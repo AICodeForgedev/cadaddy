@@ -182,6 +182,5 @@ fn estimate_unpriced_reports_not_ok() {
     let st = s.execute("estimate.status", &json!({})).unwrap();
     // Without costs loaded, all lines are unpriced: ok must be false.
     assert_eq!(st["ok"], json!(false), "unpriced lines must make ok:false: {st}");
-    assert!(st.get("next_step").is_some() || st.get("unpriced").is_some(),
-        "should suggest estimate.import_costs: {st}");
+    assert!(st.get("next_step").is_some() || st.get("unpriced").is_some(), "should suggest estimate.import_costs: {st}");
 }

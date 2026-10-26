@@ -2589,10 +2589,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(dev_stage) = job.stage(StageName::Devices) {
         if let Some(devices) = dev_stage.result.as_ref().and_then(|r| r.get("devices")) {
             if let Some(items) = devices.get("items").and_then(Value::as_array) {
-                let level_name = super::bspec::current(s, "guided")
-                    .ok()
-                    .and_then(|(sp, _)| sp.levels.first().map(|l| l.name.clone()))
-                    .unwrap_or_default();
+                let level_name =
+                    super::bspec::current(s, "guided").ok().and_then(|(sp, _)| sp.levels.first().map(|l| l.name.clone())).unwrap_or_default();
                 let mut new_tags = Vec::new();
                 for item in items.iter().take(50_000) {
                     let tag = item.get("tag").and_then(Value::as_str).unwrap_or("unknown");
@@ -2611,10 +2609,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             at_ft: [0.0, 0.0],
                             fields: {
                                 let mut f = std::collections::BTreeMap::new();
-                                f.insert(
-                                    "device_type".into(),
-                                    cadaddy_walk3d::tags::Field { value: tag.to_string(), source: "plan".into() },
-                                );
+                                f.insert("device_type".into(), cadaddy_walk3d::tags::Field { value: tag.to_string(), source: "plan".into() });
                                 f
                             },
                             ..Default::default()
