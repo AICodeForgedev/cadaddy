@@ -3194,7 +3194,18 @@ menu	Modify	Modifikace
 	Element Property Summary	Souhrn vlastností prvků
 	BIM Properties	Vlastnosti BIM
 	Kind	Druh
+	Element Identities (BIM)	Identity prvků (BIM)
+	Room Connections	Propojení místností
+	Link Print Set	Propojit sadu výkresů
 	Check Building Codes	Kontrola stavebních předpisů
 	Code Rules	Pravidla předpisů
 	Select Building Codes	Vybrat stavební předpisy
 	Fill Element Properties	Vyplnit vlastnosti prvků
+	Build Construction Sequence	Sestavit postup výstavby
+	Construction Sequence	Postup výstavby
+	Edit Sequence Activity	Upravit činnost postupu
+	Show Sequence at Date	Zobrazit postup k datu
+	Export Construction Sequence	Exportovat postup výstavby
+	Sequence Trade Conflicts	Střety profesí v postupu
+	Ceiling Space Fit	Prostor nad podhledem
+	Takeoff by Activity	Výkaz výměr podle činností

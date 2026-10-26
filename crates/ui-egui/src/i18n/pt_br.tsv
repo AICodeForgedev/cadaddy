@@ -3220,7 +3220,18 @@
 	Element Property Summary	Resumo das propriedades dos elementos
 	BIM Properties	Propriedades BIM
 	Kind	Espécie
+	Element Identities (BIM)	Identidades de elementos (BIM)
+	Room Connections	Conexões entre ambientes
+	Link Print Set	Vincular conjunto de pranchas
 	Check Building Codes	Verificar códigos de obras
 	Code Rules	Regras do código
 	Select Building Codes	Selecionar códigos de obras
 	Fill Element Properties	Preencher propriedades dos elementos
+	Build Construction Sequence	Criar sequência construtiva
+	Construction Sequence	Sequência construtiva
+	Edit Sequence Activity	Editar atividade da sequência
+	Show Sequence at Date	Mostrar a sequência em uma data
+	Export Construction Sequence	Exportar sequência construtiva
+	Sequence Trade Conflicts	Conflitos entre disciplinas na sequência
+	Ceiling Space Fit	Espaço no entreforro
+	Takeoff by Activity	Levantamento por atividade

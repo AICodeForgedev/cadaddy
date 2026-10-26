@@ -717,7 +717,9 @@ fn vec3(p: &Value, key: &str) -> Result<Option<Vec3>> {
 }
 
 fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
-    use cadaddy_render::shade::{VisualStyle, fit, rasterize, scene};
+    use cadaddy_render::model3::{self, Aabb};
+    use cadaddy_render::shade::{VisualStyle, fit, fit_bounds, rasterize};
+    use std::sync::atomic::AtomicUsize;
     let (w, h) = size(p, 800, 600);
     // The BIM view's look unless another style is asked for.
     let bim = str_param(p, "style").is_none_or(|n| n.trim().eq_ignore_ascii_case("bim"));
@@ -803,19 +805,46 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         }
         md
     };
-    let frame = if whole {
-        let (_, shell) = shell_boxes(&md);
-        (!shell.is_empty()).then(|| shell.expand(shell_margin(&shell, upf)))
+    // Frame for outlier-resistant view fitting: the building's shell (walls, floors, columns,
+    // roofs) on the whole building or on a single level, expanded by a margin.  Elements outside
+    // the frame are outliers (model.issues lists them as outside_building); the frame keeps the
+    // building in the centre of the image and outliers don't shrink it to a speck.
+    let (frame, outliers) = if whole || only.is_some() {
+        let (by_level, all_shell) = shell_boxes(&md);
+        let shell = if whole {
+            all_shell
+        } else if let Some(ln) = only.as_ref() {
+            by_level.iter().find(|(n, _)| n.eq_ignore_ascii_case(ln)).map_or(Bounds2::EMPTY, |(_, b)| *b)
+        } else {
+            Bounds2::EMPTY
+        };
+        let framed = (!shell.is_empty()).then(|| shell.expand(shell_margin(&shell, upf)));
+        // Count outliers: built objects whose plan bounds are entirely outside the frame.
+        let n_outliers = framed.as_ref().map_or(0, |f| {
+            md.model
+                .iter()
+                .filter(|e| {
+                    let b = cadaddy_doc::entity_bounds(&md, e, 0);
+                    !b.is_empty() && (b.max.x < f.min.x || b.min.x > f.max.x || b.max.y < f.min.y || b.min.y > f.max.y)
+                })
+                .count()
+        });
+        (framed, n_outliers)
     } else {
-        None
+        (None, 0)
     };
+    // Build the 3D model with instancing, LOD and spatial chunking instead of tessellating every
+    // entity into a flat triangle list.  Block references that share a block become instances
+    // (one set of triangles placed many times); each prototype has three levels of detail (full,
+    // simplified, bounding box); the base is split into spatial chunks for view culling.
     let ext = md.extents(&Space::Model);
     let size = ext.width().max(ext.height());
     let tol = if size.is_finite() && size > 0.0 { size / 1500.0 } else { 1.0 };
     let bg = cadaddy_color::Rgb(255, 255, 255);
-    let mut sc = scene(&md, &Space::Model, tol, bg);
+    let (progress, total) = (AtomicUsize::new(0), AtomicUsize::new(0));
+    let m3 = model3::build(&md, &Space::Model, tol, bg, &progress, &total);
     // Half-spaces `n · p >= c` the view keeps: a room's box (a foot round its outline), the
-    // space in front of a camera.
+    // space in front of a camera, the building's frame.
     let mut keep_in: Vec<(Vec3, f64)> = Vec::new();
     if let Some((outline, _)) = &room {
         let b = Bounds2::from_points(outline.iter().copied()).expand(upf);
@@ -838,7 +867,7 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         (Some(_), None) | (None, Some(_)) => return Err(bad("model.render", "a camera pose needs both `eye` and `target`")),
         _ => vec3(p, "dir")?.unwrap_or(Vec3::new(-1.0, -1.0, 1.0)),
     };
-    if let Some(b) = frame {
+    if let Some(b) = &frame {
         keep_in.extend([
             (Vec3::new(1.0, 0.0, 0.0), b.min.x),
             (Vec3::new(-1.0, 0.0, 0.0), -b.max.x),
@@ -860,13 +889,31 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
             (Vec3::new(0.0, -1.0, 0.0), -y0.max(y1)),
         ]);
     }
+    let proj = Projection::new(dir);
+    // Compute the view from the frame (if framing) or the model's bounds, not from the full
+    // triangle list — this lets us pick LODs and cull before flattening the scene.
+    let view_bounds = frame
+        .as_ref()
+        .map(|f| Aabb {
+            lo: Vec3::new(f.min.x, f.min.y, if m3.bounds.lo.z.is_finite() { m3.bounds.lo.z } else { 0.0 }),
+            hi: Vec3::new(f.max.x, f.max.y, if m3.bounds.hi.z.is_finite() { m3.bounds.hi.z } else { 1.0 }),
+        })
+        .unwrap_or(m3.bounds);
+    let initial_view = fit_bounds(&view_bounds, proj, w, h);
+    // Cull and pick LODs; flatten only the visible parts into a triangle list.
+    let mut sc = if let Some(iv) = &initial_view {
+        let vis = m3.visible(iv);
+        m3.flatten_visible(&vis)
+    } else {
+        m3.flatten()
+    };
+    // Clip by the half-spaces (room box, camera front, building frame, plan box).
     if !keep_in.is_empty() {
         let tris = std::mem::take(&mut sc.tris);
         for t in tris {
             let poly = clip_tri(&t.p, &keep_in);
             for k in 1..poly.len().saturating_sub(1) {
                 if let (Some(a), Some(b), Some(c)) = (poly.first(), poly.get(k), poly.get(k + 1)) {
-                    // The BIM look keeps the material (a ghost stays see-through).
                     sc.tris.push(if bim {
                         cadaddy_render::shade::Tri { p: [*a, *b, *c], ..t }
                     } else {
@@ -882,7 +929,6 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    let proj = Projection::new(dir);
     if sc.tris.is_empty() && sc.lines.is_empty() {
         return Err(bad("model.render", "nothing of the model is in view"));
     }
@@ -899,10 +945,11 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
             sc.tris.push(cadaddy_render::shade::Tri::plain([at(*a, z0), at(*b, z0), at(*b, top)], red));
             sc.tris.push(cadaddy_render::shade::Tri::plain([at(*a, z0), at(*b, top), at(*a, top)], red));
         }
-        let [a, b, cc, d] = c;
+        let [a, b, cc, dd] = c;
         sc.tris.push(cadaddy_render::shade::Tri::plain([at(a, top), at(b, top), at(cc, top)], red));
-        sc.tris.push(cadaddy_render::shade::Tri::plain([at(a, top), at(cc, top), at(d, top)], red));
+        sc.tris.push(cadaddy_render::shade::Tri::plain([at(a, top), at(cc, top), at(dd, top)], red));
     }
+    // Final fit on the clipped scene for pixel-precise framing.
     let view = fit(&sc, proj, w, h).ok_or_else(|| bad("model.render", "nothing to fit in the view"))?;
     let raster = if bim {
         cadaddy_render::bimview::rasterize_bim(&sc, &view, bg, &cadaddy_render::bimview::BimShade::default())
@@ -910,8 +957,17 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         rasterize(&sc, &view, style, bg)
     };
     let png = raster.encode_png().ok_or_else(|| bad("model.render", "the image couldn't be encoded"))?;
-    let mut out =
-        json!({ "width": view.width_px, "height": view.height_px, "triangles": sc.tris.len(), "style": if bim { "bim" } else { style.name() } });
+    let mut out = json!({
+        "width": view.width_px,
+        "height": view.height_px,
+        "triangles": sc.tris.len(),
+        "instances": m3.instances.len(),
+        "prototypes": m3.protos.len(),
+        "style": if bim { "bim" } else { style.name() },
+    });
+    if outliers > 0 {
+        out["outliers"] = json!(outliers);
+    }
     deliver(png, p, &mut out)?;
     Ok(out)
 }

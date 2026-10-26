@@ -205,6 +205,39 @@ impl Model3 {
         }
         out
     }
+
+    /// Only the visible parts, at their LOD levels, as a flat scene for the CPU rasterizer.
+    pub fn flatten_visible(&self, vis: &Visible) -> Scene {
+        let mut out = Scene {
+            lighting: self.base.lighting.clone(),
+            surfaces: self.base.surfaces.clone(),
+            textures: self.base.textures.clone(),
+            ..Scene::default()
+        };
+        for &ci in &vis.chunks {
+            if let Some(c) = self.chunks.get(ci) {
+                out.tris.extend_from_slice(&self.base.tris[c.tris.clone()]);
+                out.lines.extend_from_slice(&self.base.lines[c.lines.clone()]);
+            }
+        }
+        for (proto_idx, lod, indices) in &vis.instances {
+            let Some(proto) = self.protos.get(*proto_idx as usize) else { continue };
+            let lod_scene = &proto.lods[*lod as usize];
+            for &inst_idx in indices {
+                let Some(inst) = self.instances.get(inst_idx as usize) else { continue };
+                for t in &lod_scene.tris {
+                    if out.tris.len() >= crate::shade::MAX_SCENE {
+                        return out;
+                    }
+                    out.tris.push(Tri { p: t.p.map(|q| inst.m.apply(q)), ..*t });
+                }
+                for l in &lod_scene.lines {
+                    out.lines.push(Line3 { a: inst.m.apply(l.a), b: inst.m.apply(l.b), ..*l });
+                }
+            }
+        }
+        out
+    }
 }
 
 /// A reference's placement: the block's base to the insertion point, scaled, turned about Z.
@@ -671,5 +704,46 @@ mod tests {
         let bb = bounds_of(&s);
         assert!(simplify(&s, &bb, 12.0).tris.len() < s.tris.len() / 4);
         assert_eq!(box_of(&s, &bb).tris.len(), 12);
+    }
+
+    #[test]
+    fn flatten_visible_uses_lod_and_culling() {
+        let d = drawing();
+        let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let m = build(&d, &Space::Model, 0.01, Rgb(0, 0, 0), &p, &t);
+        // The full model: 10,000 instances + 1 slab.
+        let full = m.flatten();
+        assert_eq!(full.tris.len(), m.total_tris());
+        // A wide view where every fixture is a box (LOD 2, 12 tris) instead of full (12 tris
+        // for our unit cube, but for a real fixture with many faces the savings are large).
+        let wide = view(Vec2::new(500.0, 500.0), 1000.0, 500, 500);
+        let vis = m.visible(&wide);
+        let scene = m.flatten_visible(&vis);
+        // All 10,000 instances are visible but at box LOD.
+        assert_eq!(vis.instances.iter().map(|g| g.2.len()).sum::<usize>(), 10_000);
+        assert!(vis.instances.iter().all(|g| g.1 == 2));
+        // The visible scene has the same count here (box LOD for a cube = same 12 tris) but
+        // the base chunks are only those in view, which is all of them for a wide view.
+        assert!(!scene.tris.is_empty());
+        // A corner view: fewer instances visible.
+        let corner = view(Vec2::new(25.0, 25.0), 50.0, 500, 500);
+        let vis_corner = m.visible(&corner);
+        let scene_corner = m.flatten_visible(&vis_corner);
+        let shown: usize = vis_corner.instances.iter().map(|g| g.2.len()).sum();
+        assert!(shown < 10_000, "corner view should cull most instances");
+        assert!(scene_corner.tris.len() < full.tris.len(), "corner scene should have fewer tris than full");
+    }
+
+    #[test]
+    fn fit_bounds_produces_a_view() {
+        let bounds = Aabb { lo: Vec3::new(0.0, 0.0, 0.0), hi: Vec3::new(100.0, 100.0, 10.0) };
+        let v = crate::shade::fit_bounds(&bounds, None, 800, 600);
+        assert!(v.is_some());
+        let v = v.unwrap();
+        assert!(v.height > 0.0);
+        assert_eq!(v.width_px, 800);
+        assert_eq!(v.height_px, 600);
+        // Empty bounds: no view.
+        assert!(crate::shade::fit_bounds(&Aabb::EMPTY, None, 800, 600).is_none());
     }
 }

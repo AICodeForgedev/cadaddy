@@ -143,7 +143,8 @@ fn levels_come_from_plan_titles_and_numbers_and_every_plan_gets_one() {
     let names: Vec<&str> = index.levels.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(names, ["1", "2", "3", "4", "R"]);
     let one = index.levels.first().expect("level 1");
-    assert_eq!(one.sheets, ["A111", "M111"]);
+    // typicalfix: each level lists its sheets as {sheet, typical} (typical = the sheet covers more than one level).
+    assert_eq!(one.sheets, [serde_json::json!({"sheet": "A111", "typical": false}), serde_json::json!({"sheet": "M111", "typical": false})]);
     assert!(index.levels.iter().all(|l| l.elevation_ft.is_none()), "no sections: no heights");
 }
 

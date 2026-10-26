@@ -3098,7 +3098,18 @@
 	Element Property Summary	元素属性摘要
 	BIM Properties	BIM 属性
 	Kind	种类
+	Element Identities (BIM)	元素标识 (BIM)
+	Room Connections	房间连接
+	Link Print Set	链接图纸集
 	Check Building Codes	检查建筑规范
 	Code Rules	规范规则
 	Select Building Codes	选择建筑规范
 	Fill Element Properties	填充元素属性
+	Build Construction Sequence	生成施工顺序
+	Construction Sequence	施工顺序
+	Edit Sequence Activity	编辑施工顺序活动
+	Show Sequence at Date	显示某日的施工进度
+	Export Construction Sequence	导出施工顺序
+	Sequence Trade Conflicts	施工顺序中的工种冲突
+	Ceiling Space Fit	吊顶空间校核
+	Takeoff by Activity	按活动统计工程量

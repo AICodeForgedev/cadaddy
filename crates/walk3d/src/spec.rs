@@ -74,6 +74,11 @@ pub struct BuildingSpec {
     /// trades and tree branches shown, the level isolated.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub bim_view: serde_json::Value,
+    /// The construction sequence's settings (`schedule.*`): start date, crews, working days,
+    /// zone size, rates and the edits made to activities. The sequence itself is built from the
+    /// model each time.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub sequence: serde_json::Value,
     /// Typical units (`unittypes.*`, Q305): the unit types read from the enlarged unit plans and
     /// their instances on the floor plans, with hands and overrides. Kept as written.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
@@ -2292,6 +2297,7 @@ impl BuildingSpec {
             wholejob: serde_json::Value::Null,
             bim_view: serde_json::Value::Null,
             progress: serde_json::Value::Null,
+            sequence: serde_json::Value::Null,
             unit_types: serde_json::Value::Null,
             unit_instances: serde_json::Value::Null,
             layers,

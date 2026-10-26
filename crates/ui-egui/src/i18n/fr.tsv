@@ -3002,7 +3002,18 @@
 	Element Property Summary	Synthèse des propriétés des éléments
 	BIM Properties	Propriétés BIM
 	Kind	Nature
+	Element Identities (BIM)	Identités des éléments (BIM)
+	Room Connections	Liaisons entre pièces
+	Link Print Set	Lier le jeu de plans
 	Check Building Codes	Vérifier les codes du bâtiment
 	Code Rules	Règles du code
 	Select Building Codes	Sélectionner les codes du bâtiment
 	Fill Element Properties	Remplir les propriétés des éléments
+	Build Construction Sequence	Créer la séquence de construction
+	Construction Sequence	Séquence de construction
+	Edit Sequence Activity	Modifier une activité de la séquence
+	Show Sequence at Date	Afficher la séquence à une date
+	Export Construction Sequence	Exporter la séquence de construction
+	Sequence Trade Conflicts	Conflits entre corps d’état
+	Ceiling Space Fit	Espace du plénum de plafond
+	Takeoff by Activity	Métré par activité

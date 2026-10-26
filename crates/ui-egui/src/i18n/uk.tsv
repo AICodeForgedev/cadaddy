@@ -3305,6 +3305,9 @@
 	Element Property Summary	Зведення властивостей елементів
 	BIM Properties	Властивості BIM
 	Kind	Вид
+	Element Identities (BIM)	Ідентифікація елементів (BIM)
+	Room Connections	Зв'язки приміщень
+	Link Print Set	Зв'язати комплект аркушів
 # Low-voltage commands (lowvolt-rw1).
 	Equipment Connections	Підключення обладнання
 	LV Bill of Materials	LV: специфікація матеріалів
@@ -3314,3 +3317,11 @@
 	Code Rules	Правила норм
 	Select Building Codes	Вибрати будівельні норми
 	Fill Element Properties	Заповнити властивості елементів
+	Build Construction Sequence	Побудувати послідовність будівництва
+	Construction Sequence	Послідовність будівництва
+	Edit Sequence Activity	Змінити роботу послідовності
+	Show Sequence at Date	Показати послідовність на дату
+	Export Construction Sequence	Експортувати послідовність будівництва
+	Sequence Trade Conflicts	Конфлікти фахів у послідовності
+	Ceiling Space Fit	Простір над стелею
+	Takeoff by Activity	Обсяги за роботами

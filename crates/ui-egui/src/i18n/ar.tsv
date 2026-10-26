@@ -3209,7 +3209,18 @@ menu	View	عرض
 	Element Property Summary	ملخص خصائص العناصر
 	BIM Properties	خصائص BIM
 	Kind	النوع
+	Element Identities (BIM)	هويات العناصر (BIM)
+	Room Connections	اتصالات الغرف
+	Link Print Set	ربط مجموعة الطباعة
 	Check Building Codes	التحقق من أكواد البناء
 	Code Rules	قواعد الكود
 	Select Building Codes	اختيار أكواد البناء
 	Fill Element Properties	تعبئة خصائص العناصر
+	Build Construction Sequence	إنشاء تسلسل البناء
+	Construction Sequence	تسلسل البناء
+	Edit Sequence Activity	تحرير نشاط التسلسل
+	Show Sequence at Date	عرض التسلسل في تاريخ
+	Export Construction Sequence	تصدير تسلسل البناء
+	Sequence Trade Conflicts	تعارضات المهن في التسلسل
+	Ceiling Space Fit	ملاءمة فراغ السقف
+	Takeoff by Activity	حصر الكميات حسب النشاط
