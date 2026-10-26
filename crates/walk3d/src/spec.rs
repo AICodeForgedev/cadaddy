@@ -844,6 +844,12 @@ pub struct GridColumn {
     pub round: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_level: Option<String>,
+    /// The drawn outline it was read from (its handle, hex); empty for a column typed in.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// How it is known: `rule` (read from the plan by `grids.columns`); empty for a column typed in.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
 }
 
 /// Mechanical, electrical and plumbing runs drawn single-line on the plans.
