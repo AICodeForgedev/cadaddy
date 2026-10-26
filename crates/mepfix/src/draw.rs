@@ -603,6 +603,85 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
                 .map(abbrev),
             );
         }
+        Kind::FireAlarm(l) => {
+            background(&mut pen, t, l, true);
+            grid(&mut pen, t);
+            fa_devices(&mut pen, t, st, l, &format!("FA-10{l}"));
+            legend.push(item("fa_smoke", "SMOKE DETECTOR (SD)"));
+            legend.push(item("fa_heat", "HEAT DETECTOR (HD)"));
+            legend.push(item("fa_pull", "PULL STATION (PS)"));
+            legend.push(item("fa_horn_strobe", "HORN/STROBE (HS)"));
+            legend.push(item("fa_strobe", "STROBE (ST)"));
+            legend.push(item("fa_duct", "DUCT DETECTOR (DD)"));
+            legend.push(item("fa_speaker", "SPEAKER/STROBE (SS)"));
+            legend.push(item("fa_panel", "FIRE ALARM CONTROL PANEL (FACP)"));
+            legend.push(item("fa_nac", "NAC POWER SUPPLY"));
+            legend.push(item("fa_annunciator", "ANNUNCIATOR"));
+            legend.push(item("fa_module", "MONITOR/RELAY MODULE (MM/RM)"));
+            abbr.extend(
+                [
+                    "SD = SMOKE DETECTOR",
+                    "HD = HEAT DETECTOR",
+                    "PS = PULL STATION",
+                    "HS = HORN/STROBE",
+                    "DD = DUCT DETECTOR",
+                    "FACP = FIRE ALARM CONTROL PANEL",
+                    "NAC = NOTIFICATION APPLIANCE CIRCUIT",
+                    "SLC = SIGNALLING LINE CIRCUIT",
+                    "AFF = ABOVE FINISHED FLOOR",
+                    "CLG = CEILING",
+                ]
+                .map(abbrev),
+            );
+        }
+        Kind::Telecom(l) => {
+            background(&mut pen, t, l, true);
+            grid(&mut pen, t);
+            telecom_devices(&mut pen, t, st, l, &format!("T-10{l}"));
+            legend.push(item("tc_data", "DATA OUTLET (D)"));
+            legend.push(item("tc_tv", "TV OUTLET (TV)"));
+            legend.push(item("tc_phone", "TELEPHONE OUTLET (TEL)"));
+            legend.push(item("tc_wifi", "WIRELESS ACCESS POINT (WAP)"));
+            legend.push(item("tc_camera", "SECURITY CAMERA (CAM)"));
+            legend.push(item("tc_reader", "CARD READER (CR)"));
+            legend.push(item("tc_speaker", "SPEAKER (SPK)"));
+            legend.push(item("tc_idf", "IDF/MDF"));
+            legend.push(item("tc_nurse", "NURSE CALL STATION (NC)"));
+            legend.push(item("tc_ada_pull", "ADA PULL CORD"));
+            abbr.extend(
+                [
+                    "D = DATA OUTLET",
+                    "TV = TELEVISION OUTLET",
+                    "TEL = TELEPHONE",
+                    "WAP = WIRELESS ACCESS POINT",
+                    "CAM = CAMERA",
+                    "CR = CARD READER",
+                    "IDF = INTERMEDIATE DISTRIBUTION FRAME",
+                    "MDF = MAIN DISTRIBUTION FRAME",
+                    "NC = NURSE CALL",
+                    "ENT = ELECTRICAL NONMETALLIC TUBING",
+                ]
+                .map(abbrev),
+            );
+        }
+        Kind::SleeveLayout(l) => {
+            background(&mut pen, t, l, true);
+            grid(&mut pen, t);
+            crate::lv_reader::draw_sleeve_layout(&mut pen, t, st, l);
+            legend.push(item("sleeve_fa", "FIRE ALARM SLEEVE (RED)"));
+            legend.push(item("sleeve_data", "DATA/TELECOM SLEEVE (BLUE)"));
+            legend.push(item("sleeve_security", "SECURITY SLEEVE (GREEN)"));
+            legend.push(item("sleeve_floor", "FLOOR SLEEVE"));
+            abbr.extend(
+                [
+                    "EMT = ELECTRICAL METALLIC TUBING",
+                    "ENT = ELECTRICAL NONMETALLIC TUBING",
+                    "FS = FIRESTOP",
+                    "SL = SLEEVE",
+                ]
+                .map(abbrev),
+            );
+        }
         Kind::Site => {
             site_plan(&mut pen, t, st);
             legend.push(item("building", "BUILDING FOOTPRINT"));
@@ -2133,6 +2212,238 @@ fn elec_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str, 
     // "DO NOT SCALE" note.
     let note_at = pen.b([3.0, -2.0]);
     pen.text("TEXT", note_at, st.text_in, "DO NOT SCALE - LOCATIONS PER ARCHITECTURAL", rot, HAlign::Left, VAlign::Top);
+}
+
+// ---- Fire alarm devices on FA sheets ----------------------------------------------------------------
+
+fn fa_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str) {
+    let rot = readable(pen.rot());
+    let th = st.text_in / pen.sh.scale;
+    let s = th * 0.8;
+    const FA_LAYER: &str = "FA-DEVICE";
+    const FA_TEXT: &str = "FA-TEXT";
+
+    for fa in t.fire_alarm_devices.iter().filter(|d| d.level == level && d.sheet == sheet) {
+        let c = pen.b([fa.at_ft[0], fa.at_ft[1]]);
+        let v = |dx: f64, dy: f64| Vec2::new(c.x + dx, c.y + dy);
+        match fa.kind.as_str() {
+            "smoke_detector" | "co_detector" => {
+                pen.circle(FA_LAYER, c, s * 0.5);
+                pen.text(FA_LAYER, c, st.text_in * 0.6, "SD", rot, HAlign::Center, VAlign::Middle);
+            }
+            "heat_detector" => {
+                pen.circle(FA_LAYER, c, s * 0.5);
+                pen.text(FA_LAYER, c, st.text_in * 0.6, "HD", rot, HAlign::Center, VAlign::Middle);
+            }
+            "pull_station" => {
+                let hs = s * 0.5;
+                pen.rect(FA_LAYER, v(-hs, -hs), v(hs, hs));
+                pen.text(FA_LAYER, c, st.text_in * 0.6, "PS", rot, HAlign::Center, VAlign::Middle);
+            }
+            "horn_strobe" | "speaker_strobe" => {
+                pen.circle(FA_LAYER, c, s * 0.6);
+                pen.line(FA_LAYER, v(-s * 0.4, 0.0), v(s * 0.4, 0.0));
+                pen.line(FA_LAYER, v(0.0, -s * 0.4), v(0.0, s * 0.4));
+                pen.text(FA_LAYER, c, st.text_in * 0.5, "HS", rot, HAlign::Center, VAlign::Middle);
+            }
+            "strobe" => {
+                pen.circle(FA_LAYER, c, s * 0.5);
+                pen.line(FA_LAYER, v(-s * 0.3, -s * 0.3), v(s * 0.3, s * 0.3));
+                pen.line(FA_LAYER, v(-s * 0.3, s * 0.3), v(s * 0.3, -s * 0.3));
+            }
+            "speaker" => {
+                pen.circle(FA_LAYER, c, s * 0.5);
+                pen.text(FA_LAYER, c, st.text_in * 0.5, "SPK", rot, HAlign::Center, VAlign::Middle);
+            }
+            "duct_detector" => {
+                let hw = s * 0.8;
+                let hh = s * 0.4;
+                pen.rect(FA_LAYER, v(-hw, -hh), v(hw, hh));
+                pen.text(FA_LAYER, c, st.text_in * 0.5, "DD", rot, HAlign::Center, VAlign::Middle);
+            }
+            "facp" => {
+                let hs = s * 1.2;
+                pen.rect(FA_LAYER, v(-hs, -hs * 0.8), v(hs, hs * 0.8));
+                pen.fill(FA_LAYER, [v(-hs, -hs * 0.8), v(hs, -hs * 0.8), v(hs, hs * 0.8), v(-hs, hs * 0.8)]);
+                pen.text(FA_TEXT, c, st.text_in * 0.6, "FACP", rot, HAlign::Center, VAlign::Middle);
+            }
+            "nac_panel" => {
+                let hs = s * 0.8;
+                pen.rect(FA_LAYER, v(-hs, -hs * 0.6), v(hs, hs * 0.6));
+                pen.text(FA_LAYER, c, st.text_in * 0.5, "NAC", rot, HAlign::Center, VAlign::Middle);
+            }
+            "annunciator" => {
+                let hs = s * 0.7;
+                pen.rect(FA_LAYER, v(-hs, -hs * 0.6), v(hs, hs * 0.6));
+                pen.text(FA_LAYER, c, st.text_in * 0.5, "ANN", rot, HAlign::Center, VAlign::Middle);
+            }
+            "monitor_module" | "relay_module" => {
+                let hs = s * 0.4;
+                pen.rect(FA_LAYER, v(-hs, -hs), v(hs, hs));
+                let label = if fa.kind == "monitor_module" { "MM" } else { "RM" };
+                pen.text(FA_LAYER, c, st.text_in * 0.5, label, rot, HAlign::Center, VAlign::Middle);
+            }
+            "elevator_recall" | "door_holder" | "mag_door_holder" => {
+                pen.circle(FA_LAYER, c, s * 0.4);
+                pen.fill(FA_LAYER, [v(-s * 0.3, -s * 0.3), v(s * 0.3, -s * 0.3), v(s * 0.3, s * 0.3), v(-s * 0.3, s * 0.3)]);
+            }
+            _ => {
+                pen.circle(FA_LAYER, c, s * 0.5);
+            }
+        }
+        // Tag text beside the device.
+        if !fa.tag.is_empty() {
+            let tp = v(s * 1.2, 0.0);
+            pen.text(FA_TEXT, tp, st.text_in * 0.8, &fa.tag, rot, HAlign::Left, VAlign::Middle);
+        }
+        // Candela note for notification appliances.
+        if let Some(cd) = fa.candela {
+            let tp = v(0.0, -s * 1.5);
+            pen.text(FA_TEXT, tp, st.text_in * 0.6, &format!("{cd} cd"), rot, HAlign::Center, VAlign::Top);
+        }
+        // Mounting height note (non-ceiling).
+        if fa.mounting != "CLG" && fa.mounting_in > 0.0 {
+            let ht = crate::truth::fmt_in(fa.mounting_in);
+            let tp = v(0.0, s * 1.2);
+            pen.text(FA_TEXT, tp, st.text_in * 0.6, &format!("{ht} AFF"), rot, HAlign::Center, VAlign::Bottom);
+        }
+        // SLC/NAC circuit tags (small, below device).
+        let mut note_y = -s * 2.2;
+        if !fa.slc.is_empty() {
+            let tp = v(0.0, note_y);
+            pen.text(FA_TEXT, tp, st.text_in * 0.5, &fa.slc, rot, HAlign::Center, VAlign::Top);
+            note_y -= s * 0.8;
+        }
+        if !fa.nac.is_empty() {
+            let tp = v(0.0, note_y);
+            pen.text(FA_TEXT, tp, st.text_in * 0.5, &fa.nac, rot, HAlign::Center, VAlign::Top);
+        }
+    }
+}
+
+// ---- Telecom/LV devices on T sheets ----------------------------------------------------------------
+
+fn telecom_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str) {
+    let rot = readable(pen.rot());
+    let th = st.text_in / pen.sh.scale;
+    let s = th * 0.8;
+    const TC_LAYER: &str = "TC-DEVICE";
+    const TC_TEXT: &str = "TC-TEXT";
+
+    for tc in t.telecom_devices.iter().filter(|d| d.level == level && d.sheet == sheet) {
+        let c = pen.b([tc.at_ft[0], tc.at_ft[1]]);
+        let v = |dx: f64, dy: f64| Vec2::new(c.x + dx, c.y + dy);
+        match tc.kind.as_str() {
+            "data_outlet" => {
+                let hs = s * 0.5;
+                pen.poly(TC_LAYER, &[v(0.0, hs), v(-hs, -hs), v(hs, -hs)], true);
+                pen.text(TC_LAYER, c, st.text_in * 0.5, "D", rot, HAlign::Center, VAlign::Middle);
+            }
+            "tv_outlet" => {
+                let hs = s * 0.5;
+                pen.poly(TC_LAYER, &[v(0.0, hs), v(-hs, -hs), v(hs, -hs)], true);
+                pen.text(TC_LAYER, c, st.text_in * 0.5, "TV", rot, HAlign::Center, VAlign::Middle);
+            }
+            "telephone" => {
+                let hs = s * 0.5;
+                pen.poly(TC_LAYER, &[v(0.0, hs), v(-hs, -hs), v(hs, -hs)], true);
+                pen.text(TC_LAYER, c, st.text_in * 0.5, "T", rot, HAlign::Center, VAlign::Middle);
+            }
+            "wifi_ap" => {
+                pen.circle(TC_LAYER, c, s * 0.5);
+                pen.text(TC_LAYER, c, st.text_in * 0.4, "WAP", rot, HAlign::Center, VAlign::Middle);
+            }
+            "camera" => {
+                pen.circle(TC_LAYER, c, s * 0.5);
+                pen.text(TC_LAYER, c, st.text_in * 0.5, "CAM", rot, HAlign::Center, VAlign::Middle);
+            }
+            "card_reader" | "rex" => {
+                let hs = s * 0.4;
+                pen.rect(TC_LAYER, v(-hs, -hs * 1.2), v(hs, hs * 1.2));
+                let label = if tc.kind == "card_reader" { "CR" } else { "REX" };
+                pen.text(TC_LAYER, c, st.text_in * 0.5, label, rot, HAlign::Center, VAlign::Middle);
+            }
+            "door_contact" | "door_ajar" | "mag_lock" => {
+                let hs = s * 0.3;
+                pen.rect(TC_LAYER, v(-hs, -hs), v(hs, hs));
+                pen.fill(TC_LAYER, [v(-hs, -hs), v(hs, -hs), v(hs, hs), v(-hs, hs)]);
+            }
+            "nurse_call_station" | "nurse_call_display" | "ada_pull_cord" => {
+                pen.circle(TC_LAYER, c, s * 0.5);
+                let label = if tc.kind == "ada_pull_cord" { "ADA" } else { "NC" };
+                pen.text(TC_LAYER, c, st.text_in * 0.5, label, rot, HAlign::Center, VAlign::Middle);
+            }
+            "speaker" => {
+                pen.circle(TC_LAYER, c, s * 0.5);
+                pen.text(TC_LAYER, c, st.text_in * 0.5, "SPK", rot, HAlign::Center, VAlign::Middle);
+            }
+            "idf" | "mdf" | "patch_panel" | "backboard" | "rack" => {
+                let hs = s * 1.0;
+                pen.rect(TC_LAYER, v(-hs, -hs * 0.6), v(hs, hs * 0.6));
+                pen.fill(TC_LAYER, [v(-hs, -hs * 0.6), v(hs, -hs * 0.6), v(hs, hs * 0.6), v(-hs, hs * 0.6)]);
+                let label = tc.kind.to_uppercase();
+                pen.text(TC_TEXT, c, st.text_in * 0.5, &label, rot, HAlign::Center, VAlign::Middle);
+            }
+            "pool_alarm" | "door_alarm" => {
+                pen.circle(TC_LAYER, c, s * 0.4);
+                pen.text(TC_LAYER, c, st.text_in * 0.4, "ALM", rot, HAlign::Center, VAlign::Middle);
+            }
+            _ => {
+                pen.circle(TC_LAYER, c, s * 0.5);
+            }
+        }
+        // Tag text beside the device.
+        if !tc.tag.is_empty() {
+            let tp = v(s * 1.2, 0.0);
+            pen.text(TC_TEXT, tp, st.text_in * 0.8, &tc.tag, rot, HAlign::Left, VAlign::Middle);
+        }
+        // Cable spec note.
+        if let Some(ref cable) = tc.cable_spec {
+            let tp = v(0.0, -s * 1.5);
+            pen.text(TC_TEXT, tp, st.text_in * 0.5, cable, rot, HAlign::Center, VAlign::Top);
+        }
+        // LV system label.
+        if !tc.lv_system.is_empty() {
+            let tp = v(0.0, s * 1.2);
+            pen.text(TC_TEXT, tp, st.text_in * 0.5, &tc.lv_system.to_uppercase(), rot, HAlign::Center, VAlign::Bottom);
+        }
+    }
+
+    // Cable pathways on this level.
+    for cp in t.cable_pathways.iter().filter(|p| p.level == level) {
+        let a = pen.b(cp.from_ft);
+        let b = pen.b(cp.to_ft);
+        let layer = match cp.kind.as_str() {
+            "j_hook" => "TC-PATHWAY",
+            "cable_tray" => "TC-TRAY",
+            _ => "TC-PATHWAY",
+        };
+        pen.line(layer, a, b);
+        // Size/spacing label at midpoint.
+        let mid = Vec2::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+        let label = match cp.kind.as_str() {
+            "j_hook" => {
+                let sp = cp.spacing_in.unwrap_or(48.0);
+                format!("J-HOOK @ {}\" O.C.", sp as u32)
+            }
+            "ent" => {
+                let sz = cp.size_in.unwrap_or(2.0);
+                format!("{}\" ENT", sz as u32)
+            }
+            "cable_tray" => {
+                if let Some([w, d]) = cp.tray_size_in {
+                    format!("{}\"x{}\" CT", w as u32, d as u32)
+                } else {
+                    "CT".into()
+                }
+            }
+            _ => String::new(),
+        };
+        if !label.is_empty() {
+            let rot_line = readable(pen.rot());
+            pen.text(TC_TEXT, mid, st.text_in * 0.6, &label, rot_line, HAlign::Center, VAlign::Bottom);
+        }
+    }
 }
 
 // ---- Structure ----------------------------------------------------------------------------------

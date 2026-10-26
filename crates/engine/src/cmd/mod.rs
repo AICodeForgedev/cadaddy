@@ -56,6 +56,7 @@ pub mod import_check;
 pub(crate) mod inquiry;
 mod layer;
 pub mod levels;
+pub mod lowvolt;
 pub mod markup;
 pub mod paramconv;
 pub mod pointcloud;
@@ -862,6 +863,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(rhai_cmd::specs());
         v.extend(plugins_cmd::specs());
         v.extend(rulemodel::specs());
+        v.extend(lowvolt::specs());
         // Apply hand-written help texts.
         for spec in &mut v {
             let text = help_texts::lookup(spec.id);
