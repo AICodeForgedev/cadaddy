@@ -251,18 +251,18 @@ fn merged(set: &cadaddy_mepfix::FixtureSet) -> printed::PrintedSet {
     p
 }
 
-/// The hotel's merged print set (49 sheets in one PDF, as a real set comes) recognised page by
+/// The hotel's merged print set (50 sheets in one PDF, as a real set comes) recognised page by
 /// page and assembled: the numbers Q274 reported for it, held.
 #[test]
 fn the_hotels_merged_set_pdf_is_recognised_page_by_page() {
     let set = cadaddy_mepfix::generate_hotel(1, cadaddy_mepfix::hotel::HotelSize::Small).unwrap_or_else(|e| panic!("hotel: {e}"));
     let p = merged(&set);
     let t = &set.truth;
-    assert_eq!((p.pages.len(), t.sheets.len()), (49, 49), "a page per sheet");
+    assert_eq!((p.pages.len(), t.sheets.len()), (50, 50), "a page per sheet");
     let truth = |n: &str| t.sheets.iter().find(|s| s.number == n);
     let numbers = p.pages.iter().filter(|r| truth(&r.number).is_some()).count();
     let distinct: std::collections::BTreeSet<&str> = p.pages.iter().map(|r| r.number.as_str()).collect();
-    assert_eq!((numbers, distinct.len()), (49, 49), "sheet numbers read");
+    assert_eq!((numbers, distinct.len()), (50, 50), "sheet numbers read");
     // A level on every plan sheet (every sheet the truth gives a level), and the right one.
     for s in t.sheets.iter().filter(|s| s.level.is_some()) {
         let r = p.pages.iter().find(|r| r.number == s.number).unwrap_or_else(|| panic!("{} not read", s.number));

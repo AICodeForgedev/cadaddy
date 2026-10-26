@@ -62,6 +62,9 @@ pub enum Kind {
     SiteUtility,
     /// The sitework schedule (C-601): quantities, paving, landscaping, fencing, furnishings.
     SiteSchedules,
+    /// The enlarged guest unit plans (Q305): one plan per unit type, the tag legend and the
+    /// unit overrides table.
+    UnitPlans,
 }
 
 impl Kind {
@@ -77,6 +80,7 @@ impl Kind {
                 | Kind::ArchFinishes
                 | Kind::Assemblies
                 | Kind::SiteSchedules
+                | Kind::UnitPlans
         )
     }
 }
@@ -404,6 +408,8 @@ pub fn hotel_sheet_list() -> Vec<(String, String, String, Kind)> {
     for l in ["1", "2", "3", "4"] {
         v.push((format!("A-20{l}"), format!("LEVEL {l} REFLECTED CEILING PLAN"), "A".into(), Kind::Rcp(l.into())));
     }
+    // Enlarged guest unit plans
+    v.push((crate::units::UNIT_SHEET.into(), crate::units::UNIT_SHEET_TITLE.into(), "A".into(), Kind::UnitPlans));
     // Structural framing
     for (num, title, code) in [
         ("S-102", "LEVEL 2 FRAMING PLAN", "2"),
