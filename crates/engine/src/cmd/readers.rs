@@ -164,8 +164,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── Electrical devices ───────────────────────────────────────────
         CommandSpec::new("mep.read_devices", "Read Electrical Devices", run_elec_devices)
-            .params("{sheets?: [name], preview?: bool (default true: read only; false puts the devices in the model), limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read, model: {inserted, by_type, by_level, not_inserted: {reason: count}, why_not?}}: works on any open drawing (the current sheet is the print set); preview:false needs a building model (bspec.draft {store: true} or bim.build first) and never inserts legend samples, circuit numbers, sheet numbers or lettering")
-            .noundo(),
+            .params("{sheets?: [name], preview?: bool (default true: read only; false puts the devices in the model), save?: bool (default true: preview:false saves the drawing to its file), limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read, model: {inserted, replaced, by_type, by_level, elements, elements_replaced, filled?: {key: n}, saved?, not_saved?, save_error?, not_inserted: {reason: count}, why_not?}}: works on any open drawing (the current sheet is the print set); preview:false needs a building model (bspec.draft {store: true} or bim.build first), makes each device an element (kind device, on its sheet's level, moved onto the architectural plan) replacing the device elements an earlier read made (nothing else in the model changes), and never inserts legend samples, circuit numbers, sheet numbers or lettering"),
         // ── Envelope reader ────────────────────────────────────────────────
         CommandSpec::new("envelope.read", "Read Roof and Wall Envelope", run_envelope_read)
             .params("{apply?: bool} → {takeoff: [{code, description, unit, net, waste_pct, order, source, status}], flags: [{kind, subject, message, source, status}], spec_read, notes, page?: 1}")
@@ -992,7 +991,16 @@ fn run_elec_devices(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     // What may go in the model: the drawing's legends and schedules say which marks are types
     // and which symbols are samples; circuit numbers, sheet numbers and lettering never are.
-    let (keep, not_inserted) = model_devices(d, &found, sheet_numbers(s));
+    let (mut keep, not_inserted) = model_devices(d, &found, sheet_numbers(s));
+    // A print set imported side by side: each device is its sheet's, on that sheet's level.
+    if let Some(sp) = &spec {
+        for dv in &mut keep {
+            if let Some(sh) = sheet_holding(sp, dv.at) {
+                dv.sheet = sh.number.clone();
+                dv.level = sh.level.clone().unwrap_or_default();
+            }
+        }
+    }
     let mut out = json!({
         "devices": devices, "count": found.len(), "by_type": by_type,
         "print_set": if e_sheets.is_some() { "project" } else { "current drawing" }, "sheets_read": e_sheets.unwrap_or(1).max(1),
@@ -1008,13 +1016,46 @@ fn run_elec_devices(s: &mut Session, p: &Value) -> Result<Value> {
         json!({"inserted": 0, "why_not": "no device here passed the junk filter (see not_inserted)"})
     } else {
         match place_devices(s, &keep, "mep.read_devices") {
-            Ok(v) => v,
+            Ok(v) => devices_to_model(s, p, v)?,
             Err(e) => json!({"inserted": 0, "why_not": e.to_string()}),
         }
     };
     model["not_inserted"] = json!(not_inserted);
     out["model"] = model;
     Ok(out)
+}
+
+/// The sheet of the spec's print set whose frame holds `at` (drawing units), when the set was
+/// imported side by side.
+fn sheet_holding(sp: &cadaddy_walk3d::BuildingSpec, at: [f64; 2]) -> Option<&cadaddy_walk3d::levels::SheetLink> {
+    let inside = |r: &[f64; 4]| at[0] >= r[0].min(r[2]) && at[0] <= r[0].max(r[2]) && at[1] >= r[1].min(r[3]) && at[1] <= r[1].max(r[3]);
+    sp.sheets.iter().find(|x| x.rect.as_ref().is_some_and(inside))
+}
+
+/// After the devices went in the spec: the model's device elements built again from them (the
+/// rest of the model stays), what was read filled in (room, host wall, panel row), and the
+/// drawing saved to its file (`save: false` skips it). `placed`: what [`place_devices`] said.
+fn devices_to_model(s: &mut Session, p: &Value, mut placed: Value) -> Result<Value> {
+    const CMD: &str = "mep.read_devices";
+    let r = super::propfill::rebuild_devices(s, CMD)?;
+    placed["elements"] = json!(r.built);
+    placed["elements_replaced"] = json!(r.removed);
+    match super::propfill::fill(s) {
+        Ok(f) => placed["filled"] = f["filled"]["device"].clone(),
+        Err(e) => placed["fill_error"] = json!(e.to_string()),
+    }
+    if !bool_or(p, "save", true) {
+        placed["saved"] = json!(false);
+        return Ok(placed);
+    }
+    match s.state()?.path.clone() {
+        None => placed["not_saved"] = json!("the drawing has no file yet: save it with saveas {path}"),
+        Some(path) => match super::file::save_to(s, &path) {
+            Ok(_) => placed["saved"] = json!(path),
+            Err(e) => placed["save_error"] = json!(e.to_string()),
+        },
+    }
+    Ok(placed)
 }
 
 /// The set's sheet numbers (the print set's, else the open sheet's title block): a tag that

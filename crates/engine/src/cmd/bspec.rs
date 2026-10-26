@@ -1536,7 +1536,7 @@ pub(crate) const STACKED: &str = "stacked";
 
 /// `xdata` with the stacking move `off` recorded (added to one recorded before) at the end of
 /// WALLGEN's tags.
-fn with_stacked(xdata: &[RawTag], off: Vec2) -> Vec<RawTag> {
+pub(crate) fn with_stacked(xdata: &[RawTag], off: Vec2) -> Vec<RawTag> {
     let mut x = xdata.to_vec();
     let Some(at) = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP)) else { return x };
     let end = x.iter().skip(at + 1).position(|t| t.code == 1001).map_or(x.len(), |i| at + 1 + i);

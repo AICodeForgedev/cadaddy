@@ -334,6 +334,58 @@ fn location_prop(x: f64, y: f64, z: f64, upf: f64) -> Prop {
         .with_note("model coordinates: the sheet's plan position, the level's elevation plus the offset")
 }
 
+/// What [`rebuild_devices`] did: device elements taken out and built.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeviceRebuild {
+    pub removed: usize,
+    pub built: usize,
+}
+
+/// Build the spec's read devices in the open model again (a reader changed them): the device
+/// elements built before go, every other element stays as it is. A device on a level that
+/// `model.build` stacked moves as that level's built objects did, and the people's overrides go
+/// back on.
+pub(crate) fn rebuild_devices(s: &mut Session, cmd: &str) -> Result<DeviceRebuild> {
+    let (sp, _) = super::bspec::current(s, cmd)?;
+    let d = s.doc_mut()?;
+    // Each level's stacking move, as its built objects (not devices) carry it.
+    let mut moved: HashMap<String, Vec2> = HashMap::new();
+    for e in d.model.iter().filter(|e| super::wallgen::made_as(e).is_some_and(|p| p != "device")).take(MAX_ELEMENTS) {
+        let Some(level) = super::bspec::made_level(e) else { continue };
+        let off = super::bspec::stacked_by(e);
+        if off.len() > 1e-9 {
+            moved.entry(level.to_ascii_lowercase()).or_insert(off);
+        }
+    }
+    let old: Vec<Handle> = d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("device")).map(|e| e.handle).collect();
+    for h in &old {
+        d.model.remove(*h);
+    }
+    let built = build_devices(d, &sp);
+    if !moved.is_empty() {
+        let new: Vec<(Handle, Vec2)> = d
+            .model
+            .iter()
+            .filter(|e| super::wallgen::made_as(e).as_deref() == Some("device"))
+            .filter_map(|e| super::bspec::made_level(e).and_then(|l| moved.get(&l.to_ascii_lowercase()).map(|off| (e.handle, *off))))
+            .collect();
+        for (h, off) in new {
+            let m = cadaddy_geom::Mat3::translate(off);
+            let _ = d.modify_entity(h, |e| {
+                e.kind.transform(&m);
+                e.common.xdata = super::bspec::with_stacked(&e.common.xdata, off).into();
+            });
+        }
+    }
+    // An automatic rebuild (the plan changed) builds from the spec it keeps: the same devices.
+    if let Some(kept) = s.state_mut()?.wallgen.as_mut().and_then(|g| g.spec.as_mut()) {
+        kept.tags.retain(|t| !read_device(t));
+        kept.tags.extend(sp.tags.iter().filter(|t| read_device(t)).cloned());
+    }
+    super::overrides::after_build(s);
+    Ok(DeviceRebuild { removed: old.len(), built })
+}
+
 trait WithNote {
     fn with_note(self, note: &str) -> Self;
 }

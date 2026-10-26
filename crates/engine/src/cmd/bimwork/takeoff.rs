@@ -121,8 +121,15 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
     let mut by_run: BTreeMap<String, Vec<String>> = BTreeMap::new();
     // The BOM counts rooms from the ceilings built with a room's tag: a level's rooms are those.
     let mut room_ceilings: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // The device elements by the spec device they were built from: a device line counts those.
+    let mut by_device: BTreeMap<String, String> = BTreeMap::new();
     for e in d.model.iter().take(super::MAX_ELEMENTS) {
         let tags = crate::cmd::fieldview::wallgen_tags(e);
+        if tags.first() == Some(&"device")
+            && let Some(id) = crate::cmd::fieldview::tag_value(&tags, "devid")
+        {
+            by_device.insert(id.to_string(), e.handle.hex());
+        }
         if tags.first() == Some(&"mep")
             && let Some(id) = crate::cmd::fieldview::tag_value(&tags, "mepid")
         {
@@ -151,6 +158,9 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
     let bom_lines = bom_lines.as_slice();
     let wall_lines = built_wall_lines(d, &els, bom_lines, super::units_per_foot(s));
     let resolve = |h: &str| -> Vec<String> {
+        if let Some(el) = by_device.get(h) {
+            return vec![el.clone()];
+        }
         match h.strip_prefix("run:").and_then(|i| i.parse::<usize>().ok()) {
             Some(i) => sp.mep.runs.get(i).and_then(|r| by_run.get(&crate::cmd::mep::run_base(r))).cloned().unwrap_or_default(),
             None => Handle::parse_hex(h).filter(|x| d.entity(*x).is_some()).map(|x| vec![x.hex()]).unwrap_or_default(),
