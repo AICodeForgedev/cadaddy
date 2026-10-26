@@ -4468,8 +4468,8 @@ mod tests {
         let t = run_takeoff(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let summary = &t["summary"];
         assert!(summary["line_count"].as_u64().unwrap_or(0) > 0, "takeoff should have lines: {t:#}");
-        assert!(summary["trades"].as_array().map_or(false, |a| a.iter().any(|v| v == "electrical")), "trades should include electrical: {summary:#}");
-        assert!(summary["levels"].as_array().map_or(false, |a| !a.is_empty()), "levels should be reported: {summary:#}");
+        assert!(summary["trades"].as_array().is_some_and(|a| a.iter().any(|v| v == "electrical")), "trades should include electrical: {summary:#}");
+        assert!(summary["levels"].as_array().is_some_and(|a| !a.is_empty()), "levels should be reported: {summary:#}");
         // The device lines in bim.takeoff should account for at least the device count.
         let device_count: f64 =
             t["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").filter_map(|l| l["qty"].as_f64()).sum();
