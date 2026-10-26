@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1124,
-    "count": 1124,
+    "callableAsJson": 1132,
+    "count": 1132,
     "ids": [
       "-attedit",
       "-block",
@@ -900,6 +900,14 @@
       "scale",
       "scalelistedit",
       "scaletext",
+      "schedule.build",
+      "schedule.conflicts",
+      "schedule.edit",
+      "schedule.export",
+      "schedule.fit",
+      "schedule.list",
+      "schedule.takeoff",
+      "schedule.view",
       "schedules.read",
       "script",
       "scriptcall",
