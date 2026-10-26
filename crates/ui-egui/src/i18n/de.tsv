@@ -3025,3 +3025,9 @@
 	Layer Quantity Takeoff	Mengenermittlung nach Layer
 	Read Architecture from Prints	Architektur aus Plänen lesen
 	Read Roof and Wall Envelope	Dach- und Wandhülle lesen
+	Element Properties (BIM)	Elementeigenschaften (BIM)
+	Set Element Property (BIM)	Elementeigenschaft festlegen (BIM)
+	Find Elements by Property	Elemente nach Eigenschaft suchen
+	Element Property Summary	Übersicht der Elementeigenschaften
+	BIM Properties	BIM-Eigenschaften
+	Kind	Art

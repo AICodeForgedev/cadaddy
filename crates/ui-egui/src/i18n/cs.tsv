@@ -3188,3 +3188,9 @@ menu	Modify	Modifikace
 	Layer Quantity Takeoff	Výkaz výměr podle hladin
 	Read Architecture from Prints	Načíst architekturu z výkresů
 	Read Roof and Wall Envelope	Načíst obálku střechy a stěn
+	Element Properties (BIM)	Vlastnosti prvku (BIM)
+	Set Element Property (BIM)	Nastavit vlastnost prvku (BIM)
+	Find Elements by Property	Najít prvky podle vlastnosti
+	Element Property Summary	Souhrn vlastností prvků
+	BIM Properties	Vlastnosti BIM
+	Kind	Druh

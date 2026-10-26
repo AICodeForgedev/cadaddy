@@ -91,6 +91,7 @@ low-level `execute` only when needed.
 | Tool | Description |
 |:-----|:------------|
 | `bim_types` | BIM element types: list, create, assign and query type marks (description, manufacturer, catalog, spec section, material, ratings). |
+| `bim_props` | Every element's own properties (a device's type, mount height, circuit, room; a door's number, size, rating; a room's number, name, area, finishes…), each with its source (print, legend, schedule, spec, note, rule, default, user, computed): `get`, `set` (as the user's, kept through rebuilds), `find` by key/value/exists/missing, `summary` of coverage per kind. |
 | `bim_spec_import` | Read a spec book, schedule or submittal into proposed BIM types. Import returns proposals with citations; accept merges them. Nothing applied silently. |
 | `rooms` | Plan rooms as 3D spaces: list rooms with area/volume/finishes, zoom to a room, build see-through volumes. |
 | `stairs` | Stairs and ramps: detect from plan, list with code checks (riser/tread sizes), confirm, then model.build builds them. |

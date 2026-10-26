@@ -103,6 +103,7 @@ fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
         ("guided_job", json!({ "action": "explain", "stage": "classify" }), json!({ "action": "fly" })),
         ("import_check", json!({}), json!({ "path": 5 })),
         ("bim_types", json!({ "action": "list" }), json!({ "action": "set", "fields": 5 })),
+        ("bim_props", json!({ "action": "summary" }), json!({ "action": "set", "key": 5 })),
         (
             "bim_spec_import",
             json!({ "action": "import", "text": "LUMINAIRE SCHEDULE\nTYPE A  2X4 LED TROFFER  ACME LT-24  120V" }),
