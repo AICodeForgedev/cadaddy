@@ -2414,6 +2414,7 @@ fn draw_callouts(pen: &mut Pen, t: &Truth, sh: &Sheet) {
             "detail_bubble" => draw_detail_bubble(pen, co),
             "enlarged_plan" => draw_enlarged_plan_callout(pen, co),
             "key_plan" => draw_key_plan(pen, t, sh),
+            "match_line" => draw_match_line(pen, co),
             _ => {}
         }
     }
@@ -2561,6 +2562,20 @@ fn draw_key_plan(pen: &mut Pen, t: &Truth, _sh: &Sheet) {
     pen.prect(CALLOUT_LAYER, a, b);
     // Label "KEY PLAN"
     pen.ptext(CALLOUT_LAYER, [kp_x, kp_y - 0.15], 0.08, "KEY PLAN", HAlign::Left);
+}
+
+/// A match line: a long dashed line across the plan with "SEE SHEET <target>" text,
+/// indicating where the adjacent sheet continues.
+fn draw_match_line(pen: &mut Pen, co: &CalloutEntry) {
+    if let (Some(from), Some(to)) = (co.cut_from_ft, co.cut_to_ft) {
+        let a = pen.b(from);
+        let b = pen.b(to);
+        pen.line("DASHED", a, b);
+        // Label: "SEE SHEET <target>"
+        let mid = pen.b(co.at_ft);
+        let label = format!("SEE SHEET {}", co.target_sheet);
+        pen.text(CALLOUT_LAYER, mid + Vec2::new(0.0, pen.pl(0.15)), 0.08, &label, 0.0, HAlign::Center, VAlign::Bottom);
+    }
 }
 
 // ---- Site plan (C-101) --------------------------------------------------------------------------

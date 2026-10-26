@@ -141,6 +141,14 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "levels": {"type": "string", "description": "\"auto\" (default)"},
                 "force": {"type": "boolean", "description": "build even if import check fails"}
             }, "required": ["path"]}}),
+        json!({"name": "callouts", "description": "List cross-reference callouts from the imported print set: section marks, elevation tags, detail bubbles, enlarged-plan boundaries, match lines and key plans. Each callout shows its source sheet, kind, detail number, target sheet, and whether it resolves or is broken (with the reason). Returns a guiding error when no print set is loaded.",
+            "inputSchema": {"type": "object", "properties": {
+                "kind": {"type": "string", "description": "filter by kind: section_mark, elevation_tag, detail_bubble, enlarged_plan, match_line, key_plan"},
+                "status": {"type": "string", "description": "filter: resolved or broken"},
+                "level": {"type": "string", "description": "filter by level name (matches sheets containing this level)"},
+                "page": {"type": "integer", "minimum": 1, "description": "page number (default 1)"},
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 200, "description": "items per page (default 50)"}
+            }}}),
         json!({"name": "workflows", "description": "List the main agent workflows with exact example MCP calls. Returns a list of named flows (pdf-to-bim, view-3d, plot-set, bim-work, convert-folder) each with steps and example tool calls.",
             "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "job_status", "description": "Check on background operations. Returns whether CADaddy is busy and what it is doing (opening files, building models, rendering). Long commands like bim.from_pdf and model.build report progress here. Use wait_until_idle to block until done.",
@@ -629,6 +637,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Err(e) => err_text(&e),
             });
         }
+        "callouts" => exec(b, "callouts.list", a),
         other => return Err(format!("unknown tool `{other}`")),
     };
     Ok(match r {

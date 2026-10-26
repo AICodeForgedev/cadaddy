@@ -642,9 +642,9 @@ fn run_size(size_name: &str, size: HotelSize, seed: u64, scratch: &Path) -> Resu
     });
     let numbers: Vec<String> = truth.sheets.iter().map(|s| s.number.clone()).collect();
     let (resolved, broken) = b.stage("read_callouts", |b| {
-        let r = cadaddy_mepfix::callout_reader::resolve_callouts(&dxf, &numbers);
-        b.nonzero(r.0.len(), "resolved callouts");
-        r
+        let (res, brk, _errors) = cadaddy_mepfix::callout_reader::resolve_callouts(&dxf, &numbers);
+        b.nonzero(res.len(), "resolved callouts");
+        (res, brk)
     });
     b.notes.push(format!(
         "read: {} sheets, {} rooms/{} ceilings, {} columns, {} walls, {} doors, {} wall types, {} duct runs/{} terminals, {} pipe runs/{} risers, {} sprinkler heads, {} devices/{} panels, {} callouts ({} unresolved)",

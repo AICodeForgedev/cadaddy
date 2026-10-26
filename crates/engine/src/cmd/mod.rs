@@ -79,6 +79,7 @@ pub use render::apply_environment;
 pub use underlay::forget_pages as forget_underlay_pages;
 pub mod agentready;
 pub mod bcf;
+pub mod callouts;
 pub mod casework;
 pub mod clashreport;
 pub mod cobie;
@@ -509,6 +510,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(procure::specs());
         v.extend(tags::specs());
         v.extend(mep::specs());
+        v.extend(callouts::specs());
         v.extend(clashreport::specs());
         v.extend(concrete::specs());
     v.extend(ugsheets::specs());
