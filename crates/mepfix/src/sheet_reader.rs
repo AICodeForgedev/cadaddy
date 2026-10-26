@@ -461,7 +461,7 @@ fn detect_title(d: &Drawing, number: &str) -> String {
         let texts: Vec<(String, f64, [f64; 2], [f64; 2])> = texts_across(d).into_iter().filter(|(v, _, _, _)| v != number && !v.is_empty()).collect();
         let titled = |v: &str| {
             let up = v.to_uppercase();
-            ["PLAN", "SCHEDULE", "COVER", "FRAMING", "CEILING", "ASSEMBLIES", "DETAILS", "SECTIONS", "ELEVATIONS", "DIAGRAM"]
+            ["PLAN", "SCHEDULE", "COVER", "FRAMING", "CEILING", "ASSEMBLIES", "DETAILS", "SECTIONS", "ELEVATIONS", "DIAGRAM", "LAYOUT"]
                 .iter()
                 .any(|k| up.contains(k))
         };
@@ -493,6 +493,7 @@ fn detect_title(d: &Drawing, number: &str) -> String {
             || upper.contains("ASSEMBLIES")
             || upper.contains("DETAILS")
             || upper.contains("SECTIONS")
+            || upper.contains("LAYOUT")
         {
             return val.clone();
         }
