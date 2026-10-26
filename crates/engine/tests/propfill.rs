@@ -54,7 +54,6 @@ fn run_job(tag: &str, only: &[&str]) -> Session {
     s
 }
 
-
 // ─── A made-up two-room plan ────────────────────────────────────────────────
 
 fn line(d: &mut Drawing, layer: &str, a: (f64, f64), b: (f64, f64)) {
@@ -328,8 +327,13 @@ fn rooms_walls_and_doors_are_filled_from_the_plan() {
         let mut e = (**d.entity(wall).expect("wall")).clone();
         e.handle = d.new_handle();
         e.common.layer = "3D-Doors".into();
-        e.common.xdata =
-            vec![RawTag { code: 1001, value: "CADADDY_WALLGEN".into() }, RawTag { code: 1000, value: "door".into() }, RawTag { code: 1000, value: "L1".into() }, RawTag { code: 1000, value: "0".into() }].into();
+        e.common.xdata = vec![
+            RawTag { code: 1001, value: "CADADDY_WALLGEN".into() },
+            RawTag { code: 1000, value: "door".into() },
+            RawTag { code: 1000, value: "L1".into() },
+            RawTag { code: 1000, value: "0".into() },
+        ]
+        .into();
         let h = e.handle;
         d.model.push(e);
         h
@@ -460,30 +464,4 @@ fn the_guided_job_fills_the_elements_properties() {
     }
     assert!(k["room"]["filled"]["number"].as_u64().unwrap_or(0) > 0, "{:#}", k["room"]);
     assert!(k["wall"]["filled"]["type"].as_u64().unwrap_or(0) > 0, "{:#}", k["wall"]);
-}
-
-#[test]
-#[ignore]
-fn probe_summary() {
-    let _g = serial();
-    real_pdf_reader();
-    let names: Vec<String> = generate_hotel(42, HotelSize::Small).expect("hotel").truth.sheets.iter().map(|s| format!("{} {}", s.number, s.title)).collect();
-    let _ = names;
-    let mut s = run_job("probe", &["A-101", "A-102", "E-201", "E-202", "M-101", "P-101"]);
-    let sum: Value = s.execute("bim.props.summary", &json!({})).expect("summary");
-    for (k, v) in sum["kinds"].as_object().into_iter().flatten() {
-        eprintln!("KIND {k} count {} filled {} sources {}", v["count"], v["filled"], v["sources"]);
-    }
-    let dev = s.execute("bim.props.find", &json!({"kind": "device", "limit": 2})).expect("find");
-    if let Some(h) = dev["handles"][0].as_str() {
-        eprintln!("DEVICE {:#}", s.execute("bim.props.get", &json!({"handle": h})).expect("get"));
-    }
-    let sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
-    let tags = sp["tags"].as_array().cloned().unwrap_or_default();
-    eprintln!("TAGS {} first {:#}", tags.len(), tags.iter().take(3).cloned().collect::<Vec<_>>().into_iter().collect::<Value>());
-    let mep = &sp["mep"];
-    eprintln!("MEP keys {:?}", mep.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()));
-    eprintln!("MEP run0 {:#} term0 {:#} eq0 {:#}", mep["runs"][0], mep["terminals"][0], mep["equipment"][0]);
-    eprintln!("SPEC keys {:?}", sp.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()));
-    eprintln!("LEVEL0 keys {:?}", sp["levels"][0].as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()));
 }

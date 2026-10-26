@@ -96,7 +96,12 @@ fn default_height(kind: &str) -> f64 {
 /// inches; only with a word that says it is a mounting height.
 pub fn mount_height_in(text: &str) -> Option<f64> {
     let up = text.to_ascii_uppercase();
-    let said = up.contains("AFF") || up.contains("A.F.F") || up.contains("MOUNT") || up.contains("ABOVE FIN") || up.contains("ABOVE FLOOR") || up.contains('+');
+    let said = up.contains("AFF")
+        || up.contains("A.F.F")
+        || up.contains("MOUNT")
+        || up.contains("ABOVE FIN")
+        || up.contains("ABOVE FLOOR")
+        || up.contains('+');
     if !said {
         return None;
     }
@@ -303,7 +308,11 @@ fn register(sp: &BuildingSpec, sheet: &str, level: &cadaddy_walk3d::Level, p: Ve
     let inside = |r: &[f64; 4], q: Vec2| q.x >= r[0].min(r[2]) && q.x <= r[0].max(r[2]) && q.y >= r[1].min(r[3]) && q.y <= r[1].max(r[3]);
     let size = |r: &[f64; 4]| ((r[2] - r[0]).abs(), (r[3] - r[1]).abs());
     let plan_mid = Vec2::new((region[0] + region[2]) / 2.0, (region[1] + region[3]) / 2.0);
-    let arch = sp.sheets.iter().filter_map(|x| x.rect.filter(|_| x.discipline.as_deref().is_none_or(|d| d.eq_ignore_ascii_case("A")))).find(|r| inside(r, plan_mid));
+    let arch = sp
+        .sheets
+        .iter()
+        .filter_map(|x| x.rect.filter(|_| x.discipline.as_deref().is_none_or(|d| d.eq_ignore_ascii_case("A"))))
+        .find(|r| inside(r, plan_mid));
     let own = sp.sheets.iter().filter(|x| x.number.eq_ignore_ascii_case(sheet.trim())).filter_map(|x| x.rect).find(|r| inside(r, p));
     let (Some(a), Some(o)) = (arch, own) else { return (p, false) };
     if inside(&a, p) {
@@ -361,7 +370,9 @@ fn room_label(number: Option<&str>, name: &str) -> String {
 
 /// The room holding `p` on `level` (any level when the room has none).
 fn room_at<'a>(rooms: &'a [RoomShape], level: Option<&str>, p: Vec2) -> Option<&'a RoomShape> {
-    rooms.iter().find(|r| (r.level.is_none() || level.is_none() || r.level.as_deref().zip(level).is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))) && r.holds(p))
+    rooms.iter().find(|r| {
+        (r.level.is_none() || level.is_none() || r.level.as_deref().zip(level).is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))) && r.holds(p)
+    })
 }
 
 /// Set `key` unless a person set it (their value stays) or the store already has a value read
@@ -514,8 +525,17 @@ fn made(e: &Entity, key: &str) -> Option<String> {
 /// An equipment's capacity, from its schedule row's values (`cfm`, `tons`, `MBH`, `kW`, `gpm`,
 /// `gal`): the first one there is, with its unit.
 fn capacity_of(props: &[(String, String)]) -> Option<(String, String)> {
-    let units: [(&str, &str); 9] =
-        [("CAPACITY", ""), ("CFM", "cfm"), ("TON", "tons"), ("MBH", "MBH"), ("BTU", "BTU/h"), ("KW", "kW"), ("GPM", "gpm"), ("GAL", "gal"), ("HP", "hp")];
+    let units: [(&str, &str); 9] = [
+        ("CAPACITY", ""),
+        ("CFM", "cfm"),
+        ("TON", "tons"),
+        ("MBH", "MBH"),
+        ("BTU", "BTU/h"),
+        ("KW", "kW"),
+        ("GPM", "gpm"),
+        ("GAL", "gal"),
+        ("HP", "hp"),
+    ];
     for (word, unit) in units {
         if let Some((_, v)) = props.iter().find(|(k, v)| k.to_ascii_uppercase().contains(word) && v.chars().any(|c| c.is_ascii_digit())) {
             return Some((v.trim().to_string(), unit.to_string()));
@@ -544,7 +564,8 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     let d = s.doc()?;
     // The plan's texts, for door numbers and airflows.
     let plan = super::bspec::plan_objects(d);
-    let texts: Vec<(String, Vec2, f64)> = super::perceive::texts(&plan).into_iter().map(|(_, t, p, h)| (t, p, h)).filter(|(t, _, _)| !t.is_empty()).collect();
+    let texts: Vec<(String, Vec2, f64)> =
+        super::perceive::texts(&plan).into_iter().map(|(_, t, p, h)| (t, p, h)).filter(|(t, _, _)| !t.is_empty()).collect();
     let grid = TextGrid::new(texts, 4.0 * upf);
     // The runs and terminals by the ids their built objects carry.
     let runs: HashMap<String, &cadaddy_walk3d::MepRun> = sp.mep.runs.iter().map(|r| (super::mep::run_base(r), r)).collect();
@@ -604,10 +625,17 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                 let circuit = store.get("circuit").filter(|p| p.has_value()).map(Prop::text);
                 if let Some(p) = &panel {
                     if let Some(gh) = gear.get(&p.trim().to_ascii_uppercase()) {
-                        put(&mut store, "fed_from_handle", Prop::new(gh.hex(), Source::computed()).with_note("the panel the circuit tag names"), tally);
+                        put(
+                            &mut store,
+                            "fed_from_handle",
+                            Prop::new(gh.hex(), Source::computed()).with_note("the panel the circuit tag names"),
+                            tally,
+                        );
                     }
                     let number = circuit.as_deref().and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.trim().to_string()));
-                    let row = equipment.get(&p.trim().to_ascii_uppercase()).and_then(|q| q.circuits.iter().find(|c| number.as_deref().is_some_and(|n| c.number.trim() == n)));
+                    let row = equipment
+                        .get(&p.trim().to_ascii_uppercase())
+                        .and_then(|q| q.circuits.iter().find(|c| number.as_deref().is_some_and(|n| c.number.trim() == n)));
                     if let Some(c) = row {
                         let src = Source::from_doc(SourceKind::Schedule, if c.source.is_empty() { "panel schedule" } else { &c.source });
                         if !c.breaker.trim().is_empty() {
@@ -627,7 +655,14 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
             }
             "room" => {
                 let label = super::rooms3d::room_of(&e.common).unwrap_or_default();
-                let number = e.common.xdata.iter().position(|t| t.code == 1001 && t.value == super::rooms3d::ROOM_APP).and_then(|i| e.common.xdata.get(i + 2)).map(|t| t.value.clone()).unwrap_or_default();
+                let number = e
+                    .common
+                    .xdata
+                    .iter()
+                    .position(|t| t.code == 1001 && t.value == super::rooms3d::ROOM_APP)
+                    .and_then(|i| e.common.xdata.get(i + 2))
+                    .map(|t| t.value.clone())
+                    .unwrap_or_default();
                 let Some(r) = room_level(&room_label(Some(&number), &label)) else { continue };
                 if let Some(l) = &r.level {
                     put(&mut store, "level", Prop::new(l.clone(), Source::computed()), tally);
@@ -650,8 +685,16 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                 let Some((b, z0, z1)) = ext else { continue };
                 // The number printed at the opening (on the plan: the build moved stacked levels).
                 let at_plan = b.center() - shift;
-                if let Some((t, q, _)) = grid.near(at_plan, DOOR_TAG_FT * upf).into_iter().find(|(t, _, _)| door_number(t) && !super::guided::is_circuit_tag(t)) {
-                    put(&mut store, "number", Prop::new(t.trim().to_string(), Source::print(&sheet_at(&sp, q, lvl), Some([q.x, q.y]))).with_note("the tag printed at the opening"), tally);
+                if let Some((t, q, _)) =
+                    grid.near(at_plan, DOOR_TAG_FT * upf).into_iter().find(|(t, _, _)| door_number(t) && !super::guided::is_circuit_tag(t))
+                {
+                    put(
+                        &mut store,
+                        "number",
+                        Prop::new(t.trim().to_string(), Source::print(&sheet_at(&sp, q, lvl), Some([q.x, q.y])))
+                            .with_note("the tag printed at the opening"),
+                        tally,
+                    );
                 }
                 let width = b.width().max(b.height()) / upf * 12.0;
                 if width.is_finite() && width > 0.0 {
@@ -710,7 +753,10 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                 let part = made(e, "part").unwrap_or_default();
                 let id = made(e, "mepid").unwrap_or_default();
                 let run = id.rsplit_once('/').and_then(|(base, _)| runs.get(base)).copied();
-                let sheet = run.map(|r| r.source_sheet.clone()).filter(|x| !x.is_empty()).unwrap_or_else(|| ext.map_or_else(String::new, |(b, _, _)| sheet_at(&sp, b.center() - shift, lvl)));
+                let sheet = run
+                    .map(|r| r.source_sheet.clone())
+                    .filter(|x| !x.is_empty())
+                    .unwrap_or_else(|| ext.map_or_else(String::new, |(b, _, _)| sheet_at(&sp, b.center() - shift, lvl)));
                 if let Some(sy) = made(e, "system") {
                     put(&mut store, "system", Prop::new(sy, Source::print(&sheet, None)), tally);
                 }
@@ -722,7 +768,12 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                 if let Some((b, z0, _)) = ext {
                     if kind == "duct" || kind == "pipe" || kind == "conduit" {
                         let src = run.map_or_else(|| Source::of(SourceKind::Default), |r| source_said(&r.height_source, &sheet));
-                        put(&mut store, "elevation", Prop::new(round2((z0 - level_z) / upf), src).with_unit("ft").with_note("bottom, above the level"), tally);
+                        put(
+                            &mut store,
+                            "elevation",
+                            Prop::new(round2((z0 - level_z) / upf), src).with_unit("ft").with_note("bottom, above the level"),
+                            tally,
+                        );
                     }
                     if part.starts_with("terminal") {
                         let kind_word = part.trim_start_matches("terminal").trim_start_matches(':');
@@ -730,10 +781,8 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                             put(&mut store, "type", Prop::new(kind_word.to_string(), Source::print(&sheet, None)), tally);
                         }
                         let at_plan = b.center() - shift;
-                        if let Some((t, q, _)) = grid.near(at_plan, CFM_TAG_FT * upf).into_iter().find(|(t, _, _)| cfm_in(t).is_some()) {
-                            if let Some(cfm) = cfm_in(t) {
-                                put(&mut store, "cfm", Prop::new(cfm, Source::print(&sheet, Some([q.x, q.y]))).with_unit("cfm"), tally);
-                            }
+                        if let Some((cfm, q)) = grid.near(at_plan, CFM_TAG_FT * upf).into_iter().find_map(|(t, q, _)| cfm_in(t).map(|c| (c, q))) {
+                            put(&mut store, "cfm", Prop::new(cfm, Source::print(&sheet, Some([q.x, q.y]))).with_unit("cfm"), tally);
                         }
                         if let Some(r) = room_at(&rooms, lvl, b.center()) {
                             put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()), tally);
@@ -747,11 +796,16 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                         let rows: Vec<(String, String)> = super::bimlook::made_tags(e)
                             .into_iter()
                             .flatten()
-                            .filter_map(|t| t.value.strip_prefix("prop:").and_then(|kv| kv.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())))
+                            .filter_map(|t| {
+                                t.value.strip_prefix("prop:").and_then(|kv| kv.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string()))
+                            })
                             .filter(|(k, _)| !k.starts_with("SOURCE "))
                             .collect();
                         if let Some((v, unit)) = capacity_of(&rows) {
-                            let sched = equipment.get(&tag.to_ascii_uppercase()).and_then(|q| q.sources.get("schedule").or_else(|| q.sources.values().next()).cloned()).unwrap_or_else(|| "equipment schedule".into());
+                            let sched = equipment
+                                .get(&tag.to_ascii_uppercase())
+                                .and_then(|q| q.sources.get("schedule").or_else(|| q.sources.values().next()).cloned())
+                                .unwrap_or_else(|| "equipment schedule".into());
                             let mut p = Prop::new(v, Source::from_doc(SourceKind::Schedule, &sched));
                             if !unit.is_empty() {
                                 p = p.with_unit(&unit);
