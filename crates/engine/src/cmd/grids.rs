@@ -2,16 +2,21 @@
 //! and to place the columns drawn at their intersections.
 //!
 //! - `grids.detect`: grid bubbles (circles 4"–24" in radius around a short label: `A`, `3`,
-//!   `C.1`) and the grid line touching each (the longest line with an end at the bubble), per
-//!   level; and their intersections, labelled `A-1` (letters first).
+//!   `C.1`; or block references holding such a circle or a hexagon, labelled by an attribute or
+//!   a text, as the parts library's `G_GRID_BUBBLE_050/075/HEX` are) and the grid line touching
+//!   each (the longest line, or straight run of a polyline, with an end at the bubble), per
+//!   level; bubbles at both ends of one line are one grid. And their intersections, labelled
+//!   `A-1` (letters first). A level on its own sheet (`sheet`) is read from that drawing.
 //! - `levels.align {reference?, apply?}`: each level's intersections matched by label with the
 //!   reference level's give its scale and offset (least squares: `q ≈ s·p + t`). Applied, every
 //!   level's base point becomes its point of the same grid intersection, so the levels stack
-//!   exactly; a level drawn at another scale is reported and left (levels share one drawing
-//!   scale).
+//!   exactly (a level on its own sheet gets its base in that sheet's coordinates); a level drawn
+//!   at another scale is reported and left (levels share one drawing scale), and so is one whose
+//!   fit can't be trusted (fewer than 2 intersections in common, or one missing by over 1").
 //! - `grids.columns {level, apply?}`: the column outlines (closed outlines and circles up to 4'
 //!   across, on structural or column layers) centred on the level's grid intersections, into
-//!   the spec's `columns`; `model.build` stands them up through their storeys.
+//!   the spec's `columns` with the outline they came from and status `rule`; `model.build`
+//!   stands them up through their storeys.
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, RawTag, Space};
 use cadaddy_geom::{Polyline, Vec2};
@@ -30,13 +35,13 @@ const MAX_ITEMS: usize = 10_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("grids.detect", "Detect Grids", run_detect)
-            .params("{level?: name} → {levels: [{level, grids: [{label, from, to, bubble}], intersections: [{label, at}]}]}")
+            .params("{level?: name} → {levels: [{level, sheet?: the level's own drawing, note?, grids: [{label, from, to, bubble}], intersections: [{label, at}]}]}")
             .noundo(),
         CommandSpec::new("levels.align", "Align Levels by Grids", run_align).params(
-            "{reference?: level (default the first with grids), apply?: bool (set each level's base point to its point of a common grid intersection)} → {reference, levels: [{level, matched, scale, offset, residual, base?, note?}]}",
+            "{reference?: level (default the first with grids), apply?: bool (set each level's base point to its point of a common grid intersection; levels on their own sheet are read from it and get their base in its coordinates; a level with fewer than 2 intersections in common or one missing by over 1\" is left, with a note)} → {reference, levels: [{level, sheet?, matched, scale, offset, residual, base?, note?}]}",
         ),
         CommandSpec::new("grids.columns", "Columns at Grids", run_columns).params(
-            "{level: name, to_level?: name, apply?: bool (into the spec's columns, replacing the level's)} → {columns: [{grid, at, size_in, round}]}",
+            "{level: name (drawn in this drawing), to_level?: name, apply?: bool (into the spec's columns, replacing the level's)} → {columns: [{grid, at, size_in, round, source: the outline's handle, status: rule}]}",
         ),
     ]
 }
@@ -59,36 +64,152 @@ fn grid_label(t: &str) -> bool {
         && t.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
 }
 
-/// The grids of a set of objects.
-fn grids(ents: &[&Arc<Entity>], k: f64) -> Vec<Grid> {
+/// A grid bubble: its centre, radius and label.
+struct Bubble {
+    at: Vec2,
+    r: f64,
+    label: String,
+}
+
+/// The grid bubbles of a set of objects: circles 4"–24" in radius around a grid label, and block
+/// references whose block holds a circle or a closed polygon (a hexagon) of that size, labelled
+/// by an attribute, a text in the block or a text over it.
+fn bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Bubble> {
     let notes = texts(ents);
-    let lines: Vec<(Vec2, Vec2)> = ents
-        .iter()
-        .filter_map(|e| match &e.kind {
-            EntityKind::Line(l) => Some((l.a.xy(), l.b.xy())),
-            _ => None,
-        })
-        .filter(|(a, b)| a.dist(*b) >= 120.0 * k)
-        .take(MAX_ITEMS * 10)
-        .collect();
-    let mut out: Vec<Grid> = Vec::new();
+    let size = |r: f64| r >= 4.0 * k && r <= 24.0 * k;
+    let over = |o: Vec2, r: f64| notes.iter().find(|(_, t, at, _)| at.dist(o) <= r && grid_label(t)).map(|(_, t, _, _)| t.trim().to_string());
+    let mut out = Vec::new();
     for e in ents {
-        let EntityKind::Circle(c) = &e.kind else { continue };
-        let (o, r) = (c.center.xy(), c.radius);
-        if !(r >= 4.0 * k && r <= 24.0 * k) {
-            continue;
+        if out.len() >= MAX_ITEMS {
+            break;
         }
-        let Some((_, label, _, _)) = notes.iter().find(|(_, t, at, _)| at.dist(o) <= r && grid_label(t)) else { continue };
+        match &e.kind {
+            EntityKind::Circle(c) => {
+                let (o, r) = (c.center.xy(), c.radius);
+                if let Some(label) = over(o, r).filter(|_| size(r)) {
+                    out.push(Bubble { at: o, r, label });
+                }
+            }
+            EntityKind::Insert(i) => {
+                let Some(blk) = d.block(&i.block) else { continue };
+                let m = i.transform(blk.base.xy());
+                let sc = m.det().abs().sqrt();
+                if !sc.is_finite() || sc <= 0.0 {
+                    continue;
+                }
+                let shape = blk
+                    .entities
+                    .iter()
+                    .take(64)
+                    .find_map(|be| match &be.kind {
+                        EntityKind::Circle(c) => Some((c.center.xy(), c.radius)),
+                        EntityKind::LwPolyline(pl) if pl.closed && (5..=12).contains(&pl.vertices.len()) => {
+                            let c = pl.vertices.iter().fold(Vec2::new(0.0, 0.0), |a, v| a + v.p) * (1.0 / pl.vertices.len() as f64);
+                            Some((c, pl.vertices.iter().map(|v| v.p.dist(c)).fold(0.0, f64::max)))
+                        }
+                        _ => None,
+                    })
+                    .map(|(c, r)| (m.apply(c), r * sc))
+                    .filter(|&(_, r)| size(r));
+                let Some((o, r)) = shape else { continue };
+                let label = i
+                    .attribs
+                    .iter()
+                    .map(|a| a.text.value.trim())
+                    .find(|t| grid_label(t))
+                    .map(str::to_string)
+                    .or_else(|| {
+                        blk.entities.iter().take(64).find_map(|be| match &be.kind {
+                            EntityKind::Text(t) if grid_label(&t.value) => Some(t.value.trim().to_string()),
+                            _ => None,
+                        })
+                    })
+                    .or_else(|| over(o, r));
+                if let Some(label) = label {
+                    out.push(Bubble { at: o, r, label });
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Lines, and the straight runs of open polylines (collinear segments joined), 10' long or more.
+fn grid_lines(ents: &[&Arc<Entity>], k: f64) -> Vec<(Vec2, Vec2)> {
+    let mut out: Vec<(Vec2, Vec2)> = Vec::new();
+    let mut push = |a: Vec2, b: Vec2| {
+        if a.dist(b) >= 120.0 * k && out.len() < MAX_ITEMS * 10 {
+            out.push((a, b));
+        }
+    };
+    for e in ents {
+        match &e.kind {
+            EntityKind::Line(l) => push(l.a.xy(), l.b.xy()),
+            EntityKind::LwPolyline(pl) if !pl.closed => {
+                let mut run: Option<(Vec2, Vec2)> = None;
+                for w in pl.vertices.windows(2).take(MAX_ITEMS) {
+                    let [v, u] = w else { continue };
+                    if v.bulge.abs() > 1e-9 || v.p.dist(u.p) < 1e-9 {
+                        if let Some((a, b)) = run.take() {
+                            push(a, b);
+                        }
+                        continue;
+                    }
+                    run = match run {
+                        Some((a, b)) if (b - a).cross(u.p - b).abs() <= 1e-6 * a.dist(b) * b.dist(u.p) && (b - a).dot(u.p - b) > 0.0 => {
+                            Some((a, u.p))
+                        }
+                        Some((a, b)) => {
+                            push(a, b);
+                            Some((v.p, u.p))
+                        }
+                        None => Some((v.p, u.p)),
+                    };
+                }
+                if let Some((a, b)) = run {
+                    push(a, b);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Whether the line `a`–`b` lies along grid `g`: parallel, and within 1" of its line.
+fn along(g: &Grid, a: Vec2, b: Vec2, k: f64) -> bool {
+    let r = g.b - g.a;
+    let (lr, ls) = (r.len(), a.dist(b));
+    if lr < 1e-12 || ls < 1e-12 {
+        return false;
+    }
+    let off = |p: Vec2| (p - g.a).cross(r).abs() / lr;
+    r.cross(b - a).abs() <= 1e-3 * lr * ls && off(a) <= k && off(b) <= k
+}
+
+/// The grids of a set of objects.
+fn grids(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Grid> {
+    let lines = grid_lines(ents, k);
+    let mut out: Vec<Grid> = Vec::new();
+    for Bubble { at: o, r, label } in bubbles(d, ents, k) {
         // The longest line with an end on (or in) the bubble.
         let touching =
             lines.iter().filter(|(a, b)| a.dist(o) <= 1.3 * r || b.dist(o) <= 1.3 * r).max_by(|x, y| x.0.dist(x.1).total_cmp(&y.0.dist(y.1)));
         let Some(&(a, b)) = touching else { continue };
         // From the bubble end to the far end.
         let (a, b) = if a.dist(o) <= b.dist(o) { (a, b) } else { (b, a) };
-        if out.iter().any(|g| g.label.eq_ignore_ascii_case(label) && g.a.dist(a) < 1e-6) {
+        // Bubbles at both ends of a grid line (or on pieces of one line) are one grid: its
+        // line spans them all.
+        if let Some(g) = out.iter_mut().find(|g| g.label.eq_ignore_ascii_case(&label) && along(g, a, b, k)) {
+            let (a0, len) = (g.a, g.a.dist(g.b));
+            let u = (g.b - g.a) * (1.0 / len);
+            let (lo, hi) = [(a - a0).dot(u), (b - a0).dot(u)].iter().fold((0.0_f64, len), |(lo, hi), t| (lo.min(*t), hi.max(*t)));
+            g.a = a0 + u * lo;
+            g.b = a0 + u * hi;
             continue;
         }
-        out.push(Grid { label: label.trim().to_string(), a, b, bubble: o });
+        out.push(Grid { label, a, b, bubble: o });
         if out.len() >= MAX_ITEMS {
             break;
         }
@@ -123,23 +244,85 @@ fn intersections(gs: &[Grid], k: f64) -> Vec<(String, Vec2)> {
     out
 }
 
-/// Each level's grids and intersections.
-fn by_level(d: &Drawing, sp: &BuildingSpec) -> Vec<(String, Vec<Grid>, Vec<(String, Vec2)>)> {
+/// A level's grids and their intersections, from this drawing or the level's own sheet.
+struct LevelGrids {
+    level: String,
+    /// The level's own drawing (`sheet`), when it is on one.
+    sheet: Option<String>,
+    /// Its drawing's units per inch.
+    k: f64,
+    grids: Vec<Grid>,
+    xs: Vec<(String, Vec2)>,
+    /// Why its sheet gave nothing.
+    note: Option<String>,
+}
+
+/// Most bytes read of a level's own sheet.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_SHEET_BYTES: u64 = 256 << 20;
+
+/// The drawing of a level on its own sheet: its stored path, beside the drawing at `host`.
+fn read_sheet(path: &str, host: Option<&str>) -> std::result::Result<Drawing, String> {
+    let hooks = super::file::io().ok_or("file formats are not available in this build")?;
+    let file = crate::doc_path::resolve(path, host.map(std::path::Path::new)).map_err(|r| format!("not opened, {r}"))?;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Read;
+        let f = crate::readfile::open(&file).map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        f.take(MAX_SHEET_BYTES + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+        if bytes.len() as u64 > MAX_SHEET_BYTES {
+            return Err("too large".into());
+        }
+        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        (hooks.read)(&bytes, &name)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (hooks, file);
+        Err("other drawings are not read on the web".into())
+    }
+}
+
+/// Each level's grids and intersections: levels drawn here from their part of this drawing,
+/// levels on their own sheet from that drawing (within their `region`, when set).
+fn by_level(s: &Session, sp: &BuildingSpec) -> Result<Vec<LevelGrids>> {
+    let d = s.doc()?;
+    let host = s.state().ok().and_then(|st| st.path.clone());
     let k = units_per_inch(d);
     let all = plan_objects(d);
-    let centre = |e: &Entity| {
+    let centre = |d: &Drawing, e: &Entity| {
         let b = cadaddy_doc::entity_bounds(d, e, 0);
         (!b.is_empty()).then(|| b.center())
     };
     let mut out = Vec::new();
-    for l in sp.levels.iter().filter(|l| l.sheet.is_none()) {
-        let mine: Vec<&Arc<Entity>> =
-            all.iter().copied().filter(|e| centre(e).and_then(|c| level_at(&sp.levels, c.x, c.y)).is_some_and(|x| x.name == l.name)).collect();
-        let gs = grids(&mine, k);
-        let xs = intersections(&gs, k);
-        out.push((l.name.clone(), gs, xs));
+    for l in &sp.levels {
+        let mut row = LevelGrids { level: l.name.clone(), sheet: l.sheet.clone(), k, grids: Vec::new(), xs: Vec::new(), note: None };
+        match &l.sheet {
+            None => {
+                let mine: Vec<&Arc<Entity>> = all
+                    .iter()
+                    .copied()
+                    .filter(|e| centre(d, e).and_then(|c| level_at(&sp.levels, c.x, c.y)).is_some_and(|x| x.name == l.name))
+                    .collect();
+                row.grids = grids(d, &mine, k);
+            }
+            Some(f) => match read_sheet(f, host.as_deref()) {
+                Ok(sd) => {
+                    row.k = units_per_inch(&sd);
+                    let inside = |c: Vec2| {
+                        l.region.is_none_or(|[x0, y0, x1, y1]| c.x >= x0.min(x1) && c.x <= x0.max(x1) && c.y >= y0.min(y1) && c.y <= y0.max(y1))
+                    };
+                    let mine: Vec<&Arc<Entity>> = plan_objects(&sd).into_iter().filter(|e| centre(&sd, e).is_some_and(inside)).collect();
+                    row.grids = grids(&sd, &mine, row.k);
+                }
+                Err(e) => row.note = Some(format!("its sheet {f} could not be read ({e}): check the level's sheet path, or set its base by hand")),
+            },
+        }
+        row.xs = intersections(&row.grids, row.k);
+        out.push(row);
     }
-    out
+    Ok(out)
 }
 
 fn pt(p: Vec2) -> Value {
@@ -152,15 +335,22 @@ fn run_detect(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(l) = only.filter(|l| sp.level(l).is_none()) {
         return Err(bad("grids.detect", format!("there is no level named {l}")));
     }
-    let levels: Vec<Value> = by_level(s.doc()?, &sp)
+    let levels: Vec<Value> = by_level(s, &sp)?
         .into_iter()
-        .filter(|(l, _, _)| only.is_none_or(|o| o.eq_ignore_ascii_case(l)))
-        .map(|(l, gs, xs)| {
-            json!({
-                "level": l,
-                "grids": gs.iter().map(|g| json!({"label": g.label, "from": pt(g.a), "to": pt(g.b), "bubble": pt(g.bubble)})).collect::<Vec<_>>(),
-                "intersections": xs.iter().map(|(n, p)| json!({"label": n, "at": pt(*p)})).collect::<Vec<_>>(),
-            })
+        .filter(|l| only.is_none_or(|o| o.eq_ignore_ascii_case(&l.level)))
+        .map(|l| {
+            let mut row = json!({
+                "level": l.level,
+                "grids": l.grids.iter().map(|g| json!({"label": g.label, "from": pt(g.a), "to": pt(g.b), "bubble": pt(g.bubble)})).collect::<Vec<_>>(),
+                "intersections": l.xs.iter().map(|(n, p)| json!({"label": n, "at": pt(*p)})).collect::<Vec<_>>(),
+            });
+            if let Some(f) = l.sheet {
+                row["sheet"] = json!(f);
+            }
+            if let Some(n) = l.note {
+                row["note"] = json!(n);
+            }
+            row
         })
         .collect();
     Ok(json!({ "levels": levels }))
@@ -184,16 +374,14 @@ fn fit(pairs: &[(Vec2, Vec2)]) -> Option<(f64, Vec2, f64)> {
 
 fn run_align(s: &mut Session, p: &Value) -> Result<Value> {
     let (mut sp, _) = current(s, "levels.align")?;
-    let found = by_level(s.doc()?, &sp);
+    let found = by_level(s, &sp)?;
     let reference = match str_param(p, "reference") {
         Some(r) => sp.level(r).map(|l| l.name.clone()).ok_or_else(|| bad("levels.align", format!("there is no level named {r}")))?,
-        None => found
-            .iter()
-            .find(|(_, _, xs)| !xs.is_empty())
-            .map(|(l, _, _)| l.clone())
-            .ok_or_else(|| bad("levels.align", "no level has grid intersections"))?,
+        None => {
+            found.iter().find(|l| !l.xs.is_empty()).map(|l| l.level.clone()).ok_or_else(|| bad("levels.align", "no level has grid intersections"))?
+        }
     };
-    let Some((_, _, ref_xs)) = found.iter().find(|(l, _, _)| *l == reference) else {
+    let Some(LevelGrids { xs: ref_xs, k: ref_k, .. }) = found.iter().find(|l| l.level == reference) else {
         return Err(bad("levels.align", "the reference level has no grids"));
     };
     if ref_xs.is_empty() {
@@ -206,18 +394,31 @@ fn run_align(s: &mut Session, p: &Value) -> Result<Value> {
         ref_level.as_ref().and_then(|l| l.base).map(|b| Vec2::new(b[0], b[1])).or_else(|| ref_xs.first().map(|x| x.1)).unwrap_or(Vec2::new(0.0, 0.0));
     let mut rows = Vec::new();
     let mut bases: Vec<(String, [f64; 2])> = Vec::new();
-    for (l, _, xs) in &found {
+    for LevelGrids { level: l, sheet, xs, note, .. } in &found {
         let pairs: Vec<(Vec2, Vec2)> = xs.iter().filter_map(|(n, pp)| ref_xs.iter().find(|(m, _)| m == n).map(|(_, q)| (*pp, *q))).collect();
         let mut row = json!({ "level": l, "matched": pairs.len() });
+        if let Some(f) = sheet {
+            row["sheet"] = json!(f);
+        }
         let Some((scale, t, miss)) = fit(&pairs).filter(|_| !pairs.is_empty()) else {
-            row["note"] = json!("no grid intersections in common with the reference");
+            row["note"] = json!(note.clone().unwrap_or_else(|| "no grid intersections in common with the reference".into()));
             rows.push(row);
             continue;
         };
         row["scale"] = json!((scale * 1e9).round() / 1e9);
         row["offset"] = pt(t);
         row["residual"] = json!((miss * 1e6).round() / 1e6);
-        if (scale - 1.0).abs() > 1e-3 {
+        if pairs.len() < 2 {
+            row["note"] = json!(format!(
+                "only grid intersection {} is in common with {reference}: not aligned (two or more are needed to check the fit); check its grid labels with grids.detect, or set its base by hand",
+                xs.iter().find(|(n, _)| ref_xs.iter().any(|(m, _)| m == n)).map_or("", |(n, _)| n.as_str())
+            ));
+        } else if miss > *ref_k {
+            row["note"] = json!(format!(
+                "its grids don't line up with {reference}'s: an intersection misses by {:.2}\" after the fit (over 1\"), so a grid label may not match; not aligned: check its grid labels with grids.detect, or set its base by hand",
+                miss / ref_k
+            ));
+        } else if (scale - 1.0).abs() > 1e-3 {
             row["note"] = json!(format!("drawn at {:.4}× the reference's scale: not aligned (levels share one drawing scale)", scale));
         } else {
             // The point of this level that lands on the reference's base: base = (B_ref − t) / s.
@@ -247,10 +448,13 @@ fn run_columns(s: &mut Session, p: &Value) -> Result<Value> {
         Some(t) => Some(sp.level(t).map(|l| l.name.clone()).ok_or_else(|| bad("grids.columns", format!("there is no level named {t}")))?),
         None => None,
     };
+    if let Some(f) = sp.level(&level).and_then(|l| l.sheet.as_ref()) {
+        return Err(bad("grids.columns", format!("{level} is drawn on its own sheet ({f}): open that drawing and run grids.columns there")));
+    }
+    let found = by_level(s, &sp)?;
     let d = s.doc()?;
     let k = units_per_inch(d);
-    let found = by_level(d, &sp);
-    let Some((_, _, xs)) = found.iter().find(|(l, _, _)| *l == level) else { return Err(bad("grids.columns", "no grids on that level")) };
+    let Some(LevelGrids { xs, .. }) = found.iter().find(|l| l.level == level) else { return Err(bad("grids.columns", "no grids on that level")) };
     let all = plan_objects(d);
     let structural = |e: &Entity| {
         let up = e.common.layer.to_ascii_uppercase();
@@ -267,9 +471,9 @@ fn run_columns(s: &mut Session, p: &Value) -> Result<Value> {
                 _ => return None,
             };
             let b = cadaddy_geom::Bounds2::from_points(outline.iter().copied());
-            (!b.is_empty() && b.width() <= 48.0 * k && b.height() <= 48.0 * k && b.center().dist(*at) <= 6.0 * k).then_some((b, round))
+            (!b.is_empty() && b.width() <= 48.0 * k && b.height() <= 48.0 * k && b.center().dist(*at) <= 6.0 * k).then_some((b, round, e.handle))
         });
-        if let Some((b, round)) = shape {
+        if let Some((b, round, source)) = shape {
             let r8 = |v: f64| (v / k * 8.0).round() / 8.0;
             columns.push(GridColumn {
                 level: level.clone(),
@@ -278,6 +482,8 @@ fn run_columns(s: &mut Session, p: &Value) -> Result<Value> {
                 size_in: [r8(b.width()), r8(b.height())],
                 round,
                 to_level: to_level.clone(),
+                source: source.hex(),
+                status: "rule".into(),
             });
         }
     }
@@ -313,13 +519,18 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         };
         let Some(m) = super::bspec::prism(&outline, z0, z1) else { continue };
         let t = |code: i32, v: String| RawTag { code, value: v };
-        let xdata = vec![
+        // The outline it was read from (none for a column typed into the spec).
+        let source = Handle::parse_hex(&c.source).filter(|h| h.0 != 0).map(|h| h.hex()).unwrap_or_default();
+        let mut xdata = vec![
             t(1001, super::wallgen::APP.into()),
             t(1000, "column".into()),
             t(1000, level.name.clone()),
-            t(1000, Handle(0).hex()),
+            t(1000, source),
             t(1000, format!("grid:{}", c.grid)),
         ];
+        if !c.status.is_empty() {
+            xdata.push(t(1000, format!("status:{}", c.status)));
+        }
         if d.add(&Space::Model, Common { layer: "3D-Columns".into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             n += 1;
         }
