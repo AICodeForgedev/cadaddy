@@ -724,7 +724,7 @@ mod tests {
         assert!(vis.instances.iter().all(|g| g.1 == 2));
         // The visible scene has the same count here (box LOD for a cube = same 12 tris) but
         // the base chunks are only those in view, which is all of them for a wide view.
-        assert!(scene.tris.len() > 0);
+        assert!(!scene.tris.is_empty());
         // A corner view: fewer instances visible.
         let corner = view(Vec2::new(25.0, 25.0), 50.0, 500, 500);
         let vis_corner = m.visible(&corner);
