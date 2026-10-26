@@ -140,9 +140,12 @@ fn the_runs_are_built_on_their_sheets_levels() {
             assert!(x >= x0 && x <= x1 && y >= y0 && y <= y1, "{} point {p} outside its level's plan", r["source_sheet"]);
         }
     }
-    // A level only the MEP plans give takes no plan objects: no walls built on it twice.
-    let notes: Vec<&str> = build["notes"].as_array().expect("notes").iter().filter_map(Value::as_str).collect();
-    assert!(notes.iter().any(|n| n.starts_with("Level 2: no objects on the wall layers")), "{notes:?}");
+    // The MEP plans add no walls (and no levels that build the plans again): the walls are
+    // the architectural plans' alone.
+    let plain = run_job("levels_arch", &["A-101", "A-102", "E-101"]);
+    let plain_build = stage(&job_state(&plain), "bim_build")["result"].clone();
+    assert_eq!(build["walls"], plain_build["walls"], "MEP sheets never add walls");
+    assert_eq!(build["levels"], plain_build["levels"], "{build}");
 }
 
 #[test]
