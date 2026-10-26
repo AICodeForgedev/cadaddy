@@ -2987,6 +2987,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
 
     let mut placed: Option<Value> = None;
+    let mut located: Option<Value> = None;
     // The devices stage's devices, on their levels (bspec.draft started a new spec), before the
     // build: it makes each one an element carrying what was read about it (Q6002).
     if !job.devices.is_empty() {
@@ -3004,8 +3005,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
         // The architect locates, the engineer circuits (Q6026): each device moves to where the
         // architectural elevations and plans put it, keeping its circuit.
-        let located = super::archlocate::run_for_job(s, job);
-        for (what, examples) in super::archlocate::job_findings(&located) {
+        let moved = super::archlocate::run_for_job(s, job);
+        for (what, examples) in super::archlocate::job_findings(&moved) {
             job.add_finding(
                 StageName::BimBuild,
                 &what,
@@ -3016,7 +3017,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 false,
             );
         }
-        result["arch_locate"] = located;
+        located = Some(moved);
     }
 
     // Use model.build directly — it returns walls/doors/rooms/levels counts.
@@ -3024,6 +3025,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut result = s.execute("model.build", &json!({}))?;
     if let Some(v) = placed {
         result["devices"] = v;
+    }
+    if let Some(v) = located {
+        result["arch_locate"] = v;
     }
     // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff.
     if !job.circuits.is_empty()

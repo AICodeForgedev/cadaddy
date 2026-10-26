@@ -739,6 +739,41 @@ struct EPlan {
     sheet: Sheet,
 }
 
+/// Most places a room's number or name is looked up at.
+const MAX_ROOM_TAGS: usize = 16;
+
+/// The room an elevation shows among the rooms around `tags` (where its number or name is
+/// printed): one room, or the one with a wall (`side`'s, when the view says) closest to the
+/// view's estimated width `est_len` (feet).
+fn best_room(sheet: &Sheet, tags: &[[f64; 2]], side: Option<Side>, est_len: f64, upf: f64) -> Option<[f64; 4]> {
+    let mut boxes: Vec<[f64; 4]> = Vec::new();
+    for at in tags.iter().take(MAX_ROOM_TAGS) {
+        if let Some(bx) = room_box(sheet, *at, upf)
+            && !boxes.iter().any(|b| b.iter().zip(bx.iter()).all(|(x, y)| (x - y).abs() <= 0.25 * upf))
+        {
+            boxes.push(bx);
+        }
+    }
+    if boxes.len() <= 1 {
+        return boxes.first().copied();
+    }
+    let fit = |bx: &[f64; 4]| -> f64 {
+        walls_of(*bx)
+            .iter()
+            .filter(|w| side.is_none_or(|s| w.side == s))
+            .map(|w| (w.len() / upf / est_len.max(1e-9)).max(1e-9).ln().abs())
+            .fold(f64::INFINITY, f64::min)
+    };
+    let mut scored: Vec<(f64, [f64; 4])> = boxes.iter().map(|b| (fit(b), *b)).filter(|(f, _)| f.is_finite()).collect();
+    scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+    match scored.as_slice() {
+        // Two rooms that fit alike: not told.
+        [a, b, ..] if (b.0 - a.0).abs() < 0.05 => None,
+        [a, ..] => Some(a.1),
+        [] => None,
+    }
+}
+
 /// Unique room numbers of `labels`: number → where.
 fn unique_numbers(labels: &[Label]) -> BTreeMap<String, [f64; 2]> {
     let mut seen: BTreeMap<String, Option<[f64; 2]>> = BTreeMap::new();
@@ -966,8 +1001,13 @@ pub(crate) fn locate(
                         named
                     }
                 };
-                let [at] = tag_at.as_slice() else { continue };
-                let Some(bx) = room_box(&plan.sheet, *at, upf) else {
+                if tag_at.is_empty() {
+                    continue;
+                }
+                let est_len = v.width() / v.height.max(1e-9) * ceiling_of(&plan.level);
+                // A number printed more than once (a door numbered as its room, a keyed note):
+                // the rooms its prints sit in, the one whose wall fits the view best.
+                let Some(bx) = best_room(&plan.sheet, &tag_at, v.side, est_len, upf) else {
                     run.finding("room_walls_not_found", json!({"view": v.title, "sheet": page.number, "e_sheet": plan.number}));
                     continue;
                 };
@@ -990,7 +1030,6 @@ pub(crate) fn locate(
                         .min_by(|a, b| a.1.total_cmp(&b.1))
                         .map(|(s, _, _)| s)
                 };
-                let est_len = v.width() / v.height.max(1e-9) * ceiling_of(&plan.level);
                 let candidates: Vec<&Wall> = match v.side {
                     Some(s) => walls.iter().filter(|w| w.side == s).collect(),
                     None => walls.iter().filter(|w| (0.7..=1.43).contains(&(w.len() / upf / est_len.max(1e-9)))).collect(),
@@ -1577,6 +1616,29 @@ mod tests {
         assert_eq!(sp.tags[3].at_ft, [2.5, 8.0 / 12.0]);
         let kinds: Vec<&str> = r["findings"].as_array().unwrap().iter().filter_map(|f| f["kind"].as_str()).collect();
         assert!(kinds.contains(&"wall_not_shown"), "{r}");
+    }
+
+    #[test]
+    fn a_room_number_printed_twice_finds_the_room_whose_wall_fits_the_view() {
+        // 101 printed again in an 8' x 6' closet next door (a door mark, a keyed note).
+        let mut plan = e_plan();
+        room(&mut plan, [300.0, 0.0, 396.0, 72.0]);
+        add_text(&mut plan, "101", [348.0, 36.0], 6.0);
+        let mut sp = spec();
+        let elev = elevation("ROOM 101 - NORTH INTERIOR ELEVATION", &[("SCONCE", 42.0, 78.0), ("SCONCE", 84.0, 78.0), ("SCONCE", 126.0, 78.0)], &[]);
+        let r = locate(&mut sp, &plan, &e_sheets(), &[page(elev)], Opts::default());
+        assert_eq!(r["moved"], 3, "{r}");
+        let xs: Vec<f64> = (0..3).map(|i| sp.tags[i].at_ft[0]).collect();
+        assert_eq!(xs, vec![3.5, 7.0, 10.5], "{r}");
+        // Two rooms alike: not told.
+        let sheet = Sheet::read(plan.model.iter().map(|e| e.as_ref()), None);
+        assert_eq!(best_room(&sheet, &[[84.0, 72.0], [348.0, 36.0]], Some(Side::North), 14.0, 12.0), Some([0.0, 0.0, 168.0, 144.0]));
+        assert_eq!(best_room(&sheet, &[[84.0, 72.0], [348.0, 36.0]], Some(Side::North), 8.0, 12.0), Some([300.0, 0.0, 396.0, 72.0]));
+        let mut twin = e_plan();
+        room(&mut twin, [300.0, 0.0, 468.0, 144.0]);
+        let sheet = Sheet::read(twin.model.iter().map(|e| e.as_ref()), None);
+        assert_eq!(best_room(&sheet, &[[84.0, 72.0], [384.0, 72.0]], None, 14.0, 12.0), None);
+        assert_eq!(best_room(&sheet, &[], None, 14.0, 12.0), None);
     }
 
     #[test]

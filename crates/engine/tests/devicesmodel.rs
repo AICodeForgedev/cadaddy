@@ -401,6 +401,13 @@ fn the_guided_jobs_devices_are_elements_its_takeoff_counts() {
     let devices = count(&k, "device");
     assert!(devices > 0, "the job's devices are elements: {k:#}");
     assert_eq!(k["device"]["filled"]["location"], json!(devices), "{:#}", k["device"]);
+    // The architect-locates pass ran on them before the build, and its report is in the stage's
+    // result (no architectural elevations in this set: nothing moved, saying why).
+    let job: Value = serde_json::from_str(s.doc().ok().and_then(|d| d.agent.clone()).as_deref().unwrap_or("{}")).expect("job state");
+    let build = job["guided_job"]["stages"].as_array().and_then(|a| a.iter().find(|x| x["name"] == "bim_build")).expect("bim_build");
+    let located = &build["result"]["arch_locate"];
+    assert!(located.is_object(), "the bim_build result keeps arch_locate: {:#}", build["result"]);
+    assert_eq!(located["moved"], json!(0), "{located:#}");
     let t = s.execute("bim.takeoff", &json!({"filter": {"category": "devices"}, "keep": false})).expect("takeoff");
     let lines = t["lines"].as_array().expect("lines");
     let mut counted = 0;

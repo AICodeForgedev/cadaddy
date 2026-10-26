@@ -238,11 +238,19 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         let Some(level) = sp.level(&t.level).filter(|l| l.sheet.is_none()) else { continue };
         let mark = field(t, "type").unwrap_or_default();
         let kind = kind_of(&mark);
-        let height = heights.get(&mark.to_ascii_uppercase()).cloned().unwrap_or(Height {
-            inches: default_height(kind),
-            source: SourceKind::Default,
-            doc: format!("usual height for a {kind}"),
-        });
+        // Where the architect put it (Q6026): its elevation's height wins over the E legend's.
+        let arch = field(t, "location_source").is_some_and(|v| v == "architectural");
+        let arch_from = field(t, "located_from").unwrap_or_else(|| "architectural sheets".into());
+        let arch_height =
+            field(t, "mount_height_ft").and_then(|v| v.parse::<f64>().ok()).filter(|h| arch && h.is_finite() && (0.0..=60.0).contains(h));
+        let height = match arch_height {
+            Some(ft) => Height { inches: ft * 12.0, source: SourceKind::Print, doc: arch_from.clone() },
+            None => heights.get(&mark.to_ascii_uppercase()).cloned().unwrap_or(Height {
+                inches: default_height(kind),
+                source: SourceKind::Default,
+                doc: format!("usual height for a {kind}"),
+            }),
+        };
         let read_at = Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf);
         let sheet_name = field(t, "sheet").unwrap_or_default();
         let (placed, registered) = register(sp, &sheet_name, level, read_at);
@@ -278,7 +286,11 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
                 }
             }
         }
-        let mut hp = Prop::new(round2(height.inches), Source::from_doc(height.source, &height.doc)).with_unit("in");
+        let mut hp = if arch_height.is_some() {
+            Prop::new(round2(height.inches), Source::print(&arch_from, None)).with_unit("in").with_note("architectural elevation")
+        } else {
+            Prop::new(round2(height.inches), Source::from_doc(height.source, &height.doc)).with_unit("in")
+        };
         if height.source == SourceKind::Default {
             hp.note = Some("not printed: the usual height for this kind of device".into());
         }
@@ -288,10 +300,17 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
             store.set("sheet", Prop::new(sheet.clone(), Source::print(&sheet, at)));
         }
         let mut loc = location_prop(x, y, z, upf);
-        if registered {
+        if arch {
+            loc.source = Source::print(&arch_from, None);
+            loc.note = Some("model coordinates: where the architectural sheets put it (the architect locates, the engineer circuits)".into());
+        } else if registered {
             loc.note = Some("model coordinates: read on its sheet, moved onto its level's architectural plan by the sheet frame (same sheet size), at the level's elevation plus the offset".into());
         }
         store.set("location", loc);
+        if let Some(src) = field(t, "location_source") {
+            let source = if arch { Source::print(&arch_from, None) } else { Source::print(&sheet, at) };
+            store.set("location_source", Prop::new(src, source));
+        }
         let xdata = props::write(&xdata, &store);
         if d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             built += 1;

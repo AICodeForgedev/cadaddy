@@ -243,6 +243,34 @@ fn a_device_read_on_a_trade_sheet_lands_on_its_levels_architectural_plan() {
 }
 
 #[test]
+fn a_device_the_architect_located_is_built_where_and_as_high_as_the_elevation_says() {
+    let mut s = plan();
+    let mut spec = s.execute("bspec.get", &json!({})).expect("get")["spec"].clone();
+    let tags = spec["tags"].as_array_mut().expect("tags");
+    let a = tags.iter_mut().find(|t| t["fields"]["type"]["value"] == "A").expect("device A");
+    // Moved along its wall by an interior elevation that dimensions it at 6'-6".
+    a["at_ft"] = json!([6.0, 0.8]);
+    a["fields"]["location_source"] = json!({"value": "architectural", "source": "architectural"});
+    a["fields"]["located_from"] = json!({"value": "A-501 INTERIOR ELEVATIONS", "source": "architectural"});
+    a["fields"]["mount_height_ft"] = json!({"value": "6.5", "source": "architectural"});
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+    s.execute("model.build", &json!({})).expect("rebuild");
+    fill(&mut s);
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["location"]["value"], "6.00, 0.80, 6.50", "the elevation's spot and height, not the legend's 20\": {a:#}");
+    assert_eq!(a["location"]["source"]["kind"], "print");
+    assert_eq!(a["location"]["source"]["doc"], "A-501 INTERIOR ELEVATIONS");
+    assert_eq!(a["mount_height"]["value"], json!(78.0), "{a:#}");
+    assert_eq!(a["mount_height"]["source"]["doc"], "A-501 INTERIOR ELEVATIONS");
+    assert_eq!(a["location_source"]["value"], "architectural");
+    // The engineer still circuits it.
+    assert_eq!(a["circuit"]["value"], "LP1-3");
+    assert_eq!(a["circuit"]["source"]["doc"], "E-101");
+    // A device the architecture does not show keeps the legend's height.
+    assert_eq!(device_of(&mut s, "S")["location"]["source"]["kind"], "computed");
+}
+
+#[test]
 fn mount_heights_come_from_the_legend_then_a_note_then_a_marked_default() {
     let mut s = plan();
     fill(&mut s);
