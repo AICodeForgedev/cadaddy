@@ -536,11 +536,7 @@ fn prints_from_job(s: &Session, frame: &Frame) -> Option<Prints> {
         let level = if !dev.level.is_empty() {
             dev.level.clone()
         } else {
-            job.sheet_regions
-                .iter()
-                .find(|r| r.number.eq_ignore_ascii_case(&dev.sheet))
-                .map(|r| r.level.clone())
-                .unwrap_or_default()
+            job.sheet_regions.iter().find(|r| r.number.eq_ignore_ascii_case(&dev.sheet)).map(|r| r.level.clone()).unwrap_or_default()
         };
         let (_, at_ft) = frame.to_ft(Vec2::new(dev.at[0], dev.at[1]));
         prints.symbols.push(Symbol {
@@ -580,16 +576,7 @@ fn prints_from_job(s: &Session, frame: &Frame) -> Option<Prints> {
                 })
                 .unwrap_or_default();
             if !number.is_empty() || !name.is_empty() {
-                prints.rooms.push(v::PrintRoom {
-                    level,
-                    number,
-                    name,
-                    outline,
-                    unit_type,
-                    exterior,
-                    ceiling_ft,
-                    sheet,
-                });
+                prints.rooms.push(v::PrintRoom { level, number, name, outline, unit_type, exterior, ceiling_ft, sheet });
             }
         }
     }

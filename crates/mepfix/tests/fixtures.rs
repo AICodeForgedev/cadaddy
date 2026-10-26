@@ -1580,12 +1580,7 @@ fn elec_reader_arch_positioned_requires_source() {
         let (_set, found) = read_office_devices(seed);
         for fd in &found {
             if fd.arch_positioned {
-                assert!(
-                    !fd.source.is_empty(),
-                    "seed {seed}: arch_positioned {kind} in {room} has no source",
-                    kind = fd.kind,
-                    room = fd.room
-                );
+                assert!(!fd.source.is_empty(), "seed {seed}: arch_positioned {kind} in {room} has no source", kind = fd.kind, room = fd.room);
             }
         }
         // Devices without arch evidence must have a zone.
@@ -1681,10 +1676,7 @@ fn elec_reader_counterfactual_jitter_does_not_change_position() {
     }
     let with_room = found.iter().filter(|f| !f.room.is_empty()).count();
     // At least 80% of devices should have positions different from their E-sheet drawn position.
-    assert!(
-        not_drawn > with_room * 3 / 4,
-        "too many devices match drawn_ft: {not_drawn}/{with_room} differ"
-    );
+    assert!(not_drawn > with_room * 3 / 4, "too many devices match drawn_ft: {not_drawn}/{with_room} differ");
     eprintln!("counterfactual: {not_drawn}/{with_room} devices have positions != drawn_ft");
 }
 
@@ -1699,11 +1691,7 @@ fn elec_reader_threshold_tests_office_seeds() {
         let t = &set.truth;
         let s = elec_reader::score_devices(t, &found, 5.0);
 
-        assert!(
-            s.zone_containment >= 0.90,
-            "seed {seed}: zone containment {:.3} < 0.90",
-            s.zone_containment
-        );
+        assert!(s.zone_containment >= 0.90, "seed {seed}: zone containment {:.3} < 0.90", s.zone_containment);
         // Check MAE only for devices that the reader marked as arch_positioned (with evidence).
         let reader_arch_count = found.iter().filter(|f| f.arch_positioned).count();
         if reader_arch_count > 0 {
@@ -1711,10 +1699,12 @@ fn elec_reader_threshold_tests_office_seeds() {
             let mut mae_sum = 0.0f64;
             let mut mae_n = 0usize;
             for fd in found.iter().filter(|f| f.arch_positioned) {
-                if let Some(td) = t.elec_devices.iter().find(|d| d.level == fd.level && d.kind == fd.kind && {
-                    let dx = d.at_ft[0] - fd.at_ft[0];
-                    let dy = d.at_ft[1] - fd.at_ft[1];
-                    (dx * dx + dy * dy).sqrt() < 5.0
+                if let Some(td) = t.elec_devices.iter().find(|d| {
+                    d.level == fd.level && d.kind == fd.kind && {
+                        let dx = d.at_ft[0] - fd.at_ft[0];
+                        let dy = d.at_ft[1] - fd.at_ft[1];
+                        (dx * dx + dy * dy).sqrt() < 5.0
+                    }
                 }) {
                     mae_sum += ((fd.at_ft[0] - td.at_ft[0]).powi(2) + (fd.at_ft[1] - td.at_ft[1]).powi(2)).sqrt();
                     mae_n += 1;
@@ -1749,10 +1739,12 @@ fn elec_reader_threshold_tests_hotel() {
         let mut mae_sum = 0.0f64;
         let mut mae_n = 0usize;
         for fd in found.iter().filter(|f| f.arch_positioned) {
-            if let Some(td) = t.elec_devices.iter().find(|d| d.level == fd.level && d.kind == fd.kind && {
-                let dx = d.at_ft[0] - fd.at_ft[0];
-                let dy = d.at_ft[1] - fd.at_ft[1];
-                (dx * dx + dy * dy).sqrt() < 5.0
+            if let Some(td) = t.elec_devices.iter().find(|d| {
+                d.level == fd.level && d.kind == fd.kind && {
+                    let dx = d.at_ft[0] - fd.at_ft[0];
+                    let dy = d.at_ft[1] - fd.at_ft[1];
+                    (dx * dx + dy * dy).sqrt() < 5.0
+                }
             }) {
                 mae_sum += ((fd.at_ft[0] - td.at_ft[0]).powi(2) + (fd.at_ft[1] - td.at_ft[1]).powi(2)).sqrt();
                 mae_n += 1;

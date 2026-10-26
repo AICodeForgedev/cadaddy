@@ -770,14 +770,7 @@ impl PlacementContext {
                     .iter()
                     .map(|d| {
                         let room = d.swings_into.as_ref().or(d.from_room.as_ref()).cloned().unwrap_or_default();
-                        PlacementDoor {
-                            room,
-                            at_ft: d.at_ft,
-                            latch_ft: d.latch_ft,
-                            hinge_ft: d.hinge_ft,
-                            hand: d.hand.clone(),
-                            sheet: String::new(),
-                        }
+                        PlacementDoor { room, at_ft: d.at_ft, latch_ft: d.latch_ft, hinge_ft: d.hinge_ft, hand: d.hand.clone(), sheet: String::new() }
                     })
                     .collect()
             })
@@ -845,11 +838,14 @@ impl PlacementContext {
             .map(|c| {
                 let cx = (c.min_ft[0] + c.max_ft[0]) / 2.0;
                 let cy = (c.min_ft[1] + c.max_ft[1]) / 2.0;
-                let room_num = rooms.get(&c.level).and_then(|rms| {
-                    rms.iter()
-                        .find(|r| cx >= r.min_ft[0] - 0.5 && cx <= r.max_ft[0] + 0.5 && cy >= r.min_ft[1] - 0.5 && cy <= r.max_ft[1] + 0.5)
-                        .map(|r| r.number.clone())
-                }).unwrap_or_default();
+                let room_num = rooms
+                    .get(&c.level)
+                    .and_then(|rms| {
+                        rms.iter()
+                            .find(|r| cx >= r.min_ft[0] - 0.5 && cx <= r.max_ft[0] + 0.5 && cy >= r.min_ft[1] - 0.5 && cy <= r.max_ft[1] + 0.5)
+                            .map(|r| r.number.clone())
+                    })
+                    .unwrap_or_default();
                 PlacementCasework {
                     room: room_num,
                     kind: c.kind.clone(),
@@ -977,16 +973,14 @@ fn position_from_rules(room: &Room, kind: &str, approx_ft: [f64; 2], ctx: &Place
                 let low = counter_top + 2.0;
                 let high = (counter_top + 20.0).max(low);
                 let source = format!("{} backsplash {}", bs.sheet, bs.tag);
-                let zone = DeviceZone {
-                    room: room_num.clone(), wall_side: wall, axis, range_ft: range,
-                    height_in: [low, high], field_decision: true,
-                };
-                let at = [(range[0] + range[1]) / 2.0, if axis == ZoneAxis::X { if wall == WallSide::South { ry0 + 0.3 } else { ry1 - 0.3 } } else { approx_ft[1] }];
-                let at = if axis == ZoneAxis::Y {
-                    [if wall == WallSide::West { rx0 + 0.3 } else { rx1 - 0.3 }, (range[0] + range[1]) / 2.0]
-                } else {
-                    at
-                };
+                let zone =
+                    DeviceZone { room: room_num.clone(), wall_side: wall, axis, range_ft: range, height_in: [low, high], field_decision: true };
+                let at = [
+                    (range[0] + range[1]) / 2.0,
+                    if axis == ZoneAxis::X { if wall == WallSide::South { ry0 + 0.3 } else { ry1 - 0.3 } } else { approx_ft[1] },
+                ];
+                let at =
+                    if axis == ZoneAxis::Y { [if wall == WallSide::West { rx0 + 0.3 } else { rx1 - 0.3 }, (range[0] + range[1]) / 2.0] } else { at };
                 ArchPlacement { at_ft: at, arch_positioned: false, zone: Some(zone), source }
             } else {
                 // No casework evidence: zone covers the wall.
@@ -1006,11 +1000,7 @@ fn position_from_rules(room: &Room, kind: &str, approx_ft: [f64; 2], ctx: &Place
         "light_fixture" => {
             let grid = light_grid_for_room(room);
             let snapped = snap_to_nearest(&grid, approx_ft);
-            let (wall, range) = if rw >= rh {
-                (WallSide::South, [rx0, rx1])
-            } else {
-                (WallSide::West, [ry0, ry1])
-            };
+            let (wall, range) = if rw >= rh { (WallSide::South, [rx0, rx1]) } else { (WallSide::West, [ry0, ry1]) };
             let zone = make_zone(wall, range, default_height("light_fixture"), true);
             ArchPlacement { at_ft: snapped, arch_positioned: false, zone: Some(zone), source: String::new() }
         }
