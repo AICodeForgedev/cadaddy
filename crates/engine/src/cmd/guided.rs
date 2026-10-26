@@ -478,6 +478,17 @@ pub struct SheetRegion {
     pub kind: String,
     /// `[x0, y0, x1, y1]`, drawing units.
     pub rect: [f64; 4],
+    /// Every level this sheet covers (a typical-floor plan covers several).  Empty means
+    /// only `level`.  When non-empty, `level` equals `levels[0]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<String>,
+}
+
+impl SheetRegion {
+    /// Every level this sheet covers. Falls back to `[level]` when `levels` is empty.
+    pub fn all_levels(&self) -> Vec<String> {
+        if self.levels.is_empty() { if self.level.is_empty() { Vec::new() } else { vec![self.level.clone()] } } else { self.levels.clone() }
+    }
 }
 
 impl GuidedJob {
@@ -887,8 +898,77 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
+    // MUST 3 (typicalfloors): a level with an architectural plan but no plan for a trade
+    // gets a finding.
+    if let Some(ref sheets) = sheets_vec {
+        check_missing_trade_plans(sheets, job);
+    }
+
     job.audit("stage_run", "pipeline", None, Some(StageName::Classify), Some(json!({"sheets": sheet_count})));
     Ok(classified)
+}
+
+/// Check for levels that have an architectural plan but no MEP plan for a discipline.
+fn check_missing_trade_plans(sheets: &[Value], job: &mut GuidedJob) {
+    let is_plan = |sh: &Value| {
+        let t = sh.get("type").or_else(|| sh.get("sheet_type")).and_then(Value::as_str).unwrap_or("");
+        matches!(t, "plan" | "enlarged_plan")
+    };
+    let disc_of = |sh: &Value| sh.get("discipline").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
+    let levels_of = |sh: &Value| -> Vec<String> {
+        let mut out: Vec<String> =
+            sh.get("levels").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+        if out.is_empty()
+            && let Some(l) = sh.get("level").and_then(Value::as_str).filter(|l| !l.is_empty())
+        {
+            out.push(l.to_string());
+        }
+        out
+    };
+    // Collect levels that have architectural plans.
+    let mut arch_levels: Vec<String> = Vec::new();
+    for sh in sheets.iter().filter(|s| is_plan(s) && disc_of(s) == "A") {
+        for l in levels_of(sh) {
+            if l.parse::<u32>().is_ok() && !arch_levels.contains(&l) {
+                arch_levels.push(l.clone());
+            }
+        }
+    }
+    arch_levels.sort_by_key(|l| l.parse::<u32>().unwrap_or(u32::MAX));
+    if arch_levels.len() < 2 {
+        return; // Only meaningful when there are multiple levels.
+    }
+    // For each trade, check which levels have coverage.
+    for disc in ["E", "M", "P"] {
+        let mut covered: Vec<String> = Vec::new();
+        for sh in sheets.iter().filter(|s| is_plan(s) && disc_of(s) == disc) {
+            for l in levels_of(sh) {
+                if !covered.contains(&l) {
+                    covered.push(l.clone());
+                }
+            }
+        }
+        let missing: Vec<&str> = arch_levels.iter().filter(|l| !covered.contains(l)).map(String::as_str).collect();
+        if !missing.is_empty() && !covered.is_empty() {
+            let trade = match disc {
+                "E" => "electrical",
+                "M" => "mechanical",
+                "P" => "plumbing",
+                _ => disc,
+            };
+            for l in &missing {
+                job.add_finding(
+                    StageName::Classify,
+                    &format!("Level {l} has no {trade} ({disc}) plan"),
+                    &format!("Architectural plans exist for levels {arch_levels:?} but no {disc} plan covers level {l}; devices and MEP on this level will be empty unless a typical-floor sheet is added"),
+                    2,
+                    vec![format!("Check if a {disc} sheet covers this level (TYPICAL or multi-level title)")],
+                    None,
+                    false,
+                );
+            }
+        }
+    }
 }
 
 /// Infer discipline from title text (MUST 2 fallback).
@@ -1438,12 +1518,18 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                         .and_then(Value::as_str)
                         .filter(|d| !d.is_empty())
                         .map_or_else(|| number.chars().take_while(char::is_ascii_alphabetic).take(2).collect(), str::to_string);
+                    let levels: Vec<String> = sh
+                        .get("levels")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                        .unwrap_or_default();
                     regions.push(SheetRegion {
                         number: number.split('/').next().unwrap_or(number).to_string(),
                         level: level_of(sh),
                         discipline: discipline.to_ascii_uppercase(),
                         kind: kind(sh),
                         rect,
+                        levels,
                     });
                 }
                 if placed.len() < MAX_QUESTIONS_PER_STAGE {
@@ -1735,6 +1821,27 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
     c.unlisted.retain(|_, u| u.count >= MIN_REPEATED_TAG);
     if stray > 0 {
         *c.not_device.entry("unlisted, printed once or twice").or_default() += stray;
+    }
+    // Replicate devices on typical-floor sheets: a sheet covering levels [2,3,4] places its
+    // devices on each of those levels (the primary is already placed; clone for the rest).
+    let mut extras: Vec<super::readers::ReadDevice> = Vec::new();
+    for dv in &c.placed {
+        if let Some(reg) = job.level_at(dv.at) {
+            let all = reg.all_levels();
+            if all.len() > 1 {
+                for extra_level in all.iter().skip(1) {
+                    let mut copy = dv.clone();
+                    copy.level = extra_level.clone();
+                    extras.push(copy);
+                }
+            }
+        }
+    }
+    if !extras.is_empty() {
+        for e in &extras {
+            *c.by_type.entry(e.tag.clone()).or_default() += 1;
+        }
+        c.placed.extend(extras);
     }
     c
 }
@@ -2395,6 +2502,7 @@ pub(crate) fn job_sheet_refs(job: &GuidedJob) -> Vec<super::printmep::SheetRef> 
                 rect: r.rect,
                 span,
                 scale_text: entry.and_then(|c| c.get("scale")).and_then(Value::as_str).map(str::to_string),
+                levels: r.levels.clone(),
             }
         })
         .collect()
@@ -2795,6 +2903,7 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
                 level,
                 source: "model".into(),
                 rect: Some(r.rect),
+                levels: r.levels.iter().map(|c| level_name(c)).collect(),
             }),
         }
     }
@@ -4476,6 +4585,7 @@ mod tests {
                 discipline: "E".into(),
                 kind: "plan".into(),
                 rect: [x0, 0.0, x0 + 2000.0, 1000.0],
+                levels: Vec::new(),
             });
             want_by_level.insert(format!("Level {level}"), a + b);
         }
@@ -4773,7 +4883,14 @@ mod tests {
     }
 
     fn region(number: &str, level: &str, discipline: &str, kind: &str, x: f64) -> SheetRegion {
-        SheetRegion { number: number.into(), level: level.into(), discipline: discipline.into(), kind: kind.into(), rect: [x, 0.0, x + 100.0, 80.0] }
+        SheetRegion {
+            number: number.into(),
+            level: level.into(),
+            discipline: discipline.into(),
+            kind: kind.into(),
+            rect: [x, 0.0, x + 100.0, 80.0],
+            levels: Vec::new(),
+        }
     }
 
     #[test]
