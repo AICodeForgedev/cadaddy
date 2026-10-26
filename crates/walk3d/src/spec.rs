@@ -591,6 +591,18 @@ pub struct Stair {
     /// The plan objects it was found from (hex handles).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub objects: Vec<String>,
+    /// The code its risers and treads are checked against: "ibc" (commercial, IBC 1011.5.2:
+    /// risers 4″–7″, treads ≥ 11″; the default) or "irc" (residential, IRC R311.7.5: risers
+    /// ≤ 7¾″, treads ≥ 10″).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+impl Stair {
+    /// Checked against the residential code (`code: "irc"`) rather than the commercial one.
+    pub fn residential(&self) -> bool {
+        self.code.as_deref().is_some_and(|c| c.trim().eq_ignore_ascii_case("irc"))
+    }
 }
 
 /// The outside of the building: facades read from the elevations, roofs from the roof plan.
@@ -2767,6 +2779,15 @@ impl BuildingSpec {
                     out.push(Issue::error(format!("{at}.runs[{j}].treads"), "a stair run has 1 to 200 treads"));
                 }
             }
+            if let Some(c) = st.code.as_deref().filter(|c| !["ibc", "irc"].iter().any(|k| c.trim().eq_ignore_ascii_case(k))) {
+                out.push(Issue::error(
+                    format!("{at}.code"),
+                    format!(
+                        "the stair code is \"ibc\" (commercial, the default) or \"irc\" (residential), not \"{}\"",
+                        c.chars().take(40).collect::<String>()
+                    ),
+                ));
+            }
             if let Some((z0, z1)) = self.stair_heights(st) {
                 if z1 <= z0 || z1.is_nan() || z0.is_nan() {
                     out.push(Issue::error(format!("{at}.to_level"), "it must reach a level above the one it starts on"));
@@ -2777,25 +2798,32 @@ impl BuildingSpec {
                             out.push(Issue::warning(&at, format!("the ramp rises 1:{:.1}, steeper than 1:12 (IBC 1012.2)", 1.0 / slope)));
                         }
                     } else if n > 0 {
-                        if riser > crate::stairs::RISER_MAX_IN + 1e-9 {
-                            out.push(Issue::warning(
-                                &at,
-                                format!(
-                                    "{n} risers of {}: above the 7¾\" limit (IRC R311.7.5.1; 7\" under IBC 1011.5.2) — add treads",
-                                    inches(riser)
-                                ),
-                            ));
+                        let irc = st.residential();
+                        let (riser_max, tread_min) = if irc {
+                            (crate::stairs::RISER_MAX_IN, crate::stairs::TREAD_MIN_IN)
+                        } else {
+                            (crate::stairs::RISER_MAX_COMMERCIAL_IN, crate::stairs::TREAD_MIN_COMMERCIAL_IN)
+                        };
+                        if riser > riser_max + 1e-9 {
+                            let limit = if irc {
+                                "the 7¾\" limit (IRC R311.7.5.1; 7\" under IBC 1011.5.2)"
+                            } else {
+                                "the 7\" limit (IBC 1011.5.2; 7¾\" under IRC R311.7.5.1, code \"irc\")"
+                            };
+                            out.push(Issue::warning(&at, format!("{n} risers of {}: above {limit} — add treads", inches(riser))));
                         } else if riser < crate::stairs::RISER_MIN_IN - 1e-9 {
                             out.push(Issue::warning(
                                 &at,
                                 format!("{n} risers of {}: under the 4\" minimum (IBC 1011.5.2) — fewer treads", inches(riser)),
                             ));
                         }
-                        if tread.is_finite() && tread < crate::stairs::TREAD_MIN_IN - 1e-9 {
-                            out.push(Issue::warning(
-                                &at,
-                                format!("treads of {}: under the 10\" minimum (IRC R311.7.5.2; 11\" under IBC)", inches(tread)),
-                            ));
+                        if tread.is_finite() && tread < tread_min - 1e-9 {
+                            let limit = if irc {
+                                "the 10\" minimum (IRC R311.7.5.2; 11\" under IBC 1011.5.2)"
+                            } else {
+                                "the 11\" minimum (IBC 1011.5.2; 10\" under IRC R311.7.5.2, code \"irc\")"
+                            };
+                            out.push(Issue::warning(&at, format!("treads of {}: under {limit}", inches(tread))));
                         }
                     }
                 }
