@@ -191,3 +191,76 @@ fn model_build_makes_the_outside() {
     let brick = s.doc().unwrap().model.iter().filter(|e| e.common.xdata.iter().any(|t| t.value == "facade:South:BRICK")).count();
     assert!(brick >= 1);
 }
+
+/// When no explicit roof plan was read (`roof.read`), but the spec has a ROOF datum, model.build
+/// auto-generates a flat roof slab from the top level's wall bounding rectangle.
+#[test]
+fn auto_roof_from_datum_without_explicit_roof_plan() {
+    let mut s = Session::new();
+    // A two-level building with walls on L1. The ROOF datum says the roof is at 24'.
+    layer(&mut s, "A-WALL");
+    // Level 1 plan: a 40' × 30' rectangle of walls (outer face).
+    rect(&mut s, [0.0, 0.0], [480.0, 360.0]);
+    rect(&mut s, [6.0, 6.0], [474.0, 354.0]);
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "version": 1,
+            "units_per_foot": 12,
+            "levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 600, 500], "base": [0, 0]},
+                {"name": "Level 2", "elevation_ft": 12, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 600, 500]}
+            ],
+            "datums": [{"name": "ROOF", "elevation_ft": 24, "kind": "roof", "source": "estimated"}],
+            "layers": [{"layer": "A-WALL", "role": "wall"}]
+        }}),
+    )
+    .unwrap();
+    // Build without reading a roof plan. No roof.read was called, so sp.exterior.roofs is empty.
+    let r = s.execute("model.build", &json!({})).unwrap();
+    assert_eq!(r["roofs"].as_u64().unwrap_or(0), 1, "expected auto-roof: {r}");
+    // The auto roof should be tagged as "roof" and sit at 24' × 12 = 288 drawing units.
+    let roofs = made(&s, "roof");
+    assert_eq!(roofs.len(), 1, "expected one roof mesh");
+    let (lo, hi) = z(&roofs[0]);
+    let expected_z = 24.0 * 12.0; // 288
+    assert!((hi - expected_z).abs() < 1.0, "roof top {hi} should be near {expected_z}");
+    assert!(hi > lo, "roof slab should have thickness");
+    // The roof should appear in the model takeoff as an architecture element.
+    let t = s.execute("bim.takeoff", &json!({})).unwrap();
+    let has_roof = t["lines"].as_array().unwrap().iter().any(|l| l["category"].as_str() == Some("roofs"));
+    assert!(has_roof, "roof should appear in takeoff: {t}");
+}
+
+/// When there is also a PARAPET datum, the auto-roof includes a parapet.
+#[test]
+fn auto_roof_includes_parapet_from_datum() {
+    let mut s = Session::new();
+    layer(&mut s, "A-WALL");
+    rect(&mut s, [0.0, 0.0], [480.0, 360.0]);
+    rect(&mut s, [6.0, 6.0], [474.0, 354.0]);
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "version": 1,
+            "units_per_foot": 12,
+            "levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 600, 500], "base": [0, 0]}
+            ],
+            "datums": [
+                {"name": "ROOF", "elevation_ft": 12, "kind": "roof", "source": "estimated"},
+                {"name": "PARAPET", "elevation_ft": 15, "kind": "parapet", "source": "estimated"}
+            ],
+            "layers": [{"layer": "A-WALL", "role": "wall"}]
+        }}),
+    )
+    .unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    assert_eq!(r["roofs"].as_u64().unwrap_or(0), 1, "expected auto-roof: {r}");
+    assert_eq!(r["parapets"].as_u64().unwrap_or(0), 1, "expected auto-parapet: {r}");
+    let parapets = made(&s, "parapet");
+    assert_eq!(parapets.len(), 1, "expected one parapet mesh");
+    let (_, parapet_hi) = z(&parapets[0]);
+    let expected_parapet_z = 15.0 * 12.0; // 180
+    assert!((parapet_hi - expected_parapet_z).abs() < 1.0, "parapet top {parapet_hi} should be near {expected_parapet_z}");
+}

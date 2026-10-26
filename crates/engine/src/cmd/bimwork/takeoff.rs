@@ -547,6 +547,8 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     let by_level = bool_or(p, "by_level", false);
     let filter = p.get("filter").cloned().unwrap_or(Value::Null);
     let lines = lines(s, if by_level { "level" } else { "type" }, &filter)?;
+    let explicit_rate =
+        p.get("labor_rate").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0).is_some() || rows.iter().any(|r| r.labor_rate.is_some());
     let rate = p
         .get("labor_rate")
         .and_then(Value::as_f64)
@@ -579,7 +581,9 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
         used.insert(i);
         let w = waste_for(l, r);
         let qt = qty * (1.0 + w / 100.0);
-        let (m, h) = (qt * r.material, qt * r.labor_hrs);
+        // Material on the quantity with waste; labor on the net (waste isn't installed).
+        // This matches the estimate.* engine (estimate.rs price_lines).
+        let (m, h) = (qt * r.material, qty * r.labor_hrs);
         mat_total += m;
         hrs_total += h;
         out_lines.push(json!({
@@ -592,10 +596,62 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let unused: Vec<Value> = rows.iter().enumerate().filter(|(i, _)| !used.contains(i)).map(|(_, r)| json!(r.item)).collect();
     let total = mat_total + hrs_total * rate;
+    // Warnings for missing inputs (MUST 2: never silently $0).
+    let mut warnings: Vec<Value> = Vec::new();
+    if !explicit_rate {
+        warnings.push(json!({
+            "kind": "default_labor_rate",
+            "message": format!("using default labor rate ${DEFAULT_LABOR_RATE}/h; neither the call nor the cost table set one"),
+            "fix": "pass labor_rate ($/h for your crew) or add a labor_rate column to the cost table",
+        }));
+    }
+    if rate == 0.0 && hrs_total > 0.0 {
+        warnings.push(json!({
+            "kind": "zero_labor_rate",
+            "message": format!("{:.0} labor hours are $0 because labor_rate is 0", hrs_total),
+            "fix": "set labor_rate to your crew's hourly rate (e.g. 75 or 90)",
+        }));
+    }
+    if !unmatched.is_empty() {
+        warnings.push(json!({
+            "kind": "unpriced_lines",
+            "message": format!("{} takeoff lines have no cost-table match; their cost is not in the total", unmatched.len()),
+            "fix": "add rows to the cost table for each unmatched item, or verify they are not in contract",
+        }));
+    }
     let mut out = json!({
         "lines": out_lines, "unmatched": unmatched, "unused_rows": unused,
         "material_total": r3(mat_total), "labor_hours": r3(hrs_total), "labor_total": r3(hrs_total * rate), "total": r3(total), "labor_rate": rate,
+        "warnings": warnings,
     });
+    // Store the cost table in the estimate state so estimate.status uses the same prices.
+    if let Ok(est_sp) = crate::cmd::bspec::current(s, CMD_EST) {
+        let (mut sp, _) = est_sp;
+        let mut est: serde_json::Map<String, Value> = sp.estimate.as_object().cloned().unwrap_or_default();
+        let base = est.entry(String::from("baseline")).or_insert_with(|| json!({}));
+        if let Some(b) = base.as_object_mut() {
+            let prices: Vec<Value> = rows
+                .iter()
+                .map(|r| {
+                    let mut pv = json!({
+                        "item": r.item, "unit": if r.unit.is_empty() { "each" } else { &r.unit },
+                        "material": r.material, "source": "bim.estimate cost table", "date": "",
+                    });
+                    if r.labor_hrs > 0.0 {
+                        pv["labor_hours"] = json!(r.labor_hrs);
+                    }
+                    pv
+                })
+                .collect();
+            b.insert("prices".into(), json!(prices));
+        }
+        let settings = est.entry(String::from("settings")).or_insert_with(|| json!({}));
+        if let Some(s_obj) = settings.as_object_mut() {
+            s_obj.insert("crew_rate".into(), json!(rate));
+        }
+        sp.estimate = Value::Object(est);
+        s.doc_mut().map(|d| d.building_spec = Some(sp.to_json())).ok();
+    }
     // Change order against an earlier revision.
     let st = state(s.doc()?);
     let earlier: Option<Vec<Value>> = match p.get("compare_to") {
