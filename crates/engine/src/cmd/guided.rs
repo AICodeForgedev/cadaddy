@@ -3830,11 +3830,7 @@ fn is_plausible_default(q: &Question) -> bool {
             if area <= 0.0 {
                 return false;
             }
-            let name = vals
-                .get("room")
-                .or_else(|| vals.get("room_name"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let name = vals.get("room").or_else(|| vals.get("room_name")).and_then(Value::as_str).unwrap_or("");
             is_room_like_name(name)
         }
         // Device unknown-symbol questions default "skip": not plausible (unknown type).
@@ -3856,10 +3852,41 @@ fn is_room_like_name(name: &str) -> bool {
     // Reject names that are clearly not rooms: building materials, notes, single words that are
     // structural/finish labels, or very short fragments.
     const NOT_ROOMS: &[&str] = &[
-        "WALL", "ROOF", "ROOFING", "CEILING", "FLOOR", "SLAB", "HEIGHT", "APPLICABLE",
-        "TYP", "TYPICAL", "NIC", "N.I.C", "EXIST", "EXISTING", "SIM", "SIMILAR",
-        "ABV", "ABOVE", "BLW", "BELOW", "TPO", "EPDM", "CMU", "GYP", "ACT", "VCT",
-        "CPT", "CONC", "CLG", "FLR", "DEMO", "NEW", "FINISH", "PAINT", "BASE",
+        "WALL",
+        "ROOF",
+        "ROOFING",
+        "CEILING",
+        "FLOOR",
+        "SLAB",
+        "HEIGHT",
+        "APPLICABLE",
+        "TYP",
+        "TYPICAL",
+        "NIC",
+        "N.I.C",
+        "EXIST",
+        "EXISTING",
+        "SIM",
+        "SIMILAR",
+        "ABV",
+        "ABOVE",
+        "BLW",
+        "BELOW",
+        "TPO",
+        "EPDM",
+        "CMU",
+        "GYP",
+        "ACT",
+        "VCT",
+        "CPT",
+        "CONC",
+        "CLG",
+        "FLR",
+        "DEMO",
+        "NEW",
+        "FINISH",
+        "PAINT",
+        "BASE",
     ];
     for bad_name in NOT_ROOMS {
         // Exact match or the entire name is one of these words (possibly with punctuation).
@@ -3892,11 +3919,7 @@ fn auto_answer(job: &mut GuidedJob, name: StageName) -> usize {
         let asked = st.questions.iter_mut().chain(st.completeness.iter_mut()).map(|q| (q, !auto));
         let samples = st.verify.iter_mut().enumerate().map(|(i, q)| (q, !auto && i < VERIFY_ASKED));
         for (q, asked) in asked.chain(samples) {
-            if q.answer.is_none()
-                && !asked
-                && !always.contains(&q.id)
-                && q.default.is_some()
-            {
+            if q.answer.is_none() && !asked && !always.contains(&q.id) && q.default.is_some() {
                 if is_plausible_default(q) {
                     let def = q.default.clone().unwrap_or_default();
                     q.answer = Some(Value::String(def));
@@ -5197,11 +5220,7 @@ fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
 
     // 0 rooms.
     let rooms_stage = job.stage(StageName::Rooms);
-    let room_count = rooms_stage
-        .and_then(|st| st.result.as_ref())
-        .and_then(|r| r.get("count"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
+    let room_count = rooms_stage.and_then(|st| st.result.as_ref()).and_then(|r| r.get("count")).and_then(Value::as_u64).unwrap_or(0);
     if rooms_stage.is_some_and(|st| st.status == StageStatus::Done) && room_count == 0 {
         w.push(json!({"warning": "0 rooms", "detail": "The rooms stage finished with 0 rooms in the model"}));
     }

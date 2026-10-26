@@ -134,18 +134,15 @@ fn levels_list_typical_flag() {
 
     // Level 2: M-201 typical.
     let l2_sheets = levels[1]["sheets"].as_array().unwrap();
-    assert!(l2_sheets.iter().any(|s| s["sheet"] == "M-201" && s["typical"] == json!(true)),
-        "Level 2 should have M-201 typical: {l2_sheets:?}");
+    assert!(l2_sheets.iter().any(|s| s["sheet"] == "M-201" && s["typical"] == json!(true)), "Level 2 should have M-201 typical: {l2_sheets:?}");
 
     // Level 3: M-201 typical.
     let l3_sheets = levels[2]["sheets"].as_array().unwrap();
-    assert!(l3_sheets.iter().any(|s| s["sheet"] == "M-201" && s["typical"] == json!(true)),
-        "Level 3 should have M-201 typical: {l3_sheets:?}");
+    assert!(l3_sheets.iter().any(|s| s["sheet"] == "M-201" && s["typical"] == json!(true)), "Level 3 should have M-201 typical: {l3_sheets:?}");
 
     // Level 4: M-201 typical.
     let l4_sheets = levels[3]["sheets"].as_array().unwrap();
-    assert!(l4_sheets.iter().any(|s| s["sheet"] == "M-201" && s["typical"] == json!(true)),
-        "Level 4 should have M-201 typical: {l4_sheets:?}");
+    assert!(l4_sheets.iter().any(|s| s["sheet"] == "M-201" && s["typical"] == json!(true)), "Level 4 should have M-201 typical: {l4_sheets:?}");
 
     // The gate check: count sheets on >1 level where not all occurrences are typical.
     let mut seen: std::collections::HashMap<String, Vec<bool>> = std::collections::HashMap::new();
