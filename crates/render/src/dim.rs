@@ -12,6 +12,14 @@ use cadcraft_geom::{Arc, Vec2, ccw_sweep};
 
 use crate::units::{NumFormat, format_angle_with_separator, format_decimal, format_linear};
 
+mod arrowheads;
+mod text;
+
+use arrowheads::tick;
+pub use arrowheads::{ArrowGeom, Arrowhead, arrow, arrowhead};
+pub use text::{DimText, format_linear_value};
+use text::{apply_override, inspected, linear_text};
+
 /// Most DIMBREAK gaps drawn per dimension.
 const MAX_BREAKS: usize = 1000;
 
@@ -145,183 +153,6 @@ impl DimGeometry {
     }
 }
 
-/// The arrowheads drawn in code (DIMBLK names; our own geometry).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Arrowhead {
-    ClosedFilled,
-    ClosedBlank,
-    Closed,
-    Dot,
-    DotSmall,
-    DotBlank,
-    Oblique,
-    ArchTick,
-    Open,
-    Open90,
-    Open30,
-    Origin,
-    Origin2,
-    Small,
-    BoxFilled,
-    BoxBlank,
-    DatumFilled,
-    DatumBlank,
-    Integral,
-    None,
-}
-
-impl Arrowhead {
-    /// Parse a DIMBLK value ("" / "_DOT" / "Architectural tick" / "closed blank"…).
-    pub fn parse(name: &str) -> Arrowhead {
-        let n: String = name.trim().trim_start_matches('_').chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase();
-        match n.as_str() {
-            "" | "closedfilled" | "filled" => Arrowhead::ClosedFilled,
-            "closedblank" | "blank" => Arrowhead::ClosedBlank,
-            "closed" => Arrowhead::Closed,
-            "dot" => Arrowhead::Dot,
-            "dotsmall" => Arrowhead::DotSmall,
-            "dotblank" => Arrowhead::DotBlank,
-            "oblique" => Arrowhead::Oblique,
-            "archtick" | "architecturaltick" | "tick" => Arrowhead::ArchTick,
-            "open" => Arrowhead::Open,
-            "open90" | "rightangle" => Arrowhead::Open90,
-            "open30" => Arrowhead::Open30,
-            "origin" | "originindicator" => Arrowhead::Origin,
-            "origin2" | "originindicator2" => Arrowhead::Origin2,
-            "small" => Arrowhead::Small,
-            "boxfilled" => Arrowhead::BoxFilled,
-            "boxblank" | "box" => Arrowhead::BoxBlank,
-            "datumfilled" | "datumtrianglefilled" => Arrowhead::DatumFilled,
-            "datumblank" | "datumtriangle" => Arrowhead::DatumBlank,
-            "integral" => Arrowhead::Integral,
-            "none" => Arrowhead::None,
-            _ => Arrowhead::ClosedFilled,
-        }
-    }
-    /// Ticks and obliques: the dimension line runs through the tip and extends by DIMDLE.
-    pub fn is_tick(self) -> bool {
-        matches!(self, Arrowhead::Oblique | Arrowhead::ArchTick | Arrowhead::Integral | Arrowhead::None)
-    }
-    /// How far back from the tip the dimension line stops (blank heads are not crossed).
-    pub fn inset(self, size: f64) -> f64 {
-        match self {
-            Arrowhead::ClosedBlank | Arrowhead::DatumBlank => size,
-            Arrowhead::DotBlank => size / 4.0,
-            Arrowhead::Origin | Arrowhead::Origin2 => size / 2.0,
-            Arrowhead::BoxBlank => size / 4.0,
-            _ => 0.0,
-        }
-    }
-}
-
-/// Arrowhead geometry: open polylines and filled triangles.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ArrowGeom {
-    pub lines: Vec<Vec<Vec2>>,
-    pub tris: Vec<Vec2>,
-}
-
-fn circle_pts(c: Vec2, r: f64) -> Vec<Vec2> {
-    (0..=24).map(|i| c + Vec2::from_angle(f64::from(i) * cadcraft_geom::TAU / 24.0) * r).collect()
-}
-
-fn disc(c: Vec2, r: f64) -> Vec<Vec2> {
-    let mut t = Vec::with_capacity(72);
-    for i in 0..24 {
-        let a0 = f64::from(i) * cadcraft_geom::TAU / 24.0;
-        let a1 = f64::from(i + 1) * cadcraft_geom::TAU / 24.0;
-        t.extend_from_slice(&[c, c + Vec2::from_angle(a0) * r, c + Vec2::from_angle(a1) * r]);
-    }
-    t
-}
-
-/// An arrowhead at `tip` pointing along `dir` (unit), `size` = DIMASZ × scale.
-pub fn arrowhead(kind: Arrowhead, tip: Vec2, dir: Vec2, size: f64) -> ArrowGeom {
-    let dir = if dir == Vec2::ZERO || !dir.is_finite() { Vec2::X } else { dir };
-    let size = if size.is_finite() { size.abs() } else { 0.0 };
-    let n = dir.perp();
-    let wings = |half_angle: f64, len: f64| {
-        let back = -dir;
-        (tip + back.rotate(half_angle) * len, tip + back.rotate(-half_angle) * len)
-    };
-    let mut g = ArrowGeom::default();
-    match kind {
-        Arrowhead::ClosedFilled => g.tris = arrow(tip, dir, size),
-        Arrowhead::Small => g.tris = arrow(tip, dir, size / 2.0),
-        Arrowhead::ClosedBlank | Arrowhead::Closed => {
-            let back = tip - dir * size;
-            let w = n * (size / 6.0);
-            g.lines.push(vec![tip, back + w, back - w, tip]);
-            if kind == Arrowhead::Closed {
-                g.lines.push(vec![back, tip]);
-            }
-        }
-        Arrowhead::Dot => g.tris = disc(tip, size / 4.0),
-        Arrowhead::DotSmall => g.tris = disc(tip, size / 8.0),
-        Arrowhead::DotBlank => g.lines.push(circle_pts(tip, size / 4.0)),
-        Arrowhead::Origin => g.lines.push(circle_pts(tip, size / 2.0)),
-        Arrowhead::Origin2 => {
-            g.lines.push(circle_pts(tip, size / 2.0));
-            g.lines.push(circle_pts(tip, size / 4.0));
-        }
-        Arrowhead::Oblique => {
-            let t = canonical(dir + n).normalized() * (size / 2.0);
-            g.lines.push(vec![tip - t, tip + t]);
-        }
-        Arrowhead::ArchTick => {
-            // A heavy 45° stroke: a thin filled parallelogram.
-            let t = canonical(dir + n).normalized() * (size / 2.0);
-            let w = t.perp().normalized() * (size / 16.0);
-            let (a, b) = (tip - t, tip + t);
-            g.tris = vec![a - w, b - w, b + w, a - w, b + w, a + w];
-        }
-        Arrowhead::Integral => {
-            // A small integral-sign wave through the tip.
-            let t = canonical(dir + n).normalized();
-            let pts = (-8..=8)
-                .map(|i| {
-                    let f = f64::from(i) / 8.0;
-                    tip + t * (f * size / 2.0) + t.perp() * ((f * std::f64::consts::PI).sin() * size * 0.12)
-                })
-                .collect();
-            g.lines.push(pts);
-        }
-        Arrowhead::Open => {
-            let (a, b) = wings((1.0f64 / 6.0).atan(), size);
-            g.lines.push(vec![a, tip, b]);
-        }
-        Arrowhead::Open90 => {
-            let (a, b) = wings(std::f64::consts::FRAC_PI_4, size / std::f64::consts::SQRT_2);
-            g.lines.push(vec![a, tip, b]);
-        }
-        Arrowhead::Open30 => {
-            let (a, b) = wings(15f64.to_radians(), size);
-            g.lines.push(vec![a, tip, b]);
-        }
-        Arrowhead::BoxFilled | Arrowhead::BoxBlank => {
-            let h = size / 4.0;
-            let (u, v) = (dir * h, n * h);
-            let q = [tip - u - v, tip + u - v, tip + u + v, tip - u + v];
-            if kind == Arrowhead::BoxFilled {
-                g.tris = vec![q[0], q[1], q[2], q[0], q[2], q[3]];
-            } else {
-                g.lines.push(vec![q[0], q[1], q[2], q[3], q[0]]);
-            }
-        }
-        Arrowhead::DatumFilled | Arrowhead::DatumBlank => {
-            let apex = tip - dir * size;
-            let w = n * (size / 2.0);
-            if kind == Arrowhead::DatumFilled {
-                g.tris = vec![tip + w, tip - w, apex];
-            } else {
-                g.lines.push(vec![tip + w, tip - w, apex, tip + w]);
-            }
-        }
-        Arrowhead::None => {}
-    }
-    g
-}
-
 /// The pieces of a polyline outside the circle (`c`, `r`).
 fn cut_polyline(l: &[Vec2], c: Vec2, r: f64) -> Vec<Vec<Vec2>> {
     let mut out: Vec<Vec<Vec2>> = Vec::new();
@@ -360,146 +191,6 @@ fn cut_polyline(l: &[Vec2], c: Vec2, r: f64) -> Vec<Vec<Vec2>> {
     out
 }
 
-/// A closed filled arrowhead at `tip` pointing along `dir` (unit), as one triangle.
-pub fn arrow(tip: Vec2, dir: Vec2, size: f64) -> Vec<Vec2> {
-    let back = tip - dir * size;
-    let n = dir.perp() * (size / 6.0);
-    vec![tip, back + n, back - n]
-}
-
-/// Ticks lean the same way at both ends of a dimension line whichever way they point.
-fn canonical(v: Vec2) -> Vec2 {
-    if v.x < -1e-12 || (v.x.abs() <= 1e-12 && v.y < 0.0) { -v } else { v }
-}
-
-/// A DIMTSZ tick: an oblique stroke centred on `at`.
-fn tick(at: Vec2, dir: Vec2, half: f64) -> Vec<Vec2> {
-    let d = canonical(dir);
-    let t = (d + d.perp()).normalized() * half;
-    vec![at - t, at + t]
-}
-
-/// Format a linear measurement per the style (plain text).
-pub fn format_linear_value(v: f64, st: &DimStyle) -> String {
-    format_linear(v * st.linear_factor, &NumFormat::from_style(st)).0
-}
-
-/// The text of a linear measurement: (plain, MTEXT) with DIMPOST, tolerances/limits and
-/// alternate units, then the user's override text (`<>` = the measurement). DIMRND rounds the
-/// measurement (and so the limits) only: tolerances are never rounded and alternate units
-/// round by DIMALTRND.
-fn linear_text(meas: f64, d: &Dimension, st: &DimStyle, prefix: &str) -> String {
-    let v = meas * st.linear_factor;
-    let nf = NumFormat::from_style(st);
-    let main = if st.limits {
-        let up = format_linear(v + st.tol_plus, &nf).1;
-        let lo = format_linear(v - st.tol_minus, &nf).1;
-        format!("{{\\H{};\\S{up}^{lo};}}", tol_height_code(st))
-    } else {
-        format!("{prefix}{}", format_linear(v, &nf).1)
-    };
-    let mut s = post(&st.post, &main);
-    if st.tolerance && !st.limits {
-        let tf = NumFormat { decimals: st.tol_decimals, zin: st.tol_zero_suppression, round: 0.0, ..nf.clone() };
-        // DIMPOST's suffix (what follows `<>`, or all of it) also goes on the tolerance values.
-        let suffix = st.post.split_once("<>").map_or(st.post.as_str(), |(_, after)| after);
-        if (st.tol_plus - st.tol_minus).abs() < 1e-12 {
-            s += &format!("%%p{}{suffix}", format_linear(st.tol_plus, &tf).1);
-        } else {
-            let plus = format_linear(st.tol_plus, &tf).1 + suffix;
-            let minus = format_linear(st.tol_minus, &tf).1 + suffix;
-            let sign = |x: &str, pos: char| if x.trim_start_matches(['0', '.', ',']).is_empty() { x.to_string() } else { format!("{pos}{x}") };
-            let (plus, minus) =
-                (sign(&plus, '+'), if st.tol_minus < 0.0 { format!("+{}", minus.trim_start_matches('-')) } else { sign(&minus, '-') });
-            // DIMTOLJ: bottom / middle / top (MTEXT `\A`; middle is the default).
-            let tolj = if st.tol_just == 1 { String::new() } else { format!("\\A{};", st.tol_just.min(2)) };
-            s += &format!("{{\\H{};{tolj}\\S{plus}^{minus};}}", tol_height_code(st));
-        }
-    }
-    if st.alt {
-        // DIMALTU 6 and 7 are architectural and fractional without stacking, 8 is decimal.
-        let (unit, frac) = match st.alt_unit {
-            u @ 1..=5 => (u, nf.frac),
-            6 => (4, 2),
-            7 => (5, 2),
-            _ => (2, nf.frac),
-        };
-        let af = NumFormat { unit, decimals: st.alt_decimals, zin: st.alt_zero_suppression, round: st.alt_round, frac, ..nf };
-        let alt = format_linear(v * st.alt_factor, &af).1;
-        s += &format!(" [{}]", post(&st.alt_post, &alt));
-    }
-    inspected(apply_override(&s, d), d)
-}
-
-/// DIMINSPECT: the label and the rate either side of the value, two spaces apart.
-fn inspected(value: String, d: &Dimension) -> String {
-    match &d.marks.inspect {
-        Some(ins) => [ins.label.as_str(), value.as_str(), ins.rate.as_str()].iter().filter(|p| !p.is_empty()).copied().collect::<Vec<_>>().join("  "),
-        None => value,
-    }
-}
-
-/// `\H` code for stacked tolerance parts (DIMTFAC relative to the 70% stack scale).
-fn tol_height_code(st: &DimStyle) -> String {
-    let f = if st.tol_scale.is_finite() && st.tol_scale > 0.0 { st.tol_scale } else { 1.0 };
-    format!("{}x", format_decimal(f / 0.7, 4, 8, "."))
-}
-
-/// Apply measurement placeholders or append a dimension suffix, bounding the resulting UTF-8 text.
-fn post(template: &str, meas: &str) -> String {
-    if template.contains("<>") {
-        bounded_replace(template, meas)
-    } else {
-        let mut out = String::new();
-        append_dim_text(&mut out, meas);
-        append_dim_text(&mut out, template);
-        out
-    }
-}
-
-/// Apply dimension text overrides: empty uses the base, whitespace suppresses text, and other text substitutes it.
-fn apply_override(base: &str, d: &Dimension) -> String {
-    if d.text.is_empty() {
-        base.to_string()
-    } else if d.text.trim().is_empty() {
-        String::new()
-    } else {
-        bounded_replace(&d.text, base)
-    }
-}
-
-/// Largest dimension text produced by substituting the measurement into style/override text. Two
-/// modest strings can otherwise expand into gigabytes when the template holds many `<>` markers
-/// (CWE-789); past this the output is truncated rather than allocated unbounded.
-const MAX_DIM_TEXT: usize = 64 * 1024;
-
-/// Replace every `<>` in `template` with `value`, with the expanded length checked against
-/// [`MAX_DIM_TEXT`] before allocating so a many-placeholder template cannot blow up memory.
-fn bounded_replace(template: &str, value: &str) -> String {
-    let mut out = String::new();
-    let mut rest = template;
-    while let Some(i) = rest.find("<>") {
-        if !append_dim_text(&mut out, &rest[..i]) || !append_dim_text(&mut out, value) {
-            return out;
-        }
-        rest = &rest[i + 2..];
-    }
-    append_dim_text(&mut out, rest);
-    out
-}
-
-// Returns false when truncation consumed the remaining UTF-8-safe space.
-/// Append within the remaining dimension-text byte allowance without splitting a UTF-8 character.
-/// Return false if any input text had to be truncated.
-fn append_dim_text(out: &mut String, text: &str) -> bool {
-    let mut end = text.len().min(MAX_DIM_TEXT.saturating_sub(out.len()));
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    out.push_str(&text[..end]);
-    end == text.len()
-}
-
 fn ext_line(origin: Vec2, foot: Vec2, st: &DimStyle, k: f64) -> Option<Vec<Vec2>> {
     let v = foot - origin;
     let len = v.len();
@@ -523,16 +214,6 @@ fn readable(a: f64) -> f64 {
         a -= std::f64::consts::PI;
     }
     a
-}
-
-/// Font and fixed height of the dimension text (from DIMTXSTY's text style).
-#[derive(Clone, Debug, Default)]
-pub struct DimText {
-    pub font: TextFont,
-    /// Fixed text height of the style (0 = use DIMTXT × scale).
-    pub fixed_height: f64,
-    pub width_factor: f64,
-    pub oblique: f64,
 }
 
 /// Generate the geometry of a dimension with the stroke font.
@@ -1080,23 +761,3 @@ fn decode_value(s: &str) -> String {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod text_budget_tests {
-    use super::*;
-    /// A dimension suffix without placeholders still obeys the total text limit.
-    #[test]
-    fn bounds_post_without_markers() {
-        let text = post(&"x".repeat(MAX_DIM_TEXT * 2), "12");
-        assert_eq!(text.len(), MAX_DIM_TEXT);
-        assert!(text.starts_with("12x"));
-    }
-    /// Oversized substituted text retains its prefix and ends at a valid UTF-8 boundary.
-    #[test]
-    fn oversized_value_is_substituted_and_truncated_at_a_character_boundary() {
-        let text = bounded_replace("prefix <> mm", &"é".repeat(MAX_DIM_TEXT));
-        assert!(text.starts_with("prefix é"));
-        assert!(!text.contains("<>"));
-        assert!(text.len() <= MAX_DIM_TEXT && text.len() >= MAX_DIM_TEXT - 1);
-    }
-}
