@@ -186,7 +186,8 @@ fn model_build_makes_the_outside() {
     // The storefront glass on the south face, 0 to 10' up, outside the wall.
     let glass = &made(&s, "facade-glass")[0];
     assert_eq!(z(glass), (0.0, 120.0));
-    assert!(glass.vertices.iter().all(|v| v.y < 0.0));
+    // Its inner face lies on the wall's outer face (y = 0); the panel is wholly outside it.
+    assert!(glass.vertices.iter().all(|v| v.y < 1e-9) && glass.vertices.iter().any(|v| v.y < -1.0));
     // The south walls are named brick.
     let brick = s.doc().unwrap().model.iter().filter(|e| e.common.xdata.iter().any(|t| t.value == "facade:South:BRICK")).count();
     assert!(brick >= 1);

@@ -17,6 +17,8 @@ pub const SKIP: &[(&str, &str)] = &[
     ("-plottermanager", "writes plotter configuration files"),
     // Bakes global illumination: minutes of rendering per run.
     ("lightbake", "renders for minutes"),
+    // COMPILE asks for a shape source file and can only be cancelled with Esc.
+    ("compile", "file prompt only exits with Esc"),
 ];
 
 /// A small, fast, seeded generator (SplitMix64).

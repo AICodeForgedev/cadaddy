@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1108,
-    "count": 1108,
+    "callableAsJson": 1112,
+    "count": 1112,
     "ids": [
       "-attedit",
       "-block",
@@ -583,6 +583,10 @@
       "lsp",
       "lspsurf",
       "ltscale",
+      "lv.bom",
+      "lv.connections",
+      "lv.devices",
+      "lv.sleeves",
       "lwdisplay",
       "lweight",
       "markupimport",
@@ -1199,7 +1203,7 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 47,
+    "count": 51,
     "tools": [
       "arch_read",
       "bim_from_pdf",
@@ -1226,6 +1230,10 @@
       "job_status",
       "list_commands",
       "list_drawings",
+      "lv_bom",
+      "lv_connections",
+      "lv_devices",
+      "lv_sleeves",
       "mep",
       "new_drawing",
       "open",

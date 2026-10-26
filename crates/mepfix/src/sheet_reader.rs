@@ -78,7 +78,7 @@ pub struct SheetMap {
 
 /// Known discipline prefixes: sheet number prefix → discipline code.
 const DISCIPLINE_PREFIX: &[(&str, &str)] =
-    &[("FP", "FP"), ("FA", "FA"), ("M", "M"), ("P", "P"), ("S", "S"), ("A", "A"), ("G", "G"), ("E", "E"), ("C", "C"), ("T", "T")];
+    &[("FP", "FP"), ("FA", "FA"), ("SL", "SL"), ("M", "M"), ("P", "P"), ("S", "S"), ("A", "A"), ("G", "G"), ("E", "E"), ("C", "C"), ("T", "T")];
 
 /// The discipline a sheet number's letters name: `M-101`, `M101`, `M1.01` and `FP-201` alike.
 fn discipline_of(number: &str) -> Option<&'static str> {
@@ -461,7 +461,7 @@ fn detect_title(d: &Drawing, number: &str) -> String {
         let texts: Vec<(String, f64, [f64; 2], [f64; 2])> = texts_across(d).into_iter().filter(|(v, _, _, _)| v != number && !v.is_empty()).collect();
         let titled = |v: &str| {
             let up = v.to_uppercase();
-            ["PLAN", "SCHEDULE", "COVER", "FRAMING", "CEILING", "ASSEMBLIES", "DETAILS", "SECTIONS", "ELEVATIONS", "DIAGRAM"]
+            ["PLAN", "SCHEDULE", "COVER", "FRAMING", "CEILING", "ASSEMBLIES", "DETAILS", "SECTIONS", "ELEVATIONS", "DIAGRAM", "LAYOUT"]
                 .iter()
                 .any(|k| up.contains(k))
         };
