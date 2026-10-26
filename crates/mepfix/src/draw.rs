@@ -672,15 +672,7 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("sleeve_data", "DATA/TELECOM SLEEVE (BLUE)"));
             legend.push(item("sleeve_security", "SECURITY SLEEVE (GREEN)"));
             legend.push(item("sleeve_floor", "FLOOR SLEEVE"));
-            abbr.extend(
-                [
-                    "EMT = ELECTRICAL METALLIC TUBING",
-                    "ENT = ELECTRICAL NONMETALLIC TUBING",
-                    "FS = FIRESTOP",
-                    "SL = SLEEVE",
-                ]
-                .map(abbrev),
-            );
+            abbr.extend(["EMT = ELECTRICAL METALLIC TUBING", "ENT = ELECTRICAL NONMETALLIC TUBING", "FS = FIRESTOP", "SL = SLEEVE"].map(abbrev));
         }
         Kind::Site => {
             site_plan(&mut pen, t, st);

@@ -42,10 +42,7 @@ fn lv_data(s: &Session) -> Value {
         Ok(d) => d,
         Err(_) => return json!({}),
     };
-    d.embedded.get(LV_FILE)
-        .and_then(|b| serde_json::from_slice::<Value>(b).ok())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}))
+    d.embedded.get(LV_FILE).and_then(|b| serde_json::from_slice::<Value>(b).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}))
 }
 
 pub fn set_lv_data(s: &mut Session, data: Value) -> Result<()> {
@@ -62,14 +59,24 @@ fn run_devices(s: &mut Session, p: &Value) -> Result<Value> {
     let mut items = Vec::new();
     if system == "all" || system == "fire_alarm" {
         for d in data.get("fa_devices").and_then(Value::as_array).unwrap_or(&Vec::new()) {
-            if let Some(lf) = level && d.get("level").and_then(Value::as_str) != Some(lf) { continue; }
+            if let Some(lf) = level
+                && d.get("level").and_then(Value::as_str) != Some(lf)
+            {
+                continue;
+            }
             items.push(d.clone());
         }
     }
     if system == "all" || system != "fire_alarm" {
         for d in data.get("tc_devices").and_then(Value::as_array).unwrap_or(&Vec::new()) {
-            if system != "all" && d.get("lv_system").and_then(Value::as_str) != Some(system) { continue; }
-            if let Some(lf) = level && d.get("level").and_then(Value::as_str) != Some(lf) { continue; }
+            if system != "all" && d.get("lv_system").and_then(Value::as_str) != Some(system) {
+                continue;
+            }
+            if let Some(lf) = level
+                && d.get("level").and_then(Value::as_str) != Some(lf)
+            {
+                continue;
+            }
             items.push(d.clone());
         }
     }
@@ -84,8 +91,14 @@ fn run_sleeves(s: &mut Session, p: &Value) -> Result<Value> {
     let empty = Vec::new();
     let mut items = Vec::new();
     for sl in data.get("sleeves").and_then(Value::as_array).unwrap_or(&empty) {
-        if let Some(lf) = level && sl.get("level").and_then(Value::as_str) != Some(lf) { continue; }
-        if let Some(sf) = system && !sl.get("systems").and_then(Value::as_array).unwrap_or(&empty).iter().any(|v| v.as_str() == Some(sf)) {
+        if let Some(lf) = level
+            && sl.get("level").and_then(Value::as_str) != Some(lf)
+        {
+            continue;
+        }
+        if let Some(sf) = system
+            && !sl.get("systems").and_then(Value::as_array).unwrap_or(&empty).iter().any(|v| v.as_str() == Some(sf))
+        {
             continue;
         }
         items.push(sl.clone());
@@ -107,8 +120,16 @@ fn run_connections(s: &mut Session, p: &Value) -> Result<Value> {
     let data = lv_data(s);
     let mut items = Vec::new();
     for ec in data.get("connections").and_then(Value::as_array).unwrap_or(&Vec::new()) {
-        if let Some(lf) = level && ec.get("level").and_then(Value::as_str) != Some(lf) { continue; }
-        if let Some(kf) = kind && ec.get("kind").and_then(Value::as_str) != Some(kf) { continue; }
+        if let Some(lf) = level
+            && ec.get("level").and_then(Value::as_str) != Some(lf)
+        {
+            continue;
+        }
+        if let Some(kf) = kind
+            && ec.get("kind").and_then(Value::as_str) != Some(kf)
+        {
+            continue;
+        }
         items.push(ec.clone());
     }
     Ok(paginate(items, page, size))

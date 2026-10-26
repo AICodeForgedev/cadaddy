@@ -21,12 +21,8 @@ fn fa_reader_finds_devices_on_fa_sheets() {
     let set = hotel_set();
     let t = &set.truth;
     // Get DXF files.
-    let dxf_data: Vec<(String, Vec<u8>)> = set
-        .files
-        .iter()
-        .filter(|(n, _)| n.ends_with(".dxf") && n.starts_with("FA-"))
-        .map(|(n, b)| (n.clone(), b.clone()))
-        .collect();
+    let dxf_data: Vec<(String, Vec<u8>)> =
+        set.files.iter().filter(|(n, _)| n.ends_with(".dxf") && n.starts_with("FA-")).map(|(n, b)| (n.clone(), b.clone())).collect();
     assert!(!dxf_data.is_empty(), "no FA DXF files in the hotel set");
 
     let (found, _reviews) = lv_reader::read_fa_devices(&dxf_data, t);
@@ -36,13 +32,12 @@ fn fa_reader_finds_devices_on_fa_sheets() {
     assert!(
         score.recall >= 0.5,
         "FA recall {:.2} < 0.5 (found {} of {} truth, matched {})",
-        score.recall, score.count_found, score.count_truth, score.count_matched,
+        score.recall,
+        score.count_found,
+        score.count_truth,
+        score.count_matched,
     );
-    assert!(
-        score.precision >= 0.5,
-        "FA precision {:.2} < 0.5 (found {}, matched {})",
-        score.precision, score.count_found, score.count_matched,
-    );
+    assert!(score.precision >= 0.5, "FA precision {:.2} < 0.5 (found {}, matched {})", score.precision, score.count_found, score.count_matched,);
     // At least some devices found.
     assert!(score.count_found > 0, "FA reader found 0 devices");
 }
@@ -51,12 +46,8 @@ fn fa_reader_finds_devices_on_fa_sheets() {
 fn telecom_reader_finds_devices_on_t_sheets() {
     let set = hotel_set();
     let t = &set.truth;
-    let dxf_data: Vec<(String, Vec<u8>)> = set
-        .files
-        .iter()
-        .filter(|(n, _)| n.ends_with(".dxf") && n.starts_with("T-"))
-        .map(|(n, b)| (n.clone(), b.clone()))
-        .collect();
+    let dxf_data: Vec<(String, Vec<u8>)> =
+        set.files.iter().filter(|(n, _)| n.ends_with(".dxf") && n.starts_with("T-")).map(|(n, b)| (n.clone(), b.clone())).collect();
     assert!(!dxf_data.is_empty(), "no T DXF files in the hotel set");
 
     let found = lv_reader::read_telecom_devices(&dxf_data, t);
@@ -65,7 +56,10 @@ fn telecom_reader_finds_devices_on_t_sheets() {
     assert!(
         score.recall >= 0.5,
         "TC recall {:.2} < 0.5 (found {} of {} truth, matched {})",
-        score.recall, score.count_found, score.count_truth, score.count_matched,
+        score.recall,
+        score.count_found,
+        score.count_truth,
+        score.count_matched,
     );
     assert!(score.count_found > 0, "TC reader found 0 devices");
 }
@@ -90,12 +84,8 @@ fn equip_connections_truth_has_all_kinds() {
 fn review_items_for_planted_missing_callouts() {
     let set = hotel_set();
     let t = &set.truth;
-    let dxf_data: Vec<(String, Vec<u8>)> = set
-        .files
-        .iter()
-        .filter(|(n, _)| n.ends_with(".dxf") && n.starts_with("FA-"))
-        .map(|(n, b)| (n.clone(), b.clone()))
-        .collect();
+    let dxf_data: Vec<(String, Vec<u8>)> =
+        set.files.iter().filter(|(n, _)| n.ends_with(".dxf") && n.starts_with("FA-")).map(|(n, b)| (n.clone(), b.clone())).collect();
 
     let (_found, reviews) = lv_reader::read_fa_devices(&dxf_data, t);
     // The test verifies that when the reader finds devices, it generates review items
@@ -144,10 +134,8 @@ fn route_sleeves_creates_sleeves_at_rated_walls() {
         // (May be 0 if no device-to-IDF path crosses a rated wall.)
     }
     // Floor sleeves should exist for each level that has an IDF.
-    let levels_with_idf: BTreeSet<&str> = t.telecom_devices.iter()
-        .filter(|d| matches!(d.kind.as_str(), "idf" | "mdf" | "patch_panel"))
-        .map(|d| d.level.as_str())
-        .collect();
+    let levels_with_idf: BTreeSet<&str> =
+        t.telecom_devices.iter().filter(|d| matches!(d.kind.as_str(), "idf" | "mdf" | "patch_panel")).map(|d| d.level.as_str()).collect();
     let floor_sleeves = sleeves.iter().filter(|s| s.penetrates == "floor").count();
     if !levels_with_idf.is_empty() {
         assert!(floor_sleeves > 0, "no floor sleeves despite IDFs on levels {:?}", levels_with_idf);
@@ -177,13 +165,13 @@ fn sleeve_count_and_location_vs_truth() {
 fn hotel_set_has_sleeve_layout_sheets() {
     let set = hotel_set();
     // Check that SL-10x sheets exist in the set.
-    let sl_sheets: Vec<&str> = set.files.iter()
-        .filter(|(n, _)| n.starts_with("SL-") && n.ends_with(".dxf"))
-        .map(|(n, _)| n.as_str())
-        .collect();
+    let sl_sheets: Vec<&str> = set.files.iter().filter(|(n, _)| n.starts_with("SL-") && n.ends_with(".dxf")).map(|(n, _)| n.as_str()).collect();
     // The hotel set should have sleeve layout sheets for each level.
-    assert!(!sl_sheets.is_empty(), "no SL-xxx sheets in the hotel set; sheets: {:?}",
-        set.files.iter().map(|(n, _)| n.as_str()).filter(|n| n.ends_with(".dxf")).collect::<Vec<_>>());
+    assert!(
+        !sl_sheets.is_empty(),
+        "no SL-xxx sheets in the hotel set; sheets: {:?}",
+        set.files.iter().map(|(n, _)| n.as_str()).filter(|n| n.ends_with(".dxf")).collect::<Vec<_>>()
+    );
 }
 
 // ---- MUST 6: LV BOM in real takeoff ---------------------------------------------------------------
@@ -202,12 +190,7 @@ fn lv_bom_has_device_cable_and_sleeve_lines() {
     // Check device counts match truth counts.
     let fa_device_bom: Vec<_> = bom.iter().filter(|l| l.system == "fire_alarm" && l.category == "device").collect();
     let fa_total: f64 = fa_device_bom.iter().map(|l| l.quantity).sum();
-    assert_eq!(
-        fa_total as usize,
-        t.fire_alarm_devices.len(),
-        "FA device BOM total {} != truth count {}",
-        fa_total, t.fire_alarm_devices.len(),
-    );
+    assert_eq!(fa_total as usize, t.fire_alarm_devices.len(), "FA device BOM total {} != truth count {}", fa_total, t.fire_alarm_devices.len(),);
 
     // Cable footage should be positive.
     let cable_lines: Vec<_> = bom.iter().filter(|l| l.category == "cable").collect();
