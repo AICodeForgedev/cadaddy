@@ -700,7 +700,8 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     // Cache the sheet list for later stages (MUST 4).
     job.sheets = Some(sheets_result);
-    job.index = Some(json!({"sheets": classified.get("sheets"), "levels": classified.get("levels")}));
+    job.index =
+        Some(json!({"sheets": classified.get("sheets"), "levels": classified.get("levels"), "level_warnings": classified.get("level_warnings")}));
 
     // MUST 1: Check for empty results.
     // The index: one entry per real sheet (questions are asked once per sheet, not per copy).
@@ -888,12 +889,11 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let levels = levels_result.get("levels").and_then(Value::as_array);
     let level_count = levels.map_or(0, Vec::len);
 
-    // MUST 3: If levels.read found 0 levels, take the sheet index's: the levels the plan titles
-    // name, with elevations where the sections and elevations mark them.
+    // The sheet index's levels come first: the levels the plan titles name, with elevations
+    // where the sections and elevations mark them. levels.read's notes (which may include a
+    // site sheet's spot elevations) are used only when the index has none.
     let mut title_levels: Vec<Value> = Vec::new();
-    if level_count == 0
-        && let Some(index_levels) = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array)
-    {
+    if let Some(index_levels) = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array) {
         for l in index_levels.iter().take(MAX_QUESTIONS_PER_STAGE) {
             let Some(name) = l.get("name").and_then(Value::as_str) else { continue };
             let sheets: Vec<&str> =
@@ -902,7 +902,8 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 "name": name,
                 "sheet": sheets.first().copied().unwrap_or("?"),
                 "sheets": sheets,
-                "source": "title",
+                // Marked on the sections: no title guess to confirm.
+                "source": if l.get("elevation_ft").and_then(Value::as_f64).is_some() { "sheet index" } else { "title" },
                 "elevation_ft": l.get("elevation_ft"),
                 "height_ft": l.get("height_ft"),
             }));
@@ -937,8 +938,35 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         });
     }
     let title_level_count = title_levels.len();
-    let effective_levels = if let Some(lvls) = levels.filter(|l| !l.is_empty()) { lvls.clone() } else { title_levels };
+    let from_index = !title_levels.is_empty();
+    let effective_levels = match levels.filter(|l| !l.is_empty()) {
+        Some(lvls) if title_levels.is_empty() => lvls.clone(),
+        _ => title_levels,
+    };
     let effective_count = effective_levels.len();
+
+    // Readings levels.read refused (they break the levels' order) or set aside (site sheets).
+    let index_warnings = job.index.as_ref().and_then(|i| i.get("level_warnings")).and_then(Value::as_array);
+    let refused: Vec<String> = ["warnings", "ignored"]
+        .iter()
+        .filter_map(|k| levels_result.get(*k).and_then(Value::as_array))
+        .chain(index_warnings)
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .take(MAX_QUESTIONS_PER_STAGE)
+        .collect();
+    if !refused.is_empty() {
+        job.add_finding(
+            StageName::Levels,
+            &format!("{} level reading(s) not used: {}", refused.len(), refused.join("; ")),
+            "Level elevations rise with the level number, and a civil or site sheet's elevations are spot elevations on the site datum",
+            2,
+            vec!["Check the sections' level marks".into(), "Set a level's elevation with levels.set".into()],
+            None,
+            false,
+        );
+    }
 
     // MUST 1: No empty success.
     if effective_count == 0 {
@@ -1196,12 +1224,12 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         Some(json!({"levels_detected": level_count, "levels_from_titles": title_level_count, "effective": effective_count})),
     );
     let mut out = levels_result;
-    if level_count == 0
+    if (level_count == 0 || from_index)
         && effective_count > 0
         && let Some(o) = out.as_object_mut()
     {
-        // The levels the job goes on with: the plan titles' (levels.read found no level notes).
-        o.insert("levels_read".into(), json!(0));
+        // The levels the job goes on with: the sheet index's (the plan titles').
+        o.insert("levels_read".into(), json!(level_count));
         o.insert("levels".into(), json!(effective_levels));
     }
     Ok(out)
@@ -2471,9 +2499,21 @@ const DEFAULT_STOREY_FT: f64 = 10.0;
 /// so the build stage asks. Empty when the set has no architectural floor plans (the build reads
 /// whatever was imported, as for one sheet).
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
-    let rank = |l: &str| (l == "R", l.parse::<u32>().unwrap_or(u32::MAX), l.to_string());
-    let mut plans: Vec<&SheetRegion> =
-        job.sheet_regions.iter().filter(|r| r.discipline == "A" && r.kind == "plan" && !r.level.trim().is_empty()).collect();
+    let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
+    let floor_plan = |r: &&SheetRegion| r.kind == "plan" && !r.level.trim().is_empty() && !r.level.eq_ignore_ascii_case("SITE");
+    let mut plans: Vec<&SheetRegion> = job.sheet_regions.iter().filter(floor_plan).filter(|r| r.discipline == "A").collect();
+    if plans.is_empty() {
+        // No architectural floor plans: one discipline's plans give the floors (their
+        // background shows the walls), the one with the most levels.
+        let mut by: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
+        for r in job.sheet_regions.iter().filter(floor_plan) {
+            by.entry(r.discipline.as_str()).or_default().insert(r.level.as_str());
+        }
+        let best = by.iter().filter(|(_, l)| l.len() > 1).max_by_key(|(d, l)| (l.len(), std::cmp::Reverse(*d))).map(|(d, _)| (*d).to_string());
+        if let Some(d) = best {
+            plans = job.sheet_regions.iter().filter(floor_plan).filter(|r| r.discipline == d).collect();
+        }
+    }
     plans.sort_by_key(|r| rank(&r.level));
     plans.dedup_by(|a, b| a.level.eq_ignore_ascii_case(&b.level));
     let index_levels: Vec<Value> = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array).cloned().unwrap_or_default();
@@ -2485,15 +2525,27 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
             .and_then(Value::as_f64)
             .filter(|v| v.is_finite())
     };
+    // Elevations rise with the level: the readings that break that (a site spot elevation
+    // taken for a floor) are no readings; the most that agree win.
+    let reads: Vec<Option<f64>> = plans.iter().map(|r| read(&r.level, "elevation_ft")).collect();
+    let items: Vec<(Option<i32>, f64, u32)> = plans.iter().zip(&reads).map(|(r, e)| (Some(rank(&r.level).0), e.unwrap_or(f64::NAN), 1)).collect();
+    let in_order = cadaddy_walk3d::levels::in_order(&items);
+    let good = |i: usize| reads.get(i).copied().flatten().filter(|_| in_order.get(i).copied().unwrap_or(false));
     let mut out = Vec::new();
     let mut next_elevation = 0.0f64;
-    for r in plans {
+    for (i, r) in plans.iter().enumerate() {
         let name = match r.level.as_str() {
             "R" => "Roof".to_string(),
             l if l.chars().all(|c| c.is_ascii_digit()) => format!("Level {l}"),
             l => l.to_string(),
         };
-        let (elevation, read_elevation) = match read(&r.level, "elevation_ft") {
+        let read_el = reads.get(i).copied().flatten();
+        let out_of_order = read_el.is_some() && good(i).is_none();
+        if i == 0 {
+            // The lowest with no good reading: a storey under the first level read, if any.
+            next_elevation = (1..plans.len()).find_map(|j| good(j).map(|e| e - DEFAULT_STOREY_FT * j as f64)).unwrap_or(0.0);
+        }
+        let (elevation, read_elevation) = match good(i) {
             Some(e) => (e, true),
             None => (next_elevation, false),
         };
@@ -2504,7 +2556,15 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
         next_elevation = elevation + height;
         let mut level =
             json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.rect});
-        if !(read_elevation && read_height) {
+        if let (true, Some(e)) = (out_of_order, read_el) {
+            level["guess"] = json!(format!(
+                "{} plan {}: the elevation read for it, {}, breaks the levels' order, so it is not used; stacked at {}",
+                name,
+                r.number,
+                cadaddy_walk3d::feet(e),
+                cadaddy_walk3d::feet(elevation)
+            ));
+        } else if !(read_elevation && read_height) {
             level["guess"] = json!(format!("{} plan {}: floor to floor not read from the sections; {}' assumed", name, r.number, DEFAULT_STOREY_FT));
         }
         out.push(level);
@@ -3954,6 +4014,51 @@ mod tests {
         // Only E/M plans: no building levels (the build reads what was imported, as before).
         job.sheet_regions = vec![region("E-104", "4", "E", "plan", 0.0)];
         assert!(building_levels(&job).is_empty());
+    }
+
+    #[test]
+    fn building_levels_keep_their_order_and_come_from_any_floor_plans() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![
+            region("A111", "1", "A", "plan", 0.0),
+            region("A112", "2", "A", "plan", 200.0),
+            region("A113", "3", "A", "plan", 400.0),
+            region("A114", "4", "A", "plan", 600.0),
+            region("C-101", "SITE", "C", "plan", 800.0),
+        ];
+        // A site spot elevation read as the first floor (147'-0") is over Levels 2-4.
+        job.index = Some(json!({"levels": [
+            {"name": "1", "elevation_ft": 147.0},
+            {"name": "2", "elevation_ft": 12.0, "height_ft": 11.0},
+            {"name": "3", "elevation_ft": 23.0, "height_ft": 11.0},
+            {"name": "4", "elevation_ft": 34.0}
+        ]}));
+        let levels = building_levels(&job);
+        let names: Vec<&str> = levels.iter().filter_map(|l| l["name"].as_str()).collect();
+        assert_eq!(names, ["Level 1", "Level 2", "Level 3", "Level 4"], "{levels:?}");
+        let el: Vec<f64> = levels.iter().filter_map(|l| l["elevation_ft"].as_f64()).collect();
+        // The one reading out of order goes; Level 1 sits a storey under Level 2.
+        assert_eq!(el, [12.0 - DEFAULT_STOREY_FT, 12.0, 23.0, 34.0], "{levels:?}");
+        assert!(levels[0]["guess"].as_str().is_some_and(|g| g.contains("147'-0\", breaks the levels' order")), "{levels:?}");
+        assert!(levels[1].get("guess").is_none() && levels[2].get("guess").is_none(), "{levels:?}");
+
+        // Electrical and mechanical plans only: the discipline with the most floors gives the
+        // levels, each on its own plan's region (never one level for the whole drawing).
+        job.index = None;
+        job.sheet_regions = vec![
+            region("E-101", "1", "E", "plan", 0.0),
+            region("E-102", "2", "E", "plan", 200.0),
+            region("E-103", "3", "E", "plan", 400.0),
+            region("E-104", "4", "E", "plan", 600.0),
+            region("M-101", "1", "M", "plan", 800.0),
+            region("M-102", "2", "M", "plan", 1000.0),
+            region("E-001", "SITE", "E", "plan", 1200.0),
+        ];
+        let levels = building_levels(&job);
+        let names: Vec<&str> = levels.iter().filter_map(|l| l["name"].as_str()).collect();
+        assert_eq!(names, ["Level 1", "Level 2", "Level 3", "Level 4"], "{levels:?}");
+        let x0: Vec<f64> = levels.iter().filter_map(|l| l["region"][0].as_f64()).collect();
+        assert_eq!(x0, [0.0, 200.0, 400.0, 600.0]);
     }
 
     #[test]
