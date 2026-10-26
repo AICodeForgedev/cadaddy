@@ -113,6 +113,12 @@ fn the_same_door_on_the_a_e_and_m_sheets_is_one_door() {
 
     let r = s.execute("bim.identity", &json!({})).unwrap();
     assert_eq!(r["by_kind"]["door"], json!({"before": 5, "after": 3}), "{r:#}");
+    // Each sheet's transform onto the level's plan is kept on the spec's sheet.
+    let spec: Value = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+    let m = spec["sheets"].as_array().unwrap().iter().find(|x| x["number"] == "M-101").cloned().unwrap();
+    assert_eq!(m["registration"]["method"], "tags", "{m}");
+    assert_eq!(m["registration"]["reference"], "A-101");
+    assert!((m["registration"]["tx"].as_f64().unwrap() + 4036.0).abs() < 1.0, "{m}");
     let left = doors(&s);
     assert_eq!(left.len(), 3);
     // The architectural plan's copy is kept, lists every sheet it was seen on and has its number.

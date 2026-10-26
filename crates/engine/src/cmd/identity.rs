@@ -432,6 +432,7 @@ pub(crate) fn identity(s: &mut Session, apply: bool, room_numbers: Option<&[Stri
         .collect();
     let mut removed: BTreeMap<String, usize> = BTreeMap::new();
     if apply {
+        write_registrations(s, &transforms)?;
         write_identities(s, &els, &groups, &numbered, &sheets)?;
         for g in &groups {
             *removed.entry(g.kind.clone()).or_default() += g.merged.len();
@@ -530,6 +531,29 @@ fn schedule_findings(rows: &[cadaddy_mepfix::arch_reader::DoorRow], doors: &[&El
         }
     }
     out
+}
+
+/// Keep each registered sheet's transform on its sheet in the building spec.
+fn write_registrations(s: &mut Session, transforms: &[SheetTransform]) -> Result<()> {
+    if transforms.is_empty() {
+        return Ok(());
+    }
+    let d = s.doc_mut()?;
+    let Some(mut sp) = spec_of(d) else { return Ok(()) };
+    for sh in sp.sheets.iter_mut() {
+        sh.registration = transforms.iter().find(|t| t.registered && t.sheet == sh.number).map(|t| cadaddy_walk3d::levels::SheetRegistration {
+            reference: t.reference.clone(),
+            method: t.method.clone(),
+            a: t.transform.a,
+            b: t.transform.b,
+            tx: t.transform.tx,
+            ty: t.transform.ty,
+            matched: t.matched,
+            residual: t.residual,
+        });
+    }
+    d.building_spec = Some(sp.to_json());
+    Ok(())
 }
 
 /// Write the merges: the kept element takes the others' values it lacks and lists its sheets;

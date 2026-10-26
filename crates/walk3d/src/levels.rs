@@ -80,6 +80,29 @@ pub struct SheetLink {
     /// Every level this sheet covers (typical-floor plans); empty = only `level`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub levels: Vec<String>,
+    /// Where the sheet sits in its level's project coordinates (its reference plan's), once
+    /// registered by the door and room numbers it shares (`bim.identity`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration: Option<SheetRegistration>,
+}
+
+/// A sheet put onto its level's reference plan: `p ↦ [a·x − b·y + tx, b·x + a·y + ty]`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SheetRegistration {
+    /// The level's reference plan (itself for the reference).
+    pub reference: String,
+    /// `reference`, `tags` (shared door and room numbers) or `frame` (a sheet drawn alike).
+    pub method: String,
+    pub a: f64,
+    pub b: f64,
+    pub tx: f64,
+    pub ty: f64,
+    /// The numbers the fit used.
+    #[serde(default)]
+    pub matched: usize,
+    /// Root-mean-square error of the matched numbers, drawing units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub residual: Option<f64>,
 }
 
 /// A level name and elevation read from one note.

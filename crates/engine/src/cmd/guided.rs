@@ -3431,6 +3431,7 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
                 source: "model".into(),
                 rect: Some(r.rect),
                 levels: r.levels.iter().map(|c| level_name(c)).collect(),
+                registration: None,
             }),
         }
     }
