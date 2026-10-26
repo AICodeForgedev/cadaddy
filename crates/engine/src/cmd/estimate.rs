@@ -934,11 +934,17 @@ fn run_status(s: &mut Session, _p: &Value) -> Result<Value> {
         out[k] = b[k].clone();
     }
     let f = findings(&st, &job);
-    out["ok"] = json!(f.is_empty());
+    // Q5278 MUST 3: ok:false when every line is unpriced (not just when findings exist).
+    let unpriced = job.priced.iter().filter(|p| p.material_unit.is_none()).count();
+    let all_unpriced = !job.priced.is_empty() && unpriced == job.priced.len();
+    out["ok"] = json!(f.is_empty() && !all_unpriced);
     out["summary"] = summary(&job.priced);
     out["findings"] = json!(f);
     if let Some(n) = load_costs_step(&job.priced) {
         out["next_step"] = json!(n);
+    }
+    if all_unpriced {
+        out["unpriced"] = json!(format!("all {} lines have no price: estimate.import_costs", job.priced.len()));
     }
     Ok(out)
 }

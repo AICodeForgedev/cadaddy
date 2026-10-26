@@ -125,6 +125,7 @@ mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
 pub mod plugins_cmd;
+pub(crate) mod printmep;
 pub mod printrev;
 pub mod printset;
 pub mod projrules;

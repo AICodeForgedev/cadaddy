@@ -245,3 +245,48 @@ fn a_generated_set_is_one_entry_per_sheet_though_three_files_hold_each() {
     assert!(index.levels.len() >= truth_levels.len().min(2), "levels {:?}", index.levels);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A sheet with level markers drawn as a name over its elevation.
+fn marked(number: &str, title: &[&str], marks: &[(&str, &str)]) -> Drawing {
+    let mut d = sheet(number, title, "");
+    for (i, (name, el)) in marks.iter().enumerate() {
+        let y = 120.0 + 40.0 * i as f64;
+        text(&mut d, name, 950.0, y, 6.0);
+        text(&mut d, el, 950.0, y - 8.0, 6.0);
+    }
+    d
+}
+
+#[test]
+fn a_site_sheets_spot_elevation_is_no_level_and_levels_rise_in_order() {
+    let plans = || {
+        vec![
+            ("Full Set.pdf", 1, sheet("A111", &["OVERALL FIRST", "FLOOR PLAN"], "")),
+            ("Full Set.pdf", 2, sheet("A112", &["OVERALL SECOND", "FLOOR PLAN"], "")),
+            ("Full Set.pdf", 3, sheet("A113", &["OVERALL THIRD", "FLOOR PLAN"], "")),
+            ("Full Set.pdf", 4, sheet("A114", &["OVERALL FOURTH", "FLOOR PLAN"], "")),
+        ]
+    };
+    let elevations = |index: &printset::SheetIndex| -> Vec<(String, Option<f64>)> {
+        index.levels.iter().map(|l| (l.name.clone(), l.elevation_ft.map(|e| (e * 100.0).round() / 100.0))).collect()
+    };
+    let section = || marked("A301", &["BUILDING SECTIONS"], &[("SECOND FLOOR", "12'-0\""), ("THIRD FLOOR", "24'-0\""), ("FOURTH FLOOR", "36'-0\"")]);
+    // The civil sheet marks the finished first floor on the site datum (147'-0").
+    let mut pages = plans();
+    pages.push(("Civil Set.pdf", 1, marked("C-101", &["GRADING AND", "DRAINAGE PLAN"], &[("FIRST FLOOR", "147'-0\"")])));
+    pages.push(("Full Set.pdf", 5, section()));
+    let index = printset::sheet_index(&classify(pages));
+    assert_eq!(
+        elevations(&index),
+        [("1".to_string(), None), ("2".to_string(), Some(12.0)), ("3".to_string(), Some(24.0)), ("4".to_string(), Some(36.0))]
+    );
+    assert!(index.level_warnings.is_empty(), "{:?}", index.level_warnings);
+    // The same mark on a sheet that is no site sheet: it breaks the order, so it is dropped.
+    let mut pages = plans();
+    pages.push(("Full Set.pdf", 6, marked("A201", &["EXTERIOR ELEVATIONS"], &[("FIRST FLOOR", "147'-0\"")])));
+    pages.push(("Full Set.pdf", 5, section()));
+    let index = printset::sheet_index(&classify(pages));
+    assert_eq!(elevations(&index).first(), Some(&("1".to_string(), None)));
+    assert_eq!(index.level_warnings.len(), 1, "{:?}", index.level_warnings);
+    assert!(index.level_warnings[0].starts_with("level 1: 147'-0\" not used"), "{:?}", index.level_warnings);
+}

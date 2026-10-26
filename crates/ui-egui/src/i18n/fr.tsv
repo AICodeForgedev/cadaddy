@@ -2990,3 +2990,5 @@
 	Override Unit Instance	Remplacer une instance de logement
 	Place Unit Instances	Placer les instances de logement
 	List Callouts	Lister les renvois
+	Keep Print Set Job	Conserver le travail du jeu de plans
+	Resume Print Set Job	Reprendre le travail du jeu de plans
