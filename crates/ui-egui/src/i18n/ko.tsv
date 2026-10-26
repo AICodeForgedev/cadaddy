@@ -3204,3 +3204,7 @@ menu	Modify	수정
 	List Callouts	콜아웃 목록
 	Keep Print Set Job	도면 세트 작업 보관
 	Resume Print Set Job	도면 세트 작업 재개
+	Finish Takeoff from Prints	도면에서 마감 물량 산출
+	Layer Quantity Takeoff	도면층별 물량 산출
+	Read Architecture from Prints	도면에서 건축 읽기
+	Read Roof and Wall Envelope	지붕 및 벽체 외피 읽기

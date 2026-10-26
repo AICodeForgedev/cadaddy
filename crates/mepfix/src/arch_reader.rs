@@ -39,6 +39,47 @@ const MAX_POLY: usize = 64;
 
 // ---- Results -----------------------------------------------------------------------------------
 
+/// Where a read item came from and how sure the reading is (Q5107).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Source {
+    /// The sheet it is drawn on (`A-101`).
+    pub sheet: String,
+    /// The schedule sheet its row data came from (`A-602`), if any.
+    pub schedule: Option<String>,
+    /// `drawing` (read off the plan), `schedule` (its row found on a schedule) or `guess`.
+    pub status: String,
+    /// Why it is a guess (or what is missing).
+    pub reason: Option<String>,
+}
+
+impl Source {
+    fn new(sheet: &str, schedule: Option<&str>, status: &str, reason: Option<String>) -> Source {
+        Source { sheet: sheet.into(), schedule: schedule.map(str::to_string), status: status.into(), reason }
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut v = json!({"sheet": self.sheet, "status": self.status});
+        if let Some(s) = &self.schedule {
+            v["schedule"] = json!(s);
+        }
+        if let Some(r) = &self.reason {
+            v["reason"] = json!(r);
+        }
+        v
+    }
+}
+
+/// The sheets each schedule and the roof plan were read from.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ScheduleSheets {
+    pub doors: Option<String>,
+    pub hardware: Option<String>,
+    pub windows: Option<String>,
+    pub finishes: Option<String>,
+    pub legend: Option<String>,
+    pub roof: Option<String>,
+}
+
 /// A door schedule row.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DoorRow {
@@ -68,6 +109,7 @@ pub struct FoundDoor {
     /// Its schedule row (by mark).
     pub row: Option<DoorRow>,
     pub card_reader: bool,
+    pub source: Source,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -76,6 +118,15 @@ pub struct FoundWindow {
     pub mark: Option<String>,
     pub at_ft: [f64; 2],
     pub width_in: f64,
+    pub source: Source,
+}
+
+/// One flight of a stair, bottom to top along its walking line, building feet.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FoundRun {
+    pub from_ft: [f64; 2],
+    pub to_ft: [f64; 2],
+    pub treads: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -88,6 +139,9 @@ pub struct FoundStair {
     pub risers: u32,
     pub riser_in: Option<f64>,
     pub tread_in: f64,
+    /// Its flights in walking order (the first one up from the level it starts on).
+    pub runs: Vec<FoundRun>,
+    pub source: Source,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -98,6 +152,7 @@ pub struct FoundElevator {
     pub max_ft: [f64; 2],
     pub pit_ft: Option<f64>,
     pub capacity_lb: Option<u32>,
+    pub source: Source,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -124,6 +179,7 @@ pub struct FoundRoof {
     pub slope_in_ft: Option<f64>,
     pub drains: Vec<[f64; 2]>,
     pub curbs: Vec<FoundCurb>,
+    pub source: Source,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -140,6 +196,8 @@ pub struct FoundRoom {
     pub ceiling_ft: Option<f64>,
     /// Device plate colour from its wall finish.
     pub plates: Option<String>,
+    /// Its label's plan sheet; its finishes' schedule sheet.
+    pub source: Source,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -155,6 +213,49 @@ pub struct ArchResult {
     pub roof: Option<FoundRoof>,
     pub rooms: Vec<FoundRoom>,
     pub finish_codes: Vec<FinishCode>,
+    /// The sheets the schedules came from.
+    pub sheets: ScheduleSheets,
+    /// The plan sheets read, with their level (`A-101`, `1`).
+    pub plans: Vec<(String, String)>,
+    /// What was seen and left out, with why.
+    pub ignored: Vec<String>,
+}
+
+impl ArchResult {
+    /// What was read only in part: unmarked doors and windows, marks without a schedule row,
+    /// rooms without a finish row, a stair without its riser note, an elevator without its pit.
+    pub fn misses(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let at = |p: [f64; 2]| format!("({:.1}, {:.1})", p[0], p[1]);
+        for d in &self.doors {
+            if let Some(r) = &d.source.reason {
+                let what = d.mark.as_ref().map_or_else(|| format!("door at {}", at(d.at_ft)), |m| format!("door {m}"));
+                out.push(format!("{what} on {} (level {}): {r}", d.source.sheet, d.level));
+            }
+        }
+        for w in &self.windows {
+            if let Some(r) = &w.source.reason {
+                let what = w.mark.as_ref().map_or_else(|| format!("window at {}", at(w.at_ft)), |m| format!("window {m}"));
+                out.push(format!("{what} on {} (level {}): {r}", w.source.sheet, w.level));
+            }
+        }
+        for s in &self.stairs {
+            if let Some(r) = &s.source.reason {
+                out.push(format!("{} on {}: {r}", s.tag, s.source.sheet));
+            }
+        }
+        for e in &self.elevators {
+            if let Some(r) = &e.source.reason {
+                out.push(format!("{} on {}: {r}", e.tag, e.source.sheet));
+            }
+        }
+        for rm in &self.rooms {
+            if let Some(r) = &rm.source.reason {
+                out.push(format!("room {} {} on {} (level {}): {r}", rm.number, rm.name, rm.source.sheet, rm.level));
+            }
+        }
+        out
+    }
 }
 
 // ---- Geometry from a sheet ---------------------------------------------------------------------
@@ -585,6 +686,7 @@ fn read_doors(s: &Shapes, level: &str, cl: &CeilingResult, edge: Option<&FoundSl
             hand: hd,
             row: None,
             card_reader: false,
+            source: Source::default(),
         });
     }
     // Marks: each schedule mark on the plan goes to the nearest door without one.
@@ -626,6 +728,7 @@ fn read_windows(s: &Shapes, level: &str, marks: &[String]) -> Vec<FoundWindow> {
             mark: None,
             at_ft: [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0],
             width_in: (width * 12.0).round(),
+            source: Source::default(),
         });
     }
     for w in out.iter_mut() {
@@ -673,6 +776,9 @@ fn read_stairs(s: &Shapes, level: &str) -> Vec<FoundStair> {
         let mut treads_total = 0u32;
         let mut tread = 0.0;
         let mut flights = 0u32;
+        // (min, max, treads, a walking line up it)
+        let mut flight_boxes: Vec<([f64; 2], [f64; 2], u32, bool)> = Vec::new();
+        let mut landings: Vec<([f64; 2], [f64; 2])> = Vec::new();
         for (blo, bhi) in &g {
             let (dx, dy) = (bhi[0] - blo[0], bhi[1] - blo[1]);
             let narrow = dx.min(dy);
@@ -685,6 +791,7 @@ fn read_stairs(s: &Shapes, level: &str) -> Vec<FoundStair> {
                 .map(|(a, _)| if dx < dy { a[1] } else { a[0] })
                 .collect();
             if inner.is_empty() {
+                landings.push((*blo, *bhi));
                 continue;
             }
             flights += 1;
@@ -692,6 +799,13 @@ fn read_stairs(s: &Shapes, level: &str) -> Vec<FoundStair> {
             let n = inner.len() as u32 + 1;
             treads_total += n;
             tread = dx.max(dy) / n as f64;
+            // The walking line: along the flight, shorter than it, inside it.
+            let walk = lines.iter().any(|(a, b)| {
+                let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+                let along = if dx < dy { (a[0] - b[0]).abs() < 1e-6 } else { (a[1] - b[1]).abs() < 1e-6 };
+                along && contains(*blo, *bhi, mid, 1e-6) && dist(*a, *b) < dx.max(dy) - 0.05
+            });
+            flight_boxes.push((*blo, *bhi, n, walk));
         }
         if flights == 0 {
             continue;
@@ -707,7 +821,14 @@ fn read_stairs(s: &Shapes, level: &str) -> Vec<FoundStair> {
             let u = upper(&t.s);
             if u.starts_with("UP") || u.starts_with("DN") { stair_note(&u) } else { None }
         });
+        let noted = note.is_some();
         let (risers, riser_in) = note.unwrap_or((treads_total + flights, None));
+        let runs = stair_runs(&flight_boxes, &landings, risers);
+        let source = if noted {
+            Source::default()
+        } else {
+            Source { reason: Some("no UP/DN riser note: risers counted from the treads drawn".into()), ..Source::default() }
+        };
         out.push(FoundStair {
             tag,
             levels: vec![level.into()],
@@ -717,9 +838,53 @@ fn read_stairs(s: &Shapes, level: &str) -> Vec<FoundStair> {
             risers,
             riser_in,
             tread_in: tread * 12.0,
+            runs,
+            source,
         });
     }
     out
+}
+
+/// A stair's flights as runs up its walking line: the flight with the walking line (else the
+/// first found) goes first, up to the landing; the others go on from the landing. The treads
+/// add up to the risers given (one riser more than treads per run).
+fn stair_runs(flights: &[([f64; 2], [f64; 2], u32, bool)], landings: &[([f64; 2], [f64; 2])], risers: u32) -> Vec<FoundRun> {
+    let mut order: Vec<&([f64; 2], [f64; 2], u32, bool)> = flights.iter().collect();
+    if let Some(i) = order.iter().position(|f| f.3) {
+        let first = order.remove(i);
+        order.insert(0, first);
+    }
+    let landing = landings.first().map(|(lo, hi)| [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]);
+    let mut runs: Vec<FoundRun> = Vec::new();
+    for (k, (lo, hi, treads, _)) in order.iter().enumerate() {
+        let (dx, dy) = (hi[0] - lo[0], hi[1] - lo[1]);
+        let (a, b) = if dx < dy {
+            let x = (lo[0] + hi[0]) / 2.0;
+            ([x, lo[1]], [x, hi[1]])
+        } else {
+            let y = (lo[1] + hi[1]) / 2.0;
+            ([lo[0], y], [hi[0], y])
+        };
+        // The end nearer the landing: the first run arrives there, the others leave from it.
+        let (from, to) = match landing {
+            Some(l) if (dist(a, l) < dist(b, l)) == (k == 0) => (b, a),
+            Some(_) => (a, b),
+            None => (a, b),
+        };
+        runs.push(FoundRun { from_ft: from, to_ft: to, treads: *treads });
+    }
+    // A riser note that disagrees with the treads drawn: the first run takes the difference.
+    let counted: u32 = runs.iter().map(|r| r.treads.saturating_add(1)).fold(0, u32::saturating_add);
+    if let Some(first) = runs.first_mut()
+        && risers > counted
+    {
+        first.treads = first.treads.saturating_add(risers - counted).min(200);
+    } else if let Some(first) = runs.first_mut()
+        && counted > risers
+    {
+        first.treads = first.treads.saturating_sub(counted - risers).max(1);
+    }
+    runs
 }
 
 fn read_elevators(s: &Shapes, level: &str) -> Vec<FoundElevator> {
@@ -741,7 +906,8 @@ fn read_elevators(s: &Shapes, level: &str) -> Vec<FoundElevator> {
         let tag = words.iter().find(|w| w.starts_with("ELEV")).cloned().unwrap_or_else(|| "ELEV.".into());
         let capacity_lb = words.iter().find_map(|w| w.strip_suffix(" LB").and_then(|n| n.trim().parse::<u32>().ok()));
         let pit_ft = words.iter().find_map(|w| w.strip_prefix("PIT").and_then(|r| length_in(r.trim_start_matches(':').trim())).map(|v| v / 12.0));
-        out.push(FoundElevator { tag, levels: vec![level.into()], min_ft: *lo, max_ft: *hi, pit_ft, capacity_lb });
+        let source = Source { reason: pit_ft.is_none().then(|| "no PIT note by the hoistway".to_string()), ..Source::default() };
+        out.push(FoundElevator { tag, levels: vec![level.into()], min_ft: *lo, max_ft: *hi, pit_ft, capacity_lb, source });
     }
     out
 }
@@ -841,8 +1007,8 @@ fn merge_levels<T>(all: &mut Vec<T>, found: Vec<T>, rect: impl Fn(&T) -> ([f64; 
 /// Read the architecture of a set.
 pub fn read_arch(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &CeilingResult) -> ArchResult {
     let mut res = ArchResult::default();
-    let mut plans: Vec<(String, Shapes)> = Vec::new();
-    let mut roof_plan: Option<Shapes> = None;
+    let mut plans: Vec<(String, String, Shapes)> = Vec::new();
+    let mut roof_plan: Option<(String, Shapes)> = None;
     let mut finishes: Vec<FinishRow> = Vec::new();
     let mut legend: Vec<(String, String, Option<String>)> = Vec::new();
     for (name, bytes) in dxf {
@@ -863,43 +1029,83 @@ pub fn read_arch(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &CeilingRe
             let al: Alignment = al.clone();
             let s = shapes(&d, &|p| sheet_reader::building_from_model(&al, p), 1.0 / 12.0);
             if title.contains("ROOF") {
-                roof_plan = Some(s);
+                roof_plan = Some((sh.number.clone(), s));
             } else {
-                plans.push((level.clone(), s));
+                plans.push((level.clone(), sh.number.clone(), s));
             }
             continue;
         }
         let s = shapes(&d, &|p| p, 1.0);
+        let here = || Some(sh.number.clone());
         for t in tables(&s, &["DOOR SCHEDULE", "HARDWARE", "WINDOW SCHEDULE", "ROOM FINISHES", "FINISH LEGEND"]) {
             let tt = upper(&t.title);
             if tt.contains("DOOR SCHEDULE") {
                 res.door_rows.extend(door_rows(&t));
+                res.sheets.doors = res.sheets.doors.take().or_else(here);
             } else if tt.contains("HARDWARE") {
                 res.hardware.extend(hardware_groups(&t));
+                res.sheets.hardware = res.sheets.hardware.take().or_else(here);
             } else if tt.contains("WINDOW") {
                 res.window_types.extend(window_types(&t));
+                res.sheets.windows = res.sheets.windows.take().or_else(here);
             } else if tt.contains("ROOM FINISHES") {
                 finishes.extend(finish_rows(&t));
+                res.sheets.finishes = res.sheets.finishes.take().or_else(here);
             } else {
                 legend.extend(finish_legend(&t));
+                res.sheets.legend = res.sheets.legend.take().or_else(here);
             }
         }
     }
     let door_marks: Vec<String> = res.door_rows.iter().map(|r| r.mark.clone()).collect();
     let window_marks: Vec<String> = res.window_types.iter().map(|w| w.mark.clone()).collect();
     plans.sort_by(|a, b| a.0.cmp(&b.0));
-    for (level, s) in &plans {
+    for (level, sheet, s) in &plans {
+        res.plans.push((sheet.clone(), level.clone()));
         let edge = read_slab_edge(s, level);
         let mut doors = read_doors(s, level, ceilings, edge.as_ref(), &door_marks);
+        // A swing well off the slab, with no mark, is a legend's sample, not a door of the building.
+        doors.retain(|d| {
+            let off = d.mark.is_none() && edge.as_ref().is_some_and(|e| !contains(e.min_ft, e.max_ft, d.hinge_ft, 2.0));
+            if off {
+                res.ignored.push(format!(
+                    "door swing at ({:.1}, {:.1}) on {sheet}: off the slab edge with no mark, taken for a legend sample",
+                    d.at_ft[0], d.at_ft[1]
+                ));
+            }
+            !off
+        });
         for d in doors.iter_mut() {
             d.row = d.mark.as_ref().and_then(|m| res.door_rows.iter().find(|r| r.mark.eq_ignore_ascii_case(m))).cloned();
             d.card_reader = d.row.as_ref().is_some_and(|r| res.hardware.iter().any(|g| g.group.eq_ignore_ascii_case(&r.hardware) && g.card_reader));
+            d.source = match (&d.mark, &d.row) {
+                (Some(_), Some(_)) => Source::new(sheet, res.sheets.doors.as_deref(), "schedule", None),
+                (Some(m), None) => Source::new(sheet, None, "drawing", Some(format!("mark {m} has no row in the door schedule"))),
+                (None, _) => {
+                    Source::new(sheet, None, "guess", Some("no door mark by it on the plan: size from the swing drawn, no schedule row".into()))
+                }
+            };
         }
         res.doors.extend(doors);
-        res.windows.extend(read_windows(s, level, &window_marks));
-        let stairs = read_stairs(s, level);
+        let mut windows = read_windows(s, level, &window_marks);
+        for w in windows.iter_mut() {
+            w.source = if w.mark.is_some() {
+                Source::new(sheet, res.sheets.windows.as_deref(), "schedule", None)
+            } else {
+                Source::new(sheet, None, "guess", Some("no window mark by it on the plan: width from the frame drawn".into()))
+            };
+        }
+        res.windows.extend(windows);
+        let mut stairs = read_stairs(s, level);
+        for st in stairs.iter_mut() {
+            let status = if st.source.reason.is_some() { "guess" } else { "drawing" };
+            st.source = Source::new(sheet, None, status, st.source.reason.take());
+        }
         merge_levels(&mut res.stairs, stairs, |x| (x.min_ft, x.max_ft), |x| &mut x.levels);
-        let elevators = read_elevators(s, level);
+        let mut elevators = read_elevators(s, level);
+        for e in elevators.iter_mut() {
+            e.source.sheet = sheet.clone();
+        }
         for e in &elevators {
             if let Some(o) = res.elevators.iter_mut().find(|o| dist(o.min_ft, e.min_ft) < 1.0 && dist(o.max_ft, e.max_ft) < 1.0) {
                 o.pit_ft = o.pit_ft.or(e.pit_ft);
@@ -908,10 +1114,24 @@ pub fn read_arch(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &CeilingRe
         }
         merge_levels(&mut res.elevators, elevators, |x| (x.min_ft, x.max_ft), |x| &mut x.levels);
         res.slab_edges.extend(edge);
-        res.rooms.extend(read_rooms(s, level));
+        let mut rooms = read_rooms(s, level);
+        for rm in rooms.iter_mut() {
+            rm.source.sheet = sheet.clone();
+        }
+        res.rooms.extend(rooms);
     }
-    if let Some(s) = &roof_plan {
+    // An elevator's pit may be noted on another level than the one that found it.
+    for e in res.elevators.iter_mut() {
+        let (status, reason) = if e.pit_ft.is_some() { ("drawing", None) } else { ("guess", Some("no PIT note by the hoistway".to_string())) };
+        e.source.status = status.into();
+        e.source.reason = reason;
+    }
+    if let Some((sheet, s)) = &roof_plan {
+        res.sheets.roof = Some(sheet.clone());
         res.roof = read_roof(s);
+        if let Some(r) = res.roof.as_mut() {
+            r.source = Source::new(sheet, None, "drawing", None);
+        }
         if let Some(r) = &res.roof {
             res.slab_edges.push(FoundSlabEdge { level: "R".into(), min_ft: r.min_ft, max_ft: r.max_ft });
         }
@@ -925,6 +1145,11 @@ pub fn read_arch(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &CeilingRe
             rm.ceiling = Some(f.5.clone());
             rm.ceiling_ft = f.6;
             rm.plates = legend.iter().find(|l| l.0 == f.4).and_then(|l| l.2.clone());
+            rm.source.schedule.clone_from(&res.sheets.finishes);
+            rm.source.status = "schedule".into();
+        } else {
+            rm.source.status = "guess".into();
+            rm.source.reason = Some("no row in the room finish schedule: finishes unknown".into());
         }
     }
     for (code, description, plates) in legend {
@@ -942,6 +1167,29 @@ pub fn read_arch(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &CeilingRe
         res.finish_codes.push(FinishCode { code, kind: kind.into(), description, plates });
     }
     res
+}
+
+/// The architecture of DXF sheets as they come (any file names): each sheet recognised and named
+/// by its title block's number, the ceilings read (for the rooms either side of each door), then
+/// [`read_arch`]. Also the A sheets seen (`A-101 FIRST FLOOR PLAN`), to say what was there.
+pub fn read_sheets(files: &[(String, Vec<u8>)]) -> (ArchResult, Vec<String>) {
+    let parsed: Vec<(usize, Drawing)> = files.iter().enumerate().filter_map(|(i, (_, b))| cadaddy_io::read_dxf(b).ok().map(|d| (i, d))).collect();
+    let refs: Vec<(String, &Drawing)> =
+        parsed.iter().map(|(i, d)| (files.get(*i).map_or("", |f| f.0.as_str()).trim_end_matches(".dxf").to_string(), d)).collect();
+    let map = sheet_reader::build_sheet_map(&refs);
+    drop(refs);
+    let named: Vec<(String, Vec<u8>)> =
+        parsed.iter().zip(&map.sheets).filter_map(|((i, _), sh)| files.get(*i).map(|f| (format!("{}.dxf", sh.number), f.1.clone()))).collect();
+    drop(parsed);
+    let a_sheets: Vec<String> =
+        map.sheets.iter().filter(|s| s.discipline == "A").map(|s| format!("{} {}", s.number, s.title).trim().to_string()).collect();
+    let ceilings = crate::ceiling_reader::read_ceilings(&named, &map, None);
+    (read_arch(&named, &map, &ceilings), a_sheets)
+}
+
+/// A drawing as DXF bytes, for [`read_sheets`].
+pub fn dxf_bytes(d: &Drawing) -> Vec<u8> {
+    cadaddy_io::write_dxf(d).into_bytes()
 }
 
 /// Generate a set, recognise its sheets, read ceilings (for the rooms), then the architecture.
@@ -1179,17 +1427,24 @@ pub fn score_arch(t: &Truth, r: &ArchResult) -> ArchScore {
 
 // ---- Building spec -----------------------------------------------------------------------------
 
-/// The building spec patch for what was read: rooms with their finishes and ceiling heights,
-/// the door and window schedule rows, and a tag per door and window found (its mark at its
-/// place). `to_plan` maps a level's building feet to its plan drawing's coordinates (none: the
-/// level isn't built, so its rooms and tags are left out).
+/// The building spec patch for what was read: rooms with their finishes (base and device plate
+/// colour too) and ceiling heights, the door and window schedule rows, a tag per door and window
+/// found (its mark at its place; a door's hand, the rooms it swings into and from, hinge and
+/// latch points and card reader), the stair (its runs) and the elevator hoistway with its pit.
+/// `to_plan` maps a level's building feet to its plan drawing's coordinates (none: the level
+/// isn't built, so its rooms, tags, stairs and hoistways are left out).
 pub fn spec_patch(r: &ArchResult, to_plan: &dyn Fn(&str, [f64; 2]) -> Option<[f64; 2]>) -> Value {
+    spec_patch_named(r, to_plan, &|l| l.to_string())
+}
+
+/// [`spec_patch`] with the spec's name for each level code the prints use (`1` → `Level 1`).
+pub fn spec_patch_named(r: &ArchResult, to_plan: &dyn Fn(&str, [f64; 2]) -> Option<[f64; 2]>, level_name: &dyn Fn(&str) -> String) -> Value {
     let rooms: Vec<Value> = r
         .rooms
         .iter()
         .filter(|rm| to_plan(&rm.level, rm.at_ft).is_some())
         .map(|rm| {
-            let mut v = json!({"name": rm.name, "number": rm.number, "level": rm.level});
+            let mut v = json!({"name": rm.name, "number": rm.number, "level": level_name(&rm.level)});
             if let Some(c) = rm.ceiling_ft {
                 v["ceiling_ft"] = json!(c);
             }
@@ -1207,6 +1462,12 @@ pub fn spec_patch(r: &ArchResult, to_plan: &dyn Fn(&str, [f64; 2]) -> Option<[f6
                 m["ceiling"] = json!(c);
             }
             v["materials"] = m;
+            if let Some(b) = desc(&rm.base) {
+                v["base"] = json!(b);
+            }
+            if let Some(p) = &rm.plates {
+                v["plates"] = json!(p);
+            }
             v
         })
         .collect();
@@ -1233,13 +1494,71 @@ pub fn spec_patch(r: &ArchResult, to_plan: &dyn Fn(&str, [f64; 2]) -> Option<[f6
     let mut tags: Vec<Value> = Vec::new();
     for d in &r.doors {
         if let (Some(m), Some(p)) = (&d.mark, to_plan(&d.level, d.at_ft)) {
-            tags.push(json!({"mark": m, "at": p}));
+            let mut v =
+                json!({"mark": m, "at": p, "level": level_name(&d.level), "hand": d.hand, "source": d.source.sheet, "status": d.source.status});
+            if let Some(h) = to_plan(&d.level, d.hinge_ft) {
+                v["hinge"] = json!(h);
+            }
+            if let Some(l) = to_plan(&d.level, d.latch_ft) {
+                v["latch"] = json!(l);
+            }
+            if let Some(x) = &d.swings_into {
+                v["swings_into"] = json!(x);
+            }
+            if let Some(x) = &d.from_room {
+                v["from_room"] = json!(x);
+            }
+            if d.card_reader {
+                v["card_reader"] = json!(true);
+            }
+            tags.push(v);
         }
     }
     for w in &r.windows {
         if let (Some(m), Some(p)) = (&w.mark, to_plan(&w.level, w.at_ft)) {
-            tags.push(json!({"mark": m, "at": p}));
+            tags.push(json!({"mark": m, "at": p, "level": level_name(&w.level), "source": w.source.sheet, "status": w.source.status}));
         }
     }
-    json!({"rooms": rooms, "schedule": {"rows": rows, "tags": tags}})
+    let mut stairs: Vec<Value> = Vec::new();
+    for st in &r.stairs {
+        let Some(first) = st.levels.first() else { continue };
+        let runs: Option<Vec<Value>> = st
+            .runs
+            .iter()
+            .map(|run| Some(json!({"from": to_plan(first, run.from_ft)?, "to": to_plan(first, run.to_ft)?, "treads": run.treads})))
+            .collect();
+        let Some(runs) = runs.filter(|r| !r.is_empty()) else { continue };
+        if !(st.width_in.is_finite() && st.width_in > 0.0) {
+            continue;
+        }
+        let mut v = json!({"name": st.tag, "level": level_name(first), "runs": runs, "width_in": st.width_in});
+        if let Some(top) = st.levels.last().filter(|l| *l != first) {
+            v["to_level"] = json!(level_name(top));
+        }
+        stairs.push(v);
+    }
+    let mut elevators: Vec<Value> = Vec::new();
+    for e in &r.elevators {
+        let Some(first) = e.levels.first() else { continue };
+        let (Some(lo), Some(hi)) = (to_plan(first, e.min_ft), to_plan(first, e.max_ft)) else { continue };
+        let mut v = json!({
+            "name": e.tag, "levels": e.levels.iter().map(|l| level_name(l)).collect::<Vec<_>>(),
+            "min": [lo[0].min(hi[0]), lo[1].min(hi[1])], "max": [lo[0].max(hi[0]), lo[1].max(hi[1])], "source": e.source.sheet,
+        });
+        if let Some(p) = e.pit_ft {
+            v["pit_ft"] = json!(p);
+        }
+        if let Some(c) = e.capacity_lb {
+            v["capacity_lb"] = json!(c);
+        }
+        elevators.push(v);
+    }
+    let mut out = json!({"rooms": rooms, "schedule": {"rows": rows, "tags": tags}});
+    if !stairs.is_empty() {
+        out["stairs"] = json!(stairs);
+    }
+    if !elevators.is_empty() {
+        out["elevators"] = json!(elevators);
+    }
+    out
 }
