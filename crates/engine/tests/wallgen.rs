@@ -393,7 +393,10 @@ fn plan_box(m: &Mesh) -> (f64, f64, f64, f64) {
 /// The plan box of a mesh's first box (8 vertices): a door's leaf or a window's glass, without
 /// the frame boxes (jambs, head, sill, casings) drawn after it.
 fn first_box(m: &Mesh) -> (f64, f64, f64, f64) {
-    m.vertices.iter().take(8).fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |(x0, y0, x1, y1), v| (x0.min(v.x), y0.min(v.y), x1.max(v.x), y1.max(v.y)))
+    m.vertices
+        .iter()
+        .take(8)
+        .fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |(x0, y0, x1, y1), v| (x0.min(v.x), y0.min(v.y), x1.max(v.x), y1.max(v.y)))
 }
 
 /// Whether any wall box holds the point (each box is 8 vertices).
