@@ -785,6 +785,48 @@ fn glob_cached(
     Ok(matched)
 }
 
+/// For the bracket class opening at `pat[p]`, whether `text[t]` is in it: the index of its closing
+/// `]` when it is, `None` when it is not or the class is never closed.
+fn class_end(text: &[char], pat: &[char], p: usize, t: usize, budget: &mut u64) -> Result<Option<usize>, ()> {
+    let mut close = p;
+    while let Some(c) = pat.get(close) {
+        charge_match(budget)?;
+        if *c == ']' {
+            break;
+        }
+        close += 1;
+    }
+    if close == pat.len() {
+        return Ok(None);
+    }
+    let Some(&c) = text.get(t) else { return Ok(None) };
+    let set = &pat[p + 1..close];
+    let (neg, set) = match set.split_first() {
+        Some(('~', r)) if !r.is_empty() => (true, r),
+        _ => (false, set),
+    };
+    let mut hit = false;
+    let mut i = 0;
+    while i < set.len() {
+        charge_match(budget)?;
+        if set.get(i + 1) == Some(&'-') && i + 2 < set.len() {
+            if set[i] <= c && c <= set[i + 2] {
+                hit = true;
+            }
+            i += 3;
+        } else {
+            if set[i] == c {
+                hit = true;
+            }
+            i += 1;
+        }
+    }
+    if hit == neg {
+        return Ok(None);
+    }
+    Ok(Some(close))
+}
+
 /// Evaluate wildcard tokens and backtracking branches under shared work and recursion limits.
 fn glob_inner(
     text: &[char],
@@ -822,42 +864,7 @@ fn glob_inner(
                 p += 2;
             }
             '[' => {
-                let mut close = p;
-                while let Some(c) = pat.get(close) {
-                    charge_match(budget)?;
-                    if *c == ']' {
-                        break;
-                    }
-                    close += 1;
-                }
-                if close == pat.len() {
-                    return Ok(false);
-                }
-                let Some(&c) = text.get(t) else { return Ok(false) };
-                let set = &pat[p + 1..close];
-                let (neg, set) = match set.split_first() {
-                    Some(('~', r)) if !r.is_empty() => (true, r),
-                    _ => (false, set),
-                };
-                let mut hit = false;
-                let mut i = 0;
-                while i < set.len() {
-                    charge_match(budget)?;
-                    if set.get(i + 1) == Some(&'-') && i + 2 < set.len() {
-                        if set[i] <= c && c <= set[i + 2] {
-                            hit = true;
-                        }
-                        i += 3;
-                    } else {
-                        if set[i] == c {
-                            hit = true;
-                        }
-                        i += 1;
-                    }
-                }
-                if hit == neg {
-                    return Ok(false);
-                }
+                let Some(close) = class_end(text, pat, p, t, budget)? else { return Ok(false) };
                 t += 1;
                 p = close + 1;
             }

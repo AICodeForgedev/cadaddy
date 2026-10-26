@@ -235,6 +235,15 @@ pub struct CadApp {
     /// Admitted `ui.screenshot` requests, including completed-but-undrained ones.
     pub(crate) shots: capture::Shots,
     pub synthetic: Vec<egui::Event>,
+    /// Keys, text and clipboard events a floating panel's own OS window left over, with the
+    /// modifiers held there, for the main window's next input ([`Self::forward_native_input`]).
+    forwarded: Vec<egui::Event>,
+    forwarded_modifiers: Option<egui::Modifiers>,
+    /// The main window's own modifiers, put back the frame after forwarded keys went in.
+    restore_modifiers: Option<egui::Modifiers>,
+    /// A panel opened from a menu or command, whose floating window comes to the front on the
+    /// next frame (craft-ui's `DockArea::raise_panel`).
+    pub raise_panel: Option<docking::Panel>,
     /// One synthetic batch has been put into `RawInput` and is waiting for a real `App::ui` call.
     synthetic_injected: bool,
     /// Counts settled UI passes (one per painted frame; never hidden logic-only ticks or
@@ -303,6 +312,10 @@ impl CadApp {
             capture_identity_epoch: 0,
             shots: capture::Shots::default(),
             synthetic: Vec::new(),
+            forwarded: Vec::new(),
+            forwarded_modifiers: None,
+            restore_modifiers: None,
+            raise_panel: None,
             synthetic_injected: false,
             ui_frames: 0,
             #[cfg(not(target_arch = "wasm32"))]
@@ -604,6 +617,9 @@ impl CadApp {
         if ctx.current_pass_index() != 0 {
             return;
         }
+        if self.restore_modifiers.is_some() {
+            ctx.request_repaint();
+        }
         // Closing the window with unsaved changes asks first. `run_logic` refreshes viewport
         // close/focus state, so this must also work while hidden.
         if ctx.input(|i| i.viewport().close_requested()) && self.request_quit() {
@@ -625,13 +641,56 @@ impl CadApp {
         capture::request_hidden_paint(self, ctx);
     }
 
-    /// Input hook: refresh the raw surface snapshot and release at most one synthetic batch.
+    /// Queue keys typed in a floating panel's own OS window (craft-ui's
+    /// `DockOutput::forwarded_events` and `forwarded_modifiers`) for the main window's next
+    /// input. egui gives each OS window only its own input, and the shortcuts, the command line
+    /// and the canvas all read the main window's, so the keys go in there as if typed in it.
+    pub fn forward_native_input(&mut self, ctx: &egui::Context, events: Vec<egui::Event>, modifiers: Option<egui::Modifiers>) {
+        if events.is_empty() {
+            return;
+        }
+        self.forwarded.extend(events);
+        if modifiers.is_some() {
+            self.forwarded_modifiers = modifiers;
+        }
+        if self.restore_modifiers.is_none() {
+            self.restore_modifiers = Some(ctx.input(|i| i.modifiers));
+        }
+        ctx.request_repaint_of(egui::ViewportId::ROOT);
+    }
+
+    /// Whether a modal dialog is up: the "Save changes?" prompt or Drawing Recovery. The
+    /// floating panels' own OS windows take no input meanwhile (egui's `Modal` blocks only the
+    /// main window). The app's other dialogs are ordinary windows that leave the drawing usable.
+    pub fn shows_modal(&self) -> bool {
+        self.close_prompt().is_some() || !self.recovery.items.is_empty()
+    }
+
+    /// Input hook: refresh the raw surface snapshot, put in keys forwarded from floating panels'
+    /// OS windows, and release at most one synthetic batch.
     ///
     /// Eframe keeps the unused `RawInput` across hidden logic-only ticks, so a batch already in
     /// the buffer is never injected again; the next batch waits for a real `ui` pass to consume
     /// the previous one.
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         capture::note_raw_geometry(self, ctx, raw);
+        // The forwarded window's modifiers hold for the frame its keys go in (Shift+Copy is
+        // COPYBASE); the next frame puts the main window's back, before its own changes.
+        if !self.forwarded.is_empty() {
+            // A modifier the main window changed meanwhile is the one to put back.
+            if let Some(own) = raw.events.iter().rev().find_map(|event| match event {
+                egui::Event::ModifiersChanged(modifiers) => Some(*modifiers),
+                _ => None,
+            }) {
+                self.restore_modifiers = Some(own);
+            }
+            if let Some(modifiers) = self.forwarded_modifiers.take() {
+                raw.events.push(egui::Event::ModifiersChanged(modifiers));
+            }
+            raw.events.append(&mut self.forwarded);
+        } else if let Some(modifiers) = self.restore_modifiers.take() {
+            raw.events.insert(0, egui::Event::ModifiersChanged(modifiers));
+        }
         if self.synthetic_injected || self.synthetic.is_empty() {
             return;
         }

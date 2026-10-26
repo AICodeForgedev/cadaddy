@@ -18,6 +18,8 @@ mod measure_distance_snapping;
 mod menubar_hover;
 mod mspace_viewport_view;
 mod named_viewports_dialog;
+mod native_menu_text_keys;
+mod native_windows;
 mod options_dialog;
 mod parameters_rename;
 mod pickdrag;

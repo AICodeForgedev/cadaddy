@@ -172,7 +172,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             let pick = app.services.pick_lisp.as_ref()?;
             let dir = app.ui.last_lisp_dir.clone().unwrap_or_default();
             let Some(path) = pick(&dir) else { return Some(Ok(Value::Null)) };
-            if let Some(dir) = std::path::Path::new(&path).parent().and_then(|p| p.to_str()).filter(|d| !d.is_empty()) {
+            if let Some(dir) = std::path::Path::new(&path).parent().and_then(std::path::Path::to_str).filter(|d| !d.is_empty()) {
                 app.ui.last_lisp_dir = Some(dir.to_string());
             }
             if let Err(e) = app.session.start("appload") {
@@ -647,6 +647,61 @@ pub fn activate(app: &mut CadApp, id: &str) {
     }
     app.cmd.buffer.clear();
     app.start(id);
+}
+
+/// Activate the menu command `id` from a native menu bar, which takes the Edit menu's key
+/// equivalents (⌘C, ⌘X, ⌘V, ⌘A, ⌘Z, ⇧⌘Z) before any window sees them: while a text field has
+/// the keyboard, in the main window or a floating panel's own window, the field gets the key
+/// and the drawing command does not run.
+pub fn activate_native(app: &mut CadApp, ctx: &egui::Context, id: &str) {
+    let (Some(window), Some(text)) = (text_field_window(ctx), text_command(id, ctx.os().is_mac())) else {
+        activate(app, id);
+        return;
+    };
+    match text {
+        TextCommand::Paste => ctx.send_viewport_cmd_to(window, egui::ViewportCommand::RequestPaste),
+        TextCommand::Events(events) if window == egui::ViewportId::ROOT => {
+            app.synthetic.extend(events);
+            ctx.request_repaint();
+        }
+        TextCommand::Events(events) => craft_ui::docking::send_keys(ctx, window, events),
+    }
+}
+
+/// The window whose text field has the keyboard: a floating panel's own OS window, or the main
+/// window.
+pub fn text_field_window(ctx: &egui::Context) -> Option<egui::ViewportId> {
+    craft_ui::docking::typing_window(ctx).or_else(|| ctx.text_edit_focused().then_some(egui::ViewportId::ROOT))
+}
+
+/// Whether a focused text field takes the menu command `id` ([`activate_native`]): a native
+/// menu keeps such items enabled while one has the keyboard, whatever the drawing allows.
+pub fn edits_text(id: &str) -> bool {
+    text_command(id, false).is_some()
+}
+
+/// What a focused text field does for an Edit menu command.
+#[derive(Debug, PartialEq)]
+enum TextCommand {
+    /// The clipboard text, which the window asks for and receives as `Paste`.
+    Paste,
+    Events(Vec<egui::Event>),
+}
+
+fn text_command(id: &str, mac: bool) -> Option<TextCommand> {
+    let key = |key, shift| {
+        let modifiers = egui::Modifiers { mac_cmd: mac, ctrl: !mac, command: true, shift, alt: false };
+        TextCommand::Events([true, false].map(|pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers }).into())
+    };
+    Some(match id {
+        "copyclip" => TextCommand::Events(vec![egui::Event::Copy]),
+        "cutclip" => TextCommand::Events(vec![egui::Event::Cut]),
+        "pasteclip" => TextCommand::Paste,
+        "u" => key(egui::Key::Z, false),
+        "redo" => key(egui::Key::Z, true),
+        "selectall" => key(egui::Key::A, false),
+        _ => return None,
+    })
 }
 
 /// Run `id` with default parameters without cancelling the active command, as the drafting

@@ -96,9 +96,9 @@ fn plan(
             let dir = if dir == Vec2::ZERO || !dir.is_finite() { Vec2::from_angle(std::f64::consts::FRAC_PI_4) } else { dir };
             let p = *c + dir * *r;
             out.push(if mode == Mode::Diameter {
-                dim(s, DimKind::Diameter, *c - dir * *r, Vec2::ZERO, Vec2::ZERO, p, Vec2::ZERO, "")
+                dim(s, DimKind::Diameter, *c - dir * *r, Vec2::ZERO, Vec2::ZERO, p, "")
             } else {
-                dim(s, DimKind::Radius, *c, Vec2::ZERO, Vec2::ZERO, p, Vec2::ZERO, "")
+                dim(s, DimKind::Radius, *c, Vec2::ZERO, Vec2::ZERO, p, "")
             });
         }
         if out.is_empty() {
@@ -131,7 +131,7 @@ fn plan(
             .iter()
             .map(|p| {
                 let end = if vertical { Vec2::new(at.x, p.y) } else { Vec2::new(p.x, at.y) };
-                dim(s, DimKind::Ordinate { x_type: !vertical }, origin, *p, end, Vec2::ZERO, Vec2::ZERO, "")
+                dim(s, DimKind::Ordinate { x_type: !vertical }, origin, *p, end, Vec2::ZERO, "")
             })
             .collect());
     }
@@ -147,8 +147,7 @@ fn plan(
     let mid = bounds.center();
     let out_dir =
         if vertical { Vec2::new(if at.x >= mid.x { 1.0 } else { -1.0 }, 0.0) } else { Vec2::new(0.0, if at.y >= mid.y { 1.0 } else { -1.0 }) };
-    let lin =
-        |a: Vec2, b: Vec2, k: usize| dim(s, DimKind::Linear { rotation: rot }, at + out_dir * (step * k as f64), a, b, Vec2::ZERO, Vec2::ZERO, "");
+    let lin = |a: Vec2, b: Vec2, k: usize| dim(s, DimKind::Linear { rotation: rot }, at + out_dir * (step * k as f64), a, b, Vec2::ZERO, "");
     Ok(match mode {
         Mode::Baseline => {
             // From the datum (the point nearest it, by default the first) to every other point.
