@@ -37,6 +37,9 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         Err(e) => return Err(e),
     };
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return Err(e);
+    }
     let (mut file, tmp) = create_temp(&dir, permissions.as_ref())?;
     let write = (|| {
         if let Some(permissions) = permissions {
@@ -100,6 +103,15 @@ fn create_exclusive(path: &Path, permissions: Option<&Permissions>) -> io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creates_missing_parent_directories() {
+        let dir = std::env::temp_dir().join(format!("cadcraft-aw-mkdir-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+        let dest = dir.join("new_folder").join("out.bin");
+        write_atomic(&dest, b"created").unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"created");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn replaces_contents_atomically() {
