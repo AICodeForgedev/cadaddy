@@ -4968,6 +4968,9 @@ mod tests {
             discipline: "E".into(),
             kind: "plan".into(),
             rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
         });
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r["devices"]["count"], json!(5), "{r:#}");
