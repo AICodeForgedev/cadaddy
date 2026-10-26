@@ -250,9 +250,12 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
         let segs = segments(&mine);
         let found = pairs(d, &segs, &lim);
         let by_name = role_by_name(layer);
-        // Else what it holds: wall face pairs, door swings, room names.
+        // Else what it holds: wall face pairs, door swings, room names. Not on a layer that is
+        // off or frozen: what it holds isn't on the sheet (an imported PDF's lettering strokes,
+        // kept off under the text the OCR read from them, hold plenty of "face pairs").
+        let shown = d.layers.iter().find(|l| l.name.eq_ignore_ascii_case(layer)).is_none_or(|l| l.on && !l.frozen);
         let by_content = || -> Option<(Role, String)> {
-            if !by_content {
+            if !by_content || !shown {
                 return None;
             }
             if found.len() >= 2 {
