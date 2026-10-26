@@ -455,11 +455,7 @@ pub fn casework_clashes(t: &Truth, read: &[ReadPlumbing], clearance_in: f64) -> 
                 .min_by(|a, b| a.0.total_cmp(&b.0));
             let Some((gap, z)) = hit else { continue };
             let lev = t.level(&dev.level).map_or(0.0, |l| l.elevation_ft);
-            let what = match it.kind.as_str() {
-                "dishwasher" => "dishwasher",
-                "sink" => "sink",
-                k => k,
-            };
+            let what = it.kind.replace('_', " ");
             out.push(Clash {
                 id: String::new(),
                 kind: "in_wall_casework".into(),

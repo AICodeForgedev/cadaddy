@@ -25,6 +25,7 @@ fn all_reader_commands_are_registered() {
         "rfi.read",
         "mep.equipment.read",
         "mep.read_devices",
+        "casework.read",
     ];
     for cmd in &expected {
         assert!(cadaddy_engine::cmd::find_by_id_or_alias(cmd).is_some(), "missing command: {cmd}",);
