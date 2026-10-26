@@ -455,6 +455,10 @@ pub struct GuidedJob {
     /// Answered questions of stages being run again, to carry their answers over.
     #[serde(skip)]
     carry: Vec<Question>,
+    /// The sheet map read off the loaded sheets, in short ([`super::printset::links_summary`]):
+    /// callouts resolved, enlarged plans registered, match lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<Value>,
 }
 
 /// The handles one sheet's import created: `lo..hi`.
@@ -611,6 +615,7 @@ impl GuidedJob {
             storey_ft: None,
             spec_at_start: BTreeMap::new(),
             carry: Vec::new(),
+            links: None,
         }
     }
 
@@ -1839,6 +1844,105 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
     c
 }
 
+/// The job's sheet map, read off the sheets it loaded: each sheet's own objects (its handles)
+/// as a page, a few pages at a time.
+fn job_links(s: &Session, job: &GuidedJob) -> Option<cadaddy_mepfix::printlinks::SheetLinks> {
+    use cadaddy_mepfix::printlinks::{self, LinkPage, SetSheet};
+    let d = s.doc().ok()?;
+    let store = d.space(&s.space())?;
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let sheets: Vec<SetSheet> = job
+        .index
+        .as_ref()
+        .and_then(|i| i.get("sheets"))
+        .and_then(Value::as_array)?
+        .iter()
+        .map(|v| SetSheet {
+            number: text(v, "number"),
+            title: text(v, "title"),
+            discipline: text(v, "discipline"),
+            sheet_type: text(v, "type"),
+            level: text(v, "level"),
+        })
+        .collect();
+    let mut spans = job.sheet_spans.clone();
+    spans.sort_by_key(|sp| sp.lo);
+    if spans.is_empty() {
+        return None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let batch = rayon::current_num_threads().max(1);
+    #[cfg(target_arch = "wasm32")]
+    let batch = 1usize;
+    let mut pages: Vec<LinkPage> = Vec::with_capacity(spans.len());
+    for chunk in spans.chunks(batch) {
+        let mut parts: Vec<Vec<cadaddy_doc::Entity>> = vec![Vec::new(); chunk.len()];
+        for e in store.iter() {
+            if let Some(i) = chunk.iter().position(|sp| (sp.lo..sp.hi).contains(&e.handle.0))
+                && let Some(v) = parts.get_mut(i)
+            {
+                v.push((**e).clone());
+            }
+        }
+        let read = |(sp, ents): (&SheetSpan, Vec<cadaddy_doc::Entity>)| -> LinkPage {
+            let base = sp.sheet.split('/').next().unwrap_or(&sp.sheet).to_string();
+            let mut sub = cadaddy_doc::Drawing { blocks: d.blocks.clone(), ..cadaddy_doc::Drawing::default() };
+            sub.model.push_many(ents);
+            let k = printlinks::norm_sheet(&base);
+            let sheet = sheets
+                .iter()
+                .find(|x| printlinks::norm_sheet(&x.number) == k)
+                .cloned()
+                .unwrap_or(SetSheet { number: base.clone(), ..SetSheet::default() });
+            LinkPage { read: printlinks::read_page(&sub, &base), sheet }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            pages.extend(chunk.par_iter().zip(parts.into_par_iter()).map(read).collect::<Vec<_>>());
+        }
+        #[cfg(target_arch = "wasm32")]
+        pages.extend(chunk.iter().zip(parts).map(read));
+    }
+    Some(printlinks::link_set(&sheets, &pages))
+}
+
+/// The enlarged sheets are the authority inside their boundaries (one count per device): each
+/// registered enlarged plan's devices are moved to where they sit on its overall plan (and take
+/// that plan's level), and the overall plan's devices inside the boundary are left out. An
+/// enlarged plan that shows no devices leaves the overall plan's alone. Returns (moved, left out).
+fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::SheetLinks, census: &mut DeviceCensus) -> (usize, usize) {
+    let mut moves: BTreeMap<&str, &cadaddy_mepfix::printlinks::Enlarged> = BTreeMap::new();
+    let mut ignored: BTreeSet<&str> = BTreeSet::new();
+    for e in links.enlarged.iter().filter(|e| e.registered && e.fit.is_some() && e.devices > 0) {
+        for h in &e.device_handles {
+            moves.insert(h.as_str(), e);
+        }
+        ignored.extend(e.ignored_handles.iter().map(String::as_str));
+    }
+    let (mut moved, mut dropped) = (0usize, 0usize);
+    let mut keep = Vec::with_capacity(census.placed.len());
+    for mut dv in std::mem::take(&mut census.placed) {
+        if let Some(e) = moves.get(dv.handle.as_str()).copied()
+            && let Some(at) = e.place(dv.at)
+        {
+            dv.at = at;
+            dv.level = job.level_at(at).map_or_else(|| e.level.clone(), |r| r.level.clone());
+            moved += 1;
+        } else if ignored.contains(dv.handle.as_str()) {
+            if let Some(n) = census.by_type.get_mut(&dv.tag) {
+                *n = n.saturating_sub(1);
+            }
+            dropped += 1;
+            continue;
+        }
+        keep.push(dv);
+    }
+    census.by_type.retain(|_, n| *n > 0);
+    census.placed = keep;
+    (moved, dropped)
+}
+
 /// A 256-pixel PNG of the drawing around `at` (the first symbol printing an unlisted tag),
 /// written into `dir`; its path.
 fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, dir: &std::path::Path, name: &str) -> Option<String> {
@@ -2235,7 +2339,19 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // with a TAG attribute holding the nearby device-mark text.
     // Device types come from the sheets' legends and schedules (plus the marks every set
     // uses); notes, sheet numbers, keynotes, switch legs and dimensions never count.
-    let census = device_census(s, job);
+    let mut census = device_census(s, job);
+    // The sheet map: what the sheets' callouts point at, where the enlarged plans sit. Inside a
+    // registered enlarged plan's boundary its sheet is the authority: its devices move onto the
+    // overall plan there, and the overall plan's own copies there are left out.
+    if let Some(links) = job_links(s, job) {
+        let summary = super::printset::links_summary(&links);
+        results["links"] = summary.clone();
+        job.links = Some(summary);
+        let (moved, dropped) = enlarged_authority(job, &links, &mut census);
+        if moved + dropped > 0 {
+            results["enlarged_devices"] = json!({"moved_onto_overall_plans": moved, "overall_copies_left_out": dropped});
+        }
+    }
     results["circuit_tagged_symbols"] = json!(census.circuit);
     let not_devices: usize = census.not_device.values().sum();
     results["non_device_tags"] = json!(not_devices);
@@ -3175,6 +3291,8 @@ pub(crate) struct PlanPages {
     /// The building's levels for `bspec.draft` ([`building_levels`]; empty without
     /// architectural floor plans).
     pub levels: Vec<Value>,
+    /// The sheet map of the imported pages, in short ([`super::printset::links_summary`]).
+    pub links: Option<Value>,
     /// Where each imported sheet sits ([`add_sheet_links`]).
     pub regions: Vec<SheetRegion>,
 }
@@ -3193,7 +3311,9 @@ pub(crate) fn load_plan_pages(s: &mut Session, pdfs: &std::path::Path) -> Result
     let indexed = job.index.as_ref().and_then(|i| i.get("sheets")).and_then(Value::as_array).map_or(0, Vec::len);
     ensure_sheets_loaded(s, &mut job)?;
     let pages = job.sheet_regions.iter().map(|r| json!({"sheet": r.number, "level": r.level, "discipline": r.discipline, "type": r.kind})).collect();
-    Ok(PlanPages { indexed, pages, levels: building_levels(&job), regions: job.sheet_regions })
+    let links = job_links(s, &job).map(|l| super::printset::links_summary(&l));
+    let levels = building_levels(&job);
+    Ok(PlanPages { indexed, pages, levels, links, regions: job.sheet_regions })
 }
 
 /// Run takeoff stage — calls the model takeoff (by level and trade), not the 2D layer count.
@@ -4286,6 +4406,7 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
         "levels": levels,
         "elements": elements,
         "answers": answers_value(job),
+        "links": job.links,
     });
     // A paused job says what it is asking.
     if let Some(q) = job.next_question() {

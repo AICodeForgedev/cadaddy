@@ -700,6 +700,7 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "cdy_paths": cdy_paths,
         "pages": plan.pages,
+        "links": plan.links,
         "pages_note": pages_note,
         "spec_guesses": guesses,
         "check_results": check_results,
