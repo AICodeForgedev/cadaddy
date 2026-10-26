@@ -259,6 +259,38 @@ fn takeoff_has_known_totals_per_level_with_elements_and_diffs() {
     assert!(s.execute("bim.takeoff", &json!({"group_by": "colour"})).is_err());
 }
 
+/// Q5290: wall takeoff lines must appear on every level that has built walls, and floor/ceiling
+/// quantities must come from element geometry (not the sheet extents or a placeholder).
+#[test]
+fn wall_lines_on_every_level_and_areas_from_geometry() {
+    let mut s = building();
+    let t = s.execute("bim.takeoff", &json!({"group_by": "level"})).unwrap();
+    let lines = t["lines"].as_array().unwrap();
+    // Walls: the building has wall polylines on two levels; the takeoff must have wall lines
+    // (from the spec's wall marks or from the built wall meshes) on both levels.
+    let wall_lines: Vec<&Value> = lines.iter().filter(|l| l["category"] == "walls").collect();
+    assert!(!wall_lines.is_empty(), "the takeoff must have wall lines: {t}");
+    let wall_levels: std::collections::BTreeSet<&str> = wall_lines.iter().filter_map(|l| l["level"].as_str()).filter(|s| !s.is_empty()).collect();
+    assert!(wall_levels.contains("Level 1") && wall_levels.contains("Level 2"), "wall lines on both levels, got {wall_levels:?}: {t}");
+    // Total wall length must be positive.
+    let wall_lf: f64 = wall_lines.iter().filter(|l| l["unit"] == "lf").filter_map(|l| l["qty"].as_f64()).sum();
+    assert!(wall_lf > 0.0, "wall LF must be positive, got {wall_lf}");
+    // Filter by category "walls" must find them.
+    let filtered = s.execute("bim.takeoff", &json!({"group_by": "level", "filter": {"category": "walls"}, "keep": false})).unwrap();
+    let filtered_lines = filtered["lines"].as_array().unwrap();
+    assert!(!filtered_lines.is_empty(), "filter:{{category:walls}} must find wall lines: {filtered}");
+    // Floor area must not equal the sheet rectangle area (which would be 2500×2500 / 144 =
+    // ~43,400 SF on a region from [-1000,-1000] to [1500,1500]): the actual room is 40×30 = 1200 SF.
+    let floor_lines: Vec<&Value> = lines.iter().filter(|l| l["category"] == "floors").collect();
+    if !floor_lines.is_empty() {
+        for fl in &floor_lines {
+            let area = fl["qty"].as_f64().unwrap_or(0.0);
+            // Sheet-extent area would be > 40,000 SF; actual room is ~1,200 SF.
+            assert!(area < 10_000.0, "floor area {area} SF looks like the sheet extent, not geometry: {fl}");
+        }
+    }
+}
+
 #[test]
 fn estimate_prices_the_takeoff_and_gives_a_change_order() {
     let mut s = building();

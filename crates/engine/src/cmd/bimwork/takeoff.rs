@@ -137,7 +137,17 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             }
         }
     }
-    let bom_lines = bom["lines"].as_array().map(Vec::as_slice).unwrap_or_default();
+    // The BOM's walls measured from the meshes give way to this takeoff's own (per level, every
+    // wall's real length).
+    let bom_lines: Vec<Value> = bom["lines"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|l| !(l["category"] == "walls" && l["rule"] == crate::cmd::bom::MESH_WALLS_RULE))
+        .cloned()
+        .collect();
+    let bom_lines = bom_lines.as_slice();
     let wall_lines = built_wall_lines(d, &els, bom_lines, super::units_per_foot(s));
     let resolve = |h: &str| -> Vec<String> {
         match h.strip_prefix("run:").and_then(|i| i.parse::<usize>().ok()) {
