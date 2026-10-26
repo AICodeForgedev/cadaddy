@@ -245,6 +245,16 @@ fn tag_strings(e: &Entity, app: &str) -> Option<Vec<String>> {
     Some(x.iter().skip(at + 1).take_while(|t| t.code != 1001).filter(|t| t.code == 1000).map(|t| t.value.clone()).collect())
 }
 
+/// How far model.build moved a WALLGEN object to stack its level (its `stacked:<dx>,<dy>` tag),
+/// drawing units; zero when it didn't.
+fn stacked_by(e: &Entity) -> cadaddy_geom::Vec2 {
+    let moved = tag_strings(e, "CADADDY_WALLGEN").and_then(|t| {
+        let (x, y) = t.iter().find_map(|v| v.strip_prefix("stacked:"))?.split_once(',')?;
+        Some(cadaddy_geom::Vec2::new(x.trim().parse().ok()?, y.trim().parse().ok()?))
+    });
+    moved.filter(|v| v.is_finite()).unwrap_or(cadaddy_geom::Vec2::ZERO)
+}
+
 /// An MEP size tag, inches: `24x12` → [24, 12]; `10` (round) → [10, 0].
 fn parse_size_tag(v: &str) -> Option<[f64; 2]> {
     let ok = |x: f64| x.is_finite() && x > 0.0 && x < 10_000.0;
@@ -713,6 +723,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     for it in &items {
         let si = storey_of(it);
         let Some(&(_, place_parent, sz, _, base)) = storeys.get(si) else { continue };
+        // An object model.build moved to stack its level is that much further from its plan.
+        let base = base + stacked_by(it.e);
         // The body in the storey's coordinates (its placement is at the storey's elevation; its
         // plan's base point at the building origin).
         let pts: Vec<String> = it

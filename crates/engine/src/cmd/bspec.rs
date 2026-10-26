@@ -148,22 +148,28 @@ pub(crate) fn validate(d: &Drawing, sp: &BuildingSpec) -> Vec<Issue> {
             }
         }
     }
-    // Building objects outside every level's region.
+    // Building objects outside every level's region and every sheet of the set (another
+    // discipline's plan of a level is that sheet's: its readers take what they need from it).
     let here: Vec<&Level> = sp.levels.iter().filter(|l| l.sheet.is_none()).collect();
     if !here.is_empty() && here.iter().all(|l| l.region.is_some()) {
+        let on_sheet = |c: Vec2| {
+            sp.sheets
+                .iter()
+                .any(|s| s.rect.is_some_and(|[x0, y0, x1, y1]| c.x >= x0.min(x1) && c.x <= x0.max(x1) && c.y >= y0.min(y1) && c.y <= y0.max(y1)))
+        };
         let hs: Vec<Handle> = ents
             .iter()
             .filter(|e| sp.role(&e.common.layer).is_some_and(|r| r.role != Role::Ignore))
-            .filter(|e| centre(d, e).is_some_and(|c| level_at(&sp.levels, c.x, c.y).is_none()))
+            .filter(|e| centre(d, e).is_some_and(|c| level_at(&sp.levels, c.x, c.y).is_none() && !on_sheet(c)))
             .map(|e| e.handle)
             .collect();
         if !hs.is_empty() {
-            out.push(Issue {
-                error: false,
-                path: "levels".into(),
-                message: format!("{} building objects lie outside every level's region", hs.len()),
-                handles: hs,
-            });
+            let why = if sp.sheets.iter().any(|s| s.rect.is_some()) {
+                "on no level's plan and no sheet of the set"
+            } else {
+                "outside every level's region"
+            };
+            out.push(Issue { error: false, path: "levels".into(), message: format!("{} building objects lie {why}", hs.len()), handles: hs });
         }
     }
     for (i, l) in sp.levels.iter().enumerate().filter(|(_, l)| l.sheet.is_some()) {
@@ -173,6 +179,13 @@ pub(crate) fn validate(d: &Drawing, sp: &BuildingSpec) -> Vec<Issue> {
         ));
     }
     out
+}
+
+/// A text that can tag a room: a name (two letters or more, at most 40 characters) or a room
+/// number (`101`, `B12`).
+fn room_tag_text(t: &str) -> bool {
+    let t = t.trim();
+    (t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && t.chars().count() <= 40) || super::perceive::geometry::room_number(t)
 }
 
 pub(crate) fn room_label(r: &cadaddy_walk3d::SpecRoom) -> String {
@@ -619,6 +632,12 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
             guesses = spec.get("guesses").and_then(Value::as_array).map(|g| g.iter().take(200).cloned().collect()).unwrap_or_default();
         }
 
+        // Where each imported sheet sits: what lies on the other sheets is theirs.
+        if let Ok((mut sp, true)) = current(s, "bim.from_pdf") {
+            super::guided::add_sheet_links(&mut sp, &plan.regions);
+            s.doc_mut()?.building_spec = Some(sp.to_json());
+        }
+
         // Step 4: build the 3D model.
         s.echo(format!("bim.from_pdf: building 3D model for {stem}..."));
         match s.execute("model.build", &json!({})) {
@@ -722,6 +741,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<Traced> = Vec::new();
     let mut outline_cache = None;
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     for (h, text, at) in room_texts(sp, &ents) {
         if out.len() >= MAX_ROOMS {
             break;
@@ -734,10 +754,11 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
             .iter()
             .position(|r| names_room(r, &text) && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l))));
         // Without room tag layers only the spec's rooms are looked for. On them, a room's name
-        // or number only: a note, a sentence, a stamp or a title block's line is never a room.
+        // or number only (not a grid bubble's letter, a note's word): a note, a sentence, a stamp
+        // or a title block's line is never a room.
         let is_number = super::perceive::geometry::room_number(&text);
         let score = super::perceive::geometry::room_name_score(&text);
-        if room.is_none() && (!tagged || !(is_number || (score > 0 && super::autospec::room_like_name(&text)))) {
+        if room.is_none() && (!tagged || !(room_tag_text(&text) && (is_number || (score > 0 && super::autospec::room_like_name(&text))))) {
             continue;
         }
         let Some(level) =
@@ -749,6 +770,10 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let outline = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
         if outline.len() < 3 || cadaddy_geom::shoelace(&outline).abs() < 1e-9 {
+            continue;
+        }
+        // A room no spec room names is 16 sq ft or more (not a grid bubble, a tag's box).
+        if room.is_none() && cadaddy_geom::shoelace(&outline).abs() < 16.0 * upf * upf {
             continue;
         }
         // A name and a number in one room: the first traced keeps it (the spec's room wins).
@@ -1214,6 +1239,34 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
             }
         }
     }
+    // Each level's built walls: a room is inside them (an outline that got out through a gap
+    // runs round the sheet's border, a title block's box is no room).
+    let mut walls: Vec<(String, cadaddy_geom::Bounds2)> = Vec::new();
+    for e in d.model.iter().filter(|e| wallgen::made_as(e).as_deref() == Some("wall")) {
+        let (Some(level), b) = (made_level(e), cadaddy_doc::entity_bounds(d, e, 0)) else { continue };
+        match walls.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(&level)) {
+            Some((_, x)) => *x = x.union(&b),
+            None => walls.push((level, b)),
+        }
+    }
+    let rooms: Vec<&Traced> = rooms
+        .iter()
+        .filter(|t| {
+            let b = cadaddy_geom::Bounds2::from_points(t.outline.iter().copied());
+            let inside = walls.iter().find(|(n, _)| n.eq_ignore_ascii_case(&t.level)).is_none_or(|(_, w)| {
+                let w = w.expand(upf);
+                b.min.x >= w.min.x && b.min.y >= w.min.y && b.max.x <= w.max.x && b.max.y <= w.max.y
+            });
+            if !inside && let Some(r) = t.room.and_then(|i| sp.rooms.get(i)) {
+                notes.push(format!(
+                    "Room {}: its outline runs outside {}'s walls (a gap in them?), so it gets no ceiling of its own.",
+                    room_label(r),
+                    t.level
+                ));
+            }
+            inside
+        })
+        .collect();
     // A ceiling per room: on a level with traced rooms they replace the level's ceiling.
     let room_levels: Vec<&str> = rooms.iter().map(|t| t.level.as_str()).collect();
     let level_ceilings: Vec<Handle> = d
@@ -1400,13 +1453,50 @@ fn stack_levels(d: &mut Drawing, sp: &BuildingSpec) -> usize {
             .take(MAX_OBJECTS)
             .collect();
         for h in &mine {
-            let _ = d.modify_entity(*h, |e| e.kind.transform(&m));
+            let _ = d.modify_entity(*h, |e| {
+                e.kind.transform(&m);
+                e.common.xdata = with_stacked(&e.common.xdata, off).into();
+            });
         }
         if !mine.is_empty() {
             moved += 1;
         }
     }
     moved
+}
+
+/// WALLGEN's tag key for how far `model.build` moved a level's object to stack it
+/// (`stacked:<dx>,<dy>`, drawing units): views and exports that stack levels by the plans' base
+/// points take it off, so a stacked object never moves twice.
+pub(crate) const STACKED: &str = "stacked";
+
+/// `xdata` with the stacking move `off` recorded (added to one recorded before) at the end of
+/// WALLGEN's tags.
+fn with_stacked(xdata: &[RawTag], off: Vec2) -> Vec<RawTag> {
+    let mut x = xdata.to_vec();
+    let Some(at) = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP)) else { return x };
+    let end = x.iter().skip(at + 1).position(|t| t.code == 1001).map_or(x.len(), |i| at + 1 + i);
+    let key = format!("{STACKED}:");
+    let old = x.get(at + 1..end).and_then(|g| g.iter().position(|t| t.code == 1000 && t.value.starts_with(&key))).map(|i| at + 1 + i);
+    let before = old.and_then(|i| x.get(i)).and_then(|t| parse_stacked(t.value.get(key.len()..).unwrap_or(""))).unwrap_or(Vec2::ZERO);
+    let total = before + off;
+    let tag = RawTag { code: 1000, value: format!("{key}{},{}", total.x, total.y) };
+    match old.and_then(|i| x.get_mut(i)) {
+        Some(t) => *t = tag,
+        None => x.insert(end, tag),
+    }
+    x
+}
+
+fn parse_stacked(v: &str) -> Option<Vec2> {
+    let (a, b) = v.split_once(',')?;
+    let p = Vec2::new(a.trim().parse().ok()?, b.trim().parse().ok()?);
+    p.is_finite().then_some(p)
+}
+
+/// How far `model.build` moved a built object to stack its level (zero for one it didn't).
+pub(crate) fn stacked_by(e: &Entity) -> Vec2 {
+    super::bimlook::made_tag(e, STACKED).and_then(parse_stacked).unwrap_or(Vec2::ZERO)
 }
 
 /// The level a built object belongs to (its WALLGEN tag).
