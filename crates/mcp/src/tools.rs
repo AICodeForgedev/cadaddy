@@ -52,6 +52,12 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "fields": {"type": "object"}, "remove_fields": {"type": "array", "items": {"type": "string"}},
                 "handles": {"type": "array", "items": {"type": "string"}},
                 "create": {"type": "object"}}, "required": ["action"]}}),
+        json!({"name": "bim_props", "description": "Properties every element of the built model carries itself (outlet: type duplex, mount_height 18 in, circuit G-12, room 131…), each with its source: print (read from a sheet), legend, schedule, spec, note, rule or default (assumed — always marked), user (edited) or computed. action \"get\" {handle | handles} — an element's properties, its kind's standard keys and the missing ones; \"set\" {handle | handles | filter: {kind?, where?}, key, value, unit?, note?} or {…, props: {key: value}} — set values as the user's (kept through a rebuild from the prints); \"find\" {kind?, where: {key: value | \"exists\" | \"missing\"}} — the matching elements; \"summary\" {kind?} — per kind: count, values per key, sources per key. Kinds: wall, door, window, room, floor, ceiling, roof, device, fixture, light_fixture, equipment, duct, pipe, conduit.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set", "find", "summary"]},
+                "handle": {"type": "string"}, "handles": {"type": "array", "items": {"type": "string"}},
+                "filter": {"type": "object"}, "kind": {"type": "string"}, "where": {"type": "object"},
+                "key": {"type": "string"}, "value": {}, "unit": {"type": "string"}, "note": {"type": "string"},
+                "props": {"type": "object"}, "select": {"type": "boolean"}, "limit": {"type": "integer"}}, "required": ["action"]}}),
         json!({"name": "project_rules", "description": "Project rules: mounting heights, wiring methods, clearances, tolerances, naming and stud/joist layout per device/room type, each with a source (spec section, RFI #) and a tier (field_verified > rfi > submittal > drawing_revision > spec > project_rule > built_in). The highest tier wins. action \"list\" returns all rules (filter by domain); \"get\" resolves one rule (which tier won, what it overrode); \"set\" adds/updates a value with source, tier and reason (shows what changes); \"remove\" deletes a rule or tier; \"preview\" shows what setting would change without modifying; \"label\" gets/sets the project name; \"import\" reads a TOML/JSON file; \"export\" writes one.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "get", "set", "remove", "preview", "label", "import", "export"]},
                 "domain": {"type": "string", "enum": ["mounting_height", "wiring_method", "stud_layout", "joist_layout", "clearance", "tolerance", "naming", "custom"]},
@@ -487,6 +493,20 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 o.remove("action");
             }
             b.call("engine.execute", json!({"command": command, "params": params}))
+        }
+        "bim_props" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("get") => "bim.props.get",
+                Some("set") => "bim.props.set",
+                Some("find") => "bim.props.find",
+                Some("summary") => "bim.props.summary",
+                _ => return Ok(err_text("bim_props needs an action: get, set, find or summary")),
+            };
+            let mut params = a.clone();
+            if let Some(o) = params.as_object_mut() {
+                o.remove("action");
+            }
+            exec(b, command, params)
         }
         "project_rules" => {
             let command = match a.get("action").and_then(Value::as_str) {

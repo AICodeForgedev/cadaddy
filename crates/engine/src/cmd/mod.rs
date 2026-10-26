@@ -32,6 +32,7 @@ mod draw2;
 mod draworder;
 mod edit;
 mod edit3d;
+pub mod elemprops;
 pub mod estimate;
 mod exact_ends;
 mod exchange;
@@ -801,6 +802,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(perceive::specs());
         v.extend(rooms3d::specs());
         v.extend(bimprops::specs());
+        v.extend(elemprops::specs());
         v.extend(bimlook::specs());
         v.extend(projrules::specs());
         v.extend(spec_import::specs());

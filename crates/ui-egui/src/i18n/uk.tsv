@@ -3298,3 +3298,9 @@
 	Layer Quantity Takeoff	Підрахунок обсягів за шарами
 	Read Architecture from Prints	Зчитати архітектуру з креслень
 	Read Roof and Wall Envelope	Зчитати оболонку покрівлі та стін
+	Element Properties (BIM)	Властивості елемента (BIM)
+	Set Element Property (BIM)	Задати властивість елемента (BIM)
+	Find Elements by Property	Знайти елементи за властивістю
+	Element Property Summary	Зведення властивостей елементів
+	BIM Properties	Властивості BIM
+	Kind	Вид

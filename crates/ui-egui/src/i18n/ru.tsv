@@ -2997,3 +2997,9 @@
 	Layer Quantity Takeoff	Подсчёт объёмов по слоям
 	Read Architecture from Prints	Считать архитектуру с чертежей
 	Read Roof and Wall Envelope	Считать оболочку кровли и стен
+	Element Properties (BIM)	Свойства элемента (BIM)
+	Set Element Property (BIM)	Задать свойство элемента (BIM)
+	Find Elements by Property	Найти элементы по свойству
+	Element Property Summary	Сводка свойств элементов
+	BIM Properties	Свойства BIM
+	Kind	Вид
