@@ -234,6 +234,36 @@ pub fn enlarged_sheet(title: Option<(&str, bool)>) -> Drawing {
     s.d
 }
 
+/// E-3 the way a real enlarged sheet may print it: the core plan as view 1, titled by its area
+/// alone (no level, no "PLAN"), and two small enlarged rooms beside it as titled views 4 and 5
+/// with two devices each. With `scale_line` false the core's title and scale share one line
+/// beside its bubble (no scale line under the title).
+pub fn enlarged_sheet_with_details(scale_line: bool) -> Drawing {
+    let mut s = Sheet::new();
+    s.title_block("E-3", "ELECTRICAL ENLARGED PLANS");
+    s.grid(&[("2", 4.0), ("3", 12.0), ("4", 20.0)], &[("A", 4.0), ("B", 12.0), ("C", 20.0)], [2.5, 21.5], [2.5, 21.5]);
+    for r in [[4.0, 4.0, 12.0, 12.0], [12.0, 4.0, 20.0, 12.0], [4.0, 12.0, 12.0, 20.0], [12.0, 12.0, 20.0, 20.0]] {
+        s.rect(r);
+    }
+    for p in [[6.0, 6.0], [10.0, 14.0], [14.0, 10.0], [18.0, 19.0], [20.5, 8.0]] {
+        s.device("A", p);
+    }
+    if scale_line {
+        s.view_title("1", "E-3", "COMMON AREA CORE - POWER", "SCALE: 1/4\" = 1'-0\"", [4.0, 1.2]);
+    } else {
+        s.bubble([3.2, 1.32], "1", "E-3");
+        s.text("COMMON AREA CORE - POWER   SCALE: 1/4\" = 1'-0\"", [4.0, 1.2], 0.25, 0.0);
+    }
+    for (n, y0, title) in [("4", 14.0, "ENLARGED ELECTRICAL ROOM 101"), ("5", 4.0, "ENLARGED ELECTRICAL ROOM 102")] {
+        s.rect([24.0, y0, 29.0, y0 + 5.0]);
+        s.line([24.0, y0 + 2.5], [29.0, y0 + 2.5]);
+        s.device("A", [25.0, y0 + 1.0]);
+        s.device("A", [28.0, y0 + 4.0]);
+        s.view_title(n, "E-3", title, "SCALE: 1/2\" = 1'-0\"", [24.8, y0 - 1.0]);
+    }
+    s.d
+}
+
 /// E-4: details; detail 2 prints the receptacle's mounting height.
 fn e4() -> Drawing {
     let mut s = Sheet::new();

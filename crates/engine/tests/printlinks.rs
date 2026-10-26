@@ -158,6 +158,8 @@ fn the_fixture_sets_enlarged_plans_register_on_their_overall_plans() {
     for e in v["enlarged"].as_array().into_iter().flatten() {
         let b: Vec<f64> = e["boundary"].as_array().expect("boundary").iter().filter_map(Value::as_f64).collect();
         assert!(b.len() == 4 && b[2] > b[0] && b[3] > b[1], "{e}");
+        // The view is its plan, not its title's underline bar: it holds the plan's devices.
+        assert!(e["devices"].as_u64().is_some_and(|n| n >= 1), "{e}");
     }
     // The circled equipment tags are not callouts; the bubble to A-999 is reported.
     let unresolved: Vec<&str> = v["unresolved"].as_array().expect("unresolved").iter().filter_map(|u| u["target_sheet"].as_str()).collect();

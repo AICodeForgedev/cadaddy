@@ -270,3 +270,53 @@ fn an_enlarged_sheet_printed_twice_counts_once() {
     assert_eq!(devices_of(&l, "E-3", "1"), 5);
     assert_eq!(l.double_counted, 0);
 }
+
+/// An enlarged sheet whose main plan is titled by its area alone beside small titled enlarged
+/// views: the main plan is still view 1, with its own devices only, registered on the overall
+/// plan; the small views keep theirs. Whether the reader finds its title (a scale line under it)
+/// or not (title and scale on one line, no level named).
+#[test]
+fn the_main_plan_beside_titled_details_is_view_1() {
+    for scale_line in [false, true] {
+        main_plan_is_view_1(scale_line);
+    }
+}
+
+fn main_plan_is_view_1(scale_line: bool) {
+    let (sheets, pages) = with_e3(linkset::enlarged_sheet_with_details(scale_line));
+    let l = printlinks::link_set(&sheets, &pages);
+    let mut got: Vec<(String, usize)> = l.enlarged.iter().map(|e| (e.detail.clone(), e.devices)).collect();
+    got.sort();
+    assert_eq!(got, vec![("1".to_string(), 5), ("4".to_string(), 2), ("5".to_string(), 2)], "{:#?}", l.enlarged);
+    assert_eq!(devices_of(&l, "E-3", "1"), 5);
+    let core = l.enlarged.iter().find(|e| e.detail == "1").expect("view 1");
+    assert_eq!((core.overall_sheet.as_str(), core.level.as_str()), ("E-1", "1"));
+    assert!(core.registered, "{core:#?}");
+    assert_eq!(core.overall_ignored, 3);
+    assert!(core.title.contains("COMMON AREA CORE"), "{core:#?}");
+    // Its number bubble names the view; it is not a link to the sheet itself.
+    assert!(!l.callouts.iter().any(|c| c.on_sheet == "E-3" && c.target_sheet == "E-3" && c.detail == "1"), "{:#?}", l.callouts);
+    assert_eq!(l.double_counted, 0);
+}
+
+/// The same sheet printed and imported (its circles taken for lettering, its text doubled): view
+/// 1 is still the main plan with its own five devices.
+#[test]
+fn the_printed_main_plan_beside_titled_details_is_view_1() {
+    let (sheets, mut pages) = printed_set();
+    let pdf = linkset::print(&linkset::enlarged_sheet_with_details(false)).unwrap_or_else(|e| panic!("E-3: {e}"));
+    let (page, _) = cadaddy_io::pdf_read::read_json(&pdf, &serde_json::json!({"page": 1, "images": false, "fills": "merge"}))
+        .unwrap_or_else(|e| panic!("E-3: {e}"));
+    for p in pages.iter_mut().filter(|p| p.sheet.number == "E-3") {
+        p.read = printlinks::read_page(&page, "E-3");
+    }
+    let l = printlinks::link_set(&sheets, &pages);
+    let mut got: Vec<(String, usize)> = l.enlarged.iter().map(|e| (e.detail.clone(), e.devices)).collect();
+    got.sort();
+    assert_eq!(got, vec![("1".to_string(), 5), ("4".to_string(), 2), ("5".to_string(), 2)], "{:#?}", l.enlarged);
+    let core = l.enlarged.iter().find(|e| e.detail == "1").expect("view 1");
+    assert_eq!(core.overall_sheet, "E-1");
+    assert!(core.registered, "{core:#?}");
+    assert_eq!(core.overall_ignored, 3);
+    assert_eq!(l.double_counted, 0);
+}

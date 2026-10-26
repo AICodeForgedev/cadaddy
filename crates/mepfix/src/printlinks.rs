@@ -42,6 +42,9 @@ const MAX_SEG_CELLS: usize = 4_000_000;
 const MAX_REF_TEXTS: usize = 50_000;
 /// Most callouts in a set's answer.
 const MAX_SET_CALLOUTS: usize = 20_000;
+/// View-title words that never name a plan.
+const NOT_PLAN_WORDS: [&str; 11] =
+    ["SCHEDULE", "DIAGRAM", "RISER", "SECTION", "ELEVATION", "NOTES", "LEGEND", "DETAIL", "ONE-LINE", "ONE LINE", "KEY PLAN"];
 
 /// A sheet of the set as its index lists it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -153,6 +156,8 @@ pub struct PageRead {
     /// The whole drawing as one view: for an enlarged-plan sheet whose views carry no title
     /// this reader knows (its biggest block of linework).
     pub whole: Option<PageView>,
+    /// No view title read claims `whole`: it is a view of its own beside the titled ones.
+    pub whole_free: bool,
 }
 
 /// An enlarged plan and where it sits on its level's overall plan.
@@ -971,10 +976,53 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         pv.scale_text = scale_text;
         out.views.push(pv);
     }
-    if enlarged_page && !out.views.iter().any(|v| v.title.to_ascii_uppercase().contains("ENLARGED")) {
-        // Its biggest block of linework is the enlarged plan.
-        let main = blocks.iter().max_by_key(|(_, n)| *n).map(|(r, _)| *r);
-        out.whole = main.map(|r| view_of(Some(r), true));
+    if enlarged_page {
+        // Its biggest block of linework is the enlarged plan: the sheet's only view when no title
+        // was read, or its main plan beside small titled details when no title claims it (a
+        // title printed where this reader doesn't look for one). The title block's strip at the
+        // right edge is never it.
+        let x_hi = blocks.iter().map(|(r, _)| r[2]).fold(f64::NEG_INFINITY, f64::max);
+        let x_lo = blocks.iter().map(|(r, _)| r[0]).fold(f64::INFINITY, f64::min);
+        let in_title_strip = |r: &[f64; 4]| x_hi > x_lo && (r[0] + r[2]) / 2.0 > x_lo + 0.85 * (x_hi - x_lo);
+        let main = blocks.iter().filter(|(r, _)| !in_title_strip(r)).max_by_key(|(_, n)| *n).map(|(r, _)| *r);
+        if let Some(r) = main {
+            let mid = [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0];
+            out.whole_free = !out.views.iter().filter_map(|v| v.region).any(|g| overlap_ratio(&g, &r) >= 0.3 || inside(&g, mid));
+            let mut w = view_of(Some(r), true);
+            // Under the plan: its number bubble (a bubble naming this sheet) and its title.
+            let (bw, bh) = (r[2] - r[0], r[3] - r[1]);
+            let under = |p: [f64; 2], rad: f64| {
+                p[0] >= r[0] - 0.1 * bw && p[0] <= r[2] && p[1] >= r[1] - (0.25 * bh).max(12.0 * rad) && p[1] <= r[1] + 0.15 * bh
+            };
+            let corner = [r[0], r[1]];
+            let mark = out
+                .callouts
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| {
+                    c.radius > 0.0 && !c.detail.is_empty() && !own_n.is_empty() && norm_sheet(&c.target_sheet) == own_n && under(c.at, c.radius)
+                })
+                .min_by(|a, b| dist(a.1.at, corner).total_cmp(&dist(b.1.at, corner)))
+                .map(|(i, c)| (i, c.detail.clone(), c.at, c.radius));
+            if out.whole_free
+                && let Some((i, number, at, rad)) = mark
+            {
+                // It numbers the view: not a link.
+                out.callouts.remove(i);
+                w.number = number;
+                // The title lettering beside the bubble.
+                w.title = texts
+                    .iter()
+                    .filter(|t| {
+                        t.height >= 1.4 * median_h && t.rotation.sin().abs() < 0.05 && t.at.x > at[0] && t.at.x - at[0] < 4.0 * rad + 2.0 * t.height
+                    })
+                    .filter(|t| (text_middle(t)[1] - at[1]).abs() < 2.0 * rad.max(t.height))
+                    .min_by(|a, b| (a.at.x - at[0]).total_cmp(&(b.at.x - at[0])))
+                    .map(|t| t.value.trim().to_string())
+                    .unwrap_or_default();
+            }
+            out.whole = Some(w);
+        }
     }
 
     // Devices: the import's symbols with the mark beside them; legends say which are samples.
@@ -1085,7 +1133,16 @@ fn view_block(blocks: &[([f64; 4], usize)], at: [f64; 2], h: f64, others: &[[f64
     let above = |r: &[f64; 4]| r[1] >= at[1] - h && r[1] - at[1] <= 30.0 * h && r[0] <= at[0] + 4.0 * h && at[0] <= r[2];
     let most = blocks.iter().map(|(_, n)| *n).max().unwrap_or(0);
     let big = |n: usize| n.saturating_mul(10) >= most;
-    let near = blocks.iter().filter(|(r, _)| holds(r) || above(r)).max_by_key(|(_, n)| *n).copied();
+    // The title's own bar (its underline and bubble): a flat block holding it, never the plan.
+    let bar = |r: &[f64; 4]| holds(r) && r[3] - r[1] < 0.2 * (r[2] - r[0]) && r[3] - r[1] < 15.0 * h;
+    let near = blocks.iter().filter(|(r, _)| !bar(r) && (holds(r) || above(r))).max_by_key(|(_, n)| *n).copied();
+    // The title's width: its bar, else its start.
+    let span = blocks
+        .iter()
+        .filter(|(r, _)| bar(r))
+        .map(|(r, _)| [r[0], r[2]])
+        .min_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])))
+        .unwrap_or([at[0], at[0]]);
     // A title printed well below its plan: the nearest big block above it, with no other view
     // title between them.
     let far = || {
@@ -1093,9 +1150,9 @@ fn view_block(blocks: &[([f64; 4], usize)], at: [f64; 2], h: f64, others: &[[f64
             .iter()
             .filter(|(r, n)| {
                 let w = r[2] - r[0];
-                // With other views on the sheet, the plan stands over its title; alone, any big
-                // block above it is.
-                let over = others.is_empty() || (at[0] >= r[0] - 0.25 * w && at[0] <= r[2]);
+                // With other views on the sheet, the plan stands over its title (its bar reaching
+                // under the plan); alone, any big block above it is.
+                let over = others.is_empty() || (span[1] >= r[0] - 0.25 * w && span[0] <= r[2]);
                 big(*n)
                     && r[1] >= at[1] - h
                     && over
@@ -1225,21 +1282,37 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
         detail: String,
     }
     let mut enl_views: Vec<EnlView> = Vec::new();
+    // Titles that never name a plan, even on an enlarged-plan sheet.
+    let not_plan = |t: &str| NOT_PLAN_WORDS.iter().any(|w| t.contains(w));
     for p in pages {
         let before = enl_views.len();
+        let enlarged_sheet = p.sheet.sheet_type == "enlarged_plan"
+            || p.sheet.title.to_ascii_uppercase().contains("ENLARGED")
+            || p.read.views.iter().any(|v| v.title.to_ascii_uppercase().contains("ENLARGED"));
         for v in &p.read.views {
             let t = v.title.to_ascii_uppercase();
-            if t.contains("ENLARGED") || (p.sheet.sheet_type == "enlarged_plan" && t.contains("PLAN")) {
+            // On an enlarged-plan sheet a view is a plan unless its title says otherwise (a core
+            // plan may be titled by its area alone: `COMMON AREA - POWER`, over its scale line;
+            // a bare level name is a second title of a view, not one of its own).
+            let scaled = v.scale_text.is_some();
+            if t.contains("ENLARGED") || (enlarged_sheet && (t.contains("PLAN") || (scaled && !not_plan(&t))) && !t.contains("KEY PLAN")) {
                 enl_views.push(EnlView { page: p, view: v, detail: v.number.clone() });
             }
         }
         // An enlarged-plan sheet whose views this reader found no title for: the sheet's
-        // biggest block of linework is its plan.
-        if enl_views.len() == before
-            && (p.sheet.sheet_type == "enlarged_plan" || p.sheet.title.to_ascii_uppercase().contains("ENLARGED"))
+        // biggest block of linework is its plan. Beside titled views, the biggest block no
+        // title claims is a plan of its own.
+        if (enl_views.len() == before || p.read.whole_free)
+            && enlarged_sheet
             && let Some(w) = &p.read.whole
         {
-            enl_views.push(EnlView { page: p, view: w, detail: w.number.clone() });
+            let mut detail = w.number.clone();
+            // Unnumbered beside numbered views: the sheet's main plan is its view 1, when no
+            // other view is.
+            if detail.trim().is_empty() && enl_views.len() > before && !p.read.views.iter().any(|v| v.number.trim() == "1") {
+                detail = "1".into();
+            }
+            enl_views.push(EnlView { page: p, view: w, detail });
         }
         if enl_views.len() == before + 1
             && p.read.views.iter().all(|v| v.number.trim().is_empty())
@@ -1253,14 +1326,15 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
     // twice, would count its devices twice.
     let mut unique: Vec<EnlView> = Vec::with_capacity(enl_views.len());
     for e in enl_views {
+        let overlapping = |u: &EnlView| match (u.view.region, e.view.region) {
+            (Some(a), Some(b)) => overlap_ratio(&a, &b) >= 0.5,
+            _ => false,
+        };
         let same = |u: &EnlView| {
             norm_sheet(&u.page.sheet.number) == norm_sheet(&e.page.sheet.number)
-                && u.detail == e.detail
-                && (!std::ptr::eq(u.page, e.page)
-                    || match (u.view.region, e.view.region) {
-                        (Some(a), Some(b)) => overlap_ratio(&a, &b) >= 0.5,
-                        _ => true,
-                    })
+                && ((u.detail == e.detail && (!std::ptr::eq(u.page, e.page) || overlapping(u) || u.view.region.is_none() || e.view.region.is_none()))
+                    // An unnumbered second reading of a numbered view on the same page.
+                    || (std::ptr::eq(u.page, e.page) && (u.detail.is_empty() || e.detail.is_empty()) && overlapping(u)))
         };
         if !unique.iter().any(same) {
             unique.push(e);
@@ -1355,10 +1429,19 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
         let mut entry = Enlarged { sheet: target.clone(), detail: detail.clone(), title: e.view.title.clone(), ..Enlarged::default() };
         // Its devices: the enlarged sheet's symbols inside the view.
         if let Some(rg) = e.view.region {
-            // Devices just outside the walls (lights on the facade) are the view's too.
+            // Devices just outside the walls (lights on the facade) are the view's too. A device
+            // inside a smaller enlarged view of the same sheet is that view's (the main plan's
+            // block can take in the details beside it).
             let m = 0.08 * (rg[2] - rg[0]).max(rg[3] - rg[1]);
             let reach = [rg[0] - m, rg[1] - m, rg[2] + m, rg[3] + m];
-            for dv in e.page.read.devices.iter().filter(|dv| inside(&reach, dv.at)) {
+            let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+            let smaller: Vec<[f64; 4]> = enl_views
+                .iter()
+                .filter(|o| std::ptr::eq(o.page, e.page))
+                .filter_map(|o| o.view.region)
+                .filter(|r| *r != rg && area(r) < area(&rg))
+                .collect();
+            for dv in e.page.read.devices.iter().filter(|dv| inside(&reach, dv.at) && !smaller.iter().any(|r| inside(r, dv.at))) {
                 if let Some(t) = device_type(&dv.tag) {
                     *entry.devices_by_type.entry(t).or_default() += 1;
                     entry.devices += 1;
