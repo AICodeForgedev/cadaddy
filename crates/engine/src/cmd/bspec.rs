@@ -1141,7 +1141,34 @@ pub(crate) fn room_elements(d: &Drawing) -> Vec<RoomElement> {
 /// level's floor, not drawn: a room is a space), tagged with its name, number, area (sq ft),
 /// ceiling height (ft) and floor finish (the spec room's, else a finish code written inside
 /// it). How many per level.
-fn add_room_elements(d: &mut Drawing, sp: &BuildingSpec, rooms: &[&Traced], upf: f64) -> std::collections::BTreeMap<String, usize> {
+/// A room element's key across a rebuild: its level and its number (unnumbered, its name).
+fn room_key(level: &str, name: &str, number: Option<&str>) -> (String, String) {
+    let id = number.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(name.trim());
+    (level.trim().to_ascii_uppercase(), id.to_ascii_uppercase())
+}
+
+/// The user edits on the model's room elements, by [`room_key`] (at most `MAX_ROOMS` × 10).
+fn room_user_edits(d: &Drawing) -> std::collections::BTreeMap<(String, String), cadaddy_doc::props::Props> {
+    let mut out = std::collections::BTreeMap::new();
+    for e in d.model.iter().filter(|e| wallgen::made_as(e).as_deref() == Some("room")).take(MAX_ROOMS * 10) {
+        let edits = cadaddy_doc::props::read(&e.common.xdata).user_edits();
+        if edits.is_empty() {
+            continue;
+        }
+        let level = made_level(e).unwrap_or_default();
+        let name = room_tag(e, "name:").unwrap_or("");
+        out.insert(room_key(&level, name, room_tag(e, "number:")), edits);
+    }
+    out
+}
+
+fn add_room_elements(
+    d: &mut Drawing,
+    sp: &BuildingSpec,
+    rooms: &[&Traced],
+    upf: f64,
+    edits: &std::collections::BTreeMap<(String, String), cadaddy_doc::props::Props>,
+) -> std::collections::BTreeMap<String, usize> {
     let mut by_level: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     if rooms.is_empty() {
         return by_level;
@@ -1191,6 +1218,9 @@ fn add_room_elements(d: &mut Drawing, sp: &BuildingSpec, rooms: &[&Traced], upf:
         if let Some(f) = &finish {
             xdata.push(tg(1000, format!("finish:{}", clip(f))));
         }
+        if let Some(kept) = edits.get(&room_key(&level.name, &name, number.as_deref())) {
+            xdata = cadaddy_doc::props::write(&xdata, kept);
+        }
         let common = Common { layer: ROOM_LAYER.into(), visible: false, xdata: xdata.into(), ..Common::default() };
         if d.add(&Space::Model, common, EntityKind::Mesh(m)).is_ok() {
             *by_level.entry(level.name.clone()).or_default() += 1;
@@ -1203,6 +1233,8 @@ fn add_room_elements(d: &mut Drawing, sp: &BuildingSpec, rooms: &[&Traced], upf:
 /// and materials.
 pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     let Some(sp) = g.spec.clone() else { return wallgen::build(s, g) };
+    // What a person set on a room element (bim.props.set) goes on the rebuilt room.
+    let room_edits = room_user_edits(s.doc()?);
     let removed = wallgen::remove_made(s.doc_mut()?);
     let mut notes: Vec<String> = Vec::new();
     let mut rooms = trace_rooms(s, &sp, &mut notes)?;
@@ -1298,7 +1330,7 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     }
     // Each room as a model element of its level (a space: its floor outline, name, number,
     // area, ceiling and floor finish), what bim.tree, the takeoff and the room commands list.
-    let room_elements = add_room_elements(d, &sp, &rooms, upf);
+    let room_elements = add_room_elements(d, &sp, &rooms, upf, &room_edits);
     // The ground: the building's extents and the margin, a slab under the site elevation.
     let mut ground = 0;
     if let Some(site) = &sp.site {

@@ -215,3 +215,35 @@ fn a_tag_in_a_box_is_traced_again_on_the_built_walls() {
     let area = storage["areaSqFt"].as_f64().unwrap();
     assert!(area > 0.9 * 232.0 * 348.0 / 144.0, "the room, not the box: {area}");
 }
+
+#[test]
+fn a_room_element_holds_its_properties_once_and_keeps_user_edits_through_a_rebuild() {
+    let (mut s, _) = built();
+    // bim.props: each room element is a room object with its name, number, area and ceiling.
+    let found = s.execute("bim.props.find", &json!({"kind": "room", "where": {"number": "101"}})).unwrap();
+    assert_eq!(found["count"], json!(1), "{found}");
+    let h = found["handles"][0].as_str().unwrap().to_string();
+    let g = s.execute("bim.props.get", &json!({"handle": h})).unwrap();
+    let props = g["elements"][0]["props"].clone();
+    let props = if props.is_null() { g["props"].clone() } else { props };
+    assert_eq!(props["name"]["value"], json!("Office"), "{g}");
+    assert_eq!(props["level"]["value"], json!("Level 1"), "{g}");
+    assert_eq!(props["area"]["unit"], json!("sf"), "{g}");
+    assert!((props["area"]["value"].as_f64().unwrap() - 232.0 * 348.0 / 144.0).abs() < 1.0, "{g}");
+    assert_eq!(props["ceiling_height"]["value"].as_f64(), Some(9.0), "{g}");
+    // rooms.build's volumes are the rooms' 3D views: still three rooms, not six.
+    let built = s.execute("rooms.build", &json!({})).unwrap();
+    assert_eq!(built["built"], json!(3), "{built}");
+    let all = s.execute("bim.props.find", &json!({"kind": "room"})).unwrap();
+    assert_eq!(all["count"], json!(3), "{all}");
+    // A person's edit stays on the room when the model is built again from the prints.
+    s.execute("bim.props.set", &json!({"handle": h, "props": {"floor_finish": "VCT-1"}})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let again = s.execute("bim.props.find", &json!({"kind": "room", "where": {"floor_finish": "VCT-1"}})).unwrap();
+    assert_eq!(again["count"], json!(1), "{again}");
+    let h2 = again["handles"][0].as_str().unwrap().to_string();
+    assert_ne!(h2, h, "the rebuild made a new element");
+    let g2 = s.execute("bim.props.get", &json!({"handle": h2})).unwrap();
+    assert!(g2.to_string().contains("\"user\""), "{g2}");
+    assert!(g2.to_string().contains("\"101\""), "{g2}");
+}
