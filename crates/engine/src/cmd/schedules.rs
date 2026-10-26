@@ -293,7 +293,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let apply = bool_or(p, "apply", false);
     if apply {
         sp.schedule.rows = found.into_iter().flat_map(|f| f.rows).collect();
-        sp.schedule.tags = tag_list.iter().map(|(m, at, _)| OpeningTag { mark: m.clone(), at: [at.x, at.y] }).collect();
+        sp.schedule.tags = tag_list.iter().map(|(m, at, _)| OpeningTag { mark: m.clone(), at: [at.x, at.y], ..OpeningTag::default() }).collect();
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
     Ok(json!({

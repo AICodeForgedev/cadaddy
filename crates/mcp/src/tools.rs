@@ -141,6 +141,14 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "out": {"type": "string", "description": ".cdy file to save the model to (default: a temp folder)"},
                 "force": {"type": "boolean", "description": "build even if import check fails"}
             }, "required": ["path"]}}),
+        json!({"name": "arch_read", "description": "Read the architecture of the open job's prints: doors (mark, hand, the rooms it swings into and from, card reader), windows, the stair and elevator, and rooms with their finishes (floor, base, wall, ceiling) and device plate colours, from the A floor plans, roof plan and door/hardware/window/finish schedules (the guided job's drawing, else the open print set's DXF sheets, else the drawing). Every item carries its source (plan sheet; schedule sheet of its row) and status (drawing, schedule, or guess with why); unmarked doors and rooms without a finish row are listed in misses. Preview by default; apply: true merges it into the building spec (one undo step). With no A sheets it says what to load.",
+        "inputSchema": {"type": "object", "properties": {
+            "level": {"type": "string", "description": "only this level (code \"2\" or name \"Level 2\")"},
+            "apply": {"type": "boolean", "description": "merge into the building spec (default false: preview)"},
+            "author": {"type": "string", "description": "who applies it (default \"user\")"},
+            "offset": {"type": "integer", "minimum": 0, "description": "first door and room listed"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "doors and rooms listed (default 50)"}
+        }}}),
         json!({"name": "callouts", "description": "List cross-reference callouts from the imported print set: section marks, elevation tags, detail bubbles, enlarged-plan boundaries, match lines and key plans. Each callout shows its source sheet, kind, detail number, target sheet, and whether it resolves or is broken (with the reason). With no print set imported it returns no items and a hint saying how to import one.",
         "inputSchema": {"type": "object", "properties": {
             "kind": {"type": "string", "description": "filter by kind: section_mark, elevation_tag, detail_bubble, enlarged_plan, match_line, key_plan"},
@@ -270,6 +278,7 @@ fn bim_job_action(b: &mut dyn Backend, action: Option<&str>, params: Value) -> R
                 ("structure.read", "structure"),
                 ("walls.read", "walls"),
                 ("ceilings.read", "ceilings"),
+                ("arch.read", "arch"),
                 ("ducts.read", "ducts"),
                 ("pipes.read", "pipes"),
                 ("conduit.read", "conduit"),
@@ -726,6 +735,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
             });
         }
         "callouts" => exec(b, "callouts.list", a),
+        "arch_read" => exec(b, "arch.read", a),
         other => return Err(format!("unknown tool `{other}`")),
     };
     Ok(match r {
