@@ -70,6 +70,16 @@ pub struct BuildingSpec {
     /// field observations.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub progress: serde_json::Value,
+    /// The BIM view (`bim.look`, `bim.trades`, `bim.tree`): the trade colour table, ghosting,
+    /// trades and tree branches shown, the level isolated.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub bim_view: serde_json::Value,
+    /// Typical units (`unittypes.*`, Q305): the unit types read from the enlarged unit plans and
+    /// their instances on the floor plans, with hands and overrides. Kept as written.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub unit_types: serde_json::Value,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub unit_instances: serde_json::Value,
     #[serde(default)]
     pub layers: Vec<LayerRole>,
     #[serde(default)]
@@ -2120,7 +2130,10 @@ impl BuildingSpec {
             tags: Vec::new(),
             estimate: serde_json::Value::Null,
             wholejob: serde_json::Value::Null,
+            bim_view: serde_json::Value::Null,
             progress: serde_json::Value::Null,
+            unit_types: serde_json::Value::Null,
+            unit_instances: serde_json::Value::Null,
             layers,
             wall_types,
             rooms: Vec::new(),

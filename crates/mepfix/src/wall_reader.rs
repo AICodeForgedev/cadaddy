@@ -112,9 +112,11 @@ fn is_iden(e: &cadaddy_doc::Entity) -> bool {
 }
 
 /// Casework tags (`BC-1`, `SK-1`, Q301) sit in their cabinet's outline, which looks like a tag
-/// symbol against the wall, but never type a wall.
+/// symbol against the wall, but never type a wall; nor do plumbing fixture tags (`WC-1` in its
+/// fixture's outline, on a `*FIXT*` layer) or the casework schedule's cells.
 fn is_casework(e: &cadaddy_doc::Entity) -> bool {
-    e.common.layer.to_ascii_uppercase().contains("CASEWORK")
+    let l = e.common.layer.to_ascii_uppercase();
+    l.contains("CASEWORK") || l.contains("FIXT")
 }
 
 fn texts(d: &Drawing) -> Vec<Txt> {

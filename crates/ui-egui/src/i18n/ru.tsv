@@ -2927,3 +2927,69 @@
 	PDF exported to {path}.	PDF экспортирован в {path}.
 	Clash detection failed.	Не удалось выполнить поиск коллизий.
 	Import Cost Table	Импортировать таблицу затрат
+	BIM View	Вид BIM
+	Trade Colours	Цвета разделов
+	Element Properties	Свойства элемента
+	Tree	Дерево
+	Colours	Цвета
+	Ghost Architecture	Архитектура прозрачная
+	Sheet Lines in 3D	Линии листа в 3D
+	Nothing is built yet. Use Plans to Model first.	Пока ничего не построено. Сначала используйте «Из планов в модель».
+	Select one element to see its properties.	Выберите один элемент, чтобы увидеть его свойства.
+	Not part of the built model.	Не входит в построенную модель.
+	Category	Категория
+	Trade	Раздел
+	Circuit	Цепь
+	Source	Источник
+	Issues	Замечания
+	Show on Sheet	Показать на листе
+	Reset Colours	Сбросить цвета
+	Architecture	Архитектура
+	Structure	Конструкции
+	Fire Protection	Пожаротушение
+	Doors and Windows	Двери и окна
+	Supply Air Duct	Приточный воздуховод
+	Return Air Duct	Рециркуляционный воздуховод
+	Exhaust Air Duct	Вытяжной воздуховод
+	Outside Air Duct	Воздуховод наружного воздуха
+	Duct	Воздуховод
+	Air Terminals	Воздухораспределители
+	Equipment	Оборудование
+	Domestic Cold Water	Холодное водоснабжение
+	Domestic Hot Water	Горячее водоснабжение
+	Sanitary	Канализация
+	Vent	Вентиляционный стояк
+	Storm	Ливневая канализация
+	Gas	Газ
+	Piping	Трубопроводы
+	Plumbing Fixtures	Сантехприборы
+	Conduit	Кабельные трубы
+	Cable Tray	Кабельные лотки
+	Electrical Devices	Электроустройства
+	Light Fixtures	Светильники
+	Clash Check	Проверка коллизий
+	Fix Clash	Устранить коллизию
+	Model Takeoff	Ведомость объёмов по модели
+	Show Takeoff Line	Показать строку ведомости
+	Model Estimate	Смета по модели
+	New Issue	Новое замечание
+	Update Issue	Обновить замечание
+	Show Issue	Показать замечание
+	Issue Marks	Метки замечаний
+	Sheet and 3D Link	Связь листа и 3D
+	PDF to BIM	PDF в BIM
+	Read Casework and Fixtures	Считать встроенную мебель и сантехнические приборы
+	Frame Walls from Prints	Каркас стен по чертежам
+	List Framed Walls	Список каркасных стен
+	Framed Wall	Каркасная стена
+	Next Stud	Следующая стойка
+	Enter Field Stud	Ввести стойку, замеренную на объекте
+	Apply Shop Drawing	Применить рабочий чертёж
+	Show Framing	Показать каркас
+	Read Unit Types from Prints	Прочитать типы блоков из чертежей
+	Edit Unit Type	Изменить тип блока
+	Override Unit Instance	Переопределить экземпляр блока
+	Place Unit Instances	Разместить экземпляры блоков
+	List Callouts	Список выносок
+	Keep Print Set Job	Сохранить задание комплекта чертежей
+	Resume Print Set Job	Возобновить задание комплекта чертежей

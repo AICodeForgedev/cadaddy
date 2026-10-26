@@ -93,7 +93,8 @@ fn each_page_is_imported_once_side_by_side() {
     assert!(mech > 0);
     let mut s = Session::new();
     let builds = cadaddy_engine::cmd::wallgen::builds_so_far();
-    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "checkpoint": false})).expect("job.start");
+    let st =
+        s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false})).expect("job.start");
     assert_eq!(st["done"], json!(true), "{st}");
     // The model is built once: when job.start ends, the model its own step built is current
     // (the associative rebuild used to build it again, as if the whole plan had just been drawn).
@@ -143,7 +144,7 @@ fn a_running_job_reports_each_stage_and_sheet() {
     cadaddy_engine::cmd::guided::set_progress_sink(Some(sink));
     let mut s = Session::new();
     s.events_subscribe(true);
-    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "checkpoint": false}));
+    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false}));
     cadaddy_engine::cmd::guided::set_progress_sink(None);
     let st = st.expect("job.start");
     assert_eq!(st["done"], json!(true), "{st}");
@@ -181,7 +182,7 @@ fn a_job_cut_off_goes_on_from_its_checkpoint() {
     *COPY_AT_ROOMS.lock().unwrap_or_else(|e| e.into_inner()) = Some((checkpoint.clone(), copy.clone()));
     cadaddy_engine::cmd::guided::set_progress_sink(Some(sink));
     let mut first = Session::new();
-    let r = first.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": checkpoint.display().to_string()}));
+    let r = first.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string()}));
     cadaddy_engine::cmd::guided::set_progress_sink(None);
     *COPY_AT_ROOMS.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let st = r.expect("job.start");
@@ -197,7 +198,8 @@ fn a_job_cut_off_goes_on_from_its_checkpoint() {
     // The crash: a new session, the checkpoint left from the rooms stage.
     std::fs::copy(&copy, &checkpoint).expect("restore");
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": checkpoint.display().to_string()})).expect("resume");
+    let st =
+        s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string()})).expect("resume");
     assert_eq!(st["resumed"], json!(true), "{st}");
     assert_eq!(st["done"], json!(true), "{st}");
     assert!(audit(&job_state(&s), "job_resumed").is_some());
@@ -214,17 +216,19 @@ fn a_job_cut_off_goes_on_from_its_checkpoint() {
     std::fs::copy(&copy, &checkpoint).expect("restore");
     let mut s = Session::new();
     let st = s
-        .execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": checkpoint.display().to_string(), "resume": false}))
+        .execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string(), "resume": false}))
         .expect("fresh");
     assert!(st["resumed"].is_null(), "{st}");
     std::fs::write(&checkpoint, b"not a drawing").expect("damage");
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": checkpoint.display().to_string()})).expect("fresh");
+    let st =
+        s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string()})).expect("fresh");
     assert!(st["resumed"].is_null(), "{st}");
     std::fs::copy(&copy, &checkpoint).expect("restore");
     std::fs::write(dir.join("Added Sheet.pdf"), std::fs::read(dir.join("Full Set.pdf")).expect("set")).expect("add");
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": checkpoint.display().to_string()})).expect("fresh");
+    let st =
+        s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string()})).expect("fresh");
     assert!(st["resumed"].is_null(), "the prints changed: {st}");
     let _ = std::fs::remove_file(&copy);
     let _ = std::fs::remove_file(&checkpoint);
@@ -242,7 +246,8 @@ fn time_a_full_job() {
     let dir = job_folder("time", size, &[]);
     let mut s = Session::new();
     let t = std::time::Instant::now();
-    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "checkpoint": false})).expect("job.start");
+    let st =
+        s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "auto": true, "checkpoint": false})).expect("job.start");
     eprintln!("job.start {:.1} s: {st}", t.elapsed().as_secs_f64());
     let _ = std::fs::remove_dir_all(&dir);
 }

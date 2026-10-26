@@ -20,6 +20,84 @@ fn project(s: &Session) -> Result<PrintSetProject> {
     super::printset::get_project_handle(s)
 }
 
+/// What a print-set reader says when there is no print set to read: a warning with the way
+/// to open one, never an error (an error would stop the rest of a `run`).
+fn no_project(what: &str, mut out: Value) -> Value {
+    let msg = format!("no print-set project open, so no {what} were read; use printset.open {{path}} first, or bim_job import {{path}}");
+    out["sheets_read"] = json!(0);
+    out["warnings"] = json!([msg.clone()]);
+    out["message"] = json!(msg);
+    out
+}
+
+/// Sheet-number letters that name a discipline. A sheet found only by its largest
+/// sheet-number lettering counts when it is one of these: equipment marks look like sheet
+/// numbers too (`RTU-1`, `EF-2`).
+const DISCIPLINES: &[&str] = &["G", "C", "L", "A", "I", "ID", "S", "M", "P", "FP", "E", "FA", "T", "LV", "Q"];
+
+/// The current drawing is one sheet whose title block names another discipline than `want`
+/// (`M` for ducts, `P` for pipes): what to answer instead of reading another trade's lines.
+fn other_trade_sheet(s: &Session, want: &str, what: &str) -> Option<String> {
+    let d = s.doc().ok()?;
+    let id = cadaddy_mepfix::sheet_facts::identify_sheet(&cadaddy_mepfix::sheet_facts::texts(d))?;
+    let known = id.source == "title_block" || DISCIPLINES.iter().any(|k| k.eq_ignore_ascii_case(&id.discipline));
+    (known && !id.discipline.is_empty() && !id.discipline.eq_ignore_ascii_case(want))
+        .then(|| format!("this drawing is sheet {} ({} discipline): {what} is read on {want} plan sheets only", id.number, id.discipline))
+}
+
+/// A print-set read of one trade: on a job's drawing (its sheets side by side), each plan of
+/// the trade on its own sheet and level; with a print set open and no sheet of the trade in
+/// the drawing, the set's plans of the trade imported for the read. None: read the drawing.
+fn read_print_set(s: &mut Session, trade: MepKind, level: Option<&str>, apply: bool) -> Result<Option<Value>> {
+    let want = if trade == MepKind::Duct { "M" } else { "P" };
+    let job = super::guided::load_job(s).ok().flatten().filter(|j| !j.sheet_regions.is_empty());
+    let keep = |r: &super::printmep::SheetRef| {
+        level.is_none_or(|l| super::printmep::level_name(&r.level).eq_ignore_ascii_case(l) || r.level.eq_ignore_ascii_case(l))
+    };
+    let (read, source, in_drawing) = if let Some(job) = job {
+        let refs: Vec<super::printmep::SheetRef> =
+            super::guided::job_sheet_refs(&job).into_iter().filter(|r| r.trade() != Some(trade) || keep(r)).collect();
+        let upf = super::bspec::current(s, "print-set read")
+            .map_or(12.0, |(sp, stored)| if stored && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 });
+        (super::printmep::read_sheets(s.doc()?, &refs, upf, Some(trade)), "job drawing", true)
+    } else if let Ok(pr) = project(s) {
+        let empty = s.doc().map_or(true, |d| d.model.is_empty());
+        if !empty && other_trade_sheet(s, want, "").is_none() {
+            return Ok(None);
+        }
+        let (t, refs) = super::printmep::load_project_sheets(&pr, Some(trade))?;
+        let refs: Vec<super::printmep::SheetRef> = refs.into_iter().filter(|r| keep(r)).collect();
+        (super::printmep::read_sheets(t.doc()?, &refs, 12.0, Some(trade)), "print set", false)
+    } else {
+        return Ok(None);
+    };
+    let mut warnings = read.warnings.clone();
+    if read.sheets.is_empty() {
+        warnings.push(format!("no {want} plan sheets in the {source}; nothing read (classify the print set first: printset.classify)"));
+    }
+    let applied = apply && in_drawing && !read.mep.runs.is_empty();
+    if apply && !in_drawing {
+        warnings.push(
+            "read from the print set's own sheets: to build them, run the guided job (job.start), which places each sheet in its drawing".into(),
+        );
+    }
+    if applied {
+        let (mut sp, _) = super::bspec::current(s, "print-set read")?;
+        let sheets: Vec<String> = read.sheets.iter().map(|r| r.sheet.clone()).collect();
+        super::printmep::merge_mep(&mut sp, read.mep.clone(), &sheets);
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    let trade_key = if trade == MepKind::Duct { "duct" } else { "pipe" };
+    let mut out = read.to_json();
+    out["runs"] = json!(read.runs(trade_key));
+    out["length_ft"] = json!(super::printmep::r1(read.length_ft(trade_key)));
+    out["sheets_read"] = json!(read.sheets.len());
+    out["source"] = json!(source);
+    out["applied"] = json!(applied);
+    out["warnings"] = json!(warnings);
+    Ok(Some(out))
+}
+
 // ─── Command specs ───────────────────────────────────────────────────────────
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -46,11 +124,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── Duct reader ──────────────────────────────────────────────────
         CommandSpec::new("ducts.read", "Read Ductwork from Prints", run_duct_read)
-            .params("{level?: name, apply?: bool} → {runs: count, length_ft, terminals: count}")
+            .params("{level?: name, apply?: bool} → {runs: count, length_ft, terminals: count, warnings}: a job's drawing or an open print set: each M plan sheet on its own level (+ sheets: [{sheet, level, runs, length_ft}], source); one drawing: its ducts (none off another discipline's sheet)")
             .noundo(),
         // ── Pipe reader ──────────────────────────────────────────────────
         CommandSpec::new("pipes.read", "Read Piping from Prints", run_pipe_read)
-            .params("{level?: name, apply?: bool} → {runs: count, fittings: count}")
+            .params("{level?: name, apply?: bool} → {runs: count, length_ft, systems, warnings}: a job's drawing or an open print set: each P plan sheet on its own level (+ sheets: [{sheet, level, runs, length_ft}], source); one drawing: its pipe runs (none off another discipline's sheet)")
             .noundo(),
         // ── Structure reader ─────────────────────────────────────────────
         CommandSpec::new("structure.read", "Read Structural Plans", run_struct_read)
@@ -86,7 +164,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── Electrical devices ───────────────────────────────────────────
         CommandSpec::new("mep.read_devices", "Read Electrical Devices", run_elec_devices)
-            .params("{sheets?: [name], preview?: bool, limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read}: works on any open drawing (the current sheet is the print set)")
+            .params("{sheets?: [name], preview?: bool (default true: read only; false puts the devices in the model), limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read, model: {inserted, by_type, by_level, not_inserted: {reason: count}, why_not?}}: works on any open drawing (the current sheet is the print set); preview:false needs a building model (bspec.draft {store: true} or bim.build first) and never inserts legend samples, circuit numbers, sheet numbers or lettering")
             .noundo(),
     ]
 }
@@ -103,7 +181,7 @@ fn run_conduit_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first, or bim_job import {path}".into()));
+            return Ok(no_project("conduit runs", json!({"conduits": 0, "homeruns": {"routed": 0, "unrouted": []}})));
         }
     };
 
@@ -140,7 +218,7 @@ fn run_gear_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
+            return Ok(no_project("electrical equipment", json!({"placed": [], "unplaced": [], "tables_found": 0})));
         }
     };
 
@@ -184,7 +262,7 @@ fn run_site_read(_s: &mut Session, _p: &Value) -> Result<Value> {
     let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
+            return Ok(no_project("site items", json!({"counts_by_kind": {}, "conduit_footage": [], "unknowns": []})));
         }
     };
 
@@ -221,6 +299,14 @@ fn run_mep_heights(_s: &mut Session, p: &Value) -> Result<Value> {
 fn run_duct_read(s: &mut Session, p: &Value) -> Result<Value> {
     let level_filter = str_param(p, "level").map(str::to_string);
     let apply = bool_or(p, "apply", false);
+    if let Some(v) = read_print_set(s, MepKind::Duct, level_filter.as_deref(), apply)? {
+        return Ok(v);
+    }
+    if let Some(w) = other_trade_sheet(s, "M", "ductwork") {
+        return Ok(
+            json!({"runs": 0, "length_ft": 0.0, "terminals": 0, "equipment": 0, "fittings": 0, "applied": false, "warnings": [w], "trade_summary": "Found 0 duct run(s)", "clashes": 0, "systems": {}}),
+        );
+    }
 
     // Read from the current drawing using all-layers mode (handles PDF-imported M sheets
     // where entities are on pen layers, not standard MEP layer names).
@@ -366,7 +452,41 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
         }
     }
 
-    // Build MepSystems from the detected runs.
+    // Level registration: try the printset's M-sheet level assignment, then fall back to
+    // the first level in the spec.  This is the "register by grids" path: the printset's
+    // classify stage uses grid lines and title-block text to assign each sheet a level.
+    let sheet_level = project(s).ok().and_then(|p| {
+        let m_plans: Vec<_> = p
+            .sheets
+            .iter()
+            .filter(|sh| sh.discipline == "M" && (sh.sheet_type == "plan" || sh.sheet_type == "enlarged_plan") && !sh.level.is_empty())
+            .collect();
+        // If exactly one M plan sheet has a level, use it directly (the reader works on one
+        // drawing here; the print-set path reads each sheet on its own level).
+        match m_plans.as_slice() {
+            [one] if sp.levels.iter().any(|l| l.name.eq_ignore_ascii_case(&one.level)) => Some(one.level.clone()),
+            _ => None,
+        }
+    });
+    let default_level = sheet_level.unwrap_or_else(|| sp.levels.first().map(|l| l.name.clone()).unwrap_or_else(|| "1".to_string()));
+    if level_filter.is_some_and(|f| !f.eq_ignore_ascii_case(&default_level)) {
+        return Ok(());
+    }
+    let mep = duct_mep(net, &default_level, "", &sp);
+    super::printmep::merge_mep(&mut sp, mep, &[]);
+
+    // Store the updated spec.
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    Ok(())
+}
+
+/// A duct network as the spec's MEP parts on `level`: its systems, runs (from `sheet` when
+/// known), air terminals and equipment, at the spec's elevation bands (else the defaults).
+pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy_walk3d::BuildingSpec) -> cadaddy_walk3d::Mep {
+    let duct_bottom_ft = sp.mep.band_bottom_ft("duct").unwrap_or(10.0);
+    let terminal_bottom_ft = sp.mep.band_bottom_ft("terminal").unwrap_or(8.5);
+    let equipment_height_ft = sp.mep.band_bottom_ft("equipment").unwrap_or(6.0);
+    let mut mep = cadaddy_walk3d::Mep::default();
     let mut sys_map: BTreeMap<String, MepSystem> = BTreeMap::new();
     for run in &net.runs {
         let sys_name = run.system.clone().unwrap_or_else(|| "M-DUCT".to_string());
@@ -389,71 +509,24 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
                 color_index: duct_type.map_or(4, |dt| dt.default_color()),
             }
         });
-    }
-
-    // Add systems that don't exist yet.
-    for (name, sys) in &sys_map {
-        if !sp.mep.systems.iter().any(|s| s.name == *name) {
-            sp.mep.systems.push(sys.clone());
-        }
-    }
-
-    // Level registration: try the printset's M-sheet level assignment, then fall back to
-    // the first level in the spec.  This is the "register by grids" path: the printset's
-    // classify stage uses grid lines and title-block text to assign each sheet a level.
-    let sheet_level = project(s).ok().and_then(|p| {
-        let m_plans: Vec<_> = p
-            .sheets
-            .iter()
-            .filter(|sh| sh.discipline == "M" && (sh.sheet_type == "plan" || sh.sheet_type == "enlarged_plan") && !sh.level.is_empty())
-            .collect();
-        // If exactly one M plan sheet has a level, use it directly.
-        // With multiple sheets each run carries its own source_sheet — but the reader currently
-        // operates on a single drawing, so one sheet = one level is the common case.
-        if m_plans.len() == 1 {
-            let lvl = &m_plans[0].level;
-            // Verify the level exists in the spec.
-            if sp.levels.iter().any(|l| l.name.eq_ignore_ascii_case(lvl)) {
-                return Some(lvl.clone());
-            }
-        }
-        None
-    });
-    let default_level = sheet_level.unwrap_or_else(|| sp.levels.first().map(|l| l.name.clone()).unwrap_or_else(|| "1".to_string()));
-
-    // Per-trade elevation bands: use the spec's table if set, otherwise hard-coded defaults.
-    let duct_bottom_ft = sp.mep.band_bottom_ft("duct").unwrap_or(10.0);
-    let terminal_bottom_ft = sp.mep.band_bottom_ft("terminal").unwrap_or(8.5);
-    let equipment_height_ft = sp.mep.band_bottom_ft("equipment").unwrap_or(6.0);
-
-    // Convert runs to MepRun.
-    let mut run_count = sp.mep.runs.len();
-    for dr in &net.runs {
-        let level = default_level.clone();
-        if level_filter.is_some_and(|f| !f.eq_ignore_ascii_case(&level)) {
-            continue;
-        }
-        run_count += 1;
-        let sys_name = dr.system.clone().unwrap_or_else(|| "M-DUCT".to_string());
-        sp.mep.runs.push(MepRun {
+        mep.runs.push(MepRun {
             system: sys_name,
-            level: level.clone(),
-            points: dr.points.iter().map(|p| [p.x, p.y]).collect(),
-            size_in: [dr.width_in, dr.depth_in],
-            bottoms_ft: vec![dr.bottom_ft.unwrap_or(duct_bottom_ft); dr.points.len().saturating_sub(1).max(1)],
+            level: level.to_string(),
+            points: run.points.iter().map(|p| [p.x, p.y]).collect(),
+            size_in: [run.width_in, run.depth_in],
+            bottoms_ft: vec![run.bottom_ft.unwrap_or(duct_bottom_ft); run.points.len().saturating_sub(1).max(1)],
             objects: Vec::new(),
-            id: format!("R{run_count}"),
+            id: String::new(),
             encased: false,
-            size_source: if dr.confidence >= 0.85 { "tag" } else { "default" }.to_string(),
-            height_source: dr.height_source.clone(),
+            size_source: if run.confidence >= 0.85 { "tag" } else { "default" }.to_string(),
+            height_source: run.height_source.clone(),
             reviewed: false,
             edited_by: String::new(),
             top_ft: None,
-            source_sheet: dr.source_sheet.clone().unwrap_or_default(),
+            source_sheet: run.source_sheet.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| sheet.to_string()),
         });
     }
-
-    // Convert terminals to MepTerminal.
+    mep.systems = sys_map.into_values().collect();
     for dt in &net.terminals {
         let sys_name = match dt.kind.as_str() {
             "supply_diffuser" => "SA",
@@ -461,9 +534,9 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
             "exhaust_grille" => "EA",
             _ => "M-DUCT",
         };
-        sp.mep.terminals.push(MepTerminal {
+        mep.terminals.push(MepTerminal {
             system: sys_name.to_string(),
-            level: default_level.clone(),
+            level: level.to_string(),
             at: [dt.at.x, dt.at.y],
             size_in: [12.0, 12.0],
             bottom_ft: terminal_bottom_ft,
@@ -471,13 +544,15 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
             objects: Vec::new(),
         });
     }
-
-    // Convert equipment to MepEquipment.
     for de in &net.equipment {
-        sp.mep.equipment.push(MepEquipment {
+        let mut sources = BTreeMap::new();
+        if !sheet.is_empty() {
+            sources.insert("sheet".to_string(), sheet.to_string());
+        }
+        mep.equipment.push(MepEquipment {
             tag: de.tag.clone(),
             kind: de.kind.clone(),
-            level: default_level.clone(),
+            level: level.to_string(),
             min: [de.min.x, de.min.y],
             max: [de.max.x, de.max.y],
             height_ft: equipment_height_ft,
@@ -487,41 +562,75 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
                 _ => "M-DUCT".to_string(),
             }],
             confidence: de.confidence,
+            sources,
             ..MepEquipment::default()
         });
     }
-
-    // Store the updated spec.
-    s.doc_mut()?.building_spec = Some(sp.to_json());
-    Ok(())
+    mep
 }
 
 // ─── pipes.read ──────────────────────────────────────────────────────────────
 
-fn run_pipe_read(_s: &mut Session, p: &Value) -> Result<Value> {
-    let _level = str_param(p, "level");
+fn run_pipe_read(s: &mut Session, p: &Value) -> Result<Value> {
+    let level = str_param(p, "level").map(str::to_string);
     let apply = bool_or(p, "apply", false);
-
-    let project = match project(_s) {
-        Ok(p) => p,
-        Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
+    if let Some(v) = read_print_set(s, MepKind::Pipe, level.as_deref(), apply)? {
+        return Ok(v);
+    }
+    if let Some(w) = other_trade_sheet(s, "P", "piping") {
+        return Ok(json!({"runs": 0, "length_ft": 0.0, "fittings": 0, "systems": {}, "applied": false, "warnings": [w]}));
+    }
+    // One drawing: its pipe runs (P-* layers, else lines next to pipe tags).
+    let (mut sp, _) = super::bspec::current(s, "pipes.read")?;
+    if let Some(l) = level.as_deref().filter(|l| sp.level(l).is_none()) {
+        return Err(EngineError::Other(format!("pipes.read: there is no level named {l}")));
+    }
+    let (systems, runs) = super::mep::read(s, &sp, level.as_deref())?;
+    let pipe_names: Vec<String> = systems.iter().filter(|x| x.kind == MepKind::Pipe).map(|x| x.name.clone()).collect();
+    let runs: Vec<MepRun> = runs.into_iter().filter(|r| pipe_names.contains(&r.system)).collect();
+    let upf = {
+        let d = s.doc()?;
+        let ext = d.extents(&cadaddy_doc::Space::Model);
+        let (w, h) = (ext.max.x - ext.min.x, ext.max.y - ext.min.y);
+        let diag = (w * w + h * h).sqrt();
+        if diag.is_finite() && diag > 10.0 && diag < 80.0 {
+            0.125
+        } else if sp.units_per_foot > 0.0 {
+            sp.units_per_foot
+        } else {
+            12.0
         }
     };
-
-    let p_sheets: Vec<&mep_printset::SheetEntry> =
-        project.sheets.iter().filter(|s| s.discipline == "P" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan")).collect();
-
+    let length_ft: f64 =
+        runs.iter().map(|r| run_length_ft(&r.points.iter().map(|q| cadaddy_geom::Vec2::new(q[0], q[1])).collect::<Vec<_>>(), upf)).sum();
+    let mut by_system: BTreeMap<String, usize> = BTreeMap::new();
+    for r in &runs {
+        *by_system.entry(r.system.clone()).or_default() += 1;
+    }
+    let mut warnings: Vec<String> = Vec::new();
+    if runs.is_empty() {
+        warnings.push("no pipe runs found: no P-* layers and no pipe tags (2\" CW, 4\" SAN) next to lines — is this a plumbing plan?".into());
+    }
+    let applied = apply && !runs.is_empty();
+    let count = runs.len();
+    if applied {
+        if upf < sp.units_per_foot {
+            sp.units_per_foot = upf;
+        }
+        let levels: Vec<String> = runs.iter().map(|r| r.level.clone()).collect();
+        let old_pipes: Vec<String> = sp.mep.systems.iter().filter(|x| x.kind == MepKind::Pipe).map(|x| x.name.clone()).collect();
+        sp.mep.runs.retain(|r| !(old_pipes.contains(&r.system) && levels.iter().any(|l| l.eq_ignore_ascii_case(&r.level))));
+        let mep = cadaddy_walk3d::Mep { systems: systems.into_iter().filter(|x| x.kind == MepKind::Pipe).collect(), runs, ..Default::default() };
+        super::printmep::merge_mep(&mut sp, mep, &[]);
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
     Ok(json!({
-        "runs": 0,
+        "runs": count,
+        "length_ft": super::printmep::r1(length_ft),
         "fittings": 0,
-        "sheets_read": p_sheets.len(),
-        "apply": apply,
-        "message": if p_sheets.is_empty() {
-            "no P-sheet plans found in the project"
-        } else {
-            "pipe reader wired; DXF sheet loading integration pending"
-        },
+        "systems": by_system,
+        "applied": applied,
+        "warnings": warnings,
     }))
 }
 
@@ -533,7 +642,7 @@ fn run_struct_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
+            return Ok(no_project("structural members", json!({"levels": []})));
         }
     };
 
@@ -558,7 +667,7 @@ fn run_ceiling_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
+            return Ok(no_project("ceilings", json!({"rooms": []})));
         }
     };
 
@@ -584,7 +693,7 @@ fn run_sprinkler_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
+            return Ok(no_project("sprinkler heads", json!({"heads": {"by_mount": {}}, "pieces": {"by_size": {}}, "unresolved": []})));
         }
     };
 
@@ -614,7 +723,7 @@ fn run_tray_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
+            return Ok(no_project("cable trays", json!({"trays": {"by_size": {}}, "banks": 0, "risers": 0, "unmatched": []})));
         }
     };
 
@@ -644,7 +753,10 @@ fn run_wall_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
+            return Ok(no_project(
+                "wall types",
+                json!({"types": [], "counts": {"typed": 0, "guessed": 0, "unknown": 0}, "guesses": [], "unknown_tags": []}),
+            ));
         }
     };
 
@@ -686,7 +798,7 @@ fn run_rfi_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
+            return Ok(no_project("RFIs", json!({"counts": {"by_kind": {}, "by_severity": {}}, "items": []})));
         }
     };
 
@@ -709,7 +821,7 @@ fn run_equip_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let project = match project(_s) {
         Ok(p) => p,
         Err(_) => {
-            return Err(EngineError::Other("no print-set project open; use printset.open first".into()));
+            return Ok(no_project("MEP equipment", json!({"placed": [], "unplaced": [], "tables_found": 0})));
         }
     };
 
@@ -810,6 +922,9 @@ fn run_elec_devices(s: &mut Session, p: &Value) -> Result<Value> {
             })
         })
         .collect();
+    // What may go in the model: the drawing's legends and schedules say which marks are types
+    // and which symbols are samples; circuit numbers, sheet numbers and lettering never are.
+    let (keep, not_inserted) = model_devices(d, &found, sheet_numbers(s));
     let mut out = json!({
         "devices": devices, "count": found.len(), "by_type": by_type,
         "print_set": if e_sheets.is_some() { "project" } else { "current drawing" }, "sheets_read": e_sheets.unwrap_or(1).max(1),
@@ -819,5 +934,197 @@ fn run_elec_devices(s: &mut Session, p: &Value) -> Result<Value> {
     } else if found.len() > limit {
         out["more"] = json!(found.len() - limit);
     }
+    let mut model = if bool_or(p, "preview", true) {
+        json!({"inserted": 0, "would_insert": keep.len(), "why_not": "preview: nothing was put in the model; mep.read_devices {preview: false} inserts these devices"})
+    } else if keep.is_empty() {
+        json!({"inserted": 0, "why_not": "no device here passed the junk filter (see not_inserted)"})
+    } else {
+        match place_devices(s, &keep, "mep.read_devices") {
+            Ok(v) => v,
+            Err(e) => json!({"inserted": 0, "why_not": e.to_string()}),
+        }
+    };
+    model["not_inserted"] = json!(not_inserted);
+    out["model"] = model;
     Ok(out)
+}
+
+/// The set's sheet numbers (the print set's, else the open sheet's title block): a tag that
+/// prints one is a reference, not a device.
+fn sheet_numbers(s: &Session) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    if let Ok(pr) = project(s) {
+        for sh in pr.sheets.iter().take(MAX_DEVICES) {
+            out.extend(cadaddy_mepfix::device_types::sheet_number_forms(&sh.number));
+        }
+    }
+    out
+}
+
+/// The devices of `found` that belong in the model, and how many were left out, by reason.
+fn model_devices(
+    d: &cadaddy_doc::Drawing,
+    found: &[Found],
+    mut numbers: std::collections::BTreeSet<String>,
+) -> (Vec<ReadDevice>, BTreeMap<&'static str, usize>) {
+    use cadaddy_mepfix::device_types::{self, TagVerdict};
+    let texts = cadaddy_mepfix::sheet_facts::texts(d);
+    if let Some(id) = cadaddy_mepfix::sheet_facts::identify_sheet(&texts) {
+        numbers.extend(device_types::sheet_number_forms(&id.number));
+    }
+    let legend = device_types::read_legend(&texts);
+    let circuits: Vec<&cadaddy_mepfix::sheet_facts::TextItem> =
+        texts.iter().filter(|t| cadaddy_mepfix::sheet_facts::is_circuit_label(&t.value)).collect();
+    let mut keep = Vec::new();
+    let mut skipped: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for (tag, at, h, _) in found {
+        let why = if legend.covers(*at) {
+            Some("legend or schedule sample")
+        } else if super::guided::is_circuit_tag(tag) {
+            Some("circuit number")
+        } else {
+            match device_types::tag_verdict(tag, &legend.types, &std::collections::BTreeSet::new(), &numbers) {
+                TagVerdict::Device(_) => None,
+                TagVerdict::NotDevice(why) => Some(why),
+                TagVerdict::Unlisted(_) => Some("not in the legend (the guided job asks about it)"),
+            }
+        };
+        match why {
+            Some(w) => *skipped.entry(w).or_default() += 1,
+            None => keep.push(ReadDevice {
+                tag: tag.trim().to_string(),
+                at: [at.x, at.y],
+                circuit: circuit_beside(&circuits, *at),
+                handle: h.hex(),
+                ..ReadDevice::default()
+            }),
+        }
+    }
+    (keep, skipped)
+}
+
+/// The circuit label printed beside a device symbol at `at` (within six label heights; the
+/// nearest), else empty.
+pub(crate) fn circuit_beside(circuits: &[&cadaddy_mepfix::sheet_facts::TextItem], at: cadaddy_geom::Vec2) -> String {
+    circuits
+        .iter()
+        .filter(|t| t.height.is_finite() && t.height > 0.0 && t.at.dist(at) <= 6.0 * t.height)
+        .min_by(|a, b| a.at.dist(at).total_cmp(&b.at.dist(at)))
+        .map_or_else(String::new, |t| t.value.trim().to_string())
+}
+
+/// A device read off a sheet, to put in the model: its type mark, where its symbol is drawn
+/// (drawing units), the sheet and the sheet's level, and its circuit when one is printed
+/// beside it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReadDevice {
+    pub tag: String,
+    pub at: [f64; 2],
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sheet: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub level: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub circuit: String,
+    /// The symbol's handle (hex).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub handle: String,
+}
+
+/// The model level a device belongs on: the spec level whose plan region holds it, else the
+/// spec level named as its sheet's (`2` → `Level 2`), else its sheet's level named the way the
+/// spec names its levels, else the spec's level for the whole drawing.
+fn device_level(sp: &cadaddy_walk3d::BuildingSpec, dv: &ReadDevice) -> String {
+    let regional = cadaddy_walk3d::level_at(&sp.levels, dv.at[0], dv.at[1]).filter(|l| l.region.is_some());
+    if let Some(l) = regional {
+        return l.name.clone();
+    }
+    let want = dv.level.trim();
+    if !want.is_empty() {
+        let named = sp.levels.iter().find(|l| {
+            let n = l.name.trim().to_ascii_uppercase();
+            let w = want.to_ascii_uppercase();
+            n == w || n.ends_with(&format!(" {w}")) || (w == "R" && n.contains("ROOF"))
+        });
+        return match named {
+            Some(l) => l.name.clone(),
+            // Named as the spec names its levels (`Level 2` beside `Level 1`).
+            None if sp.levels.iter().any(|l| l.name.starts_with("Level ")) => format!("Level {want}"),
+            None => want.to_string(),
+        };
+    }
+    cadaddy_walk3d::level_at(&sp.levels, dv.at[0], dv.at[1]).or_else(|| sp.levels.first()).map_or_else(String::new, |l| l.name.clone())
+}
+
+/// What a device's BOM line calls it: `switch S3`, `device type A`.
+fn device_item(tag: &str) -> String {
+    match device_kind(tag) {
+        "device" => format!("device type {tag}"),
+        k => format!("{k} {tag}"),
+    }
+}
+
+/// Put `devices` in the drawing's building model as element tags on their levels (`kind`,
+/// `type`, `device_type`, `circuit` when known, `sheet`, `symbol`), replacing the devices an
+/// earlier read put there (tags made by hand or by other readers stay). The BOM and takeoff
+/// count them from there. Errors when the drawing has no building model yet.
+pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) -> Result<Value> {
+    let d = s.doc()?;
+    let Some(text) = d.building_spec.as_deref().filter(|t| !t.trim().is_empty()) else {
+        return Err(EngineError::Other(format!(
+            "{cmd}: there is no building model to put the devices in yet: run bspec.draft {{store: true}} (or bim.build) first, then {cmd} {{preview: false}} again"
+        )));
+    };
+    let mut sp = cadaddy_walk3d::BuildingSpec::from_json(text).map_err(|e| EngineError::Other(format!("{cmd}: {e}")))?;
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let before = sp.tags.len();
+    sp.tags.retain(|t| !(t.id.starts_with("device:") && t.fields.contains_key("symbol")));
+    let replaced = before - sp.tags.len();
+    let mut ids: std::collections::HashSet<String> = sp.tags.iter().map(|t| t.id.clone()).collect();
+    let mut by_type: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_level: BTreeMap<String, usize> = BTreeMap::new();
+    let mut inserted = 0usize;
+    for dv in devices.iter().take(MAX_DEVICES) {
+        let tag = dv.tag.trim();
+        if tag.is_empty() || !dv.at.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let level = device_level(&sp, dv);
+        let at_ft = [dv.at[0] / upf, dv.at[1] / upf];
+        let base = format!("device:{level}:{:.1},{:.1}", at_ft[0], at_ft[1]);
+        // Two marks on one symbol spot (a switch and its sensor) are two devices.
+        let id = if ids.contains(&base) { format!("{base}:{tag}") } else { base };
+        if !ids.insert(id.clone()) {
+            continue;
+        }
+        let mut e =
+            cadaddy_walk3d::tags::ElementTag { id, kind: device_kind(tag).replace(' ', "_"), level: level.clone(), at_ft, ..Default::default() };
+        e.set("type", tag, "plan");
+        e.set("device_type", device_item(tag), "plan");
+        if !dv.circuit.is_empty() {
+            e.set("circuit", dv.circuit.clone(), "plan");
+        }
+        e.set("sheet", if dv.sheet.is_empty() { "current drawing" } else { dv.sheet.as_str() }, "plan");
+        e.set("symbol", dv.handle.clone(), "plan");
+        sp.tags.push(e);
+        *by_type.entry(tag.to_string()).or_default() += 1;
+        *by_level.entry(level).or_default() += 1;
+        inserted += 1;
+    }
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    Ok(json!({"inserted": inserted, "replaced": replaced, "by_type": by_type, "by_level": by_level}))
+}
+
+/// The devices an earlier read put in the drawing's model: how many, by level and type.
+pub(crate) fn model_device_counts(d: &cadaddy_doc::Drawing) -> Value {
+    let spec = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok());
+    let mut by_level: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_type: BTreeMap<String, usize> = BTreeMap::new();
+    let mut n = 0usize;
+    for t in spec.iter().flat_map(|sp| sp.tags.iter()).filter(|t| t.id.starts_with("device:") && t.fields.contains_key("symbol")) {
+        n += 1;
+        *by_level.entry(t.level.clone()).or_default() += 1;
+        *by_type.entry(t.fields.get("type").map_or_else(String::new, |f| f.value.clone())).or_default() += 1;
+    }
+    json!({"count": n, "by_level": by_level, "by_type": by_type})
 }

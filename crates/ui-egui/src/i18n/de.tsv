@@ -2955,3 +2955,69 @@
 	PDF exported to {path}.	PDF nach {path} exportiert.
 	Clash detection failed.	Kollisionsprüfung fehlgeschlagen.
 	Import Cost Table	Kostentabelle importieren
+	BIM View	BIM-Ansicht
+	Trade Colours	Gewerkfarben
+	Element Properties	Elementeigenschaften
+	Tree	Baum
+	Colours	Farben
+	Ghost Architecture	Architektur transparent
+	Sheet Lines in 3D	Planlinien in 3D
+	Nothing is built yet. Use Plans to Model first.	Noch nichts erstellt. Zuerst „Pläne zu Modell“ verwenden.
+	Select one element to see its properties.	Ein Element wählen, um seine Eigenschaften zu sehen.
+	Not part of the built model.	Nicht Teil des erstellten Modells.
+	Category	Kategorie
+	Trade	Gewerk
+	Circuit	Stromkreis
+	Source	Quelle
+	Issues	Probleme
+	Show on Sheet	Im Plan zeigen
+	Reset Colours	Farben zurücksetzen
+	Architecture	Architektur
+	Structure	Tragwerk
+	Fire Protection	Brandschutz
+	Doors and Windows	Türen und Fenster
+	Supply Air Duct	Zuluftkanal
+	Return Air Duct	Umluftkanal
+	Exhaust Air Duct	Abluftkanal
+	Outside Air Duct	Außenluftkanal
+	Duct	Luftkanal
+	Air Terminals	Luftauslässe
+	Equipment	Geräte
+	Domestic Cold Water	Trinkwasser kalt
+	Domestic Hot Water	Trinkwasser warm
+	Sanitary	Schmutzwasser
+	Vent	Lüftungsleitung
+	Storm	Regenwasser
+	Gas	Gas
+	Piping	Rohrleitungen
+	Plumbing Fixtures	Sanitärobjekte
+	Conduit	Installationsrohre
+	Cable Tray	Kabeltrassen
+	Electrical Devices	Elektrogeräte
+	Light Fixtures	Leuchten
+	Clash Check	Kollisionsprüfung
+	Fix Clash	Kollision beheben
+	Model Takeoff	Mengenermittlung aus Modell
+	Show Takeoff Line	Mengenposition anzeigen
+	Model Estimate	Kostenschätzung aus Modell
+	New Issue	Neues Problem
+	Update Issue	Problem aktualisieren
+	Show Issue	Problem anzeigen
+	Issue Marks	Problemmarkierungen
+	Sheet and 3D Link	Verknüpfung Plan und 3D
+	PDF to BIM	PDF zu BIM
+	Read Casework and Fixtures	Einbaumöbel und Sanitärobjekte lesen
+	Frame Walls from Prints	Ständerwerk aus Plänen erstellen
+	List Framed Walls	Ständerwände auflisten
+	Framed Wall	Ständerwand
+	Next Stud	Nächster Ständer
+	Enter Field Stud	Vor Ort gemessenen Ständer eingeben
+	Apply Shop Drawing	Werkstattzeichnung anwenden
+	Show Framing	Ständerwerk anzeigen
+	Read Unit Types from Prints	Einheitentypen aus Plänen lesen
+	Edit Unit Type	Einheitentyp bearbeiten
+	Override Unit Instance	Einheiteninstanz überschreiben
+	Place Unit Instances	Einheiteninstanzen platzieren
+	List Callouts	Verweise auflisten
+	Keep Print Set Job	Plansatz-Auftrag aufbewahren
+	Resume Print Set Job	Plansatz-Auftrag fortsetzen

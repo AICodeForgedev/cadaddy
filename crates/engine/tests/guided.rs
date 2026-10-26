@@ -956,3 +956,112 @@ fn real_e4_classify_to_levels() {
     // No blocking findings.
     assert!(job.findings.iter().all(|f| !f.blocking), "no blocking findings after successful classify");
 }
+
+// ─── Q5278 honestjob tests ──────────────────────────────────────────────────
+
+/// Q5278 MUST 4: worklist items become "resolved" when their question is answered.
+#[test]
+fn worklist_syncs_with_answered_questions() {
+    use cadaddy_engine::cmd::guided::*;
+
+    let mut job = GuidedJob::new("/tmp/test-prints", JobGoal::Estimate);
+
+    // Add questions and worklist items.
+    for i in 1..=5 {
+        let qid = job.next_qid(StageName::Devices);
+        let q = Question {
+            id: qid.clone(),
+            stage: StageName::Devices,
+            question: format!("Device question {i}?"),
+            why: "test".into(),
+            choices: vec!["Yes".into(), "No".into()],
+            evidence: None,
+            default: Some("Yes".into()),
+            answer_schema: None,
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Doubt,
+        };
+        job.add_question_to_worklist(&q);
+        if let Some(st) = job.stage_mut(StageName::Devices) {
+            st.questions.push(q);
+        }
+    }
+
+    // All worklist items are pending.
+    assert_eq!(job.worklist.iter().filter(|w| w.status == "pending").count(), 5);
+
+    // Answer 3 of the 5 questions.
+    if let Some(st) = job.stage_mut(StageName::Devices) {
+        for q in st.questions.iter_mut().take(3) {
+            q.answer = Some(json!("Yes"));
+            q.answered_by = Some("default".into());
+        }
+    }
+
+    // Before sync: worklist still shows 5 pending.
+    assert_eq!(job.worklist.iter().filter(|w| w.status == "pending").count(), 5);
+
+    // Sync worklist.
+    sync_worklist(&mut job);
+
+    // After sync: 3 resolved, 2 pending.
+    assert_eq!(job.worklist.iter().filter(|w| w.status == "resolved").count(), 3);
+    assert_eq!(job.worklist.iter().filter(|w| w.status == "pending").count(), 2);
+
+    // Answer the remaining 2.
+    if let Some(st) = job.stage_mut(StageName::Devices) {
+        for q in st.questions.iter_mut().skip(3) {
+            q.answer = Some(json!("No"));
+            q.answered_by = Some("agent".into());
+        }
+    }
+    sync_worklist(&mut job);
+    assert_eq!(job.worklist.iter().filter(|w| w.status == "resolved").count(), 5);
+    assert_eq!(job.worklist.iter().filter(|w| w.status == "pending").count(), 0);
+}
+
+/// Q5278 MUST 4: worklist count agrees with open_questions when all auto-answered.
+#[test]
+fn worklist_pending_zero_when_all_questions_answered() {
+    use cadaddy_engine::cmd::guided::*;
+
+    let mut job = GuidedJob::new("/tmp/test-prints", JobGoal::Estimate);
+
+    // Add questions with defaults (these get auto-answered).
+    for i in 1..=3 {
+        let qid = job.next_qid(StageName::Levels);
+        let q = Question {
+            id: qid.clone(),
+            stage: StageName::Levels,
+            question: format!("Level question {i}?"),
+            why: "test".into(),
+            choices: vec!["Accept".into()],
+            evidence: None,
+            default: Some("Accept".into()),
+            answer_schema: None,
+            answer: Some(json!("Accept")),
+            answered_by: Some("default".into()),
+            answered_at: None,
+            kind: QuestionKind::Doubt,
+        };
+        // Add worklist item first (before the answer).
+        let unanswered_q = Question { answer: None, answered_by: None, ..q.clone() };
+        job.add_question_to_worklist(&unanswered_q);
+        if let Some(st) = job.stage_mut(StageName::Levels) {
+            st.questions.push(q);
+        }
+    }
+
+    // Questions are all answered: open_questions = 0.
+    let open: usize = job.stages.iter().map(|s| s.unanswered().len()).sum();
+    assert_eq!(open, 0);
+
+    // But worklist shows pending (the bug before the fix).
+    assert!(job.worklist.iter().filter(|w| w.status == "pending").count() > 0);
+
+    // After sync, pending should be 0.
+    sync_worklist(&mut job);
+    assert_eq!(job.worklist.iter().filter(|w| w.status == "pending").count(), 0);
+}

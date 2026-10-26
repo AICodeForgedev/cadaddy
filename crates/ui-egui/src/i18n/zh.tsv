@@ -3022,3 +3022,69 @@
 	PDF exported to {path}.	PDF 已导出到 {path}。
 	Clash detection failed.	碰撞检测失败。
 	Import Cost Table	导入成本表
+	BIM View	BIM 视图
+	Trade Colours	专业颜色
+	Element Properties	构件属性
+	Tree	树
+	Colours	颜色
+	Ghost Architecture	建筑半透明
+	Sheet Lines in 3D	在三维中显示图纸线条
+	Nothing is built yet. Use Plans to Model first.	尚未生成任何内容。请先使用“图纸生成模型”。
+	Select one element to see its properties.	选择一个构件以查看其属性。
+	Not part of the built model.	不属于已生成的模型。
+	Category	类别
+	Trade	专业
+	Circuit	回路
+	Source	来源
+	Issues	问题
+	Show on Sheet	在图纸上显示
+	Reset Colours	重置颜色
+	Architecture	建筑
+	Structure	结构
+	Fire Protection	消防
+	Doors and Windows	门窗
+	Supply Air Duct	送风管
+	Return Air Duct	回风管
+	Exhaust Air Duct	排风管
+	Outside Air Duct	新风管
+	Duct	风管
+	Air Terminals	风口
+	Equipment	设备
+	Domestic Cold Water	生活冷水
+	Domestic Hot Water	生活热水
+	Sanitary	污水
+	Vent	通气
+	Storm	雨水
+	Gas	燃气
+	Piping	管道
+	Plumbing Fixtures	卫生器具
+	Conduit	电线管
+	Cable Tray	电缆桥架
+	Electrical Devices	电气装置
+	Light Fixtures	灯具
+	Clash Check	碰撞检查
+	Fix Clash	修复碰撞
+	Model Takeoff	模型工程量统计
+	Show Takeoff Line	显示工程量条目
+	Model Estimate	模型估价
+	New Issue	新建问题
+	Update Issue	更新问题
+	Show Issue	显示问题
+	Issue Marks	问题标记
+	Sheet and 3D Link	图纸与三维联动
+	PDF to BIM	PDF 转 BIM
+	Read Casework and Fixtures	读取固定家具和卫生洁具
+	Frame Walls from Prints	根据图纸生成墙体龙骨
+	List Framed Walls	列出龙骨墙
+	Framed Wall	龙骨墙
+	Next Stud	下一根龙骨
+	Enter Field Stud	输入现场测量的龙骨
+	Apply Shop Drawing	应用加工图
+	Show Framing	显示龙骨
+	Read Unit Types from Prints	从图纸读取单元类型
+	Edit Unit Type	编辑单元类型
+	Override Unit Instance	覆盖单元实例
+	Place Unit Instances	放置单元实例
+	List Callouts	列出标注
+	Keep Print Set Job	保留图纸集作业
+	Resume Print Set Job	恢复图纸集作业

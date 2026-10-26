@@ -3137,3 +3137,69 @@ menu	Modify	Edita
 	PDF exported to {path}.	PDF esportato in {path}.
 	Clash detection failed.	Rilevamento interferenze non riuscito.
 	Import Cost Table	Importa tabella dei costi
+	BIM View	Vista BIM
+	Trade Colours	Colori per disciplina
+	Element Properties	Proprietà dell'elemento
+	Tree	Albero
+	Colours	Colori
+	Ghost Architecture	Architettura trasparente
+	Sheet Lines in 3D	Linee della tavola in 3D
+	Nothing is built yet. Use Plans to Model first.	Non è stato ancora costruito nulla. Usare prima Da tavole a modello.
+	Select one element to see its properties.	Selezionare un elemento per vederne le proprietà.
+	Not part of the built model.	Non fa parte del modello costruito.
+	Category	Categoria
+	Trade	Disciplina
+	Circuit	Circuito
+	Source	Origine
+	Issues	Problemi
+	Show on Sheet	Mostra sulla tavola
+	Reset Colours	Ripristina colori
+	Architecture	Architettura
+	Structure	Strutture
+	Fire Protection	Antincendio
+	Doors and Windows	Porte e finestre
+	Supply Air Duct	Canale di mandata
+	Return Air Duct	Canale di ripresa
+	Exhaust Air Duct	Canale di estrazione
+	Outside Air Duct	Canale di aria esterna
+	Duct	Canale
+	Air Terminals	Terminali d'aria
+	Equipment	Apparecchiature
+	Domestic Cold Water	Acqua fredda sanitaria
+	Domestic Hot Water	Acqua calda sanitaria
+	Sanitary	Scarichi
+	Vent	Ventilazione
+	Storm	Acque meteoriche
+	Gas	Gas
+	Piping	Tubazioni
+	Plumbing Fixtures	Apparecchi sanitari
+	Conduit	Tubi protettivi
+	Cable Tray	Passerelle portacavi
+	Electrical Devices	Dispositivi elettrici
+	Light Fixtures	Apparecchi di illuminazione
+	Clash Check	Verifica interferenze
+	Fix Clash	Correggi interferenza
+	Model Takeoff	Computo dal modello
+	Show Takeoff Line	Mostra voce del computo
+	Model Estimate	Stima dei costi dal modello
+	New Issue	Nuovo problema
+	Update Issue	Aggiorna problema
+	Show Issue	Mostra problema
+	Issue Marks	Contrassegni dei problemi
+	Sheet and 3D Link	Collegamento tavola e 3D
+	PDF to BIM	PDF in BIM
+	Read Casework and Fixtures	Leggi arredi fissi e apparecchi sanitari
+	Frame Walls from Prints	Intelaiatura pareti dalle tavole
+	List Framed Walls	Elenca pareti intelaiate
+	Framed Wall	Parete intelaiata
+	Next Stud	Montante successivo
+	Enter Field Stud	Inserisci montante rilevato in cantiere
+	Apply Shop Drawing	Applica disegno costruttivo
+	Show Framing	Mostra intelaiatura
+	Read Unit Types from Prints	Leggi i tipi di unità dalle tavole
+	Edit Unit Type	Modifica tipo di unità
+	Override Unit Instance	Sovrascrivi istanza di unità
+	Place Unit Instances	Posiziona istanze di unità
+	List Callouts	Elenca richiami
+	Keep Print Set Job	Conserva lavoro del set di tavole
+	Resume Print Set Job	Riprendi lavoro del set di tavole

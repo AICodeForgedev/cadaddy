@@ -30,6 +30,8 @@
 //! double hotel under 1.8x the full hotel's elements fails the run ([`bim_outcome`]). Its
 //! `cpu_cores` (how many cores were busy) is reported, not judged. `--bim` runs only the
 //! pipeline; with `--update-budget` it re-baselines only the `bim` keys (see `docs/bim-perf.md`).
+//! `--mem` (with `--full`) runs only `perfbench` and judges or, with `--update-budget`, records
+//! only the `mem_*` keys, leaving every other key of the platform's budget as it was.
 //!
 //! `cargo xtask perf --vs [--sizes 10000,100000,1000000]`: CADaddy's side of the comparison with
 //! other programs (`docs/perf-vs.md`): writes the 2D plans (`target/perf/vs/plan-<n>.dxf`), then
@@ -123,6 +125,15 @@ pub fn judged(key: &str) -> bool {
     !key.starts_with("cpu_cores@")
 }
 
+/// `budget` with `results` recorded in it (each plus the margin), keeping every other key: all
+/// judged results, or with `mem_only` just the `mem_*` ones (`--mem`).
+pub fn updated(mut budget: BTreeMap<String, f64>, results: &BTreeMap<String, f64>, mem_only: bool) -> BTreeMap<String, f64> {
+    for (k, ms) in results.iter().filter(|(k, _)| judged(k) && (!mem_only || k.starts_with("mem_"))) {
+        budget.insert(k.clone(), (ms * MARGIN * 10.0).round() / 10.0);
+    }
+    budget
+}
+
 /// This machine's key in the budget file.
 pub fn platform() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
@@ -135,8 +146,12 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     let full = rest.contains(&"--full");
     let update = rest.contains(&"--update-budget");
     let bim_only = rest.contains(&"--bim");
-    if let Some(bad) = rest.iter().find(|a| !["--full", "--update-budget", "--bim"].contains(*a)) {
-        return Err(format!("unknown option `{bad}` (perf [--full] [--bim] [--update-budget] | perf --vs [--sizes N,…])"));
+    let mem_only = rest.contains(&"--mem");
+    if let Some(bad) = rest.iter().find(|a| !["--full", "--update-budget", "--bim", "--mem"].contains(*a)) {
+        return Err(format!("unknown option `{bad}` (perf [--full] [--bim | --mem] [--update-budget] | perf --vs [--sizes N,…])"));
+    }
+    if mem_only && (bim_only || !full) {
+        return Err("`--mem` goes with `--full` (memory is measured from 100k objects on) and not with `--bim`".into());
     }
     let sizes = if full { "1000,10000,100000,500000,1000000" } else { "1000,10000" };
     let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), std::path::PathBuf::from);
@@ -153,16 +168,23 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
             return Err("perfbench wrote no results".into());
         }
     }
-    // The assembled BIM pipeline on the synthetic hotel (and twice it with --full).
     let bim_sizes = if full { "full,double" } else { "full" };
-    let bim = dir.join("bim.json");
-    let _ = std::fs::remove_file(&bim);
-    let mut c = crate::cargo();
-    c.args(["run", "-q", "-p", "cadaddy-mcp", "--example", "bimbench", "--", "--sizes", bim_sizes, "--out"]).arg(&bim);
-    let ran = crate::run(c, &format!("bimbench --sizes {bim_sizes}"));
-    let bim_results = read_json(&bim);
-    bim_outcome(ran, &bim_results)?;
-    results.extend(bim_results);
+    if mem_only {
+        results.retain(|k, _| k.starts_with("mem_"));
+        if results.is_empty() {
+            return Err("perfbench measured no memory".into());
+        }
+    } else {
+        // The assembled BIM pipeline on the synthetic hotel (and twice it with --full).
+        let bim = dir.join("bim.json");
+        let _ = std::fs::remove_file(&bim);
+        let mut c = crate::cargo();
+        c.args(["run", "-q", "-p", "cadaddy-mcp", "--example", "bimbench", "--", "--sizes", bim_sizes, "--out"]).arg(&bim);
+        let ran = crate::run(c, &format!("bimbench --sizes {bim_sizes}"));
+        let bim_results = read_json(&bim);
+        bim_outcome(ran, &bim_results)?;
+        results.extend(bim_results);
+    }
     let budget_path = root.join("perf").join("budget.json");
     let mut all: BTreeMap<String, BTreeMap<String, f64>> =
         std::fs::read_to_string(&budget_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
@@ -203,14 +225,14 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     text.push('\n');
     let _ = std::fs::write(&history, text);
     if update {
-        // BIM keys the pipeline no longer emits (a stage renamed or merged) go with the re-baseline.
-        for size in bim_sizes.split(',') {
-            budget.retain(|k, _| results.contains_key(k) || !is_bim_key(k, size));
+        // BIM keys the pipeline no longer emits (a stage renamed or merged) go with the re-baseline;
+        // a `--mem` update ran no pipeline, so it keeps them.
+        if !mem_only {
+            for size in bim_sizes.split(',') {
+                budget.retain(|k, _| results.contains_key(k) || !is_bim_key(k, size));
+            }
         }
-        for (k, ms) in results.iter().filter(|(k, _)| judged(k)) {
-            budget.insert(k.clone(), (ms * MARGIN * 10.0).round() / 10.0);
-        }
-        all.insert(here.clone(), budget);
+        all.insert(here.clone(), updated(budget, &results, mem_only));
         let v: Value = serde_json::to_value(&all).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(budget_path.parent().unwrap_or(root)).map_err(|e| e.to_string())?;
         std::fs::write(&budget_path, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n").map_err(|e| e.to_string())?;
@@ -329,6 +351,48 @@ mod tests {
     fn bim_keys_are_told_by_size() {
         assert!(is_bim_key("bim_build@full", "full") && is_bim_key("elems_mep@bim_full", "full") && is_bim_key("leak_mb@bim_full", "full"));
         assert!(!is_bim_key("bim_build@double", "full") && !is_bim_key("regen@1000", "full") && !is_bim_key("peak_mb@1000", "full"));
+    }
+
+    #[test]
+    fn a_mem_scoped_update_changes_only_the_mem_keys() {
+        let budget: BTreeMap<String, f64> = [
+            ("open_dwg@100000", 900.0),
+            ("regen@1000", 3.0),
+            ("bim_import@bim_full", 1200.0),
+            ("peak_mb@bim_full", 800.0),
+            ("mem_bytes_per_object@100000", 400.0),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let results: BTreeMap<String, f64> = [
+            ("open_dwg@100000", 2000.0),
+            ("regen@1000", 9.0),
+            ("bim_import@bim_full", 5000.0),
+            ("peak_mb@100000", 700.0),
+            ("mem_bytes_per_object@100000", 320.0),
+            ("mem_open_dwg_peak_mb@1000000", 1000.0),
+            ("cpu_cores@bim_full", 8.0),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let after = updated(budget.clone(), &results, true);
+        // The mem keys are recorded (with the margin), new ones added.
+        assert_eq!(after.get("mem_bytes_per_object@100000"), Some(&400.0));
+        assert_eq!(after.get("mem_open_dwg_peak_mb@1000000"), Some(&1250.0));
+        // Every other key is as it was; results without a mem key aren't added.
+        for (k, v) in &budget {
+            if !k.starts_with("mem_") {
+                assert_eq!(after.get(k), Some(v), "{k} changed");
+            }
+        }
+        assert_eq!(after.keys().filter(|k| !k.starts_with("mem_")).count(), 4);
+        assert!(!after.contains_key("peak_mb@100000") && !after.contains_key("cpu_cores@bim_full"));
+        // Unscoped, every judged result is recorded.
+        let all = updated(budget, &results, false);
+        assert_eq!(all.get("open_dwg@100000"), Some(&2500.0));
+        assert!(all.contains_key("peak_mb@100000") && !all.contains_key("cpu_cores@bim_full"));
     }
 
     #[test]

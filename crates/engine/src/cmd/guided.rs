@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{CommandSpec, bad, str_param};
 use crate::{Result, Session};
@@ -32,6 +32,11 @@ const MAX_AUDIT: usize = 50_000;
 const _DEFAULT_WAIT_MS: u64 = 5_000;
 /// Most worklist items kept.
 const MAX_WORKLIST: usize = 10_000;
+/// Verify samples a stage asks about when the job asks (the rest take their default): a spot
+/// check, not every room.
+const VERIFY_ASKED: usize = 3;
+/// Most numbers kept when comparing a stage's result before and after an answer.
+const MAX_DIGEST: usize = 400;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -425,6 +430,31 @@ pub struct GuidedJob {
     /// sheet's legend applies to its own symbols only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheet_spans: Vec<SheetSpan>,
+    /// The devices the devices stage confirmed (type, where, sheet, level, circuit): the
+    /// bim_build stage puts them in the model after it drafts the building spec.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<super::readers::ReadDevice>,
+    /// What the mechanical and plumbing plans read (mep_read), each run on its sheet's level:
+    /// the BIM build puts it into the spec it drafts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mep: Option<cadaddy_walk3d::Mep>,
+    /// Auto mode (`job.start {auto: true}`): every question with a default takes it and the job
+    /// runs on. Off (the default) the job stops at each checkpoint until it is answered.
+    #[serde(default)]
+    pub auto: bool,
+    /// Questions asked even in auto mode: a stage that should find things found none.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub always_ask: BTreeSet<String>,
+    /// Floor to floor (feet) given as an answer, over the sections' and the 10' guess.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storey_ft: Option<f64>,
+    /// The drawing's building spec when each stage started (stages store their own, and the
+    /// readers use it): a stage that runs again starts from the one it had.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    spec_at_start: BTreeMap<StageName, Option<String>>,
+    /// Answered questions of stages being run again, to carry their answers over.
+    #[serde(skip)]
+    carry: Vec<Question>,
     /// The sheet map read off the loaded sheets, in short ([`super::printset::links_summary`]):
     /// callouts resolved, enlarged plans registered, match lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -500,6 +530,13 @@ impl GuidedJob {
             index: None,
             sheet_regions: Vec::new(),
             sheet_spans: Vec::new(),
+            devices: Vec::new(),
+            mep: None,
+            auto: false,
+            always_ask: BTreeSet::new(),
+            storey_ft: None,
+            spec_at_start: BTreeMap::new(),
+            carry: Vec::new(),
             links: None,
         }
     }
@@ -651,7 +688,7 @@ impl GuidedJob {
 // ─── Persistence ────────────────────────────────────────────────────────────
 
 /// Job state is stored in `Drawing.agent` under the key `"guided_job"`.
-fn load_job(s: &Session) -> Result<Option<GuidedJob>> {
+pub(crate) fn load_job(s: &Session) -> Result<Option<GuidedJob>> {
     let agent_text = match &s.doc()?.agent {
         Some(t) if !t.trim().is_empty() => t.clone(),
         _ => return Ok(None),
@@ -700,7 +737,8 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     // Cache the sheet list for later stages (MUST 4).
     job.sheets = Some(sheets_result);
-    job.index = Some(json!({"sheets": classified.get("sheets"), "levels": classified.get("levels")}));
+    job.index =
+        Some(json!({"sheets": classified.get("sheets"), "levels": classified.get("levels"), "level_warnings": classified.get("level_warnings")}));
 
     // MUST 1: Check for empty results.
     // The index: one entry per real sheet (questions are asked once per sheet, not per copy).
@@ -888,12 +926,11 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let levels = levels_result.get("levels").and_then(Value::as_array);
     let level_count = levels.map_or(0, Vec::len);
 
-    // MUST 3: If levels.read found 0 levels, take the sheet index's: the levels the plan titles
-    // name, with elevations where the sections and elevations mark them.
+    // The sheet index's levels come first: the levels the plan titles name, with elevations
+    // where the sections and elevations mark them. levels.read's notes (which may include a
+    // site sheet's spot elevations) are used only when the index has none.
     let mut title_levels: Vec<Value> = Vec::new();
-    if level_count == 0
-        && let Some(index_levels) = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array)
-    {
+    if let Some(index_levels) = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array) {
         for l in index_levels.iter().take(MAX_QUESTIONS_PER_STAGE) {
             let Some(name) = l.get("name").and_then(Value::as_str) else { continue };
             let sheets: Vec<&str> =
@@ -902,7 +939,8 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 "name": name,
                 "sheet": sheets.first().copied().unwrap_or("?"),
                 "sheets": sheets,
-                "source": "title",
+                // Marked on the sections: no title guess to confirm.
+                "source": if l.get("elevation_ft").and_then(Value::as_f64).is_some() { "sheet index" } else { "title" },
                 "elevation_ft": l.get("elevation_ft"),
                 "height_ft": l.get("height_ft"),
             }));
@@ -937,8 +975,35 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         });
     }
     let title_level_count = title_levels.len();
-    let effective_levels = if let Some(lvls) = levels.filter(|l| !l.is_empty()) { lvls.clone() } else { title_levels };
+    let from_index = !title_levels.is_empty();
+    let effective_levels = match levels.filter(|l| !l.is_empty()) {
+        Some(lvls) if title_levels.is_empty() => lvls.clone(),
+        _ => title_levels,
+    };
     let effective_count = effective_levels.len();
+
+    // Readings levels.read refused (they break the levels' order) or set aside (site sheets).
+    let index_warnings = job.index.as_ref().and_then(|i| i.get("level_warnings")).and_then(Value::as_array);
+    let refused: Vec<String> = ["warnings", "ignored"]
+        .iter()
+        .filter_map(|k| levels_result.get(*k).and_then(Value::as_array))
+        .chain(index_warnings)
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .take(MAX_QUESTIONS_PER_STAGE)
+        .collect();
+    if !refused.is_empty() {
+        job.add_finding(
+            StageName::Levels,
+            &format!("{} level reading(s) not used: {}", refused.len(), refused.join("; ")),
+            "Level elevations rise with the level number, and a civil or site sheet's elevations are spot elevations on the site datum",
+            2,
+            vec!["Check the sections' level marks".into(), "Set a level's elevation with levels.set".into()],
+            None,
+            false,
+        );
+    }
 
     // MUST 1: No empty success.
     if effective_count == 0 {
@@ -1196,12 +1261,12 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         Some(json!({"levels_detected": level_count, "levels_from_titles": title_level_count, "effective": effective_count})),
     );
     let mut out = levels_result;
-    if level_count == 0
+    if (level_count == 0 || from_index)
         && effective_count > 0
         && let Some(o) = out.as_object_mut()
     {
-        // The levels the job goes on with: the plan titles' (levels.read found no level notes).
-        o.insert("levels_read".into(), json!(0));
+        // The levels the job goes on with: the sheet index's (the plan titles').
+        o.insert("levels_read".into(), json!(level_count));
         o.insert("levels".into(), json!(effective_levels));
     }
     Ok(out)
@@ -1546,6 +1611,8 @@ struct DeviceCensus {
     /// Every type the loaded legends and schedules list, and how many tables listed them.
     legend_types: std::collections::BTreeSet<String>,
     legend_tables: usize,
+    /// Each device counted in `by_type`, for the model.
+    placed: Vec<super::readers::ReadDevice>,
 }
 
 /// An unlisted tag printed by fewer symbols than this is stray lettering, not a question.
@@ -1621,9 +1688,12 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
         .filter_map(|r| r.key.strip_prefix("symbol:"))
         .map(|t| t.trim().to_string())
         .collect();
+    // Tags an answer said are not devices.
+    let refused: BTreeSet<&str> = job.rules.iter().filter(|r| r.value == "not_device").filter_map(|r| r.key.strip_prefix("tag:")).collect();
     let none = Legend::default();
     for (g, syms) in symbols.iter().enumerate() {
         let legend = legends.get(g).unwrap_or(&none);
+        let circuits: Vec<&TextItem> = texts.get(g).into_iter().flatten().filter(|t| sheet_facts::is_circuit_label(&t.value)).collect();
         let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
         let span = spans.get(g).map_or((0, u64::MAX), |sp| (sp.lo, sp.hi));
         for (tag, at, h) in syms {
@@ -1633,9 +1703,21 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                 c.untagged += 1;
             } else if is_circuit_tag(tag) {
                 c.circuit += 1;
+            } else if refused.contains(tag.as_str()) {
+                *c.not_device.entry("not a device (answered)").or_default() += 1;
             } else {
                 match device_types::tag_verdict(tag, &c.legend_types, &learned, &sheet_numbers) {
-                    TagVerdict::Device(t) => *c.by_type.entry(t).or_default() += 1,
+                    TagVerdict::Device(t) => {
+                        c.placed.push(super::readers::ReadDevice {
+                            tag: t.clone(),
+                            at: [at.x, at.y],
+                            sheet: sheet.clone(),
+                            level: job.level_at([at.x, at.y]).map_or_else(String::new, |r| r.level.clone()),
+                            circuit: super::readers::circuit_beside(&circuits, *at),
+                            handle: h.hex(),
+                        });
+                        *c.by_type.entry(t).or_default() += 1;
+                    }
                     TagVerdict::NotDevice(why) => *c.not_device.entry(why).or_default() += 1,
                     TagVerdict::Unlisted(t) => {
                         let u = c.unlisted.entry(t).or_insert_with(|| UnlistedTag {
@@ -1766,6 +1848,33 @@ fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, d
     }
 }
 
+/// The imported plan sheets of a discipline (`A`, `E`…): their numbers.
+fn plan_sheets(job: &GuidedJob, discipline: &str) -> Vec<String> {
+    let mut out: Vec<String> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.discipline.eq_ignore_ascii_case(discipline) && matches!(r.kind.as_str(), "plan" | "enlarged_plan"))
+        .map(|r| r.number.clone())
+        .collect();
+    out.dedup();
+    out.truncate(MAX_VERIFY_SAMPLES);
+    out
+}
+
+/// Evidence for a stage that read nothing: the plans it read (the first is the sheet to look at).
+fn zero_evidence(plans: &[String]) -> Option<QuestionEvidence> {
+    let first = plans.first()?;
+    Some(QuestionEvidence {
+        crop_png_path: None,
+        sheet: Some(first.clone()),
+        at: None,
+        values: Some(json!({"plans": plans, "found": 0})),
+        handles: Vec::new(),
+        tiled_crops: None,
+        leftovers: Vec::new(),
+    })
+}
+
 /// Run the rooms stage: detect rooms from labels (MUST 1, 4).
 /// Uses the same readers (rooms.list) that work directly on the job's sheets.
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
@@ -1787,11 +1896,20 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
     let duplicates = one_room_per_number(job, &mut rooms_result);
-    if duplicates > 0
-        && let Some(o) = rooms_result.as_object_mut()
-    {
-        o.insert("duplicates_merged".into(), json!(duplicates));
-        if let Some(n) = o.get("rooms").and_then(Value::as_array).map(Vec::len) {
+    let (removed, renamed) = apply_room_answers(job, &mut rooms_result);
+    if let Some(o) = rooms_result.as_object_mut() {
+        if duplicates > 0 {
+            o.insert("duplicates_merged".into(), json!(duplicates));
+        }
+        if removed > 0 {
+            o.insert("removed_by_answers".into(), json!(removed));
+        }
+        if renamed > 0 {
+            o.insert("renamed_by_answers".into(), json!(renamed));
+        }
+        if duplicates + removed > 0
+            && let Some(n) = o.get("rooms").and_then(Value::as_array).map(Vec::len)
+        {
             o.insert("count".into(), json!(n));
         }
     }
@@ -1810,15 +1928,24 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             None,
             false,
         );
-        // Raise a question rather than silently proceeding.
+        // Raise a question rather than silently proceeding. With architectural plans in the set
+        // there should be rooms: that is always asked, never taken as the default.
+        let plans = plan_sheets(job, "A");
         let qid = job.next_qid(StageName::Rooms);
+        if !plans.is_empty() {
+            job.always_ask.insert(qid.clone());
+        }
         let q = Question {
             id: qid,
             stage: StageName::Rooms,
-            question: "No rooms detected on any sheet. Are there room tags on the plans?".into(),
+            question: if plans.is_empty() {
+                "No rooms detected on any sheet. Are there room tags on the plans?".into()
+            } else {
+                format!("No rooms read on the architectural plans ({}). Are there room tags on them?", plans.join(", "))
+            },
             why: "The rooms reader found 0 rooms; the building model needs room boundaries".into(),
             choices: vec!["There should be rooms — re-check".into(), "No room tags on these sheets".into()],
-            evidence: None,
+            evidence: zero_evidence(&plans),
             default: Some("No room tags on these sheets".into()),
             answer_schema: Some(json!({"type": "string"})),
             answer: None,
@@ -1912,6 +2039,34 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     Ok(rooms_result)
 }
 
+/// The rule key of a room answer: `room:<number>|<name>`, upper case.
+fn room_key(number: &str, name: &str) -> String {
+    format!("room:{}|{}", number.trim().to_ascii_uppercase(), name.trim().to_ascii_uppercase())
+}
+
+/// The answers given about rooms ("not a room", a new name): rooms removed and renamed.
+fn apply_room_answers(job: &GuidedJob, rooms_result: &mut Value) -> (usize, usize) {
+    let rules: BTreeMap<&str, &str> = job.rules.iter().filter(|r| r.key.starts_with("room:")).map(|r| (r.key.as_str(), r.value.as_str())).collect();
+    if rules.is_empty() {
+        return (0, 0);
+    }
+    let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) else { return (0, 0) };
+    let key = |r: &Value| room_key(r.get("number").and_then(Value::as_str).unwrap_or(""), r.get("name").and_then(Value::as_str).unwrap_or(""));
+    let before = list.len();
+    list.retain(|r| rules.get(key(r).as_str()) != Some(&"remove"));
+    let removed = before - list.len();
+    let mut renamed = 0;
+    for r in list.iter_mut() {
+        if let Some(name) = rules.get(key(r).as_str()).and_then(|v| v.strip_prefix("name:"))
+            && let Some(o) = r.as_object_mut()
+        {
+            o.insert("name".into(), json!(name));
+            renamed += 1;
+        }
+    }
+    (removed, renamed)
+}
+
 /// One room per number and level: the electrical, mechanical and plumbing plans tag the same
 /// rooms as the architectural plan of their level, so a numbered room read on several sheets of
 /// one level is one room (the architectural sheet's reading, else the first). Rooms with no
@@ -1952,7 +2107,7 @@ fn one_room_per_number(job: &GuidedJob, rooms_result: &mut Value) -> usize {
 
 /// Circuit and panel references end in a dash and a number (`D-1`, `DP1-13`, `B-12`); device
 /// marks don't (`A`, `OS`, `EF`, `L4`, `XA`).
-fn is_circuit_tag(tag: &str) -> bool {
+pub(crate) fn is_circuit_tag(tag: &str) -> bool {
     tag.rsplit_once('-').is_some_and(|(head, n)| !head.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
@@ -2017,6 +2172,18 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         });
     }
 
+    // Every confirmed device goes in the model on its sheet's level (MUST 1): now when there is
+    // a building model, and again by the bim_build stage after it drafts the spec.
+    job.devices = census.placed.clone();
+    let has_model = s.doc().is_ok_and(|d| d.building_spec.as_deref().is_some_and(|t| !t.trim().is_empty()));
+    results["model"] = if job.devices.is_empty() {
+        json!({"inserted": 0})
+    } else if has_model {
+        super::readers::place_devices(s, &job.devices, "guided job").unwrap_or_else(|e| json!({"inserted": 0, "why_not": e.to_string()}))
+    } else {
+        json!({"inserted": 0, "pending": job.devices.len(), "why_not": "no building model yet: the bim_build stage puts them in after drafting it"})
+    };
+
     // ── Secondary: schedules.read for device marks in schedule tables ──
     match s.execute("schedules.read", &json!({})) {
         Ok(v) => {
@@ -2049,8 +2216,11 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
-    // MUST 1: No empty success — 0 devices found is a finding.
-    if total_items == 0 {
+    // MUST 1: No empty success — 0 devices found is a finding. On electrical plans no device
+    // symbol at all is one too, and always asked.
+    let e_plans = plan_sheets(job, "E");
+    let no_symbols = sym_count == 0 && census.unlisted.is_empty() && !e_plans.is_empty();
+    if total_items == 0 || no_symbols {
         let msg = if reader_errors.is_empty() {
             "Devices stage found 0 devices on all sheets".to_string()
         } else {
@@ -2066,13 +2236,20 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             false,
         );
         let qid = job.next_qid(StageName::Devices);
+        if !e_plans.is_empty() {
+            job.always_ask.insert(qid.clone());
+        }
         let q = Question {
             id: qid,
             stage: StageName::Devices,
-            question: "No devices detected. Are there device symbols on the electrical sheets?".into(),
+            question: if e_plans.is_empty() {
+                "No devices detected. Are there device symbols on the electrical sheets?".into()
+            } else {
+                format!("No device symbols counted on the electrical plans ({}). Are there devices on them?", e_plans.join(", "))
+            },
             why: "The device reader found 0 items; the takeoff needs device counts".into(),
             choices: vec!["There should be devices — re-check".into(), "No devices on these sheets".into()],
-            evidence: None,
+            evidence: zero_evidence(&e_plans),
             default: Some("No devices on these sheets".into()),
             answer_schema: Some(json!({"type": "string"})),
             answer: None,
@@ -2254,28 +2431,88 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     Ok(results)
 }
 
-/// Run the MEP read stage: read ductwork/piping from mechanical sheets, generate per-trade
-/// summary and per-sheet zero-result warnings as guidedrun questions.
-fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
-    // Read ductwork with apply.
-    let duct_result = s.execute("ducts.read", &json!({"apply": true}));
-    let (runs, length_ft, terminals, equipment, fittings, trade_summary, warnings) = match &duct_result {
-        Ok(v) => (
-            v["runs"].as_u64().unwrap_or(0),
-            v["length_ft"].as_f64().unwrap_or(0.0),
-            v["terminals"].as_u64().unwrap_or(0),
-            v["equipment"].as_u64().unwrap_or(0),
-            v["fittings"].as_u64().unwrap_or(0),
-            v["trade_summary"].as_str().unwrap_or("").to_string(),
-            v["warnings"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default(),
-        ),
-        Err(e) => {
-            return Err(crate::EngineError::Other(format!("ducts.read failed: {e}")));
-        }
-    };
+/// The job's imported sheets for the print-set readers: where each sits, the handles its
+/// import made, and its discipline, type and printed scale from classify.
+pub(crate) fn job_sheet_refs(job: &GuidedJob) -> Vec<super::printmep::SheetRef> {
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let mut used = vec![false; job.sheet_spans.len()];
+    job.sheet_regions
+        .iter()
+        .map(|r| {
+            let base = |n: &str| n.split('/').next().unwrap_or(n).trim().to_string();
+            let entry = classified.iter().find(|c| base(&text(c, "number")).eq_ignore_ascii_case(&r.number));
+            let discipline = entry
+                .map(|c| text(c, "discipline"))
+                .filter(|d| !d.is_empty())
+                .unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&r.number));
+            let kind = entry.map(|c| {
+                let t = text(c, "type");
+                if t.is_empty() { text(c, "sheet_type") } else { t }
+            });
+            let span = job
+                .sheet_spans
+                .iter()
+                .enumerate()
+                .find(|(i, sp)| !used.get(*i).copied().unwrap_or(true) && base(&sp.sheet).eq_ignore_ascii_case(&r.number));
+            let span = span.map(|(i, sp)| {
+                if let Some(u) = used.get_mut(i) {
+                    *u = true;
+                }
+                (sp.lo, sp.hi)
+            });
+            super::printmep::SheetRef {
+                number: r.number.clone(),
+                level: r.level.clone(),
+                discipline,
+                kind: kind.filter(|k| !k.is_empty()).unwrap_or_else(|| "plan".into()),
+                rect: r.rect,
+                span,
+                scale_text: entry.and_then(|c| c.get("scale")).and_then(Value::as_str).map(str::to_string),
+            }
+        })
+        .collect()
+}
 
-    // Per-trade summary question (MUST 6): present the summary and ask if anything was missed.
-    if runs > 0 {
+/// Drawing units per foot of the job's drawing: the stored spec's, else inches.
+fn job_units_per_foot(s: &Session) -> f64 {
+    match super::bspec::current(s, "mep_read") {
+        Ok((sp, true)) if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 => sp.units_per_foot,
+        _ => 12.0,
+    }
+}
+
+/// Run the MEP read stage: ducts on each mechanical plan and pipes on each plumbing plan of
+/// the set (never on the other sheets), each on its sheet's level; a per-trade summary and a
+/// question for each plan that read nothing.
+fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
+    ensure_sheets_loaded(s, job)?;
+    let refs = job_sheet_refs(job);
+    let upf = job_units_per_foot(s);
+    let read = super::printmep::read_sheets(s.doc()?, &refs, upf, None);
+    let read_sheets: Vec<String> = read.sheets.iter().map(|r| r.sheet.clone()).collect();
+    // A spec already stored (a re-run) takes the reading now; the BIM build puts it into the
+    // spec it drafts in any case.
+    if let Ok((mut sp, true)) = super::bspec::current(s, "mep_read") {
+        super::printmep::merge_mep(&mut sp, read.mep.clone(), &read_sheets);
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    job.mep = Some(read.mep.clone());
+
+    let duct_ft = read.length_ft("duct");
+    let pipe_ft = read.length_ft("pipe");
+    let (duct_runs, pipe_runs) = (read.runs("duct"), read.runs("pipe"));
+    let terminals = read.mep.terminals.len();
+    let equipment = read.mep.equipment.len();
+    let m_sheets = read.sheets.iter().filter(|r| r.trade == "duct").count();
+    let p_sheets = read.sheets.iter().filter(|r| r.trade == "pipe").count();
+    let trade_summary = format!(
+        "Found {duct_runs} duct run(s), {:.0} ft on {m_sheets} mechanical plan(s); {pipe_runs} pipe run(s), {:.0} ft on {p_sheets} plumbing plan(s); {terminals} terminal(s), {equipment} equipment",
+        duct_ft, pipe_ft
+    );
+
+    // Per-trade summary question: present the summary and ask if anything was missed.
+    if duct_runs + pipe_runs > 0 {
         let qid = job.next_qid(StageName::MepRead);
         let q = Question {
             id: qid,
@@ -2283,7 +2520,15 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             question: format!("{trade_summary} — anything not counted?"),
             why: "per-trade summary of MEP elements found".into(),
             choices: vec!["Looks correct".into(), "Missing items".into()],
-            evidence: None,
+            evidence: Some(QuestionEvidence {
+                crop_png_path: None,
+                sheet: None,
+                at: None,
+                values: Some(read.to_json()),
+                handles: Vec::new(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }),
             default: Some("Looks correct".into()),
             answer_schema: None,
             answer: None,
@@ -2295,21 +2540,32 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             st.questions.push(q);
         }
     }
+    if m_sheets + p_sheets == 0 {
+        job.add_finding(
+            StageName::MepRead,
+            "No mechanical or plumbing plans in the set",
+            "ducts are read on M plan sheets and pipes on P plan sheets; classify found none",
+            2,
+            vec!["Check the sheet classification (printset.classify)".into()],
+            None,
+            false,
+        );
+    }
 
-    // Per-sheet zero-result warnings as guidedrun questions with evidence (MUST 3).
-    for (i, w) in warnings.iter().enumerate() {
+    // Each plan that read nothing: a question with the sheet.
+    for r in read.sheets.iter().filter(|r| r.runs == 0).take(MAX_QUESTIONS_PER_STAGE) {
         let qid = job.next_qid(StageName::MepRead);
         let q = Question {
             id: qid,
             stage: StageName::MepRead,
-            question: format!("{w} — is this expected?"),
+            question: format!("{} ({}) read no {} runs — is this expected?", r.sheet, r.level, r.trade),
             why: "zero MEP results on a sheet that should have them".into(),
             choices: vec!["Yes, expected (schedule/detail sheet)".into(), "No, re-check this sheet".into()],
             evidence: Some(QuestionEvidence {
                 crop_png_path: None,
-                sheet: Some(format!("M-sheet warning {}", i + 1)),
+                sheet: Some(r.sheet.clone()),
                 at: None,
-                values: Some(json!({"warning": w, "runs": runs, "equipment": equipment})),
+                values: Some(r.to_json()),
                 handles: Vec::new(),
                 tiled_crops: None,
                 leftovers: Vec::new(),
@@ -2325,15 +2581,20 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             st.questions.push(q);
         }
     }
+    job.audit(
+        "stage_run",
+        "pipeline",
+        None,
+        Some(StageName::MepRead),
+        Some(json!({"duct_runs": duct_runs, "pipe_runs": pipe_runs, "sheets": read_sheets})),
+    );
 
-    Ok(json!({
-        "runs": runs,
-        "length_ft": length_ft,
-        "terminals": terminals,
-        "equipment": equipment,
-        "fittings": fittings,
-        "trade_summary": trade_summary,
-    }))
+    let mut out = read.to_json();
+    out["runs"] = json!(duct_runs + pipe_runs);
+    out["length_ft"] = json!(super::printmep::r1(duct_ft + pipe_ft));
+    out["fittings"] = json!(0);
+    out["trade_summary"] = json!(trade_summary);
+    Ok(out)
 }
 
 /// Run the BIM build stage (MUST 1).
@@ -2383,6 +2644,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
             }
             job.audit("bspec_draft", "pipeline", None, Some(StageName::BimBuild), Some(json!({"stored": true})));
+            // The drafted spec is the plans' alone: the M and P plans' runs go back in, each on
+            // its level, so the build makes them.
+            if let Some(mep) = job.mep.clone().filter(|m| !m.runs.is_empty() || !m.terminals.is_empty() || !m.equipment.is_empty())
+                && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+            {
+                let runs = mep.runs.len();
+                super::printmep::merge_mep(&mut sp, mep, &[]);
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+                job.audit("mep_merged", "pipeline", None, Some(StageName::BimBuild), Some(json!({"runs": runs})));
+            }
         }
         Err(e) => {
             // Spec draft failed — this is a finding, not a silent error.
@@ -2401,7 +2672,22 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     // Use model.build directly — it returns walls/doors/rooms/levels counts.
     // (bim.build wraps model.build but constructs its own result without those counts.)
-    let result = s.execute("model.build", &json!({}))?;
+    let mut result = s.execute("model.build", &json!({}))?;
+    // The devices stage's devices, on their levels (bspec.draft started a new spec).
+    if !job.devices.is_empty() {
+        match super::readers::place_devices(s, &job.devices, "guided job") {
+            Ok(v) => result["devices"] = v,
+            Err(e) => job.add_finding(
+                StageName::BimBuild,
+                &format!("The devices could not be put in the model: {e}"),
+                "the devices stage found devices but the model has none",
+                4,
+                vec!["Run mep.read_devices {preview: false} once the model is built".into()],
+                None,
+                false,
+            ),
+        }
+    }
 
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
@@ -2486,6 +2772,47 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
+    // Q5278: persist devices detected by the Devices stage into sp.tags, AFTER bspec.draft
+    // stored the spec (which would overwrite earlier tag inserts). Only when the stage placed no
+    // devices of its own (`job.devices`, put in the model above): counting both doubled them.
+    if job.devices.is_empty()
+        && let Some(dev_stage) = job.stage(StageName::Devices)
+        && let Some(devices) = dev_stage.result.as_ref().and_then(|r| r.get("devices"))
+        && let Some(items) = devices.get("items").and_then(Value::as_array)
+    {
+        let level_name = super::bspec::current(s, "guided").ok().and_then(|(sp, _)| sp.levels.first().map(|l| l.name.clone())).unwrap_or_default();
+        let mut new_tags = Vec::new();
+        for item in items.iter().take(50_000) {
+            let tag = item.get("tag").and_then(Value::as_str).unwrap_or("unknown");
+            let count = item.get("count").and_then(Value::as_u64).unwrap_or(0);
+            for i in 0..count {
+                let id = format!("device:{tag}:{i}");
+                let kind =
+                    if tag.to_ascii_lowercase().contains("light") || tag.to_ascii_lowercase().contains("lum") { "luminaire" } else { "receptacle" };
+                new_tags.push(cadaddy_walk3d::tags::ElementTag {
+                    id,
+                    kind: kind.into(),
+                    level: level_name.clone(),
+                    at_ft: [0.0, 0.0],
+                    fields: {
+                        let mut f = std::collections::BTreeMap::new();
+                        f.insert("device_type".into(), cadaddy_walk3d::tags::Field { value: tag.to_string(), source: "plan".into() });
+                        f
+                    },
+                    ..Default::default()
+                });
+            }
+        }
+        if !new_tags.is_empty()
+            && let Ok((mut sp, _)) = super::bspec::current(s, "guided")
+        {
+            sp.tags.extend(new_tags);
+            if let Ok(spec_val) = serde_json::to_value(&sp) {
+                let _ = s.execute("bspec.set", &json!({"replace": true, "spec": spec_val}));
+            }
+        }
+    }
+
     job.audit("stage_run", "pipeline", None, Some(StageName::BimBuild), Some(json!({"built_count": built_count})));
     Ok(result)
 }
@@ -2500,9 +2827,21 @@ const DEFAULT_STOREY_FT: f64 = 10.0;
 /// so the build stage asks. Empty when the set has no architectural floor plans (the build reads
 /// whatever was imported, as for one sheet).
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
-    let rank = |l: &str| (l == "R", l.parse::<u32>().unwrap_or(u32::MAX), l.to_string());
-    let mut plans: Vec<&SheetRegion> =
-        job.sheet_regions.iter().filter(|r| r.discipline == "A" && r.kind == "plan" && !r.level.trim().is_empty()).collect();
+    let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
+    let floor_plan = |r: &&SheetRegion| r.kind == "plan" && !r.level.trim().is_empty() && !r.level.eq_ignore_ascii_case("SITE");
+    let mut plans: Vec<&SheetRegion> = job.sheet_regions.iter().filter(floor_plan).filter(|r| r.discipline == "A").collect();
+    if plans.is_empty() {
+        // No architectural floor plans: one discipline's plans give the floors (their
+        // background shows the walls), the one with the most levels.
+        let mut by: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
+        for r in job.sheet_regions.iter().filter(floor_plan) {
+            by.entry(r.discipline.as_str()).or_default().insert(r.level.as_str());
+        }
+        let best = by.iter().filter(|(_, l)| l.len() > 1).max_by_key(|(d, l)| (l.len(), std::cmp::Reverse(*d))).map(|(d, _)| (*d).to_string());
+        if let Some(d) = best {
+            plans = job.sheet_regions.iter().filter(floor_plan).filter(|r| r.discipline == d).collect();
+        }
+    }
     plans.sort_by_key(|r| rank(&r.level));
     plans.dedup_by(|a, b| a.level.eq_ignore_ascii_case(&b.level));
     let index_levels: Vec<Value> = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array).cloned().unwrap_or_default();
@@ -2514,26 +2853,48 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
             .and_then(Value::as_f64)
             .filter(|v| v.is_finite())
     };
+    // Elevations rise with the level: the readings that break that (a site spot elevation
+    // taken for a floor) are no readings; the most that agree win.
+    let reads: Vec<Option<f64>> = plans.iter().map(|r| read(&r.level, "elevation_ft")).collect();
+    let items: Vec<(Option<i32>, f64, u32)> = plans.iter().zip(&reads).map(|(r, e)| (Some(rank(&r.level).0), e.unwrap_or(f64::NAN), 1)).collect();
+    let in_order = cadaddy_walk3d::levels::in_order(&items);
+    let good = |i: usize| reads.get(i).copied().flatten().filter(|_| in_order.get(i).copied().unwrap_or(false));
     let mut out = Vec::new();
     let mut next_elevation = 0.0f64;
-    for r in plans {
+    for (i, r) in plans.iter().enumerate() {
         let name = match r.level.as_str() {
             "R" => "Roof".to_string(),
             l if l.chars().all(|c| c.is_ascii_digit()) => format!("Level {l}"),
             l => l.to_string(),
         };
-        let (elevation, read_elevation) = match read(&r.level, "elevation_ft") {
+        let read_el = reads.get(i).copied().flatten();
+        let out_of_order = read_el.is_some() && good(i).is_none();
+        if i == 0 {
+            // The lowest with no good reading: a storey under the first level read, if any.
+            next_elevation = (1..plans.len()).find_map(|j| good(j).map(|e| e - DEFAULT_STOREY_FT * j as f64)).unwrap_or(0.0);
+        }
+        let (elevation, read_elevation) = match good(i) {
             Some(e) => (e, true),
             None => (next_elevation, false),
         };
-        let (height, read_height) = match read(&r.level, "height_ft").filter(|h| *h > 0.0 && *h <= 100.0) {
+        // A floor to floor given as an answer is the building's.
+        let (height, read_height) = match job.storey_ft.or_else(|| read(&r.level, "height_ft")).filter(|h| *h > 0.0 && *h <= 100.0) {
             Some(h) => (h, true),
             None => (DEFAULT_STOREY_FT, false),
         };
         next_elevation = elevation + height;
         let mut level =
             json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.rect});
-        if !(read_elevation && read_height) {
+        if let (true, Some(e)) = (out_of_order, read_el) {
+            level["guess"] = json!(format!(
+                "{} plan {}: the elevation read for it, {}, breaks the levels' order, so it is not used; stacked at {}",
+                name,
+                r.number,
+                cadaddy_walk3d::feet(e),
+                cadaddy_walk3d::feet(elevation)
+            ));
+        } else if !(read_height && (read_elevation || job.storey_ft.is_some())) {
+            // Stacked at a floor to floor the user gave is no guess either.
             level["guess"] = json!(format!("{} plan {}: floor to floor not read from the sections; {}' assumed", name, r.number, DEFAULT_STOREY_FT));
         }
         out.push(level);
@@ -2541,14 +2902,83 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
     out
 }
 
-/// Run takeoff stage.
+/// The building spec drafted and stored from the open print set, as the job's build stage drafts
+/// it: the set classified (when it isn't yet), its current plan sheets imported side by side and
+/// one level per architectural floor plan. For `bim.build` when there is no spec yet (Q5276: an
+/// import followed by a build must work without a guided job).
+pub(crate) fn draft_from_prints(s: &mut Session) -> Result<Value> {
+    let project = super::printset::get_project_handle(s)?;
+    if project.sheets.iter().all(|e| e.recognised.is_none()) {
+        s.execute("printset.classify", &json!({}))?;
+    }
+    let project = super::printset::get_project_handle(s)?;
+    let index = cadaddy_mepfix::printset::sheet_index(&project);
+    if index.sheets.is_empty() {
+        return Err(bad(
+            "bim.build",
+            format!("no sheets were found in {} — check the folder holds the prints (PDF, DXF or DWG)", project.source_dir),
+        ));
+    }
+    let mut job = GuidedJob::new(&project.source_dir, JobGoal::Bim);
+    job.sheets = Some(s.execute("printset.sheets", &json!({"current": true}))?);
+    job.index = Some(json!({"sheets": index.sheets, "levels": index.levels}));
+    ensure_sheets_loaded(s, &mut job)?;
+    let levels = building_levels(&job);
+    let params = if levels.is_empty() { json!({"store": true}) } else { json!({"store": true, "levels": levels, "stack": true}) };
+    s.execute("bspec.draft", &params)
+}
+
+/// What [`load_plan_pages`] put in the drawing.
+pub(crate) struct PlanPages {
+    /// The sheets in the set's index (0 when classify read none).
+    pub indexed: usize,
+    /// One per imported page: `{sheet, level, discipline, type}`.
+    pub pages: Vec<Value>,
+    /// The building's levels for `bspec.draft` ([`building_levels`]; empty without
+    /// architectural floor plans).
+    pub levels: Vec<Value>,
+    /// The sheet map of the imported pages, in short ([`super::printset::links_summary`]).
+    pub links: Option<Value>,
+}
+
+/// The guided job's classify → plan pages path, for one-call PDF to BIM (`bim.from_pdf`): the
+/// print set `pdfs` (a folder, or one PDF of any number of pages) is opened and classified, and
+/// its current plan sheets (every page when the set has none) are imported into the current
+/// drawing side by side, exactly as the job's build stage does.
+pub(crate) fn load_plan_pages(s: &mut Session, pdfs: &std::path::Path) -> Result<PlanPages> {
+    s.execute("printset.open", &json!({"path": pdfs.to_string_lossy()}))?;
+    // The sheets' files are named from the set's folder (the PDF's own folder for one file).
+    let dir = if pdfs.is_dir() { pdfs.to_path_buf() } else { pdfs.parent().map(std::path::Path::to_path_buf).unwrap_or_default() };
+    let dir = if dir.as_os_str().is_empty() { std::path::PathBuf::from(".") } else { dir };
+    let mut job = GuidedJob::new(&dir.to_string_lossy(), JobGoal::Bim);
+    run_classify(s, &mut job)?;
+    let indexed = job.index.as_ref().and_then(|i| i.get("sheets")).and_then(Value::as_array).map_or(0, Vec::len);
+    ensure_sheets_loaded(s, &mut job)?;
+    let pages = job.sheet_regions.iter().map(|r| json!({"sheet": r.number, "level": r.level, "discipline": r.discipline, "type": r.kind})).collect();
+    let links = job_links(s, &job).map(|l| super::printset::links_summary(&l));
+    Ok(PlanPages { indexed, pages, levels: building_levels(&job), links })
+}
+
+/// Run takeoff stage — calls the model takeoff (by level and trade), not the 2D layer count.
+/// The 2D layer count remains available as an explicit `takeoff.layers` tool.
 fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     ensure_sheets_loaded(s, job)?;
-    let result = s.execute("takeoff", &json!({}))?;
+    let mut result = s.execute("bim.takeoff", &json!({"group_by": "level"}))?;
+
+    // Collect the trades and levels reported by the model takeoff.
+    let lines_arr = result.get("lines").and_then(Value::as_array);
+    let line_count = lines_arr.map_or(0, Vec::len);
+    let trades: std::collections::BTreeSet<String> =
+        lines_arr.into_iter().flat_map(|a| a.iter()).filter_map(|l| l["trade"].as_str().filter(|t| !t.is_empty()).map(str::to_string)).collect();
+    let levels: Vec<Value> = result.get("levels").and_then(Value::as_array).cloned().unwrap_or_default();
+
+    result["summary"] = json!({
+        "line_count": line_count,
+        "trades": trades,
+        "levels": levels,
+    });
 
     // MUST 4: takeoff with 0 lines is a finding, never silently Done.
-    let line_count =
-        result.get("lines").and_then(Value::as_array).map_or(0, Vec::len).max(result.get("count").and_then(Value::as_u64).unwrap_or(0) as usize);
     if line_count == 0 {
         job.add_finding(
             StageName::Takeoff,
@@ -2562,7 +2992,7 @@ fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         );
     }
 
-    job.audit("stage_run", "pipeline", None, Some(StageName::Takeoff), Some(json!({"line_count": line_count})));
+    job.audit("stage_run", "pipeline", None, Some(StageName::Takeoff), Some(json!({"line_count": line_count, "trades": &trades, "levels": &levels})));
     Ok(result)
 }
 
@@ -2590,20 +3020,364 @@ fn run_clash(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
 }
 
-/// Auto-answer questions that have a default value, so the pipeline keeps moving.
-/// Questions are still recorded (for the agent to review later) but don't block.
-fn auto_answer_defaults(stage: &mut StageState) -> usize {
-    let mut answered = 0usize;
-    for q in stage.questions.iter_mut().chain(stage.verify.iter_mut()).chain(stage.completeness.iter_mut()) {
-        if q.answer.is_none()
-            && let Some(ref def) = q.default
-        {
-            q.answer = Some(Value::String(def.clone()));
-            q.answered_by = Some("default".into());
-            answered += 1;
+/// Take the defaults of the questions the job doesn't ask: in auto mode every question with a
+/// default; else only the verify samples after the first [`VERIFY_ASKED`] (a spot check). A
+/// question in [`GuidedJob::always_ask`] is never taken by default. How many were answered.
+fn auto_answer(job: &mut GuidedJob, name: StageName) -> usize {
+    let (auto, always) = (job.auto, std::mem::take(&mut job.always_ask));
+    let mut answered = Vec::new();
+    if let Some(st) = job.stage_mut(name) {
+        let asked = st.questions.iter_mut().chain(st.completeness.iter_mut()).map(|q| (q, !auto));
+        let samples = st.verify.iter_mut().enumerate().map(|(i, q)| (q, !auto && i < VERIFY_ASKED));
+        for (q, asked) in asked.chain(samples) {
+            if q.answer.is_none()
+                && !asked
+                && !always.contains(&q.id)
+                && let Some(def) = &q.default
+            {
+                q.answer = Some(Value::String(def.clone()));
+                q.answered_by = Some("default".into());
+                answered.push(q.id.clone());
+            }
         }
     }
-    answered
+    job.always_ask = always;
+    sync_worklist(job);
+    answered.len()
+}
+
+/// Every question is on the worklist (the app's palette answers from it), resolved once answered
+/// (by default too: Q5278 MUST 4, the worklist agrees with the open questions).
+pub fn sync_worklist(job: &mut GuidedJob) {
+    let mut at: std::collections::HashMap<String, usize> = job.worklist.iter().enumerate().map(|(i, w)| (w.id.clone(), i)).collect();
+    let questions: Vec<Question> =
+        job.stages.iter().flat_map(|st| st.questions.iter().chain(st.verify.iter()).chain(st.completeness.iter())).cloned().collect();
+    for q in &questions {
+        match at.get(&q.id).and_then(|&i| job.worklist.get_mut(i)) {
+            Some(w) => {
+                if let Some(a) = &q.answer
+                    && w.status != "resolved"
+                {
+                    w.status = "resolved".into();
+                    w.resolution = Some(a.clone());
+                }
+            }
+            None => {
+                job.add_question_to_worklist(q);
+                at.insert(q.id.clone(), job.worklist.len().saturating_sub(1));
+            }
+        }
+    }
+}
+
+/// How the job's questions were answered: (by default, by the agent or user, still open).
+fn answer_counts(job: &GuidedJob) -> (usize, usize, usize) {
+    let (mut automatic, mut by_you, mut open) = (0, 0, 0);
+    for q in job.stages.iter().flat_map(|st| st.questions.iter().chain(st.verify.iter()).chain(st.completeness.iter())) {
+        match (&q.answer, q.answered_by.as_deref()) {
+            (None, _) => open += 1,
+            (Some(_), Some("default")) => automatic += 1,
+            _ => by_you += 1,
+        }
+    }
+    (automatic, by_you, open)
+}
+
+/// The job's mode and how its questions were answered, in words too.
+fn answers_value(job: &GuidedJob) -> Value {
+    let (automatic, by_you, open) = answer_counts(job);
+    let mut note = format!("{automatic} answered automatically, {by_you} by you");
+    if open > 0 {
+        note.push_str(&format!(", {open} waiting for an answer"));
+    }
+    if job.auto {
+        note.push_str(" (auto mode: every question with a default took it)");
+    }
+    json!({"mode": if job.auto { "auto" } else { "interactive" }, "automatic": automatic, "by_you": by_you, "open": open, "note": note})
+}
+
+/// A question as `job.next` gives it: with the sheet it is about and its picture, when known.
+fn question_value(job: &GuidedJob, q: &Question) -> Value {
+    let ev = q.evidence.as_ref();
+    let sheet = ev.and_then(|e| e.sheet.clone()).or_else(|| ev.and_then(|e| e.at).and_then(|at| job.level_at(at)).map(|r| r.number.clone()));
+    let crop = ev.and_then(|e| e.crop_png_path.clone().or_else(|| e.leftovers.iter().find_map(|l| l.crop_path.clone())));
+    json!({
+        "id": q.id,
+        "stage": q.stage,
+        "question": q.question,
+        "why": q.why,
+        "choices": q.choices,
+        "evidence": q.evidence,
+        "sheet": sheet,
+        "crop": crop,
+        "default": q.default,
+        "answer_schema": q.answer_schema,
+        "kind": q.kind,
+        "always_asked": job.always_ask.contains(&q.id),
+    })
+}
+
+/// The numbers in a stage's result (counts, lengths, list sizes), flattened to `a.b` keys: what
+/// an answer's re-run is compared by.
+fn digest(v: &Value) -> BTreeMap<String, Value> {
+    fn walk(v: &Value, key: String, depth: usize, out: &mut BTreeMap<String, Value>) {
+        if out.len() >= MAX_DIGEST {
+            return;
+        }
+        match v {
+            Value::Number(_) | Value::Bool(_) if !key.is_empty() => {
+                out.insert(key, v.clone());
+            }
+            Value::Array(a) if !key.is_empty() => {
+                out.insert(format!("{key}.len"), json!(a.len()));
+            }
+            Value::Object(o) if depth < 3 => {
+                for (k, x) in o {
+                    if k.ends_with("_ms") {
+                        continue;
+                    }
+                    walk(x, if key.is_empty() { k.clone() } else { format!("{key}.{k}") }, depth + 1, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(v, String::new(), 0, &mut out);
+    out
+}
+
+/// What changed between two digests of a stage's result.
+fn digest_changes(stage: StageName, before: &BTreeMap<String, Value>, after: &BTreeMap<String, Value>) -> Vec<Value> {
+    let keys: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
+    keys.into_iter()
+        .filter(|k| before.get(*k) != after.get(*k))
+        .take(MAX_VERIFY_SAMPLES * 2)
+        .map(|k| json!({"stage": stage.label(), "what": k, "before": before.get(k), "after": after.get(k)}))
+        .collect()
+}
+
+/// Set `from` and the stages after it to run again: their questions are kept aside so the
+/// answers carry over to the same questions asked again, and their findings are dropped (the
+/// re-run finds them again). The stages reset, with their result digests.
+fn reset_from(job: &mut GuidedJob, from: StageName) -> Vec<(StageName, BTreeMap<String, Value>)> {
+    let mut reset = Vec::new();
+    let mut carry = Vec::new();
+    for st in job.stages.iter_mut().filter(|st| st.name >= from && !matches!(st.status, StageStatus::Skipped | StageStatus::Pending)) {
+        reset.push((st.name, st.result.as_ref().map(digest).unwrap_or_default()));
+        carry.extend(std::mem::take(&mut st.questions));
+        carry.extend(std::mem::take(&mut st.verify));
+        carry.extend(std::mem::take(&mut st.completeness));
+        st.status = StageStatus::Pending;
+        st.result = None;
+        st.error = None;
+    }
+    let names: BTreeSet<StageName> = reset.iter().map(|(n, _)| *n).collect();
+    let dropped: BTreeSet<String> = job.findings.iter().filter(|f| names.contains(&f.stage)).map(|f| f.id.clone()).collect();
+    job.findings.retain(|f| !dropped.contains(&f.id));
+    job.worklist.retain(|w| !dropped.contains(&w.id));
+    job.carry.extend(carry);
+    reset
+}
+
+/// After a stage ran again: the questions it asks again (same kind and text) take their earlier
+/// id and answer; earlier answered questions it doesn't ask again are kept, answered; earlier
+/// open ones leave the worklist.
+fn carry_answers(job: &mut GuidedJob, name: StageName) {
+    let (old, keep): (Vec<Question>, Vec<Question>) = std::mem::take(&mut job.carry).into_iter().partition(|q| q.stage == name);
+    job.carry = keep;
+    if old.is_empty() {
+        return;
+    }
+    let mut renamed: Vec<(String, String)> = Vec::new();
+    let mut used = vec![false; old.len()];
+    if let Some(st) = job.stage_mut(name) {
+        for q in st.questions.iter_mut().chain(st.verify.iter_mut()).chain(st.completeness.iter_mut()) {
+            let found = old.iter().enumerate().find(|(i, o)| !used.get(*i).copied().unwrap_or(true) && o.kind == q.kind && o.question == q.question);
+            if let Some((i, o)) = found {
+                if let Some(u) = used.get_mut(i) {
+                    *u = true;
+                }
+                renamed.push((q.id.clone(), o.id.clone()));
+                q.id = o.id.clone();
+                if o.answer.is_some() {
+                    q.answer = o.answer.clone();
+                    q.answered_by = o.answered_by.clone();
+                    q.answered_at = o.answered_at.clone();
+                }
+            }
+        }
+    }
+    for (new, old_id) in &renamed {
+        job.worklist.retain(|w| w.id != *new);
+        if job.always_ask.remove(new) {
+            job.always_ask.insert(old_id.clone());
+        }
+    }
+    let mut gone = BTreeSet::new();
+    for (o, u) in old.into_iter().zip(used) {
+        if u {
+            continue;
+        }
+        if o.answer.is_some() {
+            if let Some(st) = job.stage_mut(name) {
+                match o.kind {
+                    QuestionKind::Verify => st.verify.push(o),
+                    QuestionKind::Completeness => st.completeness.push(o),
+                    QuestionKind::Doubt => st.questions.push(o),
+                }
+            }
+        } else {
+            gone.insert(o.id);
+        }
+    }
+    job.worklist.retain(|w| !gone.contains(&w.id));
+}
+
+/// A floor to floor height in feet from an answer: `12'-0"`, `11'-6"`, `12 ft`, `12`.
+pub fn parse_feet(text: &str) -> Option<f64> {
+    let t = text.trim();
+    let num = |s: &str| -> Option<f64> {
+        let digits: String = s.trim().chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        digits.parse::<f64>().ok().filter(|v| v.is_finite())
+    };
+    let feet = match t.split_once('\'') {
+        Some((ft, rest)) => {
+            let inches = rest.trim_start_matches(['-', ' ']).split('"').next().and_then(num).unwrap_or(0.0);
+            num(ft)? + inches / 12.0
+        }
+        None => num(t)?,
+    };
+    Some(feet).filter(|f| *f > 0.0 && *f <= 100.0)
+}
+
+/// What an answer changes in the job: the rule or setting it adds (or the sheet facts it
+/// corrects), and the first stage that has to run again for it. `None` when the answer keeps
+/// what the job had, or when nothing in the job reads it.
+fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, String) {
+    let Some(answer) = &q.answer else { return (None, String::new()) };
+    let text = answer.as_str().map(str::trim).unwrap_or("");
+    if !text.is_empty() && q.default.as_deref() == Some(text) {
+        return (None, "kept what the job read".into());
+    }
+    let values = q.evidence.as_ref().and_then(|e| e.values.clone()).unwrap_or(Value::Null);
+    let value = |k: &str| values.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let other = !text.is_empty() && !q.choices.iter().any(|c| c == text);
+    match q.stage {
+        StageName::Classify => {
+            let number = q.evidence.as_ref().and_then(|e| e.sheet.clone()).unwrap_or_default();
+            if q.question.contains("discipline") {
+                // "E (Electrical)", "Yes, E" → E.
+                let letter: String = text.trim_start_matches("Yes,").trim().chars().take_while(char::is_ascii_alphabetic).collect();
+                if letter.is_empty() || letter.eq_ignore_ascii_case("Other") || letter.len() > 2 {
+                    return (None, "recorded; the sheet keeps no discipline".into());
+                }
+                let letter = letter.to_ascii_uppercase();
+                set_sheet_fact(job, &number, "discipline", &letter);
+                return (Some(StageName::Rooms), format!("sheet {number} is discipline {letter}"));
+            }
+            if q.question.contains("names no level") {
+                if text == "Not a level plan" {
+                    set_sheet_fact(job, &number, "type", "other");
+                    return (Some(StageName::Rooms), format!("sheet {number} is not read as a level plan"));
+                }
+                let level = text.trim_start_matches("Level").trim().to_string();
+                if other && !level.is_empty() && level.len() <= 8 {
+                    set_sheet_fact(job, &number, "level", &level);
+                    return (Some(StageName::Rooms), format!("sheet {number} is level {level}"));
+                }
+                return (None, "recorded; answer with the level (\"Level 3\") to move the sheet".into());
+            }
+            (None, "recorded".into())
+        }
+        StageName::Levels if q.question.contains("floor-to-floor") => match parse_feet(text) {
+            Some(ft) => {
+                job.storey_ft = Some(ft);
+                (Some(StageName::BimBuild), format!("floor to floor {ft:.2} ft"))
+            }
+            None => (None, "recorded; give a height like 12'-0\" to build with it".into()),
+        },
+        StageName::Rooms => {
+            if job.always_ask.contains(&q.id) || q.question.starts_with("No rooms") {
+                return if text.starts_with("There should be") {
+                    (Some(StageName::Rooms), "rooms read again".into())
+                } else {
+                    (None, "the plans have no room tags".into())
+                };
+            }
+            let (number, name) = match q.kind {
+                QuestionKind::Verify => (value("number"), value("room")),
+                _ => (value("room_number"), value("room_name")),
+            };
+            let key = room_key(&number, &name);
+            if text.starts_with("Not a room") {
+                job.learn_rule(&key, "remove", &q.id, q.stage);
+                (Some(StageName::Rooms), format!("room {number} '{name}' is not a room"))
+            } else if other && text.len() <= 80 {
+                job.learn_rule(&key, &format!("name:{text}"), &q.id, q.stage);
+                (Some(StageName::Rooms), format!("room {number} is named '{text}'"))
+            } else {
+                (None, "recorded; answer with the room's name to rename it".into())
+            }
+        }
+        StageName::Devices => {
+            if job.always_ask.contains(&q.id) || q.question.starts_with("No device") {
+                return if text.starts_with("There should be") {
+                    (Some(StageName::Devices), "devices counted again".into())
+                } else {
+                    (None, "the sheets have no devices".into())
+                };
+            }
+            if q.question.contains("Unknown symbol") {
+                let tag = value("description");
+                let kind = answer
+                    .get("device_type")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| (other && text != "skip").then(|| text.to_string()));
+                return match kind.filter(|k| !k.trim().is_empty() && k.len() <= 80) {
+                    Some(k) => {
+                        job.learn_rule(&format!("symbol:{tag}"), &format!("device:{k}"), &q.id, q.stage);
+                        (Some(StageName::Devices), format!("symbols tagged '{tag}' count as {k}"))
+                    }
+                    None => (None, format!("symbols tagged '{tag}' stay uncounted")),
+                };
+            }
+            if q.kind == QuestionKind::Verify && text == "Not a device" {
+                let tag = value("tag");
+                job.learn_rule(&format!("tag:{tag}"), "not_device", &q.id, q.stage);
+                return (Some(StageName::Devices), format!("symbols tagged '{tag}' are not devices"));
+            }
+            (None, "recorded".into())
+        }
+        _ => (None, "recorded; nothing in the job reads this answer yet".into()),
+    }
+}
+
+/// Correct a sheet's fact (`discipline`, `level`, `type`) in the job's sheet list and index, and
+/// on its imported rectangle.
+fn set_sheet_fact(job: &mut GuidedJob, number: &str, key: &str, value: &str) {
+    if number.is_empty() {
+        return;
+    }
+    let same = |sh: &Value| sh.get("number").and_then(Value::as_str).is_some_and(|n| n.split('/').next().unwrap_or(n).eq_ignore_ascii_case(number));
+    for list in [job.sheets.as_mut(), job.index.as_mut()].into_iter().flatten() {
+        if let Some(a) = list.get_mut("sheets").and_then(Value::as_array_mut) {
+            for sh in a.iter_mut().filter(|sh| same(sh)) {
+                sh[key] = json!(value);
+                if key == "level" {
+                    sh["level_source"] = json!("answer");
+                }
+            }
+        }
+    }
+    for r in job.sheet_regions.iter_mut().filter(|r| r.number.eq_ignore_ascii_case(number)) {
+        match key {
+            "discipline" => r.discipline = value.to_string(),
+            "level" => r.level = value.to_string(),
+            _ => r.kind = value.to_string(),
+        }
+    }
 }
 
 /// Advance the pipeline: run the current stage and generate questions. A finished job's
@@ -2623,10 +3397,8 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         let stage_name = match job.current_stage() {
             Some(st) if st.status == StageStatus::Paused => {
                 let name = st.name;
-                // Auto-answer defaulted questions so the pipeline can proceed.
-                if let Some(st) = job.stage_mut(name) {
-                    auto_answer_defaults(st);
-                }
+                // Take the defaults of the questions the job doesn't ask.
+                auto_answer(job, name);
                 // Still have unanswered questions with no default — pause.
                 if let Some(st) = job.stage(name)
                     && !st.unanswered().is_empty()
@@ -2661,6 +3433,9 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             &format!("{tag}: {}", stage_name.description()),
         );
         let started = web_time::Instant::now();
+        if let Ok(d) = s.doc() {
+            job.spec_at_start.insert(stage_name, d.building_spec.clone());
+        }
         let result = match stage_name {
             StageName::Import => run_import(s, job),
             StageName::Classify => run_classify(s, job),
@@ -2692,19 +3467,16 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             Ok(v) => {
                 // Check for blocking findings before marking done.
                 let has_blocking = job.findings.iter().any(|f| f.stage == stage_name && f.blocking);
-                // Store result and auto-answer defaults so the pipeline keeps moving.
-                let (all_answered, unanswered_count) = {
-                    let st = match job.stage_mut(stage_name) {
-                        Some(st) => {
-                            st.result = Some(v);
-                            st
-                        }
-                        None => continue,
-                    };
-                    auto_answer_defaults(st);
-                    let ua = st.unanswered().len();
-                    (ua == 0, ua)
-                };
+                // Store the result; questions asked again keep their earlier answers, and the
+                // ones the job doesn't ask take their defaults.
+                match job.stage_mut(stage_name) {
+                    Some(st) => st.result = Some(v),
+                    None => continue,
+                }
+                carry_answers(job, stage_name);
+                auto_answer(job, stage_name);
+                let unanswered_count = job.stage(stage_name).map_or(0, |st| st.unanswered().len());
+                let all_answered = unanswered_count == 0;
                 if all_answered && !has_blocking {
                     if let Some(st) = job.stage_mut(stage_name) {
                         st.status = StageStatus::Done;
@@ -2735,6 +3507,7 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                 }
             }
             Err(e) => {
+                carry_answers(job, stage_name);
                 let msg = e.to_string();
                 // RW2 MUST 2: Error → worklist finding with evidence + actions
                 // so the job never just stops silently.
@@ -2853,6 +3626,8 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let mut job = GuidedJob::new(pdfs, goal);
+    // Interactive unless asked: the job stops at each checkpoint for an answer.
+    job.auto = p.get("auto").and_then(Value::as_bool).unwrap_or(false);
     // The checkpoint: a path, false (none), else the default in the temporary folder.
     job.checkpoint = match p.get("checkpoint") {
         Some(Value::Bool(false)) => None,
@@ -2873,6 +3648,7 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
             st.status = StageStatus::Pending;
         }
         saved.checkpoint = Some(path.clone());
+        saved.auto = job.auto;
         let done: Vec<&str> = saved.stages.iter().filter(|st| st.status == StageStatus::Done).map(|st| st.name.label()).collect();
         let line = format!("job: resumed from {path} ({} stage(s) done: {})", done.len(), done.join(", "));
         let data = json!({"step": "resumed", "checkpoint": path, "stages_done": done});
@@ -2881,18 +3657,19 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
         saved.audit("job_resumed", "pipeline", None, None, Some(json!({"checkpoint": path})));
         advance_pipeline(s, &mut saved)?;
         save_job(s, &saved)?;
-        let mut status = job_status_value(&saved);
+        let stats = model_stats_from_session(s);
+        let mut status = job_status_value(&saved, stats.as_ref());
         status["resumed"] = json!(true);
         return Ok(status);
     }
-    job.audit("job_start", "pipeline", None, None, Some(json!({"pdfs": pdfs, "goal": goal_str})));
+    job.audit("job_start", "pipeline", None, None, Some(json!({"pdfs": pdfs, "goal": goal_str, "auto": job.auto})));
 
     // Run the pipeline until it pauses or finishes.
     advance_pipeline(s, &mut job)?;
     save_job(s, &job)?;
 
-    let status = job_status_value(&job);
-    Ok(status)
+    let stats = model_stats_from_session(s);
+    Ok(job_status_value(&job, stats.as_ref()))
 }
 
 /// `job.next` — return the next question, or "done".
@@ -2907,25 +3684,19 @@ fn cmd_next(s: &mut Session, _p: &Value) -> Result<Value> {
 
     match job.next_question() {
         Some(q) => Ok(json!({
-            "question": {
-                "id": q.id,
-                "stage": q.stage,
-                "question": q.question,
-                "why": q.why,
-                "choices": q.choices,
-                "evidence": q.evidence,
-                "default": q.default,
-                "answer_schema": q.answer_schema,
-                "kind": q.kind,
-            },
+            "question": question_value(&job, q),
             "progress": job.progress(),
             "stage": job.current_stage().map(|s| s.name.label()),
+            "answers": answers_value(&job),
         })),
-        None if job.is_done() => Ok(json!({
-            "done": true,
-            "progress": 1.0,
-            "summary": job_summary(&job),
-        })),
+        None if job.is_done() => {
+            let stats = model_stats_from_session(s);
+            Ok(json!({
+                "done": true,
+                "progress": 1.0,
+                "summary": job_summary(s, &job, stats.as_ref()),
+            }))
+        }
         None => Ok(json!({
             "waiting": true,
             "progress": job.progress(),
@@ -2985,22 +3756,22 @@ fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
         q.answered_at = Some(now_iso());
     }
 
-    // Learn rules from the answer (needs &mut job, so done after the borrow above).
-    {
+    // The answered question (cloned: learning and effects need the job mutably).
+    let q_clone = {
         let stage = job.stages.get(si).ok_or_else(|| bad("job.answer", "internal error"))?;
-        let q = match list {
+        match list {
             "questions" => stage.questions.get(qi),
             "verify" => stage.verify.get(qi),
             "completeness" => stage.completeness.get(qi),
             _ => None,
         }
-        .ok_or_else(|| bad("job.answer", "internal error"))?;
-        // Clone the question data we need for learning.
-        let q_clone = q.clone();
-        learn_from_answer(&mut job, &q_clone);
-    }
+        .cloned()
+        .ok_or_else(|| bad("job.answer", "internal error"))?
+    };
+    learn_from_answer(&mut job, &q_clone);
+    let (rerun_from, effect) = answer_effect(&mut job, &q_clone);
 
-    job.audit("answer", "agent", Some(qid), stage_name, Some(json!({"answer": answer})));
+    job.audit("answer", "agent", Some(qid), stage_name, Some(json!({"answer": answer, "effect": effect})));
 
     // MUST 5 REFRAME: Sync worklist — mark this item resolved.
     if let Some(wi) = job.worklist.iter_mut().find(|w| w.id == *qid) {
@@ -3008,61 +3779,101 @@ fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
         wi.resolution = Some(answer.clone());
     }
 
-    // Check if the stage's questions are all answered — if so, advance.
+    // The answer changes what a stage that already ran read: run it (and the stages after it)
+    // again, then say what changed. A stage that hasn't run yet reads the answer when it does.
+    let mut reset = Vec::new();
+    if let Some(from) = rerun_from {
+        reset = reset_from(&mut job, from);
+        // The built model is in the drawing: stages before the build would read it as more
+        // plan. It goes, and the build runs again after them. The stages start from the
+        // building spec they had (later stages store their own, and the readers use it).
+        if from < StageName::BimBuild && reset.iter().any(|(n, _)| *n == StageName::BimBuild) {
+            s.execute("model.build", &json!({"clear": true}))?;
+        }
+        if let Some(spec) = reset.first().and_then(|(n, _)| job.spec_at_start.get(n)).cloned() {
+            s.doc_mut()?.building_spec = spec;
+        }
+        if !reset.is_empty() {
+            let names: Vec<&str> = reset.iter().map(|(n, _)| n.label()).collect();
+            job.audit("stage_rerun", "pipeline", Some(qid), Some(from), Some(json!({"reason": &effect, "stages": names})));
+        }
+    }
+    // A stage whose questions are all answered is done.
     if let Some(sn) = stage_name
         && let Some(st) = job.stage_mut(sn)
+        && st.status == StageStatus::Paused
+        && st.unanswered().is_empty()
     {
-        if st.unanswered().is_empty() && st.status == StageStatus::Paused {
-            // A rejected verify sample may need to re-run the stage.
-            let needs_rerun = check_rejected_samples(st);
-            if needs_rerun {
-                st.status = StageStatus::Pending; // Re-run the stage.
-                job.audit("stage_rerun", "pipeline", None, Some(sn), Some(json!({"reason": "rejected verify sample"})));
-            } else {
-                st.status = StageStatus::Done;
-                job.audit("stage_done", "pipeline", None, Some(sn), None);
-            }
-        }
-        // Try to advance.
-        advance_pipeline(s, &mut job)?;
+        st.status = StageStatus::Done;
+        job.audit("stage_done", "pipeline", None, Some(sn), None);
     }
+    advance_pipeline(s, &mut job)?;
 
+    let mut changed = Vec::new();
+    for (name, before) in &reset {
+        if let Some(after) = job.stage(*name).and_then(|st| st.result.as_ref()).map(digest) {
+            changed.extend(digest_changes(*name, before, &after));
+        }
+    }
+    // Read again and still nothing: the reader misses what the answer says is there.
+    if q_clone.answer.as_ref().and_then(Value::as_str).is_some_and(|a| a.starts_with("There should be"))
+        && let Some(sn) = stage_name
+        && reset.iter().any(|(n, _)| *n == sn)
+        && !changed.iter().any(|c| c["stage"] == sn.label())
+    {
+        job.add_finding(
+            sn,
+            &format!("{}: read again after your answer and still nothing found", sn.label()),
+            "The answer says the sheets have them; the reader doesn't find them on this set",
+            5,
+            vec!["Look at the sheets named in the question".into()],
+            q_clone.evidence.clone(),
+            false,
+        );
+    }
+    sync_worklist(&mut job);
     save_job(s, &job)?;
 
-    // Return the next question or done.
-    match job.next_question() {
-        Some(q) => Ok(json!({
+    let rerun: Vec<&str> = reset.iter().map(|(n, _)| n.label()).collect();
+    let applies_to = rerun_from.filter(|_| reset.is_empty()).map(StageName::label);
+    let mut out = match job.next_question() {
+        Some(q) => json!({
             "answered": qid,
-            "next": {
-                "id": q.id,
-                "stage": q.stage,
-                "question": q.question,
-                "why": q.why,
-                "choices": q.choices,
-                "evidence": q.evidence,
-                "default": q.default,
-                "kind": q.kind,
-            },
+            "next": question_value(&job, q),
             "progress": job.progress(),
-        })),
-        None if job.is_done() => Ok(json!({
-            "answered": qid,
-            "done": true,
-            "progress": 1.0,
-            "summary": job_summary(&job),
-        })),
-        None => Ok(json!({
+        }),
+        None if job.is_done() => {
+            let stats = model_stats_from_session(s);
+            json!({
+                "answered": qid,
+                "done": true,
+                "progress": 1.0,
+                "summary": job_summary(s, &job, stats.as_ref()),
+            })
+        }
+        None => json!({
             "answered": qid,
             "progress": job.progress(),
             "stage": job.current_stage().map(|s| s.name.label()),
-        })),
+        }),
+    };
+    out["effect"] = json!(effect);
+    out["rerun"] = json!(rerun);
+    out["changed"] = json!(changed);
+    if let Some(stage) = applies_to {
+        out["applies_to"] = json!(stage);
     }
+    out["answers"] = answers_value(&job);
+    Ok(out)
 }
 
 /// `job.status` — current job status (returns `{running: false}` when no job exists).
 fn cmd_status(s: &mut Session, _p: &Value) -> Result<Value> {
     match load_job(s)? {
-        Some(job) => Ok(job_status_value(&job)),
+        Some(job) => {
+            let stats = model_stats_from_session(s);
+            Ok(job_status_value(&job, stats.as_ref()))
+        }
         None => Ok(json!({"running": false, "hint": "no job running — start one with job.start {pdfs, goal}"})),
     }
 }
@@ -3182,6 +3993,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
             "confirmed": confirmed,
             "assumed": assumed,
         },
+        "answers": answers_value(&job),
         "rules_learned": job.rules.len(),
         "audit_entries": job.audit.len(),
     }))
@@ -3189,7 +4001,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-fn job_status_value(job: &GuidedJob) -> Value {
+fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
     let stages: Vec<Value> = job
         .stages
         .iter()
@@ -3206,7 +4018,20 @@ fn job_status_value(job: &GuidedJob) -> Value {
 
     let pending_worklist = job.worklist.iter().filter(|w| w.status == "pending").count();
 
-    json!({
+    // Q5278 MUST 1: levels from the saved model when available.
+    let levels: Value = match stats {
+        Some(ms) => json!(ms.levels),
+        None => index_count(job, "levels").map_or(Value::Null, |n| json!(n)),
+    };
+    let elements: Value = match stats {
+        Some(ms) if !ms.elements_by_kind.is_empty() => {
+            let total: usize = ms.elements_by_kind.values().sum();
+            json!({"total": total, "by_kind": ms.elements_by_kind})
+        }
+        _ => Value::Null,
+    };
+
+    let mut v = json!({
         "job_id": job.id,
         "goal": job.goal,
         "progress": job.progress(),
@@ -3220,9 +4045,16 @@ fn job_status_value(job: &GuidedJob) -> Value {
         "elapsed_ms": job.stages.iter().filter_map(|st| st.elapsed_ms).sum::<u64>(),
         "checkpoint": job.checkpoint.as_ref().filter(|_| !job.is_done()),
         "sheets": index_count(job, "sheets"),
-        "levels": index_count(job, "levels"),
+        "levels": levels,
+        "elements": elements,
+        "answers": answers_value(job),
         "links": job.links,
-    })
+    });
+    // A paused job says what it is asking.
+    if let Some(q) = job.next_question() {
+        v["question"] = question_value(job, q);
+    }
+    v
 }
 
 /// How many sheets or levels the job's sheet index holds (none before classify).
@@ -3230,7 +4062,29 @@ fn index_count(job: &GuidedJob, key: &str) -> Option<usize> {
     job.index.as_ref().and_then(|i| i.get(key)).and_then(Value::as_array).map(Vec::len)
 }
 
-fn job_summary(job: &GuidedJob) -> Value {
+/// Model statistics from the saved drawing (Q5278 MUST 1).
+struct ModelStats {
+    levels: usize,
+    elements_by_kind: BTreeMap<String, usize>,
+}
+
+/// Extract model statistics from the session's saved model.
+fn model_stats_from_session(s: &Session) -> Option<ModelStats> {
+    let (sp, stored) = super::bspec::current(s, "job").ok()?;
+    if !stored {
+        return None;
+    }
+    let d = s.doc().ok()?;
+    let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    for e in d.model.iter().take(500_000) {
+        if let Some(part) = super::wallgen::made_as(e) {
+            *by_kind.entry(part).or_default() += 1;
+        }
+    }
+    Some(ModelStats { levels: sp.levels.len(), elements_by_kind: by_kind })
+}
+
+fn job_summary(s: &Session, job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
     let mut results = json!({});
     for stage in &job.stages {
         if stage.status != StageStatus::Skipped {
@@ -3240,13 +4094,28 @@ fn job_summary(job: &GuidedJob) -> Value {
             });
         }
     }
+    // Q5278 MUST 1: levels and element counts from the saved model, not session-local index.
+    let levels: Value = match stats {
+        Some(ms) => json!(ms.levels),
+        None => index_count(job, "levels").map_or(Value::Null, |n| json!(n)),
+    };
+    let elements: Value = match stats {
+        Some(ms) if !ms.elements_by_kind.is_empty() => {
+            json!(ms.elements_by_kind.iter().map(|(k, v)| json!({"kind": k, "count": v})).collect::<Vec<_>>())
+        }
+        _ => Value::Null,
+    };
     json!({
         "goal": job.goal,
         "stages_completed": job.stages.iter().filter(|s| s.status == StageStatus::Done).count(),
         "total_questions": job.stages.iter().map(|s| s.questions.len() + s.verify.len() + s.completeness.len()).sum::<usize>(),
         "rules_learned": job.rules.len(),
         "sheets": index_count(job, "sheets"),
-        "levels": index_count(job, "levels"),
+        "levels": levels,
+        "elements": elements,
+        "answers": answers_value(job),
+        // From the saved model, not the stage's own count.
+        "devices": s.doc().map_or(Value::Null, super::readers::model_device_counts),
         "results": results,
     })
 }
@@ -3406,12 +4275,12 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("job.start", "Start Guided Job", cmd_start)
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\", resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\", auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
-            .params("{} → {question?: {id, stage, question, why, choices, evidence, default, kind}, done?, progress, stage?}")
+            .params("{} → {question?: {id, stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked}, answers, done?, progress, stage?}")
             .noundo(),
         CommandSpec::new("job.answer", "Answer Job Question", cmd_answer)
-            .params("{id: question id, answer: value} → {answered, next?: question, done?, progress}"),
+            .params("{id: question id, answer: value} → {answered, effect: what the answer changes, rerun: [stages run again], changed: [{stage, what, before, after}], applies_to?: a stage still to run that will read it, next?: question, done?, progress, answers}"),
         CommandSpec::new("job.status", "Job Status", cmd_status)
             .params("{} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, checkpoint?, open_questions, findings, worklist_pending, rules_learned}")
             .noundo(),
@@ -3592,6 +4461,141 @@ mod tests {
         assert_eq!(r["devices"]["count"], json!(15));
         assert_eq!(r["devices"]["unknowns"], json!([]));
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
+    }
+
+    /// A made-up job of two plan sheets side by side, levels 1 and 2, each with a fixture
+    /// schedule (types A, B) and junk tags. Every device the devices stage counts becomes one
+    /// model element on its sheet's level and one BOM unit (Q5271 MUSTS 1, 2, 4, 5).
+    #[test]
+    fn devices_read_reach_the_model_and_the_bom() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets =
+            Some(json!({"sheets": [{"number": "Q-1", "sheet_type": "plan", "level": "1"}, {"number": "Q-2", "sheet_type": "plan", "level": "2"}]}));
+        job.sheets_loaded = true;
+        let mut want_by_level = BTreeMap::new();
+        for (i, (name, level, a, b)) in [("Q-1", "1", 5, 3), ("Q-2", "2", 4, 2)].into_iter().enumerate() {
+            let x0 = 3000.0 * i as f64;
+            let texts: Vec<(&str, f64, f64, f64)> = vec![
+                ("LIGHTING FIXTURE SCHEDULE", x0 + 1000.0, 800.0, 8.0),
+                ("TYPE", x0 + 1000.0, 785.0, 5.0),
+                ("DESCRIPTION", x0 + 1030.0, 785.0, 5.0),
+                ("A", x0 + 1000.0, 772.0, 5.0),
+                ("2X4 LED TROFFER", x0 + 1030.0, 772.0, 5.0),
+                ("B", x0 + 1000.0, 760.0, 5.0),
+                ("LED DOWNLIGHT", x0 + 1030.0, 760.0, 5.0),
+                // The circuit printed beside the first A.
+                ("D-7", x0 + 108.0, 296.0, 2.0),
+            ];
+            let mut syms: Vec<(&str, f64, f64)> = vec![("A", x0 + 990.0, 772.0)]; // the schedule's sample
+            syms.extend((0..a).map(|k| ("A", x0 + 100.0 + 40.0 * f64::from(k), 300.0)));
+            syms.extend((0..b).map(|k| ("B", x0 + 100.0 + 40.0 * f64::from(k), 200.0)));
+            // Junk: a circuit number, the sheet's own number, a switch leg, a keynote, an untagged symbol.
+            syms.extend([
+                ("D-1", x0 + 600.0, 100.0),
+                (name, x0 + 620.0, 100.0),
+                ("s", x0 + 640.0, 100.0),
+                ("12", x0 + 660.0, 100.0),
+                ("", x0 + 680.0, 100.0),
+            ]);
+            let lo = s.doc().map_or(0, |d| d.handseed);
+            add_sheet(&mut s, &texts, &syms);
+            let hi = s.doc().map_or(0, |d| d.handseed);
+            job.sheet_spans.push(SheetSpan { sheet: name.into(), lo, hi });
+            job.sheet_regions.push(SheetRegion {
+                number: name.into(),
+                level: level.into(),
+                discipline: "E".into(),
+                kind: "plan".into(),
+                rect: [x0, 0.0, x0 + 2000.0, 1000.0],
+            });
+            want_by_level.insert(format!("Level {level}"), a + b);
+        }
+        let n: i32 = want_by_level.values().sum();
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r["devices"]["count"], json!(n), "{r:#}");
+        assert_eq!(r["devices"]["by_type"], json!({"A": 9, "B": 5}));
+        // No building model yet: the bim_build stage puts them in.
+        assert_eq!(r["model"]["pending"], json!(n), "{:#}", r["model"]);
+        assert_eq!(job.devices.len(), n as usize);
+        let first = job.devices.iter().find(|d| d.sheet == "Q-1" && d.at == [100.0, 300.0]).unwrap_or_else(|| panic!("{:?}", job.devices));
+        assert_eq!((first.level.as_str(), first.circuit.as_str()), ("1", "D-7"));
+        assert_eq!(job.devices.iter().filter(|d| !d.circuit.is_empty()).count(), 2, "one circuit is printed per sheet");
+
+        let built = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(built["devices"]["inserted"], json!(n), "{:#}", built["devices"]);
+        assert_eq!(built["devices"]["by_level"], json!(want_by_level));
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(d.building_spec.as_deref().unwrap_or("")).unwrap_or_else(|e| panic!("{e}"));
+        let devs: Vec<&cadaddy_walk3d::tags::ElementTag> = sp.tags.iter().filter(|t| t.id.starts_with("device:")).collect();
+        assert_eq!(devs.len(), n as usize);
+        let e = devs.iter().find(|t| t.fields.contains_key("circuit")).unwrap_or_else(|| panic!("no circuit on any device"));
+        assert_eq!((e.fields["circuit"].value.as_str(), e.fields["type"].value.as_str()), ("D-7", "A"));
+        assert!(e.level.starts_with("Level ") && e.fields["sheet"].value.starts_with("Q-"), "{e:?}");
+        assert_eq!(crate::cmd::readers::model_device_counts(d)["count"], json!(n));
+
+        // The BOM: one electrical device line per type and level, with as many units.
+        let bom = s.execute("bim.bom", &json!({"group_by": "level"})).unwrap_or_else(|e| panic!("{e}"));
+        let lines: Vec<&Value> = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").collect();
+        let units = |lv: &str| lines.iter().filter(|l| l["level"] == lv).filter_map(|l| l["net"].as_f64()).sum::<f64>();
+        // The draft spec has one level, `Level 1`; sheet level 2 is named alike.
+        assert_eq!((units("Level 1"), units("Level 2")), (8.0, 6.0), "{lines:#?}");
+        assert!(lines.iter().all(|l| l["trade"] == "electrical"));
+        assert!(lines.iter().any(|l| l["item"] == "device type A" && l["level"] == "Level 2" && l["net"] == json!(4.0)), "{lines:#?}");
+        // The takeoff stage uses the model takeoff (bim.takeoff) and reports a summary.
+        let t = run_takeoff(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let summary = &t["summary"];
+        assert!(summary["line_count"].as_u64().unwrap_or(0) > 0, "takeoff should have lines: {t:#}");
+        assert!(summary["trades"].as_array().is_some_and(|a| a.iter().any(|v| v == "electrical")), "trades should include electrical: {summary:#}");
+        assert!(summary["levels"].as_array().is_some_and(|a| !a.is_empty()), "levels should be reported: {summary:#}");
+        // The device lines in bim.takeoff should account for at least the device count.
+        let device_count: f64 =
+            t["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").filter_map(|l| l["qty"].as_f64()).sum();
+        assert!(device_count >= f64::from(n), "device count {device_count} should be >= {n}: {:#}", t["lines"]);
+        // Built again: the same devices, not twice as many.
+        let again = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(again["devices"]["inserted"], json!(n));
+        assert_eq!(s.doc().map(crate::cmd::readers::model_device_counts).unwrap_or_default()["count"], json!(n));
+    }
+
+    /// `mep.read_devices` on an open drawing: a preview by default, says why it can't insert
+    /// without a model, and with one inserts the devices but never the junk (Q5271 MUSTS 3, 4).
+    #[test]
+    fn read_devices_inserts_into_the_open_model() {
+        let mut s = crate::Session::new();
+        let texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIGHTING FIXTURE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("A", 1000.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1030.0, 772.0, 5.0),
+            ("B", 1000.0, 760.0, 5.0),
+            ("LED DOWNLIGHT", 1030.0, 760.0, 5.0),
+        ];
+        let mut syms: Vec<(&str, f64, f64)> = vec![("A", 990.0, 772.0)]; // the schedule's sample
+        syms.extend((0..3).map(|k| ("A", 100.0 + 40.0 * f64::from(k), 300.0)));
+        syms.extend((0..2).map(|k| ("B", 100.0 + 40.0 * f64::from(k), 200.0)));
+        syms.extend([("ZZ", 600.0, 100.0), ("D-1", 620.0, 100.0), ("s", 640.0, 100.0)]);
+        add_sheet(&mut s, &texts, &syms);
+        let read = |s: &mut crate::Session, p: Value| s.execute("mep.read_devices", &p).unwrap_or_else(|e| panic!("{e}"));
+        let r = read(&mut s, json!({}));
+        assert_eq!((&r["model"]["inserted"], &r["model"]["would_insert"]), (&json!(0), &json!(5)), "{:#}", r["model"]);
+        let r = read(&mut s, json!({"preview": false}));
+        assert_eq!(r["model"]["inserted"], json!(0));
+        let why = r["model"]["why_not"].as_str().unwrap_or_default();
+        assert!(why.contains("no building model") && why.contains("bspec.draft"), "{why}");
+        s.execute("bspec.draft", &json!({"store": true})).unwrap_or_else(|e| panic!("{e}"));
+        let r = read(&mut s, json!({"preview": false}));
+        assert_eq!(r["model"]["inserted"], json!(5), "{:#}", r["model"]);
+        assert_eq!(r["model"]["by_type"], json!({"A": 3, "B": 2}));
+        assert_eq!(r["model"]["not_inserted"]["legend or schedule sample"], json!(2), "{:#}", r["model"]);
+        assert_eq!(r["model"]["not_inserted"]["not in the legend (the guided job asks about it)"], json!(1));
+        // Read again: the same five, not ten; the BOM has five units.
+        let r = read(&mut s, json!({"preview": false}));
+        assert_eq!((&r["model"]["inserted"], &r["model"]["replaced"]), (&json!(5), &json!(5)));
+        let bom = s.execute("bim.bom", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        let units: f64 = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").filter_map(|l| l["net"].as_f64()).sum();
+        assert_eq!(units, 5.0, "{:#}", bom["lines"]);
     }
 
     #[test]
@@ -3847,6 +4851,51 @@ mod tests {
     }
 
     #[test]
+    fn building_levels_keep_their_order_and_come_from_any_floor_plans() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![
+            region("A111", "1", "A", "plan", 0.0),
+            region("A112", "2", "A", "plan", 200.0),
+            region("A113", "3", "A", "plan", 400.0),
+            region("A114", "4", "A", "plan", 600.0),
+            region("C-101", "SITE", "C", "plan", 800.0),
+        ];
+        // A site spot elevation read as the first floor (147'-0") is over Levels 2-4.
+        job.index = Some(json!({"levels": [
+            {"name": "1", "elevation_ft": 147.0},
+            {"name": "2", "elevation_ft": 12.0, "height_ft": 11.0},
+            {"name": "3", "elevation_ft": 23.0, "height_ft": 11.0},
+            {"name": "4", "elevation_ft": 34.0}
+        ]}));
+        let levels = building_levels(&job);
+        let names: Vec<&str> = levels.iter().filter_map(|l| l["name"].as_str()).collect();
+        assert_eq!(names, ["Level 1", "Level 2", "Level 3", "Level 4"], "{levels:?}");
+        let el: Vec<f64> = levels.iter().filter_map(|l| l["elevation_ft"].as_f64()).collect();
+        // The one reading out of order goes; Level 1 sits a storey under Level 2.
+        assert_eq!(el, [12.0 - DEFAULT_STOREY_FT, 12.0, 23.0, 34.0], "{levels:?}");
+        assert!(levels[0]["guess"].as_str().is_some_and(|g| g.contains("147'-0\", breaks the levels' order")), "{levels:?}");
+        assert!(levels[1].get("guess").is_none() && levels[2].get("guess").is_none(), "{levels:?}");
+
+        // Electrical and mechanical plans only: the discipline with the most floors gives the
+        // levels, each on its own plan's region (never one level for the whole drawing).
+        job.index = None;
+        job.sheet_regions = vec![
+            region("E-101", "1", "E", "plan", 0.0),
+            region("E-102", "2", "E", "plan", 200.0),
+            region("E-103", "3", "E", "plan", 400.0),
+            region("E-104", "4", "E", "plan", 600.0),
+            region("M-101", "1", "M", "plan", 800.0),
+            region("M-102", "2", "M", "plan", 1000.0),
+            region("E-001", "SITE", "E", "plan", 1200.0),
+        ];
+        let levels = building_levels(&job);
+        let names: Vec<&str> = levels.iter().filter_map(|l| l["name"].as_str()).collect();
+        assert_eq!(names, ["Level 1", "Level 2", "Level 3", "Level 4"], "{levels:?}");
+        let x0: Vec<f64> = levels.iter().filter_map(|l| l["region"][0].as_f64()).collect();
+        assert_eq!(x0, [0.0, 200.0, 400.0, 600.0]);
+    }
+
+    #[test]
     fn a_room_read_on_several_sheets_of_a_level_is_one_room() {
         let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
         job.sheet_regions = vec![region("E-103", "3", "E", "plan", 0.0), region("A113", "3", "A", "plan", 200.0)];
@@ -3865,5 +4914,207 @@ mod tests {
         let r301: Vec<&Value> = list.iter().filter(|r| r["number"] == "301" && r["level"] == "3").collect();
         assert_eq!(r301.len(), 1);
         assert_eq!(r301[0]["sheet"], "A113");
+    }
+
+    /// A question for the jobask tests.
+    fn ask(job: &mut GuidedJob, stage: StageName, kind: QuestionKind, text: &str, default: Option<&str>) -> String {
+        let id = job.next_qid(stage);
+        let q = Question {
+            id: id.clone(),
+            stage,
+            question: text.into(),
+            why: "test".into(),
+            choices: vec!["Correct".into(), "Not a room".into()],
+            evidence: None,
+            default: default.map(str::to_string),
+            answer_schema: None,
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: kind.clone(),
+        };
+        if let Some(st) = job.stage_mut(stage) {
+            match kind {
+                QuestionKind::Verify => st.verify.push(q),
+                QuestionKind::Completeness => st.completeness.push(q),
+                QuestionKind::Doubt => st.questions.push(q),
+            }
+        }
+        id
+    }
+
+    /// Interactive: doubts and completeness checks wait for an answer, and the first few verify
+    /// samples (a spot check); the rest take their defaults. Auto: every default is taken.
+    #[test]
+    fn an_interactive_job_asks_and_auto_takes_the_defaults() {
+        for auto in [false, true] {
+            let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+            job.auto = auto;
+            ask(&mut job, StageName::Rooms, QuestionKind::Doubt, "label looks like equipment", Some("Keep"));
+            ask(&mut job, StageName::Rooms, QuestionKind::Completeness, "anything not counted?", Some("Count is complete"));
+            for i in 0..5 {
+                ask(&mut job, StageName::Rooms, QuestionKind::Verify, &format!("Room {i} right?"), Some("Correct"));
+            }
+            let taken = auto_answer(&mut job, StageName::Rooms);
+            let open = job.stage(StageName::Rooms).map_or(0, |st| st.unanswered().len());
+            if auto {
+                assert_eq!((taken, open), (7, 0));
+                assert_eq!(answers_value(&job)["note"], "7 answered automatically, 0 by you (auto mode: every question with a default took it)");
+            } else {
+                assert_eq!((taken, open), (5 - VERIFY_ASKED, 2 + VERIFY_ASKED));
+                assert_eq!(answers_value(&job)["mode"], "interactive");
+            }
+            // Every question is on the worklist; the ones taken by default are resolved.
+            let resolved = job.worklist.iter().filter(|w| w.kind == "question" && w.status == "resolved").count();
+            assert_eq!((job.worklist.len(), resolved), (7, taken));
+        }
+    }
+
+    /// MUST 3: no rooms on architectural plans, or no device symbols on electrical plans, is
+    /// asked even in auto mode; with no such plans in the set it takes its default as before.
+    #[test]
+    fn a_stage_that_found_nothing_on_its_plans_is_always_asked() {
+        for with_plans in [true, false] {
+            let mut s = crate::Session::new();
+            let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+            job.auto = true;
+            job.sheets = Some(json!({"sheets": []}));
+            job.sheets_loaded = true;
+            job.sheet_regions = if with_plans {
+                vec![region("A-101", "1", "A", "plan", 0.0), region("E-101", "1", "E", "plan", 200.0), region("A-501", "", "A", "details", 400.0)]
+            } else {
+                vec![region("M-101", "1", "M", "plan", 0.0)]
+            };
+            run_rooms(&mut s, &mut job).expect("rooms");
+            run_devices(&mut s, &mut job).expect("devices");
+            for stage in [StageName::Rooms, StageName::Devices] {
+                auto_answer(&mut job, stage);
+                let open: Vec<String> = job.stage(stage).map(|st| st.unanswered().iter().map(|q| q.question.clone()).collect()).unwrap_or_default();
+                if with_plans {
+                    assert_eq!(open.len(), 1, "{stage:?}: {open:?}");
+                    let sheet = if stage == StageName::Rooms { "A-101" } else { "E-101" };
+                    assert!(open[0].contains(&format!("({sheet})")), "{open:?}");
+                    let q = job.next_question().map(|q| question_value(&job, q)).unwrap_or_default();
+                    assert_eq!(q["always_asked"], true, "{q}");
+                    assert_eq!(q["sheet"], "A-101", "the sheet to look at: {q}");
+                } else {
+                    assert!(open.is_empty(), "{stage:?}: {open:?}");
+                }
+            }
+        }
+    }
+
+    /// A stage run again asks its questions again: the same ones keep their id and answer; an
+    /// answered one it no longer asks is kept; an open one it no longer asks leaves the worklist.
+    #[test]
+    fn answers_carry_over_when_a_stage_runs_again() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let same = ask(&mut job, StageName::Rooms, QuestionKind::Verify, "Room 101 right?", Some("Correct"));
+        let gone = ask(&mut job, StageName::Rooms, QuestionKind::Verify, "Room 102 right?", Some("Correct"));
+        let open = ask(&mut job, StageName::Rooms, QuestionKind::Doubt, "Room 103 looks like equipment", None);
+        sync_worklist(&mut job);
+        for st in job.stages.iter_mut().filter(|st| st.name == StageName::Rooms) {
+            st.status = StageStatus::Paused;
+            st.result = Some(json!({"count": 3}));
+            for q in st.verify.iter_mut() {
+                q.answer = Some(json!("Not a room"));
+                q.answered_by = Some("agent".into());
+            }
+        }
+        job.add_finding(StageName::Rooms, "a finding", "test", 2, Vec::new(), None, false);
+        let reset = reset_from(&mut job, StageName::Rooms);
+        assert_eq!(reset.len(), 1);
+        assert_eq!(reset[0].1.get("count"), Some(&json!(3)));
+        assert!(job.findings.is_empty(), "the re-run finds its findings again");
+        // The re-run asks about room 101 again, and a new question.
+        let new_same = ask(&mut job, StageName::Rooms, QuestionKind::Verify, "Room 101 right?", Some("Correct"));
+        let fresh = ask(&mut job, StageName::Rooms, QuestionKind::Verify, "Room 104 right?", Some("Correct"));
+        sync_worklist(&mut job);
+        carry_answers(&mut job, StageName::Rooms);
+        sync_worklist(&mut job);
+        let st = job.stage(StageName::Rooms).expect("rooms");
+        let q = st.verify.iter().find(|q| q.question == "Room 101 right?").expect("asked again");
+        assert_eq!((q.id.as_str(), q.answer.clone()), (same.as_str(), Some(json!("Not a room"))));
+        assert!(st.verify.iter().any(|q| q.id == gone && q.answer.is_some()), "kept, answered");
+        assert!(st.verify.iter().any(|q| q.id == fresh && q.answer.is_none()));
+        let ids: Vec<&str> = job.worklist.iter().map(|w| w.id.as_str()).collect();
+        assert!(!ids.contains(&open.as_str()) && !ids.contains(&new_same.as_str()), "{ids:?}");
+        assert!(ids.contains(&same.as_str()) && ids.contains(&fresh.as_str()), "{ids:?}");
+        let changes = digest_changes(StageName::Rooms, &reset[0].1, &digest(&json!({"count": 2})));
+        assert_eq!(changes, vec![json!({"stage": "rooms", "what": "count", "before": 3, "after": 2})]);
+    }
+
+    #[test]
+    fn floor_to_floor_answers_are_read_in_feet() {
+        assert_eq!(parse_feet("12'-0\""), Some(12.0));
+        assert_eq!(parse_feet("11'-6\" (typical)"), Some(11.5));
+        assert_eq!(parse_feet("10'-0\" (typical commercial)"), Some(10.0));
+        assert_eq!(parse_feet("13 ft"), Some(13.0));
+        assert_eq!(parse_feet("9.5"), Some(9.5));
+        for bad in ["", "tall", "0", "-3", "1000", "NaN'"] {
+            assert_eq!(parse_feet(bad), None, "{bad}");
+        }
+        // A floor to floor answer is the building's.
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![region("A-101", "1", "A", "plan", 0.0), region("A-102", "2", "A", "plan", 200.0)];
+        job.storey_ft = Some(12.0);
+        let levels = building_levels(&job);
+        assert_eq!(levels.get(1).and_then(|l| l["elevation_ft"].as_f64()), Some(12.0));
+        assert!(levels.iter().all(|l| l.get("guess").is_none()), "{levels:?}");
+    }
+
+    /// Answers about rooms and devices become rules the re-run applies.
+    #[test]
+    fn room_and_device_answers_become_rules() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let room = |n: &str, name: &str| json!({"number": n, "name": name});
+        let mut q = |stage, kind, text: &str, values: Value, answer: Value| {
+            let id = ask(&mut job, stage, kind, text, Some("Correct"));
+            let mut q = job
+                .stages
+                .iter()
+                .flat_map(|st| st.questions.iter().chain(&st.verify).chain(&st.completeness))
+                .find(|q| q.id == id)
+                .cloned()
+                .expect("q");
+            q.evidence = zero_evidence(&[]).or(Some(QuestionEvidence {
+                crop_png_path: None,
+                sheet: None,
+                at: None,
+                values: Some(values),
+                handles: Vec::new(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }));
+            q.answer = Some(answer);
+            answer_effect(&mut job, &q)
+        };
+        let (rerun, _) =
+            q(StageName::Rooms, QuestionKind::Verify, "Room 101 'STAIR' right?", json!({"number": "101", "room": "STAIR"}), json!("Not a room"));
+        assert_eq!(rerun, Some(StageName::Rooms));
+        let (rerun, _) =
+            q(StageName::Rooms, QuestionKind::Verify, "Room 102 'KNG' right?", json!({"number": "102", "room": "KNG"}), json!("KING SUITE"));
+        assert_eq!(rerun, Some(StageName::Rooms));
+        let (rerun, effect) = q(StageName::Rooms, QuestionKind::Verify, "Room 103 right?", json!({"number": "103", "room": "X"}), json!("Correct"));
+        assert_eq!((rerun, effect.as_str()), (None, "kept what the job read"));
+        let (rerun, _) = q(
+            StageName::Devices,
+            QuestionKind::Completeness,
+            "Unknown symbol tag 'XQ' printed by 4 symbols",
+            json!({"description": "XQ"}),
+            json!({"device_type": "occupancy sensor"}),
+        );
+        assert_eq!(rerun, Some(StageName::Devices));
+        let (rerun, _) =
+            q(StageName::Devices, QuestionKind::Verify, "Device 'L4' detected as L4 — type right?", json!({"tag": "L4"}), json!("Not a device"));
+        assert_eq!(rerun, Some(StageName::Devices));
+        let (rerun, _) = q(StageName::Levels, QuestionKind::Doubt, "What is the floor-to-floor height for levels 1, 2?", json!({}), json!("12'-0\""));
+        assert_eq!((rerun, job.storey_ft), (Some(StageName::BimBuild), Some(12.0)));
+
+        let mut rooms = json!({"rooms": [room("101", "STAIR"), room("102", "KNG"), room("103", "X")]});
+        assert_eq!(apply_room_answers(&job, &mut rooms), (1, 1));
+        assert_eq!(rooms["rooms"], json!([room("102", "KING SUITE"), room("103", "X")]));
+        let keys: Vec<(&str, &str)> = job.rules.iter().map(|r| (r.key.as_str(), r.value.as_str())).collect();
+        assert!(keys.contains(&("symbol:XQ", "device:occupancy sensor")) && keys.contains(&("tag:L4", "not_device")), "{keys:?}");
     }
 }

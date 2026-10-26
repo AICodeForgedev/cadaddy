@@ -439,8 +439,10 @@ fn another_programs_bcf_reads_and_junk_is_refused() {
         std::fs::write(&junk, bytes).unwrap();
         assert!(s.execute("bcf.import", &json!({"path": junk.display().to_string()})).is_err());
     }
+    let v4 = cadaddy_engine::cmd::file::zip::write(&[("bcf.version".into(), br#"<Version VersionId="4.0"/>"#.to_vec())]).unwrap();
+    assert!(cadaddy_engine::cmd::bcf::read_bcf(&v4).unwrap_err().contains("4.0"));
     let v3 = cadaddy_engine::cmd::file::zip::write(&[("bcf.version".into(), br#"<Version VersionId="3.0"/>"#.to_vec())]).unwrap();
-    assert!(cadaddy_engine::cmd::bcf::read_bcf(&v3).unwrap_err().contains("3.0"));
+    assert!(cadaddy_engine::cmd::bcf::read_bcf(&v3).unwrap_err().contains("no BCF topics"), "3.0 is read (Q5242); this one is empty");
     let broken = cadaddy_engine::cmd::file::zip::write(&[
         ("x/markup.bcf".into(), b"<Markup><Comment>no topic".to_vec()),
         ("y/markup.bcf".into(), br#"<Markup><Topic Guid="y"><Title>T</Title></Topic><Viewpoints><Viewpoint>v.bcfv</Viewpoint><Snapshot>s.png</Snapshot></Viewpoints></Markup>"#.to_vec()),

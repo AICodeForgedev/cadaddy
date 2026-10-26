@@ -6,6 +6,8 @@
 //! control channel, MCP, CLI and scripts) and interactively through prompts ([`Session::start`],
 //! [`Session::input`], [`Session::cmdline`]) exactly like typing at AutoCAD's command line.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![allow(unknown_lints)] // the lint below exists only in newer clippy
+#![allow(clippy::chunks_exact_to_as_chunks)]
 #![forbid(unsafe_code)]
 
 pub mod activity;
@@ -46,6 +48,7 @@ pub mod sysvars;
 pub mod ucs;
 pub mod undoctl;
 pub mod units;
+pub mod workflows;
 pub mod writefile;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -934,7 +937,7 @@ fn closes(rest: &str) -> bool {
 }
 
 /// The documentation of `spec`'s parameters: `same as `other`` is the other command's.
-fn params_doc(spec: &CommandSpec) -> &'static str {
+pub(crate) fn params_doc(spec: &CommandSpec) -> &'static str {
     let doc = spec.params;
     let same = doc.trim().strip_prefix("same as `").or_else(|| doc.trim().strip_prefix("as ")).and_then(|r| r.split(['`', ' ']).next());
     match same.filter(|id| !id.is_empty()).and_then(find_command) {
@@ -1240,6 +1243,11 @@ pub struct Session {
     pub project: Option<cmd::project::ProjectState>,
     /// The open print-set project (Q310): classification, stages, dashboard.
     pub printset_project: Option<Box<cadaddy_mepfix::printset::PrintSetProject>>,
+    /// The job's framing (Q5103), built from its sheets with the field points and shop drawings applied.
+    pub framing: Option<Box<cmd::framing::Cache>>,
+    /// Where `printset.keep` notes the last print set kept, for the next session's
+    /// `printset.resume {}` (Q5276). `None`: `last-printset.txt` in the settings folder.
+    pub printset_pointer: Option<std::path::PathBuf>,
     /// Rhai scripting engine state (scope and engine; see [`rhai_engine`]).
     pub rhai: rhai_engine::RhaiState,
     /// Sandboxed WASM plug-ins (desktop only; the web version runs in the browser's sandbox).
@@ -1359,6 +1367,8 @@ impl Session {
             drywall_layer_lines: Vec::new(),
             project: None,
             printset_project: None,
+            framing: None,
+            printset_pointer: None,
             rhai: rhai_engine::RhaiState::new(),
             #[cfg(not(target_arch = "wasm32"))]
             plugins: plugins::PluginHost::new(),

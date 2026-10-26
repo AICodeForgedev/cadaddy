@@ -3144,3 +3144,69 @@
 	PDF exported to {path}.	PDF exportado a {path}.
 	Clash detection failed.	La detección de interferencias falló.
 	Import Cost Table	Importar tabla de costos
+	BIM View	Vista BIM
+	Trade Colours	Colores por especialidad
+	Element Properties	Propiedades del elemento
+	Tree	Árbol
+	Colours	Colores
+	Ghost Architecture	Arquitectura transparente
+	Sheet Lines in 3D	Líneas del plano en 3D
+	Nothing is built yet. Use Plans to Model first.	Aún no hay nada construido. Use primero De planos a modelo.
+	Select one element to see its properties.	Seleccione un elemento para ver sus propiedades.
+	Not part of the built model.	No forma parte del modelo construido.
+	Category	Categoría
+	Trade	Especialidad
+	Circuit	Circuito
+	Source	Origen
+	Issues	Incidencias
+	Show on Sheet	Mostrar en el plano
+	Reset Colours	Restablecer colores
+	Architecture	Arquitectura
+	Structure	Estructura
+	Fire Protection	Protección contra incendios
+	Doors and Windows	Puertas y ventanas
+	Supply Air Duct	Conducto de impulsión
+	Return Air Duct	Conducto de retorno
+	Exhaust Air Duct	Conducto de extracción
+	Outside Air Duct	Conducto de aire exterior
+	Duct	Conducto
+	Air Terminals	Difusores
+	Equipment	Equipos
+	Domestic Cold Water	Agua fría sanitaria
+	Domestic Hot Water	Agua caliente sanitaria
+	Sanitary	Saneamiento
+	Vent	Ventilación
+	Storm	Pluviales
+	Gas	Gas
+	Piping	Tuberías
+	Plumbing Fixtures	Aparatos sanitarios
+	Conduit	Conductos eléctricos
+	Cable Tray	Bandejas portacables
+	Electrical Devices	Dispositivos eléctricos
+	Light Fixtures	Luminarias
+	Clash Check	Comprobación de interferencias
+	Fix Clash	Corregir interferencia
+	Model Takeoff	Medición del modelo
+	Show Takeoff Line	Mostrar línea de medición
+	Model Estimate	Presupuesto del modelo
+	New Issue	Nueva incidencia
+	Update Issue	Actualizar incidencia
+	Show Issue	Mostrar incidencia
+	Issue Marks	Marcas de incidencias
+	Sheet and 3D Link	Vínculo entre plano y 3D
+	PDF to BIM	PDF a BIM
+	Read Casework and Fixtures	Leer mobiliario fijo y aparatos sanitarios
+	Frame Walls from Prints	Entramar muros desde planos
+	List Framed Walls	Listar muros entramados
+	Framed Wall	Muro entramado
+	Next Stud	Siguiente montante
+	Enter Field Stud	Introducir montante medido en obra
+	Apply Shop Drawing	Aplicar plano de taller
+	Show Framing	Mostrar entramado
+	Read Unit Types from Prints	Leer tipos de unidad de los planos
+	Edit Unit Type	Editar tipo de unidad
+	Override Unit Instance	Modificar instancia de unidad
+	Place Unit Instances	Colocar instancias de unidad
+	List Callouts	Listar llamadas
+	Keep Print Set Job	Conservar trabajo del juego de planos
+	Resume Print Set Job	Reanudar trabajo del juego de planos

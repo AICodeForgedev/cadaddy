@@ -1402,15 +1402,20 @@ pub fn truth_framing(t: &Truth) -> Framing {
 pub fn read_fixture_framing(seed: u64) -> Result<(Truth, Framing), String> {
     let set = crate::generate(seed)?;
     let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
-    let map = crate::sheet_reader::recognise_fixture_set(&dxf);
-    let ceilings = crate::ceiling_reader::read_ceilings(&dxf, &map, None);
+    Ok((set.truth, read_framing(&dxf)))
+}
+
+/// Frame a print set's DXF sheets (`(file name, bytes)`): sheets → ceilings → structure → walls
+/// → framing, the same chain for a job's prints as for a fixture set.
+pub fn read_framing(dxf: &[(String, Vec<u8>)]) -> Framing {
+    let map = crate::sheet_reader::recognise_fixture_set(dxf);
+    let ceilings = crate::ceiling_reader::read_ceilings(dxf, &map, None);
     let drawings: Vec<(String, Drawing)> =
         dxf.iter().filter_map(|(n, b)| cadaddy_io::read_dxf(b).ok().map(|d| (n.trim_end_matches(".dxf").to_string(), d))).collect();
     let refs: Vec<(String, &Drawing)> = drawings.iter().map(|(n, d)| (n.clone(), d)).collect();
     let structure = crate::struct_reader::read_structure(&map, &refs);
-    let walls = crate::wall_reader::read_walls(&dxf, &map, &ceilings, &structure);
-    let fr = frame(&walls_from_reader(&walls), &posts_from_structure(&structure), &[], &[]);
-    Ok((set.truth, fr))
+    let walls = crate::wall_reader::read_walls(dxf, &map, &ceilings, &structure);
+    frame(&walls_from_reader(&walls), &posts_from_structure(&structure), &[], &[])
 }
 
 // ---- Scoring -----------------------------------------------------------------------------------
