@@ -17,6 +17,12 @@ use super::{El, elements, frame, picks, r3, selector, set_state, state, units_pe
 use crate::cmd::{CommandSpec, bad, bool_or, str_param};
 use crate::{Result, Session};
 
+/// The model's elements that take up room: not its rooms (spaces, Q5291), which every element
+/// inside them would clash with.
+fn solid_elements(d: &Drawing) -> Vec<El> {
+    elements(d).into_iter().filter(|e| e.category != "room").collect()
+}
+
 const CMD: &str = "bim.clash";
 const CMD_STATUS: &str = "bim.clash.status";
 const CMD_FIX: &str = "bim.clash.fix";
@@ -324,7 +330,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let hosted = bool_or(p, "hosted", false);
     let d = s.doc()?;
-    let els = elements(d);
+    let els = solid_elements(d);
     if els.is_empty() {
         return Err(crate::EngineError::Other(
             "bim.clash: the drawing has no built model to check: build it first (model.build or bim.build)".into(),
@@ -477,7 +483,7 @@ fn run_fix(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
     let st = state(d);
     let (_, item) = stored(&st, &id).ok_or_else(|| bad(CMD_FIX, format!("no clash {id}: run bim.clash first")))?;
-    let els = elements(d);
+    let els = solid_elements(d);
     let find = |k: &str| item[k].as_str().and_then(Handle::parse_hex).and_then(|h| els.iter().find(|e| e.handle == h)).cloned();
     let (Some(a), Some(b)) = (find("a"), find("b")) else {
         return Err(bad(CMD_FIX, format!("the elements of {id} are gone: run bim.clash again")));
@@ -567,7 +573,7 @@ fn run_fix(s: &mut Session, p: &Value) -> Result<Value> {
         })?;
         // Check again: the pair, and the moved element against the rest.
         let d = s.doc()?;
-        let els = elements(d);
+        let els = solid_elements(d);
         let (Some(moved), Some(st2)) =
             (els.iter().find(|e| e.handle == mover.handle).cloned(), els.iter().find(|e| e.handle == stays.handle).cloned())
         else {

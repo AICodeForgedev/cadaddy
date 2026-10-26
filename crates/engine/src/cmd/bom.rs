@@ -888,38 +888,91 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         }
     }
 
-    // ── Rooms: count from ceiling room tags ──
+    // ── Rooms (Q5291): the room elements by level — count, floor area, floor finish, ceiling
+    // area by ceiling height; else (a model built before rooms were elements) the room ceilings.
     let mut room_count = 0usize;
-    let mut rooms_by_level: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
-    for e in d.model.iter() {
-        if super::wallgen::made_as(e).as_deref() != Some("ceiling") {
-            continue;
+    let room_els = super::bspec::room_elements(d);
+    let mut rooms_by_level: BTreeMap<String, Vec<&super::bspec::RoomElement>> = BTreeMap::new();
+    for r in &room_els {
+        rooms_by_level.entry(r.level.clone()).or_default().push(r);
+    }
+    for (level, rs) in &rooms_by_level {
+        room_count += rs.len();
+        let handles = |f: &dyn Fn(&super::bspec::RoomElement) -> bool| -> Vec<String> {
+            rs.iter().filter(|r| f(r)).take(500).map(|r| r.handle.hex()).collect()
+        };
+        let line = |item: String, size: String, unit: &'static str, net: f64, elements: Vec<String>| Line {
+            trade: "general",
+            category: "rooms".into(),
+            item,
+            size,
+            unit,
+            net,
+            status: "model",
+            level: level.clone(),
+            elements,
+            ..Line::default()
+        };
+        add(lines, line("Room".into(), String::new(), "each", rs.len() as f64, handles(&|_| true)));
+        let area: f64 = rs.iter().map(|r| r.area_sf).sum();
+        if area > 0.0 {
+            add(lines, line("Room floor area".into(), String::new(), "sq ft", area, handles(&|_| true)));
         }
-        let level = super::bspec::made_level(e).unwrap_or_default();
-        if e.common.xdata.iter().any(|t| t.code == 1000 && t.value.starts_with("room:")) {
-            let entry = rooms_by_level.entry(level).or_insert((0, Vec::new()));
-            entry.0 += 1;
-            if entry.1.len() < 500 {
-                entry.1.push(e.handle.hex());
+        let mut finishes: BTreeMap<String, f64> = BTreeMap::new();
+        let mut heights: BTreeMap<i64, f64> = BTreeMap::new();
+        for r in rs {
+            *finishes.entry(r.finish.clone().unwrap_or_default()).or_default() += r.area_sf;
+            if r.ceiling_ft > 0.0 {
+                *heights.entry((r.ceiling_ft * 12.0).round() as i64).or_default() += r.area_sf;
             }
         }
+        for (finish, sf) in finishes.iter().filter(|(_, sf)| **sf > 0.0) {
+            let (item, size) = if finish.is_empty() {
+                ("Floor finish (not given)".to_string(), String::new())
+            } else {
+                (format!("Floor finish {finish}"), finish.clone())
+            };
+            let f = finish.clone();
+            add(lines, line(item, size, "sq ft", *sf, handles(&|r| r.finish.clone().unwrap_or_default() == f)));
+        }
+        for (inches, sf) in heights.iter().filter(|(_, sf)| **sf > 0.0) {
+            let size = format!("{}'-{}\" ceiling", inches / 12, inches % 12);
+            let h = *inches;
+            add(lines, line("Room ceiling area".into(), size, "sq ft", *sf, handles(&|r| (r.ceiling_ft * 12.0).round() as i64 == h)));
+        }
     }
-    for (level, (count, handles)) in &rooms_by_level {
-        room_count += count;
-        add(
-            lines,
-            Line {
-                trade: "general",
-                category: "rooms".into(),
-                item: "Room".into(),
-                unit: "each",
-                net: *count as f64,
-                status: "model",
-                level: level.clone(),
-                elements: handles.clone(),
-                ..Line::default()
-            },
-        );
+    if room_els.is_empty() {
+        let mut rooms_by_level: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
+        for e in d.model.iter() {
+            if super::wallgen::made_as(e).as_deref() != Some("ceiling") {
+                continue;
+            }
+            let level = super::bspec::made_level(e).unwrap_or_default();
+            if e.common.xdata.iter().any(|t| t.code == 1000 && t.value.starts_with("room:")) {
+                let entry = rooms_by_level.entry(level).or_insert((0, Vec::new()));
+                entry.0 += 1;
+                if entry.1.len() < 500 {
+                    entry.1.push(e.handle.hex());
+                }
+            }
+        }
+        for (level, (count, handles)) in &rooms_by_level {
+            room_count += count;
+            add(
+                lines,
+                Line {
+                    trade: "general",
+                    category: "rooms".into(),
+                    item: "Room".into(),
+                    unit: "each",
+                    net: *count as f64,
+                    status: "model",
+                    level: level.clone(),
+                    elements: handles.clone(),
+                    ..Line::default()
+                },
+            );
+        }
     }
     // Fall back to spec rooms if none found from ceiling tags.
     if room_count == 0 && !sp.rooms.is_empty() {
