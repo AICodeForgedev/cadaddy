@@ -313,6 +313,11 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
             continue;
         }
         let Some(si) = scene.levels.iter().position(|l| l.name == level.name) else { continue };
+        // A roof plan's lines are its edge, parapet and curbs, never a storey's walls: the
+        // exterior build reads the roof off it.
+        if roof_level(&g.rules.levels, &level.name) {
+            continue;
+        }
         let level_start = web_time::Instant::now();
         let pl = plan_level(s.doc()?, g, level, upf, &mut notes);
         let level_ms = level_start.elapsed().as_millis();
@@ -363,6 +368,9 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
             continue;
         }
         let Some(level) = scene.levels.get(grp.level) else { continue };
+        if roof_level(&g.rules.levels, &level.name) {
+            continue;
+        }
         let base = level.base;
         let to_sheet = |p: [f32; 3]| Vec3::new(base.x + f64::from(p[0]) * upf, base.y + f64::from(p[1]) * upf, f64::from(p[2]) * upf);
         let Some(mut m) = mesh(&grp.tris, &to_sheet) else { continue };
@@ -389,6 +397,13 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
         "walls": c("wall"), "doors": c("door"), "windows": c("window"), "floors": c("floor"), "ceilings": c("ceiling"),
         "levels": scene.levels.len(), "removed": removed, "notes": notes,
     }))
+}
+
+/// Whether `name` is the roof of a building with storeys under it (`Roof`, `MAIN ROOF`, `LOW
+/// ROOF`): it holds the roof, its parapets and what stands on it, not walls, a floor or rooms. A
+/// drawing of one level named so is still built as a storey.
+pub(crate) fn roof_level(levels: &[cadaddy_walk3d::Level], name: &str) -> bool {
+    levels.len() > 1 && cadaddy_walk3d::levels::canonical_level(name).is_some_and(|(_, k)| k == cadaddy_walk3d::levels::DatumKind::Roof)
 }
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
