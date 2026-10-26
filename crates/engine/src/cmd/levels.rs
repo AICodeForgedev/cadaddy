@@ -448,13 +448,18 @@ fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
         .map(|l| {
             // A sheet appears on a level if its primary level matches OR its `levels` list
             // contains the level (typical-floor sheets that cover several levels).
-            let sheets: Vec<&str> = sp
+            // Q6018: each entry is {sheet, typical} so the gate can distinguish a
+            // multi-level typical sheet from a single-level floor-specific one.
+            let sheets: Vec<Value> = sp
                 .sheets
                 .iter()
                 .filter(|x| {
                     x.level.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(&l.name)) || x.levels.iter().any(|c| level_name_matches(c, &l.name))
                 })
-                .map(|x| x.number.as_str())
+                .map(|x| {
+                    let typical = x.levels.len() > 1;
+                    json!({"sheet": x.number, "typical": typical})
+                })
                 .collect();
             json!({
                 "name": l.name,
@@ -980,7 +985,7 @@ mod tests {
             r["sheets"].as_array().unwrap().iter().map(|x| (x["number"].as_str().unwrap().to_string(), x["level"].clone())).collect();
         assert_eq!(got, [("M-201".into(), json!("Level 2")), ("M-601".into(), Value::Null), ("P-101".into(), json!("L1"))], "{r}");
         let l = s.execute("levels.list", &json!({})).unwrap();
-        assert_eq!(l["levels"][1]["sheets"], json!(["M-201"]));
+        assert_eq!(l["levels"][1]["sheets"], json!([{"sheet": "M-201", "typical": false}]));
         assert_eq!(l["unattached"], json!(["M-601"]));
         assert!(s.execute("levels.sheets", &json!({ "folder": "/no/such/folder/anywhere" })).is_err());
     }

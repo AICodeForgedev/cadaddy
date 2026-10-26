@@ -1113,12 +1113,16 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(index_levels) = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array) {
         for l in index_levels.iter().take(MAX_QUESTIONS_PER_STAGE) {
             let Some(name) = l.get("name").and_then(Value::as_str) else { continue };
-            let sheets: Vec<&str> =
-                l.get("sheets").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+            // Q6018: sheets may be strings or {sheet, typical} objects.
+            let raw_sheets = l.get("sheets").and_then(Value::as_array);
+            let sheet_name = |v: &Value| v.as_str().map(str::to_string).or_else(|| v.get("sheet").and_then(Value::as_str).map(str::to_string));
+            let first_sheet = raw_sheets.and_then(|a| a.first()).and_then(sheet_name).unwrap_or_else(|| "?".into());
+            // Pass through the sheets as-is (objects with typical flags when present).
+            let sheets_val = l.get("sheets").cloned().unwrap_or(json!([]));
             title_levels.push(json!({
                 "name": name,
-                "sheet": sheets.first().copied().unwrap_or("?"),
-                "sheets": sheets,
+                "sheet": first_sheet,
+                "sheets": sheets_val,
                 // Marked on the sections: no title guess to confirm.
                 "source": if l.get("elevation_ft").and_then(Value::as_f64).is_some() { "sheet index" } else { "title" },
                 "elevation_ft": l.get("elevation_ft"),
