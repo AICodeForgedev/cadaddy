@@ -94,3 +94,78 @@ fn the_devices_stage_replicates_for_typical_floor_sheets() {
     let all = region.all_levels();
     assert_eq!(all, vec!["2", "3", "4"], "typical sheet should cover 3 levels");
 }
+
+// ---- Q6018 typicalfix: a floor-specific sheet is never counted on two levels ----
+
+/// levels.list marks typical sheets with typical:true and floor-specific sheets
+/// with typical:false. A floor-specific sheet (levels empty or single-entry) appears
+/// on exactly one level; a typical sheet (levels with >1 entry) appears on each.
+#[test]
+fn levels_list_typical_flag() {
+    use cadaddy_engine::Session;
+    use serde_json::json;
+
+    let mut s = Session::new();
+    // 4 levels + 2 M sheets: M-201 typical on levels 2-4, M-101 floor-specific on level 1.
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [
+            {"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "region": [0, 0, 1000, 1000]},
+            {"name": "Level 2", "elevation_ft": 12, "height_ft": 12, "region": [2000, 0, 3000, 1000]},
+            {"name": "Level 3", "elevation_ft": 24, "height_ft": 12, "region": [4000, 0, 5000, 1000]},
+            {"name": "Level 4", "elevation_ft": 36, "height_ft": 12, "region": [6000, 0, 7000, 1000]}
+        ],
+        "sheets": [
+            {"number": "M-101", "discipline": "M", "level": "Level 1", "source": "model"},
+            {"number": "M-201", "discipline": "M", "level": "Level 2", "source": "model",
+             "levels": ["Level 2", "Level 3", "Level 4"]}
+        ]
+    });
+    s.execute("bspec.set", &json!({ "replace": true, "spec": spec })).unwrap();
+
+    let l = s.execute("levels.list", &json!({})).unwrap();
+    let levels = l["levels"].as_array().unwrap();
+
+    // Level 1: M-101 only, not typical.
+    let l1_sheets = levels[0]["sheets"].as_array().unwrap();
+    assert_eq!(l1_sheets.len(), 1, "Level 1 should have 1 sheet: {l1_sheets:?}");
+    assert_eq!(l1_sheets[0]["sheet"], json!("M-101"));
+    assert_eq!(l1_sheets[0]["typical"], json!(false));
+
+    // Level 2: M-201 typical.
+    let l2_sheets = levels[1]["sheets"].as_array().unwrap();
+    assert!(l2_sheets.iter().any(|s| s["sheet"] == "M-201" && s["typical"] == json!(true)),
+        "Level 2 should have M-201 typical: {l2_sheets:?}");
+
+    // Level 3: M-201 typical.
+    let l3_sheets = levels[2]["sheets"].as_array().unwrap();
+    assert!(l3_sheets.iter().any(|s| s["sheet"] == "M-201" && s["typical"] == json!(true)),
+        "Level 3 should have M-201 typical: {l3_sheets:?}");
+
+    // Level 4: M-201 typical.
+    let l4_sheets = levels[3]["sheets"].as_array().unwrap();
+    assert!(l4_sheets.iter().any(|s| s["sheet"] == "M-201" && s["typical"] == json!(true)),
+        "Level 4 should have M-201 typical: {l4_sheets:?}");
+
+    // The gate check: count sheets on >1 level where not all occurrences are typical.
+    let mut seen: std::collections::HashMap<String, Vec<bool>> = std::collections::HashMap::new();
+    for lv in levels {
+        for sh in lv["sheets"].as_array().unwrap() {
+            let sid = sh["sheet"].as_str().unwrap().to_string();
+            let typ = sh["typical"].as_bool().unwrap_or(false);
+            seen.entry(sid).or_default().push(typ);
+        }
+    }
+    let dup_untyped: usize = seen.values().filter(|v| v.len() > 1 && !v.iter().all(|t| *t)).count();
+    assert_eq!(dup_untyped, 0, "no floor-specific sheet should appear on two levels: {seen:?}");
+}
+
+/// detect_levels: a title with a level AND a "(TYP.)" note yields only the explicit level.
+#[test]
+fn detect_levels_explicit_level_with_typ_note() {
+    use cadaddy_mepfix::sheet_reader::detect_levels;
+    // A floor-specific title with a parenthetical "TYP." — the level wins, not typical.
+    assert_eq!(detect_levels("SECOND FLOOR MECHANICAL PLAN (TYP.)"), vec!["2"]);
+    assert_eq!(detect_levels("LEVEL 2 PLUMBING PLAN - TYP."), vec!["2"]);
+    assert_eq!(detect_levels("3RD FLOOR POWER PLAN (TYP.)"), vec!["3"]);
+}
