@@ -20,7 +20,7 @@
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Mesh, MeshFace, MeshKind, RawTag, Space};
 use cadaddy_geom::{Bounds2, Polyline, Vec2, Vec3};
 use cadaddy_walk3d::levels::DatumKind;
-use cadaddy_walk3d::{Band, BandKind, BuildingSpec, Cricket, Equipment, Facade, Roof, RoofSlope, Side};
+use cadaddy_walk3d::{Band, BandKind, BuildingSpec, Cricket, Equipment, Facade, LevelParapet, Roof, RoofSlope, Side, ValueStatus};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -35,10 +35,10 @@ const MAX_OBJECTS: usize = 100_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("elev.read", "Read Elevation", run_elev).params(
-            "{region: [x0,y0,x1,y1] (the elevation on the sheet), facade?: north|south|east|west (else from its title), apply?: bool (into the spec: level elevations and heights, window sill and head, the facade's bands, parapets)} → {facade, levels: [{label, name, y, elevation_ft, matched?}], roof_ft?, parapet_ft?, windows: {count, sill_ft, head_ft}, bands: [...], applied}",
+            "{region: [x0,y0,x1,y1] (the elevation on the sheet), facade?: north|south|east|west (else from its title), apply?: bool (into the spec: level elevations and heights, window sill and head, the facade's bands, the roof level's parapet height)} → {facade, levels: [{label, name, y, elevation_ft, matched?}], roof_ft?, parapet_ft?, parapet?: {level, height_ft, applied, roofs (given it), kept (roofs keeping their roof-plan note)}, windows: {count, sill_ft, head_ft}, bands: [...], assumed: [{item, value, assumed, why}], conflicts: [...], applied}",
         ),
         CommandSpec::new("roof.read", "Read Roof Plan", run_roof).params(
-            "{region: [x0,y0,x1,y1] (the roof plan on the sheet), level?: the roof level's name (default: one named ROOF), apply?: bool} → {roofs: [{name, outline, slope?: {down, rise_per_ft}, parapet_ft?}], crickets, equipment, applied}",
+            "{region: [x0,y0,x1,y1] (the roof plan on the sheet), level?: the roof level's name (default: one named ROOF), apply?: bool} → {roofs: [{name, outline, slope?: {down, rise_per_ft, direction_status?}, parapet_ft?, parapet_status?, parapet_from?}], crickets, equipment, assumed: [{item, value, assumed, why}] (each default put in), conflicts: [...] (roof-plan parapet notes the elevation disagrees with), applied}",
         ),
     ]
 }
@@ -180,6 +180,54 @@ fn names_level(label: &str, level: &str) -> bool {
     a == b || (!digits(&a).is_empty() && digits(&a) == digits(&b) && a.chars().next() == b.chars().next())
 }
 
+/// Where a roof's parapet height came from, as stored.
+const FROM_ROOF_PLAN: &str = "roof plan";
+const FROM_ELEVATION: &str = "elevation";
+const FROM_DEFAULT: &str = "default";
+
+/// The parapet height a roof plan gives with no height note and no elevation, feet.
+const DEFAULT_PARAPET_FT: f64 = 3.0;
+const DEFAULT_CRICKET_FT: f64 = 0.5;
+const DEFAULT_EQUIPMENT_FT: f64 = 4.0;
+
+/// One value put in because the drawings don't give it.
+fn assumed(item: &str, value: &str, v: Value, why: &str) -> Value {
+    json!({ "item": item, "value": value, "assumed": v, "why": why })
+}
+
+/// The level an elevation's parapet belongs to: the one named ROOF, else the highest.
+fn roof_level(sp: &BuildingSpec) -> Option<String> {
+    sp.levels
+        .iter()
+        .find(|l| l.name.to_ascii_uppercase().contains("ROOF"))
+        .or_else(|| sp.levels.iter().max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft)))
+        .map(|l| l.name.clone())
+}
+
+/// Gives a roof an elevation's parapet height unless the roof has its own documented one (a
+/// roof-plan note, or a value put in by hand). The documented one stays; a disagreement comes
+/// back as a conflict. Whether the roof took the elevation's value.
+fn settle_parapet(r: &mut Roof, elevation_ft: f64, conflicts: &mut Vec<Value>) -> bool {
+    let documented = r.parapet_ft.is_some() && !ValueStatus::is_default(&r.parapet_status) && r.parapet_from.as_deref() != Some(FROM_ELEVATION);
+    if documented {
+        if let Some(own) = r.parapet_ft.filter(|own| (own - elevation_ft).abs() > 1e-6) {
+            conflicts.push(json!({
+                "roof": r.name,
+                "level": r.level,
+                "roof_plan_ft": own,
+                "elevation_ft": elevation_ft,
+                "kept_ft": own,
+                "message": format!("{}: the roof plan gives a {} parapet, the elevation {}; the roof plan's is kept", r.name, cadaddy_walk3d::feet(own), cadaddy_walk3d::feet(elevation_ft)),
+            }));
+        }
+        return false;
+    }
+    r.parapet_ft = Some(elevation_ft);
+    r.parapet_status = Some(ValueStatus::Read);
+    r.parapet_from = Some(FROM_ELEVATION.into());
+    true
+}
+
 // ---------------- elev.read ----------------
 
 struct LevelLine {
@@ -239,7 +287,17 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
         (Some(e), Some(g)) => e - g,
         _ => (l.y - ground.y) / upf,
     };
-    let base_ft = sp.levels.iter().find(|l| names_level(&label_name(&ground.label), &l.name)).map_or(0.0, |l| l.elevation_ft);
+    let ground_level = sp.levels.iter().find(|l| names_level(&label_name(&ground.label), &l.name));
+    let base_ft = ground_level.map_or(0.0, |l| l.elevation_ft);
+    let mut assumptions = Vec::new();
+    if ground_level.is_none() {
+        assumptions.push(assumed(
+            &label_name(&ground.label),
+            "elevation_ft",
+            json!(0.0),
+            "the ground line's label names no level of the spec, so heights are taken from 0'-0\"",
+        ));
+    }
     let roof = levels.iter().find(|l| has(l, "ROOF")).map(rel);
     let parapet = levels.iter().find(|l| has(l, "PARAPET")).map(rel).zip(roof).map(|(p, r)| p - r).filter(|p| *p > 0.0);
     let mut out_levels = Vec::new();
@@ -355,11 +413,28 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
             sp.exterior.facades.retain(|f| f.side != side);
             sp.exterior.facades.push(Facade { side, bands: bands.clone() });
         }
-        if let Some(pp) = parapet {
-            for r in &mut sp.exterior.roofs {
-                r.parapet_ft.get_or_insert(round(pp));
+    }
+    // The parapet: kept by the roof level, so a roof plan read later finds it too, and given to
+    // the level's roofs now unless they have a documented height of their own.
+    let mut conflicts = Vec::new();
+    let parapet_out = match (parapet.map(round), roof_level(&sp)) {
+        (None, _) => Value::Null,
+        (Some(pp), None) => json!({ "height_ft": pp, "applied": false, "why": "the spec has no levels to put it on" }),
+        (Some(pp), Some(level)) => {
+            let (mut given, mut kept) = (Vec::new(), Vec::new());
+            let mut roofs = sp.exterior.roofs.clone();
+            for r in roofs.iter_mut().filter(|r| r.level.eq_ignore_ascii_case(&level)) {
+                if settle_parapet(r, pp, &mut conflicts) { given.push(r.name.clone()) } else { kept.push(r.name.clone()) }
             }
+            if apply {
+                sp.exterior.roofs = roofs;
+                sp.exterior.parapets.retain(|x| !x.level.eq_ignore_ascii_case(&level));
+                sp.exterior.parapets.push(LevelParapet { level: level.clone(), height_ft: pp, facade: side });
+            }
+            json!({ "level": level, "height_ft": pp, "applied": apply, "roofs": given, "kept": kept })
         }
+    };
+    if apply {
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
     Ok(json!({
@@ -367,8 +442,11 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
         "levels": out_levels,
         "roof_ft": roof.map(|r| round(base_ft + r)),
         "parapet_ft": parapet.map(round),
+        "parapet": parapet_out,
         "windows": { "count": sills.len(), "sill_ft": sill, "head_ft": head },
         "bands": serde_json::to_value(&bands).unwrap_or(Value::Null),
+        "assumed": assumptions,
+        "conflicts": conflicts,
         "applied": apply,
     }))
 }
@@ -408,6 +486,7 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
     let mut equipment = Vec::new();
     let mut crickets = Vec::new();
     let mut taken: Vec<usize> = Vec::new();
+    let mut assumptions = Vec::new();
     for (_, t, at, _) in &notes {
         let cricket = word(t, &["CRICKET"]);
         if !cricket && !word(t, &equipment_words) {
@@ -424,13 +503,22 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let outline: Vec<[f64; 2]> = q.iter().map(|p| [p.x, p.y]).collect();
+        let height = feet_inches(&up(t)).map(|i| i / 12.0);
+        let status = Some(if height.is_some() { ValueStatus::Read } else { ValueStatus::Default });
         if cricket {
-            let h = feet_inches(&up(t)).map_or(0.5, |i| i / 12.0);
-            crickets.push(Cricket { level: level.clone(), outline, height_ft: h });
+            let h = height.unwrap_or(DEFAULT_CRICKET_FT);
+            let item = format!("Cricket {}", crickets.len() + 1);
+            if height.is_none() {
+                assumptions.push(assumed(&item, "height_ft", json!(h), "its note gives no height; 6\" assumed"));
+            }
+            crickets.push(Cricket { level: level.clone(), outline, height_ft: h, height_status: status });
         } else {
-            let h = feet_inches(&up(t)).map_or(4.0, |i| i / 12.0);
+            let h = height.unwrap_or(DEFAULT_EQUIPMENT_FT);
             let name = t.split_whitespace().next().unwrap_or("EQUIP").to_string();
-            equipment.push(Equipment { name, level: level.clone(), outline, height_ft: h });
+            if height.is_none() {
+                assumptions.push(assumed(&name, "height_ft", json!(h), "its note gives no height (H=); 4'-0\" assumed"));
+            }
+            equipment.push(Equipment { name, level: level.clone(), outline, height_ft: h, height_status: status });
         }
         taken.push(i);
     }
@@ -438,6 +526,8 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
     let candidates: Vec<usize> =
         (0..all.len()).filter(|i| !taken.contains(i) && all.get(*i).is_some_and(|(q, _)| area(q) >= 100.0 * upf * upf)).collect();
     let mut roofs = Vec::new();
+    let mut conflicts = Vec::new();
+    let elevation_parapet = sp.exterior.level_parapet(&level);
     for &i in &candidates {
         let Some((q, _)) = all.get(i) else { continue };
         let outer = candidates.iter().any(|&j| j != i && all.get(j).is_some_and(|(o, _)| area(o) > area(q) && inside(q, o)));
@@ -455,10 +545,25 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
             }
         });
         let parapet_note = named(q, &["PARAPET"]);
-        let parapet = match (&parapet_note, inner) {
-            (Some(t), _) => Some(feet_inches(&up(t)).map_or(3.0, |i| i / 12.0)),
-            (None, Some(_)) => Some(3.0),
-            _ => None,
+        let noted = parapet_note.as_deref().and_then(|t| feet_inches(&up(t))).map(|i| i / 12.0);
+        let name = format!("Roof {}", roofs.len() + 1);
+        // A height noted on the roof plan; else the elevation's; else a default when the plan
+        // draws one (a note without a height, or the inner line).
+        let (parapet, parapet_status, parapet_from) = match (noted, parapet_note.is_some() || inner.is_some()) {
+            (Some(h), _) => (Some(h), Some(ValueStatus::Read), Some(FROM_ROOF_PLAN.to_string())),
+            (None, drawn) if drawn || elevation_parapet.is_some() => match elevation_parapet {
+                Some(h) => (Some(h), Some(ValueStatus::Read), Some(FROM_ELEVATION.to_string())),
+                None => {
+                    assumptions.push(assumed(
+                        &name,
+                        "parapet_ft",
+                        json!(DEFAULT_PARAPET_FT),
+                        "the roof plan draws a parapet with no height note and no elevation gives one; 3'-0\" assumed",
+                    ));
+                    (Some(DEFAULT_PARAPET_FT), Some(ValueStatus::Default), Some(FROM_DEFAULT.to_string()))
+                }
+            },
+            _ => (None, None, None),
         };
         // Its slope: the pitch note inside, and the arrow nearest it (downhill to its head).
         let note = notes.iter().find(|(_, t, at, _)| cadaddy_geom::point_in_polygon(q, *at) && pitch(t).is_some());
@@ -474,13 +579,39 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
             let (a, b) = (arrow.0, arrow.1);
             // The head: the end other short strokes meet.
             let strokes = |p: Vec2| segs.iter().filter(|(c, e, _)| c.dist(*e) < a.dist(b) * 0.3 && (c.dist(p) < 1e-6 || e.dist(p) < 1e-6)).count();
-            let (tail, head) = if strokes(a) > strokes(b) { (b, a) } else { (a, b) };
+            let (sa, sb) = (strokes(a), strokes(b));
+            let (tail, head) = if sa > sb { (b, a) } else { (a, b) };
             let dir = head - tail;
             let len = dir.len().max(1e-12);
-            Some(RoofSlope { down: [dir.x / len, dir.y / len], rise_per_ft: rise })
+            let down = [dir.x / len, dir.y / len];
+            // No head to tell the ends apart: downhill to the end drawn last.
+            let direction_status = Some(if sa == sb {
+                assumptions.push(assumed(
+                    &name,
+                    "slope.down",
+                    json!(down),
+                    "the slope arrow's head can't be told from its tail; downhill taken to the end drawn last",
+                ));
+                ValueStatus::Default
+            } else {
+                ValueStatus::Read
+            });
+            Some(RoofSlope { down, rise_per_ft: rise, direction_status })
         });
-        let name = format!("Roof {}", roofs.len() + 1);
-        roofs.push(Roof { name, level: level.clone(), outline: q.iter().map(|p| [p.x, p.y]).collect(), slope, parapet_ft: parapet, assembly: None });
+        let mut roof = Roof {
+            name,
+            level: level.clone(),
+            outline: q.iter().map(|p| [p.x, p.y]).collect(),
+            slope,
+            parapet_ft: parapet,
+            parapet_status,
+            parapet_from,
+            assembly: None,
+        };
+        if let Some(h) = elevation_parapet {
+            settle_parapet(&mut roof, h, &mut conflicts);
+        }
+        roofs.push(roof);
     }
     if roofs.is_empty() {
         return Err(bad("roof.read", "no roof outline found in the region (a closed outline of 100 sq ft or more)"));
@@ -491,6 +622,8 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
         "roofs": serde_json::to_value(&roofs).unwrap_or(Value::Null),
         "crickets": serde_json::to_value(&crickets).unwrap_or(Value::Null),
         "equipment": serde_json::to_value(&equipment).unwrap_or(Value::Null),
+        "assumed": assumptions,
+        "conflicts": conflicts,
         "applied": apply,
     });
     if apply {
@@ -589,7 +722,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         {
             roofs += 1;
         }
-        if let Some(h) = r.parapet_ft {
+        if let Some(h) = r.parapet_ft.or_else(|| sp.exterior.level_parapet(&r.level)) {
             // Round the outline, 8" thick inside it, up to the parapet over the high point.
             let high = poly.iter().map(|p| top(*p)).fold(f64::NEG_INFINITY, f64::max) + h * upf;
             let t = 8.0 / 12.0 * upf;
