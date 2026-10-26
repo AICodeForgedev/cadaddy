@@ -96,6 +96,9 @@ pub struct BuildingSpec {
     /// Stairs and ramps between the levels.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stairs: Vec<Stair>,
+    /// Elevator hoistways with their pits (`arch.read`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elevators: Vec<Hoistway>,
     /// Facades, roofs and what stands on them, from the elevations and the roof plan.
     #[serde(default, skip_serializing_if = "Exterior::is_empty")]
     pub exterior: Exterior,
@@ -516,7 +519,7 @@ fn is_six(v: &f64) -> bool {
 }
 
 /// A room, found by its tag text (`name`, or `number`) on the plan.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Room {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -529,6 +532,12 @@ pub struct Room {
     pub ceiling_ft: Option<f64>,
     #[serde(default)]
     pub materials: Surfaces,
+    /// Base finish from the room finish schedule (`RB-1 4" RUBBER BASE`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// Device plate colour from its wall finish (the finish legend).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plates: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -761,11 +770,53 @@ impl ScheduleRow {
     }
 }
 
-/// A door or window tag on a plan: its mark and where it is (sheet units).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A door or window tag on a plan: its mark and where it is (sheet units). Read off the
+/// architectural plans (`arch.read`), a door's tag also says how it swings: its hand, the rooms
+/// it swings into and from, its hinge and latch points (sheet units) and whether its hardware
+/// has a card reader; and where it was read (`source` sheet, `status`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct OpeningTag {
     pub mark: String,
     pub at: [f64; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
+    /// `LH`, `RH`, `LHR` or `RHR`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hand: Option<String>,
+    /// Room numbers either side: the one it swings into, the one it swings from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swings_into: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_room: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hinge: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latch: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub card_reader: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// `drawing`, `schedule` or `guess`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+/// An elevator hoistway read off the plans: its box (sheet units, on the plan of the lowest level
+/// it serves), the levels it serves, its pit depth and capacity.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Hoistway {
+    pub name: String,
+    #[serde(default)]
+    pub levels: Vec<String>,
+    pub min: [f64; 2],
+    pub max: [f64; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pit_ft: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_lb: Option<u32>,
+    /// The sheet it was read from.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 /// A structural column at a grid intersection: its outline's size and shape, from its level's
@@ -2141,6 +2192,7 @@ impl BuildingSpec {
             materials: Surfaces::default(),
             site: None,
             stairs: Vec::new(),
+            elevators: Vec::new(),
             exterior: Exterior::default(),
             rcp: Rcp::default(),
             mep: Mep::default(),
@@ -2805,7 +2857,7 @@ pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
                 }
                 let key = match k.as_str() {
                     "layers" => Some("layer"),
-                    "levels" | "wall_types" | "rooms" | "families" | "stairs" | "systems" => Some("name"),
+                    "levels" | "wall_types" | "rooms" | "families" | "stairs" | "elevators" | "systems" => Some("name"),
                     _ => None,
                 };
                 match (b.get_mut(k), key, v) {

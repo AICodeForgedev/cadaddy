@@ -515,6 +515,58 @@ fn a_hand_edited_segment_keeps_its_runs_fittings_on_revise() {
 }
 
 #[test]
+/// MUST 1: A segment's height slot is filled only by a text that parses as a height; when
+/// several height texts reach one segment, the nearest wins. Size-only texts and room names
+/// never block a height.
+fn separate_height_tag_wins_over_size_and_room_name() {
+    let mut s = Session::new();
+    layer(&mut s, "A-WALL");
+    rect(&mut s, [-12.0, -12.0], [492.0, 372.0]);
+    rect(&mut s, [-6.0, -6.0], [486.0, 366.0]);
+    layer(&mut s, "M-DUCT-SUPP");
+    // A straight duct along y=60.
+    s.execute("pline", &json!({"vertices": [[24, 60], [264, 60]]})).unwrap();
+    // Size text drawn first (closer to the segment than the height text).
+    text(&mut s, [144.0, 70.0], "24x12");
+    // A room-name text nearer the segment than both tags.
+    text(&mut s, [144.0, 64.0], "GUEST ROOM 101");
+    // Separate elevation tag, farther than the size and room texts.
+    text(&mut s, [144.0, 90.0], "BOT @ 10'-6\"");
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9, "region": [-100, -100, 1000, 1000], "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "role": "wall"}]
+        }}),
+    )
+    .unwrap();
+    let r = s.execute("mep.read", &json!({})).unwrap();
+    let duct = run(&r, "M-DUCT-SUPP");
+    assert_eq!(duct["size_in"], json!([24.0, 12.0]), "size from the 24x12 tag: {duct}");
+    assert_eq!(duct["bottoms_ft"], json!([10.5]), "bottom from separate BOT @ 10'-6\": {duct}");
+}
+
+#[test]
+/// MUST 2: model.clashes reports the real count when it truncates and sets truncated flag.
+fn clash_total_is_honest_when_truncated() {
+    // The existing small fixture: truncated should be false, total == clashes.len().
+    let mut s = drawing();
+    s.execute("mep.read", &json!({"apply": true})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let c = s.execute("model.clashes", &json!({})).unwrap();
+    let clashes = c["clashes"].as_array().unwrap();
+    assert_eq!(c["total"].as_u64().unwrap() as usize, clashes.len(), "total == len when not truncated: {c}");
+    assert_eq!(c["truncated"], json!(false), "not truncated: {c}");
+
+    // Lower the cap to 1 so the existing clashes exceed it.
+    let c = s.execute("model.clashes", &json!({"max_clashes": 1})).unwrap();
+    let clashes = c["clashes"].as_array().unwrap();
+    assert!(c["total"].as_u64().unwrap() as usize > clashes.len(), "total > len: {c}");
+    assert_eq!(c["truncated"], json!(true), "truncated flag: {c}");
+    assert_eq!(clashes.len(), 1, "list capped at 1: {c}");
+}
+
+#[test]
 fn deleting_one_of_two_sourceless_terminals_keeps_the_other_on_revise() {
     let mut s = mep_spec(
         json!([duct_system("M-DUCT-SUPP", [24.0, 12.0])]),

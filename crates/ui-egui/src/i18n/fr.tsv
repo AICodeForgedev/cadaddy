@@ -2992,3 +2992,7 @@
 	List Callouts	Lister les renvois
 	Keep Print Set Job	Conserver le travail du jeu de plans
 	Resume Print Set Job	Reprendre le travail du jeu de plans
+	Finish Takeoff from Prints	Métré des finitions depuis les plans
+	Layer Quantity Takeoff	Métré par calque
+	Read Architecture from Prints	Lire l'architecture depuis les plans
+	Read Roof and Wall Envelope	Lire l'enveloppe de toiture et de murs

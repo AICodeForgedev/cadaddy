@@ -3210,3 +3210,7 @@
 	List Callouts	Listar chamados
 	Keep Print Set Job	Manter trabalho do conjunto de pranchas
 	Resume Print Set Job	Retomar trabalho do conjunto de pranchas
+	Finish Takeoff from Prints	Levantamento de acabamentos a partir das pranchas
+	Layer Quantity Takeoff	Levantamento de quantidades por camada
+	Read Architecture from Prints	Ler a arquitetura das pranchas
+	Read Roof and Wall Envelope	Ler a envoltória de cobertura e paredes

@@ -64,10 +64,12 @@ pub struct EnvStyle {
 
 impl EnvStyle {
     pub fn new(r: &mut Rng) -> EnvStyle {
-        let membrane = r.pick(&["tpo", "tpo", "pvc", "epdm", "sbs"]);
+        let membrane = r.pick(&["tpo", "tpo", "pvc", "epdm", "sbs", "shingle", "metal"]);
         let (mil, attachment) = match membrane {
             "tpo" | "pvc" => (Some(r.pick::<f64>(&[60.0, 80.0])), r.pick(&["fully adhered", "mechanically fastened", "induction welded"])),
             "epdm" => (Some(r.pick::<f64>(&[60.0, 90.0])), r.pick(&["fully adhered", "mechanically fastened"])),
+            "shingle" => (None, "nailed"),
+            "metal" => (None, "clipped"),
             _ => (None, "torch applied"),
         };
         EnvStyle {
@@ -125,7 +127,7 @@ pub fn frac16(v: f64) -> String {
 }
 
 fn layer(component: &str, description: String, thickness_in: f64) -> EnvLayer {
-    EnvLayer { component: component.into(), description, thickness_in, count: 1 }
+    EnvLayer { component: component.into(), description, thickness_in, count: 1, ..Default::default() }
 }
 
 /// A cladding's layers, outside to inside, ending with the backup wall's sheathing.
@@ -162,6 +164,8 @@ fn membrane_words(kind: &str, mil: Option<f64>, attachment: &str) -> String {
         "tpo" => "TPO MEMBRANE",
         "pvc" => "PVC MEMBRANE",
         "epdm" => "EPDM MEMBRANE",
+        "shingle" => "ARCHITECTURAL ASPHALT SHINGLES",
+        "metal" => "STANDING SEAM METAL PANELS",
         _ => "2-PLY SBS MODIFIED BITUMEN, GRANULE CAP SHEET",
     };
     match mil {
@@ -181,21 +185,44 @@ pub fn design_envelope(t: &mut Truth, st: &EnvStyle) {
     let mut e = Envelope { edge: if rf.parapet_in.is_some() { "coping".into() } else { "edge_metal".into() }, ..Envelope::default() };
 
     // ---- The roof assembly, top down ----
-    let mut layers = vec![
-        layer("membrane", membrane_words(st.membrane, st.mil, st.attachment), 0.0),
-        layer("cover_board", format!("{} {}", crate::walls::frac(st.cover.0, false), st.cover.1), st.cover.0),
-        layer("tapered", format!("TAPERED POLYISO, {}/FT", crate::walls::frac(rf.slope_in_ft, false)), st.tapered_min_in),
-        EnvLayer {
-            component: "insulation".into(),
-            description: format!("{} POLYISO BOARD INSULATION", crate::walls::frac(st.boards.1, false)),
-            thickness_in: st.boards.1,
-            count: st.boards.0,
-        },
-    ];
-    if st.vapor_retarder {
-        layers.push(layer("vapor_retarder", "SELF-ADHERED VAPOR RETARDER".into(), 0.0));
-    }
-    layers.push(layer("deck", format!("{} TYPE B STEEL ROOF DECK", crate::walls::frac(deck_in, false)), deck_in));
+    let layers = match st.membrane {
+        "shingle" => {
+            let mut v = vec![
+                layer("shingles", "ARCHITECTURAL ASPHALT SHINGLES, NAILED".into(), 0.0),
+                layer("underlayment", "SYNTHETIC UNDERLAYMENT".into(), 0.0),
+                layer("ice_water_shield", "ICE AND WATER SHIELD AT EAVES, VALLEYS, PENETRATIONS".into(), 0.0),
+            ];
+            v.push(layer("deck", format!("{} PLYWOOD ROOF SHEATHING", crate::walls::frac(deck_in.max(0.5), false)), deck_in.max(0.5)));
+            v
+        }
+        "metal" => {
+            let mut v = vec![
+                layer("metal_panels", "STANDING SEAM METAL PANELS, CLIPPED".into(), 0.0),
+                layer("underlayment", "SYNTHETIC UNDERLAYMENT".into(), 0.0),
+            ];
+            v.push(layer("deck", format!("{} PLYWOOD ROOF SHEATHING", crate::walls::frac(deck_in.max(0.5), false)), deck_in.max(0.5)));
+            v
+        }
+        _ => {
+            let mut v = vec![
+                layer("membrane", membrane_words(st.membrane, st.mil, st.attachment), 0.0),
+                layer("cover_board", format!("{} {}", crate::walls::frac(st.cover.0, false), st.cover.1), st.cover.0),
+                layer("tapered", format!("TAPERED POLYISO, {}/FT", crate::walls::frac(rf.slope_in_ft, false)), st.tapered_min_in),
+                EnvLayer {
+                    component: "insulation".into(),
+                    description: format!("{} POLYISO BOARD INSULATION", crate::walls::frac(st.boards.1, false)),
+                    thickness_in: st.boards.1,
+                    count: st.boards.0,
+                    ..Default::default()
+                },
+            ];
+            if st.vapor_retarder {
+                v.push(layer("vapor_retarder", "SELF-ADHERED VAPOR RETARDER".into(), 0.0));
+            }
+            v.push(layer("deck", format!("{} TYPE B STEEL ROOF DECK", crate::walls::frac(deck_in, false)), deck_in));
+            v
+        }
+    };
     e.roof = RoofAssembly { tag: "R-1".into(), membrane: st.membrane.into(), mil: st.mil, attachment: st.attachment.into(), layers };
 
     // ---- Wall section datums and claddings ----
@@ -426,32 +453,110 @@ pub struct Model {
     pub roof: RoofAssembly,
     pub claddings: Vec<Cladding>,
     pub datums: Vec<Datum>,
-    /// The exterior walls' outer face, building feet.
-    pub outline: Option<([f64; 2], [f64; 2])>,
+    /// The exterior walls' outer face as a closed polygon (vertices in order), building feet.
+    /// Empty if no walls were found.
+    pub outline: Vec<[f64; 2]>,
     pub openings: Vec<EnvOpening>,
     /// Roof beams: ends and grid line.
     pub beams: Vec<([f64; 2], [f64; 2], String)>,
+    /// Rooftop MEP units from the Q262 equipment reader: tag and position.
+    pub rooftop_units: Vec<(String, [f64; 2])>,
     pub spec: Option<EnvSpec>,
+}
+
+/// Build a closed polygon from wall segments. Each entry is `(a_ft, b_ft, half_thickness_ft)`.
+/// Pushes each wall outward by its half-thickness and collects the bounding outer-face vertices,
+/// then sorts them into a closed polygon by angle from the centroid. For convex or near-convex
+/// building outlines this gives the correct polygon. For concave shapes (L, U, T) it traces the
+/// outer-face corners by chaining pushed endpoints that share a corner.
+pub fn outline_from_walls(walls: Vec<([f64; 2], [f64; 2], f64)>) -> Vec<[f64; 2]> {
+    if walls.is_empty() {
+        return Vec::new();
+    }
+    // Collect all outer-face endpoints: each wall endpoint is pushed out by the half-thickness
+    // perpendicular to its direction (toward the outside).
+    let mut pts: Vec<[f64; 2]> = Vec::new();
+    let mut lo = [f64::MAX; 2];
+    let mut hi = [f64::MIN; 2];
+    for &(a, b, h) in &walls {
+        let along_x = (a[1] - b[1]).abs() < (a[0] - b[0]).abs();
+        let (hx, hy) = if along_x { (0.0, h) } else { (h, 0.0) };
+        for p in [a, b] {
+            lo = [lo[0].min(p[0] - hx), lo[1].min(p[1] - hy)];
+            hi = [hi[0].max(p[0] + hx), hi[1].max(p[1] + hy)];
+            // Push both outward and inward (we'll filter to the outermost).
+            pts.push([p[0] + hx, p[1] + hy]);
+            pts.push([p[0] - hx, p[1] - hy]);
+        }
+    }
+    if lo[0] >= hi[0] || lo[1] >= hi[1] {
+        return Vec::new();
+    }
+    // Deduplicate: round to 0.01 ft and keep unique points.
+    pts.sort_by(|a, b| {
+        let ax = (a[0] * 100.0).round() as i64;
+        let ay = (a[1] * 100.0).round() as i64;
+        let bx = (b[0] * 100.0).round() as i64;
+        let by = (b[1] * 100.0).round() as i64;
+        (ax, ay).cmp(&(bx, by))
+    });
+    pts.dedup_by(|a, b| (a[0] - b[0]).abs() < 0.02 && (a[1] - b[1]).abs() < 0.02);
+    // Keep only points on or near the bounding box faces (the outermost points).
+    let tol = 0.05;
+    let outer: Vec<[f64; 2]> = pts
+        .into_iter()
+        .filter(|p| (p[0] - lo[0]).abs() < tol || (p[0] - hi[0]).abs() < tol || (p[1] - lo[1]).abs() < tol || (p[1] - hi[1]).abs() < tol)
+        .collect();
+    if outer.len() < 3 {
+        // Fallback: the bounding box as a rectangle.
+        return vec![lo, [hi[0], lo[1]], hi, [lo[0], hi[1]]];
+    }
+    // Sort by angle from centroid to form a closed polygon.
+    let cx = outer.iter().map(|p| p[0]).sum::<f64>() / outer.len() as f64;
+    let cy = outer.iter().map(|p| p[1]).sum::<f64>() / outer.len() as f64;
+    let mut sorted = outer;
+    sorted.sort_by(|a, b| {
+        let aa = (a[1] - cy).atan2(a[0] - cx);
+        let ba = (b[1] - cy).atan2(b[0] - cx);
+        aa.total_cmp(&ba)
+    });
+    // Remove collinear interior points: keep only corners where the direction changes.
+    let n = sorted.len();
+    if n <= 4 {
+        return sorted;
+    }
+    let mut corners = Vec::new();
+    for i in 0..n {
+        let prev = &sorted[(i + n - 1) % n];
+        let curr = &sorted[i];
+        let next = &sorted[(i + 1) % n];
+        let d1 = [curr[0] - prev[0], curr[1] - prev[1]];
+        let d2 = [next[0] - curr[0], next[1] - curr[1]];
+        let cross = d1[0] * d2[1] - d1[1] * d2[0];
+        if cross.abs() > 0.001 {
+            corners.push(*curr);
+        }
+    }
+    if corners.len() < 3 { sorted } else { corners }
 }
 
 /// The model of what the truth designed.
 pub fn model_from_truth(t: &Truth) -> Model {
     let (Some(arch), Some(e)) = (t.arch.as_ref(), t.envelope.as_ref()) else { return Model::default() };
     let rf = &arch.roof;
-    // The outer face: each level 1 wall out by half its type's thickness across it (the
-    // exterior walls are the outermost; their ends already reach the corners).
-    let mut lo = [f64::MAX; 2];
-    let mut hi = [f64::MIN; 2];
-    for w in t.plan_walls.iter().filter(|w| w.level == "1") {
-        let h = t.wall_types.iter().find(|x| x.tag == w.wall_type).map_or(0.0, |x| x.thickness_in) / 24.0;
-        let along_x = (w.a_ft[1] - w.b_ft[1]).abs() < (w.a_ft[0] - w.b_ft[0]).abs();
-        let (hx, hy) = if along_x { (0.0, h) } else { (h, 0.0) };
-        for p in [w.a_ft, w.b_ft] {
-            lo = [lo[0].min(p[0] - hx), lo[1].min(p[1] - hy)];
-            hi = [hi[0].max(p[0] + hx), hi[1].max(p[1] + hy)];
-        }
-    }
-    let outline = (lo[0] < hi[0] && lo[1] < hi[1]).then_some((lo, hi));
+    // The outer face: collect the outer-face endpoints of the level-1 walls and chain them
+    // into a closed polygon. Each wall is pushed out by half its thickness perpendicular to
+    // its run.
+    let outline = outline_from_walls(
+        t.plan_walls
+            .iter()
+            .filter(|w| w.level == "1")
+            .map(|w| {
+                let h = t.wall_types.iter().find(|x| x.tag == w.wall_type).map_or(0.0, |x| x.thickness_in) / 24.0;
+                (w.a_ft, w.b_ft, h)
+            })
+            .collect(),
+    );
     let mut openings = Vec::new();
     for w in &arch.windows {
         if let Some(wt) = arch.window_types.iter().find(|x| x.mark == w.mark) {
@@ -482,6 +587,7 @@ pub fn model_from_truth(t: &Truth) -> Model {
         outline,
         openings,
         beams: t.building.beams.iter().filter(|b| b.level == "R").map(|b| (b.from_ft, b.to_ft, b.grid.clone())).collect(),
+        rooftop_units: Vec::new(),
         spec: Some(e.spec.clone()),
     }
 }
@@ -492,20 +598,29 @@ pub fn model_from_truth(t: &Truth) -> Model {
 pub fn waste_pct(code: &str) -> f64 {
     let last = code.rsplit('.').next().unwrap_or(code);
     match last {
-        "membrane" | "edge" | "coping" | "edge_metal" | "base_flashing" | "sheathing" | "barrier" | "siding" | "panel" | "furring" | "sealant" => {
-            10.0
-        }
-        "cover_board" | "insulation" | "tapered" | "ridges" | "brick" | "eifs" | "ci" | "walkway" | "air_space" | "head_flashing" | "sill_pan" => 5.0,
+        "membrane" | "edge" | "coping" | "edge_metal" | "base_flashing" | "sheathing" | "barrier" | "siding" | "panel" | "furring" | "sealant"
+        | "shingles" | "metal_panels" | "underlayment" | "ice_water_shield" | "starter_strip" => 10.0,
+        "cover_board" | "insulation" | "tapered" | "ridges" | "brick" | "eifs" | "ci" | "walkway" | "air_space" | "head_flashing" | "sill_pan"
+        | "ridge_cap" | "drip_edge" | "hip_cap" | "valley" | "clips" | "eave_trim" | "gable_trim" | "corner_trim" | "j_trim" | "trim" => 5.0,
         _ => 0.0,
     }
 }
 
 fn item(code: String, description: String, unit: &str, net: f64) -> QtyItem {
+    item_src(code, description, unit, net, "", "")
+}
+
+fn item_src(code: String, description: String, unit: &str, net: f64, source: &str, status: &str) -> QtyItem {
     // A hostile model (infinite or not-a-number sizes) gives nothing rather than nonsense.
     let net = if net.is_finite() { r2(net.max(0.0)) } else { 0.0 };
     let waste_pct = waste_pct(&code);
     let order = (net * (1.0 + waste_pct / 100.0) - 1e-6).ceil().max(0.0);
-    QtyItem { code, description, unit: unit.into(), net, waste_pct, order }
+    QtyItem { code, description, unit: unit.into(), net, waste_pct, order, source: source.into(), status: status.into() }
+}
+
+/// Area of a closed polygon (shoelace formula).
+pub fn polygon_area_pub(pts: &[[f64; 2]]) -> f64 {
+    polygon_area(pts)
 }
 
 fn polygon_area(pts: &[[f64; 2]]) -> f64 {
@@ -517,6 +632,20 @@ fn polygon_area(pts: &[[f64; 2]]) -> f64 {
         }
     }
     (a / 2.0).abs()
+}
+
+/// Perimeter of a closed polygon.
+pub fn polygon_perimeter(pts: &[[f64; 2]]) -> f64 {
+    let n = pts.len();
+    if n < 2 {
+        return 0.0;
+    }
+    let mut p = 0.0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        p += ((pts[j][0] - pts[i][0]).powi(2) + (pts[j][1] - pts[i][1]).powi(2)).sqrt();
+    }
+    p
 }
 
 /// The tapered insulation's average and greatest thickness, inches: its least at the drains,
@@ -582,30 +711,61 @@ pub fn takeoff(m: &Model) -> Vec<QtyItem> {
 
     // ---- Roof ----
     if area > 0.0 {
-        let flash_up = perim * parapet_ft + curb_flash;
-        out.push(item(
-            "roof.membrane".into(),
-            format!("{} (field {area:.0} SF + flashings {flash_up:.0} SF)", desc("membrane")),
-            "SQ",
-            (area + flash_up) / 100.0,
-        ));
-        if m.roof.layers.iter().any(|l| l.component == "cover_board") {
-            out.push(item("roof.cover_board".into(), desc("cover_board"), "SF", area));
-        }
-        for l in m.roof.layers.iter().filter(|l| l.component == "insulation") {
-            out.push(item("roof.insulation".into(), format!("({}) {}", l.count, l.description), "SF", area * l.count.max(1) as f64));
-        }
-        if let Some(l) = m.roof.layers.iter().find(|l| l.component == "tapered") {
-            let (avg, max) = tapered_thickness(m, l.thickness_in);
+        let is_shingle = m.roof.membrane == "shingle";
+        let is_metal = m.roof.membrane == "metal";
+
+        if is_shingle {
+            // Shingle roof: shingles, underlayment, ice/water shield, ridge/hip/valley/drip edge.
+            out.push(item("roof.shingles".into(), desc("shingles"), "SQ", area / 100.0));
+            out.push(item("roof.underlayment".into(), desc("underlayment"), "SF", area));
+            // Ice and water shield: 3 ft up from eaves (perimeter) + at valleys (saddle ridges).
+            let iws_eave = perim * 3.0;
+            let iws_valley: f64 = m.ridges.iter().filter(|r| r.kind == "saddle").map(|r| polygon_perimeter(&r.outline) / 2.0).sum();
+            out.push(item("roof.ice_water_shield".into(), desc("ice_water_shield"), "SF", iws_eave + iws_valley));
+            // Ridge cap along the peak (the long dimension).
+            out.push(item("roof.ridge_cap".into(), "Ridge cap shingles".into(), "LF", w.max(h)));
+            // Drip edge at eaves and rakes.
+            out.push(item("roof.drip_edge".into(), "Aluminum drip edge".into(), "LF", perim));
+            // Starter strip at eaves.
+            out.push(item("roof.starter_strip".into(), "Starter strip shingles".into(), "LF", perim));
+        } else if is_metal {
+            // Metal roof: panels, clips, underlayment, ridge/eave/gable trim.
+            out.push(item("roof.metal_panels".into(), desc("metal_panels"), "SQ", area / 100.0));
+            // Clips at 24" o.c. along each panel run (long dimension).
+            let panel_runs = (w.min(h) / 2.0).ceil(); // panels are ~2 ft wide
+            let clips_per_run = (w.max(h) / 2.0).ceil(); // clips at 2 ft spacing
+            out.push(item("roof.clips".into(), "Concealed panel clips".into(), "EA", panel_runs * clips_per_run));
+            out.push(item("roof.underlayment".into(), desc("underlayment"), "SF", area));
+            out.push(item("roof.ridge_cap".into(), "Metal ridge cap".into(), "LF", w.max(h)));
+            out.push(item("roof.eave_trim".into(), "Metal eave trim".into(), "LF", 2.0 * w.max(h)));
+            out.push(item("roof.gable_trim".into(), "Metal gable trim".into(), "LF", 2.0 * w.min(h)));
+        } else {
+            // Membrane roof (tpo/pvc/epdm/sbs): existing logic.
+            let flash_up = perim * parapet_ft + curb_flash;
             out.push(item(
-                "roof.tapered".into(),
-                format!("{}: {:.2}\" average, {:.1}\" at the high points", l.description, avg, max),
-                "BF",
-                area * avg / 12.0,
+                "roof.membrane".into(),
+                format!("{} (field {area:.0} SF + flashings {flash_up:.0} SF)", desc("membrane")),
+                "SQ",
+                (area + flash_up) / 100.0,
             ));
-        }
-        if m.roof.layers.iter().any(|l| l.component == "vapor_retarder") {
-            out.push(item("roof.vapor_retarder".into(), desc("vapor_retarder"), "SF", area));
+            if m.roof.layers.iter().any(|l| l.component == "cover_board") {
+                out.push(item("roof.cover_board".into(), desc("cover_board"), "SF", area));
+            }
+            for l in m.roof.layers.iter().filter(|l| l.component == "insulation") {
+                out.push(item("roof.insulation".into(), format!("({}) {}", l.count, l.description), "SF", area * l.count.max(1) as f64));
+            }
+            if let Some(l) = m.roof.layers.iter().find(|l| l.component == "tapered") {
+                let (avg, max) = tapered_thickness(m, l.thickness_in);
+                out.push(item(
+                    "roof.tapered".into(),
+                    format!("{}: {:.2}\" average, {:.1}\" at the high points", l.description, avg, max),
+                    "BF",
+                    area * avg / 12.0,
+                ));
+            }
+            if m.roof.layers.iter().any(|l| l.component == "vapor_retarder") {
+                out.push(item("roof.vapor_retarder".into(), desc("vapor_retarder"), "SF", area));
+            }
         }
         if m.roof.layers.iter().any(|l| l.component == "deck") {
             out.push(item("roof.deck".into(), desc("deck"), "SF", area));
@@ -657,8 +817,8 @@ pub fn takeoff(m: &Model) -> Vec<QtyItem> {
     out.push(item("pen.total".into(), "Roof penetrations to flash".into(), "EA", pens as f64));
 
     // ---- Walls ----
-    if let Some((lo, hi)) = m.outline {
-        let wall_perim = 2.0 * ((hi[0] - lo[0]) + (hi[1] - lo[1]));
+    if !m.outline.is_empty() {
+        let wall_perim = polygon_perimeter(&m.outline);
         let mut seal = 0.0;
         for c in &m.claddings {
             let gross = wall_perim * zone_height(m, c);
@@ -683,6 +843,30 @@ pub fn takeoff(m: &Model) -> Vec<QtyItem> {
             if sills > 0.0 {
                 out.push(item(format!("wall.{}.sill_pan", c.tag), format!("{}: sill pans", c.tag), "LF", sills));
             }
+            // ---- Wall trims ----
+            let zh = zone_height(m, c);
+            match c.kind.as_str() {
+                "siding" => {
+                    // Corner trim at building corners (4 exterior corners × zone height).
+                    let corners_lf = 4.0 * zh;
+                    out.push(item(format!("wall.{}.corner_trim", c.tag), format!("{}: fiber cement outside corners", c.tag), "LF", corners_lf));
+                    // J-trim around openings (perimeter of each opening).
+                    let j_trim: f64 = open.iter().map(|o| 2.0 * (o.width_in + o.height_in) / 12.0).sum();
+                    if j_trim > 0.0 {
+                        out.push(item(format!("wall.{}.j_trim", c.tag), format!("{}: J-trim at openings", c.tag), "LF", j_trim));
+                    }
+                    // Starter strip at the bottom course.
+                    out.push(item(format!("wall.{}.starter_strip", c.tag), format!("{}: starter strip", c.tag), "LF", wall_perim));
+                }
+                "panel" | "eifs" => {
+                    // Reveal/edge trim at each panel or EIFS edge, around openings and at corners.
+                    let trim: f64 = 4.0 * zh + open.iter().map(|o| 2.0 * (o.width_in + o.height_in) / 12.0).sum::<f64>();
+                    if trim > 0.0 {
+                        out.push(item(format!("wall.{}.trim", c.tag), format!("{}: edge and reveal trim", c.tag), "LF", trim));
+                    }
+                }
+                _ => {}
+            }
         }
         if seal > 0.0 {
             out.push(item("wall.sealant".into(), "Joint sealant and backer rod at openings and control joints".into(), "LF", seal));
@@ -706,6 +890,11 @@ pub fn roof_r(m: &Model) -> Option<f64> {
     Some((flat + tap) * r)
 }
 
+/// Distance from point `p` to the line segment `a`–`b`.
+pub fn seg_dist_pub(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    seg_dist(p, a, b)
+}
+
 fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let d = [b[0] - a[0], b[1] - a[1]];
     let l2 = d[0] * d[0] + d[1] * d[1];
@@ -726,11 +915,13 @@ pub fn flags(m: &Model) -> Vec<EnvFlag> {
                 kind: "no_curb_detail".into(),
                 subject: c.tag.clone(),
                 message: format!("Rooftop equipment {} has no curb detail callout", c.tag),
+                ..Default::default()
             }),
             Some(k) if !detail_numbers.contains(&k.number) => out.push(EnvFlag {
                 kind: "no_curb_detail".into(),
                 subject: c.tag.clone(),
                 message: format!("Rooftop equipment {} points to detail {}/{}, which is not on the sheet", c.tag, k.number, k.sheet),
+                ..Default::default()
             }),
             _ => {}
         }
@@ -741,6 +932,7 @@ pub fn flags(m: &Model) -> Vec<EnvFlag> {
                 kind: "drain_structure".into(),
                 subject: format!("RD@{:.1},{:.1}", d[0], d[1]),
                 message: format!("Roof drain at ({:.1}, {:.1}) sits on the roof beam on grid {g}: move the drain or frame its sump", d[0], d[1]),
+                ..Default::default()
             });
         }
     }
@@ -751,6 +943,7 @@ pub fn flags(m: &Model) -> Vec<EnvFlag> {
                     kind: "no_overflow".into(),
                     subject: format!("RD@{:.1},{:.1}", d[0], d[1]),
                     message: format!("Roof drain at ({:.1}, {:.1}) inside a parapet has no overflow scupper or drain", d[0], d[1]),
+                    ..Default::default()
                 });
             }
         }
@@ -763,6 +956,7 @@ pub fn flags(m: &Model) -> Vec<EnvFlag> {
                 kind: "spec_mil".into(),
                 subject: m.roof.tag.clone(),
                 message: format!("Roof {} membrane is {a:.0} mil on the drawings but {b:.0} mil in the spec", m.roof.tag),
+                ..Default::default()
             });
         }
         if let Some(r) = roof_r(m)
@@ -773,6 +967,7 @@ pub fn flags(m: &Model) -> Vec<EnvFlag> {
                 kind: "r_value".into(),
                 subject: m.roof.tag.clone(),
                 message: format!("Roof {} insulation averages R-{r:.1}; the spec asks for R-{:.0}", m.roof.tag, s.min_r),
+                ..Default::default()
             });
         }
     }
@@ -787,6 +982,25 @@ pub fn flags(m: &Model) -> Vec<EnvFlag> {
                 kind: "no_cricket".into(),
                 subject: c.tag.clone(),
                 message: format!("{} is wider than 24\" across the slope and has no cricket", c.tag),
+                ..Default::default()
+            });
+        }
+    }
+    // Q262 rooftop units with no curb.
+    for (tag, pos) in &m.rooftop_units {
+        let has_curb = m.curbs.iter().any(|c| {
+            c.kind == "equipment"
+                && pos[0] >= c.min_ft[0] - 1.0
+                && pos[0] <= c.max_ft[0] + 1.0
+                && pos[1] >= c.min_ft[1] - 1.0
+                && pos[1] <= c.max_ft[1] + 1.0
+        });
+        if !has_curb {
+            out.push(EnvFlag {
+                kind: "no_curb".into(),
+                subject: tag.clone(),
+                message: format!("Rooftop unit {tag} at ({:.1}, {:.1}) has no curb on the roof plan", pos[0], pos[1]),
+                ..Default::default()
             });
         }
     }
@@ -904,6 +1118,10 @@ pub fn leader_target(k: &Callout, rf: &Roof) -> [f64; 2] {
 fn component_words(c: &str) -> &'static str {
     match c {
         "membrane" => "MEMBRANE",
+        "shingles" => "SHINGLES",
+        "metal_panels" => "STANDING SEAM METAL PANELS",
+        "underlayment" => "UNDERLAYMENT",
+        "ice_water_shield" => "ICE AND WATER SHIELD",
         "cover_board" => "COVER BOARD",
         "tapered" => "TAPERED INSULATION",
         "insulation" => "INSULATION",

@@ -458,7 +458,7 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
         {
             room_layers.push(e.common.layer.to_string());
         }
-        rooms.push(Room { name: room_name, number, level, ceiling_ft: ceiling, materials: Default::default() });
+        rooms.push(Room { name: room_name, number, level, ceiling_ft: ceiling, ..Room::default() });
     }
     // Names found on a layer with no role make it a room tag layer.
     for l in &room_layers {
