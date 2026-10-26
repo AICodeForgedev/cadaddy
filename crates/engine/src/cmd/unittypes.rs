@@ -35,9 +35,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{level?: code, instances?: bool (each instance's quantities too)} → {types: [{type, type_name, count, normal, mirrored, devices, terminals, fixtures, casework, equipment, totals, rooms}], grand_total, instances?}")
             .noundo(),
         CommandSpec::new("unittypes.edit", "Edit Unit Type", run_edit)
-            .params("{type: id, set: {field: value} (name, width_ft, depth_ft, wet_wall_side, hvac_sleeve_side, devices.receptacle, fixtures.bathtub, …), author?: name, preview?: bool} → {type, changed: [{field, from, to}], instances, kept: [{number, level, field, value}]}"),
+            .params("{type: id, set: {field: value} (name, width_ft, depth_ft, ceiling_height_ft, wet_wall_side, hvac_sleeve_side, ceiling_kind, wall_assembly, ada, or a count <devices|terminals|fixtures|casework|equipment>.<kind> such as devices.receptacle), author?: name, preview?: bool} → {type, changed: [{field, from, to}], instances, kept: [{number, level, field, value}]}"),
         CommandSpec::new("unittypes.override", "Override Unit Instance", run_override)
-            .params("{number: room number, level?: code, set?: {key: value} (ada, end_unit, column, devices.receptacle, casework.wardrobe, …), remove?: [key], author?: name, note?: text} → {instance}"),
+            .params("{number: room number, level?: code, set?: {key: value} (ada, end_unit, column, or a count <devices|terminals|fixtures|casework|equipment>.<kind> such as casework.wardrobe), remove?: [key], author?: name, note?: text} → {instance}"),
         CommandSpec::new("unittypes.place", "Place Unit Instances", run_place)
             .params("{level?: code, number?: room number} → {instances: [{number, level, type, hand, wet_wall_side, hvac_sleeve_side, items: [{category, kind, tag, at_ft}], unplaced: [{category, kind, count}] (kinds an override changes)}]}")
             .noundo(),
