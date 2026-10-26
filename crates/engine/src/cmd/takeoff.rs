@@ -34,6 +34,12 @@ pub fn specs() -> Vec<CommandSpec> {
             // Undoable: `at` inserts a table, and U must take it away (the waste percentage it
             // remembers in the header goes back with it).
             .interactive(|_| Ok(Box::new(TakeoffM::default()))),
+        CommandSpec::new("takeoff.layers", "Layer Quantity Takeoff", run)
+            .alias(&["qtolayers"])
+            .params(
+                "{mode?: \"length\" (default) | \"area\", handles? | layers?: \"E-*,P-*\" (wildcards; default: every object in the current space), waste?: percent added (default 0; the waste column is left out at 0), nested?: bool (default true), clipped?: bool (default true), file?: path (.csv; .txt tab-separated), at?: [x,y] (insert a table), title?} → {mode, unit, rows: [{layer, objects, drawing, real, withWaste}], total: {objects, drawing, real, withWaste}, columns, file?, table?}",
+            )
+            .interactive(|_| Ok(Box::new(TakeoffM::default()))),
     ]
 }
 
@@ -581,5 +587,22 @@ mod tests {
         assert!(after > before, "TAKEOFF with `at` should insert a table");
         s.undo().unwrap();
         assert_eq!(s.doc().unwrap().model.len(), before, "U should remove the takeoff table");
+    }
+
+    /// `takeoff.layers` is an alias for the 2D layer-count takeoff; it should produce the same
+    /// result as `takeoff` with the same parameters.
+    #[test]
+    fn takeoff_layers_alias_works() {
+        let mut s = Session::new();
+        s.execute("setvar", &json!({"name": "INSUNITS", "value": 1})).unwrap();
+        s.execute("layer.new", &json!({"name": "E-CONDUIT"})).unwrap();
+        s.execute("line", &json!({"points": [[0, 0], [120, 0]]})).unwrap();
+        let h = s.doc().unwrap().model.iter().last().unwrap().handle.hex();
+        s.execute("properties.set", &json!({"handles": [h], "layer": "E-CONDUIT"})).unwrap();
+        let r = s.execute("takeoff.layers", &json!({"layers": "E-*"})).unwrap();
+        assert_eq!(r["unit"], "ft");
+        assert_eq!(r["total"]["objects"], 1);
+        assert_eq!(r["total"]["real"], 10.0);
+        assert_eq!(r["rows"][0]["layer"], "E-CONDUIT");
     }
 }
