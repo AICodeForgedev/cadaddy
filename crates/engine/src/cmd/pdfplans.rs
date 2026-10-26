@@ -217,6 +217,46 @@ impl PairGrid {
     }
 }
 
+/// The layer of the searchable (hidden) copy of each text in a PDF from our exporter
+/// (`cadaddy_io::pdf_read::HIDDEN_TEXT_LAYER`).
+const HIDDEN_TEXT_LAYER: &str = "PDF-HIDDEN-TEXT";
+
+/// The hidden copy of the text `text` (its tallest instance): a different text on the hidden
+/// text layer starting within half its height of it.
+fn hidden_copy(ents: &[&Arc<Entity>], text: &str) -> Option<String> {
+    let (at, h) = texts(ents).into_iter().filter(|(_, t, _, _)| t == text).map(|(_, _, at, h)| (at, h)).max_by(|a, b| a.1.total_cmp(&b.1))?;
+    let hidden: Vec<&Arc<Entity>> = ents.iter().filter(|e| e.common.layer == HIDDEN_TEXT_LAYER).copied().collect();
+    texts(&hidden)
+        .into_iter()
+        .filter(|(_, t, p, _)| !t.is_empty() && t != text && p.dist(at) <= 0.5 * h)
+        .min_by(|a, b| a.2.dist(at).total_cmp(&b.2.dist(at)))
+        .map(|(_, t, _, _)| t)
+}
+
+/// Words a title block prints as field labels, not as the sheet's title.
+const TITLE_BLOCK_LABELS: &[&str] =
+    &["SHEET", "NO", "NO.", "NUMBER", "TITLE", "DATE", "SCALE", "DRAWN", "CHECKED", "BY", "PROJECT", "REV", "REVISION", "JOB", "DWG"];
+
+/// The sheet title printed beside the sheet number `number` (plain texts, as a PDF title block
+/// comes in): the nearest text within eight number heights that reads as words, is not a field
+/// label, a scale or a dimension.
+fn title_near(ents: &[&Arc<Entity>], number: &str) -> Option<String> {
+    let all = texts(ents);
+    let (at, h) = all.iter().filter(|(_, t, _, _)| t == number).map(|(_, _, at, h)| (*at, *h)).max_by(|a, b| a.1.total_cmp(&b.1))?;
+    let reach = 8.0 * h.max(1e-9);
+    all.iter()
+        .filter(|(_, t, p, _)| {
+            t != number
+                && p.dist(at) <= reach
+                && t.chars().count() <= 60
+                && t.chars().filter(|c| c.is_alphabetic()).count() >= 3
+                && !t.contains([':', '=', '\'', '"'])
+                && !t.split_whitespace().all(|w| TITLE_BLOCK_LABELS.contains(&w.to_ascii_uppercase().as_str()))
+        })
+        .min_by(|a, b| a.2.dist(at).total_cmp(&b.2.dist(at)).then(b.3.total_cmp(&a.3)))
+        .map(|(_, t, _, _)| t.clone())
+}
+
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // The drawing as it stands (a shared copy: the session is used below).
     let doc = Arc::clone(&s.state()?.doc);
@@ -411,7 +451,20 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // The sheet: number and title from the title block.
     let sheets = super::perceive::run_sheets(s, &json!({}))?;
     let items = sheets["items"].as_array().cloned().unwrap_or_default();
-    let sheet = items.iter().find(|i| i["number"].is_string()).or(items.first()).cloned().unwrap_or(Value::Null);
+    let mut sheet = items.iter().find(|i| i["number"].is_string()).or(items.first()).cloned().unwrap_or(Value::Null);
+    // Our own PDFs carry each text twice: the exact hidden copy and the stroked lettering read
+    // back by OCR, which can come out taller and misread ("A10.2." for "A102"). The sheet takes
+    // the hidden copy at the same place.
+    if let Some(exact) = sheet["number"].as_str().and_then(|n| hidden_copy(&ents, n)) {
+        sheet["number"] = json!(exact);
+    }
+    // A title block of plain texts (a PDF keeps no attributes): the title is the text beside the
+    // sheet number.
+    if sheet["title"].is_null()
+        && let Some(title) = sheet["number"].as_str().and_then(|n| title_near(&ents, n))
+    {
+        sheet["title"] = json!(hidden_copy(&ents, &title).unwrap_or(title));
+    }
     let wall_weight = heaviest.filter(|_| walls.iter().filter_map(|h| d.entity(*h)).any(|e| heavy(e))).map(|w| f64::from(w) / 100.0);
     let mut out = json!({
         "raster_only": false,
