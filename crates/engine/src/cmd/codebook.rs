@@ -5,8 +5,8 @@
 //! JSON field, so it travels with the drawing. Amendments layer on top of the starter rules.
 
 use cadaddy_walk3d::codebook::{
-    Amendment, Code, CodeBook, CodeFinding, CodeSelection, Edition, FindingSeverity,
-    MechCheck, PlumbingCheck, RoomCheck, Topic, WallCheck, starter_book,
+    Amendment, Code, CodeBook, CodeFinding, CodeSelection, Edition, FindingSeverity, MechCheck, PlumbingCheck, RoomCheck, Topic, WallCheck,
+    starter_book,
 };
 use serde_json::{Value, json};
 
@@ -62,9 +62,7 @@ fn run_select(s: &mut Session, p: &Value) -> Result<Value> {
     // If no params (or just {}), return current selection.
     let code_str = p.get("code").and_then(Value::as_str);
     if code_str.is_none() && p.get("edition").is_none() && p.get("jurisdiction").is_none() {
-        let editions: Vec<Value> = book.selection.editions.iter().map(|e| {
-            json!({"code": e.code.label(), "year": e.year})
-        }).collect();
+        let editions: Vec<Value> = book.selection.editions.iter().map(|e| json!({"code": e.code.label(), "year": e.year})).collect();
         return Ok(json!({
             "editions": editions,
             "jurisdiction": book.selection.jurisdiction,
@@ -98,9 +96,7 @@ fn run_select(s: &mut Session, p: &Value) -> Result<Value> {
     store_selection(s, SELECT, &sel)?;
 
     let updated_book = project_book(s, SELECT)?;
-    let editions: Vec<Value> = sel.editions.iter().map(|e| {
-        json!({"code": e.code.label(), "year": e.year})
-    }).collect();
+    let editions: Vec<Value> = sel.editions.iter().map(|e| json!({"code": e.code.label(), "year": e.year})).collect();
 
     Ok(json!({
         "editions": editions,
@@ -131,20 +127,25 @@ fn run_rules(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let total = matched.len();
-    let page: Vec<Value> = matched.into_iter().skip(offset).take(limit).map(|r| {
-        let val = book.resolve(r);
-        json!({
-            "id": r.id,
-            "code": r.code.label(),
-            "edition": r.edition,
-            "section": r.section,
-            "topic": r.topic,
-            "summary": r.summary,
-            "applies": r.applies,
-            "value": val,
-            "source": r.source.label(),
+    let page: Vec<Value> = matched
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|r| {
+            let val = book.resolve(r);
+            json!({
+                "id": r.id,
+                "code": r.code.label(),
+                "edition": r.edition,
+                "section": r.section,
+                "topic": r.topic,
+                "summary": r.summary,
+                "applies": r.applies,
+                "value": val,
+                "source": r.source.label(),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(json!({
         "rules": page,
@@ -216,19 +217,23 @@ fn run_check(s: &mut Session, p: &Value) -> Result<Value> {
         *by_severity.entry(sev.to_string()).or_default() += 1;
     }
 
-    let findings_json: Vec<Value> = all_findings.iter().take(1000).map(|f| {
-        json!({
-            "rule_id": f.rule_id,
-            "cite": f.cite,
-            "element": f.element,
-            "level": f.level,
-            "expected": f.expected,
-            "found": f.found,
-            "topic": f.topic,
-            "source": f.source.label(),
-            "severity": f.severity,
+    let findings_json: Vec<Value> = all_findings
+        .iter()
+        .take(1000)
+        .map(|f| {
+            json!({
+                "rule_id": f.rule_id,
+                "cite": f.cite,
+                "element": f.element,
+                "level": f.level,
+                "expected": f.expected,
+                "found": f.found,
+                "topic": f.topic,
+                "source": f.source.label(),
+                "severity": f.severity,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(json!({
         "pass": pass,
@@ -243,92 +248,102 @@ fn run_check(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn parse_walls(p: &Value, level_filter: Option<&str>) -> Vec<WallCheck> {
     let Some(arr) = p.get("walls").and_then(Value::as_array) else { return vec![] };
-    arr.iter().filter_map(|w| {
-        let level = w.get("level").and_then(Value::as_str).map(String::from);
-        if level_filter.is_some_and(|lf| level.as_deref() != Some(lf)) {
-            return None;
-        }
-        Some(WallCheck {
-            id: w.get("id").and_then(Value::as_str).unwrap_or("").into(),
-            level,
-            wall_type: w.get("wall_type").and_then(Value::as_str).unwrap_or("bearing").into(),
-            stud_size: w.get("stud_size").and_then(Value::as_str).map(String::from),
-            stud_spacing_in: w.get("stud_spacing_in").and_then(Value::as_f64).unwrap_or(16.0),
-            height_ft: w.get("height_ft").and_then(Value::as_f64).unwrap_or(8.0),
-            has_fire_blocking: w.get("has_fire_blocking").and_then(Value::as_bool).unwrap_or(false),
-            header_span_ft: w.get("header_span_ft").and_then(Value::as_f64),
-            header_size: w.get("header_size").and_then(Value::as_str).map(String::from),
+    arr.iter()
+        .filter_map(|w| {
+            let level = w.get("level").and_then(Value::as_str).map(String::from);
+            if level_filter.is_some_and(|lf| level.as_deref() != Some(lf)) {
+                return None;
+            }
+            Some(WallCheck {
+                id: w.get("id").and_then(Value::as_str).unwrap_or("").into(),
+                level,
+                wall_type: w.get("wall_type").and_then(Value::as_str).unwrap_or("bearing").into(),
+                stud_size: w.get("stud_size").and_then(Value::as_str).map(String::from),
+                stud_spacing_in: w.get("stud_spacing_in").and_then(Value::as_f64).unwrap_or(16.0),
+                height_ft: w.get("height_ft").and_then(Value::as_f64).unwrap_or(8.0),
+                has_fire_blocking: w.get("has_fire_blocking").and_then(Value::as_bool).unwrap_or(false),
+                header_span_ft: w.get("header_span_ft").and_then(Value::as_f64),
+                header_size: w.get("header_size").and_then(Value::as_str).map(String::from),
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn parse_rooms(p: &Value, level_filter: Option<&str>) -> Vec<RoomCheck> {
     let Some(arr) = p.get("rooms").and_then(Value::as_array) else { return vec![] };
-    arr.iter().filter_map(|r| {
-        let level = r.get("level").and_then(Value::as_str).map(String::from);
-        if level_filter.is_some_and(|lf| level.as_deref() != Some(lf)) {
-            return None;
-        }
-        Some(RoomCheck {
-            id: r.get("id").and_then(Value::as_str).unwrap_or("").into(),
-            level,
-            room_type: r.get("room_type").and_then(Value::as_str).unwrap_or("dwelling").into(),
-            location: r.get("location").and_then(Value::as_str).map(String::from),
-            receptacle_spacing_in: r.get("receptacle_spacing_in").and_then(Value::as_f64),
-            has_gfci: r.get("has_gfci").and_then(Value::as_bool).unwrap_or(false),
-            has_afci: r.get("has_afci").and_then(Value::as_bool).unwrap_or(false),
-            panel_clearance_in: r.get("panel_clearance_in").and_then(Value::as_f64),
+    arr.iter()
+        .filter_map(|r| {
+            let level = r.get("level").and_then(Value::as_str).map(String::from);
+            if level_filter.is_some_and(|lf| level.as_deref() != Some(lf)) {
+                return None;
+            }
+            Some(RoomCheck {
+                id: r.get("id").and_then(Value::as_str).unwrap_or("").into(),
+                level,
+                room_type: r.get("room_type").and_then(Value::as_str).unwrap_or("dwelling").into(),
+                location: r.get("location").and_then(Value::as_str).map(String::from),
+                receptacle_spacing_in: r.get("receptacle_spacing_in").and_then(Value::as_f64),
+                has_gfci: r.get("has_gfci").and_then(Value::as_bool).unwrap_or(false),
+                has_afci: r.get("has_afci").and_then(Value::as_bool).unwrap_or(false),
+                panel_clearance_in: r.get("panel_clearance_in").and_then(Value::as_f64),
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn parse_plumbing(p: &Value, level_filter: Option<&str>) -> Vec<PlumbingCheck> {
     let Some(arr) = p.get("plumbing").and_then(Value::as_array) else { return vec![] };
-    arr.iter().filter_map(|f| {
-        let level = f.get("level").and_then(Value::as_str).map(String::from);
-        if level_filter.is_some_and(|lf| level.as_deref() != Some(lf)) {
-            return None;
-        }
-        Some(PlumbingCheck {
-            id: f.get("id").and_then(Value::as_str).unwrap_or("").into(),
-            level,
-            pipe_material: f.get("pipe_material").and_then(Value::as_str).map(String::from),
-            pipe_size_in: f.get("pipe_size_in").and_then(Value::as_f64),
-            fixture_units: f.get("fixture_units").and_then(Value::as_f64),
+    arr.iter()
+        .filter_map(|f| {
+            let level = f.get("level").and_then(Value::as_str).map(String::from);
+            if level_filter.is_some_and(|lf| level.as_deref() != Some(lf)) {
+                return None;
+            }
+            Some(PlumbingCheck {
+                id: f.get("id").and_then(Value::as_str).unwrap_or("").into(),
+                level,
+                pipe_material: f.get("pipe_material").and_then(Value::as_str).map(String::from),
+                pipe_size_in: f.get("pipe_size_in").and_then(Value::as_f64),
+                fixture_units: f.get("fixture_units").and_then(Value::as_f64),
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn parse_mechanical(p: &Value, level_filter: Option<&str>) -> Vec<MechCheck> {
     let Some(arr) = p.get("mechanical").and_then(Value::as_array) else { return vec![] };
-    arr.iter().filter_map(|d| {
-        let level = d.get("level").and_then(Value::as_str).map(String::from);
-        if level_filter.is_some_and(|lf| level.as_deref() != Some(lf)) {
-            return None;
-        }
-        Some(MechCheck {
-            id: d.get("id").and_then(Value::as_str).unwrap_or("").into(),
-            level,
-            location: d.get("location").and_then(Value::as_str).map(String::from),
-            has_damper: d.get("has_damper").and_then(Value::as_bool).unwrap_or(false),
-            clearance_in: d.get("clearance_in").and_then(Value::as_f64),
+    arr.iter()
+        .filter_map(|d| {
+            let level = d.get("level").and_then(Value::as_str).map(String::from);
+            if level_filter.is_some_and(|lf| level.as_deref() != Some(lf)) {
+                return None;
+            }
+            Some(MechCheck {
+                id: d.get("id").and_then(Value::as_str).unwrap_or("").into(),
+                level,
+                location: d.get("location").and_then(Value::as_str).map(String::from),
+                has_damper: d.get("has_damper").and_then(Value::as_bool).unwrap_or(false),
+                clearance_in: d.get("clearance_in").and_then(Value::as_f64),
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn parse_building(p: &Value, level_filter: Option<&str>) -> Vec<cadaddy_walk3d::codebook::EgressCheck> {
     let Some(arr) = p.get("building").and_then(Value::as_array) else { return vec![] };
-    arr.iter().filter_map(|o| {
-        let level = o.get("level").and_then(Value::as_str).map(String::from);
-        if level_filter.is_some_and(|lf| level.as_deref() != Some(lf)) {
-            return None;
-        }
-        Some(cadaddy_walk3d::codebook::EgressCheck {
-            id: o.get("id").and_then(Value::as_str).unwrap_or("").into(),
-            level,
-            occupancy: o.get("occupancy").and_then(Value::as_str).map(String::from),
-            width_in: o.get("width_in").and_then(Value::as_f64),
-            clearance_in: o.get("clearance_in").and_then(Value::as_f64),
+    arr.iter()
+        .filter_map(|o| {
+            let level = o.get("level").and_then(Value::as_str).map(String::from);
+            if level_filter.is_some_and(|lf| level.as_deref() != Some(lf)) {
+                return None;
+            }
+            Some(cadaddy_walk3d::codebook::EgressCheck {
+                id: o.get("id").and_then(Value::as_str).unwrap_or("").into(),
+                level,
+                occupancy: o.get("occupancy").and_then(Value::as_str).map(String::from),
+                width_in: o.get("width_in").and_then(Value::as_f64),
+                clearance_in: o.get("clearance_in").and_then(Value::as_f64),
+            })
         })
-    }).collect()
+        .collect()
 }

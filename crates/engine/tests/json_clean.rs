@@ -10,10 +10,7 @@ use serde_json::{Value, json};
 fn assert_strict_json(s: &str, context: &str) {
     for (i, b) in s.bytes().enumerate() {
         if b < 0x20 && b != b'\t' && b != b'\n' && b != b'\r' {
-            panic!(
-                "raw control character 0x{b:02x} at byte {i} in {context}: …{}…",
-                &s[i.saturating_sub(20)..(i + 20).min(s.len())]
-            );
+            panic!("raw control character 0x{b:02x} at byte {i} in {context}: …{}…", &s[i.saturating_sub(20)..(i + 20).min(s.len())]);
         }
     }
     // Also verify the string round-trips through a strict parser.
@@ -33,13 +30,9 @@ fn command_output_has_no_raw_control_characters() {
     let mut s = session();
     // Plant a text entity whose content has every control character 0x00–0x1F.
     let dirty: String = (0u8..0x20).map(|b| b as char).collect();
-    s.execute("text", &json!({"text": dirty, "at": [10.0, 20.0], "height": 5.0}))
-        .expect("text");
+    s.execute("text", &json!({"text": dirty, "at": [10.0, 20.0], "height": 5.0})).expect("text");
     // Run commands that would include the dirty text in their output.
-    for cmd in [
-        "drawing.inspect",
-        "drawing.summary",
-    ] {
+    for cmd in ["drawing.inspect", "drawing.summary"] {
         let r = s.execute(cmd, &json!({})).expect(cmd);
         let serialised = serde_json::to_string(&r).expect("serialise");
         assert_strict_json(&serialised, cmd);
@@ -56,10 +49,7 @@ fn echo_strips_control_characters() {
     s.echo(dirty);
     let last = s.log.last().expect("log entry");
     for b in last.bytes() {
-        assert!(
-            b >= 0x20 || b == b'\t' || b == b'\n' || b == b'\r',
-            "raw 0x{b:02x} in echo log: {last:?}"
-        );
+        assert!(b >= 0x20 || b == b'\t' || b == b'\n' || b == b'\r', "raw 0x{b:02x} in echo log: {last:?}");
     }
 }
 
@@ -88,10 +78,22 @@ fn parameterless_commands_produce_strict_json() {
     let specs = cadaddy_engine::command_specs();
     let skip = [
         // These need an open file, specific state, or have side effects.
-        "close", "closeall", "quit", "qsave", "saveas", "save", "new", "open", "recover",
-        "plot", "publish", "plotstamp", "preview",
+        "close",
+        "closeall",
+        "quit",
+        "qsave",
+        "saveas",
+        "save",
+        "new",
+        "open",
+        "recover",
+        "plot",
+        "publish",
+        "plotstamp",
+        "preview",
         // These need user interaction or specific UI state.
-        "select", "selectall",
+        "select",
+        "selectall",
     ];
     let mut tested = 0;
     for spec in specs {

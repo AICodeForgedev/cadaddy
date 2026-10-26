@@ -32,16 +32,7 @@ pub fn sanitize_string_in_place(s: &mut String) {
     if !s.bytes().any(|b| b < 0x20 && b != b'\t' && b != b'\n' && b != b'\r') {
         return;
     }
-    *s = s
-        .chars()
-        .map(|c| {
-            if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' {
-                '\u{FFFD}'
-            } else {
-                c
-            }
-        })
-        .collect();
+    *s = s.chars().map(|c| if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' { '\u{FFFD}' } else { c }).collect();
 }
 
 #[cfg(test)]
@@ -93,10 +84,7 @@ mod tests {
         sanitize(&mut v);
         let s = serde_json::to_string(&v).unwrap();
         // A strict JSON parser must accept it: no raw control characters anywhere.
-        assert!(
-            !s.bytes().any(|b| b < 0x20 && b != b'\t' && b != b'\n' && b != b'\r'),
-            "raw control chars in serialised JSON: {s:?}"
-        );
+        assert!(!s.bytes().any(|b| b < 0x20 && b != b'\t' && b != b'\n' && b != b'\r'), "raw control chars in serialised JSON: {s:?}");
         // And a round-trip parse succeeds.
         let _: Value = serde_json::from_str(&s).unwrap();
     }

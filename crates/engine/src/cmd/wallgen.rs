@@ -118,7 +118,9 @@ impl WallGrid {
         Self { cell, map }
     }
 
-    fn k(v: f64, cell: f64) -> i64 { (v / cell).floor() as i64 }
+    fn k(v: f64, cell: f64) -> i64 {
+        (v / cell).floor() as i64
+    }
 
     /// Wall indices whose expanded bbox covers the cell at `p`.
     fn at(&self, p: Vec2) -> &[usize] {
@@ -1503,11 +1505,7 @@ fn solid_through_grid(walls: &[PlanWall], grid: Option<&WallGrid>, wi: usize, at
         let (c0, c1) = (u.dot(c.a - w.a).min(u.dot(c.b - w.a)), u.dot(c.a - w.a).max(u.dot(c.b - w.a)));
         c0 <= s0 - past && c1 >= s1 + past
     };
-    if let Some(g) = grid {
-        g.at(at).iter().any(|&i| check(&walls[i]))
-    } else {
-        walls.iter().any(check)
-    }
+    if let Some(g) = grid { g.at(at).iter().any(|&i| check(&walls[i])) } else { walls.iter().any(check) }
 }
 
 /// One door per swing: a swing drawn twice (an arc and its chords, a path stroked twice on the

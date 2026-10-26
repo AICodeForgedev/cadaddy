@@ -40,9 +40,8 @@ fn build_job(size: HotelSize, tag: &str) -> u64 {
     let dir = job_folder(tag, size);
     let mut s = Session::new();
     s.events_subscribe(true);
-    let st = s
-        .execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false}))
-        .expect("job.start");
+    let st =
+        s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false})).expect("job.start");
     assert_eq!(st["done"], json!(true), "job did not finish: {st}");
 
     // Get elapsed_ms for bim_build from events.

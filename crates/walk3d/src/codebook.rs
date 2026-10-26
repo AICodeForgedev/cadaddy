@@ -398,9 +398,7 @@ impl CodeBook {
                 if topic.is_some_and(|t| r.topic != t) {
                     return false;
                 }
-                if !self.selection.editions.is_empty()
-                    && !self.selection.editions.iter().any(|e| e.code == r.code && e.year == r.edition)
-                {
+                if !self.selection.editions.is_empty() && !self.selection.editions.iter().any(|e| e.code == r.code && e.year == r.edition) {
                     return false;
                 }
                 r.applies.matches(ctx)
@@ -429,9 +427,7 @@ impl CodeBook {
     pub fn topics(&self) -> Vec<Topic> {
         let mut seen = std::collections::BTreeSet::new();
         for r in &self.rules {
-            if self.selection.editions.is_empty()
-                || self.selection.editions.iter().any(|e| e.code == r.code && e.year == r.edition)
-            {
+            if self.selection.editions.is_empty() || self.selection.editions.iter().any(|e| e.code == r.code && e.year == r.edition) {
                 seen.insert(r.topic);
             }
         }
@@ -455,12 +451,26 @@ impl CodeBook {
                 if let Some(max) = val.max_spacing_in
                     && wall.stud_spacing_in > max + 0.01
                 {
-                    findings.push(finding(rule, Some(&wall.id), &wall.level, format!("max spacing {max}\""), format!("spacing {}\"", wall.stud_spacing_in), FindingSeverity::High));
+                    findings.push(finding(
+                        rule,
+                        Some(&wall.id),
+                        &wall.level,
+                        format!("max spacing {max}\""),
+                        format!("spacing {}\"", wall.stud_spacing_in),
+                        FindingSeverity::High,
+                    ));
                 }
                 if let Some(max_h) = val.max_height_ft
                     && wall.height_ft > max_h + 0.01
                 {
-                    findings.push(finding(rule, Some(&wall.id), &wall.level, format!("max height {max_h}'"), format!("height {}'", wall.height_ft), FindingSeverity::High));
+                    findings.push(finding(
+                        rule,
+                        Some(&wall.id),
+                        &wall.level,
+                        format!("max height {max_h}'"),
+                        format!("height {}'", wall.height_ft),
+                        FindingSeverity::High,
+                    ));
                 }
                 if let Some(span) = wall.header_span_ft {
                     check_header_table(&val, span, wall, rule, &mut findings);
@@ -471,7 +481,14 @@ impl CodeBook {
                 for rule in self.query(Some(Topic::Framing), &ctx_fb) {
                     let val = self.resolve(rule);
                     if val.required == Some(true) && rule.id.contains("fire_block") {
-                        findings.push(finding(rule, Some(&wall.id), &wall.level, "fire blocking required at concealed spaces > 10'".into(), "no fire blocking".into(), FindingSeverity::High));
+                        findings.push(finding(
+                            rule,
+                            Some(&wall.id),
+                            &wall.level,
+                            "fire blocking required at concealed spaces > 10'".into(),
+                            "no fire blocking".into(),
+                            FindingSeverity::High,
+                        ));
                     }
                 }
             }
@@ -491,18 +508,46 @@ impl CodeBook {
                     && let Some(actual) = room.receptacle_spacing_in
                     && actual > max_sp + 0.01
                 {
-                    findings.push(finding(rule, Some(&room.id), &room.level, format!("max receptacle spacing {max_sp}\""), format!("spacing {actual}\""), FindingSeverity::High));
+                    findings.push(finding(
+                        rule,
+                        Some(&room.id),
+                        &room.level,
+                        format!("max receptacle spacing {max_sp}\""),
+                        format!("spacing {actual}\""),
+                        FindingSeverity::High,
+                    ));
                 }
                 if val.required == Some(true) && rule.id.contains("gfci") && !room.has_gfci {
-                    findings.push(finding(rule, Some(&room.id), &room.level, "GFCI protection required".into(), "no GFCI protection".into(), FindingSeverity::High));
+                    findings.push(finding(
+                        rule,
+                        Some(&room.id),
+                        &room.level,
+                        "GFCI protection required".into(),
+                        "no GFCI protection".into(),
+                        FindingSeverity::High,
+                    ));
                 }
                 if val.required == Some(true) && rule.id.contains("afci") && !room.has_afci {
-                    findings.push(finding(rule, Some(&room.id), &room.level, "AFCI protection required".into(), "no AFCI protection".into(), FindingSeverity::High));
+                    findings.push(finding(
+                        rule,
+                        Some(&room.id),
+                        &room.level,
+                        "AFCI protection required".into(),
+                        "no AFCI protection".into(),
+                        FindingSeverity::High,
+                    ));
                 }
                 if let (Some(min_cl), Some(actual_cl)) = (val.min_clearance_in, room.panel_clearance_in)
                     && actual_cl < min_cl - 0.01
                 {
-                    findings.push(finding(rule, Some(&room.id), &room.level, format!("min clearance {min_cl}\""), format!("clearance {actual_cl}\""), FindingSeverity::High));
+                    findings.push(finding(
+                        rule,
+                        Some(&room.id),
+                        &room.level,
+                        format!("min clearance {min_cl}\""),
+                        format!("clearance {actual_cl}\""),
+                        FindingSeverity::High,
+                    ));
                 }
             }
         }
@@ -520,7 +565,14 @@ impl CodeBook {
                 if let (Some(min_size), Some(actual)) = (val.min_size_in, fix.pipe_size_in)
                     && actual < min_size - 0.01
                 {
-                    findings.push(finding(rule, Some(&fix.id), &fix.level, format!("min pipe size {min_size}\""), format!("pipe size {actual}\""), FindingSeverity::Medium));
+                    findings.push(finding(
+                        rule,
+                        Some(&fix.id),
+                        &fix.level,
+                        format!("min pipe size {min_size}\""),
+                        format!("pipe size {actual}\""),
+                        FindingSeverity::Medium,
+                    ));
                 }
             }
         }
@@ -536,12 +588,26 @@ impl CodeBook {
             for rule in self.query(Some(Topic::Mechanical), &ctx) {
                 let val = self.resolve(rule);
                 if val.required == Some(true) && rule.id.contains("damper") && !duct.has_damper {
-                    findings.push(finding(rule, Some(&duct.id), &duct.level, "fire/smoke damper required at rated assembly".into(), "no damper".into(), FindingSeverity::High));
+                    findings.push(finding(
+                        rule,
+                        Some(&duct.id),
+                        &duct.level,
+                        "fire/smoke damper required at rated assembly".into(),
+                        "no damper".into(),
+                        FindingSeverity::High,
+                    ));
                 }
                 if let (Some(min_cl), Some(actual)) = (val.min_clearance_in, duct.clearance_in)
                     && actual < min_cl - 0.01
                 {
-                    findings.push(finding(rule, Some(&duct.id), &duct.level, format!("min clearance {min_cl}\""), format!("clearance {actual}\""), FindingSeverity::Medium));
+                    findings.push(finding(
+                        rule,
+                        Some(&duct.id),
+                        &duct.level,
+                        format!("min clearance {min_cl}\""),
+                        format!("clearance {actual}\""),
+                        FindingSeverity::Medium,
+                    ));
                 }
             }
         }
@@ -559,12 +625,26 @@ impl CodeBook {
                 if let (Some(min_w), Some(actual)) = (val.min_width_in, op.width_in)
                     && actual < min_w - 0.01
                 {
-                    findings.push(finding(rule, Some(&op.id), &op.level, format!("min width {min_w}\""), format!("width {actual}\""), FindingSeverity::High));
+                    findings.push(finding(
+                        rule,
+                        Some(&op.id),
+                        &op.level,
+                        format!("min width {min_w}\""),
+                        format!("width {actual}\""),
+                        FindingSeverity::High,
+                    ));
                 }
                 if let (Some(min_cl), Some(actual)) = (val.min_clearance_in, op.clearance_in)
                     && actual < min_cl - 0.01
                 {
-                    findings.push(finding(rule, Some(&op.id), &op.level, format!("min clearance {min_cl}\""), format!("clearance {actual}\""), FindingSeverity::High));
+                    findings.push(finding(
+                        rule,
+                        Some(&op.id),
+                        &op.level,
+                        format!("min clearance {min_cl}\""),
+                        format!("clearance {actual}\""),
+                        FindingSeverity::High,
+                    ));
                 }
             }
         }
@@ -573,7 +653,14 @@ impl CodeBook {
     }
 }
 
-fn finding(rule: &CodeRule, element: Option<&str>, level: &Option<String>, expected: String, found: String, severity: FindingSeverity) -> CodeFinding {
+fn finding(
+    rule: &CodeRule,
+    element: Option<&str>,
+    level: &Option<String>,
+    expected: String,
+    found: String,
+    severity: FindingSeverity,
+) -> CodeFinding {
     CodeFinding {
         rule_id: rule.id.clone(),
         cite: format!("{} {}: {}", rule.code.label(), rule.section, rule.summary),
@@ -587,13 +674,7 @@ fn finding(rule: &CodeRule, element: Option<&str>, level: &Option<String>, expec
     }
 }
 
-fn check_header_table(
-    val: &RuleValue,
-    span_ft: f64,
-    wall: &WallCheck,
-    rule: &CodeRule,
-    findings: &mut Vec<CodeFinding>,
-) {
+fn check_header_table(val: &RuleValue, span_ft: f64, wall: &WallCheck, rule: &CodeRule, findings: &mut Vec<CodeFinding>) {
     // The table maps span ranges to header sizes.
     if val.table.is_empty() {
         return;
@@ -604,7 +685,8 @@ fn check_header_table(
     for (key, header) in &val.table {
         if let Some(max_str) = key.strip_prefix("<=")
             && let Ok(max) = max_str.trim().parse::<f64>()
-            && span_ft <= max + 0.01 && max < best_max
+            && span_ft <= max + 0.01
+            && max < best_max
         {
             best_max = max;
             required_header = Some(header.as_str());
@@ -613,7 +695,14 @@ fn check_header_table(
     if let (Some(required), Some(actual)) = (required_header, &wall.header_size)
         && !actual.eq_ignore_ascii_case(required)
     {
-        findings.push(finding(rule, Some(&wall.id), &wall.level, format!("header {required} for span {span_ft}'"), format!("header {actual}"), FindingSeverity::High));
+        findings.push(finding(
+            rule,
+            Some(&wall.id),
+            &wall.level,
+            format!("header {required} for span {span_ft}'"),
+            format!("header {actual}"),
+            FindingSeverity::High,
+        ));
     }
 }
 
@@ -763,10 +852,7 @@ mod tests {
         // Add an amendment that allows 24" stud spacing for bearing 2x4.
         book.amendments.push(Amendment {
             rule_id: "IRC-R602.3(5)-bearing-2x4".into(),
-            value: RuleValue {
-                max_spacing_in: Some(24.0),
-                ..Default::default()
-            },
+            value: RuleValue { max_spacing_in: Some(24.0), ..Default::default() },
             jurisdiction: "Sample County".into(),
             note: Some("Local amendment allows 24\" for single-storey".into()),
         });
