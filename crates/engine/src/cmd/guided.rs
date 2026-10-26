@@ -482,6 +482,84 @@ pub struct SheetRegion {
     pub kind: String,
     /// `[x0, y0, x1, y1]`, drawing units.
     pub rect: [f64; 4],
+    /// Where the sheet's views are: inside its border, off its title block (the whole `rect`
+    /// when no frame was found). Nothing outside it is building.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<[f64; 4]>,
+    /// The title-block strip, when one was found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_block: Option<[f64; 4]>,
+    /// Why the sheet is never built into a building level (`site/civil`, `no level`); empty
+    /// for a sheet of a storey.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub not_built: String,
+}
+
+impl SheetRegion {
+    /// Whether `at` is in the sheet's drawing area (off its border and title block).
+    pub fn in_area(&self, at: [f64; 2]) -> bool {
+        let r = self.area.unwrap_or(self.rect);
+        at[0] >= r[0].min(r[2]) && at[0] <= r[0].max(r[2]) && at[1] >= r[1].min(r[3]) && at[1] <= r[1].max(r[3])
+    }
+}
+
+/// Why a sheet is never built into a building level: a civil, landscape or site sheet, or a
+/// plan whose title and number name no level (it was only given the lowest, to confirm).
+pub fn not_built_reason(discipline: &str, title: &str, level: &str, level_source: &str) -> &'static str {
+    if level.eq_ignore_ascii_case("SITE") || cadaddy_mepfix::sheet_facts::is_site_sheet(discipline, title) {
+        "site/civil"
+    } else if level.trim().is_empty() || level_source == "default" {
+        "no level"
+    } else {
+        ""
+    }
+}
+
+/// Straight lines longer than this share of a sheet's shorter side are measured for its frame.
+const FRAME_RULE_SHARE: f64 = 0.25;
+
+/// Each sheet's frame ([`cadaddy_mepfix::sheet_facts::sheet_frame`]): its long straight lines
+/// (one pass over the drawing), then its border and title block.
+fn sheet_frames(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<cadaddy_mepfix::sheet_facts::SheetFrame> {
+    use cadaddy_doc::EntityKind;
+    use cadaddy_geom::Vec2;
+    let shortest =
+        rects.iter().map(|r| (r[2] - r[0]).abs().min((r[3] - r[1]).abs())).filter(|v| v.is_finite() && *v > 0.0).fold(f64::INFINITY, f64::min);
+    let mut per: Vec<Vec<(Vec2, Vec2)>> = vec![Vec::new(); rects.len()];
+    if shortest.is_finite() {
+        let min_len = FRAME_RULE_SHARE * shortest;
+        let mut put = |a: Vec2, b: Vec2| {
+            if !(a.is_finite() && b.is_finite()) || a.dist(b) < min_len {
+                return;
+            }
+            let m = (a + b) * 0.5;
+            let inside = |r: &[f64; 4]| m.x >= r[0].min(r[2]) && m.x <= r[0].max(r[2]) && m.y >= r[1].min(r[3]) && m.y <= r[1].max(r[3]);
+            if let Some(i) = rects.iter().position(inside)
+                && let Some(v) = per.get_mut(i)
+            {
+                v.push((a, b));
+            }
+        };
+        for e in d.model.iter() {
+            match &e.kind {
+                EntityKind::Line(l) => put(l.a.xy(), l.b.xy()),
+                EntityKind::LwPolyline(p) => {
+                    for w in p.vertices.windows(2) {
+                        if let [a, b] = w {
+                            put(a.p, b.p);
+                        }
+                    }
+                    if p.closed
+                        && let (Some(a), Some(b)) = (p.vertices.last(), p.vertices.first())
+                    {
+                        put(a.p, b.p);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    rects.iter().zip(&per).map(|(r, segs)| cadaddy_mepfix::sheet_facts::sheet_frame(segs, *r)).collect()
 }
 
 impl GuidedJob {
@@ -1366,6 +1444,14 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             .unwrap_or(own)
             .to_string()
     };
+    // The sheet's entry in the index (its title and where its level came from).
+    let index_entry = |base: &str| -> Option<&Value> {
+        job.index
+            .as_ref()
+            .and_then(|i| i.get("sheets"))
+            .and_then(Value::as_array)
+            .and_then(|a| a.iter().find(|x| x.get("number").and_then(Value::as_str) == Some(base)))
+    };
     let level_rank = |l: &str| (l.is_empty(), l == "R", l.parse::<u32>().unwrap_or(u32::MAX), l.to_string());
     plan_sheets.sort_by_key(|sh| level_rank(&level_of(sh)));
     let mut all: Vec<&Value> = if plan_sheets.is_empty() { sheet_arr.iter().filter(current).collect() } else { plan_sheets };
@@ -1443,12 +1529,20 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                         .and_then(Value::as_str)
                         .filter(|d| !d.is_empty())
                         .map_or_else(|| number.chars().take_while(char::is_ascii_alphabetic).take(2).collect(), str::to_string);
+                    let base = number.split('/').next().unwrap_or(number);
+                    let level = level_of(sh);
+                    let field =
+                        |k: &str| index_entry(base).and_then(|x| x.get(k)).or_else(|| sh.get(k)).and_then(Value::as_str).unwrap_or("").to_string();
+                    let not_built = not_built_reason(&discipline, &field("title"), &level, &field("level_source"));
                     regions.push(SheetRegion {
-                        number: number.split('/').next().unwrap_or(number).to_string(),
-                        level: level_of(sh),
+                        number: base.to_string(),
+                        level,
                         discipline: discipline.to_ascii_uppercase(),
                         kind: kind(sh),
                         rect,
+                        area: None,
+                        title_block: None,
+                        not_built: not_built.to_string(),
                     });
                 }
                 if placed.len() < MAX_QUESTIONS_PER_STAGE {
@@ -1461,6 +1555,12 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         }
     }
     job.sheet_spans.extend(spans);
+    // Each sheet's border and title block: what is read there is never building.
+    let rects: Vec<[f64; 4]> = regions.iter().map(|r| r.rect).collect();
+    for (r, f) in regions.iter_mut().zip(sheet_frames(s.doc()?, &rects)) {
+        r.area = Some(f.area);
+        r.title_block = f.title_block;
+    }
     job.sheet_regions = regions;
     job.sheets_loaded = true;
     job.audit(
@@ -1818,7 +1918,15 @@ fn zero_evidence(plans: &[String]) -> Option<QuestionEvidence> {
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Load plan-sheet PDFs into the drawing so rooms.list finds entities.
     ensure_sheets_loaded(s, job)?;
-    let mut rooms_result = s.execute("rooms.list", &json!({"outline": false}))?;
+    // Each floor plan's labels read in full, sheet by sheet (a whole set's labels are more than
+    // one reading traces: the last floors were left out).
+    let regions: Vec<[f64; 4]> =
+        job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty()).map(|r| r.area.unwrap_or(r.rect)).collect();
+    let mut params = json!({"outline": false});
+    if !regions.is_empty() {
+        params["regions"] = json!(regions);
+    }
+    let mut rooms_result = s.execute("rooms.list", &params)?;
     // A room carries the level of the sheet it was read on.
     if let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) {
         for room in list.iter_mut() {
@@ -1831,6 +1939,13 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 o.insert("sheet".into(), json!(region.number));
             }
+        }
+    }
+    let dropped = rooms_off_the_building(job, &mut rooms_result);
+    if let Some(o) = rooms_result.as_object_mut() {
+        o.insert("not_rooms".into(), dropped);
+        if let Some(n) = o.get("rooms").and_then(Value::as_array).map(Vec::len) {
+            o.insert("count".into(), json!(n));
         }
     }
     let duplicates = one_room_per_number(job, &mut rooms_result);
@@ -1975,6 +2090,67 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     job.audit("stage_run", "pipeline", None, Some(StageName::Rooms), Some(json!({"rooms_found": room_count})));
     Ok(rooms_result)
+}
+
+/// Take out what was read as rooms but is not the building's (MUST 1-3): labels in a sheet's
+/// title block or border (firm names, addresses, review stamps), rooms read on a site, civil or
+/// level-less sheet, the other disciplines' unnumbered labels on a level the architectural plan
+/// shows (legends, notes), and labels no room is named (notes, dates, view titles). How many
+/// went, by why.
+fn rooms_off_the_building(job: &GuidedJob, rooms_result: &mut Value) -> Value {
+    let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) else { return json!({}) };
+    let a_levels: Vec<String> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.discipline == "A" && r.kind == "plan" && r.not_built.is_empty())
+        .map(|r| r.level.trim().to_ascii_uppercase())
+        .collect();
+    let (mut sheet_furniture, mut site, mut other_discipline, mut not_a_name) = (0usize, 0usize, 0usize, 0usize);
+    list.retain(|room| {
+        let at = room.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
+        let name = room.get("name").and_then(Value::as_str).unwrap_or("");
+        if !name.trim().is_empty() && (!super::autospec::room_label(name) || !legible_room_name(name)) {
+            not_a_name += 1;
+            return false;
+        }
+        let Some(region) = at.and_then(|at| job.level_at(at)) else { return true };
+        if at.is_some_and(|at| !region.in_area(at)) {
+            sheet_furniture += 1;
+            return false;
+        }
+        if !region.not_built.is_empty() {
+            site += 1;
+            return false;
+        }
+        // Another discipline's copy of a level the architectural plan shows: only a numbered
+        // room (the copy of one the architectural reading missed; one per number is kept
+        // below), never its legends and notes.
+        let numbered = room.get("number").and_then(Value::as_str).is_some_and(|n| n.chars().any(|c| c.is_ascii_digit()));
+        if region.discipline != "A" && !numbered && a_levels.contains(&region.level.trim().to_ascii_uppercase()) {
+            other_discipline += 1;
+            return false;
+        }
+        true
+    });
+    json!({"title_block_or_border": sheet_furniture, "site_or_no_level": site, "other_discipline": other_discipline, "not_a_room_name": not_a_name})
+}
+
+/// Whether a room name reads as words: a run of three letters (`LOBBY`, `IDF`, `CORR`) or a
+/// two-letter code (`WC`, `CL`). Text read from a print in a font the reader can't map comes out
+/// as `-4--P- -I--Y-`, `Xb` or `D D`, and a dimension string as `22 40 OO`.
+fn legible_room_name(name: &str) -> bool {
+    let t = name.trim();
+    if t.len() == 2 && t.bytes().all(|b| b.is_ascii_uppercase()) {
+        return true;
+    }
+    let mut run = 0;
+    for c in t.chars() {
+        run = if c.is_alphabetic() { run + 1 } else { 0 };
+        if run >= 3 {
+            return true;
+        }
+    }
+    false
 }
 
 /// The rule key of a room answer: `room:<number>|<name>`, upper case.
@@ -2663,6 +2839,19 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Use model.build directly — it returns walls/doors/rooms/levels counts.
     // (bim.build wraps model.build but constructs its own result without those counts.)
     let mut result = s.execute("model.build", &json!({}))?;
+    // The model's rooms are the job's rooms on the levels it built.
+    if let Some(by_level) = rooms_from_model(s, job)
+        && let Some(o) = result.as_object_mut()
+    {
+        o.insert("rooms_by_level".into(), by_level);
+    }
+    // The plans kept out of the building (MUST 3), for the job report.
+    let skipped = not_built_sheets(job);
+    if !skipped.is_empty()
+        && let Some(o) = result.as_object_mut()
+    {
+        o.insert("not_built".into(), json!(skipped));
+    }
     // The devices stage's devices, on their levels (bspec.draft started a new spec).
     if !job.devices.is_empty() {
         match super::readers::place_devices(s, &job.devices, "guided job") {
@@ -2815,12 +3004,25 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     Ok(result)
 }
 
+/// The plan sheets never built into a building level, as `A010: not built: site/civil`.
+fn not_built_sheets(job: &GuidedJob) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in job.sheet_regions.iter().filter(|r| !r.not_built.is_empty()).take(MAX_QUESTIONS_PER_STAGE) {
+        let line = format!("{}: not built: {}", if r.number.is_empty() { "?" } else { &r.number }, r.not_built);
+        if !out.contains(&line) {
+            out.push(line);
+        }
+    }
+    out
+}
+
 /// Floor to floor when the sections give none, feet.
 const DEFAULT_STOREY_FT: f64 = 10.0;
 
 /// The building's levels for `bspec.draft`: one per level that has an architectural floor plan
 /// (discipline A, type plan; the first such sheet of each level), lowest first, its region the
-/// plan's rectangle on the job's drawing. Elevations and floor-to-floor heights from the sheet
+/// plan's drawing area on the job's drawing (inside the border, off the title block, so sheet
+/// furniture builds nothing). Elevations and floor-to-floor heights from the sheet
 /// index (read off the sections); else stacked at [`DEFAULT_STOREY_FT`] and marked as guessed,
 /// so the build stage asks. Empty when the set has no architectural floor plans (the build reads
 /// whatever was imported, as for one sheet).
@@ -2865,8 +3067,10 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
 }
 
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
+    // Site, civil and landscape plans, and plans that name no level, are no storey (MUST 3).
     let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
-    let floor_plan = |r: &&SheetRegion| r.kind == "plan" && !r.level.trim().is_empty() && !r.level.eq_ignore_ascii_case("SITE");
+    let floor_plan =
+        |r: &&SheetRegion| r.kind == "plan" && !r.level.trim().is_empty() && !r.level.eq_ignore_ascii_case("SITE") && r.not_built.is_empty();
     let mut plans: Vec<&SheetRegion> = job.sheet_regions.iter().filter(floor_plan).filter(|r| r.discipline == "A").collect();
     if plans.is_empty() {
         // No architectural floor plans: one discipline's plans give the floors (their
@@ -2917,8 +3121,7 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
             None => (DEFAULT_STOREY_FT, false),
         };
         next_elevation = elevation + height;
-        let mut level =
-            json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.rect});
+        let mut level = json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.area.unwrap_or(r.rect)});
         if let (true, Some(e)) = (out_of_order, read_el) {
             level["guess"] = json!(format!(
                 "{} plan {}: the elevation read for it, {}, breaks the levels' order, so it is not used; stacked at {}",
@@ -2934,6 +3137,71 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
         out.push(level);
     }
     out
+}
+
+/// The job's rooms after the build (MUST 2: a room is a label inside a closed boundary of real
+/// walls): the rooms stage's reading (each label traced inside its closed outline on its sheet,
+/// the title block, border and other sheets' notes left out), and the rooms the model traced
+/// inside a level's walls that the reading has not: neither its number (on any level: the
+/// model's tag can be read off another floor's sheet) nor its name on its level. The rooms
+/// stage's result takes them, its reading's count kept as `read_count`. The model's rooms per
+/// level.
+fn rooms_from_model(s: &mut Session, job: &mut GuidedJob) -> Option<Value> {
+    let model = super::rooms3d::model_rooms(s).ok().flatten().filter(|l| !l.is_empty())?;
+    let text = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+    let mut by_level: BTreeMap<String, usize> = BTreeMap::new();
+    for r in &model {
+        *by_level.entry(r.get("level").and_then(Value::as_str).unwrap_or("").to_string()).or_default() += 1;
+    }
+    let mut read: Vec<Value> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // A re-run of the build: the reading is the one before the last build added to it.
+    read.retain(|r| r.get("from_model").and_then(Value::as_bool) != Some(true));
+    let read_count = read.len();
+    let numbers: BTreeSet<String> = read.iter().map(|r| text(r, "number")).filter(|n| !n.is_empty()).collect();
+    let mut names: BTreeSet<(String, String)> = read.iter().map(|r| (level_name(&text(r, "level")).to_ascii_uppercase(), text(r, "name"))).collect();
+    let added: Vec<Value> = model
+        .into_iter()
+        .filter_map(|mut m| {
+            let (number, name) = (text(&m, "number"), m.get("name").and_then(Value::as_str).unwrap_or("").to_string());
+            let room = legible_room_name(&name) && super::autospec::room_label(&name) && !name.trim().eq_ignore_ascii_case("ROOM");
+            let new = (number.is_empty() || !numbers.contains(&number)) && names.insert((text(&m, "level"), name.trim().to_ascii_uppercase()));
+            if let Some(o) = m.as_object_mut() {
+                o.insert("from_model".into(), json!(true));
+            }
+            (room && new).then_some(m)
+        })
+        .collect();
+    let from_model = added.len();
+    let mut rooms = json!({"rooms": read.into_iter().chain(added).collect::<Vec<_>>()});
+    let (removed, renamed) = apply_room_answers(job, &mut rooms);
+    let list = rooms.get_mut("rooms").map(Value::take).unwrap_or_else(|| json!([]));
+    let count = list.as_array().map_or(0, Vec::len);
+    if let Some(o) = job.stage_mut(StageName::Rooms).and_then(|st| st.result.as_mut()).and_then(Value::as_object_mut) {
+        o.insert("read_count".into(), json!(read_count));
+        o.insert("from_model".into(), json!(from_model));
+        o.insert("rooms".into(), list);
+        o.insert("count".into(), json!(count));
+        if removed > 0 {
+            o.insert("removed_by_answers".into(), json!(removed));
+        }
+        if renamed > 0 {
+            o.insert("renamed_by_answers".into(), json!(renamed));
+        }
+    }
+    job.audit(
+        "rooms_from_model",
+        "pipeline",
+        None,
+        Some(StageName::Rooms),
+        Some(json!({"read": read_count, "from_model": from_model, "rooms": count})),
+    );
+    Some(json!(by_level))
 }
 
 /// The building spec drafted and stored from the open print set, as the job's build stage drafts
@@ -4083,6 +4351,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "answers": answers_value(&job),
         "rules_learned": job.rules.len(),
         "audit_entries": job.audit.len(),
+        "not_built": not_built_sheets(&job),
     }))
 }
 
@@ -4685,6 +4954,9 @@ mod tests {
                 discipline: "E".into(),
                 kind: "plan".into(),
                 rect: [x0, 0.0, x0 + 2000.0, 1000.0],
+                area: None,
+                title_block: None,
+                not_built: String::new(),
             });
             want_by_level.insert(format!("Level {level}"), a + b);
         }
@@ -4982,7 +5254,16 @@ mod tests {
     }
 
     fn region(number: &str, level: &str, discipline: &str, kind: &str, x: f64) -> SheetRegion {
-        SheetRegion { number: number.into(), level: level.into(), discipline: discipline.into(), kind: kind.into(), rect: [x, 0.0, x + 100.0, 80.0] }
+        SheetRegion {
+            number: number.into(),
+            level: level.into(),
+            discipline: discipline.into(),
+            kind: kind.into(),
+            rect: [x, 0.0, x + 100.0, 80.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+        }
     }
 
     #[test]
@@ -5091,6 +5372,274 @@ mod tests {
         let r301: Vec<&Value> = list.iter().filter(|r| r["number"] == "301" && r["level"] == "3").collect();
         assert_eq!(r301.len(), 1);
         assert_eq!(r301[0]["sheet"], "A113");
+    }
+
+    // ─── Sheet furniture and site sheets build nothing (Q5273) ───
+
+    fn line(s: &mut crate::Session, a: [f64; 2], b: [f64; 2]) {
+        s.execute("line", &json!({"points": [a, b]})).unwrap();
+    }
+
+    fn rect(s: &mut crate::Session, x0: f64, y0: f64, x1: f64, y1: f64) {
+        line(s, [x0, y0], [x1, y0]);
+        line(s, [x1, y0], [x1, y1]);
+        line(s, [x1, y1], [x0, y1]);
+        line(s, [x0, y1], [x0, y0]);
+    }
+
+    /// The made-up sheet's rectangle (inches, a 1/8" plan's sheet units).
+    const SHEET: [f64; 4] = [-200.0, -200.0, 1000.0, 700.0];
+
+    /// A plan sheet as a print set plots it, everything on the wall pen: a 40' × 30' floor (6"
+    /// walls, a 4" partition with a door, OFFICE and LOBBY), a double ruled border, a title-block
+    /// strip on the right (two full-height rules, rows ruled in pairs that close boxes around the
+    /// firm's name and the project name) and a round review stamp in the strip.
+    fn furnished_sheet() -> crate::Session {
+        let mut s = crate::Session::new();
+        s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+        rect(&mut s, 0.0, 0.0, 480.0, 360.0);
+        rect(&mut s, 6.0, 6.0, 474.0, 354.0);
+        for x in [238.0, 242.0] {
+            line(&mut s, [x, 6.0], [x, 150.0]);
+            line(&mut s, [x, 186.0], [x, 354.0]);
+        }
+        // The border.
+        rect(&mut s, -185.0, -185.0, 985.0, 685.0);
+        rect(&mut s, -179.0, -179.0, 979.0, 679.0);
+        // The title block: its rules, and rows in pairs 8" apart.
+        line(&mut s, [880.0, -179.0], [880.0, 679.0]);
+        line(&mut s, [886.0, -179.0], [886.0, 679.0]);
+        for y in [0.0, 100.0, 200.0, 300.0] {
+            line(&mut s, [886.0, y], [979.0, y]);
+            line(&mut s, [886.0, y + 8.0], [979.0, y + 8.0]);
+        }
+        // The stamp.
+        s.execute("circle", &json!({"center": [930.0, 450.0], "radius": 30.0})).unwrap();
+        s.execute("circle", &json!({"center": [930.0, 450.0], "radius": 24.0})).unwrap();
+        s.execute("layer.new", &json!({"name": "A-DOOR", "current": true})).unwrap();
+        s.execute("arc", &json!({"center": [240.0, 150.0], "radius": 36.0, "start": 0.0, "end": 90.0})).unwrap();
+        s.execute("layer.new", &json!({"name": "A-AREA-IDEN", "current": true})).unwrap();
+        for (t, x, y, h) in [
+            ("OFFICE", 100.0, 180.0, 8.0),
+            ("101", 100.0, 160.0, 6.0),
+            ("LOBBY", 340.0, 180.0, 8.0),
+            ("102", 340.0, 160.0, 6.0),
+            ("ACME DESIGN GROUP", 895.0, 150.0, 6.0),
+            ("SAMPLE INN", 895.0, 250.0, 6.0),
+            ("OWNER COPY", 905.0, 450.0, 5.0),
+        ] {
+            s.execute("text", &json!({"at": [x, y], "text": t, "height": h})).unwrap();
+        }
+        s
+    }
+
+    fn a_plan(area: Option<[f64; 4]>, title_block: Option<[f64; 4]>) -> SheetRegion {
+        SheetRegion {
+            number: "A111".into(),
+            level: "1".into(),
+            discipline: "A".into(),
+            kind: "plan".into(),
+            rect: SHEET,
+            area,
+            title_block,
+            not_built: String::new(),
+        }
+    }
+
+    /// Built walls: how many, and how many have their middle off the floor's footprint.
+    fn walls_built(s: &crate::Session) -> (usize, usize) {
+        let d = s.doc().unwrap();
+        let walls: Vec<_> = d.model.iter().filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("wall")).collect();
+        let off = walls
+            .iter()
+            .filter(|e| {
+                let c = cadaddy_doc::entity_bounds(d, e, 0).center();
+                !(c.x >= -12.0 && c.x <= 492.0 && c.y >= -12.0 && c.y <= 372.0)
+            })
+            .count();
+        (walls.len(), off)
+    }
+
+    fn build_job(s: &mut crate::Session, job: &GuidedJob) -> Value {
+        let levels = building_levels(job);
+        assert_eq!(levels.len(), 1, "{levels:?}");
+        s.execute("bspec.draft", &json!({"store": true, "levels": levels, "stack": true})).unwrap();
+        s.execute("model.build", &json!({})).unwrap()
+    }
+
+    #[test]
+    fn the_sheet_frame_is_found_and_the_plan_is_inside_it() {
+        let s = furnished_sheet();
+        let frames = sheet_frames(s.doc().unwrap(), &[SHEET]);
+        let f = frames.first().copied().unwrap();
+        assert!(f.border, "{f:?}");
+        let tb = f.title_block.unwrap();
+        assert!((tb[0] - 880.0).abs() < 1.0, "the strip starts at its first full-height rule: {f:?}");
+        // Inside the border, left of the title block, and the whole floor in it.
+        let a = f.area;
+        assert!(a[0] > -179.0 && a[1] > -179.0 && a[2] < 880.0 && a[3] < 679.0, "{f:?}");
+        assert!(a[0] < 0.0 && a[1] < 0.0 && a[2] > 480.0 && a[3] > 360.0, "{f:?}");
+        // A region with nothing drawn: the frame is the whole region.
+        let none = sheet_frames(s.doc().unwrap(), &[[5000.0, 5000.0, 6000.0, 6000.0]]);
+        assert_eq!(none.first().map(|f| (f.area, f.border, f.title_block)), Some(([5000.0, 5000.0, 6000.0, 6000.0], false, None)));
+    }
+
+    #[test]
+    fn the_title_block_border_and_stamp_build_no_walls_or_rooms() {
+        // Without the frame (the whole sheet a level), the title block's labels are rooms.
+        let mut s = furnished_sheet();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![a_plan(None, None)];
+        let r = build_job(&mut s, &job);
+        let spec: cadaddy_walk3d::BuildingSpec = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+        assert!(
+            spec.rooms.iter().any(|r| !["OFFICE", "LOBBY"].contains(&r.name.to_ascii_uppercase().as_str())),
+            "the test sheet's title block must name rooms: {r}"
+        );
+
+        // With it: only the floor's walls, its door and its two rooms.
+        let mut s = furnished_sheet();
+        let f = sheet_frames(s.doc().unwrap(), &[SHEET]).first().copied().unwrap();
+        job.sheet_regions = vec![a_plan(Some(f.area), f.title_block)];
+        let r = build_job(&mut s, &job);
+        let (n, off) = walls_built(&s);
+        assert!(n >= 4, "{r}");
+        assert_eq!(off, 0, "no wall from the border, title block or stamp: {r}");
+        // (OFFICE and LOBBY trace as one space through the door's gap: one room.)
+        assert_eq!(r["rooms"].as_u64(), Some(1), "the floor's room only: {r}");
+        assert_eq!(r["doors"].as_u64(), Some(1), "{r}");
+        let spec: cadaddy_walk3d::BuildingSpec = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+        let names: Vec<String> = spec.rooms.iter().map(|r| r.name.to_ascii_uppercase()).collect();
+        assert!(!names.is_empty() && names.iter().all(|n| n == "OFFICE" || n == "LOBBY"), "{names:?}");
+    }
+
+    #[test]
+    fn the_jobs_rooms_are_the_reading_and_what_only_the_model_traced() {
+        // The partition's jambs drawn and its door shut, so OFFICE and LOBBY are two rooms
+        // inside the floor's walls.
+        let mut s = furnished_sheet();
+        s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+        line(&mut s, [238.0, 150.0], [242.0, 150.0]);
+        line(&mut s, [238.0, 186.0], [242.0, 186.0]);
+        s.execute("layer.current", &json!({"name": "A-DOOR"})).unwrap();
+        line(&mut s, [240.0, 150.0], [240.0, 186.0]);
+        let f = sheet_frames(s.doc().unwrap(), &[SHEET]).first().copied().unwrap();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![a_plan(Some(f.area), f.title_block)];
+        let r = build_job(&mut s, &job);
+        assert_eq!(r["rooms"].as_u64(), Some(2), "{r}");
+        // The rooms stage read OFFICE 101 and LAB 103 (its door not built, so the model traced
+        // no lab) on level 1, and STORAGE on level 2 (no plan built); not the lobby.
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"count": 3, "rooms": [
+                {"name": "OFFICE", "number": "101", "level": "1"},
+                {"name": "LAB", "number": "103", "level": "1"},
+                {"name": "STORAGE", "number": "201", "level": "2"}
+            ]}));
+        }
+        let by_level = rooms_from_model(&mut s, &mut job).expect("the model's rooms");
+        assert_eq!(by_level, json!({"Level 1": 2}));
+        let names_of = |job: &GuidedJob| {
+            let result = job.stage(StageName::Rooms).and_then(|st| st.result.clone()).unwrap_or_default();
+            let mut names: Vec<(String, String, String)> = result["rooms"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| {
+                    (r["name"].as_str().unwrap_or("").into(), r["number"].as_str().unwrap_or("").into(), r["level"].as_str().unwrap_or("").into())
+                })
+                .collect();
+            names.sort_unstable();
+            (names, result)
+        };
+        let (names, result) = names_of(&job);
+        // The model's Office is the OFFICE read (its number); its Lobby, not read, is added.
+        let want = [("LAB", "103", "1"), ("Lobby", "102", "Level 1"), ("OFFICE", "101", "1"), ("STORAGE", "201", "2")];
+        assert_eq!(names, want.map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string())), "{result}");
+        assert_eq!((result["count"].as_u64(), result["read_count"].as_u64(), result["from_model"].as_u64()), (Some(4), Some(3), Some(1)));
+        // Run again (a re-run of the build): the same rooms, none twice.
+        rooms_from_model(&mut s, &mut job).expect("the model's rooms");
+        let (again, result) = names_of(&job);
+        assert_eq!(again, names, "{result}");
+        assert_eq!(result["read_count"].as_u64(), Some(3));
+
+        // A model with no rooms leaves the reading as it was.
+        let mut empty = crate::Session::new();
+        let mut job2 = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        if let Some(st) = job2.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"count": 1, "rooms": [{"name": "OFFICE", "level": "1"}]}));
+        }
+        assert!(rooms_from_model(&mut empty, &mut job2).is_none());
+        assert_eq!(
+            job2.stage(StageName::Rooms).and_then(|st| st.result.clone()),
+            Some(json!({"count": 1, "rooms": [{"name": "OFFICE", "level": "1"}]}))
+        );
+    }
+
+    #[test]
+    fn site_civil_and_levelless_plans_are_never_a_storey() {
+        assert_eq!(not_built_reason("C", "DIMENSION CONTROL PLAN", "1", "default"), "site/civil");
+        assert_eq!(not_built_reason("L", "PLANTING PLAN", "1", "title"), "site/civil");
+        assert_eq!(not_built_reason("A", "ARCHITECTURAL SITE PLAN", "1", "default"), "site/civil");
+        assert_eq!(not_built_reason("A", "OVERALL PLAN", "SITE", "title"), "site/civil");
+        assert_eq!(not_built_reason("A", "ENLARGED STAIR PLAN", "1", "default"), "no level");
+        assert_eq!(not_built_reason("A", "FIRST FLOOR PLAN", "1", "title"), "");
+
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let mut site = region("A010", "1", "A", "plan", 0.0);
+        site.not_built = "site/civil".into();
+        let mut civil = region("C101", "1", "C", "plan", 200.0);
+        civil.not_built = "site/civil".into();
+        let mut nolevel = region("A100", "1", "A", "plan", 400.0);
+        nolevel.not_built = "no level".into();
+        job.sheet_regions = vec![site, civil, nolevel, region("A111", "1", "A", "plan", 600.0), region("A112", "2", "A", "plan", 800.0)];
+        let levels = building_levels(&job);
+        let x0: Vec<f64> = levels.iter().filter_map(|l| l["region"][0].as_f64()).collect();
+        assert_eq!(x0, [600.0, 800.0], "Level 1 is A111's, never the site plan's: {levels:?}");
+        let report = not_built_sheets(&job);
+        assert_eq!(report, ["A010: not built: site/civil", "C101: not built: site/civil", "A100: not built: no level"]);
+    }
+
+    #[test]
+    fn rooms_in_title_blocks_on_site_sheets_and_other_disciplines_go() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let mut a = region("A111", "1", "A", "plan", 0.0);
+        a.area = Some([2.0, 2.0, 80.0, 78.0]);
+        a.title_block = Some([82.0, 2.0, 98.0, 78.0]);
+        let mut site = region("C101", "", "C", "plan", 200.0);
+        site.not_built = "site/civil".into();
+        job.sheet_regions = vec![a, region("E101", "1", "E", "plan", 400.0), region("E102", "2", "E", "plan", 600.0), site];
+        let mut rooms = json!({"rooms": [
+            {"name": "OFFICE", "number": "101", "at": [20.0, 20.0]},
+            {"name": "ACME DESIGN GROUP", "at": [90.0, 40.0]},
+            {"name": "LOBBY", "at": [99.5, 79.5]},
+            {"name": "PLAZA", "at": [250.0, 40.0]},
+            {"name": "OFFICE", "at": [420.0, 40.0]},
+            {"name": "STORAGE", "at": [620.0, 40.0]},
+            {"name": "FIRST FLOOR PLAN", "at": [30.0, 10.0]},
+            {"name": "DRAWN BY: JD", "at": [30.0, 30.0]},
+            {"name": "KING SUITE", "number": "102", "at": [40.0, 40.0]},
+            {"name": "KING SUITE", "number": "104", "at": [430.0, 40.0]},
+            {"name": "-4--P- -I--Y-", "number": "135", "at": [440.0, 40.0]},
+            {"name": "22 40 OO", "at": [50.0, 50.0]}
+        ]});
+        let dropped = rooms_off_the_building(&job, &mut rooms);
+        let names: Vec<&str> = rooms["rooms"].as_array().unwrap().iter().filter_map(|r| r["name"].as_str()).collect();
+        // Level 2 has no A plan here: its electrical plan's rooms stay. On level 1 the
+        // electrical plan's numbered room the A plan's reading missed stays (one per number is
+        // kept later); its unnumbered OFFICE (a legend's, a note's) goes.
+        assert_eq!(names, ["OFFICE", "STORAGE", "KING SUITE", "KING SUITE"], "{dropped}");
+        assert_eq!(dropped, json!({"title_block_or_border": 2, "site_or_no_level": 1, "other_discipline": 1, "not_a_room_name": 4}));
+    }
+
+    #[test]
+    fn a_room_name_reads_as_words() {
+        for good in ["LOBBY", "IDF", "WC", "CORR", "KING ROOM", "Office", "STAIR 2"] {
+            assert!(legible_room_name(good), "{good}");
+        }
+        for bad in ["-4-----P- -I-----Y-", "Xb", "D D", "22 40 OO", "-J--L---", "G L", "", "12"] {
+            assert!(!legible_room_name(bad), "{bad}");
+        }
     }
 
     /// A question for the jobask tests.

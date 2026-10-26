@@ -7,7 +7,7 @@
 //! the International Code Council's *International Building Code* (2021) §1011.5.2 (risers 4″ to
 //! 7″, treads at least 11″), *International Residential Code* (2021) §R311.7.5 (risers at most
 //! 7¾″, treads at least 10″), IBC §1012.2 (ramps at most 1:12) and §1014.2 (handrails 34″ to
-//! 38″ above the nosings). The walker climbs a flight as the slope through its nosings, the
+//! 38″ above the nosings); guards stand 42″ above a landing's open sides (§1015.3). The walker climbs a flight as the slope through its nosings, the
 //! "step offset" a character controller takes stairs with (after Fauerby, "Improved Collision
 //! detection and Response", 2003).
 
@@ -16,11 +16,14 @@ use serde::{Deserialize, Serialize};
 
 /// Handrail height above the nosings (or a ramp's surface), feet: 36″, inside 34″–38″.
 pub const HANDRAIL_FT: f64 = 3.0;
-/// Code limits, inches.
+/// Guard height above a landing, feet: 42″ (IBC 1015.3).
+pub const GUARD_FT: f64 = 3.5;
+/// Code limits, inches: commercial (IBC 1011.5.2, the default) and residential (IRC R311.7.5).
 pub const RISER_MIN_IN: f64 = 4.0;
 pub const RISER_MAX_IN: f64 = 7.75;
 pub const RISER_MAX_COMMERCIAL_IN: f64 = 7.0;
 pub const TREAD_MIN_IN: f64 = 10.0;
+pub const TREAD_MIN_COMMERCIAL_IN: f64 = 11.0;
 /// Steepest ramp: 1 in 12.
 pub const RAMP_MAX_SLOPE: f64 = 1.0 / 12.0;
 
@@ -98,6 +101,15 @@ pub struct Wedge {
     pub zb: f64,
 }
 
+/// A guard along a landing's open side, feet: on `a`–`b`, from the landing at `z0` up to `z1`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Guard {
+    pub a: Vec2,
+    pub b: Vec2,
+    pub z0: f64,
+    pub z1: f64,
+}
+
 /// What a stair is made of, feet.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StairGeometry {
@@ -105,6 +117,8 @@ pub struct StairGeometry {
     pub wedges: Vec<Wedge>,
     /// Handrails: (start, end) as (x, y, z).
     pub rails: Vec<([f64; 3], [f64; 3])>,
+    /// Guards on the landings' open sides.
+    pub guards: Vec<Guard>,
     pub slopes: Vec<Slope>,
     /// Risers and their height (feet); 0 for a ramp.
     pub risers: u32,
@@ -187,6 +201,27 @@ impl StairRule {
                 let (la, lb) = (b + side * mid, b + side * mid + u * depth);
                 g.blocks.push(Block { a: la, b: lb, width: hi - lo, z0: zb, z1: z_end });
                 g.slopes.push(Slope { a: la, b: lb, half_width: (hi - lo) / 2.0, za: z_end, zb: z_end });
+                // Guards on its open sides: every edge but the one this run arrives at and the
+                // one the next run leaves from (a switchback leaves from the same edge, so its
+                // outer edge and both ends are guarded).
+                let (na_along, na_across) = rel(na);
+                let leaves = [na_along.abs(), (na_along - depth).abs(), (na_across - lo).abs(), (na_across - hi).abs()]
+                    .iter()
+                    .enumerate()
+                    .fold((0, f64::INFINITY), |m, (k, d)| if *d < m.1 { (k, *d) } else { m })
+                    .0;
+                let corner = |along: f64, across: f64| b + u * along + side * across;
+                let edges = [
+                    (corner(0.0, lo), corner(0.0, hi)),
+                    (corner(depth, lo), corner(depth, hi)),
+                    (corner(0.0, lo), corner(depth, lo)),
+                    (corner(0.0, hi), corner(depth, hi)),
+                ];
+                for (k, (ga, gb)) in edges.iter().enumerate().skip(1) {
+                    if k != leaves && ga.dist(*gb) > 1e-6 {
+                        g.guards.push(Guard { a: *ga, b: *gb, z0: z_end, z1: z_end + GUARD_FT });
+                    }
+                }
             }
             z = z_end;
         }
@@ -240,10 +275,43 @@ mod tests {
     }
 
     #[test]
+    fn a_switchback_landing_is_guarded() {
+        let r =
+            rule(vec![StairRun { from: [0.0, 0.0], to: [88.0, 0.0], treads: 8 }, StairRun { from: [88.0, 48.0], to: [0.0, 48.0], treads: 8 }], false);
+        let g = r.geometry(Vec2 { x: 0.0, y: 0.0 }, 12.0);
+        // Guards 42" over the landing on its outer edge and both ends, none where the runs meet it.
+        assert_eq!(g.guards.len(), 3, "{:?}", g.guards);
+        assert!(g.guards.iter().all(|q| (q.z0 - 5.0).abs() < 1e-9 && (q.z1 - 8.5).abs() < 1e-9));
+        let outer = g.guards.iter().find(|q| (q.a.x - 88.0 / 12.0 - 4.0).abs() < 1e-9 && (q.b.x - 88.0 / 12.0 - 4.0).abs() < 1e-9);
+        assert!(outer.is_some_and(|q| (q.a.y - q.b.y).abs() > 7.9), "{:?}", g.guards);
+        assert!(!g.guards.iter().any(|q| (q.a.x - 88.0 / 12.0).abs() < 1e-9 && (q.b.x - 88.0 / 12.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn a_straight_landing_is_guarded_on_its_sides() {
+        // Two runs in line with a 4' landing between: guards on both sides, none across it.
+        let r = rule(
+            vec![StairRun { from: [0.0, 0.0], to: [88.0, 0.0], treads: 8 }, StairRun { from: [136.0, 0.0], to: [224.0, 0.0], treads: 8 }],
+            false,
+        );
+        let g = r.geometry(Vec2 { x: 0.0, y: 0.0 }, 12.0);
+        assert_eq!(g.guards.len(), 2, "{:?}", g.guards);
+        assert!(g.guards.iter().all(|q| (q.a.y - q.b.y).abs() < 1e-9 && ((q.a.x - q.b.x).abs() - 4.0).abs() < 1e-9));
+    }
+
+    #[test]
     fn a_ramp_is_one_slope() {
         let r = StairRule { z_top_ft: 2.0, ..rule(vec![StairRun { from: [0.0, 0.0], to: [288.0, 0.0], treads: 0 }], true) };
         let g = r.geometry(Vec2 { x: 0.0, y: 0.0 }, 12.0);
         assert_eq!((g.risers, g.blocks.len(), g.wedges.len()), (0, 0, 1));
         assert_eq!(g.slopes[0].height_at(Vec2 { x: 12.0, y: 0.0 }), Some(1.0));
+    }
+
+    #[test]
+    fn a_single_flight_or_ramp_has_no_guards() {
+        let flight = rule(vec![StairRun { from: [0.0, 0.0], to: [176.0, 0.0], treads: 16 }], false);
+        let ramp = rule(vec![StairRun { from: [0.0, 0.0], to: [288.0, 0.0], treads: 0 }], true);
+        assert!(flight.geometry(Vec2 { x: 0.0, y: 0.0 }, 12.0).guards.is_empty());
+        assert!(ramp.geometry(Vec2 { x: 0.0, y: 0.0 }, 12.0).guards.is_empty());
     }
 }
