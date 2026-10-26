@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1107,
-    "count": 1107,
+    "callableAsJson": 1108,
+    "count": 1108,
     "ids": [
       "-attedit",
       "-block",
@@ -391,6 +391,7 @@
       "filletedge",
       "filter",
       "find",
+      "finishes.takeoff",
       "flatshot",
       "flatten",
       "fourd.clear",
@@ -1198,7 +1199,7 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 46,
+    "count": 47,
     "tools": [
       "arch_read",
       "bim_from_pdf",
@@ -1215,6 +1216,7 @@
       "execute",
       "execute_many",
       "find_text",
+      "finishes_takeoff",
       "framing",
       "get_prompt",
       "get_variable",
