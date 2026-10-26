@@ -2318,5 +2318,4 @@ impl Interactive for CenterM {
 }
 
 #[cfg(test)]
-#[path = "draw2_tests.rs"]
 mod tests;
