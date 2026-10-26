@@ -341,9 +341,10 @@ fn a_weak_scripted_agent_finishes_the_hotel() {
         );
         let ctx = format!("budget {budget}, every {every}: {sc:?}\n{}", log.iter().take(30).cloned().collect::<Vec<_>>().join("\n"));
         assert!(sc.finished, "it reached the takeoff and the RFI list — {ctx}");
-        // 50: the set gained the civil sheets C-102, C-103 and C-601 (Q339 sitework) and the
-        // enlarged guest unit plans A-401 (Q305).
-        assert_eq!(sc.sheets_classified, 50, "the import classified the prints — {ctx}");
+        // 54: 50 base + 4 SL-10x sleeve layout sheets (lowvolt-rw1). The base 50 gained the
+        // civil sheets C-102, C-103 and C-601 (Q339 sitework) and the enlarged guest unit
+        // plans A-401 (Q305).
+        assert_eq!(sc.sheets_classified, 54, "the import classified the prints — {ctx}");
         assert_eq!(sc.wrong_edits, 0, "no edit against the documents — {ctx}");
         assert_eq!(sc.lost_track, 0, "resumed from the briefing without redoing work — {ctx}");
         assert_eq!(sc.tool_errors, 0, "no tool errors (each was a confusion to fix) — {ctx}");
