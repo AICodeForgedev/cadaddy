@@ -537,7 +537,7 @@ impl SheetRegion {
 /// Why a sheet is never built into a building level: a civil, landscape or site sheet, or a
 /// plan whose title and number name no level (it was only given the lowest, to confirm).
 pub fn not_built_reason(discipline: &str, title: &str, level: &str, level_source: &str) -> &'static str {
-    if level.eq_ignore_ascii_case("SITE") || cadaddy_mepfix::sheet_facts::is_site_sheet(discipline, title) {
+    if cadaddy_walk3d::levels::is_datum_name(level) || cadaddy_mepfix::sheet_facts::is_site_sheet(discipline, title) {
         "site/civil"
     } else if level.trim().is_empty() || level_source == "default" {
         "no level"
@@ -969,33 +969,17 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 false,
             );
         }
-        // Every plan gets a level: one whose title names none was given the lowest; confirm it.
-        for sheet in sheets.iter().filter(|sh| sh.get("level_source").and_then(Value::as_str) == Some("default")).take(MAX_QUESTIONS_PER_STAGE) {
-            let number = sheet.get("number").and_then(Value::as_str).unwrap_or("?");
-            let title = sheet.get("title").and_then(Value::as_str).unwrap_or("");
-            let level = sheet.get("level").and_then(Value::as_str).unwrap_or("1");
-            let q = Question {
-                id: job.next_qid(StageName::Classify),
-                stage: StageName::Classify,
-                question: format!("Plan sheet {number} \"{title}\" names no level — is it level {level}?"),
-                why: "Neither the sheet title, its view titles nor its number say which level the plan shows".into(),
-                choices: vec![format!("Level {level}"), "Another level".into(), "Not a level plan".into()],
-                evidence: Some(QuestionEvidence {
-                    crop_png_path: None,
-                    sheet: Some(number.to_string()),
-                    at: None,
-                    values: Some(json!({"number": number, "title": title, "level": level, "sources": sheet.get("sources")})),
-                    handles: Vec::new(),
-                    tiled_crops: None,
-                    leftovers: Vec::new(),
-                }),
-                default: Some(format!("Level {level}")),
-                answer_schema: Some(json!({"type": "string"})),
-                answer: None,
-                answered_by: None,
-                answered_at: None,
-                kind: QuestionKind::Doubt,
-            };
+        // A plan whose title names no level: in a one-level building it was given that level,
+        // to confirm; with several levels it has none (it is read as nothing) until the answer
+        // says which, so auto mode never puts it on a level.
+        let level_codes: Vec<String> = classified
+            .get("levels")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|l| l.get("name").and_then(Value::as_str)).map(str::to_string).collect())
+            .unwrap_or_default();
+        let uncertain = |sh: &&Value| matches!(sh.get("level_source").and_then(Value::as_str), Some("default" | "ask"));
+        for sheet in sheets.iter().filter(uncertain).take(MAX_QUESTIONS_PER_STAGE) {
+            let q = plan_level_question(job, sheet, &level_codes);
             job.add_question_to_worklist(&q);
             if let Some(st) = job.stage_mut(StageName::Classify) {
                 st.questions.push(q);
@@ -1011,6 +995,48 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     job.audit("stage_run", "pipeline", None, Some(StageName::Classify), Some(json!({"sheets": sheet_count})));
     Ok(classified)
+}
+
+/// The question for a plan whose title names no level (`level_source` `default` or `ask`): with
+/// a level given (a one-level building), is it that one; with none, which of the set's levels
+/// (`level_codes`) it shows, "Not a level plan" by default (auto mode never puts it on a level).
+fn plan_level_question(job: &mut GuidedJob, sheet: &Value, level_codes: &[String]) -> Question {
+    let number = sheet.get("number").and_then(Value::as_str).unwrap_or("?");
+    let title = sheet.get("title").and_then(Value::as_str).unwrap_or("");
+    let level = sheet.get("level").and_then(Value::as_str).unwrap_or("");
+    let (question, choices, default) = if level.is_empty() {
+        let mut choices: Vec<String> = level_codes.iter().take(20).map(|c| format!("Level {c}")).collect();
+        choices.push("Not a level plan".into());
+        (format!("Plan sheet {number} \"{title}\" names no level — which level does it show?"), choices, "Not a level plan".to_string())
+    } else {
+        (
+            format!("Plan sheet {number} \"{title}\" names no level — is it level {level}?"),
+            vec![format!("Level {level}"), "Another level".into(), "Not a level plan".into()],
+            format!("Level {level}"),
+        )
+    };
+    Question {
+        id: job.next_qid(StageName::Classify),
+        stage: StageName::Classify,
+        question,
+        why: "Neither the sheet title, its view titles nor its number say which level the plan shows".into(),
+        choices,
+        evidence: Some(QuestionEvidence {
+            crop_png_path: None,
+            sheet: Some(number.to_string()),
+            at: None,
+            values: Some(json!({"number": number, "title": title, "level": level, "levels": level_codes, "sources": sheet.get("sources")})),
+            handles: Vec::new(),
+            tiled_crops: None,
+            leftovers: Vec::new(),
+        }),
+        default: Some(default),
+        answer_schema: Some(json!({"type": "string"})),
+        answer: None,
+        answered_by: None,
+        answered_at: None,
+        kind: QuestionKind::Doubt,
+    }
 }
 
 /// Check for levels that have an architectural plan but no MEP plan for a discipline.
@@ -1915,6 +1941,11 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                 *c.not_device.entry("not a device (answered)").or_default() += 1;
             } else {
                 match device_types::tag_verdict(tag, &c.legend_types, &learned, &sheet_numbers) {
+                    // A sheet of no level (uncertain, not answered) or on the site datum is a
+                    // reference sheet: nothing on it is a model element.
+                    TagVerdict::Device(_) if job.level_at([at.x, at.y]).is_some_and(|r| !super::printmep::building_level(&r.level)) => {
+                        *c.not_device.entry("on a sheet of no building level").or_default() += 1;
+                    }
                     TagVerdict::Device(t) => {
                         c.placed.push(super::readers::ReadDevice {
                             tag: t.clone(),
@@ -3183,7 +3214,7 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
         if !r.rect.iter().all(|v| v.is_finite()) {
             continue;
         }
-        let level = Some(r.level.trim()).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("SITE")).map(level_name);
+        let level = Some(r.level.trim()).filter(|l| super::printmep::building_level(l)).map(level_name);
         let level = level.map(|n| sp.level(&n).map_or(n.clone(), |l| l.name.clone()));
         match sp.sheets.iter_mut().find(|x| x.number.eq_ignore_ascii_case(&r.number) && x.rect.is_none_or(|q| q == r.rect)) {
             Some(x) => {
@@ -3208,8 +3239,7 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
     // Site, civil and landscape plans, and plans that name no level, are no storey (MUST 3).
     let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
-    let floor_plan =
-        |r: &&SheetRegion| r.kind == "plan" && !r.level.trim().is_empty() && !r.level.eq_ignore_ascii_case("SITE") && r.not_built.is_empty();
+    let floor_plan = |r: &&SheetRegion| r.kind == "plan" && super::printmep::building_level(&r.level) && r.not_built.is_empty();
     let mut plans: Vec<&SheetRegion> = job.sheet_regions.iter().filter(floor_plan).filter(|r| r.discipline == "A").collect();
     if plans.is_empty() {
         // No architectural floor plans: one discipline's plans give the floors (their
@@ -3911,7 +3941,9 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
                     return (Some(StageName::Rooms), format!("sheet {number} is not read as a level plan"));
                 }
                 let level = text.trim_start_matches("Level").trim().to_string();
-                if other && !level.is_empty() && level.len() <= 8 {
+                // A level the sheet didn't have: typed, or one of the set's levels offered.
+                let named = text != "Another level" && !level.is_empty() && level.len() <= 8;
+                if named && (other || text.starts_with("Level")) && !cadaddy_walk3d::levels::is_datum_name(&level) {
                     set_sheet_fact(job, &number, "level", &level);
                     return (Some(StageName::Rooms), format!("sheet {number} is level {level}"));
                 }
@@ -4082,7 +4114,14 @@ fn set_sheet_fact(job: &mut GuidedJob, number: &str, key: &str, value: &str) {
     for r in job.sheet_regions.iter_mut().filter(|r| r.number.eq_ignore_ascii_case(number)) {
         match key {
             "discipline" => r.discipline = value.to_string(),
-            "level" => r.level = value.to_string(),
+            "level" => {
+                r.level = value.to_string();
+                r.levels.clear();
+                // The answer is the plan's level: it is built (unless it is a site plan).
+                if r.not_built == "no level" {
+                    r.not_built.clear();
+                }
+            }
             _ => r.kind = value.to_string(),
         }
     }
@@ -5792,6 +5831,54 @@ mod tests {
             not_built: String::new(),
             levels: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_plan_of_uncertain_level_is_asked_never_put_on_level_1() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let sheet = json!({"number": "P-201", "title": "PLUMBING PLAN", "level": "", "level_source": "ask"});
+        job.index = Some(json!({"sheets": [sheet.clone()]}));
+        job.sheets = Some(json!({"sheets": [sheet.clone()]}));
+        let mut r = region("P-201", "", "P", "plan", 0.0);
+        r.not_built = not_built_reason("P", "PLUMBING PLAN", "", "ask").to_string();
+        assert_eq!(r.not_built, "no level");
+        job.sheet_regions = vec![r];
+        let codes: Vec<String> = ["1", "2", "R"].iter().map(|c| c.to_string()).collect();
+        let mut q = plan_level_question(&mut job, &sheet, &codes);
+        assert!(q.question.contains("which level"), "{}", q.question);
+        assert_eq!(q.choices, ["Level 1", "Level 2", "Level R", "Not a level plan"]);
+        assert_eq!(q.default.as_deref(), Some("Not a level plan"), "auto mode keeps it off every level");
+        // Auto mode takes the default: the sheet stays a reference sheet, read as nothing.
+        q.answer = Some(json!("Not a level plan"));
+        answer_effect(&mut job, &q);
+        assert_eq!((job.sheet_regions[0].level.as_str(), job.sheet_regions[0].not_built.as_str()), ("", "no level"));
+        assert!(job_sheet_refs(&job).iter().all(|r| !r.builds()));
+        // The site is no level a plan can be put on.
+        q.answer = Some(json!("Level SITE"));
+        answer_effect(&mut job, &q);
+        assert_eq!(job.sheet_regions[0].level, "");
+        // An answer puts it on that level, and it is built.
+        q.answer = Some(json!("Level 2"));
+        let (rerun, said) = answer_effect(&mut job, &q);
+        assert_eq!((rerun, said.as_str()), (Some(StageName::Rooms), "sheet P-201 is level 2"));
+        assert_eq!((job.sheet_regions[0].level.as_str(), job.sheet_regions[0].not_built.as_str()), ("2", ""));
+        assert_eq!(job.index.as_ref().and_then(|i| i.pointer("/sheets/0/level_source")).and_then(Value::as_str), Some("answer"));
+        // In a one-level building it was given that level, to confirm.
+        let one = json!({"number": "P-101", "title": "PLUMBING PLAN", "level": "1", "level_source": "default"});
+        let q = plan_level_question(&mut job, &one, &codes[..1]);
+        assert_eq!(q.default.as_deref(), Some("Level 1"));
+    }
+
+    #[test]
+    fn devices_on_a_sheet_of_no_level_or_the_site_are_not_model_elements() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions =
+            vec![region("E-101", "1", "E", "plan", 0.0), region("E-201", "", "E", "plan", 200.0), region("E-001", "SITE", "E", "plan", 400.0)];
+        let refs = job_sheet_refs(&job);
+        assert_eq!(refs.iter().map(|r| r.builds()).collect::<Vec<_>>(), [true, false, false]);
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        add_sheet_links(&mut sp, &job.sheet_regions);
+        assert_eq!(sp.sheets.iter().map(|x| x.level.clone()).collect::<Vec<_>>(), [Some("Level 1".to_string()), None, None]);
     }
 
     #[test]

@@ -48,9 +48,14 @@ impl SheetRef {
     fn is_plan(&self) -> bool {
         matches!(self.kind.as_str(), "plan" | "enlarged_plan")
     }
+    /// Whether model elements are read off this sheet: a plan on a building level. A plan of no
+    /// level (uncertain, not answered yet) or on the site datum is a reference sheet.
+    pub fn builds(&self) -> bool {
+        self.is_plan() && building_level(&self.level)
+    }
     /// The trade read on this sheet: ducts on mechanical plans, pipes on plumbing plans.
     pub fn trade(&self) -> Option<MepKind> {
-        if !self.is_plan() {
+        if !self.builds() {
             return None;
         }
         match self.discipline.to_ascii_uppercase().as_str() {
@@ -59,6 +64,13 @@ impl SheetRef {
             _ => None,
         }
     }
+}
+
+/// Whether a print-set level code is a building level elements go on: not empty, not the
+/// site datum (`SITE`, `GRADE`).
+pub(crate) fn building_level(code: &str) -> bool {
+    let c = code.trim();
+    !c.is_empty() && !cadaddy_walk3d::levels::is_datum_name(c)
 }
 
 /// The spec's level name for a print-set level code: `1` → `Level 1`, `R` → `Roof`.
@@ -420,6 +432,10 @@ pub(crate) fn merge_mep(sp: &mut BuildingSpec, mep: Mep, sheets: &[String]) {
     }
     sp.mep.terminals.extend(mep.terminals);
     sp.mep.equipment.extend(mep.equipment);
+    // Nothing is built on the site datum (a site plan's utilities are no building's MEP).
+    sp.mep.runs.retain(|r| r.level.trim().is_empty() || building_level(&r.level));
+    sp.mep.terminals.retain(|t| t.level.trim().is_empty() || building_level(&t.level));
+    sp.mep.equipment.retain(|e| e.level.trim().is_empty() || building_level(&e.level));
     ensure_levels(sp);
 }
 
@@ -440,7 +456,8 @@ fn ensure_levels(sp: &mut BuildingSpec) {
         .chain(sp.mep.terminals.iter().map(|t| t.level.as_str()))
         .chain(sp.mep.equipment.iter().map(|e| e.level.as_str()));
     for n in names {
-        if !n.is_empty() && sp.level(n).is_none() && !wanted.iter().any(|w| w.eq_ignore_ascii_case(n)) {
+        // The site is a datum, never a storey stacked on the building.
+        if building_level(n) && sp.level(n).is_none() && !wanted.iter().any(|w| w.eq_ignore_ascii_case(n)) {
             wanted.push(n.to_string());
         }
     }
@@ -593,6 +610,37 @@ mod tests {
         let mut notes = sheet("M-001", "M", "", 0.0);
         notes.kind = "schedule".into();
         assert_eq!(notes.trade(), None, "a schedule sheet is not a plan");
+    }
+
+    #[test]
+    fn a_plan_of_no_level_or_on_the_site_reads_nothing() {
+        assert_eq!(sheet("P-201", "P", "", 0.0).trade(), None, "level not known yet: a reference sheet");
+        assert_eq!(sheet("P-001", "P", "SITE", 0.0).trade(), None, "the site is a datum");
+        assert!(!sheet("E-001", "E", "SITE", 0.0).builds());
+        assert!(sheet("E-101", "E", "1", 0.0).builds());
+    }
+
+    #[test]
+    fn nothing_read_on_the_site_becomes_a_storey() {
+        let lvl = |name: &str, e: f64| Level {
+            name: name.into(),
+            elevation_ft: e,
+            height_ft: 12.0,
+            ceiling_ft: 9.0,
+            region: None,
+            base: None,
+            attr: None,
+            sheet: None,
+        };
+        let mut sp = BuildingSpec { levels: vec![lvl("Level 1", 0.0), lvl("Level 2", 12.0)], ..BuildingSpec::default() };
+        let mep = Mep {
+            systems: vec![pipe_system()],
+            runs: vec![run("P-001", "SITE", vec![[0.0, 0.0], [120.0, 0.0]]), run("P-102", "Level 2", vec![[0.0, 0.0], [240.0, 0.0]])],
+            ..Mep::default()
+        };
+        merge_mep(&mut sp, mep, &["P-001".into(), "P-102".into()]);
+        assert_eq!(sp.levels.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["Level 1", "Level 2"], "no SITE storey");
+        assert_eq!(sp.mep.runs.iter().map(|r| r.level.as_str()).collect::<Vec<_>>(), ["Level 2"], "the site's run is no building's");
     }
 
     #[test]

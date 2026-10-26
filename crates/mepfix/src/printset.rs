@@ -961,7 +961,9 @@ pub fn run_classify_prints(
                 // The sheet title's levels, else the plan views' titles' (`FIRST FLOOR POWER PLAN`).
                 let mut levels = sheet_reader::detect_levels(&e.title);
                 if levels.is_empty() && is_plan_type(&e.sheet_type) {
-                    for t in &facts.view_titles {
+                    // A key plan (the small floor plan marking where an enlarged plan or detail
+                    // is) names its floor, not the sheet's.
+                    for t in facts.view_titles.iter().filter(|t| !is_key_plan(t)) {
                         levels.extend(sheet_reader::detect_levels(t));
                     }
                     levels.sort_by_key(|c| level_key(c));
@@ -1137,6 +1139,19 @@ fn canonical_discipline(letters: &str) -> String {
 
 fn is_plan_type(t: &str) -> bool {
     matches!(t, "plan" | "enlarged_plan" | "rcp")
+}
+
+/// Whether a sheet of this type shows a whole level and so defines and fills it (a floor plan,
+/// a reflected ceiling plan, a trade's plan): an enlarged plan shows part of its parent floor,
+/// and details, sections, elevations, schedules, legends, notes and covers are of no level.
+pub fn is_level_plan_type(t: &str) -> bool {
+    matches!(t, "plan" | "rcp")
+}
+
+/// Whether a view title is a key plan's (`KEY PLAN`, `KEYPLAN - LEVEL 2`).
+fn is_key_plan(title: &str) -> bool {
+    let up = title.to_ascii_uppercase();
+    up.contains("KEY PLAN") || up.contains("KEYPLAN") || up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "KEY")
 }
 
 /// Level codes in building order: basements, numbered floors, then the roof.
@@ -1334,8 +1349,10 @@ pub struct IndexSheet {
     pub level: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub levels: Vec<String>,
-    /// `title`, `number`, or `default` (a plan whose title names no level: the lowest level,
-    /// to be confirmed).
+    /// `title`, `number`, `typical`, `site` (a civil, landscape or site plan: level `SITE`, a
+    /// datum), `default` (a plan whose title names no level in a building of one level: that
+    /// level, to be confirmed) or `ask` (the same in a building of several levels: no level
+    /// until someone says which).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub level_source: String,
     /// Every copy as `file#page` (the file alone for a one-sheet file), the current one first.
@@ -1372,7 +1389,7 @@ pub struct SheetIndex {
     pub pages: usize,
     /// Entries whose title block gave no sheet number.
     pub unidentified: usize,
-    /// Plan sheets whose title and number name no level (given the lowest level, to confirm).
+    /// Plan sheets whose title and number name no level (`default` or `ask`, to confirm).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub plans_without_level: Vec<String>,
     /// Level marks not used: they break the levels' order (elevations rise with the level).
@@ -1431,12 +1448,19 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
         if first.recognised.as_ref().is_none_or(|r| r.number.is_empty()) {
             out.unidentified += 1;
         }
-        let level = if first.level.is_empty() { levels.first().cloned().unwrap_or_default() } else { first.level.clone() };
+        let mut level = if first.level.is_empty() { levels.first().cloned().unwrap_or_default() } else { first.level.clone() };
+        let sheet_type = if views { "plan".to_string() } else { first.sheet_type.clone() };
+        // Only plans attach to a level: a detail, section, schedule, legend, cover or notes
+        // sheet that names one (`LEVEL 1 DETAILS`, a key plan) is a reference sheet.
+        if !is_plan_type(&sheet_type) {
+            level.clear();
+            levels.clear();
+        }
         out.sheets.push(IndexSheet {
             number: k.clone(),
             title: first.title.clone(),
             discipline: first.discipline.clone(),
-            sheet_type: if views { "plan".into() } else { first.sheet_type.clone() },
+            sheet_type,
             level_source: if level.is_empty() {
                 String::new()
             } else {
@@ -1449,10 +1473,18 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             issued: first.issued.clone(),
         });
     }
-    // The building's levels: what the plans show (the site is no storey).
+    // A civil, landscape or site plan is on the site (a datum, no storey of the building), even
+    // when its title names a floor.
+    for s in out.sheets.iter_mut().filter(|s| is_plan_type(&s.sheet_type) && crate::sheet_facts::is_site_sheet(&s.discipline, &s.title)) {
+        s.level = "SITE".into();
+        s.levels.clear();
+        s.level_source = "site".into();
+    }
+    // The building's levels: what the floor plans show (the site is no storey; an enlarged
+    // plan is part of its parent floor and defines no level).
     let mut by_level: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for s in out.sheets.iter().filter(|s| is_plan_type(&s.sheet_type)) {
-        for l in s.levels.iter().chain(std::iter::once(&s.level)).filter(|l| !l.is_empty() && *l != "SITE") {
+    for s in out.sheets.iter().filter(|s| is_level_plan_type(&s.sheet_type)) {
+        for l in s.levels.iter().chain(std::iter::once(&s.level)).filter(|l| !l.is_empty() && !cadaddy_walk3d::levels::is_datum_name(l)) {
             let v = by_level.entry(l.clone()).or_default();
             if !v.contains(&s.number) {
                 v.push(s.number.clone());
@@ -1507,17 +1539,19 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             height_ft: el.zip(next).map(|(a, b)| b - a).filter(|h| *h > 0.0),
         });
     }
-    // Every plan gets a level: one whose title names none takes the lowest, to be confirmed. A
-    // civil, landscape or site plan is on the site (no storey of the building).
+    // A plan whose title names no level: in a building of one level it can only be that one
+    // (given it, to be confirmed); with several the level is uncertain, so the sheet stays off
+    // every level until someone says which (`ask`), never put on the lowest. An enlarged plan
+    // with no level belongs to its parent floor's region, found by where it is drawn.
     let lowest = codes.iter().find(|c| c.parse::<u32>().is_ok()).cloned().unwrap_or_else(|| "1".into());
-    for s in out.sheets.iter_mut().filter(|s| is_plan_type(&s.sheet_type) && s.level.is_empty()) {
-        if crate::sheet_facts::is_site_sheet(&s.discipline, &s.title) {
-            s.level = "SITE".into();
-            s.level_source = "site".into();
-            continue;
+    let one_level = codes.len() <= 1;
+    for s in out.sheets.iter_mut().filter(|s| is_level_plan_type(&s.sheet_type) && s.level.is_empty()) {
+        if one_level {
+            s.level = lowest.clone();
+            s.level_source = "default".into();
+        } else {
+            s.level_source = "ask".into();
         }
-        s.level = lowest.clone();
-        s.level_source = "default".into();
         out.plans_without_level.push(s.number.clone());
     }
     out
