@@ -1036,10 +1036,10 @@ pub fn plan_callouts(t: &mut Truth, _r: &mut Rng) {
                 if sh.window_ft.is_some() {
                     continue; // enlarged plans don't get match lines
                 }
-                if let Some(lv) = &sh.level {
-                    if sh.discipline == "M" {
-                        m.entry(lv.clone()).or_insert_with(Vec::new).push(sh.number.clone());
-                    }
+                if let Some(lv) = &sh.level
+                    && sh.discipline == "M"
+                {
+                    m.entry(lv.clone()).or_insert_with(Vec::new).push(sh.number.clone());
                 }
             }
             m

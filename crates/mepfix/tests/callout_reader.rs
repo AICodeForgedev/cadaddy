@@ -32,11 +32,6 @@ fn hotel_fixture(seed: u64) -> (cadaddy_mepfix::truth::Truth, Vec<ResolvedCallou
     (set.truth, resolved, broken, errors)
 }
 
-/// Match a truth callout entry against resolved/broken callouts by (on_sheet, detail, target_sheet).
-fn find_match<'a>(truth: &CalloutEntry, all: &'a [ResolvedCallout]) -> Option<&'a ResolvedCallout> {
-    all.iter().find(|r| r.on_sheet == truth.on_sheet && r.callout.detail == truth.detail && r.callout.target_sheet == truth.target_sheet)
-}
-
 /// Score callout reading against truth. Returns (matched, missed, false_positives, kind_correct, kind_total).
 fn score(
     truth: &[CalloutEntry],
@@ -83,7 +78,6 @@ fn score(
     //   bubbles look like callout bubbles but aren't tracked in truth.
     // We only count as FP: callouts on sheets that HAVE truth entries but whose
     // specific (detail, target) is not in truth.
-    let sheets_with_truth: std::collections::HashSet<&str> = truth.iter().map(|te| te.on_sheet.as_str()).collect();
     // Only count callouts as false positives if they point to a target sheet that
     // is completely unknown (not in the fixture's sheet set at all). Real callout
     // bubbles that point to valid sheets but aren't tracked in truth.callouts are
@@ -129,13 +123,9 @@ fn callout_recall_100_percent_seeds_1_to_3() {
                 }
                 if let Some(r) =
                     all.iter().find(|r| r.on_sheet == te.on_sheet && r.callout.detail == te.detail && r.callout.target_sheet == te.target_sheet)
+                    && r.callout.kind != te.kind
                 {
-                    if r.callout.kind != te.kind {
-                        eprintln!(
-                            "  KIND MISMATCH on {}: truth={} found={} ({}/{})",
-                            te.on_sheet, te.kind, r.callout.kind, te.detail, te.target_sheet
-                        );
-                    }
+                    eprintln!("  KIND MISMATCH on {}: truth={} found={} ({}/{})", te.on_sheet, te.kind, r.callout.kind, te.detail, te.target_sheet);
                 }
             }
             panic!("seed {seed}: kind accuracy {kind_acc:.1}% ({kind_correct}/{kind_total}), need >= 90%");
@@ -402,17 +392,17 @@ fn diag_missed_callouts() {
         if let Ok(d) = cadaddy_io::read_dxf(bytes) {
             let cos = callout_reader::read_callouts(&d);
             let truth_on: Vec<_> = truth.callouts.iter().filter(|c| c.on_sheet == sheet).collect();
-            if truth_on.len() > 0 {
+            if !truth_on.is_empty() {
                 eprintln!("{sheet}: truth={} found={}", truth_on.len(), cos.len());
                 if sheet == "E-101" {
                     for e in d.model.iter() {
-                        if let cadaddy_doc::EntityKind::Circle(c) = &e.kind {
-                            if e.common.layer.eq_ignore_ascii_case("CALLOUT") {
-                                eprintln!(
-                                    "E-101 CALLOUT circle: center=({:.1},{:.1}) r={:.3} layer={}",
-                                    c.center.x, c.center.y, c.radius, e.common.layer
-                                );
-                            }
+                        if let cadaddy_doc::EntityKind::Circle(c) = &e.kind
+                            && e.common.layer.eq_ignore_ascii_case("CALLOUT")
+                        {
+                            eprintln!(
+                                "E-101 CALLOUT circle: center=({:.1},{:.1}) r={:.3} layer={}",
+                                c.center.x, c.center.y, c.radius, e.common.layer
+                            );
                         }
                     }
                 }

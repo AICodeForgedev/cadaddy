@@ -153,10 +153,10 @@ pub fn read_callouts(d: &Drawing) -> Vec<ReadCallout> {
     let callout_lines: Vec<_> = {
         let mut out = Vec::new();
         for e in d.model.iter() {
-            if let EntityKind::Line(l) = &e.kind {
-                if e.common.layer.eq_ignore_ascii_case("CALLOUT") {
-                    out.push(([l.a.x, l.a.y], [l.b.x, l.b.y]));
-                }
+            if let EntityKind::Line(l) = &e.kind
+                && e.common.layer.eq_ignore_ascii_case("CALLOUT")
+            {
+                out.push(([l.a.x, l.a.y], [l.b.x, l.b.y]));
             }
         }
         out
@@ -168,10 +168,10 @@ pub fn read_callouts(d: &Drawing) -> Vec<ReadCallout> {
 
     // Sort circles: CALLOUT layer first, so they claim their texts before other layers.
     let mut sorted_circles = circles.clone();
-    sorted_circles.sort_by(|a, b| b.2.cmp(&a.2)); // true (CALLOUT) before false
+    sorted_circles.sort_by_key(|c| std::cmp::Reverse(c.2)); // true (CALLOUT) before false
 
     for &(center, radius, is_callout_layer) in &sorted_circles {
-        if radius < 0.01 || radius > 100.0 {
+        if !(0.01..=100.0).contains(&radius) {
             continue;
         }
 
@@ -195,7 +195,7 @@ pub fn read_callouts(d: &Drawing) -> Vec<ReadCallout> {
         let mut bottom_dist = f64::MAX;
         let mut bottom_on_callout = false;
 
-        for (_ti, (text, pt, on_callout)) in texts.iter().enumerate() {
+        for (text, pt, on_callout) in texts.iter() {
             let dx = pt[0] - center[0];
             let dy = pt[1] - center[1];
             let d = (dx * dx + dy * dy).sqrt();
@@ -457,7 +457,7 @@ pub fn read_sheet_details(d: &Drawing) -> Vec<String> {
 
     // Each circle with a horizontal divider and a detail number is a view title.
     for &(center, radius, _) in &circles {
-        if radius < 0.01 || radius > 100.0 {
+        if !(0.01..=100.0).contains(&radius) {
             continue;
         }
         let has_divider = lines.iter().any(|&(a, b, _)| {
@@ -485,7 +485,7 @@ pub fn read_sheet_details(d: &Drawing) -> Vec<String> {
         let upper = text.to_ascii_uppercase();
         for prefix in &["DETAIL ", "VIEW ", "SECTION "] {
             if let Some(rest) = upper.strip_prefix(prefix) {
-                let label = rest.trim().split_whitespace().next().unwrap_or("");
+                let label = rest.split_whitespace().next().unwrap_or("");
                 if !label.is_empty() && !details.contains(&label.to_string()) {
                     details.push(label.to_string());
                 }

@@ -43,7 +43,7 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     let status_filter = str_param(p, "status");
     let level_filter = str_param(p, "level");
     let page = p.get("page").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
-    let page_size = p.get("page_size").and_then(Value::as_u64).unwrap_or(50).max(1).min(200) as usize;
+    let page_size = p.get("page_size").and_then(Value::as_u64).unwrap_or(50).clamp(1, 200) as usize;
 
     let filtered: Vec<_> = summary
         .iter()
