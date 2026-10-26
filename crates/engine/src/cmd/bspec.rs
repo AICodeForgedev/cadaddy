@@ -741,7 +741,6 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<Traced> = Vec::new();
     let mut outline_cache = None;
-    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     for (h, text, at) in room_texts(sp, &ents) {
         if out.len() >= MAX_ROOMS {
             break;
@@ -770,10 +769,6 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let outline = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
         if outline.len() < 3 || cadaddy_geom::shoelace(&outline).abs() < 1e-9 {
-            continue;
-        }
-        // A room no spec room names is 16 sq ft or more (not a grid bubble, a tag's box).
-        if room.is_none() && cadaddy_geom::shoelace(&outline).abs() < 16.0 * upf * upf {
             continue;
         }
         // A name and a number in one room: the first traced keeps it (the spec's room wins).
@@ -889,9 +884,10 @@ fn walled_share(outline: &[Vec2], grid: &std::collections::HashMap<(i64, i64), V
     if all > 0.0 { on / all } else { 0.0 }
 }
 
-/// Smallest and largest room (square feet): less is a tag's box or a piece of furniture, more
-/// is the outside of the building.
-const MIN_ROOM_SF: f64 = 12.0;
+/// Smallest and largest room no spec room names (square feet): less is a grid bubble, a tag's
+/// box or a piece of furniture (traced again on the built walls), more is the outside of the
+/// building.
+const MIN_ROOM_SF: f64 = 16.0;
 const MAX_ROOM_SF: f64 = 50_000.0;
 /// Most tags traced again on the built walls per build.
 const MAX_RETRACE: usize = 5_000;
@@ -995,12 +991,15 @@ fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<
     let mut kept: Vec<Traced> = Vec::new();
     for mut t in std::mem::take(rooms) {
         let key = t.level.trim().to_ascii_uppercase();
-        let (Some(polys), Some(grid)) = (bounds.get(&key), grids.get(&key)) else {
-            kept.push(t);
+        let a = cadaddy_geom::shoelace(&t.outline).abs();
+        let big = a >= min_area || t.room.is_some();
+        let (Some(polys), Some(grid)) = (bounds.get(&key).filter(|p| !p.is_empty()), grids.get(&key)) else {
+            if big {
+                keep_room(&mut kept, t);
+            }
             continue;
         };
-        let a = cadaddy_geom::shoelace(&t.outline).abs();
-        if polys.is_empty() || (a >= min_area && walled_share(&t.outline, grid, polys, cell, tol) >= ROOM_WALLED) {
+        if big && walled_share(&t.outline, grid, polys, cell, tol) >= ROOM_WALLED {
             keep_room(&mut kept, t);
             continue;
         }
@@ -1142,7 +1141,7 @@ pub(crate) fn room_elements(d: &Drawing) -> Vec<RoomElement> {
 /// level's floor, not drawn: a room is a space), tagged with its name, number, area (sq ft),
 /// ceiling height (ft) and floor finish (the spec room's, else a finish code written inside
 /// it). How many per level.
-fn add_room_elements(d: &mut Drawing, sp: &BuildingSpec, rooms: &[Traced], upf: f64) -> std::collections::BTreeMap<String, usize> {
+fn add_room_elements(d: &mut Drawing, sp: &BuildingSpec, rooms: &[&Traced], upf: f64) -> std::collections::BTreeMap<String, usize> {
     let mut by_level: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     if rooms.is_empty() {
         return by_level;
