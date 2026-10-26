@@ -44,12 +44,26 @@ fn printset_uses_mepfix_types() {
     assert_eq!(project.schema, "cadaddy-printset/1");
 }
 
-/// A reader command without an open project gives a guiding error.
+/// A reader command without an open project warns and guides; it never errors, so the rest
+/// of a `run` goes on (Q5272).
 #[test]
-fn reader_without_project_gives_guiding_error() {
+fn reader_without_project_warns_and_guides() {
     let mut s = Session::new();
-    let err = s.execute("conduit.read", &json!({}));
-    assert!(err.is_err());
-    let msg = format!("{}", err.unwrap_err());
-    assert!(msg.contains("printset.open") || msg.contains("bim_job"), "error should guide: {msg}");
+    for cmd in [
+        "conduit.read",
+        "gear.read",
+        "site.read",
+        "structure.read",
+        "ceilings.read",
+        "sprinklers.read",
+        "trays.read",
+        "walls.read",
+        "rfi.read",
+        "mep.equipment.read",
+    ] {
+        let out = s.execute(cmd, &json!({})).unwrap_or_else(|e| panic!("{cmd} errored: {e}"));
+        let w = out["warnings"][0].as_str().unwrap_or("");
+        assert!(w.contains("printset.open") && w.contains("bim_job"), "{cmd} should guide: {out}");
+        assert_eq!(out["sheets_read"], json!(0), "{cmd}");
+    }
 }
