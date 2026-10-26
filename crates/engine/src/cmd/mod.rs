@@ -5,6 +5,7 @@ pub mod adcenter;
 pub(crate) mod annoscale;
 pub(crate) mod annotate;
 pub mod array;
+pub mod asbuilt;
 pub(crate) mod ask;
 mod attipedit;
 mod audit;
@@ -820,6 +821,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(unittypes::specs());
         v.extend(finishes::specs());
     v.extend(fieldview::specs());
+    v.extend(asbuilt::specs());
     v.extend(bimwork::specs());
         v.extend(imageattach::specs());
         v.extend(dash_styles::specs());

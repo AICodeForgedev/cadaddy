@@ -267,6 +267,77 @@ fn pdf_text(s: &str) -> Object {
     }
 }
 
+/// One markup as an annotation dictionary.
+fn annot(m: &Markup) -> Dictionary {
+    let mut d = Dictionary::new();
+    d.set("Type", Object::Name(b"Annot".to_vec()));
+    let flat = |pts: &[[f64; 2]]| pts.iter().flat_map(|p| [p[0], p[1]]).collect::<Vec<f64>>();
+    let sub: &[u8] = match m.kind {
+        MarkupKind::Cloud => {
+            d.set("IT", Object::Name(b"PolygonCloud".to_vec()));
+            d.set("Vertices", arr(&flat(&m.points)));
+            b"Polygon"
+        }
+        MarkupKind::Rectangle => b"Square",
+        MarkupKind::Ellipse => b"Circle",
+        MarkupKind::Polygon => {
+            d.set("Vertices", arr(&flat(&m.points)));
+            b"Polygon"
+        }
+        MarkupKind::Polyline => {
+            d.set("Vertices", arr(&flat(&m.points)));
+            b"PolyLine"
+        }
+        MarkupKind::Line | MarkupKind::Arrow => {
+            d.set("L", arr(&flat(&m.points.iter().take(2).copied().collect::<Vec<_>>())));
+            if m.kind == MarkupKind::Arrow {
+                d.set("LE", Object::Array(vec![Object::Name(b"OpenArrow".to_vec()), Object::Name(b"None".to_vec())]));
+            }
+            b"Line"
+        }
+        MarkupKind::Ink => {
+            d.set("InkList", Object::Array(m.strokes.iter().map(|s| arr(&flat(s))).collect()));
+            b"Ink"
+        }
+        // A note no bigger than an icon is a sticky note; others are text boxes.
+        MarkupKind::Note if (m.rect[2] - m.rect[0]).abs() <= 24.0 && (m.rect[3] - m.rect[1]).abs() <= 24.0 => b"Text",
+        MarkupKind::Note => b"FreeText",
+        MarkupKind::Callout => {
+            d.set("CL", arr(&flat(&m.points)));
+            d.set("IT", Object::Name(b"FreeTextCallout".to_vec()));
+            b"FreeText"
+        }
+        MarkupKind::Stamp => b"Stamp",
+        MarkupKind::Highlight => {
+            d.set(
+                "QuadPoints",
+                arr(&m
+                    .strokes
+                    .iter()
+                    .flat_map(|q| {
+                        let xs: Vec<f64> = q.iter().map(|p| p[0]).collect();
+                        let ys: Vec<f64> = q.iter().map(|p| p[1]).collect();
+                        let (x0, x1) = (xs.iter().copied().fold(f64::MAX, f64::min), xs.iter().copied().fold(f64::MIN, f64::max));
+                        let (y0, y1) = (ys.iter().copied().fold(f64::MAX, f64::min), ys.iter().copied().fold(f64::MIN, f64::max));
+                        [x0, y1, x1, y1, x0, y0, x1, y0]
+                    })
+                    .collect::<Vec<_>>()),
+            );
+            b"Highlight"
+        }
+    };
+    d.set("Subtype", Object::Name(sub.to_vec()));
+    d.set("Rect", arr(&m.rect));
+    d.set("Contents", pdf_text(&m.text));
+    if !m.author.is_empty() {
+        d.set("T", pdf_text(&m.author));
+    }
+    if let Some(c) = m.color {
+        d.set("C", arr(&c.map(|v| f64::from(v) / 255.0)));
+    }
+    d
+}
+
 /// A one-page PDF of `width` × `height` points carrying `markups` as annotations (no
 /// appearance streams: viewers draw them from their dictionaries).
 pub fn annotated_pdf(width: f64, height: f64, markups: &[Markup]) -> Result<Vec<u8>, String> {
@@ -274,73 +345,7 @@ pub fn annotated_pdf(width: f64, height: f64, markups: &[Markup]) -> Result<Vec<
     let pages_id: ObjectId = doc.new_object_id();
     let mut annots = Vec::new();
     for m in markups {
-        let mut d = Dictionary::new();
-        d.set("Type", Object::Name(b"Annot".to_vec()));
-        let flat = |pts: &[[f64; 2]]| pts.iter().flat_map(|p| [p[0], p[1]]).collect::<Vec<f64>>();
-        let sub: &[u8] = match m.kind {
-            MarkupKind::Cloud => {
-                d.set("IT", Object::Name(b"PolygonCloud".to_vec()));
-                d.set("Vertices", arr(&flat(&m.points)));
-                b"Polygon"
-            }
-            MarkupKind::Rectangle => b"Square",
-            MarkupKind::Ellipse => b"Circle",
-            MarkupKind::Polygon => {
-                d.set("Vertices", arr(&flat(&m.points)));
-                b"Polygon"
-            }
-            MarkupKind::Polyline => {
-                d.set("Vertices", arr(&flat(&m.points)));
-                b"PolyLine"
-            }
-            MarkupKind::Line | MarkupKind::Arrow => {
-                d.set("L", arr(&flat(&m.points.iter().take(2).copied().collect::<Vec<_>>())));
-                if m.kind == MarkupKind::Arrow {
-                    d.set("LE", Object::Array(vec![Object::Name(b"OpenArrow".to_vec()), Object::Name(b"None".to_vec())]));
-                }
-                b"Line"
-            }
-            MarkupKind::Ink => {
-                d.set("InkList", Object::Array(m.strokes.iter().map(|s| arr(&flat(s))).collect()));
-                b"Ink"
-            }
-            // A note no bigger than an icon is a sticky note; others are text boxes.
-            MarkupKind::Note if (m.rect[2] - m.rect[0]).abs() <= 24.0 && (m.rect[3] - m.rect[1]).abs() <= 24.0 => b"Text",
-            MarkupKind::Note => b"FreeText",
-            MarkupKind::Callout => {
-                d.set("CL", arr(&flat(&m.points)));
-                d.set("IT", Object::Name(b"FreeTextCallout".to_vec()));
-                b"FreeText"
-            }
-            MarkupKind::Stamp => b"Stamp",
-            MarkupKind::Highlight => {
-                d.set(
-                    "QuadPoints",
-                    arr(&m
-                        .strokes
-                        .iter()
-                        .flat_map(|q| {
-                            let xs: Vec<f64> = q.iter().map(|p| p[0]).collect();
-                            let ys: Vec<f64> = q.iter().map(|p| p[1]).collect();
-                            let (x0, x1) = (xs.iter().copied().fold(f64::MAX, f64::min), xs.iter().copied().fold(f64::MIN, f64::max));
-                            let (y0, y1) = (ys.iter().copied().fold(f64::MAX, f64::min), ys.iter().copied().fold(f64::MIN, f64::max));
-                            [x0, y1, x1, y1, x0, y0, x1, y0]
-                        })
-                        .collect::<Vec<_>>()),
-                );
-                b"Highlight"
-            }
-        };
-        d.set("Subtype", Object::Name(sub.to_vec()));
-        d.set("Rect", arr(&m.rect));
-        d.set("Contents", pdf_text(&m.text));
-        if !m.author.is_empty() {
-            d.set("T", pdf_text(&m.author));
-        }
-        if let Some(c) = m.color {
-            d.set("C", arr(&c.map(|v| f64::from(v) / 255.0)));
-        }
-        annots.push(Object::Reference(doc.add_object(d)));
+        annots.push(Object::Reference(doc.add_object(annot(m))));
     }
     let mut page = Dictionary::new();
     page.set("Type", Object::Name(b"Page".to_vec()));
@@ -358,6 +363,25 @@ pub fn annotated_pdf(width: f64, height: f64, markups: &[Markup]) -> Result<Vec<
     catalog.set("Pages", Object::Reference(pages_id));
     let catalog_id = doc.add_object(catalog);
     doc.trailer.set("Root", Object::Reference(catalog_id));
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).map_err(|e| format!("writing the PDF: {e}"))?;
+    Ok(bytes)
+}
+
+/// `pdf` with `markups` added to page `page` (1-based) as annotations, after any it has: a
+/// review copy of a printed sheet (what a reviewer's PDF app saves).
+pub fn add_markups(pdf: &[u8], page: u32, markups: &[Markup]) -> Result<Vec<u8>, String> {
+    let mut doc = Document::load_mem(pdf).map_err(|e| format!("PDF: {e}"))?;
+    let id = *doc.get_pages().get(&page.max(1)).ok_or_else(|| format!("the PDF has no page {page}"))?;
+    let mut list: Vec<Object> = match doc.get_dictionary(id).map_err(|e| format!("PDF page: {e}"))?.get(b"Annots") {
+        Ok(Object::Array(a)) => a.clone(),
+        Ok(Object::Reference(r)) => doc.get_object(*r).ok().and_then(|o| o.as_array().ok()).cloned().unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    for m in markups.iter().take(MAX_ANNOTS) {
+        list.push(Object::Reference(doc.add_object(annot(m))));
+    }
+    doc.get_dictionary_mut(id).map_err(|e| format!("PDF page: {e}"))?.set("Annots", Object::Array(list));
     let mut bytes = Vec::new();
     doc.save_to(&mut bytes).map_err(|e| format!("writing the PDF: {e}"))?;
     Ok(bytes)
