@@ -1016,6 +1016,9 @@ fn matches(p: &P, a: A, types: &BTreeMap<u64, (String, Vec<P>)>) -> Result<(), S
         (A::Value { .. }, P::Typed(t, v)) if ["IFCLABEL", "IFCTEXT", "IFCIDENTIFIER"].contains(&t.as_str()) && matches!(**v, P::Str(_)) => Ok(()),
         (A::Value { .. }, P::Typed(t, v)) if t == "IFCLENGTHMEASURE" && matches!(**v, P::Real(r) if r.is_finite()) => Ok(()),
         (A::Value { .. }, P::Typed(t, v)) if t == "IFCPOSITIVELENGTHMEASURE" && matches!(**v, P::Real(r) if r.is_finite() && r > 0.0) => Ok(()),
+        // IfcReal and IfcBoolean (IfcSimpleValue): an element's own numeric and yes/no properties.
+        (A::Value { .. }, P::Typed(t, v)) if t == "IFCREAL" && matches!(**v, P::Real(r) if r.is_finite()) => Ok(()),
+        (A::Value { .. }, P::Typed(t, v)) if t == "IFCBOOLEAN" && matches!(&**v, P::Enum(e) if e == "T" || e == "F") => Ok(()),
         _ => Err(format!("{p:?} where the schema has {}", describe(a))),
     }
 }
