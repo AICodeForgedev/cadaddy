@@ -943,6 +943,8 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     let rcp = super::ceilings::build(d, &sp);
     // Duct, pipe and conduit runs of the shown systems.
     let mep = super::mep::build(d, &sp);
+    // The devices the readers found, each an element with what was read about it.
+    let devices = super::propfill::build_devices(d, &sp);
     // Concrete: slabs, footings, pads, bases and encasement, with rebar and what is cast in.
     let concrete = super::concrete::build(d, &sp);
     // Takeoff tables linked to the model count it again.
@@ -994,6 +996,7 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
         o.extend(x.clone());
     }
     r["gridColumns"] = json!(grid_columns);
+    r["deviceElements"] = json!(devices);
     r["qtyTables"] = json!(qty_tables);
     r["removed"] = json!(removed);
     // One building: the levels' 3D moved off their plans onto the lowest level's.
