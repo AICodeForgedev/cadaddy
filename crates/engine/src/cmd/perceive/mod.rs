@@ -23,7 +23,7 @@ const MAX_PAGE: usize = 200;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("plan.layers", "Plan Layers", run_layers)
-            .params("{offset?, limit?, crops?: folder (writes a PNG of each layer's objects there)} → {items: [{layer, objects, counts: {type: n}, segments, length, pairs, pairSpacing, extents, crop?}], total, next?}")
+            .params("{offset?, limit?, crops?: folder (writes a PNG of each layer's objects there)} → {items: [{layer, objects, counts: {type: n}, segments, length, pairs, pairSpacing, extents, confidence, crop?}], total, next?}; confidence (0–1): how surely the layer draws walls, ¾ from the share of its segments that pair up a wall's thickness apart and ¼ from a WALL layer name")
             .noundo(),
         CommandSpec::new("plan.walls", "Plan Walls", geometry::run_walls)
             .params("{layers? (patterns), minThickness?, maxThickness? (default 2½\"–20\" in drawing units), minLength?, offset?, limit?} → {items: [{layer, centerline: [[x,y],[x,y]], thickness, length, confidence}], total, next?}")
@@ -90,6 +90,12 @@ fn run_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let (d, ents) = objects(s)?;
     let segs = geometry::segments(&ents);
     let pairs = geometry::pairs(d, &segs, &geometry::Limits::default_for(d));
+    // The faces in a wall pair, and each layer's segments.
+    let in_pair: std::collections::HashSet<usize> = pairs.iter().flat_map(|w| w.faces).collect();
+    let mut mine_idx: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    for (i, g) in segs.iter().enumerate() {
+        mine_idx.entry(g.layer.as_str()).or_default().push(i);
+    }
     let mut by: std::collections::BTreeMap<String, (usize, std::collections::BTreeMap<&'static str, usize>, Bounds2)> =
         std::collections::BTreeMap::new();
     for e in &ents {
@@ -108,9 +114,13 @@ fn run_layers(s: &mut Session, p: &Value) -> Result<Value> {
         let length: f64 = mine.iter().map(|g| g.a.dist(g.b)).sum();
         let lp: Vec<f64> = pairs.iter().filter(|w| w.layer == layer).map(|w| w.thickness).collect();
         let spacing = median(&lp);
+        let paired = mine_idx.get(layer.as_str()).map_or(0, |ix| ix.iter().filter(|i| in_pair.contains(*i)).count());
+        let share = if mine.is_empty() { 0.0 } else { paired as f64 / mine.len() as f64 };
+        let wall_name = layer.to_ascii_uppercase().contains("WALL");
+        let confidence = (0.75 * share + if wall_name { 0.25 } else { 0.0 }).clamp(0.0, 1.0);
         let mut v = json!({
             "layer": layer, "objects": n, "counts": counts, "segments": mine.len(), "length": round(length),
-            "pairs": lp.len(), "pairSpacing": spacing.map(round),
+            "pairs": lp.len(), "pairSpacing": spacing.map(round), "confidence": round(confidence),
             "extents": if ext.is_empty() { Value::Null } else { json!([pt(ext.min), pt(ext.max)]) },
         });
         if let Some(dir) = &crops
@@ -258,7 +268,7 @@ fn run_notes(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// A sheet number: one or two letters, maybe a dash, then digits with maybe a dotted part
 /// (`A101`, `E-1.1`, `M2.01`).
-fn sheet_number(t: &str) -> bool {
+pub(crate) fn sheet_number(t: &str) -> bool {
     let t = t.trim();
     let letters = t.chars().take_while(char::is_ascii_uppercase).count();
     let rest = t[letters..].trim_start_matches('-');
