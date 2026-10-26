@@ -2725,6 +2725,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 s.doc_mut()?.building_spec = Some(sp.to_json());
                 job.audit("mep_merged", "pipeline", None, Some(StageName::BimBuild), Some(json!({"runs": runs})));
             }
+            // Where each sheet of the set sits, so what lies on the other disciplines' sheets
+            // is theirs (not "outside every level's region").
+            if !job.sheet_regions.is_empty()
+                && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+            {
+                add_sheet_links(&mut sp, &job.sheet_regions);
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+            }
         }
         Err(e) => {
             // Spec draft failed — this is a finding, not a silent error.
@@ -2923,6 +2931,46 @@ const DEFAULT_STOREY_FT: f64 = 10.0;
 /// index (read off the sections); else stacked at [`DEFAULT_STOREY_FT`] and marked as guessed,
 /// so the build stage asks. Empty when the set has no architectural floor plans (the build reads
 /// whatever was imported, as for one sheet).
+/// A plan's level as the building's levels name it: `Level 3`, `Roof`, `B1`.
+fn level_name(code: &str) -> String {
+    match code {
+        "R" => "Roof".to_string(),
+        l if !l.is_empty() && l.chars().all(|c| c.is_ascii_digit()) => format!("Level {l}"),
+        l => l.to_string(),
+    }
+}
+
+/// Most sheets the job lists in the spec.
+const MAX_SHEET_LINKS: usize = 2_000;
+
+/// The job's imported sheets into the spec's sheet list, each with where it sits in model space
+/// and its level (a sheet listed already keeps its entry and gains its place).
+pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[SheetRegion]) {
+    for r in regions.iter().take(MAX_SHEET_LINKS) {
+        if !r.rect.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let level = Some(r.level.trim()).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("SITE")).map(level_name);
+        let level = level.map(|n| sp.level(&n).map_or(n.clone(), |l| l.name.clone()));
+        match sp.sheets.iter_mut().find(|x| x.number.eq_ignore_ascii_case(&r.number) && x.rect.is_none_or(|q| q == r.rect)) {
+            Some(x) => {
+                x.rect = Some(r.rect);
+                if x.level.is_none() {
+                    x.level = level;
+                }
+            }
+            None => sp.sheets.push(cadaddy_walk3d::levels::SheetLink {
+                number: r.number.clone(),
+                title: String::new(),
+                discipline: Some(r.discipline.clone()).filter(|d| !d.is_empty()),
+                level,
+                source: "model".into(),
+                rect: Some(r.rect),
+            }),
+        }
+    }
+}
+
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
     // Site, civil and landscape plans, and plans that name no level, are no storey (MUST 3).
     let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
@@ -3095,6 +3143,8 @@ pub(crate) struct PlanPages {
     /// The building's levels for `bspec.draft` ([`building_levels`]; empty without
     /// architectural floor plans).
     pub levels: Vec<Value>,
+    /// Where each imported sheet sits ([`add_sheet_links`]).
+    pub regions: Vec<SheetRegion>,
 }
 
 /// The guided job's classify → plan pages path, for one-call PDF to BIM (`bim.from_pdf`): the
@@ -3111,7 +3161,7 @@ pub(crate) fn load_plan_pages(s: &mut Session, pdfs: &std::path::Path) -> Result
     let indexed = job.index.as_ref().and_then(|i| i.get("sheets")).and_then(Value::as_array).map_or(0, Vec::len);
     ensure_sheets_loaded(s, &mut job)?;
     let pages = job.sheet_regions.iter().map(|r| json!({"sheet": r.number, "level": r.level, "discipline": r.discipline, "type": r.kind})).collect();
-    Ok(PlanPages { indexed, pages, levels: building_levels(&job) })
+    Ok(PlanPages { indexed, pages, levels: building_levels(&job), regions: job.sheet_regions })
 }
 
 /// Run takeoff stage — calls the model takeoff (by level and trade), not the 2D layer count.

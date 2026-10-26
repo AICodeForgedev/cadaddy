@@ -121,9 +121,11 @@ fn takeoff_and_estimate_on_a_model_built_from_a_print() {
     for lv in ["Level 3", "Level 4"] {
         let w = line(&t, lv, "walls", "Wall");
         assert_eq!(w["unit"], "lf");
-        assert_eq!(w["element_count"], 12, "{w}");
         // Three 19' × 29' rooms in a 60' × 30' box: 3 + 3 walls of 19' (north, south), 29' at
-        // each end and 2 × 29' between the rooms = 230' (the walls' plan diagonals: within 10%).
+        // each end and 2 × 29' between the rooms: 10 walls, 230' (the walls' plan diagonals:
+        // within 10%). Before the stroke OCR read the plotted lettering, its strokes were left as
+        // linework and two more "walls" were built from the letters' parallel strokes.
+        assert_eq!(w["element_count"], 10, "{w}");
         let lf = w["qty"].as_f64().unwrap();
         assert!((225.0..=253.0).contains(&lf), "{lv} wall lf {lf}");
         let a = line(&t, lv, "walls", "Wall area");
@@ -141,9 +143,9 @@ fn takeoff_and_estimate_on_a_model_built_from_a_print() {
     let with_elements = lines.iter().filter(|l| l["element_count"].as_u64().unwrap_or(0) > 0).count();
     assert!(with_elements >= 8, "{}", t["csv"]);
     assert!(t["levels"].as_array().unwrap().len() >= 2, "{}", t["levels"]);
-    // The board line the BOM gives for the whole job points at the walls.
+    // The board line the BOM gives for the whole job points at the walls (both floors' 10).
     let board = lines.iter().find(|l| l["category"] == "drywall").expect("a drywall line");
-    assert!(board["element_count"].as_u64().unwrap() >= 24, "{board}");
+    assert!(board["element_count"].as_u64().unwrap() >= 20, "{board}");
 
     // Clash between trades that are not in the model: ran, nothing found.
     let c = s.execute("bim.clash", &json!({"a": "electrical", "b": "architecture"})).unwrap();

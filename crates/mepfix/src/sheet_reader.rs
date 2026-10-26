@@ -1223,12 +1223,15 @@ pub fn plan_views(d: &Drawing) -> Vec<PlanView> {
     // Two titles of one view (`1ST FLOOR LIGHTING PLAN` and `LEVEL 1 LIGHTING PLAN` under the
     // same plan): the same levels a few lines apart are one view, titled by the larger. Views
     // side by side (a floor's two halves, or its piping and its ductwork) title on one line and stay apart.
+    // One title read twice at one spot (an imported PDF's hidden text and the OCR's reading of its
+    // stroked lettering, at different heights) is one view too: kept twice, the first copy's
+    // cell would end at the second copy, just under the title, and hold none of the plan.
     views.sort_by(|a, b| b.height.total_cmp(&a.height));
     let mut kept: Vec<PlanView> = Vec::new();
     for v in views {
         let one_view = |k: &PlanView| {
-            let (dy, h) = ((k.at[1] - v.at[1]).abs(), k.height.max(v.height));
-            k.levels == v.levels && dy > h * 0.5 && dy <= h * 8.0
+            let (dx, dy, h) = ((k.at[0] - v.at[0]).abs(), (k.at[1] - v.at[1]).abs(), k.height.max(v.height));
+            k.levels == v.levels && ((dy > h * 0.5 && dy <= h * 8.0) || (dy <= h * 0.5 && dx <= h * 2.0))
         };
         if !kept.iter().any(one_view) {
             kept.push(v);
@@ -1654,6 +1657,57 @@ pub fn score_sheet_map(map: &SheetMap, truth_sheets: &[Sheet], truth_grid_x: &[G
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sheet_text(d: &mut Drawing, at: [f64; 2], value: &str, height: f64) {
+        let t = cadaddy_doc::Text {
+            insert: cadaddy_doc::geom::Vec3::new(at[0], at[1], 0.0),
+            align_pt: None,
+            height,
+            value: value.into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: cadaddy_doc::HAlign::Left,
+            valign: cadaddy_doc::VAlign::Baseline,
+        };
+        d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), EntityKind::Text(t)).unwrap();
+    }
+
+    /// A sheet of two floor plans whose titles come twice, as an imported PDF gives them: the
+    /// hidden text and the OCR's reading of the stroked lettering, at one spot, different heights.
+    /// Each title is one view, and each view's cell holds its plan.
+    #[test]
+    fn a_title_read_twice_at_one_spot_is_one_view() {
+        let mut d = Drawing::default();
+        for (y0, title) in [(0.0, "3RD FLOOR PLAN"), (600.0, "4TH FLOOR PLAN")] {
+            sheet_text(&mut d, [200.0, y0 - 60.0], title, 12.9);
+            sheet_text(&mut d, [200.0, y0 - 60.0], title, 18.0);
+            for (i, room) in ["OFFICE", "LOBBY", "STORAGE"].iter().enumerate() {
+                sheet_text(&mut d, [90.0 + i as f64 * 240.0, y0 + 180.0], room, 6.4);
+                sheet_text(&mut d, [90.0 + i as f64 * 240.0, y0 + 180.0], room, 9.0);
+            }
+        }
+        sheet_text(&mut d, [0.0, -120.0], "SCALE: 1/8\" = 1'-0\"", 6.0);
+        sheet_text(&mut d, [900.0, -120.0], "A101", 12.0);
+        let views = plan_views(&d);
+        assert_eq!(views.len(), 2, "{views:?}");
+        assert!(views.iter().all(|v| v.height == 18.0), "the larger copy titles the view: {views:?}");
+        let cells = view_cells(&d);
+        assert_eq!(cells.len(), 2, "{cells:?}");
+        for (v, [_, y0, _, y1]) in &cells {
+            let plan_mid = if v.levels == ["3"] { 180.0 } else { 780.0 };
+            assert!(*y0 < plan_mid && plan_mid < *y1, "{} cell {y0}..{y1} misses its plan", v.title);
+        }
+        // Two views side by side, titled on one line, stay two.
+        let mut d = Drawing::default();
+        sheet_text(&mut d, [0.0, 0.0], "3RD FLOOR PLAN - AREA A", 18.0);
+        sheet_text(&mut d, [900.0, 0.0], "3RD FLOOR PLAN - AREA B", 18.0);
+        for i in 0..6 {
+            sheet_text(&mut d, [f64::from(i) * 300.0, 200.0], "ROOM", 9.0);
+        }
+        assert_eq!(plan_views(&d).len(), 2);
+    }
 
     /// The bubbles of `printed_sheets::detail_sheet`: two wall sections, each with `1` and `A`
     /// at its corner.

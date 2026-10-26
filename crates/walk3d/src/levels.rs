@@ -73,6 +73,10 @@ pub struct SheetLink {
     /// Where it was found: `layout:<name>`, `file:<name>`, `model`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
+    /// Where the sheet sits in model space `[x0, y0, x1, y1]` (a print set imported side by
+    /// side): what lies there is this sheet's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rect: Option<[f64; 4]>,
 }
 
 /// A level name and elevation read from one note.

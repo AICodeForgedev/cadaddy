@@ -42,7 +42,7 @@ const MAX_PX: u32 = 4096;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("model.issues", "Model Issues", run_issues)
-            .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}"),
+            .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}"),
         CommandSpec::new("model.render", "Render Model View", run_render)
             .params("{path?: PNG file (else the PNG comes back as base64), width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
             .noundo(),
@@ -78,6 +78,64 @@ fn built(d: &Drawing) -> Vec<Built> {
             Some(Built { handle: e.handle, part, level: made_level(e).unwrap_or_default(), source, mesh: m.clone() })
         })
         .collect()
+}
+
+/// The parts a building stands as: what a whole-building view frames, and what each level's
+/// other built objects should stand in.
+const SHELL: &[&str] = &["wall", "floor", "curtainwall", "column", "roof"];
+
+/// How far past its level's shell a built object may stand (a condenser on its pad, a canopy):
+/// 10 feet, or 5% of the shell's size when that is more.
+fn shell_margin(b: &Bounds2, upf: f64) -> f64 {
+    (10.0 * upf).max(0.05 * b.width().max(b.height()))
+}
+
+/// The plan box of each level's shell (its walls, floors, columns and roofs) where they are
+/// built, and of all levels together.
+pub(crate) fn shell_boxes(d: &Drawing) -> (Vec<(String, Bounds2)>, Bounds2) {
+    let mut by: Vec<(String, Bounds2)> = Vec::new();
+    let mut all = Bounds2::EMPTY;
+    for e in d.model.iter() {
+        let Some(part) = made_as(e) else { continue };
+        if !SHELL.iter().any(|p| part.eq_ignore_ascii_case(p)) {
+            continue;
+        }
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        if b.is_empty() || !(b.min.is_finite() && b.max.is_finite()) {
+            continue;
+        }
+        all = all.union(&b);
+        let level = made_level(e).unwrap_or_default();
+        match by.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(&level)) {
+            Some((_, x)) => *x = x.union(&b),
+            None => by.push((level, b)),
+        }
+    }
+    (by, all)
+}
+
+/// What a built object was read from, for a message: its sheet (`prop:SOURCE sheet=`), else its
+/// own tag, else the text or layer of the plan object it was built from.
+fn built_from(d: &Drawing, e: &Entity) -> String {
+    let tag = super::bimlook::made_tag;
+    let sheet = tag(e, "prop").and_then(|v| v.split_whitespace().find_map(|w| w.strip_prefix("sheet="))).map(str::to_string);
+    let what = tag(e, "tag").map(str::to_string).filter(|t| !t.is_empty()).or_else(|| tag(e, "system").map(|v| format!("system {v}")));
+    let source = super::bimlook::made_source(e).filter(|h| h.0 != 0).and_then(|h| d.model.get(h));
+    let text = source.and_then(|x| match &x.kind {
+        EntityKind::Text(t) => Some(t.value.clone()),
+        EntityKind::MText(t) => Some(t.contents.clone()),
+        _ => None,
+    });
+    let mut out: Vec<String> = Vec::new();
+    if let Some(w) = text.or(what) {
+        out.push(format!("\"{}\"", w.chars().take(40).collect::<String>()));
+    }
+    match (sheet, source) {
+        (Some(sh), _) => out.push(format!("from {sh}")),
+        (None, Some(x)) => out.push(format!("from layer {}", x.common.layer)),
+        _ => {}
+    }
+    out.join(" ")
 }
 
 /// A mesh's plan footprint: its bottom faces (convex polygons), else the bottom edges of its
@@ -336,6 +394,43 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
             handles: Vec::new(),
         });
     }
+    // Built objects off their level's building (a legend's equipment, a ceiling traced round a
+    // grid bubble): each listed with what it was read from.
+    let (shells, _) = shell_boxes(d);
+    let mut off: Vec<((String, String, String), Vec<Handle>, Vec2, f64)> = Vec::new();
+    for e in d.model.iter() {
+        let Some(part) = made_as(e) else { continue };
+        if part.eq_ignore_ascii_case("ground") || SHELL.iter().any(|p| part.eq_ignore_ascii_case(p)) {
+            continue;
+        }
+        let level = made_level(e).unwrap_or_default();
+        let Some((_, shell)) = shells.iter().find(|(n, _)| n.eq_ignore_ascii_case(&level)) else { continue };
+        let Some(c) = centre(d, e) else { continue };
+        let by = shell_dist(shell, c);
+        if !by.is_finite() || by <= shell_margin(shell, upf) {
+            continue;
+        }
+        // MEP by what it is (duct, pipe, equipment).
+        let part = super::bimlook::made_tag(e, "kind").filter(|k| !k.is_empty()).map_or(part, str::to_string);
+        let key = (level, part, built_from(d, e));
+        match off.iter_mut().find(|o| o.0 == key) {
+            Some(o) => {
+                o.1.push(e.handle);
+                o.3 = o.3.max(by);
+            }
+            None => off.push((key, vec![e.handle], c, by)),
+        }
+    }
+    for ((level, part, from), hs, at, by) in off {
+        let what = if from.is_empty() { String::new() } else { format!(" {from}") };
+        push(Finding {
+            kind: "outside_building",
+            message: format!("{} {part}{what} built {} outside {level}'s walls and floors", hs.len(), feet(by, upf)),
+            level: Some(level),
+            at: Some(at),
+            handles: hs,
+        });
+    }
     // Rooms that leak.
     let rs = rooms(&plan, &sp)?;
     let mut reported: Vec<(Handle, Handle)> = Vec::new();
@@ -502,6 +597,13 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
     Ok(out)
 }
 
+/// How far a plan point is outside a box (0 inside).
+fn shell_dist(b: &Bounds2, p: Vec2) -> f64 {
+    let dx = (b.min.x - p.x).max(p.x - b.max.x).max(0.0);
+    let dy = (b.min.y - p.y).max(p.y - b.max.y).max(0.0);
+    dx.hypot(dy)
+}
+
 fn feet(v: f64, upf: f64) -> String {
     feet_str(v / upf)
 }
@@ -666,6 +768,10 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         .filter(|b| only.as_ref().is_none_or(|l| b.level.eq_ignore_ascii_case(l) && b.part != "ceiling" && b.part != "ground" && !over(b)))
         .map(|b| b.handle)
         .collect();
+    // The whole building: its storeys stacked, framed on what it stands as (walls, floors,
+    // columns, roofs); a reader's stray object off the building (model.issues lists it as
+    // outside_building) never shrinks the building to a speck in the corner of the view.
+    let whole = only.is_none() && eye.is_none() && p.get("around").is_none_or(Value::is_null) && p.get("mark").is_none_or(Value::is_null);
     let md = if bim {
         // Trade colours; the shell ghosted for a view from outside (`ghost`, else as the view
         // has it), solid for a camera or a room seen from inside.
@@ -679,18 +785,29 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         };
         // The whole building stacks its storeys; a level, a room, a plan box, a mark or a camera
         // are on the sheet's (and the built model's) own coordinates.
-        let stack = only.is_none() && eye.is_none() && p.get("around").is_none_or(Value::is_null) && p.get("mark").is_none_or(Value::is_null);
         let keep: std::collections::HashSet<Handle> = keep.iter().copied().collect();
-        super::bimlook::compose(d, &look, ghost, stack, &|e, _| keep.contains(&e.handle))
+        super::bimlook::compose(d, &look, ghost, whole, &|e, _| keep.contains(&e.handle))
     } else {
         let mut md = Drawing::new_imperial();
         md.layers = d.layers.clone();
+        let offsets = if whole { super::bimlook::stack_offsets(d) } else { Vec::new() };
         for h in &keep {
             if let Some(e) = d.model.get(*h) {
-                md.model.push((**e).clone());
+                let mut c = (**e).clone();
+                let level = made_level(e).unwrap_or_default();
+                if let Some(o) = super::bimlook::stack_move(offsets.iter().find(|(n, _)| n.eq_ignore_ascii_case(&level)).map(|o| o.1), e) {
+                    c.kind.transform(&cadaddy_geom::Mat3::translate(o));
+                }
+                md.model.push(c);
             }
         }
         md
+    };
+    let frame = if whole {
+        let (_, shell) = shell_boxes(&md);
+        (!shell.is_empty()).then(|| shell.expand(shell_margin(&shell, upf)))
+    } else {
+        None
     };
     let ext = md.extents(&Space::Model);
     let size = ext.width().max(ext.height());
@@ -721,6 +838,14 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         (Some(_), None) | (None, Some(_)) => return Err(bad("model.render", "a camera pose needs both `eye` and `target`")),
         _ => vec3(p, "dir")?.unwrap_or(Vec3::new(-1.0, -1.0, 1.0)),
     };
+    if let Some(b) = frame {
+        keep_in.extend([
+            (Vec3::new(1.0, 0.0, 0.0), b.min.x),
+            (Vec3::new(-1.0, 0.0, 0.0), -b.max.x),
+            (Vec3::new(0.0, 1.0, 0.0), b.min.y),
+            (Vec3::new(0.0, -1.0, 0.0), -b.max.y),
+        ]);
+    }
     // A plan box round a place: only the model inside it.
     if let Some(a) = p.get("around").filter(|v| !v.is_null()) {
         let n: Vec<f64> = a.as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();

@@ -413,6 +413,13 @@ pub fn stack_offsets(d: &Drawing) -> Vec<(String, cadaddy_geom::Vec2)> {
         .collect()
 }
 
+/// The move that stacks a built object: its level's offset ([`stack_offsets`]) less what
+/// `model.build` already moved it by (a stacked build); none when that leaves nothing.
+pub(crate) fn stack_move(level_offset: Option<cadaddy_geom::Vec2>, e: &Entity) -> Option<cadaddy_geom::Vec2> {
+    let o = level_offset? - super::bspec::stacked_by(e);
+    (o.is_finite() && o.len() > 1e-6).then_some(o)
+}
+
 /// `d` with only the built elements `keep` and `look` let through (and, with `look.sheet`, the
 /// sheet's own objects), coloured by trade; the ghosted trades see-through when `ghost`; the
 /// levels stacked ([`stack_offsets`]) when `stack`.
@@ -439,7 +446,7 @@ pub fn compose(d: &Drawing, look: &Look, ghost: bool, stack: bool, keep: &dyn Fn
                 if *slot != Some(c.key) {
                     *slot = None;
                 }
-                kept.push((e, Some(c.key), offset_of(&c.level)));
+                kept.push((e, Some(c.key), stack_move(offset_of(&c.level), e)));
             }
             None if look.sheet => kept.push((e, None, None)),
             None => {}
@@ -761,7 +768,7 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
                     let Some(e) = d.model.get(*h) else { continue };
                     let eb = cadaddy_doc::entity_bounds(d, e, 0);
                     let lv = super::bspec::made_level(e).unwrap_or_default();
-                    let o = offs.iter().find(|(n, _)| n.eq_ignore_ascii_case(&lv)).map_or(cadaddy_geom::Vec2::ZERO, |o| o.1);
+                    let o = stack_move(offs.iter().find(|(n, _)| n.eq_ignore_ascii_case(&lv)).map(|o| o.1), e).unwrap_or(cadaddy_geom::Vec2::ZERO);
                     if !eb.is_empty() {
                         b = b.union(&cadaddy_geom::Bounds2::new(eb.min + o, eb.max + o));
                     }
