@@ -114,9 +114,11 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "units_per_foot": {"type": "number"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1},
             "elements": {"type": "boolean", "description": "list each line's objects (default true)"}
         }}}),
+        json!({"name": "framing", "description": "Studs and framing from the job's prints: every wall's fixed members (ends, corners, tees, posts, kings, jacks, headers), both rule layouts (laid out from either end; agreed where they coincide), the \"next stud\" dimension and flags. Answers are compact and paged; entries are kept in the job and re-applied on every rebuild, and repeating one changes nothing. Actions, each with an example of params:\n- build {dir: \"/jobs/sample/prints\"} — read the DXF sheets and frame every wall (none: the sheets framed last, else the open print set).\n- list {level: \"1\", flagged: true, offset: 0, limit: 50} — walls with their counts by status.\n- wall {wall: \"F1-003\", members: true} — one wall: members by status and kind, both layouts, next stud, flags.\n- next_stud {wall: \"F1-003\"} — the next-stud dimension from each end under each layout.\n- field_point {wall: \"F1-003\", tape: {from: \"a\", to_near_edge_in: 15.25}, author: \"agent\"} — a measured stud (or centre_in, or photo {refs: [[x, y, in] ×3], pick: [x, y]}); its run and stacked walls snap to field verified.\n- shop_drawing {file: \"/jobs/sample/shop/L1-studs.dxf\", level: \"1\"} — STUD, JOIST/TRUSS, TENDON/PT layers replace the rule members where they cover.\n- view {wall: \"F1-003\"} or {level: \"1\", walk: true} — draw the elevation / plan on FRAMING-* layers (fixed solid, rule ghosted, dimensions) and the members as 3D boxes for Walk.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["build", "list", "wall", "next_stud", "field_point", "shop_drawing", "view"]}, "params": {"type": "object"}}, "required": ["action"]}}),
         json!({"name": "guided_job", "description": "For prints → model/takeoff/estimate, call guided_job start then loop guided_job next / guided_job answer. The software runs a fixed pipeline (import → classify → levels → rooms → devices → bim.build → takeoff → estimate) and pauses with questions when it needs the agent: confirm a scale, name a room, identify an unknown symbol, spot-check a count. Answers become project rules for future runs. A worklist collects every question, finding and action; each resolved action is undoable. Actions:\n- start {pdfs: folder, goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\"|\"clash\"} — create a job.\n- next {} — the next question (or done/progress).\n- answer {id, answer} — answer a question; the pipeline resumes.\n- status {} — job progress, findings and open worklist items.\n- explain {stage?} — what a stage does and its state.\n- rules {} — learned project rules.\n- report {} — final report.\n- worklist {status?: \"pending\"|\"resolved\"|\"info\", stage?} — the unified worklist.\n- undo {id} — undo a resolved worklist action.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "answer", "status", "explain", "rules", "report", "worklist", "undo"]}, "params": {"type": "object"}}, "required": ["action"]}}),
-        json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items (paged, default 50), \"edit\" changes one item by its stable id (e.g. \"R1\").",
+        json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items (paged, default 50), \"edit\" changes one item by its stable id (e.g. \"R1\"), \"casework\" reads the open architectural floor plan's casework and plumbing fixtures with their schedule: each item's tag, kind, 3D family, position, height, source (sheet, schedule) and status (schedule / note / pattern / tag), paged by cursor and limit; place: true makes each item with a family that model.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string"},
             "level": {"type": "string"}, "system": {"type": "string"}, "guessed_only": {"type": "boolean"},
@@ -126,7 +128,10 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "size_in": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
             "bottom_ft": {"type": "number"}, "reviewed": {"type": "boolean"},
             "edited_by": {"type": "string", "description": "who made this edit (default \"agent\")"},
-            "rebuild": {"type": "boolean"}
+            "rebuild": {"type": "boolean"},
+            "place": {"type": "boolean", "description": "casework action: place the 3D family of each read item"},
+            "kind": {"type": "string", "description": "casework action: only this kind (e.g. \"vanity\", \"water_closet\")"},
+            "sheet": {"type": "string", "description": "casework action: the sheet number to record as the source"}
         }}}),
         json!({"name": "import_check", "description": "Check the quality of a PDF-imported drawing: scale, layers, text recovery, fills, symbols, grid. Returns pass/fail, a score (0-100), per-check results with evidence for zoom-to, and hard-fail IDs (SCALE, FILLS, SYMBOLS each fail on their own). Optionally check a file by path without opening it.",
             "inputSchema": {"type": "object", "properties": {"path": {"type": "string", "description": "file path to check without opening (omit to check the current drawing)"}}}}),
@@ -136,6 +141,14 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "levels": {"type": "string", "description": "\"auto\" (default)"},
                 "force": {"type": "boolean", "description": "build even if import check fails"}
             }, "required": ["path"]}}),
+        json!({"name": "callouts", "description": "List cross-reference callouts from the imported print set: section marks, elevation tags, detail bubbles, enlarged-plan boundaries, match lines and key plans. Each callout shows its source sheet, kind, detail number, target sheet, and whether it resolves or is broken (with the reason). With no print set imported it returns no items and a hint saying how to import one.",
+        "inputSchema": {"type": "object", "properties": {
+            "kind": {"type": "string", "description": "filter by kind: section_mark, elevation_tag, detail_bubble, enlarged_plan, match_line, key_plan"},
+            "status": {"type": "string", "description": "filter: resolved or broken"},
+            "level": {"type": "string", "description": "filter by level name (matches sheets containing this level)"},
+            "page": {"type": "integer", "minimum": 1, "description": "page number (default 1)"},
+            "page_size": {"type": "integer", "minimum": 1, "maximum": 200, "description": "items per page (default 50)"}
+        }}}),
         json!({"name": "workflows", "description": "List the main agent workflows with exact example MCP calls. Returns a list of named flows (pdf-to-bim, view-3d, plot-set, bim-work, convert-folder) each with steps and example tool calls.",
             "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "job_status", "description": "Check on background operations. Returns whether CADaddy is busy and what it is doing (opening files, building models, rendering). Long commands like bim.from_pdf and model.build report progress here. Use wait_until_idle to block until done.",
@@ -497,16 +510,50 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
             exec(b, command, params)
         }
         "site_takeoff" => exec(b, "site.takeoff", a),
-        "mep" => {
+        "framing" => {
             let command = match a.get("action").and_then(Value::as_str) {
-                Some("edit") => "mep.edit",
-                _ => "mep.list",
+                Some("build") => "framing.build",
+                Some("list") => "framing.list",
+                Some("wall") => "framing.wall",
+                Some("next_stud") => "framing.next_stud",
+                Some("field_point") => "framing.field_point",
+                Some("shop_drawing") => "framing.shop_drawing",
+                Some("view") => "framing.view",
+                Some(other) => {
+                    return Err(format!(
+                        "framing has no action `{}` — use build, list, wall, next_stud, field_point, shop_drawing or view",
+                        other.chars().take(30).collect::<String>()
+                    ));
+                }
+                None => return Err("framing needs an action — start with {action: \"build\", params: {dir: \"<folder of DXF sheets>\"}}".into()),
             };
-            let mut params = a.clone();
-            if let Some(o) = params.as_object_mut() {
-                o.remove("action");
-            }
+            let params = a.get("params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
             exec(b, command, params)
+        }
+        "mep" => {
+            if a.get("action").and_then(Value::as_str) == Some("casework") {
+                // The casework list pages by offset.
+                let mut params = json!({});
+                for k in ["place", "kind", "sheet", "limit"] {
+                    if let Some(v) = a.get(k).filter(|v| !v.is_null()) {
+                        params[k] = v.clone();
+                    }
+                }
+                if let Some(c) = a.get("cursor").filter(|v| !v.is_null()) {
+                    params["offset"] = c.clone();
+                }
+                exec(b, "casework.read", params)
+            } else {
+                let command = match a.get("action").and_then(Value::as_str) {
+                    Some("edit") => "mep.edit",
+                    _ => "mep.list",
+                };
+                let mut params = a.clone();
+                if let Some(o) = params.as_object_mut() {
+                    o.remove("action");
+                }
+                exec(b, command, params)
+            }
         }
         "project" => {
             let command = match a.get("action").and_then(Value::as_str) {
@@ -590,6 +637,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Err(e) => err_text(&e),
             });
         }
+        "callouts" => exec(b, "callouts.list", a),
         other => return Err(format!("unknown tool `{other}`")),
     };
     Ok(match r {
