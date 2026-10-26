@@ -506,11 +506,18 @@ fn counter_receptacle_zone_over_the_read_backsplash() {
         at_ft: [(bs.min_ft[0] + bs.max_ft[0]) / 2.0 + 0.5, wall.from_ft[1], 18.0],
         mounting_in: 18.0,
         height_source: "rule".into(),
-        zone_ft: Some([wall.from_ft[0].min(wall.to_ft[0]), wall.from_ft[0].max(wall.to_ft[0])]),
+        zone: Some(elec_reader::DeviceZone {
+            room: String::new(),
+            wall_side: elec_reader::WallSide::South,
+            axis: elec_reader::ZoneAxis::X,
+            range_ft: [wall.from_ft[0].min(wall.to_ft[0]), wall.from_ft[0].max(wall.to_ft[0])],
+            height_in: [14.0, 22.0],
+            field_decision: true,
+        }),
         ..Default::default()
     }];
     assert_eq!(elec_reader::apply_counter_zones(&mut devices, &t.building.walls, &zones), 1);
-    assert_eq!(devices[0].zone_ft, Some(z.zone_ft));
+    assert_eq!(devices[0].zone.as_ref().map(|z| z.range_ft), Some(z.zone_ft));
     assert_eq!((devices[0].mounting_in, devices[0].height_source.as_str()), (38.0, "casework"));
     // Moved 2 ft east on the sheet, the read backsplash takes its zone along.
     let mut moved = found.clone();
