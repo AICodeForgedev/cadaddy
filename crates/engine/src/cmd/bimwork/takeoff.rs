@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Model Takeoff", run)
             .alias(&["takeoffmodel"])
-            .params("{group_by?: level|trade|system|type (default level), filter?: {trade?, level?, category?, text?} | text, compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements, element_count, status}], totals: {count, length_ft, area_sf, volume_cy}, levels, changes?: {added, removed, changed}, revision, csv, path?}")
+            .params("{group_by?: level|trade|system|type|circuit (default level; circuit: each level's lines per branch circuit), filter?: {trade?, level?, category?, circuit?, text?} | text, compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level, circuit?, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements, element_count, status}], totals: {count, length_ft, area_sf, volume_cy}, levels, changes?: {added, removed, changed}, revision, csv, path?}")
             .noundo(),
         CommandSpec::new(CMD_SHOW, "Show Takeoff Line", run_show)
             .params("{line: key or index (of the last takeoff) | elements: [handle]} → {key?, selected, handles, min, max, viewpoint} — selects the elements (marked in 3D) and points the 3D camera at them")
@@ -77,7 +77,7 @@ fn passes(f: &Value, l: &Value) -> bool {
             }
             match k.as_str() {
                 "text" => ["trade", "category", "item", "size", "system"].iter().any(|k| has(k).contains(&want)),
-                "trade" | "level" | "category" | "system" | "item" | "unit" => has(k) == want || has(k).contains(&want),
+                "trade" | "level" | "category" | "system" | "item" | "unit" | "circuit" => has(k) == want || has(k).contains(&want),
                 _ => true,
             }
         }),
@@ -101,7 +101,8 @@ fn part_of(category: &str) -> Option<&'static str> {
 
 /// The takeoff lines, by `group_by`: each with its quantities and its elements.
 pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<Vec<Value>> {
-    let bom = s.execute("bim.bom", &json!({"group_by": "level", "all_elements": true}))?;
+    // Per level and branch circuit: lines on no circuit are the level's as they are.
+    let bom = s.execute("bim.bom", &json!({"group_by": "circuit", "all_elements": true}))?;
     let d = s.doc()?;
     // Each built element's level, category and system.
     let els = elements(d);
@@ -203,7 +204,11 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             l["item"].as_str().unwrap_or_default().to_string(),
             l["size"].as_str().unwrap_or_default().to_string(),
         );
-        let line = json!({"level": level, "trade": trade, "system": system, "category": category, "item": item, "size": size, "unit": unit});
+        let circuit = if group_by == "circuit" { l["circuit"].as_str().unwrap_or_default() } else { "" };
+        let mut line = json!({"level": level, "trade": trade, "system": system, "category": category, "item": item, "size": size, "unit": unit});
+        if !circuit.is_empty() {
+            line["circuit"] = json!(circuit);
+        }
         if !passes(filter, &line) {
             continue;
         }
@@ -211,6 +216,7 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             "trade" => format!("{trade}|{category}|{item}|{size}|{unit}"),
             "system" => format!("{system}|{item}|{size}|{unit}"),
             "type" => format!("{item}|{size}|{unit}"),
+            "circuit" => format!("{level}|{circuit}|{trade}|{category}|{item}|{size}|{unit}"),
             _ => format!("{level}|{trade}|{category}|{item}|{size}|{unit}"),
         };
         let qty = l["net"].as_f64().filter(|v| v.is_finite()).unwrap_or(0.0);
@@ -222,7 +228,7 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             x["status"] = l["status"].clone();
             x["waste_pct"] = l["waste_pct"].clone();
             x["levels"] = json!([]);
-            if group_by != "level" {
+            if !matches!(group_by, "level" | "circuit") {
                 x["level"] = json!("");
             }
             if group_by == "type" || group_by == "system" {
@@ -330,8 +336,8 @@ fn write_table(cmd: &str, path: &str, rows: &[Vec<String>], sheet: &str) -> Resu
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let group_by = str_param(p, "group_by").unwrap_or("level").to_ascii_lowercase();
-    if !matches!(group_by.as_str(), "level" | "trade" | "system" | "type") {
-        return Err(bad(CMD, "`group_by` is level, trade, system or type"));
+    if !matches!(group_by.as_str(), "level" | "trade" | "system" | "type" | "circuit") {
+        return Err(bad(CMD, "`group_by` is level, trade, system, type or circuit"));
     }
     let filter = p.get("filter").cloned().unwrap_or(Value::Null);
     let lines = lines(s, &group_by, &filter)?;
@@ -349,23 +355,32 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         None => st[&last_key]["lines"].as_object().map(|o| o.iter().filter_map(|(k, v)| Some((k.clone(), v.as_f64()?))).collect()),
     };
     let revision = st[&last_key]["revision"].as_u64().unwrap_or(0) + u64::from(before.as_ref().is_none_or(|b| *b != now));
-    let rows: Vec<Vec<String>> =
-        std::iter::once(["level", "trade", "system", "category", "item", "size", "unit", "qty", "elements"].map(String::from).to_vec())
-            .chain(lines.iter().map(|l| {
-                let f = |k: &str| l[k].as_str().unwrap_or_default().to_string();
-                vec![
-                    f("level"),
-                    f("trade"),
-                    f("system"),
-                    f("category"),
-                    f("item"),
-                    f("size"),
-                    f("unit"),
-                    r3(l["qty"].as_f64().unwrap_or(0.0)).to_string(),
-                    l["element_count"].to_string(),
-                ]
-            }))
-            .collect();
+    // By circuit, the circuit is a column after the level.
+    let by_circuit = group_by == "circuit";
+    let mut head = ["level", "trade", "system", "category", "item", "size", "unit", "qty", "elements"].map(String::from).to_vec();
+    if by_circuit {
+        head.insert(1, "circuit".into());
+    }
+    let rows: Vec<Vec<String>> = std::iter::once(head)
+        .chain(lines.iter().map(|l| {
+            let f = |k: &str| l[k].as_str().unwrap_or_default().to_string();
+            let mut row = vec![
+                f("level"),
+                f("trade"),
+                f("system"),
+                f("category"),
+                f("item"),
+                f("size"),
+                f("unit"),
+                r3(l["qty"].as_f64().unwrap_or(0.0)).to_string(),
+                l["element_count"].to_string(),
+            ];
+            if by_circuit {
+                row.insert(1, f("circuit"));
+            }
+            row
+        }))
+        .collect();
     let mut out = json!({"lines": lines, "totals": totals, "levels": levels, "group_by": group_by, "revision": revision});
     if let Some(b) = &before {
         out["changes"] = diff(b, &now);
