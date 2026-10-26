@@ -53,7 +53,8 @@ const SET: &[&str] = &["A-101", "A-102", "E-101", "M-101", "M-102", "P-101", "P-
 fn run_job(tag: &str, only: &[&str]) -> Session {
     let dir = job_folder(tag, only);
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "checkpoint": false})).expect("job.start");
+    let st =
+        s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "auto": true, "checkpoint": false})).expect("job.start");
     assert_eq!(st["done"], json!(true), "{st}");
     s
 }
