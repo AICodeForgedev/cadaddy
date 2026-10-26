@@ -96,6 +96,10 @@ low-level `execute` only when needed.
 | `stairs` | Stairs and ramps: detect from plan, list with code checks (riser/tread sizes), confirm, then model.build builds them. |
 | `mep` | MEP review: list runs/fittings by system and level with confidence, edit size/height/system, mark reviewed, rebuild. |
 | `callouts` | Cross-reference callouts read from the imported print set (section marks, elevation tags, detail bubbles, enlarged-plan boundaries, match lines, key plans): each with its sheet, kind, detail, target and whether it resolves or is broken; filter by `kind`, `status`, `level`, paged. |
+| `lv_devices` | Fire alarm and low-voltage devices read from the FA and telecom sheets (system, kind, level, candela, circuit, height notes); filter by `system` and `level`, paged. |
+| `lv_sleeves` | LV/FA sleeves at rated wall and floor crossings: size computed from the cables at NEC fill plus spare, material, fire rating and firestop; filter by `level` and `system`, paged. |
+| `lv_bom` | Low-voltage bill of materials: device counts, cable footage from routed lengths, supports, sleeves and firestop; with `has_lv_docs` false the lines are ASSUMED plus a document-request item. |
+| `lv_connections` | Equipment electrical connections read from the schedules (PTAC, RTU, water heater, elevator, pumps, kitchen, laundry, signage) with connection type, circuit and panel; filter by `level` and `kind`, paged. |
 | `site_takeoff` | Sitework quantities from civil sheets: earthwork cut/fill, paving, curbs, utilities with trench excavation and backfill. |
 | `framing` | Studs from the prints: `build` frames every wall of a folder of DXF sheets (fixed members, both rule layouts, stacks); `list`, `wall` and `next_stud` give compact, paged answers per wall; `field_point` (tape, centre or photo pick) and `shop_drawing` (DXF) are kept in the job and re-applied on every rebuild; `view` draws the elevation, plan and Walk boxes on `FRAMING-*` layers. The BOM's framing lines and bits come from it. |
 
