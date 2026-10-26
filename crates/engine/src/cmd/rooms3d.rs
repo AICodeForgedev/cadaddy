@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("rooms", "Rooms", run_list)
             .menu(&["Tools", "Building", "Rooms"])
-            .params("{outline?: bool (default true)} → as rooms.list (typed or from the menu: the Rooms palette)")
+            .params("{outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (as rooms.list)} → as rooms.list (typed or from the menu: the Rooms palette)")
             .noundo(),
         CommandSpec::new("rooms.list", "List Rooms", run_list)
             .params("{outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (read the labels only inside these sheet rectangles, each sheet in full)} → {rooms: [{name, number, area, areaSqFt, areaM2, perimeter, ceiling, ceilingFt, ceilingSource, elevation, volume, volumeCuFt, volumeM3, finishes, finishDetail, materials, level, label, at, outline}], count}")
