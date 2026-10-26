@@ -649,4 +649,58 @@ mod tests {
         s.start("'help").unwrap();
         assert_eq!(s.running.as_ref().map(|r| r.id.as_str()), Some("line"));
     }
+
+    /// Every command has help text: hand-written, or generated from its parameters (Q5279: an
+    /// agent's HELP {command} came back with an empty helpText for every command it tried).
+    #[test]
+    fn every_command_has_help_text_and_an_example() {
+        for spec in command_specs() {
+            let page = spec.help_page();
+            assert!(!page.help_text.trim().is_empty(), "{}", spec.id);
+            assert_eq!(page.generated, spec.help.is_empty(), "{}", spec.id);
+            assert!(page.example.starts_with(&format!("cadaddy-cli run DRAWING.dxf --cmd '{} {{", spec.id)), "{}", page.example);
+            assert!(page.mcp_example.starts_with(&format!("execute {{command: \"{}\"", spec.id)), "{}", page.mcp_example);
+            // Every documented top-level parameter is named in generated text.
+            if page.generated {
+                for p in crate::cmd::doc_params(crate::params_doc(spec)) {
+                    assert!(page.help_text.contains(&p.name), "{}: {} not in {}", spec.id, p.name, page.help_text);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn help_command_returns_generated_text() {
+        let mut s = Session::new();
+        let v = s.execute("help", &json!({"command": "bim.takeoff"})).unwrap();
+        let text = v["helpText"].as_str().unwrap();
+        assert!(text.starts_with("Model Takeoff.") && text.contains("group_by (optional)"), "{text}");
+        assert_eq!(v["generated"], json!(true));
+        assert_eq!(v["example"], json!("cadaddy-cli run DRAWING.dxf --cmd 'bim.takeoff {}'"));
+    }
+
+    #[test]
+    fn doc_params_reads_the_top_level_list() {
+        use crate::cmd::{DocParam, doc_params};
+        let p = |name: &str, optional: bool, kind: &str| DocParam { name: name.into(), optional, kind: kind.into() };
+        assert_eq!(
+            doc_params("{center: [x,y], radius?: number, opts?: {a, b: 1}, mode: \"a, b\" | c} → {handle}"),
+            vec![p("center", false, "[x,y]"), p("radius", true, "number"), p("opts", true, "{a, b: 1}"), p("mode", false, "\"a, b\" | c")]
+        );
+        assert_eq!(doc_params("{} → {x}"), vec![]);
+        assert_eq!(doc_params(""), vec![]);
+        assert_eq!(doc_params("{id, all? (default false)}"), vec![p("id", false, ""), p("all", true, "(default false)")]);
+        // Hostile docs never panic.
+        for d in ["{", "}", "{,,,}", "{\"", "{a:", "{?:}", "→{a}", "{é: 1, ü?}"] {
+            let _ = doc_params(d);
+        }
+    }
+
+    #[test]
+    fn examples_use_documented_literals() {
+        let ex = |id: &str| find_command(id).unwrap().example_params();
+        assert_eq!(ex("help"), json!({"command": "LINE"}));
+        assert_eq!(ex("job.start"), json!({"pdfs": "FILE"}));
+        assert_eq!(ex("job.answer"), json!({"id": "TEXT", "answer": "TEXT"}));
+    }
 }
