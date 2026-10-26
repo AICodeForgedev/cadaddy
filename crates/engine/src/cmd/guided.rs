@@ -438,6 +438,10 @@ pub struct GuidedJob {
     /// the BIM build puts it into the spec it drafts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mep: Option<cadaddy_walk3d::Mep>,
+    /// The branch circuits the electrical plans and the devices give (mep_read, Q6007): one
+    /// `circuit` tag each, whose conduit runs are in [`Self::mep`]; the BIM build puts them in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub circuits: Vec<cadaddy_walk3d::tags::ElementTag>,
     /// Auto mode (`job.start {auto: true}`): every question with a default takes it and the job
     /// runs on. Off (the default) the job stops at each checkpoint until it is answered.
     #[serde(default)]
@@ -615,6 +619,7 @@ impl GuidedJob {
             sheet_spans: Vec::new(),
             devices: Vec::new(),
             mep: None,
+            circuits: Vec::new(),
             auto: false,
             always_ask: BTreeSet::new(),
             storey_ft: None,
@@ -1894,6 +1899,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                             level: job.level_at([at.x, at.y]).map_or_else(String::new, |r| r.level.clone()),
                             circuit: super::readers::circuit_beside(&circuits, *at),
                             handle: h.hex(),
+                            kind: String::new(),
                         });
                         *c.by_type.entry(t).or_default() += 1;
                     }
@@ -2698,14 +2704,50 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let refs = job_sheet_refs(job);
     let upf = job_units_per_foot(s);
     let read = super::printmep::read_sheets(s.doc()?, &refs, upf, None);
-    let read_sheets: Vec<String> = read.sheets.iter().map(|r| r.sheet.clone()).collect();
+    // The electrical plans: drawn conduit, homeruns, panels, and an estimated route for each
+    // circuit the devices print (Q6007).
+    let cond = super::printcond::read_sheets(s.doc()?, &refs, upf, &job.devices);
+    let mut read_sheets: Vec<String> = read.sheets.iter().map(|r| r.sheet.clone()).collect();
+    read_sheets.extend(cond.sheets.iter().map(|r| r.sheet.clone()));
+    let mut mep = read.mep.clone();
+    for sy in &cond.mep.systems {
+        if !mep.systems.iter().any(|m| m.name == sy.name) {
+            mep.systems.push(sy.clone());
+        }
+    }
+    mep.runs.extend(cond.mep.runs.iter().cloned());
     // A spec already stored (a re-run) takes the reading now; the BIM build puts it into the
     // spec it drafts in any case.
     if let Ok((mut sp, true)) = super::bspec::current(s, "mep_read") {
-        super::printmep::merge_mep(&mut sp, read.mep.clone(), &read_sheets);
+        super::printmep::merge_mep(&mut sp, mep.clone(), &read_sheets);
+        super::printcond::seat_heights(&mut sp);
+        super::printcond::store_circuits(&mut sp, &cond.circuits);
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
-    job.mep = Some(read.mep.clone());
+    job.mep = Some(mep);
+    job.circuits = cond.circuits.clone();
+    if !cond.unrouted.is_empty() {
+        job.add_finding(
+            StageName::MepRead,
+            &format!("{} circuit(s) have no panel on their level's electrical plans", cond.unrouted.len()),
+            "their home runs to the panel are not counted: the panel's tag (PANEL LA, or its name by its box) was not found on the level's plans",
+            2,
+            vec!["Check the panel tags on the electrical plans".into()],
+            None,
+            false,
+        );
+    }
+    if cond.no_circuit > 0 {
+        job.add_finding(
+            StageName::MepRead,
+            &format!("{} device(s) on the electrical plans have no circuit printed beside them", cond.no_circuit),
+            "no conduit or wire is estimated for a device whose circuit is not known",
+            1,
+            vec!["Check the circuit numbers beside the devices".into()],
+            None,
+            false,
+        );
+    }
 
     let duct_ft = read.length_ft("duct");
     let pipe_ft = read.length_ft("pipe");
@@ -2714,13 +2756,24 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let equipment = read.mep.equipment.len();
     let m_sheets = read.sheets.iter().filter(|r| r.trade == "duct").count();
     let p_sheets = read.sheets.iter().filter(|r| r.trade == "pipe").count();
-    let trade_summary = format!(
+    let mut trade_summary = format!(
         "Found {duct_runs} duct run(s), {:.0} ft on {m_sheets} mechanical plan(s); {pipe_runs} pipe run(s), {:.0} ft on {p_sheets} plumbing plan(s); {terminals} terminal(s), {equipment} equipment",
         duct_ft, pipe_ft
     );
+    if !cond.sheets.is_empty() {
+        trade_summary.push_str(&format!(
+            "; {} circuit(s) on {} electrical plan(s): {:.0} ft of conduit ({:.0} ft drawn, {:.0} ft {})",
+            cond.circuits.len(),
+            cond.sheets.len(),
+            cond.drawn_ft() + cond.estimated_ft(),
+            cond.drawn_ft(),
+            cond.estimated_ft(),
+            super::printcond::ESTIMATED
+        ));
+    }
 
     // Per-trade summary question: present the summary and ask if anything was missed.
-    if duct_runs + pipe_runs > 0 {
+    if duct_runs + pipe_runs + cond.circuits.len() + cond.mep.runs.len() > 0 {
         let qid = job.next_qid(StageName::MepRead);
         let q = Question {
             id: qid,
@@ -2801,6 +2854,7 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     out["runs"] = json!(duct_runs + pipe_runs);
     out["length_ft"] = json!(super::printmep::r1(duct_ft + pipe_ft));
     out["fittings"] = json!(0);
+    out["conduit"] = cond.to_json();
     out["trade_summary"] = json!(trade_summary);
     Ok(out)
 }
@@ -2859,6 +2913,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             {
                 let runs = mep.runs.len();
                 super::printmep::merge_mep(&mut sp, mep, &[]);
+                // The circuits' estimated routes just above each level's ceiling.
+                super::printcond::seat_heights(&mut sp);
                 s.doc_mut()?.building_spec = Some(sp.to_json());
                 job.audit("mep_merged", "pipeline", None, Some(StageName::BimBuild), Some(json!({"runs": runs})));
             }
@@ -2916,6 +2972,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 false,
             ),
         }
+    }
+    // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff.
+    if !job.circuits.is_empty()
+        && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+    {
+        super::printcond::store_circuits(&mut sp, &job.circuits);
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+        result["circuits"] = json!(job.circuits.len());
     }
 
     // Check for warnings.
@@ -3321,6 +3385,27 @@ fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         "trades": trades,
         "levels": levels,
     });
+    // Conduit, wire, boxes and fittings by level and circuit (Q6007).
+    let by_circuit = s
+        .execute("bim.takeoff", &json!({"group_by": "circuit", "filter": {"trade": "electrical"}, "keep": false}))
+        .ok()
+        .and_then(|t| t.get("lines").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
+    let (circuits, conduit_ft, wire_ft) = circuit_summary(&by_circuit);
+    result["summary"]["conduit_ft"] = json!(super::printmep::r1(conduit_ft));
+    result["summary"]["wire_ft"] = json!(super::printmep::r1(wire_ft));
+    result["circuits"] = json!(circuits);
+    if !job.circuits.is_empty() && conduit_ft <= 0.0 {
+        job.add_finding(
+            StageName::Takeoff,
+            "The circuits read have no conduit in the takeoff",
+            "the electrical plans gave circuits but the model's conduit came to 0 ft",
+            3,
+            vec!["Re-run the mep_read and bim_build stages".into()],
+            None,
+            false,
+        );
+    }
 
     // MUST 4: takeoff with 0 lines is a finding, never silently Done.
     if line_count == 0 {
@@ -3338,6 +3423,39 @@ fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     job.audit("stage_run", "pipeline", None, Some(StageName::Takeoff), Some(json!({"line_count": line_count, "trades": &trades, "levels": &levels})));
     Ok(result)
+}
+
+/// The takeoff's electrical lines (grouped by circuit) per level and circuit: conduit feet,
+/// wire feet by size, boxes and fittings; and the conduit and wire totals (every line's).
+fn circuit_summary(lines: &[Value]) -> (Vec<Value>, f64, f64) {
+    let mut by: BTreeMap<(String, String), Value> = BTreeMap::new();
+    let (mut conduit, mut wire) = (0.0, 0.0);
+    for l in lines {
+        let (cat, qty) = (l["category"].as_str().unwrap_or_default(), l["qty"].as_f64().unwrap_or(0.0));
+        match cat {
+            "conduit" => conduit += qty,
+            "wire" => wire += qty,
+            _ => {}
+        }
+        let Some(c) = l["circuit"].as_str().filter(|c| !c.is_empty()) else { continue };
+        let level = l["level"].as_str().unwrap_or_default().to_string();
+        let e = by.entry((level.clone(), c.to_string())).or_insert_with(
+            || json!({"level": level, "circuit": c, "conduit_ft": 0.0, "wire_ft": {}, "boxes": 0.0, "fittings": 0.0, "devices": 0.0}),
+        );
+        let add = |v: &Value| json!(super::printmep::r1(v.as_f64().unwrap_or(0.0) + qty));
+        match cat {
+            "conduit" => e["conduit_ft"] = add(&e["conduit_ft"]),
+            "wire" => {
+                let size = l["size"].as_str().unwrap_or_default().to_string();
+                e["wire_ft"][&size] = add(&e["wire_ft"][&size]);
+            }
+            "boxes" => e["boxes"] = add(&e["boxes"]),
+            "conduit fittings" => e["fittings"] = add(&e["fittings"]),
+            "devices" | "fixtures" => e["devices"] = add(&e["devices"]),
+            _ => {}
+        }
+    }
+    (by.into_values().collect(), conduit, wire)
 }
 
 /// Run estimate stage.
@@ -4804,6 +4922,97 @@ mod tests {
         assert_eq!(r["devices"]["by_type"]["ZZ"], json!(4), "{r:#}");
         assert_eq!(r["devices"]["count"], json!(15));
         assert_eq!(r["devices"]["unknowns"], json!([]));
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
+    }
+
+    /// Q6007: a made-up electrical plan (level 1, inches) with a fixture schedule, three A
+    /// fixtures on circuit D-7 (a homerun arrow at the last one), two B fixtures on D-9 (no
+    /// homerun), and panel D drawn as a box lettered D. The job reads the circuits, routes
+    /// each (estimated), and the takeoff has their conduit, wire and boxes by level and circuit.
+    #[test]
+    fn circuits_come_out_of_the_job_as_conduit_and_wire() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-1", "sheet_type": "plan", "level": "1", "discipline": "E"}]}));
+        job.sheets_loaded = true;
+        let mut texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIGHTING FIXTURE SCHEDULE", 1400.0, 800.0, 8.0),
+            ("TYPE", 1400.0, 785.0, 5.0),
+            ("DESCRIPTION", 1430.0, 785.0, 5.0),
+            ("A", 1400.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1430.0, 772.0, 5.0),
+            ("B", 1400.0, 760.0, 5.0),
+            ("LED DOWNLIGHT", 1430.0, 760.0, 5.0),
+            // The homerun's label, and panel D's lettering above its box.
+            ("D-7", 532.0, 328.0, 6.0),
+            ("D", 996.0, 110.0, 6.0),
+        ];
+        let mut syms: Vec<(&str, f64, f64)> = vec![("A", 1390.0, 772.0)];
+        for x in [100.0, 300.0, 500.0] {
+            syms.push(("A", x, 300.0));
+            texts.push(("D-7", x + 8.0, 296.0, 2.0));
+        }
+        for x in [100.0, 300.0] {
+            syms.push(("B", x, 600.0));
+            texts.push(("D-9", x + 8.0, 596.0, 2.0));
+        }
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &syms);
+        s.execute("line", &json!({"points": [[500, 300], [530, 330]]})).unwrap_or_else(|e| panic!("{e}"));
+        s.execute("pline", &json!({"points": [[988, 94], [1012, 94], [1012, 106], [988, 106]], "closed": true})).unwrap_or_else(|e| panic!("{e}"));
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-1".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+        });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r["devices"]["count"], json!(5), "{r:#}");
+        assert_eq!(job.devices.iter().filter(|d| d.circuit == "D-7").count(), 3, "{:?}", job.devices);
+
+        let m = run_mep_read_stage(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let c = &m["conduit"];
+        assert_eq!((c["circuits"].clone(), c["homeruns"].clone(), c["sheets"][0]["panels"].clone()), (json!(2), json!(1), json!(["D"])), "{c:#}");
+        assert!(m["trade_summary"].as_str().unwrap_or_default().contains("2 circuit(s) on 1 electrical plan(s)"), "{m:#}");
+        // D-7: 400 units of chain + 700 of home run; D-9: 200 + 1200 (12 units a foot).
+        assert!((c["estimated_ft"].as_f64().unwrap_or(0.0) - 2500.0 / 12.0).abs() < 0.1, "{c:#}");
+
+        let built = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(built["circuits"], json!(2), "{built:#}");
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(d.building_spec.as_deref().unwrap_or("")).unwrap_or_else(|e| panic!("{e}"));
+        let tags: Vec<&cadaddy_walk3d::tags::ElementTag> = sp.tags.iter().filter(|t| t.kind == "circuit").collect();
+        assert_eq!(tags.len(), 2);
+        assert!(tags.iter().all(|t| t.fields["route"].value == super::super::printcond::ESTIMATED && t.fields["panel_at"].value == "E-1"));
+        let runs: Vec<&cadaddy_walk3d::MepRun> = sp.mep.runs.iter().filter(|r| r.system == super::super::printcond::CIRCUIT_SYSTEM).collect();
+        assert_eq!(runs.len(), 5, "two home runs and three legs: {runs:#?}");
+        let ceiling = sp.level("Level 1").map_or(0.0, |l| l.ceiling_ft);
+        assert!(runs.iter().all(|r| r.bottoms_ft.iter().all(|b| (b - ceiling - 0.25).abs() < 1e-9)), "just above the ceiling: {runs:#?}");
+
+        // The BOM by circuit: conduit (an estimated route, marked), wire, boxes.
+        let bom = s.execute("bim.bom", &json!({"group_by": "circuit"})).unwrap_or_else(|e| panic!("{e}"));
+        let lines: Vec<&Value> = bom["lines"].as_array().into_iter().flatten().filter(|l| l["circuit"] == "D-7").collect();
+        let get = |item: &str| lines.iter().find(|l| l["item"] == item).copied().unwrap_or(&Value::Null);
+        let conduit = get("EMT conduit");
+        assert!((conduit["net"].as_f64().unwrap_or(0.0) - 1100.0 / 12.0).abs() < 0.01, "{lines:#?}");
+        assert_eq!(conduit["status"], json!("rule"));
+        assert!(conduit["rule"].as_str().unwrap_or_default().contains("estimated route"));
+        // 2#12 + 1#12G (the default) over 91.67' plus 1' at each end of 3 pulls.
+        let wire = lines.iter().find(|l| l["item"] == "THHN copper" && l["size"] == "#12").copied().unwrap_or(&Value::Null);
+        assert!((wire["net"].as_f64().unwrap_or(0.0) - 2.0 * (1100.0 / 12.0 + 6.0)).abs() < 0.01, "{lines:#?}");
+        assert_eq!(get("Box, 4\" octagon")["net"], json!(3.0), "one box per fixture on the circuit");
+        assert!(get("EMT connector")["net"].as_f64().unwrap_or(0.0) >= 6.0);
+
+        // The takeoff stage: by level and circuit.
+        let t = run_takeoff(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let d9 = t["circuits"].as_array().into_iter().flatten().find(|c| c["circuit"] == "D-9").unwrap_or(&Value::Null);
+        assert_eq!(d9["level"], json!("Level 1"), "{t:#}");
+        assert!((d9["conduit_ft"].as_f64().unwrap_or(0.0) - 1400.0 / 12.0).abs() < 0.1, "{d9:#}");
+        assert!(d9["wire_ft"]["#12"].as_f64().unwrap_or(0.0) > 0.0 && d9["boxes"] == json!(2.0), "{d9:#}");
+        assert!((t["summary"]["conduit_ft"].as_f64().unwrap_or(0.0) - 2500.0 / 12.0).abs() < 0.1, "{:#}", t["summary"]);
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
     }
 
