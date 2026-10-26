@@ -301,7 +301,7 @@ const DO_NOT_SCALE_PATTERNS: &[&str] = &[
 ];
 
 /// Detect "DO NOT SCALE" or "REFER TO ARCHITECTURAL" notes in general notes.
-fn detect_do_not_scale(d: &Drawing) -> Option<String> {
+pub(crate) fn detect_do_not_scale(d: &Drawing) -> Option<String> {
     for e in d.model.iter() {
         let val = match &e.kind {
             EntityKind::Text(t) => &t.value,

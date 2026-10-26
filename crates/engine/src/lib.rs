@@ -1240,6 +1240,11 @@ pub struct Session {
     pub project: Option<cmd::project::ProjectState>,
     /// The open print-set project (Q310): classification, stages, dashboard.
     pub printset_project: Option<Box<cadaddy_mepfix::printset::PrintSetProject>>,
+    /// The job's framing (Q5103), built from its sheets with the field points and shop drawings applied.
+    pub framing: Option<Box<cmd::framing::Cache>>,
+    /// Where `printset.keep` notes the last print set kept, for the next session's
+    /// `printset.resume {}` (Q5276). `None`: `last-printset.txt` in the settings folder.
+    pub printset_pointer: Option<std::path::PathBuf>,
     /// Rhai scripting engine state (scope and engine; see [`rhai_engine`]).
     pub rhai: rhai_engine::RhaiState,
     /// Sandboxed WASM plug-ins (desktop only; the web version runs in the browser's sandbox).
@@ -1359,6 +1364,8 @@ impl Session {
             drywall_layer_lines: Vec::new(),
             project: None,
             printset_project: None,
+            framing: None,
+            printset_pointer: None,
             rhai: rhai_engine::RhaiState::new(),
             #[cfg(not(target_arch = "wasm32"))]
             plugins: plugins::PluginHost::new(),

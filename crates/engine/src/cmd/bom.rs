@@ -17,6 +17,9 @@
 //! - **Mechanical and plumbing** from `mep.qty` (Q269): duct by size and gauge (ft, sq ft, lb),
 //!   pipe by system and size, fittings, terminals, equipment, hangers.
 //! - **Drywall** from `drywall.takeoff` (Q294) where the walls have assemblies.
+//! - **Framing** from `framing.build` (Q303 / Q5103) where the job is framed: members by kind and
+//!   status, rule members at the larger layout; they replace the drywall stud length. Raceways
+//!   running inside framed walls give the bits and hole counts among the required tools.
 //! - **Grounding** from `grounding.takeoff` (Q329): conductor by size, clamps, rods, busbars,
 //!   lugs, welds or connectors and their tools, each line naming its rule; a crimper the
 //!   grounding takeoff carries is not required a second time.
@@ -342,13 +345,16 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
 
 /// Built-model BOM lines (Q5243): walls, doors, ceilings, floors, rooms from the spec and the
 /// 3D model that `model.build` created. Each built category must have lines; a built element
-/// with no BOM line is a test failure. Returns (`missing_categories`, `suspects`).
-fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<Value>)> {
+/// with no BOM line is a test failure.
+/// Returns (`missing_categories`, `suspects`, `model_has_elements`).
+fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<Value>, bool)> {
     let (sp, _) = current(s, "bim.bom")?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let d = s.doc()?;
 
     // Count built 3D elements by part and level: (part, level) → (count, handles).
+    // Q5278: scan ALL model entities, not just MAX_LINES — built entities are appended after
+    // the (potentially 800K+) imported PDF entities and the XData check is O(1) per entity.
     let mut built: BTreeMap<(String, String), (usize, Vec<String>)> = BTreeMap::new();
     // A model built from a print comes after the sheet's own objects (tens of thousands of
     // them): cap the built elements, not the objects looked at.
@@ -609,7 +615,7 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         }
     }
 
-    Ok((missing, suspects))
+    Ok((missing, suspects, has_any_built))
 }
 
 /// Devices detected directly from symbol clusters on the drawing (Q5243 MUST 2).
@@ -908,9 +914,53 @@ fn grounding(s: &Session, lines: &mut Vec<Line>) {
     }
 }
 
+/// Q5278: fallback drywall from built ceiling footprint when drywall.takeoff has no assemblies.
+fn drywall_from_built_model(s: &mut Session, lines: &mut Vec<Line>) {
+    let Ok((sp, _)) = current(s, "bim.bom") else { return };
+    let Ok(d) = s.doc() else { return };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let mut ceiling_sf = 0.0f64;
+    for e in d.model.iter() {
+        if super::wallgen::made_as(e).as_deref() == Some("ceiling") {
+            let b = cadaddy_doc::entity_bounds(d, e, 0);
+            if !b.is_empty() {
+                let w = (b.max.x - b.min.x) / upf;
+                let h = (b.max.y - b.min.y) / upf;
+                if w > 0.0 && h > 0.0 {
+                    ceiling_sf += w * h;
+                }
+            }
+        }
+    }
+    if ceiling_sf > 0.0 {
+        add(
+            lines,
+            Line {
+                trade: "drywall",
+                category: "drywall".into(),
+                item: "Board gypsum board".into(),
+                size: "0.625\"".into(),
+                unit: "sq ft",
+                net: ceiling_sf,
+                status: "model",
+                rule: Some("estimated from ceiling area (no wall assemblies)".into()),
+                ..Line::default()
+            },
+        );
+    }
+}
+
 /// Drywall from `drywall.takeoff`, where walls have assemblies.
 fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
-    let Ok(q) = s.execute("drywall.takeoff", &json!({ "waste": 0 })) else { return };
+    let Ok(q) = s.execute("drywall.takeoff", &json!({ "waste": 0 })) else {
+        // Q5278: fallback — if drywall.takeoff fails but the model has ceiling elements,
+        // produce a rough drywall line from ceiling area (board both sides of partition walls).
+        drywall_from_built_model(s, lines);
+        return;
+    };
+    if q["rows"].as_array().is_none_or(|a| a.is_empty()) {
+        drywall_from_built_model(s, lines);
+    }
     for r in q["rows"].as_array().into_iter().flatten() {
         for b in r["boards"].as_array().into_iter().flatten() {
             let item = format!("Board {}", b["material"].as_str().unwrap_or_default());
@@ -1006,6 +1056,72 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
                 ..Line::default()
             },
         );
+    }
+}
+
+/// Framing from the job's framed walls (Q303 / Q5103): members by kind and status, the rule
+/// members at the larger layout (`rule_max`). Where the job is framed, these replace the drywall
+/// takeoff's stud length. Returns the holes per bit for the raceways inside the framed walls.
+fn framing(s: &mut Session, lines: &mut Vec<Line>) -> Result<Vec<cadaddy_mepfix::bore::BitLine>> {
+    let Some(f) = super::framing::job_framing(s) else { return Ok(Vec::new()) };
+    let (rows, larger) = super::framing::bom_lines(&f);
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    lines.retain(|l| !(l.category == "drywall" && l.item.starts_with("Studs ")));
+    for (level, kind, status, n, rule) in rows {
+        let (st, why) = match status {
+            cadaddy_mepfix::framing::Status::Fixed => ("firm", "fixed by the prints".to_string()),
+            cadaddy_mepfix::framing::Status::ShopDrawing => ("firm", "from the shop drawing".to_string()),
+            cadaddy_mepfix::framing::Status::FieldVerified => ("firm", "field verified".to_string()),
+            cadaddy_mepfix::framing::Status::Agreed => ("rule", "both stud layouts put it here".to_string()),
+            cadaddy_mepfix::framing::Status::Rule => {
+                let end = larger.map_or("a", cadaddy_mepfix::framing::End::letter);
+                ("rule", format!("layout from the {end} end, the larger of the two (rule max)"))
+            }
+        };
+        add(
+            lines,
+            Line {
+                trade: "general",
+                category: "framing".into(),
+                item: capitalised(kind.words()),
+                size: status.words().into(),
+                unit: "each",
+                net: n as f64,
+                status: st,
+                rule: Some(if rule { why } else { format!("framing member, {why}") }),
+                level,
+                ..Line::default()
+            },
+        );
+    }
+    let (sp, _) = current(s, "bim.bom")?;
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let runs: Vec<(String, Vec<[f64; 2]>, f64, bool)> = sp
+        .mep
+        .runs
+        .iter()
+        .take(MAX_LINES)
+        .filter_map(|r| {
+            let kind = sp.mep.systems.iter().find(|x| x.name == r.system).map(|x| x.kind)?;
+            let cable = match kind {
+                cadaddy_walk3d::MepKind::Conduit => false,
+                cadaddy_walk3d::MepKind::Cable => true,
+                _ => return None,
+            };
+            Some((r.level.clone(), r.points.iter().map(|p| [p[0] / upf, p[1] / upf]).collect(), r.size_in[0], cable))
+        })
+        .collect();
+    Ok(super::framing::bits(&f, &runs))
+}
+
+fn bit_words(k: cadaddy_mepfix::bore::BitKind) -> &'static str {
+    match k {
+        cadaddy_mepfix::bore::BitKind::HoleSaw => "Hole saw",
+        cadaddy_mepfix::bore::BitKind::Paddle => "Paddle bit",
+        cadaddy_mepfix::bore::BitKind::MetalHoleSaw => "Bimetal hole saw",
+        cadaddy_mepfix::bore::BitKind::Punchout => "Punchout",
     }
 }
 
@@ -1150,12 +1266,16 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut lines: Vec<Line> = Vec::new();
     // Built model: walls, doors, ceilings, floors, rooms (Q5243).
-    let (built_missing, built_suspects) = built_model(s, &mut lines)?;
-    // Devices from symbol clusters on the drawing (Q5243).
-    devices_from_drawing(s, &mut lines)?;
+    let (built_missing, built_suspects, model_has_elements) = built_model(s, &mut lines)?;
     electrical(s, &mut lines)?;
+    // Devices from symbol clusters on the drawing (Q5243), when the model has none of its own: a
+    // guided job puts the devices its readers found into the model, and counting both doubled them.
+    if !lines.iter().any(|l| l.category == "devices") {
+        devices_from_drawing(s, &mut lines)?;
+    }
     mechanical(s, &mut lines);
     drywall(s, &mut lines);
+    let framing_bits = framing(s, &mut lines)?;
     grounding(s, &mut lines);
     let by_others = concrete(s, &mut lines);
     // Waivers: recorded in the project rules, with the reason.
@@ -1232,6 +1352,14 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut complete = true;
     let req: Vec<Value> = required(&grouped, sp.levels.len())
         .into_iter()
+        .chain(framing_bits.iter().map(|b| {
+            (
+                format!("{} {}", bit_words(b.kind), super::framing::inch_words(b.dia_in)),
+                1.0,
+                "purchase",
+                format!("{} holes through framing members where raceways run inside the framed walls (Q303 framing)", b.holes),
+            )
+        }))
         .map(|(item, qty, supply, rule)| {
             let waived = rules.resolve(RuleDomain::Custom, &format!("bom.waive.{item}")).map(|v| v.value.clone());
             let mut v = json!({ "item": item, "qty": if waived.is_some() { 0.0 } else { qty }, "supply": supply, "rule": rule });
@@ -1273,6 +1401,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // complete = every built category has lines, no line is suspect, reqs OK, spec clean (Q5243 MUST 4).
     let is_complete = complete && req_ok && check.is_empty() && no_suspects && no_missing;
     let mut out = json!({ "lines": out_lines, "by_others": by_others, "required": req, "spec_check": check, "complete": is_complete });
+    if !framing_bits.is_empty() {
+        out["bits"] =
+            json!(framing_bits.iter().map(|b| json!({"kind": bit_words(b.kind), "dia_in": b.dia_in, "holes": b.holes})).collect::<Vec<_>>());
+    }
     if !built_missing.is_empty() {
         out["missing"] = json!(built_missing);
         out["complete"] = json!(false);
@@ -1280,6 +1412,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if !built_suspects.is_empty() {
         out["suspects"] = json!(built_suspects);
         out["complete"] = json!(false);
+    }
+    // Q5278 MUST 2: complete:false when model has elements but the BOM produced no lines.
+    if model_has_elements && out_lines.is_empty() {
+        out["complete"] = json!(false);
+        out["reason"] = json!("model has built elements but produced no BOM lines");
     }
     // What changed since an earlier BOM.
     if let Some(prev) = p.get("compare_to").and_then(|v| v["lines"].as_array().or_else(|| v.as_array())) {

@@ -14,7 +14,8 @@
 //!   answer for many identical items: a preview and its confirm token first), `review.approve`
 //!   and `review.log` (a person reviews what agents did).
 //! - `bim.build {level?, discipline?}`: builds the model from the building spec and reports that
-//!   level's elements; building twice gives the same model.
+//!   level's elements; building twice gives the same model. With no spec yet it drafts one from
+//!   the open print set (or the plan drawing) first.
 //!
 //! Everything lives in [`cadaddy_doc::Drawing::agent`] (notes, decisions with their citations and
 //! authors, the change log, the revision) and is undoable like any edit. Review item ids are
@@ -70,7 +71,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{author?: agent|user, approved?: bool, cursor?, limit?} → {total, entries: [{rev, author, action, item, summary, citation, approved}], next_cursor?}")
             .noundo(),
         CommandSpec::new("bim.build", "Build BIM Model", run_build).params(
-            "{level?: name, discipline?: architecture|structure|mep|all, force?: bool (build even when the import check failed)} → {level, built: {discipline: count}, unchanged, warnings}: builds the model from the building spec (the same spec gives the same model)",
+            "{level?: name, discipline?: architecture|structure|mep|all, force?: bool (build even when the import check failed)} → {level, built: {discipline: count}, unchanged, warnings, drafted?}: builds the model from the building spec (the same spec gives the same model); with no spec yet, drafts one from the open print set (or the plan drawing) first",
         ),
     ]
 }
@@ -157,7 +158,14 @@ fn load(d: &Drawing) -> State {
 fn save(s: &mut Session, st: &mut State) -> Result<()> {
     st.notes = tail(std::mem::take(&mut st.notes), NOTES_KEPT);
     st.log = tail(std::mem::take(&mut st.log), LOG_KEPT);
-    s.doc_mut()?.agent = serde_json::to_string(st).ok();
+    let doc = s.doc_mut()?;
+    // Other state kept beside ours in the same JSON (the rules engine's `rulemodel`, the
+    // guided job's) stays.
+    let mut root: Value = doc.agent.as_deref().and_then(|t| serde_json::from_str(t).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}));
+    if let (Some(o), Ok(Value::Object(ours))) = (root.as_object_mut(), serde_json::to_value(&*st)) {
+        o.extend(ours);
+    }
+    doc.agent = serde_json::to_string(&root).ok();
     Ok(())
 }
 
@@ -544,8 +552,10 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
         .map(|e| json!({"rev": e.rev, "author": e.author, "action": e.action, "item": e.item, "summary": cut(&e.summary, 120)}))
         .collect();
     let notes: Vec<Value> = st.notes.iter().rev().take(5).map(|n| json!({"rev": n.rev, "author": n.author, "text": cut(&n.text, 300)})).collect();
-    let next = if !has_spec {
-        json!({"call": "bspec.draft {} or printset.open {path}", "why": "there is no building spec yet: nothing to build or review"})
+    let next = if !has_spec && (s.printset_project.is_some() || !s.doc()?.model.is_empty()) {
+        json!({"call": "bim.build {}", "why": "there is no building spec yet: the build drafts it from the prints, then builds it"})
+    } else if !has_spec {
+        json!({"call": "printset.open {path}", "why": "no prints yet: open the folder of prints (bim_job import {path}), then build"})
     } else if built.is_empty() {
         json!({"call": "bim.build {}", "why": "the building spec isn't built yet"})
     } else if !st.last_build_spec.is_empty() && st.last_build_spec != spec_hash(s.doc()?) && open.is_empty() {
@@ -1088,9 +1098,25 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         let names: Vec<&str> = fails.iter().map(|(id, _)| id.as_str()).collect();
         return Err(bad("bim.build", format!("import check failed ({}); fix the import or pass `force: true` to override", names.join(", "))));
     }
+    // No spec yet: draft it from the open print set, else from the plan drawing (Q5276: the
+    // build an import suggests must work as given).
+    let mut drafted = None;
+    if !current(s, "bim.build")?.1 {
+        let draft = if s.printset_project.is_some() {
+            super::guided::draft_from_prints(s)?
+        } else if s.doc().is_ok_and(|d| !d.model.is_empty()) {
+            s.execute("bspec.draft", &json!({"store": true}))?
+        } else {
+            return Err(bad(
+                "bim.build",
+                "there is no building spec and nothing to draft one from — open the prints first (printset.open {path}, or bim_job import {path}) or a plan drawing",
+            ));
+        };
+        drafted = Some(json!({"guesses": draft["guesses"].as_array().map_or(0, Vec::len), "call": "bspec.get {} shows the drafted spec"}));
+    }
     let (sp, stored) = current(s, "bim.build")?;
     if !stored {
-        return Err(bad("bim.build", "there is no building spec yet — call bspec.draft {} (from the plans) or printset.open {path} first"));
+        return Err(bad("bim.build", "the building spec couldn't be drafted — call bspec.draft {store: true} to see why"));
     }
     let level = str_param(p, "level");
     if let Some(l) = level
@@ -1187,7 +1213,11 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let mut warnings: Vec<Value> = r["warnings"].as_array().into_iter().flatten().take(10).cloned().collect();
     warnings.extend(mep_warnings.into_iter().map(Value::from));
-    Ok(capped(json!({"level": level, "built": built, "unchanged": unchanged, "warnings": warnings}), "warnings", ANSWER_MAX))
+    let mut out = json!({"level": level, "built": built, "unchanged": unchanged, "warnings": warnings});
+    if let Some(d) = drafted {
+        out["drafted"] = d;
+    }
+    Ok(capped(out, "warnings", ANSWER_MAX))
 }
 
 // ---- Re-apply decisions after a plan re-read -------------------------------------------------------
