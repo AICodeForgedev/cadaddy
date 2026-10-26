@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1120,
-    "count": 1120,
+    "callableAsJson": 1121,
+    "count": 1121,
     "ids": [
       "-attedit",
       "-block",
@@ -123,6 +123,7 @@
       "bim.issue.show",
       "bim.look",
       "bim.prints",
+      "bim.props.fill",
       "bim.props.find",
       "bim.props.get",
       "bim.props.set",
@@ -1124,7 +1125,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 507,
+    "inMenus": 508,
     "typed": 551
   },
   "features": {
