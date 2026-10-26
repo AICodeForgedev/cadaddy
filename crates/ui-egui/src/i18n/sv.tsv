@@ -3228,3 +3228,11 @@ menu	Modify	Ändra
 	Code Rules	Regler i byggreglerna
 	Select Building Codes	Välj byggregler
 	Fill Element Properties	Fyll i elementegenskaper
+	Build Construction Sequence	Skapa byggordning
+	Construction Sequence	Byggordning
+	Edit Sequence Activity	Redigera aktivitet i byggordningen
+	Show Sequence at Date	Visa byggordningen vid ett datum
+	Export Construction Sequence	Exportera byggordning
+	Sequence Trade Conflicts	Konflikter mellan yrken i byggordningen
+	Ceiling Space Fit	Utrymme ovan undertak
+	Takeoff by Activity	Mängdavtagning per aktivitet

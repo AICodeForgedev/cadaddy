@@ -3221,3 +3221,11 @@ menu	Modify	수정
 	Code Rules	법규 규칙
 	Select Building Codes	건축 법규 선택
 	Fill Element Properties	요소 속성 채우기
+	Build Construction Sequence	시공 순서 만들기
+	Construction Sequence	시공 순서
+	Edit Sequence Activity	순서 작업 편집
+	Show Sequence at Date	날짜별 순서 보기
+	Export Construction Sequence	시공 순서 내보내기
+	Sequence Trade Conflicts	공종 간 순서 충돌
+	Ceiling Space Fit	천장 공간 수용 검토
+	Takeoff by Activity	작업별 물량 산출
