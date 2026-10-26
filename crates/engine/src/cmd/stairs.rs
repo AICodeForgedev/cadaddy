@@ -1,12 +1,15 @@
 //! Stairs and ramps from the plan, for the building spec's `stairs`: `stairs.detect` finds them,
-//! `stairs.list` says how they measure against the code limits, `stairs.confirm` marks them
-//! checked; `model.build` builds them (steps, landings, ramps and handrails, from
+//! `stairs.list` says how they measure against the code limits (commercial, IBC 1011.5.2, unless a
+//! stair says `code: "irc"`), `stairs.confirm` marks them checked; `model.build` builds them
+//! (steps, landings, ramps, handrails and 42″ guards on the landings' open sides, from
 //! `cadaddy_walk3d::stairs`), and Walk climbs them.
 //!
 //! A stair run in plan is a row of parallel tread lines of one length, evenly spaced a tread
 //! apart (8″–14″), usually between two stringers; the UP or DN note at its foot (or head) says
 //! which way it climbs. Runs whose ends meet across a landing are one stair. A ramp is a closed
-//! outline holding a RAMP note or a slope (`1:12`, `8.33%`). Heights come from the levels: a
+//! outline holding a note that says RAMP (`RAMP 1:12`, `RAMPED 8.33%`); a bare SLOPE or `%`
+//! (SLOPE TO DRAIN, 50% OPEN) is not one, and with layer roles only outlines on stair layers (or
+//! layers named for stairs or ramps) count. Heights come from the levels: a
 //! stair climbs from its level to the next one up, in equal risers.
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Mesh, MeshFace, RawTag, Space};
@@ -172,9 +175,10 @@ fn up_or_down(t: &str) -> Option<bool> {
     }
 }
 
+/// A note that makes an outline a ramp: it says RAMP (or RAMPS, RAMPED) as a word. A slope
+/// (`1:12`, `8.33%`) only counts beside that word, so SLOPE TO DRAIN or 50% OPEN never does.
 fn ramp_note(t: &str) -> bool {
-    let up = t.to_ascii_uppercase();
-    up.contains("RAMP") || up.contains("1:12") || up.contains("1:16") || up.contains("1:20") || up.contains("SLOPE") || up.contains('%')
+    t.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphabetic()).any(|w| matches!(w, "RAMP" | "RAMPS" | "RAMPED"))
 }
 
 /// The stairs of the plan, as spec entries with their measures and confidence.
@@ -193,6 +197,8 @@ fn detect(s: &Session, sp: &BuildingSpec) -> Result<Vec<(Stair, Value)>> {
         .copied()
         .filter(|e| if has_roles { sp.role(&e.common.layer).is_some_and(|r| r.role == Role::Stair) } else { stair_layer(&e.common.layer) })
         .collect();
+    // Ramp outlines: with layer roles, only those on stair layers (or layers named for them).
+    let ramp_layer = |l: &str| !has_roles || stair_layer(l) || sp.role(l).is_some_and(|r| r.role == Role::Stair);
     let notes: Vec<(String, Vec2, Handle)> = texts(&all).into_iter().map(|(h, t, at, _)| (t, at, h)).collect();
     let mut found = runs(&segs_of(&ents), k);
     // Which way each run climbs: an UP note at its foot, or DN at its head.
@@ -261,6 +267,7 @@ fn detect(s: &Session, sp: &BuildingSpec) -> Result<Vec<(Stair, Value)>> {
             width_in: (width * upi * 8.0).round() / 8.0,
             confirmed: false,
             objects: chain.iter().flat_map(|r| r.objects.iter().map(|h| h.hex())).collect(),
+            code: None,
         };
         let confidence = 0.5 + if known { 0.25 } else { 0.0 } + if stringers { 0.15 } else { 0.0 } + if has_roles { 0.1 } else { 0.0 };
         out.push((st, json!({ "direction": if known { "text" } else { "assumed" }, "confidence": confidence })));
@@ -270,6 +277,7 @@ fn detect(s: &Session, sp: &BuildingSpec) -> Result<Vec<(Stair, Value)>> {
     for (_, at, h) in notes.iter().filter(|(t, _, _)| ramp_note(t)) {
         let outline = all
             .iter()
+            .filter(|e| ramp_layer(&e.common.layer))
             .filter_map(|e| match &e.kind {
                 EntityKind::LwPolyline(p) if p.closed && p.vertices.len() == 4 => {
                     let q: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
@@ -306,6 +314,7 @@ fn detect(s: &Session, sp: &BuildingSpec) -> Result<Vec<(Stair, Value)>> {
             width_in: (short * upi * 8.0).round() / 8.0,
             confirmed: false,
             objects: vec![oh.hex(), h.hex()],
+            code: None,
         };
         out.push((st, json!({ "direction": if known { "text" } else { "assumed" }, "confidence": if known { 0.8 } else { 0.6 } })));
         if out.len() >= MAX_STAIRS {
@@ -458,11 +467,20 @@ fn wedge(m: &mut Mesh, w: &cadaddy_walk3d::stairs::Wedge, upf: f64) {
     m.faces.extend([f([0, 3, 2, 1]), f([4, 5, 6, 7]), f([0, 1, 5, 4]), f([1, 2, 6, 5]), f([2, 3, 7, 6]), f([3, 0, 4, 7])]);
 }
 
+/// What `build` made: meshes of each part.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Built {
+    pub stairs: usize,
+    pub ramps: usize,
+    pub railings: usize,
+    pub guards: usize,
+}
+
 /// Build the spec's stairs into model space (sheet units): one mesh per stair or ramp, one
-/// for its handrails. The counts: (stairs, ramps, railings).
-pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> (usize, usize, usize) {
+/// for its handrails, one for the guards on its landings (42″, IBC 1015.3), both on 3D-Railings.
+pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Built {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-    let (mut stairs, mut ramps, mut rails) = (0, 0, 0);
+    let (mut stairs, mut ramps, mut rails, mut guards) = (0, 0, 0, 0);
     for layer in ["3D-Stairs", "3D-Railings"] {
         if d.layer(layer).is_none() {
             let color = if layer == "3D-Stairs" { 9 } else { 8 };
@@ -483,6 +501,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> (usize, usize, usize)
         for (a, b) in &g.rails {
             let v = |x: [f64; 3]| Vec3::new(x[0] * upf, x[1] * upf, x[2] * upf);
             beam(&mut r, v(*a), v(*b), 0.15 * upf);
+        }
+        // Guards: a panel from the landing up to exactly 42″ above it.
+        let mut gm = super::wallgen::empty_mesh();
+        for q in &g.guards {
+            super::wallgen::add_box(&mut gm, q.a * upf, q.b * upf, 0.15 * upf, q.z0 * upf, q.z1 * upf);
         }
         let source = st.objects.first().and_then(|h| u64::from_str_radix(h, 16).ok()).map_or(Handle(0), Handle);
         let tag = |part: &str| {
@@ -511,8 +534,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> (usize, usize, usize)
         {
             rails += 1;
         }
+        if !gm.faces.is_empty()
+            && d.add(&Space::Model, Common { layer: "3D-Railings".into(), xdata: tag("guard").into(), ..Common::default() }, EntityKind::Mesh(gm))
+                .is_ok()
+        {
+            guards += 1;
+        }
     }
-    (stairs, ramps, rails)
+    Built { stairs, ramps, railings: rails, guards }
 }
 
 #[cfg(test)]
@@ -526,6 +555,9 @@ mod tests {
         assert_eq!(up_or_down("DN"), Some(false));
         assert_eq!(up_or_down("DOWN TO LOBBY"), Some(false));
         assert_eq!(up_or_down("UPPER"), None);
-        assert!(ramp_note("RAMP 1:12") && ramp_note("8.33% SLOPE") && !ramp_note("STAIR"));
+        assert!(ramp_note("RAMP 1:12") && ramp_note("RAMPED 8.33%") && ramp_note("ramp up") && !ramp_note("STAIR"));
+        assert!(
+            !ramp_note("SLOPE TO DRAIN") && !ramp_note("50% OPEN") && !ramp_note("8.33% SLOPE") && !ramp_note("1:12") && !ramp_note("TRAMPOLINE")
+        );
     }
 }
