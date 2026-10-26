@@ -3304,3 +3304,8 @@
 	Element Property Summary	Зведення властивостей елементів
 	BIM Properties	Властивості BIM
 	Kind	Вид
+# Low-voltage commands (lowvolt-rw1).
+	Equipment Connections	Підключення обладнання
+	LV Bill of Materials	LV: специфікація матеріалів
+	LV Sleeves	LV: гільзи
+	LV/FA Devices	LV/FA: пристрої
