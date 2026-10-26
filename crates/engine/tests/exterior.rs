@@ -228,11 +228,7 @@ fn auto_roof_from_datum_without_explicit_roof_plan() {
     assert!(hi > lo, "roof slab should have thickness");
     // The roof should appear in the model takeoff as an architecture element.
     let t = s.execute("bim.takeoff", &json!({})).unwrap();
-    let has_roof = t["lines"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|l| l["category"].as_str() == Some("roofs"));
+    let has_roof = t["lines"].as_array().unwrap().iter().any(|l| l["category"].as_str() == Some("roofs"));
     assert!(has_roof, "roof should appear in takeoff: {t}");
 }
 

@@ -619,12 +619,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let z0 = roof_datum.elevation_ft * upf;
         let bb = top_level_wall_bounds(d, &top.name);
         if !bb.is_empty() {
-            let poly = vec![
-                Vec2::new(bb.min.x, bb.min.y),
-                Vec2::new(bb.max.x, bb.min.y),
-                Vec2::new(bb.max.x, bb.max.y),
-                Vec2::new(bb.min.x, bb.max.y),
-            ];
+            let poly =
+                vec![Vec2::new(bb.min.x, bb.min.y), Vec2::new(bb.max.x, bb.min.y), Vec2::new(bb.max.x, bb.max.y), Vec2::new(bb.min.x, bb.max.y)];
             let top_fn = |_: Vec2| z0;
             if let Some(m) = slab(&poly, &top_fn, upf)
                 && add(d, "3D-Roofs", tag("roof", &roof_datum.name, "auto"), m)

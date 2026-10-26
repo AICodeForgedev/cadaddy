@@ -179,10 +179,7 @@ fn find_price_by_words<'a>(prices: &'a [Value], item: &str, unit: &str, category
     let mep = matches!(category, "duct" | "pipe" | "conduit" | "tray" | "cable");
     let sys = if mep { price_words(system) } else { BTreeSet::new() };
     // The item's own words, stripped of the system name and numbers (same as takeoff::match_row).
-    let iw: BTreeSet<String> = price_words(item)
-        .into_iter()
-        .filter(|w| !sys.contains(w) && !w.chars().any(|c| c.is_ascii_digit()))
-        .collect();
+    let iw: BTreeSet<String> = price_words(item).into_iter().filter(|w| !sys.contains(w) && !w.chars().any(|c| c.is_ascii_digit())).collect();
     let mut best: Option<(usize, f64)> = None;
     let unit_ok = |pu: &str| pu.is_empty() || pu.eq_ignore_ascii_case(unit) || measure_class(pu).is_some_and(|m| Some(m) == measure_class(unit));
     for (i, p) in prices.iter().enumerate() {

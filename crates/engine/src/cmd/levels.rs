@@ -218,9 +218,7 @@ fn index_has_roof_without_elevation(job: Option<&Value>) -> bool {
     for l in arr.iter().take(levels::MAX_NOTES) {
         let Some(code) = l.get("name").and_then(Value::as_str) else { continue };
         let c = code.trim().to_ascii_uppercase();
-        let is_roof = c == "R"
-            || levels::canonical_level(if c == "R" { "ROOF" } else { &c })
-                .is_some_and(|(_, k)| k == levels::DatumKind::Roof);
+        let is_roof = c == "R" || levels::canonical_level(if c == "R" { "ROOF" } else { &c }).is_some_and(|(_, k)| k == levels::DatumKind::Roof);
         if is_roof && l.get("elevation_ft").and_then(Value::as_f64).filter(|e| e.is_finite()).is_none() {
             return true;
         }
@@ -332,11 +330,7 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
     {
         let est = top.elevation_ft + top.height_ft;
         let top_name = top.name.clone();
-        changes.push(format!(
-            "ROOF: {} (estimated from {} + floor-to-floor)",
-            cadaddy_walk3d::feet(est),
-            top_name,
-        ));
+        changes.push(format!("ROOF: {} (estimated from {} + floor-to-floor)", cadaddy_walk3d::feet(est), top_name,));
         sp.datums.push(levels::Datum {
             name: "ROOF".to_string(),
             elevation_ft: est,
@@ -346,9 +340,7 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
         sp.datums.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
         sp.guess.insert(
             "levels/ROOF".into(),
-            format!(
-                "the roof's elevation is estimated from {top_name}'s floor-to-floor height; confirm from sections or elevations"
-            ),
+            format!("the roof's elevation is estimated from {top_name}'s floor-to-floor height; confirm from sections or elevations"),
         );
         changes.extend(sp.restack_heights());
     }

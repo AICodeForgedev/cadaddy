@@ -362,11 +362,8 @@ fn estimate_prices_the_takeoff_and_gives_a_change_order() {
 fn bim_estimate_and_estimate_status_give_the_same_totals() {
     let mut s = building();
     let table = tmp("same-costs.csv");
-    std::fs::write(
-        &table,
-        "item,unit,material,labor_hrs\nEMT conduit,ft,1.10,0.05\nRectangular duct,ft,12.50,0.20\nCopper pipe,ft,8.00,0.15\n",
-    )
-    .unwrap();
+    std::fs::write(&table, "item,unit,material,labor_hrs\nEMT conduit,ft,1.10,0.05\nRectangular duct,ft,12.50,0.20\nCopper pipe,ft,8.00,0.15\n")
+        .unwrap();
     // Route 1: bim.estimate (stores in estimate state).
     let bim = s.execute("bim.estimate", &json!({"cost_table": table.display().to_string(), "labor_rate": 90})).unwrap();
     // Route 2: estimate.status (prices were stored by bim.estimate; scope all as in_contract).
