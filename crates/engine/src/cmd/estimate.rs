@@ -37,7 +37,7 @@
 //! - `estimate.export {path, format?, columns?}` and `estimate.bid_summary {}`: the human outputs.
 
 use serde_json::{Map, Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::bspec::current;
 use super::*;
@@ -134,6 +134,76 @@ pub(super) fn key_of(l: &Value) -> String {
 
 pub(super) fn setting(st: &Map<String, Value>, k: &str, default: f64) -> f64 {
     st.get("settings").and_then(|s| s.get(k)).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(default)
+}
+
+// ---------- Word matching (shared with bim.estimate, Q5294) ----------
+
+/// Tokenize a string into lower-case stems for fuzzy matching.
+fn price_words(t: &str) -> BTreeSet<String> {
+    t.to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() > 1 && !matches!(*w, "of" | "and" | "the" | "for" | "with" | "per" | "each" | "ea" | "ga" | "gauge" | "untyped"))
+        .map(|w| if w.len() > 3 && w.ends_with('s') && !w.ends_with("ss") { w.trim_end_matches('s') } else { w })
+        .map(|w| match w {
+            "drywall" | "gwb" | "gyp" | "wallboard" | "sheetrock" => "gypsum",
+            "partition" => "wall",
+            "outlet" => "receptacle",
+            "luminaire" | "lighting" => "light",
+            "doorway" => "door",
+            w => w,
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+/// Measure class for unit compatibility (same logic as bimwork::takeoff::measure).
+fn measure_class(unit: &str) -> Option<&'static str> {
+    let u = unit.trim().to_ascii_lowercase().replace('.', "");
+    Some(match u.as_str() {
+        "each" | "ea" | "count" | "pcs" | "pc" | "no" | "set" | "sets" | "unit" | "units" => "count",
+        "lf" | "ft" | "feet" | "foot" | "linear ft" | "lin ft" | "lnft" => "length_ft",
+        "sf" | "sq ft" | "sqft" | "square feet" | "ft2" | "sft" => "area_sf",
+        "cy" | "cu yd" | "cuyd" | "yd3" | "cubic yards" => "volume_cy",
+        "cf" | "cu ft" | "cuft" | "ft3" => "volume_cf",
+        "lb" | "lbs" | "pound" | "pounds" => "weight_lb",
+        _ => return None,
+    })
+}
+
+/// Find a price row by word overlap when exact matching fails.
+/// Same algorithm as `bimwork::takeoff::match_row`: for MEP lines the system name and numbers
+/// in the item are excluded from the coverage denominator (a duct named "Duct M-SUPPLY, 26 ga"
+/// really just says "duct" once the system and gauges are ignored).
+fn find_price_by_words<'a>(prices: &'a [Value], item: &str, unit: &str, category: &str, system: &str) -> Option<&'a Value> {
+    let have = price_words(&format!("{item} {category} {system}"));
+    let mep = matches!(category, "duct" | "pipe" | "conduit" | "tray" | "cable");
+    let sys = if mep { price_words(system) } else { BTreeSet::new() };
+    // The item's own words, stripped of the system name and numbers (same as takeoff::match_row).
+    let iw: BTreeSet<String> = price_words(item).into_iter().filter(|w| !sys.contains(w) && !w.chars().any(|c| c.is_ascii_digit())).collect();
+    let mut best: Option<(usize, f64)> = None;
+    let unit_ok = |pu: &str| pu.is_empty() || pu.eq_ignore_ascii_case(unit) || measure_class(pu).is_some_and(|m| Some(m) == measure_class(unit));
+    for (i, p) in prices.iter().enumerate() {
+        let pu = p["unit"].as_str().unwrap_or_default();
+        if !unit_ok(pu) {
+            continue;
+        }
+        let pi = p["item"].as_str().unwrap_or_default();
+        let want = price_words(pi);
+        if want.is_empty() {
+            continue;
+        }
+        let hit = want.iter().filter(|w| have.contains(*w)).count();
+        let score = hit as f64 / want.len() as f64;
+        let covered = if iw.is_empty() { 0.0 } else { iw.iter().filter(|w| want.contains(*w)).count() as f64 / iw.len() as f64 };
+        if hit == 0 || !((score >= 0.5 && covered >= 0.5) || covered >= 1.0) {
+            continue;
+        }
+        let score = score + covered;
+        if best.is_none_or(|(_, s)| score > s) {
+            best = Some((i, score));
+        }
+    }
+    best.map(|(i, _)| &prices[i])
 }
 
 // ---------------- CSV ----------------
@@ -562,7 +632,8 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
     let base = st.get("baseline").cloned().unwrap_or(json!({}));
     let drivers = labor::drivers(st, &base);
     let prices: Vec<Value> = base["prices"].as_array().cloned().unwrap_or_default();
-    let find_price = |item: &str, size: &str| -> Option<&Value> {
+    let find_price = |item: &str, size: &str, unit: &str, category: &str, system: &str| -> Option<&Value> {
+        // Exact item+size match, then item-only with empty size (Q327 original).
         prices
             .iter()
             .find(|p| {
@@ -573,6 +644,8 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
                     .iter()
                     .find(|p| p["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(item)) && p["size"].as_str().unwrap_or_default().is_empty())
             })
+            // Q5294: word-matching fallback (same algorithm as bim.estimate's match_row).
+            .or_else(|| find_price_by_words(&prices, item, unit, category, system))
     };
     let mut out = Vec::new();
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
@@ -641,7 +714,7 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
                     for part in asm["parts"].as_array().into_iter().flatten() {
                         let item = part["item"].as_str().unwrap_or_default();
                         let q = part["qty"].as_f64().unwrap_or(1.0);
-                        match find_price(item, "").and_then(|p| check_price(p, &mut pr.issues, &mut pr.material_steps, "part")) {
+                        match find_price(item, "", &unit, "", "").and_then(|p| check_price(p, &mut pr.issues, &mut pr.material_steps, "part")) {
                             Some((m, _)) => mat += q * m,
                             None => missing.push(item.to_string()),
                         }
@@ -660,7 +733,9 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
             None => {
                 let item = l["item"].as_str().unwrap_or_default();
                 let size = l["size"].as_str().unwrap_or_default();
-                match find_price(item, size) {
+                let category = l["category"].as_str().unwrap_or_default();
+                let system = l["system"].as_str().unwrap_or_default();
+                match find_price(item, size, &unit, category, system) {
                     Some(p) => {
                         pr.via = format!("price {} ({})", p["source"].as_str().unwrap_or_default(), p["date"].as_str().unwrap_or_default());
                         if let Some((m, h)) = check_price(p, &mut pr.issues, &mut pr.material_steps, "line") {
@@ -933,7 +1008,17 @@ fn run_status(s: &mut Session, _p: &Value) -> Result<Value> {
     for k in ["by_level", "by_trade", "by_system"] {
         out[k] = b[k].clone();
     }
-    let f = findings(&st, &job);
+    let mut f = findings(&st, &job);
+    // Q5294 MUST 2: warn when crew rate is missing and there are labor hours.
+    let crew = setting(&st, "crew_rate", 0.0);
+    let total_hours: f64 = job.priced.iter().map(|p| p.labor_hours).sum();
+    if crew == 0.0 && total_hours > 0.0 {
+        f.push(json!({
+            "kind": "no_crew_rate",
+            "message": format!("{total_hours:.0} labor hours are $0 because no crew rate is set"),
+            "fix": "estimate.settings {crew_rate: 75} (your crew's loaded hourly rate)",
+        }));
+    }
     // Q5278 MUST 3: ok:false when every line is unpriced (not just when findings exist).
     let unpriced = job.priced.iter().filter(|p| p.material_unit.is_none()).count();
     let all_unpriced = !job.priced.is_empty() && unpriced == job.priced.len();
