@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{code: \"IRC\"|\"IBC\"|\"NEC\"|\"IPC\"|\"IMC\"|\"IFC\"|\"IECC\", edition?: year (default latest starter), jurisdiction?: \"County Name\"} → {editions: [{code, year}], jurisdiction?, rules}: select the code editions for this project; call with no args to see the current selection")
             .noundo(),
         CommandSpec::new(RULES, "Code Rules", run_rules)
-            .params("{topic?: \"framing\"|\"electrical\"|\"plumbing\"|\"mechanical\"|\"building\", code?: \"IRC\"|\"NEC\"..., section?: \"R602.3\", offset?, limit?} → {rules: [{id, code, section, topic, summary, applies, value, source}], total}")
+            .params("{topic?: \"framing\"|\"electrical\"|\"plumbing\"|\"mechanical\"|\"building\", code?: \"IRC\"|\"IBC\"|\"NEC\"|\"IPC\"|\"IMC\"|\"IFC\"|\"IECC\", section?: \"R602.3\", offset?, limit?} → {rules: [{id, code, section, topic, summary, applies, value, source}], total}")
             .noundo(),
         CommandSpec::new(CHECK, "Check Building Codes", run_check)
             .params("{scope?: \"framing\"|\"electrical\"|\"plumbing\"|\"mechanical\"|\"building\"|\"all\" (default \"all\"), level?, walls?: [{id, wall_type, stud_size?, stud_spacing_in, height_ft, has_fire_blocking?, header_span_ft?, header_size?}], rooms?: [{id, room_type, location?, receptacle_spacing_in?, has_gfci?, has_afci?, panel_clearance_in?}]} → {pass, findings: [{rule_id, cite, element?, level?, expected, found, topic, source, severity}], by_topic: {topic: count}, by_severity: {severity: count}}")
