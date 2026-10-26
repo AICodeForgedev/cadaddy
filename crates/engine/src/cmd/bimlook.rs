@@ -194,6 +194,11 @@ pub(crate) fn made_tags(e: &Entity) -> Option<&[cadaddy_doc::RawTag]> {
     rest.get(..end)
 }
 
+/// The name a build gave an element, the tag after its source (a rooftop unit's `RTU-1`).
+pub fn made_name(e: &Entity) -> Option<&str> {
+    made_tags(e)?.get(3).filter(|t| t.code == 1000 && !t.value.contains(':')).map(|t| t.value.as_str())
+}
+
 /// The value of tag `key:` among an element's build tags.
 pub fn made_tag<'a>(e: &'a Entity, key: &str) -> Option<&'a str> {
     made_tags(e)?.iter().filter(|t| t.code == 1000).find_map(|t| {
@@ -341,6 +346,7 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
         "soffit" => mk("architecture", "Soffits", typed("Soffit")),
         "roof" | "cricket" => mk("architecture", "Roofs", typed(&title(&p))),
         "parapet" => mk("architecture", "Parapets", typed("Parapet")),
+        "roof-drain" => mk("architecture", "Roofs", typed("Roof Drain")),
         "stair" => mk("architecture", "Stairs", typed("Stair")),
         "railing" => mk("architecture", "Railings", typed("Railing")),
         "grid" => mk("architecture", "Ceiling Grid", typed("Ceiling Grid")),

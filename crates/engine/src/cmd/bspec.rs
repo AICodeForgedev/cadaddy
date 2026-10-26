@@ -847,6 +847,10 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     let rooms: Vec<&Traced> = rooms
         .iter()
         .filter(|t| {
+            // A roof plan has no rooms (its title block, a curb's box).
+            if wallgen::roof_level(&sp.levels, &t.level) {
+                return false;
+            }
             let b = cadaddy_geom::Bounds2::from_points(t.outline.iter().copied());
             let inside = walls.iter().find(|(n, _)| n.eq_ignore_ascii_case(&t.level)).is_none_or(|(_, w)| {
                 let w = w.expand(upf);
@@ -984,7 +988,10 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     r["railings"] = json!(built_stairs.railings);
     r["guards"] = json!(built_stairs.guards);
     if let (Some(o), Some(x)) = (r.as_object_mut(), outside.as_object()) {
-        o.extend(x.clone());
+        o.extend(x.iter().filter(|(k, _)| *k != "roofNotes").map(|(k, v)| (k.clone(), v.clone())));
+    }
+    if let (Some(n), Some(x)) = (r["notes"].as_array_mut(), outside["roofNotes"].as_array()) {
+        n.extend(x.iter().cloned());
     }
     if let (Some(o), Some(x)) = (r.as_object_mut(), rcp.as_object()) {
         o.extend(x.clone());
@@ -1032,10 +1039,32 @@ fn stack_levels(d: &mut Drawing, sp: &BuildingSpec) -> usize {
     here.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
     let Some(lowest) = here.first() else { return 0 };
     let Some(origin) = level_anchor(d, lowest) else { return 0 };
-    let mut moved = 0;
+    // Each level's move: its plan's corner onto the lowest's. A roof plan (no walls of its own)
+    // is centred over the walls of the storey under it, wherever that went: a roof edge runs a
+    // slab's overhang past the walls, so the corners don't match.
+    let mut offsets: Vec<(&str, Vec2)> = vec![(lowest.name.as_str(), Vec2::ZERO)];
     for level in here.iter().skip(1) {
-        let Some(at) = level_anchor(d, level) else { continue };
-        let off = origin - at;
+        let roof = (level.base.is_none() && wallgen::roof_level(&sp.levels, &level.name))
+            .then(|| super::exterior::built_bounds(d, &level.name, &["roof", "parapet"]))
+            .filter(|b| !b.is_empty());
+        let under = roof.and_then(|r| {
+            offsets.iter().rev().find_map(|(n, off)| {
+                let w = super::exterior::built_bounds(d, n, &["wall"]);
+                (!w.is_empty()).then(|| w.center() + *off - r.center())
+            })
+        });
+        let off = match under {
+            Some(off) => off,
+            None => {
+                let Some(at) = level_anchor(d, level) else { continue };
+                origin - at
+            }
+        };
+        offsets.push((level.name.as_str(), off));
+    }
+    let mut moved = 0;
+    for (name, off) in offsets.iter().skip(1) {
+        let (level, off) = (*name, *off);
         if !(off.x.is_finite() && off.y.is_finite()) || off.len() < 1e-9 {
             continue;
         }
@@ -1043,7 +1072,7 @@ fn stack_levels(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         let mine: Vec<Handle> = d
             .model
             .iter()
-            .filter(|e| wallgen::made_as(e).is_some() && made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(&level.name)))
+            .filter(|e| wallgen::made_as(e).is_some() && made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(level)))
             .map(|e| e.handle)
             .take(MAX_OBJECTS)
             .collect();
@@ -1095,7 +1124,7 @@ pub(crate) fn stacked_by(e: &Entity) -> Vec2 {
 }
 
 /// The level a built object belongs to (its WALLGEN tag).
-pub(crate) fn made_level(e: &Entity) -> Option<String> {
+pub fn made_level(e: &Entity) -> Option<String> {
     let x = &e.common.xdata;
     let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP))?;
     x.get(at + 2).filter(|t| t.code == 1000).map(|t| t.value.clone())
