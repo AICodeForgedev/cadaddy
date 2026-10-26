@@ -86,7 +86,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── Electrical devices ───────────────────────────────────────────
         CommandSpec::new("mep.read_devices", "Read Electrical Devices", run_elec_devices)
-            .params("{sheets?: [name], preview?: bool, limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read}: works on any open drawing (the current sheet is the print set)")
+            .params("{sheets?: [name], preview?: bool (default true: read only; false puts the devices in the model), limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read, model: {inserted, by_type, by_level, not_inserted: {reason: count}, why_not?}}: works on any open drawing (the current sheet is the print set); preview:false needs a building model (bspec.draft {store: true} or bim.build first) and never inserts legend samples, circuit numbers, sheet numbers or lettering")
             .noundo(),
     ]
 }
@@ -810,6 +810,9 @@ fn run_elec_devices(s: &mut Session, p: &Value) -> Result<Value> {
             })
         })
         .collect();
+    // What may go in the model: the drawing's legends and schedules say which marks are types
+    // and which symbols are samples; circuit numbers, sheet numbers and lettering never are.
+    let (keep, not_inserted) = model_devices(d, &found, sheet_numbers(s));
     let mut out = json!({
         "devices": devices, "count": found.len(), "by_type": by_type,
         "print_set": if e_sheets.is_some() { "project" } else { "current drawing" }, "sheets_read": e_sheets.unwrap_or(1).max(1),
@@ -819,5 +822,197 @@ fn run_elec_devices(s: &mut Session, p: &Value) -> Result<Value> {
     } else if found.len() > limit {
         out["more"] = json!(found.len() - limit);
     }
+    let mut model = if bool_or(p, "preview", true) {
+        json!({"inserted": 0, "would_insert": keep.len(), "why_not": "preview: nothing was put in the model; mep.read_devices {preview: false} inserts these devices"})
+    } else if keep.is_empty() {
+        json!({"inserted": 0, "why_not": "no device here passed the junk filter (see not_inserted)"})
+    } else {
+        match place_devices(s, &keep, "mep.read_devices") {
+            Ok(v) => v,
+            Err(e) => json!({"inserted": 0, "why_not": e.to_string()}),
+        }
+    };
+    model["not_inserted"] = json!(not_inserted);
+    out["model"] = model;
     Ok(out)
+}
+
+/// The set's sheet numbers (the print set's, else the open sheet's title block): a tag that
+/// prints one is a reference, not a device.
+fn sheet_numbers(s: &Session) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    if let Ok(pr) = project(s) {
+        for sh in pr.sheets.iter().take(MAX_DEVICES) {
+            out.extend(cadaddy_mepfix::device_types::sheet_number_forms(&sh.number));
+        }
+    }
+    out
+}
+
+/// The devices of `found` that belong in the model, and how many were left out, by reason.
+fn model_devices(
+    d: &cadaddy_doc::Drawing,
+    found: &[Found],
+    mut numbers: std::collections::BTreeSet<String>,
+) -> (Vec<ReadDevice>, BTreeMap<&'static str, usize>) {
+    use cadaddy_mepfix::device_types::{self, TagVerdict};
+    let texts = cadaddy_mepfix::sheet_facts::texts(d);
+    if let Some(id) = cadaddy_mepfix::sheet_facts::identify_sheet(&texts) {
+        numbers.extend(device_types::sheet_number_forms(&id.number));
+    }
+    let legend = device_types::read_legend(&texts);
+    let circuits: Vec<&cadaddy_mepfix::sheet_facts::TextItem> =
+        texts.iter().filter(|t| cadaddy_mepfix::sheet_facts::is_circuit_label(&t.value)).collect();
+    let mut keep = Vec::new();
+    let mut skipped: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for (tag, at, h, _) in found {
+        let why = if legend.covers(*at) {
+            Some("legend or schedule sample")
+        } else if super::guided::is_circuit_tag(tag) {
+            Some("circuit number")
+        } else {
+            match device_types::tag_verdict(tag, &legend.types, &std::collections::BTreeSet::new(), &numbers) {
+                TagVerdict::Device(_) => None,
+                TagVerdict::NotDevice(why) => Some(why),
+                TagVerdict::Unlisted(_) => Some("not in the legend (the guided job asks about it)"),
+            }
+        };
+        match why {
+            Some(w) => *skipped.entry(w).or_default() += 1,
+            None => keep.push(ReadDevice {
+                tag: tag.trim().to_string(),
+                at: [at.x, at.y],
+                circuit: circuit_beside(&circuits, *at),
+                handle: h.hex(),
+                ..ReadDevice::default()
+            }),
+        }
+    }
+    (keep, skipped)
+}
+
+/// The circuit label printed beside a device symbol at `at` (within six label heights; the
+/// nearest), else empty.
+pub(crate) fn circuit_beside(circuits: &[&cadaddy_mepfix::sheet_facts::TextItem], at: cadaddy_geom::Vec2) -> String {
+    circuits
+        .iter()
+        .filter(|t| t.height.is_finite() && t.height > 0.0 && t.at.dist(at) <= 6.0 * t.height)
+        .min_by(|a, b| a.at.dist(at).total_cmp(&b.at.dist(at)))
+        .map_or_else(String::new, |t| t.value.trim().to_string())
+}
+
+/// A device read off a sheet, to put in the model: its type mark, where its symbol is drawn
+/// (drawing units), the sheet and the sheet's level, and its circuit when one is printed
+/// beside it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReadDevice {
+    pub tag: String,
+    pub at: [f64; 2],
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sheet: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub level: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub circuit: String,
+    /// The symbol's handle (hex).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub handle: String,
+}
+
+/// The model level a device belongs on: the spec level whose plan region holds it, else the
+/// spec level named as its sheet's (`2` → `Level 2`), else its sheet's level named the way the
+/// spec names its levels, else the spec's level for the whole drawing.
+fn device_level(sp: &cadaddy_walk3d::BuildingSpec, dv: &ReadDevice) -> String {
+    let regional = cadaddy_walk3d::level_at(&sp.levels, dv.at[0], dv.at[1]).filter(|l| l.region.is_some());
+    if let Some(l) = regional {
+        return l.name.clone();
+    }
+    let want = dv.level.trim();
+    if !want.is_empty() {
+        let named = sp.levels.iter().find(|l| {
+            let n = l.name.trim().to_ascii_uppercase();
+            let w = want.to_ascii_uppercase();
+            n == w || n.ends_with(&format!(" {w}")) || (w == "R" && n.contains("ROOF"))
+        });
+        return match named {
+            Some(l) => l.name.clone(),
+            // Named as the spec names its levels (`Level 2` beside `Level 1`).
+            None if sp.levels.iter().any(|l| l.name.starts_with("Level ")) => format!("Level {want}"),
+            None => want.to_string(),
+        };
+    }
+    cadaddy_walk3d::level_at(&sp.levels, dv.at[0], dv.at[1]).or_else(|| sp.levels.first()).map_or_else(String::new, |l| l.name.clone())
+}
+
+/// What a device's BOM line calls it: `switch S3`, `device type A`.
+fn device_item(tag: &str) -> String {
+    match device_kind(tag) {
+        "device" => format!("device type {tag}"),
+        k => format!("{k} {tag}"),
+    }
+}
+
+/// Put `devices` in the drawing's building model as element tags on their levels (`kind`,
+/// `type`, `device_type`, `circuit` when known, `sheet`, `symbol`), replacing the devices an
+/// earlier read put there (tags made by hand or by other readers stay). The BOM and takeoff
+/// count them from there. Errors when the drawing has no building model yet.
+pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) -> Result<Value> {
+    let d = s.doc()?;
+    let Some(text) = d.building_spec.as_deref().filter(|t| !t.trim().is_empty()) else {
+        return Err(EngineError::Other(format!(
+            "{cmd}: there is no building model to put the devices in yet: run bspec.draft {{store: true}} (or bim.build) first, then {cmd} {{preview: false}} again"
+        )));
+    };
+    let mut sp = cadaddy_walk3d::BuildingSpec::from_json(text).map_err(|e| EngineError::Other(format!("{cmd}: {e}")))?;
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let before = sp.tags.len();
+    sp.tags.retain(|t| !(t.id.starts_with("device:") && t.fields.contains_key("symbol")));
+    let replaced = before - sp.tags.len();
+    let mut ids: std::collections::HashSet<String> = sp.tags.iter().map(|t| t.id.clone()).collect();
+    let mut by_type: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_level: BTreeMap<String, usize> = BTreeMap::new();
+    let mut inserted = 0usize;
+    for dv in devices.iter().take(MAX_DEVICES) {
+        let tag = dv.tag.trim();
+        if tag.is_empty() || !dv.at.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let level = device_level(&sp, dv);
+        let at_ft = [dv.at[0] / upf, dv.at[1] / upf];
+        let base = format!("device:{level}:{:.1},{:.1}", at_ft[0], at_ft[1]);
+        // Two marks on one symbol spot (a switch and its sensor) are two devices.
+        let id = if ids.contains(&base) { format!("{base}:{tag}") } else { base };
+        if !ids.insert(id.clone()) {
+            continue;
+        }
+        let mut e =
+            cadaddy_walk3d::tags::ElementTag { id, kind: device_kind(tag).replace(' ', "_"), level: level.clone(), at_ft, ..Default::default() };
+        e.set("type", tag, "plan");
+        e.set("device_type", device_item(tag), "plan");
+        if !dv.circuit.is_empty() {
+            e.set("circuit", dv.circuit.clone(), "plan");
+        }
+        e.set("sheet", if dv.sheet.is_empty() { "current drawing" } else { dv.sheet.as_str() }, "plan");
+        e.set("symbol", dv.handle.clone(), "plan");
+        sp.tags.push(e);
+        *by_type.entry(tag.to_string()).or_default() += 1;
+        *by_level.entry(level).or_default() += 1;
+        inserted += 1;
+    }
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    Ok(json!({"inserted": inserted, "replaced": replaced, "by_type": by_type, "by_level": by_level}))
+}
+
+/// The devices an earlier read put in the drawing's model: how many, by level and type.
+pub(crate) fn model_device_counts(d: &cadaddy_doc::Drawing) -> Value {
+    let spec = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok());
+    let mut by_level: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_type: BTreeMap<String, usize> = BTreeMap::new();
+    let mut n = 0usize;
+    for t in spec.iter().flat_map(|sp| sp.tags.iter()).filter(|t| t.id.starts_with("device:") && t.fields.contains_key("symbol")) {
+        n += 1;
+        *by_level.entry(t.level.clone()).or_default() += 1;
+        *by_type.entry(t.fields.get("type").map_or_else(String::new, |f| f.value.clone())).or_default() += 1;
+    }
+    json!({"count": n, "by_level": by_level, "by_type": by_type})
 }
