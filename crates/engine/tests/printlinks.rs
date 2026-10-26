@@ -123,3 +123,45 @@ fn the_job_and_bim_from_pdf_report_the_sheet_map() {
     assert_eq!(links["enlarged"][0]["devices"], json!(5));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The fixture crate's whole made-up set (cadaddy_mepfix::generate): its enlarged plumbing
+/// plans are boxed with dashed rectangles on the overall plans (one box's sides lie on dash-dot
+/// grid lines) and named by `SEE ENLARGED PLAN P-401` notes, not bubbles; its equipment tags are
+/// circled like bubbles (`RG-2`, `SH-1`); one bubble points at a sheet the set doesn't have.
+#[test]
+fn the_fixture_sets_enlarged_plans_register_on_their_overall_plans() {
+    let _g = serial();
+    real_pdf_reader();
+    let set = cadaddy_mepfix::generate(42).expect("fixture set");
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("cadaddy_printlinks_fixture_{}_{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("folder");
+    for sh in &set.truth.sheets {
+        std::fs::write(dir.join(&sh.pdf), set.file(&sh.pdf).expect("sheet pdf")).expect("write");
+    }
+    let mut s = Session::new();
+    let v = s.execute("printset.links", &json!({"pdfs": dir.display().to_string()})).expect("printset.links");
+    let enlarged: Vec<(String, String, bool)> = v["enlarged"]
+        .as_array()
+        .expect("enlarged")
+        .iter()
+        .map(|e| (e["sheet"].as_str().unwrap_or("").to_string(), e["on_sheet"].as_str().unwrap_or("").to_string(), e["registered"] == true))
+        .collect();
+    let want: Vec<(String, String, bool)> = [("P-401", "P-101", true), ("P-402", "P-102", true), ("P-403", "P-101", true)]
+        .iter()
+        .map(|(a, b, c)| (a.to_string(), b.to_string(), *c))
+        .collect();
+    assert_eq!(enlarged, want, "{:#}", v["enlarged"]);
+    assert_eq!(v["double_counted"], json!(0));
+    // Each boundary lies on its overall plan's paper, within the plan's own block.
+    for e in v["enlarged"].as_array().into_iter().flatten() {
+        let b: Vec<f64> = e["boundary"].as_array().expect("boundary").iter().filter_map(Value::as_f64).collect();
+        assert!(b.len() == 4 && b[2] > b[0] && b[3] > b[1], "{e}");
+    }
+    // The circled equipment tags are not callouts; the bubble to A-999 is reported.
+    let unresolved: Vec<&str> = v["unresolved"].as_array().expect("unresolved").iter().filter_map(|u| u["target_sheet"].as_str()).collect();
+    assert_eq!(unresolved, vec!["A-999"], "{:#}", v["unresolved"]);
+    assert!(v["callouts"].as_array().map_or(0, Vec::len) >= 30, "{:#}", v["callouts"]);
+    assert!(v["resolved_pct"].as_f64().is_some_and(|p| p >= 0.95), "{}", v["resolved_pct"]);
+    std::fs::remove_dir_all(&dir).ok();
+}

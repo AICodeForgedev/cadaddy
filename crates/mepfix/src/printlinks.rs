@@ -87,6 +87,16 @@ pub struct Callout {
     /// The box its leader reaches (an enlarged area's boundary).
     #[serde(skip)]
     pub boundary: Option<[f64; 4]>,
+    /// The bubble's radius, or a written reference's lettering height.
+    #[serde(skip)]
+    pub size: f64,
+    /// What its shape alone makes it (a bubble whose leader reaches a box is only an enlarged
+    /// plan's callout if the sheet it names is one).
+    #[serde(skip)]
+    pub shape_kind: String,
+    /// "ENLARGED" is lettered beside it.
+    #[serde(skip)]
+    pub enlarged_word: bool,
 }
 
 /// A view drawn on a page, from its title.
@@ -128,6 +138,8 @@ pub struct PageRead {
     pub callouts: Vec<Callout>,
     pub views: Vec<PageView>,
     pub boxes: Vec<[f64; 4]>,
+    /// Boxes drawn dashed (rows of dashes): how an enlarged area's boundary is usually drawn.
+    pub dash_boxes: Vec<[f64; 4]>,
     pub devices: Vec<PageDevice>,
     /// Device types its legends and schedules list.
     pub legend_types: BTreeSet<String>,
@@ -432,6 +444,114 @@ fn boxes(d: &Drawing, min: f64) -> Vec<[f64; 4]> {
     out
 }
 
+/// Boxes drawn dashed: four rows of dashes (short straight pieces, gaps between them) meeting
+/// at the corners. A side may run on along a dashed grid line it lies on.
+fn dash_boxes(segs: &[[[f64; 2]; 2]], h: f64) -> Vec<[f64; 4]> {
+    // Runs of dashes per line: (horizontal?, cross-axis coordinate rounded) → pieces.
+    let tol = (0.3 * h).max(1e-9);
+    let mut lines: BTreeMap<(bool, i64), Vec<(f64, f64)>> = BTreeMap::new();
+    for s in segs.iter().take(MAX_PIECES) {
+        let len = dist(s[0], s[1]);
+        if len < 0.2 * h || len > 8.0 * h {
+            continue;
+        }
+        if (s[0][1] - s[1][1]).abs() < 0.05 * len {
+            lines.entry((true, ((s[0][1] + s[1][1]) / 2.0 / tol).round() as i64)).or_default().push((s[0][0].min(s[1][0]), s[0][0].max(s[1][0])));
+        } else if (s[0][0] - s[1][0]).abs() < 0.05 * len {
+            lines.entry((false, ((s[0][0] + s[1][0]) / 2.0 / tol).round() as i64)).or_default().push((s[0][1].min(s[1][1]), s[0][1].max(s[1][1])));
+        }
+    }
+    // Each line's runs: dashes no farther apart than a few dashes, dashed (not solid) on the
+    // whole: (horizontal?, at, lo, hi, typical dash).
+    struct Row {
+        horizontal: bool,
+        at: f64,
+        lo: f64,
+        hi: f64,
+        dash: f64,
+        /// Every dash about as long as the others (a dash-dot grid line is not).
+        even: bool,
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    for ((horizontal, k), mut v) in lines {
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut run: Vec<(f64, f64)> = Vec::new();
+        let flush = |run: &mut Vec<(f64, f64)>, rows: &mut Vec<Row>| {
+            let (Some(first), Some(last)) = (run.first(), run.last()) else { return };
+            let (lo, hi) = (first.0, last.1.max(first.1));
+            let mut lens: Vec<f64> = run.iter().map(|(a, b)| b - a).collect();
+            let inked: f64 = lens.iter().sum();
+            lens.sort_by(f64::total_cmp);
+            let dash = lens.get(lens.len() / 2).copied().unwrap_or(0.0);
+            // The end dashes may be cut short at the corners.
+            // Most dashes about the typical length (a stray piece on the line may differ; a
+            // dash-dot line alternates two lengths).
+            let alike = lens.iter().filter(|l| (**l / dash.max(1e-9) - 1.0).abs() <= 0.3).count();
+            let even = alike * 5 >= lens.len() * 4;
+            if run.len() >= 5 && hi > lo && (0.25..=0.92).contains(&(inked / (hi - lo))) && rows.len() < 20_000 {
+                rows.push(Row { horizontal, at: k as f64 * tol, lo, hi, dash, even });
+            }
+            run.clear();
+        };
+        for d in v {
+            let gap = run.last().map_or(0.0, |l| d.0 - l.1);
+            if gap > 3.0 * h {
+                flush(&mut run, &mut rows);
+            }
+            run.push(d);
+        }
+        flush(&mut run, &mut rows);
+    }
+    // Two opposite sides drawn alike (the same dashes, ends matching, shorter than the plan's
+    // dashed grid lines) and a dashed line across them at one end (a side may lie on a grid line
+    // or a wall drawn some other way).
+    let near = |a: f64, b: f64| (a - b).abs() <= 1.5 * h;
+    let mut out: Vec<[f64; 4]> = Vec::new();
+    for horizontal in [true, false] {
+        // Plan-wide dashed lines (three or more nearly as long as the longest) are a grid.
+        let longest = rows.iter().filter(|r| r.horizontal == horizontal).map(|r| r.hi - r.lo).fold(0.0, f64::max);
+        let grid = rows.iter().filter(|r| r.horizontal == horizontal && r.hi - r.lo > 0.6 * longest).count() >= 3;
+        let pairs: Vec<&Row> = rows.iter().filter(|r| r.horizontal == horizontal && r.even && (!grid || r.hi - r.lo <= 0.6 * longest)).collect();
+        let cross: Vec<&Row> = rows.iter().filter(|r| r.horizontal != horizontal).collect();
+        for (i, a) in pairs.iter().enumerate() {
+            for b in pairs.iter().skip(i + 1) {
+                if out.len() >= MAX_BOXES {
+                    return out;
+                }
+                let (c0, c1) = (a.at.min(b.at), a.at.max(b.at));
+                let alike = (a.dash / b.dash.max(1e-9)).ln().abs() < 0.3;
+                if c1 - c0 < 6.0 * h || !near(a.lo, b.lo) || !near(a.hi, b.hi) || a.hi - a.lo < 6.0 * h || !alike {
+                    continue;
+                }
+                let (lo, hi) = ((a.lo + b.lo) / 2.0, (a.hi + b.hi) / 2.0);
+                // A side: dashed runs along it covering half of it or more (a grid line breaks
+                // where it crosses walls).
+                let side = |at: f64| {
+                    let mut spans: Vec<(f64, f64)> =
+                        cross.iter().filter(|v| near(v.at, at)).map(|v| (v.lo.max(c0), v.hi.min(c1))).filter(|(a, b)| b > a).collect();
+                    spans.sort_by(|x, y| x.0.total_cmp(&y.0));
+                    let (mut covered, mut end) = (0.0, c0);
+                    for (a, b) in spans {
+                        if b > end {
+                            covered += b - a.max(end);
+                            end = b;
+                        }
+                    }
+                    covered >= 0.5 * (c1 - c0)
+                };
+                if !(side(lo) || side(hi)) {
+                    continue;
+                }
+                let bx = if horizontal { [lo, c0, hi, c1] } else { [c0, lo, c1, hi] };
+                if !out.iter().any(|o| near(o[0], bx[0]) && near(o[1], bx[1]) && near(o[2], bx[2]) && near(o[3], bx[3])) {
+                    out.push(bx);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// How far `p` is from the outline of box `b`.
 fn box_edge_dist(b: &[f64; 4], p: [f64; 2]) -> f64 {
     let inside = p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3];
@@ -470,7 +590,9 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
     let median_h = heights.get(heights.len() / 2).copied().unwrap_or(1.0).max(1e-9);
     let rounds = sheet_reader::round_shapes(d);
     let segs = pieces(d);
-    let page_boxes = boxes(d, 12.0 * median_h);
+    let solid_boxes = boxes(d, 12.0 * median_h);
+    let dashed_boxes = dash_boxes(&segs, median_h);
+    let page_boxes: Vec<[f64; 4]> = dashed_boxes.iter().chain(&solid_boxes).copied().collect();
     let views_raw = sheet_facts::view_titles(d, &texts);
     let own_n = norm_sheet(own);
 
@@ -529,12 +651,12 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         v
     };
 
-    let mut out = PageRead { boxes: page_boxes.clone(), ..PageRead::default() };
+    let mut out = PageRead { boxes: solid_boxes.clone(), dash_boxes: dashed_boxes.clone(), ..PageRead::default() };
     let mut used_texts: BTreeSet<usize> = BTreeSet::new();
     let mut view_marks: Vec<(String, [f64; 2])> = Vec::new();
     // What the linework around a bubble at `c` (radius `r`) makes it: its kind, the box its
     // leader reaches, and whether a divider splits it.
-    let shape = |c: [f64; 2], r: f64| -> (&'static str, Option<[f64; 4]>, bool) {
+    let shape = |c: [f64; 2], r: f64| -> (&'static str, &'static str, Option<[f64; 4]>, bool, bool) {
         let near = segs_near(c, r * 8.0);
         let piece = |i: &usize| segs.get(*i).copied();
         let divider = near.iter().filter_map(piece).any(|s| {
@@ -580,16 +702,15 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
             .filter(|(_, len)| *len >= 1.5 * r)
             .find_map(|(far, _)| edge_box(*far, 0.5 * r))
             .or_else(|| if enlarged_word { edge_box(c, 3.0 * r) } else { None });
-        let kind = if boundary.is_some() || enlarged_word {
-            "enlarged_plan"
-        } else if cut {
+        let shape_kind = if cut {
             "section_mark"
         } else if tip {
             "elevation_tag"
         } else {
             "detail_bubble"
         };
-        (kind, boundary, divider)
+        let kind = if boundary.is_some() || enlarged_word { "enlarged_plan" } else { shape_kind };
+        (kind, shape_kind, boundary, divider, enlarged_word)
     };
     let detail_like = |v: &str| !v.is_empty() && v.len() <= 4 && v.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '.');
     // A bubble naming its own sheet beside a view title numbers that view.
@@ -639,15 +760,18 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
             view_marks.push((detail, c));
             continue;
         }
-        let (kind, boundary, divider) = shape(c, r);
+        let (kind, shape_kind, boundary, divider, enlarged_word) = shape(c, r);
         out.callouts.push(Callout {
             kind: kind.into(),
             detail,
             target_sheet: target.trim().to_string(),
             at: c,
             radius: r,
+            size: r,
             divider,
             boundary,
+            shape_kind: shape_kind.into(),
+            enlarged_word,
             ..Callout::default()
         });
     }
@@ -686,15 +810,18 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
             view_marks.push((t.value.trim().to_string(), c));
             continue;
         }
-        let (kind, boundary, _) = shape(c, r);
+        let (kind, shape_kind, boundary, _, enlarged_word) = shape(c, r);
         out.callouts.push(Callout {
             kind: kind.into(),
             detail: t.value.trim().to_string(),
             target_sheet: v.to_string(),
             at: c,
             radius: r,
+            size: r,
             divider: true,
             boundary,
+            shape_kind: shape_kind.into(),
+            enlarged_word,
             ..Callout::default()
         });
     }
@@ -748,7 +875,14 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
                 let vertical = (s[0][0] - s[1][0]).abs() < (s[0][1] - s[1][1]).abs();
                 let at = if vertical { (s[0][0] + s[1][0]) / 2.0 } else { (s[0][1] + s[1][1]) / 2.0 };
                 out.match_lines.push(PageMatchLine { target_sheet: target.clone(), vertical, at });
-                out.callouts.push(Callout { kind: "match_line".into(), target_sheet: target, at: m, text: value.clone(), ..Callout::default() });
+                out.callouts.push(Callout {
+                    kind: "match_line".into(),
+                    target_sheet: target,
+                    at: m,
+                    text: value.clone(),
+                    size: t.height,
+                    ..Callout::default()
+                });
             }
             continue;
         }
@@ -766,6 +900,7 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
                 target_sheet: target,
                 at: text_middle(t),
                 text: value.clone(),
+                size: t.height,
                 ..Callout::default()
             });
         }
@@ -805,11 +940,13 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         }
         pv
     };
+    let spots: Vec<[f64; 2]> = titles.iter().map(|t| t.3).collect();
     for (number, title, scale_text, at, region) in titles.into_iter().take(32) {
         let h = texts.iter().find(|t| t.value == title && dist([t.at.x, t.at.y], at) < 1e-6).map_or(median_h, |t| t.height);
         // The view's number: its own bubble's (a print's lettering may come back in pieces).
         let mark = view_marks.iter().filter(|(_, c)| c[0] <= at[0] && dist(*c, at) < 12.0 * h).min_by(|a, b| dist(a.1, at).total_cmp(&dist(b.1, at)));
-        let mut pv = view_of(view_block(&blocks, at, h).or(region), enlarged_page);
+        let others: Vec<[f64; 2]> = spots.iter().copied().filter(|o| *o != at).collect();
+        let mut pv = view_of(view_block(&blocks, at, h, &others).or(region), enlarged_page);
         pv.number = mark.map(|m| m.0.clone()).or(number).unwrap_or_default();
         pv.title = title;
         pv.scale_text = scale_text;
@@ -858,10 +995,34 @@ fn one_copy(texts: Vec<TextItem>) -> Vec<TextItem> {
 /// The block of linework a view title labels: the biggest block standing above the title
 /// (or holding it) over the title's start, grown by the small blocks touching it (grid bubbles,
 /// tags just outside its lines).
-fn view_block(blocks: &[([f64; 4], usize)], at: [f64; 2], h: f64) -> Option<[f64; 4]> {
+fn view_block(blocks: &[([f64; 4], usize)], at: [f64; 2], h: f64, others: &[[f64; 2]]) -> Option<[f64; 4]> {
     let holds = |r: &[f64; 4]| inside(r, at);
     let above = |r: &[f64; 4]| r[1] >= at[1] - h && r[1] - at[1] <= 30.0 * h && r[0] <= at[0] + 4.0 * h && at[0] <= r[2];
-    let (mut b, _) = blocks.iter().filter(|(r, _)| holds(r) || above(r)).max_by_key(|(_, n)| *n).copied()?;
+    let most = blocks.iter().map(|(_, n)| *n).max().unwrap_or(0);
+    let big = |n: usize| n.saturating_mul(10) >= most;
+    let near = blocks.iter().filter(|(r, _)| holds(r) || above(r)).max_by_key(|(_, n)| *n).copied();
+    // A title printed well below its plan: the nearest big block above it, with no other view
+    // title between them.
+    let far = || {
+        blocks
+            .iter()
+            .filter(|(r, n)| {
+                let w = r[2] - r[0];
+                // With other views on the sheet, the plan stands over its title; alone, any big
+                // block above it is.
+                let over = others.is_empty() || (at[0] >= r[0] - 0.25 * w && at[0] <= r[2]);
+                big(*n)
+                    && r[1] >= at[1] - h
+                    && over
+                    && !others.iter().any(|o| o[1] > at[1] + h && o[1] < r[1] && o[0] >= r[0] - 0.25 * w && o[0] <= r[2])
+            })
+            .min_by(|a, b| (a.0[1] - at[1]).total_cmp(&(b.0[1] - at[1])))
+            .copied()
+    };
+    let (mut b, _) = match near {
+        Some(nb) if big(nb.1) => nb,
+        _ => far().or(near)?,
+    };
     let pad = 2.0 * h;
     for _ in 0..4 {
         let mut grew = false;
@@ -935,6 +1096,16 @@ fn grid_fit(view: &PageView, host_x: &[(String, f64)], host_y: &[(String, f64)])
     (!px.is_empty() && !py.is_empty() && s.is_finite()).then_some(Fit { s, t: [tx, ty] })
 }
 
+/// The overlap of two boxes over their union (0 when apart).
+fn overlap_ratio(a: &[f64; 4], b: &[f64; 4]) -> f64 {
+    let w = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
+    let h = (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
+    let area = |r: &[f64; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+    let both = w * h;
+    let union = area(a) + area(b) - both;
+    if union > 0.0 { both / union } else { 0.0 }
+}
+
 fn map_box(f: &Fit, b: &[f64; 4]) -> [f64; 4] {
     let (p, q) = (f.apply([b[0], b[1]]), f.apply([b[2], b[3]]));
     [p[0].min(q[0]), p[1].min(q[1]), p[0].max(q[0]), p[1].max(q[1])]
@@ -985,6 +1156,11 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
         }
     }
 
+    let enlarged_sheets: BTreeSet<String> = enl_views
+        .iter()
+        .map(|e| norm_sheet(&e.page.sheet.number))
+        .chain(sheets.iter().filter(|x| x.sheet_type == "enlarged_plan").map(|x| norm_sheet(&x.number)))
+        .collect();
     // Callouts, resolved.
     for p in pages {
         for c in &p.read.callouts {
@@ -1008,9 +1184,17 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 }
                 _ => numbers.contains(&norm_sheet(&c.target_sheet)),
             };
-            // A bubble with no divider pointing nowhere is lettering in a circle, not a callout.
-            if c.radius > 0.0 && !c.divider && !c.resolved {
+            // A bubble with no divider pointing nowhere is lettering in a circle, not a callout; so
+            // is a circled mark that can't be one of this set's sheet numbers (`RG-2`, `L1`, `P1`
+            // where the set numbers its sheets `P-101`).
+            if c.radius > 0.0 && !c.resolved && (!c.divider || !sheet_shaped(&c.target_sheet, sheets)) {
                 continue;
+            }
+            // A leader reaching a box makes an enlarged plan's callout only when the sheet named
+            // is one (an elevation mark's tip touches the building outline too).
+            if c.kind == "enlarged_plan" && !c.enlarged_word && !enlarged_sheets.contains(&norm_sheet(&c.target_sheet)) && !c.shape_kind.is_empty() {
+                c.kind = c.shape_kind.clone();
+                c.boundary = None;
             }
             if c.resolved && c.kind != "discipline_ref" {
                 c.target_sheet = display(&c.target_sheet);
@@ -1113,13 +1297,17 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
             // The boundary box: the callout's leader reaches it, or the box a reference sits by.
             let boxed = host_callout.and_then(|(_, c)| {
                 c.boundary.or_else(|| {
-                    let r = if c.radius > 0.0 { c.radius } else { 1.0 };
-                    h.read
-                        .boxes
-                        .iter()
-                        .filter(|b| box_edge_dist(b, c.at) < 6.0 * r)
-                        .min_by(|a, b| box_edge_dist(a, c.at).total_cmp(&box_edge_dist(b, c.at)))
-                        .copied()
+                    // The box a note or bubble sits by: dashed boxes first (how a boundary is
+                    // drawn), never the sheet's border.
+                    let reach = 6.0 * if c.size > 0.0 { c.size } else { 1.0 };
+                    let widest = h.read.boxes.iter().chain(&h.read.dash_boxes).map(|b| b[2] - b[0]).fold(0.0, f64::max);
+                    let by = |list: &[[f64; 4]]| {
+                        list.iter()
+                            .filter(|b| box_edge_dist(b, c.at) < reach && b[2] - b[0] < 0.6 * widest)
+                            .min_by(|a, b| box_edge_dist(a, c.at).total_cmp(&box_edge_dist(b, c.at)))
+                            .copied()
+                    };
+                    by(&h.read.dash_boxes).or_else(|| by(&h.read.boxes))
                 })
             });
             let fit = grid_fit(e.view, &h.read.grid_x, &h.read.grid_y).map(|f| (f, "grids")).or_else(|| {
@@ -1128,12 +1316,22 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 if !(bw > 0.0 && bh > 0.0 && rw > 0.0 && rh > 0.0) {
                     return None;
                 }
-                // The scales printed say how much bigger the enlarged plan is; else the box does.
-                let view_scale = e.view.scale_text.as_deref().and_then(sheet_reader::parse_scale);
-                let s = match view_scale {
-                    Some(vs) if vs > 0.0 && h.read.scale > 0.0 => h.read.scale / vs,
-                    _ => (bw / rw).min(bh / rh),
-                };
+                // The plan fitted into its box; a scale near one to one (both sheets read at
+                // their scale notes) or near the printed scales' ratio is taken as exact.
+                let fitted = (bw / rw).min(bh / rh);
+                let printed = e
+                    .view
+                    .scale_text
+                    .as_deref()
+                    .and_then(sheet_reader::parse_scale)
+                    .filter(|v| *v > 0.0 && h.read.scale > 0.0)
+                    .map(|v| h.read.scale / v);
+                let s = [Some(1.0), printed]
+                    .into_iter()
+                    .flatten()
+                    .filter(|k| (fitted / k).ln().abs() < 0.3)
+                    .min_by(|a, b| (fitted / a).ln().abs().total_cmp(&(fitted / b).ln().abs()))
+                    .unwrap_or(fitted);
                 let cb = [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0];
                 let cr = [(rg[0] + rg[2]) / 2.0, (rg[1] + rg[3]) / 2.0];
                 Some((Fit { s, t: [cb[0] - s * cr[0], cb[1] - s * cr[1]] }, "boundary"))
@@ -1142,7 +1340,14 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 entry.registered = true;
                 entry.method = how.into();
                 entry.scale = Some((1.0 / f.s * 1000.0).round() / 1000.0);
-                let b = boxed.or_else(|| e.view.region.map(|rg| map_box(&f, &rg)));
+                // Placed by the grid, the plan's own outline is the boundary, unless a box drawn
+                // round about the same area says it more exactly.
+                let placed = e.view.region.map(|rg| map_box(&f, &rg));
+                let b = match (how, boxed, placed) {
+                    ("grids", Some(bx), Some(pl)) if overlap_ratio(&bx, &pl) >= 0.5 => Some(bx),
+                    ("grids", _, Some(pl)) => Some(pl),
+                    _ => boxed.or(placed),
+                };
                 entry.boundary = b;
                 if let Some(b) = b {
                     entry.overall_ignored = h.read.devices.iter().filter(|dv| inside(&b, dv.at) && device_type(&dv.tag).is_some()).count();
@@ -1249,6 +1454,25 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
     out
 }
 
+/// Whether a mark could be one of the set's sheet numbers: its letters are a discipline the set
+/// has, written the way the set writes that discipline's numbers (with a dash or without, no
+/// spaces).
+fn sheet_shaped(mark: &str, sheets: &[SetSheet]) -> bool {
+    let m = mark.trim();
+    let letters: String = m.chars().take_while(char::is_ascii_alphabetic).collect::<String>().to_ascii_uppercase();
+    let same: Vec<&str> = sheets
+        .iter()
+        .map(|x| x.number.as_str())
+        .filter(|n| n.chars().take_while(char::is_ascii_alphabetic).collect::<String>().eq_ignore_ascii_case(&letters))
+        .collect();
+    if letters.is_empty() || same.is_empty() || m.contains(' ') {
+        return false;
+    }
+    let dashed = same.iter().filter(|n| n.contains('-')).count();
+    let dash = m.contains('-');
+    (dash && dashed > 0) || (!dash && dashed < same.len())
+}
+
 /// The views of one several-view sheet (`E-2/1`, `E-2/2`): one page, already one plan each.
 fn plans_of_one_page(sheets: &[String]) -> bool {
     let base = |s: &String| s.split('/').next().unwrap_or(s).to_string();
@@ -1292,6 +1516,38 @@ mod tests {
         assert!(text_refs("1/2\" CONDUIT, SEE NOTE 4").is_empty());
         assert!(text_refs("OVERSEEN BY OWNER").is_empty());
         assert!(text_refs("SEE SPECIFICATIONS").is_empty());
+    }
+
+    /// A dashed box (dashes 1 long, gaps 0.5) whose right side runs along a solid line, and a
+    /// solid outline of dashes' size pieces that is not dashed.
+    #[test]
+    fn a_dashed_box_is_found_from_its_dashes() {
+        let mut segs: Vec<[[f64; 2]; 2]> = Vec::new();
+        let mut dashes = |a: [f64; 2], b: [f64; 2]| {
+            let len = dist(a, b);
+            let n = (len / 1.5).floor() as usize;
+            for k in 0..n {
+                let f0 = k as f64 * 1.5 / len;
+                let f1 = (k as f64 * 1.5 + 1.0) / len;
+                segs.push([[a[0] + (b[0] - a[0]) * f0, a[1] + (b[1] - a[1]) * f0], [a[0] + (b[0] - a[0]) * f1, a[1] + (b[1] - a[1]) * f1]]);
+            }
+        };
+        dashes([10.0, 10.0], [40.0, 10.0]);
+        dashes([10.0, 30.0], [40.0, 30.0]);
+        dashes([10.0, 10.0], [10.0, 30.0]);
+        segs.push([[40.0, 0.0], [40.0, 50.0]]);
+        // Solid: pieces end to end.
+        for k in 0..20 {
+            let x = 60.0 + k as f64;
+            segs.push([[x, 10.0], [x + 1.0, 10.0]]);
+            segs.push([[x, 30.0], [x + 1.0, 30.0]]);
+        }
+        let found = dash_boxes(&segs, 1.0);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let b = found[0];
+        for (got, want) in b.iter().zip([10.0, 10.0, 40.0, 30.0]) {
+            assert!((got - want).abs() < 0.6, "{b:?}");
+        }
     }
 
     #[test]
