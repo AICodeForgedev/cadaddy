@@ -163,6 +163,11 @@ pub struct BuildingSpec {
     /// so later compares keep user markup (objects not in this set).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub print_baseline: Vec<u64>,
+    /// Building-code rule book selection and project-level amendments (`code.*`): which codes,
+    /// editions and jurisdiction apply to this project. The rules themselves are the starter set
+    /// shipped with CADaddy plus any user additions.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub codebook: serde_json::Value,
 }
 
 /// One part of a spec in plain language: its section, key (for approval and editing) and text.
@@ -2302,6 +2307,7 @@ impl BuildingSpec {
             guess: BTreeMap::new(),
             sources: BTreeMap::new(),
             print_baseline: Vec::new(),
+            codebook: serde_json::Value::Null,
         }
     }
 

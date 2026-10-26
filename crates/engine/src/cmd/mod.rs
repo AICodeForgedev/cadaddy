@@ -22,6 +22,7 @@ pub mod ceilings;
 pub mod classic;
 pub(crate) mod clip_partners;
 pub mod clipboard;
+pub mod codebook;
 pub mod colorbook;
 pub mod constraints;
 pub mod coordination;
@@ -807,6 +808,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(elemprops::specs());
         v.extend(bimlook::specs());
         v.extend(projrules::specs());
+        v.extend(codebook::specs());
         v.extend(spec_import::specs());
         v.extend(agentready::specs());
         v.extend(underlay::specs());
