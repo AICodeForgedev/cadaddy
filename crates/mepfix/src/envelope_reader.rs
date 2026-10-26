@@ -23,7 +23,7 @@
 //!   beams (Q263).
 
 use crate::arch_reader::{ArchResult, Shapes, Txt, cell, dist, length_in, number, shapes, tables, upper};
-use crate::envelope::{EnvOpening, Model, flags, takeoff};
+use crate::envelope::{EnvOpening, Model, flags, outline_from_walls, takeoff};
 use crate::sheet_reader::{self, Alignment, SheetMap};
 use crate::struct_reader::StructuralModel;
 use crate::truth::*;
@@ -176,15 +176,21 @@ fn read_drainage(s: &Shapes, m: &mut Model, res: &mut EnvelopeResult) {
 
 fn component(words: &str) -> Option<&'static str> {
     let u = upper(words);
-    let u = u.trim();
+    // Also replace underscores with spaces so raw component names like "metal_panels" match.
+    let u = u.trim().replace('_', " ");
+    let u = u.as_str();
     Some(match u {
         _ if u.contains("MEMBRANE") || u == "ROOFING" => "membrane",
+        _ if u.contains("SHINGLE") => "shingles",
+        _ if u.contains("STANDING SEAM") || u.contains("METAL PANEL") => "metal_panels",
+        _ if u.contains("UNDERLAYMENT") => "underlayment",
+        _ if u.contains("ICE") && u.contains("WATER") => "ice_water_shield",
         _ if u.contains("COVER") => "cover_board",
         _ if u.contains("TAPERED") => "tapered",
         _ if u.contains("CONTINUOUS") || u == "CI" => "ci",
         _ if u.contains("VAPOR") => "vapor_retarder",
         _ if u.contains("INSULATION") => "insulation",
-        _ if u.contains("DECK") => "deck",
+        _ if u.contains("DECK") || u.contains("PLYWOOD") || (u.contains("SHEATHING") && u.contains("ROOF")) => "deck",
         _ if u.contains("CLADDING") || u.contains("VENEER") || u.contains("SIDING") => "cladding",
         _ if u.contains("AIR SPACE") || u.contains("CAVITY") => "air_space",
         _ if u.contains("FURRING") || u.contains("GIRT") => "furring",
@@ -219,11 +225,24 @@ fn membrane_kind(desc: &str) -> (String, String) {
         "epdm"
     } else if u.contains("SBS") || u.contains("BITUMEN") {
         "sbs"
+    } else if u.contains("SHINGLE") {
+        "shingle"
+    } else if u.contains("STANDING SEAM") || u.contains("METAL PANEL") {
+        "metal"
     } else {
         ""
     };
-    let attachment =
-        u.rsplit(", ").next().filter(|a| a.contains("ADHERED") || a.contains("FASTENED") || a.contains("WELDED") || a.contains("APPLIED"));
+    let attachment = u
+        .rsplit(", ")
+        .next()
+        .filter(|a| {
+            a.contains("ADHERED")
+                || a.contains("FASTENED")
+                || a.contains("WELDED")
+                || a.contains("APPLIED")
+                || a.contains("NAILED")
+                || a.contains("CLIPPED")
+        });
     (kind.into(), attachment.map(|a| a.to_ascii_lowercase()).unwrap_or_default())
 }
 
@@ -242,10 +261,10 @@ fn table_layers(t: &crate::arch_reader::ReadTable, notes: &mut Vec<String>) -> (
             continue;
         };
         let (thickness_in, count, m) = thickness_cell(&cell(row, kt));
-        if comp == "membrane" {
+        if comp == "membrane" || comp == "shingles" || comp == "metal_panels" {
             mil = m;
         }
-        out.push(EnvLayer { component: comp.into(), description: cell(row, kd), thickness_in, count });
+        out.push(EnvLayer { component: comp.into(), description: cell(row, kd), thickness_in, count, ..Default::default() });
     }
     (out, mil)
 }
@@ -297,7 +316,8 @@ fn read_assemblies(s: &Shapes, m: &mut Model, res: &mut EnvelopeResult) {
         let title = upper(&t.title);
         let (layers, mil) = table_layers(&t, &mut res.notes);
         if title.starts_with("ROOF") {
-            let (membrane, attachment) = layers.iter().find(|l| l.component == "membrane").map(|l| membrane_kind(&l.description)).unwrap_or_default();
+            let first_roof = layers.iter().find(|l| matches!(l.component.as_str(), "membrane" | "shingles" | "metal_panels"));
+            let (membrane, attachment) = first_roof.map(|l| membrane_kind(&l.description)).unwrap_or_default();
             m.roof = RoofAssembly { tag: title_tag(&title), membrane, mil, attachment, layers };
             continue;
         }
@@ -412,7 +432,8 @@ pub fn read_spec(text: &str) -> Option<EnvSpec> {
 // ---- Putting it together -----------------------------------------------------------------------
 
 /// Read the envelope: `arch`, `walls` and `structure` are the other readers' results; `spec` the
-/// Division 07 text, if there is one.
+/// Division 07 text, if there is one; `rooftop_units` the Q262 equipment reader's roof units
+/// (tag + position), if any.
 pub fn read_envelope(
     dxf: &[(String, Vec<u8>)],
     map: &SheetMap,
@@ -420,6 +441,7 @@ pub fn read_envelope(
     walls: &WallResult,
     structure: &StructuralModel,
     spec: Option<&str>,
+    rooftop_units: &[(String, [f64; 2])],
 ) -> EnvelopeResult {
     let mut res = EnvelopeResult::default();
     let mut m = Model::default();
@@ -466,26 +488,27 @@ pub fn read_envelope(
     {
         l.thickness_in = n;
     }
-    // The exterior walls' outer face: the outermost walls of the lowest level, whatever type
-    // they were read as (an untagged exterior wall may have been guessed wrong), each out by
-    // half its thickness across it.
+    // The exterior walls' outer face: the outermost walls of the lowest level as a polygon.
     let lowest = walls.walls.iter().map(|w| w.level.as_str()).min().unwrap_or("1").to_string();
-    let mut lo = [f64::MAX; 2];
-    let mut hi = [f64::MIN; 2];
-    for w in walls.walls.iter().filter(|w| w.level == lowest).take(MAX_ITEMS) {
-        let h = w.thickness_in / 24.0;
-        let along_x = (w.a_ft[1] - w.b_ft[1]).abs() < (w.a_ft[0] - w.b_ft[0]).abs();
-        let (hx, hy) = if along_x { (0.0, h) } else { (h, 0.0) };
-        for p in [w.a_ft, w.b_ft] {
-            lo = [lo[0].min(p[0] - hx), lo[1].min(p[1] - hy)];
-            hi = [hi[0].max(p[0] + hx), hi[1].max(p[1] + hy)];
-        }
-    }
-    m.outline = (lo[0] < hi[0] && lo[1] < hi[1]).then_some((lo, hi));
+    m.outline = outline_from_walls(
+        walls
+            .walls
+            .iter()
+            .filter(|w| w.level == lowest)
+            .take(MAX_ITEMS)
+            .map(|w| (w.a_ft, w.b_ft, w.thickness_in / 24.0))
+            .collect(),
+    );
     let on_outline = |p: [f64; 2]| {
-        m.outline.is_some_and(|(lo, hi)| {
-            let d = (p[0] - lo[0]).abs().min((p[0] - hi[0]).abs()).min((p[1] - lo[1]).abs()).min((p[1] - hi[1]).abs());
-            d < 1.5
+        if m.outline.is_empty() {
+            return false;
+        }
+        // Check distance to each edge of the polygon.
+        let n = m.outline.len();
+        (0..n).any(|i| {
+            let a = m.outline[i];
+            let b = m.outline[(i + 1) % n];
+            crate::envelope::seg_dist_pub(p, a, b) < 1.5
         })
     };
     let exterior_doors: Vec<&crate::arch_reader::FoundDoor> =
@@ -496,6 +519,9 @@ pub fn read_envelope(
             m.openings.push(EnvOpening { kind: kind.into(), level: w.level.clone(), width_in: wt.width_in, height_in: wt.height_in });
         }
     }
+    let has_assumed_door = exterior_doors.iter().any(|d| {
+        d.row.as_ref().is_none_or(|r| r.width_in.is_none() || r.height_in.is_none())
+    });
     for d in exterior_doors {
         let (w, h) = d.row.as_ref().map_or((Some(d.width_in), None), |r| (r.width_in.or(Some(d.width_in)), r.height_in));
         m.openings.push(EnvOpening { kind: "door".into(), level: d.level.clone(), width_in: w.unwrap_or(36.0), height_in: h.unwrap_or(84.0) });
@@ -503,10 +529,12 @@ pub fn read_envelope(
     if let Some(bs) = structure.beams.get("R") {
         m.beams = bs.iter().map(|b| (b.from_ft, b.to_ft, b.grid.clone())).collect();
     }
+    m.rooftop_units = rooftop_units.to_vec();
     m.spec = spec.and_then(read_spec);
     res.spec_read = m.spec.is_some();
     res.takeoff = takeoff(&m);
     res.flags = flags(&m);
+    annotate_sources(&mut res, has_assumed_door);
     res.model = m;
     res
 }
@@ -524,7 +552,93 @@ pub fn read_fixture_envelope(seed: u64) -> Result<(Truth, EnvelopeResult), Strin
     let walls = crate::wall_reader::read_walls(&dxf, &map, &ceilings, &structure);
     let arch = crate::arch_reader::read_arch(&dxf, &map, &ceilings);
     let spec = set.file("specs.txt").map(|b| String::from_utf8_lossy(b).into_owned());
-    Ok((set.truth.clone(), read_envelope(&dxf, &map, &arch, &walls, &structure, spec.as_deref())))
+    Ok((set.truth.clone(), read_envelope(&dxf, &map, &arch, &walls, &structure, spec.as_deref(), &[])))
+}
+
+// ---- Source + status annotation ----------------------------------------------------------------
+
+/// After computing takeoff and flags from the reader's model, tag every item with where it came
+/// from (`source`) and whether it was read from the drawings, a standard rule, or an assumed
+/// default (`status`).
+fn annotate_sources(res: &mut EnvelopeResult, has_assumed_door: bool) {
+    // Assembly layers: the roof assembly and wall assembly tables come from A-504.
+    for l in &mut res.model.roof.layers {
+        l.source = "A-504".into();
+        l.status = "read".into();
+    }
+    for c in &mut res.model.claddings {
+        for l in &mut c.layers {
+            l.source = "A-504".into();
+            l.status = "read".into();
+        }
+    }
+
+    // Takeoff items: source depends on what data they use.
+    for it in &mut res.takeoff {
+        let c = it.code.as_str();
+        if c.starts_with("roof.") {
+            // Roof items come from the assembly table (A-504) and the drainage plan (A-104).
+            it.source = "A-504".into();
+            it.status = "read".into();
+            // Edge items specifically from the drainage plan.
+            if c == "roof.coping" || c == "roof.edge_metal" || c == "roof.parapet.base_flashing"
+                || c == "roof.curbs.base_flashing" || c == "roof.walkway"
+                || c.starts_with("roof.crickets") || c.starts_with("roof.saddles")
+            {
+                it.source = "A-104".into();
+            }
+        } else if c.starts_with("pen.") {
+            it.source = "A-104".into();
+            it.status = "read".into();
+        } else if c.starts_with("wall.") {
+            if c == "wall.sealant" {
+                // Control joints every 25 ft is a standard rule.
+                it.source = String::new();
+                it.status = "rule".into();
+            } else {
+                it.source = "A-504".into();
+                it.status = "read".into();
+            }
+        } else if c.starts_with("open.") {
+            it.source = "arch".into();
+            it.status = if has_assumed_door { "assumed".into() } else { "read".into() };
+        }
+    }
+
+    // Flags: source depends on the flag kind.
+    for f in &mut res.flags {
+        match f.kind.as_str() {
+            "no_curb_detail" => {
+                f.source = "A-104".into();
+                f.status = "read".into();
+            }
+            "drain_structure" => {
+                f.source = "structure".into();
+                f.status = "read".into();
+            }
+            "no_overflow" => {
+                f.source = "A-104".into();
+                f.status = "read".into();
+            }
+            "spec_mil" => {
+                f.source = "spec".into();
+                f.status = "read".into();
+            }
+            "r_value" => {
+                f.source = "spec".into();
+                f.status = "read".into();
+            }
+            "no_cricket" => {
+                f.source = "A-104".into();
+                f.status = "read".into();
+            }
+            "no_curb" => {
+                f.source = "equip".into();
+                f.status = "read".into();
+            }
+            _ => {}
+        }
+    }
 }
 
 // ---- Scoring -----------------------------------------------------------------------------------

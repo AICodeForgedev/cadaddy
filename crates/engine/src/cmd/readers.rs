@@ -166,6 +166,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mep.read_devices", "Read Electrical Devices", run_elec_devices)
             .params("{sheets?: [name], preview?: bool (default true: read only; false puts the devices in the model), limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read, model: {inserted, by_type, by_level, not_inserted: {reason: count}, why_not?}}: works on any open drawing (the current sheet is the print set); preview:false needs a building model (bspec.draft {store: true} or bim.build first) and never inserts legend samples, circuit numbers, sheet numbers or lettering")
             .noundo(),
+        // ── Envelope reader ────────────────────────────────────────────────
+        CommandSpec::new("envelope.read", "Read Roof and Wall Envelope", run_envelope_read)
+            .params("{apply?: bool} → {takeoff: [{code, description, unit, net, waste_pct, order, source, status}], flags: [{kind, subject, message, source, status}], spec_read, notes, page?: 1}")
+            .noundo(),
     ]
 }
 
@@ -1127,4 +1131,43 @@ pub(crate) fn model_device_counts(d: &cadaddy_doc::Drawing) -> Value {
         *by_type.entry(t.fields.get("type").map_or_else(String::new, |f| f.value.clone())).or_default() += 1;
     }
     json!({"count": n, "by_level": by_level, "by_type": by_type})
+}
+
+// ─── envelope.read ───────────────────────────────────────────────────────────
+
+fn run_envelope_read(s: &mut Session, p: &Value) -> Result<Value> {
+    let apply = bool_or(p, "apply", false);
+    let page = p.get("page").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as usize;
+
+    let pr = match project(s) {
+        Ok(p) => p,
+        Err(_) => {
+            return Ok(no_project(
+                "envelope",
+                json!({"takeoff": [], "flags": [], "spec_read": false, "notes": []}),
+            ));
+        }
+    };
+
+    let a_sheets: Vec<&mep_printset::SheetEntry> =
+        pr.sheets.iter().filter(|s| s.discipline == "A").collect();
+
+    // The printset DXF loading pipeline is wired through printset.open/classify (Q5128).
+    // Until the DXF byte loader lands, report the sheet count and structure.
+    Ok(json!({
+        "takeoff": [],
+        "takeoff_total": 0,
+        "flags": [],
+        "spec_read": false,
+        "notes": [],
+        "sheets_read": a_sheets.len(),
+        "page": page,
+        "pages": 0,
+        "applied": apply,
+        "message": if a_sheets.is_empty() {
+            "no A-discipline sheets in the print set; classify the print set first (printset.classify)"
+        } else {
+            "envelope reader wired; DXF sheet loading through the printset pipeline pending (Q5128)"
+        },
+    }))
 }
