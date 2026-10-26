@@ -308,9 +308,11 @@ fn estimate_prices_the_takeoff_and_gives_a_change_order() {
             .sum::<f64>()
     };
     // Duct, pipe and conduit at 10% waste (the BOM's), priced by the rows they match.
-    let (duct, pipe, cond) = (q("Duct M-SUPPLY") * 1.1, (q("P-DCW pipe") + q("P-SAN pipe")) * 1.1, q("EMT conduit") * 1.1);
-    let material = duct * 12.5 + pipe * 8.0 + cond * 1.1;
-    let hours = duct * 0.2 + pipe * 0.15 + cond * 0.05;
+    // Material is on qty with waste; labor is on net qty (waste isn't installed).
+    let (duct_net, pipe_net, cond_net) = (q("Duct M-SUPPLY"), q("P-DCW pipe") + q("P-SAN pipe"), q("EMT conduit"));
+    let (duct_total, pipe_total, cond_total) = (duct_net * 1.1, pipe_net * 1.1, cond_net * 1.1);
+    let material = duct_total * 12.5 + pipe_total * 8.0 + cond_total * 1.1;
+    let hours = duct_net * 0.2 + pipe_net * 0.15 + cond_net * 0.05;
     let close = |a: &Value, b: f64| (a.as_f64().unwrap() - b).abs() < 0.01;
     assert!(close(&e["material_total"], material), "{} vs {material}: {e}", e["material_total"]);
     assert!(close(&e["labor_hours"], hours), "{}", e["labor_hours"]);
@@ -332,7 +334,8 @@ fn estimate_prices_the_takeoff_and_gives_a_change_order() {
     let co = &b["change_order"];
     let dl = co["lines"].as_array().unwrap().iter().find(|l| l["item"].as_str().unwrap().starts_with("Duct M-SUPPLY")).unwrap();
     assert_eq!((dl["delta_qty"].as_f64(), dl["change"].as_str()), (Some(10.0), Some("changed")));
-    assert!(close(&dl["delta_cost"], 10.0 * 1.1 * (12.5 + 0.2 * 80.0)), "{dl}");
+    // Material delta: 10' × 1.1 (waste) × $12.50; labor delta: 10' × 0.2 h × $80 (no waste on labor).
+    assert!(close(&dl["delta_cost"], 10.0 * 1.1 * 12.5 + 10.0 * 0.2 * 80.0), "{dl}");
     assert!(close(&co["total"], b["total"].as_f64().unwrap() - e["total"].as_f64().unwrap()), "{co}");
     assert!(std::fs::read(&x).unwrap().starts_with(b"PK"));
     // An XLSX cost table reads too (here the estimate's own XLSX: item, unit, material and
@@ -347,6 +350,38 @@ fn estimate_prices_the_takeoff_and_gives_a_change_order() {
     assert!(s.execute("bim.estimate", &json!({})).is_err());
     assert!(s.execute("bim.estimate", &json!({"csv": "price,qty\n1,2\n"})).is_err());
     assert!(s.execute("bim.estimate", &json!({"rows": [{"item": "X"}], "compare_to": "nope"})).is_err());
+    // Q5294 MUST 2: warnings for missing inputs (the default rate is reported).
+    assert!(inline["warnings"].as_array().unwrap().iter().any(|w| w["kind"] == "default_labor_rate"), "{}", inline["warnings"]);
+    // bim.estimate stores its cost table in the estimate state: estimate.status sees it.
+    let st = s.execute("estimate.status", &json!({})).unwrap();
+    assert!(st["summary"]["lines"].as_u64().unwrap() > 0, "estimate.status sees BOM lines after bim.estimate: {st}");
+}
+
+/// Q5294 MUST 3: same model, same cost table → same totals on both routes.
+#[test]
+fn bim_estimate_and_estimate_status_give_the_same_totals() {
+    let mut s = building();
+    let table = tmp("same-costs.csv");
+    std::fs::write(
+        &table,
+        "item,unit,material,labor_hrs\nEMT conduit,ft,1.10,0.05\nRectangular duct,ft,12.50,0.20\nCopper pipe,ft,8.00,0.15\n",
+    )
+    .unwrap();
+    // Route 1: bim.estimate (stores in estimate state).
+    let bim = s.execute("bim.estimate", &json!({"cost_table": table.display().to_string(), "labor_rate": 90})).unwrap();
+    // Route 2: estimate.status (prices were stored by bim.estimate; scope all as in_contract).
+    for trade in ["electrical", "mechanical", "plumbing", "general", "drywall", "job"] {
+        let _ = s.execute("estimate.set_scope", &json!({"trade": trade, "scope": "in_contract", "reason": "all ours"}));
+    }
+    let est = s.execute("estimate.status", &json!({})).unwrap();
+    // Direct costs (material + labor) match: both routes use the same pricing engine.
+    let close = |a: f64, b: f64| (a - b).abs() < 0.02;
+    let bim_material = bim["material_total"].as_f64().unwrap();
+    let bim_labor = bim["labor_total"].as_f64().unwrap();
+    let est_material = est["totals"]["material"].as_f64().unwrap();
+    let est_labor = est["totals"]["labor"].as_f64().unwrap();
+    assert!(close(bim_material, est_material), "material: bim {bim_material} vs est {est_material}");
+    assert!(close(bim_labor, est_labor), "labor: bim {bim_labor} vs est {est_labor}");
 }
 
 #[test]
