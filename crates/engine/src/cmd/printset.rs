@@ -13,10 +13,14 @@
 //! - `printset.sheets`: list the project's sheets with their classification.
 //! - `printset.reimport`: re-import a revised set, only reprocessing changed sheets.
 //! - `printset.save`: save the project state to disk.
+//! - `printset.keep`: keep the whole job (print set, drawing with its spec, model and job state)
+//!   in the print folder's `.cadaddy` folder, and note it as the last print set.
+//! - `printset.resume`: open a kept job again (a folder's, else the last one kept): a new
+//!   session picks up where the last one stopped.
 
 use cadaddy_mepfix::printset::{self as mep_printset, PrintSetProject};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use super::{CommandSpec, always, bool_or, str_param};
@@ -47,7 +51,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("printset.open", "Open Print Set", run_open)
             .files()
-            .params("{path: folder or .printset.json, name?} → {name, sheets, revision, dashboard}")
+            .params("{path: folder, one PDF (its pages only) or .printset.json, name?} → {name, sheets, revision, dashboard}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.classify", "Classify Print Set", run_classify)
@@ -72,6 +76,16 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.save", "Save Print Set", run_save).files().params("{path?} → {saved}").enabled(always).noundo(),
+        CommandSpec::new("printset.keep", "Keep Print Set Job", run_keep)
+            .files()
+            .params("{} → {kept: folder, sheets}: the print set and the drawing (its building spec, model, review and job state) kept in the print folder's .cadaddy folder; the next session's printset.resume {} opens it")
+            .enabled(always)
+            .noundo(),
+        CommandSpec::new("printset.resume", "Resume Print Set Job", run_resume)
+            .files()
+            .params("{path?: print folder (default: the last one kept), auto?: bool (only when no print set is open and the drawing is empty)} → {resumed, name?, sheets?, folder?, why?}: the kept print set and its drawing opened again")
+            .enabled(always)
+            .noundo(),
     ]
 }
 
@@ -86,8 +100,15 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     } else if path.is_dir() {
         let name = str_param(p, "name").unwrap_or_else(|| path.file_name().and_then(|n| n.to_str()).unwrap_or("Print Set"));
         mep_printset::create_project(name, &path).map_err(EngineError::Other)?
+    } else if path.is_file() && path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+        // One PDF (often a merged set): a project of that file alone, not of its whole folder.
+        let file = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("Print Set");
+        let name = str_param(p, "name").unwrap_or(stem);
+        mep_printset::create_project_from_files(name, &dir, &[(file, path.clone())])
     } else {
-        return Err(EngineError::Other(format!("{path_str} is not a folder or .json project file")));
+        return Err(EngineError::Other(format!("{path_str} is not a folder, a PDF or a .json project file")));
     };
 
     let result = json!({
@@ -126,6 +147,7 @@ fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
         "levels": index.levels,
         "unidentified": index.unidentified,
         "plans_without_level": index.plans_without_level,
+        "level_warnings": index.level_warnings,
     }))
 }
 
@@ -250,4 +272,99 @@ fn run_save(s: &mut Session, p: &Value) -> Result<Value> {
     }
     mep_printset::save_project(project, &path).map_err(EngineError::Other)?;
     Ok(json!({ "saved": path.display().to_string() }))
+}
+
+// ─── printset.keep / printset.resume ─────────────────────────────────────────
+
+/// The folder in a print folder where its job is kept (sheet discovery skips dot folders).
+const KEEP_DIR: &str = ".cadaddy";
+const KEEP_SET: &str = "printset.json";
+const KEEP_DRAWING: &str = "project.cdy";
+/// A kept drawing larger than this isn't read back (hostile files).
+const KEEP_MAX_BYTES: u64 = 2_000_000_000;
+
+/// Where the last print set kept is noted.
+fn pointer_file(s: &Session) -> Option<PathBuf> {
+    s.printset_pointer.clone().or_else(|| crate::control_auth::config_dir().map(|d| d.join("last-printset.txt")))
+}
+
+/// Written aside, then moved over the last copy: a crash mid-write keeps the last one.
+fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut part = path.as_os_str().to_owned();
+    part.push(".part");
+    let part = PathBuf::from(part);
+    std::fs::write(&part, bytes)?;
+    std::fs::rename(&part, path)
+}
+
+fn run_keep(s: &mut Session, _p: &Value) -> Result<Value> {
+    let project = get_project(s)?;
+    if project.source_dir.is_empty() {
+        return Err(EngineError::Other("this print set has no folder to keep its job in".into()));
+    }
+    let folder = PathBuf::from(&project.source_dir);
+    let dir = folder.join(KEEP_DIR);
+    let hooks = super::file::io().ok_or_else(|| EngineError::Other("no file writer is installed".into()))?;
+    let set = serde_json::to_vec(project).map_err(|e| EngineError::Other(e.to_string()))?;
+    let sheets = project.sheets.len();
+    let drawing = (hooks.write)(s.doc()?, KEEP_DRAWING).map_err(EngineError::Other)?;
+    let fail = |e: std::io::Error| EngineError::Other(format!("{}: {e}", dir.display()));
+    std::fs::create_dir_all(&dir).map_err(fail)?;
+    write_atomic(&dir.join(KEEP_DRAWING), &drawing).map_err(fail)?;
+    write_atomic(&dir.join(KEEP_SET), &set).map_err(fail)?;
+    // The pointer is a convenience: a settings folder that can't be written isn't an error.
+    if let Some(pointer) = pointer_file(s) {
+        if let Some(parent) = pointer.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = write_atomic(&pointer, folder.display().to_string().as_bytes());
+    }
+    Ok(json!({"kept": dir.display().to_string(), "sheets": sheets}))
+}
+
+/// Whether the active drawing holds nothing: no objects, building spec or agent state.
+fn drawing_is_empty(s: &Session) -> bool {
+    s.doc()
+        .is_ok_and(|d| d.model.is_empty() && d.building_spec.is_none() && d.agent.as_deref().is_none_or(|a| a.trim().is_empty() || a.trim() == "{}"))
+}
+
+fn run_resume(s: &mut Session, p: &Value) -> Result<Value> {
+    if bool_or(p, "auto", false) && (s.printset_project.is_some() || !drawing_is_empty(s)) {
+        return Ok(json!({"resumed": false, "why": "a print set or a drawing with work is open already"}));
+    }
+    let folder = match str_param(p, "path") {
+        Some(path) => PathBuf::from(path),
+        None => match pointer_file(s).and_then(|f| std::fs::read_to_string(f).ok()).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+            Some(last) => PathBuf::from(last),
+            None => {
+                return Ok(json!({"resumed": false, "why": "no job kept yet: open the prints with printset.open {path} (bim_job import {path})"}));
+            }
+        },
+    };
+    let dir = if folder.file_name().is_some_and(|n| n == KEEP_DIR) { folder.clone() } else { folder.join(KEEP_DIR) };
+    let (set_path, drawing_path) = (dir.join(KEEP_SET), dir.join(KEEP_DRAWING));
+    if !set_path.is_file() || !drawing_path.is_file() {
+        return Ok(json!({"resumed": false, "why": format!("no job is kept in {}", folder.display())}));
+    }
+    let hooks = super::file::io().ok_or_else(|| EngineError::Other("no file reader is installed".into()))?;
+    let fail = |e: String| EngineError::Other(format!("the kept job in {} can't be read: {e}", dir.display()));
+    if std::fs::metadata(&drawing_path).map_or(0, |m| m.len()) > KEEP_MAX_BYTES {
+        return Err(fail("the drawing is too large".into()));
+    }
+    let project = mep_printset::load_project(&set_path).map_err(fail)?;
+    let bytes = std::fs::read(&drawing_path).map_err(|e| fail(e.to_string()))?;
+    let drawing = (hooks.read)(&bytes, KEEP_DRAWING).map_err(fail)?;
+    let result = json!({"resumed": true, "name": project.name, "sheets": project.sheets.len(), "folder": project.source_dir});
+    // An empty drawing is replaced; one with work stays open beside the kept one.
+    if drawing_is_empty(s) && s.state().is_ok_and(|st| st.path.is_none()) {
+        *s.doc_mut()? = drawing;
+        if let Ok(st) = s.state_mut() {
+            st.path = Some(drawing_path.display().to_string());
+            st.title = project.name.clone();
+        }
+    } else {
+        s.open_drawing(drawing, &project.name, Some(drawing_path.display().to_string()));
+    }
+    set_project(s, project);
+    Ok(result)
 }

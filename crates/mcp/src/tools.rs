@@ -106,8 +106,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "source": {"type": "string"}, "from": {"type": "string"},
                 "keys": {"type": "array", "items": {"type": "string"}}
             }, "required": ["action"]}}),
-        json!({"name": "bim_job", "description": "Start here for BIM work on a project (you need no memory of earlier sessions: the project keeps it). One call per step; answers are short, paged (cursor) and capped; repeating a call is safe. Actions, each with an example of params:\n- briefing {} — one page: revision, what is built per level, open review items, recent changes, handoff notes, the next call.\n- note {text: \"Level 2 ducts reviewed to grid D; mech room next\"} — leave a handoff note in the project.\n- import {path: \"/jobs/hotel/prints\"} — open a folder of prints as the project and classify its sheets.\n- build {level: \"LEVEL 2\"} — build the model from the building spec (the same spec gives the same model).\n- review_next {kind: \"mep_guess\"} — the most important open item with candidates and the documents to check.\n- review_list {status: \"open\", cursor: \"c10\"} — the queue, 10 at a time.\n- resolve {id: \"RV-M1a2b3c4d\", answer: {size_in: [14, 10], bottom_ft: 10.5}, citation: {kind: \"drawing\", document: \"M-101\", ref: \"tag at C-4\"}} — answer an item; anything the documents speak to needs a citation (drawing, schedule, spec, submittal, rfi). A concern from code knowledge alone: {id, concern: \"...\"} raises it for review instead of changing the model.\n- defer {id, reason: \"field to verify the beam depth\"} — leave it for a field decision.\n- rfi {id, question: \"Confirm duct size at C-4\"} — put it on the RFI list.\n- batch {kind: \"mep_guess\", system: \"M-DUCT-SUPP\", answer: {...}, citation: {...}} — one answer for many identical items: returns a preview and a token; call again with confirm: token.\n- log {author: \"agent\", approved: false} — what agents decided, for a person to approve.\n- takeoff {} — quantities. rfis {} — the RFI list (20 most severe; rfis {path: \"/jobs/hotel/rfis.csv\"} exports all). export {path: \"/jobs/hotel/model.ifc\"} — the model as IFC.\nLow-level commands (execute) stay available but aren't needed for these.",
-            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["briefing", "note", "import", "build", "review_next", "review_list", "resolve", "defer", "rfi", "batch", "log", "takeoff", "rfis", "export"]}, "params": {"type": "object"}}, "required": ["action"]}}),
+        json!({"name": "bim_job", "description": "Start here for BIM work on a project (you need no memory of earlier sessions: the project keeps it). One call per step; answers are short, paged (cursor) and capped; repeating a call is safe. Actions, each with an example of params:\n- briefing {} — one page: revision, what is built per level, open review items, recent changes, handoff notes, the next call.\n- note {text: \"Level 2 ducts reviewed to grid D; mech room next\"} — leave a handoff note in the project.\n- import {path: \"/jobs/hotel/prints\"} — open a folder of prints as the project and classify its sheets.\n- build {level: \"LEVEL 2\"} — build the model from the building spec (the same spec gives the same model; the first build drafts the spec from the prints).\n- resume {path: \"/jobs/hotel/prints\"} — open the job kept for those prints (each step is kept in the folder's .cadaddy folder; a new session resumes the last job by itself).\n- review_next {kind: \"mep_guess\"} — the most important open item with candidates and the documents to check.\n- review_list {status: \"open\", cursor: \"c10\"} — the queue, 10 at a time.\n- resolve {id: \"RV-M1a2b3c4d\", answer: {size_in: [14, 10], bottom_ft: 10.5}, citation: {kind: \"drawing\", document: \"M-101\", ref: \"tag at C-4\"}} — answer an item; anything the documents speak to needs a citation (drawing, schedule, spec, submittal, rfi). A concern from code knowledge alone: {id, concern: \"...\"} raises it for review instead of changing the model.\n- defer {id, reason: \"field to verify the beam depth\"} — leave it for a field decision.\n- rfi {id, question: \"Confirm duct size at C-4\"} — put it on the RFI list.\n- batch {kind: \"mep_guess\", system: \"M-DUCT-SUPP\", answer: {...}, citation: {...}} — one answer for many identical items: returns a preview and a token; call again with confirm: token.\n- log {author: \"agent\", approved: false} — what agents decided, for a person to approve.\n- takeoff {} — quantities. rfis {} — the RFI list (20 most severe; rfis {path: \"/jobs/hotel/rfis.csv\"} exports all). export {path: \"/jobs/hotel/model.ifc\"} — the model as IFC.\nLow-level commands (execute) stay available but aren't needed for these.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["briefing", "note", "import", "resume", "build", "review_next", "review_list", "resolve", "defer", "rfi", "batch", "log", "takeoff", "rfis", "export"]}, "params": {"type": "object"}}, "required": ["action"]}}),
         json!({"name": "site_takeoff", "description": "Sitework quantities read off a job's civil sheets (grading, site and utility plans, DXF/DWG; none: the open drawing): earthwork cut AND fill between the existing and proposed surfaces (contours and spot grades), paving, curbs, fences, utility structures with RIM/INV, and storm/sanitary/water pipe LF by size and material with trench excavation and backfill. Each line has its status (read, rule, assumed or insufficient data: no number when a surface is missing), source sheets and the objects whose shares add up to it. Paged with offset and limit (default 100); unknown symbols are listed, not guessed. Opens no dialog.",
         "inputSchema": {"type": "object", "properties": {
             "paths": {"type": "array", "description": "civil sheet files: a path, or {path, sheet} to name the sheet", "items": {}},
@@ -135,10 +135,10 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         }}}),
         json!({"name": "import_check", "description": "Check the quality of a PDF-imported drawing: scale, layers, text recovery, fills, symbols, grid. Returns pass/fail, a score (0-100), per-check results with evidence for zoom-to, and hard-fail IDs (SCALE, FILLS, SYMBOLS each fail on their own). Optionally check a file by path without opening it.",
             "inputSchema": {"type": "object", "properties": {"path": {"type": "string", "description": "file path to check without opening (omit to check the current drawing)"}}}}),
-        json!({"name": "bim_from_pdf", "description": "One-call PDF to BIM: imports PDF(s), checks quality, drafts a building spec and builds the 3D model. Returns .cdy paths, check results, built counts, warnings and exact next steps. Multi-plan sheets become stacked levels.",
+        json!({"name": "bim_from_pdf", "description": "One-call PDF to BIM: reads the print set's sheet index (one PDF of any number of pages, or a folder), imports its plan pages (every page when it has no index), checks quality, drafts a building spec with one stacked level per floor plan and builds the 3D model, saved at `out` (default a temp folder; nothing is written next to the PDFs). Returns .cdy paths, the pages built from, check results, built counts, warnings and exact next steps.",
             "inputSchema": {"type": "object", "properties": {
                 "path": {"type": "string", "description": "PDF file or folder of PDFs"},
-                "levels": {"type": "string", "description": "\"auto\" (default)"},
+                "out": {"type": "string", "description": ".cdy file to save the model to (default: a temp folder)"},
                 "force": {"type": "boolean", "description": "build even if import check fails"}
             }, "required": ["path"]}}),
         json!({"name": "callouts", "description": "List cross-reference callouts from the imported print set: section marks, elevation tags, detail bubbles, enlarged-plan boundaries, match lines and key plans. Each callout shows its source sheet, kind, detail number, target sheet, and whether it resolves or is broken (with the reason). With no print set imported it returns no items and a hint saying how to import one.",
@@ -168,11 +168,65 @@ pub fn tool_definitions(has_ui: bool) -> Value {
     json!({ "tools": tools })
 }
 
-/// `engine.execute` of `command` with `params`.
+/// A new session picks up the job kept last (Q5276): when no print set is open and the drawing
+/// is empty, the kept print set and drawing are opened again. What was resumed, if anything.
+fn resume_kept(b: &mut dyn Backend) -> Option<Value> {
+    exec(b, "printset.resume", json!({"auto": true})).ok().filter(|r| r["resumed"] == json!(true))
+}
+
+/// Keep the job in the print folder after a step that changed it, so the next session resumes
+/// it. Nothing to keep (no print set open) isn't worth a word; a folder that can't be written is.
+fn keep(b: &mut dyn Backend, out: &mut Value) {
+    if let Err(e) = exec(b, "printset.keep", json!({}))
+        && !e.contains("no print-set project open")
+        && let Some(o) = out.as_object_mut()
+    {
+        o.insert("not_kept".into(), json!(e.chars().take(200).collect::<String>()));
+    }
+}
+
+/// The briefing's next call as a `bim_job` call that runs as given (`{action, params}`).
+fn bim_job_next(call: &str) -> Value {
+    let action = |a: &str, p: Value| json!({"action": a, "params": p});
+    if call.starts_with("bim.build") {
+        action("build", json!({}))
+    } else if call.starts_with("review.next") {
+        action("review_next", json!({}))
+    } else if call.starts_with("takeoff") {
+        action("takeoff", json!({}))
+    } else if call.starts_with("printset.open") {
+        action("import", json!({"path": "<the folder of prints>"}))
+    } else {
+        Value::Null
+    }
+}
+
 /// The `bim_job` tool: one job-level action per call (see its description).
 fn bim_job(b: &mut dyn Backend, a: &Value) -> Result<Value, String> {
     let params = a.get("params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
-    let command = match a.get("action").and_then(Value::as_str) {
+    let action = a.get("action").and_then(Value::as_str);
+    if action == Some("resume") {
+        return exec(b, "printset.resume", params);
+    }
+    let resumed = if action == Some("import") { None } else { resume_kept(b) };
+    let mut out = bim_job_action(b, action, params)?;
+    if matches!(action, Some("import" | "build" | "note" | "resolve" | "defer" | "rfi" | "batch")) {
+        keep(b, &mut out);
+    }
+    if action == Some("briefing") {
+        let next = bim_job_next(out["next"]["call"].as_str().unwrap_or_default());
+        if !next.is_null() {
+            out["next"]["bim_job"] = next;
+        }
+    }
+    if let (Some(r), Some(o)) = (resumed, out.as_object_mut()) {
+        o.insert("resumed".into(), json!({"name": r["name"], "folder": r["folder"]}));
+    }
+    Ok(out)
+}
+
+fn bim_job_action(b: &mut dyn Backend, action: Option<&str>, params: Value) -> Result<Value, String> {
+    let command = match action {
         Some("briefing") => "project.briefing",
         Some("note") => "project.note",
         Some("build") => "bim.build",
@@ -203,6 +257,10 @@ fn bim_job(b: &mut dyn Backend, a: &Value) -> Result<Value, String> {
             );
         }
         Some("import") => {
+            // The job kept for these prints, if any, goes on (its drawing: spec, model, review).
+            if let Some(path) = params.get("path").filter(|p| p.is_string()) {
+                let _ = exec(b, "printset.resume", json!({"path": path, "auto": true}));
+            }
             // Open the prints as the project, classify sheets, then run readers.
             let opened = exec(b, "printset.open", params)?;
             let classified = exec(b, "printset.classify", json!({}))?;
@@ -239,7 +297,7 @@ fn bim_job(b: &mut dyn Backend, a: &Value) -> Result<Value, String> {
         }
         Some(other) => {
             return Err(format!(
-                "bim_job has no action `{}` — use briefing, note, import, build, review_next, review_list, resolve, defer, rfi, batch, log, takeoff, rfis or export",
+                "bim_job has no action `{}` — use briefing, note, import, resume, build, review_next, review_list, resolve, defer, rfi, batch, log, takeoff, rfis or export",
                 other.chars().take(30).collect::<String>()
             ));
         }
@@ -507,7 +565,16 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 None => return Err("guided_job needs an action — start with {action: \"start\", params: {pdfs: \"...\", goal: \"estimate\"}}".into()),
             };
             let params = a.get("params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
-            exec(b, command, params)
+            let resumed = if command == "job.start" { None } else { resume_kept(b) };
+            exec(b, command, params).map(|mut out| {
+                if matches!(command, "job.start" | "job.next" | "job.answer" | "job.undo") {
+                    keep(b, &mut out);
+                }
+                if let (Some(r), Some(o)) = (resumed, out.as_object_mut()) {
+                    o.insert("resumed".into(), json!({"name": r["name"], "folder": r["folder"]}));
+                }
+                out
+            })
         }
         "site_takeoff" => exec(b, "site.takeoff", a),
         "framing" => {

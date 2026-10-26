@@ -1304,6 +1304,9 @@ pub struct SheetIndex {
     /// Plan sheets whose title and number name no level (given the lowest level, to confirm).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub plans_without_level: Vec<String>,
+    /// Level marks not used: they break the levels' order (elevations rise with the level).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub level_warnings: Vec<String>,
 }
 
 fn source_of(e: &SheetEntry) -> String {
@@ -1387,9 +1390,11 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
     }
     let mut codes: Vec<String> = by_level.keys().cloned().collect();
     codes.sort_by_key(|c| level_key(c));
-    // Elevations: the value most marks give per level; above the first floor at 100'-0".
+    // Elevations: the value most marks give per level; above the first floor at 100'-0". A
+    // civil or site sheet's marks are spot elevations on the site datum, never the levels'.
     let mut marks: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-    for e in project.sheets.iter().filter(|e| e.superseded_by.is_empty()) {
+    let site = |e: &SheetEntry| e.level.eq_ignore_ascii_case("SITE") || cadaddy_walk3d::levels::site_sheet(&e.discipline, &e.title);
+    for e in project.sheets.iter().filter(|e| e.superseded_by.is_empty() && !site(e)) {
         for m in &e.level_marks {
             marks.entry(m.level.clone()).or_default().push(m.elevation_ft);
         }
@@ -1405,6 +1410,19 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
         }
         if let Some((v, _)) = best {
             elevation.insert(l.clone(), v);
+        }
+    }
+    // Elevations rise with the level: the most marks that agree win; the others are dropped.
+    let marked: Vec<(String, f64)> = elevation.iter().map(|(l, e)| (l.clone(), *e)).collect();
+    let items: Vec<(Option<i32>, f64, u32)> = marked
+        .iter()
+        .map(|(l, e)| (cadaddy_walk3d::levels::code_rank(l), *e, u32::try_from(marks.get(l).map_or(1, Vec::len)).unwrap_or(u32::MAX)))
+        .collect();
+    for ((l, e), keep) in marked.iter().zip(cadaddy_walk3d::levels::in_order(&items)) {
+        if !keep {
+            elevation.remove(l);
+            out.level_warnings
+                .push(format!("level {l}: {} not used: it breaks the levels' order (elevations rise with the level)", cadaddy_walk3d::feet(*e)));
         }
     }
     let datum = if elevation.get("1").is_some_and(|e| (e - 100.0).abs() < 1e-6) { 100.0 } else { 0.0 };
