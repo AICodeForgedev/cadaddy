@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1105,
-    "count": 1105,
+    "callableAsJson": 1107,
+    "count": 1107,
     "ids": [
       "-attedit",
       "-block",
@@ -63,6 +63,7 @@
       "arc.sea",
       "arc.sed",
       "arc.ser",
+      "arch.read",
       "arctext",
       "area",
       "array",
@@ -357,6 +358,7 @@
       "ellipse.arc",
       "ellipse.axis",
       "entities",
+      "envelope.read",
       "erase",
       "erase.selection",
       "estimate.bid_summary",
@@ -1196,8 +1198,9 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 45,
+    "count": 46,
     "tools": [
+      "arch_read",
       "bim_from_pdf",
       "bim_job",
       "bim_spec_import",
