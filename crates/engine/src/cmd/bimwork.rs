@@ -186,15 +186,18 @@ pub(crate) fn classify(e: &Entity) -> Option<(&'static str, String, String, Stri
 }
 
 /// The model's elements (3D meshes it knows the trade of), with their boxes.
+///
+/// Built elements (tagged by WALLGEN) are appended after the imported 2D plan entities
+/// (potentially 800K+), so the cap applies to classified elements, not raw entities.
 pub(crate) fn elements(d: &Drawing) -> Vec<El> {
     d.model
         .iter()
-        .take(MAX_ELEMENTS)
         .filter_map(|e| {
             let (lo, hi) = super::fieldview::mesh_box(e)?;
             let (trade, category, system, level) = classify(e)?;
             Some(El { handle: e.handle, trade, category, system, level, lo: Vec3::new(lo[0], lo[1], lo[2]), hi: Vec3::new(hi[0], hi[1], hi[2]) })
         })
+        .take(MAX_ELEMENTS)
         .collect()
 }
 
