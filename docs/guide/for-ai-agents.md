@@ -85,12 +85,14 @@ low-level `execute` only when needed.
 | `job_status` | What CADaddy is busy with (opening files, building models, rendering) and the progress of long commands like `bim_from_pdf` and `model.build`; pair with `wait_until_idle`. |
 | `project` | Manage projects (groups of drawings sharing rules, types and standards): create, open, add/remove drawings, standards, shelve/restore. |
 | `project_rules` | Project rules with source and tier (field-verified > RFI > submittal > spec > built-in): mounting heights, wiring methods, clearances, tolerances, naming, stud/joist layout. |
+| `codebook` | Building-code rule book (IBC, IRC, NEC, IPC, IMC, IFC, IECC; starter values in our own words, verify with the AHJ): `select` the editions and jurisdiction for the project, list `rules` by topic, code or section with citations, and `check` walls and rooms against them; every finding cites its rule id and section. |
 
 ### BIM and building
 
 | Tool | Description |
 |:-----|:------------|
 | `bim_types` | BIM element types: list, create, assign and query type marks (description, manufacturer, catalog, spec section, material, ratings). |
+| `bim_props` | Every element's own properties (a device's type, mount height, circuit, room; a door's number, size, rating; a room's number, name, area, finishes…), each with its source (print, legend, schedule, spec, note, rule, default, user, computed): `get`, `set` (as the user's, kept through rebuilds), `find` by key/value/exists/missing, `summary` of coverage per kind. |
 | `bim_spec_import` | Read a spec book, schedule or submittal into proposed BIM types. Import returns proposals with citations; accept merges them. Nothing applied silently. |
 | `rooms` | Plan rooms as 3D spaces: list rooms with area/volume/finishes, zoom to a room, build see-through volumes. |
 | `stairs` | Stairs and ramps: detect from plan, list with code checks (riser/tread sizes), confirm, then model.build builds them. |

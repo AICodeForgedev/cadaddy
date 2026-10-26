@@ -226,6 +226,24 @@ fn apply(d: &mut Drawing, o: &mut Override, h: Option<Handle>, touched: &mut Vec
             touched.push(h);
             Some(h)
         }
+        Change::Props { props, before } => {
+            let h = h?;
+            let e = d.entity(h)?;
+            let mut store = cadaddy_doc::props::read(&e.common.xdata);
+            // On an element just generated, what it held before is what the build gave it.
+            if !overrides::applied_ids(&e.common.xdata).contains(&id) {
+                before.clear();
+            }
+            for en in props.iter() {
+                if !before.iter().any(|(k, _)| k.eq_ignore_ascii_case(&en.key)) {
+                    before.push((en.key.clone(), store.get(&en.key).cloned()));
+                }
+                store.set(&en.key, en.prop.clone());
+            }
+            d.modify_entity(h, |e| e.common.xdata = overrides::mark(&cadaddy_doc::props::write(&e.common.xdata, &store), id).into()).ok()?;
+            touched.push(h);
+            Some(h)
+        }
     }
 }
 
@@ -285,6 +303,23 @@ fn unapply(d: &mut Drawing, o: &Override, touched: &mut Vec<Handle>) -> Option<H
         Change::Verify => {
             let h = marked(d, o)?;
             d.modify_entity(h, |e| e.common.xdata = overrides::unmark(&e.common.xdata, id).into()).ok()?;
+            touched.push(h);
+            Some(h)
+        }
+        Change::Props { before, .. } => {
+            let h = marked(d, o)?;
+            let mut store = d.entity(h).map(|e| cadaddy_doc::props::read(&e.common.xdata)).unwrap_or_default();
+            for (k, was) in before {
+                match was {
+                    Some(p) => {
+                        store.set(k, p.clone());
+                    }
+                    None => {
+                        store.remove(k);
+                    }
+                }
+            }
+            d.modify_entity(h, |e| e.common.xdata = overrides::unmark(&cadaddy_doc::props::write(&e.common.xdata, &store), id).into()).ok()?;
             touched.push(h);
             Some(h)
         }
@@ -374,6 +409,111 @@ pub(crate) fn after_build(s: &mut Session) {
     }
 }
 
+/// Set properties a person edited on generated elements, as overrides (one per element, merged
+/// into the element's earlier properties override), so a rebuild puts them back. `edits`: the
+/// element and its new properties. Returns, per element, the override's label; an element no
+/// build generated is left out (the caller writes its store directly).
+pub(crate) fn set_props(
+    s: &mut Session,
+    cmd: &str,
+    edits: &[(Handle, Vec<cadaddy_doc::props::Entry>)],
+    author: Author,
+) -> Result<Vec<(Handle, String)>> {
+    let mut ov = load_for(cmd, s)?;
+    if ov.hidden {
+        return Err(bad(cmd, "overrides are hidden: show them (override.show) before editing a generated element's properties"));
+    }
+    let d = s.doc()?;
+    let mut src: Option<Vec<(Bounds2, u64)>> = None;
+    // Per element: its new properties, and the override they go in (an earlier one's id, or a
+    // new one).
+    let mut plan: Vec<(Handle, &[cadaddy_doc::props::Entry], std::result::Result<u32, Override>)> = Vec::new();
+    for (h, props) in edits {
+        let Some(e) = d.model.get(*h) else { continue };
+        let Some((part, level, source)) = super::revise3d::tag_key(e) else { continue };
+        let ids = overrides::applied_ids(&e.common.xdata);
+        if let Some(id) = ids.iter().copied().find(|id| matches!(ov.get(*id).map(|o| &o.change), Some(Change::Props { .. }))) {
+            plan.push((*h, props, Ok(id)));
+            continue;
+        }
+        // Where it was generated: undo the moves already applied to it.
+        let mut bounds = entity_bounds(d, e, 0);
+        for id in &ids {
+            if let Some(Change::Move { delta }) = ov.get(*id).map(|o| &o.change) {
+                bounds = Bounds2 {
+                    min: Vec2::new(bounds.min.x - delta[0], bounds.min.y - delta[1]),
+                    max: Vec2::new(bounds.max.x - delta[0], bounds.max.y - delta[1]),
+                };
+            }
+        }
+        if bounds.is_empty() {
+            continue;
+        }
+        if ov.items.len() + plan.len() >= overrides::MAX_OVERRIDES {
+            return Err(bad(cmd, "the drawing holds too many overrides"));
+        }
+        let at = bounds.center();
+        let area = area_around(&bounds);
+        let sig = area_sig(src.get_or_insert_with(|| sources(d)), &area);
+        let id = ov.take_id().ok_or_else(|| bad(cmd, "the drawing holds too many overrides"))?;
+        plan.push((
+            *h,
+            props,
+            Err(Override {
+                id,
+                author,
+                note: None,
+                change: Change::Props { props: Vec::new(), before: Vec::new() },
+                target: Some(ElementKey { part, level, source, at: [at.x, at.y] }),
+                area: rect(&area),
+                area_sig: sig,
+                status: Status::Active,
+                applied: None,
+            }),
+        ));
+    }
+    let mut touched = Vec::new();
+    let mut out = Vec::new();
+    let d = s.doc_mut()?;
+    for (h, props, slot) in plan {
+        let o = match slot {
+            Ok(id) => match ov.get_mut(id) {
+                Some(o) => o,
+                None => continue,
+            },
+            Err(o) => {
+                ov.items.push(o);
+                match ov.items.last_mut() {
+                    Some(o) => o,
+                    None => continue,
+                }
+            }
+        };
+        // The new values go on the element (the earlier ones are in place already), then join
+        // the override's kept ones.
+        let before = match &o.change {
+            Change::Props { before, .. } => before.clone(),
+            _ => Vec::new(),
+        };
+        let mut once = Override { change: Change::Props { props: props.to_vec(), before }, ..o.clone() };
+        let applied = apply(d, &mut once, Some(h), &mut touched);
+        if let (Change::Props { props: kept, before }, Change::Props { before: now, .. }) = (&mut o.change, once.change) {
+            *before = now;
+            for en in props {
+                match kept.iter_mut().find(|k| k.key.eq_ignore_ascii_case(&en.key)) {
+                    Some(k) => k.prop = en.prop.clone(),
+                    None => kept.push(en.clone()),
+                }
+            }
+        }
+        o.applied = applied;
+        out.push((h, o.label()));
+    }
+    save(d, &ov)?;
+    super::revise3d::resync(s, &touched);
+    Ok(out)
+}
+
 // ---------- commands ----------
 
 fn id_param(cmd: &str, p: &Value) -> Result<u32> {
@@ -407,6 +547,9 @@ fn override_json(o: &Override) -> Value {
         Change::Type { mark, before } => {
             v["mark"] = json!(mark);
             v["before"] = json!(before);
+        }
+        Change::Props { props, .. } => {
+            v["props"] = Value::Object(props.iter().map(|e| (e.key.clone(), e.prop.value.clone())).collect());
         }
         _ => {}
     }

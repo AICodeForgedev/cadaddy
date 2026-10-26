@@ -3203,3 +3203,16 @@ menu	View	عرض
 	Layer Quantity Takeoff	حصر الكميات حسب الطبقة
 	Read Architecture from Prints	قراءة المعماري من المخططات
 	Read Roof and Wall Envelope	قراءة غلاف السقف والجدران
+	Element Properties (BIM)	خصائص العنصر (BIM)
+	Set Element Property (BIM)	تعيين خاصية العنصر (BIM)
+	Find Elements by Property	البحث عن العناصر حسب الخاصية
+	Element Property Summary	ملخص خصائص العناصر
+	BIM Properties	خصائص BIM
+	Kind	النوع
+	Element Identities (BIM)	هويات العناصر (BIM)
+	Room Connections	اتصالات الغرف
+	Link Print Set	ربط مجموعة الطباعة
+	Check Building Codes	التحقق من أكواد البناء
+	Code Rules	قواعد الكود
+	Select Building Codes	اختيار أكواد البناء
+	Fill Element Properties	تعبئة خصائص العناصر

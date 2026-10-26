@@ -438,6 +438,10 @@ pub struct GuidedJob {
     /// the BIM build puts it into the spec it drafts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mep: Option<cadaddy_walk3d::Mep>,
+    /// The branch circuits the electrical plans and the devices give (mep_read, Q6007): one
+    /// `circuit` tag each, whose conduit runs are in [`Self::mep`]; the BIM build puts them in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub circuits: Vec<cadaddy_walk3d::tags::ElementTag>,
     /// Auto mode (`job.start {auto: true}`): every question with a default takes it and the job
     /// runs on. Off (the default) the job stops at each checkpoint until it is answered.
     #[serde(default)]
@@ -448,6 +452,14 @@ pub struct GuidedJob {
     /// Floor to floor (feet) given as an answer, over the sections' and the 10' guess.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storey_ft: Option<f64>,
+    /// What answers said about each level (its elevation, its name, or that it is right), by
+    /// the level as the questions name it, upper case.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub level_answers: BTreeMap<String, LevelAnswer>,
+    /// The first stage answers given with `rerun: false` changed: it runs again on the next
+    /// `job.answer` or `job.next`, once for all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerun_held: Option<StageName>,
     /// The drawing's building spec when each stage started (stages store their own, and the
     /// readers use it): a stage that runs again starts from the one it had.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -459,6 +471,20 @@ pub struct GuidedJob {
     /// callouts resolved, enlarged plans registered, match lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<Value>,
+}
+
+/// A level as an answer gave it: the elevation and name the user typed, or "Correct".
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LevelAnswer {
+    /// Feet, as the user gave it (over every reading).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elevation_ft: Option<f64>,
+    /// The level's name in the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The user confirmed what the job read.
+    #[serde(default)]
+    pub confirmed: bool,
 }
 
 /// The handles one sheet's import created: `lo..hi`.
@@ -482,6 +508,93 @@ pub struct SheetRegion {
     pub kind: String,
     /// `[x0, y0, x1, y1]`, drawing units.
     pub rect: [f64; 4],
+    /// Where the sheet's views are: inside its border, off its title block (the whole `rect`
+    /// when no frame was found). Nothing outside it is building.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<[f64; 4]>,
+    /// The title-block strip, when one was found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_block: Option<[f64; 4]>,
+    /// Why the sheet is never built into a building level (`site/civil`, `no level`); empty
+    /// for a sheet of a storey.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub not_built: String,
+    /// Every level this sheet covers (a typical-floor plan covers several).  Empty means
+    /// only `level`.  When non-empty, `level` equals `levels[0]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<String>,
+}
+
+impl SheetRegion {
+    /// Every level this sheet covers. Falls back to `[level]` when `levels` is empty.
+    pub fn all_levels(&self) -> Vec<String> {
+        if self.levels.is_empty() { if self.level.is_empty() { Vec::new() } else { vec![self.level.clone()] } } else { self.levels.clone() }
+    }
+
+    /// Whether `at` is in the sheet's drawing area (off its border and title block).
+    pub fn in_area(&self, at: [f64; 2]) -> bool {
+        let r = self.area.unwrap_or(self.rect);
+        at[0] >= r[0].min(r[2]) && at[0] <= r[0].max(r[2]) && at[1] >= r[1].min(r[3]) && at[1] <= r[1].max(r[3])
+    }
+}
+
+/// Why a sheet is never built into a building level: a civil, landscape or site sheet, or a
+/// plan whose title and number name no level (it was only given the lowest, to confirm).
+pub fn not_built_reason(discipline: &str, title: &str, level: &str, level_source: &str) -> &'static str {
+    if level.eq_ignore_ascii_case("SITE") || cadaddy_mepfix::sheet_facts::is_site_sheet(discipline, title) {
+        "site/civil"
+    } else if level.trim().is_empty() || level_source == "default" {
+        "no level"
+    } else {
+        ""
+    }
+}
+
+/// Straight lines longer than this share of a sheet's shorter side are measured for its frame.
+const FRAME_RULE_SHARE: f64 = 0.25;
+
+/// Each sheet's frame ([`cadaddy_mepfix::sheet_facts::sheet_frame`]): its long straight lines
+/// (one pass over the drawing), then its border and title block.
+fn sheet_frames(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<cadaddy_mepfix::sheet_facts::SheetFrame> {
+    use cadaddy_doc::EntityKind;
+    use cadaddy_geom::Vec2;
+    let shortest =
+        rects.iter().map(|r| (r[2] - r[0]).abs().min((r[3] - r[1]).abs())).filter(|v| v.is_finite() && *v > 0.0).fold(f64::INFINITY, f64::min);
+    let mut per: Vec<Vec<(Vec2, Vec2)>> = vec![Vec::new(); rects.len()];
+    if shortest.is_finite() {
+        let min_len = FRAME_RULE_SHARE * shortest;
+        let mut put = |a: Vec2, b: Vec2| {
+            if !(a.is_finite() && b.is_finite()) || a.dist(b) < min_len {
+                return;
+            }
+            let m = (a + b) * 0.5;
+            let inside = |r: &[f64; 4]| m.x >= r[0].min(r[2]) && m.x <= r[0].max(r[2]) && m.y >= r[1].min(r[3]) && m.y <= r[1].max(r[3]);
+            if let Some(i) = rects.iter().position(inside)
+                && let Some(v) = per.get_mut(i)
+            {
+                v.push((a, b));
+            }
+        };
+        for e in d.model.iter() {
+            match &e.kind {
+                EntityKind::Line(l) => put(l.a.xy(), l.b.xy()),
+                EntityKind::LwPolyline(p) => {
+                    for w in p.vertices.windows(2) {
+                        if let [a, b] = w {
+                            put(a.p, b.p);
+                        }
+                    }
+                    if p.closed
+                        && let (Some(a), Some(b)) = (p.vertices.last(), p.vertices.first())
+                    {
+                        put(a.p, b.p);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    rects.iter().zip(&per).map(|(r, segs)| cadaddy_mepfix::sheet_facts::sheet_frame(segs, *r)).collect()
 }
 
 impl GuidedJob {
@@ -532,9 +645,12 @@ impl GuidedJob {
             sheet_spans: Vec::new(),
             devices: Vec::new(),
             mep: None,
+            circuits: Vec::new(),
             auto: false,
             always_ask: BTreeSet::new(),
             storey_ft: None,
+            level_answers: BTreeMap::new(),
+            rerun_held: None,
             spec_at_start: BTreeMap::new(),
             carry: Vec::new(),
             links: None,
@@ -892,8 +1008,77 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
+    // MUST 3 (typicalfloors): a level with an architectural plan but no plan for a trade
+    // gets a finding.
+    if let Some(ref sheets) = sheets_vec {
+        check_missing_trade_plans(sheets, job);
+    }
+
     job.audit("stage_run", "pipeline", None, Some(StageName::Classify), Some(json!({"sheets": sheet_count})));
     Ok(classified)
+}
+
+/// Check for levels that have an architectural plan but no MEP plan for a discipline.
+fn check_missing_trade_plans(sheets: &[Value], job: &mut GuidedJob) {
+    let is_plan = |sh: &Value| {
+        let t = sh.get("type").or_else(|| sh.get("sheet_type")).and_then(Value::as_str).unwrap_or("");
+        matches!(t, "plan" | "enlarged_plan")
+    };
+    let disc_of = |sh: &Value| sh.get("discipline").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
+    let levels_of = |sh: &Value| -> Vec<String> {
+        let mut out: Vec<String> =
+            sh.get("levels").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+        if out.is_empty()
+            && let Some(l) = sh.get("level").and_then(Value::as_str).filter(|l| !l.is_empty())
+        {
+            out.push(l.to_string());
+        }
+        out
+    };
+    // Collect levels that have architectural plans.
+    let mut arch_levels: Vec<String> = Vec::new();
+    for sh in sheets.iter().filter(|s| is_plan(s) && disc_of(s) == "A") {
+        for l in levels_of(sh) {
+            if l.parse::<u32>().is_ok() && !arch_levels.contains(&l) {
+                arch_levels.push(l.clone());
+            }
+        }
+    }
+    arch_levels.sort_by_key(|l| l.parse::<u32>().unwrap_or(u32::MAX));
+    if arch_levels.len() < 2 {
+        return; // Only meaningful when there are multiple levels.
+    }
+    // For each trade, check which levels have coverage.
+    for disc in ["E", "M", "P"] {
+        let mut covered: Vec<String> = Vec::new();
+        for sh in sheets.iter().filter(|s| is_plan(s) && disc_of(s) == disc) {
+            for l in levels_of(sh) {
+                if !covered.contains(&l) {
+                    covered.push(l.clone());
+                }
+            }
+        }
+        let missing: Vec<&str> = arch_levels.iter().filter(|l| !covered.contains(l)).map(String::as_str).collect();
+        if !missing.is_empty() && !covered.is_empty() {
+            let trade = match disc {
+                "E" => "electrical",
+                "M" => "mechanical",
+                "P" => "plumbing",
+                _ => disc,
+            };
+            for l in &missing {
+                job.add_finding(
+                    StageName::Classify,
+                    &format!("Level {l} has no {trade} ({disc}) plan"),
+                    &format!("Architectural plans exist for levels {arch_levels:?} but no {disc} plan covers level {l}; devices and MEP on this level will be empty unless a typical-floor sheet is added"),
+                    2,
+                    vec![format!("Check if a {disc} sheet covers this level (TYPICAL or multi-level title)")],
+                    None,
+                    false,
+                );
+            }
+        }
+    }
 }
 
 /// Infer discipline from title text (MUST 2 fallback).
@@ -933,12 +1118,16 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(index_levels) = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array) {
         for l in index_levels.iter().take(MAX_QUESTIONS_PER_STAGE) {
             let Some(name) = l.get("name").and_then(Value::as_str) else { continue };
-            let sheets: Vec<&str> =
-                l.get("sheets").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+            // Q6018: sheets may be strings or {sheet, typical} objects.
+            let raw_sheets = l.get("sheets").and_then(Value::as_array);
+            let sheet_name = |v: &Value| v.as_str().map(str::to_string).or_else(|| v.get("sheet").and_then(Value::as_str).map(str::to_string));
+            let first_sheet = raw_sheets.and_then(|a| a.first()).and_then(sheet_name).unwrap_or_else(|| "?".into());
+            // Pass through the sheets as-is (objects with typical flags when present).
+            let sheets_val = l.get("sheets").cloned().unwrap_or(json!([]));
             title_levels.push(json!({
                 "name": name,
-                "sheet": sheets.first().copied().unwrap_or("?"),
-                "sheets": sheets,
+                "sheet": first_sheet,
+                "sheets": sheets_val,
                 // Marked on the sections: no title guess to confirm.
                 "source": if l.get("elevation_ft").and_then(Value::as_f64).is_some() { "sheet index" } else { "title" },
                 "elevation_ft": l.get("elevation_ft"),
@@ -1366,6 +1555,14 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             .unwrap_or(own)
             .to_string()
     };
+    // The sheet's entry in the index (its title and where its level came from).
+    let index_entry = |base: &str| -> Option<&Value> {
+        job.index
+            .as_ref()
+            .and_then(|i| i.get("sheets"))
+            .and_then(Value::as_array)
+            .and_then(|a| a.iter().find(|x| x.get("number").and_then(Value::as_str) == Some(base)))
+    };
     let level_rank = |l: &str| (l.is_empty(), l == "R", l.parse::<u32>().unwrap_or(u32::MAX), l.to_string());
     plan_sheets.sort_by_key(|sh| level_rank(&level_of(sh)));
     let mut all: Vec<&Value> = if plan_sheets.is_empty() { sheet_arr.iter().filter(current).collect() } else { plan_sheets };
@@ -1443,12 +1640,26 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                         .and_then(Value::as_str)
                         .filter(|d| !d.is_empty())
                         .map_or_else(|| number.chars().take_while(char::is_ascii_alphabetic).take(2).collect(), str::to_string);
+                    let base = number.split('/').next().unwrap_or(number);
+                    let level = level_of(sh);
+                    let field =
+                        |k: &str| index_entry(base).and_then(|x| x.get(k)).or_else(|| sh.get(k)).and_then(Value::as_str).unwrap_or("").to_string();
+                    let not_built = not_built_reason(&discipline, &field("title"), &level, &field("level_source"));
+                    let levels: Vec<String> = sh
+                        .get("levels")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                        .unwrap_or_default();
                     regions.push(SheetRegion {
-                        number: number.split('/').next().unwrap_or(number).to_string(),
-                        level: level_of(sh),
+                        number: base.to_string(),
+                        level,
                         discipline: discipline.to_ascii_uppercase(),
                         kind: kind(sh),
                         rect,
+                        area: None,
+                        title_block: None,
+                        not_built: not_built.to_string(),
+                        levels,
                     });
                 }
                 if placed.len() < MAX_QUESTIONS_PER_STAGE {
@@ -1461,6 +1672,12 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         }
     }
     job.sheet_spans.extend(spans);
+    // Each sheet's border and title block: what is read there is never building.
+    let rects: Vec<[f64; 4]> = regions.iter().map(|r| r.rect).collect();
+    for (r, f) in regions.iter_mut().zip(sheet_frames(s.doc()?, &rects)) {
+        r.area = Some(f.area);
+        r.title_block = f.title_block;
+    }
     job.sheet_regions = regions;
     job.sheets_loaded = true;
     job.audit(
@@ -1693,7 +1910,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
     let none = Legend::default();
     for (g, syms) in symbols.iter().enumerate() {
         let legend = legends.get(g).unwrap_or(&none);
-        let circuits: Vec<&TextItem> = texts.get(g).into_iter().flatten().filter(|t| sheet_facts::is_circuit_label(&t.value)).collect();
+        let circuits: Vec<&TextItem> = texts.get(g).into_iter().flatten().filter(|t| circuit_text(&t.value, &sheet_numbers)).collect();
         let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
         let span = spans.get(g).map_or((0, u64::MAX), |sp| (sp.lo, sp.hi));
         for (tag, at, h) in syms {
@@ -1715,6 +1932,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                             level: job.level_at([at.x, at.y]).map_or_else(String::new, |r| r.level.clone()),
                             circuit: super::readers::circuit_beside(&circuits, *at),
                             handle: h.hex(),
+                            kind: String::new(),
                         });
                         *c.by_type.entry(t).or_default() += 1;
                     }
@@ -1740,6 +1958,27 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
     c.unlisted.retain(|_, u| u.count >= MIN_REPEATED_TAG);
     if stray > 0 {
         *c.not_device.entry("unlisted, printed once or twice").or_default() += stray;
+    }
+    // Replicate devices on typical-floor sheets: a sheet covering levels [2,3,4] places its
+    // devices on each of those levels (the primary is already placed; clone for the rest).
+    let mut extras: Vec<super::readers::ReadDevice> = Vec::new();
+    for dv in &c.placed {
+        if let Some(reg) = job.level_at(dv.at) {
+            let all = reg.all_levels();
+            if all.len() > 1 {
+                for extra_level in all.iter().skip(1) {
+                    let mut copy = dv.clone();
+                    copy.level = extra_level.clone();
+                    extras.push(copy);
+                }
+            }
+        }
+    }
+    if !extras.is_empty() {
+        for e in &extras {
+            *c.by_type.entry(e.tag.clone()).or_default() += 1;
+        }
+        c.placed.extend(extras);
     }
     c
 }
@@ -1843,6 +2082,36 @@ fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::Sheet
     (moved, dropped)
 }
 
+/// Leave out the census's devices another sheet already shows (`identity::duplicate_devices`);
+/// how many.
+fn device_identity(s: &Session, job: &GuidedJob, census: &mut DeviceCensus) -> usize {
+    let Ok(d) = s.doc() else { return 0 };
+    let sheets: Vec<super::identity::SheetBox> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.kind == "plan" && !r.level.trim().is_empty() && r.not_built.is_empty() && r.rect.iter().all(|v| v.is_finite()))
+        .map(|r| super::identity::SheetBox::new(&r.number, &r.discipline, &r.level, r.rect))
+        .collect();
+    let upf = 12.0 * super::perceive::units_per_inch(d);
+    let (drop, _) = super::identity::duplicate_devices(d, &sheets, upf, &census.placed);
+    if drop.is_empty() {
+        return 0;
+    }
+    let mut keep = Vec::with_capacity(census.placed.len());
+    for (i, dv) in std::mem::take(&mut census.placed).into_iter().enumerate() {
+        if drop.contains(&i) {
+            if let Some(n) = census.by_type.get_mut(&dv.tag) {
+                *n = n.saturating_sub(1);
+            }
+            continue;
+        }
+        keep.push(dv);
+    }
+    census.by_type.retain(|_, n| *n > 0);
+    census.placed = keep;
+    drop.len()
+}
+
 /// A 256-pixel PNG of the drawing around `at` (the first symbol printing an unlisted tag),
 /// written into `dir`; its path.
 fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, dir: &std::path::Path, name: &str) -> Option<String> {
@@ -1916,19 +2185,34 @@ fn zero_evidence(plans: &[String]) -> Option<QuestionEvidence> {
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Load plan-sheet PDFs into the drawing so rooms.list finds entities.
     ensure_sheets_loaded(s, job)?;
-    let mut rooms_result = s.execute("rooms.list", &json!({"outline": false}))?;
-    // A room carries the level of the sheet it was read on.
+    // Each floor plan's labels read in full, sheet by sheet (a whole set's labels are more than
+    // one reading traces: the last floors were left out).
+    let regions: Vec<[f64; 4]> =
+        job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty()).map(|r| r.area.unwrap_or(r.rect)).collect();
+    let mut params = json!({"outline": false});
+    if !regions.is_empty() {
+        params["regions"] = json!(regions);
+    }
+    let mut rooms_result = s.execute("rooms.list", &params)?;
+    // A room carries the level of the sheet it was read on (Q5291 MUST 2): the sheet's level
+    // wins over a spec's guess.
     if let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) {
         for room in list.iter_mut() {
             let at = room.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
             let Some(region) = at.and_then(|at| job.level_at(at)) else { continue };
-            let has_level = room.get("level").and_then(Value::as_str).is_some_and(|l| !l.is_empty());
             if let Some(o) = room.as_object_mut() {
-                if !has_level && !region.level.is_empty() {
+                if !region.level.is_empty() {
                     o.insert("level".into(), json!(region.level));
                 }
                 o.insert("sheet".into(), json!(region.number));
             }
+        }
+    }
+    let dropped = rooms_off_the_building(job, &mut rooms_result);
+    if let Some(o) = rooms_result.as_object_mut() {
+        o.insert("not_rooms".into(), dropped);
+        if let Some(n) = o.get("rooms").and_then(Value::as_array).map(Vec::len) {
+            o.insert("count".into(), json!(n));
         }
     }
     let duplicates = one_room_per_number(job, &mut rooms_result);
@@ -2075,6 +2359,67 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     Ok(rooms_result)
 }
 
+/// Take out what was read as rooms but is not the building's (MUST 1-3): labels in a sheet's
+/// title block or border (firm names, addresses, review stamps), rooms read on a site, civil or
+/// level-less sheet, the other disciplines' unnumbered labels on a level the architectural plan
+/// shows (legends, notes), and labels no room is named (notes, dates, view titles). How many
+/// went, by why.
+fn rooms_off_the_building(job: &GuidedJob, rooms_result: &mut Value) -> Value {
+    let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) else { return json!({}) };
+    let a_levels: Vec<String> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.discipline == "A" && r.kind == "plan" && r.not_built.is_empty())
+        .map(|r| r.level.trim().to_ascii_uppercase())
+        .collect();
+    let (mut sheet_furniture, mut site, mut other_discipline, mut not_a_name) = (0usize, 0usize, 0usize, 0usize);
+    list.retain(|room| {
+        let at = room.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
+        let name = room.get("name").and_then(Value::as_str).unwrap_or("");
+        if !name.trim().is_empty() && (!super::autospec::room_like_name(name) || !legible_room_name(name)) {
+            not_a_name += 1;
+            return false;
+        }
+        let Some(region) = at.and_then(|at| job.level_at(at)) else { return true };
+        if at.is_some_and(|at| !region.in_area(at)) {
+            sheet_furniture += 1;
+            return false;
+        }
+        if !region.not_built.is_empty() {
+            site += 1;
+            return false;
+        }
+        // Another discipline's copy of a level the architectural plan shows: only a numbered
+        // room (the copy of one the architectural reading missed; one per number is kept
+        // below), never its legends and notes.
+        let numbered = room.get("number").and_then(Value::as_str).is_some_and(|n| n.chars().any(|c| c.is_ascii_digit()));
+        if region.discipline != "A" && !numbered && a_levels.contains(&region.level.trim().to_ascii_uppercase()) {
+            other_discipline += 1;
+            return false;
+        }
+        true
+    });
+    json!({"title_block_or_border": sheet_furniture, "site_or_no_level": site, "other_discipline": other_discipline, "not_a_room_name": not_a_name})
+}
+
+/// Whether a room name reads as words: a run of three letters (`LOBBY`, `IDF`, `CORR`) or a
+/// two-letter code (`WC`, `CL`). Text read from a print in a font the reader can't map comes out
+/// as `-4--P- -I--Y-`, `Xb` or `D D`, and a dimension string as `22 40 OO`.
+fn legible_room_name(name: &str) -> bool {
+    let t = name.trim();
+    if t.len() == 2 && t.bytes().all(|b| b.is_ascii_uppercase()) {
+        return true;
+    }
+    let mut run = 0;
+    for c in t.chars() {
+        run = if c.is_alphabetic() { run + 1 } else { 0 };
+        if run >= 3 {
+            return true;
+        }
+    }
+    false
+}
+
 /// The rule key of a room answer: `room:<number>|<name>`, upper case.
 fn room_key(number: &str, name: &str) -> String {
     format!("room:{}|{}", number.trim().to_ascii_uppercase(), name.trim().to_ascii_uppercase())
@@ -2143,6 +2488,26 @@ fn one_room_per_number(job: &GuidedJob, rooms_result: &mut Value) -> usize {
 
 /// Circuit and panel references end in a dash and a number (`D-1`, `DP1-13`, `B-12`); device
 /// marks don't (`A`, `OS`, `EF`, `L4`, `XA`).
+/// Whether a text printed beside a device is its circuit: `G-12`, `LP-3,5` (see
+/// [`cadaddy_mepfix::sheet_facts::is_circuit_label`]) and the panel-and-number forms `LP1-3`, `2LA-12`, `H1/7`
+/// (a panel name with a letter, then one to three digits), never one of the set's sheet numbers.
+pub fn circuit_text(t: &str, sheet_numbers: &BTreeSet<String>) -> bool {
+    let t = t.trim();
+    if sheet_numbers.contains(t) || sheet_numbers.contains(&t.to_ascii_uppercase()) {
+        return false;
+    }
+    if cadaddy_mepfix::sheet_facts::is_circuit_label(t) {
+        return true;
+    }
+    let Some((panel, n)) = t.rsplit_once(['-', '/']) else { return false };
+    (2..=6).contains(&panel.len())
+        && panel.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        && panel.chars().any(|c| c.is_ascii_uppercase())
+        && panel.chars().any(|c| c.is_ascii_digit())
+        && (1..=3).contains(&n.len())
+        && n.chars().all(|c| c.is_ascii_digit())
+}
+
 pub(crate) fn is_circuit_tag(tag: &str) -> bool {
     tag.rsplit_once('-').is_some_and(|(head, n)| !head.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
@@ -2175,6 +2540,13 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         if moved + dropped > 0 {
             results["enlarged_devices"] = json!({"moved_onto_overall_plans": moved, "overall_copies_left_out": dropped});
         }
+    }
+    // Tags are identities: a device another sheet of its level shows at the same spot (once the
+    // sheets are put onto the level's plan by the door and room numbers they share) is counted
+    // once.
+    let merged = device_identity(s, job, &mut census);
+    if merged > 0 {
+        results["identity"] = json!({"devices_merged": merged});
     }
     results["circuit_tagged_symbols"] = json!(census.circuit);
     let not_devices: usize = census.not_device.values().sum();
@@ -2371,11 +2743,17 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
 
         // MUST 10: Unknown/foreign symbols — ask to learn them.
+        // Q6021 MUST 2: never create a question with empty text; skip symbols with no tag.
         if let Some(unknowns) = devices.get("unknowns").and_then(Value::as_array) {
             for unk in unknowns.iter().take(MAX_QUESTIONS_PER_STAGE) {
-                let desc = unk.get("description").and_then(Value::as_str).unwrap_or("unknown symbol");
+                let desc = unk.get("description").and_then(Value::as_str).unwrap_or("");
+                // Q6021 MUST 2: skip if the description/tag is empty or whitespace-only.
+                if desc.trim().is_empty() {
+                    continue;
+                }
                 let count = unk.get("count").and_then(Value::as_u64).unwrap_or(1);
-                let tagged = unk.get("tag").and_then(Value::as_str).is_some();
+                let tagged = unk.get("tag").and_then(Value::as_str).is_some_and(|t| !t.trim().is_empty());
+                let sheet = unk.get("sheet").and_then(Value::as_str).map(String::from);
                 let qid = job.next_qid(StageName::Devices);
                 let q = Question {
                     id: qid,
@@ -2393,12 +2771,13 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     choices: Vec::new(),
                     evidence: Some(QuestionEvidence {
                         crop_png_path: unk.get("crop_path").and_then(Value::as_str).map(String::from),
-                        sheet: unk.get("sheet").and_then(Value::as_str).map(String::from),
+                        // Q6021 MUST 2: always include the sheet reference.
+                        sheet: sheet.clone(),
                         at: unk.get("at").and_then(|a| {
                             let arr = a.as_array()?;
                             Some([arr.first()?.as_f64()?, arr.get(1)?.as_f64()?])
                         }),
-                        values: Some(json!({"description": desc, "count": count})),
+                        values: Some(json!({"description": desc, "count": count, "sheet": sheet})),
                         handles: unk
                             .get("handles")
                             .and_then(Value::as_array)
@@ -2511,6 +2890,7 @@ pub(crate) fn job_sheet_refs(job: &GuidedJob) -> Vec<super::printmep::SheetRef> 
                 rect: r.rect,
                 span,
                 scale_text: entry.and_then(|c| c.get("scale")).and_then(Value::as_str).map(str::to_string),
+                levels: r.levels.clone(),
             }
         })
         .collect()
@@ -2532,14 +2912,50 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let refs = job_sheet_refs(job);
     let upf = job_units_per_foot(s);
     let read = super::printmep::read_sheets(s.doc()?, &refs, upf, None);
-    let read_sheets: Vec<String> = read.sheets.iter().map(|r| r.sheet.clone()).collect();
+    // The electrical plans: drawn conduit, homeruns, panels, and an estimated route for each
+    // circuit the devices print (Q6007).
+    let cond = super::printcond::read_sheets(s.doc()?, &refs, upf, &job.devices);
+    let mut read_sheets: Vec<String> = read.sheets.iter().map(|r| r.sheet.clone()).collect();
+    read_sheets.extend(cond.sheets.iter().map(|r| r.sheet.clone()));
+    let mut mep = read.mep.clone();
+    for sy in &cond.mep.systems {
+        if !mep.systems.iter().any(|m| m.name == sy.name) {
+            mep.systems.push(sy.clone());
+        }
+    }
+    mep.runs.extend(cond.mep.runs.iter().cloned());
     // A spec already stored (a re-run) takes the reading now; the BIM build puts it into the
     // spec it drafts in any case.
     if let Ok((mut sp, true)) = super::bspec::current(s, "mep_read") {
-        super::printmep::merge_mep(&mut sp, read.mep.clone(), &read_sheets);
+        super::printmep::merge_mep(&mut sp, mep.clone(), &read_sheets);
+        super::printcond::seat_heights(&mut sp);
+        super::printcond::store_circuits(&mut sp, &cond.circuits);
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
-    job.mep = Some(read.mep.clone());
+    job.mep = Some(mep);
+    job.circuits = cond.circuits.clone();
+    if !cond.unrouted.is_empty() {
+        job.add_finding(
+            StageName::MepRead,
+            &format!("{} circuit(s) have no panel on their level's electrical plans", cond.unrouted.len()),
+            "their home runs to the panel are not counted: the panel's tag (PANEL LA, or its name by its box) was not found on the level's plans",
+            2,
+            vec!["Check the panel tags on the electrical plans".into()],
+            None,
+            false,
+        );
+    }
+    if cond.no_circuit > 0 {
+        job.add_finding(
+            StageName::MepRead,
+            &format!("{} device(s) on the electrical plans have no circuit printed beside them", cond.no_circuit),
+            "no conduit or wire is estimated for a device whose circuit is not known",
+            1,
+            vec!["Check the circuit numbers beside the devices".into()],
+            None,
+            false,
+        );
+    }
 
     let duct_ft = read.length_ft("duct");
     let pipe_ft = read.length_ft("pipe");
@@ -2548,13 +2964,24 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let equipment = read.mep.equipment.len();
     let m_sheets = read.sheets.iter().filter(|r| r.trade == "duct").count();
     let p_sheets = read.sheets.iter().filter(|r| r.trade == "pipe").count();
-    let trade_summary = format!(
+    let mut trade_summary = format!(
         "Found {duct_runs} duct run(s), {:.0} ft on {m_sheets} mechanical plan(s); {pipe_runs} pipe run(s), {:.0} ft on {p_sheets} plumbing plan(s); {terminals} terminal(s), {equipment} equipment",
         duct_ft, pipe_ft
     );
+    if !cond.sheets.is_empty() {
+        trade_summary.push_str(&format!(
+            "; {} circuit(s) on {} electrical plan(s): {:.0} ft of conduit ({:.0} ft drawn, {:.0} ft {})",
+            cond.circuits.len(),
+            cond.sheets.len(),
+            cond.drawn_ft() + cond.estimated_ft(),
+            cond.drawn_ft(),
+            cond.estimated_ft(),
+            super::printcond::ESTIMATED
+        ));
+    }
 
     // Per-trade summary question: present the summary and ask if anything was missed.
-    if duct_runs + pipe_runs > 0 {
+    if duct_runs + pipe_runs + cond.circuits.len() + cond.mep.runs.len() > 0 {
         let qid = job.next_qid(StageName::MepRead);
         let q = Question {
             id: qid,
@@ -2635,6 +3062,7 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     out["runs"] = json!(duct_runs + pipe_runs);
     out["length_ft"] = json!(super::printmep::r1(duct_ft + pipe_ft));
     out["fittings"] = json!(0);
+    out["conduit"] = cond.to_json();
     out["trade_summary"] = json!(trade_summary);
     Ok(out)
 }
@@ -2693,6 +3121,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             {
                 let runs = mep.runs.len();
                 super::printmep::merge_mep(&mut sp, mep, &[]);
+                // The circuits' estimated routes just above each level's ceiling.
+                super::printcond::seat_heights(&mut sp);
                 s.doc_mut()?.building_spec = Some(sp.to_json());
                 job.audit("mep_merged", "pipeline", None, Some(StageName::BimBuild), Some(json!({"runs": runs})));
             }
@@ -2720,13 +3150,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
-    // Use model.build directly — it returns walls/doors/rooms/levels counts.
-    // (bim.build wraps model.build but constructs its own result without those counts.)
-    let mut result = s.execute("model.build", &json!({}))?;
-    // The devices stage's devices, on their levels (bspec.draft started a new spec).
+    let mut placed: Option<Value> = None;
+    // The devices stage's devices, on their levels (bspec.draft started a new spec), before the
+    // build: it makes each one an element carrying what was read about it (Q6002).
     if !job.devices.is_empty() {
         match super::readers::place_devices(s, &job.devices, "guided job") {
-            Ok(v) => result["devices"] = v,
+            Ok(v) => placed = Some(v),
             Err(e) => job.add_finding(
                 StageName::BimBuild,
                 &format!("The devices could not be put in the model: {e}"),
@@ -2739,6 +3168,54 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
+    // Use model.build directly — it returns walls/doors/rooms/levels counts.
+    // (bim.build wraps model.build but constructs its own result without those counts.)
+    let mut result = s.execute("model.build", &json!({}))?;
+    if let Some(v) = placed {
+        result["devices"] = v;
+    }
+    // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff.
+    if !job.circuits.is_empty()
+        && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+    {
+        super::printcond::store_circuits(&mut sp, &job.circuits);
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+        result["circuits"] = json!(job.circuits.len());
+    }
+    // The model's rooms are the job's rooms on the levels it built.
+    if let Some(by_level) = rooms_from_model(s, job)
+        && let Some(o) = result.as_object_mut()
+    {
+        o.insert("rooms_by_level".into(), by_level);
+    }
+    // Q6002: the rooms as elements, then what the readers found on every element.
+    match s.execute("rooms.build", &json!({})) {
+        Ok(v) => result["room_volumes"] = v.get("built").cloned().unwrap_or(Value::Null),
+        Err(e) => result["room_volumes_error"] = json!(e.to_string()),
+    }
+    match s.execute("bim.props.fill", &json!({})) {
+        Ok(v) => result["props"] = v,
+        Err(e) => job.add_finding(
+            StageName::BimBuild,
+            &format!("The elements' properties could not be filled: {e}"),
+            "bim.props.fill failed after the build",
+            3,
+            vec!["Run bim.props.fill once the model is built".into()],
+            None,
+            false,
+        ),
+    }
+    // The plans kept out of the building (MUST 3), for the job report.
+    let skipped = not_built_sheets(job);
+    if !skipped.is_empty()
+        && let Some(o) = result.as_object_mut()
+    {
+        o.insert("not_built".into(), json!(skipped));
+    }
+    // Tags are identities: one element per door, room and device however many sheets show it,
+    // each door between its two rooms, and the schedules checked against the plans. Never stops
+    // the job: a failure is a finding.
+    identity_step(s, job, &mut result);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -2863,8 +3340,28 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
+    // The levels the user named or confirmed keep their answers in the new model.
+    let level_changes = apply_level_answers(s, job);
+    if !level_changes.is_empty()
+        && let Some(o) = result.as_object_mut()
+    {
+        o.insert("level_answers".into(), json!(level_changes));
+    }
+
     job.audit("stage_run", "pipeline", None, Some(StageName::BimBuild), Some(json!({"built_count": built_count})));
     Ok(result)
+}
+
+/// The plan sheets never built into a building level, as `A010: not built: site/civil`.
+fn not_built_sheets(job: &GuidedJob) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in job.sheet_regions.iter().filter(|r| !r.not_built.is_empty()).take(MAX_QUESTIONS_PER_STAGE) {
+        let line = format!("{}: not built: {}", if r.number.is_empty() { "?" } else { &r.number }, r.not_built);
+        if !out.contains(&line) {
+            out.push(line);
+        }
+    }
+    out
 }
 
 /// Floor to floor when the sections give none, feet.
@@ -2872,7 +3369,8 @@ const DEFAULT_STOREY_FT: f64 = 10.0;
 
 /// The building's levels for `bspec.draft`: one per level that has an architectural floor plan
 /// (discipline A, type plan; the first such sheet of each level), lowest first, its region the
-/// plan's rectangle on the job's drawing. Elevations and floor-to-floor heights from the sheet
+/// plan's drawing area on the job's drawing (inside the border, off the title block, so sheet
+/// furniture builds nothing). Elevations and floor-to-floor heights from the sheet
 /// index (read off the sections); else stacked at [`DEFAULT_STOREY_FT`] and marked as guessed,
 /// so the build stage asks. Empty when the set has no architectural floor plans (the build reads
 /// whatever was imported, as for one sheet).
@@ -2890,6 +3388,79 @@ const MAX_SHEET_LINKS: usize = 2_000;
 
 /// The job's imported sheets into the spec's sheet list, each with where it sits in model space
 /// and its level (a sheet listed already keeps its entry and gains its place).
+/// The build's identity pass (`bim.identity` then `rooms.graph`): merged copies leave the counts,
+/// findings go on the build stage, and the answer's summary goes in the result as `identity`.
+fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
+    let numbers: Vec<String> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|r| r.get("number").and_then(Value::as_str)).map(str::to_string).collect())
+        .unwrap_or_default();
+    let run = match super::identity::identity(s, true, (!numbers.is_empty()).then_some(numbers.as_slice())) {
+        Ok(r) => r,
+        Err(e) => {
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("Element identities were not checked: {e}"),
+                "the same door or device may be counted once per sheet that shows it",
+                3,
+                vec!["Run bim.identity once the model is built".into()],
+                None,
+                false,
+            );
+            return;
+        }
+    };
+    // The build's counts are the model's after the merge.
+    for (kind, key) in [("door", "doors"), ("window", "windows"), ("wall", "walls")] {
+        let gone = run.removed.get(kind).copied().unwrap_or(0) as u64;
+        if gone > 0
+            && let Some(n) = result.get(key).and_then(Value::as_u64)
+        {
+            result[key] = json!(n.saturating_sub(gone));
+        }
+    }
+    let graph = super::identity::graph(s, true).ok();
+    let findings: Vec<Value> = run.answer.get("findings").and_then(Value::as_array).cloned().unwrap_or_default();
+    for f in findings.iter().take(MAX_QUESTIONS_PER_STAGE) {
+        let msg = f.get("message").and_then(Value::as_str).unwrap_or("element identity finding");
+        let kind = f.get("kind").and_then(Value::as_str).unwrap_or("");
+        job.add_finding(
+            StageName::BimBuild,
+            msg,
+            match kind {
+                "same_tag_apart" => "one number names one thing: two places on a level is a misread or a print error",
+                "schedule_not_placed" | "not_in_schedule" | "doors_vs_schedule" => "the door schedule and the plans disagree",
+                _ => "the finish schedule names a room the plans do not show",
+            },
+            2,
+            vec!["Check the sheets named in the finding".into()],
+            None,
+            false,
+        );
+    }
+    let sheets = run.answer.get("sheets").and_then(Value::as_array);
+    let registered = sheets.map_or(0, |a| a.iter().filter(|t| t.get("registered").and_then(Value::as_bool) == Some(true)).count());
+    if let Some(o) = result.as_object_mut() {
+        o.insert(
+            "identity".into(),
+            json!({
+                "merged": run.answer.get("merged"),
+                "by_kind": run.answer.get("by_kind"),
+                "numbered_doors": run.answer.get("numbered_doors"),
+                "sheets": sheets.map_or(0, Vec::len),
+                "sheets_registered": registered,
+                "findings": findings.len(),
+                "door_connections": graph.as_ref().and_then(|g| g.get("connected")),
+                "room_edges": graph.as_ref().and_then(|g| g.get("edges")).and_then(Value::as_array).map(Vec::len),
+            }),
+        );
+    }
+    job.audit("identity", "pipeline", None, Some(StageName::BimBuild), Some(json!({"merged": run.answer.get("merged"), "findings": findings.len()})));
+}
+
 pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[SheetRegion]) {
     for r in regions.iter().take(MAX_SHEET_LINKS) {
         if !r.rect.iter().all(|v| v.is_finite()) {
@@ -2911,14 +3482,18 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
                 level,
                 source: "model".into(),
                 rect: Some(r.rect),
+                levels: r.levels.iter().map(|c| level_name(c)).collect(),
+                registration: None,
             }),
         }
     }
 }
 
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
+    // Site, civil and landscape plans, and plans that name no level, are no storey (MUST 3).
     let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
-    let floor_plan = |r: &&SheetRegion| r.kind == "plan" && !r.level.trim().is_empty() && !r.level.eq_ignore_ascii_case("SITE");
+    let floor_plan =
+        |r: &&SheetRegion| r.kind == "plan" && !r.level.trim().is_empty() && !r.level.eq_ignore_ascii_case("SITE") && r.not_built.is_empty();
     let mut plans: Vec<&SheetRegion> = job.sheet_regions.iter().filter(floor_plan).filter(|r| r.discipline == "A").collect();
     if plans.is_empty() {
         // No architectural floor plans: one discipline's plans give the floors (their
@@ -2948,7 +3523,10 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
     let reads: Vec<Option<f64>> = plans.iter().map(|r| read(&r.level, "elevation_ft")).collect();
     let items: Vec<(Option<i32>, f64, u32)> = plans.iter().zip(&reads).map(|(r, e)| (Some(rank(&r.level).0), e.unwrap_or(f64::NAN), 1)).collect();
     let in_order = cadaddy_walk3d::levels::in_order(&items);
-    let good = |i: usize| reads.get(i).copied().flatten().filter(|_| in_order.get(i).copied().unwrap_or(false));
+    // An elevation the user gave is the level's, in order or not.
+    let given: Vec<Option<f64>> = plans.iter().map(|r| answered_level(job, &r.level).and_then(|a| a.elevation_ft)).collect();
+    let read_good = |i: usize| reads.get(i).copied().flatten().filter(|_| in_order.get(i).copied().unwrap_or(false));
+    let good = |i: usize| given.get(i).copied().flatten().or_else(|| read_good(i));
     let mut out = Vec::new();
     let mut next_elevation = 0.0f64;
     for (i, r) in plans.iter().enumerate() {
@@ -2956,21 +3534,24 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
         let read_el = reads.get(i).copied().flatten();
         let out_of_order = read_el.is_some() && good(i).is_none();
         if i == 0 {
-            // The lowest with no good reading: a storey under the first level read, if any.
-            next_elevation = (1..plans.len()).find_map(|j| good(j).map(|e| e - DEFAULT_STOREY_FT * j as f64)).unwrap_or(0.0);
+            // The lowest with no good reading: a storey under the first level read, if any (an
+            // elevation the user gave a level above doesn't move it off 0).
+            next_elevation = (1..plans.len()).find_map(|j| read_good(j).map(|e| e - DEFAULT_STOREY_FT * j as f64)).unwrap_or(0.0);
         }
         let (elevation, read_elevation) = match good(i) {
             Some(e) => (e, true),
             None => (next_elevation, false),
         };
         // A floor to floor given as an answer is the building's.
-        let (height, read_height) = match job.storey_ft.or_else(|| read(&r.level, "height_ft")).filter(|h| *h > 0.0 && *h <= 100.0) {
+        // The user put the level above at an elevation: this one reaches it.
+        let storey = |h: &f64| *h > 0.0 && *h <= 100.0;
+        let to_given = given.get(i + 1).copied().flatten().map(|up| up - elevation).filter(storey);
+        let (height, read_height) = match to_given.or_else(|| job.storey_ft.or_else(|| read(&r.level, "height_ft")).filter(storey)) {
             Some(h) => (h, true),
             None => (DEFAULT_STOREY_FT, false),
         };
         next_elevation = elevation + height;
-        let mut level =
-            json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.rect});
+        let mut level = json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.area.unwrap_or(r.rect)});
         if let (true, Some(e)) = (out_of_order, read_el) {
             level["guess"] = json!(format!(
                 "{} plan {}: the elevation read for it, {}, breaks the levels' order, so it is not used; stacked at {}",
@@ -2986,6 +3567,71 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
         out.push(level);
     }
     out
+}
+
+/// The job's rooms after the build (MUST 2: a room is a label inside a closed boundary of real
+/// walls): the rooms stage's reading (each label traced inside its closed outline on its sheet,
+/// the title block, border and other sheets' notes left out), and the rooms the model traced
+/// inside a level's walls that the reading has not: neither its number (on any level: the
+/// model's tag can be read off another floor's sheet) nor its name on its level. The rooms
+/// stage's result takes them, its reading's count kept as `read_count`. The model's rooms per
+/// level.
+fn rooms_from_model(s: &mut Session, job: &mut GuidedJob) -> Option<Value> {
+    let model = super::rooms3d::model_rooms(s).ok().flatten().filter(|l| !l.is_empty())?;
+    let text = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+    let mut by_level: BTreeMap<String, usize> = BTreeMap::new();
+    for r in &model {
+        *by_level.entry(r.get("level").and_then(Value::as_str).unwrap_or("").to_string()).or_default() += 1;
+    }
+    let mut read: Vec<Value> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // A re-run of the build: the reading is the one before the last build added to it.
+    read.retain(|r| r.get("from_model").and_then(Value::as_bool) != Some(true));
+    let read_count = read.len();
+    let numbers: BTreeSet<String> = read.iter().map(|r| text(r, "number")).filter(|n| !n.is_empty()).collect();
+    let mut names: BTreeSet<(String, String)> = read.iter().map(|r| (level_name(&text(r, "level")).to_ascii_uppercase(), text(r, "name"))).collect();
+    let added: Vec<Value> = model
+        .into_iter()
+        .filter_map(|mut m| {
+            let (number, name) = (text(&m, "number"), m.get("name").and_then(Value::as_str).unwrap_or("").to_string());
+            let room = legible_room_name(&name) && super::autospec::room_label(&name) && !name.trim().eq_ignore_ascii_case("ROOM");
+            let new = (number.is_empty() || !numbers.contains(&number)) && names.insert((text(&m, "level"), name.trim().to_ascii_uppercase()));
+            if let Some(o) = m.as_object_mut() {
+                o.insert("from_model".into(), json!(true));
+            }
+            (room && new).then_some(m)
+        })
+        .collect();
+    let from_model = added.len();
+    let mut rooms = json!({"rooms": read.into_iter().chain(added).collect::<Vec<_>>()});
+    let (removed, renamed) = apply_room_answers(job, &mut rooms);
+    let list = rooms.get_mut("rooms").map(Value::take).unwrap_or_else(|| json!([]));
+    let count = list.as_array().map_or(0, Vec::len);
+    if let Some(o) = job.stage_mut(StageName::Rooms).and_then(|st| st.result.as_mut()).and_then(Value::as_object_mut) {
+        o.insert("read_count".into(), json!(read_count));
+        o.insert("from_model".into(), json!(from_model));
+        o.insert("rooms".into(), list);
+        o.insert("count".into(), json!(count));
+        if removed > 0 {
+            o.insert("removed_by_answers".into(), json!(removed));
+        }
+        if renamed > 0 {
+            o.insert("renamed_by_answers".into(), json!(renamed));
+        }
+    }
+    job.audit(
+        "rooms_from_model",
+        "pipeline",
+        None,
+        Some(StageName::Rooms),
+        Some(json!({"read": read_count, "from_model": from_model, "rooms": count})),
+    );
+    Some(json!(by_level))
 }
 
 /// The building spec drafted and stored from the open print set, as the job's build stage drafts
@@ -3066,6 +3712,27 @@ fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         "trades": trades,
         "levels": levels,
     });
+    // Conduit, wire, boxes and fittings by level and circuit (Q6007).
+    let by_circuit = s
+        .execute("bim.takeoff", &json!({"group_by": "circuit", "filter": {"trade": "electrical"}, "keep": false}))
+        .ok()
+        .and_then(|t| t.get("lines").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
+    let (circuits, conduit_ft, wire_ft) = circuit_summary(&by_circuit);
+    result["summary"]["conduit_ft"] = json!(super::printmep::r1(conduit_ft));
+    result["summary"]["wire_ft"] = json!(super::printmep::r1(wire_ft));
+    result["circuits"] = json!(circuits);
+    if !job.circuits.is_empty() && conduit_ft <= 0.0 {
+        job.add_finding(
+            StageName::Takeoff,
+            "The circuits read have no conduit in the takeoff",
+            "the electrical plans gave circuits but the model's conduit came to 0 ft",
+            3,
+            vec!["Re-run the mep_read and bim_build stages".into()],
+            None,
+            false,
+        );
+    }
 
     // MUST 4: takeoff with 0 lines is a finding, never silently Done.
     if line_count == 0 {
@@ -3083,6 +3750,39 @@ fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     job.audit("stage_run", "pipeline", None, Some(StageName::Takeoff), Some(json!({"line_count": line_count, "trades": &trades, "levels": &levels})));
     Ok(result)
+}
+
+/// The takeoff's electrical lines (grouped by circuit) per level and circuit: conduit feet,
+/// wire feet by size, boxes and fittings; and the conduit and wire totals (every line's).
+fn circuit_summary(lines: &[Value]) -> (Vec<Value>, f64, f64) {
+    let mut by: BTreeMap<(String, String), Value> = BTreeMap::new();
+    let (mut conduit, mut wire) = (0.0, 0.0);
+    for l in lines {
+        let (cat, qty) = (l["category"].as_str().unwrap_or_default(), l["qty"].as_f64().unwrap_or(0.0));
+        match cat {
+            "conduit" => conduit += qty,
+            "wire" => wire += qty,
+            _ => {}
+        }
+        let Some(c) = l["circuit"].as_str().filter(|c| !c.is_empty()) else { continue };
+        let level = l["level"].as_str().unwrap_or_default().to_string();
+        let e = by.entry((level.clone(), c.to_string())).or_insert_with(
+            || json!({"level": level, "circuit": c, "conduit_ft": 0.0, "wire_ft": {}, "boxes": 0.0, "fittings": 0.0, "devices": 0.0}),
+        );
+        let add = |v: &Value| json!(super::printmep::r1(v.as_f64().unwrap_or(0.0) + qty));
+        match cat {
+            "conduit" => e["conduit_ft"] = add(&e["conduit_ft"]),
+            "wire" => {
+                let size = l["size"].as_str().unwrap_or_default().to_string();
+                e["wire_ft"][&size] = add(&e["wire_ft"][&size]);
+            }
+            "boxes" => e["boxes"] = add(&e["boxes"]),
+            "conduit fittings" => e["fittings"] = add(&e["fittings"]),
+            "devices" | "fixtures" => e["devices"] = add(&e["devices"]),
+            _ => {}
+        }
+    }
+    (by.into_values().collect(), conduit, wire)
 }
 
 /// Run estimate stage.
@@ -3109,9 +3809,109 @@ fn run_clash(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
 }
 
+/// Q6021 MUST 1: a default is plausible only when the thing it confirms is real.
+/// Rooms: area > 0 and a room-like name (not a material, height label, or note fragment).
+/// Devices: a known type (unknown symbols with default "skip" are not plausible).
+/// When there is no evidence at all, assume plausible (the question was asked for a reason).
+fn is_plausible_default(q: &Question) -> bool {
+    match (q.stage, &q.kind) {
+        // Room verify: "name and area right?" — only when the evidence has values with
+        // area_sqft.  A room at 0 sf or with a junk name is implausible; no evidence means
+        // the question predates the guard and keeps its default.
+        (StageName::Rooms, QuestionKind::Verify) => {
+            let vals = match q.evidence.as_ref().and_then(|e| e.values.as_ref()) {
+                Some(v) => v,
+                None => return true, // no evidence → assume plausible
+            };
+            // Only gate rooms whose evidence carries area_sqft (the room-verify pattern).
+            let Some(area) = vals.get("area_sqft").and_then(Value::as_f64) else {
+                return true;
+            };
+            if area <= 0.0 {
+                return false;
+            }
+            let name = vals.get("room").or_else(|| vals.get("room_name")).and_then(Value::as_str).unwrap_or("");
+            is_room_like_name(name)
+        }
+        // Device unknown-symbol questions default "skip": not plausible (unknown type).
+        (StageName::Devices, QuestionKind::Completeness) if q.default.as_deref() == Some("skip") => false,
+        _ => true,
+    }
+}
+
+/// Names that look like rooms (not junk labels read as rooms).
+fn is_room_like_name(name: &str) -> bool {
+    let upper = name.trim().to_uppercase();
+    if upper.is_empty() {
+        return false;
+    }
+    // A room number alone (digits, possibly with a letter suffix) is fine.
+    if upper.chars().all(|c| c.is_ascii_alphanumeric()) && upper.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    // Reject names that are clearly not rooms: building materials, notes, single words that are
+    // structural/finish labels, or very short fragments.
+    const NOT_ROOMS: &[&str] = &[
+        "WALL",
+        "ROOF",
+        "ROOFING",
+        "CEILING",
+        "FLOOR",
+        "SLAB",
+        "HEIGHT",
+        "APPLICABLE",
+        "TYP",
+        "TYPICAL",
+        "NIC",
+        "N.I.C",
+        "EXIST",
+        "EXISTING",
+        "SIM",
+        "SIMILAR",
+        "ABV",
+        "ABOVE",
+        "BLW",
+        "BELOW",
+        "TPO",
+        "EPDM",
+        "CMU",
+        "GYP",
+        "ACT",
+        "VCT",
+        "CPT",
+        "CONC",
+        "CLG",
+        "FLR",
+        "DEMO",
+        "NEW",
+        "FINISH",
+        "PAINT",
+        "BASE",
+    ];
+    for bad_name in NOT_ROOMS {
+        // Exact match or the entire name is one of these words (possibly with punctuation).
+        let cleaned: String = upper.chars().filter(|c| c.is_ascii_alphanumeric() || *c == ' ').collect();
+        if cleaned.split_whitespace().all(|w| NOT_ROOMS.contains(&w)) {
+            return false;
+        }
+        if cleaned == *bad_name {
+            return false;
+        }
+    }
+    // Very short single-word names without a number are suspect.
+    if !upper.contains(' ') && upper.len() <= 3 && !upper.chars().any(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    true
+}
+
 /// Take the defaults of the questions the job doesn't ask: in auto mode every question with a
 /// default; else only the verify samples after the first [`VERIFY_ASKED`] (a spot check). A
-/// question in [`GuidedJob::always_ask`] is never taken by default. How many were answered.
+/// question in [`GuidedJob::always_ask`] is never taken by default.
+///
+/// Q6021 MUST 1: in auto mode, implausible defaults are **rejected** (not confirmed): the
+/// answer is `"Rejected"` with `answered_by = "auto_guard"`, and the question is listed in
+/// the report.  How many were answered (accepted + rejected).
 fn auto_answer(job: &mut GuidedJob, name: StageName) -> usize {
     let (auto, always) = (job.auto, std::mem::take(&mut job.always_ask));
     let mut answered = Vec::new();
@@ -3119,13 +3919,15 @@ fn auto_answer(job: &mut GuidedJob, name: StageName) -> usize {
         let asked = st.questions.iter_mut().chain(st.completeness.iter_mut()).map(|q| (q, !auto));
         let samples = st.verify.iter_mut().enumerate().map(|(i, q)| (q, !auto && i < VERIFY_ASKED));
         for (q, asked) in asked.chain(samples) {
-            if q.answer.is_none()
-                && !asked
-                && !always.contains(&q.id)
-                && let Some(def) = &q.default
-            {
-                q.answer = Some(Value::String(def.clone()));
-                q.answered_by = Some("default".into());
+            if q.answer.is_none() && !asked && !always.contains(&q.id) && q.default.is_some() {
+                if is_plausible_default(q) {
+                    let def = q.default.clone().unwrap_or_default();
+                    q.answer = Some(Value::String(def));
+                    q.answered_by = Some("default".into());
+                } else {
+                    q.answer = Some(Value::String("Rejected".into()));
+                    q.answered_by = Some("auto_guard".into());
+                }
                 answered.push(q.id.clone());
             }
         }
@@ -3159,30 +3961,38 @@ pub fn sync_worklist(job: &mut GuidedJob) {
     }
 }
 
-/// How the job's questions were answered: (by default, by the agent or user, still open).
-fn answer_counts(job: &GuidedJob) -> (usize, usize, usize) {
-    let (mut automatic, mut by_you, mut open) = (0, 0, 0);
+/// How the job's questions were answered: (by default, by the agent or user, rejected, open).
+fn answer_counts(job: &GuidedJob) -> (usize, usize, usize, usize) {
+    let (mut automatic, mut by_you, mut rejected, mut open) = (0, 0, 0, 0);
     for q in job.stages.iter().flat_map(|st| st.questions.iter().chain(st.verify.iter()).chain(st.completeness.iter())) {
         match (&q.answer, q.answered_by.as_deref()) {
             (None, _) => open += 1,
             (Some(_), Some("default")) => automatic += 1,
+            (Some(_), Some("auto_guard")) => rejected += 1,
             _ => by_you += 1,
         }
     }
-    (automatic, by_you, open)
+    (automatic, by_you, rejected, open)
 }
 
 /// The job's mode and how its questions were answered, in words too.
 fn answers_value(job: &GuidedJob) -> Value {
-    let (automatic, by_you, open) = answer_counts(job);
+    let (automatic, by_you, rejected, open) = answer_counts(job);
     let mut note = format!("{automatic} answered automatically, {by_you} by you");
+    if rejected > 0 {
+        note.push_str(&format!(", {rejected} rejected by auto-guard (implausible defaults)"));
+    }
     if open > 0 {
         note.push_str(&format!(", {open} waiting for an answer"));
     }
     if job.auto {
-        note.push_str(" (auto mode: every question with a default took it)");
+        if rejected > 0 {
+            note.push_str(" (auto mode with guard: plausible defaults accepted, implausible rejected)");
+        } else {
+            note.push_str(" (auto mode: every question with a default took it)");
+        }
     }
-    json!({"mode": if job.auto { "auto" } else { "interactive" }, "automatic": automatic, "by_you": by_you, "open": open, "note": note})
+    json!({"mode": if job.auto { "auto" } else { "interactive" }, "automatic": automatic, "by_you": by_you, "rejected": rejected, "open": open, "note": note})
 }
 
 /// A question as `job.next` gives it: with the sheet it is about and its picture, when known.
@@ -3203,6 +4013,44 @@ fn question_value(job: &GuidedJob, q: &Question) -> Value {
         "answer_schema": q.answer_schema,
         "kind": q.kind,
         "always_asked": job.always_ask.contains(&q.id),
+        "if_changed": if_changed(job, q),
+    })
+}
+
+/// The first stage an answer other than the default runs again ([`answer_effect`]'s), by the
+/// kind of question.
+fn rerun_stage_of(q: &Question) -> Option<StageName> {
+    match q.stage {
+        StageName::Classify if q.question.contains("discipline") || q.question.contains("names no level") => Some(StageName::Rooms),
+        StageName::Levels if q.question.contains("floor-to-floor") || question_level(q).is_some() => Some(StageName::BimBuild),
+        StageName::Rooms => Some(StageName::Rooms),
+        StageName::Devices if q.question.contains("Unknown symbol") || q.question.starts_with("No device") || q.kind == QuestionKind::Verify => {
+            Some(StageName::Devices)
+        }
+        _ => None,
+    }
+}
+
+/// What answering a question with something other than its default runs again, and about how
+/// long that takes (the stages' last run times): `{reruns, about_s, note}`; `{applies_to}` when
+/// the stage hasn't run yet; null when no answer runs anything again.
+fn if_changed(job: &GuidedJob, q: &Question) -> Value {
+    let Some(from) = rerun_stage_of(q) else { return Value::Null };
+    let ran: Vec<&StageState> =
+        job.stages.iter().filter(|st| st.name >= from && !matches!(st.status, StageStatus::Skipped | StageStatus::Pending)).collect();
+    if ran.is_empty() {
+        return json!({"applies_to": from.label(), "note": format!("read when {} runs", from.label())});
+    }
+    let names: Vec<&str> = ran.iter().map(|st| st.name.label()).collect();
+    let ms: u64 = ran.iter().filter_map(|st| st.elapsed_ms).fold(0u64, u64::saturating_add);
+    let secs = (ms as f64 / 1000.0).ceil();
+    json!({
+        "reruns": names,
+        "about_s": secs,
+        "note": format!(
+            "an answer other than the default runs {} again (about {secs:.0} s); answers sent together in job.answer {{answers: [...]}} run it once",
+            names.join(", ")
+        ),
     })
 }
 
@@ -3340,12 +4188,102 @@ pub fn parse_feet(text: &str) -> Option<f64> {
     Some(feet).filter(|f| *f > 0.0 && *f <= 100.0)
 }
 
+/// A level's elevation in feet from an answer: `12'-6"`, `-4'-0"`, `0`, `EL. 112'-0"`, `112.5 ft`.
+pub fn parse_elevation(text: &str) -> Option<f64> {
+    let t = text.trim();
+    let t = t.strip_prefix("EL.").or_else(|| t.strip_prefix("EL")).or_else(|| t.strip_prefix("el.")).unwrap_or(t).trim();
+    let (sign, t) = match t.strip_prefix('-') {
+        Some(rest) => (-1.0, rest.trim()),
+        None => (1.0, t.strip_prefix('+').unwrap_or(t).trim()),
+    };
+    if !t.starts_with(|c: char| c.is_ascii_digit()) {
+        return None;
+    }
+    // "0" is an elevation (parse_feet takes heights only).
+    let zero = t.trim_end_matches(['\'', '"', ' ', '-']).trim_end_matches("ft").trim().trim_end_matches(['0', '.']).is_empty();
+    let feet = if zero { 0.0 } else { parse_feet_any(t)? };
+    Some(sign * feet).filter(|f| f.is_finite() && f.abs() <= 10_000.0)
+}
+
+/// [`parse_feet`] without its floor-to-floor range.
+fn parse_feet_any(t: &str) -> Option<f64> {
+    let num = |s: &str| -> Option<f64> {
+        let digits: String = s.trim().chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        digits.parse::<f64>().ok().filter(|v| v.is_finite())
+    };
+    match t.split_once('\'') {
+        Some((ft, rest)) => {
+            let inches = rest.trim_start_matches(['-', ' ']).split('"').next().and_then(num).unwrap_or(0.0);
+            Some(num(ft)? + inches / 12.0)
+        }
+        None => num(t),
+    }
+}
+
+/// What a level answer says: `{elevation_ft?, name?}` (`elevation_ft` a number or feet text,
+/// `rename` for `name`), or text — `Correct` / `Yes, "2"` (it's right), `12'-6"` or
+/// `Wrong elevation: 12'-6"` (the elevation), `Wrong name: Mezzanine` (the name),
+/// `Mezzanine at 12'-6"` (both). `None` for an answer that says neither.
+fn level_answer(answer: &Value) -> Option<LevelAnswer> {
+    let clean = |n: &str| -> Option<String> {
+        let n = n.trim().trim_matches('"').trim();
+        (!n.is_empty() && n.chars().count() <= 40).then(|| n.to_string())
+    };
+    if let Some(o) = answer.as_object() {
+        let elevation = o.get("elevation_ft").or_else(|| o.get("elevation")).and_then(|v| match v {
+            Value::Number(n) => n.as_f64().filter(|f| f.is_finite() && f.abs() <= 10_000.0),
+            Value::String(t) => parse_elevation(t),
+            _ => None,
+        });
+        let name = o.get("name").or_else(|| o.get("rename")).and_then(Value::as_str).and_then(clean);
+        let confirmed = o.get("correct").and_then(Value::as_bool).unwrap_or(false);
+        return (elevation.is_some() || name.is_some() || confirmed).then_some(LevelAnswer { elevation_ft: elevation, name, confirmed });
+    }
+    let text = answer.as_str()?.trim();
+    let lower = text.to_ascii_lowercase();
+    if lower == "correct" || lower.starts_with("yes") {
+        return Some(LevelAnswer { confirmed: true, ..LevelAnswer::default() });
+    }
+    // "Wrong elevation: 12'-6"", "Different name: Mezzanine": what follows the colon.
+    let (label, body) = match text.split_once(':') {
+        Some((l, b)) => (l.to_ascii_lowercase(), b.trim()),
+        None => (String::new(), text),
+    };
+    if let Some(e) = parse_elevation(body) {
+        return Some(LevelAnswer { elevation_ft: Some(e), ..LevelAnswer::default() });
+    }
+    // "Mezzanine at 12'-6"" / "Mezzanine @ 12'-6"".
+    let lb = body.to_ascii_lowercase();
+    if let Some(i) = lb.rfind(" at ").map(|i| (i, 4)).or_else(|| lb.rfind(" @ ").map(|i| (i, 3)))
+        && let (Some(head), Some(tail)) = (body.get(..i.0), body.get(i.0 + i.1..))
+        && let Some(e) = parse_elevation(tail)
+    {
+        return Some(LevelAnswer { elevation_ft: Some(e), name: clean(head), confirmed: false });
+    }
+    if label.contains("name") {
+        return clean(body).map(|n| LevelAnswer { name: Some(n), ..LevelAnswer::default() });
+    }
+    None
+}
+
 /// What an answer changes in the job: the rule or setting it adds (or the sheet facts it
 /// corrects), and the first stage that has to run again for it. `None` when the answer keeps
 /// what the job had, or when nothing in the job reads it.
 fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, String) {
     let Some(answer) = &q.answer else { return (None, String::new()) };
     let text = answer.as_str().map(str::trim).unwrap_or("");
+    // A level's elevation or name (or "Correct"), over what the job read.
+    if q.stage == StageName::Levels
+        && let Some(level) = question_level(q)
+    {
+        if let Some(a) = level_answer(answer) {
+            return level_effect(job, &level, a);
+        }
+        if text == "Not a level" {
+            return (None, "recorded".into());
+        }
+        return (None, format!("recorded; answer with an elevation (\"12'-6\\\"\") or {{\"name\": \"…\"}} to change level {level}"));
+    }
     if !text.is_empty() && q.default.as_deref() == Some(text) {
         return (None, "kept what the job read".into());
     }
@@ -3441,6 +4379,85 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
         }
         _ => (None, "recorded; nothing in the job reads this answer yet".into()),
     }
+}
+
+/// The level a levels-stage question is about (its evidence's `level`).
+fn question_level(q: &Question) -> Option<String> {
+    let v = q.evidence.as_ref()?.values.as_ref()?.get("level")?.as_str()?.trim();
+    (!v.is_empty() && v != "?").then(|| v.to_string())
+}
+
+/// Whether `code` (a sheet's level: `2`, `R`) or its model name (`Level 2`) is `key`.
+fn same_level(code: &str, key: &str) -> bool {
+    let key = key.trim();
+    code.trim().eq_ignore_ascii_case(key) || level_name(code.trim()).eq_ignore_ascii_case(key)
+}
+
+/// The answer the user gave for the level `code` (a sheet's level), if any.
+fn answered_level<'a>(job: &'a GuidedJob, code: &str) -> Option<&'a LevelAnswer> {
+    job.level_answers.iter().find(|(k, _)| same_level(code, k)).map(|(_, a)| a)
+}
+
+/// A level answer into the job: an elevation builds the model again with it; a name renames the
+/// model's level (now when the model is built, else when it is); "Correct" marks the level the
+/// user's.
+fn level_effect(job: &mut GuidedJob, level: &str, a: LevelAnswer) -> (Option<StageName>, String) {
+    // "2" and "Level 2" are one level.
+    let key = level_name(level.trim()).to_ascii_uppercase();
+    if job.level_answers.len() >= MAX_QUESTIONS_PER_STAGE && !job.level_answers.contains_key(&key) {
+        return (None, "recorded; too many level answers".into());
+    }
+    let entry = job.level_answers.entry(key).or_default();
+    entry.confirmed = true;
+    let mut said = Vec::new();
+    if let Some(n) = &a.name {
+        entry.name = Some(n.clone());
+        said.push(format!("level {level} is named {n}"));
+    }
+    if let Some(e) = a.elevation_ft {
+        entry.elevation_ft = Some(e);
+        said.push(format!("level {level} is at {}", cadaddy_walk3d::feet(e)));
+        return (Some(StageName::BimBuild), said.join("; "));
+    }
+    if said.is_empty() {
+        return (None, format!("level {level} confirmed by you (source user)"));
+    }
+    (None, said.join("; "))
+}
+
+/// The level answers onto the built model's levels: their names, and the user as their source.
+/// Returns what changed.
+fn apply_level_answers(s: &mut Session, job: &GuidedJob) -> Vec<String> {
+    let mut changes = Vec::new();
+    if job.level_answers.is_empty() {
+        return changes;
+    }
+    let Ok((mut sp, true)) = super::bspec::current(s, "guided") else { return changes };
+    for (key, a) in &job.level_answers {
+        let found = sp
+            .levels
+            .iter()
+            .find(|l| same_level(key, &l.name) || a.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(&l.name)))
+            .map(|l| l.name.clone());
+        let Some(mut current) = found else { continue };
+        if let Some(n) = a.name.as_deref().filter(|n| !n.eq_ignore_ascii_case(&current))
+            && sp.rename_level(&current, n).is_ok()
+        {
+            changes.push(format!("{current} renamed {n}"));
+            current = n.to_string();
+        }
+        if sp.level_source(&current) != Some("user") {
+            sp.set_level_source(&current, "user");
+            changes.push(format!("{current}: source user"));
+        }
+    }
+    if !changes.is_empty()
+        && let Ok(spec) = serde_json::to_value(&sp)
+        && s.execute("bspec.set", &json!({"replace": true, "spec": spec})).is_err()
+    {
+        changes.clear();
+    }
+    changes
 }
 
 /// Correct a sheet's fact (`discipline`, `level`, `type`) in the job's sheet list and index, and
@@ -3711,7 +4728,12 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(existing) = load_job(s)?
         && !existing.is_done()
     {
-        return Err(bad("job.start", "a job is already running — use job.status to see it, or start a new drawing"));
+        let hint = if p.get("auto").and_then(Value::as_bool) == Some(true) && !existing.auto {
+            "a job is already running — job.set_mode {auto: true} runs it on unattended (answers given are kept); job.status shows it"
+        } else {
+            "a job is already running — job.status shows it, job.set_mode {auto: true} runs it on unattended, or start a new drawing"
+        };
+        return Err(bad("job.start", hint));
     }
 
     let mut job = GuidedJob::new(pdfs, goal);
@@ -3765,195 +4787,354 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
 fn cmd_next(s: &mut Session, _p: &Value) -> Result<Value> {
     let mut job = load_job(s)?.ok_or_else(|| bad("job.next", "no job running — call job.start first"))?;
 
+    // Answers given with `rerun: false`: their stages run again now, once.
+    let mut rerun = Vec::new();
+    if let Some(from) = job.rerun_held.take() {
+        let reset = rerun_from_stage(s, &mut job, from, &json!("held answers"), None)?;
+        advance_pipeline(s, &mut job)?;
+        save_job(s, &job)?;
+        rerun = reset;
+    }
     // Try to advance if no questions pending.
     if job.next_question().is_none() && !job.is_done() {
         advance_pipeline(s, &mut job)?;
         save_job(s, &job)?;
     }
+    let changed = rerun_changes(&job, &rerun);
+    let rerun_value = (!rerun.is_empty()).then(|| json!({"stages": rerun.iter().map(|(n, _)| n.label()).collect::<Vec<_>>(), "changed": changed}));
+    let mut out = cmd_next_value(s, &job);
+    if let (Some(r), Some(o)) = (rerun_value, out.as_object_mut()) {
+        o.insert("rerun".into(), r);
+    }
+    Ok(out)
+}
 
+/// What `job.next` says: the next question, done, or waiting.
+fn cmd_next_value(s: &mut Session, job: &GuidedJob) -> Value {
     match job.next_question() {
-        Some(q) => Ok(json!({
-            "question": question_value(&job, q),
+        Some(q) => json!({
+            "question": question_value(job, q),
             "progress": job.progress(),
             "stage": job.current_stage().map(|s| s.name.label()),
-            "answers": answers_value(&job),
-        })),
+            "answers": answers_value(job),
+        }),
         None if job.is_done() => {
             let stats = model_stats_from_session(s);
-            Ok(json!({
+            json!({
                 "done": true,
                 "progress": 1.0,
-                "summary": job_summary(s, &job, stats.as_ref()),
-            }))
+                "summary": job_summary(s, job, stats.as_ref()),
+            })
         }
-        None => Ok(json!({
+        None => json!({
             "waiting": true,
             "progress": job.progress(),
             "stage": job.current_stage().map(|s| s.name.label()),
             "status": job.current_stage().map(|s| format!("{:?}", s.status)),
-        })),
+        }),
     }
 }
 
-/// `job.answer {id, answer}` — answer a question.
-fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
-    let qid = str_param(p, "id").ok_or_else(|| bad("job.answer", "`id` (question id) is required"))?;
-    let answer = p.get("answer").cloned().unwrap_or(Value::Null);
+/// Most answers one `job.answer` takes.
+const MAX_ANSWERS_PER_CALL: usize = 500;
+
+/// One answer set on its question: what it changes and the stage it re-runs.
+struct Applied {
+    qid: String,
+    stage: Option<StageName>,
+    rerun_from: Option<StageName>,
+    effect: String,
+    question: Question,
+}
+
+/// Where a question is: (stage index, list, index in it).
+fn find_question(job: &GuidedJob, qid: &str) -> Option<(usize, u8, usize)> {
+    for (si, stage) in job.stages.iter().enumerate() {
+        for (list, qs) in [(0u8, &stage.questions), (1, &stage.verify), (2, &stage.completeness)] {
+            if let Some(qi) = qs.iter().position(|q| q.id == qid) {
+                return Some((si, list, qi));
+            }
+        }
+    }
+    None
+}
+
+fn question_mut(job: &mut GuidedJob, (si, list, qi): (usize, u8, usize)) -> Option<&mut Question> {
+    let stage = job.stages.get_mut(si)?;
+    match list {
+        0 => stage.questions.get_mut(qi),
+        1 => stage.verify.get_mut(qi),
+        _ => stage.completeness.get_mut(qi),
+    }
+}
+
+/// Why `qid` can't be answered: never asked, or asked and gone (an earlier answer ran its stage
+/// again and it wasn't asked again, or it was merged into another).
+fn unknown_question(job: &GuidedJob, qid: &str) -> String {
+    let seen = job.audit.iter().any(|a| a.question_id.as_deref() == Some(qid)) || job.worklist.iter().any(|w| w.id == qid);
+    let shown: String = qid.chars().take(60).collect();
+    if seen {
+        format!(
+            "question '{shown}' is no longer open — an earlier answer ran its stage again and it was not asked again (or was merged into another); job.next gives the open ones"
+        )
+    } else {
+        format!("question '{shown}' not found — ids look like Q-rooms-12; job.next gives the open ones")
+    }
+}
+
+/// Set one answer on its question, learn from it and work out its effect. The stage is not run
+/// again here: the caller runs it once for every answer.
+fn apply_answer(job: &mut GuidedJob, qid: &str, answer: Value) -> std::result::Result<Applied, String> {
     if answer.is_null() {
-        return Err(bad("job.answer", "`answer` is required"));
+        return Err(format!("question '{}': `answer` is required", qid.chars().take(60).collect::<String>()));
     }
-
-    let mut job = load_job(s)?.ok_or_else(|| bad("job.answer", "no job running"))?;
-
-    // Find the question by index (to avoid borrow issues with learn_from_answer).
-    let mut found_loc: Option<(usize, &'static str, usize)> = None; // (stage_idx, list, q_idx)
-    'outer: for (si, stage) in job.stages.iter().enumerate() {
-        for (qi, q) in stage.questions.iter().enumerate() {
-            if q.id == qid {
-                found_loc = Some((si, "questions", qi));
-                break 'outer;
-            }
-        }
-        for (qi, q) in stage.verify.iter().enumerate() {
-            if q.id == qid {
-                found_loc = Some((si, "verify", qi));
-                break 'outer;
-            }
-        }
-        for (qi, q) in stage.completeness.iter().enumerate() {
-            if q.id == qid {
-                found_loc = Some((si, "completeness", qi));
-                break 'outer;
-            }
-        }
-    }
-    let (si, list, qi) = found_loc.ok_or_else(|| bad("job.answer", format!("question '{qid}' not found")))?;
-    let stage_name = job.stages.get(si).map(|s| s.name);
-
-    // Set the answer on the question.
-    {
-        let stage = job.stages.get_mut(si).ok_or_else(|| bad("job.answer", "internal error"))?;
-        let q = match list {
-            "questions" => stage.questions.get_mut(qi),
-            "verify" => stage.verify.get_mut(qi),
-            "completeness" => stage.completeness.get_mut(qi),
-            _ => None,
-        }
-        .ok_or_else(|| bad("job.answer", "internal error"))?;
+    let loc = find_question(job, qid).ok_or_else(|| unknown_question(job, qid))?;
+    let question = {
+        let Some(q) = question_mut(job, loc) else { return Err(unknown_question(job, qid)) };
         q.answer = Some(answer.clone());
         q.answered_by = Some("agent".into());
         q.answered_at = Some(now_iso());
-    }
-
-    // The answered question (cloned: learning and effects need the job mutably).
-    let q_clone = {
-        let stage = job.stages.get(si).ok_or_else(|| bad("job.answer", "internal error"))?;
-        match list {
-            "questions" => stage.questions.get(qi),
-            "verify" => stage.verify.get(qi),
-            "completeness" => stage.completeness.get(qi),
-            _ => None,
-        }
-        .cloned()
-        .ok_or_else(|| bad("job.answer", "internal error"))?
+        q.clone()
     };
-    learn_from_answer(&mut job, &q_clone);
-    let (rerun_from, effect) = answer_effect(&mut job, &q_clone);
-
-    job.audit("answer", "agent", Some(qid), stage_name, Some(json!({"answer": answer, "effect": effect})));
-
+    let stage = job.stages.get(loc.0).map(|s| s.name);
+    learn_from_answer(job, &question);
+    let (rerun_from, effect) = answer_effect(job, &question);
+    job.audit("answer", "agent", Some(qid), stage, Some(json!({"answer": answer, "effect": effect})));
     // MUST 5 REFRAME: Sync worklist — mark this item resolved.
     if let Some(wi) = job.worklist.iter_mut().find(|w| w.id == *qid) {
         wi.status = "resolved".into();
-        wi.resolution = Some(answer.clone());
+        wi.resolution = Some(answer);
     }
+    Ok(Applied { qid: qid.to_string(), stage, rerun_from, effect, question })
+}
 
-    // The answer changes what a stage that already ran read: run it (and the stages after it)
-    // again, then say what changed. A stage that hasn't run yet reads the answer when it does.
-    let mut reset = Vec::new();
-    if let Some(from) = rerun_from {
-        reset = reset_from(&mut job, from);
-        // The built model is in the drawing: stages before the build would read it as more
-        // plan. It goes, and the build runs again after them. The stages start from the
-        // building spec they had (later stages store their own, and the readers use it).
-        if from < StageName::BimBuild && reset.iter().any(|(n, _)| *n == StageName::BimBuild) {
-            s.execute("model.build", &json!({"clear": true}))?;
-        }
-        if let Some(spec) = reset.first().and_then(|(n, _)| job.spec_at_start.get(n)).cloned() {
-            s.doc_mut()?.building_spec = spec;
-        }
-        if !reset.is_empty() {
-            let names: Vec<&str> = reset.iter().map(|(n, _)| n.label()).collect();
-            job.audit("stage_rerun", "pipeline", Some(qid), Some(from), Some(json!({"reason": &effect, "stages": names})));
-        }
+/// Run `from` and the stages after it that already ran again (the answers changed what they
+/// read). Returns the stages reset, with their result digests from before.
+fn rerun_from_stage(
+    s: &mut Session,
+    job: &mut GuidedJob,
+    from: StageName,
+    reason: &Value,
+    qid: Option<&str>,
+) -> Result<Vec<(StageName, BTreeMap<String, Value>)>> {
+    let reset = reset_from(job, from);
+    // The built model is in the drawing: stages before the build would read it as more
+    // plan. It goes, and the build runs again after them. The stages start from the
+    // building spec they had (later stages store their own, and the readers use it).
+    if from < StageName::BimBuild && reset.iter().any(|(n, _)| *n == StageName::BimBuild) {
+        s.execute("model.build", &json!({"clear": true}))?;
     }
-    // A stage whose questions are all answered is done.
-    if let Some(sn) = stage_name
-        && let Some(st) = job.stage_mut(sn)
-        && st.status == StageStatus::Paused
-        && st.unanswered().is_empty()
-    {
-        st.status = StageStatus::Done;
-        job.audit("stage_done", "pipeline", None, Some(sn), None);
+    if let Some(spec) = reset.first().and_then(|(n, _)| job.spec_at_start.get(n)).cloned() {
+        s.doc_mut()?.building_spec = spec;
     }
-    advance_pipeline(s, &mut job)?;
+    if !reset.is_empty() {
+        let names: Vec<&str> = reset.iter().map(|(n, _)| n.label()).collect();
+        job.audit("stage_rerun", "pipeline", qid, Some(from), Some(json!({"reason": reason, "stages": names})));
+    }
+    Ok(reset)
+}
 
+/// What changed in the stages that ran again.
+fn rerun_changes(job: &GuidedJob, reset: &[(StageName, BTreeMap<String, Value>)]) -> Vec<Value> {
     let mut changed = Vec::new();
-    for (name, before) in &reset {
+    for (name, before) in reset {
         if let Some(after) = job.stage(*name).and_then(|st| st.result.as_ref()).map(digest) {
             changed.extend(digest_changes(*name, before, &after));
         }
     }
+    changed
+}
+
+/// `job.answer {id, answer} | {answers: [{id, answer}…]}` — answer one question or many. Each
+/// answer stands alone: one whose question is gone (merged, or not asked again after a re-run)
+/// is a warning and the others are kept and saved. The stages the answers change run again
+/// once, from the first of them (`rerun: false` holds that until the next answer or job.next).
+fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut items: Vec<(String, Value)> = Vec::new();
+    match p.get("answers") {
+        Some(Value::Array(list)) => {
+            if list.len() > MAX_ANSWERS_PER_CALL {
+                return Err(bad("job.answer", format!("at most {MAX_ANSWERS_PER_CALL} answers per call ({} given)", list.len())));
+            }
+            for (i, a) in list.iter().enumerate() {
+                let id = a.get("id").and_then(Value::as_str).map(str::trim).unwrap_or("");
+                items.push((if id.is_empty() { format!("#{i}") } else { id.to_string() }, a.get("answer").cloned().unwrap_or(Value::Null)));
+            }
+            if items.is_empty() {
+                return Err(bad("job.answer", "`answers` is empty — give [{id, answer}…]"));
+            }
+        }
+        Some(_) => return Err(bad("job.answer", "`answers` must be a list of {id, answer}")),
+        None => {
+            let qid = str_param(p, "id").ok_or_else(|| bad("job.answer", "`id` (question id from job.next, e.g. Q-rooms-12) is required"))?;
+            let answer = p.get("answer").cloned().unwrap_or(Value::Null);
+            if answer.is_null() {
+                return Err(bad("job.answer", "`answer` is required"));
+            }
+            items.push((qid.to_string(), answer));
+        }
+    }
+    let batch = p.get("answers").is_some();
+    let run_now = p.get("rerun").and_then(Value::as_bool).unwrap_or(true);
+
+    let mut job = load_job(s)?.ok_or_else(|| bad("job.answer", "no job running"))?;
+
+    let mut applied: Vec<Applied> = Vec::new();
+    let mut warnings: Vec<Value> = Vec::new();
+    for (qid, answer) in items {
+        match apply_answer(&mut job, &qid, answer) {
+            Ok(a) => applied.push(a),
+            Err(w) => warnings.push(json!({"id": qid, "warning": w})),
+        }
+    }
+
+    // The answers' re-runs (and one held by an earlier `rerun: false`), as one.
+    let wanted = applied.iter().filter_map(|a| a.rerun_from).chain(job.rerun_held).min();
+    let mut reset = Vec::new();
+    let mut held = None;
+    match wanted {
+        Some(from) if run_now => {
+            job.rerun_held = None;
+            let reasons: Vec<&str> = applied.iter().filter(|a| a.rerun_from.is_some()).map(|a| a.effect.as_str()).collect();
+            let first = applied.iter().find(|a| a.rerun_from == Some(from)).map(|a| a.qid.clone());
+            reset = rerun_from_stage(s, &mut job, from, &json!(reasons.join("; ")), first.as_deref())?;
+        }
+        Some(from) => {
+            // Held: the stage runs when the answers are all in.
+            let ran = job.stages.iter().any(|st| st.name >= from && !matches!(st.status, StageStatus::Skipped | StageStatus::Pending));
+            if ran {
+                job.rerun_held = Some(from);
+                held = Some(from);
+            }
+        }
+        None => {}
+    }
+    // A stage whose questions are all answered is done.
+    let touched: BTreeSet<StageName> = applied.iter().filter_map(|a| a.stage).collect();
+    for sn in touched {
+        if let Some(st) = job.stage_mut(sn)
+            && st.status == StageStatus::Paused
+            && st.unanswered().is_empty()
+        {
+            st.status = StageStatus::Done;
+            job.audit("stage_done", "pipeline", None, Some(sn), None);
+        }
+    }
+    // A held re-run waits: the stages after it would only run again.
+    if held.is_none() {
+        advance_pipeline(s, &mut job)?;
+    }
+
+    let changed = rerun_changes(&job, &reset);
     // Read again and still nothing: the reader misses what the answer says is there.
-    if q_clone.answer.as_ref().and_then(Value::as_str).is_some_and(|a| a.starts_with("There should be"))
-        && let Some(sn) = stage_name
-        && reset.iter().any(|(n, _)| *n == sn)
-        && !changed.iter().any(|c| c["stage"] == sn.label())
+    for a in &applied {
+        if a.question.answer.as_ref().and_then(Value::as_str).is_some_and(|t| t.starts_with("There should be"))
+            && let Some(sn) = a.stage
+            && reset.iter().any(|(n, _)| *n == sn)
+            && !changed.iter().any(|c| c["stage"] == sn.label())
+        {
+            job.add_finding(
+                sn,
+                &format!("{}: read again after your answer and still nothing found", sn.label()),
+                "The answer says the sheets have them; the reader doesn't find them on this set",
+                5,
+                vec!["Look at the sheets named in the question".into()],
+                a.question.evidence.clone(),
+                false,
+            );
+        }
+    }
+    // Level names and confirmations reach a model already built.
+    let mut level_changes = Vec::new();
+    if applied.iter().any(|a| a.stage == Some(StageName::Levels))
+        && job.stage(StageName::BimBuild).is_some_and(|st| st.status == StageStatus::Done)
+        && !reset.iter().any(|(n, _)| *n == StageName::BimBuild)
     {
-        job.add_finding(
-            sn,
-            &format!("{}: read again after your answer and still nothing found", sn.label()),
-            "The answer says the sheets have them; the reader doesn't find them on this set",
-            5,
-            vec!["Look at the sheets named in the question".into()],
-            q_clone.evidence.clone(),
-            false,
-        );
+        level_changes = apply_level_answers(s, &job);
     }
     sync_worklist(&mut job);
     save_job(s, &job)?;
 
     let rerun: Vec<&str> = reset.iter().map(|(n, _)| n.label()).collect();
-    let applies_to = rerun_from.filter(|_| reset.is_empty()).map(StageName::label);
+    let applies_to = wanted.filter(|_| reset.is_empty() && held.is_none()).map(StageName::label);
+    let ids: Vec<&str> = applied.iter().map(|a| a.qid.as_str()).collect();
+    let answered = match (batch, ids.as_slice()) {
+        (false, [one]) => json!(one),
+        (false, _) => Value::Null,
+        _ => json!(ids),
+    };
     let mut out = match job.next_question() {
         Some(q) => json!({
-            "answered": qid,
+            "answered": answered,
             "next": question_value(&job, q),
             "progress": job.progress(),
         }),
         None if job.is_done() => {
             let stats = model_stats_from_session(s);
             json!({
-                "answered": qid,
+                "answered": answered,
                 "done": true,
                 "progress": 1.0,
                 "summary": job_summary(s, &job, stats.as_ref()),
             })
         }
         None => json!({
-            "answered": qid,
+            "answered": answered,
             "progress": job.progress(),
             "stage": job.current_stage().map(|s| s.name.label()),
         }),
     };
-    out["effect"] = json!(effect);
+    let effects: Vec<&str> = applied.iter().map(|a| a.effect.as_str()).collect();
+    out["effect"] = match (batch, effects.as_slice()) {
+        (false, [one]) => json!(one),
+        (false, []) => json!(""),
+        _ => json!(applied.iter().map(|a| json!({"id": a.qid, "effect": a.effect})).collect::<Vec<_>>()),
+    };
     out["rerun"] = json!(rerun);
     out["changed"] = json!(changed);
     if let Some(stage) = applies_to {
         out["applies_to"] = json!(stage);
     }
+    if let Some(from) = held {
+        out["rerun_held"] = json!({
+            "from": from.label(),
+            "note": "held (rerun: false): it runs once on the next job.answer or job.next",
+        });
+    }
+    if !level_changes.is_empty() {
+        out["levels_changed"] = json!(level_changes);
+    }
+    if !warnings.is_empty() {
+        out["warnings"] = json!(warnings);
+    }
     out["answers"] = answers_value(&job);
     Ok(out)
+}
+
+/// `job.set_mode {auto}` — switch a job between interactive and unattended. Answers already
+/// given are kept; going to auto takes the defaults of the open questions and runs on.
+fn cmd_set_mode(s: &mut Session, p: &Value) -> Result<Value> {
+    let auto = p.get("auto").and_then(Value::as_bool).ok_or_else(|| bad("job.set_mode", "`auto` (true or false) is required"))?;
+    let mut job = load_job(s)?.ok_or_else(|| bad("job.set_mode", "no job running — job.start {pdfs, auto: true} starts one unattended"))?;
+    let was = job.auto;
+    job.auto = auto;
+    job.audit("set_mode", "agent", None, None, Some(json!({"auto": auto, "was": was})));
+    let mut reset = Vec::new();
+    if auto && !job.is_done() {
+        // A held re-run runs first: the defaults go to the questions it asks.
+        if let Some(from) = job.rerun_held.take() {
+            reset = rerun_from_stage(s, &mut job, from, &json!("held answers"), None)?;
+        }
+        advance_pipeline(s, &mut job)?;
+    }
+    save_job(s, &job)?;
+    let stats = model_stats_from_session(s);
+    let mut status = job_status_value(&job, stats.as_ref());
+    status["mode"] = json!({"from": if was { "auto" } else { "interactive" }, "to": if auto { "auto" } else { "interactive" }});
+    if !reset.is_empty() {
+        status["rerun"] = json!(reset.iter().map(|(n, _)| n.label()).collect::<Vec<_>>());
+    }
+    Ok(status)
 }
 
 /// `job.status` — current job status (returns `{running: false}` when no job exists).
@@ -4033,6 +5214,74 @@ fn cmd_rules(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(json!({"rules": rules, "count": rules.len()}))
 }
 
+/// Q6021 MUST 3: warnings the report raises when the job is done but something is off.
+fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
+    let mut w: Vec<Value> = Vec::new();
+
+    // 0 rooms.
+    let rooms_stage = job.stage(StageName::Rooms);
+    let room_count = rooms_stage.and_then(|st| st.result.as_ref()).and_then(|r| r.get("count")).and_then(Value::as_u64).unwrap_or(0);
+    if rooms_stage.is_some_and(|st| st.status == StageStatus::Done) && room_count == 0 {
+        w.push(json!({"warning": "0 rooms", "detail": "The rooms stage finished with 0 rooms in the model"}));
+    }
+
+    // Devices not placed in the model.
+    let devices_stage = job.stage(StageName::Devices);
+    if devices_stage.is_some_and(|st| st.status == StageStatus::Done) && job.devices.is_empty() {
+        w.push(json!({"warning": "devices not in model", "detail": "The devices stage ran but 0 devices were placed in the model"}));
+    }
+
+    // Estimate $0 or unpriced.
+    let estimate_stage = job.stage(StageName::Estimate);
+    if let Some(est) = estimate_stage.filter(|st| st.status == StageStatus::Done) {
+        let total = est.result.as_ref().and_then(|r| r.get("total")).and_then(Value::as_f64).unwrap_or(0.0);
+        let unpriced = est.result.as_ref().and_then(|r| r.get("unpriced")).and_then(Value::as_u64).unwrap_or(0);
+        if total <= 0.0 {
+            w.push(json!({"warning": "estimate $0", "detail": "The estimate total is $0"}));
+        }
+        if unpriced > 0 {
+            w.push(json!({"warning": "unpriced items", "detail": format!("{unpriced} line(s) have no price")}));
+        }
+    }
+
+    // MEP sheets not registered (plan sheets not loaded/built).
+    let not_built = not_built_sheets(job);
+    if !not_built.is_empty() {
+        w.push(json!({"warning": "sheets not built", "detail": not_built}));
+    }
+
+    // Auto-guard rejections (Q6021).
+    let rejected: Vec<String> = job
+        .stages
+        .iter()
+        .flat_map(|st| st.questions.iter().chain(st.verify.iter()).chain(st.completeness.iter()))
+        .filter(|q| q.answered_by.as_deref() == Some("auto_guard"))
+        .map(|q| q.question.clone())
+        .collect();
+    if !rejected.is_empty() {
+        w.push(json!({"warning": "auto-guard rejections", "count": rejected.len(), "detail": rejected}));
+    }
+
+    // Elements from the saved model.
+    if let Some(ms) = stats
+        && (ms.elements_by_kind.is_empty() || ms.elements_by_kind.values().sum::<usize>() == 0)
+    {
+        w.push(json!({"warning": "0 elements in model", "detail": "The building model has 0 elements"}));
+    }
+    w
+}
+
+/// Q6021 MUST 3: "done" vs "done_with_warnings".
+fn done_status(job: &GuidedJob, warnings: &[Value]) -> &'static str {
+    if !job.is_done() {
+        "in_progress"
+    } else if warnings.is_empty() {
+        "done"
+    } else {
+        "done_with_warnings"
+    }
+}
+
 /// `job.report` — final report (md + json).
 fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
     let job = load_job(s)?.ok_or_else(|| bad("job.report", "no job running"))?;
@@ -4069,12 +5318,18 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         })
         .collect();
 
+    let stats = model_stats_from_session(s);
+    let warnings = job_warnings(&job, stats.as_ref());
+    let status = done_status(&job, &warnings);
+
     Ok(json!({
         "job_id": job.id,
         "goal": job.goal,
         "created": job.created,
         "pdfs": job.pdfs_path,
         "done": job.is_done(),
+        "status": status,
+        "warnings": warnings,
         "progress": job.progress(),
         "stages": stages_summary,
         "totals": {
@@ -4085,6 +5340,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "answers": answers_value(&job),
         "rules_learned": job.rules.len(),
         "audit_entries": job.audit.len(),
+        "not_built": not_built_sheets(&job),
     }))
 }
 
@@ -4120,11 +5376,16 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
         _ => Value::Null,
     };
 
+    // Q6021 MUST 3: warnings and done_with_warnings status.
+    let warnings = job_warnings(job, stats);
+    let status = done_status(job, &warnings);
+
     let mut v = json!({
         "job_id": job.id,
         "goal": job.goal,
         "progress": job.progress(),
         "done": job.is_done(),
+        "status": status,
         "current_stage": job.current_stage().map(|s| s.name.label()),
         "stages": stages,
         "open_questions": job.stages.iter().map(|s| s.unanswered().len()).sum::<usize>(),
@@ -4139,6 +5400,12 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
         "answers": answers_value(job),
         "links": job.links,
     });
+    if !warnings.is_empty() {
+        v["warnings"] = json!(warnings);
+    }
+    if let Some(from) = job.rerun_held {
+        v["rerun_held"] = json!(from.label());
+    }
     // A paused job says what it is asking.
     if let Some(q) = job.next_question() {
         v["question"] = question_value(job, q);
@@ -4366,10 +5633,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .files()
             .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\", auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
-            .params("{} → {question?: {id, stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked}, answers, done?, progress, stage?}")
+            .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
         CommandSpec::new("job.answer", "Answer Job Question", cmd_answer)
-            .params("{id: question id, answer: value} → {answered, effect: what the answer changes, rerun: [stages run again], changed: [{stage, what, before, after}], applies_to?: a stage still to run that will read it, next?: question, done?, progress, answers}"),
+            .params("{id: \"Q-rooms-23\" (the question id job.next gives: Q-stage-number, as Q-levels-3; not needed with answers), answer: \"Correct\" | text | object (a choice, the default, your own value; a level question takes an elevation in feet — 12.5, or feet and inches — and a name: {elevation_ft: 12.5, name: \"Mezzanine\"}; \"Correct\" confirms it as yours), answers?: [{id, answer}] (many at once: each stands alone — an unknown or merged id is a warning and the rest are kept — and the stages they change run again once), rerun?: bool (default true; false holds the re-run until the next job.answer or job.next, to answer several questions of one stage first)} → {answered: id | [ids], effect: what the answer changes | [{id, effect}], rerun: [stages run again], changed: [{stage, what, before, after}], applies_to?: a stage still to run that will read it, rerun_held?: {from, note}, levels_changed?, warnings?: [{id, warning}], next?: question, done?, progress, answers}"),
+        CommandSpec::new("job.set_mode", "Set Job Mode", cmd_set_mode)
+            .params("{auto: bool (true: the running job goes on unattended, every open question with a default takes it; false: it stops at each checkpoint again)} → {mode: {from, to}, rerun?, …job.status}"),
         CommandSpec::new("job.status", "Job Status", cmd_status)
             .params("{} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, checkpoint?, open_questions, findings, worklist_pending, rules_learned}")
             .noundo(),
@@ -4552,6 +5821,101 @@ mod tests {
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
     }
 
+    /// Q6007: a made-up electrical plan (level 1, inches) with a fixture schedule, three A
+    /// fixtures on circuit D-7 (a homerun arrow at the last one), two B fixtures on D-9 (no
+    /// homerun), and panel D drawn as a box lettered D. The job reads the circuits, routes
+    /// each (estimated), and the takeoff has their conduit, wire and boxes by level and circuit.
+    #[test]
+    fn circuits_come_out_of_the_job_as_conduit_and_wire() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-1", "sheet_type": "plan", "level": "1", "discipline": "E"}]}));
+        job.sheets_loaded = true;
+        let mut texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIGHTING FIXTURE SCHEDULE", 1400.0, 800.0, 8.0),
+            ("TYPE", 1400.0, 785.0, 5.0),
+            ("DESCRIPTION", 1430.0, 785.0, 5.0),
+            ("A", 1400.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1430.0, 772.0, 5.0),
+            ("B", 1400.0, 760.0, 5.0),
+            ("LED DOWNLIGHT", 1430.0, 760.0, 5.0),
+            // The homerun's label, and panel D's lettering above its box.
+            ("D-7", 532.0, 328.0, 6.0),
+            ("D", 996.0, 110.0, 6.0),
+        ];
+        let mut syms: Vec<(&str, f64, f64)> = vec![("A", 1390.0, 772.0)];
+        for x in [100.0, 300.0, 500.0] {
+            syms.push(("A", x, 300.0));
+            texts.push(("D-7", x + 8.0, 296.0, 2.0));
+        }
+        for x in [100.0, 300.0] {
+            syms.push(("B", x, 600.0));
+            texts.push(("D-9", x + 8.0, 596.0, 2.0));
+        }
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &syms);
+        s.execute("line", &json!({"points": [[500, 300], [530, 330]]})).unwrap_or_else(|e| panic!("{e}"));
+        s.execute("pline", &json!({"points": [[988, 94], [1012, 94], [1012, 106], [988, 106]], "closed": true})).unwrap_or_else(|e| panic!("{e}"));
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-1".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+        });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r["devices"]["count"], json!(5), "{r:#}");
+        assert_eq!(job.devices.iter().filter(|d| d.circuit == "D-7").count(), 3, "{:?}", job.devices);
+
+        let m = run_mep_read_stage(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let c = &m["conduit"];
+        assert_eq!((c["circuits"].clone(), c["homeruns"].clone(), c["sheets"][0]["panels"].clone()), (json!(2), json!(1), json!(["D"])), "{c:#}");
+        assert!(m["trade_summary"].as_str().unwrap_or_default().contains("2 circuit(s) on 1 electrical plan(s)"), "{m:#}");
+        // D-7: 400 units of chain + 700 of home run; D-9: 200 + 1200 (12 units a foot).
+        assert!((c["estimated_ft"].as_f64().unwrap_or(0.0) - 2500.0 / 12.0).abs() < 0.1, "{c:#}");
+
+        let built = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(built["circuits"], json!(2), "{built:#}");
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(d.building_spec.as_deref().unwrap_or("")).unwrap_or_else(|e| panic!("{e}"));
+        let tags: Vec<&cadaddy_walk3d::tags::ElementTag> = sp.tags.iter().filter(|t| t.kind == "circuit").collect();
+        assert_eq!(tags.len(), 2);
+        assert!(tags.iter().all(|t| t.fields["route"].value == super::super::printcond::ESTIMATED && t.fields["panel_at"].value == "E-1"));
+        let runs: Vec<&cadaddy_walk3d::MepRun> = sp.mep.runs.iter().filter(|r| r.system == super::super::printcond::CIRCUIT_SYSTEM).collect();
+        assert_eq!(runs.len(), 5, "two home runs and three legs: {runs:#?}");
+        let ceiling = sp.level("Level 1").map_or(0.0, |l| l.ceiling_ft);
+        assert!(runs.iter().all(|r| r.bottoms_ft.iter().all(|b| (b - ceiling - 0.25).abs() < 1e-9)), "just above the ceiling: {runs:#?}");
+
+        // The BOM by circuit: conduit (an estimated route, marked), wire, boxes.
+        let bom = s.execute("bim.bom", &json!({"group_by": "circuit"})).unwrap_or_else(|e| panic!("{e}"));
+        let lines: Vec<&Value> = bom["lines"].as_array().into_iter().flatten().filter(|l| l["circuit"] == "D-7").collect();
+        let get = |item: &str| lines.iter().find(|l| l["item"] == item).copied().unwrap_or(&Value::Null);
+        let conduit = get("EMT conduit");
+        assert!((conduit["net"].as_f64().unwrap_or(0.0) - 1100.0 / 12.0).abs() < 0.01, "{lines:#?}");
+        assert_eq!(conduit["status"], json!("rule"));
+        assert!(conduit["rule"].as_str().unwrap_or_default().contains("estimated route"));
+        // 2#12 + 1#12G (the default) over 91.67' plus 1' at each end of 3 pulls.
+        let wire = lines.iter().find(|l| l["item"] == "THHN copper" && l["size"] == "#12").copied().unwrap_or(&Value::Null);
+        assert!((wire["net"].as_f64().unwrap_or(0.0) - 2.0 * (1100.0 / 12.0 + 6.0)).abs() < 0.01, "{lines:#?}");
+        assert_eq!(get("Box, 4\" octagon")["net"], json!(3.0), "one box per fixture on the circuit");
+        assert!(get("EMT connector")["net"].as_f64().unwrap_or(0.0) >= 6.0);
+
+        // The takeoff stage: by level and circuit.
+        let t = run_takeoff(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let d9 = t["circuits"].as_array().into_iter().flatten().find(|c| c["circuit"] == "D-9").unwrap_or(&Value::Null);
+        assert_eq!(d9["level"], json!("Level 1"), "{t:#}");
+        assert!((d9["conduit_ft"].as_f64().unwrap_or(0.0) - 1400.0 / 12.0).abs() < 0.1, "{d9:#}");
+        assert!(d9["wire_ft"]["#12"].as_f64().unwrap_or(0.0) > 0.0 && d9["boxes"] == json!(2.0), "{d9:#}");
+        assert!((t["summary"]["conduit_ft"].as_f64().unwrap_or(0.0) - 2500.0 / 12.0).abs() < 0.1, "{:#}", t["summary"]);
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
+    }
+
     /// A made-up job of two plan sheets side by side, levels 1 and 2, each with a fixture
     /// schedule (types A, B) and junk tags. Every device the devices stage counts becomes one
     /// model element on its sheet's level and one BOM unit (Q5271 MUSTS 1, 2, 4, 5).
@@ -4597,6 +5961,10 @@ mod tests {
                 discipline: "E".into(),
                 kind: "plan".into(),
                 rect: [x0, 0.0, x0 + 2000.0, 1000.0],
+                area: None,
+                title_block: None,
+                not_built: String::new(),
+                levels: Vec::new(),
             });
             want_by_level.insert(format!("Level {level}"), a + b);
         }
@@ -4894,7 +6262,17 @@ mod tests {
     }
 
     fn region(number: &str, level: &str, discipline: &str, kind: &str, x: f64) -> SheetRegion {
-        SheetRegion { number: number.into(), level: level.into(), discipline: discipline.into(), kind: kind.into(), rect: [x, 0.0, x + 100.0, 80.0] }
+        SheetRegion {
+            number: number.into(),
+            level: level.into(),
+            discipline: discipline.into(),
+            kind: kind.into(),
+            rect: [x, 0.0, x + 100.0, 80.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+        }
     }
 
     #[test]
@@ -5003,6 +6381,278 @@ mod tests {
         let r301: Vec<&Value> = list.iter().filter(|r| r["number"] == "301" && r["level"] == "3").collect();
         assert_eq!(r301.len(), 1);
         assert_eq!(r301[0]["sheet"], "A113");
+    }
+
+    // ─── Sheet furniture and site sheets build nothing (Q5273) ───
+
+    fn line(s: &mut crate::Session, a: [f64; 2], b: [f64; 2]) {
+        s.execute("line", &json!({"points": [a, b]})).unwrap();
+    }
+
+    fn rect(s: &mut crate::Session, x0: f64, y0: f64, x1: f64, y1: f64) {
+        line(s, [x0, y0], [x1, y0]);
+        line(s, [x1, y0], [x1, y1]);
+        line(s, [x1, y1], [x0, y1]);
+        line(s, [x0, y1], [x0, y0]);
+    }
+
+    /// The made-up sheet's rectangle (inches, a 1/8" plan's sheet units).
+    const SHEET: [f64; 4] = [-200.0, -200.0, 1000.0, 700.0];
+
+    /// A plan sheet as a print set plots it, everything on the wall pen: a 40' × 30' floor (6"
+    /// walls, a 4" partition with a door, OFFICE and LOBBY), a double ruled border, a title-block
+    /// strip on the right (two full-height rules, rows ruled in pairs that close boxes around the
+    /// firm's name and the project name) and a round review stamp in the strip.
+    fn furnished_sheet() -> crate::Session {
+        let mut s = crate::Session::new();
+        s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+        rect(&mut s, 0.0, 0.0, 480.0, 360.0);
+        rect(&mut s, 6.0, 6.0, 474.0, 354.0);
+        for x in [238.0, 242.0] {
+            line(&mut s, [x, 6.0], [x, 150.0]);
+            line(&mut s, [x, 186.0], [x, 354.0]);
+        }
+        // The border.
+        rect(&mut s, -185.0, -185.0, 985.0, 685.0);
+        rect(&mut s, -179.0, -179.0, 979.0, 679.0);
+        // The title block: its rules, and rows in pairs 8" apart.
+        line(&mut s, [880.0, -179.0], [880.0, 679.0]);
+        line(&mut s, [886.0, -179.0], [886.0, 679.0]);
+        for y in [0.0, 100.0, 200.0, 300.0] {
+            line(&mut s, [886.0, y], [979.0, y]);
+            line(&mut s, [886.0, y + 8.0], [979.0, y + 8.0]);
+        }
+        // The stamp.
+        s.execute("circle", &json!({"center": [930.0, 450.0], "radius": 30.0})).unwrap();
+        s.execute("circle", &json!({"center": [930.0, 450.0], "radius": 24.0})).unwrap();
+        s.execute("layer.new", &json!({"name": "A-DOOR", "current": true})).unwrap();
+        s.execute("arc", &json!({"center": [240.0, 150.0], "radius": 36.0, "start": 0.0, "end": 90.0})).unwrap();
+        s.execute("layer.new", &json!({"name": "A-AREA-IDEN", "current": true})).unwrap();
+        for (t, x, y, h) in [
+            ("OFFICE", 100.0, 180.0, 8.0),
+            ("101", 100.0, 160.0, 6.0),
+            ("LOBBY", 340.0, 180.0, 8.0),
+            ("102", 340.0, 160.0, 6.0),
+            ("ACME DESIGN GROUP", 895.0, 150.0, 6.0),
+            ("SAMPLE INN", 895.0, 250.0, 6.0),
+            ("OWNER COPY", 905.0, 450.0, 5.0),
+        ] {
+            s.execute("text", &json!({"at": [x, y], "text": t, "height": h})).unwrap();
+        }
+        s
+    }
+
+    fn a_plan(area: Option<[f64; 4]>, title_block: Option<[f64; 4]>) -> SheetRegion {
+        SheetRegion {
+            number: "A111".into(),
+            level: "1".into(),
+            discipline: "A".into(),
+            kind: "plan".into(),
+            rect: SHEET,
+            area,
+            title_block,
+            not_built: String::new(),
+            levels: Vec::new(),
+        }
+    }
+
+    /// Built walls: how many, and how many have their middle off the floor's footprint.
+    fn walls_built(s: &crate::Session) -> (usize, usize) {
+        let d = s.doc().unwrap();
+        let walls: Vec<_> = d.model.iter().filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("wall")).collect();
+        let off = walls
+            .iter()
+            .filter(|e| {
+                let c = cadaddy_doc::entity_bounds(d, e, 0).center();
+                !(c.x >= -12.0 && c.x <= 492.0 && c.y >= -12.0 && c.y <= 372.0)
+            })
+            .count();
+        (walls.len(), off)
+    }
+
+    fn build_job(s: &mut crate::Session, job: &GuidedJob) -> Value {
+        let levels = building_levels(job);
+        assert_eq!(levels.len(), 1, "{levels:?}");
+        s.execute("bspec.draft", &json!({"store": true, "levels": levels, "stack": true})).unwrap();
+        s.execute("model.build", &json!({})).unwrap()
+    }
+
+    #[test]
+    fn the_sheet_frame_is_found_and_the_plan_is_inside_it() {
+        let s = furnished_sheet();
+        let frames = sheet_frames(s.doc().unwrap(), &[SHEET]);
+        let f = frames.first().copied().unwrap();
+        assert!(f.border, "{f:?}");
+        let tb = f.title_block.unwrap();
+        assert!((tb[0] - 880.0).abs() < 1.0, "the strip starts at its first full-height rule: {f:?}");
+        // Inside the border, left of the title block, and the whole floor in it.
+        let a = f.area;
+        assert!(a[0] > -179.0 && a[1] > -179.0 && a[2] < 880.0 && a[3] < 679.0, "{f:?}");
+        assert!(a[0] < 0.0 && a[1] < 0.0 && a[2] > 480.0 && a[3] > 360.0, "{f:?}");
+        // A region with nothing drawn: the frame is the whole region.
+        let none = sheet_frames(s.doc().unwrap(), &[[5000.0, 5000.0, 6000.0, 6000.0]]);
+        assert_eq!(none.first().map(|f| (f.area, f.border, f.title_block)), Some(([5000.0, 5000.0, 6000.0, 6000.0], false, None)));
+    }
+
+    #[test]
+    fn the_title_block_border_and_stamp_build_no_walls_or_rooms() {
+        // Without the frame (the whole sheet a level), the title block's boxes are traced around
+        // its texts, but no room is built from them: they run along no built wall (Q5291).
+        let mut s = furnished_sheet();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![a_plan(None, None)];
+        let r = build_job(&mut s, &job);
+        let spec: cadaddy_walk3d::BuildingSpec = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+        assert!(
+            spec.rooms.iter().any(|r| !["OFFICE", "LOBBY"].contains(&r.name.to_ascii_uppercase().as_str())),
+            "the test sheet's title block must name rooms: {r}"
+        );
+        assert!(r["notes"].to_string().contains("not inside built walls"), "the title block's boxes trace: {r}");
+        assert_eq!(r["rooms"].as_u64(), Some(1), "the floor's room only: {r}");
+
+        // With it: only the floor's walls, its door and its two rooms.
+        let mut s = furnished_sheet();
+        let f = sheet_frames(s.doc().unwrap(), &[SHEET]).first().copied().unwrap();
+        job.sheet_regions = vec![a_plan(Some(f.area), f.title_block)];
+        let r = build_job(&mut s, &job);
+        let (n, off) = walls_built(&s);
+        assert!(n >= 4, "{r}");
+        assert_eq!(off, 0, "no wall from the border, title block or stamp: {r}");
+        // (OFFICE and LOBBY trace as one space through the door's gap: one room.)
+        assert_eq!(r["rooms"].as_u64(), Some(1), "the floor's room only: {r}");
+        assert_eq!(r["doors"].as_u64(), Some(1), "{r}");
+        let spec: cadaddy_walk3d::BuildingSpec = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+        let names: Vec<String> = spec.rooms.iter().map(|r| r.name.to_ascii_uppercase()).collect();
+        assert!(!names.is_empty() && names.iter().all(|n| n == "OFFICE" || n == "LOBBY"), "{names:?}");
+    }
+
+    #[test]
+    fn the_jobs_rooms_are_the_reading_and_what_only_the_model_traced() {
+        // The partition's jambs drawn and its door shut, so OFFICE and LOBBY are two rooms
+        // inside the floor's walls.
+        let mut s = furnished_sheet();
+        s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+        line(&mut s, [238.0, 150.0], [242.0, 150.0]);
+        line(&mut s, [238.0, 186.0], [242.0, 186.0]);
+        s.execute("layer.current", &json!({"name": "A-DOOR"})).unwrap();
+        line(&mut s, [240.0, 150.0], [240.0, 186.0]);
+        let f = sheet_frames(s.doc().unwrap(), &[SHEET]).first().copied().unwrap();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![a_plan(Some(f.area), f.title_block)];
+        let r = build_job(&mut s, &job);
+        assert_eq!(r["rooms"].as_u64(), Some(2), "{r}");
+        // The rooms stage read OFFICE 101 and LAB 103 (its door not built, so the model traced
+        // no lab) on level 1, and STORAGE on level 2 (no plan built); not the lobby.
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"count": 3, "rooms": [
+                {"name": "OFFICE", "number": "101", "level": "1"},
+                {"name": "LAB", "number": "103", "level": "1"},
+                {"name": "STORAGE", "number": "201", "level": "2"}
+            ]}));
+        }
+        let by_level = rooms_from_model(&mut s, &mut job).expect("the model's rooms");
+        assert_eq!(by_level, json!({"Level 1": 2}));
+        let names_of = |job: &GuidedJob| {
+            let result = job.stage(StageName::Rooms).and_then(|st| st.result.clone()).unwrap_or_default();
+            let mut names: Vec<(String, String, String)> = result["rooms"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| {
+                    (r["name"].as_str().unwrap_or("").into(), r["number"].as_str().unwrap_or("").into(), r["level"].as_str().unwrap_or("").into())
+                })
+                .collect();
+            names.sort_unstable();
+            (names, result)
+        };
+        let (names, result) = names_of(&job);
+        // The model's Office is the OFFICE read (its number); its Lobby, not read, is added.
+        let want = [("LAB", "103", "1"), ("Lobby", "102", "Level 1"), ("OFFICE", "101", "1"), ("STORAGE", "201", "2")];
+        assert_eq!(names, want.map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string())), "{result}");
+        assert_eq!((result["count"].as_u64(), result["read_count"].as_u64(), result["from_model"].as_u64()), (Some(4), Some(3), Some(1)));
+        // Run again (a re-run of the build): the same rooms, none twice.
+        rooms_from_model(&mut s, &mut job).expect("the model's rooms");
+        let (again, result) = names_of(&job);
+        assert_eq!(again, names, "{result}");
+        assert_eq!(result["read_count"].as_u64(), Some(3));
+
+        // A model with no rooms leaves the reading as it was.
+        let mut empty = crate::Session::new();
+        let mut job2 = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        if let Some(st) = job2.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"count": 1, "rooms": [{"name": "OFFICE", "level": "1"}]}));
+        }
+        assert!(rooms_from_model(&mut empty, &mut job2).is_none());
+        assert_eq!(
+            job2.stage(StageName::Rooms).and_then(|st| st.result.clone()),
+            Some(json!({"count": 1, "rooms": [{"name": "OFFICE", "level": "1"}]}))
+        );
+    }
+
+    #[test]
+    fn site_civil_and_levelless_plans_are_never_a_storey() {
+        assert_eq!(not_built_reason("C", "DIMENSION CONTROL PLAN", "1", "default"), "site/civil");
+        assert_eq!(not_built_reason("L", "PLANTING PLAN", "1", "title"), "site/civil");
+        assert_eq!(not_built_reason("A", "ARCHITECTURAL SITE PLAN", "1", "default"), "site/civil");
+        assert_eq!(not_built_reason("A", "OVERALL PLAN", "SITE", "title"), "site/civil");
+        assert_eq!(not_built_reason("A", "ENLARGED STAIR PLAN", "1", "default"), "no level");
+        assert_eq!(not_built_reason("A", "FIRST FLOOR PLAN", "1", "title"), "");
+
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let mut site = region("A010", "1", "A", "plan", 0.0);
+        site.not_built = "site/civil".into();
+        let mut civil = region("C101", "1", "C", "plan", 200.0);
+        civil.not_built = "site/civil".into();
+        let mut nolevel = region("A100", "1", "A", "plan", 400.0);
+        nolevel.not_built = "no level".into();
+        job.sheet_regions = vec![site, civil, nolevel, region("A111", "1", "A", "plan", 600.0), region("A112", "2", "A", "plan", 800.0)];
+        let levels = building_levels(&job);
+        let x0: Vec<f64> = levels.iter().filter_map(|l| l["region"][0].as_f64()).collect();
+        assert_eq!(x0, [600.0, 800.0], "Level 1 is A111's, never the site plan's: {levels:?}");
+        let report = not_built_sheets(&job);
+        assert_eq!(report, ["A010: not built: site/civil", "C101: not built: site/civil", "A100: not built: no level"]);
+    }
+
+    #[test]
+    fn rooms_in_title_blocks_on_site_sheets_and_other_disciplines_go() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let mut a = region("A111", "1", "A", "plan", 0.0);
+        a.area = Some([2.0, 2.0, 80.0, 78.0]);
+        a.title_block = Some([82.0, 2.0, 98.0, 78.0]);
+        let mut site = region("C101", "", "C", "plan", 200.0);
+        site.not_built = "site/civil".into();
+        job.sheet_regions = vec![a, region("E101", "1", "E", "plan", 400.0), region("E102", "2", "E", "plan", 600.0), site];
+        let mut rooms = json!({"rooms": [
+            {"name": "OFFICE", "number": "101", "at": [20.0, 20.0]},
+            {"name": "ACME DESIGN GROUP", "at": [90.0, 40.0]},
+            {"name": "LOBBY", "at": [99.5, 79.5]},
+            {"name": "PLAZA", "at": [250.0, 40.0]},
+            {"name": "OFFICE", "at": [420.0, 40.0]},
+            {"name": "STORAGE", "at": [620.0, 40.0]},
+            {"name": "FIRST FLOOR PLAN", "at": [30.0, 10.0]},
+            {"name": "DRAWN BY: JD", "at": [30.0, 30.0]},
+            {"name": "KING SUITE", "number": "102", "at": [40.0, 40.0]},
+            {"name": "KING SUITE", "number": "104", "at": [430.0, 40.0]},
+            {"name": "-4--P- -I--Y-", "number": "135", "at": [440.0, 40.0]},
+            {"name": "22 40 OO", "at": [50.0, 50.0]}
+        ]});
+        let dropped = rooms_off_the_building(&job, &mut rooms);
+        let names: Vec<&str> = rooms["rooms"].as_array().unwrap().iter().filter_map(|r| r["name"].as_str()).collect();
+        // Level 2 has no A plan here: its electrical plan's rooms stay. On level 1 the
+        // electrical plan's numbered room the A plan's reading missed stays (one per number is
+        // kept later); its unnumbered OFFICE (a legend's, a note's) goes.
+        assert_eq!(names, ["OFFICE", "STORAGE", "KING SUITE", "KING SUITE"], "{dropped}");
+        assert_eq!(dropped, json!({"title_block_or_border": 2, "site_or_no_level": 1, "other_discipline": 1, "not_a_room_name": 4}));
+    }
+
+    #[test]
+    fn a_room_name_reads_as_words() {
+        for good in ["LOBBY", "IDF", "WC", "CORR", "KING ROOM", "Office", "STAIR 2"] {
+            assert!(legible_room_name(good), "{good}");
+        }
+        for bad in ["-4-----P- -I-----Y-", "Xb", "D D", "22 40 OO", "-J--L---", "G L", "", "12"] {
+            assert!(!legible_room_name(bad), "{bad}");
+        }
     }
 
     /// A question for the jobask tests.
@@ -5205,5 +6855,352 @@ mod tests {
         assert_eq!(rooms["rooms"], json!([room("102", "KING SUITE"), room("103", "X")]));
         let keys: Vec<(&str, &str)> = job.rules.iter().map(|r| (r.key.as_str(), r.value.as_str())).collect();
         assert!(keys.contains(&("symbol:XQ", "device:occupancy sensor")) && keys.contains(&("tag:L4", "not_device")), "{keys:?}");
+    }
+
+    #[test]
+    fn level_answers_take_an_elevation_and_a_name() {
+        assert_eq!(parse_elevation("12'-6\""), Some(12.5));
+        assert_eq!(parse_elevation("0'-0\""), Some(0.0));
+        assert_eq!(parse_elevation("0"), Some(0.0));
+        assert_eq!(parse_elevation("-4'-0\""), Some(-4.0));
+        assert_eq!(parse_elevation("EL. 112'-0\""), Some(112.0));
+        assert_eq!(parse_elevation("112.5 ft"), Some(112.5));
+        for bad in ["", "Level 2", "Correct", "high", "-", "99999999"] {
+            assert_eq!(parse_elevation(bad), None, "{bad}");
+        }
+        let at = |e: f64| Some(LevelAnswer { elevation_ft: Some(e), ..LevelAnswer::default() });
+        let yes = Some(LevelAnswer { confirmed: true, ..LevelAnswer::default() });
+        assert_eq!(level_answer(&json!("Correct")), yes);
+        assert_eq!(level_answer(&json!("Yes, \"2\"")), yes);
+        assert_eq!(level_answer(&json!("14'-0\"")), at(14.0));
+        assert_eq!(level_answer(&json!("Wrong elevation: 14'-0\"")), at(14.0));
+        assert_eq!(level_answer(&json!({"elevation_ft": 14.5})), at(14.5));
+        assert_eq!(level_answer(&json!({"elevation_ft": "14'-6\""})), at(14.5));
+        let named = |n: &str, e: Option<f64>| Some(LevelAnswer { elevation_ft: e, name: Some(n.into()), confirmed: false });
+        assert_eq!(level_answer(&json!("Wrong name: Mezzanine")), named("Mezzanine", None));
+        assert_eq!(level_answer(&json!("Mezzanine at 14'-0\"")), named("Mezzanine", Some(14.0)));
+        assert_eq!(level_answer(&json!({"name": "Mezzanine", "elevation_ft": 14})), named("Mezzanine", Some(14.0)));
+        // A choice that says neither, or nonsense: no level answer.
+        for none in [json!("Wrong elevation"), json!("Different name"), json!("Not a level"), json!({"x": 1}), json!(3), json!({"name": ""})] {
+            assert_eq!(level_answer(&none), None, "{none}");
+        }
+    }
+
+    fn level_question(job: &mut GuidedJob, level: &str, elevation: Option<f64>) -> Question {
+        let id =
+            ask(job, StageName::Levels, QuestionKind::Verify, &format!("Level {level}: elevation — name and elevation correct?"), Some("Correct"));
+        let st = job.stage_mut(StageName::Levels).expect("levels");
+        let q = st.verify.iter_mut().find(|q| q.id == id).expect("q");
+        q.evidence = Some(QuestionEvidence {
+            crop_png_path: None,
+            sheet: None,
+            at: None,
+            values: Some(json!({"level": level, "elevation_ft": elevation})),
+            handles: Vec::new(),
+            tiled_crops: None,
+            leftovers: Vec::new(),
+        });
+        q.clone()
+    }
+
+    /// A level answer is no longer "kept what the job read": an elevation builds the model at
+    /// it (over the readings, in order or not), a name renames, "Correct" makes it the user's.
+    #[test]
+    fn a_level_answer_moves_the_level_and_correct_confirms_it() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions =
+            vec![region("A-101", "1", "A", "plan", 0.0), region("A-102", "2", "A", "plan", 200.0), region("A-103", "3", "A", "plan", 400.0)];
+        let mut q = level_question(&mut job, "2", Some(10.0));
+        q.answer = Some(json!("Wrong elevation: 14'-0\""));
+        let (rerun, effect) = answer_effect(&mut job, &q);
+        assert_eq!(rerun, Some(StageName::BimBuild), "{effect}");
+        assert!(effect.contains("14'"), "{effect}");
+        let levels = building_levels(&job);
+        let el: Vec<f64> = levels.iter().filter_map(|l| l["elevation_ft"].as_f64()).collect();
+        assert_eq!(el, vec![0.0, 14.0, 24.0], "{levels:?}");
+        // Level 1 stays at 0 and reaches the elevation given for level 2.
+        assert_eq!(levels.first().and_then(|l| l["height_ft"].as_f64()), Some(14.0), "{levels:?}");
+        let mut q = level_question(&mut job, "Level 1", None);
+        q.answer = Some(json!("-2'-0\""));
+        assert_eq!(answer_effect(&mut job, &q).0, Some(StageName::BimBuild));
+        let first = building_levels(&job).first().cloned().unwrap_or_default();
+        assert_eq!((first["elevation_ft"].as_f64(), first["height_ft"].as_f64()), (Some(-2.0), Some(16.0)));
+
+        let mut q = level_question(&mut job, "Level 3", Some(20.0));
+        q.answer = Some(json!("Correct"));
+        let (rerun, effect) = answer_effect(&mut job, &q);
+        assert_eq!((rerun, effect.as_str()), (None, "level Level 3 confirmed by you (source user)"));
+        assert!(job.level_answers.get("LEVEL 3").is_some_and(|a| a.confirmed));
+
+        let mut q = level_question(&mut job, "1", None);
+        q.answer = Some(json!({"name": "Ground Floor"}));
+        // "1" and "Level 1" are the same level: one answer, the elevation kept.
+        let (rerun, effect) = answer_effect(&mut job, &q);
+        assert_eq!((rerun, effect.as_str()), (None, "level 1 is named Ground Floor"));
+        assert_eq!(
+            job.level_answers.get("LEVEL 1"),
+            Some(&LevelAnswer { elevation_ft: Some(-2.0), name: Some("Ground Floor".into()), confirmed: true })
+        );
+        assert_eq!(building_levels(&job).first().and_then(|l| l["elevation_ft"].as_f64()), Some(-2.0));
+        // A level answer that says nothing usable says how to answer.
+        let mut q = level_question(&mut job, "1", None);
+        q.answer = Some(json!("Wrong elevation"));
+        let (rerun, effect) = answer_effect(&mut job, &q);
+        assert!(rerun.is_none() && effect.contains("answer with an elevation"), "{effect}");
+    }
+
+    /// One unknown id among good answers is a warning: the good ones are set and saved.
+    #[test]
+    fn an_unknown_id_in_a_batch_is_a_warning_and_the_rest_are_kept() {
+        let mut s = Session::new();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Cdy);
+        let a = ask(&mut job, StageName::Rooms, QuestionKind::Verify, "Room 101 'OFFICE' right?", Some("Correct"));
+        let b = ask(&mut job, StageName::Rooms, QuestionKind::Verify, "Room 102 'LOBBY' right?", Some("Correct"));
+        // An earlier answer's re-run dropped this one: it is in the audit, not in a stage.
+        job.audit("answer", "agent", Some("Q-rooms-99"), Some(StageName::Rooms), None);
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.status = StageStatus::Paused;
+        }
+        save_job(&mut s, &job).unwrap();
+        let r = cmd_answer(
+            &mut s,
+            &json!({"answers": [{"id": a, "answer": "Correct"}, {"id": "Q-rooms-99", "answer": "Correct"}, {"id": "Q-bogus-1", "answer": "x"}, {"id": b, "answer": "Correct"}]}),
+        )
+        .unwrap();
+        assert_eq!(r["answered"], json!([a, b]), "{r}");
+        let w = r["warnings"].as_array().expect("warnings");
+        assert_eq!(w.len(), 2, "{r}");
+        assert!(w[0]["warning"].as_str().is_some_and(|t| t.contains("no longer open")), "{r}");
+        assert!(w[1]["warning"].as_str().is_some_and(|t| t.contains("not found")), "{r}");
+        let saved = load_job(&s).unwrap().unwrap();
+        let answered: Vec<&str> = saved.stages.iter().flat_map(|st| st.verify.iter()).filter(|q| q.answer.is_some()).map(|q| q.id.as_str()).collect();
+        assert_eq!(answered, vec![a.as_str(), b.as_str()]);
+        // One id alone that is gone: a warning too, not an error (a script's later lines and its
+        // --save still run).
+        let r = cmd_answer(&mut s, &json!({"id": "Q-rooms-99", "answer": "Correct"})).unwrap();
+        assert!(r["answered"].is_null() && r["warnings"].as_array().is_some_and(|w| w.len() == 1), "{r}");
+        // Bad shapes are errors.
+        assert!(cmd_answer(&mut s, &json!({"answers": "x"})).is_err());
+        assert!(cmd_answer(&mut s, &json!({"answers": []})).is_err());
+        assert!(cmd_answer(&mut s, &json!({"id": a})).is_err());
+        let many: Vec<Value> = (0..=MAX_ANSWERS_PER_CALL).map(|i| json!({"id": format!("Q-x-{i}"), "answer": "y"})).collect();
+        assert!(cmd_answer(&mut s, &json!({"answers": many})).is_err());
+    }
+
+    #[test]
+    fn a_question_says_what_an_answer_runs_again() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let id = ask(&mut job, StageName::Rooms, QuestionKind::Verify, "Room 101 'OFFICE' right?", Some("Correct"));
+        let q = job.stage(StageName::Rooms).and_then(|st| st.verify.first()).cloned().expect("q");
+        assert_eq!(q.id, id);
+        // The rooms stage hasn't run: the answer is read when it does.
+        assert_eq!(if_changed(&job, &q)["applies_to"], "rooms");
+        for (name, ms) in [(StageName::Rooms, 98_400), (StageName::Devices, 3_100)] {
+            if let Some(st) = job.stage_mut(name) {
+                st.status = StageStatus::Done;
+                st.elapsed_ms = Some(ms);
+            }
+        }
+        let v = if_changed(&job, &q);
+        assert_eq!((v["reruns"].clone(), v["about_s"].as_f64()), (json!(["rooms", "devices"]), Some(102.0)), "{v}");
+        assert!(v["note"].as_str().is_some_and(|n| n.contains("about 102 s")), "{v}");
+        // A question nothing re-reads.
+        let other = ask(&mut job, StageName::Takeoff, QuestionKind::Doubt, "Totals look right?", Some("Yes"));
+        let q = job.stage(StageName::Takeoff).and_then(|st| st.questions.iter().find(|q| q.id == other)).cloned().expect("q");
+        assert!(if_changed(&job, &q).is_null());
+    }
+
+    // ─── Q6021: auto-guard tests ─────────────────────────────────────────────
+
+    /// Helper: a room-verify question with area and name in the evidence.
+    fn room_verify(job: &mut GuidedJob, name: &str, number: &str, area: f64) -> String {
+        let id = job.next_qid(StageName::Rooms);
+        let q = Question {
+            id: id.clone(),
+            stage: StageName::Rooms,
+            question: format!("Room {number} '{name}': {area:.0} sq ft — name and area right?"),
+            why: "Verify sample".into(),
+            choices: vec!["Correct".into(), "Not a room".into()],
+            evidence: Some(QuestionEvidence {
+                crop_png_path: None,
+                sheet: None,
+                at: None,
+                values: Some(json!({"room": name, "number": number, "area_sqft": area})),
+                handles: Vec::new(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }),
+            default: Some("Correct".into()),
+            answer_schema: None,
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Verify,
+        };
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.verify.push(q);
+        }
+        id
+    }
+
+    /// Helper: an unknown-symbol device question (default "skip").
+    fn device_unknown(job: &mut GuidedJob, tag: &str, count: u64) -> String {
+        let id = job.next_qid(StageName::Devices);
+        let q = Question {
+            id: id.clone(),
+            stage: StageName::Devices,
+            question: format!("Unknown symbol tag '{tag}' printed by {count} symbols — which device is it?"),
+            why: "unknown symbol".into(),
+            choices: Vec::new(),
+            evidence: Some(QuestionEvidence {
+                crop_png_path: None,
+                sheet: Some("E-1".into()),
+                at: None,
+                values: Some(json!({"description": tag, "count": count})),
+                handles: Vec::new(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }),
+            default: Some("skip".into()),
+            answer_schema: None,
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Completeness,
+        };
+        if let Some(st) = job.stage_mut(StageName::Devices) {
+            st.completeness.push(q);
+        }
+        id
+    }
+
+    #[test]
+    fn is_room_like_name_rejects_junk() {
+        // Good room names.
+        assert!(is_room_like_name("101"));
+        assert!(is_room_like_name("LOBBY"));
+        assert!(is_room_like_name("GUEST ROOM"));
+        assert!(is_room_like_name("ELECTRICAL ROOM"));
+        assert!(is_room_like_name("101A"));
+        assert!(is_room_like_name("BATHROOM 3"));
+        // Junk names from the real prints.
+        assert!(!is_room_like_name("WALL"));
+        assert!(!is_room_like_name("TPO ROOFING"));
+        assert!(!is_room_like_name("HEIGHT"));
+        assert!(!is_room_like_name("APPLICABLE."));
+        assert!(!is_room_like_name("CEILING"));
+        assert!(!is_room_like_name("FLOOR"));
+        assert!(!is_room_like_name("SLAB"));
+        assert!(!is_room_like_name("TYP"));
+        assert!(!is_room_like_name(""));
+        assert!(!is_room_like_name("CMU"));
+    }
+
+    /// Q6021 MUST 1: auto mode rejects rooms at 0 sf or with junk names.
+    #[test]
+    fn auto_guard_rejects_implausible_rooms() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.auto = true;
+        // Good room: 350 sf, real name.
+        room_verify(&mut job, "GUEST ROOM", "101", 350.0);
+        // Bad room: 0 sf.
+        room_verify(&mut job, "GUEST ROOM", "102", 0.0);
+        // Bad room: junk name.
+        room_verify(&mut job, "WALL", "103", 50.0);
+        // Bad room: junk name AND 0 sf.
+        room_verify(&mut job, "TPO ROOFING", "104", 0.0);
+
+        let taken = auto_answer(&mut job, StageName::Rooms);
+        assert_eq!(taken, 4, "all 4 should be answered (1 accepted + 3 rejected)");
+
+        let st = job.stage(StageName::Rooms).expect("rooms stage");
+        let accepted: Vec<_> = st.verify.iter().filter(|q| q.answered_by.as_deref() == Some("default")).collect();
+        let rejected: Vec<_> = st.verify.iter().filter(|q| q.answered_by.as_deref() == Some("auto_guard")).collect();
+        assert_eq!(accepted.len(), 1, "only the good room accepted");
+        assert_eq!(rejected.len(), 3, "3 junk rooms rejected");
+        assert!(accepted[0].question.contains("101"), "room 101 accepted");
+        for q in &rejected {
+            assert_eq!(q.answer.as_ref().and_then(Value::as_str), Some("Rejected"));
+        }
+
+        let (auto_count, _, rej_count, _) = answer_counts(&job);
+        assert_eq!((auto_count, rej_count), (1, 3));
+    }
+
+    /// Q6021 MUST 1: auto mode rejects unknown device "skip" defaults.
+    #[test]
+    fn auto_guard_rejects_unknown_device_skip() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.auto = true;
+        // A regular completeness question (not "skip") is accepted.
+        ask(&mut job, StageName::Devices, QuestionKind::Completeness, "I counted 5 duplex receptacles. Any uncounted?", Some("Count is complete"));
+        // Unknown symbol questions default "skip" are rejected.
+        device_unknown(&mut job, "XY", 10);
+        device_unknown(&mut job, "QQ", 4);
+
+        let taken = auto_answer(&mut job, StageName::Devices);
+        assert_eq!(taken, 3);
+
+        let st = job.stage(StageName::Devices).expect("devices stage");
+        let all_comp: Vec<_> = st.completeness.iter().collect();
+        // First: "Count is complete" → accepted.
+        assert_eq!(all_comp[0].answered_by.as_deref(), Some("default"));
+        // XY and QQ: rejected.
+        assert_eq!(all_comp[1].answered_by.as_deref(), Some("auto_guard"));
+        assert_eq!(all_comp[2].answered_by.as_deref(), Some("auto_guard"));
+    }
+
+    /// Q6021 MUST 3: job warnings and done_with_warnings status.
+    #[test]
+    fn job_report_warns_on_zero_rooms_and_empty_devices() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        // Rooms stage done with 0 rooms.
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.status = StageStatus::Done;
+            st.result = Some(json!({"count": 0, "rooms": []}));
+        }
+        // Devices stage done with 0 devices.
+        if let Some(st) = job.stage_mut(StageName::Devices) {
+            st.status = StageStatus::Done;
+            st.result = Some(json!({"count": 0}));
+        }
+        // Mark other stages skipped so is_done() returns true.
+        for st in &mut job.stages {
+            if st.status == StageStatus::Pending {
+                st.status = StageStatus::Skipped;
+            }
+        }
+        assert!(job.is_done());
+
+        let warnings = job_warnings(&job, None);
+        assert!(warnings.iter().any(|w| w["warning"] == "0 rooms"), "expected 0-rooms warning: {warnings:?}");
+        assert!(warnings.iter().any(|w| w["warning"] == "devices not in model"), "expected devices warning: {warnings:?}");
+        assert_eq!(done_status(&job, &warnings), "done_with_warnings");
+
+        // Without warnings: plain "done".
+        let empty_warnings: Vec<Value> = Vec::new();
+        assert_eq!(done_status(&job, &empty_warnings), "done");
+    }
+
+    /// Q6021 MUST 3: auto-guard rejections appear in the warnings.
+    #[test]
+    fn auto_guard_rejections_show_in_warnings() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.auto = true;
+        room_verify(&mut job, "WALL", "999", 0.0);
+        auto_answer(&mut job, StageName::Rooms);
+        // Mark everything done/skipped.
+        for st in &mut job.stages {
+            if st.status == StageStatus::Pending || st.status == StageStatus::Paused {
+                st.status = StageStatus::Skipped;
+            }
+        }
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.status = StageStatus::Done;
+            st.result = Some(json!({"count": 1, "rooms": [{"name": "WALL"}]}));
+        }
+
+        let warnings = job_warnings(&job, None);
+        assert!(warnings.iter().any(|w| w["warning"] == "auto-guard rejections"), "expected auto-guard warning: {warnings:?}");
     }
 }

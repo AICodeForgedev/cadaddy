@@ -160,7 +160,9 @@ fn a_room_found_tapped_measured_and_noted_offline_syncs_back_once() {
 
     // Send Notes, then sync into the drawing — twice is the same as once.
     assert_eq!(again.send_notes(), 1);
-    assert!(again.pkg.as_ref().unwrap().unsynced().is_empty());
+    // Handed over, not in the drawing yet: sent, still unsynced until a package brings it back.
+    let sent = again.pkg.as_ref().unwrap().unsynced();
+    assert_eq!(sent.iter().map(|n| (n.id.as_str(), n.sent, n.synced)).collect::<Vec<_>>(), [("FN-tab1-0001", true, false)]);
     let (name, file) = again.outbox.pop().unwrap();
     assert_eq!(name, "Sample_Hotel-fieldnotes-tab1.json");
     let notes: FieldNotes = serde_json::from_slice(&file).unwrap();
@@ -175,6 +177,80 @@ fn a_room_found_tapped_measured_and_noted_offline_syncs_back_once() {
     next.open(&package(&mut s)).unwrap();
     assert_eq!(next.pkg.as_ref().unwrap().notes.len(), 1);
     assert!(next.pkg.as_ref().unwrap().unsynced().is_empty());
+}
+
+/// Q5111: Send Notes only marks notes sent. A lost download is sent again with the same id, and
+/// a note is synced only once a package exported from the drawing carries it back.
+#[test]
+fn a_lost_notes_download_is_sent_again_until_a_package_brings_the_note_back() {
+    let mut s = drawing();
+    let mut v = FieldViewer::new("tab1");
+    v.open(&package(&mut s)).unwrap();
+    v.tool = Tool::Note;
+    v.tap_plan([40.0, 25.0], 0.5);
+    v.draft.as_mut().unwrap().text = "sleeve 6\" east of plan".into();
+    let id = v.save_draft("2026-05-06T09:00:00Z").unwrap();
+    assert_eq!(id, "FN-tab1-0001");
+    let ids_in = |file: &[u8]| -> Vec<String> {
+        let notes: FieldNotes = serde_json::from_slice(file).unwrap();
+        notes.notes.iter().map(|n| n.id.clone()).collect()
+    };
+
+    assert_eq!(v.send_notes(), 1);
+    assert_eq!(v.outbox.len(), 1);
+    // The download fails: the file never reaches the office.
+    v.outbox.clear();
+    let note = v.pkg.as_ref().unwrap().notes.iter().find(|n| n.id == id).unwrap().clone();
+    assert!(note.sent && !note.synced, "{note:?}");
+
+    // Send Notes again: the same note goes out again.
+    assert_eq!(v.send_notes(), 1);
+    let (_, file) = v.outbox.pop().unwrap();
+    assert_eq!(ids_in(&file), vec![id.clone()]);
+    let notes: FieldNotes = serde_json::from_slice(&file).unwrap();
+    assert!(notes.notes.iter().all(|n| !n.sent && !n.synced));
+    // A reload keeps it sent and unsynced.
+    let mut v = {
+        let mut r = FieldViewer::new("tab1");
+        r.from_storage(&v.to_storage().unwrap()).unwrap();
+        r
+    };
+    assert_eq!(v.pkg.as_ref().unwrap().unsynced().iter().map(|n| (n.id.as_str(), n.sent)).collect::<Vec<_>>(), [(id.as_str(), true)]);
+
+    // The office syncs that file twice: added once.
+    let r = s.execute("fieldview.sync", &json!({"notes": notes})).unwrap();
+    assert_eq!((r["added"].as_u64(), r["updated"].as_u64()), (Some(1), Some(0)));
+    let r = s.execute("fieldview.sync", &json!({"notes": notes})).unwrap();
+    assert_eq!((r["added"].as_u64(), r["unchanged"].as_u64()), (Some(0), Some(1)));
+
+    // A fresh export after the sync carries it back: the note is synced and nothing is left to send.
+    v.open(&package(&mut s)).unwrap();
+    let p = v.pkg.as_ref().unwrap();
+    assert_eq!(p.notes.iter().filter(|n| n.id == id).count(), 1);
+    assert!(p.notes.iter().any(|n| n.id == id && n.synced));
+    assert!(p.unsynced().is_empty());
+    assert_eq!(v.send_notes(), 0);
+    assert!(v.outbox.is_empty());
+}
+
+/// A package that does not carry a sent note (exported before the office synced it) leaves the
+/// note sent and unsynced on the device.
+#[test]
+fn a_package_without_the_note_does_not_acknowledge_it() {
+    let mut s = drawing();
+    let before_sync = package(&mut s);
+    let mut v = FieldViewer::new("tab1");
+    v.open(&before_sync).unwrap();
+    v.tool = Tool::Note;
+    v.tap_plan([40.0, 25.0], 0.5);
+    v.draft.as_mut().unwrap().text = "box at 18\" AFF".into();
+    let id = v.save_draft("2026-05-06T09:10:00Z").unwrap();
+    assert_eq!(v.send_notes(), 1);
+    v.outbox.clear();
+    v.open(&before_sync).unwrap();
+    let p = v.pkg.as_ref().unwrap();
+    assert_eq!(p.unsynced().iter().map(|n| (n.id.as_str(), n.sent, n.synced)).collect::<Vec<_>>(), [(id.as_str(), true, false)]);
+    assert_eq!(v.send_notes(), 1);
 }
 
 #[test]

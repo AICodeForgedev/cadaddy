@@ -959,13 +959,28 @@ pub fn run_classify_prints(
                 e.levels = rec.levels.clone();
             } else {
                 // The sheet title's levels, else the plan views' titles' (`FIRST FLOOR POWER PLAN`).
+                // Q6018: multi-level assignment (typical floors) only from the plan title, not
+                // from notes or different view titles on the sheet — a "TYP." note elsewhere
+                // must not make a floor-specific sheet cover several levels.
                 let mut levels = sheet_reader::detect_levels(&e.title);
                 if levels.is_empty() && is_plan_type(&e.sheet_type) {
                     for t in &facts.view_titles {
-                        levels.extend(sheet_reader::detect_levels(t));
+                        let vl = sheet_reader::detect_levels(t);
+                        if !vl.is_empty() {
+                            // Use the first view title's level only; multi-level comes from
+                            // the plan title or the typical-floor sentinel, not from combining
+                            // different views' titles (which are already split by recognise_views
+                            // when they name different levels).
+                            levels = if sheet_reader::is_typical_sentinel(&vl) {
+                                vl
+                            } else if let Some(first) = vl.into_iter().next() {
+                                vec![first]
+                            } else {
+                                continue;
+                            };
+                            break;
+                        }
                     }
-                    levels.sort_by_key(|c| level_key(c));
-                    levels.dedup();
                 }
                 if levels.is_empty() {
                     levels = rec.levels.clone();
@@ -1038,6 +1053,9 @@ pub fn run_classify_prints(
         };
     }
     level_by_number(&mut out);
+    // Expand "typical floor" sentinels: a sheet with levels == ["T"] gets the levels of every
+    // numeric floor that no other sheet of the same discipline already covers.
+    expand_typical_levels(&mut out);
     project.sheets = out;
     let current: Vec<RecognisedSheet> = project.sheets.iter().filter(|s| s.superseded_by.is_empty()).filter_map(|s| s.recognised.clone()).collect();
     project.grid = sheet_reader::sheet_map_from(current);
@@ -1259,6 +1277,64 @@ fn level_by_number(sheets: &mut [SheetEntry]) {
     }
 }
 
+/// Expand the "typical floor" sentinel (`levels == ["T"]`): for each such sheet, determine which
+/// numeric levels it covers by looking at all plan sheets of the same discipline that already
+/// have a dedicated level. The typical sheet gets every other numeric level in the set.
+fn expand_typical_levels(sheets: &mut [SheetEntry]) {
+    // Collect all known numeric levels from non-superseded plan sheets.
+    let mut all_numeric: Vec<String> = Vec::new();
+    for e in sheets.iter().filter(|s| s.superseded_by.is_empty() && is_plan_type(&s.sheet_type)) {
+        for l in &e.levels {
+            if l != "T" && l.parse::<u32>().is_ok() && !all_numeric.contains(l) {
+                all_numeric.push(l.clone());
+            }
+        }
+        // Also check the primary level.
+        if !e.level.is_empty() && e.level != "T" && e.level.parse::<u32>().is_ok() && !all_numeric.contains(&e.level) {
+            all_numeric.push(e.level.clone());
+        }
+    }
+    all_numeric.sort_by_key(|l| l.parse::<u32>().unwrap_or(u32::MAX));
+    all_numeric.dedup();
+    if all_numeric.is_empty() {
+        return;
+    }
+    // For each "typical" sheet, expand against the discipline's dedicated levels.
+    let typical_indices: Vec<usize> = sheets
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.superseded_by.is_empty() && is_plan_type(&e.sheet_type) && sheet_reader::is_typical_sentinel(&e.levels))
+        .map(|(i, _)| i)
+        .collect();
+    for idx in typical_indices {
+        let disc = sheets[idx].discipline.clone();
+        // Levels that already have a dedicated plan of this discipline.
+        let dedicated: Vec<String> = sheets
+            .iter()
+            .filter(|e| {
+                e.superseded_by.is_empty()
+                    && is_plan_type(&e.sheet_type)
+                    && e.discipline.eq_ignore_ascii_case(&disc)
+                    && !sheet_reader::is_typical_sentinel(&e.levels)
+            })
+            .flat_map(|e| e.levels.iter().cloned())
+            .filter(|l| l.parse::<u32>().is_ok())
+            .collect();
+        let expanded = sheet_reader::expand_typical(&all_numeric, |l| dedicated.iter().any(|d| d == l));
+        if expanded.is_empty() {
+            // No expansion possible: fall back to all numeric levels.
+            sheets[idx].levels = all_numeric.clone();
+        } else {
+            sheets[idx].levels = expanded;
+        }
+        // Primary level = first of the expanded list.
+        if let Some(first) = sheets[idx].levels.first() {
+            sheets[idx].level = first.clone();
+        }
+        sheets[idx].level_source = "typical".into();
+    }
+}
+
 /// One real sheet of the set: every copy of it (the full set and a discipline set print the same
 /// sheet) is one entry.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -1291,8 +1367,8 @@ pub struct IndexSheet {
 pub struct IndexLevel {
     /// Level code: `1`, `2`, `R`.
     pub name: String,
-    /// The plan sheets of the level.
-    pub sheets: Vec<String>,
+    /// The plan sheets of the level: `[{sheet, typical}]` (Q6018).
+    pub sheets: Vec<serde_json::Value>,
     /// Finished floor elevation from the sections' and elevations' level marks (above the
     /// first floor when the prints put it at 100'-0").
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1389,12 +1465,15 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
         });
     }
     // The building's levels: what the plans show (the site is no storey).
-    let mut by_level: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Q6018: each sheet entry is {sheet, typical} so the gate can distinguish a
+    // multi-level typical sheet from a floor-specific one.
+    let mut by_level: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
     for s in out.sheets.iter().filter(|s| is_plan_type(&s.sheet_type)) {
+        let typical = s.levels.len() > 1;
         for l in s.levels.iter().chain(std::iter::once(&s.level)).filter(|l| !l.is_empty() && *l != "SITE") {
             let v = by_level.entry(l.clone()).or_default();
-            if !v.contains(&s.number) {
-                v.push(s.number.clone());
+            if !v.iter().any(|x| x.get("sheet").and_then(serde_json::Value::as_str) == Some(&s.number)) {
+                v.push(serde_json::json!({"sheet": s.number, "typical": typical}));
             }
         }
     }
@@ -1446,9 +1525,15 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             height_ft: el.zip(next).map(|(a, b)| b - a).filter(|h| *h > 0.0),
         });
     }
-    // Every plan gets a level: one whose title names none takes the lowest, to be confirmed.
+    // Every plan gets a level: one whose title names none takes the lowest, to be confirmed. A
+    // civil, landscape or site plan is on the site (no storey of the building).
     let lowest = codes.iter().find(|c| c.parse::<u32>().is_ok()).cloned().unwrap_or_else(|| "1".into());
     for s in out.sheets.iter_mut().filter(|s| is_plan_type(&s.sheet_type) && s.level.is_empty()) {
+        if crate::sheet_facts::is_site_sheet(&s.discipline, &s.title) {
+            s.level = "SITE".into();
+            s.level_source = "site".into();
+            continue;
+        }
         s.level = lowest.clone();
         s.level_source = "default".into();
         out.plans_without_level.push(s.number.clone());

@@ -2996,3 +2996,16 @@
 	Layer Quantity Takeoff	Métré par calque
 	Read Architecture from Prints	Lire l'architecture depuis les plans
 	Read Roof and Wall Envelope	Lire l'enveloppe de toiture et de murs
+	Element Properties (BIM)	Propriétés de l’élément (BIM)
+	Set Element Property (BIM)	Définir une propriété de l’élément (BIM)
+	Find Elements by Property	Rechercher des éléments par propriété
+	Element Property Summary	Synthèse des propriétés des éléments
+	BIM Properties	Propriétés BIM
+	Kind	Nature
+	Element Identities (BIM)	Identités des éléments (BIM)
+	Room Connections	Liaisons entre pièces
+	Link Print Set	Lier le jeu de plans
+	Check Building Codes	Vérifier les codes du bâtiment
+	Code Rules	Règles du code
+	Select Building Codes	Sélectionner les codes du bâtiment
+	Fill Element Properties	Remplir les propriétés des éléments

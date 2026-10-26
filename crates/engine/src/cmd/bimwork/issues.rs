@@ -449,7 +449,7 @@ fn run_link(s: &mut Session, p: &Value) -> Result<Value> {
     let upf = units_per_foot(s);
     // The level: named, else the sheet region holding the point (a sheet point) or the storey
     // the height is in (a 3D point), else the first.
-    let named = str_param(p, "level").and_then(|l| sp.levels.iter().find(|x| x.name.eq_ignore_ascii_case(l.trim())));
+    let named = str_param(p, "level").and_then(|l| sp.level(l.trim()));
     let by_region = || cadaddy_walk3d::level_at(&sp.levels, x, y);
     let by_height =
         |z: f64| sp.levels.iter().filter(|l| l.elevation_ft * upf <= z + 0.05 * upf).max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));

@@ -1578,6 +1578,13 @@ pub struct RoomFinish {
     pub ceiling_height_ft: Option<f64>,
 }
 
+/// Read door schedule rows from a drawing's text entities: the tables titled "DOOR SCHEDULE"
+/// (the same parser the architectural reader uses).
+pub fn find_door_schedule(d: &cadaddy_doc::Drawing) -> Vec<DoorRow> {
+    let s = shapes(d, &|p| p, 1.0);
+    tables(&s, &["DOOR SCHEDULE"]).iter().flat_map(door_rows).collect()
+}
+
 /// Read room finish schedule rows from a drawing's text entities: the tables titled
 /// "ROOM FINISH" or "FINISH SCHEDULE". Reuses the same `tables` + `finish_rows` parser.
 pub fn find_finish_schedule(d: &cadaddy_doc::Drawing) -> Vec<RoomFinish> {

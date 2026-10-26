@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Model Takeoff", run)
             .alias(&["takeoffmodel"])
-            .params("{group_by?: level|trade|system|type (default level), filter?: {trade?, level?, category?, text?} | text, compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements, element_count, status}], totals: {count, length_ft, area_sf, volume_cy}, levels, changes?: {added, removed, changed}, revision, csv, path?}")
+            .params("{group_by?: level|trade|system|type|circuit (default level; circuit: each level's lines per branch circuit), filter?: {trade?, level?, category?, circuit?, text?} | text, compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level, circuit?, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements, element_count, status}], totals: {count, length_ft, area_sf, volume_cy}, levels, changes?: {added, removed, changed}, revision, csv, path?}")
             .noundo(),
         CommandSpec::new(CMD_SHOW, "Show Takeoff Line", run_show)
             .params("{line: key or index (of the last takeoff) | elements: [handle]} → {key?, selected, handles, min, max, viewpoint} — selects the elements (marked in 3D) and points the 3D camera at them")
@@ -77,7 +77,7 @@ fn passes(f: &Value, l: &Value) -> bool {
             }
             match k.as_str() {
                 "text" => ["trade", "category", "item", "size", "system"].iter().any(|k| has(k).contains(&want)),
-                "trade" | "level" | "category" | "system" | "item" | "unit" => has(k) == want || has(k).contains(&want),
+                "trade" | "level" | "category" | "system" | "item" | "unit" | "circuit" => has(k) == want || has(k).contains(&want),
                 _ => true,
             }
         }),
@@ -101,7 +101,8 @@ fn part_of(category: &str) -> Option<&'static str> {
 
 /// The takeoff lines, by `group_by`: each with its quantities and its elements.
 pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<Vec<Value>> {
-    let bom = s.execute("bim.bom", &json!({"group_by": "level", "all_elements": true}))?;
+    // Per level and branch circuit: lines on no circuit are the level's as they are.
+    let bom = s.execute("bim.bom", &json!({"group_by": "circuit", "all_elements": true}))?;
     let d = s.doc()?;
     // Each built element's level, category and system.
     let els = elements(d);
@@ -120,8 +121,15 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
     let mut by_run: BTreeMap<String, Vec<String>> = BTreeMap::new();
     // The BOM counts rooms from the ceilings built with a room's tag: a level's rooms are those.
     let mut room_ceilings: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // The device elements by the spec device they were built from: a device line counts those.
+    let mut by_device: BTreeMap<String, String> = BTreeMap::new();
     for e in d.model.iter().take(super::MAX_ELEMENTS) {
         let tags = crate::cmd::fieldview::wallgen_tags(e);
+        if tags.first() == Some(&"device")
+            && let Some(id) = crate::cmd::fieldview::tag_value(&tags, "devid")
+        {
+            by_device.insert(id.to_string(), e.handle.hex());
+        }
         if tags.first() == Some(&"mep")
             && let Some(id) = crate::cmd::fieldview::tag_value(&tags, "mepid")
         {
@@ -150,6 +158,9 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
     let bom_lines = bom_lines.as_slice();
     let wall_lines = built_wall_lines(d, &els, bom_lines, super::units_per_foot(s));
     let resolve = |h: &str| -> Vec<String> {
+        if let Some(el) = by_device.get(h) {
+            return vec![el.clone()];
+        }
         match h.strip_prefix("run:").and_then(|i| i.parse::<usize>().ok()) {
             Some(i) => sp.mep.runs.get(i).and_then(|r| by_run.get(&crate::cmd::mep::run_base(r))).cloned().unwrap_or_default(),
             None => Handle::parse_hex(h).filter(|x| d.entity(*x).is_some()).map(|x| vec![x.hex()]).unwrap_or_default(),
@@ -203,7 +214,11 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             l["item"].as_str().unwrap_or_default().to_string(),
             l["size"].as_str().unwrap_or_default().to_string(),
         );
-        let line = json!({"level": level, "trade": trade, "system": system, "category": category, "item": item, "size": size, "unit": unit});
+        let circuit = if group_by == "circuit" { l["circuit"].as_str().unwrap_or_default() } else { "" };
+        let mut line = json!({"level": level, "trade": trade, "system": system, "category": category, "item": item, "size": size, "unit": unit});
+        if !circuit.is_empty() {
+            line["circuit"] = json!(circuit);
+        }
         if !passes(filter, &line) {
             continue;
         }
@@ -211,6 +226,7 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             "trade" => format!("{trade}|{category}|{item}|{size}|{unit}"),
             "system" => format!("{system}|{item}|{size}|{unit}"),
             "type" => format!("{item}|{size}|{unit}"),
+            "circuit" => format!("{level}|{circuit}|{trade}|{category}|{item}|{size}|{unit}"),
             _ => format!("{level}|{trade}|{category}|{item}|{size}|{unit}"),
         };
         let qty = l["net"].as_f64().filter(|v| v.is_finite()).unwrap_or(0.0);
@@ -222,7 +238,7 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             x["status"] = l["status"].clone();
             x["waste_pct"] = l["waste_pct"].clone();
             x["levels"] = json!([]);
-            if group_by != "level" {
+            if !matches!(group_by, "level" | "circuit") {
                 x["level"] = json!("");
             }
             if group_by == "type" || group_by == "system" {
@@ -330,8 +346,8 @@ fn write_table(cmd: &str, path: &str, rows: &[Vec<String>], sheet: &str) -> Resu
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let group_by = str_param(p, "group_by").unwrap_or("level").to_ascii_lowercase();
-    if !matches!(group_by.as_str(), "level" | "trade" | "system" | "type") {
-        return Err(bad(CMD, "`group_by` is level, trade, system or type"));
+    if !matches!(group_by.as_str(), "level" | "trade" | "system" | "type" | "circuit") {
+        return Err(bad(CMD, "`group_by` is level, trade, system, type or circuit"));
     }
     let filter = p.get("filter").cloned().unwrap_or(Value::Null);
     let lines = lines(s, &group_by, &filter)?;
@@ -349,23 +365,32 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         None => st[&last_key]["lines"].as_object().map(|o| o.iter().filter_map(|(k, v)| Some((k.clone(), v.as_f64()?))).collect()),
     };
     let revision = st[&last_key]["revision"].as_u64().unwrap_or(0) + u64::from(before.as_ref().is_none_or(|b| *b != now));
-    let rows: Vec<Vec<String>> =
-        std::iter::once(["level", "trade", "system", "category", "item", "size", "unit", "qty", "elements"].map(String::from).to_vec())
-            .chain(lines.iter().map(|l| {
-                let f = |k: &str| l[k].as_str().unwrap_or_default().to_string();
-                vec![
-                    f("level"),
-                    f("trade"),
-                    f("system"),
-                    f("category"),
-                    f("item"),
-                    f("size"),
-                    f("unit"),
-                    r3(l["qty"].as_f64().unwrap_or(0.0)).to_string(),
-                    l["element_count"].to_string(),
-                ]
-            }))
-            .collect();
+    // By circuit, the circuit is a column after the level.
+    let by_circuit = group_by == "circuit";
+    let mut head = ["level", "trade", "system", "category", "item", "size", "unit", "qty", "elements"].map(String::from).to_vec();
+    if by_circuit {
+        head.insert(1, "circuit".into());
+    }
+    let rows: Vec<Vec<String>> = std::iter::once(head)
+        .chain(lines.iter().map(|l| {
+            let f = |k: &str| l[k].as_str().unwrap_or_default().to_string();
+            let mut row = vec![
+                f("level"),
+                f("trade"),
+                f("system"),
+                f("category"),
+                f("item"),
+                f("size"),
+                f("unit"),
+                r3(l["qty"].as_f64().unwrap_or(0.0)).to_string(),
+                l["element_count"].to_string(),
+            ];
+            if by_circuit {
+                row.insert(1, f("circuit"));
+            }
+            row
+        }))
+        .collect();
     let mut out = json!({"lines": lines, "totals": totals, "levels": levels, "group_by": group_by, "revision": revision});
     if let Some(b) = &before {
         out["changes"] = diff(b, &now);
@@ -544,6 +569,20 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
 
 fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     let rows = cost_rows(CMD_EST, p)?;
+    // Q6012: starter cost book as fallback, same as estimate.status (estimate.rs price_lines).
+    let starter: Vec<Cost> = crate::cmd::estimate::starter_prices()
+        .into_iter()
+        .filter_map(|v| {
+            Some(Cost {
+                item: v["item"].as_str()?.to_string(),
+                unit: v["unit"].as_str().unwrap_or("each").to_string(),
+                material: v["material"].as_f64()?,
+                labor_hrs: v["labor_hours"].as_f64().unwrap_or(0.0),
+                waste: None,
+                labor_rate: None,
+            })
+        })
+        .collect();
     let by_level = bool_or(p, "by_level", false);
     let filter = p.get("filter").cloned().unwrap_or(Value::Null);
     let lines = lines(s, if by_level { "level" } else { "type" }, &filter)?;
@@ -567,18 +606,24 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out_lines = Vec::new();
     let mut unmatched = Vec::new();
     let mut used = BTreeSet::new();
+    let mut used_starter = BTreeSet::new();
     let (mut mat_total, mut hrs_total) = (0.0f64, 0.0f64);
     for l in &lines {
         let qty = l["qty"].as_f64().unwrap_or(0.0);
         if qty <= 0.0 {
             continue;
         }
-        let Some((i, how)) = match_row(&rows, l) else {
+        // User cost table first, then the starter book, then unmatched.
+        let (r, how, via) = if let Some((i, how)) = match_row(&rows, l) {
+            used.insert(i);
+            (&rows[i], how, None)
+        } else if let Some((i, how)) = match_row(&starter, l) {
+            used_starter.insert(i);
+            (&starter[i], how, Some(crate::cmd::estimate::STARTER_SOURCE))
+        } else {
             unmatched.push(json!({"item": l["item"], "size": l["size"], "unit": l["unit"], "qty": qty, "level": l["level"], "reason": "no cost-table row names this item in this unit"}));
             continue;
         };
-        let Some(r) = rows.get(i) else { continue };
-        used.insert(i);
         let w = waste_for(l, r);
         let qt = qty * (1.0 + w / 100.0);
         // Material on the quantity with waste; labor on the net (waste isn't installed).
@@ -586,13 +631,17 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
         let (m, h) = (qt * r.material, qty * r.labor_hrs);
         mat_total += m;
         hrs_total += h;
-        out_lines.push(json!({
+        let mut line = json!({
             "key": l["key"], "level": l["level"], "trade": l["trade"], "category": l["category"], "item": l["item"], "size": l["size"], "unit": l["unit"],
             "qty": r3(qty), "waste_pct": r3(w), "qty_total": r3(qt), "cost_item": r.item, "matched_by": how,
             "material_unit": r.material, "labor_hrs_unit": r.labor_hrs,
             "material": r3(m), "labor_hrs": r3(h), "labor": r3(h * rate), "total": r3(m + h * rate),
             "elements": l["element_count"],
-        }));
+        });
+        if let Some(v) = via {
+            line["via"] = json!(v);
+        }
+        out_lines.push(line);
     }
     let unused: Vec<Value> = rows.iter().enumerate().filter(|(i, _)| !used.contains(i)).map(|(_, r)| json!(r.item)).collect();
     let total = mat_total + hrs_total * rate;
@@ -619,6 +668,13 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
             "fix": "add rows to the cost table for each unmatched item, or verify they are not in contract",
         }));
     }
+    if !used_starter.is_empty() {
+        warnings.push(json!({
+            "kind": "starter_cost_book",
+            "message": format!("{} line(s) priced with the starter cost book — generic values, not project-specific", used_starter.len()),
+            "fix": "add rows to the cost table for each starter-priced item, or import your own costs",
+        }));
+    }
     let mut out = json!({
         "lines": out_lines, "unmatched": unmatched, "unused_rows": unused,
         "material_total": r3(mat_total), "labor_hours": r3(hrs_total), "labor_total": r3(hrs_total * rate), "total": r3(total), "labor_rate": rate,
@@ -643,6 +699,10 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
                     pv
                 })
                 .collect();
+            // Starter-book prices are NOT stored in the baseline: estimate.status
+            // falls back to starter_prices() independently. The two routes match
+            // differently (grouped takeoff lines vs individual BOM lines), so
+            // storing them would cause price-shadowing.
             b.insert("prices".into(), json!(prices));
         }
         let settings = est.entry(String::from("settings")).or_insert_with(|| json!({}));

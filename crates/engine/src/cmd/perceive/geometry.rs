@@ -1,6 +1,6 @@
 //! The geometric perceptions: wall face pairs, door swings and opening blocks, and room outlines.
 
-use cadaddy_doc::{Drawing, Entity, EntityKind};
+use cadaddy_doc::{Common, Drawing, Entity, EntityKind};
 use cadaddy_geom::{Polyline, Segment, Vec2};
 use serde_json::{Value, json};
 
@@ -14,6 +14,13 @@ const MAX_SEGS: usize = 200_000;
 const MAX_PAIRS: usize = 50_000;
 /// Rooms traced at most.
 const MAX_ROOMS: usize = 1_000;
+/// A room's least width, inches (a schedule cell, a tag box and a sliver between two lines are
+/// narrower).
+const MIN_ROOM_WIDTH_IN: f64 = 36.0;
+/// Rooms traced at most on one sheet region, when the labels are read sheet by sheet.
+const MAX_ROOMS_PER_REGION: usize = 250;
+/// Rooms traced at most over all the sheet regions (a whole print set).
+const MAX_ROOMS_ALL_REGIONS: usize = 8_000;
 
 /// A straight segment of a line or polyline.
 #[derive(Clone, Debug)]
@@ -226,6 +233,8 @@ pub(crate) struct Opening {
     pub swing: Option<(f64, [Vec2; 2])>,
     pub block: Option<String>,
     pub confidence: f64,
+    /// A swing whose leaf is drawn too (a line from the hinge to an end of the arc).
+    pub leaf: bool,
 }
 
 /// Door swings (arcs of 60–100° with a door's radius, 16"–54", ideally with a leaf line from the
@@ -262,6 +271,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     swing: Some((deg, ends)),
                     block: None,
                     confidence,
+                    leaf,
                 });
             }
             // A swing flattened to a polyline (how PDF prints arrive): a quarter-ish circle run.
@@ -287,6 +297,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     swing: Some((deg, ends)),
                     block: None,
                     confidence,
+                    leaf,
                 });
             }
             EntityKind::Insert(i) => {
@@ -309,12 +320,88 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     swing: None,
                     block: Some(i.block.clone()),
                     confidence: 0.75,
+                    leaf: false,
                 });
             }
             _ => {}
         }
     }
     items
+}
+
+/// Most door leaves added to a plan traced for rooms.
+const MAX_LEAVES: usize = 200_000;
+/// Most plan objects looked at for the jambs door swings end on.
+const MAX_LEAF_SCAN: usize = 5_000_000;
+
+/// The closed leaf of every door swing in `d` (an arc of 60–100° with a door's radius, or a
+/// flattened one): a line from the hinge to the end of the arc where the wall's jamb is (an end
+/// of other linework), so a room traced on the plan ends at its door instead of running on
+/// through the gap, and the swing stays in the room it opens into. When neither end (or both)
+/// meets a jamb, both leaves are drawn.
+pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line)> {
+    let (rmin, rmax) = (16.0 * k, 54.0 * k);
+    // Ends of the plan's straight linework, filed by cell.
+    let cell = (2.0 * k).max(1e-9);
+    let key = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    let mut ends: std::collections::HashMap<(i64, i64), Vec<Vec2>> = std::collections::HashMap::new();
+    let mut file = |p: Vec2| {
+        if p.is_finite() {
+            ends.entry(key(p)).or_default().push(p);
+        }
+    };
+    for e in d.model.iter().take(MAX_LEAF_SCAN) {
+        match &e.kind {
+            EntityKind::Line(l) => {
+                file(l.a.xy());
+                file(l.b.xy());
+            }
+            EntityKind::LwPolyline(p) => p.vertices.iter().take(10_000).for_each(|v| file(v.p)),
+            _ => {}
+        }
+    }
+    let jamb = |p: Vec2, tol: f64| {
+        let (cx, cy) = key(p);
+        let k = (tol / cell).ceil() as i64;
+        (-k..=k).any(|dx| (-k..=k).any(|dy| ends.get(&(cx + dx, cy + dy)).is_some_and(|v| v.iter().any(|q| q.dist(p) <= tol))))
+    };
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        if out.len() >= MAX_LEAVES {
+            break;
+        }
+        let swing = match &e.kind {
+            EntityKind::Arc(a) => {
+                let mut sweep = (a.end - a.start).rem_euclid(std::f64::consts::TAU);
+                if sweep < 1e-9 {
+                    sweep = std::f64::consts::TAU;
+                }
+                let c = a.center.xy();
+                ((60.0..=100.0).contains(&sweep.to_degrees()) && (rmin..=rmax).contains(&a.radius))
+                    .then(|| (c, [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius]))
+            }
+            EntityKind::LwPolyline(p) if !p.closed && (3..=200).contains(&p.vertices.len()) => {
+                let pts = Polyline { vertices: p.vertices.clone(), closed: false }.tessellate(1e-3);
+                flat_swing(&pts).filter(|(_, r, _, _)| (rmin..=rmax).contains(r)).map(|(c, _, _, ends)| (c, ends))
+            }
+            _ => None,
+        };
+        let Some((hinge, arc_ends)) = swing else { continue };
+        let tol = 0.05 * hinge.dist(arc_ends[0]);
+        let at_jamb = arc_ends.map(|p| jamb(p, tol));
+        let leaves: Vec<Vec2> = match at_jamb {
+            [true, false] => vec![arc_ends[0]],
+            [false, true] => vec![arc_ends[1]],
+            _ => arc_ends.to_vec(),
+        };
+        for end in leaves {
+            if hinge.is_finite() && end.is_finite() {
+                let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(hinge.x, hinge.y, 0.0), b: cadaddy_geom::Vec3::new(end.x, end.y, 0.0) };
+                out.push((e.common.clone(), line));
+            }
+        }
+    }
+    out
 }
 
 /// A run of points that is a door swing: on one circle (within 5% of its radius) through 60–100°.
@@ -581,6 +668,36 @@ type Label = (cadaddy_doc::Handle, String, Vec2, f64, bool);
 /// the texts naming its rooms), traced on what bounds rooms ([`crate::cmd::bspec::room_plan`]).
 /// Each outline takes its best name whatever order the labels were drawn in.
 pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
+    rooms_found_in(s, None)
+}
+
+/// The labels to trace, best room names first. With `regions` (sheet rectangles, `[x0, y0, x1,
+/// y1]`): only the labels inside one, each region's best [`MAX_ROOMS_PER_REGION`] in turn, so a
+/// print set's later sheets are read as fully as its first ones; else the drawing's best
+/// [`MAX_ROOMS`].
+fn labels_to_trace<T>(mut names: Vec<T>, at: impl Fn(&T) -> Vec2, score: impl Fn(&T) -> u8, regions: Option<&[[f64; 4]]>) -> Vec<T> {
+    // A room or unit-type word claims its outline before another label in the same room.
+    names.sort_by_key(|n| std::cmp::Reverse(score(n)));
+    let Some(regions) = regions else {
+        names.truncate(MAX_ROOMS);
+        return names;
+    };
+    let inside = |r: &[f64; 4], p: Vec2| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]);
+    let mut per: Vec<Vec<T>> = regions.iter().map(|_| Vec::new()).collect();
+    for n in names {
+        let p = at(&n);
+        if let Some(i) = regions.iter().position(|r| inside(r, p))
+            && let Some(list) = per.get_mut(i)
+            && list.len() < MAX_ROOMS_PER_REGION
+        {
+            list.push(n);
+        }
+    }
+    per.into_iter().flatten().take(MAX_ROOMS_ALL_REGIONS).collect()
+}
+
+/// [`rooms_found`], the labels read only inside `regions` (sheet rectangles), sheet by sheet.
+pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
     let (d, ents) = objects(s)?;
     let k = units_per_inch(d);
     let min_area = 16.0 * 144.0 * k * k;
@@ -640,10 +757,16 @@ pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
         .cloned()
         .collect();
     // The best name claims its outline first, whatever the drawing order: a tag block's name, then
-    // a room or unit-type word, then the tallest text, then by text and place.
-    names.sort_by(|a, b| {
-        score(b).cmp(&score(a)).then(b.3.total_cmp(&a.3)).then_with(|| a.1.cmp(&b.1)).then(b.2.y.total_cmp(&a.2.y)).then(a.2.x.total_cmp(&b.2.x))
-    });
+    // a room or unit-type word, then the tallest text, then by text and place. Read sheet by sheet,
+    // the score alone orders them (then drawing order): there a taller label on the plan (a unit
+    // type, a note) would claim a room's outline before the room's own name.
+    if regions.is_none() {
+        names.sort_by(|a, b| {
+            score(b).cmp(&score(a)).then(b.3.total_cmp(&a.3)).then_with(|| a.1.cmp(&b.1)).then(b.2.y.total_cmp(&a.2.y)).then(a.2.x.total_cmp(&b.2.x))
+        });
+    }
+    // The drawing's best names, or each sheet's best in turn (the stable sort keeps the order above).
+    let names = labels_to_trace(names, |n| n.2, score, regions);
     let mut numbers: Vec<Label> = all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t)).cloned().collect();
     numbers.extend(tag_numbers);
     let plan = crate::cmd::bspec::room_plan(s)?;
@@ -659,10 +782,24 @@ pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
         t.open_drawing(wd, "Room boundaries", None);
         Some(t)
     };
+    // Doors close their rooms: each door swing's leaf, closed and open, drawn across its opening
+    // (a print often draws the swing's arc alone, which leaves the room open at the door).
+    let leaves = door_leaves(plan.as_ref().unwrap_or(s).doc()?, k);
+    let plan = if leaves.is_empty() || s.space().is_paper() {
+        plan
+    } else {
+        let mut wd = plan.as_ref().unwrap_or(s).doc()?.clone();
+        for (common, line) in leaves {
+            wd.add(&cadaddy_doc::Space::Model, common, EntityKind::Line(line))?;
+        }
+        let mut t = Session::empty();
+        t.open_drawing(wd, "Room boundaries", None);
+        Some(t)
+    };
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<FoundRoom> = Vec::new();
     let mut outline_cache = None;
-    for (h, name, at, height, _) in names.into_iter().take(MAX_ROOMS) {
+    for (h, name, at, height, _) in names {
         let Ok(loops) = crate::cmd::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let poly = polygon(outer);
@@ -675,6 +812,11 @@ pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
         }
         // One room per outline: a second label in the same room is its number or a note.
         if out.iter().any(|q| q.outline.len() == poly.len() && q.outline.iter().zip(&poly).all(|(a, b)| a.dist(*b) < 1e-6)) {
+            continue;
+        }
+        // Read sheet by sheet, a schedule's or legend's cells trace too: no room is narrower.
+        let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
+        if regions.is_some() && b.width().min(b.height()) < MIN_ROOM_WIDTH_IN * k {
             continue;
         }
         let perimeter: f64 = poly.iter().zip(poly.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
@@ -711,4 +853,33 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .collect();
     Ok(page(items, p))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_print_sets_last_sheets_are_read_as_fully_as_its_first() {
+        // Four sheets side by side, each with more labels than one reading traces in all; the
+        // labels in drawing order (sheet 1's first), all as good names.
+        let per_sheet = MAX_ROOMS / 2 + 10;
+        let regions: Vec<[f64; 4]> = (0..4).map(|i| [f64::from(i) * 100.0, 0.0, f64::from(i) * 100.0 + 90.0, 90.0]).collect();
+        let names: Vec<(usize, Vec2)> =
+            (0..4).flat_map(|i| (0..per_sheet).map(move |j| (i, Vec2::new(f64::from(i as u32) * 100.0 + 5.0, 5.0 + (j % 80) as f64)))).collect();
+        let by_sheet = |picked: &[(usize, Vec2)]| (0..4).map(|i| picked.iter().filter(|(s, _)| *s == i).count()).collect::<Vec<_>>();
+        // Read over the whole drawing: the last sheets get nothing.
+        let whole = labels_to_trace(names.clone(), |n| n.1, |_| 3, None);
+        assert_eq!(by_sheet(&whole), [per_sheet, MAX_ROOMS - per_sheet, 0, 0]);
+        // Sheet by sheet: each its own share, labels outside every sheet left out.
+        let mut with_stray = names;
+        with_stray.push((9, Vec2::new(-50.0, 5.0)));
+        let picked = labels_to_trace(with_stray, |n| n.1, |_| 3, Some(&regions));
+        let each = per_sheet.min(MAX_ROOMS_PER_REGION);
+        assert_eq!(by_sheet(&picked), [each, each, each, each]);
+        assert!(picked.iter().all(|(s, _)| *s != 9));
+        // The best names first within a sheet.
+        let scored = labels_to_trace(vec![(0, Vec2::new(5.0, 5.0)), (1, Vec2::new(6.0, 5.0))], |n| n.1, |n| u8::from(n.0 == 1), Some(&regions));
+        assert_eq!(scored.first().map(|n| n.0), Some(1));
+    }
 }

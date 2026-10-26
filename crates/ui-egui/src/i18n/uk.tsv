@@ -3211,6 +3211,7 @@
 	Import Cost Table	Імпортувати таблицю витрат
 	Accuracy Score	Оцінка точності
 	Answer Job Question	Відповісти на запитання завдання
+	Set Job Mode	Змінити режим завдання
 	Check Import Accuracy	Перевірити точність імпорту
 	Clash Resolution Loop	Цикл усунення колізій
 	Evaluate Rules	Оцінити правила
@@ -3298,3 +3299,21 @@
 	Layer Quantity Takeoff	Підрахунок обсягів за шарами
 	Read Architecture from Prints	Зчитати архітектуру з креслень
 	Read Roof and Wall Envelope	Зчитати оболонку покрівлі та стін
+	Element Properties (BIM)	Властивості елемента (BIM)
+	Set Element Property (BIM)	Задати властивість елемента (BIM)
+	Find Elements by Property	Знайти елементи за властивістю
+	Element Property Summary	Зведення властивостей елементів
+	BIM Properties	Властивості BIM
+	Kind	Вид
+	Element Identities (BIM)	Ідентифікація елементів (BIM)
+	Room Connections	Зв'язки приміщень
+	Link Print Set	Зв'язати комплект аркушів
+# Low-voltage commands (lowvolt-rw1).
+	Equipment Connections	Підключення обладнання
+	LV Bill of Materials	LV: специфікація матеріалів
+	LV Sleeves	LV: гільзи
+	LV/FA Devices	LV/FA: пристрої
+	Check Building Codes	Перевірити будівельні норми
+	Code Rules	Правила норм
+	Select Building Codes	Вибрати будівельні норми
+	Fill Element Properties	Заповнити властивості елементів

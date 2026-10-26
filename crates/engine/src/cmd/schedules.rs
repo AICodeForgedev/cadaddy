@@ -286,6 +286,17 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         .filter(|r| !tag_list.iter().any(|(m, _, _)| m.eq_ignore_ascii_case(r.mark.trim())))
         .map(|r| json!({"kind": if r.kind == FamilyKind::Door { "door" } else { "window" }, "mark": r.mark}))
         .collect();
+    // Schedule rows with a TYPE that has no matching spec family.
+    let types_without_family: Vec<Value> = rows
+        .iter()
+        .filter_map(|r| {
+            let ty = r.kind_type.as_ref()?;
+            if sp.family_by_type(r.kind, ty).is_some() {
+                return None;
+            }
+            Some(json!({"kind": if r.kind == FamilyKind::Door { "door" } else { "window" }, "mark": &r.mark, "type": ty}))
+        })
+        .collect();
     let schedules: Vec<Value> = found
         .iter()
         .map(|f| json!({"kind": if f.kind == FamilyKind::Door { "door" } else { "window" }, "title": f.title, "from": f.from, "rows": serde_json::to_value(&f.rows).unwrap_or(Value::Null)}))
@@ -299,7 +310,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "schedules": schedules,
         "tags": tags_json,
-        "flags": {"tags_without_row": tags_without_row, "rows_without_tag": rows_without_tag},
+        "flags": {
+            "tags_without_row": tags_without_row,
+            "rows_without_tag": rows_without_tag,
+            "types_without_family": types_without_family,
+        },
         "applied": apply,
     }))
 }
@@ -322,9 +337,37 @@ pub(crate) fn size_openings(
         let Some(o) = ops.iter_mut().filter(|o| o.at.dist(at) <= 72.0 * k).min_by(|a, b| a.at.dist(at).total_cmp(&b.at.dist(at))) else { continue };
         o.kind = if r.kind == FamilyKind::Door { "door" } else { "window" };
         if let Some(w) = r.width_in {
-            o.width = w * k;
+            let new_w = w * k;
+            // When the opening has a swing (arc endpoints), scale the endpoints to the schedule
+            // width so the wall cut and door leaf use the schedule width, not the drawn radius.
+            if let Some((_, ref mut ends)) = o.swing {
+                let ratio = if o.width > 1e-9 { new_w / o.width } else { 1.0 };
+                if (ratio - 1.0).abs() > 1e-9 {
+                    for e in ends.iter_mut() {
+                        *e = o.at + (*e - o.at) * ratio;
+                    }
+                }
+            }
+            o.width = new_w;
         }
-        let (head, sill) = r.heights(sp.openings.window_sill_ft);
+        let (mut head, mut sill) = r.heights(sp.openings.window_sill_ft);
+        // A schedule row's TYPE selects the spec family whose name matches: its width (when the
+        // row has none), head and sill override the defaults.
+        if let Some(ty) = &r.kind_type
+            && let Some(f) = sp.family_by_type(r.kind, ty)
+        {
+            if r.width_in.is_none()
+                && let Some(fw) = f.width_in
+            {
+                o.width = fw * k;
+            }
+            if let Some(fh) = f.head_ft {
+                head = Some(fh);
+            }
+            if f.sill_ft.is_some() {
+                sill = f.sill_ft;
+            }
+        }
         fitted.insert(o.handle, (head.map(|h| h * upf), sill.map(|s| s * upf)));
     }
 }

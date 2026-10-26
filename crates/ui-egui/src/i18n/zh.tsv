@@ -3092,3 +3092,16 @@
 	Layer Quantity Takeoff	按图层统计工程量
 	Read Architecture from Prints	从图纸读取建筑
 	Read Roof and Wall Envelope	读取屋面与墙体围护
+	Element Properties (BIM)	元素属性 (BIM)
+	Set Element Property (BIM)	设置元素属性 (BIM)
+	Find Elements by Property	按属性查找元素
+	Element Property Summary	元素属性摘要
+	BIM Properties	BIM 属性
+	Kind	种类
+	Element Identities (BIM)	元素标识 (BIM)
+	Room Connections	房间连接
+	Link Print Set	链接图纸集
+	Check Building Codes	检查建筑规范
+	Code Rules	规范规则
+	Select Building Codes	选择建筑规范
+	Fill Element Properties	填充元素属性

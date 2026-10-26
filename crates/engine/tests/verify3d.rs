@@ -204,7 +204,7 @@ fn each_issue_kind_from_a_broken_model() {
     let only = s.execute("model.issues", &json!({"kind": "leak"})).unwrap();
     assert_eq!(only["total"], json!(leaks.len()));
     // Objects built for a level the spec no longer has.
-    s.execute("bspec.set", &json!({"spec": {"levels": [{"name": "L1", "remove": true}, {"name": "Ground", "elevation_ft": 0, "height_ft": 10}]}}))
+    s.execute("bspec.set", &json!({"spec": {"levels": [{"name": "L1", "remove": true}, {"name": "Podium", "elevation_ft": 0, "height_ft": 10}]}}))
         .unwrap();
     let r = s.execute("model.issues", &json!({"kind": "level_unmatched"})).unwrap();
     assert!(r["issues"].as_array().unwrap().iter().any(|i| i["message"].as_str().unwrap().contains("built for level L1")), "{r}");

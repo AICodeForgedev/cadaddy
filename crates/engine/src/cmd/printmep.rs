@@ -40,6 +40,8 @@ pub(crate) struct SheetRef {
     pub span: Option<(u64, u64)>,
     /// Its scale as printed (`1/8" = 1'-0"`), for a sheet left at paper size.
     pub scale_text: Option<String>,
+    /// Every level this sheet covers (a typical-floor plan).  Empty = only `level`.
+    pub levels: Vec<String>,
 }
 
 impl SheetRef {
@@ -149,7 +151,7 @@ pub(crate) fn sheet_drawing(d: &Drawing, sh: &SheetRef) -> Drawing {
 
 /// Drawing units per building foot of a sheet left at paper size (its printed scale, else
 /// 1/8" = 1'-0"); none when it was imported at its scale.
-fn paper_units_per_foot(d: &Drawing, sh: &SheetRef) -> Option<f64> {
+pub(crate) fn paper_units_per_foot(d: &Drawing, sh: &SheetRef) -> Option<f64> {
     let ext = d.extents(&Space::Model);
     let (w, h) = (ext.max.x - ext.min.x, ext.max.y - ext.min.y);
     let diag = (w * w + h * h).sqrt();
@@ -323,6 +325,28 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, only: Opti
         let Some(trade) = sh.trade() else { continue };
         let (mep, read) = read_sheet(d, sh, sheets, trade, upf);
         out.warnings.extend(read.warnings.iter().cloned());
+        // Typical-floor replication: if the sheet covers several levels, clone the MEP
+        // for each additional level (the first is the primary, already read).
+        let extra_levels = extra_levels_for(sh);
+        for extra in &extra_levels {
+            let extra_name = level_name(extra);
+            let cloned = clone_mep_for_level(&mep, &extra_name);
+            out.sheets.push(SheetRead {
+                sheet: sh.number.clone(),
+                level: extra_name,
+                trade: read.trade,
+                runs: cloned.runs.len(),
+                length_ft: read.length_ft,
+                terminals: cloned.terminals.len(),
+                equipment: cloned.equipment.len(),
+                warnings: Vec::new(),
+            });
+            let room = MAX_SET_RUNS.saturating_sub(out.mep.runs.len());
+            if room == 0 {
+                break;
+            }
+            add(&mut out.mep, cloned, room);
+        }
         out.sheets.push(read);
         let room = MAX_SET_RUNS.saturating_sub(out.mep.runs.len());
         if room == 0 {
@@ -330,6 +354,30 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, only: Opti
             break;
         }
         add(&mut out.mep, mep, room);
+    }
+    out
+}
+
+/// Additional level codes (beyond the primary) for a multi-level sheet.
+fn extra_levels_for(sh: &SheetRef) -> Vec<String> {
+    if sh.levels.len() <= 1 {
+        return Vec::new();
+    }
+    // Skip the first level (the primary, already used by read_sheet).
+    sh.levels[1..].to_vec()
+}
+
+/// Clone a MEP read, changing every run/terminal/equipment level to `target`.
+fn clone_mep_for_level(src: &Mep, target: &str) -> Mep {
+    let mut out = src.clone();
+    for r in &mut out.runs {
+        r.level = target.to_string();
+    }
+    for t in &mut out.terminals {
+        t.level = target.to_string();
+    }
+    for e in &mut out.equipment {
+        e.level = target.to_string();
     }
     out
 }
@@ -425,6 +473,15 @@ pub(crate) fn load_project_sheets(
     project: &cadaddy_mepfix::printset::PrintSetProject,
     only: Option<MepKind>,
 ) -> crate::Result<(Session, Vec<SheetRef>)> {
+    load_project_plans(project, &|r| r.trade().is_some_and(|t| only.is_none_or(|o| o == t)))
+}
+
+/// The sheets of a print-set project `keep` takes, imported side by side into a scratch
+/// session: their regions and handle spans, and the session.
+pub(crate) fn load_project_plans(
+    project: &cadaddy_mepfix::printset::PrintSetProject,
+    keep: &dyn Fn(&SheetRef) -> bool,
+) -> crate::Result<(Session, Vec<SheetRef>)> {
     let mut wanted: Vec<SheetRef> = Vec::new();
     let mut pages: Vec<super::exchange::PdfPage> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -437,9 +494,9 @@ pub(crate) fn load_project_sheets(
             rect: [0.0; 4],
             span: None,
             scale_text: sh.scale_text.clone(),
+            levels: sh.levels.clone(),
         };
-        let Some(t) = r.trade() else { continue };
-        if only.is_some_and(|o| o != t) || sh.file.is_empty() || !seen.insert((sh.file.clone(), sh.page)) || pages.len() >= MAX_SHEETS {
+        if !keep(&r) || sh.file.is_empty() || !seen.insert((sh.file.clone(), sh.page)) || pages.len() >= MAX_SHEETS {
             continue;
         }
         let path = if std::path::Path::new(&sh.file).is_absolute() { sh.file.clone() } else { format!("{}/{}", project.source_dir, sh.file) };
@@ -490,6 +547,7 @@ mod tests {
             rect: [x, 0.0, x + 100.0, 80.0],
             span: None,
             scale_text: None,
+            levels: Vec::new(),
         }
     }
 

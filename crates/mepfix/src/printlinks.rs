@@ -22,8 +22,10 @@
 //! the devices their callouts point from.
 
 use crate::device_types::{self, TagVerdict};
+use crate::linefit::{self, AxisSeg, LineFit};
 use crate::sheet_facts::{self, TextItem};
 use crate::sheet_reader;
+use crate::tagid::{self, Sim};
 use cadaddy_doc::{Drawing, EntityKind};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,6 +34,8 @@ use std::collections::{BTreeMap, BTreeSet};
 const MAX_PAGE_CALLOUTS: usize = 2_000;
 /// Most devices kept per page.
 const MAX_PAGE_DEVICES: usize = 20_000;
+/// Most door and room numbers kept per page.
+const MAX_PAGE_TAGS: usize = 20_000;
 /// Most boxes looked at per page.
 const MAX_BOXES: usize = 5_000;
 /// Most straight pieces looked at per page.
@@ -158,6 +162,12 @@ pub struct PageRead {
     pub whole: Option<PageView>,
     /// No view title read claims `whole`: it is a view of its own beside the titled ones.
     pub whole_free: bool,
+    /// Door and room numbers ([`tagid::tag_key`] spelling) and where they are: an enlarged
+    /// plan registers on its overall plan by the ones both print.
+    pub tags: Vec<(String, [f64; 2])>,
+    /// The page's longest straight pieces along an axis (walls, mostly): a view no grid line,
+    /// tag or box places registers where its linework lies on its overall plan's.
+    pub lines: Vec<AxisSeg>,
 }
 
 /// An enlarged plan and where it sits on its level's overall plan.
@@ -174,9 +184,24 @@ pub struct Enlarged {
     pub title: String,
     pub level: String,
     pub registered: bool,
-    /// `grids` (shared grid lines) or `boundary` (fitted into the boundary box with the scales).
+    /// `grids` (shared grid lines), `tags` (door and room numbers both sheets print),
+    /// `boundary` (fitted into the boundary box with the scales) or `lines` (its walls laid on
+    /// the overall plan's).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub method: String,
+    /// Registered by tags: how many agree, and their root-mean-square error after the fit
+    /// (overall plan units).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub matched_tags: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub residual: Option<f64>,
+    /// Registered by linework: the share of the enlarged plan's lines that lie on the overall
+    /// plan's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_coverage: Option<f64>,
+    /// The enlarged plan's turn on the overall plan, degrees (only when not 0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation_deg: Option<f64>,
     /// Enlarged sheet units per overall plan unit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<f64>,
@@ -194,16 +219,19 @@ pub struct Enlarged {
     /// The handles of the overall plan's devices inside the boundary.
     #[serde(skip)]
     pub ignored_handles: Vec<String>,
-    /// Enlarged sheet to overall plan: `[s, tx, ty]`, a point `p` lands at `s·p + t`.
+    /// Enlarged sheet to overall plan (scale, rotation, offset).
     #[serde(skip)]
-    pub fit: Option<[f64; 3]>,
+    pub fit: Option<Sim>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 impl Enlarged {
     /// Where a point of the enlarged sheet lands on the overall plan, once registered.
     pub fn place(&self, p: [f64; 2]) -> Option<[f64; 2]> {
-        let [s, tx, ty] = self.fit.filter(|_| self.registered)?;
-        Some([s * p[0] + tx, s * p[1] + ty])
+        Some(self.fit.filter(|_| self.registered)?.apply(p))
     }
 }
 
@@ -675,7 +703,12 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         v
     };
 
-    let mut out = PageRead { boxes: solid_boxes.clone(), dash_boxes: dashed_boxes.clone(), ..PageRead::default() };
+    let mut out = PageRead {
+        boxes: solid_boxes.clone(),
+        dash_boxes: dashed_boxes.clone(),
+        lines: linefit::axis_segments(&segs, 4.0 * median_h, linefit::MAX_PAGE_LINES),
+        ..PageRead::default()
+    };
     let mut used_texts: BTreeSet<usize> = BTreeSet::new();
     let mut view_marks: Vec<(String, [f64; 2])> = Vec::new();
     // What the linework around a bubble at `c` (radius `r`) makes it: its kind, the box its
@@ -1025,6 +1058,19 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         }
     }
 
+    // Door and room numbers: plan lettering (not titles) that reads as one.
+    for t in &texts {
+        if out.tags.len() >= MAX_PAGE_TAGS {
+            break;
+        }
+        if t.height > 3.0 * median_h {
+            continue;
+        }
+        if let Some(k) = tagid::tag_key(&t.value) {
+            out.tags.push((k, text_middle(t)));
+        }
+    }
+
     // Devices: the import's symbols with the mark beside them; legends say which are samples.
     let legend = device_types::read_legend(&texts);
     out.legend_types = legend.types.clone();
@@ -1191,19 +1237,6 @@ fn is_circuit_tag(tag: &str) -> bool {
 
 // ─── The set ────────────────────────────────────────────────────────────────
 
-/// A transform `p ↦ s·p + t` taking enlarged-sheet coordinates onto the overall plan.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Fit {
-    s: f64,
-    t: [f64; 2],
-}
-
-impl Fit {
-    fn apply(&self, p: [f64; 2]) -> [f64; 2] {
-        [self.s * p[0] + self.t[0], self.s * p[1] + self.t[1]]
-    }
-}
-
 /// Scale and offset along one axis from grid lines both views label.
 fn axis_fit(from: &[(String, f64)], to: &[(String, f64)]) -> (Option<f64>, Vec<(f64, f64)>) {
     let pairs: Vec<(f64, f64)> = from.iter().filter_map(|(l, a)| to.iter().find(|(m, _)| m == l).map(|(_, b)| (*a, *b))).collect();
@@ -1222,7 +1255,7 @@ fn axis_fit(from: &[(String, f64)], to: &[(String, f64)]) -> (Option<f64>, Vec<(
 }
 
 /// Register an enlarged view onto an overall plan by the grid lines both label.
-fn grid_fit(view: &PageView, host_x: &[(String, f64)], host_y: &[(String, f64)]) -> Option<Fit> {
+fn grid_fit(view: &PageView, host_x: &[(String, f64)], host_y: &[(String, f64)]) -> Option<Sim> {
     let (sx, px) = axis_fit(&view.grid_x, host_x);
     let (sy, py) = axis_fit(&view.grid_y, host_y);
     let s = match (sx, sy) {
@@ -1235,7 +1268,7 @@ fn grid_fit(view: &PageView, host_x: &[(String, f64)], host_y: &[(String, f64)])
     };
     let tx = px.iter().map(|(a, b)| b - s * a).sum::<f64>() / px.len().max(1) as f64;
     let ty = py.iter().map(|(a, b)| b - s * a).sum::<f64>() / py.len().max(1) as f64;
-    (!px.is_empty() && !py.is_empty() && s.is_finite()).then_some(Fit { s, t: [tx, ty] })
+    (!px.is_empty() && !py.is_empty() && s.is_finite()).then_some(Sim::scale_offset(s, [tx, ty]))
 }
 
 /// The overlap of two boxes over their union (0 when apart).
@@ -1248,9 +1281,12 @@ fn overlap_ratio(a: &[f64; 4], b: &[f64; 4]) -> f64 {
     if union > 0.0 { both / union } else { 0.0 }
 }
 
-fn map_box(f: &Fit, b: &[f64; 4]) -> [f64; 4] {
-    let (p, q) = (f.apply([b[0], b[1]]), f.apply([b[2], b[3]]));
-    [p[0].min(q[0]), p[1].min(q[1]), p[0].max(q[0]), p[1].max(q[1])]
+fn map_box(f: &Sim, b: &[f64; 4]) -> [f64; 4] {
+    let corners = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].map(|p| f.apply(p));
+    let (xs, ys) = (corners.map(|p| p[0]), corners.map(|p| p[1]));
+    let lo = |v: [f64; 4]| v.into_iter().fold(f64::INFINITY, f64::min);
+    let hi = |v: [f64; 4]| v.into_iter().fold(f64::NEG_INFINITY, f64::max);
+    [lo(xs), lo(ys), hi(xs), hi(ys)]
 }
 
 /// A page of the set as read: its index entry and what it says.
@@ -1481,19 +1517,52 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 .max_by_key(|p| (p.sheet.discipline == e.page.sheet.discipline, shared(p), p.read.devices.len()))
         });
         // No callout and no level: the plan of the view's discipline sharing the most grid lines.
-        let host = host.or_else(|| {
+        let mut host = host.or_else(|| {
             pages
                 .iter()
                 .filter(|p| p.sheet.number != target && p.sheet.sheet_type == "plan" && shared(p) >= 2)
                 .max_by_key(|p| (p.sheet.discipline == e.page.sheet.discipline, shared(p), std::cmp::Reverse(level_key(&p.sheet.level))))
         });
-        if let Some(h) = host {
-            entry.overall_sheet = h.sheet.number.clone();
-            if level.is_empty() {
-                level = h.sheet.level.clone();
+        // Door and room numbers the view prints: it registers where its overall plan prints the
+        // same ones (any discipline's plan: the architectural background carries them).
+        // A sheet number printed in a bubble is a link, not a tag.
+        let not_sheet = |t: &&(String, [f64; 2])| !numbers.contains(&norm_sheet(&t.0));
+        let view_tags: Vec<(String, [f64; 2])> =
+            e.view.region.map(|rg| e.page.read.tags.iter().filter(|(_, p)| inside(&rg, *p)).filter(not_sheet).cloned().collect()).unwrap_or_default();
+        let tag_tol = e.view.region.map_or(0.0, |rg| 0.03 * (rg[2] - rg[0]).hypot(rg[3] - rg[1]));
+        let by_tags = |h: &LinkPage| -> Option<tagid::TagFit> {
+            if view_tags.len() < 3 || h.read.tags.len() < 3 {
+                return None;
             }
-            // The boundary box: the callout's leader reaches it, or the box a reference sits by.
-            let boxed = host_callout.and_then(|(_, c)| {
+            let theirs: Vec<(String, [f64; 2])> = h.read.tags.iter().filter(not_sheet).cloned().collect();
+            // Both sheets are read at their scale notes: the scale is near one, or the printed
+            // scales' ratio; anything from a fifth to five times is let through.
+            tagid::fit_by_tags(&view_tags, &theirs, tag_tol, (0.2, 5.0))
+        };
+        let placed_on_host = host.is_some_and(|h| grid_fit(e.view, &h.read.grid_x, &h.read.grid_y).is_some() || by_tags(h).is_some());
+        if !placed_on_host && view_tags.len() >= 3 {
+            // No grid line or tag places it on the plan found: the plan sharing the most of its
+            // numbers that they place it on (the same level first).
+            let mine: BTreeSet<&str> = view_tags.iter().map(|t| t.0.as_str()).collect();
+            let mut cands: Vec<(&LinkPage, usize)> = pages
+                .iter()
+                .filter(|p| {
+                    p.sheet.number != target
+                        && !enlarged_sheets.contains(&norm_sheet(&p.sheet.number))
+                        && matches!(p.sheet.sheet_type.as_str(), "plan" | "unknown" | "rcp")
+                })
+                .map(|p| (p, p.read.tags.iter().map(|t| t.0.as_str()).filter(|t| mine.contains(t)).collect::<BTreeSet<_>>().len()))
+                .filter(|(_, n)| *n >= 3)
+                .collect();
+            cands.sort_by_key(|(p, n)| (std::cmp::Reverse(!level.is_empty() && p.sheet.level == level), std::cmp::Reverse(*n)));
+            if let Some((p, _)) = cands.into_iter().take(4).find(|(p, _)| by_tags(p).is_some()) {
+                host = Some(p);
+            }
+        }
+        // The boundary box on a plan: the callout's leader reaches it, or the box a reference
+        // sits by.
+        let boxed_on = |h: &LinkPage| -> Option<[f64; 4]> {
+            host_callout.filter(|(p, _)| std::ptr::eq(*p, h)).and_then(|(_, c)| {
                 c.boundary.or_else(|| {
                     // The box a note or bubble sits by: dashed boxes first (how a boundary is
                     // drawn), never the sheet's border.
@@ -1507,8 +1576,46 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                     };
                     by(&h.read.dash_boxes).or_else(|| by(&h.read.boxes))
                 })
-            });
-            let fit = grid_fit(e.view, &h.read.grid_x, &h.read.grid_y).map(|f| (f, "grids")).or_else(|| {
+            })
+        };
+        // The view's linework, laid on a plan's: one to one (both sheets read at their scale
+        // notes) or the printed scales' ratio; inside the callout's box, or by the callout, when
+        // the plan has one.
+        let view_lines: Vec<AxisSeg> =
+            e.view.region.map(|rg| e.page.read.lines.iter().filter(|l| inside(&rg, l.mid())).copied().collect()).unwrap_or_default();
+        let by_lines = |h: &LinkPage| -> Option<LineFit> {
+            let rg = e.view.region?;
+            let tol = 0.004 * (rg[2] - rg[0]).hypot(rg[3] - rg[1]);
+            let printed = e
+                .view
+                .scale_text
+                .as_deref()
+                .and_then(sheet_reader::parse_scale)
+                .filter(|v| *v > 0.0 && h.read.scale > 0.0)
+                .map(|v| h.read.scale / v)
+                .filter(|r| (r - 1.0).abs() > 0.02);
+            let scales: Vec<f64> = [Some(1.0), printed].into_iter().flatten().collect();
+            let boxed = boxed_on(h);
+            let near = host_callout.filter(|(p, _)| std::ptr::eq(*p, h)).map(|(_, c)| c.at);
+            let accept = |f: &Sim| {
+                let placed = map_box(f, &rg);
+                match (boxed, near) {
+                    (Some(b), _) => overlap_ratio(&b, &placed) >= 0.3,
+                    (None, Some(c)) => inside(&placed, c) || box_edge_dist(&placed, c) <= 0.5 * (placed[2] - placed[0]).hypot(placed[3] - placed[1]),
+                    (None, None) => true,
+                }
+            };
+            linefit::fit_by_lines(&view_lines, &h.read.lines, &scales, tol, &accept)
+        };
+        // (plan, fit, how, its box, the tag fit, the line fit)
+        type Chosen<'p> = (&'p LinkPage, Option<(Sim, &'static str)>, Option<[f64; 4]>, Option<tagid::TagFit>, Option<LineFit>);
+        let mut chosen: Option<Chosen> = None;
+        if let Some(h) = host {
+            let boxed = boxed_on(h);
+            let tag_fit = by_tags(h);
+            let fit = grid_fit(e.view, &h.read.grid_x, &h.read.grid_y).map(|f| (f, "grids"));
+            let fit = fit.or_else(|| tag_fit.as_ref().map(|f| (f.sim, "tags")));
+            let boundary_fit = || {
                 let (b, rg) = (boxed?, e.view.region?);
                 let (bw, bh, rw, rh) = (b[2] - b[0], b[3] - b[1], rg[2] - rg[0], rg[3] - rg[1]);
                 if !(bw > 0.0 && bh > 0.0 && rw > 0.0 && rh > 0.0) {
@@ -1532,19 +1639,66 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                     .unwrap_or(fitted);
                 let cb = [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0];
                 let cr = [(rg[0] + rg[2]) / 2.0, (rg[1] + rg[3]) / 2.0];
-                Some((Fit { s, t: [cb[0] - s * cr[0], cb[1] - s * cr[1]] }, "boundary"))
-            });
+                Some((Sim::scale_offset(s, [cb[0] - s * cr[0], cb[1] - s * cr[1]]), "boundary"))
+            };
+            let fit = fit.or_else(boundary_fit);
+            let line_fit = if fit.is_none() { by_lines(h) } else { None };
+            let fit = fit.or_else(|| line_fit.map(|l| (l.sim, "lines")));
+            chosen = Some((h, fit, boxed, tag_fit, line_fit));
+        }
+        // Nothing places it on that plan (or none was found): the plans of its level (any level
+        // when it names none) whose linework it lies on. Two levels' plans both taking it (typical
+        // floors) place it on neither.
+        if chosen.as_ref().is_none_or(|c| c.1.is_none()) && view_lines.len() >= 6 {
+            let mut cands: Vec<&LinkPage> = pages
+                .iter()
+                .filter(|p| {
+                    !host.is_some_and(|h| std::ptr::eq(h, *p))
+                        && p.sheet.number != target
+                        && !enlarged_sheets.contains(&norm_sheet(&p.sheet.number))
+                        && p.sheet.sheet_type == "plan"
+                        && (level.is_empty() || p.sheet.level == level)
+                })
+                .collect();
+            cands.sort_by_key(|p| (p.sheet.discipline != e.page.sheet.discipline, p.sheet.discipline != "A", std::cmp::Reverse(p.read.lines.len())));
+            let fits: Vec<(&LinkPage, LineFit)> = cands.into_iter().take(4).filter_map(|p| Some((p, by_lines(p)?))).collect();
+            let best = fits.iter().max_by(|a, b| a.1.coverage.total_cmp(&b.1.coverage));
+            if let Some(&(p, lf)) = best {
+                let rival = fits.iter().any(|(q, o)| q.sheet.level != p.sheet.level && o.coverage >= 0.85 * lf.coverage);
+                if !rival {
+                    chosen = Some((p, Some((lf.sim, "lines")), boxed_on(p), None, Some(lf)));
+                }
+            }
+        }
+        if let Some((h, fit, boxed, tag_fit, line_fit)) = chosen {
+            entry.overall_sheet = h.sheet.number.clone();
+            if level.is_empty() {
+                level = h.sheet.level.clone();
+            }
             if let Some((f, how)) = fit {
                 entry.registered = true;
                 entry.method = how.into();
-                entry.scale = Some((1.0 / f.s * 1000.0).round() / 1000.0);
-                entry.fit = Some([f.s, f.t[0], f.t[1]]);
+                entry.scale = Some((1.0 / f.scale() * 1000.0).round() / 1000.0);
+                entry.fit = Some(f);
+                let turn = f.rotation_deg();
+                entry.rotation_deg = (turn.abs() > 0.05).then(|| (turn * 100.0).round() / 100.0);
+                if how == "tags"
+                    && let Some(t) = &tag_fit
+                {
+                    entry.matched_tags = t.matched.len();
+                    entry.residual = Some((t.residual * 100.0).round() / 100.0);
+                }
+                if how == "lines"
+                    && let Some(l) = &line_fit
+                {
+                    entry.line_coverage = Some((l.coverage * 1000.0).round() / 1000.0);
+                }
                 // Placed by the grid, the plan's own outline is the boundary, unless a box drawn
                 // round about the same area says it more exactly.
                 let placed = e.view.region.map(|rg| map_box(&f, &rg));
                 let b = match (how, boxed, placed) {
-                    ("grids", Some(bx), Some(pl)) if overlap_ratio(&bx, &pl) >= 0.5 => Some(bx),
-                    ("grids", _, Some(pl)) => Some(pl),
+                    ("grids" | "tags" | "lines", Some(bx), Some(pl)) if overlap_ratio(&bx, &pl) >= 0.5 => Some(bx),
+                    ("grids" | "tags" | "lines", _, Some(pl)) => Some(pl),
                     _ => boxed.or(placed),
                 };
                 entry.boundary = b;

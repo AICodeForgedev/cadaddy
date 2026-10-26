@@ -346,3 +346,221 @@ fn another_sheets_schedule_does_not_drop_the_enlarged_plans_devices() {
     let level = |l: &SheetLinks| l.levels.iter().find(|v| v.level == "1").map(|v| v.devices);
     assert_eq!(level(&l), level(&before).map(|n| n + 2));
 }
+
+/// Lettering added to one of the set's drawings (plan text, 0.1 high).
+fn letter(d: &mut cadaddy_doc::Drawing, v: &str, at: [f64; 2]) {
+    let t = cadaddy_doc::Text {
+        insert: cadaddy_geom::Vec3::new(at[0], at[1], 0.0),
+        align_pt: None,
+        height: 0.1,
+        value: v.into(),
+        rotation: 0.0,
+        width_factor: 1.0,
+        oblique: 0.0,
+        style: "Standard".into(),
+        halign: cadaddy_doc::HAlign::default(),
+        valign: cadaddy_doc::VAlign::default(),
+    };
+    let common = cadaddy_doc::Common { layer: "PEN-1".into(), ..cadaddy_doc::Common::default() };
+    d.add(&cadaddy_doc::Space::Model, common, cadaddy_doc::EntityKind::Text(t)).expect("text");
+}
+
+/// The set with the core's room and door numbers lettered on both E-1 and the enlarged E-3, and
+/// neither grid lines on E-3's view nor a boundary box on E-1 to place it by.
+fn tagged_set() -> (Vec<SetSheet>, Vec<LinkPage>) {
+    let sheets = linkset::sheets();
+    // E-3 (twice the scale) onto E-1: x' = x/2 + 6, y' = y/2 + 2 (their shared grid lines).
+    let numbers = [("101", [7.0, 7.0]), ("102", [15.0, 7.0]), ("103", [7.0, 15.0]), ("104", [15.0, 15.0]), ("101A", [11.5, 9.0])];
+    let pages = linkset::drawings()
+        .into_iter()
+        .map(|(n, mut d)| {
+            if n == "E-3" {
+                for (t, p) in numbers {
+                    letter(&mut d, t, p);
+                }
+            }
+            if n == "E-1" {
+                for (t, p) in numbers.iter().take(4) {
+                    letter(&mut d, t, [p[0] / 2.0 + 6.0, p[1] / 2.0 + 2.0]);
+                }
+                // A number E-3 doesn't print, and a sheet number in a bubble's place.
+                letter(&mut d, "110", [3.0, 3.0]);
+            }
+            let mut read = printlinks::read_page(&d, n);
+            if n == "E-3" {
+                for v in read.views.iter_mut().chain(read.whole.as_mut()) {
+                    v.grid_x.clear();
+                    v.grid_y.clear();
+                }
+            }
+            if n == "E-1" {
+                read.boxes.clear();
+                read.dash_boxes.clear();
+                for c in &mut read.callouts {
+                    c.boundary = None;
+                }
+            }
+            LinkPage { sheet: sheets.iter().find(|s| s.number == n).cloned().unwrap_or_default(), read }
+        })
+        .collect();
+    (sheets, pages)
+}
+
+#[test]
+fn an_enlarged_plan_with_no_grid_or_box_registers_by_the_tags_it_shares() {
+    let (sheets, pages) = tagged_set();
+    let e3 = pages.iter().find(|p| p.sheet.number == "E-3").expect("E-3");
+    assert!(e3.read.tags.iter().any(|t| t.0 == "101A"), "{:?}", e3.read.tags);
+    let l = printlinks::link_set(&sheets, &pages);
+    let e = &l.enlarged[0];
+    assert!(e.registered, "{e:#?}");
+    assert_eq!((e.method.as_str(), e.overall_sheet.as_str(), e.matched_tags), ("tags", "E-1", 4), "{e:#?}");
+    // Paper units here: the error left is the lettering's own offset (the same size of letters
+    // at two scales), well under a tag's size.
+    assert!(e.residual.is_some_and(|r| r < 0.1), "{e:#?}");
+    assert_eq!(e.scale, Some(2.0));
+    // Its devices count once: the overall plan's 3 copies in its outline are left out.
+    assert_eq!((e.devices, e.overall_ignored), (5, 3), "{e:#?}");
+    assert_eq!(l.double_counted, 0);
+    let at = e.place([6.0, 6.0]).expect("placed");
+    assert!((at[0] - 9.0).abs() < 0.1 && (at[1] - 5.0).abs() < 0.1, "{at:?}");
+}
+
+#[test]
+fn a_turned_enlarged_plan_registers_by_its_tags_with_its_rotation() {
+    let (sheets, mut pages) = tagged_set();
+    // Turn everything E-3 shows by 90° about the origin and move it (a plan drawn turned on its
+    // sheet): (x, y) -> (-y + 40, x + 3).
+    let turn = |p: [f64; 2]| [-p[1] + 40.0, p[0] + 3.0];
+    for p in pages.iter_mut().filter(|p| p.sheet.number == "E-3") {
+        for t in &mut p.read.tags {
+            t.1 = turn(t.1);
+        }
+        for dv in &mut p.read.devices {
+            dv.at = turn(dv.at);
+        }
+        for v in p.read.views.iter_mut().chain(p.read.whole.as_mut()) {
+            if let Some(r) = v.region {
+                let (a, b) = (turn([r[0], r[1]]), turn([r[2], r[3]]));
+                v.region = Some([a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]);
+            }
+        }
+    }
+    let l = printlinks::link_set(&sheets, &pages);
+    let e = &l.enlarged[0];
+    assert!(e.registered && e.method == "tags", "{e:#?}");
+    assert_eq!(e.rotation_deg, Some(-90.0), "{e:#?}");
+    assert!(e.residual.is_some_and(|r| r < 0.1), "{e:#?}");
+    let at = e.place(turn([6.0, 6.0])).expect("placed");
+    assert!((at[0] - 9.0).abs() < 0.1 && (at[1] - 5.0).abs() < 0.1, "{at:?}");
+    assert_eq!(e.devices, 5);
+}
+
+/// A wall line added to one of the set's drawings.
+fn wall(d: &mut cadaddy_doc::Drawing, a: [f64; 2], b: [f64; 2]) {
+    let l = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(a[0], a[1], 0.0), b: cadaddy_geom::Vec3::new(b[0], b[1], 0.0) };
+    let common = cadaddy_doc::Common { layer: "PEN-2".into(), ..cadaddy_doc::Common::default() };
+    d.add(&cadaddy_doc::Space::Model, common, cadaddy_doc::EntityKind::Line(l)).expect("line");
+}
+
+/// The set with the floor's walls drawn on E-1 and the core's on E-3 (at twice the scale), and
+/// nothing else to place E-3 by: no grid lines read on its view, no tags, no boundary box.
+fn walled_set() -> (Vec<SetSheet>, Vec<LinkPage>) {
+    let sheets = linkset::sheets();
+    // E-1's walls (E-1 units): the outline, a corridor, rooms of unequal widths, the core's
+    // rooms (x 8..16, y 4..12, split at 12 and 8) with a closet.
+    let mut floor: Vec<[[f64; 2]; 2]> = vec![
+        [[1.0, 1.0], [18.0, 1.0]],
+        [[18.0, 1.0], [18.0, 14.0]],
+        [[18.0, 14.0], [1.0, 14.0]],
+        [[1.0, 14.0], [1.0, 1.0]],
+        [[1.0, 2.5], [7.0, 2.5]],
+        [[3.3, 1.0], [3.3, 2.5]],
+        [[5.1, 1.0], [5.1, 2.5]],
+        [[1.0, 13.0], [8.0, 13.0]],
+        [[2.6, 13.0], [2.6, 14.0]],
+        [[16.7, 1.0], [16.7, 4.0]],
+    ];
+    let core = [
+        [[8.0, 4.0], [16.0, 4.0]],
+        [[16.0, 4.0], [16.0, 12.0]],
+        [[16.0, 12.0], [8.0, 12.0]],
+        [[8.0, 12.0], [8.0, 4.0]],
+        [[12.0, 4.0], [12.0, 12.0]],
+        [[8.0, 8.0], [16.0, 8.0]],
+        [[13.1, 9.5], [14.6, 9.5]],
+        [[14.6, 9.5], [14.6, 12.0]],
+        [[9.0, 4.0], [9.0, 5.3]],
+    ];
+    floor.extend(core);
+    // E-1 → E-3: x' = 2(x − 6), y' = 2(y − 2) (the inverse of the shared grid lines' fit).
+    let to_e3 = |p: [f64; 2]| [2.0 * (p[0] - 6.0), 2.0 * (p[1] - 2.0)];
+    let pages = linkset::drawings()
+        .into_iter()
+        .map(|(n, mut d)| {
+            if n == "E-1" {
+                for s in &floor {
+                    wall(&mut d, s[0], s[1]);
+                }
+            }
+            if n == "E-3" {
+                for s in &core {
+                    wall(&mut d, to_e3(s[0]), to_e3(s[1]));
+                }
+            }
+            let mut read = printlinks::read_page(&d, n);
+            if n == "E-3" {
+                for v in read.views.iter_mut().chain(read.whole.as_mut()) {
+                    v.grid_x.clear();
+                    v.grid_y.clear();
+                }
+                read.tags.clear();
+            }
+            if n == "E-1" {
+                read.boxes.clear();
+                read.dash_boxes.clear();
+                read.tags.clear();
+                for c in &mut read.callouts {
+                    c.boundary = None;
+                }
+            }
+            LinkPage { sheet: sheets.iter().find(|s| s.number == n).cloned().unwrap_or_default(), read }
+        })
+        .collect();
+    (sheets, pages)
+}
+
+#[test]
+fn an_enlarged_plan_with_no_grid_tag_or_box_registers_by_the_walls_both_draw() {
+    let (sheets, pages) = walled_set();
+    let l = printlinks::link_set(&sheets, &pages);
+    let e = &l.enlarged[0];
+    assert!(e.registered, "{e:#?}");
+    assert_eq!((e.method.as_str(), e.overall_sheet.as_str()), ("lines", "E-1"), "{e:#?}");
+    assert!(e.line_coverage.is_some_and(|c| c > 0.6), "{e:#?}");
+    assert_eq!(e.scale, Some(2.0));
+    // Where E-3's points land: the grid lines' fit.
+    for p in [[6.0, 6.0], [20.0, 20.0], [4.0, 12.0]] {
+        let at = e.place(p).expect("placed");
+        assert!((at[0] - (p[0] / 2.0 + 6.0)).abs() < 0.05 && (at[1] - (p[1] / 2.0 + 2.0)).abs() < 0.05, "{p:?} -> {at:?}");
+    }
+    // Its devices count once: the overall plan's 3 copies in its outline are left out.
+    assert_eq!((e.devices, e.overall_ignored), (5, 3), "{e:#?}");
+    assert_eq!(l.double_counted, 0);
+}
+
+#[test]
+fn an_enlarged_plan_whose_walls_lie_nowhere_on_its_plan_stays_unregistered() {
+    let (sheets, mut pages) = walled_set();
+    // E-1 without the core: its other walls only.
+    for p in pages.iter_mut().filter(|p| p.sheet.number == "E-1") {
+        p.read.lines.retain(|s| {
+            let m = s.mid();
+            !(m[0] > 7.9 && m[0] < 16.1 && m[1] > 3.9 && m[1] < 12.1)
+        });
+    }
+    let l = printlinks::link_set(&sheets, &pages);
+    let e = &l.enlarged[0];
+    assert!(!e.registered, "{e:#?}");
+    assert_eq!(l.enlarged_registered, 0);
+}
