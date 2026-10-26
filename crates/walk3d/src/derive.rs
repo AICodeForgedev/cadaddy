@@ -414,7 +414,7 @@ pub fn derive_set_lod(sources: &[&Drawing], rules: &Rules, lod: Lod) -> Scene {
     }
     close_walls(&mut s, &faces);
     crate::openings::build(&mut s, &plans, &rules.openings);
-    // Stairs and ramps: their steps, landings and handrails, and the slopes Walk climbs.
+    // Stairs and ramps: their steps, landings, handrails and guards, and the slopes Walk climbs.
     s.part = Part::Stair;
     for st in rules.stairs.iter().take(1_000) {
         let Some(lv) = rules.levels.iter().position(|l| l.name.eq_ignore_ascii_case(&st.level)) else { continue };
@@ -443,6 +443,13 @@ pub fn derive_set_lod(sources: &[&Drawing], rules: &Rules, lod: Lod) -> Scene {
         }
         for (a, b) in &g.rails {
             edge(&mut s, v3(a[0], a[1], a[2]), v3(b[0], b[1], b[2]));
+        }
+        // Guards on the landings: their top rail and end posts.
+        for q in &g.guards {
+            edge(&mut s, v3(q.a.x, q.a.y, q.z1), v3(q.b.x, q.b.y, q.z1));
+            for p in [q.a, q.b] {
+                edge(&mut s, v3(p.x, p.y, q.z0), v3(p.x, p.y, q.z1));
+            }
         }
         s.slopes.extend(g.slopes);
     }

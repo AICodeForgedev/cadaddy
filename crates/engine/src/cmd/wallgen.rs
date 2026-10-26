@@ -958,8 +958,6 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     let mut fitted: HashMap<Handle, (Option<f64>, Option<f64>)> = HashMap::new();
     if let Some(sp) = &g.spec {
         fit_families(d, sp, &ents, &mut ops, &mut fitted, upf);
-        // Tagged openings take their schedule row's size and heights.
-        super::schedules::size_openings(sp, &mut ops, &mut fitted, upf);
     }
     // A door block hangs from its hinge, the centre of the swing it draws (most door blocks are
     // inserted at the hinge): cut and placed as that swing, not centred on the insertion point.
@@ -971,38 +969,59 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             o.width = radius;
         }
     }
+    // Tagged openings take their schedule row's size and heights — AFTER the swing pass so a
+    // scheduled width is not overwritten by the drawn swing radius.
+    if let Some(sp) = &g.spec {
+        super::schedules::size_openings(sp, &mut ops, &mut fitted, upf);
+    }
     let (mut doors, mut windows) = (0, 0);
     let mut not_doors = 0usize;
-    for o in ops.iter().take(MAX_OBJECTS) {
-        // A swing read off the lines (an arc, not a door block) is a door only in a wall it shuts
-        // along, and (a bare arc, no leaf drawn) only where that wall is open (Q5273).
-        let drawn_swing = if o.kind == "door" && o.block.is_none() { o.swing.map(|(_, ends)| ends) } else { None };
-        // The wall it is in: the hinge (or the block) on its centreline within its thickness.
-        let best = pl
-            .walls
-            .iter()
-            .enumerate()
-            .filter_map(|(i, w)| {
-                let len = w.a.dist(w.b);
-                if len <= 1e-9 {
-                    return None;
-                }
-                let u = (w.b - w.a) * (1.0 / len);
-                let off = u.perp().dot(o.at - w.a).abs();
-                let s = u.dot(o.at - w.a);
-                let fits = drawn_swing.is_none_or(|ends| swing_shuts_along(w, o.at, ends, o.width, k));
-                (fits && off <= w.thickness.max(2.0 * k) && s >= -o.width && s <= len + o.width).then_some((i, off))
-            })
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        let Some((wi, _)) = best else {
+    // The wall each opening is in (the hinge, or the block, on its centreline within its
+    // thickness); a swing read off the lines (an arc, not a door block) only in a wall it shuts
+    // along (Q5273). For a drawn swing, whether that wall runs solid through where it shuts.
+    let placed: Vec<Option<(usize, bool)>> = ops
+        .iter()
+        .take(MAX_OBJECTS)
+        .map(|o| {
+            let drawn_swing = if o.kind == "door" && o.block.is_none() { o.swing.map(|(_, ends)| ends) } else { None };
+            let (wi, _) = pl
+                .walls
+                .iter()
+                .enumerate()
+                .filter_map(|(i, w)| {
+                    let len = w.a.dist(w.b);
+                    if len <= 1e-9 {
+                        return None;
+                    }
+                    let u = (w.b - w.a) * (1.0 / len);
+                    let off = u.perp().dot(o.at - w.a).abs();
+                    let s = u.dot(o.at - w.a);
+                    let fits = drawn_swing.is_none_or(|ends| swing_shuts_along(w, o.at, ends, o.width, k));
+                    (fits && off <= w.thickness.max(2.0 * k) && s >= -o.width && s <= len + o.width).then_some((i, off))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))?;
+            Some((wi, drawn_swing.is_some_and(|ends| solid_through(&pl.walls, wi, o.at, ends, k))))
+        })
+        .collect();
+    // A plan that breaks its walls for its doors (most drawn swings hang in an opening) draws
+    // no door on a solid wall: a swing there, leaf or not, is a cabinet's, a shower's or a
+    // fixture's. Drawings with unbroken walls keep the swings drawn with their leaf.
+    let drawn = |o: &&super::perceive::geometry::Opening| o.kind == "door" && o.block.is_none() && o.swing.is_some();
+    let (open_swings, solid_swings) = ops.iter().zip(&placed).filter(|(o, _)| drawn(o)).fold((0usize, 0usize), |(a, b), (_, p)| match p {
+        Some((_, false)) => (a + 1, b),
+        Some((_, true)) => (a, b + 1),
+        None => (a, b),
+    });
+    let walls_broken_for_doors = open_swings >= BROKEN_WALL_SHARE * solid_swings && open_swings > 0;
+    for (o, at) in ops.iter().zip(&placed) {
+        let drawn_swing = if drawn(&o) { o.swing.map(|(_, ends)| ends) } else { None };
+        let Some((wi, solid)) = *at else {
             not_doors += usize::from(drawn_swing.is_some());
             continue;
         };
         // A bare arc on a solid wall is no door; one with its leaf drawn is a door symbol on a
         // wall drawn unbroken (as some drawings do), cut as before.
-        if let Some(ends) = drawn_swing.filter(|_| !o.leaf)
-            && solid_through(&pl.walls, wi, o.at, ends, k)
-        {
+        if drawn_swing.is_some() && solid && (!o.leaf || walls_broken_for_doors) {
             not_doors += 1;
             continue;
         }
@@ -1114,33 +1133,25 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         };
         !hits(nrm) || !hits(-nrm)
     };
+    // The swings drawn on the level (arcs and flattened arcs of a door's sweep and radius), for
+    // the gaps to hang doors from.
+    let swings = drawn_swings(&ents, k);
     for (wi, g0, g1, t) in gaps {
         let width = g0.dist(g1);
         let u = (g1 - g0) * (1.0 / width.max(1e-12));
-        // A door swing (an arc, or a polyline of chords) hanging from a jamb, a gap wide.
+        // A door swing (an arc, or a polyline of chords) hung from a jamb: its hinge there, its
+        // leaf the gap wide (or half of it, a pair's). Not any curve about that far from it
+        // (furniture, text, a fixture by a wide opening) (Q5273).
         let mut leaf = None;
-        for e in &ents {
-            let pts: Vec<Vec2> = match &e.kind {
-                EntityKind::Arc(a) => {
-                    let c = a.center.xy();
-                    vec![
-                        c + Vec2::from_angle(a.start) * a.radius,
-                        c + Vec2::from_angle((a.start + a.end) / 2.0) * a.radius,
-                        c + Vec2::from_angle(a.end) * a.radius,
-                    ]
-                }
-                EntityKind::LwPolyline(p) if p.vertices.len() >= 3 => p.vertices.iter().map(|v| v.p).collect(),
-                _ => continue,
-            };
+        for sw in &swings {
             for jamb in [g0, g1] {
-                let near = |p: &Vec2| (p.dist(jamb) - width).abs() <= 0.2 * width + t;
-                if pts.iter().all(near) {
-                    // The open end: the point farthest from the wall line.
-                    let open =
-                        pts.iter().copied().max_by(|a, b| u.perp().dot(*a - jamb).abs().total_cmp(&u.perp().dot(*b - jamb).abs())).unwrap_or(jamb);
+                let leaf_fits = (sw.r - width).abs() <= 0.2 * width + t || (sw.r - width / 2.0).abs() <= 0.1 * width + t;
+                if sw.c.dist(jamb) <= t + 2.0 * k && leaf_fits {
+                    // The open end: the end farthest from the wall line.
+                    let open = if u.perp().dot(sw.ends[0] - jamb).abs() >= u.perp().dot(sw.ends[1] - jamb).abs() { sw.ends[0] } else { sw.ends[1] };
                     let along = if jamb == g0 { u } else { -u };
                     let inset = along * (LEAF_IN * k / 2.0);
-                    leaf = Some((jamb + inset, jamb + inset + (open - jamb) * (width / open.dist(jamb).max(1e-12)), e.handle, along));
+                    leaf = Some((jamb + inset, jamb + inset + (open - jamb) * (width / open.dist(jamb).max(1e-12)), sw.handle, along));
                 }
             }
         }
@@ -1198,6 +1209,44 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         notes.push(format!("{}: {not_doors} arcs not taken for doors (no open wall where they shut: fixtures, equipment, furniture).", level.name));
     }
     pl
+}
+
+/// A door swing drawn on a plan: its hinge (the centre), radius, two ends and source.
+struct Swing {
+    c: Vec2,
+    r: f64,
+    ends: [Vec2; 2],
+    handle: Handle,
+}
+
+/// The door swings among `ents`: arcs and open polylines (a swing flattened, as prints arrive)
+/// on one circle through 60–100°, a door's radius (16"–54" at `k` units per inch).
+fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
+    let (rmin, rmax) = (16.0 * k, 54.0 * k);
+    let mut out = Vec::new();
+    for e in ents.iter().take(MAX_OBJECTS) {
+        let swing = match &e.kind {
+            EntityKind::Arc(a) => {
+                let mut sweep = (a.end - a.start).rem_euclid(std::f64::consts::TAU);
+                if sweep < 1e-9 {
+                    sweep = std::f64::consts::TAU;
+                }
+                let c = a.center.xy();
+                (60.0..=100.0)
+                    .contains(&sweep.to_degrees())
+                    .then(|| (c, a.radius, [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius]))
+            }
+            EntityKind::LwPolyline(p) if !p.closed && (3..=200).contains(&p.vertices.len()) => {
+                let pts = cadaddy_geom::Polyline { vertices: p.vertices.clone(), closed: false }.tessellate(1e-3);
+                super::perceive::geometry::flat_swing(&pts).map(|(c, r, _, ends)| (c, r, ends))
+            }
+            _ => None,
+        };
+        if let Some((c, r, ends)) = swing.filter(|(c, r, _)| c.is_finite() && (rmin..=rmax).contains(r)) {
+            out.push(Swing { c, r, ends, handle: e.handle });
+        }
+    }
+    out
 }
 
 /// Walls looked at for the building's outline, at most (a level; hostile drawings).
@@ -1342,6 +1391,10 @@ fn keep_building(walls: &mut Vec<PlanWall>, region: [f64; 4], upf: f64) {
 /// How much thicker than the plan's typical wall a separate cluster's walls read when it is a
 /// view at a larger scale (an enlarged plan at 1/4" beside a 1/8" plan reads twice as thick).
 const ENLARGED_THICKER: f64 = 1.8;
+
+/// Drawn swings in an opening at least this many times those on a solid wall: the plan breaks
+/// its walls for its doors.
+const BROKEN_WALL_SHARE: usize = 2;
 
 /// Whether a door swing hinged at `at` (radius `width`, arc ends `ends`) shuts along the wall
 /// `w`: one end of its arc lies on the wall's line (within its thickness and 2"), most of a leaf

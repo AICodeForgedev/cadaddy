@@ -969,6 +969,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let ids: Vec<String> = sel.iter().map(|h| h.hex()).collect();
     let mut set: Option<Value> = None;
     let mut custom_set: Option<Value> = None;
+    let mut props_set: Option<Value> = None;
     let group = |ui: &mut egui::Ui, title: &str| {
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
         ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), 2.0, t.chrome_dark);
@@ -1318,6 +1319,36 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
             }
         }
+        // BIM Properties: the element's own values, each with where it came from; an edit is the
+        // user's (bim.props.set) and survives a rebuild.
+        if let Some(kind) = cadaddy_engine::cmd::elemprops::element_kind(&e) {
+            group(ui, "BIM Properties");
+            let upf = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok()).map_or(12.0, |sp| sp.units_per_foot);
+            let eff = cadaddy_engine::cmd::elemprops::effective(&e, &kind, upf);
+            prop_row(ui, "Kind", |ui| read_only(ui, &kind));
+            let mut keys: Vec<String> = eff.iter().map(|(k, _, _)| k.clone()).collect();
+            for k in cadaddy_doc::props::standard_keys(&kind) {
+                if !keys.iter().any(|x| x.eq_ignore_ascii_case(k)) {
+                    keys.push((*k).to_string());
+                }
+            }
+            for key in keys.iter().take(100) {
+                let found = eff.iter().find(|(k, _, _)| k == key);
+                let value = found.map(|(_, p, _)| p.text()).unwrap_or_default();
+                let source = found.map(|(_, p, _)| p.source.kind.as_str()).unwrap_or("");
+                let unit = found.and_then(|(_, p, _)| p.unit.clone()).unwrap_or_default();
+                // Rows are named by their key (data, not interface text).
+                prop_row(ui, key, |ui| {
+                    if let Some(v) = edit_field(ui, ui.id().with(("elemprop", e.handle, key.as_str())), value.clone()).filter(|v| *v != value) {
+                        props_set = Some(json!({ "handle": e.handle.hex(), "key": key, "value": v }));
+                    }
+                    if !source.is_empty() {
+                        let tail = if unit.is_empty() { format!("({source})") } else { format!("{unit} ({source})") };
+                        ui.label(egui::RichText::new(tail).color(t.text_dim));
+                    }
+                });
+            }
+        }
     }
     if let Some(p) = set {
         let _ = app.run("properties.set", p);
@@ -1325,6 +1356,9 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     report_bad(app, bad);
     if let Some(p) = custom_set {
         let _ = app.run("blocks.reference.set", p);
+    }
+    if let Some(p) = props_set {
+        let _ = app.run("bim.props.set", p);
     }
 }
 

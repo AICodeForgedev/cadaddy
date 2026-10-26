@@ -161,3 +161,88 @@ fn hostile_arcs_never_panic() {
     let r = build(&mut s, REGION);
     assert!(r["doors"].as_u64().is_some(), "{r}");
 }
+
+fn pline(s: &mut Session, pts: &[[f64; 2]]) {
+    s.execute("pline", &json!({"points": pts})).unwrap();
+}
+
+/// A 4" partition at `x` across the floor of [`floor`], with a 36" opening from y 150 and its
+/// swing hinged at the jamb.
+fn partition(s: &mut Session, x: f64) {
+    s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+    for x in [x - 2.0, x + 2.0] {
+        line(s, [x, 6.0], [x, 150.0]);
+        line(s, [x, 186.0], [x, 354.0]);
+    }
+    s.execute("layer.current", &json!({"name": "A-DOOR"})).unwrap();
+    arc(s, [x, 150.0], 36.0, 0.0, 90.0);
+}
+
+/// [`floor`] with the partition's opening and no swing.
+fn open_floor(s: &mut Session) {
+    s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+    rect(s, 0.0, 0.0, 480.0, 360.0);
+    rect(s, 6.0, 6.0, 474.0, 354.0);
+    for x in [238.0, 242.0] {
+        line(s, [x, 6.0], [x, 150.0]);
+        line(s, [x, 186.0], [x, 354.0]);
+    }
+}
+
+#[test]
+fn a_curve_by_an_opening_hangs_no_door_there() {
+    // The opening with no swing: a cased opening, no door.
+    let mut bare = session();
+    open_floor(&mut bare);
+    let r0 = build(&mut bare, REGION);
+    assert_eq!(count(&r0, "doors"), 0, "{r0}");
+
+    // A piece of furniture beside it, its corners about a leaf's width from the jamb (30", 40",
+    // 34"): no swing hung from the jamb, no door.
+    let mut s = session();
+    open_floor(&mut s);
+    s.execute("layer.new", &json!({"name": "I-FURN", "current": true})).unwrap();
+    pline(&mut s, &[[270.0, 150.0], [268.0, 178.6], [240.0, 184.0]]);
+    let r = build(&mut s, REGION);
+    assert_eq!(count(&r, "doors"), 0, "furniture by an opening is no door: {r}");
+    assert_eq!(count(&r, "walls"), count(&r0, "walls"), "{r}");
+
+    // The swing hung from the jamb, flattened to chords as prints arrive: a door.
+    let mut flat = session();
+    open_floor(&mut flat);
+    flat.execute("layer.current", &json!({"name": "A-DOOR"})).unwrap();
+    let pts: Vec<[f64; 2]> = (0..=8)
+        .map(|i| {
+            let a = f64::from(i) * std::f64::consts::FRAC_PI_2 / 8.0;
+            [242.0 + 34.0 * a.cos(), 150.0 + 34.0 * a.sin()]
+        })
+        .collect();
+    pline(&mut flat, &pts);
+    let r = build(&mut flat, REGION);
+    assert_eq!(count(&r, "doors"), 1, "{r}");
+}
+
+#[test]
+fn swings_on_solid_walls_go_when_the_plan_breaks_its_walls_for_doors() {
+    // Three partitions, each with its opening and swing: this plan breaks its walls for doors.
+    let mut plan = session();
+    floor(&mut plan, 0.0, 0.0, 1.0, 36.0);
+    partition(&mut plan, 120.0);
+    partition(&mut plan, 360.0);
+    let r0 = build(&mut plan, REGION);
+    assert_eq!(count(&r0, "doors"), 3, "{r0}");
+
+    // A swing with its leaf on the solid south wall (a cabinet's, a shower's): no door here.
+    let mut s = session();
+    floor(&mut s, 0.0, 0.0, 1.0, 36.0);
+    partition(&mut s, 120.0);
+    partition(&mut s, 360.0);
+    s.execute("layer.current", &json!({"name": "A-DOOR"})).unwrap();
+    arc(&mut s, [60.0, 6.0], 30.0, 0.0, 90.0);
+    line(&mut s, [60.0, 6.0], [60.0, 36.0]);
+    let r = build(&mut s, REGION);
+    assert_eq!(count(&r, "doors"), 3, "{r}");
+    assert_eq!(count(&r, "walls"), count(&r0, "walls"), "{r}");
+    let notes = r["notes"].to_string();
+    assert!(notes.contains("1 arcs not taken for doors"), "{notes}");
+}

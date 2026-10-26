@@ -77,6 +77,9 @@ pub struct SheetLink {
     /// side): what lies there is this sheet's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rect: Option<[f64; 4]>,
+    /// Every level this sheet covers (typical-floor plans); empty = only `level`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<String>,
 }
 
 /// A level name and elevation read from one note.
@@ -157,6 +160,20 @@ pub fn canonical_level(name: &str) -> Option<(String, DatumKind)> {
         if matches!(next, "FLOOR" | "FLR" | "STORY" | "STOREY")
             && let Some(n) = floor_number(x)
         {
+            return Some((format!("LEVEL {n}"), DatumKind::Floor));
+        }
+    }
+    // Bare sheet codes: "3" → LEVEL 3, "R" → ROOF, "B1" → BASEMENT.
+    if w.len() == 1 {
+        let c = &w[0];
+        if c == "R" {
+            return Some(("ROOF".into(), DatumKind::Roof));
+        }
+        if let Some(b) = c.strip_prefix('B').filter(|r| r.is_empty() || r.chars().all(|c| c.is_ascii_digit())) {
+            let n: u32 = if b.is_empty() { 1 } else { b.parse().ok()? };
+            return Some((if n > 1 { format!("BASEMENT {n}") } else { "BASEMENT".into() }, DatumKind::Basement));
+        }
+        if let Some(n) = floor_number(c) {
             return Some((format!("LEVEL {n}"), DatumKind::Floor));
         }
     }
@@ -557,13 +574,27 @@ pub fn shaft_runs(marks: &[ShaftMark], order: &[String], tol_ft: f64) -> Vec<Sha
 }
 
 impl BuildingSpec {
-    /// The spec's level of `name`, matched exactly or by canonical name (`L2` finds `Level 2`).
+    /// The spec's level of `name`, matched exactly, by canonical name (`L2`/`2`/`SECOND FLOOR`
+    /// find `Level 2`) or by sheet attribute (`Level.attr`).
     pub fn level_matching(&self, name: &str) -> Option<usize> {
+        // 1. Exact case-insensitive match on the display name.
         if let Some(i) = self.levels.iter().position(|l| l.name.eq_ignore_ascii_case(name)) {
             return Some(i);
         }
-        let want = canonical_level(name)?.0;
-        self.levels.iter().position(|l| canonical_level(&l.name).is_some_and(|(c, _)| c == want))
+        // 2. Canonical name match (both sides normalised).
+        if let Some(want) = canonical_level(name).map(|(c, _)| c)
+            && let Some(i) = self.levels.iter().position(|l| canonical_level(&l.name).is_some_and(|(c, _)| c == want))
+        {
+            return Some(i);
+        }
+        // 3. Sheet attribute match (e.g. attr "3" on a level named "Level 3").
+        let trimmed = name.trim();
+        if !trimmed.is_empty()
+            && let Some(i) = self.levels.iter().position(|l| l.attr.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(trimmed)))
+        {
+            return Some(i);
+        }
+        None
     }
 
     /// Stacked level notes into the spec: a level it has takes the elevation; the others become
@@ -1072,6 +1103,64 @@ mod tests {
         assert!(sp.rename_level("1", "level 2").is_err());
         assert!(sp.rename_level("9", "x").is_err());
         assert_eq!(sp.level_matching("L2"), Some(1));
+    }
+
+    #[test]
+    fn canonical_level_bare_codes() {
+        // Bare digits → LEVEL N.
+        assert_eq!(canonical_level("3"), Some(("LEVEL 3".into(), DatumKind::Floor)));
+        assert_eq!(canonical_level("1"), Some(("LEVEL 1".into(), DatumKind::Floor)));
+        assert_eq!(canonical_level("12"), Some(("LEVEL 12".into(), DatumKind::Floor)));
+        // Bare R → ROOF.
+        assert_eq!(canonical_level("R"), Some(("ROOF".into(), DatumKind::Roof)));
+        // Bare B, B1, B2 → BASEMENT.
+        assert_eq!(canonical_level("B"), Some(("BASEMENT".into(), DatumKind::Basement)));
+        assert_eq!(canonical_level("B1"), Some(("BASEMENT".into(), DatumKind::Basement)));
+        assert_eq!(canonical_level("B2"), Some(("BASEMENT 2".into(), DatumKind::Basement)));
+        // Existing forms still work.
+        assert_eq!(canonical_level("Level 3").unwrap().0, "LEVEL 3");
+        assert_eq!(canonical_level("SECOND FLOOR").unwrap().0, "LEVEL 2");
+        assert_eq!(canonical_level("L2").unwrap().0, "LEVEL 2");
+        assert_eq!(canonical_level("ROOF").unwrap().0, "ROOF");
+        // Not a level.
+        assert_eq!(canonical_level("OFFICE"), None);
+        assert_eq!(canonical_level(""), None);
+    }
+
+    #[test]
+    fn level_matching_accepts_all_forms() {
+        let sp = BuildingSpec::from_json(
+            &serde_json::json!({
+                "levels": [
+                    {"name": "Level 1", "elevation_ft": 0, "height_ft": 14, "attr": "1"},
+                    {"name": "Level 2", "elevation_ft": 14, "height_ft": 14, "attr": "2"},
+                    {"name": "Level 3", "elevation_ft": 28, "height_ft": 12, "attr": "3"},
+                ],
+                "datums": [{"name": "Roof", "elevation_ft": 40, "kind": "roof"}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        // Exact.
+        assert_eq!(sp.level_matching("Level 2"), Some(1));
+        assert_eq!(sp.level_matching("level 2"), Some(1));
+        // Canonical aliases.
+        assert_eq!(sp.level_matching("L2"), Some(1));
+        assert_eq!(sp.level_matching("LVL 2"), Some(1));
+        assert_eq!(sp.level_matching("SECOND FLOOR"), Some(1));
+        assert_eq!(sp.level_matching("2ND FLR"), Some(1));
+        // Bare digit (sheet code).
+        assert_eq!(sp.level_matching("2"), Some(1));
+        assert_eq!(sp.level_matching("3"), Some(2));
+        // Sheet attribute match.
+        assert_eq!(sp.level_matching("1"), Some(0));
+        // level() also works (delegates to level_matching).
+        assert!(sp.level("3").is_some_and(|l| l.name == "Level 3"));
+        assert!(sp.level("THIRD FLOOR").is_some_and(|l| l.name == "Level 3"));
+        assert!(sp.level("L1").is_some_and(|l| l.name == "Level 1"));
+        // Unknown.
+        assert_eq!(sp.level_matching("9"), None);
+        assert_eq!(sp.level_matching("OFFICE"), None);
     }
 
     #[test]

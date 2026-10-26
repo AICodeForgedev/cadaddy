@@ -31,6 +31,12 @@ pub enum Kind {
     Lighting(String),
     /// Electrical power plan for a level.
     Power(String),
+    /// Fire alarm plan for a level (FA-10x): FA devices, SLC/NAC wiring.
+    FireAlarm(String),
+    /// Telecom/low-voltage plan for a level (T-10x): data/TV/phone/security devices.
+    Telecom(String),
+    /// Sleeve layout plan for a level: dimensioned LV/FA sleeves at wall/floor crossings.
+    SleeveLayout(String),
     Schedules(String),
     /// An architectural floor plan: walls, doors, wall type tags.
     Floor(String),
@@ -441,11 +447,15 @@ pub fn hotel_sheet_list() -> Vec<(String, String, String, Kind)> {
     }
     // Fire alarm
     for l in ["1", "2", "3", "4"] {
-        v.push((format!("FA-10{l}"), format!("LEVEL {l} FIRE ALARM PLAN"), "FA".into(), Kind::Fire(l.into())));
+        v.push((format!("FA-10{l}"), format!("LEVEL {l} FIRE ALARM PLAN"), "FA".into(), Kind::FireAlarm(l.into())));
     }
     // Telecom
     for l in ["1", "2", "3", "4"] {
-        v.push((format!("T-10{l}"), format!("LEVEL {l} TELECOM PLAN"), "T".into(), Kind::Mech(l.into()))); // reuse Mech kind for layout
+        v.push((format!("T-10{l}"), format!("LEVEL {l} TELECOM PLAN"), "T".into(), Kind::Telecom(l.into())));
+    }
+    // Sleeve layouts
+    for l in ["1", "2", "3", "4"] {
+        v.push((format!("SL-10{l}"), format!("LEVEL {l} SLEEVE LAYOUT"), "SL".into(), Kind::SleeveLayout(l.into())));
     }
     // Civil
     v.push(("C-101".into(), "SITE PLAN".into(), "C".into(), Kind::Site));
@@ -483,7 +493,10 @@ pub fn plan_hotel_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
             | Kind::Fire(l)
             | Kind::Enlarged(l, _)
             | Kind::Lighting(l)
-            | Kind::Power(l) => Some(l.clone()),
+            | Kind::Power(l)
+            | Kind::FireAlarm(l)
+            | Kind::Telecom(l)
+            | Kind::SleeveLayout(l) => Some(l.clone()),
             _ => None,
         };
         let plan = kind.plan();

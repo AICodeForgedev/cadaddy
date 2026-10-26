@@ -60,6 +60,14 @@ fn quantities(seed: u64) -> BTreeMap<&'static str, BTreeMap<&'static str, f64>> 
     q
 }
 
+/// How many of the seeds carry this trade's driver (shingle and metal roofs have no membrane).
+fn carrying(seeds: std::ops::RangeInclusive<u64>, t: &str, d: &str) -> usize {
+    type Quantities = BTreeMap<&'static str, BTreeMap<&'static str, f64>>;
+    static ALL: std::sync::OnceLock<Vec<Quantities>> = std::sync::OnceLock::new();
+    let all = ALL.get_or_init(|| (0..=36u64).map(quantities).collect());
+    seeds.filter(|s| all.get(*s as usize).and_then(|q| q.get(t)).is_some_and(|ds| ds.contains_key(d))).count()
+}
+
 #[test]
 fn fitted_rates_recover_the_truth_from_noisy_bid_totals() {
     let dir = std::env::temp_dir().join(format!("cadaddy-calibrate-{}", std::process::id()));
@@ -119,7 +127,7 @@ fn fitted_rates_recover_the_truth_from_noisy_bid_totals() {
         let (got, sd) = (r["rate"].as_f64().unwrap(), r["sd"].as_f64().unwrap());
         assert!((got - want).abs() <= 3.0 * sd + 1e-9, "{t}/{d}: {got} ± {sd} vs {want}");
         assert!((got - want).abs() / want < 0.10, "{t}/{d}: {got} vs {want}");
-        assert_eq!(r["projects"], 30, "{r}");
+        assert_eq!(r["projects"], carrying(1..=30, t, d), "{r}");
     }
     let el = rate("elevators", "stops [ea]");
     assert_eq!(el["quality"], "insufficient data");
@@ -323,7 +331,7 @@ fn rates_from_project_totals_only() {
         if (got - want).abs() / want > 0.25 {
             assert_eq!(r["quality"], "weak", "{t}/{d}: {r}");
         }
-        assert_eq!(r["projects"], 36, "{r}");
+        assert_eq!(r["projects"], carrying(1..=36, t, d), "{r}");
     }
     let h = &fit["holdout"];
     assert!(h["projects"].as_u64().unwrap() >= 5 && h["mape_pct"].as_f64().unwrap() < 8.0, "{h}");

@@ -716,6 +716,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     let mut placed: Vec<Placed> = Vec::new();
     // All products that have a BIM spec: (product instance number, entity handle).
     let mut bim_products: Vec<(usize, u64)> = Vec::new();
+    // Products with a property store: (product, entity handle, IFC class written).
+    let mut with_props: Vec<(usize, u64, &'static str)> = Vec::new();
     // Walls by their spec wall type (its index), for their materials and properties.
     let mut typed: Vec<(usize, usize)> = Vec::new();
     // Ceilings and soffits by their spec type: (soffit, type index, covering product).
@@ -770,6 +772,10 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             }
         };
         let product = o.add(line);
+        // Elements with properties of their own: Pset_CADaddy and the standard sets.
+        if cadaddy_doc::props::has_store(&it.e.common.xdata) {
+            with_props.push((product, it.e.handle.0, entity));
+        }
         // Track products with BIM spec marks for pset writing.
         if cadaddy_doc::bimspec::entity_type_mark(&it.e.common.xdata).is_some() {
             bim_products.push((product, it.e.handle.0));
@@ -1003,6 +1009,10 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             }
         }
     }
+    for (product, handle, class) in with_props {
+        let Some(e) = d.entity(cadaddy_doc::Handle(handle)) else { continue };
+        element_props(&mut o, product, handle, class, &cadaddy_doc::props::read(&e.common.xdata), &|n, salt| id(n, salt));
+    }
     for ((st, _, _, h, _), (inside, rooms)) in storeys.iter().zip(contained.iter().zip(&spaces)) {
         if !inside.is_empty() {
             o.add(format!("IFCRELCONTAINEDINSPATIALSTRUCTURE('{}',$,$,$,{},#{st})", id(*h, 3), refs(inside)));
@@ -1034,6 +1044,57 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
 }
 
 /// The wall type WALLGEN gave a wall (`type:<name>` after its source).
+/// An IFC value of a property: a number as a real, a boolean as one, anything else as a label.
+fn prop_value(p: &cadaddy_doc::props::Prop) -> String {
+    match &p.value {
+        serde_json::Value::Number(n) => {
+            n.as_f64().filter(|v| v.is_finite()).map_or_else(|| format!("IFCLABEL({})", step_str(&p.text())), |v| format!("IFCREAL({})", real(v)))
+        }
+        serde_json::Value::Bool(b) => format!("IFCBOOLEAN(.{}.)", if *b { "T" } else { "F" }),
+        _ => format!("IFCLABEL({})", step_str(&p.text())),
+    }
+}
+
+/// An element's own properties ([`cadaddy_doc::props`]) as property sets: every one in
+/// `Pset_CADaddy` (its unit, source, confidence and note in the property's description, so a
+/// read gives them back), and the ones a standard set has a place for in that set too
+/// (`Pset_WallCommon.FireRating`, `Pset_SpaceCommon.Reference`…).
+fn element_props(o: &mut Out, product: usize, handle: u64, class: &str, store: &cadaddy_doc::props::Props, id: &dyn Fn(u64, u64) -> String) {
+    use cadaddy_doc::props;
+    if store.is_empty() {
+        return;
+    }
+    let kind = props::kind_of_ifc_class(class);
+    let mut own = Vec::new();
+    let mut standard: Vec<(&'static str, Vec<usize>)> = Vec::new();
+    for (key, p) in store.iter().take(props::MAX_PROPS) {
+        let meta = serde_json::json!({ "unit": p.unit, "source": p.source, "confidence": p.confidence, "note": p.note });
+        let meta: serde_json::Map<String, serde_json::Value> =
+            meta.as_object().into_iter().flatten().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k.clone(), v.clone())).collect();
+        let desc = step_str(&serde_json::Value::Object(meta).to_string());
+        let value = if p.has_value() { prop_value(p) } else { "$".to_string() };
+        own.push(o.add(format!("IFCPROPERTYSINGLEVALUE({},{desc},{value},$)", step_str(key))));
+        if let Some((set, name)) = props::standard_ifc(kind, key).filter(|_| p.has_value()) {
+            let v = match name {
+                "Reference" => format!("IFCIDENTIFIER({})", step_str(&p.text())),
+                _ => format!("IFCLABEL({})", step_str(&p.text())),
+            };
+            let item = o.add(format!("IFCPROPERTYSINGLEVALUE('{name}',$,{v},$)"));
+            match standard.iter_mut().find(|(s, _)| *s == set) {
+                Some((_, items)) => items.push(item),
+                None => standard.push((set, vec![item])),
+            }
+        }
+    }
+    let set = o.add(format!("IFCPROPERTYSET('{}',$,'{}',$,{})", id(handle, 28), props::IFC_PSET, refs(&own)));
+    o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, 29)));
+    for (k, (name, items)) in standard.into_iter().enumerate() {
+        let salt = 30 + 2 * k as u64;
+        let set = o.add(format!("IFCPROPERTYSET('{}',$,'{name}',$,{})", id(handle, salt), refs(&items)));
+        o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, salt + 1)));
+    }
+}
+
 fn wall_type_of(e: &Entity) -> Option<String> {
     tag_strings(e, "CADADDY_WALLGEN")?.iter().skip(3).find_map(|v| v.strip_prefix("type:")).map(str::to_string)
 }
@@ -2002,6 +2063,76 @@ impl Reader<'_> {
         }
     }
 
+    /// Object `id`'s properties as an element's own store ([`cadaddy_doc::props`]): what
+    /// `Pset_CADaddy` holds as it was written (source, unit, confidence and note from each
+    /// property's description), then the standard sets' properties our keys map to, then every
+    /// other set's as `Set.Name` (source `spec`, the document naming the set) — one store,
+    /// whatever program wrote the file.
+    fn own_props(&self, rel: &Relations, id: u64, class: &str) -> cadaddy_doc::props::Props {
+        use cadaddy_doc::props::{self, Prop, Props, Source, SourceKind};
+        let kind = props::kind_of_ifc_class(class);
+        let mut out = Props::default();
+        let mut later: Vec<(String, String, Prop)> = Vec::new();
+        let mut sets: Vec<u64> = rel.sets.get(&id).cloned().unwrap_or_default();
+        if let Some((_, ta)) = rel.types.get(&id).and_then(|t| self.m.get(t)) {
+            sets.extend(ref_list(ta, 5));
+        }
+        for sid in sets.iter().take(1000) {
+            let Some((name, a)) = self.m.get(sid) else { continue };
+            if name != "IFCPROPERTYSET" {
+                continue;
+            }
+            let set = a.get(2).and_then(P::text).unwrap_or_default().to_string();
+            for item in ref_list(a, 4).into_iter().take(props::MAX_PROPS) {
+                let Some((k, pa)) = self.m.get(&item) else { continue };
+                if k != "IFCPROPERTYSINGLEVALUE" && k != "IFCPROPERTYENUMERATEDVALUE" {
+                    continue;
+                }
+                let pname = pa.first().and_then(P::text).unwrap_or_default();
+                if pname.is_empty() {
+                    continue;
+                }
+                let raw = pa.get(2);
+                let value = match raw {
+                    Some(P::Typed(t, v))
+                        if matches!(t.as_str(), "IFCREAL" | "IFCINTEGER" | "IFCLENGTHMEASURE" | "IFCPOSITIVELENGTHMEASURE" | "IFCAREAMEASURE") =>
+                    {
+                        v.first().and_then(P::num).and_then(serde_json::Number::from_f64).map(serde_json::Value::Number)
+                    }
+                    Some(P::Typed(t, v)) if t == "IFCBOOLEAN" => match v.first() {
+                        Some(P::Enum(e)) if e == "T" => Some(serde_json::Value::Bool(true)),
+                        Some(P::Enum(e)) if e == "F" => Some(serde_json::Value::Bool(false)),
+                        _ => None,
+                    },
+                    Some(P::Null) | None => Some(serde_json::Value::Null),
+                    Some(p) => value_text(p).map(serde_json::Value::String),
+                }
+                .unwrap_or(serde_json::Value::Null);
+                if set.eq_ignore_ascii_case(props::IFC_PSET) {
+                    let meta: serde_json::Value = pa.get(1).and_then(P::text).and_then(|t| serde_json::from_str(t).ok()).unwrap_or_default();
+                    let mut prop = Prop::new(value, Source::from_doc(SourceKind::Spec, &format!("IFC {}", props::IFC_PSET)));
+                    if let Some(src) = meta.get("source").and_then(|v| serde_json::from_value::<Source>(v.clone()).ok()) {
+                        prop.source = src;
+                    }
+                    prop.unit = meta.get("unit").and_then(serde_json::Value::as_str).map(str::to_string);
+                    prop.confidence = meta.get("confidence").and_then(serde_json::Value::as_f64);
+                    prop.note = meta.get("note").and_then(serde_json::Value::as_str).map(str::to_string);
+                    out.set(pname, prop);
+                } else {
+                    let prop = Prop::new(value, Source::from_doc(SourceKind::Spec, &format!("IFC {set}")));
+                    let key = props::key_of_standard_ifc(kind, &set, pname).map_or_else(|| format!("{set}.{pname}"), str::to_string);
+                    later.push((key, set.clone(), prop));
+                }
+            }
+        }
+        for (key, _, prop) in later {
+            if prop.has_value() {
+                out.set_if_missing(&key, prop);
+            }
+        }
+        out
+    }
+
     /// What object `id` carries beyond its class, GlobalId and name, as tag strings: `level:`,
     /// `elevation:` (metres), `space:`, `building:`, `site:`, `type:`, `system:` and `prop:` ones.
     fn extras(&self, rel: &Relations, id: u64, unit: f64) -> Vec<String> {
@@ -2249,6 +2380,10 @@ pub fn read_ifc(bytes: &[u8]) -> Result<Drawing> {
             RawTag { code: 1000, value: cap(label, MAX_TAG) },
         ];
         xdata.extend(r.extras(&rel, *id, unit).into_iter().map(|value| RawTag { code: 1000, value }));
+        let own = r.own_props(&rel, *id, &class);
+        if !own.is_empty() {
+            xdata = cadaddy_doc::props::write(&xdata, &own);
+        }
         let mut c = Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() };
         if class == "Space" {
             c.transparency = cadaddy_doc::Transparency::Percent(80);
