@@ -15,10 +15,15 @@ use cadaddy_io::pdf_read::{self, LayerMode, PdfOptions};
 /// Build a minimal one-page 11×8.5 inch landscape PDF around a content stream, with one
 /// Helvetica font resource (/F1).
 fn pdf_with(content: &[u8]) -> Vec<u8> {
+    pdf_sized(content, 792, 612)
+}
+
+/// The same on a `w` × `h` point page.
+fn pdf_sized(content: &[u8], w: u32, h: u32) -> Vec<u8> {
     let mut objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
         String::new(),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
     ];
@@ -604,92 +609,202 @@ fn device_tags_near_strokes_become_blocks() {
 // SHX OCR: stroke-template character recognition on sheets without hidden text
 // -----------------------------------------------------------------------------------------
 
-/// Build a PDF content stream that draws one SHX character using our stroke font templates.
-/// The character is placed at (bx, by) with the given height in PDF points.
-fn shx_char_strokes(ch: char, bx: f64, by: f64, height: f64, out: &mut Vec<u8>) {
-    let Some((_width, spec)) = cadaddy_fonts::stroke::glyph(ch) else { return };
-    let raw = cadaddy_fonts::stroke::strokes(spec);
-    // font coordinate system: x 0..4 (most chars), y -2..6 (cap height).  Scale to `height`.
-    let scale = height / cadaddy_fonts::stroke::CAP;
-    for s in &raw {
-        if s.len() < 2 {
+/// Draw `text` in our stroke font as plain PDF strokes (no hidden text): `height` in points,
+/// `width` the width factor, `oblique` the slant in degrees.  Returns the x after the text.
+fn shx_text(text: &str, x: f64, y: f64, height: f64, width: f64, oblique: f64, out: &mut Vec<u8>) -> f64 {
+    use cadaddy_fonts::stroke::{CAP, GAP, glyph, strokes};
+    let k = height / CAP;
+    let shear = oblique.to_radians().tan();
+    let mut pen_x = x;
+    for ch in text.chars() {
+        let Some((advance, spec)) = glyph(ch) else {
+            pen_x += (4.0 + GAP) * width * k;
             continue;
-        }
-        for (i, &(fx, fy)) in s.iter().enumerate() {
-            let px = bx + fx * scale;
-            let py = by + fy * scale;
-            if i == 0 {
-                out.extend_from_slice(format!("{px:.1} {py:.1} m ").as_bytes());
-            } else {
-                out.extend_from_slice(format!("{px:.1} {py:.1} l ").as_bytes());
+        };
+        for s in strokes(spec) {
+            if s.len() < 2 {
+                continue;
             }
+            for (i, (fx, fy)) in s.into_iter().enumerate() {
+                let (px, py) = (pen_x + (fx * width + fy * shear) * k, y + fy * k);
+                out.extend_from_slice(format!("{px:.2} {py:.2} {} ", if i == 0 { "m" } else { "l" }).as_bytes());
+            }
+            out.extend_from_slice(b"S ");
         }
-        out.extend_from_slice(b"S ");
+        pen_x += (advance + GAP) * width * k;
     }
+    pen_x
+}
+
+/// A page of black 0.5 pt strokes.
+fn strokes_page(draw: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    draw(&mut content);
+    content.extend_from_slice(b"Q");
+    pdf_with(&content)
+}
+
+/// A searchable (rendering mode 3) note far from the drawing: the page is an SHX print with
+/// hidden text, so the OCR's reads there count as confirmed (their strokes leave the plan).
+const HIDDEN_NOTE: &[u8] = b"BT 3 Tr /F1 6 Tf 700 560 Td (NOTE) Tj ET ";
+
+/// The text values other than [`HIDDEN_NOTE`]'s.
+fn text_values_but_note(r: &pdf_read::PdfImport) -> Vec<String> {
+    text_values(r).into_iter().filter(|t| t != "NOTE").collect()
+}
+
+fn text_values(r: &pdf_read::PdfImport) -> Vec<String> {
+    let mut v: Vec<String> = r
+        .drawing
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Text(t) => Some(t.value.clone()),
+            _ => None,
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+fn sorted(v: &[&str]) -> Vec<String> {
+    let mut v: Vec<String> = v.iter().map(|s| s.to_string()).collect();
+    v.sort();
+    v
 }
 
 #[test]
 fn ocr_recognises_simple_word() {
-    // Draw "HELLO" in SHX strokes at a known position, with no hidden text and no visible
-    // text anchors — the OCR path must recognise the characters from their geometry.
-    let mut content = Vec::new();
-    content.extend_from_slice(b"q 0 0 0 RG 0.5 w ");
-    let height = 12.0; // 12 pt tall characters
-    let advance = height * (4.0 + 1.6) / 6.0; // ~11.2 pt
-    for (i, ch) in "HELLO".chars().enumerate() {
-        let x = 100.0 + i as f64 * advance;
-        let y = 300.0;
-        shx_char_strokes(ch, x, y, height, &mut content);
-    }
-    content.extend_from_slice(b"Q");
-
-    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
-    let texts: Vec<&str> = r
-        .drawing
-        .model
-        .iter()
-        .filter_map(|e| match &e.kind {
-            EntityKind::Text(t) => Some(t.value.as_str()),
-            _ => None,
-        })
-        .collect();
-    // the OCR should produce at least some text from the strokes
-    assert!(!texts.is_empty(), "OCR should recognise text from SHX strokes, got nothing");
-    // check the OCR stat was recorded
-    assert!(r.stats.get("SHX text (OCR) recovered").copied().unwrap_or(0) > 0, "should report SHX OCR recovered text in stats");
+    // "HELLO" in SHX strokes, no hidden text and no visible text anchors: read from geometry
+    let pdf = strokes_page(|c| {
+        shx_text("HELLO", 100.0, 300.0, 12.0, 1.0, 0.0, c);
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&["HELLO"]));
+    assert_eq!(r.stats.get("SHX text (OCR) recovered").copied(), Some(1));
 }
 
 #[test]
 fn ocr_recognises_digits() {
-    // Draw "123" in SHX strokes — digits should be recognised
-    let mut content = Vec::new();
-    content.extend_from_slice(b"q 0 0 0 RG 0.5 w ");
-    let height = 10.0;
-    let advance = height * (4.0 + 1.6) / 6.0;
-    for (i, ch) in "123".chars().enumerate() {
-        let x = 200.0 + i as f64 * advance;
-        let y = 250.0;
-        shx_char_strokes(ch, x, y, height, &mut content);
-    }
-    content.extend_from_slice(b"Q");
+    let pdf = strokes_page(|c| {
+        shx_text("123", 200.0, 250.0, 10.0, 1.0, 0.0, c);
+        shx_text("0123456789", 200.0, 200.0, 10.0, 1.0, 0.0, c);
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&["123", "0123456789"]));
+}
 
-    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
-    let texts: Vec<&str> = r
-        .drawing
-        .model
-        .iter()
-        .filter_map(|e| match &e.kind {
-            EntityKind::Text(t) => Some(t.value.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert!(!texts.is_empty(), "OCR should recognise digit strokes, got nothing");
-    // the joined text should contain the digits
-    let joined: String = texts.join("");
-    assert!(
-        joined.contains('1') || joined.contains('2') || joined.contains('3'),
-        "OCR output should contain at least one recognised digit, got: {joined:?}"
-    );
+#[test]
+fn ocr_reads_the_whole_character_set_and_punctuation() {
+    let lines = ["ABCDEFGHIJKLM", "NOPQRSTUVWXYZ", "PANEL LP-1A", "ROOM 104", "(A) #12 A&B 1/2", "6'-0\" A.F.F.", "BOB 808 S5"];
+    let pdf = strokes_page(|c| {
+        for (i, l) in lines.iter().enumerate() {
+            shx_text(l, 80.0, 500.0 - i as f64 * 30.0, 12.0, 1.0, 0.0, c);
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&lines));
+}
+
+#[test]
+fn ocr_reads_scaled_stretched_and_slanted_lettering() {
+    // (text, height pt, width factor, oblique degrees)
+    let cases = [
+        ("SMALL 6", 6.0, 1.0, 0.0),
+        ("LARGE 24", 24.0, 1.0, 0.0),
+        ("NARROW E-12", 12.0, 0.7, 0.0),
+        ("WIDE 3C", 10.0, 1.5, 0.0),
+        ("SLANT 15", 12.0, 1.0, 15.0),
+        ("OBLIQUE A&B 25", 12.0, 1.0, 25.0),
+        ("BACK 7", 12.0, 1.0, -15.0),
+        ("TAG XA-2", 9.0, 0.8, 15.0),
+    ];
+    let pdf = strokes_page(|c| {
+        for (i, (t, h, w, o)) in cases.iter().enumerate() {
+            shx_text(t, 60.0, 560.0 - i as f64 * 60.0, *h, *w, *o, c);
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&cases.map(|c| c.0)));
+}
+
+#[test]
+fn ocr_splits_texts_at_wide_gaps_and_rows() {
+    let pdf = strokes_page(|c| {
+        // one text with a space, then a second text far to the right on the same baseline
+        shx_text("AB CD", 100.0, 300.0, 12.0, 1.0, 0.0, c);
+        shx_text("EF", 250.0, 300.0, 12.0, 1.0, 0.0, c);
+        // a row just below, and a smaller row inside the first's x range
+        shx_text("ROW TWO", 100.0, 280.0, 12.0, 1.0, 0.0, c);
+        shx_text("TINY", 100.0, 266.0, 6.0, 1.0, 0.0, c);
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&["AB CD", "EF", "ROW TWO", "TINY"]));
+}
+
+#[test]
+fn ocr_leaves_linework_and_unmatched_shapes_alone() {
+    let pdf = strokes_page(|c| {
+        // hatching: parallel short 45° lines (each would read as a lone '/')
+        for i in 0..30 {
+            let x = 100.0 + f64::from(i) * 3.0;
+            c.extend_from_slice(format!("{x:.1} 100 m {:.1} 108 l S ", x + 8.0).as_bytes());
+        }
+        // tick marks and lone dashes
+        for i in 0..10 {
+            let x = 100.0 + f64::from(i) * 20.0;
+            c.extend_from_slice(format!("{x:.1} 200 m {x:.1} 206 l S {x:.1} 220 m {:.1} 220 l S ", x + 6.0).as_bytes());
+        }
+        // shapes no character fits: a star, a spiral, a comb
+        c.extend_from_slice(b"300 300 m 306 318 l 312 300 l 297 311 l 315 311 l 300 300 l S ");
+        c.extend_from_slice(b"400 300 m 410 300 l 410 312 l 398 312 l 398 302 l 408 302 l 408 310 l 400 310 l 400 304 l 406 304 l S ");
+        c.extend_from_slice(b"500 300 m 500 312 l 502 312 l 502 302 l 504 302 l 504 312 l 506 312 l 506 302 l 508 302 l 508 312 l 510 312 l S ");
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), Vec::<String>::new(), "linework must not become text");
+    assert!(r.ocr.clusters >= 40, "the OCR looked at the shapes: {:?}", r.ocr);
+    assert!(r.ocr.noise_dropped > 0, "lone straight strokes are dropped as noise: {:?}", r.ocr);
+    // nothing was read, so every stroke stays visible linework
+    assert!(r.drawing.layers.iter().all(|l| l.name != pdf_read::SHX_SOURCE_LAYER));
+}
+
+#[test]
+fn ocr_reports_clusters_and_confidence() {
+    // exact lettering, and the same lettering with its points nudged (as a plotter rounds)
+    let pdf = strokes_page(|c| {
+        shx_text("EXACT 42", 100.0, 400.0, 12.0, 1.0, 0.0, c);
+        let mut rough = Vec::new();
+        shx_text("ROUGH 42", 100.0, 300.0, 12.0, 1.0, 0.0, &mut rough);
+        let mut n = 0u32;
+        let nudged: Vec<String> = String::from_utf8_lossy(&rough)
+            .split(' ')
+            .map(|tok| match tok.parse::<f64>() {
+                Ok(v) => {
+                    n = n.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    format!("{:.2}", v + (f64::from(n >> 16 & 0xff) / 255.0 - 0.5) * 0.8)
+                }
+                Err(_) => tok.to_string(),
+            })
+            .collect();
+        c.extend_from_slice(nudged.join(" ").as_bytes());
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&["EXACT 42", "ROUGH 42"]));
+    let conf = |v: &str| r.ocr.words.iter().find(|w| w.value == v).map(|w| w.confidence).unwrap_or(-1.0);
+    let (exact, rough) = (conf("EXACT 42"), conf("ROUGH 42"));
+    assert!(exact > 0.95, "an exact fit is near-certain: {exact}");
+    assert!(rough > 0.0 && rough < exact, "a rough fit is less sure: {rough} vs {exact}");
+    // 14 glyphs: every one a cluster, every one matched
+    assert_eq!((r.ocr.clusters, r.ocr.glyphs), (14, 14), "{:?}", r.ocr);
+    assert_eq!(r.stats.get("SHX OCR glyph clusters").copied(), Some(14));
+    assert_eq!(r.stats.get("SHX text (OCR) recovered").copied(), Some(2));
+    assert!(r.stats.contains_key("SHX OCR mean confidence %"));
+    // the PDFIMPORT report carries the same
+    let (_, report) = pdf_read::read_json(&pdf, &serde_json::json!({})).expect("read_json");
+    assert_eq!(report["ocr"]["clusters"], 14);
+    assert_eq!(report["ocr"]["recovered"], 2);
+    let words = report["ocr"]["words"].as_array().cloned().unwrap_or_default();
+    assert!(words.iter().all(|w| w["confidence"].as_f64().is_some_and(|c| (0.0..=1.0).contains(&c))), "{words:?}");
 }
 
 #[test]
@@ -714,24 +829,473 @@ fn ocr_content_layer_fallback_without_ocgs() {
 }
 
 #[test]
-fn ocr_consumed_strokes_become_hidden() {
-    // Strokes consumed by OCR should not appear as linework in the drawing.
-    let mut content = Vec::new();
-    content.extend_from_slice(b"q 0 0 0 RG 0.5 w ");
-    let height = 12.0;
-    let advance = height * (4.0 + 1.6) / 6.0;
-    // draw "AB" in SHX strokes
-    for (i, ch) in "AB".chars().enumerate() {
-        shx_char_strokes(ch, 100.0 + i as f64 * advance, 300.0, height, &mut content);
-    }
-    // also draw a long non-SHX line that should survive
-    content.extend_from_slice(b"72 72 m 700 72 l S ");
-    content.extend_from_slice(b"Q");
+fn ocr_consumed_strokes_go_to_a_hidden_layer() {
+    // the strokes the OCR read stay in the drawing, on their own layer, turned off (on a page
+    // with hidden text; without it the strokes stay linework, see
+    // `ocr_without_hidden_text_keeps_the_strokes_as_linework`)
+    let mut letters = 0;
+    let pdf = strokes_page(|c| {
+        c.extend_from_slice(HIDDEN_NOTE);
+        let mut ab = Vec::new();
+        shx_text("AB", 100.0, 300.0, 12.0, 1.0, 0.0, &mut ab);
+        letters = ab.windows(2).filter(|w| w == b"S ").count();
+        c.extend_from_slice(&ab);
+        // a long line that isn't lettering
+        c.extend_from_slice(b"72 72 m 700 72 l S ");
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values_but_note(&r), sorted(&["AB"]));
+    let layer = r.drawing.layers.iter().find(|l| l.name == pdf_read::SHX_SOURCE_LAYER).expect("the source layer");
+    assert!(!layer.on, "the source layer is off");
+    let on_source: Vec<&Entity> = r.drawing.model.iter().map(|e| &**e).filter(|e| e.common.layer.as_str() == pdf_read::SHX_SOURCE_LAYER).collect();
+    // the importer may join touching strokes into one polyline: between 1 per glyph and 1 per stroke
+    assert!((2..=letters).contains(&on_source.len()), "{} of {letters} strokes on the source layer", on_source.len());
+    assert!(on_source.iter().all(|e| matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_))));
+    assert_eq!(r.stats.get("SHX source strokes (layer off)").copied(), Some(on_source.len()));
+    // nothing of the letters is left as visible linework; the long line is
+    let visible: Vec<&Entity> = r
+        .drawing
+        .model
+        .iter()
+        .map(|e| &**e)
+        .filter(|e| matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) && e.common.layer.as_str() != pdf_read::SHX_SOURCE_LAYER)
+        .collect();
+    assert_eq!(visible.len(), 1, "only the long line is visible linework");
+    assert!(matches!(&visible[0].kind, EntityKind::Line(l) if (l.b.x - l.a.x).abs() > 5.0));
+}
 
-    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
-    // the long line should still be there
-    let has_long_line = r.drawing.model.iter().any(|e| matches!(&e.kind, EntityKind::Line(l) if (l.b.x - l.a.x).abs() > 5.0));
-    assert!(has_long_line, "long non-SHX line should still be in the drawing");
+#[test]
+fn symbols_are_found_before_the_ocr_reads_their_strokes() {
+    // four device symbols: a ring drawn like the letter O plus a tick below it, each with the
+    // real-text tag "EF".  The ring would read as a lone "O"; it must stay part of the symbol.
+    let pdf = strokes_page(|c| {
+        for (x, y) in [(150.0, 300.0), (250.0, 300.0), (350.0, 300.0), (450.0, 300.0)] {
+            shx_text("O", x, y, 8.0, 1.0, 0.0, c);
+            c.extend_from_slice(format!("{:.1} {:.1} m {:.1} {:.1} l S ", x + 2.7, y - 4.0, x + 2.7, y - 1.5).as_bytes());
+            c.extend_from_slice(format!("BT /F1 5 Tf {:.1} {:.1} Td (EF) Tj ET ", x + 8.0, y + 2.0).as_bytes());
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let inserts = r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Insert(_))).count();
+    assert_eq!(inserts, 4, "every symbol became a block insert: {:?}", r.stats);
+    assert!(!text_values(&r).iter().any(|t| t == "O"), "a symbol's ring is not a letter: {:?}", text_values(&r));
+}
+
+#[test]
+fn ocr_reads_a_full_sheet_of_dense_lettering() {
+    // a 36 x 24 in sheet with 3,000 texts of 3/32" lettering in rows 11 pt apart
+    let words = ["E-101", "PANEL LP-1A", "ROOM 104", "EF", "XA-2", "CORRIDOR", "J-BOX", "2#12 & 1#12G"];
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    let mut want = Vec::new();
+    for row in 0..150 {
+        for col in 0..20 {
+            let w = words[(row + col) % words.len()];
+            shx_text(w, 20.0 + col as f64 * 125.0, 20.0 + row as f64 * 11.0, 6.75, 1.0, 0.0, &mut content);
+            want.push(w);
+        }
+    }
+    content.extend_from_slice(b"Q");
+    let r = pdf_read::read(&pdf_sized(&content, 2592, 1728), &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&want));
+    assert_eq!((r.ocr.clusters, r.ocr.glyphs, r.ocr.noise_dropped), (19_114, 19_114, 0));
+}
+
+/// `n` real (Helvetica) text labels in a grid from (x, y), 6 pt.
+fn real_labels(n: usize, x: f64, y: f64, label: impl Fn(usize) -> String, out: &mut Vec<u8>) {
+    for i in 0..n {
+        let (lx, ly) = (x + (i % 20) as f64 * 40.0, y + (i / 20) as f64 * 20.0);
+        out.extend_from_slice(format!("BT /F1 6 Tf {lx:.1} {ly:.1} Td ({}) Tj ET ", label(i)).as_bytes());
+    }
+}
+
+#[test]
+fn ocr_runs_where_stroked_lettering_outnumbers_real_text() {
+    // 100 real one-letter labels, and 80 words of stroked lettering elsewhere on the sheet
+    let pdf = {
+        let mut c = b"q 0 0 0 RG 0.5 w ".to_vec();
+        real_labels(100, 100.0, 100.0, |_| "A".into(), &mut c);
+        for i in 0..80 {
+            shx_text("ROOM 104", 100.0 + (i % 10) as f64 * 120.0, 600.0 + (i / 10) as f64 * 20.0, 8.0, 1.0, 0.0, &mut c);
+        }
+        c.extend_from_slice(b"Q");
+        pdf_sized(&c, 2592, 1728)
+    };
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let texts = text_values(&r);
+    assert_eq!(texts.iter().filter(|t| *t == "ROOM 104").count(), 80, "{:?}", r.ocr);
+    assert_eq!(texts.iter().filter(|t| *t == "A").count(), 100);
+    assert_eq!(texts.len(), 180);
+}
+
+#[test]
+fn ocr_does_not_reread_real_text_or_run_on_a_page_lettered_in_text() {
+    // 120 real labels, each also plotted as strokes on top of itself, plus five stroked X's:
+    // the OCR reads the X's and never the plotted copies
+    let page = |copies: bool| {
+        let mut c = b"q 0 0 0 RG 0.5 w ".to_vec();
+        real_labels(120, 100.0, 100.0, |i| format!("E{}", i % 10), &mut c);
+        if copies {
+            for i in 0..120 {
+                let (lx, ly) = (100.0 + (i % 20) as f64 * 40.0, 100.0 + (i / 20) as f64 * 20.0);
+                shx_text(&format!("E{}", i % 10), lx, ly, 6.0, 0.6, 0.0, &mut c);
+            }
+        }
+        for i in 0..5 {
+            shx_text("X", 100.0 + f64::from(i) * 50.0, 500.0, 8.0, 1.0, 0.0, &mut c);
+        }
+        c.extend_from_slice(b"Q");
+        pdf_sized(&c, 2592, 1728)
+    };
+    let r = pdf_read::read(&page(true), &PdfOptions::default()).expect("PDF read failed");
+    let read: Vec<&str> = r.ocr.words.iter().map(|w| w.value.as_str()).collect();
+    assert_eq!(read, ["X"; 5], "only the stroked-only glyphs are read: {:?}", r.ocr);
+    // without plotted copies the page is lettered in real text: no OCR at all
+    let r = pdf_read::read(&page(false), &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(r.ocr.clusters, 0, "the OCR didn't run: {:?}", r.ocr);
+    assert!(!r.stats.contains_key("SHX text (OCR) recovered"));
+}
+
+#[test]
+fn ocr_skips_strokes_that_lie_on_real_text() {
+    // a few real labels with a plotted stroke copy on top, and one stroked-only word
+    let pdf = strokes_page(|c| {
+        real_labels(10, 100.0, 100.0, |i| format!("E{i}"), c);
+        for i in 0..10 {
+            shx_text(&format!("E{i}"), 100.0 + i as f64 * 40.0, 100.0, 6.0, 0.6, 0.0, c);
+        }
+        shx_text("ROOM 5", 100.0, 400.0, 10.0, 1.0, 0.0, c);
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let read: Vec<&str> = r.ocr.words.iter().map(|w| w.value.as_str()).collect();
+    assert_eq!(read, ["ROOM 5"], "only the stroked-only word is read: {:?}", r.ocr);
+}
+
+/// One glyph of a round "plot font" (unlike our angular stroke font, as real plot fonts are):
+/// its strokes in a unit cap height, with a closed flag (drawn with `h`), and its width.
+type PlotGlyph = (Vec<(Vec<(f64, f64)>, bool)>, f64);
+
+/// An elliptical arc from `a0` to `a1` degrees (counter-clockwise for a1 > a0).
+fn arc(cx: f64, cy: f64, rx: f64, ry: f64, a0: f64, a1: f64) -> Vec<(f64, f64)> {
+    (0..=16).map(|i| (a0 + (a1 - a0) * f64::from(i) / 16.0).to_radians()).map(|a| (cx + rx * a.cos(), cy + ry * a.sin())).collect()
+}
+
+fn plot_glyph(ch: char) -> Option<PlotGlyph> {
+    let open = |pts: Vec<(f64, f64)>| (pts, false);
+    let line = |pts: &[(f64, f64)]| (pts.to_vec(), false);
+    Some(match ch {
+        'C' => (vec![open(arc(0.35, 0.5, 0.35, 0.5, 45.0, 315.0))], 0.7),
+        'O' | '0' => {
+            let mut o = arc(0.33, 0.5, 0.33, 0.5, 90.0, 450.0);
+            o.pop();
+            (vec![(o, true)], 0.66)
+        }
+        'R' => {
+            let mut bowl = vec![(0.0, 1.0), (0.4, 1.0)];
+            bowl.extend(arc(0.4, 0.76, 0.22, 0.24, 90.0, -90.0));
+            bowl.push((0.0, 0.52));
+            (vec![line(&[(0.0, 0.0), (0.0, 1.0)]), open(bowl), line(&[(0.3, 0.52), (0.62, 0.0)])], 0.62)
+        }
+        'D' => {
+            let mut bowl = vec![(0.0, 1.0), (0.3, 1.0)];
+            bowl.extend(arc(0.3, 0.5, 0.34, 0.5, 90.0, -90.0));
+            bowl.push((0.0, 0.0));
+            (vec![line(&[(0.0, 0.0), (0.0, 1.0)]), open(bowl)], 0.64)
+        }
+        'I' => (vec![line(&[(0.0, 0.0), (0.0, 1.0)])], 0.0),
+        'N' => (vec![line(&[(0.0, 0.0), (0.0, 1.0), (0.62, 0.0), (0.62, 1.0)])], 0.62),
+        'M' => (vec![line(&[(0.0, 0.0), (0.0, 1.0)]), line(&[(0.0, 1.0), (0.38, 0.0), (0.76, 1.0)]), line(&[(0.76, 1.0), (0.76, 0.0)])], 0.76),
+        'E' => (vec![line(&[(0.55, 1.0), (0.0, 1.0), (0.0, 0.0), (0.55, 0.0)]), line(&[(0.0, 0.52), (0.38, 0.52)])], 0.55),
+        'S' => {
+            let mut s = arc(0.3, 0.76, 0.28, 0.24, 20.0, 270.0);
+            s.extend(arc(0.3, 0.26, 0.3, 0.26, 90.0, -160.0));
+            (vec![open(s)], 0.6)
+        }
+        '1' => (vec![line(&[(0.0, 0.8), (0.2, 1.0), (0.2, 0.0)])], 0.2),
+        '2' => {
+            let mut s = arc(0.3, 0.72, 0.3, 0.28, 160.0, -20.0);
+            s.extend([(0.0, 0.0), (0.62, 0.0)]);
+            (vec![open(s)], 0.62)
+        }
+        '5' => {
+            let mut s = vec![(0.55, 1.0), (0.05, 1.0), (0.0, 0.56)];
+            s.extend(arc(0.3, 0.32, 0.32, 0.32, 140.0, -150.0));
+            (vec![open(s)], 0.62)
+        }
+        '-' => (vec![line(&[(0.0, 0.5), (0.5, 0.5)])], 0.5),
+        '.' => {
+            let mut o = arc(0.05, 0.05, 0.05, 0.05, 0.0, 360.0);
+            o.pop();
+            (vec![(o, true)], 0.1)
+        }
+        '/' => (vec![line(&[(0.0, -0.2), (0.55, 1.15)])], 0.55),
+        '(' => (vec![open(arc(0.45, 0.47, 0.45, 0.7, 120.0, 240.0))], 0.25),
+        ')' => (vec![open(arc(-0.2, 0.47, 0.45, 0.7, 60.0, -60.0))], 0.25),
+        '#' => (
+            vec![
+                line(&[(0.3, 1.15), (0.15, -0.2)]),
+                line(&[(0.6, 1.15), (0.45, -0.2)]),
+                line(&[(0.0, 0.72), (0.72, 0.72)]),
+                line(&[(-0.05, 0.3), (0.67, 0.3)]),
+            ],
+            0.72,
+        ),
+        _ => return None,
+    })
+}
+
+/// Draw `text` in the round plot font: cap `height` in points, letters `gap` × height apart.
+fn plot_text(text: &str, x: f64, y: f64, height: f64, gap: f64, out: &mut Vec<u8>) {
+    let mut pen_x = x;
+    for ch in text.chars() {
+        let Some((strokes, width)) = plot_glyph(ch) else {
+            pen_x += height * 0.6;
+            continue;
+        };
+        // a left parenthesis' arc bulges left of its start: shift it into its cell
+        let left = strokes.iter().flat_map(|s| s.0.iter()).map(|p| p.0).fold(f64::MAX, f64::min).min(0.0);
+        for (pts, closed) in strokes {
+            for (i, (fx, fy)) in pts.into_iter().enumerate() {
+                let (px, py) = (pen_x + (fx - left) * height, y + fy * height);
+                out.extend_from_slice(format!("{px:.3} {py:.3} {} ", if i == 0 { "m" } else { "l" }).as_bytes());
+            }
+            out.extend_from_slice(if closed { b"h S " } else { b"S " });
+        }
+        pen_x += (width - left + gap) * height;
+    }
+}
+
+#[test]
+fn ocr_reads_round_plot_lettering() {
+    // a plot font unlike our stroke font: round letters, an I without serifs, a 1 without a
+    // foot, an M whose middle reaches the baseline, tiny rings for periods, tall parentheses,
+    // slashes and number signs, and letters set close (their feet a tenth of the height apart)
+    let lines = ["CORRIDOR", "DOOR 105", "MIN. 1/2", "(E) 2#12", "SIDE 50", "ROOM 1-2"];
+    // (a page with hidden text: the reads are confirmed, so their strokes leave the plan)
+    let pdf = strokes_page(|c| {
+        c.extend_from_slice(HIDDEN_NOTE);
+        for (i, l) in lines.iter().enumerate() {
+            plot_text(l, 80.0, 500.0 - i as f64 * 25.0, 9.0, 0.1, c);
+        }
+        // the same at a small size, tighter still
+        for (i, l) in lines.iter().enumerate() {
+            plot_text(l, 400.0, 500.0 - i as f64 * 12.0, 4.5, 0.08, c);
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let mut want: Vec<&str> = lines.to_vec();
+    want.extend(lines);
+    assert_eq!(text_values_but_note(&r), sorted(&want), "{:?}", r.ocr);
+    // the rings of the O's and periods are read inside words, never left as linework
+    let visible = r.drawing.model.iter().filter(|e| e.common.layer.as_str() != pdf_read::SHX_SOURCE_LAYER && !matches!(e.kind, EntityKind::Text(_)));
+    assert_eq!(visible.count(), 0, "every stroke was lettering");
+}
+
+#[test]
+fn ocr_leaves_lone_rings_alone() {
+    // small circles and boxes drawn as closed loops (symbols' parts, markers): no lone "O"s
+    let pdf = strokes_page(|c| {
+        for i in 0..6 {
+            let x = 100.0 + f64::from(i) * 40.0;
+            let mut ring = String::new();
+            for (k, (px, py)) in arc(x, 300.0, 3.0, 3.0, 0.0, 345.0).into_iter().enumerate() {
+                ring.push_str(&format!("{px:.2} {py:.2} {} ", if k == 0 { "m" } else { "l" }));
+            }
+            c.extend_from_slice(format!("{ring}h S {x:.1} 200 m {:.1} 200 l {:.1} 207 l {x:.1} 207 l h S ", x + 5.0, x + 5.0).as_bytes());
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), Vec::<String>::new(), "{:?}", r.ocr);
+}
+
+/// The recovered texts with their direction in whole degrees and their insertion point.
+fn texts_turned(r: &pdf_read::PdfImport) -> Vec<(String, i64, (f64, f64))> {
+    let mut v: Vec<(String, i64, (f64, f64))> = r
+        .drawing
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Text(t) => Some((t.value.clone(), t.rotation.to_degrees().round() as i64, (t.insert.x, t.insert.y))),
+            _ => None,
+        })
+        .collect();
+    v.sort_by(|a, b| a.0.cmp(&b.0));
+    v
+}
+
+#[test]
+fn ocr_reads_lettering_turned_along_walls() {
+    // plans letter along vertical walls too: reading up the sheet (90°) and down it (270°)
+    let pdf = strokes_page(|c| {
+        // upright references, also giving the page-to-drawing mapping
+        shx_text("CORRIDOR", 80.0, 500.0, 9.0, 1.0, 0.0, c);
+        plot_text("DOOR 105", 400.0, 200.0, 9.0, 0.1, c);
+        // turned: the PDF's own transform turns the lettering, which starts at the origin
+        c.extend_from_slice(b"q 0 1 -1 0 300 100 cm ");
+        shx_text("STORAGE", 0.0, 0.0, 9.0, 1.0, 0.0, c);
+        c.extend_from_slice(b"Q q 0 1 -1 0 340 100 cm ");
+        plot_text("ROOM 1-2", 0.0, 0.0, 9.0, 0.1, c);
+        c.extend_from_slice(b"Q q 0 -1 1 0 500 400 cm ");
+        shx_text("EF-2", 0.0, 0.0, 9.0, 1.0, 0.0, c);
+        c.extend_from_slice(b"Q ");
+        // a block of notes stacked two letter heights apart is read along its lines, never
+        // down its columns
+        for (i, l) in ["NOTE 1 SEE E-501", "NOTE 2 PROVIDE GFCI", "NOTE 3 TYP", "NOTE 4 EXISTING"].iter().enumerate() {
+            shx_text(l, 80.0, 400.0 - i as f64 * 18.0, 9.0, 1.0, 0.0, c);
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let got = texts_turned(&r);
+    let found: Vec<(&str, i64)> = got.iter().map(|(v, a, _)| (v.as_str(), *a)).collect();
+    assert_eq!(
+        found,
+        vec![
+            ("CORRIDOR", 0),
+            ("DOOR 105", 0),
+            ("EF-2", 270),
+            ("NOTE 1 SEE E-501", 0),
+            ("NOTE 2 PROVIDE GFCI", 0),
+            ("NOTE 3 TYP", 0),
+            ("NOTE 4 EXISTING", 0),
+            ("ROOM 1-2", 90),
+            ("STORAGE", 90)
+        ],
+        "{:?}",
+        r.ocr
+    );
+    assert_eq!(r.ocr.turned, 3);
+    assert_eq!(r.stats.get("SHX OCR turned texts").copied(), Some(3));
+    // a turned text starts where its lettering starts: map page points to the drawing by the
+    // two upright references (their lettering starts at its drawing point too)
+    let at = |v: &str| got.iter().find(|t| t.0 == v).map(|t| t.2).expect("text");
+    let (a, b) = (at("CORRIDOR"), at("DOOR 105"));
+    let (kx, ky) = ((b.0 - a.0) / 320.0, (b.1 - a.1) / -300.0);
+    let page = |p: (f64, f64)| (80.0 + (p.0 - a.0) / kx, 500.0 + (p.1 - a.1) / ky);
+    for (v, want) in [("STORAGE", (300.0, 100.0)), ("ROOM 1-2", (340.0, 100.0)), ("EF-2", (500.0, 400.0))] {
+        let p = page(at(v));
+        assert!((p.0 - want.0).abs() < 1.5 && (p.1 - want.1).abs() < 1.5, "{v} starts at {p:?}, not {want:?}");
+    }
+}
+
+#[test]
+fn ocr_reads_tags_inside_boxes() {
+    // a room tag in a box drawn round it 2 pt off the lettering: the box's sides join
+    // into one big loop, which must not reach the letters (a wide box made "MECHANICA")
+    // on a 36" x 24" sheet, where a glyph-sized stroke runs to 80 pt: the box is one
+    let mut c = b"q 0 0 0 RG 0.5 w ".to_vec();
+    {
+        let c = &mut c;
+        for (i, (name, num)) in [("MECHANICAL", "103"), ("ELECTRICAL", "119"), ("CONFERENCE", "129")].iter().enumerate() {
+            let (x, y) = (100.0, 500.0 - i as f64 * 60.0);
+            let end = shx_text(name, x + 2.0, y + 13.0, 6.75, 1.0, 0.0, c);
+            shx_text(num, x + 2.0, y + 2.0, 6.75, 1.0, 0.0, c);
+            let (w, h) = (end - x + 2.0, 13.0 + 6.75 + 2.0);
+            c.extend_from_slice(
+                format!(
+                    "{x} {y} m {} {y} l S {} {y} m {} {} l S {} {} m {x} {} l S {x} {} m {x} {y} l S ",
+                    x + w,
+                    x + w,
+                    x + w,
+                    y + h,
+                    x + w,
+                    y + h,
+                    y + h,
+                    y + h
+                )
+                .as_bytes(),
+            );
+        }
+    }
+    c.extend_from_slice(b"Q");
+    let pdf = pdf_sized(&c, 2592, 1728);
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&["103", "119", "129", "CONFERENCE", "ELECTRICAL", "MECHANICAL"]), "{:?}", r.ocr);
+}
+
+#[test]
+fn ocr_leaves_curve_drawn_symbols_alone() {
+    // device symbols: a circle drawn with four curves (closed or not) and a bar through it read
+    // as a "6"; plot fonts flatten their arcs, so a lone glyph with a curve-drawn loop is a
+    // symbol.  The tags beside the symbols are still read.
+    let pdf = strokes_page(|c| {
+        for i in 0..6 {
+            let (x, y, r) = (100.0 + f64::from(i) * 60.0, 300.0, 4.0);
+            let k = 0.5523 * r;
+            let close = if i % 2 == 0 { "h " } else { "" };
+            c.extend_from_slice(
+                format!(
+                    "{} {y} m {} {} {} {} {x} {} c {} {} {} {} {} {y} c {} {} {} {} {x} {} c {} {} {} {} {} {y} c {close}S {} {y} m {} {y} l S ",
+                    x + r,
+                    x + r,
+                    y + k,
+                    x + k,
+                    y + r,
+                    y + r,
+                    x - k,
+                    y + r,
+                    x - r,
+                    y + k,
+                    x - r,
+                    x - r,
+                    y - k,
+                    x - k,
+                    y - r,
+                    y - r,
+                    x + k,
+                    y - r,
+                    x + r,
+                    y - k,
+                    x + r,
+                    x - r,
+                    x + r
+                )
+                .as_bytes(),
+            );
+            shx_text("EF", x + 8.0, y + 2.0, 6.0, 1.0, 0.0, c);
+        }
+    });
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    // every tag is read, as loose text or as the TAG of the symbol it stands beside (a closed
+    // outline); no symbol is read as a 6 or a 9
+    let mut tags = text_values(&r);
+    tags.extend(symbol_tags(&r.drawing));
+    tags.sort();
+    assert_eq!(tags, sorted(&["EF"; 6]), "{:?} {:?}", r.ocr, r.stats);
+}
+
+#[test]
+fn ocr_keeps_free_standing_marks() {
+    // lone marks (circuit numbers, fixture types) stand free at the page's letter height;
+    // a duct line's ticks and a wall end look like an I or a 1 but touch the lines they end,
+    // and a stroke taller than any lettering on the page is linework too (a 36" x 24" sheet,
+    // where a 50 pt leader is still glyph-sized)
+    let mut c = b"q 0 0 0 RG 0.5 w ".to_vec();
+    {
+        let c = &mut c;
+        shx_text("PANEL LP-1", 100.0, 500.0, 6.75, 1.0, 0.0, c);
+        shx_text("EXISTING", 100.0, 470.0, 6.75, 1.0, 0.0, c);
+        for (i, mark) in ["1", "A", "3", "7", "C"].iter().enumerate() {
+            shx_text(mark, 100.0 + i as f64 * 40.0, 400.0, 6.75, 1.0, 0.0, c);
+        }
+        // a lone 1 drawn as one upright stroke
+        c.extend_from_slice(b"300 400 m 300 406.75 l S ");
+        // a mark beside a leader much taller than the letters: still a 2, not a dot
+        shx_text("2", 330.0, 400.0, 6.75, 1.0, 0.0, c);
+        c.extend_from_slice(b"345 380 m 375 420 l S ");
+        // a duct line with ticks of the letters' height above and below it
+        c.extend_from_slice(b"100 300 m 400 300 l S ");
+        for i in 0..8 {
+            let x = 110.0 + f64::from(i) * 30.0;
+            c.extend_from_slice(format!("{x:.1} 300 m {x:.1} 306.75 l S {:.1} 293.25 m {:.1} 300 l S ", x + 10.0, x + 10.0).as_bytes());
+        }
+        // a wall end: an upright stroke of the letters' height ending on a wall
+        c.extend_from_slice(b"100 200 m 300 200 l S 300 200 m 300 206.75 l S ");
+        // an upright stroke three times the letters' height, standing free
+        c.extend_from_slice(b"450 400 m 450 420.25 l S ");
+    }
+    c.extend_from_slice(b"Q");
+    let pdf = pdf_sized(&c, 2592, 1728);
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    assert_eq!(text_values(&r), sorted(&["1", "1", "2", "3", "7", "A", "C", "EXISTING", "PANEL LP-1"]), "{:?}", r.ocr);
 }
 
 // -----------------------------------------------------------------------------------------
@@ -780,7 +1344,7 @@ fn ocr_leaves_symbol_lines_to_the_symbol() {
     for i in 0..4 {
         let (cx, cy) = (150.0 + 120.0 * f64::from(i), 300.0);
         square(cx, cy, &mut visible);
-        shx_char_strokes('T', cx - 4.0, cy - 6.0, 12.0, &mut visible);
+        shx_text("T", cx - 4.0, cy - 6.0, 12.0, 1.0, 0.0, &mut visible);
         visible.extend_from_slice(format!("BT 0 Tr /F1 6 Tf {:.1} {:.1} Td (T1) Tj ET ", cx + 10.0, cy - 3.0).as_bytes());
     }
     let pdf = pdf_with_hidden_text(&visible, b"600 560 Td (GENERAL NOTES) Tj");
@@ -804,7 +1368,7 @@ fn stroked_device_marks_tag_symbols() {
         );
         let mark = if i < 3 { "F" } else { "O" };
         for (k, ch) in mark.chars().enumerate() {
-            shx_char_strokes(ch, cx + 12.0 + 8.0 * k as f64, cy - 4.0, 8.0, &mut visible);
+            shx_text(&ch.to_string(), cx + 12.0 + 8.0 * k as f64, cy - 4.0, 8.0, 1.0, 0.0, &mut visible);
         }
     }
     let pdf = pdf_with_hidden_text(&visible, b"600 560 Td (GENERAL NOTES) Tj");
@@ -837,11 +1401,7 @@ fn ocr_reads_stroked_lettering_on_a_page_without_hidden_text() {
     // read from the strokes; the long line stays linework.
     let mut content = Vec::new();
     content.extend_from_slice(b"q 0 0 0 RG 0.5 w 72 72 m 700 72 l S ");
-    let height = 12.0;
-    let advance = height * (4.0 + 1.6) / 6.0;
-    for (i, ch) in "HELLO".chars().enumerate() {
-        shx_char_strokes(ch, 100.0 + i as f64 * advance, 300.0, height, &mut content);
-    }
+    shx_text("HELLO", 100.0, 300.0, 12.0, 1.0, 0.0, &mut content);
     content.extend_from_slice(b"BT /F1 10 Tf 72 500 Td (Sample Title) Tj ET Q");
     let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
     assert!(r.stats.get("SHX text (OCR) recovered").copied().unwrap_or(0) > 0, "OCR ran: {:?}", r.stats);
@@ -857,11 +1417,7 @@ fn ocr_skips_pages_whose_lettering_is_real_text() {
     // linework, not lettering, so the OCR leaves them alone.
     let mut content = Vec::new();
     content.extend_from_slice(b"q 0 0 0 RG 0.5 w ");
-    let height = 12.0;
-    let advance = height * (4.0 + 1.6) / 6.0;
-    for (i, ch) in "HELLO".chars().enumerate() {
-        shx_char_strokes(ch, 100.0 + i as f64 * advance, 300.0, height, &mut content);
-    }
+    shx_text("HELLO", 100.0, 300.0, 12.0, 1.0, 0.0, &mut content);
     for i in 0..120 {
         let (x, y) = (60 + (i % 10) * 70, 380 + (i / 10) * 18);
         content.extend_from_slice(format!("BT /F1 6 Tf {x} {y} Td (Room {i}) Tj ET ").as_bytes());
@@ -883,11 +1439,7 @@ fn ocr_leaves_lone_straight_strokes_as_linework() {
     // as linework (not an "I", "1" or "/"), so the wall, duct and pipe readers still see it.
     let mut content = Vec::new();
     content.extend_from_slice(b"q 0 0 0 RG 0.5 w 72 72 m 700 72 l S ");
-    let height = 12.0;
-    let advance = height * (4.0 + 1.6) / 6.0;
-    for (i, ch) in "HELLO".chars().enumerate() {
-        shx_char_strokes(ch, 100.0 + i as f64 * advance, 400.0, height, &mut content);
-    }
+    shx_text("HELLO", 100.0, 400.0, 12.0, 1.0, 0.0, &mut content);
     let mut stubs = 0;
     for i in 0..30 {
         let (x, y) = (90 + (i % 15) * 40, 150 + (i / 15) * 60);
@@ -922,11 +1474,7 @@ fn ocr_without_hidden_text_keeps_the_strokes_as_linework() {
     // wall, duct and pipe readers need those lines.
     let mut content = Vec::new();
     content.extend_from_slice(b"q 0 0 0 RG 0.5 w 72 72 m 700 72 l S ");
-    let height = 12.0;
-    let advance = height * (4.0 + 1.6) / 6.0;
-    for (i, ch) in "HELLO".chars().enumerate() {
-        shx_char_strokes(ch, 100.0 + i as f64 * advance, 300.0, height, &mut content);
-    }
+    shx_text("HELLO", 100.0, 300.0, 12.0, 1.0, 0.0, &mut content);
     content.extend_from_slice(b"Q");
     let pdf = pdf_with(&content);
     let linework_near_word = |r: &pdf_read::PdfImport| {
