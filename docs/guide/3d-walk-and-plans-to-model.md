@@ -164,6 +164,34 @@ Standard keys per kind (other keys are allowed):
 | `light_fixture` | type_mark, model, circuit, mount_height, room, level |
 | `equipment` | type_mark, model, circuit, room, level |
 
+#### Filled from the prints
+
+`MODEL.BUILD` makes every device the readers found (`MEP.READ_DEVICES`, the
+guided job's devices stage) an element of its own: a small box at its symbol, at
+its mounting height, moved onto its level's architectural plan when it was read on
+a trade sheet of the same size. It carries its type and type mark, the circuit
+printed beside it, the panel the circuit names and `fed_from` (`panel LP1, circuit
+LP1-3`), its sheet, `mount_height` and `offset` (from the device legend, else a
+general note such as `MOUNT ALL HORN/STROBES AT 80" AFF`, else the usual height
+for its kind, marked `default`) and its 3D `location` (feet, `x, y, z`).
+
+**`BIM.PROPS.FILL`** then fills what the model and the prints give the other
+elements (the guided job runs it, after `ROOMS.BUILD`, at the end of its build
+stage):
+
+| Kind | Filled |
+|:-----|:-------|
+| `device` | room (by containment), host_wall (nearest wall), fed_from_handle (the panel's element), breaker, poles and circuit_description (the panel schedule's row) |
+| `room` | level, ceiling_height and floor/wall/ceiling/base finishes, as `ROOMS.LIST` reads them |
+| `door` | number (the tag printed at the opening), width and height (computed), from_room / to_room |
+| `wall` | type (`print` when a wall tag names it, `rule` when it is the spec's type for the layer), thickness, height, room_a / room_b |
+| `duct`, `pipe` | size, system, shape, elevation (a size read from a tag is `print`; an estimated route height is `default`) |
+| air terminal (`fixture`) | type, cfm (the airflow printed beside it), room |
+| `equipment` | type_mark, capacity (from its schedule row: cfm, tons, MBH…), room |
+
+A value a person set (`user`) is never replaced, and a value read from the prints
+is never replaced by an assumption.
+
 ### Quick start
 
 Open a floor plan, then:

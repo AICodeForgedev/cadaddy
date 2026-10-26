@@ -65,6 +65,7 @@ pub mod pointcloud;
 pub mod procure;
 pub mod progress;
 pub mod project;
+pub mod propfill;
 mod rasterout;
 pub mod rfi;
 pub mod schedules;
@@ -807,6 +808,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(rooms3d::specs());
         v.extend(bimprops::specs());
         v.extend(elemprops::specs());
+        v.extend(propfill::specs());
         v.extend(bimlook::specs());
         v.extend(projrules::specs());
         v.extend(codebook::specs());
