@@ -212,6 +212,7 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
         rect: [ext.min.x - 1.0, ext.min.y - 1.0, ext.max.x + 1.0, ext.max.y + 1.0],
         span: None,
         scale_text: None,
+        levels: Vec::new(),
     };
     Ok(Some((sh, devices, upf)))
 }

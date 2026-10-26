@@ -693,6 +693,7 @@ mod tests {
             rect: [x, 0.0, x + 2000.0, 1000.0],
             span: None,
             scale_text: None,
+            levels: Vec::new(),
         }
     }
 

@@ -5386,6 +5386,7 @@ mod tests {
             area: None,
             title_block: None,
             not_built: String::new(),
+            levels: Vec::new(),
         });
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r["devices"]["count"], json!(5), "{r:#}");
