@@ -622,6 +622,8 @@ pub struct Exterior {
     pub crickets: Vec<Cricket>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub equipment: Vec<Equipment>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drains: Vec<RoofDrain>,
     /// Parapet heights the elevations give, by roof level: kept here so they reach roofs read
     /// later, whatever the reading order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -630,7 +632,12 @@ pub struct Exterior {
 
 impl Exterior {
     pub fn is_empty(&self) -> bool {
-        self.facades.is_empty() && self.roofs.is_empty() && self.crickets.is_empty() && self.equipment.is_empty() && self.parapets.is_empty()
+        self.facades.is_empty()
+            && self.roofs.is_empty()
+            && self.crickets.is_empty()
+            && self.equipment.is_empty()
+            && self.drains.is_empty()
+            && self.parapets.is_empty()
     }
 
     /// The parapet height an elevation gives for a level, feet.
@@ -774,6 +781,13 @@ pub struct Equipment {
     /// Whether the height was read from its note or is the 4'-0" default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height_status: Option<ValueStatus>,
+}
+
+/// A roof drain on the roof plan (sheet units, on its level's plan).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RoofDrain {
+    pub level: String,
+    pub at: [f64; 2],
 }
 
 /// Door and window schedules read from the sheets (`schedules.read`).
