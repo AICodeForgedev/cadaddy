@@ -1386,6 +1386,8 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     let rcp = super::ceilings::build(d, &sp);
     // Duct, pipe and conduit runs of the shown systems.
     let mep = super::mep::build(d, &sp);
+    // The devices the readers found, each an element with what was read about it.
+    let devices = super::propfill::build_devices(d, &sp);
     // Concrete: slabs, footings, pads, bases and encasement, with rebar and what is cast in.
     let concrete = super::concrete::build(d, &sp);
     // Takeoff tables linked to the model count it again.
@@ -1441,6 +1443,7 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
         o.extend(x.clone());
     }
     r["gridColumns"] = json!(grid_columns);
+    r["deviceElements"] = json!(devices);
     r["qtyTables"] = json!(qty_tables);
     r["removed"] = json!(removed);
     // One building: the levels' 3D moved off their plans onto the lowest level's.
@@ -1533,7 +1536,7 @@ pub(crate) const STACKED: &str = "stacked";
 
 /// `xdata` with the stacking move `off` recorded (added to one recorded before) at the end of
 /// WALLGEN's tags.
-fn with_stacked(xdata: &[RawTag], off: Vec2) -> Vec<RawTag> {
+pub(crate) fn with_stacked(xdata: &[RawTag], off: Vec2) -> Vec<RawTag> {
     let mut x = xdata.to_vec();
     let Some(at) = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP)) else { return x };
     let end = x.iter().skip(at + 1).position(|t| t.code == 1001).map_or(x.len(), |i| at + 1 + i);
