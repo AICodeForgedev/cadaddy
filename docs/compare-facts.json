@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1112,
-    "count": 1112,
+    "callableAsJson": 1116,
+    "count": 1116,
     "ids": [
       "-attedit",
       "-block",
@@ -123,6 +123,10 @@
       "bim.issue.show",
       "bim.look",
       "bim.prints",
+      "bim.props.find",
+      "bim.props.get",
+      "bim.props.set",
+      "bim.props.summary",
       "bim.remove_type",
       "bim.set_spec",
       "bim.set_type",
@@ -1203,11 +1207,12 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 51,
+    "count": 52,
     "tools": [
       "arch_read",
       "bim_from_pdf",
       "bim_job",
+      "bim_props",
       "bim_spec_import",
       "bim_types",
       "callouts",
