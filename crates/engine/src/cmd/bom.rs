@@ -714,13 +714,75 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         missing.push("floors".into());
     }
 
-    // ── Roofs: area from built roof meshes ──
+    // ── Roofs: area, parapets, drains, crickets and what stands on the roof ──
+    // A measure the build put on its elements (`area:`, `lf:`), summed; none when one lacks it.
+    let tagged = |handles: &[String], key: &str| -> Option<f64> {
+        let mut sum = 0.0;
+        for hex in handles {
+            let e = cadaddy_doc::Handle::parse_hex(hex).and_then(|h| d.entity(h))?;
+            sum += super::bimlook::made_tag(e, key)?.parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0)?;
+        }
+        Some((sum * 100.0).round() / 100.0)
+    };
+    for ((part, level), (n, handles)) in &built {
+        let (item, unit, net) = match part.as_str() {
+            "parapet" => ("Parapet", "lf", tagged(handles, "lf").unwrap_or(0.0)),
+            "roof-drain" => ("Roof drain", "each", *n as f64),
+            "cricket" => ("Cricket", "each", *n as f64),
+            _ => continue,
+        };
+        if net > 0.0 {
+            add(
+                lines,
+                Line {
+                    trade: "architecture",
+                    category: "roofs".into(),
+                    item: item.into(),
+                    unit,
+                    net,
+                    status: "model",
+                    level: level.clone(),
+                    elements: handles.clone(),
+                    ..Line::default()
+                },
+            );
+        }
+    }
+    // Rooftop units and curbs, by name.
+    let mut on_roof: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for e in
+        d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("equipment") && e.common.layer.eq_ignore_ascii_case("3D-Equipment"))
+    {
+        let name = super::bimlook::made_name(e).unwrap_or_default().to_string();
+        let level = super::bspec::made_level(e).unwrap_or_default();
+        let hs = on_roof.entry((level, name)).or_default();
+        if hs.len() < 500 {
+            hs.push(e.handle.hex());
+        }
+    }
+    for ((level, name), handles) in &on_roof {
+        add(
+            lines,
+            Line {
+                trade: "architecture",
+                category: "roofs".into(),
+                item: "Rooftop equipment".into(),
+                size: name.clone(),
+                unit: "each",
+                net: handles.len() as f64,
+                status: "model",
+                level: level.clone(),
+                elements: handles.clone(),
+                ..Line::default()
+            },
+        );
+    }
     for ((part, level), (_n, handles)) in &built {
         if part != "roof" {
             continue;
         }
-        // Measure the roof area from the mesh's XY footprint (the horizontal face area).
-        let area = roof_mesh_area(d, handles, upf);
+        // The roof's plan area as built (its outline), else the meshes' XY footprint.
+        let area = tagged(handles, "area").unwrap_or_else(|| roof_mesh_area(d, handles, upf));
         if area > 0.0 {
             add(
                 lines,

@@ -605,11 +605,13 @@ pub struct Exterior {
     pub crickets: Vec<Cricket>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub equipment: Vec<Equipment>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drains: Vec<RoofDrain>,
 }
 
 impl Exterior {
     pub fn is_empty(&self) -> bool {
-        self.facades.is_empty() && self.roofs.is_empty() && self.crickets.is_empty() && self.equipment.is_empty()
+        self.facades.is_empty() && self.roofs.is_empty() && self.crickets.is_empty() && self.equipment.is_empty() && self.drains.is_empty()
     }
 }
 
@@ -708,6 +710,13 @@ pub struct Equipment {
     pub level: String,
     pub outline: Vec<[f64; 2]>,
     pub height_ft: f64,
+}
+
+/// A roof drain on the roof plan (sheet units, on its level's plan).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RoofDrain {
+    pub level: String,
+    pub at: [f64; 2],
 }
 
 /// Door and window schedules read from the sheets (`schedules.read`).
