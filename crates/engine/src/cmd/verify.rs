@@ -717,8 +717,8 @@ fn vec3(p: &Value, key: &str) -> Result<Option<Vec3>> {
 }
 
 fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
-    use cadaddy_render::shade::{VisualStyle, fit, fit_bounds, rasterize};
     use cadaddy_render::model3::{self, Aabb};
+    use cadaddy_render::shade::{VisualStyle, fit, fit_bounds, rasterize};
     use std::sync::atomic::AtomicUsize;
     let (w, h) = size(p, 800, 600);
     // The BIM view's look unless another style is asked for.
@@ -821,10 +821,13 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         let framed = (!shell.is_empty()).then(|| shell.expand(shell_margin(&shell, upf)));
         // Count outliers: built objects whose plan bounds are entirely outside the frame.
         let n_outliers = framed.as_ref().map_or(0, |f| {
-            md.model.iter().filter(|e| {
-                let b = cadaddy_doc::entity_bounds(&md, e, 0);
-                !b.is_empty() && (b.max.x < f.min.x || b.min.x > f.max.x || b.max.y < f.min.y || b.min.y > f.max.y)
-            }).count()
+            md.model
+                .iter()
+                .filter(|e| {
+                    let b = cadaddy_doc::entity_bounds(&md, e, 0);
+                    !b.is_empty() && (b.max.x < f.min.x || b.min.x > f.max.x || b.max.y < f.min.y || b.min.y > f.max.y)
+                })
+                .count()
         });
         (framed, n_outliers)
     } else {
@@ -889,12 +892,13 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     let proj = Projection::new(dir);
     // Compute the view from the frame (if framing) or the model's bounds, not from the full
     // triangle list — this lets us pick LODs and cull before flattening the scene.
-    let view_bounds = frame.as_ref().map(|f| {
-        Aabb {
+    let view_bounds = frame
+        .as_ref()
+        .map(|f| Aabb {
             lo: Vec3::new(f.min.x, f.min.y, if m3.bounds.lo.z.is_finite() { m3.bounds.lo.z } else { 0.0 }),
             hi: Vec3::new(f.max.x, f.max.y, if m3.bounds.hi.z.is_finite() { m3.bounds.hi.z } else { 1.0 }),
-        }
-    }).unwrap_or(m3.bounds);
+        })
+        .unwrap_or(m3.bounds);
     let initial_view = fit_bounds(&view_bounds, proj, w, h);
     // Cull and pick LODs; flatten only the visible parts into a triangle list.
     let mut sc = if let Some(iv) = &initial_view {
