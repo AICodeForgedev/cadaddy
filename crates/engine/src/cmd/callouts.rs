@@ -24,12 +24,20 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     let dxf_files: Vec<(String, Vec<u8>)> =
         doc.embedded.iter().filter(|(name, _)| name.ends_with(".dxf")).map(|(name, bytes)| (name.clone(), (**bytes).clone())).collect();
 
+    let page = p.get("page").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
+    let page_size = p.get("page_size").and_then(Value::as_u64).unwrap_or(50).clamp(1, 200) as usize;
     if dxf_files.is_empty() {
-        return Err(bad(
-            "callouts.list",
-            "No imported print set found. Import a set of DXF/PDF sheets first \
-             (bim_job import or printset.open) so the callout reader has drawings to scan.",
-        ));
+        // Nothing to read yet: an empty answer that says what to do (an agent's first look is
+        // not an error).
+        return Ok(json!({
+            "items": [],
+            "total": 0,
+            "resolved": 0,
+            "broken": 0,
+            "page": page,
+            "page_size": page_size,
+            "hint": "No imported print set found. Import a set of DXF/PDF sheets first (bim_job import or printset.open) so the callout reader has drawings to scan.",
+        }));
     }
 
     let sheet_numbers: Vec<String> = dxf_files.iter().map(|(name, _)| name.trim_end_matches(".dxf").to_string()).collect();
@@ -42,9 +50,6 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     let kind_filter = str_param(p, "kind");
     let status_filter = str_param(p, "status");
     let level_filter = str_param(p, "level");
-    let page = p.get("page").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
-    let page_size = p.get("page_size").and_then(Value::as_u64).unwrap_or(50).clamp(1, 200) as usize;
-
     let filtered: Vec<_> = summary
         .iter()
         .filter(|s| kind_filter.is_none_or(|k| s.kind == k))
@@ -61,7 +66,7 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     let resolved_count = filtered.iter().filter(|s| s.status == "resolved").count();
     let broken_count = filtered.iter().filter(|s| s.status == "broken").count();
 
-    let start = (page - 1) * page_size;
+    let start = (page - 1).saturating_mul(page_size);
     let items: Vec<Value> = filtered
         .iter()
         .skip(start)

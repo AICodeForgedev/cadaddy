@@ -141,7 +141,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "levels": {"type": "string", "description": "\"auto\" (default)"},
                 "force": {"type": "boolean", "description": "build even if import check fails"}
             }, "required": ["path"]}}),
-        json!({"name": "callouts", "description": "List cross-reference callouts from the imported print set: section marks, elevation tags, detail bubbles, enlarged-plan boundaries, match lines and key plans. Each callout shows its source sheet, kind, detail number, target sheet, and whether it resolves or is broken (with the reason). Returns a guiding error when no print set is loaded.",
+        json!({"name": "callouts", "description": "List cross-reference callouts from the imported print set: section marks, elevation tags, detail bubbles, enlarged-plan boundaries, match lines and key plans. Each callout shows its source sheet, kind, detail number, target sheet, and whether it resolves or is broken (with the reason). With no print set imported it returns no items and a hint saying how to import one.",
         "inputSchema": {"type": "object", "properties": {
             "kind": {"type": "string", "description": "filter by kind: section_mark, elevation_tag, detail_bubble, enlarged_plan, match_line, key_plan"},
             "status": {"type": "string", "description": "filter: resolved or broken"},
