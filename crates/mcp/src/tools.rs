@@ -365,7 +365,8 @@ fn text(v: &Value) -> Value {
 }
 
 fn err_text(e: &str) -> Value {
-    json!({"content": [{"type": "text", "text": e}], "isError": true})
+    let clean: String = e.chars().map(|c| if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' { '\u{FFFD}' } else { c }).collect();
+    json!({"content": [{"type": "text", "text": clean}], "isError": true})
 }
 
 /// Whether `v` fits the subset of JSON Schema the tool definitions use: `type`, `items`,

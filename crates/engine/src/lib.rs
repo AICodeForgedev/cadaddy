@@ -28,6 +28,7 @@ pub mod grip_dims;
 pub mod grips;
 mod guard;
 pub mod i18n;
+pub mod json_clean;
 pub mod journal;
 pub mod legibility;
 pub mod lisp;
@@ -1499,9 +1500,12 @@ impl Session {
         }
     }
 
-    /// Message on the command line history.
+    /// Message on the command line history.  Control characters are stripped so the log
+    /// never injects raw C0 bytes into JSON responses that carry it (`cmdline.input`'s
+    /// `output` array, `cmdline.state`'s `history`).
     pub fn echo(&mut self, msg: impl Into<String>) {
-        let m = msg.into();
+        let mut m = msg.into();
+        json_clean::sanitize_string_in_place(&mut m);
         log::debug!("{m}");
         self.log.push(m);
         if self.log.len() > 5000 {
@@ -1618,7 +1622,9 @@ impl Session {
         if outer && !id.starts_with("events.") && id != "document.list" {
             self.event("command.run", serde_json::json!({ "command": id, "ok": r.is_ok() }));
         }
-        r
+        // Strip control characters so every JSON serialisation of the result is accepted by
+        // a strict parser (Q6011).
+        r.map(json_clean::sanitized)
     }
 
     /// What the running command (or the one a transparent command interrupted) changed so far
