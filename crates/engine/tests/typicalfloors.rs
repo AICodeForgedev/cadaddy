@@ -1,9 +1,6 @@
 //! Typical-floor tests (Q6005): a single sheet that covers multiple levels places its
 //! elements on each of those levels.
 
-use cadaddy_engine::Session;
-use serde_json::{Value, json};
-
 /// detect_levels recognises "TYPICAL FLOOR" titles.
 #[test]
 fn detect_levels_typical_floor_titles() {
@@ -42,7 +39,6 @@ fn sheet_region_all_levels() {
 fn the_devices_stage_replicates_for_typical_floor_sheets() {
     use cadaddy_engine::cmd::guided::*;
 
-    let mut s = Session::new();
     let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
 
     // Set up: 4 arch sheets (one per level), 1 typical E sheet for levels 2-4.
