@@ -158,10 +158,12 @@ pub struct PageRead {
 /// An enlarged plan and where it sits on its level's overall plan.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Enlarged {
-    /// The overall plan its boundary is drawn on (empty when none was found).
-    pub on_sheet: String,
-    /// The sheet the enlarged plan is drawn on.
-    pub target_sheet: String,
+    /// The sheet the enlarged plan is drawn on (`on_sheet` with `detail`: "E-6 detail 1").
+    #[serde(rename = "on_sheet")]
+    pub sheet: String,
+    /// The overall plan its boundary is drawn on, where it registers (empty when none was found).
+    #[serde(rename = "target_sheet")]
+    pub overall_sheet: String,
     /// Its view number on that sheet.
     pub detail: String,
     pub title: String,
@@ -997,15 +999,81 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
 }
 
 /// One copy of each line of lettering: an import may give a mark twice (the page's hidden text
-/// and the strokes read back), in the same place.
+/// and the strokes read back), at about the same place (the OCR copy sits on the strokes, a
+/// fraction of a letter off the hidden text), or the OCR copy in pieces (see [`drop_pieces`]).
 fn one_copy(texts: Vec<TextItem>) -> Vec<TextItem> {
-    let mut seen: BTreeSet<(String, i64, i64)> = BTreeSet::new();
-    texts
+    let mut seen: BTreeMap<String, Vec<([f64; 2], f64)>> = BTreeMap::new();
+    let kept = texts
         .into_iter()
         .filter(|t| {
-            let q = (t.height * 0.25).max(1e-9);
-            seen.insert((t.value.trim().to_string(), (t.at.x / q).round() as i64, (t.at.y / q).round() as i64))
+            let key = t.value.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_uppercase();
+            let at = [t.at.x, t.at.y];
+            let copies = seen.entry(key).or_default();
+            let near = copies.iter().any(|(p, h)| {
+                let reach = 0.75 * h.max(t.height);
+                (p[0] - at[0]).abs() <= reach && (p[1] - at[1]).abs() <= reach
+            });
+            if !near {
+                copies.push((at, t.height));
+            }
+            !near
         })
+        .collect();
+    drop_pieces(kept)
+}
+
+/// Texts in a longer text's footprint whose words it holds: the OCR copy of a line the hidden
+/// text gives whole, read in pieces (`MATCH LINE` and `SEE SHEET E-2` along `MATCH LINE - SEE
+/// SHEET E-2`) or cut short (`FIRST FLOOR POWER PLAN` over `... - AREA A`).
+fn drop_pieces(texts: Vec<TextItem>) -> Vec<TextItem> {
+    let words = |t: &TextItem| t.value.split_whitespace().map(str::to_ascii_uppercase).collect::<Vec<_>>();
+    let all: Vec<Vec<String>> = texts.iter().map(words).collect();
+    let mut heights: Vec<f64> = texts.iter().map(|t| t.height).collect();
+    heights.sort_by(f64::total_cmp);
+    let cell = 8.0 * heights.get(heights.len() / 2).copied().unwrap_or(1.0).max(1e-6);
+    let key = |x: f64, y: f64| ((x / cell).floor() as i64, (y / cell).floor() as i64);
+    // Each text of two words or more by the cells its footprint covers.
+    let foot = |t: &TextItem, n: usize| {
+        let len = n as f64 * t.height;
+        let (c, s) = (t.rotation.cos(), t.rotation.sin());
+        let ends = [[t.at.x, t.at.y], [t.at.x + len * c, t.at.y + len * s]];
+        let pad = 1.5 * t.height;
+        [ends[0][0].min(ends[1][0]) - pad, ends[0][1].min(ends[1][1]) - pad, ends[0][0].max(ends[1][0]) + pad, ends[0][1].max(ends[1][1]) + pad]
+    };
+    let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+    for (i, t) in texts.iter().enumerate() {
+        if all[i].len() < 2 {
+            continue;
+        }
+        let b = foot(t, t.value.chars().count());
+        let (k0, k1) = (key(b[0], b[1]), key(b[2], b[3]));
+        if (k1.0 - k0.0 + 1) * (k1.1 - k0.1 + 1) > 400 {
+            continue;
+        }
+        for x in k0.0..=k1.0 {
+            for y in k0.1..=k1.1 {
+                grid.entry((x, y)).or_default().push(i);
+            }
+        }
+    }
+    let holds = |big: &[String], small: &[String]| small.len() < big.len() && big.windows(small.len()).any(|w| w == small);
+    let inside_of = |t: &TextItem, u: &TextItem| {
+        let (c, s) = (u.rotation.cos(), u.rotation.sin());
+        let (dx, dy) = (t.at.x - u.at.x, t.at.y - u.at.y);
+        let (along, across) = (dx * c + dy * s, -dx * s + dy * c);
+        let h = u.height.max(t.height);
+        let len = u.value.chars().count() as f64 * u.height;
+        along >= -h && along <= len + h && across.abs() <= h
+    };
+    texts
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| {
+            let piece =
+                grid.get(&key(t.at.x, t.at.y)).is_some_and(|c| c.iter().any(|&j| j != *i && holds(&all[j], &all[*i]) && inside_of(t, &texts[j])));
+            !piece
+        })
+        .map(|(_, t)| t.clone())
         .collect()
 }
 
@@ -1153,6 +1221,8 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
     struct EnlView<'a> {
         page: &'a LinkPage,
         view: &'a PageView,
+        /// Its view number: the one printed, or "1" for the only view of a sheet that numbers none.
+        detail: String,
     }
     let mut enl_views: Vec<EnlView> = Vec::new();
     for p in pages {
@@ -1160,7 +1230,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
         for v in &p.read.views {
             let t = v.title.to_ascii_uppercase();
             if t.contains("ENLARGED") || (p.sheet.sheet_type == "enlarged_plan" && t.contains("PLAN")) {
-                enl_views.push(EnlView { page: p, view: v });
+                enl_views.push(EnlView { page: p, view: v, detail: v.number.clone() });
             }
         }
         // An enlarged-plan sheet whose views this reader found no title for: the sheet's
@@ -1169,9 +1239,34 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
             && (p.sheet.sheet_type == "enlarged_plan" || p.sheet.title.to_ascii_uppercase().contains("ENLARGED"))
             && let Some(w) = &p.read.whole
         {
-            enl_views.push(EnlView { page: p, view: w });
+            enl_views.push(EnlView { page: p, view: w, detail: w.number.clone() });
+        }
+        if enl_views.len() == before + 1
+            && p.read.views.iter().all(|v| v.number.trim().is_empty())
+            && let Some(e) = enl_views.last_mut()
+            && e.detail.trim().is_empty()
+        {
+            e.detail = "1".into();
         }
     }
+    // One entry per view: a sheet printed twice in the set, or one view whose title was read
+    // twice, would count its devices twice.
+    let mut unique: Vec<EnlView> = Vec::with_capacity(enl_views.len());
+    for e in enl_views {
+        let same = |u: &EnlView| {
+            norm_sheet(&u.page.sheet.number) == norm_sheet(&e.page.sheet.number)
+                && u.detail == e.detail
+                && (!std::ptr::eq(u.page, e.page)
+                    || match (u.view.region, e.view.region) {
+                        (Some(a), Some(b)) => overlap_ratio(&a, &b) >= 0.5,
+                        _ => true,
+                    })
+        };
+        if !unique.iter().any(same) {
+            unique.push(e);
+        }
+    }
+    let enl_views = unique;
 
     let enlarged_sheets: BTreeSet<String> = enl_views
         .iter()
@@ -1195,7 +1290,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                     });
                     if let Some(e) = found {
                         c.target_sheet = e.page.sheet.number.clone();
-                        c.detail = e.view.number.clone();
+                        c.detail = e.detail.clone();
                     }
                     found.is_some()
                 }
@@ -1255,9 +1350,9 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
     let mut boundaries: BTreeMap<String, Vec<[f64; 4]>> = BTreeMap::new();
     for e in &enl_views {
         let target = e.page.sheet.number.clone();
-        let detail = e.view.number.clone();
+        let detail = e.detail.clone();
         let mut level = level_of_view(e.page, e.view);
-        let mut entry = Enlarged { target_sheet: target.clone(), detail: detail.clone(), title: e.view.title.clone(), ..Enlarged::default() };
+        let mut entry = Enlarged { sheet: target.clone(), detail: detail.clone(), title: e.view.title.clone(), ..Enlarged::default() };
         // Its devices: the enlarged sheet's symbols inside the view.
         if let Some(rg) = e.view.region {
             // Devices just outside the walls (lights on the facade) are the view's too.
@@ -1308,7 +1403,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 .max_by_key(|p| (p.sheet.discipline == e.page.sheet.discipline, shared(p), std::cmp::Reverse(level_key(&p.sheet.level))))
         });
         if let Some(h) = host {
-            entry.on_sheet = h.sheet.number.clone();
+            entry.overall_sheet = h.sheet.number.clone();
             if level.is_empty() {
                 level = h.sheet.level.clone();
             }
@@ -1404,7 +1499,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
         }
         // What the tally kept from the overall plan inside this boundary (0: the enlarged
         // sheet is the authority there).
-        if let (Some(b), Some(h)) = (e.boundary, by_number(&e.on_sheet))
+        if let (Some(b), Some(h)) = (e.boundary, by_number(&e.overall_sheet))
             && e.registered
         {
             let kept = boundaries.get(&h.sheet.number).is_none_or(|bs| !bs.contains(&b));
@@ -1513,6 +1608,39 @@ fn level_of_view(p: &LinkPage, v: &PageView) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn text(value: &str, x: f64, y: f64, height: f64, rotation: f64) -> TextItem {
+        TextItem { value: value.into(), at: cadaddy_geom::Vec2::new(x, y), height, rotation }
+    }
+
+    #[test]
+    fn the_ocr_copy_of_a_line_counts_once() {
+        let up = std::f64::consts::FRAC_PI_2;
+        let texts = vec![
+            // The hidden text, whole, and the OCR copy a little off it.
+            text("SEE SHEET E-4 FOR MOUNTING HEIGHTS", 96.0, 2073.6, 6.87, 0.0),
+            text("SEE SHEET E-4  FOR MOUNTING HEIGHTS", 97.5, 2074.4, 9.6, 0.0),
+            // A line reading up the sheet, read by the OCR in two pieces along it.
+            text("MATCH LINE - SEE SHEET E-2", 1785.6, 576.0, 6.87, up),
+            text("MATCH LINE", 1790.4, 576.0, 9.6, up),
+            text("SEE SHEET E-2", 1790.4, 681.6, 9.6, up),
+            // Cut short.
+            text("FIRST FLOOR POWER PLAN - AREA A", 384.0, 1776.0, 17.18, 0.0),
+            text("FIRST FLOOR POWER PLAN", 384.0, 1776.0, 24.0, 0.0),
+            // The same words elsewhere are another note.
+            text("SEE SHEET E-2", 600.0, 900.0, 9.6, 0.0),
+            text("E-4", 1351.1, 1571.5, 8.25, 0.0),
+        ];
+        let kept: Vec<(String, f64)> = one_copy(texts).into_iter().map(|t| (t.value, t.at.x)).collect();
+        let want = [
+            ("SEE SHEET E-4 FOR MOUNTING HEIGHTS", 96.0),
+            ("MATCH LINE - SEE SHEET E-2", 1785.6),
+            ("FIRST FLOOR POWER PLAN - AREA A", 384.0),
+            ("SEE SHEET E-2", 600.0),
+            ("E-4", 1351.1),
+        ];
+        assert_eq!(kept, want.map(|(v, x)| (v.to_string(), x)).to_vec());
+    }
 
     #[test]
     fn sheet_numbers_compare_in_one_spelling() {

@@ -91,7 +91,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("printset.links", "Link Print Set", run_links)
             .files()
-            .params("{pdfs?: folder (else the open print set), details?: bool (default true: also read the detail sheets the callouts name)} → {sheets: [{number, title, discipline, type, level}], pages_read, callouts: [{kind, detail?, target_sheet, on_sheet, resolved, detail_found?, at, text?}], resolved, resolved_pct, enlarged: [{on_sheet, target_sheet, sheet, detail, title, level, registered, method?, scale?, boundary?, devices, devices_by_type, overall_ignored}], enlarged_registered, match_lines: [{sheets, level, stitched, offset?}], levels: [{level, sheets, stitched, devices}], facts: [{on_sheet, target_sheet, detail, kind, value_ft, applied_to}], double_counted, unresolved: [{on_sheet, kind, target_sheet, detail?, at}], key_plans, errors?}: callout bubbles, section and elevation marks, enlarged-plan boundaries, match lines and written references (SEE SHEET, SEE DETAIL 3/E-501, REFER TO ARCHITECTURAL) read off every plan page on any layer; each enlarged plan is the authority inside its boundary on the overall plan (double_counted: devices counted from both sheets)")
+            .params("{pdfs?: folder (else the open print set), details?: bool (default true: also read the detail sheets the callouts name)} → {sheets: [{number, title, discipline, type, level}], pages_read, callouts: [{kind, detail?, target_sheet, on_sheet, resolved, detail_found?, at, text?}], resolved, resolved_pct, enlarged: [{on_sheet (the enlarged sheet), target_sheet (the overall plan), sheet, overall_sheet, detail, title, level, registered, method?, scale?, boundary?, devices, devices_by_type, overall_ignored}], enlarged_registered, match_lines: [{sheets, level, stitched, offset?}], levels: [{level, sheets, stitched, devices}], facts: [{on_sheet, target_sheet, detail, kind, value_ft, applied_to}], double_counted, unresolved: [{on_sheet, kind, target_sheet, detail?, at}], key_plans, errors?}: callout bubbles, section and elevation marks, enlarged-plan boundaries, match lines and written references (SEE SHEET, SEE DETAIL 3/E-501, REFER TO ARCHITECTURAL) read off every plan page on any layer; each enlarged plan is the authority inside its boundary on the overall plan (double_counted: devices counted from both sheets)")
             .enabled(always)
             .noundo(),
     ]
@@ -537,11 +537,13 @@ pub(crate) fn links_summary(l: &SheetLinks) -> Value {
     })
 }
 
-/// An enlarged plan with its own sheet named outright (`sheet`, the same as `target_sheet`).
+/// An enlarged plan with its sheets named outright too: `sheet` (the same as `on_sheet`, the
+/// enlarged sheet) and `overall_sheet` (the same as `target_sheet`, the plan it registers on).
 fn enlarged_value(e: &printlinks::Enlarged) -> Value {
     let mut v = serde_json::to_value(e).unwrap_or(Value::Null);
     if let Some(o) = v.as_object_mut() {
-        o.insert("sheet".into(), json!(e.target_sheet));
+        o.insert("sheet".into(), json!(e.sheet));
+        o.insert("overall_sheet".into(), json!(e.overall_sheet));
     }
     v
 }

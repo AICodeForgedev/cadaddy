@@ -57,7 +57,7 @@ fn the_enlarged_plan_registers_into_its_boundary_and_its_devices_count_once() {
     let l = links();
     assert_eq!(l.enlarged.len(), 1, "{:#?}", l.enlarged);
     let e = &l.enlarged[0];
-    assert_eq!((e.on_sheet.as_str(), e.target_sheet.as_str(), e.detail.as_str(), e.level.as_str()), ("E-1", "E-3", "1", "1"));
+    assert_eq!((e.overall_sheet.as_str(), e.sheet.as_str(), e.detail.as_str(), e.level.as_str()), ("E-1", "E-3", "1", "1"));
     assert!(e.registered);
     assert_eq!(e.method, "grids");
     assert_eq!(e.scale, Some(2.0));
@@ -116,7 +116,7 @@ fn an_enlarged_plan_that_cannot_be_placed_is_reported_unregistered() {
     let l = printlinks::link_set(&sheets, &pages);
     let e = &l.enlarged[0];
     assert!(!e.registered, "{e:#?}");
-    assert_eq!(e.on_sheet, "E-1");
+    assert_eq!(e.overall_sheet, "E-1");
     assert_eq!(l.enlarged_registered, 0);
 }
 
@@ -163,7 +163,7 @@ fn a_printed_set_links_the_same_way() {
     let e = &l.enlarged[..];
     assert_eq!(e.len(), 1, "{e:#?}");
     let e = &e[0];
-    assert_eq!((e.on_sheet.as_str(), e.target_sheet.as_str(), e.detail.as_str(), e.level.as_str()), ("E-1", "E-3", "1", "1"));
+    assert_eq!((e.overall_sheet.as_str(), e.sheet.as_str(), e.detail.as_str(), e.level.as_str()), ("E-1", "E-3", "1", "1"));
     assert!(e.registered);
     assert_eq!(e.method, "grids");
     // Both sheets in building inches: one to one.
@@ -198,7 +198,7 @@ fn an_enlarged_view_without_a_scale_line_is_found_by_its_title() {
     let l = printlinks::link_set(&sheets, &pages);
     assert_eq!(l.enlarged.len(), 1, "{:#?}", l.enlarged);
     let e = &l.enlarged[0];
-    assert_eq!((e.detail.as_str(), e.level.as_str(), e.on_sheet.as_str()), ("1", "1", "E-1"));
+    assert_eq!((e.detail.as_str(), e.level.as_str(), e.overall_sheet.as_str()), ("1", "1", "E-1"));
     assert!(e.registered);
     assert_eq!((e.devices, e.overall_ignored), (5, 3));
 }
@@ -214,7 +214,9 @@ fn an_untitled_enlarged_plan_finds_its_overall_plan_by_the_grid() {
     let l = printlinks::link_set(&sheets, &pages);
     assert_eq!(l.enlarged.len(), 1, "{:#?}", l.enlarged);
     let e = &l.enlarged[0];
-    assert_eq!((e.target_sheet.as_str(), e.on_sheet.as_str(), e.level.as_str(), e.method.as_str()), ("E-3", "E-1", "1", "grids"));
+    assert_eq!((e.sheet.as_str(), e.overall_sheet.as_str(), e.level.as_str(), e.method.as_str()), ("E-3", "E-1", "1", "grids"));
+    // The only view of a sheet that numbers none is its view 1.
+    assert_eq!(e.detail, "1");
     assert!(e.registered);
     assert_eq!(e.scale, Some(2.0));
     // No box to go by: the boundary is the enlarged plan's own outline, placed by the grid.
@@ -223,5 +225,48 @@ fn an_untitled_enlarged_plan_finds_its_overall_plan_by_the_grid() {
         assert!((got - want).abs() < 0.1, "{b:?}");
     }
     assert_eq!((e.devices, e.overall_ignored), (5, 3));
+    assert_eq!(l.double_counted, 0);
+}
+
+/// The devices of one enlarged plan, as a reader of the JSON answer finds them: the entries
+/// whose `on_sheet` is the enlarged sheet and whose `detail` is its view number.
+fn devices_of(l: &SheetLinks, sheet: &str, detail: &str) -> u64 {
+    let v = serde_json::to_value(l).expect("json");
+    v["enlarged"]
+        .as_array()
+        .expect("enlarged")
+        .iter()
+        .filter(|e| e["on_sheet"] == sheet && e["detail"] == detail)
+        .filter_map(|e| e["devices"].as_u64())
+        .sum()
+}
+
+/// In the answer, an enlarged plan is named by its own sheet and view (`on_sheet` E-3, detail 1)
+/// and `target_sheet` is the overall plan it registers on.
+#[test]
+fn an_enlarged_plan_is_named_by_its_own_sheet_and_view() {
+    let l = links();
+    let v = serde_json::to_value(&l).expect("json");
+    let e = &v["enlarged"][0];
+    assert_eq!((e["on_sheet"].as_str(), e["target_sheet"].as_str(), e["detail"].as_str()), (Some("E-3"), Some("E-1"), Some("1")), "{e:#}");
+    assert_eq!(devices_of(&l, "E-3", "1"), 5);
+    assert_eq!(devices_of(&l, "E-1", "1"), 0);
+}
+
+/// A sheet that comes twice in the set (two PDFs of the same sheet) is one enlarged plan, and its
+/// devices count once.
+#[test]
+fn an_enlarged_sheet_printed_twice_counts_once() {
+    let (sheets, mut pages) = the_set();
+    let again: Vec<LinkPage> = linkset::drawings()
+        .iter()
+        .filter(|(n, _)| *n == "E-3")
+        .map(|(n, d)| LinkPage { sheet: sheets.iter().find(|s| s.number == *n).cloned().unwrap_or_default(), read: printlinks::read_page(d, n) })
+        .collect();
+    assert_eq!(again.len(), 1);
+    pages.extend(again);
+    let l = printlinks::link_set(&sheets, &pages);
+    assert_eq!(l.enlarged.len(), 1, "{:#?}", l.enlarged);
+    assert_eq!(devices_of(&l, "E-3", "1"), 5);
     assert_eq!(l.double_counted, 0);
 }

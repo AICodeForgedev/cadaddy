@@ -83,8 +83,8 @@ fn a_folder_of_prints_links_into_one_sheet_map() {
     let e = &v["enlarged"][0];
     assert_eq!(v["enlarged"].as_array().map(Vec::len), Some(1), "{v:#}");
     assert_eq!(
-        (e["sheet"].as_str(), e["target_sheet"].as_str(), e["on_sheet"].as_str(), e["detail"].as_str()),
-        (Some("E-3"), Some("E-3"), Some("E-1"), Some("1"))
+        (e["sheet"].as_str(), e["on_sheet"].as_str(), e["target_sheet"].as_str(), e["overall_sheet"].as_str(), e["detail"].as_str()),
+        (Some("E-3"), Some("E-3"), Some("E-1"), Some("E-1"), Some("1"))
     );
     assert_eq!(e["registered"], json!(true));
     assert_eq!(e["level"], json!("1"));
@@ -146,7 +146,7 @@ fn the_fixture_sets_enlarged_plans_register_on_their_overall_plans() {
         .as_array()
         .expect("enlarged")
         .iter()
-        .map(|e| (e["sheet"].as_str().unwrap_or("").to_string(), e["on_sheet"].as_str().unwrap_or("").to_string(), e["registered"] == true))
+        .map(|e| (e["on_sheet"].as_str().unwrap_or("").to_string(), e["target_sheet"].as_str().unwrap_or("").to_string(), e["registered"] == true))
         .collect();
     let want: Vec<(String, String, bool)> = [("P-401", "P-101", true), ("P-402", "P-102", true), ("P-403", "P-101", true)]
         .iter()
