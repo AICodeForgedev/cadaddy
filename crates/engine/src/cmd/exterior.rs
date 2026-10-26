@@ -19,6 +19,7 @@
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Mesh, MeshFace, MeshKind, RawTag, Space};
 use cadaddy_geom::{Bounds2, Polyline, Vec2, Vec3};
+use cadaddy_walk3d::levels::DatumKind;
 use cadaddy_walk3d::{Band, BandKind, BuildingSpec, Cricket, Equipment, Facade, Roof, RoofSlope, Side};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -609,6 +610,47 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
     }
+    // No explicit roof in the spec: if there is a ROOF datum, build a flat roof from the top
+    // level's building outline (the bounding rectangle of its walls).
+    if roofs == 0
+        && let Some(roof_datum) = sp.datums.iter().find(|dt| dt.kind == DatumKind::Roof)
+        && let Some(top) = sp.levels.iter().max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft))
+    {
+        let z0 = roof_datum.elevation_ft * upf;
+        let bb = top_level_wall_bounds(d, &top.name);
+        if !bb.is_empty() {
+            let poly =
+                vec![Vec2::new(bb.min.x, bb.min.y), Vec2::new(bb.max.x, bb.min.y), Vec2::new(bb.max.x, bb.max.y), Vec2::new(bb.min.x, bb.max.y)];
+            let top_fn = |_: Vec2| z0;
+            if let Some(m) = slab(&poly, &top_fn, upf)
+                && add(d, "3D-Roofs", tag("roof", &roof_datum.name, "auto"), m)
+            {
+                roofs += 1;
+            }
+            // A PARAPET datum above the roof: add parapets round the outline.
+            if let Some(parapet_datum) = sp.datums.iter().find(|dt| dt.kind == DatumKind::Parapet) {
+                let parapet_z = parapet_datum.elevation_ft * upf;
+                if parapet_z > z0 {
+                    let t = 8.0 / 12.0 * upf;
+                    let mut m = super::wallgen::empty_mesh();
+                    for (a, b) in poly.iter().zip(poly.iter().cycle().skip(1)) {
+                        let len = a.dist(*b);
+                        if len <= 1e-9 {
+                            continue;
+                        }
+                        let u = (*b - *a) * (1.0 / len);
+                        // Inward for CCW (our rectangle is CCW).
+                        let inward = Vec2::new(-u.y, u.x);
+                        let (pa, pb) = (*a + inward * (t / 2.0), *b + inward * (t / 2.0));
+                        super::wallgen::add_box(&mut m, pa, pb, t, z0, parapet_z);
+                    }
+                    if add(d, "3D-Parapets", tag("parapet", &roof_datum.name, "auto"), m) {
+                        parapets += 1;
+                    }
+                }
+            }
+        }
+    }
     // The roof surface under a point of a level (for what stands on it).
     let roof_at = |level: &str, p: Vec2| {
         sp.exterior.roofs.iter().filter(|r| r.level.eq_ignore_ascii_case(level)).find_map(|r| {
@@ -701,6 +743,21 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
     }
     json!({ "roofs": roofs, "parapets": parapets, "crickets": crickets, "equipment": equipment, "facadeGlass": glass })
+}
+
+/// The XY bounding box of all wall meshes built on a given level (sheet coordinates).
+fn top_level_wall_bounds(d: &Drawing, level_name: &str) -> Bounds2 {
+    let mut bb = Bounds2::EMPTY;
+    for e in d.model.iter().take(MAX_OBJECTS) {
+        if super::wallgen::made_as(e).as_deref() != Some("wall") {
+            continue;
+        }
+        if !super::bspec::made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(level_name)) {
+            continue;
+        }
+        bb = bb.union(&cadaddy_doc::entity_bounds(d, e, 0));
+    }
+    bb
 }
 
 #[cfg(test)]

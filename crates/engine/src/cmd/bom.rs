@@ -714,6 +714,31 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         missing.push("floors".into());
     }
 
+    // ── Roofs: area from built roof meshes ──
+    for ((part, level), (_n, handles)) in &built {
+        if part != "roof" {
+            continue;
+        }
+        // Measure the roof area from the mesh's XY footprint (the horizontal face area).
+        let area = roof_mesh_area(d, handles, upf);
+        if area > 0.0 {
+            add(
+                lines,
+                Line {
+                    trade: "architecture",
+                    category: "roofs".into(),
+                    item: "Roof area".into(),
+                    unit: "sq ft",
+                    net: area,
+                    status: "model",
+                    level: level.clone(),
+                    elements: handles.clone(),
+                    ..Line::default()
+                },
+            );
+        }
+    }
+
     // ── Rooms: count from ceiling room tags ──
     let mut room_count = 0usize;
     let mut rooms_by_level: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
@@ -825,6 +850,30 @@ fn mesh_wall_dims(mesh: &cadaddy_doc::Mesh, upf: f64) -> (f64, f64) {
     let dy = (max.y - min.y) / upf;
     let height = (max.z - min.z) / upf;
     (height, dx.max(dy))
+}
+
+/// The plan-area (XY footprint, sq ft) of roof meshes referred to by `handles`.
+fn roof_mesh_area(d: &cadaddy_doc::Drawing, handles: &[String], upf: f64) -> f64 {
+    let mut area = 0.0;
+    for hex in handles {
+        let Some(h) = cadaddy_doc::Handle::parse_hex(hex) else { continue };
+        let Some(e) = d.entity(h) else { continue };
+        let cadaddy_doc::EntityKind::Mesh(m) = &e.kind else { continue };
+        // Bounding box plan area (simple, works for rectangular and near-rectangular roofs).
+        let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
+        let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for v in &m.vertices {
+            min_x = min_x.min(v.x);
+            min_y = min_y.min(v.y);
+            max_x = max_x.max(v.x);
+            max_y = max_y.max(v.y);
+        }
+        let a = ((max_x - min_x) * (max_y - min_y)) / (upf * upf);
+        if a.is_finite() && a > 0.0 {
+            area += a;
+        }
+    }
+    (area * 100.0).round() / 100.0
 }
 
 /// Devices detected directly from symbol clusters on the drawing (Q5243 MUST 2).
