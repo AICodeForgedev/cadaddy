@@ -525,3 +525,84 @@ fn hostile_params_never_panic() {
         let _ = p.s.execute("bim.source", &v);
     }
 }
+
+// ---- Q5296: bim.validate after a guided job ----
+
+#[test]
+fn validate_finds_prints_from_a_guided_job() {
+    // A plan with a built model but NO bim.prints: bim.validate used to fail.
+    let mut p = plan();
+    // Confirm that without prints or a job, the error names the calls to make.
+    let e = p.s.execute("bim.validate", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("bim.prints"), "error should name bim.prints: {e}");
+    assert!(e.contains("job.start"), "error should name job.start: {e}");
+
+    // Simulate a guided job that found the plan's devices: write a job state into
+    // the drawing's agent field with devices and sheet regions, as the guided
+    // pipeline would after its Devices stage.
+    let d = p.s.doc_mut().unwrap();
+    let job_state = json!({
+        "guided_job": {
+            "id": "test-job-1",
+            "goal": "bim",
+            "created": "2026-01-01T00:00:00Z",
+            "pdfs_path": "/made-up/prints",
+            "stages": [
+                {"name": "import", "status": "done", "questions": [], "verify": [], "completeness": [], "result": null, "error": null},
+                {"name": "classify", "status": "done", "questions": [], "verify": [], "completeness": [], "result": null, "error": null},
+                {"name": "levels", "status": "done", "questions": [], "verify": [], "completeness": [], "result": null, "error": null},
+                {"name": "rooms", "status": "done", "questions": [], "verify": [], "completeness": [],
+                 "result": {"rooms": [
+                     {"number": "101", "name": "OFFICE", "level": "L1", "sheet": "A-101",
+                      "outline": [[6.0, 6.0], [180.0, 6.0], [180.0, 138.0], [6.0, 138.0]]},
+                     {"number": "102", "name": "STORAGE", "level": "L1", "sheet": "A-101",
+                      "outline": [[180.0, 6.0], [354.0, 6.0], [354.0, 138.0], [180.0, 138.0]]}
+                 ]},
+                 "error": null},
+                {"name": "devices", "status": "done", "questions": [], "verify": [], "completeness": [], "result": null, "error": null},
+                {"name": "bim_build", "status": "done", "questions": [], "verify": [], "completeness": [], "result": null, "error": null}
+            ],
+            "rules": [],
+            "audit": [],
+            "findings": [],
+            "worklist": [],
+            "question_seq": 0,
+            "sheet_regions": [
+                {"number": "E-101", "level": "L1", "discipline": "E", "kind": "plan", "rect": [0.0, 0.0, 360.0, 144.0]}
+            ],
+            "devices": [
+                {"tag": "DUPLEX", "at": [72.0, 6.0], "sheet": "E-101", "level": "L1", "circuit": "", "handle": ""},
+                {"tag": "DUPLEX", "at": [264.0, 6.0], "sheet": "E-101", "level": "L1", "circuit": "", "handle": ""},
+                {"tag": "LT-A", "at": [84.0, 72.0], "sheet": "E-101", "level": "L1", "circuit": "", "handle": ""},
+                {"tag": "LT-A", "at": [264.0, 72.0], "sheet": "E-101", "level": "L1", "circuit": "", "handle": ""}
+            ]
+        }
+    });
+    d.agent = Some(job_state.to_string());
+
+    // Now bim.validate should succeed — it finds the job's devices as prints.
+    let r = p.s.execute("bim.validate", &json!({})).unwrap();
+    assert!(r.get("pass").is_some(), "validate should return a result: {r:#}");
+    assert!(r["total"].as_u64().is_some(), "validate should report total: {r:#}");
+    // The symbols came from the job's 4 devices.
+    let checked = r["checked"].as_object().map(|o| o.values().map(|v| v.as_u64().unwrap_or(0)).sum::<u64>()).unwrap_or(0);
+    assert!(checked > 0, "validate should check something: {r:#}");
+
+    // Rooms from the job's Rooms stage should also be picked up.
+    let counts_r = p.s.execute("bim.validate", &json!({"checks": ["counts"]})).unwrap();
+    // The validator ran on room counts — we won't assert pass/fail (the coordinates
+    // in the synthetic job don't perfectly match the model), just that it ran.
+    assert!(counts_r["checked"]["counts"].as_u64().unwrap_or(0) > 0, "counts should run: {counts_r:#}");
+}
+
+#[test]
+fn validate_error_names_calls_when_no_prints_and_no_job() {
+    // A fresh drawing with a spec but no prints and no job: the error message should
+    // name both bim.prints and job.start so the caller knows what to do.
+    let mut s = Session::new();
+    s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let e = s.execute("bim.validate", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("bim.prints"), "should name bim.prints: {e}");
+    assert!(e.contains("job.start"), "should name job.start: {e}");
+}
