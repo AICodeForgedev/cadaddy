@@ -564,3 +564,88 @@ fn an_enlarged_plan_whose_walls_lie_nowhere_on_its_plan_stays_unregistered() {
     assert!(!e.registered, "{e:#?}");
     assert_eq!(l.enlarged_registered, 0);
 }
+
+/// A core plan whose linework comes apart into two blocks a little apart: both pieces are view
+/// 1's, all five devices counted, whether its title is read (over a scale line), read without
+/// a scale line, or not printed at all (the sheet's biggest block).
+#[test]
+fn a_core_plan_in_pieces_counts_every_piece() {
+    for title in [Some(("ENLARGED FIRST FLOOR CORE PLAN", true)), Some(("ENLARGED FIRST FLOOR CORE PLAN", false)), None] {
+        let (sheets, pages) = with_e3(linkset::enlarged_sheet_in_pieces(0.4, title));
+        let l = printlinks::link_set(&sheets, &pages);
+        assert_eq!(l.enlarged.len(), 1, "{title:?}: {:#?}", l.enlarged);
+        assert_eq!(devices_of(&l, "E-3", "1"), 5, "{title:?}: {:#?}", l.enlarged);
+        let core = &l.enlarged[0];
+        assert!(core.registered, "{title:?}: {core:#?}");
+        assert_eq!(core.overall_ignored, 3, "{title:?}: {core:#?}");
+        assert_eq!(l.double_counted, 0);
+    }
+}
+
+/// Pieces too far apart to read as one plan: once the view registers on the overall plan, the
+/// box drawn round the enlarged area there takes in every device of the sheet that lands in it.
+#[test]
+fn the_overall_plans_box_counts_the_pieces_its_view_missed() {
+    let (sheets, pages) = with_e3(linkset::enlarged_sheet_in_pieces(2.5, Some(("ENLARGED FIRST FLOOR CORE PLAN", true))));
+    let l = printlinks::link_set(&sheets, &pages);
+    let core = l.enlarged.iter().find(|e| e.detail == "1").expect("view 1");
+    assert!(core.registered, "{core:#?}");
+    assert_eq!((core.devices, core.devices_from.as_str()), (5, "boundary"), "{core:#?}");
+    assert_eq!(core.boundary, Some([7.5, 3.5, 16.5, 12.5]), "the box drawn on E-1: {core:#?}");
+    assert_eq!(core.overall_ignored, 3);
+    assert_eq!(devices_of(&l, "E-3", "1"), 5);
+    assert_eq!(l.double_counted, 0);
+}
+
+/// An enlarged plan says what it left out: marks that are no device type, symbols with no mark.
+#[test]
+fn an_enlarged_plan_reports_the_symbols_it_left_out() {
+    let mut e3 = linkset::enlarged_sheet(Some(("ENLARGED FIRST FLOOR CORE PLAN", true)));
+    let (sheets, _) = the_set();
+    // A keynote number beside one symbol (lettering, not a type).
+    let mut ins = None;
+    for e in e3.model.iter() {
+        if let cadaddy_doc::EntityKind::Insert(i) = &e.kind {
+            ins = Some(i.clone());
+            break;
+        }
+    }
+    let mut ins = ins.expect("a device");
+    ins.insert = cadaddy_geom::Vec3::new(8.0, 8.0, 0.0);
+    if let Some(a) = ins.attribs.first_mut() {
+        a.text.value = "12".into();
+    }
+    let mut bare = ins.clone();
+    bare.insert = cadaddy_geom::Vec3::new(16.0, 16.0, 0.0);
+    bare.attribs.clear();
+    let common = cadaddy_doc::Common::default();
+    e3.add(&cadaddy_doc::Space::Model, common.clone(), cadaddy_doc::EntityKind::Insert(ins)).expect("add");
+    e3.add(&cadaddy_doc::Space::Model, common, cadaddy_doc::EntityKind::Insert(bare)).expect("add");
+    let (_, pages) = with_e3(e3);
+    let l = printlinks::link_set(&sheets, &pages);
+    let core = l.enlarged.iter().find(|e| e.detail == "1").expect("view 1");
+    assert_eq!(core.devices, 5, "{core:#?}");
+    assert_eq!(core.uncounted_tags.get("12"), Some(&1), "{core:#?}");
+    assert_eq!(core.untagged_symbols, 1, "{core:#?}");
+    let v = serde_json::to_value(core).expect("json");
+    assert_eq!(v["untagged_symbols"], 1);
+    assert_eq!(v["uncounted_tags"]["12"], 1);
+}
+
+/// The core plan in pieces printed and imported: still one view 1 with all five devices.
+#[test]
+fn a_printed_core_plan_in_pieces_counts_every_piece() {
+    let (sheets, mut pages) = printed_set();
+    let pdf = linkset::print(&linkset::enlarged_sheet_in_pieces(0.4, Some(("ENLARGED FIRST FLOOR CORE PLAN", true))))
+        .unwrap_or_else(|e| panic!("E-3: {e}"));
+    let (page, _) = cadaddy_io::pdf_read::read_json(&pdf, &serde_json::json!({"page": 1, "images": false, "fills": "merge"}))
+        .unwrap_or_else(|e| panic!("E-3: {e}"));
+    for p in pages.iter_mut().filter(|p| p.sheet.number == "E-3") {
+        p.read = printlinks::read_page(&page, "E-3");
+    }
+    let l = printlinks::link_set(&sheets, &pages);
+    assert_eq!(devices_of(&l, "E-3", "1"), 5, "{:#?}", l.enlarged);
+    let core = l.enlarged.iter().find(|e| e.detail == "1").expect("view 1");
+    assert!(core.registered, "{core:#?}");
+    assert_eq!(l.double_counted, 0);
+}

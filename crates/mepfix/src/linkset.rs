@@ -254,6 +254,31 @@ pub fn enlarged_sheet(title: Option<(&str, bool)>) -> Drawing {
     s.d
 }
 
+/// E-3 with its core plan drawn in two pieces `gap` apart (a big plan's linework comes apart
+/// into blocks): the west rooms, then the wider east rooms, five devices across both. Titled
+/// as [`enlarged_sheet`] takes it.
+pub fn enlarged_sheet_in_pieces(gap: f64, title: Option<(&str, bool)>) -> Drawing {
+    let mut s = Sheet::new();
+    s.title_block("E-3", "ELECTRICAL ENLARGED PLANS");
+    s.grid(&[("2", 4.0), ("3", 12.0), ("4", 20.0)], &[("A", 4.0), ("B", 12.0), ("C", 20.0)], [2.5, 21.5], [2.5, 21.5]);
+    let w = 12.0 - gap;
+    for r in [[4.0, 4.0, w, 12.0], [4.0, 12.0, w, 20.0], [12.0, 4.0, 20.0, 12.0], [12.0, 12.0, 20.0, 20.0]] {
+        s.rect(r);
+    }
+    for p in [[6.0, 6.0], [9.0, 14.0], [14.0, 10.0], [18.0, 19.0], [20.5, 8.0]] {
+        s.device("A", p);
+    }
+    if let Some((t, scale_line)) = title {
+        if scale_line {
+            s.view_title("1", "E-3", t, "SCALE: 1/4\" = 1'-0\"", [4.0, 1.2]);
+        } else {
+            s.bubble([3.2, 1.32], "1", "E-3");
+            s.text(t, [4.0, 1.2], 0.25, 0.0);
+        }
+    }
+    s.d
+}
+
 /// E-3 the way a real enlarged sheet may print it: the core plan as view 1, titled by its area
 /// alone (no level, no "PLAN"), and two small enlarged rooms beside it as titled views 4 and 5
 /// with two devices each. With `scale_line` false the core's title and scale share one line

@@ -148,6 +148,8 @@ pub struct PageRead {
     /// Boxes drawn dashed (rows of dashes): how an enlarged area's boundary is usually drawn.
     pub dash_boxes: Vec<[f64; 4]>,
     pub devices: Vec<PageDevice>,
+    /// Where the symbols with no mark beside them are (legend samples left out).
+    pub untagged: Vec<[f64; 2]>,
     /// Device types its legends and schedules list.
     pub legend_types: BTreeSet<String>,
     pub match_lines: Vec<PageMatchLine>,
@@ -211,6 +213,16 @@ pub struct Enlarged {
     /// Devices the enlarged plan shows (it is the authority inside its boundary).
     pub devices: usize,
     pub devices_by_type: BTreeMap<String, usize>,
+    /// What `devices` were counted in: `view` (the view's linework on its sheet) or `boundary`
+    /// (the box drawn round the enlarged area on the overall plan, through the registration).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub devices_from: String,
+    /// Symbols there whose mark is not a device type (by mark), symbols with no mark, and
+    /// devices left to a smaller enlarged view of the sheet: what `devices` left out.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub uncounted_tags: BTreeMap<String, usize>,
+    pub untagged_symbols: usize,
+    pub in_smaller_views: usize,
     /// The overall plan's devices inside the boundary, left out of the count.
     pub overall_ignored: usize,
     /// The handles of the devices counted in `devices` (symbols on the enlarged sheet).
@@ -1010,6 +1022,30 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         out.views.push(pv);
     }
     if enlarged_page {
+        // A titled plan view may come apart into blocks too: the pieces beside it that no other
+        // view claims are its.
+        let gap = sheet_width(&blocks) * MAIN_PLAN_GAP;
+        let all: Vec<[f64; 4]> = blocks.iter().map(|(b, _)| *b).collect();
+        let regions: Vec<Option<[f64; 4]>> = out.views.iter().map(|v| v.region).collect();
+        for i in 0..out.views.len() {
+            let Some(v) = out.views.get(i) else { continue };
+            let Some(r) = v.region else { continue };
+            if NOT_PLAN_WORDS.iter().any(|w| v.title.to_ascii_uppercase().contains(w)) {
+                continue;
+            }
+            let claimed: Vec<[f64; 4]> = regions.iter().enumerate().filter(|(j, _)| *j != i).filter_map(|(_, g)| *g).collect();
+            let titles: Vec<[f64; 2]> = spots.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, t)| *t).collect();
+            let grown = grow_plan(r, &all, &claimed, &titles, gap);
+            if grown != r {
+                let mut w = view_of(Some(grown), true);
+                if let Some(v) = out.views.get_mut(i) {
+                    w.number = std::mem::take(&mut v.number);
+                    w.title = std::mem::take(&mut v.title);
+                    w.scale_text = v.scale_text.take();
+                    *v = w;
+                }
+            }
+        }
         // Its biggest block of linework is the enlarged plan: the sheet's only view when no title
         // was read, or its main plan beside small titled details when no title claims it (a
         // title printed where this reader doesn't look for one). The title block's strip at the
@@ -1021,6 +1057,15 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         if let Some(r) = main {
             let mid = [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0];
             out.whole_free = !out.views.iter().filter_map(|v| v.region).any(|g| overlap_ratio(&g, &r) >= 0.3 || inside(&g, mid));
+            // A big plan may come apart into several blocks (a gap in the linework, walls too
+            // long to join them): the pieces beside it that no titled view claims are its too.
+            let claimed: Vec<[f64; 4]> = out.views.iter().filter_map(|v| v.region).collect();
+            let r = if out.whole_free {
+                let free: Vec<[f64; 4]> = blocks.iter().map(|(b, _)| *b).filter(|b| !in_title_strip(b)).collect();
+                grow_plan(r, &free, &claimed, &spots, gap)
+            } else {
+                r
+            };
             let mut w = view_of(Some(r), true);
             // Under the plan: its number bubble (a bubble naming this sheet) and its title.
             let (bw, bh) = (r[2] - r[0], r[3] - r[1]);
@@ -1084,6 +1129,9 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         }
         let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
         let at = ins.insert.xy();
+        if tag.is_empty() && !legend.covers(at) && out.untagged.len() < MAX_PAGE_DEVICES {
+            out.untagged.push([at.x, at.y]);
+        }
         if tag.is_empty() || legend.covers(at) || is_circuit_tag(&tag) {
             continue;
         }
@@ -1230,6 +1278,77 @@ fn view_block(blocks: &[([f64; 4], usize)], at: [f64; 2], h: f64, others: &[[f64
     Some(b)
 }
 
+/// Count into `entry` the page's devices at a place `holds` takes, leaving out those inside the
+/// sheet's `smaller` enlarged views.
+fn count_devices(
+    entry: &mut Enlarged,
+    page: &LinkPage,
+    smaller: &[[f64; 4]],
+    holds: &dyn Fn([f64; 2]) -> bool,
+    device_type: &dyn Fn(&BTreeSet<String>, &str) -> Option<String>,
+) {
+    for dv in page.read.devices.iter().filter(|dv| holds(dv.at) && !smaller.iter().any(|r| inside(r, dv.at))) {
+        match device_type(&page.read.legend_types, &dv.tag) {
+            Some(t) => {
+                *entry.devices_by_type.entry(t).or_default() += 1;
+                entry.devices += 1;
+                entry.device_handles.push(dv.handle.clone());
+            }
+            None if entry.uncounted_tags.len() < MAX_UNCOUNTED_TAGS || entry.uncounted_tags.contains_key(&dv.tag) => {
+                *entry.uncounted_tags.entry(dv.tag.clone()).or_default() += 1;
+            }
+            None => {}
+        }
+    }
+    entry.untagged_symbols = page.read.untagged.iter().filter(|p| holds(**p) && !smaller.iter().any(|r| inside(r, **p))).count();
+    entry.in_smaller_views = page.read.devices.iter().filter(|dv| holds(dv.at) && smaller.iter().any(|r| inside(r, dv.at))).count();
+}
+
+/// Most tags listed in an enlarged plan's `uncounted_tags`.
+const MAX_UNCOUNTED_TAGS: usize = 24;
+
+/// How far apart (share of the sheet's width) two blocks of one plan may lie.
+const MAIN_PLAN_GAP: f64 = 0.03;
+
+/// The main plan `r` with the blocks beside it (within `gap`) that are not a titled view's:
+/// neither overlapping a view's region nor holding a view title.
+/// The width the sheet's blocks of linework span.
+fn sheet_width(blocks: &[([f64; 4], usize)]) -> f64 {
+    let hi = blocks.iter().map(|(r, _)| r[2]).fold(f64::NEG_INFINITY, f64::max);
+    let lo = blocks.iter().map(|(r, _)| r[0]).fold(f64::INFINITY, f64::min);
+    if hi > lo { hi - lo } else { 0.0 }
+}
+
+fn grow_plan(r: [f64; 4], blocks: &[[f64; 4]], claimed: &[[f64; 4]], titles: &[[f64; 2]], gap: f64) -> [f64; 4] {
+    if !(gap.is_finite() && gap > 0.0) {
+        return r;
+    }
+    let free = |b: &[f64; 4]| !claimed.iter().any(|g| covered(g, b) >= 0.3 || covered(b, g) >= 0.3) && !titles.iter().any(|t| inside(b, *t));
+    // Flat strips (a title's bar, a border) are never plan.
+    let shaped = |b: &[f64; 4]| {
+        let (w, h) = (b[2] - b[0], b[3] - b[1]);
+        w > 0.0 && h > 0.0 && w.min(h) >= 0.1 * w.max(h)
+    };
+    let mut out = r;
+    for _ in 0..8 {
+        let mut grew = false;
+        for b in blocks.iter().filter(|b| free(b) && shaped(b)) {
+            let near = b[0] <= out[2] + gap && b[2] >= out[0] - gap && b[1] <= out[3] + gap && b[3] >= out[1] - gap;
+            let adds = b[0] < out[0] || b[1] < out[1] || b[2] > out[2] || b[3] > out[3];
+            let grown = [out[0].min(b[0]), out[1].min(b[1]), out[2].max(b[2]), out[3].max(b[3])];
+            // Growing must not swallow a titled view.
+            if near && adds && !claimed.iter().any(|g| covered(g, &grown) >= 0.5 && covered(g, &out) < 0.5) {
+                out = grown;
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    out
+}
+
 /// A circuit or panel reference (`D-1`, `LP-12`): a wiring label, not a type.
 fn is_circuit_tag(tag: &str) -> bool {
     tag.rsplit_once('-').is_some_and(|(head, n)| !head.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
@@ -1272,6 +1391,14 @@ fn grid_fit(view: &PageView, host_x: &[(String, f64)], host_y: &[(String, f64)])
 }
 
 /// The overlap of two boxes over their union (0 when apart).
+/// The share of `a`'s area that lies in `b`.
+fn covered(a: &[f64; 4], b: &[f64; 4]) -> f64 {
+    let w = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
+    let h = (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
+    let area = (a[2] - a[0]).max(0.0) * (a[3] - a[1]).max(0.0);
+    if area > 0.0 { w * h / area } else { 0.0 }
+}
+
 fn overlap_ratio(a: &[f64; 4], b: &[f64; 4]) -> f64 {
     let w = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
     let h = (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
@@ -1465,27 +1592,25 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
         let detail = e.detail.clone();
         let mut level = level_of_view(e.page, e.view);
         let mut entry = Enlarged { sheet: target.clone(), detail: detail.clone(), title: e.view.title.clone(), ..Enlarged::default() };
-        // Its devices: the enlarged sheet's symbols inside the view.
-        if let Some(rg) = e.view.region {
-            // Devices just outside the walls (lights on the facade) are the view's too. A device
-            // inside a smaller enlarged view of the same sheet is that view's (the main plan's
-            // block can take in the details beside it).
-            let m = 0.08 * (rg[2] - rg[0]).max(rg[3] - rg[1]);
-            let reach = [rg[0] - m, rg[1] - m, rg[2] + m, rg[3] + m];
-            let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
-            let smaller: Vec<[f64; 4]> = enl_views
+        // Its devices: the enlarged sheet's symbols inside the view. A device inside a smaller
+        // enlarged view of the same sheet is that view's (the main plan's block can take in the
+        // details beside it).
+        let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+        let smaller: Vec<[f64; 4]> = match e.view.region {
+            Some(rg) => enl_views
                 .iter()
                 .filter(|o| std::ptr::eq(o.page, e.page))
                 .filter_map(|o| o.view.region)
                 .filter(|r| *r != rg && area(r) < area(&rg))
-                .collect();
-            for dv in e.page.read.devices.iter().filter(|dv| inside(&reach, dv.at) && !smaller.iter().any(|r| inside(r, dv.at))) {
-                if let Some(t) = device_type(&e.page.read.legend_types, &dv.tag) {
-                    *entry.devices_by_type.entry(t).or_default() += 1;
-                    entry.devices += 1;
-                    entry.device_handles.push(dv.handle.clone());
-                }
-            }
+                .collect(),
+            None => Vec::new(),
+        };
+        if let Some(rg) = e.view.region {
+            // Devices just outside the walls (lights on the facade) are the view's too.
+            let m = 0.08 * (rg[2] - rg[0]).max(rg[3] - rg[1]);
+            let reach = [rg[0] - m, rg[1] - m, rg[2] + m, rg[3] + m];
+            count_devices(&mut entry, e.page, &smaller, &|p| inside(&reach, p), &device_type);
+            entry.devices_from = "view".into();
         }
         // The overall plan: the sheet whose callout points here, else a plan of the level.
         let points_here =
@@ -1696,12 +1821,32 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 // Placed by the grid, the plan's own outline is the boundary, unless a box drawn
                 // round about the same area says it more exactly.
                 let placed = e.view.region.map(|rg| map_box(&f, &rg));
+                // The plan read off its sheet may be only part of the area boxed (a big plan comes
+                // apart into pieces): lying mostly inside the box, the box is the boundary.
                 let b = match (how, boxed, placed) {
-                    ("grids" | "tags" | "lines", Some(bx), Some(pl)) if overlap_ratio(&bx, &pl) >= 0.5 => Some(bx),
+                    ("grids" | "tags" | "lines", Some(bx), Some(pl)) if overlap_ratio(&bx, &pl) >= 0.5 || covered(&pl, &bx) >= 0.7 => Some(bx),
                     ("grids" | "tags" | "lines", _, Some(pl)) => Some(pl),
                     _ => boxed.or(placed),
                 };
                 entry.boundary = b;
+                // A box drawn on the overall plan round the enlarged area says what the
+                // enlarged plan covers better than the blocks of linework read off its sheet (a
+                // big plan comes apart into pieces): every device of the sheet that lands in it.
+                if let (Some(bx), Some(rg)) = (boxed.filter(|bx| b == Some(*bx)), e.view.region) {
+                    let pad = 0.02 * (bx[2] - bx[0]).hypot(bx[3] - bx[1]);
+                    let wide = [bx[0] - pad, bx[1] - pad, bx[2] + pad, bx[3] + pad];
+                    let mut by_box = Enlarged::default();
+                    count_devices(&mut by_box, e.page, &smaller, &|p| inside(&wide, f.apply(p)), &device_type);
+                    // Only more of the same plan, never a swap for somewhere else: most of what the
+                    // view counted lands in the box too.
+                    let kept = entry.device_handles.iter().filter(|h| by_box.device_handles.contains(h)).count();
+                    if by_box.devices > entry.devices && kept * 2 >= entry.devices && covered(&map_box(&f, &rg), &bx) >= 0.7 {
+                        entry.devices = by_box.devices;
+                        entry.devices_by_type = by_box.devices_by_type;
+                        entry.device_handles = by_box.device_handles;
+                        entry.devices_from = "boundary".into();
+                    }
+                }
                 if let Some(b) = b {
                     entry.ignored_handles = h
                         .read
