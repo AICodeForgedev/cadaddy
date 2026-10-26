@@ -58,7 +58,15 @@ fn takeoff_from_the_sheets_matches_the_answer_key_per_trade() {
             assert!(!l[k].is_null(), "{k} in {l}");
         }
     }
-    assert!(r["missing"].as_array().unwrap().iter().any(|m| m.as_str().unwrap_or("").contains("unmarked door symbol")), "{}", r["missing"]);
+    assert!(
+        r["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m.as_str().unwrap_or("").contains("legend sample") || m.as_str().unwrap_or("").contains("unmarked door symbol")),
+        "{}",
+        r["missing"]
+    );
 
     // Filters: one room, one trade.
     let r = s

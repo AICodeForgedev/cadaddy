@@ -412,8 +412,9 @@ fn read_takeoff_equals_the_truth_takeoff_on_seed_3() {
     }
     assert_eq!(truth.items.len(), read.items.len());
     assert!(read.items.len() > 400, "seed 3 should give a full takeoff, got {}", read.items.len());
-    // The read found two unmarked door symbols outside the building: reported, not counted.
-    assert!(read.missing.iter().any(|m| m.contains("unmarked door symbol")), "{:?}", read.missing);
+    // The read found unmarked door symbols outside the building (the reader takes them for legend
+    // samples): reported, not counted.
+    assert!(read.missing.iter().any(|m| m.contains("legend sample") || m.contains("unmarked door symbol")), "{:?}", read.missing);
 }
 
 #[test]

@@ -618,7 +618,8 @@ pub fn input_from_read(arch: &ArchResult, walls: &WallResult, ceilings: &Ceiling
             .map(|s| s.number.clone())
             .unwrap_or_default()
     };
-    let mut notes = Vec::new();
+    // What the reader left out (unmarked swings off the slab: legend samples) is reported, not counted.
+    let mut notes: Vec<String> = arch.ignored.iter().map(|w| format!("{w}: not counted")).collect();
     let twalls: Vec<TakeoffWall> = walls
         .walls
         .iter()
