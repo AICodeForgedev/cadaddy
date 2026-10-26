@@ -13,6 +13,11 @@ use crate::truth::{Room, Truth};
 use cadaddy_doc::{Drawing, EntityKind};
 use std::collections::BTreeMap;
 
+/// Whether a layer name is a device layer (DEVICE, E-DEVICE, etc.).
+fn is_device_layer(layer: &str) -> bool {
+    layer.to_ascii_uppercase().contains("DEVICE")
+}
+
 // ---- Default mounting height rules (inches AFF) ----------------------------------------
 
 /// Default mounting height rules by device kind, used when no note is present on the device.
@@ -154,7 +159,7 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
     // Collect all DEVICE-layer geometry centres.
     let mut centres: Vec<([f64; 2], &str)> = Vec::new(); // (centre, shape hint)
     for e in d.model.iter() {
-        if !e.common.layer.eq_ignore_ascii_case("DEVICE") {
+        if !is_device_layer(&e.common.layer) {
             continue;
         }
         match &e.kind {
@@ -211,7 +216,7 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
     // Collect all TEXT-layer text with positions.
     let mut texts: Vec<(String, [f64; 2])> = Vec::new();
     for e in d.model.iter() {
-        if !e.common.layer.eq_ignore_ascii_case("TEXT") && !e.common.layer.eq_ignore_ascii_case("DEVICE") {
+        if !e.common.layer.eq_ignore_ascii_case("TEXT") && !is_device_layer(&e.common.layer) {
             continue;
         }
         match &e.kind {
@@ -466,7 +471,7 @@ fn parse_mounting_height(texts: &[&(String, [f64; 2])], kind: &str) -> (f64, &'s
 pub(crate) fn detect_panels(d: &Drawing) -> Vec<DetectedPanel> {
     let mut rects: Vec<([f64; 2], [f64; 2])> = Vec::new();
     for e in d.model.iter() {
-        if !e.common.layer.eq_ignore_ascii_case("DEVICE") {
+        if !is_device_layer(&e.common.layer) {
             continue;
         }
         if let EntityKind::LwPolyline(p) = &e.kind
