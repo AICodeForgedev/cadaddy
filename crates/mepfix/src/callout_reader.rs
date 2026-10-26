@@ -204,11 +204,8 @@ pub fn read_callouts(d: &Drawing) -> Vec<ReadCallout> {
             }
             // For CALLOUT-layer circles, strongly prefer CALLOUT-layer text.
             // A CALLOUT-layer text always beats a non-CALLOUT text, even if farther.
-            let better_top = if is_callout_layer {
-                (*on_callout && !top_on_callout) || (*on_callout == top_on_callout && d < top_dist)
-            } else {
-                d < top_dist
-            };
+            let better_top =
+                if is_callout_layer { (*on_callout && !top_on_callout) || (*on_callout == top_on_callout && d < top_dist) } else { d < top_dist };
             let better_bottom = if is_callout_layer {
                 (*on_callout && !bottom_on_callout) || (*on_callout == bottom_on_callout && d < bottom_dist)
             } else {
@@ -317,11 +314,7 @@ pub fn read_callouts(d: &Drawing) -> Vec<ReadCallout> {
 ///
 /// Match lines appear where a plan is split across two sheets. Each side has a dashed line
 /// with the other sheet's number next to it (e.g., "SEE SHEET M-102").
-fn read_match_lines(
-    _d: &Drawing,
-    texts: &[(String, [f64; 2], bool)],
-    lines: &[([f64; 2], [f64; 2], bool)],
-) -> Vec<ReadCallout> {
+fn read_match_lines(_d: &Drawing, texts: &[(String, [f64; 2], bool)], lines: &[([f64; 2], [f64; 2], bool)]) -> Vec<ReadCallout> {
     let mut out = Vec::new();
 
     // Look for long dashed lines with "SEE SHEET" or "MATCH LINE" text nearby.
@@ -513,10 +506,7 @@ pub fn read_sheet_details(d: &Drawing) -> Vec<String> {
 /// - Its target sheet exists but does not contain the referenced detail number.
 ///
 /// DXF files that fail to read produce a `ReadError` rather than being silently skipped.
-pub fn resolve_callouts(
-    dxf_files: &[(String, Vec<u8>)],
-    sheet_numbers: &[String],
-) -> (Vec<ResolvedCallout>, Vec<ResolvedCallout>, Vec<ReadError>) {
+pub fn resolve_callouts(dxf_files: &[(String, Vec<u8>)], sheet_numbers: &[String]) -> (Vec<ResolvedCallout>, Vec<ResolvedCallout>, Vec<ReadError>) {
     // Build a map of sheet number → detail numbers found on that sheet.
     let mut sheet_details: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     let mut read_errors = Vec::new();
@@ -532,10 +522,7 @@ pub fn resolve_callouts(
                 sheet_drawings.push((sheet_number, d));
             }
             Err(e) => {
-                read_errors.push(ReadError {
-                    file: name.clone(),
-                    reason: format!("failed to read DXF: {e}"),
-                });
+                read_errors.push(ReadError { file: name.clone(), reason: format!("failed to read DXF: {e}") });
             }
         }
     }
@@ -549,30 +536,20 @@ pub fn resolve_callouts(
         for co in callouts {
             if co.kind == "key_plan" {
                 // Key plans are always resolved (they don't point to external targets).
-                resolved.push(ResolvedCallout {
-                    callout: co,
-                    on_sheet: sheet_number.clone(),
-                    resolved: true,
-                    reason: String::new(),
-                });
+                resolved.push(ResolvedCallout { callout: co, on_sheet: sheet_number.clone(), resolved: true, reason: String::new() });
                 continue;
             }
 
             if co.kind == "match_line" {
                 // Match lines: resolve by checking the target sheet exists.
                 let exists = sheet_numbers.contains(&co.target_sheet);
-                let reason = if exists {
-                    String::new()
+                let reason = if exists { String::new() } else { format!("match line target sheet {} not in set", co.target_sheet) };
+                let rc = ResolvedCallout { callout: co, on_sheet: sheet_number.clone(), resolved: exists, reason };
+                if exists {
+                    resolved.push(rc);
                 } else {
-                    format!("match line target sheet {} not in set", co.target_sheet)
-                };
-                let rc = ResolvedCallout {
-                    callout: co,
-                    on_sheet: sheet_number.clone(),
-                    resolved: exists,
-                    reason,
-                };
-                if exists { resolved.push(rc); } else { broken.push(rc); }
+                    broken.push(rc);
+                }
                 continue;
             }
 
@@ -589,12 +566,7 @@ pub fn resolve_callouts(
 
             if !sheet_numbers.contains(&co.target_sheet) {
                 let reason = format!("target sheet {} does not exist in the set", co.target_sheet);
-                broken.push(ResolvedCallout {
-                    on_sheet: sheet_number.clone(),
-                    resolved: false,
-                    reason,
-                    callout: co,
-                });
+                broken.push(ResolvedCallout { on_sheet: sheet_number.clone(), resolved: false, reason, callout: co });
                 continue;
             }
 
@@ -627,25 +599,12 @@ pub fn resolve_callouts(
             };
 
             if detail_missing {
-                let reason = format!(
-                    "target sheet {} exists but has no detail {}",
-                    co.target_sheet, co.detail
-                );
-                broken.push(ResolvedCallout {
-                    on_sheet: sheet_number.clone(),
-                    resolved: false,
-                    reason,
-                    callout: co,
-                });
+                let reason = format!("target sheet {} exists but has no detail {}", co.target_sheet, co.detail);
+                broken.push(ResolvedCallout { on_sheet: sheet_number.clone(), resolved: false, reason, callout: co });
                 continue;
             }
 
-            resolved.push(ResolvedCallout {
-                on_sheet: sheet_number.clone(),
-                resolved: true,
-                reason: String::new(),
-                callout: co,
-            });
+            resolved.push(ResolvedCallout { on_sheet: sheet_number.clone(), resolved: true, reason: String::new(), callout: co });
         }
     }
 
@@ -704,10 +663,7 @@ pub struct CalloutSummary {
 }
 
 /// Build a compact callout summary list for display.
-pub fn callout_summary(
-    resolved: &[ResolvedCallout],
-    broken: &[ResolvedCallout],
-) -> Vec<CalloutSummary> {
+pub fn callout_summary(resolved: &[ResolvedCallout], broken: &[ResolvedCallout]) -> Vec<CalloutSummary> {
     let mut out = Vec::new();
     for r in resolved {
         out.push(CalloutSummary {

@@ -11,12 +11,7 @@ use cadaddy_mepfix::{generate, generate_hotel, hotel};
 // ---- Helpers ----
 
 /// Generate a fixture set, read back the DXFs, and return (truth, resolved, broken, errors).
-fn fixture(seed: u64) -> (
-    cadaddy_mepfix::truth::Truth,
-    Vec<ResolvedCallout>,
-    Vec<ResolvedCallout>,
-    Vec<callout_reader::ReadError>,
-) {
+fn fixture(seed: u64) -> (cadaddy_mepfix::truth::Truth, Vec<ResolvedCallout>, Vec<ResolvedCallout>, Vec<callout_reader::ReadError>) {
     let set = generate(seed).unwrap_or_else(|e| {
         panic!("generate({seed}): {e}");
     });
@@ -27,12 +22,7 @@ fn fixture(seed: u64) -> (
 }
 
 /// Generate a hotel fixture set, read back the DXFs, and return (truth, resolved, broken, errors).
-fn hotel_fixture(seed: u64) -> (
-    cadaddy_mepfix::truth::Truth,
-    Vec<ResolvedCallout>,
-    Vec<ResolvedCallout>,
-    Vec<callout_reader::ReadError>,
-) {
+fn hotel_fixture(seed: u64) -> (cadaddy_mepfix::truth::Truth, Vec<ResolvedCallout>, Vec<ResolvedCallout>, Vec<callout_reader::ReadError>) {
     let set = generate_hotel(seed, hotel::HotelSize::Small).unwrap_or_else(|e| {
         panic!("generate_hotel({seed}): {e}");
     });
@@ -44,11 +34,7 @@ fn hotel_fixture(seed: u64) -> (
 
 /// Match a truth callout entry against resolved/broken callouts by (on_sheet, detail, target_sheet).
 fn find_match<'a>(truth: &CalloutEntry, all: &'a [ResolvedCallout]) -> Option<&'a ResolvedCallout> {
-    all.iter().find(|r| {
-        r.on_sheet == truth.on_sheet
-            && r.callout.detail == truth.detail
-            && r.callout.target_sheet == truth.target_sheet
-    })
+    all.iter().find(|r| r.on_sheet == truth.on_sheet && r.callout.detail == truth.detail && r.callout.target_sheet == truth.target_sheet)
 }
 
 /// Score callout reading against truth. Returns (matched, missed, false_positives, kind_correct, kind_total).
@@ -73,9 +59,7 @@ fn score(
             } else if te.kind == "match_line" {
                 r.on_sheet == te.on_sheet && r.callout.target_sheet == te.target_sheet
             } else {
-                r.on_sheet == te.on_sheet
-                    && r.callout.detail == te.detail
-                    && r.callout.target_sheet == te.target_sheet
+                r.on_sheet == te.on_sheet && r.callout.detail == te.detail && r.callout.target_sheet == te.target_sheet
             }
         });
         if let Some(r) = found {
@@ -99,14 +83,12 @@ fn score(
     //   bubbles look like callout bubbles but aren't tracked in truth.
     // We only count as FP: callouts on sheets that HAVE truth entries but whose
     // specific (detail, target) is not in truth.
-    let sheets_with_truth: std::collections::HashSet<&str> =
-        truth.iter().map(|te| te.on_sheet.as_str()).collect();
+    let sheets_with_truth: std::collections::HashSet<&str> = truth.iter().map(|te| te.on_sheet.as_str()).collect();
     // Only count callouts as false positives if they point to a target sheet that
     // is completely unknown (not in the fixture's sheet set at all). Real callout
     // bubbles that point to valid sheets but aren't tracked in truth.callouts are
     // view title bubbles or cross-references the truth generator doesn't model.
-    let known_sheets: std::collections::HashSet<&str> =
-        sheet_numbers.iter().map(|s| s.as_str()).collect();
+    let known_sheets: std::collections::HashSet<&str> = sheet_numbers.iter().map(|s| s.as_str()).collect();
     let false_positives = all
         .iter()
         .filter(|r| r.callout.kind != "key_plan" && r.callout.kind != "match_line")
@@ -114,11 +96,7 @@ fn score(
         .filter(|r| !known_sheets.contains(r.callout.target_sheet.as_str()))
         .filter(|r| {
             // Not an FP if it matches a truth entry (including planted broken ones).
-            !truth.iter().any(|te| {
-                te.on_sheet == r.on_sheet
-                    && te.detail == r.callout.detail
-                    && te.target_sheet == r.callout.target_sheet
-            })
+            !truth.iter().any(|te| te.on_sheet == r.on_sheet && te.detail == r.callout.detail && te.target_sheet == r.callout.target_sheet)
         })
         .count();
 
@@ -133,30 +111,30 @@ fn callout_recall_100_percent_seeds_1_to_3() {
         let (truth, resolved, broken, errors) = fixture(seed);
         assert!(errors.is_empty(), "seed {seed}: DXF read errors: {errors:?}");
 
-        let (matched, missed, false_positives, kind_correct, kind_total) = score(&truth.callouts, &resolved, &broken, &truth.sheets.iter().map(|s| s.number.clone()).collect::<Vec<_>>());
+        let (matched, missed, false_positives, kind_correct, kind_total) =
+            score(&truth.callouts, &resolved, &broken, &truth.sheets.iter().map(|s| s.number.clone()).collect::<Vec<_>>());
 
         let total = truth.callouts.len();
         let recall = if total > 0 { matched as f64 / total as f64 } else { 1.0 };
         let kind_acc = if kind_total > 0 { kind_correct as f64 / kind_total as f64 } else { 1.0 };
 
-        assert_eq!(
-            missed, 0,
-            "seed {seed}: recall {recall:.1}% ({matched}/{total}), missed {missed} callouts"
-        );
-        assert_eq!(
-            false_positives, 0,
-            "seed {seed}: {false_positives} false-positive callouts found that are not in truth"
-        );
+        assert_eq!(missed, 0, "seed {seed}: recall {recall:.1}% ({matched}/{total}), missed {missed} callouts");
+        assert_eq!(false_positives, 0, "seed {seed}: {false_positives} false-positive callouts found that are not in truth");
         if kind_acc < 0.90 {
             // Show which kinds are wrong.
             let all: Vec<_> = resolved.iter().chain(broken.iter()).collect();
             for te in &truth.callouts {
-                if te.kind == "key_plan" || te.kind == "match_line" { continue; }
-                if let Some(r) = all.iter().find(|r| {
-                    r.on_sheet == te.on_sheet && r.callout.detail == te.detail && r.callout.target_sheet == te.target_sheet
-                }) {
+                if te.kind == "key_plan" || te.kind == "match_line" {
+                    continue;
+                }
+                if let Some(r) =
+                    all.iter().find(|r| r.on_sheet == te.on_sheet && r.callout.detail == te.detail && r.callout.target_sheet == te.target_sheet)
+                {
                     if r.callout.kind != te.kind {
-                        eprintln!("  KIND MISMATCH on {}: truth={} found={} ({}/{})", te.on_sheet, te.kind, r.callout.kind, te.detail, te.target_sheet);
+                        eprintln!(
+                            "  KIND MISMATCH on {}: truth={} found={} ({}/{})",
+                            te.on_sheet, te.kind, r.callout.kind, te.detail, te.target_sheet
+                        );
                     }
                 }
             }
@@ -170,24 +148,16 @@ fn callout_recall_100_percent_hotel() {
     let (truth, resolved, broken, errors) = hotel_fixture(1);
     assert!(errors.is_empty(), "hotel: DXF read errors: {errors:?}");
 
-    let (matched, missed, false_positives, kind_correct, kind_total) = score(&truth.callouts, &resolved, &broken, &truth.sheets.iter().map(|s| s.number.clone()).collect::<Vec<_>>());
+    let (matched, missed, false_positives, kind_correct, kind_total) =
+        score(&truth.callouts, &resolved, &broken, &truth.sheets.iter().map(|s| s.number.clone()).collect::<Vec<_>>());
 
     let total = truth.callouts.len();
     let recall = if total > 0 { matched as f64 / total as f64 } else { 1.0 };
     let kind_acc = if kind_total > 0 { kind_correct as f64 / kind_total as f64 } else { 1.0 };
 
-    assert_eq!(
-        missed, 0,
-        "hotel: recall {recall:.1}% ({matched}/{total}), missed {missed} callouts"
-    );
-    assert_eq!(
-        false_positives, 0,
-        "hotel: {false_positives} false-positive callouts found that are not in truth"
-    );
-    assert!(
-        kind_acc >= 0.90,
-        "hotel: kind accuracy {kind_acc:.1}% ({kind_correct}/{kind_total}), need >= 90%"
-    );
+    assert_eq!(missed, 0, "hotel: recall {recall:.1}% ({matched}/{total}), missed {missed} callouts");
+    assert_eq!(false_positives, 0, "hotel: {false_positives} false-positive callouts found that are not in truth");
+    assert!(kind_acc >= 0.90, "hotel: kind accuracy {kind_acc:.1}% ({kind_correct}/{kind_total}), need >= 90%");
 }
 
 // ---- MUST 2: Resolve to the DETAIL, not just the sheet ----
@@ -206,11 +176,8 @@ fn broken_callouts_equal_planted_set() {
 
         // Every planted broken callout must appear in the broken list.
         for pb in &planted_broken {
-            let found = broken.iter().any(|b| {
-                b.on_sheet == pb.on_sheet
-                    && b.callout.detail == pb.detail
-                    && b.callout.target_sheet == pb.target_sheet
-            });
+            let found =
+                broken.iter().any(|b| b.on_sheet == pb.on_sheet && b.callout.detail == pb.detail && b.callout.target_sheet == pb.target_sheet);
             assert!(
                 found,
                 "seed {seed}: planted broken callout ({}, detail={}, target={}) not in broken list",
@@ -220,11 +187,9 @@ fn broken_callouts_equal_planted_set() {
 
         // No extra broken callouts beyond the planted ones.
         for b in &broken {
-            let is_planted = planted_broken.iter().any(|pb| {
-                pb.on_sheet == b.on_sheet
-                    && pb.detail == b.callout.detail
-                    && pb.target_sheet == b.callout.target_sheet
-            });
+            let is_planted = planted_broken
+                .iter()
+                .any(|pb| pb.on_sheet == b.on_sheet && pb.detail == b.callout.detail && pb.target_sheet == b.callout.target_sheet);
             assert!(
                 is_planted,
                 "seed {seed}: unexpected broken callout ({}, detail={}, target={}, reason={})",
@@ -241,16 +206,9 @@ fn detail_missing_on_existing_sheet_is_broken() {
     for seed in 1..=3 {
         let (_truth, _resolved, broken, _errors) = fixture(seed);
         let found = broken.iter().find(|b| b.callout.detail == "98" && b.callout.target_sheet == "A-301");
-        assert!(
-            found.is_some(),
-            "seed {seed}: detail-missing callout (98/A-301) not found in broken list"
-        );
+        assert!(found.is_some(), "seed {seed}: detail-missing callout (98/A-301) not found in broken list");
         let r = found.unwrap();
-        assert!(
-            r.reason.contains("no detail"),
-            "seed {seed}: detail-missing reason should mention 'no detail', got: {}",
-            r.reason
-        );
+        assert!(r.reason.contains("no detail"), "seed {seed}: detail-missing reason should mention 'no detail', got: {}", r.reason);
     }
 }
 
@@ -260,10 +218,7 @@ fn empty_target_sheet_is_broken() {
     for seed in 1..=3 {
         let (_truth, _resolved, broken, _errors) = fixture(seed);
         let found = broken.iter().find(|b| b.callout.detail == "97" && b.callout.target_sheet.is_empty());
-        assert!(
-            found.is_some(),
-            "seed {seed}: empty-target callout (97) not found in broken list"
-        );
+        assert!(found.is_some(), "seed {seed}: empty-target callout (97) not found in broken list");
         let r = found.unwrap();
         assert!(
             r.reason.contains("empty") || r.reason.contains("unreadable"),
@@ -283,25 +238,12 @@ fn match_lines_link_adjacent_sheets() {
     // Match lines may or may not be generated for the hotel depending on whether
     // there are multiple M-sheets for the same level. If there are, verify they're read.
     if !truth_match_lines.is_empty() {
-        let found_match_lines: Vec<_> = resolved
-            .iter()
-            .filter(|r| r.callout.kind == "match_line")
-            .collect();
-        assert!(
-            !found_match_lines.is_empty(),
-            "hotel: truth has {} match lines but none were found",
-            truth_match_lines.len()
-        );
+        let found_match_lines: Vec<_> = resolved.iter().filter(|r| r.callout.kind == "match_line").collect();
+        assert!(!found_match_lines.is_empty(), "hotel: truth has {} match lines but none were found", truth_match_lines.len());
         // Each truth match line should be found.
         for tm in &truth_match_lines {
-            let found = found_match_lines.iter().any(|r| {
-                r.on_sheet == tm.on_sheet && r.callout.target_sheet == tm.target_sheet
-            });
-            assert!(
-                found,
-                "hotel: match line ({} → {}) not found",
-                tm.on_sheet, tm.target_sheet
-            );
+            let found = found_match_lines.iter().any(|r| r.on_sheet == tm.on_sheet && r.callout.target_sheet == tm.target_sheet);
+            assert!(found, "hotel: match line ({} → {}) not found", tm.on_sheet, tm.target_sheet);
         }
     }
 }
@@ -315,15 +257,14 @@ fn enlarged_plan_callouts_have_correct_targets() {
 
         let truth_enlarged: Vec<_> = truth.callouts.iter().filter(|c| c.kind == "enlarged_plan" && !c.broken).collect();
         for te in &truth_enlarged {
-            let found = resolved.iter().find(|r| {
-                r.on_sheet == te.on_sheet
-                    && r.callout.detail == te.detail
-                    && r.callout.target_sheet == te.target_sheet
-            });
+            let found =
+                resolved.iter().find(|r| r.on_sheet == te.on_sheet && r.callout.detail == te.detail && r.callout.target_sheet == te.target_sheet);
             assert!(
                 found.is_some(),
                 "seed {seed}: enlarged plan callout ({}, detail={}, target={}) not found",
-                te.on_sheet, te.detail, te.target_sheet
+                te.on_sheet,
+                te.detail,
+                te.target_sheet
             );
         }
     }
@@ -339,23 +280,12 @@ fn detail_bubbles_resolve_to_wall_details_sheet() {
     for seed in 1..=3 {
         let (truth, resolved, _broken, _errors) = fixture(seed);
 
-        let truth_details: Vec<_> = truth
-            .callouts
-            .iter()
-            .filter(|c| c.kind == "detail_bubble" && !c.broken)
-            .collect();
+        let truth_details: Vec<_> = truth.callouts.iter().filter(|c| c.kind == "detail_bubble" && !c.broken).collect();
         for td in &truth_details {
-            let found = resolved.iter().find(|r| {
-                r.on_sheet == td.on_sheet
-                    && r.callout.detail == td.detail
-                    && r.callout.target_sheet == td.target_sheet
-                    && r.resolved
-            });
-            assert!(
-                found.is_some(),
-                "seed {seed}: detail bubble ({}, detail={}, target={}) not resolved",
-                td.on_sheet, td.detail, td.target_sheet
-            );
+            let found = resolved
+                .iter()
+                .find(|r| r.on_sheet == td.on_sheet && r.callout.detail == td.detail && r.callout.target_sheet == td.target_sheet && r.resolved);
+            assert!(found.is_some(), "seed {seed}: detail bubble ({}, detail={}, target={}) not resolved", td.on_sheet, td.detail, td.target_sheet);
         }
     }
 }
@@ -371,10 +301,7 @@ fn broken_callouts_produce_rfi_items() {
         let planted_broken: Vec<_> = truth.callouts.iter().filter(|c| c.broken).collect();
         // Each planted broken callout should produce exactly one RFI.
         for pb in &planted_broken {
-            let rfi_count = rfis
-                .iter()
-                .filter(|r| r.on_sheet == pb.on_sheet && r.detail == pb.detail && r.target_sheet == pb.target_sheet)
-                .count();
+            let rfi_count = rfis.iter().filter(|r| r.on_sheet == pb.on_sheet && r.detail == pb.detail && r.target_sheet == pb.target_sheet).count();
             assert_eq!(
                 rfi_count, 1,
                 "seed {seed}: planted broken callout ({}, {}/{}) has {} RFI items, expected 1",
@@ -396,12 +323,7 @@ fn callout_summary_includes_all_callouts() {
 
         // Summary should include at least as many entries as truth callouts.
         let truth_count = truth.callouts.len();
-        assert!(
-            summary.len() >= truth_count,
-            "seed {seed}: summary has {} entries, truth has {} callouts",
-            summary.len(),
-            truth_count
-        );
+        assert!(summary.len() >= truth_count, "seed {seed}: summary has {} entries, truth has {} callouts", summary.len(), truth_count);
 
         // Every resolved callout appears.
         for r in &resolved {
@@ -411,9 +333,8 @@ fn callout_summary_includes_all_callouts() {
 
         // Every broken callout appears with a reason.
         for b in &broken {
-            let found = summary.iter().any(|s| {
-                s.on_sheet == b.on_sheet && s.detail == b.callout.detail && s.status == "broken" && !s.reason.is_empty()
-            });
+            let found =
+                summary.iter().any(|s| s.on_sheet == b.on_sheet && s.detail == b.callout.detail && s.status == "broken" && !s.reason.is_empty());
             assert!(found, "seed {seed}: broken callout on {} not in summary with reason", b.on_sheet);
         }
     }
@@ -435,23 +356,11 @@ fn reader_finds_callouts_by_geometry_not_layer_alone() {
         let (truth, resolved, broken, _errors) = fixture(seed);
         let all: Vec<_> = resolved.iter().chain(broken.iter()).collect();
 
-        let truth_bubbles: Vec<_> = truth
-            .callouts
-            .iter()
-            .filter(|c| c.kind != "key_plan" && c.kind != "match_line")
-            .collect();
+        let truth_bubbles: Vec<_> = truth.callouts.iter().filter(|c| c.kind != "key_plan" && c.kind != "match_line").collect();
 
         for te in &truth_bubbles {
-            let found = all.iter().any(|r| {
-                r.on_sheet == te.on_sheet
-                    && r.callout.detail == te.detail
-                    && r.callout.target_sheet == te.target_sheet
-            });
-            assert!(
-                found,
-                "seed {seed}: callout ({}, {}/{}) not found by geometry-based reader",
-                te.on_sheet, te.detail, te.target_sheet
-            );
+            let found = all.iter().any(|r| r.on_sheet == te.on_sheet && r.callout.detail == te.detail && r.callout.target_sheet == te.target_sheet);
+            assert!(found, "seed {seed}: callout ({}, {}/{}) not found by geometry-based reader", te.on_sheet, te.detail, te.target_sheet);
         }
     }
 }
@@ -499,7 +408,10 @@ fn diag_missed_callouts() {
                     for e in d.model.iter() {
                         if let cadaddy_doc::EntityKind::Circle(c) = &e.kind {
                             if e.common.layer.eq_ignore_ascii_case("CALLOUT") {
-                                eprintln!("E-101 CALLOUT circle: center=({:.1},{:.1}) r={:.3} layer={}", c.center.x, c.center.y, c.radius, e.common.layer);
+                                eprintln!(
+                                    "E-101 CALLOUT circle: center=({:.1},{:.1}) r={:.3} layer={}",
+                                    c.center.x, c.center.y, c.radius, e.common.layer
+                                );
                             }
                         }
                     }

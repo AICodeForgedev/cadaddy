@@ -21,12 +21,8 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     // Check if a print set project is loaded by looking for DXF files in the drawing's
     // embedded store (where printset.open / bim_job import places the classified sheets).
     let doc = s.doc()?;
-    let dxf_files: Vec<(String, Vec<u8>)> = doc
-        .embedded
-        .iter()
-        .filter(|(name, _)| name.ends_with(".dxf"))
-        .map(|(name, bytes)| (name.clone(), (**bytes).clone()))
-        .collect();
+    let dxf_files: Vec<(String, Vec<u8>)> =
+        doc.embedded.iter().filter(|(name, _)| name.ends_with(".dxf")).map(|(name, bytes)| (name.clone(), (**bytes).clone())).collect();
 
     if dxf_files.is_empty() {
         return Err(bad(
@@ -36,13 +32,9 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         ));
     }
 
-    let sheet_numbers: Vec<String> = dxf_files
-        .iter()
-        .map(|(name, _)| name.trim_end_matches(".dxf").to_string())
-        .collect();
+    let sheet_numbers: Vec<String> = dxf_files.iter().map(|(name, _)| name.trim_end_matches(".dxf").to_string()).collect();
 
-    let (resolved, broken, _errors) =
-        cadaddy_mepfix::callout_reader::resolve_callouts(&dxf_files, &sheet_numbers);
+    let (resolved, broken, _errors) = cadaddy_mepfix::callout_reader::resolve_callouts(&dxf_files, &sheet_numbers);
 
     let summary = cadaddy_mepfix::callout_reader::callout_summary(&resolved, &broken);
 
