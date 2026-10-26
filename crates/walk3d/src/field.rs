@@ -202,9 +202,14 @@ pub struct FieldNote {
     /// When it was made, as the device wrote it (ISO 8601 when it has a clock).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub when: String,
-    /// Sent back to the drawing already.
+    /// In the drawing: set only by a package exported from it (`fieldview.export` after
+    /// `fieldview.sync`), never by handing a notes file over.
     #[serde(skip_serializing_if = "is_false")]
     pub synced: bool,
+    /// Handed over in a notes file on this device, not yet back in a package. Such notes go
+    /// in the next notes file again, in case that download was lost.
+    #[serde(skip_serializing_if = "is_false")]
+    pub sent: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -615,6 +620,13 @@ impl FieldPackage {
         self.notes.iter_mut().filter(|n| ids.contains(&n.id)).for_each(|n| n.synced = true);
     }
 
+    /// Marks notes as handed over in a notes file; they stay unsynced until a package from the
+    /// drawing brings them back.
+    pub fn mark_sent(&mut self, ids: &[String]) {
+        let ids: BTreeSet<&String> = ids.iter().collect();
+        self.notes.iter_mut().filter(|n| ids.contains(&n.id)).for_each(|n| n.sent = true);
+    }
+
     /// Adds a note made on this device, giving it the next id for `device`.
     pub fn add_note(&mut self, device: &str, mut note: FieldNote) -> Option<String> {
         if self.notes.len() >= MAX_NOTES {
@@ -937,6 +949,21 @@ mod tests {
         let ids: Vec<String> = p.unsynced().iter().map(|x| x.id.clone()).collect();
         p.mark_synced(&ids);
         assert!(p.unsynced().is_empty());
+    }
+
+    #[test]
+    fn sent_notes_stay_unsynced_and_the_flag_is_optional_in_files() {
+        let mut p = pkg();
+        let a = p.add_note("tab1", FieldNote { level: "L2".into(), text: "a".into(), ..FieldNote::default() }).unwrap_or_default();
+        p.mark_sent(std::slice::from_ref(&a));
+        let u = p.unsynced();
+        assert_eq!(u.iter().map(|n| (n.id.as_str(), n.sent, n.synced)).collect::<Vec<_>>(), [(a.as_str(), true, false)]);
+        let text = serde_json::to_string(&FieldNote { id: "x".into(), ..FieldNote::default() }).unwrap_or_default();
+        assert!(!text.contains("sent") && !text.contains("synced"), "{text}");
+        let old: FieldNote = serde_json::from_str(r#"{"id":"FN-a-0001","text":"t","synced":true}"#).unwrap_or_default();
+        assert!(old.synced && !old.sent);
+        let back = FieldPackage::from_json(p.to_json().unwrap_or_default().as_bytes());
+        assert!(back.is_ok_and(|b| b.notes.iter().any(|n| n.id == a && n.sent && !n.synced)));
     }
 
     #[test]
