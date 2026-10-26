@@ -498,21 +498,31 @@ fn words(t: &str) -> BTreeSet<String> {
 }
 
 /// The cost row for a takeoff line: its index and how it matched.
+/// Q6020: exact item match only — fuzzy/word matching is removed (silent mis-pricing).
 fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
     let item = l["item"].as_str().unwrap_or_default();
     let unit = l["unit"].as_str().unwrap_or_default();
     let unit_ok =
         |r: &Cost| r.unit.trim().is_empty() || measure(&r.unit).is_some_and(|m| Some(m) == measure(unit)) || r.unit.trim().eq_ignore_ascii_case(unit);
-    if let Some(i) = rows.iter().position(|r| r.item.trim().eq_ignore_ascii_case(item.trim()) && unit_ok(r)) {
-        return Some((i, "item"));
-    }
+    rows.iter().position(|r| r.item.trim().eq_ignore_ascii_case(item.trim()) && unit_ok(r)).map(|i| (i, "item"))
+}
+
+/// The nearest cost row by word overlap (for unpriced suggestion text only, never applied).
+fn nearest_row_name(rows: &[Cost], l: &Value) -> Option<String> {
+    let item = l["item"].as_str().unwrap_or_default();
+    let unit = l["unit"].as_str().unwrap_or_default();
+    let unit_ok =
+        |r: &Cost| r.unit.trim().is_empty() || measure(&r.unit).is_some_and(|m| Some(m) == measure(unit)) || r.unit.trim().eq_ignore_ascii_case(unit);
     let have = words(&format!(
         "{item} {} {} {}",
         l["size"].as_str().unwrap_or_default(),
         l["category"].as_str().unwrap_or_default(),
         l["system"].as_str().unwrap_or_default()
     ));
-    let mut best: Option<(usize, f64, usize)> = None;
+    let mep = matches!(l["category"].as_str().unwrap_or_default(), "duct" | "pipe" | "conduit" | "tray" | "cable");
+    let sys = if mep { words(l["system"].as_str().unwrap_or_default()) } else { BTreeSet::new() };
+    let iw: BTreeSet<String> = words(item).into_iter().filter(|w| !sys.contains(w) && !w.chars().any(|c| c.is_ascii_digit())).collect();
+    let mut best: Option<(usize, f64)> = None;
     for (i, r) in rows.iter().enumerate() {
         if !unit_ok(r) {
             continue;
@@ -523,23 +533,16 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
         }
         let hit = want.iter().filter(|w| have.contains(*w)).count();
         let score = hit as f64 / want.len() as f64;
-        // Most of the row's words, and half the item's words in the row (a door hardware set is
-        // not a door).
-        // The item's own words: not its system's name (`Duct M-SUPPLY`) nor its numbers.
-        // (A line that isn't MEP has its category as its system: those words are its own.)
-        let mep = matches!(l["category"].as_str().unwrap_or_default(), "duct" | "pipe" | "conduit" | "tray" | "cable");
-        let sys = if mep { words(l["system"].as_str().unwrap_or_default()) } else { BTreeSet::new() };
-        let iw: BTreeSet<String> = words(item).into_iter().filter(|w| !sys.contains(w) && !w.chars().any(|c| c.is_ascii_digit())).collect();
         let covered = if iw.is_empty() { 0.0 } else { iw.iter().filter(|w| want.contains(*w)).count() as f64 / iw.len() as f64 };
         if hit == 0 || !((score >= 0.5 && covered >= 0.5) || covered >= 1.0) {
             continue;
         }
-        let score = score + covered;
-        if best.is_none_or(|(_, s, n)| score > s || (score == s && want.len() > n)) {
-            best = Some((i, score, want.len()));
+        let total = score + covered;
+        if best.is_none_or(|(_, s)| total > s) {
+            best = Some((i, total));
         }
     }
-    best.map(|(i, _, _)| (i, "words"))
+    best.and_then(|(i, _)| rows.get(i)).map(|r| r.item.clone())
 }
 
 fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -574,7 +577,17 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let Some((i, how)) = match_row(&rows, l) else {
-            unmatched.push(json!({"item": l["item"], "size": l["size"], "unit": l["unit"], "qty": qty, "level": l["level"], "reason": "no cost-table row names this item in this unit"}));
+            // Q6020: suggest the nearest row but never apply it.
+            let reason = if let Some(near) = nearest_row_name(&rows, l) {
+                format!(
+                    "{} has no exact match; nearest row: {} \u{2014} add a row for this item or map it",
+                    l["item"].as_str().unwrap_or_default(),
+                    near
+                )
+            } else {
+                "no cost-table row names this item in this unit".to_string()
+            };
+            unmatched.push(json!({"item": l["item"], "size": l["size"], "unit": l["unit"], "qty": qty, "level": l["level"], "reason": reason}));
             continue;
         };
         let Some(r) = rows.get(i) else { continue };
@@ -746,26 +759,22 @@ mod tests {
     #[test]
     fn cost_rows_match_by_item_then_words_in_a_compatible_unit() {
         let rows = vec![row("Door", "ea"), row("Wall framing", "LF"), row("Duplex receptacle", "each"), row("Ceiling tile", "SF")];
-        let l = |item: &str, unit: &str, cat: &str| json!({"item": item, "unit": unit, "category": cat, "size": ""});
+        let l = |item: &str, unit: &str, cat: &str| json!({"item": item, "unit": unit, "category": cat, "size": "", "system": ""});
+        // Q6020: only exact item matches; fuzzy/word matches are suggestions, never applied.
         assert_eq!(match_row(&rows, &l("Door", "each", "doors")), Some((0, "item")));
-        assert_eq!(match_row(&rows, &l("Wall untyped", "lf", "walls")).map(|m| m.0), Some(1));
-        assert_eq!(match_row(&rows, &l("receptacle", "each", "devices")).map(|m| m.0), Some(2));
-        assert_eq!(match_row(&rows, &l("Ceiling ACT", "sq ft", "ceilings")).map(|m| m.0), Some(3));
-        // The wrong unit, or no shared words: unpriced.
-        assert_eq!(match_row(&rows, &l("Wall untyped", "sq ft", "walls")), None);
+        assert_eq!(match_row(&rows, &l("Wall framing", "lf", "walls")), Some((1, "item")));
+        assert_eq!(match_row(&rows, &l("Duplex receptacle", "each", "devices")), Some((2, "item")));
+        assert_eq!(match_row(&rows, &l("Ceiling tile", "sq ft", "ceilings")), Some((3, "item")));
+        // Fuzzy matches (different names) are no longer silently applied.
+        assert_eq!(match_row(&rows, &l("Wall untyped", "lf", "walls")), None, "different item name is unmatched");
+        assert_eq!(match_row(&rows, &l("receptacle", "each", "devices")), None, "partial item name is unmatched");
+        assert_eq!(match_row(&rows, &l("Ceiling ACT", "sq ft", "ceilings")), None, "similar but different item is unmatched");
+        // Wrong unit or no relation: still unmatched.
+        assert_eq!(match_row(&rows, &l("Door", "sq ft", "doors")), None, "wrong unit");
         assert_eq!(match_row(&rows, &l("Fan coil", "each", "equipment")), None);
-        assert_eq!(match_row(&rows, &l("Door hardware set", "each", "doors")), None, "hardware is not the door");
-        // What cost tables call by other names.
-        let rows =
-            vec![row("Interior partition, metal stud", "lf"), row("Drywall 5/8", "sf"), row("Duplex outlet", "ea"), row("LED luminaire", "ea")];
-        assert_eq!(match_row(&rows, &l("Wall", "lf", "walls")).map(|m| m.0), Some(0));
-        assert_eq!(match_row(&rows, &l("Board gypsum board", "sq ft", "drywall")).map(|m| m.0), Some(1));
-        assert_eq!(match_row(&rows, &l("receptacle", "each", "devices")).map(|m| m.0), Some(2));
-        assert_eq!(match_row(&rows, &l("Light fixture", "each", "devices")).map(|m| m.0), Some(3));
-        // A line that isn't MEP carries its category as its system (`Wall`, system `walls`).
-        let mut w = l("Wall", "lf", "walls");
-        w["system"] = json!("walls");
-        assert_eq!(match_row(&rows, &w).map(|m| m.0), Some(0));
+        // nearest_row_name finds suggestions for unmatched items.
+        assert!(nearest_row_name(&rows, &l("Wall untyped", "lf", "walls")).is_some(), "should suggest nearest for unmatched");
+        assert!(nearest_row_name(&rows, &l("Fan coil", "each", "equipment")).is_none(), "no words in common → no suggestion");
     }
 
     #[test]
