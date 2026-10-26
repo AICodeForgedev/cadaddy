@@ -699,6 +699,8 @@ struct Traced {
     level: String,
     outline: Vec<Vec2>,
     tag: Handle,
+    /// Where the tag text is (a room is traced again from here on the built walls).
+    at: Vec2,
     name: Option<String>,
     number: Option<String>,
 }
@@ -775,7 +777,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
                 }
                 o.number = o.number.take().or(number);
             }
-            None => out.push(Traced { room, level: level.name.clone(), outline, tag: h, name, number }),
+            None => out.push(Traced { room, level: level.name.clone(), outline, tag: h, at, name, number }),
         }
     }
     for (i, r) in sp.rooms.iter().enumerate() {
@@ -862,6 +864,59 @@ fn walled_share(outline: &[Vec2], grid: &std::collections::HashMap<(i64, i64), V
     if all > 0.0 { on / all } else { 0.0 }
 }
 
+/// Smallest and largest room (square feet): less is a tag's box or a piece of furniture, more
+/// is the outside of the building.
+const MIN_ROOM_SF: f64 = 12.0;
+const MAX_ROOM_SF: f64 = 50_000.0;
+/// Most tags traced again on the built walls per build.
+const MAX_RETRACE: usize = 5_000;
+
+/// A drawing of the built footprints' edges (each once), every level's where it was built: the
+/// boundaries a room is traced on when its drawn outline isn't one.
+fn walls_session(bounds: &std::collections::BTreeMap<String, Vec<Vec<Vec2>>>) -> Option<Session> {
+    let mut d = Drawing::default();
+    let mut seen: std::collections::HashSet<[i64; 4]> = std::collections::HashSet::new();
+    let key = |p: Vec2| ((p.x * 1e4).round() as i64, (p.y * 1e4).round() as i64);
+    for q in bounds.values().flatten() {
+        for (a, b) in q.iter().zip(q.iter().cycle().skip(1)) {
+            let (ka, kb) = (key(*a), key(*b));
+            if ka == kb || !seen.insert(if ka < kb { [ka.0, ka.1, kb.0, kb.1] } else { [kb.0, kb.1, ka.0, ka.1] }) {
+                continue;
+            }
+            let line = cadaddy_doc::Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) };
+            if d.add(&Space::Model, Common::default(), EntityKind::Line(line)).is_err() || seen.len() >= MAX_BOUNDS * 4 {
+                break;
+            }
+        }
+    }
+    if d.model.is_empty() {
+        return None;
+    }
+    let mut t = Session::empty();
+    t.open_drawing(d, "Built walls", None);
+    Some(t)
+}
+
+/// Add a room, or fold it into the same room already kept on its level (a name and a number
+/// in one room): the best name, the first number, the spec's room.
+fn keep_room(kept: &mut Vec<Traced>, t: Traced) {
+    let lv = t.level.trim().to_ascii_uppercase();
+    let Some(o) = kept.iter_mut().find(|o| o.level.trim().eq_ignore_ascii_case(&lv) && same_outline(&o.outline, &t.outline)) else {
+        kept.push(t);
+        return;
+    };
+    if o.room.is_none() {
+        o.room = t.room;
+    }
+    let score = |n: &str| super::perceive::geometry::room_name_score(n);
+    if t.name.as_deref().is_some_and(|n| o.name.as_deref().is_none_or(|x| score(x) < score(n))) {
+        o.name = t.name;
+    }
+    if o.number.is_none() {
+        o.number = t.number;
+    }
+}
+
 fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     let d = b - a;
     let l2 = d.dot(d);
@@ -902,16 +957,52 @@ fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<
         }
         grids.insert(level.clone(), g);
     }
+    // A tag whose outline is no room (a box around the tag, a piece of furniture, a gap the
+    // lines leave open) is traced again on the level's built walls, doors and windows.
+    let (min_area, max_area) = (MIN_ROOM_SF * upf * upf, MAX_ROOM_SF * upf * upf);
+    let mut walls_plan: Option<Option<Session>> = None;
+    let mut cache = None;
     let mut unwalled: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-    rooms.retain(|t| {
+    let mut retraced = 0usize;
+    let mut retraced_or_tried = 0usize;
+    let extents: std::collections::HashMap<&String, cadaddy_geom::Bounds2> =
+        bounds.iter().map(|(l, polys)| (l, cadaddy_geom::Bounds2::from_points(polys.iter().flatten().copied()))).collect();
+    let mut kept: Vec<Traced> = Vec::new();
+    for mut t in std::mem::take(rooms) {
         let key = t.level.trim().to_ascii_uppercase();
-        let (Some(polys), Some(grid)) = (bounds.get(&key), grids.get(&key)) else { return true };
-        if polys.is_empty() || walled_share(&t.outline, grid, polys, cell, tol) >= ROOM_WALLED {
-            return true;
+        let (Some(polys), Some(grid)) = (bounds.get(&key), grids.get(&key)) else {
+            kept.push(t);
+            continue;
+        };
+        let a = cadaddy_geom::shoelace(&t.outline).abs();
+        if polys.is_empty() || (a >= min_area && walled_share(&t.outline, grid, polys, cell, tol) >= ROOM_WALLED) {
+            keep_room(&mut kept, t);
+            continue;
         }
-        *unwalled.entry(t.level.clone()).or_default() += 1;
-        false
-    });
+        // Only a tag among the level's built walls (a schedule's or a note's text isn't).
+        let inside = extents.get(&key).is_some_and(|b| b.contains(t.at)) && retraced_or_tried < MAX_RETRACE;
+        let plan = walls_plan.get_or_insert_with(|| walls_session(&bounds));
+        let outline = plan.as_ref().filter(|_| inside).and_then(|plan| {
+            retraced_or_tried += 1;
+            let loops = super::hatch::loops_at_lazy(plan, t.at, &mut cache).ok()?;
+            let outer = loops.iter().find(|l| l.outer).or(loops.first())?;
+            let o = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
+            let a = cadaddy_geom::shoelace(&o).abs();
+            (o.len() >= 3 && (min_area..=max_area).contains(&a) && walled_share(&o, grid, polys, cell, tol) >= ROOM_WALLED).then_some(o)
+        });
+        match outline {
+            Some(o) => {
+                t.outline = o;
+                retraced += 1;
+                keep_room(&mut kept, t);
+            }
+            None => *unwalled.entry(t.level.clone()).or_default() += 1,
+        }
+    }
+    *rooms = kept;
+    if retraced > 0 {
+        notes.push(format!("{retraced} room tag(s) traced again on the built walls (their drawn outline was a tag box or furniture, not the room)."));
+    }
     for (level, n) in &unwalled {
         notes.push(format!("{level}: {n} room tag(s) not inside built walls (an enlarged view, a note's or the title block's box) — no room built."));
     }

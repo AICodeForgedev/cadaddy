@@ -188,3 +188,30 @@ fn hostile_room_tags_never_panic() {
     s.execute("bim.bom", &json!({"group_by": "level"})).unwrap();
     s.execute("rooms.list", &json!({})).unwrap();
 }
+
+/// A room's tag drawn inside its own box (a tag box or a piece of furniture on the wall layer):
+/// the box is no room; the room is traced again on the built walls, at its full size, and keeps
+/// its name and number.
+#[test]
+fn a_tag_in_a_box_is_traced_again_on_the_built_walls() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    floor(&mut s, 0.0, 0.0, 1.0, &["OFFICE", "101"], &[]);
+    s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+    rect(&mut s, 320.0, 150.0, 390.0, 240.0);
+    s.execute("layer.current", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    text(&mut s, [330.0, 220.0], "STORAGE");
+    text(&mut s, [330.0, 190.0], "102");
+    let levels = json!([{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0, "region": L1}]);
+    s.execute("bspec.draft", &json!({"store": true, "levels": levels})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    assert_eq!(r["rooms"], json!(2), "{r}");
+    assert!(r["notes"].to_string().contains("traced again on the built walls"), "{r}");
+    let list = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = list["rooms"].as_array().unwrap();
+    let storage = rooms.iter().find(|x| x["number"] == json!("102")).unwrap_or_else(|| panic!("{list}"));
+    assert_eq!(storage["name"], json!("Storage"), "{list}");
+    let area = storage["areaSqFt"].as_f64().unwrap();
+    assert!(area > 0.9 * 232.0 * 348.0 / 144.0, "the room, not the box: {area}");
+}
