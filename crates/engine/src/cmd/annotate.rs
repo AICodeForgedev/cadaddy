@@ -1997,5 +1997,4 @@ mod dimedit;
 pub(crate) use dimedit::after_command as dimbreak_after_command;
 
 #[cfg(test)]
-#[path = "annotate_tests.rs"]
 mod tests;
