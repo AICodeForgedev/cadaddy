@@ -402,7 +402,14 @@ pub struct HelpPage {
     pub params: &'static str,
     pub interactive: bool,
     pub transparent: bool,
-    pub help_text: &'static str,
+    /// What the command does: the hand-written text, else one generated from its parameters.
+    pub help_text: String,
+    /// Whether `help_text` was generated (no hand-written text yet).
+    pub generated: bool,
+    /// A copy-paste example from a shell (`cadaddy-cli run …`).
+    pub example: String,
+    /// The same call through MCP's `execute` tool.
+    pub mcp_example: String,
     /// The keywords of the command's first prompt, as the command line offers them
     /// ("Ttr (tan tan radius)" is typed TTR or T); empty when it offers none.
     pub options: Vec<String>,
@@ -424,10 +431,238 @@ impl CommandSpec {
             params: self.params,
             interactive: self.interactive.is_some(),
             transparent: self.transparent,
-            help_text: self.help,
+            help_text: self.help_text(),
+            generated: self.help.is_empty(),
+            example: self.example(),
+            mcp_example: format!("execute {{command: \"{}\", params: {}}}", self.id, self.example_params()),
             options: first.as_ref().map(|p| p.keywords.clone()).unwrap_or_default(),
             prompts: first.iter().map(crate::Prompt::display).collect(),
         }
+    }
+}
+
+/// One parameter as a command's documentation lists it at the top level of its first `{…}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DocParam {
+    pub name: String,
+    pub optional: bool,
+    /// What the documentation says after `name:` (empty when it says nothing).
+    pub kind: String,
+}
+
+/// The top-level parameters of a params doc (`{center: [x,y], radius?: number} → …`): the
+/// names in its first `{…}` before `→`, with `?` for optional ones. Empty for a doc with none.
+pub fn doc_params(doc: &str) -> Vec<DocParam> {
+    let input = doc.split('→').next().unwrap_or(doc);
+    let Some(open) = input.find('{') else { return Vec::new() };
+    let body = input.get(open + 1..).unwrap_or_default();
+    // Split at depth 0 commas, up to the brace that closes the list.
+    let mut parts = Vec::new();
+    let (mut depth, mut start, mut quoted) = (0usize, 0usize, false);
+    let mut end = body.len();
+    for (i, c) in body.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            _ if quoted => {}
+            '{' | '[' | '(' => depth += 1,
+            '}' if depth == 0 => {
+                end = i;
+                break;
+            }
+            '}' | ']' | ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(body.get(start..i).unwrap_or_default());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(body.get(start..end).unwrap_or_default());
+    let mut out: Vec<DocParam> = Vec::new();
+    for part in parts {
+        let part = part.trim();
+        let name_len = part.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(part.len());
+        let Some(name) = part.get(..name_len).filter(|n| n.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')) else {
+            continue;
+        };
+        let rest = part.get(name_len..).unwrap_or_default().trim_start();
+        let optional = rest.starts_with('?');
+        let rest = rest.trim_start_matches('?').trim_start();
+        // `name: kind`, a bare `name`, or `name (a note)`; anything else is prose, not a name.
+        let kind = match rest.strip_prefix(':') {
+            Some(k) => k.trim().to_string(),
+            None if rest.is_empty() || rest.starts_with('(') => rest.to_string(),
+            None => continue,
+        };
+        if !out.iter().any(|p| p.name == name) {
+            out.push(DocParam { name: name.to_string(), optional, kind });
+        }
+    }
+    out
+}
+
+/// A value to put in an example for a parameter documented as `kind`: the first literal the
+/// documentation gives, else a stand-in of the right type.
+fn example_value(name: &str, kind: &str) -> Value {
+    let k = kind.trim();
+    if let Some(rest) = k.strip_prefix('"') {
+        return Value::String(rest.split('"').next().unwrap_or_default().to_string());
+    }
+    let first = k.split(|c: char| c.is_whitespace() || matches!(c, '|' | ',' | '(' | ')')).next().unwrap_or_default();
+    if let Ok(n) = first.parse::<i64>() {
+        return n.into();
+    }
+    if let Ok(n) = first.parse::<f64>()
+        && let Some(n) = serde_json::Number::from_f64(n)
+    {
+        return Value::Number(n);
+    }
+    let lower = k.to_ascii_lowercase();
+    if k.starts_with("[[") {
+        return serde_json::json!([[0, 0], [10, 0]]);
+    }
+    if k.starts_with('[') {
+        let inner = k.trim_start_matches('[');
+        return if inner.starts_with(['x', 'X', '0']) { serde_json::json!([0, 0]) } else { serde_json::json!([]) };
+    }
+    if k.starts_with('{') {
+        return serde_json::json!({});
+    }
+    let word = first.to_ascii_lowercase();
+    match word.as_str() {
+        "bool" | "boolean" | "true" => return Value::Bool(true),
+        "false" => return Value::Bool(false),
+        "number" | "num" | "int" | "integer" | "float" | "real" | "count" | "n" => return 1.into(),
+        _ => {}
+    }
+    let n = name.to_ascii_lowercase();
+    // A bare or loosely typed name: its meaning in drafting decides the stand-in.
+    let generic = word.is_empty() || matches!(word.as_str(), "point" | "pt" | "number" | "num" | "real" | "value" | "any");
+    if generic || lower.starts_with("point") {
+        if matches!(n.as_str(), "points" | "vertices" | "path_points") {
+            return serde_json::json!([[0, 0], [10, 0]]);
+        }
+        if matches!(
+            n.as_str(),
+            "center"
+                | "point"
+                | "p"
+                | "p1"
+                | "pt"
+                | "base"
+                | "basepoint"
+                | "start"
+                | "insert"
+                | "at"
+                | "position"
+                | "pos"
+                | "origin"
+                | "from"
+                | "first"
+                | "corner"
+        ) {
+            return serde_json::json!([0, 0]);
+        }
+        if matches!(n.as_str(), "p2" | "end" | "to" | "second" | "target" | "p3" | "third") {
+            return if n == "p3" || n == "third" { serde_json::json!([10, 10]) } else { serde_json::json!([10, 0]) };
+        }
+        if matches!(
+            n.as_str(),
+            "radius"
+                | "diameter"
+                | "height"
+                | "width"
+                | "length"
+                | "distance"
+                | "dist"
+                | "angle"
+                | "rotation"
+                | "scale"
+                | "size"
+                | "count"
+                | "offset"
+                | "ratio"
+                | "factor"
+                | "elevation"
+                | "thickness"
+                | "gap"
+                | "spacing"
+                | "rows"
+                | "columns"
+                | "n"
+        ) {
+            return 1.into();
+        }
+    }
+    if lower.contains("path") || lower.contains("folder") || n.contains("path") || n == "file" || n == "folder" {
+        return Value::String("FILE".into());
+    }
+    if n == "handle" || n.ends_with("handle") {
+        return Value::String("1A".into());
+    }
+    if n == "handles" {
+        return serde_json::json!(["1A"]);
+    }
+    // One of a list of words (`level|trade|system`): the first.
+    let listed = k.get(first.len()..).is_some_and(|r| r.trim_start().starts_with('|'));
+    if listed
+        && !word.is_empty()
+        && word.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && !matches!(word.as_str(), "string" | "str" | "text" | "name" | "id" | "value" | "any")
+    {
+        return Value::String(first.to_string());
+    }
+    Value::String("TEXT".into())
+}
+
+impl CommandSpec {
+    /// The command's help text: the hand-written text, else one generated from its label,
+    /// parameter documentation and menu, so no command has empty help.
+    pub fn help_text(&self) -> String {
+        if !self.help.is_empty() {
+            return self.help.to_string();
+        }
+        let mut t = format!("{}.", self.label.trim_end_matches(['.', '…']));
+        let doc = crate::params_doc(self);
+        let params = doc_params(doc);
+        if params.is_empty() && doc.trim().is_empty() {
+            t.push_str(" Takes no parameters: run it with {}.");
+        } else if params.is_empty() {
+            t.push_str(&format!(" Parameters: {}", doc.trim()));
+        } else {
+            let list: Vec<String> = params.iter().map(|p| format!("{} ({})", p.name, if p.optional { "optional" } else { "required" })).collect();
+            t.push_str(&format!(" JSON parameters: {}.", list.join(", ")));
+            if let Some((_, out)) = doc.split_once('→') {
+                let out = out.trim();
+                let short: String = out.chars().take(160).collect();
+                let more = if short.len() < out.len() { "…" } else { "" };
+                t.push_str(&format!(" Returns {short}{more}."));
+            }
+        }
+        if self.interactive.is_some() {
+            t.push_str(" Typed at the command line it asks for its input step by step.");
+        }
+        if !self.menu.is_empty() {
+            t.push_str(&format!(" Menu: {}.", self.menu.join(" > ")));
+        }
+        t
+    }
+
+    /// Example JSON parameters: the required ones with a documented or stand-in value.
+    pub fn example_params(&self) -> Value {
+        let mut m = serde_json::Map::new();
+        for p in doc_params(crate::params_doc(self)).into_iter().filter(|p| !p.optional) {
+            let v = example_value(&p.name, &p.kind);
+            m.insert(p.name, v);
+        }
+        Value::Object(m)
+    }
+
+    /// A copy-paste example from a shell: run the command on a drawing (and save it when the
+    /// command changes the drawing).
+    pub fn example(&self) -> String {
+        let save = if self.undoable { " --save DRAWING.dxf" } else { "" };
+        format!("cadaddy-cli run DRAWING.dxf --cmd '{} {}'{save}", self.id, self.example_params())
     }
 }
 

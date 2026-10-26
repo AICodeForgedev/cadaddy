@@ -6,6 +6,8 @@
 //! control channel, MCP, CLI and scripts) and interactively through prompts ([`Session::start`],
 //! [`Session::input`], [`Session::cmdline`]) exactly like typing at AutoCAD's command line.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![allow(unknown_lints)] // the lint below exists only in newer clippy
+#![allow(clippy::chunks_exact_to_as_chunks)]
 #![forbid(unsafe_code)]
 
 pub mod activity;
@@ -46,6 +48,7 @@ pub mod sysvars;
 pub mod ucs;
 pub mod undoctl;
 pub mod units;
+pub mod workflows;
 pub mod writefile;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -934,7 +937,7 @@ fn closes(rest: &str) -> bool {
 }
 
 /// The documentation of `spec`'s parameters: `same as `other`` is the other command's.
-fn params_doc(spec: &CommandSpec) -> &'static str {
+pub(crate) fn params_doc(spec: &CommandSpec) -> &'static str {
     let doc = spec.params;
     let same = doc.trim().strip_prefix("same as `").or_else(|| doc.trim().strip_prefix("as ")).and_then(|r| r.split(['`', ' ']).next());
     match same.filter(|id| !id.is_empty()).and_then(find_command) {
