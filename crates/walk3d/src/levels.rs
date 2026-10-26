@@ -400,6 +400,76 @@ pub fn auto_datum(notes: &[LevelNote]) -> f64 {
     if first.is_some_and(|e| (e - 100.0).abs() < 1e-6) { 100.0 } else { 0.0 }
 }
 
+/// Where a level sits in the building's order, from its canonical name ([`canonical_level`]):
+/// basements below the floors, `LEVEL n` in number order, the main `ROOF` over every floor. None
+/// for what has no fixed place (a mezzanine, a low roof, a penthouse, a parapet).
+pub fn level_rank(name: &str) -> Option<i32> {
+    let (c, kind) = canonical_level(name)?;
+    let n = |s: &str| s.trim().parse::<i32>().ok();
+    match kind {
+        DatumKind::Floor => c.strip_prefix("LEVEL ").and_then(n).map(|v| v * 10),
+        DatumKind::Basement => Some(-10 * c.strip_prefix("BASEMENT ").and_then(n).unwrap_or(1)),
+        DatumKind::Roof if c == "ROOF" => Some(100_000),
+        _ => None,
+    }
+}
+
+/// The level code a print set's index uses (`1`, `2`, `B1`, `R`) as a canonical level rank.
+pub fn code_rank(code: &str) -> Option<i32> {
+    let c = code.trim().to_ascii_uppercase();
+    if c == "R" {
+        return Some(100_000);
+    }
+    if let Some(b) = c.strip_prefix('B') {
+        return Some(-10 * if b.is_empty() { 1 } else { b.parse::<i32>().ok()? });
+    }
+    c.parse::<i32>().ok().filter(|v| *v >= 1).map(|v| v * 10)
+}
+
+/// Which readings keep the building's order (elevations rise with the level number): `items`
+/// are (rank, elevation, weight); the kept set is the heaviest one in order, a rank-less item is
+/// always kept. A reading that breaks the order against heavier ones is dropped. Returns one
+/// flag per item.
+pub fn in_order(items: &[(Option<i32>, f64, u32)]) -> Vec<bool> {
+    let n = items.len().min(MAX_NOTES);
+    let mut keep: Vec<bool> = items.iter().map(|it| it.0.is_none()).collect();
+    // Ranked items by rank, then the heaviest chain with strictly rising elevations.
+    let mut idx: Vec<usize> = (0..n).filter(|&i| items.get(i).is_some_and(|it| it.0.is_some() && it.1.is_finite())).collect();
+    idx.sort_by_key(|&i| items.get(i).and_then(|it| it.0));
+    let mut best: Vec<(u64, Option<usize>)> = Vec::with_capacity(idx.len());
+    for (a, &i) in idx.iter().enumerate() {
+        let Some(&(ri, ei, wi)) = items.get(i) else { break };
+        let mut b = (u64::from(wi), None);
+        for (c, &j) in idx.iter().enumerate().take(a) {
+            let (Some(&(rj, ej, _)), Some(&(w, _))) = (items.get(j), best.get(c)) else { continue };
+            if rj < ri && ej < ei - 1e-6 && w + u64::from(wi) > b.0 {
+                b = (w + u64::from(wi), Some(c));
+            }
+        }
+        best.push(b);
+    }
+    let mut at = best.iter().enumerate().max_by_key(|(_, b)| b.0).map(|(c, _)| c);
+    while let Some(c) = at {
+        if let Some(f) = idx.get(c).and_then(|&i| keep.get_mut(i)) {
+            *f = true;
+        }
+        at = best.get(c).and_then(|b| b.1);
+    }
+    keep
+}
+
+/// Whether a sheet is a civil, site, survey or landscape sheet (by its discipline letters or its
+/// title): its elevations are site spot elevations (a finished floor on the site datum, a curb, a
+/// grade), never the building's levels.
+pub fn site_sheet(discipline: &str, title: &str) -> bool {
+    let d = discipline.trim().to_ascii_uppercase();
+    if matches!(d.as_str(), "C" | "CS" | "CG" | "CU" | "L" | "LS" | "LP" | "V" | "SV") {
+        return true;
+    }
+    let w = words(title);
+    w.iter().any(|x| matches!(x.as_str(), "SITE" | "CIVIL" | "GRADING" | "SURVEY" | "TOPOGRAPHIC" | "LANDSCAPE" | "PAVING" | "DRAINAGE"))
+}
+
 /// A shaft, chase, riser or elevator mark on one level's plan, in building feet.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShaftMark {
@@ -586,6 +656,71 @@ impl BuildingSpec {
         (changes, kept)
     }
 
+    /// The readings that keep the building in order once applied (elevations rise with the
+    /// level number, the main roof over every floor), and a warning for each one dropped. The
+    /// spec's own levels and datums the readings don't name count too: approved ones always
+    /// win, others weigh less than a reading, so one stray note (a site spot elevation) can't
+    /// lift a floor over the floors above it, while readings that agree with each other replace
+    /// guessed values.
+    ///
+    /// `fixed` are values that win like approved ones (the print set's level table).
+    pub fn readings_in_order(&self, stacked: &[LevelNote], fixed: &[LevelNote]) -> (Vec<LevelNote>, Vec<String>) {
+        const APPROVED: u32 = 1_000;
+        let mut items: Vec<(Option<i32>, f64, u32)> = Vec::new();
+        let mut reading: Vec<Option<usize>> = Vec::new();
+        let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b) || canonical_level(a).zip(canonical_level(b)).is_some_and(|(x, y)| x.0 == y.0);
+        let named = |name: &str| stacked.iter().chain(fixed).any(|n| same(&n.name, name));
+        for n in fixed.iter().take(MAX_NOTES) {
+            items.push((level_rank(&n.name), n.elevation_ft, APPROVED));
+            reading.push(None);
+        }
+        for l in &self.levels {
+            let approved = self.level_approved(&l.name);
+            if approved || !named(&l.name) {
+                items.push((level_rank(&l.name), l.elevation_ft, if approved { APPROVED } else { 1 }));
+                reading.push(None);
+            }
+        }
+        for d in &self.datums {
+            let approved = self.level_approved(&d.name);
+            if approved || !named(&d.name) {
+                items.push((level_rank(&d.name), d.elevation_ft, if approved { APPROVED } else { 1 }));
+                reading.push(None);
+            }
+        }
+        for (k, n) in stacked.iter().enumerate().take(MAX_NOTES) {
+            let approved = self.level_matching(&n.name).and_then(|i| self.levels.get(i)).is_some_and(|l| self.level_approved(&l.name))
+                || self.datums.iter().any(|d| d.name.eq_ignore_ascii_case(&n.name) && self.level_approved(&d.name));
+            // An approved value stays as it is (reported as kept), so the reading is no item.
+            if !approved {
+                items.push((level_rank(&n.name), n.elevation_ft, 2));
+                reading.push(Some(k));
+            }
+        }
+        let keep = in_order(&items);
+        let mut dropped: Vec<usize> = Vec::new();
+        for (r, f) in reading.iter().zip(&keep) {
+            if let (Some(k), false) = (r, f) {
+                dropped.push(*k);
+            }
+        }
+        let mut out = Vec::new();
+        let mut warnings = Vec::new();
+        for (k, n) in stacked.iter().enumerate().take(MAX_NOTES) {
+            if dropped.contains(&k) {
+                let src = if n.source.is_empty() { String::new() } else { format!(" ({})", n.source) };
+                warnings.push(format!(
+                    "{}: {} rejected{src}: it would break the levels' order (elevations rise with the level number)",
+                    n.name,
+                    crate::spec::feet(n.elevation_ft)
+                ));
+            } else {
+                out.push(n.clone());
+            }
+        }
+        (out, warnings)
+    }
+
     /// Every level reaches the next level or storey datum above it (floor to floor); the top
     /// level keeps its height. Returns what changed.
     pub fn restack_heights(&mut self) -> Vec<String> {
@@ -738,6 +873,68 @@ mod tests {
         sp.rename_level("Level 1", "Ground").unwrap();
         assert_eq!(sp.level_source("Ground"), Some("layout:A-301: LEVEL 1 = 1"));
         assert_eq!(sp.level_source("Level 1"), None);
+    }
+
+    #[test]
+    fn a_reading_that_breaks_the_levels_order_is_rejected() {
+        let lvl = |name: &str, e: f64| crate::rules::Level {
+            name: name.into(),
+            elevation_ft: e,
+            height_ft: 10.0,
+            ceiling_ft: 8.0,
+            region: None,
+            base: None,
+            attr: None,
+            sheet: None,
+        };
+        let note =
+            |name: &str, e: f64| LevelNote { name: name.into(), kind: DatumKind::Floor, elevation_ft: e, source: format!("model: {name} {e}") };
+        let sp = BuildingSpec {
+            levels: vec![lvl("Level 1", 0.0), lvl("Level 2", 12.0), lvl("Level 3", 24.0), lvl("Level 4", 36.0)],
+            ..BuildingSpec::default()
+        };
+        // A site spot elevation read as the first floor would lift it over Levels 3 and 4.
+        let (kept, warnings) = sp.readings_in_order(&[note("LEVEL 1", 147.0)], &[]);
+        assert!(kept.is_empty(), "{kept:?}");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("LEVEL 1: 147'-0\" rejected (model: LEVEL 1 147)"), "{warnings:?}");
+        // Readings that agree with each other replace guessed values, even far from them.
+        let all = [note("LEVEL 1", 100.0), note("LEVEL 2", 114.0), note("LEVEL 3", 128.0), note("LEVEL 4", 142.0)];
+        let (kept, warnings) = sp.readings_in_order(&all, &[]);
+        assert_eq!(kept.len(), 4);
+        assert!(warnings.is_empty());
+        // Of the readings, the one out of order goes, the rest stay.
+        let (kept, warnings) = sp.readings_in_order(&[note("LEVEL 2", 14.0), note("LEVEL 3", 9.0), note("LEVEL 4", 42.0)], &[]);
+        assert_eq!(kept.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["LEVEL 2", "LEVEL 4"]);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        // An approved level always wins over a reading.
+        let mut ap = sp.clone();
+        ap.approved.push("levels/Level 3".into());
+        let (kept, _) = ap.readings_in_order(&[note("LEVEL 2", 30.0)], &[]);
+        assert!(kept.is_empty());
+        // So does a fixed value (the print set's level table).
+        let (kept, _) = sp.readings_in_order(&[note("LEVEL 2", 30.0), note("LEVEL 4", 40.0)], &[note("LEVEL 3", 26.0)]);
+        assert_eq!(kept.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["LEVEL 4"]);
+        // The main roof sits over every floor; a low roof or a mezzanine has no fixed place.
+        assert_eq!(level_rank("T.O. ROOF"), Some(100_000));
+        assert_eq!(level_rank("LOW ROOF"), None);
+        assert_eq!(level_rank("MEZZANINE"), None);
+        assert!(level_rank("LEVEL B2") < level_rank("BASEMENT") && level_rank("BASEMENT") < level_rank("GROUND FLOOR"));
+        assert_eq!(code_rank("3"), level_rank("THIRD FLOOR"));
+        assert_eq!(code_rank("R"), level_rank("ROOF"));
+        assert_eq!(code_rank("B2"), level_rank("BASEMENT 2"));
+        assert_eq!(in_order(&[(Some(10), 0.0, 1), (None, -5.0, 1), (Some(20), f64::NAN, 2)]), [true, true, false]);
+    }
+
+    #[test]
+    fn civil_and_site_sheets_are_told_apart() {
+        assert!(site_sheet("C", "GRADING AND DRAINAGE PLAN"));
+        assert!(site_sheet("A", "ARCHITECTURAL SITE PLAN"));
+        assert!(site_sheet("E", "ELECTRICAL SITE PLAN"));
+        assert!(site_sheet("L", "PLANTING PLAN"));
+        assert!(!site_sheet("A", "FIRST FLOOR PLAN"));
+        assert!(!site_sheet("A", "BUILDING SECTIONS"));
+        assert!(!site_sheet("", ""));
     }
 
     #[test]

@@ -126,6 +126,7 @@ fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
         "levels": index.levels,
         "unidentified": index.unidentified,
         "plans_without_level": index.plans_without_level,
+        "level_warnings": index.level_warnings,
     }))
 }
 
