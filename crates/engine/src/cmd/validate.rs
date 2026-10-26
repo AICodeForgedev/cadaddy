@@ -30,7 +30,8 @@ use std::sync::Arc;
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, RawTag, Space};
 use cadaddy_geom::{Bounds2, Vec2, Vec3};
 use cadaddy_walk3d::validate::{
-    self as v, Check, Element, GateMode, Model, ModelLevel, ModelOpening, ModelWall, Mounting, Prints, Report, Run, Scope, Severity, Status,
+    self as v, Check, Element, GateMode, Model, ModelLevel, ModelOpening, ModelWall, Mounting, PrintSheet, Prints, Report, Run, Scope, Severity,
+    Status, Symbol,
 };
 use cadaddy_walk3d::{BuildingSpec, Role, level_at};
 use serde_json::{Value, json};
@@ -494,12 +495,95 @@ fn failure_json(f: &v::Failure, frame: &Frame) -> Value {
 /// Validate the active drawing.
 pub(crate) fn report(s: &Session, cmd: &str, p: &Value) -> Result<(Report, Frame)> {
     let (sp, _) = current(s, cmd)?;
-    let Some(prints) = prints_of(&sp) else {
-        return Err(bad(cmd, "the drawing has no prints to check against yet: give them with bim.prints"));
-    };
     let (model, frame) = model_of(s.doc()?, &sp);
+    let prints: Prints = if let Some(p) = prints_of(&sp) {
+        p.clone()
+    } else if let Some(p) = prints_from_job(s, &frame) {
+        p
+    } else {
+        return Err(bad(
+            cmd,
+            "the drawing has no prints to check against yet: \
+             give them with bim.prints, or start a guided job with job.start \
+             {pdfs: \"<folder>\", goal: \"bim\"} which imports them from the sheets",
+        ));
+    };
     let scope = scope_param(cmd, p, &frame)?;
-    Ok((v::validate(prints, &model, &scope), frame))
+    Ok((v::validate(&prints, &model, &scope), frame))
+}
+
+/// Try to build [`Prints`] from a guided job's data when `sp.prints` is empty.
+///
+/// The guided job's Devices stage reads device symbols from the plan sheets and stores them in
+/// `job.devices`. Its Rooms stage stores rooms in the stage result. Neither writes `sp.prints`,
+/// so `bim.validate` needs to find them here.
+fn prints_from_job(s: &Session, frame: &Frame) -> Option<Prints> {
+    let job = super::guided::load_job(s).ok()??;
+    let mut prints = Prints::default();
+    // Sheets from the job's classified sheet regions.
+    for r in &job.sheet_regions {
+        if !prints.sheets.iter().any(|s| s.number.eq_ignore_ascii_case(&r.number)) {
+            prints.sheets.push(PrintSheet {
+                number: r.number.clone(),
+                title: String::new(),
+                level: if r.level.is_empty() { None } else { Some(r.level.clone()) },
+                kinds: Vec::new(),
+            });
+        }
+    }
+    // Symbols from the job's confirmed devices.
+    for dev in &job.devices {
+        let level = if !dev.level.is_empty() {
+            dev.level.clone()
+        } else {
+            job.sheet_regions.iter().find(|r| r.number.eq_ignore_ascii_case(&dev.sheet)).map(|r| r.level.clone()).unwrap_or_default()
+        };
+        let (_, at_ft) = frame.to_ft(Vec2::new(dev.at[0], dev.at[1]));
+        prints.symbols.push(Symbol {
+            sheet: if dev.sheet.is_empty() { "PLAN".into() } else { dev.sheet.clone() },
+            level,
+            kind: dev.tag.to_ascii_lowercase(),
+            mark: None,
+            tag: if dev.tag.is_empty() { None } else { Some(dev.tag.clone()) },
+            at: at_ft,
+            mounting_in: None,
+        });
+    }
+    // Rooms from the Rooms stage result, when the stage ran.
+    if let Some(st) = job.stages.iter().find(|s| s.name == super::guided::StageName::Rooms)
+        && let Some(rooms_arr) = st.result.as_ref().and_then(|r| r.get("rooms")).and_then(Value::as_array)
+    {
+        for room in rooms_arr.iter().take(v::MAX_ITEMS) {
+            let number = room.get("number").or_else(|| room.get("name")).and_then(Value::as_str).unwrap_or("").to_string();
+            let name = room.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+            let level = room.get("level").and_then(Value::as_str).unwrap_or("").to_string();
+            let sheet = room.get("sheet").and_then(Value::as_str).unwrap_or("").to_string();
+            let unit_type = room.get("unit_type").and_then(Value::as_str).map(String::from);
+            let exterior = room.get("exterior").and_then(Value::as_bool).unwrap_or(false);
+            let ceiling_ft = room.get("ceiling_ft").and_then(Value::as_f64).filter(|v| v.is_finite());
+            let outline: Vec<[f64; 2]> = room
+                .get("outline")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|p| {
+                            let arr = p.as_array()?;
+                            let x = arr.first()?.as_f64()?;
+                            let y = arr.get(1)?.as_f64()?;
+                            Some(frame.to_ft(Vec2::new(x, y)).1)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !number.is_empty() || !name.is_empty() {
+                prints.rooms.push(v::PrintRoom { level, number, name, outline, unit_type, exterior, ceiling_ft, sheet });
+            }
+        }
+    }
+    if prints.sheets.is_empty() && prints.symbols.is_empty() && prints.rooms.is_empty() {
+        return None;
+    }
+    Some(prints.capped())
 }
 
 fn run_validate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -537,8 +621,14 @@ fn run_overlay(s: &mut Session, p: &Value) -> Result<Value> {
     let h = p.get("height").and_then(Value::as_u64).map_or(700, |v| v.clamp(16, u64::from(MAX_PX)) as u32);
     let around = p.get("around").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(12.0).min(1_000.0);
     let (sp, _) = current(s, CMD)?;
-    let prints = prints_of(&sp).ok_or_else(|| bad(CMD, "the drawing has no prints to check against yet"))?.clone();
     let (model, frame) = model_of(s.doc()?, &sp);
+    let prints: Prints = if let Some(p) = prints_of(&sp) {
+        p.clone()
+    } else if let Some(p) = prints_from_job(s, &frame) {
+        p
+    } else {
+        return Err(bad(CMD, "the drawing has no prints to check against yet"));
+    };
     let r = v::validate(&prints, &model, &Scope::all());
     let f = r.failures.iter().find(|f| f.id.eq_ignore_ascii_case(id)).ok_or_else(|| bad(CMD, format!("there is no failure {id} now")))?;
     let at = f.at.or(f.source.at).ok_or_else(|| bad(CMD, format!("failure {id} has no place to picture")))?;
