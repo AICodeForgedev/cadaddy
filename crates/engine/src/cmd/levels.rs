@@ -457,7 +457,7 @@ fn store(s: &mut Session, sp: &BuildingSpec) -> Result<()> {
 /// spec's name for it when it has that level).
 fn link(number: String, discipline: String, title: String, source: String, sp: &BuildingSpec) -> SheetLink {
     let level = levels::level_of_title(&title).map(|c| sp.level_matching(&c).and_then(|i| sp.levels.get(i)).map_or(c, |l| l.name.clone()));
-    SheetLink { number, title: title.chars().take(120).collect(), discipline: Some(discipline), level, source }
+    SheetLink { number, title: title.chars().take(120).collect(), discipline: Some(discipline), level, source, rect: None }
 }
 
 /// A layout's sheet: the sheet number written largest on it (else in the layout's name), and the
@@ -521,7 +521,8 @@ fn run_sheets(s: &mut Session, p: &Value) -> Result<Value> {
     if apply {
         for f in sheets {
             match sp.sheets.iter_mut().find(|x| x.number.eq_ignore_ascii_case(&f.number)) {
-                Some(x) => *x = f,
+                // Where an imported set put the sheet stays known.
+                Some(x) => *x = SheetLink { rect: f.rect.or(x.rect), ..f },
                 None => sp.sheets.push(f),
             }
         }
