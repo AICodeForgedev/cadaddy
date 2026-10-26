@@ -3175,11 +3175,6 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         s.doc_mut()?.building_spec = Some(sp.to_json());
         result["circuits"] = json!(job.circuits.len());
     }
-    // Tags are identities: one element per door, room and device however many sheets show it,
-    // each door between its two rooms, and the schedules checked against the plans. Never stops
-    // the job: a failure is a finding.
-    identity_step(s, job, &mut result);
-
     // The model's rooms are the job's rooms on the levels it built.
     if let Some(by_level) = rooms_from_model(s, job)
         && let Some(o) = result.as_object_mut()
@@ -3210,6 +3205,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     {
         o.insert("not_built".into(), json!(skipped));
     }
+    // Tags are identities: one element per door, room and device however many sheets show it,
+    // each door between its two rooms, and the schedules checked against the plans. Never stops
+    // the job: a failure is a finding.
+    identity_step(s, job, &mut result);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
