@@ -277,7 +277,7 @@ fn a_jobs_other_sheets_are_theirs_not_outside_every_level() {
         set.truth.sheets.iter().map(|sh| (set.file(&sh.pdf).unwrap().to_vec(), format!("{} {}", sh.number, sh.title), String::new())).collect();
     std::fs::write(dir.join("Full Set.pdf"), cadaddy_io::pdf_merge::merge(&pages).unwrap()).unwrap();
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "checkpoint": false})).unwrap();
+    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false})).unwrap();
     assert_eq!(st["done"], json!(true), "{st}");
     let _ = std::fs::remove_dir_all(&dir);
 
