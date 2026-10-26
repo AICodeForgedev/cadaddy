@@ -89,6 +89,7 @@ pub mod dimmodes;
 pub mod drywall;
 pub mod dwgprops;
 pub mod fieldview;
+pub mod finishes;
 pub mod fourd;
 pub mod framing;
 pub mod furnish;
@@ -807,6 +808,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(takeoff::specs());
         v.extend(drywall::specs());
         v.extend(unittypes::specs());
+        v.extend(finishes::specs());
     v.extend(fieldview::specs());
     v.extend(bimwork::specs());
         v.extend(imageattach::specs());
