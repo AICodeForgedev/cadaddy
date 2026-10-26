@@ -2068,6 +2068,12 @@ pub struct EnvLayer {
     /// Identical boards stacked (`(2) LAYERS 2"`).
     #[serde(default = "one_layer")]
     pub count: u32,
+    /// Where it was read from: sheet number or `spec`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// `read`, `rule`, `assumed`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
 }
 
 fn one_layer() -> u32 {
@@ -2182,14 +2188,26 @@ pub struct QtyItem {
     pub waste_pct: f64,
     /// Net plus waste, rounded up.
     pub order: f64,
+    /// Where it came from: sheet number (`A-104`, `A-504`), `spec`, other reader name, or empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// `read`, `rule`, `assumed`, or empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
 }
 
 /// A coordination flag: `no_curb_detail`, `drain_structure`, `no_overflow`, `spec_mil`,
-/// `r_value`, `no_cricket`.
+/// `r_value`, `no_cricket`, `no_curb` (Q262).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct EnvFlag {
     pub kind: String,
     /// What it is about (a curb's tag, a drain's place `RD@x,y`).
     pub subject: String,
     pub message: String,
+    /// Where the flag came from: sheet number, reader name, or empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// `read`, `rule`, `assumed`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
 }
