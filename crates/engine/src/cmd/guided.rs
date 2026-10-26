@@ -2671,6 +2671,32 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
     out
 }
 
+/// The building spec drafted and stored from the open print set, as the job's build stage drafts
+/// it: the set classified (when it isn't yet), its current plan sheets imported side by side and
+/// one level per architectural floor plan. For `bim.build` when there is no spec yet (Q5276: an
+/// import followed by a build must work without a guided job).
+pub(crate) fn draft_from_prints(s: &mut Session) -> Result<Value> {
+    let project = super::printset::get_project_handle(s)?;
+    if project.sheets.iter().all(|e| e.recognised.is_none()) {
+        s.execute("printset.classify", &json!({}))?;
+    }
+    let project = super::printset::get_project_handle(s)?;
+    let index = cadaddy_mepfix::printset::sheet_index(&project);
+    if index.sheets.is_empty() {
+        return Err(bad(
+            "bim.build",
+            format!("no sheets were found in {} — check the folder holds the prints (PDF, DXF or DWG)", project.source_dir),
+        ));
+    }
+    let mut job = GuidedJob::new(&project.source_dir, JobGoal::Bim);
+    job.sheets = Some(s.execute("printset.sheets", &json!({"current": true}))?);
+    job.index = Some(json!({"sheets": index.sheets, "levels": index.levels}));
+    ensure_sheets_loaded(s, &mut job)?;
+    let levels = building_levels(&job);
+    let params = if levels.is_empty() { json!({"store": true}) } else { json!({"store": true, "levels": levels, "stack": true}) };
+    s.execute("bspec.draft", &params)
+}
+
 /// Run takeoff stage.
 fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     ensure_sheets_loaded(s, job)?;
