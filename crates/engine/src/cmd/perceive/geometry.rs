@@ -682,10 +682,14 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
         .cloned()
         .collect();
     // The best name claims its outline first, whatever the drawing order: a tag block's name, then
-    // a room or unit-type word, then the tallest text, then by text and place.
-    names.sort_by(|a, b| {
-        score(b).cmp(&score(a)).then(b.3.total_cmp(&a.3)).then_with(|| a.1.cmp(&b.1)).then(b.2.y.total_cmp(&a.2.y)).then(a.2.x.total_cmp(&b.2.x))
-    });
+    // a room or unit-type word, then the tallest text, then by text and place. Read sheet by sheet,
+    // the score alone orders them (then drawing order): there a taller label on the plan (a unit
+    // type, a note) would claim a room's outline before the room's own name.
+    if regions.is_none() {
+        names.sort_by(|a, b| {
+            score(b).cmp(&score(a)).then(b.3.total_cmp(&a.3)).then_with(|| a.1.cmp(&b.1)).then(b.2.y.total_cmp(&a.2.y)).then(a.2.x.total_cmp(&b.2.x))
+        });
+    }
     // The drawing's best names, or each sheet's best in turn (the stable sort keeps the order above).
     let names = labels_to_trace(names, |n| n.2, score, regions);
     let mut numbers: Vec<Label> = all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t)).cloned().collect();
