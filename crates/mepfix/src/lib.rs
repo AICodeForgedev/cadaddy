@@ -15,6 +15,7 @@
 //! building gets it), [`draw`] (how a sheet shows it) and, if readers will find it, [`score`].
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![allow(unknown_lints)] // the lint below exists only in newer clippy
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
 pub mod arch;
