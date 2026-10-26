@@ -1834,5 +1834,4 @@ mod tedit;
 mod dimedit;
 
 #[cfg(test)]
-#[path = "annotate_tests.rs"]
 mod tests;
