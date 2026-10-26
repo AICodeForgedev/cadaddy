@@ -667,8 +667,9 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
                 p["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(item)) && p["size"].as_str().unwrap_or_default().eq_ignore_ascii_case(size)
             })
             .or_else(|| {
-                pool.iter()
-                    .position(|p| p["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(item)) && p["size"].as_str().unwrap_or_default().is_empty())
+                pool.iter().position(|p| {
+                    p["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(item)) && p["size"].as_str().unwrap_or_default().is_empty()
+                })
             })
             .or_else(|| find_price_by_words(pool, item, unit, category, system).and_then(|v| pool.iter().position(|p| std::ptr::eq(p, v))))
     };
@@ -1073,11 +1074,8 @@ fn run_status(s: &mut Session, _p: &Value) -> Result<Value> {
     // Q6012: report starter cost book usage.
     let starter_count = job.priced.iter().filter(|p| p.via == STARTER_SOURCE).count();
     if starter_count > 0 {
-        out["starter_cost_book"] = json!(format!(
-            "priced with the starter cost book: {} of {} lines; replace with estimate.import_costs",
-            starter_count,
-            job.priced.len()
-        ));
+        out["starter_cost_book"] =
+            json!(format!("priced with the starter cost book: {} of {} lines; replace with estimate.import_costs", starter_count, job.priced.len()));
         f.push(json!({
             "kind": "starter_cost_book",
             "message": format!("{starter_count} line(s) priced with the starter cost book — generic values, not project-specific"),
@@ -1443,7 +1441,12 @@ mod tests {
         let kinds: Vec<&str> = st["findings"].as_array().unwrap().iter().filter_map(|f| f["kind"].as_str()).collect();
         // Q6012: the starter book prices lines that have no baseline, so "unpriced" may be
         // replaced by "starter_cost_book"; either indicates the job needs real prices.
-        assert!(kinds.contains(&"undecided_scope") && (kinds.contains(&"unpriced") || kinds.contains(&"starter_cost_book")) && kinds.contains(&"off_ratio"), "{kinds:?}");
+        assert!(
+            kinds.contains(&"undecided_scope")
+                && (kinds.contains(&"unpriced") || kinds.contains(&"starter_cost_book"))
+                && kinds.contains(&"off_ratio"),
+            "{kinds:?}"
+        );
         // The agent maps assemblies and sets scope (with reasons); the software prices.
         s.execute(
             "estimate.set_assembly",
@@ -1837,12 +1840,8 @@ mod tests {
     fn starter_cost_book_csv_parses_and_covers_all_trades() {
         let rows = starter_prices();
         assert!(rows.len() >= 50, "starter book has {} rows, need at least 50", rows.len());
-        let trades: BTreeSet<String> = STARTER_CSV
-            .lines()
-            .skip(1)
-            .filter_map(|l| l.split(',').nth(5).map(|t| t.trim().to_string()))
-            .filter(|t| !t.is_empty())
-            .collect();
+        let trades: BTreeSet<String> =
+            STARTER_CSV.lines().skip(1).filter_map(|l| l.split(',').nth(5).map(|t| t.trim().to_string())).filter(|t| !t.is_empty()).collect();
         for t in ["electrical", "mechanical", "plumbing", "general"] {
             assert!(trades.contains(t), "starter book missing trade {t}: {trades:?}");
         }
@@ -1868,20 +1867,10 @@ mod tests {
         assert!(starter_msg.contains("starter cost book"), "status should mention starter: {st}");
         // Every starter-priced line should have via = "starter cost book".
         let q = s.execute("estimate.query", &json!({ "limit": 200 })).unwrap();
-        let starter_lines: Vec<&Value> = q["lines"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|l| l["via"].as_str() == Some(STARTER_SOURCE))
-            .collect();
+        let starter_lines: Vec<&Value> = q["lines"].as_array().unwrap().iter().filter(|l| l["via"].as_str() == Some(STARTER_SOURCE)).collect();
         assert!(!starter_lines.is_empty(), "should have lines via starter cost book: {q}");
         // A finding about the starter book should exist.
-        let f: Vec<&Value> = st["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|f| f["kind"].as_str() == Some("starter_cost_book"))
-            .collect();
+        let f: Vec<&Value> = st["findings"].as_array().unwrap().iter().filter(|f| f["kind"].as_str() == Some("starter_cost_book")).collect();
         assert!(!f.is_empty(), "should have a starter_cost_book finding: {st}");
         // Totals should be > 0 (the estimate is not $0 any more).
         assert!(st["totals"]["total"].as_f64().unwrap_or(0.0) > 0.0, "total should be > 0: {st}");
@@ -1917,20 +1906,12 @@ mod tests {
             .collect();
         assert!(!recep.is_empty(), "user price should override starter for receptacle: {q}");
         // Other lines still use the starter.
-        let _still_starter: Vec<&Value> = q["lines"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|l| l["via"].as_str() == Some(STARTER_SOURCE))
-            .collect();
+        let _still_starter: Vec<&Value> = q["lines"].as_array().unwrap().iter().filter(|l| l["via"].as_str() == Some(STARTER_SOURCE)).collect();
         // Some lines might still use starter (boxes, plates, etc).
         let after = s.execute("estimate.status", &json!({})).unwrap();
         let after_total = after["totals"]["total"].as_f64().unwrap_or(0.0);
         // The totals should have changed (user price $50 vs starter $2.50).
-        assert!(
-            (after_total - before_total).abs() > 1.0,
-            "user override should change total: before={before_total}, after={after_total}"
-        );
+        assert!((after_total - before_total).abs() > 1.0, "user override should change total: before={before_total}, after={after_total}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

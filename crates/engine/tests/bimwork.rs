@@ -391,12 +391,16 @@ fn bim_estimate_and_estimate_status_give_the_same_totals() {
     // stored price source).
     let is_starter = |v: &str| v.contains("starter cost book");
     let bim_lines = bim["lines"].as_array().unwrap();
-    let bim_user_mat: f64 = bim_lines.iter().filter(|l| l["via"].as_str().is_none_or(|v| !is_starter(v))).map(|l| l["material"].as_f64().unwrap_or(0.0)).sum();
-    let bim_user_labor: f64 = bim_lines.iter().filter(|l| l["via"].as_str().is_none_or(|v| !is_starter(v))).map(|l| l["labor"].as_f64().unwrap_or(0.0)).sum();
+    let bim_user_mat: f64 =
+        bim_lines.iter().filter(|l| l["via"].as_str().is_none_or(|v| !is_starter(v))).map(|l| l["material"].as_f64().unwrap_or(0.0)).sum();
+    let bim_user_labor: f64 =
+        bim_lines.iter().filter(|l| l["via"].as_str().is_none_or(|v| !is_starter(v))).map(|l| l["labor"].as_f64().unwrap_or(0.0)).sum();
     let q = s.execute("estimate.query", &json!({"limit": 500})).unwrap();
     let est_lines = q["lines"].as_array().unwrap();
-    let est_user_mat: f64 = est_lines.iter().filter(|l| l["via"].as_str().is_none_or(|v| !is_starter(v))).map(|l| l["material"].as_f64().unwrap_or(0.0)).sum();
-    let est_user_labor: f64 = est_lines.iter().filter(|l| l["via"].as_str().is_none_or(|v| !is_starter(v))).map(|l| l["labor_cost"].as_f64().unwrap_or(0.0)).sum();
+    let est_user_mat: f64 =
+        est_lines.iter().filter(|l| l["via"].as_str().is_none_or(|v| !is_starter(v))).map(|l| l["material"].as_f64().unwrap_or(0.0)).sum();
+    let est_user_labor: f64 =
+        est_lines.iter().filter(|l| l["via"].as_str().is_none_or(|v| !is_starter(v))).map(|l| l["labor_cost"].as_f64().unwrap_or(0.0)).sum();
     let close = |a: f64, b: f64| (a - b).abs() < 0.02;
     assert!(close(bim_user_mat, est_user_mat), "user-table material: bim {bim_user_mat} vs est {est_user_mat}");
     assert!(close(bim_user_labor, est_user_labor), "user-table labor: bim {bim_user_labor} vs est {est_user_labor}");
@@ -408,7 +412,8 @@ fn bim_estimate_and_estimate_status_give_the_same_totals() {
     // The aggregate totals include both user and starter: bim.estimate's total
     // should be close to estimate.status (within the starter-book matching margin).
     let bim_total = bim["total"].as_f64().unwrap();
-    let est_total = est["totals"]["direct"].as_f64().unwrap_or_else(|| est["totals"]["material"].as_f64().unwrap() + est["totals"]["labor"].as_f64().unwrap());
+    let est_total =
+        est["totals"]["direct"].as_f64().unwrap_or_else(|| est["totals"]["material"].as_f64().unwrap() + est["totals"]["labor"].as_f64().unwrap());
     let margin = bim_total.max(est_total) * 0.05;
     assert!((bim_total - est_total).abs() < margin, "aggregate totals too far apart: bim {bim_total} vs est {est_total} (margin {margin})");
 }
