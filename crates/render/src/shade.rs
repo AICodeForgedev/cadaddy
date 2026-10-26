@@ -475,6 +475,28 @@ pub fn fit(scene: &Scene, p: Option<Projection>, w: u32, h: u32) -> Option<Shade
     Some(ShadeView { center: b.center(), height, ..v })
 }
 
+/// A view fitted to a world-space axis-aligned bounding box (without building the full scene).
+pub fn fit_bounds(bounds: &crate::model3::Aabb, p: Option<Projection>, w: u32, h: u32) -> Option<ShadeView> {
+    if bounds.is_empty() {
+        return None;
+    }
+    let v = ShadeView::new(p, Vec2::ZERO, 1.0, w, h);
+    let on_plane = |q: Vec3| Vec2::new(q.dot(v.right), q.dot(v.up));
+    let corners = (0..8).map(|i| {
+        Vec3::new(
+            if i & 1 == 0 { bounds.lo.x } else { bounds.hi.x },
+            if i & 2 == 0 { bounds.lo.y } else { bounds.hi.y },
+            if i & 4 == 0 { bounds.lo.z } else { bounds.hi.z },
+        )
+    });
+    let b = cadaddy_geom::Bounds2::from_points(corners.map(on_plane));
+    if b.is_empty() || !(b.width().is_finite() && b.height().is_finite()) {
+        return None;
+    }
+    let height = (b.height().max(b.width() * f64::from(v.height_px) / f64::from(v.width_px)) * 1.04).max(1e-9);
+    Some(ShadeView { center: b.center(), height, ..v })
+}
+
 /// The drawing's model space drawn in `style` along `p`, fitted into a `w` × `h` image on `bg`
 /// (exports and plots of a shaded or 3D view).
 pub fn render_fitted(d: &Drawing, p: Option<Projection>, style: VisualStyle, w: u32, h: u32, bg: Rgb) -> Option<Raster> {
