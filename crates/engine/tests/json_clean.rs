@@ -45,7 +45,7 @@ fn command_output_has_no_raw_control_characters() {
 #[test]
 fn echo_strips_control_characters() {
     let mut s = session();
-    let dirty = format!("info\x1b[31mred\x1b[0m\x07bell\x00null");
+    let dirty = "info\x1b[31mred\x1b[0m\x07bell\x00null".to_string();
     s.echo(dirty);
     let last = s.log.last().expect("log entry");
     for b in last.bytes() {
@@ -101,9 +101,9 @@ fn parameterless_commands_produce_strict_json() {
             continue;
         }
         // Only test commands that take no required parameters (the empty-params call).
-        if let Ok(r) = s.execute(&spec.id, &json!({})) {
+        if let Ok(r) = s.execute(spec.id, &json!({})) {
             let serialised = serde_json::to_string(&r).expect("serialise");
-            assert_strict_json(&serialised, &spec.id);
+            assert_strict_json(&serialised, spec.id);
             tested += 1;
         }
         // Commands that fail with BadParams are fine: they need arguments.

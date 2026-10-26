@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn serialised_output_is_strict_json() {
-        let raw = format!("esc\x1b[31mred\x1b[0m bell\x07 null\x00");
+        let raw = "esc\x1b[31mred\x1b[0m bell\x07 null\x00".to_string();
         let mut v = json!({"text": raw});
         sanitize(&mut v);
         let s = serde_json::to_string(&v).unwrap();
