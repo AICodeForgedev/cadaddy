@@ -261,3 +261,18 @@ fn a_template_keeps_its_view_twist() {
     assert!(close(model_at(&t, st.view().center), (lo + hi) * 0.5));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Undo and redo leave the drawing's twist record (the lone `*Active` VPORT tile) saying what
+/// the model view shows.
+#[test]
+fn undo_keeps_the_twist_record_in_step_with_the_view() {
+    let mut s = session();
+    s.execute("view.twist", &json!({"angle": 30})).unwrap();
+    s.execute("line", &json!({"points": [[0, 10], [10, 10]]})).unwrap();
+    for step in ["undo", "redo", "undo", "undo"] {
+        s.execute(step, &json!({})).unwrap();
+        let st = s.state().unwrap();
+        let rec = st.doc.vports.iter().find(|c| c.is_active()).and_then(|c| c.tiles.first()).map_or(0.0, |t| t.twist);
+        assert!((rec - st.twist()).abs() < 1e-12, "{step}: record {rec} vs view {}", st.twist());
+    }
+}

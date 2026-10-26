@@ -3993,6 +3993,9 @@ impl Session {
         }
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
+        // Views aren't all part of the drawing's undo: the untiled twist record follows the
+        // live model view again.
+        st.keep_model_twist();
         st.selection = Vec::new();
         st.redo.push(cur);
         st.revision += 1;
@@ -4008,6 +4011,9 @@ impl Session {
         }
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
+        // Views aren't all part of the drawing's undo: the untiled twist record follows the
+        // live model view again.
+        st.keep_model_twist();
         st.selection = Vec::new();
         st.undo.push(cur);
         st.revision += 1;
