@@ -2996,6 +2996,21 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 false,
             ),
         }
+        // The architect locates, the engineer circuits (Q6026): each device moves to where the
+        // architectural elevations and plans put it, keeping its circuit.
+        let located = super::archlocate::run_for_job(s, job);
+        for (what, examples) in super::archlocate::job_findings(&located) {
+            job.add_finding(
+                StageName::BimBuild,
+                &what,
+                &examples,
+                2,
+                vec!["Check the device on the architectural elevation and the E plan; edit its location to settle it".into()],
+                None,
+                false,
+            );
+        }
+        result["arch_locate"] = located;
     }
     // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff.
     if !job.circuits.is_empty()
