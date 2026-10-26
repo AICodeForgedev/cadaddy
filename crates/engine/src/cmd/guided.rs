@@ -3615,7 +3615,13 @@ mod tests {
             add_sheet(&mut s, &texts, &syms);
             let hi = s.doc().map_or(0, |d| d.handseed);
             job.sheet_spans.push(SheetSpan { sheet: name.into(), lo, hi });
-            job.sheet_regions.push(SheetRegion { number: name.into(), level: level.into(), rect: [x0, 0.0, x0 + 2000.0, 1000.0] });
+            job.sheet_regions.push(SheetRegion {
+                number: name.into(),
+                level: level.into(),
+                discipline: "E".into(),
+                kind: "plan".into(),
+                rect: [x0, 0.0, x0 + 2000.0, 1000.0],
+            });
             want_by_level.insert(format!("Level {level}"), a + b);
         }
         let n: i32 = want_by_level.values().sum();
