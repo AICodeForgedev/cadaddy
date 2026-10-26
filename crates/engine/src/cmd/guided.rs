@@ -2414,49 +2414,48 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     // Q5278: persist devices detected by the Devices stage into sp.tags, AFTER bspec.draft
     // stored the spec (which would overwrite earlier tag inserts).
-    if let Some(dev_stage) = job.stage(StageName::Devices) {
-        if let Some(devices) = dev_stage.result.as_ref().and_then(|r| r.get("devices")) {
-            if let Some(items) = devices.get("items").and_then(Value::as_array) {
-                let level_name = super::bspec::current(s, "guided")
-                    .ok()
-                    .and_then(|(sp, _)| sp.levels.first().map(|l| l.name.clone()))
-                    .unwrap_or_default();
-                let mut new_tags = Vec::new();
-                for item in items.iter().take(50_000) {
-                    let tag = item.get("tag").and_then(Value::as_str).unwrap_or("unknown");
-                    let count = item.get("count").and_then(Value::as_u64).unwrap_or(0);
-                    for i in 0..count {
-                        let id = format!("device:{tag}:{i}");
-                        let kind = if tag.to_ascii_lowercase().contains("light") || tag.to_ascii_lowercase().contains("lum") {
-                            "luminaire"
-                        } else {
-                            "receptacle"
-                        };
-                        new_tags.push(cadaddy_walk3d::tags::ElementTag {
-                            id,
-                            kind: kind.into(),
-                            level: level_name.clone(),
-                            at_ft: [0.0, 0.0],
-                            fields: {
-                                let mut f = std::collections::BTreeMap::new();
-                                f.insert(
-                                    "device_type".into(),
-                                    cadaddy_walk3d::tags::Field { value: tag.to_string(), source: "plan".into() },
-                                );
-                                f
-                            },
-                            ..Default::default()
-                        });
-                    }
-                }
-                if !new_tags.is_empty() {
-                    if let Ok((mut sp, _)) = super::bspec::current(s, "guided") {
-                        sp.tags.extend(new_tags);
-                        if let Ok(spec_val) = serde_json::to_value(&sp) {
-                            let _ = s.execute("bspec.set", &json!({"replace": true, "spec": spec_val}));
-                        }
-                    }
-                }
+    if let Some(dev_stage) = job.stage(StageName::Devices)
+        && let Some(devices) = dev_stage.result.as_ref().and_then(|r| r.get("devices"))
+        && let Some(items) = devices.get("items").and_then(Value::as_array)
+    {
+        let level_name = super::bspec::current(s, "guided")
+            .ok()
+            .and_then(|(sp, _)| sp.levels.first().map(|l| l.name.clone()))
+            .unwrap_or_default();
+        let mut new_tags = Vec::new();
+        for item in items.iter().take(50_000) {
+            let tag = item.get("tag").and_then(Value::as_str).unwrap_or("unknown");
+            let count = item.get("count").and_then(Value::as_u64).unwrap_or(0);
+            for i in 0..count {
+                let id = format!("device:{tag}:{i}");
+                let kind = if tag.to_ascii_lowercase().contains("light") || tag.to_ascii_lowercase().contains("lum") {
+                    "luminaire"
+                } else {
+                    "receptacle"
+                };
+                new_tags.push(cadaddy_walk3d::tags::ElementTag {
+                    id,
+                    kind: kind.into(),
+                    level: level_name.clone(),
+                    at_ft: [0.0, 0.0],
+                    fields: {
+                        let mut f = std::collections::BTreeMap::new();
+                        f.insert(
+                            "device_type".into(),
+                            cadaddy_walk3d::tags::Field { value: tag.to_string(), source: "plan".into() },
+                        );
+                        f
+                    },
+                    ..Default::default()
+                });
+            }
+        }
+        if !new_tags.is_empty()
+            && let Ok((mut sp, _)) = super::bspec::current(s, "guided")
+        {
+            sp.tags.extend(new_tags);
+            if let Ok(spec_val) = serde_json::to_value(&sp) {
+                let _ = s.execute("bspec.set", &json!({"replace": true, "spec": spec_val}));
             }
         }
     }
