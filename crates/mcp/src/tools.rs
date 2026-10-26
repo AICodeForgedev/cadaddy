@@ -116,7 +116,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         }}}),
         json!({"name": "guided_job", "description": "For prints → model/takeoff/estimate, call guided_job start then loop guided_job next / guided_job answer. The software runs a fixed pipeline (import → classify → levels → rooms → devices → bim.build → takeoff → estimate) and pauses with questions when it needs the agent: confirm a scale, name a room, identify an unknown symbol, spot-check a count. Answers become project rules for future runs. A worklist collects every question, finding and action; each resolved action is undoable. Actions:\n- start {pdfs: folder, goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\"|\"clash\"} — create a job.\n- next {} — the next question (or done/progress).\n- answer {id, answer} — answer a question; the pipeline resumes.\n- status {} — job progress, findings and open worklist items.\n- explain {stage?} — what a stage does and its state.\n- rules {} — learned project rules.\n- report {} — final report.\n- worklist {status?: \"pending\"|\"resolved\"|\"info\", stage?} — the unified worklist.\n- undo {id} — undo a resolved worklist action.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "answer", "status", "explain", "rules", "report", "worklist", "undo"]}, "params": {"type": "object"}}, "required": ["action"]}}),
-        json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items (paged, default 50), \"edit\" changes one item by its stable id (e.g. \"R1\").",
+        json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items (paged, default 50), \"edit\" changes one item by its stable id (e.g. \"R1\"), \"casework\" reads the open architectural floor plan's casework and plumbing fixtures with their schedule: each item's tag, kind, 3D family, position, height, source (sheet, schedule) and status (schedule / note / pattern / tag), paged by cursor and limit; place: true makes each item with a family that model.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string"},
             "level": {"type": "string"}, "system": {"type": "string"}, "guessed_only": {"type": "boolean"},
@@ -126,7 +126,10 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "size_in": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
             "bottom_ft": {"type": "number"}, "reviewed": {"type": "boolean"},
             "edited_by": {"type": "string", "description": "who made this edit (default \"agent\")"},
-            "rebuild": {"type": "boolean"}
+            "rebuild": {"type": "boolean"},
+            "place": {"type": "boolean", "description": "casework action: place the 3D family of each read item"},
+            "kind": {"type": "string", "description": "casework action: only this kind (e.g. \"vanity\", \"water_closet\")"},
+            "sheet": {"type": "string", "description": "casework action: the sheet number to record as the source"}
         }}}),
         json!({"name": "import_check", "description": "Check the quality of a PDF-imported drawing: scale, layers, text recovery, fills, symbols, grid. Returns pass/fail, a score (0-100), per-check results with evidence for zoom-to, and hard-fail IDs (SCALE, FILLS, SYMBOLS each fail on their own). Optionally check a file by path without opening it.",
             "inputSchema": {"type": "object", "properties": {"path": {"type": "string", "description": "file path to check without opening (omit to check the current drawing)"}}}}),
@@ -498,15 +501,29 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
         }
         "site_takeoff" => exec(b, "site.takeoff", a),
         "mep" => {
-            let command = match a.get("action").and_then(Value::as_str) {
-                Some("edit") => "mep.edit",
-                _ => "mep.list",
-            };
-            let mut params = a.clone();
-            if let Some(o) = params.as_object_mut() {
-                o.remove("action");
+            if a.get("action").and_then(Value::as_str) == Some("casework") {
+                // The casework list pages by offset.
+                let mut params = json!({});
+                for k in ["place", "kind", "sheet", "limit"] {
+                    if let Some(v) = a.get(k).filter(|v| !v.is_null()) {
+                        params[k] = v.clone();
+                    }
+                }
+                if let Some(c) = a.get("cursor").filter(|v| !v.is_null()) {
+                    params["offset"] = c.clone();
+                }
+                exec(b, "casework.read", params)
+            } else {
+                let command = match a.get("action").and_then(Value::as_str) {
+                    Some("edit") => "mep.edit",
+                    _ => "mep.list",
+                };
+                let mut params = a.clone();
+                if let Some(o) = params.as_object_mut() {
+                    o.remove("action");
+                }
+                exec(b, command, params)
             }
-            exec(b, command, params)
         }
         "project" => {
             let command = match a.get("action").and_then(Value::as_str) {

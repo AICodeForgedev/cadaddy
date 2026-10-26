@@ -79,6 +79,7 @@ pub use render::apply_environment;
 pub use underlay::forget_pages as forget_underlay_pages;
 pub mod agentready;
 pub mod bcf;
+pub mod casework;
 pub mod clashreport;
 pub mod cobie;
 pub mod concrete;
@@ -553,6 +554,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         );
         v.extend(models3d::specs());
         v.extend(furnish::specs());
+        v.extend(casework::specs());
         v.extend(perceive::specs());
         v.extend(rooms3d::specs());
         v.extend(bimprops::specs());
