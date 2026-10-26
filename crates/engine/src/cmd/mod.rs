@@ -61,6 +61,7 @@ pub mod levels;
 pub mod lowvolt;
 pub mod markup;
 pub mod paramconv;
+pub mod planview;
 pub mod pointcloud;
 pub mod procure;
 pub mod progress;
@@ -739,6 +740,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(revise3d::specs());
         v.extend(overrides::specs());
         v.extend(bspec::specs());
+        v.extend(planview::specs());
         v.extend(p2meval::specs());
         v.extend(schedules::specs());
         v.extend(pdfplans::specs());
