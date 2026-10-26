@@ -91,6 +91,41 @@ pub(crate) fn tag(part: Part, level: &str, source: Handle) -> Vec<RawTag> {
     vec![t(1001, APP.into()), t(1000, part_name(part).into()), t(1000, level.chars().take(255).collect()), t(1000, source.hex())]
 }
 
+/// Spatial grid for fast wall lookups by position.  Cell size = search radius; each wall
+/// is inserted into every cell its bounding box (grown by one cell) touches, so looking up
+/// the single cell at a query point finds every wall within one cell of that point.
+struct WallGrid {
+    cell: f64,
+    map: HashMap<(i64, i64), Vec<usize>>,
+}
+
+impl WallGrid {
+    fn build(walls: &[PlanWall], cell: f64) -> Self {
+        let cell = cell.max(1.0);
+        let mut map: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+        for (i, w) in walls.iter().enumerate() {
+            let (x0, x1) = (Self::k(w.a.x.min(w.b.x) - cell, cell), Self::k(w.a.x.max(w.b.x) + cell, cell));
+            let (y0, y1) = (Self::k(w.a.y.min(w.b.y) - cell, cell), Self::k(w.a.y.max(w.b.y) + cell, cell));
+            if (x1 - x0 + 1).unsigned_abs().saturating_mul((y1 - y0 + 1).unsigned_abs()) > 10_000 {
+                continue;
+            }
+            for cx in x0..=x1 {
+                for cy in y0..=y1 {
+                    map.entry((cx, cy)).or_default().push(i);
+                }
+            }
+        }
+        Self { cell, map }
+    }
+
+    fn k(v: f64, cell: f64) -> i64 { (v / cell).floor() as i64 }
+
+    /// Wall indices whose expanded bbox covers the cell at `p`.
+    fn at(&self, p: Vec2) -> &[usize] {
+        self.map.get(&(Self::k(p.x, self.cell), Self::k(p.y, self.cell))).map(Vec::as_slice).unwrap_or_default()
+    }
+}
+
 /// A wall's tag with its wall type (`type:<name>`, after the source), for IFC's materials.
 fn wall_tag(level: &str, source: Handle, wall_type: Option<&str>) -> Vec<RawTag> {
     let mut x = tag(Part::Wall, level, source);
@@ -267,18 +302,31 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
     let upf = if scene.units_per_foot.is_finite() && scene.units_per_foot > 0.0 { scene.units_per_foot } else { 12.0 };
     let gs = groups(&scene);
     // Walls from the plan's face pairs, level by level (levels drawn on this sheet).
+    let build_start = web_time::Instant::now();
     let mut notes = Vec::new();
     let mut planned: Vec<(usize, PlanLevel)> = Vec::new();
+    let total_levels = g.rules.levels.iter().filter(|l| l.sheet.is_none()).count();
     for (i, level) in g.rules.levels.iter().enumerate() {
         if level.sheet.is_some() {
             continue;
         }
         let Some(si) = scene.levels.iter().position(|l| l.name == level.name) else { continue };
+        let level_start = web_time::Instant::now();
         let pl = plan_level(s.doc()?, g, level, upf, &mut notes);
+        let level_ms = level_start.elapsed().as_millis();
         if !pl.walls.is_empty() {
+            if level_ms > 100 {
+                notes.push(format!("{}: built {} walls, {} openings in {} ms.", level.name, pl.walls.len(), pl.leaves.len(), level_ms));
+            }
             planned.push((si, pl));
         } else if i == 0 && g.rules.levels.len() == 1 && scene.tris.is_empty() {
             notes.push("Nothing to build.".into());
+        }
+    }
+    if total_levels > 1 {
+        let plan_ms = build_start.elapsed().as_millis();
+        if plan_ms > 200 {
+            notes.push(format!("Planning {} levels took {} ms.", total_levels, plan_ms));
         }
     }
     let d = s.doc_mut()?;
@@ -932,7 +980,10 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         mark_walls(sp, &level.name, z0, upf, &mut pl.walls);
     }
     // Ends that meet another wall run on into it by its thickness (closing corners and tees).
+    // Uses a spatial grid (cell = max wall thickness) so each endpoint only checks nearby walls.
     let snapshot = pl.walls.clone();
+    let max_thick = snapshot.iter().map(|w| w.thickness).fold(0.0f64, f64::max).max(lim.max_thick);
+    let ext_grid = WallGrid::build(&snapshot, 1.5 * max_thick);
     for w in &mut pl.walls {
         let len = w.a.dist(w.b);
         if len <= 1e-9 {
@@ -940,13 +991,18 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         }
         let u = (w.b - w.a) * (1.0 / len);
         let meets = |p: Vec2| {
-            snapshot
-                .iter()
-                .filter(|o| (o.b - o.a).cross(u).abs() > 0.1 * o.a.dist(o.b))
-                .map(|o| (seg_dist(p, o.a, o.b), o.thickness))
-                .filter(|(dd, t)| *dd <= 1.5 * t.max(w.thickness))
-                .map(|(_, t)| t)
-                .fold(0.0, f64::max)
+            let mut best = 0.0f64;
+            for &i in ext_grid.at(p) {
+                let o = &snapshot[i];
+                if (o.b - o.a).cross(u).abs() <= 0.1 * o.a.dist(o.b) {
+                    continue;
+                }
+                let dd = seg_dist(p, o.a, o.b);
+                if dd <= 1.5 * o.thickness.max(w.thickness) {
+                    best = best.max(o.thickness);
+                }
+            }
+            best
         };
         let (ta, tb) = (meets(w.a), meets(w.b));
         w.a -= u * ta.min(len);
@@ -979,16 +1035,18 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // The wall each opening is in (the hinge, or the block, on its centreline within its
     // thickness); a swing read off the lines (an arc, not a door block) only in a wall it shuts
     // along (Q5273). For a drawn swing, whether that wall runs solid through where it shuts.
+    // Uses a spatial grid so each opening only checks nearby walls.
+    let open_grid = WallGrid::build(&pl.walls, max_thick.max(2.0 * k));
     let placed: Vec<Option<(usize, bool)>> = ops
         .iter()
         .take(MAX_OBJECTS)
         .map(|o| {
             let drawn_swing = if o.kind == "door" && o.block.is_none() { o.swing.map(|(_, ends)| ends) } else { None };
-            let (wi, _) = pl
-                .walls
+            let (wi, _) = open_grid
+                .at(o.at)
                 .iter()
-                .enumerate()
-                .filter_map(|(i, w)| {
+                .filter_map(|&i| {
+                    let w = &pl.walls[i];
                     let len = w.a.dist(w.b);
                     if len <= 1e-9 {
                         return None;
@@ -1000,7 +1058,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     (fits && off <= w.thickness.max(2.0 * k) && s >= -o.width && s <= len + o.width).then_some((i, off))
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1))?;
-            Some((wi, drawn_swing.is_some_and(|ends| solid_through(&pl.walls, wi, o.at, ends, k))))
+            Some((wi, drawn_swing.is_some_and(|ends| solid_through_grid(&pl.walls, Some(&open_grid), wi, o.at, ends, k))))
         })
         .collect();
     // A plan that breaks its walls for its doors (most drawn swings hang in an opening) draws
@@ -1085,17 +1143,24 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     }
     // Gaps between two pieces of one wall line: a door where a swing hangs from a jamb (or a
     // door swing's opening covers it), a window in an outside wall, else a cased opening.
+    // Uses a spatial grid so each wall only checks nearby collinear neighbors for gaps.
     let (min_gap, max_gap) = (oz.min_ft * upf, oz.max_ft * upf);
     let n = pl.walls.len().min(10_000);
     let mut gaps = Vec::new();
+    let gap_cell = max_gap.max(max_thick);
+    let gap_grid = WallGrid::build(&pl.walls[..n], gap_cell);
     for i in 0..n {
-        for j in 0..n {
-            let (Some(a), Some(b)) = (pl.walls.get(i), pl.walls.get(j)) else { continue };
-            let la = a.a.dist(a.b);
-            if i == j || la <= 1e-9 {
+        let a = &pl.walls[i];
+        let la = a.a.dist(a.b);
+        if la <= 1e-9 {
+            continue;
+        }
+        let u = (a.b - a.a) * (1.0 / la);
+        for &j in gap_grid.at(a.b) {
+            if j >= n || i == j {
                 continue;
             }
-            let u = (a.b - a.a) * (1.0 / la);
+            let b = &pl.walls[j];
             let lb = b.a.dist(b.b);
             if lb <= 1e-9 || u.cross((b.b - b.a) * (1.0 / lb)).abs() > 0.01 || u.perp().dot(b.a - a.a).abs() > a.thickness.max(b.thickness) / 2.0 {
                 continue;
@@ -1106,10 +1171,14 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             if gap < min_gap || gap > max_gap || b1 <= la {
                 continue;
             }
-            let between = pl.walls.iter().enumerate().any(|(k, c)| {
-                k != i && k != j && u.cross(c.b - c.a).abs() <= 0.01 * c.a.dist(c.b) && u.perp().dot(c.a - a.a).abs() <= a.thickness / 2.0 && {
-                    let (c0, c1) = (u.dot(c.a - a.a).min(u.dot(c.b - a.a)), u.dot(c.a - a.a).max(u.dot(c.b - a.a)));
-                    c1 > la + 1e-6 && c0 < b0 - 1e-6
+            let gap_mid = a.b + u * (gap * 0.5);
+            let between = gap_grid.at(gap_mid).iter().any(|&kk| {
+                kk < n && kk != i && kk != j && {
+                    let c = &pl.walls[kk];
+                    u.cross(c.b - c.a).abs() <= 0.01 * c.a.dist(c.b) && u.perp().dot(c.a - a.a).abs() <= a.thickness / 2.0 && {
+                        let (c0, c1) = (u.dot(c.a - a.a).min(u.dot(c.b - a.a)), u.dot(c.a - a.a).max(u.dot(c.b - a.a)));
+                        c1 > la + 1e-6 && c0 < b0 - 1e-6
+                    }
                 }
             });
             if !between {
@@ -1415,7 +1484,7 @@ fn swing_shuts_along(w: &PlanWall, at: Vec2, ends: [Vec2; 2], width: f64, k: f64
 /// thickness) reaches 6" past both the hinge and the shut end. A door is drawn where the wall
 /// stops; an arc drawn on a solid wall (a parapet's equipment, a fixture against a wall) is not
 /// one. A piece only across the opening (a header drawn in plan) is no solid wall.
-fn solid_through(walls: &[PlanWall], wi: usize, at: Vec2, ends: [Vec2; 2], k: f64) -> bool {
+fn solid_through_grid(walls: &[PlanWall], grid: Option<&WallGrid>, wi: usize, at: Vec2, ends: [Vec2; 2], k: f64) -> bool {
     let Some(w) = walls.get(wi) else { return false };
     let len = w.a.dist(w.b);
     if len <= 1e-9 {
@@ -1426,14 +1495,19 @@ fn solid_through(walls: &[PlanWall], wi: usize, at: Vec2, ends: [Vec2; 2], k: f6
     let shut = if u.dot(ends[0] - at).abs() >= u.dot(ends[1] - at).abs() { ends[0] } else { ends[1] };
     let (s0, s1) = (u.dot(at - w.a).min(u.dot(shut - w.a)), u.dot(at - w.a).max(u.dot(shut - w.a)));
     let past = 6.0 * k;
-    walls.iter().any(|c| {
+    let check = |c: &PlanWall| -> bool {
         let lc = c.a.dist(c.b);
         if lc <= 1e-9 || u.cross((c.b - c.a) * (1.0 / lc)).abs() > 0.01 || u.perp().dot(c.a - w.a).abs() > w.thickness.max(c.thickness) / 2.0 {
             return false;
         }
         let (c0, c1) = (u.dot(c.a - w.a).min(u.dot(c.b - w.a)), u.dot(c.a - w.a).max(u.dot(c.b - w.a)));
         c0 <= s0 - past && c1 >= s1 + past
-    })
+    };
+    if let Some(g) = grid {
+        g.at(at).iter().any(|&i| check(&walls[i]))
+    } else {
+        walls.iter().any(check)
+    }
 }
 
 /// One door per swing: a swing drawn twice (an arc and its chords, a path stroked twice on the
