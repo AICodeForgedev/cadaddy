@@ -97,9 +97,83 @@ pub(crate) fn role_by_name(layer: &str) -> Option<(Role, &'static str)> {
     role.map(|r| (r, "plain layer name"))
 }
 
-/// A name text (not a number): two letters or more, at most 40 characters.
+/// A name text (not a number): two letters or more, at most 40 characters, that could name a
+/// room ([`room_label`]).
 fn room_name(t: &str) -> bool {
-    t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && t.chars().count() <= 40 && !room_number(t)
+    t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && t.chars().count() <= 40 && !room_number(t) && room_label(t)
+}
+
+/// Words that put a label in a title block, a stamp or the notes, never on a room: the firm and
+/// its address, the review and issue stamps, the sheet's and views' titles.
+const NOT_ROOM_WORDS: &[&str] = &[
+    "SCALE",
+    "SHEET",
+    "DRAWN",
+    "CHECKED",
+    "DATE",
+    "REVISION",
+    "REVISIONS",
+    "ISSUE",
+    "ISSUED",
+    "PROJECT",
+    "SEAL",
+    "ARCHITECT",
+    "ARCHITECTS",
+    "ARCHITECTURE",
+    "ENGINEER",
+    "ENGINEERS",
+    "ENGINEERING",
+    "CONSULTANT",
+    "CONSULTANTS",
+    "LLC",
+    "INC",
+    "CORP",
+    "LTD",
+    "PLLC",
+    "AIA",
+    "COPYRIGHT",
+    "PLAN",
+    "PLANS",
+    "NOTES",
+    "KEYNOTES",
+    "LEGEND",
+    "CONSTRUCTION",
+    "PERMIT",
+    "REVIEW",
+    "REVIEWED",
+    "APPROVED",
+    "STREET",
+    "AVENUE",
+    "AVE",
+    "BLVD",
+    "PARKWAY",
+    "HIGHWAY",
+    "SCHEDULE",
+    "DETAIL",
+    "DETAILS",
+    "SECTION",
+    "ELEVATION",
+    "ELEVATIONS",
+    "TYP",
+    "SEE",
+    "PHONE",
+    "FAX",
+    "AFF",
+    "UNO",
+    "NTS",
+];
+
+/// Whether a label could name a room: not an address, a date, a phone number, a web or mail
+/// address, a "LABEL:" line or a title block's, stamp's or view title's words.
+pub(crate) fn room_label(t: &str) -> bool {
+    let up = t.to_ascii_uppercase();
+    if up.contains('@') || up.contains("WWW") || up.contains(".COM") || up.contains("HTTP") || up.contains(':') || t.contains('\u{a9}') {
+        return false;
+    }
+    if t.chars().filter(char::is_ascii_digit).count() >= 5 {
+        return false;
+    }
+    !up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| NOT_ROOM_WORDS.contains(&w))
 }
 
 /// A ceiling height (feet) from a note (`CLG 9'-0"`, `CEILING AT 8'6"`).
