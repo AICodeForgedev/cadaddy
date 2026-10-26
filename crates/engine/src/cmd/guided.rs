@@ -49,6 +49,8 @@ pub enum JobGoal {
     Takeoff,
     Estimate,
     Clash,
+    /// Everything through clash detection, then the construction sequence (`schedule.build`).
+    Sequence,
 }
 
 impl JobGoal {
@@ -59,6 +61,7 @@ impl JobGoal {
             "takeoff" => Some(Self::Takeoff),
             "estimate" => Some(Self::Estimate),
             "clash" => Some(Self::Clash),
+            "sequence" => Some(Self::Sequence),
             _ => None,
         }
     }
@@ -70,7 +73,7 @@ impl JobGoal {
             Self::Bim => StageName::BimBuild,
             Self::Takeoff => StageName::Takeoff,
             Self::Estimate => StageName::Estimate,
-            Self::Clash => StageName::Clash,
+            Self::Clash | Self::Sequence => StageName::Clash,
         }
     }
 }
@@ -3546,21 +3549,36 @@ fn run_estimate(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     Ok(result)
 }
 
-/// Run clash detection stage.
+/// Run clash detection stage; for the `sequence` goal, the construction sequence after it.
 fn run_clash(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Clash detection through BIM validation.
     let result = s.execute("validate.clash", &json!({}));
-    match result {
+    let mut out = match result {
         Ok(v) => {
             job.audit("stage_run", "pipeline", None, Some(StageName::Clash), None);
-            Ok(v)
+            v
         }
         Err(e) => {
             // Clash detection may not be available.
             job.audit("stage_error", "pipeline", None, Some(StageName::Clash), Some(json!({"error": e.to_string()})));
-            Ok(json!({"error": e.to_string(), "note": "Clash detection not available; skipping."}))
+            json!({"error": e.to_string(), "note": "Clash detection not available; skipping."})
         }
+    };
+    if job.goal == JobGoal::Sequence {
+        let seq = s.execute("schedule.build", &json!({}))?;
+        let conflicts = s.execute("schedule.conflicts", &json!({})).unwrap_or_else(|e| json!({"error": e.to_string()}));
+        job.audit("stage_run", "pipeline", None, Some(StageName::Clash), Some(json!({"sequence": seq["activities"], "span": seq["span"]})));
+        let mut summary = seq;
+        if let Some(m) = summary.as_object_mut() {
+            m.remove("list");
+        }
+        if !out.is_object() {
+            out = json!({"clash": out});
+        }
+        out["sequence"] = summary;
+        out["sequence_conflicts"] = json!({"by_kind": conflicts["by_kind"], "ok": conflicts["ok"]});
     }
+    Ok(out)
 }
 
 /// Take the defaults of the questions the job doesn't ask: in auto mode every question with a
@@ -4366,7 +4384,7 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
     let pdfs = str_param(p, "pdfs").ok_or_else(|| bad("job.start", "`pdfs` (path) is required"))?;
     let goal_str = p.get("goal").and_then(Value::as_str).unwrap_or("estimate");
     let goal = JobGoal::from_str(goal_str)
-        .ok_or_else(|| bad("job.start", format!("unknown goal '{goal_str}' — use cdy, bim, takeoff, estimate or clash")))?;
+        .ok_or_else(|| bad("job.start", format!("unknown goal '{goal_str}' — use cdy, bim, takeoff, estimate, clash or sequence")))?;
 
     // Check if a job already exists.
     if let Some(existing) = load_job(s)?
@@ -5192,7 +5210,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("job.start", "Start Guided Job", cmd_start)
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\", auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
@@ -5752,6 +5770,37 @@ mod tests {
         assert_eq!(JobGoal::Takeoff.last_stage(), StageName::Takeoff);
         assert_eq!(JobGoal::Estimate.last_stage(), StageName::Estimate);
         assert_eq!(JobGoal::Clash.last_stage(), StageName::Clash);
+        assert_eq!(JobGoal::Sequence.last_stage(), StageName::Clash);
+        assert_eq!(JobGoal::from_str("sequence"), Some(JobGoal::Sequence));
+    }
+
+    /// The `sequence` goal runs everything through clash detection, then builds the
+    /// construction sequence onto the model (Q6014 MUST 5).
+    #[test]
+    fn sequence_goal_builds_the_sequence_after_clash() {
+        let mut s = Session::new();
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {
+                "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 13, "ceiling_ft": 9, "region": [-1000, -1000, 1000, 1000], "base": [0, 0]}],
+                "mep": {
+                    "systems": [{"name": "M-SUPPLY", "layer": "M-DUCT-SUPP", "kind": "duct", "size_in": [12, 12], "bottom_ft": 10}],
+                    "runs": [{"system": "M-SUPPLY", "level": "L1", "points": [[0, 120], [480, 120]], "size_in": [12, 12], "bottoms_ft": [10]}]
+                }
+            }}),
+        )
+        .unwrap();
+        s.execute("model.build", &json!({})).unwrap();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Sequence);
+        assert!(job.stages.iter().all(|st| st.status != StageStatus::Skipped), "every stage runs for a sequence");
+        let out = run_clash(&mut s, &mut job).unwrap();
+        assert!(out["sequence"]["activities"].as_u64().unwrap_or(0) >= 1, "{out}");
+        assert!(out["sequence"].get("list").is_none(), "the summary, not every activity");
+        assert!(out["sequence_conflicts"]["ok"].is_boolean(), "{out}");
+        assert!(!s.doc().unwrap().schedule4d.as_deref().unwrap_or_default().is_empty(), "the sequence is the drawing's 4D schedule");
+        // Other goals don't sequence.
+        let mut clash = GuidedJob::new("/tmp/prints", JobGoal::Clash);
+        assert!(run_clash(&mut s, &mut clash).unwrap().get("sequence").is_none());
     }
 
     #[test]

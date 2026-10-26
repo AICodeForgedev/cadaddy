@@ -163,6 +163,7 @@ mod render;
 pub mod rulemodel;
 mod sections;
 mod selecttools;
+pub mod sequence;
 mod settings;
 mod solids;
 mod solview;
@@ -785,6 +786,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(redline::specs());
         v.extend(tours::specs());
         v.extend(fourd::specs());
+        v.extend(sequence::specs());
         v.extend(walkpub::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());
