@@ -68,52 +68,73 @@ pub(crate) struct Pair {
     pub thickness: f64,
     pub length: f64,
     pub confidence: f64,
+    /// The two faces (indices into the segments).
+    pub faces: [usize; 2],
 }
+
+/// Direction buckets: half a degree each over 180°.
+const BUCKETS: i64 = 360;
 
 /// Parallel face pairs: segments in the same direction (within half a degree), their lines
 /// `min_thick..max_thick` apart, overlapping along the direction by at least `min_len`.
 pub(crate) fn pairs(_d: &Drawing, segs: &[Seg], lim: &Limits) -> Vec<Pair> {
-    // Group by direction (half-degree buckets), then sort each group by offset across.
-    let mut groups: std::collections::HashMap<i64, Vec<(f64, usize)>> = std::collections::HashMap::new();
+    use std::f64::consts::PI;
+    // Group by direction (half-degree buckets over [0°, 180°): a face drawn right to left is the
+    // same direction). Faces within half a degree are in one bucket or two neighbouring ones.
+    let mut groups: std::collections::HashMap<i64, Vec<usize>> = std::collections::HashMap::new();
+    let mut angs = Vec::with_capacity(segs.len());
     for (i, s) in segs.iter().enumerate() {
         let d = s.b - s.a;
-        let ang = d.y.atan2(d.x).rem_euclid(std::f64::consts::PI);
-        let key = (ang.to_degrees() * 2.0).round() as i64 % 360;
-        let n = Vec2::new(-ang.sin(), ang.cos());
-        groups.entry(key).or_default().push((n.dot(s.a), i));
+        let ang = d.y.atan2(d.x).rem_euclid(PI);
+        angs.push(ang);
+        let key = ((ang.to_degrees() * 2.0).floor() as i64).rem_euclid(BUCKETS);
+        groups.entry(key).or_default().push(i);
     }
+    let half_degree = 0.5f64.to_radians();
+    let mut keys: Vec<i64> = groups.keys().copied().collect();
+    keys.sort_unstable();
     let mut out = Vec::new();
-    for (key, mut g) in groups {
+    for key in keys {
+        // This bucket with the next one (across 180° → 0° too), sorted by offset along one normal
+        // for all of them: the shared edge's. Pairs inside the next bucket are its own turn.
+        let next = (key + 1).rem_euclid(BUCKETS);
+        let edge = ((key + 1) as f64 / 2.0).to_radians();
+        let n = Vec2::new(-edge.sin(), edge.cos());
+        let mut g: Vec<(f64, usize, bool)> = Vec::new();
+        for (k, home) in [(key, true), (next, false)] {
+            for &i in groups.get(&k).map(Vec::as_slice).unwrap_or_default() {
+                let s = &segs[i];
+                g.push((n.dot(s.a.mid(s.b)), i, home));
+            }
+        }
         g.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let ang = (key as f64 / 2.0).to_radians();
-        let (u, n) = (Vec2::new(ang.cos(), ang.sin()), Vec2::new(-ang.sin(), ang.cos()));
+        // Midpoint offsets along the shared normal are off by up to the faces' length times the
+        // sine of their half-degree turn from it; the window allows for that.
+        let longest = g.iter().map(|&(_, i, _)| segs[i].a.dist(segs[i].b)).fold(0.0, f64::max);
+        let window = lim.max_thick + longest * (2.0 * half_degree).sin();
         for x in 0..g.len() {
             for y in x + 1..g.len() {
-                let gap = g[y].0 - g[x].0;
-                if gap > lim.max_thick {
+                if g[y].0 - g[x].0 > window {
                     break;
                 }
-                if gap < lim.min_thick {
+                if !g[x].2 && !g[y].2 {
                     continue;
                 }
-                let (s1, s2) = (&segs[g[x].1], &segs[g[y].1]);
-                let (a0, a1) = minmax(u.dot(s1.a), u.dot(s1.b));
-                let (b0, b1) = minmax(u.dot(s2.a), u.dot(s2.b));
-                let (lo, hi) = (a0.max(b0), a1.min(b1));
-                let overlap = hi - lo;
-                if overlap < lim.min_len.max(gap * 1.5) {
+                let (i, j) = (g[x].1, g[y].1);
+                let turn = (angs[i] - angs[j]).abs();
+                if turn.min(PI - turn) > half_degree {
                     continue;
                 }
-                let mid = (g[x].0 + g[y].0) / 2.0;
-                let (c0, c1) = (u * lo + n * mid, u * hi + n * mid);
-                let shorter = (a1 - a0).min(b1 - b0).max(1e-9);
+                let Some(p) = face_pair(&segs[i], &segs[j], lim) else { continue };
+                let (s1, s2) = (&segs[i], &segs[j]);
+                let shorter = s1.a.dist(s1.b).min(s2.a.dist(s2.b)).max(1e-9);
                 let wall_layer = s1.layer.to_ascii_uppercase().contains("WALL");
                 let confidence = (0.35
                     + 0.25 * f64::from(u8::from(wall_layer))
-                    + 0.25 * (overlap / shorter).min(1.0)
+                    + 0.25 * (p.length / shorter).min(1.0)
                     + 0.15 * f64::from(u8::from(s1.layer == s2.layer)))
                 .min(1.0);
-                out.push(Pair { layer: s1.layer.clone(), c0, c1, thickness: gap, length: overlap, confidence });
+                out.push(Pair { layer: s1.layer.clone(), c0: p.c0, c1: p.c1, thickness: p.gap, length: p.length, confidence, faces: [i, j] });
                 if out.len() >= MAX_PAIRS {
                     return out;
                 }
@@ -122,6 +143,45 @@ pub(crate) fn pairs(_d: &Drawing, segs: &[Seg], lim: &Limits) -> Vec<Pair> {
     }
     out.sort_by(|a, b| b.confidence.total_cmp(&a.confidence).then(b.length.total_cmp(&a.length)));
     out
+}
+
+/// Two faces measured as a wall: the gap between their lines, their overlap and the centreline.
+struct FacePair {
+    gap: f64,
+    length: f64,
+    c0: Vec2,
+    c1: Vec2,
+}
+
+/// Two nearly parallel faces as a wall when their lines are `min_thick..max_thick` apart and
+/// they overlap by at least `min_len` (and 1½ times the gap), measured along their mean direction.
+fn face_pair(s1: &Seg, s2: &Seg, lim: &Limits) -> Option<FacePair> {
+    let d1 = (s1.b - s1.a).normalized();
+    let mut d2 = (s2.b - s2.a).normalized();
+    if d1.dot(d2) < 0.0 {
+        d2 = d2 * -1.0;
+    }
+    let u = (d1 + d2).normalized();
+    if !u.is_finite() || u.len() < 0.5 {
+        return None;
+    }
+    let n = Vec2::new(-u.y, u.x);
+    let (a0, a1) = minmax(u.dot(s1.a), u.dot(s1.b));
+    let (b0, b1) = minmax(u.dot(s2.a), u.dot(s2.b));
+    let (lo, hi) = (a0.max(b0), a1.min(b1));
+    // Each face's line across `n` at a point `t` along `u`.
+    let across = |s: &Seg, d: Vec2, t: f64| {
+        let along = u.dot(d);
+        n.dot(s.a) + (t - u.dot(s.a)) * n.dot(d) / if along.abs() > 1e-12 { along } else { 1.0 }
+    };
+    let tm = (lo + hi) / 2.0;
+    let gap = (across(s2, d2, tm) - across(s1, d1, tm)).abs();
+    let length = hi - lo;
+    if !(lim.min_thick..=lim.max_thick).contains(&gap) || length < lim.min_len.max(gap * 1.5) {
+        return None;
+    }
+    let mid = |t: f64| (across(s1, d1, t) + across(s2, d2, t)) / 2.0;
+    Some(FacePair { gap, length, c0: u * lo + n * mid(lo), c1: u * hi + n * mid(hi) })
 }
 
 fn minmax(a: f64, b: f64) -> (f64, f64) {
@@ -452,10 +512,28 @@ pub(crate) fn equipment_tag(t: &str) -> bool {
     quoted || length || device_mark || circuit || words.iter().any(|w| EQUIPMENT_WORDS.contains(&w.as_str()))
 }
 
+/// Whether a text is a note rather than a room's name: a finish code (`CPT-1`), a ceiling, level
+/// or scale note (`CLG 9'-0"`, `LEVEL 2`, `EL. 100'`, `SCALE: 1/4" = 1'-0"`, `NTS`) or a sheet
+/// reference (`SEE A-201`, `A-5.1`).
+pub(crate) fn note_like(t: &str) -> bool {
+    let up = t.trim().to_ascii_uppercase();
+    let words = tag_words(&up);
+    let has = |w: &str| words.iter().any(|x| x == w);
+    let ceiling = has("CLG") || has("CEILING") || has("AFF") || has("ACT");
+    let level = up.starts_with("LEVEL") || has("EL") || up.contains("EL.") || up.contains("ELEV.") || up.contains("T.O.") || has("TOS");
+    let scale = has("SCALE") || has("NTS") || up.contains("NOT TO SCALE");
+    // A sheet reference: a sheet number with a dash or a dot (`A-201`, `E1.1`), or after SEE/REFER.
+    let sheet_ref = up.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')' | '/')).enumerate().any(|(i, w)| {
+        super::sheet_number(w)
+            && (w.contains('-') || w.contains('.') || (i > 0 && (has("SEE") || has("REFER") || has("REF") || has("SHEET") || has("DWG"))))
+    });
+    !super::finish_codes(&up).is_empty() || ceiling || level || scale || sheet_ref
+}
+
 /// How well a text names a room: 3 with a room or unit-type word (`DOUBLE Q`, `CORRIDOR`), 1 for
-/// another name, 0 for an equipment or device tag.
+/// another name, 0 for an equipment or device tag, a note or a number.
 pub(crate) fn room_name_score(t: &str) -> u8 {
-    if equipment_tag(t) || room_number(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 {
+    if equipment_tag(t) || note_like(t) || room_number(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 {
         0
     } else if tag_words(t).iter().any(|w| ROOM_WORDS.contains(&w.as_str())) {
         3
@@ -483,9 +561,25 @@ pub(crate) struct FoundRoom {
     pub confidence: f64,
 }
 
-/// The rooms of the current space, from its name labels. With a building spec, the labels on its
-/// room tag layers (else the texts naming its rooms), traced on what bounds rooms
-/// ([`crate::cmd::bspec::room_plan`]).
+/// A room tag block's attribute: `Some(true)` for the room's name (`NAME`, `ROOM_NAME`, `RM NAME`),
+/// `Some(false)` for its number (`NUMBER`, `ROOM_NO`, `RM#`), else `None`.
+fn tag_attribute(tag: &str) -> Option<bool> {
+    let t: String = tag.to_ascii_uppercase().chars().filter(char::is_ascii_alphanumeric).collect();
+    let t = ["ROOM", "SPACE", "RM"].iter().find_map(|p| t.strip_prefix(p)).unwrap_or(&t);
+    match t {
+        "NAME" | "NAM" => Some(true),
+        "NUMBER" | "NUM" | "NO" | "NBR" | "" => Some(false),
+        _ => None,
+    }
+}
+
+/// A name or number candidate: (handle, text, where, height, from a room tag block's attribute).
+type Label = (cadaddy_doc::Handle, String, Vec2, f64, bool);
+
+/// The rooms of the current space, from its name labels: texts, and the name and number
+/// attributes of room tag blocks. With a building spec, the labels on its room tag layers (else
+/// the texts naming its rooms), traced on what bounds rooms ([`crate::cmd::bspec::room_plan`]).
+/// Each outline takes its best name whatever order the labels were drawn in.
 pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
     let (d, ents) = objects(s)?;
     let k = units_per_inch(d);
@@ -499,29 +593,76 @@ pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
         .copied()
         .filter(|e| !tagged || spec.as_ref().and_then(|sp| sp.role(&e.common.layer)).is_some_and(|r| r.role == cadaddy_walk3d::Role::RoomTag))
         .collect();
-    let all = texts(&on_tags);
+    let mut all: Vec<Label> = texts(&on_tags).into_iter().map(|(h, t, at, ht)| (h, t, at, ht, false)).collect();
+    // Room tag blocks: their name and number attributes. The blocks themselves (a box or a bubble
+    // around the tag) bound no room.
+    let mut tag_blocks = std::collections::HashSet::new();
+    let mut tag_numbers: Vec<Label> = Vec::new();
+    for e in &on_tags {
+        let EntityKind::Insert(i) = &e.kind else { continue };
+        // A title block (its sheet number, title, project, date) is not a room tag.
+        let title_block = i.attribs.iter().any(|a| {
+            let t = a.tag.to_ascii_uppercase();
+            ["SHEET", "DWG", "TITLE", "PROJECT", "DATE", "SCALE", "DRAWN"].iter().any(|w| t.contains(w))
+        });
+        if title_block {
+            continue;
+        }
+        for a in &i.attribs {
+            let v = a.text.value.trim();
+            if v.is_empty() || v.chars().count() > 40 {
+                continue;
+            }
+            match tag_attribute(&a.tag) {
+                Some(true) => all.push((e.handle, v.to_string(), a.text.justify_point(), a.text.height, true)),
+                Some(false) => tag_numbers.push((e.handle, v.to_string(), a.text.justify_point(), a.text.height, true)),
+                None => continue,
+            }
+            tag_blocks.insert(e.handle);
+        }
+    }
     // Untagged, a spec with rooms names them.
     let spec_rooms = spec.as_ref().filter(|sp| !tagged && !sp.rooms.is_empty()).map(|sp| sp.rooms.as_slice());
-    let mut names: Vec<_> = all
+    let score = |(_, t, _, _, tag): &Label| if *tag { 4 } else { room_name_score(t) };
+    let mut names: Vec<Label> = all
         .iter()
-        .filter(|(_, t, _, _)| t.chars().count() <= 40)
-        .filter(|(_, t, _, _)| match spec_rooms {
+        .filter(|(_, t, _, _, tag)| t.chars().count() <= 40 && (*tag || !note_like(t)))
+        .filter(|l| match spec_rooms {
             Some(rs) => {
-                t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && !room_number(t) && rs.iter().any(|r| crate::cmd::bspec::names_room(r, t))
+                let t = &l.1;
+                l.4 || (t.chars().filter(|c| c.is_alphabetic()).count() >= 2
+                    && !room_number(t)
+                    && rs.iter().any(|r| crate::cmd::bspec::names_room(r, t)))
             }
             // Equipment and device tags (a panelboard label beside a room) never name it.
-            None => room_name_score(t) > 0,
+            None => score(l) > 0,
         })
         .cloned()
         .collect();
-    // A room or unit-type word claims its outline before another label in the same room.
-    names.sort_by_key(|(_, t, _, _)| std::cmp::Reverse(room_name_score(t)));
-    let numbers: Vec<_> = all.iter().filter(|(_, t, _, _)| room_number(t)).cloned().collect();
+    // The best name claims its outline first, whatever the drawing order: a tag block's name, then
+    // a room or unit-type word, then the tallest text, then by text and place.
+    names.sort_by(|a, b| {
+        score(b).cmp(&score(a)).then(b.3.total_cmp(&a.3)).then_with(|| a.1.cmp(&b.1)).then(b.2.y.total_cmp(&a.2.y)).then(a.2.x.total_cmp(&b.2.x))
+    });
+    let mut numbers: Vec<Label> = all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t)).cloned().collect();
+    numbers.extend(tag_numbers);
     let plan = crate::cmd::bspec::room_plan(s)?;
+    // Without the tag blocks: a tag's box is not its room.
+    let plan = if tag_blocks.is_empty() || s.space().is_paper() {
+        plan
+    } else {
+        let mut wd = plan.as_ref().unwrap_or(s).doc()?.clone();
+        for h in &tag_blocks {
+            wd.model.remove(*h);
+        }
+        let mut t = Session::empty();
+        t.open_drawing(wd, "Room boundaries", None);
+        Some(t)
+    };
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<FoundRoom> = Vec::new();
     let mut outline_cache = None;
-    for (h, name, at, height) in names.into_iter().take(MAX_ROOMS) {
+    for (h, name, at, height, _) in names.into_iter().take(MAX_ROOMS) {
         let Ok(loops) = crate::cmd::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let poly = polygon(outer);
@@ -537,12 +678,13 @@ pub(crate) fn rooms_found(s: &mut Session) -> Result<Vec<FoundRoom>> {
             continue;
         }
         let perimeter: f64 = poly.iter().zip(poly.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
-        // The room number: a number inside the outline, the nearest to the name.
+        // The room number: a number inside the outline, the one in the name's tag block, else the
+        // nearest to the name.
         let number = numbers
             .iter()
-            .filter(|(_, _, q, _)| cadaddy_geom::point_in_polygon(&poly, *q))
-            .min_by(|a, b| a.2.dist(at).total_cmp(&b.2.dist(at)))
-            .map(|(_, t, _, _)| t.clone());
+            .filter(|(_, _, q, _, _)| cadaddy_geom::point_in_polygon(&poly, *q))
+            .min_by(|a, b| u8::from(a.0 != h).cmp(&u8::from(b.0 != h)).then(a.2.dist(at).total_cmp(&b.2.dist(at))).then_with(|| a.1.cmp(&b.1)))
+            .map(|(_, t, _, _, _)| t.clone());
         let share = area / sheet;
         let confidence = (0.5 + 0.2 * f64::from(u8::from(number.is_some())) + if share < 0.5 { 0.3 } else { 0.0 }
             - if poly.len() > 200 { 0.1 } else { 0.0 })

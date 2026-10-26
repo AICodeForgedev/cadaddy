@@ -75,7 +75,16 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                             ui.label(format!("{:.0} cu ft", num("volumeCuFt")));
                         }
                         if ui.button(crate::tl!("Go to")).clicked() {
-                            action = Some(("rooms.goto", json!({ "name": name })));
+                            let num = r["number"].as_str().filter(|s| !s.is_empty());
+                            let lbl = r["label"].as_str().filter(|s| !s.is_empty());
+                            let p = if let Some(n) = num {
+                                json!({ "number": n })
+                            } else if let Some(l) = lbl {
+                                json!({ "label": l })
+                            } else {
+                                json!({ "name": name })
+                            };
+                            action = Some(("rooms.goto", p));
                         }
                         ui.end_row();
                     }
