@@ -291,10 +291,14 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
                 if let Some(sz) = size_tag(t) {
                     size.get_or_insert(sz);
                 }
-                if let Some(slot) = heights.get_mut(i)
-                    && slot.is_none()
+                if height_tag(t, 0.0).is_some()
+                    && let Some(slot) = heights.get_mut(i)
                 {
-                    *slot = Some((0.0, t.clone()));
+                    match slot {
+                        None => *slot = Some((dist, t.clone())),
+                        Some((prev_d, _)) if dist < *prev_d => *slot = Some((dist, t.clone())),
+                        _ => {}
+                    }
                 }
             }
             let size_from_tag = size.is_some();
@@ -2195,15 +2199,18 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             }));
         }
     }
-    out.truncate(5_000);
+    let cap = p.get("max_clashes").and_then(Value::as_u64).map(|v| v as usize).unwrap_or(5_000).min(50_000);
+    let total = out.len();
+    let truncated = total > cap;
+    out.truncate(cap);
     // A re-run: what was decided about each clash last time carries over to the same clash now.
     if let Some(prev) = p.get("previous").and_then(Value::as_array) {
         let radius = p.get("match_ft").and_then(Value::as_f64).filter(|f| f.is_finite() && *f >= 0.0).unwrap_or(2.0).min(100.0) * upf;
         let prev: Vec<&Value> = prev.iter().take(MAX_PREVIOUS).collect();
         let gone = carry_previous(&mut out, &prev, radius);
-        return Ok(json!({ "total": out.len(), "clashes": out, "gone": gone }));
+        return Ok(json!({ "total": total, "truncated": truncated, "clashes": out, "gone": gone }));
     }
-    Ok(json!({ "total": out.len(), "clashes": out }))
+    Ok(json!({ "total": total, "truncated": truncated, "clashes": out }))
 }
 
 /// The most earlier clashes a re-run matches against (the detector's own cap).
