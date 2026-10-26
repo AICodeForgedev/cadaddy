@@ -3017,3 +3017,9 @@
 	Sequence Trade Conflicts	Conflits entre corps d’état
 	Ceiling Space Fit	Espace du plénum de plafond
 	Takeoff by Activity	Métré par activité
+	Record As-Built Change	Enregistrer une modification de récolement
+	Import As-Built Markups	Importer les annotations de récolement
+	List As-Built Changes	Lister les modifications de récolement
+	Set As-Built Change Status	Définir l'état d'une modification de récolement
+	Compare Design and As-Built	Comparer conception et récolement
+	Export As-Built	Exporter le récolement

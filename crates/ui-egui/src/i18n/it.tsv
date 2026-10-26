@@ -3228,3 +3228,9 @@ menu	Modify	Edita
 	Sequence Trade Conflicts	Conflitti tra imprese nella sequenza
 	Ceiling Space Fit	Spazio nel controsoffitto
 	Takeoff by Activity	Computo per attività
+	Record As-Built Change	Registra modifica as-built
+	Import As-Built Markups	Importa annotazioni as-built
+	List As-Built Changes	Elenca modifiche as-built
+	Set As-Built Change Status	Imposta stato modifica as-built
+	Compare Design and As-Built	Confronta progetto e as-built
+	Export As-Built	Esporta as-built
