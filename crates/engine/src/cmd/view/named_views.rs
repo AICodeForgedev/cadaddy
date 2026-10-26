@@ -110,8 +110,10 @@ fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool) ->
         (Space::Paper(l), false) => Some(l.clone()),
         _ => None,
     };
-    // The view twist goes with the view (layout viewports and paper space have none).
-    let twist = if in_viewport { 0.0 } else { st.view().twist };
+    // The view this saves: the viewport's model view inside an MSPACE viewport, else the screen.
+    let frame = if in_viewport { st.zoom_frame() } else { st.view() };
+    // The view twist goes with the view (paper space has none).
+    let twist = if layout.is_some() { 0.0 } else { frame.twist };
     let (center, height, width) = match window {
         Some(b) => {
             if !(b.width() > 1e-12 && b.height() > 1e-12 && b.min.is_finite() && b.max.is_finite()) {
@@ -120,7 +122,7 @@ fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool) ->
             (b.center(), b.height(), b.width())
         }
         None => {
-            let f = if in_viewport { st.zoom_frame() } else { st.view() };
+            let f = frame;
             let aspect = if in_viewport { st.zoom_aspect(w / h.max(1.0)) } else { w / h.max(1.0) };
             (f.center, f.height, f.height * aspect)
         }
@@ -179,8 +181,10 @@ fn restore(s: &mut Session, name: &str) -> Result<Value> {
             }
             let (w, h) = s.viewport_px;
             let st = s.state_mut()?;
+            // In an unlocked MSPACE viewport the saved twist turns the viewport (an edit of the
+            // viewport, recorded as the command's undo step).
             let aspect = st.zoom_aspect(w / h.max(1.0)).max(1e-9);
-            let twist = if v.twist.is_finite() { v.twist } else { 0.0 };
+            let twist = if v.twist.is_finite() { v.twist.rem_euclid(std::f64::consts::TAU) } else { 0.0 };
             st.set_zoom_frame(View { center: v.center, height: v.height.max(v.width / aspect), twist });
         }
     }

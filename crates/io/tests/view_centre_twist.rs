@@ -111,3 +111,58 @@ fn twisted_model_views_and_named_views_store_display_centres() {
     assert!(close(tiles[0], SITE) && close(tiles[1], Vec2::new(5.0, 5.0)), "{tiles:?}");
     assert!(back.views.iter().all(|v| close(v.center, SITE)), "{:?}", back.views);
 }
+
+/// `dxf` with every record of type `kind` that has a nonzero group `has` (its twist) moved to
+/// view target `target` (groups `t`/`t + 10`): its centre (groups `x`/`x + 10`) is set to the
+/// display-coordinate centre of `SITE` seen from that target, as another program stores it.
+fn with_target(dxf: &str, kind: &str, x: i32, t: i32, has: i32, target: Vec2) -> String {
+    let c = (SITE - target).rotate(twist());
+    let mut records: Vec<Vec<(i32, String)>> = Vec::new();
+    for (code, v) in pairs(dxf) {
+        match records.last_mut() {
+            Some(r) if code != 0 => r.push((code, v)),
+            _ => records.push(vec![(code, v)]),
+        }
+    }
+    let mut out = String::new();
+    for mut r in records {
+        let twisted = r.first().is_some_and(|(_, v)| v == kind) && r.iter().any(|(code, v)| *code == has && v.parse::<f64>().is_ok_and(|a| a != 0.0));
+        if twisted {
+            r.retain(|(code, _)| ![x, x + 10, t, t + 10, t + 20].contains(code));
+            r.extend([
+                (x, c.x.to_string()),
+                (x + 10, c.y.to_string()),
+                (t, target.x.to_string()),
+                (t + 10, target.y.to_string()),
+                (t + 20, "0".into()),
+            ]);
+        }
+        for (code, v) in r {
+            out.push_str(&format!("{code}\n{v}\n"));
+        }
+    }
+    out
+}
+
+#[test]
+fn display_centres_are_measured_from_the_view_target() {
+    let target = Vec2::new(2_599_000.0, 1_199_500.0);
+    // A layout viewport.
+    let mut d = Drawing::new_metric();
+    let sheet = Space::Paper(d.layouts[0].name.clone());
+    d.add(&sheet, Common::default(), viewport(SITE)).unwrap();
+    let dxf = with_target(&cadcraft_io::write_dxf(&d), "VIEWPORT", 12, 17, 51, target);
+    let v = sheet_viewport(&cadcraft_io::read_dxf(dxf.as_bytes()).unwrap());
+    assert!(close(v.view_center, SITE), "{:?}", v.view_center);
+    // A model view tile and a named view.
+    let mut d = Drawing::new_metric();
+    let tile = VportTile { min: Vec2::ZERO, max: Vec2::new(1.0, 1.0), center: SITE, height: 50.0, aspect: 1.5, twist: twist() };
+    d.vports = vec![VportConfig { name: "Site".into(), tiles: vec![tile, VportTile { center: Vec2::new(5.0, 5.0), twist: 0.0, ..tile }] }];
+    d.views.push(NamedView { name: "Site".into(), center: SITE, height: 50.0, width: 75.0, twist: twist(), ..Default::default() });
+    let dxf = with_target(&cadcraft_io::write_dxf(&d), "VPORT", 12, 17, 51, target);
+    let dxf = with_target(&dxf, "VIEW", 10, 12, 50, target);
+    let back = cadcraft_io::read_dxf(dxf.as_bytes()).unwrap();
+    let tiles: Vec<Vec2> = back.vports.iter().filter(|c| c.name == "Site").flat_map(|c| c.tiles.iter().map(|t| t.center)).collect();
+    assert!(tiles.first().is_some_and(|c| close(*c, SITE)), "{tiles:?}");
+    assert!(back.views.iter().all(|v| close(v.center, SITE)), "{:?}", back.views);
+}

@@ -271,10 +271,11 @@ impl DocState {
                 }
                 self.put_paper_view(paper);
             } else {
-                // The viewport keeps its own twist: `v`'s is the one it shows.
-                let center = v.center - ((pv.center - vp.center.xy()) * k).rotate(-vp.view_twist());
+                // `v`'s twist is the one the viewport shows (a non-finite one keeps its own).
+                let twist = if v.twist.is_finite() { v.twist } else { vp.view_twist() };
+                let center = v.center - ((pv.center - vp.center.xy()) * k).rotate(-twist);
                 let height = vp.height * k;
-                if !usable_view(&View { center, height, twist: 0.0 }) {
+                if !usable_view(&View { center, height, twist }) {
                     return false;
                 }
                 let doc = Arc::make_mut(&mut self.doc);
@@ -283,6 +284,7 @@ impl DocState {
                         if let cadcraft_doc::EntityKind::Viewport(x) = &mut e.kind {
                             x.view_center = center;
                             x.view_height = height;
+                            x.twist = twist;
                         }
                     });
                 }
@@ -304,6 +306,13 @@ impl DocState {
     /// An untiled Model tab keeps its view twist in the drawing as a lone `*Active` VPORT tile
     /// (written as that record's group 51 and read back), so it survives save and reopen. Only a
     /// change of twist touches the drawing; an untwisted view keeps no record.
+    /// After undo or redo has put back another drawing: its untiled-twist record follows the
+    /// Model tab's live view again (views are not part of the drawing's undo).
+    fn reconcile_untiled_twist(&mut self) {
+        if let Some(v) = self.views.iter().find(|(s, _)| *s == Space::Model).map(|(_, v)| *v) {
+            self.keep_untiled_twist(v);
+        }
+    }
     fn keep_untiled_twist(&mut self, v: View) {
         use cadcraft_doc::{VportConfig, VportTile};
         let twist = if v.twist.is_finite() { v.twist.rem_euclid(std::f64::consts::TAU) } else { 0.0 };
@@ -363,7 +372,8 @@ impl DocState {
             Some(vp) => {
                 let pv = self.paper_view();
                 let k = f.height / vp.height;
-                let twist = vp.view_twist();
+                // The frame's twist turns the viewport (a non-finite one keeps the viewport's).
+                let twist = if f.twist.is_finite() { f.twist } else { vp.view_twist() };
                 View { center: f.center + ((pv.center - vp.center.xy()) * k).rotate(-twist), height: pv.height * k, twist }
             }
             None => f,
@@ -1228,7 +1238,7 @@ impl Session {
             Input::Point(p) => {
                 let ap = self.pixel_size() * self.settings.pickbox.max(1.0) * 1.5;
                 if let Some(pw) = self.pending_window.take() {
-                    let crossing = p.x < pw.corner.x;
+                    let crossing = self.window_is_crossing(pw.corner, p);
                     let hs = select::select_window(self.doc()?, &space, Bounds2::new(pw.corner, p), crossing);
                     return Ok(Some(Input::Pick(cmd::groups::expand(self, hs))));
                 }
@@ -1737,6 +1747,7 @@ impl Session {
         let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone() };
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
+        st.reconcile_untiled_twist();
         st.selection = Vec::new();
         st.redo.push(cur);
         st.revision += 1;
@@ -1748,6 +1759,7 @@ impl Session {
         let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone() };
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
+        st.reconcile_untiled_twist();
         st.selection = Vec::new();
         st.undo.push(cur);
         st.revision += 1;
@@ -1769,6 +1781,13 @@ impl Session {
         true
     }
 
+    /// Whether a selection window from `corner` to `p` is a crossing window: it was dragged
+    /// leftwards on screen (in a twisted view, not along the drawing's X axis).
+    pub fn window_is_crossing(&self, corner: Vec2, p: Vec2) -> bool {
+        let twist = self.state().map_or(0.0, |st| st.view().twist);
+        (p - corner).rotate(twist).x < 0.0
+    }
+
     /// A click with no command running: pick/toggle objects or start a selection window.
     ///
     /// PICKADD on (the default): picks add to the selection and Shift removes. PICKADD off: each pick
@@ -1777,7 +1796,7 @@ impl Session {
         let space = self.space();
         let pickadd = self.settings.pickadd;
         if let Some(pw) = self.pending_window.take() {
-            let crossing = p.x < pw.corner.x;
+            let crossing = self.window_is_crossing(pw.corner, p);
             let hs = select::select_window(self.doc()?, &space, Bounds2::new(pw.corner, p), crossing);
             let hs = cmd::groups::expand(self, hs);
             let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };

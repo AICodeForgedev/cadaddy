@@ -294,3 +294,54 @@ fn a_viewport_twist_survives_a_dxf_round_trip() {
     assert_eq!(twists.len(), 1);
     assert!((twists[0] - 30.0).abs() < 1e-9, "{twists:?}");
 }
+
+#[test]
+fn a_view_saved_in_a_twisted_viewport_restores_its_twist_as_one_undo_step() {
+    let (mut s, h) = layout_session();
+    s.execute("mspace", &json!({ "handle": h.hex() })).unwrap();
+    s.execute("dview", &json!({ "twist": 30 })).unwrap();
+    s.execute("view", &json!({ "option": "save", "name": "Turned" })).unwrap();
+    let saved = s.doc().unwrap().views.iter().find(|v| v.name == "Turned").map(|v| v.twist.to_degrees()).unwrap();
+    assert!(near(saved, 30.0), "saved twist {saved}");
+    let center = vp(&s, h).view_center;
+    s.execute("dview", &json!({ "twist": 0 })).unwrap();
+    s.execute("view.set", &json!({ "center": [80, 40], "height": 3 })).unwrap();
+    let undo = s.state().unwrap().undo.len();
+    s.execute("view", &json!({ "option": "restore", "name": "Turned" })).unwrap();
+    assert!(near(vp(&s, h).twist.to_degrees(), 30.0), "viewport twist {}", vp(&s, h).twist.to_degrees());
+    assert!(near(twist_deg(&s), 30.0));
+    assert!((vp(&s, h).view_center - center).len() < 1e-6, "{:?} vs {center:?}", vp(&s, h).view_center);
+    // The viewport's twist changed: one undo step, which turns it back.
+    assert_eq!(s.state().unwrap().undo.len(), undo + 1);
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(vp(&s, h).twist, 0.0);
+}
+
+#[test]
+fn undoing_a_drawing_change_keeps_the_untiled_twist_saved() {
+    let mut s = session();
+    s.execute("line", &json!({ "points": [[0, 10], [5, 10]] })).unwrap();
+    // A Model tab twist is a view change, not an undo step.
+    s.execute("dview", &json!({ "twist": 30 })).unwrap();
+    s.execute("undo", &json!({})).unwrap();
+    assert!(near(twist_deg(&s), 30.0));
+    let saved = |s: &Session| s.doc().unwrap().vports.iter().find(|c| c.is_active()).and_then(|c| c.tiles.first()).map(|t| t.twist.to_degrees());
+    assert!(saved(&s).is_some_and(|t| near(t, 30.0)), "{:?}", saved(&s));
+    s.execute("redo", &json!({})).unwrap();
+    assert!(saved(&s).is_some_and(|t| near(t, 30.0)), "{:?}", saved(&s));
+}
+
+#[test]
+fn a_leftward_drag_on_a_turned_screen_is_a_crossing_window() {
+    let mut s = session();
+    let r = s.execute("line", &json!({ "points": [[200, 0], [260, 0]] })).unwrap();
+    let line = Handle::parse_hex(r["handles"][0].as_str().unwrap()).unwrap();
+    s.execute("dview", &json!({ "twist": 180 })).unwrap();
+    // Turned half way round, a drag towards +X in the drawing runs leftwards on screen.
+    assert!(s.window_is_crossing(Vec2::new(210.0, -5.0), Vec2::new(230.0, 5.0)));
+    assert!(!s.window_is_crossing(Vec2::new(230.0, -5.0), Vec2::new(210.0, 5.0)));
+    // A crossing window takes the line it only partly covers.
+    s.idle_click(Vec2::new(210.0, -5.0), false).unwrap();
+    s.idle_click(Vec2::new(230.0, 5.0), false).unwrap();
+    assert_eq!(s.selection(), vec![line]);
+}

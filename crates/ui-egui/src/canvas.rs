@@ -704,17 +704,23 @@ struct OnlyList {
 }
 
 impl OnlyList {
-    fn update(&mut self, st: &cadcraft_engine::DocState, only: &cadcraft_engine::DisplayOnly, scale: f64) {
+    /// `outline`: a clipped viewport's outline (model units) the preview is clipped to.
+    fn update(&mut self, st: &cadcraft_engine::DocState, only: &cadcraft_engine::DisplayOnly, scale: f64, outline: Option<&[Vec2]>) {
         let band = (1.0 / scale.max(1e-300)).log2().floor() as i32;
         let key = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             (st.uid, st.revision, std::sync::Arc::as_ptr(&st.doc) as usize, band, &only.handles, format!("{:?}", only.extra)).hash(&mut h);
+            outline.into_iter().flatten().for_each(|q| (q.x.to_bits(), q.y.to_bits()).hash(&mut h));
             h.finish()
         };
         if self.key != Some(key) {
             let ents = only.handles.iter().filter_map(|h| st.doc.entity(*h)).map(|e| e.as_ref()).chain(only.extra.iter());
-            self.list = rebuilt_preview(&st.doc, ents, 2f64.powi(-band));
+            let list = rebuilt_preview(&st.doc, ents, 2f64.powi(-band));
+            self.list = match outline.and_then(cadcraft_render::clip::PolyClip::new) {
+                Some(c) => cadcraft_render::clip_list(&list, &c),
+                None => list,
+            };
             self.key = Some(key);
         }
     }
@@ -1879,7 +1885,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             .intersect(rect)
         });
         if let Ok(st) = app.session.state() {
-            app.canvas.only.update(st, &only, scale);
+            // A clipped viewport's outline, in the model units the preview is built in.
+            let outline =
+                active_vp.as_ref().zip(active_clip.as_ref()).map(|(vp, c)| c.polygon().iter().map(|q| vp.paper_to_model(*q)).collect::<Vec<_>>());
+            app.canvas.only.update(st, &only, scale, outline.as_deref());
         }
         draw_list(&painter.with_clip_rect(clip), &xf, &app.canvas.only.list, bg, app.session.settings.lwdisplay);
     } else {
@@ -2059,7 +2068,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if let (Some(pw), Some(c)) = (app.session.pending_window, raw_world) {
         // The world box it selects (turned in a twisted view).
         let corners = [pw.corner, Vec2::new(c.x, pw.corner.y), c, Vec2::new(pw.corner.x, c.y)].map(|q| xf.to_screen(q));
-        let crossing = c.x < pw.corner.x;
+        let crossing = app.session.window_is_crossing(pw.corner, c);
         if let Some(fill) = selection_area_fill(&app.session.settings, crossing) {
             painter.add(Shape::convex_polygon(corners.to_vec(), fill, Stroke::NONE));
         }
@@ -3170,5 +3179,22 @@ mod grid_range_tests {
         assert_eq!(super::grid_index_ranges(&huge, 1.0), None);
         let normal = Bounds2::new(Vec2::new(-5.0, 0.0), Vec2::new(5.0, 10.0));
         assert_eq!(super::grid_index_ranges(&normal, 1.0), Some(((-5, 5), (0, 10))));
+    }
+
+    /// DVIEW's preview inside a clipped viewport keeps to the viewport's outline.
+    #[test]
+    fn the_display_only_preview_is_clipped_to_the_viewport_outline() {
+        let mut s = cadcraft_engine::Session::new();
+        let r = s.execute("line", &serde_json::json!({ "points": [[0, 0], [100, 0]] })).unwrap();
+        let h = cadcraft_doc::Handle::parse_hex(r["handles"][0].as_str().unwrap()).unwrap();
+        let only = cadcraft_engine::DisplayOnly { handles: vec![h], extra: Vec::new() };
+        let st = s.state().unwrap();
+        let mut o = super::OnlyList::default();
+        o.update(st, &only, 1.0, None);
+        assert!(o.list.bounds.max.x > 99.0, "{:?}", o.list.bounds);
+        // A triangle outline reaching x = 10 along the line.
+        let outline = [Vec2::new(-5.0, -5.0), Vec2::new(10.0, 0.0), Vec2::new(-5.0, 5.0)];
+        o.update(st, &only, 1.0, Some(&outline));
+        assert!(!o.list.prims.is_empty() && o.list.bounds.max.x <= 10.0 + 1e-9, "{:?}", o.list.bounds);
     }
 }

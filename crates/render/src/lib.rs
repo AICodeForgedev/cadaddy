@@ -815,6 +815,14 @@ pub fn viewport_clip(d: &Drawing, handle: Handle, vp: &cadcraft_doc::Viewport) -
     clip::PolyClip::new(&clip::boundary_polygon(&be.kind)?)
 }
 
+/// `list` clipped to `clip` (a clipped viewport's outline in the list's own units), for a list
+/// drawn inside a clipped viewport apart from its contents.
+pub fn clip_list(list: &DisplayList, clip: &clip::PolyClip) -> DisplayList {
+    let mut out = DisplayList::default();
+    append_clipped(&mut out, list, &Clip::Poly(clip));
+    out
+}
+
 /// What viewport contents are clipped to.
 enum Clip<'a> {
     /// The viewport rectangle (the fast path).
