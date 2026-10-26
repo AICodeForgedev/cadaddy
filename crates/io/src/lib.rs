@@ -1,6 +1,8 @@
 //! CADaddy file formats: the native .cdy format, DXF/DWG read, SVG and SVGZ import,
 //! SVG/PNG/PDF/DWFx/DWF export (plotting), DWFx underlay reading.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![allow(unknown_lints)] // the lint below exists only in newer clippy
+#![allow(clippy::chunks_exact_to_as_chunks)]
 #![forbid(unsafe_code)]
 
 /// What a DXF file holds that CADaddy doesn't model, kept and written back (#528).

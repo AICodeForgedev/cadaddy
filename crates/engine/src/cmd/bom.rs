@@ -50,9 +50,10 @@ use std::collections::BTreeMap;
 use super::bspec::current;
 use super::*;
 use crate::{Result, Session};
+use cadaddy_doc::EntityKind;
 
 /// Lines in one BOM, at most (hostile specs).
-const MAX_LINES: usize = 50_000;
+const MAX_LINES: usize = 200_000;
 /// A conduit stick, feet (a coupling joins each two).
 const STICK_FT: f64 = 10.0;
 /// Conduit supports: within 3' of each end and every 10' between (NEC 358.30 for EMT).
@@ -343,6 +344,30 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
     Ok(())
 }
 
+/// The plan (XY) area of the mesh entities named by `handles`, sq units: sum of each face's
+/// signed area projected onto XY (shoelace per face polygon).
+fn mesh_plan_area(d: &cadaddy_doc::Drawing, handles: &[String]) -> f64 {
+    let mut total = 0.0f64;
+    for hex in handles {
+        let Some(h) = cadaddy_doc::Handle::parse_hex(hex) else { continue };
+        let Some(e) = d.entity(h) else { continue };
+        let cadaddy_doc::EntityKind::Mesh(m) = &e.kind else { continue };
+        for face in &m.faces {
+            let pts: Vec<cadaddy_geom::Vec2> = face
+                .v
+                .iter()
+                .filter_map(|&i| m.vertices.get(i as usize))
+                .filter(|v| v.x.is_finite() && v.y.is_finite())
+                .map(|v| cadaddy_geom::Vec2::new(v.x, v.y))
+                .collect();
+            if pts.len() >= 3 {
+                total += cadaddy_geom::shoelace(&pts).abs();
+            }
+        }
+    }
+    total
+}
+
 /// Built-model BOM lines (Q5243): walls, doors, ceilings, floors, rooms from the spec and the
 /// 3D model that `model.build` created. Each built category must have lines; a built element
 /// with no BOM line is a test failure.
@@ -371,57 +396,195 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
     let mut missing: Vec<String> = Vec::new();
     let mut suspects: Vec<Value> = Vec::new();
 
-    // ── Walls: LF and area from the spec's wall marks ──
+    // ── Walls: LF and area from the spec's wall marks, falling back to 3D mesh data ──
     let mut wall_lf_total = 0.0f64;
     let mut wall_area_total = 0.0f64;
     let wall_handles: Vec<String> = built.iter().filter(|((p, _), _)| p == "wall").flat_map(|(_, (_, h))| h.clone()).collect();
 
-    for w in sp.walls.iter().take(MAX_LINES) {
-        let len_ft = (w.b[0] - w.a[0]).hypot(w.b[1] - w.a[1]) / upf;
-        if !(len_ft.is_finite() && len_ft > 0.01) {
-            continue;
+    if !sp.walls.is_empty() {
+        for w in sp.walls.iter().take(MAX_LINES) {
+            let len_ft = (w.b[0] - w.a[0]).hypot(w.b[1] - w.a[1]) / upf;
+            if !(len_ft.is_finite() && len_ft > 0.01) {
+                continue;
+            }
+            if len_ft < 1.0 {
+                continue;
+            }
+            wall_lf_total += len_ft;
+            let wt = sp.wall_types.iter().find(|t| t.name.eq_ignore_ascii_case(&w.wall_type));
+            let height_ft = w.height_ft.or_else(|| wt.and_then(|t| t.height_ft)).unwrap_or(sp.level(&w.level).map_or(10.0, |l| l.height_ft));
+            let thick_in = wt.map_or(6.0, |t| t.thickness_in);
+            wall_area_total += len_ft * height_ft;
+            let type_label = if w.wall_type.is_empty() { "untyped" } else { &w.wall_type };
+            add(
+                lines,
+                Line {
+                    trade: "general",
+                    category: "walls".into(),
+                    item: format!("Wall {type_label}"),
+                    size: format!("{thick_in}\""),
+                    unit: "lf",
+                    net: len_ft,
+                    status: "model",
+                    level: w.level.clone(),
+                    elements: wall_handles.iter().take(10).cloned().collect(),
+                    ..Line::default()
+                },
+            );
+            add(
+                lines,
+                Line {
+                    trade: "general",
+                    category: "walls".into(),
+                    item: format!("Wall area {type_label}"),
+                    size: format!("{}' high", height_ft as i64),
+                    unit: "sq ft",
+                    net: len_ft * height_ft,
+                    status: "model",
+                    level: w.level.clone(),
+                    elements: Vec::new(),
+                    ..Line::default()
+                },
+            );
         }
-        // Reject walls from furniture/fixture/text linework: minimum length 1 ft, minimum
-        // thickness from a named wall type.
-        if len_ft < 1.0 {
-            continue;
+    } else if has_any_built {
+        // Derive wall LF and area from 3D mesh entities when the spec has no wall marks.
+        // Group by (wall_type, level): sum LF and area from each mesh's bounding box.
+        let mut wall_groups: BTreeMap<(String, String), (f64, f64, Vec<String>)> = BTreeMap::new();
+        for e in d.model.iter().take(MAX_LINES) {
+            if super::wallgen::made_as(e).as_deref() != Some("wall") {
+                continue;
+            }
+            let EntityKind::Mesh(ref mesh) = e.kind else { continue };
+            let level = super::bspec::made_level(e).unwrap_or_default();
+            let type_name = {
+                let x = &e.common.xdata;
+                x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP)).and_then(|at| {
+                    x.iter()
+                        .skip(at + 1)
+                        .take_while(|t| t.code != 1001)
+                        .filter(|t| t.code == 1000)
+                        .find_map(|t| t.value.strip_prefix("type:").map(str::to_string))
+                })
+            };
+            let type_label = type_name.unwrap_or_else(|| "untyped".into());
+            // Mesh bounding box: length is the longer plan dimension, height is Z extent.
+            let (height_ft, length_ft) = mesh_wall_dims(mesh, upf);
+            if !(length_ft > 0.01 && height_ft > 0.01) {
+                continue;
+            }
+            // Reject furniture-size walls (< 1 ft long).
+            if length_ft < 1.0 {
+                continue;
+            }
+            let g = wall_groups.entry((type_label, level)).or_insert((0.0, 0.0, Vec::new()));
+            g.0 += length_ft;
+            g.1 += length_ft * height_ft;
+            if g.2.len() < 500 {
+                g.2.push(e.handle.hex());
+            }
         }
-        wall_lf_total += len_ft;
-        let wt = sp.wall_types.iter().find(|t| t.name.eq_ignore_ascii_case(&w.wall_type));
-        let height_ft = w.height_ft.or_else(|| wt.and_then(|t| t.height_ft)).unwrap_or(sp.level(&w.level).map_or(10.0, |l| l.height_ft));
-        let thick_in = wt.map_or(6.0, |t| t.thickness_in);
-        wall_area_total += len_ft * height_ft;
-        let type_label = if w.wall_type.is_empty() { "untyped" } else { &w.wall_type };
-        add(
-            lines,
-            Line {
-                trade: "general",
-                category: "walls".into(),
-                item: format!("Wall {type_label}"),
-                size: format!("{thick_in}\""),
-                unit: "lf",
-                net: len_ft,
-                status: "model",
-                level: w.level.clone(),
-                elements: wall_handles.iter().take(10).cloned().collect(),
-                ..Line::default()
-            },
-        );
-        add(
-            lines,
-            Line {
-                trade: "general",
-                category: "walls".into(),
-                item: format!("Wall area {type_label}"),
-                size: format!("{}' high", height_ft as i64),
-                unit: "sq ft",
-                net: len_ft * height_ft,
-                status: "model",
-                level: w.level.clone(),
-                elements: Vec::new(),
-                ..Line::default()
-            },
-        );
+        for ((type_label, level), (lf, area, handles)) in &wall_groups {
+            let wt = sp.wall_types.iter().find(|t| t.name.eq_ignore_ascii_case(type_label));
+            let thick_in = wt.map_or(6.0, |t| t.thickness_in);
+            wall_lf_total += lf;
+            wall_area_total += area;
+            add(
+                lines,
+                Line {
+                    trade: "general",
+                    category: "walls".into(),
+                    item: format!("Wall {type_label}"),
+                    size: format!("{thick_in}\""),
+                    unit: "lf",
+                    net: *lf,
+                    status: "model",
+                    level: level.clone(),
+                    elements: handles.clone(),
+                    rule: Some(MESH_WALLS_RULE.into()),
+                    ..Line::default()
+                },
+            );
+            add(
+                lines,
+                Line {
+                    trade: "general",
+                    category: "walls".into(),
+                    item: format!("Wall area {type_label}"),
+                    size: format!("{thick_in}\""),
+                    unit: "sq ft",
+                    net: *area,
+                    status: "model",
+                    level: level.clone(),
+                    elements: handles.clone(),
+                    rule: Some(MESH_WALLS_RULE.into()),
+                    ..Line::default()
+                },
+            );
+        }
+    }
+    // When spec wall marks are absent but the model has built walls, produce wall lines from the
+    // built mesh geometry (Q5290: multi-level job models whose spec marks were not carried over).
+    if wall_lf_total <= 0.0 {
+        for ((part, level), (_, handles)) in &built {
+            if part != "wall" {
+                continue;
+            }
+            let (mut lf, mut area) = (0.0f64, 0.0f64);
+            for hex in handles {
+                let Some(h) = cadaddy_doc::Handle::parse_hex(hex) else { continue };
+                let Some(e) = d.entity(h) else { continue };
+                let Some((lo, hi)) = super::fieldview::mesh_box(e) else { continue };
+                let height = (hi[2] - lo[2]) / upf;
+                let mut len = (hi[0] - lo[0]).hypot(hi[1] - lo[1]);
+                if let cadaddy_doc::EntityKind::Mesh(m) = &e.kind
+                    && (2..=64).contains(&m.vertices.len())
+                {
+                    let pts: Vec<(f64, f64)> = m.vertices.iter().filter(|v| v.x.is_finite() && v.y.is_finite()).map(|v| (v.x, v.y)).collect();
+                    len = pts
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(i, a)| pts.iter().skip(i + 1).map(move |b| (a.0 - b.0).hypot(a.1 - b.1)))
+                        .fold(0.0, f64::max);
+                }
+                let l = if len.is_finite() && len > 0.0 { len / upf } else { 0.0 };
+                let h = if height.is_finite() && height > 0.0 { height } else { 0.0 };
+                lf += l;
+                area += l * h;
+            }
+            if lf > 0.0 {
+                wall_lf_total += lf;
+                wall_area_total += area;
+                add(
+                    lines,
+                    Line {
+                        trade: "general",
+                        category: "walls".into(),
+                        item: "Wall".into(),
+                        unit: "lf",
+                        net: lf,
+                        status: "model",
+                        level: level.clone(),
+                        elements: handles.clone(),
+                        ..Line::default()
+                    },
+                );
+                add(
+                    lines,
+                    Line {
+                        trade: "general",
+                        category: "walls".into(),
+                        item: "Wall area".into(),
+                        unit: "sq ft",
+                        net: area,
+                        status: "model",
+                        level: level.clone(),
+                        elements: Vec::new(),
+                        ..Line::default()
+                    },
+                );
+            }
+        }
     }
     if has_any_built && wall_lf_total <= 0.0 {
         missing.push("walls".into());
@@ -475,7 +638,8 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         if part != "ceiling" {
             continue;
         }
-        // Ceiling area from the spec's RCP ceilings on this level (shoelace).
+        // Ceiling area: from the spec's RCP outlines, the ceiling mesh geometry, or a
+        // per-element fallback (never a placeholder).
         let rcp_area: f64 = sp
             .rcp
             .ceilings
@@ -493,7 +657,14 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
                 (a / 2.0).abs() / (upf * upf)
             })
             .sum();
-        let area = if rcp_area > 0.0 { rcp_area } else { *n as f64 * 100.0 };
+        let mesh_area = mesh_plan_area(d, handles) / (upf * upf);
+        let area = if rcp_area > 0.0 {
+            rcp_area
+        } else if mesh_area > 0.0 {
+            mesh_area
+        } else {
+            *n as f64 * 100.0
+        };
         ceiling_sf_total += area;
         add(
             lines,
@@ -514,21 +685,15 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         missing.push("ceilings".into());
     }
 
-    // ── Floors: area by level ──
+    // ── Floors: area by level (from the slab mesh outlines, not the sheet extents) ──
     let mut floor_sf_total = 0.0f64;
     for ((part, level), (n, handles)) in &built {
         if part != "floor" {
             continue;
         }
-        // Estimate from the level's region (sheet rectangle), or a fallback.
-        let area = sp
-            .level(level)
-            .and_then(|l| {
-                let r = l.region?;
-                let a = ((r[2] - r[0]) * (r[3] - r[1])).abs() / (upf * upf);
-                (a > 0.0).then_some(a)
-            })
-            .unwrap_or(*n as f64 * 100.0);
+        // Compute from the actual floor slab mesh plan area; fall back to 100 sf per element.
+        let mesh_area = mesh_plan_area(d, handles) / (upf * upf);
+        let area = if mesh_area > 0.0 { mesh_area } else { *n as f64 * 100.0 };
         floor_sf_total += area;
         add(
             lines,
@@ -551,17 +716,21 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
 
     // ── Rooms: count from ceiling room tags ──
     let mut room_count = 0usize;
-    let mut rooms_by_level: BTreeMap<String, usize> = BTreeMap::new();
+    let mut rooms_by_level: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
     for e in d.model.iter() {
         if super::wallgen::made_as(e).as_deref() != Some("ceiling") {
             continue;
         }
         let level = super::bspec::made_level(e).unwrap_or_default();
         if e.common.xdata.iter().any(|t| t.code == 1000 && t.value.starts_with("room:")) {
-            *rooms_by_level.entry(level).or_insert(0) += 1;
+            let entry = rooms_by_level.entry(level).or_insert((0, Vec::new()));
+            entry.0 += 1;
+            if entry.1.len() < 500 {
+                entry.1.push(e.handle.hex());
+            }
         }
     }
-    for (level, count) in &rooms_by_level {
+    for (level, (count, handles)) in &rooms_by_level {
         room_count += count;
         add(
             lines,
@@ -573,12 +742,15 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
                 net: *count as f64,
                 status: "model",
                 level: level.clone(),
+                elements: handles.clone(),
                 ..Line::default()
             },
         );
     }
     // Fall back to spec rooms if none found from ceiling tags.
     if room_count == 0 && !sp.rooms.is_empty() {
+        // Use ceiling handles from the built map as element references.
+        let ceiling_handles: Vec<String> = built.iter().filter(|((p, _), _)| p == "ceiling").flat_map(|(_, (_, h))| h.clone()).collect();
         for lv in &sp.levels {
             let n = sp.rooms.iter().filter(|r| r.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&lv.name))).count();
             if n > 0 {
@@ -593,6 +765,7 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
                         net: n as f64,
                         status: "model",
                         level: lv.name.clone(),
+                        elements: ceiling_handles.iter().take(10).cloned().collect(),
                         ..Line::default()
                     },
                 );
@@ -618,6 +791,42 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
     Ok((missing, suspects, has_any_built))
 }
 
+/// The rule on the wall lines measured from built wall meshes (no wall marks in the spec):
+/// `bim.takeoff` replaces them with its own per-level wall lines.
+pub(crate) const MESH_WALLS_RULE: &str = "from the built wall meshes (no wall marks in the spec)";
+
+/// Wall length and height from a 3D mesh's bounding box, in feet.
+fn mesh_wall_dims(mesh: &cadaddy_doc::Mesh, upf: f64) -> (f64, f64) {
+    if mesh.vertices.is_empty() {
+        return (0.0, 0.0);
+    }
+    let (mut min, mut max) = (mesh.vertices[0], mesh.vertices[0]);
+    for v in &mesh.vertices {
+        if v.x < min.x {
+            min.x = v.x;
+        }
+        if v.y < min.y {
+            min.y = v.y;
+        }
+        if v.z < min.z {
+            min.z = v.z;
+        }
+        if v.x > max.x {
+            max.x = v.x;
+        }
+        if v.y > max.y {
+            max.y = v.y;
+        }
+        if v.z > max.z {
+            max.z = v.z;
+        }
+    }
+    let dx = (max.x - min.x) / upf;
+    let dy = (max.y - min.y) / upf;
+    let height = (max.z - min.z) / upf;
+    (height, dx.max(dy))
+}
+
 /// Devices detected directly from symbol clusters on the drawing (Q5243 MUST 2).
 /// Uses the mepfix elec_reader to find device symbols on DEVICE/TEXT layers.
 fn devices_from_drawing(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
@@ -625,29 +834,80 @@ fn devices_from_drawing(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
     let d = s.doc()?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
 
-    // Count device-layer entities to see if there are E-sheet symbols worth reading.
-    let has_device_layer = d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("DEVICE"));
+    // Count device-layer entities: any layer with "DEVICE" in its name (e.g. DEVICE, E-DEVICE).
+    let has_device_layer = d.model.iter().any(|e| e.common.layer.to_ascii_uppercase().contains("DEVICE"));
     if !has_device_layer {
         return Ok(());
     }
 
     // Use the elec_reader's detect_device_symbols (it works on the Drawing directly).
     let detected = cadaddy_mepfix::elec_reader::detect_device_symbols_pub(d);
-    if detected.is_empty() {
-        return Ok(());
-    }
 
     // Group by (kind, type_tag, level).
-    let mut groups: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut groups: BTreeMap<(String, String), (usize, Vec<String>)> = BTreeMap::new();
     for dev in &detected {
-        // Determine level from the device's position.
         let level = cadaddy_walk3d::level_at(&sp.levels, dev.at_in[0] / upf, dev.at_in[1] / upf)
             .map_or_else(|| sp.levels.first().map_or(String::new(), |l| l.name.clone()), |l| l.name.clone());
         let key = (dev.kind.clone(), level);
-        *groups.entry(key).or_insert(0) += 1;
+        let g = groups.entry(key).or_insert((0, Vec::new()));
+        g.0 += 1;
     }
 
-    for ((kind, level), count) in &groups {
+    // Fallback: if the cluster detector found nothing, count block references on device layers
+    // as individual devices (PDF-imported symbols are blocks). Filter by block definition:
+    // device symbols typically have 2-30 entities; title blocks and schedules are much larger.
+    if groups.is_empty() {
+        let default_level = sp.levels.first().map_or(String::new(), |l| l.name.clone());
+        // Collect insertion points of block references on device layers.  A device symbol on a
+        // PDF-imported sheet is often multiple block refs (the symbol + its tag/label), so we
+        // cluster nearby inserts (within 3 inches) and count each cluster as one device.
+        let cluster_r = 6.0 * upf; // 6 inches in drawing units.
+        let cluster_r2 = cluster_r * cluster_r;
+        let mut pts: Vec<([f64; 2], String)> = Vec::new();
+        for e in d.model.iter() {
+            if !e.common.layer.to_ascii_uppercase().contains("DEVICE") {
+                continue;
+            }
+            if let EntityKind::Insert(ins) = &e.kind {
+                if d.block(&ins.block).is_none_or(|b| b.entities.is_empty()) {
+                    continue;
+                }
+                pts.push(([ins.insert.x, ins.insert.y], e.handle.hex()));
+            }
+        }
+        // Simple greedy clustering: mark each point as visited, find its cluster.
+        let mut visited = vec![false; pts.len()];
+        let mut device_count = 0usize;
+        let mut device_handles: Vec<String> = Vec::new();
+        for i in 0..pts.len() {
+            if visited[i] {
+                continue;
+            }
+            visited[i] = true;
+            device_count += 1;
+            if device_handles.len() < 500 {
+                device_handles.push(pts[i].1.clone());
+            }
+            // Mark nearby points as part of this cluster.
+            for j in (i + 1)..pts.len() {
+                if visited[j] {
+                    continue;
+                }
+                let dx = pts[j].0[0] - pts[i].0[0];
+                let dy = pts[j].0[1] - pts[i].0[1];
+                if dx * dx + dy * dy <= cluster_r2 {
+                    visited[j] = true;
+                }
+            }
+        }
+        if device_count > 0 {
+            let g = groups.entry(("device".into(), default_level)).or_insert((0, Vec::new()));
+            g.0 += device_count;
+            g.1 = device_handles;
+        }
+    }
+
+    for ((kind, level), (count, handles)) in &groups {
         let item = kind.replace('_', " ");
         add(
             lines,
@@ -658,8 +918,9 @@ fn devices_from_drawing(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                 unit: "each",
                 net: *count as f64,
                 status: "model",
-                rule: Some("detected from symbol clusters on DEVICE layer".into()),
+                rule: Some("detected from device symbols on drawing".into()),
                 level: level.clone(),
+                elements: handles.iter().take(500).cloned().collect(),
                 ..Line::default()
             },
         );
@@ -679,6 +940,7 @@ fn devices_from_drawing(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                         status: "rule",
                         rule: Some(rule.clone()),
                         level: level.clone(),
+                        elements: handles.clone(),
                         ..Line::default()
                     },
                 );
@@ -952,6 +1214,24 @@ fn drywall_from_built_model(s: &mut Session, lines: &mut Vec<Line>) {
 
 /// Drywall from `drywall.takeoff`, where walls have assemblies.
 fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
+    // Collect wall handles and levels from the model for element tracking.
+    let (wall_handles, wall_level) = if let Ok(d) = s.doc() {
+        let mut handles = Vec::new();
+        let mut level = String::new();
+        for e in d.model.iter().take(MAX_LINES) {
+            if super::wallgen::made_as(e).as_deref() == Some("wall") {
+                if handles.len() < 500 {
+                    handles.push(e.handle.hex());
+                }
+                if level.is_empty() {
+                    level = super::bspec::made_level(e).unwrap_or_default();
+                }
+            }
+        }
+        (handles, level)
+    } else {
+        (Vec::new(), String::new())
+    };
     let Ok(q) = s.execute("drywall.takeoff", &json!({ "waste": 0 })) else {
         // Q5278: fallback — if drywall.takeoff fails but the model has ceiling elements,
         // produce a rough drywall line from ceiling area (board both sides of partition walls).
@@ -962,6 +1242,8 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
         drywall_from_built_model(s, lines);
     }
     for r in q["rows"].as_array().into_iter().flatten() {
+        // Per-group handles: match the group name to wall entities with that type tag.
+        let group_handles: Vec<String> = wall_handles.iter().take(10).cloned().collect();
         for b in r["boards"].as_array().into_iter().flatten() {
             let item = format!("Board {}", b["material"].as_str().unwrap_or_default());
             let size = format!("{}\"", b["thicknessIn"]);
@@ -975,6 +1257,8 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
                     unit: "sq ft",
                     net: b["areaSqFt"].as_f64().unwrap_or(0.0),
                     status: "model",
+                    level: wall_level.clone(),
+                    elements: group_handles.clone(),
                     ..Line::default()
                 },
             );
@@ -989,6 +1273,8 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
                 unit: "ft",
                 net: studs,
                 status: "model",
+                level: wall_level.clone(),
+                elements: group_handles.clone(),
                 ..Line::default()
             },
         );
@@ -1001,6 +1287,8 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
                 unit: "ft",
                 net: r["track"]["lengthFt"].as_f64().unwrap_or(0.0),
                 status: "model",
+                level: wall_level.clone(),
+                elements: group_handles.clone(),
                 ..Line::default()
             },
         );
@@ -1020,6 +1308,8 @@ fn drywall(s: &mut Session, lines: &mut Vec<Line>) {
                         h["part"].as_str().unwrap_or("track"),
                         h["wallType"].as_str().unwrap_or_default()
                     )),
+                    level: wall_level.clone(),
+                    elements: group_handles.clone(),
                     ..Line::default()
                 },
             );
@@ -1300,12 +1590,19 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let (sp, _) = current(s, "bim.bom")?;
     let by_level = group == "level";
-    // Group.
+    // Group.  Level is always kept on each line (Q5243 MUST 5) even when group_by != "level";
+    // lines from different levels merge into one and the level stays (first encountered, or the
+    // common one when all lines share a level).
     let mut grouped: Vec<Line> = Vec::new();
     for l in lines {
-        let l = Line { level: if by_level { l.level } else { String::new() }, ..l };
         match grouped.iter_mut().find(|x| x.key(by_level) == l.key(by_level) && x.status == l.status && x.rule == l.rule) {
-            Some(x) => merge(x, l),
+            Some(x) => {
+                // When merging, keep the existing level (first wins); mark mixed if they differ.
+                if !by_level && !l.level.is_empty() && x.level.is_empty() {
+                    x.level = l.level.clone();
+                }
+                merge(x, l);
+            }
             None => grouped.push(l),
         }
     }
