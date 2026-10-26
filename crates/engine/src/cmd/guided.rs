@@ -2566,11 +2566,17 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
 
         // MUST 10: Unknown/foreign symbols — ask to learn them.
+        // Q6021 MUST 2: never create a question with empty text; skip symbols with no tag.
         if let Some(unknowns) = devices.get("unknowns").and_then(Value::as_array) {
             for unk in unknowns.iter().take(MAX_QUESTIONS_PER_STAGE) {
-                let desc = unk.get("description").and_then(Value::as_str).unwrap_or("unknown symbol");
+                let desc = unk.get("description").and_then(Value::as_str).unwrap_or("");
+                // Q6021 MUST 2: skip if the description/tag is empty or whitespace-only.
+                if desc.trim().is_empty() {
+                    continue;
+                }
                 let count = unk.get("count").and_then(Value::as_u64).unwrap_or(1);
-                let tagged = unk.get("tag").and_then(Value::as_str).is_some();
+                let tagged = unk.get("tag").and_then(Value::as_str).is_some_and(|t| !t.trim().is_empty());
+                let sheet = unk.get("sheet").and_then(Value::as_str).map(String::from);
                 let qid = job.next_qid(StageName::Devices);
                 let q = Question {
                     id: qid,
@@ -2588,12 +2594,13 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     choices: Vec::new(),
                     evidence: Some(QuestionEvidence {
                         crop_png_path: unk.get("crop_path").and_then(Value::as_str).map(String::from),
-                        sheet: unk.get("sheet").and_then(Value::as_str).map(String::from),
+                        // Q6021 MUST 2: always include the sheet reference.
+                        sheet: sheet.clone(),
                         at: unk.get("at").and_then(|a| {
                             let arr = a.as_array()?;
                             Some([arr.first()?.as_f64()?, arr.get(1)?.as_f64()?])
                         }),
-                        values: Some(json!({"description": desc, "count": count})),
+                        values: Some(json!({"description": desc, "count": count, "sheet": sheet})),
                         handles: unk
                             .get("handles")
                             .and_then(Value::as_array)
@@ -3521,9 +3528,82 @@ fn run_clash(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
 }
 
+/// Q6021 MUST 1: a default is plausible only when the thing it confirms is real.
+/// Rooms: area > 0 and a room-like name (not a material, height label, or note fragment).
+/// Devices: a known type (unknown symbols with default "skip" are not plausible).
+/// When there is no evidence at all, assume plausible (the question was asked for a reason).
+fn is_plausible_default(q: &Question) -> bool {
+    match (q.stage, &q.kind) {
+        // Room verify: "name and area right?" — only when the evidence has values with
+        // area_sqft.  A room at 0 sf or with a junk name is implausible; no evidence means
+        // the question predates the guard and keeps its default.
+        (StageName::Rooms, QuestionKind::Verify) => {
+            let vals = match q.evidence.as_ref().and_then(|e| e.values.as_ref()) {
+                Some(v) => v,
+                None => return true, // no evidence → assume plausible
+            };
+            // Only gate rooms whose evidence carries area_sqft (the room-verify pattern).
+            let Some(area) = vals.get("area_sqft").and_then(Value::as_f64) else {
+                return true;
+            };
+            if area <= 0.0 {
+                return false;
+            }
+            let name = vals
+                .get("room")
+                .or_else(|| vals.get("room_name"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            is_room_like_name(name)
+        }
+        // Device unknown-symbol questions default "skip": not plausible (unknown type).
+        (StageName::Devices, QuestionKind::Completeness) if q.default.as_deref() == Some("skip") => false,
+        _ => true,
+    }
+}
+
+/// Names that look like rooms (not junk labels read as rooms).
+fn is_room_like_name(name: &str) -> bool {
+    let upper = name.trim().to_uppercase();
+    if upper.is_empty() {
+        return false;
+    }
+    // A room number alone (digits, possibly with a letter suffix) is fine.
+    if upper.chars().all(|c| c.is_ascii_alphanumeric()) && upper.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    // Reject names that are clearly not rooms: building materials, notes, single words that are
+    // structural/finish labels, or very short fragments.
+    const NOT_ROOMS: &[&str] = &[
+        "WALL", "ROOF", "ROOFING", "CEILING", "FLOOR", "SLAB", "HEIGHT", "APPLICABLE",
+        "TYP", "TYPICAL", "NIC", "N.I.C", "EXIST", "EXISTING", "SIM", "SIMILAR",
+        "ABV", "ABOVE", "BLW", "BELOW", "TPO", "EPDM", "CMU", "GYP", "ACT", "VCT",
+        "CPT", "CONC", "CLG", "FLR", "DEMO", "NEW", "FINISH", "PAINT", "BASE",
+    ];
+    for bad_name in NOT_ROOMS {
+        // Exact match or the entire name is one of these words (possibly with punctuation).
+        let cleaned: String = upper.chars().filter(|c| c.is_ascii_alphanumeric() || *c == ' ').collect();
+        if cleaned.split_whitespace().all(|w| NOT_ROOMS.contains(&w)) {
+            return false;
+        }
+        if cleaned == *bad_name {
+            return false;
+        }
+    }
+    // Very short single-word names without a number are suspect.
+    if !upper.contains(' ') && upper.len() <= 3 && !upper.chars().any(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    true
+}
+
 /// Take the defaults of the questions the job doesn't ask: in auto mode every question with a
 /// default; else only the verify samples after the first [`VERIFY_ASKED`] (a spot check). A
-/// question in [`GuidedJob::always_ask`] is never taken by default. How many were answered.
+/// question in [`GuidedJob::always_ask`] is never taken by default.
+///
+/// Q6021 MUST 1: in auto mode, implausible defaults are **rejected** (not confirmed): the
+/// answer is `"Rejected"` with `answered_by = "auto_guard"`, and the question is listed in
+/// the report.  How many were answered (accepted + rejected).
 fn auto_answer(job: &mut GuidedJob, name: StageName) -> usize {
     let (auto, always) = (job.auto, std::mem::take(&mut job.always_ask));
     let mut answered = Vec::new();
@@ -3534,10 +3614,16 @@ fn auto_answer(job: &mut GuidedJob, name: StageName) -> usize {
             if q.answer.is_none()
                 && !asked
                 && !always.contains(&q.id)
-                && let Some(def) = &q.default
+                && q.default.is_some()
             {
-                q.answer = Some(Value::String(def.clone()));
-                q.answered_by = Some("default".into());
+                if is_plausible_default(q) {
+                    let def = q.default.clone().unwrap_or_default();
+                    q.answer = Some(Value::String(def));
+                    q.answered_by = Some("default".into());
+                } else {
+                    q.answer = Some(Value::String("Rejected".into()));
+                    q.answered_by = Some("auto_guard".into());
+                }
                 answered.push(q.id.clone());
             }
         }
@@ -3571,30 +3657,38 @@ pub fn sync_worklist(job: &mut GuidedJob) {
     }
 }
 
-/// How the job's questions were answered: (by default, by the agent or user, still open).
-fn answer_counts(job: &GuidedJob) -> (usize, usize, usize) {
-    let (mut automatic, mut by_you, mut open) = (0, 0, 0);
+/// How the job's questions were answered: (by default, by the agent or user, rejected, open).
+fn answer_counts(job: &GuidedJob) -> (usize, usize, usize, usize) {
+    let (mut automatic, mut by_you, mut rejected, mut open) = (0, 0, 0, 0);
     for q in job.stages.iter().flat_map(|st| st.questions.iter().chain(st.verify.iter()).chain(st.completeness.iter())) {
         match (&q.answer, q.answered_by.as_deref()) {
             (None, _) => open += 1,
             (Some(_), Some("default")) => automatic += 1,
+            (Some(_), Some("auto_guard")) => rejected += 1,
             _ => by_you += 1,
         }
     }
-    (automatic, by_you, open)
+    (automatic, by_you, rejected, open)
 }
 
 /// The job's mode and how its questions were answered, in words too.
 fn answers_value(job: &GuidedJob) -> Value {
-    let (automatic, by_you, open) = answer_counts(job);
+    let (automatic, by_you, rejected, open) = answer_counts(job);
     let mut note = format!("{automatic} answered automatically, {by_you} by you");
+    if rejected > 0 {
+        note.push_str(&format!(", {rejected} rejected by auto-guard (implausible defaults)"));
+    }
     if open > 0 {
         note.push_str(&format!(", {open} waiting for an answer"));
     }
     if job.auto {
-        note.push_str(" (auto mode: every question with a default took it)");
+        if rejected > 0 {
+            note.push_str(" (auto mode with guard: plausible defaults accepted, implausible rejected)");
+        } else {
+            note.push_str(" (auto mode: every question with a default took it)");
+        }
     }
-    json!({"mode": if job.auto { "auto" } else { "interactive" }, "automatic": automatic, "by_you": by_you, "open": open, "note": note})
+    json!({"mode": if job.auto { "auto" } else { "interactive" }, "automatic": automatic, "by_you": by_you, "rejected": rejected, "open": open, "note": note})
 }
 
 /// A question as `job.next` gives it: with the sheet it is about and its picture, when known.
@@ -4816,6 +4910,78 @@ fn cmd_rules(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(json!({"rules": rules, "count": rules.len()}))
 }
 
+/// Q6021 MUST 3: warnings the report raises when the job is done but something is off.
+fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
+    let mut w: Vec<Value> = Vec::new();
+
+    // 0 rooms.
+    let rooms_stage = job.stage(StageName::Rooms);
+    let room_count = rooms_stage
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if rooms_stage.is_some_and(|st| st.status == StageStatus::Done) && room_count == 0 {
+        w.push(json!({"warning": "0 rooms", "detail": "The rooms stage finished with 0 rooms in the model"}));
+    }
+
+    // Devices not placed in the model.
+    let devices_stage = job.stage(StageName::Devices);
+    if devices_stage.is_some_and(|st| st.status == StageStatus::Done) && job.devices.is_empty() {
+        w.push(json!({"warning": "devices not in model", "detail": "The devices stage ran but 0 devices were placed in the model"}));
+    }
+
+    // Estimate $0 or unpriced.
+    let estimate_stage = job.stage(StageName::Estimate);
+    if let Some(est) = estimate_stage.filter(|st| st.status == StageStatus::Done) {
+        let total = est.result.as_ref().and_then(|r| r.get("total")).and_then(Value::as_f64).unwrap_or(0.0);
+        let unpriced = est.result.as_ref().and_then(|r| r.get("unpriced")).and_then(Value::as_u64).unwrap_or(0);
+        if total <= 0.0 {
+            w.push(json!({"warning": "estimate $0", "detail": "The estimate total is $0"}));
+        }
+        if unpriced > 0 {
+            w.push(json!({"warning": "unpriced items", "detail": format!("{unpriced} line(s) have no price")}));
+        }
+    }
+
+    // MEP sheets not registered (plan sheets not loaded/built).
+    let not_built = not_built_sheets(job);
+    if !not_built.is_empty() {
+        w.push(json!({"warning": "sheets not built", "detail": not_built}));
+    }
+
+    // Auto-guard rejections (Q6021).
+    let rejected: Vec<String> = job
+        .stages
+        .iter()
+        .flat_map(|st| st.questions.iter().chain(st.verify.iter()).chain(st.completeness.iter()))
+        .filter(|q| q.answered_by.as_deref() == Some("auto_guard"))
+        .map(|q| q.question.clone())
+        .collect();
+    if !rejected.is_empty() {
+        w.push(json!({"warning": "auto-guard rejections", "count": rejected.len(), "detail": rejected}));
+    }
+
+    // Elements from the saved model.
+    if let Some(ms) = stats
+        && (ms.elements_by_kind.is_empty() || ms.elements_by_kind.values().sum::<usize>() == 0)
+    {
+        w.push(json!({"warning": "0 elements in model", "detail": "The building model has 0 elements"}));
+    }
+    w
+}
+
+/// Q6021 MUST 3: "done" vs "done_with_warnings".
+fn done_status(job: &GuidedJob, warnings: &[Value]) -> &'static str {
+    if !job.is_done() {
+        "in_progress"
+    } else if warnings.is_empty() {
+        "done"
+    } else {
+        "done_with_warnings"
+    }
+}
+
 /// `job.report` — final report (md + json).
 fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
     let job = load_job(s)?.ok_or_else(|| bad("job.report", "no job running"))?;
@@ -4852,12 +5018,18 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         })
         .collect();
 
+    let stats = model_stats_from_session(s);
+    let warnings = job_warnings(&job, stats.as_ref());
+    let status = done_status(&job, &warnings);
+
     Ok(json!({
         "job_id": job.id,
         "goal": job.goal,
         "created": job.created,
         "pdfs": job.pdfs_path,
         "done": job.is_done(),
+        "status": status,
+        "warnings": warnings,
         "progress": job.progress(),
         "stages": stages_summary,
         "totals": {
@@ -4904,11 +5076,16 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
         _ => Value::Null,
     };
 
+    // Q6021 MUST 3: warnings and done_with_warnings status.
+    let warnings = job_warnings(job, stats);
+    let status = done_status(job, &warnings);
+
     let mut v = json!({
         "job_id": job.id,
         "goal": job.goal,
         "progress": job.progress(),
         "done": job.is_done(),
+        "status": status,
         "current_stage": job.current_stage().map(|s| s.name.label()),
         "stages": stages,
         "open_questions": job.stages.iter().map(|s| s.unanswered().len()).sum::<usize>(),
@@ -4922,6 +5099,9 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
         "elements": elements,
         "answers": answers_value(job),
     });
+    if !warnings.is_empty() {
+        v["warnings"] = json!(warnings);
+    }
     if let Some(from) = job.rerun_held {
         v["rerun_held"] = json!(from.label());
     }
@@ -6527,5 +6707,199 @@ mod tests {
         let other = ask(&mut job, StageName::Takeoff, QuestionKind::Doubt, "Totals look right?", Some("Yes"));
         let q = job.stage(StageName::Takeoff).and_then(|st| st.questions.iter().find(|q| q.id == other)).cloned().expect("q");
         assert!(if_changed(&job, &q).is_null());
+    }
+
+    // ─── Q6021: auto-guard tests ─────────────────────────────────────────────
+
+    /// Helper: a room-verify question with area and name in the evidence.
+    fn room_verify(job: &mut GuidedJob, name: &str, number: &str, area: f64) -> String {
+        let id = job.next_qid(StageName::Rooms);
+        let q = Question {
+            id: id.clone(),
+            stage: StageName::Rooms,
+            question: format!("Room {number} '{name}': {area:.0} sq ft — name and area right?"),
+            why: "Verify sample".into(),
+            choices: vec!["Correct".into(), "Not a room".into()],
+            evidence: Some(QuestionEvidence {
+                crop_png_path: None,
+                sheet: None,
+                at: None,
+                values: Some(json!({"room": name, "number": number, "area_sqft": area})),
+                handles: Vec::new(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }),
+            default: Some("Correct".into()),
+            answer_schema: None,
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Verify,
+        };
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.verify.push(q);
+        }
+        id
+    }
+
+    /// Helper: an unknown-symbol device question (default "skip").
+    fn device_unknown(job: &mut GuidedJob, tag: &str, count: u64) -> String {
+        let id = job.next_qid(StageName::Devices);
+        let q = Question {
+            id: id.clone(),
+            stage: StageName::Devices,
+            question: format!("Unknown symbol tag '{tag}' printed by {count} symbols — which device is it?"),
+            why: "unknown symbol".into(),
+            choices: Vec::new(),
+            evidence: Some(QuestionEvidence {
+                crop_png_path: None,
+                sheet: Some("E-1".into()),
+                at: None,
+                values: Some(json!({"description": tag, "count": count})),
+                handles: Vec::new(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }),
+            default: Some("skip".into()),
+            answer_schema: None,
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Completeness,
+        };
+        if let Some(st) = job.stage_mut(StageName::Devices) {
+            st.completeness.push(q);
+        }
+        id
+    }
+
+    #[test]
+    fn is_room_like_name_rejects_junk() {
+        // Good room names.
+        assert!(is_room_like_name("101"));
+        assert!(is_room_like_name("LOBBY"));
+        assert!(is_room_like_name("GUEST ROOM"));
+        assert!(is_room_like_name("ELECTRICAL ROOM"));
+        assert!(is_room_like_name("101A"));
+        assert!(is_room_like_name("BATHROOM 3"));
+        // Junk names from the real prints.
+        assert!(!is_room_like_name("WALL"));
+        assert!(!is_room_like_name("TPO ROOFING"));
+        assert!(!is_room_like_name("HEIGHT"));
+        assert!(!is_room_like_name("APPLICABLE."));
+        assert!(!is_room_like_name("CEILING"));
+        assert!(!is_room_like_name("FLOOR"));
+        assert!(!is_room_like_name("SLAB"));
+        assert!(!is_room_like_name("TYP"));
+        assert!(!is_room_like_name(""));
+        assert!(!is_room_like_name("CMU"));
+    }
+
+    /// Q6021 MUST 1: auto mode rejects rooms at 0 sf or with junk names.
+    #[test]
+    fn auto_guard_rejects_implausible_rooms() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.auto = true;
+        // Good room: 350 sf, real name.
+        room_verify(&mut job, "GUEST ROOM", "101", 350.0);
+        // Bad room: 0 sf.
+        room_verify(&mut job, "GUEST ROOM", "102", 0.0);
+        // Bad room: junk name.
+        room_verify(&mut job, "WALL", "103", 50.0);
+        // Bad room: junk name AND 0 sf.
+        room_verify(&mut job, "TPO ROOFING", "104", 0.0);
+
+        let taken = auto_answer(&mut job, StageName::Rooms);
+        assert_eq!(taken, 4, "all 4 should be answered (1 accepted + 3 rejected)");
+
+        let st = job.stage(StageName::Rooms).expect("rooms stage");
+        let accepted: Vec<_> = st.verify.iter().filter(|q| q.answered_by.as_deref() == Some("default")).collect();
+        let rejected: Vec<_> = st.verify.iter().filter(|q| q.answered_by.as_deref() == Some("auto_guard")).collect();
+        assert_eq!(accepted.len(), 1, "only the good room accepted");
+        assert_eq!(rejected.len(), 3, "3 junk rooms rejected");
+        assert!(accepted[0].question.contains("101"), "room 101 accepted");
+        for q in &rejected {
+            assert_eq!(q.answer.as_ref().and_then(Value::as_str), Some("Rejected"));
+        }
+
+        let (auto_count, _, rej_count, _) = answer_counts(&job);
+        assert_eq!((auto_count, rej_count), (1, 3));
+    }
+
+    /// Q6021 MUST 1: auto mode rejects unknown device "skip" defaults.
+    #[test]
+    fn auto_guard_rejects_unknown_device_skip() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.auto = true;
+        // A regular completeness question (not "skip") is accepted.
+        ask(&mut job, StageName::Devices, QuestionKind::Completeness, "I counted 5 duplex receptacles. Any uncounted?", Some("Count is complete"));
+        // Unknown symbol questions default "skip" are rejected.
+        device_unknown(&mut job, "XY", 10);
+        device_unknown(&mut job, "QQ", 4);
+
+        let taken = auto_answer(&mut job, StageName::Devices);
+        assert_eq!(taken, 3);
+
+        let st = job.stage(StageName::Devices).expect("devices stage");
+        let all_comp: Vec<_> = st.completeness.iter().collect();
+        // First: "Count is complete" → accepted.
+        assert_eq!(all_comp[0].answered_by.as_deref(), Some("default"));
+        // XY and QQ: rejected.
+        assert_eq!(all_comp[1].answered_by.as_deref(), Some("auto_guard"));
+        assert_eq!(all_comp[2].answered_by.as_deref(), Some("auto_guard"));
+    }
+
+    /// Q6021 MUST 3: job warnings and done_with_warnings status.
+    #[test]
+    fn job_report_warns_on_zero_rooms_and_empty_devices() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        // Rooms stage done with 0 rooms.
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.status = StageStatus::Done;
+            st.result = Some(json!({"count": 0, "rooms": []}));
+        }
+        // Devices stage done with 0 devices.
+        if let Some(st) = job.stage_mut(StageName::Devices) {
+            st.status = StageStatus::Done;
+            st.result = Some(json!({"count": 0}));
+        }
+        // Mark other stages skipped so is_done() returns true.
+        for st in &mut job.stages {
+            if st.status == StageStatus::Pending {
+                st.status = StageStatus::Skipped;
+            }
+        }
+        assert!(job.is_done());
+
+        let warnings = job_warnings(&job, None);
+        assert!(warnings.iter().any(|w| w["warning"] == "0 rooms"), "expected 0-rooms warning: {warnings:?}");
+        assert!(warnings.iter().any(|w| w["warning"] == "devices not in model"), "expected devices warning: {warnings:?}");
+        assert_eq!(done_status(&job, &warnings), "done_with_warnings");
+
+        // Without warnings: plain "done".
+        let empty_warnings: Vec<Value> = Vec::new();
+        assert_eq!(done_status(&job, &empty_warnings), "done");
+    }
+
+    /// Q6021 MUST 3: auto-guard rejections appear in the warnings.
+    #[test]
+    fn auto_guard_rejections_show_in_warnings() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.auto = true;
+        room_verify(&mut job, "WALL", "999", 0.0);
+        auto_answer(&mut job, StageName::Rooms);
+        // Mark everything done/skipped.
+        for st in &mut job.stages {
+            if st.status == StageStatus::Pending || st.status == StageStatus::Paused {
+                st.status = StageStatus::Skipped;
+            }
+        }
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.status = StageStatus::Done;
+            st.result = Some(json!({"count": 1, "rooms": [{"name": "WALL"}]}));
+        }
+
+        let warnings = job_warnings(&job, None);
+        assert!(warnings.iter().any(|w| w["warning"] == "auto-guard rejections"), "expected auto-guard warning: {warnings:?}");
     }
 }
