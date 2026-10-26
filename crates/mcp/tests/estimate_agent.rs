@@ -128,6 +128,23 @@ fn a_scripted_agent_completes_the_estimate_through_mcp_only() {
                     )
                     .unwrap();
                 }
+                "starter_cost_book" => {
+                    // Replace starter book prices with the agent's own quotes.
+                    // Set prices for ALL items in the agent's quote first, so
+                    // price_lines finds them by exact match (not by word-matching
+                    // against equipment prices like "Gang box" → "Box, 4\" square").
+                    let q = exec(&mut s, "estimate.query", json!({ "limit": 200 })).unwrap();
+                    for line in q["lines"].as_array().unwrap() {
+                        let lkey = line["key"].as_str().unwrap();
+                        let lparts: Vec<&str> = lkey.split('|').collect();
+                        let litem = lparts.get(2).copied().unwrap_or_default();
+                        let lsize = lparts.get(3).copied().unwrap_or_default();
+                        let lunit = line["unit"].as_str().unwrap_or("each");
+                        if let Some(&(m, h)) = quote.get(litem) {
+                            exec(&mut s, "estimate.set_price", json!({ "item": litem, "size": lsize, "unit": lunit, "material": m, "labor_hours": h, "date": "2026-10-01", "source": "Invented Supply quote Q-1" })).unwrap();
+                        }
+                    }
+                }
                 k => panic!("the agent has no plan for {k}: {f}"),
             }
         }
