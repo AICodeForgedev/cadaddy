@@ -2467,6 +2467,34 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
     out
 }
 
+/// What [`load_plan_pages`] put in the drawing.
+pub(crate) struct PlanPages {
+    /// The sheets in the set's index (0 when classify read none).
+    pub indexed: usize,
+    /// One per imported page: `{sheet, level, discipline, type}`.
+    pub pages: Vec<Value>,
+    /// The building's levels for `bspec.draft` ([`building_levels`]; empty without
+    /// architectural floor plans).
+    pub levels: Vec<Value>,
+}
+
+/// The guided job's classify → plan pages path, for one-call PDF to BIM (`bim.from_pdf`): the
+/// print set `pdfs` (a folder, or one PDF of any number of pages) is opened and classified, and
+/// its current plan sheets (every page when the set has none) are imported into the current
+/// drawing side by side, exactly as the job's build stage does.
+pub(crate) fn load_plan_pages(s: &mut Session, pdfs: &std::path::Path) -> Result<PlanPages> {
+    s.execute("printset.open", &json!({"path": pdfs.to_string_lossy()}))?;
+    // The sheets' files are named from the set's folder (the PDF's own folder for one file).
+    let dir = if pdfs.is_dir() { pdfs.to_path_buf() } else { pdfs.parent().map(std::path::Path::to_path_buf).unwrap_or_default() };
+    let dir = if dir.as_os_str().is_empty() { std::path::PathBuf::from(".") } else { dir };
+    let mut job = GuidedJob::new(&dir.to_string_lossy(), JobGoal::Bim);
+    run_classify(s, &mut job)?;
+    let indexed = job.index.as_ref().and_then(|i| i.get("sheets")).and_then(Value::as_array).map_or(0, Vec::len);
+    ensure_sheets_loaded(s, &mut job)?;
+    let pages = job.sheet_regions.iter().map(|r| json!({"sheet": r.number, "level": r.level, "discipline": r.discipline, "type": r.kind})).collect();
+    Ok(PlanPages { indexed, pages, levels: building_levels(&job) })
+}
+
 /// Run takeoff stage.
 fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     ensure_sheets_loaded(s, job)?;
