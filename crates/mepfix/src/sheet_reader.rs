@@ -78,7 +78,7 @@ pub struct SheetMap {
 
 /// Known discipline prefixes: sheet number prefix → discipline code.
 const DISCIPLINE_PREFIX: &[(&str, &str)] =
-    &[("FP", "FP"), ("FA", "FA"), ("M", "M"), ("P", "P"), ("S", "S"), ("A", "A"), ("G", "G"), ("E", "E"), ("C", "C"), ("T", "T")];
+    &[("FP", "FP"), ("FA", "FA"), ("SL", "SL"), ("M", "M"), ("P", "P"), ("S", "S"), ("A", "A"), ("G", "G"), ("E", "E"), ("C", "C"), ("T", "T")];
 
 /// The discipline a sheet number's letters name: `M-101`, `M101`, `M1.01` and `FP-201` alike.
 fn discipline_of(number: &str) -> Option<&'static str> {
@@ -361,15 +361,20 @@ fn level_range(lo: u32, hi: u32) -> Vec<u32> {
 /// `FLOOR 2`, `LEVEL 02`, and the lists and ranges of a typical-floor or two-view sheet
 /// (`FIRST AND SECOND FLOOR`, `THIRD & FOURTH FLOOR`, `1ST AND 3RD FLOORS`, `2ND-4TH FLOOR`,
 /// `SECOND THRU FOURTH FLOOR`, `LEVELS 2-4`).
+///
+/// A title saying "TYPICAL FLOOR" / "TYP. FLOORS" / "TYPICAL PLAN" (no specific numbers)
+/// returns `["T"]` — a sentinel the caller expands against the set's known levels.
 pub fn detect_levels(title: &str) -> Vec<String> {
     let words = level_tokens(title);
     let mut found: Vec<String> = Vec::new();
+    let mut has_typical = false;
     for (i, w) in words.iter().enumerate() {
         match w.as_str() {
             "FLOOR" | "FLOORS" => {
                 // Ordinals before it, joined by AND, `&` or a range: `FIRST AND SECOND FLOOR`.
                 let mut before: Vec<u32> = Vec::new();
                 let mut range = false;
+                let mut saw_typical = false;
                 for p in words.get(..i).unwrap_or_default().iter().rev() {
                     if let Some(n) = ordinal(p) {
                         match before.last() {
@@ -379,7 +384,12 @@ pub fn detect_levels(title: &str) -> Vec<String> {
                         range = false;
                     } else if is_range(p) {
                         range = true;
-                    } else if p != "AND" {
+                    } else if p == "AND" {
+                        // continue
+                    } else if matches!(p.as_str(), "TYPICAL" | "TYP") {
+                        saw_typical = true;
+                        break;
+                    } else {
                         break;
                     }
                 }
@@ -387,7 +397,11 @@ pub fn detect_levels(title: &str) -> Vec<String> {
                     // `FLOOR 2`, `FLOORS 3 AND 4`, `FLOORS 2-4`.
                     before = numbers_after(words.get(i + 1..).unwrap_or_default());
                 }
-                found.extend(before.iter().map(u32::to_string));
+                if before.is_empty() && saw_typical {
+                    has_typical = true;
+                } else {
+                    found.extend(before.iter().map(u32::to_string));
+                }
             }
             "LEVEL" | "LEVELS" => {
                 let rest = words.get(i + 1..).unwrap_or_default();
@@ -402,6 +416,17 @@ pub fn detect_levels(title: &str) -> Vec<String> {
             _ => {}
         }
     }
+    // "TYPICAL PLAN" / "TYP. PLAN" without FLOOR: e.g. "TYPICAL ELECTRICAL PLAN".
+    if !has_typical
+        && words.iter().any(|w| matches!(w.as_str(), "TYPICAL" | "TYP"))
+        && words.iter().any(|w| matches!(w.as_str(), "PLAN" | "PLANS"))
+        && found.is_empty()
+    {
+        has_typical = true;
+    }
+    if has_typical && found.is_empty() {
+        return vec!["T".to_string()];
+    }
     // A roof plan (framing, drainage…), not a sheet of roof assemblies or details.
     if words.iter().any(|w| w == "ROOF") && words.iter().any(|w| w == "PLAN" || w == "PLANS") {
         found.push("R".to_string());
@@ -410,6 +435,23 @@ pub fn detect_levels(title: &str) -> Vec<String> {
     found.sort_by_key(key);
     found.dedup();
     found
+}
+
+/// Whether this levels list is the "typical floor" sentinel that needs expansion.
+pub fn is_typical_sentinel(levels: &[String]) -> bool {
+    levels.len() == 1 && levels[0] == "T"
+}
+
+/// Expand a typical-floor sentinel against the known set of levels: every numeric level
+/// that has no dedicated plan for `discipline`. `all_levels` is sorted lowest-first.
+/// `has_dedicated` returns true when a level already has its own plan sheet.
+pub fn expand_typical(all_levels: &[String], has_dedicated: impl Fn(&str) -> bool) -> Vec<String> {
+    all_levels
+        .iter()
+        .filter(|l| l.parse::<u32>().is_ok()) // numeric floors only, not Roof
+        .filter(|l| !has_dedicated(l))
+        .cloned()
+        .collect()
 }
 
 /// Level numbers at the start of `words`: `2`, `02`, `3 AND 4`, `2-4`.
@@ -461,7 +503,7 @@ fn detect_title(d: &Drawing, number: &str) -> String {
         let texts: Vec<(String, f64, [f64; 2], [f64; 2])> = texts_across(d).into_iter().filter(|(v, _, _, _)| v != number && !v.is_empty()).collect();
         let titled = |v: &str| {
             let up = v.to_uppercase();
-            ["PLAN", "SCHEDULE", "COVER", "FRAMING", "CEILING", "ASSEMBLIES", "DETAILS", "SECTIONS", "ELEVATIONS", "DIAGRAM"]
+            ["PLAN", "SCHEDULE", "COVER", "FRAMING", "CEILING", "ASSEMBLIES", "DETAILS", "SECTIONS", "ELEVATIONS", "DIAGRAM", "LAYOUT"]
                 .iter()
                 .any(|k| up.contains(k))
         };
@@ -1657,6 +1699,35 @@ pub fn score_sheet_map(map: &SheetMap, truth_sheets: &[Sheet], truth_grid_x: &[G
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detect_levels_typical_floor() {
+        assert_eq!(detect_levels("TYPICAL FLOOR MECHANICAL PLAN"), vec!["T"]);
+        assert_eq!(detect_levels("TYP. FLOOR PLAN"), vec!["T"]);
+        assert_eq!(detect_levels("TYPICAL ELECTRICAL PLAN"), vec!["T"]);
+        assert_eq!(detect_levels("TYPICAL FLOORS - PLUMBING"), vec!["T"]);
+        // Not typical: has explicit levels.
+        assert_eq!(detect_levels("2ND - 4TH FLOOR MECHANICAL PLAN"), vec!["2", "3", "4"]);
+        assert_eq!(detect_levels("THIRD & FOURTH FLOOR PLAN"), vec!["3", "4"]);
+        assert_eq!(detect_levels("LEVELS 2-4"), vec!["2", "3", "4"]);
+        // Single named floor is not typical.
+        assert_eq!(detect_levels("SECOND FLOOR PLAN"), vec!["2"]);
+    }
+
+    #[test]
+    fn typical_sentinel_and_expand() {
+        assert!(is_typical_sentinel(&["T".to_string()]));
+        assert!(!is_typical_sentinel(&["1".to_string()]));
+        assert!(!is_typical_sentinel(&["1".to_string(), "2".to_string()]));
+        let all = vec!["1".to_string(), "2".to_string(), "3".to_string(), "4".to_string()];
+        // Floor 1 has a dedicated plan; typical covers 2, 3, 4.
+        let expanded = expand_typical(&all, |l| l == "1");
+        assert_eq!(expanded, vec!["2", "3", "4"]);
+        // All floors dedicated: typical covers nothing (but expand_typical is called only
+        // when there ARE no explicit numbers, so the caller falls back).
+        let expanded = expand_typical(&all, |l| l.parse::<u32>().is_ok());
+        assert!(expanded.is_empty());
+    }
 
     fn sheet_text(d: &mut Drawing, at: [f64; 2], value: &str, height: f64) {
         let t = cadaddy_doc::Text {

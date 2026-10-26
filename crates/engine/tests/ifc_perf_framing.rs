@@ -148,7 +148,7 @@ fn handle_of(s: &mut Session, guid: &str) -> String {
 /// Decode PNG bytes into (width, height, Vec<[r,g,b,a]>).
 fn decode_png(bytes: &[u8]) -> (u32, u32, Vec<[u8; 4]>) {
     let r = cadaddy_render::images::decode(bytes).expect("decode PNG");
-    let pixels: Vec<[u8; 4]> = r.rgba.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
+    let pixels: Vec<[u8; 4]> = r.rgba.as_chunks::<4>().0.to_vec();
     (r.width, r.height, pixels)
 }
 

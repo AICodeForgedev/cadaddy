@@ -3210,3 +3210,13 @@
 	List Callouts	Listar llamadas
 	Keep Print Set Job	Conservar trabajo del juego de planos
 	Resume Print Set Job	Reanudar trabajo del juego de planos
+	Finish Takeoff from Prints	Cómputo de acabados desde los planos
+	Layer Quantity Takeoff	Cómputo de cantidades por capa
+	Read Architecture from Prints	Leer la arquitectura de los planos
+	Read Roof and Wall Envelope	Leer la envolvente de cubierta y muros
+	Element Properties (BIM)	Propiedades del elemento (BIM)
+	Set Element Property (BIM)	Establecer propiedad del elemento (BIM)
+	Find Elements by Property	Buscar elementos por propiedad
+	Element Property Summary	Resumen de propiedades de elementos
+	BIM Properties	Propiedades BIM
+	Kind	Clase

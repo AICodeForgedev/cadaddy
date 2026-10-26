@@ -701,6 +701,8 @@ mod tests {
         let ex = |id: &str| find_command(id).unwrap().example_params();
         assert_eq!(ex("help"), json!({"command": "LINE"}));
         assert_eq!(ex("job.start"), json!({"pdfs": "FILE"}));
-        assert_eq!(ex("job.answer"), json!({"id": "TEXT", "answer": "TEXT"}));
+        // Real question ids (Q-<stage>-<n>), never a made-up "Q1".
+        assert_eq!(ex("job.answer"), json!({"id": "Q-rooms-23", "answer": "Correct"}));
+        assert_eq!(ex("job.set_mode"), json!({"auto": true}));
     }
 }

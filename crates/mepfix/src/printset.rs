@@ -66,7 +66,7 @@ pub struct SheetEntry {
     pub title: String,
     /// Source file, relative to `source_dir`.
     pub file: String,
-    /// Discipline code: `G`, `A`, `S`, `M`, `P`, `FP`, `E`, `FA`, `T`, `C`.
+    /// Discipline code: `G`, `A`, `S`, `M`, `P`, `FP`, `E`, `FA`, `T`, `C`, `SL`.
     pub discipline: String,
     /// Sheet type: `plan`, `enlarged_plan`, `rcp`, `schedule`, `cover`, `section`, `elevation`,
     /// `detail`, `diagram`, `unknown`.
@@ -446,9 +446,19 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
 /// Infer the discipline from the sheet number prefix.
 fn infer_discipline(number: &str) -> String {
     let up = number.to_ascii_uppercase();
-    for &(prefix, code) in
-        &[("FP-", "FP"), ("FA-", "FA"), ("M-", "M"), ("P-", "P"), ("S-", "S"), ("A-", "A"), ("G-", "G"), ("E-", "E"), ("T-", "T"), ("C-", "C")]
-    {
+    for &(prefix, code) in &[
+        ("FP-", "FP"),
+        ("FA-", "FA"),
+        ("SL-", "SL"),
+        ("M-", "M"),
+        ("P-", "P"),
+        ("S-", "S"),
+        ("A-", "A"),
+        ("G-", "G"),
+        ("E-", "E"),
+        ("T-", "T"),
+        ("C-", "C"),
+    ] {
         if up.starts_with(prefix) {
             return code.into();
         }
@@ -493,7 +503,7 @@ pub fn read_sheet_index(drawing: &cadaddy_doc::Drawing) -> Vec<String> {
         }
         let prefix = parts[0];
         let suffix = parts[1];
-        let valid_prefix = matches!(prefix, "G" | "A" | "S" | "M" | "P" | "FP" | "E" | "FA" | "T" | "C");
+        let valid_prefix = matches!(prefix, "G" | "A" | "S" | "M" | "P" | "FP" | "E" | "FA" | "T" | "C" | "SL");
         let valid_suffix = suffix.len() >= 2 && suffix.chars().next().is_some_and(|c| c.is_ascii_digit());
         valid_prefix && valid_suffix
     };
@@ -1028,6 +1038,9 @@ pub fn run_classify_prints(
         };
     }
     level_by_number(&mut out);
+    // Expand "typical floor" sentinels: a sheet with levels == ["T"] gets the levels of every
+    // numeric floor that no other sheet of the same discipline already covers.
+    expand_typical_levels(&mut out);
     project.sheets = out;
     let current: Vec<RecognisedSheet> = project.sheets.iter().filter(|s| s.superseded_by.is_empty()).filter_map(|s| s.recognised.clone()).collect();
     project.grid = sheet_reader::sheet_map_from(current);
@@ -1249,6 +1262,64 @@ fn level_by_number(sheets: &mut [SheetEntry]) {
     }
 }
 
+/// Expand the "typical floor" sentinel (`levels == ["T"]`): for each such sheet, determine which
+/// numeric levels it covers by looking at all plan sheets of the same discipline that already
+/// have a dedicated level. The typical sheet gets every other numeric level in the set.
+fn expand_typical_levels(sheets: &mut [SheetEntry]) {
+    // Collect all known numeric levels from non-superseded plan sheets.
+    let mut all_numeric: Vec<String> = Vec::new();
+    for e in sheets.iter().filter(|s| s.superseded_by.is_empty() && is_plan_type(&s.sheet_type)) {
+        for l in &e.levels {
+            if l != "T" && l.parse::<u32>().is_ok() && !all_numeric.contains(l) {
+                all_numeric.push(l.clone());
+            }
+        }
+        // Also check the primary level.
+        if !e.level.is_empty() && e.level != "T" && e.level.parse::<u32>().is_ok() && !all_numeric.contains(&e.level) {
+            all_numeric.push(e.level.clone());
+        }
+    }
+    all_numeric.sort_by_key(|l| l.parse::<u32>().unwrap_or(u32::MAX));
+    all_numeric.dedup();
+    if all_numeric.is_empty() {
+        return;
+    }
+    // For each "typical" sheet, expand against the discipline's dedicated levels.
+    let typical_indices: Vec<usize> = sheets
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.superseded_by.is_empty() && is_plan_type(&e.sheet_type) && sheet_reader::is_typical_sentinel(&e.levels))
+        .map(|(i, _)| i)
+        .collect();
+    for idx in typical_indices {
+        let disc = sheets[idx].discipline.clone();
+        // Levels that already have a dedicated plan of this discipline.
+        let dedicated: Vec<String> = sheets
+            .iter()
+            .filter(|e| {
+                e.superseded_by.is_empty()
+                    && is_plan_type(&e.sheet_type)
+                    && e.discipline.eq_ignore_ascii_case(&disc)
+                    && !sheet_reader::is_typical_sentinel(&e.levels)
+            })
+            .flat_map(|e| e.levels.iter().cloned())
+            .filter(|l| l.parse::<u32>().is_ok())
+            .collect();
+        let expanded = sheet_reader::expand_typical(&all_numeric, |l| dedicated.iter().any(|d| d == l));
+        if expanded.is_empty() {
+            // No expansion possible: fall back to all numeric levels.
+            sheets[idx].levels = all_numeric.clone();
+        } else {
+            sheets[idx].levels = expanded;
+        }
+        // Primary level = first of the expanded list.
+        if let Some(first) = sheets[idx].levels.first() {
+            sheets[idx].level = first.clone();
+        }
+        sheets[idx].level_source = "typical".into();
+    }
+}
+
 /// One real sheet of the set: every copy of it (the full set and a discipline set print the same
 /// sheet) is one entry.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -1436,9 +1507,15 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
             height_ft: el.zip(next).map(|(a, b)| b - a).filter(|h| *h > 0.0),
         });
     }
-    // Every plan gets a level: one whose title names none takes the lowest, to be confirmed.
+    // Every plan gets a level: one whose title names none takes the lowest, to be confirmed. A
+    // civil, landscape or site plan is on the site (no storey of the building).
     let lowest = codes.iter().find(|c| c.parse::<u32>().is_ok()).cloned().unwrap_or_else(|| "1".into());
     for s in out.sheets.iter_mut().filter(|s| is_plan_type(&s.sheet_type) && s.level.is_empty()) {
+        if crate::sheet_facts::is_site_sheet(&s.discipline, &s.title) {
+            s.level = "SITE".into();
+            s.level_source = "site".into();
+            continue;
+        }
         s.level = lowest.clone();
         s.level_source = "default".into();
         out.plans_without_level.push(s.number.clone());

@@ -4,16 +4,18 @@
 //! volumes (`rooms.build`: a mesh per room on the 3D-Rooms layer, see-through, tagged with the
 //! room's name and number).
 //!
-//! A room's ceiling: the building spec's for that room, else a ceiling note inside the room
-//! (`CLG 9'-0"`), else its level's in the spec, else 9'-0". Finishes: the spec room's materials and
-//! the finish codes written inside the room (`CPT-1`, `VCT-2`…).
+//! A room's ceiling: the building spec's for that room, else the finish schedule's, else a
+//! ceiling note inside the room (`CLG 9'-0"`), else its level's in the spec, else 9'-0".
+//! Finishes: schedule row (floor/base/wall/ceiling) + spec materials + finish codes written
+//! inside the room (`CPT-1`, `VCT-2`…). Each ceiling and finish carries its source.
 
 use cadaddy_doc::{Common, EntityKind, Handle, Mesh, MeshFace, MeshKind, RawTag, Space};
 use cadaddy_geom::{Bounds2, Vec2, Vec3};
+use cadaddy_mepfix::arch_reader::{RoomFinish, find_finish_schedule};
 use cadaddy_walk3d::BuildingSpec;
 use serde_json::{Value, json};
 
-use super::perceive::geometry::rooms_found;
+use super::perceive::geometry::rooms_found_in;
 use super::perceive::{feet_inches, finish_codes, objects, pt, round, texts, units_per_inch};
 use super::*;
 use crate::{Result, Session};
@@ -29,17 +31,25 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("rooms", "Rooms", run_list)
             .menu(&["Tools", "Building", "Rooms"])
-            .params("{outline?: bool (default true)} → as rooms.list (typed or from the menu: the Rooms palette)")
+            .params("{outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (as rooms.list)} → as rooms.list (typed or from the menu: the Rooms palette)")
             .noundo(),
         CommandSpec::new("rooms.list", "List Rooms", run_list)
-            .params("{outline?: bool (default true)} → {rooms: [{name, number, area, areaSqFt, areaM2, perimeter, ceiling, ceilingFt, elevation, volume, volumeCuFt, volumeM3, finishes, materials, level, label, at, outline}], count}")
+            .params("{outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (read the labels only inside these sheet rectangles, each sheet in full)} → {rooms: [{name, number, area, areaSqFt, areaM2, perimeter, ceiling, ceilingFt, ceilingSource, elevation, volume, volumeCuFt, volumeM3, finishes, finishDetail, materials, level, label, at, outline}], count}")
             .noundo(),
-        CommandSpec::new("rooms.get", "Room", run_get).params("{name? | number?} → the room (as rooms.list's)").noundo(),
-        CommandSpec::new("rooms.goto", "Go to Room", run_goto).params("{name? | number?} → {name, window}: the view shows the room").noundo(),
+        CommandSpec::new("rooms.get", "Room", run_get).params("{name? | number? | label?} → the room (as rooms.list's)").noundo(),
+        CommandSpec::new("rooms.goto", "Go to Room", run_goto).params("{name? | number? | label?} → {name, window}: the view shows the room").noundo(),
         CommandSpec::new("rooms.build", "Build Room Volumes", run_build)
             .menu(&["Tools", "Building", "Build Room Volumes"])
             .params("{clear?: true (remove them)} → {built, removed}: a see-through mesh per room on 3D-Rooms, tagged with its name and number"),
     ]
+}
+
+/// A finish with its slot and source.
+#[derive(Clone, Debug)]
+pub struct FinishDetail {
+    pub slot: String,
+    pub code: String,
+    pub source: String,
 }
 
 /// A room as a space.
@@ -55,7 +65,9 @@ pub struct Room3 {
     /// Floor elevation and ceiling height above it, drawing units.
     pub elevation: f64,
     pub ceiling: f64,
+    pub ceiling_source: String,
     pub finishes: Vec<String>,
+    pub finish_detail: Vec<FinishDetail>,
     pub materials: Value,
     pub level: Option<String>,
 }
@@ -66,19 +78,36 @@ impl Room3 {
     }
 }
 
+/// Match a room (by number, else name) to a finish schedule row.
+fn match_schedule<'a>(schedule: &'a [RoomFinish], number: Option<&str>, name: &str) -> Option<&'a RoomFinish> {
+    if let Some(num) = number
+        && let Some(row) = schedule.iter().find(|r| r.number.eq_ignore_ascii_case(num.trim()))
+    {
+        return Some(row);
+    }
+    schedule.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim()))
+}
+
 /// The plan's rooms as spaces. A built model's rooms are its room ceilings (one per traced room,
 /// what `model.build` reported): the one list every room command reads. Before a build, the
 /// rooms traced around the plan's name labels.
 pub fn rooms(s: &mut Session) -> Result<Vec<Room3>> {
+    rooms_in(s, None)
+}
+
+/// [`rooms`]; before a build, with `regions` (sheet rectangles), the labels are read only inside
+/// them, sheet by sheet (a whole print set's floors, each read in full).
+pub fn rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<Room3>> {
     if let Some(built) = built_rooms(s)? {
         return Ok(built);
     }
-    let found = rooms_found(s)?;
+    let found = rooms_found_in(s, regions)?;
     let (d, ents) = objects(s)?;
     let k = units_per_inch(d);
     let ft = 12.0 * k;
     let spec = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok());
     let notes = texts(&ents);
+    let schedule = find_finish_schedule(d);
     let mut out = Vec::with_capacity(found.len());
     for r in found {
         let inside: Vec<&String> =
@@ -91,7 +120,6 @@ pub fn rooms(s: &mut Session) -> Result<Vec<Room3>> {
         });
         let level = spec.as_ref().and_then(|sp| {
             let by_name = spec_room.and_then(|x| x.level.as_deref()).and_then(|n| sp.level(n));
-            // The level whose sheet region holds the room's tag.
             let in_region = || {
                 sp.levels.iter().find(|l| {
                     l.region
@@ -100,22 +128,40 @@ pub fn rooms(s: &mut Session) -> Result<Vec<Room3>> {
             };
             by_name.or_else(in_region).or_else(|| sp.levels.first())
         });
+        let sched_row = match_schedule(&schedule, r.number.as_deref(), &r.name);
         let note = inside.iter().find_map(|t| {
             let up = t.to_ascii_uppercase();
             (up.contains("CLG") || up.contains("CEILING")).then(|| feet_inches(&up)).flatten()
         });
-        let ceiling = spec_room
+        // Ceiling priority: spec room > schedule > CLG note > spec level > default.
+        let (ceiling, ceiling_source) = spec_room
             .and_then(|x| x.ceiling_ft)
-            .map(|f| f * ft)
-            .or_else(|| note.map(|i| i * k))
-            .or_else(|| level.map(|l| l.ceiling_ft * ft))
-            .filter(|c| c.is_finite() && *c > 0.0)
-            .unwrap_or(DEFAULT_CEILING_IN * k);
+            .map(|f| (f * ft, "spec"))
+            .or_else(|| sched_row.and_then(|r| r.ceiling_height_ft).map(|f| (f * ft, "schedule")))
+            .or_else(|| note.map(|i| (i * k, "note")))
+            .or_else(|| level.map(|l| (l.ceiling_ft * ft, "level")))
+            .filter(|(c, _)| c.is_finite() && *c > 0.0)
+            .unwrap_or((DEFAULT_CEILING_IN * k, "default"));
+        // Finishes: schedule slots first, then in-room finish codes.
         let mut finishes: Vec<String> = Vec::new();
+        let mut finish_detail: Vec<FinishDetail> = Vec::new();
+        if let Some(row) = sched_row {
+            for (slot, code) in [("floor", &row.floor), ("base", &row.base), ("wall", &row.wall), ("ceiling", &row.ceiling)] {
+                if !code.is_empty() {
+                    if !finishes.contains(code) {
+                        finishes.push(code.clone());
+                    }
+                    finish_detail.push(FinishDetail { slot: slot.into(), code: code.clone(), source: "schedule".into() });
+                }
+            }
+        }
         for t in &inside {
             for c in finish_codes(t) {
                 if !finishes.contains(&c) {
-                    finishes.push(c);
+                    finishes.push(c.clone());
+                }
+                if !finish_detail.iter().any(|d| d.code == c) {
+                    finish_detail.push(FinishDetail { slot: String::new(), code: c, source: "note".into() });
                 }
             }
         }
@@ -130,7 +176,9 @@ pub fn rooms(s: &mut Session) -> Result<Vec<Room3>> {
             perimeter: r.perimeter,
             elevation: level.map_or(0.0, |l| l.elevation_ft * ft),
             ceiling,
+            ceiling_source: ceiling_source.into(),
             finishes,
+            finish_detail,
             materials,
             level: level.map(|l| l.name.clone()),
         });
@@ -192,7 +240,7 @@ fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
     let k = units_per_inch(d);
     let spec = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok());
     let upf = spec.as_ref().map(|sp| sp.units_per_foot).filter(|u| u.is_finite() && *u > 0.0).unwrap_or(12.0 * k);
-    // The plan's texts (not what a build made), with their boxes for a quick reject.
+    let schedule = find_finish_schedule(d);
     let plan: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
         d.model.iter().filter(|e| matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_)) && super::wallgen::made_as(e).is_none()).collect();
     let notes = texts(&plan);
@@ -206,8 +254,6 @@ fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
             .and_then(|sp| sp.rooms.iter().find(|x| !c.spec_name.is_empty() && super::bspec::room_label(x).eq_ignore_ascii_case(&c.spec_name)));
         let area = cadaddy_geom::shoelace(&c.outline).abs();
         let centre = c.outline.iter().fold(Vec2::ZERO, |a, p| a + *p) * (1.0 / c.outline.len() as f64);
-        // The name: the spec's room, else the best room label inside (a room or unit-type word
-        // first; equipment and device tags never), else the tag it was traced from.
         let label = inside
             .iter()
             .map(|t| (super::perceive::geometry::room_name_score(&t.1), *t))
@@ -228,12 +274,38 @@ fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
         };
         let level = spec.as_ref().and_then(|sp| sp.level(&c.level));
         let elevation = level.map_or(0.0, |l| l.elevation_ft * upf);
-        let ceiling = Some(c.z - elevation).filter(|h| h.is_finite() && *h > 0.0).unwrap_or(DEFAULT_CEILING_IN * k);
+        let sched_row = match_schedule(&schedule, number.as_deref(), &name);
+        let note_in = inside.iter().find_map(|t| {
+            let up = t.1.to_ascii_uppercase();
+            (up.contains("CLG") || up.contains("CEILING")).then(|| feet_inches(&up)).flatten()
+        });
+        let ceiling_from_z = Some(c.z - elevation).filter(|h| h.is_finite() && *h > 0.0);
+        let (ceiling, ceiling_source) = ceiling_from_z
+            .map(|h| (h, "spec"))
+            .or_else(|| sched_row.and_then(|r| r.ceiling_height_ft).map(|f| (f * upf, "schedule")))
+            .or_else(|| note_in.map(|i| (i * k, "note")))
+            .or_else(|| level.map(|l| (l.ceiling_ft * upf, "level")))
+            .filter(|(c, _)| c.is_finite() && *c > 0.0)
+            .unwrap_or((DEFAULT_CEILING_IN * k, "default"));
         let mut finishes: Vec<String> = Vec::new();
+        let mut finish_detail: Vec<FinishDetail> = Vec::new();
+        if let Some(row) = sched_row {
+            for (slot, code) in [("floor", &row.floor), ("base", &row.base), ("wall", &row.wall), ("ceiling", &row.ceiling)] {
+                if !code.is_empty() {
+                    if !finishes.contains(code) {
+                        finishes.push(code.clone());
+                    }
+                    finish_detail.push(FinishDetail { slot: slot.into(), code: code.clone(), source: "schedule".into() });
+                }
+            }
+        }
         for t in &inside {
             for f in finish_codes(&t.1) {
                 if !finishes.contains(&f) {
-                    finishes.push(f);
+                    finishes.push(f.clone());
+                }
+                if !finish_detail.iter().any(|d| d.code == f) {
+                    finish_detail.push(FinishDetail { slot: String::new(), code: f, source: "note".into() });
                 }
             }
         }
@@ -248,7 +320,9 @@ fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
             perimeter,
             elevation,
             ceiling,
+            ceiling_source: ceiling_source.into(),
             finishes,
+            finish_detail,
             materials: spec_room.map(|x| serde_json::to_value(&x.materials).unwrap_or(Value::Null)).unwrap_or(Value::Null),
             level: Some(c.level.clone()).filter(|l| !l.is_empty()),
         });
@@ -259,13 +333,21 @@ fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
 fn room_json(d: &cadaddy_doc::Drawing, r: &Room3, outline: bool) -> Value {
     let k = units_per_inch(d);
     let (ft, m) = (12.0 * k, k / 0.0254);
+    let detail: Vec<Value> = r
+        .finish_detail
+        .iter()
+        .map(|d| {
+            if d.slot.is_empty() { json!({"code": d.code, "source": d.source}) } else { json!({"slot": d.slot, "code": d.code, "source": d.source}) }
+        })
+        .collect();
     let mut v = json!({
         "name": r.name, "number": r.number, "level": r.level, "label": r.label.hex(), "at": pt(r.at),
         "area": round(r.area), "areaSqFt": round(r.area / (ft * ft)), "areaM2": round(r.area / (m * m)),
         "perimeter": round(r.perimeter),
         "elevation": round(r.elevation), "ceiling": round(r.ceiling), "ceilingFt": round(r.ceiling / ft),
+        "ceilingSource": r.ceiling_source,
         "volume": round(r.volume()), "volumeCuFt": round(r.volume() / (ft * ft * ft)), "volumeM3": round(r.volume() / (m * m * m)),
-        "finishes": r.finishes, "materials": r.materials,
+        "finishes": r.finishes, "finishDetail": detail, "materials": r.materials,
     });
     if outline && let Some(o) = v.as_object_mut() {
         let step = (r.outline.len() / 64).max(1);
@@ -274,27 +356,70 @@ fn room_json(d: &cadaddy_doc::Drawing, r: &Room3, outline: bool) -> Value {
     v
 }
 
+/// The rooms a build made (its room ceilings, traced inside the plans' walls), as `rooms.list`
+/// lists them without outlines; None when the model has none.
+pub(crate) fn model_rooms(s: &mut Session) -> Result<Option<Vec<Value>>> {
+    let Some(rs) = built_rooms(s)? else { return Ok(None) };
+    let d = s.doc()?;
+    Ok(Some(rs.iter().map(|r| room_json(d, r, false)).collect()))
+}
+
+/// Sheet rectangles read at most (`rooms.list {regions}`).
+const MAX_REGIONS: usize = 2_000;
+
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
-    let rs = rooms(s)?;
+    let regions: Option<Vec<[f64; 4]>> = p.get("regions").and_then(Value::as_array).map(|a| {
+        a.iter()
+            .take(MAX_REGIONS)
+            .filter_map(|r| {
+                let v: Vec<f64> = r.as_array()?.iter().filter_map(Value::as_f64).collect();
+                let q = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
+                q.iter().all(|x| x.is_finite()).then_some(q)
+            })
+            .collect()
+    });
+    let rs = rooms_in(s, regions.as_deref())?;
     let outline = bool_or(p, "outline", true);
     let d = s.doc()?;
     let list: Vec<Value> = rs.iter().map(|r| room_json(d, r, outline)).collect();
     Ok(json!({ "rooms": list, "count": rs.len() }))
 }
 
-/// The room `p` names (`name`, any case, or `number`).
+/// The room `p` names (`name`, any case; `number`; or `label` (handle hex)).
 fn named(s: &mut Session, cmd: &str, p: &Value) -> Result<Room3> {
-    let (name, number) = (str_param(p, "name").map(str::trim), str_param(p, "number").map(str::trim));
-    if name.is_none() && number.is_none() {
-        return Err(bad(cmd, "pass the room's `name` or `number`"));
+    let (name, number, label) = (str_param(p, "name").map(str::trim), str_param(p, "number").map(str::trim), str_param(p, "label").map(str::trim));
+    if name.is_none() && number.is_none() && label.is_none() {
+        return Err(bad(cmd, "pass the room's `name`, `number` or `label`"));
     }
-    rooms(s)?
-        .into_iter()
-        .find(|r| {
-            name.is_some_and(|n| r.name.eq_ignore_ascii_case(n))
-                || number.is_some_and(|n| r.number.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(n)))
-        })
-        .ok_or_else(|| bad(cmd, format!("no room {}", name.or(number).unwrap_or_default())))
+    let all = rooms(s)?;
+    // Label (handle hex) is exact: one room.
+    if let Some(lbl) = label
+        && let Ok(h) = u64::from_str_radix(lbl.trim_start_matches("0x").trim_start_matches("0X"), 16)
+    {
+        return all.into_iter().find(|r| r.label.0 == h).ok_or_else(|| bad(cmd, format!("no room with label {lbl}")));
+    }
+    // Number is unambiguous.
+    if let Some(num) = number {
+        return all
+            .into_iter()
+            .find(|r| r.number.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(num)))
+            .ok_or_else(|| bad(cmd, format!("no room numbered {num}")));
+    }
+    // Name: check for duplicates.
+    // Safety: name must be Some here — we returned Err above when all three are None,
+    // and we returned above for label and number cases.
+    let Some(n) = name else {
+        return Err(bad(cmd, "pass the room's `name`, `number` or `label`"));
+    };
+    let mut matches: Vec<Room3> = all.into_iter().filter(|r| r.name.eq_ignore_ascii_case(n)).collect();
+    match matches.len() {
+        0 => Err(bad(cmd, format!("no room {n}"))),
+        1 => Ok(matches.swap_remove(0)),
+        _ => {
+            let list: Vec<String> = matches.iter().map(|r| format!("{} (label {})", r.number.as_deref().unwrap_or("—"), r.label.hex())).collect();
+            Err(bad(cmd, format!("{} rooms match \"{}\": {}; pass `number` or `label` to select one", matches.len(), n, list.join(", "))))
+        }
+    }
 }
 
 fn run_get(s: &mut Session, p: &Value) -> Result<Value> {
@@ -329,7 +454,6 @@ fn volume_mesh(r: &Room3) -> Option<Mesh> {
     if !(3..=10_000).contains(&n) {
         return None;
     }
-    // Counterclockwise from above, so the faces point out.
     if cadaddy_geom::shoelace(&pts) < 0.0 {
         pts.reverse();
     }
@@ -346,8 +470,19 @@ fn volume_mesh(r: &Room3) -> Option<Mesh> {
 }
 
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
-    // What an earlier build made goes first.
     let old: Vec<Handle> = s.doc()?.model.iter().filter(|e| room_of(&e.common).is_some()).map(|e| e.handle).collect();
+    // The properties a person set on them (bim.props.set) go on the rebuilt room of the same
+    // number (or, unnumbered, the same name).
+    let kept: Vec<(String, String, cadaddy_doc::props::Props)> = old
+        .iter()
+        .filter_map(|h| s.doc().ok()?.entity(*h).map(|e| e.common.xdata.to_vec()))
+        .filter_map(|x| {
+            let at = x.iter().position(|t| t.code == 1001 && t.value == ROOM_APP)?;
+            let v = |k: usize| x.get(at + k).filter(|t| t.code == 1000).map(|t| t.value.clone()).unwrap_or_default();
+            let edits = cadaddy_doc::props::read(&x).user_edits();
+            (!edits.is_empty()).then(|| (v(1), v(2), edits))
+        })
+        .collect();
     for h in &old {
         s.doc_mut()?.remove_entity(*h);
     }
@@ -367,6 +502,18 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
             RawTag { code: 1000, value: r.name.chars().take(250).collect() },
             RawTag { code: 1000, value: r.number.clone().unwrap_or_default().chars().take(250).collect() },
         ];
+        let number = r.number.clone().unwrap_or_default();
+        let same = |(name, num, _): &&(String, String, cadaddy_doc::props::Props)| {
+            if num.trim().is_empty() && number.trim().is_empty() {
+                name.trim().eq_ignore_ascii_case(r.name.trim())
+            } else {
+                num.trim().eq_ignore_ascii_case(number.trim())
+            }
+        };
+        let tag = match kept.iter().find(same) {
+            Some((_, _, edits)) => cadaddy_doc::props::write(&tag, edits),
+            None => tag,
+        };
         let common =
             Common { layer: ROOM_LAYER.into(), transparency: cadaddy_doc::Transparency::Percent(80), xdata: tag.into(), ..Common::default() };
         if d.add(&Space::Model, common, EntityKind::Mesh(m)).is_ok() {

@@ -72,7 +72,7 @@ pub struct Tag {
     pub building: Option<String>,
     pub site: Option<String>,
     pub systems: Vec<String>,
-    /// `(Set.Name, value)`, in the file's order.
+    /// `(Set.Name, value)`, in the file's order, then the element's own property store's other keys.
     pub props: Vec<(String, String)>,
 }
 
@@ -101,6 +101,15 @@ pub fn tag(e: &Entity) -> Option<Tag> {
             t.systems.push(v.to_string());
         } else if let Some((k, v)) = s.strip_prefix("prop:").and_then(|p| p.split_once('=')) {
             t.props.push((k.to_string(), v.to_string()));
+        }
+    }
+    // The element's own property store (the reader fills it from the same sets, and an edit
+    // lands there): its keys the sets didn't name.
+    if cadaddy_doc::props::has_store(x) {
+        for (k, p) in cadaddy_doc::props::read(x).iter() {
+            if p.has_value() && !t.props.iter().any(|(q, _)| q.eq_ignore_ascii_case(k)) {
+                t.props.push((k.to_string(), p.text()));
+            }
         }
     }
     Some(t)

@@ -591,6 +591,18 @@ pub struct Stair {
     /// The plan objects it was found from (hex handles).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub objects: Vec<String>,
+    /// The code its risers and treads are checked against: "ibc" (commercial, IBC 1011.5.2:
+    /// risers 4″–7″, treads ≥ 11″; the default) or "irc" (residential, IRC R311.7.5: risers
+    /// ≤ 7¾″, treads ≥ 10″).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+impl Stair {
+    /// Checked against the residential code (`code: "irc"`) rather than the commercial one.
+    pub fn residential(&self) -> bool {
+        self.code.as_deref().is_some_and(|c| c.trim().eq_ignore_ascii_case("irc"))
+    }
 }
 
 /// The outside of the building: facades read from the elevations, roofs from the roof plan.
@@ -605,11 +617,44 @@ pub struct Exterior {
     pub crickets: Vec<Cricket>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub equipment: Vec<Equipment>,
+    /// Parapet heights the elevations give, by roof level: kept here so they reach roofs read
+    /// later, whatever the reading order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parapets: Vec<LevelParapet>,
 }
 
 impl Exterior {
     pub fn is_empty(&self) -> bool {
-        self.facades.is_empty() && self.roofs.is_empty() && self.crickets.is_empty() && self.equipment.is_empty()
+        self.facades.is_empty() && self.roofs.is_empty() && self.crickets.is_empty() && self.equipment.is_empty() && self.parapets.is_empty()
+    }
+
+    /// The parapet height an elevation gives for a level, feet.
+    pub fn level_parapet(&self, level: &str) -> Option<f64> {
+        self.parapets.iter().find(|p| p.level.eq_ignore_ascii_case(level)).map(|p| p.height_ft)
+    }
+}
+
+/// A parapet height read from an elevation (above the roof line), for the roofs of a level.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LevelParapet {
+    pub level: String,
+    pub height_ft: f64,
+    /// The facade whose elevation gave it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facade: Option<Side>,
+}
+
+/// Whether a value was read from the drawings or is a default put in because they don't say.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueStatus {
+    Read,
+    Default,
+}
+
+impl ValueStatus {
+    pub fn is_default(status: &Option<ValueStatus>) -> bool {
+        *status == Some(ValueStatus::Default)
     }
 }
 
@@ -681,6 +726,12 @@ pub struct Roof {
     /// Parapet height above the roof's high point, feet; none = no parapet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parapet_ft: Option<f64>,
+    /// Whether the parapet height was read (`parapet_from` says where) or is a default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parapet_status: Option<ValueStatus>,
+    /// Where the parapet height came from: `roof plan` (its note), `elevation` or `default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parapet_from: Option<String>,
     /// What the roof is built of, top down (membrane, cover board, insulation, deck).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assembly: Option<Assembly>,
@@ -691,6 +742,10 @@ pub struct RoofSlope {
     pub down: [f64; 2],
     /// Rise per foot of run (¼"/ft = 0.0208, 4:12 = 0.333).
     pub rise_per_ft: f64,
+    /// Whether the downhill direction was read from the arrow's head or is a default (the
+    /// arrow's drawing order, when its head can't be told).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction_status: Option<ValueStatus>,
 }
 
 /// A cricket: a raised ridge diverting water, its outline on the roof and its height.
@@ -699,6 +754,9 @@ pub struct Cricket {
     pub level: String,
     pub outline: Vec<[f64; 2]>,
     pub height_ft: f64,
+    /// Whether the height was read from its note or is the 6" default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_status: Option<ValueStatus>,
 }
 
 /// Rooftop equipment (RTU, AHU, exhaust fan) as a box over its outline.
@@ -708,6 +766,9 @@ pub struct Equipment {
     pub level: String,
     pub outline: Vec<[f64; 2]>,
     pub height_ft: f64,
+    /// Whether the height was read from its note or is the 4'-0" default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_status: Option<ValueStatus>,
 }
 
 /// Door and window schedules read from the sheets (`schedules.read`).
@@ -832,6 +893,12 @@ pub struct GridColumn {
     pub round: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_level: Option<String>,
+    /// The drawn outline it was read from (its handle, hex); empty for a column typed in.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// How it is known: `rule` (read from the plan by `grids.columns`); empty for a column typed in.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
 }
 
 /// Mechanical, electrical and plumbing runs drawn single-line on the plans.
@@ -2005,7 +2072,10 @@ impl BuildingSpec {
         }
         for r in &self.exterior.roofs {
             let slope = r.slope.map_or("flat".to_string(), |s| format!("sloping {}", pitch_text(s.rise_per_ft)));
-            let parapet = r.parapet_ft.map_or(String::new(), |p| format!(", {} parapet", feet(p)));
+            let slope =
+                if r.slope.is_some_and(|s| ValueStatus::is_default(&s.direction_status)) { format!("{slope} (direction assumed)") } else { slope };
+            let assumed = if ValueStatus::is_default(&r.parapet_status) { " (assumed)" } else { "" };
+            let parapet = r.parapet_ft.map_or(String::new(), |p| format!(", {} parapet{assumed}", feet(p)));
             let asm = r.assembly.as_ref().map_or(String::new(), |a| {
                 let words: Vec<&str> = a.layers.iter().map(|l| l.material.as_str()).collect();
                 format!("; {} top down: {}", if a.tag.is_empty() { "built" } else { a.tag.as_str() }, words.join(", "))
@@ -2013,7 +2083,17 @@ impl BuildingSpec {
             put("exterior", format!("roofs/{}", r.name), format!("{}: roof on {}, {slope}{parapet}{asm}", r.name, r.level));
         }
         for (i, c) in self.exterior.crickets.iter().enumerate() {
-            put("exterior", format!("crickets/{}", i + 1), format!("Cricket {} on {}, {} high", i + 1, c.level, feet(c.height_ft)));
+            put(
+                "exterior",
+                format!("crickets/{}", i + 1),
+                format!(
+                    "Cricket {} on {}, {} high{}",
+                    i + 1,
+                    c.level,
+                    feet(c.height_ft),
+                    if ValueStatus::is_default(&c.height_status) { " (assumed)" } else { "" }
+                ),
+            );
         }
         for (i, c) in self.rcp.ceilings.iter().enumerate() {
             let what = match c.grid {
@@ -2130,7 +2210,17 @@ impl BuildingSpec {
             );
         }
         for e in &self.exterior.equipment {
-            put("exterior", format!("equipment/{}", e.name), format!("{}: rooftop equipment on {}, {} high", e.name, e.level, feet(e.height_ft)));
+            put(
+                "exterior",
+                format!("equipment/{}", e.name),
+                format!(
+                    "{}: rooftop equipment on {}, {} high{}",
+                    e.name,
+                    e.level,
+                    feet(e.height_ft),
+                    if ValueStatus::is_default(&e.height_status) { " (assumed)" } else { "" }
+                ),
+            );
         }
         let mats = materials_text(&self.materials);
         if !mats.is_empty() {
@@ -2317,8 +2407,13 @@ impl BuildingSpec {
         self.families.iter().find(|f| layer_match(&f.block, block))
     }
 
+    /// A family whose name matches a schedule row's TYPE (case-insensitive) and kind.
+    pub fn family_by_type(&self, kind: FamilyKind, type_name: &str) -> Option<&Family> {
+        self.families.iter().find(|f| f.kind == kind && f.name.eq_ignore_ascii_case(type_name.trim()))
+    }
+
     pub fn level(&self, name: &str) -> Option<&Level> {
-        self.levels.iter().find(|l| l.name.eq_ignore_ascii_case(name))
+        self.level_matching(name).and_then(|i| self.levels.get(i))
     }
 
     /// Problems found in the spec alone (see `bspec.validate` for those against the drawing).
@@ -2561,6 +2656,11 @@ impl BuildingSpec {
                 out.push(Issue::error(format!("exterior.equipment[{i}]"), "equipment needs a level, an outline and a height from 0 to 100 feet"));
             }
         }
+        for (i, p) in self.exterior.parapets.iter().enumerate().take(MAX_ITEMS) {
+            if !(fin(p.height_ft) && (0.0..=50.0).contains(&p.height_ft)) {
+                out.push(Issue::error(format!("exterior.parapets[{i}].height_ft"), "the parapet must be from 0 to 50 feet"));
+            }
+        }
         for (i, r) in self.schedule.rows.iter().enumerate().take(100_000) {
             let at = format!("schedule.rows[{i}]");
             if r.mark.trim().is_empty() {
@@ -2767,6 +2867,15 @@ impl BuildingSpec {
                     out.push(Issue::error(format!("{at}.runs[{j}].treads"), "a stair run has 1 to 200 treads"));
                 }
             }
+            if let Some(c) = st.code.as_deref().filter(|c| !["ibc", "irc"].iter().any(|k| c.trim().eq_ignore_ascii_case(k))) {
+                out.push(Issue::error(
+                    format!("{at}.code"),
+                    format!(
+                        "the stair code is \"ibc\" (commercial, the default) or \"irc\" (residential), not \"{}\"",
+                        c.chars().take(40).collect::<String>()
+                    ),
+                ));
+            }
             if let Some((z0, z1)) = self.stair_heights(st) {
                 if z1 <= z0 || z1.is_nan() || z0.is_nan() {
                     out.push(Issue::error(format!("{at}.to_level"), "it must reach a level above the one it starts on"));
@@ -2777,25 +2886,32 @@ impl BuildingSpec {
                             out.push(Issue::warning(&at, format!("the ramp rises 1:{:.1}, steeper than 1:12 (IBC 1012.2)", 1.0 / slope)));
                         }
                     } else if n > 0 {
-                        if riser > crate::stairs::RISER_MAX_IN + 1e-9 {
-                            out.push(Issue::warning(
-                                &at,
-                                format!(
-                                    "{n} risers of {}: above the 7¾\" limit (IRC R311.7.5.1; 7\" under IBC 1011.5.2) — add treads",
-                                    inches(riser)
-                                ),
-                            ));
+                        let irc = st.residential();
+                        let (riser_max, tread_min) = if irc {
+                            (crate::stairs::RISER_MAX_IN, crate::stairs::TREAD_MIN_IN)
+                        } else {
+                            (crate::stairs::RISER_MAX_COMMERCIAL_IN, crate::stairs::TREAD_MIN_COMMERCIAL_IN)
+                        };
+                        if riser > riser_max + 1e-9 {
+                            let limit = if irc {
+                                "the 7¾\" limit (IRC R311.7.5.1; 7\" under IBC 1011.5.2)"
+                            } else {
+                                "the 7\" limit (IBC 1011.5.2; 7¾\" under IRC R311.7.5.1, code \"irc\")"
+                            };
+                            out.push(Issue::warning(&at, format!("{n} risers of {}: above {limit} — add treads", inches(riser))));
                         } else if riser < crate::stairs::RISER_MIN_IN - 1e-9 {
                             out.push(Issue::warning(
                                 &at,
                                 format!("{n} risers of {}: under the 4\" minimum (IBC 1011.5.2) — fewer treads", inches(riser)),
                             ));
                         }
-                        if tread.is_finite() && tread < crate::stairs::TREAD_MIN_IN - 1e-9 {
-                            out.push(Issue::warning(
-                                &at,
-                                format!("treads of {}: under the 10\" minimum (IRC R311.7.5.2; 11\" under IBC)", inches(tread)),
-                            ));
+                        if tread.is_finite() && tread < tread_min - 1e-9 {
+                            let limit = if irc {
+                                "the 10\" minimum (IRC R311.7.5.2; 11\" under IBC 1011.5.2)"
+                            } else {
+                                "the 11\" minimum (IBC 1011.5.2; 10\" under IRC R311.7.5.2, code \"irc\")"
+                            };
+                            out.push(Issue::warning(&at, format!("treads of {}: under {limit}", inches(tread))));
                         }
                     }
                 }
@@ -3040,6 +3156,8 @@ mod tests {
             outline: vec![[0.0, 0.0], [100.0, 0.0], [100.0, 50.0]],
             slope: None,
             parapet_ft: Some(3.0),
+            parapet_status: None,
+            parapet_from: None,
             assembly: Some(asm.clone()),
         });
         s.exterior.facades.push(Facade {

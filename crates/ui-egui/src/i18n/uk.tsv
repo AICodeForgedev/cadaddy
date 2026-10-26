@@ -3211,6 +3211,7 @@
 	Import Cost Table	Імпортувати таблицю витрат
 	Accuracy Score	Оцінка точності
 	Answer Job Question	Відповісти на запитання завдання
+	Set Job Mode	Змінити режим завдання
 	Check Import Accuracy	Перевірити точність імпорту
 	Clash Resolution Loop	Цикл усунення колізій
 	Evaluate Rules	Оцінити правила
@@ -3294,3 +3295,18 @@
 	List Callouts	Список виносок
 	Keep Print Set Job	Зберегти завдання комплекту креслень
 	Resume Print Set Job	Відновити завдання комплекту креслень
+	Finish Takeoff from Prints	Відомість оздоблення за кресленнями
+	Layer Quantity Takeoff	Підрахунок обсягів за шарами
+	Read Architecture from Prints	Зчитати архітектуру з креслень
+	Read Roof and Wall Envelope	Зчитати оболонку покрівлі та стін
+	Element Properties (BIM)	Властивості елемента (BIM)
+	Set Element Property (BIM)	Задати властивість елемента (BIM)
+	Find Elements by Property	Знайти елементи за властивістю
+	Element Property Summary	Зведення властивостей елементів
+	BIM Properties	Властивості BIM
+	Kind	Вид
+# Low-voltage commands (lowvolt-rw1).
+	Equipment Connections	Підключення обладнання
+	LV Bill of Materials	LV: специфікація матеріалів
+	LV Sleeves	LV: гільзи
+	LV/FA Devices	LV/FA: пристрої

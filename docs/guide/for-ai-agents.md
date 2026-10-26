@@ -91,12 +91,18 @@ low-level `execute` only when needed.
 | Tool | Description |
 |:-----|:------------|
 | `bim_types` | BIM element types: list, create, assign and query type marks (description, manufacturer, catalog, spec section, material, ratings). |
+| `bim_props` | Every element's own properties (a device's type, mount height, circuit, room; a door's number, size, rating; a room's number, name, area, finishes…), each with its source (print, legend, schedule, spec, note, rule, default, user, computed): `get`, `set` (as the user's, kept through rebuilds), `find` by key/value/exists/missing, `summary` of coverage per kind. |
 | `bim_spec_import` | Read a spec book, schedule or submittal into proposed BIM types. Import returns proposals with citations; accept merges them. Nothing applied silently. |
 | `rooms` | Plan rooms as 3D spaces: list rooms with area/volume/finishes, zoom to a room, build see-through volumes. |
 | `stairs` | Stairs and ramps: detect from plan, list with code checks (riser/tread sizes), confirm, then model.build builds them. |
 | `mep` | MEP review: list runs/fittings by system and level with confidence, edit size/height/system, mark reviewed, rebuild. |
 | `callouts` | Cross-reference callouts read from the imported print set (section marks, elevation tags, detail bubbles, enlarged-plan boundaries, match lines, key plans): each with its sheet, kind, detail, target and whether it resolves or is broken; filter by `kind`, `status`, `level`, paged. |
 | `arch_read` | The architecture of the open job's prints: doors (mark, hand, swing rooms, card reader), windows, stair, elevator, rooms with finishes and plate colours, each with its source sheet and status (drawing, schedule, guess); `apply: true` merges it into the building spec. |
+| `finishes_takeoff` | The finish takeoff from a print set's DXF sheets (or the open print set's): per-trade totals first, then 50 lines a page with room, quantity, unit, with-waste, source sheet and status (drawing, schedule, rule, guess), roll-ups by unit type and what was read only in part; filters `level`, `room`, `unit_type`, `trade`. With no rooms or finish schedule read it says to run `arch_read` first. |
+| `lv_devices` | Fire alarm and low-voltage devices read from the FA and telecom sheets (system, kind, level, candela, circuit, height notes); filter by `system` and `level`, paged. |
+| `lv_sleeves` | LV/FA sleeves at rated wall and floor crossings: size computed from the cables at NEC fill plus spare, material, fire rating and firestop; filter by `level` and `system`, paged. |
+| `lv_bom` | Low-voltage bill of materials: device counts, cable footage from routed lengths, supports, sleeves and firestop; with `has_lv_docs` false the lines are ASSUMED plus a document-request item. |
+| `lv_connections` | Equipment electrical connections read from the schedules (PTAC, RTU, water heater, elevator, pumps, kitchen, laundry, signage) with connection type, circuit and panel; filter by `level` and `kind`, paged. |
 | `site_takeoff` | Sitework quantities from civil sheets: earthwork cut/fill, paving, curbs, utilities with trench excavation and backfill. |
 | `framing` | Studs from the prints: `build` frames every wall of a folder of DXF sheets (fixed members, both rule layouts, stacks); `list`, `wall` and `next_stud` give compact, paged answers per wall; `field_point` (tape, centre or photo pick) and `shop_drawing` (DXF) are kept in the job and re-applied on every rebuild; `view` draws the elevation, plan and Walk boxes on `FRAMING-*` layers. The BOM's framing lines and bits come from it. |
 

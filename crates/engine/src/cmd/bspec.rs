@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
         CommandSpec::new("model.build", "Build Model from Spec", run_build).params(
-            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, stacked?: levels moved, removed, notes, warnings}",
+            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms, ground, stairs, ramps, railings, guards, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, stacked?: levels moved, removed, notes, warnings}",
         ),
         CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).params(
             "{path: string (PDF file of any number of pages, or a folder: one print set), out?: string (.cdy to save; default a temp folder — nothing is written next to the PDFs), force?: bool (build even if import check fails)} → {cdy_paths: [string], pages: [{sheet, level, discipline, type}] (the pages the model was built from: the set's plan sheets, or every page without an index), pages_note, spec_guesses: [{key, why}] (what the spec assumed), check_results: [{file, pass (false on any hard fail), score, hard_fails, checks}], built_counts: {walls, doors, windows, ...}, warnings: [string], next_steps: [string (exact calls to make next)]}",
@@ -934,8 +934,8 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
             }
         }
     }
-    // Stairs, ramps and their handrails.
-    let (stairs, ramps, railings) = super::stairs::build(d, &sp);
+    // Stairs, ramps, their handrails and the guards on their landings.
+    let built_stairs = super::stairs::build(d, &sp);
     // The outside: roofs, parapets, crickets, rooftop equipment, facade glass and materials.
     let outside = super::exterior::build(d, &sp);
     // The reflected ceiling plans' ceilings (replacing the level's and rooms'), grids, soffits,
@@ -977,9 +977,10 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     r["columns"] = json!(columns);
     r["curtainWalls"] = json!(curtain);
     r["ground"] = json!(ground);
-    r["stairs"] = json!(stairs);
-    r["ramps"] = json!(ramps);
-    r["railings"] = json!(railings);
+    r["stairs"] = json!(built_stairs.stairs);
+    r["ramps"] = json!(built_stairs.ramps);
+    r["railings"] = json!(built_stairs.railings);
+    r["guards"] = json!(built_stairs.guards);
     if let (Some(o), Some(x)) = (r.as_object_mut(), outside.as_object()) {
         o.extend(x.clone());
     }

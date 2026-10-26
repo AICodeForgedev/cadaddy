@@ -105,6 +105,14 @@ pub enum Change {
     Delete { removed: Option<Box<Entity>> },
     /// A missing item, added: this object (drawn by hand, or imported).
     Add { entity: Box<Entity> },
+    /// Properties set by a person ([`crate::props`], source `user`): put back on the element
+    /// after every rebuild. `before`: what each key held when first set (none: no value), to put
+    /// back on revert.
+    Props {
+        props: Vec<crate::props::Entry>,
+        #[serde(default)]
+        before: Vec<(String, Option<crate::props::Prop>)>,
+    },
 }
 
 impl Change {
@@ -115,6 +123,7 @@ impl Change {
             Change::Verify => "verify",
             Change::Delete { .. } => "delete",
             Change::Add { .. } => "add",
+            Change::Props { .. } => "props",
         }
     }
 }

@@ -3211,3 +3211,13 @@ menu	Modify	Ändra
 	List Callouts	Lista hänvisningar
 	Keep Print Set Job	Behåll ritningsuppsättningens jobb
 	Resume Print Set Job	Återuppta ritningsuppsättningens jobb
+	Finish Takeoff from Prints	Ytskiktsmängder från ritningar
+	Layer Quantity Takeoff	Mängdavtagning per lager
+	Read Architecture from Prints	Läs arkitektur från ritningar
+	Read Roof and Wall Envelope	Läs tak- och väggklimatskal
+	Element Properties (BIM)	Elementegenskaper (BIM)
+	Set Element Property (BIM)	Ange elementegenskap (BIM)
+	Find Elements by Property	Hitta element efter egenskap
+	Element Property Summary	Sammanfattning av elementegenskaper
+	BIM Properties	BIM-egenskaper
+	Kind	Sort

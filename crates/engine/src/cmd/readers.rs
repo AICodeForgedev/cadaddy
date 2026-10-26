@@ -104,7 +104,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         // ── Electrical conduit ───────────────────────────────────────────
         CommandSpec::new("conduit.read", "Read Conduit from Prints", run_conduit_read)
-            .params("{level?: name, apply?: bool} → {conduits: count, homeruns: {routed, unrouted: [{label, reason}]}, systems}")
+            .params("{level?: name, apply?: bool (put the runs and circuits in the building spec)} → {conduits: drawn runs, conduit_ft, homeruns: {read, routed, unrouted: [{circuit, sheet, level, reason}]}, circuits, estimated_ft, drops, devices_without_circuit, systems, sheets: [{sheet, level, conduit_runs, conduit_ft, homeruns, panels, circuits, estimated_ft}], source: job drawing|print set|current drawing, applied, warnings}: each electrical plan's drawn (tagged) conduit, homeruns and panels, and for each circuit its devices print an estimated route (devices chained, run square above the ceiling, drops to wall boxes; marked \"estimated route\")")
             .noundo(),
         // ── Electrical equipment ─────────────────────────────────────────
         CommandSpec::new("gear.read", "Read Electrical Equipment", run_gear_read)
@@ -175,42 +175,106 @@ pub fn specs() -> Vec<CommandSpec> {
 
 // ─── conduit.read ────────────────────────────────────────────────────────────
 
-fn run_conduit_read(_s: &mut Session, p: &Value) -> Result<Value> {
-    let _level = str_param(p, "level");
-    let apply = bool_or(p, "apply", false);
-
-    // The conduit reader needs DXF data from the printset project's E-sheets.
-    // For now, return a structured placeholder that shows the command is wired.
-    // Full integration requires loading DXF sheets from the printset project.
-    let project = match project(_s) {
-        Ok(p) => p,
-        Err(_) => {
-            return Ok(no_project("conduit runs", json!({"conduits": 0, "homeruns": {"routed": 0, "unrouted": []}})));
-        }
-    };
-
-    let e_sheets: Vec<&mep_printset::SheetEntry> =
-        project.sheets.iter().filter(|s| s.discipline == "E" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan")).collect();
-
-    let conduit_count = e_sheets.len();
-    let mut result = json!({
-        "conduits": 0,
-        "homeruns": {"routed": 0, "unrouted": []},
-        "sheets_read": conduit_count,
-        "apply": apply,
-        "message": if conduit_count == 0 {
-            "no E-sheet plans found in the project; classify the print set first"
-        } else {
-            "conduit reader wired; DXF sheet loading integration pending"
-        },
-    });
-
-    if apply {
-        result["applied"] = json!(false);
-        result["note"] = json!("apply writes conduit systems and runs into the building spec");
+/// The open drawing as one electrical plan of `level` (the param, else the spec's first level):
+/// its devices are the model's (`mep.read_devices {preview: false}`) on that level.
+fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::printmep::SheetRef, Vec<ReadDevice>, f64)>> {
+    let d = s.doc()?;
+    let ext = d.extents(&cadaddy_doc::Space::Model);
+    if d.model.is_empty() || !(ext.min.x.is_finite() && ext.max.x.is_finite() && ext.min.y.is_finite() && ext.max.y.is_finite()) {
+        return Ok(None);
     }
+    let (sp, stored) = super::bspec::current(s, "conduit.read")?;
+    let upf = if stored && sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let name = level.map(str::to_string).or_else(|| sp.levels.first().map(|l| l.name.clone())).unwrap_or_else(|| "Level 1".into());
+    let devices: Vec<ReadDevice> = sp
+        .tags
+        .iter()
+        .filter(|t| t.id.starts_with("device:") && t.level.eq_ignore_ascii_case(&name))
+        .take(MAX_DEVICES)
+        .map(|t| {
+            let f = |k: &str| t.fields.get(k).map_or_else(String::new, |v| v.value.clone());
+            ReadDevice {
+                tag: f("type"),
+                at: [t.at_ft[0] * upf, t.at_ft[1] * upf],
+                sheet: String::new(),
+                level: name.clone(),
+                circuit: f("circuit"),
+                handle: f("symbol"),
+                kind: t.kind.clone(),
+            }
+        })
+        .collect();
+    let sh = super::printmep::SheetRef {
+        number: "current drawing".into(),
+        level: name,
+        discipline: "E".into(),
+        kind: "plan".into(),
+        rect: [ext.min.x - 1.0, ext.min.y - 1.0, ext.max.x + 1.0, ext.max.y + 1.0],
+        span: None,
+        scale_text: None,
+        levels: Vec::new(),
+    };
+    Ok(Some((sh, devices, upf)))
+}
 
-    Ok(result)
+fn run_conduit_read(s: &mut Session, p: &Value) -> Result<Value> {
+    use super::printmep::{SheetRef, level_name};
+    let level = str_param(p, "level").map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
+    let apply = bool_or(p, "apply", false);
+    let keep = |r: &SheetRef| level.as_deref().is_none_or(|l| level_name(&r.level).eq_ignore_ascii_case(l) || r.level.eq_ignore_ascii_case(l));
+    let job = super::guided::load_job(s).ok().flatten().filter(|j| !j.sheet_regions.is_empty());
+    // A job's drawing (its sheets and devices); an open print set's E plans (no devices placed:
+    // what is drawn); else the open drawing as one plan with the model's devices.
+    let (read, source, in_drawing) = if let Some(job) = job {
+        let refs: Vec<SheetRef> = super::guided::job_sheet_refs(&job).into_iter().filter(|r| keep(r)).collect();
+        let upf = super::bspec::current(s, "conduit.read")
+            .map_or(12.0, |(sp, stored)| if stored && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 });
+        (super::printcond::read_sheets(s.doc()?, &refs, upf, &job.devices), "job drawing", true)
+    } else if let Ok(pr) = project(s) {
+        let (t, refs) = super::printmep::load_project_plans(&pr, &|r| {
+            r.discipline.eq_ignore_ascii_case("E") && matches!(r.kind.as_str(), "plan" | "enlarged_plan") && keep(r)
+        })?;
+        (super::printcond::read_sheets(t.doc()?, &refs, 12.0, &[]), "print set", false)
+    } else if let Some((sh, devices, upf)) = current_plan(s, level.as_deref())? {
+        (super::printcond::read_sheets(s.doc()?, std::slice::from_ref(&sh), upf, &devices), "current drawing", true)
+    } else {
+        return Ok(no_project("conduit runs", json!({"conduits": 0, "homeruns": {"read": 0, "routed": 0, "unrouted": []}, "circuits": 0})));
+    };
+    let mut warnings = read.warnings.clone();
+    if read.sheets.is_empty() {
+        warnings.push(format!("no electrical plan sheets in the {source}; nothing read (classify the print set first: printset.classify)"));
+    }
+    if source == "print set" {
+        warnings.push(
+            "read from the print set's own sheets, where no devices are placed: only drawn conduit and homeruns. Run the guided job (job.start) for each circuit's estimated route".into(),
+        );
+    }
+    let mut applied = false;
+    if apply && !in_drawing {
+        warnings.push("to build them, run the guided job (job.start), which places each sheet in its drawing".into());
+    } else if apply && !read.mep.runs.is_empty() {
+        match super::bspec::current(s, "conduit.read")? {
+            (mut sp, true) => {
+                let sheets: Vec<String> = read.sheets.iter().map(|r| r.sheet.clone()).collect();
+                super::printmep::merge_mep(&mut sp, read.mep.clone(), &sheets);
+                super::printcond::seat_heights(&mut sp);
+                super::printcond::store_circuits(&mut sp, &read.circuits);
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+                applied = true;
+            }
+            (_, false) => warnings.push("no building spec to put the runs in: run bspec.draft {store: true} (or bim.build) first".into()),
+        }
+    }
+    let mut out = read.to_json();
+    let routed = read.circuits.iter().filter(|t| t.fields.contains_key("panel_at")).count();
+    out["conduits"] = out["conduit_runs"].clone();
+    out["homeruns"] = json!({"read": out["homeruns"].clone(), "routed": routed, "unrouted": read.unrouted});
+    out["systems"] = json!(read.mep.systems.iter().map(|sy| sy.name.clone()).collect::<Vec<_>>());
+    out["sheets_read"] = json!(read.sheets.len());
+    out["source"] = json!(source);
+    out["applied"] = json!(applied);
+    out["warnings"] = json!(warnings);
+    Ok(out)
 }
 
 // ─── gear.read ───────────────────────────────────────────────────────────────
@@ -848,7 +912,7 @@ fn run_equip_read(_s: &mut Session, p: &Value) -> Result<Value> {
 // ─── mep.read_devices ────────────────────────────────────────────────────────
 
 /// What a device mark usually is on an electrical plan (else `device`).
-fn device_kind(tag: &str) -> &'static str {
+pub(crate) fn device_kind(tag: &str) -> &'static str {
     match tag.trim().to_ascii_uppercase().as_str() {
         "OS" | "OC" | "VS" | "PS" => "occupancy sensor",
         "DH" | "MH" => "door holder",
@@ -1033,6 +1097,10 @@ pub struct ReadDevice {
     /// The symbol's handle (hex).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub handle: String,
+    /// What kind of device the model says it is (`receptacle`), when it says; empty: what its
+    /// tag says ([`device_kind`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
 }
 
 /// The model level a device belongs on: the spec level whose plan region holds it, else the

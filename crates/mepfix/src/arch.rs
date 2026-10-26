@@ -481,6 +481,9 @@ pub fn design_arch(t: &mut Truth, st: &ArchStyle, r: &mut Rng) {
             "CORRIDOR" | "BREAK ROOM" | "WORK ROOM" | "COPY" => {
                 (code("floor", "LVT", 1, "LUXURY VINYL TILE".into(), None), code("base", "RB", 1, "RUBBER BASE, 4\"".into(), None))
             }
+            "CONFERENCE" => {
+                (code("floor", "CPT", 2, "CARPET TILE, HERRINGBONE INSTALL".into(), None), code("base", "RB", 1, "RUBBER BASE, 4\"".into(), None))
+            }
             "STORAGE" | "FILES" => {
                 (code("floor", "VCT", 1, "VINYL COMPOSITION TILE".into(), None), code("base", "RB", 1, "RUBBER BASE, 4\"".into(), None))
             }
@@ -488,6 +491,7 @@ pub fn design_arch(t: &mut Truth, st: &ArchStyle, r: &mut Rng) {
         };
         let wall = match rm.name.as_str() {
             _ if wet => code("wall", "CT", 2, "PORCELAIN WALL TILE TO 7'-0\", PAINT ABOVE".into(), Some("STAINLESS")),
+            "BREAK ROOM" => code("wall", "FRP", 1, "FIBERGLASS REINFORCED PANELS (FRP), FULL HEIGHT".into(), Some("WHITE")),
             "MECH" | "STAIR" => code("wall", "PT", 2, format!("EPOXY PAINT, SEMI-GLOSS, COLOR: {c2}"), Some("STAINLESS")),
             "CONFERENCE" | "TRAINING" => code("wall", "PT", 3, format!("PAINT, EGGSHELL, ACCENT COLOR: {c3}"), Some("GRAY")),
             _ => code("wall", "PT", 1, format!("PAINT, EGGSHELL, COLOR: {c1}"), Some("WHITE")),

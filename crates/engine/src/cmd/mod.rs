@@ -32,6 +32,7 @@ mod draw2;
 mod draworder;
 mod edit;
 mod edit3d;
+pub mod elemprops;
 pub mod estimate;
 mod exact_ends;
 mod exchange;
@@ -56,6 +57,7 @@ pub mod import_check;
 pub(crate) mod inquiry;
 mod layer;
 pub mod levels;
+pub mod lowvolt;
 pub mod markup;
 pub mod paramconv;
 pub mod pointcloud;
@@ -90,6 +92,7 @@ pub mod dimmodes;
 pub mod drywall;
 pub mod dwgprops;
 pub mod fieldview;
+pub mod finishes;
 pub mod fourd;
 pub mod framing;
 pub mod furnish;
@@ -126,6 +129,7 @@ mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
 pub mod plugins_cmd;
+pub(crate) mod printcond;
 pub(crate) mod printmep;
 pub mod printrev;
 pub mod printset;
@@ -800,6 +804,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(perceive::specs());
         v.extend(rooms3d::specs());
         v.extend(bimprops::specs());
+        v.extend(elemprops::specs());
         v.extend(bimlook::specs());
         v.extend(projrules::specs());
         v.extend(spec_import::specs());
@@ -809,6 +814,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(takeoff::specs());
         v.extend(drywall::specs());
         v.extend(unittypes::specs());
+        v.extend(finishes::specs());
     v.extend(fieldview::specs());
     v.extend(bimwork::specs());
         v.extend(imageattach::specs());
@@ -864,6 +870,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(rhai_cmd::specs());
         v.extend(plugins_cmd::specs());
         v.extend(rulemodel::specs());
+        v.extend(lowvolt::specs());
         // Apply hand-written help texts.
         for spec in &mut v {
             let text = help_texts::lookup(spec.id);

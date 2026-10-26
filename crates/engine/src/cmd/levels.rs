@@ -366,6 +366,13 @@ fn made_level(e: &Entity) -> Option<&str> {
     x.get(at + 2).filter(|t| t.code == 1000).map(|t| t.value.as_str())
 }
 
+/// Does a level code (`"2"`, `"R"`) match a level name (`"Level 2"`, `"Roof"`)?
+fn level_name_matches(code: &str, name: &str) -> bool {
+    let n = name.to_ascii_uppercase();
+    let c = code.trim().to_ascii_uppercase();
+    n == c || n == format!("LEVEL {c}") || (c == "R" && n.contains("ROOF"))
+}
+
 fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
     let (sp, _) = current(s, "levels.list")?;
     let d = s.doc()?;
@@ -380,8 +387,16 @@ fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
     let levels: Vec<Value> = order
         .iter()
         .map(|l| {
-            let sheets: Vec<&str> =
-                sp.sheets.iter().filter(|x| x.level.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(&l.name))).map(|x| x.number.as_str()).collect();
+            // A sheet appears on a level if its primary level matches OR its `levels` list
+            // contains the level (typical-floor sheets that cover several levels).
+            let sheets: Vec<&str> = sp
+                .sheets
+                .iter()
+                .filter(|x| {
+                    x.level.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(&l.name)) || x.levels.iter().any(|c| level_name_matches(c, &l.name))
+                })
+                .map(|x| x.number.as_str())
+                .collect();
             json!({
                 "name": l.name,
                 "elevation_ft": round(l.elevation_ft),
@@ -421,7 +436,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let height = feet_param(p, "height_ft")?;
     let ceiling = feet_param(p, "ceiling_ft")?;
     let mut changes: Vec<String> = Vec::new();
-    let Some(i) = sp.levels.iter().position(|l| l.name.eq_ignore_ascii_case(&name)) else {
+    let Some(i) = sp.level_matching(&name) else {
         // A datum: only its elevation (and name) can change.
         let Some(dt) = sp.datums.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) else {
             return Err(bad("levels.set", format!("there is no level or datum named {name}")));
@@ -498,7 +513,7 @@ fn store(s: &mut Session, sp: &BuildingSpec) -> Result<()> {
 /// spec's name for it when it has that level).
 fn link(number: String, discipline: String, title: String, source: String, sp: &BuildingSpec) -> SheetLink {
     let level = levels::level_of_title(&title).map(|c| sp.level_matching(&c).and_then(|i| sp.levels.get(i)).map_or(c, |l| l.name.clone()));
-    SheetLink { number, title: title.chars().take(120).collect(), discipline: Some(discipline), level, source, rect: None }
+    SheetLink { number, title: title.chars().take(120).collect(), discipline: Some(discipline), level, source, rect: None, levels: Vec::new() }
 }
 
 /// A layout's sheet: the sheet number written largest on it (else in the layout's name), and the

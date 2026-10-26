@@ -119,6 +119,51 @@ PDF imports.
 You can run the whole pipeline at once or step through it manually to inspect
 and adjust at each stage.
 
+### Element properties
+
+Every element of the built model is an object with properties: an outlet holds
+`type: duplex`, `mount_height: 18 in`, `circuit: G-12`, `room: 131`; a door its
+number, size, frame, hardware set and fire rating. Each value says where it came
+from — `print` (read from a sheet, with the sheet and where on it), `legend`,
+`schedule`, `spec`, `note`, `rule` or `default` (assumed from a standard, always
+marked), `user` (edited) or `computed` (an area, the room an element stands in).
+
+- **`BIM.PROPS.GET`** — an element's properties with their sources, its kind's
+  standard keys and which of them have no value yet.
+- **`BIM.PROPS.SET`** — set values by hand (source `user`); on a generated element
+  the edit is kept as an override (`OVERRIDE.LIST`, kind `props`), so rebuilding
+  the model from the prints puts it back.
+- **`BIM.PROPS.FIND`** — elements by kind and by `{key: value | "exists" | "missing"}`.
+- **`BIM.PROPS.SUMMARY`** — per kind: how many elements, how many have each key
+  filled, and from which sources.
+
+The Properties palette shows them under **BIM Properties**, each value with its
+source; editing one there is the same as `BIM.PROPS.SET`. They are saved in the
+drawing (`.cdy`, DXF, DWG), written to IFC as `Pset_CADaddy` (and the matching
+standard set: `Pset_WallCommon`, `Pset_DoorCommon`, `Pset_WindowCommon`,
+`Pset_SpaceCommon`, `Pset_SpaceCoveringRequirements`,
+`Pset_ManufacturerTypeInformation`), and read back from IFC into the same store
+(an attached IFC model's property sets too).
+
+Standard keys per kind (other keys are allowed):
+
+| Kind | Keys |
+|:-----|:-----|
+| `device` | type, type_mark, mount_height, circuit, panel, voltage, room, level, host_wall, sheet |
+| `door` | number, width, height, frame, hardware_set, fire_rating, swing, from_room, to_room, level |
+| `window` | number, type_mark, width, height, sill_height, fire_rating, room, level |
+| `room` | number, name, area, ceiling_height, floor_finish, wall_finish, ceiling_finish, level |
+| `wall` | type, assembly, height, fire_rating, finish_a, finish_b, room_a, room_b, level |
+| `floor` | type, assembly, thickness, finish, area, level |
+| `ceiling` | type, height, finish, area, room, level |
+| `roof` | type, assembly, slope, area, level |
+| `duct` | size, system, shape, insulation, elevation, level |
+| `pipe` | size, system, material, insulation, elevation, level |
+| `conduit` | size, system, circuit, elevation, level |
+| `fixture` | type_mark, model, circuit, room, level |
+| `light_fixture` | type_mark, model, circuit, mount_height, room, level |
+| `equipment` | type_mark, model, circuit, room, level |
+
 ### Quick start
 
 Open a floor plan, then:
