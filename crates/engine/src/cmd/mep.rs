@@ -38,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{level?: name (default every level), apply?: bool (systems and runs into the spec, replacing those levels' runs)} → {systems: [{name, layer, kind, size_in, bottom_ft}], runs: [{system, level, points, size_in, bottoms_ft, objects}]}",
         ),
         CommandSpec::new("model.clashes", "Model Clashes", run_clashes)
-            .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2), same_trade?: bool (built walls overlapping each other; default true)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|reference|walls_overlap (category same_trade), message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total, gone?: [earlier clashes no longer found]}")
+            .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2), same_trade?: bool (built walls overlapping each other; default true), max_clashes?: count of clashes listed (5000, at most 50000)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|reference|walls_overlap (category same_trade), message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total (all found, even past the cap), truncated (the list was cut at max_clashes), gone?: [earlier clashes no longer found]}")
             .noundo(),
         CommandSpec::new("mep.list", "List MEP Items", run_list)
             .params("{level?: name, system?: name, guessed_only?: bool, cursor?: offset (0), limit?: count (50, max 200)} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed, edited_by}], systems: [...], total, next_cursor?}")
@@ -291,10 +291,14 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
                 if let Some(sz) = size_tag(t) {
                     size.get_or_insert(sz);
                 }
-                if let Some(slot) = heights.get_mut(i)
-                    && slot.is_none()
+                if height_tag(t, 0.0).is_some()
+                    && let Some(slot) = heights.get_mut(i)
                 {
-                    *slot = Some((0.0, t.clone()));
+                    match slot {
+                        None => *slot = Some((dist, t.clone())),
+                        Some((prev_d, _)) if dist < *prev_d => *slot = Some((dist, t.clone())),
+                        _ => {}
+                    }
                 }
             }
             let size_from_tag = size.is_some();
@@ -2195,15 +2199,18 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             }));
         }
     }
-    out.truncate(5_000);
+    let cap = p.get("max_clashes").and_then(Value::as_u64).map(|v| v as usize).unwrap_or(5_000).min(50_000);
+    let total = out.len();
+    let truncated = total > cap;
+    out.truncate(cap);
     // A re-run: what was decided about each clash last time carries over to the same clash now.
     if let Some(prev) = p.get("previous").and_then(Value::as_array) {
         let radius = p.get("match_ft").and_then(Value::as_f64).filter(|f| f.is_finite() && *f >= 0.0).unwrap_or(2.0).min(100.0) * upf;
         let prev: Vec<&Value> = prev.iter().take(MAX_PREVIOUS).collect();
         let gone = carry_previous(&mut out, &prev, radius);
-        return Ok(json!({ "total": out.len(), "clashes": out, "gone": gone }));
+        return Ok(json!({ "total": total, "truncated": truncated, "clashes": out, "gone": gone }));
     }
-    Ok(json!({ "total": out.len(), "clashes": out }))
+    Ok(json!({ "total": total, "truncated": truncated, "clashes": out }))
 }
 
 /// The most earlier clashes a re-run matches against (the detector's own cap).
