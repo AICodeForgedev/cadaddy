@@ -522,7 +522,18 @@ fn words(t: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// Q5301: system and material keywords for the never-cross rule.
+const SYSTEM_WORDS: &[&str] = &[
+    "gas", "vent", "cw", "hw", "dcw", "dhw", "supply", "return", "exhaust", "sanitary",
+    "storm", "fire", "refrigerant", "condensate",
+];
+const MATERIAL_WORDS: &[&str] = &[
+    "copper", "pvc", "steel", "galvanized", "aluminum", "cast", "iron", "fiberglass",
+    "stainless", "brass", "emt", "imc", "rigid",
+];
+
 /// The cost row for a takeoff line: its index and how it matched.
+/// Q5301: exact match first, then family match (word-based, never crossing system/material/size).
 fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
     let item = l["item"].as_str().unwrap_or_default();
     let unit = l["unit"].as_str().unwrap_or_default();
@@ -537,6 +548,12 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
         l["category"].as_str().unwrap_or_default(),
         l["system"].as_str().unwrap_or_default()
     ));
+    let mep = matches!(l["category"].as_str().unwrap_or_default(), "duct" | "pipe" | "conduit" | "tray" | "cable");
+    let sys_words = if mep { words(l["system"].as_str().unwrap_or_default()) } else { BTreeSet::new() };
+    let iw: BTreeSet<String> = words(item).into_iter().filter(|w| !sys_words.contains(w) && !w.chars().any(|c| c.is_ascii_digit())).collect();
+    // Line's system and material keywords for the never-cross check.
+    let line_sys: BTreeSet<&str> = SYSTEM_WORDS.iter().copied().filter(|s| have.contains(*s)).collect();
+    let line_mat: BTreeSet<&str> = MATERIAL_WORDS.iter().copied().filter(|m| have.contains(*m)).collect();
     let mut best: Option<(usize, f64, usize)> = None;
     for (i, r) in rows.iter().enumerate() {
         if !unit_ok(r) {
@@ -548,15 +565,17 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
         }
         let hit = want.iter().filter(|w| have.contains(*w)).count();
         let score = hit as f64 / want.len() as f64;
-        // Most of the row's words, and half the item's words in the row (a door hardware set is
-        // not a door).
-        // The item's own words: not its system's name (`Duct M-SUPPLY`) nor its numbers.
-        // (A line that isn't MEP has its category as its system: those words are its own.)
-        let mep = matches!(l["category"].as_str().unwrap_or_default(), "duct" | "pipe" | "conduit" | "tray" | "cable");
-        let sys = if mep { words(l["system"].as_str().unwrap_or_default()) } else { BTreeSet::new() };
-        let iw: BTreeSet<String> = words(item).into_iter().filter(|w| !sys.contains(w) && !w.chars().any(|c| c.is_ascii_digit())).collect();
         let covered = if iw.is_empty() { 0.0 } else { iw.iter().filter(|w| want.contains(*w)).count() as f64 / iw.len() as f64 };
         if hit == 0 || !((score >= 0.5 && covered >= 0.5) || covered >= 1.0) {
+            continue;
+        }
+        // Q5301 NEVER cross: block only when BOTH the row and line name the attribute and they differ.
+        let row_sys: BTreeSet<&str> = SYSTEM_WORDS.iter().copied().filter(|s| want.contains(*s)).collect();
+        if !row_sys.is_empty() && !line_sys.is_empty() && row_sys != line_sys {
+            continue;
+        }
+        let row_mat: BTreeSet<&str> = MATERIAL_WORDS.iter().copied().filter(|m| want.contains(*m)).collect();
+        if !row_mat.is_empty() && !line_mat.is_empty() && row_mat != line_mat {
             continue;
         }
         let score = score + covered;
@@ -564,7 +583,7 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
             best = Some((i, score, want.len()));
         }
     }
-    best.map(|(i, _, _)| (i, "words"))
+    best.map(|(i, _, _)| (i, "family"))
 }
 
 fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -613,7 +632,7 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
         if qty <= 0.0 {
             continue;
         }
-        // User cost table first, then the starter book, then unmatched.
+        // Q5301: user exact/family > starter exact/family > unmatched with suggestion.
         let (r, how, via) = if let Some((i, how)) = match_row(&rows, l) {
             used.insert(i);
             (&rows[i], how, None)
@@ -621,7 +640,23 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
             used_starter.insert(i);
             (&starter[i], how, Some(crate::cmd::estimate::STARTER_SOURCE))
         } else {
-            unmatched.push(json!({"item": l["item"], "size": l["size"], "unit": l["unit"], "qty": qty, "level": l["level"], "reason": "no cost-table row names this item in this unit"}));
+            // Q6020: suggest the nearest row but never apply it.
+            let item_name = l["item"].as_str().unwrap_or_default();
+            let nearest: Option<&str> = rows.iter().chain(starter.iter())
+                .filter(|r| !r.item.trim().is_empty())
+                .map(|r| r.item.as_str())
+                .min_by_key(|ri| {
+                    let rw = words(ri);
+                    let lw = words(item_name);
+                    let overlap = rw.iter().filter(|w| lw.contains(*w)).count();
+                    usize::MAX - overlap
+                });
+            let reason = if let Some(near) = nearest.filter(|_| !rows.is_empty() || !starter.is_empty()) {
+                format!("{} has no exact match; nearest row: {} \u{2014} add a row for this item or map it", item_name, near)
+            } else {
+                "no cost-table row names this item in this unit".to_string()
+            };
+            unmatched.push(json!({"item": l["item"], "size": l["size"], "unit": l["unit"], "qty": qty, "level": l["level"], "reason": reason}));
             continue;
         };
         let w = waste_for(l, r);
@@ -640,6 +675,9 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
         });
         if let Some(v) = via {
             line["via"] = json!(v);
+        }
+        if how == "family" {
+            line["via_family_row"] = json!(r.item);
         }
         out_lines.push(line);
     }
