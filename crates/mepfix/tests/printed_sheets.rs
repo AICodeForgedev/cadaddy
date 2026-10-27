@@ -535,3 +535,46 @@ fn a_floor_printed_without_its_grid_lines_reads_and_aligns_its_grid() {
         );
     }
 }
+
+// ---- Q6030 planregions: each level its own view ------------------------------------------------
+
+#[test]
+fn a_two_level_sheet_has_a_view_per_level_and_a_one_view_sheet_none() {
+    let (t, st) = cadaddy_mepfix::hotel_planned(7, cadaddy_mepfix::hotel::HotelSize::Small);
+    let two = printed::two_view_sheet(&t, &st, "E-101", "E-102", "E-1A", "LIGHTING").expect("two-view sheet");
+    let views = sheet_reader::level_views(&two.drawing);
+    assert_eq!(views.iter().map(|(v, _)| v.levels.clone()).collect::<Vec<_>>(), [vec!["1".to_string()], vec!["2".to_string()]]);
+    let (lower, upper) = (views[0].1, views[1].1);
+    assert!(lower[3] <= upper[1], "the lower view ends where the upper begins: {lower:?} {upper:?}");
+    let one = printed::one_view_sheet(&t, &st, "E-102", "LIGHTING", &printed::OneViewOptions::default()).expect("one-view sheet");
+    assert!(sheet_reader::level_views(&one.drawing).is_empty(), "one plan: no views to split");
+}
+
+#[test]
+fn views_titled_over_a_scale_line_split_a_sheet_when_their_lettering_is_the_sheets_size() {
+    // Two plans side by side, each a block of short lines, titled over a SCALE line in the
+    // sheet's usual lettering (too small for the large-title reading).
+    let mut d = Drawing::new_imperial();
+    let seg = |d: &mut Drawing, a: [f64; 2], b: [f64; 2]| {
+        let vertices = vec![PolyVertex::new(Vec2::new(a[0], a[1])), PolyVertex::new(Vec2::new(b[0], b[1]))];
+        add(d, EntityKind::LwPolyline(LwPolyline { vertices, closed: false, const_width: 0.0, elevation: 0.0, plinegen: false }));
+    };
+    for (k, title) in ["FIRST FLOOR PLAN", "SECOND FLOOR PLAN"].iter().enumerate() {
+        let x0 = k as f64 * 140.0;
+        for i in 0..10 {
+            for j in 0..9 {
+                let (x, y) = (x0 + i as f64 * 10.0, 20.0 + j as f64 * 10.0);
+                seg(&mut d, [x, y], [x + 10.0, y]);
+                seg(&mut d, [x, y], [x, y + 10.0]);
+            }
+        }
+        for i in 0..8 {
+            text(&mut d, [x0 + 5.0 + i as f64 * 11.0, 60.0], 2.0, "OFFICE");
+        }
+        text(&mut d, [x0 + 10.0, 12.0], 2.0, title);
+        text(&mut d, [x0 + 10.0, 9.0], 1.5, "SCALE: 1/8\" = 1'-0\"");
+    }
+    let views = sheet_reader::level_views(&d);
+    assert_eq!(views.iter().map(|(v, _)| v.levels.clone()).collect::<Vec<_>>(), [vec!["1".to_string()], vec!["2".to_string()]], "{views:?}");
+    assert!(views[0].1[2] < views[1].1[0], "the views stand apart: {views:?}");
+}

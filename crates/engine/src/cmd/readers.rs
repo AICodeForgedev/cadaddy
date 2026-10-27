@@ -212,6 +212,7 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
         span: None,
         scale_text: None,
         levels: Vec::new(),
+        view: None,
     };
     Ok(Some((sh, devices, upf)))
 }

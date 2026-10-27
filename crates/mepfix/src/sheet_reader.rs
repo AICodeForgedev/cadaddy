@@ -1393,6 +1393,35 @@ pub fn view_cells(d: &Drawing) -> Vec<(PlanView, [f64; 4])> {
     cells
 }
 
+/// The level views of a sheet that prints several plans of different levels, each with the part
+/// of the sheet that is its own `[x0, y0, x1, y1]` (model units): the cells of [`view_cells`],
+/// else the blocks of linework the titled views occupy ([`crate::sheet_facts::view_titles`] over
+/// a `SCALE:` line) when their titles name at least two different levels. Empty for a sheet of
+/// one view (a typical-floor plan of several levels is one view), or of views of one level.
+pub fn level_views(d: &Drawing) -> Vec<(PlanView, [f64; 4])> {
+    let cells = view_cells(d);
+    if !cells.is_empty() {
+        return cells;
+    }
+    let texts = crate::sheet_facts::texts(d);
+    let mut views: Vec<(PlanView, [f64; 4])> = Vec::new();
+    for v in crate::sheet_facts::view_titles(d, &texts) {
+        let levels = detect_levels(&v.title);
+        let Some(region) = v.region else { continue };
+        if levels.is_empty() || is_typical_sentinel(&levels) || views.iter().any(|(_, r)| *r == region) {
+            continue;
+        }
+        views.push((PlanView { title: v.title, levels, at: v.at, height: 0.0 }, region));
+    }
+    let mut distinct: Vec<&Vec<String>> = views.iter().map(|(v, _)| &v.levels).collect();
+    distinct.sort();
+    distinct.dedup();
+    if distinct.len() < 2 || views.len() > 8 {
+        return Vec::new();
+    }
+    views
+}
+
 /// Build a sheet map from a set of DXF drawings: recognise each sheet, assemble the common
 /// grid, then compute each sheet's alignment.
 pub fn build_sheet_map(drawings: &[(String, &Drawing)]) -> SheetMap {
