@@ -3664,6 +3664,50 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
     out
 }
 
+/// Most rooms the reading puts in the spec.
+const MAX_SPEC_ROOMS: usize = 2_000;
+
+/// The rooms stage's reading (each floor plan's labels in their closed outlines, sheet by
+/// sheet, on the sheet's level) into the stored spec, before a build: a print set's pages carry
+/// no room tag layers, so without them `model.build` traces no rooms at all. Keeps the reading as
+/// the job's rooms stage result. Returns (rooms read, rooms added to the spec).
+pub(crate) fn rooms_into_spec(s: &mut Session, job: &mut GuidedJob) -> Result<(usize, usize)> {
+    let read = run_rooms(s, job)?;
+    let list: Vec<Value> = read.get("rooms").and_then(Value::as_array).cloned().unwrap_or_default();
+    if let Some(st) = job.stage_mut(StageName::Rooms) {
+        st.result = Some(read);
+    }
+    let Ok((mut sp, true)) = super::bspec::current(s, "rooms") else { return Ok((list.len(), 0)) };
+    let text = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+    let mut added = 0usize;
+    for r in &list {
+        if sp.rooms.len() >= MAX_SPEC_ROOMS {
+            break;
+        }
+        let (name, number) = (text(r, "name"), text(r, "number"));
+        let Some(label) = name.clone().or_else(|| number.clone()) else { continue };
+        // The sheet's level as the spec names it (`3` is `Level 3`); none: the level whose
+        // region holds the tag.
+        let level = text(r, "level").and_then(|l| sp.level(&l).or_else(|| sp.level(&level_name(&l))).map(|lv| lv.name.clone()));
+        let same = |x: &cadaddy_walk3d::SpecRoom| {
+            x.level == level
+                && match (&number, &x.number) {
+                    (Some(a), Some(b)) => a.eq_ignore_ascii_case(b.trim()),
+                    _ => x.name.trim().eq_ignore_ascii_case(&label),
+                }
+        };
+        if sp.rooms.iter().any(same) {
+            continue;
+        }
+        sp.rooms.push(cadaddy_walk3d::SpecRoom { name: label, number, level, ..cadaddy_walk3d::SpecRoom::default() });
+        added += 1;
+    }
+    if added > 0 {
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    Ok((list.len(), added))
+}
+
 /// The job's rooms after the build (MUST 2: a room is a label inside a closed boundary of real
 /// walls): the rooms stage's reading (each label traced inside its closed outline on its sheet,
 /// the title block, border and other sheets' notes left out), and the rooms the model traced
@@ -6690,6 +6734,41 @@ mod tests {
         assert_eq!(levels.len(), 1, "{levels:?}");
         s.execute("bspec.draft", &json!({"store": true, "levels": levels, "stack": true})).unwrap();
         s.execute("model.build", &json!({})).unwrap()
+    }
+
+    /// A plan plotted in one pen, its room names and numbers on the wall layer: no room tag
+    /// layer for the spec to find them by, so the build alone traces no rooms (Q5258 rework: a
+    /// real print set's model came to 0 rooms). The rooms read on the plan go in the spec, and
+    /// the build traces them in their walls, on the plan's level.
+    #[test]
+    fn rooms_read_on_a_one_pen_plan_are_built_as_rooms() {
+        let mut s = crate::Session::new();
+        s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+        rect(&mut s, 0.0, 0.0, 480.0, 360.0);
+        rect(&mut s, 6.0, 6.0, 474.0, 354.0);
+        for x in [238.0, 242.0] {
+            line(&mut s, [x, 6.0], [x, 354.0]);
+        }
+        for (t, x, y, h) in [("OFFICE", 100.0, 180.0, 8.0), ("101", 100.0, 160.0, 6.0), ("LOBBY", 340.0, 180.0, 8.0), ("102", 340.0, 160.0, 6.0)] {
+            s.execute("text", &json!({"at": [x, y], "text": t, "height": h})).unwrap();
+        }
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![a_plan(None, None)];
+        job.sheets_loaded = true;
+        let before = build_job(&mut s, &job);
+        assert_eq!(before["rooms"].as_u64(), Some(0), "the spec finds no rooms on one pen: {before}");
+        let (read, added) = rooms_into_spec(&mut s, &mut job).unwrap();
+        assert!(read >= 2 && added >= 2, "read {read}, added {added}");
+        // Again: the same rooms are not added twice.
+        assert_eq!(rooms_into_spec(&mut s, &mut job).unwrap().1, 0);
+        let spec: cadaddy_walk3d::BuildingSpec = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+        let mut got: Vec<(String, Option<String>)> = spec.rooms.iter().map(|r| (r.name.to_ascii_uppercase(), r.number.clone())).collect();
+        got.sort();
+        assert_eq!(got, [("LOBBY".to_string(), Some("102".to_string())), ("OFFICE".to_string(), Some("101".to_string()))], "{:?}", spec.rooms);
+        assert!(spec.rooms.iter().all(|r| r.level.as_deref().is_some_and(|l| spec.level(l).is_some())), "on the plan's level: {:?}", spec.rooms);
+        let after = s.execute("model.build", &json!({})).unwrap();
+        assert_eq!(after["rooms"].as_u64(), Some(2), "{after}");
+        assert_eq!(walls_built(&s), (walls_built(&s).0, 0));
     }
 
     #[test]

@@ -779,8 +779,15 @@ pub(crate) fn stage_model(s: &mut Session, built: &Value, readings: &Readings, r
     }
     // 5. rooms
     if let Some(x) = st.get_mut(4) {
-        x.count("rooms", n("rooms"));
+        // The model's rooms: the build's traced ones, else the volumes rooms.build made from the
+        // plans' labels.
+        let traced = n("rooms");
+        x.count("rooms", traced.max(volumes.len() as u64));
+        x.count("rooms_traced", traced);
         x.count("room_volumes", volumes.len());
+        if traced == 0 && !volumes.is_empty() {
+            x.notes.push(format!("the build traced no rooms; the {} room volumes are from the plans' labels", volumes.len()));
+        }
         if let Some(by) = built.get("roomsByLevel").and_then(Value::as_object) {
             for (level, v) in by {
                 x.level(level, "rooms", v.as_f64().unwrap_or(0.0));
@@ -823,6 +830,10 @@ pub(crate) fn stage_model(s: &mut Session, built: &Value, readings: &Readings, r
                 x.count("wall_board_sf", (walls_sf * 10.0).round() / 10.0);
                 x.count("ceiling_board_sf", (ceil_sf * 10.0).round() / 10.0);
                 x.count("ceilings", n("ceilings"));
+                if walls_sf + ceil_sf <= 0.0 && !walls.is_empty() {
+                    x.status = "failed";
+                    x.notes.push(format!("drywall.takeoff found no board on the {} walls built", walls.len()));
+                }
                 for row in t["rows"].as_array().map(Vec::as_slice).unwrap_or_default() {
                     let level = row["group"].as_str().unwrap_or_default();
                     let sf: f64 = row["boards"].as_array().map_or(0.0, |b| b.iter().map(|x| num(x, "areaSqFt")).sum());
@@ -1109,6 +1120,13 @@ pub(crate) fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         // The trade plans: lined up on the architectural plans, backgrounds removed, read.
         s.echo(format!("bim.from_pdf: lining up the trade plans of {stem} and reading them..."));
         readings = read_trades(s, &mut plan.job, &refs);
+
+        // The rooms read on each architectural plan go in the spec, so the build traces them in
+        // their walls (a print set has no room tag layers to find them by).
+        match super::guided::rooms_into_spec(s, &mut plan.job) {
+            Ok((read, added)) => s.echo(format!("bim.from_pdf: {read} rooms read on the plans, {added} added to the spec")),
+            Err(e) => warnings.push(format!("{stem}: the rooms could not be read: {e}")),
+        }
 
         // Build the model once, then sort it into its stages.
         s.echo(format!("bim.from_pdf: building 3D model for {stem}..."));

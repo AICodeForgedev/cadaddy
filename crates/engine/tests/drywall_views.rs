@@ -26,7 +26,22 @@ fn text(s: &mut Session, at: [f64; 2], value: &str, height: f64) {
 /// P1 partition: centreline at x=240, mesh spans the full building depth (24 ft = 288").
 /// Height = 12.75 ft = 153". Face area per side: 24 × 12.75 = 306.0 sq ft.
 fn building() -> Session {
+    building_after(0)
+}
+
+/// [`building`] with `linework` points of an imported print set in the drawing before the
+/// build (a real set's linework comes first and outnumbers the built walls).
+fn building_after(linework: usize) -> Session {
     let mut s = Session::new();
+    {
+        use cadaddy_engine::doc::geom::Vec3;
+        use cadaddy_engine::doc::{Common, EntityKind, Point, Space};
+        let d = s.doc_mut().unwrap();
+        for i in 0..linework {
+            let p = Vec3::new(5000.0 + (i % 1000) as f64, 5000.0 + (i / 1000) as f64, 0.0);
+            d.add(&Space::Model, Common { layer: "PDF-LINEWORK".into(), ..Common::default() }, EntityKind::Point(Point { p, angle: 0.0 })).unwrap();
+        }
+    }
     layer(&mut s, "A-WALL");
     let t = 7.25;
     rect(&mut s, [0.0, 0.0], [480.0, 288.0]);
@@ -119,6 +134,21 @@ fn p1_area_per_side_is_face_area() {
         let pct_diff = ((area - expected) / expected).abs();
         assert!(pct_diff < 0.02, "P1 face area should be ~{expected} sq ft ±2%, got {area} ({:.1}% off)", pct_diff * 100.0);
     }
+}
+
+/// The takeoff's wall cap counts walls, not every object: walls built after more than
+/// 100,000 objects of an imported print set are still taken off (Q5258 rework: a real job's
+/// drywall came to 0 sf).
+#[test]
+fn walls_built_after_a_large_print_set_are_taken_off() {
+    let small = building().execute("drywall.takeoff", &json!({})).unwrap();
+    let mut s = building_after(100_001);
+    let big = s.execute("drywall.takeoff", &json!({})).unwrap();
+    let area = |r: &Value| r["totals"]["boardAreaSqFt"].as_f64().unwrap_or(0.0);
+    assert!(area(&small) > 0.0, "{}", small["totals"]);
+    assert!((area(&big) - area(&small)).abs() < 0.01, "after the print set: {} vs {}", big["totals"], small["totals"]);
+    let rows = |r: &Value| r["rows"].as_array().map_or(0, Vec::len);
+    assert_eq!(rows(&big), rows(&small));
 }
 
 #[test]

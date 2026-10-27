@@ -601,7 +601,7 @@ fn run_viewmode(s: &mut Session, p: &Value) -> Result<Value> {
             let vm = ViewMode { mode: mode.into(), legend: legend.clone() };
             // Build the handle→colour map for the renderer.
             let mut overrides = BTreeMap::new();
-            for e in d.model.iter().take(MAX_WALLS) {
+            for e in d.model.iter().filter(|e| is_wall(e)).take(MAX_WALLS) {
                 if let Some(c) = viewmode_color(e, &Some(sp.clone()), &vm) {
                     overrides.insert(e.handle, c);
                 }
@@ -693,10 +693,7 @@ fn run_finishfaces(s: &mut Session, _p: &Value) -> Result<Value> {
     let room_map = build_room_map(d, &sp);
     let mut faces = Vec::new();
 
-    for e in d.model.iter().take(MAX_WALLS) {
-        if wallgen::made_as(e).as_deref() != Some("wall") {
-            continue;
-        }
+    for e in d.model.iter().filter(|e| is_wall(e)).take(MAX_WALLS) {
         let tags = wallgen_tags(e);
         let type_name = tags.iter().skip(3).find_map(|v| v.strip_prefix("type:").map(str::to_string));
         let Some(ref tn) = type_name else { continue };
@@ -849,6 +846,12 @@ impl WallData {
     }
 }
 
+/// A WALLGEN wall. The [`MAX_WALLS`] caps count walls, not every object in the drawing: an
+/// imported print set's linework comes before the built walls and can be far more.
+fn is_wall(e: &Entity) -> bool {
+    wallgen::made_as(e).as_deref() == Some("wall")
+}
+
 /// Gather all WALLGEN wall meshes with their types and assemblies.
 fn collect_walls(d: &Drawing, sp: &BuildingSpec) -> Vec<WallData> {
     let mut out = Vec::new();
@@ -857,10 +860,7 @@ fn collect_walls(d: &Drawing, sp: &BuildingSpec) -> Vec<WallData> {
     // Collect door/window entities for opening deduction.
     let openings = collect_openings(d, k);
 
-    for e in d.model.iter().take(MAX_WALLS) {
-        if wallgen::made_as(e).as_deref() != Some("wall") {
-            continue;
-        }
+    for e in d.model.iter().filter(|e| is_wall(e)).take(MAX_WALLS) {
         let tags = wallgen_tags(e);
         let level = tags.get(1).cloned().unwrap_or_default();
         let type_name = tags.iter().skip(3).find_map(|v| v.strip_prefix("type:").map(str::to_string));
@@ -904,12 +904,8 @@ struct Opening {
 /// Collect door and window entities for opening deduction.
 fn collect_openings(d: &Drawing, k: f64) -> Vec<Opening> {
     let mut out = Vec::new();
-    for e in d.model.iter().take(MAX_WALLS) {
-        let part = wallgen::made_as(e);
-        let is_opening = matches!(part.as_deref(), Some("door") | Some("window"));
-        if !is_opening {
-            continue;
-        }
+    // The cap counts openings, not every object: a print set's linework comes first.
+    for e in d.model.iter().filter(|e| matches!(wallgen::made_as(e).as_deref(), Some("door" | "window"))).take(MAX_WALLS) {
         let EntityKind::Mesh(ref mesh) = e.kind else { continue };
         if mesh.vertices.is_empty() {
             continue;
@@ -1163,10 +1159,7 @@ fn wall_rooms(centreline: &WallCentreline, rooms: &[RoomPoint]) -> (Option<Strin
 fn compute_layer_lines(d: &Drawing, sp: &BuildingSpec) -> Vec<([f64; 3], [f64; 3])> {
     let k = insunits_per_ft(d);
     let mut lines = Vec::new();
-    for e in d.model.iter().take(MAX_WALLS) {
-        if wallgen::made_as(e).as_deref() != Some("wall") {
-            continue;
-        }
+    for e in d.model.iter().filter(|e| is_wall(e)).take(MAX_WALLS) {
         let EntityKind::Mesh(ref mesh) = e.kind else { continue };
         if mesh.vertices.is_empty() {
             continue;
