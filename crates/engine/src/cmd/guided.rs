@@ -5551,6 +5551,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "rules_learned": job.rules.len(),
         "audit_entries": job.audit.len(),
         "not_built": not_built_sheets(&job),
+        "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
     }))
 }
 
@@ -5873,6 +5874,40 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
+    /// Q6003 MUST 4: the job's report lists the property coverage per kind.
+    #[test]
+    fn job_report_lists_property_coverage_per_kind() {
+        use cadaddy_doc::props::{Prop, Props, Source};
+        let mut s = Session::new();
+        let mut d = cadaddy_doc::Drawing::new_imperial();
+        for (i, number) in [Some("101A"), None].into_iter().enumerate() {
+            let h = d.new_handle();
+            let a = cadaddy_geom::Vec3 { x: i as f64 * 48.0, y: 0.0, z: 0.0 };
+            let mut e = cadaddy_doc::Entity::new(h, EntityKind::Line(cadaddy_doc::Line { a, b: cadaddy_geom::Vec3 { x: a.x + 36.0, ..a } }));
+            let tag = vec![
+                cadaddy_doc::RawTag { code: 1001, value: crate::cmd::wallgen::APP.into() },
+                cadaddy_doc::RawTag { code: 1000, value: "door".into() },
+                cadaddy_doc::RawTag { code: 1000, value: "L1".into() },
+            ];
+            let mut store = Props::default();
+            if let Some(n) = number {
+                store.set("number", Prop::new(n, Source::print("Sample Sheet A-101", None)));
+            }
+            e.common.xdata = cadaddy_doc::props::write(&tag, &store).into();
+            d.model.push(e);
+        }
+        s.open_drawing(d, "Sample Building", None);
+        save_job(&mut s, &GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff)).unwrap();
+        let r = s.execute("job.report", &json!({})).unwrap();
+        let doors = &r["property_coverage"]["door"];
+        assert_eq!(doors["elements"], 2, "{r}");
+        // 10 standard door keys each: one number and two levels are filled.
+        assert_eq!(doors["filled"], 3, "{doors}");
+        assert_eq!(doors["possible"], 20);
+        assert_eq!(doors["percent"], 15.0);
+        assert!(doors["keys_with_no_value"].as_array().unwrap().iter().any(|k| k == "fire_rating"));
+    }
+
     #[test]
     fn explain_works_before_a_job_starts() {
         let mut s = Session::new();
