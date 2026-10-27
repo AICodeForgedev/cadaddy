@@ -48,6 +48,14 @@ pub(crate) const ESTIMATED: &str = "estimated route";
 pub(crate) const DEFAULT_CONDUCTORS: &str = "2#12 + 1#12G";
 /// Circuit tag ids start with this.
 pub(crate) const CIRCUIT_TAG: &str = "circuit:";
+/// A riser run's id ends with this (the home run up or down to a panel on another level).
+pub(crate) const RISER_SUFFIX: &str = "#riser";
+/// What a circuit no plan numbers is called (`unnumbered 3`).
+pub(crate) const UNNUMBERED: &str = "unnumbered";
+/// Devices on one estimated circuit when their circuit is not printed.
+const DEVICES_PER_UNNUMBERED: usize = 8;
+/// A floor-to-floor height until the spec has its levels (a riser's length a floor), feet.
+const DEFAULT_FLOOR_FT: f64 = 10.0;
 
 /// A level's ceiling when the spec has none yet, feet; conduit runs this far above it.
 const DEFAULT_CEILING_FT: f64 = 8.0;
@@ -377,8 +385,11 @@ pub(crate) struct CondRead {
     pub sheets: Vec<CondSheet>,
     /// Circuits whose home run could not be routed: `{circuit, sheet, level, reason}`.
     pub unrouted: Vec<Value>,
-    /// Devices with no circuit printed beside them (no route can be estimated).
+    /// Devices with no circuit printed beside them (lighting and power ones are routed on
+    /// unnumbered circuits).
     pub no_circuit: usize,
+    /// Conduit feet on each level (drawn and estimated).
+    pub by_level: BTreeMap<String, f64>,
     pub warnings: Vec<String>,
 }
 
@@ -388,6 +399,10 @@ impl CondRead {
     }
     pub fn estimated_ft(&self) -> f64 {
         self.sheets.iter().map(|s| s.estimated_ft).sum()
+    }
+    /// How many levels have any conduit.
+    pub fn levels_with_conduit(&self) -> usize {
+        self.by_level.values().filter(|ft| **ft > 0.0).count()
     }
     pub fn to_json(&self) -> Value {
         let drops = self.mep.runs.iter().filter(|r| r.top_ft.is_some()).count();
@@ -399,6 +414,8 @@ impl CondRead {
             "estimated_ft": r1(self.estimated_ft()),
             "drops": drops,
             "devices_without_circuit": self.no_circuit,
+            "levels": self.by_level.iter().map(|(l, ft)| json!({"level": l, "conduit_ft": r1(*ft)})).collect::<Vec<_>>(),
+            "levels_with_conduit": self.levels_with_conduit(),
             "unrouted": self.unrouted,
             "sheets": self.sheets.iter().map(|s| json!({
                 "sheet": s.sheet, "level": s.level, "conduit_runs": s.conduits, "conduit_ft": r1(s.conduit_ft),
@@ -442,25 +459,273 @@ fn system(name: &str, bottom: f64) -> MepSystem {
     }
 }
 
-/// Whether `dv` was read on `sh`.
+/// Whether `dv` was read on `sh`: named for it (a sheet split into one view per level keeps its
+/// devices under the sheet's own number, `E-201` for `E-201/3`) and, on a view, inside it.
 fn on_sheet(dv: &ReadDevice, sh: &SheetRef) -> bool {
-    if dv.sheet.is_empty() {
-        let [x0, y0, x1, y1] = sh.rect;
-        dv.at[0] >= x0 && dv.at[0] <= x1 && dv.at[1] >= y0 && dv.at[1] <= y1
+    let inside = |r: &[f64; 4]| dv.at[0] >= r[0].min(r[2]) && dv.at[0] <= r[0].max(r[2]) && dv.at[1] >= r[1].min(r[3]) && dv.at[1] <= r[1].max(r[3]);
+    let named = if dv.sheet.is_empty() {
+        inside(&sh.rect)
     } else {
-        dv.sheet.eq_ignore_ascii_case(&sh.number)
+        let d = dv.sheet.trim();
+        d.eq_ignore_ascii_case(&sh.number) || sh.number.split_once('/').is_some_and(|(base, _)| d.eq_ignore_ascii_case(base))
+    };
+    named && sh.view.as_ref().is_none_or(inside)
+}
+
+/// Every level a sheet's plan is on (a typical plan: each level it shows), by model name.
+fn sheet_levels(sh: &SheetRef) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for l in std::iter::once(&sh.level).chain(sh.levels.iter()) {
+        let n = level_name(l);
+        if !out.iter().any(|o| o.eq_ignore_ascii_case(&n)) {
+            out.push(n);
+        }
     }
+    out
+}
+
+/// The level a device is on: its own when its sheet shows that level (a typical plan's device
+/// is read once per level it shows), else its sheet's.
+fn device_level(dv: &ReadDevice, sh: &SheetRef) -> String {
+    let own = level_name(&dv.level);
+    if !dv.level.trim().is_empty() && sheet_levels(sh).iter().any(|l| l.eq_ignore_ascii_case(&own)) { own } else { level_name(&sh.level) }
+}
+
+/// A level's number (`Level 3` → 3), for a riser's floors; none for a named level (`Roof`).
+fn level_rank(name: &str) -> Option<f64> {
+    let t = name.trim();
+    let n = t.get(..6).filter(|p| p.eq_ignore_ascii_case("level ")).map_or(t, |_| t.get(6..).unwrap_or_default());
+    n.trim().parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+/// Where a sheet's plan is drawn: its view, else the sheet.
+fn frame(sh: &SheetRef) -> [f64; 4] {
+    let r = sh.view.unwrap_or(sh.rect);
+    [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]
+}
+
+/// Whether a device of this kind is on a lighting or power branch circuit (fire alarm, low
+/// voltage and door holders are their own systems).
+fn on_branch_circuit(kind: &str) -> bool {
+    !matches!(kind.replace('_', " ").as_str(), "fire alarm device" | "low voltage outlet" | "data outlet" | "door holder")
+}
+
+/// A circuit's panel as found: where it is on the circuit's sheet (on another level's plan: the
+/// same place, where the riser goes up or down to it), its name, the sheet it is lettered on,
+/// and its level.
+struct PanelAt {
+    name: String,
+    at: [f64; 2],
+    sheet: String,
+    level: String,
+}
+
+/// Find the panel `name` (none: the nearest panel to `near`) for a circuit on `level` of `sh`:
+/// on this plan; else on another plan of the level drawn the same size (moved over by the
+/// plans' corners); else the same way on another level's plan (a riser takes the home run there).
+fn find_panel(scans: &[(&SheetRef, SheetScan)], sh: &SheetRef, sc: &SheetScan, level: &str, name: Option<&str>, near: [f64; 2]) -> Option<PanelAt> {
+    let pick = |panels: &BTreeMap<String, [f64; 2]>, shift: [f64; 2]| -> Option<(String, [f64; 2])> {
+        let moved = |p: &[f64; 2]| [p[0] + shift[0], p[1] + shift[1]];
+        match name {
+            Some(n) => panels.get(n).map(|p| (n.to_string(), moved(p))),
+            None => panels.iter().map(|(k, p)| (k.clone(), moved(p))).min_by(|a, b| dist(a.1, near).total_cmp(&dist(b.1, near))),
+        }
+    };
+    if let Some((n, at)) = pick(&sc.panels, [0.0, 0.0]) {
+        return Some(PanelAt { name: n, at, sheet: sh.number.clone(), level: level.to_string() });
+    }
+    let f = frame(sh);
+    let (w, h) = (f[2] - f[0], f[3] - f[1]);
+    let same = |o: &SheetRef| {
+        let of = frame(o);
+        let (ow, oh) = (of[2] - of[0], of[3] - of[1]);
+        (w > 0.0 && h > 0.0 && ((ow - w) / w).abs() < 0.02 && ((oh - h) / h).abs() < 0.02).then(|| [f[0] - of[0], f[1] - of[1]])
+    };
+    let others = || scans.iter().filter(|(o, _)| o.number != sh.number);
+    // Another plan of this level first, then the other levels, nearest floor first.
+    let here = others().filter(|(o, _)| sheet_levels(o).iter().any(|l| l.eq_ignore_ascii_case(level))).find_map(|(o, osc)| {
+        let (n, at) = pick(&osc.panels, same(o)?)?;
+        Some(PanelAt { name: n, at, sheet: o.number.clone(), level: level.to_string() })
+    });
+    if here.is_some() {
+        return here;
+    }
+    let rank = level_rank(level);
+    let floors = |l: &str| match (rank, level_rank(l)) {
+        (Some(a), Some(b)) => (a - b).abs(),
+        _ => f64::MAX,
+    };
+    others()
+        .filter_map(|(o, osc)| {
+            let (n, at) = pick(&osc.panels, same(o)?)?;
+            let lv = sheet_levels(o).into_iter().filter(|l| !l.eq_ignore_ascii_case(level)).min_by(|a, b| floors(a).total_cmp(&floors(b)))?;
+            Some(PanelAt { name: n, at, sheet: o.number.clone(), level: lv })
+        })
+        .min_by(|a, b| floors(&a.level).total_cmp(&floors(&b.level)).then(dist(a.at, near).total_cmp(&dist(b.at, near))))
+}
+
+/// The plan, level and reading a circuit is routed on.
+struct RouteCtx<'a> {
+    scans: &'a [(&'a SheetRef, SheetScan)],
+    sh: &'a SheetRef,
+    sc: &'a SheetScan,
+    level: &'a str,
+    upf: f64,
+    bottom: f64,
+}
+
+/// Put one run into the read, counting its feet on its level; the feet it adds.
+fn add_run(out: &mut CondRead, r: MepRun, upf: f64) -> f64 {
+    if out.mep.runs.len() >= MAX_RUNS {
+        return 0.0;
+    }
+    let ft = match r.top_ft {
+        Some(top) => top - r.bottoms_ft.first().copied().unwrap_or(top),
+        None => super::bom::run_length_ft(&r.points, upf),
+    };
+    let ft = if ft.is_finite() { ft.max(0.0) } else { 0.0 };
+    *out.by_level.entry(r.level.clone()).or_default() += ft;
+    out.mep.runs.push(r);
+    ft
+}
+
+/// Route one circuit (`panel`: the panel its label names; none for an unnumbered one) through
+/// `devs` on the context's plan and level: the chain, the home run to the panel (by a riser
+/// when the panel is on another level), a drop to each wall device, and its tag. The feet added.
+fn route_circuit(out: &mut CondRead, cx: &RouteCtx, panel: Option<&str>, label: &str, devs: &[&ReadDevice], homerun: Option<&Homerun>) -> f64 {
+    let (level, sh, upf, bottom) = (cx.level, cx.sh, cx.upf, cx.bottom);
+    let near = homerun.map(|h| h.origin).or_else(|| devs.first().map(|d| d.at)).unwrap_or_default();
+    let panel_at = find_panel(cx.scans, sh, cx.sc, level, panel, near);
+    // The chain: from the homerun's device, else the one nearest the panel, else the
+    // lowest-leftmost; then always the nearest one left.
+    let mut left: Vec<&ReadDevice> = devs.to_vec();
+    let start_at = homerun.map(|h| h.origin).or_else(|| panel_at.as_ref().map(|p| p.at));
+    let first = match start_at {
+        Some(p) => left.iter().enumerate().min_by(|a, b| dist(a.1.at, p).total_cmp(&dist(b.1.at, p))).map(|(i, _)| i),
+        None => left
+            .iter()
+            .enumerate()
+            .min_by(|a, b| (a.1.at[1], a.1.at[0]).partial_cmp(&(b.1.at[1], b.1.at[0])).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i),
+    };
+    let Some(first) = first else { return 0.0 };
+    let mut chain = vec![left.swap_remove(first)];
+    while !left.is_empty() {
+        let Some(last) = chain.last().map(|d| d.at) else { break };
+        let Some((i, _)) = left.iter().enumerate().min_by(|a, b| dist(a.1.at, last).total_cmp(&dist(b.1.at, last))) else { break };
+        chain.push(left.swap_remove(i));
+    }
+    let Some(head) = chain.first().map(|d| d.at) else { return 0.0 };
+    let eps = 0.05 * upf;
+    let cid = format!("{CIRCUIT_TAG}{}:{}:{}", id_part(level), id_part(&sh.number), id_part(label));
+    let mk = |points: Vec<[f64; 2]>, id: String| {
+        let mut r = run(CIRCUIT_SYSTEM, level, &sh.number, points, DEFAULT_SIZE_IN, bottom);
+        r.id = id;
+        r
+    };
+    let mut ft = 0.0;
+    // The home run (to where the riser is, when the panel is on another level), then the riser.
+    let mut riser = None;
+    if let Some(p) = &panel_at {
+        ft += add_run(out, mk(square(head, p.at, eps), format!("{cid}#home")), upf);
+        if !p.level.eq_ignore_ascii_case(level) {
+            let floors = match (level_rank(level), level_rank(&p.level)) {
+                (Some(a), Some(b)) => (a - b).abs().max(1.0),
+                _ => 1.0,
+            };
+            let rise = floors * DEFAULT_FLOOR_FT;
+            // It starts on the lower of the two levels and goes up.
+            let below = if level_rank(&p.level).zip(level_rank(level)).is_some_and(|(a, b)| a < b) { p.level.as_str() } else { level };
+            let mut r = run(CIRCUIT_SYSTEM, below, &sh.number, vec![p.at], DEFAULT_SIZE_IN, bottom);
+            r.top_ft = Some(bottom + rise);
+            r.id = format!("{cid}{RISER_SUFFIX}");
+            ft += add_run(out, r, upf);
+            riser = Some(rise);
+        }
+    }
+    let mut legs = 0usize;
+    for w in chain.windows(2) {
+        if let [a, b] = w {
+            legs += 1;
+            ft += add_run(out, mk(square(a.at, b.at, eps), format!("{cid}#{legs}")), upf);
+        }
+    }
+    // A drop to each wall device.
+    let (mut drops, mut no_height) = (0usize, 0usize);
+    for (i, dv) in chain.iter().enumerate() {
+        let kind = if dv.kind.is_empty() { super::readers::device_kind(&dv.tag) } else { dv.kind.as_str() };
+        match mount_height_ft(kind) {
+            Some(m) if m < bottom => {
+                drops += 1;
+                let mut r = mk(vec![dv.at], format!("{cid}#d{i}"));
+                r.bottoms_ft = vec![m];
+                r.top_ft = Some(bottom);
+                ft += add_run(out, r, upf);
+            }
+            Some(_) => {}
+            None => no_height += 1,
+        }
+    }
+    let (conductors, source) =
+        homerun.and_then(|h| h.conductors.clone()).map_or_else(|| (DEFAULT_CONDUCTORS.to_string(), "default"), |(c, s)| (c, s));
+    let mut t =
+        ElementTag { id: cid, kind: "circuit".into(), level: level.to_string(), at_ft: [head[0] / upf, head[1] / upf], ..ElementTag::default() };
+    t.set("circuit", label, if panel.is_some() { "plan" } else { "rule" });
+    match (panel, &panel_at) {
+        (Some(p), _) => t.set("panel", p, "plan"),
+        (None, Some(p)) => t.set("panel", p.name.clone(), "rule"),
+        (None, None) => {}
+    }
+    t.set("sheet", sh.number.clone(), "plan");
+    t.set("devices", chain.len().to_string(), "computed");
+    t.set("route", ESTIMATED, "rule");
+    t.set("conductors", conductors, source);
+    t.set("conduit", "3/4\" EMT", "default");
+    t.set("homerun", homerun.map_or("not drawn", |_| "read"), if homerun.is_some() { "plan" } else { "rule" });
+    t.set("drops", drops.to_string(), "computed");
+    if no_height > 0 {
+        t.set("drops_unknown", format!("{no_height} device(s) of no known mounting height: no drop counted"), "rule");
+    }
+    if panel.is_none() {
+        t.issues.push("circuit_not_printed".into());
+        t.set(
+            "grouping",
+            format!("no circuit printed: up to {DEVICES_PER_UNNUMBERED} neighbouring devices to a circuit, to the nearest panel"),
+            "rule",
+        );
+    }
+    match &panel_at {
+        Some(p) => {
+            t.set("panel_at", p.sheet.clone(), "plan");
+            if let Some(rise) = riser {
+                t.set("panel_level", p.level.clone(), "plan");
+                t.set("riser", format!("{rise:.0} ft from {level} to {} ({DEFAULT_FLOOR_FT:.0} ft a floor)", p.level), "default");
+            }
+        }
+        None => {
+            t.issues.push("panel_not_found".into());
+            let why = match panel {
+                Some(p) => format!("panel {p} is not shown on the electrical plans: no home run counted"),
+                None => "no panel is shown on the electrical plans: no home run counted".to_string(),
+            };
+            out.unrouted.push(json!({"circuit": label, "sheet": sh.number, "level": level, "reason": why}));
+        }
+    }
+    out.circuits.push(t);
+    ft
 }
 
 /// Read every electrical plan among `sheets` of `d` (`upf` drawing units per foot): drawn
-/// conduit, homeruns and panels, and an estimated route for each circuit `devices` print.
+/// conduit, homeruns and panels, and an estimated route for each circuit `devices` print, on
+/// every level a plan's devices are on (a typical plan's on each level it shows). Devices whose
+/// circuit is not printed (lighting and power) are routed too, a few neighbours to a circuit.
 pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, devices: &[ReadDevice]) -> CondRead {
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
     let mut out = CondRead::default();
     let plans: Vec<&SheetRef> = sheets.iter().filter(|s| s.discipline.eq_ignore_ascii_case("E") && s.builds()).take(MAX_SHEETS).collect();
     let devices = &devices[..devices.len().min(MAX_DEVICES)];
     let bottom = DEFAULT_CEILING_FT + ABOVE_CEILING_FT;
-    // Every plan first (a circuit's panel can be on another plan of its level).
+    // Every plan first (a circuit's panel can be on another plan of its level, or another level).
     let mut scans: Vec<(&SheetRef, SheetScan)> = Vec::new();
     for sh in &plans {
         let sub = sheet_drawing(d, sh);
@@ -479,157 +744,91 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, devices: &
         scans.push((sh, scan(&sub, upf, &wanted)));
     }
     for (sh, sc) in &scans {
-        let level = level_name(&sh.level);
-        let mut read = CondSheet { sheet: sh.number.clone(), level: level.clone(), ..CondSheet::default() };
+        let primary = level_name(&sh.level);
+        let levels = sheet_levels(sh);
+        let mut read = CondSheet { sheet: sh.number.clone(), level: primary.clone(), ..CondSheet::default() };
         read.panels = sc.panels.keys().cloned().collect();
         read.homeruns = sc.homeruns.len();
-        for (i, (a, b, size, boc)) in sc.conduits.iter().enumerate() {
-            if out.mep.runs.len() >= MAX_RUNS {
-                break;
+        // Drawn conduit, on every level the plan shows.
+        for level in &levels {
+            for (i, (a, b, size, boc)) in sc.conduits.iter().enumerate() {
+                let mut r = run(DRAWN_SYSTEM, level, &sh.number, vec![*a, *b], *size, boc.unwrap_or(bottom));
+                r.id = format!("conduit:{}:{}#{i}", id_part(level), id_part(&sh.number));
+                r.size_source = "tag".into();
+                r.height_source = if boc.is_some() { "note".into() } else { "default".into() };
+                read.conduit_ft += add_run(&mut out, r, upf);
+                read.conduits += 1;
             }
-            let mut r = run(DRAWN_SYSTEM, &level, &sh.number, vec![*a, *b], *size, boc.unwrap_or(bottom));
-            r.id = format!("conduit:{}:{}#{i}", id_part(&level), id_part(&sh.number));
-            r.size_source = "tag".into();
-            r.height_source = if boc.is_some() { "note".into() } else { "default".into() };
-            read.conduit_ft += dist(*a, *b) / upf;
-            read.conduits += 1;
-            out.mep.runs.push(r);
         }
-        // This sheet's devices by circuit: the one the devices stage read, else the circuit
-        // lettered beside the device (within six letter heights).
-        let mut by_circuit: BTreeMap<(String, String), (String, Vec<&ReadDevice>)> = BTreeMap::new();
+        // This sheet's devices by level, then by circuit: the one the devices stage read, else
+        // the circuit lettered beside the device (within six letter heights).
+        let mut by_level: BTreeMap<String, Vec<&ReadDevice>> = BTreeMap::new();
         for dv in devices.iter().filter(|dv| on_sheet(dv, sh)) {
-            let beside = || {
-                sc.marks
-                    .iter()
-                    .filter(|(_, at, h)| dist(*at, dv.at) <= 6.0 * h)
-                    .min_by(|a, b| dist(a.1, dv.at).total_cmp(&dist(b.1, dv.at)))
-                    .map(|(m, _, _)| m.trim().to_string())
-            };
-            let label = Some(dv.circuit.trim().to_string()).filter(|c| parse_circuit(c).is_some()).or_else(beside);
-            match label.as_deref().and_then(parse_circuit) {
-                Some(key) => by_circuit.entry(key).or_insert_with(|| (label.unwrap_or_default(), Vec::new())).1.push(dv),
-                None => out.no_circuit += 1,
+            by_level.entry(device_level(dv, sh)).or_default().push(dv);
+        }
+        // A typical plan whose devices were read once: the same devices on each level it shows.
+        if let Some(first) = by_level.get(&primary).cloned() {
+            for l in levels.iter().skip(1) {
+                by_level.entry(l.clone()).or_insert_with(|| first.clone());
             }
         }
-        let eps = 0.05 * upf;
-        for ((panel, ckt), (label, devs)) in &by_circuit {
-            // A circuit whose devices all sit on drawn conduit needs no estimate.
-            let on_drawn = |p: [f64; 2]| sc.conduits.iter().any(|(a, b, ..)| beside(*a, *b, p).0 <= ON_CONDUIT_FT * upf);
-            if !sc.conduits.is_empty() && devs.iter().all(|dv| on_drawn(dv.at)) {
-                continue;
-            }
-            // The panel: on this plan, else on another plan of the level the same size (the same
-            // plan placement), moved over by the sheets' corners.
-            let size = |r: &[f64; 4]| (r[2] - r[0], r[3] - r[1]);
-            let (w, h) = size(&sh.rect);
-            let panel_at = sc.panels.get(panel).map(|p| (*p, sh.number.clone())).or_else(|| {
-                scans.iter().filter(|(o, _)| o.number != sh.number && o.level.eq_ignore_ascii_case(&sh.level)).find_map(|(o, osc)| {
-                    let (ow, oh) = size(&o.rect);
-                    let same = w > 0.0 && h > 0.0 && ((ow - w) / w).abs() < 0.02 && ((oh - h) / h).abs() < 0.02;
-                    let p = osc.panels.get(panel).filter(|_| same)?;
-                    Some(([p[0] - o.rect[0] + sh.rect[0], p[1] - o.rect[1] + sh.rect[1]], o.number.clone()))
-                })
-            });
-            let homerun = sc.homeruns.iter().filter(|h| h.key == (panel.clone(), ckt.clone())).min_by(|a, b| {
-                let near = |h: &Homerun| devs.iter().map(|dv| dist(dv.at, h.origin)).fold(f64::INFINITY, f64::min);
-                near(a).total_cmp(&near(b))
-            });
-            // The chain: from the homerun's device, else the one nearest the panel, else the
-            // lowest-leftmost; then always the nearest one left.
-            let mut left: Vec<&ReadDevice> = devs.clone();
-            let start_at = homerun.map(|h| h.origin).or_else(|| panel_at.as_ref().map(|p| p.0));
-            let first = match start_at {
-                Some(p) => left.iter().enumerate().min_by(|a, b| dist(a.1.at, p).total_cmp(&dist(b.1.at, p))).map(|(i, _)| i),
-                None => left
-                    .iter()
-                    .enumerate()
-                    .min_by(|a, b| (a.1.at[1], a.1.at[0]).partial_cmp(&(b.1.at[1], b.1.at[0])).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|(i, _)| i),
-            };
-            let Some(first) = first else { continue };
-            let mut chain = vec![left.swap_remove(first)];
-            while !left.is_empty() {
-                let Some(last) = chain.last().map(|d| d.at) else { break };
-                let Some((i, _)) = left.iter().enumerate().min_by(|a, b| dist(a.1.at, last).total_cmp(&dist(b.1.at, last))) else { break };
-                chain.push(left.swap_remove(i));
-            }
-            let cid = format!("{CIRCUIT_TAG}{}:{}:{}", id_part(&level), id_part(&sh.number), id_part(label));
-            let mut legs = 0usize;
-            let mut ft = 0.0;
-            let mut push = |out: &mut CondRead, points: Vec<[f64; 2]>, id: String, top: Option<(f64, f64)>| {
-                if out.mep.runs.len() >= MAX_RUNS {
-                    return;
-                }
-                let mut r = run(CIRCUIT_SYSTEM, &level, &sh.number, points, DEFAULT_SIZE_IN, bottom);
-                if let Some((mount, top)) = top {
-                    r.bottoms_ft = vec![mount];
-                    r.top_ft = Some(top);
-                    ft += top - mount;
-                } else {
-                    ft += super::bom::run_length_ft(&r.points, upf);
-                }
-                r.id = id;
-                out.mep.runs.push(r);
-            };
-            // The home run, then device to device.
-            if let (Some((p, _)), Some(dv)) = (&panel_at, chain.first()) {
-                push(&mut out, square(dv.at, *p, eps), format!("{cid}#home"), None);
-            }
-            for w in chain.windows(2) {
-                if let [a, b] = w {
-                    legs += 1;
-                    push(&mut out, square(a.at, b.at, eps), format!("{cid}#{legs}"), None);
-                }
-            }
-            // A drop to each wall device.
-            let mut drops = 0usize;
-            let mut no_height = 0usize;
-            for (i, dv) in chain.iter().enumerate() {
-                let kind = if dv.kind.is_empty() { super::readers::device_kind(&dv.tag) } else { dv.kind.as_str() };
-                match mount_height_ft(kind) {
-                    Some(m) if m < bottom => {
-                        drops += 1;
-                        push(&mut out, vec![dv.at], format!("{cid}#d{i}"), Some((m, bottom)));
+        for (level, devs) in &by_level {
+            let cx = RouteCtx { scans: &scans, sh, sc, level, upf, bottom };
+            let mut by_circuit: BTreeMap<(String, String), (String, Vec<&ReadDevice>)> = BTreeMap::new();
+            let mut unnumbered: Vec<&ReadDevice> = Vec::new();
+            for dv in devs {
+                let beside = || {
+                    sc.marks
+                        .iter()
+                        .filter(|(_, at, h)| dist(*at, dv.at) <= 6.0 * h)
+                        .min_by(|a, b| dist(a.1, dv.at).total_cmp(&dist(b.1, dv.at)))
+                        .map(|(m, _, _)| m.trim().to_string())
+                };
+                let label = Some(dv.circuit.trim().to_string()).filter(|c| parse_circuit(c).is_some()).or_else(beside);
+                match label.as_deref().and_then(parse_circuit) {
+                    Some(key) => by_circuit.entry(key).or_insert_with(|| (label.unwrap_or_default(), Vec::new())).1.push(*dv),
+                    None => {
+                        out.no_circuit += 1;
+                        let kind = if dv.kind.is_empty() { super::readers::device_kind(&dv.tag) } else { dv.kind.as_str() };
+                        if on_branch_circuit(kind) {
+                            unnumbered.push(*dv);
+                        }
                     }
-                    Some(_) => {}
-                    None => no_height += 1,
                 }
             }
-            let (conductors, source) =
-                homerun.and_then(|h| h.conductors.clone()).map_or_else(|| (DEFAULT_CONDUCTORS.to_string(), "default"), |(c, s)| (c, s));
-            let mut t = ElementTag {
-                id: cid.clone(),
-                kind: "circuit".into(),
-                level: level.clone(),
-                at_ft: [chain[0].at[0] / upf, chain[0].at[1] / upf],
-                ..ElementTag::default()
-            };
-            t.set("circuit", label.clone(), "plan");
-            t.set("panel", panel.clone(), "plan");
-            t.set("sheet", sh.number.clone(), "plan");
-            t.set("devices", chain.len().to_string(), "computed");
-            t.set("route", ESTIMATED, "rule");
-            t.set("conductors", conductors, source);
-            t.set("conduit", "3/4\" EMT", "default");
-            t.set("homerun", homerun.map_or("not drawn", |_| "read"), if homerun.is_some() { "plan" } else { "rule" });
-            t.set("drops", drops.to_string(), "computed");
-            if no_height > 0 {
-                t.set("drops_unknown", format!("{no_height} device(s) of no known mounting height: no drop counted"), "rule");
-            }
-            match &panel_at {
-                Some((_, on)) => t.set("panel_at", on.clone(), "plan"),
-                None => {
-                    t.issues.push("panel_not_found".into());
-                    out.unrouted.push(json!({
-                        "circuit": label, "sheet": sh.number, "level": level,
-                        "reason": format!("panel {panel} is not shown on the level's electrical plans: no home run counted"),
-                    }));
+            for ((panel, ckt), (label, devs)) in &by_circuit {
+                // A circuit whose devices all sit on drawn conduit needs no estimate.
+                let on_drawn = |p: [f64; 2]| sc.conduits.iter().any(|(a, b, ..)| beside(*a, *b, p).0 <= ON_CONDUIT_FT * upf);
+                if !sc.conduits.is_empty() && devs.iter().all(|dv| on_drawn(dv.at)) {
+                    continue;
                 }
+                let homerun = sc.homeruns.iter().filter(|h| h.key == (panel.clone(), ckt.clone())).min_by(|a, b| {
+                    let near = |h: &Homerun| devs.iter().map(|dv| dist(dv.at, h.origin)).fold(f64::INFINITY, f64::min);
+                    near(a).total_cmp(&near(b))
+                });
+                read.estimated_ft += route_circuit(&mut out, &cx, Some(panel), label, devs, homerun);
+                read.circuits += 1;
             }
-            out.circuits.push(t);
-            read.circuits += 1;
-            read.estimated_ft += ft;
+            // Devices with no circuit printed: neighbours chained, a few to a circuit.
+            let mut chain: Vec<&ReadDevice> = Vec::with_capacity(unnumbered.len());
+            if let Some(i) = unnumbered
+                .iter()
+                .enumerate()
+                .min_by(|a, b| (a.1.at[1], a.1.at[0]).partial_cmp(&(b.1.at[1], b.1.at[0])).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(i, _)| i)
+            {
+                chain.push(unnumbered.swap_remove(i));
+            }
+            while !unnumbered.is_empty() {
+                let Some(last) = chain.last().map(|d| d.at) else { break };
+                let Some((i, _)) = unnumbered.iter().enumerate().min_by(|a, b| dist(a.1.at, last).total_cmp(&dist(b.1.at, last))) else { break };
+                chain.push(unnumbered.swap_remove(i));
+            }
+            for (n, group) in chain.chunks(DEVICES_PER_UNNUMBERED).enumerate() {
+                let label = format!("{UNNUMBERED} {}", n + 1);
+                read.estimated_ft += route_circuit(&mut out, &cx, None, &label, group, None);
+                read.circuits += 1;
+            }
         }
         out.sheets.push(read);
     }
@@ -644,7 +843,8 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, devices: &
 }
 
 /// Put the estimated routes at their level's ceiling (just above it), now the spec has its
-/// levels: the legs at that height, each drop up to it. Drawn conduit keeps its own.
+/// levels: the legs at that height, each drop up to it, each riser from it as far as it went.
+/// Drawn conduit keeps its own.
 pub(crate) fn seat_heights(sp: &mut BuildingSpec) {
     let ceilings: BTreeMap<String, f64> = sp
         .levels
@@ -655,6 +855,11 @@ pub(crate) fn seat_heights(sp: &mut BuildingSpec) {
     for r in sp.mep.runs.iter_mut().filter(|r| r.system == CIRCUIT_SYSTEM) {
         let Some(&h) = ceilings.get(&r.level.to_ascii_lowercase()) else { continue };
         match r.top_ft {
+            Some(top) if r.id.ends_with(RISER_SUFFIX) => {
+                let rise = top - r.bottoms_ft.first().copied().unwrap_or(top);
+                r.bottoms_ft = vec![h];
+                r.top_ft = Some(h + rise.max(0.0));
+            }
             Some(_) => {
                 let mount = r.bottoms_ft.first().copied().unwrap_or(0.0);
                 r.top_ft = Some(h.max(mount));
@@ -778,6 +983,15 @@ mod tests {
         assert_eq!((s0.conduits, s0.homeruns, s0.panels.clone()), (1, 2, vec!["LA".to_string()]), "{s0:?}");
         assert!((s0.conduit_ft - 50.0).abs() < 1e-6, "{s0:?}");
         assert_eq!(r.no_circuit, 1);
+        // The device with no circuit printed is routed on an unnumbered circuit, to the
+        // nearest panel, and says so.
+        let u = r.circuits.iter().find(|t| t.fields["circuit"].value == format!("{UNNUMBERED} 1")).expect("unnumbered");
+        assert_eq!(
+            (u.fields["circuit"].source.as_str(), u.fields["panel"].value.as_str(), u.fields["panel"].source.as_str()),
+            ("rule", "LA", "rule")
+        );
+        assert_eq!(u.issues, vec!["circuit_not_printed".to_string()]);
+        assert!(r.mep.runs.iter().any(|x| x.id == format!("{}#home", u.id)), "its home run");
         // The drawn conduit: 3/4" from its tag.
         let drawn: Vec<&MepRun> = r.mep.runs.iter().filter(|x| x.system == DRAWN_SYSTEM).collect();
         assert_eq!(drawn.len(), 1);
@@ -813,7 +1027,10 @@ mod tests {
         assert_eq!((c5.fields["conductors"].value.as_str(), c5.fields["conductors"].source.as_str()), ("3#12 + 1#12G", "rule"));
         assert_eq!(c5.at_ft, [125.0, 100.0 / 12.0], "it starts at the homerun's device");
         // The sheet number by a stroke is no homerun.
-        assert_eq!(r.circuits.len(), 3);
+        assert_eq!(r.circuits.len(), 4);
+        assert_eq!(r.levels_with_conduit(), 1);
+        let total: f64 = r.by_level.values().sum();
+        assert!((total - r.drawn_ft() - r.estimated_ft()).abs() < 1e-6, "{:?}", r.by_level);
     }
 
     #[test]
@@ -851,5 +1068,143 @@ mod tests {
         let leg = sp.mep.runs.iter().find(|x| x.top_ft.is_none()).expect("leg");
         assert_eq!(leg.bottoms_ft, vec![9.25]);
         assert!(sp.mep.runs.iter().filter(|x| x.top_ft.is_some()).all(|x| x.top_ft == Some(9.25) && x.bottoms_ft == vec![4.0]));
+    }
+
+    fn on_level(mut d: ReadDevice, level: &str) -> ReadDevice {
+        d.level = level.into();
+        d
+    }
+
+    fn panel_box(s: &mut Session, at: [f64; 2], name: &str) {
+        let [x, y] = at;
+        s.execute("pline", &json!({"points": [[x - 12.0, y - 6.0], [x + 12.0, y - 6.0], [x + 12.0, y + 6.0], [x - 12.0, y + 6.0]], "closed": true}))
+            .expect("box");
+        text(s, [x - 30.0, y + 10.0], &format!("PANEL {name}"), 6.0);
+    }
+
+    /// Q6036: a typical plan's circuits are on every level it shows (its devices read once per
+    /// level, or only once), and a sheet split into one view per level routes each view's
+    /// devices on its own level; the conduit is counted level by level.
+    #[test]
+    fn a_typical_plan_and_a_split_sheet_put_circuits_on_every_level() {
+        let mut s = Session::new();
+        panel_box(&mut s, [100.0, 100.0], "LA");
+        text(&mut s, [1900.0, 900.0], "NOTES", 6.0);
+        // E-5: two views, Level 5 on the left, Level 6 on the right, a panel in each.
+        panel_box(&mut s, [3100.0, 100.0], "LB");
+        panel_box(&mut s, [4100.0, 100.0], "LB");
+        line(&mut s, [3050.0, 900.0], [3950.0, 900.0]);
+        line(&mut s, [4050.0, 900.0], [4950.0, 900.0]);
+        let d = s.doc().expect("doc").clone();
+        let typical = SheetRef { levels: vec!["2".into(), "3".into(), "4".into()], ..sheet("E-2", "2", 0.0) };
+        let mut v5 = SheetRef { number: "E-5/5".into(), view: Some([3000.0, 0.0, 4000.0, 1000.0]), ..sheet("E-5", "5", 3000.0) };
+        v5.rect = [3000.0, 0.0, 5000.0, 1000.0];
+        let v6 = SheetRef { number: "E-5/6".into(), level: "6".into(), view: Some([4000.0, 0.0, 5000.0, 1000.0]), ..v5.clone() };
+        // The devices stage read the typical plan's devices for Levels 2 and 3, not 4; the
+        // split sheet's devices carry the sheet's own number.
+        let mut devices = Vec::new();
+        for l in ["2", "3"] {
+            devices.push(on_level(dev("R", 600.0, 100.0, "LA-1", "E-2"), l));
+            devices.push(on_level(dev("R", 900.0, 400.0, "LA-1", "E-2"), l));
+        }
+        devices.push(on_level(dev("R", 3500.0, 300.0, "LB-2", "E-5"), "5"));
+        devices.push(on_level(dev("R", 3700.0, 300.0, "LB-2", "E-5"), "5"));
+        devices.push(on_level(dev("R", 4500.0, 300.0, "LB-4", "E-5"), "6"));
+        let r = read_sheets(&d, &[typical, v5, v6], 12.0, &devices);
+        let mut levels: Vec<&str> = r.circuits.iter().map(|t| t.level.as_str()).collect();
+        levels.sort_unstable();
+        assert_eq!(levels, ["Level 2", "Level 3", "Level 4", "Level 5", "Level 6"], "{:#?}", r.circuits);
+        assert_eq!(r.levels_with_conduit(), 5, "{:?}", r.by_level);
+        assert!(r.by_level.values().all(|ft| *ft > 0.0), "{:?}", r.by_level);
+        // Each level's circuit is its own (its id names the level) and goes to its own panel.
+        let ids: std::collections::BTreeSet<&str> = r.circuits.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids.len(), 5);
+        assert!(r.unrouted.is_empty(), "{:?}", r.unrouted);
+        assert!(r.mep.runs.iter().all(|x| !x.id.ends_with(RISER_SUFFIX)), "every panel is on its level");
+        let six = r.circuits.iter().find(|t| t.level == "Level 6").expect("Level 6");
+        assert_eq!((six.fields["circuit"].value.as_str(), six.fields["panel_at"].value.as_str()), ("LB-4", "E-5/6"));
+        let home = r.mep.runs.iter().find(|x| x.id == format!("{}#home", six.id)).expect("home");
+        assert_eq!(home.points.last(), Some(&[4100.0, 100.0]), "the panel in its own view");
+        // Levels 2–4 alike: the same plan, the same feet.
+        let ft = |l: &str| r.by_level.get(l).copied().unwrap_or(0.0);
+        assert!((ft("Level 2") - ft("Level 4")).abs() < 1e-6 && (ft("Level 3") - ft("Level 4")).abs() < 1e-6, "{:?}", r.by_level);
+    }
+
+    /// Q6036 MUST 2: a circuit whose panel is on another level's plan gets its home run to the
+    /// panel's place and a riser to it (estimated: 10' a floor until the spec has its levels;
+    /// then from the ceiling, as long).
+    #[test]
+    fn a_home_run_to_a_panel_on_another_level_goes_by_a_riser() {
+        let mut s = Session::new();
+        panel_box(&mut s, [100.0, 100.0], "LA");
+        line(&mut s, [0.0, 900.0], [1900.0, 900.0]);
+        line(&mut s, [2000.0, 900.0], [3900.0, 900.0]);
+        let d = s.doc().expect("doc").clone();
+        let devices = [dev("R", 2600.0, 400.0, "LA-7", "E-3"), dev("R", 2900.0, 400.0, "LA-7", "E-3")];
+        let r = read_sheets(
+            &d,
+            &[sheet("E-1", "1", 0.0), sheet("E-3", "3", 2000.0)],
+            12.0,
+            &[on_level(devices[0].clone(), "3"), on_level(devices[1].clone(), "3")],
+        );
+        assert_eq!(r.circuits.len(), 1, "{:#?}", r.circuits);
+        let t = &r.circuits[0];
+        assert_eq!((t.level.as_str(), t.fields["panel_at"].value.as_str(), t.fields["panel_level"].value.as_str()), ("Level 3", "E-1", "Level 1"));
+        assert!(t.fields["riser"].value.contains("20 ft"), "{:?}", t.fields["riser"]);
+        assert!(r.unrouted.is_empty());
+        // The home run goes to where the panel is (moved over from E-1 by the sheets' corners).
+        let home = r.mep.runs.iter().find(|x| x.id == format!("{}#home", t.id)).expect("home");
+        assert_eq!((home.level.as_str(), home.points.last()), ("Level 3", Some(&[2100.0, 100.0])));
+        let riser = r.mep.runs.iter().find(|x| x.id == format!("{}{RISER_SUFFIX}", t.id)).expect("riser");
+        assert_eq!((riser.level.as_str(), riser.points.clone()), ("Level 1", vec![[2100.0, 100.0]]), "it starts on the lower level");
+        assert_eq!((riser.bottoms_ft.clone(), riser.top_ft), (vec![8.25], Some(28.25)));
+        assert!(r.by_level.get("Level 1").is_some_and(|ft| (*ft - 20.0).abs() < 1e-6), "{:?}", r.by_level);
+        // In the spec it starts at Level 1's ceiling and is as long.
+        let level = |name: &str, el: f64| cadaddy_walk3d::Level {
+            name: name.into(),
+            elevation_ft: el,
+            height_ft: 12.0,
+            ceiling_ft: 9.0,
+            region: None,
+            base: None,
+            attr: None,
+            sheet: None,
+        };
+        let mut sp = BuildingSpec { levels: vec![level("Level 1", 0.0), level("Level 3", 24.0)], ..BuildingSpec::default() };
+        super::super::printmep::merge_mep(&mut sp, r.mep.clone(), &["E-3".into()]);
+        seat_heights(&mut sp);
+        let riser = sp.mep.runs.iter().find(|x| x.id.ends_with(RISER_SUFFIX)).expect("riser");
+        assert_eq!((riser.bottoms_ft.clone(), riser.top_ft), (vec![9.25], Some(29.25)));
+    }
+
+    /// Q6036 MUST 1: lighting and power devices with no circuit printed still get conduit, a few
+    /// neighbours to an unnumbered circuit to the nearest panel; fire alarm and low voltage
+    /// devices are their own systems and get none.
+    #[test]
+    fn devices_with_no_circuit_printed_are_routed_a_few_to_a_circuit() {
+        let mut s = Session::new();
+        panel_box(&mut s, [100.0, 100.0], "LC");
+        line(&mut s, [0.0, 900.0], [1900.0, 900.0]);
+        let d = s.doc().expect("doc").clone();
+        let mut devices: Vec<ReadDevice> = (0..20).map(|i| dev("R", 200.0 + 60.0 * f64::from(i), 500.0, "", "E-4")).collect();
+        devices.push(dev("SD", 900.0, 800.0, "", "E-4"));
+        devices.push(dev("FA", 950.0, 800.0, "", "E-4"));
+        devices.push(dev("WAP", 1000.0, 800.0, "", "E-4"));
+        let r = read_sheets(&d, &[sheet("E-4", "1", 0.0)], 12.0, &devices);
+        assert_eq!(r.no_circuit, 23, "{:?}", r.warnings);
+        let counts: Vec<String> = r.circuits.iter().map(|t| t.fields["devices"].value.clone()).collect();
+        assert_eq!(counts, ["8", "8", "5"], "21 branch devices (the switch too), 8 to a circuit");
+        assert!(r.circuits.iter().all(|t| t.fields["panel"].value == "LC" && t.issues == vec!["circuit_not_printed".to_string()]));
+        assert!(r.circuits.iter().all(|t| t.fields["route"].value == ESTIMATED));
+        assert!(r.unrouted.is_empty());
+        assert_eq!(r.levels_with_conduit(), 1);
+        // Hostile: no panel anywhere, devices of no sheet outside every plan: nothing panics,
+        // the circuit is listed unrouted.
+        let bare = Session::new();
+        let far = vec![dev("R", 1.0e300, -1.0e300, "", ""), dev("R", f64::NAN, 3.0, "Q-1", "")];
+        let r = read_sheets(bare.doc().expect("doc"), &[sheet("E-9", "1", 0.0)], 12.0, &far);
+        assert!(r.circuits.is_empty());
+        let r = read_sheets(&d, &[sheet("E-4", "R", 0.0)], 12.0, &[dev("R", 300.0, 300.0, "Z-1", "E-4")]);
+        assert_eq!(r.unrouted.len(), 1, "{:?}", r.unrouted);
     }
 }

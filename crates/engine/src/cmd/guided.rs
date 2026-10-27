@@ -3109,8 +3109,8 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if !cond.unrouted.is_empty() {
         job.add_finding(
             StageName::MepRead,
-            &format!("{} circuit(s) have no panel on their level's electrical plans", cond.unrouted.len()),
-            "their home runs to the panel are not counted: the panel's tag (PANEL LA, or its name by its box) was not found on the level's plans",
+            &format!("{} circuit(s) have no panel on the electrical plans", cond.unrouted.len()),
+            "their home runs to the panel are not counted: the panel's tag (PANEL LA, or its name by its box) was not found on any electrical plan",
             2,
             vec!["Check the panel tags on the electrical plans".into()],
             None,
@@ -3121,7 +3121,7 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         job.add_finding(
             StageName::MepRead,
             &format!("{} device(s) on the electrical plans have no circuit printed beside them", cond.no_circuit),
-            "no conduit or wire is estimated for a device whose circuit is not known",
+            "lighting and power devices with no circuit are routed a few neighbours to an unnumbered circuit (estimated, marked circuit_not_printed); the others get no conduit",
             1,
             vec!["Check the circuit numbers beside the devices".into()],
             None,
@@ -3142,9 +3142,10 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     );
     if !cond.sheets.is_empty() {
         trade_summary.push_str(&format!(
-            "; {} circuit(s) on {} electrical plan(s): {:.0} ft of conduit ({:.0} ft drawn, {:.0} ft {})",
+            "; {} circuit(s) on {} electrical plan(s), conduit on {} level(s): {:.0} ft of conduit ({:.0} ft drawn, {:.0} ft {})",
             cond.circuits.len(),
             cond.sheets.len(),
+            cond.levels_with_conduit(),
             cond.drawn_ft() + cond.estimated_ft(),
             cond.drawn_ft(),
             cond.estimated_ft(),
@@ -3902,8 +3903,11 @@ fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         .ok()
         .and_then(|t| t.get("lines").and_then(Value::as_array).cloned())
         .unwrap_or_default();
-    let (circuits, conduit_ft, wire_ft) = circuit_summary(&by_circuit);
+    let (circuits, conduit_ft, wire_ft, conduit_levels) = circuit_summary(&by_circuit);
     result["summary"]["conduit_ft"] = json!(super::printmep::r1(conduit_ft));
+    result["summary"]["levels_with_conduit"] = json!(conduit_levels.values().filter(|ft| **ft > 0.0).count());
+    result["summary"]["conduit_by_level"] =
+        json!(conduit_levels.iter().map(|(l, ft)| json!({"level": l, "conduit_ft": super::printmep::r1(*ft)})).collect::<Vec<_>>());
     result["summary"]["wire_ft"] = json!(super::printmep::r1(wire_ft));
     result["circuits"] = json!(circuits);
     if !job.circuits.is_empty() && conduit_ft <= 0.0 {
@@ -3937,14 +3941,19 @@ fn run_takeoff(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 }
 
 /// The takeoff's electrical lines (grouped by circuit) per level and circuit: conduit feet,
-/// wire feet by size, boxes and fittings; and the conduit and wire totals (every line's).
-fn circuit_summary(lines: &[Value]) -> (Vec<Value>, f64, f64) {
+/// wire feet by size, boxes and fittings; the conduit and wire totals (every line's); and the
+/// conduit feet on each level.
+fn circuit_summary(lines: &[Value]) -> (Vec<Value>, f64, f64, BTreeMap<String, f64>) {
     let mut by: BTreeMap<(String, String), Value> = BTreeMap::new();
+    let mut levels: BTreeMap<String, f64> = BTreeMap::new();
     let (mut conduit, mut wire) = (0.0, 0.0);
     for l in lines {
         let (cat, qty) = (l["category"].as_str().unwrap_or_default(), l["qty"].as_f64().unwrap_or(0.0));
         match cat {
-            "conduit" => conduit += qty,
+            "conduit" => {
+                conduit += qty;
+                *levels.entry(l["level"].as_str().unwrap_or_default().to_string()).or_default() += qty;
+            }
             "wire" => wire += qty,
             _ => {}
         }
@@ -3966,7 +3975,7 @@ fn circuit_summary(lines: &[Value]) -> (Vec<Value>, f64, f64) {
             _ => {}
         }
     }
-    (by.into_values().collect(), conduit, wire)
+    (by.into_values().collect(), conduit, wire, levels)
 }
 
 /// Run estimate stage.
@@ -6174,6 +6183,64 @@ mod tests {
         assert!((d9["conduit_ft"].as_f64().unwrap_or(0.0) - 1400.0 / 12.0).abs() < 0.1, "{d9:#}");
         assert!(d9["wire_ft"]["#12"].as_f64().unwrap_or(0.0) > 0.0 && d9["boxes"] == json!(2.0), "{d9:#}");
         assert!((t["summary"]["conduit_ft"].as_f64().unwrap_or(0.0) - 2500.0 / 12.0).abs() < 0.1, "{:#}", t["summary"]);
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
+    }
+
+    /// Q6036: a typical electrical plan (Levels 1–4) gives each of its levels its circuits, and
+    /// the takeoff reports the conduit level by level (round 6 had it all on Level 1).
+    #[test]
+    fn a_typical_electrical_plan_puts_conduit_on_every_level_it_shows() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets =
+            Some(json!({"sheets": [{"number": "E-1", "sheet_type": "plan", "level": "1", "discipline": "E", "levels": ["1", "2", "3", "4"]}]}));
+        job.sheets_loaded = true;
+        let mut texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIGHTING FIXTURE SCHEDULE", 1400.0, 800.0, 8.0),
+            ("TYPE", 1400.0, 785.0, 5.0),
+            ("DESCRIPTION", 1430.0, 785.0, 5.0),
+            ("A", 1400.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1430.0, 772.0, 5.0),
+            ("D", 996.0, 110.0, 6.0),
+        ];
+        let mut syms: Vec<(&str, f64, f64)> = vec![("A", 1390.0, 772.0)];
+        for x in [100.0, 300.0, 500.0] {
+            syms.push(("A", x, 300.0));
+            texts.push(("D-7", x + 8.0, 296.0, 2.0));
+        }
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &syms);
+        s.execute("pline", &json!({"points": [[988, 94], [1012, 94], [1012, 106], [988, 106]], "closed": true})).unwrap_or_else(|e| panic!("{e}"));
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-1".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: vec!["1".into(), "2".into(), "3".into(), "4".into()],
+            view: None,
+        });
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let m = run_mep_read_stage(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let c = &m["conduit"];
+        assert_eq!(c["levels_with_conduit"], json!(4), "{c:#}");
+        let mut d7: Vec<&str> = job.circuits.iter().filter(|t| t.fields["circuit"].value == "D-7").map(|t| t.level.as_str()).collect();
+        d7.sort_unstable();
+        assert_eq!(d7, ["Level 1", "Level 2", "Level 3", "Level 4"], "circuit D-7 on each level: {c:#}");
+        assert!(m["trade_summary"].as_str().unwrap_or_default().contains("conduit on 4 level(s)"), "{m:#}");
+        run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let t = run_takeoff(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(t["summary"]["levels_with_conduit"], json!(4), "{:#}", t["summary"]);
+        let by: Vec<&Value> = t["summary"]["conduit_by_level"].as_array().into_iter().flatten().collect();
+        assert_eq!(by.len(), 4, "{by:?}");
+        // The same plan on each level: the same conduit (700 units of chain + home run each).
+        assert!(by.iter().all(|l| (l["conduit_ft"].as_f64().unwrap_or(0.0) - by[0]["conduit_ft"].as_f64().unwrap_or(-1.0)).abs() < 0.1), "{by:?}");
+        assert!(by[0]["conduit_ft"].as_f64().unwrap_or(0.0) > 0.0);
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
     }
 
