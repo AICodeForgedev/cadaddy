@@ -355,8 +355,8 @@ fn estimate_prices_the_takeoff_and_gives_a_change_order() {
     assert!(ducts.iter().all(|l| l["matched_by"] == "item"));
     let inline = s.execute("bim.estimate", &json!({"rows": [{"item": "EMT conduit", "unit": "ft", "material": 1.1, "labor_hrs": 0.05}]})).unwrap();
     assert_eq!(inline["labor_rate"], 75.0, "the default rate");
-    // Bad tables and revisions are errors.
-    assert!(s.execute("bim.estimate", &json!({})).is_err());
+    // Bad tables and revisions are errors; empty params fall back to the starter book (Q6034).
+    assert!(s.execute("bim.estimate", &json!({})).is_ok());
     assert!(s.execute("bim.estimate", &json!({"csv": "price,qty\n1,2\n"})).is_err());
     assert!(s.execute("bim.estimate", &json!({"rows": [{"item": "X"}], "compare_to": "nope"})).is_err());
     // Q5294 MUST 2: warnings for missing inputs (the default rate is reported).
@@ -416,6 +416,52 @@ fn bim_estimate_and_estimate_status_give_the_same_totals() {
         est["totals"]["direct"].as_f64().unwrap_or_else(|| est["totals"]["material"].as_f64().unwrap() + est["totals"]["labor"].as_f64().unwrap());
     let margin = bim_total.max(est_total) * 0.05;
     assert!((bim_total - est_total).abs() < margin, "aggregate totals too far apart: bim {bim_total} vs est {est_total} (margin {margin})");
+}
+
+/// Q6034: `bim.estimate {}` (no cost table) uses the starter cost book.
+#[test]
+fn bim_estimate_without_cost_table_uses_starter_book() {
+    let mut s = building();
+    let r = s.execute("bim.estimate", &json!({})).unwrap();
+    let total = r["total"].as_f64().unwrap();
+    assert!(total > 0.0, "starter cost book should price something: {r}");
+    let lines = r["lines"].as_array().unwrap();
+    let starter_count = lines.iter().filter(|l| l["via"].as_str().is_some_and(|v| v.contains("starter cost book"))).count();
+    assert!(starter_count > 0, "at least one line should come from the starter cost book: {r}");
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w["kind"] == "starter_cost_book"), "should warn about starter usage: {r}");
+}
+
+/// Q6034: `wholejob.estimate` prices lines from the starter cost book when no user prices exist.
+#[test]
+fn wholejob_estimate_uses_starter_cost_book_fallback() {
+    let mut s = building();
+    let r = s.execute("wholejob.estimate", &json!({})).unwrap();
+    let total = r["total"].as_f64().unwrap();
+    assert!(total > 0.0, "wholejob.estimate should produce a non-zero total from starter book: {r}");
+    let starter = r["starter_priced_lines"].as_u64().unwrap();
+    assert!(starter > 0, "wholejob.estimate should use the starter cost book: {r}");
+    let trades = r["trades"].as_array().unwrap();
+    let has_via = trades.iter().any(|t| {
+        t["priced"].as_array().unwrap_or(&vec![]).iter().any(|l| l["via"].as_str().is_some_and(|v| v.contains("starter cost book")))
+    });
+    assert!(has_via, "priced lines should carry via='starter cost book': {r}");
+}
+
+/// Q6034 MUST 3: all estimate routes produce a non-zero total from the starter cost book.
+#[test]
+fn all_estimate_routes_price_from_starter_without_user_table() {
+    let mut s = building();
+    let bim = s.execute("bim.estimate", &json!({})).unwrap();
+    assert!(bim["total"].as_f64().unwrap() > 0.0, "bim.estimate: {bim}");
+    let wj = s.execute("wholejob.estimate", &json!({})).unwrap();
+    assert!(wj["total"].as_f64().unwrap() > 0.0, "wholejob.estimate: {wj}");
+    // estimate.status also prices from the starter book (existing bim.estimate stores prices).
+    for trade in ["electrical", "mechanical", "plumbing", "general", "drywall", "job"] {
+        let _ = s.execute("estimate.set_scope", &json!({"trade": trade, "scope": "in_contract", "reason": "all ours"}));
+    }
+    let est = s.execute("estimate.status", &json!({})).unwrap();
+    let est_total = est["totals"]["total"].as_f64().unwrap_or(0.0);
+    assert!(est_total > 0.0, "estimate.status: {est}");
 }
 
 #[test]
