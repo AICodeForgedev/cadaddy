@@ -61,6 +61,8 @@ fn each_reviewer_gets_a_layer() {
     std::fs::write(&p, cadaddy_io::pdf_markups::annotated_pdf(1224.0, 792.0, &markups).unwrap()).unwrap();
     let mut s = Session::new();
     s.execute("layout", &json!({ "option": "set", "name": "Layout1" })).unwrap();
+    // Match the layout paper to the PDF (17×11 in = 279.4×431.8 mm, landscape).
+    s.execute("pagesetup", &json!({ "layout": "Layout1", "width": 279.4, "height": 431.8, "landscape": true })).unwrap();
     // Single-page: pass page explicitly to use the single-page path.
     let r = s.execute("redline.import", &json!({ "path": p.to_string_lossy(), "page": 1 })).unwrap();
     let placed = r["placed"].as_array().unwrap();
