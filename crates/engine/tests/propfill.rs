@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use cadaddy_engine::Session;
 use cadaddy_engine::cmd::propfill::{
-    airflow_number, cfm_in, device_class, device_type_of, door_number, level_key, mount_height_in, panel_of, terminal_type_tag,
+    airflow_number, cfm_in, device_class, device_type_of, door_number, level_key, mount_height_in, panel_of, room_number_in, terminal_type_tag,
 };
 use cadaddy_engine::cmd::wallgen::made_as;
 use cadaddy_engine::doc::{Attrib, AttribModes, AttribProps, Block, Drawing, Entity, EntityKind, Handle, Insert, Line, RawTag};
@@ -542,6 +542,8 @@ fn probe_full_hotel_summary() {
         *by_type.entry(format!("{} ({})", t["fields"]["device_type"]["value"], t["fields"]["device_type"]["source"])).or_default() += 1;
     }
     eprintln!("devices by type: {by_type:?}");
+    let build = s.execute("job.explain", &json!({"stage": "bim_build"})).expect("explain")["result"].clone();
+    eprintln!("fill diagnostics: {}", build["props"]["diagnostics"]);
     let sum = s.execute("bim.props.summary", &json!({})).expect("summary");
     for k in ["device", "door", "room", "wall", "fixture", "equipment", "duct", "pipe"] {
         eprintln!("{k}: count {} filled {}", sum["kinds"][k]["count"], sum["kinds"][k]["filled"]);
@@ -799,4 +801,157 @@ fn a_terminal_tag_held_in_a_symbol_gives_its_airflow_from_the_schedule() {
     bare.doc_mut().expect("doc").remove_entity(cfm.expect("the printed airflow"));
     fill(&mut bare);
     assert!(find(&mut bare, "fixture", json!({"cfm": "exists"})).is_empty());
+}
+
+// ─── Round 4: rooms numbered from the job's rooms reading ───────────────────
+
+/// Office 101's room element with its tag's number taken off, and the printed `101` gone.
+fn office_without_its_number(s: &mut Session) -> Handle {
+    let (room, printed) = {
+        let d = s.doc().expect("doc");
+        let room = d
+            .model
+            .iter()
+            .filter(|e| made_as(e).as_deref() == Some("room"))
+            .find(|e| e.common.xdata.iter().any(|t| t.value == "number:101"))
+            .map(|e| e.handle)
+            .expect("office 101's room element");
+        let printed: Vec<Handle> =
+            d.model.iter().filter(|e| matches!(&e.kind, EntityKind::Text(t) if t.value.trim() == "101")).map(|e| e.handle).collect();
+        (room, printed)
+    };
+    assert_eq!(printed.len(), 1, "one printed 101");
+    let d = s.doc_mut().expect("doc");
+    d.modify_entity(room, |e| e.common.xdata = e.common.xdata.iter().filter(|t| !t.value.starts_with("number:")).cloned().collect::<Vec<_>>().into())
+        .expect("untag");
+    for h in printed {
+        d.remove_entity(h);
+    }
+    room
+}
+
+#[test]
+fn room_numbers_in_a_one_line_tag() {
+    assert_eq!(room_number_in("101").as_deref(), Some("101"));
+    assert_eq!(room_number_in(" 101A ").as_deref(), Some("101A"));
+    assert_eq!(room_number_in("OFFICE 101").as_deref(), Some("101"));
+    assert_eq!(room_number_in("101 STORAGE").as_deref(), Some("101"));
+    assert_eq!(room_number_in("ROOMS 101 TO 103"), None, "two numbers name no one room");
+    assert_eq!(room_number_in("OFFICE"), None);
+    assert_eq!(room_number_in("LEVEL 2"), None, "one digit is no room number");
+    assert_eq!(room_number_in("12 34"), None, "no name word");
+    assert_eq!(room_number_in("1/2 HR RATED"), None);
+}
+
+#[test]
+fn a_room_tagged_name_and_number_on_one_line_takes_its_number() {
+    // Q6002 round 4: a print that sets a room's name and number on one line ("OFFICE 101") gave
+    // no number: only a text that is a number alone counted.
+    let mut s = plan();
+    let room = office_without_its_number(&mut s);
+    text(&mut s, "A-ANNO", [60.0, 30.0], "OFFICE 101");
+    let r = fill(&mut s);
+    assert_eq!(r["diagnostics"]["rooms_numbered_from_text"], json!(1), "{r:#}");
+    let p = get(&mut s, &room.hex());
+    assert_eq!(p["number"]["value"], "101", "{p:#}");
+    assert_eq!(p["number"]["source"]["kind"], "print");
+    assert_eq!(device_of(&mut s, "A")["room"]["value"], "101");
+}
+
+#[test]
+fn a_room_with_no_number_printed_inside_takes_the_number_the_rooms_reading_gave() {
+    // Q6002 round 4: on the real set the job's rooms stage reads ~200 numbered rooms, yet the
+    // model's rooms had no number: the fill only looked for a number text inside each room. Now
+    // the job passes its reading and a room takes the number paired with the label inside it.
+    let mut s = plan();
+    let room = office_without_its_number(&mut s);
+    let r = fill(&mut s);
+    assert_eq!(r["diagnostics"]["rooms_numbered_from_text"], json!(0), "nothing printed: {r:#}");
+    assert!(get(&mut s, &room.hex())["number"].is_null(), "no number without the reading");
+    let rooms = json!([
+        // The label inside office 101 (plan coordinates), as the rooms stage read it.
+        {"number": "101", "name": "OFFICE", "level": "LEVEL 1", "sheet": "A-101", "at": [110.0, 64.0]},
+        // Read on another level: never office 101's number.
+        {"number": "201", "name": "OFFICE", "level": "LEVEL 2", "sheet": "A-102", "at": [112.0, 60.0]}
+    ]);
+    let r = s.execute("bim.props.fill", &json!({"rooms": rooms})).expect("fill");
+    assert_eq!(r["diagnostics"]["rooms_numbered_from_reading"], json!(1), "{r:#}");
+    assert_eq!(r["diagnostics"]["read_rooms"], json!(2), "{r:#}");
+    let p = get(&mut s, &room.hex());
+    assert_eq!(p["number"]["value"], "101", "{p:#}");
+    assert_eq!(p["number"]["source"]["kind"], "print");
+    assert_eq!(p["number"]["note"], "the room number the rooms reading paired with this room's label");
+    assert_eq!(device_of(&mut s, "A")["room"]["value"], "101", "the device in it gets its number");
+    let sum = s.execute("bim.props.summary", &json!({})).expect("summary");
+    assert_eq!(sum["kinds"]["room"]["filled"]["number"], json!(2), "{:#}", sum["kinds"]["room"]);
+}
+
+#[test]
+fn a_numbered_room_the_build_did_not_trace_becomes_a_room_of_the_model() {
+    // Q6002 round 4: the model's room elements come only from tags inside built walls (~69 on
+    // the real set against ~200 read). A numbered room the job read and the model lacks becomes
+    // a room of the model, and the devices in it take its number.
+    let mut s = plan();
+    let storage = {
+        let d = s.doc().expect("doc");
+        d.model
+            .iter()
+            .filter(|e| made_as(e).as_deref() == Some("room"))
+            .find(|e| e.common.xdata.iter().any(|t| t.value == "number:102"))
+            .map(|e| e.handle)
+            .expect("storage 102's room element")
+    };
+    s.doc_mut().expect("doc").remove_entity(storage);
+    s.execute("rooms.build", &json!({})).expect("rooms");
+    let r = fill(&mut s);
+    assert!(device_of(&mut s, "FA")["room"].is_null(), "no room for the device in 102 yet: {r:#}");
+    let sum = s.execute("bim.props.summary", &json!({})).expect("summary");
+    assert_eq!(sum["kinds"]["room"]["filled"]["number"], json!(1), "{:#}", sum["kinds"]["room"]);
+    let rooms = json!([
+        // Office 101 is in the model already: not added again.
+        {"number": "101", "name": "OFFICE", "level": "L1", "sheet": "A-101", "at": [110.0, 64.0],
+         "outline": [[6.0, 6.0], [234.0, 6.0], [234.0, 114.0], [6.0, 114.0]]},
+        // The sheet names the level its own way: the room is on the model's L1.
+        {"number": "102", "name": "STORAGE", "level": "LEVEL 1", "sheet": "A-101", "at": [470.0, 64.0],
+         "outline": [[366.0, 6.0], [594.0, 6.0], [594.0, 114.0], [366.0, 114.0]]},
+        // A label's box, not a room (under 16 sf): left out.
+        {"number": "103", "name": "CLOSET", "level": "L1", "sheet": "A-101", "at": [700.0, 64.0],
+         "outline": [[690.0, 60.0], [710.0, 60.0], [710.0, 70.0], [690.0, 70.0]]}
+    ]);
+    let r = s.execute("bim.props.fill", &json!({"rooms": rooms})).expect("fill");
+    assert_eq!(r["diagnostics"]["read_rooms_added"], json!(1), "{r:#}");
+    assert_eq!(device_of(&mut s, "FA")["room"]["value"], "102", "the device in 102 gets its number");
+    let added = find(&mut s, "room", json!({"number": "102"}));
+    assert_eq!(added.len(), 1, "{added:?}");
+    let p = get(&mut s, &added[0]);
+    assert_eq!(p["number"]["source"]["kind"], "print", "{p:#}");
+    assert_eq!(p["level"]["value"], "L1", "{p:#}");
+    let sum = s.execute("bim.props.summary", &json!({})).expect("summary");
+    assert_eq!(sum["kinds"]["room"]["filled"]["number"], json!(2), "{:#}", sum["kinds"]["room"]);
+    assert_eq!(sum["kinds"]["room"]["count"], json!(2), "{:#}", sum["kinds"]["room"]);
+    // Filled again: nothing added twice.
+    let r = s.execute("bim.props.fill", &json!({"rooms": rooms})).expect("fill");
+    assert_eq!(r["diagnostics"]["read_rooms_added"], json!(0), "{r:#}");
+    assert_eq!(find(&mut s, "room", json!({"number": "102"})).len(), 1);
+}
+
+#[test]
+fn the_guided_job_gives_the_fill_its_rooms_reading() {
+    // Q6002 round 4: the bim_build stage passes the rooms stage's reading (numbers, levels and
+    // outlines) to the fill; the stage's own result stays without outlines.
+    let _g = serial();
+    real_pdf_reader();
+    let mut s = run_job("reading", &["A-101"]);
+    let rooms = s.execute("job.explain", &json!({"stage": "rooms"})).expect("explain")["result"].clone();
+    let list = rooms["rooms"].as_array().cloned().unwrap_or_default();
+    assert!(!list.is_empty(), "{rooms:#}");
+    assert!(list.iter().all(|r| r.get("outline").is_none()), "no outlines in the stage's result");
+    let build = s.execute("job.explain", &json!({"stage": "bim_build"})).expect("explain")["result"].clone();
+    let diag = &build["props"]["diagnostics"];
+    let read = list.iter().filter(|r| r["from_model"] != json!(true)).count() as u64;
+    assert_eq!(diag["read_rooms"].as_u64(), Some(read), "{diag:#}");
+    assert!(diag["read_rooms_with_outline"].as_u64().unwrap_or(0) > 0, "{diag:#}");
+    assert!(diag["read_rooms_numbered"].as_u64().unwrap_or(0) > 0, "{diag:#}");
+    let sum = s.execute("bim.props.summary", &json!({})).expect("summary");
+    assert!(sum["kinds"]["room"]["filled"]["number"].as_u64().unwrap_or(0) > 0, "{:#}", sum["kinds"]["room"]);
 }

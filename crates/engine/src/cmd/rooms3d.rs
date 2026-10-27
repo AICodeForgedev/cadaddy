@@ -25,7 +25,7 @@ pub const ROOM_APP: &str = "CADADDY_ROOM";
 /// The layer room volumes go on.
 pub const ROOM_LAYER: &str = "3D-Rooms";
 /// A ceiling height when nothing says one: 9'-0" (in inches).
-const DEFAULT_CEILING_IN: f64 = 108.0;
+pub(crate) const DEFAULT_CEILING_IN: f64 = 108.0;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -510,6 +510,26 @@ fn volume_mesh(r: &Room3) -> Option<Mesh> {
     Some(Mesh { vertices, faces, kind: MeshKind::Subd })
 }
 
+/// Put `r`'s volume on the rooms layer, tagged with its name and number and carrying `props`
+/// (a person's edits kept through a rebuild, or what a reader said about it); whether it went in.
+pub(crate) fn add_volume(d: &mut cadaddy_doc::Drawing, r: &Room3, props: Option<&cadaddy_doc::props::Props>) -> bool {
+    let Some(m) = volume_mesh(r) else { return false };
+    if d.layer(ROOM_LAYER).is_none() {
+        d.layers.push(cadaddy_doc::Layer { name: ROOM_LAYER.into(), color: cadaddy_doc::color::Color::Index(151), ..cadaddy_doc::Layer::default() });
+    }
+    let tag = vec![
+        RawTag { code: 1001, value: ROOM_APP.into() },
+        RawTag { code: 1000, value: r.name.chars().take(250).collect() },
+        RawTag { code: 1000, value: r.number.clone().unwrap_or_default().chars().take(250).collect() },
+    ];
+    let tag = match props {
+        Some(p) => cadaddy_doc::props::write(&tag, p),
+        None => tag,
+    };
+    let common = Common { layer: ROOM_LAYER.into(), transparency: cadaddy_doc::Transparency::Percent(80), xdata: tag.into(), ..Common::default() };
+    d.add(&Space::Model, common, EntityKind::Mesh(m)).is_ok()
+}
+
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let old: Vec<Handle> = s.doc()?.model.iter().filter(|e| room_of(&e.common).is_some()).map(|e| e.handle).collect();
     // The properties a person set on them (bim.props.set) go on the rebuilt room of the same
@@ -537,12 +557,6 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut built = 0;
     for r in &rs {
-        let Some(m) = volume_mesh(r) else { continue };
-        let tag = vec![
-            RawTag { code: 1001, value: ROOM_APP.into() },
-            RawTag { code: 1000, value: r.name.chars().take(250).collect() },
-            RawTag { code: 1000, value: r.number.clone().unwrap_or_default().chars().take(250).collect() },
-        ];
         let number = r.number.clone().unwrap_or_default();
         let same = |(name, num, _): &&(String, String, cadaddy_doc::props::Props)| {
             if num.trim().is_empty() && number.trim().is_empty() {
@@ -551,13 +565,7 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
                 num.trim().eq_ignore_ascii_case(number.trim())
             }
         };
-        let tag = match kept.iter().find(same) {
-            Some((_, _, edits)) => cadaddy_doc::props::write(&tag, edits),
-            None => tag,
-        };
-        let common =
-            Common { layer: ROOM_LAYER.into(), transparency: cadaddy_doc::Transparency::Percent(80), xdata: tag.into(), ..Common::default() };
-        if d.add(&Space::Model, common, EntityKind::Mesh(m)).is_ok() {
+        if add_volume(d, r, kept.iter().find(same).map(|(_, _, edits)| edits)) {
             built += 1;
         }
     }

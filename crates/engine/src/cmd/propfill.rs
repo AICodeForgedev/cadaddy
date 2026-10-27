@@ -63,7 +63,7 @@ const SIDE_FT: f64 = 1.0;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(FILL, "Fill Element Properties", run_fill)
-            .params("{schedules?: [{tag, sheet?, title?, row: {column: text}}]} → {filled: {kind: {key: n}}, elements, devices, fixtures_placed}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; plumbing fixtures are placed at their scheduled tags; a person's values stay")
+            .params("{schedules?: [{tag, sheet?, title?, row: {column: text}}], rooms?: [{number?, name?, level?, sheet?, at: [x, y], outline?: [[x, y]]}]} → {filled: {kind: {key: n}}, elements, devices, fixtures_placed}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; plumbing fixtures are placed at their scheduled tags; `rooms` (the rooms a reading found on the plans, in plan coordinates) number the model's rooms and add the numbered ones it lacks; a person's values stay")
             .menu(&["Tools", "Building", "Fill Element Properties"]),
     ]
 }
@@ -668,48 +668,288 @@ fn room_shapes(d: &Drawing, rooms: &[super::rooms3d::Room3]) -> Vec<RoomShape> {
         .collect()
 }
 
-/// Give each room element whose tag has no number the room number printed inside it (on its
-/// plan: the build moved stacked levels), nearest its middle (`print`); how many got one.
-fn number_rooms(d: &mut Drawing, sp: &BuildingSpec, texts: &[(String, Vec2, f64)]) -> usize {
-    let els: Vec<super::bspec::RoomElement> = super::bspec::room_elements(d)
+/// A room the guided job's rooms stage read on a plan sheet (`rooms` parameter), in plan
+/// coordinates: the drawing as imported, before the build stacked the levels.
+pub(crate) struct ReadRoom {
+    number: Option<String>,
+    name: String,
+    level: Option<String>,
+    sheet: String,
+    at: Vec2,
+    outline: Vec<Vec2>,
+}
+
+/// Rooms read, and outline points per room, taken at most (hostile parameters).
+const MAX_READ_ROOMS: usize = 20_000;
+const MAX_READ_OUTLINE: usize = 512;
+
+fn point_of(v: &Value) -> Option<Vec2> {
+    let p = Vec2::new(v.get(0)?.as_f64()?, v.get(1)?.as_f64()?);
+    p.is_finite().then_some(p)
+}
+
+/// The `rooms` parameter: `[{number?, name?, level?, sheet?, at: [x, y], outline?: [[x, y]…]}]`.
+pub(crate) fn rooms_param(p: &Value) -> Vec<ReadRoom> {
+    let cap = |v: &str| v.trim().chars().take(props::MAX_TEXT).collect::<String>();
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(cap).filter(|t| !t.is_empty());
+    p.get("rooms")
+        .and_then(Value::as_array)
         .into_iter()
-        .filter(|r| r.number.as_deref().is_none_or(|n| n.trim().is_empty()) && r.outline.len() >= 3)
-        .collect();
+        .flatten()
+        .take(MAX_READ_ROOMS)
+        .filter_map(|v| {
+            let at = v.get("at").and_then(point_of)?;
+            let outline: Vec<Vec2> =
+                v.get("outline").and_then(Value::as_array).into_iter().flatten().take(MAX_READ_OUTLINE).filter_map(point_of).collect();
+            Some(ReadRoom {
+                number: text(v, "number").filter(|n| room_number_in(n).is_some()),
+                name: text(v, "name").unwrap_or_default(),
+                level: text(v, "level"),
+                sheet: text(v, "sheet").unwrap_or_default(),
+                at,
+                outline,
+            })
+        })
+        .collect()
+}
+
+/// The room number a text gives: the text itself (`101`, `101A`), else the one number word of a
+/// one-line tag with its name (`OFFICE 101`, `101 OFFICE`).
+pub fn room_number_in(t: &str) -> Option<String> {
+    let t = t.trim();
+    if super::perceive::geometry::room_number(t) {
+        return Some(t.to_string());
+    }
+    let words: Vec<&str> = t.split_whitespace().collect();
+    if words.len() < 2 || words.len() > 4 || !words.iter().any(|w| w.chars().filter(char::is_ascii_alphabetic).count() >= 2) {
+        return None;
+    }
+    let mut numbers = words.iter().filter(|w| super::perceive::geometry::room_number(w) && w.chars().any(|c| c.is_ascii_digit()));
+    let n = numbers.next()?;
+    // `ROOM 101 TO 103`: two numbers name no one room.
+    numbers.next().is_none().then(|| n.to_string())
+}
+
+/// Whether two levels are one (by [`level_key`]); a missing level matches any.
+fn level_matches(a: Option<&str>, b: Option<&str>) -> bool {
+    a.zip(b).filter(|(a, b)| !a.trim().is_empty() && !b.trim().is_empty()).is_none_or(|(a, b)| level_key(a) == level_key(b))
+}
+
+/// The number the rooms reading gives the room whose plan outline is `plan` on `level`: the
+/// numbered read room whose label stands inside it (nearest its middle), else the one whose
+/// outline holds its middle and is about its size, else the one numbered room of its name on its
+/// level. Numbers in `used` (level key, number) are taken already.
+fn read_number<'a>(
+    read: &'a [ReadRoom],
+    plan: &[Vec2],
+    level: &str,
+    name: &str,
+    used: &std::collections::HashSet<(String, String)>,
+) -> Option<&'a ReadRoom> {
+    let b = Bounds2::from_points(plan.iter().copied());
+    let mid = b.center();
+    let area = cadaddy_geom::shoelace(plan).abs();
+    let free = |r: &&ReadRoom| {
+        r.number.as_deref().is_some_and(|n| !used.contains(&(level_key(level), n.to_ascii_uppercase())))
+            && level_matches(r.level.as_deref(), Some(level))
+    };
+    let inside = read
+        .iter()
+        .filter(free)
+        .filter(|r| b.contains(r.at) && cadaddy_geom::point_in_polygon(plan, r.at))
+        .min_by(|a, b| a.at.dist(mid).total_cmp(&b.at.dist(mid)));
+    if inside.is_some() {
+        return inside;
+    }
+    let holds = read.iter().filter(free).find(|r| {
+        let a = cadaddy_geom::shoelace(&r.outline).abs();
+        r.outline.len() >= 3 && a > 0.0 && area > 0.0 && (0.25..=4.0).contains(&(a / area)) && cadaddy_geom::point_in_polygon(&r.outline, mid)
+    });
+    if holds.is_some() {
+        return holds;
+    }
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let mut named = read.iter().filter(free).filter(|r| r.name.trim().eq_ignore_ascii_case(name));
+    let one = named.next()?;
+    named.next().is_none().then_some(one)
+}
+
+/// Give each room element whose tag has no number the room number printed inside it (on its
+/// plan: the build moved stacked levels), nearest its middle (`print`), else the number the
+/// job's rooms reading paired with its label (`read`); how many got one from each.
+fn number_rooms(d: &mut Drawing, sp: &BuildingSpec, texts: &[(String, Vec2, f64)], read: &[ReadRoom]) -> (usize, usize) {
+    let all = super::bspec::room_elements(d);
+    let number_of = |r: &super::bspec::RoomElement| {
+        r.number
+            .clone()
+            .filter(|n| !n.trim().is_empty())
+            .or_else(|| d.model.get(r.handle).and_then(|e| props::read(&e.common.xdata).get("number").filter(|p| p.has_value()).map(Prop::text)))
+    };
+    let mut used: std::collections::HashSet<(String, String)> =
+        all.iter().filter_map(|r| number_of(r).map(|n| (level_key(&r.level), n.trim().to_ascii_uppercase()))).collect();
+    let els: Vec<&super::bspec::RoomElement> = all.iter().filter(|r| number_of(r).is_none() && r.outline.len() >= 3).collect();
     if els.is_empty() {
-        return 0;
+        return (0, 0);
     }
     let cell = texts.iter().map(|(_, _, h)| *h).filter(|h| h.is_finite()).fold(0.0, f64::max).max(1.0) * 20.0;
     let grid = TextGrid::new(texts.to_vec(), cell);
-    let mut changes: Vec<(Handle, Props)> = Vec::new();
-    for r in els.iter().take(MAX_ELEMENTS) {
+    let mut changes: Vec<(Handle, Props, bool)> = Vec::new();
+    for r in els.into_iter().take(MAX_ELEMENTS) {
         let Some(e) = d.model.get(r.handle) else { continue };
         let mut store = props::read(&e.common.xdata);
-        if store.get("number").is_some_and(|p| p.has_value()) {
-            continue;
-        }
         let shift = super::bspec::stacked_by(e);
         let plan: Vec<Vec2> = r.outline.iter().map(|p| *p - shift).collect();
         let b = Bounds2::from_points(plan.iter().copied());
         let mid = b.center();
         let reach = (b.width().hypot(b.height()) / 2.0).min(200.0 * sp.units_per_foot.max(1.0));
-        let found = grid.near(mid, reach).into_iter().find(|(t, q, _)| {
-            super::perceive::geometry::room_number(t)
-                && !super::guided::is_circuit_tag(t)
-                && b.contains(*q)
-                && cadaddy_geom::point_in_polygon(&plan, *q)
-        });
-        let Some((t, q, _)) = found else { continue };
-        let src = Source::print(&sheet_at(sp, q, Some(&r.level)), Some([q.x, q.y]));
-        store.set("number", Prop::new(t.trim().to_string(), src).with_note("the room number printed inside the room"));
-        changes.push((r.handle, store));
+        let inside = |q: Vec2| b.contains(q) && cadaddy_geom::point_in_polygon(&plan, q);
+        let near = grid.near(mid, reach);
+        let printed = |whole: bool| {
+            near.iter().find_map(|(t, q, _)| {
+                let n = if whole { super::perceive::geometry::room_number(t).then(|| t.trim().to_string()) } else { room_number_in(t) }?;
+                (!super::guided::is_circuit_tag(t) && inside(*q) && !used.contains(&(level_key(&r.level), n.to_ascii_uppercase()))).then_some((n, *q))
+            })
+        };
+        let (number, src, note, from_read) = if let Some((n, q)) = printed(true).or_else(|| printed(false)) {
+            (n, Source::print(&sheet_at(sp, q, Some(&r.level)), Some([q.x, q.y])), "the room number printed inside the room", false)
+        } else if let Some(rr) = read_number(read, &plan, &r.level, &r.name, &used) {
+            let Some(n) = rr.number.clone() else { continue };
+            let sheet = if rr.sheet.is_empty() { sheet_at(sp, rr.at, Some(&r.level)) } else { rr.sheet.clone() };
+            (n, Source::print(&sheet, Some([rr.at.x, rr.at.y])), "the room number the rooms reading paired with this room's label", true)
+        } else {
+            continue;
+        };
+        used.insert((level_key(&r.level), number.to_ascii_uppercase()));
+        store.set("number", Prop::new(number, src).with_note(note));
+        changes.push((r.handle, store, from_read));
     }
-    let mut n = 0;
-    for (h, store) in changes {
+    let (mut printed, mut from_read) = (0, 0);
+    for (h, store, read) in changes {
         if d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).is_ok() {
-            n += 1;
+            if read {
+                from_read += 1;
+            } else {
+                printed += 1;
+            }
         }
     }
-    n
+    (printed, from_read)
+}
+
+/// Smallest and largest read room made a room of the model (square feet), as the build's.
+const MIN_READ_ROOM_SF: f64 = 16.0;
+const MAX_READ_ROOM_SF: f64 = 50_000.0;
+
+/// The numbered rooms the job read that the model has no room for (no room element or volume of
+/// that number on the level, none holding its label): each a room volume where the build put
+/// its level (the stacking move of the level's built objects), carrying its number and level as
+/// read. The model's room elements come only from room tags inside the built walls; a set whose
+/// walls leave its rooms open would otherwise have rooms in the reading and none in the model.
+fn add_read_rooms(d: &mut Drawing, sp: &BuildingSpec, read: &[ReadRoom], upf: f64) -> (usize, Vec<RoomShape>) {
+    if read.is_empty() {
+        return (0, Vec::new());
+    }
+    // Each level's stacking move, from what the build made on it.
+    let mut moved: HashMap<String, Vec2> = HashMap::new();
+    let mut have: Vec<(Option<String>, Vec<Vec2>, Option<String>)> = Vec::new();
+    for e in d.model.iter().take(MAX_ELEMENTS * 4) {
+        if let Some(l) = super::bspec::made_level(e) {
+            moved.entry(level_key(&l)).or_insert_with(|| super::bspec::stacked_by(e));
+        }
+        if super::rooms3d::room_of(&e.common).is_some()
+            && let EntityKind::Mesh(m) = &e.kind
+        {
+            let z0 = m.vertices.iter().map(|v| v.z).fold(f64::INFINITY, f64::min);
+            let outline: Vec<Vec2> = m.vertices.iter().filter(|v| (v.z - z0).abs() < 1e-9).map(|v| v.xy()).collect();
+            let store = props::read(&e.common.xdata);
+            let level = store.get("level").filter(|p| p.has_value()).map(Prop::text);
+            let number = volume_number(e).or_else(|| store.get("number").filter(|p| p.has_value()).map(Prop::text));
+            have.push((level, outline, number));
+        }
+    }
+    for r in super::bspec::room_elements(d) {
+        let stored = d.model.get(r.handle).and_then(|e| props::read(&e.common.xdata).get("number").filter(|p| p.has_value()).map(Prop::text));
+        have.push((Some(r.level.clone()), r.outline, r.number.filter(|n| !n.trim().is_empty()).or(stored)));
+    }
+    let mut out: Vec<RoomShape> = Vec::new();
+    let mut added = 0;
+    let (lo, hi) = (MIN_READ_ROOM_SF * upf * upf, MAX_READ_ROOM_SF * upf * upf);
+    for r in read {
+        let Some(number) = r.number.as_deref() else { continue };
+        if r.outline.len() < 3 || added >= MAX_READ_ROOMS {
+            continue;
+        }
+        let area = cadaddy_geom::shoelace(&r.outline).abs();
+        if !(lo..=hi).contains(&area) {
+            continue;
+        }
+        let shift = r.level.as_deref().and_then(|l| moved.get(&level_key(l))).copied().unwrap_or(Vec2::ZERO);
+        let outline: Vec<Vec2> = r.outline.iter().map(|p| *p + shift).collect();
+        let at = r.at + shift;
+        let lvl = r.level.as_deref();
+        let taken = have.iter().any(|(l, o, n)| {
+            level_matches(l.as_deref(), lvl)
+                && (n.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(number.trim()))
+                    || (o.len() >= 3 && (cadaddy_geom::point_in_polygon(o, at) || cadaddy_geom::point_in_polygon(&outline, centroid(o)))))
+        });
+        if taken {
+            continue;
+        }
+        let level = lvl.and_then(|l| sp.levels.iter().find(|x| level_key(&x.name) == level_key(l)));
+        // The model's name for the level (the sheet may call it `1` or `FIRST FLOOR`).
+        let level_name = level.map(|l| l.name.clone()).or_else(|| r.level.clone());
+        let ceiling = level.map(|l| l.ceiling_ft * upf).filter(|c| c.is_finite() && *c > 0.0);
+        let room = super::rooms3d::Room3 {
+            name: r.name.clone(),
+            number: Some(number.to_string()),
+            at,
+            label: Handle(0),
+            area,
+            perimeter: outline.iter().zip(outline.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum(),
+            elevation: level.map_or(0.0, |l| l.elevation_ft * upf),
+            ceiling: ceiling.unwrap_or(super::rooms3d::DEFAULT_CEILING_IN * upf / 12.0),
+            ceiling_source: if ceiling.is_some() { "level" } else { "default" }.into(),
+            finishes: Vec::new(),
+            finish_detail: Vec::new(),
+            materials: Value::Null,
+            level: level_name.clone(),
+            outline: outline.clone(),
+        };
+        let src = Source::print(&r.sheet, Some([r.at.x, r.at.y]));
+        let mut store = Props::default();
+        store.set("number", Prop::new(number.to_string(), src.clone()).with_note("read on the plan; the build traced no room here"));
+        if let Some(l) = &level_name {
+            store.set("level", Prop::new(l.clone(), src));
+        }
+        if super::rooms3d::add_volume(d, &room, Some(&store)) {
+            added += 1;
+            have.push((level_name.clone(), outline.clone(), Some(number.to_string())));
+            out.push(RoomShape {
+                bounds: Bounds2::from_points(outline.iter().copied()),
+                outline,
+                level: level_name,
+                label: room_label(Some(number), &r.name),
+            });
+        }
+    }
+    (added, out)
+}
+
+/// A room volume's number (its `rooms.build` tag).
+fn volume_number(e: &Entity) -> Option<String> {
+    let x = &e.common.xdata;
+    let at = x.iter().position(|t| t.code == 1001 && t.value == super::rooms3d::ROOM_APP)?;
+    x.get(at + 2).filter(|t| t.code == 1000 && !t.value.trim().is_empty()).map(|t| t.value.clone())
+}
+
+fn centroid(o: &[Vec2]) -> Vec2 {
+    if o.is_empty() {
+        return Vec2::ZERO;
+    }
+    o.iter().fold(Vec2::ZERO, |a, p| a + *p) * (1.0 / o.len() as f64)
 }
 
 /// The room holding `p` on `level` (any level when the room has none).
@@ -1234,7 +1474,7 @@ fn capacity_of(props: &[(String, String)]) -> Option<(String, String)> {
 
 /// Fill the built model's elements from what the readers found; per kind, how many values went
 /// on each key.
-pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
+pub(crate) fn fill(s: &mut Session, schedules: &Rows, read: &[ReadRoom]) -> Result<Value> {
     let (sp, stored) = super::bspec::current(s, FILL)?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     // The rooms (the build's, or the plan's), in model coordinates.
@@ -1244,12 +1484,15 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
         super::perceive::texts_and_tags(&plan).into_iter().map(|(_, t, p, h)| (t, p, h)).filter(|(t, _, _)| !t.is_empty()).collect()
     };
     // A room element whose tag gave no number: the room number printed inside it.
-    let rooms_numbered = number_rooms(s.doc_mut()?, &sp, &texts);
+    let (rooms_numbered, rooms_numbered_from_reading) = number_rooms(s.doc_mut()?, &sp, &texts, read);
+    // The numbered rooms the job read and the model has no room for.
+    let (read_rooms_added, read_shapes) = add_read_rooms(s.doc_mut()?, &sp, read, upf);
     let (rooms3, rooms_error) = match super::rooms3d::rooms(s) {
         Ok(r) => (r, None),
         Err(e) => (Vec::new(), Some(e.to_string())),
     };
-    let rooms: Vec<RoomShape> = room_shapes(s.doc()?, &rooms3);
+    let mut rooms: Vec<RoomShape> = room_shapes(s.doc()?, &rooms3);
+    rooms.extend(read_shapes);
     let fixtures_placed = place_fixtures(s.doc_mut()?, &sp, schedules, &texts);
     let d = s.doc()?;
     let text_count = texts.len();
@@ -1541,7 +1784,7 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
         }
     }
     filled.retain(|_, m| !m.is_empty());
-    if changed + fixtures_placed > 0 {
+    if changed + fixtures_placed + rooms_numbered + rooms_numbered_from_reading + read_rooms_added > 0 {
         s.touch();
     }
     // What the fill had to go on, for a run on a set no one can see.
@@ -1553,6 +1796,11 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
         "rooms": rooms.len(),
         "rooms_labelled": rooms.iter().filter(|r| !r.label.trim().is_empty()).count(),
         "rooms_numbered_from_text": rooms_numbered,
+        "rooms_numbered_from_reading": rooms_numbered_from_reading,
+        "read_rooms": read.len(),
+        "read_rooms_numbered": read.iter().filter(|r| r.number.is_some()).count(),
+        "read_rooms_with_outline": read.iter().filter(|r| r.outline.len() >= 3).count(),
+        "read_rooms_added": read_rooms_added,
         "room_levels": room_levels,
         "element_levels": element_levels,
         "schedule_rows": schedules.len(),
@@ -1579,7 +1827,7 @@ fn sheet_at(sp: &BuildingSpec, p: Vec2, level: Option<&str>) -> String {
 }
 
 fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
-    let mut r = fill(s, &schedules_param(p))?;
+    let mut r = fill(s, &schedules_param(p), &rooms_param(p))?;
     let devices = s.doc().map_or(0, |d| d.model.iter().filter(|e| made(e, DEVID).is_some()).count());
     r["devices"] = json!(devices);
     let n = r["elements"].as_u64().unwrap_or(0);

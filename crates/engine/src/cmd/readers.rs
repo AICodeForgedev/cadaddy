@@ -1042,7 +1042,7 @@ fn devices_to_model(s: &mut Session, p: &Value, mut placed: Value) -> Result<Val
     let r = super::propfill::rebuild_devices(s, CMD)?;
     placed["elements"] = json!(r.built);
     placed["elements_replaced"] = json!(r.removed);
-    match super::propfill::fill(s, &super::propfill::Rows::new()) {
+    match super::propfill::fill(s, &super::propfill::Rows::new(), &[]) {
         Ok(f) => placed["filled"] = f["filled"]["device"].clone(),
         Err(e) => placed["fill_error"] = json!(e.to_string()),
     }

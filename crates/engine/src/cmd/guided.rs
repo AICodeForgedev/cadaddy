@@ -445,6 +445,11 @@ pub struct GuidedJob {
     /// `circuit` tag each, whose conduit runs are in [`Self::mep`]; the BIM build puts them in.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub circuits: Vec<cadaddy_walk3d::tags::ElementTag>,
+    /// The outlines of the rooms the rooms stage read (by the room's `label`), in plan
+    /// coordinates: the BIM build's fill numbers the model's rooms by them and adds the read
+    /// rooms the model lacks (Q6002). Kept off the stage's result, which agents read.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub room_outlines: BTreeMap<String, Vec<[f64; 2]>>,
     /// Auto mode (`job.start {auto: true}`): every question with a default takes it and the job
     /// runs on. Off (the default) the job stops at each checkpoint until it is answered.
     #[serde(default)]
@@ -649,6 +654,7 @@ impl GuidedJob {
             devices: Vec::new(),
             mep: None,
             circuits: Vec::new(),
+            room_outlines: BTreeMap::new(),
             auto: false,
             always_ask: BTreeSet::new(),
             storey_ft: None,
@@ -2239,11 +2245,31 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // one reading traces: the last floors were left out).
     let regions: Vec<[f64; 4]> =
         job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty()).map(|r| r.area.unwrap_or(r.rect)).collect();
-    let mut params = json!({"outline": false});
+    let mut params = json!({"outline": true});
     if !regions.is_empty() {
         params["regions"] = json!(regions);
     }
     let mut rooms_result = s.execute("rooms.list", &params)?;
+    // The outlines go on the job (for the BIM build's fill), not in the stage's result.
+    job.room_outlines.clear();
+    if let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) {
+        for room in list.iter_mut() {
+            let Some(o) = room.as_object_mut() else { continue };
+            let outline = o.remove("outline");
+            let Some(label) = o.get("label").and_then(Value::as_str).map(str::to_string) else { continue };
+            let pts: Vec<[f64; 2]> = outline
+                .as_ref()
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|q| Some([q.get(0)?.as_f64()?, q.get(1)?.as_f64()?]))
+                .filter(|q| q.iter().all(|x| x.is_finite()))
+                .collect();
+            if pts.len() >= 3 {
+                job.room_outlines.insert(label, pts);
+            }
+        }
+    }
     // A room carries the level of the sheet it was read on (Q5291 MUST 2): the sheet's level
     // wins over a spec's guess.
     if let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) {
@@ -3409,7 +3435,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The mechanical and plumbing schedules' rows, for the equipment's capacities.
     let (schedules, schedules_read) = equipment_schedule_rows(job);
     result["schedules_read"] = schedules_read;
-    match s.execute("bim.props.fill", &json!({"schedules": schedules})) {
+    match s.execute("bim.props.fill", &json!({"schedules": schedules, "rooms": read_rooms(job)})) {
         Ok(v) => result["props"] = v,
         Err(e) => job.add_finding(
             StageName::BimBuild,
@@ -3606,6 +3632,27 @@ const MAX_SHEET_LINKS: usize = 2_000;
 /// and its level (a sheet listed already keeps its entry and gains its place).
 /// The build's identity pass (`bim.identity` then `rooms.graph`): merged copies leave the counts,
 /// findings go on the build stage, and the answer's summary goes in the result as `identity`.
+/// The rooms the rooms stage read on the plans (not the ones the model added), each with its
+/// outline: `bim.props.fill`'s `rooms`.
+fn read_rooms(job: &GuidedJob) -> Value {
+    let list = job.stage(StageName::Rooms).and_then(|st| st.result.as_ref()).and_then(|r| r.get("rooms")).and_then(Value::as_array);
+    let rooms: Vec<Value> = list
+        .into_iter()
+        .flatten()
+        .filter(|r| r.get("from_model").and_then(Value::as_bool) != Some(true))
+        .map(|r| {
+            let mut v = json!({
+                "number": r.get("number"), "name": r.get("name"), "level": r.get("level"), "sheet": r.get("sheet"), "at": r.get("at"),
+            });
+            if let Some(o) = r.get("label").and_then(Value::as_str).and_then(|l| job.room_outlines.get(l)) {
+                v["outline"] = json!(o);
+            }
+            v
+        })
+        .collect();
+    json!(rooms)
+}
+
 fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     let numbers: Vec<String> = job
         .stage(StageName::Rooms)
