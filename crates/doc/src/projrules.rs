@@ -242,23 +242,31 @@ impl RuleEntry {
         format!("{}/{}", self.domain.as_str(), self.key)
     }
 
-    /// All values (active + overridden) sorted by tier (highest first).
+    /// All values (active + overridden) sorted by tier (highest first, using default order).
     pub fn all_values(&self) -> Vec<&RuleValue> {
         let mut all: Vec<&RuleValue> = std::iter::once(&self.active).chain(self.overridden.iter()).collect();
         all.sort_by_key(|v| v.tier);
         all
     }
 
+    /// All values sorted by the given source_order.
+    pub fn all_values_ranked(&self, tier_rank: impl Fn(SourceTier) -> usize) -> Vec<&RuleValue> {
+        let mut all: Vec<&RuleValue> = std::iter::once(&self.active).chain(self.overridden.iter()).collect();
+        all.sort_by_key(|v| tier_rank(v.tier));
+        all
+    }
+
     /// Add or update a value at the given tier. Returns a preview of what would change
     /// (the new active value and what it would override) without modifying self.
-    pub fn preview_set(&self, new: &RuleValue) -> ChangePreview {
+    /// `tier_rank` maps each tier to its precedence position (lower = higher priority).
+    pub fn preview_set(&self, new: &RuleValue, tier_rank: impl Fn(SourceTier) -> usize) -> ChangePreview {
         let mut all_values: Vec<RuleValue> = std::iter::once(self.active.clone())
             .chain(self.overridden.iter().cloned())
             // Replace any existing value at the same tier, or add.
             .filter(|v| v.tier != new.tier)
             .chain(std::iter::once(new.clone()))
             .collect();
-        all_values.sort_by_key(|v| v.tier);
+        all_values.sort_by_key(|v| tier_rank(v.tier));
 
         let new_active = all_values.first().cloned().unwrap_or_else(|| new.clone());
         let new_overridden: Vec<RuleValue> = all_values.into_iter().skip(1).collect();
@@ -275,8 +283,10 @@ impl RuleEntry {
     }
 
     /// Apply a new value, re-sorting by tier precedence. Returns what changed.
-    pub fn apply_set(&mut self, new: RuleValue, reason: &str) -> ChangePreview {
-        let preview = self.preview_set(&new);
+    /// `tier_rank` maps each tier to its precedence position (lower = higher priority).
+    pub fn apply_set(&mut self, new: RuleValue, reason: &str, tier_rank: impl Fn(SourceTier) -> usize) -> ChangePreview {
+        let preview = self.preview_set(&new, &tier_rank);
+        let set_by = new.set_by.clone();
 
         // Rebuild the values list.
         let new_tier = new.tier;
@@ -285,18 +295,25 @@ impl RuleEntry {
             .filter(|v| v.tier != new_tier)
             .chain(std::iter::once(new))
             .collect();
-        all_values.sort_by_key(|v| v.tier);
+        all_values.sort_by_key(|v| tier_rank(v.tier));
 
         if let Some(winner) = all_values.first().cloned() {
             self.active = winner;
         }
         self.overridden = all_values.into_iter().skip(1).collect();
 
-        // Log the change.
-        if preview.changed && self.changelog.len() < MAX_CHANGELOG {
+        // Log every set (including lower-tier sets that don't change the active value).
+        if self.changelog.len() < MAX_CHANGELOG {
             self.changelog.insert(
                 0,
-                ChangeLogEntry { from: preview.old_value.clone(), to: preview.new_value.clone(), reason: reason.to_string(), tier: preview.new_tier },
+                ChangeLogEntry {
+                    from: preview.old_value.clone(),
+                    to: preview.new_value.clone(),
+                    reason: reason.to_string(),
+                    tier: new_tier,
+                    set_by,
+                    time: String::new(),
+                },
             );
         }
 
@@ -304,18 +321,22 @@ impl RuleEntry {
     }
 
     /// Remove the value at a tier. If it was the active one, the next-highest takes over.
-    pub fn remove_tier(&mut self, tier: SourceTier) -> Option<RuleValue> {
+    /// Returns `(removed_value, entry_is_now_empty)`.
+    pub fn remove_tier(&mut self, tier: SourceTier) -> (Option<RuleValue>, bool) {
         if self.active.tier == tier {
             let removed = self.active.clone();
             if let Some(next) = self.overridden.first().cloned() {
                 self.active = next;
                 self.overridden.remove(0);
+                (Some(removed), false)
+            } else {
+                // This was the only value — entry is now empty.
+                (Some(removed), true)
             }
-            Some(removed)
         } else if let Some(pos) = self.overridden.iter().position(|v| v.tier == tier) {
-            Some(self.overridden.remove(pos))
+            (Some(self.overridden.remove(pos)), false)
         } else {
-            None
+            (None, false)
         }
     }
 }
@@ -346,6 +367,12 @@ pub struct ChangeLogEntry {
     pub to: String,
     pub reason: String,
     pub tier: SourceTier,
+    /// Who made this change (e.g. "agent", "PM", "foreman").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub set_by: String,
+    /// When this change was made (ISO 8601, optional).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub time: String,
 }
 
 // ── project rules collection ───────────────────────────────────────────────
@@ -387,6 +414,12 @@ impl ProjectRules {
         Self { version: 1, label: String::new(), source_order: default_source_order(), rules: BTreeMap::new() }
     }
 
+    /// Position of a tier in the source order (lower = higher priority).
+    /// Falls back to the tier's enum order if it's not in the list.
+    pub fn tier_rank(&self, tier: SourceTier) -> usize {
+        self.source_order.iter().position(|&t| t == tier).unwrap_or(tier as usize + 100)
+    }
+
     /// Look up a rule by domain and key.
     pub fn get(&self, domain: RuleDomain, key: &str) -> Option<&RuleEntry> {
         let id = format!("{}/{}", domain.as_str(), key);
@@ -412,21 +445,41 @@ impl ProjectRules {
                 overridden: Vec::new(),
             };
         }
-        let entry = self.rules.entry(id).or_insert_with(|| RuleEntry {
-            domain,
-            key: key.to_string(),
-            active: RuleValue::new(""),
-            overridden: Vec::new(),
-            changelog: Vec::new(),
-        });
-        entry.apply_set(value, reason)
+        if let Some(entry) = self.rules.get_mut(&id) {
+            let so = self.source_order.clone();
+            let rank = move |t: SourceTier| so.iter().position(|&x| x == t).unwrap_or(t as usize + 100);
+            entry.apply_set(value, reason, rank)
+        } else {
+            // Brand new entry: no phantom placeholder.
+            let preview = ChangePreview {
+                old_value: String::new(),
+                old_tier: SourceTier::BuiltIn,
+                new_value: value.value.clone(),
+                new_tier: value.tier,
+                changed: true,
+                overridden: Vec::new(),
+            };
+            let mut entry = RuleEntry { domain, key: key.to_string(), active: value, overridden: Vec::new(), changelog: Vec::new() };
+            if entry.changelog.len() < MAX_CHANGELOG {
+                entry.changelog.push(ChangeLogEntry {
+                    from: String::new(),
+                    to: entry.active.value.clone(),
+                    reason: reason.to_string(),
+                    tier: entry.active.tier,
+                    set_by: entry.active.set_by.clone(),
+                    time: String::new(),
+                });
+            }
+            self.rules.insert(id, entry);
+            preview
+        }
     }
 
     /// Preview what setting a value would change, without modifying anything.
     pub fn preview(&self, domain: RuleDomain, key: &str, value: &RuleValue) -> ChangePreview {
         let id = format!("{}/{}", domain.as_str(), key);
         if let Some(entry) = self.rules.get(&id) {
-            entry.preview_set(value)
+            entry.preview_set(value, |t| self.tier_rank(t))
         } else {
             ChangePreview {
                 old_value: String::new(),
@@ -445,13 +498,13 @@ impl ProjectRules {
         self.rules.remove(&id)
     }
 
-    /// Remove the value at a specific tier from a rule.
+    /// Remove the value at a specific tier from a rule. If it was the sole value, the
+    /// entire rule is deleted (not left as a phantom entry).
     pub fn remove_tier(&mut self, domain: RuleDomain, key: &str, tier: SourceTier) -> Option<RuleValue> {
         let id = format!("{}/{}", domain.as_str(), key);
         let entry = self.rules.get_mut(&id)?;
-        let removed = entry.remove_tier(tier);
-        // If the active value is now empty (the entry had only this tier), remove it.
-        if entry.active.value.is_empty() && entry.overridden.is_empty() {
+        let (removed, empty) = entry.remove_tier(tier);
+        if empty {
             self.rules.remove(&id);
         }
         removed
@@ -459,14 +512,7 @@ impl ProjectRules {
 
     /// List all rules in a domain.
     pub fn list_domain(&self, domain: RuleDomain) -> Vec<&RuleEntry> {
-        let prefix = format!("{}/", domain.as_str());
-        self.rules
-            .values()
-            .filter(|r| {
-                r.domain == domain
-                    || self.rules.keys().any(|k| k.starts_with(&prefix) && self.rules.get(k).map(|e| std::ptr::eq(*r, e)).unwrap_or(false))
-            })
-            .collect()
+        self.rules.values().filter(|r| r.domain == domain).collect()
     }
 
     /// List all rules, optionally filtered by domain.
@@ -668,6 +714,83 @@ mod tests {
         assert!(removed.is_some());
         assert_eq!(removed.unwrap().value, "46\"");
         assert_eq!(rules.get(RuleDomain::MountingHeight, "switch/general").unwrap().active.value, "48\"",);
+    }
+
+    #[test]
+    fn first_set_at_spec_has_no_phantom_override() {
+        let mut rules = ProjectRules::new();
+        let val = RuleValue::new("36\"").with_source("NEC 110.26").with_tier(SourceTier::Spec);
+        rules.set(RuleDomain::Clearance, "panel_front", val, "initial");
+
+        let entry = rules.get(RuleDomain::Clearance, "panel_front").unwrap();
+        assert_eq!(entry.active.value, "36\"");
+        assert_eq!(entry.active.tier, SourceTier::Spec);
+        // No phantom empty ProjectRule override.
+        assert!(entry.overridden.is_empty(), "overrides should be empty, got {:?}", entry.overridden);
+    }
+
+    #[test]
+    fn set_at_built_in_on_new_key_works() {
+        let mut rules = ProjectRules::new();
+        let val = RuleValue::new("48\"").with_tier(SourceTier::BuiltIn);
+        let preview = rules.set(RuleDomain::MountingHeight, "switch/general", val, "builtin default");
+
+        assert!(preview.changed);
+        assert_eq!(preview.new_value, "48\"");
+
+        let entry = rules.get(RuleDomain::MountingHeight, "switch/general").unwrap();
+        assert_eq!(entry.active.value, "48\"");
+        assert_eq!(entry.active.tier, SourceTier::BuiltIn);
+    }
+
+    #[test]
+    fn source_order_swapped_changes_winner() {
+        let mut rules = ProjectRules::new();
+        // Swap submittal and drawing_revision in source_order:
+        // default: [FV, Rfi, Submittal, DrawingRevision, Spec, ProjectRule, BuiltIn]
+        // swapped: [FV, Rfi, DrawingRevision, Submittal, Spec, ProjectRule, BuiltIn]
+        rules.source_order = vec![
+            SourceTier::FieldVerified,
+            SourceTier::Rfi,
+            SourceTier::DrawingRevision,
+            SourceTier::Submittal,
+            SourceTier::Spec,
+            SourceTier::ProjectRule,
+            SourceTier::BuiltIn,
+        ];
+
+        rules.set(
+            RuleDomain::MountingHeight,
+            "receptacle/kitchen",
+            RuleValue::new("44\"").with_tier(SourceTier::Submittal).with_source("Submittal #A-3"),
+            "submittal",
+        );
+        rules.set(
+            RuleDomain::MountingHeight,
+            "receptacle/kitchen",
+            RuleValue::new("42\"").with_tier(SourceTier::DrawingRevision).with_source("Rev 3"),
+            "drawing revision",
+        );
+
+        // With swapped order, DrawingRevision is now higher priority than Submittal.
+        let entry = rules.get(RuleDomain::MountingHeight, "receptacle/kitchen").unwrap();
+        assert_eq!(entry.active.value, "42\"", "drawing_revision should win with swapped order");
+        assert_eq!(entry.active.tier, SourceTier::DrawingRevision);
+        assert_eq!(entry.overridden.len(), 1);
+        assert_eq!(entry.overridden[0].value, "44\"");
+        assert_eq!(entry.overridden[0].tier, SourceTier::Submittal);
+    }
+
+    #[test]
+    fn remove_sole_tier_deletes_rule() {
+        let mut rules = ProjectRules::new();
+        rules.set(RuleDomain::Naming, "layer", RuleValue::new("E-prefix").with_tier(SourceTier::Spec), "spec says");
+
+        let removed = rules.remove_tier(RuleDomain::Naming, "layer", SourceTier::Spec);
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().value, "E-prefix");
+        // The rule should be fully gone.
+        assert!(rules.get(RuleDomain::Naming, "layer").is_none(), "rule should be deleted after removing sole tier");
     }
 
     #[test]

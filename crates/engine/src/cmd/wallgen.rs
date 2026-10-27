@@ -566,22 +566,14 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     if built.is_some_and(|b| Arc::ptr_eq(&b.0, &st.doc) || plan(&b.0, &g) == plan(&st.doc, &g)) {
         return;
     }
-    // Rebuilt keeping the hand edits whose plan objects didn't change (those did: see
-    // `model.revise`, which reports them).
-    let changed = changed_sources(s, &g);
-    if let Err(e) = super::revise3d::rebuild_keeping_edits(s, &g, &changed) {
+    // Rebuilt keeping the hand edits whose plan objects didn't change; the edits that conflict
+    // are echoed and kept in the drawing's last revision (`model.revise {last: true}`).
+    let (old, rooms) =
+        st.model_record.as_ref().map_or_else(Default::default, |r| r.plan.iter().cloned().partition::<Vec<_>, _>(|i| i.kind != "room"));
+    let how = super::revise3d::Revise { by_handle: true, tolerance: None, rebuild: true, auto: true };
+    if let Err(e) = super::revise3d::revise(s, &g, old, rooms, &how) {
         s.echo(e.to_string());
     }
-}
-
-/// The plan objects that changed since the model was last built (by handle and geometry).
-fn changed_sources(s: &Session, g: &WallGen) -> std::collections::HashSet<Handle> {
-    let (Ok(st), Ok(d)) = (s.state(), s.doc()) else { return Default::default() };
-    let Some(rec) = &st.model_record else { return Default::default() };
-    let old: Vec<_> = rec.plan.iter().filter(|i| i.kind != "room").cloned().collect();
-    let now = super::revise3d::plan_items(d, g);
-    let (added, removed, moved, _) = super::revise3d::diff(&old, &now, true, f64::MAX);
-    added.iter().map(|i| i.handle).chain(removed.iter().map(|i| i.handle)).chain(moved.iter().flat_map(|(o, n)| [o.handle, n.handle])).collect()
 }
 
 // ---------- walls from the plan's face pairs ----------

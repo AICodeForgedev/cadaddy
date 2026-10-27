@@ -334,8 +334,11 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             );
         }
         Kind::Floor(l) => {
+            if !t.unit_instances.is_empty() {
+                background(&mut pen, t, l, true);
+                crate::units::draw_unit_tags(&mut pen, t, l);
+            }
             grid(&mut pen, t);
-            crate::units::draw_unit_tags(&mut pen, t, l);
             crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale, false);
             crate::arch::draw_floor(&mut pen, t, &st.arch, l, sh.scale);
             casework_plan(&mut pen, t, st, l);
