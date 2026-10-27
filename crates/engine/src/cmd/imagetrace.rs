@@ -20,7 +20,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new("imagetrace", "Trace Image to Vectors", run)
         .menu(&["Insert", "Trace Raster Image to Vectors"])
         .alias(&["vectorize"])
-        .params("{handle?: the IMAGE (default the selected one, else the only one), layer?: \"TRACED\" (walls go on <layer>-WALLS, text boxes on <layer>-TEXT), threshold?: 0..255 (ink is at most this grey; default Otsu's), tolerance?: pixels (1.5), ortho?: degrees (3; 0 off) from the plan's own main directions (a slightly turned scan stays square), walls?: true, wallMin?: pixels (default three times the typical stroke), text?: true, textMax?: pixels (default 2.5% of the image's shorter side, up to 6% for letters with another beside them), minLength?: pixels (4)} → {lines, arcs, circles, walls, textBoxes, threshold, stroke (pixels), handles}")]
+        .params("{handle?: the IMAGE (default the selected one, else the only one), layer?: \"TRACED\" (walls go on <layer>-WALLS, text boxes on <layer>-TEXT), threshold?: 0..255 (ink is at most this grey; default Otsu's), tolerance?: pixels (1.5), ortho?: degrees (3; 0 off) from the plan's own main directions (a slightly turned scan stays square), walls?: true, wallMin?: pixels (default three times the typical stroke), wallPairs?: false (two parallel thin lines a wall apart with no hatch between are a wall too; hatched strips always are), text?: true, textMax?: pixels (default 2.5% of the image's shorter side, up to 6% for letters with another beside them), minLength?: pixels (4)} → {lines, arcs, circles, walls, textBoxes, threshold, stroke (pixels), handles}")]
 }
 
 /// The IMAGE to trace.
@@ -70,6 +70,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         ortho_deg: num("ortho").unwrap_or(3.0),
         walls: bool_or(p, "walls", true),
         wall_min_px: num("wallMin"),
+        wall_pairs: bool_or(p, "wallPairs", false),
         text: bool_or(p, "text", true),
         text_max_px: num("textMax"),
         min_length: num("minLength").unwrap_or(4.0),
