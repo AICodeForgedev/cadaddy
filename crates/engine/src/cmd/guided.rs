@@ -2515,7 +2515,7 @@ pub(crate) fn is_circuit_tag(tag: &str) -> bool {
 /// Run the devices stage: detect devices, symbols and counts (MUST 1, 4, 9-11).
 /// MUST 9: count then "anything not counted?" with leftover clusters.
 /// MUST 10: learn foreign symbols. MUST 11: recount after learning.
-fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
+pub(crate) fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Load sheets so the drawing has PDF-SYM block inserts from pdfnative symbol detection.
     ensure_sheets_loaded(s, job)?;
 
@@ -2907,7 +2907,7 @@ fn job_units_per_foot(s: &Session) -> f64 {
 /// Run the MEP read stage: ducts on each mechanical plan and pipes on each plumbing plan of
 /// the set (never on the other sheets), each on its sheet's level; a per-trade summary and a
 /// question for each plan that read nothing.
-fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
+pub(crate) fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     ensure_sheets_loaded(s, job)?;
     let refs = job_sheet_refs(job);
     let upf = job_units_per_foot(s);
@@ -3216,6 +3216,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // each door between its two rooms, and the schedules checked against the plans. Never stops
     // the job: a failure is a finding.
     identity_step(s, job, &mut result);
+    // The model in its eight build stages (shell, walls, openings, framing, rooms, mep, drywall,
+    // finishes), each kept as a checkpoint in the drawing (Q5258).
+    let mep = job.stage(StageName::MepRead).and_then(|st| st.result.clone());
+    super::stagedbuild::job_stages(s, job, mep, &mut result);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -3673,6 +3677,9 @@ pub(crate) struct PlanPages {
     pub links: Option<Value>,
     /// Where each imported sheet sits ([`add_sheet_links`]).
     pub regions: Vec<SheetRegion>,
+    /// The job the pages were loaded by (its sheets, spans and classification), for the trade
+    /// readers of the staged build.
+    pub job: Box<GuidedJob>,
 }
 
 /// The guided job's classify → plan pages path, for one-call PDF to BIM (`bim.from_pdf`): the
@@ -3691,7 +3698,8 @@ pub(crate) fn load_plan_pages(s: &mut Session, pdfs: &std::path::Path) -> Result
     let pages = job.sheet_regions.iter().map(|r| json!({"sheet": r.number, "level": r.level, "discipline": r.discipline, "type": r.kind})).collect();
     let links = job_links(s, &job).map(|l| super::printset::links_summary(&l));
     let levels = building_levels(&job);
-    Ok(PlanPages { indexed, pages, levels, links, regions: job.sheet_regions })
+    let regions = job.sheet_regions.clone();
+    Ok(PlanPages { indexed, pages, levels, links, regions, job: Box::new(job) })
 }
 
 /// Run takeoff stage — calls the model takeoff (by level and trade), not the 2D layer count.

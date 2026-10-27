@@ -134,6 +134,8 @@ pub mod plotters;
 pub mod plugins_cmd;
 pub(crate) mod printcond;
 pub(crate) mod printmep;
+pub(crate) mod register;
+pub(crate) mod stagedbuild;
 pub mod printrev;
 pub mod printset;
 pub mod projrules;
@@ -740,6 +742,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(revise3d::specs());
         v.extend(overrides::specs());
         v.extend(bspec::specs());
+        v.extend(stagedbuild::specs());
         v.extend(p2meval::specs());
         v.extend(schedules::specs());
         v.extend(pdfplans::specs());

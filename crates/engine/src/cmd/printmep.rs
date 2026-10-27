@@ -83,6 +83,12 @@ pub(crate) struct SheetRead {
     pub terminals: usize,
     pub equipment: usize,
     pub warnings: Vec<String>,
+    /// Lined up on its level's architectural plan (its background then removed before reading).
+    pub registered: bool,
+    /// Runs read that still lay on architectural lines: dropped.
+    pub dropped_on_walls: usize,
+    /// Where it was lined up and what was removed ([`super::register::Registration::to_json`]).
+    pub registration: Option<Value>,
 }
 
 impl SheetRead {
@@ -91,6 +97,8 @@ impl SheetRead {
             "sheet": self.sheet, "level": self.level, "trade": self.trade, "runs": self.runs,
             "length_ft": r1(self.length_ft), "terminals": self.terminals,
             "equipment": self.equipment, "warnings": self.warnings,
+            "registered": self.registered, "dropped_on_walls": self.dropped_on_walls,
+            "registration": self.registration,
         })
     }
 }
@@ -171,6 +179,7 @@ struct Placement {
 }
 
 impl Placement {
+    #[cfg(test)]
     fn apply(&self, p: [f64; 2]) -> [f64; 2] {
         [self.to[0] + (p[0] - self.from[0]) * self.k, self.to[1] + (p[1] - self.from[1]) * self.k]
     }
@@ -198,6 +207,39 @@ fn placement(sh: &SheetRef, all: &[SheetRef], k: f64) -> Placement {
     Placement { from, to: arch.map_or(from, |a| [a.rect[0], a.rect[1]]), k }
 }
 
+/// Where a sheet's placement puts it on its level's architectural floor plan (same sheet size,
+/// scaled up from paper size), as a transform; none when no A plan of the level is its size.
+pub(crate) fn sheet_placement(d: &Drawing, sh: &SheetRef, all: &[SheetRef], upf: f64) -> Option<super::register::Similarity> {
+    let mut b = cadaddy_geom::Bounds2::EMPTY;
+    for e in super::register::sheet_objects(d, sh) {
+        b = b.union(&cadaddy_doc::entity_bounds(d, e, 0));
+    }
+    let diag = if b.is_empty() { 0.0 } else { (b.max.x - b.min.x).hypot(b.max.y - b.min.y) };
+    let k = if diag.is_finite() && diag > 1.0 && diag < 100.0 {
+        let printed = sh.scale_text.as_deref().and_then(cadaddy_mepfix::sheet_reader::parse_scale).filter(|k| k.is_finite() && *k > 0.0 && *k <= 12.0);
+        upf / printed.unwrap_or(0.125)
+    } else {
+        1.0
+    };
+    let at = placement(sh, all, k);
+    (at.to != at.from || (k - 1.0).abs() > 1e-12).then(|| super::register::Similarity::place(at.from, at.to, at.k))
+}
+
+/// How much of a run's path lies on the architectural plan's lines, by length.
+fn on_arch_share(points: &[[f64; 2]], arch: &super::register::ArchPlan) -> f64 {
+    let (mut on, mut all) = (0.0, 0.0);
+    for w in points.windows(2) {
+        if let [a, b] = w {
+            let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+            if len.is_finite() && len > 0.0 {
+                all += len;
+                on += len * arch.on_lines(*a, *b);
+            }
+        }
+    }
+    if all > 0.0 { on / all } else { 0.0 }
+}
+
 fn path_ft(points: &[[f64; 2]], upf: f64) -> f64 {
     let mut total = 0.0;
     for w in points.windows(2) {
@@ -211,8 +253,19 @@ fn path_ft(points: &[[f64; 2]], upf: f64) -> f64 {
     total / upf
 }
 
-/// Read one sheet's trade into spec parts in `d`'s units (`upf` per foot).
-fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf: f64) -> (Mep, SheetRead) {
+/// Read one sheet's trade into spec parts in `d`'s units (`upf` per foot). Registered (`reg`) on
+/// its level's architectural plan `arch`, the background is removed first, the sheet is read at
+/// the registration's scale and moved by it, and the runs still on the plan's lines are dropped;
+/// else it is placed by its sheet position, with a warning.
+fn read_sheet(
+    d: &Drawing,
+    sh: &SheetRef,
+    all: &[SheetRef],
+    trade: MepKind,
+    upf: f64,
+    reg: Option<&super::register::Registration>,
+    arch: Option<&super::register::ArchPlan>,
+) -> (Mep, SheetRead) {
     let level = level_name(&sh.level);
     let mut read = SheetRead {
         sheet: sh.number.clone(),
@@ -220,13 +273,25 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
         trade: if trade == MepKind::Duct { "duct" } else { "pipe" },
         ..SheetRead::default()
     };
-    let sub = sheet_drawing(d, sh);
+    let mut sub = sheet_drawing(d, sh);
     if sub.model.is_empty() {
         read.warnings.push(format!("{}: no objects imported for this sheet", sh.number));
         return (Mep::default(), read);
     }
     let paper = paper_units_per_foot(&sub, sh);
-    let sheet_upf = paper.unwrap_or(upf);
+    let reg = reg.filter(|r| r.registered);
+    read.registration = reg.map(super::register::Registration::to_json);
+    read.registered = reg.is_some();
+    if let Some(r) = reg {
+        for h in &r.background {
+            sub.model.remove(*h);
+        }
+    }
+    // Registered: read at the scale it was lined up at.
+    let sheet_upf = match reg {
+        Some(r) if r.transform.scale() > 0.0 => upf / r.transform.scale(),
+        _ => paper.unwrap_or(upf),
+    };
     // No MEP systems: the readers take them from the sheet's layers and tags.
     let spec = BuildingSpec {
         units_per_foot: sheet_upf,
@@ -282,11 +347,23 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
         }
     };
     // Into the drawing's units, onto the level's architectural plan.
-    let k = if paper.is_some() { upf / sheet_upf } else { 1.0 };
+    let at = match reg {
+        Some(r) => r.transform,
+        None => {
+            let k = if paper.is_some() { upf / sheet_upf } else { 1.0 };
+            let p = placement(sh, all, k);
+            read.warnings.push(format!(
+                "{} ({}): not lined up on an architectural plan of its level; placed by its sheet position{}",
+                sh.number,
+                level,
+                if p.to == p.from { " (where it is)" } else { "" }
+            ));
+            super::register::Similarity::place(p.from, p.to, p.k)
+        }
+    };
     if paper.is_some() {
         read.warnings.push(format!("{}: at paper size; read at {} drawing units per foot", sh.number, sheet_upf));
     }
-    let at = placement(sh, all, k);
     for r in &mut mep.runs {
         for p in &mut r.points {
             *p = at.apply(*p);
@@ -296,8 +373,13 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
         t.at = at.apply(t.at);
     }
     for e in &mut mep.equipment {
-        e.min = at.apply(e.min);
-        e.max = at.apply(e.max);
+        (e.min, e.max) = at.apply_box(e.min, e.max);
+    }
+    // A run still lying on the architectural plan's lines is the building, not the trade.
+    if let (Some(_), Some(arch)) = (reg, arch) {
+        let before = mep.runs.len();
+        mep.runs.retain(|r| on_arch_share(&r.points, arch) < 0.8);
+        read.dropped_on_walls = before - mep.runs.len();
     }
     read.runs = mep.runs.len();
     read.length_ft = mep.runs.iter().map(|r| path_ft(&r.points, upf)).sum();
@@ -321,9 +403,12 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, only: Opti
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
     let mut out = SetRead::default();
     let mine: Vec<&SheetRef> = sheets.iter().filter(|s| s.trade().is_some_and(|t| only.is_none_or(|o| o == t))).take(MAX_SHEETS).collect();
+    let mut plans = std::collections::HashMap::new();
     for sh in mine {
         let Some(trade) = sh.trade() else { continue };
-        let (mep, read) = read_sheet(d, sh, sheets, trade, upf);
+        let reg = super::register::register_with(d, sh, sheets, upf, &mut plans);
+        let arch = reg.arch_sheet.as_ref().and_then(|n| plans.get(n));
+        let (mep, read) = read_sheet(d, sh, sheets, trade, upf, Some(&reg), arch);
         out.warnings.extend(read.warnings.iter().cloned());
         // Typical-floor replication: if the sheet covers several levels, clone the MEP
         // for each additional level (the first is the primary, already read).
@@ -340,6 +425,9 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, only: Opti
                 terminals: cloned.terminals.len(),
                 equipment: cloned.equipment.len(),
                 warnings: Vec::new(),
+                registered: read.registered,
+                dropped_on_walls: read.dropped_on_walls,
+                registration: read.registration.clone(),
             });
             let room = MAX_SET_RUNS.saturating_sub(out.mep.runs.len());
             if room == 0 {
@@ -679,12 +767,166 @@ mod tests {
         s.execute("text", &json!({"at": [300, 20], "text": "12x12 SA", "height": 4})).expect("tag");
         let d = s.doc().expect("doc").clone();
         let sh = SheetRef { rect: [-10.0, -10.0, 700.0, 100.0], ..sheet("M-001", "M", "1", 0.0) };
-        let (_, plain) = read_sheet(&d, &sh, std::slice::from_ref(&sh), MepKind::Duct, 12.0);
+        let (_, plain) = read_sheet(&d, &sh, std::slice::from_ref(&sh), MepKind::Duct, 12.0, None, None);
         s.execute("text", &json!({"at": [300, 80], "text": "DO NOT SCALE DRAWINGS", "height": 4})).expect("note");
         let d = s.doc().expect("doc").clone();
-        let (mep, notes) = read_sheet(&d, &sh, std::slice::from_ref(&sh), MepKind::Duct, 12.0);
+        let (mep, notes) = read_sheet(&d, &sh, std::slice::from_ref(&sh), MepKind::Duct, 12.0, None, None);
         assert!(plain.runs > 0, "the same sheet without the note reads its duct: {plain:?}");
         assert!(mep.runs.is_empty(), "{notes:?}");
         assert!(notes.warnings.iter().any(|w| w.contains("notes sheet")), "{notes:?}");
+    }
+
+    /// A made-up plan in `tf`'s frame: a row of rooms' wall faces (inches), grid lines and
+    /// their labelled bubbles, on `layer`.
+    fn background(d: &mut Drawing, tf: &super::super::register::Similarity, layer: &str) {
+        let mut w = |d: &mut Drawing, a: [f64; 2], b: [f64; 2]| add_line(d, layer, tf.apply(a), tf.apply(b));
+        for x in [0.0, 240.0, 480.0, 720.0, 960.0] {
+            w(d, [x, 0.0], [x, 600.0]);
+            w(d, [x + 6.0, 0.0], [x + 6.0, 600.0]);
+        }
+        for y in [0.0, 600.0] {
+            w(d, [0.0, y], [966.0, y]);
+            w(d, [0.0, y + 6.0], [966.0, y + 6.0]);
+        }
+        for (i, x) in [0.0, 480.0, 960.0].iter().enumerate() {
+            w(d, [*x + 3.0, -120.0], [*x + 3.0, 720.0]);
+            add_text(d, &format!("{}", i + 1), tf.apply([*x + 3.0, -150.0]), 6.0 * tf.scale());
+        }
+        for (i, y) in [0.0, 600.0].iter().enumerate() {
+            w(d, [-120.0, *y + 3.0], [1080.0, *y + 3.0]);
+            add_text(d, ["A", "B"].get(i).copied().unwrap_or("C"), tf.apply([-150.0, *y + 3.0]), 6.0 * tf.scale());
+        }
+        // Room tags.
+        for (i, x) in [120.0, 360.0, 600.0, 840.0].iter().enumerate() {
+            add_text(d, &format!("10{}", i + 1), tf.apply([*x, 560.0]), 6.0 * tf.scale());
+        }
+    }
+
+    fn add_line(d: &mut Drawing, layer: &str, a: [f64; 2], b: [f64; 2]) -> cadaddy_doc::Handle {
+        let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(a[0], a[1], 0.0), b: cadaddy_geom::Vec3::new(b[0], b[1], 0.0) };
+        d.add(&Space::Model, cadaddy_doc::Common { layer: layer.into(), ..cadaddy_doc::Common::default() }, cadaddy_doc::EntityKind::Line(line)).expect("line")
+    }
+
+    fn add_text(d: &mut Drawing, s: &str, at: [f64; 2], h: f64) {
+        let t = cadaddy_doc::Text {
+            insert: cadaddy_geom::Vec3::new(at[0], at[1], 0.0),
+            align_pt: None,
+            height: h,
+            value: s.into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: cadaddy_doc::HAlign::Left,
+            valign: cadaddy_doc::VAlign::Baseline,
+        };
+        d.add(&Space::Model, cadaddy_doc::Common { layer: "TEXT".into(), ..cadaddy_doc::Common::default() }, cadaddy_doc::EntityKind::Text(t)).expect("text");
+    }
+
+    fn border(d: &mut Drawing, r: [f64; 4]) {
+        let [x0, y0, x1, y1] = r;
+        for (a, b) in [([x0, y0], [x1, y0]), ([x1, y0], [x1, y1]), ([x1, y1], [x0, y1]), ([x0, y1], [x0, y0])] {
+            add_line(d, "BORDER", a, b);
+        }
+    }
+
+    fn placed(number: &str, discipline: &str, rect: [f64; 4], span: (u64, u64)) -> SheetRef {
+        SheetRef { number: number.into(), level: "1".into(), discipline: discipline.into(), kind: "plan".into(), rect, span: Some(span), scale_text: None, levels: Vec::new() }
+    }
+
+    /// The rectangle round `tf`'s plan, with a margin.
+    fn rect_of(tf: &super::super::register::Similarity) -> [f64; 4] {
+        let (lo, hi) = tf.apply_box([-300.0, -300.0], [1_260.0, 900.0]);
+        [lo[0], lo[1], hi[0], hi[1]]
+    }
+
+    #[test]
+    fn trade_plans_at_another_scale_and_turn_line_up_and_read_only_their_trade() {
+        use super::super::register::Similarity;
+        let mut d = Drawing::default();
+        let lo = d.handseed;
+        let id = Similarity::identity();
+        background(&mut d, &id, "A-WALL");
+        border(&mut d, rect_of(&id));
+        let a_hi = d.handseed;
+        // The mechanical plan: half scale, turned a quarter, far right; two tagged ducts.
+        let m = Similarity { m: [0.0, 0.5], t: [6_000.0, 100.0] };
+        background(&mut d, &m, "M-BKGD");
+        border(&mut d, rect_of(&m));
+        for (a, b, off, tag, at) in [
+            ([60.0, 300.0], [420.0, 300.0], [0.0, 6.0], "12x12 SA", [240.0, 316.0]),
+            ([600.0, 120.0], [600.0, 480.0], [6.0, 0.0], "12x12 SA", [616.0, 300.0]),
+        ] {
+            for k in [-1.0, 1.0] {
+                let (p, q) = ([a[0] + off[0] * k, a[1] + off[1] * k], [b[0] + off[0] * k, b[1] + off[1] * k]);
+                add_line(&mut d, "0", m.apply(p), m.apply(q));
+            }
+            add_text(&mut d, tag, m.apply(at), 3.0);
+        }
+        let m_hi = d.handseed;
+        // The plumbing plan: twice the scale, turned half round; two pipe runs.
+        let pl = Similarity { m: [-2.0, 0.0], t: [14_000.0, 1_400.0] };
+        background(&mut d, &pl, "P-BKGD");
+        border(&mut d, rect_of(&pl));
+        for (a, b) in [([100.0, 450.0], [860.0, 450.0]), ([300.0, 100.0], [300.0, 560.0])] {
+            add_line(&mut d, "P-CW", pl.apply(a), pl.apply(b));
+        }
+        let p_hi = d.handseed;
+        let sheets = vec![
+            placed("A-101", "A", rect_of(&id), (lo, a_hi)),
+            placed("M-101", "M", rect_of(&m), (a_hi, m_hi)),
+            placed("P-101", "P", rect_of(&pl), (m_hi, p_hi)),
+        ];
+        let read = read_sheets(&d, &sheets, 12.0, None);
+        for r in &read.sheets {
+            assert!(r.registered, "{} registered: {:?}", r.sheet, r.registration);
+            let reg = r.registration.clone().unwrap_or_default();
+            assert!(reg["matched_pct"].as_f64().unwrap_or(0.0) > 0.95, "{reg}");
+            assert_eq!(r.dropped_on_walls, 0, "no run lies on a wall: {r:?}");
+        }
+        // Exact counts, lengths within 5% (60 ft of duct, 101.7 ft of pipe), on the A plan.
+        assert_eq!(read.runs("duct"), 2, "{:?}", read.to_json());
+        assert_eq!(read.runs("pipe"), 2, "{:?}", read.to_json());
+        let (duct, pipe) = (read.length_ft("duct"), read.length_ft("pipe"));
+        assert!((duct - 60.0).abs() <= 3.0, "duct {duct}");
+        assert!((pipe - 101.67).abs() <= 5.1, "pipe {pipe}");
+        for r in &read.mep.runs {
+            for p in &r.points {
+                assert!(p[0] > -1.0 && p[0] < 967.0 && p[1] > -1.0 && p[1] < 607.0, "{} point {p:?} on the A plan", r.system);
+            }
+        }
+        // The background never reached a reader: the walls were not read as ducts or pipes.
+        let plan = super::super::register::ArchPlan::new(&d, &sheets[0]);
+        for r in &read.mep.runs {
+            assert!(on_arch_share(&r.points, &plan) < 0.2, "{r:?}");
+        }
+    }
+
+    #[test]
+    fn a_trade_plan_without_the_background_is_not_registered_and_says_so() {
+        use super::super::register::Similarity;
+        let mut d = Drawing::default();
+        let lo = d.handseed;
+        let id = Similarity::identity();
+        background(&mut d, &id, "A-WALL");
+        let a_hi = d.handseed;
+        let m = Similarity { m: [1.0, 0.0], t: [6_000.0, 0.0] };
+        // Only the grid labels in common, and its ducts.
+        for (i, x) in [0.0, 480.0, 960.0].iter().enumerate() {
+            add_text(&mut d, &format!("{}", i + 1), m.apply([*x + 3.0, -150.0]), 6.0);
+        }
+        for k in [-1.0, 1.0] {
+            add_line(&mut d, "0", m.apply([60.0, 300.0 + 6.0 * k]), m.apply([420.0, 300.0 + 6.0 * k]));
+        }
+        add_text(&mut d, "12x12 SA", m.apply([240.0, 316.0]), 6.0);
+        let m_hi = d.handseed;
+        let mut ms = placed("M-101", "M", [5_700.0, -300.0, 7_300.0, 900.0], (a_hi, m_hi));
+        ms.level = "1".into();
+        let sheets = vec![placed("A-101", "A", rect_of(&id), (lo, a_hi)), ms];
+        let read = read_sheets(&d, &sheets, 12.0, None);
+        let r = read.sheets.first().expect("M-101 read");
+        assert!(!r.registered);
+        assert!(r.warnings.iter().any(|w| w.contains("not lined up")), "{r:?}");
+        assert!(r.registration.is_none());
     }
 }
