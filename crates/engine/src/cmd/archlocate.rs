@@ -1574,8 +1574,26 @@ pub(crate) fn locate(
             run.kept_electrical += 1;
         }
     }
+    // Where the devices sit (which plan; whether inside a level's plan the model is built from):
+    // a device on a plan no level is built from is not in the model's rooms.
+    let mut by_plan: BTreeMap<String, usize> = BTreeMap::new();
+    for d in &devs {
+        let on = e_sheets.iter().find(|(n, _, r)| holds(n, *r, d)).map_or_else(|| "none".to_string(), |(n, _, _)| n.clone());
+        *by_plan.entry(on).or_default() += 1;
+    }
+    let level_regions: Vec<[f64; 4]> = sp.levels.iter().filter_map(|l| l.region).collect();
+    let off_model = if level_regions.is_empty() { 0 } else { devs.iter().filter(|d| !level_regions.iter().any(|r| inside(Some(*r), d.at))).count() };
+    if off_model > 0 {
+        run.finding(
+            "devices_off_level_plans",
+            json!({"devices": off_model, "why": "on a plan no level is built from (an enlarged plan not put onto its overall plan)"}),
+        );
+    }
     json!({
         "devices": devs.len(),
+        "devices_by_plan": by_plan.into_iter().take(MAX_VIEWS).map(|(k, v)| (k, json!(v))).collect::<serde_json::Map<String, Value>>(),
+        "devices_off_level_plans": off_model,
+        "pages": pages.iter().take(MAX_PAGES).map(|p| p.number.clone()).collect::<Vec<_>>(),
         "moved": run.moved,
         "recorded_not_moved": run.recorded,
         "kept_electrical": run.kept_electrical,
@@ -1778,6 +1796,7 @@ pub(crate) fn job_findings(report: &Value) -> Vec<(String, String)> {
                 "wall_not_shown" => "walls with devices that no elevation shows",
                 "wall_ambiguous" => "elevations whose wall could not be told (two walls fit alike)",
                 "room_walls_not_found" => "elevations whose room walls were not found on the electrical plan",
+                "devices_off_level_plans" => "devices on a plan no level is built from (kept where that plan has them)",
                 _ => "device location findings",
             };
             let examples: Vec<String> = fs.iter().take(3).map(|f| f.to_string()).collect();
@@ -2266,6 +2285,42 @@ mod tests {
         let other = vec![sheets[0].clone(), ("A-2".to_string(), "Level 2".to_string(), sheets[1].2)];
         let r = locate(&mut sp, &d, &other, &[details_page(wall_detail())], Opts::default());
         assert_eq!(r["moved"], 0, "{r}");
+    }
+
+    fn level_on(region: [f64; 4]) -> cadaddy_walk3d::Level {
+        cadaddy_walk3d::Level {
+            name: "Level 1".into(),
+            elevation_ft: 0.0,
+            height_ft: 12.0,
+            ceiling_ft: 9.0,
+            region: Some(region),
+            base: None,
+            attr: None,
+            sheet: None,
+        }
+    }
+
+    #[test]
+    fn the_report_says_which_plan_holds_the_devices_and_which_are_off_the_level_plans() {
+        let d = e_plan();
+        let sheets = vec![
+            ("E-1".to_string(), "Level 1".to_string(), Some([-20.0, -20.0, 400.0, 200.0])),
+            ("E-9".to_string(), "Level 1".to_string(), Some([980.0, -20.0, 1400.0, 200.0])),
+        ];
+        // Level 1 is built from E-1: its devices are in the model.
+        let mut sp = spec();
+        sp.levels = vec![level_on([-20.0, -20.0, 400.0, 200.0])];
+        let r = locate(&mut sp, &d, &sheets, &[details_page(wall_detail())], Opts::default());
+        assert_eq!(r["devices_by_plan"]["E-1"], json!(sp.tags.iter().filter(|t| t.id.starts_with("device:")).count()), "{r}");
+        assert_eq!(r["devices_off_level_plans"], 0, "{r}");
+        assert_eq!(r["pages"], json!(["A-733"]), "{r}");
+        // Level 1 is built from another plan (an enlarged plan not put onto it): every device is off it.
+        let mut sp = spec();
+        sp.levels = vec![level_on([980.0, -20.0, 1400.0, 200.0])];
+        let n = sp.tags.iter().filter(|t| t.id.starts_with("device:")).count();
+        let r = locate(&mut sp, &d, &sheets, &[details_page(wall_detail())], Opts::default());
+        assert_eq!(r["devices_off_level_plans"], json!(n), "{r}");
+        assert!(r["findings"].as_array().is_some_and(|f| f.iter().any(|f| f["kind"] == "devices_off_level_plans")), "{r}");
     }
 
     #[test]
