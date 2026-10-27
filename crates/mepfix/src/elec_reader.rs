@@ -1201,7 +1201,7 @@ pub struct FoundDevice {
     pub at_ft: [f64; 3],
     /// Mounting height inches AFF.
     pub mounting_in: f64,
-    /// `"note"`, `"legend"`, or `"rule"`.
+    /// `"note"`, `"legend"`, `"rule"`, or `"project_rule"`.
     pub height_source: String,
     /// Whether this device's plan position was fixed by architectural sheets (true) or is a
     /// zone / field decision (false).
@@ -1218,6 +1218,13 @@ pub struct FoundDevice {
     pub drawn_ft: [f64; 2],
     /// The texts beside the symbol (subscripts, its circuit), as printed.
     pub notes: Vec<String>,
+    /// Provenance: which source tier determined the mounting height (e.g. "rfi", "built_in").
+    /// Empty when the height came from a drawing note.
+    pub height_tier: String,
+    /// Provenance: the source citation for the mounting height (e.g. "RFI #12").
+    pub height_citation: String,
+    /// Provenance: what the winning height overrode: [(value, tier)].
+    pub height_overrode: Vec<(String, String)>,
 }
 
 /// A found panel, building coordinates.
@@ -1243,6 +1250,52 @@ const DEFAULT_CEILING_FT: f64 = 9.0;
 pub fn read_devices(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, truth: &Truth) -> (Vec<FoundDevice>, Vec<FoundPanel>) {
     let ctx = PlacementContext::from_truth(truth);
     read_devices_ctx(dxf_data, sheet_map, &ctx)
+}
+
+/// Resolve mounting height from project rules, then built-in defaults.
+/// Returns (height_inches, source_type, tier_name, citation, overrode_list).
+fn resolve_height_from_rules(
+    rules: &cadaddy_doc::projrules::ProjectRules,
+    kind: &str,
+    room: &str,
+) -> Option<(f64, String, String, Vec<(String, String)>)> {
+    use cadaddy_doc::projrules::{RuleDomain, builtin_mounting_height};
+
+    // Try specific key first: "switch/bathroom", then generic: "switch/general".
+    let keys = [format!("{kind}/{room}"), format!("{kind}/general")];
+    for key in &keys {
+        if let Some(resolved) = rules.resolve(RuleDomain::MountingHeight, key) {
+            // Parse the value as inches (strip trailing `"`, `\"`, etc.)
+            if let Some(inches) = parse_rule_inches(&resolved.value) {
+                let overrode: Vec<(String, String)> = resolved.overrides.iter().map(|(v, t)| (v.clone(), t.as_str().to_string())).collect();
+                return Some((inches, resolved.tier.as_str().to_string(), resolved.source.clone(), overrode));
+            }
+        }
+    }
+
+    // Fall back to built-in defaults from projrules.
+    let room_key = if room.is_empty() { "general" } else { room };
+    if let Some(val) = builtin_mounting_height(kind, room_key)
+        && let Some(inches) = parse_rule_inches(val)
+    {
+        return Some((inches, "built_in".to_string(), String::new(), Vec::new()));
+    }
+
+    None
+}
+
+/// Parse a rule value like `"46\""`, `"46"`, `"48\""`, `"ceiling"` to inches.
+fn parse_rule_inches(s: &str) -> Option<f64> {
+    let trimmed = s.trim().trim_end_matches('"').trim_end_matches('\\').trim();
+    if trimmed.eq_ignore_ascii_case("ceiling") || trimmed.eq_ignore_ascii_case("clg") {
+        return Some(0.0); // 0 = ceiling, resolved later.
+    }
+    if trimmed.eq_ignore_ascii_case("floor") {
+        return Some(0.0);
+    }
+    // Try to parse as number, possibly with units like `48" to top`.
+    let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    digits.parse::<f64>().ok().filter(|v| (0.0..=240.0).contains(v))
 }
 
 /// Read electrical devices using a `PlacementContext` built from reader output (no truth).
@@ -1344,6 +1397,9 @@ pub fn read_devices_ctx(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, ct
                 properties: BTreeMap::new(),
                 drawn_ft: approx_b,
                 notes: rd.notes.clone(),
+                height_tier: String::new(),
+                height_citation: String::new(),
+                height_overrode: Vec::new(),
             });
         }
 
@@ -1379,6 +1435,38 @@ fn find_room<'a>(rooms: &'a BTreeMap<String, Vec<&'a Room>>, level: &str, pt: [f
 }
 
 // ---- 3D generation ---------------------------------------------------------------------
+
+/// Apply project rules to found devices: for each device whose `height_source` is `"rule"`
+/// (i.e. from hard-coded defaults, not a drawing note), look up the project rules for a
+/// `mounting_height/<kind>/<room>` or `mounting_height/<kind>/general` entry.  If found, update
+/// the device's mounting height and record provenance (tier, citation, what it overrode).
+///
+/// Returns the number of devices whose height was changed.
+pub fn apply_project_rules(devices: &mut [FoundDevice], rules: &cadaddy_doc::projrules::ProjectRules) -> usize {
+    let mut changed = 0;
+    for dev in devices.iter_mut() {
+        // Only overwrite rule-derived heights (notes on the drawing take precedence).
+        if dev.height_source != "rule" {
+            continue;
+        }
+        let room = if dev.room.is_empty() { "general" } else { &dev.room };
+        if let Some((inches, tier, citation, overrode)) = resolve_height_from_rules(rules, &dev.kind, room) {
+            let old_in = dev.mounting_in;
+            dev.mounting_in = inches;
+            dev.height_source = "project_rule".to_string();
+            dev.height_tier = tier;
+            dev.height_citation = citation;
+            dev.height_overrode = overrode;
+            // Recompute z from the new height.
+            if (inches - old_in).abs() > 0.01 {
+                // Adjust z: old z was level_elev + old_in/12, new z is level_elev + inches/12.
+                dev.at_ft[2] += (inches - old_in) / 12.0;
+                changed += 1;
+            }
+        }
+    }
+    changed
+}
 
 /// Generate 3D geometry for found electrical devices: simple shapes on per-type layers.
 ///
@@ -1581,6 +1669,9 @@ pub fn perfect_devices(truth: &Truth) -> Vec<FoundDevice> {
                 .note(&d.id)
                 .map(|n| n.subscripts.iter().cloned().chain((!n.circuit_ref.is_empty()).then(|| n.circuit_ref.clone())).collect())
                 .unwrap_or_default(),
+            height_tier: String::new(),
+            height_citation: String::new(),
+            height_overrode: Vec::new(),
         })
         .collect()
 }

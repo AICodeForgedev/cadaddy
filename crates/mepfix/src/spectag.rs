@@ -152,9 +152,19 @@ pub fn wiring_method(rules: &ProjectRules, location: &str) -> Option<(String, &'
     builtin_wiring_method(location).map(|v| (v.to_string(), "rule"))
 }
 
-/// A rule value naming more than one method (`MC cable or EMT`).
-fn two_methods(v: &str) -> bool {
-    v.to_ascii_lowercase().contains(" or ")
+/// Two or more rules (project and/or built-in) giving **different** methods for the same
+/// location. A single rule whose value contains " or " (e.g. "MC cable or EMT") is
+/// `method_choice_open`, not `two_rules_apply`.
+fn conflicting_rules(rules: &ProjectRules, location: &str) -> Option<&'static str> {
+    let proj = rules.resolve(RuleDomain::WiringMethod, location).map(|v| v.value.clone());
+    let builtin = builtin_wiring_method(location).map(str::to_string);
+    match (&proj, &builtin) {
+        (Some(p), Some(b)) if !p.eq_ignore_ascii_case(b) => Some("two_rules_apply"),
+        _ => {
+            let val = proj.as_deref().or(builtin.as_deref()).unwrap_or_default();
+            if val.to_ascii_lowercase().contains(" or ") { Some("method_choice_open") } else { None }
+        }
+    }
 }
 
 /// The smallest room holding a point (a reader can also report a box around a whole floor; a
@@ -228,12 +238,21 @@ pub fn tag(
             if let Some(c) = &circuit {
                 e.set("circuit", c.clone(), "plan");
             }
-            let breaker_gf = breaker.as_deref().is_some_and(|b| matches!(b, "GFCI" | "DF" | "GFEP"));
-            let protection = match (breaker_gf, device_gfci) {
-                (true, true) => "GFCI breaker and GFCI device",
-                (true, false) => "GFCI breaker",
-                (false, true) => "GFCI device",
-                (false, false) => "none",
+            // Protection: name the breaker type (GFCI, AFCI, DF, GFEP) when present.
+            let breaker_kind = breaker.as_deref().map(|b| b.to_ascii_uppercase());
+            let bk = breaker_kind.as_deref().unwrap_or_default();
+            let breaker_gf = matches!(bk, "GFCI" | "DF" | "GFEP");
+            let protection = match (bk, device_gfci) {
+                ("GFCI", true) => "GFCI breaker and GFCI device",
+                ("GFCI", false) => "GFCI breaker",
+                ("DF", true) => "dual-function breaker and GFCI device",
+                ("DF", false) => "dual-function breaker",
+                ("GFEP", true) => "GFEP breaker and GFCI device",
+                ("GFEP", false) => "GFEP breaker",
+                ("CAFCI", _) => "CAFCI breaker",
+                ("AFCI", _) => "AFCI breaker",
+                (_, true) => "GFCI device",
+                _ => "none",
             };
             e.set(
                 "protection",
@@ -287,8 +306,8 @@ pub fn tag(
         let loc = locations(&c.level, mid);
         e.set("location", loc, "rule");
         if let Some((m, src)) = wiring_method(rules, loc) {
-            if two_methods(&m) {
-                e.issues.push("two_rules_apply".into());
+            if let Some(issue) = conflicting_rules(rules, loc) {
+                e.issues.push(issue.into());
             }
             e.set("wiring_method", m, src);
         }
@@ -296,6 +315,31 @@ pub fn tag(
         out.push(e);
     }
     out
+}
+
+/// The location of a conduit run in the expected (truth) tags: uses the room's properties
+/// to distinguish wet, below_slab, in_slab, plenum, exposed and concealed.
+fn expected_location(room: Option<&crate::truth::Room>, t: &Truth) -> &'static str {
+    let Some(room) = room else { return "concealed" };
+    let name_upper = room.name.to_ascii_uppercase();
+    if wet(&name_upper) {
+        return "wet";
+    }
+    // Below slab / in CMU block: the room note elecspec plants on the electrical plan.
+    match t.elec_spec.room_location(&room.level, &room.number) {
+        Some("below_slab") => return "below_slab",
+        Some("in_slab") => return "in_slab",
+        _ => {}
+    }
+    // Plenum: a room with a ceiling that has meaningful plenum depth.
+    if room.plenum_ft.is_some_and(|d| d > 0.0) && room.ceiling.is_some() {
+        return "plenum";
+    }
+    // Open to structure: no ceiling.
+    if room.ceiling.is_none() {
+        return "exposed";
+    }
+    "concealed"
 }
 
 /// What the truth says each element is (the same rules over the truth's own facts), for
@@ -332,13 +376,21 @@ pub fn expected(t: &Truth, rules: &ProjectRules) -> Vec<ElementTag> {
             if let Some(c) = c {
                 e.set("circuit", format!("{}-{}", panel_tag(&c.panel), c.number), "plan");
             }
-            let breaker_gf = c.and_then(|c| spec.breaker(&c.panel, &c.number)).is_some_and(|b| matches!(b, "GFCI" | "DF" | "GFEP"));
+            let breaker_kind = c.and_then(|c| spec.breaker(&c.panel, &c.number)).map(|b| b.to_ascii_uppercase());
+            let bk = breaker_kind.as_deref().unwrap_or_default();
+            let breaker_gf = matches!(bk, "GFCI" | "DF" | "GFEP");
             let device_gfci = subs.iter().any(|s| s == "GFCI");
-            let protection = match (breaker_gf, device_gfci) {
-                (true, true) => "GFCI breaker and GFCI device",
-                (true, false) => "GFCI breaker",
-                (false, true) => "GFCI device",
-                (false, false) => "none",
+            let protection = match (bk, device_gfci) {
+                ("GFCI", true) => "GFCI breaker and GFCI device",
+                ("GFCI", false) => "GFCI breaker",
+                ("DF", true) => "dual-function breaker and GFCI device",
+                ("DF", false) => "dual-function breaker",
+                ("GFEP", true) => "GFEP breaker and GFCI device",
+                ("GFEP", false) => "GFEP breaker",
+                ("CAFCI", _) => "CAFCI breaker",
+                ("AFCI", _) => "AFCI breaker",
+                (_, true) => "GFCI device",
+                _ => "none",
             };
             e.set("protection", protection, "schedule");
             if breaker_gf && device_gfci {
@@ -369,11 +421,11 @@ pub fn expected(t: &Truth, rules: &ProjectRules) -> Vec<ElementTag> {
             ElementTag { id: format!("conduit:{}", c.id), kind: "conduit".into(), level: c.level.clone(), at_ft: mid, ..ElementTag::default() };
         let level_rooms: Vec<&crate::truth::Room> = t.building.rooms.iter().filter(|r| r.level == c.level).collect();
         let room = room_at(&level_rooms, mid, &|r| (r.min_ft, r.max_ft)).copied();
-        let loc = if room.is_some_and(|r| r.ceiling.is_none()) { "exposed" } else { "concealed" };
+        let loc = expected_location(room, t);
         e.set("location", loc, "rule");
         if let Some((m, _)) = wiring_method(rules, loc) {
-            if two_methods(&m) {
-                e.issues.push("two_rules_apply".into());
+            if let Some(issue) = conflicting_rules(rules, loc) {
+                e.issues.push(issue.into());
             }
             e.set("wiring_method", m, "rule");
         }
@@ -401,6 +453,10 @@ impl FieldScore {
 
 /// Score found tags against expected ones: elements matched by kind, level and position (within
 /// 1'; homeruns by label), then each field's value and each issue kind compared.
+///
+/// Found elements with **no match** in the truth count as false positives for every field and
+/// issue they carry. `wiring_method` truth comes from the planted values in the truth tags,
+/// not from the tagger's own `wiring_method()`.
 pub fn score(found: &[ElementTag], truth: &[ElementTag]) -> BTreeMap<String, FieldScore> {
     let near = |a: &ElementTag, b: &ElementTag| {
         a.kind == b.kind
@@ -419,7 +475,9 @@ pub fn score(found: &[ElementTag], truth: &[ElementTag]) -> BTreeMap<String, Fie
     for f in found {
         let m = truth.iter().find(|t| near(f, t));
         for (k, v) in &f.fields {
-            if !m.is_some_and(|t| t.fields.contains_key(k)) {
+            // Matched element whose truth lacks this field (e.g. luminaire, size): skip it.
+            // Unmatched element (no truth match): count all fields as false positives.
+            if m.is_some_and(|t| !t.fields.contains_key(k)) {
                 continue;
             }
             let s = out.entry(k.clone()).or_default();
@@ -474,10 +532,31 @@ pub fn read_fixture_tags(seed: u64, rules: &ProjectRules) -> Result<(Truth, Vec<
             d.room = r.name.clone();
         }
     }
+    // Room notes on the electrical plans (`CONDUIT BELOW SLAB`): the room each sits in.
+    let mut noted: BTreeMap<(String, String), &'static str> = BTreeMap::new();
+    for (level, at, location) in room_location_notes(&dxf, &map) {
+        let level_rooms: Vec<&crate::ceiling_reader::FoundRoom> = ceil.rooms.iter().filter(|r| r.level == level).collect();
+        if let Some(r) = room_at(&level_rooms, at, &|r| (r.min_ft, r.max_ft)) {
+            noted.entry((level, r.number.clone())).or_insert(location);
+        }
+    }
     let locate = |level: &str, p: [f64; 2]| -> &'static str {
         let level_rooms: Vec<&crate::ceiling_reader::FoundRoom> = ceil.rooms.iter().filter(|r| r.level == level).collect();
         let room = room_at(&level_rooms, p, &|r| (r.min_ft, r.max_ft)).copied();
-        // Open only when every ceiling read for the room says so.
+        let room_name = room.map(|r| r.name.as_str()).unwrap_or_default().to_ascii_uppercase();
+        // Wet locations (bathrooms, kitchens, etc.).
+        if wet(&room_name) {
+            return "wet";
+        }
+        // Below slab / in CMU block: the room's note on the electrical plan.
+        if let Some(loc) = room.and_then(|r| noted.get(&(level.to_string(), r.number.clone()))) {
+            return loc;
+        }
+        // Plenum: identified by room name (planted by elecspec).
+        if room_name.contains("PLENUM") {
+            return "plenum";
+        }
+        // Open to structure = exposed.
         let open = room.is_some_and(|r| {
             let cs: Vec<&crate::ceiling_reader::FoundCeiling> =
                 ceil.ceilings.iter().filter(|c| c.level == level && c.room_number == r.number).collect();
@@ -486,6 +565,24 @@ pub fn read_fixture_tags(seed: u64, rules: &ProjectRules) -> Result<(Truth, Vec<
         if open { "exposed" } else { "concealed" }
     };
     Ok((set.truth, tag(&devices, &runs, &schedules, rules, &locate)))
+}
+
+/// The conduit-location notes on the electrical plans (`CONDUIT BELOW SLAB`, `CONDUIT IN CMU
+/// BLOCK`): level, where the note sits in building feet, and the location it gives.
+pub fn room_location_notes(dxf: &[(String, Vec<u8>)], map: &crate::sheet_reader::SheetMap) -> Vec<(String, [f64; 2], &'static str)> {
+    let mut out = Vec::new();
+    for (n, b) in dxf {
+        let stem = n.trim_end_matches(".dxf");
+        let Some(sheet) = map.sheets.iter().find(|s| s.number == stem && s.discipline == "E") else { continue };
+        let (Some(alignment), Some(level)) = (&sheet.alignment, &sheet.level) else { continue };
+        let Ok(d) = cadaddy_io::read_dxf(b) else { continue };
+        for t in crate::sheet_facts::texts(&d) {
+            if let Some(location) = elecspec::location_from_note(&t.value) {
+                out.push((level.clone(), crate::sheet_reader::building_from_model(alignment, [t.at.x, t.at.y]), location));
+            }
+        }
+    }
+    out
 }
 
 /// The tags as the building spec's `tags` list (for `bspec.set`).
@@ -514,6 +611,66 @@ mod tests {
         assert_eq!(device_type(&s(&["GFCI"])), "GFCI receptacle");
         assert_eq!(device_type(&s(&["usb"])), "USB receptacle");
         assert_eq!(device_type(&[]), "standard duplex receptacle");
-        assert!(two_methods("MC cable or EMT") && !two_methods("EMT"));
+        let r = ProjectRules::new();
+        assert_eq!(conflicting_rules(&r, "concealed"), Some("method_choice_open"));
+        assert_eq!(conflicting_rules(&r, "exposed"), None);
+        assert_eq!(conflicting_rules(&r, "wet"), Some("method_choice_open"));
+    }
+
+    #[test]
+    fn location_notes_parse() {
+        assert_eq!(elecspec::location_from_note("CONDUIT BELOW SLAB"), Some("below_slab"));
+        assert_eq!(elecspec::location_from_note("run under slab"), Some("below_slab"));
+        assert_eq!(elecspec::location_from_note("CONDUIT IN CMU BLOCK"), Some("in_slab"));
+        assert_eq!(elecspec::location_from_note("RUN IN SLAB"), Some("in_slab"));
+        assert_eq!(elecspec::location_from_note("SLAB EDGE"), None);
+        assert_eq!(elecspec::location_from_note("DO NOT SCALE - LOCATIONS PER ARCHITECTURAL"), None);
+        for loc in ["below_slab", "in_slab"] {
+            let note = elecspec::location_note(loc).unwrap_or_default();
+            assert_eq!(elecspec::location_from_note(note), Some(loc));
+        }
+    }
+
+    /// Q5231: the slab and CMU-block locations are a note on the electrical plan, not a renamed
+    /// room, so the architectural sheets and their truth keep the same room names; the note is
+    /// read back into the room it was planted in.
+    #[test]
+    fn slab_locations_are_room_notes_read_back_from_the_plans() {
+        for seed in [1, 3] {
+            let set = crate::generate(seed).unwrap();
+            let t = &set.truth;
+            assert!(!t.elec_spec.room_locations.is_empty(), "seed {seed}: no room location planted");
+            assert!(t.building.rooms.iter().all(|r| !r.name.contains("SLAB") && !r.name.contains("BLOCK")), "seed {seed}: a room was renamed");
+            if let Some(a) = &t.arch {
+                for f in &a.finishes {
+                    let room = t.building.rooms.iter().find(|r| r.level == f.level && r.number == f.number);
+                    assert_eq!(room.map(|r| r.name.as_str()), Some(f.name.as_str()), "seed {seed}: room {}", f.number);
+                }
+            }
+            let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
+            let map = crate::sheet_reader::recognise_fixture_set(&dxf);
+            let notes = room_location_notes(&dxf, &map);
+            for planted in &t.elec_spec.room_locations {
+                let room = t.building.rooms.iter().find(|r| r.level == planted.level && r.number == planted.room).unwrap();
+                let read = notes.iter().any(|(lv, at, loc)| {
+                    *lv == planted.level
+                        && *loc == planted.location
+                        && (room.min_ft[0]..=room.max_ft[0]).contains(&at[0])
+                        && (room.min_ft[1]..=room.max_ft[1]).contains(&at[1])
+                });
+                assert!(read, "seed {seed}: {} note in room {} not read back ({notes:?})", planted.location, planted.room);
+            }
+            // Every note read is one that was planted (no false locations).
+            assert!(notes.len() >= t.elec_spec.room_locations.len());
+            assert!(
+                notes.iter().all(|(lv, at, loc)| t.elec_spec.room_locations.iter().any(|p| {
+                    let r = t.building.rooms.iter().find(|r| r.level == p.level && r.number == p.room);
+                    p.level == *lv
+                        && p.location == *loc
+                        && r.is_some_and(|r| at[0] >= r.min_ft[0] && at[0] <= r.max_ft[0] && at[1] >= r.min_ft[1] && at[1] <= r.max_ft[1])
+                })),
+                "seed {seed}: {notes:?}"
+            );
+        }
     }
 }

@@ -52,7 +52,7 @@ fn releases_sum_to_the_bom_with_spares_on_top() {
         .cloned()
         .unwrap_or_else(|| panic!("{lines:#?}"));
     let duct_cat = duct["category"].as_str().unwrap().to_string();
-    s.execute("project.rules.set", &json!({"domain": "custom", "key": format!("spares.{duct_cat}"), "value": "10"})).unwrap();
+    s.execute("project.rules.set", &json!({"domain": "custom", "key": format!("spares.{duct_cat}"), "value": "10", "reason": "test setup"})).unwrap();
     // Floor by floor, then the rest of the job.
     let r1 = s.execute("procure.release", &json!({"name": "Level 1", "level": "L1"})).unwrap();
     assert!(r1["unlinked"].as_array().unwrap().is_empty(), "{r1}");

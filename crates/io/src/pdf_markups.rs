@@ -212,39 +212,117 @@ fn markup(doc: &Document, d: &Dictionary) -> Option<Markup> {
     Some(m)
 }
 
+/// Inherit a key from the page or its ancestors in the page tree.
+fn inherited<'a>(doc: &'a Document, page: &'a Dictionary, key: &[u8]) -> Option<Vec<f64>> {
+    let v = nums(doc, page, key);
+    if v.len() == 4 {
+        return Some(v);
+    }
+    let mut parent = page.get(b"Parent").ok().and_then(|o| o.as_reference().ok());
+    for _ in 0..32 {
+        let p = parent.and_then(|p| doc.get_dictionary(p).ok())?;
+        let v = nums(doc, p, key);
+        if v.len() == 4 {
+            return Some(v);
+        }
+        parent = p.get(b"Parent").ok().and_then(|o| o.as_reference().ok());
+    }
+    None
+}
+
+/// Inherit an integer key (e.g. /Rotate) from the page or its ancestors.
+fn inherited_num(doc: &Document, page: &Dictionary, key: &[u8]) -> Option<f64> {
+    if let Some(o) = get(doc, page, key)
+        && let Some(v) = num(o)
+    {
+        return Some(v);
+    }
+    let mut parent = page.get(b"Parent").ok().and_then(|o| o.as_reference().ok());
+    for _ in 0..32 {
+        let p = parent.and_then(|p| doc.get_dictionary(p).ok())?;
+        if let Some(o) = get(doc, p, key)
+            && let Some(v) = num(o)
+        {
+            return Some(v);
+        }
+        parent = p.get(b"Parent").ok().and_then(|o| o.as_reference().ok());
+    }
+    None
+}
+
+/// The number of pages in a PDF.
+pub fn page_count(bytes: &[u8]) -> Result<u32, String> {
+    let doc = Document::load_mem(bytes).map_err(|e| format!("PDF: {e}"))?;
+    Ok(doc.get_pages().len() as u32)
+}
+
+/// The leaf bookmarks of a PDF as (title, 1-based page number).
+pub fn bookmark_titles(bytes: &[u8]) -> Result<Vec<(String, usize)>, String> {
+    crate::pdf_merge::bookmarks(bytes)
+        .map(|v| v.into_iter().filter(|(_, _, page)| *page > 0).map(|(t, _, p)| (t, p)).collect())
+        .map_err(|e| e.to_string())
+}
+
 /// The markups of page `page` (1-based) of a PDF.
 pub fn read(bytes: &[u8], page: u32) -> Result<MarkupPage, String> {
     let doc = Document::load_mem(bytes).map_err(|e| format!("PDF: {e}"))?;
     let pages = doc.get_pages();
     let id = *pages.get(&page.max(1)).ok_or_else(|| format!("the PDF has {} page(s)", pages.len()))?;
     let pd = doc.get_dictionary(id).map_err(|e| format!("PDF page: {e}"))?;
-    // MediaBox may be inherited from the page tree.
-    let mut mb = nums(&doc, pd, b"MediaBox");
-    let mut parent = pd.get(b"Parent").ok().and_then(|o| o.as_reference().ok());
-    let mut guard = 0;
-    while mb.len() != 4 && guard < 32 {
-        guard += 1;
-        let Some(p) = parent.and_then(|p| doc.get_dictionary(p).ok()) else { break };
-        mb = nums(&doc, p, b"MediaBox");
-        parent = p.get(b"Parent").ok().and_then(|o| o.as_reference().ok());
-    }
-    let [x0, y0, x1, y1] = <[f64; 4]>::try_from(mb.as_slice()).unwrap_or([0.0, 0.0, 612.0, 792.0]);
+    // Effective box: CropBox if present, else MediaBox (both may be inherited).
+    let ebox = inherited(&doc, pd, b"CropBox")
+        .or_else(|| inherited(&doc, pd, b"MediaBox"))
+        .and_then(|v| <[f64; 4]>::try_from(v.as_slice()).ok())
+        .unwrap_or([0.0, 0.0, 612.0, 792.0]);
+    let [bx0, by0, bx1, by1] = ebox;
+    let (ox, oy) = (bx0.min(bx1), by0.min(by1));
+    let bw = (bx1 - bx0).abs();
+    let bh = (by1 - by0).abs();
+    // /Rotate: 0, 90, 180, 270 — how the page is viewed.
+    let rotate = inherited_num(&doc, pd, b"Rotate").map_or(0i64, |r| ((r as i64 % 360) + 360) % 360);
     let annots: Vec<&Dictionary> = get(&doc, pd, b"Annots")
         .and_then(|o| o.as_array().ok())
         .map(|a| a.iter().take(MAX_ANNOTS).filter_map(|o| deref(&doc, o).as_dict().ok()).collect())
         .unwrap_or_default();
     let mut markups: Vec<Markup> = annots.iter().filter_map(|d| markup(&doc, d)).collect();
-    // Page coordinates from the media box's corner.
+    // Shift to the box corner, then rotate so coordinates match the viewed page.
     for m in &mut markups {
-        let shift = |p: &mut [f64; 2]| {
-            p[0] -= x0.min(x1);
-            p[1] -= y0.min(y1);
+        let transform = |p: &mut [f64; 2]| {
+            // Shift to box origin.
+            p[0] -= ox;
+            p[1] -= oy;
+            // Rotate: annotations are in unrotated coordinates; the viewer rotates the page.
+            match rotate {
+                90 => {
+                    let (x, y) = (p[0], p[1]);
+                    p[0] = y;
+                    p[1] = bw - x;
+                }
+                180 => {
+                    p[0] = bw - p[0];
+                    p[1] = bh - p[1];
+                }
+                270 => {
+                    let (x, y) = (p[0], p[1]);
+                    p[0] = bh - y;
+                    p[1] = x;
+                }
+                _ => {}
+            }
         };
-        m.points.iter_mut().for_each(shift);
-        m.strokes.iter_mut().flatten().for_each(shift);
-        m.rect = [m.rect[0] - x0.min(x1), m.rect[1] - y0.min(y1), m.rect[2] - x0.min(x1), m.rect[3] - y0.min(y1)];
+        m.points.iter_mut().for_each(transform);
+        m.strokes.iter_mut().flatten().for_each(transform);
+        let mut corners = [[m.rect[0], m.rect[1]], [m.rect[2], m.rect[3]]];
+        corners.iter_mut().for_each(transform);
+        m.rect =
+            [corners[0][0].min(corners[1][0]), corners[0][1].min(corners[1][1]), corners[0][0].max(corners[1][0]), corners[0][1].max(corners[1][1])];
     }
-    Ok(MarkupPage { width: (x1 - x0).abs(), height: (y1 - y0).abs(), markups })
+    // The viewed size: width and height swap under 90/270 rotation.
+    let (width, height) = match rotate {
+        90 | 270 => (bh, bw),
+        _ => (bw, bh),
+    };
+    Ok(MarkupPage { width, height, markups })
 }
 
 fn real(v: f64) -> Object {
@@ -351,6 +429,41 @@ pub fn annotated_pdf(width: f64, height: f64, markups: &[Markup]) -> Result<Vec<
     page.set("Type", Object::Name(b"Page".to_vec()));
     page.set("Parent", Object::Reference(pages_id));
     page.set("MediaBox", arr(&[0.0, 0.0, width, height]));
+    page.set("Annots", Object::Array(annots));
+    let page_id = doc.add_object(page);
+    let mut pages = Dictionary::new();
+    pages.set("Type", Object::Name(b"Pages".to_vec()));
+    pages.set("Kids", Object::Array(vec![Object::Reference(page_id)]));
+    pages.set("Count", Object::Integer(1));
+    doc.objects.insert(pages_id, Object::Dictionary(pages));
+    let mut catalog = Dictionary::new();
+    catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+    catalog.set("Pages", Object::Reference(pages_id));
+    let catalog_id = doc.add_object(catalog);
+    doc.trailer.set("Root", Object::Reference(catalog_id));
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).map_err(|e| format!("writing the PDF: {e}"))?;
+    Ok(bytes)
+}
+
+/// Like [`annotated_pdf`] but with an optional `/Rotate` and/or `/CropBox` on the page.
+pub fn annotated_pdf_ex(width: f64, height: f64, markups: &[Markup], rotate: Option<i64>, crop_box: Option<[f64; 4]>) -> Result<Vec<u8>, String> {
+    let mut doc = Document::with_version("1.7");
+    let pages_id: ObjectId = doc.new_object_id();
+    let mut annots = Vec::new();
+    for m in markups {
+        annots.push(Object::Reference(doc.add_object(annot(m))));
+    }
+    let mut page = Dictionary::new();
+    page.set("Type", Object::Name(b"Page".to_vec()));
+    page.set("Parent", Object::Reference(pages_id));
+    page.set("MediaBox", arr(&[0.0, 0.0, width, height]));
+    if let Some(cb) = crop_box {
+        page.set("CropBox", arr(&cb));
+    }
+    if let Some(r) = rotate {
+        page.set("Rotate", Object::Integer(r));
+    }
     page.set("Annots", Object::Array(annots));
     let page_id = doc.add_object(page);
     let mut pages = Dictionary::new();

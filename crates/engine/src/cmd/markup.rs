@@ -22,7 +22,7 @@ const CMD: &str = "markupimport";
 /// Most markups placed from one page.
 const MAX_MARKUPS: usize = 5000;
 
-static READER: std::sync::OnceLock<MarkupReader> = std::sync::OnceLock::new();
+pub(crate) static READER: std::sync::OnceLock<MarkupReader> = std::sync::OnceLock::new();
 
 /// Install the PDF markup reader (once).
 pub fn set_reader(f: MarkupReader) {
@@ -98,9 +98,10 @@ fn pairs(v: Option<&Value>) -> Option<(Vec2, Vec2)> {
 }
 
 /// The placement asked for, or the default for the current space.
-fn placement(s: &Session, p: &Value, page: &MarkupPage) -> Result<Place> {
+fn placement(s: &Session, p: &Value, page: &MarkupPage) -> Result<(Place, Option<f64>)> {
     if let (Some((p0, p1)), Some((q0, q1))) = (pairs(p.get("from")), pairs(p.get("to"))) {
-        return Place::from_pairs(p0, p1, q0, q1).ok_or_else(|| bad(CMD, "the two page points are the same"));
+        let pl = Place::from_pairs(p0, p1, q0, q1).ok_or_else(|| bad(CMD, "the two page points are the same"))?;
+        return Ok((pl, None));
     }
     let space = s.space();
     let d = s.doc()?;
@@ -109,12 +110,49 @@ fn placement(s: &Session, p: &Value, page: &MarkupPage) -> Result<Place> {
         let l = d.layouts.iter().find(|l| &l.name == name).ok_or_else(|| bad(CMD, "no current layout"))?;
         let mm = l.page.mm_units.unwrap_or(d.header.i64("MEASUREMENT", 0) == 1);
         let k = if mm { 25.4 / 72.0 } else { 1.0 / 72.0 };
-        let _ = page;
-        return Ok(Place { a: k, b: 0.0, t: l.origin });
+        // The layout paper size in points (width_mm/height_mm are always mm; landscape swaps).
+        let (ew_mm, eh_mm) = if l.page.landscape { (l.page.height_mm, l.page.width_mm) } else { (l.page.width_mm, l.page.height_mm) };
+        let paper_w_pt = ew_mm * 72.0 / 25.4;
+        let paper_h_pt = eh_mm * 72.0 / 25.4;
+        // Check page size vs layout paper.
+        let sw = if paper_w_pt > 1e-6 { page.width / paper_w_pt } else { 1.0 };
+        let sh = if paper_h_pt > 1e-6 { page.height / paper_h_pt } else { 1.0 };
+        if (sw - 1.0).abs() <= 0.01 && (sh - 1.0).abs() <= 0.01 {
+            // Same size within 1%: place 1:1.
+            return Ok((Place { a: k, b: 0.0, t: l.origin }, None));
+        }
+        let aspect_page = if page.height > 1e-6 { page.width / page.height } else { 1.0 };
+        let aspect_paper = if paper_h_pt > 1e-6 { paper_w_pt / paper_h_pt } else { 1.0 };
+        if (aspect_page / aspect_paper - 1.0).abs() <= 0.01 {
+            // Same aspect ratio: scale to fit.
+            let scale_factor = (paper_w_pt / page.width).min(paper_h_pt / page.height);
+            let k_scaled = k * scale_factor;
+            return Ok((Place { a: k_scaled, b: 0.0, t: l.origin }, Some(scale_factor)));
+        }
+        return Err(bad(
+            CMD,
+            format!(
+                "the PDF page ({:.0} × {:.0} pt) does not match the layout paper ({:.1} × {:.1} {}); \
+             pass `from`/`to` (two page points and where they go) or `scale` + `at`",
+                page.width,
+                page.height,
+                if mm { ew_mm } else { ew_mm / 25.4 },
+                if mm { eh_mm } else { eh_mm / 25.4 },
+                if mm { "mm" } else { "in" }
+            ),
+        ));
+    }
+    // Model space: require explicit placement.
+    if space == Space::Model && p.get("scale").is_none() && p.get("at").is_none() {
+        return Err(bad(
+            CMD,
+            "in Model space, pass `from`/`to` (e.g. {\"from\":[[72,72],[144,72]], \"to\":[[0,0],[100,0]]}) \
+            or `scale` + `at` (e.g. {\"scale\":48, \"at\":[0,0]})",
+        ));
     }
     let scale = p.get("scale").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);
     let at = super::point_param(p, "at").unwrap_or(Vec2::ZERO);
-    Ok(Place { a: scale / 72.0, b: 0.0, t: at })
+    Ok((Place { a: scale / 72.0, b: 0.0, t: at }, None))
 }
 
 /// Text of a markup's record, cut to what one extended data string holds.
@@ -257,7 +295,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     let bytes: Vec<u8> = return Err(bad(CMD, "files can't be read on the web"));
     let page_no = p.get("page").and_then(Value::as_u64).map_or(1, |n| n.clamp(1, 100_000) as u32);
     let page = reader(&bytes, page_no).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
-    let at = placement(s, p, &page)?;
+    let (at, scaled) = placement(s, p, &page)?;
     let layer = str_param(p, "layer").map(str::trim).filter(|x| !x.is_empty()).unwrap_or("MARKUP").to_string();
     let by_author = super::bool_or(p, "byAuthor", false);
     // The layer a markup goes on: the markup layer, or with `byAuthor` one per author.
@@ -309,9 +347,14 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         placed.push(json!({ "id": id, "kind": kind, "layer": on, "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() }));
     }
     skipped += page.markups.len().saturating_sub(MAX_MARKUPS);
-    let msg =
-        format!("{} markup(s) placed on layer {layer}{}.", placed.len(), if skipped > 0 { format!(", {skipped} skipped") } else { String::new() });
-    Ok(json!({ "placed": placed, "skipped": skipped, "message": msg }))
+    let scaled_msg = scaled.map(|k| format!(", scaled {k:.4}×")).unwrap_or_default();
+    let skip_msg = if skipped > 0 { format!(", {skipped} skipped") } else { String::new() };
+    let msg = format!("{} markup(s) placed on layer {layer}{scaled_msg}{skip_msg}.", placed.len());
+    let mut result = json!({ "placed": placed, "skipped": skipped, "message": msg });
+    if let Some(k) = scaled {
+        result["scaled"] = json!(k);
+    }
+    Ok(result)
 }
 
 fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
