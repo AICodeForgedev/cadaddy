@@ -140,6 +140,28 @@ try {
       $ui['CraftScopeDlg'] -lt $ui['CraftRestoreUserFolder'] -and $ui['CraftRestoreUserFolder'] -lt $ui['CostInitialize'])) {
     throw 'Scope must be chosen after AppSearch and before FindRelatedProducts, launch checks and costing.'
   }
+  # Windows Installer resolves Program Files for the context it started in, before the wizard's scope choice.
+  # The wizard therefore sets the new-install folder itself, and only in the wizard.
+  $defaults = @(Read-Rows $database 'SELECT `Action`, `Sequence`, `Condition` FROM `InstallUISequence`' 3 | Where-Object { $_[0] -like 'CraftDefault*' })
+  if ($defaults.Count -lt 2) { throw 'The wizard must set the new-install folder after the scope page; Program Files is resolved before the choice.' }
+  foreach ($row in $defaults) {
+    if (-not ($ui['CraftScopeDlg'] -lt [int]$row[1] -and [int]$row[1] -lt $ui['CostInitialize'])) { throw "$($row[0]) must run after the scope page and before costing." }
+  }
+  if (@(Read-Rows $database 'SELECT `Action` FROM `InstallExecuteSequence`' 1 | Where-Object { $_[0] -like 'CraftDefault*' }).Count) {
+    throw 'Silent installs must not use the wizard-only default folder actions.'
+  }
+  foreach ($scope in @('1', '')) {
+    Set-SessionProperty $session 'ALLUSERS' $scope
+    Set-SessionProperty $session 'INSTALLFOLDER' ''
+    Set-SessionProperty $session 'CRAFT_MACHINE_DIR' ''
+    Set-SessionProperty $session 'CRAFT_USER_DIR' ''
+    foreach ($row in @($defaults | Sort-Object { [int]$_[1] })) {
+      if ($session.EvaluateCondition($row[2]) -eq 1 -and $session.DoAction($row[0]) -ne 1) { throw "$($row[0]) failed." }
+    }
+    $folder = Get-SessionProperty $session 'INSTALLFOLDER'
+    $wanted = if ($scope -eq '1') { '^[A-Za-z]:\\Program Files( \(x86\))?\\ArtCraft\\[^\\]+\\$' } else { '^' + [regex]::Escape($env:LOCALAPPDATA) + '\\Programs\\ArtCraft\\[^\\]+\\$' }
+    if ($folder -notmatch $wanted) { throw "Wizard default folder for ALLUSERS='$scope' is '$folder'." }
+  }
   $execute = @{}
   foreach ($row in (Read-Rows $database 'SELECT `Action`, `Sequence` FROM `InstallExecuteSequence`' 2)) { $execute[$row[0]] = [int]$row[1] }
   foreach ($action in @('CraftRestoreUserFolder','CraftRestoreMachineFolder')) {
@@ -177,7 +199,7 @@ try {
     $allUsers = Get-SessionProperty $session 'ALLUSERS'
     $perUser = Get-SessionProperty $session 'MSIINSTALLPERUSER'
     if (($choice -eq 'machine' -and ($allUsers -ne '1' -or $perUser)) -or
-        ($choice -eq 'user' -and ($allUsers -ne '2' -or $perUser -ne '1'))) {
+        ($choice -eq 'user' -and ($allUsers -or $perUser -ne '1'))) {
       throw 'Scope selector does not reset the requested installation context.'
     }
   }

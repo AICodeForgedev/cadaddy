@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Include xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <!-- Choose scope before launch checks and directory costing. Never move an existing copy. -->
+  <!-- Only for me leaves ALLUSERS unset. Publishing ALLUSERS=2 here makes FindRelatedProducts treat the run as
+       per-machine and skip the existing per-user copy, so an interactive upgrade installs beside it
+       (two registered products, and uninstall leaves files behind). Checked with real msiexec runs. -->
   <Property Id="INSTALLFOLDER" Secure="yes" />
   <Property Id="CRAFT_SCOPE" Value="user" Secure="yes" />
   <Property Id="CRAFT_U_DIR" Secure="yes"><RegistrySearch Id="CRAFT_U_DIRSearch" Root="HKCU" Key="Software\CADCraft" Name="InstallDir" Type="raw" /></Property>
@@ -25,6 +28,16 @@
   <Property Id="CRAFT_MACHINE_DIR" Secure="yes" />
   <SetProperty Id="CRAFT_SCOPE" Action="CraftPreferMachineScope" Value="machine" After="CraftMFromLegacyExe" Sequence="ui" Condition="ALLUSERS = 1 OR (CRAFT_MACHINE_DIR AND NOT CRAFT_USER_DIR)" />
   <SetProperty Id="INSTALLFOLDER" Action="CraftRestoreUserFolder" Value="[CRAFT_USER_DIR]" Before="CostInitialize" Sequence="both" Condition="NOT INSTALLFOLDER AND ALLUSERS &lt;&gt; 1 AND CRAFT_USER_DIR" />
+  <!-- The wizard can change the context after Windows Installer has already resolved Program Files for the first one.
+       Give the new-install folder explicitly so Everyone never lands in the profile and Only for me never lands in Program Files. -->
+  <?if $(sys.BUILDARCH) = x86 ?>
+  <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultMachineFolder" Value="[%ProgramFiles(x86)]\ArtCraft\CADCraft\" After="CraftRestoreUserFolder" Sequence="ui" Condition="NOT INSTALLFOLDER AND ALLUSERS = 1 AND VersionNT64" />
+  <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultMachineFolder32" Value="[%ProgramFiles]\ArtCraft\CADCraft\" After="CraftDefaultMachineFolder" Sequence="ui" Condition="NOT INSTALLFOLDER AND ALLUSERS = 1 AND NOT VersionNT64" />
+  <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultUserFolder" Value="[LocalAppDataFolder]Programs\ArtCraft\CADCraft\" After="CraftDefaultMachineFolder32" Sequence="ui" Condition="NOT INSTALLFOLDER AND ALLUSERS &lt;&gt; 1" />
+  <?else?>
+  <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultMachineFolder" Value="[%ProgramW6432]\ArtCraft\CADCraft\" After="CraftRestoreUserFolder" Sequence="ui" Condition="NOT INSTALLFOLDER AND ALLUSERS = 1" />
+  <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultUserFolder" Value="[LocalAppDataFolder]Programs\ArtCraft\CADCraft\" After="CraftDefaultMachineFolder" Sequence="ui" Condition="NOT INSTALLFOLDER AND ALLUSERS &lt;&gt; 1" />
+  <?endif?>
   <SetProperty Id="INSTALLFOLDER" Action="CraftRestoreMachineFolder" Value="[CRAFT_MACHINE_DIR]" Before="CraftRestoreUserFolder" Sequence="both" Condition="NOT INSTALLFOLDER AND ALLUSERS = 1 AND CRAFT_MACHINE_DIR" />
   <Launch Condition="Installed OR ALLUSERS &lt;&gt; 1 OR NOT CRAFT_USER_DIR" Message="This app is already installed for your account. Choose Only for me to update it, or uninstall that copy before changing who it is installed for." />
   <Launch Condition="Installed OR ALLUSERS = 1 OR NOT CRAFT_MACHINE_DIR" Message="This app is already installed for everyone. Choose Everyone to update it, or pass ALLUSERS=1 to msiexec. Uninstall that copy before changing who it is installed for." />
@@ -42,7 +55,7 @@
       </Control>
       <Control Id="Next" Type="PushButton" X="214" Y="182" Width="66" Height="20" Default="yes" Text="Next">
         <Publish Property="ALLUSERS" Value="1" Order="1" Condition="CRAFT_SCOPE = &quot;machine&quot;" />
-        <Publish Property="ALLUSERS" Value="2" Order="2" Condition="CRAFT_SCOPE = &quot;user&quot;" />
+        <Publish Property="ALLUSERS" Value="{}" Order="2" Condition="CRAFT_SCOPE = &quot;user&quot;" />
         <Publish Property="MSIINSTALLPERUSER" Value="{}" Order="3" Condition="CRAFT_SCOPE = &quot;machine&quot;" />
         <Publish Property="MSIINSTALLPERUSER" Value="1" Order="4" Condition="CRAFT_SCOPE = &quot;user&quot;" />
         <Publish Event="EndDialog" Value="Return" Order="5" />
