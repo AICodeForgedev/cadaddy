@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1120,
-    "count": 1120,
+    "callableAsJson": 1132,
+    "count": 1132,
     "ids": [
       "-attedit",
       "-block",
@@ -116,6 +116,7 @@
       "bim.field.link",
       "bim.from_pdf",
       "bim.get_spec",
+      "bim.identity",
       "bim.issue.create",
       "bim.issue.list",
       "bim.issue.marks",
@@ -123,6 +124,7 @@
       "bim.issue.show",
       "bim.look",
       "bim.prints",
+      "bim.props.fill",
       "bim.props.find",
       "bim.props.get",
       "bim.props.set",
@@ -758,6 +760,7 @@
       "printset.classify",
       "printset.dashboard",
       "printset.keep",
+      "printset.links",
       "printset.open",
       "printset.reimport",
       "printset.resume",
@@ -879,6 +882,7 @@
       "rooms.build",
       "rooms.get",
       "rooms.goto",
+      "rooms.graph",
       "rooms.list",
       "rotate",
       "rscript",
@@ -896,6 +900,14 @@
       "scale",
       "scalelistedit",
       "scaletext",
+      "schedule.build",
+      "schedule.conflicts",
+      "schedule.edit",
+      "schedule.export",
+      "schedule.fit",
+      "schedule.list",
+      "schedule.takeoff",
+      "schedule.view",
       "schedules.read",
       "script",
       "scriptcall",
@@ -1124,7 +1136,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 507,
+    "inMenus": 508,
     "typed": 551
   },
   "features": {

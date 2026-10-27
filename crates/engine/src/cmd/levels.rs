@@ -450,8 +450,10 @@ fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
         .map(|l| {
             // A sheet is on its level; only a typical-floor sheet (its `levels` name several)
             // is on each level it covers, so no other sheet counts on two levels.
+            // Q6018: each entry is {sheet, typical} so the gate can tell a typical sheet from a
+            // floor-specific one.
             let on = |x: &&SheetLink| on_level(x, &l.name);
-            let sheets: Vec<&str> = sp.sheets.iter().filter(on).map(|x| x.number.as_str()).collect();
+            let sheets: Vec<Value> = sp.sheets.iter().filter(on).map(|x| json!({"sheet": x.number, "typical": typical_sheet(x)})).collect();
             let typical: Vec<&str> = sp.sheets.iter().filter(on).filter(|x| typical_sheet(x)).map(|x| x.number.as_str()).collect();
             json!({
                 "name": l.name,
@@ -612,7 +614,16 @@ fn store(s: &mut Session, sp: &BuildingSpec) -> Result<()> {
 /// spec's name for it when it has that level).
 fn link(number: String, discipline: String, title: String, source: String, sp: &BuildingSpec) -> SheetLink {
     let level = levels::level_of_title(&title).map(|c| sp.level_matching(&c).and_then(|i| sp.levels.get(i)).map_or(c, |l| l.name.clone()));
-    SheetLink { number, title: title.chars().take(120).collect(), discipline: Some(discipline), level, source, rect: None, levels: Vec::new() }
+    SheetLink {
+        number,
+        title: title.chars().take(120).collect(),
+        discipline: Some(discipline),
+        level,
+        source,
+        rect: None,
+        levels: Vec::new(),
+        registration: None,
+    }
 }
 
 /// A layout's sheet: the sheet number written largest on it (else in the layout's name), and the
@@ -677,7 +688,7 @@ fn run_sheets(s: &mut Session, p: &Value) -> Result<Value> {
         for f in sheets {
             match sp.sheets.iter_mut().find(|x| x.number.eq_ignore_ascii_case(&f.number)) {
                 // Where an imported set put the sheet stays known.
-                Some(x) => *x = SheetLink { rect: f.rect.or(x.rect), ..f },
+                Some(x) => *x = SheetLink { rect: f.rect.or(x.rect), registration: f.registration.clone().or_else(|| x.registration.clone()), ..f },
                 None => sp.sheets.push(f),
             }
         }
@@ -1020,7 +1031,7 @@ mod tests {
             r["sheets"].as_array().unwrap().iter().map(|x| (x["number"].as_str().unwrap().to_string(), x["level"].clone())).collect();
         assert_eq!(got, [("M-201".into(), json!("Level 2")), ("M-601".into(), Value::Null), ("P-101".into(), json!("L1"))], "{r}");
         let l = s.execute("levels.list", &json!({})).unwrap();
-        assert_eq!(l["levels"][1]["sheets"], json!(["M-201"]));
+        assert_eq!(l["levels"][1]["sheets"], json!([{"sheet": "M-201", "typical": false}]));
         assert_eq!(l["unattached"], json!(["M-601"]));
         assert!(s.execute("levels.sheets", &json!({ "folder": "/no/such/folder/anywhere" })).is_err());
     }
@@ -1038,6 +1049,7 @@ mod tests {
             source: "model".into(),
             rect: None,
             levels: levels.iter().map(|l| l.to_string()).collect(),
+            registration: None,
         };
         sp.sheets = vec![
             link("A-101", Some("Level 1"), &[]),
@@ -1051,7 +1063,7 @@ mod tests {
         ];
         store(&mut s, &sp).unwrap();
         let l = s.execute("levels.list", &json!({})).unwrap();
-        let on = |i: usize| l["levels"][i]["sheets"].clone();
+        let on = |i: usize| json!(l["levels"][i]["sheets"].as_array().unwrap().iter().map(|x| x["sheet"].clone()).collect::<Vec<_>>());
         assert_eq!(on(0), json!(["A-101"]), "{l}");
         assert_eq!(on(1), json!(["M-2", "P-2"]));
         assert_eq!(on(2), json!(["M-3", "P-2"]), "a floor-specific sheet is never counted on two levels");
@@ -1060,10 +1072,20 @@ mod tests {
         let mut count: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
         for lv in l["levels"].as_array().unwrap() {
             for n in lv["sheets"].as_array().unwrap() {
-                *count.entry(n.as_str().unwrap().to_string()).or_default() += 1;
+                *count.entry(n["sheet"].as_str().unwrap().to_string()).or_default() += 1;
             }
         }
         assert!(count.iter().all(|(n, c)| *c == 1 || n == "P-2"), "{count:?}");
+        // Q6018's gate count: a sheet on two levels is always marked typical.
+        let untyped_dups = l["levels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|lv| lv["sheets"].as_array().unwrap().iter())
+            .filter(|x| x["typical"] == json!(false))
+            .filter(|x| count.get(x["sheet"].as_str().unwrap()).is_some_and(|c| *c > 1))
+            .count();
+        assert_eq!(untyped_dups, 0, "{l}");
         assert_eq!(l["unattached"], json!(["A-601", "C-101"]));
         assert_eq!(l["reference_sheets"][1], json!({"number": "C-101", "title": "", "discipline": "C", "datum": "SITE"}));
         let storeys: Vec<&str> = l["storeys"].as_array().unwrap().iter().filter_map(|x| x["name"].as_str()).collect();

@@ -185,7 +185,7 @@ pub struct Class {
 }
 
 /// The tags after the build's marker: `[part, level, source, more…]`.
-fn made_tags(e: &Entity) -> Option<&[cadaddy_doc::RawTag]> {
+pub(crate) fn made_tags(e: &Entity) -> Option<&[cadaddy_doc::RawTag]> {
     let x = &e.common.xdata;
     let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP))?;
     let rest = x.get(at + 1..)?;

@@ -959,15 +959,30 @@ pub fn run_classify_prints(
                 e.levels = rec.levels.clone();
             } else {
                 // The sheet title's levels, else the plan views' titles' (`FIRST FLOOR POWER PLAN`).
+                // Q6018: multi-level assignment (typical floors) only from the plan title, not
+                // from notes or different view titles on the sheet — a "TYP." note elsewhere
+                // must not make a floor-specific sheet cover several levels.
                 let mut levels = sheet_reader::detect_levels(&e.title);
                 if levels.is_empty() && is_plan_type(&e.sheet_type) {
                     // A key plan (the small floor plan marking where an enlarged plan or detail
                     // is) names its floor, not the sheet's.
                     for t in facts.view_titles.iter().filter(|t| !is_key_plan(t)) {
-                        levels.extend(sheet_reader::detect_levels(t));
+                        let vl = sheet_reader::detect_levels(t);
+                        if !vl.is_empty() {
+                            // Use the first view title's level only; multi-level comes from
+                            // the plan title or the typical-floor sentinel, not from combining
+                            // different views' titles (which are already split by recognise_views
+                            // when they name different levels).
+                            levels = if sheet_reader::is_typical_sentinel(&vl) {
+                                vl
+                            } else if let Some(first) = vl.into_iter().next() {
+                                vec![first]
+                            } else {
+                                continue;
+                            };
+                            break;
+                        }
                     }
-                    levels.sort_by_key(|c| level_key(c));
-                    levels.dedup();
                 }
                 if levels.is_empty() {
                     levels = rec.levels.clone();
@@ -1369,8 +1384,8 @@ pub struct IndexSheet {
 pub struct IndexLevel {
     /// Level code: `1`, `2`, `R`.
     pub name: String,
-    /// The plan sheets of the level.
-    pub sheets: Vec<String>,
+    /// The plan sheets of the level: `[{sheet, typical}]` (Q6018).
+    pub sheets: Vec<serde_json::Value>,
     /// Finished floor elevation from the sections' and elevations' level marks (above the
     /// first floor when the prints put it at 100'-0").
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1482,12 +1497,15 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
     }
     // The building's levels: what the floor plans show (the site is no storey; an enlarged
     // plan is part of its parent floor and defines no level).
-    let mut by_level: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Q6018: each sheet entry is {sheet, typical} so the gate can distinguish a
+    // multi-level typical sheet from a floor-specific one.
+    let mut by_level: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
     for s in out.sheets.iter().filter(|s| is_level_plan_type(&s.sheet_type)) {
+        let typical = s.levels.len() > 1;
         for l in s.levels.iter().chain(std::iter::once(&s.level)).filter(|l| !l.is_empty() && !cadaddy_walk3d::levels::is_datum_name(l)) {
             let v = by_level.entry(l.clone()).or_default();
-            if !v.contains(&s.number) {
-                v.push(s.number.clone());
+            if !v.iter().any(|x| x.get("sheet").and_then(serde_json::Value::as_str) == Some(&s.number)) {
+                v.push(serde_json::json!({"sheet": s.number, "typical": typical}));
             }
         }
     }
