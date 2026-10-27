@@ -638,13 +638,21 @@ fn face_rooms(w: &crate::truth::PlanWall, rooms: &[crate::truth::Room]) -> Vec<(
 
 /// Build a full cover record from a truth.
 pub fn record_from_truth(t: &Truth, project: &str) -> CoverRecord {
-    let levels: Vec<String> = {
-        let mut lvs: Vec<String> = t.building.levels.iter().map(|l| l.name.clone()).collect();
-        lvs.sort();
-        lvs.dedup();
-        lvs
-    };
-    CoverRecord { schema: "cadaddy-covercheck/1".into(), project: project.into(), areas: areas_from_truth(t), phases: default_phases(&levels) }
+    let areas = areas_from_truth(t);
+    // Phases name levels the way areas do: walls and rooms carry the level's code (`1`), not
+    // its title-block name (`LEVEL 1`).
+    let mut levels: Vec<String> = Vec::new();
+    for l in t.building.levels.iter().map(level_key).chain(areas.iter().map(|a| a.level.clone())) {
+        if !l.is_empty() && !levels.contains(&l) {
+            levels.push(l);
+        }
+    }
+    CoverRecord { schema: "cadaddy-covercheck/1".into(), project: project.into(), areas, phases: default_phases(&levels) }
+}
+
+/// The name walls, rooms and cover areas give a level: its code, else its name.
+pub fn level_key(l: &crate::truth::Level) -> String {
+    if l.code.trim().is_empty() { l.name.clone() } else { l.code.clone() }
 }
 
 // ---------------------------------------------------------------------------

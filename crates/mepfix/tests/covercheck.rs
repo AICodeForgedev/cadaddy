@@ -433,7 +433,9 @@ fn long_multibyte_text_never_panics() {
         assert!(f.len() <= 2000 && f.ends_with('a'), "{}", f.len());
     }
     // Numbers that aren't finite are refused.
-    for (elev, along, at) in [(f64::NAN, 0.0, [1.0, 1.0]), (1.0, f64::INFINITY, [1.0, 1.0]), (1.0, 0.0, [f64::NAN, 1.0]), (1.0, 0.0, [1.0, f64::NEG_INFINITY])] {
+    for (elev, along, at) in
+        [(f64::NAN, 0.0, [1.0, 1.0]), (1.0, f64::INFINITY, [1.0, 1.0]), (1.0, 0.0, [f64::NAN, 1.0]), (1.0, 0.0, [1.0, f64::NEG_INFINITY])]
+    {
         let mut p = photo("bad", at, "1", "A");
         p.elevation_ft = elev;
         p.along_ft = along;
@@ -506,7 +508,12 @@ fn photos_are_filed_by_position() {
 fn two_level_truth() -> cadaddy_mepfix::truth::Truth {
     let mut t = test_truth();
     t.building.levels.push(cadaddy_mepfix::truth::Level { name: "2".into(), code: "2".into(), elevation_ft: 12.0 });
-    let rooms: Vec<Room> = t.building.rooms.iter().map(|r| Room { id: format!("{}-2", r.id), level: "2".into(), number: format!("2{}", &r.number[1..]), ..r.clone() }).collect();
+    let rooms: Vec<Room> = t
+        .building
+        .rooms
+        .iter()
+        .map(|r| Room { id: format!("{}-2", r.id), level: "2".into(), number: format!("2{}", &r.number[1..]), ..r.clone() })
+        .collect();
     t.building.rooms.extend(rooms);
     let walls: Vec<PlanWall> = t
         .plan_walls
@@ -592,4 +599,20 @@ fn validate_clears_ready_claimed_by_a_loaded_record() {
     // A valid record keeps its ready areas.
     assert!(record.validate().is_empty());
     assert!(record.area("W1-002/A").unwrap().ready_to_cover);
+}
+
+#[test]
+fn fixture_set_phases_apply_to_every_area() {
+    // Generated sets name levels `LEVEL 1` with code `1`; walls and rooms carry the code.
+    let t = cadaddy_mepfix::truth_for(42);
+    let record = record_from_truth(&t, "Fixture Seed 42");
+    assert_eq!(record.phases.len() % STANDARD_PHASES.len(), 0);
+    for a in &record.areas {
+        let n = record.phases.iter().filter(|p| p.applies_to(a)).count();
+        assert_eq!(n, STANDARD_PHASES.len(), "area {} on level {} has {n} phases", a.id, a.level);
+    }
+    // Signing one level's electrical rough-in signs exactly that level's.
+    let mut record = record;
+    let level = record.areas[0].level.clone();
+    assert_eq!(record.sign_phase("Rough-In Electrical", &level, "Inspector", "2026-10-21"), 1);
 }
