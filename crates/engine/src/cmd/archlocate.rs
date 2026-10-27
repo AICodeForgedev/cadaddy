@@ -8,7 +8,7 @@
 //! give the plan position. This module reads that evidence and moves each E device of the model
 //! onto its architectural counterpart, keeping its circuit:
 //!
-//! 1. **Elevations.** A view title naming an elevation (`INTERIOR ELEVATION`, `ROOM 150 - NORTH`)
+//! 1. **Elevations.** A view title naming an elevation (`INTERIOR ELEVATION`, `ROOM 101 - NORTH`)
 //!    sits under its view; the view's floor line is the long line above the title with wall-end
 //!    lines rising from both ends, its top the ceiling. Devices are the tagged symbols, device
 //!    marks and device words inside that box; `48" AFF` callouts give heights. The title names
@@ -43,7 +43,7 @@ use serde_json::{Value, json};
 use super::guided::GuidedJob;
 
 /// Most architectural pages read for evidence in one job.
-const MAX_PAGES: usize = 40;
+const MAX_PAGES: usize = 64;
 /// Most objects looked at per page or sheet.
 const MAX_OBJECTS: usize = 400_000;
 /// Most devices on one wall (the alignment is quadratic).
@@ -102,7 +102,7 @@ pub(crate) fn classify(mark: &str, kind: &str) -> Option<Class> {
         }
         "S" | "S2" | "S3" | "S4" | "SD" | "SW" | "SWITCH" | "DIM" | "DIMMER" | "OS" | "VS" | "SK" => Some(Class::Switch),
         "DATA" | "D" | "TEL" | "TV" | "CATV" | "WAP" | "CAT6" | "VOICE" | "COAX" => Some(Class::Data),
-        "J" | "JB" | "J-BOX" | "JBOX" | "SCONCE" | "LIGHT" | "FIXTURE" | "VANITY" | "LTG" | "LUMINAIRE" | "PENDANT" | "DOWNLIGHT" => {
+        "J" | "JB" | "J-BOX" | "JBOX" | "JUNCTION" | "SCONCE" | "LIGHT" | "FIXTURE" | "VANITY" | "LTG" | "LUMINAIRE" | "PENDANT" | "DOWNLIGHT" => {
             Some(Class::Light)
         }
         _ if m.starts_with("RECEPT") || m.starts_with("OUTLET") => Some(Class::Receptacle),
@@ -176,7 +176,12 @@ struct Sheet {
     v: Vec<Run>,
     labels: Vec<Label>,
     symbols: Vec<Symbol>,
+    /// Every straight piece as drawn (leaders run at any angle), capped.
+    segs: Vec<[[f64; 2]; 2]>,
 }
+
+/// Most straight pieces kept per sheet for leaders.
+const MAX_SEGS: usize = 200_000;
 
 fn inside(r: Option<[f64; 4]>, p: [f64; 2]) -> bool {
     r.is_none_or(|r| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3])
@@ -194,6 +199,9 @@ impl Sheet {
             let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
             if !(dx.is_finite() && dy.is_finite()) {
                 return;
+            }
+            if s.segs.len() < MAX_SEGS && (dx != 0.0 || dy != 0.0) {
+                s.segs.push([a, b]);
             }
             if dy.abs() <= dx.abs() * 0.01 && dx.abs() > 0.0 {
                 s.h.push(Run { at: (a[1] + b[1]) / 2.0, lo: a[0].min(b[0]), hi: a[0].max(b[0]) });
@@ -254,6 +262,34 @@ impl Sheet {
         s
     }
 
+    /// Only the lettering of `ents`, sorted into `rects` (each label into the first that holds it),
+    /// in one pass: the plans that are looked up but not measured.
+    fn labels_in<'a>(ents: impl Iterator<Item = &'a Entity>, rects: &[Option<[f64; 4]>]) -> Vec<Vec<Label>> {
+        let mut out: Vec<Vec<Label>> = vec![Vec::new(); rects.len()];
+        let mut kept = 0usize;
+        for e in ents {
+            if kept >= MAX_OBJECTS {
+                break;
+            }
+            let (text, at, height) = match &e.kind {
+                EntityKind::Text(t) => {
+                    let at = t.justify_point();
+                    (t.value.clone(), [at.x, at.y], t.height)
+                }
+                EntityKind::MText(t) => (cadaddy_fonts::plain_mtext(&t.contents), [t.insert.x, t.insert.y], t.height),
+                _ => continue,
+            };
+            if text.trim().is_empty() || !(at[0].is_finite() && at[1].is_finite()) {
+                continue;
+            }
+            if let Some(v) = rects.iter().position(|r| inside(*r, at)).and_then(|i| out.get_mut(i)) {
+                v.push(Label { text: clean(&text), at, height: height.abs().max(1e-9) });
+                kept += 1;
+            }
+        }
+        out
+    }
+
     /// Join runs on one line that touch or nearly do (a PDF draws a line in pieces).
     fn merge(&mut self, tol: f64, gap: f64) {
         for runs in [&mut self.h, &mut self.v] {
@@ -293,7 +329,7 @@ fn clean(t: &str) -> String {
     t.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_uppercase()
 }
 
-/// A room number as plans print them (`150`, `150A`, `B102`).
+/// A room number as plans print them (`101`, `101A`, `B102`).
 fn room_number(t: &str) -> bool {
     super::perceive::geometry::room_number(t)
 }
@@ -429,6 +465,8 @@ pub(crate) struct ArchDevice {
 #[derive(Clone, Debug)]
 pub(crate) struct ElevView {
     pub title: String,
+    /// Its view number (the `4` of `4/A-733`), when its bubble prints one.
+    pub number: Option<String>,
     pub room_number: Option<String>,
     /// Words of the title that may be the room's name (`LOBBY`).
     pub room_words: Vec<String>,
@@ -496,6 +534,28 @@ fn is_measure(t: &str) -> bool {
 /// Words that make a title an exterior or building view, not a room's.
 const NOT_ROOM_VIEW: &[&str] = &["EXTERIOR", "BUILDING ELEV", "BLDG ELEV", "SITE"];
 
+/// Words of a view title (one found by its scale line) that make it a view other than a wall's
+/// face: a plan, a cut, a schedule, an opening's detail.
+const NOT_WALL_VIEW: &[&str] = &[
+    "PLAN",
+    "PLANS",
+    "RCP",
+    "CEILING",
+    "SECTION",
+    "SECTIONS",
+    "SCHEDULE",
+    "LEGEND",
+    "ROOF",
+    "FOUNDATION",
+    "FOOTING",
+    "DIAGRAM",
+    "RISER",
+    "HEAD",
+    "JAMB",
+    "SILL",
+    "THRESHOLD",
+];
+
 /// The devices drawn in `sheet` within `bx` (`[x0, y0, x1, y1]`), and the height callouts. `h`:
 /// a lettering height, the unit for "next to". `e_marks`: the marks the electrical plans use.
 fn devices_in(sheet: &Sheet, bx: [f64; 4], h: f64, e_marks: &BTreeSet<String>, skip: &BTreeSet<usize>) -> Vec<ArchDevice> {
@@ -516,11 +576,36 @@ fn devices_in(sheet: &Sheet, bx: [f64; 4], h: f64, e_marks: &BTreeSet<String>, s
         anchors.iter().map(|a| (dist(*a, p), *a)).filter(|(d, _)| *d <= r).min_by(|x, y| x.0.total_cmp(&y.0)).map(|(_, a)| a)
     };
     let mut callouts: Vec<([f64; 2], f64)> = Vec::new();
+    // Notes beside the view reach into it with leaders.
+    let reach = (0.5 * (bx[2] - bx[0])).max(20.0 * h);
+    let beside = |p: [f64; 2]| p[0] >= bx[0] - reach && p[0] <= bx[2] + reach && p[1] >= bx[1] - reach && p[1] <= bx[3] + reach;
     for (i, l) in sheet.labels.iter().enumerate() {
-        if skip.contains(&i) || !within(l.at) {
+        if skip.contains(&i) || !beside(l.at) {
+            continue;
+        }
+        if !within(l.at) {
+            // Lettering outside the view names a device only through a leader into it.
+            if let Some(class) = note_device(&l.text)
+                && let Some(end) = leader_end(sheet, l)
+            {
+                let at = anchor(end, 3.0 * h).unwrap_or(end);
+                if within(at) && !out.iter().any(|d| dist(d.at, at) <= 1.5 * h && compat((d.class, &d.mark), (class, "")).is_some()) {
+                    out.push(ArchDevice { class, mark: String::new(), at, aff_ft: aff_height(&l.text) });
+                }
+            }
             continue;
         }
         if let Some(ft) = aff_height(&l.text) {
+            // A note naming a device and its height, with a leader to it (`SCONCE @ 6'-0" AFF`).
+            if let Some(class) = note_device(&l.text)
+                && let Some(end) = leader_end(sheet, l)
+            {
+                let at = anchor(end, 3.0 * h).unwrap_or(end);
+                if within(at) {
+                    out.push(ArchDevice { class, mark: String::new(), at, aff_ft: Some(ft) });
+                    continue;
+                }
+            }
             callouts.push((l.at, ft));
             continue;
         }
@@ -528,8 +613,17 @@ fn devices_in(sheet: &Sheet, bx: [f64; 4], h: f64, e_marks: &BTreeSet<String>, s
             continue;
         }
         let words: Vec<&str> = l.text.split(' ').collect();
-        // A note ("PROVIDE BLOCKING FOR TV") is not a device: device words come alone or in two.
+        // A note ("PROVIDE BLOCKING FOR TV") is not a device: device words come alone or in two,
+        // or as a note naming the device with a leader to it ("WALL SCONCE, SEE ELEC.").
         if words.len() > 3 {
+            if let Some(class) = note_device(&l.text)
+                && let Some(end) = leader_end(sheet, l)
+            {
+                let at = anchor(end, 3.0 * h).unwrap_or(end);
+                if within(at) && !out.iter().any(|d| dist(d.at, at) <= 1.5 * h && compat((d.class, &d.mark), (class, "")).is_some()) {
+                    out.push(ArchDevice { class, mark: String::new(), at, aff_ft: aff_height(&l.text) });
+                }
+            }
             continue;
         }
         let whole = l.text.as_str();
@@ -547,7 +641,8 @@ fn devices_in(sheet: &Sheet, bx: [f64; 4], h: f64, e_marks: &BTreeSet<String>, s
         } else {
             continue;
         };
-        let at = anchor(l.at, 4.0 * h).unwrap_or(l.at);
+        // Beside its symbol, else at the end of its leader, else where it is lettered.
+        let at = anchor(l.at, 4.0 * h).or_else(|| leader_end(sheet, l).map(|end| anchor(end, 3.0 * h).unwrap_or(end))).unwrap_or(l.at);
         // The same device twice (a symbol and its tag): keep one.
         if out.iter().any(|d| dist(d.at, at) <= 1.5 * h && compat((d.class, &d.mark), (class, &mark)).is_some()) {
             continue;
@@ -576,6 +671,58 @@ fn devices_in(sheet: &Sheet, bx: [f64; 4], h: f64, e_marks: &BTreeSet<String>, s
     out
 }
 
+/// Words that make a note about a device's support, not the device (`BLOCKING FOR SCONCE`).
+const SUPPORT_WORDS: &[&str] = &["BLOCKING", "BACKING", "REINFORCING", "REINFORCEMENT", "STUD", "STUDS"];
+
+/// The device a note names (`WALL SCONCE, SEE ELEC.`, `J-BOX @ 6'-0" AFF`): the first word of
+/// three letters or more that names a device kind. Notes about the device's support, and long
+/// notes, name none.
+fn note_device(t: &str) -> Option<Class> {
+    let words: Vec<&str> = t.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':' | '(' | ')')).filter(|w| !w.is_empty()).collect();
+    if words.len() > 10 || words.iter().any(|w| SUPPORT_WORDS.contains(&w.trim_matches('.'))) {
+        return None;
+    }
+    words.iter().map(|w| w.trim_matches('.')).filter(|w| w.len() >= 3).find_map(|w| classify(w, ""))
+}
+
+/// Where the leader leaving lettering `l` ends: a straight piece starting at the lettering's
+/// left or right end, followed through its bends (pieces meeting end to end, at most four).
+/// `None` when no piece leaves the lettering.
+fn leader_end(sheet: &Sheet, l: &Label) -> Option<[f64; 2]> {
+    let h = l.height.max(1e-9);
+    let wide = l.text.chars().count() as f64 * 0.8 * h;
+    let ends = [[l.at[0] - 0.5 * h, l.at[1] + 0.4 * h], [l.at[0] + wide + 0.5 * h, l.at[1] + 0.4 * h]];
+    let near_text =
+        |p: [f64; 2]| p[0] >= l.at[0] - 1.5 * h && p[0] <= l.at[0] + wide + 1.5 * h && p[1] >= l.at[1] - 1.5 * h && p[1] <= l.at[1] + 2.0 * h;
+    // The first piece: one end by the lettering's start or end, the other well away from it.
+    let mut best: Option<(f64, usize, [f64; 2])> = None;
+    for (i, sg) in sheet.segs.iter().enumerate() {
+        for (near, far) in [(sg[0], sg[1]), (sg[1], sg[0])] {
+            if near_text(far) || dist(near, far) < 2.0 * h {
+                continue;
+            }
+            let d = ends.iter().map(|e| dist(*e, near)).fold(f64::INFINITY, f64::min);
+            if d <= 1.2 * h && best.is_none_or(|b| d < b.0) {
+                best = Some((d, i, far));
+            }
+        }
+    }
+    let (_, mut last, mut end) = best?;
+    // Its bends: a piece of some length starting where this one ends, heading on.
+    for _ in 0..4 {
+        let next = sheet.segs.iter().enumerate().filter(|(i, _)| *i != last).find_map(|(i, sg)| {
+            [(sg[0], sg[1]), (sg[1], sg[0])]
+                .into_iter()
+                .find(|(a, b)| dist(*a, end) <= 0.15 * h && dist(*a, *b) >= 2.0 * h && !near_text(*b))
+                .map(|(_, b)| (i, b))
+        });
+        let Some((i, b)) = next else { break };
+        last = i;
+        end = b;
+    }
+    Some(end)
+}
+
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
@@ -583,7 +730,7 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
 /// The elevation views a sheet draws: each titled view's floor line, wall ends and ceiling,
 /// the room and wall its title names, and the devices inside it.
 /// `elev_sheet`: the sheet's title says it holds elevations, so a view title there may name
-/// only the room and wall (`ROOM 150 - NORTH`).
+/// only the room and wall (`ROOM 101 - NORTH`).
 pub(crate) fn read_elevations(d: &Drawing, e_marks: &BTreeSet<String>, elev_sheet: bool) -> Vec<ElevView> {
     let mut sheet = Sheet::read(d.model.iter().map(|e| e.as_ref()), None);
     let names_view = |t: &str| {
@@ -591,26 +738,63 @@ pub(crate) fn read_elevations(d: &Drawing, e_marks: &BTreeSet<String>, elev_shee
             || t.contains("ELEV.")
             || (elev_sheet && t.split([' ', '-', ',', ':']).any(|w| Side::from_word(w).is_some() || room_number(w)))
     };
-    let titles: Vec<usize> = sheet
+    let room_view = |t: &str| !NOT_ROOM_VIEW.iter().any(|w| t.contains(w));
+    // Title → (it names an elevation, its view number when its bubble prints one).
+    let mut titles: BTreeMap<usize, (bool, Option<String>)> = sheet
         .labels
         .iter()
         .enumerate()
-        .filter(|(_, l)| names_view(&l.text) && !NOT_ROOM_VIEW.iter().any(|w| l.text.contains(w)))
-        .map(|(i, _)| i)
+        .filter(|(_, l)| names_view(&l.text) && room_view(&l.text))
+        .map(|(i, _)| (i, (true, None)))
         .take(MAX_VIEWS)
         .collect();
+    // Any view title with its scale under it: a wall detail need not say ELEVATION (then it must
+    // show devices to count).
+    let texts = cadaddy_mepfix::sheet_facts::texts(d);
+    for vt in cadaddy_mepfix::sheet_facts::view_titles(d, &texts) {
+        let t = clean(&cadaddy_fonts::plain_mtext(&vt.title));
+        if !room_view(&t) || t.split(|c: char| !c.is_ascii_alphabetic()).any(|w| NOT_WALL_VIEW.contains(&w)) || titles.len() >= MAX_VIEWS {
+            continue;
+        }
+        let found = sheet
+            .labels
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.text == t || dist(l.at, vt.at) <= 0.5 * l.height)
+            .min_by(|a, b| dist(a.1.at, vt.at).total_cmp(&dist(b.1.at, vt.at)))
+            .filter(|(_, l)| dist(l.at, vt.at) <= 4.0 * l.height);
+        if let Some((i, _)) = found {
+            let e = titles.entry(i).or_insert((false, None));
+            e.1 = vt.number.clone();
+        }
+    }
     if titles.is_empty() {
         return Vec::new();
     }
     // Lettering height: the titles' (the unit of every "next to" below).
-    let mut hs: Vec<f64> = titles.iter().filter_map(|i| sheet.labels.get(*i)).map(|l| l.height).filter(|h| *h > 0.0).collect();
+    let mut hs: Vec<f64> = titles.keys().filter_map(|i| sheet.labels.get(*i)).map(|l| l.height).filter(|h| *h > 0.0).collect();
     hs.sort_by(f64::total_cmp);
     let h = hs.get(hs.len() / 2).copied().unwrap_or(1.0);
     sheet.merge(0.05 * h, 0.3 * h);
     let mut views: Vec<ElevView> = Vec::new();
-    for ti in titles {
+    for (ti, (names_elevation, number)) in titles {
         let Some(title) = sheet.labels.get(ti).cloned() else { continue };
         let th = title.height.max(1e-9);
+        // The view's number: its bubble's, else a number of up to three digits just left of it.
+        let number = number.or_else(|| {
+            sheet
+                .labels
+                .iter()
+                .filter(|l| {
+                    l.text.len() <= 3
+                        && l.text.chars().all(|c| c.is_ascii_digit())
+                        && l.at[0] < title.at[0]
+                        && title.at[0] - l.at[0] <= 8.0 * th
+                        && (l.at[1] - title.at[1]).abs() <= 2.5 * th
+                })
+                .min_by(|a, b| (title.at[0] - a.at[0]).total_cmp(&(title.at[0] - b.at[0])))
+                .map(|l| l.text.clone())
+        });
         let tw = (title.text.len() as f64 * 0.8 * th).max(4.0 * th);
         // The title's own lettering: the lines just above and below it, along it.
         let near: Vec<usize> = sheet
@@ -688,6 +872,9 @@ pub(crate) fn read_elevations(d: &Drawing, e_marks: &BTreeSet<String>, elev_shee
             if seen.room_number.is_none() {
                 seen.room_number = room_number;
             }
+            if seen.number.is_none() {
+                seen.number = number;
+            }
             for w in room_words {
                 if !seen.room_words.contains(&w) {
                     seen.room_words.push(w);
@@ -696,7 +883,10 @@ pub(crate) fn read_elevations(d: &Drawing, e_marks: &BTreeSet<String>, elev_shee
             continue;
         }
         let devices = devices_in(&sheet, bx, th, e_marks, &skip);
-        views.push(ElevView { title: title.text.clone(), room_number, room_words, side, x0: fl.lo, x1: fl.hi, floor, height, devices });
+        if !names_elevation && devices.is_empty() {
+            continue;
+        }
+        views.push(ElevView { title: title.text.clone(), number, room_number, room_words, side, x0: fl.lo, x1: fl.hi, floor, height, devices });
     }
     views
 }
@@ -732,11 +922,61 @@ pub(crate) struct EDevice {
     pub sheet: String,
 }
 
-/// An electrical plan: its number, level and what it draws.
+/// A plan the model's devices sit on: its number, level, where it is in the drawing and what it
+/// draws.
 struct EPlan {
     number: String,
     level: String,
+    rect: Option<[f64; 4]>,
     sheet: Sheet,
+}
+
+/// A plan's references to views: (view number, sheet number as [`norm_sheet`] spells it) → where
+/// the plan prints them. A reference is `4/A-733` (also inside a note, `SEE 4/A733`) or a bubble
+/// printing the view number over the sheet number.
+///
+/// [`norm_sheet`]: cadaddy_mepfix::printlinks::norm_sheet
+type RefIndex = BTreeMap<(String, String), Vec<[f64; 2]>>;
+
+fn ref_index(labels: &[Label]) -> RefIndex {
+    use cadaddy_mepfix::printlinks::{norm_sheet, text_refs};
+    use cadaddy_mepfix::sheet_facts::is_sheet_number;
+    let mut out: RefIndex = BTreeMap::new();
+    let mut add = |k: (String, String), at: [f64; 2]| {
+        let v = out.entry(k).or_default();
+        if v.len() < MAX_ROOM_TAGS {
+            v.push(at);
+        }
+    };
+    let alnum = |w: &str| w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '.').trim_end_matches('.').to_string();
+    for l in labels {
+        let mut keys: BTreeSet<(String, String)> = BTreeSet::new();
+        for (a, b) in l.text.split_whitespace().filter_map(|w| w.split_once('/')) {
+            let (a, b) = (alnum(a), alnum(b));
+            if (1..=3).contains(&a.len()) && is_sheet_number(&b) {
+                keys.insert((a, norm_sheet(&b)));
+            }
+        }
+        for (_, d, t) in text_refs(&l.text) {
+            if !d.is_empty() {
+                keys.insert((d, norm_sheet(&t)));
+            }
+        }
+        for k in keys {
+            add(k, l.at);
+        }
+    }
+    // Bubbles: a short number with a sheet number right under it.
+    let sheets: Vec<&Label> = labels.iter().filter(|m| is_sheet_number(&m.text)).take(20_000).collect();
+    for l in labels.iter().filter(|l| (1..=3).contains(&l.text.len()) && l.text.chars().all(|c| c.is_ascii_alphanumeric())) {
+        if let Some(under) = sheets.iter().find(|m| {
+            let dy = l.at[1] - m.at[1];
+            dy > 0.0 && dy <= 3.5 * l.height && (m.at[0] - l.at[0]).abs() <= 3.0 * l.height
+        }) {
+            add((l.text.clone(), norm_sheet(&under.text)), [(l.at[0] + under.at[0]) / 2.0, (l.at[1] + under.at[1]) / 2.0]);
+        }
+    }
+    out
 }
 
 /// Most places a room's number or name is looked up at.
@@ -962,17 +1202,37 @@ pub(crate) fn locate(
         devs.push(EDevice { tag: i, class, mark, at: [at_ft[0] * upf, at_ft[1] * upf], sheet: f("sheet") });
     }
     let e_marks: BTreeSet<String> = devs.iter().map(|d| d.mark.clone()).filter(|m| !m.is_empty()).collect();
-    // The E plans, read once.
+    // A device is on the plan it sits on (an enlarged plan's devices may have been moved onto
+    // their overall plan); a plan with no place in the drawing goes by the device's sheet.
+    let holds = |number: &str, rect: Option<[f64; 4]>, d: &EDevice| match rect {
+        Some(r) => inside(Some(r), d.at),
+        None => number.is_empty() || d.sheet == number,
+    };
+    // The plans devices sit on, read once; every plan's lettering (for references to a view).
     let plans: Vec<EPlan> = if e_sheets.is_empty() {
-        vec![EPlan { number: String::new(), level: String::new(), sheet: Sheet::read(d.model.iter().map(|e| e.as_ref()), None) }]
+        vec![EPlan { number: String::new(), level: String::new(), rect: None, sheet: Sheet::read(d.model.iter().map(|e| e.as_ref()), None) }]
     } else {
         e_sheets
             .iter()
-            .filter(|(n, _, _)| devs.iter().any(|d| &d.sheet == n))
-            .map(|(n, l, r)| EPlan { number: n.clone(), level: l.clone(), sheet: Sheet::read(d.model.iter().map(|e| e.as_ref()), *r) })
+            .filter(|(n, _, r)| devs.iter().any(|d| holds(n, *r, d)))
+            .map(|(n, l, r)| EPlan { number: n.clone(), level: l.clone(), rect: *r, sheet: Sheet::read(d.model.iter().map(|e| e.as_ref()), *r) })
             .collect()
     };
-    let on_plan = |p: &EPlan, d: &EDevice| p.number.is_empty() || d.sheet == p.number;
+    // Every plan: number, level, its references to views, its room numbers.
+    let others: Vec<(String, String, RefIndex, BTreeMap<String, [f64; 2]>)> = if e_sheets.is_empty() {
+        plans.iter().map(|p| (p.number.clone(), p.level.clone(), ref_index(&p.sheet.labels), unique_numbers(&p.sheet.labels))).collect()
+    } else {
+        let rects: Vec<Option<[f64; 4]>> = e_sheets.iter().map(|(_, _, r)| *r).collect();
+        e_sheets
+            .iter()
+            .zip(Sheet::labels_in(d.model.iter().map(|e| e.as_ref()), &rects))
+            .map(|((n, l, _), labels)| (n.clone(), l.clone(), ref_index(&labels), unique_numbers(&labels)))
+            .collect()
+    };
+    let on_plan = |p: &EPlan, d: &EDevice| holds(&p.number, p.rect, d);
+    // Plan `q`'s lettering mapped onto device plan `p` (scale, offset), by the room numbers
+    // both print; computed once per pair.
+    let mut fits: BTreeMap<(usize, usize), Option<(f64, [f64; 2])>> = BTreeMap::new();
     let ceiling_of = |level: &str| sp.levels.iter().find(|l| l.name == level).map_or(9.0, |l| l.ceiling_ft).clamp(6.0, 30.0);
     // Where each device goes: tag → (at, fields).
     let mut placed: BTreeMap<usize, Placement> = BTreeMap::new();
@@ -986,8 +1246,34 @@ pub(crate) fn locate(
         run.views_read += views.len();
         for v in &views {
             let mut placed_view = false;
-            for plan in &plans {
-                // The room on this plan: its number, else a name the plan prints once.
+            for (pi, plan) in plans.iter().enumerate() {
+                // Where the plans refer to this view (`4/A-733`), on this plan's sheet: on this
+                // plan, and on the other plans of its level registered onto it by room numbers.
+                let mut refs: Vec<[f64; 2]> = Vec::new();
+                if let Some(num) = &v.number {
+                    let key = (num.clone(), cadaddy_mepfix::printlinks::norm_sheet(&page.number));
+                    for (qi, (qn, ql, qrefs, qnums)) in others.iter().enumerate() {
+                        if !(ql == &plan.level || ql.is_empty() || plan.level.is_empty()) {
+                            continue;
+                        }
+                        let Some(pts) = qrefs.get(&key) else { continue };
+                        if qn == &plan.number {
+                            refs.extend(pts.iter().copied());
+                            continue;
+                        }
+                        let fit = *fits.entry((qi, pi)).or_insert_with(|| {
+                            let mine = unique_numbers(&plan.sheet.labels);
+                            let pairs: Vec<([f64; 2], [f64; 2])> = qnums.iter().filter_map(|(k, p)| mine.get(k).map(|e| (*p, *e))).collect();
+                            register(&pairs, 2.0 * upf).map(|(s, t, _)| (s, t))
+                        });
+                        if let Some((s, t)) = fit {
+                            refs.extend(pts.iter().map(|p| [s * p[0] + t[0], s * p[1] + t[1]]));
+                        }
+                    }
+                    refs.truncate(MAX_ROOM_TAGS);
+                }
+                // The room on this plan: its number, else a name the plan prints once, else
+                // where the plans refer to the view.
                 let tag_at = match &v.room_number {
                     Some(n) => plan.sheet.labels.iter().filter(|l| &l.text == n).map(|l| l.at).collect::<Vec<_>>(),
                     None => {
@@ -1001,6 +1287,7 @@ pub(crate) fn locate(
                         named
                     }
                 };
+                let tag_at = if tag_at.is_empty() { refs.clone() } else { tag_at };
                 if tag_at.is_empty() {
                     continue;
                 }
@@ -1030,9 +1317,27 @@ pub(crate) fn locate(
                         .min_by(|a, b| a.1.total_cmp(&b.1))
                         .map(|(s, _, _)| s)
                 };
-                let candidates: Vec<&Wall> = match v.side {
+                // A reference printed by one wall (a callout on the wall it details) names it.
+                let by_ref = refs
+                    .iter()
+                    .filter(|p| p[0] >= bx[0] - 2.0 * upf && p[0] <= bx[2] + 2.0 * upf && p[1] >= bx[1] - 2.0 * upf && p[1] <= bx[3] + 2.0 * upf)
+                    .filter_map(|p| {
+                        let mut ds: Vec<(f64, Side)> = walls.iter().map(|w| (w.project(*p).1, w.side)).collect();
+                        ds.sort_by(|a, b| a.0.total_cmp(&b.0));
+                        match ds.as_slice() {
+                            [a, b, ..] if a.0 <= (3.0 * upf).min(0.25 * perp(&bx, a.1)) && b.0 >= 2.0 * a.0.max(0.5 * upf) => Some(a.1),
+                            _ => None,
+                        }
+                    })
+                    .next();
+                let candidates: Vec<&Wall> = match v.side.or(by_ref) {
                     Some(s) => walls.iter().filter(|w| w.side == s).collect(),
-                    None => walls.iter().filter(|w| (0.7..=1.43).contains(&(w.len() / upf / est_len.max(1e-9)))).collect(),
+                    None => {
+                        let fit: Vec<&Wall> = walls.iter().filter(|w| (0.7..=1.43).contains(&(w.len() / upf / est_len.max(1e-9)))).collect();
+                        // No wall has the view's proportions (a detail showing part of the height):
+                        // every wall, its devices decide.
+                        if fit.is_empty() { walls.iter().collect() } else { fit }
+                    }
                 };
                 // Score each candidate wall by how its devices line up.
                 let mut scored: Vec<(f64, &Wall, Vec<(usize, usize)>, Vec<&EDevice>, Vec<usize>)> = Vec::new();
@@ -1066,7 +1371,7 @@ pub(crate) fn locate(
                     [first, second, ..] => {
                         // Two walls that fit as well (a room's two equal walls): the evidence
                         // can't tell which wall this is.
-                        if v.side.is_none() && !first.2.is_empty() && second.0 - first.0 < 0.3 * first.0.max(1.0) {
+                        if v.side.or(by_ref).is_none() && !first.2.is_empty() && second.0 - first.0 < 0.3 * first.0.max(1.0) {
                             run.finding("wall_ambiguous", json!({"view": v.title, "sheet": page.number, "e_sheet": plan.number, "walls": [first.1.side.name(), second.1.side.name()]}));
                             None
                         } else {
@@ -1075,7 +1380,7 @@ pub(crate) fn locate(
                     }
                 };
                 let Some((_, wall, pairs, on, ai)) = pick else { continue };
-                if v.side.is_none() && pairs.is_empty() {
+                if v.side.or(by_ref).is_none() && pairs.is_empty() {
                     continue;
                 }
                 placed_view = true;
@@ -1211,7 +1516,7 @@ pub(crate) fn locate(
         for w in walls_of(*bx).iter().filter(|w| !sides.contains(&w.side)) {
             let on: Vec<&EDevice> = devs
                 .iter()
-                .filter(|d| (key.0.is_empty() || d.sheet == key.0) && !placed.contains_key(&d.tag))
+                .filter(|d| plans.iter().any(|p| p.number == key.0 && on_plan(p, d)) && !placed.contains_key(&d.tag))
                 .filter(|d| d.at[0] >= bx[0] - upf && d.at[0] <= bx[2] + upf && d.at[1] >= bx[1] - upf && d.at[1] <= bx[3] + upf)
                 .filter(|d| w.project(d.at).1 <= (2.0 * upf).min(0.25 * perp(bx, w.side)))
                 .collect();
@@ -1323,29 +1628,63 @@ pub(crate) fn architect_locates(d: &Drawing) -> bool {
         .is_none_or(|r| !r.value.trim().to_ascii_lowercase().starts_with("elec"))
 }
 
-/// Is a sheet one whose views can place devices: an architectural (or interiors) elevation,
-/// reflected ceiling plan, enlarged plan or millwork / casework sheet.
-fn evidence_sheet(sh: &Value) -> bool {
+/// Whether a sheet's views can place devices, and how soon to read it (lower first): interior,
+/// millwork and casework elevations; reflected ceiling and enlarged plans; detail and section
+/// sheets a plan refers to (`referenced`, sheet numbers as `norm_sheet` spells them); other
+/// detail and section sheets.
+fn evidence_rank(sh: &Value, referenced: &BTreeSet<String>) -> Option<u8> {
     let s = |k: &str| sh.get(k).and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
     let (number, title, kind, disc) = (s("number"), s("title"), s("type"), s("discipline"));
     let arch = disc == "A" || disc == "I" || (disc.is_empty() && (number.starts_with('A') || number.starts_with('I')));
     if !arch || title.contains("EXTERIOR") || title.contains("BUILDING ELEV") {
-        return false;
+        return None;
     }
-    matches!(kind.as_str(), "elevation" | "rcp" | "enlarged_plan")
-        || ["INTERIOR", "ELEVATION", "REFLECTED", "RCP", "ENLARGED", "CASEWORK", "MILLWORK"].iter().any(|w| title.contains(w))
+    let has = |ws: &[&str]| ws.iter().any(|w| title.contains(w));
+    if kind == "elevation" || has(&["INTERIOR", "ELEVATION", "CASEWORK", "MILLWORK"]) {
+        Some(0)
+    } else if matches!(kind.as_str(), "rcp" | "enlarged_plan") || has(&["REFLECTED", "RCP", "ENLARGED"]) {
+        Some(1)
+    } else if matches!(kind.as_str(), "detail" | "section") || has(&["DETAIL", "SECTION"]) {
+        Some(if referenced.contains(&cadaddy_mepfix::printlinks::norm_sheet(&number)) { 2 } else { 3 })
+    } else {
+        None
+    }
+}
+
+/// The sheet numbers lettered on the job's plans (`4/A-733`, `SEE A733`, a bubble's sheet), as
+/// `norm_sheet` spells them.
+fn referenced_sheets(d: &Drawing) -> BTreeSet<String> {
+    use cadaddy_mepfix::sheet_facts::is_sheet_number;
+    let mut out = BTreeSet::new();
+    for e in d.model.iter().take(4 * MAX_OBJECTS) {
+        let t = match &e.kind {
+            EntityKind::Text(t) => t.value.clone(),
+            EntityKind::MText(t) => cadaddy_fonts::plain_mtext(&t.contents),
+            _ => continue,
+        };
+        for w in t.split(|c: char| c.is_whitespace() || matches!(c, '/' | ',' | ';' | '(' | ')')) {
+            let w = w.trim_end_matches(['.', ':']);
+            if is_sheet_number(w) && out.len() < 10_000 {
+                out.insert(cadaddy_mepfix::printlinks::norm_sheet(w));
+            }
+        }
+    }
+    out
 }
 
 /// The job's architectural evidence pages, read from the prints (each page its own drawing,
 /// so nothing is added to the job's drawing).
-fn read_pages(job: &GuidedJob) -> (Vec<ArchPage>, Vec<String>) {
+fn read_pages(job: &GuidedJob, referenced: &BTreeSet<String>) -> (Vec<ArchPage>, Vec<String>) {
     let Some(hooks) = super::file::io() else { return (Vec::new(), vec!["file formats are not available in this build".into()]) };
     let Some(read_pdf) = hooks.read_pdf else { return (Vec::new(), vec!["PDF import is not available in this build".into()]) };
     let sheets: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
     let current = |sh: &Value| sh.get("superseded_by").and_then(Value::as_str).is_none_or(str::is_empty);
+    let mut ranked: Vec<(u8, &Value)> =
+        sheets.iter().filter(|sh| current(sh)).filter_map(|sh| evidence_rank(sh, referenced).map(|r| (r, sh))).collect();
+    ranked.sort_by_key(|(r, _)| *r);
     let mut want: Vec<(String, String, String, u64)> = Vec::new();
     let mut seen = BTreeSet::new();
-    for sh in sheets.iter().filter(|sh| current(sh) && evidence_sheet(sh)) {
+    for sh in ranked.into_iter().map(|(_, sh)| sh) {
         let file = sh.get("file").and_then(Value::as_str).unwrap_or_default();
         if file.is_empty() {
             continue;
@@ -1390,16 +1729,21 @@ fn read_pages(job: &GuidedJob) -> (Vec<ArchPage>, Vec<String>) {
 
 /// The job's run: read the architectural evidence and move the model's devices onto it.
 pub(crate) fn run_for_job(s: &mut crate::Session, job: &mut GuidedJob) -> Value {
-    let (pages, errors) = read_pages(job);
+    let referenced = s.doc().map(referenced_sheets).unwrap_or_default();
+    let (pages, errors) = read_pages(job, &referenced);
     if pages.is_empty() {
-        return json!({"pages_read": 0, "moved": 0, "why_not": "no architectural elevation, RCP or enlarged plan sheets in the set", "errors": errors});
+        return json!({"pages_read": 0, "moved": 0, "why_not": "no architectural elevation, RCP, enlarged plan, detail or section sheets in the set", "errors": errors});
     }
-    let e_sheets: Vec<(String, String, Option<[f64; 4]>)> = job
+    // Every plan of the job (electrical first): a device is on the one it sits on, and any plan
+    // may print the references that place a view.
+    let mut regions: Vec<&super::guided::SheetRegion> = job
         .sheet_regions
         .iter()
-        .filter(|r| r.discipline.eq_ignore_ascii_case("E"))
-        .map(|r| (r.number.clone(), r.level.clone(), Some(r.area.unwrap_or(r.rect))))
+        .filter(|r| matches!(r.kind.as_str(), "plan" | "enlarged_plan" | "rcp" | "") && r.rect.iter().all(|v| v.is_finite()))
         .collect();
+    regions.sort_by_key(|r| !r.discipline.eq_ignore_ascii_case("E"));
+    let e_sheets: Vec<(String, String, Option<[f64; 4]>)> =
+        regions.iter().map(|r| (r.number.clone(), r.level.clone(), Some(r.area.unwrap_or(r.rect)))).collect();
     let Ok(d) = s.doc() else { return json!({"moved": 0, "why_not": "no drawing"}) };
     let Some(text) = d.building_spec.as_deref().filter(|t| !t.trim().is_empty()) else { return json!({"moved": 0, "why_not": "no building model"}) };
     let Ok(mut sp) = cadaddy_walk3d::BuildingSpec::from_json(text) else { return json!({"moved": 0, "why_not": "the building model did not read"}) };
@@ -1825,5 +2169,138 @@ mod tests {
         let plan = e_plan();
         let sheet = Sheet::read(plan.model.iter().map(|e| e.as_ref()), None);
         assert_eq!(room_box(&sheet, [84.0, 72.0], 12.0), Some([0.0, 0.0, 168.0, 144.0]));
+    }
+
+    fn add_circle(d: &mut Drawing, at: [f64; 2], r: f64) {
+        d.add(&Space::Model, Common::default(), EntityKind::Circle(cadaddy_doc::Circle { center: Vec3::new(at[0], at[1], 0.0), radius: r })).ok();
+    }
+
+    /// A made-up detail sheet: view 4, a wall drawn like `elevation`'s but titled with no room,
+    /// wall or "ELEVATION"; three sconces drawn as circles at 42/84/126 (6'-6"), named only by
+    /// notes beside the view with leaders to them, and a blocking note that is not a device.
+    fn wall_detail() -> Drawing {
+        let mut d = elevation("RECEPTION FEATURE WALL", &[], &[]);
+        let (x0, y0) = (1000.0, 500.0);
+        add_text(&mut d, "4", [x0 - 12.0, y0 - 24.0], 4.0);
+        for (k, x) in [42.0, 84.0, 126.0].into_iter().enumerate() {
+            add_circle(&mut d, [x0 + x, y0 + 78.0], 3.0);
+            let ny = y0 + 95.0 - 8.0 * k as f64;
+            add_text(&mut d, "WALL SCONCE, SEE ELECTRICAL", [x0 + 200.0, ny], 3.0);
+            // The leader: from the note's start, bent once, ending on the sconce's edge.
+            add_line(&mut d, [x0 + 199.0, ny + 1.0], [x0 + 180.0, ny + 1.0]);
+            add_line(&mut d, [x0 + 180.0, ny + 1.0], [x0 + x + 2.0, y0 + 80.0]);
+        }
+        add_text(&mut d, "PROVIDE BLOCKING FOR SCONCES", [x0 + 200.0, y0 + 40.0], 3.0);
+        add_line(&mut d, [x0 + 199.0, y0 + 41.0], [x0 + 100.0, y0 + 60.0]);
+        d
+    }
+
+    fn details_page(d: Drawing) -> ArchPage {
+        ArchPage { number: "A-733".into(), title: "INTERIOR DETAILS AND SECTIONS".into(), drawing: d }
+    }
+
+    #[test]
+    fn a_wall_detail_titled_without_room_or_wall_is_placed_where_the_plan_refers_to_it() {
+        // The detail view and its sconces are read: leader notes are devices, the blocking note
+        // is not, and the view number comes from the title's bubble.
+        let views = read_elevations(&wall_detail(), &BTreeSet::new(), false);
+        assert_eq!(views.len(), 1, "{views:?}");
+        assert_eq!(views[0].number.as_deref(), Some("4"));
+        let mut xs: Vec<f64> = views[0].devices.iter().map(|d| d.at[0] - 1000.0).collect();
+        xs.sort_by(f64::total_cmp);
+        assert_eq!(xs, vec![42.0, 84.0, 126.0], "{views:?}");
+        assert!(views[0].devices.iter().all(|d| d.class == Class::Light));
+
+        // The plan prints `4/A-733` by the room's north wall: the view is that wall.
+        let mut plan = e_plan();
+        add_text(&mut plan, "4/A-733", [84.0, 132.0], 3.0);
+        let mut sp = spec();
+        let r = locate(&mut sp, &plan, &e_sheets(), &[details_page(wall_detail())], Opts::default());
+        assert_eq!(r["moved"], 3, "{r}");
+        let xs: Vec<f64> = (0..3).map(|i| sp.tags[i].at_ft[0]).collect();
+        assert_eq!(xs, vec![3.5, 7.0, 10.5], "{r}");
+        for i in 0..3 {
+            assert_eq!(field(&sp, i, "wall"), "north");
+            assert_eq!(field(&sp, i, "mount_height_ft"), "6.5");
+            assert_eq!(field(&sp, i, "circuit"), "LA-1");
+            assert!(field(&sp, i, "located_from").starts_with("A-733 RECEPTION FEATURE WALL"), "{}", field(&sp, i, "located_from"));
+        }
+
+        // No reference anywhere: the view names no room, so nothing moves.
+        let mut sp = spec();
+        let r = locate(&mut sp, &e_plan(), &e_sheets(), &[details_page(wall_detail())], Opts::default());
+        assert_eq!(r["moved"], 0, "{r}");
+    }
+
+    #[test]
+    fn a_reference_on_the_architectural_plan_places_devices_moved_onto_their_overall_plan() {
+        // The drawing holds the E plan and, beside it, the architectural plan of the same level;
+        // both print rooms 101 and 102. Only the architectural plan has the view's bubble
+        // (4 over A-733). The devices came from an enlarged sheet (E-9) and were moved onto the
+        // E plan: they are found by where they sit, not by the sheet they were read on.
+        let mut d = e_plan();
+        room(&mut d, [200.0, 0.0, 320.0, 144.0]);
+        add_text(&mut d, "102", [260.0, 72.0], 6.0);
+        for (x, y, n) in [(84.0, 72.0, "101"), (260.0, 72.0, "102")] {
+            add_text(&mut d, n, [1000.0 + x, y], 6.0);
+        }
+        room(&mut d, [1000.0, 0.0, 1168.0, 144.0]);
+        room(&mut d, [1200.0, 0.0, 1320.0, 144.0]);
+        add_text(&mut d, "4", [1084.0, 134.0], 3.0);
+        add_text(&mut d, "A-733", [1082.0, 128.0], 3.0);
+        let mut sp = spec();
+        for t in &mut sp.tags {
+            t.set("sheet", "E-9", "plan");
+        }
+        let sheets = vec![
+            ("E-1".to_string(), "Level 1".to_string(), Some([-20.0, -20.0, 400.0, 200.0])),
+            ("A-1".to_string(), "Level 1".to_string(), Some([980.0, -20.0, 1400.0, 200.0])),
+        ];
+        let r = locate(&mut sp, &d, &sheets, &[details_page(wall_detail())], Opts::default());
+        assert_eq!(r["moved"], 3, "{r}");
+        let xs: Vec<f64> = (0..3).map(|i| sp.tags[i].at_ft[0]).collect();
+        assert_eq!(xs, vec![3.5, 7.0, 10.5], "{r}");
+        assert_eq!(field(&sp, 0, "wall"), "north");
+        // A plan of another level is not looked at.
+        let mut sp = spec();
+        let other = vec![sheets[0].clone(), ("A-2".to_string(), "Level 2".to_string(), sheets[1].2)];
+        let r = locate(&mut sp, &d, &other, &[details_page(wall_detail())], Opts::default());
+        assert_eq!(r["moved"], 0, "{r}");
+    }
+
+    #[test]
+    fn plan_references_to_views_read() {
+        let l = |t: &str, x: f64, y: f64| Label { text: t.into(), at: [x, y], height: 3.0 };
+        let idx = ref_index(&[
+            l("SEE 3/A501 FOR LOCATIONS", 0.0, 0.0),
+            l("7/A-612", 50.0, 0.0),
+            l("2", 100.0, 10.0),
+            l("A-410", 99.0, 4.0),
+            l("2", 200.0, 10.0),
+        ]);
+        assert_eq!(idx.get(&("3".into(), "A501".into())), Some(&vec![[0.0, 0.0]]));
+        assert_eq!(idx.get(&("7".into(), "A612".into())), Some(&vec![[50.0, 0.0]]));
+        assert_eq!(idx.get(&("2".into(), "A410".into())), Some(&vec![[99.5, 7.0]]), "a bubble: number over sheet");
+        assert_eq!(idx.len(), 3, "{idx:?}");
+    }
+
+    #[test]
+    fn notes_name_devices_and_detail_sheets_are_read_after_elevations() {
+        assert_eq!(note_device("WALL SCONCE, SEE ELECTRICAL"), Some(Class::Light));
+        assert_eq!(note_device("J-BOX @ 6'-0\" AFF"), Some(Class::Light));
+        assert_eq!(note_device("DUPLEX RECEPTACLE ABOVE COUNTER"), Some(Class::Receptacle));
+        assert_eq!(note_device("PROVIDE BLOCKING FOR SCONCES"), None);
+        assert_eq!(note_device("ALIGN WITH MIRROR"), None);
+        let sh = |n: &str, t: &str, k: &str| json!({"number": n, "title": t, "type": k, "discipline": "A"});
+        let refd: BTreeSet<String> = ["A733".to_string()].into();
+        assert_eq!(evidence_rank(&sh("A-401", "INTERIOR ELEVATIONS", "elevation"), &refd), Some(0));
+        assert_eq!(evidence_rank(&sh("A-201", "REFLECTED CEILING PLAN", "rcp"), &refd), Some(1));
+        assert_eq!(evidence_rank(&sh("A-733", "DETAILS", "detail"), &refd), Some(2));
+        assert_eq!(evidence_rank(&sh("A-530", "DETAILS", "detail"), &refd), Some(3));
+        assert_eq!(evidence_rank(&sh("A-301", "EXTERIOR ELEVATIONS", "elevation"), &refd), None);
+        assert_eq!(evidence_rank(&sh("A-101", "FLOOR PLAN", "plan"), &refd), None);
+        // A titled view with no devices and no "ELEVATION" is no wall view.
+        let bare = elevation("TYPICAL WALL TYPES", &[], &[]);
+        assert!(read_elevations(&bare, &BTreeSet::new(), false).is_empty());
     }
 }
