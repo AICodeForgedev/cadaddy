@@ -299,6 +299,37 @@ fn main_plan_is_view_1(scale_line: bool) {
     assert_eq!(l.double_counted, 0);
 }
 
+/// Small details printed in a row under a piece of the core plan: each detail is the linework
+/// right over its title, not the core's piece above that, so the core keeps every device.
+#[test]
+fn a_detail_under_the_core_plan_takes_its_own_linework_not_the_cores() {
+    let (sheets, pages) = with_e3(linkset::enlarged_sheet_with_details_below());
+    let l = printlinks::link_set(&sheets, &pages);
+    let mut got: Vec<(String, usize)> = l.enlarged.iter().map(|e| (e.detail.clone(), e.devices)).collect();
+    got.sort();
+    assert_eq!(got, vec![("1".to_string(), 7), ("4".to_string(), 2), ("5".to_string(), 2)], "{:#?}", l.enlarged);
+    let core = l.enlarged.iter().find(|e| e.detail == "1").expect("view 1");
+    assert_eq!(core.in_smaller_views, 0, "{core:#?}");
+    assert_eq!(l.double_counted, 0);
+}
+
+/// The same sheet printed and imported: the details still take their own linework.
+#[test]
+fn a_printed_detail_under_the_core_plan_takes_its_own_linework() {
+    let (sheets, mut pages) = printed_set();
+    let pdf = linkset::print(&linkset::enlarged_sheet_with_details_below()).unwrap_or_else(|e| panic!("E-3: {e}"));
+    let (page, _) = cadaddy_io::pdf_read::read_json(&pdf, &serde_json::json!({"page": 1, "images": false, "fills": "merge"}))
+        .unwrap_or_else(|e| panic!("E-3: {e}"));
+    for p in pages.iter_mut().filter(|p| p.sheet.number == "E-3") {
+        p.read = printlinks::read_page(&page, "E-3");
+    }
+    let l = printlinks::link_set(&sheets, &pages);
+    let mut got: Vec<(String, usize)> = l.enlarged.iter().map(|e| (e.detail.clone(), e.devices)).collect();
+    got.sort();
+    assert_eq!(got, vec![("1".to_string(), 7), ("4".to_string(), 2), ("5".to_string(), 2)], "{:#?}", l.enlarged);
+    assert_eq!(l.double_counted, 0);
+}
+
 /// The same sheet printed and imported (its circles taken for lettering, its text doubled): view
 /// 1 is still the main plan with its own five devices.
 #[test]

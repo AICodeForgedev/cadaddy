@@ -309,6 +309,30 @@ pub fn enlarged_sheet_with_details(scale_line: bool) -> Drawing {
     s.d
 }
 
+/// E-3 with its core plan in two pieces (west and east rooms, a gap between) and two small
+/// enlarged rooms printed in a row under the east piece, titled as views 4 and 5 with two
+/// devices each: a detail's own linework is far smaller than the core's, and the core's east
+/// piece stands right over the details' titles. Seven devices are the core's.
+pub fn enlarged_sheet_with_details_below() -> Drawing {
+    let mut s = Sheet::new();
+    s.title_block("E-3", "ELECTRICAL ENLARGED PLANS");
+    for r in [[3.0, 9.0, 10.6, 15.0], [3.0, 15.0, 10.6, 21.0], [11.0, 9.0, 19.0, 15.0], [11.0, 15.0, 19.0, 21.0]] {
+        s.rect(r);
+    }
+    for p in [[5.0, 11.0], [8.0, 17.0], [6.0, 19.0], [13.0, 11.0], [17.0, 13.0], [14.0, 18.0], [18.0, 20.0]] {
+        s.device("A", p);
+    }
+    s.view_title("1", "E-3", "COMMON AREA CORE - POWER", "SCALE: 1/4\" = 1'-0\"", [3.0, 7.8]);
+    for (n, x0, title) in [("4", 12.0, "ENLARGED ELECTRICAL ROOM 101"), ("5", 16.0, "ENLARGED ELECTRICAL ROOM 102")] {
+        s.rect([x0, 3.6, x0 + 2.8, 6.4]);
+        s.line([x0, 5.0], [x0 + 2.8, 5.0]);
+        s.device("A", [x0 + 0.6, 4.2]);
+        s.device("A", [x0 + 2.2, 5.8]);
+        s.view_title(n, "E-3", title, "SCALE: 1/2\" = 1'-0\"", [x0 + 0.8, 2.6]);
+    }
+    s.d
+}
+
 /// E-3 as [`enlarged_sheet`], each device's circuit label (`D-10` ...) printed before the
 /// sheet's other content, just above and left of the symbol: the import reads the label first
 /// and tags the symbol with it, leaving the type mark beside it as lettering.

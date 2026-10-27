@@ -287,9 +287,10 @@ pub(super) fn find(
             // within a letter of it.
             if o.ocr
                 && cells().any(|k| {
-                    grid.get(&k).into_iter().flatten().any(|&j| {
-                        !members.contains(&j) && shapes.get(j).is_some_and(|s| s.ocr && s.near_from(c) <= 2.0 * reach)
-                    })
+                    grid.get(&k)
+                        .into_iter()
+                        .flatten()
+                        .any(|&j| !members.contains(&j) && shapes.get(j).is_some_and(|s| s.ocr && s.near_from(c) <= 2.0 * reach))
                 })
             {
                 continue;
@@ -327,11 +328,7 @@ mod tests {
             })
             .collect();
         let bar = |dx: f64| EntityKind::Line(Line { a: Vec3::new(c[0] + dx, c[1] - 2.0, 0.0), b: Vec3::new(c[0] + dx, c[1] + 2.0, 0.0) });
-        vec![
-            EntityKind::LwPolyline(LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false }),
-            bar(-1.0),
-            bar(1.0),
-        ]
+        vec![EntityKind::LwPolyline(LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false }), bar(-1.0), bar(1.0)]
     }
 
     fn device(tag: &str, at: [f64; 2], handle: String) -> PageDevice {

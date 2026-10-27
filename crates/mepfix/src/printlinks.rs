@@ -1454,10 +1454,20 @@ fn view_block(blocks: &[([f64; 4], usize)], at: [f64; 2], h: f64, others: &[[f64
             .min_by(|a, b| (a.0[1] - at[1]).total_cmp(&(b.0[1] - at[1])))
             .copied()
     };
-    let (mut b, _) = match near {
+    let (picked, _) = match near {
         Some(nb) if big(nb.1) => nb,
         _ => far().or(near)?,
     };
+    // A drawing (not a north arrow or a scale bar) right over the title is its view however small
+    // beside the sheet's main plan, when the block picked stands beyond it: a detail printed
+    // under a piece of the main plan.
+    let drawing = |r: &[f64; 4]| (r[2] - r[0]).min(r[3] - r[1]) >= 6.0 * h;
+    let mut b = blocks
+        .iter()
+        .map(|(r, _)| *r)
+        .filter(|r| *r != picked && !bar(r) && (holds(r) || above(r)) && drawing(r) && picked[1] >= r[3] - h)
+        .min_by(|a, c| a[1].total_cmp(&c[1]))
+        .unwrap_or(picked);
     let pad = 2.0 * h;
     for _ in 0..4 {
         let mut grew = false;
