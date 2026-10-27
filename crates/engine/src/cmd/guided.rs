@@ -3437,6 +3437,40 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         );
     }
 
+    // Q6035 MUST 2: a level with an architectural plan but ~0 built elements is a WARNING and
+    // the result is not "pass".  Parse the build notes ("{name}: built {N} walls …") and cross-
+    // check against the spec's levels.
+    if let Ok((sp, _)) = super::bspec::current(s, "bim_build") {
+        let total_walls = result.get("walls").and_then(Value::as_u64).unwrap_or(0);
+        if sp.levels.len() > 1 && total_walls > 0 {
+            let notes_str: Vec<String> = result.get("notes").and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
+                .unwrap_or_default();
+            for level in &sp.levels {
+                let prefix = format!("{}: ", level.name);
+                let has_walls = notes_str.iter().any(|n| {
+                    if !n.starts_with(&prefix) { return false; }
+                    let desc = &n[prefix.len()..];
+                    desc.split_whitespace().collect::<Vec<_>>().windows(2)
+                        .any(|w| w[1].starts_with("wall") && w[0].parse::<u64>().is_ok_and(|n| n > 0))
+                });
+                if !has_walls && !super::wallgen::roof_level(&sp.levels, &level.name) {
+                    job.add_finding(
+                        StageName::BimBuild,
+                        &format!("{}: architectural plan found but 0 walls built", level.name),
+                        "A level with a plan page should produce walls; 0 walls indicates the \
+                         level's page was not read or has no detectable geometry",
+                        4,
+                        vec!["Check that the sheet was classified correctly".into(),
+                             "Check that wall lines are on a recognized layer".into()],
+                        None,
+                        false,
+                    );
+                }
+            }
+        }
+    }
+
     // Plausibility check.
     if let Some(counts) = result.get("counts").and_then(Value::as_object) {
         for (key, val) in counts {
