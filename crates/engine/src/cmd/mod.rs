@@ -149,6 +149,7 @@ pub(crate) mod rhai_cmd;
 pub mod rooms3d;
 pub(crate) mod runtidy;
 pub mod sheetfacts;
+pub mod sheetsout;
 pub mod sitetakeoff;
 pub mod spell;
 pub mod stairs;
@@ -765,6 +766,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(clashreport::specs());
         v.extend(concrete::specs());
     v.extend(ugsheets::specs());
+    v.extend(sheetsout::specs());
         v.extend(gear::specs());
         v.extend(labels::specs());
         v.extend(sitetakeoff::specs());

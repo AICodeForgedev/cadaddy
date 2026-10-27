@@ -2030,7 +2030,12 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadaddy_doc::Dimension
     }
     if b.opts.text {
         let sh = cadaddy_fonts::Shaped { strokes: g.text.clone(), glyphs: g.text_glyphs.clone(), width: 0.0, text: g.text_runs.clone() };
+        let at = b.list.prims.len();
         b.shaped(ctx, txt_rgb, lw, &sh);
+        // A plot's stroked dimension text is searchable too.
+        if !sh.strokes.is_empty() {
+            b.words(ctx, at, &g.value, g.text_angle, g.text_height);
+        }
     }
 }
 
@@ -2382,7 +2387,14 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
                 match (&multiline, &sh) {
                     (Some(m), _) => mtext(b, ctx, m, ink, lw),
                     (None, Some(sh)) if qtext(ctx.d) => qtext_box(b, ctx, ink, lw, &[sh], a.text.rotation),
-                    (None, Some(sh)) => b.shaped(ctx, ink, lw, sh),
+                    (None, Some(sh)) => {
+                        let at = b.list.prims.len();
+                        b.shaped(ctx, ink, lw, sh);
+                        // A plot's stroked attribute (a title block's sheet number) is searchable.
+                        if !sh.strokes.is_empty() {
+                            b.words(ctx, at, &a.text.value, a.text.rotation, a.text.height);
+                        }
+                    }
                     (None, None) => {}
                 }
             }

@@ -186,9 +186,9 @@ struct Route {
 
 /// Grid lines: vertical ones (an x each) and horizontal ones (a y each), by label.
 #[derive(Clone, Debug, Default)]
-struct Grids {
-    x: Vec<(String, f64)>,
-    y: Vec<(String, f64)>,
+pub(super) struct Grids {
+    pub(super) x: Vec<(String, f64)>,
+    pub(super) y: Vec<(String, f64)>,
 }
 
 struct Ug {
@@ -432,7 +432,7 @@ fn is_pipe_service(kind: &str) -> bool {
 
 /// Grid lines from the spec's columns (`A-1` at a point): a label whose columns line up on one x
 /// is a vertical line, on one y a horizontal one.
-fn grids(sp: &BuildingSpec) -> Grids {
+pub(super) fn grids(sp: &BuildingSpec) -> Grids {
     let stray = GRID_STRAY_FT * upf(sp);
     let mut by: BTreeMap<String, Vec<[f64; 2]>> = BTreeMap::new();
     for c in sp.columns.iter().take(MAX_ITEMS).filter(|c| finite(c.at)) {
