@@ -418,6 +418,9 @@ fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
         let h = targets(s, p)?.first().copied().ok_or_else(|| bad("area", "`points` or `handle` is required"))?;
         object_area(s, h)?
     };
+    if let Some(what) = too_large(a, per) {
+        return Err(bad("area", format!("the {what} is too large")));
+    }
     Ok(json!({ "area": a, "perimeter": per, "message": area_text(s, a, per) }))
 }
 
@@ -454,6 +457,17 @@ fn volume_text(s: &Session, v: f64) -> String {
 fn fmt_volume(s: &Session, v: f64) -> String {
     let (u, p) = s.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
     format_distance(v, if matches!(u, 3 | 4) { 2 } else { u }, p)
+}
+
+/// "area" or "perimeter" when that value is past f64's range, `None` when both can be reported.
+fn too_large(a: f64, per: f64) -> Option<&'static str> {
+    if !a.is_finite() {
+        Some("area")
+    } else if !per.is_finite() {
+        Some("perimeter")
+    } else {
+        None
+    }
 }
 
 /// Area and perimeter of a closed object (AREA's Object option).
@@ -1039,17 +1053,26 @@ impl AreaM {
     }
     /// Report an area (and the running total in add/subtract mode); ends the command in single mode.
     /// In volume mode the area waits for its height instead.
+    /// An area, perimeter or total past f64's range is not reported or added to the total.
     fn measured(&mut self, s: &mut Session, a: f64, per: f64) -> Step {
         if self.volume {
+            if !a.is_finite() {
+                s.echo("The area is too large.");
+                return if self.mode == AreaMode::Single { Step::Done } else { Step::Continue };
+            }
             self.pending.push(a);
             return Step::Continue;
         }
-        s.echo(area_text(s, a, per));
-        match self.mode {
-            AreaMode::Single => return Step::Done,
-            AreaMode::Add => self.total += a,
-            AreaMode::Subtract => self.total -= a,
+        let total = self.total_with(a);
+        if let Some(what) = too_large(a, per).or_else(|| (!total.is_finite()).then_some("total area")) {
+            s.echo(format!("The {what} is too large."));
+            return if self.mode == AreaMode::Single { Step::Done } else { Step::Continue };
         }
+        s.echo(area_text(s, a, per));
+        if self.mode == AreaMode::Single {
+            return Step::Done;
+        }
+        self.total = total;
         s.echo(format!("Total area = {}", fmt_d(s, self.total)));
         Step::Continue
     }
