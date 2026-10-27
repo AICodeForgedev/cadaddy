@@ -32,6 +32,12 @@ function Set-SessionProperty($Session, [string] $Name, [string] $Value) {
 function Get-SessionProperty($Session, [string] $Name) {
   $Session.GetType().InvokeMember('Property', 'GetProperty', $null, $Session, @($Name))
 }
+function Get-PackageTemplate($Database) {
+  # Summary information property 7 is the platform: "Intel;1033", "x64;1033" or "Arm64;1033".
+  $summary = $Database.GetType().InvokeMember('SummaryInformation', 'GetProperty', $null, $Database, @(0))
+  try { [string]$summary.GetType().InvokeMember('Property', 'GetProperty', $null, $summary, @(7)) }
+  finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($summary) }
+}
 $installer = $null; $database = $null; $session = $null
 try {
   $installer = New-Object -ComObject WindowsInstaller.Installer
@@ -150,6 +156,12 @@ try {
   if (@(Read-Rows $database 'SELECT `Action` FROM `InstallExecuteSequence`' 1 | Where-Object { $_[0] -like 'CraftDefault*' }).Count) {
     throw 'Silent installs must not use the wizard-only default folder actions.'
   }
+  # The machine default comes from the environment of the package architecture, not from a folder name.
+  # x86 packages use Program Files (x86) on 64-bit Windows; x64 and Arm64 packages use the 64-bit root.
+  $machineRoot = if ((Get-PackageTemplate $database) -match '^Intel') {
+    if (Get-SessionProperty $session 'VersionNT64') { ${env:ProgramFiles(x86)} } else { $env:ProgramFiles }
+  } elseif ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
+  $machineFolder = (Join-Path $machineRoot "ArtCraft\$($policy.name)") + '\'
   foreach ($scope in @('1', '')) {
     Set-SessionProperty $session 'ALLUSERS' $scope
     Set-SessionProperty $session 'INSTALLFOLDER' ''
@@ -159,8 +171,8 @@ try {
       if ($session.EvaluateCondition($row[2]) -eq 1 -and $session.DoAction($row[0]) -ne 1) { throw "$($row[0]) failed." }
     }
     $folder = Get-SessionProperty $session 'INSTALLFOLDER'
-    $wanted = if ($scope -eq '1') { '^[A-Za-z]:\\Program Files( \(x86\))?\\ArtCraft\\[^\\]+\\$' } else { '^' + [regex]::Escape($env:LOCALAPPDATA) + '\\Programs\\ArtCraft\\[^\\]+\\$' }
-    if ($folder -notmatch $wanted) { throw "Wizard default folder for ALLUSERS='$scope' is '$folder'." }
+    $wanted = if ($scope -eq '1') { $machineFolder } else { (Join-Path $env:LOCALAPPDATA "Programs\ArtCraft\$($policy.name)") + '\' }
+    if ($folder -ine $wanted) { throw "Wizard default folder for ALLUSERS='$scope' is '$folder', expected '$wanted'." }
   }
   $execute = @{}
   foreach ($row in (Read-Rows $database 'SELECT `Action`, `Sequence` FROM `InstallExecuteSequence`' 2)) { $execute[$row[0]] = [int]$row[1] }
