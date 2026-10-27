@@ -578,9 +578,19 @@ pub fn not_built_reason(discipline: &str, title: &str, level: &str, level_source
 /// `4TH FLOOR PLAN`), each split into one region per view: the view's level, its title and its
 /// part of the sheet ([`super::printmep::sheet_views`]). A sheet of one view keeps its region, a
 /// typical-floor plan its several levels: it is the one case where one view feeds several levels.
-pub(crate) fn split_view_regions(d: &cadaddy_doc::Drawing, regions: Vec<SheetRegion>) -> Vec<SheetRegion> {
+/// `typical[i]`: region `i`'s sheet is titled as a typical plan. Any other sheet that shows
+/// several levels is split even when its views carry no title the readers find (by its blocks
+/// of linework), so no floor-specific plan feeds two levels.
+pub(crate) fn split_view_regions(d: &cadaddy_doc::Drawing, regions: Vec<SheetRegion>, typical: &[bool]) -> Vec<SheetRegion> {
     let candidate = |r: &SheetRegion| matches!(r.kind.as_str(), "plan" | "enlarged_plan") && r.view.is_none();
-    let sheets: Vec<Option<([f64; 4], [f64; 4])>> = regions.iter().map(|r| candidate(r).then(|| (r.rect, r.area.unwrap_or(r.rect)))).collect();
+    let sheets: Vec<Option<([f64; 4], [f64; 4], Vec<String>)>> = regions
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let levels = if typical.get(i).copied().unwrap_or(false) { Vec::new() } else { r.levels.clone() };
+            candidate(r).then(|| (r.rect, r.area.unwrap_or(r.rect), levels))
+        })
+        .collect();
     let mut views = super::printmep::sheet_views(d, &sheets);
     let mut out = Vec::with_capacity(regions.len());
     for (i, r) in regions.into_iter().enumerate() {
@@ -1712,6 +1722,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let mut same = 0usize;
     let mut placed = Vec::new();
     let mut regions = Vec::new();
+    let mut typical = Vec::new();
     for ((r, name), sh) in results.iter().zip(&names).zip(&all) {
         match r {
             super::exchange::PageImport::Done(rep) => {
@@ -1737,6 +1748,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                         .and_then(Value::as_array)
                         .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
                         .unwrap_or_default();
+                    typical.push(cadaddy_mepfix::sheet_reader::says_typical(&field("title")));
                     regions.push(SheetRegion {
                         number: base.to_string(),
                         level,
@@ -1767,7 +1779,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         r.title_block = f.title_block;
     }
     // A sheet printing two levels' plans: each level takes only its own view.
-    let regions = split_view_regions(s.doc()?, regions);
+    let regions = split_view_regions(s.doc()?, regions, &typical);
     job.sheet_regions = regions;
     job.sheets_loaded = true;
     job.audit(
@@ -6564,7 +6576,7 @@ mod tests {
         assert!(links.iter().all(|l| l.view.is_some()));
         // A typical plan (one view of several levels) stays one region feeding each level.
         let typical = SheetRegion { levels: vec!["2".into(), "3".into()], ..region("M-201", "2", "M", "plan", 600.0) };
-        let kept = split_view_regions(&cadaddy_doc::Drawing::new_imperial(), vec![typical.clone()]);
+        let kept = split_view_regions(&cadaddy_doc::Drawing::new_imperial(), vec![typical.clone()], &[true]);
         assert_eq!(kept, vec![typical]);
     }
 
@@ -7377,6 +7389,7 @@ mod tests {
             title_block: None,
             not_built: String::new(),
             levels: Vec::new(),
+            view: None,
         });
         let _r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let completeness = job.stage(StageName::Devices).map(|st| st.completeness.clone()).unwrap_or_default();

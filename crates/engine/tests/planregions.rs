@@ -45,8 +45,26 @@ fn write_sheets(dir: &std::path::Path, only: &[&str]) {
 
 /// One sheet printing `lower`'s and `upper`'s plans, one above the other, as `number`.
 fn write_two_view(dir: &std::path::Path, lower: &str, upper: &str, number: &str, word: &str) {
+    write_two_view_as(dir, lower, upper, number, word, true);
+}
+
+/// [`write_two_view`], with the views' own titles (`FIRST FLOOR MECHANICAL PLAN`) left off when
+/// `titled` is false: only the sheet's title says which levels it shows.
+fn write_two_view_as(dir: &std::path::Path, lower: &str, upper: &str, number: &str, word: &str, titled: bool) {
     let (t, st) = cadaddy_mepfix::hotel_planned(SEED, HotelSize::Small);
-    let two = cadaddy_mepfix::printed::two_view_sheet(&t, &st, lower, upper, number, word).expect("two-view sheet");
+    let mut two = cadaddy_mepfix::printed::two_view_sheet(&t, &st, lower, upper, number, word).expect("two-view sheet");
+    if !titled {
+        let mut kept = cadaddy_engine::doc::EntityStore::new();
+        kept.push_many(
+            two.drawing
+                .model
+                .iter()
+                .filter(|e| !matches!(&e.kind, cadaddy_engine::doc::EntityKind::Text(x) if cadaddy_mepfix::sheet_reader::detect_levels(&x.value).len() == 1))
+                .map(|e| (**e).clone())
+                .collect::<Vec<_>>(),
+        );
+        two.drawing.model = kept;
+    }
     // Plotted at the plans' printed scale (as a real sheet is), on paper the size of the views.
     let printed = t.sheets.iter().find(|s| s.number == lower).and_then(|s| s.scale_text.clone()).unwrap_or_default();
     let k = cadaddy_mepfix::sheet_reader::parse_scale(&printed).unwrap_or(0.125);
@@ -97,10 +115,16 @@ fn per_level(read: &Value, trade: &str) -> Vec<(String, String, f64)> {
 }
 
 /// What the whole sheet `file` reads for `cmd` (`ducts.read`, `pipes.read`): both plans at once,
-/// as a level was given before (Q6030's doubling).
+/// as a level was given before (Q6030's doubling). Ducts as the job takes them: applied, so the
+/// traced centrelines are tidied (`ducts.read`'s own `length_ft` is the reader's, before that).
 fn whole_sheet(file: &std::path::Path, cmd: &str) -> f64 {
     let mut s = Session::new();
     s.execute("pdfimport", &json!({"path": file.display().to_string(), "page": 1, "images": false})).expect("pdfimport");
+    if cmd == "ducts.read" {
+        s.execute(cmd, &json!({"apply": true})).expect(cmd);
+        let q = s.execute("mep.qty", &json!({})).expect("mep.qty");
+        return q["totals"]["duct_length_ft"].as_f64().unwrap_or(0.0);
+    }
     let r = s.execute(cmd, &json!({})).expect(cmd);
     r["length_ft"].as_f64().unwrap_or(0.0)
 }
@@ -181,5 +205,31 @@ fn an_open_print_set_reads_each_view_on_its_level() {
     assert_eq!(levels, ["Level 1", "Level 2"], "{pipes}");
     assert!(b.iter().all(|x| x.2 > 10.0), "{b:?}");
     assert!(b[0].2 < 0.85 * (b[0].2 + b[1].2) && b[1].2 < 0.85 * (b[0].2 + b[1].2), "{b:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_two_plan_sheet_whose_views_carry_no_titles_still_gives_each_level_its_own_plan() {
+    let _g = serial();
+    real_pdf_reader();
+    // The sheet's title names both levels (`MECHANICAL PLAN - FIRST & SECOND FLOORS`) but the
+    // plans have no titles under them: its two blocks of linework split it, bottom to top.
+    let dir = folder("untitled");
+    write_sheets(&dir, &["A-101", "A-102"]);
+    write_two_view_as(&dir, "M-101", "M-102", "M-1A", "MECHANICAL", false);
+    let s = run_job(&dir);
+    let b = per_level(&mep_read(&s), "duct");
+    let whole = whole_sheet(&dir.join("M-1A.pdf"), "ducts.read");
+    eprintln!("untitled duct: per level {b:?}; the whole sheet {whole}");
+    let levels: Vec<&str> = b.iter().map(|(l, _, _)| l.as_str()).collect();
+    assert_eq!(levels, ["Level 1", "Level 2"], "{b:?}");
+    let (l1, l2) = (b[0].2, b[1].2);
+    assert!(l1 > 10.0 && l2 > 10.0, "each level reads its own plan: {b:?}");
+    assert!((l1 + l2 - whole).abs() < 0.1 * whole, "the levels add up to the sheet, read once: {b:?} vs {whole}");
+    assert!(l1 > 1.3 * l2, "the bottom plan (level 1's, more duct) is level 1's: {b:?}");
+    let job = job_state(&s);
+    let views: Vec<&Value> = job["guided_job"]["sheet_regions"].as_array().expect("regions").iter().filter(|r| r["number"] == "M-1A").collect();
+    assert_eq!(views.len(), 2, "one region per plan: {views:?}");
+    assert!(views.iter().all(|r| r["view"].is_object() && r["levels"].is_null()), "{views:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -565,17 +565,20 @@ pub(crate) struct SheetViewRead {
     pub rect: [f64; 4],
 }
 
-/// For each sheet of `d` (`Some((rect, drawing area))`; None: not looked at), its plan views
-/// when it prints plans of different levels (`3RD FLOOR PLAN` beside `4TH FLOOR PLAN`), lowest
-/// level first; empty for a sheet of one view. Read on the imported sheet
-/// ([`cadaddy_mepfix::sheet_reader::level_views`]), the drawing gone over once.
-pub(crate) fn sheet_views(d: &Drawing, sheets: &[Option<([f64; 4], [f64; 4])>]) -> Vec<Vec<SheetViewRead>> {
+/// For each sheet of `d` (`Some((rect, drawing area, levels))`; None: not looked at), its plan
+/// views when it prints plans of different levels (`3RD FLOOR PLAN` beside `4TH FLOOR PLAN`),
+/// lowest level first; empty for a sheet of one view. Read on the imported sheet
+/// ([`cadaddy_mepfix::sheet_reader::level_views`]), the drawing gone over once. `levels`: the
+/// levels the set says a sheet shows that is no typical plan (else empty); when its views carry
+/// no title the readers find, its blocks of linework in the drawing area split it, one per level
+/// ([`cadaddy_mepfix::sheet_reader::level_blocks`]).
+pub(crate) fn sheet_views(d: &Drawing, sheets: &[Option<([f64; 4], [f64; 4], Vec<String>)>]) -> Vec<Vec<SheetViewRead>> {
     let mut out: Vec<Vec<SheetViewRead>> = vec![Vec::new(); sheets.len()];
-    let looked: Vec<(usize, [f64; 4], [f64; 4])> = sheets
+    let looked: Vec<(usize, [f64; 4], [f64; 4], &[String])> = sheets
         .iter()
         .enumerate()
-        .filter_map(|(i, s)| s.map(|(r, a)| (i, r, a)))
-        .filter(|(_, r, a)| r.iter().chain(a.iter()).all(|v| v.is_finite()))
+        .filter_map(|(i, s)| s.as_ref().map(|(r, a, l)| (i, *r, *a, l.as_slice())))
+        .filter(|(_, r, a, _)| r.iter().chain(a.iter()).all(|v| v.is_finite()))
         .take(MAX_VIEW_SHEETS)
         .collect();
     if looked.is_empty() {
@@ -590,7 +593,7 @@ pub(crate) fn sheet_views(d: &Drawing, sheets: &[Option<([f64; 4], [f64; 4])>]) 
             continue;
         }
         let c = b.center();
-        if let Some(k) = looked.iter().position(|(_, r, _)| inside(r, c.x, c.y))
+        if let Some(k) = looked.iter().position(|(_, r, _, _)| inside(r, c.x, c.y))
             && let Some(v) = per.get_mut(k)
         {
             v.push((**e).clone());
@@ -599,18 +602,34 @@ pub(crate) fn sheet_views(d: &Drawing, sheets: &[Option<([f64; 4], [f64; 4])>]) 
     let mut shell = d.clone();
     shell.model = EntityStore::new();
     let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
-    for ((i, _, area), ents) in looked.iter().zip(per) {
+    for ((i, _, area, levels), ents) in looked.iter().zip(per) {
         if ents.is_empty() {
             continue;
         }
+        let a = [area[0].min(area[2]), area[1].min(area[3]), area[0].max(area[2]), area[1].max(area[3])];
         let mut sub = shell.clone();
         sub.model.push_many(ents);
-        let mut views: Vec<SheetViewRead> = cadaddy_mepfix::sheet_reader::level_views(&sub)
+        let mut found = cadaddy_mepfix::sheet_reader::level_views(&sub);
+        if found.is_empty() && levels.len() > 1 {
+            // Untitled views: the blocks of linework in the drawing area (not the title block's).
+            let mut area_only = shell.clone();
+            area_only.model.push_many(
+                sub.model
+                    .iter()
+                    .filter(|e| {
+                        let c = cadaddy_doc::entity_bounds(&sub, e, 0).center();
+                        inside(&a, c.x, c.y)
+                    })
+                    .map(|e| (**e).clone())
+                    .collect::<Vec<_>>(),
+            );
+            found = cadaddy_mepfix::sheet_reader::level_blocks(&area_only, levels);
+        }
+        let mut views: Vec<SheetViewRead> = found
             .into_iter()
             .filter_map(|(v, cell)| {
                 let level = v.levels.first()?.clone();
                 // Cells are open at the sheet's edges: a view ends at the sheet's drawing area.
-                let a = [area[0].min(area[2]), area[1].min(area[3]), area[0].max(area[2]), area[1].max(area[3])];
                 let rect = [cell[0].max(a[0]), cell[1].max(a[1]), cell[2].min(a[2]), cell[3].min(a[3])];
                 (rect.iter().all(|x| x.is_finite()) && rect[2] > rect[0] && rect[3] > rect[1]).then(|| SheetViewRead {
                     title: v.title,
@@ -649,6 +668,9 @@ pub(crate) fn load_project_plans(
     let mut wanted: Vec<SheetRef> = Vec::new();
     let mut pages: Vec<super::exchange::PdfPage> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    // Sheets titled as typical plans: one plan for every level they show, never split.
+    let typicals: std::collections::HashSet<&String> =
+        project.sheets.iter().filter(|s| cadaddy_mepfix::sheet_reader::says_typical(&s.title)).map(|s| &s.number).collect();
     for sh in project.sheets.iter().filter(|s| s.superseded_by.is_empty()) {
         let r = SheetRef {
             number: sh.number.clone(),
@@ -696,7 +718,8 @@ pub(crate) fn load_project_plans(
         out.push(sh);
     }
     // A sheet printing two levels' plans: one sheet per view, each read on its own level.
-    let sheets: Vec<Option<([f64; 4], [f64; 4])>> = out.iter().map(|r| r.is_plan().then_some((r.rect, r.rect))).collect();
+    let sheets: Vec<Option<([f64; 4], [f64; 4], Vec<String>)>> =
+        out.iter().map(|r| r.is_plan().then(|| (r.rect, r.rect, if typicals.contains(&r.number) { Vec::new() } else { r.levels.clone() }))).collect();
     let views = sheet_views(t.doc()?, &sheets);
     let mut split = Vec::with_capacity(out.len());
     for (r, vs) in out.into_iter().zip(views) {
