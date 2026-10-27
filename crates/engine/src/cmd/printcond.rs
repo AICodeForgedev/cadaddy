@@ -457,11 +457,7 @@ fn on_sheet(dv: &ReadDevice, sh: &SheetRef) -> bool {
 pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, devices: &[ReadDevice]) -> CondRead {
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
     let mut out = CondRead::default();
-    let plans: Vec<&SheetRef> = sheets
-        .iter()
-        .filter(|s| s.discipline.eq_ignore_ascii_case("E") && matches!(s.kind.as_str(), "plan" | "enlarged_plan"))
-        .take(MAX_SHEETS)
-        .collect();
+    let plans: Vec<&SheetRef> = sheets.iter().filter(|s| s.discipline.eq_ignore_ascii_case("E") && s.builds()).take(MAX_SHEETS).collect();
     let devices = &devices[..devices.len().min(MAX_DEVICES)];
     let bottom = DEFAULT_CEILING_FT + ABOVE_CEILING_FT;
     // Every plan first (a circuit's panel can be on another plan of its level).

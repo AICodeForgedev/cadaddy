@@ -125,7 +125,8 @@ fn levels_come_from_plan_titles_and_numbers_and_every_plan_gets_one() {
         // A numbered series whose titles name no level: the last digit is the level.
         ("Mech Set.pdf", 1, sheet("M111", &["MECHANICAL PLAN"], "")),
         ("Mech Set.pdf", 2, sheet("M112", &["MECHANICAL PLAN"], "")),
-        // A plan of no level and no series: the lowest level, to be confirmed.
+        // A plan of no level and no series in a building of several levels: no level until
+        // someone says which (never the lowest).
         ("Plumb Set.pdf", 1, sheet("P-201", &["PLUMBING PLAN"], "")),
         // Not a plan: no level.
         ("Full Set.pdf", 6, sheet("G-001", &["COVER SHEET"], "")),
@@ -137,7 +138,7 @@ fn levels_come_from_plan_titles_and_numbers_and_every_plan_gets_one() {
     }
     assert_eq!(level("M111"), ("1".into(), "number".into()));
     assert_eq!(level("M112"), ("2".into(), "number".into()));
-    assert_eq!(level("P-201"), ("1".into(), "default".into()));
+    assert_eq!(level("P-201"), (String::new(), "ask".into()));
     assert_eq!(level("G-001"), (String::new(), String::new()));
     assert_eq!(index.plans_without_level, ["P-201"]);
     let names: Vec<&str> = index.levels.iter().map(|l| l.name.as_str()).collect();
@@ -290,4 +291,63 @@ fn a_site_sheets_spot_elevation_is_no_level_and_levels_rise_in_order() {
     assert_eq!(elevations(&index).first(), Some(&("1".to_string(), None)));
     assert_eq!(index.level_warnings.len(), 1, "{:?}", index.level_warnings);
     assert!(index.level_warnings[0].starts_with("level 1: 147'-0\" not used"), "{:?}", index.level_warnings);
+}
+
+/// `sheet` with one view titled `view` over its scale line, in the drawing area.
+fn sheet_with_view(number: &str, title: &[&str], view: &str) -> Drawing {
+    let mut d = sheet(number, title, "");
+    text(&mut d, view, 300.0, 80.0, 10.0);
+    text(&mut d, "SCALE: 1/32\" = 1'-0\"", 300.0, 62.0, 5.0);
+    d
+}
+
+#[test]
+fn only_floor_plans_define_and_fill_a_level() {
+    let project = classify(vec![
+        ("Full Set.pdf", 1, sheet("A111", &["FIRST FLOOR PLAN"], "")),
+        ("Full Set.pdf", 2, sheet("A112", &["SECOND FLOOR PLAN"], "")),
+        // An enlarged plan whose only level word is its key plan's: part of a floor, no level.
+        ("Full Set.pdf", 3, sheet_with_view("A501", &["ENLARGED UNIT PLANS"], "KEY PLAN - FIRST FLOOR")),
+        // Details naming a level: a reference sheet.
+        ("Full Set.pdf", 4, sheet("A601", &["FIRST FLOOR DETAILS"], "")),
+        // A landscape plan naming a floor (a courtyard on it): on the site.
+        ("Full Set.pdf", 5, sheet("L101", &["LANDSCAPE PLAN - FIRST FLOOR COURTYARD"], "")),
+        // A cover sheet naming a level: no level.
+        ("Fire Alarm Set.pdf", 1, sheet("FA001", &["FIRE ALARM COVER SHEET - LEVEL 1"], "")),
+        // A plan naming no level in a building of two: no level until someone says which.
+        ("Plumb Set.pdf", 1, sheet("P-201", &["PLUMBING PLAN"], "")),
+    ]);
+    let index = printset::sheet_index(&project);
+    let level = |n: &str| {
+        index
+            .sheets
+            .iter()
+            .find(|s| s.number == n)
+            .map(|s| (s.level.clone(), s.level_source.clone()))
+            .unwrap_or_else(|| panic!("{n}: {:?}", index.sheets))
+    };
+    assert_eq!(level("A111"), ("1".into(), "title".into()));
+    assert_eq!(level("A501"), (String::new(), String::new()), "a key plan names its floor, not the sheet's");
+    assert_eq!(level("A601"), (String::new(), String::new()), "details are on no level");
+    assert_eq!(level("L101"), ("SITE".into(), "site".into()), "a landscape plan is on the site");
+    assert_eq!(level("FA001"), (String::new(), String::new()), "a cover is on no level");
+    assert_eq!(level("P-201"), (String::new(), "ask".into()));
+    assert_eq!(index.plans_without_level, ["P-201"]);
+    let names: Vec<&str> = index.levels.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["1", "2"], "the site and reference sheets make no level");
+    assert_eq!(
+        index.levels.first().map(|l| l.sheets.clone()),
+        Some(vec![serde_json::json!({"sheet": "A111", "typical": false})]),
+        "only floor plans fill a level"
+    );
+}
+
+#[test]
+fn in_a_building_of_one_level_a_plan_naming_none_is_on_it() {
+    let project =
+        classify(vec![("Full Set.pdf", 1, sheet("A111", &["FIRST FLOOR PLAN"], "")), ("Plumb Set.pdf", 1, sheet("P-201", &["PLUMBING PLAN"], ""))]);
+    let index = printset::sheet_index(&project);
+    let p = index.sheets.iter().find(|s| s.number == "P-201").expect("P-201");
+    assert_eq!((p.level.as_str(), p.level_source.as_str()), ("1", "default"));
+    assert_eq!(index.plans_without_level, ["P-201"]);
 }

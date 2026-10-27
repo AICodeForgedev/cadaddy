@@ -31,12 +31,15 @@ pub enum DatumKind {
     Roof,
     /// The top of a parapet: a height, not a storey.
     Parapet,
+    /// A reference height of the site (`SITE`, finished `GRADE`, a survey benchmark): never a
+    /// storey, never a level a sheet attaches to.
+    Datum,
 }
 
 impl DatumKind {
     /// Whether the datum is a storey (IFC) and the top of the floor below it.
     pub fn is_storey(self) -> bool {
-        self != DatumKind::Parapet
+        !matches!(self, DatumKind::Parapet | DatumKind::Datum)
     }
 
     fn is_floor(&self) -> bool {
@@ -159,6 +162,9 @@ pub fn canonical_level(name: &str) -> Option<(String, DatumKind)> {
     if has("PARAPET") {
         return Some(("PARAPET".into(), DatumKind::Parapet));
     }
+    if let Some(name) = site_datum(&w) {
+        return Some((name.into(), DatumKind::Datum));
+    }
     if has("PENTHOUSE") || has("MPH") {
         return Some(if has("ROOF") { ("PENTHOUSE ROOF".into(), DatumKind::Roof) } else { ("PENTHOUSE".into(), DatumKind::Penthouse) });
     }
@@ -213,6 +219,31 @@ pub fn canonical_level(name: &str) -> Option<(String, DatumKind)> {
         }
     }
     None
+}
+
+/// The site datum the words name (`SITE`, `FINISHED GRADE`, `SURVEY BENCHMARK`, `DATUM`): a
+/// reference height, never a storey. `GRADE LEVEL` / `GROUND FLOOR` are the first floor, not
+/// a datum.
+fn site_datum(w: &[String]) -> Option<&'static str> {
+    let has = |k: &str| w.iter().any(|x| x == k);
+    if has("FLOOR") || has("FLR") || has("LEVEL") || has("STORY") || has("STOREY") {
+        return None;
+    }
+    if has("SITE") {
+        Some("SITE")
+    } else if has("GRADE") {
+        Some("GRADE")
+    } else if has("SURVEY") || has("BENCHMARK") || has("DATUM") || (has("BM") && w.len() <= 3) {
+        Some("DATUM")
+    } else {
+        None
+    }
+}
+
+/// Whether a level name or code is a site datum (`SITE`, `GRADE`, `SURVEY DATUM`), never a
+/// storey: no sheet attaches to it and nothing is built on it.
+pub fn is_datum_name(name: &str) -> bool {
+    canonical_level(name).is_some_and(|(_, k)| k == DatumKind::Datum)
 }
 
 /// The first elevation in `s` and the byte range it covers: feet and inches (`14'-0"`,
@@ -382,7 +413,7 @@ pub fn parse_level_note(text: &str) -> Option<LevelNote> {
 /// `ROOF PLAN`), canonical; none for a title of no one level.
 pub fn level_of_title(title: &str) -> Option<String> {
     let (name, kind) = canonical_level(title)?;
-    (kind != DatumKind::Parapet).then_some(name)
+    (kind.is_storey()).then_some(name)
 }
 
 /// A sheet number in `text` (`M-201`, `FP-101`, `A2.01`, `E101`) and its discipline (the letters).
@@ -797,6 +828,7 @@ impl BuildingSpec {
         let tops: Vec<f64> = self
             .levels
             .iter()
+            .filter(|l| !is_datum_name(&l.name))
             .map(|l| l.elevation_ft)
             .chain(self.datums.iter().filter(|d| d.kind.is_storey()).map(|d| d.elevation_ft))
             .filter(|e| e.is_finite())
@@ -819,7 +851,7 @@ impl BuildingSpec {
     /// The building's storeys, lowest first: its levels and its storey datums (the roof, a
     /// penthouse drawn elsewhere), by name and elevation in feet.
     pub fn storeys(&self) -> Vec<(String, f64)> {
-        let mut out: Vec<(String, f64)> = self.levels.iter().map(|l| (l.name.clone(), l.elevation_ft)).collect();
+        let mut out: Vec<(String, f64)> = self.levels.iter().filter(|l| !is_datum_name(&l.name)).map(|l| (l.name.clone(), l.elevation_ft)).collect();
         for d in self.datums.iter().filter(|d| d.kind.is_storey()) {
             if !out.iter().any(|(n, _)| n.eq_ignore_ascii_case(&d.name)) {
                 out.push((d.name.clone(), d.elevation_ft));
@@ -994,6 +1026,43 @@ mod tests {
         assert_eq!(code_rank("R"), level_rank("ROOF"));
         assert_eq!(code_rank("B2"), level_rank("BASEMENT 2"));
         assert_eq!(in_order(&[(Some(10), 0.0, 1), (None, -5.0, 1), (Some(20), f64::NAN, 2)]), [true, true, false]);
+    }
+
+    #[test]
+    fn site_grade_and_survey_are_datums_never_storeys() {
+        for (s, want) in
+            [("SITE", "SITE"), ("FINISHED GRADE", "GRADE"), ("GRADE", "GRADE"), ("SURVEY BENCHMARK", "DATUM"), ("PROJECT DATUM", "DATUM")]
+        {
+            assert_eq!(canonical_level(s), Some((want.to_string(), DatumKind::Datum)), "{s}");
+            assert!(is_datum_name(s), "{s}");
+        }
+        // The first floor is no datum, however it is spelled.
+        for s in ["GRADE LEVEL", "GROUND FLOOR", "GROUND", "LEVEL 1"] {
+            assert_eq!(canonical_level(s), Some(("LEVEL 1".to_string(), DatumKind::Floor)), "{s}");
+            assert!(!is_datum_name(s), "{s}");
+        }
+        assert!(!DatumKind::Datum.is_storey());
+        // A site plan's title names no level of the building.
+        assert_eq!(level_of_title("ARCHITECTURAL SITE PLAN"), None);
+        let note = parse_level_note("FINISHED GRADE EL. 98'-6\"").expect("a grade note");
+        assert_eq!((note.name.as_str(), note.kind), ("GRADE", DatumKind::Datum));
+        // A grade reading goes in as a datum: no storey, no floor's height changes.
+        let lvl = |name: &str, e: f64| crate::rules::Level {
+            name: name.into(),
+            elevation_ft: e,
+            height_ft: 12.0,
+            ceiling_ft: 8.0,
+            region: None,
+            base: None,
+            attr: None,
+            sheet: None,
+        };
+        let mut sp = BuildingSpec { levels: vec![lvl("Level 1", 0.0), lvl("Level 2", 12.0), lvl("SITE", 38.79)], ..BuildingSpec::default() };
+        sp.apply_levels(&[LevelNote { name: "GRADE".into(), kind: DatumKind::Datum, elevation_ft: 6.0, source: String::new() }]);
+        assert_eq!(sp.datums.iter().map(|d| (d.name.as_str(), d.kind)).collect::<Vec<_>>(), [("GRADE", DatumKind::Datum)]);
+        assert_eq!(sp.levels.first().map(|l| l.height_ft), Some(12.0), "a datum is no storey's top");
+        let storeys: Vec<String> = sp.storeys().into_iter().map(|(n, _)| n).collect();
+        assert_eq!(storeys, ["Level 1", "Level 2"], "neither GRADE nor a level named SITE is a storey");
     }
 
     #[test]
