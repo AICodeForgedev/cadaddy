@@ -227,8 +227,12 @@ fn a_two_view_sheet_is_one_entry_and_its_page_is_imported_once() {
     assert_eq!(e["levels"], json!(["1", "2"]), "{e}");
     let agent: serde_json::Value = serde_json::from_str(s.doc().ok().and_then(|d| d.agent.clone()).as_deref().unwrap_or("{}")).expect("job state");
     let regions = agent["guided_job"]["sheet_regions"].as_array().cloned().unwrap_or_default();
-    assert_eq!(regions.len(), 1, "the page is imported once: {regions:?}");
-    assert_eq!(regions[0]["number"], "E-1A");
+    // The page is imported once: one rectangle, split into its two views (Q6030), each level
+    // taking only its own plan.
+    assert_eq!(regions.len(), 2, "one region per view: {regions:?}");
+    assert!(regions.iter().all(|r| r["number"] == "E-1A" && r["rect"] == regions[0]["rect"]), "the page is imported once: {regions:?}");
+    assert_eq!(regions.iter().map(|r| r["level"].clone()).collect::<Vec<_>>(), [json!("1"), json!("2")], "{regions:?}");
+    assert!(regions.iter().all(|r| r["view"]["rect"].is_array()), "{regions:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

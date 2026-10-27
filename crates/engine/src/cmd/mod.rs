@@ -70,6 +70,7 @@ pub mod procure;
 pub mod progress;
 pub mod project;
 pub mod propfill;
+pub mod propuse;
 mod rasterout;
 pub mod rfi;
 pub mod schedules;
@@ -816,6 +817,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(bimprops::specs());
         v.extend(elemprops::specs());
         v.extend(propfill::specs());
+        v.extend(propuse::specs());
         v.extend(identity::specs());
         v.extend(bimlook::specs());
         v.extend(projrules::specs());
