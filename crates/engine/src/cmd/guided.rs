@@ -526,7 +526,14 @@ pub struct SheetRegion {
     /// only `level`.  When non-empty, `level` equals `levels[0]`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub levels: Vec<String>,
+    /// For a sheet printing several plans of different levels (`3RD FLOOR PLAN` beside `4TH
+    /// FLOOR PLAN`): the one view this region is, so its level takes only what lies in it. The
+    /// sheet is then one region per view, all with the same `rect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<SheetView>,
 }
+
+pub use cadaddy_walk3d::levels::SheetView;
 
 impl SheetRegion {
     /// Every level this sheet covers. Falls back to `[level]` when `levels` is empty.
@@ -539,6 +546,20 @@ impl SheetRegion {
         let r = self.area.unwrap_or(self.rect);
         at[0] >= r[0].min(r[2]) && at[0] <= r[0].max(r[2]) && at[1] >= r[1].min(r[3]) && at[1] <= r[1].max(r[3])
     }
+
+    /// Whether `at` is in this region's view (the whole sheet for a sheet of one view).
+    pub fn in_view(&self, at: [f64; 2]) -> bool {
+        self.view.as_ref().is_none_or(|v| in_rect(&v.rect, at))
+    }
+
+    /// Where the level's plan is: its view, else the sheet's drawing area, else the sheet.
+    pub fn plan_rect(&self) -> [f64; 4] {
+        self.view.as_ref().map_or_else(|| self.area.unwrap_or(self.rect), |v| v.rect)
+    }
+}
+
+fn in_rect(r: &[f64; 4], at: [f64; 2]) -> bool {
+    at[0] >= r[0].min(r[2]) && at[0] <= r[0].max(r[2]) && at[1] >= r[1].min(r[3]) && at[1] <= r[1].max(r[3])
 }
 
 /// Why a sheet is never built into a building level: a civil, landscape or site sheet, or a
@@ -551,6 +572,45 @@ pub fn not_built_reason(discipline: &str, title: &str, level: &str, level_source
     } else {
         ""
     }
+}
+
+/// The job's plan sheets that print several plans of different levels (`3RD FLOOR PLAN` beside
+/// `4TH FLOOR PLAN`), each split into one region per view: the view's level, its title and its
+/// part of the sheet ([`super::printmep::sheet_views`]). A sheet of one view keeps its region, a
+/// typical-floor plan its several levels: it is the one case where one view feeds several levels.
+/// `typical[i]`: region `i`'s sheet is titled as a typical plan. Any other sheet that shows
+/// several levels is split even when its views carry no title the readers find (by its blocks
+/// of linework), so no floor-specific plan feeds two levels.
+pub(crate) fn split_view_regions(d: &cadaddy_doc::Drawing, regions: Vec<SheetRegion>, typical: &[bool]) -> Vec<SheetRegion> {
+    let candidate = |r: &SheetRegion| matches!(r.kind.as_str(), "plan" | "enlarged_plan") && r.view.is_none();
+    let sheets: Vec<Option<([f64; 4], [f64; 4], Vec<String>)>> = regions
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let levels = if typical.get(i).copied().unwrap_or(false) { Vec::new() } else { r.levels.clone() };
+            candidate(r).then(|| (r.rect, r.area.unwrap_or(r.rect), levels))
+        })
+        .collect();
+    let mut views = super::printmep::sheet_views(d, &sheets);
+    let mut out = Vec::with_capacity(regions.len());
+    for (i, r) in regions.into_iter().enumerate() {
+        let found = views.get_mut(i).map(std::mem::take).unwrap_or_default();
+        if found.is_empty() {
+            out.push(r);
+            continue;
+        }
+        for v in found {
+            let not_built = if r.not_built == "site/civil" { r.not_built.clone() } else { String::new() };
+            out.push(SheetRegion {
+                level: v.level,
+                levels: v.levels,
+                not_built,
+                view: Some(SheetView { title: v.title, rect: v.rect }),
+                ..r.clone()
+            });
+        }
+    }
+    out
 }
 
 /// Straight lines longer than this share of a sheet's shorter side are measured for its frame.
@@ -602,8 +662,16 @@ fn sheet_frames(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<cadaddy_mep
 
 impl GuidedJob {
     /// The level of the imported sheet holding `at`.
+    /// A sheet printing several levels' plans is one region per view: the view holding `at`
+    /// (outside every view, its notes and title block: the sheet's first region).
     pub fn level_at(&self, at: [f64; 2]) -> Option<&SheetRegion> {
-        self.sheet_regions.iter().find(|r| at[0] >= r.rect[0] && at[0] <= r.rect[2] && at[1] >= r.rect[1] && at[1] <= r.rect[3])
+        let on_sheet = |r: &&SheetRegion| at[0] >= r.rect[0] && at[0] <= r.rect[2] && at[1] >= r.rect[1] && at[1] <= r.rect[3];
+        let mut here = self.sheet_regions.iter().filter(on_sheet);
+        let first = here.next()?;
+        if first.view.is_none() || first.in_view(at) {
+            return Some(first);
+        }
+        Some(here.take_while(|r| r.rect == first.rect).find(|r| r.in_view(at)).unwrap_or(first))
     }
 }
 
@@ -1654,6 +1722,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let mut same = 0usize;
     let mut placed = Vec::new();
     let mut regions = Vec::new();
+    let mut typical = Vec::new();
     for ((r, name), sh) in results.iter().zip(&names).zip(&all) {
         match r {
             super::exchange::PageImport::Done(rep) => {
@@ -1679,6 +1748,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                         .and_then(Value::as_array)
                         .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
                         .unwrap_or_default();
+                    typical.push(cadaddy_mepfix::sheet_reader::says_typical(&field("title")));
                     regions.push(SheetRegion {
                         number: base.to_string(),
                         level,
@@ -1689,6 +1759,7 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                         title_block: None,
                         not_built: not_built.to_string(),
                         levels,
+                        view: None,
                     });
                 }
                 if placed.len() < MAX_QUESTIONS_PER_STAGE {
@@ -1707,6 +1778,8 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         r.area = Some(f.area);
         r.title_block = f.title_block;
     }
+    // A sheet printing two levels' plans: each level takes only its own view.
+    let regions = split_view_regions(s.doc()?, regions, &typical);
     job.sheet_regions = regions;
     job.sheets_loaded = true;
     job.audit(
@@ -2238,7 +2311,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Each floor plan's labels read in full, sheet by sheet (a whole set's labels are more than
     // one reading traces: the last floors were left out).
     let regions: Vec<[f64; 4]> =
-        job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty()).map(|r| r.area.unwrap_or(r.rect)).collect();
+        job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty()).map(SheetRegion::plan_rect).collect();
     let mut params = json!({"outline": false});
     if !regions.is_empty() {
         params["regions"] = json!(regions);
@@ -2948,6 +3021,7 @@ pub(crate) fn job_sheet_refs(job: &GuidedJob) -> Vec<super::printmep::SheetRef> 
     let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
     let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let mut used = vec![false; job.sheet_spans.len()];
+    let mut prev: Option<(String, [f64; 4], Option<(u64, u64)>)> = None;
     job.sheet_regions
         .iter()
         .map(|r| {
@@ -2961,17 +3035,24 @@ pub(crate) fn job_sheet_refs(job: &GuidedJob) -> Vec<super::printmep::SheetRef> 
                 let t = text(c, "type");
                 if t.is_empty() { text(c, "sheet_type") } else { t }
             });
-            let span = job
-                .sheet_spans
-                .iter()
-                .enumerate()
-                .find(|(i, sp)| !used.get(*i).copied().unwrap_or(true) && base(&sp.sheet).eq_ignore_ascii_case(&r.number));
-            let span = span.map(|(i, sp)| {
-                if let Some(u) = used.get_mut(i) {
-                    *u = true;
-                }
-                (sp.lo, sp.hi)
-            });
+            // The views of a several-view sheet share its import's objects.
+            let same_page = r.view.is_some() && prev.as_ref().is_some_and(|p| p.0 == r.number && p.1 == r.rect);
+            let span = if same_page {
+                prev.as_ref().and_then(|(_, _, sp)| *sp)
+            } else {
+                let span = job
+                    .sheet_spans
+                    .iter()
+                    .enumerate()
+                    .find(|(i, sp)| !used.get(*i).copied().unwrap_or(true) && base(&sp.sheet).eq_ignore_ascii_case(&r.number));
+                span.map(|(i, sp)| {
+                    if let Some(u) = used.get_mut(i) {
+                        *u = true;
+                    }
+                    (sp.lo, sp.hi)
+                })
+            };
+            prev = Some((r.number.clone(), r.rect, span));
             super::printmep::SheetRef {
                 number: r.number.clone(),
                 level: r.level.clone(),
@@ -2981,6 +3062,7 @@ pub(crate) fn job_sheet_refs(job: &GuidedJob) -> Vec<super::printmep::SheetRef> 
                 span,
                 scale_text: entry.and_then(|c| c.get("scale")).and_then(Value::as_str).map(str::to_string),
                 levels: r.levels.clone(),
+                view: r.view.as_ref().map(|v| v.rect),
             }
         })
         .collect()
@@ -3560,11 +3642,21 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
         }
         let level = Some(r.level.trim()).filter(|l| super::printmep::building_level(l)).map(level_name);
         let level = level.map(|n| sp.level(&n).map_or(n.clone(), |l| l.name.clone()));
-        match sp.sheets.iter_mut().find(|x| x.number.eq_ignore_ascii_case(&r.number) && x.rect.is_none_or(|q| q == r.rect)) {
+        // The views of a several-view sheet: one link each, on its own level.
+        let same = |x: &cadaddy_walk3d::levels::SheetLink| {
+            x.number.eq_ignore_ascii_case(&r.number)
+                && x.rect.is_none_or(|q| q == r.rect)
+                && (r.view.is_none() || x.view.is_none() || x.view == r.view)
+        };
+        match sp.sheets.iter_mut().find(|x| same(x)) {
             Some(x) => {
                 x.rect = Some(r.rect);
-                if x.level.is_none() {
+                if x.level.is_none() || (r.view.is_some() && x.view.is_none()) {
                     x.level = level;
+                }
+                if r.view.is_some() {
+                    x.view.clone_from(&r.view);
+                    x.levels = r.levels.iter().map(|c| level_name(c)).collect();
                 }
             }
             None => sp.sheets.push(cadaddy_walk3d::levels::SheetLink {
@@ -3576,6 +3668,7 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
                 rect: Some(r.rect),
                 levels: r.levels.iter().map(|c| level_name(c)).collect(),
                 registration: None,
+                view: r.view.clone(),
             }),
         }
     }
@@ -3642,7 +3735,7 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
             None => (DEFAULT_STOREY_FT, false),
         };
         next_elevation = elevation + height;
-        let mut level = json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.area.unwrap_or(r.rect)});
+        let mut level = json!({"name": name, "elevation_ft": elevation, "height_ft": height, "ceiling_ft": (height - 2.0).clamp(7.0, 9.0), "region": r.plan_rect()});
         if let (true, Some(e)) = (out_of_order, read_el) {
             level["guess"] = json!(format!(
                 "{} plan {}: the elevation read for it, {}, breaks the levels' order, so it is not used; stacked at {}",
@@ -4588,7 +4681,8 @@ fn set_sheet_fact(job: &mut GuidedJob, number: &str, key: &str, value: &str) {
     for r in job.sheet_regions.iter_mut().filter(|r| r.number.eq_ignore_ascii_case(number)) {
         match key {
             "discipline" => r.discipline = value.to_string(),
-            "level" => {
+            // A view of a several-view sheet keeps the level its own title names.
+            "level" if r.view.is_none() => {
                 r.level = value.to_string();
                 r.levels.clear();
                 // The answer is the plan's level: it is built (unless it is a site plan).
@@ -4596,6 +4690,7 @@ fn set_sheet_fact(job: &mut GuidedJob, number: &str, key: &str, value: &str) {
                     r.not_built.clear();
                 }
             }
+            "level" => {}
             _ => r.kind = value.to_string(),
         }
     }
@@ -6031,6 +6126,7 @@ mod tests {
             title_block: None,
             not_built: String::new(),
             levels: Vec::new(),
+            view: None,
         });
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r["devices"]["count"], json!(5), "{r:#}");
@@ -6128,6 +6224,7 @@ mod tests {
                 title_block: None,
                 not_built: String::new(),
                 levels: Vec::new(),
+                view: None,
             });
             want_by_level.insert(format!("Level {level}"), a + b);
         }
@@ -6466,7 +6563,56 @@ mod tests {
             title_block: None,
             not_built: String::new(),
             levels: Vec::new(),
+            view: None,
         }
+    }
+
+    /// Sheet `number` printing level 1's plan under level 2's: one region per view.
+    fn two_views(number: &str, discipline: &str, x: f64) -> Vec<SheetRegion> {
+        let view = |level: &str, y0: f64, y1: f64| SheetRegion {
+            view: Some(SheetView { title: format!("LEVEL {level} PLAN"), rect: [x, y0, x + 100.0, y1] }),
+            ..region(number, level, discipline, "plan", x)
+        };
+        vec![view("1", 0.0, 40.0), view("2", 40.0, 80.0)]
+    }
+
+    #[test]
+    fn a_two_plan_sheet_gives_each_level_its_own_view() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = two_views("A-1A", "A", 0.0);
+        job.sheet_regions.extend(two_views("M-1A", "M", 200.0));
+        job.sheet_regions.push(region("A-103", "3", "A", "plan", 400.0));
+        // What is read on the sheet carries the level of the view it is in.
+        let level = |at: [f64; 2]| job.level_at(at).map(|r| r.level.clone());
+        assert_eq!(level([50.0, 10.0]).as_deref(), Some("1"));
+        assert_eq!(level([50.0, 70.0]).as_deref(), Some("2"));
+        assert_eq!(level([250.0, 70.0]).as_deref(), Some("2"));
+        assert_eq!(level([450.0, 70.0]).as_deref(), Some("3"));
+        // Each level's plan region is its view, not the whole sheet.
+        let levels = building_levels(&job);
+        let names: Vec<&str> = levels.iter().filter_map(|l| l["name"].as_str()).collect();
+        assert_eq!(names, ["Level 1", "Level 2", "Level 3"], "{levels:?}");
+        let region_of = |i: usize| [0, 1, 2, 3].map(|k| levels[i]["region"][k].as_f64().unwrap_or(f64::NAN));
+        assert_eq!(region_of(0), [0.0, 0.0, 100.0, 40.0]);
+        assert_eq!(region_of(1), [0.0, 40.0, 100.0, 80.0]);
+        // The readers read each view on its own level, sharing the sheet's imported objects.
+        job.sheet_spans = vec![SheetSpan { sheet: "A-1A".into(), lo: 1, hi: 10 }, SheetSpan { sheet: "M-1A".into(), lo: 10, hi: 20 }];
+        let refs = job_sheet_refs(&job);
+        let m: Vec<_> = refs.iter().filter(|r| r.number == "M-1A").collect();
+        assert_eq!(m.len(), 2);
+        assert!(m.iter().all(|r| r.span == Some((10, 20)) && r.levels.is_empty()), "{m:?}");
+        assert_eq!(m.iter().map(|r| r.view.map(|v| v[1])).collect::<Vec<_>>(), [Some(0.0), Some(40.0)]);
+        // The spec's sheet links: one per view, each on its level with its view.
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        add_sheet_links(&mut sp, &job.sheet_regions);
+        let links: Vec<_> = sp.sheets.iter().filter(|l| l.number == "M-1A").collect();
+        assert_eq!(links.len(), 2, "{:?}", sp.sheets);
+        assert_eq!(links.iter().map(|l| l.level.clone().unwrap_or_default()).collect::<Vec<_>>(), ["Level 1", "Level 2"]);
+        assert!(links.iter().all(|l| l.view.is_some()));
+        // A typical plan (one view of several levels) stays one region feeding each level.
+        let typical = SheetRegion { levels: vec!["2".into(), "3".into()], ..region("M-201", "2", "M", "plan", 600.0) };
+        let kept = split_view_regions(&cadaddy_doc::Drawing::new_imperial(), vec![typical.clone()], &[true]);
+        assert_eq!(kept, vec![typical]);
     }
 
     #[test]
@@ -6695,6 +6841,7 @@ mod tests {
             title_block,
             not_built: String::new(),
             levels: Vec::new(),
+            view: None,
         }
     }
 
@@ -7277,6 +7424,7 @@ mod tests {
             title_block: None,
             not_built: String::new(),
             levels: Vec::new(),
+            view: None,
         });
         let _r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let completeness = job.stage(StageName::Devices).map(|st| st.completeness.clone()).unwrap_or_default();

@@ -3237,7 +3237,6 @@
 	Takeoff by Activity	Levantamento por atividade
 	BIM	BIM
 	Door	Porta
-	Wall	Parede
 	Plan Views	Vistas de planta
 	Generate Plan Views	Gerar vistas de planta
 	Draw Wall (Object)	Desenhar parede (objeto)
@@ -3265,3 +3264,5 @@
 	Checklist	Lista de verificação
 	Photos	Fotos
 	Photo	Foto
+	Schedule from Element Properties	Tabela a partir das propriedades dos elementos
+	Check Element Properties	Verificar propriedades dos elementos

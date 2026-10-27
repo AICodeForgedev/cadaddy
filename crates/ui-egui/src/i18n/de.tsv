@@ -3048,7 +3048,6 @@
 	Takeoff by Activity	Mengenermittlung nach Vorgang
 	BIM	BIM
 	Door	Tür
-	Wall	Wand
 	Plan Views	Grundrissansichten
 	Generate Plan Views	Grundrissansichten erzeugen
 	Draw Wall (Object)	Wand zeichnen (Objekt)
@@ -3076,3 +3075,5 @@
 	Checklist	Checkliste
 	Photos	Fotos
 	Photo	Foto
+	Schedule from Element Properties	Liste aus Elementeigenschaften
+	Check Element Properties	Elementeigenschaften prüfen

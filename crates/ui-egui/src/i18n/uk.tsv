@@ -3328,7 +3328,6 @@
 	Takeoff by Activity	Обсяги за роботами
 	BIM	BIM
 	Door	Двері
-	Wall	Стіна
 	Plan Views	Планові види
 	Generate Plan Views	Створити планові види
 	Draw Wall (Object)	Стіна (об'єкт)
@@ -3355,3 +3354,5 @@
 	Checklist	Контрольний список
 	Photos	Фото
 	Photo	Фото
+	Schedule from Element Properties	Специфікація за властивостями елементів
+	Check Element Properties	Перевірити властивості елементів

@@ -3211,7 +3211,6 @@ menu	Modify	Modifikace
 	Takeoff by Activity	Výkaz výměr podle činností
 	BIM	BIM
 	Door	Dveře
-	Wall	Zeď
 	Plan Views	Půdorysné pohledy
 	Generate Plan Views	Generovat půdorysné pohledy
 	Draw Wall (Object)	Kreslit zeď (objekt)
@@ -3239,3 +3238,5 @@ menu	Modify	Modifikace
 	Checklist	Kontrolní seznam
 	Photos	Fotky
 	Photo	Fotka
+	Schedule from Element Properties	Výkaz z vlastností prvků
+	Check Element Properties	Kontrola vlastností prvků

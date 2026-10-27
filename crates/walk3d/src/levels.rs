@@ -87,6 +87,18 @@ pub struct SheetLink {
     /// registered by the door and room numbers it shares (`bim.identity`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registration: Option<SheetRegistration>,
+    /// For a sheet printing several levels' plans: the view that is `level`'s (only what lies
+    /// in it is the level's). The sheet then has one link per view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<SheetView>,
+}
+
+/// One plan view of a sheet that prints several: its title and its part of the sheet
+/// `[x0, y0, x1, y1]` (model space).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SheetView {
+    pub title: String,
+    pub rect: [f64; 4],
 }
 
 /// A sheet put onto its level's reference plan: `p ↦ [a·x − b·y + tx, b·x + a·y + ty]`.

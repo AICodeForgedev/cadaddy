@@ -3019,7 +3019,6 @@
 	Takeoff by Activity	Métré par activité
 	BIM	BIM
 	Door	Porte
-	Wall	Mur
 	Plan Views	Vues en plan
 	Generate Plan Views	Générer les vues en plan
 	Draw Wall (Object)	Dessiner mur (objet)
@@ -3047,3 +3046,5 @@
 	Checklist	Liste de contrôle
 	Photos	Photos
 	Photo	Photo
+	Schedule from Element Properties	Nomenclature à partir des propriétés des éléments
+	Check Element Properties	Vérifier les propriétés des éléments

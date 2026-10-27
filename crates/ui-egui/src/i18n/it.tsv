@@ -3230,7 +3230,6 @@ menu	Modify	Edita
 	Takeoff by Activity	Computo per attività
 	BIM	BIM
 	Door	Porta
-	Wall	Muro
 	Plan Views	Viste di pianta
 	Generate Plan Views	Genera viste di pianta
 	Draw Wall (Object)	Disegna muro (oggetto)
@@ -3258,3 +3257,5 @@ menu	Modify	Edita
 	Checklist	Lista di controllo
 	Photos	Foto
 	Photo	Foto
+	Schedule from Element Properties	Abaco dalle proprietà degli elementi
+	Check Element Properties	Verifica proprietà degli elementi

@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1155,
-    "count": 1155,
+    "callableAsJson": 1157,
+    "count": 1157,
     "ids": [
       "-attedit",
       "-block",
@@ -251,9 +251,12 @@
       "convtosolid",
       "convtosurface",
       "coordination.bcf",
+      "coordination.clashgo",
       "coordination.clashlist",
       "coordination.clashstatus",
+      "coordination.colorby",
       "coordination.colors",
+      "coordination.inspect",
       "coordination.isolate",
       "coordination.measure3d",
       "coordination.mode",
@@ -946,7 +949,6 @@
       "share",
       "sheet.facts",
       "sheetset",
-      "sheetset.from_model",
       "showurls",
       "site.read",
       "site.takeoff",
@@ -1159,7 +1161,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 513,
+    "inMenus": 512,
     "typed": 551
   },
   "features": {

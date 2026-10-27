@@ -3020,7 +3020,6 @@
 	Takeoff by Activity	Объёмы по работам
 	BIM	BIM
 	Door	Дверь
-	Wall	Стена
 	Plan Views	Виды плана
 	Generate Plan Views	Создать виды плана
 	Draw Wall (Object)	Стена (объект)
@@ -3048,3 +3047,5 @@
 	Checklist	Контрольный список
 	Photos	Фото
 	Photo	Фото
+	Schedule from Element Properties	Спецификация по свойствам элементов
+	Check Element Properties	Проверить свойства элементов

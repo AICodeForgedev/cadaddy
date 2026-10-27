@@ -690,6 +690,7 @@ mod tests {
             span: None,
             scale_text: None,
             levels: Vec::new(),
+            view: None,
         }
     }
 

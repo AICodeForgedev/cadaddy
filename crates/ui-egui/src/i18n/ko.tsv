@@ -3231,7 +3231,6 @@ menu	Modify	수정
 	Takeoff by Activity	작업별 물량 산출
 	BIM	BIM
 	Door	문
-	Wall	벽
 	Plan Views	평면도 보기
 	Generate Plan Views	평면도 보기 생성
 	Draw Wall (Object)	벽 그리기 (객체)
@@ -3259,3 +3258,5 @@ menu	Modify	수정
 	Checklist	체크리스트
 	Photos	사진
 	Photo	사진
+	Schedule from Element Properties	요소 특성으로 일람표 작성
+	Check Element Properties	요소 특성 검사
