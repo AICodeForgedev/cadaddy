@@ -3204,7 +3204,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     // Use model.build directly — it returns walls/doors/rooms/levels counts.
     // (bim.build wraps model.build but constructs its own result without those counts.)
-    let mut result = s.execute("model.build", &json!({}))?;
+    // Q6029 MUST 3: pass a configurable time budget (default 20 min).
+    let budget_s = super::bspec::BUILD_BUDGET_S;
+    let mut result = s.execute("model.build", &json!({"budget_s": budget_s}))?;
     if let Some(v) = placed {
         result["devices"] = v;
     }
