@@ -217,6 +217,38 @@ fn hostile_stage_calls_refuse_clearly() {
     }
 }
 
+/// A set whose only architectural floor plan is level 1, the trades' plans on four levels: the
+/// floor titles on the trade sheets are never banded across the whole drawing into levels (a
+/// band takes in every sheet side by side, so walls came off the trades' backgrounds). The walls
+/// are level 1's, each on the A sheet, and the walls stage says which sheet they came from.
+#[test]
+fn one_architectural_plan_never_takes_walls_from_the_trade_sheets() {
+    let _g = serial();
+    real_pdf_reader();
+    let dir = job_folder("onearch", &["A-101", "M-101", "M-102", "M-103", "M-104", "P-101", "P-102", "P-103", "P-104"]);
+    let mut s = Session::new();
+    let r = bim(&mut s, &dir);
+    let staged = &r["staged"];
+    assert_eq!(staged["ok"], json!(true), "{staged} {}", r["warnings"]);
+    assert!(count(&r, "walls", "walls") > 0.0, "{}", stage(&r, "walls"));
+    assert_eq!(count(&r, "walls", "walls_from_other_sheets"), 0.0, "{}", stage(&r, "walls"));
+    assert_eq!(staged["wall_ratio"], json!(1.0), "{staged}");
+    let notes = stage(&r, "walls")["notes"].to_string();
+    assert!(notes.contains("A-101") && !notes.contains("M-10") && !notes.contains("P-10"), "{notes}");
+    // Each level's region is its own A plan's (none for the levels without one), never a band
+    // across the sheets.
+    let spec: Value = serde_json::from_str(s.doc().expect("doc").building_spec.as_deref().unwrap_or("{}")).expect("spec");
+    let regions: Vec<[f64; 4]> = spec["levels"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|l| serde_json::from_value(l["region"].clone()).ok())
+        .filter(|r: &[f64; 4]| r[0] > -1.0e8)
+        .collect();
+    assert_eq!(regions.len(), 1, "{}", spec["levels"]);
+}
+
 /// Measured by hand: the staged build of the whole made-up hotel (`cargo test --release --test
 /// stagedbuild -- --ignored --nocapture`).
 #[test]

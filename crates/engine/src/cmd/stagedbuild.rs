@@ -602,25 +602,46 @@ pub(crate) struct Readings {
     pub warnings: Vec<String>,
 }
 
-/// The sheets of a job as the trade readers see them, the architectural ones' discipline first.
-fn arch_spans(refs: &[super::printmep::SheetRef]) -> Vec<(u64, u64, [f64; 4], bool)> {
+/// Each sheet of a job as the walls are told apart by: its handle span, where it is (and its
+/// view's part of it), whether it is architectural, and its number.
+struct SheetPlace<'a> {
+    span: Option<(u64, u64)>,
+    rect: [f64; 4],
+    view: Option<[f64; 4]>,
+    arch: bool,
+    number: &'a str,
+}
+
+fn sheet_places(refs: &[super::printmep::SheetRef]) -> Vec<SheetPlace<'_>> {
     refs.iter()
-        .map(|r| {
-            let (lo, hi) = r.span.unwrap_or((0, 0));
-            (lo, hi, r.rect, r.discipline.eq_ignore_ascii_case("A"))
+        .map(|r| SheetPlace {
+            span: r.span.filter(|(lo, hi)| hi > lo),
+            rect: r.rect,
+            view: r.view,
+            arch: r.discipline.eq_ignore_ascii_case("A"),
+            number: r.number.as_str(),
         })
         .collect()
 }
 
-/// Whether a plan object (by handle and where it is) lies on an architectural sheet.
-fn on_arch(d: &Drawing, h: Handle, spans: &[(u64, u64, [f64; 4], bool)]) -> Option<bool> {
-    if let Some((_, _, _, a)) = spans.iter().find(|(lo, hi, _, _)| hi > lo && h.0 >= *lo && h.0 < *hi) {
-        return Some(*a);
+fn holds(r: &[f64; 4], x: f64, y: f64) -> bool {
+    x >= r[0].min(r[2]) && x <= r[0].max(r[2]) && y >= r[1].min(r[3]) && y <= r[1].max(r[3])
+}
+
+/// The sheet a plan object (by handle) lies on: the imported sheet its middle is on (the view
+/// holding it on a several-view sheet), else the sheet whose import made it. Where it is decides
+/// first: the sheets are imported side by side, so their places never overlap, while a handle
+/// span is only as good as the import's bookkeeping.
+fn sheet_of<'a>(d: &Drawing, h: Handle, places: &'a [SheetPlace<'a>]) -> Option<&'a SheetPlace<'a>> {
+    if let Some(e) = d.entity(h) {
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        let (cx, cy) = ((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0);
+        let on: Vec<&SheetPlace> = places.iter().filter(|p| cx.is_finite() && cy.is_finite() && holds(&p.rect, cx, cy)).collect();
+        if let Some(first) = on.first() {
+            return Some(on.iter().find(|p| p.view.is_some_and(|v| holds(&v, cx, cy))).unwrap_or(first));
+        }
     }
-    let e = d.entity(h)?;
-    let b = cadaddy_doc::entity_bounds(d, e, 0);
-    let (cx, cy) = ((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0);
-    spans.iter().find(|(_, _, r, _)| cx >= r[0] && cx <= r[2] && cy >= r[1] && cy <= r[3]).map(|(_, _, _, a)| *a)
+    places.iter().find(|p| p.span.is_some_and(|(lo, hi)| h.0 >= lo && h.0 < hi))
 }
 
 /// Sort the built model into the eight stages, frame its walls, take off its board and
@@ -633,8 +654,10 @@ pub(crate) fn stage_model(s: &mut Session, built: &Value, readings: &Readings, r
     let (mut walls, mut openings): (Vec<(Handle, String, Foot)>, Vec<(Handle, String, Foot)>) = (Vec::new(), Vec::new());
     let mut parts: Vec<(Handle, String, String)> = Vec::new();
     let mut volumes: Vec<Handle> = Vec::new();
-    let spans = arch_spans(refs);
+    let places = sheet_places(refs);
     let (mut arch_walls, mut other_walls) = (0usize, 0usize);
+    // Walls by the sheet their source line is on (a check that walls come from A sheets only).
+    let mut by_sheet: BTreeMap<String, usize> = BTreeMap::new();
     {
         let d = s.doc()?;
         for e in d.model.iter() {
@@ -646,10 +669,12 @@ pub(crate) fn stage_model(s: &mut Session, built: &Value, readings: &Readings, r
                     if let Some(f) = footprint(e) {
                         walls.push((e.handle, level.clone(), f));
                     }
-                    match source.and_then(|h| on_arch(d, h, &spans)) {
-                        Some(false) => other_walls += 1,
+                    let sheet = source.and_then(|h| sheet_of(d, h, &places));
+                    match sheet {
+                        Some(p) if !p.arch => other_walls += 1,
                         _ => arch_walls += 1,
                     }
+                    *by_sheet.entry(sheet.map_or("(no sheet)", |p| p.number).to_string()).or_default() += 1;
                 } else if (part == "door" || part == "window")
                     && let Some(f) = footprint(e)
                 {
@@ -725,6 +750,14 @@ pub(crate) fn stage_model(s: &mut Session, built: &Value, readings: &Readings, r
         x.count("arch_walls", arch_walls);
         x.count("walls_from_other_sheets", other_walls);
         x.count("wall_ratio", (wall_ratio * 1000.0).round() / 1000.0);
+        if !by_sheet.is_empty() {
+            let mut most: Vec<(&String, &usize)> = by_sheet.iter().collect();
+            most.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+            x.notes.push(format!(
+                "walls by the sheet their source line is on: {}",
+                most.iter().take(12).map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", ")
+            ));
+        }
         for (h, level, _) in &walls {
             if !exterior.contains(h) {
                 x.level(level, "walls", 1.0);
@@ -1089,7 +1122,20 @@ pub(crate) fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         // The spec: one stacked level per architectural floor plan (one sheet showing several
         // floor titles: those are the levels).
         s.echo(format!("bim.from_pdf: drafting spec for {stem}..."));
-        let floors = if plan.levels.len() <= 1 { detect_floor_levels(s).ok().filter(|f| f.len() >= 2) } else { None };
+        // Floor titles banded across the drawing are one sheet's levels: never a set's, whose
+        // sheets lie side by side (a band would take in every sheet, the trades' too).
+        let mut sheet_rects: Vec<[f64; 4]> = plan.regions.iter().map(|r| r.rect).collect();
+        sheet_rects.dedup();
+        let floors = if plan.levels.len() <= 1 && sheet_rects.len() <= 1 { detect_floor_levels(s).ok().filter(|f| f.len() >= 2) } else { None };
+        let arch_plans = plan
+            .regions
+            .iter()
+            .any(|r| r.discipline == "A" && r.kind == "plan" && r.not_built.is_empty() && super::printmep::building_level(&r.level));
+        if !arch_plans && !plan.levels.is_empty() {
+            warnings.push(format!(
+                "{stem}: no architectural floor plan was found, so the levels and their walls are read off another trade's plans (their backgrounds) — check the set's A sheets"
+            ));
+        }
         if let Some(levels_found) = floors {
             s.execute("bspec.draft", &json!({"store": true}))?;
             let levels_json: Vec<Value> = levels_found
@@ -1237,6 +1283,44 @@ mod tests {
         for p in ["floor", "roof", "column", "stair", "concrete", "parapet"] {
             assert_eq!(stage_of_part(p, false), 0, "{p}");
         }
+    }
+
+    #[test]
+    fn a_wall_source_is_on_the_sheet_it_lies_on_whatever_the_spans_say() {
+        let mut d = Drawing::new_imperial();
+        let mut line = |x: f64| {
+            let h = d.new_handle();
+            let a = cadaddy_geom::Vec3 { x, y: 10.0, z: 0.0 };
+            d.model.push(Entity::new(h, cadaddy_doc::EntityKind::Line(cadaddy_doc::Line { a, b: cadaddy_geom::Vec3 { x: x + 5.0, ..a } })));
+            h
+        };
+        let (on_a, on_m, on_view2) = (line(10.0), line(110.0), line(260.0));
+        let sheet =
+            |number: &str, discipline: &str, rect: [f64; 4], span: Option<(u64, u64)>, view: Option<[f64; 4]>| super::super::printmep::SheetRef {
+                number: number.into(),
+                discipline: discipline.into(),
+                kind: "plan".into(),
+                rect,
+                span,
+                view,
+                ..Default::default()
+            };
+        // M-101's span holds A-101's line: the place decides.
+        let refs = vec![
+            sheet("A-101", "A", [0.0, 0.0, 100.0, 100.0], Some((9_000, 9_100)), None),
+            sheet("M-101", "M", [100.0, 0.0, 200.0, 100.0], Some((on_a.0, on_a.0 + 1)), None),
+            // A two-view sheet: its second view holds the line.
+            sheet("A-201", "A", [200.0, 0.0, 300.0, 100.0], None, Some([200.0, 0.0, 250.0, 100.0])),
+            sheet("A-201", "A", [200.0, 0.0, 300.0, 100.0], None, Some([250.0, 0.0, 300.0, 100.0])),
+        ];
+        let places = sheet_places(&refs);
+        let at = |h: Handle| sheet_of(&d, h, &places).map(|p| (p.number, p.arch, p.view));
+        assert_eq!(at(on_a), Some(("A-101", true, None)));
+        assert_eq!(at(on_m), Some(("M-101", false, None)));
+        assert_eq!(at(on_view2), Some(("A-201", true, Some([250.0, 0.0, 300.0, 100.0]))));
+        // Not in the drawing: its span says where, else nowhere.
+        assert_eq!(sheet_of(&d, Handle(9_050), &places).map(|p| p.number), Some("A-101"));
+        assert_eq!(sheet_of(&d, Handle(20_000), &places).map(|p| p.number), None);
     }
 
     #[test]
