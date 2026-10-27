@@ -7272,15 +7272,15 @@ mod tests {
 
         // ── Crop size check for unknown tags ──
         for q in &unkn_qs {
-            if let Some(ev) = &q.evidence {
-                if let Some(path) = &ev.crop_png_path {
-                    let png = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"));
-                    assert!(png.starts_with(b"\x89PNG"), "not PNG: {path}");
-                    assert!(png.len() >= 24, "PNG too short");
-                    let w = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
-                    let h = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
-                    assert!(w >= 800 && h >= 800, "crop {path} too small: {w}x{h}");
-                }
+            if let Some(ev) = &q.evidence
+                && let Some(path) = &ev.crop_png_path
+            {
+                let png = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+                assert!(png.starts_with(b"\x89PNG"), "not PNG: {path}");
+                assert!(png.len() >= 24, "PNG too short");
+                let w = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+                let h = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+                assert!(w >= 800 && h >= 800, "crop {path} too small: {w}x{h}");
             }
         }
 
