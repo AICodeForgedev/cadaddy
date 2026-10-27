@@ -30,7 +30,7 @@ fn kind_str(k: MepKind) -> &'static str {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("coordination.tree", "Coordination Tree", run_tree)
-            .params("{level?} → {levels: [{name, elevation_ft, rooms, systems, elements}]}")
+            .params("{level?, search?, detail?: bool} → {levels: [{name, elevation_ft, rooms, systems, elements}]}")
             .noundo(),
         CommandSpec::new("coordination.trades", "Trade Visibility", run_trades)
             .params("{set?: [{system, visible?}], level?} → {trades: [{system, kind, layer, visible, count}]}"),
@@ -400,6 +400,34 @@ fn run_measure3d(_s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── Clash list ───────────────────────────────────────────────────────────────
 
+/// Stable ID for a clearance clash from `model.clashes`: deterministic from its content so
+/// the same physical clash keeps the same ID across runs.  Uses the `C-` prefix so
+/// `coordination.clashstatus` can persist its status in the same store as mesh clashes.
+fn clearance_clash_id(c: &Value) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let kind = c.get("kind").and_then(Value::as_str).unwrap_or("");
+    let level = c.get("level").and_then(Value::as_str).unwrap_or("");
+    let mut systems: Vec<&str> = c
+        .get("systems")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    systems.sort();
+    let at = c.get("at").and_then(Value::as_array).map(|a| {
+        a.iter().filter_map(Value::as_f64).map(|v| ((v * 100.0).round() as i64).to_string()).collect::<Vec<_>>().join(",")
+    }).unwrap_or_default();
+    let mut h = DefaultHasher::new();
+    kind.hash(&mut h);
+    level.hash(&mut h);
+    systems.hash(&mut h);
+    at.hash(&mut h);
+    let hash = h.finish();
+    format!("C-CL{:08x}{:08x}", hash as u32, (hash >> 32) as u32)
+}
+
 fn run_clashlist(s: &mut Session, p: &Value) -> Result<Value> {
     // Delegate to bim.clash which has stable IDs, status persistence and real grouping.
     let group_by = p.get("group_by").and_then(Value::as_str).unwrap_or("pair");
@@ -413,9 +441,34 @@ fn run_clashlist(s: &mut Session, p: &Value) -> Result<Value> {
         &json!({ "tolerance": p.get("tolerance_in"), "group_by": group_by_clash }),
     )?;
     // bim.clash returns stable IDs (C-{hex-a}-{hex-b}) and persisted status — pass them through.
-    let clashes = raw.get("clashes").and_then(Value::as_array).cloned().unwrap_or_default();
-    let groups = raw.get("groups").and_then(Value::as_array).cloned().unwrap_or_default();
-    let total = raw.get("total").and_then(Value::as_u64).unwrap_or(0);
+    let mut clashes = raw.get("clashes").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut groups = raw.get("groups").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut total = raw.get("total").and_then(Value::as_u64).unwrap_or(0);
+
+    // Merge clearance clashes from model.clashes (below_ceiling, into_structure, crossing,
+    // column) that mesh-based bim.clash doesn't detect.  bim.clash is the superset: mesh +
+    // clearance together in one list.
+    let mep_p = json!({ "tolerance_in": p.get("tolerance_in"), "references": false, "same_trade": false });
+    if let Ok(mep_raw) = super::mep::run_clashes(s, &mep_p)
+        && let Some(mep_clashes) = mep_raw.get("clashes").and_then(Value::as_array)
+    {
+        let mut mep_ids = Vec::new();
+        for c in mep_clashes {
+            // Build a stable ID from the clash's content (kind + level + systems + position).
+            let id = clearance_clash_id(c);
+            let mut entry = c.clone();
+            entry["id"] = json!(&id);
+            entry["status"] = json!("new");
+            clashes.push(entry);
+            mep_ids.push(json!(&id));
+        }
+        let mep_count = mep_ids.len() as u64;
+        total += mep_count;
+        if mep_count > 0 {
+            groups.push(json!({"key": "MEP clearance", "count": mep_count, "ids": mep_ids}));
+        }
+    }
+
     Ok(json!({ "clashes": clashes, "groups": groups, "total": total,
                "new": raw.get("new"), "active": raw.get("active"), "resolved": raw.get("resolved") }))
 }
@@ -1511,9 +1564,13 @@ mod tests {
 
     #[test]
     fn uuid_format() {
-        let u = uuid_v4();
+        let u = stable_uuid("test");
         assert_eq!(u.len(), 36);
         assert_eq!(u.chars().nth(14), Some('4'));
+        // Deterministic: same input produces the same UUID.
+        assert_eq!(u, stable_uuid("test"));
+        // Different input produces a different UUID.
+        assert_ne!(u, stable_uuid("other"));
     }
 
     #[test]

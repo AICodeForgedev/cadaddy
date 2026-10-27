@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1152,
-    "count": 1152,
+    "callableAsJson": 1155,
+    "count": 1155,
     "ids": [
       "-attedit",
       "-block",
@@ -249,9 +249,12 @@
       "convtosolid",
       "convtosurface",
       "coordination.bcf",
+      "coordination.clashgo",
       "coordination.clashlist",
       "coordination.clashstatus",
+      "coordination.colorby",
       "coordination.colors",
+      "coordination.inspect",
       "coordination.isolate",
       "coordination.measure3d",
       "coordination.mode",

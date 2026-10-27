@@ -195,7 +195,7 @@ fn must6_tree_detail_mode_includes_handles() {
     let mut s = building();
     let r = s.execute("coordination.tree", &json!({"detail": true})).unwrap();
     let levels = r["levels"].as_array().unwrap();
-    assert!(levels.len() > 0);
+    assert!(!levels.is_empty());
     // At least one level should have handles in detail mode.
     let has_handles = levels.iter().any(|l| l.get("handles").and_then(Value::as_array).is_some_and(|a| !a.is_empty()));
     assert!(has_handles, "detail mode should include element handles");
