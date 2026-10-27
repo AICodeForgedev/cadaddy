@@ -3351,6 +3351,33 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 s.doc_mut()?.building_spec = Some(sp.to_json());
             }
+            // Each level's region is its architectural floor plan's view: the draft guessed the
+            // upper floors' regions from stray objects (slivers), so their walls weren't built.
+            let arch_plans: Vec<(String, [f64; 4])> = job
+                .sheet_regions
+                .iter()
+                .filter(|r| r.kind == "plan" && r.not_built.is_empty() && r.discipline.eq_ignore_ascii_case("A"))
+                .map(|r| (r.level.clone(), r.plan_rect()))
+                .collect();
+            if !arch_plans.is_empty()
+                && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+            {
+                let key = |l: &str| {
+                    let l = l.trim().to_ascii_uppercase();
+                    let digits: String = l.chars().filter(char::is_ascii_digit).collect();
+                    if digits.is_empty() { l.trim_start_matches("LEVEL").trim().chars().take(1).collect() } else { digits }
+                };
+                for level in &mut sp.levels {
+                    let want = key(&level.name);
+                    let rects: Vec<[f64; 4]> = arch_plans.iter().filter(|(l, _)| !l.is_empty() && key(l) == want).map(|(_, r)| *r).collect();
+                    // The largest view of the level (a several-view sheet's floor plan, not its enlarged plans).
+                    if let Some(r) = rects.into_iter().max_by(|a, b| ((a[2] - a[0]).abs() * (a[3] - a[1]).abs()).total_cmp(&((b[2] - b[0]).abs() * (b[3] - b[1]).abs()))) {
+                        progress_line(&format!("  level {}: region from its architectural plan {:?}", level.name, r.map(|v| v.round())));
+                        level.region = Some(r);
+                    }
+                }
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+            }
             // Where each sheet of the set sits, so what lies on the other disciplines' sheets
             // is theirs (not "outside every level's region").
             if !job.sheet_regions.is_empty()
