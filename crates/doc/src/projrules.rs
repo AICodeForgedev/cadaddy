@@ -459,13 +459,7 @@ impl ProjectRules {
                 changed: true,
                 overridden: Vec::new(),
             };
-            let mut entry = RuleEntry {
-                domain,
-                key: key.to_string(),
-                active: value,
-                overridden: Vec::new(),
-                changelog: Vec::new(),
-            };
+            let mut entry = RuleEntry { domain, key: key.to_string(), active: value, overridden: Vec::new(), changelog: Vec::new() };
             if entry.changelog.len() < MAX_CHANGELOG {
                 entry.changelog.push(ChangeLogEntry {
                     from: String::new(),

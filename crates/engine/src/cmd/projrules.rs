@@ -105,10 +105,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     if tier < SourceTier::ProjectRule && source.is_empty() {
         return Err(bad(
             CMD_SET,
-            format!(
-                "tier `{}` requires a non-empty `source` (document citation) — only project_rule and built_in may omit it",
-                tier.as_str()
-            ),
+            format!("tier `{}` requires a non-empty `source` (document citation) — only project_rule and built_in may omit it", tier.as_str()),
         ));
     }
 
@@ -361,13 +358,8 @@ fn affected_elements(s: &Session, domain: RuleDomain, key: &str, old_value: &str
     };
 
     // Find BIM type marks whose category matches the device kind.
-    let matching_marks: Vec<&str> = d
-        .bim_types
-        .types
-        .iter()
-        .filter(|t| t.category.eq_ignore_ascii_case(device_kind))
-        .map(|t| t.mark.as_str())
-        .collect();
+    let matching_marks: Vec<&str> =
+        d.bim_types.types.iter().filter(|t| t.category.eq_ignore_ascii_case(device_kind)).map(|t| t.mark.as_str()).collect();
 
     if matching_marks.is_empty() {
         return (0, Vec::new());
@@ -468,7 +460,8 @@ mod tests {
 
     /// Helper: set at a higher tier (source required).
     fn set_tier(s: &mut Session, domain: &str, key: &str, value: &str, tier: &str, source: &str, reason: &str) -> serde_json::Value {
-        s.execute("project.rules.set", &json!({"domain": domain, "key": key, "value": value, "tier": tier, "source": source, "reason": reason})).unwrap()
+        s.execute("project.rules.set", &json!({"domain": domain, "key": key, "value": value, "tier": tier, "source": source, "reason": reason}))
+            .unwrap()
     }
 
     #[test]
@@ -653,18 +646,24 @@ mod tests {
     #[test]
     fn higher_tier_refuses_empty_source() {
         let mut s = session();
-        let err = s.execute("project.rules.set", &json!({
-            "domain": "clearance", "key": "a", "value": "36\"", "tier": "rfi", "reason": "test"
-        }));
+        let err = s.execute(
+            "project.rules.set",
+            &json!({
+                "domain": "clearance", "key": "a", "value": "36\"", "tier": "rfi", "reason": "test"
+            }),
+        );
         assert!(err.is_err(), "rfi tier without source should fail");
     }
 
     #[test]
     fn invalid_tier_is_an_error() {
         let mut s = session();
-        let err = s.execute("project.rules.set", &json!({
-            "domain": "clearance", "key": "a", "value": "36\"", "tier": "made_up", "reason": "test"
-        }));
+        let err = s.execute(
+            "project.rules.set",
+            &json!({
+                "domain": "clearance", "key": "a", "value": "36\"", "tier": "made_up", "reason": "test"
+            }),
+        );
         assert!(err.is_err(), "invalid tier should fail");
         // Error should list valid tiers.
         let msg = format!("{:?}", err.unwrap_err());
@@ -715,12 +714,17 @@ mod tests {
         set_pr(&mut s, "mounting_height", "switch/general", "48", "initial default");
 
         // Preview changing height from 48 to 46.
-        let r = s.execute("project.rules.preview", &json!({
-            "domain": "mounting_height",
-            "key": "switch/general",
-            "value": "46",
-            "tier": "rfi"
-        })).unwrap();
+        let r = s
+            .execute(
+                "project.rules.preview",
+                &json!({
+                    "domain": "mounting_height",
+                    "key": "switch/general",
+                    "value": "46",
+                    "tier": "rfi"
+                }),
+            )
+            .unwrap();
 
         assert_eq!(r["preview"]["changed"], true);
         assert_eq!(r["preview"]["newValue"], "46");
@@ -729,12 +733,17 @@ mod tests {
         assert_eq!(ids.len(), 5, "should list all 5 affected entity handles");
 
         // Preview with no actual change should show 0 affected.
-        let r = s.execute("project.rules.preview", &json!({
-            "domain": "mounting_height",
-            "key": "switch/general",
-            "value": "48",
-            "tier": "project_rule"
-        })).unwrap();
+        let r = s
+            .execute(
+                "project.rules.preview",
+                &json!({
+                    "domain": "mounting_height",
+                    "key": "switch/general",
+                    "value": "48",
+                    "tier": "project_rule"
+                }),
+            )
+            .unwrap();
         assert_eq!(r["affectedElements"], 0, "no change means no affected elements");
     }
 
@@ -799,12 +808,7 @@ mod tests {
 
         // Now set a different height and verify it changes.
         let mut rules2 = ProjectRules::new();
-        rules2.set(
-            RuleDomain::MountingHeight,
-            "switch/general",
-            RuleValue::new("48").with_tier(SourceTier::ProjectRule),
-            "project default 48",
-        );
+        rules2.set(RuleDomain::MountingHeight, "switch/general", RuleValue::new("48").with_tier(SourceTier::ProjectRule), "project default 48");
         rules2.set(
             RuleDomain::MountingHeight,
             "switch/general",
