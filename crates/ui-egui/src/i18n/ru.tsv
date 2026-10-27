@@ -3018,3 +3018,12 @@
 	Sequence Trade Conflicts	Конфликты специальностей в последовательности
 	Ceiling Space Fit	Запотолочное пространство
 	Takeoff by Activity	Объёмы по работам
+	BIM	BIM
+	Door	Дверь
+	Wall	Стена
+	Plan Views	Виды плана
+	Generate Plan Views	Создать виды плана
+	Draw Wall (Object)	Стена (объект)
+	Place Door in Wall	Вставить дверь в стену
+	Place Window in Wall	Вставить окно в стену
+	Resolve Plan Entity	Определить элемент плана

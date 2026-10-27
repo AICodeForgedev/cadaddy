@@ -3229,3 +3229,12 @@ menu	Modify	수정
 	Sequence Trade Conflicts	공종 간 순서 충돌
 	Ceiling Space Fit	천장 공간 수용 검토
 	Takeoff by Activity	작업별 물량 산출
+	BIM	BIM
+	Door	문
+	Wall	벽
+	Plan Views	평면도 보기
+	Generate Plan Views	평면도 보기 생성
+	Draw Wall (Object)	벽 그리기 (객체)
+	Place Door in Wall	벽에 문 배치
+	Place Window in Wall	벽에 창 배치
+	Resolve Plan Entity	평면 요소 확인

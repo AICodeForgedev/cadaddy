@@ -3224,3 +3224,12 @@ menu	View	عرض
 	Sequence Trade Conflicts	تعارضات المهن في التسلسل
 	Ceiling Space Fit	ملاءمة فراغ السقف
 	Takeoff by Activity	حصر الكميات حسب النشاط
+	BIM	BIM
+	Door	باب
+	Wall	جدار
+	Plan Views	مساقط أفقية
+	Generate Plan Views	إنشاء مساقط أفقية
+	Draw Wall (Object)	رسم جدار (كائن)
+	Place Door in Wall	وضع باب في الجدار
+	Place Window in Wall	وضع نافذة في الجدار
+	Resolve Plan Entity	تحديد عنصر المسقط

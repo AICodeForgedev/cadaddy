@@ -3235,3 +3235,12 @@
 	Sequence Trade Conflicts	Conflitos entre disciplinas na sequência
 	Ceiling Space Fit	Espaço no entreforro
 	Takeoff by Activity	Levantamento por atividade
+	BIM	BIM
+	Door	Porta
+	Wall	Parede
+	Plan Views	Vistas de planta
+	Generate Plan Views	Gerar vistas de planta
+	Draw Wall (Object)	Desenhar parede (objeto)
+	Place Door in Wall	Inserir porta na parede
+	Place Window in Wall	Inserir janela na parede
+	Resolve Plan Entity	Resolver elemento da planta

@@ -10,9 +10,7 @@ use std::sync::Mutex;
 use cadaddy_engine::Session;
 use cadaddy_engine::cmd::planview;
 use cadaddy_engine::cmd::wallgen;
-use cadaddy_engine::doc::{
-    Drawing, Entity, EntityKind, Handle, Layer, Line, Mesh, MeshFace, MeshKind, RawTag,
-};
+use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Handle, Layer, Line, Mesh, MeshFace, MeshKind, RawTag};
 use cadaddy_engine::geom::Vec3;
 use serde_json::json;
 
@@ -56,19 +54,20 @@ fn add_wall_mesh(d: &mut Drawing, ax: f64, ay: f64, bx: f64, by: f64, thickness:
     let dx = bx - ax;
     let dy = by - ay;
     let len = (dx * dx + dy * dy).sqrt();
-    if len < 0.01 { return h; }
+    if len < 0.01 {
+        return h;
+    }
     let nx = -dy / len;
     let ny = dx / len;
     let ht = thickness / 2.0;
-    let corners = [
-        (ax + nx * ht, ay + ny * ht),
-        (bx + nx * ht, by + ny * ht),
-        (bx - nx * ht, by - ny * ht),
-        (ax - nx * ht, ay - ny * ht),
-    ];
+    let corners = [(ax + nx * ht, ay + ny * ht), (bx + nx * ht, by + ny * ht), (bx - nx * ht, by - ny * ht), (ax - nx * ht, ay - ny * ht)];
     let mut vertices = Vec::new();
-    for (x, y) in &corners { vertices.push(Vec3::new(*x, *y, 0.0)); }
-    for (x, y) in &corners { vertices.push(Vec3::new(*x, *y, height)); }
+    for (x, y) in &corners {
+        vertices.push(Vec3::new(*x, *y, 0.0));
+    }
+    for (x, y) in &corners {
+        vertices.push(Vec3::new(*x, *y, height));
+    }
     let faces = vec![
         MeshFace { v: vec![0, 1, 2, 3], hidden: 0 },
         MeshFace { v: vec![7, 6, 5, 4], hidden: 0 },
@@ -93,15 +92,14 @@ fn add_door_mesh(d: &mut Drawing, ax: f64, ay: f64, bx: f64, by: f64, thickness:
     let nx = 0.0;
     let ny = 1.0;
     let ht = thickness / 2.0;
-    let corners = [
-        (ax + nx * ht, ay + ny * ht),
-        (bx + nx * ht, by + ny * ht),
-        (bx - nx * ht, by - ny * ht),
-        (ax - nx * ht, ay - ny * ht),
-    ];
+    let corners = [(ax + nx * ht, ay + ny * ht), (bx + nx * ht, by + ny * ht), (bx - nx * ht, by - ny * ht), (ax - nx * ht, ay - ny * ht)];
     let mut vertices = Vec::new();
-    for (x, y) in &corners { vertices.push(Vec3::new(*x, *y, 0.0)); }
-    for (x, y) in &corners { vertices.push(Vec3::new(*x, *y, height)); }
+    for (x, y) in &corners {
+        vertices.push(Vec3::new(*x, *y, 0.0));
+    }
+    for (x, y) in &corners {
+        vertices.push(Vec3::new(*x, *y, height));
+    }
     let faces = vec![
         MeshFace { v: vec![0, 1, 2, 3], hidden: 0 },
         MeshFace { v: vec![7, 6, 5, 4], hidden: 0 },
@@ -126,10 +124,15 @@ fn plan_wall_creates_3d_and_plan() {
     let _g = SERIAL.lock().unwrap();
     let mut s = new_session();
     // Create a wall with plan.wall.
-    let r = s.execute("plan.wall", &json!({
-        "a": [0.0, 0.0], "b": [240.0, 0.0],
-        "thickness": 6, "height": 9, "type": "Interior", "level": "Level 1"
-    })).expect("plan.wall failed");
+    let r = s
+        .execute(
+            "plan.wall",
+            &json!({
+                "a": [0.0, 0.0], "b": [240.0, 0.0],
+                "thickness": 6, "height": 9, "type": "Interior", "level": "Level 1"
+            }),
+        )
+        .expect("plan.wall failed");
     // The model handle should be valid.
     let model_h = r["handle"].as_str().expect("no handle");
     assert!(!model_h.is_empty());
@@ -158,10 +161,15 @@ fn plan_wall_creates_3d_and_plan() {
 fn plan_wall_resolve_returns_props() {
     let _g = SERIAL.lock().unwrap();
     let mut s = new_session();
-    let r = s.execute("plan.wall", &json!({
-        "a": [0.0, 0.0], "b": [240.0, 0.0],
-        "thickness": 6, "height": 9, "type": "Exterior", "level": "Level 1"
-    })).unwrap();
+    let r = s
+        .execute(
+            "plan.wall",
+            &json!({
+                "a": [0.0, 0.0], "b": [240.0, 0.0],
+                "thickness": 6, "height": 9, "type": "Exterior", "level": "Level 1"
+            }),
+        )
+        .unwrap();
     let plan_h = r["plan_handles"][0].as_str().unwrap();
     // Resolve the plan entity.
     let resolved = s.execute("plan.resolve", &json!({ "handle": plan_h })).expect("resolve failed");
@@ -179,15 +187,25 @@ fn plan_door_in_wall() {
     let _g = SERIAL.lock().unwrap();
     let mut s = new_session();
     // First create a wall.
-    let wall_r = s.execute("plan.wall", &json!({
-        "a": [0.0, 0.0], "b": [240.0, 0.0],
-        "thickness": 6, "height": 9, "level": "Level 1"
-    })).unwrap();
+    let wall_r = s
+        .execute(
+            "plan.wall",
+            &json!({
+                "a": [0.0, 0.0], "b": [240.0, 0.0],
+                "thickness": 6, "height": 9, "level": "Level 1"
+            }),
+        )
+        .unwrap();
     let wall_h = wall_r["handle"].as_str().unwrap();
     // Place a door in it.
-    let door_r = s.execute("plan.door", &json!({
-        "wall": wall_h, "position": 0.5, "width": 36, "height": 6.67, "swing": "left"
-    })).expect("plan.door failed");
+    let door_r = s
+        .execute(
+            "plan.door",
+            &json!({
+                "wall": wall_h, "position": 0.5, "width": 36, "height": 6.67, "swing": "left"
+            }),
+        )
+        .expect("plan.door failed");
     let door_h = door_r["handle"].as_str().unwrap();
     assert!(!door_h.is_empty());
     // Door should have plan representations (leaf line + swing arc = 2).
@@ -210,14 +228,24 @@ fn plan_door_in_wall() {
 fn plan_window_in_wall() {
     let _g = SERIAL.lock().unwrap();
     let mut s = new_session();
-    let wall_r = s.execute("plan.wall", &json!({
-        "a": [0.0, 0.0], "b": [240.0, 0.0],
-        "thickness": 6, "height": 9, "level": "Level 1"
-    })).unwrap();
+    let wall_r = s
+        .execute(
+            "plan.wall",
+            &json!({
+                "a": [0.0, 0.0], "b": [240.0, 0.0],
+                "thickness": 6, "height": 9, "level": "Level 1"
+            }),
+        )
+        .unwrap();
     let wall_h = wall_r["handle"].as_str().unwrap();
-    let win_r = s.execute("plan.window", &json!({
-        "wall": wall_h, "position": 0.3, "width": 36, "sill": 3.0, "height": 4.0
-    })).expect("plan.window failed");
+    let win_r = s
+        .execute(
+            "plan.window",
+            &json!({
+                "wall": wall_h, "position": 0.3, "width": 36, "sill": 3.0, "height": 4.0
+            }),
+        )
+        .expect("plan.window failed");
     let win_h = win_r["handle"].as_str().unwrap();
     assert!(!win_h.is_empty());
     let plan_hs = win_r["plan_handles"].as_array().expect("no plan_handles");
@@ -255,9 +283,7 @@ fn plan_views_from_model() {
     assert!(r["levels"].as_u64().unwrap() >= 1);
     // Verify plan entities exist on A-WALL.
     let d = s.doc().unwrap();
-    let plan_walls: Vec<_> = d.model.iter()
-        .filter(|e| planview::plan_of(e).is_some_and(|(k, _, _)| k == "wall"))
-        .collect();
+    let plan_walls: Vec<_> = d.model.iter().filter(|e| planview::plan_of(e).is_some_and(|(k, _, _)| k == "wall")).collect();
     // Each wall generates 2 face lines, so 4 total.
     assert_eq!(plan_walls.len(), 4, "2 walls × 2 face lines = 4 plan entities");
     for e in &plan_walls {
@@ -270,9 +296,13 @@ fn plan_views_clear() {
     let _g = SERIAL.lock().unwrap();
     let mut s = new_session();
     // Create a wall (which also creates plan entities).
-    s.execute("plan.wall", &json!({
-        "a": [0.0, 0.0], "b": [240.0, 0.0], "thickness": 6, "height": 9, "level": "Level 1"
-    })).unwrap();
+    s.execute(
+        "plan.wall",
+        &json!({
+            "a": [0.0, 0.0], "b": [240.0, 0.0], "thickness": 6, "height": 9, "level": "Level 1"
+        }),
+    )
+    .unwrap();
     // There should be plan entities.
     let count_before = s.doc().unwrap().model.iter().filter(|e| planview::plan_of(e).is_some()).count();
     assert!(count_before > 0);
@@ -288,10 +318,15 @@ fn plan_views_clear() {
 fn plan_resolve_3d_element_directly() {
     let _g = SERIAL.lock().unwrap();
     let mut s = new_session();
-    let r = s.execute("plan.wall", &json!({
-        "a": [0.0, 0.0], "b": [240.0, 0.0],
-        "thickness": 6, "height": 9, "type": "Interior", "level": "Level 1"
-    })).unwrap();
+    let r = s
+        .execute(
+            "plan.wall",
+            &json!({
+                "a": [0.0, 0.0], "b": [240.0, 0.0],
+                "thickness": 6, "height": 9, "type": "Interior", "level": "Level 1"
+            }),
+        )
+        .unwrap();
     let model_h = r["handle"].as_str().unwrap();
     // Resolve the 3D element directly.
     let resolved = s.execute("plan.resolve", &json!({ "handle": model_h })).expect("resolve failed");
@@ -302,10 +337,15 @@ fn plan_resolve_3d_element_directly() {
 fn cdy_roundtrip_preserves_plan_tags() {
     let _g = SERIAL.lock().unwrap();
     let mut s = new_session();
-    let r = s.execute("plan.wall", &json!({
-        "a": [0.0, 0.0], "b": [240.0, 0.0],
-        "thickness": 6, "height": 9, "level": "Level 1"
-    })).unwrap();
+    let r = s
+        .execute(
+            "plan.wall",
+            &json!({
+                "a": [0.0, 0.0], "b": [240.0, 0.0],
+                "thickness": 6, "height": 9, "level": "Level 1"
+            }),
+        )
+        .unwrap();
     let plan_h = r["plan_handles"][0].as_str().unwrap();
     let h = Handle(u64::from_str_radix(plan_h, 16).unwrap());
     // Before any save: the plan tag is there.
