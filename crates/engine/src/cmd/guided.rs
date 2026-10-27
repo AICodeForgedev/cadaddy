@@ -2484,9 +2484,9 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
 /// Take out what was read as rooms but is not the building's (MUST 1-3): labels in a sheet's
 /// title block or border (firm names, addresses, review stamps), rooms read on a site, civil or
-/// level-less sheet, the other disciplines' unnumbered labels on a level the architectural plan
-/// shows (legends, notes), and labels no room is named (notes, dates, view titles). How many
-/// went, by why.
+/// level-less sheet, the other disciplines' labels on a level the architectural plan shows
+/// (equipment tags, panel numbers, legends, notes), and labels no room is named (notes, dates,
+/// view titles). How many went, by why.
 fn rooms_off_the_building(job: &GuidedJob, rooms_result: &mut Value) -> Value {
     let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) else { return json!({}) };
     let a_levels: Vec<String> = job
@@ -2512,17 +2512,43 @@ fn rooms_off_the_building(job: &GuidedJob, rooms_result: &mut Value) -> Value {
             site += 1;
             return false;
         }
-        // Another discipline's copy of a level the architectural plan shows: only a numbered
-        // room (the copy of one the architectural reading missed; one per number is kept
-        // below), never its legends and notes.
-        let numbered = room.get("number").and_then(Value::as_str).is_some_and(|n| n.chars().any(|c| c.is_ascii_digit()));
-        if region.discipline != "A" && !numbered && a_levels.contains(&region.level.trim().to_ascii_uppercase()) {
-            other_discipline += 1;
-            return false;
+        // Non-A discipline rooms: keep only numbered rooms whose number's floor prefix
+        // matches the level (room 213 → level 2, room 301 → level 3).  This drops
+        // cross-level bleed (a Level-1 room number read on a Level-3 mechanical sheet)
+        // and unnumbered labels (legends, equipment names, notes).
+        if region.discipline != "A" {
+            let level_up = region.level.trim().to_ascii_uppercase();
+            if a_levels.contains(&level_up) {
+                let number = room.get("number").and_then(Value::as_str).unwrap_or("");
+                if !room_number_on_level(number, &level_up) {
+                    other_discipline += 1;
+                    return false;
+                }
+            }
         }
         true
     });
     json!({"title_block_or_border": sheet_furniture, "site_or_no_level": site, "other_discipline": other_discipline, "not_a_room_name": not_a_name})
+}
+
+/// Whether `number` is a plausible room number for `level`: the number's leading digits match the
+/// level code (room 213 on level "2", room 305A on level "3").  Rooms from other disciplines'
+/// sheets are kept only when their number belongs to their level, not when it bleeds from another
+/// floor (an M-3 sheet showing level-1 room numbers beside ductwork).
+fn room_number_on_level(number: &str, level: &str) -> bool {
+    let n = number.trim();
+    if n.is_empty() {
+        return false;
+    }
+    // The level code: "1", "2", "R", etc.  Only digit levels have a prefix convention.
+    let lv = level.trim_start_matches("LEVEL").trim_start_matches("Level").trim_start_matches("level").trim();
+    if lv.is_empty() || !lv.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        // Non-numeric level (Roof, Basement): no prefix convention, accept any numbered room.
+        return n.chars().any(|c| c.is_ascii_digit());
+    }
+    // The room number should start with the level number and have at least one more character:
+    // level "2" → "200", "213", "2A"; not "12", "302".
+    n.starts_with(lv) && n.len() > lv.len()
 }
 
 /// Whether a room name reads as words: a run of three letters (`LOBBY`, `IDF`, `CORR`) or a
@@ -6805,6 +6831,26 @@ mod tests {
         // Verify SL sheets are not used as building level sources.
         let sheets: Vec<_> = levels.iter().filter_map(|l| l.get("sheet").and_then(Value::as_str)).collect();
         assert!(sheets.iter().all(|s| !s.starts_with("SL-")), "no SL sheets in building levels: {sheets:?}");
+    }
+
+    /// Pipeline S3: non-A rooms are kept only when their number's floor prefix matches the
+    /// level. Room 213 on level 2 stays; room 101 on level 3 is cross-level bleed.
+    #[test]
+    fn room_number_floor_prefix_matches_level() {
+        // Digit levels: number must start with the level code + more.
+        assert!(room_number_on_level("200", "2"));
+        assert!(room_number_on_level("213", "2"));
+        assert!(room_number_on_level("2A", "2"));
+        assert!(room_number_on_level("160A", "1"));
+        assert!(room_number_on_level("160B", "1"));
+        assert!(!room_number_on_level("101", "3"), "cross-level bleed");
+        assert!(!room_number_on_level("50", "3"), "wrong floor");
+        assert!(!room_number_on_level("11", "2"), "wrong floor");
+        assert!(!room_number_on_level("P40A", "1"), "not a digit prefix");
+        assert!(!room_number_on_level("", "1"), "empty number");
+        // Non-digit levels: any numbered room is accepted.
+        assert!(room_number_on_level("12", "R"));
+        assert!(!room_number_on_level("", "R"));
     }
 
     #[test]
