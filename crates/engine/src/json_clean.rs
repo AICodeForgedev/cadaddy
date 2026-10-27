@@ -56,14 +56,14 @@ mod tests {
 
     #[test]
     fn null_and_escape_are_replaced() {
-        let mut v = json!(format!("before\x00mid\x1bafter"));
+        let mut v = json!("before\x00mid\x1bafter".to_string());
         sanitize(&mut v);
         assert_eq!(v.as_str().unwrap(), "before\u{FFFD}mid\u{FFFD}after");
     }
 
     #[test]
     fn nested_values_are_cleaned() {
-        let mut v = json!({"a": [format!("x\x01y")], "b": {"c": format!("z\x02w")}});
+        let mut v = json!({"a": ["x\x01y".to_string()], "b": {"c": "z\x02w".to_string()}});
         sanitize(&mut v);
         assert_eq!(v["a"][0].as_str().unwrap(), "x\u{FFFD}y");
         assert_eq!(v["b"]["c"].as_str().unwrap(), "z\u{FFFD}w");
