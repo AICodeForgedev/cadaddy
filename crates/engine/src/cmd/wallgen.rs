@@ -32,7 +32,7 @@ const LEAF_IN: f64 = 1.75;
 const FRAME_IN: f64 = 2.0;
 const CASING_IN: f64 = 0.75;
 /// Most objects one WALLGEN makes.
-const MAX_OBJECTS: usize = 200_000;
+const MAX_OBJECTS: usize = 4_000_000;
 
 /// The settings of the last WALLGEN of a drawing: what it builds again from.
 #[derive(Clone, Debug, PartialEq)]

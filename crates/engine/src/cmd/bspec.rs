@@ -25,7 +25,7 @@ const MAX_HANDLES: usize = 50;
 /// Rooms traced per build, at most.
 const MAX_ROOMS: usize = 2_000;
 /// Objects looked at per build, at most (hostile drawings).
-const MAX_OBJECTS: usize = 200_000;
+const MAX_OBJECTS: usize = 4_000_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -859,7 +859,7 @@ const ROOM_LAYER: &str = super::rooms3d::ROOM_LAYER;
 /// windows (the rest: openings, gaps the tracing closed).
 const ROOM_WALLED: f64 = 0.5;
 /// Most plan footprints and grid cells looked at per level (hostile drawings).
-const MAX_BOUNDS: usize = 200_000;
+const MAX_BOUNDS: usize = 4_000_000;
 const MAX_CELLS: usize = 4_000_000;
 
 /// The plan footprints of what bounds rooms in the built model (walls, curtain walls, columns,

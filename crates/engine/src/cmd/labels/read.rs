@@ -19,7 +19,7 @@ use crate::{Result, Session};
 
 /// Most sheets read at once, objects looked at per sheet, and rows per schedule (hostile files).
 const MAX_SHEETS: usize = 500;
-const MAX_OBJECTS: usize = 200_000;
+const MAX_OBJECTS: usize = 4_000_000;
 const MAX_ROWS: usize = 500;
 
 /// What a panel schedule's header names.

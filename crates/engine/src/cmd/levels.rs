@@ -32,7 +32,7 @@ use super::*;
 use crate::{Result, Session};
 
 /// Texts and objects looked at, at most (hostile drawings).
-const MAX_TEXTS: usize = 200_000;
+const MAX_TEXTS: usize = 4_000_000;
 /// Warnings and ignored notes listed, at most.
 const MAX_REPORTED: usize = 50;
 /// Files looked at in a folder.

@@ -9,7 +9,7 @@ use crate::cmd::{bool_or, str_param};
 use crate::{Result, Session};
 
 /// Straight segments looked at, at most (hostile drawings).
-const MAX_SEGS: usize = 200_000;
+const MAX_SEGS: usize = 4_000_000;
 /// Pairs reported at most.
 const MAX_PAIRS: usize = 50_000;
 /// Rooms traced at most.
