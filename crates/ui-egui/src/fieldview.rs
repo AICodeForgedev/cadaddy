@@ -89,6 +89,9 @@ pub struct FieldViewer {
     pub open_requested: bool,
     /// The spot the 3D view orbits when a plan point was sent to it (feet).
     pub focus: Option<[f64; 3]>,
+    /// The wall face last tapped (index into the package's `cover`): its pre-cover checklist
+    /// and in-wall photos are shown (Q5119).
+    pub cover: Option<usize>,
 }
 
 impl Default for FieldViewer {
@@ -118,6 +121,7 @@ impl Default for FieldViewer {
             drawn_3d: 0,
             open_requested: false,
             focus: None,
+            cover: None,
         }
     }
 }
@@ -223,6 +227,7 @@ impl FieldViewer {
         let Some(pkg) = &self.pkg else { return };
         match self.tool {
             Tool::Select => {
+                self.cover = pkg.cover_at(&level, p, tol);
                 self.selected = pkg.pick_plan(&level, p, tol, &self.hidden);
                 if self.selected.is_none()
                     && let Some(r) = pkg.room_at(&level, p)
@@ -567,6 +572,31 @@ impl FieldViewer {
             }
             ui.separator();
         }
+        // The tapped wall face: its pre-cover checklist and the photos taken behind it.
+        if let Some(c) = self.cover.and_then(|i| p.cover.get(i)) {
+            ui.label(egui::RichText::new(format!("{} {} / {}", t("Wall"), c.wall, c.face)).strong().color(tk.text));
+            if !c.rooms.is_empty() || !c.fire_rating.is_empty() {
+                ui.label(egui::RichText::new(format!("{} {}", c.rooms.join(", "), c.fire_rating).trim().to_string()).color(tk.text_dim));
+            }
+            let (ready, colour) = if c.ready { (t("Ready to cover"), tk.accent) } else { (t("Not ready to cover"), tk.text_dim) };
+            ui.label(egui::RichText::new(ready).color(colour));
+            ui.label(
+                egui::RichText::new(format!("{} ({}/{})", t("Checklist"), c.checklist.iter().filter(|i| i.done).count(), c.checklist.len()))
+                    .color(tk.text),
+            );
+            for item in &c.checklist {
+                let mut done = item.done;
+                ui.add_enabled(false, egui::Checkbox::new(&mut done, &item.description));
+            }
+            ui.label(egui::RichText::new(format!("{} ({})", t("Photos"), c.photos.len())).color(tk.text));
+            for ph in c.photos.iter().take(50) {
+                let caption = if ph.caption.is_empty() { &ph.uri } else { &ph.caption };
+                ui.label(
+                    egui::RichText::new(format!("{}: {caption} ({}, {})", ph.id, ph.uri, cadaddy_walk3d::feet(ph.elevation_ft))).color(tk.text_dim),
+                );
+            }
+            ui.separator();
+        }
         // The room: its unit, open clashes and RFIs, notes.
         if let Some(r) = self.room.and_then(|i| p.rooms.get(i)) {
             ui.label(egui::RichText::new(format!("{} {} {}", t("Room"), r.number, r.name)).strong().color(tk.text));
@@ -589,7 +619,11 @@ impl FieldViewer {
                 p.notes.iter().filter(|n| n.room.eq_ignore_ascii_case(&r.number) && n.level.eq_ignore_ascii_case(&r.level)).collect();
             ui.label(egui::RichText::new(format!("{} ({})", t("Notes"), notes.len())).color(tk.text));
             for n in notes.iter().take(50) {
-                let kind = if n.kind == NoteKind::VerifiedPoint { t("Verified") } else { t("Note") };
+                let kind = match n.kind {
+                    NoteKind::VerifiedPoint => t("Verified"),
+                    NoteKind::Photo => t("Photo"),
+                    NoteKind::Note => t("Note"),
+                };
                 // • not sent yet, ↑ sent and not back in a package yet, nothing once in the drawing.
                 let sent = match (n.synced, n.sent) {
                     (true, _) => "",

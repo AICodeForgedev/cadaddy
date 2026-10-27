@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1144,
-    "count": 1144,
+    "callableAsJson": 1147,
+    "count": 1147,
     "ids": [
       "-attedit",
       "-block",
@@ -268,6 +268,14 @@
       "count",
       "countlist",
       "counttable",
+      "cover.check",
+      "cover.init",
+      "cover.photo",
+      "cover.ready",
+      "cover.sign",
+      "cover.status",
+      "cover.uncheck",
+      "cover.wall",
       "cutbase",
       "cutclip",
       "cvadd",
@@ -733,17 +741,12 @@
       "pipes.read",
       "plan",
       "plan.classify",
-      "plan.door",
       "plan.layers",
       "plan.notes",
       "plan.openings",
-      "plan.resolve",
       "plan.rooms",
       "plan.sheets",
-      "plan.views",
-      "plan.wall",
       "plan.walls",
-      "plan.window",
       "plan.world",
       "planesurf",
       "pline",
@@ -1148,7 +1151,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 512,
+    "inMenus": 508,
     "typed": 551
   },
   "features": {
@@ -1235,7 +1238,7 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 54,
+    "count": 55,
     "tools": [
       "arch_read",
       "asbuilt",
@@ -1250,6 +1253,7 @@
       "close_drawing",
       "codebook",
       "command_line",
+      "cover",
       "drawing_query",
       "drawing_summary",
       "execute",

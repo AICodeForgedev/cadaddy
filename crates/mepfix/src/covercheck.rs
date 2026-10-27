@@ -21,8 +21,13 @@ const MAX_AREAS: usize = 10_000;
 /// Maximum text field length.
 const MAX_TEXT: usize = 2_000;
 
-fn clamp_text(s: &str) -> String {
-    if s.len() <= MAX_TEXT { s.to_string() } else { s[..MAX_TEXT].to_string() }
+/// `s` cut to at most [`MAX_TEXT`] bytes, on a character boundary.
+pub fn clamp_text(s: &str) -> String {
+    let mut end = s.len().min(MAX_TEXT);
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.get(..end).unwrap_or_default().to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -179,8 +184,8 @@ impl CoverArea {
         (done, self.checklist.len())
     }
 
-    /// Whether this area can be marked ready to cover: every checklist item done, and at least
-    /// one photo.
+    /// Whether this area can be marked ready to cover: every checklist item done and every
+    /// inspection phase that applies to it signed (photos are not required).
     pub fn can_mark_ready(&self, phases: &[InspectionPhase]) -> bool {
         if !self.checklist_complete() {
             return false;
@@ -205,10 +210,25 @@ impl CoverArea {
         true
     }
 
-    /// Add a photo, respecting the cap.
-    pub fn add_photo(&mut self, photo: InWallPhoto) -> bool {
+    /// What still stands between this area and "ready to cover": the open checklist items
+    /// (`id: category`) and the names of the unsigned phases that apply to it (`name (level)`).
+    pub fn open_reasons(&self, phases: &[InspectionPhase]) -> (Vec<String>, Vec<String>) {
+        let items = self.checklist.iter().filter(|c| !c.done).map(|c| format!("{}: {}", c.id, c.category)).collect();
+        let unsigned = phases.iter().filter(|ph| ph.applies_to(self) && !ph.signed).map(InspectionPhase::label).collect();
+        (items, unsigned)
+    }
+
+    /// Add a photo, respecting the cap. Its text is cut to [`MAX_TEXT`] bytes; a photo with a
+    /// position or elevation that isn't a finite number is refused.
+    pub fn add_photo(&mut self, mut photo: InWallPhoto) -> bool {
         if self.photos.len() >= MAX_PHOTOS {
             return false;
+        }
+        if !(photo.elevation_ft.is_finite() && photo.along_ft.is_finite() && photo.at_ft.iter().all(|v| v.is_finite())) {
+            return false;
+        }
+        for t in [&mut photo.id, &mut photo.face, &mut photo.uri, &mut photo.author, &mut photo.date, &mut photo.caption, &mut photo.level] {
+            *t = clamp_text(t);
         }
         self.photos.push(photo);
         true
@@ -220,7 +240,6 @@ impl CoverArea {
             item.done = true;
             item.done_by = Some(clamp_text(by));
             item.done_date = Some(clamp_text(date));
-            // Once an item is re-opened, the area is no longer ready.
             true
         } else {
             false
@@ -287,6 +306,11 @@ impl InspectionPhase {
         level_ok && kind_ok
     }
 
+    /// The phase's name with its level(s): `Rough-In Electrical (L1)`.
+    pub fn label(&self) -> String {
+        if self.levels.is_empty() { self.name.clone() } else { format!("{} ({})", self.name, self.levels.join(", ")) }
+    }
+
     /// Sign off the phase.
     pub fn sign(&mut self, inspector: &str, date: &str) {
         self.signed = true;
@@ -305,22 +329,25 @@ pub const STANDARD_PHASES: &[(&str, &str)] = &[
     ("insulation", "Insulation"),
 ];
 
-/// Build the default inspection phases for a set of levels.
+/// Build the default inspection phases for a set of levels: one instance of each standard
+/// phase per level (`rough_elec@L1`), so the AHJ signs each floor on its own. With no levels,
+/// one instance of each that applies to every level.
 pub fn default_phases(levels: &[String]) -> Vec<InspectionPhase> {
-    STANDARD_PHASES
-        .iter()
-        .map(|(id, name)| InspectionPhase {
-            id: (*id).into(),
-            name: (*name).into(),
-            levels: levels.to_vec(),
-            area_kinds: Vec::new(), // applies to all
-            signed: false,
-            inspector: None,
-            signed_date: None,
-            permit_number: String::new(),
-            notes: String::new(),
-        })
-        .collect()
+    let phase = |id: &str, name: &str, level: Option<&String>| InspectionPhase {
+        id: level.map_or_else(|| id.to_string(), |l| format!("{id}@{l}")),
+        name: name.into(),
+        levels: level.cloned().into_iter().collect(),
+        area_kinds: Vec::new(), // applies to all
+        signed: false,
+        inspector: None,
+        signed_date: None,
+        permit_number: String::new(),
+        notes: String::new(),
+    };
+    if levels.is_empty() {
+        return STANDARD_PHASES.iter().map(|(id, name)| phase(id, name, None)).collect();
+    }
+    levels.iter().flat_map(|l| STANDARD_PHASES.iter().map(move |(id, name)| phase(id, name, Some(l)))).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +408,42 @@ impl CoverRecord {
         self.wall_areas(wall_id).iter().flat_map(|a| a.photos.iter()).collect()
     }
 
+    /// Sign the phase `phase` (its id, standard id such as `rough_elec`, or name, any case) for
+    /// `level`: the instances that cover that level. Returns how many were signed (0: no such
+    /// phase on that level).
+    pub fn sign_phase(&mut self, phase: &str, level: &str, inspector: &str, date: &str) -> usize {
+        let want = phase.trim();
+        let mut n = 0;
+        for ph in &mut self.phases {
+            let base = ph.id.split('@').next().unwrap_or_default();
+            let named = ph.id.eq_ignore_ascii_case(want) || base.eq_ignore_ascii_case(want) || ph.name.eq_ignore_ascii_case(want);
+            let on_level = ph.levels.is_empty() || ph.levels.iter().any(|l| l == level);
+            if named && on_level {
+                ph.sign(inspector, date);
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// Close the gate's back door: an area marked ready whose checklist or applicable phases
+    /// aren't complete (a hand-edited or older record) is no longer ready. Called whenever a
+    /// record is loaded; returns the areas it cleared and why.
+    pub fn validate(&mut self) -> Vec<ClearedArea> {
+        let phases = self.phases.clone();
+        let mut cleared = Vec::new();
+        for a in &mut self.areas {
+            if a.ready_to_cover && !a.can_mark_ready(&phases) {
+                let (open_items, unsigned_phases) = a.open_reasons(&phases);
+                a.ready_to_cover = false;
+                a.ready_by = None;
+                a.ready_date = None;
+                cleared.push(ClearedArea { area: a.id.clone(), open_items, unsigned_phases });
+            }
+        }
+        cleared
+    }
+
     /// Summary of what's inside a wall: the checklist items, photos, and whether it's ready.
     pub fn wall_contents(&self, wall_id: &str) -> WallContents {
         let areas = self.wall_areas(wall_id);
@@ -414,6 +477,14 @@ impl CoverRecord {
         let phases_signed = self.phases.iter().filter(|p| p.signed).count();
         CoverProgress { total, ready, checklist_complete: complete, photos, phases_total, phases_signed }
     }
+}
+
+/// An area [`CoverRecord::validate`] took "ready to cover" off, and why.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClearedArea {
+    pub area: String,
+    pub open_items: Vec<String>,
+    pub unsigned_phases: Vec<String>,
 }
 
 /// What's behind a wall (both faces).
@@ -463,9 +534,9 @@ pub fn areas_from_truth(t: &Truth) -> Vec<CoverArea> {
     for w in t.plan_walls.iter().take(MAX_AREAS / 2) {
         let wt = t.wall_types.iter().find(|x| x.tag == w.wall_type);
         let fire_rating = wt.and_then(|x| x.fire_rating.clone());
+        let sides = face_rooms(w, &t.building.rooms);
         for face in ["A", "B"] {
-            let face_rooms: Vec<String> =
-                if face == "A" { w.rooms.first().cloned().into_iter().collect() } else { w.rooms.last().cloned().into_iter().collect() };
+            let face_rooms: Vec<String> = sides.iter().filter(|(f, _)| *f == face).map(|(_, r)| r.clone()).collect();
             let area_id = format!("{}/{face}", w.id);
             areas.push(CoverArea {
                 id: area_id.clone(),
@@ -509,15 +580,79 @@ pub fn areas_from_truth(t: &Truth) -> Vec<CoverArea> {
     areas
 }
 
+/// Which side of wall `w` a plan point is on: `A` left of a→b, `B` right of it, `None` on the
+/// centreline (or a zero-length wall). The rule [`resolve_wall_tap`] uses.
+pub fn side_of(w: &crate::truth::PlanWall, p: [f64; 2]) -> Option<&'static str> {
+    let dx = w.b_ft[0] - w.a_ft[0];
+    let dy = w.b_ft[1] - w.a_ft[1];
+    let len = (dx * dx + dy * dy).sqrt();
+    if len.is_nan() || len <= 1e-6 {
+        return None;
+    }
+    // Signed distance from the centreline, feet.
+    let off = (dx * (p[1] - w.a_ft[1]) - dy * (p[0] - w.a_ft[0])) / len;
+    if !off.is_finite() || off.abs() < 1e-6 {
+        None
+    } else if off > 0.0 {
+        Some("A")
+    } else {
+        Some("B")
+    }
+}
+
+/// The faces the rooms `w` names are on, by geometry: each room (found by number on the wall's
+/// level) is on the side of the wall its outline's centre is. When the centre sits on the
+/// centreline, a point just off the wall's middle on each side decides by which outline holds
+/// it. A room that can't be found or placed is left off both faces, never guessed, so an
+/// exterior wall gets a room on one face only.
+fn face_rooms(w: &crate::truth::PlanWall, rooms: &[crate::truth::Room]) -> Vec<(&'static str, String)> {
+    let mid = [(w.a_ft[0] + w.b_ft[0]) / 2.0, (w.a_ft[1] + w.b_ft[1]) / 2.0];
+    let dx = w.b_ft[0] - w.a_ft[0];
+    let dy = w.b_ft[1] - w.a_ft[1];
+    let len = (dx * dx + dy * dy).sqrt();
+    let mut out: Vec<(&'static str, String)> = Vec::new();
+    for number in &w.rooms {
+        let Some(rm) = rooms.iter().find(|r| r.level == w.level && &r.number == number) else { continue };
+        let centre = [(rm.min_ft[0] + rm.max_ft[0]) / 2.0, (rm.min_ft[1] + rm.max_ft[1]) / 2.0];
+        let side = side_of(w, centre).or_else(|| {
+            if len.is_nan() || len <= 1e-6 {
+                return None;
+            }
+            // Half a foot off the middle, left (A) then right (B).
+            let n = [-dy / len * 0.5, dx / len * 0.5];
+            let inside = |p: [f64; 2]| p[0] >= rm.min_ft[0] && p[0] <= rm.max_ft[0] && p[1] >= rm.min_ft[1] && p[1] <= rm.max_ft[1];
+            match (inside([mid[0] + n[0], mid[1] + n[1]]), inside([mid[0] - n[0], mid[1] - n[1]])) {
+                (true, false) => Some("A"),
+                (false, true) => Some("B"),
+                _ => None,
+            }
+        });
+        if let Some(face) = side
+            && !out.iter().any(|(f, r)| *f == face && r == number)
+        {
+            out.push((face, number.clone()));
+        }
+    }
+    out
+}
+
 /// Build a full cover record from a truth.
 pub fn record_from_truth(t: &Truth, project: &str) -> CoverRecord {
-    let levels: Vec<String> = {
-        let mut lvs: Vec<String> = t.building.levels.iter().map(|l| l.name.clone()).collect();
-        lvs.sort();
-        lvs.dedup();
-        lvs
-    };
-    CoverRecord { schema: "cadaddy-covercheck/1".into(), project: project.into(), areas: areas_from_truth(t), phases: default_phases(&levels) }
+    let areas = areas_from_truth(t);
+    // Phases name levels the way areas do: walls and rooms carry the level's code (`1`), not
+    // its title-block name (`LEVEL 1`).
+    let mut levels: Vec<String> = Vec::new();
+    for l in t.building.levels.iter().map(level_key).chain(areas.iter().map(|a| a.level.clone())) {
+        if !l.is_empty() && !levels.contains(&l) {
+            levels.push(l);
+        }
+    }
+    CoverRecord { schema: "cadaddy-covercheck/1".into(), project: project.into(), areas, phases: default_phases(&levels) }
+}
+
+/// The name walls, rooms and cover areas give a level: its code, else its name.
+pub fn level_key(l: &crate::truth::Level) -> String {
+    if l.code.trim().is_empty() { l.name.clone() } else { l.code.clone() }
 }
 
 // ---------------------------------------------------------------------------
@@ -568,6 +703,63 @@ pub fn resolve_wall_tap(
         }
     }
     best
+}
+
+/// How far from a wall's centreline a photo may be taken and still be filed on it, feet.
+pub const PHOTO_REACH_FT: f64 = 3.0;
+
+/// File `photo` by where it was taken: its `at_ft` and `level` pick the wall face (the side of
+/// the nearest wall within `max_distance_ft`, as a tap does), `along_ft` becomes its distance
+/// from the wall's `a` end, and `face` is set. A photo that states a face the position
+/// contradicts, has no wall near it, has numbers that aren't finite, or would pass an area's
+/// cap is refused with the reason. Returns the area id it was filed on.
+pub fn add_photo_at(
+    record: &mut CoverRecord,
+    plan_walls: &[crate::truth::PlanWall],
+    mut photo: InWallPhoto,
+    max_distance_ft: f64,
+) -> Result<String, String> {
+    if !(photo.at_ft.iter().all(|v| v.is_finite()) && photo.elevation_ft.is_finite()) {
+        return Err(format!("photo {}: its position and elevation must be finite numbers", clamp_text(&photo.id)));
+    }
+    let reach = if max_distance_ft.is_finite() && max_distance_ft > 0.0 { max_distance_ft } else { PHOTO_REACH_FT };
+    let Some((area_id, _)) = resolve_wall_tap(record, plan_walls, photo.at_ft, &photo.level, reach) else {
+        return Err(format!(
+            "photo {}: no wall face within {reach} ft of [{:.2}, {:.2}] on level {}",
+            clamp_text(&photo.id),
+            photo.at_ft[0],
+            photo.at_ft[1],
+            clamp_text(&photo.level)
+        ));
+    };
+    let (wall_id, face) = area_id.rsplit_once('/').unwrap_or((area_id.as_str(), ""));
+    let stated = photo.face.trim();
+    if !stated.is_empty() && !stated.eq_ignore_ascii_case(face) {
+        return Err(format!(
+            "photo {}: it says face {} but was taken on the face {face} side of {wall_id} ({area_id})",
+            clamp_text(&photo.id),
+            clamp_text(stated)
+        ));
+    }
+    if let Some(w) = plan_walls.iter().find(|w| w.id == wall_id && w.level == photo.level) {
+        let dx = w.b_ft[0] - w.a_ft[0];
+        let dy = w.b_ft[1] - w.a_ft[1];
+        let len = (dx * dx + dy * dy).sqrt();
+        if len > 1e-6 {
+            let along = ((photo.at_ft[0] - w.a_ft[0]) * dx + (photo.at_ft[1] - w.a_ft[1]) * dy) / len;
+            photo.along_ft = along.clamp(0.0, len);
+        }
+    }
+    photo.face = face.to_string();
+    let id = clamp_text(&photo.id);
+    let area = record.area_mut(&area_id).ok_or_else(|| format!("photo {id}: area {area_id} is not in the record"))?;
+    if area.photos.iter().any(|p| p.id == id) {
+        return Err(format!("photo {id} is already filed on {area_id}"));
+    }
+    if !area.add_photo(photo) {
+        return Err(format!("photo {id}: {area_id} already has {MAX_PHOTOS} photos"));
+    }
+    Ok(area_id)
 }
 
 /// Resolve a ceiling tap: given a plan position and level, find the ceiling area the user tapped.
