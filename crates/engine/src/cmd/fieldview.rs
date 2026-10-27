@@ -18,7 +18,7 @@ use cadaddy_doc::bimspec::entity_type_mark;
 use cadaddy_doc::{Drawing, Entity, EntityKind, Handle};
 use cadaddy_walk3d::field::{
     FIELD_SCHEMA, FieldElement, FieldIssue, FieldLevel, FieldNote, FieldNotes, FieldPackage, FieldRoom, FieldSpec, FieldType, IssueKind,
-    MAX_ELEMENTS, MAX_NOTES, merge_notes, trade_info, trade_of,
+    MAX_ELEMENTS, MAX_NOTES, NoteKind, merge_notes, trade_info, trade_of,
 };
 use cadaddy_walk3d::{BuildingSpec, MepKind};
 use serde_json::{Value, json};
@@ -145,6 +145,10 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
             n
         })
         .collect();
+    // The wall faces' pre-cover checklists and photos (Q5119), when the drawing has a record.
+    if let Some((rec, _)) = super::cover::stored(s, CMD_EXPORT)? {
+        pkg.cover = super::cover::field_cover(&rec, &super::cover::stored_plan(s));
+    }
     pkg.assign_rooms();
     let text = pkg.to_json().map_err(|e| bad(CMD_EXPORT, e))?;
     let mut out = json!({
@@ -156,6 +160,9 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         "issues": pkg.issues.len(),
         "notes": pkg.notes.len(),
     });
+    if !pkg.cover.is_empty() {
+        out["cover_faces"] = json!(pkg.cover.len());
+    }
     if pkg.elements.is_empty() {
         out["hint"] = json!("no model elements yet: run model.build first");
     }
@@ -460,7 +467,39 @@ fn run_sync(s: &mut Session, p: &Value) -> Result<Value> {
         let text = serde_json::to_vec(&file).map_err(|e| bad(CMD_SYNC, e.to_string()))?;
         s.doc_mut()?.embedded.insert(NOTES_FILE.into(), Arc::new(text));
     }
-    Ok(json!({ "added": m.added, "updated": m.updated, "unchanged": m.unchanged, "total": notes.len().min(MAX_NOTES) }))
+    let mut out = json!({ "added": m.added, "updated": m.updated, "unchanged": m.unchanged, "total": notes.len().min(MAX_NOTES) });
+    if let Some(cover) = file_photos(s, &incoming.notes)? {
+        out["cover"] = cover;
+    }
+    Ok(out)
+}
+
+/// Photo notes (Q5119) filed on the wall face where they were taken, in the drawing's cover
+/// record: `{filed: [{note, area}], refused: [{note, reason}]}`. `None` when no note is a photo.
+fn file_photos(s: &mut Session, incoming: &[FieldNote]) -> Result<Option<Value>> {
+    let photos: Vec<&FieldNote> =
+        incoming.iter().take(MAX_NOTES).filter(|n| !n.id.trim().is_empty() && (n.kind == NoteKind::Photo || !n.photo.trim().is_empty())).collect();
+    if photos.is_empty() {
+        return Ok(None);
+    }
+    let Some((mut rec, _)) = super::cover::stored(s, CMD_SYNC)? else {
+        return Ok(Some(
+            json!({ "filed": [], "refused": [], "hint": "the drawing has no cover record: run cover.init to file in-wall photos on wall faces" }),
+        ));
+    };
+    let plan = super::cover::stored_plan(s);
+    let before = serde_json::to_vec(&rec).unwrap_or_default();
+    let (mut filed, mut refused) = (Vec::new(), Vec::new());
+    for n in photos {
+        match super::cover::file_field_photo(&mut rec, &plan, n) {
+            Ok(area) => filed.push(json!({ "note": n.id, "area": area })),
+            Err(reason) => refused.push(json!({ "note": n.id, "reason": reason })),
+        }
+    }
+    if serde_json::to_vec(&rec).unwrap_or_default() != before {
+        super::cover::store(s, CMD_SYNC, &rec)?;
+    }
+    Ok(Some(json!({ "filed": filed, "refused": refused })))
 }
 
 fn run_notes(s: &mut Session, p: &Value) -> Result<Value> {
@@ -602,6 +641,73 @@ mod tests {
             .unwrap();
         let r = s.execute(CMD_SYNC, &json!({"path": path.to_string_lossy()})).unwrap();
         assert_eq!(r["added"], 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Q5119: a photo in a synced notes file is filed on the wall face where it was taken, and
+    /// the next package carries the face with its checklist and photo for a wall tap.
+    #[test]
+    fn photo_notes_are_filed_on_the_wall_face_and_shown_on_a_wall_tap() {
+        use cadaddy_mepfix::truth::{Level, PlanWall, Room, Truth};
+        let mut s = session();
+        // The drawing has notes but no cover record: photos are not filed, and it says why.
+        let photo = |id: &str, at: [f64; 3]| json!({"id": id, "kind": "photo", "level": "L2", "at": at, "text": "boxes before drywall", "photo": format!("{id}.jpg"), "author": "Foreman", "when": "2026-03-04T10:00"});
+        let r = s.execute(CMD_SYNC, &json!({"notes": {"schema": NOTES_SCHEMA, "notes": [photo("FN-ph1-0001", [12.0, 9.6, 15.0])]}})).unwrap();
+        assert!(r["cover"]["hint"].as_str().is_some_and(|h| h.contains("cover.init")), "{r}");
+        // A cover record from a print set: one wall across the room, east along y = 10.
+        let mut t = Truth::default();
+        t.building.levels.push(Level { name: "LEVEL 2".into(), code: "L2".into(), elevation_ft: 12.0 });
+        t.building.rooms.push(Room {
+            id: "R1".into(),
+            level: "L2".into(),
+            number: "214".into(),
+            min_ft: [0.0, 10.0],
+            max_ft: [40.0, 30.0],
+            ..Room::default()
+        });
+        t.plan_walls.push(PlanWall {
+            id: "W2-001".into(),
+            level: "L2".into(),
+            a_ft: [0.0, 10.0],
+            b_ft: [40.0, 10.0],
+            rooms: vec!["214".into()],
+            ..PlanWall::default()
+        });
+        let dir = std::env::temp_dir().join(format!("cadaddy-fieldcover-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("truth.json"), serde_json::to_vec(&t).unwrap()).unwrap();
+        s.execute("cover.init", &json!({"model": dir.to_string_lossy()})).unwrap();
+        // A notes file with one photo south of the wall (face B) and one far from any wall.
+        let path = dir.join("notes.json");
+        let file = json!({"schema": NOTES_SCHEMA, "project": "Project A", "notes": [photo("FN-ph1-0002", [12.0, 9.6, 15.0]), photo("FN-ph1-0003", [20.0, 25.0, 15.0])]});
+        std::fs::write(&path, file.to_string()).unwrap();
+        let r = s.execute(CMD_SYNC, &json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(r["added"], 2);
+        assert_eq!(r["cover"]["filed"], json!([{"note": "FN-ph1-0002", "area": "W2-001/B"}]), "{r}");
+        assert_eq!(r["cover"]["refused"][0]["note"], "FN-ph1-0003");
+        let w = s.execute("cover.wall", &json!({"at": [12.0, 9.6], "level": "L2"})).unwrap();
+        assert_eq!(w["tapped"], "W2-001/B");
+        let p = &w["photos"][0];
+        assert_eq!(
+            (p["id"].as_str(), p["uri"].as_str(), p["caption"].as_str()),
+            (Some("FN-ph1-0002"), Some("FN-ph1-0002.jpg"), Some("boxes before drywall"))
+        );
+        assert!((p["elevation_ft"].as_f64().unwrap() - 3.0).abs() < 1e-9 && (p["along_ft"].as_f64().unwrap() - 12.0).abs() < 1e-9, "{p}");
+        // The room is north of the wall: face A.
+        assert_eq!(w["faces"][0]["rooms"], json!(["214"]));
+        // Synced again: nothing added twice.
+        let r = s.execute(CMD_SYNC, &json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(r["cover"]["filed"][0]["area"], "W2-001/B");
+        assert_eq!(s.execute("cover.status", &json!({})).unwrap()["levels"][0]["photos"], 1);
+        // The field package carries both faces; a tap south of the wall shows face B's photo
+        // and checklist.
+        let r = s.execute(CMD_EXPORT, &json!({"inline": true})).unwrap();
+        assert_eq!(r["cover_faces"], 2);
+        let pkg: FieldPackage = serde_json::from_value(r["package"].clone()).unwrap();
+        let i = pkg.cover_at("L2", [30.0, 9.8], 1.0).unwrap();
+        let face = &pkg.cover[i];
+        assert_eq!((face.area.as_str(), face.photos.len(), face.checklist.len()), ("W2-001/B", 1, 7));
+        assert_eq!(pkg.cover[pkg.cover_at("L2", [30.0, 10.2], 1.0).unwrap()].area, "W2-001/A");
         std::fs::remove_dir_all(&dir).ok();
     }
 

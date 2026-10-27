@@ -8,8 +8,9 @@
 use cadaddy_engine::Session;
 use cadaddy_ui_egui::fieldview::{FieldViewer, Mode, Tool};
 use cadaddy_ui_egui::theme;
-use cadaddy_walk3d::field::{FieldNotes, NoteKind};
+use cadaddy_walk3d::field::{FieldCheck, FieldCover, FieldNotes, FieldPackage, FieldPhoto, NoteKind};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 fn layer(s: &mut Session, name: &str) {
@@ -296,4 +297,58 @@ fn tablet_and_phone_views_render() {
     let mut h = harness(FieldViewer::new("tab1"), egui::vec2(390.0, 844.0));
     shot(&mut h, "field-phone-empty.png");
     h.state_mut().open(b"{\"schema\":\"cadaddy-field/99\"}").unwrap_err();
+}
+
+/// Q5119: tapping a wall shows the face on the tapped side, with its pre-cover checklist and the
+/// photos taken behind it (the package carries them from the drawing's cover record).
+#[test]
+fn a_wall_tap_lists_the_tapped_faces_checklist_and_photos() {
+    let mut s = drawing();
+    let mut pkg: FieldPackage = serde_json::from_slice(&package(&mut s)).unwrap();
+    // The wall between room 214 and the corridor, west to east along y = 30'.
+    let face = |f: &str, rooms: &[&str], photos: Vec<FieldPhoto>| FieldCover {
+        area: format!("W2-001/{f}"),
+        wall: "W2-001".into(),
+        face: f.into(),
+        level: "Level 2".into(),
+        a: [0.0, 30.0],
+        b: [26.0, 30.0],
+        rooms: rooms.iter().map(|r| r.to_string()).collect(),
+        fire_rating: "1 HR".into(),
+        ready: false,
+        checklist: vec![
+            FieldCheck { id: "c1".into(), category: "boxes".into(), description: "Boxes installed and secured".into(), done: true },
+            FieldCheck { id: "c2".into(), category: "firestop".into(), description: "Firestop at rated penetrations".into(), done: false },
+        ],
+        photos,
+    };
+    let photo = FieldPhoto {
+        id: "FN-ph1-0002".into(),
+        uri: "IMG_0002.jpg".into(),
+        caption: "boxes before drywall".into(),
+        elevation_ft: 3.0,
+        along_ft: 12.0,
+        ..FieldPhoto::default()
+    };
+    pkg.cover = vec![face("A", &[], Vec::new()), face("B", &["214"], vec![photo])];
+    let mut v = FieldViewer::new("tab1");
+    v.open(pkg.to_json().unwrap().as_bytes()).unwrap();
+    let room = v.pkg.as_ref().unwrap().search_rooms("214").first().unwrap().0;
+    v.select_room(room);
+    // South of the wall (inside 214): face B.
+    v.tap_plan([12.0, 29.7], 0.5);
+    let c = v.cover.and_then(|i| v.pkg.as_ref().unwrap().cover.get(i)).unwrap();
+    assert_eq!((c.area.as_str(), c.photos.len()), ("W2-001/B", 1));
+    // North: face A, no photos. Far from the wall: no face.
+    v.tap_plan([12.0, 30.3], 0.5);
+    assert_eq!(v.cover.map(|i| v.pkg.as_ref().unwrap().cover[i].area.clone()).as_deref(), Some("W2-001/A"));
+    v.tap_plan([12.0, 15.0], 0.5);
+    assert!(v.cover.is_none());
+    v.tap_plan([12.0, 29.7], 0.5);
+    // The details panel lists the checklist and the photo.
+    let mut h = harness(v, egui::vec2(1180.0, 820.0));
+    h.get_by_label("Firestop at rated penetrations");
+    h.get_by_label("FN-ph1-0002: boxes before drywall (IMG_0002.jpg, 3'-0\")");
+    h.get_by_label("Not ready to cover");
+    shot(&mut h, "field-tablet-wall.png");
 }
