@@ -3121,7 +3121,7 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         job.add_finding(
             StageName::MepRead,
             &format!("{} device(s) on the electrical plans have no circuit printed beside them", cond.no_circuit),
-            "lighting and power devices with no circuit are routed a few neighbours to an unnumbered circuit (estimated, marked circuit_not_printed); the others get no conduit",
+            "no conduit or wire is estimated for a device whose circuit is not known",
             1,
             vec!["Check the circuit numbers beside the devices".into()],
             None,
