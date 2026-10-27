@@ -7,6 +7,8 @@
 use egui::RichText;
 use serde_json::{Value, json};
 
+use cadaddy_walk3d::{BuildingSpec, PartPath};
+
 use crate::CadApp;
 use crate::docking::Panel;
 
@@ -44,6 +46,8 @@ struct Part {
     approved: bool,
     /// Why `bspec.draft` guessed it (shown until approved).
     guess: Option<String>,
+    /// Where it is in the spec, from [`BuildingSpec::describe`]; none: no Edit or Remove.
+    path: Option<PartPath>,
 }
 
 /// The issues last checked (`model.issues`), for the revision they were checked at.
@@ -72,69 +76,46 @@ fn view(app: &mut CadApp, ui: &egui::Ui) -> View {
         return v;
     }
     let v = match app.run("bspec.get", json!({})) {
-        Ok(r) => View {
-            key: k,
-            stored: r["stored"].as_bool().unwrap_or(false),
-            built: r["built"].as_bool().unwrap_or(false),
-            parts: r["parts"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|p| Part {
-                    section: p["section"].as_str().unwrap_or_default().to_string(),
-                    key: p["key"].as_str().unwrap_or_default().to_string(),
-                    text: p["text"].as_str().unwrap_or_default().to_string(),
-                    approved: p["approved"].as_bool().unwrap_or(false),
-                    guess: p["guess"].as_str().map(str::to_string),
-                })
-                .collect(),
-            spec: r["spec"].clone(),
-            error: None,
-        },
+        Ok(r) => {
+            // The same spec described again here, for where each part is.
+            let paths: Vec<_> = serde_json::from_value::<BuildingSpec>(r["spec"].clone()).map(|s| s.describe()).unwrap_or_default();
+            View {
+                key: k,
+                stored: r["stored"].as_bool().unwrap_or(false),
+                built: r["built"].as_bool().unwrap_or(false),
+                parts: r["parts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|p| Part {
+                        section: p["section"].as_str().unwrap_or_default().to_string(),
+                        key: p["key"].as_str().unwrap_or_default().to_string(),
+                        text: p["text"].as_str().unwrap_or_default().to_string(),
+                        approved: p["approved"].as_bool().unwrap_or(false),
+                        guess: p["guess"].as_str().map(str::to_string),
+                        path: None,
+                    })
+                    .enumerate()
+                    .map(|(i, mut p)| {
+                        p.path = paths.get(i).filter(|d| d.key == p.key).and_then(|d| d.path.clone());
+                        p
+                    })
+                    .collect(),
+                spec: r["spec"].clone(),
+                error: None,
+            }
+        }
         Err(e) => View { key: k, error: Some(e), ..View::default() },
     };
     ui.data_mut(|d| d.insert_temp(id, v.clone()));
     v
 }
 
-/// A part's JSON in the spec: the list item named by its key, or the whole object.
-fn item(spec: &Value, key: &str) -> Value {
-    match key.split_once('/') {
-        Some((section, name)) => {
-            let field = if section == "layers" { "layer" } else { "name" };
-            spec[section]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|x| x[field].as_str().is_some_and(|n| n.eq_ignore_ascii_case(name)))
-                .cloned()
-                .unwrap_or(Value::Null)
-        }
-        None => spec[key].clone(),
-    }
-}
-
-/// The `bspec.set` patch that puts an edited part back (or removes it: `edited` null).
-fn patch(key: &str, old: &Value, edited: Option<Value>) -> Value {
-    match key.split_once('/') {
-        Some((section, name)) => {
-            let field = if section == "layers" { "layer" } else { "name" };
-            let mut items = Vec::new();
-            let renamed = edited.as_ref().and_then(|e| e[field].as_str()).is_some_and(|n| !n.eq_ignore_ascii_case(name));
-            if edited.is_none() || renamed {
-                items.push(json!({ field: old[field].clone(), "remove": true }));
-            }
-            items.extend(edited);
-            json!({ section: items })
-        }
-        // Materials, site and openings are replaced whole (`null` removes the site).
-        None => json!({ key: edited.unwrap_or(Value::Null) }),
-    }
-}
-
 /// What a click asks for, done once the palette is drawn.
 enum Act {
     Set(Value),
+    /// An Edit or Remove: says so when it changes nothing.
+    Change(Value),
     Draft,
     Build,
     Walk,
@@ -157,7 +138,11 @@ fn section_title(s: &str) -> &'static str {
         "mep" => "MEP Systems",
         "columns" => "Columns",
         "schedule" => "Schedules",
-        _ => "Openings",
+        "openings" => "Openings",
+        "walls" => "Walls",
+        "ceiling_types" => "Ceiling Types",
+        "soffit_types" => "Soffit Types",
+        _ => "Other",
     }
 }
 
@@ -242,14 +227,17 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
                 ui.add(egui::Label::new(RichText::new(&p.text).color(if p.approved { t.text } else { t.text_dim })).wrap());
             });
+            let Some(path) = &p.path else { continue };
             ui.horizontal(|ui| {
                 ui.add_space(36.0);
                 if ui.small_button(crate::tl!("Edit")).on_hover_text(&p.key).clicked() {
-                    let text = serde_json::to_string_pretty(&item(&v.spec, &p.key)).unwrap_or_default();
+                    let text = serde_json::to_string_pretty(&path.get(&v.spec)).unwrap_or_default();
                     editing = Some(Editing { key: p.key.clone(), text, error: None });
                 }
-                if p.section != "openings" && ui.small_button(crate::tl!("Remove")).on_hover_text(&p.key).clicked() {
-                    act = Some(Act::Set(patch(&p.key, &item(&v.spec, &p.key), None)));
+                if let Some(remove) = path.patch(&v.spec, None)
+                    && ui.small_button(crate::tl!("Remove")).on_hover_text(&p.key).clicked()
+                {
+                    act = Some(Act::Change(remove));
                 }
             });
             if let Some(ed) = editing.as_mut().filter(|e| e.key == p.key) {
@@ -268,7 +256,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                     ui.add_space(36.0);
                     if ui.button(crate::tl!("Apply")).clicked() {
                         match serde_json::from_str::<Value>(&ed.text) {
-                            Ok(new) => act = Some(Act::Set(patch(&p.key, &item(&v.spec, &p.key), Some(new)))),
+                            Ok(new) => act = path.patch(&v.spec, Some(new)).map(Act::Change),
                             Err(e) => ed.error = Some(e.to_string()),
                         }
                     }
@@ -317,6 +305,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         None => d.remove::<Editing>(edit_id),
     });
+    let changing = matches!(act, Some(Act::Change(_)));
     let check = |app: &mut CadApp, ui: &egui::Ui| match app.run("model.issues", json!({ "limit": 1000 })) {
         Ok(r) => {
             let items = r["issues"].as_array().cloned().unwrap_or_default();
@@ -325,8 +314,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         Err(e) => app.set_status(e),
     };
     match act {
-        Some(Act::Set(p)) => match app.run("bspec.set", json!({ "spec": p })) {
-            Ok(_) => ui.data_mut(|d| d.remove::<Editing>(edit_id)),
+        Some(Act::Set(p) | Act::Change(p)) => match app.run("bspec.set", json!({ "spec": p })) {
+            Ok(r) => {
+                ui.data_mut(|d| d.remove::<Editing>(edit_id));
+                if changing && r["spec"] == v.spec {
+                    app.set_status(crate::tl!("Nothing changed: the building spec is the same as before."));
+                }
+            }
             Err(e) => {
                 if let Some(mut ed) = editing {
                     ed.error = Some(e.clone());
