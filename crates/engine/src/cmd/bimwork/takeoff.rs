@@ -488,7 +488,8 @@ fn cost_rows(cmd: &str, p: &Value) -> Result<Vec<Cost>> {
             crate::cmd::estimate::csv_rows(&String::from_utf8_lossy(&bytes))
         }
     } else {
-        return Err(bad(cmd, "a cost table is required: `cost_table` (a .csv or .xlsx file with item, unit, material, labor_hrs), `csv` or `rows`"));
+        // Q6034: no user cost table — the starter cost book is the fallback.
+        return Ok(vec![]);
     };
     let pick = |r: &BTreeMap<String, String>, keys: &[&str]| keys.iter().find_map(|k| r.get(*k)).cloned();
     let out: Vec<Cost> = rows

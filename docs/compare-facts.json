@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1157,
-    "count": 1157,
+    "callableAsJson": 1159,
+    "count": 1159,
     "ids": [
       "-attedit",
       "-block",
@@ -949,6 +949,7 @@
       "share",
       "sheet.facts",
       "sheetset",
+      "sheetset.from_model",
       "showurls",
       "site.read",
       "site.takeoff",
@@ -1018,6 +1019,7 @@
       "tablestyle.cellstyle",
       "tags.accept",
       "tags.list",
+      "tags.read",
       "tags.set",
       "takeoff",
       "takeoff.layers",
@@ -1161,7 +1163,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 512,
+    "inMenus": 513,
     "typed": 551
   },
   "features": {

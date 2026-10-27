@@ -428,6 +428,9 @@ struct Builder<'a> {
     shared_budget: Option<&'a std::sync::atomic::AtomicUsize>,
     /// Transparency (percent) of the entity being drawn.
     transparency: u8,
+    /// Drawing paper space itself (a layout's title block), not model space plotted or seen
+    /// through a viewport.
+    paper: bool,
 }
 
 /// Upper bound on the block contents drawn per display list (each block reference, MINSERT copy
@@ -674,12 +677,13 @@ fn top_ctx<'a>(d: &'a Drawing, xf: Mat3, top: Handle, frozen: &'a [String], vp_c
 fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> DisplayList {
     let opts = &with_point_view(d, space, opts);
     let styler = style_table(d, space, opts, plotting).map(|t| plotstyle::Styler::new(d, t));
-    let mut b = Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None, shared_budget: None, transparency: 0 };
+    let paper = matches!(space, Space::Paper(_));
+    let mut b =
+        Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None, shared_budget: None, transparency: 0, paper };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
     }
     if let Some(store) = d.space(space) {
-        let paper = matches!(space, Space::Paper(_));
         #[cfg(not(target_arch = "wasm32"))]
         if !paper && !plotting && b.styles.is_none() && store.len() >= 2 * PARALLEL_CHUNK {
             build_parallel(&mut b, d, store);
@@ -739,8 +743,16 @@ fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadaddy_doc::EntityStore
     let parts: Vec<DisplayList> = ents
         .par_chunks(PARALLEL_CHUNK)
         .map(|chunk| {
-            let mut part =
-                Builder { list: DisplayList::default(), opts, plotting, styles: None, named: None, shared_budget: Some(&budget), transparency: 0 };
+            let mut part = Builder {
+                list: DisplayList::default(),
+                opts,
+                plotting,
+                styles: None,
+                named: None,
+                shared_budget: Some(&budget),
+                transparency: 0,
+                paper: false,
+            };
             for e in chunk {
                 top_entity(&mut part, d, e);
             }
@@ -870,8 +882,16 @@ pub fn viewport_content(d: &Drawing, space: &Space, handle: Handle, area: Bounds
     }
     let opts = &with_point_view(d, space, opts);
     let styler = style_table(d, space, opts, false).map(|t| plotstyle::Styler::new(d, t));
-    let mut b =
-        Builder { list: DisplayList::default(), opts, plotting: false, styles: styler.as_ref(), named: None, shared_budget: None, transparency: 0 };
+    let mut b = Builder {
+        list: DisplayList::default(),
+        opts,
+        plotting: false,
+        styles: styler.as_ref(),
+        named: None,
+        shared_budget: None,
+        transparency: 0,
+        paper: false,
+    };
     contents(&mut b, d, vp, area, &Clip::Rect(area));
     b.list
 }
@@ -940,6 +960,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
         named: None,
         shared_budget: None,
         transparency: 0,
+        paper: false,
     };
     #[cfg(not(target_arch = "wasm32"))]
     let parallel = !b.plotting && b.styles.is_none() && d.model.len() >= 2 * PARALLEL_CHUNK;
@@ -964,6 +985,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
                         named: None,
                         shared_budget: Some(&budget),
                         transparency: 0,
+                        paper: false,
                     };
                     let c = ctx();
                     for me in chunk.iter().filter(|me| seen(me)) {
@@ -1121,7 +1143,16 @@ pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents:
     } else {
         opts
     };
-    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None, shared_budget: None, transparency: 0 };
+    let mut b = Builder {
+        list: DisplayList::default(),
+        opts,
+        plotting: false,
+        styles: None,
+        named: None,
+        shared_budget: None,
+        transparency: 0,
+        paper: false,
+    };
     for e in ents {
         top_entity(&mut b, d, e);
     }
@@ -2030,7 +2061,12 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadaddy_doc::Dimension
     }
     if b.opts.text {
         let sh = cadaddy_fonts::Shaped { strokes: g.text.clone(), glyphs: g.text_glyphs.clone(), width: 0.0, text: g.text_runs.clone() };
+        let at = b.list.prims.len();
         b.shaped(ctx, txt_rgb, lw, &sh);
+        // A plot's stroked dimension text is searchable too.
+        if !sh.strokes.is_empty() {
+            b.words(ctx, at, &g.value, g.text_angle, g.text_height);
+        }
     }
 }
 
@@ -2158,6 +2194,7 @@ fn underlay(b: &mut Builder, ctx: &Ctx, u: &cadaddy_doc::Underlay, rgb: Ink, lw:
         named: None,
         shared_budget: b.shared_budget,
         transparency: 0,
+        paper: false,
     };
     part.list.expanded = b.list.expanded;
     for pe in page.model.iter() {
@@ -2317,6 +2354,7 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
                     named: b.named,
                     shared_budget: b.shared_budget,
                     transparency: b.transparency,
+                    paper: b.paper,
                 };
                 // The same expansion budget as the rest of the list.
                 part.list.expanded = b.list.expanded;
@@ -2382,7 +2420,16 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
                 match (&multiline, &sh) {
                     (Some(m), _) => mtext(b, ctx, m, ink, lw),
                     (None, Some(sh)) if qtext(ctx.d) => qtext_box(b, ctx, ink, lw, &[sh], a.text.rotation),
-                    (None, Some(sh)) => b.shaped(ctx, ink, lw, sh),
+                    (None, Some(sh)) => {
+                        let at = b.list.prims.len();
+                        b.shaped(ctx, ink, lw, sh);
+                        // A layout's stroked attribute (its title block's sheet number) is
+                        // searchable. Not model space's: a device's mark read back as text would
+                        // change what an imported print finds.
+                        if b.paper && !sh.strokes.is_empty() {
+                            b.words(ctx, at, &a.text.value, a.text.rotation, a.text.height);
+                        }
+                    }
                     (None, None) => {}
                 }
             }

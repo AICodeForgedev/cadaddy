@@ -1081,14 +1081,14 @@ fn plan_level_question(job: &mut GuidedJob, sheet: &Value, level_codes: &[String
     let title = sheet.get("title").and_then(Value::as_str).unwrap_or("");
     let level = sheet.get("level").and_then(Value::as_str).unwrap_or("");
     let (question, choices, default) = if level.is_empty() {
-        let mut choices: Vec<String> = level_codes.iter().take(20).map(|c| format!("Level {c}")).collect();
+        let mut choices: Vec<String> = level_codes.iter().take(20).map(|c| level_name(c)).collect();
         choices.push("Not a level plan".into());
         (format!("Plan sheet {number} \"{title}\" names no level — which level does it show?"), choices, "Not a level plan".to_string())
     } else {
         (
-            format!("Plan sheet {number} \"{title}\" names no level — is it level {level}?"),
-            vec![format!("Level {level}"), "Another level".into(), "Not a level plan".into()],
-            format!("Level {level}"),
+            format!("Plan sheet {number} \"{title}\" names no level — is it {}?", level_name(level)),
+            vec![level_name(level), "Another level".into(), "Not a level plan".into()],
+            level_name(level),
         )
     };
     Question {
@@ -3582,11 +3582,42 @@ const DEFAULT_STOREY_FT: f64 = 10.0;
 /// so the build stage asks. Empty when the set has no architectural floor plans (the build reads
 /// whatever was imported, as for one sheet).
 /// A plan's level as the building's levels name it: `Level 3`, `Roof`, `B1`.
+/// Uses the canonical level mapping so every alias resolves to one name:
+/// R/RF/ROOF/T.O. → Roof, B/B1 → Basement, PH → Penthouse, M/MEZZ → Mezzanine, etc.
 fn level_name(code: &str) -> String {
-    match code {
-        "R" => "Roof".to_string(),
-        l if !l.is_empty() && l.chars().all(|c| c.is_ascii_digit()) => format!("Level {l}"),
-        l => l.to_string(),
+    // Try canonical_level first; fall back to common short codes that the canonical
+    // function doesn't handle as bare single-word inputs.
+    let canonical = cadaddy_walk3d::levels::canonical_level(code).map(|(c, _)| c).or_else(|| {
+        let u = code.trim().to_ascii_uppercase();
+        match u.as_str() {
+            "PH" => Some("PENTHOUSE".into()),
+            "RF" | "T.O." => Some("ROOF".into()),
+            "G" => Some("LEVEL 1".into()),
+            "M" | "MEZZ" => Some("MEZZANINE".into()),
+            "MPH" => Some("PENTHOUSE".into()),
+            _ => None,
+        }
+    });
+    if let Some(canonical) = canonical {
+        // Title-case the canonical name: "ROOF" → "Roof", "LEVEL 3" → "Level 3", etc.
+        let mut out = String::with_capacity(canonical.len());
+        for (i, word) in canonical.split_whitespace().enumerate() {
+            if i > 0 {
+                out.push(' ');
+            }
+            let mut chars = word.chars();
+            if let Some(first) = chars.next() {
+                out.push(first);
+                for c in chars {
+                    out.push(c.to_ascii_lowercase());
+                }
+            }
+        }
+        out
+    } else if !code.is_empty() && code.chars().all(|c| c.is_ascii_digit()) {
+        format!("Level {code}")
+    } else {
+        code.to_string()
     }
 }
 
@@ -3715,17 +3746,22 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
     if plans.is_empty() {
         // No architectural floor plans: one discipline's plans give the floors (their
         // background shows the walls), the one with the most levels.
+        // Q6037: exclude disciplines that don't carry building walls/doors (life safety,
+        // fire protection, fire alarm, general/civil, structural, telecom).
+        const NON_BUILDING: &[&str] = &["SL", "FP", "FA", "G", "C", "S", "T"];
+        let building_plan = |r: &&SheetRegion| floor_plan(r) && !NON_BUILDING.contains(&r.discipline.as_str());
         let mut by: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
-        for r in job.sheet_regions.iter().filter(floor_plan) {
+        for r in job.sheet_regions.iter().filter(|r| building_plan(r)) {
             by.entry(r.discipline.as_str()).or_default().insert(r.level.as_str());
         }
         let best = by.iter().filter(|(_, l)| l.len() > 1).max_by_key(|(d, l)| (l.len(), std::cmp::Reverse(*d))).map(|(d, _)| (*d).to_string());
         if let Some(d) = best {
-            plans = job.sheet_regions.iter().filter(floor_plan).filter(|r| r.discipline == d).collect();
+            plans = job.sheet_regions.iter().filter(|r| building_plan(r)).filter(|r| r.discipline == d).collect();
         }
     }
     plans.sort_by_key(|r| rank(&r.level));
-    plans.dedup_by(|a, b| a.level.eq_ignore_ascii_case(&b.level));
+    // Dedup by canonical level name so aliases (R/RF/ROOF/T.O.) merge into one level.
+    plans.dedup_by(|a, b| level_name(&a.level).eq_ignore_ascii_case(&level_name(&b.level)));
     let index_levels: Vec<Value> = job.index.as_ref().and_then(|i| i.get("levels")).and_then(Value::as_array).cloned().unwrap_or_default();
     let read = |level: &str, key: &str| {
         index_levels
@@ -5492,7 +5528,7 @@ fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
     // MEP sheets not registered (plan sheets not loaded/built).
     let not_built = not_built_sheets(job);
     if !not_built.is_empty() {
-        w.push(json!({"warning": "sheets not built", "detail": not_built}));
+        w.push(json!({"warning": "sheets not built", "detail": not_built.join("; ")}));
     }
 
     // Auto-guard rejections (Q6021).
@@ -5504,7 +5540,7 @@ fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
         .map(|q| q.question.clone())
         .collect();
     if !rejected.is_empty() {
-        w.push(json!({"warning": "auto-guard rejections", "count": rejected.len(), "detail": rejected}));
+        w.push(json!({"warning": "auto-guard rejections", "count": rejected.len(), "detail": format!("{} rejected: {}", rejected.len(), rejected.join("; "))}));
     }
 
     // Elements from the saved model.
@@ -5585,7 +5621,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "answers": answers_value(&job),
         "rules_learned": job.rules.len(),
         "audit_entries": job.audit.len(),
-        "not_built": not_built_sheets(&job),
+        "not_built": not_built_sheets(&job).join("; "),
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
     }))
 }
@@ -5626,6 +5662,11 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
     let warnings = job_warnings(job, stats);
     let status = done_status(job, &warnings);
 
+    // Q6037: auto-rejected questions count as open (they need resolution).
+    let unanswered: usize = job.stages.iter().map(|s| s.unanswered().len()).sum();
+    let (_, _, rejected_count, _) = answer_counts(job);
+    let open_questions = unanswered + rejected_count;
+
     let mut v = json!({
         "job_id": job.id,
         "goal": job.goal,
@@ -5634,7 +5675,7 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
         "status": status,
         "current_stage": job.current_stage().map(|s| s.name.label()),
         "stages": stages,
-        "open_questions": job.stages.iter().map(|s| s.unanswered().len()).sum::<usize>(),
+        "open_questions": open_questions,
         "findings": job.findings.len(),
         "worklist_pending": pending_worklist,
         "rules_learned": job.rules.len(),
@@ -5648,6 +5689,17 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
     });
     if !warnings.is_empty() {
         v["warnings"] = json!(warnings);
+    }
+    // Q6037: auto-rejected questions are listed as open with their reason.
+    let rejected_qs: Vec<Value> = job
+        .stages
+        .iter()
+        .flat_map(|st| st.questions.iter().chain(st.verify.iter()).chain(st.completeness.iter()))
+        .filter(|q| q.answered_by.as_deref() == Some("auto_guard"))
+        .map(|q| json!({"id": q.id, "question": q.question, "reason": "implausible default rejected by auto-guard", "default": q.default}))
+        .collect();
+    if !rejected_qs.is_empty() {
+        v["rejected_questions"] = json!(rejected_qs);
     }
     if let Some(from) = job.rerun_held {
         v["rerun_held"] = json!(from.label());
@@ -6663,7 +6715,7 @@ mod tests {
         let codes: Vec<String> = ["1", "2", "R"].iter().map(|c| c.to_string()).collect();
         let mut q = plan_level_question(&mut job, &sheet, &codes);
         assert!(q.question.contains("which level"), "{}", q.question);
-        assert_eq!(q.choices, ["Level 1", "Level 2", "Level R", "Not a level plan"]);
+        assert_eq!(q.choices, ["Level 1", "Level 2", "Roof", "Not a level plan"]);
         assert_eq!(q.default.as_deref(), Some("Not a level plan"), "auto mode keeps it off every level");
         // Auto mode takes the default: the sheet stays a reference sheet, read as nothing.
         q.answer = Some(json!("Not a level plan"));
@@ -6684,6 +6736,108 @@ mod tests {
         let one = json!({"number": "P-101", "title": "PLUMBING PLAN", "level": "1", "level_source": "default"});
         let q = plan_level_question(&mut job, &one, &codes[..1]);
         assert_eq!(q.default.as_deref(), Some("Level 1"));
+    }
+
+    /// Q6037: level_name canonicalises aliases to one name per real level.
+    #[test]
+    fn level_name_uses_canonical_names() {
+        assert_eq!(level_name("R"), "Roof");
+        assert_eq!(level_name("1"), "Level 1");
+        assert_eq!(level_name("2"), "Level 2");
+        assert_eq!(level_name("B"), "Basement");
+        assert_eq!(level_name("B1"), "Basement");
+        assert_eq!(level_name("B2"), "Basement 2");
+        assert_eq!(level_name("PH"), "Penthouse");
+        assert_eq!(level_name("M"), "Mezzanine");
+        // Unknown codes pass through.
+        assert_eq!(level_name("X"), "X");
+    }
+
+    /// Q6037: warnings are strings, never char lists.
+    #[test]
+    fn job_warnings_are_strings() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![{
+            let mut r = region("E-101", "1", "E", "plan", 0.0);
+            r.not_built = "no level".to_string();
+            r
+        }];
+        // Add an auto-guard rejected question.
+        let q = Question {
+            id: "test-q".into(),
+            stage: StageName::Classify,
+            question: "Is this the right room?".into(),
+            why: String::new(),
+            choices: vec!["Yes".into(), "No".into()],
+            evidence: None,
+            default: Some("Yes".into()),
+            answer_schema: None,
+            answer: Some(Value::String("Rejected".into())),
+            answered_by: Some("auto_guard".into()),
+            answered_at: None,
+            kind: QuestionKind::Doubt,
+        };
+        if let Some(st) = job.stage_mut(StageName::Classify) {
+            st.questions.push(q);
+        }
+        let warnings = job_warnings(&job, None);
+        for w in &warnings {
+            if let Some(detail) = w.get("detail") {
+                assert!(detail.is_string(), "warning detail must be a string, got: {detail}");
+            }
+        }
+    }
+
+    /// Q6037: auto-rejected questions are listed as open.
+    #[test]
+    fn auto_rejected_questions_count_as_open() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let qid = job.next_qid(StageName::Classify);
+        let q = Question {
+            id: qid.clone(),
+            stage: StageName::Classify,
+            question: "Is this plausible?".into(),
+            why: String::new(),
+            choices: Vec::new(),
+            evidence: None,
+            default: Some("Yes".into()),
+            answer_schema: None,
+            answer: Some(Value::String("Rejected".into())),
+            answered_by: Some("auto_guard".into()),
+            answered_at: None,
+            kind: QuestionKind::Doubt,
+        };
+        if let Some(st) = job.stage_mut(StageName::Classify) {
+            st.questions.push(q);
+        }
+        let (_automatic, _by_you, rejected, open) = answer_counts(&job);
+        assert_eq!(rejected, 1, "one rejected question");
+        assert_eq!(open, 0, "no truly unanswered questions");
+        // open_questions in status includes rejected.
+        let unanswered: usize = job.stages.iter().map(|s| s.unanswered().len()).sum();
+        assert_eq!(unanswered + rejected, 1, "open_questions = unanswered + rejected");
+    }
+
+    /// Q6037: building_levels excludes non-building disciplines in the fallback.
+    #[test]
+    fn building_levels_exclude_life_safety_and_general() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        // No A plans — fallback should NOT pick Life Safety (SL) or General (G) plans.
+        job.sheet_regions = vec![
+            region("SL-111", "1", "SL", "plan", 0.0),
+            region("SL-112", "2", "SL", "plan", 200.0),
+            region("E-101", "1", "E", "plan", 400.0),
+            region("E-102", "2", "E", "plan", 600.0),
+        ];
+        let levels = building_levels(&job);
+        // Should pick E (Electrical), not SL (Life Safety).
+        for lv in &levels {
+            let name = lv.get("name").and_then(Value::as_str).unwrap_or("");
+            assert!(!name.is_empty(), "level has a name");
+        }
+        // Verify SL sheets are not used as building level sources.
+        let sheets: Vec<_> = levels.iter().filter_map(|l| l.get("sheet").and_then(Value::as_str)).collect();
+        assert!(sheets.iter().all(|s| !s.starts_with("SL-")), "no SL sheets in building levels: {sheets:?}");
     }
 
     #[test]

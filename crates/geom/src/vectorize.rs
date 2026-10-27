@@ -23,6 +23,8 @@ pub const MAX_PIXELS: usize = 48_000_000;
 const MAX_SHAPES: usize = 200_000;
 /// Most thinning passes (each removes a layer of border pixels).
 const MAX_THIN_PASSES: usize = 2_000;
+/// Most stroke checks made while pairing hatched walls (bounds a dense sheet).
+const MAX_PAIR_WORK: usize = 50_000_000;
 
 /// How to trace.
 #[derive(Clone, Debug)]
@@ -38,6 +40,9 @@ pub struct Options {
     pub walls: bool,
     /// Strokes at least this wide (pixels) are walls; `None`: three times the typical stroke.
     pub wall_min_px: Option<f64>,
+    /// Two parallel thin lines a wall's thickness apart with nothing between them pair as a wall
+    /// too (a hatched strip always does, when `walls`).
+    pub wall_pairs: bool,
     /// Small blobs in rows become text boxes.
     pub text: bool,
     /// Text is at most this tall (pixels); `None`: 2.5% of the image's shorter side, or up to 6%
@@ -49,7 +54,17 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { threshold: None, tolerance: 1.5, ortho_deg: 3.0, walls: true, wall_min_px: None, text: true, text_max_px: None, min_length: 4.0 }
+        Options {
+            threshold: None,
+            tolerance: 1.5,
+            ortho_deg: 3.0,
+            walls: true,
+            wall_min_px: None,
+            wall_pairs: false,
+            text: true,
+            text_max_px: None,
+            min_length: 4.0,
+        }
     }
 }
 
@@ -594,6 +609,491 @@ fn merge_arcs(shapes: &mut Vec<Shape>, tol: f64) {
     }
 }
 
+/// A traced segment: its ends and stroke width (image units).
+type Seg = ([f64; 2], [f64; 2], f64);
+
+/// Thin pieces along one face line: the direction group `k`, the offset `c` along its normal
+/// (length-weighted), their total length, and their extents along it.
+struct FaceLine {
+    k: usize,
+    c: f64,
+    len: f64,
+    spans: Vec<(f64, f64)>,
+}
+
+/// Hatched walls as wall pairs. A wall drawn the usual way is two parallel face lines a wall's
+/// thickness apart with diagonal hatch strokes between them; thinning leaves the faces broken at
+/// every stroke. Collinear face pieces are gathered into face lines, parallel lines at a wall's spacing
+/// (overlapping along at least half the shorter one) are paired when the strip between them is
+/// crossed by diagonal strokes spread along it (or always, with `pairs`), and each pair becomes one
+/// `Shape::Wall` on the strip's centre line, as thick as the gap. The faces, the hatch strokes and
+/// the junction pieces inside the strip are taken out of `segs` (and arcs and circles lying
+/// wholly inside it, bent junction pieces, out of `curves`).
+fn hatched_walls(segs: &mut Vec<Seg>, curves: &mut Vec<Shape>, thin_max: f64, stroke: f64, tol: f64, min_len: f64, pairs: bool) -> Vec<Shape> {
+    use std::f64::consts::PI;
+    let ang_tol = 1.5f64.to_radians();
+    let slack = tol + stroke;
+    let dot = |p: [f64; 2], q: [f64; 2]| p[0] * q[0] + p[1] * q[1];
+    // Thin segments and their directions, in [-ang_tol/2, PI - ang_tol/2) so near-horizontal
+    // ones from either side fall together.
+    let thin: Vec<(usize, f64, f64)> = segs
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.2 < thin_max)
+        .map(|(i, s)| {
+            let th = (s.1[1] - s.0[1]).atan2(s.1[0] - s.0[0]).rem_euclid(PI);
+            (i, if th >= PI - ang_tol / 2.0 { th - PI } else { th }, (s.1[0] - s.0[0]).hypot(s.1[1] - s.0[1]))
+        })
+        .collect();
+    // Direction groups of the face candidates (greedy from the smallest angle).
+    let mut by_angle: Vec<&(usize, f64, f64)> = thin.iter().filter(|t| t.2 >= min_len).collect();
+    by_angle.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let mut groups: Vec<Vec<(usize, f64, f64)>> = Vec::new();
+    let mut first = f64::NEG_INFINITY;
+    for t in by_angle {
+        match groups.last_mut() {
+            Some(g) if t.1 - first <= ang_tol => g.push(*t),
+            _ => {
+                first = t.1;
+                groups.push(vec![*t]);
+            }
+        }
+    }
+    // Each group's direction (length-weighted). A group can hold a wall only when two of its
+    // lines lie a wall's thickness apart.
+    let (gap_lo, gap_hi) = ((3.0 * stroke).max(2.0 * slack + 1.0), 60.0 * stroke.max(1.0));
+    let mut dirs: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut maybe: Vec<bool> = Vec::new();
+    for g in &groups {
+        let total: f64 = g.iter().map(|t| t.2).sum();
+        let th = g.iter().map(|t| t.1 * t.2).sum::<f64>() / total.max(1e-9);
+        let (d, n) = ([th.cos(), th.sin()], [-th.sin(), th.cos()]);
+        dirs.push((d, n));
+        let mut cs: Vec<f64> = g.iter().filter_map(|&(i, _, _)| segs.get(i).map(|s| (dot(n, s.0) + dot(n, s.1)) / 2.0)).collect();
+        cs.sort_by(|a, b| a.total_cmp(b));
+        let mut hi = 0;
+        let mut any = false;
+        for (lo, c) in cs.iter().enumerate() {
+            hi = hi.max(lo);
+            while cs.get(hi + 1).is_some_and(|x| x - c <= gap_hi) {
+                hi += 1;
+            }
+            if cs.get(lo..=hi).is_some_and(|w| w.iter().any(|x| x - c >= gap_lo)) {
+                any = true;
+                break;
+            }
+        }
+        maybe.push(any);
+    }
+    // A group within 8° of a longer one is that one's (the bent pieces by the hatch junctions),
+    // not a direction of its own.
+    let totals: Vec<f64> = groups.iter().map(|g| g.iter().map(|t| t.2).sum()).collect();
+    let mut by_total: Vec<usize> = (0..groups.len()).collect();
+    by_total.sort_by(|&a, &b| totals.get(b).unwrap_or(&0.0).total_cmp(totals.get(a).unwrap_or(&0.0)));
+    let mut kept_dirs: Vec<f64> = Vec::new();
+    for k in by_total {
+        let Some(&(d, _)) = dirs.get(k) else { continue };
+        let th = d[1].atan2(d[0]);
+        let near = kept_dirs.iter().any(|&o| {
+            let x = (th - o).rem_euclid(PI);
+            x.min(PI - x) <= 8f64.to_radians()
+        });
+        if near {
+            if let Some(m) = maybe.get_mut(k) {
+                *m = false;
+            }
+        } else {
+            kept_dirs.push(th);
+        }
+    }
+    // Per such group, every thin segment in its frame: (u from, u to, t from, t to, angle to the
+    // group's direction folded into 0..90°, segment), sorted by `u from`.
+    let mut work = 0usize;
+    let mut frames: Vec<Vec<(f64, f64, f64, f64, f64, usize)>> = vec![Vec::new(); dirs.len()];
+    for ((&(d, n), frame), _) in dirs.iter().zip(frames.iter_mut()).zip(&maybe).filter(|(_, m)| **m) {
+        work += thin.len();
+        if work > MAX_PAIR_WORK {
+            break;
+        }
+        let dir = d[1].atan2(d[0]);
+        *frame = thin
+            .iter()
+            .filter_map(|&(i, th, _)| {
+                let s = segs.get(i)?;
+                let (ua, ub) = (dot(n, s.0), dot(n, s.1));
+                let fold = (th - dir).rem_euclid(PI);
+                Some((ua.min(ub), ua.max(ub), dot(d, s.0), dot(d, s.1), fold.min(PI - fold), i))
+            })
+            .collect();
+        frame.sort_by(|a, b| a.0.total_cmp(&b.0));
+    }
+    // Face lines: the thin pieces within 8° of a group's direction and no wider than a stroke,
+    // by their offset. Thinning bends a face toward each hatch stroke it meets (a few degrees, and
+    // up to a few pixels into the strip on a narrow wall), so the pieces of one face wander: they
+    // chain into a line where each is within the tolerance of the last, and short off-line pieces
+    // join the nearest long line within two strokes' width.
+    let join_gap = (3.0 * stroke).max(2.0 * tol) + 2.0;
+    let mut lines: Vec<FaceLine> = Vec::new();
+    for (k, frame) in frames.iter().enumerate() {
+        // (offset, t0, t1, length)
+        let mut on: Vec<(f64, f64, f64, f64)> = frame
+            .iter()
+            .filter(|q| q.4 <= 8f64.to_radians() && q.1 - q.0 <= slack)
+            .map(|q| ((q.0 + q.1) / 2.0, q.2.min(q.3), q.2.max(q.3), (q.3 - q.2).abs().max(1e-6)))
+            .collect();
+        on.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut found: Vec<FaceLine> = Vec::new();
+        let mut start = 0;
+        while start < on.len() {
+            let c0 = on.get(start).map_or(0.0, |q| q.0);
+            let mut end = start + 1;
+            while let (Some(prev), Some(q)) = (on.get(end - 1), on.get(end)) {
+                if q.0 - prev.0 > tol || q.0 - c0 > slack {
+                    break;
+                }
+                end += 1;
+            }
+            let part = on.get(start..end).unwrap_or_default();
+            let len: f64 = part.iter().map(|q| q.3).sum();
+            let c = part.iter().map(|q| q.0 * q.3).sum::<f64>() / len.max(1e-9);
+            found.push(FaceLine { k, c, len, spans: part.iter().map(|q| (q.1, q.2)).collect() });
+            start = end;
+        }
+        // Longest first, each line takes in the shorter ones within two strokes' width (no
+        // wall is that narrow) and keeps its own offset.
+        found.sort_by(|a, b| b.len.total_cmp(&a.len));
+        let mut kept: Vec<FaceLine> = Vec::new();
+        for m in found {
+            let near = kept.iter_mut().filter(|f| (f.c - m.c).abs() <= 2.0 * slack).min_by(|a, b| (a.c - m.c).abs().total_cmp(&(b.c - m.c).abs()));
+            match near {
+                Some(f) => {
+                    f.spans.extend(m.spans);
+                    f.len += m.len;
+                }
+                None => kept.push(m),
+            }
+        }
+        // Long enough to face a wall: an overlap of 1.5 of the narrowest wall.
+        kept.retain(|f| f.len >= 1.5 * gap_lo);
+        for f in kept.iter_mut() {
+            f.spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+        lines.extend(kept);
+    }
+    // Runs along a line: its pieces joined across breaks shorter than `join`.
+    let runs_of = |f: &FaceLine, join: f64| -> Vec<(f64, f64)> {
+        let mut out: Vec<(f64, f64)> = Vec::new();
+        for &(a, b) in &f.spans {
+            match out.last_mut() {
+                Some(r) if a <= r.1 + join => r.1 = r.1.max(b),
+                _ => out.push((a, b)),
+            }
+        }
+        out
+    };
+    // Candidate pairs: (hatched, gap, line, line, run on the first, run on the second, overlap).
+    // A face broken for less than the wall's thickness (at the hatch junctions) is one face.
+    lines.sort_by(|a, b| a.k.cmp(&b.k).then(a.c.total_cmp(&b.c)));
+    type Cand = (bool, f64, usize, usize, (f64, f64), (f64, f64), (f64, f64));
+    let mut cands: Vec<Cand> = Vec::new();
+    for (ia, la) in lines.iter().enumerate() {
+        for (ib, lb) in lines.iter().enumerate().skip(ia + 1) {
+            let gap = lb.c - la.c;
+            if lb.k != la.k || gap > gap_hi {
+                break;
+            }
+            if gap < gap_lo {
+                continue;
+            }
+            let Some(frame) = frames.get(la.k) else { continue };
+            // Hatch strokes along the strip: diagonal, inside it, across most of it; their
+            // extents and middles along the direction.
+            let mid = (la.c + lb.c) / 2.0;
+            let (lo, hi) = (mid - gap / 2.0 - slack, mid + gap / 2.0 + slack);
+            let from = frame.partition_point(|q| q.0 < lo);
+            let mut strokes: Vec<(f64, f64, usize)> = Vec::new();
+            for q in frame.iter().skip(from) {
+                work += 1;
+                if q.0 > hi || work > MAX_PAIR_WORK {
+                    break;
+                }
+                if q.1 <= hi && (20f64.to_radians()..=70f64.to_radians()).contains(&q.4) && q.1 - q.0 >= 0.45 * gap {
+                    strokes.push((q.2.min(q.3), q.2.max(q.3), q.5));
+                }
+            }
+            if strokes.is_empty() && !pairs {
+                continue;
+            }
+            strokes.sort_by(|a, b| a.0.total_cmp(&b.0));
+            // A face broken for less than the wall's thickness, or where the hatching carries on
+            // across the break (thinning pulls a face off its line by the strokes), is one face;
+            // a door opening has neither face nor hatch.
+            let join = join_gap.max(gap);
+            let bridge = |runs: Vec<(f64, f64)>| -> Vec<(f64, f64)> {
+                let mut out: Vec<(f64, f64)> = Vec::new();
+                for r in runs {
+                    let Some(last) = out.last_mut() else {
+                        out.push(r);
+                        continue;
+                    };
+                    let (x, y) = (last.1, r.0);
+                    let (mut cur, mut hole) = (x, 0.0f64);
+                    for &(a, b, _) in strokes.iter().filter(|s| s.1 > x && s.0 < y) {
+                        hole = hole.max(a - cur);
+                        cur = cur.max(b);
+                    }
+                    hole = hole.max(y - cur);
+                    if hole <= join {
+                        last.1 = last.1.max(r.1);
+                    } else {
+                        out.push(r);
+                    }
+                }
+                out
+            };
+            let (runs_a, runs_b) = (bridge(runs_of(la, join)), bridge(runs_of(lb, join)));
+            for &ra in &runs_a {
+                for &rb in &runs_b {
+                    work += 1;
+                    let (ov0, ov1) = (ra.0.max(rb.0), ra.1.min(rb.1));
+                    let ov = ov1 - ov0;
+                    if ov < 0.5 * (ra.1 - ra.0).min(rb.1 - rb.0) || ov < 1.5 * gap {
+                        continue;
+                    }
+                    let inside: Vec<&(f64, f64, usize)> = strokes.iter().filter(|s| s.0 >= ov0 - slack && s.1 <= ov1 + slack).collect();
+                    let at: Vec<f64> = inside.iter().map(|s| (s.0 + s.1) / 2.0).collect();
+                    // Hatching is a ladder: at least three of its strokes lie on parallel lines of
+                    // their own. (Between two hatch strokes, the pieces of the faces they cut lie on
+                    // two lines of each direction.)
+                    let mut keys: Vec<(i64, f64)> = inside
+                        .iter()
+                        .filter_map(|q| {
+                            let s = segs.get(q.2)?;
+                            let mut phi = (s.1[1] - s.0[1]).atan2(s.1[0] - s.0[0]).rem_euclid(PI);
+                            if phi >= PI - 2.5f64.to_radians() {
+                                phi -= PI;
+                            }
+                            Some(((phi.to_degrees() / 5.0).round() as i64, dot([-phi.sin(), phi.cos()], s.0)))
+                        })
+                        .collect();
+                    keys.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+                    let mut ladder = 0usize;
+                    let mut run = 0usize;
+                    for (j, key) in keys.iter().enumerate() {
+                        match j.checked_sub(1).and_then(|p| keys.get(p)) {
+                            Some(prev) if prev.0 == key.0 => {
+                                if key.1 - prev.1 > slack {
+                                    run += 1;
+                                }
+                            }
+                            _ => run = 1,
+                        }
+                        ladder = ladder.max(run);
+                    }
+                    // Spread along the strip: no stretch without a stroke longer than three wall
+                    // thicknesses or a third of the strip (`at` is in order of the strokes' starts,
+                    // the same as their middles for strokes of one slope).
+                    let mut stops = vec![ov0];
+                    stops.extend(at.iter().copied());
+                    stops.push(ov1);
+                    stops.sort_by(|a, b| a.total_cmp(b));
+                    let widest = stops.windows(2).map(|p| p[1] - p[0]).fold(0.0, f64::max);
+                    let hatched = ladder >= 3 && widest <= (3.0 * gap).max(ov / 3.0);
+                    if hatched || pairs {
+                        cands.push((hatched, gap, ia, ib, ra, rb, (ov0, ov1)));
+                    }
+                }
+            }
+        }
+    }
+    // Hatched pairs first, then the narrowest; a stretch of a face line is one wall's face only.
+    cands.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.total_cmp(&b.1)));
+    let mut used: Vec<Vec<(f64, f64)>> = vec![Vec::new(); lines.len()];
+    let free =
+        |used: &[Vec<(f64, f64)>], r: usize, a: f64, b: f64| used.get(r).is_none_or(|u| u.iter().all(|&(x, y)| b <= x + slack || a >= y - slack));
+    // Walls found: (direction group, centre offset, thickness, from, to).
+    let mut found: Vec<(usize, f64, f64, f64, f64)> = Vec::new();
+    for (_, gap, ia, ib, ra, rb, (ov0, ov1)) in cands {
+        if !free(&used, ia, ov0, ov1) || !free(&used, ib, ov0, ov1) {
+            continue;
+        }
+        let (Some(la), Some(lb)) = (lines.get(ia), lines.get(ib)) else { continue };
+        let Some(_) = dirs.get(la.k) else { continue };
+        // Ends: where the faces end together (or a wall's thickness apart, at a corner) the
+        // centre line ends half-way; else where they stop overlapping.
+        let s0 = if (ra.0 - rb.0).abs() <= gap + slack { (ra.0 + rb.0) / 2.0 } else { ov0 };
+        let s1 = if (ra.1 - rb.1).abs() <= gap + slack { (ra.1 + rb.1) / 2.0 } else { ov1 };
+        found.push((la.k, (la.c + lb.c) / 2.0, gap, s0, s1));
+        for r in [ia, ib] {
+            if let Some(u) = used.get_mut(r) {
+                u.push((ov0, ov1));
+            }
+        }
+    }
+    // A wall lying inside walls already found (longest first) repeats them: between two of a
+    // wall's own hatch strokes the faces' pieces can pass for hatching.
+    let line_of = |w: &(usize, f64, f64, f64, f64)| dirs.get(w.0).map(|&(d, n)| (d, n, w.1));
+    found.sort_by(|a, b| (b.4 - b.3).total_cmp(&(a.4 - a.3)));
+    let mut kept_walls: Vec<(usize, f64, f64, f64, f64)> = Vec::new();
+    for w in found {
+        let Some((d, n, c)) = line_of(&w) else { continue };
+        let inside = (0..=4).all(|i| {
+            let t = w.3 + (w.4 - w.3) * f64::from(i) / 4.0;
+            let p = [d[0] * t + n[0] * c, d[1] * t + n[1] * c];
+            kept_walls.iter().any(|o| {
+                line_of(o).is_some_and(|(od, on, oc)| {
+                    let reach = o.2 / 2.0 + slack;
+                    (dot(on, p) - oc).abs() <= reach && dot(od, p) >= o.3 - reach && dot(od, p) <= o.4 + reach
+                })
+            })
+        });
+        if !inside {
+            kept_walls.push(w);
+        }
+    }
+    let found = kept_walls;
+    // Corners and tees: an end within the two walls' thicknesses of another wall's centre line
+    // (one that crosses it at 30° or more) is carried to that line, as a solid band's centre
+    // line meets the next one's.
+    let mut ends: Vec<(f64, f64)> = found.iter().map(|w| (w.3, w.4)).collect();
+    for (i, wi) in found.iter().enumerate() {
+        let Some((di, ni, ci)) = line_of(wi) else { continue };
+        for (end, s) in [(0usize, wi.3), (1, wi.4)] {
+            let mut best: Option<(f64, f64)> = None;
+            for (j, wj) in found.iter().enumerate() {
+                let Some((dj, nj, cj)) = line_of(wj) else { continue };
+                let cross = di[0] * dj[1] - di[1] * dj[0];
+                if j == i || cross.abs() < 0.5 {
+                    continue;
+                }
+                // Where wall i's centre line meets wall j's: dot(nj, ci·ni + t·di) = cj.
+                let t = (cj - ci * dot(nj, ni)) / dot(nj, di);
+                let x = [ni[0] * ci + di[0] * t, ni[1] * ci + di[1] * t];
+                let along_j = dot(dj, x);
+                let reach = (wi.2 + wj.2) / 2.0 + slack;
+                if (t - s).abs() <= reach && along_j >= wj.3 - reach && along_j <= wj.4 + reach && best.is_none_or(|b| (t - s).abs() < b.0) {
+                    best = Some(((t - s).abs(), t));
+                }
+            }
+            if let (Some((_, t)), Some(e)) = (best, ends.get_mut(i)) {
+                if end == 0 {
+                    e.0 = t;
+                } else {
+                    e.1 = t;
+                }
+            }
+        }
+    }
+    let mut walls = Vec::new();
+    // Strips taken out: (direction group, centre offset, half width, from, to).
+    let mut strips: Vec<(usize, f64, f64, f64, f64)> = Vec::new();
+    for (w, &(s0, s1)) in found.iter().zip(&ends) {
+        let Some((d, n, mid)) = line_of(w) else { continue };
+        let (s0, s1) = (s0.min(s1), s0.max(s1));
+        let at = |t: f64| [d[0] * t + n[0] * mid, d[1] * t + n[1] * mid];
+        walls.push(Shape::Wall { a: at(s0), b: at(s1), thickness: w.2 });
+        strips.push((w.0, mid, w.2 / 2.0 + slack, s0 - w.2 / 2.0 - slack, s1 + w.2 / 2.0 + slack));
+    }
+    if strips.is_empty() {
+        return walls;
+    }
+    // The strips by grid cell (their bounding boxes), so each piece is checked against the strips
+    // near it only.
+    const CELL: f64 = 256.0;
+    let cell = |v: f64| (v / CELL).floor() as i64;
+    let mut grid: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
+    for (j, &(k, mid, half, t0, t1)) in strips.iter().enumerate() {
+        let Some(&(d, n)) = dirs.get(k) else { continue };
+        let pt = |t: f64, u: f64| [d[0] * t + n[0] * u, d[1] * t + n[1] * u];
+        let cs = [pt(t0, mid - half), pt(t0, mid + half), pt(t1, mid - half), pt(t1, mid + half)];
+        let (x0, x1) = (cs.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min), cs.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max));
+        let (y0, y1) = (cs.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min), cs.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max));
+        for cx in cell(x0)..=cell(x1) {
+            for cy in cell(y0)..=cell(y1) {
+                grid.entry((cx, cy)).or_default().push(j);
+            }
+        }
+    }
+    let near = |lo: [f64; 2], hi: [f64; 2]| -> Vec<usize> {
+        let mut out: Vec<usize> = Vec::new();
+        for cx in cell(lo[0])..=cell(hi[0]) {
+            for cy in cell(lo[1])..=cell(hi[1]) {
+                if let Some(v) = grid.get(&(cx, cy)) {
+                    out.extend(v);
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    };
+    let in_strip = |p: [f64; 2], among: &[usize]| {
+        among
+            .iter()
+            .filter_map(|&j| strips.get(j))
+            .any(|&(k, mid, half, t0, t1)| dirs.get(k).is_some_and(|&(d, n)| (dot(n, p) - mid).abs() <= half && (t0..=t1).contains(&dot(d, p))))
+    };
+    curves.retain(|c| {
+        let on = |center: [f64; 2], radius: f64, a0: f64, sweep: f64| {
+            let among = near([center[0] - radius, center[1] - radius], [center[0] + radius, center[1] + radius]);
+            !among.is_empty()
+                && (0..=8).all(|i| {
+                    let a = a0 + sweep * f64::from(i) / 8.0;
+                    in_strip([center[0] + radius * a.cos(), center[1] + radius * a.sin()], &among)
+                })
+        };
+        match *c {
+            Shape::Arc { center, radius, start, end, .. } => !on(center, radius, start, (end - start).rem_euclid(std::f64::consts::TAU)),
+            Shape::Circle { center, radius, .. } => !on(center, radius, 0.0, std::f64::consts::TAU),
+            _ => true,
+        }
+    });
+    // Thin segments inside a strip go; one crossing its end keeps the part outside.
+    let mut kept: Vec<Seg> = Vec::with_capacity(segs.len());
+    'seg: for s in segs.drain(..) {
+        if s.2 >= thin_max {
+            kept.push(s);
+            continue;
+        }
+        let among = near([s.0[0].min(s.1[0]), s.0[1].min(s.1[1])], [s.0[0].max(s.1[0]), s.0[1].max(s.1[1])]);
+        if among.is_empty() {
+            kept.push(s);
+            continue;
+        }
+        let mut pieces = vec![(0.0f64, 1.0f64)];
+        for &(k, mid, half, t0, t1) in among.iter().filter_map(|&j| strips.get(j)) {
+            let Some(&(d, n)) = dirs.get(k) else { continue };
+            let (ua, ub) = (dot(n, s.0) - mid, dot(n, s.1) - mid);
+            if ua.abs() > half || ub.abs() > half {
+                continue;
+            }
+            let (ta, tb) = (dot(d, s.0), dot(d, s.1));
+            if (tb - ta).abs() < 1e-9 {
+                if (t0..=t1).contains(&ta) {
+                    continue 'seg;
+                }
+                continue;
+            }
+            // The part of the segment (0..1 along it) inside t0..t1.
+            let (p0, p1) = ((t0 - ta) / (tb - ta), (t1 - ta) / (tb - ta));
+            let (cut0, cut1) = (p0.min(p1), p0.max(p1));
+            pieces = pieces.into_iter().flat_map(|(a, b)| [(a, b.min(cut0)), (a.max(cut1), b)]).filter(|(a, b)| b - a > 1e-9).collect();
+        }
+        let len = (s.1[0] - s.0[0]).hypot(s.1[1] - s.0[1]);
+        let at = |f: f64| [s.0[0] + (s.1[0] - s.0[0]) * f, s.0[1] + (s.1[1] - s.0[1]) * f];
+        // A hatch stroke across a corner has its ends in two walls' strips: it goes when it lies
+        // inside their union all along.
+        for (a, b) in pieces {
+            let inside = (0..=4).all(|i| in_strip(at(a + (b - a) * f64::from(i) / 4.0), &among));
+            if !inside && ((b - a) * len >= min_len || (a == 0.0 && b == 1.0)) {
+                kept.push((at(a), at(b), s.2));
+            }
+        }
+    }
+    *segs = kept;
+    walls
+}
+
 /// Trace a grey image (`w` × `h`, row by row from the top, 0 black … 255 white).
 pub fn trace(gray: &[u8], w: usize, h: usize, o: &Options) -> Result<Traced, String> {
     let n = w.checked_mul(h).ok_or("the image is too large")?;
@@ -889,15 +1389,19 @@ pub fn trace(gray: &[u8], w: usize, h: usize, o: &Options) -> Result<Traced, Str
             }
         }
     }
-    for (a, b, width) in edges {
-        let (Some(pa), Some(pb)) = (nodes.get(a), nodes.get(b)) else { continue };
+    let mut segs: Vec<Seg> = edges.iter().filter_map(|&(a, b, width)| Some((*nodes.get(a)?, *nodes.get(b)?, width))).collect();
+    if o.walls {
+        let walls = hatched_walls(&mut segs, &mut shapes, wall_min, stroke, tol, o.min_length.max(1.0), o.wall_pairs);
+        shapes.extend(walls);
+    }
+    for (pa, pb, width) in segs {
         if (pb[0] - pa[0]).hypot(pb[1] - pa[1]) < o.min_length.max(1.0) {
             continue;
         }
         if o.walls && width >= wall_min {
-            shapes.push(Shape::Wall { a: *pa, b: *pb, thickness: width });
+            shapes.push(Shape::Wall { a: pa, b: pb, thickness: width });
         } else {
-            shapes.push(Shape::Line { a: *pa, b: *pb, width });
+            shapes.push(Shape::Line { a: pa, b: pb, width });
         }
     }
     shapes.truncate(MAX_SHAPES);
@@ -1095,6 +1599,55 @@ mod tests {
         // Text off: no boxes, and the letters are traced as strokes instead.
         let t2 = c.trace(&Options { text: false, text_max_px: Some(12.0), ..Options::default() });
         assert!(t2.shapes.iter().all(|s| !matches!(s, Shape::TextBox { .. })));
+    }
+
+    /// Two 2 px face lines 16 px apart (y down 40 and 56, x 20–280) and, apart, a thin line.
+    fn double_line(hatch: bool) -> Canvas {
+        let mut c = Canvas::new(300, 140);
+        c.line((20.0, 40.0), (280.0, 40.0), 2.0);
+        c.line((20.0, 56.0), (280.0, 56.0), 2.0);
+        if hatch {
+            // 45° strokes from face to face, 12 px apart along the band (8.5 px square to the
+            // strokes: four times the stroke).
+            let mut x = 24.0;
+            while x + 16.0 <= 276.0 {
+                c.line((x, 56.0), (x + 16.0, 40.0), 2.0);
+                x += 12.0;
+            }
+        }
+        c.line((20.0, 110.0), (280.0, 110.0), 2.0);
+        c
+    }
+
+    #[test]
+    fn a_hatched_band_is_one_wall_and_a_bare_double_line_is_not() {
+        let walls = |t: &Traced| -> Vec<([f64; 2], [f64; 2], f64)> {
+            t.shapes.iter().filter_map(|s| if let Shape::Wall { a, b, thickness } = s { Some((*a, *b, *thickness)) } else { None }).collect()
+        };
+        // The band's centre line: y down 48 → y up 140 − 48 = 92.
+        let check_wall = |t: &Traced| {
+            let w = walls(t);
+            assert_eq!(w.len(), 1, "one wall: {:?}", t.shapes);
+            let (a, b, th) = w[0];
+            assert!((th - 16.0).abs() <= 2.5, "thickness {th}");
+            assert!((a[1] - 92.0).abs() < 1.5 && (b[1] - 92.0).abs() < 1.5 && (a[0] - b[0]).abs() > 240.0, "{a:?} {b:?}");
+            // Only the thin line apart is a line: no faces, no hatch strokes.
+            let ls = lines(t);
+            assert_eq!(ls.len(), 1, "no lines from the band: {ls:?}");
+            assert!((ls[0].0[1] - 30.0).abs() < 1.5 && (ls[0].1[1] - 30.0).abs() < 1.5, "{ls:?}");
+        };
+        let o = Options { text: false, ..Options::default() };
+        check_wall(&double_line(true).trace(&o));
+        // Text finding on (the default) leaves the hatched band alone too.
+        check_wall(&double_line(true).trace(&Options::default()));
+        // No hatch between: two lines, not a wall, unless asked.
+        let bare = double_line(false).trace(&o);
+        assert!(walls(&bare).is_empty(), "{:?}", bare.shapes);
+        assert_eq!(lines(&bare).len(), 3, "{:?}", bare.shapes);
+        check_wall(&double_line(false).trace(&Options { wall_pairs: true, ..o.clone() }));
+        // Walls off: nothing is paired.
+        let off = double_line(true).trace(&Options { walls: false, ..o });
+        assert!(walls(&off).is_empty(), "{:?}", off.shapes);
     }
 
     #[test]

@@ -2188,6 +2188,19 @@ fn elec_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str, 
         }
     }
 
+    // Room notes on where the conduit runs (below slab, in CMU block), in each room this sheet
+    // has devices in, low in the room clear of the ceiling grid.
+    for loc in t.elec_spec.room_locations.iter().filter(|l| l.level == level) {
+        let Some(room) = t.building.rooms.iter().find(|r| r.level == level && r.number == loc.room) else { continue };
+        let Some(note) = crate::elecspec::location_note(&loc.location) else { continue };
+        if !devs.iter().any(|d| d.room == room.number || d.room == room.id) {
+            continue;
+        }
+        let at = [(room.min_ft[0] + room.max_ft[0]) / 2.0, room.min_ft[1] + (room.max_ft[1] - room.min_ft[1]) * 0.3];
+        let at = pen.b(at);
+        pen.text("TEXT", at, st.text_in * 0.8, note, rot, HAlign::Center, VAlign::Middle);
+    }
+
     // Homerun arrows.
     for ckt in t.elec_circuits.iter().filter(|ck| ck.level == level && ck.sheet == sheet) {
         let hr = pen.b(ckt.homerun_ft);

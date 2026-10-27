@@ -410,8 +410,14 @@ pub(crate) fn draw(b: &mut Builder, ctx: &Ctx, t: &Table, rgb: Ink, lw: f32) {
         // alignment point (its numbering is MTEXT's attachment).
         let mp = text_params(tx, font, &ts);
         let layout = cadaddy_fonts::layout_mtext_with(&tx.text, &mp);
+        let (at, glyphs) = (b.list.prims.len(), b.list.texts.len());
         for piece in &layout.pieces {
             b.shaped(ctx, style_ink(tx.color, rgb), lw, &piece.shaped);
+        }
+        // Drawn in a stroke font: the cell's words are searchable in a plot all the same.
+        if b.list.texts.len() == glyphs {
+            let plain = cadaddy_fonts::plain_text(&cadaddy_fonts::plain_mtext(&tx.text)).split_whitespace().collect::<Vec<_>>().join(" ");
+            b.words(ctx, at, &plain, 0.0, tx.height);
         }
     }
 }
