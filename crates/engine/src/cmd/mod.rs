@@ -28,6 +28,7 @@ pub mod colorbook;
 pub mod constraints;
 pub mod coordination;
 pub mod copricing;
+pub mod cover;
 mod dash_styles;
 mod draw;
 mod draw2;
@@ -827,6 +828,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(finishes::specs());
     v.extend(fieldview::specs());
     v.extend(asbuilt::specs());
+    v.extend(cover::specs());
     v.extend(bimwork::specs());
         v.extend(imageattach::specs());
         v.extend(dash_styles::specs());
