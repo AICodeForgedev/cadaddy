@@ -31,10 +31,10 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("rooms", "Rooms", run_list)
             .menu(&["Tools", "Building", "Rooms"])
-            .params("{outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (as rooms.list)} → as rooms.list (typed or from the menu: the Rooms palette)")
+            .params("{outline?: bool (default true), outline_full?: bool (as rooms.list), regions?: [[x0, y0, x1, y1], ...] (as rooms.list)} → as rooms.list (typed or from the menu: the Rooms palette)")
             .noundo(),
         CommandSpec::new("rooms.list", "List Rooms", run_list)
-            .params("{outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (read the labels only inside these sheet rectangles, each sheet in full)} → {rooms: [{name, number, area, areaSqFt, areaM2, perimeter, ceiling, ceilingFt, ceilingSource, elevation, volume, volumeCuFt, volumeM3, finishes, finishDetail, materials, level, label, at, outline}], count}")
+            .params("{outline?: bool (default true), outline_full?: bool (every outline point, not at most 64; default false), regions?: [[x0, y0, x1, y1], ...] (read the labels only inside these sheet rectangles, each sheet in full)} → {rooms: [{name, number, area, areaSqFt, areaM2, perimeter, ceiling, ceilingFt, ceilingSource, elevation, volume, volumeCuFt, volumeM3, finishes, finishDetail, materials, level, label, at, outline}], count}")
             .noundo(),
         CommandSpec::new("rooms.get", "Room", run_get).params("{name? | number? | label?} → the room (as rooms.list's)").noundo(),
         CommandSpec::new("rooms.goto", "Go to Room", run_goto).params("{name? | number? | label?} → {name, window}: the view shows the room").noundo(),
@@ -371,7 +371,17 @@ fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
     Ok(Some(out))
 }
 
+/// Most outline points a room lists unless every point is asked for (`full`).
+const OUTLINE_POINTS: usize = 64;
+
+/// Most outline points a room lists with `full` (a print set's room reading, built as read).
+const MAX_OUTLINE_POINTS: usize = 10_000;
+
 fn room_json(d: &cadaddy_doc::Drawing, r: &Room3, outline: bool) -> Value {
+    room_json_with(d, r, outline, false)
+}
+
+fn room_json_with(d: &cadaddy_doc::Drawing, r: &Room3, outline: bool, full: bool) -> Value {
     let k = units_per_inch(d);
     let (ft, m) = (12.0 * k, k / 0.0254);
     let detail: Vec<Value> = r
@@ -391,7 +401,7 @@ fn room_json(d: &cadaddy_doc::Drawing, r: &Room3, outline: bool) -> Value {
         "finishes": r.finishes, "finishDetail": detail, "materials": r.materials,
     });
     if outline && let Some(o) = v.as_object_mut() {
-        let step = (r.outline.len() / 64).max(1);
+        let step = (r.outline.len() / if full { MAX_OUTLINE_POINTS } else { OUTLINE_POINTS }).max(1);
         o.insert("outline".into(), json!(r.outline.iter().step_by(step).map(|q| pt(*q)).collect::<Vec<_>>()));
     }
     v
@@ -420,9 +430,9 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
             .collect()
     });
     let rs = rooms_in(s, regions.as_deref())?;
-    let outline = bool_or(p, "outline", true);
+    let (outline, full) = (bool_or(p, "outline", true), bool_or(p, "outline_full", false));
     let d = s.doc()?;
-    let list: Vec<Value> = rs.iter().map(|r| room_json(d, r, outline)).collect();
+    let list: Vec<Value> = rs.iter().map(|r| room_json_with(d, r, outline, full)).collect();
     Ok(json!({ "rooms": list, "count": rs.len() }))
 }
 

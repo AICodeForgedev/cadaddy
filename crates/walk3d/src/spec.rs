@@ -548,6 +548,13 @@ pub struct Room {
     /// Device plate colour from its wall finish (the finish legend).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plates: Option<String>,
+    /// Where its tag is, drawing units (a print set's room reading); none = found by its text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<[f64; 2]>,
+    /// The closed outline the plan reading traced round its tag, drawing units; empty = traced
+    /// round its tag when the model is built.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outline: Vec<[f64; 2]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

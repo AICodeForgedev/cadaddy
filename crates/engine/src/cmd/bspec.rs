@@ -580,7 +580,52 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         ((c.x / ROOM_GRID_CELL).floor() as i64, (c.y / ROOM_GRID_CELL).floor() as i64)
     };
     let mut outline_cache = None;
-    for (h, text, at) in room_texts(sp, &ents) {
+    let texts = room_texts(sp, &ents);
+    // The rooms a print set's reading traced on its plans come with their outlines: they are
+    // taken as read (the build's walls check them below), and no tag inside one is traced again
+    // (on a one-pen page a tag's outline can run out through a door into the next rooms).
+    let mut read: Vec<usize> = Vec::new();
+    for (i, r) in sp.rooms.iter().enumerate() {
+        if out.len() >= MAX_ROOMS {
+            break;
+        }
+        let outline: Vec<Vec2> = r.outline.iter().map(|p| Vec2::new(p[0], p[1])).filter(|p| p.is_finite()).collect();
+        let area = cadaddy_geom::shoelace(&outline).abs();
+        if outline.len() < 3 || area < 1e-9 {
+            continue;
+        }
+        let bounds = cadaddy_geom::Bounds2::from_points(outline.iter().copied());
+        let at = r.at.map(|p| Vec2::new(p[0], p[1])).filter(|p| p.is_finite()).unwrap_or_else(|| bounds.center());
+        let Some(level) = r.level.as_ref().and_then(|n| sp.level(n)).or_else(|| level_at(&sp.levels, at.x, at.y)) else { continue };
+        let tag = texts
+            .iter()
+            .find(|(_, t, p)| names_room(r, t) && bounds.contains(*p) && cadaddy_geom::point_in_polygon(&outline, *p))
+            .map_or(Handle(0), |(h, _, _)| *h);
+        let name = Some(r.name.trim().to_string()).filter(|n| !n.is_empty() && r.number.as_deref().is_none_or(|x| x.trim() != n));
+        let idx = out.len();
+        grid.entry(grid_key(&bounds)).or_default().push(idx);
+        out.push(Traced {
+            room: Some(i),
+            level: level.name.clone(),
+            outline,
+            tag,
+            at,
+            name,
+            number: r.number.clone(),
+            cached_area: area,
+            cached_bounds: bounds,
+        });
+        read.push(idx);
+    }
+    if !read.is_empty() {
+        notes.push(format!("{} room(s) outlined as the plans' reading traced them (each door closing its room).", read.len()));
+    }
+    let in_read = |out: &[Traced], level: &str, p: Vec2| {
+        read.iter()
+            .filter_map(|i| out.get(*i))
+            .any(|t| t.level.eq_ignore_ascii_case(level) && t.cached_bounds.contains(p) && cadaddy_geom::point_in_polygon(&t.outline, p))
+    };
+    for (h, text, at) in texts {
         if out.len() >= MAX_ROOMS {
             break;
         }
@@ -604,6 +649,9 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         else {
             continue;
         };
+        if in_read(&out, &level.name, at) {
+            continue;
+        }
         let Ok(loops) = super::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
         let outline = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);

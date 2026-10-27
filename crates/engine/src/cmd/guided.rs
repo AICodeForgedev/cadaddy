@@ -2233,13 +2233,18 @@ fn zero_evidence(plans: &[String]) -> Option<QuestionEvidence> {
 /// Run the rooms stage: detect rooms from labels (MUST 1, 4).
 /// Uses the same readers (rooms.list) that work directly on the job's sheets.
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
+    run_rooms_with(s, job, false)
+}
+
+/// [`run_rooms`], each room with its traced `outline` when asked.
+fn run_rooms_with(s: &mut Session, job: &mut GuidedJob, outline: bool) -> Result<Value> {
     // Load plan-sheet PDFs into the drawing so rooms.list finds entities.
     ensure_sheets_loaded(s, job)?;
     // Each floor plan's labels read in full, sheet by sheet (a whole set's labels are more than
     // one reading traces: the last floors were left out).
     let regions: Vec<[f64; 4]> =
         job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty()).map(|r| r.area.unwrap_or(r.rect)).collect();
-    let mut params = json!({"outline": false});
+    let mut params = json!({ "outline": outline, "outline_full": outline });
     if !regions.is_empty() {
         params["regions"] = json!(regions);
     }
@@ -3672,13 +3677,20 @@ const MAX_SPEC_ROOMS: usize = 2_000;
 /// no room tag layers, so without them `model.build` traces no rooms at all. Keeps the reading as
 /// the job's rooms stage result. Returns (rooms read, rooms added to the spec).
 pub(crate) fn rooms_into_spec(s: &mut Session, job: &mut GuidedJob) -> Result<(usize, usize)> {
-    let read = run_rooms(s, job)?;
+    let mut read = run_rooms_with(s, job, true)?;
     let list: Vec<Value> = read.get("rooms").and_then(Value::as_array).cloned().unwrap_or_default();
+    // The job keeps the reading as `rooms.list {outline: false}` gives it.
+    if let Some(rooms) = read.get_mut("rooms").and_then(Value::as_array_mut) {
+        for r in rooms.iter_mut().filter_map(Value::as_object_mut) {
+            r.remove("outline");
+        }
+    }
     if let Some(st) = job.stage_mut(StageName::Rooms) {
         st.result = Some(read);
     }
     let Ok((mut sp, true)) = super::bspec::current(s, "rooms") else { return Ok((list.len(), 0)) };
     let text = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+    let point = |v: &Value| Some([v.get(0)?.as_f64()?, v.get(1)?.as_f64()?]).filter(|p| p.iter().all(|x| x.is_finite()));
     let mut added = 0usize;
     for r in &list {
         if sp.rooms.len() >= MAX_SPEC_ROOMS {
@@ -3689,22 +3701,39 @@ pub(crate) fn rooms_into_spec(s: &mut Session, job: &mut GuidedJob) -> Result<(u
         // The sheet's level as the spec names it (`3` is `Level 3`); none: the level whose
         // region holds the tag.
         let level = text(r, "level").and_then(|l| sp.level(&l).or_else(|| sp.level(&level_name(&l))).map(|lv| lv.name.clone()));
+        // The outline the reading traced round the tag: the build takes the room as read.
+        let at = r.get("at").and_then(point);
+        let outline: Vec<[f64; 2]> = r.get("outline").and_then(Value::as_array).map(|o| o.iter().filter_map(point).collect()).unwrap_or_default();
+        let outline = if outline.len() >= 3 && at.is_some() { outline } else { Vec::new() };
+        let inside = |x: &cadaddy_walk3d::SpecRoom| {
+            let poly: Vec<cadaddy_geom::Vec2> = x.outline.iter().map(|p| cadaddy_geom::Vec2::new(p[0], p[1])).collect();
+            at.is_some_and(|p| cadaddy_geom::point_in_polygon(&poly, cadaddy_geom::Vec2::new(p[0], p[1])))
+        };
         let same = |x: &cadaddy_walk3d::SpecRoom| {
             x.level == level
                 && match (&number, &x.number) {
                     (Some(a), Some(b)) => a.eq_ignore_ascii_case(b.trim()),
-                    _ => x.name.trim().eq_ignore_ascii_case(&label),
+                    // Two unnumbered rooms of one name (every floor has its STORAGE): the same
+                    // one only where both outlines were read and one holds the other's tag.
+                    _ => x.name.trim().eq_ignore_ascii_case(&label) && (outline.is_empty() || x.outline.is_empty() || inside(x)),
                 }
         };
-        if sp.rooms.iter().any(same) {
+        if let Some(x) = sp.rooms.iter_mut().find(|x| same(x)) {
+            if x.outline.is_empty() && !outline.is_empty() {
+                x.outline = outline;
+                x.at = at;
+                // The reading's name where the spec's guess is no room word (a misread tag).
+                let score = super::perceive::geometry::room_name_score;
+                if let Some(n) = name.filter(|n| score(n) > score(&x.name)) {
+                    x.name = n;
+                }
+            }
             continue;
         }
-        sp.rooms.push(cadaddy_walk3d::SpecRoom { name: label, number, level, ..cadaddy_walk3d::SpecRoom::default() });
+        sp.rooms.push(cadaddy_walk3d::SpecRoom { name: label, number, level, at, outline, ..cadaddy_walk3d::SpecRoom::default() });
         added += 1;
     }
-    if added > 0 {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
-    }
+    s.doc_mut()?.building_spec = Some(sp.to_json());
     Ok((list.len(), added))
 }
 
@@ -6769,6 +6798,51 @@ mod tests {
         let after = s.execute("model.build", &json!({})).unwrap();
         assert_eq!(after["rooms"].as_u64(), Some(2), "{after}");
         assert_eq!(walls_built(&s), (walls_built(&s).0, 0));
+    }
+
+    #[test]
+    fn rooms_read_with_their_doors_closed_are_built_as_read() {
+        // One pen: walls, and a door drawn as its swing alone (no leaf across the opening).
+        let mut s = crate::Session::new();
+        s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+        rect(&mut s, 0.0, 0.0, 480.0, 360.0);
+        rect(&mut s, 6.0, 6.0, 474.0, 354.0);
+        for x in [238.0, 242.0] {
+            line(&mut s, [x, 6.0], [x, 100.0]);
+            line(&mut s, [x, 136.0], [x, 354.0]);
+        }
+        s.execute("arc", &json!({"center": [242.0, 100.0], "radius": 36.0, "start": 0.0, "end": 90.0})).unwrap();
+        for (t, x, y, h) in [("OFFICE", 100.0, 250.0, 8.0), ("101", 100.0, 230.0, 6.0), ("LOBBY", 380.0, 250.0, 8.0), ("102", 380.0, 230.0, 6.0)] {
+            s.execute("text", &json!({"at": [x, y], "text": t, "height": h})).unwrap();
+        }
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions = vec![a_plan(None, None)];
+        job.sheets_loaded = true;
+        build_job(&mut s, &job);
+        let (read, added) = rooms_into_spec(&mut s, &mut job).unwrap();
+        assert!(read >= 2 && added >= 2, "read {read}, added {added}");
+        let with = s.doc().unwrap().building_spec.clone().unwrap();
+        let spec: cadaddy_walk3d::BuildingSpec = serde_json::from_str(&with).unwrap();
+        assert!(spec.rooms.iter().all(|r| r.outline.len() >= 4 && r.at.is_some()), "each room as read: {:?}", spec.rooms);
+        // Traced from their tags, the two rooms are one: the open door joins them.
+        let mut tags_only = spec.clone();
+        for r in &mut tags_only.rooms {
+            r.outline.clear();
+            r.at = None;
+        }
+        s.doc_mut().unwrap().building_spec = Some(tags_only.to_json());
+        let traced = s.execute("model.build", &json!({})).unwrap();
+        assert!(traced["rooms"].as_u64().unwrap_or(0) < 2, "the tags alone trace through the door: {traced}");
+        // As read (the door closes them): both, each on its side of the partition.
+        s.doc_mut().unwrap().building_spec = Some(with);
+        let built = s.execute("model.build", &json!({})).unwrap();
+        assert_eq!(built["rooms"].as_u64(), Some(2), "{built}");
+        let rooms = crate::cmd::rooms3d::model_rooms(&mut s).unwrap().unwrap();
+        let mut got: Vec<(String, bool)> =
+            rooms.iter().map(|r| (r["number"].as_str().unwrap_or("").to_string(), r["at"][0].as_f64().unwrap_or(0.0) < 240.0)).collect();
+        got.sort();
+        assert_eq!(got, [("101".to_string(), true), ("102".to_string(), false)], "{rooms:?}");
+        assert!(rooms.iter().all(|r| r["areaSqFt"].as_f64().is_some_and(|a| a < 480.0 * 360.0 / 144.0 / 2.0 + 1.0)), "{rooms:?}");
     }
 
     #[test]
