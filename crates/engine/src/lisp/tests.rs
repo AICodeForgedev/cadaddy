@@ -136,6 +136,10 @@ fn lists_and_strings() {
     assert_eq!(ok(&mut s, "(wcmatch \"abc\" \"x*,a?c\")"), "T");
     assert_eq!(ok(&mut s, "(wcmatch \"abc\" \"~a*\")"), "nil");
     assert_eq!(ok(&mut s, "(wcmatch \"b\" \"[a-c]\")"), "T");
+    let many = format!("(wcmatch \"{}\" \"{}\")", "a".repeat(80), "*a".repeat(80));
+    assert_eq!(ok(&mut s, &many), "T");
+    let too_deep = format!("(wcmatch \"{}\" \"{}\")", "a".repeat(400), "*a".repeat(400));
+    assert!(eval(&mut s, &too_deep).is_err());
     assert_eq!(ok(&mut s, "(vl-string-subst \"X\" \"b\" \"abcb\")"), "\"aXcb\"");
     assert_eq!(ok(&mut s, "(vl-string-search \"c\" \"abc\")"), "2");
     assert_eq!(ok(&mut s, "(read \"(1 2)\")"), "(1 2)");
@@ -453,6 +457,15 @@ fn getvar_drawing_and_session_variables() {
     let want = format!("{}{}", dir.to_string_lossy().trim_end_matches(std::path::MAIN_SEPARATOR), std::path::MAIN_SEPARATOR);
     assert_eq!(crate::sysvars::get(&s, "DWGPREFIX"), Some(serde_json::json!(want)));
     assert_eq!(ok(&mut s, "(getvar \"DWGTITLED\")"), "1");
+}
+
+/// CECOLOR is a string in AutoCAD, whatever it was set from (#1999).
+#[test]
+fn getvar_cecolor_is_a_string() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "(list (getvar \"CECOLOR\") (type (getvar \"CECOLOR\")))"), "(\"BYLAYER\" STR)");
+    assert_eq!(ok(&mut s, "(setvar \"CECOLOR\" \"red\") (getvar \"CECOLOR\")"), "\"1\"");
+    assert_eq!(ok(&mut s, "(setvar \"CECOLOR\" \"10,20,30\") (getvar \"CECOLOR\")"), "\"RGB:10,20,30\"");
 }
 
 #[test]

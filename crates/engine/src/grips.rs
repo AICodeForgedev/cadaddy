@@ -538,5 +538,4 @@ pub fn polyline_grip_count(p: &LwPolyline) -> usize {
 }
 
 #[cfg(test)]
-#[path = "grips_tests.rs"]
 mod tests;

@@ -1222,3 +1222,6 @@ menu	Modify	Modifikace
 	Not a number or distance: {text}	Není číslo ani vzdálenost: {text}
 	Query Texts	Dotaz na texty
 	Analyze Shapes	Analyzovat tvary
+	Check for Updates…	Zkontrolovat aktualizace…
+	CADCraft is up to date.	CADCraft je aktuální.
+	Could not check for updates.	Aktualizace se nepodařilo zkontrolovat.
