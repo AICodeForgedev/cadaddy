@@ -3220,3 +3220,47 @@
 	Element Property Summary	Resumo das propriedades dos elementos
 	BIM Properties	Propriedades BIM
 	Kind	Espécie
+	Element Identities (BIM)	Identidades de elementos (BIM)
+	Room Connections	Conexões entre ambientes
+	Link Print Set	Vincular conjunto de pranchas
+	Check Building Codes	Verificar códigos de obras
+	Code Rules	Regras do código
+	Select Building Codes	Selecionar códigos de obras
+	Fill Element Properties	Preencher propriedades dos elementos
+	Build Construction Sequence	Criar sequência construtiva
+	Construction Sequence	Sequência construtiva
+	Edit Sequence Activity	Editar atividade da sequência
+	Show Sequence at Date	Mostrar a sequência em uma data
+	Export Construction Sequence	Exportar sequência construtiva
+	Sequence Trade Conflicts	Conflitos entre disciplinas na sequência
+	Ceiling Space Fit	Espaço no entreforro
+	Takeoff by Activity	Levantamento por atividade
+	BIM	BIM
+	Door	Porta
+	Plan Views	Vistas de planta
+	Generate Plan Views	Gerar vistas de planta
+	Draw Wall (Object)	Desenhar parede (objeto)
+	Place Door in Wall	Inserir porta na parede
+	Place Window in Wall	Inserir janela na parede
+	Resolve Plan Entity	Resolver elemento da planta
+	Record As-Built Change	Registrar alteração as-built
+	Import As-Built Markups	Importar marcações as-built
+	List As-Built Changes	Listar alterações as-built
+	Set As-Built Change Status	Definir status da alteração as-built
+	Compare Design and As-Built	Comparar projeto e as-built
+	Export As-Built	Exportar as-built
+	Map Line to Price Row	Mapear linha para linha de preço
+	Start Cover Check	Iniciar verificação antes do fechamento
+	Cover Check Status	Status da verificação antes do fechamento
+	Check Cover Item	Marcar item antes do fechamento
+	Reopen Cover Item	Reabrir item antes do fechamento
+	Sign Inspection	Assinar inspeção
+	Ready to Cover	Pronto para fechar
+	Cover Check Wall	Parede da verificação antes do fechamento
+	Add In-Wall Photo	Adicionar foto dentro da parede
+	Wall	Parede
+	Ready to cover	Pronto para fechar
+	Not ready to cover	Não pronto para fechar
+	Checklist	Lista de verificação
+	Photos	Fotos
+	Photo	Foto

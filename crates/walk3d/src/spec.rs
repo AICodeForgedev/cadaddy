@@ -74,6 +74,11 @@ pub struct BuildingSpec {
     /// trades and tree branches shown, the level isolated.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub bim_view: serde_json::Value,
+    /// The construction sequence's settings (`schedule.*`): start date, crews, working days,
+    /// zone size, rates and the edits made to activities. The sequence itself is built from the
+    /// model each time.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub sequence: serde_json::Value,
     /// Typical units (`unittypes.*`, Q305): the unit types read from the enlarged unit plans and
     /// their instances on the floor plans, with hands and overrides. Kept as written.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
@@ -163,6 +168,11 @@ pub struct BuildingSpec {
     /// so later compares keep user markup (objects not in this set).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub print_baseline: Vec<u64>,
+    /// Building-code rule book selection and project-level amendments (`code.*`): which codes,
+    /// editions and jurisdiction apply to this project. The rules themselves are the starter set
+    /// shipped with CADaddy plus any user additions.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub codebook: serde_json::Value,
 }
 
 /// One part of a spec in plain language: its section, key (for approval and editing) and text.
@@ -617,6 +627,8 @@ pub struct Exterior {
     pub crickets: Vec<Cricket>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub equipment: Vec<Equipment>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drains: Vec<RoofDrain>,
     /// Parapet heights the elevations give, by roof level: kept here so they reach roofs read
     /// later, whatever the reading order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -625,7 +637,12 @@ pub struct Exterior {
 
 impl Exterior {
     pub fn is_empty(&self) -> bool {
-        self.facades.is_empty() && self.roofs.is_empty() && self.crickets.is_empty() && self.equipment.is_empty() && self.parapets.is_empty()
+        self.facades.is_empty()
+            && self.roofs.is_empty()
+            && self.crickets.is_empty()
+            && self.equipment.is_empty()
+            && self.drains.is_empty()
+            && self.parapets.is_empty()
     }
 
     /// The parapet height an elevation gives for a level, feet.
@@ -769,6 +786,13 @@ pub struct Equipment {
     /// Whether the height was read from its note or is the 4'-0" default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height_status: Option<ValueStatus>,
+}
+
+/// A roof drain on the roof plan (sheet units, on its level's plan).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RoofDrain {
+    pub level: String,
+    pub at: [f64; 2],
 }
 
 /// Door and window schedules read from the sheets (`schedules.read`).
@@ -2273,6 +2297,7 @@ impl BuildingSpec {
             wholejob: serde_json::Value::Null,
             bim_view: serde_json::Value::Null,
             progress: serde_json::Value::Null,
+            sequence: serde_json::Value::Null,
             unit_types: serde_json::Value::Null,
             unit_instances: serde_json::Value::Null,
             layers,
@@ -2302,6 +2327,7 @@ impl BuildingSpec {
             guess: BTreeMap::new(),
             sources: BTreeMap::new(),
             print_baseline: Vec::new(),
+            codebook: serde_json::Value::Null,
         }
     }
 
@@ -2413,7 +2439,7 @@ impl BuildingSpec {
     }
 
     pub fn level(&self, name: &str) -> Option<&Level> {
-        self.levels.iter().find(|l| l.name.eq_ignore_ascii_case(name))
+        self.level_matching(name).and_then(|i| self.levels.get(i))
     }
 
     /// Problems found in the spec alone (see `bspec.validate` for those against the drawing).

@@ -3002,3 +3002,47 @@
 	Element Property Summary	Synthèse des propriétés des éléments
 	BIM Properties	Propriétés BIM
 	Kind	Nature
+	Element Identities (BIM)	Identités des éléments (BIM)
+	Room Connections	Liaisons entre pièces
+	Link Print Set	Lier le jeu de plans
+	Check Building Codes	Vérifier les codes du bâtiment
+	Code Rules	Règles du code
+	Select Building Codes	Sélectionner les codes du bâtiment
+	Fill Element Properties	Remplir les propriétés des éléments
+	Build Construction Sequence	Créer la séquence de construction
+	Construction Sequence	Séquence de construction
+	Edit Sequence Activity	Modifier une activité de la séquence
+	Show Sequence at Date	Afficher la séquence à une date
+	Export Construction Sequence	Exporter la séquence de construction
+	Sequence Trade Conflicts	Conflits entre corps d’état
+	Ceiling Space Fit	Espace du plénum de plafond
+	Takeoff by Activity	Métré par activité
+	BIM	BIM
+	Door	Porte
+	Plan Views	Vues en plan
+	Generate Plan Views	Générer les vues en plan
+	Draw Wall (Object)	Dessiner mur (objet)
+	Place Door in Wall	Insérer porte dans le mur
+	Place Window in Wall	Insérer fenêtre dans le mur
+	Resolve Plan Entity	Résoudre l'élément du plan
+	Record As-Built Change	Enregistrer une modification de récolement
+	Import As-Built Markups	Importer les annotations de récolement
+	List As-Built Changes	Lister les modifications de récolement
+	Set As-Built Change Status	Définir l'état d'une modification de récolement
+	Compare Design and As-Built	Comparer conception et récolement
+	Export As-Built	Exporter le récolement
+	Map Line to Price Row	Associer la ligne à la ligne de prix
+	Start Cover Check	Démarrer le contrôle avant fermeture
+	Cover Check Status	État du contrôle avant fermeture
+	Check Cover Item	Cocher un point avant fermeture
+	Reopen Cover Item	Rouvrir un point avant fermeture
+	Sign Inspection	Signer l'inspection
+	Ready to Cover	Prêt à fermer
+	Cover Check Wall	Mur du contrôle avant fermeture
+	Add In-Wall Photo	Ajouter une photo dans le mur
+	Wall	Mur
+	Ready to cover	Prêt à fermer
+	Not ready to cover	Pas prêt à fermer
+	Checklist	Liste de contrôle
+	Photos	Photos
+	Photo	Photo

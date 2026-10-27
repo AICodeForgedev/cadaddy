@@ -89,6 +89,9 @@ pub struct FieldViewer {
     pub open_requested: bool,
     /// The spot the 3D view orbits when a plan point was sent to it (feet).
     pub focus: Option<[f64; 3]>,
+    /// The wall face last tapped (index into the package's `cover`): its pre-cover checklist
+    /// and in-wall photos are shown (Q5119).
+    pub cover: Option<usize>,
 }
 
 impl Default for FieldViewer {
@@ -118,6 +121,7 @@ impl Default for FieldViewer {
             drawn_3d: 0,
             open_requested: false,
             focus: None,
+            cover: None,
         }
     }
 }
@@ -135,12 +139,15 @@ impl FieldViewer {
     pub fn open(&mut self, bytes: &[u8]) -> Result<(), String> {
         let mut pkg = FieldPackage::from_json(bytes)?;
         pkg.assign_rooms();
-        // Notes made here and not sent yet stay when the same project's package is replaced.
+        // Notes made here and not in the drawing yet (unsent, or sent and not acknowledged) stay
+        // when the same project's package is replaced. One becomes synced only when the package
+        // carries its id as synced, i.e. the office ran fieldview.sync and exported again.
         if let Some(old) = &self.pkg
             && old.project == pkg.project
         {
             let mut keep = old.unsynced();
-            keep.retain(|n| !pkg.notes.iter().any(|m| m.id == n.id));
+            keep.retain(|n| !pkg.notes.iter().any(|m| m.id == n.id && m.synced));
+            pkg.notes.retain(|m| m.synced || !keep.iter().any(|n| n.id == m.id));
             pkg.notes.extend(keep);
         }
         self.status = format!("{} — {} {}", pkg.project, pkg.elements.len(), t("elements"));
@@ -220,6 +227,7 @@ impl FieldViewer {
         let Some(pkg) = &self.pkg else { return };
         match self.tool {
             Tool::Select => {
+                self.cover = pkg.cover_at(&level, p, tol);
                 self.selected = pkg.pick_plan(&level, p, tol, &self.hidden);
                 if self.selected.is_none()
                     && let Some(r) = pkg.room_at(&level, p)
@@ -330,21 +338,25 @@ impl FieldViewer {
         Some(id)
     }
 
-    /// Send Notes: the notes not sent yet as a notes file in the outbox, then marked sent.
+    /// Send Notes: every note not in the drawing yet (new, or sent before and not back in a
+    /// package) as a notes file in the outbox, then marked sent. Only a package exported from the
+    /// drawing marks a note synced, so a lost download is fixed by sending again.
     pub fn send_notes(&mut self) -> usize {
         let Some(pkg) = self.pkg.as_mut() else { return 0 };
-        let notes = pkg.unsynced();
+        let mut notes = pkg.unsynced();
         if notes.is_empty() {
             self.status = t("No new notes to send").into();
             return 0;
         }
         let n = notes.len();
         let ids: Vec<String> = notes.iter().map(|x| x.id.clone()).collect();
+        // `sent` is this device's bookkeeping, not part of the note the drawing keeps.
+        notes.iter_mut().for_each(|x| x.sent = false);
         let file = FieldNotes::new(&pkg.project, notes);
         let Ok(bytes) = serde_json::to_vec_pretty(&file) else { return 0 };
         let name: String = pkg.project.chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' }).take(60).collect();
         self.outbox.push((format!("{name}-fieldnotes-{}.json", self.device), bytes));
-        pkg.mark_synced(&ids);
+        pkg.mark_sent(&ids);
         self.dirty = true;
         self.status = format!("{n} {}", t("notes ready to sync"));
         n
@@ -560,6 +572,31 @@ impl FieldViewer {
             }
             ui.separator();
         }
+        // The tapped wall face: its pre-cover checklist and the photos taken behind it.
+        if let Some(c) = self.cover.and_then(|i| p.cover.get(i)) {
+            ui.label(egui::RichText::new(format!("{} {} / {}", t("Wall"), c.wall, c.face)).strong().color(tk.text));
+            if !c.rooms.is_empty() || !c.fire_rating.is_empty() {
+                ui.label(egui::RichText::new(format!("{} {}", c.rooms.join(", "), c.fire_rating).trim().to_string()).color(tk.text_dim));
+            }
+            let (ready, colour) = if c.ready { (t("Ready to cover"), tk.accent) } else { (t("Not ready to cover"), tk.text_dim) };
+            ui.label(egui::RichText::new(ready).color(colour));
+            ui.label(
+                egui::RichText::new(format!("{} ({}/{})", t("Checklist"), c.checklist.iter().filter(|i| i.done).count(), c.checklist.len()))
+                    .color(tk.text),
+            );
+            for item in &c.checklist {
+                let mut done = item.done;
+                ui.add_enabled(false, egui::Checkbox::new(&mut done, &item.description));
+            }
+            ui.label(egui::RichText::new(format!("{} ({})", t("Photos"), c.photos.len())).color(tk.text));
+            for ph in c.photos.iter().take(50) {
+                let caption = if ph.caption.is_empty() { &ph.uri } else { &ph.caption };
+                ui.label(
+                    egui::RichText::new(format!("{}: {caption} ({}, {})", ph.id, ph.uri, cadaddy_walk3d::feet(ph.elevation_ft))).color(tk.text_dim),
+                );
+            }
+            ui.separator();
+        }
         // The room: its unit, open clashes and RFIs, notes.
         if let Some(r) = self.room.and_then(|i| p.rooms.get(i)) {
             ui.label(egui::RichText::new(format!("{} {} {}", t("Room"), r.number, r.name)).strong().color(tk.text));
@@ -582,8 +619,17 @@ impl FieldViewer {
                 p.notes.iter().filter(|n| n.room.eq_ignore_ascii_case(&r.number) && n.level.eq_ignore_ascii_case(&r.level)).collect();
             ui.label(egui::RichText::new(format!("{} ({})", t("Notes"), notes.len())).color(tk.text));
             for n in notes.iter().take(50) {
-                let kind = if n.kind == NoteKind::VerifiedPoint { t("Verified") } else { t("Note") };
-                let sent = if n.synced { "" } else { " •" };
+                let kind = match n.kind {
+                    NoteKind::VerifiedPoint => t("Verified"),
+                    NoteKind::Photo => t("Photo"),
+                    NoteKind::Note => t("Note"),
+                };
+                // • not sent yet, ↑ sent and not back in a package yet, nothing once in the drawing.
+                let sent = match (n.synced, n.sent) {
+                    (true, _) => "",
+                    (false, true) => " ↑",
+                    (false, false) => " •",
+                };
                 ui.label(egui::RichText::new(format!("{kind} {}{sent}: {}", n.id, n.text)).color(tk.text_dim));
             }
             if go.is_some() {

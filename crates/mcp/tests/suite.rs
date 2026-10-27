@@ -98,6 +98,7 @@ fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
         ("lv_sleeves", json!({ "page": 1 }), json!({ "page": "one" })),
         ("lv_bom", json!({ "has_lv_docs": true }), json!({ "has_lv_docs": "yes" })),
         ("lv_connections", json!({ "page": 1 }), json!({ "page": "one" })),
+        ("codebook", json!({ "action": "rules", "topic": "framing", "limit": 5 }), json!({ "action": "fly" })),
         ("arch_read", json!({ "limit": 5 }), json!({ "limit": "ten" })),
         ("bim_job", json!({ "action": "briefing" }), json!({ "action": "fly" })),
         ("guided_job", json!({ "action": "explain", "stage": "classify" }), json!({ "action": "fly" })),
@@ -139,6 +140,10 @@ fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
         ("save", json!({ "path": format!("{dir}/suite.dxf") }), json!({ "path": 7 })),
         // Frames the walls of the sheet just saved (none: an empty framing, still an answer).
         ("framing", json!({ "action": "build", "params": { "paths": [format!("{dir}/suite.dxf")] } }), json!({ "action": "frame" })),
+        // The drawing's as-built record (empty: an empty page, still an answer).
+        ("asbuilt", json!({ "action": "list", "params": { "limit": 5 } }), json!({ "action": "fly" })),
+        // The drawing's cover record (none yet: an empty page with a hint, still an answer).
+        ("cover", json!({ "action": "status", "params": { "limit": 5 } }), json!({ "action": "fly" })),
         ("plot", json!({ "path": format!("{dir}/suite.pdf") }), json!({})),
         ("open", json!({ "path": format!("{dir}/suite.dxf") }), json!({})),
         ("list_drawings", json!({}), json!("all")),

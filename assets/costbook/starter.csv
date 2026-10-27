@@ -1,0 +1,95 @@
+item,size,unit,material,labor_hours,trade,source
+Wall untyped,,lf,8.50,0.25,general,starter — replace with your own
+Wall area untyped,,sq ft,2.80,0.08,general,starter — replace with your own
+Wall,,lf,8.50,0.25,general,starter — replace with your own
+Wall area,,sq ft,2.80,0.08,general,starter — replace with your own
+Door,,each,285.00,1.50,general,starter — replace with your own
+Door hardware set,,each,75.00,0.50,general,starter — replace with your own
+Ceiling,,sq ft,2.25,0.06,general,starter — replace with your own
+Floor slab,,sq ft,6.50,0.04,general,starter — replace with your own
+Roof area,,sq ft,4.80,0.05,general,starter — replace with your own
+Board gypsum board,,sq ft,0.45,0.02,general,starter — replace with your own
+Board gypsum board,5/8" fire,sq ft,0.55,0.02,general,starter — replace with your own
+Studs wood,,lf,1.20,0.04,general,starter — replace with your own
+Studs steel,,lf,0.90,0.03,general,starter — replace with your own
+Track,,lf,0.65,0.02,general,starter — replace with your own
+Duplex receptacle,,each,2.50,0.40,electrical,starter — replace with your own
+Receptacle,,each,2.50,0.40,electrical,starter — replace with your own
+GFCI receptacle,,each,19.00,0.50,electrical,starter — replace with your own
+Single-pole switch,,each,2.00,0.30,electrical,starter — replace with your own
+Switch,,each,2.00,0.30,electrical,starter — replace with your own
+Three-way switch,,each,3.50,0.35,electrical,starter — replace with your own
+Data outlet,,each,4.50,0.45,electrical,starter — replace with your own
+Fire alarm device,,each,35.00,0.60,electrical,starter — replace with your own
+Exhaust fan,,each,85.00,1.20,electrical,starter — replace with your own
+Smoke detector,,each,28.00,0.50,electrical,starter — replace with your own
+Motion sensor,,each,22.00,0.40,electrical,starter — replace with your own
+Occupancy sensor,,each,32.00,0.45,electrical,starter — replace with your own
+Luminaire type,,each,95.00,0.75,electrical,starter — replace with your own
+Light fixture,,each,95.00,0.75,electrical,starter — replace with your own
+"Box, 4"" square",2-1/8" deep,each,3.00,0.15,electrical,starter — replace with your own
+"Box, 4-11/16"" square",,each,4.50,0.20,electrical,starter — replace with your own
+Plaster ring,1 gang,each,0.70,0.05,electrical,starter — replace with your own
+Plaster ring,2 gang,each,1.10,0.05,electrical,starter — replace with your own
+Device plate,1 gang,each,0.60,0.03,electrical,starter — replace with your own
+Device plate,2 gang,each,0.90,0.03,electrical,starter — replace with your own
+EMT conduit,1/2",ft,0.35,0.04,electrical,starter — replace with your own
+EMT conduit,3/4",ft,0.52,0.05,electrical,starter — replace with your own
+EMT conduit,1",ft,0.84,0.06,electrical,starter — replace with your own
+EMT conduit,1-1/4",ft,1.28,0.07,electrical,starter — replace with your own
+EMT conduit,1-1/2",ft,1.56,0.08,electrical,starter — replace with your own
+EMT conduit,2",ft,2.01,0.10,electrical,starter — replace with your own
+EMT coupling,1/2",each,0.30,0.03,electrical,starter — replace with your own
+EMT coupling,3/4",each,0.35,0.03,electrical,starter — replace with your own
+EMT coupling,1",each,0.55,0.04,electrical,starter — replace with your own
+EMT connector,1/2",each,0.35,0.03,electrical,starter — replace with your own
+EMT connector,3/4",each,0.45,0.03,electrical,starter — replace with your own
+EMT connector,1",each,0.65,0.04,electrical,starter — replace with your own
+Conduit strap,1/2",each,0.20,0.03,electrical,starter — replace with your own
+Conduit strap,3/4",each,0.25,0.03,electrical,starter — replace with your own
+Conduit strap,1",each,0.35,0.03,electrical,starter — replace with your own
+EMT 90 elbow,1/2",each,1.80,0.10,electrical,starter — replace with your own
+EMT 90 elbow,3/4",each,2.40,0.12,electrical,starter — replace with your own
+EMT 90 elbow,1",each,4.50,0.15,electrical,starter — replace with your own
+THHN wire,#14,ft,0.08,0.01,electrical,starter — replace with your own
+THHN wire,#12,ft,0.12,0.01,electrical,starter — replace with your own
+THHN wire,#10,ft,0.18,0.02,electrical,starter — replace with your own
+THHN wire,#8,ft,0.35,0.02,electrical,starter — replace with your own
+THHN wire,#6,ft,0.55,0.03,electrical,starter — replace with your own
+THHN wire,#4,ft,0.90,0.04,electrical,starter — replace with your own
+THHN wire,#2,ft,1.45,0.05,electrical,starter — replace with your own
+THHN wire,#1/0,ft,2.30,0.06,electrical,starter — replace with your own
+Wire nut,,each,0.08,0.01,electrical,starter — replace with your own
+Insulating bushing,,each,1.20,0.05,electrical,starter — replace with your own
+Panel,100A,each,180.00,4.00,electrical,starter — replace with your own
+Panel,200A,each,350.00,6.00,electrical,starter — replace with your own
+Panel,400A,each,850.00,10.00,electrical,starter — replace with your own
+20A 1P breaker,,each,9.00,0.20,electrical,starter — replace with your own
+30A 2P breaker,,each,22.00,0.25,electrical,starter — replace with your own
+Duct,,ft,8.50,0.25,mechanical,starter — replace with your own
+Sheet metal,,sq ft,3.20,0.10,mechanical,starter — replace with your own
+Diffuser,,each,42.00,0.50,mechanical,starter — replace with your own
+Grille,,each,35.00,0.45,mechanical,starter — replace with your own
+Register,,each,38.00,0.45,mechanical,starter — replace with your own
+Terminal,,each,42.00,0.50,mechanical,starter — replace with your own
+PTAC unit,,each,650.00,4.00,mechanical,starter — replace with your own
+Fan coil unit,,each,480.00,3.50,mechanical,starter — replace with your own
+AHU,,each,3500.00,16.00,mechanical,starter — replace with your own
+Exhaust fan unit,,each,220.00,2.00,mechanical,starter — replace with your own
+Hanger,,each,3.50,0.15,mechanical,starter — replace with your own
+Fire damper,,each,85.00,1.00,mechanical,starter — replace with your own
+Smoke damper,,each,120.00,1.20,mechanical,starter — replace with your own
+Flexible duct connector,,each,18.00,0.30,mechanical,starter — replace with your own
+Pipe,,ft,6.50,0.20,plumbing,starter — replace with your own
+Pipe fitting,,each,8.50,0.25,plumbing,starter — replace with your own
+Valve,,each,45.00,0.50,plumbing,starter — replace with your own
+Lavatory,,each,180.00,2.50,plumbing,starter — replace with your own
+Water closet,,each,220.00,3.00,plumbing,starter — replace with your own
+Shower valve,,each,95.00,1.50,plumbing,starter — replace with your own
+Bathtub,,each,350.00,4.00,plumbing,starter — replace with your own
+Kitchen sink,,each,160.00,2.00,plumbing,starter — replace with your own
+Floor drain,,each,65.00,1.50,plumbing,starter — replace with your own
+Cleanout,,each,28.00,0.75,plumbing,starter — replace with your own
+Water heater,,each,850.00,4.00,plumbing,starter — replace with your own
+Hose bibb,,each,25.00,0.75,plumbing,starter — replace with your own
+Backflow preventer,,each,280.00,2.00,plumbing,starter — replace with your own

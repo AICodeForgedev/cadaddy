@@ -3194,3 +3194,47 @@ menu	Modify	Modifikace
 	Element Property Summary	Souhrn vlastností prvků
 	BIM Properties	Vlastnosti BIM
 	Kind	Druh
+	Element Identities (BIM)	Identity prvků (BIM)
+	Room Connections	Propojení místností
+	Link Print Set	Propojit sadu výkresů
+	Check Building Codes	Kontrola stavebních předpisů
+	Code Rules	Pravidla předpisů
+	Select Building Codes	Vybrat stavební předpisy
+	Fill Element Properties	Vyplnit vlastnosti prvků
+	Build Construction Sequence	Sestavit postup výstavby
+	Construction Sequence	Postup výstavby
+	Edit Sequence Activity	Upravit činnost postupu
+	Show Sequence at Date	Zobrazit postup k datu
+	Export Construction Sequence	Exportovat postup výstavby
+	Sequence Trade Conflicts	Střety profesí v postupu
+	Ceiling Space Fit	Prostor nad podhledem
+	Takeoff by Activity	Výkaz výměr podle činností
+	BIM	BIM
+	Door	Dveře
+	Plan Views	Půdorysné pohledy
+	Generate Plan Views	Generovat půdorysné pohledy
+	Draw Wall (Object)	Kreslit zeď (objekt)
+	Place Door in Wall	Vložit dveře do zdi
+	Place Window in Wall	Vložit okno do zdi
+	Resolve Plan Entity	Rozlišit prvek plánu
+	Record As-Built Change	Zaznamenat změnu skutečného provedení
+	Import As-Built Markups	Importovat značky skutečného provedení
+	List As-Built Changes	Seznam změn skutečného provedení
+	Set As-Built Change Status	Nastavit stav změny skutečného provedení
+	Compare Design and As-Built	Porovnat návrh a skutečné provedení
+	Export As-Built	Exportovat skutečné provedení
+	Map Line to Price Row	Přiřadit řádek k cenovému řádku
+	Start Cover Check	Zahájit kontrolu před zakrytím
+	Cover Check Status	Stav kontroly před zakrytím
+	Check Cover Item	Odškrtnout položku před zakrytím
+	Reopen Cover Item	Znovu otevřít položku před zakrytím
+	Sign Inspection	Podepsat inspekci
+	Ready to Cover	Připraveno k zakrytí
+	Cover Check Wall	Stěna v kontrole před zakrytím
+	Add In-Wall Photo	Přidat fotku ve stěně
+	Wall	Stěna
+	Ready to cover	Připraveno k zakrytí
+	Not ready to cover	Není připraveno k zakrytí
+	Checklist	Kontrolní seznam
+	Photos	Fotky
+	Photo	Fotka

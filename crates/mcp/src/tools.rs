@@ -52,8 +52,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "fields": {"type": "object"}, "remove_fields": {"type": "array", "items": {"type": "string"}},
                 "handles": {"type": "array", "items": {"type": "string"}},
                 "create": {"type": "object"}}, "required": ["action"]}}),
-        json!({"name": "bim_props", "description": "Properties every element of the built model carries itself (outlet: type duplex, mount_height 18 in, circuit G-12, room 131…), each with its source: print (read from a sheet), legend, schedule, spec, note, rule or default (assumed — always marked), user (edited) or computed. action \"get\" {handle | handles} — an element's properties, its kind's standard keys and the missing ones; \"set\" {handle | handles | filter: {kind?, where?}, key, value, unit?, note?} or {…, props: {key: value}} — set values as the user's (kept through a rebuild from the prints); \"find\" {kind?, where: {key: value | \"exists\" | \"missing\"}} — the matching elements; \"summary\" {kind?} — per kind: count, values per key, sources per key. Kinds: wall, door, window, room, floor, ceiling, roof, device, fixture, light_fixture, equipment, duct, pipe, conduit.",
-            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set", "find", "summary"]},
+        json!({"name": "bim_props", "description": "Properties every element of the built model carries itself (outlet: type duplex, mount_height 18 in, circuit G-12, room 131…), each with its source: print (read from a sheet), legend, schedule, spec, note, rule or default (assumed — always marked), user (edited) or computed. action \"get\" {handle | handles} — an element's properties, its kind's standard keys and the missing ones; \"set\" {handle | handles | filter: {kind?, where?}, key, value, unit?, note?} or {…, props: {key: value}} — set values as the user's (kept through a rebuild from the prints); \"find\" {kind?, where: {key: value | \"exists\" | \"missing\"}} — the matching elements; \"summary\" {kind?} — per kind: count, values per key, sources per key; \"fill\" {} — put what the readers found on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), a person's values kept. Kinds: wall, door, window, room, floor, ceiling, roof, device, fixture, light_fixture, equipment, duct, pipe, conduit.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set", "find", "summary", "fill"]},
                 "handle": {"type": "string"}, "handles": {"type": "array", "items": {"type": "string"}},
                 "filter": {"type": "object"}, "kind": {"type": "string"}, "where": {"type": "object"},
                 "key": {"type": "string"}, "value": {}, "unit": {"type": "string"}, "note": {"type": "string"},
@@ -66,6 +66,13 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "source": {"type": "string"}, "set_by": {"type": "string"}, "reason": {"type": "string"},
                 "label": {"type": "string"}, "path": {"type": "string"}, "merge": {"type": "boolean"}},
                 "required": ["action"]}}),
+        json!({"name": "codebook", "description": "Building-code rule book: IBC, IRC, NEC, IPC, IMC, IFC, IECC rules as data (section numbers and values in our own words; starter set — verify with your AHJ). Actions:\n- select {code: \"IRC\", edition?: 2021, jurisdiction?: \"County\"} — choose code editions for this project; no args returns the current selection.\n- rules {topic?: \"framing\"|\"electrical\"|\"plumbing\"|\"mechanical\"|\"building\", code?: \"NEC\", section?: \"210.52\", offset?, limit?} — list matching rules with section citations and values.\n- check {scope?: \"framing\"|\"electrical\"|\"plumbing\"|\"mechanical\"|\"building\"|\"all\", walls?: [{id, wall_type, stud_size?, stud_spacing_in, height_ft, ...}], rooms?: [{id, room_type, receptacle_spacing_in?, has_gfci?, ...}]} — run code checks against model data; returns findings with rule_id, cite, expected, found.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["select", "rules", "check"]},
+                "code": {"type": "string"}, "edition": {"type": "integer"}, "jurisdiction": {"type": "string"},
+                "topic": {"type": "string"}, "section": {"type": "string"}, "scope": {"type": "string"},
+                "level": {"type": "string"}, "walls": {"type": "array"}, "rooms": {"type": "array"},
+                "plumbing": {"type": "array"}, "mechanical": {"type": "array"}, "building": {"type": "array"},
+                "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["action"]}}),
         json!({"name": "lv_devices", "description": "List fire alarm and low-voltage devices in the project. Paged: use page/page_size to navigate large lists. Filter by system (fire_alarm, data, security, tv, telephone, nurse_call, sound, all) and/or level.",
             "inputSchema": {"type": "object", "properties": {"system": {"type": "string"}, "level": {"type": "string"}, "page": {"type": "integer"}, "page_size": {"type": "integer"}}}}),
         json!({"name": "lv_sleeves", "description": "List LV/FA sleeves at wall and floor crossings. Filter by level and/or system. Each sleeve shows its size (computed from cables at NEC fill), material, fire rating and firestop.",
@@ -120,8 +127,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "source": {"type": "string"}, "from": {"type": "string"},
                 "keys": {"type": "array", "items": {"type": "string"}}
             }, "required": ["action"]}}),
-        json!({"name": "bim_job", "description": "Start here for BIM work on a project (you need no memory of earlier sessions: the project keeps it). One call per step; answers are short, paged (cursor) and capped; repeating a call is safe. Actions, each with an example of params:\n- briefing {} — one page: revision, what is built per level, open review items, recent changes, handoff notes, the next call.\n- note {text: \"Level 2 ducts reviewed to grid D; mech room next\"} — leave a handoff note in the project.\n- import {path: \"/jobs/hotel/prints\"} — open a folder of prints as the project and classify its sheets.\n- build {level: \"LEVEL 2\"} — build the model from the building spec (the same spec gives the same model; the first build drafts the spec from the prints).\n- resume {path: \"/jobs/hotel/prints\"} — open the job kept for those prints (each step is kept in the folder's .cadaddy folder; a new session resumes the last job by itself).\n- review_next {kind: \"mep_guess\"} — the most important open item with candidates and the documents to check.\n- review_list {status: \"open\", cursor: \"c10\"} — the queue, 10 at a time.\n- resolve {id: \"RV-M1a2b3c4d\", answer: {size_in: [14, 10], bottom_ft: 10.5}, citation: {kind: \"drawing\", document: \"M-101\", ref: \"tag at C-4\"}} — answer an item; anything the documents speak to needs a citation (drawing, schedule, spec, submittal, rfi). A concern from code knowledge alone: {id, concern: \"...\"} raises it for review instead of changing the model.\n- defer {id, reason: \"field to verify the beam depth\"} — leave it for a field decision.\n- rfi {id, question: \"Confirm duct size at C-4\"} — put it on the RFI list.\n- batch {kind: \"mep_guess\", system: \"M-DUCT-SUPP\", answer: {...}, citation: {...}} — one answer for many identical items: returns a preview and a token; call again with confirm: token.\n- log {author: \"agent\", approved: false} — what agents decided, for a person to approve.\n- takeoff {} — quantities. rfis {} — the RFI list (20 most severe; rfis {path: \"/jobs/hotel/rfis.csv\"} exports all). export {path: \"/jobs/hotel/model.ifc\"} — the model as IFC.\nLow-level commands (execute) stay available but aren't needed for these.",
-            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["briefing", "note", "import", "resume", "build", "review_next", "review_list", "resolve", "defer", "rfi", "batch", "log", "takeoff", "rfis", "export"]}, "params": {"type": "object"}}, "required": ["action"]}}),
+        json!({"name": "bim_job", "description": "Start here for BIM work on a project (you need no memory of earlier sessions: the project keeps it). One call per step; answers are short, paged (cursor) and capped; repeating a call is safe. Actions, each with an example of params:\n- briefing {} — one page: revision, what is built per level, open review items, recent changes, handoff notes, the next call.\n- note {text: \"Level 2 ducts reviewed to grid D; mech room next\"} — leave a handoff note in the project.\n- import {path: \"/jobs/hotel/prints\"} — open a folder of prints as the project and classify its sheets.\n- links {pdfs: \"/jobs/hotel/prints\"} — the sheet map: callouts and references (SEE SHEET, 3/E-501) resolved, enlarged plans placed on their overall plans and counted once, match lines, unresolved references.\n- build {level: \"LEVEL 2\"} — build the model from the building spec (the same spec gives the same model; the first build drafts the spec from the prints).\n- resume {path: \"/jobs/hotel/prints\"} — open the job kept for those prints (each step is kept in the folder's .cadaddy folder; a new session resumes the last job by itself).\n- review_next {kind: \"mep_guess\"} — the most important open item with candidates and the documents to check.\n- review_list {status: \"open\", cursor: \"c10\"} — the queue, 10 at a time.\n- resolve {id: \"RV-M1a2b3c4d\", answer: {size_in: [14, 10], bottom_ft: 10.5}, citation: {kind: \"drawing\", document: \"M-101\", ref: \"tag at C-4\"}} — answer an item; anything the documents speak to needs a citation (drawing, schedule, spec, submittal, rfi). A concern from code knowledge alone: {id, concern: \"...\"} raises it for review instead of changing the model.\n- defer {id, reason: \"field to verify the beam depth\"} — leave it for a field decision.\n- rfi {id, question: \"Confirm duct size at C-4\"} — put it on the RFI list.\n- batch {kind: \"mep_guess\", system: \"M-DUCT-SUPP\", answer: {...}, citation: {...}} — one answer for many identical items: returns a preview and a token; call again with confirm: token.\n- log {author: \"agent\", approved: false} — what agents decided, for a person to approve.\n- takeoff {} — quantities. rfis {} — the RFI list (20 most severe; rfis {path: \"/jobs/hotel/rfis.csv\"} exports all). export {path: \"/jobs/hotel/model.ifc\"} — the model as IFC.\nLow-level commands (execute) stay available but aren't needed for these.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["briefing", "note", "import", "links", "resume", "build", "review_next", "review_list", "resolve", "defer", "rfi", "batch", "log", "takeoff", "rfis", "export"]}, "params": {"type": "object"}}, "required": ["action"]}}),
         json!({"name": "site_takeoff", "description": "Sitework quantities read off a job's civil sheets (grading, site and utility plans, DXF/DWG; none: the open drawing): earthwork cut AND fill between the existing and proposed surfaces (contours and spot grades), paving, curbs, fences, utility structures with RIM/INV, and storm/sanitary/water pipe LF by size and material with trench excavation and backfill. Each line has its status (read, rule, assumed or insufficient data: no number when a surface is missing), source sheets and the objects whose shares add up to it. Paged with offset and limit (default 100); unknown symbols are listed, not guessed. Opens no dialog.",
         "inputSchema": {"type": "object", "properties": {
             "paths": {"type": "array", "description": "civil sheet files: a path, or {path, sheet} to name the sheet", "items": {}},
@@ -139,8 +146,12 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         }}}),
         json!({"name": "framing", "description": "Studs and framing from the job's prints: every wall's fixed members (ends, corners, tees, posts, kings, jacks, headers), both rule layouts (laid out from either end; agreed where they coincide), the \"next stud\" dimension and flags. Answers are compact and paged; entries are kept in the job and re-applied on every rebuild, and repeating one changes nothing. Actions, each with an example of params:\n- build {dir: \"/jobs/sample/prints\"} — read the DXF sheets and frame every wall (none: the sheets framed last, else the open print set).\n- list {level: \"1\", flagged: true, offset: 0, limit: 50} — walls with their counts by status.\n- wall {wall: \"F1-003\", members: true} — one wall: members by status and kind, both layouts, next stud, flags.\n- next_stud {wall: \"F1-003\"} — the next-stud dimension from each end under each layout.\n- field_point {wall: \"F1-003\", tape: {from: \"a\", to_near_edge_in: 15.25}, author: \"agent\"} — a measured stud (or centre_in, or photo {refs: [[x, y, in] ×3], pick: [x, y]}); its run and stacked walls snap to field verified.\n- shop_drawing {file: \"/jobs/sample/shop/L1-studs.dxf\", level: \"1\"} — STUD, JOIST/TRUSS, TENDON/PT layers replace the rule members where they cover.\n- view {wall: \"F1-003\"} or {level: \"1\", walk: true} — draw the elevation / plan on FRAMING-* layers (fixed solid, rule ghosted, dimensions) and the members as 3D boxes for Walk.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["build", "list", "wall", "next_stud", "field_point", "shop_drawing", "view"]}, "params": {"type": "object"}}, "required": ["action"]}}),
-        json!({"name": "guided_job", "description": "For prints → model/takeoff/estimate, call guided_job start then loop guided_job next / guided_job answer. The software runs a fixed pipeline (import → classify → levels → rooms → devices → bim.build → takeoff → estimate) and stops with a question at each checkpoint: confirm a scale, name a room, identify an unknown symbol, spot-check a count. The job waits until the question is answered; an answer that changes what a stage read runs that stage (and the ones after it) again and says what changed. Answers become project rules for future runs. A worklist collects every question, finding and action; each resolved action is undoable. Actions:\n- start {pdfs: folder, goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\"|\"clash\", auto?: true} — create a job; auto: true takes every default and runs to the end (a stage that found nothing is still asked).\n- next {} — the next question (or done/progress).\n- answer {id, answer} — answer a question; the pipeline resumes (reply: effect, rerun, changed).\n- status {} — job progress, findings and open worklist items.\n- explain {stage?} — what a stage does and its state.\n- rules {} — learned project rules.\n- report {} — final report.\n- worklist {status?: \"pending\"|\"resolved\"|\"info\", stage?} — the unified worklist.\n- undo {id} — undo a resolved worklist action.",
-            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "answer", "status", "explain", "rules", "report", "worklist", "undo"]}, "params": {"type": "object"}}, "required": ["action"]}}),
+        json!({"name": "asbuilt", "description": "As-built: field changes back into the model, each with who, when, why and a status (pending, field_decision, rfi_answer, change_order, rejected). Only reviewed changes go into the as-built model; pending ones never change it. Kept in the drawing; the design model is the print set's truth.json (`model`, remembered once given). Actions, each with an example of params:\n- record {kind: \"move\", element: \"E-1-REC-3\", to: [42.5, 18.0], status: \"field_decision\", author: \"agent\", reason: \"RFI-12\", model: \"/jobs/sample/prints\"} — one change (kinds move, reroute {path}, type {type}, size {size}, height {height_ft}, add {at, level}, delete, verify, note; `near: [x, y]` with `level` instead of `element` takes the nearest); kind stud {wall, tape: {from: \"a\", to_near_edge_in: 15.25}} enters a measured stud through the framing (framing build first).\n- import_markups {pdf: \"/jobs/sample/review/E-101.pdf\", confirm: false} — the review markups on a printed sheet (clouds, arrows, callouts) mapped to the elements they mark: a preview; confirm: true keeps them as pending changes.\n- list {status: \"pending\", level: \"1\", offset: 0, limit: 50} — the changes, paged.\n- set_status {ids: [\"AB-0001\"], status: \"change_order\", reason: \"CO-4\"} — review changes.\n- compare {include_pending: false} — how the as-built model differs from the design.\n- export {dir: \"/jobs/sample/asbuilt\"} — an as-built sheet per level (DXF, changes on ASBUILT-CHANGES with a status legend) and asbuilt.ifc with CaDaddy_AsBuilt property sets.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["record", "import_markups", "list", "set_status", "compare", "export"]}, "params": {"type": "object"}}, "required": ["action"]}}),
+        json!({"name": "cover", "description": "Pre-cover hold points: before a wall or ceiling is closed, every wall face (and ceiling) has a rough-in checklist (boxes, cable, protection_plates, firestop, sleeves, grounding, inspection_signed) and the AHJ signs each inspection phase per level. An area can't be marked ready to cover until its items are done and its phases signed; a refusal lists what is open. In-wall photos are filed on the wall face where they were taken. Kept in the drawing. Actions, each with an example of params:\n- init {model: \"/jobs/sample/prints\"} — the record from the print set's truth.json (once; replace: true starts again).\n- status {level: \"1\", ready: false, offset: 0, limit: 50} — per level and per area, paged.\n- check {area: \"W1-003/A\", item: \"firestop\", by: \"agent\"} / uncheck {area, item} — an item done or reopened (reopening takes ready off).\n- sign {phase: \"Rough-In Electrical\", level: \"1\", inspector: \"AHJ\", permit: \"E-1234\"} — one phase on one level.\n- ready {area: \"W1-003/A\", by: \"Foreman\"} — the hold point: {ready: true} or {ready: false, open_items, unsigned_phases, reason}.\n- wall {at: [12.5, 30.2], level: \"1\"} or {wall: \"W1-003\"} — both faces with checklists and photos; a position picks the face on that side.\n- photo {at: [12.5, 30.2], level: \"1\", uri: \"photos/IMG_0042.jpg\", caption: \"boxes at 18 in\"} — filed on the face of the nearest wall on that side (none within 3 ft: refused).",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["init", "status", "check", "uncheck", "sign", "ready", "wall", "photo"]}, "params": {"type": "object"}}, "required": ["action"]}}),
+        json!({"name": "guided_job", "description": "For prints → model/takeoff/estimate, call guided_job start then loop guided_job next / guided_job answer. The software runs a fixed pipeline (import → classify → levels → rooms → devices → bim.build → takeoff → estimate) and stops with a question at each checkpoint: confirm a scale, name a room, identify an unknown symbol, spot-check a count. The job waits until the question is answered; an answer that changes what a stage read runs that stage (and the ones after it) again and says what changed. Answers become project rules for future runs. A worklist collects every question, finding and action; each resolved action is undoable. Actions:\n- start {pdfs: folder, goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\"|\"clash\", auto?: true} — create a job; auto: true takes every default and runs to the end (a stage that found nothing is still asked).\n- next {} — the next question (or done/progress).\n- answer {id: \"Q-rooms-23\", answer: \"Correct\"} — answer a question (ids come from next: Q-<stage>-<n>); the pipeline resumes (reply: effect, rerun, changed). Many at once: {answers: [{id, answer}, …]} — each stands alone (an unknown or merged id is a warning, the rest are kept) and the stages they change run again once. A level question takes an elevation (\"12'-6\\\"\" or {elevation_ft: 12.5, name: \"Mezzanine\"}). Each question's if_changed says what an answer other than the default runs again and about how long.\n- set_mode {auto: true} — run the job on unattended from here (answers given are kept); auto: false makes it stop at checkpoints again.\n- status {} — job progress, findings and open worklist items.\n- explain {stage?} — what a stage does and its state.\n- rules {} — learned project rules.\n- report {} — final report.\n- worklist {status?: \"pending\"|\"resolved\"|\"info\", stage?} — the unified worklist.\n- undo {id} — undo a resolved worklist action.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "answer", "set_mode", "status", "explain", "rules", "report", "worklist", "undo"]}, "params": {"type": "object"}}, "required": ["action"]}}),
         json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items (paged, default 50), \"edit\" changes one item by its stable id (e.g. \"R1\"), \"casework\" reads the open architectural floor plan's casework and plumbing fixtures with their schedule: each item's tag, kind, 3D family, position, height, source (sheet, schedule) and status (schedule / note / pattern / tag), paged by cursor and limit; place: true makes each item with a family that model.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string"},
@@ -327,9 +338,30 @@ fn bim_job_action(b: &mut dyn Backend, action: Option<&str>, params: Value) -> R
                 json!({"opened": {"name": opened["name"], "sheets": opened["sheets"], "revision": opened["revision"]}, "classified": classified, "readers": reader_results, "next": "bim_job build {}"}),
             );
         }
+        Some("links") => {
+            // The sheet map, short: callouts counted by kind, the first unresolved ones.
+            let v = exec(b, "printset.links", params)?;
+            let mut by_kind: std::collections::BTreeMap<String, (u64, u64)> = std::collections::BTreeMap::new();
+            for c in v["callouts"].as_array().into_iter().flatten() {
+                let e = by_kind.entry(c["kind"].as_str().unwrap_or("?").to_string()).or_default();
+                e.0 += 1;
+                if c["resolved"] == true {
+                    e.1 += 1;
+                }
+            }
+            let kinds: serde_json::Map<String, Value> = by_kind.into_iter().map(|(k, (n, r))| (k, json!({"count": n, "resolved": r}))).collect();
+            let unresolved: Vec<Value> = v["unresolved"].as_array().into_iter().flatten().take(20).cloned().collect();
+            return Ok(json!({
+                "sheets": v["sheets"].as_array().map_or(0, Vec::len), "pages_read": v["pages_read"],
+                "callouts": v["callouts"].as_array().map_or(0, Vec::len), "resolved_pct": v["resolved_pct"], "by_kind": kinds,
+                "enlarged": v["enlarged"], "match_lines": v["match_lines"], "levels": v["levels"], "double_counted": v["double_counted"],
+                "unresolved": unresolved, "unresolved_total": v["unresolved"].as_array().map_or(0, Vec::len),
+                "more": "execute printset.links {pdfs} for every callout and fact",
+            }));
+        }
         Some(other) => {
             return Err(format!(
-                "bim_job has no action `{}` — use briefing, note, import, resume, build, review_next, review_list, resolve, defer, rfi, batch, log, takeoff, rfis or export",
+                "bim_job has no action `{}` — use briefing, note, import, links, resume, build, review_next, review_list, resolve, defer, rfi, batch, log, takeoff, rfis or export",
                 other.chars().take(30).collect::<String>()
             ));
         }
@@ -371,7 +403,8 @@ fn text(v: &Value) -> Value {
 }
 
 fn err_text(e: &str) -> Value {
-    json!({"content": [{"type": "text", "text": e}], "isError": true})
+    let clean: String = e.chars().map(|c| if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' { '\u{FFFD}' } else { c }).collect();
+    json!({"content": [{"type": "text", "text": clean}], "isError": true})
 }
 
 /// Whether `v` fits the subset of JSON Schema the tool definitions use: `type`, `items`,
@@ -508,13 +541,30 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Some("set") => "bim.props.set",
                 Some("find") => "bim.props.find",
                 Some("summary") => "bim.props.summary",
-                _ => return Ok(err_text("bim_props needs an action: get, set, find or summary")),
+                Some("fill") => "bim.props.fill",
+                _ => return Ok(err_text("bim_props needs an action: get, set, find, summary or fill")),
             };
             let mut params = a.clone();
             if let Some(o) = params.as_object_mut() {
                 o.remove("action");
             }
             exec(b, command, params)
+        }
+        "codebook" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("select") => "code.select",
+                Some("rules") => "code.rules",
+                Some("check") => "code.check",
+                Some(other) => return Err(format!(
+                    "codebook has no action `{other}` — use select, rules or check"
+                )),
+                None => return Err("codebook needs an action — start with {action: \"select\"}".into()),
+            };
+            let mut params = a.clone();
+            if let Some(o) = params.as_object_mut() {
+                o.remove("action");
+            }
+            b.call("engine.execute", json!({"command": command, "params": params}))
         }
         "project_rules" => {
             let command = match a.get("action").and_then(Value::as_str) {
@@ -606,9 +656,10 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Some("report") => "job.report",
                 Some("worklist") => "job.worklist",
                 Some("undo") => "job.undo",
+                Some("set_mode") => "job.set_mode",
                 Some(other) => {
                     return Err(format!(
-                        "guided_job has no action `{}` — use start, next, answer, status, explain, rules, report, worklist or undo",
+                        "guided_job has no action `{}` — use start, next, answer, set_mode, status, explain, rules, report, worklist or undo",
                         other.chars().take(30).collect::<String>()
                     ));
                 }
@@ -617,7 +668,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
             let params = a.get("params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
             let resumed = if command == "job.start" { None } else { resume_kept(b) };
             exec(b, command, params).map(|mut out| {
-                if matches!(command, "job.start" | "job.next" | "job.answer" | "job.undo") {
+                if matches!(command, "job.start" | "job.next" | "job.answer" | "job.set_mode" | "job.undo") {
                     keep(b, &mut out);
                 }
                 if let (Some(r), Some(o)) = (resumed, out.as_object_mut()) {
@@ -644,6 +695,46 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                     ));
                 }
                 None => return Err("framing needs an action — start with {action: \"build\", params: {dir: \"<folder of DXF sheets>\"}}".into()),
+            };
+            let params = a.get("params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
+            exec(b, command, params)
+        }
+        "asbuilt" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("record") => "asbuilt.record",
+                Some("import_markups") => "asbuilt.import_markups",
+                Some("list") => "asbuilt.list",
+                Some("set_status") => "asbuilt.set_status",
+                Some("compare") => "asbuilt.compare",
+                Some("export") => "asbuilt.export",
+                Some(other) => {
+                    return Err(format!(
+                        "asbuilt has no action `{}` — use record, import_markups, list, set_status, compare or export",
+                        other.chars().take(30).collect::<String>()
+                    ));
+                }
+                None => return Err("asbuilt needs an action — start with {action: \"list\"} or {action: \"import_markups\", params: {pdf: \"<marked-up sheet PDF>\", model: \"<print set folder>\"}}".into()),
+            };
+            let params = a.get("params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
+            exec(b, command, params)
+        }
+        "cover" => {
+            let command = match a.get("action").and_then(Value::as_str) {
+                Some("init") => "cover.init",
+                Some("status") => "cover.status",
+                Some("check") => "cover.check",
+                Some("uncheck") => "cover.uncheck",
+                Some("sign") => "cover.sign",
+                Some("ready") => "cover.ready",
+                Some("wall") => "cover.wall",
+                Some("photo") => "cover.photo",
+                Some(other) => {
+                    return Err(format!(
+                        "cover has no action `{}` — use init, status, check, uncheck, sign, ready, wall or photo",
+                        other.chars().take(30).collect::<String>()
+                    ));
+                }
+                None => return Err("cover needs an action — start with {action: \"status\"} or {action: \"init\", params: {model: \"<print set folder>\"}}".into()),
             };
             let params = a.get("params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
             exec(b, command, params)

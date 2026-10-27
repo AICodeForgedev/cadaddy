@@ -3221,3 +3221,47 @@ menu	Modify	Ändra
 	Element Property Summary	Sammanfattning av elementegenskaper
 	BIM Properties	BIM-egenskaper
 	Kind	Sort
+	Element Identities (BIM)	Elementidentiteter (BIM)
+	Room Connections	Rumskopplingar
+	Link Print Set	Länka ritningsuppsättning
+	Check Building Codes	Kontrollera byggregler
+	Code Rules	Regler i byggreglerna
+	Select Building Codes	Välj byggregler
+	Fill Element Properties	Fyll i elementegenskaper
+	Build Construction Sequence	Skapa byggordning
+	Construction Sequence	Byggordning
+	Edit Sequence Activity	Redigera aktivitet i byggordningen
+	Show Sequence at Date	Visa byggordningen vid ett datum
+	Export Construction Sequence	Exportera byggordning
+	Sequence Trade Conflicts	Konflikter mellan yrken i byggordningen
+	Ceiling Space Fit	Utrymme ovan undertak
+	Takeoff by Activity	Mängdavtagning per aktivitet
+	BIM	BIM
+	Door	Dörr
+	Plan Views	Planvyer
+	Generate Plan Views	Generera planvyer
+	Draw Wall (Object)	Rita vägg (objekt)
+	Place Door in Wall	Placera dörr i vägg
+	Place Window in Wall	Placera fönster i vägg
+	Resolve Plan Entity	Identifiera planelement
+	Record As-Built Change	Registrera relationsändring
+	Import As-Built Markups	Importera relationsmarkeringar
+	List As-Built Changes	Lista relationsändringar
+	Set As-Built Change Status	Ange status för relationsändring
+	Compare Design and As-Built	Jämför projektering och relationsritning
+	Export As-Built	Exportera relationshandlingar
+	Map Line to Price Row	Koppla rad till prisrad
+	Start Cover Check	Starta kontroll före inklädnad
+	Cover Check Status	Status för kontroll före inklädnad
+	Check Cover Item	Bocka av punkt före inklädnad
+	Reopen Cover Item	Öppna punkt före inklädnad igen
+	Sign Inspection	Signera besiktning
+	Ready to Cover	Klar för inklädnad
+	Cover Check Wall	Vägg i kontroll före inklädnad
+	Add In-Wall Photo	Lägg till foto i väggen
+	Wall	Vägg
+	Ready to cover	Klar för inklädnad
+	Not ready to cover	Inte klar för inklädnad
+	Checklist	Checklista
+	Photos	Foton
+	Photo	Foto

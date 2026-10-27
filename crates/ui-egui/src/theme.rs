@@ -447,6 +447,13 @@ pub fn install_fonts(ctx: &egui::Context, language: &str, cjk: bool) {
     {
         added.push(("system-symbols".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes))));
     }
+    // macOS: SF NS lacks some technical symbols (⌄ U+2304); Apple Symbols covers them.
+    #[cfg(not(target_arch = "wasm32"))]
+    if cfg!(target_os = "macos")
+        && let Some(bytes) = read_capped(std::path::Path::new("/System/Library/Fonts/Apple Symbols.ttf"), MAX_UI_FONT_BYTES)
+    {
+        added.push(("macos-symbols".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes))));
+    }
     for (name, data) in added {
         fonts.font_data.insert(name.clone(), data);
         for family in [FontFamily::Proportional, FontFamily::Monospace] {

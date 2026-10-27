@@ -164,6 +164,70 @@ Standard keys per kind (other keys are allowed):
 | `light_fixture` | type_mark, model, circuit, mount_height, room, level |
 | `equipment` | type_mark, model, circuit, room, level |
 
+#### Filled from the prints
+
+`MODEL.BUILD` makes every device the readers found (`MEP.READ_DEVICES`, the
+guided job's devices stage) an element of its own: a small box at its symbol, at
+its mounting height, moved onto its level's architectural plan when it was read on
+a trade sheet of the same size. It carries its type and type mark, the circuit
+printed beside it, the panel the circuit names and `fed_from` (`panel LP1, circuit
+LP1-3`), its sheet, `mount_height` and `offset` (from the device legend, else a
+general note such as `MOUNT ALL HORN/STROBES AT 80" AFF`, else the usual height
+for its kind, marked `default`) and its 3D `location` (feet, `x, y, z`).
+
+**`BIM.PROPS.FILL`** then fills what the model and the prints give the other
+elements (the guided job runs it, after `ROOMS.BUILD`, at the end of its build
+stage):
+
+| Kind | Filled |
+|:-----|:-------|
+| `device` | room (by containment), host_wall (nearest wall), fed_from_handle (the panel's element), breaker, poles and circuit_description (the panel schedule's row) |
+| `room` | level, ceiling_height and floor/wall/ceiling/base finishes, as `ROOMS.LIST` reads them |
+| `door` | number (the tag printed at the opening), width and height (computed), from_room / to_room |
+| `wall` | type (`print` when a wall tag names it, `rule` when it is the spec's type for the layer), thickness, height, room_a / room_b |
+| `duct`, `pipe` | size, system, shape, elevation (a size read from a tag is `print`; an estimated route height is `default`) |
+| air terminal (`fixture`) | type, cfm (the airflow printed beside it), room |
+| `equipment` | type_mark, capacity (from its schedule row: cfm, tons, MBH…), room |
+
+A value a person set (`user`) is never replaced, and a value read from the prints
+is never replaced by an assumption.
+
+### Tags are identities
+
+A door number, a room number, a wall-type tag at a wall's centreline and a
+device's type and circuit at its spot each name one thing in the building, and a
+print set shows that thing on several sheets. `bim.identity` (run by the guided
+job after the build) keeps one element per thing:
+
+- Every plan sheet is put onto its level's reference plan (the architectural
+  plan with the most door and room numbers) by the numbers both sheets print:
+  scale, rotation and offset, with the fit's error (`residual`). A sheet with
+  no shared numbers is placed by its frame only when it is the same size and the
+  one or two numbers it does share sit where the frame puts them; otherwise it
+  stays unregistered and is never merged with another sheet.
+- Elements of one kind on one level with the same key merge when their places
+  agree (doors within 6", devices within 12", plus the fit's error). The best
+  source is kept (schedule or spec, then the architectural plan, then another
+  discipline's background); it takes the values it lacks from the copies, your
+  own edits always win, and `seen_on` lists every sheet it was found on.
+- The same number far apart on one level is a finding, never a merge. So are
+  door-schedule marks on no plan, door numbers the schedule lacks, a level whose
+  door count is off from the schedule's, and finish-schedule rooms with no room
+  on the plan.
+
+The job's devices stage counts a device once even when several sheets of its
+level show it. A door's swing closes its room: rooms are traced with each
+swing's closed leaf across the opening. `rooms.graph` puts every door between
+the rooms on its two sides (`from_room`, `to_room` on the door) and lists the
+connections. An enlarged plan also registers on its overall plan by the door
+and room numbers both print (`printset.links`, method `tags`) when no shared
+grid line places it. When neither does, nor a boundary box, it registers where
+its walls lie on the overall plan's (method `lines`, with `line_coverage`, the
+share of its linework that lands on the plan's), at one to one or the printed
+scales' ratio, turned by quarters. A view that fits several places equally (a
+typical room along a corridor, a typical floor's plan on several levels) is
+left unregistered rather than guessed.
+
 ### Quick start
 
 Open a floor plan, then:

@@ -104,7 +104,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         // ── Electrical conduit ───────────────────────────────────────────
         CommandSpec::new("conduit.read", "Read Conduit from Prints", run_conduit_read)
-            .params("{level?: name, apply?: bool} → {conduits: count, homeruns: {routed, unrouted: [{label, reason}]}, systems}")
+            .params("{level?: name, apply?: bool (put the runs and circuits in the building spec)} → {conduits: drawn runs, conduit_ft, homeruns: {read, routed, unrouted: [{circuit, sheet, level, reason}]}, circuits, estimated_ft, drops, devices_without_circuit, systems, sheets: [{sheet, level, conduit_runs, conduit_ft, homeruns, panels, circuits, estimated_ft}], source: job drawing|print set|current drawing, applied, warnings}: each electrical plan's drawn (tagged) conduit, homeruns and panels, and for each circuit its devices print an estimated route (devices chained, run square above the ceiling, drops to wall boxes; marked \"estimated route\")")
             .noundo(),
         // ── Electrical equipment ─────────────────────────────────────────
         CommandSpec::new("gear.read", "Read Electrical Equipment", run_gear_read)
@@ -164,8 +164,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── Electrical devices ───────────────────────────────────────────
         CommandSpec::new("mep.read_devices", "Read Electrical Devices", run_elec_devices)
-            .params("{sheets?: [name], preview?: bool (default true: read only; false puts the devices in the model), limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read, model: {inserted, by_type, by_level, not_inserted: {reason: count}, why_not?}}: works on any open drawing (the current sheet is the print set); preview:false needs a building model (bspec.draft {store: true} or bim.build first) and never inserts legend samples, circuit numbers, sheet numbers or lettering")
-            .noundo(),
+            .params("{sheets?: [name], preview?: bool (default true: read only; false puts the devices in the model), save?: bool (default true: preview:false saves the drawing to its file), limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read, model: {inserted, replaced, by_type, by_level, elements, elements_replaced, filled?: {key: n}, saved?, not_saved?, save_error?, not_inserted: {reason: count}, why_not?}}: works on any open drawing (the current sheet is the print set); preview:false needs a building model (bspec.draft {store: true} or bim.build first), makes each device an element (kind device, on its sheet's level, moved onto the architectural plan) replacing the device elements an earlier read made (nothing else in the model changes), and never inserts legend samples, circuit numbers, sheet numbers or lettering"),
         // ── Envelope reader ────────────────────────────────────────────────
         CommandSpec::new("envelope.read", "Read Roof and Wall Envelope", run_envelope_read)
             .params("{apply?: bool} → {takeoff: [{code, description, unit, net, waste_pct, order, source, status}], flags: [{kind, subject, message, source, status}], spec_read, notes, page?: 1}")
@@ -175,42 +174,106 @@ pub fn specs() -> Vec<CommandSpec> {
 
 // ─── conduit.read ────────────────────────────────────────────────────────────
 
-fn run_conduit_read(_s: &mut Session, p: &Value) -> Result<Value> {
-    let _level = str_param(p, "level");
-    let apply = bool_or(p, "apply", false);
-
-    // The conduit reader needs DXF data from the printset project's E-sheets.
-    // For now, return a structured placeholder that shows the command is wired.
-    // Full integration requires loading DXF sheets from the printset project.
-    let project = match project(_s) {
-        Ok(p) => p,
-        Err(_) => {
-            return Ok(no_project("conduit runs", json!({"conduits": 0, "homeruns": {"routed": 0, "unrouted": []}})));
-        }
-    };
-
-    let e_sheets: Vec<&mep_printset::SheetEntry> =
-        project.sheets.iter().filter(|s| s.discipline == "E" && (s.sheet_type == "plan" || s.sheet_type == "enlarged_plan")).collect();
-
-    let conduit_count = e_sheets.len();
-    let mut result = json!({
-        "conduits": 0,
-        "homeruns": {"routed": 0, "unrouted": []},
-        "sheets_read": conduit_count,
-        "apply": apply,
-        "message": if conduit_count == 0 {
-            "no E-sheet plans found in the project; classify the print set first"
-        } else {
-            "conduit reader wired; DXF sheet loading integration pending"
-        },
-    });
-
-    if apply {
-        result["applied"] = json!(false);
-        result["note"] = json!("apply writes conduit systems and runs into the building spec");
+/// The open drawing as one electrical plan of `level` (the param, else the spec's first level):
+/// its devices are the model's (`mep.read_devices {preview: false}`) on that level.
+fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::printmep::SheetRef, Vec<ReadDevice>, f64)>> {
+    let d = s.doc()?;
+    let ext = d.extents(&cadaddy_doc::Space::Model);
+    if d.model.is_empty() || !(ext.min.x.is_finite() && ext.max.x.is_finite() && ext.min.y.is_finite() && ext.max.y.is_finite()) {
+        return Ok(None);
     }
+    let (sp, stored) = super::bspec::current(s, "conduit.read")?;
+    let upf = if stored && sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let name = level.map(str::to_string).or_else(|| sp.levels.first().map(|l| l.name.clone())).unwrap_or_else(|| "Level 1".into());
+    let devices: Vec<ReadDevice> = sp
+        .tags
+        .iter()
+        .filter(|t| t.id.starts_with("device:") && t.level.eq_ignore_ascii_case(&name))
+        .take(MAX_DEVICES)
+        .map(|t| {
+            let f = |k: &str| t.fields.get(k).map_or_else(String::new, |v| v.value.clone());
+            ReadDevice {
+                tag: f("type"),
+                at: [t.at_ft[0] * upf, t.at_ft[1] * upf],
+                sheet: String::new(),
+                level: name.clone(),
+                circuit: f("circuit"),
+                handle: f("symbol"),
+                kind: t.kind.clone(),
+            }
+        })
+        .collect();
+    let sh = super::printmep::SheetRef {
+        number: "current drawing".into(),
+        level: name,
+        discipline: "E".into(),
+        kind: "plan".into(),
+        rect: [ext.min.x - 1.0, ext.min.y - 1.0, ext.max.x + 1.0, ext.max.y + 1.0],
+        span: None,
+        scale_text: None,
+        levels: Vec::new(),
+    };
+    Ok(Some((sh, devices, upf)))
+}
 
-    Ok(result)
+fn run_conduit_read(s: &mut Session, p: &Value) -> Result<Value> {
+    use super::printmep::{SheetRef, level_name};
+    let level = str_param(p, "level").map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
+    let apply = bool_or(p, "apply", false);
+    let keep = |r: &SheetRef| level.as_deref().is_none_or(|l| level_name(&r.level).eq_ignore_ascii_case(l) || r.level.eq_ignore_ascii_case(l));
+    let job = super::guided::load_job(s).ok().flatten().filter(|j| !j.sheet_regions.is_empty());
+    // A job's drawing (its sheets and devices); an open print set's E plans (no devices placed:
+    // what is drawn); else the open drawing as one plan with the model's devices.
+    let (read, source, in_drawing) = if let Some(job) = job {
+        let refs: Vec<SheetRef> = super::guided::job_sheet_refs(&job).into_iter().filter(|r| keep(r)).collect();
+        let upf = super::bspec::current(s, "conduit.read")
+            .map_or(12.0, |(sp, stored)| if stored && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 });
+        (super::printcond::read_sheets(s.doc()?, &refs, upf, &job.devices), "job drawing", true)
+    } else if let Ok(pr) = project(s) {
+        let (t, refs) = super::printmep::load_project_plans(&pr, &|r| {
+            r.discipline.eq_ignore_ascii_case("E") && matches!(r.kind.as_str(), "plan" | "enlarged_plan") && keep(r)
+        })?;
+        (super::printcond::read_sheets(t.doc()?, &refs, 12.0, &[]), "print set", false)
+    } else if let Some((sh, devices, upf)) = current_plan(s, level.as_deref())? {
+        (super::printcond::read_sheets(s.doc()?, std::slice::from_ref(&sh), upf, &devices), "current drawing", true)
+    } else {
+        return Ok(no_project("conduit runs", json!({"conduits": 0, "homeruns": {"read": 0, "routed": 0, "unrouted": []}, "circuits": 0})));
+    };
+    let mut warnings = read.warnings.clone();
+    if read.sheets.is_empty() {
+        warnings.push(format!("no electrical plan sheets in the {source}; nothing read (classify the print set first: printset.classify)"));
+    }
+    if source == "print set" {
+        warnings.push(
+            "read from the print set's own sheets, where no devices are placed: only drawn conduit and homeruns. Run the guided job (job.start) for each circuit's estimated route".into(),
+        );
+    }
+    let mut applied = false;
+    if apply && !in_drawing {
+        warnings.push("to build them, run the guided job (job.start), which places each sheet in its drawing".into());
+    } else if apply && !read.mep.runs.is_empty() {
+        match super::bspec::current(s, "conduit.read")? {
+            (mut sp, true) => {
+                let sheets: Vec<String> = read.sheets.iter().map(|r| r.sheet.clone()).collect();
+                super::printmep::merge_mep(&mut sp, read.mep.clone(), &sheets);
+                super::printcond::seat_heights(&mut sp);
+                super::printcond::store_circuits(&mut sp, &read.circuits);
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+                applied = true;
+            }
+            (_, false) => warnings.push("no building spec to put the runs in: run bspec.draft {store: true} (or bim.build) first".into()),
+        }
+    }
+    let mut out = read.to_json();
+    let routed = read.circuits.iter().filter(|t| t.fields.contains_key("panel_at")).count();
+    out["conduits"] = out["conduit_runs"].clone();
+    out["homeruns"] = json!({"read": out["homeruns"].clone(), "routed": routed, "unrouted": read.unrouted});
+    out["systems"] = json!(read.mep.systems.iter().map(|sy| sy.name.clone()).collect::<Vec<_>>());
+    out["sheets_read"] = json!(read.sheets.len());
+    out["source"] = json!(source);
+    out["applied"] = json!(applied);
+    out["warnings"] = json!(warnings);
+    Ok(out)
 }
 
 // ─── gear.read ───────────────────────────────────────────────────────────────
@@ -531,6 +594,8 @@ pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy
         });
     }
     mep.systems = sys_map.into_values().collect();
+    // Geometry noise in the traced centrelines (jogs, hooks, a bend in pieces) is no fitting.
+    mep.runs = super::runtidy::tidy_runs(std::mem::take(&mut mep.runs), sp.units_per_foot);
     for dt in &net.terminals {
         let sys_name = match dt.kind.as_str() {
             "supply_diffuser" => "SA",
@@ -848,7 +913,7 @@ fn run_equip_read(_s: &mut Session, p: &Value) -> Result<Value> {
 // ─── mep.read_devices ────────────────────────────────────────────────────────
 
 /// What a device mark usually is on an electrical plan (else `device`).
-fn device_kind(tag: &str) -> &'static str {
+pub(crate) fn device_kind(tag: &str) -> &'static str {
     match tag.trim().to_ascii_uppercase().as_str() {
         "OS" | "OC" | "VS" | "PS" => "occupancy sensor",
         "DH" | "MH" => "door holder",
@@ -928,7 +993,16 @@ fn run_elec_devices(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     // What may go in the model: the drawing's legends and schedules say which marks are types
     // and which symbols are samples; circuit numbers, sheet numbers and lettering never are.
-    let (keep, not_inserted) = model_devices(d, &found, sheet_numbers(s));
+    let (mut keep, not_inserted) = model_devices(d, &found, sheet_numbers(s));
+    // A print set imported side by side: each device is its sheet's, on that sheet's level.
+    if let Some(sp) = &spec {
+        for dv in &mut keep {
+            if let Some(sh) = sheet_holding(sp, dv.at) {
+                dv.sheet = sh.number.clone();
+                dv.level = sh.level.clone().unwrap_or_default();
+            }
+        }
+    }
     let mut out = json!({
         "devices": devices, "count": found.len(), "by_type": by_type,
         "print_set": if e_sheets.is_some() { "project" } else { "current drawing" }, "sheets_read": e_sheets.unwrap_or(1).max(1),
@@ -944,13 +1018,46 @@ fn run_elec_devices(s: &mut Session, p: &Value) -> Result<Value> {
         json!({"inserted": 0, "why_not": "no device here passed the junk filter (see not_inserted)"})
     } else {
         match place_devices(s, &keep, "mep.read_devices") {
-            Ok(v) => v,
+            Ok(v) => devices_to_model(s, p, v)?,
             Err(e) => json!({"inserted": 0, "why_not": e.to_string()}),
         }
     };
     model["not_inserted"] = json!(not_inserted);
     out["model"] = model;
     Ok(out)
+}
+
+/// The sheet of the spec's print set whose frame holds `at` (drawing units), when the set was
+/// imported side by side.
+fn sheet_holding(sp: &cadaddy_walk3d::BuildingSpec, at: [f64; 2]) -> Option<&cadaddy_walk3d::levels::SheetLink> {
+    let inside = |r: &[f64; 4]| at[0] >= r[0].min(r[2]) && at[0] <= r[0].max(r[2]) && at[1] >= r[1].min(r[3]) && at[1] <= r[1].max(r[3]);
+    sp.sheets.iter().find(|x| x.rect.as_ref().is_some_and(inside))
+}
+
+/// After the devices went in the spec: the model's device elements built again from them (the
+/// rest of the model stays), what was read filled in (room, host wall, panel row), and the
+/// drawing saved to its file (`save: false` skips it). `placed`: what [`place_devices`] said.
+fn devices_to_model(s: &mut Session, p: &Value, mut placed: Value) -> Result<Value> {
+    const CMD: &str = "mep.read_devices";
+    let r = super::propfill::rebuild_devices(s, CMD)?;
+    placed["elements"] = json!(r.built);
+    placed["elements_replaced"] = json!(r.removed);
+    match super::propfill::fill(s) {
+        Ok(f) => placed["filled"] = f["filled"]["device"].clone(),
+        Err(e) => placed["fill_error"] = json!(e.to_string()),
+    }
+    if !bool_or(p, "save", true) {
+        placed["saved"] = json!(false);
+        return Ok(placed);
+    }
+    match s.state()?.path.clone() {
+        None => placed["not_saved"] = json!("the drawing has no file yet: save it with saveas {path}"),
+        Some(path) => match super::file::save_to(s, &path) {
+            Ok(_) => placed["saved"] = json!(path),
+            Err(e) => placed["save_error"] = json!(e.to_string()),
+        },
+    }
+    Ok(placed)
 }
 
 /// The set's sheet numbers (the print set's, else the open sheet's title block): a tag that
@@ -1033,6 +1140,10 @@ pub struct ReadDevice {
     /// The symbol's handle (hex).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub handle: String,
+    /// What kind of device the model says it is (`receptacle`), when it says; empty: what its
+    /// tag says ([`device_kind`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
 }
 
 /// The model level a device belongs on: the spec level whose plan region holds it, else the

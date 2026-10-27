@@ -1,6 +1,6 @@
 //! The geometric perceptions: wall face pairs, door swings and opening blocks, and room outlines.
 
-use cadaddy_doc::{Drawing, Entity, EntityKind};
+use cadaddy_doc::{Common, Drawing, Entity, EntityKind};
 use cadaddy_geom::{Polyline, Segment, Vec2};
 use serde_json::{Value, json};
 
@@ -327,6 +327,81 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
         }
     }
     items
+}
+
+/// Most door leaves added to a plan traced for rooms.
+const MAX_LEAVES: usize = 200_000;
+/// Most plan objects looked at for the jambs door swings end on.
+const MAX_LEAF_SCAN: usize = 5_000_000;
+
+/// The closed leaf of every door swing in `d` (an arc of 60–100° with a door's radius, or a
+/// flattened one): a line from the hinge to the end of the arc where the wall's jamb is (an end
+/// of other linework), so a room traced on the plan ends at its door instead of running on
+/// through the gap, and the swing stays in the room it opens into. When neither end (or both)
+/// meets a jamb, both leaves are drawn.
+pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line)> {
+    let (rmin, rmax) = (16.0 * k, 54.0 * k);
+    // Ends of the plan's straight linework, filed by cell.
+    let cell = (2.0 * k).max(1e-9);
+    let key = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    let mut ends: std::collections::HashMap<(i64, i64), Vec<Vec2>> = std::collections::HashMap::new();
+    let mut file = |p: Vec2| {
+        if p.is_finite() {
+            ends.entry(key(p)).or_default().push(p);
+        }
+    };
+    for e in d.model.iter().take(MAX_LEAF_SCAN) {
+        match &e.kind {
+            EntityKind::Line(l) => {
+                file(l.a.xy());
+                file(l.b.xy());
+            }
+            EntityKind::LwPolyline(p) => p.vertices.iter().take(10_000).for_each(|v| file(v.p)),
+            _ => {}
+        }
+    }
+    let jamb = |p: Vec2, tol: f64| {
+        let (cx, cy) = key(p);
+        let k = (tol / cell).ceil() as i64;
+        (-k..=k).any(|dx| (-k..=k).any(|dy| ends.get(&(cx + dx, cy + dy)).is_some_and(|v| v.iter().any(|q| q.dist(p) <= tol))))
+    };
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        if out.len() >= MAX_LEAVES {
+            break;
+        }
+        let swing = match &e.kind {
+            EntityKind::Arc(a) => {
+                let mut sweep = (a.end - a.start).rem_euclid(std::f64::consts::TAU);
+                if sweep < 1e-9 {
+                    sweep = std::f64::consts::TAU;
+                }
+                let c = a.center.xy();
+                ((60.0..=100.0).contains(&sweep.to_degrees()) && (rmin..=rmax).contains(&a.radius))
+                    .then(|| (c, [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius]))
+            }
+            EntityKind::LwPolyline(p) if !p.closed && (3..=200).contains(&p.vertices.len()) => {
+                let pts = Polyline { vertices: p.vertices.clone(), closed: false }.tessellate(1e-3);
+                flat_swing(&pts).filter(|(_, r, _, _)| (rmin..=rmax).contains(r)).map(|(c, _, _, ends)| (c, ends))
+            }
+            _ => None,
+        };
+        let Some((hinge, arc_ends)) = swing else { continue };
+        let tol = 0.05 * hinge.dist(arc_ends[0]);
+        let at_jamb = arc_ends.map(|p| jamb(p, tol));
+        let leaves: Vec<Vec2> = match at_jamb {
+            [true, false] => vec![arc_ends[0]],
+            [false, true] => vec![arc_ends[1]],
+            _ => arc_ends.to_vec(),
+        };
+        for end in leaves {
+            if hinge.is_finite() && end.is_finite() {
+                let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(hinge.x, hinge.y, 0.0), b: cadaddy_geom::Vec3::new(end.x, end.y, 0.0) };
+                out.push((e.common.clone(), line));
+            }
+        }
+    }
+    out
 }
 
 /// A run of points that is a door swing: on one circle (within 5% of its radius) through 60–100°.
@@ -702,6 +777,20 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
         let mut wd = plan.as_ref().unwrap_or(s).doc()?.clone();
         for h in &tag_blocks {
             wd.model.remove(*h);
+        }
+        let mut t = Session::empty();
+        t.open_drawing(wd, "Room boundaries", None);
+        Some(t)
+    };
+    // Doors close their rooms: each door swing's leaf, closed and open, drawn across its opening
+    // (a print often draws the swing's arc alone, which leaves the room open at the door).
+    let leaves = door_leaves(plan.as_ref().unwrap_or(s).doc()?, k);
+    let plan = if leaves.is_empty() || s.space().is_paper() {
+        plan
+    } else {
+        let mut wd = plan.as_ref().unwrap_or(s).doc()?.clone();
+        for (common, line) in leaves {
+            wd.add(&cadaddy_doc::Space::Model, common, EntityKind::Line(line))?;
         }
         let mut t = Session::empty();
         t.open_drawing(wd, "Room boundaries", None);

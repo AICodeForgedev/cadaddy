@@ -9,6 +9,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod codebook;
 pub mod concrete;
 mod derive;
 mod doors;
@@ -50,8 +51,8 @@ pub use spec::{
     Cricket, Described, DuctType, ElecDevice, Electrode, Enclosure, Equipment, Exterior, Facade, Family, FamilyKind, Feeder, GridColumn,
     GroundRequirement, Grounding, Hang, Head, HeadTo, HeadTrack, HeightRule, Hoistway, Issue, ItemKind, LayerRole, LayerSide, LevelParapet,
     MAX_ASSEMBLY_LAYERS, MarkStatus, Mep, MepEquipment, MepKind, MepRevision, MepRun, MepSystem, MepTerminal, OpeningTag, PanelCircuit, PointOfEntry,
-    Rcp, Role, Roof, RoofSlope, Room as SpecRoom, SPEC_VERSION, Schedule, ScheduleRow, Service, Side, Site, Soffit, SoffitType, Stair, Surfaces,
-    Termination, UferNote, ValueStatus, WallFrom, WallMark, WallType, feet, inches, level_at, merge, pipe_system_default_color, pitch_text,
+    Rcp, Role, Roof, RoofDrain, RoofSlope, Room as SpecRoom, SPEC_VERSION, Schedule, ScheduleRow, Service, Side, Site, Soffit, SoffitType, Stair,
+    Surfaces, Termination, UferNote, ValueStatus, WallFrom, WallMark, WallType, feet, inches, level_at, merge, pipe_system_default_color, pitch_text,
 };
 pub use takeoff::{Takeoff, TakeoffRow, takeoff};
 pub use tour::{Look, MAX_FRAMES, MAX_TOUR_STOPS, Pose, TOURS_VERSION, Tour, TourPath, Tours, Viewpoint};

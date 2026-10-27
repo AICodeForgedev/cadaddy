@@ -3220,3 +3220,47 @@
 	Element Property Summary	Resumen de propiedades de elementos
 	BIM Properties	Propiedades BIM
 	Kind	Clase
+	Element Identities (BIM)	Identidades de elementos (BIM)
+	Room Connections	Conexiones entre habitaciones
+	Link Print Set	Vincular juego de planos
+	Check Building Codes	Comprobar códigos de construcción
+	Code Rules	Reglas del código
+	Select Building Codes	Seleccionar códigos de construcción
+	Fill Element Properties	Rellenar propiedades de elementos
+	Build Construction Sequence	Crear secuencia de construcción
+	Construction Sequence	Secuencia de construcción
+	Edit Sequence Activity	Editar actividad de la secuencia
+	Show Sequence at Date	Mostrar la secuencia en una fecha
+	Export Construction Sequence	Exportar secuencia de construcción
+	Sequence Trade Conflicts	Conflictos entre oficios en la secuencia
+	Ceiling Space Fit	Espacio en el plénum del techo
+	Takeoff by Activity	Medición por actividad
+	BIM	BIM
+	Door	Puerta
+	Plan Views	Vistas de planta
+	Generate Plan Views	Generar vistas de planta
+	Draw Wall (Object)	Dibujar muro (objeto)
+	Place Door in Wall	Colocar puerta en muro
+	Place Window in Wall	Colocar ventana en muro
+	Resolve Plan Entity	Resolver elemento de planta
+	Record As-Built Change	Registrar cambio de obra ejecutada
+	Import As-Built Markups	Importar marcas de obra ejecutada
+	List As-Built Changes	Listar cambios de obra ejecutada
+	Set As-Built Change Status	Establecer estado del cambio de obra ejecutada
+	Compare Design and As-Built	Comparar diseño y obra ejecutada
+	Export As-Built	Exportar obra ejecutada
+	Map Line to Price Row	Asignar línea a fila de precio
+	Start Cover Check	Iniciar revisión antes de cubrir
+	Cover Check Status	Estado de la revisión antes de cubrir
+	Check Cover Item	Marcar elemento antes de cubrir
+	Reopen Cover Item	Reabrir elemento antes de cubrir
+	Sign Inspection	Firmar inspección
+	Ready to Cover	Listo para cubrir
+	Cover Check Wall	Muro de la revisión antes de cubrir
+	Add In-Wall Photo	Añadir foto dentro del muro
+	Wall	Muro
+	Ready to cover	Listo para cubrir
+	Not ready to cover	No listo para cubrir
+	Checklist	Lista de verificación
+	Photos	Fotos
+	Photo	Foto

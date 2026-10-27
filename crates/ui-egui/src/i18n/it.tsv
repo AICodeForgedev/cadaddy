@@ -3213,3 +3213,47 @@ menu	Modify	Edita
 	Element Property Summary	Riepilogo delle proprietà degli elementi
 	BIM Properties	Proprietà BIM
 	Kind	Genere
+	Element Identities (BIM)	Identità degli elementi (BIM)
+	Room Connections	Collegamenti tra locali
+	Link Print Set	Collega set di tavole
+	Check Building Codes	Verifica norme edilizie
+	Code Rules	Regole delle norme
+	Select Building Codes	Seleziona norme edilizie
+	Fill Element Properties	Compila proprietà degli elementi
+	Build Construction Sequence	Crea sequenza di costruzione
+	Construction Sequence	Sequenza di costruzione
+	Edit Sequence Activity	Modifica attività della sequenza
+	Show Sequence at Date	Mostra la sequenza a una data
+	Export Construction Sequence	Esporta sequenza di costruzione
+	Sequence Trade Conflicts	Conflitti tra imprese nella sequenza
+	Ceiling Space Fit	Spazio nel controsoffitto
+	Takeoff by Activity	Computo per attività
+	BIM	BIM
+	Door	Porta
+	Plan Views	Viste di pianta
+	Generate Plan Views	Genera viste di pianta
+	Draw Wall (Object)	Disegna muro (oggetto)
+	Place Door in Wall	Inserisci porta nel muro
+	Place Window in Wall	Inserisci finestra nel muro
+	Resolve Plan Entity	Risolvi elemento della pianta
+	Record As-Built Change	Registra modifica as-built
+	Import As-Built Markups	Importa annotazioni as-built
+	List As-Built Changes	Elenca modifiche as-built
+	Set As-Built Change Status	Imposta stato modifica as-built
+	Compare Design and As-Built	Confronta progetto e as-built
+	Export As-Built	Esporta as-built
+	Map Line to Price Row	Associa riga alla riga di prezzo
+	Start Cover Check	Avvia controllo prima della chiusura
+	Cover Check Status	Stato del controllo prima della chiusura
+	Check Cover Item	Spunta voce prima della chiusura
+	Reopen Cover Item	Riapri voce prima della chiusura
+	Sign Inspection	Firma ispezione
+	Ready to Cover	Pronto per la chiusura
+	Cover Check Wall	Parete del controllo prima della chiusura
+	Add In-Wall Photo	Aggiungi foto nella parete
+	Wall	Parete
+	Ready to cover	Pronto per la chiusura
+	Not ready to cover	Non pronto per la chiusura
+	Checklist	Lista di controllo
+	Photos	Foto
+	Photo	Foto

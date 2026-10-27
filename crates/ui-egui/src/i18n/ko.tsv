@@ -3214,3 +3214,47 @@ menu	Modify	수정
 	Element Property Summary	요소 속성 요약
 	BIM Properties	BIM 속성
 	Kind	종류
+	Element Identities (BIM)	요소 식별 (BIM)
+	Room Connections	실 연결
+	Link Print Set	출력 세트 연결
+	Check Building Codes	건축 법규 검사
+	Code Rules	법규 규칙
+	Select Building Codes	건축 법규 선택
+	Fill Element Properties	요소 속성 채우기
+	Build Construction Sequence	시공 순서 만들기
+	Construction Sequence	시공 순서
+	Edit Sequence Activity	순서 작업 편집
+	Show Sequence at Date	날짜별 순서 보기
+	Export Construction Sequence	시공 순서 내보내기
+	Sequence Trade Conflicts	공종 간 순서 충돌
+	Ceiling Space Fit	천장 공간 수용 검토
+	Takeoff by Activity	작업별 물량 산출
+	BIM	BIM
+	Door	문
+	Plan Views	평면도 보기
+	Generate Plan Views	평면도 보기 생성
+	Draw Wall (Object)	벽 그리기 (객체)
+	Place Door in Wall	벽에 문 배치
+	Place Window in Wall	벽에 창 배치
+	Resolve Plan Entity	평면 요소 확인
+	Record As-Built Change	준공 변경 기록
+	Import As-Built Markups	준공 마크업 가져오기
+	List As-Built Changes	준공 변경 목록
+	Set As-Built Change Status	준공 변경 상태 설정
+	Compare Design and As-Built	설계와 준공 비교
+	Export As-Built	준공 내보내기
+	Map Line to Price Row	라인을 가격 행에 매핑
+	Start Cover Check	마감 전 점검 시작
+	Cover Check Status	마감 전 점검 상태
+	Check Cover Item	마감 전 항목 확인
+	Reopen Cover Item	마감 전 항목 다시 열기
+	Sign Inspection	검사 서명
+	Ready to Cover	마감 준비 완료
+	Cover Check Wall	마감 전 점검 벽
+	Add In-Wall Photo	벽 속 사진 추가
+	Wall	벽
+	Ready to cover	마감 준비 완료
+	Not ready to cover	마감 준비 안 됨
+	Checklist	체크리스트
+	Photos	사진
+	Photo	사진

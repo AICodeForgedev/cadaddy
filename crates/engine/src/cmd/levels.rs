@@ -47,7 +47,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{apply?: bool (elevations into the spec's levels; others become datums), datum_ft?: feet subtracted from every elevation (default 100 when LEVEL 1 is at 100'-0\", else 0)} → {levels: [{name, kind, elevation_ft, source, matches?, approved?}], conflicts (incl. approved values kept), datum_ft, changes?, kept?, applied, warnings (readings rejected: they break the levels' order), ignored (notes on civil and site sheets: spot elevations)}; approved levels (`levels/<name>`) keep their elevation; a guided job's sheet index (its level table) wins over notes read here",
         ),
         CommandSpec::new("levels.list", "List Levels", run_list)
-            .params("{} → {levels: [{name, elevation_ft, height_ft, ceiling_ft, top_ft, plan, sheet?, sheets, built, source, approved}], datums: [{name, elevation_ft, kind, source?}], storeys, unattached}")
+            .params("{} → {levels: [{name, elevation_ft, height_ft, ceiling_ft, top_ft, plan, sheet?, sheets, typical (sheets of several levels), built, source, approved}], datums: [{name, elevation_ft, kind (datum: site, grade, survey; never a storey), source?}], storeys, unattached, reference_sheets: [{number, title, discipline?, datum?}] (on no level: nothing built from them)}")
             .noundo(),
         CommandSpec::new("levels.set", "Edit Level", run_set).params(
             "{name: level or datum, rename?: new name, elevation_ft?: feet, height_ft?: floor to floor, ceiling_ft?: feet, shift_above?: bool (move the levels above by the same change)} → {level, renamed_refs?, changes}",
@@ -168,7 +168,9 @@ fn notes_of(d: &Drawing, site: &SiteSheets) -> (Vec<LevelNote>, Vec<LevelNote>) 
         }
         let Some((name, kind)) = levels::canonical_level(t) else { continue };
         // Only a bare name: `LEVEL 2 MECHANICAL PLAN` is a title, not a marker.
-        if t.split_whitespace().count() > 4 || levels::level_of_title(t).is_some() && t.to_ascii_uppercase().contains("PLAN") {
+        if t.split_whitespace().count() > 4
+            || (levels::level_of_title(t).is_some() || kind == levels::DatumKind::Datum) && t.to_ascii_uppercase().contains("PLAN")
+        {
             continue;
         }
         let reach = 3.0 * ht.max(1e-9);
@@ -224,6 +226,67 @@ fn index_has_roof_without_elevation(job: Option<&Value>) -> bool {
         }
     }
     false
+}
+
+/// The roof's elevation when nothing marks it: the top of the topmost floor, and that floor's
+/// name. The topmost floor is the highest one the spec, its floor datums or the sheet index
+/// names: a floor the index has above the spec's (no plan read for it yet) is stacked at the
+/// spec's top floor to floor, so the roof is never put over Level 1 of a taller building.
+fn roof_estimate(sp: &BuildingSpec, job: Option<&Value>) -> Option<(f64, String)> {
+    // The spec's highest floor (a level, or a floor datum), with its floor to floor.
+    let storeys = sp.levels.iter().filter(|l| !levels::canonical_level(&l.name).is_some_and(|(_, k)| k == levels::DatumKind::Roof));
+    let top = storeys.max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft))?;
+    let datum = sp
+        .datums
+        .iter()
+        .filter(|d| d.kind == levels::DatumKind::Floor && d.elevation_ft > top.elevation_ft)
+        .max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
+    let height = if top.height_ft.is_finite() && top.height_ft > 0.0 { top.height_ft } else { 10.0 };
+    // Over a floor datum, the spec's top level's height runs up to it: the floor to floor is the
+    // step between them.
+    let (mut elevation, mut name, rank, mut floor_to_floor) = match datum {
+        Some(d) => {
+            let r = levels::level_rank(&d.name);
+            let steps = r.zip(levels::level_rank(&top.name)).map_or(1, |(a, b)| ((a - b) / 10).max(1));
+            (d.elevation_ft, d.name.clone(), r, (d.elevation_ft - top.elevation_ft) / f64::from(steps))
+        }
+        None => (top.elevation_ft, top.name.clone(), levels::level_rank(&top.name), height),
+    };
+    // The index's floors.
+    let index: Vec<(i32, String, Option<f64>, Option<f64>)> = job
+        .and_then(|j| j.pointer("/index/levels"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(levels::MAX_NOTES)
+        .filter_map(|l| {
+            let code = l.get("name").and_then(Value::as_str)?.trim().to_ascii_uppercase();
+            let r = levels::code_rank(&code).filter(|r| *r < 100_000)?;
+            let f = |k: &str| l.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
+            Some((r, code, f("elevation_ft"), f("height_ft").filter(|h| *h > 0.0)))
+        })
+        .collect();
+    if let Some(h) = index.iter().find(|x| Some(x.0) == rank).and_then(|x| x.3) {
+        floor_to_floor = h;
+    }
+    // A floor the index names above it: the roof goes over that one.
+    if let Some((r, code, e, h)) = index.iter().max_by_key(|x| x.0)
+        && rank.is_none_or(|t| *r > t)
+    {
+        match e {
+            Some(e) => elevation = *e,
+            None => elevation += floor_to_floor * index.iter().filter(|x| rank.is_none_or(|t| x.0 > t)).count() as f64,
+        }
+        if let Some(h) = h {
+            floor_to_floor = *h;
+        }
+        name = if code.chars().all(|c| c.is_ascii_digit()) { format!("Level {code}") } else { code.clone() };
+    }
+    if !(floor_to_floor.is_finite() && floor_to_floor > 0.0) {
+        floor_to_floor = height;
+    }
+    let est = elevation + floor_to_floor;
+    est.is_finite().then_some((est, name))
 }
 
 /// Where a note was read: `model: <text>` or `layout:<name>: <text>`.
@@ -326,10 +389,8 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
     if index_has_roof_without_elevation(job.as_ref())
         && !sp.datums.iter().any(|d| d.kind == levels::DatumKind::Roof)
         && !stacked.iter().any(|n| n.kind == levels::DatumKind::Roof)
-        && let Some(top) = sp.levels.iter().max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft))
+        && let Some((est, top_name)) = roof_estimate(&sp, job.as_ref())
     {
-        let est = top.elevation_ft + top.height_ft;
-        let top_name = top.name.clone();
         changes.push(format!("ROOF: {} (estimated from {} + floor-to-floor)", cadaddy_walk3d::feet(est), top_name,));
         sp.datums.push(levels::Datum {
             name: "ROOF".to_string(),
@@ -387,16 +448,13 @@ fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
     let levels: Vec<Value> = order
         .iter()
         .map(|l| {
-            // A sheet appears on a level if its primary level matches OR its `levels` list
-            // contains the level (typical-floor sheets that cover several levels).
-            let sheets: Vec<&str> = sp
-                .sheets
-                .iter()
-                .filter(|x| {
-                    x.level.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(&l.name)) || x.levels.iter().any(|c| level_name_matches(c, &l.name))
-                })
-                .map(|x| x.number.as_str())
-                .collect();
+            // A sheet is on its level; only a typical-floor sheet (its `levels` name several)
+            // is on each level it covers, so no other sheet counts on two levels.
+            // Q6018: each entry is {sheet, typical} so the gate can tell a typical sheet from a
+            // floor-specific one.
+            let on = |x: &&SheetLink| on_level(x, &l.name);
+            let sheets: Vec<Value> = sp.sheets.iter().filter(on).map(|x| json!({"sheet": x.number, "typical": typical_sheet(x)})).collect();
+            let typical: Vec<&str> = sp.sheets.iter().filter(on).filter(|x| typical_sheet(x)).map(|x| x.number.as_str()).collect();
             json!({
                 "name": l.name,
                 "elevation_ft": round(l.elevation_ft),
@@ -406,6 +464,7 @@ fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
                 "plan": if l.sheet.is_some() { "sheet" } else if l.region.is_some() { "region" } else { "drawing" },
                 "sheet": l.sheet,
                 "sheets": sheets,
+                "typical": typical,
                 "built": built.get(&l.name.to_ascii_uppercase()).copied().unwrap_or(0),
                 "source": sp.level_source(&l.name),
                 "approved": sp.level_approved(&l.name),
@@ -414,8 +473,50 @@ fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
         .collect();
     let datums = serde_json::to_value(&sp.datums).unwrap_or(Value::Null);
     let storeys: Vec<Value> = sp.storeys().iter().map(|(n, e)| json!({ "name": n, "elevation_ft": round(*e) })).collect();
-    let unattached: Vec<&str> = sp.sheets.iter().filter(|x| x.level.is_none()).map(|x| x.number.as_str()).collect();
-    Ok(json!({ "levels": levels, "datums": datums, "storeys": storeys, "unattached": unattached }))
+    // Reference sheets: on no level (details, sections, schedules, covers, civil and site
+    // plans, plans whose level is not known yet), nothing built from them.
+    let reference: Vec<&SheetLink> = sp.sheets.iter().filter(|x| !order.iter().any(|l| on_level(x, &l.name))).collect();
+    let unattached: Vec<&str> = reference.iter().map(|x| x.number.as_str()).collect();
+    let reference_sheets: Vec<Value> = reference
+        .iter()
+        .take(levels::MAX_NOTES)
+        .map(|x| {
+            let mut v = json!({ "number": x.number, "title": x.title });
+            if let Some(d) = &x.discipline {
+                v["discipline"] = json!(d);
+            }
+            if let Some(n) = x.level.as_deref().filter(|n| levels::is_datum_name(n)) {
+                v["datum"] = json!(n);
+            }
+            v
+        })
+        .collect();
+    Ok(json!({ "levels": levels, "datums": datums, "storeys": storeys, "unattached": unattached, "reference_sheets": reference_sheets }))
+}
+
+/// Whether a sheet covers several levels (a typical-floor plan).
+fn typical_sheet(x: &SheetLink) -> bool {
+    x.levels.len() > 1
+}
+
+/// Whether sheet `x` is on the level named `name`: a typical-floor sheet on every level its
+/// `levels` name, any other on its one level. A site datum is no level.
+fn on_level(x: &SheetLink, name: &str) -> bool {
+    if levels::is_datum_name(name) {
+        return false;
+    }
+    let same = |c: &str| {
+        c.eq_ignore_ascii_case(name)
+            || level_name_matches(c, name)
+            || levels::canonical_level(c).zip(levels::canonical_level(name)).is_some_and(|(a, b)| a == b)
+    };
+    if typical_sheet(x) {
+        return x.levels.iter().any(|c| same(c));
+    }
+    match x.level.as_deref() {
+        Some(n) => same(n),
+        None => x.levels.first().is_some_and(|c| same(c)),
+    }
 }
 
 fn feet_param(p: &Value, key: &str) -> Result<Option<f64>> {
@@ -436,7 +537,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let height = feet_param(p, "height_ft")?;
     let ceiling = feet_param(p, "ceiling_ft")?;
     let mut changes: Vec<String> = Vec::new();
-    let Some(i) = sp.levels.iter().position(|l| l.name.eq_ignore_ascii_case(&name)) else {
+    let Some(i) = sp.level_matching(&name) else {
         // A datum: only its elevation (and name) can change.
         let Some(dt) = sp.datums.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) else {
             return Err(bad("levels.set", format!("there is no level or datum named {name}")));
@@ -513,7 +614,16 @@ fn store(s: &mut Session, sp: &BuildingSpec) -> Result<()> {
 /// spec's name for it when it has that level).
 fn link(number: String, discipline: String, title: String, source: String, sp: &BuildingSpec) -> SheetLink {
     let level = levels::level_of_title(&title).map(|c| sp.level_matching(&c).and_then(|i| sp.levels.get(i)).map_or(c, |l| l.name.clone()));
-    SheetLink { number, title: title.chars().take(120).collect(), discipline: Some(discipline), level, source, rect: None, levels: Vec::new() }
+    SheetLink {
+        number,
+        title: title.chars().take(120).collect(),
+        discipline: Some(discipline),
+        level,
+        source,
+        rect: None,
+        levels: Vec::new(),
+        registration: None,
+    }
 }
 
 /// A layout's sheet: the sheet number written largest on it (else in the layout's name), and the
@@ -578,7 +688,7 @@ fn run_sheets(s: &mut Session, p: &Value) -> Result<Value> {
         for f in sheets {
             match sp.sheets.iter_mut().find(|x| x.number.eq_ignore_ascii_case(&f.number)) {
                 // Where an imported set put the sheet stays known.
-                Some(x) => *x = SheetLink { rect: f.rect.or(x.rect), ..f },
+                Some(x) => *x = SheetLink { rect: f.rect.or(x.rect), registration: f.registration.clone().or_else(|| x.registration.clone()), ..f },
                 None => sp.sheets.push(f),
             }
         }
@@ -921,9 +1031,81 @@ mod tests {
             r["sheets"].as_array().unwrap().iter().map(|x| (x["number"].as_str().unwrap().to_string(), x["level"].clone())).collect();
         assert_eq!(got, [("M-201".into(), json!("Level 2")), ("M-601".into(), Value::Null), ("P-101".into(), json!("L1"))], "{r}");
         let l = s.execute("levels.list", &json!({})).unwrap();
-        assert_eq!(l["levels"][1]["sheets"], json!(["M-201"]));
+        assert_eq!(l["levels"][1]["sheets"], json!([{"sheet": "M-201", "typical": false}]));
         assert_eq!(l["unattached"], json!(["M-601"]));
         assert!(s.execute("levels.sheets", &json!({ "folder": "/no/such/folder/anywhere" })).is_err());
+    }
+
+    #[test]
+    fn a_sheet_is_on_one_level_unless_typical_and_reference_sheets_are_on_none() {
+        let mut s = Session::new();
+        four_levels(&mut s);
+        let mut sp = stored_spec(&s);
+        let link = |n: &str, level: Option<&str>, levels: &[&str]| SheetLink {
+            number: n.into(),
+            title: String::new(),
+            discipline: Some(n.chars().take(1).collect()),
+            level: level.map(str::to_string),
+            source: "model".into(),
+            rect: None,
+            levels: levels.iter().map(|l| l.to_string()).collect(),
+            registration: None,
+        };
+        sp.sheets = vec![
+            link("A-101", Some("Level 1"), &[]),
+            link("M-2", Some("Level 2"), &["2"]),
+            // A floor-specific sheet whose level list names another level: its one level.
+            link("M-3", Some("Level 3"), &["4"]),
+            // A typical-floor sheet: on every level it covers, marked typical.
+            link("P-2", Some("Level 2"), &["2", "3", "4"]),
+            link("A-601", None, &[]),
+            link("C-101", Some("SITE"), &[]),
+        ];
+        store(&mut s, &sp).unwrap();
+        let l = s.execute("levels.list", &json!({})).unwrap();
+        let on = |i: usize| json!(l["levels"][i]["sheets"].as_array().unwrap().iter().map(|x| x["sheet"].clone()).collect::<Vec<_>>());
+        assert_eq!(on(0), json!(["A-101"]), "{l}");
+        assert_eq!(on(1), json!(["M-2", "P-2"]));
+        assert_eq!(on(2), json!(["M-3", "P-2"]), "a floor-specific sheet is never counted on two levels");
+        assert_eq!(on(3), json!(["P-2"]));
+        assert_eq!(l["levels"][2]["typical"], json!(["P-2"]));
+        let mut count: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for lv in l["levels"].as_array().unwrap() {
+            for n in lv["sheets"].as_array().unwrap() {
+                *count.entry(n["sheet"].as_str().unwrap().to_string()).or_default() += 1;
+            }
+        }
+        assert!(count.iter().all(|(n, c)| *c == 1 || n == "P-2"), "{count:?}");
+        // Q6018's gate count: a sheet on two levels is always marked typical.
+        let untyped_dups = l["levels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|lv| lv["sheets"].as_array().unwrap().iter())
+            .filter(|x| x["typical"] == json!(false))
+            .filter(|x| count.get(x["sheet"].as_str().unwrap()).is_some_and(|c| *c > 1))
+            .count();
+        assert_eq!(untyped_dups, 0, "{l}");
+        assert_eq!(l["unattached"], json!(["A-601", "C-101"]));
+        assert_eq!(l["reference_sheets"][1], json!({"number": "C-101", "title": "", "discipline": "C", "datum": "SITE"}));
+        let storeys: Vec<&str> = l["storeys"].as_array().unwrap().iter().filter_map(|x| x["name"].as_str()).collect();
+        assert_eq!(storeys, ["Level 1", "Level 2", "Level 3", "Level 4"]);
+    }
+
+    #[test]
+    fn a_site_note_is_a_datum_never_a_storey() {
+        let mut s = Session::new();
+        four_levels(&mut s);
+        text(&mut s, "FINISHED GRADE EL. -1'-0\"", [100.0, 100.0]);
+        text(&mut s, "ROOF EL. 48'-0\"", [100.0, 200.0]);
+        let r = s.execute("levels.read", &json!({ "apply": true })).unwrap();
+        let sp = stored_spec(&s);
+        let grade = sp.datums.iter().find(|d| d.name == "GRADE").unwrap_or_else(|| panic!("{r}"));
+        assert_eq!((grade.kind, grade.elevation_ft), (levels::DatumKind::Datum, -1.0));
+        let l = s.execute("levels.list", &json!({})).unwrap();
+        let storeys: Vec<&str> = l["storeys"].as_array().unwrap().iter().filter_map(|x| x["name"].as_str()).collect();
+        assert_eq!(storeys, ["Level 1", "Level 2", "Level 3", "Level 4", "ROOF"], "{l}");
+        assert!(l["datums"].as_array().unwrap().iter().any(|d| d["name"] == "GRADE" && d["kind"] == "datum"), "{l}");
     }
 
     #[test]
@@ -1039,6 +1221,56 @@ mod tests {
         let l = s.execute("levels.list", &json!({})).unwrap();
         let storeys: Vec<&str> = l["storeys"].as_array().unwrap().iter().filter_map(|x| x["name"].as_str()).collect();
         assert!(storeys.contains(&"ROOF"), "storeys: {storeys:?}");
+    }
+
+    /// The roof datum `levels.read` estimated, and where from.
+    fn estimated_roof(s: &Session) -> (f64, String) {
+        let sp = stored_spec(s);
+        let roof = sp.datums.iter().find(|d| d.kind == cadaddy_walk3d::levels::DatumKind::Roof).expect("a ROOF datum");
+        (roof.elevation_ft, roof.source.clone())
+    }
+
+    #[test]
+    fn the_roof_is_never_estimated_from_level_1_when_the_index_has_higher_floors() {
+        // The blind test, round 3: the levels stage ran with only Level 1 in the spec (10'-6"
+        // floor to floor) and put the roof at 10'-6". The index names Levels 1 to 4: the roof
+        // goes over Level 4, stacked at that floor to floor.
+        let mut s = Session::new();
+        let spec = json!({"version": 1, "units_per_foot": 12, "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10.5}]});
+        s.execute("bspec.set", &json!({ "replace": true, "spec": spec })).unwrap();
+        guided_state(
+            &mut s,
+            json!([]),
+            json!([]),
+            json!([{"name": "1", "elevation_ft": 0.0}, {"name": "2"}, {"name": "3"}, {"name": "4"}, {"name": "R"}]),
+        );
+        let r = s.execute("levels.read", &json!({ "apply": true })).unwrap();
+        let (e, source) = estimated_roof(&s);
+        assert!((e - 42.0).abs() < 1e-6, "roof at {e}, not over Level 4 (four storeys of 10.5 feet): {r}");
+        assert!(source.contains("Level 4") && !source.contains("Level 1"), "{source}");
+    }
+
+    #[test]
+    fn the_roof_estimate_takes_the_top_floors_elevation_from_the_index() {
+        // Level 4's elevation and floor to floor are on the sections: the roof is on top of it.
+        let mut s = Session::new();
+        let spec = json!({"version": 1, "units_per_foot": 12, "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 12}]});
+        s.execute("bspec.set", &json!({ "replace": true, "spec": spec })).unwrap();
+        guided_state(
+            &mut s,
+            json!([]),
+            json!([]),
+            json!([{"name": "1", "elevation_ft": 0.0}, {"name": "2"}, {"name": "4", "elevation_ft": 39.0, "height_ft": 13.0}, {"name": "R"}]),
+        );
+        s.execute("levels.read", &json!({ "apply": true })).unwrap();
+        let (e, source) = estimated_roof(&s);
+        assert!((e - 52.0).abs() < 1e-6, "roof at {e}: {source}");
+        // With the spec's own top floor the highest, the estimate stays on it (Level 4 + 12').
+        let mut s = Session::new();
+        four_levels(&mut s);
+        guided_state(&mut s, json!([]), json!([]), json!([{"name": "1", "elevation_ft": 0.0}, {"name": "4", "elevation_ft": 36.0}, {"name": "R"}]));
+        s.execute("levels.read", &json!({ "apply": true })).unwrap();
+        assert!((estimated_roof(&s).0 - 48.0).abs() < 1e-6);
     }
 
     #[test]

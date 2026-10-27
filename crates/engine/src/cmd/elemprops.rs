@@ -21,7 +21,7 @@
 //! the build's tag), a room's area, and a room volume's name and number (read from its tag on the
 //! plan, so `print`). A stored value always wins.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cadaddy_doc::props::{self, Entry, Prop, Props, Source, SourceKind};
 use cadaddy_doc::{Drawing, Entity, EntityKind, Handle};
@@ -152,7 +152,25 @@ pub fn effective(e: &Entity, kind: &str, upf: f64) -> Vec<(String, Prop, bool)> 
     if let Some(l) = level_of(e) {
         derive("level", Prop::new(l, Source::computed()));
     }
-    if kind == "room" {
+    if kind == "room" && super::wallgen::made_as(e).as_deref() == Some("room") {
+        // A room element of the model (model.build, Q5291): its tag's values.
+        let tag = |k: &str| super::bspec::room_tag(e, k).filter(|v| !v.is_empty());
+        if let Some(n) = tag("number:") {
+            derive("number", Prop::new(n, Source::of(SourceKind::Print)));
+        }
+        if let Some(n) = tag("name:") {
+            derive("name", Prop::new(n, Source::of(SourceKind::Print)));
+        }
+        if let Some(a) = tag("area_sf:").and_then(num).filter(|a| *a > 0.0) {
+            derive("area", Prop::new((a * 100.0).round() / 100.0, Source::computed()).with_unit("sf"));
+        }
+        if let Some(c) = tag("ceiling_ft:").and_then(num).filter(|c| *c > 0.0) {
+            derive("ceiling_height", Prop::new(c, Source::of(SourceKind::Spec)).with_unit("ft"));
+        }
+        if let Some(f) = tag("finish:") {
+            derive("floor_finish", Prop::new(f, Source::of(SourceKind::Spec)));
+        }
+    } else if kind == "room" {
         if let Some((name, number)) = room_tag(e) {
             derive("number", Prop::new(number, Source::of(SourceKind::Print)));
             derive("name", Prop::new(name, Source::of(SourceKind::Print)));
@@ -255,9 +273,22 @@ fn num(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
-/// The model's elements: (entity, kind).
+/// The model's elements: (entity, kind). A room counts once: a `rooms.build` volume of a room
+/// the model holds as a room element (same number, or unnumbered the same name) is that room's
+/// 3D view, not a second room.
 fn elements(d: &Drawing) -> impl Iterator<Item = (&std::sync::Arc<Entity>, String)> {
-    d.model.iter().take(MAX_SCAN).filter_map(|e| element_kind(e).map(|k| (e, k)))
+    let modelled: BTreeSet<String> = super::bspec::room_elements(d)
+        .into_iter()
+        .map(|r| r.number.filter(|n| !n.trim().is_empty()).unwrap_or(r.name).trim().to_ascii_uppercase())
+        .collect();
+    d.model.iter().take(MAX_SCAN).filter_map(move |e| {
+        let k = element_kind(e)?;
+        let volume_of_element = !modelled.is_empty()
+            && super::wallgen::made_as(e).is_none()
+            && room_tag(e)
+                .is_some_and(|(name, number)| modelled.contains(&if number.trim().is_empty() { name } else { number }.trim().to_ascii_uppercase()));
+        (!volume_of_element).then_some((e, k))
+    })
 }
 
 fn found(d: &Drawing, f: &Filter) -> Vec<(Handle, String, Option<String>)> {

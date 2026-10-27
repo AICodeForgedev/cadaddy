@@ -85,6 +85,7 @@ low-level `execute` only when needed.
 | `job_status` | What CADaddy is busy with (opening files, building models, rendering) and the progress of long commands like `bim_from_pdf` and `model.build`; pair with `wait_until_idle`. |
 | `project` | Manage projects (groups of drawings sharing rules, types and standards): create, open, add/remove drawings, standards, shelve/restore. |
 | `project_rules` | Project rules with source and tier (field-verified > RFI > submittal > spec > built-in): mounting heights, wiring methods, clearances, tolerances, naming, stud/joist layout. |
+| `codebook` | Building-code rule book (IBC, IRC, NEC, IPC, IMC, IFC, IECC; starter values in our own words, verify with the AHJ): `select` the editions and jurisdiction for the project, list `rules` by topic, code or section with citations, and `check` walls and rooms against them; every finding cites its rule id and section. |
 
 ### BIM and building
 
@@ -105,6 +106,8 @@ low-level `execute` only when needed.
 | `lv_connections` | Equipment electrical connections read from the schedules (PTAC, RTU, water heater, elevator, pumps, kitchen, laundry, signage) with connection type, circuit and panel; filter by `level` and `kind`, paged. |
 | `site_takeoff` | Sitework quantities from civil sheets: earthwork cut/fill, paving, curbs, utilities with trench excavation and backfill. |
 | `framing` | Studs from the prints: `build` frames every wall of a folder of DXF sheets (fixed members, both rule layouts, stacks); `list`, `wall` and `next_stud` give compact, paged answers per wall; `field_point` (tape, centre or photo pick) and `shop_drawing` (DXF) are kept in the job and re-applied on every rebuild; `view` draws the elevation, plan and Walk boxes on `FRAMING-*` layers. The BOM's framing lines and bits come from it. |
+| `asbuilt` | Field changes back into the model, each with who, when, why and a status (`pending`, `field_decision`, `rfi_answer`, `change_order`, `rejected`); only reviewed ones go into the as-built model. `record` one change (move, reroute, type, size, height, add, delete, verify, note; `stud` enters a measured stud through the framing); `import_markups` reads the review markups on a printed sheet's PDF (clouds, arrows, callouts) onto the elements they mark, a preview until `confirm: true`; `list` (paged), `set_status`, `compare` and `export` (an as-built sheet per level as DXF and an IFC with `CaDaddy_AsBuilt` property sets). Kept in the drawing; the design model is the print set's `truth.json` (`model`). |
+| `cover` | Pre-cover hold points: every wall face and ceiling has a rough-in checklist (boxes, cable, protection plates, firestop, sleeves, grounding, inspection signed) and the AHJ signs each inspection phase per level. `init` makes the record from the print set's `truth.json` (`model`); `status` (paged, per level), `check`/`uncheck` an item, `sign` a phase on one level, `ready` (refused while anything is open, with the open items and unsigned phases), `wall` (both faces with checklists and photos; `at` + `level` picks the tapped face), `photo` (filed on the wall face where it was taken; refused when no wall is near or its stated face contradicts its position). Photos in field notes synced with `fieldview.sync` are filed the same way. Kept in the drawing. |
 
 ### Drawing commands
 
