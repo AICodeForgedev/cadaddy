@@ -3122,3 +3122,10 @@
 	Place Door in Wall	在墙中放置门
 	Place Window in Wall	在墙中放置窗
 	Resolve Plan Entity	解析平面图元素
+	Record As-Built Change	记录竣工变更
+	Import As-Built Markups	导入竣工标记
+	List As-Built Changes	列出竣工变更
+	Set As-Built Change Status	设置竣工变更状态
+	Compare Design and As-Built	比较设计与竣工
+	Export As-Built	导出竣工
+	Map Line to Price Row	将行映射到价格行

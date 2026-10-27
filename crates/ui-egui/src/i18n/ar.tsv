@@ -3233,3 +3233,10 @@ menu	View	عرض
 	Place Door in Wall	وضع باب في الجدار
 	Place Window in Wall	وضع نافذة في الجدار
 	Resolve Plan Entity	تحديد عنصر المسقط
+	Record As-Built Change	تسجيل تغيير كما هو منفذ
+	Import As-Built Markups	استيراد علامات كما هو منفذ
+	List As-Built Changes	سرد تغييرات كما هو منفذ
+	Set As-Built Change Status	تعيين حالة تغيير كما هو منفذ
+	Compare Design and As-Built	مقارنة التصميم بما هو منفذ
+	Export As-Built	تصدير كما هو منفذ
+	Map Line to Price Row	ربط السطر بصف السعر

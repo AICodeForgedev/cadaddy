@@ -533,7 +533,7 @@ fn pt(v: &Value) -> Option<[f64; 2]> {
     Some([num(v.get(0)?)?, num(v.get(1)?)?])
 }
 
-fn run_field(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn run_field(s: &mut Session, p: &Value) -> Result<Value> {
     let who = author(p);
     let c = framing(s, FIELD)?;
     let f = &c.applied;
@@ -606,7 +606,7 @@ fn run_field(s: &mut Session, p: &Value) -> Result<Value> {
         save(s, &st)?;
     }
     Ok(json!({
-        "changed": changed, "wall": entry.wall, "centre_in": r2(centre), "how": entry.how, "author": entry.author,
+        "changed": changed, "wall": entry.wall, "level": entry.level, "at_ft": entry.at_ft, "centre_in": r2(centre), "how": entry.how, "author": entry.author,
         "matches": snap.matches.map(End::letter), "off_in": r2(snap.off_in), "walls": snapped, "settled": settled, "next_stud": next,
         "message": if changed { "entered: kept in the job and re-applied on every rebuild" } else { "already entered: nothing changed" },
     }))

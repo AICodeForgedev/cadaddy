@@ -2,6 +2,8 @@
   "commands": {
     "callableAsJson": 1137,
     "count": 1137,
+    "callableAsJson": 1139,
+    "count": 1139,
     "ids": [
       "-attedit",
       "-block",
@@ -75,6 +77,12 @@
       "arraypath",
       "arraypolar",
       "arrayrect",
+      "asbuilt.compare",
+      "asbuilt.export",
+      "asbuilt.import_markups",
+      "asbuilt.list",
+      "asbuilt.record",
+      "asbuilt.set_status",
       "attach",
       "attdef",
       "attdisp",
@@ -377,6 +385,7 @@
       "estimate.import",
       "estimate.import_costs",
       "estimate.import_p405",
+      "estimate.map_price",
       "estimate.observe",
       "estimate.query",
       "estimate.set_assembly",
@@ -1228,9 +1237,10 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 53,
+    "count": 54,
     "tools": [
       "arch_read",
+      "asbuilt",
       "bim_from_pdf",
       "bim_job",
       "bim_props",

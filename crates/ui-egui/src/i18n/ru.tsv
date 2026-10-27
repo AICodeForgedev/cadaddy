@@ -3027,3 +3027,10 @@
 	Place Door in Wall	Вставить дверь в стену
 	Place Window in Wall	Вставить окно в стену
 	Resolve Plan Entity	Определить элемент плана
+	Record As-Built Change	Записать исполнительное изменение
+	Import As-Built Markups	Импортировать исполнительные пометки
+	List As-Built Changes	Список исполнительных изменений
+	Set As-Built Change Status	Задать статус исполнительного изменения
+	Compare Design and As-Built	Сравнить проект и исполнительную документацию
+	Export As-Built	Экспортировать исполнительную документацию
+	Map Line to Price Row	Сопоставить строку со строкой цены

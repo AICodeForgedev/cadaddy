@@ -3237,3 +3237,10 @@ menu	Modify	Edita
 	Place Door in Wall	Inserisci porta nel muro
 	Place Window in Wall	Inserisci finestra nel muro
 	Resolve Plan Entity	Risolvi elemento della pianta
+	Record As-Built Change	Registra modifica as-built
+	Import As-Built Markups	Importa annotazioni as-built
+	List As-Built Changes	Elenca modifiche as-built
+	Set As-Built Change Status	Imposta stato modifica as-built
+	Compare Design and As-Built	Confronta progetto e as-built
+	Export As-Built	Esporta as-built
+	Map Line to Price Row	Associa riga alla riga di prezzo

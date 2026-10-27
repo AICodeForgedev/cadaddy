@@ -3244,3 +3244,10 @@
 	Place Door in Wall	Inserir porta na parede
 	Place Window in Wall	Inserir janela na parede
 	Resolve Plan Entity	Resolver elemento da planta
+	Record As-Built Change	Registrar alteração as-built
+	Import As-Built Markups	Importar marcações as-built
+	List As-Built Changes	Listar alterações as-built
+	Set As-Built Change Status	Definir status da alteração as-built
+	Compare Design and As-Built	Comparar projeto e as-built
+	Export As-Built	Exportar as-built
+	Map Line to Price Row	Mapear linha para linha de preço

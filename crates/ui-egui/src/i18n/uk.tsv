@@ -2909,6 +2909,7 @@
 	Query Estimate	Запит до кошторису
 	Set Estimate Assembly	Задати збірку кошторису
 	Set Estimate Price	Задати ціну кошторису
+	Map Line to Price Row	Зіставити рядок з рядком ціни
 	Set Estimate Scope	Задати обсяг кошторису
 	New Window	Нове вікно
 	Concrete Elements	Бетонні елементи
@@ -3334,3 +3335,9 @@
 	Place Door in Wall	Вставити двері у стіну
 	Place Window in Wall	Вставити вікно у стіну
 	Resolve Plan Entity	Визначити елемент плану
+	Record As-Built Change	Записати виконавчу зміну
+	Import As-Built Markups	Імпортувати виконавчі позначки
+	List As-Built Changes	Список виконавчих змін
+	Set As-Built Change Status	Встановити стан виконавчої зміни
+	Compare Design and As-Built	Порівняти проєкт і виконавчу документацію
+	Export As-Built	Експортувати виконавчу документацію

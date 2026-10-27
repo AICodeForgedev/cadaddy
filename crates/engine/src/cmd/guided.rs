@@ -544,7 +544,7 @@ impl SheetRegion {
 /// Why a sheet is never built into a building level: a civil, landscape or site sheet, or a
 /// plan whose title and number name no level (it was only given the lowest, to confirm).
 pub fn not_built_reason(discipline: &str, title: &str, level: &str, level_source: &str) -> &'static str {
-    if level.eq_ignore_ascii_case("SITE") || cadaddy_mepfix::sheet_facts::is_site_sheet(discipline, title) {
+    if cadaddy_walk3d::levels::is_datum_name(level) || cadaddy_mepfix::sheet_facts::is_site_sheet(discipline, title) {
         "site/civil"
     } else if level.trim().is_empty() || level_source == "default" {
         "no level"
@@ -977,33 +977,17 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 false,
             );
         }
-        // Every plan gets a level: one whose title names none was given the lowest; confirm it.
-        for sheet in sheets.iter().filter(|sh| sh.get("level_source").and_then(Value::as_str) == Some("default")).take(MAX_QUESTIONS_PER_STAGE) {
-            let number = sheet.get("number").and_then(Value::as_str).unwrap_or("?");
-            let title = sheet.get("title").and_then(Value::as_str).unwrap_or("");
-            let level = sheet.get("level").and_then(Value::as_str).unwrap_or("1");
-            let q = Question {
-                id: job.next_qid(StageName::Classify),
-                stage: StageName::Classify,
-                question: format!("Plan sheet {number} \"{title}\" names no level — is it level {level}?"),
-                why: "Neither the sheet title, its view titles nor its number say which level the plan shows".into(),
-                choices: vec![format!("Level {level}"), "Another level".into(), "Not a level plan".into()],
-                evidence: Some(QuestionEvidence {
-                    crop_png_path: None,
-                    sheet: Some(number.to_string()),
-                    at: None,
-                    values: Some(json!({"number": number, "title": title, "level": level, "sources": sheet.get("sources")})),
-                    handles: Vec::new(),
-                    tiled_crops: None,
-                    leftovers: Vec::new(),
-                }),
-                default: Some(format!("Level {level}")),
-                answer_schema: Some(json!({"type": "string"})),
-                answer: None,
-                answered_by: None,
-                answered_at: None,
-                kind: QuestionKind::Doubt,
-            };
+        // A plan whose title names no level: in a one-level building it was given that level,
+        // to confirm; with several levels it has none (it is read as nothing) until the answer
+        // says which, so auto mode never puts it on a level.
+        let level_codes: Vec<String> = classified
+            .get("levels")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|l| l.get("name").and_then(Value::as_str)).map(str::to_string).collect())
+            .unwrap_or_default();
+        let uncertain = |sh: &&Value| matches!(sh.get("level_source").and_then(Value::as_str), Some("default" | "ask"));
+        for sheet in sheets.iter().filter(uncertain).take(MAX_QUESTIONS_PER_STAGE) {
+            let q = plan_level_question(job, sheet, &level_codes);
             job.add_question_to_worklist(&q);
             if let Some(st) = job.stage_mut(StageName::Classify) {
                 st.questions.push(q);
@@ -1019,6 +1003,48 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     job.audit("stage_run", "pipeline", None, Some(StageName::Classify), Some(json!({"sheets": sheet_count})));
     Ok(classified)
+}
+
+/// The question for a plan whose title names no level (`level_source` `default` or `ask`): with
+/// a level given (a one-level building), is it that one; with none, which of the set's levels
+/// (`level_codes`) it shows, "Not a level plan" by default (auto mode never puts it on a level).
+fn plan_level_question(job: &mut GuidedJob, sheet: &Value, level_codes: &[String]) -> Question {
+    let number = sheet.get("number").and_then(Value::as_str).unwrap_or("?");
+    let title = sheet.get("title").and_then(Value::as_str).unwrap_or("");
+    let level = sheet.get("level").and_then(Value::as_str).unwrap_or("");
+    let (question, choices, default) = if level.is_empty() {
+        let mut choices: Vec<String> = level_codes.iter().take(20).map(|c| format!("Level {c}")).collect();
+        choices.push("Not a level plan".into());
+        (format!("Plan sheet {number} \"{title}\" names no level — which level does it show?"), choices, "Not a level plan".to_string())
+    } else {
+        (
+            format!("Plan sheet {number} \"{title}\" names no level — is it level {level}?"),
+            vec![format!("Level {level}"), "Another level".into(), "Not a level plan".into()],
+            format!("Level {level}"),
+        )
+    };
+    Question {
+        id: job.next_qid(StageName::Classify),
+        stage: StageName::Classify,
+        question,
+        why: "Neither the sheet title, its view titles nor its number say which level the plan shows".into(),
+        choices,
+        evidence: Some(QuestionEvidence {
+            crop_png_path: None,
+            sheet: Some(number.to_string()),
+            at: None,
+            values: Some(json!({"number": number, "title": title, "level": level, "levels": level_codes, "sources": sheet.get("sources")})),
+            handles: Vec::new(),
+            tiled_crops: None,
+            leftovers: Vec::new(),
+        }),
+        default: Some(default),
+        answer_schema: Some(json!({"type": "string"})),
+        answer: None,
+        answered_by: None,
+        answered_at: None,
+        kind: QuestionKind::Doubt,
+    }
 }
 
 /// Check for levels that have an architectural plan but no MEP plan for a discipline.
@@ -1927,6 +1953,11 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                 *c.not_device.entry("not a device (answered)").or_default() += 1;
             } else {
                 match device_types::tag_verdict(tag, &c.legend_types, &learned, &sheet_numbers) {
+                    // A sheet of no level (uncertain, not answered) or on the site datum is a
+                    // reference sheet: nothing on it is a model element.
+                    TagVerdict::Device(_) if job.level_at([at.x, at.y]).is_some_and(|r| !super::printmep::building_level(&r.level)) => {
+                        *c.not_device.entry("on a sheet of no building level").or_default() += 1;
+                    }
                     TagVerdict::Device(t) => {
                         c.placed.push(super::readers::ReadDevice {
                             tag: t.clone(),
@@ -2115,9 +2146,9 @@ fn device_identity(s: &Session, job: &GuidedJob, census: &mut DeviceCensus) -> u
     drop.len()
 }
 
-/// A 256-pixel PNG of the drawing around `at` (the first symbol printing an unlisted tag),
-/// written into `dir`; its path.
-fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, dir: &std::path::Path, name: &str) -> Option<String> {
+/// An 800-pixel PNG of the drawing around `at` (the first symbol printing an unlisted tag),
+/// written into `dir`; its path.  Returns `None` when the render is blank after retries.
+fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, dir: &std::path::Path, name: &str, sheet: &str) -> Option<String> {
     let d = s.doc().ok()?;
     let store = d.space(&s.space())?;
     let centre = cadaddy_geom::Vec2::new(at[0], at[1]);
@@ -2128,21 +2159,37 @@ fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, d
         .map(|e| cadaddy_doc::entity_bounds(d, e, 0))
         .filter(|b| !b.is_empty());
     let r = sym.map_or(0.0, |b| b.width().max(b.height()));
-    let half = if r.is_finite() && r > 0.0 { 4.0 * r } else { 24.0 };
-    let window = cadaddy_geom::Bounds2::new(centre, centre).expand(half);
-    // The sheets overlap in model space: draw only this sheet's objects.
-    let near: Vec<&cadaddy_doc::Entity> = store
-        .iter()
-        .filter(|e| (span.0..span.1).contains(&e.handle.0) && cadaddy_doc::entity_bounds(d, e, 0).intersects(&window))
-        .map(|e| e.as_ref())
-        .take(20_000)
-        .collect();
-    let list = cadaddy_render::build_entities(d, near, &cadaddy_render::Options::default());
-    let view = cadaddy_render::raster::View::fit(&window, 256, 256, 0.0);
+    let base_half = if r.is_finite() && r > 0.0 { 4.0 * r } else { 24.0 };
     let ro = cadaddy_render::raster::RasterOptions { background: cadaddy_color::Rgb(255, 255, 255), hairline: 1.0, px_per_mm: 0.0, antialias: true };
-    let png = cadaddy_render::raster::render_png(&list, &view, &ro)?;
+    // Try progressively wider windows if the render is blank.
+    let mut png_bytes: Option<Vec<u8>> = None;
+    for zoom in &[1.0_f64, 2.0, 4.0] {
+        let half = base_half * zoom;
+        let window = cadaddy_geom::Bounds2::new(centre, centre).expand(half);
+        // The sheets overlap in model space: draw only this sheet's objects.
+        let near: Vec<&cadaddy_doc::Entity> = store
+            .iter()
+            .filter(|e| (span.0..span.1).contains(&e.handle.0) && cadaddy_doc::entity_bounds(d, e, 0).intersects(&window))
+            .map(|e| e.as_ref())
+            .take(20_000)
+            .collect();
+        let list = cadaddy_render::build_entities(d, near, &cadaddy_render::Options::default());
+        let view = cadaddy_render::raster::View::fit(&window, 800, 800, 0.0);
+        let Some(pm) = cadaddy_render::raster::render(&list, &view, &ro) else { continue };
+        let blank = pm.data().chunks_exact(4).all(|px| px[0] == 255 && px[1] == 255 && px[2] == 255);
+        if let Ok(encoded) = pm.encode_png() {
+            if !blank {
+                png_bytes = Some(encoded);
+                break;
+            }
+            // Keep the last render even if blank — we'll save it if nothing better comes.
+            png_bytes = Some(encoded);
+        }
+    }
+    let png = png_bytes?;
     let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).take(24).collect();
-    let path = dir.join(format!("tag-{safe}.png"));
+    let sheet_safe: String = sheet.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).take(16).collect();
+    let path = dir.join(format!("tag-{safe}-{sheet_safe}.png"));
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::fs::create_dir_all(dir).ok()?;
@@ -2576,7 +2623,8 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             .iter()
             .enumerate()
             .map(|(i, (tag, u))| {
-                let crop = if i < MAX_TAG_CROPS { tag_crop(s, u.at, u.span, u.handles.first().map(String::as_str), &crop_dir, tag) } else { None };
+                let crop =
+                    if i < MAX_TAG_CROPS { tag_crop(s, u.at, u.span, u.handles.first().map(String::as_str), &crop_dir, tag, &u.sheet) } else { None };
                 json!({"description": tag, "tag": tag, "count": u.count, "at": u.at, "sheet": u.sheet, "handles": u.handles, "crop_path": crop})
             })
             .collect();
@@ -2692,21 +2740,37 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     ];
 
     if let Some(devices) = results.get("devices") {
+        // Collect unlisted tag names for "they are drawn as <tag>" choices.
+        let unlisted_tags: Vec<String> = census.unlisted.keys().take(10).cloned().collect();
         for (class_key, class_label) in &device_classes {
             let count = devices.get("by_type").and_then(|bt| bt.get(*class_key)).and_then(Value::as_u64).unwrap_or(0);
             // MUST 9: Always ask — even for 0 ("I counted 0 X — anything not counted?").
+            // Build choices: "count is complete", "none on this sheet", or "they are drawn as <tag>"
+            // for each unlisted tag, plus "there are uncounted devices".
+            let mut choices = vec!["Count is complete".into()];
+            if count == 0 {
+                choices.push("None on these sheets".into());
+            }
+            for tag in &unlisted_tags {
+                choices.push(format!("They are drawn as '{tag}'"));
+            }
+            choices.push("There are uncounted devices".into());
             let qid = job.next_qid(StageName::Devices);
             let q = Question {
                 id: qid,
                 stage: StageName::Devices,
                 question: format!("I counted {count} {class_label}. Are there any {class_label} I did not count?",),
                 why: format!("Completeness checkpoint for {class_label}"),
-                choices: vec!["Count is complete".into(), "There are uncounted devices".into()],
+                choices,
                 evidence: Some(QuestionEvidence {
                     crop_png_path: None,
                     sheet: None,
                     at: None,
-                    values: Some(json!({"class": class_key, "count": count})),
+                    values: Some(json!({
+                        "class": class_key,
+                        "count": count,
+                        "legend_entry": census.legend_types.contains(*class_key),
+                    })),
                     handles: Vec::new(),
                     // MUST 9: tiled_crops with every counted item boxed.
                     tiled_crops: devices
@@ -2745,7 +2809,7 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
         }
 
-        // MUST 10: Unknown/foreign symbols — ask to learn them.
+        // MUST 10: Unknown/foreign symbols — ask to learn them, with choices from the legend.
         // Q6021 MUST 2: never create a question with empty text; skip symbols with no tag.
         if let Some(unknowns) = devices.get("unknowns").and_then(Value::as_array) {
             for unk in unknowns.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -2757,6 +2821,29 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let count = unk.get("count").and_then(Value::as_u64).unwrap_or(1);
                 let tagged = unk.get("tag").and_then(Value::as_str).is_some_and(|t| !t.trim().is_empty());
                 let sheet = unk.get("sheet").and_then(Value::as_str).map(String::from);
+                // Build choices: legend device types (near-matching first, then the rest),
+                // plus non-device and skip.
+                let mut choices: Vec<String> = Vec::new();
+                let desc_lower = desc.to_ascii_lowercase();
+                // Near-matches first: types whose name shares a prefix or substring with the tag.
+                let mut near: Vec<&String> = Vec::new();
+                let mut rest: Vec<&String> = Vec::new();
+                for lt in &census.legend_types {
+                    let lt_lower = lt.to_ascii_lowercase();
+                    if lt_lower.contains(&desc_lower) || desc_lower.contains(&lt_lower) {
+                        near.push(lt);
+                    } else {
+                        rest.push(lt);
+                    }
+                }
+                for lt in near.iter().take(8) {
+                    choices.push(lt.to_string());
+                }
+                for lt in rest.iter().take(12usize.saturating_sub(choices.len())) {
+                    choices.push(lt.to_string());
+                }
+                choices.push("a window/door/room/equipment tag (not a device)".into());
+                choices.push("skip".into());
                 let qid = job.next_qid(StageName::Devices);
                 let q = Question {
                     id: qid,
@@ -2771,7 +2858,7 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     } else {
                         "Foreign/unknown symbol not matched to any library entry; learning it adds to future counts".into()
                     },
-                    choices: Vec::new(),
+                    choices,
                     evidence: Some(QuestionEvidence {
                         crop_png_path: unk.get("crop_path").and_then(Value::as_str).map(String::from),
                         // Q6021 MUST 2: always include the sheet reference.
@@ -3173,7 +3260,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     // Use model.build directly — it returns walls/doors/rooms/levels counts.
     // (bim.build wraps model.build but constructs its own result without those counts.)
-    let mut result = s.execute("model.build", &json!({}))?;
+    // Q6029 MUST 3: pass a configurable time budget (default 20 min).
+    let budget_s = super::bspec::BUILD_BUDGET_S;
+    let mut result = s.execute("model.build", &json!({"budget_s": budget_s}))?;
     if let Some(v) = placed {
         result["devices"] = v;
     }
@@ -3469,7 +3558,7 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
         if !r.rect.iter().all(|v| v.is_finite()) {
             continue;
         }
-        let level = Some(r.level.trim()).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("SITE")).map(level_name);
+        let level = Some(r.level.trim()).filter(|l| super::printmep::building_level(l)).map(level_name);
         let level = level.map(|n| sp.level(&n).map_or(n.clone(), |l| l.name.clone()));
         match sp.sheets.iter_mut().find(|x| x.number.eq_ignore_ascii_case(&r.number) && x.rect.is_none_or(|q| q == r.rect)) {
             Some(x) => {
@@ -3495,8 +3584,7 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
 fn building_levels(job: &GuidedJob) -> Vec<Value> {
     // Site, civil and landscape plans, and plans that name no level, are no storey (MUST 3).
     let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
-    let floor_plan =
-        |r: &&SheetRegion| r.kind == "plan" && !r.level.trim().is_empty() && !r.level.eq_ignore_ascii_case("SITE") && r.not_built.is_empty();
+    let floor_plan = |r: &&SheetRegion| r.kind == "plan" && super::printmep::building_level(&r.level) && r.not_built.is_empty();
     let mut plans: Vec<&SheetRegion> = job.sheet_regions.iter().filter(floor_plan).filter(|r| r.discipline == "A").collect();
     if plans.is_empty() {
         // No architectural floor plans: one discipline's plans give the floors (their
@@ -4327,7 +4415,9 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
                     return (Some(StageName::Rooms), format!("sheet {number} is not read as a level plan"));
                 }
                 let level = text.trim_start_matches("Level").trim().to_string();
-                if other && !level.is_empty() && level.len() <= 8 {
+                // A level the sheet didn't have: typed, or one of the set's levels offered.
+                let named = text != "Another level" && !level.is_empty() && level.len() <= 8;
+                if named && (other || text.starts_with("Level")) && !cadaddy_walk3d::levels::is_datum_name(&level) {
                     set_sheet_fact(job, &number, "level", &level);
                     return (Some(StageName::Rooms), format!("sheet {number} is level {level}"));
                 }
@@ -4498,7 +4588,14 @@ fn set_sheet_fact(job: &mut GuidedJob, number: &str, key: &str, value: &str) {
     for r in job.sheet_regions.iter_mut().filter(|r| r.number.eq_ignore_ascii_case(number)) {
         match key {
             "discipline" => r.discipline = value.to_string(),
-            "level" => r.level = value.to_string(),
+            "level" => {
+                r.level = value.to_string();
+                r.levels.clear();
+                // The answer is the plan's level: it is built (unless it is a site plan).
+                if r.not_built == "no level" {
+                    r.not_built.clear();
+                }
+            }
             _ => r.kind = value.to_string(),
         }
     }
@@ -5823,11 +5920,24 @@ mod tests {
         assert!(std::path::Path::new(crop).starts_with(&tmp), "{crop}");
         let png = std::fs::read(crop).unwrap_or_else(|e| panic!("{crop}: {e}"));
         assert!(png.starts_with(b"\x89PNG"), "{crop}");
+        // Q6031: crop is >= 800 px.
+        assert!(png.len() >= 24, "PNG too short for IHDR");
+        let w = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+        let h = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+        assert!(w >= 800 && h >= 800, "crop too small: {w}x{h}");
+        // Q6031: crop filename includes sheet info.
+        assert!(crop.contains("Q_1") || crop.contains("Q-1"), "crop should mention sheet: {crop}");
         let stage = job.stage_mut(StageName::Devices).map(|st| st.completeness.clone()).unwrap_or_default();
         let q = stage.iter().find(|q| q.question.contains("'ZZ'")).unwrap_or_else(|| panic!("no ZZ question"));
         assert!(q.question.contains("no legend or schedule lists it"), "{}", q.question);
         assert_eq!(q.evidence.as_ref().and_then(|e| e.crop_png_path.as_deref()), Some(crop));
         assert_eq!(q.evidence.as_ref().map_or(0, |e| e.handles.len()), 4);
+        // Q6031: unknown-tag questions always have choices.
+        assert!(!q.choices.is_empty(), "unknown-tag question must have choices");
+        assert!(q.choices.iter().any(|c| c == "skip"), "must offer 'skip'");
+        assert!(q.choices.iter().any(|c| c.contains("not a device")), "must offer 'not a device'");
+        // Q6031: unknown-tag evidence includes sheet info.
+        assert_eq!(q.evidence.as_ref().and_then(|e| e.sheet.as_deref()), Some("Q-1"));
         // Answering it makes ZZ a device type on the recount.
         let mut answered = q.clone();
         answered.answer = Some(json!({"device_type": "wall_sconce"}));
@@ -6322,6 +6432,54 @@ mod tests {
             not_built: String::new(),
             levels: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_plan_of_uncertain_level_is_asked_never_put_on_level_1() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let sheet = json!({"number": "P-201", "title": "PLUMBING PLAN", "level": "", "level_source": "ask"});
+        job.index = Some(json!({"sheets": [sheet.clone()]}));
+        job.sheets = Some(json!({"sheets": [sheet.clone()]}));
+        let mut r = region("P-201", "", "P", "plan", 0.0);
+        r.not_built = not_built_reason("P", "PLUMBING PLAN", "", "ask").to_string();
+        assert_eq!(r.not_built, "no level");
+        job.sheet_regions = vec![r];
+        let codes: Vec<String> = ["1", "2", "R"].iter().map(|c| c.to_string()).collect();
+        let mut q = plan_level_question(&mut job, &sheet, &codes);
+        assert!(q.question.contains("which level"), "{}", q.question);
+        assert_eq!(q.choices, ["Level 1", "Level 2", "Level R", "Not a level plan"]);
+        assert_eq!(q.default.as_deref(), Some("Not a level plan"), "auto mode keeps it off every level");
+        // Auto mode takes the default: the sheet stays a reference sheet, read as nothing.
+        q.answer = Some(json!("Not a level plan"));
+        answer_effect(&mut job, &q);
+        assert_eq!((job.sheet_regions[0].level.as_str(), job.sheet_regions[0].not_built.as_str()), ("", "no level"));
+        assert!(job_sheet_refs(&job).iter().all(|r| !r.builds()));
+        // The site is no level a plan can be put on.
+        q.answer = Some(json!("Level SITE"));
+        answer_effect(&mut job, &q);
+        assert_eq!(job.sheet_regions[0].level, "");
+        // An answer puts it on that level, and it is built.
+        q.answer = Some(json!("Level 2"));
+        let (rerun, said) = answer_effect(&mut job, &q);
+        assert_eq!((rerun, said.as_str()), (Some(StageName::Rooms), "sheet P-201 is level 2"));
+        assert_eq!((job.sheet_regions[0].level.as_str(), job.sheet_regions[0].not_built.as_str()), ("2", ""));
+        assert_eq!(job.index.as_ref().and_then(|i| i.pointer("/sheets/0/level_source")).and_then(Value::as_str), Some("answer"));
+        // In a one-level building it was given that level, to confirm.
+        let one = json!({"number": "P-101", "title": "PLUMBING PLAN", "level": "1", "level_source": "default"});
+        let q = plan_level_question(&mut job, &one, &codes[..1]);
+        assert_eq!(q.default.as_deref(), Some("Level 1"));
+    }
+
+    #[test]
+    fn devices_on_a_sheet_of_no_level_or_the_site_are_not_model_elements() {
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        job.sheet_regions =
+            vec![region("E-101", "1", "E", "plan", 0.0), region("E-201", "", "E", "plan", 200.0), region("E-001", "SITE", "E", "plan", 400.0)];
+        let refs = job_sheet_refs(&job);
+        assert_eq!(refs.iter().map(|r| r.builds()).collect::<Vec<_>>(), [true, false, false]);
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        add_sheet_links(&mut sp, &job.sheet_regions);
+        assert_eq!(sp.sheets.iter().map(|x| x.level.clone()).collect::<Vec<_>>(), [Some("Level 1".to_string()), None, None]);
     }
 
     #[test]
@@ -7034,6 +7192,99 @@ mod tests {
         assert!(cmd_answer(&mut s, &json!({"id": a})).is_err());
         let many: Vec<Value> = (0..=MAX_ANSWERS_PER_CALL).map(|i| json!({"id": format!("Q-x-{i}"), "answer": "y"})).collect();
         assert!(cmd_answer(&mut s, &json!({"answers": many})).is_err());
+    }
+
+    /// Q6031: question payloads always have choices, crops are >= 800 px, and completeness
+    /// questions offer "drawn as" alternatives from unlisted tags.
+    #[test]
+    fn askcrops_questions_have_choices_and_readable_crops() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/askcrops-test", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-1", "sheet_type": "plan", "discipline": "E"}]}));
+        job.sheets_loaded = true;
+        // A legend with types A (lights) and B, then 3 x A, 3 x B, plus 4 x unlisted "W1"
+        // and 4 x unlisted "JL".
+        let schedule: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIGHTING FIXTURE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("A", 1000.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1030.0, 772.0, 5.0),
+            ("B", 1000.0, 760.0, 5.0),
+            ("LED DOWNLIGHT", 1030.0, 760.0, 5.0),
+        ];
+        let mut syms: Vec<(&str, f64, f64)> = vec![("A", 990.0, 772.0)]; // legend sample
+        // 3 x A and 3 x B on the plan
+        for i in 0..3 {
+            syms.push(("A", 100.0 + 40.0 * f64::from(i), 300.0));
+        }
+        for i in 0..3 {
+            syms.push(("B", 100.0 + 40.0 * f64::from(i), 200.0));
+        }
+        // 4 x unlisted "W1" and 4 x "JL"
+        for i in 0..4 {
+            syms.push(("W1", 100.0 + 40.0 * f64::from(i), 500.0));
+        }
+        for i in 0..4 {
+            syms.push(("JL", 100.0 + 40.0 * f64::from(i), 600.0));
+        }
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &schedule, &syms);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-1".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+        });
+        let _r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let completeness = job.stage(StageName::Devices).map(|st| st.completeness.clone()).unwrap_or_default();
+
+        // ── Unknown-tag questions: every one must have choices ──
+        let unkn_qs: Vec<&Question> = completeness.iter().filter(|q| q.question.contains("Unknown")).collect();
+        assert!(unkn_qs.len() >= 2, "expected questions for W1 and JL: {}", unkn_qs.len());
+        for q in &unkn_qs {
+            assert!(!q.choices.is_empty(), "unknown-tag question must have choices: {}", q.question);
+            assert!(q.choices.iter().any(|c| c == "skip"), "missing 'skip' in: {:?}", q.choices);
+            assert!(q.choices.iter().any(|c| c.contains("not a device")), "missing 'not a device' in: {:?}", q.choices);
+            // Should include legend types as choices.
+            assert!(q.choices.iter().any(|c| c == "A" || c == "B"), "missing legend types in choices: {:?}", q.choices);
+            // Crop evidence: sheet info present.
+            let ev = q.evidence.as_ref().expect("evidence");
+            assert_eq!(ev.sheet.as_deref(), Some("E-1"), "evidence should name the sheet");
+        }
+
+        // ── Completeness questions: must have choices ──
+        let comp_qs: Vec<&Question> = completeness.iter().filter(|q| q.question.starts_with("I counted")).collect();
+        assert!(!comp_qs.is_empty(), "no completeness questions");
+        for q in &comp_qs {
+            assert!(q.choices.len() >= 2, "completeness question needs choices: {} -> {:?}", q.question, q.choices);
+            // Should offer "drawn as" alternatives for the unlisted tags.
+            let has_drawn_as = q.choices.iter().any(|c| c.starts_with("They are drawn as"));
+            assert!(has_drawn_as, "completeness question should offer 'drawn as' alternatives from unlisted tags: {:?}", q.choices);
+        }
+
+        // ── Crop size check for unknown tags ──
+        for q in &unkn_qs {
+            if let Some(ev) = &q.evidence
+                && let Some(path) = &ev.crop_png_path
+            {
+                let png = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+                assert!(png.starts_with(b"\x89PNG"), "not PNG: {path}");
+                assert!(png.len() >= 24, "PNG too short");
+                let w = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+                let h = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+                assert!(w >= 800 && h >= 800, "crop {path} too small: {w}x{h}");
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
     }
 
     #[test]

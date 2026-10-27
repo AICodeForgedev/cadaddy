@@ -3244,3 +3244,10 @@
 	Place Door in Wall	Colocar puerta en muro
 	Place Window in Wall	Colocar ventana en muro
 	Resolve Plan Entity	Resolver elemento de planta
+	Record As-Built Change	Registrar cambio de obra ejecutada
+	Import As-Built Markups	Importar marcas de obra ejecutada
+	List As-Built Changes	Listar cambios de obra ejecutada
+	Set As-Built Change Status	Establecer estado del cambio de obra ejecutada
+	Compare Design and As-Built	Comparar diseño y obra ejecutada
+	Export As-Built	Exportar obra ejecutada
+	Map Line to Price Row	Asignar línea a fila de precio
