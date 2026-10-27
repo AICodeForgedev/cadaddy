@@ -250,6 +250,19 @@ fn inherited_num(doc: &Document, page: &Dictionary, key: &[u8]) -> Option<f64> {
     None
 }
 
+/// The number of pages in a PDF.
+pub fn page_count(bytes: &[u8]) -> Result<u32, String> {
+    let doc = Document::load_mem(bytes).map_err(|e| format!("PDF: {e}"))?;
+    Ok(doc.get_pages().len() as u32)
+}
+
+/// The leaf bookmarks of a PDF as (title, 1-based page number).
+pub fn bookmark_titles(bytes: &[u8]) -> Result<Vec<(String, usize)>, String> {
+    crate::pdf_merge::bookmarks(bytes)
+        .map(|v| v.into_iter().filter(|(_, _, page)| *page > 0).map(|(t, _, p)| (t, p)).collect())
+        .map_err(|e| e.to_string())
+}
+
 /// The markups of page `page` (1-based) of a PDF.
 pub fn read(bytes: &[u8], page: u32) -> Result<MarkupPage, String> {
     let doc = Document::load_mem(bytes).map_err(|e| format!("PDF: {e}"))?;

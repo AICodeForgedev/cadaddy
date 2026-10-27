@@ -59,3 +59,10 @@ pub struct MarkupPage {
 
 /// Reads page `page` (1-based) of a PDF's markups (installed by the host; PDFs are `io`'s).
 pub type MarkupReader = fn(&[u8], u32) -> Result<MarkupPage, String>;
+
+/// The number of pages in a PDF (installed by the host).
+pub type PdfPageCount = fn(&[u8]) -> Result<u32, String>;
+
+/// The bookmark titles of a PDF as (title, 1-based page number) — leaf bookmarks that point to a
+/// page (installed by the host).
+pub type PdfBookmarks = fn(&[u8]) -> Result<Vec<(String, usize)>, String>;
