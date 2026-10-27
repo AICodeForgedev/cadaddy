@@ -3209,6 +3209,14 @@ menu	Modify	Modifikace
 	Sequence Trade Conflicts	Střety profesí v postupu
 	Ceiling Space Fit	Prostor nad podhledem
 	Takeoff by Activity	Výkaz výměr podle činností
+	BIM	BIM
+	Door	Dveře
+	Plan Views	Půdorysné pohledy
+	Generate Plan Views	Generovat půdorysné pohledy
+	Draw Wall (Object)	Kreslit zeď (objekt)
+	Place Door in Wall	Vložit dveře do zdi
+	Place Window in Wall	Vložit okno do zdi
+	Resolve Plan Entity	Rozlišit prvek plánu
 	Record As-Built Change	Zaznamenat změnu skutečného provedení
 	Import As-Built Markups	Importovat značky skutečného provedení
 	List As-Built Changes	Seznam změn skutečného provedení

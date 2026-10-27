@@ -3113,6 +3113,14 @@
 	Sequence Trade Conflicts	施工顺序中的工种冲突
 	Ceiling Space Fit	吊顶空间校核
 	Takeoff by Activity	按活动统计工程量
+	BIM	BIM
+	Door	门
+	Plan Views	平面图视图
+	Generate Plan Views	生成平面图视图
+	Draw Wall (Object)	绘制墙体（对象）
+	Place Door in Wall	在墙中放置门
+	Place Window in Wall	在墙中放置窗
+	Resolve Plan Entity	解析平面图元素
 	Record As-Built Change	记录竣工变更
 	Import As-Built Markups	导入竣工标记
 	List As-Built Changes	列出竣工变更

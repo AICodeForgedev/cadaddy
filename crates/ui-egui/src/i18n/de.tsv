@@ -3046,6 +3046,14 @@
 	Sequence Trade Conflicts	Gewerkekonflikte im Ablauf
 	Ceiling Space Fit	Platz im Deckenhohlraum
 	Takeoff by Activity	Mengenermittlung nach Vorgang
+	BIM	BIM
+	Door	Tür
+	Plan Views	Grundrissansichten
+	Generate Plan Views	Grundrissansichten erzeugen
+	Draw Wall (Object)	Wand zeichnen (Objekt)
+	Place Door in Wall	Tür in Wand einfügen
+	Place Window in Wall	Fenster in Wand einfügen
+	Resolve Plan Entity	Planelement auflösen
 	Record As-Built Change	Bestandsänderung erfassen
 	Import As-Built Markups	Bestandsmarkierungen importieren
 	List As-Built Changes	Bestandsänderungen auflisten
