@@ -2203,7 +2203,11 @@ fn device_identity(s: &Session, job: &GuidedJob, census: &mut DeviceCensus) -> u
         .sheet_regions
         .iter()
         .filter(|r| r.kind == "plan" && !r.level.trim().is_empty() && r.not_built.is_empty() && r.rect.iter().all(|v| v.is_finite()))
-        .map(|r| super::identity::SheetBox::new(&r.number, &r.discipline, &r.level, r.rect))
+        .map(|r| {
+            let mut b = super::identity::SheetBox::new(&r.number, &r.discipline, &r.level, r.rect);
+            b.view = r.view.as_ref().map(|v| v.rect);
+            b
+        })
         .collect();
     let upf = 12.0 * super::perceive::units_per_inch(d);
     let (drop, _) = super::identity::duplicate_devices(d, &sheets, upf, &census.placed);
@@ -2316,8 +2320,15 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     ensure_sheets_loaded(s, job)?;
     // Each floor plan's labels read in full, sheet by sheet (a whole set's labels are more than
     // one reading traces: the last floors were left out).
-    let regions: Vec<[f64; 4]> =
-        job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty()).map(SheetRegion::plan_rect).collect();
+    // A sheet of several levels' views is read whole, once: a view's part of the sheet can leave
+    // out labels its plan prints (each room still takes the level of the view it is in).
+    let mut regions: Vec<[f64; 4]> = Vec::new();
+    for r in job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty()) {
+        let rect = r.area.unwrap_or(r.rect);
+        if !regions.contains(&rect) {
+            regions.push(rect);
+        }
+    }
     let mut params = json!({"outline": true});
     if !regions.is_empty() {
         params["regions"] = json!(regions);

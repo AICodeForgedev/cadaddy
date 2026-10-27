@@ -987,6 +987,18 @@ fn outline_dist(outline: &[Vec2], p: Vec2) -> f64 {
     best
 }
 
+/// The sheet `p` lies on; on a sheet printing several levels' plans (one link per view), the
+/// view holding it (outside every view: the sheet's first link).
+fn link_at(sp: &BuildingSpec, p: Vec2) -> Option<&cadaddy_walk3d::levels::SheetLink> {
+    let inside = |r: &[f64; 4], q: Vec2| q.x >= r[0].min(r[2]) && q.x <= r[0].max(r[2]) && q.y >= r[1].min(r[3]) && q.y <= r[1].max(r[3]);
+    let mut on = sp.sheets.iter().filter(|x| x.rect.is_some_and(|r| inside(&r, p)));
+    let first = on.next()?;
+    if first.view.as_ref().is_none_or(|v| inside(&v.rect, p)) {
+        return Some(first);
+    }
+    Some(on.find(|x| x.rect == first.rect && x.view.as_ref().is_some_and(|v| inside(&v.rect, p))).unwrap_or(first))
+}
+
 /// Where a point of a level's architectural plan lies on the trades' sheets of that level (the
 /// same title block and plan placement: the sheets are the same size), nearest first: the point
 /// itself, then its place on each such sheet. The trades' readers moved what they read onto the
@@ -1290,7 +1302,7 @@ fn place_fixtures(d: &mut Drawing, sp: &BuildingSpec, schedules: &Rows, texts: &
         if legend(*p, *h) {
             continue;
         }
-        let Some(sheet) = sp.sheets.iter().find(|x| x.rect.is_some_and(|r| inside(&r, *p))) else { continue };
+        let Some(sheet) = link_at(sp, *p) else { continue };
         let Some(level) = sheet.level.as_deref().and_then(|l| sp.level(l)).filter(|l| l.sheet.is_none()) else { continue };
         // The level's floor plan (the sheet holding its region), or a plumbing plan of its size
         // (moved onto it); not an enlarged or partial plan (they repeat what the plans show).
@@ -1524,8 +1536,11 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows, read: &[ReadRoom]) -> Resu
     // The trades' sheets put onto their levels' architectural plans by the door and room numbers
     // both print (`bim.identity`'s registration), for the devices read on them.
     let registration = super::identity::register(d, &super::identity::sheets_of(Some(&sp)), upf);
-    let placements: HashMap<String, &cadaddy_mepfix::tagid::SheetTransform> =
-        registration.transforms.iter().filter(|t| t.registered && t.method == "tags").map(|t| (t.sheet.trim().to_ascii_uppercase(), t)).collect();
+    // Per sheet: its registrations, one per level on a sheet of several levels' views.
+    let mut placements: HashMap<String, Vec<&cadaddy_mepfix::tagid::SheetTransform>> = HashMap::new();
+    for t in registration.transforms.iter().filter(|t| t.registered && t.method == "tags") {
+        placements.entry(t.sheet.trim().to_ascii_uppercase()).or_default().push(t);
+    }
     let (mut devices_roomed_by_fit, mut devices_without_room) = (0usize, 0usize);
     // Doors with no tag beside them and the one numbered room each opens into; the numbers the
     // tagged doors have, per level.
@@ -1557,7 +1572,7 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows, read: &[ReadRoom]) -> Resu
                 // Where its sheet's shared door and room numbers put it on its level's plan (a
                 // sheet whose plan sits elsewhere on the paper than the architectural one's), else
                 // where it was built.
-                let fitted = registered_at(&store, &placements).map(|q| q + shift);
+                let fitted = registered_at(&store, &placements, lvl).map(|q| q + shift);
                 let found = match fitted.and_then(|q| room_near(&rooms, lvl, q, NEAR_ROOM_FT * upf)) {
                     Some((r, _)) => {
                         devices_roomed_by_fit += 1;
@@ -1850,7 +1865,7 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows, read: &[ReadRoom]) -> Resu
         "terminals": terminals,
         "doors_untagged": doors_untagged,
         "doors_numbered_by_room": doors_numbered_by_room,
-        "sheets_registered_by_tags": placements.len(),
+        "sheets_registered_by_tags": placements.values().map(Vec::len).sum::<usize>(),
         "devices_roomed_by_registration": devices_roomed_by_fit,
         "devices_without_room": devices_without_room,
         "texts": text_count,
@@ -1901,10 +1916,12 @@ fn number_doors_by_room(
 }
 
 /// Where a device read on a registered sheet lies on its level's architectural plan: its read
-/// point (its `sheet` value's) through its sheet's registration; none when the sheet has none.
-fn registered_at(store: &Props, placements: &HashMap<String, &cadaddy_mepfix::tagid::SheetTransform>) -> Option<Vec2> {
+/// point (its `sheet` value's) through its sheet's registration (its level's on a sheet of
+/// several levels' views); none when the sheet has none.
+fn registered_at(store: &Props, placements: &HashMap<String, Vec<&cadaddy_mepfix::tagid::SheetTransform>>, level: Option<&str>) -> Option<Vec2> {
     let src = &store.get("sheet")?.source;
-    let t = placements.get(&src.doc.as_deref()?.trim().to_ascii_uppercase())?;
+    let all = placements.get(&src.doc.as_deref()?.trim().to_ascii_uppercase())?;
+    let t = all.iter().find(|t| level.is_some_and(|l| level_key(l) == level_key(&t.level))).or_else(|| all.first())?;
     let [x, y] = t.place(src.at?)?;
     let q = Vec2::new(x, y);
     q.is_finite().then_some(q)

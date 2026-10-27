@@ -216,3 +216,43 @@ fn hostile_identity_calls_never_panic() {
     s.open_drawing(d, "Broken", None);
     assert!(s.execute("bim.identity", &json!({})).is_ok());
 }
+
+/// A-102 prints two levels' plans side by side (one spec link per view, as the job writes a
+/// sheet of several views): Level 3 on the left, Level 4 on the right. E-104, Level 4's power
+/// plan, prints Level 4's room numbers 3' to the right of where its frame would put them. Its
+/// level's architectural plan is A-102's right view, so it is registered by the numbers that view
+/// prints; Level 3's numbers stay with the left view.
+#[test]
+fn a_trade_sheet_registers_onto_its_own_levels_view_of_a_two_level_sheet() {
+    let mut d = Drawing::new_imperial();
+    let layout = [(1, (200.0, 300.0)), (2, (600.0, 300.0)), (3, (200.0, 600.0)), (4, (600.0, 600.0))];
+    for (level, x0) in [(3, 0.0), (4, 1000.0)] {
+        for (k, (x, y)) in layout {
+            text(&mut d, &format!("{level}0{k}"), (x0 + x, y));
+        }
+    }
+    for (k, (x, y)) in layout {
+        text(&mut d, &format!("40{k}"), (3036.0 + x, y));
+    }
+    let view = |title: &str, x0: f64| json!({"title": title, "rect": [x0, 0.0, x0 + 1000.0, 800.0]});
+    let spec = json!({
+        "units_per_foot": 12.0,
+        "sheets": [
+            {"number": "A-102", "discipline": "A", "level": "Level 3", "rect": [0.0, 0.0, 2000.0, 800.0], "view": view("THIRD FLOOR PLAN", 0.0)},
+            {"number": "A-102", "discipline": "A", "level": "Level 4", "rect": [0.0, 0.0, 2000.0, 800.0], "view": view("FOURTH FLOOR PLAN", 1000.0)},
+            {"number": "E-104", "discipline": "E", "level": "Level 4", "rect": [3000.0, 0.0, 4000.0, 800.0]},
+        ],
+    });
+    d.building_spec = Some(spec.to_string());
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Set", None);
+    let r = s.execute("bim.identity", &json!({"apply": false})).unwrap();
+    let sheets = r["sheets"].as_array().unwrap();
+    let e = sheets.iter().find(|t| t["sheet"] == "E-104").unwrap_or_else(|| panic!("{r:#}"));
+    assert_eq!(e["level"], "Level 4", "{r:#}");
+    assert_eq!(e["reference"], "A-102", "{r:#}");
+    assert_eq!(e["method"], "tags", "by the numbers A-102's Level 4 view prints: {r:#}");
+    assert_eq!(e["matched"], 4, "{r:#}");
+    // 3' (36") to the right on E-104, and A-102's Level 4 view starts 1000 to the right of its sheet.
+    assert!((e["transform"]["tx"].as_f64().unwrap_or(f64::NAN) + 2036.0).abs() < 1.0, "{e}");
+}

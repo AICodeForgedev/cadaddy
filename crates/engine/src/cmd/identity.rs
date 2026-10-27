@@ -60,12 +60,14 @@ fn spec_of(d: &Drawing) -> Option<BuildingSpec> {
     d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
 }
 
-/// A plan sheet of the set: number, discipline, level and rectangle.
+/// A plan sheet of the set: number, discipline, level and rectangle. A sheet printing several
+/// levels' plans is one box per view, each with its `view`: what lies in it is that level's.
 pub(crate) struct SheetBox {
     pub number: String,
     pub discipline: String,
     pub level: String,
     pub rect: [f64; 4],
+    pub view: Option<[f64; 4]>,
 }
 
 impl SheetBox {
@@ -75,7 +77,13 @@ impl SheetBox {
             discipline: if discipline.trim().is_empty() { cadaddy_mepfix::sheet_facts::discipline_of(number) } else { discipline.to_string() },
             level: level.to_string(),
             rect: [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])],
+            view: None,
         }
+    }
+
+    /// Whether `p` lies in this box's view (none: the box is one view).
+    fn in_view(&self, p: [f64; 2]) -> bool {
+        self.view.is_none_or(|v| inside(&v, p))
     }
 }
 
@@ -85,7 +93,14 @@ pub(crate) fn sheets_of(sp: Option<&BuildingSpec>) -> Vec<SheetBox> {
         .iter()
         .filter_map(|s| {
             let r = s.rect.filter(|r| r.iter().all(|v| v.is_finite()))?;
-            Some(SheetBox::new(&s.number, s.discipline.as_deref().unwrap_or(""), s.level.as_deref().unwrap_or(""), r))
+            let mut b = SheetBox::new(&s.number, s.discipline.as_deref().unwrap_or(""), s.level.as_deref().unwrap_or(""), r);
+            b.view = s
+                .view
+                .as_ref()
+                .map(|v| v.rect)
+                .filter(|v| v.iter().all(|x| x.is_finite()))
+                .map(|v| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])]);
+            Some(b)
         })
         .collect()
 }
@@ -94,16 +109,29 @@ fn inside(r: &[f64; 4], p: [f64; 2]) -> bool {
     p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3]
 }
 
-/// The sheet `p` lies on (the smallest rectangle holding it).
+/// The sheet `p` lies on (the smallest rectangle holding it); on a sheet of several views, the
+/// view holding it (outside every view: the sheet's first).
 fn sheet_at(sheets: &[SheetBox], p: [f64; 2]) -> Option<usize> {
+    let area = |s: &SheetBox| (s.rect[2] - s.rect[0]) * (s.rect[3] - s.rect[1]);
     sheets
         .iter()
         .enumerate()
         .filter(|(_, s)| inside(&s.rect, p))
-        .min_by(|a, b| {
-            ((a.1.rect[2] - a.1.rect[0]) * (a.1.rect[3] - a.1.rect[1])).total_cmp(&((b.1.rect[2] - b.1.rect[0]) * (b.1.rect[3] - b.1.rect[1])))
-        })
+        .min_by(|a, b| area(a.1).total_cmp(&area(b.1)).then_with(|| b.1.in_view(p).cmp(&a.1.in_view(p))))
         .map(|(i, _)| i)
+}
+
+/// The sheet numbered `number` (the view holding `p` on a sheet of several views), else the
+/// sheet `p` lies on.
+fn sheet_named(sheets: &[SheetBox], number: Option<&str>, p: [f64; 2]) -> Option<usize> {
+    let named = |s: &SheetBox| number.is_some_and(|n| s.number.eq_ignore_ascii_case(n.trim()));
+    sheets.iter().position(|s| named(s) && s.view.is_some() && s.in_view(p)).or_else(|| sheets.iter().position(named)).or_else(|| sheet_at(sheets, p))
+}
+
+/// The registration of sheet box `s`: its own level's (a sheet of several views is registered
+/// once per view), else its number's first.
+fn transform_for<'a>(transforms: &'a [SheetTransform], s: &SheetBox) -> Option<&'a SheetTransform> {
+    transforms.iter().find(|t| t.sheet == s.number && t.level == s.level).or_else(|| transforms.iter().find(|t| t.sheet == s.number))
 }
 
 /// Every door or room number lettered in model space and where (the lettering's middle).
@@ -198,7 +226,7 @@ fn elements(d: &Drawing, sp: Option<&BuildingSpec>, sheets: &[SheetBox]) -> Vec<
             // A device's identity: its type and circuit (a circuit names one run of devices, so
             // the type and the spot tell them apart).
             let number = field("circuit").map(|c| format!("{ty} {c}"));
-            let sheet = field("sheet").and_then(|n| sheets.iter().position(|s| s.number.eq_ignore_ascii_case(&n))).or_else(|| sheet_at(sheets, at));
+            let sheet = sheet_named(sheets, field("sheet").as_deref(), at);
             out.push(Element {
                 handle: None,
                 tag_id: Some(t.id.clone()),
@@ -294,8 +322,8 @@ pub(crate) fn duplicate_devices(d: &Drawing, sheets: &[SheetBox], upf: f64, devi
     let items: Vec<IdItem> = devices
         .iter()
         .map(|dv| {
-            let sheet = sheets.iter().position(|s| s.number.eq_ignore_ascii_case(&dv.sheet)).or_else(|| sheet_at(sheets, dv.at));
-            let tr = sheet.and_then(|i| sheets.get(i)).and_then(|s| reg.transforms.iter().find(|t| t.sheet == s.number));
+            let sheet = sheet_named(sheets, Some(dv.sheet.as_str()).filter(|n| !n.trim().is_empty()), dv.at);
+            let tr = sheet.and_then(|i| sheets.get(i)).and_then(|s| transform_for(&reg.transforms, s));
             let discipline = sheet.and_then(|i| sheets.get(i)).map_or("", |s| s.discipline.as_str());
             IdItem {
                 kind: "device".into(),
@@ -323,10 +351,7 @@ pub(crate) fn identity(s: &mut Session, apply: bool, room_numbers: Option<&[Stri
     let upf = units_per_foot(sp.as_ref());
     let sheets = sheets_of(sp.as_ref());
     let Registration { texts, on_sheet, transforms } = register(d, &sheets, upf);
-    let transform_of = |i: Option<usize>| -> Option<&SheetTransform> {
-        let n = &sheets.get(i?)?.number;
-        transforms.iter().find(|t| &t.sheet == n)
-    };
+    let transform_of = |i: Option<usize>| -> Option<&SheetTransform> { transform_for(&transforms, sheets.get(i?)?) };
 
     let mut els = elements(d, sp.as_ref(), &sheets);
     // Doors with no number: the door number lettered beside it on its own sheet.
@@ -549,15 +574,19 @@ fn write_registrations(s: &mut Session, transforms: &[SheetTransform]) -> Result
     let d = s.doc_mut()?;
     let Some(mut sp) = spec_of(d) else { return Ok(()) };
     for sh in sp.sheets.iter_mut() {
-        sh.registration = transforms.iter().find(|t| t.registered && t.sheet == sh.number).map(|t| cadaddy_walk3d::levels::SheetRegistration {
-            reference: t.reference.clone(),
-            method: t.method.clone(),
-            a: t.transform.a,
-            b: t.transform.b,
-            tx: t.transform.tx,
-            ty: t.transform.ty,
-            matched: t.matched,
-            residual: t.residual,
+        let level = sh.level.as_deref().unwrap_or("");
+        let mine = |t: &&SheetTransform| t.registered && t.sheet == sh.number;
+        sh.registration = transforms.iter().filter(mine).find(|t| t.level == level).or_else(|| transforms.iter().find(mine)).map(|t| {
+            cadaddy_walk3d::levels::SheetRegistration {
+                reference: t.reference.clone(),
+                method: t.method.clone(),
+                a: t.transform.a,
+                b: t.transform.b,
+                tx: t.transform.tx,
+                ty: t.transform.ty,
+                matched: t.matched,
+                residual: t.residual,
+            }
         });
     }
     d.building_spec = Some(sp.to_json());
