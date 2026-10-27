@@ -1242,9 +1242,34 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
     let arr = |k: &str| q[k].as_array().cloned().unwrap_or_default();
     let st = |v: &Value, k: &str| v[k].as_str().unwrap_or_default().to_string();
     let num = |v: &Value, k: &str| v[k].as_f64().unwrap_or(0.0);
+    // Build a map from (system, level) → run handles so pipe/fittings/hangers can reference them.
+    let run_handles_of = |v: &Value| -> Vec<String> {
+        v["runs"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|r| r.as_u64().map(|i| format!("run:{i}"))).collect())
+            .unwrap_or_default()
+    };
+    let mut sys_level_runs: std::collections::HashMap<(String, String), Vec<String>> =
+        std::collections::HashMap::new();
+    for p in arr("pipes") {
+        let key = (st(&p, "system"), st(&p, "level"));
+        let runs = run_handles_of(&p);
+        sys_level_runs.entry(key).or_default().extend(runs);
+    }
+    for d in arr("ducts") {
+        let key = (st(&d, "system"), st(&d, "level"));
+        let runs = run_handles_of(&d);
+        sys_level_runs.entry(key).or_default().extend(runs);
+    }
     for d in arr("ducts") {
         let size = format!("{} {}", st(&d, "size"), st(&d, "shape"));
         let lv = st(&d, "level");
+        let els = run_handles_of(&d);
+        let sys_els = if els.is_empty() {
+            sys_level_runs.get(&(st(&d, "system"), lv.clone())).cloned().unwrap_or_default()
+        } else {
+            els
+        };
         add(
             lines,
             Line {
@@ -1256,6 +1281,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
                 net: num(&d, "length_ft"),
                 status: "model",
                 level: lv.clone(),
+                elements: sys_els.clone(),
                 ..Line::default()
             },
         );
@@ -1270,12 +1296,20 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
                 net: num(&d, "weight_lb"),
                 status: "model",
                 level: lv,
+                elements: sys_els,
                 ..Line::default()
             },
         );
     }
     for p in arr("pipes").into_iter().filter(|p| !matches!(p["kind"].as_str(), Some("conduit" | "cable"))) {
         let trade = if p["kind"].as_str() == Some("tray") { "electrical" } else { "plumbing" };
+        let els = run_handles_of(&p);
+        let lv = st(&p, "level");
+        let sys_els = if els.is_empty() {
+            sys_level_runs.get(&(st(&p, "system"), lv.clone())).cloned().unwrap_or_default()
+        } else {
+            els
+        };
         add(
             lines,
             Line {
@@ -1286,12 +1320,14 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
                 unit: "ft",
                 net: num(&p, "length_ft"),
                 status: "model",
-                level: st(&p, "level"),
+                level: lv,
+                elements: sys_els,
                 ..Line::default()
             },
         );
     }
     for f in arr("fittings").into_iter().filter(|f| !ours(f)) {
+        let sys_els = sys_level_runs.get(&(st(&f, "system"), st(&f, "level"))).cloned().unwrap_or_default();
         add(
             lines,
             Line {
@@ -1303,6 +1339,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
                 net: num(&f, "count"),
                 status: "model",
                 level: st(&f, "level"),
+                elements: sys_els,
                 ..Line::default()
             },
         );
@@ -1379,6 +1416,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
     }
     for h in arr("hangers").into_iter().filter(|h| !ours(h)) {
         let rule = format!("{}' spacing", h["spacing_ft"]);
+        let sys_els = sys_level_runs.get(&(st(&h, "system"), st(&h, "level"))).cloned().unwrap_or_default();
         add(
             lines,
             Line {
@@ -1391,6 +1429,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
                 status: "rule",
                 rule: Some(rule),
                 level: st(&h, "level"),
+                elements: sys_els,
                 ..Line::default()
             },
         );
