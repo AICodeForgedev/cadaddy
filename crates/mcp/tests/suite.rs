@@ -142,6 +142,8 @@ fn table(dir: &str) -> Vec<(&'static str, Value, Value)> {
         ("framing", json!({ "action": "build", "params": { "paths": [format!("{dir}/suite.dxf")] } }), json!({ "action": "frame" })),
         // The drawing's as-built record (empty: an empty page, still an answer).
         ("asbuilt", json!({ "action": "list", "params": { "limit": 5 } }), json!({ "action": "fly" })),
+        // The drawing's cover record (none yet: an empty page with a hint, still an answer).
+        ("cover", json!({ "action": "status", "params": { "limit": 5 } }), json!({ "action": "fly" })),
         ("plot", json!({ "path": format!("{dir}/suite.pdf") }), json!({})),
         ("open", json!({ "path": format!("{dir}/suite.dxf") }), json!({})),
         ("list_drawings", json!({}), json!("all")),
