@@ -24,6 +24,11 @@ struct Plan {
     walls: Vec<(Vec2, Vec2, f64)>,
     /// Text: where (lower left), height, contents.
     texts: Vec<(Vec2, f64, String)>,
+    /// Walls drawn the usual way, as `strokes` (their faces and 45° hatching between), instead
+    /// of solid bands; `walls` then only scores them.
+    hatched: bool,
+    /// Thin lines drawn but not scored as lines themselves (a hatched wall's faces and hatching).
+    strokes: Vec<(Vec2, Vec2)>,
 }
 
 fn v(x: f64, y: f64) -> Vec2 {
@@ -75,6 +80,59 @@ fn lines_at_angles() -> Plan {
     p
 }
 
+/// Walls drawn as two face lines with 45° hatching between (8 cm apart square to the strokes:
+/// 1.6 mm on paper, six times the 0.25 mm pen), round a flat with two free-standing walls inside;
+/// thin fittings, and a bare double line a wall's thickness apart with no hatching (not a wall).
+fn hatched() -> Plan {
+    let mut p = Plan { hatched: true, ..Plan::default() };
+    // Outer walls, 25 cm, corner to corner; their faces are the outline's two rectangles.
+    for (a, b) in [
+        (v(100.0, 100.0), v(900.0, 100.0)),
+        (v(900.0, 100.0), v(900.0, 600.0)),
+        (v(900.0, 600.0), v(100.0, 600.0)),
+        (v(100.0, 600.0), v(100.0, 100.0)),
+    ] {
+        p.walls.push((a, b, 25.0));
+    }
+    // Free-standing walls, 15 and 20 cm, with square ends (each a closed outline).
+    p.walls.push((v(350.0, 207.5), v(350.0, 492.5), 15.0));
+    p.walls.push((v(510.0, 450.0), v(790.0, 450.0), 20.0));
+    let rect = |x0: f64, y0: f64, x1: f64, y1: f64| [(v(x0, y0), v(x1, y0)), (v(x1, y0), v(x1, y1)), (v(x1, y1), v(x0, y1)), (v(x0, y1), v(x0, y0))];
+    p.strokes.extend(rect(87.5, 87.5, 912.5, 612.5));
+    p.strokes.extend(rect(112.5, 112.5, 887.5, 587.5));
+    p.strokes.extend(rect(342.5, 200.0, 357.5, 500.0));
+    p.strokes.extend(rect(500.0, 440.0, 800.0, 460.0));
+    // Each wall's band (square ends half its thickness past the centre line), hatched along
+    // y = x − k, clipped to the bands' union.
+    let bands: Vec<(f64, f64, f64, f64)> =
+        p.walls.iter().map(|(a, b, t)| (a.x.min(b.x) - t / 2.0, a.y.min(b.y) - t / 2.0, a.x.max(b.x) + t / 2.0, a.y.max(b.y) + t / 2.0)).collect();
+    let step = 8.0 * std::f64::consts::SQRT_2;
+    let mut k = -700.0;
+    while k <= 1000.0 {
+        let mut spans: Vec<(f64, f64)> =
+            bands.iter().map(|&(x0, y0, x1, y1)| (x0.max(y0 + k), x1.min(y1 + k))).filter(|(a, b)| b - a > 1e-6).collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut merged: Vec<(f64, f64)> = Vec::new();
+        for (a, b) in spans {
+            match merged.last_mut() {
+                Some(m) if a <= m.1 + 1e-6 => m.1 = m.1.max(b),
+                _ => merged.push((a, b)),
+            }
+        }
+        for (a, b) in merged {
+            p.strokes.push((v(a, a - k), v(b, b - k)));
+        }
+        k += step;
+    }
+    // Thin fittings: a counter run, a diagonal, and a bare double line 15 cm apart.
+    p.lines.push((v(500.0, 200.0), v(800.0, 200.0)));
+    p.lines.push((v(800.0, 200.0), v(800.0, 350.0)));
+    p.lines.push((v(450.0, 280.0), v(650.0, 380.0)));
+    p.lines.push((v(500.0, 520.0), v(800.0, 520.0)));
+    p.lines.push((v(500.0, 535.0), v(800.0, 535.0)));
+    p
+}
+
 fn drawing(p: &Plan) -> Session {
     let mut s = Session::new();
     let z = |q: Vec2| Vec3::new(q.x, q.y, 0.0);
@@ -87,7 +145,10 @@ fn drawing(p: &Plan) -> Session {
     for (c, r, a0) in &p.arcs {
         s.add_entity(EntityKind::Arc(Arc { center: z(*c), radius: *r, start: *a0, end: a0 + std::f64::consts::FRAC_PI_2 })).unwrap();
     }
-    for (a, b, t) in &p.walls {
+    for (a, b) in &p.strokes {
+        s.add_entity(EntityKind::Line(Line { a: z(*a), b: z(*b) })).unwrap();
+    }
+    for (a, b, t) in p.walls.iter().filter(|_| !p.hatched) {
         let vertices = vec![PolyVertex { p: *a, ..Default::default() }, PolyVertex { p: *b, ..Default::default() }];
         s.add_entity(EntityKind::LwPolyline(LwPolyline { vertices, closed: false, const_width: *t, elevation: 0.0, plinegen: false })).unwrap();
     }
@@ -505,6 +566,11 @@ fn iou(a: &Bounds2, b: &Bounds2) -> f64 {
 // ---------------- the matrix ----------------
 
 fn run(plan: &Plan, dpi: f64, dirt: Dirt) -> Score {
+    run_traced(plan, dpi, dirt).0
+}
+
+/// The score, and what was traced (drawing units).
+fn run_traced(plan: &Plan, dpi: f64, dirt: Dirt) -> (Score, Traced) {
     let s = drawing(plan);
     let mut img = render(&s, dpi);
     let mut deg = 0.0;
@@ -519,7 +585,7 @@ fn run(plan: &Plan, dpi: f64, dirt: Dirt) -> Score {
         img = jpeg(&img, 40);
     }
     let t = trace(&img, deg);
-    score(plan, &t, img.w as f64 / (FRAME.2 - FRAME.0))
+    (score(plan, &t, img.w as f64 / (FRAME.2 - FRAME.0)), t)
 }
 
 fn err_str(e: f64) -> String {
@@ -798,4 +864,50 @@ fn invented_shapes_are_caught_by_scoring() {
     // An empty-match error metric must be NaN, not 0.
     assert!(s.circle_err.is_nan(), "circle_err must be NaN when no circles found: {}", s.circle_err);
     assert!(s2.wall_err.is_nan(), "wall_err must be NaN when no walls found: {}", s2.wall_err);
+}
+
+/// Walls drawn as two faces with sparse 45° hatching between (the usual drafting, not solid
+/// bands; Q5198): each hatched strip is one wall pair, the faces and the hatch strokes are not
+/// left as lines, and the thin lines (a bare double line among them) are still found as lines.
+#[test]
+fn hatched_walls_trace_as_wall_pairs() {
+    let plan = hatched();
+    let mut table = vec![HEADER.to_string()];
+    for dpi in [200.0, 300.0] {
+        for dirt in [Dirt::Clean, Dirt::Noise] {
+            let (s, t) = run_traced(&plan, dpi, dirt);
+            table.push(row("hatched", dpi, dirt, &s));
+            let case = format!("{dpi} dpi {dirt:?}: {s:?}");
+            assert_eq!(s.walls.0, s.walls.1, "walls found, {case}");
+            assert!(!s.wall_err.is_nan() && s.wall_err <= 1.0, "wall face error in pixels, {case}");
+            assert_eq!(s.extra_walls, 0, "extra wall faces, {case}");
+            assert_eq!(s.extra_lines, 0, "lines traced where the plan has none, {case}");
+            assert_eq!(Score::rate(s.lines), 1.0, "thin lines found, {case}");
+            // Nor bent junction pieces as arcs or circles.
+            assert_eq!((s.extra_arcs, s.extra_circles), (0, 0), "arcs or circles from the hatching, {case}");
+            // score() takes any line inside a wall's band for part of the wall; here none may be
+            // left there at all: no face or hatch stroke traced as a line.
+            let tol = (2.0 / (t_px(dpi) / (FRAME.2 - FRAME.0))).max(5.0);
+            let in_band: Vec<_> = t
+                .lines
+                .iter()
+                .filter(|l| {
+                    let m = (l.0 + l.1) * 0.5;
+                    plan.walls.iter().any(|(a, b, th)| {
+                        let d = (*b - *a).normalized() * (th / 2.0);
+                        seg_dist(m, *a - d, *b + d) <= th / 2.0 + tol
+                    })
+                })
+                .collect();
+            assert!(in_band.is_empty(), "faces or hatch strokes left as lines {in_band:?}, {case}");
+            // The bare double line stays two lines, not a wall (it is not in `walls`, so a wall
+            // there would be an extra wall face above).
+        }
+    }
+    eprintln!("{}", table.join("\n"));
+}
+
+/// The image width at `dpi`, pixels.
+fn t_px(dpi: f64) -> f64 {
+    (PAPER_MM / 25.4 * dpi).round()
 }
