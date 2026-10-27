@@ -48,9 +48,8 @@ fn interactive_then_auto_finishes() {
     s.events_subscribe(true);
 
     // Start INTERACTIVELY (auto: false) — the job pauses at each stage's questions.
-    let st = s
-        .execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": false, "checkpoint": false}))
-        .expect("job.start");
+    let st =
+        s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": false, "checkpoint": false})).expect("job.start");
     assert_ne!(st["done"], json!(true), "interactive job should pause, not finish immediately");
 
     // Answer questions with defaults until bim_build, then switch to auto.
@@ -86,13 +85,7 @@ fn interactive_then_auto_finishes() {
     let done = status.get("done").and_then(Value::as_bool).unwrap_or(false);
 
     // The bim_build stage must have completed (not errored, not timed out).
-    let bim_status = status["stages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|st| st["name"] == "bim_build")
-        .cloned()
-        .unwrap_or(json!(null));
+    let bim_status = status["stages"].as_array().into_iter().flatten().find(|st| st["name"] == "bim_build").cloned().unwrap_or(json!(null));
     let bim_ok = bim_status["status"].as_str() == Some("Done") || bim_status["status"].as_str() == Some("done");
     eprintln!("  bim_build status: {}", bim_status["status"]);
 
@@ -100,20 +93,13 @@ fn interactive_then_auto_finishes() {
 
     // Check for per-level progress events (Q6029 MUST 2).
     let ev = s.events_poll(0);
-    let progress_events: Vec<&Value> = ev["events"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|e| e["type"] == "build.progress" && e["step"] == "level")
-        .collect();
+    let progress_events: Vec<&Value> =
+        ev["events"].as_array().into_iter().flatten().filter(|e| e["type"] == "build.progress" && e["step"] == "level").collect();
     eprintln!("  per-level progress events: {}", progress_events.len());
     assert!(!progress_events.is_empty(), "must report per-level progress events");
 
     // The elapsed time must be reasonable (under the 20 min budget).
-    assert!(
-        elapsed_ms < 1_200_000,
-        "interactive-then-auto path took {elapsed_ms} ms, exceeds 20 min budget"
-    );
+    assert!(elapsed_ms < 1_200_000, "interactive-then-auto path took {elapsed_ms} ms, exceeds 20 min budget");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -127,9 +113,8 @@ fn build_reports_per_level_progress() {
     let mut s = Session::new();
     s.events_subscribe(true);
 
-    let st = s
-        .execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false}))
-        .expect("job.start");
+    let st =
+        s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false})).expect("job.start");
     assert_eq!(st["done"], json!(true), "auto job did not finish: {st}");
 
     let ev = s.events_poll(0);
@@ -140,14 +125,10 @@ fn build_reports_per_level_progress() {
     assert!(trace_rooms, "must emit trace_rooms progress event");
 
     // Must have per-level progress.
-    let level_events: Vec<&&Value> = events
-        .iter()
-        .filter(|e| e["type"] == "build.progress" && e["step"] == "level")
-        .collect();
+    let level_events: Vec<&&Value> = events.iter().filter(|e| e["type"] == "build.progress" && e["step"] == "level").collect();
     eprintln!("Level progress events: {}", level_events.len());
     for e in &level_events {
-        eprintln!("  level={}, {}/{}, walls_so_far={}, eta_s={}",
-            e["level"], e["level_num"], e["total_levels"], e["walls_so_far"], e["eta_s"]);
+        eprintln!("  level={}, {}/{}, walls_so_far={}, eta_s={}", e["level"], e["level_num"], e["total_levels"], e["walls_so_far"], e["eta_s"]);
     }
     assert!(!level_events.is_empty(), "must report per-level progress");
 

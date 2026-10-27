@@ -834,17 +834,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
             None => {
                 let idx = out.len();
                 grid.entry((gx, gy)).or_default().push(idx);
-                out.push(Traced {
-                    room,
-                    level: level.name.clone(),
-                    outline,
-                    tag: h,
-                    at,
-                    name,
-                    number,
-                    cached_area: area,
-                    cached_bounds: bounds,
-                });
+                out.push(Traced { room, level: level.name.clone(), outline, tag: h, at, name, number, cached_area: area, cached_bounds: bounds });
             }
         }
     }
@@ -1304,14 +1294,15 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     s.event("build.progress", json!({"step": "trace_rooms_done", "rooms": rooms.len(), "ms": trace_ms}));
     // Q6029 MUST 3: over budget after trace_rooms alone → stop with a finding.
     if web_time::Instant::now() > deadline {
-        notes.push(format!(
-            "Build stopped: room tracing took {:.0} s, over the {} s budget.",
-            trace_ms as f64 / 1000.0, budget_s
+        notes.push(format!("Build stopped: room tracing took {:.0} s, over the {} s budget.", trace_ms as f64 / 1000.0, budget_s));
+        return Err(bad(
+            "model.build",
+            format!(
+                "Time budget ({budget_s} s) exceeded during room tracing ({:.0} s). {} rooms traced so far.",
+                trace_ms as f64 / 1000.0,
+                rooms.len()
+            ),
         ));
-        return Err(bad("model.build", format!(
-            "Time budget ({budget_s} s) exceeded during room tracing ({:.0} s). {} rooms traced so far.",
-            trace_ms as f64 / 1000.0, rooms.len()
-        )));
     }
     s.event("build.progress", json!({"step": "walls", "detail": "building walls per level"}));
     let mut r = wallgen::build_with_progress(s, g, &deadline)?;
@@ -1321,10 +1312,13 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     if web_time::Instant::now() > deadline {
         let secs = wall_ms as f64 / 1000.0;
         notes.push(format!("Build stopped after walls: {secs:.0} s exceeds the {budget_s} s budget."));
-        return Err(bad("model.build", format!(
-            "Time budget ({budget_s} s) exceeded during wall build ({secs:.0} s). {} walls, {} levels built so far.",
-            r["walls"], r["levels"]
-        )));
+        return Err(bad(
+            "model.build",
+            format!(
+                "Time budget ({budget_s} s) exceeded during wall build ({secs:.0} s). {} walls, {} levels built so far.",
+                r["walls"], r["levels"]
+            ),
+        ));
     }
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     s.event("build.progress", json!({"step": "validate_rooms", "rooms": rooms.len()}));

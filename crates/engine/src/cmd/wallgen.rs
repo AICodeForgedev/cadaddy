@@ -380,14 +380,17 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
         } else {
             None
         };
-        s.event("build.progress", json!({
-            "step": "level",
-            "level": level.name,
-            "level_num": levels_done + 1,
-            "total_levels": total_levels,
-            "walls_so_far": total_walls,
-            "eta_s": eta_s,
-        }));
+        s.event(
+            "build.progress",
+            json!({
+                "step": "level",
+                "level": level.name,
+                "level_num": levels_done + 1,
+                "total_levels": total_levels,
+                "walls_so_far": total_walls,
+                "eta_s": eta_s,
+            }),
+        );
         let level_start = web_time::Instant::now();
         let pl = plan_level(s.doc()?, g, level, upf, &mut notes);
         let level_ms = level_start.elapsed().as_millis();
