@@ -530,7 +530,9 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("clear").and_then(Value::as_bool) == Some(true) {
         return Ok(json!({ "built": 0, "removed": old.len() }));
     }
-    let rs = rooms(s)?;
+    // `regions`: read only inside these sheet rectangles (a guided job's floor plans).
+    let regions: Option<Vec<[f64; 4]>> = p.get("regions").and_then(|v| serde_json::from_value(v.clone()).ok());
+    let rs = rooms_in(s, regions.as_deref())?;
     let d = s.doc_mut()?;
     if d.layer(ROOM_LAYER).is_none() {
         d.layers.push(cadaddy_doc::Layer { name: ROOM_LAYER.into(), color: cadaddy_doc::color::Color::Index(151), ..cadaddy_doc::Layer::default() });

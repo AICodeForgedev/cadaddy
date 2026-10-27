@@ -2319,8 +2319,16 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     ensure_sheets_loaded(s, job)?;
     // Each floor plan's labels read in full, sheet by sheet (a whole set's labels are more than
     // one reading traces: the last floors were left out).
-    let regions: Vec<[f64; 4]> =
-        job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty()).map(SheetRegion::plan_rect).collect();
+    let plans = |arch_only: bool| -> Vec<[f64; 4]> {
+        job.sheet_regions
+            .iter()
+            .filter(|r| r.kind == "plan" && r.not_built.is_empty() && (!arch_only || r.discipline.eq_ignore_ascii_case("A")))
+            .map(SheetRegion::plan_rect)
+            .collect()
+    };
+    // Rooms come from the architectural floor plans: other trades' plans show the same rooms
+    // again (and phantom ones). Any plan when the set has no architectural ones.
+    let regions = Some(plans(true)).filter(|r| !r.is_empty()).unwrap_or_else(|| plans(false));
     let mut params = json!({"outline": false});
     if !regions.is_empty() {
         params["regions"] = json!(regions);
@@ -3318,6 +3326,31 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 s.doc_mut()?.building_spec = Some(sp.to_json());
                 job.audit("mep_merged", "pipeline", None, Some(StageName::BimBuild), Some(json!({"runs": runs})));
             }
+            // The rooms stage's rooms go in too: the drafted spec had none, so the build made no
+            // room elements (and every later room read traced the whole print set again).
+            let found: Vec<cadaddy_walk3d::SpecRoom> = job
+                .stage(StageName::Rooms)
+                .and_then(|st| st.result.as_ref())
+                .and_then(|r| r.get("rooms"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|r| {
+                    let name = r.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                    let number = r.get("number").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).map(String::from);
+                    (!name.is_empty() || number.is_some()).then(|| cadaddy_walk3d::SpecRoom { name, number, ..Default::default() })
+                })
+                .collect();
+            if !found.is_empty()
+                && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+            {
+                for r in found {
+                    if !sp.rooms.iter().any(|x| x.name == r.name && x.number == r.number) {
+                        sp.rooms.push(r);
+                    }
+                }
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+            }
             // Where each sheet of the set sits, so what lies on the other disciplines' sheets
             // is theirs (not "outside every level's region").
             if !job.sheet_regions.is_empty()
@@ -3391,7 +3424,19 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Q6002: the rooms as elements, then what the readers found on every element.
     bim_step(s, job, "circuits and model rooms", t);
     let t = web_time::Instant::now();
-    match s.execute("rooms.build", &json!({})) {
+    // The architectural floor plans only: tracing the whole print set took over 10 min.
+    let arch: Vec<[f64; 4]> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.kind == "plan" && r.not_built.is_empty() && r.discipline.eq_ignore_ascii_case("A"))
+        .map(SheetRegion::plan_rect)
+        .collect();
+    let volumes = if arch.is_empty() { json!({}) } else { json!({"regions": arch}) };
+    // A print set's room volumes: after the build the stacked model sits on the lowest level's
+    // plan and the trace ran for 18+ min on Windows. The rooms are already model elements.
+    let no_rooms = s.doc().map_or(true, |d| super::bspec::room_elements(d).is_empty());
+    let volumes = if job.sheet_regions.len() > 8 && no_rooms { json!({"clear": true}) } else { volumes };
+    match s.execute("rooms.build", &volumes) {
         Ok(v) => result["room_volumes"] = v.get("built").cloned().unwrap_or(Value::Null),
         Err(e) => result["room_volumes_error"] = json!(e.to_string()),
     }

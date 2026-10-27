@@ -169,10 +169,18 @@ pub fn plan_items(d: &Drawing, g: &WallGen) -> Vec<PlanItem> {
     out
 }
 
+/// Above this many model objects the plan's rooms are not traced for the record.
+const MAX_TRACED_OBJECTS: usize = 200_000;
+
 /// The rooms of the current plan as plan items (name labels in closed outlines), read once. A
 /// room's signature is its name, area and centre, so a room moved without changing size is a
 /// change too. (Paging through `plan.rooms` traced every room again for each page of 200.)
 fn room_items(s: &mut Session) -> Vec<PlanItem> {
+    // A whole print set in one drawing (a guided job's sheets): tracing it took 11 min on
+    // Windows and found no rooms. Skipped there; both record and revise read it the same way.
+    if s.doc().map_or(true, |d| d.model.len() > MAX_TRACED_OBJECTS) {
+        return Vec::new();
+    }
     let Ok(rooms) = super::perceive::geometry::rooms_found(s) else { return Vec::new() };
     rooms
         .into_iter()
