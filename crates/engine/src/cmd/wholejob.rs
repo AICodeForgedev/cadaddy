@@ -422,7 +422,8 @@ fn estimate(s: &mut Session, w: &WholeJob) -> Result<Value> {
             Some(Price { item, unit, unit_cost: material + labor_hrs * 75.0 })
         })
         .collect();
-    let starter_pack = PricePack { quality: "starter".into(), source: crate::cmd::estimate::STARTER_SOURCE.into(), date: String::new(), rows: starter };
+    let starter_pack =
+        PricePack { quality: "starter".into(), source: crate::cmd::estimate::STARTER_SOURCE.into(), date: String::new(), rows: starter };
     let mut trades = Vec::new();
     let mut by_div: BTreeMap<String, f64> = BTreeMap::new();
     let mut subtotal_all = 0.0;

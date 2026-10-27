@@ -441,9 +441,9 @@ fn wholejob_estimate_uses_starter_cost_book_fallback() {
     let starter = r["starter_priced_lines"].as_u64().unwrap();
     assert!(starter > 0, "wholejob.estimate should use the starter cost book: {r}");
     let trades = r["trades"].as_array().unwrap();
-    let has_via = trades.iter().any(|t| {
-        t["priced"].as_array().unwrap_or(&vec![]).iter().any(|l| l["via"].as_str().is_some_and(|v| v.contains("starter cost book")))
-    });
+    let has_via = trades
+        .iter()
+        .any(|t| t["priced"].as_array().unwrap_or(&vec![]).iter().any(|l| l["via"].as_str().is_some_and(|v| v.contains("starter cost book"))));
     assert!(has_via, "priced lines should carry via='starter cost book': {r}");
 }
 
