@@ -3144,3 +3144,8 @@
 	Photo	照片
 	Schedule from Element Properties	根据构件属性生成明细表
 	Check Element Properties	检查构件属性
+Walls	墙
+Ceiling Types	吊顶类型
+Soffit Types	吊顶跌级类型
+Other	其他
+Nothing changed: the building spec is the same as before.	没有变化：建筑规格与之前相同。
