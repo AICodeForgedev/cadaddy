@@ -3483,6 +3483,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     })
                     .collect();
                 progress_line(&format!("  devices onto the plans: {} placed, {} not placeable", out.len(), job.devices.len() - out.len()));
+                let explain = arch_explainer(s.doc()?, &sp);
+                let mut shown: BTreeMap<String, usize> = BTreeMap::new();
+                for dv in job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()) {
+                    let n = shown.entry(dv.sheet.clone()).or_default();
+                    if *n < 2 {
+                        *n += 1;
+                        progress_line(&format!("  why not placed: {} on {} at {:?}: {}", dv.sheet, dv.level, dv.at.map(|v| v.round()), explain(dv.at, &dv.level)));
+                    }
+                }
                 let mut why: BTreeMap<String, usize> = BTreeMap::new();
                 for dv in job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()) {
                     *why.entry(format!("{} on {}", if dv.sheet.is_empty() { "?" } else { &dv.sheet }, if dv.level.is_empty() { "?" } else { &dv.level })).or_default() += 1;
@@ -3860,6 +3869,21 @@ fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
 /// Where a sheet point goes on its level's architectural plan (architecture is the rule): the
 /// sheet's registration when it fits on enough tags at 1:1, else the frame of a same-size
 /// architectural sheet of the level; `None` when it can't be placed.
+/// [`arch_placer`]'s grid fit explained, for the progress lines.
+fn arch_explainer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> impl Fn([f64; 2], &str) -> String + use<> {
+    let sheets = super::identity::sheets_of(Some(sp));
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let level_key = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), l.to_ascii_uppercase().contains("ROOF"));
+    let plans: Vec<(String, [f64; 4])> = sp
+        .levels
+        .iter()
+        .filter_map(|l| Some((level_key(&l.name), l.region.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8))?)))
+        .collect();
+    let others: Vec<[f64; 4]> = sheets.iter().filter(|b| !b.discipline.eq_ignore_ascii_case("A")).map(|b| b.rect).collect();
+    let grid = super::grids::GridPlacer::new(d, upf, &plans, &others);
+    move |p, level| grid.explain(p, &level_key(level))
+}
+
 fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<> {
     let sheets = super::identity::sheets_of(Some(&sp));
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };

@@ -117,6 +117,10 @@ fn bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Bubble> {
                             let c = pl.vertices.iter().fold(Vec2::new(0.0, 0.0), |a, v| a + v.p) * (1.0 / pl.vertices.len() as f64);
                             Some((c, pl.vertices.iter().map(|v| v.p.dist(c)).fold(0.0, f64::max)))
                         }
+                        // A circle drawn as a path, made a symbol block by the PDF import.
+                        EntityKind::LwPolyline(pl) if pl.vertices.len() > 12 => {
+                            round_path(&pl.vertices.iter().map(|v| v.p).collect::<Vec<_>>())
+                        }
                         _ => None,
                     })
                     .map(|(c, r)| (m.apply(c), r * sc))
@@ -215,9 +219,24 @@ fn along(g: &Grid, a: Vec2, b: Vec2, k: f64) -> bool {
 
 /// The grids of a set of objects.
 fn grids(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Grid> {
+    grids_with(d, ents, k, false, false)
+}
+
+/// [`grids`]; `placing`: for putting views onto a plan, each grid's direction from its row of
+/// bubbles first and its line across the whole plan (not the line as drawn). `one_floor`: a
+/// whole floor's plan, where a grid has a bubble at each end at most (a label on more is a tag:
+/// window tags, section marks).
+fn grids_with(d: &Drawing, ents: &[&Arc<Entity>], k: f64, placing: bool, one_floor: bool) -> Vec<Grid> {
     let lines = grid_lines(ents, k);
     let mut out: Vec<Grid> = Vec::new();
-    let all = bubbles(d, ents, k);
+    let mut all = bubbles(d, ents, k);
+    if one_floor {
+        let mut n: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for b in &all {
+            *n.entry(b.label.to_ascii_uppercase()).or_default() += 1;
+        }
+        all.retain(|b| n.get(&b.label.to_ascii_uppercase()).is_some_and(|c| *c <= 2));
+    }
     // How far the bubbles spread: a grid drawn from its bubble alone spans that much each way.
     let spread = cadaddy_geom::Bounds2::from_points(all.iter().map(|x| x.at));
     let reach = if spread.is_empty() { 120.0 * k } else { (spread.max - spread.min).len().max(120.0 * k) };
@@ -227,18 +246,31 @@ fn grids(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Grid> {
             lines.iter().filter(|(a, b)| a.dist(o) <= 1.3 * r || b.dist(o) <= 1.3 * r).max_by(|x, y| x.0.dist(x.1).total_cmp(&y.0.dist(y.1)));
         // A dashed grid line is pieces too short to be a line: its direction is across its row of
         // bubbles (a row across the top marks vertical grids, a column down the side horizontal).
+        // The nearest bubble of the same family (numbers, or letters) lies along the row: a row
+        // across marks vertical grids, a column horizontal ones. Two views side by side repeat
+        // the labels far off; the nearest is the view's own.
         let from_row = || {
-            let row = all.iter().filter(|x| x.at.dist(o) > r && (x.at.y - o.y).abs() <= r).count();
-            let col = all.iter().filter(|x| x.at.dist(o) > r && (x.at.x - o.x).abs() <= r).count();
-            match (row, col) {
-                (0, 0) => None,
-                (row, col) if row >= col => Some((Vec2::new(o.x, o.y + reach), Vec2::new(o.x, o.y - reach))),
-                _ => Some((Vec2::new(o.x + reach, o.y), Vec2::new(o.x - reach, o.y))),
+            let family = |l: &str| l.chars().next().is_some_and(|c| c.is_ascii_digit());
+            let next = all
+                .iter()
+                .filter(|x| x.at.dist(o) > r && family(&x.label) == family(&label) && !x.label.eq_ignore_ascii_case(&label))
+                .min_by(|a, b| a.at.dist(o).total_cmp(&b.at.dist(o)))?;
+            let d = next.at - o;
+            if d.x.abs() >= d.y.abs() {
+                Some((Vec2::new(o.x, o.y + reach), Vec2::new(o.x, o.y - reach)))
+            } else {
+                Some((Vec2::new(o.x + reach, o.y), Vec2::new(o.x - reach, o.y)))
             }
         };
-        let Some((a, b)) = touching.copied().or_else(from_row) else { continue };
+        // The row of bubbles first (a wall or leader passing a bubble is no grid), its own line
+        // for a bubble alone.
+        let line = if placing { from_row().or(touching.copied()) } else { touching.copied().or_else(from_row) };
+        let Some((a, b)) = line else { continue };
         // From the bubble end to the far end.
         let (a, b) = if a.dist(o) <= b.dist(o) { (a, b) } else { (b, a) };
+        // Placing, a grid runs across the whole plan: a dashed one's first piece is only its direction.
+        let len = a.dist(b);
+        let (a, b) = if placing && len > 1e-9 && len < reach { (a, a + (b - a) * (reach / len)) } else { (a, b) };
         // Bubbles at both ends of a grid line (or on pieces of one line) are one grid: its
         // line spans them all.
         if let Some(g) = out.iter_mut().find(|g| g.label.eq_ignore_ascii_case(&label) && along(g, a, b, k)) {
@@ -281,7 +313,14 @@ fn intersections(gs: &[Grid], k: f64) -> Vec<(String, Vec2)> {
         }
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
+    // One crossing per label and place (bubbles at both ends of a grid make it twice).
+    let mut one: Vec<(String, Vec2)> = Vec::new();
+    for (l, p) in out {
+        if !one.iter().any(|(m, q)| *m == l && q.dist(p) <= 24.0 * k) {
+            one.push((l, p));
+        }
+    }
+    one
 }
 
 /// A level's grids and their intersections, from this drawing or the level's own sheet.
@@ -681,6 +720,8 @@ pub(crate) struct GridPlacer {
     upf: f64,
     levels: Vec<(String, Vec<(String, Vec2)>)>,
     sheets: Vec<([f64; 4], Vec<(String, Vec2)>)>,
+    /// Per level then per sheet: objects, bubbles and grids found (for the progress lines).
+    counts: Vec<(usize, usize, usize)>,
 }
 
 /// Fewest shared grid intersections for a fit.
@@ -699,23 +740,53 @@ impl GridPlacer {
             })
             .collect();
         let inside = |r: &[f64; 4], c: Vec2| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]);
-        let xs_in = |r: &[f64; 4]| {
+        let mut counts = Vec::new();
+        let mut xs_in = |r: &[f64; 4], one_floor: bool| {
             let mine: Vec<&Arc<Entity>> = objs.iter().filter(|(c, _)| inside(r, *c)).map(|(_, e)| *e).collect();
-            intersections(&grids(d, &mine, k), k)
+            let gs = grids_with(d, &mine, k, true, one_floor);
+            counts.push((mine.len(), bubbles(d, &mine, k).len(), gs.len()));
+            intersections(&gs, k)
         };
-        GridPlacer {
-            k,
-            upf,
-            levels: levels.iter().map(|(key, r)| (key.clone(), xs_in(r))).collect(),
-            sheets: sheets.iter().map(|r| (*r, xs_in(r))).collect(),
-        }
+        let levels: Vec<(String, Vec<(String, Vec2)>)> = levels.iter().map(|(key, r)| (key.clone(), xs_in(r, true))).collect();
+        let sheets: Vec<([f64; 4], Vec<(String, Vec2)>)> = sheets.iter().map(|r| (*r, xs_in(r, false))).collect();
+        GridPlacer { k, upf, levels, sheets, counts }
     }
 
     /// How many grid intersections each level's plan and each sheet gave (for the progress lines).
     pub(crate) fn summary(&self) -> String {
         let lv: Vec<String> = self.levels.iter().map(|(k, xs)| format!("{k}:{}", xs.len())).collect();
         let sh: Vec<usize> = self.sheets.iter().map(|(_, xs)| xs.len()).collect();
-        format!("plans {lv:?}; sheets {sh:?}")
+        let n = self.levels.len();
+        format!("plans {lv:?} (objects, bubbles, grids {:?}); sheets {sh:?}", &self.counts[..n.min(self.counts.len())])
+    }
+
+    /// Why `p` was or wasn't placed (for the progress lines).
+    pub(crate) fn explain(&self, p: [f64; 2], level: &str) -> String {
+        let at = Vec2::new(p[0], p[1]);
+        let inside = |r: &[f64; 4]| p[0] >= r[0].min(r[2]) && p[0] <= r[0].max(r[2]) && p[1] >= r[1].min(r[3]) && p[1] <= r[1].max(r[3]);
+        let Some((_, xs)) = self.sheets.iter().find(|(r, _)| inside(r)) else { return "on no sheet".into() };
+        let Some((_, plan)) = self.levels.iter().find(|(key, _)| key == level) else { return format!("no plan for level {level}") };
+        let mut near: Vec<(&str, Vec2, f64)> = Vec::new();
+        for (label, q) in xs {
+            let d = q.dist(at);
+            match near.iter_mut().find(|(l, _, _)| *l == label.as_str()) {
+                Some(n) if d < n.2 => *n = (label.as_str(), *q, d),
+                Some(_) => {}
+                None => near.push((label.as_str(), *q, d)),
+            }
+        }
+        near.sort_by(|a, b| a.2.total_cmp(&b.2));
+        let on: Vec<String> = near.iter().take(8).map(|(l, _, d)| format!("{l}@{d:.0}:{}", plan.iter().filter(|(x, _)| x == l).count())).collect();
+        let pairs: Vec<(Vec2, Vec2)> = near
+            .iter()
+            .take(8)
+            .filter_map(|(l, q, _)| {
+                let hits: Vec<Vec2> = plan.iter().filter(|(x, _)| x == l).map(|(_, q)| *q).collect();
+                (hits.len() == 1).then(|| (*q, hits[0]))
+            })
+            .collect();
+        let f = fit(&pairs).map(|(s, _, m)| format!("scale {s:.3} miss {m:.1}"));
+        format!("nearest (label@dist:on-plan) {on:?}; {} pairs; {f:?}", pairs.len())
     }
 
     /// The scale and offset that put `p` (on one of the sheets) onto the plan of the level keyed
