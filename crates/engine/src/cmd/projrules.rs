@@ -91,18 +91,40 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let key = p.get("key").and_then(Value::as_str).ok_or_else(|| bad(CMD_SET, "`key` (string) is required"))?;
     let value_str = p.get("value").and_then(Value::as_str).ok_or_else(|| bad(CMD_SET, "`value` (string) is required"))?;
 
-    let tier = p.get("tier").and_then(Value::as_str).and_then(SourceTier::parse).unwrap_or(SourceTier::ProjectRule);
+    let tier = parse_tier(CMD_SET, p)?;
     let source = p.get("source").and_then(Value::as_str).unwrap_or_default();
     let set_by = p.get("set_by").and_then(Value::as_str).unwrap_or_default();
     let reason = p.get("reason").and_then(Value::as_str).unwrap_or_default();
 
+    // MUST 5: `set` refuses an empty `reason`.
+    if reason.is_empty() {
+        return Err(bad(CMD_SET, "`reason` (string) is required — explain why this value is being set"));
+    }
+
+    // MUST 5: Tiers above project_rule refuse an empty `source`.
+    if tier < SourceTier::ProjectRule && source.is_empty() {
+        return Err(bad(
+            CMD_SET,
+            format!(
+                "tier `{}` requires a non-empty `source` (document citation) — only project_rule and built_in may omit it",
+                tier.as_str()
+            ),
+        ));
+    }
+
     let rule_value = RuleValue::new(value_str).with_source(source).with_tier(tier).with_set_by(set_by);
+
+    // Preview element impact BEFORE modifying.
+    let old_value = s.doc().ok().and_then(|d| d.project_rules.resolve(domain, key)).map(|r| r.value).unwrap_or_default();
+    let (affected_count, affected_ids) = affected_elements(s, domain, key, &old_value, value_str);
 
     let d = s.doc_mut()?;
     let preview = d.project_rules.set(domain, key, rule_value, reason);
 
     Ok(json!({
         "preview": preview_to_json(&preview),
+        "affectedElements": affected_count,
+        "affectedIds": affected_ids,
         "message": if preview.changed {
             format!("Rule {}/{} changed: {} ({}) → {} ({})",
                 domain.as_str(), key,
@@ -138,14 +160,21 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     let key = p.get("key").and_then(Value::as_str).ok_or_else(|| bad(CMD_PREVIEW, "`key` (string) is required"))?;
     let value_str = p.get("value").and_then(Value::as_str).ok_or_else(|| bad(CMD_PREVIEW, "`value` (string) is required"))?;
 
-    let tier = p.get("tier").and_then(Value::as_str).and_then(SourceTier::parse).unwrap_or(SourceTier::ProjectRule);
+    let tier = parse_tier(CMD_PREVIEW, p)?;
 
     let rule_value = RuleValue::new(value_str).with_tier(tier);
 
     let d = s.doc()?;
     let preview = d.project_rules.preview(domain, key, &rule_value);
 
-    Ok(json!({ "preview": preview_to_json(&preview) }))
+    // Element impact.
+    let (affected_count, affected_ids) = affected_elements(s, domain, key, &preview.old_value, &preview.new_value);
+
+    Ok(json!({
+        "preview": preview_to_json(&preview),
+        "affectedElements": affected_count,
+        "affectedIds": affected_ids,
+    }))
 }
 
 // ── project.rules.label ────────────────────────────────────────────────────
@@ -310,6 +339,59 @@ fn rules_to_toml(rules: &ProjectRules) -> String {
     out
 }
 
+// ── element impact ─────────────────────────────────────────────────────
+
+/// Scan the drawing for entities affected by a rule change. For mounting_height rules,
+/// this finds entities with a BIM type mark whose category matches the device kind in the key.
+/// Returns (count, first N entity handles).
+fn affected_elements(s: &Session, domain: RuleDomain, key: &str, old_value: &str, new_value: &str) -> (u64, Vec<String>) {
+    if old_value == new_value {
+        return (0, Vec::new());
+    }
+    // Only mounting_height rules affect elements currently.
+    if domain != RuleDomain::MountingHeight {
+        return (0, Vec::new());
+    }
+    // Parse device kind from key: "switch/general" -> "switch".
+    let device_kind = key.split('/').next().unwrap_or(key);
+
+    let d = match s.doc() {
+        Ok(d) => d,
+        Err(_) => return (0, Vec::new()),
+    };
+
+    // Find BIM type marks whose category matches the device kind.
+    let matching_marks: Vec<&str> = d
+        .bim_types
+        .types
+        .iter()
+        .filter(|t| t.category.eq_ignore_ascii_case(device_kind))
+        .map(|t| t.mark.as_str())
+        .collect();
+
+    if matching_marks.is_empty() {
+        return (0, Vec::new());
+    }
+
+    // Scan model entities for matching type marks.
+    let mut count: u64 = 0;
+    let mut handles = Vec::new();
+    let max_handles = 100; // Page size.
+
+    for e in d.model.iter() {
+        if let Some(mark) = cadaddy_doc::bimspec::entity_type_mark(&e.common.xdata)
+            && matching_marks.iter().any(|m| m.eq_ignore_ascii_case(mark))
+        {
+            count += 1;
+            if handles.len() < max_handles {
+                handles.push(format!("{:X}", e.handle.0));
+            }
+        }
+    }
+
+    (count, handles)
+}
+
 // ── JSON helpers ───────────────────────────────────────────────────────────
 
 fn entry_to_json(e: &RuleEntry) -> Value {
@@ -330,6 +412,8 @@ fn entry_to_json(e: &RuleEntry) -> Value {
             "to": c.to,
             "reason": c.reason,
             "tier": c.tier.as_str(),
+            "set_by": c.set_by,
+            "time": c.time,
         })).collect::<Vec<_>>(),
     })
 }
@@ -355,6 +439,15 @@ fn parse_domain(cmd: &str, p: &Value) -> Result<RuleDomain> {
     })
 }
 
+fn parse_tier(cmd: &str, p: &Value) -> Result<SourceTier> {
+    match p.get("tier").and_then(Value::as_str) {
+        Some(s) => SourceTier::parse(s).ok_or_else(|| {
+            bad(cmd, format!("unknown tier `{s}`; valid: {}", SourceTier::ALL.iter().map(|t| t.as_str()).collect::<Vec<_>>().join(", ")))
+        }),
+        None => Ok(SourceTier::ProjectRule),
+    }
+}
+
 // ── tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -368,31 +461,25 @@ mod tests {
         s
     }
 
+    /// Helper: set a project_rule tier (no source required).
+    fn set_pr(s: &mut Session, domain: &str, key: &str, value: &str, reason: &str) -> serde_json::Value {
+        s.execute("project.rules.set", &json!({"domain": domain, "key": key, "value": value, "tier": "project_rule", "reason": reason})).unwrap()
+    }
+
+    /// Helper: set at a higher tier (source required).
+    fn set_tier(s: &mut Session, domain: &str, key: &str, value: &str, tier: &str, source: &str, reason: &str) -> serde_json::Value {
+        s.execute("project.rules.set", &json!({"domain": domain, "key": key, "value": value, "tier": tier, "source": source, "reason": reason})).unwrap()
+    }
+
     #[test]
     fn set_and_list_rules() {
         let mut s = session();
-
-        // Set a mounting height rule.
-        let r = s
-            .execute(
-                "project.rules.set",
-                &json!({
-                    "domain": "mounting_height",
-                    "key": "receptacle/general",
-                    "value": "18\"",
-                    "tier": "project_rule",
-                    "source": "NEC 210.52",
-                    "reason": "standard height"
-                }),
-            )
-            .unwrap_or_default();
+        let r = set_pr(&mut s, "mounting_height", "receptacle/general", "18\"", "standard height");
         assert_eq!(r["preview"]["changed"], true);
         assert_eq!(r["preview"]["newValue"], "18\"");
 
-        // List rules.
-        let r = s.execute("project.rules.list", &json!({})).unwrap_or_default();
-        let empty = vec![];
-        let rules = r["rules"].as_array().unwrap_or(&empty);
+        let r = s.execute("project.rules.list", &json!({})).unwrap();
+        let rules = r["rules"].as_array().unwrap();
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0]["domain"], "mounting_height");
         assert_eq!(rules[0]["key"], "receptacle/general");
@@ -402,37 +489,14 @@ mod tests {
     #[test]
     fn get_rule_resolved() {
         let mut s = session();
+        set_pr(&mut s, "wiring_method", "general", "MC cable", "project default");
+        set_tier(&mut s, "wiring_method", "general", "EMT", "spec", "Spec 26 05 33", "spec requirement");
 
-        s.execute(
-            "project.rules.set",
-            &json!({
-                "domain": "wiring_method",
-                "key": "general",
-                "value": "MC cable",
-                "tier": "project_rule"
-            }),
-        )
-        .ok();
-
-        // Override with spec.
-        s.execute(
-            "project.rules.set",
-            &json!({
-                "domain": "wiring_method",
-                "key": "general",
-                "value": "EMT",
-                "tier": "spec",
-                "source": "Spec 26 05 33"
-            }),
-        )
-        .ok();
-
-        let r = s.execute("project.rules.get", &json!({"domain": "wiring_method", "key": "general"})).unwrap_or_default();
+        let r = s.execute("project.rules.get", &json!({"domain": "wiring_method", "key": "general"})).unwrap();
         assert_eq!(r["value"], "EMT");
         assert_eq!(r["tier"], "spec");
         assert_eq!(r["source"], "Spec 26 05 33");
-        let empty = vec![];
-        let overrides = r["overrides"].as_array().unwrap_or(&empty);
+        let overrides = r["overrides"].as_array().unwrap();
         assert_eq!(overrides.len(), 1);
         assert_eq!(overrides[0]["value"], "MC cable");
     }
@@ -440,225 +504,358 @@ mod tests {
     #[test]
     fn preview_without_modifying() {
         let mut s = session();
+        set_tier(&mut s, "clearance", "panel_front", "36\"", "spec", "NEC 110.26", "code requirement");
 
-        s.execute(
-            "project.rules.set",
-            &json!({
-                "domain": "clearance",
-                "key": "panel_front",
-                "value": "36\"",
-                "tier": "spec",
-                "source": "NEC 110.26"
-            }),
-        )
-        .ok();
-
-        let r = s
-            .execute(
-                "project.rules.preview",
-                &json!({
-                    "domain": "clearance",
-                    "key": "panel_front",
-                    "value": "42\"",
-                    "tier": "rfi"
-                }),
-            )
-            .unwrap_or_default();
+        let r = s.execute("project.rules.preview", &json!({"domain": "clearance", "key": "panel_front", "value": "42\"", "tier": "rfi"})).unwrap();
         assert_eq!(r["preview"]["changed"], true);
         assert_eq!(r["preview"]["newValue"], "42\"");
         assert_eq!(r["preview"]["oldValue"], "36\"");
 
         // Actual value unchanged.
-        let r = s.execute("project.rules.get", &json!({"domain": "clearance", "key": "panel_front"})).unwrap_or_default();
+        let r = s.execute("project.rules.get", &json!({"domain": "clearance", "key": "panel_front"})).unwrap();
         assert_eq!(r["value"], "36\"");
     }
 
     #[test]
     fn remove_rule() {
         let mut s = session();
+        set_pr(&mut s, "tolerance", "placement", "1/4\"", "initial");
 
-        s.execute(
-            "project.rules.set",
-            &json!({
-                "domain": "tolerance",
-                "key": "placement",
-                "value": "1/4\"",
-                "tier": "project_rule"
-            }),
-        )
-        .ok();
-
-        let r = s.execute("project.rules.remove", &json!({"domain": "tolerance", "key": "placement"})).unwrap_or_default();
+        let r = s.execute("project.rules.remove", &json!({"domain": "tolerance", "key": "placement"})).unwrap();
         assert_eq!(r["removed"], true);
-
-        let r = s.execute("project.rules.get", &json!({"domain": "tolerance", "key": "placement"})).unwrap_or_default();
+        let r = s.execute("project.rules.get", &json!({"domain": "tolerance", "key": "placement"})).unwrap();
         assert!(r.is_null());
     }
 
     #[test]
     fn remove_tier_promotes_next() {
         let mut s = session();
+        set_pr(&mut s, "mounting_height", "switch/general", "48\"", "project default");
+        set_tier(&mut s, "mounting_height", "switch/general", "46\"", "rfi", "RFI #12", "RFI response");
 
-        s.execute(
-            "project.rules.set",
-            &json!({
-                "domain": "mounting_height",
-                "key": "switch/general",
-                "value": "48\"",
-                "tier": "project_rule"
-            }),
-        )
-        .ok();
-
-        s.execute(
-            "project.rules.set",
-            &json!({
-                "domain": "mounting_height",
-                "key": "switch/general",
-                "value": "46\"",
-                "tier": "rfi",
-                "source": "RFI #12"
-            }),
-        )
-        .ok();
-
-        // RFI wins.
-        let r = s.execute("project.rules.get", &json!({"domain": "mounting_height", "key": "switch/general"})).unwrap_or_default();
+        let r = s.execute("project.rules.get", &json!({"domain": "mounting_height", "key": "switch/general"})).unwrap();
         assert_eq!(r["value"], "46\"");
 
-        // Remove RFI tier.
-        let r = s.execute("project.rules.remove", &json!({"domain": "mounting_height", "key": "switch/general", "tier": "rfi"})).unwrap_or_default();
+        let r = s.execute("project.rules.remove", &json!({"domain": "mounting_height", "key": "switch/general", "tier": "rfi"})).unwrap();
         assert_eq!(r["removed"], true);
 
-        // Project rule takes over.
-        let r = s.execute("project.rules.get", &json!({"domain": "mounting_height", "key": "switch/general"})).unwrap_or_default();
+        let r = s.execute("project.rules.get", &json!({"domain": "mounting_height", "key": "switch/general"})).unwrap();
         assert_eq!(r["value"], "48\"");
     }
 
     #[test]
     fn label_set_and_get() {
         let mut s = session();
-
-        let r = s.execute("project.rules.label", &json!({"label": "Sample Tower"})).unwrap_or_default();
+        let r = s.execute("project.rules.label", &json!({"label": "Sample Tower"})).unwrap();
         assert_eq!(r["label"], "Sample Tower");
-
-        let r = s.execute("project.rules.label", &json!({})).unwrap_or_default();
+        let r = s.execute("project.rules.label", &json!({})).unwrap();
         assert_eq!(r["label"], "Sample Tower");
     }
 
     #[test]
     fn undo_set() {
         let mut s = session();
-
-        s.execute(
-            "project.rules.set",
-            &json!({
-                "domain": "naming",
-                "key": "layer",
-                "value": "E-prefix",
-                "tier": "project_rule"
-            }),
-        )
-        .ok();
+        // Assert the set took effect.
+        let r = set_pr(&mut s, "naming", "layer", "E-prefix", "naming convention");
+        assert_eq!(r["preview"]["changed"], true);
+        let r = s.execute("project.rules.get", &json!({"domain": "naming", "key": "layer"})).unwrap();
+        assert_eq!(r["value"], "E-prefix");
 
         // Undo should restore.
         s.execute("undo", &json!({})).ok();
-
-        let r = s.execute("project.rules.get", &json!({"domain": "naming", "key": "layer"})).unwrap_or_default();
+        let r = s.execute("project.rules.get", &json!({"domain": "naming", "key": "layer"})).unwrap();
         assert!(r.is_null());
+    }
+
+    #[test]
+    fn undo_remove() {
+        let mut s = session();
+        set_pr(&mut s, "tolerance", "placement", "1/4\"", "initial");
+        let r = s.execute("project.rules.get", &json!({"domain": "tolerance", "key": "placement"})).unwrap();
+        assert_eq!(r["value"], "1/4\"");
+
+        s.execute("project.rules.remove", &json!({"domain": "tolerance", "key": "placement"})).unwrap();
+        let r = s.execute("project.rules.get", &json!({"domain": "tolerance", "key": "placement"})).unwrap();
+        assert!(r.is_null());
+
+        s.execute("undo", &json!({})).ok();
+        let r = s.execute("project.rules.get", &json!({"domain": "tolerance", "key": "placement"})).unwrap();
+        assert_eq!(r["value"], "1/4\"");
+    }
+
+    #[test]
+    fn undo_import() {
+        let mut s = session();
+        set_pr(&mut s, "clearance", "panel_front", "36\"", "initial");
+
+        let dir = std::env::temp_dir().join("projrules_undo_import");
+        let _ = std::fs::create_dir_all(&dir);
+        let json_path = dir.join("import.json");
+        s.execute("project.rules.export", &json!({"path": json_path.to_str().unwrap_or_default()})).unwrap();
+
+        // Import into same session (replace mode changes rules).
+        let mut s2 = session();
+        set_pr(&mut s2, "tolerance", "placement", "1/8\"", "tighter");
+        s2.execute("project.rules.import", &json!({"path": json_path.to_str().unwrap_or_default(), "merge": false})).unwrap();
+
+        // The tolerance rule should be gone (replaced).
+        let r = s2.execute("project.rules.get", &json!({"domain": "tolerance", "key": "placement"})).unwrap();
+        assert!(r.is_null());
+        // The clearance rule should be there from the import.
+        let r = s2.execute("project.rules.get", &json!({"domain": "clearance", "key": "panel_front"})).unwrap();
+        assert_eq!(r["value"], "36\"");
+
+        // Undo restores the pre-import state.
+        s2.execute("undo", &json!({})).ok();
+        let r = s2.execute("project.rules.get", &json!({"domain": "tolerance", "key": "placement"})).unwrap();
+        assert_eq!(r["value"], "1/8\"");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn filter_by_domain() {
         let mut s = session();
+        set_pr(&mut s, "mounting_height", "a", "1", "test");
+        set_pr(&mut s, "wiring_method", "b", "2", "test");
 
-        s.execute("project.rules.set", &json!({"domain": "mounting_height", "key": "a", "value": "1"})).ok();
-        s.execute("project.rules.set", &json!({"domain": "wiring_method", "key": "b", "value": "2"})).ok();
-
-        let r = s.execute("project.rules.list", &json!({"domain": "mounting_height"})).unwrap_or_default();
-        assert_eq!(r["rules"].as_array().unwrap_or(&vec![]).len(), 1);
-
-        let r = s.execute("project.rules.list", &json!({})).unwrap_or_default();
-        assert_eq!(r["rules"].as_array().unwrap_or(&vec![]).len(), 2);
+        let r = s.execute("project.rules.list", &json!({"domain": "mounting_height"})).unwrap();
+        assert_eq!(r["rules"].as_array().unwrap().len(), 1);
+        let r = s.execute("project.rules.list", &json!({})).unwrap();
+        assert_eq!(r["rules"].as_array().unwrap().len(), 2);
     }
 
     #[test]
     fn hostile_params_never_panic() {
         let mut s = session();
-
         // Missing required params.
         assert!(s.execute("project.rules.set", &json!({})).is_err());
         assert!(s.execute("project.rules.get", &json!({})).is_err());
         assert!(s.execute("project.rules.remove", &json!({})).is_err());
         assert!(s.execute("project.rules.preview", &json!({})).is_err());
-
         // Bad domain.
-        assert!(s.execute("project.rules.set", &json!({"domain": "nonsense", "key": "a", "value": "b"})).is_err());
-
+        assert!(s.execute("project.rules.set", &json!({"domain": "nonsense", "key": "a", "value": "b", "reason": "test"})).is_err());
         // Missing key.
-        assert!(s.execute("project.rules.set", &json!({"domain": "clearance", "value": "36\""})).is_err());
-
+        assert!(s.execute("project.rules.set", &json!({"domain": "clearance", "value": "36\"", "reason": "test"})).is_err());
         // Missing value.
-        assert!(s.execute("project.rules.set", &json!({"domain": "clearance", "key": "a"})).is_err());
-
+        assert!(s.execute("project.rules.set", &json!({"domain": "clearance", "key": "a", "reason": "test"})).is_err());
         // Import non-existent file.
         assert!(s.execute("project.rules.import", &json!({"path": "/nonexistent/file.json"})).is_err());
     }
 
     #[test]
-    fn import_and_export_json() {
+    fn set_refuses_empty_reason() {
+        let mut s = session();
+        let err = s.execute("project.rules.set", &json!({"domain": "clearance", "key": "a", "value": "36\""}));
+        assert!(err.is_err(), "set without reason should fail");
+    }
+
+    #[test]
+    fn higher_tier_refuses_empty_source() {
+        let mut s = session();
+        let err = s.execute("project.rules.set", &json!({
+            "domain": "clearance", "key": "a", "value": "36\"", "tier": "rfi", "reason": "test"
+        }));
+        assert!(err.is_err(), "rfi tier without source should fail");
+    }
+
+    #[test]
+    fn invalid_tier_is_an_error() {
+        let mut s = session();
+        let err = s.execute("project.rules.set", &json!({
+            "domain": "clearance", "key": "a", "value": "36\"", "tier": "made_up", "reason": "test"
+        }));
+        assert!(err.is_err(), "invalid tier should fail");
+        // Error should list valid tiers.
+        let msg = format!("{:?}", err.unwrap_err());
+        assert!(msg.contains("field_verified"), "error should list valid tiers");
+    }
+
+    #[test]
+    fn changelog_records_lower_tier_set() {
+        let mut s = session();
+        set_tier(&mut s, "wiring_method", "general", "EMT", "spec", "Spec 26 05 33", "spec says EMT");
+        set_pr(&mut s, "wiring_method", "general", "MC cable", "project default");
+
+        let r = s.execute("project.rules.list", &json!({"domain": "wiring_method"})).unwrap();
+        let rules = r["rules"].as_array().unwrap();
+        assert_eq!(rules.len(), 1);
+        // Changelog should have 2 entries (both sets logged, even though the lower-tier didn't change active).
+        let changelog = rules[0]["changelog"].as_array().unwrap();
+        assert!(changelog.len() >= 2, "both sets should be logged, got {}", changelog.len());
+    }
+
+    #[test]
+    fn preview_returns_affected_element_count() {
+        use cadaddy_doc::bimspec::{BimType, SpecField};
+
         let mut s = session();
 
-        s.execute(
-            "project.rules.set",
-            &json!({"domain": "clearance", "key": "panel_front", "value": "36\"", "tier": "spec", "source": "NEC 110.26"}),
-        )
-        .ok();
+        // Add BIM types for switches.
+        {
+            let d = s.doc_mut().unwrap();
+            let mut switch_type = BimType::new("S");
+            switch_type.category = "switch".to_string();
+            switch_type.set_field("mountingHeight", SpecField::new("48\""));
+            d.bim_types.set(switch_type);
+
+            // Add 5 entities with the switch type mark.
+            for i in 0..5u64 {
+                let mut e = cadaddy_doc::Entity::new(
+                    cadaddy_doc::Handle(100 + i),
+                    cadaddy_doc::EntityKind::Point(cadaddy_doc::Point { p: cadaddy_geom::Vec3::ZERO, angle: 0.0 }),
+                );
+                e.common.layer = "DEVICE".into();
+                e.common.xdata = cadaddy_doc::Rare::from(cadaddy_doc::bimspec::type_mark_xdata("S"));
+                d.model.push(e);
+            }
+        }
+
+        // Set initial rule.
+        set_pr(&mut s, "mounting_height", "switch/general", "48", "initial default");
+
+        // Preview changing height from 48 to 46.
+        let r = s.execute("project.rules.preview", &json!({
+            "domain": "mounting_height",
+            "key": "switch/general",
+            "value": "46",
+            "tier": "rfi"
+        })).unwrap();
+
+        assert_eq!(r["preview"]["changed"], true);
+        assert_eq!(r["preview"]["newValue"], "46");
+        assert_eq!(r["affectedElements"], 5, "all 5 switch entities should be affected");
+        let ids = r["affectedIds"].as_array().unwrap();
+        assert_eq!(ids.len(), 5, "should list all 5 affected entity handles");
+
+        // Preview with no actual change should show 0 affected.
+        let r = s.execute("project.rules.preview", &json!({
+            "domain": "mounting_height",
+            "key": "switch/general",
+            "value": "48",
+            "tier": "project_rule"
+        })).unwrap();
+        assert_eq!(r["affectedElements"], 0, "no change means no affected elements");
+    }
+
+    #[test]
+    fn import_and_export_json() {
+        let mut s = session();
+        set_tier(&mut s, "clearance", "panel_front", "36\"", "spec", "NEC 110.26", "code requirement");
         s.execute("project.rules.label", &json!({"label": "Export Test"})).ok();
 
         let dir = std::env::temp_dir().join("projrules_test");
         let _ = std::fs::create_dir_all(&dir);
         let json_path = dir.join("test_rules.json");
 
-        let r = s.execute("project.rules.export", &json!({"path": json_path.to_str().unwrap_or_default()})).unwrap_or_default();
+        let r = s.execute("project.rules.export", &json!({"path": json_path.to_str().unwrap_or_default()})).unwrap();
         assert_eq!(r["exported"], 1);
 
-        // Import into a new session.
         let mut s2 = session();
-        let r = s2.execute("project.rules.import", &json!({"path": json_path.to_str().unwrap_or_default()})).unwrap_or_default();
+        let r = s2.execute("project.rules.import", &json!({"path": json_path.to_str().unwrap_or_default()})).unwrap();
         assert_eq!(r["imported"], 1);
-
-        let r = s2.execute("project.rules.get", &json!({"domain": "clearance", "key": "panel_front"})).unwrap_or_default();
+        let r = s2.execute("project.rules.get", &json!({"domain": "clearance", "key": "panel_front"})).unwrap();
         assert_eq!(r["value"], "36\"");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
+    fn project_rules_drive_device_mounting_height() {
+        use cadaddy_doc::projrules::{ProjectRules, RuleDomain, RuleValue, SourceTier};
+        use cadaddy_mepfix::elec_reader::{FoundDevice, apply_project_rules};
+
+        let mut rules = ProjectRules::new();
+        rules.set(
+            RuleDomain::MountingHeight,
+            "switch/general",
+            RuleValue::new("46").with_tier(SourceTier::Rfi).with_source("RFI #12").with_set_by("PM"),
+            "per RFI #12",
+        );
+
+        // Create 3 fake switches at the default 46-inch height (from rule fallback).
+        let mut devices: Vec<FoundDevice> = (0..3)
+            .map(|i| FoundDevice {
+                kind: "switch".into(),
+                room: "general".into(),
+                mounting_in: 46.0,
+                height_source: "rule".into(),
+                at_ft: [10.0 * i as f64, 5.0, 46.0 / 12.0],
+                ..Default::default()
+            })
+            .collect();
+
+        let changed = apply_project_rules(&mut devices, &rules);
+
+        // All 3 switches should now be at 46" from the RFI rule.
+        for (i, dev) in devices.iter().enumerate() {
+            assert_eq!(dev.mounting_in, 46.0, "device {i}: height should be 46 inches");
+            assert_eq!(dev.height_source, "project_rule", "device {i}: source should be project_rule");
+            assert_eq!(dev.height_tier, "rfi", "device {i}: tier should be rfi");
+            assert_eq!(dev.height_citation, "RFI #12", "device {i}: citation should be RFI #12");
+        }
+        // Heights didn't change (46 -> 46), so changed count = 0.
+        assert_eq!(changed, 0, "height didn't change numerically");
+
+        // Now set a different height and verify it changes.
+        let mut rules2 = ProjectRules::new();
+        rules2.set(
+            RuleDomain::MountingHeight,
+            "switch/general",
+            RuleValue::new("48").with_tier(SourceTier::ProjectRule),
+            "project default 48",
+        );
+        rules2.set(
+            RuleDomain::MountingHeight,
+            "switch/general",
+            RuleValue::new("46").with_tier(SourceTier::Rfi).with_source("RFI #12"),
+            "per RFI #12",
+        );
+
+        // Devices start at default 48" (from hard-coded rules).
+        let mut devices2: Vec<FoundDevice> = (0..3)
+            .map(|i| FoundDevice {
+                kind: "switch".into(),
+                room: "general".into(),
+                mounting_in: 48.0, // default_mounting_in gives 46 but let's say 48 for test.
+                height_source: "rule".into(),
+                at_ft: [10.0 * i as f64, 5.0, 48.0 / 12.0],
+                ..Default::default()
+            })
+            .collect();
+
+        let changed2 = apply_project_rules(&mut devices2, &rules2);
+        assert_eq!(changed2, 3, "all 3 devices should have changed height from 48 to 46");
+
+        for dev in &devices2 {
+            assert_eq!(dev.mounting_in, 46.0, "height should be 46 inches from RFI");
+            assert_eq!(dev.height_tier, "rfi");
+            assert_eq!(dev.height_citation, "RFI #12");
+            // Should report overriding the 48" project_rule.
+            assert_eq!(dev.height_overrode.len(), 1, "should override one value");
+            assert_eq!(dev.height_overrode[0].0, "48");
+            assert_eq!(dev.height_overrode[0].1, "project_rule");
+        }
+    }
+
+    #[test]
     fn import_and_export_toml() {
         let mut s = session();
-
-        s.execute(
-            "project.rules.set",
-            &json!({"domain": "mounting_height", "key": "switch/general", "value": "48\"", "tier": "spec", "source": "NEC"}),
-        )
-        .ok();
-        s.execute("project.rules.set", &json!({"domain": "wiring_method", "key": "general", "value": "MC cable"})).ok();
+        set_tier(&mut s, "mounting_height", "switch/general", "48\"", "spec", "NEC", "NEC default");
+        set_pr(&mut s, "wiring_method", "general", "MC cable", "project default");
         s.execute("project.rules.label", &json!({"label": "TOML Test"})).ok();
 
         let dir = std::env::temp_dir().join("projrules_toml_test");
         let _ = std::fs::create_dir_all(&dir);
         let toml_path = dir.join("test_rules.toml");
 
-        let r = s.execute("project.rules.export", &json!({"path": toml_path.to_str().unwrap_or_default()})).unwrap_or_default();
+        let r = s.execute("project.rules.export", &json!({"path": toml_path.to_str().unwrap_or_default()})).unwrap();
         assert_eq!(r["exported"], 2);
 
-        // Import into a new session.
         let mut s2 = session();
-        let r = s2.execute("project.rules.import", &json!({"path": toml_path.to_str().unwrap_or_default()})).unwrap_or_default();
+        let r = s2.execute("project.rules.import", &json!({"path": toml_path.to_str().unwrap_or_default()})).unwrap();
         assert_eq!(r["imported"], 2);
-
-        let r = s2.execute("project.rules.get", &json!({"domain": "mounting_height", "key": "switch/general"})).unwrap_or_default();
+        let r = s2.execute("project.rules.get", &json!({"domain": "mounting_height", "key": "switch/general"})).unwrap();
         assert_eq!(r["value"], "48\"");
 
         let _ = std::fs::remove_dir_all(&dir);
