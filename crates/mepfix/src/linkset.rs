@@ -335,6 +335,31 @@ pub fn enlarged_sheet_with_receptacles(title: Option<(&str, bool)>) -> Drawing {
     s.d
 }
 
+/// E-3 as [`enlarged_sheet`] with four more receptacles drawn bare (no mark, no circuit), as
+/// a plan draws the rest of a room's devices once one is tagged: three as the symbol stands and
+/// one turned a quarter. Beside them, a lone circle of the symbol's size and a bigger circle
+/// with bars, neither of them the symbol.
+pub fn enlarged_sheet_with_bare_copies(title: Option<(&str, bool)>) -> Drawing {
+    let mut s = Sheet { d: enlarged_sheet(title) };
+    for (p, turned) in [([8.0, 8.0], false), ([16.0, 16.0], false), ([8.0, 17.0], false), ([16.0, 6.0], true)] {
+        s.circle(p, 0.1);
+        for o in [-0.04, 0.04] {
+            if turned {
+                s.line([p[0] + o, p[1] - 0.15], [p[0] + o, p[1] + 0.15]);
+            } else {
+                s.line([p[0] - 0.15, p[1] + o], [p[0] + 0.15, p[1] + o]);
+            }
+        }
+    }
+    s.circle([6.0, 18.0], 0.1);
+    let big = [18.0, 14.0];
+    s.circle(big, 0.25);
+    for o in [-0.1, 0.1] {
+        s.line([big[0] - 0.375, big[1] + o], [big[0] + 0.375, big[1] + o]);
+    }
+    s.d
+}
+
 /// E-4: details; detail 2 prints the receptacle's mounting height.
 fn e4() -> Drawing {
     let mut s = Sheet::new();

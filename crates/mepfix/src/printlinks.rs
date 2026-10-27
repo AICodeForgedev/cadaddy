@@ -30,6 +30,8 @@ use cadaddy_doc::{Drawing, EntityKind};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod twins;
+
 /// Most callouts kept per page (hostile files).
 const MAX_PAGE_CALLOUTS: usize = 2_000;
 /// Most devices kept per page.
@@ -133,6 +135,10 @@ pub struct PageDevice {
     /// Its only label is a circuit (`D-12`), with no type mark and no typed symbol beside it: a
     /// device drawn without a type mark (a plain receptacle), known by the circuit it is on.
     pub circuit_only: bool,
+    /// An untagged copy of a symbol the import made (same outline, strokes and length): the
+    /// import makes a symbol only beside a mark, and a plan tags one fixture of a room and
+    /// draws the rest bare. It counts as its template's device; `handle` is its outline's.
+    pub twin: bool,
 }
 
 /// The type an enlarged plan counts a circuit-only symbol under.
@@ -248,6 +254,9 @@ pub struct Enlarged {
     pub uncounted_tags: BTreeMap<String, usize>,
     pub untagged_symbols: usize,
     pub in_smaller_views: usize,
+    /// Of `devices`, the untagged copies of a symbol the import made (see [`PageDevice::twin`]).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub twins: usize,
     /// The overall plan's devices inside the boundary, left out of the count.
     pub overall_ignored: usize,
     /// The handles of the devices counted in `devices` (symbols on the enlarged sheet).
@@ -1145,6 +1154,7 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
     let legend = device_types::read_legend(&texts);
     out.legend_types = legend.types.clone();
     let mut syms: Vec<PageDevice> = Vec::new();
+    let mut inserts: Vec<(String, [f64; 2], String)> = Vec::new();
     for e in d.model.iter() {
         if syms.len() >= MAX_PAGE_DEVICES {
             break;
@@ -1155,13 +1165,17 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         }
         let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
         let at = ins.insert.xy();
+        inserts.push((ins.block.clone(), [at.x, at.y], e.handle.hex()));
         if !legend.covers(at) {
-            syms.push(PageDevice { tag, at: [at.x, at.y], handle: e.handle.hex(), alt: None, circuit_only: false });
+            syms.push(PageDevice { tag, at: [at.x, at.y], handle: e.handle.hex(), alt: None, circuit_only: false, twin: false });
         }
     }
     marks_beside(&mut syms, &texts, &legend, median_h);
     let named: BTreeSet<String> = std::iter::once(own_n.clone()).chain(out.callouts.iter().map(|c| norm_sheet(&c.target_sheet))).collect();
     circuit_only(&mut syms, median_h, &named);
+    let counts = |dv: &PageDevice| (!dv.tag.is_empty() && !is_circuit_tag(&dv.tag)) || dv.alt.is_some() || dv.circuit_only;
+    let copies = twins::find(d, &inserts, &syms, &counts, &legend);
+    let copies = not_their_labels(copies, &syms, &texts, median_h);
     for dv in syms {
         let tagged = !dv.tag.is_empty() && !is_circuit_tag(&dv.tag);
         if dv.tag.is_empty() && dv.alt.is_none() && out.untagged.len() < MAX_PAGE_DEVICES {
@@ -1171,6 +1185,8 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
             out.devices.push(dv);
         }
     }
+    let room = MAX_PAGE_DEVICES.saturating_sub(out.devices.len());
+    out.devices.extend(copies.into_iter().take(room));
     out
 }
 
@@ -1270,6 +1286,45 @@ fn circuit_only(syms: &mut [PageDevice], median_h: f64, sheets: &BTreeSet<String
             (-1..=1).any(|dx| (-1..=1).any(|dy| by_cell.get(&(cx + dx, cy + dy)).is_some_and(|ps| ps.iter().any(|p| dist(*p, dv.at) <= reach))));
         dv.circuit_only = !near;
     }
+}
+
+/// The bare copies that are not a labelled device's own symbol. Where the import read a label
+/// (a circuit, a mark) as the symbol, it made the symbol of the label's own strokes and left the
+/// real one loose: a copy found within a mark's reach of such a device (one tagged by a circuit
+/// or a mark beside it, or sitting on the lettering of its tag) is that device, counted once.
+fn not_their_labels(copies: Vec<PageDevice>, syms: &[PageDevice], texts: &[TextItem], median_h: f64) -> Vec<PageDevice> {
+    let reach = MARK_REACH * median_h.max(1e-9);
+    let cell = reach.max(1e-6);
+    let key = |p: [f64; 2]| ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64);
+    let mut by_cell: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+    for (i, t) in texts.iter().enumerate() {
+        by_cell.entry(key(text_middle(t))).or_default().push(i);
+    }
+    let on_label = |dv: &PageDevice| {
+        let (cx, cy) = key(dv.at);
+        (-1..=1).any(|dx| {
+            (-1..=1).any(|dy| {
+                by_cell.get(&(cx + dx, cy + dy)).into_iter().flatten().filter_map(|&i| texts.get(i)).any(|t| {
+                    let v = t.value.trim();
+                    let w = 0.35 * t.height * v.chars().count() as f64;
+                    (v == dv.tag || dv.alt.as_deref() == Some(v)) && dist(text_middle(t), dv.at) <= w.max(t.height)
+                })
+            })
+        })
+    };
+    let labels: Vec<[f64; 2]> =
+        syms.iter().filter(|dv| dv.circuit_only || dv.alt.is_some() || (!dv.tag.is_empty() && on_label(dv))).map(|dv| dv.at).collect();
+    let mut label_cells: BTreeMap<(i64, i64), Vec<[f64; 2]>> = BTreeMap::new();
+    for p in labels {
+        label_cells.entry(key(p)).or_default().push(p);
+    }
+    copies
+        .into_iter()
+        .filter(|c| {
+            let (cx, cy) = key(c.at);
+            !(-1..=1).any(|dx| (-1..=1).any(|dy| label_cells.get(&(cx + dx, cy + dy)).is_some_and(|ps| ps.iter().any(|p| dist(*p, c.at) <= reach))))
+        })
+        .collect()
 }
 
 /// One copy of each line of lettering: an import may give a mark twice (the page's hidden text
@@ -1425,6 +1480,7 @@ fn count_devices(
             Some(t) => {
                 *entry.devices_by_type.entry(t).or_default() += 1;
                 entry.devices += 1;
+                entry.twins += usize::from(dv.twin);
                 entry.device_handles.push(dv.handle.clone());
             }
             None if entry.uncounted_tags.len() < MAX_UNCOUNTED_TAGS || entry.uncounted_tags.contains_key(&dv.tag) => {
@@ -1977,6 +2033,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                     if by_box.devices > entry.devices && kept * 2 >= entry.devices && covered(&map_box(&f, &rg), &bx) >= 0.7 {
                         entry.devices = by_box.devices;
                         entry.devices_by_type = by_box.devices_by_type;
+                        entry.twins = by_box.twins;
                         entry.device_handles = by_box.device_handles;
                         entry.devices_from = "boundary".into();
                     }
