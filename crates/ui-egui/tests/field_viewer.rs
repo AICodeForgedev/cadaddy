@@ -10,6 +10,7 @@ use cadaddy_ui_egui::fieldview::{FieldViewer, Mode, Tool};
 use cadaddy_ui_egui::theme;
 use cadaddy_walk3d::field::{FieldCheck, FieldCover, FieldNotes, FieldPackage, FieldPhoto, NoteKind};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 fn layer(s: &mut Session, name: &str) {
