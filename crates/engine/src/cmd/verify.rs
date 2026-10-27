@@ -307,15 +307,20 @@ fn plan_openings(d: &Drawing, sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<s
     ops
 }
 
-/// A room traced around its name tag.
+/// A room traced around its name or number tag.
 struct Room {
     tag: Handle,
     name: String,
     at: Vec2,
     outline: Option<Vec<Vec2>>,
+    /// Tagged by its number only (`101`, `B12`): named by that number.
+    number: bool,
 }
 
-/// Every room name tag (names, not numbers) and the outline around it, if it closes.
+/// Every room tag and the outline around it, if it closes: names, and numbers (`101`, `2104`,
+/// `B12`) on a room tag layer or numbering a spec room. A number whose room a name tag also tags
+/// (the name inside its outline, or near it when it has none) is that room's number, not another
+/// room: the name's tag is traced instead.
 fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
     let d = plan.doc()?;
     let ents = plan_objects(d);
@@ -328,7 +333,8 @@ fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
     for (h, t, at) in room_texts(sp, &ents) {
         // Equipment and device tags (a panelboard label on a room tag layer) are no rooms.
         let named = super::perceive::geometry::room_name_score(&t) > 0;
-        if !named || (!tagged && !sp.rooms.iter().any(|r| names_room(r, &t))) {
+        let number = !named && super::perceive::geometry::room_number(&t) && !super::perceive::geometry::equipment_tag(&t);
+        if !(named || number) || (!tagged && !sp.rooms.iter().any(|r| names_room(r, &t))) {
             continue;
         }
         if out.len() >= 2_000 {
@@ -339,8 +345,18 @@ fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
             .and_then(|loops| loops.iter().find(|l| l.outer).or(loops.first()).cloned())
             .map(|l| cadaddy_geom::Polyline { vertices: l.vertices, closed: true }.tessellate(1e-3))
             .filter(|q| q.len() >= 3);
-        out.push(Room { tag: h, name: t, at, outline });
+        out.push(Room { tag: h, name: t, at, outline, number });
     }
+    // Tags of one room sit within a few feet of each other.
+    let near = 4.0 * units(sp);
+    let names: Vec<Vec2> = out.iter().filter(|r| !r.number).map(|r| r.at).collect();
+    out.retain(|r| {
+        !r.number
+            || !names.iter().any(|&at| match &r.outline {
+                Some(q) => cadaddy_geom::point_in_polygon(q, at),
+                None => (at - r.at).len() <= near,
+            })
+    });
     Ok(out)
 }
 
@@ -445,7 +461,11 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
                 handles: vec![r.tag],
             }),
             Some(q) => {
-                for o in rs.iter().filter(|o| o.tag != r.tag && !o.name.eq_ignore_ascii_case(&r.name) && cadaddy_geom::point_in_polygon(q, o.at)) {
+                // Names run into names, numbers into numbers.
+                let joined = |o: &&Room| {
+                    o.tag != r.tag && o.number == r.number && !o.name.eq_ignore_ascii_case(&r.name) && cadaddy_geom::point_in_polygon(q, o.at)
+                };
+                for o in rs.iter().filter(joined) {
                     let key = if r.tag.0 < o.tag.0 { (r.tag, o.tag) } else { (o.tag, r.tag) };
                     if reported.contains(&key) {
                         continue;
