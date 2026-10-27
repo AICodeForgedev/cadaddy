@@ -162,11 +162,7 @@ fn conflicting_rules(rules: &ProjectRules, location: &str) -> Option<&'static st
         (Some(p), Some(b)) if !p.eq_ignore_ascii_case(b) => Some("two_rules_apply"),
         _ => {
             let val = proj.as_deref().or(builtin.as_deref()).unwrap_or_default();
-            if val.to_ascii_lowercase().contains(" or ") {
-                Some("method_choice_open")
-            } else {
-                None
-            }
+            if val.to_ascii_lowercase().contains(" or ") { Some("method_choice_open") } else { None }
         }
     }
 }
@@ -323,19 +319,17 @@ pub fn tag(
 
 /// The location of a conduit run in the expected (truth) tags: uses the room's properties
 /// to distinguish wet, below_slab, in_slab, plenum, exposed and concealed.
-fn expected_location(room: Option<&crate::truth::Room>, _t: &Truth) -> &'static str {
+fn expected_location(room: Option<&crate::truth::Room>, t: &Truth) -> &'static str {
     let Some(room) = room else { return "concealed" };
     let name_upper = room.name.to_ascii_uppercase();
     if wet(&name_upper) {
         return "wet";
     }
-    // Below-slab: the room name says so (planted by elecspec).
-    if name_upper.contains("SLAB") {
-        return "below_slab";
-    }
-    // In-slab/block: identified by room name (planted by elecspec).
-    if name_upper.contains("BLOCK") {
-        return "in_slab";
+    // Below slab / in CMU block: the room note elecspec plants on the electrical plan.
+    match t.elec_spec.room_location(&room.level, &room.number) {
+        Some("below_slab") => return "below_slab",
+        Some("in_slab") => return "in_slab",
+        _ => {}
     }
     // Plenum: a room with a ceiling that has meaningful plenum depth.
     if room.plenum_ft.is_some_and(|d| d > 0.0) && room.ceiling.is_some() {
@@ -538,6 +532,14 @@ pub fn read_fixture_tags(seed: u64, rules: &ProjectRules) -> Result<(Truth, Vec<
             d.room = r.name.clone();
         }
     }
+    // Room notes on the electrical plans (`CONDUIT BELOW SLAB`): the room each sits in.
+    let mut noted: BTreeMap<(String, String), &'static str> = BTreeMap::new();
+    for (level, at, location) in room_location_notes(&dxf, &map) {
+        let level_rooms: Vec<&crate::ceiling_reader::FoundRoom> = ceil.rooms.iter().filter(|r| r.level == level).collect();
+        if let Some(r) = room_at(&level_rooms, at, &|r| (r.min_ft, r.max_ft)) {
+            noted.entry((level, r.number.clone())).or_insert(location);
+        }
+    }
     let locate = |level: &str, p: [f64; 2]| -> &'static str {
         let level_rooms: Vec<&crate::ceiling_reader::FoundRoom> = ceil.rooms.iter().filter(|r| r.level == level).collect();
         let room = room_at(&level_rooms, p, &|r| (r.min_ft, r.max_ft)).copied();
@@ -546,13 +548,9 @@ pub fn read_fixture_tags(seed: u64, rules: &ProjectRules) -> Result<(Truth, Vec<
         if wet(&room_name) {
             return "wet";
         }
-        // Below-slab: at the lowest level in a slab-designated area.
-        if room_name.contains("SLAB") {
-            return "below_slab";
-        }
-        // In-slab/block: identified by room properties.
-        if room_name.contains("BLOCK") {
-            return "in_slab";
+        // Below slab / in CMU block: the room's note on the electrical plan.
+        if let Some(loc) = room.and_then(|r| noted.get(&(level.to_string(), r.number.clone()))) {
+            return loc;
         }
         // Plenum: identified by room name (planted by elecspec).
         if room_name.contains("PLENUM") {
@@ -567,6 +565,24 @@ pub fn read_fixture_tags(seed: u64, rules: &ProjectRules) -> Result<(Truth, Vec<
         if open { "exposed" } else { "concealed" }
     };
     Ok((set.truth, tag(&devices, &runs, &schedules, rules, &locate)))
+}
+
+/// The conduit-location notes on the electrical plans (`CONDUIT BELOW SLAB`, `CONDUIT IN CMU
+/// BLOCK`): level, where the note sits in building feet, and the location it gives.
+pub fn room_location_notes(dxf: &[(String, Vec<u8>)], map: &crate::sheet_reader::SheetMap) -> Vec<(String, [f64; 2], &'static str)> {
+    let mut out = Vec::new();
+    for (n, b) in dxf {
+        let stem = n.trim_end_matches(".dxf");
+        let Some(sheet) = map.sheets.iter().find(|s| s.number == stem && s.discipline == "E") else { continue };
+        let (Some(alignment), Some(level)) = (&sheet.alignment, &sheet.level) else { continue };
+        let Ok(d) = cadaddy_io::read_dxf(b) else { continue };
+        for t in crate::sheet_facts::texts(&d) {
+            if let Some(location) = elecspec::location_from_note(&t.value) {
+                out.push((level.clone(), crate::sheet_reader::building_from_model(alignment, [t.at.x, t.at.y]), location));
+            }
+        }
+    }
+    out
 }
 
 /// The tags as the building spec's `tags` list (for `bspec.set`).
@@ -599,5 +615,62 @@ mod tests {
         assert_eq!(conflicting_rules(&r, "concealed"), Some("method_choice_open"));
         assert_eq!(conflicting_rules(&r, "exposed"), None);
         assert_eq!(conflicting_rules(&r, "wet"), Some("method_choice_open"));
+    }
+
+    #[test]
+    fn location_notes_parse() {
+        assert_eq!(elecspec::location_from_note("CONDUIT BELOW SLAB"), Some("below_slab"));
+        assert_eq!(elecspec::location_from_note("run under slab"), Some("below_slab"));
+        assert_eq!(elecspec::location_from_note("CONDUIT IN CMU BLOCK"), Some("in_slab"));
+        assert_eq!(elecspec::location_from_note("RUN IN SLAB"), Some("in_slab"));
+        assert_eq!(elecspec::location_from_note("SLAB EDGE"), None);
+        assert_eq!(elecspec::location_from_note("DO NOT SCALE - LOCATIONS PER ARCHITECTURAL"), None);
+        for loc in ["below_slab", "in_slab"] {
+            let note = elecspec::location_note(loc).unwrap_or_default();
+            assert_eq!(elecspec::location_from_note(note), Some(loc));
+        }
+    }
+
+    /// Q5231: the slab and CMU-block locations are a note on the electrical plan, not a renamed
+    /// room, so the architectural sheets and their truth keep the same room names; the note is
+    /// read back into the room it was planted in.
+    #[test]
+    fn slab_locations_are_room_notes_read_back_from_the_plans() {
+        for seed in [1, 3] {
+            let set = crate::generate(seed).unwrap();
+            let t = &set.truth;
+            assert!(!t.elec_spec.room_locations.is_empty(), "seed {seed}: no room location planted");
+            assert!(t.building.rooms.iter().all(|r| !r.name.contains("SLAB") && !r.name.contains("BLOCK")), "seed {seed}: a room was renamed");
+            if let Some(a) = &t.arch {
+                for f in &a.finishes {
+                    let room = t.building.rooms.iter().find(|r| r.level == f.level && r.number == f.number);
+                    assert_eq!(room.map(|r| r.name.as_str()), Some(f.name.as_str()), "seed {seed}: room {}", f.number);
+                }
+            }
+            let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
+            let map = crate::sheet_reader::recognise_fixture_set(&dxf);
+            let notes = room_location_notes(&dxf, &map);
+            for planted in &t.elec_spec.room_locations {
+                let room = t.building.rooms.iter().find(|r| r.level == planted.level && r.number == planted.room).unwrap();
+                let read = notes.iter().any(|(lv, at, loc)| {
+                    *lv == planted.level
+                        && *loc == planted.location
+                        && (room.min_ft[0]..=room.max_ft[0]).contains(&at[0])
+                        && (room.min_ft[1]..=room.max_ft[1]).contains(&at[1])
+                });
+                assert!(read, "seed {seed}: {} note in room {} not read back ({notes:?})", planted.location, planted.room);
+            }
+            // Every note read is one that was planted (no false locations).
+            assert!(notes.len() >= t.elec_spec.room_locations.len());
+            assert!(
+                notes.iter().all(|(lv, at, loc)| t.elec_spec.room_locations.iter().any(|p| {
+                    let r = t.building.rooms.iter().find(|r| r.level == p.level && r.number == p.room);
+                    p.level == *lv
+                        && p.location == *loc
+                        && r.is_some_and(|r| at[0] >= r.min_ft[0] && at[0] <= r.max_ft[0] && at[1] >= r.min_ft[1] && at[1] <= r.max_ft[1])
+                })),
+                "seed {seed}: {notes:?}"
+            );
+        }
     }
 }

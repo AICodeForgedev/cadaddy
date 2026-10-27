@@ -68,11 +68,8 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
     let rules = &s.doc()?.project_rules;
     let new_tags = reader(rules).map_err(|e| bad("tags.read", e))?;
     // Optionally filter by level.
-    let new_tags: Vec<ElementTag> = if let Some(lv) = str_param(p, "level") {
-        new_tags.into_iter().filter(|t| t.level.eq_ignore_ascii_case(lv)).collect()
-    } else {
-        new_tags
-    };
+    let new_tags: Vec<ElementTag> =
+        if let Some(lv) = str_param(p, "level") { new_tags.into_iter().filter(|t| t.level.eq_ignore_ascii_case(lv)).collect() } else { new_tags };
     // Merge with existing tags, keeping user overrides and reviewed flags.
     let merged = merge_keeping_overrides(&sp.tags, &new_tags);
     let added = merged.len().saturating_sub(sp.tags.len());

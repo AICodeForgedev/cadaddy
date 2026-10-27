@@ -130,20 +130,25 @@ fn re_read_keeps_user_overrides_and_reviewed() {
     assert_eq!(user_tag["fields"]["type"]["source"], json!("user"));
 
     // Re-read: shift positions slightly (simulating re-reading after small drawing edits).
-    let shifted: Vec<ElementTag> = tags.iter().map(|t| {
-        let mut t2 = t.clone();
-        t2.at_ft[0] += 0.2;
-        t2
-    }).collect();
+    let shifted: Vec<ElementTag> = tags
+        .iter()
+        .map(|t| {
+            let mut t2 = t.clone();
+            t2.at_ft[0] += 0.2;
+            t2
+        })
+        .collect();
     let shifted_arc = Arc::new(shifted);
     s.tag_reader = Some(Arc::new(move |_rules| Ok((*shifted_arc).clone())));
     s.execute("tags.read", &json!({ "apply": true })).unwrap();
 
     // The user field and reviewed flag must survive.
     let after = s.execute("tags.list", &json!({})).unwrap();
-    let found = after["tags"].as_array().unwrap().iter().find(|t| {
-        t["fields"]["type"]["source"] == json!("user") && t["fields"]["type"]["value"] == json!("USER-A")
-    });
+    let found = after["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["fields"]["type"]["source"] == json!("user") && t["fields"]["type"]["value"] == json!("USER-A"));
     assert!(found.is_some(), "user override lost after re-read: {after}");
     assert!(found.unwrap()["reviewed"] == json!(true), "reviewed flag lost after re-read");
 }
@@ -190,7 +195,9 @@ fn breaker_types_are_planted_and_detected() {
         };
         for tt in &truth {
             if let Some(f) = tt.fields.get("protection") {
-                if f.value == "none" { continue; }
+                if f.value == "none" {
+                    continue;
+                }
                 let e = per_type.entry(f.value.clone()).or_default();
                 e.0 += 1;
                 if found.iter().any(|ft| near(ft, tt) && ft.fields.get("protection").is_some_and(|fp| fp.value.eq_ignore_ascii_case(&f.value))) {
@@ -223,7 +230,8 @@ fn per_location_scores() {
         let (t, found) = spectag::read_fixture_tags(seed, &rules).unwrap();
         let truth = spectag::expected(&t, &rules);
         let near = |a: &cadaddy_walk3d::tags::ElementTag, b: &cadaddy_walk3d::tags::ElementTag| {
-            a.kind == b.kind && a.level == b.level
+            a.kind == b.kind
+                && a.level == b.level
                 && if a.kind == "homerun" { a.id == b.id } else { (a.at_ft[0] - b.at_ft[0]).hypot(a.at_ft[1] - b.at_ft[1]) <= 1.0 }
         };
         for tt in truth.iter().filter(|t| t.fields.contains_key("location")) {
@@ -246,8 +254,12 @@ fn per_location_scores() {
         let p = if *found == 0 { 1.0 } else { *correct as f64 / *found as f64 };
         let r = if *truth == 0 { 1.0 } else { *correct as f64 / *truth as f64 };
         println!("  {loc:20} truth {truth:4} found {found:4} correct {correct:4}  P {p:.3} R {r:.3}");
-        if loc == "below_slab" { below_slab_seen = true; }
-        if loc == "in_slab" { in_slab_seen = true; }
+        if loc == "below_slab" {
+            below_slab_seen = true;
+        }
+        if loc == "in_slab" {
+            in_slab_seen = true;
+        }
         // Plenum detection requires data the ceiling reader doesn't expose (plenum depth);
         // the truth knows it from the building model. Check P/R only for planted locations.
         if *truth >= 5 && loc != "plenum" && loc != "concealed" {
@@ -255,8 +267,11 @@ fn per_location_scores() {
         }
     }
     assert!(below_slab_seen, "below_slab never appeared in 10 seeds (rooms not planted?)");
-    assert!(in_slab_seen || per_loc.get("in_slab").map_or(0, |x| x.0) < 5,
-        "in_slab planted but never detected (truth: {:?})", per_loc.get("in_slab"));
+    assert!(
+        in_slab_seen || per_loc.get("in_slab").map_or(0, |x| x.0) < 5,
+        "in_slab planted but never detected (truth: {:?})",
+        per_loc.get("in_slab")
+    );
 }
 
 /// `two_rules_apply` fires when a project rule and the built-in give different methods.
@@ -279,11 +294,14 @@ fn two_rules_apply_with_conflicting_project_rule() {
         let (t, found) = spectag::read_fixture_tags(seed, &rules).unwrap();
         let truth = spectag::expected(&t, &rules);
         let near = |a: &cadaddy_walk3d::tags::ElementTag, b: &cadaddy_walk3d::tags::ElementTag| {
-            a.kind == b.kind && a.level == b.level
+            a.kind == b.kind
+                && a.level == b.level
                 && if a.kind == "homerun" { a.id == b.id } else { (a.at_ft[0] - b.at_ft[0]).hypot(a.at_ft[1] - b.at_ft[1]) <= 1.0 }
         };
         for tt in &truth {
-            if tt.issues.contains(&"two_rules_apply".to_string()) { two_rules_truth += 1; }
+            if tt.issues.contains(&"two_rules_apply".to_string()) {
+                two_rules_truth += 1;
+            }
         }
         for ft in &found {
             if ft.issues.contains(&"two_rules_apply".to_string()) {

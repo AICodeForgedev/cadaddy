@@ -29,11 +29,25 @@ pub struct ElecSpec {
     /// Luminaires drawn without their type tag (planted): device ids.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub untagged: Vec<String>,
+    /// Rooms whose conduit runs below or in the slab, as a note printed in the room on the
+    /// electrical plan (planted).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub room_locations: Vec<RoomLocation>,
 }
 
 impl ElecSpec {
     pub fn is_empty(&self) -> bool {
-        self.notes.is_empty() && self.breakers.is_empty() && self.conductors.is_empty() && self.unscheduled.is_empty() && self.untagged.is_empty()
+        self.notes.is_empty()
+            && self.breakers.is_empty()
+            && self.conductors.is_empty()
+            && self.unscheduled.is_empty()
+            && self.untagged.is_empty()
+            && self.room_locations.is_empty()
+    }
+
+    /// The planted conduit location of a room (`below_slab`, `in_slab`), by level and number.
+    pub fn room_location(&self, level: &str, number: &str) -> Option<&str> {
+        self.room_locations.iter().find(|l| l.level == level && l.room == number).map(|l| l.location.as_str())
     }
 
     pub fn note(&self, device: &str) -> Option<&DeviceNote> {
@@ -61,6 +75,38 @@ pub struct BreakerType {
     pub circuit: String,
     /// `GFCI`, `AFCI`, `DF` (dual function), `GFEP` (equipment ground-fault).
     pub kind: String,
+}
+
+/// A room note on the electrical plan saying where its conduit runs.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoomLocation {
+    pub level: String,
+    /// The room number.
+    pub room: String,
+    /// `below_slab` or `in_slab`.
+    pub location: String,
+}
+
+/// The note the electrical plan prints in a room for a conduit location.
+pub fn location_note(location: &str) -> Option<&'static str> {
+    match location {
+        "below_slab" => Some("CONDUIT BELOW SLAB"),
+        "in_slab" => Some("CONDUIT IN CMU BLOCK"),
+        _ => None,
+    }
+}
+
+/// The conduit location a printed room note gives (`CONDUIT BELOW SLAB`, `RUN IN SLAB`,
+/// `CONDUIT IN CMU BLOCK`).
+pub fn location_from_note(text: &str) -> Option<&'static str> {
+    let u = text.to_ascii_uppercase();
+    if u.contains("BELOW SLAB") || u.contains("UNDER SLAB") {
+        Some("below_slab")
+    } else if u.contains("IN SLAB") || u.contains("IN CMU") || u.contains("IN BLOCK") {
+        Some("in_slab")
+    } else {
+        None
+    }
 }
 
 /// Rooms whose receptacles must be ground-fault protected (wet or kitchen-like).
@@ -208,19 +254,22 @@ pub fn design(t: &mut Truth) {
             spec.untagged.push(d.id.clone());
         }
     }
-    // Plant location-specific rooms (MUST 3): conduits in these rooms get below_slab / in_slab
-    // locations, so the wiring-method mapping (PVC Sch 40 / ENT) is tested end-to-end.
-    let mut slab_done = false;
-    for room in &mut t.building.rooms {
+    // Conduit below the slab and in CMU block (Q5043): a note printed in a room that has
+    // devices, so the wiring-method mapping (PVC Sch 40 / ENT) is read end-to-end. The rooms keep
+    // their names: the architectural sheets and every other reader see the same building.
+    let mut planted = 0;
+    for room in &t.building.rooms {
         let upper = room.name.to_ascii_uppercase();
         if upper.is_empty() || wet_room(&upper) || upper.contains("CORRIDOR") || upper.contains("HALL") || upper.contains("STAIR") {
             continue;
         }
-        if !slab_done {
-            room.name = format!("{} (SLAB)", room.name);
-            slab_done = true;
-        } else {
-            room.name = format!("{} (CMU BLOCK)", room.name);
+        if !t.elec_devices.iter().any(|d| d.level == room.level && (d.room == room.number || d.room == room.id)) {
+            continue;
+        }
+        let location = if planted == 0 { "below_slab" } else { "in_slab" };
+        spec.room_locations.push(RoomLocation { level: room.level.clone(), room: room.number.clone(), location: location.into() });
+        planted += 1;
+        if planted == 2 {
             break;
         }
     }

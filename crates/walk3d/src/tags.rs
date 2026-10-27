@@ -42,11 +42,7 @@ impl ElementTag {
 
 /// A function that reads electrical sheets and returns element tags. Registered on the session
 /// by the code that has the reader pipeline (tests or the app), called by `tags.read`.
-pub type TagReaderFn = std::sync::Arc<
-    dyn Fn(&cadaddy_doc::projrules::ProjectRules) -> std::result::Result<Vec<ElementTag>, String>
-        + Send
-        + Sync,
->;
+pub type TagReaderFn = std::sync::Arc<dyn Fn(&cadaddy_doc::projrules::ProjectRules) -> std::result::Result<Vec<ElementTag>, String> + Send + Sync>;
 
 /// The issues a field's value settles: setting it resolves them.
 pub fn issues_settled_by(field: &str) -> &'static [&'static str] {
@@ -67,11 +63,7 @@ pub fn merge_keeping_overrides(old: &[ElementTag], new: &[ElementTag]) -> Vec<El
         let prev = old.iter().find(|o| {
             o.kind == n.kind
                 && o.level == n.level
-                && if o.kind == "homerun" {
-                    o.id == n.id
-                } else {
-                    (o.at_ft[0] - n.at_ft[0]).hypot(o.at_ft[1] - n.at_ft[1]) <= 0.5
-                }
+                && if o.kind == "homerun" { o.id == n.id } else { (o.at_ft[0] - n.at_ft[0]).hypot(o.at_ft[1] - n.at_ft[1]) <= 0.5 }
         });
         let mut merged = n.clone();
         if let Some(prev) = prev {

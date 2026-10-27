@@ -34,7 +34,8 @@ fn issue_label(i: &str) -> &'static str {
     }
 }
 
-const ISSUES: [&str; 7] = ["untagged", "tag_not_in_schedule", "missing_protection", "double_protection", "no_conductor_note", "two_rules_apply", "method_choice_open"];
+const ISSUES: [&str; 7] =
+    ["untagged", "tag_not_in_schedule", "missing_protection", "double_protection", "no_conductor_note", "two_rules_apply", "method_choice_open"];
 
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = crate::theme::Tokens::get();
