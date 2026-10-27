@@ -1284,7 +1284,7 @@ pub fn plan_views(d: &Drawing) -> Vec<PlanView> {
 }
 
 /// The drawing with only the entities whose middle `keep` accepts.
-fn crop(d: &Drawing, keep: &dyn Fn([f64; 2]) -> bool) -> Drawing {
+pub(crate) fn crop(d: &Drawing, keep: &dyn Fn([f64; 2]) -> bool) -> Drawing {
     let mut sub = d.clone();
     sub.model = cadaddy_doc::EntityStore::new();
     let kept: Vec<cadaddy_doc::Entity> = d

@@ -20,6 +20,8 @@
 //!   `production_model.json`, `field_observations.csv`, `indexes.csv`, `tool_rules.json`,
 //!   `price_history.csv`).
 //! - `estimate.set_price {item, unit, material, labor_hours? | labor_dollars?, date, source, index?}`.
+//! - `estimate.map_price {lines? | trade?/category?/item?, row_item, row_size?, reason}`: map
+//!   unpriced BOM lines to a specific price row (Q6020: explicit, never silent).
 //! - `estimate.set_assembly {lines? | trade?/category?/item?, assembly, reason, citation?}`.
 //! - `estimate.set_scope {lines? | trade?/category?/item?, scope, reason, citation?}`.
 //! - `estimate.set_factor {lines? | trade?/category?/item?, factor? | tier?, reason, remove?}`.
@@ -93,6 +95,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("estimate.set_price", "Set Estimate Price", run_set_price).params(
             "{item, size?, unit: each|ft|lb|sq ft…, material: dollars per unit, labor_hours?: per unit, labor_dollars?: per unit (÷ crew rate), date: YYYY-MM-DD, source, index?: name in indexes.csv (escalates the price to today)} → {price}",
         ),
+        CommandSpec::new("estimate.map_price", "Map Line to Price Row", run_map_price)
+            .params("{lines?: [key] | trade?, category?, item?, row_item, row_size?, reason} → {lines}"),
         CommandSpec::new("estimate.set_assembly", "Set Estimate Assembly", run_set_assembly)
             .params("{lines?: [key] | trade?, category?, item?, assembly, reason, citation?} → {lines}"),
         CommandSpec::new("estimate.set_scope", "Set Estimate Scope", run_set_scope)
@@ -231,6 +235,64 @@ fn find_price_by_words<'a>(prices: &'a [Value], item: &str, unit: &str, category
         }
     }
     best.map(|(i, _)| &prices[i])
+}
+
+/// Q5301: family matching — a row whose words name a category prices lines of that category,
+/// unless the row names a system, material or size that the line does not share (NEVER cross).
+/// Returns the pool index of the best family-match row.
+fn find_family_match(pool: &[Value], item: &str, unit: &str, category: &str, system: &str) -> Option<usize> {
+    const SYSTEMS: &[&str] =
+        &["gas", "vent", "cw", "hw", "dcw", "dhw", "supply", "return", "exhaust", "sanitary", "storm", "fire", "refrigerant", "condensate"];
+    const MATERIALS: &[&str] =
+        &["copper", "pvc", "steel", "galvanized", "aluminum", "cast", "iron", "fiberglass", "stainless", "brass", "emt", "imc", "rigid"];
+    let have = price_words(&format!("{item} {category} {system}"));
+    let mep = matches!(category, "duct" | "pipe" | "conduit" | "tray" | "cable");
+    let line_sys: BTreeSet<&str> = SYSTEMS.iter().copied().filter(|s| have.contains(*s)).collect();
+    let line_mat: BTreeSet<&str> = MATERIALS.iter().copied().filter(|m| have.contains(*m)).collect();
+    // For MEP lines, the item's own words exclude the system name and numbers.
+    let sys_words = if mep { price_words(system) } else { BTreeSet::new() };
+    let iw: BTreeSet<String> = price_words(item).into_iter().filter(|w| !sys_words.contains(w) && !w.chars().any(|c| c.is_ascii_digit())).collect();
+    let unit_ok = |pu: &str| pu.is_empty() || pu.eq_ignore_ascii_case(unit) || measure_class(pu).is_some_and(|m| Some(m) == measure_class(unit));
+    let mut best: Option<(usize, f64)> = None;
+    for (i, p) in pool.iter().enumerate() {
+        let pu = p["unit"].as_str().unwrap_or_default();
+        if !unit_ok(pu) {
+            continue;
+        }
+        // Family rows must have no size (a sized row is an exact match or nothing).
+        let ps = p["size"].as_str().unwrap_or_default();
+        if !ps.is_empty() {
+            continue;
+        }
+        let pi = p["item"].as_str().unwrap_or_default();
+        let want = price_words(pi);
+        if want.is_empty() {
+            continue;
+        }
+        // All the row's words must appear in the line's context.
+        let hit = want.iter().filter(|w| have.contains(*w)).count();
+        let score = hit as f64 / want.len() as f64;
+        let covered = if iw.is_empty() { 0.0 } else { iw.iter().filter(|w| want.contains(*w)).count() as f64 / iw.len() as f64 };
+        if hit == 0 || !((score >= 0.5 && covered >= 0.5) || covered >= 1.0) {
+            continue;
+        }
+        // NEVER cross: block only when BOTH the row and line name the attribute and they differ.
+        // A row naming a material/system can still price a line that doesn't name one (the
+        // estimator knows the material); the guard only fires on explicit mismatches.
+        let row_sys: BTreeSet<&str> = SYSTEMS.iter().copied().filter(|s| want.contains(*s)).collect();
+        if !row_sys.is_empty() && !line_sys.is_empty() && row_sys != line_sys {
+            continue;
+        }
+        let row_mat: BTreeSet<&str> = MATERIALS.iter().copied().filter(|m| want.contains(*m)).collect();
+        if !row_mat.is_empty() && !line_mat.is_empty() && row_mat != line_mat {
+            continue;
+        }
+        let score = score + covered;
+        if best.is_none_or(|(_, s)| score > s) {
+            best = Some((i, score));
+        }
+    }
+    best.map(|(i, _)| i)
 }
 
 // ---------------- CSV ----------------
@@ -510,6 +572,35 @@ fn run_set_price(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "price": price }))
 }
 
+/// Q6020: explicitly map BOM lines to a specific price row (never silently applied).
+fn run_map_price(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "estimate.map_price";
+    let row_item =
+        str_param(p, "row_item").filter(|i| !i.trim().is_empty()).ok_or_else(|| bad(C, "`row_item` (the price row's item name) is required"))?;
+    let row_size = str_param(p, "row_size").unwrap_or_default();
+    let reason = str_param(p, "reason").filter(|r| !r.trim().is_empty()).ok_or_else(|| bad(C, "`reason` is required"))?.to_string();
+    let keys = picked(C, s, p)?;
+    let (sp, mut st) = state(s, C)?;
+    // Validate the target row exists in the baseline prices.
+    let found = st.get("baseline").and_then(|b| b["prices"].as_array()).is_some_and(|ps| {
+        ps.iter().any(|r| {
+            r["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(row_item))
+                && r["size"].as_str().unwrap_or_default().eq_ignore_ascii_case(row_size)
+        })
+    });
+    if !found {
+        let desc = if row_size.is_empty() { row_item.to_string() } else { format!("{row_item} {row_size}") };
+        return Err(bad(C, format!("no price row for {desc} (import it or estimate.set_price first)")));
+    }
+    if let Some(pm) = obj(&mut st, "price_map") {
+        for k in &keys {
+            pm.insert(k.clone(), json!({ "item": row_item, "size": row_size, "reason": reason }));
+        }
+    }
+    store(s, sp, st)?;
+    Ok(json!({ "lines": keys }))
+}
+
 /// The BOM line keys a set call picks: `lines`, else every line matching trade/category/item.
 fn picked(cmd: &str, s: &mut Session, p: &Value) -> Result<Vec<String>> {
     let bom = s.execute("bim.bom", &json!({}))?;
@@ -635,6 +726,8 @@ pub(super) struct Priced {
     pub(super) scope: Option<String>,
     pub(super) via: String,
     pub(super) issues: Vec<(&'static str, String, String)>,
+    /// How this line was priced: "exact", "family", "mapped", "starter_book", "starter_family", or "" (unpriced).
+    pub(super) match_kind: &'static str,
     /// How the material price was reached (escalation, rental periods).
     pub(super) material_steps: Vec<String>,
     /// How the labor rate was reached (tier, drivers, factors).
@@ -659,22 +752,29 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
     let base = st.get("baseline").cloned().unwrap_or(json!({}));
     let drivers = labor::drivers(st, &base);
     let prices: Vec<Value> = base["prices"].as_array().cloned().unwrap_or_default();
+    let price_map: Map<String, Value> = st.get("price_map").and_then(Value::as_object).cloned().unwrap_or_default();
     // Q6012: starter cost book as fallback when no user/baseline price matches.
     let starter: Vec<Value> = starter_prices();
-    let find_in = |pool: &[Value], item: &str, size: &str, unit: &str, category: &str, system: &str| -> Option<usize> {
-        pool.iter()
-            .position(|p| {
-                p["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(item)) && p["size"].as_str().unwrap_or_default().eq_ignore_ascii_case(size)
-            })
-            .or_else(|| {
-                pool.iter().position(|p| {
-                    p["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(item)) && p["size"].as_str().unwrap_or_default().is_empty()
-                })
-            })
-            .or_else(|| find_price_by_words(pool, item, unit, category, system).and_then(|v| pool.iter().position(|p| std::ptr::eq(p, v))))
+    // Q5301: exact match → family match (never crossing system/material/size) → None.
+    let find_in = |pool: &[Value], item: &str, size: &str, unit: &str, category: &str, system: &str| -> Option<(usize, &'static str)> {
+        // 1. Exact: item+size match.
+        if let Some(i) = pool.iter().position(|p| {
+            p["item"].as_str().is_some_and(|pi| pi.eq_ignore_ascii_case(item)) && p["size"].as_str().unwrap_or_default().eq_ignore_ascii_case(size)
+        }) {
+            return Some((i, "exact"));
+        }
+        // 2. Item-only family: same item name, row has no size.
+        if let Some(i) = pool
+            .iter()
+            .position(|p| p["item"].as_str().is_some_and(|pi| pi.eq_ignore_ascii_case(item)) && p["size"].as_str().unwrap_or_default().is_empty())
+        {
+            return Some((i, "family"));
+        }
+        // 3. Word-based family: category words match, never crossing system/material.
+        find_family_match(pool, item, unit, category, system).map(|i| (i, "family"))
     };
-    let find_price = |item: &str, size: &str, unit: &str, category: &str, system: &str| -> Option<&Value> {
-        find_in(&prices, item, size, unit, category, system).map(|i| &prices[i])
+    let find_price = |item: &str, size: &str, unit: &str, category: &str, system: &str| -> Option<(&Value, &'static str)> {
+        find_in(&prices, item, size, unit, category, system).map(|(i, kind)| (&prices[i], kind))
     };
     let mut out = Vec::new();
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
@@ -730,6 +830,7 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
         match assembly.as_deref().and_then(|a| base["assemblies"].get(a).map(|x| (a, x))) {
             Some((a, asm)) => {
                 pr.via = format!("assembly {a}");
+                pr.match_kind = "mapped";
                 let asm_unit = asm["unit"].as_str().unwrap_or_default();
                 if !asm_unit.eq_ignore_ascii_case(&unit) {
                     pr.issues.push((
@@ -743,7 +844,10 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
                     for part in asm["parts"].as_array().into_iter().flatten() {
                         let item = part["item"].as_str().unwrap_or_default();
                         let q = part["qty"].as_f64().unwrap_or(1.0);
-                        match find_price(item, "", &unit, "", "").and_then(|p| check_price(p, &mut pr.issues, &mut pr.material_steps, "part")) {
+                        match find_price(item, "", &unit, "", "")
+                            .map(|(p, _)| p)
+                            .and_then(|p| check_price(p, &mut pr.issues, &mut pr.material_steps, "part"))
+                        {
                             Some((m, _)) => mat += q * m,
                             None => missing.push(item.to_string()),
                         }
@@ -764,30 +868,86 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
                 let size = l["size"].as_str().unwrap_or_default();
                 let category = l["category"].as_str().unwrap_or_default();
                 let system = l["system"].as_str().unwrap_or_default();
-                match find_price(item, size, &unit, category, system) {
-                    Some(p) => {
-                        pr.via = format!("price {} ({})", p["source"].as_str().unwrap_or_default(), p["date"].as_str().unwrap_or_default());
-                        if let Some((m, h)) = check_price(p, &mut pr.issues, &mut pr.material_steps, "line") {
-                            pr.material_unit = Some(m);
-                            book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
-                        }
+                // Q6020: check user price mapping first.
+                let mapped_price = price_map.get(&key).and_then(|x| {
+                    let mi = x["item"].as_str()?;
+                    let ms = x["size"].as_str().unwrap_or_default();
+                    prices.iter().find(|p| {
+                        p["item"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(mi))
+                            && p["size"].as_str().unwrap_or_default().eq_ignore_ascii_case(ms)
+                    })
+                });
+                if let Some(p) = mapped_price {
+                    pr.via =
+                        format!("mapped \u{2192} price {} ({})", p["source"].as_str().unwrap_or_default(), p["date"].as_str().unwrap_or_default());
+                    pr.match_kind = "mapped";
+                    if let Some((m, h)) = check_price(p, &mut pr.issues, &mut pr.material_steps, "line") {
+                        pr.material_unit = Some(m);
+                        book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
                     }
-                    // Q6012: try the starter cost book before giving up.
-                    None => match find_in(&starter, item, size, &unit, category, system) {
-                        Some(si) => {
-                            let sp = &starter[si];
-                            pr.via = STARTER_SOURCE.to_string();
-                            let m = sp["material"].as_f64().unwrap_or(0.0);
-                            let h = sp["labor_hours"].as_f64();
-                            pr.material_unit = Some(m);
-                            book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
+                } else {
+                    // Q5301: user exact > user family > starter exact > starter family > unpriced.
+                    match find_price(item, size, &unit, category, system) {
+                        Some((p, kind)) => {
+                            let source_label = if kind == "family" {
+                                let ri = p["item"].as_str().unwrap_or_default();
+                                format!(
+                                    "priced by family row: {ri} — {} ({})",
+                                    p["source"].as_str().unwrap_or_default(),
+                                    p["date"].as_str().unwrap_or_default()
+                                )
+                            } else {
+                                format!("price {} ({})", p["source"].as_str().unwrap_or_default(), p["date"].as_str().unwrap_or_default())
+                            };
+                            pr.via = source_label;
+                            pr.match_kind = kind;
+                            if let Some((m, h)) = check_price(p, &mut pr.issues, &mut pr.material_steps, "line") {
+                                pr.material_unit = Some(m);
+                                book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
+                            }
                         }
-                        None => pr.issues.push((
-                            "unpriced",
-                            "no assembly and no price".into(),
-                            "map an assembly (estimate.set_assembly) or add a price (estimate.set_price)".into(),
-                        )),
-                    },
+                        // Q6012: try the starter cost book before giving up.
+                        None => match find_in(&starter, item, size, &unit, category, system) {
+                            Some((si, kind)) => {
+                                let sp = &starter[si];
+                                pr.via = if kind == "family" {
+                                    let ri = sp["item"].as_str().unwrap_or_default();
+                                    format!("priced by family row: {ri} — {STARTER_SOURCE}")
+                                } else {
+                                    STARTER_SOURCE.to_string()
+                                };
+                                pr.match_kind = if kind == "family" { "starter_family" } else { "starter_book" };
+                                let m = sp["material"].as_f64().unwrap_or(0.0);
+                                let h = sp["labor_hours"].as_f64();
+                                pr.material_unit = Some(m);
+                                book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
+                            }
+                            None => {
+                                // Q6020: nearest row is a SUGGESTION, never applied silently.
+                                if let Some(near) = find_price_by_words(&prices, item, &unit, category, system)
+                                    .or_else(|| find_price_by_words(&starter, item, &unit, category, system))
+                                {
+                                    let ni = near["item"].as_str().unwrap_or_default();
+                                    let ns = near["size"].as_str().unwrap_or_default();
+                                    let near_desc = if ns.is_empty() { ni.to_string() } else { format!("{ni} {ns}") };
+                                    let item_desc = if size.is_empty() { item.to_string() } else { format!("{item} {size}") };
+                                    pr.issues.push((
+                                        "unpriced",
+                                        format!(
+                                            "{item_desc} has no price; nearest row: {near_desc} \u{2014} estimate.set_price or estimate.map_price"
+                                        ),
+                                        "estimate.set_price or estimate.map_price".into(),
+                                    ));
+                                } else {
+                                    pr.issues.push((
+                                        "unpriced",
+                                        "no assembly and no price".into(),
+                                        "map an assembly (estimate.set_assembly) or add a price (estimate.set_price)".into(),
+                                    ));
+                                }
+                            }
+                        },
+                    }
                 }
             }
         }
@@ -1001,6 +1161,11 @@ fn summary(priced: &[Priced]) -> Value {
     let n = |f: &dyn Fn(&Priced) -> bool| priced.iter().filter(|p| f(p)).count();
     json!({
         "lines": priced.len(),
+        "exact": n(&|p| p.match_kind == "exact"),
+        "family": n(&|p| p.match_kind == "family"),
+        "mapped": n(&|p| p.match_kind == "mapped"),
+        "starter_book": n(&|p| p.match_kind == "starter_book"),
+        "starter_family": n(&|p| p.match_kind == "starter_family"),
         "priced": n(&|p| p.material_unit.is_some()),
         "unpriced": n(&|p| p.material_unit.is_none()),
         "undecided": n(&|p| p.scope.is_none()),
@@ -1014,7 +1179,7 @@ fn line_json(p: &Priced) -> Value {
         "key": p.key, "item": p.line["item"], "size": p.line["size"], "unit": p.unit, "qty": p.qty, "net": p.net,
         "material_unit": p.material_unit, "labor_unit_hours": p.labor_unit_hours,
         "material": r2(p.material), "labor_hours": r2(p.labor_hours), "labor_cost": r2(p.labor_cost), "cost": r2(p.cost),
-        "scope": p.scope, "via": p.via,
+        "scope": p.scope, "via": p.via, "match_kind": p.match_kind,
         "status": if p.issues.iter().any(|i| matches!(i.0, "unit_mismatch")) { "error" } else if p.material_unit.is_none() { "unpriced" } else if p.scope.is_none() { "undecided" } else { "priced" },
         "issues": p.issues.iter().map(|i| i.0).collect::<Vec<_>>(),
     })
@@ -1912,6 +2077,192 @@ mod tests {
         let after_total = after["totals"]["total"].as_f64().unwrap_or(0.0);
         // The totals should have changed (user price $50 vs starter $2.50).
         assert!((after_total - before_total).abs() > 1.0, "user override should change total: before={before_total}, after={after_total}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Q6020/Q5301: never-cross matching ──
+
+    #[test]
+    fn q6020_gas_pipe_not_priced_at_vent_pipe_rate() {
+        // A cost table with "vent pipe 3\"" must NOT silently price "gas pipe 1\"" (system cross).
+        // The starter book may price gas pipe via a generic "Pipe" family row — that's OK.
+        let mut s = Session::new();
+        let spec = json!({
+            "levels": [{"name": "1", "elevation_ft": 0, "height_ft": 12}],
+            "mep": {
+                "systems": [
+                    {"name": "M-VENT", "layer": "M-VENT", "kind": "pipe", "size_in": [3, 0], "bottom_ft": 9},
+                    {"name": "M-GAS", "layer": "M-GAS", "kind": "pipe", "size_in": [1, 0], "bottom_ft": 8},
+                ],
+                "runs": [
+                    {"system": "M-VENT", "level": "1", "points": [[0, 0], [1200, 0]], "size_in": [3, 0], "bottoms_ft": [9]},
+                    {"system": "M-GAS", "level": "1", "points": [[0, 120], [600, 120]], "size_in": [1, 0], "bottoms_ft": [8]},
+                ]
+            },
+            "tags": []
+        });
+        s.execute("bspec.set", &json!({ "replace": true, "spec": spec })).unwrap();
+        let dir = std::env::temp_dir().join(format!("cadaddy-q6020-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let w = |n: &str, t: &str| std::fs::write(dir.join(n), t).unwrap();
+        w("item_labor_units.csv", "item,unit,material,labor_normal\n");
+        w("assemblies.csv", "assembly,unit,description,labor_hours\n");
+        w("assembly_parts.csv", "assembly,item,qty\n");
+        // Only a price for vent pipe 3" — NOT for gas pipe 1".
+        w("prices.csv", "item,size,unit,material,labor_hours,date,source\nvent pipe,3\",lf,12.50,0.15,2026-09-01,Invented Supply\n");
+        w("rates.json", "{\"crew_rate\": 85.0}");
+        w("benchmarks.json", "{}");
+        s.execute("estimate.import", &json!({ "folder": dir.to_string_lossy() })).unwrap();
+        s.execute("estimate.settings", &json!({ "today": "2026-10-21" })).unwrap();
+        s.execute("estimate.set_scope", &json!({ "trade": "mechanical", "scope": "in_contract", "reason": "test" })).unwrap();
+        // Check the gas pipe line is NOT priced via the user's "vent pipe" row.
+        let q = s.execute("estimate.query", &json!({ "limit": 200 })).unwrap();
+        let gas_line = q["lines"].as_array().unwrap().iter().find(|l| l["item"].as_str().unwrap_or_default().to_ascii_lowercase().contains("gas"));
+        assert!(gas_line.is_some(), "gas pipe should exist in BOM: {q}");
+        let gas = gas_line.unwrap();
+        let via = gas["via"].as_str().unwrap_or_default();
+        // Gas pipe must NOT be priced via the user's vent pipe row (never-cross: different system + size).
+        assert!(
+            !via.to_ascii_lowercase().contains("vent pipe") && !via.contains("Invented Supply"),
+            "gas pipe must not be priced from the vent pipe user row: via={via}"
+        );
+        // Match kind must not be "exact" or "family" from the user table (it may be starter_family).
+        let mk = gas["match_kind"].as_str().unwrap_or_default();
+        assert!(mk != "exact" || !via.contains("Invented"), "gas pipe should not exact-match the vent pipe row: {gas}");
+        // Summary should count match kinds.
+        let st = s.execute("estimate.status", &json!({})).unwrap();
+        let summary = &st["summary"];
+        assert!(summary["exact"].as_u64().is_some(), "summary should have exact count: {summary}");
+        assert!(summary["mapped"].as_u64().is_some(), "summary should have mapped count: {summary}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn q6020_cw_size_mismatch_not_cross_priced() {
+        // A row for "CW pipe 3/4\"" must NOT price "CW pipe 2\"" (different size).
+        // The starter book may provide a generic "Pipe" family price — that's OK.
+        let mut s = Session::new();
+        let spec = json!({
+            "levels": [{"name": "1", "elevation_ft": 0, "height_ft": 12}],
+            "mep": {
+                "systems": [
+                    {"name": "P-DCW", "layer": "P-DCW", "kind": "pipe", "size_in": [2, 0], "bottom_ft": 8},
+                ],
+                "runs": [
+                    {"system": "P-DCW", "level": "1", "points": [[0, 0], [600, 0]], "size_in": [2, 0], "bottoms_ft": [8]},
+                ]
+            },
+            "tags": []
+        });
+        s.execute("bspec.set", &json!({ "replace": true, "spec": spec })).unwrap();
+        let dir = std::env::temp_dir().join(format!("cadaddy-q6020sz-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let w = |n: &str, t: &str| std::fs::write(dir.join(n), t).unwrap();
+        w("item_labor_units.csv", "item,unit,material,labor_normal\n");
+        w("assemblies.csv", "assembly,unit,description,labor_hours\n");
+        w("assembly_parts.csv", "assembly,item,qty\n");
+        // Only a price for "CW pipe 3/4\"" — NOT for CW pipe 2".
+        w("prices.csv", "item,size,unit,material,labor_hours,date,source\nCW pipe,3/4\",lf,5.00,0.10,2026-09-01,Test\n");
+        w("rates.json", "{\"crew_rate\": 85.0}");
+        w("benchmarks.json", "{}");
+        s.execute("estimate.import", &json!({ "folder": dir.to_string_lossy() })).unwrap();
+        s.execute("estimate.settings", &json!({ "today": "2026-10-21" })).unwrap();
+        s.execute("estimate.set_scope", &json!({ "trade": "plumbing", "scope": "in_contract", "reason": "test" })).unwrap();
+        // Check that 2" CW pipe is NOT priced at the 3/4" rate from the user table.
+        let q = s.execute("estimate.query", &json!({ "limit": 200 })).unwrap();
+        let cw_line = q["lines"].as_array().unwrap().iter().find(|l| {
+            l["item"].as_str().unwrap_or_default().to_ascii_lowercase().contains("dcw")
+                || l["item"].as_str().unwrap_or_default().to_ascii_lowercase().contains("cw")
+        });
+        assert!(cw_line.is_some(), "CW pipe should exist in BOM: {q}");
+        let cw = cw_line.unwrap();
+        let via = cw["via"].as_str().unwrap_or_default();
+        // Must NOT be priced from the user's 3/4" CW row (never-cross: different size).
+        assert!(!via.contains("Test"), "2\" CW pipe must not be priced from the 3/4\" user row: via={via}, line={cw}");
+        // Material unit must not be $5.00 (the 3/4" price).
+        let mat = cw["material_unit"].as_f64().unwrap_or(0.0);
+        assert!((mat - 5.0).abs() > 0.01 || mat == 0.0, "2\" CW pipe material should not be $5.00 (the 3/4\" price): {cw}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn q6020_map_price_applies_explicit_mapping() {
+        let mut s = Session::new();
+        let spec = json!({
+            "levels": [{"name": "1", "elevation_ft": 0, "height_ft": 12}],
+            "mep": {
+                "systems": [
+                    {"name": "M-GAS", "layer": "M-GAS", "kind": "pipe", "size_in": [1, 0], "bottom_ft": 8},
+                ],
+                "runs": [
+                    {"system": "M-GAS", "level": "1", "points": [[0, 0], [600, 0]], "size_in": [1, 0], "bottoms_ft": [8]},
+                ]
+            },
+            "tags": []
+        });
+        s.execute("bspec.set", &json!({ "replace": true, "spec": spec })).unwrap();
+        let dir = std::env::temp_dir().join(format!("cadaddy-q6020map-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let w = |n: &str, t: &str| std::fs::write(dir.join(n), t).unwrap();
+        w("item_labor_units.csv", "item,unit,material,labor_normal\n");
+        w("assemblies.csv", "assembly,unit,description,labor_hours\n");
+        w("assembly_parts.csv", "assembly,item,qty\n");
+        w("prices.csv", "item,size,unit,material,labor_hours,date,source\nvent pipe,,lf,10.00,0.10,2026-09-01,Invented Supply\n");
+        w("rates.json", "{\"crew_rate\": 85.0}");
+        w("benchmarks.json", "{}");
+        s.execute("estimate.import", &json!({ "folder": dir.to_string_lossy() })).unwrap();
+        s.execute("estimate.settings", &json!({ "today": "2026-10-21" })).unwrap();
+        s.execute("estimate.set_scope", &json!({ "trade": "mechanical", "scope": "in_contract", "reason": "test" })).unwrap();
+        // Gas pipe before mapping: not priced from the user's "vent pipe" row (different system).
+        // The starter may provide a generic price — that's fine; the mapping should override it.
+        let q = s.execute("estimate.query", &json!({})).unwrap();
+        let gas_before = q["lines"].as_array().unwrap().iter().find(|l| l["item"].as_str().unwrap_or_default().to_ascii_lowercase().contains("gas"));
+        assert!(gas_before.is_some(), "gas pipe should exist in BOM: {q}");
+        let before_via = gas_before.unwrap()["via"].as_str().unwrap_or_default();
+        assert!(
+            !before_via.contains("Invented Supply"),
+            "gas pipe should not be priced from the vent pipe user row before mapping: {}",
+            gas_before.unwrap()
+        );
+        // Map gas pipe to the vent pipe price row (explicit user decision).
+        let m = s
+            .execute("estimate.map_price", &json!({ "category": "pipe", "row_item": "vent pipe", "reason": "same material, user confirmed" }))
+            .unwrap();
+        assert!(!m["lines"].as_array().unwrap().is_empty(), "should have mapped lines: {m}");
+        // Now gas pipe should be priced via the explicit mapping.
+        let q2 = s.execute("estimate.query", &json!({})).unwrap();
+        let gas_after = q2["lines"].as_array().unwrap().iter().find(|l| l["item"].as_str().unwrap_or_default().to_ascii_lowercase().contains("gas"));
+        assert!(gas_after.is_some(), "gas pipe should still be in BOM: {q2}");
+        assert_eq!(gas_after.unwrap()["match_kind"], json!("mapped"), "gas pipe should be mapped: {}", gas_after.unwrap());
+        let after_via = gas_after.unwrap()["via"].as_str().unwrap_or_default();
+        assert!(after_via.contains("mapped"), "via should say mapped: {after_via}");
+        // Bad mapping: non-existent row is refused.
+        assert!(s.execute("estimate.map_price", &json!({ "category": "pipe", "row_item": "nonexistent", "reason": "x" })).is_err());
+        // Missing reason is refused.
+        assert!(s.execute("estimate.map_price", &json!({ "category": "pipe", "row_item": "vent pipe" })).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn q6020_summary_counts_match_kinds() {
+        let mut s = Session::new();
+        job(&mut s);
+        let dir = baseline();
+        priced_job(&mut s, &dir);
+        let st = s.execute("estimate.status", &json!({})).unwrap();
+        let summary = &st["summary"];
+        // The priced_job maps receptacles to assemblies (mapped) and conduit/coupling have prices (exact).
+        assert!(summary["exact"].as_u64().is_some(), "should have exact field: {summary}");
+        assert!(summary["mapped"].as_u64().is_some(), "should have mapped field: {summary}");
+        assert!(summary["starter_book"].as_u64().is_some(), "should have starter_book field: {summary}");
+        assert!(summary["family"].as_u64().is_some(), "should have family field: {summary}");
+        assert!(summary["starter_family"].as_u64().is_some(), "should have starter_family field: {summary}");
+        let matched = summary["exact"].as_u64().unwrap()
+            + summary["mapped"].as_u64().unwrap()
+            + summary["starter_book"].as_u64().unwrap()
+            + summary["family"].as_u64().unwrap()
+            + summary["starter_family"].as_u64().unwrap();
+        assert!(matched <= summary["lines"].as_u64().unwrap(), "matched should not exceed total: {summary}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

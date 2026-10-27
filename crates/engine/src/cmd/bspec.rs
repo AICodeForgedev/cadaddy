@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
         CommandSpec::new("model.build", "Build Model from Spec", run_build).params(
-            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, stacked?: levels moved, removed, notes, warnings}",
+            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true, budget_s?: seconds (1200: stop with an error naming the step when the build runs longer)} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, stacked?: levels moved, removed, notes, warnings}",
         ),
         CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).params(
             "{path: string (PDF file of any number of pages, or a folder: one print set), out?: string (.cdy to save; default a temp folder — nothing is written next to the PDFs), force?: bool (build even if import check fails)} → {cdy_paths: [string], pages: [{sheet, level, discipline, type}] (the pages the model was built from: the set's plan sheets, or every page without an index), pages_note, spec_guesses: [{key, why}] (what the spec assumed), check_results: [{file, pass (false on any hard fail), score, hard_fails, checks}], built_counts: {walls, doors, windows, ...}, warnings: [string], next_steps: [string (exact calls to make next)]}",
@@ -395,8 +395,9 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
             .filter(|t| t.is_finite() && (0.0..=10.0).contains(t))
             .ok_or_else(|| bad("model.build", "`slabThickness` must be from 0 to 10 feet"))?,
     };
+    let budget_s = p.get("budget_s").and_then(Value::as_u64).unwrap_or(BUILD_BUDGET_S);
     let g = WallGen { rules: sp.to_rules(), auto: bool_or(p, "auto", true), slab_ft, layers: None, spec: Some(sp) };
-    let mut r = build_spec(s, &g)?;
+    let mut r = build_spec_with_budget(s, &g, budget_s)?;
     r["warnings"] = json!(issues.iter().filter(|i| !i.error).map(issue_json).collect::<Vec<_>>());
     super::revise3d::record(s, &g);
     s.state_mut()?.wallgen = Some(g);
@@ -700,6 +701,7 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "cdy_paths": cdy_paths,
         "pages": plan.pages,
+        "links": plan.links,
         "pages_note": pages_note,
         "spec_guesses": guesses,
         "check_results": check_results,
@@ -722,7 +724,15 @@ struct Traced {
     at: Vec2,
     name: Option<String>,
     number: Option<String>,
+    /// Cached area and bounds for fast duplicate detection (Q6029).
+    cached_area: f64,
+    cached_bounds: cadaddy_geom::Bounds2,
 }
+
+/// Grid cell size for the spatial index of traced rooms (Q6029): two rooms are the same only when
+/// their bounds and area match, so coarse cells (1000 units, wider than any single room on a
+/// typical plan) still cut the search space by orders of magnitude.
+const ROOM_GRID_CELL: f64 = 1000.0;
 
 /// The rooms of the plan: each room tag's closed outline (the boundary search HATCH uses),
 /// traced before anything is built so the generated walls don't get in the way.
@@ -740,6 +750,13 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     let plan = room_plan(s)?;
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<Traced> = Vec::new();
+    // Q6029: spatial index for O(1) amortised duplicate detection instead of O(n) linear scan.
+    // Key: (grid_x, grid_y) of the outline's bounds centre; value: indices into `out`.
+    let mut grid: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
+    let grid_key = |b: &cadaddy_geom::Bounds2| {
+        let c = b.center();
+        ((c.x / ROOM_GRID_CELL).floor() as i64, (c.y / ROOM_GRID_CELL).floor() as i64)
+    };
     let mut outline_cache = None;
     for (h, text, at) in room_texts(sp, &ents) {
         if out.len() >= MAX_ROOMS {
@@ -773,18 +790,35 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         }
         // A name and a number in one room: the first traced keeps it (the spec's room wins).
         // The same outline traced from another point may start at another corner: same area and
-        // extents.
+        // extents.  Q6029: use cached area/bounds from the grid instead of recomputing.
         let area = cadaddy_geom::shoelace(&outline).abs();
         let bounds = cadaddy_geom::Bounds2::from_points(outline.iter().copied());
         let same = |o: &Traced| {
-            let b = cadaddy_geom::Bounds2::from_points(o.outline.iter().copied());
-            (cadaddy_geom::shoelace(&o.outline).abs() - area).abs() <= 1e-6 * area.max(1.0)
-                && b.min.dist(bounds.min) < 1e-6
-                && b.max.dist(bounds.max) < 1e-6
+            (o.cached_area - area).abs() <= 1e-6 * area.max(1.0)
+                && o.cached_bounds.min.dist(bounds.min) < 1e-6
+                && o.cached_bounds.max.dist(bounds.max) < 1e-6
         };
         let (name, number) = if is_number { (None, Some(text.trim().to_string())) } else { (Some(text.trim().to_string()), None) };
-        match out.iter_mut().find(|o| same(o)) {
-            Some(o) => {
+        // Q6029: search only the grid cell and its neighbours instead of the whole list.
+        let (gx, gy) = grid_key(&bounds);
+        let mut found = None;
+        'search: for dx in -1..=1 {
+            for dy in -1..=1 {
+                if let Some(idxs) = grid.get(&(gx + dx, gy + dy)) {
+                    for &idx in idxs {
+                        if let Some(o) = out.get(idx)
+                            && same(o)
+                        {
+                            found = Some(idx);
+                            break 'search;
+                        }
+                    }
+                }
+            }
+        }
+        match found {
+            Some(idx) => {
+                let o = &mut out[idx];
                 if o.room.is_none() {
                     o.room = room;
                 }
@@ -797,7 +831,11 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
                 }
                 o.number = o.number.take().or(number);
             }
-            None => out.push(Traced { room, level: level.name.clone(), outline, tag: h, at, name, number }),
+            None => {
+                let idx = out.len();
+                grid.entry((gx, gy)).or_default().push(idx);
+                out.push(Traced { room, level: level.name.clone(), outline, tag: h, at, name, number, cached_area: area, cached_bounds: bounds });
+            }
         }
     }
     for (i, r) in sp.rooms.iter().enumerate() {
@@ -1016,6 +1054,9 @@ fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<
         });
         match outline {
             Some(o) => {
+                // Q6029: update cached area/bounds when the outline is replaced.
+                t.cached_area = cadaddy_geom::shoelace(&o).abs();
+                t.cached_bounds = cadaddy_geom::Bounds2::from_points(o.iter().copied());
                 t.outline = o;
                 retraced += 1;
                 keep_room(&mut kept, t);
@@ -1229,19 +1270,61 @@ fn add_room_elements(
     by_level
 }
 
+/// Default time budget for model.build (Q6029 MUST 3): 20 minutes.
+pub(crate) const BUILD_BUDGET_S: u64 = 1200;
+
 /// Build from a spec: WALLGEN's walls, openings, floors and ceilings, then the spec's own parts
-/// and materials.
+/// and materials. Reports progress per level (Q6029 MUST 2).
 pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
+    build_spec_with_budget(s, g, BUILD_BUDGET_S)
+}
+
+/// [`build_spec`] with an explicit time budget (seconds).
+pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64) -> Result<Value> {
     let Some(sp) = g.spec.clone() else { return wallgen::build(s, g) };
+    let deadline = web_time::Instant::now() + std::time::Duration::from_secs(budget_s);
+    let build_start = web_time::Instant::now();
     // What a person set on a room element (bim.props.set) goes on the rebuilt room.
     let room_edits = room_user_edits(s.doc()?);
     let removed = wallgen::remove_made(s.doc_mut()?);
     let mut notes: Vec<String> = Vec::new();
+    s.event("build.progress", json!({"step": "trace_rooms", "detail": "tracing room outlines"}));
     let mut rooms = trace_rooms(s, &sp, &mut notes)?;
-    let mut r = wallgen::build(s, g)?;
+    let trace_ms = build_start.elapsed().as_millis();
+    s.event("build.progress", json!({"step": "trace_rooms_done", "rooms": rooms.len(), "ms": trace_ms}));
+    // Q6029 MUST 3: over budget after trace_rooms alone → stop with a finding.
+    if web_time::Instant::now() > deadline {
+        notes.push(format!("Build stopped: room tracing took {:.0} s, over the {} s budget.", trace_ms as f64 / 1000.0, budget_s));
+        return Err(bad(
+            "model.build",
+            format!(
+                "Time budget ({budget_s} s) exceeded during room tracing ({:.0} s). {} rooms traced so far.",
+                trace_ms as f64 / 1000.0,
+                rooms.len()
+            ),
+        ));
+    }
+    s.event("build.progress", json!({"step": "walls", "detail": "building walls per level"}));
+    let mut r = wallgen::build_with_progress(s, g, &deadline)?;
+    let wall_ms = build_start.elapsed().as_millis();
+    s.event("build.progress", json!({"step": "walls_done", "ms": wall_ms, "walls": r["walls"]}));
+    // Q6029 MUST 3: budget check after walls.
+    if web_time::Instant::now() > deadline {
+        let secs = wall_ms as f64 / 1000.0;
+        notes.push(format!("Build stopped after walls: {secs:.0} s exceeds the {budget_s} s budget."));
+        return Err(bad(
+            "model.build",
+            format!(
+                "Time budget ({budget_s} s) exceeded during wall build ({secs:.0} s). {} walls, {} levels built so far.",
+                r["walls"], r["levels"]
+            ),
+        ));
+    }
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    s.event("build.progress", json!({"step": "validate_rooms", "rooms": rooms.len()}));
+    walled_rooms(s.doc_mut()?, &mut rooms, upf, &mut notes);
+    s.event("build.progress", json!({"step": "validate_rooms_done", "rooms": rooms.len()}));
     let d = s.doc_mut()?;
-    walled_rooms(d, &mut rooms, upf, &mut notes);
     let mut columns = 0;
     let mut curtain = 0;
     // Columns and curtain walls, level by level.

@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Result, Session};
 
+mod outline;
+
 /// The extended data application that marks what WALLGEN made (part, level, source object).
 pub const APP: &str = "CADADDY_WALLGEN";
 /// Floor slab thickness when none is given, feet.
@@ -280,6 +282,40 @@ fn slab(top: &Mesh, t: f64) -> Mesh {
     Mesh { vertices, faces, kind: MeshKind::Polyface }
 }
 
+/// A floor plate's faces at `z`: its rectangles, facing up (`down` facing down: a ceiling).
+fn plate_faces(o: &outline::Outline, z: f64, down: bool) -> Mesh {
+    let mut m = empty_mesh();
+    for [a, b] in &o.rects {
+        let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
+        m.vertices.extend([Vec3::new(a.x, a.y, z), Vec3::new(b.x, a.y, z), Vec3::new(b.x, b.y, z), Vec3::new(a.x, b.y, z)]);
+        let mut v = vec![base, base + 1, base + 2, base + 3];
+        if down {
+            v.reverse();
+        }
+        m.faces.push(MeshFace { v, hidden: 0 });
+    }
+    m
+}
+
+/// A floor slab over a floor plate: its top at `z`, its underside `t` lower, closed round the
+/// plate's boundary only (no sides between its rectangles).
+fn plate_slab(o: &outline::Outline, z: f64, t: f64) -> Mesh {
+    let mut m = plate_faces(o, z, false);
+    if t <= 0.0 {
+        return m;
+    }
+    let under = plate_faces(o, z - t, true);
+    let n = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
+    m.vertices.extend(under.vertices);
+    m.faces.extend(under.faces.into_iter().map(|f| MeshFace { v: f.v.iter().map(|i| i.saturating_add(n)).collect(), hidden: 0 }));
+    for (a, b) in &o.edges {
+        let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
+        m.vertices.extend([Vec3::new(a.x, a.y, z), Vec3::new(b.x, b.y, z), Vec3::new(a.x, a.y, z - t), Vec3::new(b.x, b.y, z - t)]);
+        m.faces.push(MeshFace { v: vec![base + 1, base, base + 2, base + 3], hidden: 0 });
+    }
+    m
+}
+
 /// Remove what WALLGEN made from model space; how many objects.
 pub(crate) fn remove_made(d: &mut Drawing) -> usize {
     let hs: Vec<Handle> = d.model.iter().filter(|e| made_as(e).is_some()).map(|e| e.handle).collect();
@@ -299,6 +335,11 @@ pub fn builds_so_far() -> usize {
 
 /// Build the drawing's 3D building from `g`; the counts.
 pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
+    build_with_progress(s, g, &(web_time::Instant::now() + std::time::Duration::from_secs(3600)))
+}
+
+/// [`build`] with per-level progress events and a deadline (Q6029 MUST 2/3).
+pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_time::Instant) -> Result<Value> {
     BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let scene = cadaddy_walk3d::derive(s.doc()?, &g.rules);
     let upf = if scene.units_per_foot.is_finite() && scene.units_per_foot > 0.0 { scene.units_per_foot } else { 12.0 };
@@ -308,6 +349,9 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
     let mut notes = Vec::new();
     let mut planned: Vec<(usize, PlanLevel)> = Vec::new();
     let total_levels = g.rules.levels.iter().filter(|l| l.sheet.is_none()).count();
+    let mut levels_done = 0usize;
+    let mut total_walls = 0usize;
+    let mut budget_exceeded = false;
     for (i, level) in g.rules.levels.iter().enumerate() {
         if level.sheet.is_some() {
             continue;
@@ -318,17 +362,50 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
         if roof_level(&g.rules.levels, &level.name) {
             continue;
         }
+        // Q6029 MUST 3: stop if the time budget is exceeded.
+        if web_time::Instant::now() > *deadline {
+            let secs = build_start.elapsed().as_secs();
+            notes.push(format!(
+                "Build stopped at level {}/{}: {} s exceeded the time budget. {} walls built so far.",
+                levels_done, total_levels, secs, total_walls
+            ));
+            budget_exceeded = true;
+            break;
+        }
+        // Q6029 MUST 2: per-level progress with ETA.
+        let eta_s = if levels_done > 0 {
+            let avg = build_start.elapsed().as_secs_f64() / levels_done as f64;
+            let remaining = total_levels.saturating_sub(levels_done);
+            Some((avg * remaining as f64).round() as u64)
+        } else {
+            None
+        };
+        s.event(
+            "build.progress",
+            json!({
+                "step": "level",
+                "level": level.name,
+                "level_num": levels_done + 1,
+                "total_levels": total_levels,
+                "walls_so_far": total_walls,
+                "eta_s": eta_s,
+            }),
+        );
         let level_start = web_time::Instant::now();
         let pl = plan_level(s.doc()?, g, level, upf, &mut notes);
         let level_ms = level_start.elapsed().as_millis();
         if !pl.walls.is_empty() {
+            let walls = pl.walls.len();
+            let openings = pl.leaves.len();
+            total_walls += walls;
             if level_ms > 100 {
-                notes.push(format!("{}: built {} walls, {} openings in {} ms.", level.name, pl.walls.len(), pl.leaves.len(), level_ms));
+                notes.push(format!("{}: built {} walls, {} openings in {} ms.", level.name, walls, openings, level_ms));
             }
             planned.push((si, pl));
         } else if i == 0 && g.rules.levels.len() == 1 && scene.tris.is_empty() {
             notes.push("Nothing to build.".into());
         }
+        levels_done += 1;
     }
     if total_levels > 1 {
         let plan_ms = build_start.elapsed().as_millis();
@@ -362,6 +439,23 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
             }
         }
     }
+    // Each planned level's floor plate: inside its exterior walls' outside faces (an L plan's
+    // slab is its L), else the walls' extents when they do not close round it.
+    let mut plates: HashMap<usize, outline::Outline> = HashMap::new();
+    for (si, pl) in &planned {
+        let Some((lo, hi)) = pl.footprint() else { continue };
+        let walls: Vec<(Vec2, Vec2, f64)> = pl.walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
+        match outline::building(&walls, lo, hi, upf) {
+            Some(o) => {
+                plates.insert(*si, o);
+            }
+            None => {
+                if let Some(level) = scene.levels.get(*si) {
+                    notes.push(format!("{}: the walls do not close round the building; its floor slab is their extents.", level.name));
+                }
+            }
+        }
+    }
     for grp in gs.iter().take(MAX_OBJECTS) {
         // Levels built from the plan's pairs keep only Walk mode's floors and ceilings.
         if matches!(grp.part, Part::Wall | Part::Door | Part::Glass) && planned.iter().any(|(si, _)| *si == grp.level) {
@@ -384,8 +478,15 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
                 v.y = v.y.clamp(lo.y, hi.y);
             }
         }
+        let plate = plates.get(&grp.level).filter(|_| matches!(grp.part, Part::Floor | Part::Ceiling));
+        let z = m.vertices.first().map_or(0.0, |v| v.z);
         if grp.part == Part::Floor {
-            m = slab(&m, g.slab_ft.max(0.0) * upf);
+            m = match plate {
+                Some(o) => plate_slab(o, z, g.slab_ft.max(0.0) * upf),
+                None => slab(&m, g.slab_ft.max(0.0) * upf),
+            };
+        } else if let Some(o) = plate {
+            m = plate_faces(o, z, true);
         }
         let common = Common { layer: layer_of(grp.part).into(), xdata: tag(grp.part, &level.name, grp.source).into(), ..Common::default() };
         if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
@@ -393,10 +494,15 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
         }
     }
     let c = |k: &str| counts.get(k).copied().unwrap_or(0);
-    Ok(json!({
+    let mut r = json!({
         "walls": c("wall"), "doors": c("door"), "windows": c("window"), "floors": c("floor"), "ceilings": c("ceiling"),
         "levels": scene.levels.len(), "removed": removed, "notes": notes,
-    }))
+    });
+    if budget_exceeded {
+        r["budget_exceeded"] = json!(true);
+        r["levels_built"] = json!(levels_done);
+    }
+    Ok(r)
 }
 
 /// Whether `name` is the roof of a building with storeys under it (`Roof`, `MAIN ROOF`, `LOW

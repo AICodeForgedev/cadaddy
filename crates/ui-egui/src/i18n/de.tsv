@@ -3031,7 +3031,25 @@
 	Element Property Summary	Übersicht der Elementeigenschaften
 	BIM Properties	BIM-Eigenschaften
 	Kind	Art
+	Element Identities (BIM)	Elementidentitäten (BIM)
+	Room Connections	Raumverbindungen
+	Link Print Set	Plansatz verknüpfen
 	Check Building Codes	Bauvorschriften prüfen
 	Code Rules	Vorschriftsregeln
 	Select Building Codes	Bauvorschriften auswählen
 	Fill Element Properties	Elementeigenschaften füllen
+	Build Construction Sequence	Bauablauf erstellen
+	Construction Sequence	Bauablauf
+	Edit Sequence Activity	Ablaufvorgang bearbeiten
+	Show Sequence at Date	Ablauf zum Datum anzeigen
+	Export Construction Sequence	Bauablauf exportieren
+	Sequence Trade Conflicts	Gewerkekonflikte im Ablauf
+	Ceiling Space Fit	Platz im Deckenhohlraum
+	Takeoff by Activity	Mengenermittlung nach Vorgang
+	Record As-Built Change	Bestandsänderung erfassen
+	Import As-Built Markups	Bestandsmarkierungen importieren
+	List As-Built Changes	Bestandsänderungen auflisten
+	Set As-Built Change Status	Status der Bestandsänderung festlegen
+	Compare Design and As-Built	Entwurf und Bestand vergleichen
+	Export As-Built	Bestand exportieren
+	Map Line to Price Row	Zeile der Preiszeile zuordnen

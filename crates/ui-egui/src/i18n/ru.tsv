@@ -3003,7 +3003,25 @@
 	Element Property Summary	Сводка свойств элементов
 	BIM Properties	Свойства BIM
 	Kind	Вид
+	Element Identities (BIM)	Идентификация элементов (BIM)
+	Room Connections	Связи помещений
+	Link Print Set	Связать комплект листов
 	Check Building Codes	Проверить строительные нормы
 	Code Rules	Правила норм
 	Select Building Codes	Выбрать строительные нормы
 	Fill Element Properties	Заполнить свойства элементов
+	Build Construction Sequence	Построить последовательность строительства
+	Construction Sequence	Последовательность строительства
+	Edit Sequence Activity	Изменить работу последовательности
+	Show Sequence at Date	Показать последовательность на дату
+	Export Construction Sequence	Экспорт последовательности строительства
+	Sequence Trade Conflicts	Конфликты специальностей в последовательности
+	Ceiling Space Fit	Запотолочное пространство
+	Takeoff by Activity	Объёмы по работам
+	Record As-Built Change	Записать исполнительное изменение
+	Import As-Built Markups	Импортировать исполнительные пометки
+	List As-Built Changes	Список исполнительных изменений
+	Set As-Built Change Status	Задать статус исполнительного изменения
+	Compare Design and As-Built	Сравнить проект и исполнительную документацию
+	Export As-Built	Экспортировать исполнительную документацию
+	Map Line to Price Row	Сопоставить строку со строкой цены
