@@ -309,6 +309,21 @@ pub fn enlarged_sheet_with_details(scale_line: bool) -> Drawing {
     s.d
 }
 
+/// E-3 as [`enlarged_sheet`], each device's circuit label (`D-10` ...) printed before the
+/// sheet's other content, just above and left of the symbol: the import reads the label first
+/// and tags the symbol with it, leaving the type mark beside it as lettering.
+pub fn enlarged_sheet_circuits_first(title: Option<(&str, bool)>) -> Drawing {
+    let src = enlarged_sheet(title);
+    let mut s = Sheet { d: Drawing { blocks: src.blocks.clone(), layers: src.layers.clone(), ..Drawing::default() } };
+    for (i, p) in [[6.0, 6.0], [10.0, 14.0], [14.0, 10.0], [18.0, 19.0], [20.5, 8.0]].iter().enumerate() {
+        s.add(EntityKind::Text(text_ent(&format!("D-{}", 10 + i), p[0] - 0.55, p[1] + 0.12, 0.1, 0.0)));
+    }
+    for e in src.model.iter() {
+        s.d.add(&Space::Model, e.common.clone(), e.kind.clone()).ok();
+    }
+    s.d
+}
+
 /// E-4: details; detail 2 prints the receptacle's mounting height.
 fn e4() -> Drawing {
     let mut s = Sheet::new();

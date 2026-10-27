@@ -127,6 +127,16 @@ pub struct PageDevice {
     pub at: [f64; 2],
     /// The symbol's handle (hex).
     pub handle: String,
+    /// The type mark printed beside the symbol when the import tagged it with other lettering
+    /// (its circuit label, a note): the nearest mark no other symbol carries.
+    pub alt: Option<String>,
+}
+
+impl PageDevice {
+    /// The device type its mark (else the mark beside it) names, by `device_type`.
+    fn kind(&self, legend: &BTreeSet<String>, device_type: &dyn Fn(&BTreeSet<String>, &str) -> Option<String>) -> Option<String> {
+        device_type(legend, &self.tag).or_else(|| self.alt.as_deref().and_then(|a| device_type(legend, a)))
+    }
 }
 
 /// A match line on a page.
@@ -1119,8 +1129,9 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
     // Devices: the import's symbols with the mark beside them; legends say which are samples.
     let legend = device_types::read_legend(&texts);
     out.legend_types = legend.types.clone();
+    let mut syms: Vec<PageDevice> = Vec::new();
     for e in d.model.iter() {
-        if out.devices.len() >= MAX_PAGE_DEVICES {
+        if syms.len() >= MAX_PAGE_DEVICES {
             break;
         }
         let EntityKind::Insert(ins) = &e.kind else { continue };
@@ -1129,15 +1140,95 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         }
         let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
         let at = ins.insert.xy();
-        if tag.is_empty() && !legend.covers(at) && out.untagged.len() < MAX_PAGE_DEVICES {
-            out.untagged.push([at.x, at.y]);
+        if !legend.covers(at) {
+            syms.push(PageDevice { tag, at: [at.x, at.y], handle: e.handle.hex(), alt: None });
         }
-        if tag.is_empty() || legend.covers(at) || is_circuit_tag(&tag) {
-            continue;
+    }
+    marks_beside(&mut syms, &texts, &legend, median_h);
+    for dv in syms {
+        let tagged = !dv.tag.is_empty() && !is_circuit_tag(&dv.tag);
+        if dv.tag.is_empty() && dv.alt.is_none() && out.untagged.len() < MAX_PAGE_DEVICES {
+            out.untagged.push(dv.at);
         }
-        out.devices.push(PageDevice { tag, at: [at.x, at.y], handle: e.handle.hex() });
+        if tagged || dv.alt.is_some() {
+            out.devices.push(dv);
+        }
     }
     out
+}
+
+/// A type mark's shape: a short mark of letters and digits (`J`, `OS`, `L4`, `XA`), not a
+/// circuit, a scale or a number, nor a lone I, O or X (a line, a circle or a crossing the
+/// import read as a letter).
+fn mark_shaped(v: &str) -> bool {
+    (1..=6).contains(&v.len())
+        && !matches!(v, "I" | "O" | "X")
+        && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && v.bytes().any(|b| b.is_ascii_alphabetic())
+        && !is_circuit_tag(v)
+}
+
+/// How far (in the mark's letter heights) a symbol's middle may sit from its mark: the import
+/// looks 4 heights round a mark for the symbol's strokes, and the symbol reaches past them.
+const MARK_REACH: f64 = 8.0;
+
+/// The mark beside each symbol whose own tag is other lettering. The import tags a symbol with
+/// the first mark it reads beside it; where a circuit label (`D-12`) or a note comes first,
+/// the symbol takes that, and its type mark is left on the page as plain lettering. Each such
+/// mark goes to its nearest symbol, unless a symbol near it already carries it (the import
+/// keeps one-letter marks and hidden text on the page after using them).
+fn marks_beside(syms: &mut [PageDevice], texts: &[TextItem], legend: &device_types::Legend, median_h: f64) {
+    let reach = |t: &TextItem| MARK_REACH * t.height.max(median_h);
+    // Symbols by cell.
+    let cell = (2.0 * MARK_REACH * median_h).max(1e-6);
+    let key = |p: [f64; 2]| ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64);
+    let mut by_cell: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+    for (si, dv) in syms.iter().enumerate() {
+        by_cell.entry(key(dv.at)).or_default().push(si);
+    }
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (ti, t) in texts.iter().enumerate() {
+        let v = t.value.trim();
+        if t.height > 3.0 * median_h || !mark_shaped(v) || legend.covers(t.at) {
+            continue;
+        }
+        let r = reach(t);
+        let spots = [[t.at.x, t.at.y], text_middle(t)];
+        let d_to = |p: [f64; 2]| spots.iter().map(|s| dist(*s, p)).fold(f64::INFINITY, f64::min);
+        // Every symbol within reach (the text's own cells, wide enough for its height).
+        let k = (r / cell).ceil().min(64.0) as i64 + 1;
+        let (cx, cy) = key(text_middle(t));
+        let mut near: Vec<(f64, usize)> = Vec::new();
+        for dx in -k..=k {
+            for dy in -k..=k {
+                for &si in by_cell.get(&(cx + dx, cy + dy)).into_iter().flatten() {
+                    if let Some(dv) = syms.get(si) {
+                        let dd = d_to(dv.at);
+                        if dd <= r {
+                            near.push((dd, si));
+                        }
+                    }
+                }
+            }
+        }
+        if near.iter().any(|&(_, si)| syms.get(si).is_some_and(|dv| dv.tag == v)) {
+            continue;
+        }
+        pairs.extend(near.into_iter().map(|(dd, si)| (dd, ti, si)));
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut text_used = vec![false; texts.len()];
+    let mut sym_done = vec![false; syms.len()];
+    for (_, ti, si) in pairs {
+        if text_used[ti] || sym_done[si] {
+            continue;
+        }
+        text_used[ti] = true;
+        sym_done[si] = true;
+        if let (Some(dv), Some(t)) = (syms.get_mut(si), texts.get(ti)) {
+            dv.alt = Some(t.value.trim().to_string());
+        }
+    }
 }
 
 /// One copy of each line of lettering: an import may give a mark twice (the page's hidden text
@@ -1288,7 +1379,7 @@ fn count_devices(
     device_type: &dyn Fn(&BTreeSet<String>, &str) -> Option<String>,
 ) {
     for dv in page.read.devices.iter().filter(|dv| holds(dv.at) && !smaller.iter().any(|r| inside(r, dv.at))) {
-        match device_type(&page.read.legend_types, &dv.tag) {
+        match dv.kind(&page.read.legend_types, device_type) {
             Some(t) => {
                 *entry.devices_by_type.entry(t).or_default() += 1;
                 entry.devices += 1;
@@ -1852,7 +1943,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                         .read
                         .devices
                         .iter()
-                        .filter(|dv| inside(&b, dv.at) && device_type(&h.read.legend_types, &dv.tag).is_some())
+                        .filter(|dv| inside(&b, dv.at) && dv.kind(&h.read.legend_types, &device_type).is_some())
                         .map(|dv| dv.handle.clone())
                         .collect();
                     entry.overall_ignored = entry.ignored_handles.len();
@@ -1872,7 +1963,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
         l.sheets.push(p.sheet.number.clone());
         let bounds = boundaries.get(&p.sheet.number).cloned().unwrap_or_default();
         for dv in &p.read.devices {
-            if device_type(&p.read.legend_types, &dv.tag).is_none() {
+            if dv.kind(&p.read.legend_types, &device_type).is_none() {
                 continue;
             }
             if bounds.iter().any(|b| inside(b, dv.at)) {
@@ -1894,7 +1985,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
             let kept = boundaries.get(&h.sheet.number).is_none_or(|bs| !bs.contains(&b));
             if kept {
                 counted_inside +=
-                    h.read.devices.iter().filter(|dv| inside(&b, dv.at) && device_type(&h.read.legend_types, &dv.tag).is_some()).count();
+                    h.read.devices.iter().filter(|dv| inside(&b, dv.at) && dv.kind(&h.read.legend_types, &device_type).is_some()).count();
             }
         }
     }
@@ -1942,7 +2033,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
             let Some(&h) = v.mounting_ft.first() else { continue };
             let reach = if c.radius > 0.0 { 6.0 * c.radius } else { 12.0 };
             let mut near: Vec<&PageDevice> =
-                p.read.devices.iter().filter(|dv| dist(dv.at, c.at) <= reach && device_type(&p.read.legend_types, &dv.tag).is_some()).collect();
+                p.read.devices.iter().filter(|dv| dist(dv.at, c.at) <= reach && dv.kind(&p.read.legend_types, &device_type).is_some()).collect();
             near.sort_by(|a, b| dist(a.at, c.at).total_cmp(&dist(b.at, c.at)));
             let applied: Vec<serde_json::Value> = near.iter().take(1).map(|dv| serde_json::json!({"tag": dv.tag, "handle": dv.handle})).collect();
             if out.facts.len() < MAX_SET_CALLOUTS {

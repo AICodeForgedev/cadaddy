@@ -632,6 +632,89 @@ fn an_enlarged_plan_reports_the_symbols_it_left_out() {
     assert_eq!(v["uncounted_tags"]["12"], 1);
 }
 
+/// A symbol the import tagged with its circuit label (the label came first) counts by the type
+/// mark printed beside it; a mark another symbol already carries (the import keeps one-letter
+/// marks on the page) is not taken twice, and a circuit-tagged symbol with no mark stays out.
+#[test]
+fn a_symbol_tagged_with_its_circuit_counts_by_the_mark_beside_it() {
+    let mut e3 = linkset::enlarged_sheet(Some(("ENLARGED FIRST FLOOR CORE PLAN", true)));
+    let (sheets, _) = the_set();
+    let mut ins = None;
+    for e in e3.model.iter() {
+        if let cadaddy_doc::EntityKind::Insert(i) = &e.kind {
+            ins = Some(i.clone());
+            break;
+        }
+    }
+    let ins = ins.expect("a device");
+    let text = |v: &str, x: f64, y: f64| {
+        cadaddy_doc::EntityKind::Text(cadaddy_doc::Text {
+            insert: cadaddy_geom::Vec3::new(x, y, 0.0),
+            align_pt: None,
+            height: 0.12,
+            value: v.into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: Default::default(),
+            valign: Default::default(),
+        })
+    };
+    let tagged = |tag: &str, x: f64, y: f64| {
+        let mut i = ins.clone();
+        i.insert = cadaddy_geom::Vec3::new(x, y, 0.0);
+        if let Some(a) = i.attribs.first_mut() {
+            a.text.value = tag.into();
+        }
+        cadaddy_doc::EntityKind::Insert(i)
+    };
+    let common = cadaddy_doc::Common::default();
+    let mut add = |k| {
+        e3.add(&cadaddy_doc::Space::Model, common.clone(), k).expect("add");
+    };
+    // Circuit-tagged, its type mark beside it.
+    add(tagged("D-12", 8.0, 8.0));
+    add(text("A", 8.25, 8.05));
+    // A device tagged A, the page still printing its A: not a second device.
+    add(tagged("A", 16.0, 16.0));
+    add(text("A", 16.25, 16.05));
+    // Circuit-tagged with no mark beside it.
+    add(tagged("D-14", 16.0, 8.0));
+    let (_, pages) = with_e3(e3);
+    let e3p = pages.iter().find(|p| p.sheet.number == "E-3").expect("E-3");
+    let rescued: Vec<_> = e3p.read.devices.iter().filter(|dv| dv.alt.is_some()).map(|dv| (dv.tag.as_str(), dv.alt.as_deref())).collect();
+    assert_eq!(rescued, [("D-12", Some("A"))]);
+    let l = printlinks::link_set(&sheets, &pages);
+    let core = l.enlarged.iter().find(|e| e.detail == "1").expect("view 1");
+    assert_eq!(core.devices, 7, "5 + the circuit-tagged one + the tagged one: {core:#?}");
+    assert_eq!(core.devices_by_type.get("A"), Some(&7), "{core:#?}");
+    assert_eq!(l.double_counted, 0);
+}
+
+/// The core plan printed with each device's circuit label read before its type mark: the
+/// import tags every symbol with its circuit, and the marks beside them still count all five.
+#[test]
+fn a_printed_core_plan_with_circuit_labels_counts_by_the_type_marks() {
+    let (sheets, mut pages) = printed_set();
+    let pdf = linkset::print(&linkset::enlarged_sheet_circuits_first(Some(("ENLARGED FIRST FLOOR CORE PLAN", true))))
+        .unwrap_or_else(|e| panic!("E-3: {e}"));
+    let (page, _) = cadaddy_io::pdf_read::read_json(&pdf, &serde_json::json!({"page": 1, "images": false, "fills": "merge"}))
+        .unwrap_or_else(|e| panic!("E-3: {e}"));
+    let read = printlinks::read_page(&page, "E-3");
+    // The import's side of it: the symbols carry the circuits.
+    assert!(read.devices.iter().all(|dv| dv.tag.starts_with("D-")), "{:?}", read.devices);
+    for p in pages.iter_mut().filter(|p| p.sheet.number == "E-3") {
+        p.read = read.clone();
+    }
+    let l = printlinks::link_set(&sheets, &pages);
+    assert_eq!(devices_of(&l, "E-3", "1"), 5, "{:#?}", l.enlarged);
+    let core = l.enlarged.iter().find(|e| e.detail == "1").expect("view 1");
+    assert_eq!(core.devices_by_type.get("A"), Some(&5), "{core:#?}");
+    assert!(core.registered, "{core:#?}");
+    assert_eq!(l.double_counted, 0);
+}
+
 /// The core plan in pieces printed and imported: still one view 1 with all five devices.
 #[test]
 fn a_printed_core_plan_in_pieces_counts_every_piece() {
