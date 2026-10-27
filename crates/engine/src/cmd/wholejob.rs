@@ -234,15 +234,10 @@ fn run_quantities(s: &mut Session, p: &Value) -> Result<Value> {
         // Q6037: use bim.takeoff as the single source of truth for quantities, so every
         // command that reports quantities (takeoff, estimate) agrees on the same numbers.
         // Fall back to bim.bom when the takeoff is not available (no model built yet).
-        let (lines_source, source_name) =
-            match s.execute("bim.takeoff", &json!({"group_by": "trade", "keep": false})) {
-                Ok(t) => (t, "bim.takeoff"),
-                Err(_) => (
-                    s.execute("bim.bom", &json!({}))
-                        .map_err(|e| bad("wholejob.quantities", format!("the bill of materials: {e}")))?,
-                    "bim.bom",
-                ),
-            };
+        let (lines_source, source_name) = match s.execute("bim.takeoff", &json!({"group_by": "trade", "keep": false})) {
+            Ok(t) => (t, "bim.takeoff"),
+            Err(_) => (s.execute("bim.bom", &json!({})).map_err(|e| bad("wholejob.quantities", format!("the bill of materials: {e}")))?, "bim.bom"),
+        };
         let sp = spec("wholejob.quantities", s)?;
         let mut w = load(&sp);
         let mut by: BTreeMap<String, Vec<QLine>> = BTreeMap::new();
