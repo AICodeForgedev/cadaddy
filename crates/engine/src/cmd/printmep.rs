@@ -216,7 +216,8 @@ pub(crate) fn sheet_placement(d: &Drawing, sh: &SheetRef, all: &[SheetRef], upf:
     }
     let diag = if b.is_empty() { 0.0 } else { (b.max.x - b.min.x).hypot(b.max.y - b.min.y) };
     let k = if diag.is_finite() && diag > 1.0 && diag < 100.0 {
-        let printed = sh.scale_text.as_deref().and_then(cadaddy_mepfix::sheet_reader::parse_scale).filter(|k| k.is_finite() && *k > 0.0 && *k <= 12.0);
+        let printed =
+            sh.scale_text.as_deref().and_then(cadaddy_mepfix::sheet_reader::parse_scale).filter(|k| k.is_finite() && *k > 0.0 && *k <= 12.0);
         upf / printed.unwrap_or(0.125)
     } else {
         1.0
@@ -779,7 +780,7 @@ mod tests {
     /// A made-up plan in `tf`'s frame: a row of rooms' wall faces (inches), grid lines and
     /// their labelled bubbles, on `layer`.
     fn background(d: &mut Drawing, tf: &super::super::register::Similarity, layer: &str) {
-        let mut w = |d: &mut Drawing, a: [f64; 2], b: [f64; 2]| add_line(d, layer, tf.apply(a), tf.apply(b));
+        let w = |d: &mut Drawing, a: [f64; 2], b: [f64; 2]| add_line(d, layer, tf.apply(a), tf.apply(b));
         for x in [0.0, 240.0, 480.0, 720.0, 960.0] {
             w(d, [x, 0.0], [x, 600.0]);
             w(d, [x + 6.0, 0.0], [x + 6.0, 600.0]);
@@ -804,7 +805,8 @@ mod tests {
 
     fn add_line(d: &mut Drawing, layer: &str, a: [f64; 2], b: [f64; 2]) -> cadaddy_doc::Handle {
         let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(a[0], a[1], 0.0), b: cadaddy_geom::Vec3::new(b[0], b[1], 0.0) };
-        d.add(&Space::Model, cadaddy_doc::Common { layer: layer.into(), ..cadaddy_doc::Common::default() }, cadaddy_doc::EntityKind::Line(line)).expect("line")
+        d.add(&Space::Model, cadaddy_doc::Common { layer: layer.into(), ..cadaddy_doc::Common::default() }, cadaddy_doc::EntityKind::Line(line))
+            .expect("line")
     }
 
     fn add_text(d: &mut Drawing, s: &str, at: [f64; 2], h: f64) {
@@ -820,7 +822,8 @@ mod tests {
             halign: cadaddy_doc::HAlign::Left,
             valign: cadaddy_doc::VAlign::Baseline,
         };
-        d.add(&Space::Model, cadaddy_doc::Common { layer: "TEXT".into(), ..cadaddy_doc::Common::default() }, cadaddy_doc::EntityKind::Text(t)).expect("text");
+        d.add(&Space::Model, cadaddy_doc::Common { layer: "TEXT".into(), ..cadaddy_doc::Common::default() }, cadaddy_doc::EntityKind::Text(t))
+            .expect("text");
     }
 
     fn border(d: &mut Drawing, r: [f64; 4]) {
@@ -831,7 +834,16 @@ mod tests {
     }
 
     fn placed(number: &str, discipline: &str, rect: [f64; 4], span: (u64, u64)) -> SheetRef {
-        SheetRef { number: number.into(), level: "1".into(), discipline: discipline.into(), kind: "plan".into(), rect, span: Some(span), scale_text: None, levels: Vec::new() }
+        SheetRef {
+            number: number.into(),
+            level: "1".into(),
+            discipline: discipline.into(),
+            kind: "plan".into(),
+            rect,
+            span: Some(span),
+            scale_text: None,
+            levels: Vec::new(),
+        }
     }
 
     /// The rectangle round `tf`'s plan, with a margin.

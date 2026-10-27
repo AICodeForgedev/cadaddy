@@ -81,11 +81,15 @@ fn the_job_reads_ducts_on_mechanical_plans_and_pipes_on_plumbing_plans() {
     // Ducts on the M plans only, pipes on the P plans only: never on the A or E sheets.
     assert_eq!(sheets_of(&read, "duct"), ["M-101", "M-102"], "{read}");
     assert_eq!(sheets_of(&read, "pipe"), ["P-101", "P-102"], "{read}");
+    // Each plan is lined up on its level's architectural plan and read on what its background
+    // leaves (Q5258): the wall pairs and grid dashes the readers used to count are gone.
     for r in read["sheets"].as_array().expect("sheets") {
-        assert!(r["runs"].as_u64().unwrap_or(0) > 0 && r["length_ft"].as_f64().unwrap_or(0.0) > 10.0, "every plan reads its trade: {r}");
+        assert!(r["runs"].as_u64().unwrap_or(0) > 0 && r["length_ft"].as_f64().unwrap_or(0.0) > 0.0, "every plan reads its trade: {r}");
+        assert_eq!(r["registered"], json!(true), "{r}");
+        assert!(r["registration"]["background_lines"].as_u64().unwrap_or(0) > 0, "{r}");
     }
     let (duct_ft, pipe_ft) = (read["duct_ft"].as_f64().expect("duct_ft"), read["pipe_ft"].as_f64().expect("pipe_ft"));
-    assert!(duct_ft > 50.0 && pipe_ft > 100.0, "{read}");
+    assert!(duct_ft > 0.0 && pipe_ft > 0.0, "{read}");
     // The model's quantities are what the plans read.
     let q = s.execute("mep.qty", &json!({})).expect("mep.qty");
     assert!((q["totals"]["duct_length_ft"].as_f64().expect("duct") - duct_ft).abs() < 1.0, "{}", q["totals"]);

@@ -176,7 +176,11 @@ fn a_trade_plan_with_no_architectural_plan_to_line_up_on_is_a_question() {
     assert_eq!(m2["registered"], json!(false), "{m2}");
     let q = r["questions"].as_array().expect("questions");
     assert!(q.iter().any(|x| x["stage"] == "mep" && x["sheet"] == "M-102"), "{}", r["questions"]);
-    assert!(r["warnings"].as_array().is_some_and(|w| w.iter().any(|x| x.as_str().is_some_and(|t| t.contains("M-102") && t.contains("not lined up")))), "{}", r["warnings"]);
+    assert!(
+        r["warnings"].as_array().is_some_and(|w| w.iter().any(|x| x.as_str().is_some_and(|t| t.contains("M-102") && t.contains("not lined up")))),
+        "{}",
+        r["warnings"]
+    );
     assert_eq!(r["staged"]["registered"], json!(1));
 }
 
@@ -186,10 +190,12 @@ fn the_guided_job_reports_the_eight_build_stages() {
     real_pdf_reader();
     let dir = job_folder("guided", &["A-101", "M-101", "P-101"]);
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false})).expect("job.start");
+    let st =
+        s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false})).expect("job.start");
     assert_eq!(st["done"], json!(true), "{st}");
     let job: Value = serde_json::from_str(s.doc().ok().and_then(|d| d.agent.clone()).as_deref().unwrap_or("{}")).expect("job state");
-    let build = job["guided_job"]["stages"].as_array().and_then(|a| a.iter().find(|x| x["name"] == "bim_build")).expect("bim_build")["result"].clone();
+    let build =
+        job["guided_job"]["stages"].as_array().and_then(|a| a.iter().find(|x| x["name"] == "bim_build")).expect("bim_build")["result"].clone();
     let names: Vec<&str> = build["build_stages"].as_array().expect("build_stages").iter().filter_map(|x| x["name"].as_str()).collect();
     assert_eq!(names, STAGES, "{build}");
     assert_eq!(build["staged"]["stages_8ok"], json!(true));

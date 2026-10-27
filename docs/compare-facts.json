@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1139,
-    "count": 1139,
+    "callableAsJson": 1141,
+    "count": 1141,
     "ids": [
       "-attedit",
       "-block",
@@ -511,8 +511,10 @@
       "job.explain",
       "job.next",
       "job.report",
+      "job.rollback",
       "job.rules",
       "job.set_mode",
+      "job.stage_view",
       "job.start",
       "job.status",
       "job.undo",

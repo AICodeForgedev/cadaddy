@@ -197,14 +197,12 @@ pub(crate) fn sheet_geom(d: &Drawing, sh: &SheetRef) -> SheetGeom {
                     }
                 }
             }
-            EntityKind::Text(_) | EntityKind::MText(_) => {
-                if g.texts.len() < MAX_TEXTS {
-                    for (h, text, at, _) in super::perceive::texts(&[e]) {
-                        if let Some(l) = label(&text)
-                            && at.is_finite()
-                        {
-                            g.texts.push((l, [at.x, at.y], h));
-                        }
+            EntityKind::Text(_) | EntityKind::MText(_) if g.texts.len() < MAX_TEXTS => {
+                for (h, text, at, _) in super::perceive::texts(&[e]) {
+                    if let Some(l) = label(&text)
+                        && at.is_finite()
+                    {
+                        g.texts.push((l, [at.x, at.y], h));
                     }
                 }
             }
@@ -388,9 +386,8 @@ pub(crate) fn arch_of<'a>(sh: &SheetRef, all: &'a [SheetRef]) -> Option<&'a Shee
     if sh.level.trim().is_empty() {
         return None;
     }
-    let of_level = |kind: &str| {
-        all.iter().find(|a| a.discipline.eq_ignore_ascii_case("A") && a.kind == kind && a.level.eq_ignore_ascii_case(&sh.level))
-    };
+    let of_level =
+        |kind: &str| all.iter().find(|a| a.discipline.eq_ignore_ascii_case("A") && a.kind == kind && a.level.eq_ignore_ascii_case(&sh.level));
     of_level("plan").or_else(|| if sh.kind == "enlarged_plan" { of_level("enlarged_plan") } else { None })
 }
 
@@ -595,11 +592,14 @@ pub(crate) fn register(d: &Drawing, sh: &SheetRef, arch: Option<&ArchPlan>, plac
     // A small symbol (a diffuser's square, a device) is the trade's even where a ceiling plan
     // shows it too: only the building's linework (and its dashes) is background.
     let min_size = SYMBOL_FT * upf.max(1e-9) / tf.scale().max(1e-9);
-    let symbol = |i: usize| {
-        trade.pieces.get(i).is_some_and(|n| *n >= 2) && trade.boxes.get(i).is_some_and(|b| (b[2] - b[0]).max(b[3] - b[1]) < min_size)
-    };
-    let gone: std::collections::BTreeSet<usize> =
-        length.iter().enumerate().filter(|(i, (on, all))| *all > 0.0 && on / all >= BACKGROUND_SHARE && !frame(*i) && !symbol(*i)).map(|(i, _)| i).collect();
+    let symbol =
+        |i: usize| trade.pieces.get(i).is_some_and(|n| *n >= 2) && trade.boxes.get(i).is_some_and(|b| (b[2] - b[0]).max(b[3] - b[1]) < min_size);
+    let gone: std::collections::BTreeSet<usize> = length
+        .iter()
+        .enumerate()
+        .filter(|(i, (on, all))| *all > 0.0 && on / all >= BACKGROUND_SHARE && !frame(*i) && !symbol(*i))
+        .map(|(i, _)| i)
+        .collect();
     let mut background: Vec<Handle> = gone.iter().filter_map(|i| trade.objects.get(*i).copied()).collect();
     r.background_lines = trade.lines.iter().filter(|l| gone.contains(&l.object)).count();
     r.residual_lines = trade.lines.len() - r.background_lines;
@@ -694,7 +694,15 @@ mod tests {
     }
 
     fn sheet(number: &str, discipline: &str, rect: [f64; 4], span: (u64, u64)) -> SheetRef {
-        SheetRef { number: number.into(), level: "1".into(), discipline: discipline.into(), kind: "plan".into(), rect, span: Some(span), ..SheetRef::default() }
+        SheetRef {
+            number: number.into(),
+            level: "1".into(),
+            discipline: discipline.into(),
+            kind: "plan".into(),
+            rect,
+            span: Some(span),
+            ..SheetRef::default()
+        }
     }
 
     #[test]
@@ -708,10 +716,15 @@ mod tests {
         let bg = plan(&mut d, &at, "M-BKGD");
         let duct = line(&mut d, "M-DUCT", at.apply([120.0, 300.0]), at.apply([840.0, 300.0]));
         // Its own border: the sheet's frame, never background.
-        let border: Vec<Handle> = [([4_100.0, -350.0], [5_150.0, -350.0]), ([5_150.0, -350.0], [5_150.0, 750.0]), ([5_150.0, 750.0], [4_100.0, 750.0]), ([4_100.0, 750.0], [4_100.0, -350.0])]
-            .iter()
-            .map(|(a, b)| line(&mut d, "BORDER", *a, *b))
-            .collect();
+        let border: Vec<Handle> = [
+            ([4_100.0, -350.0], [5_150.0, -350.0]),
+            ([5_150.0, -350.0], [5_150.0, 750.0]),
+            ([5_150.0, 750.0], [4_100.0, 750.0]),
+            ([4_100.0, 750.0], [4_100.0, -350.0]),
+        ]
+        .iter()
+        .map(|(a, b)| line(&mut d, "BORDER", *a, *b))
+        .collect();
         let hi = d.handseed;
         let a = sheet("A-101", "A", [-200.0, -200.0, 1_100.0, 800.0], (lo, mid));
         let m = sheet("M-101", "M", [4_000.0, -400.0, 5_200.0, 800.0], (mid, hi));

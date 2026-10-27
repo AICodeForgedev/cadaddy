@@ -84,8 +84,23 @@ fn stage_of_part(part: &str, exterior: bool) -> usize {
         return 7;
     }
     if has(&[
-        "mep", "device", "equipment", "light", "diffuser", "terminal", "duct", "pipe", "conduit", "tray", "sprinkler", "fixture", "ground_rod",
-        "raceway", "panel", "grounding", "drain",
+        "mep",
+        "device",
+        "equipment",
+        "light",
+        "diffuser",
+        "terminal",
+        "duct",
+        "pipe",
+        "conduit",
+        "tray",
+        "sprinkler",
+        "fixture",
+        "ground_rod",
+        "raceway",
+        "panel",
+        "grounding",
+        "drain",
     ]) {
         return 5;
     }
@@ -224,7 +239,12 @@ fn exterior_walls(walls: &[(Handle, String, Foot)]) -> BTreeSet<Handle> {
 
 /// A wall's framing rules from the code book: (wall kind, stud, spacing in, rule id, header rows
 /// or none when the code gives no header table for it).
-fn framing_rules(book: &cadaddy_walk3d::codebook::CodeBook, exterior: bool, thick_in: f64, height_ft: f64) -> (String, String, f64, String, Option<Vec<fr::HeaderRow>>) {
+fn framing_rules(
+    book: &cadaddy_walk3d::codebook::CodeBook,
+    exterior: bool,
+    thick_in: f64,
+    height_ft: f64,
+) -> (String, String, f64, String, Option<Vec<fr::HeaderRow>>) {
     use cadaddy_walk3d::codebook::{RuleContext, Topic};
     let wall = if exterior { "bearing" } else { "non-bearing" };
     let stud = if thick_in >= 6.5 { "2x6" } else { "2x4" };
@@ -245,7 +265,11 @@ fn framing_rules(book: &cadaddy_walk3d::codebook::CodeBook, exterior: bool, thic
                 .filter_map(|(k, size)| {
                     let ft: f64 = k.strip_prefix("<=")?.trim().parse().ok()?;
                     let nominal: f64 = size.rsplit(['x', 'X']).next()?.trim().parse().ok()?;
-                    (ft.is_finite() && ft > 0.0).then(|| fr::HeaderRow { max_span_in: ft * 12.0, size: format!("2-{size}"), depth_in: (nominal - 0.75).max(1.0) })
+                    (ft.is_finite() && ft > 0.0).then(|| fr::HeaderRow {
+                        max_span_in: ft * 12.0,
+                        size: format!("2-{size}"),
+                        depth_in: (nominal - 0.75).max(1.0),
+                    })
                 })
                 .collect();
             rows.sort_by(|a, b| a.max_span_in.total_cmp(&b.max_span_in));
@@ -273,7 +297,13 @@ struct Framed {
 }
 
 /// Frame every wall of the model: its openings are the doors and windows hosted in it.
-fn frame_walls(d: &mut Drawing, walls: &[(Handle, String, Foot)], openings: &[(Handle, String, Foot)], exterior: &BTreeSet<Handle>, upf: f64) -> Framed {
+fn frame_walls(
+    d: &mut Drawing,
+    walls: &[(Handle, String, Foot)],
+    openings: &[(Handle, String, Foot)],
+    exterior: &BTreeSet<Handle>,
+    upf: f64,
+) -> Framed {
     let book = d
         .building_spec
         .as_deref()
@@ -327,7 +357,11 @@ fn frame_walls(d: &mut Drawing, walls: &[(Handle, String, Foot)], openings: &[(H
         g.0.push(wall);
     }
     if d.layer(FRAMING_LAYER).is_none() {
-        d.layers.push(cadaddy_doc::Layer { name: FRAMING_LAYER.into(), color: cadaddy_doc::color::Color::Index(42), ..cadaddy_doc::Layer::default() });
+        d.layers.push(cadaddy_doc::Layer {
+            name: FRAMING_LAYER.into(),
+            color: cadaddy_doc::color::Color::Index(42),
+            ..cadaddy_doc::Layer::default()
+        });
     }
     for ((kind, stud, has_headers), (fws, headers, rule, _)) in groups {
         let framing = fr::frame(&fws, &[], &[], headers.as_deref().unwrap_or(&[]));
@@ -338,7 +372,14 @@ fn frame_walls(d: &mut Drawing, walls: &[(Handle, String, Foot)], openings: &[(H
                 .filter(|m| {
                     matches!(
                         m.kind,
-                        Kind::EndStud | Kind::CornerStud | Kind::IntersectionStud | Kind::PostStud | Kind::KingStud | Kind::JackStud | Kind::FieldStud | Kind::Cripple
+                        Kind::EndStud
+                            | Kind::CornerStud
+                            | Kind::IntersectionStud
+                            | Kind::PostStud
+                            | Kind::KingStud
+                            | Kind::JackStud
+                            | Kind::FieldStud
+                            | Kind::Cripple
                     )
                 })
                 .count();
@@ -363,7 +404,12 @@ fn frame_walls(d: &mut Drawing, walls: &[(Handle, String, Foot)], openings: &[(H
             let Some(f) = walls.iter().find(|(h, _, _)| *h == src).map(|(_, _, f)| *f) else { continue };
             let z = f.z[0];
             let t = |code: i32, v: String| RawTag { code, value: v };
-            let mut xdata = vec![t(1001, super::wallgen::APP.into()), t(1000, FRAMING_PART.into()), t(1000, wf.wall.level.chars().take(255).collect()), t(1000, src.hex())];
+            let mut xdata = vec![
+                t(1001, super::wallgen::APP.into()),
+                t(1000, FRAMING_PART.into()),
+                t(1000, wf.wall.level.chars().take(255).collect()),
+                t(1000, src.hex()),
+            ];
             let mut props = cadaddy_doc::props::Props::default();
             let rule_src = || cadaddy_doc::props::Source::from_doc(cadaddy_doc::props::SourceKind::Rule, &rule);
             let num = |v: f64| (v * 10.0).round() / 10.0;
@@ -458,7 +504,10 @@ fn load(d: &Drawing) -> Option<Vec<Value>> {
 }
 
 fn stage_handles(st: &Value) -> Vec<Handle> {
-    st.get("handles").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).filter_map(Handle::parse_hex).collect()).unwrap_or_default()
+    st.get("handles")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).filter_map(Handle::parse_hex).collect())
+        .unwrap_or_default()
 }
 
 fn stage_index(cmd: &str, name: &str) -> Result<usize> {
@@ -555,10 +604,12 @@ pub(crate) struct Readings {
 
 /// The sheets of a job as the trade readers see them, the architectural ones' discipline first.
 fn arch_spans(refs: &[super::printmep::SheetRef]) -> Vec<(u64, u64, [f64; 4], bool)> {
-    refs.iter().map(|r| {
-        let (lo, hi) = r.span.unwrap_or((0, 0));
-        (lo, hi, r.rect, r.discipline.eq_ignore_ascii_case("A"))
-    }).collect()
+    refs.iter()
+        .map(|r| {
+            let (lo, hi) = r.span.unwrap_or((0, 0));
+            (lo, hi, r.rect, r.discipline.eq_ignore_ascii_case("A"))
+        })
+        .collect()
 }
 
 /// Whether a plan object (by handle and where it is) lies on an architectural sheet.
@@ -626,7 +677,11 @@ pub(crate) fn stage_model(s: &mut Session, built: &Value, readings: &Readings, r
             stage.elements.push(*h);
             stage.level(if level.is_empty() { "(no level)" } else { level }, part, 1.0);
         }
-        if i == 0 && !matches!(part.as_str(), "wall" | "floor" | "roof" | "parapet" | "column" | "curtainwall" | "ground" | "stair" | "ramp" | "railing" | "guard" | "concrete")
+        if i == 0
+            && !matches!(
+                part.as_str(),
+                "wall" | "floor" | "roof" | "parapet" | "column" | "curtainwall" | "ground" | "stair" | "ramp" | "railing" | "guard" | "concrete"
+            )
         {
             *unsorted.entry(part.clone()).or_default() += 1;
         }
@@ -644,7 +699,10 @@ pub(crate) fn stage_model(s: &mut Session, built: &Value, readings: &Readings, r
             x.count(k, n(k));
         }
         if !unsorted.is_empty() {
-            x.notes.push(format!("other built parts kept with the shell: {}", unsorted.iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", ")));
+            x.notes.push(format!(
+                "other built parts kept with the shell: {}",
+                unsorted.iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", ")
+            ));
         }
         for (h, level, _) in &walls {
             if exterior.contains(h) {
@@ -654,7 +712,13 @@ pub(crate) fn stage_model(s: &mut Session, built: &Value, readings: &Readings, r
     }
     // 2. walls
     let interior = walls.len().saturating_sub(exterior.len());
-    let wall_ratio = if arch_walls > 0 { (arch_walls + other_walls) as f64 / arch_walls as f64 } else if other_walls > 0 { f64::INFINITY } else { 1.0 };
+    let wall_ratio = if arch_walls > 0 {
+        (arch_walls + other_walls) as f64 / arch_walls as f64
+    } else if other_walls > 0 {
+        f64::INFINITY
+    } else {
+        1.0
+    };
     if let Some(x) = st.get_mut(1) {
         x.count("walls", walls.len());
         x.count("interior_walls", interior);
@@ -888,7 +952,6 @@ pub(crate) fn read_trades(s: &mut Session, job: &mut super::guided::GuidedJob, r
     }
     r
 }
-
 
 /// Every trade plan's registration: the M and P plans' from their reading (`mep`), the others'
 /// (electrical, fire protection) lined up here.
@@ -1136,7 +1199,6 @@ pub(crate) fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         "next_steps": next_steps,
     }))
 }
-
 
 #[cfg(test)]
 mod tests {
