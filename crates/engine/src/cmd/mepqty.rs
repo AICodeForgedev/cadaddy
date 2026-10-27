@@ -330,14 +330,15 @@ fn corners(pts: &[Vec2], bottoms: &[f64]) -> Vec<Corner> {
     out
 }
 
-/// An elbow's name by its turn: 90°, 45°, else the angle to the nearest 5°.
+/// An elbow's name by its turn, snapped to the standard fittings: 22.5°, 45° or 90° (a turn
+/// past 90° is still bought as a 90°).
 fn elbow_name(deg: f64) -> String {
-    if (deg - 90.0).abs() <= 10.0 {
-        "elbow 90°".into()
-    } else if (deg - 45.0).abs() <= 10.0 {
+    if deg < 33.75 {
+        "elbow 22.5°".into()
+    } else if deg < 67.5 {
         "elbow 45°".into()
     } else {
-        format!("elbow {}°", ((deg / 5.0).round() * 5.0) as i64)
+        "elbow 90°".into()
     }
 }
 
@@ -1058,7 +1059,10 @@ mod tests {
         assert!(matches!(c.get(1), Some(Corner::Drop(d)) if (d - 1.0).abs() < 1e-9));
         assert!(matches!(c.get(2), Some(Corner::Elbow(d)) if (d - 45.0).abs() < 1e-6));
         assert_eq!(elbow_name(88.0), "elbow 90°");
-        assert_eq!(elbow_name(30.0), "elbow 30°");
+        assert_eq!(elbow_name(30.0), "elbow 22.5°");
+        assert_eq!(elbow_name(10.0), "elbow 22.5°");
+        assert_eq!(elbow_name(50.0), "elbow 45°");
+        assert_eq!(elbow_name(175.0), "elbow 90°");
     }
 
     #[test]

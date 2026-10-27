@@ -223,6 +223,46 @@ fn path_ft(points: &[[f64; 2]], upf: f64) -> f64 {
     total / upf
 }
 
+/// Words of a title that make a sheet or view a reference one (not a plan to read runs off).
+const REFERENCE_WORDS: &[(&str, &str)] = &[
+    ("SCHEDULE", "schedule"),
+    ("DETAIL", "detail"),
+    ("LEGEND", "legend"),
+    ("DIAGRAM", "diagram"),
+    ("RISER", "riser"),
+    ("SECTION", "section"),
+    ("ELEVATION", "elevation"),
+    ("NOTES", "notes"),
+];
+
+/// What kind of reference sheet `title` names (`detail`), none for a plan's title.
+fn reference_title(title: &str) -> Option<&'static str> {
+    let up = title.to_ascii_uppercase();
+    if up.contains("PLAN") {
+        return None;
+    }
+    REFERENCE_WORDS.iter().find(|(w, _)| up.contains(w)).map(|(_, k)| *k)
+}
+
+/// Whether the cut-out sheet `sub` is a details/schedules/diagrams sheet by its own titles: its
+/// title block's title, else (no title read) its view titles when there are several and every
+/// one is a reference view's.
+fn reference_sheet(sub: &Drawing) -> Option<&'static str> {
+    use cadaddy_mepfix::sheet_facts;
+    let texts = sheet_facts::texts(sub);
+    if let Some(id) = sheet_facts::identify_sheet(&texts)
+        && !id.title.trim().is_empty()
+    {
+        return reference_title(&id.title);
+    }
+    let views = sheet_facts::view_titles(sub, &texts);
+    let kinds: Vec<Option<&'static str>> = views.iter().map(|v| reference_title(&v.title)).collect();
+    if kinds.len() < 2 || kinds.iter().any(Option::is_none) {
+        return None;
+    }
+    kinds.into_iter().flatten().next()
+}
+
 /// Read one sheet's trade into spec parts in `d`'s units (`upf` per foot).
 fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf: f64) -> (Mep, SheetRead) {
     let level = level_name(&sh.level);
@@ -263,6 +303,12 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
         read.warnings.push(format!("{}: a notes sheet (\"{note}\"): no ducts read", sh.number));
         return (Mep::default(), read);
     }
+    // A sheet classify took for a plan (or had no entry for) whose own title block or view
+    // titles say details, schedules or diagrams: their linework is no ductwork or piping.
+    if let Some(what) = reference_sheet(&sub) {
+        read.warnings.push(format!("{}: a {what} sheet, not a plan: no {} read", sh.number, if trade == MepKind::Duct { "ducts" } else { "pipes" }));
+        return (Mep::default(), read);
+    }
     let mut mep = match trade {
         MepKind::Duct => {
             let plain = cadaddy_mepfix::duct_reader::read_ducts(&sub, &cadaddy_mepfix::truth::Sheet::default());
@@ -284,6 +330,7 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
                         r.source_sheet.clone_from(&sh.number);
                         r.objects.clear();
                     }
+                    m.runs = super::runtidy::tidy_runs(std::mem::take(&mut m.runs), sheet_upf);
                     m
                 }
                 Err(e) => {
@@ -734,5 +781,40 @@ mod tests {
         assert!(plain.runs > 0, "the same sheet without the note reads its duct: {plain:?}");
         assert!(mep.runs.is_empty(), "{notes:?}");
         assert!(notes.warnings.iter().any(|w| w.contains("notes sheet")), "{notes:?}");
+    }
+
+    /// A duct's two sides with its size tag, and a title block titled `title`.
+    fn titled_sheet(title: &str) -> Drawing {
+        let mut s = Session::new();
+        for (a, b) in [([0.0, 0.0], [600.0, 0.0]), ([0.0, 12.0], [600.0, 12.0])] {
+            s.execute("line", &json!({"points": [a, b]})).expect("line");
+        }
+        s.execute("text", &json!({"at": [300, 20], "text": "12x12 SA", "height": 4})).expect("tag");
+        s.execute("text", &json!({"at": [620, 80], "text": "DRAWING TITLE", "height": 3})).expect("label");
+        s.execute("text", &json!({"at": [620, 75], "text": title, "height": 3})).expect("title");
+        s.execute("text", &json!({"at": [620, 60], "text": "M-5", "height": 6})).expect("number");
+        s.doc().expect("doc").clone()
+    }
+
+    #[test]
+    fn a_details_sheet_taken_for_a_plan_reads_no_ducts() {
+        // Classify had no entry for the sheet (so it counts as a plan on level 1), but its
+        // own title block says details and schedules.
+        let sh = SheetRef { rect: [-10.0, -10.0, 700.0, 100.0], ..sheet("M-5", "M", "1", 0.0) };
+        let (mep, read) = read_sheet(&titled_sheet("MECHANICAL DETAILS AND SCHEDULES"), &sh, std::slice::from_ref(&sh), MepKind::Duct, 12.0);
+        assert!(mep.runs.is_empty(), "{read:?}");
+        assert!(read.warnings.iter().any(|w| w.contains("schedule sheet, not a plan")), "{read:?}");
+        let (mep, read) = read_sheet(&titled_sheet("MECHANICAL PLAN - LEVEL 1"), &sh, std::slice::from_ref(&sh), MepKind::Duct, 12.0);
+        assert!(!mep.runs.is_empty(), "a plan's title reads its ducts: {read:?}");
+        let (_, read) = read_sheet(&titled_sheet("PLUMBING RISER DIAGRAMS"), &sh, std::slice::from_ref(&sh), MepKind::Pipe, 12.0);
+        assert!(read.warnings.iter().any(|w| w.contains("diagram sheet") && w.contains("no pipes")), "{read:?}");
+    }
+
+    #[test]
+    fn reference_titles() {
+        assert_eq!(reference_title("MECHANICAL DETAILS"), Some("detail"));
+        assert_eq!(reference_title("HVAC SCHEDULES"), Some("schedule"));
+        assert_eq!(reference_title("ENLARGED MECHANICAL PLANS AND DETAILS"), None);
+        assert_eq!(reference_title("SECOND FLOOR HVAC"), None);
     }
 }
