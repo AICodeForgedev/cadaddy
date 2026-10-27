@@ -795,3 +795,25 @@ fn a_printed_core_plan_counts_the_bare_copies_of_a_tagged_symbol() {
     assert!(core.registered, "{core:#?}");
     assert_eq!(l.double_counted, 0);
 }
+
+/// The core plan printed with its four bare receptacles drawn tight against room numbers: the
+/// copies still count as the tagged symbol's type, and the room numbers are no devices.
+#[test]
+fn a_printed_core_plan_counts_bare_copies_beside_lettering() {
+    let (sheets, mut pages) = printed_set();
+    let pdf = linkset::print(&linkset::enlarged_sheet_with_bare_copies_by_lettering(Some(("ENLARGED FIRST FLOOR CORE PLAN", true))))
+        .unwrap_or_else(|e| panic!("E-3: {e}"));
+    let (page, _) = cadaddy_io::pdf_read::read_json(&pdf, &serde_json::json!({"page": 1, "images": false, "fills": "merge"}))
+        .unwrap_or_else(|e| panic!("E-3: {e}"));
+    let read = printlinks::read_page(&page, "E-3");
+    assert_eq!(read.devices.iter().filter(|dv| dv.twin).count(), 4, "{:?}", read.devices);
+    for p in pages.iter_mut().filter(|p| p.sheet.number == "E-3") {
+        p.read = read.clone();
+    }
+    let l = printlinks::link_set(&sheets, &pages);
+    let core = l.enlarged.iter().find(|e| e.detail == "1").expect("view 1");
+    assert_eq!(core.devices, 9, "{core:#?}");
+    assert_eq!(core.devices_by_type.get("A"), Some(&9), "{core:#?}");
+    assert_eq!(core.twins, 4, "{core:#?}");
+    assert_eq!(l.double_counted, 0);
+}

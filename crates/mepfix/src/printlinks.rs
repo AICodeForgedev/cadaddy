@@ -1290,8 +1290,8 @@ fn circuit_only(syms: &mut [PageDevice], median_h: f64, sheets: &BTreeSet<String
 
 /// The bare copies that are not a labelled device's own symbol. Where the import read a label
 /// (a circuit, a mark) as the symbol, it made the symbol of the label's own strokes and left the
-/// real one loose: a copy found within a mark's reach of such a device (one tagged by a circuit
-/// or a mark beside it, or sitting on the lettering of its tag) is that device, counted once.
+/// real one loose: the copy nearest such a device (one tagged by a circuit or a mark beside it,
+/// or sitting on the lettering of its tag), within a mark's reach, is that device, counted once.
 fn not_their_labels(copies: Vec<PageDevice>, syms: &[PageDevice], texts: &[TextItem], median_h: f64) -> Vec<PageDevice> {
     let reach = MARK_REACH * median_h.max(1e-9);
     let cell = reach.max(1e-6);
@@ -1314,17 +1314,29 @@ fn not_their_labels(copies: Vec<PageDevice>, syms: &[PageDevice], texts: &[TextI
     };
     let labels: Vec<[f64; 2]> =
         syms.iter().filter(|dv| dv.circuit_only || dv.alt.is_some() || (!dv.tag.is_empty() && on_label(dv))).map(|dv| dv.at).collect();
-    let mut label_cells: BTreeMap<(i64, i64), Vec<[f64; 2]>> = BTreeMap::new();
-    for p in labels {
-        label_cells.entry(key(p)).or_default().push(p);
+    // Each label left one real symbol loose: the copy nearest it (within reach) is that one.
+    // Copies beside it are other devices of a dense plan, drawn bare.
+    let mut copy_cells: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+    for (i, c) in copies.iter().enumerate() {
+        copy_cells.entry(key(c.at)).or_default().push(i);
     }
-    copies
-        .into_iter()
-        .filter(|c| {
-            let (cx, cy) = key(c.at);
-            !(-1..=1).any(|dx| (-1..=1).any(|dy| label_cells.get(&(cx + dx, cy + dy)).is_some_and(|ps| ps.iter().any(|p| dist(*p, c.at) <= reach))))
-        })
-        .collect()
+    let mut theirs = vec![false; copies.len()];
+    for p in labels {
+        let (cx, cy) = key(p);
+        let nearest = (-1..=1)
+            .flat_map(|dx| (-1..=1).map(move |dy| (cx + dx, cy + dy)))
+            .flat_map(|k| copy_cells.get(&k).into_iter().flatten().copied())
+            .filter(|&i| !theirs.get(i).copied().unwrap_or(true))
+            .filter_map(|i| copies.get(i).map(|c| (i, dist(c.at, p))))
+            .filter(|(_, d)| *d <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((i, _)) = nearest
+            && let Some(t) = theirs.get_mut(i)
+        {
+            *t = true;
+        }
+    }
+    copies.into_iter().zip(theirs).filter(|(_, t)| !t).map(|(c, _)| c).collect()
 }
 
 /// One copy of each line of lettering: an import may give a mark twice (the page's hidden text
@@ -2229,6 +2241,17 @@ mod tests {
             ("E-4", 1351.1),
         ];
         assert_eq!(kept, want.map(|(v, x)| (v.to_string(), x)).to_vec());
+    }
+
+    /// A label's own symbol is the one bare copy nearest it; the copies beside that one are
+    /// other devices drawn bare.
+    #[test]
+    fn a_label_explains_one_bare_copy() {
+        let label = PageDevice { tag: "D-20".into(), at: [0.0, 0.0], handle: "1".into(), alt: None, circuit_only: true, twin: false };
+        let copy = |x: f64| PageDevice { tag: "A".into(), at: [x, 0.0], handle: format!("c{x}"), alt: None, circuit_only: false, twin: true };
+        let kept = not_their_labels(vec![copy(12.0), copy(4.0), copy(30.0), copy(200.0)], &[label], &[], 6.0);
+        let xs: Vec<f64> = kept.iter().map(|c| c.at[0]).collect();
+        assert_eq!(xs, [12.0, 30.0, 200.0]);
     }
 
     #[test]

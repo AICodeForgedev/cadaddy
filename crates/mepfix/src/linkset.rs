@@ -360,6 +360,21 @@ pub fn enlarged_sheet_with_bare_copies(title: Option<(&str, bool)>) -> Drawing {
     s.d
 }
 
+/// The core plan with its four bare receptacles each drawn tight against plan lettering (a
+/// room number just past the circle): the import's OCR reads the circle and bars with the
+/// digits as one word and keeps their strokes as lettering.
+pub fn enlarged_sheet_with_bare_copies_by_lettering(title: Option<(&str, bool)>) -> Drawing {
+    let mut s = Sheet { d: enlarged_sheet(title) };
+    for (i, p) in [[8.0, 8.0], [16.0, 16.0], [8.0, 17.0], [16.0, 6.0]].into_iter().enumerate() {
+        s.circle(p, 0.1);
+        for o in [-0.04, 0.04] {
+            s.line([p[0] - 0.15, p[1] + o], [p[0] + 0.15, p[1] + o]);
+        }
+        s.text(&format!("1{}", 21 + i), [p[0] + 0.17, p[1] - 0.05], 0.1, 0.0);
+    }
+    s.d
+}
+
 /// E-4: details; detail 2 prints the receptacle's mounting height.
 fn e4() -> Drawing {
     let mut s = Sheet::new();

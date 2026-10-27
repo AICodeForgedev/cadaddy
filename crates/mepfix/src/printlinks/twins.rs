@@ -25,9 +25,17 @@ const LENGTH_TOL: f64 = 0.12;
 /// How much past the template's reach a copy's strokes may lie (share).
 const REACH_SLACK: f64 = 1.15;
 
-/// Layers the import keeps lettering on (hidden text, the strokes OCR text was read from).
-fn lettering_layer(name: &str) -> bool {
-    name.eq_ignore_ascii_case(cadaddy_io::pdf_read::HIDDEN_TEXT_LAYER) || name.eq_ignore_ascii_case(cadaddy_io::pdf_read::SHX_SOURCE_LAYER)
+/// The layer the import keeps the page's hidden text on.
+fn hidden_text_layer(name: &str) -> bool {
+    name.eq_ignore_ascii_case(cadaddy_io::pdf_read::HIDDEN_TEXT_LAYER)
+}
+
+/// The layer (off) the import moves the strokes its OCR read as lettering to. On a page with
+/// hidden text that is every stroke cluster the OCR took for a word, and a bare symbol's circle
+/// and bars read as letters (O, I, -) too: its copies are looked for there as well. Lettering
+/// beside it never matches: a word's other letters add strokes the template doesn't have.
+fn ocr_layer(name: &str) -> bool {
+    name.eq_ignore_ascii_case(cadaddy_io::pdf_read::SHX_SOURCE_LAYER)
 }
 
 /// One stroke: its points, whether it closes, its length and box.
@@ -40,6 +48,8 @@ struct Shape {
     len: f64,
     bbox: [f64; 4],
     handle: String,
+    /// On the OCR's layer (see [`ocr_layer`]).
+    ocr: bool,
 }
 
 impl Shape {
@@ -73,7 +83,7 @@ impl Shape {
                 (len, b, closed)
             }
         };
-        Some(Shape { pts, circle, closed, len, bbox, handle })
+        Some(Shape { pts, circle, closed, len, bbox, handle, ocr: false })
     }
 
     fn mid(&self) -> [f64; 2] {
@@ -82,6 +92,25 @@ impl Shape {
 
     fn size(&self) -> f64 {
         (self.bbox[2] - self.bbox[0]).max(self.bbox[3] - self.bbox[1])
+    }
+
+    /// The nearest the stroke comes to `c`.
+    fn near_from(&self, c: [f64; 2]) -> f64 {
+        match self.circle {
+            Some((m, r)) => (dist(m, c) - r).abs(),
+            None if self.pts.len() == 1 => self.pts.first().map_or(f64::INFINITY, |p| dist(*p, c)),
+            None => self
+                .pts
+                .windows(2)
+                .filter_map(|w| {
+                    let (a, b) = (*w.first()?, *w.get(1)?);
+                    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                    let l2 = dx * dx + dy * dy;
+                    let t = if l2 > 0.0 { (((c[0] - a[0]) * dx + (c[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                    Some(dist([a[0] + t * dx, a[1] + t * dy], c))
+                })
+                .fold(f64::INFINITY, f64::min),
+        }
     }
 
     /// The farthest the stroke reaches from `c`.
@@ -189,19 +218,20 @@ pub(super) fn find(
     let max_size = 2.0 * max_reach;
 
     // The page's loose strokes, small enough to be part of a symbol, by cell.
-    let off: BTreeSet<String> = d.layers.iter().filter(|l| !l.on || lettering_layer(&l.name)).map(|l| l.name.to_ascii_lowercase()).collect();
+    let off: BTreeSet<String> =
+        d.layers.iter().filter(|l| (!l.on && !ocr_layer(&l.name)) || hidden_text_layer(&l.name)).map(|l| l.name.to_ascii_lowercase()).collect();
     let mut shapes: Vec<Shape> = Vec::new();
     for e in d.model.iter() {
         if shapes.len() >= MAX_SHAPES {
             break;
         }
-        if lettering_layer(&e.common.layer) || off.contains(&e.common.layer.to_ascii_lowercase()) {
+        if hidden_text_layer(&e.common.layer) || off.contains(&e.common.layer.to_ascii_lowercase()) {
             continue;
         }
         if let Some(s) = Shape::of(&e.kind, String::new())
             && s.size() <= max_size
         {
-            shapes.push(Shape { handle: e.handle.hex(), ..s });
+            shapes.push(Shape { handle: e.handle.hex(), ocr: ocr_layer(&e.common.layer), ..s });
         }
     }
     let cell = max_reach.max(1e-9);
@@ -253,6 +283,17 @@ pub(super) fn find(
                     }
                 }
             }
+            // Read as lettering, it stands clear of other lettering: a word's next letter sits
+            // within a letter of it.
+            if o.ocr
+                && cells().any(|k| {
+                    grid.get(&k).into_iter().flatten().any(|&j| {
+                        !members.contains(&j) && shapes.get(j).is_some_and(|s| s.ocr && s.near_from(c) <= 2.0 * reach)
+                    })
+                })
+            {
+                continue;
+            }
             let strokes_ok = if t.strokes >= 4 { members.len().abs_diff(t.strokes) <= 1 } else { members.len() == t.strokes };
             if !strokes_ok || !near(len, t.len, LENGTH_TOL) {
                 continue;
@@ -267,4 +308,92 @@ pub(super) fn find(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadaddy_doc::{Block, Common, Entity, Insert, Line, LwPolyline, Space};
+    use cadaddy_geom::PolyVertex;
+    use cadaddy_geom::Vec3;
+
+    /// A receptacle at `c`: a round outline (a 16-gon) and two bars across it.
+    fn receptacle(c: [f64; 2]) -> Vec<EntityKind> {
+        let r = 3.0;
+        let vertices = (0..16)
+            .map(|i| {
+                let a = std::f64::consts::TAU * f64::from(i) / 16.0;
+                PolyVertex { p: cadaddy_geom::Vec2::new(c[0] + r * a.cos(), c[1] + r * a.sin()), bulge: 0.0, start_width: 0.0, end_width: 0.0 }
+            })
+            .collect();
+        let bar = |dx: f64| EntityKind::Line(Line { a: Vec3::new(c[0] + dx, c[1] - 2.0, 0.0), b: Vec3::new(c[0] + dx, c[1] + 2.0, 0.0) });
+        vec![
+            EntityKind::LwPolyline(LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false }),
+            bar(-1.0),
+            bar(1.0),
+        ]
+    }
+
+    fn device(tag: &str, at: [f64; 2], handle: String) -> PageDevice {
+        PageDevice { tag: tag.into(), at, handle, alt: None, circuit_only: false, twin: false }
+    }
+
+    /// A page with hidden text whose OCR took a bare receptacle's circle and bars for lettering
+    /// (they sit on the OCR's layer, off): it is still a copy of the tagged one. The same circle
+    /// inside a word on that layer is not, nor is anything on the hidden text layer.
+    #[test]
+    fn a_copy_the_ocr_moved_to_its_layer_still_counts() {
+        let mut d = Drawing::new_imperial();
+        let mut b = Block::new("PDF-SYM-1");
+        for kind in receptacle([0.0, 0.0]) {
+            b.entities.push(Entity { handle: d.new_handle(), common: Common::default(), kind });
+        }
+        d.blocks.insert("PDF-SYM-1".into(), std::sync::Arc::new(b));
+        let mut inserts = Vec::new();
+        let mut syms = Vec::new();
+        for at in [[0.0, 0.0], [200.0, 0.0]] {
+            let ins = Insert {
+                block: "PDF-SYM-1".into(),
+                insert: Vec3::new(at[0], at[1], 0.0),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                rotation: 0.0,
+                attribs: Vec::new(),
+                cols: 1,
+                rows: 1,
+                col_spacing: 0.0,
+                row_spacing: 0.0,
+                clip: None,
+            };
+            let h = d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).expect("insert").hex();
+            inserts.push(("PDF-SYM-1".to_string(), at, h.clone()));
+            syms.push(device("A", at, h));
+        }
+        let on = |layer: &str| Common { layer: layer.into(), ..Common::default() };
+        let ocr = cadaddy_io::pdf_read::SHX_SOURCE_LAYER;
+        let hidden = cadaddy_io::pdf_read::HIDDEN_TEXT_LAYER;
+        // The bare copy, eaten by the OCR.
+        for kind in receptacle([60.0, 0.0]) {
+            d.add(&Space::Model, on(ocr), kind).expect("copy");
+        }
+        // A word whose O is the same circle: its other letters' strokes are in reach.
+        for kind in receptacle([120.0, 0.0]) {
+            d.add(&Space::Model, on(ocr), kind).expect("word");
+        }
+        for dx in [-5.0, 5.0] {
+            let x = 120.0 + dx;
+            d.add(&Space::Model, on(ocr), EntityKind::Line(Line { a: Vec3::new(x, -3.0, 0.0), b: Vec3::new(x, 3.0, 0.0) })).expect("letter");
+        }
+        // The same shape on the hidden text layer.
+        for kind in receptacle([60.0, 80.0]) {
+            d.add(&Space::Model, on(hidden), kind).expect("hidden");
+        }
+        for l in d.layers.iter_mut().filter(|l| l.name == ocr || l.name == hidden) {
+            l.on = false;
+        }
+        let copies = find(&d, &inserts, &syms, &|_| true, &Legend::default());
+        let at: Vec<[f64; 2]> = copies.iter().map(|c| c.at).collect();
+        assert_eq!(at.len(), 1, "{copies:?}");
+        assert!(dist(at[0], [60.0, 0.0]) < 1e-9, "{at:?}");
+        assert!(copies.iter().all(|c| c.twin && c.tag == "A"));
+    }
 }
