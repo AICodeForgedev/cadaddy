@@ -849,10 +849,10 @@ impl Interactive for WallM {
                         "height": self.height_ft,
                     });
                     let result = run_wall(s, &params)?;
-                    if let Some(hex) = result.get("handle").and_then(Value::as_str) {
-                        if let Ok(v) = u64::from_str_radix(hex.trim_start_matches("0x"), 16) {
-                            self.handles.push(Handle(v));
-                        }
+                    if let Some(hex) = result.get("handle").and_then(Value::as_str)
+                        && let Ok(v) = u64::from_str_radix(hex.trim_start_matches("0x"), 16)
+                    {
+                        self.handles.push(Handle(v));
                     }
                 }
                 self.pts.push(p);
@@ -861,7 +861,7 @@ impl Interactive for WallM {
             Input::Keyword(ref k) if k == "Undo" => {
                 if let Some(h) = self.handles.pop() {
                     let d = s.doc_mut()?;
-                    let linked: Vec<Handle> = d.model.iter().filter(|e| plan_of(e).map_or(false, |(_, _, src)| src == h)).map(|e| e.handle).collect();
+                    let linked: Vec<Handle> = d.model.iter().filter(|e| plan_of(e).is_some_and(|(_, _, src)| src == h)).map(|e| e.handle).collect();
                     for lh in linked {
                         d.model.remove(lh);
                     }
@@ -889,11 +889,11 @@ impl Interactive for WallM {
                 Ok(Step::Continue)
             }
             Input::Text(ref t) => {
-                if let Some(v) = super::machines::number(t) {
-                    if v > 0.0 {
-                        self.height_ft = v;
-                        s.echo(format!("Wall height set to {v}'."));
-                    }
+                if let Some(v) = super::machines::number(t)
+                    && v > 0.0
+                {
+                    self.height_ft = v;
+                    s.echo(format!("Wall height set to {v}'."));
                 }
                 Ok(Step::Continue)
             }
@@ -948,11 +948,12 @@ impl Interactive for DoorWindowM {
                 let h = hs.into_iter().next();
                 if let Some(h) = h {
                     let d = s.doc()?;
-                    if let Some(e) = d.model.get(h) {
-                        if matches!(e.kind, EntityKind::Mesh(_)) && super::wallgen::made_as(e).map_or(false, |p| p.eq_ignore_ascii_case("wall")) {
-                            self.wall = Some(h);
-                            return Ok(Step::Continue);
-                        }
+                    if let Some(e) = d.model.get(h)
+                        && matches!(e.kind, EntityKind::Mesh(_))
+                        && super::wallgen::made_as(e).is_some_and(|p| p.eq_ignore_ascii_case("wall"))
+                    {
+                        self.wall = Some(h);
+                        return Ok(Step::Continue);
                     }
                     s.echo("Not a wall. Select a wall object.".to_string());
                 }
