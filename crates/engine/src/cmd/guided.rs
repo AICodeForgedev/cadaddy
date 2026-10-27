@@ -3873,7 +3873,7 @@ fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
 fn arch_explainer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> impl Fn([f64; 2], &str) -> String + use<> {
     let sheets = super::identity::sheets_of(Some(sp));
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-    let level_key = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), l.to_ascii_uppercase().contains("ROOF"));
+    let level_key = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), { let u = l.trim().to_ascii_uppercase(); u.contains("ROOF") || u == "R" });
     let plans: Vec<(String, [f64; 4])> = sp
         .levels
         .iter()
@@ -3890,7 +3890,7 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
     let reg = super::identity::register(d, &sheets, upf);
     // Each level's architectural plan (the sheet the registration takes as its reference) and
     // the other sheets: their grid intersections, for views no tag fit reaches.
-    let level_key0 = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), l.to_ascii_uppercase().contains("ROOF"));
+    let level_key0 = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), { let u = l.trim().to_ascii_uppercase(); u.contains("ROOF") || u == "R" });
     let plans: Vec<(String, [f64; 4])> = sp
         .levels
         .iter()
@@ -3900,7 +3900,7 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
     let grid = super::grids::GridPlacer::new(d, upf, &plans, &others);
     progress_line(&format!("  grid intersections: {}", grid.summary()));
     let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
-    let level_key = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), l.to_ascii_uppercase().contains("ROOF"));
+    let level_key = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), { let u = l.trim().to_ascii_uppercase(); u.contains("ROOF") || u == "R" });
     // Architecture is the rule: a placed point must land on its level's plan (5% margin).
     let regions: Vec<(String, [f64; 4])> = sp
         .levels

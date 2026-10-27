@@ -107,40 +107,41 @@ fn bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Bubble> {
                 if !sc.is_finite() || sc <= 0.0 {
                     continue;
                 }
-                let shape = blk
+                // Every round shape of the block: a symbol the PDF import made of a repeated group
+                // holds several bubbles (two grids' bubbles and their leaders).
+                let shapes: Vec<(Vec2, f64)> = blk
                     .entities
                     .iter()
                     .take(64)
-                    .find_map(|be| match &be.kind {
+                    .filter_map(|be| match &be.kind {
                         EntityKind::Circle(c) => Some((c.center.xy(), c.radius)),
                         EntityKind::LwPolyline(pl) if pl.closed && (5..=12).contains(&pl.vertices.len()) => {
                             let c = pl.vertices.iter().fold(Vec2::new(0.0, 0.0), |a, v| a + v.p) * (1.0 / pl.vertices.len() as f64);
                             Some((c, pl.vertices.iter().map(|v| v.p.dist(c)).fold(0.0, f64::max)))
                         }
                         // A circle drawn as a path, made a symbol block by the PDF import.
-                        EntityKind::LwPolyline(pl) if pl.vertices.len() > 12 => {
-                            round_path(&pl.vertices.iter().map(|v| v.p).collect::<Vec<_>>())
-                        }
+                        EntityKind::LwPolyline(pl) if pl.vertices.len() > 12 => round_path(&pl.vertices.iter().map(|v| v.p).collect::<Vec<_>>()),
                         _ => None,
                     })
                     .map(|(c, r)| (m.apply(c), r * sc))
-                    .filter(|&(_, r)| size(r));
-                let Some((o, r)) = shape else { continue };
-                let label = i
-                    .attribs
-                    .iter()
-                    .map(|a| a.text.value.trim())
-                    .find(|t| grid_label(t))
-                    .map(str::to_string)
-                    .or_else(|| {
-                        blk.entities.iter().take(64).find_map(|be| match &be.kind {
-                            EntityKind::Text(t) if grid_label(&t.value) => Some(t.value.trim().to_string()),
-                            _ => None,
+                    .filter(|&(_, r)| size(r))
+                    .collect();
+                let one = shapes.len() == 1;
+                for (o, r) in shapes {
+                    // One shape: the block's own label (an attribute, a text in it) or a text over it;
+                    // several: each by the text over it.
+                    let own = || {
+                        i.attribs.iter().map(|a| a.text.value.trim()).find(|t| grid_label(t)).map(str::to_string).or_else(|| {
+                            blk.entities.iter().take(64).find_map(|be| match &be.kind {
+                                EntityKind::Text(t) if grid_label(&t.value) => Some(t.value.trim().to_string()),
+                                _ => None,
+                            })
                         })
-                    })
-                    .or_else(|| over(o, r));
-                if let Some(label) = label {
-                    out.push(Bubble { at: o, r, label });
+                    };
+                    let label = if one { own().or_else(|| over(o, r)) } else { over(o, r) };
+                    if let Some(label) = label {
+                        out.push(Bubble { at: o, r, label });
+                    }
                 }
             }
             _ => {}
@@ -701,6 +702,9 @@ mod tests {
         grid_view(&mut s, [7000.0, 0.0], 1.2, &[(300.0, "B"), (600.0, "C")], &gy);
         let plan = [("1false".to_string(), [-200.0, -200.0, 1100.0, 800.0])];
         let g = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &[[4700.0, -300.0, 9000.0, 1000.0]]);
+        // A decoy near the second view: a tag in a circle labelled like a grid on the plan.
+        s.execute("circle", &json!({"center": [7000.0 + 200.0, 500.0], "radius": 20.0})).unwrap();
+        s.execute("text", &json!({"at": [7000.0 + 196.0, 496.0], "text": "A", "height": 9.6})).unwrap();
         // A point between B and C in the second view: (450, 150) on the plan.
         let at = [7000.0 + 450.0 * 1.2, 150.0 * 1.2];
         let (k, t) = g.place(at, "1false").expect("placed by its view's grids");
@@ -811,17 +815,29 @@ impl GridPlacer {
             let hits: Vec<Vec2> = plan.iter().filter(|(x, _)| x == l).map(|(_, q)| *q).collect();
             (hits.len() == 1).then(|| hits[0])
         };
-        // The closest few first, then fewer (a neighbouring view's labels spoil a fit).
-        for take in [8usize, 6, 4, MIN_GRID_PAIRS] {
-            let pairs: Vec<(Vec2, Vec2)> = near.iter().take(take).filter_map(|(l, q, _)| Some((*q, on_plan(l)?))).collect();
-            if pairs.len() < MIN_GRID_PAIRS {
-                continue;
+        // Consensus: each two of the nearest matches give a scale and offset; the one most of
+        // the others agree with wins (a neighbouring view's label, or a tag, agrees with none).
+        let cands: Vec<(Vec2, Vec2)> = near.iter().take(12).filter_map(|(l, q, _)| Some((*q, on_plan(l)?))).collect();
+        let tol = 1.5 * self.upf.max(12.0 * self.k);
+        let mut best: Option<(usize, f64, Vec2)> = None;
+        for i in 0..cands.len() {
+            for j in i + 1..cands.len() {
+                let Some((s, t, _)) = fit(&[cands[i], cands[j]]) else { continue };
+                if !(0.1..=10.0).contains(&s) || cands[i].0.dist(cands[j].0) < 1e-6 {
+                    continue;
+                }
+                let agree: Vec<(Vec2, Vec2)> = cands.iter().copied().filter(|(a, b)| (*a * s + t).dist(*b) <= tol).collect();
+                if agree.len() >= MIN_GRID_PAIRS && best.as_ref().is_none_or(|b| agree.len() > b.0) {
+                    // The fit of all that agree.
+                    if let Some((s2, t2, miss)) = fit(&agree).filter(|f| f.2 <= tol && (0.1..=10.0).contains(&f.0)) {
+                        let _ = miss;
+                        best = Some((agree.len(), s2, t2));
+                    }
+                }
             }
-            let Some((s, t, miss)) = fit(&pairs) else { continue };
-            // Within a foot and a half on the plan, at a plausible scale (1/16" to 1" details).
-            if (0.1..=10.0).contains(&s) && miss <= 1.5 * self.upf.max(12.0 * self.k) {
-                return Some((s, [t.x, t.y]));
-            }
+        }
+        if let Some((_, s, t)) = best {
+            return Some((s, [t.x, t.y]));
         }
         None
     }
