@@ -152,7 +152,16 @@ fn append_ref(dst: &mut DisplayList, src: &DisplayList) {
 
 /// The list of one chunk's objects.
 fn build_chunk(d: &Drawing, chunk: &ChunkRef, opts: &Options) -> DisplayList {
-    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None, shared_budget: None, transparency: 0 };
+    let mut b = Builder {
+        list: DisplayList::default(),
+        opts,
+        plotting: false,
+        styles: None,
+        named: None,
+        shared_budget: None,
+        transparency: 0,
+        paper: false,
+    };
     for e in chunk.items() {
         top_entity(&mut b, d, e);
     }
