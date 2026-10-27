@@ -3402,40 +3402,48 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             // (the sheets sit side by side): each is put onto its level's architectural plan by
             // its sheet's registration (shared door and room numbers), so it is in the building.
             if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-                let sheets = super::identity::sheets_of(Some(&sp));
-                let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-                let reg = super::identity::register(s.doc()?, &sheets, upf);
-                let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
-                let level_key = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), l.to_ascii_uppercase().contains("ROOF"));
-                let sim = |p: [f64; 2], level: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
-                    let sheet = sheets.iter().find(|b| inside(&b.rect, p))?;
-                    let on = |t: &&cadaddy_mepfix::tagid::SheetTransform| t.registered && t.sheet.eq_ignore_ascii_case(&sheet.number);
-                    let ts: Vec<_> = reg.transforms.iter().filter(on).collect();
-                    ts.iter().find(|t| level_key(&t.level) == level_key(level)).or(ts.first()).map(|t| t.transform)
-                };
-                let (mut moved, mut left) = (0usize, 0usize);
-                for r in &mut sp.mep.runs {
-                    match r.points.first().and_then(|p| sim(*p, &r.level)) {
-                        Some(t) => {
-                            r.points.iter_mut().for_each(|p| *p = t.apply(*p));
-                            moved += 1;
-                        }
-                        None => left += 1,
+                let sim = arch_placer(s.doc()?, &sp);
+                // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
+                let before = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
+                sp.mep.runs.retain_mut(|r| match r.points.first().and_then(|p| sim(*p, &r.level)).filter(|_| r.points.last().is_some_and(|p| sim(*p, &r.level).is_some())) {
+                    Some(t) => {
+                        r.points.iter_mut().for_each(|p| *p = t.apply(*p));
+                        true
                     }
-                }
-                for t in &mut sp.mep.terminals {
-                    if let Some(m) = sim(t.at, &t.level) {
+                    None => false,
+                });
+                sp.mep.terminals.retain_mut(|t| match sim(t.at, &t.level) {
+                    Some(m) => {
                         t.at = m.apply(t.at);
+                        true
                     }
-                }
-                for e in &mut sp.mep.equipment {
-                    if let Some(m) = sim(e.min, &e.level) {
+                    None => false,
+                });
+                sp.mep.equipment.retain_mut(|e| match sim(e.min, &e.level) {
+                    Some(m) => {
                         let (a, b) = (m.apply(e.min), m.apply(e.max));
                         e.min = [a[0].min(b[0]), a[1].min(b[1])];
                         e.max = [a[0].max(b[0]), a[1].max(b[1])];
+                        true
                     }
+                    None => false,
+                });
+                let dropped = (before.0 - sp.mep.runs.len(), before.1 - sp.mep.terminals.len(), before.2 - sp.mep.equipment.len());
+                progress_line(&format!(
+                    "  MEP onto the plans: {} runs, {} terminals, {} equipment placed; not placeable (no fit to the architecture): {} runs, {} terminals, {} equipment",
+                    sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len(), dropped.0, dropped.1, dropped.2
+                ));
+                if dropped.0 + dropped.1 + dropped.2 > 0 {
+                    job.add_finding(
+                        StageName::BimBuild,
+                        "MEP items not placed",
+                        &format!("{} runs, {} terminals and {} pieces of equipment are on sheets that don't line up with an architectural plan; they are not drawn", dropped.0, dropped.1, dropped.2),
+                        2,
+                        vec!["Register those sheets onto their level's plan".into()],
+                        None,
+                        false,
+                    );
                 }
-                progress_line(&format!("  MEP onto the plans: {moved} runs moved by their sheet's registration, {left} left in place"));
                 s.doc_mut()?.building_spec = Some(sp.to_json());
             }
         }
@@ -3460,7 +3468,26 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The devices stage's devices, on their levels (bspec.draft started a new spec), before the
     // build: it makes each one an element carrying what was read about it (Q6002).
     if !job.devices.is_empty() {
-        match super::readers::place_devices(s, &job.devices, "guided job") {
+        // Onto the architecture like the MEP: a device that can't be placed is left out.
+        let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
+            Ok((sp, true)) => {
+                let sim = arch_placer(s.doc()?, &sp);
+                let out: Vec<_> = job
+                    .devices
+                    .iter()
+                    .filter_map(|dv| {
+                        let m = sim(dv.at, &dv.level)?;
+                        let mut dv = dv.clone();
+                        dv.at = m.apply(dv.at);
+                        Some(dv)
+                    })
+                    .collect();
+                progress_line(&format!("  devices onto the plans: {} placed, {} not placeable", out.len(), job.devices.len() - out.len()));
+                out
+            }
+            _ => job.devices.clone(),
+        };
+        match super::readers::place_devices(s, &devices, "guided job") {
             Ok(v) => placed = Some(v),
             Err(e) => job.add_finding(
                 StageName::BimBuild,
@@ -3823,6 +3850,69 @@ fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     job.audit("identity", "pipeline", None, Some(StageName::BimBuild), Some(json!({"merged": run.answer.get("merged"), "findings": findings.len()})));
 }
 
+
+
+/// Where a sheet point goes on its level's architectural plan (architecture is the rule): the
+/// sheet's registration when it fits on enough tags at 1:1, else the frame of a same-size
+/// architectural sheet of the level; `None` when it can't be placed.
+fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<> {
+    let sheets = super::identity::sheets_of(Some(&sp));
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let reg = super::identity::register(d, &sheets, upf);
+    let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
+    let level_key = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), l.to_ascii_uppercase().contains("ROOF"));
+    // Architecture is the rule: a placed point must land on its level's plan (5% margin).
+    let regions: Vec<(String, [f64; 4])> = sp
+        .levels
+        .iter()
+        .filter_map(|l| {
+            let r = l.region.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8))?;
+            let (mx, my) = (0.05 * (r[2] - r[0]).abs(), 0.05 * (r[3] - r[1]).abs());
+            Some((level_key(&l.name), [r[0].min(r[2]) - mx, r[1].min(r[3]) - my, r[0].max(r[2]) + mx, r[1].max(r[3]) + my]))
+        })
+        .collect();
+    let place = move |p: [f64; 2], level: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
+        let sheet = sheets.iter().find(|b| inside(&b.rect, p))?;
+        let on = |t: &&cadaddy_mepfix::tagid::SheetTransform| t.registered && t.sheet.eq_ignore_ascii_case(&sheet.number);
+        let ts: Vec<_> = reg.transforms.iter().filter(on).collect();
+        let fit = ts.iter().find(|t| level_key(&t.level) == level_key(level)).or(ts.first());
+        // A fit on a few tags or off 1:1 (an enlarged plan) is no fit.
+        if let Some(t) = fit.filter(|t| t.matched >= 4 && (0.85..=1.18).contains(&t.transform.scale())) {
+            // The fit puts the sheet onto its reference plan, which for a several-level sheet
+            // may be another level's: from there onto this level's own plan, by their frames.
+            let mut m = t.transform;
+            let own = |b: &&super::identity::SheetBox| {
+                b.discipline.eq_ignore_ascii_case("A")
+                    && level_key(&b.level) == level_key(level)
+                    && reg.transforms.iter().any(|x| x.sheet.eq_ignore_ascii_case(&b.number) && x.method == "reference")
+            };
+            if let (Some(from), Some(to)) =
+                (sheets.iter().find(|b| b.number.eq_ignore_ascii_case(&t.reference)), sheets.iter().find(own))
+                && !from.number.eq_ignore_ascii_case(&to.number)
+            {
+                m.tx += to.rect[0] - from.rect[0];
+                m.ty += to.rect[1] - from.rect[1];
+            }
+            return Some(m);
+        }
+        // Else the frame: a sheet the size of the level's architectural plan sheet has
+        // its plan in the same place on the page.
+        let size = |b: &super::identity::SheetBox| [b.rect[2] - b.rect[0], b.rect[3] - b.rect[1]];
+        let alike = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() <= 0.01 * b[0] && (a[1] - b[1]).abs() <= 0.01 * b[1];
+        let arch = sheets.iter().find(|b| {
+            b.discipline.eq_ignore_ascii_case("A") && level_key(&b.level) == level_key(level) && alike(size(b), size(sheet))
+                && reg.transforms.iter().any(|t| t.sheet.eq_ignore_ascii_case(&b.number) && t.method == "reference")
+        })?;
+        Some(cadaddy_mepfix::tagid::Sim::scale_offset(1.0, [arch.rect[0] - sheet.rect[0], arch.rect[1] - sheet.rect[1]]))
+    };
+    move |p: [f64; 2], level: &str| {
+        let m = place(p, level)?;
+        let q = m.apply(p);
+        let key = level_key(level);
+        let on = regions.iter().filter(|(k, _)| *k == key).any(|(_, r)| inside(r, q));
+        (on || regions.iter().all(|(k, _)| *k != key)).then_some(m)
+    }
+}
 pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[SheetRegion]) {
     for r in regions.iter().take(MAX_SHEET_LINKS) {
         if !r.rect.iter().all(|v| v.is_finite()) {
