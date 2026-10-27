@@ -314,3 +314,33 @@ fn model_build_follows_the_spec_and_is_deterministic() {
     assert_eq!(n as usize, first.len());
     eprintln!("model.build: {} objects in {:?}", first.len(), took);
 }
+
+#[test]
+fn an_unreadable_stored_spec_can_be_replaced() {
+    for broken in [r#"{"version":99}"#, r#"{"levels":"x"}"#] {
+        let mut s = plan();
+        s.doc_mut().unwrap().building_spec = Some(broken.to_string());
+        // Every command that reads the stored spec says what is wrong and what to do.
+        let get = s.execute("bspec.get", &json!({})).unwrap_err().to_string();
+        assert!(get.contains("building spec") && get.contains("replace"), "{broken}: {get}");
+        for (cmd, p) in [("bspec.validate", json!({})), ("model.build", json!({})), ("bspec.set", json!({"spec": {"site": null}}))] {
+            let e = s.execute(cmd, &p).unwrap_err().to_string();
+            assert!(e.contains("replace"), "{broken} {cmd}: {e}");
+        }
+        assert_eq!(s.doc().unwrap().building_spec.as_deref(), Some(broken), "{broken}: a failed set kept the text");
+        // Clearing the built model never needs the spec.
+        assert_eq!(s.execute("model.build", &json!({"clear": true})).unwrap()["removed"], json!(0));
+        // replace: true never reads the old spec, so it fixes the drawing.
+        let set = s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
+        assert_eq!(set["errors"], json!([]), "{broken}: {set}");
+        let got = s.execute("bspec.get", &json!({})).unwrap();
+        assert_eq!(got["stored"], json!(true), "{broken}");
+        assert_eq!(got["spec"], set["spec"], "{broken}");
+        assert!(s.execute("bspec.validate", &json!({})).unwrap()["ok"].as_bool().unwrap(), "{broken}");
+        // Undo puts the old (unreadable) text back.
+        s.undo().unwrap();
+        assert_eq!(s.doc().unwrap().building_spec.as_deref(), Some(broken), "{broken}: undo");
+        // validate/model.build with replace and a spec also skip the stored text.
+        assert_eq!(s.execute("bspec.validate", &json!({"spec": spec(), "replace": true})).unwrap()["ok"], json!(true), "{broken}");
+    }
+}

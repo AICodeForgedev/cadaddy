@@ -78,7 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.bom", "Bill of Materials", run)
             .alias(&["bom"])
             .params(
-                "{group_by?: job|level|trade|circuit (each level's lines per branch circuit), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
+                "{group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
             ),
     ]
 }
@@ -1806,6 +1806,10 @@ pub(super) fn model_lines(s: &mut Session) -> Result<Vec<Value>> {
 }
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
+    // By the elements' properties (Q6003): any keys, a filter by kind or property.
+    if super::propuse::by_properties(p, &["job", "level", "trade", "circuit"], &[]) {
+        return super::propuse::grouped(s, "bim.bom", p);
+    }
     let group = str_param(p, "group_by").unwrap_or("job").to_ascii_lowercase();
     let all_elements = p.get("all_elements").and_then(Value::as_bool).unwrap_or(false);
     if !matches!(group.as_str(), "job" | "level" | "trade" | "circuit") {
