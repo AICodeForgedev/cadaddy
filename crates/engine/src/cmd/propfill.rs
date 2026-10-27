@@ -605,7 +605,111 @@ fn room_label(number: Option<&str>, name: &str) -> String {
 }
 
 fn same_level(r: &RoomShape, level: Option<&str>) -> bool {
-    r.level.is_none() || level.is_none() || r.level.as_deref().zip(level).is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+    r.level.is_none() || level.is_none() || r.level.as_deref().zip(level).is_some_and(|(a, b)| level_key(a) == level_key(b))
+}
+
+/// A level's name as a key, so the readers' names for one level match: `Level 1`, `LEVEL 1`,
+/// `1ST FLOOR`, `FIRST FLOOR`, `L1` and `1` are all `#1`; `ROOF` is `R`; anything else as written.
+pub fn level_key(name: &str) -> String {
+    let u = name.trim().to_ascii_uppercase();
+    let digits: String = u.chars().skip_while(|c| !c.is_ascii_digit()).take_while(char::is_ascii_digit).collect();
+    if let Ok(n) = digits.parse::<u32>() {
+        return format!("#{n}");
+    }
+    const ORDINALS: [(&str, u32); 10] = [
+        ("FIRST", 1),
+        ("SECOND", 2),
+        ("THIRD", 3),
+        ("FOURTH", 4),
+        ("FIFTH", 5),
+        ("SIXTH", 6),
+        ("SEVENTH", 7),
+        ("EIGHTH", 8),
+        ("NINTH", 9),
+        ("TENTH", 10),
+    ];
+    if let Some((_, n)) = ORDINALS.iter().find(|(w, _)| u.split(|c: char| !c.is_ascii_alphabetic()).any(|x| x == *w)) {
+        return format!("#{n}");
+    }
+    if u.contains("ROOF") {
+        return "R".into();
+    }
+    u
+}
+
+/// The rooms devices and fixtures are put in: the model's room elements (their tag's number,
+/// else the number the fill read inside them, else their name), else `rooms`.
+fn room_shapes(d: &Drawing, rooms: &[super::rooms3d::Room3]) -> Vec<RoomShape> {
+    let els = super::bspec::room_elements(d);
+    if els.is_empty() {
+        return rooms
+            .iter()
+            .filter(|r| r.outline.len() >= 3)
+            .map(|r| RoomShape {
+                bounds: Bounds2::from_points(r.outline.iter().copied()),
+                outline: r.outline.clone(),
+                level: r.level.clone(),
+                label: room_label(r.number.as_deref(), &r.name),
+            })
+            .collect();
+    }
+    els.into_iter()
+        .filter(|r| r.outline.len() >= 3)
+        .map(|r| {
+            let stored = d.model.get(r.handle).and_then(|e| props::read(&e.common.xdata).get("number").filter(|p| p.has_value()).map(Prop::text));
+            let number = r.number.clone().filter(|n| !n.trim().is_empty()).or(stored);
+            RoomShape {
+                bounds: Bounds2::from_points(r.outline.iter().copied()),
+                level: Some(r.level.clone()).filter(|l| !l.trim().is_empty()),
+                label: room_label(number.as_deref(), &r.name),
+                outline: r.outline,
+            }
+        })
+        .collect()
+}
+
+/// Give each room element whose tag has no number the room number printed inside it (on its
+/// plan: the build moved stacked levels), nearest its middle (`print`); how many got one.
+fn number_rooms(d: &mut Drawing, sp: &BuildingSpec, texts: &[(String, Vec2, f64)]) -> usize {
+    let els: Vec<super::bspec::RoomElement> = super::bspec::room_elements(d)
+        .into_iter()
+        .filter(|r| r.number.as_deref().is_none_or(|n| n.trim().is_empty()) && r.outline.len() >= 3)
+        .collect();
+    if els.is_empty() {
+        return 0;
+    }
+    let cell = texts.iter().map(|(_, _, h)| *h).filter(|h| h.is_finite()).fold(0.0, f64::max).max(1.0) * 20.0;
+    let grid = TextGrid::new(texts.to_vec(), cell);
+    let mut changes: Vec<(Handle, Props)> = Vec::new();
+    for r in els.iter().take(MAX_ELEMENTS) {
+        let Some(e) = d.model.get(r.handle) else { continue };
+        let mut store = props::read(&e.common.xdata);
+        if store.get("number").is_some_and(|p| p.has_value()) {
+            continue;
+        }
+        let shift = super::bspec::stacked_by(e);
+        let plan: Vec<Vec2> = r.outline.iter().map(|p| *p - shift).collect();
+        let b = Bounds2::from_points(plan.iter().copied());
+        let mid = b.center();
+        let reach = (b.width().hypot(b.height()) / 2.0).min(200.0 * sp.units_per_foot.max(1.0));
+        let found = grid.near(mid, reach).into_iter().find(|(t, q, _)| {
+            super::perceive::geometry::room_number(t)
+                && !super::guided::is_circuit_tag(t)
+                && b.contains(*q)
+                && cadaddy_geom::point_in_polygon(&plan, *q)
+        });
+        let Some((t, q, _)) = found else { continue };
+        let src = Source::print(&sheet_at(sp, q, Some(&r.level)), Some([q.x, q.y]));
+        store.set("number", Prop::new(t.trim().to_string(), src).with_note("the room number printed inside the room"));
+        changes.push((r.handle, store));
+    }
+    let mut n = 0;
+    for (h, store) in changes {
+        if d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).is_ok() {
+            n += 1;
+        }
+    }
+    n
 }
 
 /// The room holding `p` on `level` (any level when the room has none).
@@ -1106,24 +1210,18 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
     let (sp, stored) = super::bspec::current(s, FILL)?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     // The rooms (the build's, or the plan's), in model coordinates.
-    let rooms3 = super::rooms3d::rooms(s).unwrap_or_default();
-    let rooms: Vec<RoomShape> = rooms3
-        .iter()
-        .filter(|r| r.outline.len() >= 3)
-        .map(|r| RoomShape {
-            bounds: Bounds2::from_points(r.outline.iter().copied()),
-            outline: r.outline.clone(),
-            level: r.level.clone(),
-            label: room_label(r.number.as_deref(), &r.name),
-        })
-        .collect();
-    // The plan's texts, for door numbers, airflows and fixture tags.
+    // The plan's texts, for room and door numbers, airflows and fixture tags.
     let texts: Vec<(String, Vec2, f64)> = {
         let plan = super::bspec::plan_objects(s.doc()?);
         super::perceive::texts(&plan).into_iter().map(|(_, t, p, h)| (t, p, h)).filter(|(t, _, _)| !t.is_empty()).collect()
     };
+    // A room element whose tag gave no number: the room number printed inside it.
+    let rooms_numbered = number_rooms(s.doc_mut()?, &sp, &texts);
+    let rooms3 = super::rooms3d::rooms(s).unwrap_or_default();
+    let rooms: Vec<RoomShape> = room_shapes(s.doc()?, &rooms3);
     let fixtures_placed = place_fixtures(s.doc_mut()?, &sp, schedules, &texts);
     let d = s.doc()?;
+    let text_count = texts.len();
     let grid = TextGrid::new(texts, 4.0 * upf);
     // The runs and terminals by the ids their built objects carry.
     let runs: HashMap<String, &cadaddy_walk3d::MepRun> = sp.mep.runs.iter().map(|r| (super::mep::run_base(r), r)).collect();
@@ -1152,6 +1250,8 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
     let room_level = |label: &str| rooms3.iter().find(|r| room_label(r.number.as_deref(), &r.name).eq_ignore_ascii_case(label));
     let mut filled: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut changes: Vec<(Handle, Props)> = Vec::new();
+    let mut element_levels: BTreeMap<String, usize> = BTreeMap::new();
+    let mut terminals = 0usize;
     for (h, kind) in &work {
         let Some(e) = d.model.get(*h) else { continue };
         let mut store = props::read(&e.common.xdata);
@@ -1159,6 +1259,9 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
         let tally = filled.entry(kind.clone()).or_default();
         let level = super::bspec::made_level(e);
         let lvl = level.as_deref();
+        if kind == "device" && element_levels.len() < 50 {
+            *element_levels.entry(level.clone().unwrap_or_default()).or_default() += 1;
+        }
         let ext = extent(d, e);
         let level_z = lvl.and_then(|l| sp.level(l)).map_or(0.0, |l| l.elevation_ft * upf);
         let shift = super::bspec::stacked_by(e);
@@ -1172,7 +1275,7 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
                 }
                 let host = walls
                     .iter()
-                    .filter(|(_, l, _)| l.as_deref().zip(lvl).is_none_or(|(a, b)| a.eq_ignore_ascii_case(b)))
+                    .filter(|(_, l, _)| l.as_deref().zip(lvl).is_none_or(|(a, b)| level_key(a) == level_key(b)))
                     .map(|(wh, _, wb)| (wh, dist_to(wb, c)))
                     .filter(|(_, dd)| *dd <= HOST_WALL_FT * upf)
                     .min_by(|a, b| a.1.total_cmp(&b.1));
@@ -1335,6 +1438,7 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
                         );
                     }
                     if part.starts_with("terminal") {
+                        terminals += 1;
                         let kind_word = part.trim_start_matches("terminal").trim_start_matches(':');
                         if !kind_word.is_empty() {
                             put(&mut store, "type", Prop::new(kind_word.to_string(), Source::print(&sheet, None)), tally);
@@ -1401,7 +1505,23 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
     if changed + fixtures_placed > 0 {
         s.touch();
     }
-    Ok(json!({ "filled": filled, "elements": changed, "fixtures_placed": fixtures_placed, "spec": stored }))
+    // What the fill had to go on, for a run on a set no one can see.
+    let mut room_levels: BTreeMap<String, usize> = BTreeMap::new();
+    for r in &rooms {
+        *room_levels.entry(r.level.clone().unwrap_or_default()).or_default() += 1;
+    }
+    let diagnostics = json!({
+        "rooms": rooms.len(),
+        "rooms_labelled": rooms.iter().filter(|r| !r.label.trim().is_empty()).count(),
+        "rooms_numbered_from_text": rooms_numbered,
+        "room_levels": room_levels,
+        "element_levels": element_levels,
+        "schedule_rows": schedules.len(),
+        "fixture_rows": fixture_rows(schedules).len(),
+        "terminals": terminals,
+        "texts": text_count,
+    });
+    Ok(json!({ "filled": filled, "elements": changed, "fixtures_placed": fixtures_placed, "spec": stored, "diagnostics": diagnostics }))
 }
 
 /// The sheet a plan point lies on (the set's sheet rectangles), else the level's name.

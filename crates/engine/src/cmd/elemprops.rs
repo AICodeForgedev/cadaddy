@@ -277,9 +277,11 @@ fn num(s: &str) -> Option<f64> {
 /// the model holds as a room element (same number, or unnumbered the same name) is that room's
 /// 3D view, not a second room.
 fn elements(d: &Drawing) -> impl Iterator<Item = (&std::sync::Arc<Entity>, String)> {
+    // A room element's number: its tag's, else the one stored on it (read inside it, or a person's).
+    let stored = |h: Handle| d.model.get(h).and_then(|e| props::read(&e.common.xdata).get("number").filter(|p| p.has_value()).map(Prop::text));
     let modelled: BTreeSet<String> = super::bspec::room_elements(d)
         .into_iter()
-        .map(|r| r.number.filter(|n| !n.trim().is_empty()).unwrap_or(r.name).trim().to_ascii_uppercase())
+        .map(|r| r.number.filter(|n| !n.trim().is_empty()).or_else(|| stored(r.handle)).unwrap_or(r.name).trim().to_ascii_uppercase())
         .collect();
     d.model.iter().take(MAX_SCAN).filter_map(move |e| {
         let k = element_kind(e)?;

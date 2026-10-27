@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use cadaddy_engine::Session;
 use cadaddy_engine::cmd::propfill::{
-    airflow_number, cfm_in, device_class, device_type_of, door_number, mount_height_in, panel_of, terminal_type_tag,
+    airflow_number, cfm_in, device_class, device_type_of, door_number, level_key, mount_height_in, panel_of, terminal_type_tag,
 };
 use cadaddy_engine::cmd::wallgen::made_as;
 use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Handle, Line, RawTag};
@@ -455,6 +455,12 @@ fn the_text_readers() {
     for t in ["", "A", "SEE NOTE 4", "SWITCHBOARD SB-1", "LIGHTNING PROTECTION"] {
         assert_eq!(device_type_of(t), None, "{t}");
     }
+    for l in ["Level 1", "LEVEL 1", "1ST FLOOR", "FIRST FLOOR PLAN", "L1", "1"] {
+        assert_eq!(level_key(l), "#1", "{l}");
+    }
+    assert_eq!(level_key("Level 2"), "#2");
+    assert_eq!(level_key("ROOF"), "R");
+    assert_eq!(level_key("Mezzanine"), "MEZZANINE");
     assert_eq!(airflow_number("150"), Some(150.0));
     assert_eq!(airflow_number("1,200"), Some(1200.0));
     for t in ["10", "9000", "150 CFM", "12x12", "1A"] {
@@ -657,4 +663,39 @@ fn the_guided_job_reads_the_schedules_onto_fixtures_and_equipment() {
     assert!(fixtures > 0, "fixtures with connections: {:#}", k["fixture"]);
     assert_eq!(k["fixture"]["filled"]["cw_size"].as_u64(), Some(fixtures), "{:#}", k["fixture"]);
     assert!(k["equipment"]["filled"]["capacity"].as_u64().unwrap_or(0) > 0, "{:#}", k["equipment"]);
+}
+
+/// A room element whose tag carries no number takes the room number printed inside it (`print`,
+/// with where), and the devices standing in it get that room; the fill says what it went on.
+#[test]
+fn a_room_without_a_numbered_tag_takes_the_number_printed_inside_it() {
+    let mut s = plan();
+    // Office 101's room element, its tag's number taken off.
+    let room = {
+        let d = s.doc().expect("doc");
+        d.model
+            .iter()
+            .filter(|e| made_as(e).as_deref() == Some("room"))
+            .find(|e| e.common.xdata.iter().any(|t| t.value == "number:101"))
+            .map(|e| e.handle)
+            .expect("office 101's room element")
+    };
+    s.doc_mut()
+        .expect("doc")
+        .modify_entity(room, |e| {
+            e.common.xdata = e.common.xdata.iter().filter(|t| !t.value.starts_with("number:")).cloned().collect::<Vec<_>>().into()
+        })
+        .expect("untag");
+    assert!(get(&mut s, &room.hex())["number"].is_null(), "no number before the fill");
+    let r = fill(&mut s);
+    assert_eq!(r["diagnostics"]["rooms_numbered_from_text"], json!(1), "{r:#}");
+    assert!(r["diagnostics"]["rooms"].as_u64().unwrap_or(0) >= 2, "{r:#}");
+    assert!(r["diagnostics"]["element_levels"]["L1"].as_u64().unwrap_or(0) >= 4, "{r:#}");
+    let p = get(&mut s, &room.hex());
+    assert_eq!(p["number"]["value"], "101", "{p:#}");
+    assert_eq!(p["number"]["source"]["kind"], "print");
+    assert_eq!(p["number"]["note"], "the room number printed inside the room");
+    assert_eq!(device_of(&mut s, "A")["room"]["value"], "101", "the device in it gets its number");
+    let sum = s.execute("bim.props.summary", &json!({})).expect("summary");
+    assert_eq!(sum["kinds"]["room"]["filled"]["number"], json!(2), "{:#}", sum["kinds"]["room"]);
 }
