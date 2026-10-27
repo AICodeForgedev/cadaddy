@@ -848,3 +848,35 @@ fn a_printed_core_plan_counts_bare_copies_beside_lettering() {
     assert_eq!(core.twins, 4, "{core:#?}");
     assert_eq!(l.double_counted, 0);
 }
+
+/// A fixture schedule printed over the core plan, the plan's lettering running on below its
+/// rows: the schedule's samples stay out, the plan's five devices count.
+#[test]
+fn a_schedule_over_the_core_plan_does_not_take_its_devices_for_samples() {
+    let (sheets, pages) = with_e3(linkset::enlarged_sheet_under_a_schedule(Some(("ENLARGED FIRST FLOOR CORE PLAN", true))));
+    let l = printlinks::link_set(&sheets, &pages);
+    let core = l.enlarged.iter().find(|e| e.sheet == "E-3" && e.detail == "1").unwrap_or_else(|| panic!("{:#?}", l.enlarged));
+    assert_eq!(core.devices, 5, "{core:#?}");
+    assert_eq!(core.devices_by_type.get("A"), Some(&5), "{core:#?}");
+    // The schedule's own sample stays a sample.
+    let e3 = pages.iter().find(|p| p.sheet.number == "E-3").map(|p| &p.read.samples);
+    assert_eq!(e3.map(Vec::len), Some(1), "{e3:?}");
+    assert_eq!(l.double_counted, 0);
+}
+
+/// The same sheet printed and imported.
+#[test]
+fn a_printed_schedule_over_the_core_plan_does_not_take_its_devices_for_samples() {
+    let (sheets, mut pages) = printed_set();
+    let pdf = linkset::print(&linkset::enlarged_sheet_under_a_schedule(Some(("ENLARGED FIRST FLOOR CORE PLAN", true))))
+        .unwrap_or_else(|e| panic!("E-3: {e}"));
+    let (page, _) = cadaddy_io::pdf_read::read_json(&pdf, &serde_json::json!({"page": 1, "images": false, "fills": "merge"}))
+        .unwrap_or_else(|e| panic!("E-3: {e}"));
+    for p in pages.iter_mut().filter(|p| p.sheet.number == "E-3") {
+        p.read = printlinks::read_page(&page, "E-3");
+    }
+    let l = printlinks::link_set(&sheets, &pages);
+    let core = l.enlarged.iter().find(|e| e.sheet == "E-3" && e.detail == "1").unwrap_or_else(|| panic!("{:#?}", l.enlarged));
+    assert_eq!(core.devices, 5, "{core:#?}");
+    assert_eq!(l.double_counted, 0);
+}

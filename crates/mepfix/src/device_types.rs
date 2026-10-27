@@ -76,6 +76,19 @@ pub fn is_device_table_heading(t: &str) -> bool {
 /// The legends and device schedules among a sheet's texts: each table's type tags (the first
 /// text of each row) and extent.
 pub fn read_legend(texts: &[TextItem]) -> Legend {
+    read_tables(texts, false)
+}
+
+/// [`read_legend`]'s types, with each table's extent kept to the table itself: its rows end at
+/// the first one that doesn't start in a column of its first rows, and lettering in a row past
+/// the table's width is not the table's. Otherwise a table's rows run on through any lettering
+/// below it with no blank band, as a dense plan under a schedule has, and every symbol of that
+/// plan reads as a legend sample.
+pub fn read_legend_tight(texts: &[TextItem]) -> Legend {
+    read_tables(texts, true)
+}
+
+fn read_tables(texts: &[TextItem], tight: bool) -> Legend {
     let mut out = Legend::default();
     let headings = texts.iter().filter(|t| is_device_table_heading(&t.value) && t.height > 0.0 && t.height.is_finite()).take(MAX_TABLES);
     for h in headings {
@@ -122,12 +135,61 @@ pub fn read_legend(texts: &[TextItem]) -> Legend {
         if tags.len() < MIN_TAG_ROWS {
             continue;
         }
+        if tight {
+            ext = table_extent(h, &rows);
+        }
         // Room for the symbols drawn left of the first column and the last row's height.
         let pad = 2.0 * hh;
         out.regions.push([ext[0] - pad, ext[1] - pad, ext[2] + pad, ext[3] + pad]);
         out.types.extend(tags);
     }
     out
+}
+
+/// A row of a table starts within this many text heights of one of its columns.
+const COLUMN_TOL: f64 = 2.0;
+/// A gap this many text heights wide between two texts of a table's first rows ends the table.
+const TABLE_GAP: f64 = 30.0;
+
+/// The extent of a table's `rows` under heading `h` that keep to the table: the columns are
+/// where the first two rows' cells start (the column titles, or the first entries), the width
+/// is theirs up to a wide gap, and the rows end at the first one starting outside every column
+/// or below a blank band.
+fn table_extent(h: &TextItem, rows: &[Vec<&TextItem>]) -> [f64; 4] {
+    let right = |t: &TextItem| t.at.x + t.height * t.value.chars().count() as f64;
+    let mut ext = [h.at.x, h.at.y + h.height, h.at.x, h.at.y];
+    // The first rows' cells, left to right up to a gap no table leaves between its columns.
+    let mut head: Vec<&TextItem> = rows.iter().take(2).flatten().copied().collect();
+    head.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+    let mut cells: Vec<&TextItem> = Vec::new();
+    for t in head {
+        let reach = cells.iter().map(|c| right(c)).fold(f64::NEG_INFINITY, f64::max);
+        if !cells.is_empty() && t.at.x - reach > TABLE_GAP * t.height {
+            break;
+        }
+        cells.push(t);
+    }
+    let Some(lo) = cells.iter().map(|t| t.at.x).reduce(f64::min) else { return ext };
+    let hi = cells.iter().map(|t| right(t)).fold(lo, f64::max);
+    let tol = |t: &TextItem| COLUMN_TOL * t.height;
+    let mut last: Option<(f64, f64)> = None;
+    for (i, row) in rows.iter().enumerate() {
+        let own: Vec<&TextItem> = row.iter().copied().filter(|t| t.at.x >= lo - tol(t) && t.at.x <= hi + tol(t)).collect();
+        let Some(first) = own.iter().min_by(|a, b| a.at.x.total_cmp(&b.at.x)) else { continue };
+        if i >= 2 && !cells.iter().any(|c| (first.at.x - c.at.x).abs() <= tol(first).max(tol(c))) {
+            break;
+        }
+        if let Some((y, th)) = last
+            && y - first.at.y > ROW_GAP * th.max(first.height)
+        {
+            break;
+        }
+        for t in &own {
+            ext = [ext[0].min(t.at.x), ext[1].min(t.at.y), ext[2].max(right(t)), ext[3].max(t.at.y)];
+        }
+        last = Some((first.at.y, first.height));
+    }
+    ext
 }
 
 /// Whether `tag` is a mark electrical sets use without listing it.
@@ -210,6 +272,49 @@ mod tests {
         assert!(l.covers(Vec2::new(1495.0, 1160.0)), "a sample symbol beside the schedule");
         assert!(!l.covers(Vec2::new(1505.0, 600.0)), "plan below the blank band");
         assert!(!l.covers(Vec2::new(200.0, 1300.0)), "the note");
+    }
+
+    /// A made-up schedule over a dense plan: the plan's lettering runs on below its last row
+    /// with no blank band, and more plan lettering stands beside its rows.
+    fn schedule_over_a_plan() -> Vec<TextItem> {
+        let mut v = vec![t("LIGHTING FIXTURE SCHEDULE", 100.0, 1000.0, 8.0), t("TYPE", 100.0, 985.0, 5.0), t("DESCRIPTION", 130.0, 985.0, 5.0)];
+        for (i, ty) in ["A", "B", "C"].iter().enumerate() {
+            let y = 973.0 - 12.0 * i as f64;
+            v.push(t(ty, 101.0, y, 5.0));
+            v.push(t("LED FIXTURE", 130.0, y, 5.0));
+            // a room name of the plan beside the table, on the row's line
+            v.push(t("OFFICE", 600.0, y, 5.0));
+        }
+        // the plan under the table: room numbers, tags and circuits every 15 units down
+        for i in 0..40 {
+            let y = 935.0 - 15.0 * i as f64;
+            v.push(t("A", 160.0 + (i % 5) as f64 * 70.0, y, 5.0));
+            v.push(t("D-12", 190.0 + (i % 3) as f64 * 90.0, y - 4.0, 5.0));
+        }
+        v
+    }
+
+    #[test]
+    fn a_tight_table_ends_where_its_rows_and_columns_do() {
+        let texts = schedule_over_a_plan();
+        let loose = read_legend(&texts);
+        let tight = read_legend_tight(&texts);
+        assert_eq!(tight.types, loose.types, "the same types");
+        assert!(tight.types.contains("B"));
+        assert_eq!(tight.regions.len(), 1, "{:?}", tight.regions);
+        // the loose table runs on into the plan; the tight one stops at its last row
+        assert!(loose.covers(Vec2::new(300.0, 700.0)), "{:?}", loose.regions);
+        assert!(tight.covers(Vec2::new(95.0, 950.0)), "a sample beside the last row: {:?}", tight.regions);
+        for p in [[300.0, 700.0], [160.0, 920.0], [450.0, 500.0], [600.0, 960.0]] {
+            assert!(!tight.covers(Vec2::new(p[0], p[1])), "plan at {p:?}: {:?}", tight.regions);
+        }
+        // the made-up sheet's tables are where they were
+        let sheet = sheet();
+        let (a, b) = (read_legend(&sheet), read_legend_tight(&sheet));
+        assert_eq!(a.types, b.types);
+        assert_eq!(b.regions.len(), 2);
+        assert!(b.covers(Vec2::new(1495.0, 1160.0)) && b.covers(Vec2::new(1500.0, 965.0)), "{:?}", b.regions);
+        assert!(!b.covers(Vec2::new(1505.0, 600.0)));
     }
 
     #[test]

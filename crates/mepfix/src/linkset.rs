@@ -399,6 +399,27 @@ pub fn enlarged_sheet_with_bare_copies_by_lettering(title: Option<(&str, bool)>)
     s.d
 }
 
+/// E-3 as [`enlarged_sheet`] with a lighting fixture schedule printed over the core plan and
+/// the plan's room names running down from under it with no blank band between: the schedule's
+/// rows end at its own last row, not at the bottom of the plan.
+pub fn enlarged_sheet_under_a_schedule(title: Option<(&str, bool)>) -> Drawing {
+    let mut s = Sheet { d: enlarged_sheet(title) };
+    s.text("LIGHTING FIXTURE SCHEDULE", [5.0, 23.3], 0.15, 0.0);
+    s.text("TYPE", [5.0, 23.0], 0.1, 0.0);
+    s.text("DESCRIPTION", [5.6, 23.0], 0.1, 0.0);
+    for (i, (ty, what)) in [("A", "DUPLEX RECEPTACLE"), ("B", "LED TROFFER")].into_iter().enumerate() {
+        let y = 22.8 - 0.2 * i as f64;
+        s.text(ty, [5.0, y], 0.1, 0.0);
+        s.text(what, [5.6, y], 0.1, 0.0);
+    }
+    // The schedule's sample of type A, left of its row.
+    s.device("A", [4.8, 22.8]);
+    for (i, name) in ["CORRIDOR", "LOBBY", "STAIR"].iter().cycle().take(37).enumerate() {
+        s.text(name, [13.0, 22.1 - 0.5 * i as f64], 0.1, 0.0);
+    }
+    s.d
+}
+
 /// E-4: details; detail 2 prints the receptacle's mounting height.
 fn e4() -> Drawing {
     let mut s = Sheet::new();

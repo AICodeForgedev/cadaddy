@@ -181,6 +181,8 @@ pub struct PageRead {
     pub devices: Vec<PageDevice>,
     /// Where the symbols with no mark beside them are (legend samples left out).
     pub untagged: Vec<[f64; 2]>,
+    /// Where the symbols inside a legend or schedule are (its samples, never devices).
+    pub samples: Vec<[f64; 2]>,
     /// Device types its legends and schedules list.
     pub legend_types: BTreeSet<String>,
     pub match_lines: Vec<PageMatchLine>,
@@ -254,6 +256,9 @@ pub struct Enlarged {
     pub uncounted_tags: BTreeMap<String, usize>,
     pub untagged_symbols: usize,
     pub in_smaller_views: usize,
+    /// Symbols there inside a legend or schedule of the sheet, left out as its samples.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub legend_samples: usize,
     /// Of `devices`, the untagged copies of a symbol the import made (see [`PageDevice::twin`]).
     #[serde(skip_serializing_if = "is_zero")]
     pub twins: usize,
@@ -1150,8 +1155,10 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         }
     }
 
-    // Devices: the import's symbols with the mark beside them; legends say which are samples.
-    let legend = device_types::read_legend(&texts);
+    // Devices: the import's symbols with the mark beside them; legends say which are samples
+    // (each table only as far as its own rows and columns go: a schedule over the plan doesn't
+    // take the plan's devices for samples).
+    let legend = device_types::read_legend_tight(&texts);
     out.legend_types = legend.types.clone();
     let mut syms: Vec<PageDevice> = Vec::new();
     let mut inserts: Vec<(String, [f64; 2], String)> = Vec::new();
@@ -1168,6 +1175,8 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         inserts.push((ins.block.clone(), [at.x, at.y], e.handle.hex()));
         if !legend.covers(at) {
             syms.push(PageDevice { tag, at: [at.x, at.y], handle: e.handle.hex(), alt: None, circuit_only: false, twin: false });
+        } else if out.samples.len() < MAX_PAGE_DEVICES {
+            out.samples.push([at.x, at.y]);
         }
     }
     marks_beside(&mut syms, &texts, &legend, median_h);
@@ -1512,6 +1521,7 @@ fn count_devices(
         }
     }
     entry.untagged_symbols = page.read.untagged.iter().filter(|p| holds(**p) && !smaller.iter().any(|r| inside(r, **p))).count();
+    entry.legend_samples = page.read.samples.iter().filter(|p| holds(**p) && !smaller.iter().any(|r| inside(r, **p))).count();
     entry.in_smaller_views = page.read.devices.iter().filter(|dv| holds(dv.at) && smaller.iter().any(|r| inside(r, dv.at))).count();
 }
 
@@ -2056,6 +2066,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                         entry.devices = by_box.devices;
                         entry.devices_by_type = by_box.devices_by_type;
                         entry.twins = by_box.twins;
+                        entry.legend_samples = by_box.legend_samples;
                         entry.device_handles = by_box.device_handles;
                         entry.devices_from = "boundary".into();
                     }
