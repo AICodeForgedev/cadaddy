@@ -87,6 +87,10 @@ real_name = "Richard Sauer"
 display_name = "Richard Sauer"
 sync_github_name = false
 
+[people.dotCooCoo]
+real_name = "Robert Lee"
+sync_github_name = true
+
 [people.assamaral]
 real_name = "assamaral"
 sync_github_name = false

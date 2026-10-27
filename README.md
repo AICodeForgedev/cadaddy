@@ -123,8 +123,7 @@ numbers):
 
 ## Quick start
 
-Desktop and web UI builds require Rust 1.95 or later. The core workspace's declared minimum
-remains Rust 1.90.
+CADCraft requires Rust 1.95 or later.
 
 ```sh
 git clone https://github.com/storytold/cadcraft
