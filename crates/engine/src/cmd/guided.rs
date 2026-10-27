@@ -2146,9 +2146,9 @@ fn device_identity(s: &Session, job: &GuidedJob, census: &mut DeviceCensus) -> u
     drop.len()
 }
 
-/// A 256-pixel PNG of the drawing around `at` (the first symbol printing an unlisted tag),
-/// written into `dir`; its path.
-fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, dir: &std::path::Path, name: &str) -> Option<String> {
+/// An 800-pixel PNG of the drawing around `at` (the first symbol printing an unlisted tag),
+/// written into `dir`; its path.  Returns `None` when the render is blank after retries.
+fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, dir: &std::path::Path, name: &str, sheet: &str) -> Option<String> {
     let d = s.doc().ok()?;
     let store = d.space(&s.space())?;
     let centre = cadaddy_geom::Vec2::new(at[0], at[1]);
@@ -2159,21 +2159,37 @@ fn tag_crop(s: &Session, at: [f64; 2], span: (u64, u64), handle: Option<&str>, d
         .map(|e| cadaddy_doc::entity_bounds(d, e, 0))
         .filter(|b| !b.is_empty());
     let r = sym.map_or(0.0, |b| b.width().max(b.height()));
-    let half = if r.is_finite() && r > 0.0 { 4.0 * r } else { 24.0 };
-    let window = cadaddy_geom::Bounds2::new(centre, centre).expand(half);
-    // The sheets overlap in model space: draw only this sheet's objects.
-    let near: Vec<&cadaddy_doc::Entity> = store
-        .iter()
-        .filter(|e| (span.0..span.1).contains(&e.handle.0) && cadaddy_doc::entity_bounds(d, e, 0).intersects(&window))
-        .map(|e| e.as_ref())
-        .take(20_000)
-        .collect();
-    let list = cadaddy_render::build_entities(d, near, &cadaddy_render::Options::default());
-    let view = cadaddy_render::raster::View::fit(&window, 256, 256, 0.0);
+    let base_half = if r.is_finite() && r > 0.0 { 4.0 * r } else { 24.0 };
     let ro = cadaddy_render::raster::RasterOptions { background: cadaddy_color::Rgb(255, 255, 255), hairline: 1.0, px_per_mm: 0.0, antialias: true };
-    let png = cadaddy_render::raster::render_png(&list, &view, &ro)?;
+    // Try progressively wider windows if the render is blank.
+    let mut png_bytes: Option<Vec<u8>> = None;
+    for zoom in &[1.0_f64, 2.0, 4.0] {
+        let half = base_half * zoom;
+        let window = cadaddy_geom::Bounds2::new(centre, centre).expand(half);
+        // The sheets overlap in model space: draw only this sheet's objects.
+        let near: Vec<&cadaddy_doc::Entity> = store
+            .iter()
+            .filter(|e| (span.0..span.1).contains(&e.handle.0) && cadaddy_doc::entity_bounds(d, e, 0).intersects(&window))
+            .map(|e| e.as_ref())
+            .take(20_000)
+            .collect();
+        let list = cadaddy_render::build_entities(d, near, &cadaddy_render::Options::default());
+        let view = cadaddy_render::raster::View::fit(&window, 800, 800, 0.0);
+        let Some(pm) = cadaddy_render::raster::render(&list, &view, &ro) else { continue };
+        let blank = pm.data().chunks_exact(4).all(|px| px[0] == 255 && px[1] == 255 && px[2] == 255);
+        if let Ok(encoded) = pm.encode_png() {
+            if !blank {
+                png_bytes = Some(encoded);
+                break;
+            }
+            // Keep the last render even if blank — we'll save it if nothing better comes.
+            png_bytes = Some(encoded);
+        }
+    }
+    let png = png_bytes?;
     let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).take(24).collect();
-    let path = dir.join(format!("tag-{safe}.png"));
+    let sheet_safe: String = sheet.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).take(16).collect();
+    let path = dir.join(format!("tag-{safe}-{sheet_safe}.png"));
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::fs::create_dir_all(dir).ok()?;
@@ -2607,7 +2623,7 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             .iter()
             .enumerate()
             .map(|(i, (tag, u))| {
-                let crop = if i < MAX_TAG_CROPS { tag_crop(s, u.at, u.span, u.handles.first().map(String::as_str), &crop_dir, tag) } else { None };
+                let crop = if i < MAX_TAG_CROPS { tag_crop(s, u.at, u.span, u.handles.first().map(String::as_str), &crop_dir, tag, &u.sheet) } else { None };
                 json!({"description": tag, "tag": tag, "count": u.count, "at": u.at, "sheet": u.sheet, "handles": u.handles, "crop_path": crop})
             })
             .collect();
@@ -2723,21 +2739,42 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     ];
 
     if let Some(devices) = results.get("devices") {
+        // Collect unlisted tag names for "they are drawn as <tag>" choices.
+        let unlisted_tags: Vec<String> = census
+            .unlisted
+            .keys()
+            .take(10)
+            .cloned()
+            .collect();
         for (class_key, class_label) in &device_classes {
             let count = devices.get("by_type").and_then(|bt| bt.get(*class_key)).and_then(Value::as_u64).unwrap_or(0);
             // MUST 9: Always ask — even for 0 ("I counted 0 X — anything not counted?").
+            // Build choices: "count is complete", "none on this sheet", or "they are drawn as <tag>"
+            // for each unlisted tag, plus "there are uncounted devices".
+            let mut choices = vec!["Count is complete".into()];
+            if count == 0 {
+                choices.push("None on these sheets".into());
+            }
+            for tag in &unlisted_tags {
+                choices.push(format!("They are drawn as '{tag}'"));
+            }
+            choices.push("There are uncounted devices".into());
             let qid = job.next_qid(StageName::Devices);
             let q = Question {
                 id: qid,
                 stage: StageName::Devices,
                 question: format!("I counted {count} {class_label}. Are there any {class_label} I did not count?",),
                 why: format!("Completeness checkpoint for {class_label}"),
-                choices: vec!["Count is complete".into(), "There are uncounted devices".into()],
+                choices,
                 evidence: Some(QuestionEvidence {
                     crop_png_path: None,
                     sheet: None,
                     at: None,
-                    values: Some(json!({"class": class_key, "count": count})),
+                    values: Some(json!({
+                        "class": class_key,
+                        "count": count,
+                        "legend_entry": census.legend_types.contains(*class_key),
+                    })),
                     handles: Vec::new(),
                     // MUST 9: tiled_crops with every counted item boxed.
                     tiled_crops: devices
@@ -2776,7 +2813,7 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
         }
 
-        // MUST 10: Unknown/foreign symbols — ask to learn them.
+        // MUST 10: Unknown/foreign symbols — ask to learn them, with choices from the legend.
         // Q6021 MUST 2: never create a question with empty text; skip symbols with no tag.
         if let Some(unknowns) = devices.get("unknowns").and_then(Value::as_array) {
             for unk in unknowns.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -2788,6 +2825,29 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let count = unk.get("count").and_then(Value::as_u64).unwrap_or(1);
                 let tagged = unk.get("tag").and_then(Value::as_str).is_some_and(|t| !t.trim().is_empty());
                 let sheet = unk.get("sheet").and_then(Value::as_str).map(String::from);
+                // Build choices: legend device types (near-matching first, then the rest),
+                // plus non-device and skip.
+                let mut choices: Vec<String> = Vec::new();
+                let desc_lower = desc.to_ascii_lowercase();
+                // Near-matches first: types whose name shares a prefix or substring with the tag.
+                let mut near: Vec<&String> = Vec::new();
+                let mut rest: Vec<&String> = Vec::new();
+                for lt in &census.legend_types {
+                    let lt_lower = lt.to_ascii_lowercase();
+                    if lt_lower.contains(&desc_lower) || desc_lower.contains(&lt_lower) {
+                        near.push(lt);
+                    } else {
+                        rest.push(lt);
+                    }
+                }
+                for lt in near.iter().take(8) {
+                    choices.push(lt.to_string());
+                }
+                for lt in rest.iter().take(12usize.saturating_sub(choices.len())) {
+                    choices.push(lt.to_string());
+                }
+                choices.push("a window/door/room/equipment tag (not a device)".into());
+                choices.push("skip".into());
                 let qid = job.next_qid(StageName::Devices);
                 let q = Question {
                     id: qid,
@@ -2802,7 +2862,7 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     } else {
                         "Foreign/unknown symbol not matched to any library entry; learning it adds to future counts".into()
                     },
-                    choices: Vec::new(),
+                    choices,
                     evidence: Some(QuestionEvidence {
                         crop_png_path: unk.get("crop_path").and_then(Value::as_str).map(String::from),
                         // Q6021 MUST 2: always include the sheet reference.
@@ -5864,11 +5924,24 @@ mod tests {
         assert!(std::path::Path::new(crop).starts_with(&tmp), "{crop}");
         let png = std::fs::read(crop).unwrap_or_else(|e| panic!("{crop}: {e}"));
         assert!(png.starts_with(b"\x89PNG"), "{crop}");
+        // Q6031: crop is >= 800 px.
+        assert!(png.len() >= 24, "PNG too short for IHDR");
+        let w = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+        let h = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+        assert!(w >= 800 && h >= 800, "crop too small: {w}x{h}");
+        // Q6031: crop filename includes sheet info.
+        assert!(crop.contains("Q_1") || crop.contains("Q-1"), "crop should mention sheet: {crop}");
         let stage = job.stage_mut(StageName::Devices).map(|st| st.completeness.clone()).unwrap_or_default();
         let q = stage.iter().find(|q| q.question.contains("'ZZ'")).unwrap_or_else(|| panic!("no ZZ question"));
         assert!(q.question.contains("no legend or schedule lists it"), "{}", q.question);
         assert_eq!(q.evidence.as_ref().and_then(|e| e.crop_png_path.as_deref()), Some(crop));
         assert_eq!(q.evidence.as_ref().map_or(0, |e| e.handles.len()), 4);
+        // Q6031: unknown-tag questions always have choices.
+        assert!(!q.choices.is_empty(), "unknown-tag question must have choices");
+        assert!(q.choices.iter().any(|c| c == "skip"), "must offer 'skip'");
+        assert!(q.choices.iter().any(|c| c.contains("not a device")), "must offer 'not a device'");
+        // Q6031: unknown-tag evidence includes sheet info.
+        assert_eq!(q.evidence.as_ref().and_then(|e| e.sheet.as_deref()), Some("Q-1"));
         // Answering it makes ZZ a device type on the recount.
         let mut answered = q.clone();
         answered.answer = Some(json!({"device_type": "wall_sconce"}));
@@ -7123,6 +7196,84 @@ mod tests {
         assert!(cmd_answer(&mut s, &json!({"id": a})).is_err());
         let many: Vec<Value> = (0..=MAX_ANSWERS_PER_CALL).map(|i| json!({"id": format!("Q-x-{i}"), "answer": "y"})).collect();
         assert!(cmd_answer(&mut s, &json!({"answers": many})).is_err());
+    }
+
+    /// Q6031: question payloads always have choices, crops are >= 800 px, and completeness
+    /// questions offer "drawn as" alternatives from unlisted tags.
+    #[test]
+    fn askcrops_questions_have_choices_and_readable_crops() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/askcrops-test", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-1", "sheet_type": "plan", "discipline": "E"}]}));
+        job.sheets_loaded = true;
+        // A legend with types A (lights) and B, then 3 x A, 3 x B, plus 4 x unlisted "W1"
+        // and 4 x unlisted "JL".
+        let schedule: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIGHTING FIXTURE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("A", 1000.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1030.0, 772.0, 5.0),
+            ("B", 1000.0, 760.0, 5.0),
+            ("LED DOWNLIGHT", 1030.0, 760.0, 5.0),
+        ];
+        let mut syms: Vec<(&str, f64, f64)> = vec![("A", 990.0, 772.0)]; // legend sample
+        // 3 x A and 3 x B on the plan
+        for i in 0..3 { syms.push(("A", 100.0 + 40.0 * f64::from(i), 300.0)); }
+        for i in 0..3 { syms.push(("B", 100.0 + 40.0 * f64::from(i), 200.0)); }
+        // 4 x unlisted "W1" and 4 x "JL"
+        for i in 0..4 { syms.push(("W1", 100.0 + 40.0 * f64::from(i), 500.0)); }
+        for i in 0..4 { syms.push(("JL", 100.0 + 40.0 * f64::from(i), 600.0)); }
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &schedule, &syms);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-1".into(), level: "1".into(), discipline: "E".into(), kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0], area: None, title_block: None, not_built: String::new(), levels: Vec::new(),
+        });
+        let _r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let completeness = job.stage(StageName::Devices).map(|st| st.completeness.clone()).unwrap_or_default();
+
+        // ── Unknown-tag questions: every one must have choices ──
+        let unkn_qs: Vec<&Question> = completeness.iter().filter(|q| q.question.contains("Unknown")).collect();
+        assert!(unkn_qs.len() >= 2, "expected questions for W1 and JL: {}", unkn_qs.len());
+        for q in &unkn_qs {
+            assert!(!q.choices.is_empty(), "unknown-tag question must have choices: {}", q.question);
+            assert!(q.choices.iter().any(|c| c == "skip"), "missing 'skip' in: {:?}", q.choices);
+            assert!(q.choices.iter().any(|c| c.contains("not a device")), "missing 'not a device' in: {:?}", q.choices);
+            // Should include legend types as choices.
+            assert!(q.choices.iter().any(|c| c == "A" || c == "B"), "missing legend types in choices: {:?}", q.choices);
+            // Crop evidence: sheet info present.
+            let ev = q.evidence.as_ref().expect("evidence");
+            assert_eq!(ev.sheet.as_deref(), Some("E-1"), "evidence should name the sheet");
+        }
+
+        // ── Completeness questions: must have choices ──
+        let comp_qs: Vec<&Question> = completeness.iter().filter(|q| q.question.starts_with("I counted")).collect();
+        assert!(!comp_qs.is_empty(), "no completeness questions");
+        for q in &comp_qs {
+            assert!(q.choices.len() >= 2, "completeness question needs choices: {} -> {:?}", q.question, q.choices);
+            // Should offer "drawn as" alternatives for the unlisted tags.
+            let has_drawn_as = q.choices.iter().any(|c| c.starts_with("They are drawn as"));
+            assert!(has_drawn_as, "completeness question should offer 'drawn as' alternatives from unlisted tags: {:?}", q.choices);
+        }
+
+        // ── Crop size check for unknown tags ──
+        for q in &unkn_qs {
+            if let Some(ev) = &q.evidence {
+                if let Some(path) = &ev.crop_png_path {
+                    let png = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+                    assert!(png.starts_with(b"\x89PNG"), "not PNG: {path}");
+                    assert!(png.len() >= 24, "PNG too short");
+                    let w = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+                    let h = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+                    assert!(w >= 800 && h >= 800, "crop {path} too small: {w}x{h}");
+                }
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
     }
 
     #[test]
