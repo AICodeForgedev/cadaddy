@@ -109,12 +109,12 @@ fn kind_of_part<'a>(e: &Entity, part: &'a str) -> &'a str {
 }
 
 /// The level an element stands on, as the model knows it.
-fn level_of(e: &Entity) -> Option<String> {
+pub(crate) fn level_of(e: &Entity) -> Option<String> {
     super::bspec::made_level(e).or_else(|| super::ifcref::tag(e).and_then(|t| t.level)).filter(|l| !l.trim().is_empty())
 }
 
 /// The plan area of a mesh: its faces looking up (a room volume's ceiling, a slab's top).
-fn up_area(e: &Entity) -> Option<f64> {
+pub(crate) fn up_area(e: &Entity) -> Option<f64> {
     let EntityKind::Mesh(m) = &e.kind else { return None };
     let a: f64 = m
         .triangles()
@@ -128,7 +128,7 @@ fn up_area(e: &Entity) -> Option<f64> {
 }
 
 /// Drawing units per foot (the building spec's, else inches).
-fn units_per_foot(d: &Drawing) -> f64 {
+pub(crate) fn units_per_foot(d: &Drawing) -> f64 {
     d.building_spec
         .as_deref()
         .and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok())
@@ -276,7 +276,7 @@ fn num(s: &str) -> Option<f64> {
 /// The model's elements: (entity, kind). A room counts once: a `rooms.build` volume of a room
 /// the model holds as a room element (same number, or unnumbered the same name) is that room's
 /// 3D view, not a second room.
-fn elements(d: &Drawing) -> impl Iterator<Item = (&std::sync::Arc<Entity>, String)> {
+pub(crate) fn elements(d: &Drawing) -> impl Iterator<Item = (&std::sync::Arc<Entity>, String)> {
     // A room element's number: its tag's, else the one stored on it (read inside it, or a person's).
     let stored = |h: Handle| d.model.get(h).and_then(|e| props::read(&e.common.xdata).get("number").filter(|p| p.has_value()).map(Prop::text));
     let modelled: BTreeSet<String> = super::bspec::room_elements(d)

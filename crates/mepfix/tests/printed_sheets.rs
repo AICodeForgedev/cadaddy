@@ -535,3 +535,125 @@ fn a_floor_printed_without_its_grid_lines_reads_and_aligns_its_grid() {
         );
     }
 }
+
+// ---- Q6030 planregions: each level its own view ------------------------------------------------
+
+#[test]
+fn a_two_level_sheet_has_a_view_per_level_and_a_one_view_sheet_none() {
+    let (t, st) = cadaddy_mepfix::hotel_planned(7, cadaddy_mepfix::hotel::HotelSize::Small);
+    let two = printed::two_view_sheet(&t, &st, "E-101", "E-102", "E-1A", "LIGHTING").expect("two-view sheet");
+    let views = sheet_reader::level_views(&two.drawing);
+    assert_eq!(views.iter().map(|(v, _)| v.levels.clone()).collect::<Vec<_>>(), [vec!["1".to_string()], vec!["2".to_string()]]);
+    let (lower, upper) = (views[0].1, views[1].1);
+    assert!(lower[3] <= upper[1], "the lower view ends where the upper begins: {lower:?} {upper:?}");
+    let one = printed::one_view_sheet(&t, &st, "E-102", "LIGHTING", &printed::OneViewOptions::default()).expect("one-view sheet");
+    assert!(sheet_reader::level_views(&one.drawing).is_empty(), "one plan: no views to split");
+}
+
+#[test]
+fn views_titled_over_a_scale_line_split_a_sheet_when_their_lettering_is_the_sheets_size() {
+    // Two plans side by side, each a block of short lines, titled over a SCALE line in the
+    // sheet's usual lettering (too small for the large-title reading).
+    let mut d = Drawing::new_imperial();
+    let seg = |d: &mut Drawing, a: [f64; 2], b: [f64; 2]| {
+        let vertices = vec![PolyVertex::new(Vec2::new(a[0], a[1])), PolyVertex::new(Vec2::new(b[0], b[1]))];
+        add(d, EntityKind::LwPolyline(LwPolyline { vertices, closed: false, const_width: 0.0, elevation: 0.0, plinegen: false }));
+    };
+    for (k, title) in ["FIRST FLOOR PLAN", "SECOND FLOOR PLAN"].iter().enumerate() {
+        let x0 = k as f64 * 140.0;
+        for i in 0..10 {
+            for j in 0..9 {
+                let (x, y) = (x0 + i as f64 * 10.0, 20.0 + j as f64 * 10.0);
+                seg(&mut d, [x, y], [x + 10.0, y]);
+                seg(&mut d, [x, y], [x, y + 10.0]);
+            }
+        }
+        for i in 0..8 {
+            text(&mut d, [x0 + 5.0 + i as f64 * 11.0, 60.0], 2.0, "OFFICE");
+        }
+        text(&mut d, [x0 + 10.0, 12.0], 2.0, title);
+        text(&mut d, [x0 + 10.0, 9.0], 1.5, "SCALE: 1/8\" = 1'-0\"");
+    }
+    let views = sheet_reader::level_views(&d);
+    assert_eq!(views.iter().map(|(v, _)| v.levels.clone()).collect::<Vec<_>>(), [vec!["1".to_string()], vec!["2".to_string()]], "{views:?}");
+    assert!(views[0].1[2] < views[1].1[0], "the views stand apart: {views:?}");
+}
+
+/// A block of short lines (a plan's linework) `w` × `h` squares of 10 from `at`.
+fn plan_block(d: &mut Drawing, at: [f64; 2], w: usize, h: usize) {
+    for i in 0..w {
+        for j in 0..h {
+            let (x, y) = (at[0] + i as f64 * 10.0, at[1] + j as f64 * 10.0);
+            for b in [[x + 10.0, y], [x, y + 10.0]] {
+                let vertices = vec![PolyVertex::new(Vec2::new(x, y)), PolyVertex::new(Vec2::new(b[0], b[1]))];
+                add(d, EntityKind::LwPolyline(LwPolyline { vertices, closed: false, const_width: 0.0, elevation: 0.0, plinegen: false }));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_two_level_sheet_with_untitled_views_splits_by_its_blocks_of_linework() {
+    let one = |v: &[(sheet_reader::PlanView, [f64; 4])]| v.iter().map(|(v, _)| v.levels.clone()).collect::<Vec<_>>();
+    let levels = ["1".to_string(), "2".to_string()];
+    // Two plans side by side, no view titles: the titled readings find nothing.
+    let mut d = Drawing::new_imperial();
+    plan_block(&mut d, [0.0, 20.0], 10, 9);
+    plan_block(&mut d, [140.0, 20.0], 8, 9);
+    text(&mut d, [5.0, 60.0], 2.0, "OFFICE");
+    assert!(sheet_reader::level_views(&d).is_empty(), "no titles to read");
+    let views = sheet_reader::level_blocks(&d, &levels);
+    assert_eq!(one(&views), [vec!["1".to_string()], vec!["2".to_string()]], "left to right, lowest first: {views:?}");
+    let (left, right) = (views[0].1, views[1].1);
+    assert!((left[2] - 120.0).abs() < 10.0 && left[2] <= right[0], "they meet halfway between the plans: {views:?}");
+    assert!(left[0].is_infinite() && right[2].is_infinite(), "open at the sheet's edges: {views:?}");
+    // A typical plan (the set's "T"), a level more than the blocks, or one level: no split.
+    assert!(sheet_reader::level_blocks(&d, &["T".to_string()]).is_empty());
+    assert!(sheet_reader::level_blocks(&d, &["1".to_string(), "2".to_string(), "3".to_string()]).is_empty());
+    assert!(sheet_reader::level_blocks(&d, &levels[..1]).is_empty());
+    // One plan and a small legend block: one big block, so it is one view.
+    let mut single = Drawing::new_imperial();
+    plan_block(&mut single, [0.0, 20.0], 10, 9);
+    plan_block(&mut single, [140.0, 20.0], 3, 2);
+    assert!(sheet_reader::level_blocks(&single, &levels).is_empty(), "one plan is never split");
+
+    // Stacked plans whose small titles name their levels: the titles decide, not the order.
+    let mut stacked = Drawing::new_imperial();
+    plan_block(&mut stacked, [0.0, 0.0], 10, 6);
+    plan_block(&mut stacked, [0.0, 100.0], 10, 6);
+    text(&mut stacked, [10.0, 92.0], 1.0, "LEVEL 2 MECHANICAL PLAN");
+    text(&mut stacked, [10.0, -8.0], 1.0, "LEVEL 1 MECHANICAL PLAN");
+    text(&mut stacked, [10.0, 162.0], 1.0, "MECHANICAL PLANS - LEVELS 1 AND 2");
+    let views = sheet_reader::level_blocks(&stacked, &levels);
+    assert_eq!(one(&views), [vec!["1".to_string()], vec!["2".to_string()]], "{views:?}");
+    let (lower, upper) = (views[0].1, views[1].1);
+    assert!(lower[3] > 60.0 && lower[3] < 100.0 && lower[3] == upper[1], "they meet between the plans: {views:?}");
+    assert!(lower[1] < 0.0 && upper[1] < 92.0 && upper[1] > 60.0, "the bottom plan's part holds the title under the top plan: {views:?}");
+    assert_eq!(views[0].0.title, "LEVEL 1 MECHANICAL PLAN", "the title naming one level, not the sheet's: {views:?}");
+    // Here the title under the top plan says it is level 1's.
+    let mut swapped = Drawing::new_imperial();
+    plan_block(&mut swapped, [0.0, 0.0], 10, 6);
+    plan_block(&mut swapped, [0.0, 100.0], 10, 6);
+    text(&mut swapped, [10.0, 92.0], 1.0, "LEVEL 1 MECHANICAL PLAN");
+    text(&mut swapped, [10.0, -8.0], 1.0, "LEVEL 2 MECHANICAL PLAN");
+    let views = sheet_reader::level_blocks(&swapped, &levels);
+    assert_eq!(one(&views), [vec!["2".to_string()], vec!["1".to_string()]], "the titles decide, not the order: {views:?}");
+    assert!(views[1].1[1] > views[0].1[1], "level 1 is the top plan: {views:?}");
+    // Untitled, they go bottom to top.
+    let mut bare = Drawing::new_imperial();
+    plan_block(&mut bare, [0.0, 0.0], 10, 6);
+    plan_block(&mut bare, [0.0, 100.0], 10, 6);
+    let views = sheet_reader::level_blocks(&bare, &levels);
+    assert_eq!(one(&views), [vec!["1".to_string()], vec!["2".to_string()]]);
+    assert!(views[0].1[3] < views[1].1[3], "the bottom plan first: {views:?}");
+}
+
+#[test]
+fn a_typical_title_says_so() {
+    for t in ["TYPICAL 2ND-4TH FLOOR PLAN", "LEVELS 3-4 MECHANICAL PLAN (TYP.)", "Typical floor plan"] {
+        assert!(sheet_reader::says_typical(t), "{t}");
+    }
+    for t in ["FIRST AND SECOND FLOOR PLANS", "LEVEL 3 & 4 POWER PLANS", "TYPEWRITER ROOM"] {
+        assert!(!sheet_reader::says_typical(t), "{t}");
+    }
+}

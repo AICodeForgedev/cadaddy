@@ -55,22 +55,25 @@ fn stored(d: &Drawing) -> std::result::Result<Option<BuildingSpec>, String> {
     d.building_spec.as_deref().filter(|t| !t.trim().is_empty()).map(BuildingSpec::from_json).transpose()
 }
 
+/// What to do about a stored spec that can't be read (a newer version, or the wrong shape).
+const UNREADABLE_HINT: &str = "the drawing's stored building spec can't be read; bspec.set {spec, replace: true} replaces it";
+
 /// The drawing's spec, else one drafted from the walk rules; whether it was stored.
 pub(crate) fn current(s: &Session, cmd: &str) -> Result<(BuildingSpec, bool)> {
-    match stored(s.doc()?).map_err(|e| bad(cmd, e))? {
+    match stored(s.doc()?).map_err(|e| bad(cmd, format!("{e} — {UNREADABLE_HINT}")))? {
         Some(sp) => Ok((sp, true)),
         None => Ok((BuildingSpec::from_rules(&wallgen::rules_for(s, &json!({}))?), false)),
     }
 }
 
 /// The current spec with `patch` merged in (or `patch` alone with `replace`).
+/// With `replace` the stored spec is never read, so an unreadable one can still be replaced.
 fn merged(s: &Session, cmd: &str, patch: Option<&Value>, replace: bool) -> Result<BuildingSpec> {
-    let (base, _) = current(s, cmd)?;
-    let Some(patch) = patch.filter(|v| !v.is_null()) else { return Ok(base) };
+    let Some(patch) = patch.filter(|v| !v.is_null()) else { return Ok(current(s, cmd)?.0) };
     if !patch.is_object() {
         return Err(bad(cmd, "`spec` must be an object"));
     }
-    let mut v = if replace { json!({}) } else { serde_json::to_value(&base).map_err(|e| bad(cmd, e.to_string()))? };
+    let mut v = if replace { json!({}) } else { serde_json::to_value(current(s, cmd)?.0).map_err(|e| bad(cmd, e.to_string()))? };
     cadaddy_walk3d::merge(&mut v, patch);
     BuildingSpec::from_json(&v.to_string()).map_err(|e| bad(cmd, e))
 }

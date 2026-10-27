@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1152,
-    "count": 1152,
+    "callableAsJson": 1154,
+    "count": 1154,
     "ids": [
       "-attedit",
       "-block",
@@ -130,12 +130,14 @@
       "bim.issue.show",
       "bim.look",
       "bim.prints",
+      "bim.props.check",
       "bim.props.fill",
       "bim.props.find",
       "bim.props.get",
       "bim.props.set",
       "bim.props.summary",
       "bim.remove_type",
+      "bim.schedule",
       "bim.set_spec",
       "bim.set_type",
       "bim.source",

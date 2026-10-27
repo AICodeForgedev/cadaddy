@@ -202,6 +202,45 @@ imports those sheets on their own to read their tables).
 A value a person set (`user`) is never replaced, and a value read from the prints
 is never replaced by an assumption.
 
+#### Takeoff, schedules and checks from the properties
+
+- **`BIM.TAKEOFF`** and **`BIM.BOM`** group and filter by any property:
+  `{"group_by": ["level", "circuit"], "filter": {"kind": "device", "type": "duplex"}}`
+  (a filter value is matched as the same text, number or a part of it; a list
+  means any of them; `where: {key: "exists" | "missing"}` as in `BIM.PROPS.FIND`).
+  Each line counts its elements and measures them by kind: length for ducts,
+  pipes, conduit and walls; area for rooms, floors, ceilings and roofs; sheet
+  metal (sf) and weight for ducts by gauge (the low-pressure gauge for the
+  largest side when a duct carries none, marked); hangers (IPC spacing by
+  material), insulation and fittings for pipes. `file` writes CSV or XLSX.
+- **`BIM.SCHEDULE {kind}`** — a schedule from the properties, to CSV/XLSX
+  (`file`): `device` (by room, or `by: "circuit"`), `door`, `window`,
+  `room_finish`, `light_fixture`, `equipment`, `plumbing_fixture` (by room, with
+  fixture units), `air_distribution` (each unit and the terminals it serves,
+  their cfm against the unit's), `panel` (circuits, breakers, wire, connected
+  load per phase: circuits 1-2 on A, 3-4 on B, 5-6 on C), `wire` (conduit and
+  wire by circuit and size: conductors × (route + a drop per device) × makeup),
+  `duct` and `pipe`. Assumed values (a receptacle's 180 VA, a fixture's IPC
+  units) are listed in `notes`.
+- **`BIM.PROPS.CHECK`** — findings, never changes: devices with no circuit or
+  no panel, assumed mounting heights, doors in rated walls with no rating,
+  rooms with no number, receptacles in wet rooms without GFCI, circuit load over
+  80 % of the breaker, a breaker larger than the wire allows, conduit fill,
+  voltage drop over 3 % (the conduit's length, else an estimated route from the
+  panel through the devices), a breaker over the unit's MOCP or under its MCA;
+  terminal airflow against the unit (±10 %), duct velocity, a duct through a
+  rated wall with no fire damper, unserved terminals, equipment with no circuit;
+  drainage fixture units down each drain against its size, drain slope, fixtures
+  with no waste or vent, water heater recovery against the fixtures' demand, and
+  each gas pipe's load against its size at the run's length. `checks` picks
+  some, `level` one level, `limits` changes the thresholds. The tables are the
+  common US model-code values (NEC, IPC, IFGC, SMACNA, ASPE): a finding to
+  review, not a code ruling.
+
+The guided job's report (`JOB.REPORT`) lists the property coverage per kind:
+elements, standard values filled out of possible, assumed values and the
+standard keys no element has yet.
+
 ### Tags are identities
 
 A door number, a room number, a wall-type tag at a wall's centreline and a
