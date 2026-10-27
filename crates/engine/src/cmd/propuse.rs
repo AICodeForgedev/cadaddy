@@ -38,7 +38,7 @@ pub mod codes;
 
 use codes::Section;
 
-const SCHEDULE: &str = "bim.schedule";
+pub(crate) const SCHEDULE: &str = "bim.schedule";
 /// Most elements a line or schedule row lists.
 const MAX_LINE_ELEMENTS: usize = 5_000;
 /// Most rows a schedule has.
