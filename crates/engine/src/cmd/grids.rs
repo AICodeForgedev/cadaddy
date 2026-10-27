@@ -77,7 +77,8 @@ struct Bubble {
 /// by an attribute, a text in the block or a text over it.
 fn bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Bubble> {
     let notes = texts(ents);
-    let size = |r: f64| r >= 4.0 * k && r <= 36.0 * k;
+    // A bubble is about 3/8"-5/8" on paper: up to 8' radius at 1/16" (a whole floor on a small sheet).
+    let size = |r: f64| r >= 4.0 * k && r <= 96.0 * k;
     let over = |o: Vec2, r: f64| notes.iter().find(|(_, t, at, _)| at.dist(o) <= r && grid_label(t)).map(|(_, t, _, _)| t.trim().to_string());
     let mut out = Vec::new();
     for e in ents {
@@ -692,6 +693,17 @@ mod tests {
     }
 
     #[test]
+    fn a_background_outline_fits_the_floor_of_its_shape_only() {
+        let b = |x0: f64, y0: f64, x1: f64, y1: f64| cadaddy_geom::Bounds2::new(Vec2::new(x0, y0), Vec2::new(x1, y1));
+        // A half-size view of a 300 x 60 floor, drawn at (5000, 100).
+        let (view, floor) = (b(5000.0, 100.0, 5150.0, 130.0), b(0.0, 0.0, 300.0, 60.0));
+        let (k, t) = outline_fit(&view, &floor).expect("same shape");
+        assert!((k - 2.0).abs() < 1e-9 && (5075.0 * k + t[0] - 150.0).abs() < 1e-9 && (115.0 * k + t[1] - 30.0).abs() < 1e-9);
+        // Another shape (a square room's background) is no fit.
+        assert!(outline_fit(&b(0.0, 0.0, 100.0, 100.0), &floor).is_none());
+    }
+
+    #[test]
     fn an_enlarged_view_goes_onto_the_plan_by_its_own_grids() {
         let mut s = crate::Session::new();
         // The floor plan: grids A B C (x 0, 300, 600) and 1 2 (y 0, 300).
@@ -841,4 +853,106 @@ impl GridPlacer {
         }
         None
     }
+}
+
+/// The screened (grey) background drawings of sheets: each view of an MEP or low-voltage sheet is
+/// drawn over the architectural plan in grey, and a view with no grid bubble or room number is
+/// put onto the plan by its background's outline.
+pub(crate) struct Backgrounds {
+    /// Per sheet rectangle, the outlines of its background drawings, largest first.
+    sheets: Vec<([f64; 4], Vec<cadaddy_geom::Bounds2>)>,
+}
+
+/// Grid cell for joining background lines into drawings, inches of the drawing.
+const BACKGROUND_CELL_IN: f64 = 48.0;
+
+impl Backgrounds {
+    pub(crate) fn new(d: &Drawing, sheets: &[[f64; 4]]) -> Self {
+        let k = units_per_inch(d);
+        let grey = |c: &cadaddy_doc::color::Color| match c {
+            cadaddy_doc::color::Color::True(rgb) => {
+                let (r, g, b) = (rgb.0, rgb.1, rgb.2);
+                r.min(g).min(b) >= 110 && r.max(g).max(b) - r.min(g).min(b) <= 24 && r.max(g).max(b) < 250
+            }
+            _ => false,
+        };
+        let cell = BACKGROUND_CELL_IN * k;
+        let mut by_sheet: Vec<Vec<Vec2>> = vec![Vec::new(); sheets.len()];
+        for e in plan_objects(d) {
+            if !grey(&e.common.color) || !matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
+                continue;
+            }
+            let b = cadaddy_doc::entity_bounds(d, e, 0);
+            if b.is_empty() {
+                continue;
+            }
+            let c = b.center();
+            if let Some(i) = sheets.iter().position(|r| c.x >= r[0] && c.x <= r[2] && c.y >= r[1] && c.y <= r[3]) {
+                by_sheet[i].extend([b.min, b.max, c]);
+            }
+        }
+        let clusters = |pts: &[Vec2]| -> Vec<cadaddy_geom::Bounds2> {
+            use std::collections::{HashMap, HashSet};
+            let key = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+            let mut cells: HashMap<(i64, i64), Vec<Vec2>> = HashMap::new();
+            for p in pts {
+                cells.entry(key(*p)).or_default().push(*p);
+            }
+            let mut seen: HashSet<(i64, i64)> = HashSet::new();
+            let mut out = Vec::new();
+            for start in cells.keys().copied().collect::<Vec<_>>() {
+                if !seen.insert(start) {
+                    continue;
+                }
+                let mut stack = vec![start];
+                let mut b = cadaddy_geom::Bounds2::from_points(cells[&start].iter().copied());
+                while let Some((x, y)) = stack.pop() {
+                    for dx in -1..=1 {
+                        for dy in -1..=1 {
+                            let n = (x + dx, y + dy);
+                            if let Some(ps) = cells.get(&n)
+                                && seen.insert(n)
+                            {
+                                for p in ps {
+                                    b.add(*p);
+                                }
+                                stack.push(n);
+                            }
+                        }
+                    }
+                }
+                out.push(b);
+            }
+            out.sort_by(|a, b| ((b.max.x - b.min.x) * (b.max.y - b.min.y)).total_cmp(&((a.max.x - a.min.x) * (a.max.y - a.min.y))));
+            out
+        };
+        Backgrounds { sheets: sheets.iter().zip(&by_sheet).map(|(r, pts)| (*r, clusters(pts))).collect() }
+    }
+
+    /// The largest background outline of the sheet holding `p`.
+    pub(crate) fn largest(&self, p: [f64; 2]) -> Option<cadaddy_geom::Bounds2> {
+        self.sheets.iter().find(|(r, _)| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3]).and_then(|(_, c)| c.first().copied())
+    }
+
+    /// The background outline holding `p` (the smallest that does: a view, not the sheet).
+    pub(crate) fn around(&self, p: [f64; 2]) -> Option<cadaddy_geom::Bounds2> {
+        let at = Vec2::new(p[0], p[1]);
+        let (_, cs) = self.sheets.iter().find(|(r, _)| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3])?;
+        cs.iter().filter(|b| b.contains(at)).min_by(|a, b| ((a.max.x - a.min.x) * (a.max.y - a.min.y)).total_cmp(&((b.max.x - b.min.x) * (b.max.y - b.min.y)))).copied()
+    }
+}
+
+/// The scale and offset that put outline `from` onto outline `to`, when they are the same shape
+/// (widths and heights in one ratio, within 5%).
+pub(crate) fn outline_fit(from: &cadaddy_geom::Bounds2, to: &cadaddy_geom::Bounds2) -> Option<(f64, [f64; 2])> {
+    let (fw, fh, tw, th) = (from.max.x - from.min.x, from.max.y - from.min.y, to.max.x - to.min.x, to.max.y - to.min.y);
+    if fw <= 0.0 || fh <= 0.0 || tw <= 0.0 || th <= 0.0 {
+        return None;
+    }
+    let (sx, sy) = (tw / fw, th / fh);
+    if (sx / sy - 1.0).abs() > 0.05 {
+        return None;
+    }
+    let s = 0.5 * (sx + sy);
+    Some((s, [to.min.x - from.min.x * s, to.min.y - from.min.y * s]))
 }

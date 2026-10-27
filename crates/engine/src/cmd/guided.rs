@@ -3911,6 +3911,14 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
             Some((level_key(&l.name), [r[0].min(r[2]) - mx, r[1].min(r[3]) - my, r[0].max(r[2]) + mx, r[1].max(r[3]) + my]))
         })
         .collect();
+    // The MEP sheets registered by their tags (number, level, rectangle): their backgrounds give
+    // each level's building outline.
+    let tagged: Vec<(String, [f64; 4])> = sheets
+        .iter()
+        .filter(|b| !b.discipline.eq_ignore_ascii_case("A"))
+        .filter(|b| reg.transforms.iter().any(|t| t.sheet.eq_ignore_ascii_case(&b.number) && t.method == "tags" && t.matched >= 8))
+        .map(|b| (b.level.clone(), b.rect))
+        .collect();
     let place = move |p: [f64; 2], level: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
         let sheet = sheets.iter().find(|b| inside(&b.rect, p))?;
         let on = |t: &&cadaddy_mepfix::tagid::SheetTransform| t.registered && t.sheet.eq_ignore_ascii_case(&sheet.number);
@@ -3948,6 +3956,33 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
                 && reg.transforms.iter().any(|t| t.sheet.eq_ignore_ascii_case(&b.number) && t.method == "reference")
         })?;
         Some(cadaddy_mepfix::tagid::Sim::scale_offset(1.0, [arch.rect[0] - sheet.rect[0], arch.rect[1] - sheet.rect[1]]))
+    };
+    // Each level's building outline in plan terms: the background of a sheet registered by its
+    // tags, put onto the plan; a view with neither grids nor tags fits its background onto it.
+    let backgrounds = super::grids::Backgrounds::new(d, &others);
+    let targets: Vec<(String, cadaddy_geom::Bounds2)> = plans
+        .iter()
+        .filter_map(|(key, _)| {
+            tagged
+                .iter()
+                .filter(|(l, _)| level_key(l) == *key)
+                .find_map(|(l, r)| {
+                    let c = [0.5 * (r[0] + r[2]), 0.5 * (r[1] + r[3])];
+                    let bg = backgrounds.largest(c)?;
+                    let (lo, hi) = (place([bg.min.x, bg.min.y], l)?, place([bg.max.x, bg.max.y], l)?);
+                    let (a, z) = (lo.apply([bg.min.x, bg.min.y]), hi.apply([bg.max.x, bg.max.y]));
+                    Some((key.clone(), cadaddy_geom::Bounds2::new(cadaddy_geom::Vec2::new(a[0], a[1]), cadaddy_geom::Vec2::new(z[0], z[1]))))
+                })
+        })
+        .collect();
+    progress_line(&format!("  building outlines from registered backgrounds: {} level(s)", targets.len()));
+    let place = move |p: [f64; 2], level: &str| {
+        place(p, level).or_else(|| {
+            let bg = backgrounds.around(p)?;
+            let (_, to) = targets.iter().find(|(k, _)| *k == level_key(level))?;
+            let (k, t) = super::grids::outline_fit(&bg, to)?;
+            Some(cadaddy_mepfix::tagid::Sim::scale_offset(k, t))
+        })
     };
     move |p: [f64; 2], level: &str| {
         let m = place(p, level)?;
