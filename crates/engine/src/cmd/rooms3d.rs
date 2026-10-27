@@ -212,6 +212,68 @@ pub fn rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<Roo
             level: level.map(|l| l.name.clone()),
         });
     }
+    // Schedule-sourced rooms: the finish schedule lists every room by number and name.  For
+    // schedule entries whose number wasn't detected by the plan reader, add a room using the
+    // average area and outline of detected rooms with the same name.  This fills gaps from
+    // SHX text that the PDF import couldn't recover as Text entities.
+    let detected_numbers: std::collections::HashSet<String> =
+        out.iter().filter_map(|r| r.number.as_deref()).map(|n| n.trim().to_ascii_uppercase()).collect();
+    // Average area per name (upper case) among detected rooms that have outlines.
+    let mut name_stats: std::collections::HashMap<String, (f64, f64, usize, Vec<Vec2>)> = std::collections::HashMap::new();
+    for r in &out {
+        if r.area > 0.0 && !r.outline.is_empty() {
+            let up = r.name.trim().to_ascii_uppercase();
+            let e = name_stats.entry(up).or_default();
+            e.0 += r.area;
+            e.1 += r.perimeter;
+            e.2 += 1;
+            if e.3.is_empty() {
+                e.3 = r.outline.clone();
+            }
+        }
+    }
+    for row in &schedule {
+        let num_up = row.number.trim().to_ascii_uppercase();
+        if num_up.is_empty() || detected_numbers.contains(&num_up) {
+            continue;
+        }
+        let name_up = row.name.trim().to_ascii_uppercase();
+        let Some(stats) = name_stats.get(&name_up).or_else(|| {
+            // Prefix match: "DOUBLE QUEEN" in schedule, "DOUBLE Q" in detected.
+            name_stats.iter().find(|(k, _)| name_up.starts_with(k.as_str()) || k.starts_with(&name_up)).map(|(_, v)| v)
+        }) else {
+            continue;
+        };
+        if stats.2 == 0 {
+            continue;
+        }
+        let avg_area = stats.0 / stats.2 as f64;
+        let avg_perimeter = stats.1 / stats.2 as f64;
+        let sched_level = spec.as_ref().and_then(|sp| {
+            // Infer level from room number prefix (room 213 → level 2).
+            let prefix = num_up.chars().take_while(|c| c.is_ascii_digit()).collect::<String>();
+            sp.levels.iter().find(|l| {
+                let lv = l.name.trim_start_matches("Level").trim_start_matches("level").trim();
+                !lv.is_empty() && prefix.starts_with(lv)
+            })
+        });
+        out.push(Room3 {
+            name: row.name.clone(),
+            number: Some(row.number.clone()),
+            at: Vec2::ZERO,
+            label: Handle(0),
+            outline: stats.3.clone(),
+            area: avg_area,
+            perimeter: avg_perimeter,
+            elevation: sched_level.map_or(0.0, |l| l.elevation_ft * ft),
+            ceiling: sched_level.map_or(DEFAULT_CEILING_IN * k, |l| l.ceiling_ft * ft),
+            ceiling_source: "schedule".into(),
+            finishes: Vec::new(),
+            finish_detail: Vec::new(),
+            materials: Value::Null,
+            level: sched_level.map(|l| l.name.clone()),
+        });
+    }
     Ok(out)
 }
 

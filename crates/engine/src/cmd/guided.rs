@@ -1632,7 +1632,16 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let sheet_arr = sheets_val.get("sheets").and_then(Value::as_array).cloned().unwrap_or_default();
     let current = |sh: &&Value| sh.get("superseded_by").and_then(Value::as_str).is_none_or(str::is_empty);
     let kind = |sh: &Value| sh.get("type").or_else(|| sh.get("sheet_type")).and_then(Value::as_str).unwrap_or("").to_string();
-    let mut plan_sheets: Vec<&Value> = sheet_arr.iter().filter(current).filter(|sh| matches!(kind(sh).as_str(), "plan" | "enlarged_plan")).collect();
+    let discipline_of = |sh: &Value| sh.get("discipline").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
+    let mut plan_sheets: Vec<&Value> = sheet_arr
+        .iter()
+        .filter(current)
+        .filter(|sh| {
+            let k = kind(sh);
+            matches!(k.as_str(), "plan" | "enlarged_plan")
+                || (k == "schedule" && discipline_of(sh) == "A")
+        })
+        .collect();
     // The index's level (a plan whose title names none was given one) over the page's own.
     let level_of = |sh: &Value| -> String {
         let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
@@ -1731,7 +1740,9 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                     let v: Vec<f64> = r.iter().filter_map(Value::as_f64).collect();
                     <[f64; 4]>::try_from(v).ok()
                 });
-                if let Some(rect) = rect {
+                if let Some(rect) = rect
+                    && kind(sh) != "schedule"
+                {
                     let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
                     let discipline = sh
                         .get("discipline")
@@ -2367,6 +2378,20 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     let rooms = rooms_result.get("rooms").and_then(Value::as_array);
     let room_count = rooms.map_or(0, Vec::len);
+    if let Some(rooms) = rooms {
+        let mut by_level: std::collections::BTreeMap<String, (usize, Vec<String>)> = std::collections::BTreeMap::new();
+        for r in rooms {
+            let level = r.get("level").and_then(Value::as_str).unwrap_or("?").to_string();
+            let number = r.get("number").and_then(Value::as_str).unwrap_or("").to_string();
+            let entry = by_level.entry(level).or_default();
+            entry.0 += 1;
+            if !number.is_empty() { entry.1.push(number); }
+        }
+        for (level, (count, numbers)) in &by_level {
+            let mut nums = numbers.clone(); nums.sort();
+            eprintln!("[S3] level={level}: {count} rooms, {} numbered: {}", numbers.len(), nums.join(","));
+        }
+    }
 
     // MUST 1: No empty success — 0 rooms is a finding.
     if room_count == 0 {
