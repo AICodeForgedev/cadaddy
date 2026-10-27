@@ -11,7 +11,8 @@ use cadcraft_doc::Drawing;
 pub use cadcraft_dxf::Version;
 use serde_json::{Value, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Interactive, always, bad, bool_or, find_command, ok, str_param};
+
 use crate::{Accept, Input, Prompt, Result, Session, Step};
 
 /// The rules the Command Aliases dialog checks before it sends an alias to ALIASEDIT.
@@ -731,6 +732,7 @@ mod tests {
 #[cfg(test)]
 mod pr193_tests {
     use super::*;
+    use crate::Session;
 
     #[test]
     fn failed_store_keeps_unsaved_changes_and_delivered_save_clears_them() {

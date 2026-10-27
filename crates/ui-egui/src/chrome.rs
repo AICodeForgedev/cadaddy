@@ -69,6 +69,8 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
     egui::Panel::top("cc_title_toolbar").exact_size(title_h + tb_h).frame(egui::Frame::NONE.fill(t.chrome)).show(ui, |ui| {
         let r = ui.max_rect();
         if title_h > 0.0 {
+            // The empty row moves the window; it goes first so later widgets take their own clicks.
+            craft_window::title_bar::empty_area(ui, Rect::from_min_size(r.min, vec2(r.width(), title_h)));
             let title = match app.session.state() {
                 Ok(st) if !app.ui.start_tab => format!("CADCraft      {}{}", st.title, if st.title.contains('.') { "" } else { ".dwg" }),
                 _ => format!("CADCraft      {}", crate::tl!("Start")),
@@ -78,16 +80,6 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
             let galley = ui.painter().layout_no_wrap(title, egui::FontId::proportional(13.0), t.text_dim);
             let x = title_left(r.left(), r.width(), galley.size().x);
             ui.painter().galley(pos2(x, r.top() + (title_h - galley.size().y) / 2.0), galley, t.text_dim);
-            // Allow dragging the window by the title row.
-            let tr = Rect::from_min_size(r.min, vec2(r.width(), title_h));
-            let resp = ui.interact(tr, ui.scope_id().with("titledrag"), Sense::CLICK | Sense::DRAG);
-            if resp.drag_started() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-            }
-            if resp.double_clicked() {
-                let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
-            }
         }
         if tb_h > 0.0 {
             let row = Rect::from_min_size(pos2(r.left(), r.top() + title_h), vec2(r.width(), tb_h));
@@ -298,7 +290,8 @@ fn visible_tabs(widths: &[f32], active: Option<usize>, room: f32) -> std::ops::R
     start..active + 1
 }
 
-/// Status bar: layout tabs on the left, coordinates and drafting toggles on the right.
+/// Status bar: layout tabs follow the left-hand layout actions, independent of palette docking.
+/// Coordinates and drafting toggles remain on the right.
 pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     egui::Panel::bottom("cc_status").exact_size(26.0).frame(egui::Frame::NONE.fill(t.chrome)).show(ui, |ui| {
@@ -328,7 +321,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             }
             x += 22.0;
         }
-        x = x.max(r.left() + if app.ui.show_toolsets { 232.0 } else { 60.0 });
+        x += 8.0;
         // Right side: toggles, right-aligned.
         let s = app.session.settings.clone();
         let anno_all = app.session.doc().is_ok_and(|d| d.anno_all_visible());

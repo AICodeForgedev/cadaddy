@@ -14,7 +14,8 @@ use cadcraft_doc::{DevicePaper, Orientation, PageSetup, PlotOutput, PlotterConfi
 use cadcraft_geom::{Bounds2, Vec2};
 use serde_json::{Value, json};
 
-use super::*;
+use super::{CommandSpec, Result, always, bad, has_doc, point_req, str_param};
+
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Session, Step};
 
 /// Where plotter configuration files live. Names are file names ending in
@@ -362,6 +363,8 @@ impl Interactive for PlotWindowM {
     fn name(&self) -> &'static str {
         "PLOTWINDOW"
     }
+    /// Ask for the first corner, then for the opposite one marked as a rectangle corner
+    /// (`Prompt::corner`), so ORTHO does not bend the pick and the window keeps its area.
     fn prompt(&self, _s: &Session) -> Prompt {
         match self.first {
             None => Prompt::new("Specify first corner", Accept::POINT),
