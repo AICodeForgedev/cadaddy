@@ -25,8 +25,10 @@ permissions:
 
 jobs:
   windows-arm64:
-    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@main
+    # Immutable supporting workflow revision until the new install contract lands upstream.
+    uses: Jeremy8776/craft-common-actions/.github/workflows/windows-arm64.yml@f4666d5cbf35f9bdeda24f1f88c7fb5c6adf5276
     with:
       app-name: cadcraft
       app-dir: CADCraft
+      install-relative-path: Programs/ArtCraft/CADCraft
+      install-scope: perUser

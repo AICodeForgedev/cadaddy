@@ -131,9 +131,12 @@ try {
   }
   $ui = @{}
   foreach ($row in (Read-Rows $database 'SELECT `Action`, `Sequence` FROM `InstallUISequence`' 2)) { $ui[$row[0]] = [int]$row[1] }
-  if (-not ($ui['AppSearch'] -lt $ui['CraftScopeDlg'] -and $ui['CraftScopeDlg'] -lt $ui['LaunchConditions'] -and
+  if (-not ($ui['AppSearch'] -lt $ui['CraftPreferMachineScope'] -and
+      $ui['CraftPreferMachineScope'] -lt $ui['CraftScopeDlg'] -and
+      $ui['CraftScopeDlg'] -lt $ui['FindRelatedProducts'] -and
+      $ui['FindRelatedProducts'] -lt $ui['LaunchConditions'] -and
       $ui['CraftScopeDlg'] -lt $ui['CraftRestoreUserFolder'] -and $ui['CraftRestoreUserFolder'] -lt $ui['CostInitialize'])) {
-    throw 'Scope must be chosen after discovery and before duplicate checks, folder restoration and costing.'
+    throw 'Scope must be chosen after AppSearch and before FindRelatedProducts, launch checks and costing.'
   }
   $execute = @{}
   foreach ($row in (Read-Rows $database 'SELECT `Action`, `Sequence` FROM `InstallExecuteSequence`' 2)) { $execute[$row[0]] = [int]$row[1] }
@@ -144,7 +147,18 @@ try {
   }
   # Switching the first-page choice must reset BOTH properties, including a back-and-forth change.
   $events = @(Read-Rows $database 'SELECT `Event`, `Argument`, `Condition`, `Ordering` FROM `ControlEvent` WHERE `Dialog_` = ''CraftScopeDlg'' AND `Control_` = ''Next'' ORDER BY `Ordering`' 4)
-  foreach ($choice in @('user','machine','user')) {
+  # Model the full-UI upgrade entry with an existing machine-wide copy. Run
+  # the actual preference action, then the compiled Next events before discovery.
+  Set-SessionProperty $session 'ALLUSERS' '2'
+  Set-SessionProperty $session 'CRAFT_SCOPE' 'user'
+  Set-SessionProperty $session 'CRAFT_USER_DIR' ''
+  Set-SessionProperty $session 'CRAFT_MACHINE_DIR' 'E:\Existing machine app'
+  $preference = @(Read-Rows $database 'SELECT `Condition` FROM `InstallUISequence` WHERE `Action` = ''CraftPreferMachineScope''' 1)[0]
+  if ($session.EvaluateCondition($preference[0]) -ne 1 -or $session.DoAction('CraftPreferMachineScope') -ne 1 -or
+      (Get-SessionProperty $session 'CRAFT_SCOPE') -ne 'machine') {
+    throw 'Full-UI machine upgrades must initially select the existing machine context.'
+  }
+  foreach ($choice in @('machine','user','machine','user')) {
     Set-SessionProperty $session 'CRAFT_SCOPE' $choice
     foreach ($event in $events) {
       if ($event[0] -notmatch '^\[([^\]]+)\]$') { continue }
@@ -174,6 +188,52 @@ try {
       if ($session.DoAction($action) -ne 1) { throw 'Saved-option property action failed.' }
       $expected = if ($scope -eq '1') { 'saved-machine-choice' } else { 'saved-user-choice' }
       if ((Get-SessionProperty $session $option[1]) -ne $expected) { throw 'Saved installer choices leaked across contexts.' }
+    }
+  }
+  # Follow the compiled control conditions, not the source's intended appearance.
+  $controls = @(Read-Rows $database 'SELECT `Dialog_`, `Control`, `Type`, `Attributes`, `Text` FROM `Control`' 5)
+  $conditions = @()
+  if (@(Read-Rows $database 'SELECT `Name` FROM `_Tables` WHERE `Name` = ''ControlCondition''' 1).Count) {
+    $conditions = @(Read-Rows $database 'SELECT `Dialog_`, `Control_`, `Action`, `Condition` FROM `ControlCondition`' 4)
+  }
+  function Test-ControlVisible($Control) {
+    $visible = ([int]$Control[3] -band 1) -ne 0
+    foreach ($condition in $conditions) {
+      if ($condition[0] -eq $Control[0] -and $condition[1] -eq $Control[1] -and $session.EvaluateCondition($condition[3]) -eq 1) {
+        if ($condition[2] -eq 'Show') { $visible = $true }
+        if ($condition[2] -eq 'Hide') { $visible = $false }
+      }
+    }
+    return $visible
+  }
+  foreach ($button in @($controls | Where-Object { $_[0] -in 'InstallWelcome','InstallMaintenance','DesktopShortcutDlg' -and ([int]$_[3] -band 8388608) -ne 0 })) {
+    $plain = @($controls | Where-Object { $_[0] -eq $button[0] -and $_[1] -eq ($button[1] + 'User') })
+    if ($plain.Count -ne 1 -or ([int]$plain[0][3] -band 8388608)) { throw 'Scope-aware buttons need an unshielded per-user counterpart.' }
+    foreach ($scope in @('', '2', '1')) {
+      Set-SessionProperty $session 'ALLUSERS' $scope
+      if ((Test-ControlVisible $button) -ne ($scope -eq '1') -or (Test-ControlVisible $plain[0]) -ne ($scope -ne '1')) {
+        throw 'The elevation shield must follow the selected scope.'
+      }
+    }
+    $dialog = $button[0]; $shieldId = $button[1]; $plainId = $plain[0][1]
+    $shieldEvents = @(Read-Rows $database "SELECT ``Event``, ``Argument``, ``Condition``, ``Ordering`` FROM ``ControlEvent`` WHERE ``Dialog_`` = '$dialog' AND ``Control_`` = '$shieldId' ORDER BY ``Ordering``" 4 | ForEach-Object { $_ -join '|' })
+    $plainEvents = @(Read-Rows $database "SELECT ``Event``, ``Argument``, ``Condition``, ``Ordering`` FROM ``ControlEvent`` WHERE ``Dialog_`` = '$dialog' AND ``Control_`` = '$plainId' ORDER BY ``Ordering``" 4 | ForEach-Object { $_ -join '|' })
+    if (($shieldEvents -join "`n") -ne ($plainEvents -join "`n")) { throw 'Per-user and machine buttons must perform the same operation.' }
+  }
+  foreach ($scope in @('', '2', '1')) {
+    Set-SessionProperty $session 'ALLUSERS' $scope
+    foreach ($text in @($controls | Where-Object { $_[4] -like '*for all users*' })) {
+      if ((Test-ControlVisible $text) -ne ($scope -eq '1')) { throw 'The welcome-page scope text must follow the selected scope.' }
+    }
+  }
+  if ($policy.id -in 'deckcraft','filmcraft','soundcraft') {
+    foreach ($route in @(@('WelcomeDlg','Next','InstallDirDlg'),@('InstallDirDlg','Back','WelcomeDlg'))) {
+      $dialog = $route[0]; $control = $route[1]
+      $routes = @(Read-Rows $database "SELECT ``Argument``, ``Condition`` FROM ``ControlEvent`` WHERE ``Dialog_`` = '$dialog' AND ``Control_`` = '$control' AND ``Event`` = 'NewDialog' ORDER BY ``Ordering``" 2)
+      Set-SessionProperty $session 'Installed' ''
+      $destination = ''
+      foreach ($event in $routes) { if ($session.EvaluateCondition($event[1]) -eq 1) { $destination = $event[0] } }
+      if ($destination -ne $route[2]) { throw 'Skipping the licence page must work in both navigation directions.' }
     }
   }
   $registry = @(Read-Rows $database 'SELECT `Root`, `Key`, `Name`, `Value` FROM `Registry`' 4)

@@ -50,5 +50,9 @@
       <Control Id="Cancel" Type="PushButton" X="290" Y="182" Width="60" Height="20" Cancel="yes" Text="Cancel"><Publish Event="EndDialog" Value="Exit" /></Control>
     </Dialog>
   </UI>
-  <InstallUISequence><Show Dialog="CraftScopeDlg" Before="LaunchConditions" Condition="NOT Installed AND NOT REMOVE AND UILevel = 5" /></InstallUISequence>
+  <InstallUISequence>
+    <Show Dialog="CraftScopeDlg" After="CraftPreferMachineScope" Condition="NOT Installed AND NOT REMOVE AND UILevel = 5" />
+    <!-- Related-product discovery runs once, so full UI must choose its context first. -->
+    <FindRelatedProducts After="CraftScopeDlg" />
+  </InstallUISequence>
 </Include>
