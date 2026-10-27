@@ -3229,3 +3229,9 @@ menu	Modify	수정
 	Sequence Trade Conflicts	공종 간 순서 충돌
 	Ceiling Space Fit	천장 공간 수용 검토
 	Takeoff by Activity	작업별 물량 산출
+	Record As-Built Change	준공 변경 기록
+	Import As-Built Markups	준공 마크업 가져오기
+	List As-Built Changes	준공 변경 목록
+	Set As-Built Change Status	준공 변경 상태 설정
+	Compare Design and As-Built	설계와 준공 비교
+	Export As-Built	준공 내보내기

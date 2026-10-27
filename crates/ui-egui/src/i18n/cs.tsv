@@ -3209,3 +3209,9 @@ menu	Modify	Modifikace
 	Sequence Trade Conflicts	Střety profesí v postupu
 	Ceiling Space Fit	Prostor nad podhledem
 	Takeoff by Activity	Výkaz výměr podle činností
+	Record As-Built Change	Zaznamenat změnu skutečného provedení
+	Import As-Built Markups	Importovat značky skutečného provedení
+	List As-Built Changes	Seznam změn skutečného provedení
+	Set As-Built Change Status	Nastavit stav změny skutečného provedení
+	Compare Design and As-Built	Porovnat návrh a skutečné provedení
+	Export As-Built	Exportovat skutečné provedení
