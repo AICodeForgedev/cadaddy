@@ -129,19 +129,26 @@ fn placement(s: &Session, p: &Value, page: &MarkupPage) -> Result<(Place, Option
             let k_scaled = k * scale_factor;
             return Ok((Place { a: k_scaled, b: 0.0, t: l.origin }, Some(scale_factor)));
         }
-        return Err(bad(CMD, format!(
-            "the PDF page ({:.0} × {:.0} pt) does not match the layout paper ({:.1} × {:.1} {}); \
+        return Err(bad(
+            CMD,
+            format!(
+                "the PDF page ({:.0} × {:.0} pt) does not match the layout paper ({:.1} × {:.1} {}); \
              pass `from`/`to` (two page points and where they go) or `scale` + `at`",
-            page.width, page.height,
-            if mm { ew_mm } else { ew_mm / 25.4 },
-            if mm { eh_mm } else { eh_mm / 25.4 },
-            if mm { "mm" } else { "in" }
-        )));
+                page.width,
+                page.height,
+                if mm { ew_mm } else { ew_mm / 25.4 },
+                if mm { eh_mm } else { eh_mm / 25.4 },
+                if mm { "mm" } else { "in" }
+            ),
+        ));
     }
     // Model space: require explicit placement.
     if space == Space::Model && p.get("scale").is_none() && p.get("at").is_none() {
-        return Err(bad(CMD, "in Model space, pass `from`/`to` (e.g. {\"from\":[[72,72],[144,72]], \"to\":[[0,0],[100,0]]}) \
-            or `scale` + `at` (e.g. {\"scale\":48, \"at\":[0,0]})"));
+        return Err(bad(
+            CMD,
+            "in Model space, pass `from`/`to` (e.g. {\"from\":[[72,72],[144,72]], \"to\":[[0,0],[100,0]]}) \
+            or `scale` + `at` (e.g. {\"scale\":48, \"at\":[0,0]})",
+        ));
     }
     let scale = p.get("scale").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);
     let at = super::point_param(p, "at").unwrap_or(Vec2::ZERO);

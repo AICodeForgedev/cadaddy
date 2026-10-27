@@ -293,9 +293,20 @@ pub fn read(bytes: &[u8], page: u32) -> Result<MarkupPage, String> {
             p[1] -= oy;
             // Rotate: annotations are in unrotated coordinates; the viewer rotates the page.
             match rotate {
-                90 => { let (x, y) = (p[0], p[1]); p[0] = y; p[1] = bw - x; }
-                180 => { p[0] = bw - p[0]; p[1] = bh - p[1]; }
-                270 => { let (x, y) = (p[0], p[1]); p[0] = bh - y; p[1] = x; }
+                90 => {
+                    let (x, y) = (p[0], p[1]);
+                    p[0] = y;
+                    p[1] = bw - x;
+                }
+                180 => {
+                    p[0] = bw - p[0];
+                    p[1] = bh - p[1];
+                }
+                270 => {
+                    let (x, y) = (p[0], p[1]);
+                    p[0] = bh - y;
+                    p[1] = x;
+                }
                 _ => {}
             }
         };
@@ -303,12 +314,8 @@ pub fn read(bytes: &[u8], page: u32) -> Result<MarkupPage, String> {
         m.strokes.iter_mut().flatten().for_each(transform);
         let mut corners = [[m.rect[0], m.rect[1]], [m.rect[2], m.rect[3]]];
         corners.iter_mut().for_each(transform);
-        m.rect = [
-            corners[0][0].min(corners[1][0]),
-            corners[0][1].min(corners[1][1]),
-            corners[0][0].max(corners[1][0]),
-            corners[0][1].max(corners[1][1]),
-        ];
+        m.rect =
+            [corners[0][0].min(corners[1][0]), corners[0][1].min(corners[1][1]), corners[0][0].max(corners[1][0]), corners[0][1].max(corners[1][1])];
     }
     // The viewed size: width and height swap under 90/270 rotation.
     let (width, height) = match rotate {
@@ -440,13 +447,7 @@ pub fn annotated_pdf(width: f64, height: f64, markups: &[Markup]) -> Result<Vec<
 }
 
 /// Like [`annotated_pdf`] but with an optional `/Rotate` and/or `/CropBox` on the page.
-pub fn annotated_pdf_ex(
-    width: f64,
-    height: f64,
-    markups: &[Markup],
-    rotate: Option<i64>,
-    crop_box: Option<[f64; 4]>,
-) -> Result<Vec<u8>, String> {
+pub fn annotated_pdf_ex(width: f64, height: f64, markups: &[Markup], rotate: Option<i64>, crop_box: Option<[f64; 4]>) -> Result<Vec<u8>, String> {
     let mut doc = Document::with_version("1.7");
     let pages_id: ObjectId = doc.new_object_id();
     let mut annots = Vec::new();

@@ -99,8 +99,11 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         return (import.run)(s, &q);
     }
 
-    let path = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty())
-        .ok_or_else(|| bad("redline.import", "`path` of a PDF is required"))?.to_string();
+    let path = str_param(p, "path")
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .ok_or_else(|| bad("redline.import", "`path` of a PDF is required"))?
+        .to_string();
 
     #[cfg(not(target_arch = "wasm32"))]
     let bytes = crate::readfile::read(&path).map_err(|e| bad("redline.import", format!("{path}: {e}")))?;
@@ -112,8 +115,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
 
     // Bookmark titles → page→layout name map.
     let bmarks = BOOKMARKS.get().and_then(|f| f(&bytes).ok()).unwrap_or_default();
-    let page_title: std::collections::HashMap<usize, String> =
-        bmarks.into_iter().map(|(t, pg)| (pg, t)).collect();
+    let page_title: std::collections::HashMap<usize, String> = bmarks.into_iter().map(|(t, pg)| (pg, t)).collect();
 
     // The drawing's layout names.
     let layout_names: Vec<String> = s.doc()?.layouts.iter().map(|l| l.name.clone()).collect();
@@ -159,8 +161,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         match layout.as_deref() {
             Some("Model") => {
                 // MUST 2: refuse Model pages with a message about from/to placement.
-                let reader = super::markup::READER.get()
-                    .ok_or_else(|| bad("redline.import", "PDF markups can't be read in this build"))?;
+                let reader = super::markup::READER.get().ok_or_else(|| bad("redline.import", "PDF markups can't be read in this build"))?;
                 let count = reader(&bytes, pg).map(|p| p.markups.len()).unwrap_or(0);
                 if count > 0 {
                     unmatched.push(json!({
@@ -172,7 +173,8 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
                     }));
                     s.echo(format!(
                         "Page {pg}: {count} markup(s) from Model skipped — use \
-                         markupimport with `from`/`to` to place them in model space."));
+                         markupimport with `from`/`to` to place them in model space."
+                    ));
                 }
             }
             Some(name) => {
@@ -200,8 +202,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
             None => {
-                let reader = super::markup::READER.get()
-                    .ok_or_else(|| bad("redline.import", "PDF markups can't be read in this build"))?;
+                let reader = super::markup::READER.get().ok_or_else(|| bad("redline.import", "PDF markups can't be read in this build"))?;
                 let count = reader(&bytes, pg).map(|p| p.markups.len()).unwrap_or(0);
                 if count > 0 {
                     unmatched.push(json!({ "page": pg, "markups": count }));
@@ -216,9 +217,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         let _ = s.execute("layout", &json!({ "option": "set", "name": current_layout }));
     }
 
-    let total_placed: usize = pages_result.iter()
-        .filter_map(|p| p["placed"].as_array().map(|a| a.len()))
-        .sum();
+    let total_placed: usize = pages_result.iter().filter_map(|p| p["placed"].as_array().map(|a| a.len())).sum();
     let msg = format!(
         "{total_placed} markup(s) imported from {pg} page(s){unm}.",
         pg = pages_result.len(),

@@ -125,24 +125,14 @@ fn round_trip_two_layouts() {
     // Add synthetic annotations to the sent PDF:
     //   Page 1 (Layout1): cloud by Reviewer A, note by Reviewer B
     //   Page 2 (Layout2): note by Reviewer A, cloud by Reviewer B
-    let cloud_a = mk(
-        MarkupKind::Cloud,
-        "Reviewer A",
-        [100.0, 100.0, 200.0, 200.0],
-        "",
-        vec![[100.0, 100.0], [200.0, 100.0], [200.0, 200.0], [100.0, 200.0]],
-    );
+    let cloud_a =
+        mk(MarkupKind::Cloud, "Reviewer A", [100.0, 100.0, 200.0, 200.0], "", vec![[100.0, 100.0], [200.0, 100.0], [200.0, 200.0], [100.0, 200.0]]);
     let note_b = note("Reviewer B", [300.0, 300.0, 400.0, 330.0], "Check wiring");
     let pdf = cadaddy_io::pdf_markups::add_markups(&pdf, 1, &[cloud_a, note_b]).unwrap();
 
     let note_a = note("Reviewer A", [150.0, 150.0, 250.0, 180.0], "Move conduit");
-    let cloud_b = mk(
-        MarkupKind::Cloud,
-        "Reviewer B",
-        [50.0, 50.0, 150.0, 150.0],
-        "",
-        vec![[50.0, 50.0], [150.0, 50.0], [150.0, 150.0], [50.0, 150.0]],
-    );
+    let cloud_b =
+        mk(MarkupKind::Cloud, "Reviewer B", [50.0, 50.0, 150.0, 150.0], "", vec![[50.0, 50.0], [150.0, 50.0], [150.0, 150.0], [50.0, 150.0]]);
     let pdf = cadaddy_io::pdf_markups::add_markups(&pdf, 2, &[note_a, cloud_b]).unwrap();
     std::fs::write(&out, &pdf).unwrap();
 
@@ -310,8 +300,7 @@ fn send_pdf_page_count_bookmarks_links() {
 
     // The hyperlink produces a /Link annotation in the merged PDF.
     let pdf_text = String::from_utf8_lossy(&bytes);
-    let link_count = pdf_text.matches("/Subtype /Link").count()
-        + pdf_text.matches("/Subtype/Link").count();
+    let link_count = pdf_text.matches("/Subtype /Link").count() + pdf_text.matches("/Subtype/Link").count();
     assert_eq!(link_count, 1, "exactly one /Subtype /Link in the PDF");
     assert!(pdf_text.contains("aicodeforge.dev/test"), "the URI is in the PDF");
 

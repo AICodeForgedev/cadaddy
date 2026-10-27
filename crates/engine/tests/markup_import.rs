@@ -224,7 +224,8 @@ fn half_size_page_scales_to_fit_layout() {
     // Cloud at page centre (612, 396). After scaling: (612 * 2.0 / 72, 396 * 2.0 / 72) + origin.
     //   = (17.0, 11.0) + origin. But we need to use the scaled k: k_scaled = k * 2.0 = 2.0/72.
     //   Cloud at (612, 396) → (612 * 2/72, 396 * 2/72) = (17.0, 11.0) + origin.
-    let cloud = m(MarkupKind::Cloud, vec![[562.0, 346.0], [662.0, 346.0], [662.0, 446.0], [562.0, 446.0]], [562.0, 346.0, 662.0, 446.0], "Centre cloud");
+    let cloud =
+        m(MarkupKind::Cloud, vec![[562.0, 346.0], [662.0, 346.0], [662.0, 446.0], [562.0, 446.0]], [562.0, 346.0, 662.0, 446.0], "Centre cloud");
     let path = pdf_of("halfsize", &[cloud]);
     let mut s = Session::new();
     s.execute("layout", &json!({ "option": "set", "name": "Layout1" })).unwrap();
@@ -290,11 +291,16 @@ fn model_space_with_from_to_places_cloud() {
     let path = pdf_of("model-ok", &[cloud]);
     let mut s = Session::new();
     // Map page (72,72)→(500,500) and (144,72)→(600,500): scale = 100/72 ≈ 1.389.
-    let r = s.execute("markupimport", &json!({
-        "path": path,
-        "from": [[72, 72], [144, 72]],
-        "to": [[500, 500], [600, 500]]
-    })).unwrap();
+    let r = s
+        .execute(
+            "markupimport",
+            &json!({
+                "path": path,
+                "from": [[72, 72], [144, 72]],
+                "to": [[500, 500], [600, 500]]
+            }),
+        )
+        .unwrap();
     let placed = r["placed"].as_array().unwrap();
     assert_eq!(placed.len(), 1);
     let d = s.doc().unwrap();
