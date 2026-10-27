@@ -1229,6 +1229,8 @@ pub struct Session {
     lisp_last: Option<std::result::Result<lisp::value::Value, String>>,
     /// What the last HATCHPICK kept (the Hatch and Gradient dialog's picks).
     pub hatch_picks: Option<cmd::hatch::HatchPicks>,
+    /// Reads electrical prints and returns element tags; set by whoever has the reader pipeline.
+    pub tag_reader: Option<cadaddy_walk3d::tags::TagReaderFn>,
     /// Safety rails for agents: requests, dry run, confirmations, the change journal.
     pub agent: agent::AgentGuard,
     /// What happened, for agents watching (`events.subscribe` / `events.poll`).
@@ -1364,6 +1366,7 @@ impl Session {
             lisp: lisp::LispState::default(),
             lisp_last: None,
             hatch_picks: None,
+            tag_reader: None,
             agent: agent::AgentGuard::default(),
             events: events::EventLog::default(),
             background_checks: false,
