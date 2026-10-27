@@ -565,10 +565,7 @@ pub fn is_reference_sheet(title: &str) -> bool {
     // Two-word phrases checked as consecutive pairs.
     for pair in words.windows(2) {
         let phrase = format!("{} {}", pair[0], pair[1]);
-        if matches!(
-            phrase.as_str(),
-            "LIFE SAFETY" | "OCCUPANCY LOAD" | "CODE ANALYSIS" | "CODE COMPLIANCE"
-        ) {
+        if matches!(phrase.as_str(), "LIFE SAFETY" | "OCCUPANCY LOAD" | "CODE ANALYSIS" | "CODE COMPLIANCE") {
             return true;
         }
     }
