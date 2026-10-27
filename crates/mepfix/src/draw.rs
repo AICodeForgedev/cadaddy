@@ -335,6 +335,7 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
         }
         Kind::Floor(l) => {
             grid(&mut pen, t);
+            crate::units::draw_unit_tags(&mut pen, t, l);
             crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale, false);
             crate::arch::draw_floor(&mut pen, t, &st.arch, l, sh.scale);
             casework_plan(&mut pen, t, st, l);
@@ -734,36 +735,6 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
                     "RIM = RIM ELEVATION",
                 ]
                 .map(abbrev),
-            );
-        }
-        Kind::FireAlarm(l) => {
-            background(&mut pen, t, l, true);
-            grid(&mut pen, t);
-            fire_alarm_devices(&mut pen, t, st, l, &format!("FA-10{l}"));
-            legend.push(item("smoke_detector", "SMOKE DETECTOR"));
-            legend.push(item("horn_strobe", "HORN/STROBE"));
-            legend.push(item("pull_station", "MANUAL PULL STATION"));
-            legend.push(item("facp", "FIRE ALARM CONTROL PANEL"));
-            legend.push(item("annunciator", "REMOTE ANNUNCIATOR"));
-            legend.push(item("duct_detector", "DUCT SMOKE DETECTOR"));
-            abbr.extend(
-                ["FACP = FIRE ALARM CONTROL PANEL", "SD = SMOKE DETECTOR", "H/S = HORN/STROBE", "PS = PULL STATION", "AFF = ABOVE FINISHED FLOOR"]
-                    .map(abbrev),
-            );
-        }
-        Kind::Telecom(l) => {
-            background(&mut pen, t, l, true);
-            grid(&mut pen, t);
-            telecom_devices(&mut pen, t, st, l, &format!("T-10{l}"));
-            legend.push(item("data_outlet", "DATA OUTLET"));
-            legend.push(item("wifi_ap", "WIRELESS ACCESS POINT"));
-            legend.push(item("camera", "SECURITY CAMERA"));
-            legend.push(item("tv_outlet", "TV OUTLET"));
-            legend.push(item("phone", "TELEPHONE OUTLET"));
-            legend.push(item("card_reader", "CARD READER"));
-            abbr.extend(
-                ["AP = ACCESS POINT", "CAM = CAMERA", "IDF = INTERMEDIATE DISTRIBUTION FRAME", "MDF = MAIN DISTRIBUTION FRAME"]
-                    .map(abbrev),
             );
         }
         Kind::EnlargedUnit(unit_type) => {
@@ -3508,105 +3479,6 @@ fn site_schedules(pen: &mut Pen, t: &Truth) {
     }
 
     let _ = (x1, y0);
-}
-
-// ---- Fire alarm plan --------------------------------------------------------------------------
-
-/// Draw fire alarm devices (smoke detectors, horn/strobes, pull stations, FACP) on a FA sheet.
-fn fire_alarm_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str) {
-    let rot = readable(pen.rot());
-    let th = st.text_in / pen.sh.scale;
-    let s = th * 0.8;
-
-    for fa in t.fire_alarm_devices.iter().filter(|d| d.level == level && d.sheet == sheet) {
-        let c = pen.b([fa.at_ft[0], fa.at_ft[1]]);
-        match fa.kind.as_str() {
-            "smoke_detector" => {
-                pen.circle("DEVICE", c, s * 0.5);
-                pen.text("DEVICE", c, st.text_in * 0.6, "SD", rot, HAlign::Center, VAlign::Middle);
-            }
-            "horn_strobe" => {
-                let hs = s * 0.6;
-                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
-                pen.text("DEVICE", c, st.text_in * 0.6, "H/S", rot, HAlign::Center, VAlign::Middle);
-            }
-            "pull_station" => {
-                let hs = s * 0.5;
-                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
-                pen.line("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
-                pen.text("DEVICE", Vec2::new(c.x, c.y - hs - th * 0.3), st.text_in * 0.6, "PS", rot, HAlign::Center, VAlign::Top);
-            }
-            "facp" => {
-                let hs = s * 1.2;
-                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
-                pen.text("DEVICE", c, st.text_in * 0.5, "FACP", rot, HAlign::Center, VAlign::Middle);
-            }
-            "annunciator" => {
-                let hs = s * 0.8;
-                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs * 0.5), Vec2::new(c.x + hs, c.y + hs * 0.5));
-                pen.text("DEVICE", c, st.text_in * 0.5, "ANN", rot, HAlign::Center, VAlign::Middle);
-            }
-            "duct_detector" => {
-                pen.circle("DEVICE", c, s * 0.5);
-                pen.text("DEVICE", c, st.text_in * 0.5, "DD", rot, HAlign::Center, VAlign::Middle);
-            }
-            _ => {
-                pen.circle("DEVICE", c, s * 0.4);
-            }
-        }
-        if !fa.tag.is_empty() {
-            pen.text("TEXT", Vec2::new(c.x + s, c.y), st.text_in, &fa.tag, rot, HAlign::Left, VAlign::Middle);
-        }
-    }
-}
-
-// ---- Telecom plan -----------------------------------------------------------------------------
-
-/// Draw telecom devices (data outlets, WiFi APs, cameras, TV/phone outlets) on a T sheet.
-fn telecom_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str) {
-    let rot = readable(pen.rot());
-    let th = st.text_in / pen.sh.scale;
-    let s = th * 0.8;
-
-    for tc in t.telecom_devices.iter().filter(|d| d.level == level && d.sheet == sheet) {
-        let c = pen.b([tc.at_ft[0], tc.at_ft[1]]);
-        match tc.kind.as_str() {
-            "data_outlet" => {
-                let hs = s * 0.4;
-                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
-                pen.text("DEVICE", c, st.text_in * 0.6, "D", rot, HAlign::Center, VAlign::Middle);
-            }
-            "wifi_ap" => {
-                pen.circle("DEVICE", c, s * 0.5);
-                pen.text("DEVICE", c, st.text_in * 0.5, "AP", rot, HAlign::Center, VAlign::Middle);
-            }
-            "camera" => {
-                pen.circle("DEVICE", c, s * 0.4);
-                pen.text("DEVICE", c, st.text_in * 0.5, "C", rot, HAlign::Center, VAlign::Middle);
-            }
-            "tv_outlet" => {
-                let hs = s * 0.4;
-                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
-                pen.text("DEVICE", c, st.text_in * 0.6, "TV", rot, HAlign::Center, VAlign::Middle);
-            }
-            "phone" => {
-                let hs = s * 0.4;
-                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
-                pen.text("DEVICE", c, st.text_in * 0.6, "T", rot, HAlign::Center, VAlign::Middle);
-            }
-            "card_reader" => {
-                let hs = s * 0.4;
-                pen.rect("DEVICE", Vec2::new(c.x - hs, c.y - hs), Vec2::new(c.x + hs, c.y + hs));
-                pen.text("DEVICE", c, st.text_in * 0.5, "CR", rot, HAlign::Center, VAlign::Middle);
-            }
-            _ => {
-                pen.circle("DEVICE", c, s * 0.3);
-            }
-        }
-        if !tc.tag.is_empty() {
-            pen.text("TEXT", Vec2::new(c.x + s, c.y), st.text_in, &tc.tag, rot, HAlign::Left, VAlign::Middle);
-        }
-    }
 }
 
 // ---- Enlarged unit plan -----------------------------------------------------------------------

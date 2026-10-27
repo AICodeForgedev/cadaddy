@@ -58,10 +58,6 @@ pub enum Kind {
     ArchFinishes,
     /// The roof drainage and flashing plan (Q337).
     RoofDrainage,
-    /// Fire alarm plan for a level: smoke detectors, horn/strobes, pull stations, FACP.
-    FireAlarm(String),
-    /// Telecom plan for a level: data outlets, WiFi APs, cameras.
-    Telecom(String),
     /// An enlarged unit plan for a hotel guest room type.
     EnlargedUnit(String),
     /// An interior elevation (typical guest room bath, etc.).

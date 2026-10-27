@@ -1904,7 +1904,7 @@ fn hotel_planted_gaps_on_paper() {
     let ceil_gap = t.gaps.iter().find(|g| g.kind == "ceiling_no_height").expect("no ceiling_no_height gap");
     let corridor = t.building.rooms.iter().find(|r| r.id == ceil_gap.elements[0]);
     if let Some(rm) = corridor {
-        let hidden = rm.ceiling.as_ref().map_or(false, |c| c.height_hidden);
+        let hidden = rm.ceiling.as_ref().is_some_and(|c| c.height_hidden);
         assert!(hidden, "ceiling_no_height room's ceiling doesn't have height_hidden = true");
     }
 

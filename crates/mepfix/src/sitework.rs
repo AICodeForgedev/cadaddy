@@ -57,7 +57,7 @@ fn design_grading(t: &mut Truth, bldg_w: f64, bldg_d: f64, setback: f64, r: &mut
     let _site_w = bldg_w + 2.0 * setback + 40.0;
     let site_lo_y = -setback - 80.0;
     let site_hi_y = bldg_d + setback + 20.0;
-    let existing_slope = r.range(1, 4) as f64; // 1-3% slope north to south
+    let existing_slope = r.range(1, 3) as f64; // 1-3% slope north to south
 
     for elev_offset in -3i32..=3 {
         let elev = base_elev + elev_offset as f64;
