@@ -1819,6 +1819,15 @@ fn progress_tag(job: &GuidedJob, stage: StageName) -> String {
     format!("job {at}/{} {}", active.len(), stage.label())
 }
 
+/// A line to the progress sink only (a step inside a stage, e.g. the model build's).
+pub(crate) fn progress_line(line: &str) {
+    if let Ok(g) = PROGRESS_SINK.read()
+        && let Some(sink) = *g
+    {
+        sink(line);
+    }
+}
+
 /// A `job.progress` event, and the line to the progress sink.
 fn report_progress(s: &mut Session, data: Value, line: &str) {
     s.event("job.progress", data);
@@ -3241,9 +3250,20 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
 /// Run the BIM build stage (MUST 1).
 /// Must draft/store the building spec itself (bspec.draft store) before building.
+/// One `job N/M bim_build: <step> done in X s` line per sub-step of the build, so a slow step
+/// shows where it is (Q6033: on Windows the stage ran for an hour without a line).
+fn bim_step(s: &mut Session, job: &GuidedJob, step: &str, started: web_time::Instant) {
+    let secs = started.elapsed().as_secs_f64();
+    let line = format!("{}: {step} done in {secs:.1} s", progress_tag(job, StageName::BimBuild));
+    report_progress(s, json!({"stage": "bim_build", "step": step, "elapsed_s": secs}), &line);
+}
+
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Ensure sheet content is in the drawing so bspec.draft can read geometry.
+    let t = web_time::Instant::now();
     ensure_sheets_loaded(s, job)?;
+    bim_step(s, job, "sheets loaded", t);
+    let t = web_time::Instant::now();
     // MUST 1: Draft the spec first — bim.build needs it. Without the spec, it errors.
     // With architectural floor plans, the building is theirs: one level per plan (its sheet's
     // rectangle), stacked; the other disciplines' plans add no walls.
@@ -3322,6 +3342,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
+    bim_step(s, job, "spec drafted (with MEP and sheet links)", t);
+    let t = web_time::Instant::now();
     let mut placed: Option<Value> = None;
     // The devices stage's devices, on their levels (bspec.draft started a new spec), before the
     // build: it makes each one an element carrying what was read about it (Q6002).
@@ -3343,8 +3365,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Use model.build directly — it returns walls/doors/rooms/levels counts.
     // (bim.build wraps model.build but constructs its own result without those counts.)
     // Q6029 MUST 3: pass a configurable time budget (default 20 min).
+    bim_step(s, job, "devices placed", t);
+    let t = web_time::Instant::now();
     let budget_s = super::bspec::BUILD_BUDGET_S;
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s}))?;
+    bim_step(s, job, "model built", t);
+    let t = web_time::Instant::now();
     if let Some(v) = placed {
         result["devices"] = v;
     }
@@ -3363,10 +3389,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         o.insert("rooms_by_level".into(), by_level);
     }
     // Q6002: the rooms as elements, then what the readers found on every element.
+    bim_step(s, job, "circuits and model rooms", t);
+    let t = web_time::Instant::now();
     match s.execute("rooms.build", &json!({})) {
         Ok(v) => result["room_volumes"] = v.get("built").cloned().unwrap_or(Value::Null),
         Err(e) => result["room_volumes_error"] = json!(e.to_string()),
     }
+    bim_step(s, job, "room volumes built", t);
+    let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
         Ok(v) => result["props"] = v,
         Err(e) => job.add_finding(
@@ -3389,7 +3419,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Tags are identities: one element per door, room and device however many sheets show it,
     // each door between its two rooms, and the schedules checked against the plans. Never stops
     // the job: a failure is a finding.
+    bim_step(s, job, "properties filled", t);
+    let t = web_time::Instant::now();
     identity_step(s, job, &mut result);
+    bim_step(s, job, "tag identity", t);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {

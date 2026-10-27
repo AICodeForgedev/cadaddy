@@ -698,6 +698,16 @@ fn labels_to_trace<T>(mut names: Vec<T>, at: impl Fn(&T) -> Vec2, score: impl Fn
 
 /// [`rooms_found`], the labels read only inside `regions` (sheet rectangles), sheet by sheet.
 pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
+    // A slow phase (over 2 s) goes to the job's progress lines: which one held a long trace up.
+    let started = web_time::Instant::now();
+    let mut last = 0.0f64;
+    let mut phase = |what: &str| {
+        let now = started.elapsed().as_secs_f64();
+        if now - last > 2.0 {
+            crate::cmd::guided::progress_line(&format!("  room trace: {what} took {:.1} s", now - last));
+        }
+        last = now;
+    };
     let (d, ents) = objects(s)?;
     let k = units_per_inch(d);
     let min_area = 16.0 * 144.0 * k * k;
@@ -767,9 +777,11 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     }
     // The drawing's best names, or each sheet's best in turn (the stable sort keeps the order above).
     let names = labels_to_trace(names, |n| n.2, score, regions);
+    phase("labels");
     let mut numbers: Vec<Label> = all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t)).cloned().collect();
     numbers.extend(tag_numbers);
     let plan = crate::cmd::bspec::room_plan(s)?;
+    phase("plan");
     // Without the tag blocks: a tag's box is not its room.
     let plan = if tag_blocks.is_empty() || s.space().is_paper() {
         plan
@@ -785,6 +797,7 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     // Doors close their rooms: each door swing's leaf, closed and open, drawn across its opening
     // (a print often draws the swing's arc alone, which leaves the room open at the door).
     let leaves = door_leaves(plan.as_ref().unwrap_or(s).doc()?, k);
+    phase("tag blocks and door leaves");
     let plan = if leaves.is_empty() || s.space().is_paper() {
         plan
     } else {
@@ -833,6 +846,7 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
         .clamp(0.0, 1.0);
         out.push(FoundRoom { name, number, at, label: h, text_height: height, outline: poly, area, perimeter, confidence });
     }
+    phase(&format!("tracing {} rooms", out.len()));
     Ok(out)
 }
 

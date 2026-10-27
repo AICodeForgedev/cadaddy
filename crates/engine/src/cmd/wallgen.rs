@@ -391,6 +391,12 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
                 "eta_s": eta_s,
             }),
         );
+        super::guided::progress_line(&format!(
+            "  model.build: walls level {} ({}/{total_levels}) at {:.1} s",
+            level.name,
+            levels_done + 1,
+            build_start.elapsed().as_secs_f64()
+        ));
         let level_start = web_time::Instant::now();
         let pl = plan_level(s.doc()?, g, level, upf, &mut notes);
         let level_ms = level_start.elapsed().as_millis();

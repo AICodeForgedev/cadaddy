@@ -169,34 +169,23 @@ pub fn plan_items(d: &Drawing, g: &WallGen) -> Vec<PlanItem> {
     out
 }
 
-/// The rooms of the current plan as plan items (name labels in closed outlines): every page of
-/// `plan.rooms`, following its `next`. A room's signature is its name, area and centre, so a room
-/// moved without changing size is a change too.
+/// The rooms of the current plan as plan items (name labels in closed outlines), read once. A
+/// room's signature is its name, area and centre, so a room moved without changing size is a
+/// change too. (Paging through `plan.rooms` traced every room again for each page of 200.)
 fn room_items(s: &mut Session) -> Vec<PlanItem> {
-    let Some(spec) = find_command("plan.rooms") else { return Vec::new() };
-    let mut out = Vec::new();
-    let mut offset = 0u64;
-    for _ in 0..MAX_ROOM_PAGES {
-        let Ok(r) = (spec.run)(s, &json!({ "outline": false, "offset": offset, "limit": 200 })) else { break };
-        out.extend(r["items"].as_array().into_iter().flatten().filter_map(|x| {
-            let name = x["name"].as_str()?.to_string();
-            let at = Vec2::new(x["at"][0].as_f64()?, x["at"][1].as_f64()?);
-            let area = x["area"].as_f64().unwrap_or(0.0);
-            Some(PlanItem {
-                kind: "room",
-                handle: x["label"].as_str().and_then(Handle::parse_hex).unwrap_or_default(),
-                layer: String::new(),
-                signature: format!("{}|{:.3}|{:.3}|{:.3}", name.to_ascii_uppercase(), area, at.x, at.y),
-                name: Some(name),
-                at,
-            })
-        }));
-        match r["next"].as_u64() {
-            Some(n) if n > offset => offset = n,
-            _ => break,
-        }
-    }
-    out
+    let Ok(rooms) = super::perceive::geometry::rooms_found(s) else { return Vec::new() };
+    rooms
+        .into_iter()
+        .take(MAX_ROOM_PAGES * 200)
+        .map(|r| PlanItem {
+            kind: "room",
+            handle: r.label,
+            layer: String::new(),
+            signature: format!("{}|{:.3}|{:.3}|{:.3}", r.name.to_ascii_uppercase(), r.area, r.at.x, r.at.y),
+            name: Some(r.name),
+            at: r.at,
+        })
+        .collect()
 }
 
 /// The rooms of another drawing (another version of the plan), read as [`room_items`] reads them.

@@ -402,15 +402,19 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let g = WallGen { rules: sp.to_rules(), auto: bool_or(p, "auto", true), slab_ft, layers: None, spec: Some(sp) };
     let mut r = build_spec_with_budget(s, &g, budget_s)?;
     r["warnings"] = json!(issues.iter().filter(|i| !i.error).map(issue_json).collect::<Vec<_>>());
+    let recording = web_time::Instant::now();
     super::revise3d::record(s, &g);
+    super::guided::progress_line(&format!("  model.build: plan recorded in {:.1} s", recording.elapsed().as_secs_f64()));
     s.state_mut()?.wallgen = Some(g);
     s.echo(format!(
         "3D building from the spec: {} walls, {} doors, {} windows, {} columns, {} curtain walls, {} floors, {} ceilings ({} rooms) on {} level(s).",
         r["walls"], r["doors"], r["windows"], r["columns"], r["curtainWalls"], r["floors"], r["ceilings"], r["rooms"], r["levels"]
     ));
     // BIM drawings open in 3D shaded view (SW iso + realistic), not 2D wireframe.
+    let viewing = web_time::Instant::now();
     let _ = s.execute("view.swiso", &json!({}));
     let _ = s.execute("vscurrent", &json!({ "style": "realistic" }));
+    super::guided::progress_line(&format!("  model.build: 3D view set in {:.1} s", viewing.elapsed().as_secs_f64()));
     Ok(r)
 }
 
@@ -1282,6 +1286,13 @@ pub(crate) fn build_spec(s: &mut Session, g: &WallGen) -> Result<Value> {
     build_spec_with_budget(s, g, BUILD_BUDGET_S)
 }
 
+/// A model build step done: its `build.progress` event, and a line to the job's progress sink.
+fn build_step(s: &mut Session, step: &str, started: web_time::Instant) {
+    let secs = started.elapsed().as_secs_f64();
+    s.event("build.progress", json!({"step": step, "elapsed_s": secs}));
+    super::guided::progress_line(&format!("  model.build: {step} at {secs:.1} s"));
+}
+
 /// [`build_spec`] with an explicit time budget (seconds).
 pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64) -> Result<Value> {
     let Some(sp) = g.spec.clone() else { return wallgen::build(s, g) };
@@ -1290,9 +1301,11 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // What a person set on a room element (bim.props.set) goes on the rebuilt room.
     let room_edits = room_user_edits(s.doc()?);
     let removed = wallgen::remove_made(s.doc_mut()?);
+    build_step(s, "old model removed", build_start);
     let mut notes: Vec<String> = Vec::new();
     s.event("build.progress", json!({"step": "trace_rooms", "detail": "tracing room outlines"}));
     let mut rooms = trace_rooms(s, &sp, &mut notes)?;
+    build_step(s, "rooms traced", build_start);
     let trace_ms = build_start.elapsed().as_millis();
     s.event("build.progress", json!({"step": "trace_rooms_done", "rooms": rooms.len(), "ms": trace_ms}));
     // Q6029 MUST 3: over budget after trace_rooms alone → stop with a finding.
@@ -1309,6 +1322,7 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     }
     s.event("build.progress", json!({"step": "walls", "detail": "building walls per level"}));
     let mut r = wallgen::build_with_progress(s, g, &deadline)?;
+    build_step(s, "walls built", build_start);
     let wall_ms = build_start.elapsed().as_millis();
     s.event("build.progress", json!({"step": "walls_done", "ms": wall_ms, "walls": r["walls"]}));
     // Q6029 MUST 3: budget check after walls.
@@ -1326,7 +1340,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     s.event("build.progress", json!({"step": "validate_rooms", "rooms": rooms.len()}));
     walled_rooms(s.doc_mut()?, &mut rooms, upf, &mut notes);
+    build_step(s, "rooms validated", build_start);
     s.event("build.progress", json!({"step": "validate_rooms_done", "rooms": rooms.len()}));
+    let mark = |step: &str| super::guided::progress_line(&format!("  model.build: {step} at {:.1} s", build_start.elapsed().as_secs_f64()));
     let d = s.doc_mut()?;
     let mut columns = 0;
     let mut curtain = 0;
@@ -1421,6 +1437,7 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // Each room as a model element of its level (a space: its floor outline, name, number,
     // area, ceiling and floor finish), what bim.tree, the takeoff and the room commands list.
     let room_elements = add_room_elements(d, &sp, &rooms, upf, &room_edits);
+    mark("room ceilings and elements");
     // The ground: the building's extents and the margin, a slab under the site elevation.
     let mut ground = 0;
     if let Some(site) = &sp.site {
@@ -1463,23 +1480,32 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
             }
         }
     }
+    mark("columns, ground and room ceilings");
     // Stairs, ramps, their handrails and the guards on their landings.
     let built_stairs = super::stairs::build(d, &sp);
+    mark("stairs");
     // The outside: roofs, parapets, crickets, rooftop equipment, facade glass and materials.
     let outside = super::exterior::build(d, &sp);
+    mark("exterior");
     // The reflected ceiling plans' ceilings (replacing the level's and rooms'), grids, soffits,
     // lights and diffusers.
     let rcp = super::ceilings::build(d, &sp);
+    mark("reflected ceilings");
     // Duct, pipe and conduit runs of the shown systems.
     let mep = super::mep::build(d, &sp);
+    mark("MEP runs");
     // The devices the readers found, each an element with what was read about it.
     let devices = super::propfill::build_devices(d, &sp);
+    mark("device elements");
     // Concrete: slabs, footings, pads, bases and encasement, with rebar and what is cast in.
     let concrete = super::concrete::build(d, &sp);
+    mark("concrete");
     // Takeoff tables linked to the model count it again.
     let qty_tables = super::mepqty::refresh(d, &sp);
+    mark("takeoff tables");
     // Columns at the grid intersections.
     let grid_columns = super::grids::build(d, &sp);
+    mark("grid columns");
     // Materials: the room's for its ceiling, else the building's for the part.
     let made: Vec<(Handle, String)> = d.model.iter().filter_map(|e| wallgen::made_as(e).map(|p| (e.handle, p))).collect();
     for (h, part) in made {
@@ -1535,6 +1561,7 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // One building: the levels' 3D moved off their plans onto the lowest level's.
     if sp.stack {
         r["stacked"] = json!(stack_levels(d, &sp));
+        mark("levels stacked");
     }
     Ok(r)
 }
