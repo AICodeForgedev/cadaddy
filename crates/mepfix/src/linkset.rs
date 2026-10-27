@@ -324,6 +324,17 @@ pub fn enlarged_sheet_circuits_first(title: Option<(&str, bool)>) -> Drawing {
     s.d
 }
 
+/// E-3 as [`enlarged_sheet`] with three more devices drawn with no type mark, each labelled by
+/// its circuit alone (`D-20` ...), as a plain receptacle is: the import tags them with it.
+pub fn enlarged_sheet_with_receptacles(title: Option<(&str, bool)>) -> Drawing {
+    let mut s = Sheet { d: enlarged_sheet(title) };
+    for (i, p) in [[8.0, 8.0], [16.0, 16.0], [8.0, 17.0]].iter().enumerate() {
+        s.device("", *p);
+        s.add(EntityKind::Text(text_ent(&format!("D-{}", 20 + i), p[0] + 0.3, p[1] - 0.05, 0.1, 0.0)));
+    }
+    s.d
+}
+
 /// E-4: details; detail 2 prints the receptacle's mounting height.
 fn e4() -> Drawing {
     let mut s = Sheet::new();

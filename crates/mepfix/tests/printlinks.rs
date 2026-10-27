@@ -634,7 +634,8 @@ fn an_enlarged_plan_reports_the_symbols_it_left_out() {
 
 /// A symbol the import tagged with its circuit label (the label came first) counts by the type
 /// mark printed beside it; a mark another symbol already carries (the import keeps one-letter
-/// marks on the page) is not taken twice, and a circuit-tagged symbol with no mark stays out.
+/// marks on the page) is not taken twice, a lone circuit-tagged symbol counts untyped, and one beside a
+/// typed symbol (its label) stays out.
 #[test]
 fn a_symbol_tagged_with_its_circuit_counts_by_the_mark_beside_it() {
     let mut e3 = linkset::enlarged_sheet(Some(("ENLARGED FIRST FLOOR CORE PLAN", true)));
@@ -679,16 +680,23 @@ fn a_symbol_tagged_with_its_circuit_counts_by_the_mark_beside_it() {
     // A device tagged A, the page still printing its A: not a second device.
     add(tagged("A", 16.0, 16.0));
     add(text("A", 16.25, 16.05));
-    // Circuit-tagged with no mark beside it.
+    // Circuit-tagged with no mark beside it and no typed symbol near: a device with no type
+    // mark (a plain receptacle), counted untyped.
     add(tagged("D-14", 16.0, 8.0));
+    // Circuit-tagged right beside a typed symbol: that device's circuit label took the strokes
+    // left beside it, not a second device.
+    add(tagged("D-16", 16.3, 16.2));
     let (_, pages) = with_e3(e3);
     let e3p = pages.iter().find(|p| p.sheet.number == "E-3").expect("E-3");
     let rescued: Vec<_> = e3p.read.devices.iter().filter(|dv| dv.alt.is_some()).map(|dv| (dv.tag.as_str(), dv.alt.as_deref())).collect();
     assert_eq!(rescued, [("D-12", Some("A"))]);
+    let lone: Vec<_> = e3p.read.devices.iter().filter(|dv| dv.circuit_only).map(|dv| dv.tag.as_str()).collect();
+    assert_eq!(lone, ["D-14"]);
     let l = printlinks::link_set(&sheets, &pages);
     let core = l.enlarged.iter().find(|e| e.detail == "1").expect("view 1");
-    assert_eq!(core.devices, 7, "5 + the circuit-tagged one + the tagged one: {core:#?}");
+    assert_eq!(core.devices, 8, "5 + the circuit-tagged one + the tagged one + the lone circuit one: {core:#?}");
     assert_eq!(core.devices_by_type.get("A"), Some(&7), "{core:#?}");
+    assert_eq!(core.devices_by_type.get(printlinks::CIRCUIT_ONLY_TYPE), Some(&1), "{core:#?}");
     assert_eq!(l.double_counted, 0);
 }
 
@@ -729,6 +737,33 @@ fn a_printed_core_plan_in_pieces_counts_every_piece() {
     let l = printlinks::link_set(&sheets, &pages);
     assert_eq!(devices_of(&l, "E-3", "1"), 5, "{:#?}", l.enlarged);
     let core = l.enlarged.iter().find(|e| e.detail == "1").expect("view 1");
+    assert!(core.registered, "{core:#?}");
+    assert_eq!(l.double_counted, 0);
+}
+
+/// The core plan printed with three devices that carry only their circuit label (plain
+/// receptacles) apart from the typed ones: the import tags them with the circuit, and they
+/// count untyped beside the five A's; the sheet numbers in the title block and the view's
+/// bubble do not.
+#[test]
+fn a_printed_core_plan_counts_the_devices_labelled_by_their_circuit_alone() {
+    let (sheets, mut pages) = printed_set();
+    let pdf = linkset::print(&linkset::enlarged_sheet_with_receptacles(Some(("ENLARGED FIRST FLOOR CORE PLAN", true))))
+        .unwrap_or_else(|e| panic!("E-3: {e}"));
+    let (page, _) = cadaddy_io::pdf_read::read_json(&pdf, &serde_json::json!({"page": 1, "images": false, "fills": "merge"}))
+        .unwrap_or_else(|e| panic!("E-3: {e}"));
+    let read = printlinks::read_page(&page, "E-3");
+    let mut lone: Vec<&str> = read.devices.iter().filter(|dv| dv.circuit_only).map(|dv| dv.tag.as_str()).collect();
+    lone.sort_unstable();
+    assert_eq!(lone, ["D-20", "D-21", "D-22"], "{:?}", read.devices);
+    for p in pages.iter_mut().filter(|p| p.sheet.number == "E-3") {
+        p.read = read.clone();
+    }
+    let l = printlinks::link_set(&sheets, &pages);
+    let core = l.enlarged.iter().find(|e| e.detail == "1").expect("view 1");
+    assert_eq!(core.devices, 8, "{core:#?}");
+    assert_eq!(core.devices_by_type.get("A"), Some(&5), "{core:#?}");
+    assert_eq!(core.devices_by_type.get(printlinks::CIRCUIT_ONLY_TYPE), Some(&3), "{core:#?}");
     assert!(core.registered, "{core:#?}");
     assert_eq!(l.double_counted, 0);
 }

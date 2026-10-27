@@ -130,12 +130,27 @@ pub struct PageDevice {
     /// The type mark printed beside the symbol when the import tagged it with other lettering
     /// (its circuit label, a note): the nearest mark no other symbol carries.
     pub alt: Option<String>,
+    /// Its only label is a circuit (`D-12`), with no type mark and no typed symbol beside it: a
+    /// device drawn without a type mark (a plain receptacle), known by the circuit it is on.
+    pub circuit_only: bool,
 }
 
+/// The type an enlarged plan counts a circuit-only symbol under.
+pub const CIRCUIT_ONLY_TYPE: &str = "untyped (circuit label)";
+
 impl PageDevice {
-    /// The device type its mark (else the mark beside it) names, by `device_type`.
-    fn kind(&self, legend: &BTreeSet<String>, device_type: &dyn Fn(&BTreeSet<String>, &str) -> Option<String>) -> Option<String> {
-        device_type(legend, &self.tag).or_else(|| self.alt.as_deref().and_then(|a| device_type(legend, a)))
+    /// The device type its mark (else the mark beside it) names, by `device_type`; a
+    /// circuit-only symbol is [`CIRCUIT_ONLY_TYPE`] unless its label is one of the set's sheet
+    /// numbers (`sheets`, [`norm_sheet`] spelling: a title block or a bubble, not a circuit).
+    fn kind(
+        &self,
+        legend: &BTreeSet<String>,
+        device_type: &dyn Fn(&BTreeSet<String>, &str) -> Option<String>,
+        sheets: &BTreeSet<String>,
+    ) -> Option<String> {
+        device_type(legend, &self.tag)
+            .or_else(|| self.alt.as_deref().and_then(|a| device_type(legend, a)))
+            .or_else(|| (self.circuit_only && !sheets.contains(&norm_sheet(&self.tag))).then(|| CIRCUIT_ONLY_TYPE.to_string()))
     }
 }
 
@@ -1141,16 +1156,18 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
         let at = ins.insert.xy();
         if !legend.covers(at) {
-            syms.push(PageDevice { tag, at: [at.x, at.y], handle: e.handle.hex(), alt: None });
+            syms.push(PageDevice { tag, at: [at.x, at.y], handle: e.handle.hex(), alt: None, circuit_only: false });
         }
     }
     marks_beside(&mut syms, &texts, &legend, median_h);
+    let named: BTreeSet<String> = std::iter::once(own_n.clone()).chain(out.callouts.iter().map(|c| norm_sheet(&c.target_sheet))).collect();
+    circuit_only(&mut syms, median_h, &named);
     for dv in syms {
         let tagged = !dv.tag.is_empty() && !is_circuit_tag(&dv.tag);
         if dv.tag.is_empty() && dv.alt.is_none() && out.untagged.len() < MAX_PAGE_DEVICES {
             out.untagged.push(dv.at);
         }
-        if tagged || dv.alt.is_some() {
+        if tagged || dv.alt.is_some() || dv.circuit_only {
             out.devices.push(dv);
         }
     }
@@ -1228,6 +1245,30 @@ fn marks_beside(syms: &mut [PageDevice], texts: &[TextItem], legend: &device_typ
         if let (Some(dv), Some(t)) = (syms.get_mut(si), texts.get(ti)) {
             dv.alt = Some(t.value.trim().to_string());
         }
+    }
+}
+
+/// Mark the symbols whose only label is a circuit and that stand apart from every typed symbol
+/// (one with a type mark, its own or beside it). Devices drawn with no type mark (a plain
+/// duplex receptacle) carry only their circuit, and the import tags them with it. A circuit
+/// symbol next to a typed one is that device's label taking the strokes left beside it, not
+/// a second device. A label naming a sheet (`sheets`: the page's own number and those its
+/// callouts name) is a title block or a bubble.
+fn circuit_only(syms: &mut [PageDevice], median_h: f64, sheets: &BTreeSet<String>) {
+    let reach = MARK_REACH * median_h.max(1e-9);
+    let typed: Vec<[f64; 2]> =
+        syms.iter().filter(|dv| dv.alt.is_some() || (!dv.tag.is_empty() && !is_circuit_tag(&dv.tag))).map(|dv| dv.at).collect();
+    let cell = reach.max(1e-6);
+    let key = |p: [f64; 2]| ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64);
+    let mut by_cell: BTreeMap<(i64, i64), Vec<[f64; 2]>> = BTreeMap::new();
+    for p in &typed {
+        by_cell.entry(key(*p)).or_default().push(*p);
+    }
+    for dv in syms.iter_mut().filter(|dv| dv.alt.is_none() && is_circuit_tag(&dv.tag) && !sheets.contains(&norm_sheet(&dv.tag))) {
+        let (cx, cy) = key(dv.at);
+        let near =
+            (-1..=1).any(|dx| (-1..=1).any(|dy| by_cell.get(&(cx + dx, cy + dy)).is_some_and(|ps| ps.iter().any(|p| dist(*p, dv.at) <= reach))));
+        dv.circuit_only = !near;
     }
 }
 
@@ -1377,9 +1418,10 @@ fn count_devices(
     smaller: &[[f64; 4]],
     holds: &dyn Fn([f64; 2]) -> bool,
     device_type: &dyn Fn(&BTreeSet<String>, &str) -> Option<String>,
+    sheets: &BTreeSet<String>,
 ) {
     for dv in page.read.devices.iter().filter(|dv| holds(dv.at) && !smaller.iter().any(|r| inside(r, dv.at))) {
-        match dv.kind(&page.read.legend_types, device_type) {
+        match dv.kind(&page.read.legend_types, device_type, sheets) {
             Some(t) => {
                 *entry.devices_by_type.entry(t).or_default() += 1;
                 entry.devices += 1;
@@ -1670,6 +1712,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
     for s in sheets {
         sheet_forms.extend(device_types::sheet_number_forms(&s.number));
     }
+    let set_sheets: BTreeSet<String> = sheets.iter().map(|s| norm_sheet(&s.number)).collect();
     let none = BTreeSet::new();
     let device_type = |legend: &BTreeSet<String>, tag: &str| match device_types::tag_verdict(tag, legend, &none, &sheet_forms) {
         TagVerdict::Device(t) => Some(t),
@@ -1700,7 +1743,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
             // Devices just outside the walls (lights on the facade) are the view's too.
             let m = 0.08 * (rg[2] - rg[0]).max(rg[3] - rg[1]);
             let reach = [rg[0] - m, rg[1] - m, rg[2] + m, rg[3] + m];
-            count_devices(&mut entry, e.page, &smaller, &|p| inside(&reach, p), &device_type);
+            count_devices(&mut entry, e.page, &smaller, &|p| inside(&reach, p), &device_type, &set_sheets);
             entry.devices_from = "view".into();
         }
         // The overall plan: the sheet whose callout points here, else a plan of the level.
@@ -1927,7 +1970,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                     let pad = 0.02 * (bx[2] - bx[0]).hypot(bx[3] - bx[1]);
                     let wide = [bx[0] - pad, bx[1] - pad, bx[2] + pad, bx[3] + pad];
                     let mut by_box = Enlarged::default();
-                    count_devices(&mut by_box, e.page, &smaller, &|p| inside(&wide, f.apply(p)), &device_type);
+                    count_devices(&mut by_box, e.page, &smaller, &|p| inside(&wide, f.apply(p)), &device_type, &set_sheets);
                     // Only more of the same plan, never a swap for somewhere else: most of what the
                     // view counted lands in the box too.
                     let kept = entry.device_handles.iter().filter(|h| by_box.device_handles.contains(h)).count();
@@ -1943,7 +1986,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                         .read
                         .devices
                         .iter()
-                        .filter(|dv| inside(&b, dv.at) && dv.kind(&h.read.legend_types, &device_type).is_some())
+                        .filter(|dv| inside(&b, dv.at) && dv.kind(&h.read.legend_types, &device_type, &set_sheets).is_some())
                         .map(|dv| dv.handle.clone())
                         .collect();
                     entry.overall_ignored = entry.ignored_handles.len();
@@ -1963,7 +2006,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
         l.sheets.push(p.sheet.number.clone());
         let bounds = boundaries.get(&p.sheet.number).cloned().unwrap_or_default();
         for dv in &p.read.devices {
-            if dv.kind(&p.read.legend_types, &device_type).is_none() {
+            if dv.kind(&p.read.legend_types, &device_type, &set_sheets).is_none() {
                 continue;
             }
             if bounds.iter().any(|b| inside(b, dv.at)) {
@@ -1984,8 +2027,12 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
         {
             let kept = boundaries.get(&h.sheet.number).is_none_or(|bs| !bs.contains(&b));
             if kept {
-                counted_inside +=
-                    h.read.devices.iter().filter(|dv| inside(&b, dv.at) && dv.kind(&h.read.legend_types, &device_type).is_some()).count();
+                counted_inside += h
+                    .read
+                    .devices
+                    .iter()
+                    .filter(|dv| inside(&b, dv.at) && dv.kind(&h.read.legend_types, &device_type, &set_sheets).is_some())
+                    .count();
             }
         }
     }
@@ -2032,8 +2079,12 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
             let Some(v) = tp.read.views.iter().find(|v| v.number == c.detail) else { continue };
             let Some(&h) = v.mounting_ft.first() else { continue };
             let reach = if c.radius > 0.0 { 6.0 * c.radius } else { 12.0 };
-            let mut near: Vec<&PageDevice> =
-                p.read.devices.iter().filter(|dv| dist(dv.at, c.at) <= reach && dv.kind(&p.read.legend_types, &device_type).is_some()).collect();
+            let mut near: Vec<&PageDevice> = p
+                .read
+                .devices
+                .iter()
+                .filter(|dv| dist(dv.at, c.at) <= reach && dv.kind(&p.read.legend_types, &device_type, &set_sheets).is_some())
+                .collect();
             near.sort_by(|a, b| dist(a.at, c.at).total_cmp(&dist(b.at, c.at)));
             let applied: Vec<serde_json::Value> = near.iter().take(1).map(|dv| serde_json::json!({"tag": dv.tag, "handle": dv.handle})).collect();
             if out.facts.len() < MAX_SET_CALLOUTS {
