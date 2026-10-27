@@ -2310,8 +2310,12 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     ensure_sheets_loaded(s, job)?;
     // Each floor plan's labels read in full, sheet by sheet (a whole set's labels are more than
     // one reading traces: the last floors were left out).
-    let regions: Vec<[f64; 4]> =
-        job.sheet_regions.iter().filter(|r| r.kind == "plan" && r.not_built.is_empty()).map(SheetRegion::plan_rect).collect();
+    let regions: Vec<[f64; 4]> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| matches!(r.kind.as_str(), "plan" | "enlarged_plan") && r.not_built.is_empty())
+        .map(SheetRegion::plan_rect)
+        .collect();
     let mut params = json!({"outline": false});
     if !regions.is_empty() {
         params["regions"] = json!(regions);
@@ -2339,6 +2343,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
     let duplicates = one_room_per_number(job, &mut rooms_result);
+    let unnamed_dups = drop_unnamed_duplicates(job, &mut rooms_result);
     let (removed, renamed) = apply_room_answers(job, &mut rooms_result);
     if let Some(o) = rooms_result.as_object_mut() {
         if duplicates > 0 {
@@ -2350,7 +2355,10 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         if renamed > 0 {
             o.insert("renamed_by_answers".into(), json!(renamed));
         }
-        if duplicates + removed > 0
+        if unnamed_dups > 0 {
+            o.insert("unnamed_duplicates".into(), json!(unnamed_dups));
+        }
+        if duplicates + removed + unnamed_dups > 0
             && let Some(n) = o.get("rooms").and_then(Value::as_array).map(Vec::len)
         {
             o.insert("count".into(), json!(n));
@@ -2448,7 +2456,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         for room in rooms.iter().take(sample_count) {
             let name = room.get("name").and_then(Value::as_str).unwrap_or("?");
             let number = room.get("number").and_then(Value::as_str).unwrap_or("");
-            let area = room.get("area_sqft").and_then(Value::as_f64).unwrap_or(0.0);
+            let area = room.get("areaSqFt").and_then(Value::as_f64).unwrap_or(0.0);
             let qid = job.next_qid(StageName::Rooms);
             let q = Question {
                 id: qid,
@@ -2492,7 +2500,7 @@ fn rooms_off_the_building(job: &GuidedJob, rooms_result: &mut Value) -> Value {
     let a_levels: Vec<String> = job
         .sheet_regions
         .iter()
-        .filter(|r| r.discipline == "A" && r.kind == "plan" && r.not_built.is_empty())
+        .filter(|r| r.discipline == "A" && matches!(r.kind.as_str(), "plan" | "enlarged_plan") && r.not_built.is_empty())
         .map(|r| r.level.trim().to_ascii_uppercase())
         .collect();
     let (mut sheet_furniture, mut site, mut other_discipline, mut not_a_name) = (0usize, 0usize, 0usize, 0usize);
@@ -2512,11 +2520,14 @@ fn rooms_off_the_building(job: &GuidedJob, rooms_result: &mut Value) -> Value {
             site += 1;
             return false;
         }
-        // Non-A discipline rooms: keep only numbered rooms whose number's floor prefix
-        // matches the level (room 213 → level 2, room 301 → level 3).  This drops
-        // cross-level bleed (a Level-1 room number read on a Level-3 mechanical sheet)
-        // and unnumbered labels (legends, equipment names, notes).
-        if region.discipline != "A" {
+        // Floor-prefix filter: keep only numbered rooms whose number's floor prefix matches
+        // the level (room 213 → level 2, room 301 → level 3).  For non-A disciplines, this
+        // drops cross-level bleed (a Level-1 room number on a Level-3 mechanical sheet).
+        // For enlarged A plans, the same filter applies: an enlarged lobby plan assigned to
+        // Level 2 can show Level-1 room numbers from the overall plan it details.
+        // Main A-discipline floor plans (kind "plan") are trusted on their level.
+        let apply_prefix = region.discipline != "A" || region.kind == "enlarged_plan";
+        if apply_prefix {
             let level_up = region.level.trim().to_ascii_uppercase();
             if a_levels.contains(&level_up) {
                 let number = room.get("number").and_then(Value::as_str).unwrap_or("");
@@ -2631,6 +2642,54 @@ fn one_room_per_number(job: &GuidedJob, rooms_result: &mut Value) -> usize {
         };
         i += 1;
         keep
+    });
+    before - list.len()
+}
+
+/// Unnamed rooms whose name also appears among numbered rooms on the same level are likely OCR
+/// gaps: the architectural plan found the label but not the number, and the same room exists with
+/// its number from another discipline's plan. Dropping these prevents double-counting a level's
+/// rooms when one sheet reads names without numbers and another reads numbers without names.
+fn drop_unnamed_duplicates(job: &GuidedJob, rooms_result: &mut Value) -> usize {
+    let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) else { return 0 };
+    let text = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).map(|v| v.trim().to_ascii_uppercase()).unwrap_or_default();
+    // Count numbered rooms per (level, name).
+    let mut numbered: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    for r in list.iter() {
+        let (level, number, name) = (text(r, "level"), text(r, "number"), text(r, "name"));
+        if !level.is_empty() && !number.is_empty() && !name.is_empty() {
+            *numbered.entry((level, name)).or_default() += 1;
+        }
+    }
+    // Count unnamed rooms per (level, name) from A-discipline sheets.
+    let unnamed_a = |r: &Value| -> bool {
+        let (number, sheet) = (text(r, "number"), text(r, "sheet"));
+        number.is_empty() && job.sheet_regions.iter().any(|g| g.number.eq_ignore_ascii_case(&sheet) && g.discipline == "A")
+    };
+    let mut unnamed_count: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    for r in list.iter() {
+        if unnamed_a(r) {
+            let (level, name) = (text(r, "level"), text(r, "name"));
+            if !level.is_empty() && !name.is_empty() {
+                *unnamed_count.entry((level, name)).or_default() += 1;
+            }
+        }
+    }
+    // Drop unnamed A rooms where the level already has at least as many numbered rooms
+    // with the same name (the unnamed ones are the same rooms without their numbers read).
+    let before = list.len();
+    list.retain(|r| {
+        if !unnamed_a(r) {
+            return true;
+        }
+        let (level, name) = (text(r, "level"), text(r, "name"));
+        if level.is_empty() || name.is_empty() {
+            return true;
+        }
+        let n = numbered.get(&(level.clone(), name.clone())).copied().unwrap_or(0);
+        let u = unnamed_count.get(&(level, name)).copied().unwrap_or(0);
+        // Keep unnamed rooms only when the level doesn't have enough numbered instances.
+        n < u
     });
     before - list.len()
 }
@@ -7244,6 +7303,61 @@ mod tests {
         for bad in ["-4-----P- -I-----Y-", "Xb", "D D", "22 40 OO", "-J--L---", "G L", "", "12"] {
             assert!(!legible_room_name(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn room_number_floor_prefix_on_level() {
+        // A room number starts with its level's digit and has at least one more character.
+        assert!(room_number_on_level("213", "Level 2"));
+        assert!(room_number_on_level("305A", "3"));
+        assert!(room_number_on_level("100", "1"));
+        assert!(room_number_on_level("160B", "1"));
+        // Wrong prefix: room 101 is not on level 3.
+        assert!(!room_number_on_level("101", "3"));
+        assert!(!room_number_on_level("302", "Level 2"));
+        // Empty or no-digit levels accept any numbered room.
+        assert!(room_number_on_level("475", "Roof"));
+        assert!(room_number_on_level("B1", "B"));
+        // Empty number never matches.
+        assert!(!room_number_on_level("", "1"));
+    }
+
+    #[test]
+    fn unnamed_duplicates_dropped_when_numbered_exist() {
+        // Synthetic: level "3" has 3 named numbered rooms "DOUBLE Q" and 3 unnamed "DOUBLE Q"
+        // from an A sheet. The unnamed ones should be dropped because the level already has
+        // ≥3 numbered "DOUBLE Q" rooms.
+        let region = |number: &str, discipline: &str| SheetRegion {
+            number: number.into(),
+            level: "3".into(),
+            discipline: discipline.into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 1.0, 1.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        let mut job = GuidedJob::new("/nonexistent", JobGoal::Takeoff);
+        job.sheet_regions.push(region("A113", "A"));
+        job.sheet_regions.push(region("E-4", "E"));
+        let mut result = json!({"rooms": [
+            {"level": "3", "number": "302", "name": "DOUBLE Q", "sheet": "E-4"},
+            {"level": "3", "number": "304", "name": "DOUBLE Q", "sheet": "E-4"},
+            {"level": "3", "number": "306", "name": "DOUBLE Q", "sheet": "E-4"},
+            {"level": "3", "number": "", "name": "DOUBLE Q", "sheet": "A113"},
+            {"level": "3", "number": "", "name": "DOUBLE Q", "sheet": "A113"},
+            {"level": "3", "number": "", "name": "DOUBLE Q", "sheet": "A113"},
+            {"level": "3", "number": "308", "name": "SINGLE Q", "sheet": "E-4"},
+            {"level": "3", "number": "", "name": "SINGLE Q", "sheet": "A113"},
+        ]});
+        let dropped = drop_unnamed_duplicates(&job, &mut result);
+        // The 3 unnamed DOUBLE Q + 1 unnamed SINGLE Q should be dropped.
+        assert_eq!(dropped, 4, "expected 4 unnamed duplicates dropped");
+        let rooms = result["rooms"].as_array().unwrap();
+        assert_eq!(rooms.len(), 4, "expected 4 remaining rooms (all numbered)");
+        assert!(rooms.iter().all(|r| !r["number"].as_str().unwrap_or("").is_empty()), "all remaining rooms are numbered");
     }
 
     /// A question for the jobask tests.
