@@ -555,6 +555,26 @@ pub fn sheet_frame(segs: &[(Vec2, Vec2)], rect: [f64; 4]) -> SheetFrame {
     SheetFrame { area: [l, b, r, t], title_block, border }
 }
 
+/// A reference sheet that mentions a floor in its title but should not be assigned a building
+/// level: life safety, occupancy load, code analysis, accessibility guidelines and similar
+/// code-compliance documents. These overlay existing floor plans for review but do not
+/// contain the architectural geometry that drives the BIM model.
+pub fn is_reference_sheet(title: &str) -> bool {
+    let up = title.to_ascii_uppercase();
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    // Two-word phrases checked as consecutive pairs.
+    for pair in words.windows(2) {
+        let phrase = format!("{} {}", pair[0], pair[1]);
+        if matches!(
+            phrase.as_str(),
+            "LIFE SAFETY" | "OCCUPANCY LOAD" | "CODE ANALYSIS" | "CODE COMPLIANCE"
+        ) {
+            return true;
+        }
+    }
+    false
+}
+
 /// A site sheet: civil, landscape and site plans (what is outside the building), by the sheet
 /// number's discipline (`C`, `L`, `CS`, `LS`, `V`) or the title's words.
 pub fn is_site_sheet(discipline: &str, title: &str) -> bool {
@@ -798,6 +818,22 @@ mod tests {
         for s in ["12'-0\"", "A = B", "1/8 INCH", "=1'-0\""] {
             assert!(!is_bare_scale(s), "{s}");
         }
+    }
+
+    #[test]
+    fn reference_sheets_detected() {
+        // Life safety and occupancy load plans mention floors but are reference docs.
+        assert!(is_reference_sheet("LIFE SAFETY - FIRST FLOOR PLAN"));
+        assert!(is_reference_sheet("OCCUPANCY LOAD PLAN - 1ST FLOOR"));
+        assert!(is_reference_sheet("Life Safety Plan - Third Floor"));
+        assert!(is_reference_sheet("Code Analysis - Second Floor"));
+        assert!(is_reference_sheet("CODE COMPLIANCE OVERLAY"));
+        // Regular floor plans are NOT reference sheets.
+        assert!(!is_reference_sheet("OVERALL FIRST FLOOR PLAN"));
+        assert!(!is_reference_sheet("ELECTRICAL - 1ST FLOOR"));
+        assert!(!is_reference_sheet("MECHANICAL FIRST & SECOND FLOOR PLANS"));
+        assert!(!is_reference_sheet("FOUNDATION & FIRST FLOOR PLAN"));
+        assert!(!is_reference_sheet(""));
     }
 
     #[test]

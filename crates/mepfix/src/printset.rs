@@ -8,6 +8,7 @@
 //! drawings before moving on, so peak memory stays proportional to the largest single sheet.
 //! The project state (JSON) is the only thing kept fully in memory.
 
+use crate::sheet_facts;
 use crate::sheet_reader::{self, RecognisedSheet, SheetMap};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -800,6 +801,12 @@ pub fn run_classify(
                         e.discipline = if rec.discipline.is_empty() { infer_discipline(&e.number) } else { rec.discipline.clone() };
                         e.sheet_type = classify_sheet_type(&e.number, &e.title);
                         e.level = rec.level.clone().unwrap_or_else(|| infer_level(&e.title));
+                        // Reference sheets (life safety, occupancy load, etc.) mention a
+                        // floor in their title but are not architectural floor plans — strip
+                        // the building level so they don't drive the BIM model.
+                        if sheet_facts::is_reference_sheet(&e.title) {
+                            e.level = String::new();
+                        }
                         e.scale_text = rec.scale_text.clone();
                         e.scale = rec.scale;
                         e.recognised = Some(rec);
@@ -844,6 +851,9 @@ pub fn run_classify(
             }
             if e.level.is_empty() && !e.title.is_empty() {
                 e.level = infer_level(&e.title);
+            }
+            if sheet_facts::is_reference_sheet(&e.title) {
+                e.level = String::new();
             }
             e.stage_results.insert(
                 "classify".into(),
@@ -989,6 +999,12 @@ pub fn run_classify_prints(
                 }
                 e.level = levels.first().cloned().or_else(|| rec.level.clone()).unwrap_or_else(|| infer_level(&type_text));
                 e.levels = levels;
+            }
+            // Reference sheets (life safety, occupancy load, code analysis) mention a floor
+            // in their title but should not be on a building level.
+            if sheet_facts::is_reference_sheet(&e.title) {
+                e.level = String::new();
+                e.levels = Vec::new();
             }
             e.level_source = if e.level.is_empty() { String::new() } else { "title".into() };
             e.issued = facts.issued.clone();
