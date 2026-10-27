@@ -26,10 +26,18 @@ use crate::{Result, Session};
 /// Most plan objects compared.
 const MAX_ITEMS: usize = 200_000;
 
+/// A revision report's lists, paged alike.
+const LISTS: [&str; 6] = ["added", "removed", "moved", "kept", "conflicts", "changed"];
+/// Items per list in one page of a revision report, by default and at most.
+const PAGE: usize = 100;
+const PAGE_MAX: usize = 500;
+/// Most `plan.rooms` pages read (its largest page is 200 rooms).
+const MAX_ROOM_PAGES: usize = 100;
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new("model.revise", "Revise Model from Plans", run)
         .menu(&["Draw", "Modeling", "Revise Model from Plans"])
-        .params("{against?: path (an earlier or later version of the plan to compare with; default the plan the model was last built from), rebuild?: bool (default true), tolerance? (drawing units; default a millionth of the plan's size)} → {added, removed, moved: [{kind, handle, layer, name?, at, from?}], unchanged, rebuilt, kept: [handles], conflicts: [{handle, part, source, change}], changed: [handles of rebuilt objects of changed plan objects]}")]
+        .params("{against?: path (an earlier or later version of the plan to compare with, rooms included; default the plan the model was last built from), rebuild?: bool (default true), tolerance? (drawing units: how far an object may move and still count as moved rather than removed and added; default 5 % of the larger side of the box around both plans' objects), last?: bool (return the last revision that found changes, e.g. the one an associative model made when the plan was edited, instead of comparing again), offset?, limit? (default 100, at most 500: each list is paged alike)} → {added, removed, moved: [{kind, handle, layer, name?, at, from?}], unchanged, rebuilt, auto, kept: [handles], conflicts: [{handle?, part, source, change}], changed: [handles of rebuilt objects of changed plan objects], totals: {added, removed, moved, kept, conflicts, changed}, offset, limit, next?: offset of the next page, last?: the last revision's totals when this one found nothing}")]
 }
 
 fn read_file(cmd: &str, path: &str) -> Result<Vec<u8>> {
@@ -63,6 +71,25 @@ type TagKey = (String, String, String);
 pub struct ModelRecord {
     pub plan: Vec<PlanItem>,
     pub made: HashMap<Handle, (u64, Option<TagKey>)>,
+    /// The drawing as the build left it (shared, not copied): a plan unchanged since then needs
+    /// no rebuild, even when the build was one step of a longer command.
+    pub built: Option<BuiltDrawing>,
+}
+
+/// The drawing a build left; two are equal when they are the same drawing.
+#[derive(Clone)]
+pub struct BuiltDrawing(pub std::sync::Arc<cadaddy_doc::Drawing>);
+
+impl PartialEq for BuiltDrawing {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for BuiltDrawing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BuiltDrawing({} objects)", self.0.model.len())
+    }
 }
 
 fn fnv(s: &str) -> u64 {
@@ -142,15 +169,16 @@ pub fn plan_items(d: &Drawing, g: &WallGen) -> Vec<PlanItem> {
     out
 }
 
-/// The rooms of the current plan as plan items (name labels in closed outlines).
+/// The rooms of the current plan as plan items (name labels in closed outlines): every page of
+/// `plan.rooms`, following its `next`. A room's signature is its name, area and centre, so a room
+/// moved without changing size is a change too.
 fn room_items(s: &mut Session) -> Vec<PlanItem> {
     let Some(spec) = find_command("plan.rooms") else { return Vec::new() };
-    let Ok(r) = (spec.run)(s, &json!({ "outline": false, "limit": 200 })) else { return Vec::new() };
-    r["items"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|x| {
+    let mut out = Vec::new();
+    let mut offset = 0u64;
+    for _ in 0..MAX_ROOM_PAGES {
+        let Ok(r) = (spec.run)(s, &json!({ "outline": false, "offset": offset, "limit": 200 })) else { break };
+        out.extend(r["items"].as_array().into_iter().flatten().filter_map(|x| {
             let name = x["name"].as_str()?.to_string();
             let at = Vec2::new(x["at"][0].as_f64()?, x["at"][1].as_f64()?);
             let area = x["area"].as_f64().unwrap_or(0.0);
@@ -158,25 +186,43 @@ fn room_items(s: &mut Session) -> Vec<PlanItem> {
                 kind: "room",
                 handle: x["label"].as_str().and_then(Handle::parse_hex).unwrap_or_default(),
                 layer: String::new(),
-                signature: format!("{}|{:.3}", name.to_ascii_uppercase(), area),
+                signature: format!("{}|{:.3}|{:.3}|{:.3}", name.to_ascii_uppercase(), area, at.x, at.y),
                 name: Some(name),
                 at,
             })
-        })
-        .collect()
+        }));
+        match r["next"].as_u64() {
+            Some(n) if n > offset => offset = n,
+            _ => break,
+        }
+    }
+    out
+}
+
+/// The rooms of another drawing (another version of the plan), read as [`room_items`] reads them.
+fn rooms_of(other: Drawing) -> Vec<PlanItem> {
+    let mut t = Session::empty();
+    t.open_drawing(other, "Plan", None);
+    room_items(&mut t)
 }
 
 /// Record what the build just made (and the plan it made it from).
 pub(crate) fn record(s: &mut Session, g: &WallGen) {
+    record_with(s, g, None);
+}
+
+/// [`record`], with the plan's rooms when they were just read (`None`: read them).
+fn record_with(s: &mut Session, g: &WallGen, rooms: Option<Vec<PlanItem>>) {
     // The overrides go back on the regenerated model first: what they change is no hand edit.
     super::overrides::after_build(s);
     let Ok(d) = s.doc() else { return };
     let mut plan = plan_items(d, g);
     let made: HashMap<Handle, (u64, Option<TagKey>)> =
         d.model.iter().filter(|e| wallgen::made_as(e).is_some()).map(|e| (e.handle, (fingerprint(e), tag_key(e)))).collect();
-    plan.extend(room_items(s));
+    plan.extend(rooms.unwrap_or_else(|| room_items(s)));
     if let Ok(st) = s.state_mut() {
-        st.model_record = Some(ModelRecord { plan, made });
+        let built = Some(BuiltDrawing(std::sync::Arc::clone(&st.doc)));
+        st.model_record = Some(ModelRecord { plan, made, built });
     }
 }
 
@@ -268,12 +314,26 @@ fn source_of(e: &Entity) -> Option<Handle> {
     x.get(at + 3).filter(|t| t.code == 1000).and_then(|t| Handle::parse_hex(&t.value))
 }
 
-/// A generated object's (part, level, source) tag: what the rebuilt counterpart shares.
+/// A generated object's (part, level, source) tag: what the rebuilt counterpart shares. One plan
+/// object makes many MEP objects (a run's segments, each fitting, terminals read from nothing),
+/// so theirs adds the object's own id (`mepid:`) to the source: `<source>#<id>`.
 pub(crate) fn tag_key(e: &Entity) -> Option<TagKey> {
     let x = &e.common.xdata;
     let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP))?;
     let v = |k: usize| x.get(at + k).filter(|t| t.code == 1000).map(|t| t.value.clone());
-    Some((v(1)?, v(2).unwrap_or_default(), v(3).unwrap_or_default()))
+    let part = v(1)?;
+    let mut source = v(3).unwrap_or_default();
+    if part == "mep"
+        && let Some(id) = x.iter().skip(at + 4).take_while(|t| t.code != 1001).find_map(|t| t.value.strip_prefix("mepid:"))
+    {
+        source = format!("{source}#{id}");
+    }
+    Some((part, v(2).unwrap_or_default(), source))
+}
+
+/// The plan object a tag key's source names (before an MEP object's `#<id>`).
+fn key_source(source: &str) -> Option<Handle> {
+    Handle::parse_hex(source.split('#').next().unwrap_or_default())
 }
 
 /// What a rebuild kept of the hand edits: (kept handles, conflicts).
@@ -283,17 +343,25 @@ pub struct Kept {
 }
 
 /// Build again from `g`, putting back the hand edits since the last build whose plan objects
-/// didn't change (`changed`: the plan objects that did).
-pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &HashSet<Handle>) -> Result<(Value, Kept)> {
+/// didn't change (`changed`: the plan objects that did). The rebuilt objects of unchanged plan
+/// objects keep the handles they had. `rooms`: the plan's rooms, when just read.
+pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &HashSet<Handle>, rooms: Option<Vec<PlanItem>>) -> Result<(Value, Kept)> {
     let before = s.state()?.model_record.clone();
     // The edits: generated objects changed since the build, and ones deleted.
     let mut edited: Vec<Entity> = Vec::new();
     let mut deleted: Vec<TagKey> = Vec::new();
+    // The untouched generated objects of unchanged plan objects, by tag, in drawing order: their
+    // rebuilt counterparts take these handles back.
+    let mut handles_of: HashMap<TagKey, std::collections::VecDeque<Handle>> = HashMap::new();
     if let Some(rec) = &before {
         let d = s.doc()?;
         for e in d.model.iter().filter(|e| wallgen::made_as(e).is_some()) {
-            if rec.made.get(&e.handle).is_some_and(|(f, _)| *f != fingerprint(e)) {
-                edited.push((**e).clone());
+            match rec.made.get(&e.handle) {
+                Some((f, _)) if *f != fingerprint(e) => edited.push((**e).clone()),
+                Some((_, Some(key))) if !key_source(&key.2).is_some_and(|h| changed.contains(&h)) => {
+                    handles_of.entry(key.clone()).or_default().push_back(e.handle);
+                }
+                _ => {}
             }
         }
         deleted = rec.made.iter().filter(|(h, _)| d.entity(**h).is_none()).filter_map(|(_, (_, k))| k.clone()).collect();
@@ -320,9 +388,9 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
     }
     // Deleted by hand: stays deleted unless its plan object changed (then it conflicts).
     for key in deleted {
-        let src = Handle::parse_hex(&key.2);
+        let src = key_source(&key.2);
         if src.is_some_and(|h| changed.contains(&h)) {
-            kept.conflicts.push(json!({ "part": key.0, "source": key.2, "change": "deleted" }));
+            kept.conflicts.push(json!({ "part": key.0, "source": key.2.split('#').next().unwrap_or_default(), "change": "deleted" }));
             continue;
         }
         let d = s.doc_mut()?;
@@ -331,63 +399,81 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
             d.remove_entity(h);
         }
     }
-    record(s, g);
+    keep_handles(s.doc_mut()?, handles_of);
+    record_with(s, g, rooms);
     Ok((built, kept))
+}
+
+/// Give rebuilt objects back the handles their counterparts had before the build (`handles_of`,
+/// by tag), when free: anything that refers to an unchanged part by handle still finds it.
+fn keep_handles(d: &mut Drawing, mut handles_of: HashMap<TagKey, std::collections::VecDeque<Handle>>) {
+    if handles_of.is_empty() {
+        return;
+    }
+    let mut moves: Vec<(Handle, Handle)> = Vec::new();
+    for e in d.model.iter().filter(|e| wallgen::made_as(e).is_some()) {
+        let Some(old) = tag_key(e).and_then(|k| handles_of.get_mut(&k)).and_then(std::collections::VecDeque::pop_front) else { continue };
+        if old != e.handle {
+            moves.push((e.handle, old));
+        }
+    }
+    for (now, old) in moves {
+        if d.entity(old).is_some() {
+            continue;
+        }
+        if let Some(e) = d.remove_entity(now) {
+            d.model.push(Entity { handle: old, ..(*e).clone() });
+        }
+    }
 }
 
 fn item_json(i: &PlanItem) -> Value {
     json!({ "kind": i.kind, "handle": i.handle.hex(), "layer": i.layer, "name": i.name, "at": [i.at.x, i.at.y] })
 }
 
-fn run(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "model.revise";
-    let g = s
-        .state()?
-        .wallgen
-        .clone()
-        .ok_or_else(|| crate::EngineError::Other("The drawing has no model yet: run model.build or WALLGEN first.".into()))?;
-    let ext = s.doc()?.extents(&cadaddy_doc::Space::Model);
-    let reach = match p.get("tolerance") {
-        None | Some(Value::Null) => (ext.width().max(ext.height()) * 0.05).max(1e-6),
-        Some(v) => v.as_f64().filter(|t| t.is_finite() && *t >= 0.0).ok_or_else(|| bad(cmd, "`tolerance` must be a distance"))?,
-    };
-    // The plan to compare with: another file, or what the model was last built from.
-    let (old, by_handle) = match str_param(p, "against") {
-        Some(path) => {
-            let hooks = super::file::io().ok_or_else(|| bad(cmd, "file formats are not available in this build"))?;
-            let bytes = read_file(cmd, path)?;
-            let other = (hooks.read)(&bytes, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-            (plan_items(&other, &g), false)
-        }
-        None => match &s.state()?.model_record {
-            Some(r) => (r.plan.iter().filter(|i| i.kind != "room").cloned().collect::<Vec<_>>(), true),
-            None => return Err(bad(cmd, "no record of the plan the model was built from: build it once, or pass `against`")),
-        },
-    };
-    let now = plan_items(s.doc()?, &g);
-    let (added, removed, moved, unchanged) = diff(&old, &now, by_handle, reach);
-    // Rooms: compared by name and outline.
+/// How to revise: match plan objects by handle (the plan the model was built from) or not
+/// (another file), how far a moved object may go (`None`: 5 % of the plans' size), whether to
+/// build again, and whether an associative model's rebuild asked.
+pub(crate) struct Revise {
+    pub by_handle: bool,
+    pub tolerance: Option<f64>,
+    pub rebuild: bool,
+    pub auto: bool,
+}
+
+/// Compare `old` (its plan objects) and `old_rooms` with the plan now and, when they differ and
+/// `how.rebuild`, build again keeping the hand edits; select the rebuilt objects of changed plan
+/// objects and echo a summary with the conflicts. The whole report (every list), also kept as
+/// the drawing's last revision when it found changes.
+pub(crate) fn revise(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms: Vec<PlanItem>, how: &Revise) -> Result<Value> {
+    let now = plan_items(s.doc()?, g);
     let rooms_now = room_items(s);
-    let rooms_then: Vec<PlanItem> = if by_handle {
-        s.state()?.model_record.as_ref().map(|r| r.plan.iter().filter(|i| i.kind == "room").cloned().collect()).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    let (r_added, r_removed, r_moved, _) =
-        if by_handle { diff(&rooms_then, &rooms_now, false, reach) } else { (Vec::new(), Vec::new(), Vec::new(), 0) };
+    // The default reach: from the plan objects only (not the model, which moves with them).
+    let reach = how.tolerance.unwrap_or_else(|| {
+        let b = Bounds2::from_points(old.iter().chain(&now).chain(&old_rooms).chain(&rooms_now).map(|i| i.at));
+        (b.width().max(b.height()) * 0.05).max(1e-6)
+    });
+    let (added, removed, moved, unchanged) = diff(&old, &now, how.by_handle, reach);
+    // Rooms: by name, size and centre (their labels' handles don't follow a room across files).
+    let (r_added, r_removed, r_moved, r_unchanged) = diff(&old_rooms, &rooms_now, false, reach);
     let changed_sources: HashSet<Handle> =
         removed.iter().map(|i| i.handle).chain(moved.iter().flat_map(|(o, n)| [o.handle, n.handle])).chain(added.iter().map(|i| i.handle)).collect();
     let any = !(added.is_empty() && removed.is_empty() && moved.is_empty() && r_added.is_empty() && r_removed.is_empty() && r_moved.is_empty());
-    let rebuild = p.get("rebuild").and_then(Value::as_bool).unwrap_or(true) && any;
+    let rebuild = how.rebuild && any;
     let mut out = json!({
         "added": added.iter().chain(&r_added).map(item_json).collect::<Vec<_>>(),
         "removed": removed.iter().chain(&r_removed).map(item_json).collect::<Vec<_>>(),
         "moved": moved.iter().chain(&r_moved).map(|(o, n)| { let mut v = item_json(n); v["from"] = json!([o.at.x, o.at.y]); v }).collect::<Vec<_>>(),
-        "unchanged": unchanged,
+        "unchanged": unchanged + r_unchanged,
         "rebuilt": rebuild,
+        "auto": how.auto,
+        "kept": [],
+        "conflicts": [],
+        "changed": [],
     });
+    let (n_added, n_removed, n_moved) = (added.len() + r_added.len(), removed.len() + r_removed.len(), moved.len() + r_moved.len());
     if rebuild {
-        let (built, kept) = rebuild_keeping_edits(s, &g, &changed_sources)?;
+        let (built, kept) = rebuild_keeping_edits(s, g, &changed_sources, Some(rooms_now))?;
         // The rebuilt objects of changed plan objects, selected to show them.
         let changed: Vec<Handle> =
             s.doc()?.model.iter().filter(|e| source_of(e).is_some_and(|h| changed_sources.contains(&h))).map(|e| e.handle).collect();
@@ -398,14 +484,84 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             o.insert("changed".into(), json!(changed.iter().map(|h| h.hex()).collect::<Vec<_>>()));
             o.insert("model".into(), built);
         }
+        let conflicts = kept.conflicts.len();
         s.echo(format!(
-            "Plan changes: {} added, {} removed, {} moved. Rebuilt; {} edit(s) kept, {} conflict(s).",
-            added.len() + r_added.len(),
-            removed.len() + r_removed.len(),
-            moved.len() + r_moved.len(),
+            "Plan changes: {n_added} added, {n_removed} removed, {n_moved} moved. Rebuilt; {} edit(s) kept, {conflicts} conflict(s).{}",
             kept.kept.len(),
-            kept.conflicts.len()
+            if conflicts > 0 { " The rebuilt parts replaced the conflicting edits: model.revise {last: true} lists them." } else { "" }
         ));
+    }
+    if any {
+        s.state_mut()?.last_revision = Some(out.clone());
+    }
+    Ok(out)
+}
+
+/// One page of a revision report: each list from `offset`, at most `limit` items, with every
+/// list's total, and the next page's offset while any list has more.
+fn paged(report: &Value, p: &Value) -> Value {
+    let offset = p.get("offset").and_then(Value::as_u64).map_or(0, |o| usize::try_from(o).unwrap_or(usize::MAX));
+    let limit = p.get("limit").and_then(Value::as_u64).map_or(PAGE, |l| usize::try_from(l).unwrap_or(PAGE_MAX)).clamp(1, PAGE_MAX);
+    let mut out = report.clone();
+    let mut totals = serde_json::Map::new();
+    let mut more = false;
+    for key in LISTS {
+        let list = report.get(key).and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+        totals.insert(key.into(), json!(list.len()));
+        more |= list.len() > offset.saturating_add(limit);
+        out[key] = json!(list.iter().skip(offset).take(limit).collect::<Vec<_>>());
+    }
+    out["totals"] = Value::Object(totals);
+    out["offset"] = json!(offset);
+    out["limit"] = json!(limit);
+    if more {
+        out["next"] = json!(offset.saturating_add(limit));
+    }
+    out
+}
+
+fn run(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "model.revise";
+    if p.get("last").and_then(Value::as_bool).unwrap_or(false) {
+        return match &s.state()?.last_revision {
+            Some(r) => Ok(paged(r, p)),
+            None => Err(bad(cmd, "no revision has found plan changes yet")),
+        };
+    }
+    let g = s
+        .state()?
+        .wallgen
+        .clone()
+        .ok_or_else(|| crate::EngineError::Other("The drawing has no model yet: run model.build or WALLGEN first.".into()))?;
+    let tolerance = match p.get("tolerance") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_f64().filter(|t| t.is_finite() && *t >= 0.0).ok_or_else(|| bad(cmd, "`tolerance` must be a distance"))?),
+    };
+    // The plan to compare with: another file, or what the model was last built from.
+    let (old, old_rooms, by_handle) = match str_param(p, "against") {
+        Some(path) => {
+            let hooks = super::file::io().ok_or_else(|| bad(cmd, "file formats are not available in this build"))?;
+            let bytes = read_file(cmd, path)?;
+            let other = (hooks.read)(&bytes, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+            (plan_items(&other, &g), rooms_of(other), false)
+        }
+        None => match &s.state()?.model_record {
+            Some(r) => {
+                let (old, rooms) = r.plan.iter().cloned().partition(|i| i.kind != "room");
+                (old, rooms, true)
+            }
+            None => return Err(bad(cmd, "no record of the plan the model was built from: build it once, or pass `against`")),
+        },
+    };
+    let rebuild = p.get("rebuild").and_then(Value::as_bool).unwrap_or(true);
+    let report = revise(s, &g, old, old_rooms, &Revise { by_handle, tolerance, rebuild, auto: false })?;
+    let mut out = paged(&report, p);
+    // Nothing changed since the last build: the last revision that found changes (an associative
+    // model's rebuild, say), in short.
+    let found = LISTS.iter().take(3).any(|k| report[*k].as_array().is_some_and(|l| !l.is_empty()));
+    if !found && let Some(last) = &s.state()?.last_revision {
+        let short = paged(last, &json!({"limit": 1}));
+        out["last"] = json!({ "totals": short["totals"], "auto": last["auto"], "rebuilt": last["rebuilt"] });
     }
     Ok(out)
 }

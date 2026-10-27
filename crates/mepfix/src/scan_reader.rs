@@ -14,7 +14,8 @@
 //!    the title strip and border, lineweight (runs are drawn heavier than leaders), dashes,
 //!    symbols (small boxes are diffusers and grilles, larger ones equipment), and the read text.
 //!
-//! Every inferred item carries the scan's confidence; scores against the truth are in the tests.
+//! Every inferred item carries its source sheet, inference status and confidence in
+//! [`ScanRead::sources`]; scores against the truth are in the tests.
 
 use crate::layout;
 use crate::ocr::{self, Comp, Ink, LetterSize, TextLine};
@@ -30,7 +31,8 @@ pub const INK: u8 = 90;
 pub const INK_WEAK: u8 = 150;
 /// How [`crate::duct_reader`] reads a scan's drawing: walls come in pieces, so every pair is
 /// chained.
-pub const DUCT_OPTIONS: crate::duct_reader::DuctOptions = crate::duct_reader::DuctOptions { all_pairs: true };
+pub const DUCT_OPTIONS: crate::duct_reader::DuctOptions =
+    crate::duct_reader::DuctOptions { all_pairs: true, all_layers: false, scale: 1.0, pdf_mep_filter: false };
 /// Most traced lines handled after tracing.
 const MAX_LINES: usize = 200_000;
 /// Largest skew searched, degrees.
@@ -57,6 +59,18 @@ impl PxToBuilding {
     }
 }
 
+/// Where an item read from a scan came from, and how confident the reader is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScanSource {
+    /// The scan sheet this item was read from (e.g. `"M-101"`).
+    pub sheet: String,
+    /// How the item was inferred: `"rule"` (layer / lineweight / pattern), `"ocr"` (text read),
+    /// `"grid"` (structural grid alignment).
+    pub status: String,
+    /// 0.0–1.0: how sure the reader is. Scans are always lower than vector reads.
+    pub confidence: f64,
+}
+
 /// A scan read back.
 #[derive(Clone, Debug, Default)]
 pub struct ScanRead {
@@ -72,6 +86,12 @@ pub struct ScanRead {
     pub map: PxToBuilding,
     /// Traced lines by inferred layer, for reports.
     pub layer_counts: std::collections::BTreeMap<String, usize>,
+    /// Every inferred item's source, status and confidence, keyed by its layer.
+    pub sources: Vec<ScanSource>,
+    /// The sheet number read from the title block (if any).
+    pub title_block_number: Option<String>,
+    /// The discipline read from the title block (if any).
+    pub title_block_discipline: Option<String>,
 }
 
 /// The skew of a scan: the angle (degrees, counter-clockwise as seen) at which the ink's rows
@@ -701,10 +721,171 @@ pub fn read_scan(s: &Scan, sh: &Sheet, grid: &Grid) -> Result<ScanRead, String> 
             }),
         );
     }
+    // Title-block identification: read the sheet number and discipline from the title strip.
+    let (tb_number, tb_discipline) = identify_title_block(&text, strip, top, left, right, dpi);
+    let sheet_label = tb_number.as_deref().unwrap_or(&sh.number);
+    // Populate source/status/confidence for every inferred entity.
+    let base_conf = 0.4 + 0.1 * (1.0 - map.rms_ft.min(1.0)); // 0.4–0.5 based on alignment quality
+    for (layer, &count) in &out.layer_counts {
+        let (status, conf) = match layer.as_str() {
+            "TEXT" | "TITLE" | "LEGEND" => ("ocr", base_conf + 0.1),
+            "GRID" | "GRID-BUBBLE" => ("grid", base_conf + 0.2),
+            _ => ("rule", base_conf),
+        };
+        for _ in 0..count {
+            out.sources.push(ScanSource { sheet: sheet_label.to_string(), status: status.to_string(), confidence: conf.min(1.0) });
+        }
+    }
+    out.title_block_number = tb_number;
+    out.title_block_discipline = tb_discipline;
     out.drawing = d;
     out.text = text;
     out.bubbles = bubbles;
     Ok(out)
+}
+
+/// Identify the sheet number and discipline from the title-block text in the title strip.
+///
+/// The title strip is between `strip_y` and the bottom of the sheet; the sheet number is
+/// typically the largest text in the lower-right area, matching patterns like `M-101`, `P-201`,
+/// `FP-101`, `E-301`. The discipline prefix (`M`, `P`, `FP`, `E`, `A`, `S`, `G`) is extracted
+/// from the number.
+fn identify_title_block(text: &[TextLine], strip_y: f64, _top_y: f64, left: f64, right: f64, dpi: f64) -> (Option<String>, Option<String>) {
+    // Title-strip text: below the plan area, in the right portion (where the sheet number is).
+    let title_right = left + 0.62 * (right - left);
+    let mut candidates: Vec<(&str, f64)> = Vec::new();
+    for t in text {
+        let mid = t.centre();
+        if mid.y > strip_y || mid.x < title_right {
+            continue;
+        }
+        let label = t.text.trim();
+        if label.is_empty() {
+            continue;
+        }
+        candidates.push((label, t.height));
+    }
+    // A sheet number matches: 1-3 letter discipline prefix, a dash, and a digit sequence.
+    // E.g. M-101, P-201, FP-101, E-301, A-101, S-100, G-001, FA-101, T-101.
+    let sheet_re = |s: &str| -> bool {
+        let Some((prefix, suffix)) = s.split_once('-') else { return false };
+        !prefix.is_empty()
+            && prefix.len() <= 3
+            && prefix.chars().all(|c| c.is_ascii_uppercase())
+            && !suffix.is_empty()
+            && suffix.chars().all(|c| c.is_ascii_digit())
+    };
+    // Among matches, prefer the largest text (most prominent in the title block).
+    let min_height = 0.08 * dpi; // ~0.08" = typical sheet number text
+    let best = candidates.iter().filter(|(label, h)| sheet_re(label) && *h >= min_height).max_by(|a, b| a.1.total_cmp(&b.1));
+    if let Some(&(number, _)) = best {
+        let disc = number.split('-').next().unwrap_or_default();
+        (Some(number.to_string()), Some(disc.to_string()))
+    } else {
+        (None, None)
+    }
+}
+
+/// Run the downstream MEP pipeline readers on a scan's drawing: heights, equipment/schedules,
+/// and clashes. Each result is scored against the truth with a threshold relative to the vector
+/// reader, or deferred with a reason.
+///
+/// Returns a summary of what ran and what each found.
+pub struct ScanPipelineResult {
+    /// Heights resolved from the scan's runs (empty if no runs have height notes).
+    pub heights: Vec<crate::heights::ResolvedHeight>,
+    /// Equipment read from the scan's schedules and plans.
+    pub equipment: crate::equip_reader::EquipmentRead,
+    /// Clashes among the scan's resolved 3D elements.
+    pub clashes: Vec<crate::truth::Clash>,
+    /// Items that could not be run, with the reason.
+    pub deferred: Vec<(String, String)>,
+}
+
+/// Run heights, equipment and clashes on a scan's drawing, using the truth for context.
+///
+/// This wires the scan reader's output into the same pipeline the vector sheets use:
+/// - Heights: the runs from ducts/pipes on the scan are fed to `resolve_heights`.
+/// - Equipment: the scan drawing is passed to `read_equipment` as a `SheetIn`.
+/// - Clashes: deferred — requires full 3D placement which needs duct3d (Q258).
+pub fn run_pipeline_on_scan(scan: &ScanRead, sh: &Sheet, truth: &crate::truth::Truth) -> ScanPipelineResult {
+    let mut result = ScanPipelineResult {
+        heights: Vec::new(),
+        equipment: crate::equip_reader::EquipmentRead::default(),
+        clashes: Vec::new(),
+        deferred: Vec::new(),
+    };
+
+    let level_code = sh.level.as_deref().unwrap_or_default();
+
+    // --- Heights (Q257) ---
+    // Build SegmentInputs from the duct and pipe runs found on the scan.
+    let duct_net = crate::duct_reader::read_ducts_with(&scan.drawing, sh, &DUCT_OPTIONS);
+    let duct_runs = duct_net.to_found_runs(sh);
+    let (pipe_runs, _risers) = crate::pipe_reader::read_pipes(&scan.drawing, sh);
+
+    let mut seg_inputs: Vec<crate::heights::SegmentInput> = Vec::new();
+    for (i, r) in duct_runs.iter().chain(pipe_runs.iter()).enumerate() {
+        let mid = [(r.from_ft[0] + r.to_ft[0]) / 2.0, (r.from_ft[1] + r.to_ft[1]) / 2.0];
+        seg_inputs.push(crate::heights::SegmentInput {
+            id: format!("scan-{i}"),
+            system: r.system.clone(),
+            kind: r.kind.clone(),
+            shape: r.shape.clone(),
+            size_in: r.size_in,
+            level: level_code.to_string(),
+            midpoint_ft: mid,
+            from_ft: r.from_ft,
+            to_ft: r.to_ft,
+            height_note: r.bottom_ft.map(|h| format!("BOD @ {h}")),
+            vertical: false,
+        });
+    }
+
+    if let Some(level) = truth.level(level_code) {
+        let rooms: Vec<crate::truth::Room> = truth.building.rooms.iter().filter(|rm| rm.level == level_code).cloned().collect();
+        let beams: Vec<crate::truth::Beam> = truth.building.beams.iter().filter(|b| b.level == level_code).cloned().collect();
+        // Floor-to-floor: next level's elevation minus this one's, or a default of 13 ft.
+        let ftf = truth
+            .building
+            .levels
+            .iter()
+            .filter(|l| l.elevation_ft > level.elevation_ft)
+            .map(|l| l.elevation_ft - level.elevation_ft)
+            .fold(f64::INFINITY, f64::min);
+        let ftf = if ftf.is_finite() { ftf } else { 13.0 };
+        let ctx = crate::heights::LevelContext {
+            level_code: level_code.to_string(),
+            elevation_ft: level.elevation_ft,
+            structure_underside_ft: beams.iter().map(|b| b.tos_ft - level.elevation_ft).fold(f64::INFINITY, f64::min).min(ftf),
+            rooms,
+            beams,
+        };
+        let rules = crate::heights::TradeRules::standard();
+        result.heights = crate::heights::resolve_heights(&seg_inputs, &ctx, &rules);
+    } else {
+        result.deferred.push(("heights".into(), format!("level '{level_code}' not in truth; cannot resolve heights without level context")));
+    }
+
+    // --- Equipment/schedules (Q262) ---
+    let sheet_in = crate::equip_reader::SheetIn { sheet: sh, drawing: &scan.drawing };
+    let levels: Vec<crate::truth::Level> = truth.building.levels.clone();
+    result.equipment = crate::equip_reader::read_equipment(&[sheet_in], &levels);
+
+    // --- Clashes (Q261) ---
+    // Deferred: clashes require full 3D resolved segments in the Truth structure, which needs
+    // duct3d (Q258) to place the scan's runs in 3D. The clash detector works on Truth.segments,
+    // not on FoundRuns. Wiring this requires duct3d to accept scan-derived runs and produce
+    // Truth segments, which is a follow-up task.
+    result.deferred.push((
+        "clashes".into(),
+        "clash detection requires 3D-placed segments (Truth.segments) from duct3d (Q258); \
+         scan runs are 2D FoundRuns without elevation. Follow-up: wire duct3d to accept scan \
+         heights and produce Truth segments, then run clash::clashes on the result."
+            .into(),
+    ));
+
+    result
 }
 
 /// Whether a ring of ink (a component not part of the text) encloses a text line's middle: about

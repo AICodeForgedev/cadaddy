@@ -54,6 +54,15 @@ pub fn specs() -> Vec<CommandSpec> {
 fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     let (sp, _) = current(s, "rcp.takeoff")?;
     let mut t = cadaddy_walk3d::takeoff(&sp);
+    // No ceiling or soffit types in the spec: the ceilings and soffits the build made, by level
+    // and type (board area and edge length measured on the model).
+    let source = if t.rows.is_empty() {
+        let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        t.rows = built_rows(s.doc()?, upf);
+        "model"
+    } else {
+        "spec"
+    };
     if let Some(l) = str_param(p, "level") {
         t.rows.retain(|r| r.level.eq_ignore_ascii_case(l));
     }
@@ -67,7 +76,81 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
         .iter()
         .map(|r| json!({"level": r.level, "part": r.part, "assembly": r.assembly, "material": r.material, "layer": r.layer, "quantity": r.quantity, "unit": r.unit}))
         .collect();
-    Ok(json!({ "rows": rows, "totals": totals, "csv": t.csv() }))
+    let mut out = json!({ "rows": rows, "totals": totals, "csv": t.csv(), "source": source });
+    if t.rows.is_empty() {
+        out["next_step"] =
+            json!("nothing to take off: build the model (bim.build or model.build) or read the ceiling plans (rcp.read {apply: true})");
+    }
+    Ok(out)
+}
+
+/// Rows from the built ceilings and soffits: per level, part and type, the area of their
+/// underside (sf) and the length of its edge (lf, the wall angle or soffit edge).
+fn built_rows(d: &Drawing, upf: f64) -> Vec<cadaddy_walk3d::TakeoffRow> {
+    use std::collections::BTreeMap;
+    let mut by: BTreeMap<(String, String, String), (f64, f64)> = BTreeMap::new();
+    for e in d.model.iter() {
+        let Some(part) = super::wallgen::made_as(e).filter(|p| p == "ceiling" || p == "soffit") else { continue };
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let x = &e.common.xdata;
+        let Some(at) = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP)) else { continue };
+        let ty = x.iter().skip(at + 4).take_while(|t| t.code != 1001).find_map(|t| t.value.strip_prefix("type:").map(str::to_string));
+        let (area, edge) = underside(m);
+        if !(area.is_finite() && edge.is_finite()) || area <= 0.0 {
+            continue;
+        }
+        let level = super::bspec::made_level(e).unwrap_or_default();
+        let v = by.entry((level, part, ty.unwrap_or_else(|| "untyped".into()))).or_insert((0.0, 0.0));
+        v.0 += area / (upf * upf);
+        v.1 += edge / upf;
+    }
+    let round = |v: f64| (v * 100.0).round() / 100.0;
+    let mut rows = Vec::new();
+    for ((level, part, ty), (sf, lf)) in by {
+        let row = |part: String, quantity: f64, unit: &'static str| cadaddy_walk3d::TakeoffRow {
+            level: level.clone(),
+            part,
+            assembly: ty.clone(),
+            material: if ty == "untyped" { "board (no type in the spec)".into() } else { ty.clone() },
+            layer: if unit == "sf" { 1 } else { 0 },
+            quantity: round(quantity),
+            unit,
+        };
+        rows.push(row(part.clone(), sf, "sf"));
+        rows.push(row(format!("{part} edge"), lf, "lf"));
+    }
+    rows
+}
+
+/// The area of a mesh's underside (its faces at its lowest height, measured in plan) and the
+/// length of that underside's outer edge.
+fn underside(m: &Mesh) -> (f64, f64) {
+    let z0 = m.vertices.iter().map(|v| v.z).fold(f64::INFINITY, f64::min);
+    if !z0.is_finite() {
+        return (0.0, 0.0);
+    }
+    let z1 = m.vertices.iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max);
+    let tol = ((z1 - z0).abs() * 1e-6).max(1e-6);
+    let low = |i: &u32| m.vertices.get(*i as usize).filter(|v| (v.z - z0).abs() <= tol).map(|v| v.xy());
+    let mut area = 0.0;
+    let mut edges: std::collections::HashMap<(u32, u32), u32> = std::collections::HashMap::new();
+    for f in m.faces.iter().take(MAX_LINES) {
+        let pts: Vec<Vec2> = f.v.iter().filter_map(low).collect();
+        if pts.len() < 3 || pts.len() != f.v.len() {
+            continue;
+        }
+        area += cadaddy_geom::shoelace(&pts).abs();
+        for (a, b) in f.v.iter().zip(f.v.iter().cycle().skip(1)) {
+            *edges.entry(((*a).min(*b), (*a).max(*b))).or_insert(0) += 1;
+        }
+    }
+    // An edge of one face only is on the outline.
+    let edge: f64 = edges
+        .iter()
+        .filter(|(_, n)| **n == 1)
+        .filter_map(|((a, b), _)| Some(m.vertices.get(*a as usize)?.xy().dist(m.vertices.get(*b as usize)?.xy())))
+        .sum();
+    (area, edge)
 }
 
 /// Colours the view modes hand out, in order (ACI).

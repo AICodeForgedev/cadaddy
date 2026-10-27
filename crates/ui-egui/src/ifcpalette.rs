@@ -12,11 +12,18 @@ use crate::CadApp;
 
 pub const DIALOG: &str = "ifcmodel";
 
-/// What the palette keeps between frames.
+/// What the palette keeps between frames. Caches are keyed on revision (and selection for
+/// properties) so we don't re-query the engine every frame.
 #[derive(Clone, Default)]
 struct State {
     /// The tree, and the drawing revision it was read at.
     tree: Option<(u64, Value)>,
+    /// Cached properties: (revision, selected_handle, properties).
+    props_cache: Option<(u64, String, Value)>,
+    /// Cached bcf.list: (revision, topics).
+    bcf_list_cache: Option<(u64, Value)>,
+    /// Cached bcf.get: (revision, topic_guid, topic_detail).
+    bcf_get_cache: Option<(u64, String, Value)>,
     class: String,
     level: String,
     system: String,
@@ -119,9 +126,40 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     }
     let tree = st.tree.as_ref().map(|(_, v)| v.clone()).unwrap_or(Value::Null);
     let selected: Vec<String> = app.session.selection().iter().map(|h| h.hex()).collect();
-    let props = if selected.len() == 1 { app.session.execute("ifc.properties", &json!({})).ok() } else { None };
-    let topics = app.session.execute("bcf.list", &json!({})).unwrap_or(Value::Null);
-    let topic = st.topic.as_ref().and_then(|g| app.session.execute("bcf.get", &json!({ "topic": g })).ok());
+    // Cache ifc.properties keyed on (revision, selected handle).
+    let sel_key = if selected.len() == 1 { selected[0].clone() } else { String::new() };
+    let props = if selected.len() == 1 {
+        if st.props_cache.as_ref().is_none_or(|(r, h, _)| *r != revision || *h != sel_key) {
+            let v = app.session.execute("ifc.properties", &json!({})).ok();
+            st.props_cache = v.as_ref().map(|val| (revision, sel_key.clone(), val.clone()));
+            v
+        } else {
+            st.props_cache.as_ref().map(|(_, _, v)| v.clone())
+        }
+    } else {
+        None
+    };
+    // Cache bcf.list keyed on revision.
+    let topics = if st.bcf_list_cache.as_ref().is_none_or(|(r, _)| *r != revision) {
+        let v = app.session.execute("bcf.list", &json!({})).unwrap_or(Value::Null);
+        st.bcf_list_cache = Some((revision, v.clone()));
+        v
+    } else {
+        st.bcf_list_cache.as_ref().map(|(_, v)| v.clone()).unwrap_or(Value::Null)
+    };
+    // Cache bcf.get keyed on (revision, topic guid).
+    let topic_guid = st.topic.clone().unwrap_or_default();
+    let topic = if !topic_guid.is_empty() {
+        if st.bcf_get_cache.as_ref().is_none_or(|(r, g, _)| *r != revision || *g != topic_guid) {
+            let v = app.session.execute("bcf.get", &json!({ "topic": topic_guid })).ok();
+            st.bcf_get_cache = v.as_ref().map(|val| (revision, topic_guid.clone(), val.clone()));
+            v
+        } else {
+            st.bcf_get_cache.as_ref().map(|(_, _, v)| v.clone())
+        }
+    } else {
+        None
+    };
     let section_on = app.session.state().is_ok_and(|s| s.ifc_view.section.is_some());
     let mut acts: Vec<Act> = Vec::new();
     egui::Window::new(crate::tl!("IFC Model"))

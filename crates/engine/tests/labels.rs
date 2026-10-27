@@ -108,9 +108,10 @@ fn the_directory_matches_the_panel_schedule_and_every_label_reads_from_the_model
         assert!(problems.iter().any(|p| p.contains(&format!("no arc flash study data for {g}"))), "{g}");
     }
     // The project's rules change how they read.
-    s.execute("project.rules.set", &json!({"domain": "naming", "key": "room_label", "value": "Room {room}"})).unwrap();
-    s.execute("project.rules.set", &json!({"domain": "naming", "key": "label_case", "value": "as_is"})).unwrap();
-    s.execute("project.rules.set", &json!({"domain": "naming", "key": "circuit_label", "value": "{panel}/{circuit}"})).unwrap();
+    s.execute("project.rules.set", &json!({"domain": "naming", "key": "room_label", "value": "Room {room}", "reason": "test setup"})).unwrap();
+    s.execute("project.rules.set", &json!({"domain": "naming", "key": "label_case", "value": "as_is", "reason": "test setup"})).unwrap();
+    s.execute("project.rules.set", &json!({"domain": "naming", "key": "circuit_label", "value": "{panel}/{circuit}", "reason": "test setup"}))
+        .unwrap();
     let l = s.execute("labels.list", &json!({})).unwrap();
     assert_eq!(l["directories"]["P1"][0], json!({"circuit": "1", "description": "Receptacles", "room": "Room 101"}));
     assert_eq!(label(&l, "dev:R-101-1")["lines"], json!(["P1/1"]));

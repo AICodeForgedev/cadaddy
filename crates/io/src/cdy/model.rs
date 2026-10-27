@@ -16,6 +16,7 @@
 //! | PRTS | the parametric parts (parameters, feature trees) | JSON text |
 //! | OVRD | the overrides of generated elements | JSON text |
 //! | AGNT | the agent state (notes, review decisions, change log) | JSON text |
+//! | IMCK | the import accuracy check results | JSON text |
 //! | EMBD | one embedded file (a texture image, the baked lightmap): `name length u32, name, bytes` | raw |
 //! | THMB | a PNG preview | raw |
 //!
@@ -39,8 +40,10 @@ pub const ENTITY_CHUNK: usize = 1024;
 const V1: u16 = 1;
 /// Longest building spec or tours text kept (hostile files).
 const MAX_TEXT: usize = 64 << 20;
-pub(super) const KNOWN: [&[u8; 4]; 16] =
-    [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"BCFI", b"SCH4", b"PRTS", b"OVRD", b"AGNT", b"EMBD", b"THMB"];
+pub(super) const KNOWN: [&[u8; 4]; 17] = [
+    b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"BCFI", b"SCH4", b"PRTS", b"OVRD", b"AGNT", b"IMCK", b"EMBD",
+    b"THMB",
+];
 /// Most files one drawing embeds.
 const MAX_EMBEDDED: usize = 100_000;
 
@@ -246,6 +249,7 @@ pub(super) fn manifest(d: &Drawing, thumbnail: bool) -> Vec<u8> {
         "schedule4d": d.schedule4d.is_some(),
         "parts": d.parts.is_some(),
         "embedded": d.embedded.keys().collect::<Vec<_>>(),
+        "importCheck": d.import_check.as_ref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
     });
     serde_json::to_string_pretty(&manifest).unwrap_or_default().into_bytes()
 }
@@ -463,6 +467,17 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 {
                     Some(t) => d.agent = Some(t),
                     None => rep.notes.push("the agent notes and review decisions couldn't be read".into()),
+                }
+                continue;
+            }
+            b"IMCK" => {
+                // Import accuracy check results: a JSON object.
+                match String::from_utf8(c.data)
+                    .ok()
+                    .filter(|t| t.len() <= MAX_TEXT && serde_json::from_str::<serde_json::Value>(t).is_ok_and(|v| v.is_object()))
+                {
+                    Some(t) => d.import_check = Some(t),
+                    None => rep.notes.push("the import check results couldn't be read".into()),
                 }
                 continue;
             }

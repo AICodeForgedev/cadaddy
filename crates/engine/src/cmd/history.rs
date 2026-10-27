@@ -16,6 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Edit", "Undo History"])
             .params("{action?: list (default) | to, step: n (to: the number of steps left done, 0 = everything undone)} → {steps: [{step, label, done}], current, marks, group?}")
             .noundo()
+            .restores_history()
             .enabled(always),
         CommandSpec::new("commandhistory", "Command History", run_commands)
             .params("{action?: list (default) | save (path) | clear, filter?: text} → {lines} | {path, lines}")

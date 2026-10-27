@@ -96,6 +96,15 @@ pub(crate) fn relative(from: &str, to: &str) -> String {
     out.join("\\")
 }
 
+/// Why a referenced file wasn't packed: not there, or a saved path that isn't followed (another
+/// computer, a device), which is never read.
+fn why_left(missing: crate::cmd::blocks::xref::load::Missing) -> String {
+    match missing {
+        crate::cmd::blocks::xref::load::Missing::NotFound => "not found".into(),
+        crate::cmd::blocks::xref::load::Missing::Refused(r) => format!("not packed: {r}"),
+    }
+}
+
 fn file_name(p: &Path) -> String {
     p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into())
 }
@@ -146,9 +155,12 @@ impl Pack {
     /// Pack the file at `stored` (a path saved in the drawing at `host`, itself packed at `me`)
     /// as `kind`; returns the path to store instead, or `None` when it wasn't found (listed).
     fn file(&mut self, kind: &'static str, stored: &str, host: Option<&Path>, me: &str) -> std::result::Result<Option<String>, String> {
-        let Ok(file) = crate::cmd::blocks::xref::load::find(stored, host, false) else {
-            self.left.push(Left { kind, name: stored.to_string(), note: "not found".into() });
-            return Ok(None);
+        let file = match crate::cmd::blocks::xref::load::find(stored, host, false) {
+            Ok(file) => file,
+            Err(missing) => {
+                self.left.push(Left { kind, name: stored.to_string(), note: why_left(missing) });
+                return Ok(None);
+            }
         };
         let canon = std::fs::canonicalize(&file).unwrap_or_else(|_| file.clone());
         if let Some(t) = self.placed.get(&canon) {
@@ -170,9 +182,12 @@ impl Pack {
 
     /// Pack xref `stored` of the drawing at `host` (packed at `me`), with its own references.
     fn xref(&mut self, stored: &str, host: Option<&Path>, me: &str, depth: usize) -> std::result::Result<Option<String>, String> {
-        let Ok(file) = crate::cmd::blocks::xref::load::find(stored, host, false) else {
-            self.left.push(Left { kind: "xref", name: stored.to_string(), note: "not found".into() });
-            return Ok(None);
+        let file = match crate::cmd::blocks::xref::load::find(stored, host, false) {
+            Ok(file) => file,
+            Err(missing) => {
+                self.left.push(Left { kind: "xref", name: stored.to_string(), note: why_left(missing) });
+                return Ok(None);
+            }
         };
         let canon = std::fs::canonicalize(&file).unwrap_or_else(|_| file.clone());
         // Packed already (or being packed further up: a circular reference).

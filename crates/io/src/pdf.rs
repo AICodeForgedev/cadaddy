@@ -454,6 +454,8 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
         projection: None,
         // Fields' grey backgrounds are for the screen; plots don't show them.
         field_shading: false,
+        color_overrides: std::collections::BTreeMap::new(),
+        layer_lines: Vec::new(),
     };
     let k = unit_mm * PT_PER_MM;
     let window = o.window.filter(|w| matches!(space, Space::Model) && !w.is_empty());

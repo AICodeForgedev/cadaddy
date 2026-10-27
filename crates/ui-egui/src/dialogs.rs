@@ -589,7 +589,7 @@ fn commands(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 
                     // Help text.
                     if !page.help_text.is_empty() {
-                        ui.label(page.help_text);
+                        ui.label(&page.help_text);
                         ui.add_space(6.0);
                     }
 

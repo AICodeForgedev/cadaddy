@@ -37,7 +37,7 @@ const MAX_ELEMENTS: usize = 2_000_000;
 pub const SELECTED: Rgb = Rgb(255, 140, 0);
 
 /// The viewer's state of one open drawing (not saved with it).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Default)]
 pub struct ViewState {
     /// The section box (drawing units, min and max corners).
     pub section: Option<(Vec3, Vec3)>,
@@ -45,6 +45,31 @@ pub struct ViewState {
     pub section_hidden: Vec<Handle>,
     /// The camera last set (`ifc.camera`, a BCF viewpoint): eye and target, drawing units.
     pub camera: Option<(Vec3, Vec3)>,
+    /// Cached element index: (revision, index). Rebuilt when the drawing revision changes.
+    element_cache: Option<(u64, std::sync::Arc<ElementIndex>)>,
+}
+
+impl Clone for ViewState {
+    fn clone(&self) -> Self {
+        Self { section: self.section, section_hidden: self.section_hidden.clone(), camera: self.camera, element_cache: self.element_cache.clone() }
+    }
+}
+
+impl std::fmt::Debug for ViewState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ViewState")
+            .field("section", &self.section)
+            .field("section_hidden", &self.section_hidden)
+            .field("camera", &self.camera)
+            .field("element_cache", &self.element_cache.as_ref().map(|(r, _)| r))
+            .finish()
+    }
+}
+
+impl PartialEq for ViewState {
+    fn eq(&self, other: &Self) -> bool {
+        self.section == other.section && self.section_hidden == other.section_hidden && self.camera == other.camera
+    }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -93,14 +118,6 @@ impl Element {
     }
 }
 
-/// The points of an object's surfaces (its mesh or polyface).
-fn points(e: &Entity) -> Vec<Vec3> {
-    match &e.kind {
-        EntityKind::Mesh(m) => m.vertices.clone(),
-        _ => Vec::new(),
-    }
-}
-
 fn bounds(pts: &[Vec3]) -> Option<(Vec3, Vec3)> {
     let mut it = pts.iter().filter(|p| p.x.is_finite() && p.y.is_finite() && p.z.is_finite());
     let first = *it.next()?;
@@ -109,26 +126,92 @@ fn bounds(pts: &[Vec3]) -> Option<(Vec3, Vec3)> {
     }))
 }
 
+/// Bounding box of an entity's mesh by iterating vertices (no clone).
+fn entity_bounds(e: &Entity) -> Option<(Vec3, Vec3)> {
+    match &e.kind {
+        EntityKind::Mesh(m) => bounds(&m.vertices),
+        _ => None,
+    }
+}
+
 /// The IFC objects in model space (read from an IFC file), in drawing order.
 pub fn elements(d: &Drawing) -> Vec<Element> {
+    ELEMENTS_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     d.model
         .iter()
         .take(MAX_ELEMENTS)
         .filter_map(|e| {
             let tag = ifcref::tag(e)?;
-            let (min, max) = bounds(&points(e)).unwrap_or_default();
+            let (min, max) = entity_bounds(e).unwrap_or_default();
             Some(Element { handle: e.handle, tag, min, max })
         })
         .collect()
 }
 
-fn need_model(cmd: &str, d: &Drawing) -> Result<Vec<Element>> {
-    let els = elements(d);
-    if els.is_empty() {
+/// A cached element index: elements, a GUID→index map and a Handle→index map, keyed on drawing
+/// revision. Avoids rebuilding elements() and doing linear lookups every frame / every command.
+pub struct ElementIndex {
+    pub els: Vec<Element>,
+    guid_map: std::collections::HashMap<String, usize>,
+    handle_map: std::collections::HashMap<Handle, usize>,
+}
+
+impl ElementIndex {
+    /// Build the index from a drawing (calls `elements()` once).
+    pub fn build(d: &Drawing) -> Self {
+        let els = elements(d);
+        let mut guid_map = std::collections::HashMap::with_capacity(els.len());
+        let mut handle_map = std::collections::HashMap::with_capacity(els.len());
+        for (i, e) in els.iter().enumerate() {
+            if !e.tag.guid.is_empty() {
+                guid_map.insert(e.tag.guid.clone(), i);
+            }
+            handle_map.insert(e.handle, i);
+        }
+        Self { els, guid_map, handle_map }
+    }
+
+    /// Look up by GlobalId.
+    pub fn by_guid(&self, guid: &str) -> Option<usize> {
+        self.guid_map.get(guid).copied()
+    }
+
+    /// Look up by Handle.
+    pub fn by_handle(&self, h: Handle) -> Option<usize> {
+        self.handle_map.get(&h).copied()
+    }
+
+    /// Look up by either GlobalId or Handle hex string.
+    pub fn by_guid_or_handle(&self, q: &str) -> Option<usize> {
+        self.by_guid(q).or_else(|| Handle::parse_hex(q).and_then(|h| self.by_handle(h)))
+    }
+}
+
+/// Get (or build) the cached element index for the current drawing. Rebuilds when the drawing
+/// revision changes. Returns an `Arc` so callers can hold it across borrow boundaries.
+pub fn cached_index(s: &mut Session) -> Result<std::sync::Arc<ElementIndex>> {
+    let rev = s.state()?.revision;
+    if let Some((r, ref idx)) = s.state()?.ifc_view.element_cache
+        && r == rev
+    {
+        return Ok(std::sync::Arc::clone(idx));
+    }
+    let idx = std::sync::Arc::new(ElementIndex::build(s.doc()?));
+    s.state_mut()?.ifc_view.element_cache = Some((rev, std::sync::Arc::clone(&idx)));
+    Ok(idx)
+}
+
+/// Get the cached element index, returning an error if the model is empty.
+fn need_index(cmd: &str, s: &mut Session) -> Result<std::sync::Arc<ElementIndex>> {
+    let idx = cached_index(s)?;
+    if idx.els.is_empty() {
         return Err(bad(cmd, "the drawing has no IFC objects: open an IFC model first (ifc.open)"));
     }
-    Ok(els)
+    Ok(idx)
 }
+
+/// Counter for how many times `elements()` is called (test instrumentation).
+pub static ELEMENTS_CALL_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn r6(v: f64) -> f64 {
     (v * 1e6).round() / 1e6
@@ -281,10 +364,10 @@ fn tree(els: &[Element]) -> Node {
 }
 
 fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
-    let els = need_model("ifc.tree", s.doc()?)?;
-    let root = tree(&els);
+    let idx = need_index("ifc.tree", s)?;
+    let root = tree(&idx.els);
     let lim = limit(p);
-    Ok(json!({ "tree": root.children.iter().map(|c| c.json(&els, lim)).collect::<Vec<_>>(), "elements": els.len() }))
+    Ok(json!({ "tree": root.children.iter().map(|c| c.json(&idx.els, lim)).collect::<Vec<_>>(), "elements": idx.els.len() }))
 }
 
 // ---------------- one object's properties ----------------
@@ -294,17 +377,16 @@ fn is_quantity_set(set: &str) -> bool {
     set.starts_with("Qto_") || set.contains("Quantities")
 }
 
-/// The object `p` names (`handle` or `guid`), else the one selected.
-fn one(cmd: &str, s: &Session, els: &[Element], p: &Value, hkey: &str) -> Result<usize> {
-    let by = |q: &str| {
-        let q = q.trim();
-        els.iter().position(|e| e.tag.guid == q).or_else(|| Handle::parse_hex(q).and_then(|h| els.iter().position(|e| e.handle == h)))
-    };
+/// The object `p` names (`handle` or `guid`), else the one selected. Uses the index for O(1) lookup.
+fn one_indexed(cmd: &str, s: &Session, idx: &ElementIndex, p: &Value, hkey: &str) -> Result<usize> {
     if let Some(q) = str_param(p, hkey).or_else(|| if hkey == "handle" { str_param(p, "guid") } else { None }) {
-        return by(q).ok_or_else(|| bad(cmd, format!("no IFC object has the handle or GlobalId {}", q.chars().take(40).collect::<String>())));
+        let q = q.trim();
+        return idx
+            .by_guid_or_handle(q)
+            .ok_or_else(|| bad(cmd, format!("no IFC object has the handle or GlobalId {}", q.chars().take(40).collect::<String>())));
     }
     let sel = s.selection();
-    let picked: Vec<usize> = sel.iter().filter_map(|h| els.iter().position(|e| e.handle == *h)).collect();
+    let picked: Vec<usize> = sel.iter().filter_map(|h| idx.by_handle(*h)).collect();
     match picked[..] {
         [i] => Ok(i),
         [] => Err(bad(cmd, "select an IFC object, or give its handle or GlobalId")),
@@ -330,9 +412,9 @@ pub(crate) fn properties_json(e: &Element) -> Value {
 }
 
 fn run_properties(s: &mut Session, p: &Value) -> Result<Value> {
-    let els = need_model("ifc.properties", s.doc()?)?;
-    let i = one("ifc.properties", s, &els, p, "handle")?;
-    els.get(i).map(properties_json).ok_or_else(|| bad("ifc.properties", "no such object"))
+    let idx = need_index("ifc.properties", s)?;
+    let i = one_indexed("ifc.properties", s, &idx, p, "handle")?;
+    idx.els.get(i).map(properties_json).ok_or_else(|| bad("ifc.properties", "no such object"))
 }
 
 // ---------------- filters ----------------
@@ -378,7 +460,6 @@ fn hexes(hs: &[Handle]) -> Vec<String> {
 }
 
 fn run_filter(s: &mut Session, p: &Value) -> Result<Value> {
-    let els = need_model("ifc.filter", s.doc()?)?;
     let action = str_param(p, "action").unwrap_or("list").trim().to_ascii_lowercase();
     if action == "show" {
         let n = s.doc()?.hidden_objects.len();
@@ -388,7 +469,9 @@ fn run_filter(s: &mut Session, p: &Value) -> Result<Value> {
         s.state_mut()?.ifc_view.section_hidden.clear();
         return Ok(json!({ "action": "show", "shown": n }));
     }
-    let Some(found) = matching(&els, p) else {
+    let idx = need_index("ifc.filter", s)?;
+    let els = &idx.els;
+    let Some(found) = matching(els, p) else {
         return Err(bad("ifc.filter", "give a filter: class, level, space, system, type, property, name or guids"));
     };
     let handles: Vec<Handle> = found.iter().filter_map(|i| els.get(*i)).map(|e| e.handle).collect();
@@ -448,7 +531,8 @@ fn section_off(s: &mut Session) -> Result<()> {
 }
 
 fn run_sectionbox(s: &mut Session, p: &Value) -> Result<Value> {
-    let els = need_model("ifc.sectionbox", s.doc()?)?;
+    let idx = need_index("ifc.sectionbox", s)?;
+    let els = &idx.els;
     let cur = s.state()?.ifc_view.section;
     let (mut lo, mut hi) = cur.unwrap_or_default();
     let mut on = cur.is_some();
@@ -517,12 +601,13 @@ fn run_measure(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("from").is_some() || p.get("to").is_some() {
         return Err(bad("ifc.measure", "a distance between points needs both `from` and `to`"));
     }
-    let els = need_model("ifc.measure", d)?;
+    let idx = need_index("ifc.measure", s)?;
+    let els = &idx.els;
     let (ia, ib) = match (str_param(p, "a"), str_param(p, "b")) {
-        (Some(_), Some(_)) => (one("ifc.measure", s, &els, p, "a")?, one("ifc.measure", s, &els, p, "b")?),
+        (Some(_), Some(_)) => (one_indexed("ifc.measure", s, &idx, p, "a")?, one_indexed("ifc.measure", s, &idx, p, "b")?),
         (None, None) => {
             let sel = s.selection();
-            let picked: Vec<usize> = sel.iter().filter_map(|h| els.iter().position(|e| e.handle == *h)).collect();
+            let picked: Vec<usize> = sel.iter().filter_map(|h| idx.by_handle(*h)).collect();
             match picked[..] {
                 [a, b] => (a, b),
                 _ => return Err(bad("ifc.measure", "select two IFC objects, or give `a` and `b` (or points `from` and `to`)")),
@@ -559,11 +644,11 @@ fn run_camera(s: &mut Session, p: &Value) -> Result<Value> {
     let (eye, target) = match (vec3_param("ifc.camera", p, "eye")?, vec3_param("ifc.camera", p, "target")?) {
         (Some(e), Some(t)) => (e, t),
         (None, None) => {
-            let els = need_model("ifc.camera", s.doc()?)?;
+            let idx = need_index("ifc.camera", s)?;
             let sel = s.selection();
             let pick: Vec<Vec3> = match str_param(p, "fit").unwrap_or("all") {
-                "selection" => els.iter().filter(|e| sel.contains(&e.handle)).flat_map(|e| [e.min, e.max]).collect(),
-                _ => els.iter().flat_map(|e| [e.min, e.max]).collect(),
+                "selection" => idx.els.iter().filter(|e| sel.contains(&e.handle)).flat_map(|e| [e.min, e.max]).collect(),
+                _ => idx.els.iter().flat_map(|e| [e.min, e.max]).collect(),
             };
             let (lo, hi) = bounds(&pick).ok_or_else(|| bad("ifc.camera", "select the objects to look at"))?;
             let dir = vec3_param("ifc.camera", p, "dir")?.unwrap_or(Vec3::new(-1.0, -1.0, 0.8));
@@ -696,7 +781,39 @@ pub(crate) fn render_png(
     if sc.tris.is_empty() && sc.lines.is_empty() {
         return Err(bad("ifc.render", "nothing of the model is in view"));
     }
-    let view = fit(&sc, Projection::new(view_dir), size.0, size.1).ok_or_else(|| bad("ifc.render", "nothing to fit in the view"))?;
+    // When there is a selection, fit the view to the selected (orange) objects' bounds (padded)
+    // instead of the entire scene, so snapshots/renders show the subject up close.
+    let has_selection = highlight && sc.tris.iter().any(|t| t.color == SELECTED);
+    let proj = Projection::new(view_dir);
+    let view = if has_selection {
+        use cadaddy_geom::Vec2;
+        let base = cadaddy_render::shade::ShadeView::new(proj, Vec2::ZERO, 1.0, size.0, size.1);
+        let on_plane = |q: Vec3| Vec2::new(q.dot(base.right), q.dot(base.up));
+        // Bounds of only the selected triangles on the view plane.
+        let mut lo = Vec2::new(f64::MAX, f64::MAX);
+        let mut hi = Vec2::new(f64::MIN, f64::MIN);
+        for t in &sc.tris {
+            if t.color == SELECTED {
+                for p in &t.p {
+                    let v = on_plane(*p);
+                    lo = Vec2::new(lo.x.min(v.x), lo.y.min(v.y));
+                    hi = Vec2::new(hi.x.max(v.x), hi.y.max(v.y));
+                }
+            }
+        }
+        let w = hi.x - lo.x;
+        let h = hi.y - lo.y;
+        if w.is_finite() && h.is_finite() && w >= 0.0 && h >= 0.0 {
+            let pad = (w.max(h)) * 0.15 + 1e-6; // 15% padding around the selection
+            let center = Vec2::new((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5);
+            let sel_h = (h + 2.0 * pad).max((w + 2.0 * pad) * f64::from(size.1) / f64::from(size.0));
+            cadaddy_render::shade::ShadeView::new(proj, center, sel_h, size.0, size.1)
+        } else {
+            fit(&sc, proj, size.0, size.1).ok_or_else(|| bad("ifc.render", "nothing to fit in the view"))?
+        }
+    } else {
+        fit(&sc, proj, size.0, size.1).ok_or_else(|| bad("ifc.render", "nothing to fit in the view"))?
+    };
     let raster = rasterize(&sc, &view, style, bg);
     let png = raster.encode_png().ok_or_else(|| bad("ifc.render", "the image couldn't be encoded"))?;
     let info = json!({ "width": view.width_px, "height": view.height_px, "triangles": sc.tris.len() });
@@ -705,7 +822,7 @@ pub(crate) fn render_png(
 
 fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     use cadaddy_render::shade::VisualStyle;
-    need_model("ifc.render", s.doc()?)?;
+    need_index("ifc.render", s)?;
     let dim = |k: &str, def: u32| p.get(k).and_then(Value::as_u64).map_or(def, |v| u32::try_from(v).unwrap_or(4096).clamp(16, 4096));
     let style = match str_param(p, "style") {
         Some(n) => VisualStyle::parse(n).ok_or_else(|| bad("ifc.render", format!("unknown style {}", n.chars().take(20).collect::<String>())))?,

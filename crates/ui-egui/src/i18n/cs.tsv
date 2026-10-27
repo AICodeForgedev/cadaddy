@@ -2530,6 +2530,7 @@ menu	Modify	Modifikace
 	List MEP Items	Vypsat prvky MEP
 	Section Box	Řezový kvádr
 	Trade Visibility	Viditelnost profesí
+	Colour by BIM Property	Obarvit podle vlastnosti BIM
 	BIM Types	Typy BIM
 	Get BIM Spec	Zobrazit specifikaci BIM
 	Remove BIM Spec from Entities	Odebrat specifikaci BIM z objektů
@@ -3111,3 +3112,131 @@ menu	Modify	Modifikace
 	Estimate Bid Summary	Souhrn nabídky z odhadu
 	Read Panel Schedules	Načíst rozpisy rozváděčů
 	Site Takeoff	Výkaz výměr terénních úprav
+	Clash Report	Zpráva o kolizích
+	Export PDF	Exportovat PDF
+	Export the grouped clash report to PDF	Exportovat seskupenou zprávu o kolizích do PDF
+	PDF exported to {path}.	PDF exportováno do {path}.
+	Clash detection failed.	Detekce kolizí selhala.
+	Import Cost Table	Importovat tabulku nákladů
+	BIM View	Zobrazení BIM
+	Trade Colours	Barvy profesí
+	Element Properties	Vlastnosti prvku
+	Tree	Strom
+	Colours	Barvy
+	Ghost Architecture	Průhledná architektura
+	Sheet Lines in 3D	Čáry výkresu ve 3D
+	Nothing is built yet. Use Plans to Model first.	Zatím nic není vytvořeno. Nejprve použijte Z výkresů do modelu.
+	Select one element to see its properties.	Vyberte jeden prvek a zobrazí se jeho vlastnosti.
+	Not part of the built model.	Není součástí vytvořeného modelu.
+	Category	Kategorie
+	Trade	Profese
+	Circuit	Obvod
+	Source	Zdroj
+	Issues	Problémy
+	Show on Sheet	Zobrazit na výkresu
+	Reset Colours	Obnovit barvy
+	Architecture	Architektura
+	Structure	Konstrukce
+	Fire Protection	Požární ochrana
+	Doors and Windows	Dveře a okna
+	Supply Air Duct	Přívodní potrubí
+	Return Air Duct	Vratné potrubí
+	Exhaust Air Duct	Odtahové potrubí
+	Outside Air Duct	Potrubí venkovního vzduchu
+	Duct	Potrubí
+	Air Terminals	Koncové prvky
+	Equipment	Zařízení
+	Domestic Cold Water	Studená pitná voda
+	Domestic Hot Water	Teplá voda
+	Sanitary	Kanalizace
+	Vent	Odvětrání
+	Storm	Dešťová kanalizace
+	Gas	Plyn
+	Piping	Potrubí
+	Plumbing Fixtures	Zařizovací předměty
+	Conduit	Elektroinstalační trubky
+	Cable Tray	Kabelové žlaby
+	Electrical Devices	Elektrické prvky
+	Light Fixtures	Svítidla
+	Clash Check	Kontrola kolizí
+	Fix Clash	Opravit kolizi
+	Model Takeoff	Výkaz výměr z modelu
+	Show Takeoff Line	Zobrazit položku výkazu
+	Model Estimate	Rozpočet z modelu
+	New Issue	Nový problém
+	Update Issue	Aktualizovat problém
+	Show Issue	Zobrazit problém
+	Issue Marks	Značky problémů
+	Sheet and 3D Link	Propojení výkresu a 3D
+	PDF to BIM	PDF do BIM
+	Read Casework and Fixtures	Načíst vestavěný nábytek a zařizovací předměty
+	Frame Walls from Prints	Konstrukce stěn z výkresů
+	List Framed Walls	Seznam konstrukcí stěn
+	Framed Wall	Konstrukce stěny
+	Next Stud	Další sloupek
+	Enter Field Stud	Zadat sloupek změřený na stavbě
+	Apply Shop Drawing	Použít dílenský výkres
+	Show Framing	Zobrazit konstrukci stěn
+	Read Unit Types from Prints	Načíst typy jednotek z výkresů
+	Edit Unit Type	Upravit typ jednotky
+	Override Unit Instance	Přepsat instanci jednotky
+	Place Unit Instances	Umístit instance jednotek
+	List Callouts	Seznam odkazů
+	Keep Print Set Job	Uchovat úlohu tiskové sady
+	Resume Print Set Job	Obnovit úlohu tiskové sady
+	Finish Takeoff from Prints	Výkaz povrchových úprav z výkresů
+	Layer Quantity Takeoff	Výkaz výměr podle hladin
+	Read Architecture from Prints	Načíst architekturu z výkresů
+	Read Roof and Wall Envelope	Načíst obálku střechy a stěn
+	Element Properties (BIM)	Vlastnosti prvku (BIM)
+	Set Element Property (BIM)	Nastavit vlastnost prvku (BIM)
+	Find Elements by Property	Najít prvky podle vlastnosti
+	Element Property Summary	Souhrn vlastností prvků
+	BIM Properties	Vlastnosti BIM
+	Kind	Druh
+	Element Identities (BIM)	Identity prvků (BIM)
+	Room Connections	Propojení místností
+	Link Print Set	Propojit sadu výkresů
+	Check Building Codes	Kontrola stavebních předpisů
+	Code Rules	Pravidla předpisů
+	Select Building Codes	Vybrat stavební předpisy
+	Fill Element Properties	Vyplnit vlastnosti prvků
+	Build Construction Sequence	Sestavit postup výstavby
+	Construction Sequence	Postup výstavby
+	Edit Sequence Activity	Upravit činnost postupu
+	Show Sequence at Date	Zobrazit postup k datu
+	Export Construction Sequence	Exportovat postup výstavby
+	Sequence Trade Conflicts	Střety profesí v postupu
+	Ceiling Space Fit	Prostor nad podhledem
+	Takeoff by Activity	Výkaz výměr podle činností
+	BIM	BIM
+	Door	Dveře
+	Plan Views	Půdorysné pohledy
+	Generate Plan Views	Generovat půdorysné pohledy
+	Draw Wall (Object)	Kreslit zeď (objekt)
+	Place Door in Wall	Vložit dveře do zdi
+	Place Window in Wall	Vložit okno do zdi
+	Resolve Plan Entity	Rozlišit prvek plánu
+	Record As-Built Change	Zaznamenat změnu skutečného provedení
+	Import As-Built Markups	Importovat značky skutečného provedení
+	List As-Built Changes	Seznam změn skutečného provedení
+	Set As-Built Change Status	Nastavit stav změny skutečného provedení
+	Compare Design and As-Built	Porovnat návrh a skutečné provedení
+	Export As-Built	Exportovat skutečné provedení
+	Map Line to Price Row	Přiřadit řádek k cenovému řádku
+	Start Cover Check	Zahájit kontrolu před zakrytím
+	Cover Check Status	Stav kontroly před zakrytím
+	Check Cover Item	Odškrtnout položku před zakrytím
+	Reopen Cover Item	Znovu otevřít položku před zakrytím
+	Sign Inspection	Podepsat inspekci
+	Ready to Cover	Připraveno k zakrytí
+	Cover Check Wall	Stěna v kontrole před zakrytím
+	Add In-Wall Photo	Přidat fotku ve stěně
+	Wall	Stěna
+	Ready to cover	Připraveno k zakrytí
+	Not ready to cover	Není připraveno k zakrytí
+	Checklist	Kontrolní seznam
+	Photos	Fotky
+	Photo	Fotka
+	Schedule from Element Properties	Výkaz z vlastností prvků
+	Check Element Properties	Kontrola vlastností prvků

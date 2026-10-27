@@ -139,6 +139,19 @@ fn app_calls(dir: &Path) -> Vec<(&'static str, Value, Value)> {
     ]
 }
 
+/// The server a .mcpb's `manifest` starts, unpacked in `dir`: `server.mcp_config.command` (the win32
+/// override on Windows) with `${__dirname}` = `dir`, and its args. `cargo xtask release` checks the
+/// .mcpb it builds with this too.
+pub(crate) fn mcpb_server(manifest: &Value, dir: &Path) -> (PathBuf, Vec<String>) {
+    let cfg = &manifest["server"]["mcp_config"];
+    let command =
+        if cfg!(windows) { cfg["platform_overrides"]["win32"]["command"].as_str().or(cfg["command"].as_str()) } else { cfg["command"].as_str() }
+            .unwrap_or_default();
+    let exe = PathBuf::from(command.replace("${__dirname}", &dir.to_string_lossy()));
+    let args: Vec<String> = cfg["args"].as_array().into_iter().flatten().filter_map(|a| a.as_str().map(str::to_string)).collect();
+    (exe, args)
+}
+
 pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     let o = parse(rest)?;
     let dir = std::env::temp_dir().join(format!("cadaddy-mcptest-{}", std::process::id()));
@@ -215,17 +228,12 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         let ok = Command::new("tar").arg("-xf").arg(mcpb).arg("-C").arg(&un).status().is_ok_and(|s| s.success());
         let manifest: Value =
             std::fs::read_to_string(un.join("manifest.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
-        let cfg = &manifest["server"]["mcp_config"];
-        let command =
-            if cfg!(windows) { cfg["platform_overrides"]["win32"]["command"].as_str().or(cfg["command"].as_str()) } else { cfg["command"].as_str() }
-                .unwrap_or_default();
-        let exe = PathBuf::from(command.replace("${__dirname}", &un.to_string_lossy()));
+        let (exe, args) = mcpb_server(&manifest, &un);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755));
         }
-        let args: Vec<String> = cfg["args"].as_array().into_iter().flatten().filter_map(|a| a.as_str().map(str::to_string)).collect();
         c.check(
             "mcpb unpack",
             if ok && exe.is_file() {

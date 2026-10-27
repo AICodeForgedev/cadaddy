@@ -13,7 +13,9 @@ use cadaddy_mepfix::sheet_reader::{self, parse_scale, recognise_dxf};
 use cadaddy_mepfix::{conduit_reader, printed};
 
 fn import(pdf: &[u8]) -> Drawing {
-    let opts = cadaddy_io::pdf_read::PdfOptions { images: false, markups: false, layout: false, ..Default::default() };
+    // recover_text off: SHX recovery and symbol detection consume grid-bubble strokes and
+    // labels that the sheet recogniser needs for grid alignment.
+    let opts = cadaddy_io::pdf_read::PdfOptions { images: false, markups: false, layout: false, recover_text: false, ..Default::default() };
     cadaddy_io::pdf_read::read(pdf, &opts).unwrap_or_else(|e| panic!("pdf import: {e}")).drawing
 }
 
@@ -51,6 +53,47 @@ fn the_fixture_sets_printed_sheets_are_recognised_like_its_dxf() {
     assert_eq!(map.grid_x.len(), set.truth.building.grid.x.len(), "grid lines across");
     assert_eq!(map.grid_y.len(), set.truth.building.grid.y.len(), "grid lines up");
     assert!(map.sheets.iter().filter(|s| s.alignment.is_some()).count() >= plans, "printed plans aligned");
+    // ... and align right: every printed plan aligned, measured against the truth.
+    let aligned = assert_printed_alignment(&map, &set.truth, &|s| s.title.contains("PLAN") && s.window_ft.is_none());
+    assert_eq!(aligned, plans, "printed plans aligned within {PRINTED_GRID_TOLERANCE_FT} ft");
+}
+
+/// Largest alignment error allowed at a grid intersection of a printed page, feet.
+const PRINTED_GRID_TOLERANCE_FT: f64 = 0.1;
+
+/// The truth sheet as its print imports: a page comes in drawn full size at the sheet's scale,
+/// its lower-left corner at the origin, so the drawing is the sheet's shifted by the paper origin.
+fn as_printed(ts: &cadaddy_mepfix::truth::Sheet) -> cadaddy_mepfix::truth::Sheet {
+    let mut p = ts.clone();
+    for (o, origin) in p.model_from_building.offset_in.iter_mut().zip(ts.paper_from_model.origin_in) {
+        *o -= origin;
+    }
+    p
+}
+
+/// Score `map` against the truth ([`sheet_reader::score_sheet_map`], the truth sheets as printed)
+/// and assert every aligned page among the plan pages (`plan`, of the truth sheets with a level)
+/// puts every grid intersection within [`PRINTED_GRID_TOLERANCE_FT`]; returns how many aligned.
+fn assert_printed_alignment(
+    map: &sheet_reader::SheetMap,
+    t: &cadaddy_mepfix::truth::Truth,
+    plan: &dyn Fn(&cadaddy_mepfix::truth::Sheet) -> bool,
+) -> usize {
+    let printed: Vec<_> = t.sheets.iter().map(as_printed).collect();
+    let scores = sheet_reader::score_sheet_map(map, &printed, &t.building.grid.x, &t.building.grid.y);
+    let mut aligned = 0;
+    let mut worst = 0.0f64;
+    for (ts, sc) in t.sheets.iter().zip(&scores) {
+        if ts.level.is_none() || !plan(ts) {
+            continue;
+        }
+        let Some(err) = sc.grid_max_error_ft else { continue };
+        assert!(err < PRINTED_GRID_TOLERANCE_FT, "{}: printed alignment worst grid error {err:.4} ft", ts.number);
+        aligned += 1;
+        worst = worst.max(err);
+    }
+    println!("{aligned} printed plan pages aligned, worst grid error {worst:.4} ft");
+    aligned
 }
 
 // ---- A hand-made sheet on layer 0 ------------------------------------------------------------
@@ -197,7 +240,8 @@ fn merged(set: &cadaddy_mepfix::FixtureSet) -> printed::PrintedSet {
     let pdf = set.files.iter().find(|(n, _)| n == "set.pdf").map(|(_, b)| b).unwrap_or_else(|| panic!("no set.pdf"));
     let p = printed::read_merged(pdf).unwrap_or_else(|e| panic!("read set.pdf: {e}"));
     assert!(p.errors.is_empty(), "{:?}", p.errors);
-    // Nothing on the fixture's own layers: what follows reads a print's pens only.
+    // Nothing on the fixture's own synthetic layers: content-class layers (TEXT, A-WALL) are
+    // expected since the default import now uses content classification for non-OCG PDFs.
     for (n, b) in &p.dxf {
         let d = cadaddy_io::read_dxf(b).unwrap_or_else(|e| panic!("{n}: {e}"));
         for l in ["DEVICE", "TEXT", "CALLOUT", "ARCH", "A-WALL", "GRID-BUBBLE", "TITLE"] {
@@ -207,18 +251,19 @@ fn merged(set: &cadaddy_mepfix::FixtureSet) -> printed::PrintedSet {
     p
 }
 
-/// The hotel's merged print set (49 sheets in one PDF, as a real set comes) recognised page by
+/// The hotel's merged print set (50 sheets in one PDF, as a real set comes) recognised page by
 /// page and assembled: the numbers Q274 reported for it, held.
 #[test]
 fn the_hotels_merged_set_pdf_is_recognised_page_by_page() {
     let set = cadaddy_mepfix::generate_hotel(1, cadaddy_mepfix::hotel::HotelSize::Small).unwrap_or_else(|e| panic!("hotel: {e}"));
     let p = merged(&set);
     let t = &set.truth;
-    assert_eq!((p.pages.len(), t.sheets.len()), (49, 49), "a page per sheet");
+    // 54: 50 base + 4 SL-10x sleeve layout sheets (lowvolt-rw1)
+    assert_eq!((p.pages.len(), t.sheets.len()), (54, 54), "a page per sheet");
     let truth = |n: &str| t.sheets.iter().find(|s| s.number == n);
     let numbers = p.pages.iter().filter(|r| truth(&r.number).is_some()).count();
     let distinct: std::collections::BTreeSet<&str> = p.pages.iter().map(|r| r.number.as_str()).collect();
-    assert_eq!((numbers, distinct.len()), (49, 49), "sheet numbers read");
+    assert_eq!((numbers, distinct.len()), (54, 54), "sheet numbers read");
     // A level on every plan sheet (every sheet the truth gives a level), and the right one.
     for s in t.sheets.iter().filter(|s| s.level.is_some()) {
         let r = p.pages.iter().find(|r| r.number == s.number).unwrap_or_else(|| panic!("{} not read", s.number));
@@ -228,8 +273,10 @@ fn the_hotels_merged_set_pdf_is_recognised_page_by_page() {
     assert!(scales >= 43, "scales read right: {scales}");
     let grids = p.pages.iter().filter(|r| !r.grid_x.is_empty() && !r.grid_y.is_empty()).count();
     assert!(grids >= 40, "grids found: {grids}");
-    let aligned = p.map.sheets.iter().filter(|s| s.alignment.is_some()).count();
-    assert!(aligned >= 40, "sheets aligned to the common grid: {aligned}");
+    // Aligned to the common grid, and measured against the truth: every aligned plan page within
+    // a tenth of a foot at every grid intersection.
+    let aligned = assert_printed_alignment(&p.map, t, &|s| s.window_ft.is_none());
+    assert!(aligned >= 40, "plan pages aligned to the common grid within {PRINTED_GRID_TOLERANCE_FT} ft: {aligned}");
     assert_eq!(p.map.grid_x.len(), t.building.grid.x.len(), "grid lines across");
     assert_eq!(p.map.grid_y.len(), t.building.grid.y.len(), "grid lines up");
 }
@@ -270,7 +317,7 @@ fn conduit_runs_and_height_notes_read_from_merged_prints() {
         let set = cadaddy_mepfix::generate(seed).unwrap_or_else(|e| panic!("generate: {e}"));
         let p = merged(&set);
         let mut branch = conduit_reader::read_conduits(&p.dxf, &p.map);
-        let ceilings = cadaddy_mepfix::ceiling_reader::read_ceilings(&p.dxf, &p.map);
+        let ceilings = cadaddy_mepfix::ceiling_reader::read_ceilings(&p.dxf, &p.map, None);
         conduit_reader::assign_heights(&mut branch, &|level| Some(conduit_reader::context_from_ceilings(&ceilings, level, 0.0, 12.0)));
         let trays = cadaddy_mepfix::tray_reader::read_trays(&p.dxf, &p.map);
         let runs = printed::conduit_runs(&branch, &trays);
@@ -313,7 +360,7 @@ fn walls_read_from_merged_prints() {
     for seed in 1..=3 {
         let set = cadaddy_mepfix::generate(seed).unwrap_or_else(|e| panic!("generate: {e}"));
         let p = merged(&set);
-        let ceilings = cadaddy_mepfix::ceiling_reader::read_ceilings(&p.dxf, &p.map);
+        let ceilings = cadaddy_mepfix::ceiling_reader::read_ceilings(&p.dxf, &p.map, None);
         let walls = cadaddy_mepfix::wall_reader::read_walls(&p.dxf, &p.map, &ceilings, &Default::default());
         // Where along the truth wall (feet from a) a wall read on its centreline runs, if it does.
         let on = |w: &cadaddy_mepfix::wall_reader::FoundWall, t: &cadaddy_mepfix::truth::PlanWall| -> Option<(f64, f64)> {
@@ -486,5 +533,127 @@ fn a_floor_printed_without_its_grid_lines_reads_and_aligns_its_grid() {
             al.offset_in,
             a[0].offset_in
         );
+    }
+}
+
+// ---- Q6030 planregions: each level its own view ------------------------------------------------
+
+#[test]
+fn a_two_level_sheet_has_a_view_per_level_and_a_one_view_sheet_none() {
+    let (t, st) = cadaddy_mepfix::hotel_planned(7, cadaddy_mepfix::hotel::HotelSize::Small);
+    let two = printed::two_view_sheet(&t, &st, "E-101", "E-102", "E-1A", "LIGHTING").expect("two-view sheet");
+    let views = sheet_reader::level_views(&two.drawing);
+    assert_eq!(views.iter().map(|(v, _)| v.levels.clone()).collect::<Vec<_>>(), [vec!["1".to_string()], vec!["2".to_string()]]);
+    let (lower, upper) = (views[0].1, views[1].1);
+    assert!(lower[3] <= upper[1], "the lower view ends where the upper begins: {lower:?} {upper:?}");
+    let one = printed::one_view_sheet(&t, &st, "E-102", "LIGHTING", &printed::OneViewOptions::default()).expect("one-view sheet");
+    assert!(sheet_reader::level_views(&one.drawing).is_empty(), "one plan: no views to split");
+}
+
+#[test]
+fn views_titled_over_a_scale_line_split_a_sheet_when_their_lettering_is_the_sheets_size() {
+    // Two plans side by side, each a block of short lines, titled over a SCALE line in the
+    // sheet's usual lettering (too small for the large-title reading).
+    let mut d = Drawing::new_imperial();
+    let seg = |d: &mut Drawing, a: [f64; 2], b: [f64; 2]| {
+        let vertices = vec![PolyVertex::new(Vec2::new(a[0], a[1])), PolyVertex::new(Vec2::new(b[0], b[1]))];
+        add(d, EntityKind::LwPolyline(LwPolyline { vertices, closed: false, const_width: 0.0, elevation: 0.0, plinegen: false }));
+    };
+    for (k, title) in ["FIRST FLOOR PLAN", "SECOND FLOOR PLAN"].iter().enumerate() {
+        let x0 = k as f64 * 140.0;
+        for i in 0..10 {
+            for j in 0..9 {
+                let (x, y) = (x0 + i as f64 * 10.0, 20.0 + j as f64 * 10.0);
+                seg(&mut d, [x, y], [x + 10.0, y]);
+                seg(&mut d, [x, y], [x, y + 10.0]);
+            }
+        }
+        for i in 0..8 {
+            text(&mut d, [x0 + 5.0 + i as f64 * 11.0, 60.0], 2.0, "OFFICE");
+        }
+        text(&mut d, [x0 + 10.0, 12.0], 2.0, title);
+        text(&mut d, [x0 + 10.0, 9.0], 1.5, "SCALE: 1/8\" = 1'-0\"");
+    }
+    let views = sheet_reader::level_views(&d);
+    assert_eq!(views.iter().map(|(v, _)| v.levels.clone()).collect::<Vec<_>>(), [vec!["1".to_string()], vec!["2".to_string()]], "{views:?}");
+    assert!(views[0].1[2] < views[1].1[0], "the views stand apart: {views:?}");
+}
+
+/// A block of short lines (a plan's linework) `w` × `h` squares of 10 from `at`.
+fn plan_block(d: &mut Drawing, at: [f64; 2], w: usize, h: usize) {
+    for i in 0..w {
+        for j in 0..h {
+            let (x, y) = (at[0] + i as f64 * 10.0, at[1] + j as f64 * 10.0);
+            for b in [[x + 10.0, y], [x, y + 10.0]] {
+                let vertices = vec![PolyVertex::new(Vec2::new(x, y)), PolyVertex::new(Vec2::new(b[0], b[1]))];
+                add(d, EntityKind::LwPolyline(LwPolyline { vertices, closed: false, const_width: 0.0, elevation: 0.0, plinegen: false }));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_two_level_sheet_with_untitled_views_splits_by_its_blocks_of_linework() {
+    let one = |v: &[(sheet_reader::PlanView, [f64; 4])]| v.iter().map(|(v, _)| v.levels.clone()).collect::<Vec<_>>();
+    let levels = ["1".to_string(), "2".to_string()];
+    // Two plans side by side, no view titles: the titled readings find nothing.
+    let mut d = Drawing::new_imperial();
+    plan_block(&mut d, [0.0, 20.0], 10, 9);
+    plan_block(&mut d, [140.0, 20.0], 8, 9);
+    text(&mut d, [5.0, 60.0], 2.0, "OFFICE");
+    assert!(sheet_reader::level_views(&d).is_empty(), "no titles to read");
+    let views = sheet_reader::level_blocks(&d, &levels);
+    assert_eq!(one(&views), [vec!["1".to_string()], vec!["2".to_string()]], "left to right, lowest first: {views:?}");
+    let (left, right) = (views[0].1, views[1].1);
+    assert!((left[2] - 120.0).abs() < 10.0 && left[2] <= right[0], "they meet halfway between the plans: {views:?}");
+    assert!(left[0].is_infinite() && right[2].is_infinite(), "open at the sheet's edges: {views:?}");
+    // A typical plan (the set's "T"), a level more than the blocks, or one level: no split.
+    assert!(sheet_reader::level_blocks(&d, &["T".to_string()]).is_empty());
+    assert!(sheet_reader::level_blocks(&d, &["1".to_string(), "2".to_string(), "3".to_string()]).is_empty());
+    assert!(sheet_reader::level_blocks(&d, &levels[..1]).is_empty());
+    // One plan and a small legend block: one big block, so it is one view.
+    let mut single = Drawing::new_imperial();
+    plan_block(&mut single, [0.0, 20.0], 10, 9);
+    plan_block(&mut single, [140.0, 20.0], 3, 2);
+    assert!(sheet_reader::level_blocks(&single, &levels).is_empty(), "one plan is never split");
+
+    // Stacked plans whose small titles name their levels: the titles decide, not the order.
+    let mut stacked = Drawing::new_imperial();
+    plan_block(&mut stacked, [0.0, 0.0], 10, 6);
+    plan_block(&mut stacked, [0.0, 100.0], 10, 6);
+    text(&mut stacked, [10.0, 92.0], 1.0, "LEVEL 2 MECHANICAL PLAN");
+    text(&mut stacked, [10.0, -8.0], 1.0, "LEVEL 1 MECHANICAL PLAN");
+    text(&mut stacked, [10.0, 162.0], 1.0, "MECHANICAL PLANS - LEVELS 1 AND 2");
+    let views = sheet_reader::level_blocks(&stacked, &levels);
+    assert_eq!(one(&views), [vec!["1".to_string()], vec!["2".to_string()]], "{views:?}");
+    let (lower, upper) = (views[0].1, views[1].1);
+    assert!(lower[3] > 60.0 && lower[3] < 100.0 && lower[3] == upper[1], "they meet between the plans: {views:?}");
+    assert!(lower[1] < 0.0 && upper[1] < 92.0 && upper[1] > 60.0, "the bottom plan's part holds the title under the top plan: {views:?}");
+    assert_eq!(views[0].0.title, "LEVEL 1 MECHANICAL PLAN", "the title naming one level, not the sheet's: {views:?}");
+    // Here the title under the top plan says it is level 1's.
+    let mut swapped = Drawing::new_imperial();
+    plan_block(&mut swapped, [0.0, 0.0], 10, 6);
+    plan_block(&mut swapped, [0.0, 100.0], 10, 6);
+    text(&mut swapped, [10.0, 92.0], 1.0, "LEVEL 1 MECHANICAL PLAN");
+    text(&mut swapped, [10.0, -8.0], 1.0, "LEVEL 2 MECHANICAL PLAN");
+    let views = sheet_reader::level_blocks(&swapped, &levels);
+    assert_eq!(one(&views), [vec!["2".to_string()], vec!["1".to_string()]], "the titles decide, not the order: {views:?}");
+    assert!(views[1].1[1] > views[0].1[1], "level 1 is the top plan: {views:?}");
+    // Untitled, they go bottom to top.
+    let mut bare = Drawing::new_imperial();
+    plan_block(&mut bare, [0.0, 0.0], 10, 6);
+    plan_block(&mut bare, [0.0, 100.0], 10, 6);
+    let views = sheet_reader::level_blocks(&bare, &levels);
+    assert_eq!(one(&views), [vec!["1".to_string()], vec!["2".to_string()]]);
+    assert!(views[0].1[3] < views[1].1[3], "the bottom plan first: {views:?}");
+}
+
+#[test]
+fn a_typical_title_says_so() {
+    for t in ["TYPICAL 2ND-4TH FLOOR PLAN", "LEVELS 3-4 MECHANICAL PLAN (TYP.)", "Typical floor plan"] {
+        assert!(sheet_reader::says_typical(t), "{t}");
+    }
+    for t in ["FIRST AND SECOND FLOOR PLANS", "LEVEL 3 & 4 POWER PLANS", "TYPEWRITER ROOM"] {
+        assert!(!sheet_reader::says_typical(t), "{t}");
     }
 }

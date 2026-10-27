@@ -47,7 +47,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {refs: [{name, path, status, changed, handles, scale, elements, classes, levels: [{name, elevation, elements, spec_level?}]}]}")
             .noundo(),
         CommandSpec::new("ifc.elements", "IFC Reference Elements", run_elements)
-            .params("{name?: reference, class?: IFC class (Wall, Slab… or IfcWall), level?: storey name, guid?, system?, property?: \"Set.Name\" | \"Set.Name=value\", limit? (default 500)} → {elements: [{ref, handle, class, guid, name, level?, elevation?, type?, systems, properties: {\"Set.Name\": value}, min, max}], total}")
+            .params("{name?: reference, or \"model\" (the model built in this drawing; listed by default only when no reference is attached), class?: IFC class (Wall, Slab… or IfcWall), level?: storey name, guid?, system?, property?: \"Set.Name\" | \"Set.Name=value\", limit? (default 500)} → {elements: [{ref, handle, class, guid, name, level?, elevation?, type?, systems, properties: {\"Set.Name\": value}, min, max}], total, built (elements of the built model), export?}")
             .noundo(),
         CommandSpec::new("ifc.reload", "Reload IFC References", run_reload)
             .files()
@@ -72,7 +72,7 @@ pub struct Tag {
     pub building: Option<String>,
     pub site: Option<String>,
     pub systems: Vec<String>,
-    /// `(Set.Name, value)`, in the file's order.
+    /// `(Set.Name, value)`, in the file's order, then the element's own property store's other keys.
     pub props: Vec<(String, String)>,
 }
 
@@ -101,6 +101,15 @@ pub fn tag(e: &Entity) -> Option<Tag> {
             t.systems.push(v.to_string());
         } else if let Some((k, v)) = s.strip_prefix("prop:").and_then(|p| p.split_once('=')) {
             t.props.push((k.to_string(), v.to_string()));
+        }
+    }
+    // The element's own property store (the reader fills it from the same sets, and an edit
+    // lands there): its keys the sets didn't name.
+    if cadaddy_doc::props::has_store(x) {
+        for (k, p) in cadaddy_doc::props::read(x).iter() {
+            if p.has_value() && !t.props.iter().any(|(q, _)| q.eq_ignore_ascii_case(k)) {
+                t.props.push((k.to_string(), p.text()));
+            }
         }
     }
     Some(t)
@@ -410,9 +419,10 @@ fn run_elements(s: &mut Session, p: &Value) -> Result<Value> {
     let want = |k: &str| str_param(p, k).map(str::trim).filter(|t| !t.is_empty());
     let (name, class, level, guid, system, property) = (want("name"), want("class"), want("level"), want("guid"), want("system"), want("property"));
     if let Some(n) = name
+        && !n.eq_ignore_ascii_case(MODEL_REF)
         && !ref_names(d).iter().any(|r| r.eq_ignore_ascii_case(n))
     {
-        return Err(bad("ifc.elements", format!("no IFC reference named \"{n}\"")));
+        return Err(bad("ifc.elements", format!("no IFC reference named \"{n}\" (the built model is \"{MODEL_REF}\")")));
     }
     let limit = p.get("limit").and_then(Value::as_u64).map_or(LIST_DEFAULT, |l| usize::try_from(l).unwrap_or(LIST_MAX).min(LIST_MAX));
     let prop = property.map(|q| match q.split_once('=') {
@@ -446,7 +456,94 @@ fn run_elements(s: &mut Session, p: &Value) -> Result<Value> {
             "min": [r6(lo.x), r6(lo.y), r6(lo.z)], "max": [r6(hi.x), r6(hi.y), r6(hi.z)],
         }));
     }
-    Ok(json!({ "elements": out, "total": total }))
+    // The model built here (walls, slabs, doors, runs…) as the IFC elements an export writes.
+    let mut built = 0usize;
+    // With no name: the built model only when no reference is attached (the references stay
+    // the default listing); `name: "model"` always lists it.
+    let model_wanted = name.map_or_else(|| ref_names(d).is_empty(), |n| n.eq_ignore_ascii_case(MODEL_REF));
+    if model_wanted && guid.is_none() && property.is_none() {
+        for e in d.model.iter().filter(|e| super::wallgen::made_as(e).is_some()) {
+            let EntityKind::Mesh(m) = &e.kind else { continue };
+            let info = built_element(e);
+            let ok = class.is_none_or(|c| class_matches(&info.class, c))
+                && level.is_none_or(|l| info.level.as_deref().is_some_and(|x| x.trim().eq_ignore_ascii_case(l)))
+                && system.is_none_or(|sy| info.systems.iter().any(|x| x.eq_ignore_ascii_case(sy)));
+            if !ok {
+                continue;
+            }
+            total += 1;
+            built += 1;
+            if out.len() >= limit {
+                continue;
+            }
+            let (lo, hi) = bounds3(&m.vertices).unwrap_or_default();
+            out.push(json!({
+                "ref": MODEL_REF, "handle": e.handle.hex(), "class": info.class, "guid": "", "name": info.name, "level": info.level,
+                "systems": info.systems, "properties": {}, "min": [r6(lo.x), r6(lo.y), r6(lo.z)], "max": [r6(hi.x), r6(hi.y), r6(hi.z)],
+            }));
+        }
+    }
+    let mut r = json!({ "elements": out, "total": total, "built": built });
+    if built > 0 {
+        r["export"] = json!("export {path: model.ifc} writes the built model as IFC4");
+    }
+    Ok(r)
+}
+
+/// The name `ifc.elements` gives the model built in the drawing (not an attached reference).
+pub const MODEL_REF: &str = "model";
+
+/// A built object as an IFC element: its class (as an IFC export writes it, named as the reader
+/// names classes: `Wall` for IfcWall), level, name and
+/// systems.
+struct BuiltElement {
+    class: String,
+    level: Option<String>,
+    name: String,
+    systems: Vec<String>,
+}
+
+fn built_element(e: &Entity) -> BuiltElement {
+    let x = &e.common.xdata;
+    let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP)).unwrap_or(0);
+    let tags: Vec<&str> = x.iter().skip(at + 1).take_while(|t| t.code != 1001).map(|t| t.value.as_str()).collect();
+    let part = tags.first().copied().unwrap_or_default();
+    let extra = |key: &str| tags.iter().skip(3).find_map(|v| v.strip_prefix(key));
+    let class = match part {
+        "wall" | "parapet" => "Wall",
+        "floor" => "Slab",
+        "ceiling" | "soffit" => "Covering",
+        "door" => "Door",
+        "window" | "glass" => "Window",
+        "stair" => "Stair",
+        "column" => "Column",
+        "curtainwall" => "CurtainWall",
+        "railing" => "Railing",
+        "ramp" => "Ramp",
+        "roof" => "Roof",
+        "ground" => "GeographicElement",
+        "room" => "Space",
+        "concrete" => "Footing",
+        _ => match (extra("kind:"), extra("part:").unwrap_or("segment")) {
+            (Some("equipment"), _) => "FlowTerminal",
+            (Some("duct"), p) if p.starts_with("fitting") => "DuctFitting",
+            (Some("pipe"), p) if p.starts_with("fitting") => "PipeFitting",
+            (Some("conduit"), p) if p.starts_with("fitting") => "CableCarrierFitting",
+            (_, p) if p.starts_with("terminal") => "FlowTerminal",
+            (Some("duct"), _) => "DuctSegment",
+            (Some("pipe"), _) => "PipeSegment",
+            (Some("conduit"), _) => "CableCarrierSegment",
+            _ => "BuildingElementProxy",
+        },
+    };
+    let systems: Vec<String> = tags.iter().skip(3).filter_map(|v| v.strip_prefix("system:")).map(str::to_string).collect();
+    let level = tags.get(1).map(|l| l.to_string()).filter(|l| !l.is_empty());
+    let name = extra("room:")
+        .filter(|r| !r.is_empty())
+        .or_else(|| extra("type:"))
+        .or_else(|| extra("tag:"))
+        .map_or_else(|| part.to_string(), str::to_string);
+    BuiltElement { class: class.to_string(), level, name, systems }
 }
 
 fn run_reload(s: &mut Session, p: &Value) -> Result<Value> {

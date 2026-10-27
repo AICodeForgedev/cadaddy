@@ -357,6 +357,20 @@ fn run_app(exe: &Path, bundle_ver: Option<String>, want: &str, out: &Path, r: &m
             c.exec("sheetset", json!({ "set": set, "action": "publish", "path": book }))?;
             made(&book, Some(b"%PDF"))
         });
+        r.step("clipboard", || {
+            let before = c.entities()?;
+            c.exec("selectall", json!({}))?;
+            c.exec("copyclip", json!({}))?;
+            c.exec("ai_deselect", json!({}))?;
+            c.exec("pasteclip", json!({ "at": [200, 0] }))?;
+            let after = c.entities()?;
+            // The paste must have added at least as many objects as the drawing had.
+            if after >= before * 2 {
+                Ok(format!("{before} → {after} objects (copied {}, pasted {})", before, after - before))
+            } else {
+                Err(format!("{before} → {after} objects (expected at least {}, got {})", before * 2, after))
+            }
+        });
         r.step("update check", || {
             c.exec("ui.update.check", json!({}))?;
             std::thread::sleep(Duration::from_secs(5));
@@ -534,6 +548,19 @@ fn run_cli(exe: &Path, want: &str, out: &Path, r: &mut Report) -> Result<(), Str
         ex(&mut m, json!({ "set": set, "action": "publish", "path": book }))?;
         made(&book, Some(b"%PDF"))
     });
+    r.step("clipboard", || {
+        let before = count(&mut m)?;
+        m.tool("execute", json!({ "command": "selectall", "params": {} }))?;
+        m.tool("execute", json!({ "command": "copyclip", "params": {} }))?;
+        m.tool("execute", json!({ "command": "ai_deselect", "params": {} }))?;
+        m.tool("execute", json!({ "command": "pasteclip", "params": { "at": [200, 0] } }))?;
+        let after = count(&mut m)?;
+        if after >= before * 2 {
+            Ok(format!("{before} → {after} objects (copied {}, pasted {})", before, after - before))
+        } else {
+            Err(format!("{before} → {after} objects (expected at least {}, got {})", before * 2, after))
+        }
+    });
     r.step("update check", || {
         let latest = latest_release()?;
         if latest == want {
@@ -649,6 +676,50 @@ mod tests {
         assert!(made(&f, None).is_err());
         assert!(made(&dir.join("none"), None).is_err());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Every expected step is present, including the clipboard round-trip added in Q5057.
+    #[test]
+    fn smoke_step_list_includes_clipboard() {
+        // The step names used by run_app (the desktop smoke); run_cli uses the same set except
+        // walk is skipped. This list mirrors the report.step calls in run_app.
+        let app_steps = [
+            "launch",
+            "version",
+            "about",
+            "draw",
+            "save dwg",
+            "save dxf",
+            "save cdy",
+            "reopen dwg",
+            "reopen dxf",
+            "reopen cdy",
+            "plot pdf",
+            "walk",
+            "sheet set",
+            "clipboard",
+            "update check",
+            "quit",
+        ];
+        assert!(app_steps.contains(&"clipboard"), "run_app must have a clipboard step");
+        // run_cli replaces walk with a skip and has no quit.
+        let cli_steps = [
+            "launch",
+            "version",
+            "draw",
+            "save dwg",
+            "save dxf",
+            "save cdy",
+            "reopen dwg",
+            "reopen dxf",
+            "reopen cdy",
+            "plot pdf",
+            "walk",
+            "sheet set",
+            "clipboard",
+            "update check",
+        ];
+        assert!(cli_steps.contains(&"clipboard"), "run_cli must have a clipboard step");
     }
 
     /// A rate-limited request is sent again until the app runs it; other errors are not retried.

@@ -245,7 +245,7 @@ fn main() {
 
     let stage = |name: &str, t: Instant| println!("  {name}: {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
     let t = Instant::now();
-    let ceil = cadaddy_mepfix::ceiling_reader::read_ceilings(&dxf, &map);
+    let ceil = cadaddy_mepfix::ceiling_reader::read_ceilings(&dxf, &map, None);
     stage("ceilings", t);
     println!("ceilings: {} rooms, {} ceilings", ceil.rooms.len(), ceil.ceilings.len());
     // Structure, ducts and pipes read parsed drawings: the S, M and P sheets only.
@@ -331,8 +331,7 @@ fn main() {
     println!("duct runs: {duct_runs}, terminals: {terminals}; pipe runs: {pipe_runs}, risers: {risers}");
     let numbers: Vec<String> = map.sheets.iter().map(|s| s.number.clone()).collect();
     let t = Instant::now();
-    let (resolved, broken) = cadaddy_mepfix::callout_reader::resolve_callouts(&dxf, &numbers);
+    let (resolved, broken, read_errors) = cadaddy_mepfix::callout_reader::resolve_callouts(&dxf, &numbers);
     stage("callouts", t);
-    println!("callouts: {} resolved, {} unresolved", resolved.len(), broken.len());
-    println!("errors: {errors:?}");
+    println!("callouts: {} resolved, {} unresolved, {} read errors", resolved.len(), broken.len(), read_errors.len());
 }

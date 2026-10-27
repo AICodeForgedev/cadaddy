@@ -10,7 +10,14 @@
 //! - `roof.read`: a roof plan (a region): roof areas (outermost closed outlines), each slope from
 //!   its arrow (pointing downhill) and pitch note (`1/4" / FT`, `4:12`, `2%`), parapets (a
 //!   `PARAPET` note, or an inner outline a parapet's thickness inside), crickets (outlines with a
-//!   `CRICKET` note) and rooftop equipment (outlines named RTU, AHU, EF, MAU, CU…).
+//!   `CRICKET` note) and rooftop equipment (outlines named RTU, AHU, EF, MAU, CU…). With no
+//!   closed outline (a PDF's roof edge comes as loose lines) it reads the plan's lines instead,
+//!   as the build does.
+//!
+//! `model.build` reads the roof of a roof level the spec has no roof for off that level's plan
+//! (the face of the wall pen's lines its drains, slopes and parapet notes lie in, a parapet ring
+//! round it, curbs and units by the notes beside them, drains at their `RD` notes), else puts a
+//! flat roof over the walls of the storey under it.
 //!
 //! `apply: true` writes what was read into the spec. The build puts roofs on their level (sloped
 //! slabs over their outlines, parapets round them, crickets as hips rising to their apex,
@@ -19,7 +26,10 @@
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Mesh, MeshFace, MeshKind, RawTag, Space};
 use cadaddy_geom::{Bounds2, Polyline, Vec2, Vec3};
-use cadaddy_walk3d::{Band, BandKind, BuildingSpec, Cricket, Equipment, Facade, Roof, RoofSlope, Side};
+use cadaddy_walk3d::levels::DatumKind;
+use cadaddy_walk3d::{
+    Band, BandKind, BuildingSpec, Cricket, Equipment, Exterior, Facade, LevelParapet, Role, Roof, RoofDrain, RoofSlope, Side, ValueStatus,
+};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -34,10 +44,10 @@ const MAX_OBJECTS: usize = 100_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("elev.read", "Read Elevation", run_elev).params(
-            "{region: [x0,y0,x1,y1] (the elevation on the sheet), facade?: north|south|east|west (else from its title), apply?: bool (into the spec: level elevations and heights, window sill and head, the facade's bands, parapets)} → {facade, levels: [{label, name, y, elevation_ft, matched?}], roof_ft?, parapet_ft?, windows: {count, sill_ft, head_ft}, bands: [...], applied}",
+            "{region: [x0,y0,x1,y1] (the elevation on the sheet), facade?: north|south|east|west (else from its title), apply?: bool (into the spec: level elevations and heights, window sill and head, the facade's bands, the roof level's parapet height)} → {facade, levels: [{label, name, y, elevation_ft, matched?}], roof_ft?, parapet_ft?, parapet?: {level, height_ft, applied, roofs (given it), kept (roofs keeping their roof-plan note)}, windows: {count, sill_ft, head_ft}, bands: [...], assumed: [{item, value, assumed, why}], conflicts: [...], applied}",
         ),
         CommandSpec::new("roof.read", "Read Roof Plan", run_roof).params(
-            "{region: [x0,y0,x1,y1] (the roof plan on the sheet), level?: the roof level's name (default: one named ROOF), apply?: bool} → {roofs: [{name, outline, slope?: {down, rise_per_ft}, parapet_ft?}], crickets, equipment, applied}",
+            "{region: [x0,y0,x1,y1] (the roof plan on the sheet), level?: the roof level's name (default: one named ROOF), apply?: bool} → {roofs: [{name, outline, slope?: {down, rise_per_ft, direction_status?}, parapet_ft?, parapet_status?, parapet_from?}], crickets, equipment, drains, assumed: [{item, value, assumed, why}] (each default put in), conflicts: [...] (roof-plan parapet notes the elevation disagrees with), applied}",
         ),
     ]
 }
@@ -50,15 +60,26 @@ fn in_region<'a>(d: &'a Drawing, p: &Value, cmd: &str) -> Result<(Bounds2, Vec<&
         return Err(bad(cmd, "`region` must be a rectangle with an area"));
     }
     let b = Bounds2::new(Vec2::new(x0.min(x1), y0.min(y1)), Vec2::new(x0.max(x1), y0.max(y1)));
-    let ents = plan_objects(d)
+    Ok((b, objects_in(d, &b)))
+}
+
+/// The plan's objects whose centres lie in `b`.
+fn objects_in<'a>(d: &'a Drawing, b: &Bounds2) -> Vec<&'a Arc<Entity>> {
+    plan_objects(d)
         .into_iter()
         .filter(|e| {
             let eb = cadaddy_doc::entity_bounds(d, e, 0);
             !eb.is_empty() && b.contains(eb.center())
         })
         .take(MAX_OBJECTS)
-        .collect();
-    Ok((b, ents))
+        .collect()
+}
+
+/// Whether an outline is the sheet's border (or its title block's frame): it spans most of the
+/// region both ways.
+fn sheet_border(q: &[Vec2], region: &Bounds2) -> bool {
+    let b = Bounds2::from_points(q.iter().copied());
+    !b.is_empty() && b.width() >= 0.85 * region.width() && b.height() >= 0.85 * region.height()
 }
 
 fn units(sp: &BuildingSpec) -> f64 {
@@ -179,6 +200,54 @@ fn names_level(label: &str, level: &str) -> bool {
     a == b || (!digits(&a).is_empty() && digits(&a) == digits(&b) && a.chars().next() == b.chars().next())
 }
 
+/// Where a roof's parapet height came from, as stored.
+const FROM_ROOF_PLAN: &str = "roof plan";
+const FROM_ELEVATION: &str = "elevation";
+const FROM_DEFAULT: &str = "default";
+
+/// The parapet height a roof plan gives with no height note and no elevation, feet.
+const DEFAULT_PARAPET_FT: f64 = 3.0;
+const DEFAULT_CRICKET_FT: f64 = 0.5;
+const DEFAULT_EQUIPMENT_FT: f64 = 4.0;
+
+/// One value put in because the drawings don't give it.
+fn assumed(item: &str, value: &str, v: Value, why: &str) -> Value {
+    json!({ "item": item, "value": value, "assumed": v, "why": why })
+}
+
+/// The level an elevation's parapet belongs to: the one named ROOF, else the highest.
+fn roof_level(sp: &BuildingSpec) -> Option<String> {
+    sp.levels
+        .iter()
+        .find(|l| l.name.to_ascii_uppercase().contains("ROOF"))
+        .or_else(|| sp.levels.iter().max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft)))
+        .map(|l| l.name.clone())
+}
+
+/// Gives a roof an elevation's parapet height unless the roof has its own documented one (a
+/// roof-plan note, or a value put in by hand). The documented one stays; a disagreement comes
+/// back as a conflict. Whether the roof took the elevation's value.
+fn settle_parapet(r: &mut Roof, elevation_ft: f64, conflicts: &mut Vec<Value>) -> bool {
+    let documented = r.parapet_ft.is_some() && !ValueStatus::is_default(&r.parapet_status) && r.parapet_from.as_deref() != Some(FROM_ELEVATION);
+    if documented {
+        if let Some(own) = r.parapet_ft.filter(|own| (own - elevation_ft).abs() > 1e-6) {
+            conflicts.push(json!({
+                "roof": r.name,
+                "level": r.level,
+                "roof_plan_ft": own,
+                "elevation_ft": elevation_ft,
+                "kept_ft": own,
+                "message": format!("{}: the roof plan gives a {} parapet, the elevation {}; the roof plan's is kept", r.name, cadaddy_walk3d::feet(own), cadaddy_walk3d::feet(elevation_ft)),
+            }));
+        }
+        return false;
+    }
+    r.parapet_ft = Some(elevation_ft);
+    r.parapet_status = Some(ValueStatus::Read);
+    r.parapet_from = Some(FROM_ELEVATION.into());
+    true
+}
+
 // ---------------- elev.read ----------------
 
 struct LevelLine {
@@ -238,7 +307,17 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
         (Some(e), Some(g)) => e - g,
         _ => (l.y - ground.y) / upf,
     };
-    let base_ft = sp.levels.iter().find(|l| names_level(&label_name(&ground.label), &l.name)).map_or(0.0, |l| l.elevation_ft);
+    let ground_level = sp.levels.iter().find(|l| names_level(&label_name(&ground.label), &l.name));
+    let base_ft = ground_level.map_or(0.0, |l| l.elevation_ft);
+    let mut assumptions = Vec::new();
+    if ground_level.is_none() {
+        assumptions.push(assumed(
+            &label_name(&ground.label),
+            "elevation_ft",
+            json!(0.0),
+            "the ground line's label names no level of the spec, so heights are taken from 0'-0\"",
+        ));
+    }
     let roof = levels.iter().find(|l| has(l, "ROOF")).map(rel);
     let parapet = levels.iter().find(|l| has(l, "PARAPET")).map(rel).zip(roof).map(|(p, r)| p - r).filter(|p| *p > 0.0);
     let mut out_levels = Vec::new();
@@ -354,11 +433,28 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
             sp.exterior.facades.retain(|f| f.side != side);
             sp.exterior.facades.push(Facade { side, bands: bands.clone() });
         }
-        if let Some(pp) = parapet {
-            for r in &mut sp.exterior.roofs {
-                r.parapet_ft.get_or_insert(round(pp));
+    }
+    // The parapet: kept by the roof level, so a roof plan read later finds it too, and given to
+    // the level's roofs now unless they have a documented height of their own.
+    let mut conflicts = Vec::new();
+    let parapet_out = match (parapet.map(round), roof_level(&sp)) {
+        (None, _) => Value::Null,
+        (Some(pp), None) => json!({ "height_ft": pp, "applied": false, "why": "the spec has no levels to put it on" }),
+        (Some(pp), Some(level)) => {
+            let (mut given, mut kept) = (Vec::new(), Vec::new());
+            let mut roofs = sp.exterior.roofs.clone();
+            for r in roofs.iter_mut().filter(|r| r.level.eq_ignore_ascii_case(&level)) {
+                if settle_parapet(r, pp, &mut conflicts) { given.push(r.name.clone()) } else { kept.push(r.name.clone()) }
             }
+            if apply {
+                sp.exterior.roofs = roofs;
+                sp.exterior.parapets.retain(|x| !x.level.eq_ignore_ascii_case(&level));
+                sp.exterior.parapets.push(LevelParapet { level: level.clone(), height_ft: pp, facade: side });
+            }
+            json!({ "level": level, "height_ft": pp, "applied": apply, "roofs": given, "kept": kept })
         }
+    };
+    if apply {
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
     Ok(json!({
@@ -366,8 +462,11 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
         "levels": out_levels,
         "roof_ft": roof.map(|r| round(base_ft + r)),
         "parapet_ft": parapet.map(round),
+        "parapet": parapet_out,
         "windows": { "count": sills.len(), "sill_ft": sill, "head_ft": head },
         "bands": serde_json::to_value(&bands).unwrap_or(Value::Null),
+        "assumed": assumptions,
+        "conflicts": conflicts,
         "applied": apply,
     }))
 }
@@ -387,26 +486,23 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
             .ok_or_else(|| bad("roof.read", "give `level` (the roof level); none is named ROOF"))?,
     };
     let d = s.doc()?;
-    let (_, ents) = in_region(d, p, "roof.read")?;
+    let (region, ents) = in_region(d, p, "roof.read")?;
     let notes = texts(&ents);
     let segs = segments(&ents);
     let all = outlines(&ents);
     let area = |q: &[Vec2]| cadaddy_geom::shoelace(q).abs();
     let inside = |inner: &[Vec2], outer: &[Vec2]| inner.iter().all(|p| cadaddy_geom::point_in_polygon(outer, *p));
     let up = |t: &str| t.to_ascii_uppercase();
-    let word = |t: &str, ws: &[&str]| {
-        let u = up(t);
-        u.split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|w| ws.iter().any(|x| w == *x || (w.starts_with(x) && w[x.len()..].chars().all(|c| c.is_ascii_digit()))))
-    };
+    let word = has_word;
     let named = |q: &[Vec2], ws: &[&str]| {
         notes.iter().find(|(_, t, at, _)| cadaddy_geom::point_in_polygon(q, *at) && word(t, ws)).map(|(_, t, _, _)| t.clone())
     };
-    let equipment_words = ["RTU", "AHU", "EF", "MAU", "CU", "ACCU", "UNIT", "EQUIP", "EQUIPMENT", "HVAC"];
+    let equipment_words = EQUIPMENT_WORDS;
     // Rooftop equipment and crickets: each note names the smallest outline holding it.
     let mut equipment = Vec::new();
     let mut crickets = Vec::new();
     let mut taken: Vec<usize> = Vec::new();
+    let mut assumptions = Vec::new();
     for (_, t, at, _) in &notes {
         let cricket = word(t, &["CRICKET"]);
         if !cricket && !word(t, &equipment_words) {
@@ -423,20 +519,32 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let outline: Vec<[f64; 2]> = q.iter().map(|p| [p.x, p.y]).collect();
+        let height = feet_inches(&up(t)).map(|i| i / 12.0);
+        let status = Some(if height.is_some() { ValueStatus::Read } else { ValueStatus::Default });
         if cricket {
-            let h = feet_inches(&up(t)).map_or(0.5, |i| i / 12.0);
-            crickets.push(Cricket { level: level.clone(), outline, height_ft: h });
+            let h = height.unwrap_or(DEFAULT_CRICKET_FT);
+            let item = format!("Cricket {}", crickets.len() + 1);
+            if height.is_none() {
+                assumptions.push(assumed(&item, "height_ft", json!(h), "its note gives no height; 6\" assumed"));
+            }
+            crickets.push(Cricket { level: level.clone(), outline, height_ft: h, height_status: status });
         } else {
-            let h = feet_inches(&up(t)).map_or(4.0, |i| i / 12.0);
+            let h = height.unwrap_or(DEFAULT_EQUIPMENT_FT);
             let name = t.split_whitespace().next().unwrap_or("EQUIP").to_string();
-            equipment.push(Equipment { name, level: level.clone(), outline, height_ft: h });
+            if height.is_none() {
+                assumptions.push(assumed(&name, "height_ft", json!(h), "its note gives no height (H=); 4'-0\" assumed"));
+            }
+            equipment.push(Equipment { name, level: level.clone(), outline, height_ft: h, height_status: status });
         }
         taken.push(i);
     }
     // Roof areas: the outermost remaining outlines of 100 sq ft or more.
-    let candidates: Vec<usize> =
-        (0..all.len()).filter(|i| !taken.contains(i) && all.get(*i).is_some_and(|(q, _)| area(q) >= 100.0 * upf * upf)).collect();
+    let candidates: Vec<usize> = (0..all.len())
+        .filter(|i| !taken.contains(i) && all.get(*i).is_some_and(|(q, _)| area(q) >= 100.0 * upf * upf && !sheet_border(q, &region)))
+        .collect();
     let mut roofs = Vec::new();
+    let mut conflicts = Vec::new();
+    let elevation_parapet = sp.exterior.level_parapet(&level);
     for &i in &candidates {
         let Some((q, _)) = all.get(i) else { continue };
         let outer = candidates.iter().any(|&j| j != i && all.get(j).is_some_and(|(o, _)| area(o) > area(q) && inside(q, o)));
@@ -454,10 +562,25 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
             }
         });
         let parapet_note = named(q, &["PARAPET"]);
-        let parapet = match (&parapet_note, inner) {
-            (Some(t), _) => Some(feet_inches(&up(t)).map_or(3.0, |i| i / 12.0)),
-            (None, Some(_)) => Some(3.0),
-            _ => None,
+        let noted = parapet_note.as_deref().and_then(|t| feet_inches(&up(t))).map(|i| i / 12.0);
+        let name = format!("Roof {}", roofs.len() + 1);
+        // A height noted on the roof plan; else the elevation's; else a default when the plan
+        // draws one (a note without a height, or the inner line).
+        let (parapet, parapet_status, parapet_from) = match (noted, parapet_note.is_some() || inner.is_some()) {
+            (Some(h), _) => (Some(h), Some(ValueStatus::Read), Some(FROM_ROOF_PLAN.to_string())),
+            (None, drawn) if drawn || elevation_parapet.is_some() => match elevation_parapet {
+                Some(h) => (Some(h), Some(ValueStatus::Read), Some(FROM_ELEVATION.to_string())),
+                None => {
+                    assumptions.push(assumed(
+                        &name,
+                        "parapet_ft",
+                        json!(DEFAULT_PARAPET_FT),
+                        "the roof plan draws a parapet with no height note and no elevation gives one; 3'-0\" assumed",
+                    ));
+                    (Some(DEFAULT_PARAPET_FT), Some(ValueStatus::Default), Some(FROM_DEFAULT.to_string()))
+                }
+            },
+            _ => (None, None, None),
         };
         // Its slope: the pitch note inside, and the arrow nearest it (downhill to its head).
         let note = notes.iter().find(|(_, t, at, _)| cadaddy_geom::point_in_polygon(q, *at) && pitch(t).is_some());
@@ -473,16 +596,49 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
             let (a, b) = (arrow.0, arrow.1);
             // The head: the end other short strokes meet.
             let strokes = |p: Vec2| segs.iter().filter(|(c, e, _)| c.dist(*e) < a.dist(b) * 0.3 && (c.dist(p) < 1e-6 || e.dist(p) < 1e-6)).count();
-            let (tail, head) = if strokes(a) > strokes(b) { (b, a) } else { (a, b) };
+            let (sa, sb) = (strokes(a), strokes(b));
+            let (tail, head) = if sa > sb { (b, a) } else { (a, b) };
             let dir = head - tail;
             let len = dir.len().max(1e-12);
-            Some(RoofSlope { down: [dir.x / len, dir.y / len], rise_per_ft: rise })
+            let down = [dir.x / len, dir.y / len];
+            // No head to tell the ends apart: downhill to the end drawn last.
+            let direction_status = Some(if sa == sb {
+                assumptions.push(assumed(
+                    &name,
+                    "slope.down",
+                    json!(down),
+                    "the slope arrow's head can't be told from its tail; downhill taken to the end drawn last",
+                ));
+                ValueStatus::Default
+            } else {
+                ValueStatus::Read
+            });
+            Some(RoofSlope { down, rise_per_ft: rise, direction_status })
         });
-        let name = format!("Roof {}", roofs.len() + 1);
-        roofs.push(Roof { name, level: level.clone(), outline: q.iter().map(|p| [p.x, p.y]).collect(), slope, parapet_ft: parapet, assembly: None });
+        let mut roof = Roof {
+            name,
+            level: level.clone(),
+            outline: q.iter().map(|p| [p.x, p.y]).collect(),
+            slope,
+            parapet_ft: parapet,
+            parapet_status,
+            parapet_from,
+            assembly: None,
+        };
+        if let Some(h) = elevation_parapet {
+            settle_parapet(&mut roof, h, &mut conflicts);
+        }
+        roofs.push(roof);
     }
+    let mut drains = Vec::new();
     if roofs.is_empty() {
-        return Err(bad("roof.read", "no roof outline found in the region (a closed outline of 100 sq ft or more)"));
+        // No closed outline: the roof plan's lines (a PDF's edges come as loose lines).
+        let read = read_plan(d, &sp, &region, &level)
+            .ok_or_else(|| bad("roof.read", "no roof outline found in the region (a closed outline of 100 sq ft or more)"))?;
+        roofs = read.roofs;
+        crickets.extend(read.crickets);
+        equipment.extend(read.equipment);
+        drains = read.drains;
     }
     let apply = bool_or(p, "apply", false);
     let result = json!({
@@ -490,18 +646,264 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
         "roofs": serde_json::to_value(&roofs).unwrap_or(Value::Null),
         "crickets": serde_json::to_value(&crickets).unwrap_or(Value::Null),
         "equipment": serde_json::to_value(&equipment).unwrap_or(Value::Null),
+        "drains": serde_json::to_value(&drains).unwrap_or(Value::Null),
+        "assumed": assumptions,
+        "conflicts": conflicts,
         "applied": apply,
     });
     if apply {
         sp.exterior.roofs.retain(|r| !r.level.eq_ignore_ascii_case(&level));
         sp.exterior.crickets.retain(|r| !r.level.eq_ignore_ascii_case(&level));
         sp.exterior.equipment.retain(|r| !r.level.eq_ignore_ascii_case(&level));
+        sp.exterior.drains.retain(|r| !r.level.eq_ignore_ascii_case(&level));
         sp.exterior.roofs.extend(roofs);
         sp.exterior.crickets.extend(crickets);
         sp.exterior.equipment.extend(equipment);
+        sp.exterior.drains.extend(drains);
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
     Ok(result)
+}
+
+/// Whether `t` has one of the words `ws` (or one with a number after it: `RTU2`).
+fn has_word(t: &str, ws: &[&str]) -> bool {
+    let u = t.to_ascii_uppercase();
+    u.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| ws.iter().any(|x| w == *x || (w.starts_with(x) && w.get(x.len()..).is_some_and(|r| r.chars().all(|c| c.is_ascii_digit())))))
+}
+
+/// Words naming what stands on a roof.
+const EQUIPMENT_WORDS: [&str; 10] = ["RTU", "AHU", "EF", "MAU", "CU", "ACCU", "UNIT", "EQUIP", "EQUIPMENT", "HVAC"];
+
+/// Curbs and openings on a roof that aren't units: their notes give a curb or a height.
+const CURB_WORDS: [&str; 6] = ["HATCH", "OVERRUN", "SKYLIGHT", "CURB", "PENTHOUSE", "SMOKE"];
+
+/// Notes a roof plan writes on its roof (the seeds for finding it; not its title's `ROOF`).
+const ROOF_WORDS: [&str; 5] = ["RD", "DRAIN", "PARAPET", "CRICKET", "SCUPPER"];
+
+/// Roof faces searched for at most (each is a boundary search over the plan's lines).
+const MAX_SEARCHES: usize = 40;
+
+/// Pieces on a roof plan, at most.
+const MAX_ROOF_ITEMS: usize = 2_000;
+
+/// What a roof plan's lines say: its roofs, crickets, curbs and units, and drains.
+struct PlanRoof {
+    roofs: Vec<Roof>,
+    crickets: Vec<Cricket>,
+    equipment: Vec<Equipment>,
+    drains: Vec<RoofDrain>,
+}
+
+/// The roof read off a roof plan's lines in `region` (a PDF's roof edge, parapet and curbs come
+/// as loose lines, not closed outlines): the face most of its notes lie in (drains, slopes, the
+/// parapet, curbs), never the sheet's border; a parapet when a ring a parapet's thickness
+/// (4"–24") wraps that face, or a note says so; the curbs inside it, named by the notes beside
+/// them; drains at their `RD` notes. Arrows pointing different ways (tapered insulation to
+/// drains in the field) leave the roof flat. None when no face of 100 sq ft or more holds them.
+fn read_plan(d: &Drawing, sp: &BuildingSpec, region: &Bounds2, level: &str) -> Option<PlanRoof> {
+    use cadaddy_geom::region::boundary_at;
+    let upf = units(sp);
+    let ents = objects_in(d, region);
+    let notes = texts(&ents);
+    let segs = segments(&ents);
+    // The edge and curbs are drawn with the wall pen: the wall layers' lines when the spec names
+    // any (not the grid, dimensions or lettering), else every line.
+    let walled: Vec<Vec<Vec2>> = segs
+        .iter()
+        .filter(|(_, _, h)| d.entity(*h).is_some_and(|e| sp.role(&e.common.layer).is_some_and(|r| r.role == Role::Wall)))
+        .map(|(a, b, _)| vec![*a, *b])
+        .collect();
+    let pen: Vec<Vec<Vec2>> = if walled.is_empty() { segs.iter().map(|(a, b, _)| vec![*a, *b]).collect() } else { walled };
+    if pen.is_empty() {
+        return None;
+    }
+    let tol = upf / 48.0;
+    let area = |q: &[Vec2]| cadaddy_geom::shoelace(q).abs();
+    let inside = |q: &[Vec2], p: Vec2| cadaddy_geom::point_in_polygon(q, p);
+    let seeds: Vec<Vec2> = notes
+        .iter()
+        .filter(|(_, t, _, _)| pitch(t).is_some() || has_word(t, &ROOF_WORDS) || has_word(t, &EQUIPMENT_WORDS) || has_word(t, &CURB_WORDS))
+        .map(|(_, _, at, _)| *at)
+        .take(MAX_ROOF_ITEMS)
+        .collect();
+    // Each face found, and how many notes lie in it (on it, not on a curb inside it).
+    let mut faces: Vec<(cadaddy_geom::region::Boundary, usize)> = Vec::new();
+    let in_face = |b: &cadaddy_geom::region::Boundary, p: Vec2| inside(&b.outer, p) && !b.islands.iter().any(|i| inside(&i.outline, p));
+    let mut searches = 0;
+    for at in &seeds {
+        if let Some(f) = faces.iter_mut().find(|(b, _)| in_face(b, *at)) {
+            f.1 += 1;
+            continue;
+        }
+        if searches >= MAX_SEARCHES {
+            continue;
+        }
+        searches += 1;
+        let Some(b) = boundary_at(&pen, *at, tol) else { continue };
+        let a = area(&b.outer);
+        let bb = Bounds2::from_points(b.outer.iter().copied());
+        // Not the border, nor a strip of the title block.
+        if a >= 100.0 * upf * upf
+            && a <= 0.7 * region.width() * region.height()
+            && bb.width().min(bb.height()) >= 8.0 * upf
+            && !sheet_border(&b.outer, region)
+        {
+            faces.push((b, 1));
+        }
+    }
+    // The roof: the face most notes are on (the larger of equals).
+    let best = faces.iter().max_by(|a, b| a.1.cmp(&b.1).then(area(&a.0.outer).total_cmp(&area(&b.0.outer))))?;
+    let face = &best.0;
+    let mut outline = face.outer.clone();
+    // A parapet: a ring a parapet's thickness wide round the face (its outer edge is the roof's).
+    let ring = outline.iter().zip(outline.iter().cycle().skip(1)).max_by(|a, b| a.0.dist(*a.1).total_cmp(&b.0.dist(*b.1))).and_then(|(a, b)| {
+        let len = a.dist(*b);
+        // Counter-clockwise: outside is on the right.
+        let out = Vec2::new(b.y - a.y, a.x - b.x) * (1.0 / len.max(1e-12));
+        let probe = (*a + *b) * 0.5 + out * (upf / 12.0);
+        let o = boundary_at(&pen, probe, tol)?.outer;
+        let gap = outline
+            .iter()
+            .map(|p| o.iter().zip(o.iter().cycle().skip(1)).map(|(e0, e1)| seg_dist(*p, *e0, *e1)).fold(f64::INFINITY, f64::min))
+            .fold(f64::INFINITY, f64::min);
+        (area(&o) > area(&outline)
+            && outline.iter().all(|p| inside(&o, *p))
+            && gap >= 4.0 / 12.0 * upf
+            && gap <= 2.0 * upf
+            && !sheet_border(&o, region))
+        .then_some(o)
+    });
+    // Its height: the roof plan's note, else the elevation's, else a default for one drawn.
+    let parapet_note = notes.iter().find(|(_, t, at, _)| has_word(t, &["PARAPET"]) && inside(&face.outer, *at));
+    let noted = parapet_note.and_then(|(_, t, _, _)| feet_inches(&t.to_ascii_uppercase())).map(|i| i / 12.0);
+    let elevation_parapet = sp.exterior.level_parapet(level);
+    let (parapet, parapet_status, parapet_from) = match (noted, elevation_parapet) {
+        (Some(h), _) => (Some(h), Some(ValueStatus::Read), Some(FROM_ROOF_PLAN)),
+        (None, Some(h)) => (Some(h), Some(ValueStatus::Read), Some(FROM_ELEVATION)),
+        (None, None) if parapet_note.is_some() || ring.is_some() => (Some(DEFAULT_PARAPET_FT), Some(ValueStatus::Default), Some(FROM_DEFAULT)),
+        _ => (None, None, None),
+    };
+    if let Some(o) = ring {
+        outline = o;
+    }
+    // One slope when its arrows agree; arrows every way are tapered insulation to drains.
+    let pitched: Vec<&(Handle, String, Vec2, f64)> = notes.iter().filter(|(_, t, at, _)| pitch(t).is_some() && inside(&outline, *at)).collect();
+    let slopes: Vec<RoofSlope> = pitched.iter().filter_map(|n| note_slope(&outline, std::slice::from_ref(*n), &segs, upf)).collect();
+    let slope = slopes
+        .first()
+        .copied()
+        .filter(|s0| slopes.iter().all(|s| s.down[0] * s0.down[0] + s.down[1] * s0.down[1] > 0.9 && (s.rise_per_ft - s0.rise_per_ft).abs() < 1e-9));
+    // The curbs on it: each note names the nearest one within 4 feet.
+    let near = 4.0 * upf;
+    let box_dist = |q: &[Vec2], p: Vec2| {
+        let b = Bounds2::from_points(q.iter().copied());
+        let dx = (b.min.x - p.x).max(p.x - b.max.x).max(0.0);
+        let dy = (b.min.y - p.y).max(p.y - b.max.y).max(0.0);
+        (dx * dx + dy * dy).sqrt()
+    };
+    // The curbs: closed groups of the roof's lines inside it, and closed outlines on any layer
+    // too big for lettering (an importer can take a plain box for a letter).
+    let mut curbs: Vec<Vec<Vec2>> = face
+        .islands
+        .iter()
+        .map(|i| i.outline.clone())
+        .filter(|q| area(q) >= upf * upf && area(q) < 2_000.0 * upf * upf)
+        .take(MAX_ROOF_ITEMS)
+        .collect();
+    for (q, _) in outlines(&ents).into_iter().take(MAX_ROOF_ITEMS) {
+        let b = Bounds2::from_points(q.iter().copied());
+        let a = area(&q);
+        let same = |c: &Vec<Vec2>| inside(c, b.center()) && (area(c) - a).abs() <= 0.2 * a;
+        if b.width().min(b.height()) >= 1.5 * upf && a < 2_000.0 * upf * upf && in_face(face, b.center()) && !curbs.iter().any(same) {
+            curbs.push(q);
+        }
+    }
+    let mut named: Vec<Vec<&str>> = vec![Vec::new(); curbs.len()];
+    for (_, t, at, _) in notes.iter().filter(|(_, _, at, _)| inside(&outline, *at)) {
+        let best = (0..curbs.len())
+            .filter_map(|i| curbs.get(i).map(|c| (i, box_dist(c, *at))))
+            .filter(|(_, dist)| *dist <= near)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some(words) = best.and_then(|(i, _)| named.get_mut(i)) {
+            words.push(t.as_str());
+        }
+    }
+    let (mut crickets, mut equipment) = (Vec::new(), Vec::new());
+    for (c, words) in curbs.iter().zip(&named) {
+        let ring: Vec<[f64; 2]> = c.iter().map(|p| [p.x, p.y]).collect();
+        if let Some(t) = words.iter().find(|t| has_word(t, &["CRICKET"])) {
+            let read = feet_inches(&t.to_ascii_uppercase()).map(|i| i / 12.0);
+            let height_status = Some(if read.is_some() { ValueStatus::Read } else { ValueStatus::Default });
+            crickets.push(Cricket { level: level.into(), outline: ring, height_ft: read.unwrap_or(DEFAULT_CRICKET_FT), height_status });
+            continue;
+        }
+        let unit = words.iter().find(|t| has_word(t, &EQUIPMENT_WORDS));
+        let Some(name_note) = unit.or_else(|| words.iter().find(|t| has_word(t, &CURB_WORDS))) else { continue };
+        let name: String = if unit.is_some() {
+            name_note.split_whitespace().next().unwrap_or("EQUIP").chars().take(40).collect()
+        } else {
+            name_note.trim().chars().take(40).collect()
+        };
+        // Its height: one a note gives above the roof, else a unit's 4', else its curb's.
+        let above = words.iter().filter(|t| t.to_ascii_uppercase().contains("ABOVE")).find_map(|t| feet_inches(&t.to_ascii_uppercase()));
+        let curb = words.iter().filter(|t| has_word(t, &["CURB"])).find_map(|t| feet_inches(&t.to_ascii_uppercase()));
+        let read = above.or(if unit.is_some() { None } else { curb }).map(|i| i / 12.0);
+        let height_status = Some(if read.is_some() { ValueStatus::Read } else { ValueStatus::Default });
+        let height_ft = read.unwrap_or(if unit.is_some() { DEFAULT_EQUIPMENT_FT } else { 1.0 }).clamp(0.1, 60.0);
+        if !equipment.iter().any(|e: &Equipment| e.outline == ring) {
+            equipment.push(Equipment { name, level: level.into(), outline: ring, height_ft, height_status });
+        }
+    }
+    // Drains at their notes on the roof (the legend's are off it), at the circle beside one.
+    let centres: Vec<Vec2> = ents
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Circle(c) => Some(c.center.xy()),
+            EntityKind::Insert(i) => Some(i.insert.xy()),
+            _ => None,
+        })
+        .collect();
+    let mut drains: Vec<RoofDrain> = Vec::new();
+    for (_, _, at, _) in notes.iter().filter(|(_, t, at, _)| has_word(t, &["RD", "DRAIN"]) && in_face(face, *at)).take(MAX_ROOF_ITEMS) {
+        let c = centres.iter().copied().filter(|c| c.dist(*at) <= 3.0 * upf).min_by(|a, b| a.dist(*at).total_cmp(&b.dist(*at))).unwrap_or(*at);
+        if !drains.iter().any(|x| Vec2::new(x.at[0], x.at[1]).dist(c) < 2.0 * upf) {
+            drains.push(RoofDrain { level: level.into(), at: [c.x, c.y] });
+        }
+    }
+    let roof = Roof {
+        name: "Roof 1".into(),
+        level: level.into(),
+        outline: outline.iter().map(|p| [p.x, p.y]).collect(),
+        slope,
+        parapet_ft: parapet,
+        parapet_status,
+        parapet_from: parapet_from.map(str::to_string),
+        assembly: None,
+    };
+    Some(PlanRoof { roofs: vec![roof], crickets, equipment, drains })
+}
+
+/// A roof's slope: the pitch note inside its outline, and the arrow nearest it (downhill to
+/// its head).
+fn note_slope(q: &[Vec2], notes: &[(Handle, String, Vec2, f64)], segs: &[(Vec2, Vec2, Handle)], upf: f64) -> Option<RoofSlope> {
+    let (_, t, at, _) = notes.iter().find(|(_, t, at, _)| cadaddy_geom::point_in_polygon(q, *at) && pitch(t).is_some())?;
+    let rise = pitch(t)?;
+    let arrow = segs
+        .iter()
+        .filter(|(a, b, _)| a.dist(*b) >= 3.0 * upf && cadaddy_geom::point_in_polygon(q, (*a + *b) * 0.5))
+        .filter(|(a, b, _)| !q.iter().zip(q.iter().cycle().skip(1)).any(|(e0, e1)| seg_dist(*a, *e0, *e1) < 1e-6 && seg_dist(*b, *e0, *e1) < 1e-6))
+        .min_by(|x, y| seg_dist(*at, x.0, x.1).total_cmp(&seg_dist(*at, y.0, y.1)))?;
+    let (a, b) = (arrow.0, arrow.1);
+    // The head: the end other short strokes meet.
+    let strokes = |p: Vec2| segs.iter().filter(|(c, e, _)| c.dist(*e) < a.dist(b) * 0.3 && (c.dist(p) < 1e-6 || e.dist(p) < 1e-6)).count();
+    let (sa, sb) = (strokes(a), strokes(b));
+    let (tail, head) = if sa > sb { (b, a) } else { (a, b) };
+    let dir = head - tail;
+    let len = dir.len().max(1e-12);
+    // No head to tell the ends apart: downhill to the end drawn last.
+    let direction_status = Some(if sa == sb { ValueStatus::Default } else { ValueStatus::Read });
+    Some(RoofSlope { down: [dir.x / len, dir.y / len], rise_per_ft: rise, direction_status })
 }
 
 fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
@@ -557,6 +959,7 @@ fn slab(poly: &[Vec2], top: &dyn Fn(Vec2) -> f64, t: f64) -> Option<Mesh> {
 /// glass and materials. The counts.
 pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let upf = units(sp);
+    let (ext, notes) = with_plan_roofs(d, sp);
     for (layer, color) in [("3D-Roofs", 33), ("3D-Parapets", 8), ("3D-Equipment", 252)] {
         if d.layer(layer).is_none() {
             d.layers.push(cadaddy_doc::Layer { name: layer.into(), color: cadaddy_doc::color::Color::Index(color), ..cadaddy_doc::Layer::default() });
@@ -572,23 +975,32 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             t(1000, name.chars().take(240).collect()),
         ]
     };
-    let (mut roofs, mut parapets, mut crickets, mut equipment, mut glass) = (0, 0, 0, 0, 0);
+    // What the takeoff measures, on the element: `area:` sq ft, `lf:` feet.
+    let measured = |mut x: Vec<RawTag>, key: &str, v: f64| {
+        if v.is_finite() && v > 0.0 {
+            x.push(RawTag { code: 1000, value: format!("{key}:{}", (v * 100.0).round() / 100.0) });
+        }
+        x
+    };
+    let perimeter = |poly: &[Vec2]| poly.iter().zip(poly.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum::<f64>() / upf;
+    let (mut roofs, mut parapets, mut crickets, mut equipment, mut glass, mut drains) = (0, 0, 0, 0, 0, 0);
     let add = |d: &mut Drawing, layer: &str, xdata: Vec<RawTag>, m: Mesh| {
         !m.faces.is_empty()
             && d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok()
     };
-    for r in sp.exterior.roofs.iter().take(10_000) {
+    for r in ext.roofs.iter().take(10_000) {
         let Some(level) = sp.level(&r.level) else { continue };
         let z0 = level.elevation_ft * upf;
         let poly: Vec<Vec2> = r.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect();
         let rise = surface(r);
         let top = |p: Vec2| z0 + rise(p);
+        let plan_area = cadaddy_geom::shoelace(&poly).abs() / (upf * upf);
         if let Some(m) = slab(&poly, &top, upf)
-            && add(d, "3D-Roofs", tag("roof", &level.name, &r.name), m)
+            && add(d, "3D-Roofs", measured(tag("roof", &level.name, &r.name), "area", plan_area), m)
         {
             roofs += 1;
         }
-        if let Some(h) = r.parapet_ft {
+        if let Some(h) = r.parapet_ft.or_else(|| sp.exterior.level_parapet(&r.level)) {
             // Round the outline, 8" thick inside it, up to the parapet over the high point.
             let high = poly.iter().map(|p| top(*p)).fold(f64::NEG_INFINITY, f64::max) + h * upf;
             let t = 8.0 / 12.0 * upf;
@@ -604,19 +1016,59 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let (pa, pb) = (*a + inward * (t / 2.0), *b + inward * (t / 2.0));
                 super::wallgen::add_box(&mut m, pa, pb, t, z0, high);
             }
-            if add(d, "3D-Parapets", tag("parapet", &level.name, &r.name), m) {
+            if add(d, "3D-Parapets", measured(tag("parapet", &level.name, &r.name), "lf", perimeter(&poly)), m) {
                 parapets += 1;
+            }
+        }
+    }
+    // No explicit roof in the spec: if there is a ROOF datum, build a flat roof from the top
+    // level's building outline (the bounding rectangle of its walls).
+    if roofs == 0
+        && let Some(roof_datum) = sp.datums.iter().find(|dt| dt.kind == DatumKind::Roof)
+        && let Some((_, bb)) = top_walls(d, sp, f64::INFINITY)
+    {
+        let z0 = roof_datum.elevation_ft * upf;
+        if !bb.is_empty() {
+            let poly =
+                vec![Vec2::new(bb.min.x, bb.min.y), Vec2::new(bb.max.x, bb.min.y), Vec2::new(bb.max.x, bb.max.y), Vec2::new(bb.min.x, bb.max.y)];
+            let top_fn = |_: Vec2| z0;
+            if let Some(m) = slab(&poly, &top_fn, upf)
+                && add(d, "3D-Roofs", measured(tag("roof", &roof_datum.name, "auto"), "area", bb.width() * bb.height() / (upf * upf)), m)
+            {
+                roofs += 1;
+            }
+            // A PARAPET datum above the roof: add parapets round the outline.
+            if let Some(parapet_datum) = sp.datums.iter().find(|dt| dt.kind == DatumKind::Parapet) {
+                let parapet_z = parapet_datum.elevation_ft * upf;
+                if parapet_z > z0 {
+                    let t = 8.0 / 12.0 * upf;
+                    let mut m = super::wallgen::empty_mesh();
+                    for (a, b) in poly.iter().zip(poly.iter().cycle().skip(1)) {
+                        let len = a.dist(*b);
+                        if len <= 1e-9 {
+                            continue;
+                        }
+                        let u = (*b - *a) * (1.0 / len);
+                        // Inward for CCW (our rectangle is CCW).
+                        let inward = Vec2::new(-u.y, u.x);
+                        let (pa, pb) = (*a + inward * (t / 2.0), *b + inward * (t / 2.0));
+                        super::wallgen::add_box(&mut m, pa, pb, t, z0, parapet_z);
+                    }
+                    if add(d, "3D-Parapets", measured(tag("parapet", &roof_datum.name, "auto"), "lf", perimeter(&poly)), m) {
+                        parapets += 1;
+                    }
+                }
             }
         }
     }
     // The roof surface under a point of a level (for what stands on it).
     let roof_at = |level: &str, p: Vec2| {
-        sp.exterior.roofs.iter().filter(|r| r.level.eq_ignore_ascii_case(level)).find_map(|r| {
+        ext.roofs.iter().filter(|r| r.level.eq_ignore_ascii_case(level)).find_map(|r| {
             let poly: Vec<Vec2> = r.outline.iter().map(|q| Vec2::new(q[0], q[1])).collect();
             cadaddy_geom::point_in_polygon(&poly, p).then(|| surface(r)(p))
         })
     };
-    for c in sp.exterior.crickets.iter().take(10_000) {
+    for c in ext.crickets.iter().take(10_000) {
         let Some(level) = sp.level(&c.level) else { continue };
         let poly: Vec<Vec2> = c.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect();
         let n = poly.len().max(1) as f64;
@@ -631,7 +1083,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             crickets += 1;
         }
     }
-    for e in sp.exterior.equipment.iter().take(10_000) {
+    for e in ext.equipment.iter().take(10_000) {
         let Some(level) = sp.level(&e.level) else { continue };
         let poly: Vec<Vec2> = e.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect();
         let n = poly.len().max(1) as f64;
@@ -641,6 +1093,18 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             && add(d, "3D-Equipment", tag("equipment", &level.name, &e.name), m)
         {
             equipment += 1;
+        }
+    }
+    // Roof drains: a 1'-6" bowl standing 4" proud of the roof.
+    for r in ext.drains.iter().take(10_000) {
+        let Some(level) = sp.level(&r.level) else { continue };
+        let c = Vec2::new(r.at[0], r.at[1]);
+        let z = level.elevation_ft * upf + roof_at(&level.name, c).unwrap_or(0.0);
+        let ring: Vec<Vec2> = (0..8).map(|i| c + Vec2::new(0.75 * upf, 0.0).rotate(f64::from(i) * std::f64::consts::FRAC_PI_4)).collect();
+        if let Some(m) = super::bspec::prism(&ring, z, z + upf / 3.0)
+            && add(d, "3D-Roofs", tag("roof-drain", &level.name, "RD"), m)
+        {
+            drains += 1;
         }
     }
     // Facades: glass panels on the building's outside face, materials named on its walls.
@@ -700,7 +1164,86 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
     }
-    json!({ "roofs": roofs, "parapets": parapets, "crickets": crickets, "equipment": equipment, "facadeGlass": glass })
+    json!({ "roofs": roofs, "parapets": parapets, "crickets": crickets, "equipment": equipment, "roofDrains": drains, "facadeGlass": glass, "roofNotes": notes })
+}
+
+/// The spec's exterior with the roofs of roof levels it has none for: read off the level's
+/// roof plan ([`read_plan`]), else a flat roof over the walls of the storey under it, moved onto
+/// the roof plan's sheet (so stacking puts it over them). What was done, as notes.
+fn with_plan_roofs(d: &Drawing, sp: &BuildingSpec) -> (Exterior, Vec<String>) {
+    let upf = units(sp);
+    let mut ext = sp.exterior.clone();
+    let mut notes = Vec::new();
+    let rect = |r: [f64; 4]| Bounds2::new(Vec2::new(r[0].min(r[2]), r[1].min(r[3])), Vec2::new(r[0].max(r[2]), r[1].max(r[3])));
+    for level in sp.levels.iter().filter(|l| l.sheet.is_none() && super::wallgen::roof_level(&sp.levels, &l.name)).take(100) {
+        if ext.roofs.iter().any(|r| r.level.eq_ignore_ascii_case(&level.name)) {
+            continue;
+        }
+        if let Some(read) = level.region.and_then(|r| read_plan(d, sp, &rect(r), &level.name)) {
+            let sq_ft: f64 = read
+                .roofs
+                .iter()
+                .map(|r| cadaddy_geom::shoelace(&r.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect::<Vec<_>>()).abs())
+                .sum::<f64>()
+                / (upf * upf);
+            notes.push(format!(
+                "{}: roof read from its plan: {} sq ft{}, {} drain(s), {} curb(s) and unit(s).",
+                level.name,
+                sq_ft.round(),
+                read.roofs.iter().find_map(|r| r.parapet_ft).map_or(String::new(), |p| format!(", parapet {}", cadaddy_walk3d::feet(p))),
+                read.drains.len(),
+                read.equipment.len()
+            ));
+            ext.roofs.extend(read.roofs);
+            ext.crickets.extend(read.crickets);
+            ext.equipment.extend(read.equipment);
+            ext.drains.extend(read.drains);
+            continue;
+        }
+        let Some((under, bb)) = top_walls(d, sp, level.elevation_ft) else {
+            notes.push(format!("{}: no roof outline on its plan and no walls under it, so no roof is built.", level.name));
+            continue;
+        };
+        // As far from the roof plan's corner as the walls are from their plan's.
+        let shift = match (level.region, under.region) {
+            (Some(a), Some(b)) => rect(a).min - rect(b).min,
+            _ => Vec2::ZERO,
+        };
+        let (lo, hi) = (bb.min + shift, bb.max + shift);
+        ext.roofs.push(Roof {
+            name: "Roof 1".into(),
+            level: level.name.clone(),
+            outline: vec![[lo.x, lo.y], [hi.x, lo.y], [hi.x, hi.y], [lo.x, hi.y]],
+            slope: None,
+            parapet_ft: sp.exterior.level_parapet(&level.name),
+            parapet_status: sp.exterior.level_parapet(&level.name).map(|_| ValueStatus::Read),
+            parapet_from: sp.exterior.level_parapet(&level.name).map(|_| FROM_ELEVATION.to_string()),
+            assembly: None,
+        });
+        notes.push(format!("{}: no roof outline read on its plan; a flat roof over {}'s walls.", level.name, under.name));
+    }
+    (ext, notes)
+}
+
+/// The highest storey under `below_ft` with walls built (not a roof), and their plan extents.
+fn top_walls<'a>(d: &Drawing, sp: &'a BuildingSpec, below_ft: f64) -> Option<(&'a cadaddy_walk3d::Level, Bounds2)> {
+    let mut storeys: Vec<&cadaddy_walk3d::Level> =
+        sp.levels.iter().filter(|l| l.elevation_ft < below_ft && !super::wallgen::roof_level(&sp.levels, &l.name)).collect();
+    storeys.sort_by(|a, b| b.elevation_ft.total_cmp(&a.elevation_ft));
+    storeys.into_iter().find_map(|l| Some(built_bounds(d, &l.name, &["wall"])).filter(|b| !b.is_empty()).map(|b| (l, b)))
+}
+
+/// The plan extents of the objects built on `level` as one of `parts` (sheet coordinates).
+pub(crate) fn built_bounds(d: &Drawing, level: &str, parts: &[&str]) -> Bounds2 {
+    let mut bb = Bounds2::EMPTY;
+    for e in d.model.iter() {
+        let Some(part) = super::wallgen::made_as(e) else { continue };
+        if !parts.iter().any(|p| p.eq_ignore_ascii_case(&part)) || !super::bspec::made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(level)) {
+            continue;
+        }
+        bb = bb.union(&cadaddy_doc::entity_bounds(d, e, 0));
+    }
+    bb
 }
 
 #[cfg(test)]

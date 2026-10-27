@@ -36,6 +36,10 @@ pub const MAX_FIELDS: usize = 128;
 pub const MAX_TEXT: usize = 4_000;
 /// Room search results returned.
 pub const MAX_SEARCH: usize = 50;
+/// Wall faces with a pre-cover checklist (Q5119), and the photos and items each carries.
+pub const MAX_COVER: usize = 20_000;
+pub const MAX_COVER_PHOTOS: usize = 100;
+pub const MAX_COVER_ITEMS: usize = 32;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -54,6 +58,57 @@ pub struct FieldPackage {
     /// Notes and verified points made in the field (and ones already synced).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<FieldNote>,
+    /// Wall faces with their pre-cover checklist and in-wall photos (Q5119), from the drawing's
+    /// cover-check record: tapping a wall shows the face tapped.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cover: Vec<FieldCover>,
+}
+
+/// One wall face's pre-cover state: where the wall runs, its checklist and its photos.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FieldCover {
+    /// The cover area id (`W1-003/A`).
+    pub area: String,
+    pub wall: String,
+    /// `A` (left of a→b) or `B`.
+    pub face: String,
+    pub level: String,
+    /// The wall's centreline, building feet.
+    pub a: [f64; 2],
+    pub b: [f64; 2],
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rooms: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub fire_rating: String,
+    pub ready: bool,
+    pub checklist: Vec<FieldCheck>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub photos: Vec<FieldPhoto>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FieldCheck {
+    pub id: String,
+    pub category: String,
+    pub description: String,
+    pub done: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FieldPhoto {
+    pub id: String,
+    pub uri: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub caption: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub author: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub date: String,
+    pub elevation_ft: f64,
+    pub along_ft: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -181,6 +236,8 @@ pub enum NoteKind {
     Note,
     /// A point measured on site (a stud, a sleeve, a device as built).
     VerifiedPoint,
+    /// A photo taken where `at` is (in a wall before it is closed: filed on the wall face).
+    Photo,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -197,14 +254,22 @@ pub struct FieldNote {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub element: String,
     pub text: String,
+    /// The picture's file name or URI (photo notes).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub photo: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub author: String,
     /// When it was made, as the device wrote it (ISO 8601 when it has a clock).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub when: String,
-    /// Sent back to the drawing already.
+    /// In the drawing: set only by a package exported from it (`fieldview.export` after
+    /// `fieldview.sync`), never by handing a notes file over.
     #[serde(skip_serializing_if = "is_false")]
     pub synced: bool,
+    /// Handed over in a notes file on this device, not yet back in a package. Such notes go
+    /// in the next notes file again, in case that download was lost.
+    #[serde(skip_serializing_if = "is_false")]
+    pub sent: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -301,6 +366,7 @@ fn clean_note(n: &mut FieldNote) {
     for s in [&mut n.id, &mut n.level, &mut n.room, &mut n.element, &mut n.author, &mut n.when] {
         clip(s, 200);
     }
+    clip(&mut n.photo, 1000);
     finite3(&mut n.at);
 }
 
@@ -453,6 +519,43 @@ impl FieldPackage {
             i.elements.truncate(64);
         }
         self.notes.iter_mut().for_each(clean_note);
+        self.cover.truncate(MAX_COVER);
+        self.cover.retain(|c| c.a.iter().chain(&c.b).all(|v| v.is_finite()));
+        for c in &mut self.cover {
+            c.checklist.truncate(MAX_COVER_ITEMS);
+            c.photos.truncate(MAX_COVER_PHOTOS);
+            for p in &mut c.photos {
+                for v in [&mut p.elevation_ft, &mut p.along_ft] {
+                    if !v.is_finite() {
+                        *v = 0.0;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The wall face tapped on a level's plan at `p` (feet) within `tol` feet of the wall's
+    /// centreline: the nearest wall, and of its two faces the one on the tapped side.
+    pub fn cover_at(&self, level: &str, p: [f64; 2], tol: f64) -> Option<usize> {
+        let mut best: Option<(f64, usize)> = None;
+        for (i, c) in self.cover.iter().enumerate() {
+            if !c.level.eq_ignore_ascii_case(level) {
+                continue;
+            }
+            let (dx, dy) = (c.b[0] - c.a[0], c.b[1] - c.a[1]);
+            let len_sq = dx * dx + dy * dy;
+            if len_sq.is_nan() || len_sq < 1e-12 {
+                continue;
+            }
+            let t = (((p[0] - c.a[0]) * dx + (p[1] - c.a[1]) * dy) / len_sq).clamp(0.0, 1.0);
+            let d = ((p[0] - c.a[0] - t * dx).powi(2) + (p[1] - c.a[1] - t * dy).powi(2)).sqrt();
+            // Left of a→b is face A.
+            let side = if dx * (p[1] - c.a[1]) - dy * (p[0] - c.a[0]) >= 0.0 { "A" } else { "B" };
+            if d <= tol && c.face.eq_ignore_ascii_case(side) && best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, i));
+            }
+        }
+        best.map(|(_, i)| i)
     }
 
     pub fn level(&self, name: &str) -> Option<&FieldLevel> {
@@ -613,6 +716,13 @@ impl FieldPackage {
     pub fn mark_synced(&mut self, ids: &[String]) {
         let ids: BTreeSet<&String> = ids.iter().collect();
         self.notes.iter_mut().filter(|n| ids.contains(&n.id)).for_each(|n| n.synced = true);
+    }
+
+    /// Marks notes as handed over in a notes file; they stay unsynced until a package from the
+    /// drawing brings them back.
+    pub fn mark_sent(&mut self, ids: &[String]) {
+        let ids: BTreeSet<&String> = ids.iter().collect();
+        self.notes.iter_mut().filter(|n| ids.contains(&n.id)).for_each(|n| n.sent = true);
     }
 
     /// Adds a note made on this device, giving it the next id for `device`.
@@ -940,6 +1050,21 @@ mod tests {
     }
 
     #[test]
+    fn sent_notes_stay_unsynced_and_the_flag_is_optional_in_files() {
+        let mut p = pkg();
+        let a = p.add_note("tab1", FieldNote { level: "L2".into(), text: "a".into(), ..FieldNote::default() }).unwrap_or_default();
+        p.mark_sent(std::slice::from_ref(&a));
+        let u = p.unsynced();
+        assert_eq!(u.iter().map(|n| (n.id.as_str(), n.sent, n.synced)).collect::<Vec<_>>(), [(a.as_str(), true, false)]);
+        let text = serde_json::to_string(&FieldNote { id: "x".into(), ..FieldNote::default() }).unwrap_or_default();
+        assert!(!text.contains("sent") && !text.contains("synced"), "{text}");
+        let old: FieldNote = serde_json::from_str(r#"{"id":"FN-a-0001","text":"t","synced":true}"#).unwrap_or_default();
+        assert!(old.synced && !old.sent);
+        let back = FieldPackage::from_json(p.to_json().unwrap_or_default().as_bytes());
+        assert!(back.is_ok_and(|b| b.notes.iter().any(|n| n.id == a && n.sent && !n.synced)));
+    }
+
+    #[test]
     fn package_round_trips_and_hostile_input_is_refused_or_capped() {
         let p = pkg();
         let text = p.to_json().unwrap_or_default();
@@ -974,5 +1099,38 @@ mod tests {
         assert_eq!(trade_of("wall", "3D-Walls"), "arch");
         assert_eq!(trade_of("equipment", "E-PANEL"), "elec");
         assert_eq!(trade_of("column", ""), "struct");
+    }
+
+    /// Q5119: a tap on a wall shows the face on the tapped side, with its checklist and photos.
+    #[test]
+    fn a_wall_tap_finds_the_face_tapped() {
+        let face = |f: &str, level: &str| FieldCover {
+            area: format!("W1-001/{f}"),
+            wall: "W1-001".into(),
+            face: f.into(),
+            level: level.into(),
+            a: [0.0, 15.0],
+            b: [10.0, 15.0],
+            checklist: vec![FieldCheck { id: "c1".into(), category: "boxes".into(), done: f == "B", ..FieldCheck::default() }],
+            photos: vec![FieldPhoto { id: format!("P-{f}"), uri: format!("{f}.jpg"), ..FieldPhoto::default() }],
+            ..FieldCover::default()
+        };
+        let mut p = FieldPackage::new("Project A");
+        p.cover = vec![face("A", "L1"), face("B", "L1"), face("A", "L2")];
+        let text = p.to_json().unwrap();
+        let p = FieldPackage::from_json(text.as_bytes()).unwrap();
+        assert_eq!(p.cover_at("L1", [5.0, 15.4], 1.0), Some(0), "north: face A");
+        assert_eq!(p.cover_at("l1", [5.0, 14.6], 1.0), Some(1), "south: face B");
+        assert_eq!(p.cover[1].photos[0].id, "P-B");
+        assert_eq!(p.cover_at("L2", [5.0, 14.6], 1.0), None, "L2 has only face A");
+        assert_eq!(p.cover_at("L1", [5.0, 18.0], 1.0), None, "too far");
+        assert_eq!(p.cover_at("L1", [f64::NAN, 15.0], 1.0), None);
+        // Hostile numbers are dropped on reading.
+        let mut bad = p.clone();
+        bad.cover[0].a = [f64::NAN, 0.0];
+        bad.cover[1].photos[0].along_ft = f64::INFINITY;
+        bad.clean();
+        assert_eq!(bad.cover.len(), 2);
+        assert_eq!(bad.cover[0].photos[0].along_ft, 0.0);
     }
 }

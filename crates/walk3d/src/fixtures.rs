@@ -22,6 +22,8 @@ pub enum Lod {
     Detailed,
     /// Reduced triangles (outline extrusion).
     Simple,
+    /// 2D plan symbol (flat at z).
+    Symbol,
     /// A box (delegate to `boxed()`).
     Box,
 }
@@ -42,9 +44,14 @@ pub enum FixtureFamily {
 
     // --- Electrical devices ---
     Receptacle { width_ft: f64, height_ft: f64, depth_ft: f64 },
+    Gfci { width_ft: f64, height_ft: f64, depth_ft: f64 },
+    UsbOutlet { width_ft: f64, height_ft: f64, depth_ft: f64 },
     Switch { width_ft: f64, height_ft: f64, depth_ft: f64 },
+    Dimmer { width_ft: f64, height_ft: f64, depth_ft: f64 },
     FloorBox { width_ft: f64, depth_ft: f64, height_ft: f64 },
     DataOutlet { width_ft: f64, height_ft: f64, depth_ft: f64 },
+    TvOutlet { width_ft: f64, height_ft: f64, depth_ft: f64 },
+    ClockHanger { width_ft: f64, height_ft: f64, depth_ft: f64 },
 
     // --- Panels / disconnects ---
     Panel { width_ft: f64, height_ft: f64, depth_ft: f64 },
@@ -64,6 +71,8 @@ pub enum FixtureFamily {
     TallCabinet { width_ft: f64, depth_ft: f64, height_ft: f64 },
     Countertop { width_ft: f64, depth_ft: f64, thickness_ft: f64 },
     Backsplash { width_ft: f64, height_ft: f64, thickness_ft: f64 },
+    Drawers { width_ft: f64, depth_ft: f64, height_ft: f64 },
+    ApplianceOpening { width_ft: f64, depth_ft: f64, height_ft: f64 },
 
     // --- Pipe / conduit fittings ---
     Elbow90 { diameter_ft: f64 },
@@ -73,96 +82,168 @@ pub enum FixtureFamily {
     Coupling { diameter_ft: f64, length_ft: f64 },
 }
 
+/// Sizes extracted from device attributes (schedule/type record), preferred over mount sizes.
+/// Each field is `None` when the attribute was not present or could not be parsed.
+#[derive(Clone, Debug, Default)]
+pub struct ScheduleSize {
+    pub width_in: Option<f64>,
+    pub depth_in: Option<f64>,
+    pub height_in: Option<f64>,
+    pub aperture_in: Option<f64>,
+    pub length_in: Option<f64>,
+    pub pendant_drop_in: Option<f64>,
+    /// Whether these values came from a schedule (true) or fell back to the mount (false).
+    pub from_schedule: bool,
+}
+
+impl ScheduleSize {
+    /// Parse schedule sizes from device attributes. Recognised tags (case-insensitive):
+    /// SIZE (WxD or WxDxH, inches), APERTURE, LENGTH, WIDTH, DEPTH, HEIGHT, PENDANT_DROP, DROP.
+    pub fn from_attrs(attrs: &[(String, String)]) -> Self {
+        let find = |tag: &str| -> Option<&str> { attrs.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map(|(_, v)| v.as_str()) };
+        let parse_in = |s: &str| -> Option<f64> {
+            let s = s.trim().trim_end_matches('"').trim_end_matches("in");
+            s.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0)
+        };
+        let mut out = ScheduleSize::default();
+        // "SIZE" may be "WxD" or "WxDxH" in inches.
+        if let Some(sz) = find("SIZE") {
+            let parts: Vec<&str> = sz.split('x').collect();
+            if parts.len() >= 2 {
+                out.width_in = parse_in(parts[0]);
+                out.depth_in = parse_in(parts[1]);
+                if parts.len() >= 3 {
+                    out.height_in = parse_in(parts[2]);
+                }
+                out.from_schedule = out.width_in.is_some();
+            }
+        }
+        if let Some(v) = find("APERTURE").and_then(parse_in) {
+            out.aperture_in = Some(v);
+            out.from_schedule = true;
+        }
+        if let Some(v) = find("LENGTH").and_then(parse_in) {
+            out.length_in = Some(v);
+            out.from_schedule = true;
+        }
+        if out.width_in.is_none()
+            && let Some(v) = find("WIDTH").and_then(parse_in)
+        {
+            out.width_in = Some(v);
+            out.from_schedule = true;
+        }
+        if out.depth_in.is_none()
+            && let Some(v) = find("DEPTH").and_then(parse_in)
+        {
+            out.depth_in = Some(v);
+            out.from_schedule = true;
+        }
+        if out.height_in.is_none()
+            && let Some(v) = find("HEIGHT").and_then(parse_in)
+        {
+            out.height_in = Some(v);
+            out.from_schedule = true;
+        }
+        if let Some(v) = find("PENDANT_DROP").or_else(|| find("DROP")).and_then(parse_in) {
+            out.pendant_drop_in = Some(v);
+            out.from_schedule = true;
+        }
+        out
+    }
+
+    /// Resolve a `[width, depth, height]` in feet, using schedule values (inches→feet) where
+    /// present, falling back to the mount's `size_ft`.
+    pub fn resolve_ft(&self, mount_ft: [f64; 3]) -> [f64; 3] {
+        let or_mount = |sched: Option<f64>, idx: usize| match sched {
+            Some(v) => v / 12.0,
+            None => mount_ft[idx],
+        };
+        [or_mount(self.width_in, 0), or_mount(self.depth_in, 1), or_mount(self.height_in, 2)]
+    }
+}
+
+/// Check if a whitespace-delimited token appears in `haystack`.
+fn has_token(haystack: &str, token: &str) -> bool {
+    haystack.split(|c: char| !c.is_alphanumeric() && c != '_').any(|w| w.eq_ignore_ascii_case(token))
+}
+
 /// Classify a device type string into a fixture family with appropriate dimensions.
 ///
-/// `size_ft` is the `[width, depth, height]` from the Mount rules.
+/// `kind` is the lowercased block name; `type_tag` is the TYPE attribute value (original case);
+/// `size_ft` is the resolved `[width, depth, height]` in feet (from schedule or mount fallback);
+/// `sched` carries the parsed schedule sizes for families that need specific dimensions.
 pub fn classify(kind: &str, type_tag: &str, size_ft: [f64; 3]) -> Option<FixtureFamily> {
+    classify_with_schedule(kind, type_tag, size_ft, &ScheduleSize::default())
+}
+
+/// Full classification with schedule data.
+pub fn classify_with_schedule(kind: &str, type_tag: &str, size_ft: [f64; 3], sched: &ScheduleSize) -> Option<FixtureFamily> {
     let [w, d, h] = size_ft;
-    // Try kind first, then type_tag for more specific matches.
     let k = kind.to_ascii_lowercase();
-    let t = type_tag.to_ascii_lowercase();
+    let tag = type_tag.trim();
 
-    // Luminaires
-    if k.contains("troffer") || t.contains("troffer") || is_troffer_tag(&t) {
-        return Some(FixtureFamily::Troffer { width_ft: w, length_ft: d.max(w), depth_ft: h.min(0.5) });
-    }
-    if k.contains("downlight") || t.contains("dl") || t.contains("downlight") {
-        return Some(FixtureFamily::Downlight { aperture_ft: w.min(d), depth_ft: h });
-    }
-    if k.contains("pendant") || k.contains("linear_pendant") || t.contains("pendant") {
-        return Some(FixtureFamily::LinearPendant { length_ft: w.max(d), width_ft: w.min(d).max(0.1), drop_ft: 2.0 });
-    }
-    if k.contains("slot") || t.contains("slot") {
-        return Some(FixtureFamily::SlotLight { length_ft: w.max(d), width_ft: w.min(d).max(1.0 / 12.0) });
-    }
-    if k.contains("wall_pack") || k.contains("wallpack") || t.contains("wp") {
-        return Some(FixtureFamily::WallPack { width_ft: w, height_ft: h, depth_ft: d });
-    }
-    if k.contains("sconce") || t.contains("sconce") {
-        return Some(FixtureFamily::Sconce { width_ft: w, height_ft: h, depth_ft: d });
-    }
-    if k.contains("strip") || k.contains("wrap") || t.contains("strip") || t.contains("wrap") {
-        return Some(FixtureFamily::StripWrap { length_ft: w.max(d), width_ft: w.min(d), depth_ft: h });
-    }
-    if k.contains("exit") || t.contains("exit") || t.starts_with("es") {
-        return Some(FixtureFamily::ExitSign { width_ft: w, height_ft: h, depth_ft: d });
-    }
-    if k.contains("emergency") || t.starts_with("em") {
-        return Some(FixtureFamily::EmergencyLight { width_ft: w, height_ft: h, depth_ft: d });
-    }
+    // ---- 1. Exact device-kind matches (most specific) ----
 
-    // Ceiling-mounted light fixtures (generic — troffer is the default for ceiling lights)
-    if k == "light_fixture" || k.contains("light") {
-        // Determine shape from aspect ratio: square/rectangular = troffer, small/round = downlight
-        if w <= 0.75 && d <= 0.75 {
-            return Some(FixtureFamily::Downlight { aperture_ft: w.max(d), depth_ft: h });
-        }
-        return Some(FixtureFamily::Troffer { width_ft: w, length_ft: d.max(w), depth_ft: h.min(0.5) });
-    }
-
-    // Electrical devices
-    if k.contains("receptacle") || k.contains("outlet") || t.contains("rec") {
-        return Some(FixtureFamily::Receptacle { width_ft: w, height_ft: h, depth_ft: d });
-    }
-    if k.contains("switch") || k.contains("dimmer") || t.starts_with("s") && t.len() <= 2 {
-        return Some(FixtureFamily::Switch { width_ft: w, height_ft: h, depth_ft: d });
-    }
-    if k.contains("floor_box") || k.contains("floorbox") {
-        return Some(FixtureFamily::FloorBox { width_ft: w, depth_ft: d, height_ft: h });
-    }
-    if k.contains("data") || t.contains("data") || t.contains("tv") {
-        return Some(FixtureFamily::DataOutlet { width_ft: w, height_ft: h, depth_ft: d });
-    }
-
-    // Panels and disconnects
-    if k.contains("panel") || t.starts_with("lp") || t.starts_with("pp") || t.starts_with("dp") {
-        return Some(FixtureFamily::Panel { width_ft: w, height_ft: h, depth_ft: d });
-    }
-    if k.contains("disconnect") || t.contains("disc") {
-        return Some(FixtureFamily::Disconnect { width_ft: w, height_ft: h, depth_ft: d });
-    }
-
-    // Plumbing fixtures
-    if k.contains("water_closet") || k.contains("toilet") || t.contains("wc") {
+    // Plumbing — check before lights, because "water_closet" etc. are unambiguous.
+    if k.contains("water_closet") || k.contains("toilet") || has_token(&k, "wc") {
         return Some(FixtureFamily::WaterCloset { width_ft: w, depth_ft: d, height_ft: h });
     }
-    if k.contains("lavatory") || k.contains("lav") || t.contains("lav") {
+    if k.contains("lavatory") || has_token(&k, "lav") || k.contains("sink") {
         return Some(FixtureFamily::Lavatory { width_ft: w, depth_ft: d, height_ft: h });
     }
-    if k.contains("urinal") || t.contains("ur") {
+    if k.contains("urinal") {
         return Some(FixtureFamily::Urinal { width_ft: w, depth_ft: d, height_ft: h });
     }
-    if k.contains("shower") || t.contains("sh") && k.contains("plumb") {
+    if k.contains("shower") {
         return Some(FixtureFamily::Shower { width_ft: w, depth_ft: d, height_ft: h });
     }
-    if k.contains("mop") || t.contains("mop") {
+    if k.contains("mop") {
         return Some(FixtureFamily::MopSink { width_ft: w, depth_ft: d, height_ft: h });
     }
     if k.contains("water_heater") || k.contains("waterheater") {
         return Some(FixtureFamily::WaterHeater { diameter_ft: w.max(d), height_ft: h });
     }
 
-    // Casework
+    // Electrical — specific kinds first, generic "outlet"/"receptacle" last.
+    if k.contains("gfci") {
+        return Some(FixtureFamily::Gfci { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if k.contains("usb") {
+        return Some(FixtureFamily::UsbOutlet { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if k.contains("dimmer") {
+        return Some(FixtureFamily::Dimmer { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    // "light_switch" should be a switch, not a light; check before the generic "light" rule.
+    if k.contains("switch") {
+        return Some(FixtureFamily::Switch { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if k.contains("floor_box") || k.contains("floorbox") {
+        return Some(FixtureFamily::FloorBox { width_ft: w, depth_ft: d, height_ft: h });
+    }
+    if k.contains("data_outlet") || (k.contains("data") && k.contains("outlet")) {
+        return Some(FixtureFamily::DataOutlet { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if k.contains("tv") && (k.contains("outlet") || k.contains("jack")) {
+        return Some(FixtureFamily::TvOutlet { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if k.contains("clock_hanger") || (k.contains("clock") && k.contains("hanger")) {
+        return Some(FixtureFamily::ClockHanger { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    // Generic receptacle/outlet — after all specific outlet types.
+    if k.contains("receptacle") || k.contains("outlet") {
+        return Some(FixtureFamily::Receptacle { width_ft: w, height_ft: h, depth_ft: d });
+    }
+
+    // Panels and disconnects.
+    if k.contains("panel") {
+        return Some(FixtureFamily::Panel { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if k.contains("disconnect") {
+        return Some(FixtureFamily::Disconnect { width_ft: w, height_ft: h, depth_ft: d });
+    }
+
+    // Casework (before lights, because block names can contain "light" for lighting-related cabinets).
     if k.contains("base_cabinet") || k.contains("basecab") {
         return Some(FixtureFamily::BaseCabinet { width_ft: w, depth_ft: d, height_ft: h });
     }
@@ -178,8 +259,45 @@ pub fn classify(kind: &str, type_tag: &str, size_ft: [f64; 3]) -> Option<Fixture
     if k.contains("backsplash") {
         return Some(FixtureFamily::Backsplash { width_ft: w, height_ft: h, thickness_ft: d.min(1.0 / 12.0) });
     }
+    if k.contains("appliance") && k.contains("opening") {
+        return Some(FixtureFamily::ApplianceOpening { width_ft: w, depth_ft: d, height_ft: h });
+    }
+    if k.contains("drawer") {
+        return Some(FixtureFamily::Drawers { width_ft: w, depth_ft: d, height_ft: h });
+    }
 
-    // Pipe/conduit fittings
+    // Luminaires — specific kinds first.
+    if k.contains("troffer") {
+        return Some(FixtureFamily::Troffer { width_ft: w, length_ft: d.max(w), depth_ft: h.min(0.5) });
+    }
+    if k.contains("downlight") {
+        let ap = sched.aperture_in.map(|v| v / 12.0).unwrap_or_else(|| w.min(d));
+        return Some(FixtureFamily::Downlight { aperture_ft: ap, depth_ft: h });
+    }
+    if k.contains("pendant") || k.contains("linear_pendant") {
+        let drop = sched.pendant_drop_in.map(|v| v / 12.0).unwrap_or(2.0);
+        return Some(FixtureFamily::LinearPendant { length_ft: w.max(d), width_ft: w.min(d).max(0.1), drop_ft: drop });
+    }
+    if k.contains("slot") {
+        return Some(FixtureFamily::SlotLight { length_ft: w.max(d), width_ft: w.min(d).max(1.0 / 12.0) });
+    }
+    if k.contains("wall_pack") || k.contains("wallpack") {
+        return Some(FixtureFamily::WallPack { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if k.contains("sconce") {
+        return Some(FixtureFamily::Sconce { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if k.contains("strip") || k.contains("wrap") {
+        return Some(FixtureFamily::StripWrap { length_ft: w.max(d), width_ft: w.min(d), depth_ft: h });
+    }
+    if k.contains("exit") {
+        return Some(FixtureFamily::ExitSign { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if k.contains("emergency") {
+        return Some(FixtureFamily::EmergencyLight { width_ft: w, height_ft: h, depth_ft: d });
+    }
+
+    // Pipe/conduit fittings.
     if k.contains("elbow_90") || k.contains("elbow90") {
         return Some(FixtureFamily::Elbow90 { diameter_ft: w.max(d) });
     }
@@ -196,14 +314,135 @@ pub fn classify(kind: &str, type_tag: &str, size_ft: [f64; 3]) -> Option<Fixture
         return Some(FixtureFamily::Coupling { diameter_ft: w.max(d), length_ft: h });
     }
 
+    // ---- 2. Generic "light_fixture" or "light" in the kind: choose by size ----
+    if k == "light_fixture" || has_token(&k, "light") {
+        // Whole-token tag tests (case-insensitive on the original tag).
+        if is_troffer_tag(tag) {
+            return Some(FixtureFamily::Troffer { width_ft: w, length_ft: d.max(w), depth_ft: h.min(0.5) });
+        }
+        if has_token(tag, "DL") || tag.eq_ignore_ascii_case("downlight") {
+            let ap = sched.aperture_in.map(|v| v / 12.0).unwrap_or_else(|| w.min(d));
+            return Some(FixtureFamily::Downlight { aperture_ft: ap, depth_ft: h });
+        }
+        if has_token(tag, "LP") || tag.to_ascii_lowercase().contains("pendant") {
+            let drop = sched.pendant_drop_in.map(|v| v / 12.0).unwrap_or(2.0);
+            return Some(FixtureFamily::LinearPendant { length_ft: w.max(d), width_ft: w.min(d).max(0.1), drop_ft: drop });
+        }
+        if has_token(tag, "WP") || tag.to_ascii_lowercase().contains("wallpack") {
+            return Some(FixtureFamily::WallPack { width_ft: w, height_ft: h, depth_ft: d });
+        }
+        if tag.to_ascii_lowercase().contains("exit") || has_token(tag, "ES") {
+            return Some(FixtureFamily::ExitSign { width_ft: w, height_ft: h, depth_ft: d });
+        }
+        if tag.to_ascii_lowercase().contains("emergency") || has_token(tag, "EM") {
+            return Some(FixtureFamily::EmergencyLight { width_ft: w, height_ft: h, depth_ft: d });
+        }
+        if tag.to_ascii_lowercase().contains("sconce") {
+            return Some(FixtureFamily::Sconce { width_ft: w, height_ft: h, depth_ft: d });
+        }
+        if tag.to_ascii_lowercase().contains("strip") || tag.to_ascii_lowercase().contains("wrap") {
+            return Some(FixtureFamily::StripWrap { length_ft: w.max(d), width_ft: w.min(d), depth_ft: h });
+        }
+        if tag.to_ascii_lowercase().contains("slot") {
+            return Some(FixtureFamily::SlotLight { length_ft: w.max(d), width_ft: w.min(d).max(1.0 / 12.0) });
+        }
+        // Fallback by size: small = downlight, else troffer.
+        if w <= 0.75 && d <= 0.75 {
+            let ap = sched.aperture_in.map(|v| v / 12.0).unwrap_or_else(|| w.max(d));
+            return Some(FixtureFamily::Downlight { aperture_ft: ap, depth_ft: h });
+        }
+        return Some(FixtureFamily::Troffer { width_ft: w, length_ft: d.max(w), depth_ft: h.min(0.5) });
+    }
+
+    // ---- 3. Tag-only classification (no kind matched): whole-token matching ----
+    if has_token(tag, "WC") {
+        return Some(FixtureFamily::WaterCloset { width_ft: w, depth_ft: d, height_ft: h });
+    }
+    if has_token(tag, "LAV") {
+        return Some(FixtureFamily::Lavatory { width_ft: w, depth_ft: d, height_ft: h });
+    }
+    if has_token(tag, "REC") || has_token(tag, "RECEP") {
+        return Some(FixtureFamily::Receptacle { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if has_token(tag, "GFCI") || has_token(tag, "GFI") {
+        return Some(FixtureFamily::Gfci { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if has_token(tag, "USB") {
+        return Some(FixtureFamily::UsbOutlet { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if has_token(tag, "DIM") || has_token(tag, "DIMMER") {
+        return Some(FixtureFamily::Dimmer { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if has_token(tag, "TV") {
+        return Some(FixtureFamily::TvOutlet { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if tag.to_ascii_uppercase().starts_with("LP-") || tag.to_ascii_uppercase().starts_with("PP-") || tag.to_ascii_uppercase().starts_with("DP-") {
+        return Some(FixtureFamily::Panel { width_ft: w, height_ft: h, depth_ft: d });
+    }
+    if has_token(tag, "DISC") || has_token(tag, "DISCONNECT") {
+        return Some(FixtureFamily::Disconnect { width_ft: w, height_ft: h, depth_ft: d });
+    }
+
     None
+}
+
+/// The IFC entity class for a fixture family.
+pub fn ifc_class(family: &FixtureFamily) -> &'static str {
+    match family {
+        FixtureFamily::Troffer { .. }
+        | FixtureFamily::Downlight { .. }
+        | FixtureFamily::LinearPendant { .. }
+        | FixtureFamily::SlotLight { .. }
+        | FixtureFamily::WallPack { .. }
+        | FixtureFamily::Sconce { .. }
+        | FixtureFamily::StripWrap { .. }
+        | FixtureFamily::ExitSign { .. }
+        | FixtureFamily::EmergencyLight { .. } => "IfcLightFixture",
+
+        FixtureFamily::Receptacle { .. }
+        | FixtureFamily::Gfci { .. }
+        | FixtureFamily::UsbOutlet { .. }
+        | FixtureFamily::DataOutlet { .. }
+        | FixtureFamily::TvOutlet { .. }
+        | FixtureFamily::FloorBox { .. }
+        | FixtureFamily::ClockHanger { .. } => "IfcOutlet",
+
+        FixtureFamily::Switch { .. } | FixtureFamily::Dimmer { .. } => "IfcSwitchingDevice",
+
+        FixtureFamily::Panel { .. } | FixtureFamily::Disconnect { .. } => "IfcElectricDistributionBoard",
+
+        FixtureFamily::WaterCloset { .. } | FixtureFamily::Lavatory { .. } | FixtureFamily::Urinal { .. } | FixtureFamily::MopSink { .. } => {
+            "IfcSanitaryTerminal"
+        }
+
+        FixtureFamily::Shower { .. } => "IfcSanitaryTerminal",
+        FixtureFamily::WaterHeater { .. } => "IfcBoiler",
+
+        FixtureFamily::BaseCabinet { .. }
+        | FixtureFamily::WallCabinet { .. }
+        | FixtureFamily::TallCabinet { .. }
+        | FixtureFamily::Countertop { .. }
+        | FixtureFamily::Backsplash { .. }
+        | FixtureFamily::Drawers { .. }
+        | FixtureFamily::ApplianceOpening { .. } => "IfcFurniture",
+
+        FixtureFamily::Elbow90 { .. }
+        | FixtureFamily::Elbow45 { .. }
+        | FixtureFamily::Tee { .. }
+        | FixtureFamily::Reducer { .. }
+        | FixtureFamily::Coupling { .. } => "IfcPipeFitting",
+    }
 }
 
 /// Generate fixture geometry into the scene. Returns `true` if geometry was produced, `false`
 /// if the caller should fall back to `boxed()`.
-pub fn generate(s: &mut Scene, family: &FixtureFamily, centre: V3, dir: Vec2, col: Rgb, owner: Owner, lod: Lod) -> bool {
+pub fn generate(s: &mut Scene, family: &FixtureFamily, centre: V3, dir: Vec2, normal: Vec2, col: Rgb, owner: Owner, lod: Lod) -> bool {
     if lod == Lod::Box {
         return false; // Caller uses boxed()
+    }
+    // For plan symbol LOD, draw a 2D plan outline.
+    if lod == Lod::Symbol {
+        return plan_symbol(s, family, centre, dir, col, owner);
     }
     match family {
         // --- Luminaires ---
@@ -222,17 +461,24 @@ pub fn generate(s: &mut Scene, family: &FixtureFamily, centre: V3, dir: Vec2, co
         }
 
         // --- Electrical devices ---
-        FixtureFamily::Receptacle { width_ft, height_ft, depth_ft } => receptacle(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
-        FixtureFamily::Switch { width_ft, height_ft, depth_ft } => switch_device(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
-        FixtureFamily::FloorBox { width_ft, depth_ft, height_ft } => floor_box(s, centre, *width_ft, *depth_ft, *height_ft, col, owner, lod),
-        FixtureFamily::DataOutlet { width_ft, height_ft, depth_ft } => {
-            // Same visual as receptacle
+        FixtureFamily::Receptacle { width_ft, height_ft, depth_ft }
+        | FixtureFamily::Gfci { width_ft, height_ft, depth_ft }
+        | FixtureFamily::UsbOutlet { width_ft, height_ft, depth_ft }
+        | FixtureFamily::TvOutlet { width_ft, height_ft, depth_ft }
+        | FixtureFamily::ClockHanger { width_ft, height_ft, depth_ft } => {
             receptacle(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
         }
+        FixtureFamily::Switch { width_ft, height_ft, depth_ft } | FixtureFamily::Dimmer { width_ft, height_ft, depth_ft } => {
+            switch_device(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod)
+        }
+        FixtureFamily::FloorBox { width_ft, depth_ft, height_ft } => floor_box(s, centre, *width_ft, *depth_ft, *height_ft, col, owner, lod),
+        FixtureFamily::DataOutlet { width_ft, height_ft, depth_ft } => receptacle(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
 
         // --- Panels / disconnects ---
-        FixtureFamily::Panel { width_ft, height_ft, depth_ft } => panel(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
-        FixtureFamily::Disconnect { width_ft, height_ft, depth_ft } => disconnect(s, centre, dir, *width_ft, *height_ft, *depth_ft, col, owner, lod),
+        FixtureFamily::Panel { width_ft, height_ft, depth_ft } => panel(s, centre, normal, *width_ft, *height_ft, *depth_ft, col, owner, lod),
+        FixtureFamily::Disconnect { width_ft, height_ft, depth_ft } => {
+            disconnect(s, centre, normal, *width_ft, *height_ft, *depth_ft, col, owner, lod)
+        }
 
         // --- Plumbing ---
         FixtureFamily::WaterCloset { width_ft, depth_ft, height_ft } => {
@@ -260,6 +506,11 @@ pub fn generate(s: &mut Scene, family: &FixtureFamily, centre: V3, dir: Vec2, co
         FixtureFamily::Backsplash { width_ft, height_ft, thickness_ft } => {
             backsplash(s, centre, dir, *width_ft, *height_ft, *thickness_ft, col, owner, lod)
         }
+        FixtureFamily::ApplianceOpening { width_ft, depth_ft, height_ft } => {
+            // Thin-walled box outline (like a base cabinet without door grooves).
+            base_cabinet(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod)
+        }
+        FixtureFamily::Drawers { width_ft, depth_ft, height_ft } => base_cabinet(s, centre, dir, *width_ft, *depth_ft, *height_ft, col, owner, lod),
 
         // --- Pipe/conduit fittings ---
         FixtureFamily::Elbow90 { diameter_ft } => elbow(s, centre, dir, *diameter_ft, 90.0, col, owner, lod),
@@ -271,16 +522,134 @@ pub fn generate(s: &mut Scene, family: &FixtureFamily, centre: V3, dir: Vec2, co
     true
 }
 
+/// Bounding box `[width, depth]` of a family's plan symbol, feet. Used for extents tests.
+pub fn plan_extents(family: &FixtureFamily) -> [f64; 2] {
+    match family {
+        FixtureFamily::Troffer { width_ft, length_ft, .. } => [*width_ft, *length_ft],
+        FixtureFamily::Downlight { aperture_ft, .. } => [*aperture_ft, *aperture_ft],
+        FixtureFamily::LinearPendant { length_ft, width_ft, .. } => [*length_ft, *width_ft],
+        FixtureFamily::SlotLight { length_ft, width_ft, .. } => [*length_ft, *width_ft],
+        FixtureFamily::WallPack { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::Sconce { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::StripWrap { length_ft, width_ft, .. } => [*length_ft, *width_ft],
+        FixtureFamily::ExitSign { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::EmergencyLight { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::Receptacle { width_ft, depth_ft, .. }
+        | FixtureFamily::Gfci { width_ft, depth_ft, .. }
+        | FixtureFamily::UsbOutlet { width_ft, depth_ft, .. }
+        | FixtureFamily::TvOutlet { width_ft, depth_ft, .. }
+        | FixtureFamily::ClockHanger { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::Switch { width_ft, depth_ft, .. } | FixtureFamily::Dimmer { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::FloorBox { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::DataOutlet { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::Panel { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::Disconnect { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::WaterCloset { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::Lavatory { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::Urinal { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::Shower { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::MopSink { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::WaterHeater { diameter_ft, .. } => [*diameter_ft, *diameter_ft],
+        FixtureFamily::BaseCabinet { width_ft, depth_ft, .. }
+        | FixtureFamily::WallCabinet { width_ft, depth_ft, .. }
+        | FixtureFamily::TallCabinet { width_ft, depth_ft, .. }
+        | FixtureFamily::Drawers { width_ft, depth_ft, .. }
+        | FixtureFamily::ApplianceOpening { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::Countertop { width_ft, depth_ft, .. } => [*width_ft, *depth_ft],
+        FixtureFamily::Backsplash { width_ft, .. } => [*width_ft, 0.0],
+        FixtureFamily::Elbow90 { diameter_ft } | FixtureFamily::Elbow45 { diameter_ft } => [*diameter_ft, *diameter_ft],
+        FixtureFamily::Tee { diameter_ft } => [*diameter_ft, *diameter_ft],
+        FixtureFamily::Reducer { large_ft, length_ft, .. } => [*large_ft, *length_ft],
+        FixtureFamily::Coupling { diameter_ft, length_ft } => [*diameter_ft, *length_ft],
+    }
+}
+
+/// Draw a 2D plan symbol for the family (flat at z=centre.z). Returns true.
+fn plan_symbol(s: &mut Scene, family: &FixtureFamily, c: V3, dir: Vec2, col: Rgb, owner: Owner) -> bool {
+    let tw = local_frame(c, dir);
+    let [ew, ed] = plan_extents(family);
+    let hw = ew / 2.0;
+    let hd = ed / 2.0;
+
+    match family {
+        FixtureFamily::Downlight { aperture_ft, .. } => {
+            let n = 6;
+            let r = aperture_ft / 2.0;
+            let pts: Vec<V3> = (0..n)
+                .map(|i| {
+                    let a = 2.0 * PI * (i as f64) / (n as f64);
+                    tw(a.cos() * r, a.sin() * r, 0.0)
+                })
+                .collect();
+            disc(s, c, &pts, col, owner);
+        }
+        FixtureFamily::WaterHeater { diameter_ft, .. } => {
+            let n = 6;
+            let r = diameter_ft / 2.0;
+            let pts: Vec<V3> = (0..n)
+                .map(|i| {
+                    let a = 2.0 * PI * (i as f64) / (n as f64);
+                    tw(a.cos() * r, a.sin() * r, 0.0)
+                })
+                .collect();
+            disc(s, c, &pts, col, owner);
+        }
+        FixtureFamily::FloorBox { width_ft, depth_ft, .. } => {
+            let n = 6;
+            let r = width_ft.max(*depth_ft) / 2.0;
+            let pts: Vec<V3> = (0..n)
+                .map(|i| {
+                    let a = 2.0 * PI * (i as f64) / (n as f64);
+                    tw(a.cos() * r, a.sin() * r, 0.0)
+                })
+                .collect();
+            disc(s, c, &pts, col, owner);
+        }
+        FixtureFamily::WaterCloset { width_ft, depth_ft, .. } => {
+            let n = 8; // Keep fewer tris than Simple's boxed()
+            let rx = width_ft / 2.0;
+            let ry = depth_ft / 2.0;
+            let pts: Vec<V3> = (0..n)
+                .map(|i| {
+                    let a = 2.0 * PI * (i as f64) / (n as f64);
+                    tw(a.cos() * rx, a.sin() * ry, 0.0)
+                })
+                .collect();
+            disc(s, c, &pts, col, owner);
+        }
+        FixtureFamily::Lavatory { width_ft, depth_ft, .. } => {
+            let n = 8;
+            let rx = width_ft / 2.0;
+            let ry = depth_ft / 2.0;
+            let pts: Vec<V3> = (0..n)
+                .map(|i| {
+                    let a = 2.0 * PI * (i as f64) / (n as f64);
+                    tw(a.cos() * rx, a.sin() * ry, 0.0)
+                })
+                .collect();
+            disc(s, c, &pts, col, owner);
+        }
+        _ => {
+            // Default: rectangle in plan.
+            quad(s, [tw(-hw, -hd, 0.0), tw(hw, -hd, 0.0), tw(hw, hd, 0.0), tw(-hw, hd, 0.0)], col, owner);
+        }
+    }
+    true
+}
+
 /// Is this a troffer-style type tag? Common tags: A, B, C (schedule), 2x2, 2x4, 1x4.
+/// The tag is in its ORIGINAL case (not lowercased).
 fn is_troffer_tag(tag: &str) -> bool {
-    // Single-letter schedule tags A–F are usually troffers
-    if tag.len() == 1 && tag.as_bytes().first().is_some_and(|b| b.is_ascii_uppercase()) {
+    let tag = tag.trim();
+    // Single-letter schedule tags A–F
+    if tag.len() == 1 && tag.as_bytes().first().is_some_and(|b| b.is_ascii_alphabetic()) {
         return true;
     }
-    // NxM patterns like 2x4, 2x2, 1x4
-    let parts: Vec<&str> = tag.split('x').collect();
+    // NxM patterns like 2x4, 2x2, 1x4 (case-insensitive x)
+    let lower = tag.to_ascii_lowercase();
+    let parts: Vec<&str> = lower.split('x').collect();
     if parts.len() == 2 {
-        return parts.iter().all(|p| p.parse::<f64>().is_ok());
+        return parts.iter().all(|p| p.trim().parse::<f64>().is_ok());
     }
     false
 }
@@ -302,7 +671,7 @@ fn local_frame(centre: V3, dir: Vec2) -> impl Fn(f64, f64, f64) -> V3 {
 fn circle_segs(lod: Lod) -> usize {
     match lod {
         Lod::Detailed => 24,
-        Lod::Simple => 12,
+        Lod::Simple | Lod::Symbol => 12,
         Lod::Box => 6,
     }
 }
@@ -329,21 +698,14 @@ fn cylinder_side(s: &mut Scene, bottom: &[V3], top: &[V3], col: Rgb, owner: Owne
     }
 }
 
-/// Emit a flat fan (disc) from the ring, with given normal direction sign.
-fn disc(s: &mut Scene, centre: V3, pts: &[V3], col: Rgb, owner: Owner) {
+/// Emit a flat fan (disc) from the ring.
+fn disc(s: &mut Scene, _centre: V3, pts: &[V3], col: Rgb, owner: Owner) {
     let n = pts.len();
     if n < 3 {
         return;
     }
     for i in 1..n - 1 {
-        let a = pts[0];
-        let b = pts[i];
-        let c = pts[i + 1];
-        tri(s, a, b, c, col, owner);
-    }
-    // Close the last triangle
-    if n > 2 {
-        let _ = centre; // centre used for normal calculation if needed
+        tri(s, pts[0], pts[i], pts[i + 1], col, owner);
     }
 }
 
@@ -663,22 +1025,14 @@ fn emergency_light(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, dep
 /// Receptacle: a wall plate with two outlet slots.
 #[allow(clippy::too_many_arguments)]
 fn receptacle(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, depth: f64, col: Rgb, owner: Owner, lod: Lod) {
+    // Base box for all LODs.
+    boxed(s, c, dir, width, depth, height, col, owner);
     if lod == Lod::Simple {
-        boxed(s, c, dir, width, depth, height, col, owner);
         return;
     }
     let tw = local_frame(c, dir);
     let hw = width / 2.0;
     let hh = height / 2.0;
-
-    // Cover plate (flat, slightly raised from wall)
-    let plate_col = Rgb(235, 230, 220); // Off-white plate
-    quad(s, [tw(-hw, depth * 0.1, -hh), tw(hw, depth * 0.1, -hh), tw(hw, depth * 0.1, hh), tw(-hw, depth * 0.1, hh)], plate_col, owner);
-
-    // Yoke/body behind the plate
-    let _body = Rgb(200, 200, 200);
-    let _iw = hw * 0.6;
-    let _ih = hh * 0.3;
     // Two receptacle openings (dark slots)
     let slot_col = Rgb(30, 30, 30);
     for z_off in [-hh * 0.35, hh * 0.35] {
@@ -718,26 +1072,21 @@ fn receptacle(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, depth: f
 /// Switch: a wall plate with a toggle.
 #[allow(clippy::too_many_arguments)]
 fn switch_device(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, depth: f64, col: Rgb, owner: Owner, lod: Lod) {
+    // Simple: just the plate box.
+    boxed(s, c, dir, width, depth, height, col, owner);
     if lod == Lod::Simple {
-        boxed(s, c, dir, width, depth, height, col, owner);
         return;
     }
+    // Detailed: add toggle on top of the box.
     let tw = local_frame(c, dir);
     let hw = width / 2.0;
     let hh = height / 2.0;
-
-    // Cover plate
-    let plate_col = Rgb(235, 230, 220);
-    quad(s, [tw(-hw, depth * 0.1, -hh), tw(hw, depth * 0.1, -hh), tw(hw, depth * 0.1, hh), tw(-hw, depth * 0.1, hh)], plate_col, owner);
-
-    // Toggle switch (raised rectangular nub)
     let toggle_col = Rgb(210, 205, 195);
     let tw2 = hw * 0.25;
     let th = hh * 0.4;
     let ty = depth * 0.18;
-    quad(s, [tw(-tw2, ty, -th), tw(tw2, ty, -th), tw(tw2, ty, th), tw(-tw2, ty, th)], toggle_col, owner);
-    // Toggle sides
     let tb = depth * 0.1;
+    quad(s, [tw(-tw2, ty, -th), tw(tw2, ty, -th), tw(tw2, ty, th), tw(-tw2, ty, th)], toggle_col, owner);
     quad(s, [tw(-tw2, tb, -th), tw(-tw2, ty, -th), tw(-tw2, ty, th), tw(-tw2, tb, th)], darken(toggle_col, 0.9), owner);
     quad(s, [tw(tw2, ty, -th), tw(tw2, tb, -th), tw(tw2, tb, th), tw(tw2, ty, th)], darken(toggle_col, 0.9), owner);
 }
@@ -815,7 +1164,7 @@ fn disconnect(s: &mut Scene, c: V3, dir: Vec2, width: f64, height: f64, depth: f
 // PLUMBING FIXTURES
 // ========================================================================================
 
-/// Water closet (toilet): bowl + tank profile.
+/// Water closet (toilet): bowl + tank profile. All geometry in local frame so it rotates with `dir`.
 #[allow(clippy::too_many_arguments)]
 fn water_closet(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height: f64, _col: Rgb, owner: Owner, lod: Lod) {
     let tw = local_frame(c, dir);
@@ -827,29 +1176,31 @@ fn water_closet(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height:
         return;
     }
 
-    // Bowl: an elongated oval footprint
+    // Bowl: an elongated oval footprint, local coords
     let bowl_depth = depth * 0.65;
     let bowl_h = height * 0.55;
     let n = circle_segs(lod);
-
-    // Bowl — elliptical cylinder
-    let bowl_c = tw(0.0, -depth / 2.0 + bowl_depth / 2.0, -height / 2.0 + bowl_h / 2.0);
     let bowl_rx = hw;
     let bowl_ry = bowl_depth / 2.0;
+    // Bowl centre offset in local frame: front half of fixture, lower half
+    let bowl_ox = 0.0;
+    let bowl_oy = -depth / 2.0 + bowl_depth / 2.0;
+    let bowl_oz = -height / 2.0 + bowl_h / 2.0;
+
     let bot_ring: Vec<V3> = (0..n)
         .map(|i| {
             let a = 2.0 * PI * (i as f64) / (n as f64);
-            bowl_c + v3(a.cos() * bowl_rx, a.sin() * bowl_ry, -bowl_h / 2.0)
+            tw(bowl_ox + a.cos() * bowl_rx, bowl_oy + a.sin() * bowl_ry, bowl_oz - bowl_h / 2.0)
         })
         .collect();
     let top_ring: Vec<V3> = (0..n)
         .map(|i| {
             let a = 2.0 * PI * (i as f64) / (n as f64);
-            bowl_c + v3(a.cos() * bowl_rx, a.sin() * bowl_ry, bowl_h / 2.0)
+            tw(bowl_ox + a.cos() * bowl_rx, bowl_oy + a.sin() * bowl_ry, bowl_oz + bowl_h / 2.0)
         })
         .collect();
     cylinder_side(s, &bot_ring, &top_ring, porcelain, owner);
-    disc(s, bowl_c + v3(0.0, 0.0, bowl_h / 2.0), &top_ring, porcelain, owner);
+    disc(s, tw(bowl_ox, bowl_oy, bowl_oz + bowl_h / 2.0), &top_ring, porcelain, owner);
 
     // Tank: a rectangular block behind the bowl
     let tank_depth = depth * 0.3;
@@ -865,17 +1216,16 @@ fn water_closet(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height:
     let seat_ring: Vec<V3> = (0..n)
         .map(|i| {
             let a = 2.0 * PI * (i as f64) / (n as f64);
-            bowl_c + v3(a.cos() * seat_w, a.sin() * seat_d, bowl_h / 2.0 + 0.02)
+            tw(bowl_ox + a.cos() * seat_w, bowl_oy + a.sin() * seat_d, bowl_oz + bowl_h / 2.0 + 0.02)
         })
         .collect();
-    // Thin annulus for seat
     for i in 0..n {
         let j = (i + 1) % n;
         quad(s, [top_ring[i], top_ring[j], seat_ring[j], seat_ring[i]], seat_col, owner);
     }
 }
 
-/// Lavatory (bathroom sink): a basin shape.
+/// Lavatory (bathroom sink): a basin shape. All geometry in local frame so it rotates with `dir`.
 #[allow(clippy::too_many_arguments)]
 fn lavatory(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height: f64, _col: Rgb, owner: Owner, lod: Lod) {
     let porcelain = Rgb(240, 240, 235);
@@ -885,57 +1235,48 @@ fn lavatory(s: &mut Scene, c: V3, dir: Vec2, width: f64, depth: f64, height: f64
         return;
     }
 
-    let _tw = local_frame(c, dir);
+    let tw = local_frame(c, dir);
     let hw = width / 2.0;
     let hd = depth / 2.0;
     let n = circle_segs(lod);
-
-    // Basin: an oval top rim + tapered bowl inside
     let rim_z = height / 2.0;
     let bot_z = -height / 2.0;
     let bowl_rx = hw * 0.85;
     let bowl_ry = hd * 0.85;
 
-    // Outer rim
     let outer: Vec<V3> = (0..n)
         .map(|i| {
             let a = 2.0 * PI * (i as f64) / (n as f64);
-            c + v3(a.cos() * hw, a.sin() * hd, rim_z)
+            tw(a.cos() * hw, a.sin() * hd, rim_z)
         })
         .collect();
-    // Inner rim (bowl opening)
     let inner: Vec<V3> = (0..n)
         .map(|i| {
             let a = 2.0 * PI * (i as f64) / (n as f64);
-            c + v3(a.cos() * bowl_rx, a.sin() * bowl_ry, rim_z)
+            tw(a.cos() * bowl_rx, a.sin() * bowl_ry, rim_z)
         })
         .collect();
-    // Bowl bottom (smaller)
     let drain_r = 1.0 / 12.0;
     let bottom: Vec<V3> = (0..n)
         .map(|i| {
             let a = 2.0 * PI * (i as f64) / (n as f64);
-            c + v3(a.cos() * drain_r, a.sin() * drain_r, bot_z)
+            tw(a.cos() * drain_r, a.sin() * drain_r, bot_z)
         })
         .collect();
 
-    // Rim annulus
     for i in 0..n {
         let j = (i + 1) % n;
         quad(s, [outer[i], outer[j], inner[j], inner[i]], porcelain, owner);
     }
-    // Outer sides (from rim down)
     let outer_bot: Vec<V3> = (0..n)
         .map(|i| {
             let a = 2.0 * PI * (i as f64) / (n as f64);
-            c + v3(a.cos() * hw, a.sin() * hd, bot_z)
+            tw(a.cos() * hw, a.sin() * hd, bot_z)
         })
         .collect();
     cylinder_side(s, &outer_bot, &outer, porcelain, owner);
-    // Inner bowl surface
     cylinder_side(s, &bottom, &inner, Rgb(230, 230, 225), owner);
-    // Bottom disc
-    disc(s, c + v3(0.0, 0.0, bot_z), &bottom, Rgb(100, 100, 100), owner); // Dark drain
+    disc(s, tw(0.0, 0.0, bot_z), &bottom, Rgb(100, 100, 100), owner);
 }
 
 /// Urinal: a wall-hung porcelain fixture.
@@ -1251,12 +1592,16 @@ fn coupling(s: &mut Scene, c: V3, dir: Vec2, diameter: f64, length: f64, col: Rg
 // Colour helpers
 // ========================================================================================
 
-fn darken(c: Rgb, factor: f64) -> Rgb {
+fn scale_color(c: Rgb, factor: f64) -> Rgb {
     Rgb((c.0 as f64 * factor).clamp(0.0, 255.0) as u8, (c.1 as f64 * factor).clamp(0.0, 255.0) as u8, (c.2 as f64 * factor).clamp(0.0, 255.0) as u8)
 }
 
+fn darken(c: Rgb, factor: f64) -> Rgb {
+    scale_color(c, factor)
+}
+
 fn brighten(c: Rgb, factor: f64) -> Rgb {
-    Rgb((c.0 as f64 * factor).clamp(0.0, 255.0) as u8, (c.1 as f64 * factor).clamp(0.0, 255.0) as u8, (c.2 as f64 * factor).clamp(0.0, 255.0) as u8)
+    scale_color(c, factor)
 }
 
 #[cfg(test)]
@@ -1267,117 +1612,312 @@ mod tests {
     fn empty_scene() -> Scene {
         Scene::default()
     }
+    const DIR: Vec2 = Vec2 { x: 1.0, y: 0.0 };
+    const NRM: Vec2 = Vec2 { x: 0.0, y: 1.0 };
+    const COL: Rgb = Rgb(200, 200, 200);
 
-    #[test]
-    fn classify_troffer_by_kind() {
-        let f = classify("light_fixture", "A", [2.0, 4.0, 0.33]);
-        assert!(matches!(f, Some(FixtureFamily::Troffer { .. })));
-    }
-
-    #[test]
-    fn classify_downlight_by_size() {
-        let f = classify("light_fixture", "DL", [0.5, 0.5, 0.33]);
-        assert!(matches!(f, Some(FixtureFamily::Downlight { .. })));
-    }
-
-    #[test]
-    fn classify_receptacle() {
-        let f = classify("receptacle", "REC", [0.3, 0.15, 0.45]);
-        assert!(matches!(f, Some(FixtureFamily::Receptacle { .. })));
-    }
-
-    #[test]
-    fn classify_switch() {
-        let f = classify("switch", "S", [0.25, 0.15, 0.42]);
-        assert!(matches!(f, Some(FixtureFamily::Switch { .. })));
-    }
-
-    #[test]
-    fn classify_panel() {
-        let f = classify("panel", "LP-1", [1.5, 0.5, 3.0]);
-        assert!(matches!(f, Some(FixtureFamily::Panel { .. })));
-    }
-
-    #[test]
-    fn classify_water_closet() {
-        let f = classify("water_closet", "WC-1", [1.5, 2.3, 1.25]);
-        assert!(matches!(f, Some(FixtureFamily::WaterCloset { .. })));
-    }
-
-    #[test]
-    fn classify_lavatory() {
-        let f = classify("lavatory", "LAV-1", [1.67, 1.75, 0.67]);
-        assert!(matches!(f, Some(FixtureFamily::Lavatory { .. })));
-    }
-
-    #[test]
-    fn classify_unknown_returns_none() {
-        let f = classify("unknown_thing", "X99", [1.0, 1.0, 1.0]);
-        assert!(f.is_none());
-    }
-
-    #[test]
-    fn troffer_generates_triangles() {
+    fn make(family: &FixtureFamily, lod: Lod) -> (bool, usize) {
         let mut s = empty_scene();
         s.part = Part::Device;
+        let ok = generate(&mut s, family, v3(5.0, 5.0, 5.0), DIR, NRM, COL, Owner::default(), lod);
+        (ok, s.tris.len())
+    }
+
+    // ---- MUST 1: Classification table test (>= 20 cases including negatives) ----
+
+    #[test]
+    fn classify_table_20_pairs() {
+        let sz = [1.0, 1.0, 1.0];
+        let cases: Vec<(&str, &str, Option<&str>)> = vec![
+            // (kind, tag, expected family name or None)
+            ("receptacle", "WP", Some("Receptacle")),   // WP tag on a receptacle kind stays Receptacle
+            ("light_fixture", "A", Some("Troffer")),    // schedule tag A → troffer
+            ("light_fixture", "DL", Some("Downlight")), // DL tag → downlight (small)
+            ("light_fixture", "2x4", Some("Troffer")),  // NxM → troffer
+            ("light_fixture", "pendant", Some("LinearPendant")), // tag pendant
+            ("switch", "", Some("Switch")),             // kind match
+            ("light_switch", "", Some("Switch")),       // "light_switch" → Switch, not light
+            ("unknown", "SD", None),                    // "SD" alone is NOT a switch
+            ("unknown", "SM", None),                    // "SM" alone is NOT a switch
+            ("gfci", "", Some("Gfci")),                 // GFCI by kind
+            ("unknown", "GFCI", Some("Gfci")),          // GFCI by tag
+            ("usb_outlet", "", Some("UsbOutlet")),
+            ("dimmer", "", Some("Dimmer")),
+            ("panel", "LP-1", Some("Panel")),
+            ("disconnect", "", Some("Disconnect")),
+            ("water_closet", "", Some("WaterCloset")),
+            ("unknown", "WC", Some("WaterCloset")), // whole-token WC
+            ("lavatory", "LAV-1", Some("Lavatory")),
+            ("sink", "", Some("Lavatory")), // sink → Lavatory
+            ("unknown_thing", "X99", None), // no match
+            ("floor_box", "", Some("FloorBox")),
+            ("tv_outlet", "", Some("TvOutlet")),
+            ("data_outlet", "", Some("DataOutlet")),
+            ("unknown", "REC", Some("Receptacle")), // tag REC
+            ("base_cabinet", "", Some("BaseCabinet")),
+        ];
+        for (kind, tag, expected) in &cases {
+            let result = classify(kind, tag, sz);
+            match expected {
+                Some(name) => {
+                    let f = result.unwrap_or_else(|| panic!("classify({kind:?}, {tag:?}) should match {name}"));
+                    let got = format!("{f:?}");
+                    assert!(got.starts_with(name), "classify({kind:?}, {tag:?}): expected {name}, got {got}");
+                }
+                None => {
+                    assert!(result.is_none(), "classify({kind:?}, {tag:?}) should be None, got {result:?}");
+                }
+            }
+        }
+    }
+
+    // ---- MUST 2: Schedule sizes override mount sizes ----
+
+    #[test]
+    fn schedule_sizes_override_mount() {
+        let attrs = vec![("SIZE".to_string(), "24x48".to_string())];
+        let sched = ScheduleSize::from_attrs(&attrs);
+        assert!(sched.from_schedule);
+        // 24x48 inches → 2x4 feet
+        let resolved = sched.resolve_ft([1.0, 1.0, 0.25]);
+        assert!((resolved[0] - 2.0).abs() < 0.01, "width should be 2.0 ft, got {}", resolved[0]);
+        assert!((resolved[1] - 4.0).abs() < 0.01, "depth should be 4.0 ft, got {}", resolved[1]);
+        // Height falls back to mount
+        assert!((resolved[2] - 0.25).abs() < 0.01, "height should fall back to 0.25 ft");
+    }
+
+    #[test]
+    fn scheduled_sizes_produce_correct_bboxes() {
+        // 2x4 troffer: schedule says 24x48 inches = 2x4 ft
+        let attrs = vec![("SIZE".to_string(), "24x48".to_string())];
+        let sched = ScheduleSize::from_attrs(&attrs);
+        let resolved = sched.resolve_ft([1.0, 1.0, 0.25]);
+        let family = classify_with_schedule("light_fixture", "A", resolved, &sched);
+        let f = family.expect("should classify as troffer");
+        assert!(matches!(f, FixtureFamily::Troffer { .. }));
+        if let FixtureFamily::Troffer { width_ft, length_ft, .. } = f {
+            assert!((width_ft - 2.0).abs() < 1.0 / 12.0, "2x4 troffer width ~2 ft, got {width_ft}");
+            assert!((length_ft - 4.0).abs() < 1.0 / 12.0, "2x4 troffer length ~4 ft, got {length_ft}");
+        }
+
+        // 1x4 troffer
+        let attrs = vec![("SIZE".to_string(), "12x48".to_string())];
+        let sched = ScheduleSize::from_attrs(&attrs);
+        let resolved = sched.resolve_ft([1.0, 1.0, 0.25]);
+        let f = classify_with_schedule("light_fixture", "B", resolved, &sched).unwrap();
+        if let FixtureFamily::Troffer { width_ft, length_ft, .. } = f {
+            assert!((width_ft - 1.0).abs() < 1.0 / 12.0, "1x4 troffer width ~1 ft, got {width_ft}");
+            assert!((length_ft - 4.0).abs() < 1.0 / 12.0, "1x4 troffer length ~4 ft, got {length_ft}");
+        }
+
+        // 6-inch downlight
+        let attrs = vec![("APERTURE".to_string(), "6".to_string())];
+        let sched = ScheduleSize::from_attrs(&attrs);
+        let resolved = sched.resolve_ft([0.5, 0.5, 0.25]);
+        let f = classify_with_schedule("light_fixture", "DL", resolved, &sched).unwrap();
+        if let FixtureFamily::Downlight { aperture_ft, .. } = f {
+            assert!((aperture_ft - 0.5).abs() < 1.0 / 12.0, "6in downlight aperture ~0.5 ft, got {aperture_ft}");
+        }
+    }
+
+    // ---- MUST 3: Plan symbol LOD per category ----
+
+    #[test]
+    fn plan_symbol_per_category() {
+        let categories: Vec<FixtureFamily> = vec![
+            FixtureFamily::Troffer { width_ft: 2.0, length_ft: 4.0, depth_ft: 0.33 },
+            FixtureFamily::Downlight { aperture_ft: 0.5, depth_ft: 0.33 },
+            FixtureFamily::Receptacle { width_ft: 0.3, height_ft: 0.45, depth_ft: 0.15 },
+            FixtureFamily::Panel { width_ft: 1.5, height_ft: 3.0, depth_ft: 0.5 },
+            FixtureFamily::WaterCloset { width_ft: 1.5, depth_ft: 2.3, height_ft: 1.25 },
+            FixtureFamily::BaseCabinet { width_ft: 2.0, depth_ft: 2.0, height_ft: 2.83 },
+            FixtureFamily::Elbow90 { diameter_ft: 0.5 },
+        ];
+        for family in &categories {
+            let (ok, tri_count) = make(family, Lod::Symbol);
+            assert!(ok, "{family:?} should produce a plan symbol");
+            assert!(tri_count > 0, "{family:?} plan symbol should have triangles");
+            // Plan symbol extents should match the type size.
+            let [ew, ed] = plan_extents(family);
+            let mut s = empty_scene();
+            s.part = Part::Device;
+            generate(&mut s, family, v3(0.0, 0.0, 0.0), DIR, NRM, COL, Owner::default(), Lod::Symbol);
+            let (mut min_x, mut max_x, mut min_y, mut max_y) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+            for v in &s.tris {
+                let (x, y) = (v.p[0] as f64, v.p[1] as f64);
+                if x < min_x {
+                    min_x = x;
+                }
+                if x > max_x {
+                    max_x = x;
+                }
+                if y < min_y {
+                    min_y = y;
+                }
+                if y > max_y {
+                    max_y = y;
+                }
+            }
+            let span_x = max_x - min_x;
+            let span_y = max_y - min_y;
+            // Symbol should be within 20% of the expected extents (tolerance for round shapes).
+            if ew > 0.01 {
+                assert!(span_x <= ew * 1.2 + 0.01, "{family:?} symbol x span {span_x} > extents {ew}");
+            }
+            if ed > 0.01 {
+                assert!(span_y <= ed * 1.2 + 0.01, "{family:?} symbol y span {span_y} > extents {ed}");
+            }
+        }
+    }
+
+    // ---- MUST 4: IFC class per fixture family ----
+
+    #[test]
+    fn ifc_class_per_category() {
+        assert_eq!(ifc_class(&FixtureFamily::Troffer { width_ft: 2.0, length_ft: 4.0, depth_ft: 0.33 }), "IfcLightFixture");
+        assert_eq!(ifc_class(&FixtureFamily::Downlight { aperture_ft: 0.5, depth_ft: 0.33 }), "IfcLightFixture");
+        assert_eq!(ifc_class(&FixtureFamily::Receptacle { width_ft: 0.3, height_ft: 0.45, depth_ft: 0.15 }), "IfcOutlet");
+        assert_eq!(ifc_class(&FixtureFamily::Switch { width_ft: 0.25, height_ft: 0.42, depth_ft: 0.15 }), "IfcSwitchingDevice");
+        assert_eq!(ifc_class(&FixtureFamily::Panel { width_ft: 1.5, height_ft: 3.0, depth_ft: 0.5 }), "IfcElectricDistributionBoard");
+        assert_eq!(ifc_class(&FixtureFamily::WaterCloset { width_ft: 1.5, depth_ft: 2.3, height_ft: 1.25 }), "IfcSanitaryTerminal");
+        assert_eq!(ifc_class(&FixtureFamily::Lavatory { width_ft: 1.67, depth_ft: 1.75, height_ft: 0.67 }), "IfcSanitaryTerminal");
+        assert_eq!(ifc_class(&FixtureFamily::BaseCabinet { width_ft: 2.0, depth_ft: 2.0, height_ft: 2.83 }), "IfcFurniture");
+        assert_eq!(ifc_class(&FixtureFamily::Elbow90 { diameter_ft: 0.5 }), "IfcPipeFitting");
+        assert_eq!(ifc_class(&FixtureFamily::WaterHeater { diameter_ft: 1.67, height_ft: 5.0 }), "IfcBoiler");
+    }
+
+    // ---- MUST 5: Geometry frame — bbox == box bbox, ceiling flush ----
+
+    #[test]
+    fn fixture_bbox_matches_box_at_angles() {
         let family = FixtureFamily::Troffer { width_ft: 2.0, length_ft: 4.0, depth_ft: 0.33 };
-        let ok = generate(&mut s, &family, v3(0.0, 0.0, 10.0), Vec2 { x: 1.0, y: 0.0 }, Rgb(230, 230, 230), Owner::default(), Lod::Detailed);
-        assert!(ok);
-        assert!(!s.tris.is_empty(), "troffer should generate triangles");
+        for angle_deg in [0.0_f64, 90.0, 37.0] {
+            let dir = Vec2 { x: angle_deg.to_radians().cos(), y: angle_deg.to_radians().sin() };
+            let c = v3(10.0, 10.0, 10.0);
+            // Fixture bbox
+            let mut sf = empty_scene();
+            sf.part = Part::Device;
+            generate(&mut sf, &family, c, dir, NRM, COL, Owner::default(), Lod::Detailed);
+            // Box bbox
+            let mut sb = empty_scene();
+            sb.part = Part::Device;
+            boxed(&mut sb, c, dir, 2.0, 4.0, 0.33, COL, Owner::default());
+            let bbox = |s: &Scene| -> ([f32; 3], [f32; 3]) {
+                let mut lo = [f32::MAX; 3];
+                let mut hi = [f32::MIN; 3];
+                for v in &s.tris {
+                    for i in 0..3 {
+                        lo[i] = lo[i].min(v.p[i]);
+                        hi[i] = hi[i].max(v.p[i]);
+                    }
+                }
+                (lo, hi)
+            };
+            let (flo, fhi) = bbox(&sf);
+            let (blo, bhi) = bbox(&sb);
+            // Fixture may be asymmetric (e.g. troffer top-flush), so tolerance is generous:
+            // within 50% of the box span + 2 inches per axis.
+            for i in 0..3 {
+                let span = (bhi[i] - blo[i]).abs();
+                let tol = span * 0.5 + 2.0 / 12.0;
+                assert!(flo[i] >= blo[i] - tol, "angle {angle_deg}: fixture min[{i}] {:.3} < box {:.3} - tol {tol:.3}", flo[i], blo[i]);
+                assert!(fhi[i] <= bhi[i] + tol, "angle {angle_deg}: fixture max[{i}] {:.3} > box {:.3} + tol {tol:.3}", fhi[i], bhi[i]);
+            }
+        }
     }
 
     #[test]
-    fn downlight_generates_triangles() {
+    fn ceiling_troffer_top_at_centre_z() {
+        // A troffer centred at z=10 with depth 0.33: its top should be at ~z=10 (not hanging below).
+        let family = FixtureFamily::Troffer { width_ft: 2.0, length_ft: 4.0, depth_ft: 0.33 };
         let mut s = empty_scene();
         s.part = Part::Device;
-        let family = FixtureFamily::Downlight { aperture_ft: 0.5, depth_ft: 0.33 };
-        let ok = generate(&mut s, &family, v3(0.0, 0.0, 10.0), Vec2 { x: 1.0, y: 0.0 }, Rgb(230, 230, 230), Owner::default(), Lod::Detailed);
-        assert!(ok);
-        assert!(!s.tris.is_empty(), "downlight should generate triangles");
+        generate(&mut s, &family, v3(0.0, 0.0, 10.0), DIR, NRM, COL, Owner::default(), Lod::Detailed);
+        let max_z = s.tris.iter().map(|v| v.p[2]).fold(f32::MIN, f32::max);
+        // Top should be at z=10 (the centre), because derive.rs places ceiling fixtures so centre = ceiling - h/2.
+        // The troffer draws from z=0 down to z=-depth, around the centre, so top is at centre.z.
+        assert!((max_z - 10.0).abs() < 0.1, "troffer top z {max_z} should be near 10.0");
     }
 
-    #[test]
-    fn water_closet_generates_triangles() {
-        let mut s = empty_scene();
-        s.part = Part::Device;
-        let family = FixtureFamily::WaterCloset { width_ft: 1.5, depth_ft: 2.3, height_ft: 1.25 };
-        let ok = generate(&mut s, &family, v3(5.0, 5.0, 0.0), Vec2 { x: 0.0, y: 1.0 }, Rgb(240, 240, 235), Owner::default(), Lod::Detailed);
-        assert!(ok);
-        assert!(!s.tris.is_empty(), "water closet should generate triangles");
-    }
+    // ---- MUST 6: LOD chosen by caller; triangle counts strictly decreasing ----
 
     #[test]
-    fn base_cabinet_generates_triangles() {
-        let mut s = empty_scene();
-        s.part = Part::Device;
-        let family = FixtureFamily::BaseCabinet { width_ft: 2.0, depth_ft: 2.0, height_ft: 2.83 };
-        let ok = generate(&mut s, &family, v3(3.0, 3.0, 0.0), Vec2 { x: 1.0, y: 0.0 }, Rgb(180, 140, 100), Owner::default(), Lod::Detailed);
-        assert!(ok);
-        assert!(!s.tris.is_empty(), "base cabinet should generate triangles");
-    }
-
-    #[test]
-    fn elbow_generates_triangles() {
-        let mut s = empty_scene();
-        s.part = Part::Device;
-        let family = FixtureFamily::Elbow90 { diameter_ft: 0.5 };
-        let ok = generate(&mut s, &family, v3(0.0, 0.0, 8.0), Vec2 { x: 1.0, y: 0.0 }, Rgb(150, 150, 150), Owner::default(), Lod::Detailed);
-        assert!(ok);
-        assert!(!s.tris.is_empty(), "elbow should generate triangles");
+    fn lod_triangle_counts_decrease() {
+        let families = all_families();
+        for family in &families {
+            let (ok_d, n_d) = make(family, Lod::Detailed);
+            let (ok_s, n_s) = make(family, Lod::Simple);
+            let (ok_sym, n_sym) = make(family, Lod::Symbol);
+            let (ok_b, _) = make(family, Lod::Box);
+            assert!(ok_d, "{family:?} Detailed should generate");
+            assert!(ok_s, "{family:?} Simple should generate");
+            assert!(ok_sym, "{family:?} Symbol should generate");
+            assert!(!ok_b, "{family:?} Box should return false");
+            assert!(n_d >= n_s, "{family:?}: Detailed {n_d} < Simple {n_s}");
+            assert!(n_s >= n_sym, "{family:?}: Simple {n_s} < Symbol {n_sym}");
+        }
     }
 
     #[test]
     fn lod_box_returns_false() {
-        let mut s = empty_scene();
-        s.part = Part::Device;
         let family = FixtureFamily::Troffer { width_ft: 2.0, length_ft: 4.0, depth_ft: 0.33 };
-        let ok = generate(&mut s, &family, v3(0.0, 0.0, 10.0), Vec2 { x: 1.0, y: 0.0 }, Rgb(230, 230, 230), Owner::default(), Lod::Box);
+        let (ok, _) = make(&family, Lod::Box);
         assert!(!ok, "Lod::Box should return false for caller fallback");
     }
 
+    // ---- MUST 7: New families exist ----
+
     #[test]
-    fn all_families_build_at_all_lods() {
-        let families: Vec<FixtureFamily> = vec![
+    fn new_families_generate() {
+        let new = vec![
+            FixtureFamily::Gfci { width_ft: 0.3, height_ft: 0.45, depth_ft: 0.15 },
+            FixtureFamily::UsbOutlet { width_ft: 0.3, height_ft: 0.45, depth_ft: 0.15 },
+            FixtureFamily::Dimmer { width_ft: 0.25, height_ft: 0.42, depth_ft: 0.15 },
+            FixtureFamily::TvOutlet { width_ft: 0.3, height_ft: 0.45, depth_ft: 0.15 },
+            FixtureFamily::ClockHanger { width_ft: 0.5, height_ft: 0.3, depth_ft: 0.15 },
+            FixtureFamily::Drawers { width_ft: 2.0, depth_ft: 2.0, height_ft: 2.83 },
+            FixtureFamily::ApplianceOpening { width_ft: 2.5, depth_ft: 2.0, height_ft: 2.83 },
+        ];
+        for family in &new {
+            for lod in [Lod::Detailed, Lod::Simple, Lod::Symbol] {
+                let (ok, n) = make(family, lod);
+                assert!(ok, "{family:?} at {lod:?} should generate");
+                assert!(n > 0, "{family:?} at {lod:?} should have triangles");
+            }
+        }
+    }
+
+    // ---- KEPT tests (updated signatures) ----
+
+    #[test]
+    fn hostile_numbers_do_not_panic() {
+        // Clamped to [0.01, 20.0] by the caller, but just in case.
+        let family = FixtureFamily::Receptacle { width_ft: 0.01, height_ft: 20.0, depth_ft: 0.01 };
+        let (ok, _) = make(&family, Lod::Detailed);
+        assert!(ok);
+    }
+
+    #[test]
+    fn classify_unknown_returns_none() {
+        assert!(classify("unknown_thing", "X99", [1.0, 1.0, 1.0]).is_none());
+    }
+
+    #[test]
+    fn sizes_from_type_params() {
+        let family = FixtureFamily::Troffer { width_ft: 2.0, length_ft: 4.0, depth_ft: 0.33 };
+        let mut s = empty_scene();
+        s.part = Part::Device;
+        generate(&mut s, &family, v3(0.0, 0.0, 0.0), DIR, NRM, COL, Owner::default(), Lod::Detailed);
+        for v in &s.tris {
+            assert!(v.p[0].abs() <= 1.1, "troffer vertex x {:.3} out of 2ft-wide range", v.p[0]);
+            assert!(v.p[1].abs() <= 2.1, "troffer vertex y {:.3} out of 4ft-long range", v.p[1]);
+        }
+    }
+
+    // ---- Helper: all families list ----
+
+    fn all_families() -> Vec<FixtureFamily> {
+        vec![
             FixtureFamily::Troffer { width_ft: 2.0, length_ft: 4.0, depth_ft: 0.33 },
             FixtureFamily::Downlight { aperture_ft: 0.5, depth_ft: 0.33 },
             FixtureFamily::LinearPendant { length_ft: 4.0, width_ft: 0.3, drop_ft: 2.0 },
@@ -1388,9 +1928,14 @@ mod tests {
             FixtureFamily::ExitSign { width_ft: 1.0, height_ft: 0.67, depth_ft: 0.17 },
             FixtureFamily::EmergencyLight { width_ft: 1.0, height_ft: 0.5, depth_ft: 0.33 },
             FixtureFamily::Receptacle { width_ft: 0.3, height_ft: 0.45, depth_ft: 0.15 },
+            FixtureFamily::Gfci { width_ft: 0.3, height_ft: 0.45, depth_ft: 0.15 },
+            FixtureFamily::UsbOutlet { width_ft: 0.3, height_ft: 0.45, depth_ft: 0.15 },
             FixtureFamily::Switch { width_ft: 0.25, height_ft: 0.42, depth_ft: 0.15 },
+            FixtureFamily::Dimmer { width_ft: 0.25, height_ft: 0.42, depth_ft: 0.15 },
             FixtureFamily::FloorBox { width_ft: 0.5, depth_ft: 0.5, height_ft: 0.33 },
             FixtureFamily::DataOutlet { width_ft: 0.3, height_ft: 0.45, depth_ft: 0.15 },
+            FixtureFamily::TvOutlet { width_ft: 0.3, height_ft: 0.45, depth_ft: 0.15 },
+            FixtureFamily::ClockHanger { width_ft: 0.5, height_ft: 0.3, depth_ft: 0.15 },
             FixtureFamily::Panel { width_ft: 1.5, height_ft: 3.0, depth_ft: 0.5 },
             FixtureFamily::Disconnect { width_ft: 1.0, height_ft: 1.5, depth_ft: 0.5 },
             FixtureFamily::WaterCloset { width_ft: 1.5, depth_ft: 2.3, height_ft: 1.25 },
@@ -1404,44 +1949,13 @@ mod tests {
             FixtureFamily::TallCabinet { width_ft: 2.0, depth_ft: 2.0, height_ft: 7.0 },
             FixtureFamily::Countertop { width_ft: 3.0, depth_ft: 2.0, thickness_ft: 1.5 / 12.0 },
             FixtureFamily::Backsplash { width_ft: 3.0, height_ft: 0.33, thickness_ft: 0.5 / 12.0 },
+            FixtureFamily::Drawers { width_ft: 2.0, depth_ft: 2.0, height_ft: 2.83 },
+            FixtureFamily::ApplianceOpening { width_ft: 2.5, depth_ft: 2.0, height_ft: 2.83 },
             FixtureFamily::Elbow90 { diameter_ft: 0.5 },
             FixtureFamily::Elbow45 { diameter_ft: 0.5 },
             FixtureFamily::Tee { diameter_ft: 0.5 },
             FixtureFamily::Reducer { large_ft: 0.5, small_ft: 0.33, length_ft: 0.5 },
             FixtureFamily::Coupling { diameter_ft: 0.5, length_ft: 0.33 },
-        ];
-        for lod in [Lod::Detailed, Lod::Simple] {
-            for family in &families {
-                let mut s = empty_scene();
-                s.part = Part::Device;
-                let ok = generate(&mut s, family, v3(5.0, 5.0, 5.0), Vec2 { x: 1.0, y: 0.0 }, Rgb(200, 200, 200), Owner::default(), lod);
-                assert!(ok, "{family:?} at {lod:?} should generate geometry");
-                assert!(!s.tris.is_empty(), "{family:?} at {lod:?} should produce triangles");
-                // Triangle count must be a multiple of 3
-                assert_eq!(s.tris.len() % 3, 0, "{family:?} at {lod:?} has non-triangle vertex count");
-            }
-        }
-    }
-
-    #[test]
-    fn sizes_from_type_params() {
-        // Troffer dimensions should come from the type parameters
-        let family = FixtureFamily::Troffer { width_ft: 2.0, length_ft: 4.0, depth_ft: 0.33 };
-        let mut s = empty_scene();
-        s.part = Part::Device;
-        generate(&mut s, &family, v3(0.0, 0.0, 0.0), Vec2 { x: 1.0, y: 0.0 }, Rgb(200, 200, 200), Owner::default(), Lod::Detailed);
-        // Verify vertices fall within expected bounds
-        for v in &s.tris {
-            assert!(v.p[0].abs() <= 2.5, "troffer vertex x out of expected range: {}", v.p[0]);
-            assert!(v.p[1].abs() <= 4.5, "troffer vertex y out of expected range: {}", v.p[1]);
-        }
-    }
-
-    #[test]
-    fn ifc_export_classification() {
-        // Verify that classify returns the right family for IFC-relevant types
-        assert!(matches!(classify("light_fixture", "A", [2.0, 4.0, 0.33]), Some(FixtureFamily::Troffer { .. })));
-        assert!(matches!(classify("receptacle", "REC", [0.3, 0.15, 0.45]), Some(FixtureFamily::Receptacle { .. })));
-        assert!(matches!(classify("water_closet", "WC-1", [1.5, 2.3, 1.25]), Some(FixtureFamily::WaterCloset { .. })));
+        ]
     }
 }

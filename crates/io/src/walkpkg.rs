@@ -42,3 +42,27 @@ pub fn package_of(d: &Drawing) -> Result<Package> {
     }
     Ok(p)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Security suite (Q207 rework, packages): a walkthrough package whose entry names leave the
+    /// package (`..`, a drive, a share) is refused as a whole; nothing in it is read.
+    #[test]
+    fn a_package_with_entries_outside_it_is_refused() {
+        let d = Drawing::new_metric();
+        let good = write(&d).unwrap();
+        assert!(read(&good).is_ok());
+        for bad in ["../../x.exe", "..\\..\\x.exe", "C:\\x.exe", "C:/x.exe", "\\\\192.0.2.1\\s\\x", "//192.0.2.1/s/x", "/tmp/x.exe"] {
+            let mut p = package_of(&d).unwrap();
+            p.put(bad, b"MZ".to_vec());
+            let bytes = p.encode().unwrap();
+            let e = read(&bytes).unwrap_err().to_string();
+            assert_eq!(e, "a file in the walkthrough package has a name that leaves the package", "{bad}");
+            // Opened as a file, the same refusal.
+            let e = crate::read(&bytes, "Sample Walk.cdywalk").unwrap_err().to_string();
+            assert_eq!(e, "a file in the walkthrough package has a name that leaves the package", "{bad}");
+        }
+    }
+}

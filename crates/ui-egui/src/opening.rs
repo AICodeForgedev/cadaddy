@@ -4,7 +4,7 @@
 //! on the UI thread. The web build has no threads and opens synchronously.
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use cadaddy_engine::cmd::file::{ReadFile, read_file};
 

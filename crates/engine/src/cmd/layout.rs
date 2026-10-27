@@ -1153,11 +1153,52 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     };
     // What the plot stamp says that the plotter can't know (used when a sheet carries it).
     super::plotstamp::facts(s, &mut opts);
+    // Set up layouts that were never opened before plotting them, so a bare layout's viewport
+    // shows the drawing (the same setup `layout.set` does, without an undo step).
+    let paper_layouts: Vec<String> = match &sheets {
+        Some(names) => names.iter().filter(|n| !n.eq_ignore_ascii_case("model")).cloned().collect(),
+        None => match &space {
+            Space::Paper(n) => vec![n.clone()],
+            Space::Model => vec![],
+        },
+    };
+    if !paper_layouts.is_empty() {
+        let st = s.state_mut()?;
+        let has_work = paper_layouts.iter().any(|n| st.bare_layouts.contains(n) || st.doc.layout(n).is_some_and(|l| l.pending_setup));
+        if has_work {
+            let mut doc = (*st.doc).clone();
+            for name in &paper_layouts {
+                if let Some(i) = st.bare_layouts.iter().position(|b| b == name) {
+                    st.bare_layouts.remove(i);
+                    if let Some(l) = doc.layouts.iter_mut().find(|l| l.name == *name) {
+                        l.pending_setup = true;
+                    }
+                }
+                set_up_layout(&mut doc, name);
+            }
+            st.doc = std::sync::Arc::new(doc);
+        }
+    }
+    // Warn about sheets that would plot blank.
+    let mut warnings: Vec<String> = Vec::new();
+    {
+        let d = s.doc()?;
+        for name in &paper_layouts {
+            if sheet_is_blank(d, name) {
+                warnings.push(format!("{name} has nothing on it: its page is blank."));
+            }
+        }
+    }
+    for w in &warnings {
+        s.echo(format!("Warning: {w}"));
+    }
     let bytes = hook(s.doc()?, &space, &opts).map_err(|e| bad(cmd, e))?;
     if let (Some(name), Some(h)) = (&printer, print) {
         let title = s.state().map(|st| st.title.clone()).unwrap_or_default();
         (h.print)(name, &bytes, &title).map_err(|e| bad(cmd, format!("printer `{name}`: {e}")))?;
-        return Ok(json!({ "printed": name, "bytes": bytes.len(), "layout": space.tab_name(), "pages": sheets.as_ref().map_or(1, Vec::len) }));
+        return Ok(
+            json!({ "printed": name, "bytes": bytes.len(), "layout": space.tab_name(), "pages": sheets.as_ref().map_or(1, Vec::len), "warnings": warnings }),
+        );
     }
     let layout = match &sheets {
         Some(names) => names.first().cloned().unwrap_or_default(),
@@ -1172,7 +1213,7 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
                 let tmp = format!("{path}.cadaddy-tmp");
                 crate::writefile::write(&tmp, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
                 std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-                let mut r = json!({ "path": path, "bytes": bytes.len(), "layout": layout, "pages": pages });
+                let mut r = json!({ "path": path, "bytes": bytes.len(), "layout": layout, "pages": pages, "warnings": warnings });
                 match super::plotstamp::log_plot(s, &space, &opts, path) {
                     Some(Ok(log)) => r["stampLog"] = json!(log),
                     Some(Err(e)) => r["stampLogError"] = json!(e),
@@ -1188,10 +1229,10 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
                 let deliver = super::file::deliver()
                     .ok_or_else(|| bad(cmd, "paths are not available on the web; omit `path` to get the PDF as base64 `data`"))?;
                 deliver(&name, "application/pdf", &bytes).map_err(|e| bad(cmd, format!("{name}: {e}")))?;
-                Ok(json!({ "path": name, "bytes": bytes.len(), "layout": layout, "pages": pages, "downloaded": true }))
+                Ok(json!({ "path": name, "bytes": bytes.len(), "layout": layout, "pages": pages, "downloaded": true, "warnings": warnings }))
             }
         }
-        None => Ok(json!({ "data": base64_encode(&bytes), "bytes": bytes.len(), "layout": layout, "pages": pages })),
+        None => Ok(json!({ "data": base64_encode(&bytes), "bytes": bytes.len(), "layout": layout, "pages": pages, "warnings": warnings })),
     }
 }
 

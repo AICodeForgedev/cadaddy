@@ -2557,6 +2557,7 @@ menu	Modify	Ändra
 	List MEP Items	Lista MEP-objekt
 	Section Box	Snittlåda
 	Trade Visibility	Synlighet per fack
+	Colour by BIM Property	Färga efter BIM-egenskap
 	BIM Types	BIM-typer
 	Get BIM Spec	Hämta BIM-specifikation
 	Remove BIM Spec from Entities	Ta bort BIM-specifikation från objekt
@@ -3138,3 +3139,131 @@ menu	Modify	Ändra
 	Estimate Bid Summary	Anbudssammanfattning för kalkyl
 	Read Panel Schedules	Läs centralscheman
 	Site Takeoff	Mängdavtagning mark
+	Clash Report	Kollisionsrapport
+	Export PDF	Exportera PDF
+	Export the grouped clash report to PDF	Exportera den grupperade kollisionsrapporten till PDF
+	PDF exported to {path}.	PDF exporterad till {path}.
+	Clash detection failed.	Kollisionskontrollen misslyckades.
+	Import Cost Table	Importera kostnadstabell
+	BIM View	BIM-vy
+	Trade Colours	Färger per disciplin
+	Element Properties	Elementegenskaper
+	Tree	Träd
+	Colours	Färger
+	Ghost Architecture	Genomskinlig arkitektur
+	Sheet Lines in 3D	Ritningslinjer i 3D
+	Nothing is built yet. Use Plans to Model first.	Inget är byggt ännu. Använd Ritningar till modell först.
+	Select one element to see its properties.	Välj ett element för att se dess egenskaper.
+	Not part of the built model.	Ingår inte i den byggda modellen.
+	Category	Kategori
+	Trade	Disciplin
+	Circuit	Grupp
+	Source	Källa
+	Issues	Ärenden
+	Show on Sheet	Visa på ritningen
+	Reset Colours	Återställ färger
+	Architecture	Arkitektur
+	Structure	Konstruktion
+	Fire Protection	Brandskydd
+	Doors and Windows	Dörrar och fönster
+	Supply Air Duct	Tilluftskanal
+	Return Air Duct	Returluftskanal
+	Exhaust Air Duct	Frånluftskanal
+	Outside Air Duct	Uteluftskanal
+	Duct	Kanal
+	Air Terminals	Luftdon
+	Equipment	Utrustning
+	Domestic Cold Water	Tappkallvatten
+	Domestic Hot Water	Tappvarmvatten
+	Sanitary	Spillvatten
+	Vent	Avluftning
+	Storm	Dagvatten
+	Gas	Gas
+	Piping	Rör
+	Plumbing Fixtures	Sanitetsporslin
+	Conduit	Elrör
+	Cable Tray	Kabelstegar
+	Electrical Devices	Elapparater
+	Light Fixtures	Armaturer
+	Clash Check	Kollisionskontroll
+	Fix Clash	Åtgärda kollision
+	Model Takeoff	Mängdavtagning från modell
+	Show Takeoff Line	Visa mängdrad
+	Model Estimate	Kostnadskalkyl från modell
+	New Issue	Nytt ärende
+	Update Issue	Uppdatera ärende
+	Show Issue	Visa ärende
+	Issue Marks	Ärendemarkeringar
+	Sheet and 3D Link	Länk mellan ritning och 3D
+	PDF to BIM	PDF till BIM
+	Read Casework and Fixtures	Läs fast inredning och sanitetsporslin
+	Frame Walls from Prints	Regla väggar från ritningar
+	List Framed Walls	Lista reglade väggar
+	Framed Wall	Reglad vägg
+	Next Stud	Nästa regel
+	Enter Field Stud	Ange regel uppmätt på plats
+	Apply Shop Drawing	Använd verkstadsritning
+	Show Framing	Visa regelverk
+	Read Unit Types from Prints	Läs enhetstyper från ritningar
+	Edit Unit Type	Redigera enhetstyp
+	Override Unit Instance	Åsidosätt enhetsinstans
+	Place Unit Instances	Placera enhetsinstanser
+	List Callouts	Lista hänvisningar
+	Keep Print Set Job	Behåll ritningsuppsättningens jobb
+	Resume Print Set Job	Återuppta ritningsuppsättningens jobb
+	Finish Takeoff from Prints	Ytskiktsmängder från ritningar
+	Layer Quantity Takeoff	Mängdavtagning per lager
+	Read Architecture from Prints	Läs arkitektur från ritningar
+	Read Roof and Wall Envelope	Läs tak- och väggklimatskal
+	Element Properties (BIM)	Elementegenskaper (BIM)
+	Set Element Property (BIM)	Ange elementegenskap (BIM)
+	Find Elements by Property	Hitta element efter egenskap
+	Element Property Summary	Sammanfattning av elementegenskaper
+	BIM Properties	BIM-egenskaper
+	Kind	Sort
+	Element Identities (BIM)	Elementidentiteter (BIM)
+	Room Connections	Rumskopplingar
+	Link Print Set	Länka ritningsuppsättning
+	Check Building Codes	Kontrollera byggregler
+	Code Rules	Regler i byggreglerna
+	Select Building Codes	Välj byggregler
+	Fill Element Properties	Fyll i elementegenskaper
+	Build Construction Sequence	Skapa byggordning
+	Construction Sequence	Byggordning
+	Edit Sequence Activity	Redigera aktivitet i byggordningen
+	Show Sequence at Date	Visa byggordningen vid ett datum
+	Export Construction Sequence	Exportera byggordning
+	Sequence Trade Conflicts	Konflikter mellan yrken i byggordningen
+	Ceiling Space Fit	Utrymme ovan undertak
+	Takeoff by Activity	Mängdavtagning per aktivitet
+	BIM	BIM
+	Door	Dörr
+	Plan Views	Planvyer
+	Generate Plan Views	Generera planvyer
+	Draw Wall (Object)	Rita vägg (objekt)
+	Place Door in Wall	Placera dörr i vägg
+	Place Window in Wall	Placera fönster i vägg
+	Resolve Plan Entity	Identifiera planelement
+	Record As-Built Change	Registrera relationsändring
+	Import As-Built Markups	Importera relationsmarkeringar
+	List As-Built Changes	Lista relationsändringar
+	Set As-Built Change Status	Ange status för relationsändring
+	Compare Design and As-Built	Jämför projektering och relationsritning
+	Export As-Built	Exportera relationshandlingar
+	Map Line to Price Row	Koppla rad till prisrad
+	Start Cover Check	Starta kontroll före inklädnad
+	Cover Check Status	Status för kontroll före inklädnad
+	Check Cover Item	Bocka av punkt före inklädnad
+	Reopen Cover Item	Öppna punkt före inklädnad igen
+	Sign Inspection	Signera besiktning
+	Ready to Cover	Klar för inklädnad
+	Cover Check Wall	Vägg i kontroll före inklädnad
+	Add In-Wall Photo	Lägg till foto i väggen
+	Wall	Vägg
+	Ready to cover	Klar för inklädnad
+	Not ready to cover	Inte klar för inklädnad
+	Checklist	Checklista
+	Photos	Foton
+	Photo	Foto
+	Schedule from Element Properties	Förteckning från elementegenskaper
+	Check Element Properties	Kontrollera elementegenskaper

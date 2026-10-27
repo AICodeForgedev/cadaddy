@@ -19,7 +19,7 @@ pub mod ltshapes;
 mod mtext;
 pub mod shp;
 pub mod shx;
-mod stroke;
+pub mod stroke;
 pub mod subset;
 pub mod ttf;
 

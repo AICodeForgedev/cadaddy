@@ -31,6 +31,9 @@ use crate::{IoError, Result};
 
 /// The extended data application tagging objects read from IFC (class, GlobalId, name).
 pub const APP: &str = "CADADDY_IFC";
+/// The extended data application of an as-built model's elements: the element's id (its IFC
+/// name), then `Key=Value` strings written as its `CaDaddy_AsBuilt` property set.
+pub const ASBUILT_APP: &str = "CADADDY_ASBUILT";
 /// Most instances one file holds.
 const MAX_INSTANCES: usize = 5_000_000;
 /// Deepest placement chain, mapped item or boolean followed.
@@ -211,6 +214,11 @@ struct Kind {
     systems: Vec<String>,
     description: String,
     properties: Vec<(String, String)>,
+    /// MEP segments, fittings and terminals: their size tags (`size:24x12`, `size:10` round;
+    /// `size2:` a tee's branch or a transition's other end), inches.
+    sizes: Vec<[f64; 2]>,
+    /// For a `USERDEFINED` predefined type: what it is (IFC's ObjectType).
+    object_type: &'static str,
 }
 
 /// The IFC4 class and predefined type a scheduled equipment kind is written as.
@@ -240,6 +248,34 @@ fn tag_strings(e: &Entity, app: &str) -> Option<Vec<String>> {
     Some(x.iter().skip(at + 1).take_while(|t| t.code != 1001).filter(|t| t.code == 1000).map(|t| t.value.clone()).collect())
 }
 
+/// How far model.build moved a WALLGEN object to stack its level (its `stacked:<dx>,<dy>` tag),
+/// drawing units; zero when it didn't.
+fn stacked_by(e: &Entity) -> cadaddy_geom::Vec2 {
+    let moved = tag_strings(e, "CADADDY_WALLGEN").and_then(|t| {
+        let (x, y) = t.iter().find_map(|v| v.strip_prefix("stacked:"))?.split_once(',')?;
+        Some(cadaddy_geom::Vec2::new(x.trim().parse().ok()?, y.trim().parse().ok()?))
+    });
+    moved.filter(|v| v.is_finite()).unwrap_or(cadaddy_geom::Vec2::ZERO)
+}
+
+/// An MEP size tag, inches: `24x12` → [24, 12]; `10` (round) → [10, 0].
+fn parse_size_tag(v: &str) -> Option<[f64; 2]> {
+    let ok = |x: f64| x.is_finite() && x > 0.0 && x < 10_000.0;
+    match v.split_once('x') {
+        Some((w, h)) => Some([w.trim().parse().ok().filter(|x| ok(*x))?, h.trim().parse().ok().filter(|x| ok(*x))?]),
+        None => Some([v.trim().parse().ok().filter(|x| ok(*x))?, 0.0]),
+    }
+}
+
+/// A size as printed: `24"x12"`, `10"Ø`.
+fn size_label_in(s: [f64; 2]) -> String {
+    let n = |v: f64| {
+        let t = format!("{v:.3}");
+        t.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    if s[1] > 0.0 { format!("{}\"x{}\"", n(s[0]), n(s[1])) } else { format!("{}\"Ø", n(s[0])) }
+}
+
 fn class_of(e: &Entity) -> Kind {
     let kind = |class: Class, level: Option<String>, name: String, long: String| Kind {
         class,
@@ -252,6 +288,8 @@ fn class_of(e: &Entity) -> Kind {
         systems: Vec::new(),
         description: String::new(),
         properties: Vec::new(),
+        sizes: Vec::new(),
+        object_type: "",
     };
     if let Some(t) = tag_strings(e, "CADADDY_WALLGEN") {
         let part = t.first().map(String::as_str).unwrap_or_default();
@@ -272,6 +310,10 @@ fn class_of(e: &Entity) -> Kind {
             "ramp" => Class::Ramp,
             "roof" => Class::Roof,
             "ground" => Class::Terrain,
+            // A room model.build made (Q5291): a space, named as its tag.
+            "room" => {
+                return kind(Class::Space, t.get(1).cloned(), extra("name:").unwrap_or_else(|| "Room".into()), extra("number:").unwrap_or_default());
+            }
             "concrete" => {
                 // An element by its kind; its rebar and what is cast into it by their part.
                 let ek = extra("kind:").unwrap_or_default();
@@ -365,10 +407,18 @@ fn class_of(e: &Entity) -> Kind {
         {
             k.predefined = match sub {
                 "elbow" => "BEND",
-                "tee" => "JUNCTION",
+                "tee" | "cross" => "JUNCTION",
                 "transition" | "reducer" => "TRANSITION",
+                // A riser between two heights: none of IFC's own kinds.
+                "drop" => "USERDEFINED",
                 _ => "NOTDEFINED",
             };
+            if sub == "drop" {
+                k.object_type = "DROP";
+            }
+        }
+        if part == "mep" {
+            k.sizes = ["size:", "size2:"].iter().filter_map(|key| extra(key).and_then(|v| parse_size_tag(&v))).collect();
         }
         return k;
     }
@@ -385,6 +435,10 @@ fn class_of(e: &Entity) -> Kind {
         k.predefined = if class == Class::Space { "SPACE" } else { "NOTDEFINED" };
         k.read_id = t.get(1).filter(|g| is_guid(g)).cloned();
         return k;
+    }
+    // An as-built model's element: named by its id.
+    if let Some(id) = tag_strings(e, ASBUILT_APP).and_then(|t| t.into_iter().next()).filter(|n| !n.is_empty()) {
+        return kind(Class::Proxy, None, id, String::new());
     }
     kind(Class::Proxy, None, e.common.layer.to_string(), String::new())
 }
@@ -554,9 +608,13 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         zmin: f64,
     }
     let mut items: Vec<Item> = Vec::new();
+    // A room model.build made is its floor outline; with room volumes (ROOMS) in the drawing,
+    // those are its space, written once.
+    let volumes = d.model.iter().any(|e| tag_strings(e, "CADADDY_ROOM").is_some());
+    let room_element = |e: &Entity| tag_strings(e, "CADADDY_WALLGEN").is_some_and(|t| t.first().is_some_and(|p| p == "room"));
     for e in d.model.iter() {
         let EntityKind::Mesh(m) = &e.kind else { continue };
-        if m.faces.is_empty() || m.vertices.is_empty() {
+        if m.faces.is_empty() || m.vertices.is_empty() || (volumes && room_element(e)) {
             continue;
         }
         let zmin = m.vertices.iter().map(|v| v.z).fold(f64::MAX, f64::min);
@@ -660,8 +718,15 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     // MEP products grouped by system name for IfcDistributionSystem.
     let mut system_products: HashMap<String, Vec<usize>> = HashMap::new();
     let mut schedules: Vec<(usize, Vec<(String, String)>, u64)> = Vec::new();
+    // As-built properties (CaDaddy_AsBuilt): (product, key-values, handle).
+    let mut asbuilt: Vec<(usize, Vec<(String, String)>, u64)> = Vec::new();
+    let mut mep_sizes: Vec<(usize, Vec<[f64; 2]>, u64)> = Vec::new();
     // Walls, doors and windows as written: for the openings the doors and windows fill.
     let mut placed: Vec<Placed> = Vec::new();
+    // All products that have a BIM spec: (product instance number, entity handle).
+    let mut bim_products: Vec<(usize, u64)> = Vec::new();
+    // Products with a property store: (product, entity handle, IFC class written).
+    let mut with_props: Vec<(usize, u64, &'static str)> = Vec::new();
     // Walls by their spec wall type (its index), for their materials and properties.
     let mut typed: Vec<(usize, usize)> = Vec::new();
     // Ceilings and soffits by their spec type: (soffit, type index, covering product).
@@ -669,6 +734,8 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
     for it in &items {
         let si = storey_of(it);
         let Some(&(_, place_parent, sz, _, base)) = storeys.get(si) else { continue };
+        // An object model.build moved to stack its level is that much further from its plan.
+        let base = base + stacked_by(it.e);
         // The body in the storey's coordinates (its placement is at the storey's elevation; its
         // plan's base point at the building origin).
         let pts: Vec<String> = it
@@ -709,10 +776,19 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             ),
             _ => {
                 let desc = if kd.description.is_empty() { "$".to_string() } else { step_str(&kd.description) };
-                format!("{upper}('{g}',$,{nm},{desc},$,#{place},#{pds},{tag},.{pre}.)")
+                let object_type = if kd.object_type.is_empty() { "$".to_string() } else { step_str(kd.object_type) };
+                format!("{upper}('{g}',$,{nm},{desc},{object_type},#{place},#{pds},{tag},.{pre}.)")
             }
         };
         let product = o.add(line);
+        // Elements with properties of their own: Pset_CADaddy and the standard sets.
+        if cadaddy_doc::props::has_store(&it.e.common.xdata) {
+            with_props.push((product, it.e.handle.0, entity));
+        }
+        // Track products with BIM spec marks for pset writing.
+        if cadaddy_doc::bimspec::entity_type_mark(&it.e.common.xdata).is_some() {
+            bim_products.push((product, it.e.handle.0));
+        }
         if kd.class == Class::Wall
             && let Some(sp) = &spec
             && let Some(i) = wall_type_of(it.e).and_then(|n| sp.wall_types.iter().position(|t| t.name.eq_ignore_ascii_case(&n)))
@@ -756,6 +832,16 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         // Scheduled equipment: its schedule row as a property set (our own set, so not `Pset_`).
         if !kd.properties.is_empty() {
             schedules.push((product, kd.properties.clone(), it.e.handle.0));
+        }
+        if let Some(t) = tag_strings(it.e, ASBUILT_APP) {
+            let kv: Vec<(String, String)> =
+                t.iter().skip(1).filter_map(|v| v.split_once('=')).take(64).map(|(a, b)| (a.trim().to_string(), b.to_string())).collect();
+            if !kv.is_empty() {
+                asbuilt.push((product, kv, it.e.handle.0));
+            }
+        }
+        if !kd.sizes.is_empty() {
+            mep_sizes.push((product, kd.sizes.clone(), it.e.handle.0));
         }
         // Base quantities (IFC4's Qto_…BaseQuantities): lengths in the length unit, areas in m², volumes in m³.
         let m = measures(it.mesh);
@@ -849,10 +935,39 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         let set = o.add(format!("IFCPROPERTYSET('{}',$,'CADaddy_EquipmentSchedule',$,{})", id(handle, 13), refs(&ids)));
         o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, 14)));
     }
+    for (product, props, handle) in asbuilt {
+        let ids: Vec<usize> =
+            props.iter().map(|(k, v)| o.add(format!("IFCPROPERTYSINGLEVALUE({},$,IFCLABEL({}),$)", step_str(k), step_str(v)))).collect();
+        let set = o.add(format!("IFCPROPERTYSET('{}',$,'CaDaddy_AsBuilt',$,{})", id(handle, 30), refs(&ids)));
+        o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, 31)));
+    }
+    // MEP sizes (our own set): the nominal width and height of a rectangular section, or the
+    // diameter of a round one, in the length unit; the size as printed; for a tee or a transition
+    // the other size too.
+    let per_inch = if mm { 25.4 } else { 0.0254 };
+    for (product, sizes, handle) in mep_sizes {
+        let mut ids = Vec::new();
+        for (k, sz) in sizes.iter().enumerate().take(2) {
+            let pre = if k == 0 { "" } else { "Other" };
+            let mut len = |name: &str, v: f64| {
+                ids.push(o.add(format!("IFCPROPERTYSINGLEVALUE('{pre}{name}',$,IFCPOSITIVELENGTHMEASURE({}),$)", real(v * per_inch))))
+            };
+            if sz[1] > 0.0 {
+                len("NominalWidth", sz[0]);
+                len("NominalHeight", sz[1]);
+            } else {
+                len("NominalDiameter", sz[0]);
+            }
+            ids.push(o.add(format!("IFCPROPERTYSINGLEVALUE('{pre}Size',$,IFCLABEL({}),$)", step_str(&size_label_in(*sz)))));
+        }
+        let set = o.add(format!("IFCPROPERTYSET('{}',$,'CADaddy_MepSize',$,{})", id(handle, 22), refs(&ids)));
+        o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, 23)));
+    }
     // BIM spec property sets (CaDaddy_Spec): entities with a type mark → IfcPropertySet with the
     // type's fields as IfcPropertySingleValue (all text). Attached via IfcRelDefinesByProperties.
-    for p in &placed {
-        let ent = d.entity(cadaddy_doc::Handle(p.handle));
+    // Also: Pset_ManufacturerTypeInformation (standard IFC pset) and CaDaddy_SpecSource (provenance).
+    for &(product, handle) in &bim_products {
+        let ent = d.entity(cadaddy_doc::Handle(handle));
         let mark = ent.and_then(|e| cadaddy_doc::bimspec::entity_type_mark(&e.common.xdata));
         let ty = mark.and_then(|m| d.bim_types.get(m));
         if let (Some(mark), Some(ty)) = (mark, ty) {
@@ -868,9 +983,57 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
                 let prop = o.add(format!("IFCPROPERTYSINGLEVALUE({},$,IFCTEXT({}),$)", step_str(key), step_str(&field.value)));
                 prop_ids.push(prop);
             }
-            let pset = o.add(format!("IFCPROPERTYSET('{}',$,'CaDaddy_Spec',$,{})", id(p.handle, 20), refs(&prop_ids)));
-            o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{}),#{pset})", id(p.handle, 21), p.product));
+            let pset = o.add(format!("IFCPROPERTYSET('{}',$,'CaDaddy_Spec',$,{})", id(handle, 20), refs(&prop_ids)));
+            o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{pset})", id(handle, 21)));
+
+            // Pset_ManufacturerTypeInformation (IFC4 standard pset): Manufacturer + ModelReference.
+            let mfr = ty.get_field(cadaddy_doc::bimspec::keys::MANUFACTURER);
+            let model_ref = ty.get_field(cadaddy_doc::bimspec::keys::CATALOG_NUMBER);
+            if mfr.is_some() || model_ref.is_some() {
+                let mut mfr_ids = Vec::new();
+                if let Some(f) = mfr {
+                    mfr_ids.push(o.add(format!("IFCPROPERTYSINGLEVALUE('Manufacturer',$,IFCLABEL({}),$)", step_str(&f.value))));
+                }
+                if let Some(f) = model_ref {
+                    mfr_ids.push(o.add(format!("IFCPROPERTYSINGLEVALUE('ModelReference',$,IFCLABEL({}),$)", step_str(&f.value))));
+                }
+                let mfr_pset = o.add(format!("IFCPROPERTYSET('{}',$,'Pset_ManufacturerTypeInformation',$,{})", id(handle, 24), refs(&mfr_ids)));
+                o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{mfr_pset})", id(handle, 25)));
+            }
+
+            // CaDaddy_SpecSource: source and confidence per field for provenance.
+            let source_fields: Vec<_> = ty
+                .fields
+                .iter()
+                .filter(|(_, f)| !f.source.is_empty() || f.confidence != cadaddy_doc::bimspec::Confidence::Stated)
+                .take(200)
+                .collect();
+            if !source_fields.is_empty() {
+                let mut src_ids = Vec::new();
+                for (key, field) in &source_fields {
+                    if !field.source.is_empty() {
+                        src_ids.push(o.add(format!(
+                            "IFCPROPERTYSINGLEVALUE({},$,IFCTEXT({}),$)",
+                            step_str(&format!("{key}.source")),
+                            step_str(&field.source)
+                        )));
+                    }
+                    if field.confidence != cadaddy_doc::bimspec::Confidence::Stated {
+                        src_ids.push(o.add(format!(
+                            "IFCPROPERTYSINGLEVALUE({},$,IFCTEXT({}),$)",
+                            step_str(&format!("{key}.confidence")),
+                            step_str(field.confidence.as_str())
+                        )));
+                    }
+                }
+                let src_pset = o.add(format!("IFCPROPERTYSET('{}',$,'CaDaddy_SpecSource',$,{})", id(handle, 26), refs(&src_ids)));
+                o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{src_pset})", id(handle, 27)));
+            }
         }
+    }
+    for (product, handle, class) in with_props {
+        let Some(e) = d.entity(cadaddy_doc::Handle(handle)) else { continue };
+        element_props(&mut o, product, handle, class, &cadaddy_doc::props::read(&e.common.xdata), &|n, salt| id(n, salt));
     }
     for ((st, _, _, h, _), (inside, rooms)) in storeys.iter().zip(contained.iter().zip(&spaces)) {
         if !inside.is_empty() {
@@ -903,6 +1066,57 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
 }
 
 /// The wall type WALLGEN gave a wall (`type:<name>` after its source).
+/// An IFC value of a property: a number as a real, a boolean as one, anything else as a label.
+fn prop_value(p: &cadaddy_doc::props::Prop) -> String {
+    match &p.value {
+        serde_json::Value::Number(n) => {
+            n.as_f64().filter(|v| v.is_finite()).map_or_else(|| format!("IFCLABEL({})", step_str(&p.text())), |v| format!("IFCREAL({})", real(v)))
+        }
+        serde_json::Value::Bool(b) => format!("IFCBOOLEAN(.{}.)", if *b { "T" } else { "F" }),
+        _ => format!("IFCLABEL({})", step_str(&p.text())),
+    }
+}
+
+/// An element's own properties ([`cadaddy_doc::props`]) as property sets: every one in
+/// `Pset_CADaddy` (its unit, source, confidence and note in the property's description, so a
+/// read gives them back), and the ones a standard set has a place for in that set too
+/// (`Pset_WallCommon.FireRating`, `Pset_SpaceCommon.Reference`…).
+fn element_props(o: &mut Out, product: usize, handle: u64, class: &str, store: &cadaddy_doc::props::Props, id: &dyn Fn(u64, u64) -> String) {
+    use cadaddy_doc::props;
+    if store.is_empty() {
+        return;
+    }
+    let kind = props::kind_of_ifc_class(class);
+    let mut own = Vec::new();
+    let mut standard: Vec<(&'static str, Vec<usize>)> = Vec::new();
+    for (key, p) in store.iter().take(props::MAX_PROPS) {
+        let meta = serde_json::json!({ "unit": p.unit, "source": p.source, "confidence": p.confidence, "note": p.note });
+        let meta: serde_json::Map<String, serde_json::Value> =
+            meta.as_object().into_iter().flatten().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k.clone(), v.clone())).collect();
+        let desc = step_str(&serde_json::Value::Object(meta).to_string());
+        let value = if p.has_value() { prop_value(p) } else { "$".to_string() };
+        own.push(o.add(format!("IFCPROPERTYSINGLEVALUE({},{desc},{value},$)", step_str(key))));
+        if let Some((set, name)) = props::standard_ifc(kind, key).filter(|_| p.has_value()) {
+            let v = match name {
+                "Reference" => format!("IFCIDENTIFIER({})", step_str(&p.text())),
+                _ => format!("IFCLABEL({})", step_str(&p.text())),
+            };
+            let item = o.add(format!("IFCPROPERTYSINGLEVALUE('{name}',$,{v},$)"));
+            match standard.iter_mut().find(|(s, _)| *s == set) {
+                Some((_, items)) => items.push(item),
+                None => standard.push((set, vec![item])),
+            }
+        }
+    }
+    let set = o.add(format!("IFCPROPERTYSET('{}',$,'{}',$,{})", id(handle, 28), props::IFC_PSET, refs(&own)));
+    o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, 29)));
+    for (k, (name, items)) in standard.into_iter().enumerate() {
+        let salt = 30 + 2 * k as u64;
+        let set = o.add(format!("IFCPROPERTYSET('{}',$,'{name}',$,{})", id(handle, salt), refs(&items)));
+        o.add(format!("IFCRELDEFINESBYPROPERTIES('{}',$,$,$,(#{product}),#{set})", id(handle, salt + 1)));
+    }
+}
+
 fn wall_type_of(e: &Entity) -> Option<String> {
     tag_strings(e, "CADADDY_WALLGEN")?.iter().skip(3).find_map(|v| v.strip_prefix("type:")).map(str::to_string)
 }
@@ -1871,6 +2085,76 @@ impl Reader<'_> {
         }
     }
 
+    /// Object `id`'s properties as an element's own store ([`cadaddy_doc::props`]): what
+    /// `Pset_CADaddy` holds as it was written (source, unit, confidence and note from each
+    /// property's description), then the standard sets' properties our keys map to, then every
+    /// other set's as `Set.Name` (source `spec`, the document naming the set) — one store,
+    /// whatever program wrote the file.
+    fn own_props(&self, rel: &Relations, id: u64, class: &str) -> cadaddy_doc::props::Props {
+        use cadaddy_doc::props::{self, Prop, Props, Source, SourceKind};
+        let kind = props::kind_of_ifc_class(class);
+        let mut out = Props::default();
+        let mut later: Vec<(String, String, Prop)> = Vec::new();
+        let mut sets: Vec<u64> = rel.sets.get(&id).cloned().unwrap_or_default();
+        if let Some((_, ta)) = rel.types.get(&id).and_then(|t| self.m.get(t)) {
+            sets.extend(ref_list(ta, 5));
+        }
+        for sid in sets.iter().take(1000) {
+            let Some((name, a)) = self.m.get(sid) else { continue };
+            if name != "IFCPROPERTYSET" {
+                continue;
+            }
+            let set = a.get(2).and_then(P::text).unwrap_or_default().to_string();
+            for item in ref_list(a, 4).into_iter().take(props::MAX_PROPS) {
+                let Some((k, pa)) = self.m.get(&item) else { continue };
+                if k != "IFCPROPERTYSINGLEVALUE" && k != "IFCPROPERTYENUMERATEDVALUE" {
+                    continue;
+                }
+                let pname = pa.first().and_then(P::text).unwrap_or_default();
+                if pname.is_empty() {
+                    continue;
+                }
+                let raw = pa.get(2);
+                let value = match raw {
+                    Some(P::Typed(t, v))
+                        if matches!(t.as_str(), "IFCREAL" | "IFCINTEGER" | "IFCLENGTHMEASURE" | "IFCPOSITIVELENGTHMEASURE" | "IFCAREAMEASURE") =>
+                    {
+                        v.first().and_then(P::num).and_then(serde_json::Number::from_f64).map(serde_json::Value::Number)
+                    }
+                    Some(P::Typed(t, v)) if t == "IFCBOOLEAN" => match v.first() {
+                        Some(P::Enum(e)) if e == "T" => Some(serde_json::Value::Bool(true)),
+                        Some(P::Enum(e)) if e == "F" => Some(serde_json::Value::Bool(false)),
+                        _ => None,
+                    },
+                    Some(P::Null) | None => Some(serde_json::Value::Null),
+                    Some(p) => value_text(p).map(serde_json::Value::String),
+                }
+                .unwrap_or(serde_json::Value::Null);
+                if set.eq_ignore_ascii_case(props::IFC_PSET) {
+                    let meta: serde_json::Value = pa.get(1).and_then(P::text).and_then(|t| serde_json::from_str(t).ok()).unwrap_or_default();
+                    let mut prop = Prop::new(value, Source::from_doc(SourceKind::Spec, &format!("IFC {}", props::IFC_PSET)));
+                    if let Some(src) = meta.get("source").and_then(|v| serde_json::from_value::<Source>(v.clone()).ok()) {
+                        prop.source = src;
+                    }
+                    prop.unit = meta.get("unit").and_then(serde_json::Value::as_str).map(str::to_string);
+                    prop.confidence = meta.get("confidence").and_then(serde_json::Value::as_f64);
+                    prop.note = meta.get("note").and_then(serde_json::Value::as_str).map(str::to_string);
+                    out.set(pname, prop);
+                } else {
+                    let prop = Prop::new(value, Source::from_doc(SourceKind::Spec, &format!("IFC {set}")));
+                    let key = props::key_of_standard_ifc(kind, &set, pname).map_or_else(|| format!("{set}.{pname}"), str::to_string);
+                    later.push((key, set.clone(), prop));
+                }
+            }
+        }
+        for (key, _, prop) in later {
+            if prop.has_value() {
+                out.set_if_missing(&key, prop);
+            }
+        }
+        out
+    }
+
     /// What object `id` carries beyond its class, GlobalId and name, as tag strings: `level:`,
     /// `elevation:` (metres), `space:`, `building:`, `site:`, `type:`, `system:` and `prop:` ones.
     fn extras(&self, rel: &Relations, id: u64, unit: f64) -> Vec<String> {
@@ -2118,6 +2402,10 @@ pub fn read_ifc(bytes: &[u8]) -> Result<Drawing> {
             RawTag { code: 1000, value: cap(label, MAX_TAG) },
         ];
         xdata.extend(r.extras(&rel, *id, unit).into_iter().map(|value| RawTag { code: 1000, value }));
+        let own = r.own_props(&rel, *id, &class);
+        if !own.is_empty() {
+            xdata = cadaddy_doc::props::write(&xdata, &own);
+        }
         let mut c = Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() };
         if class == "Space" {
             c.transparency = cadaddy_doc::Transparency::Percent(80);
@@ -2327,6 +2615,9 @@ mod tests {
         ] {
             cases.push(wg(&[part, "Level 1", "2A"]));
         }
+        // A room model.build made: a space with its name (Q5291).
+        cases.push(wg(&["room", "Level 1", "2A", "type:Office", "name:Office", "number:101", "area_sf:120.00"]));
+        cases.push(wg(&["room", "Level 1", "2A"]));
         for kind in [
             "duct",
             "pipe",

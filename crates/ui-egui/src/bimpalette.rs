@@ -1,5 +1,7 @@
 //! The BIM Coordination palette: a dockable panel for reviewing MEP and structural
-//! coordination in 3D. Tabs: Model Tree, Trades, Clashes, Views, Section Box, Measure.
+//! coordination in 3D. Tabs: Model Tree (Level ▸ Trade ▸ Category ▸ Type ▸ element, with the
+//! selected element's properties), Colours (the trade colour table), Systems, Clashes, Views,
+//! Section Box, Measure.
 //!
 //! The palette drives the `coordination.*` engine commands and reads their results to show
 //! a live, interactive coordination viewer that matches or beats Navisworks for the
@@ -18,6 +20,7 @@ pub const DIALOG: &str = "bimcoordination";
 enum Tab {
     #[default]
     Tree,
+    Colours,
     Trades,
     Clashes,
     Views,
@@ -39,12 +42,16 @@ struct State {
     view_name: String,
     /// The selected clash index for navigation.
     selected_clash: Option<usize>,
-    /// Expanded levels in the tree.
-    expanded: std::collections::HashSet<String>,
     /// Coordination mode state.
     coord_mode: Option<Value>,
     /// Level filter for trades.
     level_filter: String,
+    /// The BIM view's settings (`bim.look`).
+    look: Option<Value>,
+    /// The trade colour table (`bim.trades`).
+    colours: Option<Value>,
+    /// The selected element and its properties (`bim.element`).
+    element: Option<(cadaddy_doc::Handle, Option<Value>)>,
 }
 
 fn id() -> egui::Id {
@@ -67,7 +74,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         let tabs = [
             (Tab::Tree, "Tree"),
-            (Tab::Trades, "Trades"),
+            (Tab::Colours, "Colours"),
+            (Tab::Trades, "Systems"),
             (Tab::Clashes, "Clashes"),
             (Tab::Views, "Views"),
             (Tab::SectionBox, "Section"),
@@ -86,6 +94,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 
     match st.tab {
         Tab::Tree => tree_tab(app, ui, &mut st),
+        Tab::Colours => colours_tab(app, ui, &mut st),
         Tab::Trades => trades_tab(app, ui, &mut st),
         Tab::Clashes => clashes_tab(app, ui, &mut st),
         Tab::Views => views_tab(app, ui, &mut st),
@@ -98,82 +107,219 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 
 // ─── Model Tree tab ───────────────────────────────────────────────────────────
 
+/// The BIM view's switches: on, the shell ghosted, the sheet's own lines in 3D.
+fn look_row(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
+    if st.look.is_none() {
+        st.look = app.session.execute("bim.look", &json!({})).ok();
+    }
+    let get = |k: &str| st.look.as_ref().and_then(|v| v.get(k)).and_then(Value::as_bool).unwrap_or(false);
+    let (mut on, mut ghost, mut sheet) = (get("on"), get("ghost"), get("sheet"));
+    let mut set: Option<Value> = None;
+    ui.horizontal_wrapped(|ui| {
+        if ui.checkbox(&mut on, crate::i18n::t("BIM View")).changed() {
+            set = Some(json!({ "on": on }));
+        }
+        if ui.add_enabled(on, egui::Checkbox::new(&mut ghost, crate::i18n::t("Ghost Architecture"))).changed() {
+            set = Some(json!({ "ghost": ghost }));
+        }
+        if ui.add_enabled(on, egui::Checkbox::new(&mut sheet, crate::i18n::t("Sheet Lines in 3D"))).changed() {
+            set = Some(json!({ "sheet": sheet }));
+        }
+    });
+    if let Some(p) = set {
+        match app.session.execute("bim.look", &p) {
+            Ok(v) => st.look = Some(v),
+            Err(e) => app.set_status(e.to_string()),
+        }
+    }
+}
+
+/// A branch's header: a checkbox (shown in the view) and its name (click: select it and zoom).
+fn branch_header(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, path: &[&str], node: &Value, strong: bool) {
+    let name = node.get("name").and_then(Value::as_str).unwrap_or("?");
+    let count = node.get("count").and_then(Value::as_u64).unwrap_or(0);
+    let mut vis = node.get("visible").and_then(Value::as_bool).unwrap_or(true);
+    if ui.checkbox(&mut vis, "").changed() {
+        st.tree_data = app.session.execute("bim.tree", &json!({ "path": path, "visible": vis })).ok();
+    }
+    let text = RichText::new(format!("{name}  ({count})"));
+    let text = if strong { text.strong() } else { text };
+    if ui.selectable_label(false, text).clicked()
+        && let Err(e) = app.session.execute("bim.tree", &json!({ "path": path, "select": true, "zoom": true }))
+    {
+        app.set_status(e.to_string());
+    }
+}
+
+/// The children of a tree node under `key`.
+fn kids<'a>(n: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
+    n.get(key).and_then(Value::as_array).into_iter().flatten()
+}
+
+fn name_of(n: &Value) -> String {
+    n.get("name").and_then(Value::as_str).unwrap_or("?").to_string()
+}
+
+/// One branch of the tree and what is under it (Level ▸ Trade ▸ Category ▸ Type ▸ element).
+fn branch(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, path: &[String], node: &Value, filter: &str) {
+    const LEVELS: [&str; 4] = ["trades", "categories", "types", "elements"];
+    let depth = path.len();
+    let id = ui.make_persistent_id(("bim-tree", path));
+    let refs: Vec<&str> = path.iter().map(String::as_str).collect();
+    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+        .show_header(ui, |ui| branch_header(app, ui, st, &refs, node, depth == 1))
+        .body(|ui| {
+            let key = LEVELS.get(depth - 1).copied().unwrap_or("elements");
+            for child in kids(node, key) {
+                if !filter.is_empty() && !child.to_string().to_ascii_lowercase().contains(filter) {
+                    continue;
+                }
+                if key == "elements" {
+                    let h = child.get("handle").and_then(Value::as_str).unwrap_or("");
+                    let name = child.get("name").and_then(Value::as_str).unwrap_or(h);
+                    if ui.selectable_label(false, name).clicked() {
+                        let _ = app.session.execute("zoom", &json!({ "mode": "object", "handles": [h] }));
+                        if let Some(hh) = cadaddy_doc::Handle::parse_hex(h) {
+                            app.session.set_selection(vec![hh]);
+                        }
+                    }
+                } else {
+                    let mut p = path.to_vec();
+                    p.push(name_of(child));
+                    branch(app, ui, st, &p, child, filter);
+                }
+            }
+        });
+}
+
 fn tree_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
-    // Refresh button.
+    look_row(app, ui, st);
     ui.horizontal(|ui| {
         if ui.button(crate::i18n::t("Refresh")).clicked() {
-            st.tree_data = app.session.execute("coordination.tree", &json!({})).ok();
+            st.tree_data = app.session.execute("bim.tree", &json!({})).ok();
+            st.look = None;
         }
         ui.text_edit_singleline(&mut st.search);
     });
-
-    // Auto-load on first show.
     if st.tree_data.is_none() {
-        st.tree_data = app.session.execute("coordination.tree", &json!({})).ok();
+        st.tree_data = app.session.execute("bim.tree", &json!({})).ok();
     }
-
-    let Some(data) = &st.tree_data else {
-        ui.label(crate::i18n::t("No building spec. Use Plans to Model first."));
+    let data = st.tree_data.clone().unwrap_or(Value::Null);
+    let levels: Vec<Value> = kids(&data, "levels").cloned().collect();
+    if levels.is_empty() {
+        ui.label(crate::i18n::t("Nothing is built yet. Use Plans to Model first."));
         return;
-    };
-
-    let levels = data.get("levels").and_then(Value::as_array);
-    let Some(levels) = levels else {
-        ui.label(crate::i18n::t("No levels found."));
-        return;
-    };
-
+    }
     let filter = st.search.to_ascii_lowercase();
-    egui::ScrollArea::vertical().id_salt("bim-tree").auto_shrink([false, false]).show(ui, |ui| {
-        for level in levels {
-            let name = level.get("name").and_then(Value::as_str).unwrap_or("?");
-            let elev = level.get("elevation_ft").and_then(Value::as_f64).unwrap_or(0.0);
-            let elements = level.get("elements").and_then(Value::as_u64).unwrap_or(0);
-
-            if !filter.is_empty() && !name.to_ascii_lowercase().contains(&filter) {
+    let height = (ui.available_height() * 0.6).max(120.0);
+    egui::ScrollArea::vertical().id_salt("bim-tree").max_height(height).auto_shrink([false, false]).show(ui, |ui| {
+        for level in &levels {
+            if !filter.is_empty() && !level.to_string().to_ascii_lowercase().contains(&filter) {
                 continue;
             }
+            branch(app, ui, st, &[name_of(level)], level, &filter);
+        }
+    });
+    ui.separator();
+    properties(app, ui, st);
+}
 
-            let expanded = st.expanded.contains(name);
-            let header = format!("{name}  ({elev:.1} ft, {elements} elements)");
-            let resp = ui.selectable_label(expanded, RichText::new(&header).strong());
-            if resp.clicked() {
-                if expanded {
-                    st.expanded.remove(name);
-                } else {
-                    st.expanded.insert(name.to_string());
-                }
-            }
-
-            if expanded {
-                ui.indent(name, |ui| {
-                    // Rooms.
-                    if let Some(rooms) = level.get("rooms").and_then(Value::as_array)
-                        && !rooms.is_empty()
-                    {
-                        ui.label(RichText::new(crate::i18n::t("Rooms")).color(Tokens::get().text_dim));
-                        for room in rooms {
-                            let rn = room.get("name").and_then(Value::as_str).unwrap_or("?");
-                            let cf = room.get("ceiling_ft").and_then(Value::as_f64).unwrap_or(0.0);
-                            ui.label(format!("  {rn} (ceiling {cf:.1} ft)"));
-                        }
-                    }
-                    // Systems.
-                    if let Some(systems) = level.get("systems").and_then(Value::as_array)
-                        && !systems.is_empty()
-                    {
-                        ui.label(RichText::new(crate::i18n::t("Systems")).color(Tokens::get().text_dim));
-                        for sys in systems {
-                            let sn = sys.get("name").and_then(Value::as_str).unwrap_or("?");
-                            let kind = sys.get("kind").and_then(Value::as_str).unwrap_or("?");
-                            let count = sys.get("count").and_then(Value::as_u64).unwrap_or(0);
-                            ui.label(format!("  {sn} ({kind}, {count} runs)"));
-                        }
-                    }
-                });
+/// The one selected element's properties (type, size, level, system, circuit, quantity,
+/// source, issues) and a button to its spot on the sheet.
+fn properties(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
+    let sel = app.session.selection();
+    let [h] = sel.as_slice() else {
+        ui.label(RichText::new(crate::i18n::t("Select one element to see its properties.")).color(Tokens::get().text_dim));
+        return;
+    };
+    if st.element.as_ref().is_none_or(|(k, _)| k != h) {
+        st.element = Some((*h, app.session.execute("bim.element", &json!({ "handle": h.hex() })).ok()));
+    }
+    let Some((_, Some(el))) = st.element.clone() else {
+        ui.label(RichText::new(crate::i18n::t("Not part of the built model.")).color(Tokens::get().text_dim));
+        return;
+    };
+    let text = |k: &str| el.get(k).and_then(Value::as_str).filter(|t| !t.is_empty()).map(str::to_string);
+    let q = el.get("quantity").cloned().unwrap_or(Value::Null);
+    let num = |k: &str| q.get(k).and_then(Value::as_f64);
+    let src = el.get("source").cloned().unwrap_or(Value::Null);
+    let issues = el.get("issues").and_then(Value::as_array).map_or(0, Vec::len);
+    let rows: [(&str, Option<String>); 14] = [
+        ("Type", text("type")),
+        ("Category", text("category")),
+        ("Trade", text("trade_label")),
+        ("Size", text("size")),
+        ("Level", text("level")),
+        ("System", text("system")),
+        ("Circuit", el.get("circuit").filter(|v| !v.is_null()).map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string))),
+        ("Length", num("length_ft").map(|v| format!("{v:.2} ft"))),
+        ("Area", num("area_sf").map(|v| format!("{v:.2} sf"))),
+        ("Height", num("height_ft").map(|v| format!("{v:.2} ft"))),
+        ("Count", q.get("count").and_then(Value::as_u64).map(|v| v.to_string())),
+        ("Sheet", src.get("sheet").and_then(Value::as_str).or(src.get("sheet_file").and_then(Value::as_str)).map(str::to_string)),
+        ("Source", src.get("kind").and_then(Value::as_str).map(|k| format!("{k} {}", src.get("handle").and_then(Value::as_str).unwrap_or("")))),
+        ("Issues", (issues > 0).then(|| issues.to_string())),
+    ];
+    egui::Grid::new("bim-element").num_columns(2).striped(true).show(ui, |ui| {
+        for (label, v) in rows {
+            if let Some(v) = v {
+                ui.label(RichText::new(crate::i18n::t(label)).color(Tokens::get().text_dim));
+                ui.label(v);
+                ui.end_row();
             }
         }
     });
+    if !src.is_null() && ui.button(crate::i18n::t("Show on Sheet")).clicked() {
+        if let Err(e) = app.session.execute("bim.element", &json!({ "handle": h.hex(), "open_source": true })) {
+            app.set_status(e.to_string());
+        }
+        st.element = None;
+    }
+}
+
+// ─── Colours tab ──────────────────────────────────────────────────────────────
+
+/// The trade colour table: each trade's colour (editable) and whether it shows.
+fn colours_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
+    if st.colours.is_none() {
+        st.colours = app.session.execute("bim.trades", &json!({})).ok();
+    }
+    if ui.button(crate::i18n::t("Reset Colours")).clicked() {
+        st.colours = app.session.execute("bim.trades", &json!({ "reset": true })).ok();
+    }
+    let rows: Vec<Value> = st.colours.as_ref().map(|v| kids(v, "trades").cloned().collect()).unwrap_or_default();
+    let mut set: Option<Value> = None;
+    egui::ScrollArea::vertical().id_salt("bim-colours").auto_shrink([false, false]).show(ui, |ui| {
+        let mut group = String::new();
+        for r in &rows {
+            let g = r.get("group").and_then(Value::as_str).unwrap_or("");
+            if g != group {
+                group = g.to_string();
+                ui.label(RichText::new(crate::i18n::t(g)).strong());
+            }
+            let key = r.get("trade").and_then(Value::as_str).unwrap_or("");
+            let label = r.get("label").and_then(Value::as_str).unwrap_or(key);
+            let count = r.get("count").and_then(Value::as_u64).unwrap_or(0);
+            let c: Vec<u8> = kids(r, "color").filter_map(Value::as_u64).map(|v| v.min(255) as u8).collect();
+            let mut rgb = [c.first().copied().unwrap_or(200), c.get(1).copied().unwrap_or(200), c.get(2).copied().unwrap_or(200)];
+            let mut vis = r.get("visible").and_then(Value::as_bool).unwrap_or(true);
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut vis, "").changed() {
+                    set = Some(json!({ "visible": { key: vis } }));
+                }
+                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                    set = Some(json!({ "colors": { key: rgb } }));
+                }
+                ui.label(format!("{}  ({count})", crate::i18n::t(label)));
+            });
+        }
+    });
+    if let Some(p) = set {
+        match app.session.execute("bim.trades", &p) {
+            Ok(v) => st.colours = Some(v),
+            Err(e) => app.set_status(e.to_string()),
+        }
+    }
 }
 
 // ─── Trades tab ───────────────────────────────────────────────────────────────
@@ -201,6 +347,12 @@ fn trades_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
             let params = if st.level_filter.is_empty() { json!({}) } else { json!({ "level": st.level_filter }) };
             st.trades_data = app.session.execute("coordination.trades", &params).ok();
         }
+        // Hide the MEP objects of the other levels (undo or Show All brings them back).
+        if ui.add_enabled(!st.level_filter.trim().is_empty(), egui::Button::new(crate::i18n::t("Isolate Level"))).clicked()
+            && let Err(e) = app.session.execute("coordination.isolate", &json!({ "level": st.level_filter.trim() }))
+        {
+            app.set_status(e.to_string());
+        }
     });
 
     let Some(data) = &st.trades_data.clone() else {
@@ -218,6 +370,7 @@ fn trades_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
     ui.horizontal(|ui| {
         if ui.button(crate::i18n::t("Show All")).clicked() {
             let sets: Vec<Value> = trades.iter().map(|tr| json!({ "system": tr.get("system"), "visible": true })).collect();
+            let _ = app.session.execute("coordination.isolate", &json!({ "reset": true }));
             st.trades_data = app.session.execute("coordination.trades", &json!({ "set": sets })).ok();
         }
         if ui.button(crate::i18n::t("Hide All")).clicked() {
@@ -242,8 +395,13 @@ fn trades_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
                 let color = if visible { t.text } else { t.text_faint };
                 ui.label(RichText::new(format!("{system} ({kind}, {count} runs)")).color(color));
                 // Isolate button.
+                // Isolate button: this system (on the level typed above, if any).
                 if ui.small_button(crate::i18n::t("Isolate")).clicked() {
-                    let _ = app.session.execute("coordination.isolate", &json!({ "system": system }));
+                    let level = st.level_filter.trim();
+                    let params = if level.is_empty() { json!({ "system": system }) } else { json!({ "system": system, "level": level }) };
+                    if let Err(e) = app.session.execute("coordination.isolate", &params) {
+                        app.set_status(e.to_string());
+                    }
                     st.trades_data = app.session.execute("coordination.trades", &json!({})).ok();
                 }
             });
@@ -361,7 +519,21 @@ fn views_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
 
             ui.horizontal(|ui| {
                 if ui.button(name).clicked() {
-                    st.views_data = app.session.execute("coordination.views", &json!({ "restore": name })).ok();
+                    match app.session.execute("coordination.views", &json!({ "restore": name })) {
+                        Ok(r) => {
+                            let warnings: Vec<&str> =
+                                r.get("warnings").and_then(Value::as_array).map(|w| w.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+                            if !warnings.is_empty() {
+                                app.set_status(warnings.join("; "));
+                            }
+                        }
+                        Err(e) => app.set_status(e.to_string()),
+                    }
+                    // The list again (restoring answers with what it did, not the views).
+                    st.views_data = None;
+                    st.coord_mode = None;
+                    st.sectionbox = None;
+                    st.trades_data = None;
                 }
                 let t = Tokens::get();
                 ui.label(RichText::new(detail).color(t.text_dim));

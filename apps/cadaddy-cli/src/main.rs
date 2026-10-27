@@ -1,11 +1,14 @@
 //! `cadaddy-cli`: headless CADaddy.
 //!
 //! ```text
-//! cadaddy-cli info FILE                           summary as JSON (a .cdy file's manifest and chunk sizes first)
+//! cadaddy-cli help [COMMAND]                     the main workflows, or one command's summary, parameters and example
+//! cadaddy-cli guide                              every workflow step by step (the MCP `workflows` text)
+//! cadaddy-cli info FILE [--full]                   short summary (--full for detailed JSON with manifest and chunk sizes)
 //! cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|pdf|svg|png) [--window x0,y0,x1,y1 | --view extents|current]
 //! cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|pdf|svg|png)   every drawing in a folder
 //! cadaddy-cli verify FILE.cdy                     check every chunk's checksum, the index and the drawing (exit 1 if damaged)
-//! cadaddy-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--save OUT] [--export OUT.png] [--window ... | --view ...]
+//! cadaddy-cli check-import FILE.(cdy|dwg|dxf)     import accuracy check (exit 1 on fail)
+//! cadaddy-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--cmd-file F.jsonl] [--save OUT] [--export OUT.png] [--window ... | --view ...]
 //! cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]   batch plot: one PDF per drawing
 //! cadaddy-cli commands [FILTER]                   command catalog (JSON)
 //! cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--launch]]  MCP server on stdio (the open app on the agent port, else headless; or bridged to a given app)
@@ -59,14 +62,18 @@ fn stdout_failed(e: std::io::Error) {
 }
 
 const USAGE: &str = "usage:
-  cadaddy-cli info FILE.(dwg|dxf|cdy)
+  cadaddy-cli help [COMMAND]    workflows, or one command's summary, parameters and example
+  cadaddy-cli guide             every workflow with its MCP calls and shell commands
+  cadaddy-cli info FILE.(dwg|dxf|cdy) [--full]
   cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|svg|png|pdf) [FRAMING]
   cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|svg|png|pdf) [--recurse] [FRAMING]
   cadaddy-cli verify FILE.cdy
-  cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
+  cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]
+  cadaddy-cli check-import FILE.(cdy|dwg|dxf) [--json]
+  cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--cmd-file F (one `id {json}` per line)] [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
   cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]
   cadaddy-cli commands [FILTER]
-  cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--launch]]
+  cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--no-launch]]
   cadaddy-cli perf [N | FILE]
   cadaddy-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)
   cadaddy-cli --version
@@ -80,6 +87,184 @@ image framing (png 2400x1600, svg, pdf; always model space):
   --view extents           always fit the drawing extents.
   --view current           the current view (as last set by zoom/pan/view.set; a freshly
                            opened drawing's view is its extents plus a 10% margin).";
+
+/// One `cadaddy-cli` subcommand for `cadaddy-cli help`: its usage, what it does, an example.
+struct CliCommand {
+    name: &'static str,
+    usage: &'static str,
+    summary: &'static str,
+    example: &'static str,
+}
+
+/// Every subcommand `cli` dispatches (a test keeps the two in step).
+const CLI_COMMANDS: &[CliCommand] = &[
+    CliCommand {
+        name: "help",
+        usage: "cadaddy-cli help [COMMAND]",
+        summary: "This help: the main workflows, or one command's summary, parameters and an example. COMMAND is a \
+                  cadaddy-cli subcommand (bim, run, convert…) or any drawing command (line, bim.takeoff, job.start…). \
+                  Also --help and -h, and `cadaddy-cli COMMAND --help`.",
+        example: "cadaddy-cli help bim.takeoff",
+    },
+    CliCommand {
+        name: "guide",
+        usage: "cadaddy-cli guide",
+        summary: "Every workflow step by step, each step with its MCP call and its cadaddy-cli command (the same text as the MCP `workflows` tool).",
+        example: "cadaddy-cli guide",
+    },
+    CliCommand {
+        name: "info",
+        usage: "cadaddy-cli info FILE.(dwg|dxf|cdy) [--full]",
+        summary: "A short JSON summary of a drawing: format, entities, layers, blocks, units, extents. --full gives the detailed JSON \
+                  (with a .cdy file's manifest and chunk sizes).",
+        example: "cadaddy-cli info plan.dwg",
+    },
+    CliCommand {
+        name: "convert",
+        usage: "cadaddy-cli convert IN.(dwg|dxf|cdy) OUT.(dwg|dxf|cdy|svg|png|pdf) [FRAMING]\n  \
+                cadaddy-cli convert IN_FOLDER OUT_FOLDER --to (dwg|dxf|cdy|svg|png|pdf) [--recurse] [FRAMING]",
+        summary: "Converts one drawing, or every drawing in a folder, by the output's extension. FRAMING (--window, --view) picks what an image shows.",
+        example: "cadaddy-cli convert drawings converted --to cdy",
+    },
+    CliCommand {
+        name: "verify",
+        usage: "cadaddy-cli verify FILE.cdy",
+        summary: "Checks every chunk's checksum, the index and the drawing of a .cdy file; exit status 1 if it is damaged.",
+        example: "cadaddy-cli verify model.cdy",
+    },
+    CliCommand {
+        name: "bim",
+        usage: "cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]",
+        summary: "PDF prints to a BIM model in one call: imports the prints, checks the import, drafts a building spec, builds the \
+                  model and saves it (--out names the .cdy). A failed import check stops the build unless --force. Prints JSON \
+                  with the saved paths, check results, built counts and the next steps.",
+        example: "cadaddy-cli bim prints --out model.cdy",
+    },
+    CliCommand {
+        name: "check-import",
+        usage: "cadaddy-cli check-import FILE.(cdy|dwg|dxf) [--json]",
+        summary: "The import accuracy check on an imported drawing; exit status 1 when it fails.",
+        example: "cadaddy-cli check-import model.cdy --json",
+    },
+    CliCommand {
+        name: "run",
+        usage: "cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... \
+                [--cmd-file F] [--save OUT] [--export OUT.(png|svg|pdf)] [FRAMING]",
+        summary: "Opens a drawing (or a new one), runs commands in order and prints each result as JSON, then saves or exports. \
+                  --cmd takes any drawing command with JSON parameters (`cadaddy-cli help COMMAND` shows them); --cmd-file \
+                  reads one `id {json}` per line; --script runs command-line text.",
+        example: "cadaddy-cli run model.cdy --cmd 'bim.takeoff {\"group_by\":\"level\"}'",
+    },
+    CliCommand {
+        name: "plot",
+        usage: "cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]",
+        summary: "Batch plot: one PDF per drawing in a folder.",
+        example: "cadaddy-cli plot drawings pdfs",
+    },
+    CliCommand {
+        name: "commands",
+        usage: "cadaddy-cli commands [FILTER]",
+        summary: "The command catalog as JSON (id, label, menu, params), filtered by id or label.",
+        example: "cadaddy-cli commands takeoff",
+    },
+    CliCommand {
+        name: "mcp",
+        usage: "cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--no-launch]]",
+        summary: "An MCP server on stdio for AI agents: the open app on the agent port, else headless; or bridged to a given app.",
+        example: "cadaddy-cli mcp --headless",
+    },
+    CliCommand {
+        name: "perf",
+        usage: "cadaddy-cli perf [N | FILE]",
+        summary: "A timing table on a synthetic N-entity drawing, or the display-list build of a drawing zoomed in step by step.",
+        example: "cadaddy-cli perf 100000",
+    },
+    CliCommand {
+        name: "sample",
+        usage: "cadaddy-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)",
+        summary: "Writes a built-in sample drawing.",
+        example: "cadaddy-cli sample floorplan floorplan.dxf",
+    },
+    CliCommand { name: "--version", usage: "cadaddy-cli --version", summary: "The version.", example: "cadaddy-cli --version" },
+];
+
+/// `cadaddy-cli help`: the workflows with copy-paste commands, then where to look next.
+fn help_overview() -> String {
+    let more = [
+        "More:",
+        "  cadaddy-cli guide              every workflow step by step, with the MCP calls",
+        "  cadaddy-cli help COMMAND       a subcommand (bim, run, convert…) or a drawing command (bim.takeoff, job.start,",
+        "                                 line…): its summary, parameters and an example",
+    ]
+    .join("\n");
+    format!(
+        "cadaddy-cli {} — CADaddy without a window.\n\n\
+         Main workflows (copy-paste; `prints` is a PDF or a folder of PDFs, `costs.csv` a cost table):\n{}\n{more}\n  \
+         cadaddy-cli commands [FILTER]  find drawing commands ({} in all)\n\n{USAGE}",
+        env!("CARGO_PKG_VERSION"),
+        cadaddy_engine::workflows::summary_text(),
+        cadaddy_engine::command_specs().len(),
+    )
+}
+
+/// `cadaddy-cli help NAME`: a subcommand's usage, summary and example, and/or a drawing
+/// command's help page (summary, parameters, example).
+fn help_for(name: &str) -> Result<String, String> {
+    let mut out = Vec::new();
+    let bare = name.trim_start_matches("--");
+    if let Some(c) = CLI_COMMANDS.iter().find(|c| c.name == name || c.name.trim_start_matches("--") == bare) {
+        out.push(format!("cadaddy-cli {}\n\n{}\n\nUsage:\n  {}\n\nExample:\n  {}\n", c.name, c.summary, c.usage, c.example));
+    }
+    if let Some(spec) = cadaddy_engine::cmd::find_by_id_or_alias(name) {
+        let page = spec.help_page();
+        let mut t = format!("{} — {}\n\n{}\n", page.id, page.label, page.help_text);
+        let params = if page.params.trim().is_empty() { "{} (none)" } else { page.params };
+        t.push_str(&format!("\nParameters (JSON):\n  {params}\n"));
+        let mut facts = Vec::new();
+        if !page.aliases.is_empty() {
+            facts.push(format!("aliases {}", page.aliases.join(", ")));
+        }
+        if !page.menu_path.is_empty() {
+            facts.push(format!("menu {}", page.menu_path));
+        }
+        if !page.shortcut.is_empty() {
+            facts.push(format!("shortcut {}", page.shortcut));
+        }
+        if !page.prompts.is_empty() {
+            facts.push(format!("asks first: {}", page.prompts.join(" ")));
+        }
+        if !facts.is_empty() {
+            t.push_str(&format!("\n{}\n", facts.join("; ")));
+        }
+        t.push_str(&format!("\nExample:\n  {}\n  MCP: {}\n", page.example, page.mcp_example));
+        if page.generated {
+            t.push_str("  (example values come from the parameter list: replace them with yours)\n");
+        }
+        if !out.is_empty() {
+            t = format!("Drawing command (run it with `cadaddy-cli run … --cmd`):\n\n{t}");
+        }
+        out.push(t);
+    }
+    if out.is_empty() {
+        let l = name.to_ascii_lowercase();
+        let near: Vec<String> =
+            cadaddy_engine::command_specs().iter().filter(|c| c.id.contains(l.as_str())).take(10).map(|c| c.id.to_string()).collect();
+        let hint = if near.is_empty() { String::new() } else { format!(" Did you mean: {}?", near.join(", ")) };
+        return Err(format!(
+            "help: no subcommand or drawing command `{name}`.{hint} `cadaddy-cli help` lists the subcommands; `cadaddy-cli commands FILTER` finds drawing commands."
+        ));
+    }
+    Ok(out.join("\n"))
+}
+
+fn help(args: &[String]) -> Result<(), String> {
+    match args {
+        [] => outln!("{}", help_overview()),
+        [name] => outln!("{}", help_for(name)?),
+        _ => return Err("usage: cadaddy-cli help [COMMAND]".into()),
+    }
+    Ok(())
+}
 
 /// What part of model space an image export shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -239,8 +424,9 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
 const NO_OPTIONS: &[OptionSpec] = &[];
 
 /// One JSON document: the drawing's summary, and for a .cdy file its container too (manifest,
-/// what each kind of chunk takes, the bytes earlier saves left behind).
-fn info(path: &str) -> Result<(), String> {
+/// what each kind of chunk takes, the bytes earlier saves left behind). `full` adds entity
+/// details and container internals; the default is a compact summary.
+fn info(path: &str, full: bool) -> Result<(), String> {
     let container = std::fs::read(path).ok().and_then(|bytes| {
         let m = cadaddy_io::cdy::manifest(&bytes)?;
         let check = cadaddy_io::cdy::verify(&bytes).unwrap_or_default();
@@ -252,7 +438,29 @@ fn info(path: &str) -> Result<(), String> {
     if let (Some(obj), Some(serde_json::Value::Object(c))) = (v.as_object_mut(), container) {
         obj.extend(c);
     }
-    outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    if full {
+        outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    } else {
+        // Short summary: file, format, entities, extents, units, layer/block counts.
+        let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("?");
+        let entities = v.get("entityCount").and_then(Value::as_u64).unwrap_or(0);
+        let layers = v.get("layers").and_then(Value::as_array).map_or(0, Vec::len);
+        let blocks = v.get("blocks").and_then(Value::as_array).map_or(0, Vec::len);
+        let units = v.get("units").and_then(Value::as_str).unwrap_or("?");
+        let extents = v.get("extents").cloned().unwrap_or(Value::Null);
+        let short = json!({
+            "file": path,
+            "format": ext,
+            "entities": entities,
+            "layers": layers,
+            "blocks": blocks,
+            "units": units,
+            "extents": extents,
+            // Records a damaged file lost stay visible without --full.
+            "skipped": v.get("skipped").cloned().unwrap_or(Value::Null),
+        });
+        outln!("{}", serde_json::to_string_pretty(&short).unwrap_or_default());
+    }
     Ok(())
 }
 
@@ -354,10 +562,25 @@ fn convert_folder(i: &str, o: &str, to: &str, recurse: bool, framing: Framing) -
     }
     check_framed_output(framing, Some(&format!("x.{to}")))?;
     let inputs = convert::folder_inputs(std::path::Path::new(i), recurse)?;
-    if inputs.is_empty() {
-        return Err(format!("{i}: no drawings (.dwg, .dxf, .cdy) in this folder"));
+    // PDFs import through the same path as `convert IN.pdf OUT` (the batch job reads drawings only).
+    let pdfs = convert::folder_inputs_of(std::path::Path::new(i), recurse, &["pdf"])?;
+    if inputs.is_empty() && pdfs.is_empty() {
+        return Err(format!("{i}: no drawings (.dwg, .dxf, .cdy, .pdf) in this folder"));
     }
     std::fs::create_dir_all(o).map_err(|e| format!("{o}: {e}"))?;
+    let mut pdf_failed = 0usize;
+    for p in &pdfs {
+        let stem = p.path.file_stem().map(std::path::PathBuf::from).unwrap_or_default();
+        let out = std::path::Path::new(o).join(&p.sub).join(stem).with_extension(to);
+        let made = out.parent().map_or(Ok(()), std::fs::create_dir_all).map_err(|e| e.to_string());
+        if let Err(e) = made.and_then(|()| convert_file(&p.path.to_string_lossy(), &out.to_string_lossy(), framing)) {
+            eprintln!("{}: {e}", p.path.display());
+            pdf_failed += 1;
+        }
+    }
+    if inputs.is_empty() {
+        return if pdf_failed == 0 { Ok(()) } else { Err(format!("{pdf_failed} of {} PDFs could not be converted", pdfs.len())) };
+    }
     let job =
         convert::Job { inputs, to: to.to_string(), out: Some(o.into()), exists: convert::Exists::Overwrite, bak: false, ..convert::Job::default() };
     let image = |from: &std::path::Path, out: &std::path::Path, _: &convert::Job| {
@@ -370,8 +593,8 @@ fn convert_folder(i: &str, o: &str, to: &str, recurse: bool, framing: Framing) -
         }
     });
     outln!("{}", serde_json::to_string_pretty(&sum.to_json()).unwrap_or_default());
-    let failed = sum.count(convert::Status::Failed);
-    if failed == 0 { Ok(()) } else { Err(format!("{failed} of {} drawings could not be converted", sum.total)) }
+    let failed = sum.count(convert::Status::Failed) + pdf_failed;
+    if failed == 0 { Ok(()) } else { Err(format!("{failed} of {} drawings could not be converted", sum.total + pdfs.len())) }
 }
 
 /// `verify FILE.cdy`: the check as JSON; an error (exit status 1) when the file is damaged.
@@ -385,6 +608,76 @@ fn verify(path: &str) -> Result<(), String> {
         let bad = check["chunks"].as_array().map_or(0, |c| c.iter().filter(|c| c.get("damage").is_some() && c["live"] == json!(true)).count());
         Err(format!("{path}: damaged ({bad} damaged parts, index {}; see the report)", check["index"].as_str().unwrap_or("?")))
     }
+}
+
+/// `check-import FILE.cdy [--json]`: run import accuracy checks on a drawing file.
+/// Exit 1 on fail.
+/// `cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]`: one-call PDF → BIM pipeline.
+fn bim(args: &[String]) -> Result<(), String> {
+    let mut path: Option<&str> = None;
+    let mut out: Option<String> = None;
+    let mut force = false;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--out" => out = Some(it.next().ok_or("--out needs a .cdy file path")?.clone()),
+            "--force" => force = true,
+            o if o.starts_with('-') => return Err(format!("bim: unknown option {o}")),
+            f => {
+                if path.is_some() {
+                    return Err("bim takes one file or folder".into());
+                }
+                path = Some(f);
+            }
+        }
+    }
+    let path = path.ok_or("usage: cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]")?;
+    let mut s = Session::for_app();
+    s.new_drawing_with_viewports(false);
+    // The model is saved at --out (default: a temp folder); nothing goes next to the PDFs.
+    let mut p = json!({ "path": path, "force": force });
+    if let Some(o) = &out {
+        p["out"] = json!(o);
+    }
+    let r = s.execute("bim.from_pdf", &p).map_err(|e| e.to_string())?;
+    outln!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+    let cdy_paths = r.get("cdy_paths").and_then(Value::as_array).map_or(0, Vec::len);
+    if cdy_paths == 0 { Err("no BIM models were built; see warnings in the output".into()) } else { Ok(()) }
+}
+
+fn check_import(args: &[String]) -> Result<(), String> {
+    let mut json_output = false;
+    let mut file = None;
+    for a in args {
+        match a.as_str() {
+            "--json" => json_output = true,
+            o if o.starts_with('-') => return Err(format!("check-import: unknown option {o}")),
+            f => {
+                if file.is_some() {
+                    return Err("check-import takes one file".into());
+                }
+                file = Some(f);
+            }
+        }
+    }
+    let path = file.ok_or("check-import FILE.cdy [--json]")?;
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    let d = cadaddy_io::read(&bytes, name).map_err(|e| format!("{path}: {e}"))?;
+    let result = cadaddy_engine::cmd::import_check::check_drawing(&d);
+    if json_output {
+        outln!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+    } else {
+        outln!("{} (score {}/100)", if result.pass { "PASS" } else { "FAIL" }, result.score);
+        for c in &result.checks {
+            let mark = if c.pass { "ok" } else { "FAIL" };
+            outln!("  [{mark}] {}: {}", c.id, c.found);
+            if !c.pass && !c.hint.is_empty() {
+                outln!("       hint: {}", c.hint);
+            }
+        }
+    }
+    if result.pass { Ok(()) } else { Err(format!("{path}: import check failed (score {}/100)", result.score)) }
 }
 
 /// `plot IN_FOLDER OUT_FOLDER`: every drawing in a folder plotted to one PDF each (PUBLISH's batch
@@ -451,6 +744,18 @@ fn run(args: &[String]) -> Result<(), String> {
                 steps.push(("script".into(), std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?));
             }
             "--cmd" => steps.push(("cmd".into(), it.next().ok_or("--cmd needs `id {json}`")?.clone())),
+            // One `id {json}` per line (PowerShell 5 strips the quotes inside a --cmd argument).
+            "--cmd-file" => {
+                let p = it.next().ok_or("--cmd-file needs a path")?;
+                let bytes = std::fs::read(p).map_err(|e| format!("--cmd-file {p}: {e}"))?;
+                let text = cmd_file_text(&bytes).map_err(|e| format!("--cmd-file {p}: {e}"))?;
+                for (n, line) in text.lines().enumerate() {
+                    let line = line.trim();
+                    if !line.is_empty() && !line.starts_with('#') {
+                        steps.push((format!("cmd {p}:{}", n + 1), line.to_string()));
+                    }
+                }
+            }
             "--save" => save = Some(it.next().ok_or("--save needs a path")?.clone()),
             "--export" => exp = Some(it.next().ok_or("--export needs a path")?.clone()),
             f if !f.starts_with("--") => open(&mut s, f)?,
@@ -466,9 +771,11 @@ fn run(args: &[String]) -> Result<(), String> {
         match kind.as_str() {
             "script" => s.script(&body).map_err(|e| e.to_string())?,
             _ => {
+                // `cmd FILE:LINE` for a --cmd-file line: errors say where it came from.
+                let at = kind.strip_prefix("cmd ").map(|w| format!("{w}: ")).unwrap_or_default();
                 let (id, json) = body.split_once(' ').unwrap_or((&body, "{}"));
-                let params: Value = serde_json::from_str(json).map_err(|e| format!("--cmd {id}: {e}"))?;
-                let r = s.execute(id, &params).map_err(|e| e.to_string())?;
+                let params: Value = serde_json::from_str(json).map_err(|e| format!("{at}--cmd {id}: {e}"))?;
+                let r = s.execute(id, &params).map_err(|e| format!("{at}{e}"))?;
                 if !r.is_null() {
                     outln!("{r}");
                 }
@@ -479,6 +786,10 @@ fn run(args: &[String]) -> Result<(), String> {
         eprintln!("{l}");
     }
     if let Some(p) = save {
+        // PDF images an import left in the session's temp folder go next to the saved drawing.
+        for note in cadaddy_engine::cmd::file::adopt_session_images(&mut s, &p) {
+            eprintln!("{note}");
+        }
         export(&s, &p)?;
     }
     if let Some(p) = exp {
@@ -486,6 +797,25 @@ fn run(args: &[String]) -> Result<(), String> {
         export_framed(&s, &p, window)?;
     }
     Ok(())
+}
+
+/// The text of a --cmd-file: UTF-8 (a leading byte-order mark is dropped), or UTF-16 with a
+/// byte-order mark, as Windows PowerShell 5's `>` and `Out-File` write it.
+fn cmd_file_text(bytes: &[u8]) -> Result<String, String> {
+    let utf16 = |big: bool, rest: &[u8]| {
+        let (units, odd) = rest.as_chunks::<2>();
+        if !odd.is_empty() {
+            return Err("UTF-16 text with an odd number of bytes".to_string());
+        }
+        let units: Vec<u16> = units.iter().map(|b| if big { u16::from_be_bytes(*b) } else { u16::from_le_bytes(*b) }).collect();
+        String::from_utf16(&units).map_err(|e| e.to_string())
+    };
+    match bytes {
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8(rest.to_vec()).map_err(|e| e.to_string()),
+        [0xFF, 0xFE, rest @ ..] => utf16(false, rest),
+        [0xFE, 0xFF, rest @ ..] => utf16(true, rest),
+        _ => String::from_utf8(bytes.to_vec()).map_err(|_| "not UTF-8 or UTF-16 text (save it as UTF-8)".to_string()),
+    }
 }
 
 /// Small deterministic generator (xorshift64*) so perf runs are repeatable without a dependency.
@@ -730,9 +1060,12 @@ enum McpTarget {
 
 /// Parses the arguments after `mcp`. `--connect` must be followed by a `HOST:PORT`; a missing,
 /// empty or flag-like value is an error, never a silent fall back to a headless session (#103).
+/// When no `--connect` is given, `CADADDY_CONTROL_PORT` and the legacy `CADCRAFT_CONTROL_PORT` are
+/// checked: a port there becomes `--connect 127.0.0.1:PORT --launch`.
 fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
     let mut addr: Option<String> = None;
-    let (mut lazy, mut launch, mut headless) = (false, false, false);
+    let (mut lazy, mut headless) = (false, false);
+    let mut no_launch = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -749,15 +1082,32 @@ fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
             }
             "--lazy" => lazy = true,
             "--headless" => headless = true,
-            "--launch" => launch = true,
+            // Launch is the default for --connect; the flag stays accepted.
+            "--launch" => {}
+            "--no-launch" => no_launch = true,
             other => return Err(format!("mcp: unknown argument {other}\n{USAGE}")),
+        }
+    }
+    // When no --connect is given, check CADADDY_CONTROL_PORT / CADCRAFT_CONTROL_PORT.
+    if addr.is_none() && !headless {
+        let port_str =
+            std::env::var("CADADDY_CONTROL_PORT").or_else(|_| std::env::var("CADCRAFT_CONTROL_PORT")).ok().filter(|v| !v.trim().is_empty());
+        if let Some(ps) = port_str {
+            let p = ps.trim();
+            if let Ok(port) = p.parse::<u16>() {
+                addr = Some(format!("127.0.0.1:{port}"));
+            }
         }
     }
     match addr {
         Some(_) if headless => Err("--headless and --connect exclude each other".into()),
-        // `--launch` connects at the first call too (the app opens then).
-        Some(addr) => Ok(McpTarget::Connect { addr, lazy: lazy || launch, launch }),
-        None if lazy || launch => Err("--lazy and --launch need --connect HOST:PORT".into()),
+        // `--launch` defaults on for --connect: the app opens at first call if not running.
+        // Pass `--no-launch` to turn it off.
+        Some(addr) => {
+            let launch = !no_launch;
+            Ok(McpTarget::Connect { addr, lazy: lazy || launch, launch })
+        }
+        None if lazy => Err("--lazy needs --connect HOST:PORT".into()),
         None if headless => Ok(McpTarget::Headless),
         None => Ok(McpTarget::Auto),
     }
@@ -865,13 +1215,15 @@ mod mcp_args_tests {
     #[test]
     fn mcp_connect_with_address_selects_remote() {
         let to = |addr: &str, lazy, launch| Ok(McpTarget::Connect { addr: addr.into(), lazy, launch });
-        assert_eq!(parse_mcp_args(&args(&["--connect", "127.0.0.1:7979"])), to("127.0.0.1:7979", false, false));
-        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979"])), to("localhost:7979", false, false));
-        assert_eq!(parse_mcp_args(&args(&["--lazy", "--connect", "localhost:7979"])), to("localhost:7979", true, false));
+        // --launch defaults ON: --connect alone gets launch=true, lazy=true.
+        assert_eq!(parse_mcp_args(&args(&["--connect", "127.0.0.1:7979"])), to("127.0.0.1:7979", true, true));
+        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979"])), to("localhost:7979", true, true));
+        assert_eq!(parse_mcp_args(&args(&["--lazy", "--connect", "localhost:7979"])), to("localhost:7979", true, true));
         assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979", "--launch"])), to("localhost:7979", true, true));
-        // Without an app to reach they mean nothing: never a headless session.
+        // --no-launch turns it off.
+        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979", "--no-launch"])), to("localhost:7979", false, false));
+        // --lazy without --connect is still an error.
         assert!(parse_mcp_args(&args(&["--lazy"])).is_err());
-        assert!(parse_mcp_args(&args(&["--launch"])).is_err());
     }
 
     #[test]
@@ -891,6 +1243,81 @@ mod mcp_args_tests {
     }
 }
 
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+
+    /// The subcommand names `cli` dispatches, read from its `Some("…")` arms.
+    fn dispatched() -> Vec<String> {
+        let src = include_str!("main.rs");
+        let body = src.split("\nfn cli() -> ExitCode {").nth(1).unwrap();
+        let body = body.split("\n}\n").next().unwrap();
+        let mut names = Vec::new();
+        for arm in body.split("Some(\"").skip(1) {
+            for name in arm.split(')').next().unwrap().split('|') {
+                let name = name.trim().trim_matches('"');
+                if !name.is_empty() && !matches!(name, "-V" | "-h" | "--help") {
+                    names.push(name.to_string());
+                }
+            }
+        }
+        names
+    }
+
+    #[test]
+    fn every_subcommand_has_help() {
+        let names = dispatched();
+        assert!(names.len() >= 12, "{names:?}");
+        for name in &names {
+            let c = CLI_COMMANDS.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("no CLI_COMMANDS entry for `{name}`"));
+            assert!(!c.summary.is_empty() && c.example.starts_with("cadaddy-cli"), "{name}");
+            let text = help_for(name).unwrap();
+            assert!(text.contains("Usage:") && text.contains("Example:") && text.contains(c.summary), "{name}: {text}");
+        }
+        for c in CLI_COMMANDS {
+            assert!(names.iter().any(|n| n == c.name), "`{}` has help but cli() doesn't run it", c.name);
+        }
+    }
+
+    #[test]
+    fn every_drawing_command_has_help_with_parameters_and_an_example() {
+        for spec in cadaddy_engine::command_specs() {
+            let text = help_for(spec.id).unwrap_or_else(|e| panic!("{}: {e}", spec.id));
+            let page = spec.help_page();
+            assert!(!page.help_text.trim().is_empty(), "{}: empty help text", spec.id);
+            assert!(text.contains(&page.help_text), "{}", spec.id);
+            assert!(text.contains("Parameters (JSON):") && text.contains("Example:\n  cadaddy-cli run "), "{}: {text}", spec.id);
+            // The example's JSON parses.
+            let json = page.example.split_once(&format!("--cmd '{} ", spec.id)).unwrap().1.split('\'').next().unwrap();
+            assert!(serde_json::from_str::<Value>(json).unwrap().is_object(), "{}: {json}", spec.id);
+        }
+    }
+
+    #[test]
+    fn overview_lists_prints_to_estimate_with_commands() {
+        let text = help_overview();
+        let bim = text.find("cadaddy-cli bim prints").unwrap();
+        let takeoff = text.find("bim.takeoff").unwrap();
+        let estimate = text.find("bim.estimate").unwrap();
+        assert!(bim < takeoff && takeoff < estimate, "{text}");
+        assert!(text.contains("cadaddy-cli guide") && text.contains("cadaddy-cli help COMMAND"));
+    }
+
+    #[test]
+    fn help_finds_aliases_and_refuses_unknown_names() {
+        assert!(help_for("l").unwrap().starts_with("LINE — "));
+        assert!(help_for("--version").unwrap().contains("cadaddy-cli --version"));
+        let e = help_for("takeof").unwrap_err();
+        assert!(e.contains("bim.takeoff"), "{e}");
+        assert!(help_for("zzzz-nothing").is_err());
+        assert!(help(&args(&["a", "b"])).is_err());
+    }
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|v| (*v).to_string()).collect()
+    }
+}
+
 fn main() -> ExitCode {
     let code = cli();
     if STDOUT_ERROR.load(Ordering::Relaxed) { ExitCode::FAILURE } else { code }
@@ -898,10 +1325,23 @@ fn main() -> ExitCode {
 
 fn cli() -> ExitCode {
     install_io();
+    // A guided job (job.start) says what it is doing while it runs, one line per stage and sheet.
+    cadaddy_engine::cmd::guided::set_progress_sink(Some(|line| eprintln!("{line}")));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
     let r = match args.first().map(String::as_str) {
-        Some("info") => validate_options("info", &rest, NO_OPTIONS).and_then(|_| rest.first().ok_or_else(|| USAGE.to_string())).and_then(|p| info(p)),
+        None | Some("help" | "--help" | "-h") => help(&rest),
+        // `cadaddy-cli bim --help`: the subcommand's help instead of running it.
+        Some(sub) if matches!(rest.first().map(String::as_str), Some("--help" | "-h")) => help(&[sub.to_string()]),
+        Some("guide") => validate_options("guide", &rest, NO_OPTIONS).map(|_| outln!("{}", cadaddy_engine::workflows::guide_text())),
+        Some("info") => {
+            const INFO_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--full", takes_value: false }];
+            validate_options("info", &rest, INFO_OPTIONS).and_then(|_| {
+                let full = rest.iter().any(|a| a == "--full");
+                let path = rest.iter().find(|a| !a.starts_with("--")).ok_or_else(|| USAGE.to_string())?;
+                info(path, full)
+            })
+        }
         Some("convert") => convert(&rest),
         Some("verify") => {
             validate_options("verify", &rest, NO_OPTIONS).and_then(|_| rest.first().ok_or_else(|| USAGE.to_string())).and_then(|p| verify(p))
@@ -920,12 +1360,14 @@ fn cli() -> ExitCode {
                 .collect();
             outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
         }),
+        Some("bim") => bim(&rest),
+        Some("check-import") => check_import(&rest),
         Some("mcp") => mcp(&rest),
         Some("--version" | "-V") => {
             outln!("cadaddy-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        _ => Err(USAGE.into()),
+        Some(other) => Err(format!("cadaddy-cli: unknown command `{other}` (`cadaddy-cli help` lists the commands and workflows)\n{USAGE}")),
     };
     match r {
         Ok(()) => ExitCode::SUCCESS,
@@ -1066,6 +1508,21 @@ mod tests {
         let w = export_window(&s, Framing::Auto, Some(&before)).unwrap().unwrap();
         assert!(w.contains(eb.min) && w.contains(eb.max));
         assert!(w.width() < ext.width() && w.height() < ext.height(), "{w:?} vs extents {ext:?}");
+    }
+
+    #[test]
+    fn run_reads_commands_from_a_file() {
+        let dir = std::env::temp_dir().join(format!("cadaddy-cli-cmdfile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cmds = dir.join("cmds.jsonl");
+        // A quoted JSON argument PowerShell 5 would mangle, plus a comment and a blank line.
+        std::fs::write(&cmds, "# draw a line\n\nline {\"points\":[[0,0],[10,0]]}\nline {\"points\":[[0,0],[0,5]]}\n").unwrap();
+        let out = dir.join("out.dxf");
+        run(&["--cmd-file".into(), cmds.to_string_lossy().to_string(), "--save".into(), out.to_string_lossy().to_string()]).unwrap();
+        let dxf = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(dxf.matches("\nLINE\n").count() + dxf.matches("\r\nLINE\r\n").count(), 2, "two lines drawn");
+        assert!(run(&["--cmd-file".into(), dir.join("missing.jsonl").to_string_lossy().to_string()]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

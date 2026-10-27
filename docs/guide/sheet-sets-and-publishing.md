@@ -18,13 +18,14 @@ properties and publishing settings.
 
 ## Add sheets
 
-Each sheet is a layout in a drawing file. Add layouts from one or more drawings:
+Each sheet is a layout in a drawing file. Add layouts from one or more drawings
+using `execute` with JSON parameters:
 
-```
-SHEETSET add --drawing "Floor Plan.cdy" --layouts "First Floor,Second Floor"
+```json
+execute {"command": "sheetset", "params": {"set": "Project A Plans.sheetset.json", "action": "add", "drawing": "Floor Plan.cdy", "layouts": ["First Floor", "Second Floor"]}}
 ```
 
-Parameters:
+Parameters for the `add` action:
 
 | Parameter | Description |
 |:----------|:------------|
@@ -39,27 +40,27 @@ Parameters:
 
 Group sheets into subsets (like folders):
 
-```
-SHEETSET subset --add "Architectural"
-SHEETSET subset --add "Electrical"
+```json
+execute {"command": "sheetset", "params": {"set": "Project A Plans.sheetset.json", "action": "subset", "add": "Architectural"}}
+execute {"command": "sheetset", "params": {"set": "Project A Plans.sheetset.json", "action": "subset", "add": "Electrical"}}
 ```
 
 Move a sheet to a subset:
 
-```
-SHEETSET set --sheet 3 --subset "Electrical"
+```json
+execute {"command": "sheetset", "params": {"set": "Project A Plans.sheetset.json", "action": "set", "sheet": 3, "subset": "Electrical"}}
 ```
 
 ## Renumber sheets
 
-```
-SHEETSET renumber --start 1 --prefix "A" --digits 3
+```json
+execute {"command": "sheetset", "params": {"set": "Project A Plans.sheetset.json", "action": "renumber", "start": 1, "prefix": "A", "digits": 3}}
 ```
 
 Produces A001, A002, A003 and so on. You can renumber a subset independently:
 
-```
-SHEETSET renumber --subset "Electrical" --start 1 --prefix "E"
+```json
+execute {"command": "sheetset", "params": {"set": "Project A Plans.sheetset.json", "action": "renumber", "subset": "Electrical", "start": 1, "prefix": "E"}}
 ```
 
 ## Properties and fields
@@ -67,8 +68,8 @@ SHEETSET renumber --subset "Electrical" --start 1 --prefix "E"
 Sheet sets support custom properties at both the set level and individual sheet
 level:
 
-```
-SHEETSET properties --values '{"Client": "Sample Corp", "ProjectNo": "2024-001"}'
+```json
+execute {"command": "sheetset", "params": {"set": "Project A Plans.sheetset.json", "action": "properties", "values": {"Client": "Sample Corp", "ProjectNo": "2024-001"}}}
 ```
 
 These properties are available as field codes inside your drawings:
@@ -97,14 +98,14 @@ renumbering or changing titles.
 
 Place a named model-space view on a sheet:
 
-```
-SHEETSET view --sheet 1 --view "Detail A" --at 5,4 --scale 48
+```json
+execute {"command": "sheetset", "params": {"set": "Project A Plans.sheetset.json", "action": "view", "sheet": 1, "view": "Detail A", "at": [5,4], "scale": 48}}
 ```
 
 Then reference that view from another sheet with a callout:
 
-```
-SHEETSET callout --sheet 2 --view 1 --at 10,8
+```json
+execute {"command": "sheetset", "params": {"set": "Project A Plans.sheetset.json", "action": "callout", "sheet": 2, "view": 1, "at": [10,8]}}
 ```
 
 The callout shows the target sheet number and view number, and updates when sheets
@@ -114,16 +115,16 @@ are renumbered.
 
 Apply a named page setup to all sheets or a subset:
 
-```
-SHEETSET pagesetup --name "Full Size D" --use "Full Size D"
+```json
+execute {"command": "sheetset", "params": {"set": "Project A Plans.sheetset.json", "action": "pagesetup", "name": "Full Size D", "use": "Full Size D"}}
 ```
 
 Each subset can have its own page setup override.
 
 ## Publish to PDF
 
-```
-SHEETSET publish --path "Project A Plans.pdf"
+```json
+execute {"command": "sheetset", "params": {"set": "Project A Plans.sheetset.json", "action": "publish", "path": "Project A Plans.pdf"}}
 ```
 
 All sheets are plotted into a single PDF with bookmarks for each sheet and
@@ -132,7 +133,7 @@ subset. The page setup for each sheet controls size, orientation and scale.
 You can also publish from the CLI:
 
 ```sh
-cadaddy-cli run --script 'SHEETSET publish --path "output.pdf"' -- drawing.cdy
+cadaddy-cli run --script 'SHEETSET\n' --cmd 'sheetset {"set":"plans.sheetset.json","action":"publish","path":"output.pdf"}' -- drawing.cdy
 ```
 
 ## Limits

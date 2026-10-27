@@ -648,6 +648,59 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             crate::update::check_now(app);
             Ok(Value::Null)
         }
+        // The update-gate drives the card programmatically (no mouse clicks needed).
+        "ui.update.status" => {
+            let phase = match &app.update.phase {
+                crate::update::Phase::Idle => "idle",
+                crate::update::Phase::Checking { .. } => "checking",
+                crate::update::Phase::Available(_) => "available",
+                crate::update::Phase::Downloading(_) => "downloading",
+                crate::update::Phase::Ready(_) => "ready",
+                crate::update::Phase::Failed(_) => "failed",
+            };
+            let version = match &app.update.phase {
+                crate::update::Phase::Available(r) | crate::update::Phase::Downloading(r) | crate::update::Phase::Ready(r) => {
+                    Some(r.version.as_str())
+                }
+                _ => None,
+            };
+            let mut v = json!({ "phase": phase, "showing": app.update.showing, "scripted": app.has_control_channel() });
+            if let Some(ver) = version {
+                v["version"] = json!(ver);
+            }
+            Ok(v)
+        }
+        "ui.update.accept" => {
+            // Same as clicking the "Update" button on the card.
+            if let crate::update::Phase::Available(r) = &app.update.phase {
+                let r = r.clone();
+                if let Some(u) = &app.updater {
+                    if u.can_install() {
+                        u.download(&r);
+                        app.update.phase = crate::update::Phase::Downloading(r);
+                        Ok(json!({ "downloading": true }))
+                    } else {
+                        Err("this build can't install updates".into())
+                    }
+                } else {
+                    Err("no updater".into())
+                }
+            } else {
+                Err(format!("update not available (phase: {:?})", app.update.phase))
+            }
+        }
+        "ui.update.restart" => {
+            // Same as clicking "Restart Now": installs and relaunches.
+            if matches!(app.update.phase, crate::update::Phase::Ready(_)) {
+                if let Some(u) = &app.updater {
+                    u.relaunch_after_install();
+                }
+                app.quit_requested = true;
+                Ok(json!({ "restarting": true }))
+            } else {
+                Err(format!("update not ready (phase: {:?})", app.update.phase))
+            }
+        }
         // The feedback form and the fundraiser open in the browser ([`crate::support`]).
         "ui.dialog.aliases" => {
             app.ui.dialog = Some("aliasedit".into());

@@ -204,8 +204,15 @@ fn a_lazy_bridge_starts_without_the_app_and_says_how_to_open_it() {
     let app = std::thread::spawn(move || {
         use std::io::{BufRead, Write};
         let (sock, _) = listener.accept().unwrap();
+        let mut rd = std::io::BufReader::new(sock.try_clone().unwrap());
         let mut line = String::new();
-        std::io::BufReader::new(sock.try_clone().unwrap()).read_line(&mut line).unwrap();
+        rd.read_line(&mut line).unwrap();
+        // The version handshake comes first: answer it like an older app ("pong").
+        if serde_json::from_str::<Value>(&line).is_ok_and(|v| v["method"] == "ping") {
+            writeln!(&sock, "{}", json!({"id": -1, "ok": true, "result": "pong"})).unwrap();
+            line.clear();
+            rd.read_line(&mut line).unwrap();
+        }
         let id = serde_json::from_str::<Value>(&line).unwrap()["id"].clone();
         writeln!(&sock, "{}", json!({"id": id, "ok": true, "result": {"prompt": "Command:"}})).unwrap();
     });
@@ -473,6 +480,46 @@ fn stairs_tool_detects_lists_and_confirms() {
     assert_eq!(tool(&mut s, "stairs", json!({"action": "list"}))["stairs"][0]["confirmed"], true);
     let r = call(&mut s, 7, "tools/call", json!({"name": "stairs", "arguments": {}}));
     assert_eq!(r["error"]["code"], -32602, "action is required: {r}");
+}
+
+#[test]
+fn rooms_list_comes_a_page_at_a_time_without_outlines() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    // 60 rooms, 10 a row: a closed outline round each name and number.
+    let mut cmds = Vec::new();
+    for k in 0..60 {
+        let (x, y) = (f64::from(k % 10) * 200.0, f64::from(k / 10) * 200.0);
+        cmds.push(
+            json!({"command": "pline", "params": {"vertices": [[x, y], [x + 180.0, y], [x + 180.0, y + 180.0], [x, y + 180.0]], "closed": true}}),
+        );
+        cmds.push(json!({"command": "text", "params": {"at": [x + 40.0, y + 100.0], "text": format!("GUEST ROOM {k}"), "height": 6}}));
+        cmds.push(json!({"command": "text", "params": {"at": [x + 40.0, y + 80.0], "text": format!("{}", 100 + k), "height": 6}}));
+    }
+    tool(&mut s, "execute_many", json!({"commands": cmds}));
+    let first = tool(&mut s, "rooms", json!({"action": "list"}));
+    assert_eq!(first["count"], 60, "{first}");
+    let page = first["rooms"].as_array().unwrap();
+    let page_len = page.len();
+    assert!((40..=55).contains(&page_len), "first page fits 40-55 rooms: {page_len}");
+    assert_eq!(first["next"], page_len as u64);
+    assert!(page.iter().all(|r| r["outline"].is_null()), "no outlines unless asked");
+    assert!(first.to_string().len() <= cadaddy_engine::cmd::agentready::ANSWER_MAX);
+    let rest = tool(&mut s, "rooms", json!({"action": "list", "offset": page_len as u64}));
+    assert_eq!(rest["rooms"].as_array().unwrap().len(), 60 - page_len);
+    assert!(rest["next"].is_null(), "{rest}");
+    // Every room once over the pages.
+    let mut seen: Vec<String> = page.iter().chain(rest["rooms"].as_array().unwrap()).map(|r| r["number"].to_string()).collect();
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), 60);
+    let shaped = tool(&mut s, "rooms", json!({"action": "list", "outline": true, "limit": 3}));
+    assert_eq!(shaped["rooms"].as_array().unwrap().len(), 3);
+    assert!(shaped["rooms"][0]["outline"].is_array(), "{shaped}");
+    // Past the end: an empty page, still the count.
+    let past = tool(&mut s, "rooms", json!({"action": "list", "offset": 1000}));
+    assert_eq!(past["rooms"], json!([]));
+    assert_eq!(past["count"], 60);
 }
 
 #[test]

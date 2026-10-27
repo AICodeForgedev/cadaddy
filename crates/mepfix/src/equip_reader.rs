@@ -2,14 +2,17 @@
 //! description, size, weight, CFM…), finds each scheduled tag on the plans and places the item as
 //! a sized box there, joined to the duct and pipe runs that end at it.
 //!
-//! A schedule is a table drawn as cells: a header row of boxes (`BORDER`) holding the column names,
-//! one of which is the tag (`TAG`, `MARK`), a title just above it, and rows of boxes below. What
+//! A schedule is a table drawn as cells (closed boxes, or grid lines, on any layer): a header row
+//! holding the column names, one of which is the tag (`TAG`, `MARK`), a title just above it, and
+//! rows of cells below. What
 //! the rows are comes from the title (`AIR HANDLING UNIT SCHEDULE`), else from the tag's prefix
 //! (`AHU-`, `RTU-`, `VAV-`, `EF-`, `P-`, `WH-`, `CU-`…). Tables of things that aren't equipment
 //! (air devices, plumbing fixtures, the sheet index) are left out.
 //!
 //! On a plan the tag is a text equal to the schedule's tag, beside the item's outline (a box or,
-//! for tanks, a circle on `EQUIP`) or joined to it by a leader. The outline gives the footprint;
+//! for tanks, a circle) or joined to it by a leader. Outlines on an equipment layer (`EQUIP`,
+//! `M-EQPM`) are taken first; a closed shape on another layer only when it is the printed size
+//! (flagged). The outline gives the footprint;
 //! the schedule gives the height (and the footprint when the plan has no outline); the rest comes
 //! from rules (per kind), and every value says where it came from so guesses show:
 //! `outline` / `schedule` / `tag` / `rule` / `run`.
@@ -152,9 +155,92 @@ pub struct EquipmentRead {
     pub placed: Vec<Placed>,
     /// Scheduled tags not found on any plan, with why.
     pub unplaced: Vec<(String, String)>,
+    /// What the reader couldn't do, in words (no schedule found, and why).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
     /// The run graphs the connections were traced on, per level.
     #[serde(skip)]
     pub runs: BTreeMap<String, RunGraph>,
+}
+
+/// Printed system codes and the words a building spec's system names use for them (layer-name
+/// parts: `M-DUCT-SUPP`, `P-DOMW-HW`, `Supply Air`), and words that rule a name out.
+const SYSTEM_WORDS: &[(&str, &str, &[&str], &[&str])] = &[
+    ("SA", "duct", &["SA", "SUPP", "SUPPLY", "SAS"], &[]),
+    ("RA", "duct", &["RA", "RETN", "RETURN", "RTN", "RET"], &[]),
+    ("EA", "duct", &["EA", "EXHS", "EXHAUST", "EXH"], &[]),
+    ("OA", "duct", &["OA", "OUTSIDE", "OAIR", "FRESH"], &[]),
+    ("CW", "pipe", &["CW", "DCW", "COLD"], &["CHW", "CHWS", "CHWR"]),
+    ("HW", "pipe", &["HW", "DHW", "HWS", "HOT"], &["HWR", "HWC", "DHWR", "RETURN", "RECIRC", "RET", "CIRC"]),
+    ("HWR", "pipe", &["HWR", "HWC", "DHWR", "HWRC", "RECIRC", "CIRC"], &[]),
+    ("SAN", "pipe", &["SAN", "SANR", "SANI", "SS", "WAST", "WASTE", "SW"], &[]),
+    ("V", "pipe", &["V", "VENT", "VNT"], &[]),
+    ("G", "pipe", &["G", "GAS", "NG", "NGAS"], &[]),
+    ("FP", "pipe", &["FP", "FIRE", "SPRK", "SPRINKLER", "SP"], &[]),
+    ("CHW", "pipe", &["CHW", "CHWS"], &["CHWR", "RETURN"]),
+    ("CHWR", "pipe", &["CHWR"], &[]),
+    ("ST", "pipe", &["ST", "STRM", "STORM"], &[]),
+];
+
+/// The building spec's name for a system code the reader gave a `duct` or `pipe` run: the
+/// spec's system of that name, else the one whose name has the code's words (`SA` →
+/// `M-DUCT-SUPP`, `HW` → `P-DOMW-HW`). `systems` are the spec's (name, kind) pairs; `None`
+/// when none of them is that system.
+pub fn spec_system_name(code: &str, kind: &str, systems: &[(&str, &str)]) -> Option<String> {
+    if let Some((n, _)) = systems.iter().find(|(n, _)| n.trim().eq_ignore_ascii_case(code.trim())) {
+        return Some(n.to_string());
+    }
+    let (_, want, words, not) = SYSTEM_WORDS.iter().find(|(c, k, _, _)| c.eq_ignore_ascii_case(code.trim()) && *k == kind)?;
+    systems
+        .iter()
+        .filter(|(_, k)| k.eq_ignore_ascii_case(want))
+        .find(|(n, _)| {
+            let up = n.to_ascii_uppercase();
+            let parts: Vec<&str> = up.split(['-', '_', ' ', '.', '/']).filter(|w| !w.is_empty()).collect();
+            parts.iter().any(|w| words.contains(w)) && !parts.iter().any(|w| not.contains(w))
+        })
+        .map(|(n, _)| n.to_string())
+}
+
+/// The placed equipment in the building spec's form (`mep.equipment[]` for `bspec.set`, drawing
+/// inches = building feet × 12), with level codes turned into the spec's level names
+/// (`level_names`: code → name) and the systems it joins into the spec's system names
+/// (`systems`: the spec's (name, kind) pairs, see [`spec_system_name`]). Items on a level the
+/// spec doesn't name are left out, and a system the spec doesn't have keeps its code; both are
+/// said in the notes it gives back.
+pub fn spec_equipment(
+    read: &EquipmentRead,
+    levels: &[Level],
+    level_names: &[(&str, &str)],
+    systems: &[(&str, &str)],
+) -> (Vec<serde_json::Value>, Vec<String>) {
+    let mut out = Vec::new();
+    let mut notes = Vec::new();
+    for p in read.placed.iter().take(MAX_ITEMS) {
+        let Some((_, name)) = level_names.iter().find(|(c, _)| c.eq_ignore_ascii_case(&p.level)) else {
+            notes.push(format!("{} is on level {}, which the building spec doesn't name: left out", p.tag, p.level));
+            continue;
+        };
+        let mut names: Vec<String> = Vec::new();
+        for c in p.connections.iter().filter(|c| !c.system.is_empty()) {
+            let n = spec_system_name(&c.system, &c.kind, systems).unwrap_or_else(|| {
+                let note = format!("{} joins {} {}, which isn't a system of the building spec: kept as {}", p.tag, c.kind, c.system, c.system);
+                if !notes.contains(&note) {
+                    notes.push(note);
+                }
+                c.system.clone()
+            });
+            if !names.contains(&n) {
+                names.push(n);
+            }
+        }
+        names.sort();
+        let mut v = p.spec_json(elevation(levels, &p.level));
+        v["level"] = serde_json::json!(name);
+        v["systems"] = serde_json::json!(names);
+        out.push(v);
+    }
+    (out, notes)
 }
 
 // ---- Text helpers ------------------------------------------------------------------------------
@@ -231,6 +317,19 @@ fn near(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol
 }
 
+/// A layer whose name says it holds equipment: `EQUIP`, `M-EQPM`, `P-EQPT`, `M-HVAC-EQUIP`.
+/// Names are only a hint: shapes on other layers are read too, more carefully.
+fn equipment_layer(layer: &str) -> bool {
+    let up = layer.to_ascii_uppercase();
+    up.split(['-', '_', ' ', '|', '$']).any(|w| w.starts_with("EQUIP") || w == "EQPM" || w == "EQPT" || w == "EQP")
+}
+
+/// A layer whose lines may be leaders from tags: text and annotation layers.
+fn annotation_layer(layer: &str) -> bool {
+    let up = layer.to_ascii_uppercase();
+    up.split(['-', '_', ' ', '|', '$']).any(|w| ["TEXT", "ANNO", "NOTE", "NOTES", "LEADER", "LDR", "TAG", "TAGS", "IDEN", "SYMB"].contains(&w))
+}
+
 // ---- Schedules -----------------------------------------------------------------------------------
 
 /// Read every table with a tag column on a sheet.
@@ -238,80 +337,221 @@ pub fn read_tables(d: &Drawing, sheet: &str) -> Vec<Table> {
     read_tables_keyed(d, sheet, is_tag_column)
 }
 
+/// Most work (line pairs looked at) spent finding the cells of line-drawn tables on one sheet.
+const MAX_GRID_WORK: usize = 5_000_000;
+
+/// Horizontal (`y, x0, x1`) and vertical (`x, y0, y1`) straight lines of a drawing, any layer:
+/// lines and the straight edges of polylines, those along a side merged into one (a rule drawn
+/// in pieces, cell by cell, is one line).
+fn rules(d: &Drawing, eps: f64) -> (Vec<[f64; 3]>, Vec<[f64; 3]>) {
+    let (mut h, mut v) = (Vec::new(), Vec::new());
+    let mut add = |a: Vec2, b: Vec2| {
+        if !(a.is_finite() && b.is_finite()) || h.len() + v.len() >= MAX_ITEMS {
+            return;
+        }
+        let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
+        let tol = 1e-6 * dx.max(dy);
+        if dx > eps && dy <= tol {
+            h.push([(a.y + b.y) / 2.0, a.x.min(b.x), a.x.max(b.x)]);
+        } else if dy > eps && dx <= tol {
+            v.push([(a.x + b.x) / 2.0, a.y.min(b.y), a.y.max(b.y)]);
+        }
+    };
+    for e in d.model.iter().take(MAX_ITEMS) {
+        match &e.kind {
+            EntityKind::Line(l) => add(l.a.xy(), l.b.xy()),
+            EntityKind::LwPolyline(p) => {
+                let n = p.vertices.len();
+                for k in 0..if p.closed { n } else { n.saturating_sub(1) } {
+                    if let (Some(x), Some(y)) = (p.vertices.get(k), p.vertices.get((k + 1) % n.max(1)))
+                        && x.bulge == 0.0
+                    {
+                        add(x.p, y.p);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let merge = |mut ls: Vec<[f64; 3]>| -> Vec<[f64; 3]> {
+        ls.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+        let mut out: Vec<[f64; 3]> = Vec::with_capacity(ls.len());
+        for l in ls {
+            match out.last_mut() {
+                Some(o) if near(o[0], l[0], eps * 0.1) && l[1] <= o[2] + eps * 0.1 => o[2] = o[2].max(l[2]),
+                _ => out.push(l),
+            }
+        }
+        out
+    };
+    (merge(h), merge(v))
+}
+
+/// The cells of tables drawn as grid lines: between two neighbouring vertical rules that both
+/// cross just below a horizontal one, down to the next horizontal rule that spans them and that
+/// both reach. Cells already drawn as boxes come out once (`have` holds them).
+fn grid_cells(d: &Drawing, eps: f64, have: &[(Vec2, Vec2, String)]) -> Vec<(Vec2, Vec2, String)> {
+    let (h, v) = rules(d, eps);
+    if h.len() < 2 || v.len() < 2 {
+        return Vec::new();
+    }
+    // Horizontal rules from the top down.
+    let mut down: Vec<&[f64; 3]> = h.iter().collect();
+    down.sort_by(|a, b| b[0].total_cmp(&a[0]));
+    // Vertical rules by x (already sorted by `rules`).
+    let key = |lo: Vec2, hi: Vec2| [lo.x, lo.y, hi.x, hi.y].map(|c| (c / (eps * 0.1).max(1e-9)).round() as i64);
+    let mut seen: BTreeSet<[i64; 4]> = have.iter().map(|(lo, hi, _)| key(*lo, *hi)).collect();
+    let mut out = Vec::new();
+    let mut work = 0usize;
+    for (ti, top) in down.iter().enumerate() {
+        let y = top[0];
+        let from = v.partition_point(|l| l[0] < top[1] - eps);
+        let mut xs: Vec<&[f64; 3]> = Vec::new();
+        for l in v.iter().skip(from) {
+            work += 1;
+            if l[0] > top[2] + eps || work > MAX_GRID_WORK {
+                break;
+            }
+            if l[1] < y - eps && l[2] >= y - eps && xs.last().is_none_or(|p| !near(p[0], l[0], eps * 0.1)) {
+                xs.push(l);
+            }
+        }
+        for pair in xs.windows(2) {
+            let [a, b] = pair else { continue };
+            // The first rule below spanning a..b that both sides reach.
+            let bottom = down.iter().skip(ti + 1).find(|r| {
+                work += 1;
+                r[0] < y - eps && r[1] <= a[0] + eps && r[2] >= b[0] - eps
+            });
+            if work > MAX_GRID_WORK || out.len() >= MAX_ITEMS {
+                return out;
+            }
+            let Some(bot) = bottom else { continue };
+            if a[1] > bot[0] + eps || b[1] > bot[0] + eps {
+                continue;
+            }
+            let (lo, hi) = (Vec2::new(a[0], bot[0]), Vec2::new(b[0], y));
+            if seen.insert(key(lo, hi)) {
+                out.push((lo, hi, String::new()));
+            }
+        }
+    }
+    out
+}
+
+/// Texts sorted by x, for finding the one in a cell without looking at them all.
+struct TextIndex<'a> {
+    by_x: Vec<(usize, &'a Txt)>,
+}
+
+impl<'a> TextIndex<'a> {
+    fn new(txt: &'a [Txt]) -> Self {
+        let mut by_x: Vec<(usize, &Txt)> = txt.iter().enumerate().collect();
+        by_x.sort_by(|a, b| a.1.at.x.total_cmp(&b.1.at.x));
+        TextIndex { by_x }
+    }
+
+    /// The text in a cell: of those whose point is inside it, the first drawn.
+    fn in_cell(&self, lo: Vec2, hi: Vec2) -> Option<&'a Txt> {
+        let from = self.by_x.partition_point(|(_, t)| t.at.x < lo.x);
+        self.by_x.iter().skip(from).take_while(|(_, t)| t.at.x <= hi.x).filter(|(_, t)| inside(t.at, lo, hi)).min_by_key(|(i, _)| *i).map(|(_, t)| *t)
+    }
+}
+
 /// As [`read_tables`], with tables keyed by the columns `is_key` accepts (a fixture schedule's
 /// `TYPE`, say).
+///
+/// A table is a header row of cells, one holding a key column's name, with rows of cells under
+/// it. Cells are closed boxes or the spaces between grid lines, on any layer (drafters put
+/// schedules on `BORDER`, `M-ANNO-SCHD`, `G-ANNO-TABL`…); each table is found from its key
+/// cell, so a sheet's other boxes and lines cost little.
 pub fn read_tables_keyed(d: &Drawing, sheet: &str, is_key: fn(&str) -> bool) -> Vec<Table> {
     let txt = texts(d);
-    let all = boxes(d);
     let h = txt.iter().map(|t| t.h).fold(f64::INFINITY, f64::min);
     if !h.is_finite() {
         return Vec::new();
     }
     let eps = h * 0.3;
-    // The text in a cell: the first whose point is inside it.
-    let cell_text = |lo: Vec2, hi: Vec2| -> Option<&Txt> { txt.iter().find(|t| inside(t.at, lo, hi)) };
-    // Header cells: boxes on BORDER holding a text.
-    let mut headers: Vec<(Vec2, Vec2, String)> = all
+    let mut all = boxes(d);
+    let grid = grid_cells(d, eps, &all);
+    all.extend(grid);
+    let index = TextIndex::new(&txt);
+    // Cells sorted by their left and right sides.
+    let mut by_lo: Vec<usize> = (0..all.len()).collect();
+    by_lo.sort_by(|a, b| all.get(*a).map(|c| c.0.x).unwrap_or(0.0).total_cmp(&all.get(*b).map(|c| c.0.x).unwrap_or(0.0)));
+    let mut by_hi: Vec<usize> = (0..all.len()).collect();
+    by_hi.sort_by(|a, b| all.get(*a).map(|c| c.1.x).unwrap_or(0.0).total_cmp(&all.get(*b).map(|c| c.1.x).unwrap_or(0.0)));
+    // The cells whose left (right) side is at x.
+    let left_at = |x: f64| {
+        let from = by_lo.partition_point(|i| all.get(*i).is_some_and(|c| c.0.x < x - eps));
+        by_lo.iter().skip(from).filter_map(|i| all.get(*i)).take_while(move |c| c.0.x <= x + eps)
+    };
+    let right_at = |x: f64| {
+        let from = by_hi.partition_point(|i| all.get(*i).is_some_and(|c| c.1.x < x - eps));
+        by_hi.iter().skip(from).filter_map(|i| all.get(*i)).take_while(move |c| c.1.x <= x + eps)
+    };
+    let same_row = |a: &(Vec2, Vec2, String), lo: Vec2, hi: Vec2| near(a.0.y, lo.y, eps) && near(a.1.y, hi.y, eps);
+    // A header cell: a cell in the row holding a text.
+    let header = |c: &(Vec2, Vec2, String)| index.in_cell(c.0, c.1).map(|t| (c.0, c.1, t.value.clone()));
+    // Key cells: the smallest cell around each key column's name, top to bottom.
+    let mut keys: Vec<&(Vec2, Vec2, String)> = txt
         .iter()
-        .filter(|(_, _, l)| l.eq_ignore_ascii_case("BORDER"))
-        .filter_map(|(lo, hi, _)| cell_text(*lo, *hi).map(|t| (*lo, *hi, t.value.clone())))
+        .filter(|t| is_key(&t.value))
+        .filter_map(|t| {
+            all.iter()
+                .filter(|(lo, hi, _)| inside(t.at, *lo, *hi) && hi.y - lo.y > eps)
+                .min_by(|a, b| ((a.1.x - a.0.x) * (a.1.y - a.0.y)).total_cmp(&((b.1.x - b.0.x) * (b.1.y - b.0.y))))
+        })
         .collect();
-    headers.sort_by(|a, b| b.0.y.total_cmp(&a.0.y).then(a.0.x.total_cmp(&b.0.x)));
-    let mut used = vec![false; headers.len()];
+    keys.sort_by(|a, b| b.0.y.total_cmp(&a.0.y).then(a.0.x.total_cmp(&b.0.x)));
+    let mut starts: Vec<(f64, f64, f64)> = Vec::new();
     let mut out = Vec::new();
-    for i in 0..headers.len() {
+    for key in keys {
         if out.len() >= MAX_TABLES {
             break;
         }
-        if used.get(i).copied().unwrap_or(true) {
+        let Some(seed) = header(key) else { continue };
+        // The row: cells joined edge to edge, walked left to its first, then right.
+        let mut first = seed.clone();
+        for _ in 0..MAX_COLS {
+            let Some(c) = right_at(first.0.x).filter(|c| same_row(c, first.0, first.1)).find_map(header) else { break };
+            first = c;
+        }
+        if starts.iter().any(|s| near(s.0, first.0.x, eps) && near(s.1, first.0.y, eps) && near(s.2, first.1.y, eps)) {
             continue;
         }
-        let Some(first) = headers.get(i).cloned() else { continue };
-        // Is there a cell just left of it in the same row? Then it isn't a row's first.
-        let has_left = headers.iter().any(|(lo, hi, _)| near(hi.x, first.0.x, eps) && near(lo.y, first.0.y, eps) && near(hi.y, first.1.y, eps));
-        if has_left {
-            continue;
-        }
-        // The row: cells joined edge to edge.
+        starts.push((first.0.x, first.0.y, first.1.y));
         let mut cols: Vec<(Vec2, Vec2, String)> = vec![first.clone()];
-        if let Some(u) = used.get_mut(i) {
-            *u = true;
-        }
         while cols.len() < MAX_COLS {
             let Some(last) = cols.last() else { break };
-            let next = headers.iter().enumerate().find(|(j, (lo, hi, _))| {
-                !used.get(*j).copied().unwrap_or(true) && near(lo.x, last.1.x, eps) && near(lo.y, last.0.y, eps) && near(hi.y, last.1.y, eps)
-            });
-            let Some((j, c)) = next else { break };
-            cols.push(c.clone());
-            if let Some(u) = used.get_mut(j) {
-                *u = true;
-            }
+            let Some(c) = left_at(last.1.x).filter(|c| same_row(c, last.0, last.1)).find_map(header) else { break };
+            cols.push(c);
         }
         let names: Vec<String> = cols.iter().map(|c| c.2.clone()).collect();
         if !names.iter().any(|n| is_key(n)) {
             continue;
         }
-        // The title: the text just above the header's left end.
+        // The title: the lowest text just above the header row.
         let row_h = first.1.y - first.0.y;
+        let right = cols.last().map_or(first.1.x, |c| c.1.x);
         let title = txt
             .iter()
-            .filter(|t| t.at.y > first.1.y - eps && t.at.y < first.1.y + row_h * 2.5 && t.at.x >= first.0.x - eps && t.at.x < first.1.x)
+            .filter(|t| t.at.y > first.1.y - eps && t.at.y < first.1.y + row_h * 2.5 && t.at.x >= first.0.x - eps && t.at.x < right)
+            .filter(|t| !cols.iter().any(|c| inside(t.at, c.0, c.1)))
             .min_by(|a, b| a.at.y.total_cmp(&b.at.y))
             .map(|t| t.value.clone())
             .unwrap_or_default();
-        // Rows: boxes under each column, stacked edge to edge.
+        // Rows: cells under each column, stacked edge to edge.
         let mut rows = Vec::new();
         let mut top = first.0.y;
         while rows.len() < MAX_ROWS {
-            let below = |c: &(Vec2, Vec2, String)| {
-                all.iter().find(|(lo, hi, _)| near(lo.x, c.0.x, eps) && near(hi.x, c.1.x, eps) && near(hi.y, top, eps) && hi.y - lo.y > eps)
-            };
+            let below =
+                |c: &(Vec2, Vec2, String)| left_at(c.0.x).find(|(lo, hi, _)| near(hi.x, c.1.x, eps) && near(hi.y, top, eps) && hi.y - lo.y > eps);
             let Some(first_cell) = cols.first().and_then(below) else { break };
             let mut row = BTreeMap::new();
             for c in &cols {
                 if let Some((lo, hi, _)) = below(c)
-                    && let Some(t) = cell_text(*lo, *hi)
+                    && let Some(t) = index.in_cell(*lo, *hi)
                 {
                     row.insert(c.2.clone(), t.value.clone());
                 }
@@ -536,6 +776,19 @@ pub fn read_equipment(sheets: &[SheetIn], levels: &[Level]) -> EquipmentRead {
         }
     }
     let sched = scheduled(&tables);
+    let mut notes = Vec::new();
+    let schedule_sheets = sheets.iter().filter(|s| s.sheet.level.is_none()).count();
+    if tables.is_empty() {
+        notes.push(if schedule_sheets == 0 {
+            "no schedule sheets: every sheet given is a plan of a level".to_string()
+        } else {
+            format!(
+                "no schedule found on {schedule_sheets} schedule sheet(s): no table has a header row with a TAG or MARK column (cells drawn as boxes or grid lines)"
+            )
+        });
+    } else if sched.is_empty() {
+        notes.push(format!("{} table(s) read, none of them an equipment schedule (by title or tag prefix)", tables.len()));
+    }
 
     // The runs per level (full plans only; enlarged plans repeat them).
     let mut graphs: BTreeMap<String, RunGraph> = BTreeMap::new();
@@ -599,7 +852,7 @@ pub fn read_equipment(sheets: &[SheetIn], levels: &[Level]) -> EquipmentRead {
         .filter(|x| !placed.iter().any(|p| p.tag == x.tag))
         .map(|x| (x.tag.clone(), "its tag isn't on any plan of the set (a roof plan or a detail?)".to_string()))
         .collect();
-    EquipmentRead { tables, scheduled: sched, placed, unplaced, runs: graphs }
+    EquipmentRead { tables, scheduled: sched, placed, unplaced, notes, runs: graphs }
 }
 
 /// Printed pipe system letters → our codes.
@@ -658,18 +911,33 @@ fn place_on_sheet(s: &SheetIn, todo: &[&Scheduled], levels: &[Level]) -> Vec<Pla
     let sh = s.sheet;
     let level = sh.level.clone().unwrap_or_default();
     let txt = texts(d);
-    let mut outlines: Vec<Outline> =
-        boxes(d).into_iter().filter(|(_, _, l)| l.eq_ignore_ascii_case("EQUIP")).map(|(lo, hi, _)| Outline::Box(lo, hi)).collect();
+    // Outlines on an equipment layer (`EQUIP`, `M-EQPM`, `P-EQPT`…) first; closed shapes on other
+    // layers are only taken when they are the printed size (see below).
+    let (mut outlines, mut others): (Vec<Outline>, Vec<(Outline, String)>) = (Vec::new(), Vec::new());
+    for (lo, hi, l) in boxes(d) {
+        if equipment_layer(&l) {
+            outlines.push(Outline::Box(lo, hi));
+        } else {
+            others.push((Outline::Box(lo, hi), l));
+        }
+    }
     let mut leaders: Vec<(Vec2, Vec2)> = Vec::new();
     for e in d.model.iter().take(MAX_ITEMS) {
+        let layer = e.common.layer.as_str();
         match &e.kind {
-            EntityKind::Circle(c) if e.common.layer.eq_ignore_ascii_case("EQUIP") && c.radius.is_finite() && c.radius > 0.0 => {
-                outlines.push(Outline::Circle(c.center.xy(), c.radius));
+            EntityKind::Circle(c) if c.center.xy().is_finite() && c.radius.is_finite() && c.radius > 0.0 => {
+                if equipment_layer(layer) {
+                    outlines.push(Outline::Circle(c.center.xy(), c.radius));
+                } else {
+                    others.push((Outline::Circle(c.center.xy(), c.radius), layer.to_string()));
+                }
             }
-            EntityKind::Line(l) if e.common.layer.eq_ignore_ascii_case("TEXT") => leaders.push((l.a.xy(), l.b.xy())),
+            EntityKind::Line(l) if annotation_layer(layer) => leaders.push((l.a.xy(), l.b.xy())),
             _ => {}
         }
     }
+    let primary = outlines.len();
+    outlines.extend(others.iter().map(|(o, _)| *o));
     // Candidates: (distance, tag index, outline index or none, anchor).
     let mut cands: Vec<(f64, usize, Option<usize>, Vec2)> = Vec::new();
     let mut found_tag = vec![None; todo.len()];
@@ -698,27 +966,57 @@ fn place_on_sheet(s: &SheetIn, todo: &[&Scheduled], levels: &[Level]) -> Vec<Pla
             }
         }
     }
-    cands.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Outlines on equipment layers before the others, each the nearest first.
+    cands.sort_by(|a, b| a.2.is_some_and(|o| o >= primary).cmp(&b.2.is_some_and(|o| o >= primary)).then(a.0.total_cmp(&b.0)));
     let mut took_outline = vec![false; outlines.len()];
     let mut done = vec![false; todo.len()];
     let mut out = Vec::new();
     let el = elevation(levels, &level);
-    for (_, ti, oi, _) in &cands {
+    let feet = |o: &Outline| {
+        let [lo, hi] = o.corners();
+        let (a, b) = (score::building_from_model(sh, lo), score::building_from_model(sh, hi));
+        ([a[0].min(b[0]), a[1].min(b[1])], [a[0].max(b[0]), a[1].max(b[1])])
+    };
+    for (dist, ti, oi, _) in &cands {
         let (Some(x), Some(oi)) = (todo.get(*ti), oi) else { continue };
         if done.get(*ti).copied().unwrap_or(true) || took_outline.get(*oi).copied().unwrap_or(true) {
             continue;
         }
         let Some(o) = outlines.get(*oi) else { continue };
+        let (min, max) = feet(o);
+        let other = oi.checked_sub(primary).and_then(|k| others.get(k));
+        // A shape on another layer: only the printed size (either way round), or, with no size
+        // printed, the shape the tag (or its leader) is in.
+        let mut why = "";
+        if other.is_some() {
+            let (dx, dy) = (max[0] - min[0], max[1] - min[1]);
+            let fits = |a: f64, b: f64| (a - b).abs() <= 0.1 * b.max(1.0);
+            let ok = match x.size_ft {
+                Some(s) if s[0] > 0.0 && s[1] > 0.0 => {
+                    why = "it is the printed size";
+                    x.round == matches!(o, Outline::Circle(..)) && ((fits(dx, s[0]) && fits(dy, s[1])) || (fits(dy, s[0]) && fits(dx, s[1])))
+                }
+                _ => {
+                    why = "its tag is inside it";
+                    *dist <= 0.0
+                }
+            };
+            if !ok {
+                continue;
+            }
+        }
         if let Some(t) = took_outline.get_mut(*oi) {
             *t = true;
         }
         if let Some(t) = done.get_mut(*ti) {
             *t = true;
         }
-        let [lo, hi] = o.corners();
-        let (a, b) = (score::building_from_model(sh, lo), score::building_from_model(sh, hi));
-        let (min, max) = ([a[0].min(b[0]), a[1].min(b[1])], [a[0].max(b[0]), a[1].max(b[1])]);
-        out.push(make(x, &level, &sh.number, min, max, "outline", matches!(o, Outline::Circle(..)), el));
+        let mut p = make(x, &level, &sh.number, min, max, "outline", matches!(o, Outline::Circle(..)), el);
+        if let Some((_, layer)) = other {
+            p.flags.push(format!("its outline is on layer {layer}, not an equipment layer: taken because {why}"));
+            p.confidence = (p.confidence - 0.1).max(0.05);
+        }
+        out.push(p);
     }
     // Tags with no outline near: a box of the printed (or usual) size at the tag.
     for (ti, x) in todo.iter().enumerate() {

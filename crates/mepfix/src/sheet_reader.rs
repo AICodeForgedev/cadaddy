@@ -78,7 +78,7 @@ pub struct SheetMap {
 
 /// Known discipline prefixes: sheet number prefix → discipline code.
 const DISCIPLINE_PREFIX: &[(&str, &str)] =
-    &[("FP", "FP"), ("FA", "FA"), ("M", "M"), ("P", "P"), ("S", "S"), ("A", "A"), ("G", "G"), ("E", "E"), ("C", "C"), ("T", "T")];
+    &[("FP", "FP"), ("FA", "FA"), ("SL", "SL"), ("M", "M"), ("P", "P"), ("S", "S"), ("A", "A"), ("G", "G"), ("E", "E"), ("C", "C"), ("T", "T")];
 
 /// The discipline a sheet number's letters name: `M-101`, `M101`, `M1.01` and `FP-201` alike.
 fn discipline_of(number: &str) -> Option<&'static str> {
@@ -165,7 +165,11 @@ fn parse_fraction(s: &str) -> Option<f64> {
 fn detect_sheet_number(d: &Drawing) -> Option<String> {
     let mut best: Option<(f64, String)> = None;
     for e in d.model.iter() {
-        let on_title = e.common.layer.eq_ignore_ascii_case("TITLE") || e.common.layer.eq_ignore_ascii_case("BORDER");
+        let ly = &e.common.layer;
+        // Original DXF layers (TITLE, BORDER) and content-class layer TITLEBLOCK from PDF
+        // import. Not TEXT — that layer holds ALL text, so picking the largest there gives the
+        // title instead of the number.
+        let on_title = ly.eq_ignore_ascii_case("TITLE") || ly.eq_ignore_ascii_case("BORDER") || ly.eq_ignore_ascii_case("TITLEBLOCK");
         if !on_title {
             continue;
         }
@@ -174,7 +178,9 @@ fn detect_sheet_number(d: &Drawing) -> Option<String> {
             EntityKind::MText(t) => (t.height, t.contents.clone()),
             _ => continue,
         };
-        if h > best.as_ref().map_or(0.0, |b| b.0) && !val.is_empty() {
+        // Validate: SHX OCR can put garbled single-letter fragments on the TITLE layer;
+        // reject text that doesn't look like a sheet number to avoid picking up OCR noise.
+        if h > best.as_ref().map_or(0.0, |b| b.0) && looks_like_sheet_number(&val) {
             best = Some((h, val));
         }
     }
@@ -355,15 +361,20 @@ fn level_range(lo: u32, hi: u32) -> Vec<u32> {
 /// `FLOOR 2`, `LEVEL 02`, and the lists and ranges of a typical-floor or two-view sheet
 /// (`FIRST AND SECOND FLOOR`, `THIRD & FOURTH FLOOR`, `1ST AND 3RD FLOORS`, `2ND-4TH FLOOR`,
 /// `SECOND THRU FOURTH FLOOR`, `LEVELS 2-4`).
+///
+/// A title saying "TYPICAL FLOOR" / "TYP. FLOORS" / "TYPICAL PLAN" (no specific numbers)
+/// returns `["T"]` — a sentinel the caller expands against the set's known levels.
 pub fn detect_levels(title: &str) -> Vec<String> {
     let words = level_tokens(title);
     let mut found: Vec<String> = Vec::new();
+    let mut has_typical = false;
     for (i, w) in words.iter().enumerate() {
         match w.as_str() {
             "FLOOR" | "FLOORS" => {
                 // Ordinals before it, joined by AND, `&` or a range: `FIRST AND SECOND FLOOR`.
                 let mut before: Vec<u32> = Vec::new();
                 let mut range = false;
+                let mut saw_typical = false;
                 for p in words.get(..i).unwrap_or_default().iter().rev() {
                     if let Some(n) = ordinal(p) {
                         match before.last() {
@@ -373,7 +384,12 @@ pub fn detect_levels(title: &str) -> Vec<String> {
                         range = false;
                     } else if is_range(p) {
                         range = true;
-                    } else if p != "AND" {
+                    } else if p == "AND" {
+                        // continue
+                    } else if matches!(p.as_str(), "TYPICAL" | "TYP") {
+                        saw_typical = true;
+                        break;
+                    } else {
                         break;
                     }
                 }
@@ -381,7 +397,11 @@ pub fn detect_levels(title: &str) -> Vec<String> {
                     // `FLOOR 2`, `FLOORS 3 AND 4`, `FLOORS 2-4`.
                     before = numbers_after(words.get(i + 1..).unwrap_or_default());
                 }
-                found.extend(before.iter().map(u32::to_string));
+                if before.is_empty() && saw_typical {
+                    has_typical = true;
+                } else {
+                    found.extend(before.iter().map(u32::to_string));
+                }
             }
             "LEVEL" | "LEVELS" => {
                 let rest = words.get(i + 1..).unwrap_or_default();
@@ -396,6 +416,17 @@ pub fn detect_levels(title: &str) -> Vec<String> {
             _ => {}
         }
     }
+    // "TYPICAL PLAN" / "TYP. PLAN" without FLOOR: e.g. "TYPICAL ELECTRICAL PLAN".
+    if !has_typical
+        && words.iter().any(|w| matches!(w.as_str(), "TYPICAL" | "TYP"))
+        && words.iter().any(|w| matches!(w.as_str(), "PLAN" | "PLANS"))
+        && found.is_empty()
+    {
+        has_typical = true;
+    }
+    if has_typical && found.is_empty() {
+        return vec!["T".to_string()];
+    }
     // A roof plan (framing, drainage…), not a sheet of roof assemblies or details.
     if words.iter().any(|w| w == "ROOF") && words.iter().any(|w| w == "PLAN" || w == "PLANS") {
         found.push("R".to_string());
@@ -404,6 +435,23 @@ pub fn detect_levels(title: &str) -> Vec<String> {
     found.sort_by_key(key);
     found.dedup();
     found
+}
+
+/// Whether this levels list is the "typical floor" sentinel that needs expansion.
+pub fn is_typical_sentinel(levels: &[String]) -> bool {
+    levels.len() == 1 && levels[0] == "T"
+}
+
+/// Expand a typical-floor sentinel against the known set of levels: every numeric level
+/// that has no dedicated plan for `discipline`. `all_levels` is sorted lowest-first.
+/// `has_dedicated` returns true when a level already has its own plan sheet.
+pub fn expand_typical(all_levels: &[String], has_dedicated: impl Fn(&str) -> bool) -> Vec<String> {
+    all_levels
+        .iter()
+        .filter(|l| l.parse::<u32>().is_ok()) // numeric floors only, not Roof
+        .filter(|l| !has_dedicated(l))
+        .cloned()
+        .collect()
 }
 
 /// Level numbers at the start of `words`: `2`, `02`, `3 AND 4`, `2-4`.
@@ -430,8 +478,14 @@ fn numbers_after(words: &[String]) -> Vec<u32> {
 
 fn detect_title(d: &Drawing, number: &str) -> String {
     let mut candidates: Vec<(f64, String)> = Vec::new();
+    let has_title_layer = d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("TITLE"));
     for e in d.model.iter() {
-        if !e.common.layer.eq_ignore_ascii_case("TITLE") {
+        let ly = &e.common.layer;
+        // TITLE layer (DXF), or when TITLE has text (OCR may garble it), also accept
+        // PDF-HIDDEN-TEXT as an authoritative source.  Without TITLE text, let the
+        // fallback (texts_across) handle it — hidden text heights are unreliable.
+        let ok = ly.eq_ignore_ascii_case("TITLE") || (has_title_layer && ly.eq_ignore_ascii_case("PDF-HIDDEN-TEXT"));
+        if !ok {
             continue;
         }
         let (h, val) = match &e.kind {
@@ -449,7 +503,7 @@ fn detect_title(d: &Drawing, number: &str) -> String {
         let texts: Vec<(String, f64, [f64; 2], [f64; 2])> = texts_across(d).into_iter().filter(|(v, _, _, _)| v != number && !v.is_empty()).collect();
         let titled = |v: &str| {
             let up = v.to_uppercase();
-            ["PLAN", "SCHEDULE", "COVER", "FRAMING", "CEILING", "ASSEMBLIES", "DETAILS", "SECTIONS", "ELEVATIONS", "DIAGRAM"]
+            ["PLAN", "SCHEDULE", "COVER", "FRAMING", "CEILING", "ASSEMBLIES", "DETAILS", "SECTIONS", "ELEVATIONS", "DIAGRAM", "LAYOUT"]
                 .iter()
                 .any(|k| up.contains(k))
         };
@@ -844,6 +898,74 @@ fn bubbles_on_lines(a: &Alignment, bubbles: &[(String, [f64; 2])], grid_x: &[Gri
     mostly_fit(&misfits)
 }
 
+/// Grid labels in their natural order: numbers by value (`2` before `10`, `1.5` between), else
+/// shorter first (`Z` before `AA`), then alphabetically. Grids are labelled so these ascend
+/// along building +x and +y.
+fn label_key(label: &str) -> (u8, f64, usize, String) {
+    let t = label.trim().to_uppercase();
+    match t.parse::<f64>() {
+        Ok(v) if v.is_finite() => (0, v, 0, t),
+        _ => (1, 0.0, t.chars().count(), t),
+    }
+}
+
+/// Whether lines read in model order (`at_in` ascending) carry their labels in natural order:
+/// more neighbours ascend than descend ([`label_key`]). A sheet plotted turned 180° reads its
+/// lines in reverse.
+fn ascends(grids: &[DetectedGrid]) -> bool {
+    let mut sorted: Vec<&DetectedGrid> = grids.iter().collect();
+    sorted.sort_by(|a, b| a.at_in.total_cmp(&b.at_in));
+    let (mut up, mut down) = (0usize, 0usize);
+    for w in sorted.windows(2) {
+        if let [a, b] = w {
+            match label_key(&a.label).partial_cmp(&label_key(&b.label)) {
+                Some(std::cmp::Ordering::Less) => up += 1,
+                Some(std::cmp::Ordering::Greater) => down += 1,
+                _ => {}
+            }
+        }
+    }
+    up > down
+}
+
+/// Largest turn off square, degrees, a sheet's bubble pairs may show and its read lines still
+/// be taken as square (pair ends a print's 0.01" off show a few hundredths of a degree).
+const SQUARE_DEG: f64 = 0.25;
+
+/// How far a sheet's bubble pairs turn it off square, degrees in (-45, 45]: the circular mean
+/// of each pair's direction taken modulo 90° (four times the angle, as unit vectors). `None`
+/// with no pairs, or when the pairs don't agree on a turn.
+fn pair_turn_deg(bubbles: &[(String, [f64; 2])]) -> Option<f64> {
+    let (mut c, mut s, mut n) = (0.0, 0.0, 0usize);
+    for d in pair_directions(bubbles) {
+        let a = d[1].atan2(d[0]) * 4.0;
+        c += a.cos();
+        s += a.sin();
+        n += 1;
+    }
+    if n == 0 || c.hypot(s) < 0.5 * n as f64 {
+        return None;
+    }
+    Some(s.atan2(c).to_degrees() / 4.0)
+}
+
+/// The unit direction from a label's first bubble to its second, for every label with two.
+fn pair_directions(bubbles: &[(String, [f64; 2])]) -> Vec<[f64; 2]> {
+    let mut by_label: BTreeMap<&str, Vec<[f64; 2]>> = BTreeMap::new();
+    for (label, pos) in bubbles {
+        by_label.entry(label.as_str()).or_default().push(*pos);
+    }
+    by_label
+        .values()
+        .filter_map(|p| {
+            let (a, b) = (p.first()?, p.get(1)?);
+            let d = [b[0] - a[0], b[1] - a[1]];
+            let l = d[0].hypot(d[1]);
+            (l > 1e-9 && l.is_finite()).then(|| [d[0] / l, d[1] / l])
+        })
+        .collect()
+}
+
 fn compute_alignment_from_bubbles(bubbles: &[(String, [f64; 2])], grid_x: &[GridLine], grid_y: &[GridLine]) -> Option<Alignment> {
     let x_map: BTreeMap<&str, f64> = grid_x.iter().map(|g| (g.label.as_str(), g.at_ft)).collect();
     let y_map: BTreeMap<&str, f64> = grid_y.iter().map(|g| (g.label.as_str(), g.at_ft)).collect();
@@ -853,62 +975,72 @@ fn compute_alignment_from_bubbles(bubbles: &[(String, [f64; 2])], grid_x: &[Grid
         by_label.entry(label.as_str()).or_default().push(*pos);
     }
 
-    // Step 1: determine rotation from bubble pair directions.
-    // x-grid labels (constant x, runs along building y): direction = rotated [0, 1] = [-sin θ, cos θ]
-    // y-grid labels (constant y, runs along building x): direction = rotated [1, 0] = [cos θ, sin θ]
-    let mut rotation_estimates = Vec::new();
-
+    // Step 1: the rotation from bubble pair directions. A pair's direction gives the turn only
+    // up to a half turn (which bubble is "first" is arbitrary), so the estimates are averaged
+    // as axes: the mean of (cos 2θ, sin 2θ), halved. A plain mean of angles put in [0, π)
+    // breaks at the seam: a square sheet whose pairs are a hair off either way (±ε, read as ε
+    // and π − ε) averaged to 90°.
+    // x-grid labels (constant x, runs along building y): direction = ±[-sin θ, cos θ]
+    // y-grid labels (constant y, runs along building x): direction = ±[cos θ, sin θ]
+    let (mut c2, mut s2, mut n) = (0.0, 0.0, 0usize);
     for (label, positions) in &by_label {
-        if positions.len() < 2 {
-            continue;
-        }
-        let (a, b) = (positions[0], positions[1]);
+        let (Some(a), Some(b)) = (positions.first(), positions.get(1)) else { continue };
         let d = [b[0] - a[0], b[1] - a[1]];
-        let l = (d[0].powi(2) + d[1].powi(2)).sqrt();
-        if l < 1e-9 {
+        let l = d[0].hypot(d[1]);
+        if l < 1e-9 || !l.is_finite() {
             continue;
         }
         let dir = [d[0] / l, d[1] / l];
-
-        if x_map.contains_key(label) {
-            // x-grid line direction in model = [-sin θ, cos θ] (or flipped)
-            // θ = atan2(-dir[0], dir[1]) or atan2(dir[0], -dir[1])
-            // Use both signs since the bubble order is arbitrary.
-            rotation_estimates.push((-dir[0]).atan2(dir[1]));
+        let estimate = if x_map.contains_key(label) {
+            (-dir[0]).atan2(dir[1])
         } else if y_map.contains_key(label) {
-            // y-grid line direction in model = [cos θ, sin θ] (or flipped)
-            rotation_estimates.push(dir[1].atan2(dir[0]));
-        }
+            dir[1].atan2(dir[0])
+        } else {
+            continue;
+        };
+        c2 += (2.0 * estimate).cos();
+        s2 += (2.0 * estimate).sin();
+        n += 1;
     }
-
-    if rotation_estimates.is_empty() {
+    // Pairs that don't agree on an axis (a detail's few bubbles) give no rotation.
+    if n == 0 || c2.hypot(s2) < 0.5 * n as f64 {
         return None;
     }
+    let axis = s2.atan2(c2) / 2.0;
 
-    // Normalise angles to a consistent range and average.
-    // Angles might be off by π due to bubble order. Normalise to [0, π).
-    let normalise = |a: f64| {
-        let mut a = a % std::f64::consts::PI;
-        if a < 0.0 {
-            a += std::f64::consts::PI;
+    // Which way along the axis: the grid's labels ascend along building +x and +y (the common
+    // grid is built so, [`assemble_grid`]), so turned the right way each line's position across
+    // the sheet rises with its place in the common grid; turned a half turn wrong, it falls.
+    // This tells 0° from 180° (and 90° from 270°).
+    let order = |theta: f64| -> f64 {
+        let (sin_t, cos_t) = theta.sin_cos();
+        let mut along: Vec<(f64, f64)> = Vec::new(); // (position across the sheet, common-grid feet)
+        let mut across: Vec<(f64, f64)> = Vec::new();
+        for (label, positions) in &by_label {
+            let (Some(a), Some(b)) = (positions.first(), positions.get(1)) else { continue };
+            let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+            if let Some(&ft) = x_map.get(label) {
+                along.push((mid[0] * cos_t + mid[1] * sin_t, ft));
+            } else if let Some(&ft) = y_map.get(label) {
+                across.push((-mid[0] * sin_t + mid[1] * cos_t, ft));
+            }
         }
-        a
+        let cov = |v: &[(f64, f64)]| -> f64 {
+            if v.is_empty() {
+                return 0.0;
+            }
+            let k = v.len() as f64;
+            let (mp, mf) = (v.iter().map(|p| p.0).sum::<f64>() / k, v.iter().map(|p| p.1).sum::<f64>() / k);
+            v.iter().map(|(p, f)| (p - mp) * (f - mf)).sum()
+        };
+        cov(&along) + cov(&across)
     };
-    let norm: Vec<f64> = rotation_estimates.iter().map(|a| normalise(*a)).collect();
-    let avg_norm = norm.iter().sum::<f64>() / norm.len() as f64;
-
-    // Pick the candidate (avg_norm or avg_norm - π) closest to the original estimates.
-    let candidates = [avg_norm, avg_norm - std::f64::consts::PI];
-    let theta = *candidates
-        .iter()
-        .min_by(|a, b| {
-            let da: f64 = rotation_estimates.iter().map(|r| (r - *a).abs()).sum();
-            let db: f64 = rotation_estimates.iter().map(|r| (r - *b).abs()).sum();
-            da.total_cmp(&db)
-        })
-        .unwrap_or(&avg_norm);
-
-    let rotation_deg = theta.to_degrees();
+    let theta = if order(axis) < 0.0 { axis + std::f64::consts::PI } else { axis };
+    // In (-180°, 180°].
+    let mut rotation_deg = theta.to_degrees();
+    if rotation_deg > 180.0 {
+        rotation_deg -= 360.0;
+    }
 
     // Step 2: compute offset using grid line midpoints.
     // For an x-grid bubble pair with label L:
@@ -1133,12 +1265,15 @@ pub fn plan_views(d: &Drawing) -> Vec<PlanView> {
     // Two titles of one view (`1ST FLOOR LIGHTING PLAN` and `LEVEL 1 LIGHTING PLAN` under the
     // same plan): the same levels a few lines apart are one view, titled by the larger. Views
     // side by side (a floor's two halves, or its piping and its ductwork) title on one line and stay apart.
+    // One title read twice at one spot (an imported PDF's hidden text and the OCR's reading of its
+    // stroked lettering, at different heights) is one view too: kept twice, the first copy's
+    // cell would end at the second copy, just under the title, and hold none of the plan.
     views.sort_by(|a, b| b.height.total_cmp(&a.height));
     let mut kept: Vec<PlanView> = Vec::new();
     for v in views {
         let one_view = |k: &PlanView| {
-            let (dy, h) = ((k.at[1] - v.at[1]).abs(), k.height.max(v.height));
-            k.levels == v.levels && dy > h * 0.5 && dy <= h * 8.0
+            let (dx, dy, h) = ((k.at[0] - v.at[0]).abs(), (k.at[1] - v.at[1]).abs(), k.height.max(v.height));
+            k.levels == v.levels && ((dy > h * 0.5 && dy <= h * 8.0) || (dy <= h * 0.5 && dx <= h * 2.0))
         };
         if !kept.iter().any(one_view) {
             kept.push(v);
@@ -1149,7 +1284,7 @@ pub fn plan_views(d: &Drawing) -> Vec<PlanView> {
 }
 
 /// The drawing with only the entities whose middle `keep` accepts.
-fn crop(d: &Drawing, keep: &dyn Fn([f64; 2]) -> bool) -> Drawing {
+pub(crate) fn crop(d: &Drawing, keep: &dyn Fn([f64; 2]) -> bool) -> Drawing {
     let mut sub = d.clone();
     sub.model = cadaddy_doc::EntityStore::new();
     let kept: Vec<cadaddy_doc::Entity> = d
@@ -1176,40 +1311,9 @@ pub fn recognise_views(d: &Drawing) -> Vec<RecognisedSheet> {
 /// [`recognise_views`], each view with its part of the drawing (`None`: the whole sheet).
 pub fn split_views(d: &Drawing) -> Vec<(RecognisedSheet, Option<Drawing>)> {
     let sheet = recognise_dxf(d);
-    let views = plan_views(d);
-    let mut distinct: Vec<&Vec<String>> = views.iter().map(|v| &v.levels).collect();
-    distinct.sort();
-    distinct.dedup();
-    if distinct.len() < 2 || views.len() > 8 {
+    let cells = view_cells(d);
+    if cells.is_empty() {
         return vec![(sheet, None)];
-    }
-    // Each view's cell: the views stand in columns (titles at about the same x, a tenth of the
-    // sheet or less apart), a column's views one above another. A title sits under its view:
-    // a view starts just below its title and ends where the next one up starts; a column ends
-    // halfway to the next column's titles.
-    let width = texts_across(d).iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), t| (lo.min(t.3[0]), hi.max(t.3[0])));
-    let gap = ((width.1 - width.0) * 0.1).max(1e-9);
-    let mut views = views;
-    views.sort_by(|a, b| a.at[0].total_cmp(&b.at[0]));
-    let mut columns: Vec<Vec<PlanView>> = Vec::new();
-    for v in views {
-        match columns.last_mut() {
-            Some(c) if c.last().is_some_and(|l| v.at[0] - l.at[0] <= gap) => c.push(v),
-            _ => columns.push(vec![v]),
-        }
-    }
-    let centre = |c: &Vec<PlanView>| c.iter().map(|v| v.at[0]).sum::<f64>() / c.len().max(1) as f64;
-    let mut cells: Vec<(PlanView, [f64; 4])> = Vec::new();
-    for (ci, col) in columns.iter().enumerate() {
-        let x0 = if ci == 0 { f64::NEG_INFINITY } else { columns.get(ci - 1).map_or(f64::NEG_INFINITY, |p| (centre(p) + centre(col)) / 2.0) };
-        let x1 = columns.get(ci + 1).map_or(f64::INFINITY, |n| (centre(col) + centre(n)) / 2.0);
-        let mut col = col.clone();
-        col.sort_by(|a, b| a.at[1].total_cmp(&b.at[1]));
-        for (i, v) in col.iter().enumerate() {
-            let y0 = if i == 0 { f64::NEG_INFINITY } else { v.at[1] - v.height };
-            let y1 = col.get(i + 1).map_or(f64::INFINITY, |n| n.at[1] - n.height);
-            cells.push((v.clone(), [x0, y0, x1, y1]));
-        }
     }
     let mut out: Vec<(RecognisedSheet, Option<Drawing>)> = Vec::new();
     for (v, [x0, y0, x1, y1]) in cells {
@@ -1246,6 +1350,181 @@ pub fn split_views(d: &Drawing) -> Vec<(RecognisedSheet, Option<Drawing>)> {
     out
 }
 
+/// The plan views of a sheet that prints several, each of its own level (`3RD FLOOR PLAN` under
+/// one plan, `4TH FLOOR PLAN` under the other), each with its cell `[x0, y0, x1, y1]` (model
+/// units; open to infinity at the sheet's outer edges). Empty for a sheet of one view, or of
+/// views of the same levels.
+pub fn view_cells(d: &Drawing) -> Vec<(PlanView, [f64; 4])> {
+    let views = plan_views(d);
+    let mut distinct: Vec<&Vec<String>> = views.iter().map(|v| &v.levels).collect();
+    distinct.sort();
+    distinct.dedup();
+    if distinct.len() < 2 || views.len() > 8 {
+        return Vec::new();
+    }
+    // Each view's cell: the views stand in columns (titles at about the same x, a tenth of the
+    // sheet or less apart), a column's views one above another. A title sits under its view:
+    // a view starts just below its title and ends where the next one up starts; a column ends
+    // halfway to the next column's titles.
+    let width = texts_across(d).iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), t| (lo.min(t.3[0]), hi.max(t.3[0])));
+    let gap = ((width.1 - width.0) * 0.1).max(1e-9);
+    let mut views = views;
+    views.sort_by(|a, b| a.at[0].total_cmp(&b.at[0]));
+    let mut columns: Vec<Vec<PlanView>> = Vec::new();
+    for v in views {
+        match columns.last_mut() {
+            Some(c) if c.last().is_some_and(|l| v.at[0] - l.at[0] <= gap) => c.push(v),
+            _ => columns.push(vec![v]),
+        }
+    }
+    let centre = |c: &Vec<PlanView>| c.iter().map(|v| v.at[0]).sum::<f64>() / c.len().max(1) as f64;
+    let mut cells: Vec<(PlanView, [f64; 4])> = Vec::new();
+    for (ci, col) in columns.iter().enumerate() {
+        let x0 = if ci == 0 { f64::NEG_INFINITY } else { columns.get(ci - 1).map_or(f64::NEG_INFINITY, |p| (centre(p) + centre(col)) / 2.0) };
+        let x1 = columns.get(ci + 1).map_or(f64::INFINITY, |n| (centre(col) + centre(n)) / 2.0);
+        let mut col = col.clone();
+        col.sort_by(|a, b| a.at[1].total_cmp(&b.at[1]));
+        for (i, v) in col.iter().enumerate() {
+            let y0 = if i == 0 { f64::NEG_INFINITY } else { v.at[1] - v.height };
+            let y1 = col.get(i + 1).map_or(f64::INFINITY, |n| n.at[1] - n.height);
+            cells.push((v.clone(), [x0, y0, x1, y1]));
+        }
+    }
+    cells
+}
+
+/// The level views of a sheet that prints several plans of different levels, each with the part
+/// of the sheet that is its own `[x0, y0, x1, y1]` (model units): the cells of [`view_cells`],
+/// else the blocks of linework the titled views occupy ([`crate::sheet_facts::view_titles`] over
+/// a `SCALE:` line) when their titles name at least two different levels. Empty for a sheet of
+/// one view (a typical-floor plan of several levels is one view), or of views of one level.
+pub fn level_views(d: &Drawing) -> Vec<(PlanView, [f64; 4])> {
+    let cells = view_cells(d);
+    if !cells.is_empty() {
+        return cells;
+    }
+    let texts = crate::sheet_facts::texts(d);
+    let mut views: Vec<(PlanView, [f64; 4])> = Vec::new();
+    for v in crate::sheet_facts::view_titles(d, &texts) {
+        let levels = detect_levels(&v.title);
+        let Some(region) = v.region else { continue };
+        if levels.is_empty() || is_typical_sentinel(&levels) || views.iter().any(|(_, r)| *r == region) {
+            continue;
+        }
+        views.push((PlanView { title: v.title, levels, at: v.at, height: 0.0 }, region));
+    }
+    let mut distinct: Vec<&Vec<String>> = views.iter().map(|(v, _)| &v.levels).collect();
+    distinct.sort();
+    distinct.dedup();
+    if distinct.len() < 2 || views.len() > 8 {
+        return Vec::new();
+    }
+    views
+}
+
+/// Whether a sheet title calls its plan a typical one (`TYPICAL 2ND-4TH FLOOR PLAN`,
+/// `LEVELS 3-4 (TYP.)`): one plan for every level it names.
+pub fn says_typical(title: &str) -> bool {
+    title.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).any(|w| matches!(w, "TYPICAL" | "TYP"))
+}
+
+/// A block holds a plan of a several-plan sheet when it is at least this share of the largest
+/// block (cells).
+const PLAN_BLOCK_SHARE: f64 = 0.4;
+
+/// The level views of a sheet the print set says shows `levels` (two to four, no typical plan)
+/// when [`level_views`] finds no titled views: its big blocks of linework
+/// ([`crate::sheet_facts::view_regions`]), one per level, side by side or one above another.
+/// Each block's part of the sheet runs halfway to its neighbours. A block takes the level a
+/// title in its part names; else the levels go left to right (or bottom to top), lowest first.
+/// Empty unless the sheet has exactly as many big blocks as levels, in one row or column.
+pub fn level_blocks(d: &Drawing, levels: &[String]) -> Vec<(PlanView, [f64; 4])> {
+    let n = levels.len();
+    if !(2..=4).contains(&n) || is_typical_sentinel(levels) {
+        return Vec::new();
+    }
+    let mut blocks = crate::sheet_facts::view_regions(d);
+    blocks.sort_by_key(|b| std::cmp::Reverse(b.1));
+    let Some(largest) = blocks.first().map(|b| b.1 as f64) else { return Vec::new() };
+    let big: Vec<[f64; 4]> = blocks.iter().filter(|b| b.1 as f64 >= PLAN_BLOCK_SHARE * largest).map(|b| b.0).collect();
+    if big.len() != n {
+        return Vec::new();
+    }
+    // One row (no two overlap across) or one column (no two overlap up and down).
+    let apart = |axis: usize, sorted: &[[f64; 4]]| sorted.windows(2).all(|w| matches!(w, [a, b] if b[axis] >= a[axis + 2]));
+    let mut row = big.clone();
+    row.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    let mut col = big.clone();
+    col.sort_by(|a, b| a[1].total_cmp(&b[1]));
+    let (order, axis) = if apart(0, &row) {
+        (row, 0)
+    } else if apart(1, &col) {
+        // Bottom to top, as a building stacks.
+        (col, 1)
+    } else {
+        return Vec::new();
+    };
+    // Each block's part: halfway to its neighbours along the row (or column), open at the ends.
+    let cells: Vec<[f64; 4]> = (0..n)
+        .map(|i| {
+            let b = order.get(i).copied().unwrap_or_default();
+            let mut c = [f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY];
+            if axis == 0 {
+                if let Some(p) = i.checked_sub(1).and_then(|k| order.get(k)) {
+                    c[0] = (p[2] + b[0]) / 2.0;
+                }
+                if let Some(q) = order.get(i + 1) {
+                    c[2] = (b[2] + q[0]) / 2.0;
+                }
+            } else {
+                if let Some(p) = i.checked_sub(1).and_then(|k| order.get(k)) {
+                    c[1] = (p[3] + b[1]) / 2.0;
+                }
+                if let Some(q) = order.get(i + 1) {
+                    c[3] = (b[3] + q[1]) / 2.0;
+                }
+            }
+            c
+        })
+        .collect();
+    // The level each part's titles name (the largest lettering naming exactly one of `levels`).
+    let texts = crate::sheet_facts::texts(d);
+    let named: Vec<Option<(String, String, [f64; 2], f64)>> = cells
+        .iter()
+        .map(|c| {
+            texts
+                .iter()
+                .filter(|t| t.at.x >= c[0] && t.at.x <= c[2] && t.at.y >= c[1] && t.at.y <= c[3] && t.value.len() <= 60)
+                .filter_map(|t| match detect_levels(&t.value).as_slice() {
+                    [l] if levels.contains(l) => Some((l.clone(), t.value.clone(), [t.at.x, t.at.y], t.height)),
+                    _ => None,
+                })
+                .max_by(|a, b| a.3.total_cmp(&b.3))
+        })
+        .collect();
+    let mut by_title: Vec<&str> = named.iter().filter_map(|x| x.as_ref().map(|x| x.0.as_str())).collect();
+    by_title.sort_unstable();
+    by_title.dedup();
+    let titled = by_title.len() == n && named.iter().all(Option::is_some);
+    let mut sorted: Vec<String> = levels.to_vec();
+    sorted.sort_by_key(|c| (c == "R", c.parse::<u32>().unwrap_or(u32::MAX), c.clone()));
+    cells
+        .iter()
+        .zip(&order)
+        .enumerate()
+        .map(|(i, (cell, b))| {
+            let (level, title, at, height) = match named.get(i).cloned().flatten().filter(|_| titled) {
+                Some(x) => x,
+                None => {
+                    let l = sorted.get(i).cloned().unwrap_or_default();
+                    (l.clone(), format!("LEVEL {l} (plan {} of {n} on the sheet)", i + 1), [(b[0] + b[2]) / 2.0, b[1]], 0.0)
+                }
+            };
+            (PlanView { title, levels: vec![level], at, height }, *cell)
+        })
+        .collect()
+}
+
 /// Build a sheet map from a set of DXF drawings: recognise each sheet, assemble the common
 /// grid, then compute each sheet's alignment.
 pub fn build_sheet_map(drawings: &[(String, &Drawing)]) -> SheetMap {
@@ -1276,8 +1555,12 @@ pub fn sheet_map_from(mut sheets: Vec<RecognisedSheet>) -> SheetMap {
         // An unrotated plan: the lines it read fit the common grid square (this also aligns
         // one view of a two-view sheet, with one bubble per line and so no pairs to turn by).
         // Else bubble-based alignment (rotated plans), kept when the bubbles then sit on their
-        // lines (a detail or an elevation with a few bubbles gives nonsense).
-        sh.alignment = alignment_from_lines(&sh.grid_x, &sh.grid_y, &grid_x, &grid_y)
+        // lines (a detail or an elevation with a few bubbles gives nonsense). A sheet whose
+        // bubble pairs show it turned a little off square isn't read square: its lines fit
+        // within the tolerance yet 2.5° puts the far end of a long building feet out.
+        let turned = pair_turn_deg(&sh.bubbles).is_some_and(|t| t.abs() > SQUARE_DEG);
+        let square = if turned { None } else { alignment_from_lines(&sh.grid_x, &sh.grid_y, &grid_x, &grid_y) };
+        sh.alignment = square
             .or_else(|| compute_alignment_from_bubbles(&sh.bubbles, &grid_x, &grid_y).filter(|a| bubbles_on_lines(a, &sh.bubbles, &grid_x, &grid_y)));
     }
 
@@ -1313,22 +1596,64 @@ fn assemble_grid(sheets: &[RecognisedSheet]) -> (Vec<GridLine>, Vec<GridLine>) {
         return (Vec::new(), Vec::new());
     };
 
-    // Pick the best sheet matching the majority classification.
-    let best = valid.iter().filter(|s| grid_x_labels(s) == majority_x).max_by_key(|s| s.grid_x.len() + s.grid_y.len());
+    // Pick the best sheet matching the majority classification: one plotted square and the
+    // right way up (its lines in label order along +x and +y, [`ascends`]) if there is one, as
+    // its lines become the building frame; then the one reading most lines.
+    let upright_square = |s: &RecognisedSheet| -> (bool, bool) {
+        let square = pair_turn_deg(&s.bubbles).is_none_or(|t| t.abs() <= SQUARE_DEG);
+        (ascends(&s.grid_x) && ascends(&s.grid_y) && square, square)
+    };
+    let best = valid.iter().filter(|s| grid_x_labels(s) == majority_x).max_by_key(|s| {
+        let (upright, square) = upright_square(s);
+        (upright, square, s.grid_x.len() + s.grid_y.len())
+    });
 
     let Some(ref_sheet) = best else {
         return (Vec::new(), Vec::new());
     };
+    // Every sheet read the same way up as the reference adds its reading of each line, shifted
+    // onto the reference: one sheet's bubbles a little off don't set the building frame alone.
+    let (ref_upright, ref_square) = upright_square(ref_sheet);
+    let agree: Vec<&RecognisedSheet> =
+        valid.iter().copied().filter(|s| grid_x_labels(s) == majority_x && upright_square(s) == (ref_upright, ref_square)).collect();
+    let consensus = |pick: &dyn Fn(&RecognisedSheet) -> &[DetectedGrid]| -> Vec<DetectedGrid> {
+        let reference = pick(ref_sheet);
+        let mut sums: BTreeMap<&str, (f64, usize)> = BTreeMap::new();
+        for s in &agree {
+            let pairs: Vec<(&str, f64)> =
+                pick(s).iter().filter_map(|g| reference.iter().find(|r| r.label == g.label).map(|r| (r.label.as_str(), g.at_in - r.at_in))).collect();
+            let mut shifts: Vec<f64> = pairs.iter().map(|p| p.1).collect();
+            shifts.sort_by(f64::total_cmp);
+            let Some(&median) = shifts.get(shifts.len() / 2) else { continue };
+            let misfits: Vec<f64> = shifts.iter().map(|d| d - median).collect();
+            if !mostly_fit(&misfits) {
+                continue;
+            }
+            let fits: Vec<(&str, f64)> = pairs.into_iter().filter(|p| (p.1 - median).abs() <= LINE_FIT_TOLERANCE_IN).collect();
+            let shift = fits.iter().map(|p| p.1).sum::<f64>() / fits.len().max(1) as f64;
+            for (label, d) in fits {
+                let e = sums.entry(label).or_default();
+                e.0 += d - shift;
+                e.1 += 1;
+            }
+        }
+        reference
+            .iter()
+            .map(|r| {
+                let mean = sums.get(r.label.as_str()).map_or(0.0, |(sum, n)| sum / (*n).max(1) as f64);
+                DetectedGrid { label: r.label.clone(), at_in: r.at_in + mean }
+            })
+            .collect()
+    };
 
     let to_ft = |grids: &[DetectedGrid]| -> Vec<GridLine> {
-        if grids.is_empty() {
-            return Vec::new();
-        }
-        let origin = grids[0].at_in;
+        // Building coordinates start at the reference sheet's first line each way (the lowest
+        // label of an upright sheet) at 0.
+        let Some(origin) = grids.first().map(|g| g.at_in) else { return Vec::new() };
         grids.iter().map(|g| GridLine { label: g.label.clone(), at_ft: (g.at_in - origin) / 12.0 }).collect()
     };
 
-    (to_ft(&ref_sheet.grid_x), to_ft(&ref_sheet.grid_y))
+    (to_ft(&consensus(&|s| &s.grid_x)), to_ft(&consensus(&|s| &s.grid_y)))
 }
 
 /// Convert model inches to building feet using a sheet's alignment.
@@ -1462,6 +1787,8 @@ pub struct SheetScore {
     pub scale_correct: bool,
     /// Grid alignment error in feet (mean absolute error of grid intersection positions).
     pub grid_error_ft: Option<f64>,
+    /// The largest of those errors, feet: the worst grid intersection.
+    pub grid_max_error_ft: Option<f64>,
 }
 
 /// Score the recognised sheet map against the truth.
@@ -1491,6 +1818,7 @@ pub fn score_sheet_map(map: &SheetMap, truth_sheets: &[Sheet], truth_grid_x: &[G
                 }
                 if !errors.is_empty() {
                     sc.grid_error_ft = Some(errors.iter().sum::<f64>() / errors.len() as f64);
+                    sc.grid_max_error_ft = Some(errors.iter().copied().fold(0.0, f64::max));
                 }
             }
         }
@@ -1503,6 +1831,86 @@ pub fn score_sheet_map(map: &SheetMap, truth_sheets: &[Sheet], truth_grid_x: &[G
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detect_levels_typical_floor() {
+        assert_eq!(detect_levels("TYPICAL FLOOR MECHANICAL PLAN"), vec!["T"]);
+        assert_eq!(detect_levels("TYP. FLOOR PLAN"), vec!["T"]);
+        assert_eq!(detect_levels("TYPICAL ELECTRICAL PLAN"), vec!["T"]);
+        assert_eq!(detect_levels("TYPICAL FLOORS - PLUMBING"), vec!["T"]);
+        // Not typical: has explicit levels.
+        assert_eq!(detect_levels("2ND - 4TH FLOOR MECHANICAL PLAN"), vec!["2", "3", "4"]);
+        assert_eq!(detect_levels("THIRD & FOURTH FLOOR PLAN"), vec!["3", "4"]);
+        assert_eq!(detect_levels("LEVELS 2-4"), vec!["2", "3", "4"]);
+        // Single named floor is not typical.
+        assert_eq!(detect_levels("SECOND FLOOR PLAN"), vec!["2"]);
+    }
+
+    #[test]
+    fn typical_sentinel_and_expand() {
+        assert!(is_typical_sentinel(&["T".to_string()]));
+        assert!(!is_typical_sentinel(&["1".to_string()]));
+        assert!(!is_typical_sentinel(&["1".to_string(), "2".to_string()]));
+        let all = vec!["1".to_string(), "2".to_string(), "3".to_string(), "4".to_string()];
+        // Floor 1 has a dedicated plan; typical covers 2, 3, 4.
+        let expanded = expand_typical(&all, |l| l == "1");
+        assert_eq!(expanded, vec!["2", "3", "4"]);
+        // All floors dedicated: typical covers nothing (but expand_typical is called only
+        // when there ARE no explicit numbers, so the caller falls back).
+        let expanded = expand_typical(&all, |l| l.parse::<u32>().is_ok());
+        assert!(expanded.is_empty());
+    }
+
+    fn sheet_text(d: &mut Drawing, at: [f64; 2], value: &str, height: f64) {
+        let t = cadaddy_doc::Text {
+            insert: cadaddy_doc::geom::Vec3::new(at[0], at[1], 0.0),
+            align_pt: None,
+            height,
+            value: value.into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: cadaddy_doc::HAlign::Left,
+            valign: cadaddy_doc::VAlign::Baseline,
+        };
+        d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), EntityKind::Text(t)).unwrap();
+    }
+
+    /// A sheet of two floor plans whose titles come twice, as an imported PDF gives them: the
+    /// hidden text and the OCR's reading of the stroked lettering, at one spot, different heights.
+    /// Each title is one view, and each view's cell holds its plan.
+    #[test]
+    fn a_title_read_twice_at_one_spot_is_one_view() {
+        let mut d = Drawing::default();
+        for (y0, title) in [(0.0, "3RD FLOOR PLAN"), (600.0, "4TH FLOOR PLAN")] {
+            sheet_text(&mut d, [200.0, y0 - 60.0], title, 12.9);
+            sheet_text(&mut d, [200.0, y0 - 60.0], title, 18.0);
+            for (i, room) in ["OFFICE", "LOBBY", "STORAGE"].iter().enumerate() {
+                sheet_text(&mut d, [90.0 + i as f64 * 240.0, y0 + 180.0], room, 6.4);
+                sheet_text(&mut d, [90.0 + i as f64 * 240.0, y0 + 180.0], room, 9.0);
+            }
+        }
+        sheet_text(&mut d, [0.0, -120.0], "SCALE: 1/8\" = 1'-0\"", 6.0);
+        sheet_text(&mut d, [900.0, -120.0], "A101", 12.0);
+        let views = plan_views(&d);
+        assert_eq!(views.len(), 2, "{views:?}");
+        assert!(views.iter().all(|v| v.height == 18.0), "the larger copy titles the view: {views:?}");
+        let cells = view_cells(&d);
+        assert_eq!(cells.len(), 2, "{cells:?}");
+        for (v, [_, y0, _, y1]) in &cells {
+            let plan_mid = if v.levels == ["3"] { 180.0 } else { 780.0 };
+            assert!(*y0 < plan_mid && plan_mid < *y1, "{} cell {y0}..{y1} misses its plan", v.title);
+        }
+        // Two views side by side, titled on one line, stay two.
+        let mut d = Drawing::default();
+        sheet_text(&mut d, [0.0, 0.0], "3RD FLOOR PLAN - AREA A", 18.0);
+        sheet_text(&mut d, [900.0, 0.0], "3RD FLOOR PLAN - AREA B", 18.0);
+        for i in 0..6 {
+            sheet_text(&mut d, [f64::from(i) * 300.0, 200.0], "ROOM", 9.0);
+        }
+        assert_eq!(plan_views(&d).len(), 2);
+    }
 
     /// The bubbles of `printed_sheets::detail_sheet`: two wall sections, each with `1` and `A`
     /// at its corner.
@@ -1520,10 +1928,79 @@ mod tests {
         let gx = vec![GridLine { label: "1".into(), at_ft: 0.0 }, GridLine { label: "2".into(), at_ft: 24.0 }];
         let gy = vec![GridLine { label: "A".into(), at_ft: 0.0 }, GridLine { label: "B".into(), at_ft: 30.0 }];
         let b = detail_bubbles();
-        // The pairs alone turn the sheet (the nonsense rotations seen on details) ...
-        let a = compute_alignment_from_bubbles(&b, &gx, &gy).expect("pairs give an alignment");
-        assert!(a.rotation_deg.abs() > 5.0, "rotation {}", a.rotation_deg);
-        // ... which the bubbles then sitting off their lines rejects.
-        assert!(!bubbles_on_lines(&a, &b, &gx, &gy));
+        // The pairs alone would turn the sheet (the nonsense rotations seen on details): either
+        // they don't agree on an axis and give none, or the bubbles then sitting off their
+        // lines reject the rotation they give.
+        if let Some(a) = compute_alignment_from_bubbles(&b, &gx, &gy) {
+            assert!(a.rotation_deg.abs() > 5.0, "rotation {}", a.rotation_deg);
+            assert!(!bubbles_on_lines(&a, &b, &gx, &gy));
+        }
+        // Each pair alone turns it.
+        let one = |label: &str| b.iter().filter(|(l, _)| l == label).cloned().collect::<Vec<_>>();
+        for label in ["1", "A"] {
+            let a = compute_alignment_from_bubbles(&one(label), &gx, &gy);
+            assert!(a.as_ref().is_none_or(|a| a.rotation_deg.abs() > 5.0), "{label}: {a:?}");
+        }
+    }
+
+    fn square_grid() -> (Vec<GridLine>, Vec<GridLine>) {
+        let gx = (0..4).map(|i| GridLine { label: (i + 1).to_string(), at_ft: f64::from(i) * 24.0 }).collect();
+        let gy = ["A", "B", "C"].iter().enumerate().map(|(i, l)| GridLine { label: (*l).into(), at_ft: i as f64 * 30.0 }).collect();
+        (gx, gy)
+    }
+
+    /// Both bubbles of every line of `square_grid`, drawn turned `deg` and shifted, each moved by
+    /// `jitter` (model inches) one way or the other.
+    fn turned_bubbles(deg: f64, jitter: f64) -> Vec<(String, [f64; 2])> {
+        let (gx, gy) = square_grid();
+        let mut b = Vec::new();
+        let mut k = 0usize;
+        let mut push = |label: &str, p: [f64; 2]| {
+            let r = layout::rotate([p[0] * 12.0, p[1] * 12.0], deg);
+            let sign = |n: usize| if n.is_multiple_of(2) { 1.0 } else { -1.0 };
+            b.push((label.to_string(), [r[0] + 500.0 + sign(k) * jitter, r[1] - 300.0 + sign(k / 2) * jitter]));
+            k += 1;
+        };
+        for g in &gx {
+            push(&g.label, [g.at_ft, -10.0]);
+            push(&g.label, [g.at_ft, 70.0]);
+        }
+        for g in &gy {
+            push(&g.label, [-10.0, g.at_ft]);
+            push(&g.label, [82.0, g.at_ft]);
+        }
+        b
+    }
+
+    #[test]
+    fn rotation_is_an_axial_mean_turned_by_label_order() {
+        let (gx, gy) = square_grid();
+        // 0.01" at 1/8" = 1'-0" is 0.96 model inches.
+        for deg in [0.0, 90.0, 180.0, -90.0, 2.5, -2.5, 177.5] {
+            for jitter in [0.0, 0.96] {
+                let a = compute_alignment_from_bubbles(&turned_bubbles(deg, jitter), &gx, &gy).expect("aligned");
+                let mut off = (a.rotation_deg - deg) % 360.0;
+                if off > 180.0 {
+                    off -= 360.0;
+                } else if off < -180.0 {
+                    off += 360.0;
+                }
+                assert!(off.abs() < 0.1, "{deg}° jitter {jitter}: read {}", a.rotation_deg);
+            }
+        }
+        // The pairs of a square sheet a hair off read square, not turned.
+        assert!(pair_turn_deg(&turned_bubbles(0.0, 0.96)).is_some_and(|t| t.abs() < SQUARE_DEG));
+        assert!(pair_turn_deg(&turned_bubbles(90.0, 0.96)).is_some_and(|t| t.abs() < SQUARE_DEG));
+        assert!(pair_turn_deg(&turned_bubbles(2.5, 0.96)).is_some_and(|t| (t - 2.5).abs() < 0.1));
+    }
+
+    #[test]
+    fn labels_ascend_in_natural_order() {
+        let g = |labels: &[&str]| labels.iter().enumerate().map(|(i, l)| DetectedGrid { label: (*l).into(), at_in: i as f64 }).collect::<Vec<_>>();
+        assert!(ascends(&g(&["1", "2", "10", "11"])));
+        assert!(ascends(&g(&["A", "B", "Z", "AA"])));
+        assert!(ascends(&g(&["1", "1.5", "2"])));
+        assert!(!ascends(&g(&["C", "B", "A"])));
+        assert!(!ascends(&g(&["4", "3", "2", "1"])));
     }
 }

@@ -20,3 +20,11 @@ log = { workspace = true }
 cadaddy-io = { workspace = true }
 # The synthetic hotel the weak agent works on (tests/weakagent.rs).
 cadaddy-mepfix = { path = "../mepfix" }
+# bimbench (moved from cadaddy-mepfix 10-23) builds the hotel model and reads its 3D parts.
+cadaddy-walk3d = { path = "../walk3d" }
+
+# bimbench times the agent tools through the MCP server on the built hotel; its stage checks are
+# unit-tested (`cargo test -p cadaddy-mcp --example bimbench`). `cargo xtask perf` runs it.
+[[example]]
+name = "bimbench"
+test = true

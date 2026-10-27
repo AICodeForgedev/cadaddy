@@ -80,6 +80,7 @@ impl Remote {
                     let mut reader = BufReader::new(read);
                     let mut s = s;
                     authenticate(&mut reader, &mut s, sa.port())?;
+                    version_handshake(&mut reader, &mut s);
                     self.conn = Some((reader, s));
                     return Ok(());
                 }
@@ -143,6 +144,48 @@ pub(crate) fn authenticate_with(reader: &mut BufReader<TcpStream>, writer: &mut 
     Ok(())
 }
 
+/// After authenticating, ask the app for its version and tool list; warn on stderr when the
+/// bridge (this cadaddy-cli) and the app are different versions so the user knows why a tool
+/// might be missing. Non-fatal: a version mismatch doesn't prevent use.
+fn version_handshake(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream) {
+    let bridge_version = env!("CARGO_PKG_VERSION");
+    let bridge_exe = std::env::current_exe().unwrap_or_default();
+    let req = format!("{}\n", json!({"id": -1, "method": "ping", "params": {"version": true}}));
+    if writer.write_all(req.as_bytes()).is_err() || writer.flush().is_err() {
+        return;
+    }
+    let mut reply = String::new();
+    if reader.read_line(&mut reply).is_err() {
+        return;
+    }
+    let v: Value = match serde_json::from_str(reply.trim()) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    // The app's ping reply may include "version" when the app supports it (older apps just
+    // reply "pong"). Extract the version string if present.
+    let app_version = v.get("result").and_then(|r| r.as_object()).and_then(|o| o.get("version")).and_then(Value::as_str).or_else(|| {
+        // Older apps reply with a simple string "pong" — no version info.
+        v.get("result").and_then(Value::as_str).filter(|s| *s != "pong").map(|_| "unknown")
+    });
+    if let Some(app_ver) = app_version {
+        if app_ver != bridge_version {
+            eprintln!(
+                "warning: version mismatch — cadaddy-cli is {bridge_version} ({}) but the app is {app_ver}; \
+                 some tools may be missing or behave differently. Update both to the same version.",
+                bridge_exe.display()
+            );
+        }
+    } else if bridge_version != "unknown" {
+        // App didn't report a version (old app). Warn that tools might be missing.
+        eprintln!(
+            "warning: the app at this port did not report its version (cadaddy-cli is {bridge_version}, {}); \
+             if tools are missing, update the app.",
+            bridge_exe.display()
+        );
+    }
+}
+
 /// The `window` of a `ui.render` request: two finite corners [[x0, y0], [x1, y1]] around an area
 /// (`None` when absent or unusable).
 fn render_window(p: &Value) -> Option<cadaddy_engine::geom::Bounds2> {
@@ -161,7 +204,7 @@ fn not_open(addr: &str, e: std::io::Error) -> std::io::Error {
     std::io::Error::new(
         e.kind(),
         format!(
-            "CADaddy is not answering at {addr} ({e}). Open CADaddy with its control port (`--control PORT` or CADADDY_CONTROL_PORT), then try again"
+            "CADaddy is not answering at {addr} ({e}). Open CADaddy with its control port (`--control PORT`, CADADDY_CONTROL_PORT or CADCRAFT_CONTROL_PORT), or use `mcp --connect {addr}` (--launch is on by default)"
         ),
     )
 }
@@ -499,9 +542,16 @@ mod tests {
             let addr = listener.local_addr().unwrap().to_string();
             let server = std::thread::spawn(move || {
                 let (conn, _) = listener.accept().unwrap();
-                let mut line = String::new();
-                BufReader::new(conn.try_clone().unwrap()).read_line(&mut line).unwrap();
+                let mut rd = BufReader::new(conn.try_clone().unwrap());
                 let mut out = conn;
+                // The version handshake comes first: answer it like an older app ("pong").
+                let mut line = String::new();
+                rd.read_line(&mut line).unwrap();
+                if serde_json::from_str::<Value>(&line).is_ok_and(|v| v["method"] == "ping") {
+                    writeln!(out, "{}", json!({"id": -1, "ok": true, "result": "pong"})).unwrap();
+                    line.clear();
+                    rd.read_line(&mut line).unwrap();
+                }
                 writeln!(out, "{}", json!({"id": 1, "ok": false, "error": "timeout", "state": state})).unwrap();
             });
             let mut remote = Remote::connect(&addr).unwrap();

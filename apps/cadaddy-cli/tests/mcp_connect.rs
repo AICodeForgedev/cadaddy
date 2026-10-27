@@ -62,12 +62,21 @@ fn connect_with_address_routes_to_that_endpoint() {
     let server = std::thread::spawn(move || {
         let (conn, _) = listener.accept().expect("accept");
         let mut reader = BufReader::new(conn.try_clone().expect("clone"));
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("read request");
-        let req: Value = serde_json::from_str(&line).expect("json request");
-        let reply = json!({"id": req["id"], "ok": true, "result": {"fixture": "loopback"}});
         let mut w = conn;
-        writeln!(w, "{reply}").expect("write reply");
+        // The bridge opens with a version handshake (`ping`); an app that answers "pong" is an
+        // older one (no version to compare), so no warning. Then the real request arrives.
+        let mut req = Value::Null;
+        for _ in 0..2 {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read request");
+            req = serde_json::from_str(&line).expect("json request");
+            if req["method"] == "ping" {
+                writeln!(w, "{}", json!({"id": req["id"], "ok": true, "result": "pong"})).expect("write pong");
+                continue;
+            }
+            writeln!(w, "{}", json!({"id": req["id"], "ok": true, "result": {"fixture": "loopback"}})).expect("write reply");
+            break;
+        }
         req
     });
     let call = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ui_inspect","arguments":{}}}"#;
@@ -86,7 +95,9 @@ fn connect_with_address_routes_to_that_endpoint() {
 fn connect_to_closed_port_fails() {
     // Port 0 never accepts a connection. (A port freed by dropping a listener could be taken by a
     // test running in parallel before this one connects.)
-    let out = mcp(&["--connect", "127.0.0.1:0"], &format!("{INIT}\n"));
+    // Launching the app when it isn't answering is the default now; this test is about the
+    // connection failing, so turn the launch off.
+    let out = mcp(&["--connect", "127.0.0.1:0", "--no-launch"], &format!("{INIT}\n"));
     assert!(!out.status.success());
     assert!(out.stdout.is_empty());
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot connect to"));

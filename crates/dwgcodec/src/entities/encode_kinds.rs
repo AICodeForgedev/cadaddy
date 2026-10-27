@@ -1601,8 +1601,10 @@ pub fn table_record(v: Version, name: &str, handle: u64, owner: Option<u64>, r: 
             }
         }
         "STYLE" => {
-            w.d.b(flags & 4 != 0);
+            // Shape-file bit before vertical (observed: ODA's converter reads the other order
+            // as a vertical font with an empty name and won't write that file out as DXF).
             w.d.b(flags & 1 != 0);
+            w.d.b(flags & 4 != 0);
             w.d.bd(r.fd(40, 0.0));
             w.d.bd(r.fd(41, 1.0));
             w.d.bd(rad(r.fd(50, 0.0)));

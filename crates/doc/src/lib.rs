@@ -18,6 +18,7 @@ pub mod library;
 mod plotstyle;
 mod plotter;
 pub mod projrules;
+pub mod props;
 mod rare;
 mod refedit;
 mod section;
@@ -192,6 +193,10 @@ pub struct Drawing {
     /// change log and the revision count, so a fresh agent resumes from the file alone. Kept in
     /// the named-object dictionary (`CADADDY_AGENT`).
     pub agent: Option<String>,
+    /// Import accuracy check results (JSON text, `import.check`): the checks that ran on this
+    /// drawing after a PDF import, their pass/fail status and scores, so the BIM pipeline can
+    /// gate on import quality. Kept in the .cdy manifest (`importCheck`).
+    pub import_check: Option<String>,
     /// Files the drawing carries inside itself, by name: texture images its materials name
     /// (`texture:<path>`, see [`Drawing::embedded_texture`]) and the baked lightmap
     /// (`lightmap.png`, `lightmap.json`). Kept in .cdy files, so a walkthrough model opens on
@@ -306,6 +311,7 @@ impl Drawing {
             parts: None,
             overrides: None,
             agent: None,
+            import_check: None,
             embedded: BTreeMap::new(),
             plot_stamp: None,
             properties: dwgprops::DwgProps::default(),

@@ -125,6 +125,32 @@ impl Source {
     fn github() -> Source {
         Source { api: API.into(), downloads: DOWNLOADS.into(), keys: crate::relsig::trusted_keys() }
     }
+
+    /// When `CADADDY_UPDATE_GATE` is set (a non-empty token), `CADADDY_UPDATE_API`,
+    /// `CADADDY_UPDATE_DOWNLOADS` and `CADADDY_UPDATE_KEY` override the compiled-in GitHub
+    /// defaults. This lets `cargo xtask update-gate` point an installed app at a local fake
+    /// release server signed with a test key, so the gate exercises the real updater end-to-end.
+    /// The gate token prevents accidental activation by normal users.
+    fn from_gate_env() -> Option<Source> {
+        let _gate = std::env::var("CADADDY_UPDATE_GATE").ok().filter(|t| !t.is_empty())?;
+        let api = std::env::var("CADADDY_UPDATE_API").ok().filter(|s| !s.is_empty())?;
+        let downloads = std::env::var("CADADDY_UPDATE_DOWNLOADS").ok().filter(|s| !s.is_empty())?;
+        let key_hex = std::env::var("CADADDY_UPDATE_KEY").ok().filter(|s| s.len() == 64)?;
+        let key = parse_hex_key(&key_hex)?;
+        log::info!("update-gate: using override source api={api} downloads={downloads}");
+        Some(Source { api, downloads, keys: vec![key] })
+    }
+}
+
+fn parse_hex_key(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    for (i, byte) in key.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(key)
 }
 
 /// The latest release at `src`: its version, page, and this platform's installer.
@@ -287,7 +313,8 @@ pub struct DesktopUpdater {
 
 impl Default for DesktopUpdater {
     fn default() -> Self {
-        DesktopUpdater::new(Source::github(), install_target())
+        let source = Source::from_gate_env().unwrap_or_else(Source::github);
+        DesktopUpdater::new(source, install_target())
     }
 }
 
@@ -916,6 +943,111 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), INSTALLED);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "only the installed app is left");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A local release feed that holds every answer until [`HeldFeed::release`]: an update
+    /// check stays in flight for as long as a test needs.
+    struct HeldFeed {
+        base: String,
+        asked: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        gate: std::sync::Arc<(Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    impl HeldFeed {
+        fn start(body: Vec<u8>) -> HeldFeed {
+            use std::io::{BufRead, Write};
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let base = format!("http://{}", l.local_addr().unwrap());
+            let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let gate = std::sync::Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+            let (a2, g2) = (asked.clone(), gate.clone());
+            std::thread::spawn(move || {
+                for c in l.incoming().flatten() {
+                    let (asked, gate, body) = (a2.clone(), g2.clone(), body.clone());
+                    std::thread::spawn(move || {
+                        let mut r = std::io::BufReader::new(c.try_clone().unwrap());
+                        let mut line = String::new();
+                        while r.read_line(&mut line).is_ok_and(|n| n > 2) {
+                            line.clear();
+                        }
+                        asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let (open, cv) = &*gate;
+                        let held = cv.wait_timeout_while(open.lock().unwrap(), std::time::Duration::from_secs(30), |open| !*open).unwrap();
+                        drop(held);
+                        let mut w = c;
+                        let _ = write!(w, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                        let _ = w.write_all(&body);
+                    });
+                }
+            });
+            HeldFeed { base, asked, gate }
+        }
+
+        fn source(&self) -> Source {
+            Source { api: format!("{}/api/latest", self.base), downloads: format!("{}/download/", self.base), keys: Vec::new() }
+        }
+
+        /// Wait (bounded) until `n` requests have arrived and are being held.
+        fn wait_asked(&self, n: usize) {
+            let start = std::time::Instant::now();
+            while self.asked.load(std::sync::atomic::Ordering::SeqCst) < n {
+                assert!(start.elapsed().as_secs() < 30, "the update check never reached the feed");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+
+        fn release(&self) {
+            let (open, cv) = &*self.gate;
+            *open.lock().unwrap() = true;
+            cv.notify_all();
+        }
+    }
+
+    /// Wait (bounded) until nothing but `keep` holds the updater state behind `alive`: the
+    /// check thread that held a clone has ended.
+    fn joined(alive: &std::sync::Weak<Mutex<Pending>>, keep: usize, what: &str) {
+        let start = std::time::Instant::now();
+        while alive.strong_count() > keep {
+            assert!(start.elapsed().as_secs() < 30, "{what}: the check thread did not end");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// Quit during an update check, then a second check (the next start) while the first is
+    /// still waiting for the feed: nothing panics, the quit app's late answer goes nowhere,
+    /// the second check gets exactly one answer, and both check threads end in bounded time.
+    #[test]
+    fn an_update_check_racing_quit_and_a_second_check() {
+        if Command::new("curl").arg("--version").output().is_err() {
+            return;
+        }
+        let feed = HeldFeed::start(serde_json::json!({ "tag_name": "v99.0.0", "assets": [] }).to_string().into_bytes());
+
+        let first = DesktopUpdater::new(feed.source(), None);
+        let first_alive = std::sync::Arc::downgrade(&first.pending);
+        first.check();
+        feed.wait_asked(1);
+        // Quit while the first check waits for its answer.
+        drop(first);
+        assert_eq!(first_alive.strong_count(), 1, "only the check thread still holds the quit updater");
+
+        let second = DesktopUpdater::new(feed.source(), None);
+        let second_alive = std::sync::Arc::downgrade(&second.pending);
+        second.check();
+        feed.wait_asked(2);
+        // Both checks are in flight: nothing has answered yet.
+        assert!(second.poll().is_none(), "no answer while the feed holds it");
+
+        feed.release();
+        match wait(&second) {
+            Event::Available(r) => assert_eq!(r.version, "99.0.0"),
+            e => panic!("expected the offer of 99.0.0, got {e:?}"),
+        }
+        joined(&first_alive, 0, "the quit updater");
+        joined(&second_alive, 1, "the second updater");
+        // Exactly one answer: the quit updater's never arrives here.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(second.poll().is_none(), "exactly one answer for one check");
     }
 
     /// The installer script runs: PowerShell started the way [`install`] starts it (hidden,

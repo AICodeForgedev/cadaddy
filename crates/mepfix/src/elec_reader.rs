@@ -13,6 +13,41 @@ use crate::truth::{Room, Truth};
 use cadaddy_doc::{Drawing, EntityKind};
 use std::collections::BTreeMap;
 
+// ---- Zone type: names the wall, range along it, height band, and decision status --------
+
+/// Which axis a zone range runs along.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZoneAxis {
+    /// Range is along the X axis (south or north wall).
+    X,
+    /// Range is along the Y axis (west or east wall).
+    Y,
+}
+
+/// A placement zone for a device whose exact position is not fixed by architectural documents.
+/// Names the wall (room + side), the allowed range along it, a height band, and whether the
+/// installer decides the exact spot in the field.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeviceZone {
+    /// Room this zone belongs to.
+    pub room: String,
+    /// Which wall side of the room.
+    pub wall_side: WallSide,
+    /// Which axis the range runs along.
+    pub axis: ZoneAxis,
+    /// Allowed range along the wall axis, building feet `[min, max]`.
+    pub range_ft: [f64; 2],
+    /// Mounting height band, inches AFF `[min, max]`.
+    pub height_in: [f64; 2],
+    /// True when the installer decides the exact spot in the field (no drawing fixes it).
+    pub field_decision: bool,
+}
+
+/// Whether a layer name is a device layer (DEVICE, E-DEVICE, etc.).
+fn is_device_layer(layer: &str) -> bool {
+    layer.to_ascii_uppercase().contains("DEVICE")
+}
+
 // ---- Default mounting height rules (inches AFF) ----------------------------------------
 
 /// Default mounting height rules by device kind, used when no note is present on the device.
@@ -140,6 +175,11 @@ const SYMBOL_RADIUS_IN: f64 = 12.0;
 /// A symbol's own texts are within this distance of it (model inches).
 const CLOSE_TEXT_IN: f64 = 12.0;
 
+/// Public entry point for BOM and other callers that need device detection on a drawing.
+pub fn detect_device_symbols_pub(d: &Drawing) -> Vec<DetectedDevice> {
+    detect_device_symbols(d)
+}
+
 /// Detect device symbols on a DEVICE layer in the DXF.
 ///
 /// Strategy: on E-sheets, devices are drawn as circles, rectangles, arcs, polygons on the
@@ -149,7 +189,7 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
     // Collect all DEVICE-layer geometry centres.
     let mut centres: Vec<([f64; 2], &str)> = Vec::new(); // (centre, shape hint)
     for e in d.model.iter() {
-        if !e.common.layer.eq_ignore_ascii_case("DEVICE") {
+        if !is_device_layer(&e.common.layer) {
             continue;
         }
         match &e.kind {
@@ -206,7 +246,7 @@ fn detect_device_symbols(d: &Drawing) -> Vec<DetectedDevice> {
     // Collect all TEXT-layer text with positions.
     let mut texts: Vec<(String, [f64; 2])> = Vec::new();
     for e in d.model.iter() {
-        if !e.common.layer.eq_ignore_ascii_case("TEXT") && !e.common.layer.eq_ignore_ascii_case("DEVICE") {
+        if !e.common.layer.eq_ignore_ascii_case("TEXT") && !is_device_layer(&e.common.layer) {
             continue;
         }
         match &e.kind {
@@ -461,7 +501,7 @@ fn parse_mounting_height(texts: &[&(String, [f64; 2])], kind: &str) -> (f64, &'s
 pub(crate) fn detect_panels(d: &Drawing) -> Vec<DetectedPanel> {
     let mut rects: Vec<([f64; 2], [f64; 2])> = Vec::new();
     for e in d.model.iter() {
-        if !e.common.layer.eq_ignore_ascii_case("DEVICE") {
+        if !is_device_layer(&e.common.layer) {
             continue;
         }
         if let EntityKind::LwPolyline(p) = &e.kind
@@ -549,7 +589,7 @@ pub(crate) fn detect_panels(d: &Drawing) -> Vec<DetectedPanel> {
 
 /// Which wall of a rectangular room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WallSide {
+pub enum WallSide {
     South,
     North,
     West,
@@ -559,11 +599,6 @@ enum WallSide {
 fn is_corridor_room(room: &Room) -> bool {
     let n = room.name.to_uppercase();
     n.contains("CORRIDOR") || n.contains("HALL")
-}
-
-fn is_utility_room(room: &Room) -> bool {
-    let n = room.name.to_uppercase();
-    n.contains("MECH") || n.contains("ELEC")
 }
 
 fn assign_wall_side(room: &Room, pt: [f64; 2]) -> WallSide {
@@ -669,81 +704,341 @@ fn snap_to_nearest(expected: &[[f64; 2]], approx: [f64; 2]) -> [f64; 2] {
 struct ArchPlacement {
     at_ft: [f64; 2],
     arch_positioned: bool,
-    zone_ft: Option<[f64; 2]>,
+    zone: Option<DeviceZone>,
+    /// Source of the position: sheet number + item that fixed it, or empty.
+    source: String,
 }
 
-/// Position a device using room geometry and placement rules, NOT the E-sheet symbol position.
+/// A door read from the A-sheets, for placement context.
+pub struct PlacementDoor {
+    pub room: String,
+    pub at_ft: [f64; 2],
+    pub latch_ft: [f64; 2],
+    pub hinge_ft: [f64; 2],
+    pub hand: String,
+    pub sheet: String,
+}
+
+/// A casework/backsplash item read from the A-sheets, for placement context.
+pub struct PlacementCasework {
+    pub room: String,
+    pub kind: String,
+    pub tag: String,
+    pub min_ft: [f64; 2],
+    pub max_ft: [f64; 2],
+    pub height_in: f64,
+    pub sheet: String,
+}
+
+/// Context for device placement: rooms, doors, casework read from A-sheets (never from truth).
+pub struct PlacementContext {
+    /// Rooms by level, from the ceiling or arch reader.
+    pub rooms: BTreeMap<String, Vec<Room>>,
+    /// Level elevations (feet) from the reader.
+    pub level_elev: BTreeMap<String, f64>,
+    /// Ceiling heights per (level, room_number), from the ceiling reader.
+    pub ceiling_ft: BTreeMap<(String, String), f64>,
+    /// Doors per room from the A-sheet arch reader.
+    pub doors: Vec<PlacementDoor>,
+    /// Casework items per room from the A-sheet casework reader.
+    pub casework: Vec<PlacementCasework>,
+}
+
+impl PlacementContext {
+    /// Build from truth (temporary bridge until all callers pass reader output).
+    pub fn from_truth(truth: &Truth) -> Self {
+        let mut rooms: BTreeMap<String, Vec<Room>> = BTreeMap::new();
+        for rm in &truth.building.rooms {
+            rooms.entry(rm.level.clone()).or_default().push(rm.clone());
+        }
+        let mut level_elev = BTreeMap::new();
+        for lev in &truth.building.levels {
+            level_elev.insert(lev.name.clone(), lev.elevation_ft);
+        }
+        let mut ceiling_ft = BTreeMap::new();
+        for rm in &truth.building.rooms {
+            if let Some(c) = &rm.ceiling {
+                ceiling_ft.insert((rm.level.clone(), rm.number.clone()), c.height_ft);
+            }
+        }
+        // Doors from truth.arch.doors (when the truth carries architecture).
+        let doors = truth
+            .arch
+            .as_ref()
+            .map(|a| {
+                a.doors
+                    .iter()
+                    .map(|d| {
+                        let room = d.swings_into.as_ref().or(d.from_room.as_ref()).cloned().unwrap_or_default();
+                        PlacementDoor { room, at_ft: d.at_ft, latch_ft: d.latch_ft, hinge_ft: d.hinge_ft, hand: d.hand.clone(), sheet: String::new() }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Casework from truth.casework.
+        let casework = truth
+            .casework
+            .iter()
+            .map(|c| PlacementCasework {
+                room: c.room.clone(),
+                kind: c.kind.clone(),
+                tag: c.tag.clone(),
+                min_ft: c.min_ft,
+                max_ft: c.max_ft,
+                height_in: c.height_in,
+                sheet: String::new(),
+            })
+            .collect();
+        PlacementContext { rooms, level_elev, ceiling_ft, doors, casework }
+    }
+
+    /// Build from reader output (the production path — no truth dependency).
+    pub fn from_readers(
+        ceiling_rooms: &[crate::ceiling_reader::FoundRoom],
+        ceilings: &[crate::ceiling_reader::FoundCeiling],
+        arch_doors: &[crate::arch_reader::FoundDoor],
+        read_casework: &[crate::score::FoundCaseworkItem],
+        level_elevations: &BTreeMap<String, f64>,
+    ) -> Self {
+        let mut rooms: BTreeMap<String, Vec<Room>> = BTreeMap::new();
+        for cr in ceiling_rooms {
+            rooms.entry(cr.level.clone()).or_default().push(Room {
+                id: cr.number.clone(),
+                level: cr.level.clone(),
+                number: cr.number.clone(),
+                name: cr.name.clone(),
+                min_ft: cr.min_ft,
+                max_ft: cr.max_ft,
+                ceiling: None,
+                plenum_ft: None,
+            });
+        }
+        let mut ceiling_ft = BTreeMap::new();
+        for c in ceilings {
+            if let Some(h) = c.height_ft {
+                ceiling_ft.insert((c.level.clone(), c.room_number.clone()), h);
+            }
+        }
+        let doors = arch_doors
+            .iter()
+            .filter_map(|d| {
+                Some(PlacementDoor {
+                    room: d.swings_into.as_ref().or(d.from_room.as_ref())?.clone(),
+                    at_ft: d.at_ft,
+                    latch_ft: d.latch_ft,
+                    hinge_ft: d.hinge_ft,
+                    hand: d.hand.clone(),
+                    sheet: String::new(),
+                })
+            })
+            .collect();
+        // Casework: assign room by checking which room the centre falls in.
+        let casework = read_casework
+            .iter()
+            .map(|c| {
+                let cx = (c.min_ft[0] + c.max_ft[0]) / 2.0;
+                let cy = (c.min_ft[1] + c.max_ft[1]) / 2.0;
+                let room_num = rooms
+                    .get(&c.level)
+                    .and_then(|rms| {
+                        rms.iter()
+                            .find(|r| cx >= r.min_ft[0] - 0.5 && cx <= r.max_ft[0] + 0.5 && cy >= r.min_ft[1] - 0.5 && cy <= r.max_ft[1] + 0.5)
+                            .map(|r| r.number.clone())
+                    })
+                    .unwrap_or_default();
+                PlacementCasework {
+                    room: room_num,
+                    kind: c.kind.clone(),
+                    tag: c.tag.clone(),
+                    min_ft: c.min_ft,
+                    max_ft: c.max_ft,
+                    height_in: c.height_in,
+                    sheet: String::new(),
+                }
+            })
+            .collect();
+        PlacementContext { rooms, level_elev: level_elevations.clone(), ceiling_ft, doors, casework }
+    }
+
+    fn room_doors(&self, room: &str) -> Vec<&PlacementDoor> {
+        self.doors.iter().filter(|d| d.room == room).collect()
+    }
+
+    fn room_casework(&self, room: &str, kind: &str) -> Vec<&PlacementCasework> {
+        self.casework.iter().filter(|c| c.room == room && c.kind == kind).collect()
+    }
+}
+
+/// Position a device using room geometry and A-sheet evidence.
 ///
 /// The `approx_ft` (from the E-sheet via `building_from_model`) is used ONLY to determine
 /// which expected layout position this device corresponds to (e.g. which grid cell, which
-/// perimeter slot, which corridor end). The final position comes from architectural features
-/// and placement rules.
-fn position_from_rules(room: &Room, kind: &str, approx_ft: [f64; 2]) -> ArchPlacement {
+/// perimeter slot, which corridor end). The final position comes from A-sheet evidence when
+/// available, otherwise from a placement zone (flagged field-decision).
+fn position_from_rules(room: &Room, kind: &str, approx_ft: [f64; 2], ctx: &PlacementContext) -> ArchPlacement {
     let (rx0, ry0) = (room.min_ft[0], room.min_ft[1]);
     let (rx1, ry1) = (room.max_ft[0], room.max_ft[1]);
     let rw = rx1 - rx0;
     let rh = ry1 - ry0;
+    let room_num = &room.number;
+
+    // Helper: build a zone for a given wall side of this room.
+    let make_zone = |wall: WallSide, range: [f64; 2], height_band: [f64; 2], field: bool| -> DeviceZone {
+        let axis = match wall {
+            WallSide::South | WallSide::North => ZoneAxis::X,
+            WallSide::West | WallSide::East => ZoneAxis::Y,
+        };
+        DeviceZone { room: room_num.clone(), wall_side: wall, axis, range_ft: range, height_in: height_band, field_decision: field }
+    };
+
+    // Default height bands by kind (inches AFF).
+    let default_height = |k: &str| -> [f64; 2] {
+        match k {
+            "receptacle" | "data_outlet" => [14.0, 22.0],
+            "switch" => [42.0, 50.0],
+            "light_fixture" | "exit_sign" | "emergency_light" => [84.0, 120.0],
+            "disconnect" => [48.0, 72.0],
+            "junction_box" => [72.0, 120.0],
+            "floor_box" => [0.0, 0.0],
+            _ => [0.0, 120.0],
+        }
+    };
 
     match kind {
-        // ---- Architecturally positioned: position fixed by A-sheet dimensions ----
-        "floor_box" => {
-            // Floor boxes at room centre (from A-sheet room dimensions).
-            ArchPlacement { at_ft: [(rx0 + rx1) / 2.0, (ry0 + ry1) / 2.0], arch_positioned: true, zone_ft: None }
-        }
-
-        "disconnect" => {
-            // Near mechanical equipment (AHU), standard placement from equipment schedule.
-            ArchPlacement { at_ft: [rx0 + 2.0, ry0 + 2.0], arch_positioned: true, zone_ft: None }
-        }
-
-        "junction_box" => {
-            // Near electrical panels, from panel schedule and A-sheet riser diagram.
-            ArchPlacement { at_ft: [rx0 + 3.5, ry0 + 2.0], arch_positioned: true, zone_ft: None }
-        }
-
-        "light_fixture" if !is_corridor_room(room) && !is_utility_room(room) => {
-            // Office fixtures: reflected-ceiling-plan grid from A-sheet dimensions.
-            let grid = light_grid_for_room(room);
-            let snapped = snap_to_nearest(&grid, approx_ft);
-            ArchPlacement { at_ft: snapped, arch_positioned: true, zone_ft: None }
-        }
-
-        // ---- Zone / field-decision devices ----
-        "light_fixture" => {
-            // Corridor or utility room fixtures: ceiling grid layout, field decision.
-            let grid = light_grid_for_room(room);
-            let snapped = snap_to_nearest(&grid, approx_ft);
-            let zone = if rw >= rh { [rx0, rx1] } else { [ry0, ry1] };
-            ArchPlacement { at_ft: snapped, arch_positioned: false, zone_ft: Some(zone) }
-        }
-
+        // ---- Switches: position from A-sheet door latch side when available ----
         "switch" => {
-            // Near the room entry (door position from A-sheet floor plan).
-            // Standard: door is at a corner of the room; switch 0.5 ft offset.
-            let corners = [[rx0 + 0.5, ry0 + 0.5], [rx0 + 0.5, ry1 - 0.5], [rx1 - 0.5, ry0 + 0.5], [rx1 - 0.5, ry1 - 0.5]];
-            let nearest_corner = snap_to_nearest(&corners, approx_ft);
-            let wall = assign_wall_side(room, nearest_corner);
-            let zone = match wall {
-                WallSide::South | WallSide::North => [(nearest_corner[0] - 2.0).max(rx0), (nearest_corner[0] + 2.0).min(rx1)],
-                WallSide::West | WallSide::East => [(nearest_corner[1] - 2.0).max(ry0), (nearest_corner[1] + 2.0).min(ry1)],
-            };
-            ArchPlacement { at_ft: nearest_corner, arch_positioned: false, zone_ft: Some(zone) }
+            let doors = ctx.room_doors(room_num);
+            if let Some(door) = doors.iter().min_by(|a, b| {
+                let da = (a.latch_ft[0] - approx_ft[0]).powi(2) + (a.latch_ft[1] - approx_ft[1]).powi(2);
+                let db = (b.latch_ft[0] - approx_ft[0]).powi(2) + (b.latch_ft[1] - approx_ft[1]).powi(2);
+                da.total_cmp(&db)
+            }) {
+                // Switch on latch side of the actual door.
+                let latch = door.latch_ft;
+                let wall = assign_wall_side(room, latch);
+                let (range, at) = match wall {
+                    WallSide::South | WallSide::North => {
+                        let r = [(latch[0] - 1.0).max(rx0), (latch[0] + 1.0).min(rx1)];
+                        ([r[0], r[1]], [latch[0], if wall == WallSide::South { ry0 + 0.3 } else { ry1 - 0.3 }])
+                    }
+                    WallSide::West | WallSide::East => {
+                        let r = [(latch[1] - 1.0).max(ry0), (latch[1] + 1.0).min(ry1)];
+                        ([r[0], r[1]], [if wall == WallSide::West { rx0 + 0.3 } else { rx1 - 0.3 }, latch[1]])
+                    }
+                };
+                let source = format!("{} door-latch", door.sheet);
+                let zone = make_zone(wall, range, default_height("switch"), true);
+                ArchPlacement { at_ft: at, arch_positioned: false, zone: Some(zone), source }
+            } else {
+                // No door found: zone at nearest corner.
+                let corners = [[rx0 + 0.5, ry0 + 0.5], [rx0 + 0.5, ry1 - 0.5], [rx1 - 0.5, ry0 + 0.5], [rx1 - 0.5, ry1 - 0.5]];
+                let nearest_corner = snap_to_nearest(&corners, approx_ft);
+                let wall = assign_wall_side(room, nearest_corner);
+                let range = match wall {
+                    WallSide::South | WallSide::North => [(nearest_corner[0] - 2.0).max(rx0), (nearest_corner[0] + 2.0).min(rx1)],
+                    WallSide::West | WallSide::East => [(nearest_corner[1] - 2.0).max(ry0), (nearest_corner[1] + 2.0).min(ry1)],
+                };
+                let zone = make_zone(wall, range, default_height("switch"), true);
+                ArchPlacement { at_ft: nearest_corner, arch_positioned: false, zone: Some(zone), source: String::new() }
+            }
         }
 
+        // ---- Receptacles: check for backsplash/counter evidence ----
         "receptacle" => {
-            // Perimeter positions from placement rules (one every 12 ft per code).
-            let expected = receptacle_positions_for_room(room);
-            let snapped = snap_to_nearest(&expected, approx_ft);
-            let wall = assign_wall_side(room, snapped);
-            let zone = match wall {
-                WallSide::South | WallSide::North => [rx0, rx1],
-                WallSide::West | WallSide::East => [ry0, ry1],
-            };
-            ArchPlacement { at_ft: snapped, arch_positioned: false, zone_ft: Some(zone) }
+            // Check if there's a backsplash/counter fixing this receptacle.
+            let backsplashes = ctx.room_casework(room_num, "backsplash");
+            let counters = ctx.room_casework(room_num, "counter");
+            let vanities = ctx.room_casework(room_num, "vanity");
+            let counter_items: Vec<&PlacementCasework> = counters.into_iter().chain(vanities).collect();
+
+            // Find a backsplash near the approx position.
+            let bs_hit = backsplashes.iter().find(|bs| {
+                let cx = (bs.min_ft[0] + bs.max_ft[0]) / 2.0;
+                let cy = (bs.min_ft[1] + bs.max_ft[1]) / 2.0;
+                (cx - approx_ft[0]).abs() < 3.0 && (cy - approx_ft[1]).abs() < 3.0
+            });
+
+            if let Some(bs) = bs_hit {
+                // Find counter under this backsplash.
+                let bsc = [(bs.min_ft[0] + bs.max_ft[0]) / 2.0, (bs.min_ft[1] + bs.max_ft[1]) / 2.0];
+                let counter = counter_items.iter().find(|c| {
+                    bsc[0] >= c.min_ft[0] - 0.1 && bsc[0] <= c.max_ft[0] + 0.1 && bsc[1] >= c.min_ft[1] - 0.1 && bsc[1] <= c.max_ft[1] + 0.1
+                });
+                let wall = assign_wall_side(room, bsc);
+                let (range, axis) = match wall {
+                    WallSide::South | WallSide::North => ([bs.min_ft[0], bs.max_ft[0]], ZoneAxis::X),
+                    WallSide::West | WallSide::East => ([bs.min_ft[1], bs.max_ft[1]], ZoneAxis::Y),
+                };
+                let counter_top = counter.map(|c| c.height_in).unwrap_or(36.0);
+                let low = counter_top + 2.0;
+                let high = (counter_top + 20.0).max(low);
+                let source = format!("{} backsplash {}", bs.sheet, bs.tag);
+                let zone =
+                    DeviceZone { room: room_num.clone(), wall_side: wall, axis, range_ft: range, height_in: [low, high], field_decision: true };
+                let at = [
+                    (range[0] + range[1]) / 2.0,
+                    if axis == ZoneAxis::X { if wall == WallSide::South { ry0 + 0.3 } else { ry1 - 0.3 } } else { approx_ft[1] },
+                ];
+                let at =
+                    if axis == ZoneAxis::Y { [if wall == WallSide::West { rx0 + 0.3 } else { rx1 - 0.3 }, (range[0] + range[1]) / 2.0] } else { at };
+                ArchPlacement { at_ft: at, arch_positioned: false, zone: Some(zone), source }
+            } else {
+                // No casework evidence: zone covers the wall.
+                let expected = receptacle_positions_for_room(room);
+                let snapped = snap_to_nearest(&expected, approx_ft);
+                let wall = assign_wall_side(room, snapped);
+                let range = match wall {
+                    WallSide::South | WallSide::North => [rx0, rx1],
+                    WallSide::West | WallSide::East => [ry0, ry1],
+                };
+                let zone = make_zone(wall, range, default_height("receptacle"), true);
+                ArchPlacement { at_ft: snapped, arch_positioned: false, zone: Some(zone), source: String::new() }
+            }
         }
 
+        // ---- Light fixtures: always zones (rule-based grid, no A-sheet fixes them) ----
+        "light_fixture" => {
+            let grid = light_grid_for_room(room);
+            let snapped = snap_to_nearest(&grid, approx_ft);
+            let (wall, range) = if rw >= rh { (WallSide::South, [rx0, rx1]) } else { (WallSide::West, [ry0, ry1]) };
+            let zone = make_zone(wall, range, default_height("light_fixture"), true);
+            ArchPlacement { at_ft: snapped, arch_positioned: false, zone: Some(zone), source: String::new() }
+        }
+
+        // ---- Floor box: zone at room centre (rule-based, not arch-fixed) ----
+        "floor_box" => {
+            let centre = [(rx0 + rx1) / 2.0, (ry0 + ry1) / 2.0];
+            let wall = WallSide::South;
+            let zone = make_zone(wall, [rx0, rx1], default_height("floor_box"), true);
+            ArchPlacement { at_ft: centre, arch_positioned: false, zone: Some(zone), source: String::new() }
+        }
+
+        // ---- Disconnect: zone in mechanical room (rule-based) ----
+        "disconnect" => {
+            let at = [rx0 + 2.0, ry0 + 2.0];
+            let wall = assign_wall_side(room, at);
+            let range = match wall {
+                WallSide::South | WallSide::North => [rx0, (rx0 + 5.0).min(rx1)],
+                WallSide::West | WallSide::East => [ry0, (ry0 + 5.0).min(ry1)],
+            };
+            let zone = make_zone(wall, range, default_height("disconnect"), true);
+            ArchPlacement { at_ft: at, arch_positioned: false, zone: Some(zone), source: String::new() }
+        }
+
+        // ---- Junction box: zone near panels (rule-based) ----
+        "junction_box" => {
+            let at = [rx0 + 3.5, ry0 + 2.0];
+            let wall = assign_wall_side(room, at);
+            let range = match wall {
+                WallSide::South | WallSide::North => [rx0, (rx0 + 6.0).min(rx1)],
+                WallSide::West | WallSide::East => [ry0, (ry0 + 6.0).min(ry1)],
+            };
+            let zone = make_zone(wall, range, default_height("junction_box"), true);
+            ArchPlacement { at_ft: at, arch_positioned: false, zone: Some(zone), source: String::new() }
+        }
+
+        // ---- Data outlet: zone along south wall ----
         "data_outlet" => {
-            // Along the south wall of offices, from casework/counter dimensions.
             let n_data = 2usize;
             let expected: Vec<[f64; 2]> = (0..n_data)
                 .map(|k| {
@@ -752,31 +1047,145 @@ fn position_from_rules(room: &Room, kind: &str, approx_ft: [f64; 2]) -> ArchPlac
                 })
                 .collect();
             let snapped = snap_to_nearest(&expected, approx_ft);
-            ArchPlacement { at_ft: snapped, arch_positioned: false, zone_ft: Some([rx0, rx1]) }
+            let zone = make_zone(WallSide::South, [rx0, rx1], default_height("data_outlet"), true);
+            ArchPlacement { at_ft: snapped, arch_positioned: false, zone: Some(zone), source: String::new() }
         }
 
+        // ---- Exit sign: zone at corridor ends ----
         "exit_sign" => {
             let expected = exit_sign_positions(room);
             let snapped = snap_to_nearest(&expected, approx_ft);
-            ArchPlacement { at_ft: snapped, arch_positioned: false, zone_ft: Some([rx0, rx1]) }
+            let wall = if rw >= rh { WallSide::South } else { WallSide::West };
+            let range = if rw >= rh { [rx0, rx1] } else { [ry0, ry1] };
+            let zone = make_zone(wall, range, default_height("exit_sign"), true);
+            ArchPlacement { at_ft: snapped, arch_positioned: false, zone: Some(zone), source: String::new() }
         }
 
+        // ---- Emergency light: zone along corridor ----
         "emergency_light" => {
             let expected = emergency_light_positions(room);
             let snapped = snap_to_nearest(&expected, approx_ft);
-            ArchPlacement { at_ft: snapped, arch_positioned: false, zone_ft: Some([rx0, rx1]) }
+            let wall = if rw >= rh { WallSide::South } else { WallSide::West };
+            let range = if rw >= rh { [rx0, rx1] } else { [ry0, ry1] };
+            let zone = make_zone(wall, range, default_height("emergency_light"), true);
+            ArchPlacement { at_ft: snapped, arch_positioned: false, zone: Some(zone), source: String::new() }
         }
 
         _ => {
             // Unknown device: zone covers the wall it's nearest to.
             let wall = assign_wall_side(room, approx_ft);
-            let zone = match wall {
+            let range = match wall {
                 WallSide::South | WallSide::North => [rx0, rx1],
                 WallSide::West | WallSide::East => [ry0, ry1],
             };
-            ArchPlacement { at_ft: approx_ft, arch_positioned: false, zone_ft: Some(zone) }
+            let zone = make_zone(wall, range, default_height(kind), true);
+            ArchPlacement { at_ft: approx_ft, arch_positioned: false, zone: Some(zone), source: String::new() }
         }
     }
+}
+
+// ---- Counter receptacle zones from read casework (Q301 → Q288) ---------------------------
+
+/// A counter receptacle zone from casework read off the architectural sheets: the stretch of
+/// the wall a read backsplash covers, at the heights a receptacle over its counter can take.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CounterZone {
+    pub level: String,
+    /// The wall behind the backsplash.
+    pub wall: String,
+    /// Along the wall from its start, inches.
+    pub along_in: [f64; 2],
+    /// The same stretch in building feet, along the wall's axis (x for a wall running east-west,
+    /// else y), as [`DeviceZone::range_ft`] holds it.
+    pub zone_ft: [f64; 2],
+    /// Box-centre heights, inches AFF: from 2" over the backsplash (or over the counter when the
+    /// backsplash runs full height, 18" or more) to 20" over the counter top.
+    pub height_in: [f64; 2],
+    /// The read backsplash's and counter's tags.
+    pub backsplash: String,
+    pub counter: String,
+}
+
+/// Counter receptacle zones over every read backsplash that sits on a read counter or vanity
+/// (its height is the counter top) against a wall. Only the reader's items are used.
+pub fn counter_receptacle_zones(walls: &[crate::truth::Wall], read: &[crate::score::FoundCaseworkItem]) -> Vec<CounterZone> {
+    let mut out = Vec::new();
+    for bs in read.iter().filter(|c| c.kind == "backsplash") {
+        let c = [(bs.min_ft[0] + bs.max_ft[0]) / 2.0, (bs.min_ft[1] + bs.max_ft[1]) / 2.0];
+        let half = [(bs.max_ft[0] - bs.min_ft[0]) / 2.0, (bs.max_ft[1] - bs.min_ft[1]) / 2.0];
+        let counter = read
+            .iter()
+            .filter(|k| k.level == bs.level && (k.kind == "counter" || k.kind == "vanity") && k.height_in > 0.0)
+            .filter(|k| c[0] >= k.min_ft[0] - 0.1 && c[0] <= k.max_ft[0] + 0.1 && c[1] >= k.min_ft[1] - 0.1 && c[1] <= k.max_ft[1] + 0.1)
+            .max_by(|a, b| {
+                ((a.max_ft[0] - a.min_ft[0]) * (a.max_ft[1] - a.min_ft[1])).total_cmp(&((b.max_ft[0] - b.min_ft[0]) * (b.max_ft[1] - b.min_ft[1])))
+            });
+        let Some(counter) = counter else { continue };
+        let Some(wall) = crate::clash::backing_wall(walls, &bs.level, c, half) else { continue };
+        let (dx, dy) = (wall.to_ft[0] - wall.from_ft[0], wall.to_ft[1] - wall.from_ft[1]);
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < 1e-6 {
+            continue;
+        }
+        let along = |p: [f64; 2]| ((p[0] - wall.from_ft[0]) * dx + (p[1] - wall.from_ft[1]) * dy) / len * 12.0;
+        let (a, b) = (along(bs.min_ft), along(bs.max_ft));
+        let x_axis = dx.abs() >= dy.abs();
+        let zone_ft = if x_axis { [bs.min_ft[0], bs.max_ft[0]] } else { [bs.min_ft[1], bs.max_ft[1]] };
+        let top = counter.height_in;
+        let low = if bs.height_in >= 18.0 { top + 2.0 } else { top + bs.height_in.max(0.0) + 2.0 };
+        out.push(CounterZone {
+            level: bs.level.clone(),
+            wall: wall.id.clone(),
+            along_in: [a.min(b), a.max(b)],
+            zone_ft,
+            height_in: [low, (top + 20.0).max(low)],
+            backsplash: bs.tag.clone(),
+            counter: counter.tag.clone(),
+        });
+    }
+    out
+}
+
+/// Gives every found receptacle drawn over a counter zone (within 2 ft of its wall, along its
+/// stretch give or take a foot) that zone: `zone_ft` becomes the backsplash's stretch, the
+/// mounting height is kept inside the zone's band and `height_source` becomes `casework`.
+/// Returns how many devices changed.
+pub fn apply_counter_zones(devices: &mut [FoundDevice], walls: &[crate::truth::Wall], zones: &[CounterZone]) -> usize {
+    let mut n = 0;
+    for d in devices.iter_mut().filter(|d| d.kind == "receptacle") {
+        let at = [d.at_ft[0], d.at_ft[1]];
+        let hit = zones.iter().find(|z| {
+            let Some(w) = walls.iter().find(|w| w.id == z.wall) else { return false };
+            let (dx, dy) = (w.to_ft[0] - w.from_ft[0], w.to_ft[1] - w.from_ft[1]);
+            let len = (dx * dx + dy * dy).sqrt();
+            if z.level != d.level || len < 1e-6 {
+                return false;
+            }
+            let off = ((at[0] - w.from_ft[0]) * -dy + (at[1] - w.from_ft[1]) * dx).abs() / len;
+            let v = if dx.abs() >= dy.abs() { at[0] } else { at[1] };
+            off <= 2.0 && v >= z.zone_ft[0] - 1.0 && v <= z.zone_ft[1] + 1.0
+        });
+        if let Some(z) = hit {
+            let x_axis = {
+                let Some(w) = walls.iter().find(|w| w.id == z.wall) else { continue };
+                (w.to_ft[0] - w.from_ft[0]).abs() >= (w.to_ft[1] - w.from_ft[1]).abs()
+            };
+            d.zone = Some(DeviceZone {
+                room: d.room.clone(),
+                wall_side: if x_axis { WallSide::South } else { WallSide::West },
+                axis: if x_axis { ZoneAxis::X } else { ZoneAxis::Y },
+                range_ft: z.zone_ft,
+                height_in: z.height_in,
+                field_decision: true,
+            });
+            d.source = format!("casework {} / {}", z.backsplash, z.counter);
+            d.arch_positioned = false;
+            d.mounting_in = if d.mounting_in.is_finite() { d.mounting_in.clamp(z.height_in[0], z.height_in[1]) } else { z.height_in[0] };
+            d.height_source = "casework".into();
+            n += 1;
+        }
+    }
+    n
 }
 
 // ---- Found device (building coordinates) for scoring ------------------------------------
@@ -792,14 +1201,16 @@ pub struct FoundDevice {
     pub at_ft: [f64; 3],
     /// Mounting height inches AFF.
     pub mounting_in: f64,
-    /// `"note"`, `"legend"`, or `"rule"`.
+    /// `"note"`, `"legend"`, `"rule"`, or `"project_rule"`.
     pub height_source: String,
     /// Whether this device's plan position was fixed by architectural sheets (true) or is a
     /// zone / field decision (false).
     pub arch_positioned: bool,
-    /// For zone-placed devices: the zone's allowed range along the wall, building feet
-    /// `[min, max]`, if computed from placement rules.
-    pub zone_ft: Option<[f64; 2]>,
+    /// For zone-placed devices: the zone naming wall, range, height band, and field-decision flag.
+    pub zone: Option<DeviceZone>,
+    /// Source of the architectural position: sheet number + item/dimension that fixed it.
+    /// Empty when the device is a zone (not fixed by a document).
+    pub source: String,
     /// Its type's columns in the light fixture schedule (description, mounting, lamp and
     /// wattage, as text), when the schedule has its type ([`crate::gear_reader::link_fixtures`]).
     pub properties: BTreeMap<String, String>,
@@ -807,6 +1218,13 @@ pub struct FoundDevice {
     pub drawn_ft: [f64; 2],
     /// The texts beside the symbol (subscripts, its circuit), as printed.
     pub notes: Vec<String>,
+    /// Provenance: which source tier determined the mounting height (e.g. "rfi", "built_in").
+    /// Empty when the height came from a drawing note.
+    pub height_tier: String,
+    /// Provenance: the source citation for the mounting height (e.g. "RFI #12").
+    pub height_citation: String,
+    /// Provenance: what the winning height overrode: [(value, tier)].
+    pub height_overrode: Vec<(String, String)>,
 }
 
 /// A found panel, building coordinates.
@@ -816,6 +1234,8 @@ pub struct FoundPanel {
     pub tag: String,
     pub kind: String,
     pub at_ft: [f64; 2],
+    /// The plan sheet its tag was read from (`E-101`).
+    pub sheet: String,
 }
 
 // ---- Read E-sheets and produce found devices -------------------------------------------
@@ -824,15 +1244,72 @@ pub struct FoundPanel {
 const DEFAULT_CEILING_FT: f64 = 9.0;
 
 /// Read electrical devices from the fixture set's DXF files using the sheet map for alignment.
+/// Rooms, ceilings and level elevations come from the `PlacementContext` (reader output), not
+/// from the truth. The `truth` parameter is kept for backward-compatible callers; new callers
+/// should use `read_devices_ctx` with a reader-built context.
 pub fn read_devices(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, truth: &Truth) -> (Vec<FoundDevice>, Vec<FoundPanel>) {
+    let ctx = PlacementContext::from_truth(truth);
+    read_devices_ctx(dxf_data, sheet_map, &ctx)
+}
+
+/// Resolve mounting height from project rules, then built-in defaults.
+/// Returns (height_inches, source_type, tier_name, citation, overrode_list).
+fn resolve_height_from_rules(
+    rules: &cadaddy_doc::projrules::ProjectRules,
+    kind: &str,
+    room: &str,
+) -> Option<(f64, String, String, Vec<(String, String)>)> {
+    use cadaddy_doc::projrules::{RuleDomain, builtin_mounting_height};
+
+    // Try specific key first: "switch/bathroom", then generic: "switch/general".
+    let keys = [format!("{kind}/{room}"), format!("{kind}/general")];
+    for key in &keys {
+        if let Some(resolved) = rules.resolve(RuleDomain::MountingHeight, key) {
+            // Parse the value as inches (strip trailing `"`, `\"`, etc.)
+            if let Some(inches) = parse_rule_inches(&resolved.value) {
+                let overrode: Vec<(String, String)> = resolved.overrides.iter().map(|(v, t)| (v.clone(), t.as_str().to_string())).collect();
+                return Some((inches, resolved.tier.as_str().to_string(), resolved.source.clone(), overrode));
+            }
+        }
+    }
+
+    // Fall back to built-in defaults from projrules.
+    let room_key = if room.is_empty() { "general" } else { room };
+    if let Some(val) = builtin_mounting_height(kind, room_key)
+        && let Some(inches) = parse_rule_inches(val)
+    {
+        return Some((inches, "built_in".to_string(), String::new(), Vec::new()));
+    }
+
+    None
+}
+
+/// Parse a rule value like `"46\""`, `"46"`, `"48\""`, `"ceiling"` to inches.
+fn parse_rule_inches(s: &str) -> Option<f64> {
+    let trimmed = s.trim().trim_end_matches('"').trim_end_matches('\\').trim();
+    if trimmed.eq_ignore_ascii_case("ceiling") || trimmed.eq_ignore_ascii_case("clg") {
+        return Some(0.0); // 0 = ceiling, resolved later.
+    }
+    if trimmed.eq_ignore_ascii_case("floor") {
+        return Some(0.0);
+    }
+    // Try to parse as number, possibly with units like `48" to top`.
+    let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    digits.parse::<f64>().ok().filter(|v| (0.0..=240.0).contains(v))
+}
+
+/// Read electrical devices using a `PlacementContext` built from reader output (no truth).
+pub fn read_devices_ctx(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, ctx: &PlacementContext) -> (Vec<FoundDevice>, Vec<FoundPanel>) {
     let mut found_devices = Vec::new();
     let mut found_panels = Vec::new();
 
-    // Build a room lookup: level → list of rooms (for placing devices in rooms).
+    // Build a room lookup: level → list of rooms (from the placement context).
     let room_map: BTreeMap<String, Vec<&Room>> = {
         let mut m: BTreeMap<String, Vec<&Room>> = BTreeMap::new();
-        for rm in &truth.building.rooms {
-            m.entry(rm.level.clone()).or_default().push(rm);
+        for (level, rooms) in &ctx.rooms {
+            for rm in rooms {
+                m.entry(level.clone()).or_default().push(rm);
+            }
         }
         m
     };
@@ -855,9 +1332,6 @@ pub fn read_devices(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, truth:
             continue;
         }
 
-        // Find the truth's sheet for ceiling heights.
-        let _truth_sheet = truth.sheets.iter().find(|s| s.number == sheet_num);
-
         // Read the DXF.
         let d = match cadaddy_io::read_dxf(bytes) {
             Ok(d) => d,
@@ -869,7 +1343,7 @@ pub fn read_devices(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, truth:
         let raw_panels = detect_panels(&d);
 
         // E-sheet symbols give WHAT (type, tag, circuit, room, wall/side).
-        // Position comes from architectural features and placement rules, NOT from where
+        // Position comes from A-sheet evidence and placement rules, NOT from where
         // the symbol sits on the diagrammatic E-sheet.
         for rd in &raw_devices {
             // Approximate building position from E-sheet — used ONLY for room and
@@ -878,9 +1352,12 @@ pub fn read_devices(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, truth:
             let room = find_room(&room_map, &level, approx_b);
             let room_name = room.map(|r| r.number.clone()).unwrap_or_default();
 
-            // Resolve ceiling height for ceiling-mounted devices.
-            let ceiling_ft = room.and_then(|r| r.ceiling.as_ref()).map(|c| c.height_ft).unwrap_or(DEFAULT_CEILING_FT);
-            let level_elev = truth.level(&level).map(|l| l.elevation_ft).unwrap_or(0.0);
+            // Resolve ceiling height from context (reader output).
+            let ceiling_ft = room
+                .and_then(|r| ctx.ceiling_ft.get(&(level.clone(), r.number.clone())).copied())
+                .or_else(|| room.and_then(|r| r.ceiling.as_ref()).map(|c| c.height_ft))
+                .unwrap_or(DEFAULT_CEILING_FT);
+            let level_elev = ctx.level_elev.get(&level).copied().unwrap_or(0.0);
 
             let (z, mounting_in) = if rd.mounting_in == 0.0 && is_ceiling_mount(&rd.kind) {
                 (level_elev + ceiling_ft, ceiling_ft * 12.0)
@@ -890,12 +1367,20 @@ pub fn read_devices(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, truth:
                 (level_elev + rd.mounting_in / 12.0, rd.mounting_in)
             };
 
-            // Position from architectural features and placement rules.
+            // Position from A-sheet evidence and placement rules.
             let placement = if let Some(rm) = room {
-                position_from_rules(rm, &rd.kind, approx_b)
+                position_from_rules(rm, &rd.kind, approx_b, ctx)
             } else {
                 // No room found — fallback to approximate with a zone.
-                ArchPlacement { at_ft: approx_b, arch_positioned: false, zone_ft: Some([approx_b[0] - 3.0, approx_b[0] + 3.0]) }
+                let zone = DeviceZone {
+                    room: String::new(),
+                    wall_side: WallSide::South,
+                    axis: ZoneAxis::X,
+                    range_ft: [approx_b[0] - 3.0, approx_b[0] + 3.0],
+                    height_in: [0.0, 120.0],
+                    field_decision: true,
+                };
+                ArchPlacement { at_ft: approx_b, arch_positioned: false, zone: Some(zone), source: String::new() }
             };
 
             found_devices.push(FoundDevice {
@@ -907,16 +1392,26 @@ pub fn read_devices(dxf_data: &[(String, Vec<u8>)], sheet_map: &SheetMap, truth:
                 mounting_in,
                 height_source: rd.height_source.clone(),
                 arch_positioned: placement.arch_positioned,
-                zone_ft: placement.zone_ft,
+                zone: placement.zone,
+                source: placement.source,
                 properties: BTreeMap::new(),
                 drawn_ft: approx_b,
                 notes: rd.notes.clone(),
+                height_tier: String::new(),
+                height_citation: String::new(),
+                height_overrode: Vec::new(),
             });
         }
 
         for rp in &raw_panels {
             let b = building_from_model(alignment, rp.at_in);
-            found_panels.push(FoundPanel { level: level.clone(), tag: rp.tag.clone(), kind: rp.kind.clone(), at_ft: b });
+            found_panels.push(FoundPanel {
+                level: level.clone(),
+                tag: rp.tag.clone(),
+                kind: rp.kind.clone(),
+                at_ft: b,
+                sheet: sheet_num.to_string(),
+            });
         }
     }
 
@@ -940,6 +1435,38 @@ fn find_room<'a>(rooms: &'a BTreeMap<String, Vec<&'a Room>>, level: &str, pt: [f
 }
 
 // ---- 3D generation ---------------------------------------------------------------------
+
+/// Apply project rules to found devices: for each device whose `height_source` is `"rule"`
+/// (i.e. from hard-coded defaults, not a drawing note), look up the project rules for a
+/// `mounting_height/<kind>/<room>` or `mounting_height/<kind>/general` entry.  If found, update
+/// the device's mounting height and record provenance (tier, citation, what it overrode).
+///
+/// Returns the number of devices whose height was changed.
+pub fn apply_project_rules(devices: &mut [FoundDevice], rules: &cadaddy_doc::projrules::ProjectRules) -> usize {
+    let mut changed = 0;
+    for dev in devices.iter_mut() {
+        // Only overwrite rule-derived heights (notes on the drawing take precedence).
+        if dev.height_source != "rule" {
+            continue;
+        }
+        let room = if dev.room.is_empty() { "general" } else { &dev.room };
+        if let Some((inches, tier, citation, overrode)) = resolve_height_from_rules(rules, &dev.kind, room) {
+            let old_in = dev.mounting_in;
+            dev.mounting_in = inches;
+            dev.height_source = "project_rule".to_string();
+            dev.height_tier = tier;
+            dev.height_citation = citation;
+            dev.height_overrode = overrode;
+            // Recompute z from the new height.
+            if (inches - old_in).abs() > 0.01 {
+                // Adjust z: old z was level_elev + old_in/12, new z is level_elev + inches/12.
+                dev.at_ft[2] += (inches - old_in) / 12.0;
+                changed += 1;
+            }
+        }
+    }
+    changed
+}
 
 /// Generate 3D geometry for found electrical devices: simple shapes on per-type layers.
 ///
@@ -1067,16 +1594,15 @@ pub fn score_devices(truth: &Truth, found: &[FoundDevice], tol_ft: f64) -> Devic
                 pos_err_sum += (dx * dx + dy * dy).sqrt();
                 pos_count += 1;
             } else {
-                // Zone containment: check if truth position is in the found zone.
+                // Zone containment: check if truth position falls inside the found zone
+                // along the zone's own wall axis (axis-correct check).
                 zone_total += 1;
-                if let Some(zone) = &fd.zone_ft {
-                    // The zone is along one wall dimension; check if the truth x or y
-                    // falls within the zone range.
-                    let tx = td.at_ft[0];
-                    let ty = td.at_ft[1];
-                    // We stored zone as the range along the nearest wall.
-                    // For simplicity, check that the truth position's x or y is in range.
-                    if (tx >= zone[0] && tx <= zone[1]) || (ty >= zone[0] && ty <= zone[1]) {
+                if let Some(zone) = &fd.zone {
+                    let v = match zone.axis {
+                        ZoneAxis::X => td.at_ft[0],
+                        ZoneAxis::Y => td.at_ft[1],
+                    };
+                    if v >= zone.range_ft[0] && v <= zone.range_ft[1] {
                         zone_ok += 1;
                     }
                 }
@@ -1122,12 +1648,20 @@ pub fn perfect_devices(truth: &Truth) -> Vec<FoundDevice> {
             mounting_in: d.mounting_in,
             height_source: if d.mounting_note.is_some() { "note" } else { "rule" }.into(),
             arch_positioned: d.arch_positioned,
-            zone_ft: if !d.arch_positioned {
-                // The truth position itself is in any correct zone.
-                Some([d.at_ft[0] - 3.0, d.at_ft[0] + 3.0])
+            zone: if !d.arch_positioned {
+                // The truth position itself is in any correct zone centred on it.
+                Some(DeviceZone {
+                    room: d.room.clone(),
+                    wall_side: WallSide::South,
+                    axis: ZoneAxis::X,
+                    range_ft: [d.at_ft[0] - 3.0, d.at_ft[0] + 3.0],
+                    height_in: [0.0, 120.0],
+                    field_decision: true,
+                })
             } else {
                 None
             },
+            source: String::new(),
             properties: BTreeMap::new(),
             drawn_ft: d.drawn_ft,
             notes: truth
@@ -1135,6 +1669,9 @@ pub fn perfect_devices(truth: &Truth) -> Vec<FoundDevice> {
                 .note(&d.id)
                 .map(|n| n.subscripts.iter().cloned().chain((!n.circuit_ref.is_empty()).then(|| n.circuit_ref.clone())).collect())
                 .unwrap_or_default(),
+            height_tier: String::new(),
+            height_citation: String::new(),
+            height_overrode: Vec::new(),
         })
         .collect()
 }

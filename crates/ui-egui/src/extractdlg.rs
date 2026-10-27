@@ -186,7 +186,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     let mut gone = None;
                     for (i, d) in st.drawings.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            if ui.small_button("✕").on_hover_text(crate::tl!("Remove")).clicked() {
+                            if crate::icons::button(ui, crate::icons::Icon::Close, 16.0, "Remove", false).clicked() {
                                 gone = Some(i);
                             }
                             ui.label(d);

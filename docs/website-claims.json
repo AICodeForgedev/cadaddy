@@ -1,7 +1,7 @@
 {
   "about": "What aicodeforge.dev (the compare page and llms.txt) says about CADaddy, each with the fact in docs/compare-facts.json that backs it ('check'), or why no code can ('manual': kept true by hand). apps/cadaddy-cli/tests/compare_facts.rs fails when a checked claim stops being true. Change a claim here when the site changes.",
   "claims": [
-    { "claim": "Current version: 0.7.8", "source": "llms.txt, compare page", "check": { "fact": "version", "equals": "0.7.8" } },
+    { "claim": "Current version: 0.7.9", "source": "llms.txt, compare page (the last published release; the code may be ahead of it — owner 10-25)", "check": { "fact": "version", "versionAtLeast": "0.7.9" } },
     { "claim": "400+ commands, each callable as JSON", "source": "llms.txt", "check": { "fact": "commands.typed", "atLeast": 400 } },
     { "claim": "Opens and saves DWG and DXF (and its own lossless .cdy format)", "source": "compare page", "check": { "fact": "formats.open", "includes": ["dwg", "dxf", "cdy"] } },
     { "claim": "Opens and saves DWG and DXF (and its own lossless .cdy format) — saving", "source": "compare page", "check": { "fact": "formats.save", "includes": ["dwg", "dxf", "cdy"] } },

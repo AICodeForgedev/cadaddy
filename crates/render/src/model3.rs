@@ -205,6 +205,39 @@ impl Model3 {
         }
         out
     }
+
+    /// Only the visible parts, at their LOD levels, as a flat scene for the CPU rasterizer.
+    pub fn flatten_visible(&self, vis: &Visible) -> Scene {
+        let mut out = Scene {
+            lighting: self.base.lighting.clone(),
+            surfaces: self.base.surfaces.clone(),
+            textures: self.base.textures.clone(),
+            ..Scene::default()
+        };
+        for &ci in &vis.chunks {
+            if let Some(c) = self.chunks.get(ci) {
+                out.tris.extend_from_slice(&self.base.tris[c.tris.clone()]);
+                out.lines.extend_from_slice(&self.base.lines[c.lines.clone()]);
+            }
+        }
+        for (proto_idx, lod, indices) in &vis.instances {
+            let Some(proto) = self.protos.get(*proto_idx as usize) else { continue };
+            let lod_scene = &proto.lods[*lod as usize];
+            for &inst_idx in indices {
+                let Some(inst) = self.instances.get(inst_idx as usize) else { continue };
+                for t in &lod_scene.tris {
+                    if out.tris.len() >= crate::shade::MAX_SCENE {
+                        return out;
+                    }
+                    out.tris.push(Tri { p: t.p.map(|q| inst.m.apply(q)), ..*t });
+                }
+                for l in &lod_scene.lines {
+                    out.lines.push(Line3 { a: inst.m.apply(l.a), b: inst.m.apply(l.b), ..*l });
+                }
+            }
+        }
+        out
+    }
 }
 
 /// A reference's placement: the block's base to the insertion point, scaled, turned about Z.
@@ -351,6 +384,42 @@ fn chunked(mut s: Scene) -> (Scene, Vec<Chunk>) {
     (s, chunks)
 }
 
+/// Where a placed box is against clipping planes (each keeps its positive side).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Side {
+    Inside,
+    Outside,
+    Cut,
+}
+
+/// Whether `b` is wholly kept by `planes` (none: inside), wholly behind one of them, or cut.
+fn box_side(b: &Aabb, planes: &[cadaddy_doc::SectionPlane]) -> Side {
+    if planes.is_empty() || b.is_empty() {
+        return Side::Inside;
+    }
+    let corners = [
+        Vec3::new(b.lo.x, b.lo.y, b.lo.z),
+        Vec3::new(b.hi.x, b.lo.y, b.lo.z),
+        Vec3::new(b.lo.x, b.hi.y, b.lo.z),
+        Vec3::new(b.hi.x, b.hi.y, b.lo.z),
+        Vec3::new(b.lo.x, b.lo.y, b.hi.z),
+        Vec3::new(b.hi.x, b.lo.y, b.hi.z),
+        Vec3::new(b.lo.x, b.hi.y, b.hi.z),
+        Vec3::new(b.hi.x, b.hi.y, b.hi.z),
+    ];
+    let mut inside = true;
+    for pl in planes {
+        let kept = corners.iter().filter(|c| pl.side(**c) >= 0.0).count();
+        if kept == 0 {
+            return Side::Outside;
+        }
+        if kept < corners.len() {
+            inside = false;
+        }
+    }
+    if inside { Side::Inside } else { Side::Cut }
+}
+
 /// Most block references made instances (beyond them, references draw as part of the base).
 pub const MAX_INSTANCES: usize = 2_000_000;
 
@@ -390,7 +459,8 @@ pub fn build_clipped(
         if b.xref_path.is_some() {
             continue;
         }
-        // Blocks are built without section box clipping (instances are clipped at cull time).
+        // Prototypes are whole; a section box drops the instances outside it and draws the ones
+        // it cuts through, placed and clipped, in the base scene (below).
         let full = scene(&with_model(d, b.entities.iter().map(|x| (**x).clone())), &Space::Model, tol, bg);
         // Only blocks with surfaces: flat symbols keep drawing as the plan does.
         if full.tris.is_empty() {
@@ -404,6 +474,8 @@ pub fn build_clipped(
     }
     let mut instances = Vec::new();
     let mut rest = Vec::new();
+    // Placements the section box cuts through: (reference, prototype, placement).
+    let mut cut_through: Vec<(cadaddy_doc::Handle, u32, Mat4)> = Vec::new();
     for e in store.iter() {
         if let EntityKind::Insert(i) = &e.kind
             && let Some(&p) = proto_of.get(&i.block.to_ascii_lowercase())
@@ -421,7 +493,11 @@ pub fn build_clipped(
                     let at = i.insert + Vec3::new(co * dx - s * dy, s * dx + co * dy, 0.0);
                     let m = insert_matrix(b.base, at, i.scale, i.rotation);
                     let bounds = protos.get(p as usize).map_or(Aabb::EMPTY, |pr| pr.bounds.placed(&m));
-                    instances.push(Instance { proto: p, m, bounds });
+                    match box_side(&bounds, extra_planes) {
+                        Side::Inside => instances.push(Instance { proto: p, m, bounds }),
+                        Side::Outside => {}
+                        Side::Cut => cut_through.push((e.handle, p, m)),
+                    }
                 }
             }
             continue;
@@ -432,6 +508,24 @@ pub fn build_clipped(
     // The base scene is clipped by the section box planes (if any).
     let mut base = scene_clipped(&with_model(d, rest.into_iter()), &Space::Model, tol, bg, extra_planes);
     base.lighting = Some(crate::light::Lighting::of(d, space));
+    // What the box cuts through: the prototype's triangles and edges placed, clipped, in the base.
+    for (h, p, m) in &cut_through {
+        let Some(full) = protos.get(*p as usize).and_then(|pr| pr.lods.first()) else { continue };
+        base.owner_now = *h;
+        for t in &full.tris {
+            let pts = crate::live::clip_polygon(t.p.iter().map(|q| m.apply(*q)).collect(), extra_planes);
+            for k in 1..pts.len().saturating_sub(1) {
+                if let (Some(a), Some(b), Some(c)) = (pts.first(), pts.get(k), pts.get(k + 1)) {
+                    crate::shade::push_tri(&mut base, Tri { p: [*a, *b, *c], mat: crate::shade::NO_SURFACE, ..*t });
+                }
+            }
+        }
+        for l in &full.lines {
+            if let Some((a, b)) = crate::live::clip_segment(m.apply(l.a), m.apply(l.b), extra_planes) {
+                crate::shade::push_line(&mut base, Line3 { a, b, ..*l });
+            }
+        }
+    }
     let (mut base, chunks) = chunked(base);
     let mut bounds = bounds_of(&base);
     for i in &instances {
@@ -536,6 +630,58 @@ mod tests {
         assert_eq!(m.flatten().tris.len(), m.total_tris());
     }
 
+    /// The six planes of the box `lo`..`hi` (each keeping the inside), as a coordination section
+    /// box makes them.
+    fn box_planes(lo: Vec3, hi: Vec3) -> Vec<cadaddy_doc::SectionPlane> {
+        let c = (lo + hi) * 0.5;
+        let plane =
+            |origin: Vec3, normal: Vec3| cadaddy_doc::SectionPlane { origin, normal, width: 1e6, height: 1e6, live: true, name: String::new() };
+        vec![
+            plane(Vec3::new(hi.x, c.y, c.z), Vec3::new(-1.0, 0.0, 0.0)),
+            plane(Vec3::new(lo.x, c.y, c.z), Vec3::new(1.0, 0.0, 0.0)),
+            plane(Vec3::new(c.x, hi.y, c.z), Vec3::new(0.0, -1.0, 0.0)),
+            plane(Vec3::new(c.x, lo.y, c.z), Vec3::new(0.0, 1.0, 0.0)),
+            plane(Vec3::new(c.x, c.y, hi.z), Vec3::new(0.0, 0.0, -1.0)),
+            plane(Vec3::new(c.x, c.y, lo.z), Vec3::new(0.0, 0.0, 1.0)),
+        ]
+    }
+
+    #[test]
+    fn section_box_clips_block_instances() {
+        let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        // Round the fixtures at x 0 and 10, y 0, 10 and 20; through the ones at x 20 (20..21).
+        let (lo, hi) = (Vec3::new(-0.5, -0.5, -0.5), Vec3::new(20.5, 25.5, 2.0));
+        let m = build_clipped(&drawing(), &Space::Model, 0.01, Rgb(0, 0, 0), &p, &t, &box_planes(lo, hi));
+        // Wholly inside: still instances, all of them in the box.
+        assert_eq!(m.instances.len(), 6, "{:?}", m.instances.iter().map(|i| i.bounds.lo).collect::<Vec<_>>());
+        for i in &m.instances {
+            assert!(i.bounds.lo.x >= lo.x && i.bounds.hi.x <= hi.x && i.bounds.lo.y >= lo.y && i.bounds.hi.y <= hi.y, "{:?}", i.bounds);
+        }
+        // Wholly outside (x 30.., y 30..): gone. Cut by the box: drawn clipped in the base.
+        let flat = m.flatten();
+        let pts: Vec<Vec3> = flat.tris.iter().flat_map(|t| t.p).collect();
+        assert!(!pts.is_empty());
+        let eps = 1e-6;
+        assert!(pts.iter().all(|q| q.x <= hi.x + eps && q.x >= lo.x - eps && q.y <= hi.y + eps && q.y >= lo.y - eps), "geometry outside the box");
+        // The three cut fixtures stand above the slab between x 20 and the box's face.
+        let cut_tops = m.base.tris.iter().flat_map(|t| t.p).filter(|q| q.x > 20.0 + eps && q.z > 0.5).count();
+        assert!(cut_tops > 0, "the fixtures the box cuts are drawn, clipped");
+        assert!(m.base.tris.iter().flat_map(|t| t.p).all(|q| q.x <= hi.x + eps));
+        // Without a box every fixture is an instance.
+        let all = build(&drawing(), &Space::Model, 0.01, Rgb(0, 0, 0), &p, &t);
+        assert_eq!(all.instances.len(), 10_000);
+    }
+
+    #[test]
+    fn box_side_classifies() {
+        let planes = box_planes(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0));
+        let b = |lo: Vec3, hi: Vec3| Aabb { lo, hi };
+        assert_eq!(box_side(&b(Vec3::new(1.0, 1.0, 1.0), Vec3::new(2.0, 2.0, 2.0)), &planes), Side::Inside);
+        assert_eq!(box_side(&b(Vec3::new(11.0, 1.0, 1.0), Vec3::new(12.0, 2.0, 2.0)), &planes), Side::Outside);
+        assert_eq!(box_side(&b(Vec3::new(9.0, 1.0, 1.0), Vec3::new(12.0, 2.0, 2.0)), &planes), Side::Cut);
+        assert_eq!(box_side(&b(Vec3::new(11.0, 1.0, 1.0), Vec3::new(12.0, 2.0, 2.0)), &[]), Side::Inside);
+    }
+
     #[test]
     fn culling_and_simplifying() {
         let b = Aabb { lo: Vec3::new(10.0, 10.0, 0.0), hi: Vec3::new(11.0, 11.0, 1.0) };
@@ -558,5 +704,46 @@ mod tests {
         let bb = bounds_of(&s);
         assert!(simplify(&s, &bb, 12.0).tris.len() < s.tris.len() / 4);
         assert_eq!(box_of(&s, &bb).tris.len(), 12);
+    }
+
+    #[test]
+    fn flatten_visible_uses_lod_and_culling() {
+        let d = drawing();
+        let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let m = build(&d, &Space::Model, 0.01, Rgb(0, 0, 0), &p, &t);
+        // The full model: 10,000 instances + 1 slab.
+        let full = m.flatten();
+        assert_eq!(full.tris.len(), m.total_tris());
+        // A wide view where every fixture is a box (LOD 2, 12 tris) instead of full (12 tris
+        // for our unit cube, but for a real fixture with many faces the savings are large).
+        let wide = view(Vec2::new(500.0, 500.0), 1000.0, 500, 500);
+        let vis = m.visible(&wide);
+        let scene = m.flatten_visible(&vis);
+        // All 10,000 instances are visible but at box LOD.
+        assert_eq!(vis.instances.iter().map(|g| g.2.len()).sum::<usize>(), 10_000);
+        assert!(vis.instances.iter().all(|g| g.1 == 2));
+        // The visible scene has the same count here (box LOD for a cube = same 12 tris) but
+        // the base chunks are only those in view, which is all of them for a wide view.
+        assert!(!scene.tris.is_empty());
+        // A corner view: fewer instances visible.
+        let corner = view(Vec2::new(25.0, 25.0), 50.0, 500, 500);
+        let vis_corner = m.visible(&corner);
+        let scene_corner = m.flatten_visible(&vis_corner);
+        let shown: usize = vis_corner.instances.iter().map(|g| g.2.len()).sum();
+        assert!(shown < 10_000, "corner view should cull most instances");
+        assert!(scene_corner.tris.len() < full.tris.len(), "corner scene should have fewer tris than full");
+    }
+
+    #[test]
+    fn fit_bounds_produces_a_view() {
+        let bounds = Aabb { lo: Vec3::new(0.0, 0.0, 0.0), hi: Vec3::new(100.0, 100.0, 10.0) };
+        let v = crate::shade::fit_bounds(&bounds, None, 800, 600);
+        assert!(v.is_some());
+        let v = v.unwrap();
+        assert!(v.height > 0.0);
+        assert_eq!(v.width_px, 800);
+        assert_eq!(v.height_px, 600);
+        // Empty bounds: no view.
+        assert!(crate::shade::fit_bounds(&Aabb::EMPTY, None, 800, 600).is_none());
     }
 }

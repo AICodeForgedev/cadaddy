@@ -428,8 +428,12 @@ fn main() -> eframe::Result {
     let debug_filter = if debug { Some("debug,cadaddy*=debug") } else { None };
     let logger = logging::install(debug_filter);
     // lossy, so a value that is not Unicode is reported like any other bad port instead of ignored
-    let mut control_port =
-        control_port_from("CADADDY_CONTROL_PORT", std::env::var_os("CADADDY_CONTROL_PORT").map(|p| p.to_string_lossy().into_owned()));
+    // CADCRAFT_CONTROL_PORT: the name before the rename, still set on machines configured back then.
+    let (port_var, port_value) = match std::env::var_os("CADADDY_CONTROL_PORT") {
+        Some(v) => ("CADADDY_CONTROL_PORT", Some(v)),
+        None => ("CADCRAFT_CONTROL_PORT", std::env::var_os("CADCRAFT_CONTROL_PORT")),
+    };
+    let mut control_port = control_port_from(port_var, port_value.map(|p| p.to_string_lossy().into_owned()));
     // `args_os`: a file name that isn't Unicode must not stop the start (`args` panics on one).
     let launch = open_files::Launch::parse(std::env::args_os().skip(1));
     if launch.version {

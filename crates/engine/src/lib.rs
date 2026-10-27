@@ -6,6 +6,8 @@
 //! control channel, MCP, CLI and scripts) and interactively through prompts ([`Session::start`],
 //! [`Session::input`], [`Session::cmdline`]) exactly like typing at AutoCAD's command line.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![allow(unknown_lints)] // the lint below exists only in newer clippy
+#![allow(clippy::chunks_exact_to_as_chunks)]
 #![forbid(unsafe_code)]
 
 pub mod activity;
@@ -27,6 +29,7 @@ pub mod grips;
 mod guard;
 pub mod i18n;
 pub mod journal;
+pub mod json_clean;
 pub mod legibility;
 pub mod lisp;
 pub mod mtext_edit;
@@ -46,6 +49,7 @@ pub mod sysvars;
 pub mod ucs;
 pub mod undoctl;
 pub mod units;
+pub mod workflows;
 pub mod writefile;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -294,6 +298,9 @@ pub struct DocState {
     pub wallgen: Option<cmd::wallgen::WallGen>,
     /// The plan the model was last built from and what that build made (`model.revise`).
     pub model_record: Option<cmd::revise3d::ModelRecord>,
+    /// The last revision that found plan changes (`model.revise`, or the rebuild an associative
+    /// model does): every list whole, paged when `model.revise {last: true}` returns it.
+    pub last_revision: Option<serde_json::Value>,
     /// What opening the drawing changed and told the user (missing current styles reset): the
     /// OPEN reply lists them with its warnings, for agents that see no command-line history.
     pub open_notes: Vec<String>,
@@ -374,6 +381,7 @@ impl DocState {
             cdy_saved: None,
             wallgen: None,
             model_record: None,
+            last_revision: None,
             open_notes: Vec::new(),
             block_edit: None,
             lightmap: None,
@@ -934,7 +942,7 @@ fn closes(rest: &str) -> bool {
 }
 
 /// The documentation of `spec`'s parameters: `same as `other`` is the other command's.
-fn params_doc(spec: &CommandSpec) -> &'static str {
+pub(crate) fn params_doc(spec: &CommandSpec) -> &'static str {
     let doc = spec.params;
     let same = doc.trim().strip_prefix("same as `").or_else(|| doc.trim().strip_prefix("as ")).and_then(|r| r.split(['`', ' ']).next());
     match same.filter(|id| !id.is_empty()).and_then(find_command) {
@@ -1234,8 +1242,19 @@ pub struct Session {
     pub background_checks: bool,
     /// Drywall view mode: walls coloured by type, fire rating, board layers or height rule.
     pub drywall_viewmode: Option<cmd::drywall::ViewMode>,
+    /// Pre-computed handle→colour map for the drywall view mode (for the renderer).
+    pub drywall_color_overrides: std::collections::BTreeMap<cadaddy_doc::Handle, [u8; 3]>,
+    /// Layer boundary lines for the renderer: each entry is two 3D points forming a line segment.
+    pub drywall_layer_lines: Vec<([f64; 3], [f64; 3])>,
     /// The active project (Q325): its manifest, which drawing is open.
     pub project: Option<cmd::project::ProjectState>,
+    /// The open print-set project (Q310): classification, stages, dashboard.
+    pub printset_project: Option<Box<cadaddy_mepfix::printset::PrintSetProject>>,
+    /// The job's framing (Q5103), built from its sheets with the field points and shop drawings applied.
+    pub framing: Option<Box<cmd::framing::Cache>>,
+    /// Where `printset.keep` notes the last print set kept, for the next session's
+    /// `printset.resume {}` (Q5276). `None`: `last-printset.txt` in the settings folder.
+    pub printset_pointer: Option<std::path::PathBuf>,
     /// Rhai scripting engine state (scope and engine; see [`rhai_engine`]).
     pub rhai: rhai_engine::RhaiState,
     /// Sandboxed WASM plug-ins (desktop only; the web version runs in the browser's sandbox).
@@ -1352,7 +1371,12 @@ impl Session {
             events: events::EventLog::default(),
             background_checks: false,
             drywall_viewmode: None,
+            drywall_color_overrides: std::collections::BTreeMap::new(),
+            drywall_layer_lines: Vec::new(),
             project: None,
+            printset_project: None,
+            framing: None,
+            printset_pointer: None,
             rhai: rhai_engine::RhaiState::new(),
             #[cfg(not(target_arch = "wasm32"))]
             plugins: plugins::PluginHost::new(),
@@ -1483,9 +1507,12 @@ impl Session {
         }
     }
 
-    /// Message on the command line history.
+    /// Message on the command line history.  Control characters are stripped so the log
+    /// never injects raw C0 bytes into JSON responses that carry it (`cmdline.input`'s
+    /// `output` array, `cmdline.state`'s `history`).
     pub fn echo(&mut self, msg: impl Into<String>) {
-        let m = msg.into();
+        let mut m = msg.into();
+        json_clean::sanitize_string_in_place(&mut m);
         log::debug!("{m}");
         self.log.push(m);
         if self.log.len() > 5000 {
@@ -1602,7 +1629,9 @@ impl Session {
         if outer && !id.starts_with("events.") && id != "document.list" {
             self.event("command.run", serde_json::json!({ "command": id, "ok": r.is_ok() }));
         }
-        r
+        // Strip control characters so every JSON serialisation of the result is accepted by
+        // a strict parser (Q6011).
+        r.map(json_clean::sanitized)
     }
 
     /// What the running command (or the one a transparent command interrupted) changed so far
@@ -2929,9 +2958,10 @@ impl Session {
     }
 }
 
-/// The commands that move through the undo history (they restore drawings as they were).
+/// Whether `id` restores a drawing from the undo/redo history (the after-command follow-ups
+/// must not run on the restored drawing). Uses the [`CommandSpec::restores_history`] flag.
 fn moves_through_history(id: &str) -> bool {
-    matches!(id, "undo" | "u" | "redo" | "mredo")
+    find_command(id).is_some_and(|c| c.restores_history)
 }
 
 /// Typed text that is LISP: `(expression)` or `!variable`.

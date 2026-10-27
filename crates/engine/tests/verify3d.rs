@@ -204,7 +204,7 @@ fn each_issue_kind_from_a_broken_model() {
     let only = s.execute("model.issues", &json!({"kind": "leak"})).unwrap();
     assert_eq!(only["total"], json!(leaks.len()));
     // Objects built for a level the spec no longer has.
-    s.execute("bspec.set", &json!({"spec": {"levels": [{"name": "L1", "remove": true}, {"name": "Ground", "elevation_ft": 0, "height_ft": 10}]}}))
+    s.execute("bspec.set", &json!({"spec": {"levels": [{"name": "L1", "remove": true}, {"name": "Podium", "elevation_ft": 0, "height_ft": 10}]}}))
         .unwrap();
     let r = s.execute("model.issues", &json!({"kind": "level_unmatched"})).unwrap();
     assert!(r["issues"].as_array().unwrap().iter().any(|i| i["message"].as_str().unwrap().contains("built for level L1")), "{r}");
@@ -297,4 +297,113 @@ fn issues_come_a_page_at_a_time(s: &mut Session) {
         let r = s.execute("model.issues", &p).unwrap();
         assert!(r["issues"].as_array().unwrap().len() <= 1000, "{p}");
     }
+}
+
+/// A 45' × 12' building of 6" walls in three rooms tagged by number only: 101 | 102 at x = 15'
+/// (the partition up to `partition_to`) and 102 | 103 at x = 30' (full height). With
+/// `west_open`, the west wall is drawn as lines with a 4' gap in both faces.
+fn numbered(partition_to: f64, west_open: bool) -> Session {
+    let mut s = Session::new();
+    layer(&mut s, "A-WALL");
+    if west_open {
+        for (a, b) in [
+            ([0.0, 0.0], [45.0, 0.0]),
+            ([45.0, 0.0], [45.0, 12.0]),
+            ([45.0, 12.0], [0.0, 12.0]),
+            ([0.0, 12.0], [0.0, 8.0]),
+            ([0.0, 4.0], [0.0, 0.0]),
+            ([0.5, 0.5], [44.5, 0.5]),
+            ([44.5, 0.5], [44.5, 11.5]),
+            ([44.5, 11.5], [0.5, 11.5]),
+            ([0.5, 11.5], [0.5, 8.0]),
+            ([0.5, 4.0], [0.5, 0.5]),
+            ([0.0, 8.0], [0.5, 8.0]),
+            ([0.0, 4.0], [0.5, 4.0]),
+        ] {
+            line(&mut s, a, b);
+        }
+        // The gap's jambs close the wall ends, not the room: no line across the opening.
+    } else {
+        rect(&mut s, [0.0, 0.0], [45.0, 12.0]);
+        rect(&mut s, [0.5, 0.5], [44.5, 11.5]);
+    }
+    layer(&mut s, "A-WALL-CL");
+    line(&mut s, [15.0, 0.5], [15.0, partition_to]);
+    line(&mut s, [30.0, 0.5], [30.0, 11.5]);
+    layer(&mut s, "A-ROOM-TAG");
+    text(&mut s, [7.0, 6.0], "101");
+    text(&mut s, [22.0, 6.0], "102");
+    text(&mut s, [37.0, 6.0], "103");
+    s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    s
+}
+
+fn tag_text(s: &Session, h: &Value) -> String {
+    let h = h.as_str().unwrap();
+    s.doc()
+        .unwrap()
+        .model
+        .iter()
+        .find(|e| e.handle.hex() == h)
+        .and_then(|e| if let EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None })
+        .unwrap_or_default()
+}
+
+#[test]
+fn rooms_tagged_by_number_only_are_checked_for_leaks() {
+    // Closed rooms: no leak.
+    let mut s = numbered(11.5, false);
+    let r = s.execute("model.issues", &json!({"kind": "leak"})).unwrap();
+    assert_eq!(r["total"], json!(0), "{r}");
+
+    // The 101 | 102 partition stops short: 101 runs into 102, and 103 (closed) is never named.
+    let mut s = numbered(8.0, false);
+    let r = s.execute("model.issues", &json!({"kind": "leak"})).unwrap();
+    assert_eq!(r["total"], json!(1), "{r}");
+    assert_eq!(r["byKind"]["leak"], json!(1), "{r}");
+    let leaks = of_kind(&r, "leak");
+    assert_eq!(leaks.len(), 1, "{r}");
+    let m = leaks[0]["message"].as_str().unwrap();
+    assert!(m.contains("101") && m.contains("runs into") && m.contains("102"), "{m}");
+    assert!(!m.contains("103"), "{m}");
+    let tags: Vec<String> = leaks[0]["handles"].as_array().unwrap().iter().map(|h| tag_text(&s, h)).collect();
+    assert_eq!(tags.len(), 2, "{tags:?}");
+    assert!(tags.contains(&"101".to_string()) && tags.contains(&"102".to_string()), "{tags:?}");
+
+    // 101's west wall has a gap to the outside: no closed outline around 101, named by its number;
+    // 102 and 103 are closed.
+    let mut s = numbered(11.5, true);
+    let r = s.execute("model.issues", &json!({"kind": "leak"})).unwrap();
+    assert_eq!(r["total"], json!(1), "{r}");
+    let leaks = of_kind(&r, "leak");
+    assert!(leaks[0]["message"].as_str().unwrap().starts_with("101: no closed outline"), "{r}");
+    assert_eq!(leaks[0]["handles"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(tag_text(&s, &leaks[0]["handles"][0]), "101");
+    assert!(leaks.iter().all(|l| !l["message"].as_str().unwrap().contains("103")), "{r}");
+}
+
+#[test]
+fn a_number_tag_beside_a_name_tag_is_that_rooms_number_not_another_room() {
+    // OFFICE 101 and STORAGE 102, closed: no leak.
+    let mut s = Session::new();
+    base(&mut s, 11.5);
+    text(&mut s, [5.0, 4.0], "101");
+    text(&mut s, [20.0, 4.0], "102");
+    s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let r = s.execute("model.issues", &json!({})).unwrap();
+    assert_eq!(r["total"], json!(0), "{r}");
+
+    // Joined: one leak (the names), not a second one for their numbers.
+    let mut s = Session::new();
+    base(&mut s, 8.0);
+    text(&mut s, [5.0, 4.0], "101");
+    text(&mut s, [20.0, 4.0], "102");
+    s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let r = s.execute("model.issues", &json!({"kind": "leak"})).unwrap();
+    assert_eq!(r["total"], json!(1), "{r}");
+    let m = of_kind(&r, "leak")[0]["message"].as_str().unwrap().to_string();
+    assert!(m.contains("OFFICE") && m.contains("STORAGE") && m.contains("runs into"), "{m}");
 }

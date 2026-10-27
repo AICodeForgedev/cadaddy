@@ -217,6 +217,7 @@ pub fn element_of(e: &Entity) -> Element {
             "ramp" => "IfcRamp",
             "roof" => "IfcRoof",
             "ground" => "IfcGeographicElement",
+            "room" => "IfcSpace",
             "mep" if kind.as_deref() == Some("equipment") => {
                 out.name = extra("tag:").unwrap_or_else(|| mep_part.strip_prefix("equipment:").unwrap_or_default().to_string());
                 match mep_part.strip_prefix("equipment:").unwrap_or_default() {
@@ -251,7 +252,9 @@ pub fn element_of(e: &Entity) -> Element {
             _ => "IfcBuildingElementProxy",
         };
         out.class = class.into();
-        if part != "mep" || kind.as_deref() != Some("equipment") {
+        if part == "room" {
+            out.name = extra("name:").unwrap_or_else(|| "Room".into());
+        } else if part != "mep" || kind.as_deref() != Some("equipment") {
             out.name = out.systems.first().cloned().unwrap_or_else(|| part.to_string());
         }
     } else if let Some(t) = tags("CADADDY_ROOM") {

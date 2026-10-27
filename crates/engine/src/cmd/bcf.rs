@@ -7,9 +7,10 @@
 //! - `bcf.update {topic, status?, assignee?, priority?, type?, title?, description?, comment?}`.
 //! - `bcf.show {topic, viewpoint?}`: back to its view, its objects selected.
 //! - `bcf.delete {topic}`.
-//! - `bcf.export {path, topics?}`, `bcf.import {path}`: `.bcf`/`.bcfzip` files (BCF 2.1), ours or
-//!   another program's; an imported topic already here is updated when it was modified later, and
-//!   its comments are merged.
+//! - `bcf.export {path, topics?, version?}`, `bcf.import {path}`: `.bcf`/`.bcfzip` files (BCF 2.1,
+//!   or 3.0 with `version: "3.0"`; both read), ours or another program's; an imported topic already
+//!   here is updated when it was modified later, and its comments are merged. Objects of the
+//!   drawing that have no IFC GlobalId go by their handle (a component's `AuthoringToolId`).
 //!
 //! Topics live in the drawing ([`Drawing::bcf`], JSON), saved with it (`.cdy` and DXF). Camera
 //! positions are kept as BCF keeps them: metres, in the model's coordinates.
@@ -72,6 +73,15 @@ pub struct Topic {
     pub comments: Vec<Comment>,
     #[serde(default)]
     pub viewpoints: Vec<Viewpoint>,
+    /// When it is due (BCF `DueDate`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub due: String,
+    /// Where it is pinned in the drawing (drawing units) and on which level: the plan mark and
+    /// the 3D spot (`bim.issue.*`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub level: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -107,6 +117,10 @@ pub struct Viewpoint {
     pub snapshot: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub snapshot_type: String,
+    /// The selected objects of this drawing that have no GlobalId: their handles (BCF
+    /// `AuthoringToolId`, originating system CADaddy).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handles: Vec<String>,
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -127,11 +141,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bcf.delete", "Delete BCF Issue", run_delete).params("{topic} → {deleted}"),
         CommandSpec::new("bcf.export", "Export BCF", run_export)
             .menu(&["File", "Export", "BCF Issues..."])
-            .params("{path: .bcf file, topics?: [GlobalId or index] (default all)} → {path, topics}")
+            .params("{path: .bcf file, topics?: [GlobalId or index] (default all), version?: 2.1|3.0 (default 2.1)} → {path, topics, version}")
             .noundo(),
         CommandSpec::new("bcf.import", "Import BCF", run_import)
             .menu(&["File", "Import", "BCF Issues..."])
-            .params("{path: .bcf/.bcfzip file (BCF 2.1 or 2.0)} | {data: base64} → {added, updated, unchanged, topics, skipped: [reason]}"),
+            .params("{path: .bcf/.bcfzip file (BCF 3.0, 2.1 or 2.0)} | {data: base64} → {added, updated, unchanged, topics, skipped: [reason]}"),
     ]
 }
 
@@ -250,28 +264,21 @@ fn up_of(dir: Vec3) -> Vec3 {
 
 fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
     let title = text(p, "title").filter(|t| !t.is_empty()).ok_or_else(|| bad("bcf.create", "title required"))?;
-    let d = s.doc()?;
-    let mut topics = load(d);
+    let mut topics = load(s.doc()?);
     if topics.topics.len() >= MAX_TOPICS {
         return Err(bad("bcf.create", format!("a drawing keeps at most {MAX_TOPICS} BCF topics")));
     }
-    let els = ifcmodel::elements(d);
-    let upm = super::ifcref::units_per_metre(d);
-    // The objects: given (handles or GlobalIds), else the selection.
-    let picked: Vec<&Element> = match p.get("selection").and_then(Value::as_array) {
-        Some(a) => a
-            .iter()
-            .filter_map(Value::as_str)
-            .take(MAX_SELECTED)
-            .filter_map(|q| {
-                els.iter().find(|e| e.tag.guid == q.trim()).or_else(|| Handle::parse_hex(q.trim()).and_then(|h| els.iter().find(|e| e.handle == h)))
-            })
-            .collect(),
+    let idx = ifcmodel::cached_index(s)?;
+    let upm = super::ifcref::units_per_metre(s.doc()?);
+    // The objects: given (handles or GlobalIds), else the selection. Map-based lookup.
+    let picked_indices: Vec<usize> = match p.get("selection").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(Value::as_str).take(MAX_SELECTED).filter_map(|q| idx.by_guid_or_handle(q.trim())).collect(),
         None => {
             let sel = s.selection();
-            els.iter().filter(|e| sel.contains(&e.handle)).take(MAX_SELECTED).collect()
+            sel.iter().filter_map(|h| idx.by_handle(*h)).take(MAX_SELECTED).collect()
         }
     };
+    let picked: Vec<&Element> = picked_indices.iter().filter_map(|i| idx.els.get(*i)).collect();
     // The camera: given, the one last set, else along the view at the selection (or everything).
     let (eye, target) = match (vec3_param("bcf.create", p, "eye")?, vec3_param("bcf.create", p, "target")?) {
         (Some(e), Some(t)) if (e - t).len() > 1e-9 => (e, t),
@@ -280,7 +287,7 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
             Some(c) => c,
             None => {
                 let look: Vec<Vec3> = if picked.is_empty() {
-                    els.iter().flat_map(|e| [e.min, e.max]).collect()
+                    idx.els.iter().flat_map(|e| [e.min, e.max]).collect()
                 } else {
                     picked.iter().flat_map(|e| [e.min, e.max]).collect()
                 };
@@ -298,7 +305,7 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
             }
         },
     };
-    let snapshot = if bool_or(p, "snapshot", true) && !els.is_empty() {
+    let snapshot = if bool_or(p, "snapshot", true) && !idx.els.is_empty() {
         let dim = |k: &str, def: u32| p.get(k).and_then(Value::as_u64).map_or(def, |v| u32::try_from(v).unwrap_or(2048).clamp(16, 2048));
         let keep = s.selection();
         s.set_selection(picked.iter().map(|e| e.handle).collect());
@@ -335,6 +342,7 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
         selection: picked.iter().map(|e| e.tag.guid.clone()).filter(|g| !g.is_empty()).collect(),
         snapshot_type: if snapshot.is_some() { "png".into() } else { String::new() },
         snapshot: snapshot.map(|b| base64_encode(&b)),
+        handles: Vec::new(),
     };
     let mut t = Topic {
         guid: guid.clone(),
@@ -355,6 +363,7 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
         index: topics.topics.iter().map(|x| x.index).max().unwrap_or(0).saturating_add(1),
         comments: Vec::new(),
         viewpoints: vec![vp],
+        ..Topic::default()
     };
     if let Some(c) = text(p, "comment").filter(|c| !c.is_empty()) {
         let viewpoint = t.viewpoints.first().map(|v| v.guid.clone());
@@ -462,13 +471,23 @@ fn run_show(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(vp) = t.viewpoints.get(k) else {
         return Ok(json!({ "guid": t.guid, "selected": [], "missing": [], "message": "the topic has no viewpoint" }));
     };
-    let d = s.doc()?;
-    let els = ifcmodel::elements(d);
-    let upm = super::ifcref::units_per_metre(d);
+    let idx = ifcmodel::cached_index(s)?;
+    let upm = super::ifcref::units_per_metre(s.doc()?);
     let (mut selected, mut missing) = (Vec::new(), Vec::new());
+    for h in vp.handles.iter().filter_map(|h| Handle::parse_hex(h)) {
+        if s.doc()?.entity(h).is_some() {
+            selected.push(h);
+        } else {
+            missing.push(h.hex());
+        }
+    }
     for g in &vp.selection {
-        match els.iter().find(|e| &e.tag.guid == g) {
-            Some(e) => selected.push(e.handle),
+        match idx.by_guid(g) {
+            Some(i) => {
+                if let Some(e) = idx.els.get(i) {
+                    selected.push(e.handle);
+                }
+            }
             None => missing.push(g.clone()),
         }
     }
@@ -476,16 +495,29 @@ fn run_show(s: &mut Session, p: &Value) -> Result<Value> {
     let eye = Vec3::new(vp.eye[0] * upm, vp.eye[1] * upm, vp.eye[2] * upm);
     let dir = unit(Vec3::new(vp.dir[0], vp.dir[1], vp.dir[2]));
     if eye.x.is_finite() && eye.y.is_finite() && eye.z.is_finite() && dir.len() > 0.5 {
-        // The target: as far along the view as the selection (or the model) is from the eye.
-        let look: Vec<&Element> =
-            if selected.is_empty() { els.iter().collect() } else { els.iter().filter(|e| selected.contains(&e.handle)).collect() };
-        let centre = if look.is_empty() {
-            eye + dir * upm
+        // Fit to the selection's bounds (padded) along eye→target, not the whole model.
+        let sel_els: Vec<&Element> = selected.iter().filter_map(|h| idx.by_handle(*h).and_then(|i| idx.els.get(i))).collect();
+        let target = if sel_els.is_empty() {
+            // No selection: look as far as the model centre.
+            let centre = if idx.els.is_empty() {
+                eye + dir * upm
+            } else {
+                idx.els.iter().fold(Vec3::ZERO, |a, e| a + (e.min + e.max) * 0.5) * (1.0 / idx.els.len() as f64)
+            };
+            let reach = (centre - eye).dot(dir).max(upm);
+            eye + dir * reach
         } else {
-            look.iter().fold(Vec3::ZERO, |a, e| a + (e.min + e.max) * 0.5) * (1.0 / look.len() as f64)
+            // Selection: target = centre of selected objects' bounds.
+            let pts: Vec<Vec3> = sel_els.iter().flat_map(|e| [e.min, e.max]).collect();
+            let lo =
+                pts.iter().fold(Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), |a, b| Vec3::new(a.x.min(b.x), a.y.min(b.y), a.z.min(b.z)));
+            let hi = pts
+                .iter()
+                .fold(Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |a, b| Vec3::new(a.x.max(b.x), a.y.max(b.y), a.z.max(b.z)));
+            let centre = (lo + hi) * 0.5;
+            let reach = (centre - eye).dot(dir).max(upm);
+            eye + dir * reach
         };
-        let reach = (centre - eye).dot(dir).max(upm);
-        let target = eye + dir * reach;
         ifcmodel::set_camera(s, eye, target)?;
         out["eye"] = json!([eye.x, eye.y, eye.z]);
         out["target"] = json!([target.x, target.y, target.z]);
@@ -511,28 +543,44 @@ fn xyz(tag: &str, v: [f64; 3]) -> String {
     format!("<{tag}><X>{}</X><Y>{}</Y><Z>{}</Z></{tag}>", n(v[0]), n(v[1]), n(v[2]))
 }
 
-fn markup(t: &Topic) -> String {
+/// A topic's markup: BCF 2.1 (comments and viewpoints after the topic) or 3.0 (inside it, labels
+/// and lists wrapped).
+fn markup(t: &Topic, v3: bool) -> String {
     let mut x = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Markup>\n");
     x += &format!("  <Topic Guid=\"{}\" TopicType=\"{}\" TopicStatus=\"{}\">\n", esc(&t.guid), esc(&t.topic_type), esc(&t.status));
     x += &format!("    <Title>{}</Title>\n", esc(&t.title));
     if !t.priority.is_empty() {
         x += &format!("    <Priority>{}</Priority>\n", esc(&t.priority));
     }
-    if t.index > 0 {
+    if t.index > 0 && !v3 {
         x += &format!("    <Index>{}</Index>\n", t.index);
     }
-    for l in &t.labels {
-        x += &format!("    <Labels>{}</Labels>\n", esc(l));
+    if v3 && !t.labels.is_empty() {
+        x += "    <Labels>\n";
+        for l in &t.labels {
+            x += &format!("      <Label>{}</Label>\n", esc(l));
+        }
+        x += "    </Labels>\n";
+    } else {
+        for l in &t.labels {
+            x += &format!("    <Labels>{}</Labels>\n", esc(l));
+        }
     }
     x += &format!("    <CreationDate>{}</CreationDate>\n    <CreationAuthor>{}</CreationAuthor>\n", esc(&t.created), esc(&t.author));
     if !t.modified.is_empty() {
         x += &format!("    <ModifiedDate>{}</ModifiedDate>\n", esc(&t.modified));
+    }
+    if !t.due.is_empty() {
+        x += &format!("    <DueDate>{}</DueDate>\n", esc(&t.due));
     }
     if !t.assignee.is_empty() {
         x += &format!("    <AssignedTo>{}</AssignedTo>\n", esc(&t.assignee));
     }
     if !t.description.is_empty() {
         x += &format!("    <Description>{}</Description>\n", esc(&t.description));
+    }
+    if v3 {
+        return x + markup_lists_v3(t).as_str() + "  </Topic>\n</Markup>\n";
     }
     x += "  </Topic>\n";
     for c in &t.comments {
@@ -563,12 +611,57 @@ fn markup(t: &Topic) -> String {
     x + "</Markup>\n"
 }
 
-fn visinfo(v: &Viewpoint) -> String {
+fn snapshot_name(k: usize, v: &Viewpoint) -> String {
+    format!("snapshot{}.{}", if k == 0 { String::new() } else { k.to_string() }, if v.snapshot_type == "jpg" { "jpg" } else { "png" })
+}
+
+/// BCF 3.0's comments and viewpoints, inside the topic.
+fn markup_lists_v3(t: &Topic) -> String {
+    let mut x = String::new();
+    if !t.comments.is_empty() {
+        x += "    <Comments>\n";
+        for c in &t.comments {
+            x += &format!(
+                "      <Comment Guid=\"{}\">\n        <Date>{}</Date>\n        <Author>{}</Author>\n        <Comment>{}</Comment>\n",
+                esc(&c.guid),
+                esc(&c.date),
+                esc(&c.author),
+                esc(&c.text)
+            );
+            if let Some(v) = &c.viewpoint {
+                x += &format!("        <Viewpoint Guid=\"{}\"/>\n", esc(v));
+            }
+            x += "      </Comment>\n";
+        }
+        x += "    </Comments>\n";
+    }
+    if !t.viewpoints.is_empty() {
+        x += "    <Viewpoints>\n";
+        for (k, v) in t.viewpoints.iter().enumerate() {
+            let name = if k == 0 { "viewpoint".to_string() } else { format!("viewpoint{k}") };
+            x += &format!("      <ViewPoint Guid=\"{}\">\n        <Viewpoint>{name}.bcfv</Viewpoint>\n", esc(&v.guid));
+            if v.snapshot.is_some() {
+                x += &format!("        <Snapshot>{}</Snapshot>\n", snapshot_name(k, v));
+            }
+            x += "      </ViewPoint>\n";
+        }
+        x += "    </Viewpoints>\n";
+    }
+    x
+}
+
+fn visinfo(v: &Viewpoint, v3: bool) -> String {
     let mut x = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<VisualizationInfo Guid=\"{}\">\n  <Components>\n", esc(&v.guid));
-    if !v.selection.is_empty() {
+    if !v.selection.is_empty() || !v.handles.is_empty() {
         x += "    <Selection>\n";
         for g in &v.selection {
             x += &format!("      <Component IfcGuid=\"{}\"/>\n", esc(g));
+        }
+        for h in &v.handles {
+            x += &format!(
+                "      <Component>\n        <OriginatingSystem>CADaddy</OriginatingSystem>\n        <AuthoringToolId>{}</AuthoringToolId>\n      </Component>\n",
+                esc(h)
+            );
         }
         x += "    </Selection>\n";
     }
@@ -576,13 +669,15 @@ fn visinfo(v: &Viewpoint) -> String {
     let cam = format!("{}{}{}", xyz("CameraViewPoint", v.eye), xyz("CameraDirection", v.dir), xyz("CameraUpVector", v.up));
     if v.ortho {
         x += &format!(
-            "  <OrthogonalCamera>{cam}<ViewToWorldScale>{}</ViewToWorldScale></OrthogonalCamera>\n",
-            if v.fov.is_finite() && v.fov > 0.0 { v.fov } else { 10.0 }
+            "  <OrthogonalCamera>{cam}<ViewToWorldScale>{}</ViewToWorldScale>{}</OrthogonalCamera>\n",
+            if v.fov.is_finite() && v.fov > 0.0 { v.fov } else { 10.0 },
+            if v3 { "<AspectRatio>1.333333</AspectRatio>" } else { "" }
         );
     } else {
         x += &format!(
-            "  <PerspectiveCamera>{cam}<FieldOfView>{}</FieldOfView></PerspectiveCamera>\n",
-            if v.fov.is_finite() && v.fov > 0.0 { v.fov } else { 60.0 }
+            "  <PerspectiveCamera>{cam}<FieldOfView>{}</FieldOfView>{}</PerspectiveCamera>\n",
+            if v.fov.is_finite() && v.fov > 0.0 { v.fov } else { 60.0 },
+            if v3 { "<AspectRatio>1.333333</AspectRatio>" } else { "" }
         );
     }
     x + "</VisualizationInfo>\n"
@@ -590,16 +685,43 @@ fn visinfo(v: &Viewpoint) -> String {
 
 /// The BCF 2.1 archive of `topics`.
 pub fn write_bcf(topics: &[&Topic]) -> std::result::Result<Vec<u8>, String> {
+    write_bcf_version(topics, false)
+}
+
+/// The BCF archive of `topics`: 2.1, or 3.0 with `v3` (with the `extensions.xml` it requires,
+/// naming the topic types and statuses used).
+pub fn write_bcf_version(topics: &[&Topic], v3: bool) -> std::result::Result<Vec<u8>, String> {
     let mut files: Vec<(String, Vec<u8>)> = vec![(
         "bcf.version".into(),
-        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Version VersionId=\"2.1\">\n  <DetailedVersion>2.1</DetailedVersion>\n</Version>\n".to_vec(),
+        if v3 {
+            b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Version VersionId=\"3.0\"/>\n".to_vec()
+        } else {
+            b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Version VersionId=\"2.1\">\n  <DetailedVersion>2.1</DetailedVersion>\n</Version>\n"
+                .to_vec()
+        },
     )];
+    if v3 {
+        let list = |tag: &str, inner: &str, vals: std::collections::BTreeSet<&str>| -> String {
+            let items: String = vals.iter().filter(|v| !v.is_empty()).map(|v| format!("    <{inner}>{}</{inner}>\n", esc(v))).collect();
+            format!("  <{tag}>\n{items}  </{tag}>\n")
+        };
+        let types = topics.iter().map(|t| t.topic_type.as_str()).chain(["Issue"]).collect();
+        let statuses = topics.iter().map(|t| t.status.as_str()).chain(STATUSES).collect();
+        let labels = topics.iter().flat_map(|t| t.labels.iter().map(String::as_str)).collect();
+        let ext = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Extensions>\n{}{}{}</Extensions>\n",
+            list("TopicTypes", "TopicType", types),
+            list("TopicStatuses", "TopicStatus", statuses),
+            list("TopicLabels", "TopicLabel", labels)
+        );
+        files.push(("extensions.xml".into(), ext.into_bytes()));
+    }
     for t in topics {
         let dir = t.guid.replace(['/', '\\', '.'], "_");
-        files.push((format!("{dir}/markup.bcf"), markup(t).into_bytes()));
+        files.push((format!("{dir}/markup.bcf"), markup(t, v3).into_bytes()));
         for (k, v) in t.viewpoints.iter().enumerate() {
             let name = if k == 0 { "viewpoint".to_string() } else { format!("viewpoint{k}") };
-            files.push((format!("{dir}/{name}.bcfv"), visinfo(v).into_bytes()));
+            files.push((format!("{dir}/{name}.bcfv"), visinfo(v, v3).into_bytes()));
             if let Some(b) = v.snapshot.as_deref().and_then(base64_decode) {
                 let ext = if v.snapshot_type == "jpg" { "jpg" } else { "png" };
                 files.push((format!("{dir}/snapshot{}.{ext}", if k == 0 { String::new() } else { k.to_string() }), b));
@@ -628,14 +750,21 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     if pick.is_empty() {
         return Err(bad("bcf.export", "there are no BCF topics to export"));
     }
-    let bytes = write_bcf(&pick).map_err(|e| bad("bcf.export", e))?;
+    let v3 = match p.get("version").map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string)) {
+        None => false,
+        Some(v) if v.starts_with('3') => true,
+        Some(v) if v.starts_with("2.1") || v == "2" => false,
+        Some(v) => return Err(bad("bcf.export", format!("BCF {v} isn't written (2.1 and 3.0 are)"))),
+    };
+    let version = if v3 { "3.0" } else { "2.1" };
+    let bytes = write_bcf_version(&pick, v3).map_err(|e| bad("bcf.export", e))?;
     #[cfg(not(target_arch = "wasm32"))]
     {
         crate::writefile::write(path, &bytes).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
-        Ok(json!({ "path": path, "topics": pick.len(), "bytes": bytes.len() }))
+        Ok(json!({ "path": path, "topics": pick.len(), "bytes": bytes.len(), "version": version }))
     }
     #[cfg(target_arch = "wasm32")]
-    Ok(json!({ "path": path, "topics": pick.len(), "data": base64_encode(&bytes) }))
+    Ok(json!({ "path": path, "topics": pick.len(), "data": base64_encode(&bytes), "version": version }))
 }
 
 // A small XML reader for BCF's markup and viewpoint files: elements by name (nested ones of the
@@ -772,8 +901,16 @@ fn read_viewpoint(xml: &str, guid: &str) -> Option<Viewpoint> {
     if let Some((_, comps)) = first(body, "Components")
         && let Some((_, sel)) = first(comps, "Selection")
     {
-        v.selection =
-            elements(sel, "Component").into_iter().filter_map(|(h, _)| attr(h, "IfcGuid")).filter(|g| !g.is_empty()).take(MAX_SELECTED).collect();
+        let comps = elements(sel, "Component");
+        v.selection = comps.iter().filter_map(|(h, _)| attr(h, "IfcGuid")).filter(|g| !g.is_empty()).take(MAX_SELECTED).collect();
+        // Ours without a GlobalId: the handle.
+        v.handles = comps
+            .iter()
+            .filter(|(h, b)| attr(h, "IfcGuid").is_none_or(|g| g.is_empty()) && child_text(b, "OriginatingSystem").trim() == "CADaddy")
+            .map(|(_, b)| child_text(b, "AuthoringToolId").trim().to_string())
+            .filter(|h| Handle::parse_hex(h).is_some())
+            .take(MAX_SELECTED)
+            .collect();
     }
     let (cam, ortho) = match first(body, "PerspectiveCamera") {
         Some((_, c)) => (Some(c), false),
@@ -791,7 +928,7 @@ fn read_viewpoint(xml: &str, guid: &str) -> Option<Viewpoint> {
     Some(v)
 }
 
-/// The topics of a BCF archive (2.1 or 2.0), and why any were left out.
+/// The topics of a BCF archive (3.0, 2.1 or 2.0), and why any were left out.
 pub fn read_bcf(bytes: &[u8]) -> std::result::Result<(Vec<Topic>, Vec<String>), String> {
     if bytes.len() > MAX_FILE {
         return Err("the BCF file is too large".into());
@@ -801,12 +938,16 @@ pub fn read_bcf(bytes: &[u8]) -> std::result::Result<(Vec<Topic>, Vec<String>), 
     let xml = |b: &Vec<u8>| -> Option<String> {
         (b.len() <= MAX_XML).then(|| String::from_utf8_lossy(b.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(b)).into_owned())
     };
+    let mut v3 = false;
     if let Some(v) = get("bcf.version").and_then(xml)
         && let Some((head, _)) = first(&v, "Version")
         && let Some(id) = attr(head, "VersionId")
-        && !(id.starts_with("2.0") || id.starts_with("2.1"))
     {
-        return Err(format!("BCF {id} isn't read yet (2.0 and 2.1 are)"));
+        if id.starts_with("3.") {
+            v3 = true;
+        } else if !(id.starts_with("2.0") || id.starts_with("2.1")) {
+            return Err(format!("BCF {id} isn't read yet (3.0, 2.1 and 2.0 are)"));
+        }
     }
     let mut topics = Vec::new();
     let mut skipped = Vec::new();
@@ -836,10 +977,21 @@ pub fn read_bcf(bytes: &[u8]) -> std::result::Result<(Vec<Topic>, Vec<String>), 
             created: child_text(tb, "CreationDate"),
             modified: child_text(tb, "ModifiedDate"),
             description: child_text(tb, "Description"),
-            labels: elements(tb, "Labels").into_iter().take(50).map(|(_, l)| unescape(l)).collect(),
+            labels: elements(tb, "Labels")
+                .into_iter()
+                .flat_map(|(_, l)| {
+                    // BCF 3.0 wraps each label.
+                    let inner = elements(l, "Label");
+                    if inner.is_empty() { vec![unescape(l)] } else { inner.into_iter().map(|(_, x)| unescape(x)).collect() }
+                })
+                .filter(|l| !l.is_empty())
+                .take(50)
+                .collect(),
             index: child_text(tb, "Index").trim().parse().unwrap_or(0),
             comments: Vec::new(),
             viewpoints: Vec::new(),
+            due: child_text(tb, "DueDate"),
+            ..Topic::default()
         };
         if t.title.is_empty() {
             t.title = "(untitled)".into();
@@ -854,7 +1006,7 @@ pub fn read_bcf(bytes: &[u8]) -> std::result::Result<(Vec<Topic>, Vec<String>), 
             });
         }
         // Viewpoints: listed in the markup, else the topic folder's viewpoint.bcfv (BCF 2.0).
-        let mut listed: Vec<(String, String, String)> = elements(&m, "Viewpoints")
+        let mut listed: Vec<(String, String, String)> = elements(&m, if v3 { "ViewPoint" } else { "Viewpoints" })
             .into_iter()
             .take(100)
             .map(|(h, b)| (attr(h, "Guid").unwrap_or_default(), child_text(b, "Viewpoint"), child_text(b, "Snapshot")))

@@ -68,16 +68,19 @@ CADaddy is pre-alpha. Some AutoCAD features are not yet implemented or are
 partially implemented. The full gap list is maintained in the repository at
 `docs/gaps.md`. Key areas still in progress:
 
-- **REFEDIT** (in-place block and xref editing)
-- **Binary plot styles** (`.ctb`/`.stb` files; named styles work)
-- **Dynamic input** (on-screen dimension entry near the cursor)
+- **Xref write-back** (REFEDIT works for blocks; editing an xref source in
+  place and saving back is not yet supported)
+- **Dynamic-block authoring** (existing dynamic blocks display and grip-edit,
+  but creating or modifying parameters and actions in the Block Editor is not
+  implemented)
+- **Data extraction wizard**
 - **Object tracking** (temporary alignment lines from snap points)
 - **3D solid modelling** (Boolean operations, shell, slice and imprint are
   partially implemented)
 - **Parametric constraints** (geometric and dimensional constraints exist but are
   incomplete)
-- **Data extraction wizard**
-- **Design Center palette** (partially implemented)
+- **Binary `.ctb`/`.stb` reading** (plot styles work, but importing the binary
+  AutoCAD files is not yet supported)
 
 For the latest status, run `cargo xtask parity` or see the
 [Command Reference](command-reference.md) for every command that is live.

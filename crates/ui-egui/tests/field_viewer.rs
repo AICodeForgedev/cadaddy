@@ -8,8 +8,9 @@
 use cadaddy_engine::Session;
 use cadaddy_ui_egui::fieldview::{FieldViewer, Mode, Tool};
 use cadaddy_ui_egui::theme;
-use cadaddy_walk3d::field::{FieldNotes, NoteKind};
+use cadaddy_walk3d::field::{FieldCheck, FieldCover, FieldNotes, FieldPackage, FieldPhoto, NoteKind};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 fn layer(s: &mut Session, name: &str) {
@@ -160,7 +161,9 @@ fn a_room_found_tapped_measured_and_noted_offline_syncs_back_once() {
 
     // Send Notes, then sync into the drawing — twice is the same as once.
     assert_eq!(again.send_notes(), 1);
-    assert!(again.pkg.as_ref().unwrap().unsynced().is_empty());
+    // Handed over, not in the drawing yet: sent, still unsynced until a package brings it back.
+    let sent = again.pkg.as_ref().unwrap().unsynced();
+    assert_eq!(sent.iter().map(|n| (n.id.as_str(), n.sent, n.synced)).collect::<Vec<_>>(), [("FN-tab1-0001", true, false)]);
     let (name, file) = again.outbox.pop().unwrap();
     assert_eq!(name, "Sample_Hotel-fieldnotes-tab1.json");
     let notes: FieldNotes = serde_json::from_slice(&file).unwrap();
@@ -175,6 +178,80 @@ fn a_room_found_tapped_measured_and_noted_offline_syncs_back_once() {
     next.open(&package(&mut s)).unwrap();
     assert_eq!(next.pkg.as_ref().unwrap().notes.len(), 1);
     assert!(next.pkg.as_ref().unwrap().unsynced().is_empty());
+}
+
+/// Q5111: Send Notes only marks notes sent. A lost download is sent again with the same id, and
+/// a note is synced only once a package exported from the drawing carries it back.
+#[test]
+fn a_lost_notes_download_is_sent_again_until_a_package_brings_the_note_back() {
+    let mut s = drawing();
+    let mut v = FieldViewer::new("tab1");
+    v.open(&package(&mut s)).unwrap();
+    v.tool = Tool::Note;
+    v.tap_plan([40.0, 25.0], 0.5);
+    v.draft.as_mut().unwrap().text = "sleeve 6\" east of plan".into();
+    let id = v.save_draft("2026-05-06T09:00:00Z").unwrap();
+    assert_eq!(id, "FN-tab1-0001");
+    let ids_in = |file: &[u8]| -> Vec<String> {
+        let notes: FieldNotes = serde_json::from_slice(file).unwrap();
+        notes.notes.iter().map(|n| n.id.clone()).collect()
+    };
+
+    assert_eq!(v.send_notes(), 1);
+    assert_eq!(v.outbox.len(), 1);
+    // The download fails: the file never reaches the office.
+    v.outbox.clear();
+    let note = v.pkg.as_ref().unwrap().notes.iter().find(|n| n.id == id).unwrap().clone();
+    assert!(note.sent && !note.synced, "{note:?}");
+
+    // Send Notes again: the same note goes out again.
+    assert_eq!(v.send_notes(), 1);
+    let (_, file) = v.outbox.pop().unwrap();
+    assert_eq!(ids_in(&file), vec![id.clone()]);
+    let notes: FieldNotes = serde_json::from_slice(&file).unwrap();
+    assert!(notes.notes.iter().all(|n| !n.sent && !n.synced));
+    // A reload keeps it sent and unsynced.
+    let mut v = {
+        let mut r = FieldViewer::new("tab1");
+        r.from_storage(&v.to_storage().unwrap()).unwrap();
+        r
+    };
+    assert_eq!(v.pkg.as_ref().unwrap().unsynced().iter().map(|n| (n.id.as_str(), n.sent)).collect::<Vec<_>>(), [(id.as_str(), true)]);
+
+    // The office syncs that file twice: added once.
+    let r = s.execute("fieldview.sync", &json!({"notes": notes})).unwrap();
+    assert_eq!((r["added"].as_u64(), r["updated"].as_u64()), (Some(1), Some(0)));
+    let r = s.execute("fieldview.sync", &json!({"notes": notes})).unwrap();
+    assert_eq!((r["added"].as_u64(), r["unchanged"].as_u64()), (Some(0), Some(1)));
+
+    // A fresh export after the sync carries it back: the note is synced and nothing is left to send.
+    v.open(&package(&mut s)).unwrap();
+    let p = v.pkg.as_ref().unwrap();
+    assert_eq!(p.notes.iter().filter(|n| n.id == id).count(), 1);
+    assert!(p.notes.iter().any(|n| n.id == id && n.synced));
+    assert!(p.unsynced().is_empty());
+    assert_eq!(v.send_notes(), 0);
+    assert!(v.outbox.is_empty());
+}
+
+/// A package that does not carry a sent note (exported before the office synced it) leaves the
+/// note sent and unsynced on the device.
+#[test]
+fn a_package_without_the_note_does_not_acknowledge_it() {
+    let mut s = drawing();
+    let before_sync = package(&mut s);
+    let mut v = FieldViewer::new("tab1");
+    v.open(&before_sync).unwrap();
+    v.tool = Tool::Note;
+    v.tap_plan([40.0, 25.0], 0.5);
+    v.draft.as_mut().unwrap().text = "box at 18\" AFF".into();
+    let id = v.save_draft("2026-05-06T09:10:00Z").unwrap();
+    assert_eq!(v.send_notes(), 1);
+    v.outbox.clear();
+    v.open(&before_sync).unwrap();
+    let p = v.pkg.as_ref().unwrap();
+    assert_eq!(p.unsynced().iter().map(|n| (n.id.as_str(), n.sent, n.synced)).collect::<Vec<_>>(), [(id.as_str(), true, false)]);
+    assert_eq!(v.send_notes(), 1);
 }
 
 #[test]
@@ -220,4 +297,58 @@ fn tablet_and_phone_views_render() {
     let mut h = harness(FieldViewer::new("tab1"), egui::vec2(390.0, 844.0));
     shot(&mut h, "field-phone-empty.png");
     h.state_mut().open(b"{\"schema\":\"cadaddy-field/99\"}").unwrap_err();
+}
+
+/// Q5119: tapping a wall shows the face on the tapped side, with its pre-cover checklist and the
+/// photos taken behind it (the package carries them from the drawing's cover record).
+#[test]
+fn a_wall_tap_lists_the_tapped_faces_checklist_and_photos() {
+    let mut s = drawing();
+    let mut pkg: FieldPackage = serde_json::from_slice(&package(&mut s)).unwrap();
+    // The wall between room 214 and the corridor, west to east along y = 30'.
+    let face = |f: &str, rooms: &[&str], photos: Vec<FieldPhoto>| FieldCover {
+        area: format!("W2-001/{f}"),
+        wall: "W2-001".into(),
+        face: f.into(),
+        level: "Level 2".into(),
+        a: [0.0, 30.0],
+        b: [26.0, 30.0],
+        rooms: rooms.iter().map(|r| r.to_string()).collect(),
+        fire_rating: "1 HR".into(),
+        ready: false,
+        checklist: vec![
+            FieldCheck { id: "c1".into(), category: "boxes".into(), description: "Boxes installed and secured".into(), done: true },
+            FieldCheck { id: "c2".into(), category: "firestop".into(), description: "Firestop at rated penetrations".into(), done: false },
+        ],
+        photos,
+    };
+    let photo = FieldPhoto {
+        id: "FN-ph1-0002".into(),
+        uri: "IMG_0002.jpg".into(),
+        caption: "boxes before drywall".into(),
+        elevation_ft: 3.0,
+        along_ft: 12.0,
+        ..FieldPhoto::default()
+    };
+    pkg.cover = vec![face("A", &[], Vec::new()), face("B", &["214"], vec![photo])];
+    let mut v = FieldViewer::new("tab1");
+    v.open(pkg.to_json().unwrap().as_bytes()).unwrap();
+    let room = v.pkg.as_ref().unwrap().search_rooms("214").first().unwrap().0;
+    v.select_room(room);
+    // South of the wall (inside 214): face B.
+    v.tap_plan([12.0, 29.7], 0.5);
+    let c = v.cover.and_then(|i| v.pkg.as_ref().unwrap().cover.get(i)).unwrap();
+    assert_eq!((c.area.as_str(), c.photos.len()), ("W2-001/B", 1));
+    // North: face A, no photos. Far from the wall: no face.
+    v.tap_plan([12.0, 30.3], 0.5);
+    assert_eq!(v.cover.map(|i| v.pkg.as_ref().unwrap().cover[i].area.clone()).as_deref(), Some("W2-001/A"));
+    v.tap_plan([12.0, 15.0], 0.5);
+    assert!(v.cover.is_none());
+    v.tap_plan([12.0, 29.7], 0.5);
+    // The details panel lists the checklist and the photo.
+    let mut h = harness(v, egui::vec2(1180.0, 820.0));
+    h.get_by_label("Firestop at rated penetrations");
+    h.get_by_label("FN-ph1-0002: boxes before drywall (IMG_0002.jpg, 3'-0\")");
+    h.get_by_label("Not ready to cover");
+    shot(&mut h, "field-tablet-wall.png");
 }

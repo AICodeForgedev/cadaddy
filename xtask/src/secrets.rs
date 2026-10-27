@@ -161,12 +161,12 @@ mod tests {
     #[test]
     fn credentials_are_found() {
         let cases = [
-            (fake("AK", "IA", 2) + &fake("", "Q7ZK3M", 16), "AWS access key"),
-            (fake("gh", "p_", 2) + &fake("", "aB3dE5fG7h", 36), "GitHub token"),
-            (fake("sk-", "ant-", 4) + &fake("api03-", "Zq9_xY-12", 60), "Anthropic API key"),
-            (fake("xa", "i-", 2) + &fake("", "Qw3Er5Ty7U", 60), "xAI API key"),
-            (fake("AI", "za", 2) + &fake("", "Sy9-Bc_1De", 35), "Google API key"),
-            (fake("sk_", "live_", 5) + &fake("", "4eC39HqLyjWDarjtT1zdp7dc", 24), "Stripe secret key"),
+            (format!("{}{}", fake("AK", "IA", 2), fake("", "Q7ZK3M", 16)), "AWS access key"),
+            (format!("{}{}", fake("gh", "p_", 2), fake("", "aB3dE5fG7h", 36)), "GitHub token"),
+            (format!("{}{}", fake("sk-", "ant-", 4), fake("api03-", "Zq9_xY-12", 60)), "Anthropic API key"),
+            (format!("{}{}", fake("xa", "i-", 2), fake("", "Qw3Er5Ty7U", 60)), "xAI API key"),
+            (format!("{}{}", fake("AI", "za", 2), fake("", "Sy9-Bc_1De", 35)), "Google API key"),
+            (format!("{}{}", fake("sk_", "live_", 5), fake("", "4eC39HqLyjWDarjtT1zdp7dc", 24)), "Stripe secret key"),
         ];
         for (secret, what) in &cases {
             let text = format!("let key = \"{secret}\";\n");
@@ -180,11 +180,11 @@ mod tests {
     fn look_alikes_are_not() {
         let not = [
             // Too short, too long, inside a word, a placeholder.
-            fake("AK", "IA", 2) + "ABC123",
-            fake("AK", "IA", 2) + &fake("", "Q7ZK3M", 20),
-            "MY".to_string() + &fake("AK", "IA", 2) + &fake("", "Q7ZK3M", 16),
-            fake("sk-", "ant-", 4) + &"x".repeat(40),
-            fake("gh", "p_", 2) + &"X".repeat(36),
+            format!("{}ABC123", fake("AK", "IA", 2)),
+            format!("{}{}", fake("AK", "IA", 2), fake("", "Q7ZK3M", 20)),
+            format!("MY{}{}", fake("AK", "IA", 2), fake("", "Q7ZK3M", 16)),
+            format!("{}{}", fake("sk-", "ant-", 4), "x".repeat(40)),
+            format!("{}{}", fake("gh", "p_", 2), "X".repeat(36)),
             "the prefix ghp_ alone in prose".to_string(),
             "-----BEGIN PUBLIC KEY-----".to_string(),
         ];

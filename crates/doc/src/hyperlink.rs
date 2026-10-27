@@ -292,14 +292,26 @@ fn network_host(path: &str, url_form: bool) -> Option<String> {
     } else {
         p.strip_prefix("//")?.trim_start_matches('/')
     };
-    // Win32 namespaces: `//?/UNC/host/share` is a share; `//?/C:/x` and `//./C:/x` are local drives.
+    // Win32 namespaces: `//?/UNC/host/share` is a share; `//?/C:/x` and `//./C:/x` are local
+    // drives. Anything else there is a device path: `//?/GLOBALROOT/Device/Mup/host/share` reaches
+    // a share too, and other devices aren't plain files, so they all ask.
     let rest = match rest.get(..2) {
         Some("?/") | Some("./") => {
             let inner = rest.get(2..).unwrap_or_default();
-            match inner.get(..4) {
-                Some(u) if u.eq_ignore_ascii_case("unc/") => inner.get(4..).unwrap_or_default(),
-                _ => return None,
+            let first = inner.split('/').next().unwrap_or_default();
+            let b = first.as_bytes();
+            if b.len() == 2 && b.first().is_some_and(u8::is_ascii_alphabetic) && b.get(1) == Some(&b':') {
+                return None;
             }
+            if !first.eq_ignore_ascii_case("unc") {
+                let parts: Vec<&str> = inner.split('/').collect();
+                let mup = parts.len() > 3 && parts.iter().take(3).zip(["globalroot", "device", "mup"]).all(|(a, b)| a.eq_ignore_ascii_case(b));
+                return match parts.get(3) {
+                    Some(host) if mup && !host.is_empty() => Some(host.to_string()),
+                    _ => Some(format!("the device path {}", inner.trim_end_matches('/'))),
+                };
+            }
+            inner.get(4..).unwrap_or_default()
         }
         _ => rest,
     };
@@ -344,11 +356,31 @@ mod tests {
             "file://///192.0.2.1/share/plan.pdf",
             "\\\\?\\UNC\\192.0.2.1\\share\\plan.pdf",
             "file:%2F%2F192.0.2.1/share/plan.pdf",
+            // The Win32 device namespace reaches the same shares (Q207 rework).
+            r"\\?\GLOBALROOT\Device\Mup\192.0.2.1\share\plan.pdf",
+            r"\\.\GLOBALROOT\Device\Mup\192.0.2.1\s\x.pdf",
+            "file:////?/GLOBALROOT/Device/Mup/192.0.2.1/share/plan.pdf",
+            r"\\.\UNC\192.0.2.1\share\plan.pdf",
+            // ...and other devices aren't plain files.
+            r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\plan.pdf",
+            r"\\.\pipe\sample",
+            r"\\?\CC:\a.pdf",
         ] {
             assert!(matches!(follow_check(ask), Follow::Ask(_)), "{ask}");
         }
+        assert_eq!(
+            follow_check(r"\\?\GLOBALROOT\Device\Mup\192.0.2.1\share\plan.pdf"),
+            Follow::Ask("the link opens a file on another computer (192.0.2.1): following it connects to that computer".into())
+        );
+        assert_eq!(
+            follow_check(r"\\.\GLOBALROOT\Device\Mup\192.0.2.1\s\x.pdf"),
+            Follow::Ask("the link opens a file on another computer (192.0.2.1): following it connects to that computer".into())
+        );
         // This computer stays this computer.
         for ok in ["file://localhost/C:/a.pdf", "file:///home/x/a%2Bb.pdf", "\\\\?\\C:\\a.pdf", "/srv/plans/a.pdf"] {
+            assert_eq!(follow_check(ok), Follow::Open, "{ok}");
+        }
+        for ok in [r"\\.\D:\b.pdf", r"\\?\c:"] {
             assert_eq!(follow_check(ok), Follow::Open, "{ok}");
         }
         assert_eq!(percent_decode("a%2Eb%zz%4"), "a.b%zz%4");

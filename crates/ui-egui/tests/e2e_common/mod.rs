@@ -20,6 +20,8 @@ pub struct E2e {
     pub ctx: egui::Context,
     /// Synthetic input for the next frame (touch, pointer and keys).
     pub events: Vec<egui::Event>,
+    /// The frame size used by `frame()`. Change it to test different window sizes.
+    pub size: (f32, f32),
 }
 
 /// The real file formats, as the app installs them (apps/cadaddy `install_io`).
@@ -57,15 +59,16 @@ pub fn folder(tag: &str) -> std::path::PathBuf {
 impl E2e {
     pub fn new() -> E2e {
         io_hooks();
-        let mut e = E2e { app: CadApp::new(Session::new(), Services::default()), ctx: egui::Context::default(), events: Vec::new() };
+        let mut e = E2e { app: CadApp::new(Session::new(), Services::default()), ctx: egui::Context::default(), events: Vec::new(), size: (W, H) };
         e.pump();
         e
     }
 
     /// One frame of the whole interface, with any queued synthetic input.
     pub fn frame(&mut self) {
+        let (w, h) = self.size;
         let mut raw = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(W, H))),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))),
             events: std::mem::take(&mut self.events),
             ..Default::default()
         };
