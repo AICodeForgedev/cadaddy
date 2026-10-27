@@ -3398,6 +3398,46 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 add_sheet_links(&mut sp, &job.sheet_regions);
                 s.doc_mut()?.building_spec = Some(sp.to_json());
             }
+            // The MEP plans' runs, terminals and equipment were read in their own sheet's place
+            // (the sheets sit side by side): each is put onto its level's architectural plan by
+            // its sheet's registration (shared door and room numbers), so it is in the building.
+            if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+                let sheets = super::identity::sheets_of(Some(&sp));
+                let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+                let reg = super::identity::register(s.doc()?, &sheets, upf);
+                let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
+                let level_key = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), l.to_ascii_uppercase().contains("ROOF"));
+                let sim = |p: [f64; 2], level: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
+                    let sheet = sheets.iter().find(|b| inside(&b.rect, p))?;
+                    let on = |t: &&cadaddy_mepfix::tagid::SheetTransform| t.registered && t.sheet.eq_ignore_ascii_case(&sheet.number);
+                    let ts: Vec<_> = reg.transforms.iter().filter(on).collect();
+                    ts.iter().find(|t| level_key(&t.level) == level_key(level)).or(ts.first()).map(|t| t.transform)
+                };
+                let (mut moved, mut left) = (0usize, 0usize);
+                for r in &mut sp.mep.runs {
+                    match r.points.first().and_then(|p| sim(*p, &r.level)) {
+                        Some(t) => {
+                            r.points.iter_mut().for_each(|p| *p = t.apply(*p));
+                            moved += 1;
+                        }
+                        None => left += 1,
+                    }
+                }
+                for t in &mut sp.mep.terminals {
+                    if let Some(m) = sim(t.at, &t.level) {
+                        t.at = m.apply(t.at);
+                    }
+                }
+                for e in &mut sp.mep.equipment {
+                    if let Some(m) = sim(e.min, &e.level) {
+                        let (a, b) = (m.apply(e.min), m.apply(e.max));
+                        e.min = [a[0].min(b[0]), a[1].min(b[1])];
+                        e.max = [a[0].max(b[0]), a[1].max(b[1])];
+                    }
+                }
+                progress_line(&format!("  MEP onto the plans: {moved} runs moved by their sheet's registration, {left} left in place"));
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+            }
         }
         Err(e) => {
             // Spec draft failed — this is a finding, not a silent error.

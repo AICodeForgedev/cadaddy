@@ -79,7 +79,7 @@ impl SheetBox {
     }
 }
 
-fn sheets_of(sp: Option<&BuildingSpec>) -> Vec<SheetBox> {
+pub(crate) fn sheets_of(sp: Option<&BuildingSpec>) -> Vec<SheetBox> {
     let Some(sp) = sp else { return Vec::new() };
     sp.sheets
         .iter()
