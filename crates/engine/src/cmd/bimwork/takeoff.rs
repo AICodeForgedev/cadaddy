@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Model Takeoff", run)
             .alias(&["takeoffmodel"])
-            .params("{group_by?: level|trade|system|type|circuit (default level; circuit: each level's lines per branch circuit), filter?: {trade?, level?, category?, circuit?, text?} | text, compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level, circuit?, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements, element_count, status}], totals: {count, length_ft, area_sf, volume_cy}, levels, changes?: {added, removed, changed}, revision, csv, path?}")
+            .params("{group_by?: level|trade|system|type|circuit (default level; circuit: each level's lines per branch circuit) | [property key] (by the elements' properties, e.g. [\"level\", \"circuit\"]), filter?: {trade?, level?, category?, circuit?, text?} | text | {kind?, where?, key: value…} (by the elements' properties: e.g. {kind: \"device\", type: \"duplex\"}), compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level, circuit?, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements, element_count, status}], totals: {count, length_ft, area_sf, volume_cy}, levels, changes?: {added, removed, changed}, revision, csv, path?}")
             .noundo(),
         CommandSpec::new(CMD_SHOW, "Show Takeoff Line", run_show)
             .params("{line: key or index (of the last takeoff) | elements: [handle]} → {key?, selected, handles, min, max, viewpoint} — selects the elements (marked in 3D) and points the 3D camera at them")
@@ -345,6 +345,14 @@ fn write_table(cmd: &str, path: &str, rows: &[Vec<String>], sheet: &str) -> Resu
 }
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
+    // By the elements' properties (Q6003): any keys, a filter by kind or property.
+    if crate::cmd::propuse::by_properties(
+        p,
+        &["level", "trade", "system", "type", "circuit"],
+        &["trade", "level", "category", "circuit", "text", "system", "item", "unit"],
+    ) {
+        return crate::cmd::propuse::grouped(s, CMD, p);
+    }
     let group_by = str_param(p, "group_by").unwrap_or("level").to_ascii_lowercase();
     if !matches!(group_by.as_str(), "level" | "trade" | "system" | "type" | "circuit") {
         return Err(bad(CMD, "`group_by` is level, trade, system, type or circuit"));

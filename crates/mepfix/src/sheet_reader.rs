@@ -1393,6 +1393,138 @@ pub fn view_cells(d: &Drawing) -> Vec<(PlanView, [f64; 4])> {
     cells
 }
 
+/// The level views of a sheet that prints several plans of different levels, each with the part
+/// of the sheet that is its own `[x0, y0, x1, y1]` (model units): the cells of [`view_cells`],
+/// else the blocks of linework the titled views occupy ([`crate::sheet_facts::view_titles`] over
+/// a `SCALE:` line) when their titles name at least two different levels. Empty for a sheet of
+/// one view (a typical-floor plan of several levels is one view), or of views of one level.
+pub fn level_views(d: &Drawing) -> Vec<(PlanView, [f64; 4])> {
+    let cells = view_cells(d);
+    if !cells.is_empty() {
+        return cells;
+    }
+    let texts = crate::sheet_facts::texts(d);
+    let mut views: Vec<(PlanView, [f64; 4])> = Vec::new();
+    for v in crate::sheet_facts::view_titles(d, &texts) {
+        let levels = detect_levels(&v.title);
+        let Some(region) = v.region else { continue };
+        if levels.is_empty() || is_typical_sentinel(&levels) || views.iter().any(|(_, r)| *r == region) {
+            continue;
+        }
+        views.push((PlanView { title: v.title, levels, at: v.at, height: 0.0 }, region));
+    }
+    let mut distinct: Vec<&Vec<String>> = views.iter().map(|(v, _)| &v.levels).collect();
+    distinct.sort();
+    distinct.dedup();
+    if distinct.len() < 2 || views.len() > 8 {
+        return Vec::new();
+    }
+    views
+}
+
+/// Whether a sheet title calls its plan a typical one (`TYPICAL 2ND-4TH FLOOR PLAN`,
+/// `LEVELS 3-4 (TYP.)`): one plan for every level it names.
+pub fn says_typical(title: &str) -> bool {
+    title.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).any(|w| matches!(w, "TYPICAL" | "TYP"))
+}
+
+/// A block holds a plan of a several-plan sheet when it is at least this share of the largest
+/// block (cells).
+const PLAN_BLOCK_SHARE: f64 = 0.4;
+
+/// The level views of a sheet the print set says shows `levels` (two to four, no typical plan)
+/// when [`level_views`] finds no titled views: its big blocks of linework
+/// ([`crate::sheet_facts::view_regions`]), one per level, side by side or one above another.
+/// Each block's part of the sheet runs halfway to its neighbours. A block takes the level a
+/// title in its part names; else the levels go left to right (or bottom to top), lowest first.
+/// Empty unless the sheet has exactly as many big blocks as levels, in one row or column.
+pub fn level_blocks(d: &Drawing, levels: &[String]) -> Vec<(PlanView, [f64; 4])> {
+    let n = levels.len();
+    if !(2..=4).contains(&n) || is_typical_sentinel(levels) {
+        return Vec::new();
+    }
+    let mut blocks = crate::sheet_facts::view_regions(d);
+    blocks.sort_by_key(|b| std::cmp::Reverse(b.1));
+    let Some(largest) = blocks.first().map(|b| b.1 as f64) else { return Vec::new() };
+    let big: Vec<[f64; 4]> = blocks.iter().filter(|b| b.1 as f64 >= PLAN_BLOCK_SHARE * largest).map(|b| b.0).collect();
+    if big.len() != n {
+        return Vec::new();
+    }
+    // One row (no two overlap across) or one column (no two overlap up and down).
+    let apart = |axis: usize, sorted: &[[f64; 4]]| sorted.windows(2).all(|w| matches!(w, [a, b] if b[axis] >= a[axis + 2]));
+    let mut row = big.clone();
+    row.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    let mut col = big.clone();
+    col.sort_by(|a, b| a[1].total_cmp(&b[1]));
+    let (order, axis) = if apart(0, &row) {
+        (row, 0)
+    } else if apart(1, &col) {
+        // Bottom to top, as a building stacks.
+        (col, 1)
+    } else {
+        return Vec::new();
+    };
+    // Each block's part: halfway to its neighbours along the row (or column), open at the ends.
+    let cells: Vec<[f64; 4]> = (0..n)
+        .map(|i| {
+            let b = order.get(i).copied().unwrap_or_default();
+            let mut c = [f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY];
+            if axis == 0 {
+                if let Some(p) = i.checked_sub(1).and_then(|k| order.get(k)) {
+                    c[0] = (p[2] + b[0]) / 2.0;
+                }
+                if let Some(q) = order.get(i + 1) {
+                    c[2] = (b[2] + q[0]) / 2.0;
+                }
+            } else {
+                if let Some(p) = i.checked_sub(1).and_then(|k| order.get(k)) {
+                    c[1] = (p[3] + b[1]) / 2.0;
+                }
+                if let Some(q) = order.get(i + 1) {
+                    c[3] = (b[3] + q[1]) / 2.0;
+                }
+            }
+            c
+        })
+        .collect();
+    // The level each part's titles name (the largest lettering naming exactly one of `levels`).
+    let texts = crate::sheet_facts::texts(d);
+    let named: Vec<Option<(String, String, [f64; 2], f64)>> = cells
+        .iter()
+        .map(|c| {
+            texts
+                .iter()
+                .filter(|t| t.at.x >= c[0] && t.at.x <= c[2] && t.at.y >= c[1] && t.at.y <= c[3] && t.value.len() <= 60)
+                .filter_map(|t| match detect_levels(&t.value).as_slice() {
+                    [l] if levels.contains(l) => Some((l.clone(), t.value.clone(), [t.at.x, t.at.y], t.height)),
+                    _ => None,
+                })
+                .max_by(|a, b| a.3.total_cmp(&b.3))
+        })
+        .collect();
+    let mut by_title: Vec<&str> = named.iter().filter_map(|x| x.as_ref().map(|x| x.0.as_str())).collect();
+    by_title.sort_unstable();
+    by_title.dedup();
+    let titled = by_title.len() == n && named.iter().all(Option::is_some);
+    let mut sorted: Vec<String> = levels.to_vec();
+    sorted.sort_by_key(|c| (c == "R", c.parse::<u32>().unwrap_or(u32::MAX), c.clone()));
+    cells
+        .iter()
+        .zip(&order)
+        .enumerate()
+        .map(|(i, (cell, b))| {
+            let (level, title, at, height) = match named.get(i).cloned().flatten().filter(|_| titled) {
+                Some(x) => x,
+                None => {
+                    let l = sorted.get(i).cloned().unwrap_or_default();
+                    (l.clone(), format!("LEVEL {l} (plan {} of {n} on the sheet)", i + 1), [(b[0] + b[2]) / 2.0, b[1]], 0.0)
+                }
+            };
+            (PlanView { title, levels: vec![level], at, height }, *cell)
+        })
+        .collect()
+}
+
 /// Build a sheet map from a set of DXF drawings: recognise each sheet, assemble the common
 /// grid, then compute each sheet's alignment.
 pub fn build_sheet_map(drawings: &[(String, &Drawing)]) -> SheetMap {

@@ -26,6 +26,7 @@ fn sheet_region_all_levels() {
         title_block: None,
         not_built: String::new(),
         levels: vec!["2".into(), "3".into(), "4".into()],
+        view: None,
     };
     assert_eq!(r.all_levels(), vec!["2", "3", "4"]);
 
@@ -54,6 +55,7 @@ fn the_devices_stage_replicates_for_typical_floor_sheets() {
             title_block: None,
             not_built: String::new(),
             levels: Vec::new(),
+            view: None,
         });
         x0 += 200.0;
     }
@@ -69,6 +71,7 @@ fn the_devices_stage_replicates_for_typical_floor_sheets() {
         title_block: None,
         not_built: String::new(),
         levels: vec!["2".into(), "3".into(), "4".into()],
+        view: None,
     });
     // A dedicated E sheet for level 1.
     let e1_rect = [0.0, 100.0, 100.0, 180.0];
@@ -82,6 +85,7 @@ fn the_devices_stage_replicates_for_typical_floor_sheets() {
         title_block: None,
         not_built: String::new(),
         levels: Vec::new(),
+        view: None,
     });
 
     // Place a PDF-SYM symbol inside the typical sheet's rect.

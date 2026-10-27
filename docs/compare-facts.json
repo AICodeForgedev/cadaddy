@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1149,
-    "count": 1149,
+    "callableAsJson": 1156,
+    "count": 1156,
     "ids": [
       "-attedit",
       "-block",
@@ -130,12 +130,14 @@
       "bim.issue.show",
       "bim.look",
       "bim.prints",
+      "bim.props.check",
       "bim.props.fill",
       "bim.props.find",
       "bim.props.get",
       "bim.props.set",
       "bim.props.summary",
       "bim.remove_type",
+      "bim.schedule",
       "bim.set_spec",
       "bim.set_type",
       "bim.source",
@@ -743,12 +745,17 @@
       "pipes.read",
       "plan",
       "plan.classify",
+      "plan.door",
       "plan.layers",
       "plan.notes",
       "plan.openings",
+      "plan.resolve",
       "plan.rooms",
       "plan.sheets",
+      "plan.views",
+      "plan.wall",
       "plan.walls",
+      "plan.window",
       "plan.world",
       "planesurf",
       "pline",
@@ -1153,7 +1160,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 508,
+    "inMenus": 512,
     "typed": 551
   },
   "features": {

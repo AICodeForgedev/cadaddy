@@ -42,6 +42,9 @@ pub(crate) struct SheetRef {
     pub scale_text: Option<String>,
     /// Every level this sheet covers (a typical-floor plan).  Empty = only `level`.
     pub levels: Vec<String>,
+    /// The one view of a several-view sheet this is (`[x0, y0, x1, y1]`): only what lies in it
+    /// is read. None: the whole sheet.
+    pub view: Option<[f64; 4]>,
 }
 
 impl SheetRef {
@@ -152,13 +155,18 @@ pub(crate) fn sheet_drawing(d: &Drawing, sh: &SheetRef) -> Drawing {
     let mine: Vec<cadaddy_doc::Entity> = d
         .model
         .iter()
-        .filter(|e| match sh.span {
-            Some((lo, hi)) => e.handle.0 >= lo && e.handle.0 < hi,
-            None => {
+        .filter(|e| {
+            let middle = || {
                 let b = cadaddy_doc::entity_bounds(d, e, 0);
                 let (cx, cy) = ((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0);
-                cx.is_finite() && cy.is_finite() && cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1
-            }
+                (cx.is_finite() && cy.is_finite()).then_some((cx, cy))
+            };
+            let on_sheet = match sh.span {
+                Some((lo, hi)) => e.handle.0 >= lo && e.handle.0 < hi,
+                None => middle().is_some_and(|(cx, cy)| cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1),
+            };
+            // One view of a several-view sheet: its own plan only, never the other level's.
+            on_sheet && sh.view.is_none_or(|[vx0, vy0, vx1, vy1]| middle().is_some_and(|(cx, cy)| cx >= vx0 && cx <= vx1 && cy >= vy0 && cy <= vy1))
         })
         .map(|e| (**e).clone())
         .collect();
@@ -200,12 +208,16 @@ impl Placement {
 /// Where `sh`'s reading goes: onto its level's architectural floor plan when that sheet is the
 /// same size (the same title block and plan placement), else where it is; scaled up from paper
 /// size by `k`.
+/// One view of a several-view sheet goes onto the same view of a several-view architectural
+/// sheet laid out alike, else stays where it is.
 fn placement(sh: &SheetRef, all: &[SheetRef], k: f64) -> Placement {
     let size = |r: &[f64; 4]| (r[2] - r[0], r[3] - r[1]);
-    let (w, h) = size(&sh.rect);
+    let own = sh.view.unwrap_or(sh.rect);
+    let (w, h) = size(&own);
     let arch = all.iter().find(|a| {
-        let (aw, ah) = size(&a.rect);
-        a.discipline.eq_ignore_ascii_case("A")
+        let (aw, ah) = size(&a.view.unwrap_or(a.rect));
+        a.view.is_some() == sh.view.is_some()
+            && a.discipline.eq_ignore_ascii_case("A")
             && a.kind == "plan"
             && sh.kind == "plan"
             && !sh.level.is_empty()
@@ -215,8 +227,15 @@ fn placement(sh: &SheetRef, all: &[SheetRef], k: f64) -> Placement {
             && ((aw - w * k) / (w * k)).abs() < 0.02
             && ((ah - h * k) / (h * k)).abs() < 0.02
     });
-    let from = [sh.rect[0], sh.rect[1]];
-    Placement { from, to: arch.map_or(from, |a| [a.rect[0], a.rect[1]]), k }
+    let from = [own[0], own[1]];
+    Placement {
+        from,
+        to: arch.map_or(from, |a| {
+            let r = a.view.unwrap_or(a.rect);
+            [r[0], r[1]]
+        }),
+        k,
+    }
 }
 
 /// Where a sheet's placement puts it on its level's architectural floor plan (same sheet size,
@@ -620,6 +639,106 @@ fn ensure_levels(sp: &mut BuildingSpec) {
     }
 }
 
+/// Most plan sheets looked at for several level views in one drawing (a guard on hostile sets).
+const MAX_VIEW_SHEETS: usize = 400;
+
+/// One plan view of a sheet that prints several plans of different levels.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SheetViewRead {
+    pub title: String,
+    /// The view's level code (`3`), and every level it shows when it is a typical plan of
+    /// several (else empty).
+    pub level: String,
+    pub levels: Vec<String>,
+    /// Its part of the sheet `[x0, y0, x1, y1]`, inside the sheet's drawing area.
+    pub rect: [f64; 4],
+}
+
+/// For each sheet of `d` (`Some((rect, drawing area, levels))`; None: not looked at), its plan
+/// views when it prints plans of different levels (`3RD FLOOR PLAN` beside `4TH FLOOR PLAN`),
+/// lowest level first; empty for a sheet of one view. Read on the imported sheet
+/// ([`cadaddy_mepfix::sheet_reader::level_views`]), the drawing gone over once. `levels`: the
+/// levels the set says a sheet shows that is no typical plan (else empty); when its views carry
+/// no title the readers find, its blocks of linework in the drawing area split it, one per level
+/// ([`cadaddy_mepfix::sheet_reader::level_blocks`]).
+pub(crate) fn sheet_views(d: &Drawing, sheets: &[Option<([f64; 4], [f64; 4], Vec<String>)>]) -> Vec<Vec<SheetViewRead>> {
+    let mut out: Vec<Vec<SheetViewRead>> = vec![Vec::new(); sheets.len()];
+    let looked: Vec<(usize, [f64; 4], [f64; 4], &[String])> = sheets
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| s.as_ref().map(|(r, a, l)| (i, *r, *a, l.as_slice())))
+        .filter(|(_, r, a, _)| r.iter().chain(a.iter()).all(|v| v.is_finite()))
+        .take(MAX_VIEW_SHEETS)
+        .collect();
+    if looked.is_empty() {
+        return out;
+    }
+    let inside = |r: &[f64; 4], x: f64, y: f64| x >= r[0].min(r[2]) && x <= r[0].max(r[2]) && y >= r[1].min(r[3]) && y <= r[1].max(r[3]);
+    // Each object to the sheet its middle is on.
+    let mut per: Vec<Vec<cadaddy_doc::Entity>> = vec![Vec::new(); looked.len()];
+    for e in d.model.iter() {
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        if b.is_empty() {
+            continue;
+        }
+        let c = b.center();
+        if let Some(k) = looked.iter().position(|(_, r, _, _)| inside(r, c.x, c.y))
+            && let Some(v) = per.get_mut(k)
+        {
+            v.push((**e).clone());
+        }
+    }
+    let mut shell = d.clone();
+    shell.model = EntityStore::new();
+    let rank = |l: &str| (cadaddy_walk3d::levels::code_rank(l).unwrap_or(i32::MAX - 1), l.to_string());
+    for ((i, _, area, levels), ents) in looked.iter().zip(per) {
+        if ents.is_empty() {
+            continue;
+        }
+        let a = [area[0].min(area[2]), area[1].min(area[3]), area[0].max(area[2]), area[1].max(area[3])];
+        let mut sub = shell.clone();
+        sub.model.push_many(ents);
+        let mut found = cadaddy_mepfix::sheet_reader::level_views(&sub);
+        if found.is_empty() && levels.len() > 1 {
+            // Untitled views: the blocks of linework in the drawing area (not the title block's).
+            let mut area_only = shell.clone();
+            area_only.model.push_many(
+                sub.model
+                    .iter()
+                    .filter(|e| {
+                        let c = cadaddy_doc::entity_bounds(&sub, e, 0).center();
+                        inside(&a, c.x, c.y)
+                    })
+                    .map(|e| (**e).clone())
+                    .collect::<Vec<_>>(),
+            );
+            found = cadaddy_mepfix::sheet_reader::level_blocks(&area_only, levels);
+        }
+        let mut views: Vec<SheetViewRead> = found
+            .into_iter()
+            .filter_map(|(v, cell)| {
+                let level = v.levels.first()?.clone();
+                // Cells are open at the sheet's edges: a view ends at the sheet's drawing area.
+                let rect = [cell[0].max(a[0]), cell[1].max(a[1]), cell[2].min(a[2]), cell[3].min(a[3])];
+                (rect.iter().all(|x| x.is_finite()) && rect[2] > rect[0] && rect[3] > rect[1]).then(|| SheetViewRead {
+                    title: v.title,
+                    level,
+                    levels: if v.levels.len() > 1 { v.levels } else { Vec::new() },
+                    rect,
+                })
+            })
+            .collect();
+        views.sort_by_key(|v| rank(&v.level));
+        // One view left (the others fell off the sheet): the sheet is read whole.
+        if views.len() > 1
+            && let Some(slot) = out.get_mut(*i)
+        {
+            *slot = views;
+        }
+    }
+    out
+}
+
 /// The sheets of a print-set project, imported side by side into a scratch session: the plan
 /// sheets of `trade` (both when none). Their regions and handle spans, and the session.
 pub(crate) fn load_project_sheets(
@@ -638,6 +757,9 @@ pub(crate) fn load_project_plans(
     let mut wanted: Vec<SheetRef> = Vec::new();
     let mut pages: Vec<super::exchange::PdfPage> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    // Sheets titled as typical plans: one plan for every level they show, never split.
+    let typicals: std::collections::HashSet<&String> =
+        project.sheets.iter().filter(|s| cadaddy_mepfix::sheet_reader::says_typical(&s.title)).map(|s| &s.number).collect();
     for sh in project.sheets.iter().filter(|s| s.superseded_by.is_empty()) {
         let r = SheetRef {
             number: sh.number.clone(),
@@ -648,6 +770,7 @@ pub(crate) fn load_project_plans(
             span: None,
             scale_text: sh.scale_text.clone(),
             levels: sh.levels.clone(),
+            view: None,
         };
         if !keep(&r) || sh.file.is_empty() || !seen.insert((sh.file.clone(), sh.page)) || pages.len() >= MAX_SHEETS {
             continue;
@@ -683,7 +806,23 @@ pub(crate) fn load_project_plans(
         sh.span = spans.get(i).copied().flatten();
         out.push(sh);
     }
-    Ok((t, out))
+    // A sheet printing two levels' plans: one sheet per view, each read on its own level.
+    let sheets: Vec<Option<([f64; 4], [f64; 4], Vec<String>)>> =
+        out.iter().map(|r| r.is_plan().then(|| (r.rect, r.rect, if typicals.contains(&r.number) { Vec::new() } else { r.levels.clone() }))).collect();
+    let views = sheet_views(t.doc()?, &sheets);
+    let mut split = Vec::with_capacity(out.len());
+    for (r, vs) in out.into_iter().zip(views) {
+        if vs.is_empty() {
+            split.push(r);
+            continue;
+        }
+        // Each view its own sheet, named as classify names one: `<number>/<level>`.
+        let base = r.number.split('/').next().unwrap_or(&r.number).to_string();
+        for v in vs {
+            split.push(SheetRef { number: format!("{base}/{}", v.level), level: v.level, levels: v.levels, view: Some(v.rect), ..r.clone() });
+        }
+    }
+    Ok((t, split))
 }
 
 #[cfg(test)]
@@ -701,6 +840,7 @@ mod tests {
             span: None,
             scale_text: None,
             levels: Vec::new(),
+            view: None,
         }
     }
 
