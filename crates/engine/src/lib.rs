@@ -298,6 +298,9 @@ pub struct DocState {
     pub wallgen: Option<cmd::wallgen::WallGen>,
     /// The plan the model was last built from and what that build made (`model.revise`).
     pub model_record: Option<cmd::revise3d::ModelRecord>,
+    /// The last revision that found plan changes (`model.revise`, or the rebuild an associative
+    /// model does): every list whole, paged when `model.revise {last: true}` returns it.
+    pub last_revision: Option<serde_json::Value>,
     /// What opening the drawing changed and told the user (missing current styles reset): the
     /// OPEN reply lists them with its warnings, for agents that see no command-line history.
     pub open_notes: Vec<String>,
@@ -378,6 +381,7 @@ impl DocState {
             cdy_saved: None,
             wallgen: None,
             model_record: None,
+            last_revision: None,
             open_notes: Vec::new(),
             block_edit: None,
             lightmap: None,
