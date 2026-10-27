@@ -122,9 +122,11 @@ try {
       Set-SessionProperty $session 'CRAFT_USER_DIR' 'D:\Existing user app'
       Set-SessionProperty $session 'CRAFT_MACHINE_DIR' 'E:\Existing machine app'
       $action = if ($scope -eq '1') { 'CraftRestoreMachineFolder' } else { 'CraftRestoreUserFolder' }
-      if (-not $explicit) {
-        if ($session.DoAction($action) -ne 1) { throw 'Remembered-folder property action failed.' }
-      }
+      # Evaluate the compiled condition, so the test exercises it instead of calling the action directly.
+      $restore = @(Read-Rows $database ('SELECT `Condition` FROM `InstallExecuteSequence` WHERE `Action` = ''{0}''' -f $action) 1)[0]
+      $selected = $session.EvaluateCondition($restore[0]) -eq 1
+      if ($selected -eq [bool]$explicit) { throw "$action must run only when no folder was supplied (condition: $($restore[0]))." }
+      if ($selected -and $session.DoAction($action) -ne 1) { throw 'Remembered-folder property action failed.' }
       $expected = if ($explicit) { $explicit } elseif ($scope -eq '1') { 'E:\Existing machine app' } else { 'D:\Existing user app' }
       if ((Get-SessionProperty $session 'INSTALLFOLDER') -ne $expected) { throw 'Custom or remembered folder was not preserved.' }
     }
@@ -143,6 +145,11 @@ try {
   foreach ($action in @('CraftRestoreUserFolder','CraftRestoreMachineFolder')) {
     if (-not ($execute['AppSearch'] -lt $execute[$action] -and $execute[$action] -lt $execute['CostInitialize'])) {
       throw 'Silent updates must restore the folder before directory costing.'
+    }
+  }
+  foreach ($resolver in @('CraftUFromLegacyExe','CraftMFromLegacyExe')) {
+    if (-not ($execute['AppSearch'] -lt $execute[$resolver] -and $execute[$resolver] -lt $execute['LaunchConditions'])) {
+      throw 'Both legacy folder resolvers must run after AppSearch and before the launch checks.'
     }
   }
   # Switching the first-page choice must reset BOTH properties, including a back-and-forth change.
