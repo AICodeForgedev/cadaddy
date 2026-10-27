@@ -153,11 +153,26 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
 /// reviewed PDF from the file dialog. With no dialog (an agent's request, FILEDIA 0, no picker)
 /// the history says how to give the file, since a UI command's error isn't shown (battle test
 /// 0.7.8 #12: it did nothing, silently).
+///
+/// In Model space the command needs placement (`from`/`to` or `scale`+`at`); the menu echoes
+/// what to type instead of silently placing at the origin.
 fn import_markups(app: &mut CadApp, id: &str, name: &str) -> Result<Value, String> {
     app.session.echo(format!("Command: {}", id.to_ascii_uppercase()));
     let off = file_dialogs_off(app);
     match app.services.pick_pdf.as_ref().or(app.services.pick_open.as_ref()).map(|p| p()) {
-        Some(Some(path)) => app.run(id, json!({ "path": path })).inspect(|_| app.ui.dialog = Some("markups".into())),
+        Some(Some(path)) => {
+            // In Model space, prompt for placement instead of silently defaulting.
+            if app.session.space() == cadaddy_engine::doc::Space::Model {
+                let esc = path.replace('\\', "\\\\").replace('"', "\\\"");
+                app.session.echo(format!(
+                    "{name}: in Model space, specify placement. Type one of:\n  \
+                     {id} {{\"path\": \"{esc}\", \"from\": [[px1,py1],[px2,py2]], \"to\": [[x1,y1],[x2,y2]]}}\n  \
+                     {id} {{\"path\": \"{esc}\", \"scale\": 48, \"at\": [0,0]}}"
+                ));
+                return Err(format!("{name}: pass `from`/`to` or `scale`+`at` in Model space"));
+            }
+            app.run(id, json!({ "path": path })).inspect(|_| app.ui.dialog = Some("markups".into()))
+        }
         // Cancelled.
         Some(None) if !off && !crate::dialog_refused() => Ok(Value::Null),
         _ => {
