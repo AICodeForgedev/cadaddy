@@ -26,7 +26,7 @@ permissions:
 jobs:
   windows-arm64:
     # Immutable supporting workflow revision until the new install contract lands upstream.
-    uses: Jeremy8776/craft-common-actions/.github/workflows/windows-arm64.yml@f4666d5cbf35f9bdeda24f1f88c7fb5c6adf5276
+    uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@8bb4e5ab95443171104ad88113fe1ef9b0e5ce3f
     with:
       app-name: cadcraft
       app-dir: CADCraft
