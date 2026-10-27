@@ -3235,6 +3235,15 @@
 	Sequence Trade Conflicts	Conflictos entre oficios en la secuencia
 	Ceiling Space Fit	Espacio en el plénum del techo
 	Takeoff by Activity	Medición por actividad
+	BIM	BIM
+	Door	Puerta
+	Wall	Muro
+	Plan Views	Vistas de planta
+	Generate Plan Views	Generar vistas de planta
+	Draw Wall (Object)	Dibujar muro (objeto)
+	Place Door in Wall	Colocar puerta en muro
+	Place Window in Wall	Colocar ventana en muro
+	Resolve Plan Entity	Resolver elemento de planta
 	Record As-Built Change	Registrar cambio de obra ejecutada
 	Import As-Built Markups	Importar marcas de obra ejecutada
 	List As-Built Changes	Listar cambios de obra ejecutada

@@ -3017,6 +3017,15 @@
 	Sequence Trade Conflicts	Conflits entre corps d’état
 	Ceiling Space Fit	Espace du plénum de plafond
 	Takeoff by Activity	Métré par activité
+	BIM	BIM
+	Door	Porte
+	Wall	Mur
+	Plan Views	Vues en plan
+	Generate Plan Views	Générer les vues en plan
+	Draw Wall (Object)	Dessiner mur (objet)
+	Place Door in Wall	Insérer porte dans le mur
+	Place Window in Wall	Insérer fenêtre dans le mur
+	Resolve Plan Entity	Résoudre l'élément du plan
 	Record As-Built Change	Enregistrer une modification de récolement
 	Import As-Built Markups	Importer les annotations de récolement
 	List As-Built Changes	Lister les modifications de récolement
