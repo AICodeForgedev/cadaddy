@@ -173,8 +173,8 @@ fn civil_landscape_and_site_plans_are_on_the_site_never_the_lowest_storey() {
     assert_eq!(level("C3.1"), "SITE");
     assert_eq!(level("L1.0"), "SITE");
     assert_eq!(level("A010"), "SITE");
-    // A building plan naming no level still takes the lowest, to be confirmed.
-    assert_eq!(level("P-201"), "1");
+    // A building plan naming no level in a building of several levels: no level, asked.
+    assert_eq!(level("P-201"), "");
     assert_eq!(index.plans_without_level, ["P-201"]);
     let names: Vec<&str> = index.levels.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(names, ["1", "2"], "the site is no storey");
