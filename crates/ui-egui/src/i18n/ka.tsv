@@ -153,6 +153,7 @@
 	Close All Other Drawings	ყველა სხვა ნახაზის დახურვა
 	Closed	შეკრული
 	Close Comparison	შედარების დახურვა
+	Export Comparison	შედარების ექსპორტი
 	Coincident	დამთხვევა
 	Collapse Palettes	პალიტრების ჩაკეცვა
 	Collapse Tool Sets	ხელსაწყოთა ნაკრებების ჩაკეცვა
@@ -200,6 +201,7 @@
 	Current selection	მიმდინარე მონიშნული
 	Current: {color}	მიმდინარე: {color}
 	Cut	ამოჭრა
+	Cut with Base Point	ამოჭრა საბაზო წერტილით
 	Cyan	ცისფერი
 	Cylinder	ცილინდრი
 	DWG	DWG
@@ -264,6 +266,7 @@
 	Drawing Template (DWT)	ნახაზის შაბლონი (DWT)
 	Drawing Utilities	ნახაზის უტილიტები
 	Drawings (DWG, DXF)	ნახაზები (DWG, DXF)
+	AutoLISP (LSP)	AutoLISP (LSP)
 	SVG drawings (SVG, SVGZ)	SVG ნახაზები (SVG, SVGZ)
 	Dynamic	დინამიკური
 	Dynamic Dimensions	დინამიკური ზომები
@@ -572,7 +575,7 @@
 	New Viewports...	ახალი ხედვის არეები...
 	New from Template...	ახალი შაბლონიდან...
 	New layout	ახალი განლაგება
-	New state name	ახალი მდგომარეობა
+	New state name	მდგომარეობის ახალი სახელი
 	Next Change	შემდეგი ცვლილება
 	No	არა
 	No blocks defined in this drawing.	ამ ნახაზში ბლოკები არ არის განსაზღვრული.
@@ -756,6 +759,7 @@
 	Rename Text Style	ტექსტის სტილის სახელის შეცვლა
 	Rename...	სახელის შეცვლა...
 	Repeat {command}	გამეორება: {command}
+	Replace Block...	ბლოკის ჩანაცვლება...
 	Requires a point (x,y, @dx,dy or @d<a).	საჭიროა წერტილი (x,y, @dx,dy ან @d<a).
 	Reset Palettes	პალიტრების ჩამოყრა
 	Restore	აღდგენა
@@ -991,7 +995,7 @@
 	Units of new drawings	ახალი ნახაზების ერთეულები
 	Imperial (inches)	იმპერიული (დუიმები)
 	Metric (millimetres)	მეტრული (მილიმეტრები)
-	New and the first drawing at startup use these units unless a default template is set (QNEWTEMPLATE).	ახალი ნახაზი და გაშვებისას გახსნილი პირველი ნახაზი ამ ერთეულებს იყენებს, თუ ნაგულისხმევი შაბლონი არ არის მითითებული (QNEWTEMPLATE).
+	New and the first drawing at startup use these units unless a default template is set (QNEWTEMPLATE).	„ახალი“ და გაშვებისას პირველი ნახაზი ამ ერთეულებს იყენებს, თუ ნაგულისხმევი შაბლონი არ არის მითითებული (QNEWTEMPLATE).
 	Screen magnifiers, screen readers and recorders follow the system cursor.	ეკრანის გამადიდებლები, ეკრანის წამკითხველები და ჩამწერები სისტემის კურსორს მიჰყვება.
 	Select objects first, then choose a command	ჯერ მონიშნეთ ობიექტები, შემდეგ აირჩიეთ ბრძანება
 	Selection	მონიშვნა
@@ -1258,6 +1262,9 @@
 	Convert to Line	ხაზად გარდაქმნა
 	Stretch Vertex	წვეროს გაწელვა
 	Edit Array	მასივის რედაქტირება
+	Save changes to {name}?	შევინახო ცვლილებები ნახაზში {name}?
+	Your changes will be lost if you don't save them.	თუ ცვლილებებს არ შეინახავთ, ისინი დაიკარგება.
+	Don't Save	არ შეინახო
 	Close Array Editing	მასივის რედაქტირების დახურვა
 	Multiline...	მულტიხაზი...
 	Multiline Style...	მულტიხაზის სტილი...
@@ -1303,6 +1310,45 @@
 	Curved	მრუდი
 	Spherical	სფერული
 	Hemispherical	ნახევარსფერული
+	Drawing Units	ნახაზის ერთეულები
+	Insertion scale	ჩასმის მასშტაბი
+	Units to scale inserted content	ჩასმული შიგთავსის მასშტაბირების ერთეულები
+	Sample output	გამოტანის ნიმუში
+	Architectural	არქიტექტურული
+	Decimal	ათწილადი
+	Engineering	საინჟინრო
+	Fractional	წილადური
+	Scientific	სამეცნიერო
+	Decimal Degrees	ათწილადი გრადუსები
+	Deg/Min/Sec	გრადუსი/წუთი/წამი
+	Grads	გრადი
+	Radians	რადიანი
+	Surveyor's Units	გეოდეზიური ერთეულები
+	Unitless	ერთეულის გარეშე
+	Inches	დუიმი
+	Feet	ფუტი
+	Miles	მილი
+	Millimeters	მილიმეტრი
+	Centimeters	სანტიმეტრი
+	Meters	მეტრი
+	Kilometers	კილომეტრი
+	Microinches	მიკროდუიმი
+	Mils	დუიმის მეათასედი
+	Yards	იარდი
+	Angstroms	ანგსტრემი
+	Nanometers	ნანომეტრი
+	Microns	მიკრონი
+	Decimeters	დეციმეტრი
+	Decameters	დეკამეტრი
+	Hectometers	ჰექტომეტრი
+	Gigameters	გიგამეტრი
+	Astronomical Units	ასტრონომიული ერთეული
+	Light Years	სინათლის წელი
+	Parsecs	პარსეკი
+	US Survey Feet	აშშ გეოდეზიური ფუტი
+	US Survey Inch	აშშ გეოდეზიური დუიმი
+	US Survey Yard	აშშ გეოდეზიური იარდი
+	US Survey Mile	აშშ გეოდეზიური მილი
 	Inverted	შებრუნებული
 	Centered	ცენტრში
 	Hatch origin	დაშტრიხვის საწყისი წერტილი
@@ -1318,6 +1364,7 @@
 	Add: Pick points	დამატება: წერტილების არჩევა
 	Add: Select objects	დამატება: ობიექტების მონიშვნა
 	Boundaries picked: {n}	არჩეული საზღვრები: {n}
+	Associate	ასოცირება
 	Select boundaries to remove	მონიშნეთ მოსაშორებელი საზღვრები
 	Island	კუნძული
 	Associative	ასოციაციური
@@ -1370,6 +1417,9 @@
 	Discard	მოშორება
 	Customize	მორგება
 	Edit Command Aliases (PGP)...	ბრძანებების ფსევდონიმების რედაქტირება (PGP)...
+	Check for Updates…	განახლებების შემოწმება…
+	CADCraft is up to date.	CADCraft განახლებულია.
+	Could not check for updates.	განახლებების შემოწმება ვერ მოხერხდა.
 	B	B
 	CADCraft	CADCraft
 	X	X
