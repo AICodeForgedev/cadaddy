@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (DXF/DWG save keeps a landscape media's paper size order and plot rotation) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (LAYOUT SAveas writes a layout as a DWT template) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -108,7 +108,7 @@ on read with a note, so such files no longer exceed the DXF limit (#1482). **DWG
 
 | Format | AutoCAD 2027 | CADCraft | Hours to parity (est.) |
 |---|---|---|---|
-| DWT templates | open, save | NEW/QNEW from `.dwt` and `.dxf` templates, SAVEAS `.dwt` (#552) | 0–1 |
+| DWT templates | open, save | NEW/QNEW from `.dwt` and `.dxf` templates, SAVEAS `.dwt` (#552); LAYOUT SAveas writes one layout and the named objects it uses as a `.dwt` (`layout.saveas`) | 0–1 |
 | DWS standards | open, save, CHECKSTANDARDS | no | 6–10 |
 | PDF output (PLOT, EXPORTPDF) | multi-sheet, layers, searchable text, hyperlinks | vector PDF with lineweights, real text in embedded TrueType subsets, layers (OCG), several sheets per file and hyperlinks (#567, #571); object transparency as PDF alpha when "Plot transparency" is on (the option isn't saved in DXF/DWG: no public plot layout flag) | 1–2 |
 | PDF import (PDFIMPORT) and PDF underlays (PDFATTACH) | yes | no | 15–25 |
@@ -140,6 +140,7 @@ our output in AutoCAD black-box.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | LAYOUT SAveas (`layout.saveas`) writes a layout as a drawing template: its page setup and paper space objects, no model space objects or other layouts, and only the named objects they use |
 | 2026-10-23 | minor | DXF/DWG save: a layout whose media is named wider than tall (`ISO_full_bleed_A3_(420.00_x_297.00_MM)`) keeps its paper size in that order (44 = 420, 45 = 297) and its plot rotation relative to the media, instead of a portrait size with rotation 1 that ZWCAD plotted as a shrunk portrait page (#1463); other media are written as before |
 | 2026-10-22 | minor | DXF/DWG save: angular, diametric and radial dimensions get standard DIMASSOC objects (one centre reference to the circle for radial/diametric, the definition points for angular), so AutoCAD follows their geometry; the standard objects of those kinds are read back too, without CADCraft's xdata (#1651) |
 | 2026-10-19 | minor | DXF/DWG save: angular dimension block text honors DIMDSEP, including per-dimension overrides (#1646) |
