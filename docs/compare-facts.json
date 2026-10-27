@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1157,
-    "count": 1157,
+    "callableAsJson": 1158,
+    "count": 1158,
     "ids": [
       "-attedit",
       "-block",
@@ -1018,6 +1018,7 @@
       "tablestyle.cellstyle",
       "tags.accept",
       "tags.list",
+      "tags.read",
       "tags.set",
       "takeoff",
       "takeoff.layers",
