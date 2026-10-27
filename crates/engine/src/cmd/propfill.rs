@@ -223,8 +223,8 @@ pub(crate) fn legend_types(d: &Drawing, marks: &[String]) -> BTreeMap<String, (S
     if wanted.is_empty() {
         return BTreeMap::new();
     }
-    let ents = super::bspec::plan_objects(d);
-    let texts: Vec<(String, Vec2, f64)> = super::perceive::texts(&ents)
+    let ents = super::bspec::plan_text_objects(d);
+    let texts: Vec<(String, Vec2, f64)> = super::perceive::texts_and_tags(&ents)
         .into_iter()
         .map(|(_, t, p, h)| (t, p, h))
         .filter(|(t, p, h)| !t.trim().is_empty() && p.is_finite() && h.is_finite() && *h > 0.0)
@@ -333,8 +333,8 @@ fn note_kinds(up: &str) -> Vec<&'static str> {
 /// of the sheet), else a general note's for its kind of device, else the kind's usual height
 /// (marked default).
 pub fn mount_heights(d: &Drawing, marks: &[String]) -> BTreeMap<String, Height> {
-    let ents = super::bspec::plan_objects(d);
-    let texts = super::perceive::texts(&ents);
+    let ents = super::bspec::plan_text_objects(d);
+    let texts = super::perceive::texts_and_tags(&ents);
     let wanted: Vec<String> = marks.iter().map(|m| m.trim().to_ascii_uppercase()).filter(|m| !m.is_empty()).collect();
     let mut legend: BTreeMap<String, Height> = BTreeMap::new();
     let mut by_note: BTreeMap<&'static str, Height> = BTreeMap::new();
@@ -899,6 +899,34 @@ fn airflow_at(grid: &TextGrid, sp: &BuildingSpec, p: Vec2, level: Option<&str>, 
     None
 }
 
+/// A terminal's airflow from its schedule when its plan prints none: the type mark beside it on
+/// any of its sheets' views (`CD-1`) and that mark's row's CFM cell (`CFM`, `MAX CFM`, `AIRFLOW`).
+/// The airflow, the mark and where the row is printed.
+fn scheduled_airflow(grid: &TextGrid, sp: &BuildingSpec, schedules: &Rows, p: Vec2, level: Option<&str>, upf: f64) -> Option<(f64, String, String)> {
+    if schedules.is_empty() {
+        return None;
+    }
+    for q in views(sp, p, level) {
+        for (t, _, _) in grid.near(q, TERM_TAG_FT * upf) {
+            if !terminal_type_tag(t) {
+                continue;
+            }
+            let mark = t.trim().to_ascii_uppercase();
+            let Some((row, place)) = schedules.get(&mark) else { continue };
+            let cfm = row.iter().find_map(|(k, v)| {
+                let k = k.to_ascii_uppercase();
+                (k.contains("CFM") || k.contains("AIRFLOW") || k.contains("AIR FLOW"))
+                    .then(|| cfm_in(v).or_else(|| airflow_number(v.split(['-', '/', ' ']).next().unwrap_or(""))))
+                    .flatten()
+            });
+            if let Some(c) = cfm {
+                return Some((c, mark, place.clone()));
+            }
+        }
+    }
+    None
+}
+
 /// A schedule row given to the fill: its tag (upper case) → the row (column → text) and where
 /// it is printed (`AIR HANDLING UNIT SCHEDULE M-601`).
 pub(crate) type Rows = HashMap<String, (Vec<(String, String)>, String)>;
@@ -1212,12 +1240,15 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
     // The rooms (the build's, or the plan's), in model coordinates.
     // The plan's texts, for room and door numbers, airflows and fixture tags.
     let texts: Vec<(String, Vec2, f64)> = {
-        let plan = super::bspec::plan_objects(s.doc()?);
-        super::perceive::texts(&plan).into_iter().map(|(_, t, p, h)| (t, p, h)).filter(|(t, _, _)| !t.is_empty()).collect()
+        let plan = super::bspec::plan_text_objects(s.doc()?);
+        super::perceive::texts_and_tags(&plan).into_iter().map(|(_, t, p, h)| (t, p, h)).filter(|(t, _, _)| !t.is_empty()).collect()
     };
     // A room element whose tag gave no number: the room number printed inside it.
     let rooms_numbered = number_rooms(s.doc_mut()?, &sp, &texts);
-    let rooms3 = super::rooms3d::rooms(s).unwrap_or_default();
+    let (rooms3, rooms_error) = match super::rooms3d::rooms(s) {
+        Ok(r) => (r, None),
+        Err(e) => (Vec::new(), Some(e.to_string())),
+    };
     let rooms: Vec<RoomShape> = room_shapes(s.doc()?, &rooms3);
     let fixtures_placed = place_fixtures(s.doc_mut()?, &sp, schedules, &texts);
     let d = s.doc()?;
@@ -1447,6 +1478,14 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
                         if let Some((cfm, q, how)) = airflow_at(&grid, &sp, at_plan, lvl, upf) {
                             let src = Source::print(&sheet_at(&sp, q, lvl), Some([q.x, q.y]));
                             put(&mut store, "cfm", Prop::new(cfm, src).with_unit("cfm").with_note(how), tally);
+                        } else if let Some((cfm, mark, place)) = scheduled_airflow(&grid, &sp, schedules, at_plan, lvl, upf) {
+                            let note = format!("the airflow on the schedule's {mark} row (the type printed beside the terminal)");
+                            put(
+                                &mut store,
+                                "cfm",
+                                Prop::new(cfm, Source::from_doc(SourceKind::Schedule, &place)).with_unit("cfm").with_note(&note),
+                                tally,
+                            );
                         }
                         if let Some((r, _)) = room_near(&rooms, lvl, b.center(), NEAR_ROOM_FT * upf) {
                             put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()), tally);
@@ -1510,7 +1549,7 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
     for r in &rooms {
         *room_levels.entry(r.level.clone().unwrap_or_default()).or_default() += 1;
     }
-    let diagnostics = json!({
+    let mut diagnostics = json!({
         "rooms": rooms.len(),
         "rooms_labelled": rooms.iter().filter(|r| !r.label.trim().is_empty()).count(),
         "rooms_numbered_from_text": rooms_numbered,
@@ -1520,7 +1559,12 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows) -> Result<Value> {
         "fixture_rows": fixture_rows(schedules).len(),
         "terminals": terminals,
         "texts": text_count,
+        "room_elements": super::bspec::room_elements(s.doc()?).len(),
+        "drawing_objects": s.doc()?.model.len(),
     });
+    if let Some(e) = rooms_error {
+        diagnostics["rooms_error"] = json!(e);
+    }
     Ok(json!({ "filled": filled, "elements": changed, "fixtures_placed": fixtures_placed, "spec": stored, "diagnostics": diagnostics }))
 }
 

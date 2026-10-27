@@ -3191,14 +3191,26 @@ fn equipment_schedule_rows(job: &GuidedJob) -> (Vec<Value>, Value) {
     };
     let text = |sh: &Value, k: &str| sh.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let mut seen = std::collections::HashSet::new();
-    let wanted: Vec<(String, super::exchange::PdfPage)> = list
-        .iter()
-        .filter(|sh| text(sh, "superseded_by").is_empty())
-        .filter(|sh| {
-            let kind = if text(sh, "type").is_empty() { text(sh, "sheet_type") } else { text(sh, "type") };
-            let disc = text(sh, "discipline").to_ascii_uppercase();
-            kind == "schedule" && text(sh, "title").to_ascii_uppercase().contains("SCHEDULE") && matches!(disc.as_str(), "M" | "P" | "H" | "FP")
-        })
+    // A mechanical or plumbing sheet titled with SCHEDULE, whatever its type ("DETAILS AND
+    // SCHEDULES"), first; then the trades' other schedule-type sheets (legends and notes print
+    // equipment tables too). The discipline from the number when the list has none (`M-601`).
+    let trade = |sh: &Value| {
+        let mut disc = text(sh, "discipline").trim().to_ascii_uppercase();
+        if disc.is_empty() {
+            disc = text(sh, "number").trim().to_ascii_uppercase().chars().take_while(char::is_ascii_alphabetic).collect();
+        }
+        matches!(disc.as_str(), "M" | "P" | "H" | "FP" | "MP" | "MH" | "PL")
+    };
+    let rank = |sh: &Value| {
+        let kind = if text(sh, "type").is_empty() { text(sh, "sheet_type") } else { text(sh, "type") };
+        if text(sh, "title").to_ascii_uppercase().contains("SCHEDULE") { Some(0) } else { (kind == "schedule").then_some(1) }
+    };
+    let mut ranked: Vec<(u8, &Value)> =
+        list.iter().filter(|sh| text(sh, "superseded_by").is_empty() && trade(sh)).filter_map(|sh| rank(sh).map(|r| (r, sh))).collect();
+    ranked.sort_by_key(|(r, _)| *r);
+    let wanted: Vec<(String, super::exchange::PdfPage)> = ranked
+        .into_iter()
+        .map(|(_, sh)| sh)
         .filter_map(|sh| {
             let file = text(sh, "file");
             let page = sh.get("page").and_then(Value::as_u64).filter(|p| *p >= 1).unwrap_or(1);
@@ -3240,10 +3252,18 @@ fn equipment_schedule_rows(job: &GuidedJob) -> (Vec<Value>, Value) {
         let sub = super::printmep::sheet_drawing(d, &sheet);
         for table in cadaddy_mepfix::equip_reader::read_tables(&sub, number) {
             tables += 1;
-            let Some(key) = table.columns.iter().find(|c| {
+            // The tag column: TAG or MARK, else a unit number, else an air device's SYMBOL or TYPE.
+            let rank = |c: &String| {
                 let c = c.trim().to_ascii_uppercase();
-                c.contains("TAG") || c.contains("MARK") || c == "UNIT" || c == "NO." || c == "NO"
-            }) else {
+                if c.contains("TAG") || c.contains("MARK") {
+                    Some(0)
+                } else if c == "UNIT" || c == "NO." || c == "NO" {
+                    Some(1)
+                } else {
+                    (c == "SYMBOL" || c == "TYPE").then_some(2)
+                }
+            };
+            let Some(key) = table.columns.iter().filter_map(|c| rank(c).map(|r| (r, c))).min_by_key(|(r, _)| *r).map(|(_, c)| c) else {
                 continue;
             };
             for row in &table.rows {

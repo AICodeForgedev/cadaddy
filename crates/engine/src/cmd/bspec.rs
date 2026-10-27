@@ -26,6 +26,9 @@ const MAX_HANDLES: usize = 50;
 const MAX_ROOMS: usize = 2_000;
 /// Objects looked at per build, at most (hostile drawings).
 const MAX_OBJECTS: usize = 200_000;
+/// Objects looked through for the plan's texts, and texts kept, at most (hostile drawings).
+const MAX_TEXT_SCAN: usize = 5_000_000;
+const MAX_TEXTS: usize = 400_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -85,6 +88,24 @@ fn report(issues: &[Issue]) -> Value {
 /// The plan's objects (not what a build made), at most [`MAX_OBJECTS`].
 pub(crate) fn plan_objects(d: &Drawing) -> Vec<&Arc<Entity>> {
     d.model.iter().filter(|e| wallgen::made_as(e).is_none()).take(MAX_OBJECTS).collect()
+}
+
+/// The plan's texts (TEXT, MTEXT) and inserts with attributes (a symbol whose tag the PDF import
+/// put in its TAG attribute), the whole drawing through: a print set imported sheet by sheet is
+/// more than [`plan_objects`]' first [`MAX_OBJECTS`] objects, and the later sheets' room
+/// numbers, door tags and airflows were never read.
+pub(crate) fn plan_text_objects(d: &Drawing) -> Vec<&Arc<Entity>> {
+    d.model
+        .iter()
+        .take(MAX_TEXT_SCAN)
+        .filter(|e| match &e.kind {
+            EntityKind::Text(_) | EntityKind::MText(_) => true,
+            EntityKind::Insert(i) => !i.attribs.is_empty(),
+            _ => false,
+        })
+        .filter(|e| wallgen::made_as(e).is_none())
+        .take(MAX_TEXTS)
+        .collect()
 }
 
 /// The centre of an object on the sheet.
@@ -745,7 +766,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         return Ok(Vec::new());
     }
     let d = s.doc()?;
-    let ents = plan_objects(d);
+    let ents = plan_text_objects(d);
     let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
     let plan = room_plan(s)?;
     let plan = plan.as_ref().unwrap_or(s);
@@ -1219,7 +1240,7 @@ fn add_room_elements(
     }
     // The plan's texts, for the finish codes written inside a room.
     let notes: Vec<(Vec2, String)> = {
-        let plan = plan_objects(d);
+        let plan = plan_text_objects(d);
         let texts: Vec<&Arc<Entity>> =
             plan.into_iter().filter(|e| matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_))).take(MAX_OBJECTS).collect();
         super::perceive::texts(&texts).into_iter().map(|(_, t, at, _)| (at, t)).filter(|(at, t)| at.is_finite() && !t.is_empty()).collect()

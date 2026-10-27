@@ -7,7 +7,7 @@ use cadaddy_engine::cmd::propfill::{
     airflow_number, cfm_in, device_class, device_type_of, door_number, level_key, mount_height_in, panel_of, terminal_type_tag,
 };
 use cadaddy_engine::cmd::wallgen::made_as;
-use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Handle, Line, RawTag};
+use cadaddy_engine::doc::{Attrib, AttribModes, AttribProps, Block, Drawing, Entity, EntityKind, Handle, Insert, Line, RawTag};
 use cadaddy_engine::geom::{Vec2, Vec3};
 use cadaddy_mepfix::generate_hotel;
 use cadaddy_mepfix::hotel::HotelSize;
@@ -106,9 +106,19 @@ fn plan() -> Session {
 /// [`plan`]; `on_e_sheet`: the set's sheets side by side (the plan on A-101, an electrical plan
 /// E-101 of the same size to its right) and one more device read on E-101.
 fn plan_with(on_e_sheet: bool) -> Session {
+    plan_from(on_e_sheet, 0)
+}
+
+/// [`plan_with`] with `filler` short lines between the walls and the texts (a print set imported
+/// sheet by sheet: the later sheets' texts come after many objects).
+fn plan_from(on_e_sheet: bool, filler: usize) -> Session {
     let mut d = Drawing::new_imperial();
     room(&mut d, 0.0);
     room(&mut d, 30.0);
+    for i in 0..filler {
+        let y = -40.0 - (i % 100) as f64 * 0.01;
+        line(&mut d, "G-ANNO", (-50.0, y), (-49.9, y));
+    }
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Floor Plan", None);
     text(&mut s, "A-ROOM-TAG", [110.0, 64.0], "OFFICE");
@@ -703,4 +713,90 @@ fn a_room_without_a_numbered_tag_takes_the_number_printed_inside_it() {
     assert_eq!(device_of(&mut s, "A")["room"]["value"], "101", "the device in it gets its number");
     let sum = s.execute("bim.props.summary", &json!({})).expect("summary");
     assert_eq!(sum["kinds"]["room"]["filled"]["number"], json!(2), "{:#}", sum["kinds"]["room"]);
+}
+
+#[test]
+fn texts_past_the_first_two_hundred_thousand_objects_are_read() {
+    // Q6002 round 3: the fill and the build's room tracing read the plan's texts from the first
+    // 200,000 objects only; a whole print set is more, so its later sheets gave no room numbers.
+    let mut s = plan_from(false, 200_000);
+    let rooms: Vec<String> = {
+        let d = s.doc().expect("doc");
+        assert!(d.model.len() > 200_000, "the texts come after the first 200,000 objects");
+        d.model.iter().filter(|e| made_as(e).as_deref() == Some("room")).map(|e| e.handle.hex()).collect()
+    };
+    assert_eq!(rooms.len(), 2, "the build traces both rooms from their tags: {rooms:?}");
+    let r = fill(&mut s);
+    assert!(r["diagnostics"]["drawing_objects"].as_u64().unwrap_or(0) > 200_000, "{r:#}");
+    assert_eq!(r["diagnostics"]["room_elements"], json!(2), "{r:#}");
+    let numbers: Vec<Value> = rooms.iter().map(|h| get(&mut s, h)["number"]["value"].clone()).collect();
+    assert!(numbers.contains(&json!("101")) && numbers.contains(&json!("102")), "{numbers:?}");
+    assert_eq!(device_of(&mut s, "A")["room"]["value"], "101");
+    let terminals = find(&mut s, "fixture", json!({"cfm": "exists"}));
+    assert_eq!(terminals.len(), 1, "the diffuser's airflow, printed after the filler: {r:#}");
+    assert_eq!(get(&mut s, &terminals[0])["cfm"]["value"], json!(150.0));
+    let sum = s.execute("bim.props.summary", &json!({})).expect("summary");
+    assert_eq!(sum["kinds"]["room"]["filled"]["number"], json!(2), "{:#}", sum["kinds"]["room"]);
+}
+
+#[test]
+fn a_terminal_tag_held_in_a_symbol_gives_its_airflow_from_the_schedule() {
+    // Q6002 round 3: the PDF import puts a tag drawn beside a repeated symbol in the symbol's
+    // TAG attribute (at the origin), so `CD-1` is no text of its own; with no airflow printed,
+    // the schedule's CD-1 row gives it.
+    let mut s = plan();
+    let style = {
+        let d = s.doc_mut().expect("doc");
+        let cfm =
+            d.model.iter().find(|e| matches!(&e.kind, EntityKind::Text(t) if t.value == "150 CFM")).map(|e| e.handle).expect("the printed airflow");
+        let style = d.model.iter().find_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t.clone()) } else { None }).expect("a text");
+        d.remove_entity(cfm);
+        let mut b = Block::new("PDF-SYM-1");
+        let h = d.new_handle();
+        b.entities.push(Entity::new(h, EntityKind::Line(Line { a: Vec3::new(-4.0, 0.0, 0.0), b: Vec3::new(4.0, 0.0, 0.0) })));
+        d.blocks.insert("PDF-SYM-1".into(), std::sync::Arc::new(b));
+        let tag = Attrib {
+            tag: "TAG".into(),
+            text: cadaddy_engine::doc::Text { value: "CD-1".into(), insert: Vec3::new(0.0, 0.0, 0.0), align_pt: None, ..style.clone() },
+            invisible: false,
+            constant: false,
+            prompt: String::new(),
+            props: AttribProps::default(),
+            multiline: None,
+            modes: AttribModes::default(),
+        };
+        let ins = Insert {
+            block: "PDF-SYM-1".into(),
+            insert: Vec3::new(1500.0, 520.0, 0.0),
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: vec![tag],
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+            clip: None,
+        };
+        let h = d.new_handle();
+        let mut e = Entity::new(h, EntityKind::Insert(ins));
+        e.common.layer = "M-ANNO".into();
+        d.model.push(e);
+        style
+    };
+    assert_eq!(style.height, 6.0);
+    let rows = json!([{"tag": "CD-1", "sheet": "M-601", "title": "AIR DEVICE SCHEDULE",
+                       "row": {"TYPE": "CD-1", "NECK SIZE": "8\"", "CFM": "225"}}]);
+    let r = s.execute("bim.props.fill", &json!({"schedules": rows})).expect("fill");
+    let terminals = find(&mut s, "fixture", json!({"cfm": "exists"}));
+    assert_eq!(terminals.len(), 1, "{r:#}");
+    let t = get(&mut s, &terminals[0]);
+    assert_eq!(t["cfm"]["value"], json!(225.0), "{t:#}");
+    assert_eq!(t["cfm"]["source"]["kind"], "schedule");
+    assert_eq!(t["cfm"]["source"]["doc"], "AIR DEVICE SCHEDULE M-601");
+    // No schedule row: the tag alone gives no airflow.
+    let mut bare = plan();
+    let cfm = bare.doc().expect("doc").model.iter().find(|e| matches!(&e.kind, EntityKind::Text(t) if t.value == "150 CFM")).map(|e| e.handle);
+    bare.doc_mut().expect("doc").remove_entity(cfm.expect("the printed airflow"));
+    fill(&mut bare);
+    assert!(find(&mut bare, "fixture", json!({"cfm": "exists"})).is_empty());
 }

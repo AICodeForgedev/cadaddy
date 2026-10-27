@@ -185,6 +185,26 @@ pub(crate) fn texts(ents: &[&std::sync::Arc<Entity>]) -> Vec<(cadaddy_doc::Handl
     out
 }
 
+/// [`texts`] and the inserts' attribute values (a symbol's tag: the PDF import puts a tag drawn
+/// beside a repeated symbol in the symbol's TAG attribute, so `CD-1`, `WC-1` or a door's `101A`
+/// is no text of its own). An attribute placed at the origin stands at its insert.
+pub(crate) fn texts_and_tags(ents: &[&std::sync::Arc<Entity>]) -> Vec<(cadaddy_doc::Handle, String, Vec2, f64)> {
+    let mut out = texts(ents);
+    for e in ents {
+        let EntityKind::Insert(i) = &e.kind else { continue };
+        for a in i.attribs.iter().filter(|a| !a.invisible) {
+            let v = a.text.value.trim();
+            if v.is_empty() {
+                continue;
+            }
+            let at = a.text.justify_point();
+            let at = if at.x.abs() + at.y.abs() < 1e-9 { i.insert.xy() } else { at };
+            out.push((e.handle, v.to_string(), at, a.text.height));
+        }
+    }
+    out
+}
+
 /// A feet-and-inches height in `s` (`9'-0"`, `8'6"`, `10'`, `96"`), in inches.
 pub(crate) fn feet_inches(s: &str) -> Option<f64> {
     let chars: Vec<char> = s.chars().collect();
