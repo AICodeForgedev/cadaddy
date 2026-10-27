@@ -118,7 +118,7 @@ fn linetype(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
     let mut action = None;
     egui::Window::new("Linetype Manager").open(open).default_size(vec2(520.0, 360.0)).resizable(true).show(ctx, |ui| {
         ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("ltmgr_load").selected_text("Load...").width(110.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("ltmgr_load").selected_text("Load...").width(110.0).show_ui(ui, |ui| {
                 if library.is_empty() {
                     ui.label("Every library linetype is loaded.");
                 } else if ui.selectable_label(false, "All").clicked() {
@@ -445,7 +445,7 @@ fn style_manager(ctx: &egui::Context, open: &mut bool, title: &str, cmd: &'stati
                         Field::Choice(key, label, v, choices) => {
                             ui.label(*label);
                             let mut picked = None;
-                            egui::ComboBox::from_id_salt((cmd, *key)).selected_text(v.as_str()).show_ui(ui, |ui| {
+                            craft_ui::ComboBox::from_id_salt((cmd, *key)).selected_text(v.as_str()).show_ui(ui, |ui| {
                                 for c in choices {
                                     if ui.selectable_label(c == v, c).clicked() && c != v {
                                         picked = Some(c.clone());
@@ -599,7 +599,7 @@ fn page_rows(
 ) -> Option<(&'static str, Value)> {
     let mut change = None;
     ui.label("Printer/plotter");
-    egui::ComboBox::from_id_salt(salt.with("device")).selected_text(device_label(page)).width(190.0).show_ui(ui, |ui| {
+    craft_ui::ComboBox::from_id_salt(salt.with("device")).selected_text(device_label(page)).width(190.0).show_ui(ui, |ui| {
         if ui.selectable_label(device_label(page) == "None", "None").on_hover_text("PDF on the paper chosen below").clicked()
             && device_label(page) != "None"
         {
@@ -618,7 +618,7 @@ fn page_rows(
     // The device's papers, else the standard sizes.
     let device = choices.devices.iter().find(|dv| dv.name.eq_ignore_ascii_case(&page.device));
     ui.label("Paper size");
-    egui::ComboBox::from_id_salt(salt.with("paper")).selected_text(page.paper.as_str()).width(190.0).show_ui(ui, |ui| match device {
+    craft_ui::ComboBox::from_id_salt(salt.with("paper")).selected_text(page.paper.as_str()).width(190.0).show_ui(ui, |ui| match device {
         Some(dev) => {
             for p in &dev.papers {
                 if ui.selectable_label(p.name == page.paper, &p.name).clicked() && p.name != page.paper {
@@ -647,7 +647,7 @@ fn page_rows(
     ui.end_row();
     ui.label("Plot area");
     ui.add_enabled_ui(rows.areas.len() > 1, |ui| {
-        egui::ComboBox::from_id_salt(salt.with("area")).selected_text(area_label(&page.plot_area)).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt(salt.with("area")).selected_text(area_label(&page.plot_area)).show_ui(ui, |ui| {
             for a in rows.areas {
                 if ui.selectable_label(page.plot_area == *a, area_label(a)).clicked() && page.plot_area != *a {
                     change = Some(("plotArea", json!(a)));
@@ -723,7 +723,7 @@ fn page_rows(
     }
     ui.end_row();
     ui.label("Plot style table");
-    egui::ComboBox::from_id_salt(salt.with("styles")).selected_text(style_label(page)).width(190.0).show_ui(ui, |ui| {
+    craft_ui::ComboBox::from_id_salt(salt.with("styles")).selected_text(style_label(page)).width(190.0).show_ui(ui, |ui| {
         if ui.selectable_label(style_label(page) == "None", "None").clicked() && style_label(page) != "None" {
             change = Some(("plotStyleTable", json!("None")));
         }
@@ -941,7 +941,7 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
     egui::Window::new("Plot").open(open).collapsible(false).resizable(false).pivot(egui::Align2::CENTER_CENTER).default_pos(center).show(ctx, |ui| {
         egui::Grid::new("plot_target").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
             ui.label("Layout");
-            egui::ComboBox::from_id_salt("plot_layout").selected_text(st.target.as_str()).width(190.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("plot_layout").selected_text(st.target.as_str()).width(190.0).show_ui(ui, |ui| {
                 for n in &targets {
                     if ui.selectable_label(*n == st.target, n).clicked() && *n != st.target {
                         st.page = plot_page(d, n);
