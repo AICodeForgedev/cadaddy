@@ -955,3 +955,109 @@ fn the_guided_job_gives_the_fill_its_rooms_reading() {
     let sum = s.execute("bim.props.summary", &json!({})).expect("summary");
     assert!(sum["kinds"]["room"]["filled"]["number"].as_u64().unwrap_or(0) > 0, "{:#}", sum["kinds"]["room"]);
 }
+
+/// A door the way the build makes one, over the built wall nearest `at` (drawing units).
+fn door_at(s: &mut Session, at: Vec2) -> Handle {
+    let wall = {
+        let d = s.doc().expect("doc");
+        d.model
+            .iter()
+            .filter(|e| made_as(e).as_deref() == Some("wall"))
+            .map(|e| (cadaddy_engine::doc::entity_bounds(d, e, 0).center().dist(at), e.handle))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("a wall")
+            .1
+    };
+    let d = s.doc_mut().expect("doc");
+    let mut e = (**d.entity(wall).expect("wall")).clone();
+    e.handle = d.new_handle();
+    e.common.layer = "3D-Doors".into();
+    e.common.xdata = vec![
+        RawTag { code: 1001, value: "CADADDY_WALLGEN".into() },
+        RawTag { code: 1000, value: "door".into() },
+        RawTag { code: 1000, value: "L1".into() },
+        RawTag { code: 1000, value: "0".into() },
+    ]
+    .into();
+    let h = e.handle;
+    d.model.push(e);
+    h
+}
+
+#[test]
+fn a_door_with_no_tag_takes_the_number_of_the_one_numbered_room_it_opens_into() {
+    // Q6002 round 5: on the real set 44 of 313 doors had a number; most print no tag beside
+    // them. Doors are numbered after the room they open into, so a door with no tag between one
+    // numbered room and the outside takes that number, marked as the convention's (`rule`).
+    let mut s = plan();
+    let into_101 = door_at(&mut s, Vec2::new(0.0, 60.0));
+    // The doors stand in the rooms' outer walls, away from the room tags (a room tag within 5'
+    // of a door reads as its number). Two untagged doors into storage 102: which one is 102 is not known, so neither is.
+    let a_102 = door_at(&mut s, Vec2::new(360.0, 60.0));
+    let b_102 = door_at(&mut s, Vec2::new(600.0, 60.0));
+    let r = fill(&mut s);
+    assert_eq!(r["diagnostics"]["doors_untagged"], json!(3), "{r:#}");
+    assert_eq!(r["diagnostics"]["doors_numbered_by_room"], json!(1), "{r:#}");
+    let p = get(&mut s, &into_101.hex());
+    assert_eq!(p["number"]["value"], "101", "{p:#}");
+    assert_eq!(p["number"]["source"]["kind"], "rule", "never presented as read: {p:#}");
+    assert!(p["number"]["note"].as_str().is_some_and(|n| n.contains("opens into")), "{p:#}");
+    assert!(get(&mut s, &a_102.hex())["number"].is_null());
+    assert!(get(&mut s, &b_102.hex())["number"].is_null());
+    // A second fill gives nothing again, and a tag printed at the door wins over the rule.
+    let r = fill(&mut s);
+    assert_eq!(r["diagnostics"]["doors_numbered_by_room"], json!(0), "{r:#}");
+    let at = cadaddy_engine::doc::entity_bounds(s.doc().expect("doc"), s.doc().expect("doc").entity(into_101).expect("door"), 0).center();
+    text(&mut s, "A-ANNO", [at.x + 24.0, at.y - 34.0], "101A");
+    fill(&mut s);
+    let p = get(&mut s, &into_101.hex());
+    assert_eq!(p["number"]["value"], "101A", "{p:#}");
+    assert_eq!(p["number"]["source"]["kind"], "print");
+}
+
+#[test]
+fn a_door_whose_room_number_a_tagged_door_has_keeps_none() {
+    // The tag says which door is 101: another untagged door into 101 is not given it again.
+    let mut s = plan();
+    let tagged = door_at(&mut s, Vec2::new(0.0, 60.0));
+    let other = door_at(&mut s, Vec2::new(240.0, 60.0));
+    let at = cadaddy_engine::doc::entity_bounds(s.doc().expect("doc"), s.doc().expect("doc").entity(tagged).expect("door"), 0).center();
+    text(&mut s, "A-ANNO", [at.x + 24.0, at.y - 34.0], "101");
+    let r = fill(&mut s);
+    assert_eq!(get(&mut s, &tagged.hex())["number"]["source"]["kind"], "print", "{r:#}");
+    assert!(get(&mut s, &other.hex())["number"].is_null(), "{r:#}");
+    assert_eq!(r["diagnostics"]["doors_numbered_by_room"], json!(0), "{r:#}");
+}
+
+#[test]
+fn a_device_on_a_sheet_whose_plan_sits_elsewhere_is_put_in_its_room_by_the_shared_numbers() {
+    // Q6002 round 5: on the real set 83 of 1,055 devices had a room. A trade sheet the same size
+    // as the architectural one, with its plan 10' further right on the paper, puts its devices
+    // 10' off by the sheet frame. The room and door numbers both sheets print register it.
+    let mut s = plan_with(true);
+    let mut spec: Value = serde_json::from_str(s.doc().expect("doc").building_spec.as_deref().expect("spec")).expect("json");
+    // Office 101 at 15', 5' on the plan; E-101 draws it 10' right of where the frame puts it.
+    let mut c = device(285.0, 5.0, "C", "LP1-7", "1F5");
+    c["id"] = json!("device:L1:3420.0,60.0");
+    c["at_ft"] = json!([285.0, 5.0]);
+    spec["tags"].as_array_mut().expect("tags").push(c);
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    s.execute("rooms.build", &json!({})).expect("rooms");
+    // Before the numbers are printed on E-101: the frame puts C between the offices, in neither.
+    fill(&mut s);
+    assert!(device_of(&mut s, "C")["room"].is_null(), "{:#}", device_of(&mut s, "C"));
+    // Numbers both sheets print: E-101's 3240" right of the plan's (3120" of frame, 120" more).
+    text(&mut s, "A-ANNO", [300.0, 100.0], "105");
+    for (x, y, t) in [(116.0, 52.0, "101"), (476.0, 52.0, "102"), (300.0, 100.0, "105")] {
+        text(&mut s, "E-ANNO", [x + 3240.0, y], t);
+    }
+    let r = fill(&mut s);
+    assert_eq!(r["diagnostics"]["sheets_registered_by_tags"], json!(1), "{r:#}");
+    let p = device_of(&mut s, "C");
+    assert_eq!(p["room"]["value"], "101", "{p:#}");
+    assert!(p["room"]["note"].as_str().is_some_and(|n| n.contains("door and room numbers")), "{p:#}");
+    assert!(r["diagnostics"]["devices_roomed_by_registration"].as_u64().unwrap_or(0) >= 1, "{r:#}");
+    // B, on E-101 too, is where the frame put it: the registration agrees and keeps office 101.
+    assert_eq!(device_of(&mut s, "B")["room"]["value"], "101");
+}

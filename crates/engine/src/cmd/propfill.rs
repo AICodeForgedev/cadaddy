@@ -1521,6 +1521,17 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows, read: &[ReadRoom]) -> Resu
         .filter(|(_, k)| k == "equipment")
         .filter_map(|(h, _)| d.model.get(*h).and_then(|e| made(e, "tag")).map(|t| (t.trim().to_ascii_uppercase(), *h)))
         .collect();
+    // The trades' sheets put onto their levels' architectural plans by the door and room numbers
+    // both print (`bim.identity`'s registration), for the devices read on them.
+    let registration = super::identity::register(d, &super::identity::sheets_of(Some(&sp)), upf);
+    let placements: HashMap<String, &cadaddy_mepfix::tagid::SheetTransform> =
+        registration.transforms.iter().filter(|t| t.registered && t.method == "tags").map(|t| (t.sheet.trim().to_ascii_uppercase(), t)).collect();
+    let (mut devices_roomed_by_fit, mut devices_without_room) = (0usize, 0usize);
+    // Doors with no tag beside them and the one numbered room each opens into; the numbers the
+    // tagged doors have, per level.
+    let mut doors_by_room: Vec<(Handle, String, String)> = Vec::new();
+    let mut door_numbers_used: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut doors_untagged = 0usize;
     let room_level = |label: &str| rooms3.iter().find(|r| room_label(r.number.as_deref(), &r.name).eq_ignore_ascii_case(label));
     let mut filled: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut changes: Vec<(Handle, Props)> = Vec::new();
@@ -1543,9 +1554,25 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows, read: &[ReadRoom]) -> Resu
             "device" | "light_fixture" | "fixture" if made(e, DEVID).is_some() || made(e, FIXID).is_some() || kind == "device" => {
                 let Some((b, z0, z1)) = ext else { continue };
                 let c = b.center();
-                if let Some((r, inside)) = room_near(&rooms, lvl, c, NEAR_ROOM_FT * upf) {
-                    let note = if inside { "the room the device stands in" } else { "the nearest room: the device is on its wall" };
+                // Where its sheet's shared door and room numbers put it on its level's plan (a
+                // sheet whose plan sits elsewhere on the paper than the architectural one's), else
+                // where it was built.
+                let fitted = registered_at(&store, &placements).map(|q| q + shift);
+                let found = match fitted.and_then(|q| room_near(&rooms, lvl, q, NEAR_ROOM_FT * upf)) {
+                    Some((r, _)) => {
+                        devices_roomed_by_fit += 1;
+                        Some((
+                            r,
+                            "the room at its place on its level's architectural plan, by the door and room numbers its sheet shares with that plan",
+                        ))
+                    }
+                    None => room_near(&rooms, lvl, c, NEAR_ROOM_FT * upf)
+                        .map(|(r, inside)| (r, if inside { "the room the device stands in" } else { "the nearest room: the device is on its wall" })),
+                };
+                if let Some((r, note)) = found {
                     put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()).with_note(note), tally);
+                } else if kind == "device" {
+                    devices_without_room += 1;
                 }
                 let host = walls
                     .iter()
@@ -1645,6 +1672,20 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows, read: &[ReadRoom]) -> Resu
                         && !near.iter().any(|x| std::ptr::eq(*x, r))
                     {
                         near.push(r);
+                    }
+                }
+                // No tag at the opening: it may take the number of the one numbered room it opens
+                // into (below, once every door's tag is known).
+                let numbered: Vec<&str> = near.iter().map(|r| r.label.trim()).filter(|l| super::perceive::geometry::room_number(l)).collect();
+                match store.get("number").filter(|p| p.has_value()) {
+                    Some(n) => {
+                        door_numbers_used.insert((level_key(lvl.unwrap_or("")), n.text().trim().to_ascii_uppercase()));
+                    }
+                    None => {
+                        doors_untagged += 1;
+                        if let [one] = numbered.as_slice() {
+                            doors_by_room.push((*h, level_key(lvl.unwrap_or("")), one.to_ascii_uppercase()));
+                        }
                     }
                 }
                 if let Some(r) = near.first() {
@@ -1776,6 +1817,7 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows, read: &[ReadRoom]) -> Resu
             changes.push((*h, store));
         }
     }
+    let doors_numbered_by_room = number_doors_by_room(d, &mut changes, &doors_by_room, &door_numbers_used, filled.entry("door".into()).or_default());
     let d = s.doc_mut()?;
     let mut changed = 0usize;
     for (h, store) in changes {
@@ -1806,6 +1848,11 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows, read: &[ReadRoom]) -> Resu
         "schedule_rows": schedules.len(),
         "fixture_rows": fixture_rows(schedules).len(),
         "terminals": terminals,
+        "doors_untagged": doors_untagged,
+        "doors_numbered_by_room": doors_numbered_by_room,
+        "sheets_registered_by_tags": placements.len(),
+        "devices_roomed_by_registration": devices_roomed_by_fit,
+        "devices_without_room": devices_without_room,
         "texts": text_count,
         "room_elements": super::bspec::room_elements(s.doc()?).len(),
         "drawing_objects": s.doc()?.model.len(),
@@ -1814,6 +1861,53 @@ pub(crate) fn fill(s: &mut Session, schedules: &Rows, read: &[ReadRoom]) -> Resu
         diagnostics["rooms_error"] = json!(e);
     }
     Ok(json!({ "filled": filled, "elements": changed, "fixtures_placed": fixtures_placed, "spec": stored, "diagnostics": diagnostics }))
+}
+
+/// Doors are numbered after the room they open into (door 101 into room 101). A door with no tag
+/// printed beside it that opens into one numbered room (the other side a corridor or outside)
+/// takes that room's number when it is the only such door of that room on its level and no tagged
+/// door of the level has the number already. The number is the convention's (`rule`), never
+/// presented as read. How many doors took one.
+fn number_doors_by_room(
+    d: &Drawing,
+    changes: &mut Vec<(Handle, Props)>,
+    doors: &[(Handle, String, String)],
+    used: &std::collections::HashSet<(String, String)>,
+    tally: &mut BTreeMap<String, usize>,
+) -> usize {
+    let mut wanting: HashMap<(&str, &str), usize> = HashMap::new();
+    for (_, level, number) in doors {
+        *wanting.entry((level.as_str(), number.as_str())).or_default() += 1;
+    }
+    let mut numbered = 0;
+    for (h, level, number) in doors {
+        if wanting.get(&(level.as_str(), number.as_str())) != Some(&1) || used.contains(&(level.clone(), number.clone())) {
+            continue;
+        }
+        let prop = Prop::new(number.clone(), Source::from_doc(SourceKind::Rule, "doors are numbered after the room they open into"))
+            .with_note("no tag printed at the opening: the number of the one numbered room it opens into");
+        match changes.iter_mut().find(|(x, _)| x == h) {
+            Some((_, store)) => put(store, "number", prop, tally),
+            None => {
+                let Some(e) = d.model.get(*h) else { continue };
+                let mut store = props::read(&e.common.xdata);
+                put(&mut store, "number", prop, tally);
+                changes.push((*h, store));
+            }
+        }
+        numbered += 1;
+    }
+    numbered
+}
+
+/// Where a device read on a registered sheet lies on its level's architectural plan: its read
+/// point (its `sheet` value's) through its sheet's registration; none when the sheet has none.
+fn registered_at(store: &Props, placements: &HashMap<String, &cadaddy_mepfix::tagid::SheetTransform>) -> Option<Vec2> {
+    let src = &store.get("sheet")?.source;
+    let t = placements.get(&src.doc.as_deref()?.trim().to_ascii_uppercase())?;
+    let [x, y] = t.place(src.at?)?;
+    let q = Vec2::new(x, y);
+    q.is_finite().then_some(q)
 }
 
 /// The sheet a plan point lies on (the set's sheet rectangles), else the level's name.

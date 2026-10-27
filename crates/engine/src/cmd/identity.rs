@@ -79,7 +79,7 @@ impl SheetBox {
     }
 }
 
-fn sheets_of(sp: Option<&BuildingSpec>) -> Vec<SheetBox> {
+pub(crate) fn sheets_of(sp: Option<&BuildingSpec>) -> Vec<SheetBox> {
     let Some(sp) = sp else { return Vec::new() };
     sp.sheets
         .iter()
@@ -175,6 +175,14 @@ fn elements(d: &Drawing, sp: Option<&BuildingSpec>, sheets: &[SheetBox]) -> Vec<
                 let b = cadaddy_doc::entity_bounds(d, e, 0);
                 format!("{t} {:.0}'", (b.max.x - b.min.x).max(b.max.y - b.min.y) / upf)
             }),
+            // A door numbered only by the convention (after its room, `rule`) still looks for the
+            // tag lettered beside it.
+            "door" => store
+                .iter()
+                .find(|(k, p, _)| k.eq_ignore_ascii_case("number") && p.has_value() && !p.source.kind.is_assumed())
+                .map(|(_, p, _)| p.text().trim().to_string())
+                .filter(|t| !t.is_empty())
+                .and_then(|n| tagid::tag_key(&n).or(Some(n.to_ascii_uppercase()))),
             _ => prop_text(&store, "number").and_then(|n| tagid::tag_key(&n).or(Some(n.to_ascii_uppercase()))),
         };
         out.push(Element { handle: Some(e.handle), tag_id: None, kind, level, number, sort: String::new(), at, sheet: sheet_at(sheets, at) });
