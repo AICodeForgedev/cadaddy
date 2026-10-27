@@ -231,11 +231,17 @@ fn words(s: &str) -> Vec<String> {
 
 fn run_quantities(s: &mut Session, p: &Value) -> Result<Value> {
     if bool_or(p, "from_bom", false) {
-        let b = s.execute("bim.bom", &json!({})).map_err(|e| bad("wholejob.quantities", format!("the bill of materials: {e}")))?;
+        // Q6037: use bim.takeoff as the single source of truth for quantities, so every
+        // command that reports quantities (takeoff, estimate) agrees on the same numbers.
+        // Fall back to bim.bom when the takeoff is not available (no model built yet).
+        let (lines_source, source_name) = match s.execute("bim.takeoff", &json!({"group_by": "trade", "keep": false})) {
+            Ok(t) => (t, "bim.takeoff"),
+            Err(_) => (s.execute("bim.bom", &json!({})).map_err(|e| bad("wholejob.quantities", format!("the bill of materials: {e}")))?, "bim.bom"),
+        };
         let sp = spec("wholejob.quantities", s)?;
         let mut w = load(&sp);
         let mut by: BTreeMap<String, Vec<QLine>> = BTreeMap::new();
-        for l in b["lines"].as_array().into_iter().flatten().take(MAX_LINES) {
+        for l in lines_source["lines"].as_array().into_iter().flatten().take(MAX_LINES) {
             let trade = l["trade"].as_str().unwrap_or("other").to_ascii_lowercase();
             let item = [l["item"].as_str().unwrap_or(""), l["size"].as_str().unwrap_or("")]
                 .iter()
@@ -246,9 +252,9 @@ fn run_quantities(s: &mut Session, p: &Value) -> Result<Value> {
             by.entry(trade).or_default().push(QLine {
                 item,
                 unit: l["unit"].as_str().unwrap_or("each").into(),
-                qty: l["total"].as_f64().or_else(|| l["net"].as_f64()).unwrap_or(0.0),
+                qty: l["total"].as_f64().or_else(|| l["net"].as_f64()).or_else(|| l["qty"].as_f64()).unwrap_or(0.0),
                 spec_section: String::new(),
-                source: "bim.bom".into(),
+                source: source_name.into(),
             });
         }
         let n: Vec<Value> = by.iter().map(|(t, ls)| json!({"trade": t, "lines": ls.len()})).collect();
@@ -258,7 +264,7 @@ fn run_quantities(s: &mut Session, p: &Value) -> Result<Value> {
             e.lines = ls;
         }
         save(s, sp, &w)?;
-        return Ok(json!({"trades": n}));
+        return Ok(json!({"trades": n, "source": source_name}));
     }
     let trade = trade_param("wholejob.quantities", p)?;
     let lines: Vec<QLine> = p
@@ -411,10 +417,24 @@ fn estimate(s: &mut Session, w: &WholeJob) -> Result<Value> {
     } else {
         None
     };
+    // Q6034: starter cost book as fallback (same as bim.estimate and estimate.status).
+    let starter: Vec<Price> = crate::cmd::estimate::starter_prices()
+        .into_iter()
+        .filter_map(|v| {
+            let item = v["item"].as_str()?.to_string();
+            let unit = v["unit"].as_str().unwrap_or("each").to_string();
+            let material = v["material"].as_f64()?;
+            let labor_hrs = v["labor_hours"].as_f64().unwrap_or(0.0);
+            Some(Price { item, unit, unit_cost: material + labor_hrs * 75.0 })
+        })
+        .collect();
+    let starter_pack =
+        PricePack { quality: "starter".into(), source: crate::cmd::estimate::STARTER_SOURCE.into(), date: String::new(), rows: starter };
     let mut trades = Vec::new();
     let mut by_div: BTreeMap<String, f64> = BTreeMap::new();
     let mut subtotal_all = 0.0;
     let mut unpriced_all = 0usize;
+    let mut starter_used = 0usize;
     for (name, t) in &w.trades {
         let pack = w.prices.get(name);
         let (div, div_name, default_markup) = trade_info(name);
@@ -423,17 +443,29 @@ fn estimate(s: &mut Session, w: &WholeJob) -> Result<Value> {
         let mut unpriced = Vec::new();
         let mut direct = 0.0;
         for l in &t.lines {
-            match price_for(pack, l) {
-                Some(pr) => {
-                    let cost = l.qty * pr.unit_cost;
-                    direct += cost;
-                    priced.push(json!({"item": l.item, "unit": l.unit, "qty": l.qty, "unit_cost": pr.unit_cost, "cost": r2(cost)}));
-                }
-                None => unpriced.push(json!({"item": l.item, "unit": l.unit, "qty": l.qty})),
+            if let Some(pr) = price_for(pack, l) {
+                let cost = l.qty * pr.unit_cost;
+                direct += cost;
+                priced.push(json!({"item": l.item, "unit": l.unit, "qty": l.qty, "unit_cost": pr.unit_cost, "cost": r2(cost)}));
+            } else if let Some(pr) = price_for(Some(&starter_pack), l) {
+                let cost = l.qty * pr.unit_cost;
+                direct += cost;
+                starter_used += 1;
+                priced.push(json!({"item": l.item, "unit": l.unit, "qty": l.qty, "unit_cost": pr.unit_cost, "cost": r2(cost), "via": crate::cmd::estimate::STARTER_SOURCE}));
+            } else {
+                unpriced.push(json!({"item": l.item, "unit": l.unit, "qty": l.qty}));
             }
         }
-        let mut quality = pack.map_or("unpriced".to_string(), |p| p.quality.clone());
-        let mut source = pack.map(|p| p.source.clone()).unwrap_or_default();
+        let mut quality = match pack {
+            Some(p) => p.quality.clone(),
+            None if priced.is_empty() => "unpriced".to_string(),
+            None => "starter".to_string(),
+        };
+        let mut source = match pack {
+            Some(p) => p.source.clone(),
+            None if priced.is_empty() => String::new(),
+            None => crate::cmd::estimate::STARTER_SOURCE.into(),
+        };
         if is_electrical(name, &division)
             && let Some(total) = electrical_total
         {
@@ -467,6 +499,7 @@ fn estimate(s: &mut Session, w: &WholeJob) -> Result<Value> {
             "equipment": r2(g.weeks * g.equipment_per_week), "cleanup": r2(g.weeks * g.cleanup_per_week), "insurance": r2(insurance), "bond": r2(bond), "total": r2(gc_total),
         },
         "subtotal": r2(subtotal_all), "total": r2(total), "unpriced_lines": unpriced_all,
+        "starter_priced_lines": starter_used,
     }))
 }
 

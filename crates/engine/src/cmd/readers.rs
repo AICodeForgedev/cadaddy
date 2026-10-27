@@ -1157,10 +1157,22 @@ fn device_level(sp: &cadaddy_walk3d::BuildingSpec, dv: &ReadDevice) -> String {
     }
     let want = dv.level.trim();
     if !want.is_empty() {
+        // Resolve the device's raw level code to its canonical form, then match by canonical name.
+        let canonical_want = cadaddy_walk3d::levels::canonical_level(want).map(|(c, _)| c);
         let named = sp.levels.iter().find(|l| {
             let n = l.name.trim().to_ascii_uppercase();
             let w = want.to_ascii_uppercase();
-            n == w || n.ends_with(&format!(" {w}")) || (w == "R" && n.contains("ROOF"))
+            if n == w || n.ends_with(&format!(" {w}")) {
+                return true;
+            }
+            // Match by canonical form: "R" → "ROOF" matches a level named "Roof".
+            if let Some(ref cw) = canonical_want {
+                let cn = cadaddy_walk3d::levels::canonical_level(&n).map(|(c, _)| c);
+                if cn.as_deref() == Some(cw) {
+                    return true;
+                }
+            }
+            false
         });
         return match named {
             Some(l) => l.name.clone(),

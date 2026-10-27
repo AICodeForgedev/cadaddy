@@ -298,6 +298,9 @@ pub struct DocState {
     pub wallgen: Option<cmd::wallgen::WallGen>,
     /// The plan the model was last built from and what that build made (`model.revise`).
     pub model_record: Option<cmd::revise3d::ModelRecord>,
+    /// The last revision that found plan changes (`model.revise`, or the rebuild an associative
+    /// model does): every list whole, paged when `model.revise {last: true}` returns it.
+    pub last_revision: Option<serde_json::Value>,
     /// What opening the drawing changed and told the user (missing current styles reset): the
     /// OPEN reply lists them with its warnings, for agents that see no command-line history.
     pub open_notes: Vec<String>,
@@ -378,6 +381,7 @@ impl DocState {
             cdy_saved: None,
             wallgen: None,
             model_record: None,
+            last_revision: None,
             open_notes: Vec::new(),
             block_edit: None,
             lightmap: None,
@@ -1225,6 +1229,8 @@ pub struct Session {
     lisp_last: Option<std::result::Result<lisp::value::Value, String>>,
     /// What the last HATCHPICK kept (the Hatch and Gradient dialog's picks).
     pub hatch_picks: Option<cmd::hatch::HatchPicks>,
+    /// Reads electrical prints and returns element tags; set by whoever has the reader pipeline.
+    pub tag_reader: Option<cadaddy_walk3d::tags::TagReaderFn>,
     /// Safety rails for agents: requests, dry run, confirmations, the change journal.
     pub agent: agent::AgentGuard,
     /// What happened, for agents watching (`events.subscribe` / `events.poll`).
@@ -1360,6 +1366,7 @@ impl Session {
             lisp: lisp::LispState::default(),
             lisp_last: None,
             hatch_picks: None,
+            tag_reader: None,
             agent: agent::AgentGuard::default(),
             events: events::EventLog::default(),
             background_checks: false,

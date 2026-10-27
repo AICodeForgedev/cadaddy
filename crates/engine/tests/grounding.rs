@@ -238,7 +238,7 @@ fn the_takeoff_counts_everything_routed_and_it_builds_in_3d() {
     assert!(qty("Conduit for grounding conductors") > 10.0);
     assert_eq!(qty("Bonding jumper connection (bonding jumper lugs)"), 4.0, "MBJ and the transformer's");
     // Compression instead of exothermic: a crimper, no moulds.
-    s.execute("project.rules.set", &json!({"domain": "custom", "key": "ground_connection", "value": "compression"})).unwrap();
+    s.execute("project.rules.set", &json!({"domain": "custom", "key": "ground_connection", "value": "compression", "reason": "test setup"})).unwrap();
     let t = s.execute("grounding.takeoff", &json!({})).unwrap();
     let names: Vec<&str> = t["items"].as_array().unwrap().iter().map(|i| i["item"].as_str().unwrap()).collect();
     assert!(names.contains(&"Compression crimper with dies (tool)") && !names.iter().any(|n| n.contains("mould")), "{names:?}");
@@ -325,7 +325,7 @@ fn the_grounding_takeoff_is_in_the_job_bom_without_doubling_its_tools() {
     assert_eq!((crimpers(&bom), moulds(&bom)), (1, 3), "{bom}");
     assert!(bom["required"].as_array().unwrap().iter().any(|r| r["item"] == "Crimper with dies"), "{bom}");
     // Compression: the grounding takeoff's crimper is the only one, and no moulds.
-    s.execute("project.rules.set", &json!({"domain": "custom", "key": "ground_connection", "value": "compression"})).unwrap();
+    s.execute("project.rules.set", &json!({"domain": "custom", "key": "ground_connection", "value": "compression", "reason": "test setup"})).unwrap();
     let bom = s.execute("bim.bom", &json!({})).unwrap();
     assert_eq!((crimpers(&bom), moulds(&bom)), (1, 0), "{bom}");
     assert!(!bom["required"].as_array().unwrap().iter().any(|r| r["item"] == "Crimper with dies"), "not required twice: {bom}");

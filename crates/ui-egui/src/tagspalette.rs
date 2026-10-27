@@ -29,11 +29,13 @@ fn issue_label(i: &str) -> &'static str {
         "double_protection" => crate::tl!("Double protection"),
         "no_conductor_note" => crate::tl!("No conductor note"),
         "two_rules_apply" => crate::tl!("Two rules apply"),
+        "method_choice_open" => crate::tl!("Method choice open"),
         _ => crate::tl!("Other"),
     }
 }
 
-const ISSUES: [&str; 6] = ["untagged", "tag_not_in_schedule", "missing_protection", "double_protection", "no_conductor_note", "two_rules_apply"];
+const ISSUES: [&str; 7] =
+    ["untagged", "tag_not_in_schedule", "missing_protection", "double_protection", "no_conductor_note", "two_rules_apply", "method_choice_open"];
 
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = crate::theme::Tokens::get();
@@ -110,6 +112,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 ui.add(egui::TextEdit::singleline(&mut st.value).desired_width(120.0));
             });
             ui.horizontal(|ui| {
+                if ui.button(crate::tl!("Read from prints")).clicked() {
+                    act = Some(("tags.read", json!({ "apply": true })));
+                }
                 let some = !st.picked.is_empty();
                 if ui.add_enabled(some && !st.field.trim().is_empty(), egui::Button::new(crate::tl!("Set on Picked"))).clicked() {
                     act = Some(("tags.set", json!({ "ids": st.picked, "field": st.field.trim(), "value": st.value })));
