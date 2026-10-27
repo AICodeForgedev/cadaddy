@@ -1040,7 +1040,7 @@ fn devices_to_model(s: &mut Session, p: &Value, mut placed: Value) -> Result<Val
     let r = super::propfill::rebuild_devices(s, CMD)?;
     placed["elements"] = json!(r.built);
     placed["elements_replaced"] = json!(r.removed);
-    match super::propfill::fill(s) {
+    match super::propfill::fill(s, &super::propfill::Rows::new()) {
         Ok(f) => placed["filled"] = f["filled"]["device"].clone(),
         Err(e) => placed["fill_error"] = json!(e.to_string()),
     }
@@ -1190,12 +1190,17 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
     };
     let mut sp = cadaddy_walk3d::BuildingSpec::from_json(text).map_err(|e| EngineError::Other(format!("{cmd}: {e}")))?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    // Each mark's device type as the legends describe it (`A` → duplex receptacle).
+    let marks: std::collections::BTreeSet<String> = devices.iter().take(MAX_DEVICES).map(|dv| dv.tag.trim().to_string()).collect();
+    let legend = super::propfill::legend_types(d, &marks.into_iter().collect::<Vec<_>>());
     let before = sp.tags.len();
     sp.tags.retain(|t| !(t.id.starts_with("device:") && t.fields.contains_key("symbol")));
     let replaced = before - sp.tags.len();
     let mut ids: std::collections::HashSet<String> = sp.tags.iter().map(|t| t.id.clone()).collect();
     let mut by_type: BTreeMap<String, usize> = BTreeMap::new();
     let mut by_level: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_device_type: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_class: BTreeMap<String, usize> = BTreeMap::new();
     let mut inserted = 0usize;
     for dv in devices.iter().take(MAX_DEVICES) {
         let tag = dv.tag.trim();
@@ -1213,7 +1218,20 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         let mut e =
             cadaddy_walk3d::tags::ElementTag { id, kind: device_kind(tag).replace(' ', "_"), level: level.clone(), at_ft, ..Default::default() };
         e.set("type", tag, "plan");
-        e.set("device_type", device_item(tag), "plan");
+        let device_type = match legend.get(&tag.to_ascii_uppercase()) {
+            Some((ty, desc)) => {
+                let ty = super::propfill::typed(tag, ty);
+                e.set("device_type", ty.clone(), "legend");
+                e.set("description", desc.clone(), "legend");
+                ty
+            }
+            None => {
+                e.set("device_type", device_item(tag), "plan");
+                device_kind(tag).to_string()
+            }
+        };
+        *by_class.entry(super::propfill::device_class(&device_type)).or_default() += 1;
+        *by_device_type.entry(device_type).or_default() += 1;
         if !dv.circuit.is_empty() {
             e.set("circuit", dv.circuit.clone(), "plan");
         }
@@ -1225,7 +1243,11 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         inserted += 1;
     }
     s.doc_mut()?.building_spec = Some(sp.to_json());
-    Ok(json!({"inserted": inserted, "replaced": replaced, "by_type": by_type, "by_level": by_level}))
+    let legend: BTreeMap<&String, Value> = legend.iter().map(|(m, (ty, desc))| (m, json!({"type": ty, "legend": desc}))).collect();
+    Ok(json!({
+        "inserted": inserted, "replaced": replaced, "by_type": by_type, "by_level": by_level,
+        "by_device_type": by_device_type, "by_class": by_class, "legend_types": legend,
+    }))
 }
 
 /// The devices an earlier read put in the drawing's model: how many, by level and type.

@@ -169,7 +169,11 @@ Standard keys per kind (other keys are allowed):
 `MODEL.BUILD` makes every device the readers found (`MEP.READ_DEVICES`, the
 guided job's devices stage) an element of its own: a small box at its symbol, at
 its mounting height, moved onto its level's architectural plan when it was read on
-a trade sheet of the same size. It carries its type and type mark, the circuit
+a trade sheet of the same size. It carries its type and type mark (the type is
+what the sheets' legend or fixture schedule says the mark is: `A` beside `DUPLEX
+RECEPTACLE` makes a `duplex receptacle`, source `legend`, with the row as its
+`description`; a light fixture keeps its mark, `light fixture A`; a mark no
+legend describes keeps its letter), the circuit
 printed beside it, the panel the circuit names and `fed_from` (`panel LP1, circuit
 LP1-3`), its sheet, `mount_height` and `offset` (from the device legend, else a
 general note such as `MOUNT ALL HORN/STROBES AT 80" AFF`, else the usual height
@@ -181,13 +185,19 @@ stage):
 
 | Kind | Filled |
 |:-----|:-------|
-| `device` | room (by containment), host_wall (nearest wall), fed_from_handle (the panel's element), breaker, poles and circuit_description (the panel schedule's row) |
+| `device` | room (by containment; a device drawn on a room's wall, just outside its outline, takes the nearest room within 2 ft), host_wall (nearest wall), fed_from_handle (the panel's element), breaker, poles and circuit_description (the panel schedule's row) |
 | `room` | level, ceiling_height and floor/wall/ceiling/base finishes, as `ROOMS.LIST` reads them |
-| `door` | number (the tag printed at the opening), width and height (computed), from_room / to_room |
+| `door` | number (the nearest door-number tag within 5 ft of the opening), width and height (computed), from_room / to_room |
 | `wall` | type (`print` when a wall tag names it, `rule` when it is the spec's type for the layer), thickness, height, room_a / room_b |
 | `duct`, `pipe` | size, system, shape, elevation (a size read from a tag is `print`; an estimated route height is `default`) |
-| air terminal (`fixture`) | type, cfm (the airflow printed beside it), room |
+| air terminal (`fixture`) | type, cfm (`150 CFM` beside it, or the number under the type in its tag, `CD-1` over `150`; looked for on the mechanical plan the terminal was read on as well as the floor plan), room |
 | `equipment` | type_mark, capacity (from its schedule row: cfm, tons, MBH…), room |
+| plumbing `fixture` | placed: one element at each scheduled fixture's tag on a plumbing plan (else the floor plan; enlarged plans and legend entries skipped), with type_mark (`print`), type, cw_size / hw_size / waste_size / vent_size, fixture units and `connections` (`CW 1", SAN 3", V 2"`) from the plumbing fixture schedule (`schedule`), room, host_wall, location |
+
+The schedule rows come in `BIM.PROPS.FILL {schedules: [{tag, sheet, title, row:
+{column: text}}]}`. The guided job reads them off the set's mechanical and
+plumbing schedule sheets (it imports only the plans into the job's drawing, so it
+imports those sheets on their own to read their tables).
 
 A value a person set (`user`) is never replaced, and a value read from the prints
 is never replaced by an assumption.

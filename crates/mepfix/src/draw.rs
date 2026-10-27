@@ -2561,7 +2561,10 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
                 continue;
             }
             seen.push(e.tag.clone());
-            rows.push(cols.iter().map(|c| e.schedule.get(c).cloned().unwrap_or_default()).collect());
+            // The tag column prints the equipment's tag (its schedule map need not repeat it).
+            rows.push(
+                cols.iter().map(|c| e.schedule.get(c).cloned().unwrap_or_else(|| if c == "TAG" { e.tag.clone() } else { String::new() })).collect(),
+            );
         }
         let h = table(pen, [x, y], title, &rows);
         y -= h + 0.6;

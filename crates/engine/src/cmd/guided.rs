@@ -2611,10 +2611,27 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 json!({"description": tag, "tag": tag, "count": u.count, "at": u.at, "sheet": u.sheet, "handles": u.handles, "crop_path": crop})
             })
             .collect();
+        // Each mark's real type as the legends describe it, and the counts by type and by class.
+        let marks: Vec<String> = census.by_type.keys().cloned().collect();
+        let legend = s.doc().map(|d| super::propfill::legend_types(d, &marks)).unwrap_or_default();
+        let mut by_device_type: BTreeMap<String, usize> = BTreeMap::new();
+        let mut by_class: BTreeMap<String, usize> = BTreeMap::new();
+        for (tag, &count) in &census.by_type {
+            let ty = legend
+                .get(&tag.trim().to_ascii_uppercase())
+                .map_or_else(|| super::readers::device_kind(tag).to_string(), |(ty, _)| super::propfill::typed(tag, ty));
+            *by_class.entry(super::propfill::device_class(&ty)).or_default() += count;
+            *by_device_type.entry(ty).or_default() += count;
+        }
+        let legend_types: serde_json::Map<String, Value> =
+            legend.iter().map(|(m, (ty, desc))| (m.clone(), json!({"type": ty, "legend": desc}))).collect();
         results["devices"] = json!({
             "items": items,
             "count": sym_count,
             "by_type": by_type,
+            "by_device_type": by_device_type,
+            "by_class": by_class,
+            "legend_types": legend_types,
             "unknowns": unknowns,
             "source": "pdf_symbol_blocks",
         });
@@ -2724,7 +2741,9 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     if let Some(devices) = results.get("devices") {
         for (class_key, class_label) in &device_classes {
-            let count = devices.get("by_type").and_then(|bt| bt.get(*class_key)).and_then(Value::as_u64).unwrap_or(0);
+            // By the legends' types (`by_class`); a mark named like a class counts too.
+            let count = devices.get("by_class").and_then(|bt| bt.get(*class_key)).and_then(Value::as_u64).unwrap_or(0)
+                + devices.get("by_type").and_then(|bt| bt.get(*class_key)).and_then(Value::as_u64).unwrap_or(0);
             // MUST 9: Always ask — even for 0 ("I counted 0 X — anything not counted?").
             let qid = job.next_qid(StageName::Devices);
             let q = Question {
@@ -3103,6 +3122,80 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
 /// Run the BIM build stage (MUST 1).
 /// Must draft/store the building spec itself (bspec.draft store) before building.
+/// Schedule sheets read for the equipment's rows, at most.
+const MAX_SCHEDULE_PAGES: usize = 12;
+
+/// The rows of the set's mechanical and plumbing schedule sheets (the job imports only plans):
+/// each such sheet imported on its own into a scratch drawing and its tables read; one
+/// `{tag, sheet, row}` per row with a tag. None when the set has no such sheet or it can't be read.
+fn equipment_schedule_rows(job: &GuidedJob) -> Vec<Value> {
+    let Some(list) = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array) else { return Vec::new() };
+    let text = |sh: &Value, k: &str| sh.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let mut seen = std::collections::HashSet::new();
+    let wanted: Vec<(String, super::exchange::PdfPage)> = list
+        .iter()
+        .filter(|sh| text(sh, "superseded_by").is_empty())
+        .filter(|sh| {
+            let kind = if text(sh, "type").is_empty() { text(sh, "sheet_type") } else { text(sh, "type") };
+            let disc = text(sh, "discipline").to_ascii_uppercase();
+            kind == "schedule" && text(sh, "title").to_ascii_uppercase().contains("SCHEDULE") && matches!(disc.as_str(), "M" | "P" | "H" | "FP")
+        })
+        .filter_map(|sh| {
+            let file = text(sh, "file");
+            let page = sh.get("page").and_then(Value::as_u64).filter(|p| *p >= 1).unwrap_or(1);
+            if file.is_empty() || !seen.insert((file.clone(), page)) {
+                return None;
+            }
+            let path = if std::path::Path::new(&file).is_absolute() { file } else { format!("{}/{}", job.pdfs_path, file) };
+            Some((text(sh, "number"), super::exchange::PdfPage { path, params: json!({"page": page, "images": false, "fills": "merge"}), at: None }))
+        })
+        .take(MAX_SCHEDULE_PAGES)
+        .collect();
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let mut t = Session::new();
+    let (numbers, pages): (Vec<String>, Vec<super::exchange::PdfPage>) = wanted.into_iter().unzip();
+    let mut spans: Vec<Option<(u64, u64)>> = vec![None; pages.len()];
+    let mut last = t.doc().map_or(0, |d| d.handseed);
+    let mut on_page = |s: &mut Session, i: usize, r: &super::exchange::PageImport| {
+        let seed = s.doc().map_or(0, |d| d.handseed);
+        if matches!(r, super::exchange::PageImport::Done(_))
+            && seed > last
+            && let Some(slot) = spans.get_mut(i)
+        {
+            *slot = Some((last, seed));
+        }
+        last = seed;
+    };
+    if super::exchange::import_pdf_pages(&mut t, &pages, true, true, &mut on_page).is_err() {
+        return Vec::new();
+    }
+    let Ok(d) = t.doc() else { return Vec::new() };
+    let mut out = Vec::new();
+    for (number, span) in numbers.iter().zip(&spans) {
+        let Some(span) = *span else { continue };
+        let sheet = super::printmep::SheetRef { number: number.clone(), span: Some(span), ..Default::default() };
+        let sub = super::printmep::sheet_drawing(d, &sheet);
+        for table in cadaddy_mepfix::equip_reader::read_tables(&sub, number) {
+            let Some(key) = table.columns.iter().find(|c| {
+                let c = c.trim().to_ascii_uppercase();
+                c.contains("TAG") || c.contains("MARK") || c == "UNIT" || c == "NO." || c == "NO"
+            }) else {
+                continue;
+            };
+            for row in &table.rows {
+                let Some(tag) = row.get(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) else { continue };
+                out.push(json!({"tag": tag, "sheet": number, "title": table.title, "row": row}));
+                if out.len() >= 5_000 {
+                    return out;
+                }
+            }
+        }
+    }
+    out
+}
+
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Ensure sheet content is in the drawing so bspec.draft can read geometry.
     ensure_sheets_loaded(s, job)?;
@@ -3229,7 +3322,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         Ok(v) => result["room_volumes"] = v.get("built").cloned().unwrap_or(Value::Null),
         Err(e) => result["room_volumes_error"] = json!(e.to_string()),
     }
-    match s.execute("bim.props.fill", &json!({})) {
+    // The mechanical and plumbing schedules' rows, for the equipment's capacities.
+    let schedules = equipment_schedule_rows(job);
+    match s.execute("bim.props.fill", &json!({"schedules": schedules})) {
         Ok(v) => result["props"] = v,
         Err(e) => job.add_finding(
             StageName::BimBuild,
@@ -6031,6 +6126,8 @@ mod tests {
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r["devices"]["count"], json!(n), "{r:#}");
         assert_eq!(r["devices"]["by_type"], json!({"A": 9, "B": 5}));
+        assert_eq!(r["devices"]["by_device_type"], json!({"light fixture A": 9, "light fixture B": 5}), "{r:#}");
+        assert_eq!(r["devices"]["by_class"], json!({"light": 14}), "{r:#}");
         // No building model yet: the bim_build stage puts them in.
         assert_eq!(r["model"]["pending"], json!(n), "{:#}", r["model"]);
         assert_eq!(job.devices.len(), n as usize);
@@ -6057,7 +6154,8 @@ mod tests {
         // The draft spec has one level, `Level 1`; sheet level 2 is named alike.
         assert_eq!((units("Level 1"), units("Level 2")), (8.0, 6.0), "{lines:#?}");
         assert!(lines.iter().all(|l| l["trade"] == "electrical"));
-        assert!(lines.iter().any(|l| l["item"] == "device type A" && l["level"] == "Level 2" && l["net"] == json!(4.0)), "{lines:#?}");
+        // The schedule says A is a luminaire: its line is that type, not the letter (Q6002).
+        assert!(lines.iter().any(|l| l["item"] == "light fixture A" && l["level"] == "Level 2" && l["net"] == json!(4.0)), "{lines:#?}");
         // The takeoff stage uses the model takeoff (bim.takeoff) and reports a summary.
         let t = run_takeoff(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let summary = &t["summary"];

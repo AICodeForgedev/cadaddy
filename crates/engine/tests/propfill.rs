@@ -3,7 +3,9 @@
 use std::sync::{Mutex, MutexGuard};
 
 use cadaddy_engine::Session;
-use cadaddy_engine::cmd::propfill::{cfm_in, door_number, mount_height_in, panel_of};
+use cadaddy_engine::cmd::propfill::{
+    airflow_number, cfm_in, device_class, device_type_of, door_number, mount_height_in, panel_of, terminal_type_tag,
+};
 use cadaddy_engine::cmd::wallgen::made_as;
 use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Handle, Line, RawTag};
 use cadaddy_engine::geom::{Vec2, Vec3};
@@ -339,7 +341,8 @@ fn rooms_walls_and_doors_are_filled_from_the_plan() {
         h
     };
     let at = cadaddy_engine::doc::entity_bounds(s.doc().expect("doc"), s.doc().expect("doc").entity(door).expect("door"), 0).center();
-    text(&mut s, "A-ANNO", [at.x + 10.0, at.y - 14.0], "101A");
+    // 3.5' from the door's centre (a tag in front of the swing), nearer than the room's tag.
+    text(&mut s, "A-ANNO", [at.x + 24.0, at.y - 34.0], "101A");
     fill(&mut s);
     let dp = get(&mut s, &door.hex());
     assert_eq!(dp["number"]["value"], "101A", "{dp:#}");
@@ -428,6 +431,35 @@ fn the_text_readers() {
     assert_eq!(cfm_in("12x12 / 1,200CFM"), Some(1200.0));
     assert_eq!(cfm_in("CFM: 200"), Some(200.0));
     assert_eq!(cfm_in("CFM"), None);
+    for t in ["A", "CD-1", "SR2", "RG-1"] {
+        assert!(terminal_type_tag(t), "{t}");
+    }
+    for t in ["", "12", "ABCD-1", "CD-123", "CD 1"] {
+        assert!(!terminal_type_tag(t), "{t}");
+    }
+    for (t, ty, class) in [
+        ("DUPLEX RECEPTACLE, +18\" AFF", "duplex receptacle", "duplex_receptacle"),
+        ("GFCI DUPLEX RECEPTACLE", "GFCI receptacle", "gfci"),
+        ("SINGLE POLE SWITCH", "switch", "switch"),
+        ("3-WAY SWITCH", "3-way switch", "switch"),
+        ("2X4 LED TROFFER", "light fixture", "light"),
+        ("DATA OUTLET, CAT6", "data/voice outlet", "data"),
+        ("FIRE ALARM HORN/STROBE", "fire alarm horn/strobe", "fire_alarm"),
+        ("SMOKE DETECTOR", "smoke detector", "fire_alarm"),
+        ("CEILING EXHAUST FAN", "exhaust fan", "ef"),
+        ("FUSED DISCONNECT SWITCH", "disconnect switch", "disconnect_switch"),
+    ] {
+        assert_eq!(device_type_of(t), Some(ty), "{t}");
+        assert_eq!(device_class(ty), class, "{ty}");
+    }
+    for t in ["", "A", "SEE NOTE 4", "SWITCHBOARD SB-1", "LIGHTNING PROTECTION"] {
+        assert_eq!(device_type_of(t), None, "{t}");
+    }
+    assert_eq!(airflow_number("150"), Some(150.0));
+    assert_eq!(airflow_number("1,200"), Some(1200.0));
+    for t in ["10", "9000", "150 CFM", "12x12", "1A"] {
+        assert_eq!(airflow_number(t), None, "{t}");
+    }
     let sheets: std::collections::BTreeSet<String> = ["E-201".to_string(), "A-301".to_string()].into();
     for t in ["G-12", "LP-3,5", "LP1-3", "2LA-12", "H1/7"] {
         assert!(cadaddy_engine::cmd::guided::circuit_text(t, &sheets), "{t}");
@@ -464,4 +496,165 @@ fn the_guided_job_fills_the_elements_properties() {
     }
     assert!(k["room"]["filled"]["number"].as_u64().unwrap_or(0) > 0, "{:#}", k["room"]);
     assert!(k["wall"]["filled"]["type"].as_u64().unwrap_or(0) > 0, "{:#}", k["wall"]);
+}
+
+/// Probe (run by hand: `--ignored --nocapture`): the made-up full hotel's property summary after
+/// the guided job, beside the set's own counts.
+#[test]
+#[ignore]
+fn probe_full_hotel_summary() {
+    let _g = serial();
+    real_pdf_reader();
+    let set = generate_hotel(42, HotelSize::Full).expect("generate hotel");
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("cadaddy_propfill_probe_{}_{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("folder");
+    let pages: Vec<(Vec<u8>, String, String)> = set
+        .truth
+        .sheets
+        .iter()
+        .map(|sh| (set.file(&sh.pdf).expect("sheet pdf").to_vec(), format!("{} {}", sh.number, sh.title), String::new()))
+        .collect();
+    std::fs::write(dir.join("Full Set.pdf"), cadaddy_io::pdf_merge::merge(&pages).expect("merge")).expect("write set");
+    let mut s = Session::new();
+    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "auto": true, "checkpoint": false})).expect("job");
+    let _ = std::fs::remove_dir_all(&dir);
+    eprintln!("done {}; the set: {} fixtures, {} terminals", st["done"], set.truth.fixtures.len(), set.truth.terminals.len());
+    let spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    let mut by_type: std::collections::BTreeMap<String, usize> = Default::default();
+    for t in spec["tags"].as_array().into_iter().flatten().filter(|t| t["fields"]["symbol"].is_object()) {
+        *by_type.entry(format!("{} ({})", t["fields"]["device_type"]["value"], t["fields"]["device_type"]["source"])).or_default() += 1;
+    }
+    eprintln!("devices by type: {by_type:?}");
+    let sum = s.execute("bim.props.summary", &json!({})).expect("summary");
+    for k in ["device", "door", "room", "wall", "fixture", "equipment", "duct", "pipe"] {
+        eprintln!("{k}: count {} filled {}", sum["kinds"][k]["count"], sum["kinds"][k]["filled"]);
+    }
+}
+
+/// [`plan_with`] on a set of sheets side by side: the floor plan A-101, then a mechanical plan
+/// M-101 and a plumbing plan P-101 of the same size. The model is built again with a diffuser
+/// and an air handler read on M-101 (moved onto the floor plan, as the readers do), a device on
+/// office 101's wall; the trades' tags are printed on their own sheets.
+fn trade_sheets() -> Session {
+    let mut s = plan_with(true);
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(sh) = spec["sheets"].as_array_mut() {
+        sh.push(json!({"number": "M-101", "discipline": "M", "level": "L1", "source": "model", "rect": [6000, -120, 7320, 600]}));
+        sh.push(json!({"number": "P-101", "discipline": "P", "level": "L1", "source": "model", "rect": [9000, -120, 10320, 600]}));
+    }
+    // A diffuser in office 101 (10', 5' on the plan); an air handler with no schedule row in the
+    // spec (its row comes with the fill's `schedules`).
+    if let Some(t) = spec["mep"]["terminals"].as_array_mut() {
+        t.push(json!({"system": "SA", "level": "L1", "at": [120, 60], "size_in": [12, 12], "bottom_ft": 8, "terminal_kind": "supply_diffuser"}));
+    }
+    if let Some(e) = spec["mep"]["equipment"].as_array_mut() {
+        e.push(
+            json!({"tag": "AHU-2", "kind": "ahu", "level": "L1", "min": [380, 20], "max": [440, 60], "height_ft": 5, "sources": {"sheet": "M-101"}}),
+        );
+    }
+    // A receptacle drawn on office 101's south wall, outside the room's outline.
+    if let Some(t) = spec["tags"].as_array_mut() {
+        t.push(device(8.0, 0.2, "W", "LP1-7", "1F5"));
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    s.execute("rooms.build", &json!({})).expect("rooms");
+    // The diffuser's tag on M-101: its type over its airflow, beside it (10', 5' → 6240", 60").
+    text(&mut s, "M-ANNO", [6260.0, 66.0], "CD-1");
+    text(&mut s, "M-ANNO", [6260.0, 56.0], "225");
+    // P-101: a water closet tagged by its mark at 5', 2.5' and a lavatory by its letters at 15', 2.5';
+    // the plan's legend names the mark (not a fixture).
+    text(&mut s, "P-ANNO", [9180.0, 30.0], "WC-1");
+    text(&mut s, "P-ANNO", [9300.0, 30.0], "LAV");
+    text(&mut s, "P-ANNO", [10000.0, 500.0], "WC-1");
+    text(&mut s, "P-ANNO", [10040.0, 500.0], "WATER CLOSET, FLUSH VALVE");
+    // The floor plan tags the same water closet again.
+    text(&mut s, "A-ANNO", [62.0, 31.0], "WC-1");
+    s
+}
+
+/// The schedule rows the guided job reads off the M and P schedule sheets.
+fn schedule_rows() -> Value {
+    json!([
+        {"tag": "WC-1", "sheet": "P-601", "title": "PLUMBING FIXTURE SCHEDULE",
+         "row": {"TAG": "WC-1", "FIXTURE": "WATER CLOSET, FLUSH VALVE", "CW": "1\"", "HW": "-", "SAN": "3\"", "V": "2\""}},
+        {"tag": "LAV-1", "sheet": "P-601", "title": "PLUMBING FIXTURE SCHEDULE",
+         "row": {"TAG": "LAV-1", "FIXTURE": "LAVATORY", "CW": "1/2\"", "HW": "1/2\"", "SAN": "1-1/2\"", "V": "1-1/2\""}},
+        {"tag": "AHU-2", "sheet": "M-601", "title": "AIR HANDLING UNIT SCHEDULE", "row": {"TAG": "AHU-2", "CFM": "3000", "VOLTS": "460/3/60"}},
+        {"tag": "CD-1", "sheet": "M-601", "title": "AIR DEVICE SCHEDULE", "row": {"TAG": "CD-1", "NECK (IN)": "10"}}
+    ])
+}
+
+/// What the trades printed on their own sheets reaches the elements moved onto the floor plan:
+/// a terminal's airflow from its tag on the mechanical plan, an air handler's capacity from its
+/// schedule row, plumbing fixtures placed at their tags with the schedule's connection sizes
+/// (once each, a legend's entry none), and a device on a room's wall is in that room.
+#[test]
+fn the_trades_sheets_give_airflow_capacity_fixtures_and_rooms() {
+    let mut s = trade_sheets();
+    let r = s.execute("bim.props.fill", &json!({"schedules": schedule_rows()})).expect("fill");
+    assert_eq!(r["fixtures_placed"], json!(2), "{r:#}");
+
+    let with_cfm: Vec<Value> = find(&mut s, "fixture", json!({"cfm": "exists"})).iter().map(|h| get(&mut s, h)).collect();
+    let cd =
+        with_cfm.iter().find(|p| p["cfm"]["value"] == json!(225.0)).unwrap_or_else(|| panic!("the diffuser's airflow from M-101: {with_cfm:#?}"));
+    assert_eq!(cd["cfm"]["source"]["kind"], "print", "{cd:#}");
+    assert_eq!(cd["cfm"]["source"]["doc"], "M-101", "read on the mechanical plan: {cd:#}");
+    assert_eq!(cd["room"]["value"], "101", "{cd:#}");
+
+    let ahu = find(&mut s, "equipment", json!({"type_mark": "AHU-2"}));
+    assert_eq!(ahu.len(), 1);
+    let a = get(&mut s, &ahu[0]);
+    assert_eq!(a["capacity"]["value"], "3000", "{a:#}");
+    assert_eq!(a["capacity"]["unit"], "cfm");
+    assert_eq!(a["capacity"]["source"]["kind"], "schedule");
+    assert!(a["capacity"]["source"]["doc"].as_str().is_some_and(|d| d.contains("M-601")), "{a:#}");
+
+    let wc = find(&mut s, "fixture", json!({"type_mark": "WC-1"}));
+    assert_eq!(wc.len(), 1, "one water closet: the floor plan's tag is the same one, the legend's is none");
+    let w = get(&mut s, &wc[0]);
+    assert_eq!(w["type"]["value"], "WATER CLOSET, FLUSH VALVE");
+    assert_eq!(w["cw_size"]["value"], "1\"", "{w:#}");
+    assert_eq!(w["waste_size"]["value"], "3\"");
+    assert_eq!(w["vent_size"]["value"], "2\"");
+    assert!(w["hw_size"].is_null(), "no hot water: {w:#}");
+    assert_eq!(w["connections"]["source"]["kind"], "schedule");
+    assert!(w["connections"]["value"].as_str().is_some_and(|c| c.contains("CW 1\"") && c.contains("SAN 3\"")), "{w:#}");
+    assert_eq!(w["type_mark"]["source"]["kind"], "print");
+    assert_eq!(w["sheet"]["value"], "P-101");
+    assert_eq!(w["room"]["value"], "101", "moved onto the floor plan, into its room: {w:#}");
+    let lav = find(&mut s, "fixture", json!({"type_mark": "LAV-1"}));
+    assert_eq!(lav.len(), 1, "the lavatory tagged by its letters");
+    assert_eq!(get(&mut s, &lav[0])["hw_size"]["value"], "1/2\"");
+
+    let dev = device_of(&mut s, "W");
+    assert_eq!(dev["room"]["value"], "101", "{dev:#}");
+    assert_eq!(dev["room"]["note"], "the nearest room: the device is on its wall");
+
+    // Filling again places nothing twice.
+    let again = s.execute("bim.props.fill", &json!({"schedules": schedule_rows()})).expect("fill");
+    assert_eq!(again["fixtures_placed"], json!(0), "{again:#}");
+    assert_eq!(find(&mut s, "fixture", json!({"type_mark": "WC-1"})).len(), 1);
+    // Hostile schedules: not a list, rows without a tag or a row: nothing placed, no failure.
+    for bad in [json!("x"), json!([{"tag": ""}, {"row": {"CW": "1"}}, 5])] {
+        let r = s.execute("bim.props.fill", &json!({"schedules": bad})).expect("fill");
+        assert_eq!(r["fixtures_placed"], json!(0));
+    }
+}
+
+/// The guided job on a made-up hotel's second floor with the M and P schedule sheets: the
+/// plumbing fixtures are elements with their connection sizes and the air handler has its
+/// capacity, both from the schedules.
+#[test]
+fn the_guided_job_reads_the_schedules_onto_fixtures_and_equipment() {
+    let _g = serial();
+    real_pdf_reader();
+    let mut s = run_job("sched", &["A-101", "M-101", "A-102", "P-102", "M-601", "P-601"]);
+    let sum = s.execute("bim.props.summary", &json!({})).expect("summary");
+    let k = &sum["kinds"];
+    let fixtures = k["fixture"]["filled"]["connections"].as_u64().unwrap_or(0);
+    assert!(fixtures > 0, "fixtures with connections: {:#}", k["fixture"]);
+    assert_eq!(k["fixture"]["filled"]["cw_size"].as_u64(), Some(fixtures), "{:#}", k["fixture"]);
+    assert!(k["equipment"]["filled"]["capacity"].as_u64().unwrap_or(0) > 0, "{:#}", k["equipment"]);
 }

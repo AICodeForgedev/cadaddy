@@ -420,3 +420,25 @@ fn the_guided_jobs_devices_are_elements_its_takeoff_counts() {
     assert!(count(&k, "device") > 0, "{m:#}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A device's type is what the legend or fixture schedule says its mark is, not the letter: the
+/// schedule's A and B are luminaires, so the six devices are light fixtures A and B, each with
+/// the schedule's description; the read counts them by type and by the job's classes (Q6002).
+#[test]
+fn read_devices_types_each_mark_by_its_legend_row() {
+    let _g = serial();
+    let Set { mut s, .. } = set(None);
+    let m = read(&mut s, json!({"preview": false}));
+    assert_eq!(m["by_device_type"], json!({"light fixture A": 5, "light fixture B": 1}), "{m:#}");
+    assert_eq!(m["by_class"], json!({"light": 6}), "{m:#}");
+    assert_eq!(m["legend_types"]["A"]["legend"], "2X4 LED TROFFER", "{m:#}");
+    let spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    let a = spec["tags"].as_array().expect("tags").iter().find(|t| t["fields"]["type"]["value"] == "A").cloned().expect("a type A device");
+    assert_eq!(a["fields"]["device_type"], json!({"value": "light fixture A", "source": "legend"}), "{a:#}");
+    let hs = s.execute("bim.props.find", &json!({"kind": "device", "where": {"type_mark": "B"}})).expect("find")["handles"].clone();
+    let h = hs[0].as_str().expect("a B device");
+    let p = s.execute("bim.props.get", &json!({"handle": h})).expect("get")["elements"][0]["props"].clone();
+    assert_eq!(p["type"]["value"], "light fixture B", "{p:#}");
+    assert_eq!(p["type"]["source"]["kind"], "legend");
+    assert_eq!(p["description"]["value"], "LED DOWNLIGHT");
+}
