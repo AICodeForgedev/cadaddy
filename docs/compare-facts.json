@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1147,
-    "count": 1147,
+    "callableAsJson": 1152,
+    "count": 1152,
     "ids": [
       "-attedit",
       "-block",
@@ -741,12 +741,17 @@
       "pipes.read",
       "plan",
       "plan.classify",
+      "plan.door",
       "plan.layers",
       "plan.notes",
       "plan.openings",
+      "plan.resolve",
       "plan.rooms",
       "plan.sheets",
+      "plan.views",
+      "plan.wall",
       "plan.walls",
+      "plan.window",
       "plan.world",
       "planesurf",
       "pline",
@@ -1151,7 +1156,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 508,
+    "inMenus": 512,
     "typed": 551
   },
   "features": {
