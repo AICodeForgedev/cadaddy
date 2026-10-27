@@ -78,14 +78,32 @@ impl Room3 {
     }
 }
 
-/// Match a room (by number, else name) to a finish schedule row.
+/// Match a room (by number, else name) to a finish schedule row.  The name match accepts a
+/// prefix: a room label may be truncated by its tag's width (`DOUBLE Q` for `DOUBLE QUEEN`).
 fn match_schedule<'a>(schedule: &'a [RoomFinish], number: Option<&str>, name: &str) -> Option<&'a RoomFinish> {
     if let Some(num) = number
         && let Some(row) = schedule.iter().find(|r| r.number.eq_ignore_ascii_case(num.trim()))
     {
         return Some(row);
     }
-    schedule.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim()))
+    let up = name.trim().to_ascii_uppercase();
+    if up.is_empty() {
+        return None;
+    }
+    // Exact match first, then prefix (room name is a prefix of the schedule name or vice versa).
+    schedule
+        .iter()
+        .find(|r| r.name.trim().eq_ignore_ascii_case(&up))
+        .or_else(|| {
+            let min_prefix = 3;
+            if up.len() < min_prefix {
+                return None;
+            }
+            schedule.iter().find(|r| {
+                let sn = r.name.trim().to_ascii_uppercase();
+                sn.starts_with(&up) || (sn.len() >= min_prefix && up.starts_with(&sn))
+            })
+        })
 }
 
 /// The plan's rooms as spaces. A built model's rooms are its room ceilings (one per traced room,
@@ -109,7 +127,7 @@ pub fn rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<Roo
     let notes = texts(&ents);
     let schedule = find_finish_schedule(d);
     let mut out = Vec::with_capacity(found.len());
-    for r in found {
+    for mut r in found {
         let inside: Vec<&String> =
             notes.iter().filter(|(_, _, at, _)| cadaddy_geom::point_in_polygon(&r.outline, *at)).map(|(_, t, _, _)| t).collect();
         let spec_room = spec.as_ref().and_then(|sp| {
@@ -132,6 +150,14 @@ pub fn rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<Roo
             by_name.or_else(in_region).or_else(only)
         });
         let sched_row = match_schedule(&schedule, r.number.as_deref(), &r.name);
+        // A room whose label was read without its number can get the number from the schedule:
+        // the schedule lists every room by number and name, so a name-matched row is reliable.
+        if r.number.is_none()
+            && let Some(row) = sched_row
+            && !row.number.is_empty()
+        {
+            r.number = Some(row.number.clone());
+        }
         let note = inside.iter().find_map(|t| {
             let up = t.to_ascii_uppercase();
             (up.contains("CLG") || up.contains("CEILING")).then(|| feet_inches(&up)).flatten()
