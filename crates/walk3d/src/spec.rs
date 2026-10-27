@@ -186,6 +186,128 @@ pub struct Described {
     pub approved: bool,
     /// Why its values are a guess, when they are.
     pub guess: Option<String>,
+    /// Where it is in the spec's JSON, to show and patch it; none: it can't be edited part by
+    /// part (a room without a name).
+    pub path: Option<PartPath>,
+}
+
+/// Where a described part is in the spec's JSON (`serde_json::to_value` of the spec): what an
+/// editor shows for it, and the [`merge`] patch that changes or removes just that part. Every key
+/// [`BuildingSpec::describe`] gives has one here, so a palette or an agent never patches the
+/// wrong place.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PartPath {
+    /// A whole value (`materials`, `site`, `openings`, `walls`, `rcp.items`); `removable`: a
+    /// `null` patch removes it (back to its default).
+    Value { at: &'static [&'static str], removable: bool },
+    /// The item of a list [`merge`] merges item by item, whose `field` is `id` (case ignored):
+    /// levels, layers, wall, ceiling and soffit types, rooms, families, stairs, MEP systems.
+    Named { at: &'static [&'static str], field: &'static str, id: String },
+    /// Items of a list [`merge`] replaces whole (roofs, facades, RCP ceilings, columns, schedule
+    /// rows…): the patch is the whole list with them changed or left out.
+    Items { at: &'static [&'static str], pick: Pick },
+}
+
+/// Which items of a list a [`PartPath::Items`] is.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pick {
+    /// The one item at this place in the list.
+    Index(usize),
+    /// Every item whose `field` is this text (`columns` on a level, `schedule.rows` of a kind),
+    /// shown and edited as a list.
+    Field(&'static str, String),
+}
+
+impl PartPath {
+    fn list<'a>(&self, spec: &'a serde_json::Value) -> &'a serde_json::Value {
+        let at = match self {
+            PartPath::Value { at, .. } | PartPath::Named { at, .. } | PartPath::Items { at, .. } => at,
+        };
+        at.iter().fold(spec, |v, k| &v[*k])
+    }
+
+    fn wrap(&self, v: serde_json::Value) -> serde_json::Value {
+        let at = match self {
+            PartPath::Value { at, .. } | PartPath::Named { at, .. } | PartPath::Items { at, .. } => at,
+        };
+        at.iter().rev().fold(v, |v, k| serde_json::json!({ *k: v }))
+    }
+
+    /// The part's JSON in `spec`: the item, the picked items (a list for [`Pick::Field`]), or
+    /// the value. `null` when it isn't there.
+    pub fn get(&self, spec: &serde_json::Value) -> serde_json::Value {
+        use serde_json::Value;
+        let items = || self.list(spec).as_array().into_iter().flatten();
+        match self {
+            PartPath::Value { .. } => self.list(spec).clone(),
+            PartPath::Named { field, id, .. } => {
+                items().find(|x| x[*field].as_str().is_some_and(|n| n.eq_ignore_ascii_case(id))).cloned().unwrap_or(Value::Null)
+            }
+            PartPath::Items { pick: Pick::Index(i), .. } => self.list(spec).get(*i).cloned().unwrap_or(Value::Null),
+            PartPath::Items { pick: Pick::Field(f, id), .. } => Value::Array(items().filter(|x| x[*f].as_str() == Some(id)).cloned().collect()),
+        }
+    }
+
+    /// The [`merge`] patch that puts `edited` in the part's place, or removes the part (`None`).
+    /// None when the part can't be removed (`openings`).
+    pub fn patch(&self, spec: &serde_json::Value, edited: Option<serde_json::Value>) -> Option<serde_json::Value> {
+        use serde_json::Value;
+        let inner = match self {
+            PartPath::Value { removable, .. } => match edited {
+                Some(v) => v,
+                None if *removable => Value::Null,
+                None => return None,
+            },
+            PartPath::Named { field, id, .. } => {
+                let old = self.get(spec);
+                let name = old.get(*field).cloned().unwrap_or_else(|| Value::String(id.clone()));
+                let mut items = Vec::new();
+                let edited = edited.map(|mut e| {
+                    // An edit without the name keeps the part's own.
+                    if let Value::Object(o) = &mut e {
+                        o.entry(field.to_string()).or_insert_with(|| name.clone());
+                    }
+                    e
+                });
+                let renamed = edited.as_ref().and_then(|e| e[*field].as_str()).is_some_and(|n| !n.eq_ignore_ascii_case(id));
+                if edited.is_none() || renamed {
+                    items.push(serde_json::json!({ *field: name, "remove": true }));
+                }
+                items.extend(edited);
+                Value::Array(items)
+            }
+            PartPath::Items { pick, .. } => {
+                let old = self.list(spec).as_array().cloned().unwrap_or_default();
+                let new: Vec<Value> = match edited {
+                    None => Vec::new(),
+                    Some(Value::Array(a)) if matches!(pick, Pick::Field(..)) => a,
+                    Some(v) => vec![v],
+                };
+                let picked = |i: usize, x: &Value| match pick {
+                    Pick::Index(at) => i == *at,
+                    Pick::Field(f, id) => x[*f].as_str() == Some(id),
+                };
+                // Each picked item's place takes the next edited one (so an unchanged edit keeps
+                // the order); extra ones follow the last picked, missing ones are left out.
+                let last = old.iter().enumerate().filter(|(i, x)| picked(*i, x)).map(|(i, _)| i).next_back();
+                let mut out = Vec::with_capacity(old.len() + new.len());
+                let mut new = new.into_iter();
+                for (i, x) in old.into_iter().enumerate() {
+                    if !picked(i, &x) {
+                        out.push(x);
+                        continue;
+                    }
+                    out.extend(new.next());
+                    if Some(i) == last {
+                        out.extend(new.by_ref());
+                    }
+                }
+                out.extend(new);
+                Value::Array(out)
+            }
+        };
+        Some(self.wrap(inner))
+    }
 }
 
 /// What a layer's objects are. `layer` is a pattern: `*` matches any run of characters, case
@@ -1950,11 +2072,13 @@ impl BuildingSpec {
     /// height walls 4 7/8" thick (line pairs)").
     pub fn describe(&self) -> Vec<Described> {
         let mut out = Vec::new();
-        let mut put = |section: &'static str, key: String, text: String| {
+        let mut put = |section: &'static str, key: String, text: String, path: Option<PartPath>| {
             let approved = self.approved.iter().any(|a| a.eq_ignore_ascii_case(&key));
             let guess = self.guess.iter().find(|(k, _)| k.eq_ignore_ascii_case(&key)).map(|(_, why)| why.clone());
-            out.push(Described { section, key, text, approved, guess });
+            out.push(Described { section, key, text, approved, guess, path });
         };
+        let named = |at: &'static [&'static str], field: &'static str, id: &str| Some(PartPath::Named { at, field, id: id.to_string() });
+        let index = |at: &'static [&'static str], i: usize| Some(PartPath::Items { at, pick: Pick::Index(i) });
         for l in &self.levels {
             let place = match &l.sheet {
                 Some(sh) => format!("sheet {sh}"),
@@ -1965,6 +2089,7 @@ impl BuildingSpec {
                 "levels",
                 format!("levels/{}", l.name),
                 format!("{} = {place} at {}; {} floor to floor, {} ceilings", l.name, feet(l.elevation_ft), feet(l.height_ft), feet(l.ceiling_ft)),
+                named(&["levels"], "name", &l.name),
             );
         }
         for r in &self.layers {
@@ -1993,7 +2118,7 @@ impl BuildingSpec {
                 Role::Run => format!("runs {} above the floor", feet(r.height_ft.unwrap_or(9.0))),
                 Role::Ignore => "not part of the building".into(),
             };
-            put("layers", format!("layers/{}", r.layer), format!("{} = {what}", r.layer));
+            put("layers", format!("layers/{}", r.layer), format!("{} = {what}", r.layer), named(&["layers"], "layer", &r.layer));
         }
         for t in &self.wall_types {
             let height = t.height_ft.map_or("floor to floor".to_string(), |h| format!("{} high", feet(h)));
@@ -2020,7 +2145,7 @@ impl BuildingSpec {
                     let _ = write!(text, "; from {}", a.source);
                 }
             }
-            put("wall_types", format!("wall_types/{}", t.name), text);
+            put("wall_types", format!("wall_types/{}", t.name), text, named(&["wall_types"], "name", &t.name));
         }
         if !self.walls.is_empty() {
             let guessed = self.walls.iter().filter(|w| w.status() == MarkStatus::Guess).count();
@@ -2029,6 +2154,7 @@ impl BuildingSpec {
                 "walls",
                 "walls".into(),
                 format!("{} walls: {drawing} typed from their tags on the plans (drawing), {guessed} guessed (no tag)", self.walls.len()),
+                Some(PartPath::Value { at: &["walls"], removable: true }),
             );
         }
         for r in &self.rooms {
@@ -2040,6 +2166,8 @@ impl BuildingSpec {
                 "rooms",
                 format!("rooms/{name}"),
                 format!("{name}{on}: {ceiling}{}", if mats.is_empty() { String::new() } else { format!("; {mats}") }),
+                // Rooms merge by name: one without a name can't be picked out.
+                if r.name.trim().is_empty() { None } else { named(&["rooms"], "name", &r.name) },
             );
         }
         for f in &self.families {
@@ -2054,7 +2182,12 @@ impl BuildingSpec {
                 FamilyKind::Door => format!("{} high", feet(head)),
                 FamilyKind::Window => format!("{} to {}", feet(f.sill_ft.unwrap_or(self.openings.window_sill_ft)), feet(head)),
             };
-            put("families", format!("families/{}", f.name), format!("{}: {kind} from blocks {}, {width}, {heights}", f.name, f.block));
+            put(
+                "families",
+                format!("families/{}", f.name),
+                format!("{}: {kind} from blocks {}, {width}, {heights}", f.name, f.block),
+                named(&["families"], "name", &f.name),
+            );
         }
         for st in &self.stairs {
             let to = match (&st.to_level, self.stair_heights(st)) {
@@ -2077,9 +2210,14 @@ impl BuildingSpec {
                 None => format!("stair from {}", st.level),
             };
             let state = if st.confirmed { "" } else { " (detected; confirm)" };
-            put("stairs", format!("stairs/{}", st.name), format!("{}: {what}, {} wide{state}", st.name, inches(st.width_in)));
+            put(
+                "stairs",
+                format!("stairs/{}", st.name),
+                format!("{}: {what}, {} wide{state}", st.name, inches(st.width_in)),
+                named(&["stairs"], "name", &st.name),
+            );
         }
-        for f in &self.exterior.facades {
+        for (i, f) in self.exterior.facades.iter().enumerate() {
             let bands: Vec<String> = f
                 .bands
                 .iter()
@@ -2099,9 +2237,10 @@ impl BuildingSpec {
                 "exterior",
                 format!("facades/{}", f.side.name()),
                 format!("{} facade: {}", f.side.name(), if bands.is_empty() { "plain".into() } else { bands.join("; ") }),
+                index(&["exterior", "facades"], i),
             );
         }
-        for r in &self.exterior.roofs {
+        for (i, r) in self.exterior.roofs.iter().enumerate() {
             let slope = r.slope.map_or("flat".to_string(), |s| format!("sloping {}", pitch_text(s.rise_per_ft)));
             let slope =
                 if r.slope.is_some_and(|s| ValueStatus::is_default(&s.direction_status)) { format!("{slope} (direction assumed)") } else { slope };
@@ -2111,7 +2250,12 @@ impl BuildingSpec {
                 let words: Vec<&str> = a.layers.iter().map(|l| l.material.as_str()).collect();
                 format!("; {} top down: {}", if a.tag.is_empty() { "built" } else { a.tag.as_str() }, words.join(", "))
             });
-            put("exterior", format!("roofs/{}", r.name), format!("{}: roof on {}, {slope}{parapet}{asm}", r.name, r.level));
+            put(
+                "exterior",
+                format!("roofs/{}", r.name),
+                format!("{}: roof on {}, {slope}{parapet}{asm}", r.name, r.level),
+                index(&["exterior", "roofs"], i),
+            );
         }
         for (i, c) in self.exterior.crickets.iter().enumerate() {
             put(
@@ -2124,6 +2268,7 @@ impl BuildingSpec {
                     feet(c.height_ft),
                     if ValueStatus::is_default(&c.height_status) { " (assumed)" } else { "" }
                 ),
+                index(&["exterior", "crickets"], i),
             );
         }
         for (i, c) in self.rcp.ceilings.iter().enumerate() {
@@ -2134,12 +2279,22 @@ impl BuildingSpec {
             let room = c.room.as_ref().map_or(String::new(), |r| format!(" ({r})"));
             let what = c.ceiling_type.as_ref().map_or(what.clone(), |t| format!("type {t}, {what}"));
             let guess = c.guess.as_ref().map_or(String::new(), |g| format!(" (guess: {g})"));
-            put("rcp", format!("ceilings/{}", i + 1), format!("Ceiling {}{room} on {}: {what} at {}{guess}", i + 1, c.level, feet(c.height_ft)));
+            put(
+                "rcp",
+                format!("ceilings/{}", i + 1),
+                format!("Ceiling {}{room} on {}: {what} at {}{guess}", i + 1, c.level, feet(c.height_ft)),
+                index(&["rcp", "ceilings"], i),
+            );
         }
         for (i, sf) in self.rcp.soffits.iter().enumerate() {
             let what = sf.soffit_type.as_ref().map_or(String::new(), |t| format!(", type {t}"));
             let guess = sf.guess.as_ref().map_or(String::new(), |g| format!(" (guess: {g})"));
-            put("rcp", format!("soffits/{}", i + 1), format!("Soffit {} on {} at {}{what}{guess}", i + 1, sf.level, feet(sf.height_ft)));
+            put(
+                "rcp",
+                format!("soffits/{}", i + 1),
+                format!("Soffit {} on {} at {}{what}{guess}", i + 1, sf.level, feet(sf.height_ft)),
+                index(&["rcp", "soffits"], i),
+            );
         }
         let words = |ls: &[AssemblyLayer]| ls.iter().map(|l| l.material.as_str()).collect::<Vec<_>>().join(" + ");
         for c in &self.ceiling_types {
@@ -2155,7 +2310,7 @@ impl BuildingSpec {
             if let Some(r) = &c.fire_rating {
                 let _ = write!(text, "; {r}");
             }
-            put("ceiling_types", format!("ceiling_types/{}", c.name), text);
+            put("ceiling_types", format!("ceiling_types/{}", c.name), text, named(&["ceiling_types"], "name", &c.name));
         }
         for t in &self.soffit_types {
             let hang = match t.hangs_from {
@@ -2166,6 +2321,7 @@ impl BuildingSpec {
                 "soffit_types",
                 format!("soffit_types/{}", t.name),
                 format!("{}: {hang}; bottom {}; sides {}; framing {}", t.name, words(&t.bottom), words(&t.sides), words(&t.framing)),
+                named(&["soffit_types"], "name", &t.name),
             );
         }
         if !self.rcp.items.is_empty() {
@@ -2174,9 +2330,10 @@ impl BuildingSpec {
                 "rcp",
                 "ceiling_items".into(),
                 format!("In the ceilings: {} light fixtures, {} diffusers", n(ItemKind::Fixture), n(ItemKind::Diffuser)),
+                Some(PartPath::Value { at: &["rcp", "items"], removable: true }),
             );
         }
-        for (kind, label) in [(FamilyKind::Door, "Door"), (FamilyKind::Window, "Window")] {
+        for (kind, label, id) in [(FamilyKind::Door, "Door", "door"), (FamilyKind::Window, "Window", "window")] {
             let rows: Vec<&ScheduleRow> = self.schedule.rows.iter().filter(|r| r.kind == kind).collect();
             if rows.is_empty() {
                 continue;
@@ -2190,7 +2347,12 @@ impl BuildingSpec {
                 })
                 .collect();
             let more = if rows.len() > 12 { format!(" and {} more", rows.len() - 12) } else { String::new() };
-            put("schedule", format!("schedule/{}s", label.to_ascii_lowercase()), format!("{label} schedule: {}{more}", list.join(", ")));
+            put(
+                "schedule",
+                format!("schedule/{id}s"),
+                format!("{label} schedule: {}{more}", list.join(", ")),
+                Some(PartPath::Items { at: &["schedule", "rows"], pick: Pick::Field("kind", id.into()) }),
+            );
         }
         if !self.columns.is_empty() {
             let mut by: Vec<(&str, usize)> = Vec::new();
@@ -2201,7 +2363,12 @@ impl BuildingSpec {
                 }
             }
             for (l, n) in by {
-                put("columns", format!("columns/{l}"), format!("{n} columns on {l} at the grid intersections"));
+                put(
+                    "columns",
+                    format!("columns/{l}"),
+                    format!("{n} columns on {l} at the grid intersections"),
+                    Some(PartPath::Items { at: &["columns"], pick: Pick::Field("level", l.to_string()) }),
+                );
             }
         }
         for sy in &self.mep.systems {
@@ -2223,9 +2390,10 @@ impl BuildingSpec {
                 "mep",
                 format!("systems/{}", sy.name),
                 format!("{}: {kind} on {}, {n} runs, usually {size} with its bottom at {}{hidden}", sy.name, sy.layer, feet(sy.bottom_ft)),
+                named(&["mep", "systems"], "name", &sy.name),
             );
         }
-        for e in &self.mep.equipment {
+        for (i, e) in self.mep.equipment.iter().enumerate() {
             let guessed = e.sources.values().any(|v| v == "rule");
             put(
                 "mep",
@@ -2238,9 +2406,10 @@ impl BuildingSpec {
                     feet(e.height_ft),
                     if guessed { ", partly guessed" } else { "" }
                 ),
+                index(&["mep", "equipment"], i),
             );
         }
-        for e in &self.exterior.equipment {
+        for (i, e) in self.exterior.equipment.iter().enumerate() {
             put(
                 "exterior",
                 format!("equipment/{}", e.name),
@@ -2251,20 +2420,27 @@ impl BuildingSpec {
                     feet(e.height_ft),
                     if ValueStatus::is_default(&e.height_status) { " (assumed)" } else { "" }
                 ),
+                index(&["exterior", "equipment"], i),
             );
         }
         let mats = materials_text(&self.materials);
         if !mats.is_empty() {
-            put("materials", "materials".into(), format!("Materials: {mats}"));
+            put("materials", "materials".into(), format!("Materials: {mats}"), Some(PartPath::Value { at: &["materials"], removable: true }));
         }
         if let Some(site) = &self.site {
-            put("site", "site".into(), format!("Ground at {}, {} round the building", feet(site.elevation_ft), feet(site.margin_ft)));
+            put(
+                "site",
+                "site".into(),
+                format!("Ground at {}, {} round the building", feet(site.elevation_ft), feet(site.margin_ft)),
+                Some(PartPath::Value { at: &["site"], removable: true }),
+            );
         }
         let o = &self.openings;
         put(
             "openings",
             "openings".into(),
             format!("Openings in walls: doors {} high, windows {} to {}", feet(o.door_head_ft), feet(o.window_sill_ft), feet(o.window_head_ft)),
+            Some(PartPath::Value { at: &["openings"], removable: false }),
         );
         out
     }
@@ -2979,9 +3155,6 @@ fn materials_text(m: &Surfaces) -> String {
     parts.iter().filter_map(|(k, v)| v.as_ref().map(|v| format!("{k} {v}"))).collect::<Vec<_>>().join(", ")
 }
 
-/// Merge `patch` into `base` (both spec JSON): objects merge key by key, `null` removes a key; a
-/// list of named items (levels, wall types, rooms, families by `name`; layers by `layer`) merges
-/// item by item, an item with `"remove": true` removing it; other lists are replaced.
 /// A roof's or a facade band's assembly: at most [`MAX_ASSEMBLY_LAYERS`] layers, each from 0
 /// (a membrane or a barrier) to 48 inches thick.
 fn envelope_assembly_issues(at: &str, a: &Assembly, out: &mut Vec<Issue>) {
@@ -2995,6 +3168,10 @@ fn envelope_assembly_issues(at: &str, a: &Assembly, out: &mut Vec<Issue>) {
     }
 }
 
+/// Merge `patch` into `base` (both spec JSON): objects merge key by key, `null` removes a key; a
+/// list of named items (levels, wall, ceiling and soffit types, rooms, families, stairs,
+/// elevators, MEP systems by `name`; layers by `layer`) merges item by item, an item with
+/// `"remove": true` removing it; other lists are replaced.
 pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
     use serde_json::Value;
     match (base, patch) {
@@ -3006,7 +3183,9 @@ pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
                 }
                 let key = match k.as_str() {
                     "layers" => Some("layer"),
-                    "levels" | "wall_types" | "rooms" | "families" | "stairs" | "elevators" | "systems" => Some("name"),
+                    "levels" | "wall_types" | "rooms" | "families" | "stairs" | "elevators" | "systems" | "ceiling_types" | "soffit_types" => {
+                        Some("name")
+                    }
                     _ => None,
                 };
                 match (b.get_mut(k), key, v) {
@@ -3219,5 +3398,133 @@ mod tests {
         let issues = s.check();
         assert!(issues.iter().any(|i| i.error && i.path.ends_with("layers")), "{issues:?}");
         assert!(issues.iter().any(|i| i.error && i.path.contains("thickness_in")), "{issues:?}");
+    }
+
+    /// A spec with two of every kind of part `describe()` gives.
+    fn every_part() -> serde_json::Value {
+        let sq = |x: f64| serde_json::json!([[x, 0], [x + 10.0, 0], [x + 10.0, 10], [x, 10]]);
+        serde_json::json!({
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9}, {"name": "L2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9}],
+            "layers": [{"layer": "A-WALL", "role": "wall"}, {"layer": "A-DOOR", "role": "door"}],
+            "wall_types": [{"name": "WT1", "thickness_in": 5}, {"name": "WT2", "thickness_in": 8}],
+            "walls": [{"level": "L1", "a": [0, 0], "b": [10, 0], "wall_type": "WT1"}],
+            "rooms": [{"name": "Office"}, {"name": "", "number": "102"}],
+            "families": [{"name": "D1", "kind": "door", "block": "DOOR"}, {"name": "W1", "kind": "window", "block": "WIN"}],
+            "stairs": [{"name": "S1", "level": "L1", "runs": [{"from": [0, 0], "to": [0, 10]}]}],
+            "exterior": {
+                "facades": [{"side": "north"}, {"side": "south"}],
+                "roofs": [{"name": "R1", "level": "L2", "outline": sq(0.0)}, {"name": "R2", "level": "L2", "outline": sq(20.0)}],
+                "crickets": [{"level": "L2", "outline": sq(0.0), "height_ft": 1}],
+                "equipment": [{"name": "RTU-1", "level": "L2", "outline": sq(0.0), "height_ft": 4}]
+            },
+            "rcp": {
+                "ceilings": [{"level": "L1", "outline": sq(0.0), "height_ft": 9}],
+                "soffits": [{"level": "L1", "outline": sq(0.0), "height_ft": 8}],
+                "items": [{"kind": "fixture", "block": "LT", "level": "L1", "at": [1, 1], "size_in": [24, 24]}]
+            },
+            "ceiling_types": [{"name": "C1"}, {"name": "C2", "kind": "grid"}],
+            "soffit_types": [{"name": "SF1"}, {"name": "SF2", "hangs_from": "structure"}],
+            "columns": [
+                {"level": "L1", "grid": "A-1", "at": [0, 0], "size_in": [12, 12]},
+                {"level": "L2", "grid": "A-1", "at": [0, 0], "size_in": [12, 12]},
+                {"level": "L1", "grid": "B-1", "at": [20, 0], "size_in": [12, 12]}
+            ],
+            "schedule": {"rows": [{"kind": "door", "mark": "101"}, {"kind": "window", "mark": "A"}, {"kind": "door", "mark": "102"}]},
+            "mep": {
+                "systems": [{"name": "SA", "layer": "M-SUPP", "kind": "duct", "size_in": [12, 8], "bottom_ft": 9}],
+                "equipment": [{"tag": "AHU-1", "kind": "air_handler", "level": "L1", "height_ft": 4}]
+            },
+            "materials": {"wall": "Brick"},
+            "site": {"elevation_ft": 0, "margin_ft": 20}
+        })
+    }
+
+    #[test]
+    fn every_described_part_has_its_own_place_in_the_json() {
+        let s: BuildingSpec = serde_json::from_value(every_part()).unwrap();
+        let v = serde_json::to_value(&s).unwrap();
+        let d = s.describe();
+        let mut sections: Vec<&str> = d.iter().map(|p| p.section).collect();
+        sections.dedup();
+        assert_eq!(
+            sections,
+            [
+                "levels",
+                "layers",
+                "wall_types",
+                "walls",
+                "rooms",
+                "families",
+                "stairs",
+                "exterior",
+                "rcp",
+                "ceiling_types",
+                "soffit_types",
+                "rcp",
+                "schedule",
+                "columns",
+                "mep",
+                "exterior",
+                "materials",
+                "site",
+                "openings"
+            ]
+        );
+        let at = |p: &str| v.pointer(p).cloned().unwrap();
+        let expect = [
+            ("levels/L1", at("/levels/0")),
+            ("layers/A-DOOR", at("/layers/1")),
+            ("wall_types/WT2", at("/wall_types/1")),
+            ("walls", at("/walls")),
+            ("rooms/Office", at("/rooms/0")),
+            ("families/W1", at("/families/1")),
+            ("stairs/S1", at("/stairs/0")),
+            ("facades/South", at("/exterior/facades/1")),
+            ("roofs/R2", at("/exterior/roofs/1")),
+            ("crickets/1", at("/exterior/crickets/0")),
+            ("ceilings/1", at("/rcp/ceilings/0")),
+            ("soffits/1", at("/rcp/soffits/0")),
+            ("ceiling_types/C2", at("/ceiling_types/1")),
+            ("soffit_types/SF1", at("/soffit_types/0")),
+            ("ceiling_items", at("/rcp/items")),
+            ("schedule/doors", serde_json::json!([at("/schedule/rows/0"), at("/schedule/rows/2")])),
+            ("schedule/windows", serde_json::json!([at("/schedule/rows/1")])),
+            ("columns/L1", serde_json::json!([at("/columns/0"), at("/columns/2")])),
+            ("columns/L2", serde_json::json!([at("/columns/1")])),
+            ("systems/SA", at("/mep/systems/0")),
+            ("equipment/AHU-1", at("/mep/equipment/0")),
+            ("equipment/RTU-1", at("/exterior/equipment/0")),
+            ("materials", at("/materials")),
+            ("site", at("/site")),
+            ("openings", at("/openings")),
+        ];
+        for (key, want) in &expect {
+            let p = d.iter().find(|p| p.key == *key).unwrap_or_else(|| panic!("{key} not described"));
+            assert_eq!(&p.path.as_ref().unwrap().get(&v), want, "{key}");
+        }
+        for p in &d {
+            // The room with only a number can't be picked out by name: no path.
+            let Some(path) = &p.path else {
+                assert_eq!(p.key, "rooms/102");
+                continue;
+            };
+            assert!(!path.get(&v).is_null(), "{}", p.key);
+            // Put back unchanged: the spec is identical.
+            let mut same = v.clone();
+            merge(&mut same, &path.patch(&v, Some(path.get(&v))).unwrap());
+            let same: BuildingSpec = serde_json::from_value(same).unwrap();
+            assert_eq!(same, s, "{}", p.key);
+            // Removed: that part, and only it, is gone.
+            let Some(remove) = path.patch(&v, None) else {
+                assert_eq!(p.key, "openings");
+                continue;
+            };
+            let mut gone = v.clone();
+            merge(&mut gone, &remove);
+            let gone: BuildingSpec = serde_json::from_value(gone).unwrap();
+            let left: Vec<String> = gone.describe().into_iter().map(|x| x.key).collect();
+            let want: Vec<String> = d.iter().map(|x| x.key.clone()).filter(|k| k != &p.key).collect();
+            assert_eq!(left, want, "{}", p.key);
+        }
     }
 }

@@ -1,10 +1,12 @@
 //! Redline (our own free PDF editor for construction drawings, by AICodeForge): SEND TO REDLINE
 //! plots the layouts to one PDF (a bookmark per sheet, the drawing's hyperlinks as links) and
 //! opens it in Redline when it is installed, else just saves it; IMPORT REDLINE MARKUPS reads that
-//! PDF's annotations back (MARKUPIMPORT) on a markup layer per reviewer. No accounts, no network.
+//! PDF's annotations back on a markup layer per reviewer, matching each page to the layout it came
+//! from. No accounts, no network.
 
 use std::sync::OnceLock;
 
+use cadaddy_doc::markup::{PdfBookmarks, PdfPageCount};
 use serde_json::{Value, json};
 
 use super::*;
@@ -15,9 +17,19 @@ use crate::{Result, Session};
 pub type Opener = fn(&str) -> std::result::Result<bool, String>;
 
 static OPENER: OnceLock<Opener> = OnceLock::new();
+static PAGE_COUNT: OnceLock<PdfPageCount> = OnceLock::new();
+static BOOKMARKS: OnceLock<PdfBookmarks> = OnceLock::new();
 
 pub fn set_opener(f: Opener) {
     let _ = OPENER.set(f);
+}
+
+pub fn set_page_count(f: PdfPageCount) {
+    let _ = PAGE_COUNT.set(f);
+}
+
+pub fn set_bookmarks(f: PdfBookmarks) {
+    let _ = BOOKMARKS.set(f);
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -29,7 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(has_doc),
         CommandSpec::new("redline.import", "Import Redline Markups", run_import)
             .menu(&["Insert", "Import Redline Markups..."])
-            .params("{path: the reviewed PDF, page?, placement as MARKUPIMPORT} → MARKUPIMPORT's result: the markups on MARKUP-<reviewer> layers")
+            .params("{path: the reviewed PDF, page?: (restricts to one page on the current layout), placement as MARKUPIMPORT} → {pages: [{page, layout, placed}], unmatched: [{page, markups}]}")
             .enabled(has_doc),
     ]
 }
@@ -76,10 +88,142 @@ fn run_send(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
-    let mut q = p.clone();
-    if let Some(o) = q.as_object_mut() {
-        o.insert("byAuthor".into(), json!(true));
-    }
     let import = find_command("markupimport").ok_or_else(|| crate::EngineError::Other("Markup import is not available in this build.".into()))?;
-    (import.run)(s, &q)
+
+    // Single-page mode: `page` param given, or no page-count hook installed — old behaviour.
+    if p.get("page").is_some() || PAGE_COUNT.get().is_none() {
+        let mut q = p.clone();
+        if let Some(o) = q.as_object_mut() {
+            o.insert("byAuthor".into(), json!(true));
+        }
+        return (import.run)(s, &q);
+    }
+
+    let path = str_param(p, "path")
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .ok_or_else(|| bad("redline.import", "`path` of a PDF is required"))?
+        .to_string();
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let bytes = crate::readfile::read(&path).map_err(|e| bad("redline.import", format!("{path}: {e}")))?;
+    #[cfg(target_arch = "wasm32")]
+    let bytes: Vec<u8> = return Err(bad("redline.import", "files can't be read on the web"));
+
+    let page_count_fn = PAGE_COUNT.get().ok_or_else(|| bad("redline.import", "PDF page count is not available"))?;
+    let total = page_count_fn(&bytes).map_err(|e| bad("redline.import", e))?;
+
+    // Bookmark titles → page→layout name map.
+    let bmarks = BOOKMARKS.get().and_then(|f| f(&bytes).ok()).unwrap_or_default();
+    let page_title: std::collections::HashMap<usize, String> = bmarks.into_iter().map(|(t, pg)| (pg, t)).collect();
+
+    // The drawing's layout names.
+    let layout_names: Vec<String> = s.doc()?.layouts.iter().map(|l| l.name.clone()).collect();
+
+    // The layout order PUBLISH would use (Model if it has objects, then layouts in order).
+    let model_has_objects = !s.doc()?.model.is_empty();
+    let mut publish_order: Vec<String> = Vec::new();
+    if model_has_objects {
+        publish_order.push("Model".to_string());
+    }
+    publish_order.extend(layout_names.iter().cloned());
+
+    // Map each page to a layout: by bookmark title first, then by publish page order.
+    let match_layout = |pg: u32| -> Option<String> {
+        if let Some(title) = page_title.get(&(pg as usize)) {
+            if layout_names.iter().any(|n| n == title) {
+                return Some(title.clone());
+            }
+            if title == "Model" {
+                return Some("Model".to_string());
+            }
+        }
+        // Fallback: page order of published layouts.
+        publish_order.get(pg as usize - 1).cloned()
+    };
+
+    // Single-page PDF: fall back to the current layout.
+    let current_layout = match s.layout_space() {
+        cadaddy_doc::Space::Paper(name) => name,
+        _ => String::new(),
+    };
+
+    let mut pages_result: Vec<Value> = Vec::new();
+    let mut unmatched: Vec<Value> = Vec::new();
+
+    for pg in 1..=total {
+        let layout = if total == 1 && match_layout(pg).is_none() {
+            if current_layout.is_empty() { None } else { Some(current_layout.clone()) }
+        } else {
+            match_layout(pg)
+        };
+
+        match layout.as_deref() {
+            Some("Model") => {
+                // MUST 2: refuse Model pages with a message about from/to placement.
+                let reader = super::markup::READER.get().ok_or_else(|| bad("redline.import", "PDF markups can't be read in this build"))?;
+                let count = reader(&bytes, pg).map(|p| p.markups.len()).unwrap_or(0);
+                if count > 0 {
+                    unmatched.push(json!({
+                        "page": pg,
+                        "markups": count,
+                        "reason": format!(
+                            "page {pg} came from Model; place its markups in model space with \
+                             `from`/`to` (two page points and where they go in model space)")
+                    }));
+                    s.echo(format!(
+                        "Page {pg}: {count} markup(s) from Model skipped — use \
+                         markupimport with `from`/`to` to place them in model space."
+                    ));
+                }
+            }
+            Some(name) => {
+                // Switch to this layout, import, collect results.
+                s.execute("layout", &json!({ "option": "set", "name": name }))?;
+                let q = json!({
+                    "path": path,
+                    "page": pg,
+                    "byAuthor": true,
+                });
+                match (import.run)(s, &q) {
+                    Ok(r) => {
+                        let placed = r.get("placed").cloned().unwrap_or(json!([]));
+                        if placed.as_array().is_some_and(|a| !a.is_empty()) {
+                            pages_result.push(json!({
+                                "page": pg,
+                                "layout": name,
+                                "placed": placed,
+                            }));
+                        }
+                    }
+                    Err(e) => {
+                        s.echo(format!("Page {pg} ({name}): {e}"));
+                    }
+                }
+            }
+            None => {
+                let reader = super::markup::READER.get().ok_or_else(|| bad("redline.import", "PDF markups can't be read in this build"))?;
+                let count = reader(&bytes, pg).map(|p| p.markups.len()).unwrap_or(0);
+                if count > 0 {
+                    unmatched.push(json!({ "page": pg, "markups": count }));
+                    s.echo(format!("Page {pg}: {count} markup(s) could not be matched to a layout."));
+                }
+            }
+        }
+    }
+
+    // Restore the layout we started on, if it still exists.
+    if !current_layout.is_empty() {
+        let _ = s.execute("layout", &json!({ "option": "set", "name": current_layout }));
+    }
+
+    let total_placed: usize = pages_result.iter().filter_map(|p| p["placed"].as_array().map(|a| a.len())).sum();
+    let msg = format!(
+        "{total_placed} markup(s) imported from {pg} page(s){unm}.",
+        pg = pages_result.len(),
+        unm = if unmatched.is_empty() { String::new() } else { format!(", {} page(s) unmatched", unmatched.len()) },
+    );
+    s.echo(&msg);
+
+    Ok(json!({ "pages": pages_result, "unmatched": unmatched, "message": msg }))
 }

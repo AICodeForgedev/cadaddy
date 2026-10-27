@@ -570,6 +570,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
         }
         "project_rules" => {
             let command = match a.get("action").and_then(Value::as_str) {
+                Some("list") | None => "project.rules.list",
                 Some("get") => "project.rules.get",
                 Some("set") => "project.rules.set",
                 Some("remove") => "project.rules.remove",
@@ -577,11 +578,20 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Some("label") => "project.rules.label",
                 Some("import") => "project.rules.import",
                 Some("export") => "project.rules.export",
-                _ => "project.rules.list",
+                Some(other) => return Err(format!(
+                    "project_rules has no action `{other}` — valid actions: list, get, set, remove, preview, label, import, export"
+                )),
             };
             let mut params = a.clone();
             if let Some(o) = params.as_object_mut() {
                 o.remove("action");
+            }
+            // Default set_by to "agent" for MCP calls to set.
+            if command == "project.rules.set"
+                && let Some(o) = params.as_object_mut()
+                && !o.contains_key("set_by")
+            {
+                o.insert("set_by".to_string(), json!("agent"));
             }
             b.call("engine.execute", json!({"command": command, "params": params}))
         }

@@ -4983,6 +4983,7 @@ fn apply_rules_for_stage(s: &mut Session, job: &mut GuidedJob, _stage: StageName
                         "value": &rule.value,
                         "source": "guided_job",
                         "tier": "project_rule",
+                        "reason": "symbol rule from the guided job",
                     }),
                 );
                 rule.auto_applied = rule.auto_applied.saturating_add(1);
@@ -4998,6 +4999,7 @@ fn apply_rules_for_stage(s: &mut Session, job: &mut GuidedJob, _stage: StageName
                     "value": &rule.value,
                     "source": "guided_job",
                     "tier": "project_rule",
+                    "reason": "scale override from the guided job",
                 }),
             );
             rule.auto_applied = rule.auto_applied.saturating_add(1);
