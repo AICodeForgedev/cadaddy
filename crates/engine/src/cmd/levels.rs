@@ -434,6 +434,15 @@ fn level_name_matches(code: &str, name: &str) -> bool {
     n == c || n == format!("LEVEL {c}") || (c == "R" && n.contains("ROOF"))
 }
 
+/// A level's code from its spec name: `Level 3` → `3`, `Roof` → `R`.
+fn level_code(name: &str) -> String {
+    let n = name.trim();
+    if n.eq_ignore_ascii_case("roof") {
+        return "R".into();
+    }
+    n.get(..6).filter(|p| p.eq_ignore_ascii_case("level ")).and_then(|_| n.get(6..)).map_or_else(|| n.to_string(), |c| c.trim().to_string())
+}
+
 fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
     let (sp, _) = current(s, "levels.list")?;
     let d = s.doc()?;
@@ -453,7 +462,7 @@ fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
             // Q6018: each entry is {sheet, typical} so the gate can tell a typical sheet from a
             // floor-specific one.
             let on = |x: &&SheetLink| on_level(x, &l.name);
-            let sheets: Vec<Value> = sp.sheets.iter().filter(on).map(|x| json!({"sheet": x.number, "typical": typical_sheet(x)})).collect();
+            let sheets: Vec<Value> = sp.sheets.iter().filter(on).map(|x| sheet_entry(x, &l.name)).collect();
             let typical: Vec<&str> = sp.sheets.iter().filter(on).filter(|x| typical_sheet(x)).map(|x| x.number.as_str()).collect();
             json!({
                 "name": l.name,
@@ -495,6 +504,21 @@ fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 /// Whether a sheet covers several levels (a typical-floor plan).
+/// A sheet's entry on level `name` in `levels.list`. One view of a sheet printing several
+/// levels' plans (Q6030): the level takes only that view, named `<number>/<level>` as the print
+/// set's classify names it, so no sheet shows on two levels untyped.
+fn sheet_entry(x: &SheetLink, name: &str) -> Value {
+    match &x.view {
+        Some(v) => json!({
+            "sheet": format!("{}/{}", x.number, level_code(name)),
+            "printed": x.number,
+            "typical": typical_sheet(x),
+            "view": {"title": v.title, "region": v.rect.map(round)},
+        }),
+        None => json!({"sheet": x.number, "typical": typical_sheet(x)}),
+    }
+}
+
 fn typical_sheet(x: &SheetLink) -> bool {
     x.levels.len() > 1
 }
@@ -623,6 +647,7 @@ fn link(number: String, discipline: String, title: String, source: String, sp: &
         rect: None,
         levels: Vec::new(),
         registration: None,
+        view: None,
     }
 }
 
@@ -688,7 +713,14 @@ fn run_sheets(s: &mut Session, p: &Value) -> Result<Value> {
         for f in sheets {
             match sp.sheets.iter_mut().find(|x| x.number.eq_ignore_ascii_case(&f.number)) {
                 // Where an imported set put the sheet stays known.
-                Some(x) => *x = SheetLink { rect: f.rect.or(x.rect), registration: f.registration.clone().or_else(|| x.registration.clone()), ..f },
+                Some(x) => {
+                    *x = SheetLink {
+                        rect: f.rect.or(x.rect),
+                        registration: f.registration.clone().or_else(|| x.registration.clone()),
+                        view: f.view.clone().or_else(|| x.view.clone()),
+                        ..f
+                    }
+                }
                 None => sp.sheets.push(f),
             }
         }
@@ -1050,6 +1082,7 @@ mod tests {
             rect: None,
             levels: levels.iter().map(|l| l.to_string()).collect(),
             registration: None,
+            view: None,
         };
         sp.sheets = vec![
             link("A-101", Some("Level 1"), &[]),
