@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Result, Session};
 
+mod outline;
+
 /// The extended data application that marks what WALLGEN made (part, level, source object).
 pub const APP: &str = "CADADDY_WALLGEN";
 /// Floor slab thickness when none is given, feet.
@@ -280,6 +282,40 @@ fn slab(top: &Mesh, t: f64) -> Mesh {
     Mesh { vertices, faces, kind: MeshKind::Polyface }
 }
 
+/// A floor plate's faces at `z`: its rectangles, facing up (`down` facing down: a ceiling).
+fn plate_faces(o: &outline::Outline, z: f64, down: bool) -> Mesh {
+    let mut m = empty_mesh();
+    for [a, b] in &o.rects {
+        let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
+        m.vertices.extend([Vec3::new(a.x, a.y, z), Vec3::new(b.x, a.y, z), Vec3::new(b.x, b.y, z), Vec3::new(a.x, b.y, z)]);
+        let mut v = vec![base, base + 1, base + 2, base + 3];
+        if down {
+            v.reverse();
+        }
+        m.faces.push(MeshFace { v, hidden: 0 });
+    }
+    m
+}
+
+/// A floor slab over a floor plate: its top at `z`, its underside `t` lower, closed round the
+/// plate's boundary only (no sides between its rectangles).
+fn plate_slab(o: &outline::Outline, z: f64, t: f64) -> Mesh {
+    let mut m = plate_faces(o, z, false);
+    if t <= 0.0 {
+        return m;
+    }
+    let under = plate_faces(o, z - t, true);
+    let n = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
+    m.vertices.extend(under.vertices);
+    m.faces.extend(under.faces.into_iter().map(|f| MeshFace { v: f.v.iter().map(|i| i.saturating_add(n)).collect(), hidden: 0 }));
+    for (a, b) in &o.edges {
+        let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
+        m.vertices.extend([Vec3::new(a.x, a.y, z), Vec3::new(b.x, b.y, z), Vec3::new(a.x, a.y, z - t), Vec3::new(b.x, b.y, z - t)]);
+        m.faces.push(MeshFace { v: vec![base + 1, base, base + 2, base + 3], hidden: 0 });
+    }
+    m
+}
+
 /// Remove what WALLGEN made from model space; how many objects.
 pub(crate) fn remove_made(d: &mut Drawing) -> usize {
     let hs: Vec<Handle> = d.model.iter().filter(|e| made_as(e).is_some()).map(|e| e.handle).collect();
@@ -362,6 +398,23 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
             }
         }
     }
+    // Each planned level's floor plate: inside its exterior walls' outside faces (an L plan's
+    // slab is its L), else the walls' extents when they do not close round it.
+    let mut plates: HashMap<usize, outline::Outline> = HashMap::new();
+    for (si, pl) in &planned {
+        let Some((lo, hi)) = pl.footprint() else { continue };
+        let walls: Vec<(Vec2, Vec2, f64)> = pl.walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
+        match outline::building(&walls, lo, hi, upf) {
+            Some(o) => {
+                plates.insert(*si, o);
+            }
+            None => {
+                if let Some(level) = scene.levels.get(*si) {
+                    notes.push(format!("{}: the walls do not close round the building; its floor slab is their extents.", level.name));
+                }
+            }
+        }
+    }
     for grp in gs.iter().take(MAX_OBJECTS) {
         // Levels built from the plan's pairs keep only Walk mode's floors and ceilings.
         if matches!(grp.part, Part::Wall | Part::Door | Part::Glass) && planned.iter().any(|(si, _)| *si == grp.level) {
@@ -384,8 +437,15 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
                 v.y = v.y.clamp(lo.y, hi.y);
             }
         }
+        let plate = plates.get(&grp.level).filter(|_| matches!(grp.part, Part::Floor | Part::Ceiling));
+        let z = m.vertices.first().map_or(0.0, |v| v.z);
         if grp.part == Part::Floor {
-            m = slab(&m, g.slab_ft.max(0.0) * upf);
+            m = match plate {
+                Some(o) => plate_slab(o, z, g.slab_ft.max(0.0) * upf),
+                None => slab(&m, g.slab_ft.max(0.0) * upf),
+            };
+        } else if let Some(o) = plate {
+            m = plate_faces(o, z, true);
         }
         let common = Common { layer: layer_of(grp.part).into(), xdata: tag(grp.part, &level.name, grp.source).into(), ..Common::default() };
         if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {

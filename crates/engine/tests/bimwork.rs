@@ -325,7 +325,7 @@ fn estimate_prices_the_takeoff_and_gives_a_change_order() {
     assert!((user_hrs - hours).abs() < 0.01, "user-table labor_hrs: {user_hrs} vs {hours}");
     assert!(e["total"].as_f64().unwrap() >= material + hours * 80.0, "total must be at least the user-table total");
     let d = e["lines"].as_array().unwrap().iter().find(|l| l["cost_item"] == "Rectangular duct").unwrap();
-    assert_eq!((d["waste_pct"].as_f64(), d["matched_by"].as_str()), (Some(10.0), Some("words")));
+    assert_eq!((d["waste_pct"].as_f64(), d["matched_by"].as_str()), (Some(10.0), Some("family")));
     // Q6012: items previously unmatched may now be priced from the starter book.
     // Items with no cost-table row AND no starter-book match are still unmatched.
     let starter_priced: Vec<&str> = user_lines.iter().filter(|l| is_starter(l)).filter_map(|l| l["item"].as_str()).collect();

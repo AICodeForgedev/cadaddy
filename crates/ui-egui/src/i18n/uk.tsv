@@ -2909,6 +2909,7 @@
 	Query Estimate	Запит до кошторису
 	Set Estimate Assembly	Задати збірку кошторису
 	Set Estimate Price	Задати ціну кошторису
+	Map Line to Price Row	Зіставити рядок з рядком ціни
 	Set Estimate Scope	Задати обсяг кошторису
 	New Window	Нове вікно
 	Concrete Elements	Бетонні елементи
@@ -3317,3 +3318,17 @@
 	Code Rules	Правила норм
 	Select Building Codes	Вибрати будівельні норми
 	Fill Element Properties	Заповнити властивості елементів
+	Build Construction Sequence	Побудувати послідовність будівництва
+	Construction Sequence	Послідовність будівництва
+	Edit Sequence Activity	Змінити роботу послідовності
+	Show Sequence at Date	Показати послідовність на дату
+	Export Construction Sequence	Експортувати послідовність будівництва
+	Sequence Trade Conflicts	Конфлікти фахів у послідовності
+	Ceiling Space Fit	Простір над стелею
+	Takeoff by Activity	Обсяги за роботами
+	Record As-Built Change	Записати виконавчу зміну
+	Import As-Built Markups	Імпортувати виконавчі позначки
+	List As-Built Changes	Список виконавчих змін
+	Set As-Built Change Status	Встановити стан виконавчої зміни
+	Compare Design and As-Built	Порівняти проєкт і виконавчу документацію
+	Export As-Built	Експортувати виконавчу документацію
