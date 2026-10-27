@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1139,
-    "count": 1139,
+    "callableAsJson": 1147,
+    "count": 1147,
     "ids": [
       "-attedit",
       "-block",
@@ -268,6 +268,14 @@
       "count",
       "countlist",
       "counttable",
+      "cover.check",
+      "cover.init",
+      "cover.photo",
+      "cover.ready",
+      "cover.sign",
+      "cover.status",
+      "cover.uncheck",
+      "cover.wall",
       "cutbase",
       "cutclip",
       "cvadd",
@@ -1230,7 +1238,7 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 54,
+    "count": 55,
     "tools": [
       "arch_read",
       "asbuilt",
@@ -1245,6 +1253,7 @@
       "close_drawing",
       "codebook",
       "command_line",
+      "cover",
       "drawing_query",
       "drawing_summary",
       "execute",
