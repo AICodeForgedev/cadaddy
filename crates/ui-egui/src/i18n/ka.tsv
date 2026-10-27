@@ -103,6 +103,7 @@
 	Blend	გადასვლა
 	Block	ბლოკი
 	Block Attribute Manager...	ბლოკის ატრიბუტების მენეჯერი...
+	Block Description...	ბლოკის აღწერა...
 	Block Editor	ბლოკის რედაქტორი
 	Block Reference	ბლოკის ჩასმა
 	Block...	ბლოკი...
@@ -563,6 +564,7 @@
 	N	N
 	Name	სახელი
 	Name (A–Z)	სახელი (ა–ჰ)
+	Named Viewports...	დასახელებული ხედვის არეები...
 	Named Views...	დასახელებული ხედები...
 	Nearest	უახლოესი
 	New	ახალი
@@ -777,6 +779,7 @@
 	Save (⌘S)	შენახვა (⌘S)
 	Save As	შენახვა როგორც
 	Save As...	შენახვა როგორც...
+	Save Layout as Template	განლაგების შაბლონად შენახვა
 	Save Layer State	შრეების მდგომარეობის შენახვა
 	Save State	მდგომარეობის შენახვა
 	Scale	მასშტაბირება
