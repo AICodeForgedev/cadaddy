@@ -1200,5 +1200,4 @@ pub fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, ok: bool) {
 }
 
 #[cfg(test)]
-#[path = "constraints_tests.rs"]
 mod tests;
