@@ -144,6 +144,7 @@ pub mod redline;
 pub mod revise3d;
 pub(crate) mod rhai_cmd;
 pub mod rooms3d;
+pub(crate) mod runtidy;
 pub mod sheetfacts;
 pub mod sitetakeoff;
 pub mod spell;

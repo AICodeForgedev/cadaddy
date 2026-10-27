@@ -694,8 +694,10 @@ pub(crate) fn merge_tables(d: &mut Drawing, src: &Drawing) -> (usize, usize) {
 }
 
 /// Which source blocks to copy, and under which name: new names keep theirs, generated
-/// (anonymous `*…`) blocks that collide get a fresh generated name, and a named block this drawing
-/// already has keeps this drawing's definition (not copied).
+/// (anonymous `*…`, or a PDF import's `PDF-SYM-n` symbol) blocks that collide get a fresh
+/// generated name, and a named block this drawing already has keeps this drawing's definition
+/// (not copied). Every page of a print set numbers its symbols from 1: another page's
+/// `PDF-SYM-1` is another symbol.
 pub(crate) fn block_names(d: &Drawing, src: &Drawing) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     let mut taken: BTreeSet<String> = d.blocks.keys().map(|k| k.to_ascii_uppercase()).collect();
@@ -704,7 +706,7 @@ pub(crate) fn block_names(d: &Drawing, src: &Drawing) -> BTreeMap<String, String
         if upper.starts_with("*MODEL_SPACE") || upper.starts_with("*PAPER_SPACE") {
             continue;
         }
-        let anonymous = b.anonymous || name.starts_with('*');
+        let anonymous = b.anonymous || name.starts_with('*') || upper.starts_with("PDF-SYM-");
         let to = if !taken.contains(&upper) {
             name.clone()
         } else if anonymous {
@@ -1201,6 +1203,29 @@ mod tests {
             row_spacing: 0.0,
             clip: None,
         })
+    }
+
+    #[test]
+    fn a_second_pages_symbols_keep_their_own_blocks() {
+        // Two imported pages each number their repeated symbols from PDF-SYM-1.
+        let page = |r: f64| {
+            let mut src = Drawing::new_imperial();
+            src.blocks.insert("PDF-SYM-1".into(), block("PDF-SYM-1", r));
+            src.add(&Space::Model, Common::default(), insert("PDF-SYM-1")).unwrap();
+            src
+        };
+        let mut s = session();
+        import_drawing(&mut s, &page(1.0), Vec2::new(0.0, 0.0), 1.0, "a.pdf").unwrap();
+        import_drawing(&mut s, &page(2.0), Vec2::new(100.0, 0.0), 1.0, "m.pdf").unwrap();
+        let d = s.doc().unwrap();
+        let names: Vec<String> =
+            d.model.iter().filter_map(|e| if let EntityKind::Insert(i) = &e.kind { Some(i.block.clone()) } else { None }).collect();
+        assert_eq!(names, ["PDF-SYM-1", "PDF-SYM-2"]);
+        let radius = |n: &str| match d.block(n).and_then(|b| b.entities.iter().next().map(|e| e.kind.clone())) {
+            Some(EntityKind::Circle(c)) => c.radius,
+            _ => 0.0,
+        };
+        assert_eq!((radius("PDF-SYM-1"), radius("PDF-SYM-2")), (1.0, 2.0), "the second page's symbol is its own");
     }
 
     #[test]

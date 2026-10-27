@@ -595,6 +595,8 @@ pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy
         });
     }
     mep.systems = sys_map.into_values().collect();
+    // Geometry noise in the traced centrelines (jogs, hooks, a bend in pieces) is no fitting.
+    mep.runs = super::runtidy::tidy_runs(std::mem::take(&mut mep.runs), sp.units_per_foot);
     for dt in &net.terminals {
         let sys_name = match dt.kind.as_str() {
             "supply_diffuser" => "SA",
