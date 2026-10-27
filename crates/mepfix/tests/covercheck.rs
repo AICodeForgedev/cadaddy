@@ -214,7 +214,7 @@ fn uncheck_item_revokes_ready_status() {
 fn photos_resolve_to_correct_wall_face() {
     let t = test_truth();
     let mut record = record_from_truth(&t, "Test Project");
-    // Add a photo to face A of W1-001.
+    // Add a photo to face A of W1-001, taken on its north side (face A = left of a→b = north).
     let photo = InWallPhoto {
         id: "P001".into(),
         face: "A".into(),
@@ -224,7 +224,7 @@ fn photos_resolve_to_correct_wall_face() {
         author: "Foreman".into(),
         date: "2026-10-21".into(),
         caption: "Boxes installed".into(),
-        at_ft: [5.0, 14.5],
+        at_ft: [5.0, 15.5],
         level: "1".into(),
     };
     {
@@ -279,7 +279,8 @@ fn wall_contents_shows_both_faces() {
     let t = test_truth();
     let mut record = record_from_truth(&t, "Test Project");
     // Add photos to each face.
-    for (face, along, y) in [("A", 3.0, 14.0), ("B", 3.0, 16.0)] {
+    // Face A is north of the wall (y > 15), face B south.
+    for (face, along, y) in [("A", 3.0, 16.0), ("B", 3.0, 14.0)] {
         let area_id = format!("W1-001/{face}");
         let photo = InWallPhoto {
             id: format!("P-{face}"),
@@ -375,4 +376,220 @@ fn fixture_set_cover_record() {
     }
     // Phases exist.
     assert!(!record.phases.is_empty());
+}
+
+// ---- Rework Q5119 (covercheck-rw1) -------------------------------------------------------------
+
+fn photo(id: &str, at: [f64; 2], level: &str, face: &str) -> InWallPhoto {
+    InWallPhoto {
+        id: id.into(),
+        face: face.into(),
+        elevation_ft: 4.0,
+        along_ft: 0.0,
+        uri: format!("photos/{id}.jpg"),
+        author: "Foreman".into(),
+        date: "2026-10-21".into(),
+        caption: String::new(),
+        at_ft: at,
+        level: level.into(),
+    }
+}
+
+/// Text just over the cap, with a two-byte letter straddling byte 2000.
+fn long_text() -> String {
+    let mut s = "a".repeat(1999);
+    s.push_str(&"é".repeat(40));
+    s
+}
+
+#[test]
+fn long_multibyte_text_never_panics() {
+    let t = test_truth();
+    let mut record = record_from_truth(&t, "Test Project");
+    let text = long_text();
+    assert!(text.len() > 2000 && !text.is_char_boundary(2000));
+    assert!(clamp_text(&text).len() <= 2000);
+    for ph in record.phases.iter_mut() {
+        ph.sign(&text, &text);
+        assert!(ph.inspector.as_ref().is_some_and(|i| i.len() <= 2000 && i.starts_with("aaa")));
+    }
+    let ids: Vec<String> = record.area("W1-001/A").unwrap().checklist.iter().map(|c| c.id.clone()).collect();
+    let phases = record.phases.clone();
+    let area = record.area_mut("W1-001/A").unwrap();
+    for id in &ids {
+        assert!(area.check_item(id, &text, &text));
+    }
+    assert!(area.mark_ready(&text, &text, &phases));
+    assert!(area.ready_by.as_ref().is_some_and(|b| b.len() <= 2000));
+    // Every text field of a photo is cut on a character boundary.
+    let mut p = photo(&text, [5.0, 15.5], &text, &text);
+    p.uri = text.clone();
+    p.author = text.clone();
+    p.date = text.clone();
+    p.caption = text.clone();
+    assert!(area.add_photo(p));
+    let kept = area.photos.last().unwrap();
+    for f in [&kept.id, &kept.face, &kept.uri, &kept.author, &kept.date, &kept.caption, &kept.level] {
+        assert!(f.len() <= 2000 && f.ends_with('a'), "{}", f.len());
+    }
+    // Numbers that aren't finite are refused.
+    for (elev, along, at) in [(f64::NAN, 0.0, [1.0, 1.0]), (1.0, f64::INFINITY, [1.0, 1.0]), (1.0, 0.0, [f64::NAN, 1.0]), (1.0, 0.0, [1.0, f64::NEG_INFINITY])] {
+        let mut p = photo("bad", at, "1", "A");
+        p.elevation_ft = elev;
+        p.along_ft = along;
+        assert!(!area.add_photo(p));
+    }
+    assert_eq!(area.photos.len(), 1);
+}
+
+#[test]
+fn face_rooms_follow_the_geometry() {
+    let mut t = test_truth();
+    let record = record_from_truth(&t, "Test Project");
+    // W1-001 runs east along y=15: face A (left) is north, the corridor; face B the office.
+    assert_eq!(record.area("W1-001/A").unwrap().rooms, vec!["102"]);
+    assert_eq!(record.area("W1-001/B").unwrap().rooms, vec!["101"]);
+    // Drawn the other way, the faces swap.
+    t.plan_walls[1].a_ft = [20.0, 15.0];
+    t.plan_walls[1].b_ft = [10.0, 15.0];
+    // An exterior wall (west side of the office, drawn north to south): one room, on one face.
+    t.plan_walls.push(cadaddy_mepfix::truth::PlanWall {
+        id: "W1-003".into(),
+        a_ft: [0.0, 15.0],
+        b_ft: [0.0, 0.0],
+        rooms: vec!["101".into()],
+        openings: Vec::new(),
+        ..t.plan_walls[0].clone()
+    });
+    let record = record_from_truth(&t, "Test Project");
+    assert_eq!(record.area("W1-002/A").unwrap().rooms, vec!["101"]);
+    assert_eq!(record.area("W1-002/B").unwrap().rooms, vec!["102"]);
+    // South-going: left (A) is east, inside the office; the outside face has no room.
+    assert_eq!(record.area("W1-003/A").unwrap().rooms, vec!["101"]);
+    assert!(record.area("W1-003/B").unwrap().rooms.is_empty());
+}
+
+#[test]
+fn photos_are_filed_by_position() {
+    let t = test_truth();
+    let mut record = record_from_truth(&t, "Test Project");
+    // South of W1-001 (y=14.5): the office face B, 5 ft from its a end.
+    let area = add_photo_at(&mut record, &t.plan_walls, photo("P1", [5.0, 14.5], "1", ""), PHOTO_REACH_FT).unwrap();
+    assert_eq!(area, "W1-001/B");
+    let p = &record.area("W1-001/B").unwrap().photos[0];
+    assert_eq!(p.face, "B");
+    assert!((p.along_ft - 5.0).abs() < 1e-9, "{}", p.along_ft);
+    // North (y=15.5): face A, the corridor side; a stated face that agrees is fine.
+    assert_eq!(add_photo_at(&mut record, &t.plan_walls, photo("P2", [5.0, 15.5], "1", "a"), PHOTO_REACH_FT).unwrap(), "W1-001/A");
+    // W1-002 starts at x=10: along is from its own a end.
+    assert_eq!(add_photo_at(&mut record, &t.plan_walls, photo("P3", [13.0, 14.0], "1", "B"), PHOTO_REACH_FT).unwrap(), "W1-002/B");
+    assert!((record.area("W1-002/B").unwrap().photos[0].along_ft - 3.0).abs() < 1e-9);
+    // Far from every wall: refused, with the reason.
+    let far = add_photo_at(&mut record, &t.plan_walls, photo("P4", [5.0, 40.0], "1", ""), PHOTO_REACH_FT).unwrap_err();
+    assert!(far.contains("no wall face within"), "{far}");
+    // Right position, wrong level: refused too.
+    assert!(add_photo_at(&mut record, &t.plan_walls, photo("P5", [5.0, 14.5], "2", ""), PHOTO_REACH_FT).is_err());
+    // It says face A but stands on the B side: refused, nothing filed.
+    let wrong = add_photo_at(&mut record, &t.plan_walls, photo("P6", [5.0, 14.5], "1", "A"), PHOTO_REACH_FT).unwrap_err();
+    assert!(wrong.contains("face A") && wrong.contains("W1-001/B"), "{wrong}");
+    // Not a number: refused.
+    assert!(add_photo_at(&mut record, &t.plan_walls, photo("P7", [f64::NAN, 14.5], "1", ""), PHOTO_REACH_FT).is_err());
+    // The same photo twice is filed once.
+    assert!(add_photo_at(&mut record, &t.plan_walls, photo("P1", [5.0, 14.5], "1", ""), PHOTO_REACH_FT).is_err());
+    assert_eq!(record.progress().photos, 3);
+    // The tap and the photo agree: tapping where P1 was taken shows P1.
+    let (tapped, _) = resolve_wall_tap(&record, &t.plan_walls, [5.0, 14.5], "1", 2.0).unwrap();
+    assert_eq!(record.area(&tapped).unwrap().photos[0].id, "P1");
+}
+
+/// The fixture with a second floor: the same walls and rooms on level 2.
+fn two_level_truth() -> cadaddy_mepfix::truth::Truth {
+    let mut t = test_truth();
+    t.building.levels.push(cadaddy_mepfix::truth::Level { name: "2".into(), code: "2".into(), elevation_ft: 12.0 });
+    let rooms: Vec<Room> = t.building.rooms.iter().map(|r| Room { id: format!("{}-2", r.id), level: "2".into(), number: format!("2{}", &r.number[1..]), ..r.clone() }).collect();
+    t.building.rooms.extend(rooms);
+    let walls: Vec<PlanWall> = t
+        .plan_walls
+        .iter()
+        .map(|w| PlanWall { id: w.id.replace("W1", "W2"), level: "2".into(), rooms: vec!["201".into(), "202".into()], ..w.clone() })
+        .collect();
+    t.plan_walls.extend(walls);
+    t
+}
+
+#[test]
+fn phases_are_signed_per_level() {
+    let t = two_level_truth();
+    let mut record = record_from_truth(&t, "Test Project");
+    assert_eq!(record.phases.len(), STANDARD_PHASES.len() * 2, "one per phase and level");
+    assert!(record.phases.iter().all(|p| p.levels.len() == 1));
+    assert_eq!(record.area("W2-001/A").unwrap().rooms, vec!["202"]);
+    // Every other phase signed on both floors; Rough-In Electrical on L1 only.
+    for (id, name) in STANDARD_PHASES.iter().filter(|(id, _)| *id != "rough_elec") {
+        assert_eq!(record.sign_phase(id, "1", "Inspector", "2026-10-21"), 1, "{name}");
+        assert_eq!(record.sign_phase(name, "2", "Inspector", "2026-10-21"), 1, "{name}");
+    }
+    assert_eq!(record.sign_phase("Rough-In Electrical", "1", "Inspector", "2026-10-22"), 1);
+    assert_eq!(record.sign_phase("rough_elec", "9", "Inspector", "2026-10-22"), 0, "no such level");
+    let phases = record.phases.clone();
+    for id in ["W1-001/A", "W2-001/A"] {
+        let ids: Vec<String> = record.area(id).unwrap().checklist.iter().map(|c| c.id.clone()).collect();
+        let area = record.area_mut(id).unwrap();
+        for c in &ids {
+            area.check_item(c, "Electrician", "2026-10-21");
+        }
+    }
+    assert!(record.area_mut("W1-001/A").unwrap().mark_ready("Foreman", "2026-10-22", &phases), "L1 is signed");
+    let l2 = record.area_mut("W2-001/A").unwrap();
+    assert!(!l2.mark_ready("Foreman", "2026-10-22", &phases), "L1's signature doesn't release L2");
+    let (items, unsigned) = l2.open_reasons(&phases);
+    assert!(items.is_empty());
+    assert_eq!(unsigned, vec!["Rough-In Electrical (2)"]);
+    // Per level in the summary too.
+    let s = summary_by_level(&record);
+    assert_eq!((s[0].phases_signed, s[0].phases_total), (6, 6));
+    assert_eq!((s[1].phases_signed, s[1].phases_total), (5, 6));
+}
+
+#[test]
+fn validate_clears_ready_claimed_by_a_loaded_record() {
+    let t = test_truth();
+    let mut record = record_from_truth(&t, "Test Project");
+    for ph in record.phases.iter_mut() {
+        ph.sign("Inspector", "2026-10-21");
+    }
+    let ids: Vec<String> = record.area("W1-002/A").unwrap().checklist.iter().map(|c| c.id.clone()).collect();
+    let phases = record.phases.clone();
+    let good = record.area_mut("W1-002/A").unwrap();
+    for c in &ids {
+        good.check_item(c, "Electrician", "2026-10-21");
+    }
+    assert!(good.mark_ready("Foreman", "2026-10-21", &phases));
+    // A hand-edited file: W1-001/A claims ready with its whole checklist open, and the
+    // ceiling claims ready with one item open and its phase unsigned.
+    let mut v = serde_json::to_value(&record).unwrap();
+    for a in v["areas"].as_array_mut().unwrap() {
+        if a["id"] == "W1-001/A" || a["id"] == "CLG-1-101" {
+            a["ready_to_cover"] = serde_json::json!(true);
+            a["ready_by"] = serde_json::json!("someone");
+        }
+        if a["id"] == "CLG-1-101" {
+            for c in a["checklist"].as_array_mut().unwrap() {
+                c["done"] = serde_json::json!(true);
+            }
+            a["checklist"][2]["done"] = serde_json::json!(false);
+        }
+    }
+    v["phases"][0]["signed"] = serde_json::json!(false);
+    let mut loaded: CoverRecord = serde_json::from_value(v).unwrap();
+    let cleared = loaded.validate();
+    let names: Vec<&str> = cleared.iter().map(|c| c.area.as_str()).collect();
+    assert_eq!(names, vec!["W1-001/A", "W1-002/A", "CLG-1-101"], "{cleared:?}");
+    assert_eq!(cleared[0].open_items.len(), STANDARD_CATEGORIES.len());
+    assert_eq!(cleared[2].open_items, vec!["CLG-1-101-CK03: protection_plates"]);
+    assert_eq!(cleared[1].unsigned_phases, vec!["Rough-In Electrical (1)"]);
+    assert!(loaded.areas.iter().all(|a| !a.ready_to_cover && a.ready_by.is_none()));
+    // A valid record keeps its ready areas.
+    assert!(record.validate().is_empty());
+    assert!(record.area("W1-002/A").unwrap().ready_to_cover);
 }
