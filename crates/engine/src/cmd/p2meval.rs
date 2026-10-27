@@ -16,14 +16,16 @@
 //! `plan.classify {draft}` for a PDF) → levels from the plan titles and notes → `stairs.detect`
 //! → `model.build` → `model.issues`, `model.counts`. Each step's result and time are reported.
 //!
-//! **Scorer** (`score`): each measure from 0 to 1 — wall length (built walls along their run),
-//! openings (built doors and windows), rooms (built room ceilings' areas, by name), heights
-//! (levels' elevations and floor to floor), stairs (risers) — and their mean.
+//! **Scorer** (`score`): each measure from 0 to 1, read from the BUILT model only — wall length
+//! (built walls along their run) and openings (built doors and windows) on every level, rooms
+//! (built room ceilings' areas, by name), heights (the elevation and floor to floor of each level
+//! that has built walls), stairs (built stairs' risers, on their level) — and their mean.
 //!
 //! **With a live agent**: give the agent the MCP server (`cadaddy-cli mcp`, or the app with
 //! `--control`), open a case's drawing (`p2m.case {name, path}` writes it as DXF), let it work
 //! with the `plan.*`, `bspec.*`, `stairs.*`, `model.*` tools, then call `p2m.score {case}` on
-//! its drawing to get the same scores as the benchmark.
+//! its drawing to get the same scores as the benchmark. `p2m.case` keeps the answers to itself
+//! unless the harness asks for them (`with_truth: true`), so the agent can't read them.
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Mesh, Space};
 use cadaddy_geom::{Vec2, Vec3};
@@ -41,7 +43,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("p2m.case", "Plans to Model Case", run_case_cmd)
             .files()
-            .params("{name, path?: DXF file to write} → {truth}: a benchmark case opened as a new drawing (or written to a file) for a live agent")
+            .params("{name, path?: DXF file to write, with_truth?: bool} → {name, path?, truth?}: a benchmark case opened as a new drawing (or written to a file) for a live agent; the truth only with `with_truth`")
             .noundo(),
         CommandSpec::new("p2m.score", "Plans to Model Score", run_score)
             .files()
@@ -50,19 +52,28 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// What a case's model should have.
+/// What one level of a case's model should have.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Truth {
-    /// Wall run length on the ground floor, feet (centrelines, through openings).
+pub struct LevelTruth {
+    pub name: String,
+    /// Elevation and floor to floor, feet.
+    pub elevation_ft: f64,
+    pub height_ft: f64,
+    /// Wall run length on this level, feet (centrelines, through openings).
     pub walls_ft: f64,
     pub doors: usize,
     pub windows: usize,
+}
+
+/// What a case's model should have.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Truth {
+    /// Every level, lowest first.
+    pub levels: Vec<LevelTruth>,
     /// Room name → floor area, square feet.
     pub rooms: Vec<(String, f64)>,
-    /// Level → (elevation, floor to floor), feet.
-    pub levels: Vec<(String, f64, f64)>,
-    /// Risers of each stair.
-    pub stairs: Vec<u32>,
+    /// Each stair: the level it starts on and its risers.
+    pub stairs: Vec<(String, u32)>,
 }
 
 pub struct Case {
@@ -177,14 +188,23 @@ fn storey(d: &mut Drawing, o: (f64, f64), messy: bool, lw: bool) {
     text(d, tags, p(330.0, 120.0), "LOBBY", 9.0);
 }
 
-fn base_truth() -> Truth {
-    Truth {
+/// One storey's level truth (see `storey`).
+fn storey_truth(name: &str, elevation_ft: f64, height_ft: f64, windows: usize) -> LevelTruth {
+    LevelTruth {
+        name: name.into(),
+        elevation_ft,
+        height_ft,
         // The perimeter's centreline (474 × 234) and the middle wall's run (228).
         walls_ft: (2.0 * (474.0 + 234.0) + 228.0) / 12.0,
         doors: 1,
-        windows: 1,
+        windows,
+    }
+}
+
+fn base_truth(windows: usize) -> Truth {
+    Truth {
+        levels: vec![storey_truth("Level 1", 0.0, 10.0, windows)],
         rooms: vec![("Office".into(), 361.0), ("Lobby".into(), 361.0)],
-        levels: vec![("Level 1".into(), 0.0, 10.0)],
         stairs: Vec::new(),
     }
 }
@@ -221,7 +241,7 @@ pub fn cases() -> Vec<Case> {
     out.push(Case {
         name: "single",
         drawing: d,
-        truth: base_truth(),
+        truth: base_truth(1),
         pdf: false,
         spec: perfect_spec(json!([{"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 8}]), json!({})),
     });
@@ -237,9 +257,9 @@ pub fn cases() -> Vec<Case> {
         line(&mut d, "A-FLOR-STRS", None, (x, 150.0), (x, 194.0));
     }
     text(&mut d, "A-FLOR-STRS", (262.0, 168.0), "UP", 6.0);
-    let mut truth = base_truth();
-    truth.levels = vec![("Level 1".into(), 0.0, 12.0), ("Level 2".into(), 12.0, 12.0)];
-    truth.stairs = vec![19];
+    let mut truth = base_truth(1);
+    truth.levels = vec![storey_truth("Level 1", 0.0, 12.0, 1), storey_truth("Level 2", 12.0, 12.0, 1)];
+    truth.stairs = vec![("Level 1".into(), 19)];
     let spec_levels = json!([
         {"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 8, "region": [-200, -200, 900, 600]},
         {"name": "Level 2", "elevation_ft": 12, "height_ft": 12, "ceiling_ft": 8, "region": [900, -200, 2000, 600]}
@@ -257,7 +277,7 @@ pub fn cases() -> Vec<Case> {
     out.push(Case {
         name: "messy",
         drawing: d,
-        truth: Truth { windows: 0, ..base_truth() },
+        truth: base_truth(0),
         pdf: false,
         spec: perfect_spec(json!([{"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 8}]), json!({})),
     });
@@ -265,7 +285,7 @@ pub fn cases() -> Vec<Case> {
     let mut d = Drawing::new_imperial();
     storey(&mut d, (0.0, 0.0), true, true);
     text(&mut d, "0", (0.0, -50.0), "SCALE: 1/4\" = 1'-0\"", 6.0);
-    out.push(Case { name: "pdf", drawing: d, truth: Truth { windows: 0, ..base_truth() }, pdf: true, spec: Value::Null });
+    out.push(Case { name: "pdf", drawing: d, truth: base_truth(0), pdf: true, spec: Value::Null });
     out
 }
 
@@ -419,24 +439,110 @@ fn area(m: &Mesh) -> f64 {
         .sum()
 }
 
+/// Risers of a built stair: its tread and landing tops are each one riser above the last, and
+/// the floor it arrives at one more (see `cadaddy_walk3d::StairRule::geometry`).
+fn built_risers(m: &Mesh, upf: f64) -> u32 {
+    let mut zs: Vec<f64> = m.vertices.iter().map(|v| v.z).filter(|z| z.is_finite()).collect();
+    zs.sort_by(f64::total_cmp);
+    let tol = 1e-3 * upf;
+    let mut levels = 0u32;
+    let mut last: Option<f64> = None;
+    for z in zs {
+        if last.is_none_or(|l| z - l > tol) {
+            levels = levels.saturating_add(1);
+            last = Some(z);
+        }
+    }
+    // The lowest height is the stair's bottom, not a tread; the floor it arrives at adds that
+    // riser back, so the risers are the distinct heights. A flat mesh has none.
+    if levels < 2 { 0 } else { levels }
+}
+
+/// One level of the built model: what `model.build` made with this level's name on it.
+struct BuiltLevel {
+    name: String,
+    /// The bottom and top of its built walls, drawing units.
+    walls_z: Option<(f64, f64)>,
+}
+
+/// The built model's levels: every level name a built part carries, with its walls' extent.
+fn built_levels(d: &Drawing) -> Vec<BuiltLevel> {
+    let mut out: Vec<BuiltLevel> = Vec::new();
+    for e in d.model.iter() {
+        let (Some(part), Some(level)) = (super::wallgen::made_as(e), super::bspec::made_level(e)) else { continue };
+        let i = match out.iter().position(|l| l.name.eq_ignore_ascii_case(&level)) {
+            Some(i) => i,
+            None => {
+                out.push(BuiltLevel { name: level, walls_z: None });
+                out.len() - 1
+            }
+        };
+        if part != "wall" {
+            continue;
+        }
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let (lo, hi) =
+            m.vertices.iter().map(|v| v.z).filter(|z| z.is_finite()).fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), z| (l.min(z), h.max(z)));
+        if let Some(l) = out.get_mut(i)
+            && lo <= hi
+        {
+            l.walls_z = Some(l.walls_z.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
+        }
+    }
+    out
+}
+
 /// The built model of a session scored against a case's truth: each measure 0–1, and the mean.
+/// Everything is read from what `model.build` made, never from the spec (only its units).
 pub fn score(s: &Session, truth: &Truth) -> (Value, f64) {
     let Ok(d) = s.doc() else { return (json!({}), 0.0) };
     let spec = super::bspec::current(s, "p2m.score").map(|x| x.0).ok();
     let upf = spec.as_ref().map_or(12.0, |sp| if sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 });
-    let ground = spec.as_ref().and_then(|sp| sp.levels.iter().min_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft)).map(|l| l.name.clone()));
-    let on_ground = |e: &Entity| ground.as_ref().is_some_and(|g| super::bspec::made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(g)));
+    let built = built_levels(d);
+    // The built levels with walls, lowest first: an agent may name its levels its own way, so a
+    // truth level is the built level of its name, else the one at its place in that order.
+    let mut walled: Vec<(&str, f64, f64)> = built.iter().filter_map(|l| l.walls_z.map(|(lo, hi)| (l.name.as_str(), lo, hi))).collect();
+    walled.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let names: Vec<String> = truth
+        .levels
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            built
+                .iter()
+                .find(|l| l.name.eq_ignore_ascii_case(&t.name))
+                .map(|l| l.name.clone())
+                .or_else(|| walled.get(i).map(|w| w.0.to_string()))
+                .unwrap_or_else(|| t.name.clone())
+        })
+        .collect();
+    let on = |e: &Entity, level: &str| super::bspec::made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(level));
+    let mean = |v: &[f64]| if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 };
     let mut scores = serde_json::Map::new();
-    // Walls: the ground floor's runs, less the corner overlaps (each wall end runs on into the
-    // wall it meets by its thickness).
-    let walls: f64 = meshes(d, "wall").filter(|(e, _)| on_ground(e)).map(|(_, m)| run_length(m)).sum::<f64>() / upf;
-    scores.insert("walls".into(), json!(round(closeness(walls, truth.walls_ft))));
-    // Openings.
-    let count = |part: &str| meshes(d, part).filter(|(e, _)| on_ground(e)).count();
-    let (doors, windows) = (count("door"), count("window"));
-    let want = (truth.doors + truth.windows).max(1) as f64;
-    let miss = doors.abs_diff(truth.doors) + windows.abs_diff(truth.windows);
-    scores.insert("openings".into(), json!(round((1.0 - miss as f64 / want).clamp(0.0, 1.0))));
+    if !truth.levels.is_empty() {
+        // Walls: each level's runs. (Each wall end runs on into the wall it meets by its
+        // thickness; nothing is taken off for that.)
+        let walls: Vec<f64> = truth
+            .levels
+            .iter()
+            .zip(&names)
+            .map(|(t, n)| closeness(meshes(d, "wall").filter(|(e, _)| on(e, n)).map(|(_, m)| run_length(m)).sum::<f64>() / upf, t.walls_ft))
+            .collect();
+        scores.insert("walls".into(), json!(round(mean(&walls))));
+        // Openings: each level's built doors and windows.
+        let openings: Vec<f64> = truth
+            .levels
+            .iter()
+            .zip(&names)
+            .map(|(t, n)| {
+                let count = |part: &str| meshes(d, part).filter(|(e, _)| on(e, n)).count();
+                let want = (t.doors + t.windows).max(1) as f64;
+                let miss = count("door").abs_diff(t.doors) + count("window").abs_diff(t.windows);
+                (1.0 - miss as f64 / want).clamp(0.0, 1.0)
+            })
+            .collect();
+        scores.insert("openings".into(), json!(round(mean(&openings))));
+    }
     // Rooms: each room's built ceiling area, by name.
     if !truth.rooms.is_empty() {
         let mut sum = 0.0;
@@ -450,27 +556,49 @@ pub fn score(s: &Session, truth: &Truth) -> (Value, f64) {
         }
         scores.insert("rooms".into(), json!(round(sum / truth.rooms.len() as f64)));
     }
-    // Heights: each level's elevation and floor to floor.
+    // Heights: each level's built walls stand on its elevation; its floor to floor runs up to
+    // the next built level's walls (the top level's walls stop 0.1' under the next floor, as
+    // Walk mode leaves for its structure). A level with no built walls scores nothing.
     if !truth.levels.is_empty() {
-        let mut sum = 0.0;
-        for (i, (_, elev, height)) in truth.levels.iter().enumerate() {
-            let got = spec.as_ref().and_then(|sp| {
-                let mut ls: Vec<&cadaddy_walk3d::Level> = sp.levels.iter().collect();
-                ls.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
-                ls.get(i).map(|l| (l.elevation_ft, l.height_ft))
-            });
-            sum += match got {
-                Some((e, h)) => 0.5 * (if (e - elev).abs() < 0.05 { 1.0 } else { closeness(e, *elev).min(0.5) }) + 0.5 * closeness(h, *height),
-                None => 0.0,
-            };
-        }
-        scores.insert("heights".into(), json!(round(sum / truth.levels.len() as f64)));
+        let heights: Vec<f64> = truth
+            .levels
+            .iter()
+            .zip(&names)
+            .map(|(t, n)| {
+                let Some(at) = walled.iter().position(|w| w.0.eq_ignore_ascii_case(n)) else { return 0.0 };
+                let Some(&(_, lo, hi)) = walled.get(at) else { return 0.0 };
+                let elev = lo / upf;
+                let height = walled.get(at + 1).map_or(hi / upf + 0.1 - elev, |next| (next.1 - lo) / upf);
+                0.5 * (if (elev - t.elevation_ft).abs() < 0.05 { 1.0 } else { closeness(elev, t.elevation_ft).min(0.5) })
+                    + 0.5 * closeness(height, t.height_ft)
+            })
+            .collect();
+        scores.insert("heights".into(), json!(round(mean(&heights))));
     }
-    // Stairs: risers.
+    // Stairs: the built stairs on each stair's level, by their risers (each built stair counts
+    // once, for the truth stair it is closest to).
     if !truth.stairs.is_empty() {
-        let got: Vec<u32> =
-            spec.as_ref().map(|sp| sp.stairs.iter().filter_map(|st| sp.stair_rule(st)).map(|r| r.risers()).collect()).unwrap_or_default();
-        let sum: f64 = truth.stairs.iter().enumerate().map(|(i, want)| got.get(i).map_or(0.0, |g| closeness(f64::from(*g), f64::from(*want)))).sum();
+        let mut got: Vec<(String, u32)> =
+            meshes(d, "stair").filter_map(|(e, m)| super::bspec::made_level(e).map(|l| (l, built_risers(m, upf)))).collect();
+        let mut sum = 0.0;
+        for (level, want) in &truth.stairs {
+            let n = truth
+                .levels
+                .iter()
+                .position(|t| t.name.eq_ignore_ascii_case(level))
+                .and_then(|i| names.get(i))
+                .map_or(level.as_str(), |n| n.as_str());
+            let best = got
+                .iter()
+                .enumerate()
+                .filter(|(_, (l, _))| l.eq_ignore_ascii_case(n))
+                .map(|(i, (_, r))| (i, closeness(f64::from(*r), f64::from(*want))))
+                .max_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((i, c)) = best {
+                sum += c;
+                got.remove(i);
+            }
+        }
         scores.insert("stairs".into(), json!(round(sum / truth.stairs.len() as f64)));
     }
     let vals: Vec<f64> = scores.values().filter_map(Value::as_f64).collect();
@@ -484,10 +612,15 @@ fn round(v: f64) -> f64 {
 
 fn truth_json(t: &Truth) -> Value {
     json!({
-        "walls_ft": t.walls_ft, "doors": t.doors, "windows": t.windows,
+        "walls_ft": t.levels.iter().map(|l| l.walls_ft).sum::<f64>(),
+        "doors": t.levels.iter().map(|l| l.doors).sum::<usize>(),
+        "windows": t.levels.iter().map(|l| l.windows).sum::<usize>(),
         "rooms": t.rooms.iter().map(|(n, a)| json!({"name": n, "area_sqft": a})).collect::<Vec<_>>(),
-        "levels": t.levels.iter().map(|(n, e, h)| json!({"name": n, "elevation_ft": e, "height_ft": h})).collect::<Vec<_>>(),
-        "stairs": t.stairs,
+        "levels": t.levels.iter().map(|l| json!({
+            "name": l.name, "elevation_ft": l.elevation_ft, "height_ft": l.height_ft,
+            "walls_ft": l.walls_ft, "doors": l.doors, "windows": l.windows,
+        })).collect::<Vec<_>>(),
+        "stairs": t.stairs.iter().map(|(l, r)| json!({"level": l, "risers": r})).collect::<Vec<_>>(),
     })
 }
 
@@ -507,7 +640,9 @@ fn case_named(name: &str) -> Result<Case> {
 fn run_case_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad("p2m.case", "`name` is required"))?;
     let case = case_named(name)?;
-    let truth = truth_json(&case.truth);
+    // The answers stay with the harness: an agent opening the case must not read them.
+    let truth = p.get("with_truth").and_then(Value::as_bool).unwrap_or(false).then(|| truth_json(&case.truth));
+    let mut out = json!({ "name": case.name });
     match str_param(p, "path") {
         Some(path) => {
             let write = super::file::io().map(|h| h.write).ok_or_else(|| bad("p2m.case", "no file writer in this build"))?;
@@ -516,12 +651,16 @@ fn run_case_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             crate::writefile::write(path, bytes).map_err(|e| bad("p2m.case", format!("{path}: {e}")))?;
             #[cfg(target_arch = "wasm32")]
             let _ = bytes;
+            out["path"] = json!(path);
         }
         None => {
             s.open_drawing(case.drawing, case.name, None);
         }
     }
-    Ok(json!({ "truth": truth }))
+    if let Some(t) = truth {
+        out["truth"] = t;
+    }
+    Ok(out)
 }
 
 fn run_score(s: &mut Session, p: &Value) -> Result<Value> {
