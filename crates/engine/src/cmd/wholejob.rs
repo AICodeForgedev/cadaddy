@@ -231,11 +231,22 @@ fn words(s: &str) -> Vec<String> {
 
 fn run_quantities(s: &mut Session, p: &Value) -> Result<Value> {
     if bool_or(p, "from_bom", false) {
-        let b = s.execute("bim.bom", &json!({})).map_err(|e| bad("wholejob.quantities", format!("the bill of materials: {e}")))?;
+        // Q6037: use bim.takeoff as the single source of truth for quantities, so every
+        // command that reports quantities (takeoff, estimate) agrees on the same numbers.
+        // Fall back to bim.bom when the takeoff is not available (no model built yet).
+        let (lines_source, source_name) =
+            match s.execute("bim.takeoff", &json!({"group_by": "trade", "keep": false})) {
+                Ok(t) => (t, "bim.takeoff"),
+                Err(_) => (
+                    s.execute("bim.bom", &json!({}))
+                        .map_err(|e| bad("wholejob.quantities", format!("the bill of materials: {e}")))?,
+                    "bim.bom",
+                ),
+            };
         let sp = spec("wholejob.quantities", s)?;
         let mut w = load(&sp);
         let mut by: BTreeMap<String, Vec<QLine>> = BTreeMap::new();
-        for l in b["lines"].as_array().into_iter().flatten().take(MAX_LINES) {
+        for l in lines_source["lines"].as_array().into_iter().flatten().take(MAX_LINES) {
             let trade = l["trade"].as_str().unwrap_or("other").to_ascii_lowercase();
             let item = [l["item"].as_str().unwrap_or(""), l["size"].as_str().unwrap_or("")]
                 .iter()
@@ -246,9 +257,9 @@ fn run_quantities(s: &mut Session, p: &Value) -> Result<Value> {
             by.entry(trade).or_default().push(QLine {
                 item,
                 unit: l["unit"].as_str().unwrap_or("each").into(),
-                qty: l["total"].as_f64().or_else(|| l["net"].as_f64()).unwrap_or(0.0),
+                qty: l["total"].as_f64().or_else(|| l["net"].as_f64()).or_else(|| l["qty"].as_f64()).unwrap_or(0.0),
                 spec_section: String::new(),
-                source: "bim.bom".into(),
+                source: source_name.into(),
             });
         }
         let n: Vec<Value> = by.iter().map(|(t, ls)| json!({"trade": t, "lines": ls.len()})).collect();
@@ -258,7 +269,7 @@ fn run_quantities(s: &mut Session, p: &Value) -> Result<Value> {
             e.lines = ls;
         }
         save(s, sp, &w)?;
-        return Ok(json!({"trades": n}));
+        return Ok(json!({"trades": n, "source": source_name}));
     }
     let trade = trade_param("wholejob.quantities", p)?;
     let lines: Vec<QLine> = p
