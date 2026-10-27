@@ -2623,7 +2623,8 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             .iter()
             .enumerate()
             .map(|(i, (tag, u))| {
-                let crop = if i < MAX_TAG_CROPS { tag_crop(s, u.at, u.span, u.handles.first().map(String::as_str), &crop_dir, tag, &u.sheet) } else { None };
+                let crop =
+                    if i < MAX_TAG_CROPS { tag_crop(s, u.at, u.span, u.handles.first().map(String::as_str), &crop_dir, tag, &u.sheet) } else { None };
                 json!({"description": tag, "tag": tag, "count": u.count, "at": u.at, "sheet": u.sheet, "handles": u.handles, "crop_path": crop})
             })
             .collect();
@@ -2740,12 +2741,7 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     if let Some(devices) = results.get("devices") {
         // Collect unlisted tag names for "they are drawn as <tag>" choices.
-        let unlisted_tags: Vec<String> = census
-            .unlisted
-            .keys()
-            .take(10)
-            .cloned()
-            .collect();
+        let unlisted_tags: Vec<String> = census.unlisted.keys().take(10).cloned().collect();
         for (class_key, class_label) in &device_classes {
             let count = devices.get("by_type").and_then(|bt| bt.get(*class_key)).and_then(Value::as_u64).unwrap_or(0);
             // MUST 9: Always ask — even for 0 ("I counted 0 X — anything not counted?").
@@ -7219,18 +7215,33 @@ mod tests {
         ];
         let mut syms: Vec<(&str, f64, f64)> = vec![("A", 990.0, 772.0)]; // legend sample
         // 3 x A and 3 x B on the plan
-        for i in 0..3 { syms.push(("A", 100.0 + 40.0 * f64::from(i), 300.0)); }
-        for i in 0..3 { syms.push(("B", 100.0 + 40.0 * f64::from(i), 200.0)); }
+        for i in 0..3 {
+            syms.push(("A", 100.0 + 40.0 * f64::from(i), 300.0));
+        }
+        for i in 0..3 {
+            syms.push(("B", 100.0 + 40.0 * f64::from(i), 200.0));
+        }
         // 4 x unlisted "W1" and 4 x "JL"
-        for i in 0..4 { syms.push(("W1", 100.0 + 40.0 * f64::from(i), 500.0)); }
-        for i in 0..4 { syms.push(("JL", 100.0 + 40.0 * f64::from(i), 600.0)); }
+        for i in 0..4 {
+            syms.push(("W1", 100.0 + 40.0 * f64::from(i), 500.0));
+        }
+        for i in 0..4 {
+            syms.push(("JL", 100.0 + 40.0 * f64::from(i), 600.0));
+        }
         let lo = s.doc().map_or(0, |d| d.handseed);
         add_sheet(&mut s, &schedule, &syms);
         let hi = s.doc().map_or(0, |d| d.handseed);
         job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
         job.sheet_regions.push(SheetRegion {
-            number: "E-1".into(), level: "1".into(), discipline: "E".into(), kind: "plan".into(),
-            rect: [0.0, 0.0, 2000.0, 1000.0], area: None, title_block: None, not_built: String::new(), levels: Vec::new(),
+            number: "E-1".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
         });
         let _r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let completeness = job.stage(StageName::Devices).map(|st| st.completeness.clone()).unwrap_or_default();
