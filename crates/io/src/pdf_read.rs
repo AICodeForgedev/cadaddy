@@ -54,6 +54,9 @@ pub enum LayerMode {
     Pen,
     /// AutoCAD's PDFIMPORT object layers: PDF_Geometry, PDF_Solid Fills, PDF_Text.
     Object,
+    /// Content-class layers: PDF-GRID, PDF-WALL, PDF-TEXT, PDF-SYMBOLS, PDF-TITLEBLOCK,
+    /// PDF-HATCH, PDF-GEOMETRY — assigned by detecting what each element is.
+    Content,
 }
 
 #[derive(Clone, Debug)]
@@ -86,7 +89,25 @@ pub struct PdfOptions {
     pub image_folder: Option<String>,
     /// File name start of the images (the PDF's name and page).
     pub image_prefix: String,
+    /// Recover SHX-stroked text and detect repeated symbol clusters (on by default).  Turn off
+    /// for downstream geometry analysis (walls, conduits, grids) that needs every stroke intact.
+    pub recover_text: bool,
+    /// Draw an E sheet that has a scale note at that scale (off by default: E sheets are
+    /// DO NOT SCALE and stay sheet-size).  Either way the import reports `do_not_scale` and
+    /// `needs_registration`.  For a sheet opened on its own, with no architectural plan to
+    /// register it to, so walls and rooms still read at building size.
+    pub e_sheet_at_note_scale: bool,
+    /// Fills smaller than [`SMALL_FILL_IN`] on the sheet (pattern dots and dashes, lettering
+    /// painted as fills) become one solid hatch per layer and colour, not one hatch each: the
+    /// sheet looks the same with far fewer objects (off by default; on for print-set jobs).
+    pub merge_small_fills: bool,
 }
+
+/// The largest side (sheet inches) of a fill [`PdfOptions::merge_small_fills`] merges: smaller
+/// than a wall's poché is long, larger than a pattern's dots and dashes.
+pub const SMALL_FILL_IN: f64 = 0.06;
+/// Most outlines one merged fill holds.
+const MAX_MERGED_LOOPS: usize = 4_000;
 
 /// The layer annotations (markups) are drawn on.
 pub const MARKUP_LAYER: &str = "PDF-MARKUP";
@@ -95,6 +116,16 @@ pub const MARKUP_LAYER: &str = "PDF-MARKUP";
 /// linework, as AutoCAD writes SHX text) goes on, turned off: the sheet shows the lettering
 /// once, and its words can still be searched and listed.
 pub const HIDDEN_TEXT_LAYER: &str = "PDF-HIDDEN-TEXT";
+
+/// The text style of words the SHX stroke OCR read on a page without hidden text to confirm
+/// them.  They are searchable text, but a guess: two ticks beside a stroke read as `8"`, a
+/// corner and a dash as `EL`.  Readers that take text as evidence (duct sizes and heights) skip
+/// this style.
+pub const OCR_TEXT_STYLE: &str = "PDF-SHX-OCR";
+
+/// The layer (off) that keeps the strokes recovered text was read from: the TEXT replaces them
+/// on the sheet, and the plotted lettering is still there to check a reading against.
+pub const SHX_SOURCE_LAYER: &str = "PDF-SHX-SOURCE";
 
 impl Default for PdfOptions {
     fn default() -> Self {
@@ -111,6 +142,9 @@ impl Default for PdfOptions {
             images: true,
             image_folder: None,
             image_prefix: "pdf-image".into(),
+            recover_text: true,
+            e_sheet_at_note_scale: false,
+            merge_small_fills: false,
         }
     }
 }
@@ -123,21 +157,142 @@ pub struct PdfImport {
     /// The scale used, and where it came from ("scale note 1/8" = 1'-0"", "option", "none").
     pub scale: f64,
     pub scale_source: String,
+    /// Whether a "DO NOT SCALE" note was detected (visible or recovered from SHX text).
+    pub do_not_scale: bool,
+    /// Whether the sheet needs registration (it carries a scale note but is kept at sheet size
+    /// because of a DO NOT SCALE note).
+    pub needs_registration: bool,
     pub pages: u32,
     pub stats: BTreeMap<String, usize>,
     pub notes: Vec<String>,
     /// The image files the IMAGE objects name (path as they name it) and their pixels.
     pub images: Vec<(String, std::sync::Arc<cadaddy_render::images::Raster>)>,
+    /// What the stroke-lettering OCR read (empty when it didn't run).
+    pub ocr: OcrReport,
 }
 
 /// The number of pages.
 pub fn page_count(bytes: &[u8]) -> Result<u32> {
-    let doc = load(bytes)?;
+    let doc = load_cached(bytes)?;
     Ok(u32::try_from(doc.get_pages().len()).unwrap_or(u32::MAX))
 }
 
 fn load(bytes: &[u8]) -> Result<Document> {
-    Document::load_mem(bytes).map_err(|e| IoError::Format(format!("PDF: {e}")))
+    match Document::load_mem(bytes) {
+        Ok(doc) => Ok(doc),
+        Err(first_err) => {
+            // Attempt xref rebuild: find `startxref` candidates by scanning backwards for
+            // earlier xref offsets (incremental saves leave multiple). The last one may be
+            // damaged while an earlier one is still valid.
+            if let Some(repaired) = try_repair_xref(bytes) {
+                return Ok(repaired);
+            }
+            Err(IoError::Format(format!("PDF: {first_err}")))
+        }
+    }
+}
+
+/// Scan `bytes` for `startxref` markers and try loading with each candidate offset (oldest
+/// first), so a PDF with a damaged final xref section can still be read from an earlier save.
+fn try_repair_xref(bytes: &[u8]) -> Option<Document> {
+    // Collect all `startxref` positions (there may be several in an incrementally saved PDF).
+    let needle = b"startxref";
+    let mut positions = Vec::new();
+    for i in 0..bytes.len().saturating_sub(needle.len()) {
+        if bytes.get(i..i + needle.len()) == Some(needle) {
+            positions.push(i);
+        }
+    }
+    if positions.len() < 2 {
+        // Only one (or zero) startxref — nothing earlier to try.
+        return None;
+    }
+    // Try each startxref from the oldest: build patched bytes where %%EOF points at that xref.
+    for &pos in positions.iter().rev().skip(1) {
+        // Read the offset number after this startxref marker.
+        let after = pos + needle.len();
+        let tail = std::str::from_utf8(bytes.get(after..bytes.len().min(after + 30))?).ok()?;
+        let offset_str = tail.trim().lines().next()?.trim();
+        if offset_str.parse::<usize>().is_err() {
+            continue;
+        }
+        // Build a truncated copy up to (and including) this %%EOF.
+        if let Some(eof_pos) = bytes.get(after..).and_then(|b| {
+            let eof = b"%%EOF";
+            (0..b.len().saturating_sub(eof.len())).find(|&i| b.get(i..i + eof.len()) == Some(eof))
+        }) {
+            let end = after + eof_pos + b"%%EOF".len();
+            if let Ok(doc) = Document::load_mem(bytes.get(..end)?) {
+                return Some(doc);
+            }
+        }
+    }
+    None
+}
+
+/// Files at least this big are parsed once and kept for the next pages ([`load_cached`]).
+const CACHE_MIN_BYTES: usize = 256 * 1024;
+/// The parsed files kept: at most this many, and at most [`CACHE_MAX_BYTES`] of PDF between them.
+const CACHE_MAX_DOCS: usize = 6;
+const CACHE_MAX_BYTES: usize = 512 * 1024 * 1024;
+
+type DocSlot = std::sync::Arc<std::sync::OnceLock<std::result::Result<std::sync::Arc<Document>, String>>>;
+
+/// The last PDFs parsed, by content: `(fingerprint, length, parsed)`.
+static DOC_CACHE: std::sync::Mutex<Vec<(u64, usize, DocSlot)>> = std::sync::Mutex::new(Vec::new());
+
+/// A fingerprint of a file's bytes (which parsed file a page read can reuse).
+fn fingerprint(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0x9E37_79B9_7F4A_7C15 ^ bytes.len() as u64;
+    let mut chunks = bytes.chunks_exact(8);
+    for c in &mut chunks {
+        let mut w = [0u8; 8];
+        w.copy_from_slice(c);
+        h = (h ^ u64::from_le_bytes(w)).wrapping_mul(0x0000_0100_0000_01B3).rotate_left(29);
+    }
+    for &b in chunks.remainder() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    h
+}
+
+/// The parsed document of `bytes`: a big file (a merged print set read page by page, by several
+/// threads at once) is parsed once while it stays among the last few read.
+fn load_cached(bytes: &[u8]) -> Result<std::sync::Arc<Document>> {
+    if bytes.len() < CACHE_MIN_BYTES {
+        return load(bytes).map(std::sync::Arc::new);
+    }
+    let key = fingerprint(bytes);
+    let slot: DocSlot = {
+        let Ok(mut cache) = DOC_CACHE.lock() else { return load(bytes).map(std::sync::Arc::new) };
+        if let Some((_, _, slot)) = cache.iter().find(|(k, n, _)| *k == key && *n == bytes.len()) {
+            std::sync::Arc::clone(slot)
+        } else {
+            let slot: DocSlot = std::sync::Arc::default();
+            cache.push((key, bytes.len(), std::sync::Arc::clone(&slot)));
+            while cache.len() > CACHE_MAX_DOCS || (cache.len() > 1 && cache.iter().map(|(_, n, _)| *n).sum::<usize>() > CACHE_MAX_BYTES) {
+                cache.remove(0);
+            }
+            slot
+        }
+    };
+    // Other threads wanting the same file wait for this parse instead of parsing it again.
+    match slot.get_or_init(|| load(bytes).map(std::sync::Arc::new).map_err(|e| e.to_string())) {
+        Ok(doc) => Ok(std::sync::Arc::clone(doc)),
+        Err(e) => {
+            if let Ok(mut cache) = DOC_CACHE.lock() {
+                cache.retain(|(k, n, _)| !(*k == key && *n == bytes.len()));
+            }
+            Err(IoError::Format(e.clone()))
+        }
+    }
+}
+
+/// Forget the parsed files kept for the next pages (their memory is freed once no read uses them).
+pub fn clear_cache() {
+    if let Ok(mut cache) = DOC_CACHE.lock() {
+        cache.clear();
+    }
 }
 
 fn err(m: impl Into<String>) -> IoError {
@@ -213,6 +368,9 @@ struct Stroke {
     layer: Option<String>,
     /// From a curve (Bézier) of 4 segments forming a closed loop: a circle candidate.
     curve_loop: bool,
+    /// Drawn with four or more curves that end where they start (closed or not): CAD geometry
+    /// (a circle, a symbol's round outline); plot fonts flatten their arcs into lines.
+    curved_loop: bool,
     /// Painting order on the page.
     order: usize,
 }
@@ -1247,11 +1405,24 @@ impl<'a> Interp<'a> {
                         ring.push(f);
                     }
                     for piece in clip_polyline(&ring, r) {
-                        self.out.strokes.push(Stroke { pts: piece, closed: false, pen, layer: layer.clone(), curve_loop: false, order });
+                        self.out.strokes.push(Stroke {
+                            pts: piece,
+                            closed: false,
+                            pen,
+                            layer: layer.clone(),
+                            curve_loop: false,
+                            curved_loop: false,
+                            order,
+                        });
                     }
                     continue;
                 }
-                self.out.strokes.push(Stroke { pts, closed, pen, layer: layer.clone(), curve_loop: closed && curves == 4, order });
+                let ends_meet = match (pts.first(), pts.last()) {
+                    (Some(a), Some(b)) => (a.0 - b.0).hypot(a.1 - b.1) < 0.01,
+                    _ => false,
+                };
+                let curved_loop = curves >= 4 && (closed || ends_meet);
+                self.out.strokes.push(Stroke { pts, closed, pen, layer: layer.clone(), curve_loop: closed && curves == 4, curved_loop, order });
             }
         }
     }
@@ -1487,6 +1658,7 @@ fn join(strokes: Vec<Stroke>) -> Vec<Stroke> {
                 let Some(j) = cand else { break };
                 let Some(mut next) = open.get_mut(j).and_then(Option::take) else { break };
                 cur.order = cur.order.min(next.order);
+                cur.curved_loop |= next.curved_loop;
                 // orient `next` to continue from `tip`
                 let starts_here = next.pts.first().is_some_and(|p| q(*p) == q(tip));
                 if at_end {
@@ -1643,12 +1815,1981 @@ pub fn parse_scale(text: &str) -> Option<f64> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Fix 1: Enhanced scale detection — per-viewport/drawing-title scale notes
+// ---------------------------------------------------------------------------------------------
+
+/// Check whether the sheet carries a "DO NOT SCALE" / "NTS" / "refer to architectural" note.
+/// Checks both visible and hidden text.
+fn has_do_not_scale_note(texts: &[TextOut]) -> bool {
+    for t in texts {
+        let up = t.value.trim().to_ascii_uppercase();
+        if up.contains("DO NOT SCALE")
+            || up.contains("NOT TO SCALE")
+            || up == "NTS"
+            || up == "N.T.S."
+            || (up.contains("REFER") && up.contains("ARCHITECTURAL") && (up.contains("SCALE") || up.contains("DIMENSION")))
+            || up.contains("DO NOT SCALE THIS DRAWING")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Detect scale notes in text entities, with preference for those on TITLE/BORDER layers or
+/// near the bottom/right of the sheet (the title block area). Returns the best scale factor and
+/// the source text.
+fn detect_scale_note(texts: &[TextOut], sheet: (f64, f64)) -> Option<(f64, String)> {
+    struct Candidate {
+        scale: f64,
+        text: String,
+        count: usize,
+        priority: u8, // 0 = best (title block layer), 1 = bottom-right, 2 = anywhere
+    }
+    let mut candidates: Vec<Candidate> = Vec::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for t in texts {
+        let v = t.value.trim();
+        let up = v.to_ascii_uppercase();
+        if !(up.contains('=') || up.starts_with("SCALE")) || !(up.contains('\'') || up.contains('"') || up.contains(':')) {
+            continue;
+        }
+        let Some(k) = parse_scale(v) else { continue };
+        let key = v.trim_start_matches(|c: char| !c.is_ascii_digit()).to_string();
+        let layer_up = t.layer.as_deref().unwrap_or("").to_ascii_uppercase();
+        let on_title = layer_up.contains("TITLE") || layer_up.contains("BORDER") || layer_up.contains("TBLOCK");
+        // sheet position: the title block is typically in the bottom-right quadrant
+        let (sx, sy) = (t.at.0 / 72.0, t.at.1 / 72.0);
+        let in_title_area = sx > sheet.0 * 0.6 && sy < sheet.1 * 0.3;
+        let priority = if on_title {
+            0
+        } else if in_title_area {
+            1
+        } else {
+            2
+        };
+        if let Some(idx) = seen.get(&key) {
+            if let Some(c) = candidates.get_mut(*idx) {
+                c.count += 1;
+                if priority < c.priority {
+                    c.priority = priority;
+                }
+            }
+        } else {
+            seen.insert(key.clone(), candidates.len());
+            candidates.push(Candidate { scale: k, text: key, count: 1, priority });
+        }
+    }
+    // best = lowest priority, then most occurrences
+    candidates.sort_by(|a, b| a.priority.cmp(&b.priority).then(b.count.cmp(&a.count)));
+    candidates.into_iter().next().map(|c| (c.scale, c.text))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix 2: Content-class layer assignment
+// ---------------------------------------------------------------------------------------------
+
+/// Content class for a PDF entity, used to assign layers by content type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ContentClass {
+    /// Gray dashed long lines — structural grid
+    Grid,
+    /// Wall linework (heavy black lines forming closed regions)
+    Wall,
+    /// Text entities
+    Text,
+    /// Symbols (repeated small clusters, devices, fixtures)
+    Symbol,
+    /// Title block elements (near sheet border, in title block area)
+    TitleBlock,
+    /// Solid fills / hatches
+    Hatch,
+    /// Annotation / dimensions / leaders
+    Anno,
+    /// Everything else
+    Geometry,
+}
+
+/// Classify a stroke by its visual characteristics and position on the sheet.
+fn classify_stroke(s: &Stroke, sheet: (f64, f64), grid_lines: &HashSet<usize>) -> ContentClass {
+    if grid_lines.contains(&s.order) {
+        return ContentClass::Grid;
+    }
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    // title block: near the border of the sheet
+    if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+        let near_right = b[2] > sw * 0.95;
+        let near_bottom = b[1] < sh * 0.05;
+        let near_border = near_right || near_bottom || b[0] < sw * 0.02 || b[3] > sh * 0.98;
+        if near_border && (b[2] - b[0] < sw * 0.4 || b[3] - b[1] < sh * 0.4) {
+            return ContentClass::TitleBlock;
+        }
+    }
+    // heavy black lines are likely walls
+    let is_black = s.pen.rgb.iter().all(|c| *c <= 38);
+    if is_black && s.pen.lw >= 35 {
+        return ContentClass::Wall;
+    }
+    // thin lines with arrowhead-like short segments: annotation (dims, leaders)
+    if s.pen.lw <= 15 && s.pts.len() <= 4 {
+        let total_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+        if total_len < sw.min(sh) * 0.15 && total_len > 1.0 {
+            return ContentClass::Anno;
+        }
+    }
+    ContentClass::Geometry
+}
+
+/// Detect grid lines: long, same-color, evenly spaced horizontal or vertical lines that span
+/// most of the sheet — typically the structural grid on construction documents.
+fn detect_grid_lines(strokes: &[Stroke], sheet: (f64, f64)) -> HashSet<usize> {
+    let mut grid_orders = HashSet::new();
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    let min_span = sw.min(sh) * 0.5;
+    // collect long horizontal and vertical lines
+    struct GridCandidate {
+        order: usize,
+        horizontal: bool,
+        pos: f64, // the fixed coordinate (y for horizontal, x for vertical)
+        pen: Pen,
+    }
+    let mut candidates: Vec<GridCandidate> = Vec::new();
+    for s in strokes {
+        if s.pts.len() < 2 || s.closed {
+            continue;
+        }
+        let b = match bbox(std::slice::from_ref(&s.pts)) {
+            Some(b) => b,
+            None => continue,
+        };
+        let dx = b[2] - b[0];
+        let dy = b[3] - b[1];
+        // horizontal: spans most of the sheet width, thin vertically
+        if dx > min_span && dy < 2.0 {
+            candidates.push(GridCandidate { order: s.order, horizontal: true, pos: (b[1] + b[3]) / 2.0, pen: s.pen });
+        }
+        // vertical: spans most of the sheet height, thin horizontally
+        if dy > min_span && dx < 2.0 {
+            candidates.push(GridCandidate { order: s.order, horizontal: false, pos: (b[0] + b[2]) / 2.0, pen: s.pen });
+        }
+    }
+    // group by direction and pen: ≥4 same-pen lines in one direction = grid
+    let mut groups: HashMap<(bool, Pen), Vec<&GridCandidate>> = HashMap::new();
+    for c in &candidates {
+        groups.entry((c.horizontal, c.pen)).or_default().push(c);
+    }
+    for ((_, _), members) in &groups {
+        if members.len() >= 4 {
+            // check roughly even spacing
+            let mut positions: Vec<f64> = members.iter().map(|c| c.pos).collect();
+            positions.sort_by(f64::total_cmp);
+            let spacings: Vec<f64> = positions.windows(2).map(|w| w[1] - w[0]).collect();
+            if !spacings.is_empty() {
+                let mean = spacings.iter().sum::<f64>() / spacings.len() as f64;
+                let even = spacings.iter().all(|s| (*s - mean).abs() < mean * 0.3 + 5.0);
+                if even {
+                    for m in members {
+                        grid_orders.insert(m.order);
+                    }
+                }
+            }
+        }
+    }
+    grid_orders
+}
+
+/// The content-class layer name for the given class.
+fn content_class_layer(class: ContentClass) -> &'static str {
+    match class {
+        ContentClass::Grid => "E-GRID",
+        ContentClass::Wall => "A-WALL",
+        ContentClass::Text => "TEXT",
+        ContentClass::Symbol => "E-DEVICE",
+        ContentClass::TitleBlock => "TITLEBLOCK",
+        ContentClass::Hatch => "HATCH",
+        ContentClass::Geometry => "PDF-GEOMETRY",
+        ContentClass::Anno => "ANNO",
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix 3: SHX text recovery — use invisible text (rendering mode 3) as the ground truth for
+// stroked lettering, then fall back to feature-based glyph matching for any remainders.
+// AutoCAD draws SHX text twice: once as linework (strokes) and once as invisible searchable
+// text at the same position.  Matching hidden text to stroke clusters gives perfect accuracy.
+// ---------------------------------------------------------------------------------------------
+
+/// A page with this many real text items or more has its lettering as text: no OCR without
+/// hidden text (Revit and TrueType prints; stroke OCR there only reads symbol ticks) unless
+/// stroked lettering clearly outnumbers it (see [`OCR_STROKES_PER_CHAR`]).
+const OCR_REAL_TEXT_LIMIT: usize = 100;
+
+/// Loose glyph-sized strokes (outside real text) per real-text character above which a page's
+/// lettering is mostly strokes and the OCR runs anyway: a plotted sheet with a few hundred
+/// real labels and thousands of words of SHX lettering.
+const OCR_STROKES_PER_CHAR: usize = 4;
+
+/// The longest stroke side the OCR takes for lettering, by sheet size (points).
+fn ocr_max_seg(sheet: (f64, f64)) -> f64 {
+    (sheet.0.min(sheet.1) * 72.0 * 0.025).clamp(2.0, 40.0)
+}
+
+/// Most points a glyph stroke has: a plotted round letter (an 8, an S drawn in one stroke
+/// with its arcs flattened) runs to a few dozen.
+const OCR_MAX_STROKE_POINTS: usize = 64;
+
+/// Whether a stroke could be (part of) a stroked glyph: a few points, glyph-sized, open or a
+/// loop (the importer closes a D's stem and bowl, or an O, into one).
+fn ocr_candidate(s: &Stroke, max_seg: f64) -> Option<[f64; 4]> {
+    if s.pts.len() > OCR_MAX_STROKE_POINTS || (s.closed && s.pts.len() < 4) {
+        return None;
+    }
+    // one stroke can draw a whole letter (a G, an 8): several times the letter's size
+    let seg_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+    if seg_len > max_seg * 8.0 || seg_len < 0.05 {
+        return None;
+    }
+    let b = bbox(std::slice::from_ref(&s.pts))?;
+    ((b[2] - b[0]) <= max_seg * 2.0 && (b[3] - b[1]) <= max_seg * 2.0).then_some(b)
+}
+
+/// The strokes that lie on a visible real text item: a plotted copy of the text, which the
+/// text already is.  The OCR leaves them alone.  (Strokes under hidden text are the lettering
+/// the hidden text stands for; what its own recovery didn't claim, the OCR may read.)
+fn strokes_under_text(strokes: &[Stroke], texts: &[TextOut]) -> HashSet<usize> {
+    const CELL: f64 = 36.0;
+    let mut boxes: Vec<[f64; 4]> = Vec::new();
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for t in texts.iter().filter(|t| !t.value.trim().is_empty() && t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)) {
+        let h = t.height.max(0.5);
+        let (dx, dy) = (t.end.0 - t.at.0, t.end.1 - t.at.1);
+        let len = dx.hypot(dy);
+        // the text's up direction (perpendicular to its baseline)
+        let (ux, uy) = if len > 1e-9 { (-dy / len, dx / len) } else { (0.0, 1.0) };
+        let corners = [t.at, t.end, (t.at.0 + ux * h, t.at.1 + uy * h), (t.end.0 + ux * h, t.end.1 + uy * h)];
+        let pad = h * 0.25;
+        let b = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
+        let b = [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad];
+        let (gx0, gy0, gx1, gy1) =
+            ((b[0] / CELL).floor() as i64, (b[1] / CELL).floor() as i64, (b[2] / CELL).floor() as i64, (b[3] / CELL).floor() as i64);
+        // a long note spans many cells; a hostile one is capped
+        if (gx1 - gx0 + 1).saturating_mul(gy1 - gy0 + 1) > 2_000 {
+            continue;
+        }
+        let bi = boxes.len();
+        boxes.push(b);
+        for gx in gx0..=gx1 {
+            for gy in gy0..=gy1 {
+                grid.entry((gx, gy)).or_default().push(bi);
+            }
+        }
+    }
+    let mut under = HashSet::new();
+    if boxes.is_empty() {
+        return under;
+    }
+    for (i, s) in strokes.iter().enumerate() {
+        let Some(b) = bbox(std::slice::from_ref(&s.pts)) else { continue };
+        let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        let Some(cands) = grid.get(&((cx / CELL).floor() as i64, (cy / CELL).floor() as i64)) else { continue };
+        if cands.iter().filter_map(|&bi| boxes.get(bi)).any(|t| cx >= t[0] && cx <= t[2] && cy >= t[1] && cy <= t[3]) {
+            under.insert(i);
+        }
+    }
+    under
+}
+
+/// A text entity recovered from SHX stroke clusters.
+struct RecoveredText {
+    at: (f64, f64),
+    height: f64,
+    value: String,
+    stroke_indices: HashSet<usize>,
+    pen: Pen,
+    layer: Option<String>,
+    /// Read by the OCR with no hidden text to confirm it (drawn in [`OCR_TEXT_STYLE`]).
+    unconfirmed: bool,
+    /// The OCR's confidence in the reading (0..1); `None` when the value came from real text.
+    confidence: Option<f64>,
+    /// The lettering's direction in degrees, counter-clockwise (90: reading up the sheet).
+    rotation: f64,
+}
+
+/// Recover SHX-stroked text by matching invisible (hidden) text entities to nearby stroke
+/// clusters.  Each hidden text entity that sits near a group of short strokes at the same
+/// position and height is adopted: the strokes are consumed and the hidden text's value is
+/// used.  Returns the recovered texts and the set of consumed stroke indices.
+fn recover_shx_from_hidden(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f64)) -> Vec<RecoveredText> {
+    // separate hidden from visible texts
+    let hidden: Vec<&TextOut> = texts.iter().filter(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER)).collect();
+    if hidden.is_empty() {
+        return Vec::new();
+    }
+
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    // SHX strokes are short segments (2% of sheet) around each hidden text position
+    let max_seg = (sw.min(sh) * 0.025).clamp(2.0, 40.0);
+
+    // build a spatial grid of short strokes
+    let cell = max_seg * 4.0;
+    struct SI {
+        idx: usize,
+        cx: f64,
+        cy: f64,
+    }
+    let mut short: Vec<SI> = Vec::new();
+    for (i, s) in strokes.iter().enumerate() {
+        if s.pts.len() > 8 {
+            continue;
+        }
+        let seg_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+        if seg_len > max_seg || seg_len < 0.05 {
+            continue;
+        }
+        if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+            short.push(SI { idx: i, cx: (b[0] + b[2]) / 2.0, cy: (b[1] + b[3]) / 2.0 });
+        }
+    }
+    let mut sgrid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (si, s) in short.iter().enumerate() {
+        let gx = (s.cx / cell).floor() as i64;
+        let gy = (s.cy / cell).floor() as i64;
+        sgrid.entry((gx, gy)).or_default().push(si);
+    }
+
+    let mut used: HashSet<usize> = HashSet::new();
+    let mut result: Vec<RecoveredText> = Vec::new();
+
+    for ht in &hidden {
+        if ht.value.trim().is_empty() {
+            continue;
+        }
+        let h = ht.height.max(1.0);
+        // approximate the text's bounding box from its position, height and character count
+        let est_w = h * 0.6 * ht.value.len().max(1) as f64;
+        let (tx0, ty0) = (ht.at.0 - h * 0.2, ht.at.1 - h * 0.3);
+        let (tx1, ty1) = (ht.at.0 + est_w + h * 0.2, ht.at.1 + h * 1.3);
+        // find short strokes inside this box
+        let gx0 = ((tx0 / cell).floor() as i64) - 1;
+        let gx1 = ((tx1 / cell).floor() as i64) + 1;
+        let gy0 = ((ty0 / cell).floor() as i64) - 1;
+        let gy1 = ((ty1 / cell).floor() as i64) + 1;
+        let mut matched: Vec<usize> = Vec::new();
+        for gx in gx0..=gx1 {
+            for gy in gy0..=gy1 {
+                if let Some(members) = sgrid.get(&(gx, gy)) {
+                    for &si in members {
+                        let s = &short[si];
+                        if used.contains(&s.idx) {
+                            continue;
+                        }
+                        if s.cx >= tx0 && s.cx <= tx1 && s.cy >= ty0 && s.cy <= ty1 {
+                            matched.push(s.idx);
+                        }
+                    }
+                }
+            }
+        }
+        // need at least 1 stroke per character (SHX glyphs typically have 2-6 strokes each)
+        if matched.len() < ht.value.len().max(1) {
+            continue;
+        }
+        for &si in &matched {
+            used.insert(si);
+        }
+        let pen = strokes.get(matched[0]).map(|s| s.pen).unwrap_or(Pen { rgb: [0, 0, 0], lw: 0, transp: 0 });
+        let layer = strokes.get(matched[0]).and_then(|s| s.layer.clone());
+        result.push(RecoveredText {
+            at: ht.at,
+            height: ht.height,
+            value: ht.value.clone(),
+            stroke_indices: matched.into_iter().collect(),
+            pen,
+            layer,
+            unconfirmed: false,
+            confidence: None,
+            rotation: 0.0,
+        });
+    }
+    result
+}
+
+/// Fallback SHX text recovery: when no hidden text is available, detect clusters of short
+/// strokes that form glyph-like patterns and match them to nearby visible text.  This is less
+/// accurate than hidden-text matching but recovers more text than leaving it as linework.
+fn recover_shx_fallback(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f64)) -> Vec<RecoveredText> {
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    let max_seg = (sw.min(sh) * 0.02).clamp(2.0, 25.0);
+    let cell = max_seg * 3.0;
+
+    // find short strokes (SHX candidates)
+    struct SI {
+        idx: usize,
+        cx: f64,
+        cy: f64,
+        pen: Pen,
+    }
+    let mut short: Vec<SI> = Vec::new();
+    for (i, s) in strokes.iter().enumerate() {
+        if s.closed || s.pts.len() > 6 {
+            continue;
+        }
+        let seg_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+        if seg_len > max_seg || seg_len < 0.1 {
+            continue;
+        }
+        if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+            short.push(SI { idx: i, cx: (b[0] + b[2]) / 2.0, cy: (b[1] + b[3]) / 2.0, pen: s.pen });
+        }
+    }
+    if short.is_empty() {
+        return Vec::new();
+    }
+
+    // cluster short strokes by proximity and same pen
+    let mut grid: HashMap<(i64, i64, Pen), Vec<usize>> = HashMap::new();
+    for (si, s) in short.iter().enumerate() {
+        let gx = (s.cx / cell).floor() as i64;
+        let gy = (s.cy / cell).floor() as i64;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                grid.entry((gx + dx, gy + dy, s.pen)).or_default().push(si);
+            }
+        }
+    }
+    let mut visited = vec![false; short.len()];
+    let mut clusters: Vec<([f64; 4], Vec<usize>, f64, Pen)> = Vec::new(); // bounds, indices, height, pen
+    for si in 0..short.len() {
+        if visited[si] {
+            continue;
+        }
+        visited[si] = true;
+        let s = &short[si];
+        let mut members = vec![si];
+        let mut queue = vec![si];
+        let mut bounds = [s.cx, s.cy, s.cx, s.cy];
+        while let Some(cur) = queue.pop() {
+            let c = &short[cur];
+            let gx = (c.cx / cell).floor() as i64;
+            let gy = (c.cy / cell).floor() as i64;
+            if let Some(neighbors) = grid.get(&(gx, gy, c.pen)) {
+                for &ni in neighbors {
+                    if visited[ni] {
+                        continue;
+                    }
+                    let n = &short[ni];
+                    if (n.cx - c.cx).abs() < cell && (n.cy - c.cy).abs() < cell {
+                        visited[ni] = true;
+                        members.push(ni);
+                        queue.push(ni);
+                        bounds = [bounds[0].min(n.cx), bounds[1].min(n.cy), bounds[2].max(n.cx), bounds[3].max(n.cy)];
+                    }
+                }
+            }
+        }
+        let h = bounds[3] - bounds[1];
+        let w = bounds[2] - bounds[0];
+        if members.len() >= 2 && h > 0.5 && h < max_seg * 12.0 && w > 0.5 && w < max_seg * 100.0 {
+            clusters.push((bounds, members.iter().map(|&mi| short[mi].idx).collect(), h, s.pen));
+        }
+    }
+
+    // for each cluster, try to find a visible text entity that overlaps it
+    let mut result: Vec<RecoveredText> = Vec::new();
+    let mut used_texts: HashSet<usize> = HashSet::new();
+    for (bounds, indices, height, pen) in &clusters {
+        let pad = height * 0.5;
+        let cb = [bounds[0] - pad, bounds[1] - pad, bounds[2] + pad, bounds[3] + pad];
+        // find visible text that overlaps this cluster
+        let mut best: Option<(usize, f64)> = None;
+        for (ti, t) in texts.iter().enumerate() {
+            if used_texts.contains(&ti) {
+                continue;
+            }
+            if t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER) {
+                continue;
+            }
+            let th = t.height.max(1.0);
+            let tw = th * 0.6 * t.value.len().max(1) as f64;
+            let tb = [t.at.0 - 1.0, t.at.1 - 1.0, t.at.0 + tw + 1.0, t.at.1 + th + 1.0];
+            if tb[0] < cb[2] && tb[2] > cb[0] && tb[1] < cb[3] && tb[3] > cb[1] {
+                let dist = ((t.at.0 - bounds[0]).hypot(t.at.1 - bounds[1])).abs();
+                if !best.is_some_and(|(_, d)| dist >= d) {
+                    best = Some((ti, dist));
+                }
+            }
+        }
+        if let Some((ti, _)) = best {
+            used_texts.insert(ti);
+            let t = &texts[ti];
+            result.push(RecoveredText {
+                at: (bounds[0], bounds[1]),
+                height: *height,
+                value: t.value.clone(),
+                stroke_indices: indices.iter().copied().collect(),
+                pen: *pen,
+                layer: t.layer.clone(),
+                unconfirmed: false,
+                confidence: None,
+                rotation: 0.0,
+            });
+        }
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------------------------
+// SHX OCR: recognise stroked (SHX-style) lettering by matching individual glyph clusters
+// against stroke templates.  Used when no hidden text covers the strokes.
+//
+// Source: CADaddy's own single-stroke font definitions (crates/fonts/src/stroke.rs), which are
+// original (CC0).  Each glyph is normalised to its own box, so matching tolerates size and
+// width factor; a slanted (oblique) glyph is also tried straightened.
+//
+// Algorithm:
+//   1. Find all short open strokes that could be SHX glyph strokes.
+//   2. Join strokes that touch (same pen, within a tenth of their size) into glyph clusters:
+//      single-stroke lettering draws each character as connected strokes, with a gap to the
+//      next character.
+//   3. Match each glyph cluster against the templates by chamfer distance (upright, and with
+//      its slant removed); the distance gives the match's confidence.
+//   4. Assemble matched glyphs into lines by baseline and height, then into texts by spacing.
+//   5. Drop lone glyphs that plain linework also makes (a single straight stroke, punctuation)
+//      and emit TEXT entities for the rest.
+// ---------------------------------------------------------------------------------------------
+
+/// Normalised stroke template for one character: sampled points along the template strokes,
+/// each in the [0,1]×[0,1] unit cell (bottom-left origin).
+struct ShxTemplate {
+    ch: char,
+    /// Evenly sampled points along all strokes, normalised to [0,1]².
+    samples: Vec<(f64, f64)>,
+    /// Width/height aspect ratio of this character's bounding box in the source font.
+    aspect: f64,
+    /// Expected number of strokes.
+    n_strokes: usize,
+}
+
+/// The gap (as a share of the larger stroke's size, up to twice the smaller's) under which two
+/// strokes join one glyph.
+const OCR_JOIN_TOLERANCE: f64 = 0.05;
+
+/// Sample points per glyph, spread along its strokes by length (so a glyph the PDF drew as
+/// one joined polyline samples like the same glyph drawn as separate strokes).
+const GLYPH_SAMPLES: usize = 32;
+
+/// The characters the OCR reads.
+const OCR_CHARS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-./'\"()#&,";
+
+/// Other common shapes of single-stroke plot lettering, in the stroke font's notation
+/// (`crates/fonts/src/stroke.rs`: x digit, y letter with `c` the baseline, `i` the cap
+/// line, strokes split by spaces).  Plot fonts differ from ours mostly here: an M whose
+/// middle reaches the baseline, a W whose middle reaches the cap line, a 1 without a foot,
+/// a plain I and a 5 with a round bowl.
+const OCR_VARIANTS: [(char, &str); 5] = [('M', "0c0i2c4i4c"), ('W', "0i1c2i3c4i"), ('1', "1h2i2c"), ('I', "0i0c"), ('5', "4i1i0f1g3g4f4d3c1c0d")];
+
+/// Build the template library from our stroke font for the characters the OCR reads, plus
+/// the [`OCR_VARIANTS`].
+fn shx_templates() -> Vec<ShxTemplate> {
+    let font = OCR_CHARS.chars().filter_map(|ch| cadaddy_fonts::stroke::glyph(ch).map(|(_, spec)| (ch, spec)));
+    let mut templates = Vec::new();
+    for (ch, spec) in font.chain(OCR_VARIANTS) {
+        let raw_strokes = cadaddy_fonts::stroke::strokes(spec);
+        let refs: Vec<&[(f64, f64)]> = raw_strokes.iter().map(Vec::as_slice).filter(|s| !s.is_empty()).collect();
+        let Some((samples, aspect)) = glyph_samples(&refs, 0.0) else { continue };
+        templates.push(ShxTemplate { ch, samples, aspect, n_strokes: refs.len() });
+    }
+    templates
+}
+
+/// The frame a glyph is normalised to: its bounding box, except that a side much thinner than
+/// the other (an I, a 1, a dash) is widened to the other's size around its centre, so pen
+/// jitter across a thin stroke doesn't fill the whole unit cell.  Returns `(x0, y0, w, h)`.
+fn norm_frame(b: [f64; 4]) -> (f64, f64, f64, f64) {
+    let (mut x0, mut y0) = (b[0], b[1]);
+    let (mut w, mut h) = (b[2] - b[0], b[3] - b[1]);
+    let big = w.max(h).max(1e-6);
+    if w < big * 0.15 {
+        x0 = (b[0] + b[2]) / 2.0 - big / 2.0;
+        w = big;
+    }
+    if h < big * 0.15 {
+        y0 = (b[1] + b[3]) / 2.0 - big / 2.0;
+        h = big;
+    }
+    (x0, y0, w, h)
+}
+
+/// Sample a glyph's strokes, sheared by `slant` (x -= slant·y: 0 keeps it as drawn) and
+/// normalised to its frame.  Returns the samples and the box's aspect (width / height, kept
+/// within 0.1..10 so thin glyphs compare).
+fn glyph_samples(strokes: &[&[(f64, f64)]], slant: f64) -> Option<(Vec<(f64, f64)>, f64)> {
+    let sheared: Vec<Vec<(f64, f64)>> = strokes.iter().map(|s| s.iter().map(|&(x, y)| (x - slant * y, y)).collect()).collect();
+    let b = bbox(&sheared)?;
+    let (x0, y0, w, h) = norm_frame(b);
+    let length = |s: &[(f64, f64)]| s.windows(2).map(|p| (p[1].0 - p[0].0).hypot(p[1].1 - p[0].1)).sum::<f64>();
+    let total: f64 = sheared.iter().map(|s| length(s)).sum::<f64>().max(1e-9);
+    let mut samples = Vec::new();
+    for s in &sheared {
+        let n = ((GLYPH_SAMPLES as f64 * length(s) / total).round() as usize).max(2);
+        sample_polyline_norm(s, x0, y0, w, h, n, &mut samples);
+    }
+    let aspect = ((b[2] - b[0]) / (b[3] - b[1]).max(1e-6)).clamp(0.1, 10.0);
+    Some((samples, aspect))
+}
+
+/// Sample a polyline into `n` evenly spaced points, normalised by the given bbox.
+fn sample_polyline_norm(pts: &[(f64, f64)], x0: f64, y0: f64, w: f64, h: f64, n: usize, out: &mut Vec<(f64, f64)>) {
+    if pts.len() < 2 {
+        if let Some(&(x, y)) = pts.first() {
+            out.push(((x - x0) / w, (y - y0) / h));
+        }
+        return;
+    }
+    let total: f64 = pts.windows(2).map(|s| (s[1].0 - s[0].0).hypot(s[1].1 - s[0].1)).sum();
+    if total < 1e-9 {
+        if let Some(&(x, y)) = pts.first() {
+            out.push(((x - x0) / w, (y - y0) / h));
+        }
+        return;
+    }
+    let n = n.max(2);
+    for si in 0..n {
+        let target = total * si as f64 / (n - 1) as f64;
+        let mut acc = 0.0;
+        let mut found = false;
+        for seg in pts.windows(2) {
+            let sl = (seg[1].0 - seg[0].0).hypot(seg[1].1 - seg[0].1);
+            if acc + sl >= target - 1e-12 {
+                let t = if sl > 1e-12 { (target - acc) / sl } else { 0.0 };
+                let px = seg[0].0 + t * (seg[1].0 - seg[0].0);
+                let py = seg[0].1 + t * (seg[1].1 - seg[0].1);
+                out.push(((px - x0) / w, (py - y0) / h));
+                found = true;
+                break;
+            }
+            acc += sl;
+        }
+        if !found && let Some(&(x, y)) = pts.last() {
+            out.push(((x - x0) / w, (y - y0) / h));
+        }
+    }
+}
+
+/// The directed chamfer distance from `a` to `b` (mean distance of `a`'s points to the nearest
+/// of `b`'s), or `None` as soon as it must exceed `bound`.
+fn chamfer(a: &[(f64, f64)], b: &[(f64, f64)], bound: f64) -> Option<f64> {
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    let limit = bound * a.len() as f64;
+    let mut sum = 0.0;
+    for &(ax, ay) in a {
+        let d2 = b.iter().map(|&(bx, by)| (ax - bx) * (ax - bx) + (ay - by) * (ay - by)).fold(f64::MAX, f64::min);
+        sum += d2.sqrt();
+        if sum > limit {
+            return None;
+        }
+    }
+    Some(sum / a.len() as f64)
+}
+
+/// The symmetric chamfer distance (the larger of both directions), `None` above `bound`.
+fn chamfer_sym(a: &[(f64, f64)], b: &[(f64, f64)], bound: f64) -> Option<f64> {
+    let ab = chamfer(a, b, bound)?;
+    let ba = chamfer(b, a, bound)?;
+    Some(ab.max(ba))
+}
+
+/// Max chamfer distance for a template match to be accepted.
+const MATCH_THRESHOLD: f64 = 0.25;
+
+/// A match's confidence from its chamfer distance: 1 for an exact fit, 0 at the threshold.
+fn match_confidence(dist: f64) -> f64 {
+    (1.0 - dist / MATCH_THRESHOLD).clamp(0.0, 1.0)
+}
+
+/// A glyph's reading: the best character, its chamfer distance, and the runner-up character
+/// when it is a look-alike that fits about as well (an O for a 0, a B for an 8).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct GlyphRead {
+    ch: char,
+    dist: f64,
+    alt: Option<char>,
+}
+
+/// Letter/digit look-alikes the stroke shapes can't tell apart; the word around them decides.
+const LOOK_ALIKES: [(char, char); 6] = [('O', '0'), ('B', '8'), ('S', '5'), ('I', '1'), ('Z', '2'), ('G', '6')];
+
+fn look_alike(a: char, b: char) -> bool {
+    LOOK_ALIKES.iter().any(|&(l, d)| (a, b) == (l, d) || (a, b) == (d, l))
+}
+
+/// Match a candidate glyph against all templates.
+fn match_glyph(candidate: &[(f64, f64)], candidate_aspect: f64, candidate_n_strokes: usize, templates: &[ShxTemplate]) -> Option<GlyphRead> {
+    if candidate.is_empty() {
+        return None;
+    }
+    let mut fits: Vec<(char, f64)> = Vec::new();
+    for tpl in templates {
+        // loose aspect ratio filter (width factors from about 0.4 to 2.5 pass)
+        let ar = candidate_aspect / tpl.aspect;
+        if !(0.25..=4.0).contains(&ar) {
+            continue;
+        }
+        // loose stroke count filter: PDF output joins and splits strokes
+        let (lo, hi) = (tpl.n_strokes / 2, tpl.n_strokes * 2 + 2);
+        if candidate_n_strokes < lo || candidate_n_strokes > hi {
+            continue;
+        }
+        // only fits that could still be the best or its look-alike runner-up matter
+        let best = fits.iter().map(|f| f.1).fold(MATCH_THRESHOLD, f64::min);
+        if let Some(dist) = chamfer_sym(candidate, &tpl.samples, (best * 1.5 + 0.02).min(MATCH_THRESHOLD)) {
+            fits.push((tpl.ch, dist));
+        }
+    }
+    // the closest fit; equal fits keep the template order (letters before digits)
+    fits.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let &(ch, dist) = fits.first()?;
+    let alt = fits.iter().skip(1).find(|&&(c, d)| look_alike(ch, c) && d <= dist * 1.2 + 0.01).map(|&(c, _)| c);
+    Some(GlyphRead { ch, dist, alt })
+}
+
+/// A row slant from which the row counts as oblique lettering (about 8.5°).
+const OBLIQUE_ROW: f64 = 0.15;
+
+/// Largest slant the OCR straightens (horizontal shift per unit of height, about 31°).
+const MAX_SLANT: f64 = 0.6;
+
+/// The slant of a glyph: the length-weighted mean lean (dx per dy) of its near-vertical
+/// full-height segments (within 35° of vertical).  About 0 for upright lettering (the legs of an A or a V
+/// lean both ways and cancel); an oblique style leans all its verticals the same way.  One
+/// glyph's lean is rough (a 7, a slanted A); the row's median is what the OCR uses.  `None`
+/// for a glyph without long near-vertical segments (an O, a dash): it says nothing of the slant.
+fn glyph_slant(strokes: &[&[(f64, f64)]]) -> Option<f64> {
+    // only the strokes about the glyph's full height (a stem, a side): a curve's short corner
+    // segments lean anyhow, and so does an R's or a K's leg
+    let (lo, hi) = strokes.iter().flat_map(|s| s.iter()).fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
+    let min_dy = (hi - lo) * 0.7;
+    let (mut sum, mut weight) = (0.0, 0.0);
+    for s in strokes {
+        for w in s.windows(2) {
+            let (mut dx, mut dy) = (w[1].0 - w[0].0, w[1].1 - w[0].1);
+            if dy < 0.0 {
+                dx = -dx;
+                dy = -dy;
+            }
+            let len = dx.hypot(dy);
+            if len < 1e-9 || dy < min_dy || dx.abs() > dy * 0.7 {
+                continue;
+            }
+            sum += dx / dy * len;
+            weight += len;
+        }
+    }
+    (weight >= 1e-9).then(|| (sum / weight).clamp(-MAX_SLANT, MAX_SLANT))
+}
+
+/// Best match for a glyph's strokes, given the slant of its row (straightened at it and a
+/// tenth either side, as the estimate is rough).  On a row that leans clearly (oblique
+/// lettering) the straightened reading wins unless the upright one fits clearly better (by a
+/// fifth); on one that barely leans it is the other way round, so an upright 7 or / stays
+/// itself.
+fn read_glyph(strokes: &[&[(f64, f64)]], slant: f64, templates: &[ShxTemplate]) -> Option<GlyphRead> {
+    let n = strokes.len();
+    let upright = glyph_samples(strokes, 0.0).and_then(|(s, a)| match_glyph(&s, a, n, templates));
+    if slant.abs() < 0.05 {
+        return upright;
+    }
+    let straightened = [slant - 0.1, slant, slant + 0.1]
+        .into_iter()
+        .filter(|s| s.abs() >= 0.05 && s.abs() <= MAX_SLANT)
+        .filter_map(|s| glyph_samples(strokes, s).and_then(|(smp, a)| match_glyph(&smp, a, n, templates)))
+        .min_by(|a, b| a.dist.total_cmp(&b.dist));
+    match (upright, straightened) {
+        (Some(u), Some(s)) if slant.abs() >= OBLIQUE_ROW => Some(if u.dist < s.dist * 0.8 { u } else { s }),
+        (Some(u), Some(s)) if s.dist < u.dist * 0.8 => Some(s),
+        (None, s) => s,
+        (u, _) => u,
+    }
+}
+
+/// Distance between two polylines (0 when they cross or touch).
+fn polyline_gap(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
+    let seg = |s: &[(f64, f64)]| -> Vec<((f64, f64), (f64, f64))> {
+        if s.len() == 1 { s.first().map(|&p| vec![(p, p)]).unwrap_or_default() } else { s.windows(2).map(|w| (w[0], w[1])).collect() }
+    };
+    let mut best = f64::MAX;
+    for (p0, p1) in seg(a) {
+        for (q0, q1) in seg(b) {
+            best = best.min(segment_gap(p0, p1, q0, q1));
+            if best <= 0.0 {
+                return 0.0;
+            }
+        }
+    }
+    best
+}
+
+fn point_segment_gap(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 < 1e-18 { 0.0 } else { (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / l2).clamp(0.0, 1.0) };
+    (p.0 - a.0 - t * dx).hypot(p.1 - a.1 - t * dy)
+}
+
+fn segment_gap(p0: (f64, f64), p1: (f64, f64), q0: (f64, f64), q1: (f64, f64)) -> f64 {
+    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
+    let (d1, d2) = (cross(q0, q1, p0), cross(q0, q1, p1));
+    let (d3, d4) = (cross(p0, p1, q0), cross(p0, p1, q1));
+    if ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0)) && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0)) {
+        return 0.0;
+    }
+    point_segment_gap(p0, q0, q1).min(point_segment_gap(p1, q0, q1)).min(point_segment_gap(q0, p0, p1)).min(point_segment_gap(q1, p0, p1))
+}
+
+/// What the OCR pass found on a page.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OcrReport {
+    /// Glyph-sized stroke clusters the OCR tried to read.
+    pub clusters: usize,
+    /// Clusters that matched a character above the threshold.
+    pub glyphs: usize,
+    /// Lone matches dropped as linework noise (a single straight stroke, punctuation alone).
+    pub noise_dropped: usize,
+    /// Texts read in lettering that runs up or down the sheet.
+    pub turned: usize,
+    /// The texts it recovered, with their confidence.
+    pub words: Vec<OcrWord>,
+}
+
+impl OcrReport {
+    /// The mean confidence of the recovered texts (0 when there are none).
+    pub fn mean_confidence(&self) -> f64 {
+        if self.words.is_empty() { 0.0 } else { self.words.iter().map(|w| w.confidence).sum::<f64>() / self.words.len() as f64 }
+    }
+}
+
+/// One text the OCR recovered.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OcrWord {
+    pub value: String,
+    /// Insertion point in drawing units.
+    pub at: (f64, f64),
+    /// Its weakest character's confidence, 0..1 (1: an exact template fit; 0: at the threshold).
+    pub confidence: f64,
+}
+
+/// A matched glyph.
+struct MatchedGlyph {
+    ch: char,
+    /// A look-alike the shapes fit as well (see [`LOOK_ALIKES`]).
+    alt: Option<char>,
+    /// Its box, the x extent upright (an oblique row's slant taken out).
+    bb: [f64; 4],
+    indices: Vec<usize>,
+    pen: Pen,
+    confidence: f64,
+    /// One straight stroke (an I, a 1, a dash or a slash): plain linework looks the same.
+    straight: bool,
+    /// A single closed loop (an O, a D): alone it is as likely a small circle or box.  Also a
+    /// glyph with a curve-drawn loop in it (`Stroke::curved_loop`): alone it is a symbol (a
+    /// circle with a bar through it reads as a 6).
+    ring: bool,
+    /// The slant of its row.
+    slant: f64,
+}
+
+/// Characters that don't set a line's height or baseline: dashes, dots, commas and quotes sit
+/// inside the letter band, and parentheses, slashes and number signs often reach past it.
+fn small_glyph(ch: char) -> bool {
+    matches!(ch, '-' | '.' | ',' | '\'' | '"') || tall_glyph(ch)
+}
+
+/// Characters plot fonts often draw taller than a capital (see [`small_glyph`]).
+fn tall_glyph(ch: char) -> bool {
+    matches!(ch, '(' | ')' | '/' | '#')
+}
+
+/// Settle the look-alikes of a word (O/0, B/8, I/1, ...): each takes the kind (letter or
+/// digit) most of the sure characters of its part of the word are (the parts split at
+/// punctuation: "LP" and "1A" in "LP-1A"); a part that doesn't say takes its nearest
+/// neighbour part's kind (the 6 in "2,4,6"), else the whole word's.  A word of look-alikes
+/// only is a number if any of them reads as a digit first (a 5 and a ring: "50").
+fn settle_look_alikes(word: &mut [(&MatchedGlyph, char)]) {
+    // the kind most sure characters of `part` are: Some(true) for digits
+    let kind = |part: &[(&MatchedGlyph, char)]| -> Option<bool> {
+        let (letters, digits) = part
+            .iter()
+            .filter(|(g, _)| g.alt.is_none())
+            .fold((0, 0), |(l, d), (_, c)| (l + usize::from(c.is_ascii_alphabetic()), d + usize::from(c.is_ascii_digit())));
+        (letters != digits).then_some(digits > letters)
+    };
+    let all_alike = word.iter().all(|(g, c)| g.alt.is_some() || !c.is_ascii_alphanumeric());
+    let whole = kind(word).or_else(|| (all_alike && word.iter().any(|(_, c)| c.is_ascii_digit())).then_some(true));
+    // the parts: runs of letters and digits
+    let mut parts: Vec<(usize, usize)> = Vec::new();
+    let mut start = None;
+    for (i, (_, c)) in word.iter().enumerate() {
+        match (c.is_ascii_alphanumeric(), start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                parts.push((s, i));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        parts.push((s, word.len()));
+    }
+    let kinds: Vec<Option<bool>> = parts.iter().map(|&(a, b)| word.get(a..b).and_then(kind)).collect();
+    for (pi, &(a, b)) in parts.iter().enumerate() {
+        let near = || {
+            let before = kinds.get(..pi).and_then(|k| k.iter().rev().flatten().next().copied());
+            before.or_else(|| kinds.get(pi + 1..).and_then(|k| k.iter().flatten().next().copied()))
+        };
+        let Some(want_digit) = kinds.get(pi).copied().flatten().or_else(near).or(whole) else { continue };
+        for (g, ch) in word.get_mut(a..b).into_iter().flatten() {
+            if let Some(alt) = g.alt
+                && alt.is_ascii_digit() == want_digit
+            {
+                *ch = alt;
+            }
+        }
+    }
+}
+
+/// Recover SHX-stroked text by OCR: cluster short strokes into individual glyph-sized groups,
+/// match each against stroke templates, and assemble matched glyphs into TEXT entities.
+/// Strokes in `excluded` (already read or part of a symbol) are left alone.
+/// Read stroked lettering in the three directions a plan uses: across the sheet, and up or down
+/// along a vertical wall.  The upright reading goes first; its words (two or more letters or
+/// digits) stand.  Each turned direction then reads a turned copy of the strokes those words
+/// left, mapped back.  A turned word read upright falls apart into stray single glyphs, so a
+/// turned reading (of two or more letters or digits: a lone turned glyph is as often a tick)
+/// replaces the stray glyphs it shares strokes with.  Where the two turns read the same
+/// strokes (a word read upside down too), the reading with more letters wins, then the surer.
+fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usize>) -> (Vec<RecoveredText>, OcrReport) {
+    let (upright, mut report) = recover_shx_ocr_upright(strokes, sheet, excluded);
+    let alnum = |rt: &RecoveredText| rt.value.chars().filter(char::is_ascii_alphanumeric).count();
+    let (mut result, stray): (Vec<RecoveredText>, Vec<RecoveredText>) = upright.into_iter().partition(|rt| alnum(rt) >= 2);
+    let mut taken: HashSet<usize> = excluded.clone();
+    for rt in &result {
+        taken.extend(&rt.stroke_indices);
+    }
+    let mut turned_readings: Vec<RecoveredText> = Vec::new();
+    // (the turn that lays the lettering flat, the turn back, the lettering's direction)
+    let turns: [(fn((f64, f64)) -> (f64, f64), fn((f64, f64)) -> (f64, f64), f64); 2] =
+        [(|(x, y)| (y, -x), |(u, v)| (-v, u), 90.0), (|(x, y)| (-y, x), |(u, v)| (v, -u), 270.0)];
+    for (flat, back, rotation) in turns {
+        let turned: Vec<Stroke> = strokes
+            .iter()
+            .map(|s| Stroke {
+                pts: s.pts.iter().map(|&p| flat(p)).collect(),
+                closed: s.closed,
+                pen: s.pen,
+                layer: s.layer.clone(),
+                curve_loop: s.curve_loop,
+                curved_loop: s.curved_loop,
+                order: s.order,
+            })
+            .collect();
+        let (texts, _) = recover_shx_ocr_upright(&turned, (sheet.1, sheet.0), &taken);
+        for mut rt in texts.into_iter().filter(|rt| alnum(rt) >= 2) {
+            rt.at = back(rt.at);
+            rt.rotation = rotation;
+            turned_readings.push(rt);
+        }
+    }
+    // most letters first, then the surer reading (a word read upside down fits its letters worse)
+    turned_readings.sort_by(|a, b| alnum(b).cmp(&alnum(a)).then(b.confidence.unwrap_or(0.0).total_cmp(&a.confidence.unwrap_or(0.0))));
+    for rt in turned_readings {
+        if rt.stroke_indices.iter().any(|s| taken.contains(s)) {
+            continue;
+        }
+        taken.extend(&rt.stroke_indices);
+        report.turned += 1;
+        result.push(rt);
+    }
+    result.extend(stray.into_iter().filter(|rt| !rt.stroke_indices.iter().any(|s| taken.contains(s))));
+    (result, report)
+}
+
+/// Read the lettering that runs across the sheet (left to right, upright or slanted).
+fn recover_shx_ocr_upright(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usize>) -> (Vec<RecoveredText>, OcrReport) {
+    let mut report = OcrReport::default();
+    let templates = shx_templates();
+    if templates.is_empty() {
+        return (Vec::new(), report);
+    }
+
+    let max_seg = ocr_max_seg(sheet);
+
+    // ---- phase 1: find candidate SHX strokes ----
+    struct Cand {
+        idx: usize,
+        bb: [f64; 4],
+        pen: Pen,
+    }
+    let mut cands: Vec<Cand> = Vec::new();
+    for (i, s) in strokes.iter().enumerate() {
+        if excluded.contains(&i) {
+            continue;
+        }
+        if let Some(b) = ocr_candidate(s, max_seg) {
+            cands.push(Cand { idx: i, bb: b, pen: s.pen });
+        }
+    }
+    if cands.is_empty() {
+        return (Vec::new(), report);
+    }
+
+    // ---- phase 2: join touching strokes into glyphs ----
+    // Two strokes of the same pen belong to one glyph when they touch: their gap is under a
+    // twentieth of the larger one's size (at least 0.3 pt, for rounded coordinates).  Plot
+    // fonts set their letters close (two letters' feet can be a tenth of the height apart), so
+    // the tolerance stays well under that.  The larger size counts up to twice the smaller: a
+    // box drawn round a tag (one big loop) must not reach the lettering inside it.
+    let cell = max_seg;
+    let mut grid: HashMap<(i64, i64, Pen), Vec<usize>> = HashMap::new();
+    for (ci, c) in cands.iter().enumerate() {
+        let gx = (((c.bb[0] + c.bb[2]) / 2.0) / cell).floor() as i64;
+        let gy = (((c.bb[1] + c.bb[3]) / 2.0) / cell).floor() as i64;
+        grid.entry((gx, gy, c.pen)).or_default().push(ci);
+    }
+    let size = |b: &[f64; 4]| (b[2] - b[0]).max(b[3] - b[1]);
+    let mut visited = vec![false; cands.len()];
+    // each glyph: its strokes (indices into `strokes`), box and pen
+    let mut glyphs: Vec<(Vec<usize>, [f64; 4], Pen)> = Vec::new();
+    for (ci, first) in cands.iter().enumerate() {
+        match visited.get_mut(ci) {
+            Some(v) if !*v => *v = true,
+            _ => continue,
+        }
+        let mut members = vec![first.idx];
+        let mut queue = vec![ci];
+        let mut gbb = first.bb;
+        while let Some(cur) = queue.pop() {
+            let Some(cc) = cands.get(cur) else { continue };
+            let gx = (((cc.bb[0] + cc.bb[2]) / 2.0) / cell).floor() as i64;
+            let gy = (((cc.bb[1] + cc.bb[3]) / 2.0) / cell).floor() as i64;
+            for dx in -1_i64..=1 {
+                for dy in -1_i64..=1 {
+                    let Some(ns) = grid.get(&(gx + dx, gy + dy, cc.pen)) else { continue };
+                    for &ni in ns {
+                        if visited.get(ni).is_none_or(|&v| v) || members.len() > 16 {
+                            continue;
+                        }
+                        let Some(n) = cands.get(ni) else { continue };
+                        let (small, large) = (size(&cc.bb).min(size(&n.bb)), size(&cc.bb).max(size(&n.bb)));
+                        let tol = (large.min(small * 2.0) * OCR_JOIN_TOLERANCE).max(0.3);
+                        if n.bb[0] > cc.bb[2] + tol || n.bb[2] < cc.bb[0] - tol || n.bb[1] > cc.bb[3] + tol || n.bb[3] < cc.bb[1] - tol {
+                            continue;
+                        }
+                        let (Some(a), Some(b)) = (strokes.get(cc.idx), strokes.get(n.idx)) else { continue };
+                        if polyline_gap(&a.pts, &b.pts) <= tol {
+                            if let Some(v) = visited.get_mut(ni) {
+                                *v = true;
+                            }
+                            members.push(n.idx);
+                            queue.push(ni);
+                            gbb = [gbb[0].min(n.bb[0]), gbb[1].min(n.bb[1]), gbb[2].max(n.bb[2]), gbb[3].max(n.bb[3])];
+                        }
+                    }
+                }
+            }
+        }
+        let (w, h) = (gbb[2] - gbb[0], gbb[3] - gbb[1]);
+        // glyph-sized: not a speck, not taller than lettering gets, a handful of strokes
+        if w.max(h) > 0.25 && h < max_seg * 4.0 && w < max_seg * 4.0 && members.len() <= 12 {
+            glyphs.push((members, gbb, first.pen));
+        }
+    }
+    report.clusters = glyphs.len();
+
+    // ---- phase 3: match each glyph cluster against templates ----
+    // a loop is sampled all the way round (the importer drops its repeated closing point)
+    let loops: HashMap<usize, Vec<(f64, f64)>> = glyphs
+        .iter()
+        .flat_map(|(members, _, _)| members.iter())
+        .filter_map(|&i| strokes.get(i).filter(|s| s.closed).map(|s| (i, s.pts.iter().chain(s.pts.first()).copied().collect())))
+        .collect();
+    let glyph_pts: Vec<Vec<&[(f64, f64)]>> = glyphs
+        .iter()
+        .map(|(members, _, _)| {
+            members.iter().filter_map(|&i| loops.get(&i).map(Vec::as_slice).or_else(|| strokes.get(i).map(|s| s.pts.as_slice()))).collect()
+        })
+        .collect();
+    // the slant of each glyph's row: the median lean of the glyphs of its height beside it
+    let leans: Vec<Option<f64>> = glyph_pts.iter().map(|p| glyph_slant(p)).collect();
+    let mut by_cell: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (gi, (_, bb, _)) in glyphs.iter().enumerate() {
+        by_cell.entry((((bb[0] + bb[2]) / 2.0 / cell).floor() as i64, ((bb[1] + bb[3]) / 2.0 / cell).floor() as i64)).or_default().push(gi);
+    }
+    let row_slant = |gi: usize| -> f64 {
+        let Some((_, bb, pen)) = glyphs.get(gi) else { return 0.0 };
+        let (cx, cy, h) = ((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0, (bb[3] - bb[1]).max(0.5));
+        let reach = ((h * 4.0 / cell).ceil() as i64).clamp(1, 4);
+        let (gx, gy) = ((cx / cell).floor() as i64, (cy / cell).floor() as i64);
+        // (height, lean) of the glyphs beside it
+        let mut near: Vec<(f64, Option<f64>)> = Vec::new();
+        for dx in -reach..=reach {
+            for dy in -1..=1 {
+                for &gj in by_cell.get(&(gx + dx, gy + dy)).map(Vec::as_slice).unwrap_or_default() {
+                    let Some((_, b2, p2)) = glyphs.get(gj) else { continue };
+                    let h2 = b2[3] - b2[1];
+                    if p2 == pen
+                        && ((b2[1] + b2[3]) / 2.0 - cy).abs() <= h * 0.5
+                        && ((b2[0] + b2[2]) / 2.0 - cx).abs() <= h * 4.0
+                        && (0.6..=1.6).contains(&(h2 / h))
+                    {
+                        near.push((h2, leans.get(gj).copied().flatten()));
+                    }
+                }
+            }
+        }
+        // only the glyphs of the row's letter height vote: a slash or a number sign drawn
+        // taller than the letters leans by design
+        let mut heights: Vec<f64> = near.iter().map(|n| n.0).collect();
+        heights.sort_by(f64::total_cmp);
+        let Some(&hm) = heights.get(heights.len() / 2) else { return 0.0 };
+        let mut votes: Vec<f64> = near.iter().filter(|n| (hm * 0.85..=hm * 1.15).contains(&n.0)).filter_map(|n| n.1).collect();
+        votes.sort_by(f64::total_cmp);
+        votes.get(votes.len() / 2).copied().unwrap_or(0.0)
+    };
+    // the letter height of each glyph's row: the median height of the taller glyphs beside it
+    // whose letter band holds its centre (none for a glyph standing alone)
+    let row_height = |gi: usize| -> Option<f64> {
+        let (_, bb, pen) = glyphs.get(gi)?;
+        let (cx, cy, h) = ((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0, bb[3] - bb[1]);
+        let (gx, gy) = ((cx / cell).floor() as i64, (cy / cell).floor() as i64);
+        let mut near: Vec<f64> = Vec::new();
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for &gj in by_cell.get(&(gx + dx, gy + dy)).map(Vec::as_slice).unwrap_or_default() {
+                    let Some((_, b2, p2)) = glyphs.get(gj) else { continue };
+                    let h2 = b2[3] - b2[1];
+                    // (a lone straight stroke beside it may be a leader or a wall end, not a letter)
+                    let line = glyph_pts.get(gj).is_some_and(|p| p.len() == 1 && p.first().is_some_and(|s| s.len() <= 2));
+                    if gj != gi
+                        && !line
+                        && p2 == pen
+                        && h2 >= h * 0.6
+                        && h2 > 0.5
+                        && cy >= b2[1] - h2 * 0.25
+                        && cy <= b2[3] + h2 * 0.25
+                        && ((b2[0] + b2[2]) / 2.0 - cx).abs() <= h2 * 3.0
+                    {
+                        near.push(h2);
+                    }
+                }
+            }
+        }
+        near.sort_by(f64::total_cmp);
+        near.get(near.len() / 2).copied()
+    };
+    let mut matched: Vec<MatchedGlyph> = Vec::new();
+    for (gi, ((members, bb, pen), pts)) in glyphs.iter().zip(&glyph_pts).enumerate() {
+        let slant = row_slant(gi);
+        if let Some(GlyphRead { mut ch, dist, mut alt }) = read_glyph(pts, slant, &templates) {
+            let straight = pts.len() == 1 && pts.first().is_some_and(|p| p.len() <= 2);
+            let ring = (members.len() == 1 && members.first().and_then(|&i| strokes.get(i)).is_some_and(|s| s.closed))
+                || members.iter().any(|&i| strokes.get(i).is_some_and(|s| s.curved_loop));
+            // a lone upright stroke is an I (or a 1) at full letter height and a dot or an
+            // apostrophe below it; a speck a fraction of the letters' height is a dot whatever
+            // its shape (plot fonts draw a period as a tiny ring or diamond)
+            let (w, h) = (bb[2] - bb[0], bb[3] - bb[1]);
+            // upright, or leaning with its row (an oblique I reads as a slash)
+            let lean = pts.first().and_then(|p| Some((p.first()?, p.last()?))).map_or(f64::MAX, |(a, b)| {
+                let dy = b.1 - a.1;
+                if dy.abs() < 1e-9 { f64::MAX } else { (b.0 - a.0) / dy }
+            });
+            let along_row = straight && (lean - slant).abs() <= 0.1;
+            let row = row_height(gi);
+            if row.is_none() && straight && lean.abs() <= 0.1 && matches!(ch, '.' | '\'' | '/' | 'I') {
+                // alone, an upright stroke is a 1 (a circuit number) if it is anything (a mark's
+                // letter height and clear space decide, see `keep_lone_marks`); a lone stroke's
+                // "row" slant is its own lean, so a leader would pass as an oblique 1
+                (ch, alt) = ('1', Some('I'));
+            }
+            if let Some(row_h) = row {
+                if along_row && matches!(ch, '.' | '\'' | 'I' | '1' | '/') {
+                    (ch, alt) = if h >= row_h * 0.75 { ('I', Some('1')) } else { ('.', None) };
+                } else if w.max(h) <= row_h * 0.3 && ch != '-' {
+                    // a speck with a tail (taller than wide, not one straight tick) is a comma
+                    (ch, alt) = (if !straight && h > w * 1.8 { ',' } else { '.' }, None);
+                }
+            }
+            // spacing is measured upright: x with the row's slant taken out about the glyph's
+            // bottom (where an oblique letter stands)
+            let mut bb = *bb;
+            if slant.abs() >= 0.05 {
+                let xs = pts.iter().flat_map(|p| p.iter()).map(|&(x, y)| x - slant * (y - bb[1]));
+                let (x0, x1) = xs.fold((f64::MAX, f64::MIN), |(a, b), x| (a.min(x), b.max(x)));
+                if x0 <= x1 {
+                    bb[0] = x0;
+                    bb[2] = x1;
+                }
+            }
+            matched.push(MatchedGlyph {
+                ch,
+                alt,
+                bb,
+                indices: members.clone(),
+                pen: *pen,
+                confidence: match_confidence(dist),
+                straight,
+                ring,
+                slant,
+            });
+        }
+    }
+    report.glyphs = matched.len();
+    if matched.is_empty() {
+        return (Vec::new(), report);
+    }
+
+    // ---- phase 4: lines by baseline and height, then texts by spacing ----
+    // Letters and digits (full-height glyphs) build the lines, left to right; dashes, dots and
+    // quotes join the line whose letter band holds them.
+    matched.sort_by(|a, b| a.bb[0].total_cmp(&b.bb[0]));
+    struct TextLine {
+        pen: Pen,
+        bottom: f64,
+        height: f64,
+        x1: f64,
+        slant: f64,
+        members: Vec<usize>,
+    }
+    let mut lines: Vec<TextLine> = Vec::new();
+    let mut small: Vec<usize> = Vec::new();
+    for (gi, g) in matched.iter().enumerate() {
+        if small_glyph(g.ch) {
+            small.push(gi);
+            continue;
+        }
+        let h = g.bb[3] - g.bb[1];
+        let best = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| {
+                let gap = g.bb[0] - l.x1;
+                l.pen == g.pen
+                    && (g.bb[1] - l.bottom).abs() <= l.height * 0.3
+                    && (0.7..=1.45).contains(&(h / l.height.max(1e-6)))
+                    // room for a dash or a dot between (they join the line afterwards)
+                    && gap <= l.height * 2.0
+                    && gap >= -l.height * 0.3
+            })
+            .min_by(|a, b| (g.bb[0] - a.1.x1).total_cmp(&(g.bb[0] - b.1.x1)))
+            .map(|(li, _)| li);
+        match best.and_then(|li| lines.get_mut(li)) {
+            Some(l) => {
+                l.x1 = l.x1.max(g.bb[2]);
+                l.members.push(gi);
+            }
+            None => lines.push(TextLine { pen: g.pen, bottom: g.bb[1], height: h, x1: g.bb[2], slant: g.slant, members: vec![gi] }),
+        }
+    }
+    for gi in small {
+        let Some(g) = matched.get(gi) else { continue };
+        // a dash or a quote stands above the baseline: on an oblique row it shifts with the slant
+        let on_oblique_line = |l: &TextLine| {
+            let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
+            let rise = g.bb[1] - l.bottom;
+            l.pen == g.pen
+                && l.slant.abs() >= 0.05
+                && (0.0..=l.height * 1.25).contains(&rise)
+                && g.bb[0] - l.slant * rise >= x0 - l.height * 1.2
+                && g.bb[2] - l.slant * rise <= l.x1 + l.height * 1.2
+        };
+        let shift = lines.iter().find(|l| on_oblique_line(l)).map(|l| l.slant * (g.bb[1] - l.bottom));
+        if let Some(shift) = shift
+            && let Some(g) = matched.get_mut(gi)
+        {
+            g.bb[0] -= shift;
+            g.bb[2] -= shift;
+        }
+        let Some(g) = matched.get(gi) else { continue };
+        let cy = (g.bb[1] + g.bb[3]) / 2.0;
+        let line = lines.iter_mut().find(|l| {
+            let x0 = l.members.first().and_then(|&m| matched.get(m)).map_or(f64::MAX, |m| m.bb[0]);
+            l.pen == g.pen
+                && cy >= l.bottom - l.height * 0.25
+                && cy <= l.bottom + l.height * 1.25
+                && (g.bb[3] - g.bb[1]) <= l.height * if tall_glyph(g.ch) { 1.7 } else { 1.1 }
+                && g.bb[0] >= x0 - l.height * 1.2
+                && g.bb[2] <= l.x1 + l.height * 1.2
+        });
+        match line {
+            Some(l) => {
+                l.x1 = l.x1.max(g.bb[2]);
+                l.members.push(gi);
+            }
+            None => {
+                lines.push(TextLine { pen: g.pen, bottom: g.bb[1], height: (g.bb[3] - g.bb[1]).max(0.5), x1: g.bb[2], slant: 0.0, members: vec![gi] })
+            }
+        }
+    }
+
+    // lines the punctuation now bridges join: in "(A) #12" the parenthesis and the number sign
+    // left a gap between the A and the 12 that only they fill
+    let line_x0 = |l: &TextLine| l.members.iter().filter_map(|&m| matched.get(m)).map(|g| g.bb[0]).fold(f64::MAX, f64::min);
+    lines.sort_by(|a, b| line_x0(a).total_cmp(&line_x0(b)));
+    let mut joined: Vec<TextLine> = Vec::with_capacity(lines.len());
+    for l in lines {
+        let x0 = line_x0(&l);
+        let into = joined.iter_mut().rev().find(|m| {
+            let gap = x0 - m.x1;
+            m.pen == l.pen
+                && (l.bottom - m.bottom).abs() <= m.height * 0.3
+                && (0.7..=1.45).contains(&(l.height / m.height.max(1e-6)))
+                && gap <= m.height * 2.0
+                && gap >= -m.height * 0.3
+        });
+        match into {
+            Some(m) => {
+                m.x1 = m.x1.max(l.x1);
+                m.members.extend(l.members);
+            }
+            None => joined.push(l),
+        }
+    }
+    let lines = joined;
+
+    let mut result: Vec<RecoveredText> = Vec::new();
+    let mut marks: Vec<RecoveredText> = Vec::new();
+    for mut line in lines {
+        line.members.sort_by(|&a, &b| {
+            let (ax, bx) = (matched.get(a).map_or(0.0, |g| g.bb[0]), matched.get(b).map_or(0.0, |g| g.bb[0]));
+            ax.total_cmp(&bx)
+        });
+        let h = line.height;
+        // the line's character width (its median letter), for a width factor's wider spacing
+        let mut widths: Vec<f64> = line.members.iter().filter_map(|&m| matched.get(m)).map(|g| g.bb[2] - g.bb[0]).filter(|&w| w >= h * 0.4).collect();
+        widths.sort_by(f64::total_cmp);
+        let cw = widths.get(widths.len() / 2).copied().unwrap_or(h * 0.67);
+        // spacing is measured on nominal boxes: a narrow glyph (an I, a 1, a dot) is given
+        // a normal letter's width around its centre
+        let span = |g: &MatchedGlyph| -> (f64, f64) {
+            // a dot, a comma or a quote sits in a narrow cell of its own
+            let nominal = if matches!(g.ch, '.' | ',' | '\'') { cw * 0.3 } else { cw * 0.9 };
+            let (cx, w) = ((g.bb[0] + g.bb[2]) / 2.0, (g.bb[2] - g.bb[0]).max(nominal));
+            (cx - w / 2.0, cx + w / 2.0)
+        };
+        // split the line into texts at wide gaps (about two spaces); a narrower gap is a space
+        let mut runs: Vec<Vec<&MatchedGlyph>> = Vec::new();
+        let mut prev_end = f64::MIN;
+        for g in line.members.iter().filter_map(|&m| matched.get(m)) {
+            let (x0, x1) = span(g);
+            match runs.last_mut() {
+                Some(run) if x0 - prev_end <= cw * 1.8 => run.push(g),
+                _ => runs.push(vec![g]),
+            }
+            prev_end = prev_end.max(x1);
+        }
+        for run in runs {
+            // words (split at spaces), each glyph with the character it reads as
+            let mut words: Vec<Vec<(&MatchedGlyph, char)>> = Vec::new();
+            let mut prev_end = f64::MIN;
+            for &g in &run {
+                let (x0, x1) = span(g);
+                // a tick in the upper half of the letter band is an apostrophe, low a dot (or
+                // a comma, read by its tail)
+                let ch = match g.ch {
+                    '.' | '\'' | ',' if (g.bb[1] + g.bb[3]) / 2.0 > line.bottom + h * 0.5 => '\'',
+                    '.' | '\'' => '.',
+                    c => c,
+                };
+                match words.last_mut() {
+                    Some(word) if x0 - prev_end <= cw * 0.6 => word.push((g, ch)),
+                    _ => words.push(vec![(g, ch)]),
+                }
+                prev_end = prev_end.max(x1);
+            }
+            let mut value = String::new();
+            for word in &mut words {
+                settle_look_alikes(word);
+                if !value.is_empty() {
+                    value.push(' ');
+                }
+                value.extend(word.iter().map(|(_, c)| *c));
+            }
+            // two ticks side by side are a double quote
+            let value = value.replace("''", "\"");
+            let alnum = value.chars().filter(char::is_ascii_alphanumeric).count();
+            let lone = run.len() == 1;
+            let confidence = run.iter().map(|g| g.confidence).fold(1.0, f64::min);
+            // linework reads as lone glyphs and runs of straight strokes (hatching: "////"); a
+            // lone loop is a small circle or box as often as an O, and a row of nothing but
+            // loops is a row of circles or boxes ("OOO", or "DDD" for boxes read turned)
+            let noise =
+                alnum == 0 || run.iter().all(|g| g.straight) || run.iter().all(|g| g.ring) || (lone && run.iter().any(|g| g.confidence < 0.7));
+            // a lone letter or digit can still be a mark (a circuit number, a fixture type):
+            // it is judged once the page's words give its letter heights
+            let mark = noise && lone && alnum == 1 && run.first().is_some_and(|g| lone_mark_shape(g, strokes));
+            if noise && !mark {
+                report.noise_dropped += 1;
+                continue;
+            }
+            let Some(first) = run.first() else { continue };
+            let x0 = run.iter().map(|g| g.bb[0]).fold(f64::MAX, f64::min);
+            let y0 = run.iter().filter(|g| !small_glyph(g.ch)).map(|g| g.bb[1]).fold(f64::MAX, f64::min);
+            let y0 = if y0 == f64::MAX { first.bb[1] } else { y0 };
+            let stroke_indices: HashSet<usize> = run.iter().flat_map(|g| g.indices.iter().copied()).collect();
+            let layer = first.indices.first().and_then(|&i| strokes.get(i)).and_then(|s| s.layer.clone());
+            let text = RecoveredText {
+                at: (x0, y0),
+                height: h,
+                value,
+                stroke_indices,
+                pen: line.pen,
+                layer,
+                unconfirmed: false,
+                confidence: Some(confidence),
+                rotation: 0.0,
+            };
+            if mark { marks.push(text) } else { result.push(text) }
+        }
+    }
+    let kept = keep_lone_marks(marks, &result, strokes, max_seg);
+    report.noise_dropped += kept.1;
+    result.extend(kept.0);
+    (result, report)
+}
+
+/// A lone glyph that may be a mark rather than linework: a letter or digit of a letter's shape
+/// (not a drawn circle, a box as wide as it is tall, or a stroke leaning off the upright).
+fn lone_mark_shape(g: &MatchedGlyph, strokes: &[Stroke]) -> bool {
+    let (w, h) = (g.bb[2] - g.bb[0], g.bb[3] - g.bb[1]);
+    if !g.ch.is_ascii_alphanumeric() || h <= 0.5 || g.confidence < 0.45 {
+        return false;
+    }
+    if g.indices.iter().any(|&i| strokes.get(i).is_some_and(|s| s.curved_loop)) {
+        return false;
+    }
+    // a lettering loop (O, D, 0) is narrower than it is tall; a circle or a box is not
+    if g.ring && w > h * 0.8 {
+        return false;
+    }
+    // a lone straight stroke must stand upright (an I or a 1)
+    if g.straight && w > h * 0.12 {
+        return false;
+    }
+    true
+}
+
+/// Which lone marks are lettering (see [`lone_mark_shape`]): one standing at the letter height
+/// of the page's words (in its pen), clear of every other stroke.  A door jamb, a duct tick
+/// or a wall end reads like an I but touches the lines it ends; a circuit number or a fixture
+/// type stands free.  Returns the kept marks and how many were dropped.
+fn keep_lone_marks(marks: Vec<RecoveredText>, words: &[RecoveredText], strokes: &[Stroke], cell: f64) -> (Vec<RecoveredText>, usize) {
+    if marks.is_empty() {
+        return (marks, 0);
+    }
+    let heights: Vec<(Pen, f64)> =
+        words.iter().filter(|w| w.value.chars().filter(char::is_ascii_alphanumeric).count() >= 2).map(|w| (w.pen, w.height)).collect();
+    // the segments of the page near a mark, by grid cell
+    let cell = cell.max(1.0);
+    let key = |x: f64, y: f64| ((x / cell).floor() as i64, (y / cell).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<(usize, (f64, f64), (f64, f64))>> = HashMap::new();
+    for m in &marks {
+        let (k0, k1) = (key(m.at.0 - m.height, m.at.1 - m.height), key(m.at.0 + m.height * 2.0, m.at.1 + m.height * 2.0));
+        for gx in k0.0..=k1.0.min(k0.0 + 8) {
+            for gy in k0.1..=k1.1.min(k0.1 + 8) {
+                grid.entry((gx, gy)).or_default();
+            }
+        }
+    }
+    for (si, s) in strokes.iter().enumerate() {
+        let closing = if s.closed && s.pts.len() > 2 { s.pts.last().zip(s.pts.first()) } else { None };
+        for (&a, &b) in s.pts.iter().zip(s.pts.iter().skip(1)).chain(closing) {
+            let (k0, k1) = (key(a.0.min(b.0), a.1.min(b.1)), key(a.0.max(b.0), a.1.max(b.1)));
+            if (k1.0 - k0.0 + 1).saturating_mul(k1.1 - k0.1 + 1) > 400 {
+                // a long diagonal: only the cells it passes near a mark
+                for (&(gx, gy), segs) in grid.iter_mut() {
+                    let (x0, y0) = (gx as f64 * cell, gy as f64 * cell);
+                    let centre = (x0 + cell / 2.0, y0 + cell / 2.0);
+                    if point_segment_gap(centre, a, b) <= cell {
+                        segs.push((si, a, b));
+                    }
+                }
+                continue;
+            }
+            for gx in k0.0..=k1.0 {
+                for gy in k0.1..=k1.1 {
+                    if let Some(segs) = grid.get_mut(&(gx, gy)) {
+                        segs.push((si, a, b));
+                    }
+                }
+            }
+        }
+    }
+    let mut kept = Vec::new();
+    let mut dropped = 0;
+    for m in marks {
+        let at_letter_height = heights.iter().any(|&(pen, h)| pen == m.pen && (m.height / h.max(1e-6) - 1.0).abs() <= 0.15);
+        let clear = (m.height * 0.15).max(0.3);
+        let free = at_letter_height
+            && m.stroke_indices.iter().filter_map(|&i| strokes.get(i)).all(|s| {
+                s.pts.iter().zip(s.pts.iter().skip(1)).all(|(&p, &q)| {
+                    let (k0, k1) = (key(p.0.min(q.0) - clear, p.1.min(q.1) - clear), key(p.0.max(q.0) + clear, p.1.max(q.1) + clear));
+                    (k0.0..=k1.0).all(|gx| {
+                        (k0.1..=k1.1).all(|gy| {
+                            grid.get(&(gx, gy)).is_none_or(|segs| {
+                                segs.iter().all(|&(si, a, b)| m.stroke_indices.contains(&si) || polyline_gap(&[p, q], &[a, b]) > clear)
+                            })
+                        })
+                    })
+                })
+            });
+        if free {
+            kept.push(m);
+        } else {
+            dropped += 1;
+        }
+    }
+    (kept, dropped)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix 4: Filter opaque fills that the PDF render doesn't show
+// ---------------------------------------------------------------------------------------------
+
+/// Check if a fill is likely a false opaque fill (artifact) rather than real content visible
+/// in the PDF. False fills are typically:
+/// - Large solid fills covering significant portions of the sheet (yellow/white boxes)
+/// - Fills whose color doesn't match nearby content (e.g., bright yellow on a line drawing)
+/// - Fills behind text that are not wipeouts
+fn is_artifact_fill(f: &Fill, sheet: (f64, f64), texts: &[TextOut], strokes: &[Stroke]) -> bool {
+    let b = match bbox(&f.loops) {
+        Some(b) => b,
+        None => return false,
+    };
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+    let fill_area = (b[2] - b[0]) * (b[3] - b[1]);
+    let sheet_area = sw * sh;
+    if sheet_area < 1.0 {
+        return false;
+    }
+    // fills covering >50% of the sheet are almost certainly artifacts
+    if fill_area > sheet_area * 0.5 {
+        return true;
+    }
+    // bright yellow, orange, or other non-standard fills on construction docs that cover large areas
+    // are typically "highlighted" artifacts from PDF redline tools, not original drawing content
+    let [r, g, _b] = f.pen.rgb;
+    let is_bright_yellow = r > 200 && g > 200 && _b < 100;
+    let is_bright_orange = r > 200 && g > 100 && g < 200 && _b < 100;
+    let is_artifact_color = is_bright_yellow || is_bright_orange;
+    if is_artifact_color && fill_area > sheet_area * 0.01 {
+        // large bright colored fills without nearby matching-color content are artifacts
+        let has_matching_content = strokes.iter().any(|s| s.pen.rgb == f.pen.rgb) || texts.iter().any(|t| t.pen.rgb == f.pen.rgb);
+        if !has_matching_content {
+            return true;
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------------------------
+// Mask reduction: merge overlapping/adjacent wipeouts, drop those that mask nothing visible
+// ---------------------------------------------------------------------------------------------
+
+/// Reduce the mask count by merging spatially overlapping masks into combined bounding-box
+/// masks, and by dropping masks that do not overlap any visible non-white content.
+fn reduce_masks(masks: Vec<Fill>, strokes: &[Stroke], fills: &[Fill], texts: &[TextOut], sheet: (f64, f64)) -> Vec<Fill> {
+    if masks.is_empty() {
+        return masks;
+    }
+    let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
+
+    // compute a bounding box for each mask
+    struct MaskInfo {
+        bb: [f64; 4],
+        order: usize,
+    }
+    let mut infos: Vec<MaskInfo> = Vec::new();
+    for m in &masks {
+        if let Some(bb) = bbox(&m.loops) {
+            infos.push(MaskInfo { bb, order: m.order });
+        }
+    }
+    if infos.is_empty() {
+        return Vec::new();
+    }
+
+    // grid-based spatial grouping: merge masks whose bounding boxes overlap or are close
+    let cell_size = sw.min(sh) * 0.05; // 5% of sheet for grouping
+    let cell_size = cell_size.max(20.0);
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, info) in infos.iter().enumerate() {
+        let gx0 = (info.bb[0] / cell_size).floor() as i64;
+        let gx1 = (info.bb[2] / cell_size).floor() as i64;
+        let gy0 = (info.bb[1] / cell_size).floor() as i64;
+        let gy1 = (info.bb[3] / cell_size).floor() as i64;
+        for gx in gx0..=gx1 {
+            for gy in gy0..=gy1 {
+                grid.entry((gx, gy)).or_default().push(i);
+            }
+        }
+    }
+
+    // union-find to group overlapping masks
+    let mut parent: Vec<usize> = (0..infos.len()).collect();
+    let find = |parent: &mut [usize], mut x: usize| -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    };
+    let pad = cell_size * 0.5; // generous tolerance for adjacency (masks behind nearby tags)
+    for members in grid.values() {
+        for (mi, &a) in members.iter().enumerate() {
+            for &b in &members[mi + 1..] {
+                let (ba, bb_) = (&infos[a].bb, &infos[b].bb);
+                // overlapping or adjacent (with padding)
+                if ba[0] <= bb_[2] + pad && ba[2] >= bb_[0] - pad && ba[1] <= bb_[3] + pad && ba[3] >= bb_[1] - pad {
+                    let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+                    if ra != rb {
+                        parent[rb] = ra;
+                    }
+                }
+            }
+        }
+    }
+
+    // collect groups and merge each into a single bounding-box mask
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..infos.len() {
+        groups.entry(find(&mut parent, i)).or_default().push(i);
+    }
+
+    // determine which areas have visible non-white content (strokes, fills, texts)
+    // to decide whether a merged mask is worth keeping
+    let mut content_bbs: Vec<[f64; 4]> = Vec::new();
+    for s in strokes {
+        if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+            content_bbs.push(b);
+        }
+    }
+    for f in fills {
+        if let Some(b) = bbox(&f.loops) {
+            content_bbs.push(b);
+        }
+    }
+    for t in texts {
+        let h = t.height.max(1.0);
+        let w = h * t.value.len().max(1) as f64 * 0.6;
+        content_bbs.push([t.at.0, t.at.1, t.at.0 + w, t.at.1 + h]);
+    }
+
+    // generous proximity check: a mask near visible content is worth keeping (it may mask
+    // behind text or tags that are adjacent, not exactly overlapping)
+    let content_pad = sw.min(sh) * 0.05; // 5% of sheet size
+    let overlaps_content = |bb: &[f64; 4]| -> bool {
+        let expanded = [bb[0] - content_pad, bb[1] - content_pad, bb[2] + content_pad, bb[3] + content_pad];
+        content_bbs.iter().any(|cb| cb[0] < expanded[2] && cb[2] > expanded[0] && cb[1] < expanded[3] && cb[3] > expanded[1])
+    };
+
+    let mut result: Vec<Fill> = Vec::new();
+    for (_, members) in groups {
+        let mut merged_bb = infos[members[0]].bb;
+        let mut max_order = infos[members[0]].order;
+        for &mi in &members[1..] {
+            let b = &infos[mi].bb;
+            merged_bb = [merged_bb[0].min(b[0]), merged_bb[1].min(b[1]), merged_bb[2].max(b[2]), merged_bb[3].max(b[3])];
+            max_order = max_order.max(infos[mi].order);
+        }
+
+        // drop only large merged groups of masks that don't overlap any visible content:
+        // a cluster of 10+ tiny masks far from anything useful is an artefact.
+        // Singleton or small groups are kept (a single white fill behind a tag is legitimate).
+        if members.len() >= 10 && !overlaps_content(&merged_bb) {
+            continue;
+        }
+
+        // emit one merged mask for the group
+        let loop_pts = vec![(merged_bb[0], merged_bb[1]), (merged_bb[2], merged_bb[1]), (merged_bb[2], merged_bb[3]), (merged_bb[0], merged_bb[3])];
+        result.push(Fill { loops: vec![loop_pts], pen: Pen { rgb: [255, 255, 255], lw: 0, transp: 0 }, order: max_order, layer: None });
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix 5: Detect repeated symbol clusters and create blocks with attributes
+// ---------------------------------------------------------------------------------------------
+
+/// A group of entities at one location that appears multiple times on the sheet.
+struct SymbolInstance {
+    /// Center point.
+    center: (f64, f64),
+    /// Stroke indices that form this symbol.
+    stroke_indices: Vec<usize>,
+    /// Fill indices.
+    fill_indices: Vec<usize>,
+    /// Nearby text (potential attribute tag).
+    nearby_text: Option<String>,
+    nearby_text_idx: Option<usize>,
+    /// The tag is lettering the OCR read from strokes: its index in the recovered texts.
+    ocr_idx: Option<usize>,
+    /// The device-type tag from nearby hidden text (e.g. "A", "G", "OS").
+    device_type: Option<String>,
+}
+
+/// A short mark that may name the device beside it: real PDF text, or lettering the OCR read
+/// from strokes.
+struct TagAnchor<'a> {
+    value: &'a str,
+    at: (f64, f64),
+    height: f64,
+    /// Index in the page's texts (real text).
+    text_idx: Option<usize>,
+    /// Index in the recovered texts (OCR lettering).
+    ocr_idx: Option<usize>,
+}
+
+/// Device-tag candidates among real texts: short marks (common on E-sheets: A, C, DH, E, EF,
+/// G, J, L4, OS, REC, XA, etc.), hidden or visible.
+fn is_device_tag(v: &str) -> bool {
+    let t = v.trim();
+    (1..=6).contains(&t.len())
+        && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && t.chars().any(|c| c.is_ascii_alphabetic())
+        // not a scale note or sheet number
+        && !t.contains('=') && !t.contains('"') && !t.contains('\'')
+}
+
+/// Device marks the OCR read from strokes.  Stricter than real text, since a misread glyph
+/// costs nothing to make: 1-3 capitals and up to 2 digits, never a lone I, O or X (a short
+/// line, a circle or a crossing read as a letter).
+fn is_ocr_device_tag(v: &str) -> bool {
+    let t = v.trim();
+    let letters = t.bytes().take_while(u8::is_ascii_uppercase).count();
+    (1..=3).contains(&letters) && t.len() - letters <= 2 && t.bytes().skip(letters).all(|b| b.is_ascii_digit()) && !matches!(t, "I" | "O" | "X")
+}
+
+/// A closed loop: a symbol's circle, box or triangle.
+fn is_outline(s: &Stroke) -> bool {
+    s.closed
+        || s.pts.len() >= 4
+            && match (s.pts.first(), s.pts.last()) {
+                (Some(a), Some(b)) => (a.0 - b.0).hypot(a.1 - b.1) < 0.05,
+                _ => false,
+            }
+}
+
+/// Where a real text sits, sheet points (rotation ignored: tags and their neighbours read
+/// left to right).
+fn text_box(t: &TextOut) -> [f64; 4] {
+    [t.at.0.min(t.end.0), t.at.1.min(t.end.1), t.at.0.max(t.end.0), t.at.1.max(t.end.1) + t.height]
+}
+
+/// Lettering the OCR read that stands alone, as a device mark does: no other text box within
+/// one letter height of `boxes[i]`.  A letter the OCR split off a word sits right beside the
+/// rest of it.
+fn stands_alone(i: usize, height: f64, boxes: &[[f64; 4]]) -> bool {
+    let Some(b) = boxes.get(i) else { return false };
+    let gap = height.max(1.0);
+    boxes.iter().enumerate().all(|(k, o)| k == i || !(o[0] <= b[2] + gap && o[2] >= b[0] - gap && o[1] <= b[3] + gap && o[3] >= b[1] - gap))
+}
+
+/// Smallest and largest symbol on a sheet, in points.
+fn symbol_size_range(sheet: (f64, f64)) -> (f64, f64) {
+    let short = (sheet.0 * 72.0).min(sheet.1 * 72.0);
+    (short * 0.002, short * 0.06)
+}
+
+/// Group symbol instances by device type (in tag order); each type with ≥2 instances becomes
+/// a block.  Within a group, instances keep their order (the first one draws the block).
+fn group_symbols(instances: Vec<SymbolInstance>) -> Vec<Vec<SymbolInstance>> {
+    let mut groups: BTreeMap<String, Vec<SymbolInstance>> = BTreeMap::new();
+    for inst in instances {
+        let key = inst.device_type.clone().unwrap_or_else(|| "UNKNOWN".to_string());
+        groups.entry(key).or_default().push(inst);
+    }
+    groups.into_values().filter(|g| g.len() >= 2).collect()
+}
+
+/// Find device symbols: for each tag anchor, the compact cluster of short strokes around it
+/// (none of them in `excluded`: lettering, or symbols already found) is the symbol.
+fn find_symbol_instances(
+    strokes: &[Stroke],
+    fills: &[Fill],
+    anchors: &[TagAnchor],
+    sheet: (f64, f64),
+    excluded: &HashSet<usize>,
+    need_outline: bool,
+) -> Vec<SymbolInstance> {
+    let (min_size, max_size) = symbol_size_range(sheet);
+
+    // Build a spatial grid of short strokes not excluded
+    let cell = max_size * 1.5;
+    let mut stroke_grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, s) in strokes.iter().enumerate() {
+        if excluded.contains(&i) {
+            continue;
+        }
+        let seg_len: f64 = s.pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+        if seg_len > max_size * 3.0 {
+            continue;
+        }
+        if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+            let gx = ((b[0] + b[2]) / 2.0 / cell).floor() as i64;
+            let gy = ((b[1] + b[3]) / 2.0 / cell).floor() as i64;
+            stroke_grid.entry((gx, gy)).or_default().push(i);
+        }
+    }
+    // Fill grid
+    let mut fill_grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, f) in fills.iter().enumerate() {
+        if let Some(b) = bbox(&f.loops) {
+            let gx = ((b[0] + b[2]) / 2.0 / cell).floor() as i64;
+            let gy = ((b[1] + b[3]) / 2.0 / cell).floor() as i64;
+            fill_grid.entry((gx, gy)).or_default().push(i);
+        }
+    }
+
+    let mut used_strokes: HashSet<usize> = HashSet::new();
+    let mut instances: Vec<SymbolInstance> = Vec::new();
+
+    // For each device tag, find the compact stroke cluster around it
+    for t in anchors {
+        let v = t.value.trim();
+        let tx = t.at.0;
+        let ty = t.at.1;
+        let search_r = t.height.max(5.0) * 4.0; // search radius: ~4× the text height
+
+        // find short strokes near this tag
+        let gx0 = (((tx - search_r) / cell).floor() as i64) - 1;
+        let gx1 = (((tx + search_r) / cell).floor() as i64) + 1;
+        let gy0 = (((ty - search_r) / cell).floor() as i64) - 1;
+        let gy1 = (((ty + search_r) / cell).floor() as i64) + 1;
+
+        let mut nearby: Vec<usize> = Vec::new();
+        for gx in gx0..=gx1 {
+            for gy in gy0..=gy1 {
+                if let Some(members) = stroke_grid.get(&(gx, gy)) {
+                    for &si in members {
+                        if used_strokes.contains(&si) {
+                            continue;
+                        }
+                        let s = &strokes[si];
+                        if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+                            let sc = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+                            let dist = (sc.0 - tx).hypot(sc.1 - ty);
+                            if dist < search_r {
+                                nearby.push(si);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if nearby.len() < 2 {
+            continue;
+        }
+
+        // flood-fill from the closest stroke to the tag to build a compact cluster
+        nearby.sort_by(|&a, &b| {
+            let ab = bbox(std::slice::from_ref(&strokes[a].pts)).unwrap_or([0.0; 4]);
+            let bb = bbox(std::slice::from_ref(&strokes[b].pts)).unwrap_or([0.0; 4]);
+            let da = ((ab[0] + ab[2]) / 2.0 - tx).hypot((ab[1] + ab[3]) / 2.0 - ty);
+            let db = ((bb[0] + bb[2]) / 2.0 - tx).hypot((bb[1] + bb[3]) / 2.0 - ty);
+            da.total_cmp(&db)
+        });
+
+        let seed = nearby[0];
+        let seed_b = match bbox(std::slice::from_ref(&strokes[seed].pts)) {
+            Some(b) => b,
+            None => continue,
+        };
+        let mut cluster = vec![seed];
+        let mut bounds = seed_b;
+        let mut visited = HashSet::from([seed]);
+
+        // greedily add nearby strokes that keep the cluster compact
+        for &si in &nearby {
+            if visited.contains(&si) {
+                continue;
+            }
+            let Some(sb) = bbox(std::slice::from_ref(&strokes[si].pts)) else { continue };
+            let trial = [bounds[0].min(sb[0]), bounds[1].min(sb[1]), bounds[2].max(sb[2]), bounds[3].max(sb[3])];
+            let tw = trial[2] - trial[0];
+            let th = trial[3] - trial[1];
+            if tw <= max_size && th <= max_size {
+                // check the stroke is close to the cluster
+                let sc = ((sb[0] + sb[2]) / 2.0, (sb[1] + sb[3]) / 2.0);
+                let cc = ((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0);
+                if (sc.0 - cc.0).hypot(sc.1 - cc.1) < max_size {
+                    visited.insert(si);
+                    cluster.push(si);
+                    bounds = trial;
+                }
+            }
+        }
+
+        let w = bounds[2] - bounds[0];
+        let h = bounds[3] - bounds[1];
+        if cluster.len() < 2 || w < min_size || h < min_size {
+            continue;
+        }
+        // Leftover lettering is open strokes; a symbol drawn round a closed outline is not.
+        if need_outline && !cluster.iter().filter_map(|&si| strokes.get(si)).any(is_outline) {
+            continue;
+        }
+
+        // collect fills in the cluster area
+        let center = ((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0);
+        let cgx = (center.0 / cell).floor() as i64;
+        let cgy = (center.1 / cell).floor() as i64;
+        let mut cluster_fills = Vec::new();
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                if let Some(neighbors) = fill_grid.get(&(cgx + dx, cgy + dy)) {
+                    for &fi in neighbors {
+                        if let Some(fb) = bbox(&fills[fi].loops)
+                            && fb[0] >= bounds[0] - 2.0
+                            && fb[1] >= bounds[1] - 2.0
+                            && fb[2] <= bounds[2] + 2.0
+                            && fb[3] <= bounds[3] + 2.0
+                        {
+                            cluster_fills.push(fi);
+                        }
+                    }
+                }
+            }
+        }
+
+        // extract the device type from the tag text (first alphabetic chars)
+        let dev_type: String = v.chars().filter(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_uppercase();
+
+        for &si in &cluster {
+            used_strokes.insert(si);
+        }
+
+        instances.push(SymbolInstance {
+            center,
+            stroke_indices: cluster,
+            fill_indices: cluster_fills,
+            nearby_text: Some(v.to_string()),
+            nearby_text_idx: t.text_idx,
+            ocr_idx: t.ocr_idx,
+            device_type: if dev_type.is_empty() { None } else { Some(dev_type) },
+        });
+    }
+    instances
+}
+
+// ---------------------------------------------------------------------------------------------
 // The whole page
 // ---------------------------------------------------------------------------------------------
 
 /// Read page `opts.page` as a drawing.
 pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
-    let doc = load(bytes)?;
+    let doc = load_cached(bytes)?;
     let pages = doc.get_pages();
     let page_total = u32::try_from(pages.len()).unwrap_or(u32::MAX);
     let page_id = *pages.get(&opts.page.max(1)).ok_or_else(|| err(format!("page {} doesn't exist (the file has {page_total})", opts.page)))?;
@@ -1738,33 +3879,95 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         _ => 0.0,
     };
 
-    // scale: the option, else the sheet's scale note (the most common one)
-    let mut notes_count: HashMap<String, (f64, usize)> = HashMap::new();
-    for t in &out.texts {
-        let v = t.value.trim();
-        let up = v.to_ascii_uppercase();
-        if (up.contains('=') || up.starts_with("SCALE"))
-            && (up.contains('\'') || up.contains('"') || up.contains(':'))
-            && let Some(k) = parse_scale(v)
-        {
-            let e = notes_count.entry(v.trim_start_matches(|c: char| !c.is_ascii_digit()).to_string()).or_insert((k, 0));
-            e.1 += 1;
+    // scale: the option, else the sheet's scale note (enhanced detection with title block
+    // preference — Fix 1: detect per viewport/drawing title)
+    // "DO NOT SCALE" sheets stay at sheet size (scale=1) but carry the scale and note in the
+    // manifest for registration purposes (MUST 6)
+    // Initial scale detection — may be overridden after SHX text recovery if a DO NOT SCALE
+    // note only exists in stroked (hidden) text.
+    let do_not_scale_visible = if opts.recover_text { has_do_not_scale_note(&out.texts) } else { false };
+    let best_note = if opts.scale.is_some() {
+        None
+    } else if opts.recover_text {
+        detect_scale_note(&out.texts, sheet)
+    } else {
+        // old algorithm: most common scale note (no title-block priority)
+        let mut notes_count: HashMap<String, (f64, usize)> = HashMap::new();
+        for t in &out.texts {
+            let v = t.value.trim();
+            let up = v.to_ascii_uppercase();
+            if (up.contains('=') || up.starts_with("SCALE"))
+                && (up.contains('\'') || up.contains('"') || up.contains(':'))
+                && let Some(k) = parse_scale(v)
+            {
+                let e = notes_count.entry(v.trim_start_matches(|c: char| !c.is_ascii_digit()).to_string()).or_insert((k, 0));
+                e.1 += 1;
+            }
         }
-    }
-    let best_note = notes_count.into_iter().max_by(|a, b| a.1.1.cmp(&b.1.1).then(b.0.cmp(&a.0)));
-    let (scale, scale_source) = match (opts.scale, &best_note) {
+        notes_count.into_iter().max_by(|a, b| a.1.1.cmp(&b.1.1).then(b.0.cmp(&a.0))).map(|(t, (k, _))| (k, t))
+    };
+    // MUST 5: E-sheets (electrical) always carry a "do not scale / refer to architectural"
+    // general note, even when it's only in stroked text we can't read.  The sheet number in
+    // the title block tells us: detect it early from visible text.
+    let early_sheet_num = {
+        let dummy_to_sheet = |x: f64, y: f64| -> (f64, f64) {
+            let (x, y) = (x - x0, y - y0);
+            let (x, y) = match rotate {
+                90 => (y, pw - x),
+                180 => (pw - x, ph - y),
+                270 => (ph - y, x),
+                _ => (x, y),
+            };
+            (x / 72.0, y / 72.0)
+        };
+        sheet_number(&out.texts, &dummy_to_sheet, sheet)
+    };
+    let is_e_sheet = if opts.recover_text {
+        early_sheet_num.as_ref().is_some_and(|n| {
+            let first = n.chars().next().unwrap_or(' ');
+            first == 'E' || first == 'e'
+        })
+    } else {
+        false
+    };
+    // E-sheets are DO NOT SCALE (reported either way); they stay sheet-size unless the caller
+    // asked for an E sheet's scale note to be used (a sheet opened on its own).
+    let e_sheet_drawn_to_note = is_e_sheet && !do_not_scale_visible && opts.e_sheet_at_note_scale && best_note.is_some();
+    let do_not_scale = do_not_scale_visible || (is_e_sheet && !e_sheet_drawn_to_note);
+    let (mut scale, mut scale_source) = match (opts.scale, &best_note) {
         (Some(k), _) if k.is_finite() && k > 0.0 => (k, "option".to_string()),
-        (_, Some((note, (k, _)))) => (*k, format!("scale note {note}")),
+        (_, Some((k, note))) if e_sheet_drawn_to_note => {
+            (*k, format!("scale note {note} (E sheet: DO NOT SCALE, locations approximate; register it to the architectural plans)"))
+        }
+        (_, Some((k, note))) if !do_not_scale => (*k, format!("scale note {note}")),
+        (_, Some((k, note))) => {
+            // DO NOT SCALE: keep scale=1 but record the note for registration
+            (1.0, format!("DO NOT SCALE (detected {note}, scale {k}x — sheet kept at sheet size)"))
+        }
+        _ if do_not_scale => (1.0, "DO NOT SCALE (the sheet in inches)".to_string()),
         _ => (1.0, "none (the sheet in inches)".to_string()),
     };
 
     let mut stats: BTreeMap<String, usize> = BTreeMap::new();
     let mut notes = Vec::new();
 
-    // duplicates
+    // page-box clip: discard anything entirely outside the page (stray content that should not
+    // contribute to the drawing extents, e.g. block defs with bad base points in the source PDF)
+    let page_box = [x0, y0, x0 + pw, y0 + ph];
+    let inside_page = |pts: &[(f64, f64)]| -> bool {
+        let mut it = pts.iter();
+        let Some(&(x, y)) = it.next() else { return false };
+        let b = it.fold([x, y, x, y], |b, &(x, y)| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]);
+        b[2] >= page_box[0] && b[0] <= page_box[2] && b[3] >= page_box[1] && b[1] <= page_box[3]
+    };
+
+    // duplicates + page clip
     let mut seen: HashSet<(Vec<(i64, i64)>, Pen, Option<String>)> = HashSet::new();
     let mut strokes = Vec::new();
     for s in out.strokes {
+        if opts.recover_text && !inside_page(&s.pts) {
+            continue;
+        }
         if seen.insert((key_pts(&s.pts), s.pen, s.layer.clone())) {
             strokes.push(s);
         } else {
@@ -1779,6 +3982,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     let mut fills = Vec::new();
     let mut masks: Vec<Fill> = Vec::new();
     for f in out.fills {
+        // page clip: skip fills entirely outside the page box
+        if opts.recover_text && !f.loops.iter().any(|l| inside_page(l)) {
+            continue;
+        }
         if !opts.white_fills && f.pen.rgb.iter().all(|c| *c >= 250) {
             if opts.masks {
                 masks.push(f);
@@ -1794,14 +4001,25 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             *stats.entry("duplicates removed".into()).or_default() += 1;
         }
     }
-    let before = out.texts.len();
-    let merged = merge_texts(out.texts);
-    if merged.len() < before {
-        stats.insert("text pieces joined".into(), before - merged.len());
-    }
+    let merged = if opts.recover_text {
+        let before = out.texts.len();
+        let m = merge_texts(out.texts);
+        if m.len() < before {
+            stats.insert("text pieces joined".into(), before - m.len());
+        }
+        m
+    } else {
+        out.texts
+    };
     let mut texts = Vec::new();
     let mut seen_text: HashSet<(String, i64, i64)> = HashSet::new();
     for t in merged {
+        // page clip: skip text outside the page box (only when recover_text is on)
+        if opts.recover_text
+            && (t.at.0 < page_box[0] - 72.0 || t.at.0 > page_box[2] + 72.0 || t.at.1 < page_box[1] - 72.0 || t.at.1 > page_box[3] + 72.0)
+        {
+            continue;
+        }
         if seen_text.insert((t.value.clone(), (t.at.0 * 10.0).round() as i64, (t.at.1 * 10.0).round() as i64)) {
             texts.push(t);
         } else {
@@ -1809,11 +4027,239 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
     }
 
-    let white: HashSet<usize> = masks.iter().map(|f| f.order).collect();
-    let (images, stitched) = stitch(out.images, &white);
+    // save original mask orders for the stitch function before reducing (the reduced masks have
+    // different orders which would break the "between" check in stitching)
+    let original_white: HashSet<usize> = masks.iter().map(|f| f.order).collect();
+
+    // Reduce masks: merge overlapping/adjacent wipeouts into larger ones, and drop masks that
+    // do not overlap any visible non-white content (they mask nothing the viewer can see).
+    // Skip when recover_text is off — keep raw masks for pre-merge compatibility.
+    if opts.recover_text {
+        let masks_before = masks.len();
+        masks = reduce_masks(masks, &strokes, &fills, &texts, sheet);
+        let masks_merged = masks_before.saturating_sub(masks.len());
+        if masks_merged > 0 {
+            stats.insert("masks merged/dropped".into(), masks_merged);
+        }
+    }
+
+    // page clip images: discard raster pieces entirely outside the page box
+    let clipped_images: Vec<ImageOut> = out
+        .images
+        .into_iter()
+        .filter(|im| {
+            let b = image_box(&im.ctm);
+            b[2] >= page_box[0] && b[0] <= page_box[2] && b[3] >= page_box[1] && b[1] <= page_box[3]
+        })
+        .collect();
+    let (images, stitched) = stitch(clipped_images, &original_white);
     if stitched > 0 {
         stats.insert("image pieces stitched".into(), stitched);
     }
+    // MUST 4: second pass — spatial grouping of remaining raster tiles into composite images.
+    // Many PDF producers tile an image into hundreds/thousands of small strips; the sequential
+    // stitch catches runs but not spatially adjacent tiles that had other content between them.
+    let images_before_spatial = images.len();
+    let images = spatial_stitch(images);
+    let spatial_stitched = images_before_spatial.saturating_sub(images.len());
+    if spatial_stitched > 0 {
+        stats.insert("raster tiles spatially merged".into(), spatial_stitched);
+    }
+
+    // Fix 2: detect grid lines for content-class layer assignment
+    let grid_lines = if opts.recover_text { detect_grid_lines(&strokes, sheet) } else { HashSet::new() };
+    if !grid_lines.is_empty() {
+        stats.insert("grid lines detected".into(), grid_lines.len());
+    }
+
+    // Fix 3: recover SHX-stroked text, artifact fills, and repeated symbol clusters.
+    // All three are text/symbol-oriented post-processing; skip when recover_text is off
+    // (downstream geometry analysis that needs every stroke intact).
+    let mut ocr_report = OcrReport::default();
+    let (
+        recovered_texts,
+        shx_stroke_indices,
+        symbol_groups,
+        symbol_stroke_indices,
+        symbol_fill_indices,
+        symbol_text_indices,
+        symbol_ocr_indices,
+        recovered_do_not_scale,
+    ) = if opts.recover_text {
+        // Primary: match invisible text (rendering mode 3) to nearby stroke clusters — 100%
+        // accuracy.  Fallback: cluster short strokes and match to overlapping visible text —
+        // lower accuracy but catches sheets without hidden text.
+        let mut recovered_texts = recover_shx_from_hidden(&strokes, &texts, sheet);
+        if recovered_texts.is_empty() {
+            recovered_texts = recover_shx_fallback(&strokes, &texts, sheet);
+            if !recovered_texts.is_empty() {
+                stats.insert("SHX text (fallback) recovered".into(), recovered_texts.len());
+            }
+        }
+        let mut shx_stroke_indices: HashSet<usize> = HashSet::new();
+        for rt in &recovered_texts {
+            shx_stroke_indices.extend(&rt.stroke_indices);
+        }
+
+        // Fix 4: filter artifact fills (large opaque fills not visible in the PDF render)
+        let artifact_count = fills.len();
+        fills.retain(|f| !is_artifact_fill(f, sheet, &texts, &strokes));
+        let artifacts_removed = artifact_count - fills.len();
+        if artifacts_removed > 0 {
+            stats.insert("artifact fills removed".into(), artifacts_removed);
+        }
+
+        // Fix 5: detect repeated symbol clusters, first beside the page's real tag texts.
+        // This runs before the OCR: the OCR reads the short lines inside a symbol (the bars of
+        // a receptacle, the letter in a circle) as glyphs, and a symbol robbed of them is lost.
+        let anchors: Vec<TagAnchor> = texts
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| is_device_tag(&t.value))
+            .map(|(i, t)| TagAnchor { value: &t.value, at: t.at, height: t.height, text_idx: Some(i), ocr_idx: None })
+            .collect();
+        let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false));
+        let mut instances: Vec<SymbolInstance> = found.into_iter().flatten().collect();
+        let mut taken: HashSet<usize> = shx_stroke_indices.clone();
+        for inst in &instances {
+            taken.extend(&inst.stroke_indices);
+        }
+
+        // OCR pass: template-based glyph recognition for the strokes not yet claimed (by text
+        // or symbols) and not lying on real text: on a sheet with hidden text, for the strokes
+        // it doesn't cover; without hidden text, where the lettering is drawn as strokes (the
+        // fallback stage recovered some of it, little real text on the page, or far more loose
+        // glyph-sized strokes than real characters).  A page lettered in real text has nothing
+        // to OCR: its short strokes are symbols and ticks, which the OCR would read as stray
+        // letters.
+        let mut excluded = taken.clone();
+        excluded.extend(strokes_under_text(&strokes, &texts));
+        let has_hidden_text = texts.iter().any(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER));
+        let has_shx_evidence = has_hidden_text || !recovered_texts.is_empty();
+        let real_chars: usize = texts.iter().map(|t| t.value.trim().chars().count()).sum();
+        let max_seg = ocr_max_seg(sheet);
+        let loose = strokes.iter().enumerate().filter(|(i, s)| !excluded.contains(i) && ocr_candidate(s, max_seg).is_some()).count();
+        let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT || loose >= real_chars.saturating_mul(OCR_STROKES_PER_CHAR);
+        if has_shx_evidence || lettering_is_strokes {
+            let (mut ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded);
+            if report.clusters > 0 {
+                stats.insert("SHX OCR glyph clusters".into(), report.clusters);
+                stats.insert("SHX OCR glyphs matched".into(), report.glyphs);
+                stats.insert("SHX OCR lone glyphs dropped".into(), report.noise_dropped);
+                if report.turned > 0 {
+                    stats.insert("SHX OCR turned texts".into(), report.turned);
+                }
+            }
+            if !ocr_texts.is_empty() {
+                stats.insert("SHX text (OCR) recovered".into(), ocr_texts.len());
+                let pct = (report.mean_confidence() * 100.0).round().clamp(0.0, 100.0) as usize;
+                stats.insert("SHX OCR mean confidence %".into(), pct);
+                let strokes_went = if has_hidden_text {
+                    format!("their strokes are kept on layer {SHX_SOURCE_LAYER} (off)")
+                } else {
+                    format!("no hidden text confirms them, so their strokes stay linework and the texts use style {OCR_TEXT_STYLE}")
+                };
+                notes.push(format!(
+                    "SHX OCR: {} text(s) read from {} glyph cluster(s) ({} matched a character, mean confidence {pct}%); {strokes_went}",
+                    ocr_texts.len(),
+                    report.clusters,
+                    report.glyphs
+                ));
+                for rt in &ocr_texts {
+                    taken.extend(&rt.stroke_indices);
+                }
+                // Then beside the device marks that exist only as stroked lettering (no text
+                // object at all): standing alone, away from the symbols already found, and
+                // only round a closed outline.
+                let (_, max_size) = symbol_size_range(sheet);
+                let base = recovered_texts.len();
+                // Every text's box: the page's texts, then the recovered ones, then the OCR's.
+                let mut boxes: Vec<[f64; 4]> = texts.iter().map(text_box).collect();
+                for rt in recovered_texts.iter().chain(&ocr_texts) {
+                    let own: Vec<Vec<(f64, f64)>> = rt.stroke_indices.iter().filter_map(|&si| strokes.get(si)).map(|s| s.pts.clone()).collect();
+                    boxes.push(bbox(&own).unwrap_or([f64::NAN; 4]));
+                }
+                let first_ocr = texts.len() + base;
+                let anchors: Vec<TagAnchor> = ocr_texts
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, rt)| is_ocr_device_tag(&rt.value) && stands_alone(first_ocr + i, rt.height, &boxes))
+                    .filter(|(_, rt)| !instances.iter().any(|inst| (inst.center.0 - rt.at.0).hypot(inst.center.1 - rt.at.1) < max_size))
+                    .map(|(i, rt)| TagAnchor { value: &rt.value, at: rt.at, height: rt.height, text_idx: None, ocr_idx: Some(base + i) })
+                    .collect();
+                let more = find_symbol_instances(&strokes, &fills, &anchors, sheet, &taken, true);
+                if !more.is_empty() {
+                    stats.insert("symbols tagged by stroked lettering".into(), more.len());
+                }
+                instances.extend(more);
+                // Without hidden text to confirm them, the OCR's words are added but their
+                // strokes stay linework: a misread wall corner, jamb or duct tick must not leave
+                // the plan (walls, duct and pipe chains read those strokes).  The symbols found
+                // above already kept their own lines away from the OCR.  Their style marks them
+                // as unconfirmed, so duct tags don't come from them.
+                if !has_hidden_text {
+                    for t in &mut ocr_texts {
+                        t.stroke_indices.clear();
+                        t.unconfirmed = true;
+                    }
+                }
+                recovered_texts.extend(ocr_texts);
+            }
+            ocr_report = report;
+        }
+        for rt in &recovered_texts {
+            shx_stroke_indices.extend(&rt.stroke_indices);
+        }
+        if !recovered_texts.is_empty() {
+            stats.insert("SHX text clusters recovered".into(), recovered_texts.len());
+        }
+        // Also check recovered text for DO NOT SCALE (MUST 5): the note may only exist in
+        // SHX-stroked form, not as real PDF text.
+        let recovered_do_not_scale = recovered_texts.iter().any(|rt| {
+            let up = rt.value.trim().to_ascii_uppercase();
+            up.contains("DO NOT SCALE") || up.contains("NOT TO SCALE")
+        });
+
+        // MUST 5: if DO NOT SCALE was found in recovered SHX text but not in visible text, and
+        // the scale was set from a scale note, override back to 1.0 (sheet size).
+        if recovered_do_not_scale && !do_not_scale_visible && scale > 1.0 {
+            let old_scale = scale;
+            scale = 1.0;
+            scale_source = format!("DO NOT SCALE (recovered from SHX text; detected scale {old_scale}x from note — sheet kept at sheet size)");
+            notes.push(format!("DO NOT SCALE note found in recovered SHX text — overriding scale {old_scale}x → 1.0"));
+        }
+
+        let symbol_groups = group_symbols(instances);
+        let mut symbol_stroke_indices: HashSet<usize> = HashSet::new();
+        let mut symbol_fill_indices: HashSet<usize> = HashSet::new();
+        let mut symbol_text_indices: HashSet<usize> = HashSet::new();
+        let mut symbol_ocr_indices: HashSet<usize> = HashSet::new();
+        let total_symbols: usize = symbol_groups.iter().map(|g| g.len()).sum();
+        for group in &symbol_groups {
+            for inst in group {
+                symbol_stroke_indices.extend(&inst.stroke_indices);
+                symbol_fill_indices.extend(&inst.fill_indices);
+                symbol_text_indices.extend(inst.nearby_text_idx);
+                symbol_ocr_indices.extend(inst.ocr_idx);
+            }
+        }
+        if total_symbols > 0 {
+            stats.insert("symbol instances detected".into(), total_symbols);
+            stats.insert("symbol types".into(), symbol_groups.len());
+        }
+        (
+            recovered_texts,
+            shx_stroke_indices,
+            symbol_groups,
+            symbol_stroke_indices,
+            symbol_fill_indices,
+            symbol_text_indices,
+            symbol_ocr_indices,
+            recovered_do_not_scale,
+        )
+    } else {
+        (Vec::new(), HashSet::new(), Vec::new(), HashSet::new(), HashSet::new(), HashSet::new(), HashSet::new(), false)
+    };
 
     // the drawing
     let mut d = Drawing::new_imperial();
@@ -1834,12 +4280,19 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
     }
     let use_ocg = opts.layers == LayerMode::Pdf && !ocg_names.is_empty();
-    let mode = if use_ocg {
+    let mode = if opts.layers == LayerMode::Content {
+        LayerMode::Content
+    } else if use_ocg {
         LayerMode::Pdf
     } else if opts.layers == LayerMode::Object {
         LayerMode::Object
-    } else {
+    } else if opts.layers == LayerMode::Pen {
         LayerMode::Pen
+    } else {
+        // Pdf mode without OCGs: fall back to Content (classifies strokes into E-GRID,
+        // A-WALL, TEXT, E-DEVICE, TITLEBLOCK, HATCH, ANNO, PDF-GEOMETRY) — more useful
+        // than pen-based layers for construction-drawing PDFs.
+        LayerMode::Content
     };
     let mut layer_set: BTreeMap<String, (Color, Lineweight)> = BTreeMap::new();
     // black and near-black greys (up to about 15%) are colour 7: white on a dark screen, black on
@@ -1878,6 +4331,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             layer_set.entry(HIDDEN_TEXT_LAYER.into()).or_insert((Color::Index(8), Lineweight::Default));
             return (HIDDEN_TEXT_LAYER.into(), Color::ByLayer, Lineweight::ByLayer);
         }
+        if kind == "shx_source" {
+            layer_set.entry(SHX_SOURCE_LAYER.into()).or_insert((Color::Index(8), Lineweight::Default));
+            return (SHX_SOURCE_LAYER.into(), color, lw);
+        }
         match mode {
             LayerMode::Pdf => {
                 let name = layer.clone().unwrap_or_else(|| "0".into());
@@ -1912,6 +4369,23 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 layer_set.entry(name.clone()).or_insert((color, if kind == "line" { lw } else { Lineweight::Default }));
                 (name, Color::ByLayer, Lineweight::ByLayer)
             }
+            LayerMode::Content => {
+                let name = match kind {
+                    "mask" => "PDF-MASK",
+                    "image" => "PDF-IMAGES",
+                    "text" | "shx_text" => content_class_layer(ContentClass::Text),
+                    "fill" => content_class_layer(ContentClass::Hatch),
+                    "grid" => content_class_layer(ContentClass::Grid),
+                    "wall" => content_class_layer(ContentClass::Wall),
+                    "symbol" => content_class_layer(ContentClass::Symbol),
+                    "titleblock" => content_class_layer(ContentClass::TitleBlock),
+                    "anno" => content_class_layer(ContentClass::Anno),
+                    _ => content_class_layer(ContentClass::Geometry),
+                }
+                .to_string();
+                layer_set.entry(name.clone()).or_insert((color, if kind == "line" { lw } else { Lineweight::Default }));
+                (name, color, if kind == "line" { lw } else { Lineweight::ByLayer })
+            }
         }
     };
     let k = scale;
@@ -1938,14 +4412,179 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     paint.extend(texts.iter().enumerate().map(|(i, t)| (t.order, 3, i)));
     paint.extend(images.iter().enumerate().map(|(i, im)| (im.order, 4, i)));
     paint.sort_unstable();
+    // small fills merged: (layer, colour, transparency) → (placed layer, colour, weight, outlines)
+    let mut small_fills: BTreeMap<(String, [u8; 3], u8), (String, Color, Lineweight, Vec<HatchLoop>)> = BTreeMap::new();
+    let small_pt = SMALL_FILL_IN * 72.0;
+    let is_small = |l: &[(f64, f64)]| {
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for &(x, y) in l {
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+        }
+        x1 - x0 <= small_pt && y1 - y0 <= small_pt
+    };
     // image files by their pixels (a logo on every sheet is one file)
     let mut image_files: HashMap<u64, String> = HashMap::new();
     let mut image_out: Vec<(String, std::sync::Arc<cadaddy_render::images::Raster>)> = Vec::new();
+    // Pre-compute which SHX-consumed wall-weight strokes should be protected.
+    // A stroke is protected only when it forms a wall face pair with another stroke
+    // AND has no non-consumed counterpart already covering the same line (i.e. it is
+    // isolated geometry that would be lost without protection).  This keeps real wall
+    // faces on prints where SHX recovery consumes wall linework near lettering, while
+    // avoiding duplicate geometry on synthetic tests where the wall strokes survive
+    // independently of OCR.
+    let protected_shx_indices: std::collections::HashSet<usize> = {
+        let min_dim_pts = (sheet.0 * 72.0_f64).min(sheet.1 * 72.0);
+        let face_min_len = min_dim_pts * 0.01;
+        let wall_min_pts = 1.0_f64;
+        let wall_max_pts = (min_dim_pts * 0.025).max(40.0);
+        // Represent a stroke as a directed line segment if it is straight enough.
+        let seg_of = |st: &Stroke| -> Option<((f64, f64), (f64, f64), f64, f64, f64)> {
+            if st.pts.len() < 2 {
+                return None;
+            }
+            let a = st.pts[0];
+            let b = *st.pts.last()?;
+            let dx = b.0 - a.0;
+            let dy = b.1 - a.1;
+            let len = dx.hypot(dy);
+            if len < face_min_len {
+                return None;
+            }
+            // Reject non-straight strokes (multi-point with deviation).
+            if st.pts.len() > 3 {
+                let chord = len;
+                for p in &st.pts[1..st.pts.len() - 1] {
+                    let cross = ((p.0 - a.0) * dy - (p.1 - a.1) * dx).abs();
+                    if cross / chord > 2.0 {
+                        return None;
+                    }
+                }
+            }
+            Some((a, b, dx / len, dy / len, len))
+        };
+        // Collect SHX-consumed wall-weight candidate segments.
+        let mut cands: Vec<(usize, (f64, f64), (f64, f64), f64, f64, f64)> = Vec::new();
+        for &idx in &shx_stroke_indices {
+            if symbol_stroke_indices.contains(&idx) {
+                continue;
+            }
+            let Some(st) = strokes.get(idx) else { continue };
+            if !(st.pen.lw >= 24 && st.pen.rgb.iter().all(|&c| c <= 60)) {
+                continue;
+            }
+            if let Some((a, b, ux, uy, len)) = seg_of(st) {
+                cands.push((idx, a, b, ux, uy, len));
+            }
+        }
+        // Collect non-consumed straight segments (the surviving geometry).
+        let mut survivors: Vec<((f64, f64), (f64, f64), f64, f64, f64)> = Vec::new();
+        for (si, st) in strokes.iter().enumerate() {
+            if shx_stroke_indices.contains(&si) || symbol_stroke_indices.contains(&si) {
+                continue;
+            }
+            if let Some(s) = seg_of(st) {
+                survivors.push(s);
+            }
+        }
+        // Step 1: find which candidates form wall face pairs with each other.
+        let mut in_pair: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for ci in 0..cands.len() {
+            let (_, ai, _, uxi, uyi, leni) = cands[ci];
+            let nxi = -uyi;
+            let nyi = uxi;
+            for (cj, &(_, aj, bj, uxj, uyj, _)) in cands.iter().enumerate().skip(ci + 1) {
+                if (uxi * uxj + uyi * uyj).abs() < 0.996 {
+                    continue;
+                }
+                let d0 = (aj.0 - ai.0) * nxi + (aj.1 - ai.1) * nyi;
+                let d1 = (bj.0 - ai.0) * nxi + (bj.1 - ai.1) * nyi;
+                let dist = ((d0 + d1) / 2.0).abs();
+                if dist < wall_min_pts || dist > wall_max_pts {
+                    continue;
+                }
+                let proj = |p: (f64, f64)| (p.0 - ai.0) * uxi + (p.1 - ai.1) * uyi;
+                let (pb0, pb1) = {
+                    let p0 = proj(aj);
+                    let p1 = proj(bj);
+                    (p0.min(p1), p0.max(p1))
+                };
+                let overlap = leni.min(pb1) - 0.0_f64.max(pb0);
+                if overlap > dist.max(face_min_len) {
+                    in_pair.insert(ci);
+                    in_pair.insert(cj);
+                }
+            }
+        }
+        // Step 2: for each paired candidate, check if a non-consumed survivor already
+        // covers it (parallel, collinear within tolerance).  If so it's redundant.
+        let collinear_tol = 3.0_f64; // pts: lateral offset tolerance
+        let overlap_frac = 0.5_f64; // at least half the length overlaps
+        let mut result: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for &ci in &in_pair {
+            let (idx, ai, _bi, uxi, uyi, leni) = cands[ci];
+            let nxi = -uyi;
+            let nyi = uxi;
+            let has_survivor = survivors.iter().any(|(sa, sb, sux, suy, slen)| {
+                if (uxi * sux + uyi * suy).abs() < 0.996 {
+                    return false;
+                }
+                // Lateral distance: must be nearly collinear.
+                let d = ((sa.0 - ai.0) * nxi + (sa.1 - ai.1) * nyi).abs();
+                if d > collinear_tol {
+                    return false;
+                }
+                // Overlap along direction.
+                let proj = |p: (f64, f64)| (p.0 - ai.0) * uxi + (p.1 - ai.1) * uyi;
+                let (pb0, pb1) = {
+                    let p0 = proj(*sa);
+                    let p1 = proj(*sb);
+                    (p0.min(p1), p0.max(p1))
+                };
+                let ov = leni.min(pb1) - 0.0_f64.max(pb0);
+                ov > leni * overlap_frac || ov > slen * overlap_frac
+            });
+            if !has_survivor {
+                result.insert(idx);
+            }
+        }
+        result
+    };
     for (_, kind, i) in paint {
         match kind {
             0 => {
                 let Some(s) = strokes.get(i) else { continue };
-                let (layer, color, lw) = place("line", s.pen, &s.layer);
+                // Fix 5: strokes that became symbol blocks are drawn by the blocks
+                if symbol_stroke_indices.contains(&i) {
+                    continue;
+                }
+                // Fix 3: strokes recovered text was read from stay, on their own layer (off),
+                // but isolated wall face pairs the recovery took stay on the sheet.
+                let kind_hint = if shx_stroke_indices.contains(&i) && !protected_shx_indices.contains(&i) {
+                    "shx_source"
+                } else if mode == LayerMode::Content {
+                    let class = classify_stroke(s, sheet, &grid_lines);
+                    match class {
+                        ContentClass::Grid => "grid",
+                        ContentClass::Wall => "wall",
+                        ContentClass::TitleBlock => "titleblock",
+                        ContentClass::Anno => "anno",
+                        _ => "line",
+                    }
+                } else {
+                    "line"
+                };
+                let (layer, color, lw) = place(kind_hint, s.pen, &s.layer);
+                if kind_hint == "shx_source" {
+                    let vertices: Vec<PolyVertex> =
+                        s.pts.iter().map(|(x, y)| PolyVertex { p: sp(*x, *y), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
+                    let kind = match (vertices.as_slice(), s.closed) {
+                        ([va, vb], false) => EntityKind::Line(Line { a: Vec3::new(va.p.x, va.p.y, 0.0), b: Vec3::new(vb.p.x, vb.p.y, 0.0) }),
+                        _ => EntityKind::LwPolyline(LwPolyline { vertices, closed: s.closed, const_width: 0.0, elevation: 0.0, plinegen: false }),
+                    };
+                    add(&mut d, layer, color, lw, s.pen.transp, kind);
+                    *stats.entry("SHX source strokes (layer off)".into()).or_default() += 1;
+                    continue;
+                }
                 if opts.join
                     && let Some(((cx, cy), r)) = as_circle(s)
                 {
@@ -1981,6 +4620,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             }
             1 => {
                 let Some(f) = fills.get(i) else { continue };
+                // Fix 5: skip fills consumed by symbol block detection
+                if symbol_fill_indices.contains(&i) {
+                    continue;
+                }
                 let (layer, color, lw) = place("fill", f.pen, &f.layer);
                 let loops: Vec<HatchLoop> = f
                     .loops
@@ -1995,6 +4638,17 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     })
                     .collect();
                 if loops.is_empty() {
+                    continue;
+                }
+                if opts.merge_small_fills && f.loops.iter().filter(|l| l.len() >= 3).all(|l| is_small(l)) {
+                    let e = small_fills
+                        .entry((f.layer.clone().unwrap_or_default(), f.pen.rgb, f.pen.transp))
+                        .or_insert_with(|| (layer, color, lw, Vec::new()));
+                    e.3.extend(loops.into_iter().map(|mut l| {
+                        l.outer = true;
+                        l
+                    }));
+                    *stats.entry("small fills merged".into()).or_default() += 1;
                     continue;
                 }
                 let hatch = Hatch {
@@ -2084,6 +4738,16 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             }
             _ => {
                 let Some(t) = texts.get(i) else { continue };
+                // Fix 5: skip texts consumed as symbol attributes (but keep hidden text —
+                // it is the searchable copy and must not be swallowed by symbol detection).
+                // Also keep single-char alphanumeric text: these are grid bubble labels
+                // ("A", "B", "1", "2" etc.) that symbol detection may claim erroneously.
+                if symbol_text_indices.contains(&i)
+                    && t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)
+                    && !(t.value.trim().len() == 1 && t.value.trim().chars().next().is_some_and(|c| c.is_ascii_alphanumeric()))
+                {
+                    continue;
+                }
                 let (layer, color, lw) = place("text", t.pen, &t.layer);
                 let p = sp(t.at.0, t.at.1);
                 let text = Text {
@@ -2111,6 +4775,152 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             }
         }
     }
+    for ((_, _, transp), (layer, color, lw, loops)) in small_fills {
+        for chunk in loops.chunks(MAX_MERGED_LOOPS) {
+            let hatch = Hatch {
+                pattern: "SOLID".into(),
+                solid: true,
+                loops: chunk.to_vec(),
+                scale: 1.0,
+                angle: 0.0,
+                associative: false,
+                style: 0,
+                elevation: 0.0,
+                gradient: None,
+                origin: Vec2::ZERO,
+                background: None,
+                pattern_lines: Vec::new(),
+            };
+            add(&mut d, layer.clone(), color, lw, transp, EntityKind::Hatch(Box::new(hatch)));
+            *stats.entry("solid fills".into()).or_default() += 1;
+        }
+    }
+    // Fix 3: emit recovered SHX text entities (replacing the strokes that formed them)
+    // using glyph-matched characters instead of '?' placeholders
+    let mut recovered_count = 0usize;
+    for (i, rt) in recovered_texts.iter().enumerate() {
+        // skip empty or all-unrecognised clusters (they stay as linework), and device marks
+        // that became a symbol's TAG
+        if rt.value.is_empty() || symbol_ocr_indices.contains(&i) {
+            continue;
+        }
+        let (layer, color, lw) = place(if mode == LayerMode::Content { "shx_text" } else { "text" }, rt.pen, &rt.layer);
+        let p = sp(rt.at.0, rt.at.1);
+        let text = Text {
+            insert: Vec3::new(p.x, p.y, 0.0),
+            align_pt: None,
+            height: rt.height / 72.0 * k,
+            value: rt.value.clone(),
+            rotation: rt.rotation.to_radians(),
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: if rt.unconfirmed { OCR_TEXT_STYLE.into() } else { "Standard".into() },
+            halign: HAlign::default(),
+            valign: VAlign::default(),
+        };
+        if rt.unconfirmed && !d.text_styles.iter().any(|st| st.name.eq_ignore_ascii_case(OCR_TEXT_STYLE)) {
+            d.text_styles.push(TextStyle { name: OCR_TEXT_STYLE.into(), ..TextStyle::default() });
+        }
+        add(&mut d, layer, color, lw, rt.pen.transp, EntityKind::Text(text));
+        recovered_count += 1;
+        if let Some(confidence) = rt.confidence {
+            ocr_report.words.push(OcrWord { value: rt.value.clone(), at: (p.x, p.y), confidence });
+        }
+    }
+    if recovered_count > 0 {
+        stats.insert("SHX recovered texts".into(), recovered_count);
+    }
+
+    // Fix 5: create blocks for repeated symbol clusters
+    for (gi, group) in symbol_groups.iter().enumerate() {
+        if group.is_empty() {
+            continue;
+        }
+        let block_name = format!("PDF-SYM-{}", gi + 1);
+        // use the first instance as the block definition
+        let Some(first) = group.first() else { continue };
+        let base_x = first.center.0;
+        let base_y = first.center.1;
+        let base = sp(base_x, base_y);
+        let mut block = Block { name: block_name.clone(), base: Vec3::ZERO, explodable: true, ..Block::new(&block_name) };
+        // add the first instance's strokes to the block definition, relative to center
+        for &si in &first.stroke_indices {
+            if let Some(s) = strokes.get(si) {
+                let vertices: Vec<PolyVertex> = s
+                    .pts
+                    .iter()
+                    .map(|(x, y)| {
+                        let p = sp(*x, *y);
+                        PolyVertex { p: Vec2::new(p.x - base.x, p.y - base.y), bulge: 0.0, start_width: 0.0, end_width: 0.0 }
+                    })
+                    .collect();
+                let color = color_of(s.pen.rgb);
+                let lw = Lineweight::Mm100(s.pen.lw);
+                let common = Common { layer: "0".into(), color, lineweight: lw, ..Common::default() };
+                let h = d.new_handle();
+                if let ([va, vb], false) = (vertices.as_slice(), s.closed) {
+                    let (a, b) = (va.p, vb.p);
+                    block.entities.push(Entity {
+                        handle: h,
+                        common,
+                        kind: EntityKind::Line(Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) }),
+                    });
+                } else {
+                    block.entities.push(Entity {
+                        handle: h,
+                        common,
+                        kind: EntityKind::LwPolyline(LwPolyline { vertices, closed: s.closed, const_width: 0.0, elevation: 0.0, plinegen: false }),
+                    });
+                }
+            }
+        }
+        d.blocks.insert(block_name.clone(), std::sync::Arc::new(block));
+        // insert all instances of this symbol
+        for inst in group {
+            let c = sp(inst.center.0, inst.center.1);
+            let (layer, color, lw) =
+                place(if mode == LayerMode::Content { "symbol" } else { "line" }, Pen { rgb: [0, 0, 0], lw: 0, transp: 0 }, &None);
+            let mut attribs = Vec::new();
+            if let Some(tag) = &inst.nearby_text {
+                attribs.push(Attrib {
+                    tag: "TAG".into(),
+                    text: Text {
+                        insert: Vec3::new(0.0, 0.0, 0.0),
+                        align_pt: None,
+                        height: 2.5 / 72.0 * k,
+                        value: tag.clone(),
+                        rotation: 0.0,
+                        width_factor: 1.0,
+                        oblique: 0.0,
+                        style: "Standard".into(),
+                        halign: HAlign::default(),
+                        valign: VAlign::default(),
+                    },
+                    invisible: false,
+                    constant: false,
+                    prompt: String::new(),
+                    props: AttribProps::default(),
+                    multiline: None,
+                    modes: AttribModes::default(),
+                });
+            }
+            let insert = Insert {
+                block: block_name.clone(),
+                insert: Vec3::new(c.x, c.y, 0.0),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                rotation: 0.0,
+                attribs,
+                cols: 1,
+                rows: 1,
+                col_spacing: 0.0,
+                row_spacing: 0.0,
+                clip: None,
+            };
+            add(&mut d, layer, color, lw, 0, EntityKind::Insert(insert));
+            *stats.entry("symbol inserts".into()).or_default() += 1;
+        }
+    }
+
     // Adding an object on a new layer created it plain: give each its pen.
     for (name, (color, lw)) in &layer_set {
         if name == "0" {
@@ -2124,7 +4934,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             None => d.layers.push(Layer { name: name.clone(), color: *color, lineweight: *lw, ..Layer::default() }),
         }
     }
-    if let Some(l) = d.layers.iter_mut().find(|l| l.name == HIDDEN_TEXT_LAYER) {
+    for l in d.layers.iter_mut().filter(|l| l.name == HIDDEN_TEXT_LAYER || l.name == SHX_SOURCE_LAYER) {
         l.on = false;
     }
     if added >= MAX_OBJECTS {
@@ -2142,7 +4952,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     if out.clipped_ops > 0 {
         stats.insert("clip-shaped fills".into(), out.clipped_ops);
     }
-    if texts.is_empty() && strokes.len() > 1000 {
+    // Update the SHX text note: if we recovered some, the note changes
+    if !recovered_texts.is_empty() {
+        notes.push(format!("{} SHX text cluster(s) recovered from stroked lettering", recovered_texts.len()));
+    } else if texts.is_empty() && strokes.len() > 1000 {
         notes.push("no text in the PDF: its lettering was plotted as linework (SHX fonts) and stays linework".into());
     }
 
@@ -2175,7 +4988,21 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
         notes.push(format!("layout \"{name}\" shows model space at 1:{k} on the {:.0} x {:.0} in sheet", sheet.0, sheet.1));
     }
-    Ok(PdfImport { drawing: d, sheet, scale: k, scale_source, pages: page_total, stats, notes, images: image_out })
+    let do_not_scale = do_not_scale_visible || recovered_do_not_scale || is_e_sheet;
+    let needs_registration = do_not_scale && best_note.is_some();
+    Ok(PdfImport {
+        drawing: d,
+        sheet,
+        scale: k,
+        scale_source,
+        do_not_scale,
+        needs_registration,
+        pages: page_total,
+        stats,
+        notes,
+        images: image_out,
+        ocr: ocr_report,
+    })
 }
 
 /// Images painted one after another in the same orientation that touch, each small (the rows
@@ -2248,6 +5075,207 @@ fn stitch(images: Vec<ImageOut>, white_fills: &HashSet<usize>) -> (Vec<ImageOut>
     }
     flush(&mut run, &mut out, &mut stitched);
     (out, stitched)
+}
+
+/// Spatial stitching: group images by proximity and orientation, merge each group into one
+/// composite image.  This catches tiles that the sequential stitch missed because non-image
+/// content (white fills, strokes) was interleaved between them.
+fn spatial_stitch(images: Vec<ImageOut>) -> Vec<ImageOut> {
+    if images.len() <= 50 {
+        return images; // already within the target — nothing to do
+    }
+
+    let unit = |x: f64, y: f64| -> Option<(f64, f64)> {
+        let l = x.hypot(y);
+        (l > 1e-9).then(|| (x / l, y / l))
+    };
+    let frame_dir = |m: &M| -> Option<((f64, f64), (f64, f64))> {
+        let [a, b, c, d, ..] = m.0;
+        let u = unit(a, b)?;
+        let v = unit(c, d)?;
+        // orthogonal only
+        ((u.0 * v.0 + u.1 * v.1).abs() < 1e-4).then_some((u, v))
+    };
+
+    // quantize frame direction to group by orientation (8 bits each component)
+    let dir_key = |m: &M| -> Option<(i16, i16, i16, i16)> {
+        let (u, v) = frame_dir(m)?;
+        Some(((u.0 * 100.0).round() as i16, (u.1 * 100.0).round() as i16, (v.0 * 100.0).round() as i16, (v.1 * 100.0).round() as i16))
+    };
+
+    // group by orientation
+    let mut orient_groups: HashMap<(i16, i16, i16, i16), Vec<usize>> = HashMap::new();
+    for (i, im) in images.iter().enumerate() {
+        if let Some(dk) = dir_key(&im.ctm) {
+            orient_groups.entry(dk).or_default().push(i);
+        }
+    }
+
+    // within each orientation group, spatial-cluster by proximity using union-find
+    let mut parent: Vec<usize> = (0..images.len()).collect();
+    let find = |parent: &mut [usize], mut x: usize| -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    };
+
+    for members in orient_groups.values() {
+        if members.len() < 2 {
+            continue;
+        }
+        // bounding boxes
+        let boxes: Vec<[f64; 4]> = members.iter().map(|&i| image_box(&images[i].ctm)).collect();
+        // pad: images that nearly touch belong together
+        let avg_size: f64 = boxes.iter().map(|b| (b[2] - b[0]).max(b[3] - b[1])).sum::<f64>() / boxes.len() as f64;
+        let pad = avg_size * 0.5;
+
+        // simple O(n²) within each orientation group — usually small per group
+        let n = members.len();
+        if n > 10000 {
+            continue;
+        } // safety cap
+        for mi in 0..n {
+            for mj in (mi + 1)..n {
+                let (ba, bb) = (&boxes[mi], &boxes[mj]);
+                if ba[0] <= bb[2] + pad && ba[2] >= bb[0] - pad && ba[1] <= bb[3] + pad && ba[3] >= bb[1] - pad {
+                    let (ra, rb) = (find(&mut parent, members[mi]), find(&mut parent, members[mj]));
+                    if ra != rb {
+                        parent[rb] = ra;
+                    }
+                }
+            }
+        }
+    }
+
+    // collect groups
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..images.len() {
+        groups.entry(find(&mut parent, i)).or_default().push(i);
+    }
+
+    let mut result: Vec<ImageOut> = Vec::with_capacity(groups.len());
+    for (_, members) in groups {
+        if members.len() == 1 {
+            // avoid moving out of images (we'll reconstruct later)
+            result.push(ImageOut {
+                ctm: images[members[0]].ctm,
+                raster: std::sync::Arc::clone(&images[members[0]].raster),
+                layer: images[members[0]].layer.clone(),
+                clip: images[members[0]].clip.clone(),
+                transp: images[members[0]].transp,
+                order: images[members[0]].order,
+            });
+            continue;
+        }
+        // merge group: composite into one image
+        let run: Vec<&ImageOut> = members.iter().map(|&i| &images[i]).collect();
+        if let Some(merged) = spatial_stitch_group(&run) {
+            result.push(merged);
+        } else {
+            for &i in &members {
+                result.push(ImageOut {
+                    ctm: images[i].ctm,
+                    raster: std::sync::Arc::clone(&images[i].raster),
+                    layer: images[i].layer.clone(),
+                    clip: images[i].clip.clone(),
+                    transp: images[i].transp,
+                    order: images[i].order,
+                });
+            }
+        }
+    }
+    result
+}
+
+/// Merge a group of images that share orientation and spatial proximity into one composite.
+fn spatial_stitch_group(run: &[&ImageOut]) -> Option<ImageOut> {
+    if run.len() < 2 {
+        return None;
+    }
+
+    let unit = |x: f64, y: f64| -> Option<(f64, f64, f64)> {
+        let l = x.hypot(y);
+        (l > 1e-9).then(|| (x / l, y / l, l))
+    };
+    let frame = |m: &M| -> Option<((f64, f64), (f64, f64), f64, f64)> {
+        let [a, b, c, d, ..] = m.0;
+        let (ux, uy, lu) = unit(a, b)?;
+        let (vx, vy, lv) = unit(c, d)?;
+        Some(((ux, uy), (vx, vy), lu, lv))
+    };
+    let first = run[0];
+    let (u, v, _, _) = frame(&first.ctm)?;
+    let dot = |p: (f64, f64), q: (f64, f64)| p.0 * q.0 + p.1 * q.1;
+
+    let mut parts = Vec::with_capacity(run.len());
+    let (mut u0, mut v0, mut u1, mut v1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    let (mut ru, mut rv) = (0.0f64, 0.0f64);
+    for im in run {
+        let (_, _, lu, lv) = frame(&im.ctm)?;
+        let o = (im.ctm.0[4], im.ctm.0[5]);
+        let (pu, pv) = (dot(o, u), dot(o, v));
+        parts.push((pu, pv, lu, lv));
+        (u0, v0, u1, v1) = (u0.min(pu), v0.min(pv), u1.max(pu + lu), v1.max(pv + lv));
+        ru = ru.max(f64::from(im.raster.width) / lu);
+        rv = rv.max(f64::from(im.raster.height) / lv);
+    }
+    let (mut cw, mut ch) = (((u1 - u0) * ru).ceil(), ((v1 - v0) * rv).ceil());
+    const MAX_SIDE: f64 = 4096.0;
+    if cw > MAX_SIDE || ch > MAX_SIDE {
+        let k = MAX_SIDE / cw.max(ch);
+        (cw, ch) = ((cw * k).ceil(), (ch * k).ceil());
+    }
+    if !(cw >= 1.0 && ch >= 1.0) {
+        return None;
+    }
+    let (cw, ch) = (cw as usize, ch as usize);
+    if cw * ch > 16_000_000 {
+        return None;
+    } // safety: max ~16M pixels per composite
+
+    let mut rgba = vec![0u8; cw * ch * 4];
+    for (im, &(pu, pv, lu, lv)) in run.iter().zip(&parts) {
+        let (w, h) = (im.raster.width as usize, im.raster.height as usize);
+        let cx0 = (((pu - u0) / (u1 - u0)) * cw as f64).floor().max(0.0) as usize;
+        let cx1 = ((((pu + lu - u0) / (u1 - u0)) * cw as f64).ceil() as usize).min(cw);
+        let cy0 = (((v1 - pv - lv) / (v1 - v0)) * ch as f64).floor().max(0.0) as usize;
+        let cy1 = ((((v1 - pv) / (v1 - v0)) * ch as f64).ceil() as usize).min(ch);
+        for cy in cy0..cy1 {
+            let vv = v1 - (cy as f64 + 0.5) / ch as f64 * (v1 - v0);
+            let t = (vv - pv) / lv;
+            if !(0.0..1.0).contains(&t) {
+                continue;
+            }
+            let sy = (((1.0 - t) * h as f64) as usize).min(h.saturating_sub(1));
+            for cx in cx0..cx1 {
+                let uu = u0 + (cx as f64 + 0.5) / cw as f64 * (u1 - u0);
+                let sx_f = (uu - pu) / lu;
+                if !(0.0..1.0).contains(&sx_f) {
+                    continue;
+                }
+                let sx = ((sx_f * w as f64) as usize).min(w.saturating_sub(1));
+                let Some(px) = im.raster.pixel(sx as u32, sy as u32) else { continue };
+                if px[3] == 0 {
+                    continue;
+                }
+                let i = (cy * cw + cx) * 4;
+                if let Some(dst) = rgba.get_mut(i..i + 4) {
+                    let a = u32::from(px[3]);
+                    for k in 0..3 {
+                        dst[k] = ((u32::from(px[k]) * a + u32::from(dst[k]) * (255 - a)) / 255) as u8;
+                    }
+                    dst[3] = (a + u32::from(dst[3]) * (255 - a) / 255) as u8;
+                }
+            }
+        }
+    }
+    let raster = cadaddy_render::images::Raster::new(cw as u32, ch as u32, rgba)?;
+    let origin = (u.0 * u0 + v.0 * v0, u.1 * u0 + v.1 * v0);
+    let ctm = M([u.0 * (u1 - u0), u.1 * (u1 - u0), v.0 * (v1 - v0), v.1 * (v1 - v0), origin.0, origin.1]);
+    let order = run.iter().map(|im| im.order).max().unwrap_or(first.order);
+    Some(ImageOut { ctm, raster: std::sync::Arc::new(raster), layer: first.layer.clone(), clip: first.clip.clone(), transp: first.transp, order })
 }
 
 /// The sheet-point box of an image's unit square.
@@ -2416,7 +5444,8 @@ fn write_images(_folder: &str, _images: &[(String, std::sync::Arc<cadaddy_render
 
 /// PDFIMPORT's JSON options → the converted page and a report: `{page?, scale?: number | "auto",
 /// layers?: "pdf" | "pen" | "object", whiteFills?, text?, join?, layout?, markups?, images?,
-/// imageFolder?, imagePrefix?}`. Images are written as PNG files in `imageFolder` (created
+/// imageFolder?, imagePrefix?, fills?: "each" | "merge"}` (`merge`: small fills as one hatch per
+/// layer and colour, [`PdfOptions::merge_small_fills`]). Images are written as PNG files in `imageFolder` (created
 /// when missing) and their pixels handed to the image cache, so they show at once.
 pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Drawing, serde_json::Value), String> {
     use serde_json::{Value, json};
@@ -2438,6 +5467,7 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
     o.layers = match p.get("layers").and_then(Value::as_str).map(str::to_ascii_lowercase).as_deref() {
         Some("pen") => LayerMode::Pen,
         Some("object") => LayerMode::Object,
+        Some("content") => LayerMode::Content,
         _ => LayerMode::Pdf,
     };
     let flag = |k: &str, d: bool| p.get(k).and_then(Value::as_bool).unwrap_or(d);
@@ -2448,6 +5478,11 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
     o.layout = flag("layout", true);
     o.markups = flag("markups", true);
     o.images = flag("images", true);
+    o.recover_text = flag("recoverText", true);
+    // PDFIMPORT brings one sheet in: an E sheet with a scale note comes in at that scale
+    // (still reported do_not_scale + needs_registration) so it reads at building size.
+    o.e_sheet_at_note_scale = true;
+    o.merge_small_fills = p.get("fills").and_then(Value::as_str).is_some_and(|f| f.eq_ignore_ascii_case("merge"));
     o.image_folder = p.get("imageFolder").and_then(Value::as_str).map(str::trim).filter(|f| !f.is_empty()).map(str::to_string);
     if let Some(prefix) = p.get("imagePrefix").and_then(Value::as_str) {
         let clean: String = prefix.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect();
@@ -2474,7 +5509,18 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
         "sheet": [r.sheet.0, r.sheet.1],
         "scale": r.scale,
         "scaleSource": r.scale_source,
+        "do_not_scale": r.do_not_scale,
+        "needs_registration": r.needs_registration,
         "stats": r.stats,
+        "ocr": {
+            "clusters": r.ocr.clusters,
+            "glyphs": r.ocr.glyphs,
+            "recovered": r.ocr.words.len(),
+            "noise_dropped": r.ocr.noise_dropped,
+            "mean_confidence": (r.ocr.mean_confidence() * 1000.0).round() / 1000.0,
+            "low_confidence": r.ocr.words.iter().filter(|w| w.confidence < 0.5).count(),
+            "words": r.ocr.words.iter().take(500).map(|w| json!({"value": w.value, "at": [w.at.0, w.at.1], "confidence": (w.confidence * 1000.0).round() / 1000.0})).collect::<Vec<_>>(),
+        },
         "notes": r.notes,
         "layers": r.drawing.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
         "imageFiles": written,
@@ -2544,15 +5590,17 @@ mod tests {
         // a circle drawn as 24 separate chords
         let pts: Vec<(f64, f64)> =
             (0..=24).map(|i| (f64::from(i) * std::f64::consts::TAU / 24.0).sin_cos()).map(|(s, c)| (10.0 + 5.0 * c, 10.0 + 5.0 * s)).collect();
-        let strokes: Vec<Stroke> =
-            pts.windows(2).map(|w| Stroke { pts: w.to_vec(), closed: false, pen, layer: None, curve_loop: false, order: 0 }).collect();
+        let strokes: Vec<Stroke> = pts
+            .windows(2)
+            .map(|w| Stroke { pts: w.to_vec(), closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 })
+            .collect();
         // a faceplate: two arcs of one circle and two short sides is not a circle
         let lens: Vec<(f64, f64)> = (0..=8)
             .map(|i| (f64::from(i) / 8.0 * 1.2 - 0.6 + std::f64::consts::FRAC_PI_2).sin_cos())
             .map(|(s, c)| (5.0 * c, 5.0 * s))
             .chain((0..=8).map(|i| (f64::from(i) / 8.0 * 1.2 - 0.6 - std::f64::consts::FRAC_PI_2).sin_cos()).map(|(s, c)| (5.0 * c, 5.0 * s)))
             .collect();
-        assert!(as_circle(&Stroke { pts: lens, closed: true, pen, layer: None, curve_loop: false, order: 0 }).is_none());
+        assert!(as_circle(&Stroke { pts: lens, closed: true, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 }).is_none());
         let joined = join(strokes);
         assert_eq!(joined.len(), 1);
         let c = joined.first().and_then(as_circle);
@@ -2591,7 +5639,9 @@ mod tests {
 
     #[test]
     fn reads_lines_text_scale_and_layout() {
-        let r = read(&sample_pdf(), &PdfOptions::default());
+        // Pen mode: the default Pdf-mode now falls back to Content for non-OCG PDFs, but this
+        // test checks pen-based layer names like PDF-BLACK-0.40.
+        let r = read(&sample_pdf(), &PdfOptions { layers: LayerMode::Pen, ..PdfOptions::default() });
         let r = match r {
             Ok(r) => r,
             Err(e) => panic!("{e}"),
@@ -2654,5 +5704,20 @@ mod tests {
     fn hostile_input_is_an_error_not_a_crash() {
         assert!(read(b"%PDF-1.4 garbage", &PdfOptions::default()).is_err());
         assert!(read(&sample_pdf(), &PdfOptions { page: 7, ..PdfOptions::default() }).is_err());
+    }
+
+    #[test]
+    fn stroked_marks_that_can_tag_a_symbol() {
+        for t in ["A", "F", "OS", "EF", "L4", "WAP", "XA12"] {
+            assert!(is_ocr_device_tag(t), "{t}");
+        }
+        for t in ["I", "O", "X", "s", "Ef", "4", "4A", "ABCD", "A123", "A-1", "NO TE", ""] {
+            assert!(!is_ocr_device_tag(t), "{t}");
+        }
+        // a mark alone; a letter split off a word (the rest one gap away); its own box ignored
+        let boxes = [[100.0, 100.0, 106.0, 108.0], [300.0, 100.0, 330.0, 108.0], [331.0, 100.0, 337.0, 108.0], [f64::NAN; 4]];
+        assert!(stands_alone(0, 8.0, &boxes));
+        assert!(!stands_alone(2, 8.0, &boxes));
+        assert!(!stands_alone(9, 8.0, &boxes));
     }
 }

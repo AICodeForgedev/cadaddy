@@ -242,6 +242,26 @@ pub fn report(app: &CadApp) -> Value {
     Value::Object(m)
 }
 
+/// Who may drive this window and whether updates come are the user's to change, not an
+/// agent's (turning the token off would let any program on the computer in at the next start).
+/// Every writer of that state (`options`, the control channel's `ui.set`) checks here.
+pub(crate) fn user_only_fields(
+    app: &CadApp,
+    from_agent: bool,
+    control_token: Option<bool>,
+    agent_control: Option<bool>,
+    check_for_updates: Option<bool>,
+) -> Result<(), String> {
+    if from_agent
+        && (control_token.is_some_and(|b| b != app.ui.control_token)
+            || agent_control.is_some_and(|b| b != app.ui.agent_control)
+            || check_for_updates == Some(false))
+    {
+        return Err("Only the user can change agentControl, controlToken or checkForUpdates (Options), not an agent.".into());
+    }
+    Ok(())
+}
+
 /// The OPTIONS JSON form: validate everything, then change it.
 fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
     let Some(obj) = params.as_object() else { return Err("options: expected an object".into()) };
@@ -252,15 +272,7 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
             engine.insert(k.clone(), v.clone());
         }
     }
-    // Who may drive this window and whether updates come are the user's to change, not an
-    // agent's (turning the token off would let any program on the computer in at the next start).
-    if app.session.agent.from_agent
-        && (ui.control_token.is_some_and(|b| b != app.ui.control_token)
-            || ui.agent_control.is_some_and(|b| b != app.ui.agent_control)
-            || ui.check_for_updates == Some(false))
-    {
-        return Err("Only the user can change agentControl, controlToken or checkForUpdates (Options), not an agent.".into());
-    }
+    user_only_fields(app, app.session.agent.from_agent, ui.control_token, ui.agent_control, ui.check_for_updates)?;
     let reset = engine.get("reset").and_then(Value::as_bool) == Some(true);
     // The engine checks its part (and refuses unknown names) before anything here changes.
     app.session.execute("options", &Value::Object(engine)).map_err(|e| e.to_string())?;

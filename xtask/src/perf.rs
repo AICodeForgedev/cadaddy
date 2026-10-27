@@ -16,19 +16,29 @@
 //! 100k time grows faster than the drawing: reported, and a failure. Every run is appended to
 //! `target/perf/history.jsonl` (the trend).
 //!
-//! The assembled BIM pipeline runs too (`cadaddy-mepfix`'s `bimbench` example): every stage on
+//! The assembled BIM pipeline runs too (`cadaddy-mcp`'s `bimbench` example): every stage on
 //! the synthetic hotel's print set — project import, PDF to .cdy, sheet classification, each
-//! print reader, the model build, validation, review, takeoff, IFC and BCF export, rendering,
-//! .cdy save and open, and a revision re-import — as `bim_<stage>@full` (with `--full` also
+//! print reader, the whole job's model build, validation, review, takeoff, IFC and BCF export,
+//! rendering, .cdy save and open, spec intake, the viewer, an agent-session soak, the MCP tools
+//! and a revision re-import — as `bim_<stage>@full` (with `--full` also
 //! `@double`, twice the hotel), with the run's peak memory, .cdy and IFC sizes and the largest
-//! command answer an agent reads (`resp_kb`), all budgeted like the rest. Its `cpu_cores` (how
-//! many cores were busy) is reported, not judged. `--bim` runs only the pipeline; with
-//! `--update-budget` it re-baselines only the `bim` keys (see `docs/bim-perf.md`).
+//! command answer an agent reads (`resp_kb`), all budgeted like the rest. The whole job is built
+//! as one model (every level and discipline, its element counts as `elems_*`), then validated,
+//! reviewed, taken off, exported, viewed, soaked for leaks (`leak_mb`) and driven through the MCP
+//! tools (`mcp_<tool>_ms`/`_kb`). Every stage is checked as well as timed: a stage whose command
+//! errors or whose key result is empty, a revision that doesn't change exactly one sheet, or a
+//! double hotel under 1.8x the full hotel's elements fails the run ([`bim_outcome`]). Its
+//! `cpu_cores` (how many cores were busy) is reported, not judged. `--bim` runs only the
+//! pipeline; with `--update-budget` it re-baselines only the `bim` keys (see `docs/bim-perf.md`).
+//! `--mem` (with `--full`) runs only `perfbench` and judges or, with `--update-budget`, records
+//! only the `mem_*` keys, leaving every other key of the platform's budget as it was.
 //!
 //! `cargo xtask perf --vs [--sizes 10000,100000,1000000]`: CADaddy's side of the comparison with
 //! other programs (`docs/perf-vs.md`): writes the 2D plans (`target/perf/vs/plan-<n>.dxf`), then
 //! opens each in a fresh process (`perfbench --file`) and prints open, select-all, zoom-extents
-//! and save times with the process's peak memory, as the table's rows.
+//! and save times with the process's peak memory, as the table's rows; then measures pan frame
+//! time per size (`perfbench --pan`, 100 steps rasterised on the CPU at 1600 x 900).
+//! The competitor scripts are in `tools/perf-vs/` (QCAD, FreeCAD).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -85,9 +95,43 @@ pub fn superlinear(results: &BTreeMap<String, f64>) -> Vec<(String, f64)> {
     out
 }
 
+/// The double hotel's model has at least this many times the full hotel's elements.
+pub const BIM_DOUBLE_MIN_RATIO: f64 = 1.8;
+
+/// Whether the BIM pipeline run passed: bimbench exits non-zero when a stage's command errors or
+/// its key result is empty (its FAILED lines say which), it must have written results, and the
+/// double hotel's model must have nearly twice the full hotel's elements.
+pub fn bim_outcome(ran: Result<(), String>, results: &BTreeMap<String, f64>) -> Result<(), String> {
+    ran.map_err(|e| format!("{e}: a BIM pipeline stage failed its check (see the FAILED lines above)"))?;
+    if results.is_empty() {
+        return Err("bimbench wrote no results".into());
+    }
+    if let (Some(full), Some(double)) = (results.get("elems_total@bim_full"), results.get("elems_total@bim_double"))
+        && *double < BIM_DOUBLE_MIN_RATIO * full
+    {
+        return Err(format!("the double hotel's model has {double} elements, under {BIM_DOUBLE_MIN_RATIO}x the full hotel's {full}"));
+    }
+    Ok(())
+}
+
+/// Whether `key` is one of the BIM pipeline's results for hotel `size` (`bim_<stage>@full`,
+/// `peak_mb@bim_full`).
+pub fn is_bim_key(key: &str, size: &str) -> bool {
+    (key.starts_with("bim_") && key.ends_with(&format!("@{size}"))) || key.ends_with(&format!("@bim_{size}"))
+}
+
 /// Whether a result has a budget: everything but the cores-busy figure.
 pub fn judged(key: &str) -> bool {
     !key.starts_with("cpu_cores@")
+}
+
+/// `budget` with `results` recorded in it (each plus the margin), keeping every other key: all
+/// judged results, or with `mem_only` just the `mem_*` ones (`--mem`).
+pub fn updated(mut budget: BTreeMap<String, f64>, results: &BTreeMap<String, f64>, mem_only: bool) -> BTreeMap<String, f64> {
+    for (k, ms) in results.iter().filter(|(k, _)| judged(k) && (!mem_only || k.starts_with("mem_"))) {
+        budget.insert(k.clone(), (ms * MARGIN * 10.0).round() / 10.0);
+    }
+    budget
 }
 
 /// This machine's key in the budget file.
@@ -102,8 +146,12 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     let full = rest.contains(&"--full");
     let update = rest.contains(&"--update-budget");
     let bim_only = rest.contains(&"--bim");
-    if let Some(bad) = rest.iter().find(|a| !["--full", "--update-budget", "--bim"].contains(*a)) {
-        return Err(format!("unknown option `{bad}` (perf [--full] [--bim] [--update-budget] | perf --vs [--sizes N,…])"));
+    let mem_only = rest.contains(&"--mem");
+    if let Some(bad) = rest.iter().find(|a| !["--full", "--update-budget", "--bim", "--mem"].contains(*a)) {
+        return Err(format!("unknown option `{bad}` (perf [--full] [--bim | --mem] [--update-budget] | perf --vs [--sizes N,…])"));
+    }
+    if mem_only && (bim_only || !full) {
+        return Err("`--mem` goes with `--full` (memory is measured from 100k objects on) and not with `--bim`".into());
     }
     let sizes = if full { "1000,10000,100000,500000,1000000" } else { "1000,10000" };
     let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), std::path::PathBuf::from);
@@ -120,17 +168,23 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
             return Err("perfbench wrote no results".into());
         }
     }
-    // The assembled BIM pipeline on the synthetic hotel (and twice it with --full).
     let bim_sizes = if full { "full,double" } else { "full" };
-    let bim = dir.join("bim.json");
-    let mut c = crate::cargo();
-    c.args(["run", "-q", "-p", "cadaddy-mepfix", "--example", "bimbench", "--", "--sizes", bim_sizes, "--out"]).arg(&bim);
-    crate::run(c, &format!("bimbench --sizes {bim_sizes}"))?;
-    let bim_results = read_json(&bim);
-    if bim_results.is_empty() {
-        return Err("bimbench wrote no results".into());
+    if mem_only {
+        results.retain(|k, _| k.starts_with("mem_"));
+        if results.is_empty() {
+            return Err("perfbench measured no memory".into());
+        }
+    } else {
+        // The assembled BIM pipeline on the synthetic hotel (and twice it with --full).
+        let bim = dir.join("bim.json");
+        let _ = std::fs::remove_file(&bim);
+        let mut c = crate::cargo();
+        c.args(["run", "-q", "-p", "cadaddy-mcp", "--example", "bimbench", "--", "--sizes", bim_sizes, "--out"]).arg(&bim);
+        let ran = crate::run(c, &format!("bimbench --sizes {bim_sizes}"));
+        let bim_results = read_json(&bim);
+        bim_outcome(ran, &bim_results)?;
+        results.extend(bim_results);
     }
-    results.extend(bim_results);
     let budget_path = root.join("perf").join("budget.json");
     let mut all: BTreeMap<String, BTreeMap<String, f64>> =
         std::fs::read_to_string(&budget_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
@@ -171,10 +225,14 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     text.push('\n');
     let _ = std::fs::write(&history, text);
     if update {
-        for (k, ms) in results.iter().filter(|(k, _)| judged(k)) {
-            budget.insert(k.clone(), (ms * MARGIN * 10.0).round() / 10.0);
+        // BIM keys the pipeline no longer emits (a stage renamed or merged) go with the re-baseline;
+        // a `--mem` update ran no pipeline, so it keeps them.
+        if !mem_only {
+            for size in bim_sizes.split(',') {
+                budget.retain(|k, _| results.contains_key(k) || !is_bim_key(k, size));
+            }
         }
-        all.insert(here.clone(), budget);
+        all.insert(here.clone(), updated(budget, &results, mem_only));
         let v: Value = serde_json::to_value(&all).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(budget_path.parent().unwrap_or(root)).map_err(|e| e.to_string())?;
         std::fs::write(&budget_path, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n").map_err(|e| e.to_string())?;
@@ -220,6 +278,7 @@ fn run_vs(root: &Path, rest: &[&str]) -> Result<(), String> {
     crate::run(c, "perfbench --plans")?;
     let flag = if cfg!(target_os = "linux") { "-v" } else { "-l" };
     println!("\n| objects | open (ms) | select all (ms) | zoom extents (ms) | save DXF (ms) | peak MB |\n|---|---|---|---|---|---|");
+    let mut pan_rows = Vec::new();
     for n in sizes.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         let plan = dir.join(format!("plan-{n}.dxf"));
         let out = std::process::Command::new("/usr/bin/time")
@@ -233,7 +292,20 @@ fn run_vs(root: &Path, rest: &[&str]) -> Result<(), String> {
         let ms = |k: &str| r[k].as_f64().map_or_else(|| "-".into(), |v| format!("{v:.0}"));
         let peak = peak_mb(&String::from_utf8_lossy(&out.stderr)).map_or_else(|| "-".into(), |m| format!("{m:.0}"));
         println!("| {n} | {} | {} | {} | {} | {peak} |", ms("open"), ms("select_all"), ms("zoom_extents"), ms("save_dxf"));
+        // Pan frame time: rasterise 100 pan steps on the CPU (conservative upper bound; GPU is
+        // faster since it only changes a uniform).
+        let pan_out = std::process::Command::new(&bench).arg("--pan").arg(&plan).output().map_err(|e| format!("perfbench --pan: {e}"))?;
+        let pr: Value = serde_json::from_slice(String::from_utf8_lossy(&pan_out.stdout).trim().as_bytes()).unwrap_or(Value::Null);
+        let frame = pr["pan_frame_ms"].as_f64().map_or_else(|| "-".into(), |v| format!("{v:.2}"));
+        let fps = pr["pan_fps"].as_f64().map_or_else(|| "-".into(), |v| format!("{v:.0}"));
+        pan_rows.push((n.to_string(), frame, fps));
     }
+    println!("\n| objects | program | pan frame (ms) | pan FPS |\n|---|---|---|---|");
+    for (n, frame, fps) in &pan_rows {
+        println!("| {n} | **CADaddy** | {frame} | {fps} |");
+    }
+    println!("| any | QCAD | not measured (by hand) | |");
+    println!("| any | FreeCAD | not measured (by hand) | |");
     Ok(())
 }
 
@@ -254,6 +326,73 @@ mod tests {
     fn busy_cores_are_reported_not_judged() {
         assert!(!judged("cpu_cores@bim_full"));
         assert!(judged("bim_import@bim_full") && judged("peak_mb@bim_full") && judged("resp_kb@bim_full") && judged("regen@1000"));
+    }
+
+    #[test]
+    fn a_failed_bim_stage_fails_perf() {
+        let ok: BTreeMap<String, f64> = [("bim_build@full", 50.0), ("elems_total@bim_full", 1000.0), ("elems_total@bim_double", 1900.0)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        assert_eq!(bim_outcome(Ok(()), &ok), Ok(()));
+        // bimbench exits non-zero when a stage errors or comes back empty (its results are still
+        // written): perf fails.
+        let failed = bim_outcome(Err("bimbench --sizes full: exited with exit status: 1".into()), &ok);
+        assert!(failed.as_ref().is_err_and(|e| e.contains("failed its check")), "{failed:?}");
+        assert!(bim_outcome(Ok(()), &BTreeMap::new()).is_err(), "no results");
+        let mut small = ok.clone();
+        small.insert("elems_total@bim_double".into(), 1200.0);
+        assert!(bim_outcome(Ok(()), &small).is_err_and(|e| e.contains("1200")));
+        small.remove("elems_total@bim_double");
+        assert_eq!(bim_outcome(Ok(()), &small), Ok(()), "full only: nothing to compare");
+    }
+
+    #[test]
+    fn bim_keys_are_told_by_size() {
+        assert!(is_bim_key("bim_build@full", "full") && is_bim_key("elems_mep@bim_full", "full") && is_bim_key("leak_mb@bim_full", "full"));
+        assert!(!is_bim_key("bim_build@double", "full") && !is_bim_key("regen@1000", "full") && !is_bim_key("peak_mb@1000", "full"));
+    }
+
+    #[test]
+    fn a_mem_scoped_update_changes_only_the_mem_keys() {
+        let budget: BTreeMap<String, f64> = [
+            ("open_dwg@100000", 900.0),
+            ("regen@1000", 3.0),
+            ("bim_import@bim_full", 1200.0),
+            ("peak_mb@bim_full", 800.0),
+            ("mem_bytes_per_object@100000", 400.0),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let results: BTreeMap<String, f64> = [
+            ("open_dwg@100000", 2000.0),
+            ("regen@1000", 9.0),
+            ("bim_import@bim_full", 5000.0),
+            ("peak_mb@100000", 700.0),
+            ("mem_bytes_per_object@100000", 320.0),
+            ("mem_open_dwg_peak_mb@1000000", 1000.0),
+            ("cpu_cores@bim_full", 8.0),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let after = updated(budget.clone(), &results, true);
+        // The mem keys are recorded (with the margin), new ones added.
+        assert_eq!(after.get("mem_bytes_per_object@100000"), Some(&400.0));
+        assert_eq!(after.get("mem_open_dwg_peak_mb@1000000"), Some(&1250.0));
+        // Every other key is as it was; results without a mem key aren't added.
+        for (k, v) in &budget {
+            if !k.starts_with("mem_") {
+                assert_eq!(after.get(k), Some(v), "{k} changed");
+            }
+        }
+        assert_eq!(after.keys().filter(|k| !k.starts_with("mem_")).count(), 4);
+        assert!(!after.contains_key("peak_mb@100000") && !after.contains_key("cpu_cores@bim_full"));
+        // Unscoped, every judged result is recorded.
+        let all = updated(budget, &results, false);
+        assert_eq!(all.get("open_dwg@100000"), Some(&2500.0));
+        assert!(all.contains_key("peak_mb@100000") && !all.contains_key("cpu_cores@bim_full"));
     }
 
     #[test]

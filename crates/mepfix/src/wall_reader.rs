@@ -44,8 +44,12 @@ pub struct ReadType {
     pub fire_rating: Option<String>,
     pub stc: Option<u32>,
     pub external: bool,
-    /// Lines not understood.
+    /// Lines not understood, and depths that fell back to a default.
     pub notes: Vec<String>,
+    /// Its studs are sawn lumber (`2X6 WOOD STUDS`), not metal.
+    pub wood_studs: bool,
+    /// The legend sheet it was read from (`A-501`).
+    pub sheet: String,
 }
 
 impl ReadType {
@@ -76,6 +80,8 @@ pub struct FoundWall {
     pub rooms: Vec<String>,
     /// A tag on it the legend doesn't have (its type is then a guess, as for an untagged wall).
     pub stray_tag: Option<String>,
+    /// The plan sheet it was read from (`A-101`).
+    pub sheet: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -106,9 +112,11 @@ fn is_iden(e: &cadaddy_doc::Entity) -> bool {
 }
 
 /// Casework tags (`BC-1`, `SK-1`, Q301) sit in their cabinet's outline, which looks like a tag
-/// symbol against the wall, but never type a wall.
+/// symbol against the wall, but never type a wall; nor do plumbing fixture tags (`WC-1` in its
+/// fixture's outline, on a `*FIXT*` layer) or the casework schedule's cells.
 fn is_casework(e: &cadaddy_doc::Entity) -> bool {
-    e.common.layer.to_ascii_uppercase().contains("CASEWORK")
+    let l = e.common.layer.to_ascii_uppercase();
+    l.contains("CASEWORK") || l.contains("FIXT")
 }
 
 fn texts(d: &Drawing) -> Vec<Txt> {
@@ -161,14 +169,39 @@ pub(crate) fn number(s: &str) -> Option<f64> {
     s.parse::<f64>().ok()
 }
 
-/// Every inch dimension in a line (`5/8"`, `3-5/8"`, `3 5/8"`, `6"`), with where it starts.
+/// Every inch dimension in a line (`5/8"`, `3-5/8"`, `3 5/8"`, `6"`, `5/8″`, `5/8 IN.`,
+/// `5/8 INCH`), with where it starts.
 pub(crate) fn inch_values(s: &str) -> Vec<(usize, f64)> {
+    inch_spans(s).into_iter().map(|(at, _, v)| (at, v)).collect()
+}
+
+/// [`inch_values`] with where each one's unit ends too.
+fn inch_spans(s: &str) -> Vec<(usize, usize, f64)> {
     let b = s.as_bytes();
+    let digit_at = |k: usize| k > 0 && b.get(k - 1).is_some_and(u8::is_ascii_digit);
     let mut out = Vec::new();
-    for (i, c) in s.char_indices() {
-        if c != '"' {
+    for (k, c) in s.char_indices() {
+        // The number ends at `i`; the unit runs to `end`.
+        let (i, end) = if c == '"' || c == '\u{2033}' {
+            (k, k + c.len_utf8())
+        } else if c == 'I' || c == 'i' {
+            let rest = s.get(k..).unwrap_or("");
+            let unit = ["INCHES", "INCH", "IN."].into_iter().find(|u| rest.get(..u.len()).is_some_and(|r| r.eq_ignore_ascii_case(u)));
+            let Some(unit) = unit else { continue };
+            // Not the start of a longer word (`INCHWORM`), and right after a number or a space after one.
+            if rest.get(unit.len()..).and_then(|r| r.chars().next()).is_some_and(|n| n.is_ascii_alphabetic()) {
+                continue;
+            }
+            if digit_at(k) {
+                (k, k + unit.len())
+            } else if k > 0 && b.get(k - 1) == Some(&b' ') && digit_at(k - 1) {
+                (k - 1, k + unit.len())
+            } else {
+                continue;
+            }
+        } else {
             continue;
-        }
+        };
         // Back over digits, '/', and one '-' or ' ' between a whole number and a fraction.
         let mut j = i;
         let mut seps = 0;
@@ -189,10 +222,29 @@ pub(crate) fn inch_values(s: &str) -> Vec<(usize, f64)> {
             }
         }
         if let Some(v) = s.get(j..i).and_then(number).filter(|v| v.is_finite() && *v > 0.0 && *v < 100.0) {
-            out.push((j, v));
+            out.push((j, end, v));
         }
     }
     out
+}
+
+/// Sawn lumber's actual depth from its nominal size in a line (`2X4` → 3 1/2", `2x6` → 5 1/2",
+/// `2X8` → 7 1/4"), with the size as written.
+pub(crate) fn nominal_lumber(u: &str) -> Option<(String, f64)> {
+    u.split(|c: char| !c.is_ascii_alphanumeric()).find_map(|w| {
+        let (a, b) = w.split_once(['X', 'x'])?;
+        let (a, b): (u32, u32) = (a.parse().ok()?, b.parse().ok()?);
+        let depth = match b {
+            3 => 2.5,
+            4 => 3.5,
+            6 => 5.5,
+            8 => 7.25,
+            10 => 9.25,
+            12 => 11.25,
+            _ => return None,
+        };
+        (1..=4).contains(&a).then(|| (format!("{a}X{b}"), depth))
+    })
 }
 
 fn count_of(s: &str) -> usize {
@@ -273,9 +325,31 @@ pub fn parse_type(tag: &str, lines: &[String]) -> ReadType {
             s1.extend(items.iter().cloned());
             s2.extend(items);
         } else if u.contains("STUD") {
-            let v = inch_values(u);
-            let depth = v.first().map(|x| x.1).unwrap_or(3.625);
-            let spacing = v.iter().skip(1).map(|x| x.1).find(|x| *x >= 8.0);
+            let v = inch_spans(u);
+            // The spacing: after `@`, or the value right before `O.C.`; never the depth.
+            let after_at = u.find('@').and_then(|a| v.iter().position(|x| x.0 > a));
+            let is_spacing = |k: usize, x: &(usize, usize, f64)| {
+                after_at == Some(k) || u.get(x.1..).is_some_and(|r| r.trim_start().starts_with("O.C") || r.trim_start().starts_with("OC"))
+            };
+            let lumber = nominal_lumber(u);
+            let sized = v.iter().enumerate().find(|(k, x)| !is_spacing(*k, x)).map(|(_, x)| x.2);
+            let depth = match (&lumber, sized) {
+                (Some((_, d)), _) => *d,
+                (None, Some(d)) => d,
+                (None, None) => {
+                    t.notes.push(format!("stud size not given: {} assumed", crate::walls::frac(3.625, true)));
+                    3.625
+                }
+            };
+            if lumber.is_some() || u.contains("WOOD") {
+                t.wood_studs = true;
+            }
+            let spacing = v
+                .iter()
+                .enumerate()
+                .find(|(k, x)| is_spacing(*k, x))
+                .map(|(_, x)| x.2)
+                .or_else(|| v.iter().map(|x| x.2).skip(usize::from(sized.is_some() && lumber.is_none())).find(|x| *x >= 8.0));
             let gauge = u.split(|c: char| !c.is_ascii_alphanumeric() && c != '.').collect::<Vec<_>>().windows(2).find_map(|w| match w {
                 [n, g] if g.starts_with("GA") => n.parse::<u32>().ok(),
                 _ => None,
@@ -292,7 +366,10 @@ pub fn parse_type(tag: &str, lines: &[String]) -> ReadType {
             let th = inch_values(u).first().map_or(8.0, |x| x.1);
             core.push(WallTypeLayer { material: "cmu".into(), thickness_in: th, side: "core".into(), ..WallTypeLayer::default() });
         } else if u.contains("BATT") || u.contains("INSUL") {
-            let th = inch_values(u).first().map_or(3.5, |x| x.1);
+            let th = inch_values(u).first().map(|x| x.1).unwrap_or_else(|| {
+                t.notes.push(format!("insulation thickness not given: {} assumed", crate::walls::frac(3.5, true)));
+                3.5
+            });
             core.push(WallTypeLayer {
                 material: "insulation".into(),
                 thickness_in: th,
@@ -884,7 +961,7 @@ fn guess(
 /// Read the walls of a set: legend, plans, tags, guesses, heights.
 pub fn read_walls(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &CeilingResult, structure: &StructuralModel) -> WallResult {
     let mut res = WallResult::default();
-    let mut plans: Vec<(String, Alignment, Drawing)> = Vec::new();
+    let mut plans: Vec<(String, String, Alignment, Drawing)> = Vec::new();
     let mut framing: BTreeMap<String, (Option<f64>, Option<f64>)> = BTreeMap::new();
     for (name, bytes) in dxf {
         let stem = name.trim_end_matches(".dxf");
@@ -907,19 +984,23 @@ pub fn read_walls(dxf: &[(String, Vec<u8>)], map: &SheetMap, ceilings: &CeilingR
         }
         let Ok(d) = cadaddy_io::read_dxf(bytes) else { continue };
         if legend {
-            for t in read_legend(&d) {
+            for mut t in read_legend(&d) {
+                t.sheet = stem.to_string();
                 if !res.types.iter().any(|o| o.tag == t.tag) {
                     res.types.push(t);
                 }
             }
         } else if let (Some(level), Some(al)) = (&sh.level, &sh.alignment) {
-            plans.push((level.clone(), al.clone(), d));
+            plans.push((stem.to_string(), level.clone(), al.clone(), d));
         }
     }
     let decks = deck_heights(&framing, structure);
     let inside = sheet_reader::grid_box(map, PRINT_MARGIN_FT);
-    for (level, al, d) in &plans {
+    for (sheet, level, al, d) in &plans {
         let mut walls = read_plan_walls_within(d, al, level, &res.types, inside);
+        for w in walls.iter_mut() {
+            w.sheet = sheet.clone();
+        }
         let tagged: Vec<FoundWall> = walls.iter().filter(|w| w.tagged).cloned().collect();
         let (lo, hi) = walls
             .iter()
@@ -966,7 +1047,7 @@ pub fn read_fixture_walls(seed: u64) -> Result<(Truth, WallResult), String> {
     let set = crate::generate(seed)?;
     let dxf: Vec<(String, Vec<u8>)> = set.files.iter().filter(|(n, _)| n.ends_with(".dxf")).cloned().collect();
     let map = sheet_reader::recognise_fixture_set(&dxf);
-    let ceilings = crate::ceiling_reader::read_ceilings(&dxf, &map);
+    let ceilings = crate::ceiling_reader::read_ceilings(&dxf, &map, None);
     let drawings: Vec<(String, Drawing)> =
         dxf.iter().filter_map(|(n, b)| cadaddy_io::read_dxf(b).ok().map(|d| (n.trim_end_matches(".dxf").to_string(), d))).collect();
     let refs: Vec<(String, &Drawing)> = drawings.iter().map(|(n, d)| (n.clone(), d)).collect();
@@ -1073,6 +1154,11 @@ fn category(m: &str) -> &'static str {
 
 /// A layer in plain words: `5/8" Type X gypsum board`, `3 5/8" 20 ga metal studs @ 16" o.c.`.
 pub fn layer_words(l: &WallTypeLayer) -> String {
+    words(l, false)
+}
+
+/// [`layer_words`], with studs of sawn lumber when `wood`.
+fn words(l: &WallTypeLayer, wood: bool) -> String {
     let d = crate::walls::frac(l.thickness_in, false);
     match l.material.as_str() {
         "gyp" => format!("{d} gypsum board"),
@@ -1088,7 +1174,7 @@ pub fn layer_words(l: &WallTypeLayer) -> String {
         "stud" => {
             let g = l.gauge.map(|g| format!(" {g} ga")).unwrap_or_default();
             let o = l.spacing_in.map(|s| format!(" @ {} o.c.", crate::walls::frac(s, false))).unwrap_or_default();
-            format!("{d}{g} metal studs{o}")
+            format!("{d}{g} {} studs{o}", if wood { "wood" } else { "metal" })
         }
         m => format!("{d} {m}"),
     }
@@ -1111,7 +1197,7 @@ pub fn spec_patch(r: &WallResult, to_plan: &dyn Fn(&str, [f64; 2]) -> Option<[f6
                         "2" => "side2",
                         _ => "core",
                     };
-                    json!({"material": layer_words(l), "thickness_in": l.thickness_in, "side": side, "category": category(&l.material), "in_cavity": l.in_cavity})
+                    json!({"material": words(l, t.wood_studs), "thickness_in": l.thickness_in, "side": side, "category": category(&l.material), "in_cavity": l.in_cavity})
                 })
                 .collect();
             let mut a = json!({"tag": t.tag, "description": t.name, "layers": layers, "external": t.external});
@@ -1126,6 +1212,9 @@ pub fn spec_patch(r: &WallResult, to_plan: &dyn Fn(&str, [f64; 2]) -> Option<[f6
             }
             if !t.notes.is_empty() {
                 a["notes"] = json!(t.notes);
+            }
+            if !t.sheet.is_empty() {
+                a["source"] = json!(format!("{} wall type legend, tag {}", t.sheet, t.tag));
             }
             json!({"name": t.tag, "thickness_in": t.thickness_in(), "from": "pairs", "assembly": a})
         })
@@ -1142,6 +1231,18 @@ pub fn spec_patch(r: &WallResult, to_plan: &dyn Fn(&str, [f64; 2]) -> Option<[f6
             }
             if let Some(g) = &w.guess {
                 m["guess"] = json!(g);
+            }
+            m["status"] = json!(if w.tagged { "drawing" } else { "guess" });
+            let source = match (&w.stray_tag, w.tagged) {
+                (_, true) => w.sheet.clone(),
+                (Some(x), false) => format!("{} (tag {x} not in the legend)", w.sheet),
+                (None, false) => format!("{} (no tag)", w.sheet),
+            };
+            if !w.sheet.is_empty() {
+                m["source"] = json!(source);
+            }
+            if !w.height_source.is_empty() {
+                m["height_source"] = json!(w.height_source);
             }
             Some(m)
         })

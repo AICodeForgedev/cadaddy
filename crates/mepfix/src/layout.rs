@@ -31,6 +31,12 @@ pub enum Kind {
     Lighting(String),
     /// Electrical power plan for a level.
     Power(String),
+    /// Fire alarm plan for a level (FA-10x): FA devices, SLC/NAC wiring.
+    FireAlarm(String),
+    /// Telecom/low-voltage plan for a level (T-10x): data/TV/phone/security devices.
+    Telecom(String),
+    /// Sleeve layout plan for a level: dimensioned LV/FA sleeves at wall/floor crossings.
+    SleeveLayout(String),
     Schedules(String),
     /// An architectural floor plan: walls, doors, wall type tags.
     Floor(String),
@@ -72,6 +78,9 @@ pub enum Kind {
     SiteUtility,
     /// The sitework schedule (C-601): quantities, paving, landscaping, fencing, furnishings.
     SiteSchedules,
+    /// The enlarged guest unit plans (Q305): one plan per unit type, the tag legend and the
+    /// unit overrides table.
+    UnitPlans,
 }
 
 impl Kind {
@@ -89,6 +98,7 @@ impl Kind {
                 | Kind::SiteSchedules
                 | Kind::InteriorElevation(_)
                 | Kind::Section(_)
+                | Kind::UnitPlans
         )
     }
 }
@@ -416,6 +426,8 @@ pub fn hotel_sheet_list() -> Vec<(String, String, String, Kind)> {
     for l in ["1", "2", "3", "4"] {
         v.push((format!("A-20{l}"), format!("LEVEL {l} REFLECTED CEILING PLAN"), "A".into(), Kind::Rcp(l.into())));
     }
+    // Enlarged guest unit plans
+    v.push((crate::units::UNIT_SHEET.into(), crate::units::UNIT_SHEET_TITLE.into(), "A".into(), Kind::UnitPlans));
     // Structural framing
     for (num, title, code) in [
         ("S-102", "LEVEL 2 FRAMING PLAN", "2"),
@@ -452,6 +464,10 @@ pub fn hotel_sheet_list() -> Vec<(String, String, String, Kind)> {
     // Telecom
     for l in ["1", "2", "3", "4"] {
         v.push((format!("T-10{l}"), format!("LEVEL {l} TELECOM PLAN"), "T".into(), Kind::Telecom(l.into())));
+    }
+    // Sleeve layouts
+    for l in ["1", "2", "3", "4"] {
+        v.push((format!("SL-10{l}"), format!("LEVEL {l} SLEEVE LAYOUT"), "SL".into(), Kind::SleeveLayout(l.into())));
     }
     // Enlarged unit plans (one per unit type)
     v.push(("A-501".into(), "ENLARGED UNIT PLAN - KING".into(), "A".into(), Kind::EnlargedUnit("ut-king".into())));
@@ -502,7 +518,8 @@ pub fn plan_hotel_sheets(t: &mut Truth, st: &Style, r: &mut Rng) {
             | Kind::Lighting(l)
             | Kind::Power(l)
             | Kind::FireAlarm(l)
-            | Kind::Telecom(l) => Some(l.clone()),
+            | Kind::Telecom(l)
+            | Kind::SleeveLayout(l) => Some(l.clone()),
             _ => None,
         };
         let plan = kind.plan();
@@ -922,7 +939,14 @@ pub fn plan_callouts(t: &mut Truth, _r: &mut Rng) {
             if sh.level.is_none() || sh.window_ft.is_some() {
                 continue;
             }
-            let mid_ft = [(sect.cut_from_ft[0] + sect.cut_to_ft[0]) / 2.0, (sect.cut_from_ft[1] + sect.cut_to_ft[1]) / 2.0];
+            // Offset the bubble along the cut line by detail_num so that multiple
+            // section marks on the same sheet don't share the exact same position.
+            let raw_mid = [(sect.cut_from_ft[0] + sect.cut_to_ft[0]) / 2.0, (sect.cut_from_ft[1] + sect.cut_to_ft[1]) / 2.0];
+            let offset = (detail_num as f64 - 1.0) * 3.0; // 3 ft offset per section
+            let dx = sect.cut_to_ft[0] - sect.cut_from_ft[0];
+            let dy = sect.cut_to_ft[1] - sect.cut_from_ft[1];
+            let len = (dx * dx + dy * dy).sqrt().max(1.0);
+            let mid_ft = [raw_mid[0] + dx / len * offset, raw_mid[1] + dy / len * offset];
             callouts.push(CalloutEntry {
                 id: id(),
                 kind: "section_mark".into(),
@@ -1040,8 +1064,89 @@ pub fn plan_callouts(t: &mut Truth, _r: &mut Rng) {
         }
     }
 
+    // --- Interior elevation callouts on enlarged plan sheets ---
+    // Interior elevation callouts (e.g. guest-room bath) point to an interior elevation sheet.
+    // We place them on enlarged plan sheets that have a window_ft, pointing to A-201.
+    for sh in t.sheets.clone() {
+        if sh.window_ft.is_none() || sh.discipline != "P" {
+            continue;
+        }
+        let win = sh.window_ft.unwrap_or_default();
+        // Place near the lower-left corner of the enlarged area.
+        let ie_x = win[0][0] + (win[1][0] - win[0][0]) * 0.25;
+        let ie_y = win[0][1] + (win[1][1] - win[0][1]) * 0.25;
+        detail_num += 1;
+        callouts.push(CalloutEntry {
+            id: id(),
+            kind: "elevation_tag".into(),
+            on_sheet: sh.number.clone(),
+            detail: format!("{detail_num}"),
+            target_sheet: "A-201".into(),
+            at_ft: [round(ie_x), round(ie_y)],
+            cut_from_ft: None,
+            cut_to_ft: None,
+            looking: Some("north".into()),
+            broken: false,
+        });
+    }
+
+    // --- Match lines ---
+    // On the hotel set, mechanical plan sheets that share a level get match lines
+    // where their plan areas overlap. For the office set, all plans fit on one sheet,
+    // so match lines only appear when there are multiple plan sheets for the same level.
+    {
+        let level_sheets: std::collections::BTreeMap<String, Vec<String>> = {
+            let mut m = std::collections::BTreeMap::new();
+            for sh in t.sheets.iter() {
+                if sh.window_ft.is_some() {
+                    continue; // enlarged plans don't get match lines
+                }
+                if let Some(lv) = &sh.level
+                    && sh.discipline == "M"
+                {
+                    m.entry(lv.clone()).or_insert_with(Vec::new).push(sh.number.clone());
+                }
+            }
+            m
+        };
+        for (lv, sheets) in &level_sheets {
+            if sheets.len() < 2 {
+                continue;
+            }
+            // Create match lines linking consecutive sheet pairs.
+            for pair in sheets.windows(2) {
+                let mid_x = x_max / 2.0;
+                callouts.push(CalloutEntry {
+                    id: id(),
+                    kind: "match_line".into(),
+                    on_sheet: pair[0].clone(),
+                    detail: String::new(),
+                    target_sheet: pair[1].clone(),
+                    at_ft: [round(mid_x), round(y_max)],
+                    cut_from_ft: Some([0.0, y_max]),
+                    cut_to_ft: Some([x_max, y_max]),
+                    looking: None,
+                    broken: false,
+                });
+                callouts.push(CalloutEntry {
+                    id: id(),
+                    kind: "match_line".into(),
+                    on_sheet: pair[1].clone(),
+                    detail: String::new(),
+                    target_sheet: pair[0].clone(),
+                    at_ft: [round(mid_x), 0.0],
+                    cut_from_ft: Some([0.0, 0.0]),
+                    cut_to_ft: Some([x_max, 0.0]),
+                    looking: None,
+                    broken: false,
+                });
+            }
+            let _ = lv; // used above in the loop
+        }
+    }
+
     // --- Planted broken callouts ---
-    // A section mark on level 1 RCP pointing to a nonexistent sheet.
+    // 1. A section mark on level 1 RCP pointing to a nonexistent sheet.
     if let Some(rcp) = t.sheets.iter().find(|s| s.number == "A-121") {
         let mid_x = x_max * 0.75;
         let mid_y = y_max * 0.75;
@@ -1058,7 +1163,7 @@ pub fn plan_callouts(t: &mut Truth, _r: &mut Rng) {
             broken: true,
         });
     }
-    // A detail bubble on P-401 pointing to nonexistent detail sheet.
+    // 2. A detail bubble on P-401 pointing to nonexistent detail sheet.
     if has_sheet("P-401") {
         callouts.push(CalloutEntry {
             id: id(),
@@ -1067,6 +1172,37 @@ pub fn plan_callouts(t: &mut Truth, _r: &mut Rng) {
             detail: "77".into(),
             target_sheet: "P-777".into(),
             at_ft: [round(xs.first().copied().unwrap_or(0.0) + 1.0), round(ys.get(1).copied().unwrap_or(20.0) + 1.0)],
+            cut_from_ft: None,
+            cut_to_ft: None,
+            looking: None,
+            broken: true,
+        });
+    }
+    // 3. A detail bubble on A-121 pointing to an EXISTING sheet but a nonexistent detail
+    //    (detail 98 on A-301, which doesn't have detail 98).
+    if has_sheet("A-121") && has_sheet("A-301") {
+        callouts.push(CalloutEntry {
+            id: id(),
+            kind: "detail_bubble".into(),
+            on_sheet: "A-121".into(),
+            detail: "98".into(),
+            target_sheet: "A-301".into(),
+            at_ft: [round(x_max * 0.25), round(y_max * 0.25)],
+            cut_from_ft: None,
+            cut_to_ft: None,
+            looking: None,
+            broken: true,
+        });
+    }
+    // 4. A detail bubble with an empty/unreadable target sheet number.
+    if has_sheet("A-121") {
+        callouts.push(CalloutEntry {
+            id: id(),
+            kind: "detail_bubble".into(),
+            on_sheet: "A-121".into(),
+            detail: "97".into(),
+            target_sheet: String::new(), // unreadable
+            at_ft: [round(x_max * 0.15), round(y_max * 0.85)],
             cut_from_ft: None,
             cut_to_ft: None,
             looking: None,

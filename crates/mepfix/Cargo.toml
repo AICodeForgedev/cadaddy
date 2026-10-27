@@ -1,6 +1,6 @@
 [package]
 name = "cadaddy-mepfix"
-description = "CADaddy MEP print fixtures: made-up mechanical, plumbing, fire protection, ceiling and structural sheets (vector PDF + DXF) with a JSON ground truth to score print readers against"
+description = "CADaddy print readers and the print-set pipeline, plus MEP print fixtures: made-up mechanical, plumbing, fire protection, ceiling and structural sheets (vector PDF + DXF) with a JSON ground truth to score print readers against"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -27,11 +27,9 @@ cadaddy-fonts = { workspace = true }
 image = { workspace = true }
 # The RFI list's items (shared with the building spec) and the print validator's inputs.
 cadaddy-walk3d = { path = "../walk3d" }
-# Read trays become 3D runs, clash with other trades and export to IFC (tray_reader test).
-# The agent tools are tried on a whole synthetic hotel (agentready test).
-cadaddy-engine = { workspace = true }
-
+# Stage timings: std::time::Instant panics in the web build.
+web-time = "1.1"
 [dev-dependencies]
 cadaddy-dxf = { workspace = true }
-# Read sprinklers become a 3D model and IFC (sprinkler_reader's end-to-end test).
-cadaddy-engine = { workspace = true }
+# Tests that need the engine or the MCP server live in crates/engine/tests and crates/mcp (10-23: mepfix is
+# the readers layer under the engine, so it may not depend on it, not even for tests).

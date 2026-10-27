@@ -397,10 +397,10 @@ enum A {
     Points3,
     Index,
     Derived,
-    /// A typed value of one of these types, holding a string.
-    Label {
+    /// An IfcValue (IFC4's select of typed values): a string as one of the string types, or a
+    /// length (IfcLengthMeasure; IfcPositiveLengthMeasure above zero).
+    Value {
         opt: bool,
-        of: &'static [&'static str],
     },
 }
 
@@ -678,12 +678,7 @@ fn schema() -> HashMap<&'static str, Vec<A>> {
     m.insert("IFCPROPERTYSET", pset);
     m.insert(
         "IFCPROPERTYSINGLEVALUE",
-        vec![
-            A::Text { opt: false },
-            A::Text { opt: true },
-            A::Label { opt: true, of: &["IFCLABEL", "IFCTEXT", "IFCIDENTIFIER"] },
-            A::Ref { opt: true, to: &["IFCSIUNIT"] },
-        ],
+        vec![A::Text { opt: false }, A::Text { opt: true }, A::Value { opt: true }, A::Ref { opt: true, to: &["IFCSIUNIT"] }],
     );
     // IfcDistributionSystem: IfcRoot (4) + ObjectType + LongName + PredefinedType.
     {
@@ -1017,8 +1012,13 @@ fn matches(p: &P, a: A, types: &BTreeMap<u64, (String, Vec<P>)>) -> Result<(), S
         }
         (A::Index, P::List(v)) if v.len() >= 3 && v.iter().all(|x| matches!(x, P::Int(i) if *i > 0)) => Ok(()),
         (A::Derived, P::Derived) => Ok(()),
-        (A::Label { opt: true, .. }, P::Null) => Ok(()),
-        (A::Label { of, .. }, P::Typed(t, v)) if of.contains(&t.as_str()) && matches!(**v, P::Str(_)) => Ok(()),
+        (A::Value { opt: true }, P::Null) => Ok(()),
+        (A::Value { .. }, P::Typed(t, v)) if ["IFCLABEL", "IFCTEXT", "IFCIDENTIFIER"].contains(&t.as_str()) && matches!(**v, P::Str(_)) => Ok(()),
+        (A::Value { .. }, P::Typed(t, v)) if t == "IFCLENGTHMEASURE" && matches!(**v, P::Real(r) if r.is_finite()) => Ok(()),
+        (A::Value { .. }, P::Typed(t, v)) if t == "IFCPOSITIVELENGTHMEASURE" && matches!(**v, P::Real(r) if r.is_finite() && r > 0.0) => Ok(()),
+        // IfcReal and IfcBoolean (IfcSimpleValue): an element's own numeric and yes/no properties.
+        (A::Value { .. }, P::Typed(t, v)) if t == "IFCREAL" && matches!(**v, P::Real(r) if r.is_finite()) => Ok(()),
+        (A::Value { .. }, P::Typed(t, v)) if t == "IFCBOOLEAN" && matches!(&**v, P::Enum(e) if e == "T" || e == "F") => Ok(()),
         _ => Err(format!("{p:?} where the schema has {}", describe(a))),
     }
 }
@@ -1037,7 +1037,7 @@ fn describe(a: A) -> &'static str {
         A::Points3 => "a list of 3D points",
         A::Index => "a list of at least 3 positive indices",
         A::Derived => "a derived attribute (*)",
-        A::Label { .. } => "a typed string value",
+        A::Value { .. } => "a typed value (a string, or a length)",
     }
 }
 
@@ -1526,6 +1526,10 @@ fn quantities_match_the_drawing() {
         let product = refs(&p[4])[0];
         let (class, pa) = get(product);
         let set = get(refs(&p[5])[0]);
+        // Quantity sets only (MEP objects also carry their sizes as a property set).
+        if set.0 != "IFCELEMENTQUANTITY" {
+            continue;
+        }
         let q: BTreeMap<String, f64> = refs(&set.1[5])
             .into_iter()
             .map(|r| {
@@ -1732,7 +1736,11 @@ fn scheduled_equipment_exports_as_its_distribution_element_class() {
         {"tag": "X-1", "kind": "humidifier", "level": "L2", "min": [2700, 100], "max": [2712, 112], "bottom_ft": 0, "height_ft": 1}
     ]);
     let issues = s.execute("bspec.set", &json!({"spec": {"mep": {"equipment": equipment}}})).unwrap();
-    assert!(!issues.to_string().contains("mep.equipment"), "{issues}");
+    assert!(!issues["errors"].to_string().contains("mep.equipment"), "{issues}");
+    // The drawing has no hot-water pipes, so P-DOMW-HW isn't one of its systems: the one warning.
+    let warned: Vec<&str> =
+        issues["warnings"].as_array().unwrap().iter().filter_map(|w| w["path"].as_str()).filter(|p| p.starts_with("mep.equipment")).collect();
+    assert_eq!(warned, ["mep.equipment[2].systems[1]"], "{issues}");
     let built = s.execute("model.build", &json!({})).unwrap();
     assert_eq!(built["mepEquipment"].as_u64().or_else(|| find_count(&built)), Some(9), "{built}");
     let text = export(&mut s, "Sample Equipment.ifc");
@@ -1742,8 +1750,9 @@ fn scheduled_equipment_exports_as_its_distribution_element_class() {
     let n = |t: &str| c.get(t).copied().unwrap_or(0);
     assert_eq!((n("IFCUNITARYEQUIPMENT"), n("IFCAIRTERMINALBOX"), n("IFCFAN"), n("IFCPUMP")), (2, 1, 1, 1));
     assert_eq!((n("IFCBOILER"), n("IFCCONDENSER"), n("IFCFLOWMETER")), (1, 1, 1));
-    assert_eq!(n("IFCPROPERTYSET"), 5, "one schedule row per item that has one");
     let f = read_step(&text).unwrap();
+    let schedules = f.data.values().filter(|(t, a)| t == "IFCPROPERTYSET" && a.get(2) == Some(&P::Str("CADaddy_EquipmentSchedule".into()))).count();
+    assert_eq!(schedules, 5, "one schedule row per item that has one");
     let find = |name: &str| f.data.values().find(|(_, p)| p.get(2) == Some(&P::Str(name.into()))).cloned().unwrap();
     let (t, ahu) = find("AHU-1");
     assert_eq!((t.as_str(), &ahu[8], &ahu[3]), ("IFCUNITARYEQUIPMENT", &P::Enum("AIRHANDLER".into()), &P::Str("AIR HANDLING UNIT SCHEDULE".into())));
@@ -1829,4 +1838,272 @@ fn bad_equipment_is_an_issue_not_a_crash() {
     assert!(text.contains("mep.equipment"), "{text}");
     // Whatever was stored, building skips what it can't make.
     let _ = s.execute("model.build", &json!({}));
+}
+
+/// An equipment entry whose systems aren't in `mep.systems` is warned about (it would sit in an
+/// IFC group of its own, apart from the runs it joins); a known system and no systems aren't.
+#[test]
+fn equipment_on_an_unknown_system_is_warned_about() {
+    hooks();
+    let mut s = Session::new();
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9}],
+        "mep": {
+            "systems": [{"name": "M-DUCT-SUPP", "layer": "M-DUCT-SUPP", "kind": "duct", "size_in": [12, 12], "bottom_ft": 9}],
+            "equipment": [
+                {"tag": "AHU-1", "kind": "ahu", "level": "L1", "min": [0, 0], "max": [96, 60], "bottom_ft": 0, "height_ft": 6, "systems": ["M-DUCT-SUPP", "SA"]},
+                {"tag": "CU-1", "kind": "condensing_unit", "level": "L1", "min": [200, 0], "max": [236, 36], "bottom_ft": 0, "height_ft": 3}
+            ]
+        }
+    });
+    let r = s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let warned: Vec<(&str, &str)> = r["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|w| Some((w["path"].as_str()?, w["message"].as_str()?)))
+        .filter(|(p, _)| p.starts_with("mep.equipment"))
+        .collect();
+    assert_eq!(warned.len(), 1, "{r}");
+    let (path, message) = warned[0];
+    assert_eq!(path, "mep.equipment[0].systems[1]");
+    assert!(message.contains("AHU-1") && message.contains("SA") && message.contains("mep.systems"), "{message}");
+    // bspec.validate says the same; with the system added, nothing.
+    let v = s.execute("bspec.validate", &json!({})).unwrap();
+    assert!(v["warnings"].to_string().contains("mep.equipment[0].systems[1]"), "{v}");
+    let fixed = json!({"mep": {"systems": [
+        {"name": "M-DUCT-SUPP", "layer": "M-DUCT-SUPP", "kind": "duct", "size_in": [12, 12], "bottom_ft": 9},
+        {"name": "SA", "layer": "SA", "kind": "duct", "size_in": [12, 12], "bottom_ft": 9}
+    ]}});
+    let r = s.execute("bspec.set", &json!({"spec": fixed})).unwrap();
+    assert!(!r["warnings"].to_string().contains("mep.equipment"), "{r}");
+}
+
+/// Equipment read off a generated print set (Q262 reader, Q254 fixtures) into the building spec
+/// with the spec's level and system names, built and exported: every placeable item, each as
+/// its kind's IFC class, each in the same IfcDistributionSystem group as runs of every system it
+/// joins. The runs are the set's own (truth), named as an office layer standard names them; the
+/// equipment's system names come from the reader's codes (`SA`, `HW`) through
+/// `equip_reader::spec_system_name`, not from that table.
+#[test]
+fn equipment_read_from_prints_builds_into_ifc_with_its_runs() {
+    use cadaddy_mepfix::equip_reader;
+    hooks();
+    const NAMES: &[(&str, &str, &str)] = &[
+        ("SA", "M-DUCT-SUPP", "duct"),
+        ("RA", "M-DUCT-RETN", "duct"),
+        ("EA", "M-DUCT-EXHS", "duct"),
+        ("OA", "M-DUCT-OA", "duct"),
+        ("CW", "P-DOMW-CW", "pipe"),
+        ("HW", "P-DOMW-HW", "pipe"),
+        ("HWR", "P-DOMW-HWR", "pipe"),
+        ("SAN", "P-SANR", "pipe"),
+        ("V", "P-VENT", "pipe"),
+        ("G", "P-GAS", "pipe"),
+        ("FP", "F-SPRK-PIPE", "pipe"),
+        ("ST", "P-STRM", "pipe"),
+        ("CHW", "M-HYDR-CHWS", "pipe"),
+        ("CHWR", "M-HYDR-CHWR", "pipe"),
+    ];
+    let class_of = |kind: &str| match kind {
+        "ahu" | "rtu" => "IFCUNITARYEQUIPMENT",
+        "vav" => "IFCAIRTERMINALBOX",
+        "exhaust_fan" | "fan" => "IFCFAN",
+        "pump" => "IFCPUMP",
+        "water_heater" => "IFCBOILER",
+        "condensing_unit" => "IFCCONDENSER",
+        "gas_meter" => "IFCFLOWMETER",
+        _ => "IFCBUILDINGELEMENTPROXY",
+    };
+    for seed in [1u64, 2] {
+        let set = cadaddy_mepfix::generate(seed).unwrap();
+        let t = &set.truth;
+        let read = equip_reader::read_fixture_set(&set);
+        let sc = equip_reader::score(&read, t);
+        assert_eq!(sc.placed, sc.expected_placed, "seed {seed}: the reader places every placeable item");
+        // The spec's levels are named, not coded: `1` → `L1`.
+        let names: Vec<(String, String)> = t.building.levels.iter().map(|l| (l.code.clone(), format!("L{}", l.code))).collect();
+        let level_names: Vec<(&str, &str)> = names.iter().map(|(c, n)| (c.as_str(), n.as_str())).collect();
+        let mut levels = Vec::new();
+        for (i, l) in t.building.levels.iter().enumerate() {
+            let next = t.building.levels.get(i + 1).map_or(l.elevation_ft + 14.0, |n| n.elevation_ft);
+            levels.push(json!({"name": format!("L{}", l.code), "elevation_ft": l.elevation_ft, "height_ft": (next - l.elevation_ft).max(8.0), "ceiling_ft": 9}));
+        }
+        let elevation = |code: &str| t.building.levels.iter().find(|l| l.code == code).map_or(0.0, |l| l.elevation_ft);
+        // The set's horizontal runs near the equipment, as spec runs of the named systems.
+        let near_equipment = |seg: &cadaddy_mepfix::truth::Segment| {
+            t.equipment.iter().filter(|e| e.level == seg.level).any(|e| {
+                seg.path_ft
+                    .iter()
+                    .any(|p| p[0] > e.min_ft[0] - 40.0 && p[0] < e.max_ft[0] + 40.0 && p[1] > e.min_ft[1] - 40.0 && p[1] < e.max_ft[1] + 40.0)
+            })
+        };
+        let mut runs = Vec::new();
+        let mut used: BTreeSet<&str> = BTreeSet::new();
+        for seg in t.segments.iter().filter(|s| !s.vertical && !s.below_floor && near_equipment(s)) {
+            let Some((_, name, _)) = NAMES.iter().find(|(c, _, _)| *c == seg.system) else { continue };
+            let [a, b] = seg.path_ft;
+            if (a[0] - b[0]).hypot(a[1] - b[1]) < 0.1 {
+                continue;
+            }
+            let size = if seg.shape == "rect" { seg.size_in } else { [seg.size_in[0], 0.0] };
+            let depth = if seg.shape == "rect" { seg.size_in[1] } else { seg.size_in[0] };
+            let bottom = (a[2] - elevation(&seg.level) - depth / 24.0).max(0.0);
+            runs.push(json!({"system": name, "level": format!("L{}", seg.level), "points": [[a[0] * 12.0, a[1] * 12.0], [b[0] * 12.0, b[1] * 12.0]],
+                "size_in": size, "bottoms_ft": [bottom]}));
+            used.insert(name);
+        }
+        let systems: Vec<serde_json::Value> = NAMES
+            .iter()
+            .filter(|(_, n, _)| used.contains(n))
+            .map(|(_, n, k)| json!({"name": n, "layer": n, "kind": k, "size_in": if *k == "duct" { [12.0, 12.0] } else { [2.0, 0.0] }, "bottom_ft": 9}))
+            .collect();
+        let spec_systems: Vec<(&str, &str)> = NAMES.iter().filter(|(_, n, _)| used.contains(n)).map(|(_, n, k)| (*n, *k)).collect();
+        let (equipment, notes) = equip_reader::spec_equipment(&read, &t.building.levels, &level_names, &spec_systems);
+        assert!(notes.is_empty(), "seed {seed}: every level and system named: {notes:?}");
+        assert_eq!(equipment.len(), read.placed.len(), "seed {seed}");
+        for e in &equipment {
+            assert!(e["level"].as_str().unwrap().starts_with('L'), "seed {seed}: {e}");
+            for sy in e["systems"].as_array().unwrap() {
+                assert!(NAMES.iter().any(|(_, n, _)| sy == n), "seed {seed}: {} joins {sy}, not a spec name", e["tag"]);
+            }
+        }
+        let mut s = Session::new();
+        let spec = json!({"version": 1, "units_per_foot": 12, "levels": levels, "mep": {"systems": systems, "runs": runs, "equipment": equipment}});
+        let r = s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+        assert!(r["errors"].as_array().unwrap().is_empty(), "seed {seed}: {}", r["errors"]);
+        assert!(!r["warnings"].to_string().contains("mep.equipment"), "seed {seed}: {}", r["warnings"]);
+        let built = s.execute("model.build", &json!({})).unwrap();
+        assert_eq!(built["mepEquipment"].as_u64(), Some(sc.expected_placed as u64), "seed {seed}: {built}");
+        let text = export(&mut s, "Sample Print Set.ifc");
+        let p = problems(&text);
+        assert!(p.is_empty(), "seed {seed}: {}", p.join("\n"));
+        let f = read_step(&text).unwrap();
+        let groups: Vec<(String, Vec<u64>)> = f
+            .data
+            .values()
+            .filter(|(t, _)| t == "IFCRELASSIGNSTOGROUP")
+            .filter_map(|(_, p)| {
+                let g = refs(&p[6]).first().copied()?;
+                let name = match f.data.get(&g)?.1.get(2)? {
+                    P::Str(s) => s.clone(),
+                    _ => return None,
+                };
+                Some((name, refs(&p[4])))
+            })
+            .collect();
+        let class = |id: u64| f.data.get(&id).map_or("", |(t, _)| t.as_str());
+        let mut joined = 0;
+        for e in &equipment {
+            let tag = e["tag"].as_str().unwrap();
+            let (id, (cls, _)) = f
+                .data
+                .iter()
+                .find(|(_, (_, p))| p.get(2) == Some(&P::Str(tag.into())))
+                .unwrap_or_else(|| panic!("seed {seed}: {tag} not in the IFC"));
+            assert_eq!(cls, class_of(e["kind"].as_str().unwrap()), "seed {seed}: {tag}");
+            for sy in e["systems"].as_array().unwrap().iter().filter_map(|v| v.as_str()) {
+                joined += 1;
+                let with_runs = groups
+                    .iter()
+                    .filter(|(n, m)| n == sy && m.contains(id))
+                    .any(|(_, m)| m.iter().any(|x| ["IFCDUCTSEGMENT", "IFCPIPESEGMENT"].contains(&class(*x))));
+                assert!(with_runs, "seed {seed}: {tag} isn't in a {sy} group with that system's runs");
+            }
+        }
+        assert!(joined >= equipment.len(), "seed {seed}: the equipment joins its runs ({joined} joins for {} items)", equipment.len());
+    }
+}
+
+/// The value of property `name` in the CADaddy_MepSize set of product `product`.
+fn mep_size(f: &File, product: u64, name: &str) -> Option<P> {
+    let get = |n: u64| f.data.get(&n);
+    f.data.values().filter(|(t, _)| t == "IFCRELDEFINESBYPROPERTIES").find_map(|(_, a)| {
+        if !refs(&a[4]).contains(&product) {
+            return None;
+        }
+        let (t, set) = match &a[5] {
+            P::Ref(r) => get(*r)?,
+            _ => return None,
+        };
+        if t != "IFCPROPERTYSET" || set[2] != P::Str("CADaddy_MepSize".into()) {
+            return None;
+        }
+        refs(&set[4]).into_iter().filter_map(get).find(|(_, v)| v[0] == P::Str(name.into())).map(|(_, v)| v[2].clone())
+    })
+}
+
+fn measure(p: Option<P>) -> Option<f64> {
+    match p? {
+        P::Typed(t, v) if t == "IFCPOSITIVELENGTHMEASURE" => match *v {
+            P::Real(r) => Some(r),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[test]
+fn duct_fittings_export_one_each_and_duct_sizes_are_properties() {
+    hooks();
+    let mut s = Session::new();
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 14, "ceiling_ft": 9, "region": [-1000, -1000, 3000, 3000], "base": [0, 0]}],
+            "mep": {
+                "systems": [
+                    {"name": "M-DUCT-SUPP", "layer": "M-DUCT-SUPP", "kind": "duct", "size_in": [24, 12], "bottom_ft": 10},
+                    {"name": "M-DUCT-RND", "layer": "M-DUCT-RND", "kind": "duct", "size_in": [10, 0], "bottom_ft": 10}
+                ],
+                "runs": [
+                    // An elbow, a drop from 10' to 8', another elbow.
+                    {"system": "M-DUCT-SUPP", "level": "Level 1", "points": [[0, 0], [240, 0], [240, 240], [480, 240], [480, 480]], "size_in": [24, 12], "bottoms_ft": [10, 10, 8, 8]},
+                    {"system": "M-DUCT-RND", "level": "Level 1", "points": [[0, 600], [480, 600]], "size_in": [10, 0], "bottoms_ft": [10]}
+                ],
+                "terminals": [{"system": "M-DUCT-RND", "level": "Level 1", "at": [240, 700], "size_in": [24, 24], "bottom_ft": 9, "terminal_kind": "diffuser"}]
+            }
+        }}),
+    )
+    .unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let text = export(&mut s, "Sample Ducts.ifc");
+    let p = problems(&text);
+    assert!(p.is_empty(), "{}", p.join("\n"));
+    let f = read_step(&text).unwrap();
+    let of = |t: &str| f.data.iter().filter(|(_, (n, _))| n == t).map(|(k, (_, a))| (*k, a.clone())).collect::<Vec<_>>();
+    // One IfcDuctFitting per fitting: two bends and the drop (user defined, ObjectType DROP).
+    let fittings = of("IFCDUCTFITTING");
+    assert_eq!(fittings.len(), 3, "{fittings:?}");
+    let pre = |a: &Vec<P>| match a.get(8) {
+        Some(P::Enum(e)) => e.clone(),
+        _ => String::new(),
+    };
+    assert_eq!(fittings.iter().filter(|(_, a)| pre(a) == "BEND").count(), 2);
+    let drop: Vec<_> = fittings.iter().filter(|(_, a)| pre(a) == "USERDEFINED").collect();
+    assert_eq!(drop.len(), 1);
+    assert_eq!(drop[0].1[4], P::Str("DROP".into()), "the drop's ObjectType");
+    // The 24x12 segment: width 24" and height 12" in the export's length unit (metres).
+    let segs = of("IFCDUCTSEGMENT");
+    assert_eq!(segs.len(), 2);
+    let rect = segs.iter().find(|(k, _)| mep_size(&f, *k, "NominalWidth").is_some()).expect("the rectangular segment");
+    let w = measure(mep_size(&f, rect.0, "NominalWidth")).unwrap();
+    let h = measure(mep_size(&f, rect.0, "NominalHeight")).unwrap();
+    assert!((w - 24.0 * 0.0254).abs() < 1e-6 && (h - 12.0 * 0.0254).abs() < 1e-6, "{w} {h}");
+    assert!((w / 0.0254 - 24.0).abs() < 1e-4 && (h / 0.0254 - 12.0).abs() < 1e-4, "24 and 12 inches");
+    assert_eq!(mep_size(&f, rect.0, "Size"), Some(P::Typed("IFCLABEL".into(), Box::new(P::Str("24\"x12\"".into())))));
+    // The round segment: its diameter.
+    let round = segs.iter().find(|(k, _)| *k != rect.0).unwrap();
+    let d = measure(mep_size(&f, round.0, "NominalDiameter")).unwrap();
+    assert!((d - 10.0 * 0.0254).abs() < 1e-6, "{d}");
+    // Fittings and the terminal carry their sizes too.
+    for (k, _) in &fittings {
+        let w = measure(mep_size(&f, *k, "NominalWidth")).unwrap();
+        assert!((w - 24.0 * 0.0254).abs() < 1e-6, "fitting #{k}: {w}");
+    }
+    let terminal = of("IFCAIRTERMINAL");
+    assert_eq!(terminal.len(), 1);
+    assert!((measure(mep_size(&f, terminal[0].0, "NominalWidth")).unwrap() - 24.0 * 0.0254).abs() < 1e-6);
 }

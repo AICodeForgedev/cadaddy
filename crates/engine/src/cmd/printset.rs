@@ -1,488 +1,51 @@
 //! Print-set project commands: open a folder of sheets as a project, run the classification
-//! pipeline, show the dashboard, and re-import revised sets.
+//! and stage pipeline, show the dashboard, and re-import revised sets.
 //!
-//! The project state is a JSON file (`*.printset.json`) stored alongside the sheet files.
-//! The heavy recognition pipeline (MEP readers, height assignment, clash detection) runs in
-//! the `cadaddy-mepfix` crate's `printset` module; these engine commands manage the project
-//! file, run the classify stage (which only needs the DXF reader from `cadaddy-dxf`), and
-//! present the dashboard.
+//! Delegates to [`cadaddy_mepfix::printset`] for all project operations (create, classify,
+//! reimport, dashboard). Project state is owned by the [`Session`] (not a process-global static),
+//! so two sessions can each have their own project open.
 //!
 //! Commands:
 //! - `printset.open`: create or load a project from a folder of sheets.
 //! - `printset.classify`: classify sheets by discipline, type, level, scale.
+//! - `printset.run`: run recognition stages on the project's sheets.
 //! - `printset.dashboard`: show what has been modelled, confidence, gaps, RFIs.
 //! - `printset.sheets`: list the project's sheets with their classification.
 //! - `printset.reimport`: re-import a revised set, only reprocessing changed sheets.
 //! - `printset.save`: save the project state to disk.
+//! - `printset.keep`: keep the whole job (print set, drawing with its spec, model and job state)
+//!   in the print folder's `.cadaddy` folder, and note it as the last print set.
+//! - `printset.resume`: open a kept job again (a folder's, else the last one kept): a new
+//!   session picks up where the last one stopped.
+//! - `printset.links`: the sheet map: callouts and references resolved, enlarged plans
+//!   registered on their overall plans, match lines, detail facts.
 
-use serde::{Deserialize, Serialize};
+use cadaddy_mepfix::printlinks::{self, LinkPage, SetSheet, SheetLinks};
+use cadaddy_mepfix::printset::{self as mep_printset, PrintSetProject};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
-use super::{CommandSpec, always, str_param};
+use super::{CommandSpec, always, bool_or, str_param};
 use crate::{EngineError, Result, Session};
 
-/// Maximum sheets in a single project (hostile input guard).
-const MAX_SHEETS: usize = 2000;
+// ─── Per-session project access ─────────────────────────────────────────────
 
-/// Maximum file size for a single sheet, bytes.
-const MAX_FILE_BYTES: u64 = 500_000_000;
-
-// ─── Project model (self-contained, serialized as JSON) ──────────────────────
-
-const SCHEMA: &str = "cadaddy-printset/1";
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-struct PrintSetProject {
-    schema: String,
-    name: String,
-    source_dir: String,
-    sheets: Vec<SheetEntry>,
-    stages: Vec<StageRecord>,
-    revision: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    revisions: Vec<RevisionRecord>,
-    dashboard: Dashboard,
+fn get_project(s: &Session) -> Result<&PrintSetProject> {
+    s.printset_project.as_deref().ok_or_else(|| EngineError::Other("no print-set project open; use printset.open first".into()))
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-struct SheetEntry {
-    number: String,
-    title: String,
-    file: String,
-    discipline: String,
-    sheet_type: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    level: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    scale_text: Option<String>,
-    scale: f64,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    stage_results: BTreeMap<String, SheetStageResult>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    content_hash: String,
-    #[serde(default)]
-    dirty: bool,
+fn get_project_mut(s: &mut Session) -> Result<&mut PrintSetProject> {
+    s.printset_project.as_deref_mut().ok_or_else(|| EngineError::Other("no print-set project open; use printset.open first".into()))
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-struct SheetStageResult {
-    stage: String,
-    #[serde(default)]
-    status: String,
-    items_found: usize,
-    confidence: f64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    findings: Vec<Finding>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
+/// Access the current printset project from other modules (readers).
+pub(crate) fn get_project_handle(s: &Session) -> Result<PrintSetProject> {
+    get_project(s).cloned()
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-struct Finding {
-    kind: String,
-    description: String,
-    severity: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    at_ft: Option<[f64; 2]>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    elements: Vec<String>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-struct StageRecord {
-    stage: String,
-    status: String,
-    sheets_processed: usize,
-    sheets_total: usize,
-    items_found: usize,
-    findings: usize,
-    elapsed_ms: u64,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-struct Dashboard {
-    total_sheets: usize,
-    classified_sheets: usize,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    levels: Vec<LevelSummary>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    disciplines: Vec<DisciplineSummary>,
-    total_items: usize,
-    mean_confidence: f64,
-    open_gaps: usize,
-    open_rfis: usize,
-    total_clashes: usize,
-    stages_completed: usize,
-    stages_total: usize,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-struct LevelSummary {
-    level: String,
-    sheets: usize,
-    items: usize,
-    confidence: f64,
-    gaps: usize,
-    rfis: usize,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-struct DisciplineSummary {
-    discipline: String,
-    sheets: usize,
-    items: usize,
-    confidence: f64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    stages_done: Vec<String>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-struct RevisionRecord {
-    revision: String,
-    label: String,
-    sheets_total: usize,
-    sheets_changed: usize,
-    sheets_added: usize,
-    sheets_removed: usize,
-}
-
-// ─── Global project state ────────────────────────────────────────────────────
-
-static PROJECT: std::sync::Mutex<Option<PrintSetProject>> = std::sync::Mutex::new(None);
-
-fn get_project() -> Result<PrintSetProject> {
-    PROJECT
-        .lock()
-        .map_err(|_| EngineError::Other("project lock poisoned".into()))?
-        .clone()
-        .ok_or_else(|| EngineError::Other("no print-set project open; use printset.open first".into()))
-}
-
-fn set_project(p: PrintSetProject) -> Result<()> {
-    *PROJECT.lock().map_err(|_| EngineError::Other("project lock poisoned".into()))? = Some(p);
-    Ok(())
-}
-
-// ─── Classification helpers ──────────────────────────────────────────────────
-
-fn infer_discipline(number: &str) -> String {
-    let up = number.to_ascii_uppercase();
-    for &(prefix, code) in
-        &[("FP-", "FP"), ("FA-", "FA"), ("M-", "M"), ("P-", "P"), ("S-", "S"), ("A-", "A"), ("G-", "G"), ("E-", "E"), ("T-", "T"), ("C-", "C")]
-    {
-        if up.starts_with(prefix) {
-            return code.into();
-        }
-    }
-    "unknown".into()
-}
-
-fn classify_sheet_type(number: &str, title: &str) -> String {
-    let up = title.to_ascii_uppercase();
-    if up.contains("COVER") || up.contains("INDEX") {
-        return "cover".into();
-    }
-    if up.contains("SCHEDULE") {
-        return "schedule".into();
-    }
-    if up.contains("DETAIL") {
-        return "detail".into();
-    }
-    if up.contains("SECTION") {
-        return "section".into();
-    }
-    if up.contains("ELEVATION") {
-        return "elevation".into();
-    }
-    if up.contains("DIAGRAM") || up.contains("RISER") {
-        return "diagram".into();
-    }
-    if up.contains("ENLARGED") {
-        return "enlarged_plan".into();
-    }
-    if up.contains("REFLECTED CEILING") || up.contains("RCP") {
-        return "rcp".into();
-    }
-    if up.contains("PLAN") {
-        return "plan".into();
-    }
-    let num_part = number.split('-').next_back().unwrap_or("");
-    if let Ok(n) = num_part.parse::<u32>() {
-        if (100..500).contains(&n) {
-            return "plan".into();
-        }
-        if (600..700).contains(&n) {
-            return "schedule".into();
-        }
-    }
-    "unknown".into()
-}
-
-fn infer_level(title: &str) -> String {
-    let up = title.to_ascii_uppercase();
-    for prefix in &["LEVEL ", "FLOOR "] {
-        if let Some(pos) = up.find(prefix) {
-            let after = &up[pos + prefix.len()..];
-            let code: String = after.chars().take_while(|c| c.is_alphanumeric()).collect();
-            if !code.is_empty() {
-                return code;
-            }
-        }
-    }
-    if up.contains("ROOF") {
-        return "R".into();
-    }
-    if up.contains("SITE") {
-        return "SITE".into();
-    }
-    String::new()
-}
-
-fn content_hash(data: &[u8]) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    data.hash(&mut h);
-    format!("{:016x}", h.finish())
-}
-
-fn file_hash(path: &Path) -> std::result::Result<String, String> {
-    let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(content_hash(&data))
-}
-
-// ─── Sheet number parser from filename ───────────────────────────────────────
-
-/// Try to extract a sheet number from a filename like "M-101 Level 1 Mech Plan.dxf".
-fn number_from_filename(filename: &str) -> String {
-    let stem = filename.rsplit('.').next_back().unwrap_or(filename);
-    // Try to match a sheet number pattern at the start: "M-101", "FP-201", etc.
-    let up = stem.to_ascii_uppercase();
-    for prefix in &["FP-", "FA-", "M-", "P-", "S-", "A-", "G-", "E-", "T-", "C-"] {
-        if let Some(rest) = up.strip_prefix(prefix) {
-            // Take the number part.
-            let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            if !num.is_empty() {
-                return format!("{}{num}", prefix);
-            }
-        }
-    }
-    // Fall back to the whole stem.
-    stem.to_string()
-}
-
-/// Try to extract a title from a filename like "M-101 Level 1 Mech Plan.dxf".
-fn title_from_filename(filename: &str) -> String {
-    let stem = filename.rsplit('.').next_back().unwrap_or(filename);
-    // Strip the leading number pattern.
-    let up = stem.to_ascii_uppercase();
-    for prefix in &["FP-", "FA-", "M-", "P-", "S-", "A-", "G-", "E-", "T-", "C-"] {
-        if let Some(rest) = up.strip_prefix(prefix) {
-            let after_num: String = rest.chars().skip_while(|c| c.is_ascii_digit()).collect();
-            let trimmed = after_num.trim_start_matches([' ', '-', '_']);
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
-            }
-        }
-    }
-    String::new()
-}
-
-// ─── Project operations ──────────────────────────────────────────────────────
-
-fn discover_sheets(dir: &Path) -> std::result::Result<Vec<(String, PathBuf)>, String> {
-    if !dir.is_dir() {
-        return Err(format!("{} is not a directory", dir.display()));
-    }
-    let mut files = Vec::new();
-    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
-        if ext == "dxf" || ext == "pdf" || ext == "dwg" {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-            files.push((name, path));
-        }
-        if files.len() >= MAX_SHEETS {
-            break;
-        }
-    }
-    files.sort_by(|(a, _), (b, _)| a.cmp(b));
-    Ok(files)
-}
-
-fn create_project(name: &str, dir: &Path) -> std::result::Result<PrintSetProject, String> {
-    let files = discover_sheets(dir)?;
-    if files.is_empty() {
-        return Err(format!("no drawing files found in {}", dir.display()));
-    }
-    let mut sheets = Vec::new();
-    for (filename, path) in &files {
-        let meta = path.metadata().map_err(|e| format!("{filename}: {e}"))?;
-        if meta.len() > MAX_FILE_BYTES {
-            continue;
-        }
-        let hash = file_hash(path).unwrap_or_default();
-        sheets.push(SheetEntry { file: filename.clone(), content_hash: hash, dirty: true, ..SheetEntry::default() });
-    }
-    let n = sheets.len();
-    Ok(PrintSetProject {
-        schema: SCHEMA.into(),
-        name: name.into(),
-        source_dir: dir.display().to_string(),
-        sheets,
-        revision: "initial".into(),
-        dashboard: Dashboard { total_sheets: n, stages_total: 9, ..Dashboard::default() },
-        ..PrintSetProject::default()
-    })
-}
-
-fn update_dashboard(project: &mut PrintSetProject) {
-    let mut d = Dashboard { total_sheets: project.sheets.len(), stages_total: 9, ..Dashboard::default() };
-    let mut levels: BTreeMap<String, LevelSummary> = BTreeMap::new();
-    let mut disciplines: BTreeMap<String, DisciplineSummary> = BTreeMap::new();
-    let mut total_confidence = 0.0f64;
-    let mut confidence_count = 0usize;
-
-    for sheet in &project.sheets {
-        if sheet.stage_results.get("classify").is_some_and(|r| r.status == "completed") {
-            d.classified_sheets += 1;
-        }
-        if !sheet.level.is_empty() {
-            let ls = levels.entry(sheet.level.clone()).or_insert_with(|| LevelSummary { level: sheet.level.clone(), ..LevelSummary::default() });
-            ls.sheets += 1;
-        }
-        if !sheet.discipline.is_empty() && sheet.discipline != "unknown" {
-            let ds = disciplines
-                .entry(sheet.discipline.clone())
-                .or_insert_with(|| DisciplineSummary { discipline: sheet.discipline.clone(), ..DisciplineSummary::default() });
-            ds.sheets += 1;
-        }
-        for (stage_name, result) in &sheet.stage_results {
-            if result.status == "completed" {
-                d.total_items += result.items_found;
-                total_confidence += result.confidence;
-                confidence_count += 1;
-                if !sheet.level.is_empty()
-                    && let Some(ls) = levels.get_mut(&sheet.level)
-                {
-                    ls.items += result.items_found;
-                }
-                if !sheet.discipline.is_empty()
-                    && let Some(ds) = disciplines.get_mut(&sheet.discipline)
-                {
-                    ds.items += result.items_found;
-                    if !ds.stages_done.contains(stage_name) {
-                        ds.stages_done.push(stage_name.clone());
-                    }
-                }
-                for f in &result.findings {
-                    match f.kind.as_str() {
-                        "gap" | "guessed" | "missing_tag" | "unreadable" => {
-                            d.open_gaps += 1;
-                            if let Some(ls) = levels.get_mut(&sheet.level) {
-                                ls.gaps += 1;
-                            }
-                        }
-                        "rfi" | "conflict" => {
-                            d.open_rfis += 1;
-                            if let Some(ls) = levels.get_mut(&sheet.level) {
-                                ls.rfis += 1;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-    d.mean_confidence = if confidence_count > 0 { total_confidence / confidence_count as f64 } else { 0.0 };
-    d.levels = levels.into_values().collect();
-    d.disciplines = disciplines.into_values().collect();
-    d.stages_completed = project.stages.iter().filter(|s| s.status == "completed").count();
-    project.dashboard = d;
-}
-
-fn compute_delta(project: &PrintSetProject, new_files: &[(String, PathBuf)]) -> std::result::Result<RevisionDelta, String> {
-    let current: BTreeMap<&str, &SheetEntry> = project.sheets.iter().map(|s| (s.file.as_str(), s)).collect();
-    let mut delta = RevisionDelta::default();
-    for (name, path) in new_files {
-        let new_hash = file_hash(path)?;
-        if let Some(existing) = current.get(name.as_str()) {
-            if existing.content_hash == new_hash {
-                delta.unchanged.push(name.clone());
-            } else {
-                delta.changed.push(name.clone());
-            }
-        } else {
-            delta.added.push(name.clone());
-        }
-    }
-    let new_names: std::collections::HashSet<&str> = new_files.iter().map(|(n, _)| n.as_str()).collect();
-    for sheet in &project.sheets {
-        if !new_names.contains(sheet.file.as_str()) {
-            delta.removed.push(sheet.file.clone());
-        }
-    }
-    Ok(delta)
-}
-
-#[derive(Clone, Debug, Default)]
-struct RevisionDelta {
-    added: Vec<String>,
-    changed: Vec<String>,
-    removed: Vec<String>,
-    unchanged: Vec<String>,
-}
-
-fn apply_reimport(project: &mut PrintSetProject, new_files: &[(String, PathBuf)], label: &str) -> std::result::Result<RevisionDelta, String> {
-    let delta = compute_delta(project, new_files)?;
-    project.revisions.push(RevisionRecord {
-        revision: label.into(),
-        label: label.into(),
-        sheets_total: new_files.len(),
-        sheets_changed: delta.changed.len(),
-        sheets_added: delta.added.len(),
-        sheets_removed: delta.removed.len(),
-    });
-    let removed_set: std::collections::HashSet<&str> = delta.removed.iter().map(|s| s.as_str()).collect();
-    project.sheets.retain(|s| !removed_set.contains(s.file.as_str()));
-    let changed_set: std::collections::HashSet<&str> = delta.changed.iter().map(|s| s.as_str()).collect();
-    for sheet in &mut project.sheets {
-        if changed_set.contains(sheet.file.as_str()) {
-            sheet.dirty = true;
-            sheet.stage_results.clear();
-            if let Some((_, path)) = new_files.iter().find(|(n, _)| n == &sheet.file) {
-                sheet.content_hash = file_hash(path).unwrap_or_default();
-            }
-        }
-    }
-    for name in &delta.added {
-        if let Some((_, path)) = new_files.iter().find(|(n, _)| n == name) {
-            let hash = file_hash(path).unwrap_or_default();
-            project.sheets.push(SheetEntry { file: name.clone(), content_hash: hash, dirty: true, ..SheetEntry::default() });
-        }
-    }
-    if !delta.changed.is_empty() || !delta.added.is_empty() {
-        project.stages.retain(|s| s.stage == "classify");
-    }
-    project.revision = label.into();
-    update_dashboard(project);
-    Ok(delta)
-}
-
-fn save_project(project: &PrintSetProject, path: &Path) -> std::result::Result<(), String> {
-    let json = serde_json::to_vec_pretty(project).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-fn load_project(path: &Path) -> std::result::Result<PrintSetProject, String> {
-    let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    serde_json::from_slice(&data).map_err(|e| format!("{}: {e}", path.display()))
+fn set_project(s: &mut Session, p: PrintSetProject) {
+    s.printset_project = Some(Box::new(p));
 }
 
 // ─── Command specs ───────────────────────────────────────────────────────────
@@ -491,42 +54,69 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("printset.open", "Open Print Set", run_open)
             .files()
-            .params("{path: folder or .printset.json, name?} → {name, sheets, revision, dashboard}")
+            .params("{path: folder, one PDF (its pages only) or .printset.json, name?} → {name, sheets, revision, dashboard}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.classify", "Classify Print Set", run_classify)
             .files()
-            .params("{} → {classified, total, elapsed_ms}")
+            .params("{} → {classified: pages read, total: sheets in the index, pages, elapsed_ms, sheets: [{number, title, discipline, type, level, levels, level_source, sources: [file#page], superseded?, issued?}], levels: [{name, sheets, elevation_ft?, height_ft?}], unidentified, plans_without_level}: one entry per real sheet (copies in several files merged by number, the newer revision date current), from each page's title block")
+            .enabled(always)
+            .noundo(),
+        CommandSpec::new("printset.run", "Run Print Set Stages", run_stages)
+            .files()
+            .params("{stages?: [name], resume?: bool, force?: bool (run even when the import check failed)} → {stages_run, total_items, elapsed_ms}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.dashboard", "Print Set Dashboard", run_dashboard).files().params("{} → {dashboard}").enabled(always).noundo(),
         CommandSpec::new("printset.sheets", "Print Set Sheets", run_sheets)
             .files()
-            .params("{discipline?, level?} → {sheets, total}")
+            .params("{discipline?, level?, current?: bool (leave out sheets a later copy supersedes)} → {sheets: [{number, title, discipline, type, level, levels, scale, scale_factor, file, page, dirty, superseded_by, stages}], total}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.reimport", "Re-import Revised Set", run_reimport)
             .files()
-            .params("{path: folder, revision?: label} → {delta, sheets}")
+            .params("{path: folder, revision?: label, full_set?: bool} → {delta, sheets}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.save", "Save Print Set", run_save).files().params("{path?} → {saved}").enabled(always).noundo(),
+        CommandSpec::new("printset.keep", "Keep Print Set Job", run_keep)
+            .files()
+            .params("{} → {kept: folder, sheets}: the print set and the drawing (its building spec, model, review and job state) kept in the print folder's .cadaddy folder; the next session's printset.resume {} opens it")
+            .enabled(always)
+            .noundo(),
+        CommandSpec::new("printset.resume", "Resume Print Set Job", run_resume)
+            .files()
+            .params("{path?: print folder (default: the last one kept), auto?: bool (only when no print set is open and the drawing is empty)} → {resumed, name?, sheets?, folder?, why?}: the kept print set and its drawing opened again")
+            .enabled(always)
+            .noundo(),
+        CommandSpec::new("printset.links", "Link Print Set", run_links)
+            .files()
+            .params("{pdfs?: folder (else the open print set), details?: bool (default true: also read the detail sheets the callouts name)} → {sheets: [{number, title, discipline, type, level}], pages_read, callouts: [{kind, detail?, target_sheet, on_sheet, resolved, detail_found?, at, text?}], resolved, resolved_pct, enlarged: [{on_sheet (the enlarged sheet), target_sheet (the overall plan), sheet, overall_sheet, detail, title, level, registered, method? (grids | tags | boundary | lines), matched_tags?, residual?, line_coverage?, rotation_deg?, scale?, boundary?, devices, devices_by_type, overall_ignored}], enlarged_registered, match_lines: [{sheets, level, stitched, offset?}], levels: [{level, sheets, stitched, devices}], facts: [{on_sheet, target_sheet, detail, kind, value_ft, applied_to}], double_counted, unresolved: [{on_sheet, kind, target_sheet, detail?, at}], key_plans, errors?}: callout bubbles, section and elevation marks, enlarged-plan boundaries, match lines and written references (SEE SHEET, SEE DETAIL 3/E-501, REFER TO ARCHITECTURAL) read off every plan page on any layer; each enlarged plan is the authority inside its boundary on the overall plan (double_counted: devices counted from both sheets)")
+            .enabled(always)
+            .noundo(),
     ]
 }
 
 // ─── printset.open ───────────────────────────────────────────────────────────
 
-fn run_open(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     let path_str = str_param(p, "path").ok_or_else(|| EngineError::Other("path is required".into()))?;
     let path = PathBuf::from(path_str);
 
     let project = if path.extension().and_then(|e| e.to_str()) == Some("json") && path.is_file() {
-        load_project(&path).map_err(EngineError::Other)?
+        mep_printset::load_project(&path).map_err(EngineError::Other)?
     } else if path.is_dir() {
         let name = str_param(p, "name").unwrap_or_else(|| path.file_name().and_then(|n| n.to_str()).unwrap_or("Print Set"));
-        create_project(name, &path).map_err(EngineError::Other)?
+        mep_printset::create_project(name, &path).map_err(EngineError::Other)?
+    } else if path.is_file() && path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+        // One PDF (often a merged set): a project of that file alone, not of its whole folder.
+        let file = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("Print Set");
+        let name = str_param(p, "name").unwrap_or(stem);
+        mep_printset::create_project_from_files(name, &dir, &[(file, path.clone())])
     } else {
-        return Err(EngineError::Other(format!("{path_str} is not a folder or .json project file")));
+        return Err(EngineError::Other(format!("{path_str} is not a folder, a PDF or a .json project file")));
     };
 
     let result = json!({
@@ -535,81 +125,90 @@ fn run_open(_s: &mut Session, p: &Value) -> Result<Value> {
         "revision": project.revision,
         "dashboard": project.dashboard,
     });
-    set_project(project)?;
+    set_project(s, project);
     Ok(result)
 }
 
 // ─── printset.classify ───────────────────────────────────────────────────────
 
-fn run_classify(_s: &mut Session, _p: &Value) -> Result<Value> {
-    let mut project = get_project()?;
-    let start = web_time::Instant::now();
-    let total = project.sheets.len();
-    let mut classified = 0usize;
+/// Classify reads every sheet's own print (each page of a merged set): the title block's number,
+/// title and discipline, never the file name. The result is the set's sheet index.
+fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
+    let project = get_project_mut(s)?;
+    let cancel = AtomicBool::new(false);
+    let mut noop = |_: &mep_printset::Progress| {};
+    let dir = PathBuf::from(&project.source_dir);
+    let rec = if !project.source_dir.is_empty() && dir.is_dir() {
+        let loader = mep_printset::PrintLoader::new(&dir);
+        mep_printset::run_classify_prints(project, &|e| loader.load(e), &cancel, &mut noop)
+    } else {
+        // A project made without files (from a saved truth): classify what it already holds.
+        mep_printset::run_classify(project, None, &cancel, &mut noop)
+    };
+    let index = mep_printset::sheet_index(project);
+    Ok(json!({
+        "classified": rec.sheets_processed,
+        "total": index.sheets.len(),
+        "pages": rec.sheets_total,
+        "elapsed_ms": rec.elapsed_ms,
+        "sheets": index.sheets,
+        "levels": index.levels,
+        "unidentified": index.unidentified,
+        "plans_without_level": index.plans_without_level,
+        "level_warnings": index.level_warnings,
+    }))
+}
 
-    for i in 0..total {
-        let entry = match project.sheets.get(i) {
-            Some(e) => e.clone(),
-            None => continue,
-        };
-        if !entry.dirty && !entry.number.is_empty() {
-            classified += 1;
-            continue;
-        }
+// ─── printset.run ────────────────────────────────────────────────────────────
 
-        // Classify from filename and any existing data.
-        if let Some(sheet) = project.sheets.get_mut(i) {
-            if sheet.number.is_empty() {
-                sheet.number = number_from_filename(&entry.file);
-            }
-            if sheet.title.is_empty() {
-                sheet.title = title_from_filename(&entry.file);
-            }
-            sheet.discipline = infer_discipline(&sheet.number);
-            sheet.sheet_type = classify_sheet_type(&sheet.number, &sheet.title);
-            sheet.level = infer_level(&sheet.title);
-            sheet.dirty = false;
-            let conf = if sheet.discipline != "unknown" && !sheet.title.is_empty() {
-                0.7
-            } else if sheet.discipline != "unknown" {
-                0.5
-            } else {
-                0.1
-            };
-            sheet.stage_results.insert(
-                "classify".into(),
-                SheetStageResult {
-                    stage: "classify".into(),
-                    status: "completed".into(),
-                    items_found: 1,
-                    confidence: conf,
-                    ..SheetStageResult::default()
-                },
-            );
-            classified += 1;
-        }
+fn run_stages(s: &mut Session, p: &Value) -> Result<Value> {
+    // Gate: refuse to run stages if the current drawing's import check failed, unless force.
+    let force = bool_or(p, "force", false);
+    if !force
+        && let Ok(d) = s.doc()
+        && !super::import_check::passes(d)
+    {
+        let fails = super::import_check::failed_checks(d);
+        let names: Vec<&str> = fails.iter().map(|(id, _)| id.as_str()).collect();
+        return Err(EngineError::Other(format!(
+            "printset.run: import check failed ({}); fix the import or pass `force: true` to override",
+            names.join(", ")
+        )));
     }
+    let resume = bool_or(p, "resume", false);
 
-    let elapsed_ms = start.elapsed().as_millis() as u64;
-    project.stages.push(StageRecord {
-        stage: "classify".into(),
-        status: if classified == total { "completed" } else { "partial" }.into(),
-        sheets_processed: classified,
-        sheets_total: total,
-        items_found: classified,
-        findings: 0,
-        elapsed_ms,
+    // Parse optional stage filter.
+    let stage_filter: Option<Vec<mep_printset::Stage>> = p.get("stages").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter().filter_map(|v| v.as_str()).filter_map(|name| mep_printset::Stage::all().iter().find(|s| s.name() == name).copied()).collect()
     });
-    update_dashboard(&mut project);
-    let result = json!({ "classified": classified, "total": total, "elapsed_ms": elapsed_ms });
-    set_project(project)?;
-    Ok(result)
+
+    let stages = stage_filter.as_deref().unwrap_or(&mep_printset::Stage::all()[1..]);
+    let project = get_project_mut(s)?;
+    let cancel = AtomicBool::new(false);
+    let mut noop = |_: &mep_printset::Progress| {};
+
+    let records = mep_printset::run_stages(project, stages, &mut mep_printset::null_stage_runner, &cancel, &mut noop, resume);
+
+    let total_items: usize = records.iter().map(|r| r.items_found).sum();
+    let elapsed_ms: u64 = records.iter().map(|r| r.elapsed_ms).sum();
+
+    Ok(json!({
+        "stages_run": records.len(),
+        "total_items": total_items,
+        "elapsed_ms": elapsed_ms,
+        "stages": records.iter().map(|r| json!({
+            "stage": r.stage,
+            "status": r.status,
+            "sheets_processed": r.sheets_processed,
+            "items_found": r.items_found,
+        })).collect::<Vec<_>>(),
+    }))
 }
 
 // ─── printset.dashboard ──────────────────────────────────────────────────────
 
-fn run_dashboard(_s: &mut Session, _p: &Value) -> Result<Value> {
-    let project = get_project()?;
+fn run_dashboard(s: &mut Session, _p: &Value) -> Result<Value> {
+    let project = get_project(s)?;
     Ok(json!({
         "name": project.name,
         "revision": project.revision,
@@ -620,22 +219,25 @@ fn run_dashboard(_s: &mut Session, _p: &Value) -> Result<Value> {
 
 // ─── printset.sheets ─────────────────────────────────────────────────────────
 
-fn run_sheets(_s: &mut Session, p: &Value) -> Result<Value> {
-    let project = get_project()?;
+fn run_sheets(s: &mut Session, p: &Value) -> Result<Value> {
+    let project = get_project(s)?;
     let filter_discipline = str_param(p, "discipline");
     let filter_level = str_param(p, "level");
+    let current = bool_or(p, "current", false);
 
     let sheets: Vec<Value> = project
         .sheets
         .iter()
-        .filter(|s| filter_discipline.is_none_or(|d| s.discipline == d))
-        .filter(|s| filter_level.is_none_or(|l| s.level == l))
-        .map(|s| {
+        .filter(|sh| filter_discipline.is_none_or(|d| sh.discipline == d))
+        .filter(|sh| filter_level.is_none_or(|l| sh.level == l))
+        .filter(|sh| !current || sh.superseded_by.is_empty())
+        .map(|sh| {
             json!({
-                "number": s.number, "title": s.title, "discipline": s.discipline,
-                "type": s.sheet_type, "level": s.level, "scale": s.scale_text,
-                "file": s.file, "dirty": s.dirty,
-                "stages": s.stage_results.keys().collect::<Vec<_>>(),
+                "number": sh.number, "title": sh.title, "discipline": sh.discipline,
+                "type": sh.sheet_type, "level": sh.level, "levels": sh.levels, "scale": sh.scale_text,
+                "scale_factor": sh.scale, "file": sh.file, "page": sh.page, "dirty": sh.dirty,
+                "superseded_by": sh.superseded_by,
+                "stages": sh.stage_results.keys().collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -645,33 +247,313 @@ fn run_sheets(_s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── printset.reimport ───────────────────────────────────────────────────────
 
-fn run_reimport(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_reimport(s: &mut Session, p: &Value) -> Result<Value> {
     let path_str = str_param(p, "path").ok_or_else(|| EngineError::Other("path is required".into()))?;
     let dir = PathBuf::from(path_str);
     if !dir.is_dir() {
         return Err(EngineError::Other(format!("{path_str} is not a directory")));
     }
     let label = str_param(p, "revision").unwrap_or("revised");
-    let files = discover_sheets(&dir).map_err(EngineError::Other)?;
-    let mut project = get_project()?;
-    let delta = apply_reimport(&mut project, &files, label).map_err(EngineError::Other)?;
+    let full_set = bool_or(p, "full_set", false);
+    let files = mep_printset::discover_sheets(&dir).map_err(EngineError::Other)?;
+    let project = get_project_mut(s)?;
+    let delta = mep_printset::apply_reimport(project, &files, label, full_set).map_err(EngineError::Other)?;
 
-    let result = json!({
+    Ok(json!({
         "delta": { "added": delta.added, "changed": delta.changed, "removed": delta.removed, "unchanged": delta.unchanged },
         "revision": label, "sheets": project.sheets.len(),
-    });
-    set_project(project)?;
-    Ok(result)
+    }))
 }
 
 // ─── printset.save ───────────────────────────────────────────────────────────
 
-fn run_save(_s: &mut Session, p: &Value) -> Result<Value> {
-    let project = get_project()?;
+fn run_save(s: &mut Session, p: &Value) -> Result<Value> {
+    let project = get_project(s)?;
     let path = str_param(p, "path").map(PathBuf::from).unwrap_or_else(|| {
         let dir = PathBuf::from(&project.source_dir);
         dir.join(format!("{}.printset.json", project.name.replace(' ', "_")))
     });
-    save_project(&project, &path).map_err(EngineError::Other)?;
+    // Sanitize: don't allow path separators in the name portion.
+    let name_part = path.file_name().and_then(|n| n.to_str()).unwrap_or("project.json");
+    if name_part.contains("..") {
+        return Err(EngineError::Other("path must not contain '..'".into()));
+    }
+    mep_printset::save_project(project, &path).map_err(EngineError::Other)?;
     Ok(json!({ "saved": path.display().to_string() }))
+}
+
+// ─── printset.keep / printset.resume ─────────────────────────────────────────
+
+/// The folder in a print folder where its job is kept (sheet discovery skips dot folders).
+const KEEP_DIR: &str = ".cadaddy";
+const KEEP_SET: &str = "printset.json";
+const KEEP_DRAWING: &str = "project.cdy";
+/// A kept drawing larger than this isn't read back (hostile files).
+const KEEP_MAX_BYTES: u64 = 2_000_000_000;
+
+/// Where the last print set kept is noted.
+fn pointer_file(s: &Session) -> Option<PathBuf> {
+    s.printset_pointer.clone().or_else(|| crate::control_auth::config_dir().map(|d| d.join("last-printset.txt")))
+}
+
+/// Written aside, then moved over the last copy: a crash mid-write keeps the last one.
+fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut part = path.as_os_str().to_owned();
+    part.push(".part");
+    let part = PathBuf::from(part);
+    std::fs::write(&part, bytes)?;
+    std::fs::rename(&part, path)
+}
+
+fn run_keep(s: &mut Session, _p: &Value) -> Result<Value> {
+    let project = get_project(s)?;
+    if project.source_dir.is_empty() {
+        return Err(EngineError::Other("this print set has no folder to keep its job in".into()));
+    }
+    let folder = PathBuf::from(&project.source_dir);
+    let dir = folder.join(KEEP_DIR);
+    let hooks = super::file::io().ok_or_else(|| EngineError::Other("no file writer is installed".into()))?;
+    let set = serde_json::to_vec(project).map_err(|e| EngineError::Other(e.to_string()))?;
+    let sheets = project.sheets.len();
+    let drawing = (hooks.write)(s.doc()?, KEEP_DRAWING).map_err(EngineError::Other)?;
+    let fail = |e: std::io::Error| EngineError::Other(format!("{}: {e}", dir.display()));
+    std::fs::create_dir_all(&dir).map_err(fail)?;
+    write_atomic(&dir.join(KEEP_DRAWING), &drawing).map_err(fail)?;
+    write_atomic(&dir.join(KEEP_SET), &set).map_err(fail)?;
+    // The pointer is a convenience: a settings folder that can't be written isn't an error.
+    if let Some(pointer) = pointer_file(s) {
+        if let Some(parent) = pointer.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = write_atomic(&pointer, folder.display().to_string().as_bytes());
+    }
+    Ok(json!({"kept": dir.display().to_string(), "sheets": sheets}))
+}
+
+/// Whether the active drawing holds nothing: no objects, building spec or agent state.
+fn drawing_is_empty(s: &Session) -> bool {
+    s.doc()
+        .is_ok_and(|d| d.model.is_empty() && d.building_spec.is_none() && d.agent.as_deref().is_none_or(|a| a.trim().is_empty() || a.trim() == "{}"))
+}
+
+fn run_resume(s: &mut Session, p: &Value) -> Result<Value> {
+    if bool_or(p, "auto", false) && (s.printset_project.is_some() || !drawing_is_empty(s)) {
+        return Ok(json!({"resumed": false, "why": "a print set or a drawing with work is open already"}));
+    }
+    let folder = match str_param(p, "path") {
+        Some(path) => PathBuf::from(path),
+        None => match pointer_file(s).and_then(|f| std::fs::read_to_string(f).ok()).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+            Some(last) => PathBuf::from(last),
+            None => {
+                return Ok(json!({"resumed": false, "why": "no job kept yet: open the prints with printset.open {path} (bim_job import {path})"}));
+            }
+        },
+    };
+    let dir = if folder.file_name().is_some_and(|n| n == KEEP_DIR) { folder.clone() } else { folder.join(KEEP_DIR) };
+    let (set_path, drawing_path) = (dir.join(KEEP_SET), dir.join(KEEP_DRAWING));
+    if !set_path.is_file() || !drawing_path.is_file() {
+        return Ok(json!({"resumed": false, "why": format!("no job is kept in {}", folder.display())}));
+    }
+    let hooks = super::file::io().ok_or_else(|| EngineError::Other("no file reader is installed".into()))?;
+    let fail = |e: String| EngineError::Other(format!("the kept job in {} can't be read: {e}", dir.display()));
+    if std::fs::metadata(&drawing_path).map_or(0, |m| m.len()) > KEEP_MAX_BYTES {
+        return Err(fail("the drawing is too large".into()));
+    }
+    let project = mep_printset::load_project(&set_path).map_err(fail)?;
+    let bytes = std::fs::read(&drawing_path).map_err(|e| fail(e.to_string()))?;
+    let drawing = (hooks.read)(&bytes, KEEP_DRAWING).map_err(fail)?;
+    let result = json!({"resumed": true, "name": project.name, "sheets": project.sheets.len(), "folder": project.source_dir});
+    // An empty drawing is replaced; one with work stays open beside the kept one.
+    if drawing_is_empty(s) && s.state().is_ok_and(|st| st.path.is_none()) {
+        *s.doc_mut()? = drawing;
+        if let Ok(st) = s.state_mut() {
+            st.path = Some(drawing_path.display().to_string());
+            st.title = project.name.clone();
+        }
+    } else {
+        s.open_drawing(drawing, &project.name, Some(drawing_path.display().to_string()));
+    }
+    set_project(s, project);
+    Ok(result)
+}
+
+// ─── printset.links ──────────────────────────────────────────────────────────
+
+/// Most plan pages `printset.links` reads.
+const MAX_LINK_PAGES: usize = 400;
+/// Most detail pages it reads for the facts their callouts point at.
+const MAX_DETAIL_PAGES: usize = 60;
+
+fn classified(p: &PrintSetProject) -> bool {
+    !p.sheets.is_empty() && p.sheets.iter().all(|e| !e.dirty)
+}
+
+fn same_folder(a: &str, b: &str) -> bool {
+    let canon = |x: &str| std::fs::canonicalize(x).unwrap_or_else(|_| PathBuf::from(x));
+    canon(a) == canon(b)
+}
+
+/// The set's sheets for the sheet map, from the print set's index.
+fn set_sheets(index: &mep_printset::SheetIndex) -> Vec<SetSheet> {
+    index
+        .sheets
+        .iter()
+        .map(|x| SetSheet {
+            number: x.number.clone(),
+            title: x.title.clone(),
+            discipline: x.discipline.clone(),
+            sheet_type: x.sheet_type.clone(),
+            level: x.level.clone(),
+        })
+        .collect()
+}
+
+/// `file#page` (or a one-sheet file) → the file and its page.
+fn source_page(src: &str) -> (String, u32) {
+    match src.rsplit_once('#') {
+        Some((f, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => (f.to_string(), n.parse().unwrap_or(1)),
+        _ => (src.to_string(), 1),
+    }
+}
+
+/// Read pages of the print set (in parallel, each page dropped once read) into link pages.
+fn read_link_pages(dir: &std::path::Path, want: &[(SetSheet, String)], errors: &mut Vec<String>) -> Result<Vec<LinkPage>> {
+    let hooks = super::file::io().ok_or_else(|| EngineError::Other("printset.links: file formats are not available in this build".into()))?;
+    let mut files: std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>> = std::collections::BTreeMap::new();
+    for (_, src) in want {
+        let (file, _) = source_page(src);
+        if files.contains_key(&file) || file.split(['/', '\\']).any(|part| part == "..") {
+            continue;
+        }
+        let path = dir.join(&file);
+        match crate::readfile::read(&path) {
+            Ok(b) => {
+                files.insert(file, std::sync::Arc::new(b));
+            }
+            Err(e) => errors.push(format!("{file}: {e}")),
+        }
+    }
+    let read_pdf = hooks.read_pdf;
+    let read_any = hooks.read;
+    let convert = |(sheet, src): &(SetSheet, String)| -> std::result::Result<LinkPage, String> {
+        let (file, page) = source_page(src);
+        let bytes = files.get(&file).ok_or_else(|| format!("{file}: not read"))?;
+        let d = if file.to_ascii_lowercase().ends_with(".pdf") {
+            let read_pdf = read_pdf.ok_or_else(|| "PDF import is not available in this build".to_string())?;
+            // As the job imports a sheet: no images, pattern fills merged.
+            read_pdf(bytes, &json!({"page": page.max(1), "images": false, "fills": "merge"}))?.0
+        } else {
+            read_any(bytes, &file)?
+        };
+        Ok(LinkPage { sheet: sheet.clone(), read: printlinks::read_page(&d, &sheet.number) })
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let results: Vec<std::result::Result<LinkPage, String>> = {
+        use rayon::prelude::*;
+        want.par_iter().map(convert).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let results: Vec<std::result::Result<LinkPage, String>> = want.iter().map(convert).collect();
+    let mut pages = Vec::with_capacity(results.len());
+    for (r, (sheet, _)) in results.into_iter().zip(want) {
+        match r {
+            Ok(pg) => pages.push(pg),
+            Err(e) => errors.push(format!("{}: {e}", sheet.number)),
+        }
+    }
+    Ok(pages)
+}
+
+/// The set's sheet map: the plan pages read (and the detail pages their callouts name), linked.
+pub(crate) fn sheet_links(s: &mut Session, pdfs: Option<&str>, details: bool) -> Result<(SheetLinks, Vec<String>)> {
+    match pdfs {
+        Some(folder) => {
+            let ready = s.printset_project.as_deref().is_some_and(|pr| classified(pr) && same_folder(&pr.source_dir, folder));
+            if !ready {
+                s.execute("printset.open", &json!({"path": folder}))?;
+                s.execute("printset.classify", &json!({}))?;
+            }
+        }
+        None => {
+            if !classified(get_project(s)?) {
+                s.execute("printset.classify", &json!({}))?;
+            }
+        }
+    }
+    let project = get_project(s)?;
+    let dir = PathBuf::from(&project.source_dir);
+    let index = mep_printset::sheet_index(project);
+    let sheets = set_sheets(&index);
+    let plan_like = |x: &mep_printset::IndexSheet| {
+        matches!(x.sheet_type.as_str(), "plan" | "enlarged_plan" | "rcp") || x.title.to_ascii_uppercase().contains("ENLARGED")
+    };
+    let want: Vec<(SetSheet, String)> = index
+        .sheets
+        .iter()
+        .zip(&sheets)
+        .filter(|(x, _)| plan_like(x))
+        .filter_map(|(x, sh)| x.sources.first().map(|src| (sh.clone(), src.clone())))
+        .take(MAX_LINK_PAGES)
+        .collect();
+    let mut errors = Vec::new();
+    let mut pages = read_link_pages(&dir, &want, &mut errors)?;
+    if details {
+        // The detail sheets the plans' callouts name, for the facts they print.
+        let read: std::collections::BTreeSet<String> = pages.iter().map(|p| printlinks::norm_sheet(&p.sheet.number)).collect();
+        let mut more: Vec<(SetSheet, String)> = Vec::new();
+        for c in pages.iter().flat_map(|p| p.read.callouts.iter()) {
+            if c.detail.is_empty() || !matches!(c.kind.as_str(), "detail_bubble" | "detail_ref" | "section_mark" | "elevation_tag") {
+                continue;
+            }
+            let k = printlinks::norm_sheet(&c.target_sheet);
+            if read.contains(&k) || more.iter().any(|(sh, _)| printlinks::norm_sheet(&sh.number) == k) || more.len() >= MAX_DETAIL_PAGES {
+                continue;
+            }
+            if let Some((x, sh)) = index.sheets.iter().zip(&sheets).find(|(_, sh)| printlinks::norm_sheet(&sh.number) == k)
+                && let Some(src) = x.sources.first()
+            {
+                more.push((sh.clone(), src.clone()));
+            }
+        }
+        pages.extend(read_link_pages(&dir, &more, &mut errors)?);
+    }
+    Ok((printlinks::link_set(&sheets, &pages), errors))
+}
+
+/// The sheet map in short, for the job's and `bim.from_pdf`'s answers.
+pub(crate) fn links_summary(l: &SheetLinks) -> Value {
+    json!({
+        "sheets": l.sheets.len(),
+        "pages_read": l.pages_read,
+        "callouts": l.callouts.len(),
+        "resolved": l.resolved,
+        "resolved_pct": l.resolved_pct,
+        "enlarged": l.enlarged.iter().map(enlarged_value).collect::<Vec<_>>(),
+        "enlarged_registered": l.enlarged_registered,
+        "match_lines": l.match_lines,
+        "double_counted": l.double_counted,
+        "unresolved": l.unresolved.iter().take(20).collect::<Vec<_>>(),
+        "unresolved_total": l.unresolved.len(),
+    })
+}
+
+/// An enlarged plan with its sheets named outright too: `sheet` (the same as `on_sheet`, the
+/// enlarged sheet) and `overall_sheet` (the same as `target_sheet`, the plan it registers on).
+fn enlarged_value(e: &printlinks::Enlarged) -> Value {
+    let mut v = serde_json::to_value(e).unwrap_or(Value::Null);
+    if let Some(o) = v.as_object_mut() {
+        o.insert("sheet".into(), json!(e.sheet));
+        o.insert("overall_sheet".into(), json!(e.overall_sheet));
+    }
+    v
+}
+
+fn run_links(s: &mut Session, p: &Value) -> Result<Value> {
+    let (links, errors) = sheet_links(s, str_param(p, "pdfs"), bool_or(p, "details", true))?;
+    let mut out = serde_json::to_value(&links).map_err(|e| EngineError::Other(e.to_string()))?;
+    out["enlarged"] = Value::Array(links.enlarged.iter().map(enlarged_value).collect());
+    if !errors.is_empty() {
+        out["errors"] = json!(errors);
+    }
+    Ok(out)
 }

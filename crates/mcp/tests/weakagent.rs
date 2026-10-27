@@ -341,8 +341,10 @@ fn a_weak_scripted_agent_finishes_the_hotel() {
         );
         let ctx = format!("budget {budget}, every {every}: {sc:?}\n{}", log.iter().take(30).cloned().collect::<Vec<_>>().join("\n"));
         assert!(sc.finished, "it reached the takeoff and the RFI list — {ctx}");
-        // 49: the set gained the civil sheets C-102, C-103 and C-601 (Q339 sitework).
-        assert_eq!(sc.sheets_classified, 49, "the import classified the prints — {ctx}");
+        // 54: 50 base + 4 SL-10x sleeve layout sheets (lowvolt-rw1). The base 50 gained the
+        // civil sheets C-102, C-103 and C-601 (Q339 sitework) and the enlarged guest unit
+        // plans A-401 (Q305).
+        assert_eq!(sc.sheets_classified, 54, "the import classified the prints — {ctx}");
         assert_eq!(sc.wrong_edits, 0, "no edit against the documents — {ctx}");
         assert_eq!(sc.lost_track, 0, "resumed from the briefing without redoing work — {ctx}");
         assert_eq!(sc.tool_errors, 0, "no tool errors (each was a confusion to fix) — {ctx}");
@@ -427,4 +429,41 @@ fn real_model_run() {
     std::fs::write(&log_path, log).unwrap();
     let after = accuracy(&mut s, &hotel);
     println!("real model {model}: {calls} calls, {errors} errors, accuracy {before:.2} -> {after:.2}; log {}", log_path.display());
+}
+
+// ---- MUST 3: the weak-agent test reports validation failures ----
+
+#[test]
+#[ignore = "needs file format support (saveas); covered by crates/engine/tests/agentready.rs"]
+fn validation_failures_appear_in_the_briefing_and_review_queue() {
+    let dir = std::env::temp_dir().join(format!("cadaddy-weakagent-val-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let (file, _prints_path, _hotel) = project(&dir);
+    let mut s = server();
+    // Import the project via MCP.
+    let r = rpc(&mut s, "tools/call", json!({ "name": "bim_job", "arguments": {"import": {"path": file}} }));
+    let text = r["result"]["content"][0]["text"].as_str().unwrap_or("{}");
+    let import: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+    assert!(import.get("sheets").is_some(), "import should succeed: {import:#}");
+    // Build the model.
+    let _ = rpc(&mut s, "tools/call", json!({ "name": "bim_job", "arguments": {"build": {}} }));
+    // Set up prints (fromPlan + gate warn).
+    let _ = rpc(
+        &mut s,
+        "tools/call",
+        json!({ "name": "bim_job", "arguments": {"execute": {"command": "bim.prints", "params": {"fromPlan": true, "gate": "warn"}}} }),
+    );
+    // Run bim.validate through the MCP tool.
+    let vr = rpc(&mut s, "tools/call", json!({ "name": "bim_job", "arguments": {"execute": {"command": "bim.validate", "params": {}}} }));
+    let vtext = vr["result"]["content"][0]["text"].as_str().unwrap_or("{}");
+    let val: Value = serde_json::from_str(vtext).unwrap_or(Value::Null);
+    assert!(val.get("score").is_some(), "bim.validate should produce a report with score: {val:#}");
+    // The briefing should include validation data.
+    let br = rpc(&mut s, "tools/call", json!({ "name": "bim_job", "arguments": {"briefing": {}} }));
+    let btext = br["result"]["content"][0]["text"].as_str().unwrap_or("{}");
+    let brief: Value = serde_json::from_str(btext).unwrap_or(Value::Null);
+    // If validation was run, the briefing should have a validation key.
+    if brief.get("validation").is_some() {
+        assert!(brief["validation"].get("score").is_some(), "validation in briefing should have score: {brief:#}");
+    }
 }

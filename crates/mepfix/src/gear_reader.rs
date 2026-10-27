@@ -3,15 +3,28 @@
 //! enclosure) and feeders (`mep.feeders`); each piece of gear placed at its tag on the plan as a
 //! box of its scheduled size at its mounting height, with the schedule's row as its properties
 //! (as text: no load calculations). The light fixture schedule's columns go on every fixture of
-//! that type ([`link_fixtures`]).
+//! that type ([`link_fixtures`] on the reader's devices, [`link_spec_fixtures`] on the building
+//! spec's `mep.devices`).
+//!
+//! Source and status: a position taken from the gear's tag on an E-plan is marked as such
+//! (`sources.position = "E-sheet tag E-101"`, `sources.status = "unconfirmed"`, confidence
+//! [`E_TAG_CONFIDENCE`]) until an architectural position confirms it ([`confirm_position`]).
+//! Every termination and feeder records the schedule (and sheet) it was read from; an approved
+//! submittal's lug data replaces the schedule's ([`apply_submittal`]) and says so.
 
 use std::collections::BTreeMap;
 
 use cadaddy_doc::Drawing;
-use cadaddy_walk3d::{Enclosure, Feeder, MepEquipment, Termination};
+use cadaddy_walk3d::{ElecDevice, Enclosure, Feeder, MepEquipment, Termination};
 
 use crate::elec_reader::{FoundDevice, FoundPanel};
 use crate::equip_reader::{Table, read_tables_keyed};
+
+/// Confidence in a piece of gear placed at its E-plan tag: the E-sheets show gear
+/// diagrammatically; the architectural plans and elevations fix where it goes.
+pub const E_TAG_CONFIDENCE: f64 = 0.6;
+/// Confidence once an architectural position has confirmed it.
+pub const ARCH_CONFIDENCE: f64 = 0.95;
 
 /// Tables keyed by a tag (gear) or a type (light fixtures).
 fn key_column(n: &str) -> bool {
@@ -225,12 +238,16 @@ pub fn read_gear(drawings: &[(&str, &Drawing)], panels: &[FoundPanel], units_per
     let titled = |t: &'static str| tables.iter().filter(move |x| x.title.trim().eq_ignore_ascii_case(t));
     let mut out = GearRead::default();
     let mut lugs: BTreeMap<String, Vec<Termination>> = BTreeMap::new();
-    for row in titled("LUG SCHEDULE").flat_map(|t| &t.rows) {
-        if let Some(t) = termination(row) {
-            lugs.entry(cell(row, "TAG").to_string()).or_default().push(t);
+    for table in titled("LUG SCHEDULE") {
+        for row in &table.rows {
+            if let Some(mut t) = termination(row) {
+                t.source = format!("LUG SCHEDULE {}", table.sheet);
+                lugs.entry(cell(row, "TAG").to_string()).or_default().push(t);
+            }
         }
     }
-    for row in titled("ELECTRICAL EQUIPMENT SCHEDULE").flat_map(|t| &t.rows) {
+    let equipment = titled("ELECTRICAL EQUIPMENT SCHEDULE").flat_map(|t| t.rows.iter().map(move |r| (t.sheet.as_str(), r)));
+    for (sheet, row) in equipment {
         let tag = cell(row, "TAG").to_string();
         let Some([w, d, h]) = size(cell(row, "SIZE")) else { continue };
         let Some(p) = panels.iter().find(|p| p.tag.eq_ignore_ascii_case(&tag)) else {
@@ -248,9 +265,16 @@ pub fn read_gear(drawings: &[(&str, &Drawing)], panels: &[FoundPanel], units_per
             bottom_entry_in: plate(bot),
             gutter_in: plate(gut),
         });
+        // Size and mounting height are the schedule's; where it stands is only the E-plan's tag.
+        let schedule = format!("ELECTRICAL EQUIPMENT SCHEDULE {sheet}");
+        let tag_on = format!("E-sheet tag {}", p.sheet);
         let mut sources = BTreeMap::new();
-        sources.insert("footprint".into(), "schedule".into());
-        sources.insert("elevation".into(), "schedule".into());
+        sources.insert("size".into(), schedule.clone());
+        sources.insert("height".into(), schedule.clone());
+        sources.insert("elevation".into(), schedule);
+        sources.insert("position".into(), tag_on.clone());
+        sources.insert("footprint".into(), tag_on);
+        sources.insert("status".into(), "unconfirmed".into());
         out.equipment.push(MepEquipment {
             kind: kind_of(cell(row, "TYPE")).into(),
             level: p.level.clone(),
@@ -261,14 +285,21 @@ pub fn read_gear(drawings: &[(&str, &Drawing)], panels: &[FoundPanel], units_per
             title: "ELECTRICAL EQUIPMENT SCHEDULE".into(),
             properties,
             sources,
-            confidence: 1.0,
+            confidence: E_TAG_CONFIDENCE,
             terminations: lugs.remove(&tag).unwrap_or_default(),
             enclosure,
             tag,
             ..MepEquipment::default()
         });
     }
-    out.feeders = titled("FEEDER SCHEDULE").flat_map(|t| &t.rows).filter_map(feeder).collect();
+    out.feeders = titled("FEEDER SCHEDULE")
+        .flat_map(|t| {
+            t.rows.iter().filter_map(feeder).map(|mut f| {
+                f.source = format!("FEEDER SCHEDULE {}", t.sheet);
+                f
+            })
+        })
+        .collect();
     for row in titled("LIGHT FIXTURE SCHEDULE").flat_map(|t| &t.rows) {
         let ty = cell(row, "TYPE").to_string();
         if !ty.is_empty() {
@@ -291,6 +322,68 @@ pub fn link_fixtures(devices: &mut [FoundDevice], types: &BTreeMap<String, BTree
         }
     }
     n
+}
+
+/// The light fixture schedule's columns on every light fixture in the building spec whose type
+/// the schedule has (`mep.devices`); the number linked. A type the schedule doesn't have clears
+/// what an earlier read put there.
+pub fn link_spec_fixtures(devices: &mut [ElecDevice], types: &BTreeMap<String, BTreeMap<String, String>>) -> usize {
+    let mut n = 0;
+    for d in devices.iter_mut().filter(|d| d.kind == "light_fixture") {
+        match types.get(d.type_tag.trim()) {
+            Some(p) => {
+                d.properties = p.clone();
+                n += 1;
+            }
+            None => d.properties.clear(),
+        }
+    }
+    n
+}
+
+/// A device the reader found, as the building spec keeps it (`mep.devices`), with its tag.
+pub fn spec_device(d: &FoundDevice, tag: &str) -> ElecDevice {
+    ElecDevice {
+        tag: tag.to_string(),
+        kind: d.kind.clone(),
+        level: d.level.clone(),
+        room: d.room.clone(),
+        type_tag: d.type_tag.clone(),
+        properties: d.properties.clone(),
+        ..ElecDevice::default()
+    }
+}
+
+/// An architectural position (plan corners, drawing units) confirms where a piece of gear goes:
+/// its box moves there (same size), and its position is marked as from `source` (`A-101 room
+/// 104`), `confirmed`.
+pub fn confirm_position(e: &mut MepEquipment, center: [f64; 2], source: &str) {
+    if !(center[0].is_finite() && center[1].is_finite()) {
+        return;
+    }
+    let (hw, hd) = ((e.max[0] - e.min[0]) / 2.0, (e.max[1] - e.min[1]) / 2.0);
+    e.min = [center[0] - hw, center[1] - hd];
+    e.max = [center[0] + hw, center[1] + hd];
+    e.sources.insert("position".into(), source.to_string());
+    e.sources.insert("footprint".into(), source.to_string());
+    e.sources.insert("status".into(), "confirmed".into());
+    e.confidence = ARCH_CONFIDENCE;
+}
+
+/// An approved submittal's lug data for one piece of gear replaces the schedule's at the same
+/// termination points (others added); each replaced or added one is marked
+/// `submittal <id>`. The number of terminations it set; 0 when the gear isn't there.
+pub fn apply_submittal(equipment: &mut [MepEquipment], tag: &str, submitted: &[Termination], submittal: &str) -> usize {
+    let Some(e) = equipment.iter_mut().find(|e| e.tag.trim().eq_ignore_ascii_case(tag.trim())) else { return 0 };
+    let source = format!("submittal {}", submittal.trim());
+    for t in submitted {
+        let t = Termination { source: source.clone(), ..t.clone() };
+        match e.terminations.iter_mut().find(|x| x.point == t.point) {
+            Some(x) => *x = t,
+            None => e.terminations.push(t),
+        }
+    }
+    submitted.len()
 }
 
 #[cfg(test)]

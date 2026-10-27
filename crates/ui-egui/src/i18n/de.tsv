@@ -2366,6 +2366,7 @@
 	List MEP Items	MEP-Elemente auflisten
 	Section Box	Schnittbox
 	Trade Visibility	Gewerkesichtbarkeit
+	Colour by BIM Property	Nach BIM-Eigenschaft einfärben
 	BIM Types	BIM-Typen
 	Get BIM Spec	BIM-Spezifikation abrufen
 	Remove BIM Spec from Entities	BIM-Spezifikation von Objekten entfernen
@@ -2948,3 +2949,131 @@
 	Estimate Bid Summary	Angebotszusammenfassung der Kalkulation
 	Read Panel Schedules	Verteilerpläne lesen
 	Site Takeoff	Mengenermittlung Außenanlagen
+	Clash Report	Kollisionsbericht
+	Export PDF	PDF exportieren
+	Export the grouped clash report to PDF	Gruppierten Kollisionsbericht als PDF exportieren
+	PDF exported to {path}.	PDF nach {path} exportiert.
+	Clash detection failed.	Kollisionsprüfung fehlgeschlagen.
+	Import Cost Table	Kostentabelle importieren
+	BIM View	BIM-Ansicht
+	Trade Colours	Gewerkfarben
+	Element Properties	Elementeigenschaften
+	Tree	Baum
+	Colours	Farben
+	Ghost Architecture	Architektur transparent
+	Sheet Lines in 3D	Planlinien in 3D
+	Nothing is built yet. Use Plans to Model first.	Noch nichts erstellt. Zuerst „Pläne zu Modell“ verwenden.
+	Select one element to see its properties.	Ein Element wählen, um seine Eigenschaften zu sehen.
+	Not part of the built model.	Nicht Teil des erstellten Modells.
+	Category	Kategorie
+	Trade	Gewerk
+	Circuit	Stromkreis
+	Source	Quelle
+	Issues	Probleme
+	Show on Sheet	Im Plan zeigen
+	Reset Colours	Farben zurücksetzen
+	Architecture	Architektur
+	Structure	Tragwerk
+	Fire Protection	Brandschutz
+	Doors and Windows	Türen und Fenster
+	Supply Air Duct	Zuluftkanal
+	Return Air Duct	Umluftkanal
+	Exhaust Air Duct	Abluftkanal
+	Outside Air Duct	Außenluftkanal
+	Duct	Luftkanal
+	Air Terminals	Luftauslässe
+	Equipment	Geräte
+	Domestic Cold Water	Trinkwasser kalt
+	Domestic Hot Water	Trinkwasser warm
+	Sanitary	Schmutzwasser
+	Vent	Lüftungsleitung
+	Storm	Regenwasser
+	Gas	Gas
+	Piping	Rohrleitungen
+	Plumbing Fixtures	Sanitärobjekte
+	Conduit	Installationsrohre
+	Cable Tray	Kabeltrassen
+	Electrical Devices	Elektrogeräte
+	Light Fixtures	Leuchten
+	Clash Check	Kollisionsprüfung
+	Fix Clash	Kollision beheben
+	Model Takeoff	Mengenermittlung aus Modell
+	Show Takeoff Line	Mengenposition anzeigen
+	Model Estimate	Kostenschätzung aus Modell
+	New Issue	Neues Problem
+	Update Issue	Problem aktualisieren
+	Show Issue	Problem anzeigen
+	Issue Marks	Problemmarkierungen
+	Sheet and 3D Link	Verknüpfung Plan und 3D
+	PDF to BIM	PDF zu BIM
+	Read Casework and Fixtures	Einbaumöbel und Sanitärobjekte lesen
+	Frame Walls from Prints	Ständerwerk aus Plänen erstellen
+	List Framed Walls	Ständerwände auflisten
+	Framed Wall	Ständerwand
+	Next Stud	Nächster Ständer
+	Enter Field Stud	Vor Ort gemessenen Ständer eingeben
+	Apply Shop Drawing	Werkstattzeichnung anwenden
+	Show Framing	Ständerwerk anzeigen
+	Read Unit Types from Prints	Einheitentypen aus Plänen lesen
+	Edit Unit Type	Einheitentyp bearbeiten
+	Override Unit Instance	Einheiteninstanz überschreiben
+	Place Unit Instances	Einheiteninstanzen platzieren
+	List Callouts	Verweise auflisten
+	Keep Print Set Job	Plansatz-Auftrag aufbewahren
+	Resume Print Set Job	Plansatz-Auftrag fortsetzen
+	Finish Takeoff from Prints	Ausbau-Mengenermittlung aus Plänen
+	Layer Quantity Takeoff	Mengenermittlung nach Layer
+	Read Architecture from Prints	Architektur aus Plänen lesen
+	Read Roof and Wall Envelope	Dach- und Wandhülle lesen
+	Element Properties (BIM)	Elementeigenschaften (BIM)
+	Set Element Property (BIM)	Elementeigenschaft festlegen (BIM)
+	Find Elements by Property	Elemente nach Eigenschaft suchen
+	Element Property Summary	Übersicht der Elementeigenschaften
+	BIM Properties	BIM-Eigenschaften
+	Kind	Art
+	Element Identities (BIM)	Elementidentitäten (BIM)
+	Room Connections	Raumverbindungen
+	Link Print Set	Plansatz verknüpfen
+	Check Building Codes	Bauvorschriften prüfen
+	Code Rules	Vorschriftsregeln
+	Select Building Codes	Bauvorschriften auswählen
+	Fill Element Properties	Elementeigenschaften füllen
+	Build Construction Sequence	Bauablauf erstellen
+	Construction Sequence	Bauablauf
+	Edit Sequence Activity	Ablaufvorgang bearbeiten
+	Show Sequence at Date	Ablauf zum Datum anzeigen
+	Export Construction Sequence	Bauablauf exportieren
+	Sequence Trade Conflicts	Gewerkekonflikte im Ablauf
+	Ceiling Space Fit	Platz im Deckenhohlraum
+	Takeoff by Activity	Mengenermittlung nach Vorgang
+	BIM	BIM
+	Door	Tür
+	Plan Views	Grundrissansichten
+	Generate Plan Views	Grundrissansichten erzeugen
+	Draw Wall (Object)	Wand zeichnen (Objekt)
+	Place Door in Wall	Tür in Wand einfügen
+	Place Window in Wall	Fenster in Wand einfügen
+	Resolve Plan Entity	Planelement auflösen
+	Record As-Built Change	Bestandsänderung erfassen
+	Import As-Built Markups	Bestandsmarkierungen importieren
+	List As-Built Changes	Bestandsänderungen auflisten
+	Set As-Built Change Status	Status der Bestandsänderung festlegen
+	Compare Design and As-Built	Entwurf und Bestand vergleichen
+	Export As-Built	Bestand exportieren
+	Map Line to Price Row	Zeile der Preiszeile zuordnen
+	Start Cover Check	Abdeckprüfung starten
+	Cover Check Status	Status der Abdeckprüfung
+	Check Cover Item	Abdeckpunkt abhaken
+	Reopen Cover Item	Abdeckpunkt wieder öffnen
+	Sign Inspection	Prüfung abzeichnen
+	Ready to Cover	Bereit zum Schließen
+	Cover Check Wall	Wand der Abdeckprüfung
+	Add In-Wall Photo	Foto in der Wand hinzufügen
+	Wall	Wand
+	Ready to cover	Bereit zum Schließen
+	Not ready to cover	Nicht bereit zum Schließen
+	Checklist	Checkliste
+	Photos	Fotos
+	Photo	Foto
+	Schedule from Element Properties	Liste aus Elementeigenschaften
+	Check Element Properties	Elementeigenschaften prüfen

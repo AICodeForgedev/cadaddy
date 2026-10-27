@@ -194,13 +194,18 @@ impl Summary {
     }
 }
 
-fn is_drawing(p: &Path) -> bool {
-    p.extension().and_then(|x| x.to_str()).is_some_and(|x| DRAWINGS.contains(&x.to_ascii_lowercase().as_str()))
+fn has_ext(p: &Path, exts: &[&str]) -> bool {
+    p.extension().and_then(|x| x.to_str()).is_some_and(|x| exts.contains(&x.to_ascii_lowercase().as_str()))
 }
 
 /// The drawings in `folder` (and its subfolders when `recurse`), sorted by name, each with the
 /// subfolder it is in.
 pub fn folder_inputs(folder: &Path, recurse: bool) -> std::result::Result<Vec<Input>, String> {
+    folder_inputs_of(folder, recurse, &DRAWINGS)
+}
+
+/// Like [`folder_inputs`], for files with one of `exts` (lower case, no dot).
+pub fn folder_inputs_of(folder: &Path, recurse: bool, exts: &[&str]) -> std::result::Result<Vec<Input>, String> {
     let mut out = Vec::new();
     let mut stack = vec![(folder.to_path_buf(), PathBuf::new(), 0usize)];
     while let Some((dir, sub, depth)) = stack.pop() {
@@ -209,7 +214,7 @@ pub fn folder_inputs(folder: &Path, recurse: bool) -> std::result::Result<Vec<In
         paths.sort();
         let mut dirs = Vec::new();
         for p in paths {
-            if p.is_file() && is_drawing(&p) {
+            if p.is_file() && has_ext(&p, exts) {
                 if out.len() >= MAX_FILES {
                     return Err(format!("more than {MAX_FILES} drawings: convert fewer at a time"));
                 }

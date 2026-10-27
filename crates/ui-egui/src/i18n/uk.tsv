@@ -2617,6 +2617,7 @@
 	List MEP Items	Список елементів MEP
 	Section Box	Січний паралелепіпед
 	Trade Visibility	Видимість розділів
+	Colour by BIM Property	Колір за властивістю BIM
 	BIM Types	Типи BIM
 	Get BIM Spec	Отримати специфікацію BIM
 	Remove BIM Spec from Entities	Вилучити специфікацію BIM з об'єктів
@@ -2908,6 +2909,7 @@
 	Query Estimate	Запит до кошторису
 	Set Estimate Assembly	Задати збірку кошторису
 	Set Estimate Price	Задати ціну кошторису
+	Map Line to Price Row	Зіставити рядок з рядком ціни
 	Set Estimate Scope	Задати обсяг кошторису
 	New Window	Нове вікно
 	Concrete Elements	Бетонні елементи
@@ -3184,3 +3186,173 @@
 	Export Estimate	Експортувати кошторис
 	Estimate Bid Summary	Підсумок пропозиції за кошторисом
 	Site Takeoff	Підрахунок обсягів робіт на ділянці
+	Read Cable Trays from Prints	Зчитати кабельні лотки з креслень
+	Read Ceiling Assemblies	Зчитати конструкції стель
+	Read Ceiling Plans	Зчитати плани стель
+	Read Conduit from Prints	Зчитати кабелепроводи з креслень
+	Read Ductwork from Prints	Зчитати повітроводи з креслень
+	Read Electrical Devices	Зчитати електричні пристрої
+	Read Electrical Equipment	Зчитати електрообладнання
+	Read Element Tags from Prints	Зчитати позначки елементів з креслень
+	Read MEP Equipment	Зчитати інженерне обладнання
+	Read Piping from Prints	Зчитати трубопроводи з креслень
+	Read RFIs from Prints	Зчитати запити RFI з креслень
+	Read Scanned Print	Зчитати скановане креслення
+	Read Site Plans	Зчитати генплани
+	Read Sprinkler Plans	Зчитати плани спринклерів
+	Read Structural Plans	Зчитати конструктивні плани
+	Read Wall Types from Plans	Зчитати типи стін з планів
+	Resolve MEP Heights	Визначити висоти інженерних мереж
+	Run Print Set Stages	Виконати етапи комплекту креслень
+	Clash Report	Звіт про колізії
+	Export PDF	Експорт у PDF
+	Export the grouped clash report to PDF	Експортувати згрупований звіт про колізії у PDF
+	PDF exported to {path}.	PDF експортовано до {path}.
+	Clash detection failed.	Не вдалося виконати пошук колізій.
+	Import Cost Table	Імпортувати таблицю витрат
+	Accuracy Score	Оцінка точності
+	Answer Job Question	Відповісти на запитання завдання
+	Set Job Mode	Змінити режим завдання
+	Check Import Accuracy	Перевірити точність імпорту
+	Clash Resolution Loop	Цикл усунення колізій
+	Evaluate Rules	Оцінити правила
+	Explain Job Stage	Пояснити етап завдання
+	Job Learned Rules	Вивчені правила завдання
+	Job Report	Звіт завдання
+	Job Status	Стан завдання
+	Job Worklist	Список робіт завдання
+	Next Job Question	Наступне запитання завдання
+	Rule Packs	Набори правил
+	Rules Action	Дія правил
+	Rules Report	Звіт правил
+	Rules Worklist	Список робіт правил
+	Sheet Facts	Дані аркуша
+	Start Guided Job	Почати кероване завдання
+	Undo Job Action	Скасувати дію завдання
+	BIM View	Вигляд BIM
+	Trade Colours	Кольори розділів
+	Element Properties	Властивості елемента
+	Tree	Дерево
+	Colours	Кольори
+	Systems	Системи
+	Ghost Architecture	Архітектура прозора
+	Sheet Lines in 3D	Лінії аркуша в 3D
+	Nothing is built yet. Use Plans to Model first.	Ще нічого не побудовано. Спершу скористайтеся «З планів у модель».
+	Select one element to see its properties.	Виберіть один елемент, щоб побачити його властивості.
+	Not part of the built model.	Не входить до побудованої моделі.
+	Category	Категорія
+	Trade	Розділ
+	Circuit	Коло
+	Source	Джерело
+	Issues	Зауваження
+	Show on Sheet	Показати на аркуші
+	Reset Colours	Скинути кольори
+	Architecture	Архітектура
+	Structure	Конструкції
+	Fire Protection	Пожежогасіння
+	Doors and Windows	Двері та вікна
+	Supply Air Duct	Припливний повітропровід
+	Return Air Duct	Рециркуляційний повітропровід
+	Exhaust Air Duct	Витяжний повітропровід
+	Outside Air Duct	Повітропровід зовнішнього повітря
+	Duct	Повітропровід
+	Air Terminals	Повітророзподільники
+	Equipment	Обладнання
+	Domestic Cold Water	Холодне водопостачання
+	Domestic Hot Water	Гаряче водопостачання
+	Sanitary	Каналізація
+	Vent	Вентиляційний стояк
+	Storm	Зливова каналізація
+	Gas	Газ
+	Piping	Трубопроводи
+	Plumbing Fixtures	Санітарні прилади
+	Conduit	Кабельні труби
+	Cable Tray	Кабельні лотки
+	Electrical Devices	Електропристрої
+	Light Fixtures	Світильники
+	Clash Check	Перевірка колізій
+	Fix Clash	Усунути колізію
+	Model Takeoff	Відомість обсягів за моделлю
+	Show Takeoff Line	Показати рядок відомості
+	Model Estimate	Кошторис за моделлю
+	New Issue	Нове зауваження
+	Update Issue	Оновити зауваження
+	Show Issue	Показати зауваження
+	Issue Marks	Позначки зауважень
+	Sheet and 3D Link	Зв'язок аркуша і 3D
+	PDF to BIM	PDF у BIM
+	Read Casework and Fixtures	Зчитати вбудовані меблі та сантехнічні прилади
+	Frame Walls from Prints	Каркас стін за кресленнями
+	List Framed Walls	Список каркасних стін
+	Framed Wall	Каркасна стіна
+	Next Stud	Наступна стійка
+	Enter Field Stud	Ввести стійку, заміряну на об’єкті
+	Apply Shop Drawing	Застосувати робоче креслення
+	Show Framing	Показати каркас
+	Read Unit Types from Prints	Прочитати типи блоків із креслень
+	Edit Unit Type	Редагувати тип блока
+	Override Unit Instance	Перевизначити екземпляр блока
+	Place Unit Instances	Розмістити екземпляри блоків
+	List Callouts	Список виносок
+	Keep Print Set Job	Зберегти завдання комплекту креслень
+	Resume Print Set Job	Відновити завдання комплекту креслень
+	Finish Takeoff from Prints	Відомість оздоблення за кресленнями
+	Layer Quantity Takeoff	Підрахунок обсягів за шарами
+	Read Architecture from Prints	Зчитати архітектуру з креслень
+	Read Roof and Wall Envelope	Зчитати оболонку покрівлі та стін
+	Element Properties (BIM)	Властивості елемента (BIM)
+	Set Element Property (BIM)	Задати властивість елемента (BIM)
+	Find Elements by Property	Знайти елементи за властивістю
+	Element Property Summary	Зведення властивостей елементів
+	BIM Properties	Властивості BIM
+	Kind	Вид
+	Element Identities (BIM)	Ідентифікація елементів (BIM)
+	Room Connections	Зв'язки приміщень
+	Link Print Set	Зв'язати комплект аркушів
+# Low-voltage commands (lowvolt-rw1).
+	Equipment Connections	Підключення обладнання
+	LV Bill of Materials	LV: специфікація матеріалів
+	LV Sleeves	LV: гільзи
+	LV/FA Devices	LV/FA: пристрої
+	Check Building Codes	Перевірити будівельні норми
+	Code Rules	Правила норм
+	Select Building Codes	Вибрати будівельні норми
+	Fill Element Properties	Заповнити властивості елементів
+	Build Construction Sequence	Побудувати послідовність будівництва
+	Construction Sequence	Послідовність будівництва
+	Edit Sequence Activity	Змінити роботу послідовності
+	Show Sequence at Date	Показати послідовність на дату
+	Export Construction Sequence	Експортувати послідовність будівництва
+	Sequence Trade Conflicts	Конфлікти фахів у послідовності
+	Ceiling Space Fit	Простір над стелею
+	Takeoff by Activity	Обсяги за роботами
+	BIM	BIM
+	Door	Двері
+	Plan Views	Планові види
+	Generate Plan Views	Створити планові види
+	Draw Wall (Object)	Стіна (об'єкт)
+	Place Door in Wall	Вставити двері у стіну
+	Place Window in Wall	Вставити вікно у стіну
+	Resolve Plan Entity	Визначити елемент плану
+	Record As-Built Change	Записати виконавчу зміну
+	Import As-Built Markups	Імпортувати виконавчі позначки
+	List As-Built Changes	Список виконавчих змін
+	Set As-Built Change Status	Встановити стан виконавчої зміни
+	Compare Design and As-Built	Порівняти проєкт і виконавчу документацію
+	Export As-Built	Експортувати виконавчу документацію
+	Start Cover Check	Почати перевірку перед закриттям
+	Cover Check Status	Стан перевірки перед закриттям
+	Check Cover Item	Позначити пункт перед закриттям
+	Reopen Cover Item	Знову відкрити пункт перед закриттям
+	Sign Inspection	Підписати інспекцію
+	Ready to Cover	Готово до закриття
+	Cover Check Wall	Стіна в перевірці перед закриттям
+	Add In-Wall Photo	Додати фото всередині стіни
+	Wall	Стіна
+	Ready to cover	Готово до закриття
+	Not ready to cover	Не готово до закриття
+	Checklist	Контрольний список
+	Photos	Фото
+	Photo	Фото
+	Schedule from Element Properties	Специфікація за властивостями елементів
+	Check Element Properties	Перевірити властивості елементів

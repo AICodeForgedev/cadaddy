@@ -4,8 +4,8 @@
 //! reducer), terminals, the equipment list and hangers — grouped by level and system, exported
 //! as CSV and XLSX, and a takeoff table in the drawing that follows an edit of the model.
 
-use cadaddy_engine::Session;
 use cadaddy_engine::doc::EntityKind;
+use cadaddy_engine::{EngineError, Session};
 use serde_json::{Value, json};
 
 fn model() -> Session {
@@ -230,8 +230,11 @@ fn a_takeoff_table_follows_edits_of_the_model() {
     assert_eq!(before[1][0], "Category");
     assert!(before.iter().any(|r| r[4] == "24x12" && r[6] == "30"), "{before:?}");
     assert_eq!(before.len(), 2 + 3, "title, header and the three duct sizes");
-    // The branch (run 1) becomes 14x10; the rebuild counts again.
-    let e = s.execute("mep.edit", &json!({"id": 1, "size_in": [14, 10], "rebuild": true})).unwrap();
+    // The branch (12x8) becomes 14x10; the rebuild counts again.
+    let list = s.execute("mep.list", &json!({})).unwrap();
+    let branch = list["items"].as_array().unwrap().iter().find(|it| it["size_in"] == json!([12.0, 8.0])).expect("should find the 12x8 branch");
+    let run_id = branch["id"].as_str().unwrap().to_string();
+    let e = s.execute("mep.edit", &json!({"id": &run_id, "size_in": [14, 10], "rebuild": true})).unwrap();
     assert_eq!(e["rebuilt"], true);
     let after = cells(&s, &h);
     assert!(after.iter().any(|r| r[4] == "14x10"), "{after:?}");
@@ -269,6 +272,51 @@ fn read_from_the_plan_then_counted() {
     assert_eq!(count(&q, "drop", "24x12"), 1, "{}", q["fittings"]);
 }
 
+/// A linked table made with custom gauges and hanger spacing keeps those settings after a
+/// rebuild: the numbers in the table must not revert to defaults.
+#[test]
+fn linked_table_keeps_custom_settings() {
+    let mut s = model();
+    // Place a table with custom gauge (20, 2.0 lb/sq ft) and hanger spacing (duct 10').
+    let q = s
+        .execute(
+            "mep.qty",
+            &json!({
+                "system": "SA",
+                "gauges": [{"gauge": 20, "lb_per_sqft": 2.0}],
+                "hanger_spacing_ft": {"duct": 10},
+                "table": {"at": [0, -3000], "part": "all"}
+            }),
+        )
+        .unwrap();
+    let h = q["table"].as_str().unwrap().to_string();
+    // 24x12 main: 30' long, 6 ft perimeter → 180 sq ft, at 2.0 lb/sq ft → 360 lb.
+    let main = row(&q["ducts"], |r| r["size"] == "24x12");
+    assert_eq!(main["gauge"], 20);
+    assert!(near(&main["weight_lb"], 360.0), "custom gauge weight: {main}");
+    // Hangers at 10': 20' → 2, 10' → 1 = 3 (not the default-8' count of 5).
+    assert_eq!(row(&q["hangers"], |r| r["size"] == "24x12")["count"], 3);
+
+    // Edit the branch run (12x8, found by its stable id) to 14x10 and rebuild; the table must
+    // still use gauge 20.
+    let list = s.execute("mep.list", &json!({})).unwrap();
+    let branch = list["items"].as_array().unwrap().iter().find(|it| it["size_in"] == json!([12.0, 8.0])).expect("should find the 12x8 branch");
+    let run_id = branch["id"].as_str().unwrap().to_string();
+    let e = s.execute("mep.edit", &json!({"id": &run_id, "size_in": [14, 10], "rebuild": true})).unwrap();
+    assert_eq!(e["rebuilt"], true);
+    let after = cells(&s, &h);
+    // The 24x12 row must still show gauge 20 and 360 lb weight.
+    let main_row = after.iter().find(|r| r.len() > 5 && r[4] == "24x12").expect("24x12 row exists");
+    assert_eq!(main_row[5], "20", "gauge persisted: {main_row:?}");
+    assert_eq!(main_row[9], "360", "weight with custom gauge: {main_row:?}");
+    // The hanger count for 24x12 should still be 3 (spacing 10').
+    let hanger_row = after.iter().find(|r| r.len() > 4 && r[0] == "Hanger" && r[4] == "24x12").expect("24x12 hanger row");
+    assert_eq!(hanger_row[6], "3", "hanger count with custom spacing: {hanger_row:?}");
+}
+
+/// Every call in this test must either succeed or return a plain refusal — never
+/// `EngineError::Internal` (which means a panic was caught). The 1e308 run must not produce
+/// an infinite or overflowing hanger count.
 #[test]
 fn hostile_models_never_panic() {
     let mut s = model();
@@ -278,9 +326,22 @@ fn hostile_models_never_panic() {
         {"system": "SA", "level": "L1", "points": [[0, 0]], "size_in": [-5, 0], "bottoms_ft": [10, 10, 10]},
         {"system": "nowhere", "level": "nowhere", "points": [[0, 0], [1, 1]], "size_in": [1, 0], "bottoms_ft": [0]}
     ]}});
+    // bspec.set may fail (bad spec) — that is fine.
     let _ = s.execute("bspec.set", &json!({"spec": bad}));
-    let _ = s.execute("mep.qty", &json!({}));
-    let _ = s.execute("mep.qty", &json!({"gauges": [{"max_in": -1, "gauge": 0}], "hanger_spacing_ft": {"pipe": 1e308}}));
-    let _ = s.execute("mep.qty", &json!({"table": {"at": [1e308, 1e308]}}));
-    let _ = s.execute("mep.qty.refresh", &json!({}));
+    // Each mep.qty / mep.qty.refresh must be Ok or a parameter refusal, never Internal.
+    let assert_no_internal = |r: Result<Value, EngineError>| {
+        if let Err(EngineError::Internal(cmd, msg)) = &r {
+            panic!("got EngineError::Internal in `{cmd}`: {msg}");
+        }
+        r
+    };
+    let _ = assert_no_internal(s.execute("mep.qty", &json!({})));
+    let _ = assert_no_internal(s.execute("mep.qty", &json!({"gauges": [{"max_in": -1, "gauge": 0}], "hanger_spacing_ft": {"pipe": 1e308}})));
+    let _ = assert_no_internal(s.execute("mep.qty", &json!({"table": {"at": [1e308, 1e308]}})));
+    let _ = assert_no_internal(s.execute("mep.qty.refresh", &json!({})));
+    // The 1e308-points run: hanger totals must be finite and bounded.
+    if let Ok(v) = assert_no_internal(s.execute("mep.qty", &json!({}))) {
+        let h = v["totals"]["hangers"].as_u64().unwrap_or(0);
+        assert!(h < 1_000_000, "hanger total is bounded: {h}");
+    }
 }

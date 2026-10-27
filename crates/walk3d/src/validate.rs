@@ -219,11 +219,15 @@ pub struct Tolerances {
     pub connect_in: f64,
     /// Failures per 1 000 checked items still counted a pass (the false-alarm threshold).
     pub pass_per_mille: f64,
+    /// Along-wall tolerance for misplaced: an element on the correct wall may be this far
+    /// along the wall from its symbol before it is misplaced (inches). Default 120 (10 feet)
+    /// because E-sheet symbols establish the room and wall, not the exact stud bay.
+    pub along_wall_in: f64,
 }
 
 impl Default for Tolerances {
     fn default() -> Self {
-        Tolerances { place_in: 6.0, search_in: 48.0, dim_in: 0.5, height_in: 1.0, connect_in: 1.0, pass_per_mille: 0.0 }
+        Tolerances { place_in: 6.0, search_in: 48.0, dim_in: 0.5, height_in: 1.0, connect_in: 1.0, pass_per_mille: 0.0, along_wall_in: 120.0 }
     }
 }
 
@@ -288,6 +292,7 @@ impl Prints {
             (&mut t.height_in, d.height_in),
             (&mut t.connect_in, d.connect_in),
             (&mut t.pass_per_mille, d.pass_per_mille),
+            (&mut t.along_wall_in, d.along_wall_in),
         ] {
             if !v.is_finite() || *v < 0.0 || *v > 1.0e6 {
                 *v = dv;
@@ -1052,6 +1057,32 @@ fn shown_kinds(p: &Prints) -> HashMap<String, BTreeSet<String>> {
     m
 }
 
+/// The nearest wall (by index) for a point, within a tolerance.
+fn nearest_wall<'a>(walls: &'a [ModelWall], wall_grid: &Grid, level: &str, p: [f64; 2], tol: f64) -> Option<(usize, &'a ModelWall)> {
+    let mut ids = wall_grid.near(level, p, tol);
+    ids.sort_unstable();
+    ids.dedup();
+    ids.into_iter()
+        .filter_map(|i| walls.get(i).filter(|w| same(&w.level, level)).map(|w| (i, w)))
+        .min_by(|(_, a), (_, b)| seg_dist(p, a.a, a.b).0.total_cmp(&seg_dist(p, b.a, b.b).0))
+        .filter(|(_, w)| seg_dist(p, w.a, w.b).0 <= tol)
+}
+
+/// A human-readable description of a location (room name/number and wall).
+fn location_desc(room: Option<&PrintRoom>, wall: Option<&ModelWall>) -> String {
+    let room_part = room.map_or_else(
+        || "an unknown area".to_string(),
+        |r| {
+            let label = if !r.name.is_empty() { &r.name } else { &r.number };
+            format!("room {label}")
+        },
+    );
+    match wall {
+        Some(w) => format!("{room_part}, wall {}", w.id),
+        None => room_part,
+    }
+}
+
 /// Each symbol's element (one to one, nearest first, within the search distance), by index.
 fn pairing(cx: &Ctx) -> (Vec<Option<usize>>, Vec<bool>) {
     let p = cx.prints;
@@ -1106,9 +1137,20 @@ fn label(kind: &str, mark: Option<&str>) -> String {
 
 fn overlay(cx: &mut Ctx) {
     let (pairs, used) = pairing(cx);
-    let place = cx.tol.place_in / 12.0;
     let p = cx.prints;
     let m = cx.model;
+    let along_wall = cx.tol.along_wall_in / 12.0;
+    let wall_tol: f64 = 4.0; // feet: nearness threshold for "on a wall"
+    // Wall grid for location lookups.
+    let mut wall_grid = Grid::new(wall_tol.max(1.0));
+    for (i, w) in m.walls.iter().enumerate() {
+        let l = dist(w.a, w.b);
+        let steps = ((l / 4.0).ceil() as usize).clamp(1, 2_000);
+        for k in 0..=steps {
+            let t = k as f64 / steps as f64;
+            wall_grid.put(&w.level, [w.a[0] + (w.b[0] - w.a[0]) * t, w.a[1] + (w.b[1] - w.a[1]) * t], i);
+        }
+    }
     let mut n = 0;
     let mut out = Vec::new();
     for (s, pair) in p.symbols.iter().zip(&pairs) {
@@ -1130,21 +1172,72 @@ fn overlay(cx: &mut Ctx) {
                 format!("Add a {} at {} as {} shows.", label(&s.kind, s.mark.as_deref()), pt(s.at), s.sheet),
             )),
             Some(e) => {
-                let d = dist(e.at, s.at);
                 // Field-verified places and overrides are where they are on purpose.
                 let kept = matches!(e.status, Some(Status::FieldVerified | Status::Override));
-                if d > place && !kept {
+                // Zone elements are checked only against their zone (if stored), not the
+                // symbol point. With no zone geometry stored yet, they are exempt.
+                let zone = matches!(e.status, Some(Status::Zone));
+                if kept || zone {
+                    continue;
+                }
+                // Location doctrine: E-sheet symbols establish WHAT and which room/wall, not
+                // the exact point. `misplaced` fires only when the element is in a different
+                // room or on a different wall than its symbol, or beyond the along-wall
+                // tolerance. The fix names the room/wall, never the symbol coordinates.
+                let sym_room = cx.room_of(&s.level, s.at);
+                let sym_wall = nearest_wall(&m.walls, &wall_grid, &s.level, s.at, wall_tol);
+                let el_room = cx.room_of(&e.level, e.at);
+                let el_wall = e
+                    .wall
+                    .as_deref()
+                    .and_then(|id| m.walls.iter().enumerate().find(|(_, w)| w.id == id))
+                    .or_else(|| nearest_wall(&m.walls, &wall_grid, &e.level, e.at, wall_tol));
+                let same_room = match (sym_room, el_room) {
+                    (Some(sr), Some(er)) => sr.number.eq_ignore_ascii_case(&er.number),
+                    // No rooms at all, or one side has no room: skip room check.
+                    _ => true,
+                };
+                // Location doctrine: within `place_in` always passes (symbols are
+                // drawn approximately). Beyond that, check room and wall.
+                let d = dist(e.at, s.at);
+                let place = cx.tol.place_in / 12.0;
+                let misplaced = if d <= place {
+                    // Within the symbol tolerance: never misplaced.
+                    false
+                } else if !same_room {
+                    // Different room and beyond place_in: misplaced.
+                    true
+                } else if let (Some((si, _)), Some((ei, _))) = (sym_wall, el_wall) {
+                    if si != ei {
+                        // Different wall in the same room: misplaced.
+                        true
+                    } else {
+                        // Same wall: check along-wall distance.
+                        let w = &m.walls[si];
+                        let (_, ts) = seg_dist(s.at, w.a, w.b);
+                        let (_, te) = seg_dist(e.at, w.a, w.b);
+                        let wlen = dist(w.a, w.b);
+                        (ts - te).abs() * wlen > along_wall
+                    }
+                } else {
+                    // Same room, no wall data: only the radial distance matters,
+                    // and we already know d > place_in. Misplaced.
+                    true
+                };
+                if misplaced {
+                    let expected_loc = location_desc(sym_room, sym_wall.map(|(_, w)| w));
+                    let found_loc = location_desc(el_room, el_wall.map(|(_, w)| w));
                     out.push(failure(
                         Check::Overlay,
                         "misplaced",
                         Some(&e.id),
                         &s.level,
                         Some(e.at),
-                        format!("at {}", pt(s.at)),
-                        format!("at {}, {} away", pt(e.at), ft_in(d)),
+                        format!("in {expected_loc}"),
+                        format!("in {found_loc}"),
                         sym_source(s),
                         Severity::Medium,
-                        format!("Move it {} to {} as {} shows.", ft_in(d), pt(s.at), s.sheet),
+                        format!("Move it to {expected_loc} as {} shows.", s.sheet,),
                     ));
                 }
             }

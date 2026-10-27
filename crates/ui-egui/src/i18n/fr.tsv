@@ -2337,6 +2337,7 @@
 	List MEP Items	Lister les éléments MEP
 	Section Box	Boîte de coupe
 	Trade Visibility	Visibilité des corps d'état
+	Colour by BIM Property	Colorer par propriété BIM
 	BIM Types	Types BIM
 	Get BIM Spec	Obtenir la spécification BIM
 	Remove BIM Spec from Entities	Retirer la spécification BIM des entités
@@ -2919,3 +2920,131 @@
 	Estimate Bid Summary	Résumé de l’offre de l’estimation
 	Read Panel Schedules	Lire les tableaux de répartition
 	Site Takeoff	Métré des travaux extérieurs
+	Clash Report	Rapport de conflits
+	Export PDF	Exporter en PDF
+	Export the grouped clash report to PDF	Exporter le rapport de conflits groupé en PDF
+	PDF exported to {path}.	PDF exporté vers {path}.
+	Clash detection failed.	La détection des conflits a échoué.
+	Import Cost Table	Importer une table de coûts
+	BIM View	Vue BIM
+	Trade Colours	Couleurs par lot
+	Element Properties	Propriétés de l'élément
+	Tree	Arborescence
+	Colours	Couleurs
+	Ghost Architecture	Architecture transparente
+	Sheet Lines in 3D	Traits de la feuille en 3D
+	Nothing is built yet. Use Plans to Model first.	Rien n'est encore construit. Utilisez d'abord Plans vers modèle.
+	Select one element to see its properties.	Sélectionnez un élément pour voir ses propriétés.
+	Not part of the built model.	Ne fait pas partie du modèle construit.
+	Category	Catégorie
+	Trade	Lot
+	Circuit	Circuit
+	Source	Source
+	Issues	Problèmes
+	Show on Sheet	Afficher sur la feuille
+	Reset Colours	Réinitialiser les couleurs
+	Architecture	Architecture
+	Structure	Structure
+	Fire Protection	Protection incendie
+	Doors and Windows	Portes et fenêtres
+	Supply Air Duct	Gaine de soufflage
+	Return Air Duct	Gaine de reprise
+	Exhaust Air Duct	Gaine d'extraction
+	Outside Air Duct	Gaine d'air neuf
+	Duct	Gaine
+	Air Terminals	Bouches d'air
+	Equipment	Équipements
+	Domestic Cold Water	Eau froide sanitaire
+	Domestic Hot Water	Eau chaude sanitaire
+	Sanitary	Eaux usées
+	Vent	Ventilation
+	Storm	Eaux pluviales
+	Gas	Gaz
+	Piping	Tuyauterie
+	Plumbing Fixtures	Appareils sanitaires
+	Conduit	Conduits
+	Cable Tray	Chemins de câbles
+	Electrical Devices	Appareillage électrique
+	Light Fixtures	Luminaires
+	Clash Check	Contrôle des conflits
+	Fix Clash	Corriger le conflit
+	Model Takeoff	Métré du modèle
+	Show Takeoff Line	Afficher la ligne du métré
+	Model Estimate	Estimation du modèle
+	New Issue	Nouveau problème
+	Update Issue	Mettre à jour le problème
+	Show Issue	Afficher le problème
+	Issue Marks	Repères de problèmes
+	Sheet and 3D Link	Lien entre plan et 3D
+	PDF to BIM	PDF vers BIM
+	Read Casework and Fixtures	Lire le mobilier intégré et les appareils sanitaires
+	Frame Walls from Prints	Ossature des murs depuis les plans
+	List Framed Walls	Lister les murs à ossature
+	Framed Wall	Mur à ossature
+	Next Stud	Montant suivant
+	Enter Field Stud	Saisir un montant relevé sur chantier
+	Apply Shop Drawing	Appliquer un plan d’atelier
+	Show Framing	Afficher l’ossature
+	Read Unit Types from Prints	Lire les types de logement depuis les plans
+	Edit Unit Type	Modifier le type de logement
+	Override Unit Instance	Remplacer une instance de logement
+	Place Unit Instances	Placer les instances de logement
+	List Callouts	Lister les renvois
+	Keep Print Set Job	Conserver le travail du jeu de plans
+	Resume Print Set Job	Reprendre le travail du jeu de plans
+	Finish Takeoff from Prints	Métré des finitions depuis les plans
+	Layer Quantity Takeoff	Métré par calque
+	Read Architecture from Prints	Lire l'architecture depuis les plans
+	Read Roof and Wall Envelope	Lire l'enveloppe de toiture et de murs
+	Element Properties (BIM)	Propriétés de l’élément (BIM)
+	Set Element Property (BIM)	Définir une propriété de l’élément (BIM)
+	Find Elements by Property	Rechercher des éléments par propriété
+	Element Property Summary	Synthèse des propriétés des éléments
+	BIM Properties	Propriétés BIM
+	Kind	Nature
+	Element Identities (BIM)	Identités des éléments (BIM)
+	Room Connections	Liaisons entre pièces
+	Link Print Set	Lier le jeu de plans
+	Check Building Codes	Vérifier les codes du bâtiment
+	Code Rules	Règles du code
+	Select Building Codes	Sélectionner les codes du bâtiment
+	Fill Element Properties	Remplir les propriétés des éléments
+	Build Construction Sequence	Créer la séquence de construction
+	Construction Sequence	Séquence de construction
+	Edit Sequence Activity	Modifier une activité de la séquence
+	Show Sequence at Date	Afficher la séquence à une date
+	Export Construction Sequence	Exporter la séquence de construction
+	Sequence Trade Conflicts	Conflits entre corps d’état
+	Ceiling Space Fit	Espace du plénum de plafond
+	Takeoff by Activity	Métré par activité
+	BIM	BIM
+	Door	Porte
+	Plan Views	Vues en plan
+	Generate Plan Views	Générer les vues en plan
+	Draw Wall (Object)	Dessiner mur (objet)
+	Place Door in Wall	Insérer porte dans le mur
+	Place Window in Wall	Insérer fenêtre dans le mur
+	Resolve Plan Entity	Résoudre l'élément du plan
+	Record As-Built Change	Enregistrer une modification de récolement
+	Import As-Built Markups	Importer les annotations de récolement
+	List As-Built Changes	Lister les modifications de récolement
+	Set As-Built Change Status	Définir l'état d'une modification de récolement
+	Compare Design and As-Built	Comparer conception et récolement
+	Export As-Built	Exporter le récolement
+	Map Line to Price Row	Associer la ligne à la ligne de prix
+	Start Cover Check	Démarrer le contrôle avant fermeture
+	Cover Check Status	État du contrôle avant fermeture
+	Check Cover Item	Cocher un point avant fermeture
+	Reopen Cover Item	Rouvrir un point avant fermeture
+	Sign Inspection	Signer l'inspection
+	Ready to Cover	Prêt à fermer
+	Cover Check Wall	Mur du contrôle avant fermeture
+	Add In-Wall Photo	Ajouter une photo dans le mur
+	Wall	Mur
+	Ready to cover	Prêt à fermer
+	Not ready to cover	Pas prêt à fermer
+	Checklist	Liste de contrôle
+	Photos	Photos
+	Photo	Photo
+	Schedule from Element Properties	Nomenclature à partir des propriétés des éléments
+	Check Element Properties	Vérifier les propriétés des éléments

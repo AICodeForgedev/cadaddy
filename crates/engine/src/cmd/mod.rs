@@ -5,11 +5,14 @@ pub mod adcenter;
 pub(crate) mod annoscale;
 pub(crate) mod annotate;
 pub mod array;
+pub mod asbuilt;
 pub(crate) mod ask;
 mod attipedit;
 mod audit;
 pub mod autospec;
+pub mod bimlook;
 pub mod bimprops;
+pub mod bimwork;
 pub mod blockdetect;
 pub(crate) mod blocks;
 pub mod bom;
@@ -20,16 +23,19 @@ pub mod ceilings;
 pub mod classic;
 pub(crate) mod clip_partners;
 pub mod clipboard;
+pub mod codebook;
 pub mod colorbook;
 pub mod constraints;
 pub mod coordination;
 pub mod copricing;
+pub mod cover;
 mod dash_styles;
 mod draw;
 mod draw2;
 mod draworder;
 mod edit;
 mod edit3d;
+pub mod elemprops;
 pub mod estimate;
 mod exact_ends;
 mod exchange;
@@ -48,17 +54,23 @@ pub(crate) mod hatch;
 pub mod help_texts;
 pub mod history;
 pub mod hyperlink;
+pub mod identity;
 mod imageattach;
 mod imageclip;
+pub mod import_check;
 pub(crate) mod inquiry;
 mod layer;
 pub mod levels;
+pub mod lowvolt;
 pub mod markup;
 pub mod paramconv;
+pub mod planview;
 pub mod pointcloud;
 pub mod procure;
 pub mod progress;
 pub mod project;
+pub mod propfill;
+pub mod propuse;
 mod rasterout;
 pub mod rfi;
 pub mod schedules;
@@ -75,7 +87,11 @@ pub use qselect::wildcard;
 pub use render::apply_environment;
 pub use underlay::forget_pages as forget_underlay_pages;
 pub mod agentready;
+pub mod archread;
 pub mod bcf;
+pub mod callouts;
+pub mod casework;
+pub mod clashreport;
 pub mod cobie;
 pub mod concrete;
 pub mod dgn;
@@ -83,11 +99,14 @@ pub mod dimmodes;
 pub mod drywall;
 pub mod dwgprops;
 pub mod fieldview;
+pub mod finishes;
 pub mod fourd;
+pub mod framing;
 pub mod furnish;
 pub mod gear;
 pub mod geo;
 pub mod grounding;
+pub mod guided;
 pub mod ifcmodel;
 pub mod ifcref;
 pub mod imagetrace;
@@ -117,14 +136,19 @@ mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
 pub mod plugins_cmd;
+pub(crate) mod printcond;
+pub(crate) mod printmep;
 pub mod printrev;
 pub mod printset;
 pub mod projrules;
 mod props;
+pub mod readers;
 pub mod redline;
 pub mod revise3d;
 pub(crate) mod rhai_cmd;
 pub mod rooms3d;
+pub(crate) mod runtidy;
+pub mod sheetfacts;
 pub mod sitetakeoff;
 pub mod spell;
 pub mod stairs;
@@ -142,8 +166,10 @@ pub use props::MatchProps;
 pub mod actions;
 pub(crate) mod qselect;
 mod render;
+pub mod rulemodel;
 mod sections;
 mod selecttools;
+pub mod sequence;
 mod settings;
 mod solids;
 mod solview;
@@ -188,6 +214,9 @@ pub struct CommandSpec {
     pub enabled: Enabled,
     pub run: Run,
     pub undoable: bool,
+    /// The command restores a drawing from the undo/redo history: the follow-ups (associative
+    /// dimensions, groups, tables, fields…) must not run on the restored drawing.
+    pub restores_history: bool,
     pub interactive: Option<Factory>,
     /// Can run inside another command with a leading apostrophe.
     pub transparent: bool,
@@ -260,6 +289,7 @@ impl CommandSpec {
             enabled: has_doc,
             run,
             undoable: true,
+            restores_history: false,
             interactive: None,
             transparent: false,
             help: "",
@@ -315,6 +345,12 @@ impl CommandSpec {
     }
     pub const fn noundo(mut self) -> Self {
         self.undoable = false;
+        self
+    }
+    /// It restores a drawing from the undo/redo history: the after-command follow-ups must not
+    /// run on the restored drawing (they would take restored objects for moved ones).
+    pub const fn restores_history(mut self) -> Self {
+        self.restores_history = true;
         self
     }
     pub const fn interactive(mut self, f: Factory) -> Self {
@@ -380,7 +416,14 @@ pub struct HelpPage {
     pub params: &'static str,
     pub interactive: bool,
     pub transparent: bool,
-    pub help_text: &'static str,
+    /// What the command does: the hand-written text, else one generated from its parameters.
+    pub help_text: String,
+    /// Whether `help_text` was generated (no hand-written text yet).
+    pub generated: bool,
+    /// A copy-paste example from a shell (`cadaddy-cli run …`).
+    pub example: String,
+    /// The same call through MCP's `execute` tool.
+    pub mcp_example: String,
     /// The keywords of the command's first prompt, as the command line offers them
     /// ("Ttr (tan tan radius)" is typed TTR or T); empty when it offers none.
     pub options: Vec<String>,
@@ -402,10 +445,238 @@ impl CommandSpec {
             params: self.params,
             interactive: self.interactive.is_some(),
             transparent: self.transparent,
-            help_text: self.help,
+            help_text: self.help_text(),
+            generated: self.help.is_empty(),
+            example: self.example(),
+            mcp_example: format!("execute {{command: \"{}\", params: {}}}", self.id, self.example_params()),
             options: first.as_ref().map(|p| p.keywords.clone()).unwrap_or_default(),
             prompts: first.iter().map(crate::Prompt::display).collect(),
         }
+    }
+}
+
+/// One parameter as a command's documentation lists it at the top level of its first `{…}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DocParam {
+    pub name: String,
+    pub optional: bool,
+    /// What the documentation says after `name:` (empty when it says nothing).
+    pub kind: String,
+}
+
+/// The top-level parameters of a params doc (`{center: [x,y], radius?: number} → …`): the
+/// names in its first `{…}` before `→`, with `?` for optional ones. Empty for a doc with none.
+pub fn doc_params(doc: &str) -> Vec<DocParam> {
+    let input = doc.split('→').next().unwrap_or(doc);
+    let Some(open) = input.find('{') else { return Vec::new() };
+    let body = input.get(open + 1..).unwrap_or_default();
+    // Split at depth 0 commas, up to the brace that closes the list.
+    let mut parts = Vec::new();
+    let (mut depth, mut start, mut quoted) = (0usize, 0usize, false);
+    let mut end = body.len();
+    for (i, c) in body.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            _ if quoted => {}
+            '{' | '[' | '(' => depth += 1,
+            '}' if depth == 0 => {
+                end = i;
+                break;
+            }
+            '}' | ']' | ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(body.get(start..i).unwrap_or_default());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(body.get(start..end).unwrap_or_default());
+    let mut out: Vec<DocParam> = Vec::new();
+    for part in parts {
+        let part = part.trim();
+        let name_len = part.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(part.len());
+        let Some(name) = part.get(..name_len).filter(|n| n.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')) else {
+            continue;
+        };
+        let rest = part.get(name_len..).unwrap_or_default().trim_start();
+        let optional = rest.starts_with('?');
+        let rest = rest.trim_start_matches('?').trim_start();
+        // `name: kind`, a bare `name`, or `name (a note)`; anything else is prose, not a name.
+        let kind = match rest.strip_prefix(':') {
+            Some(k) => k.trim().to_string(),
+            None if rest.is_empty() || rest.starts_with('(') => rest.to_string(),
+            None => continue,
+        };
+        if !out.iter().any(|p| p.name == name) {
+            out.push(DocParam { name: name.to_string(), optional, kind });
+        }
+    }
+    out
+}
+
+/// A value to put in an example for a parameter documented as `kind`: the first literal the
+/// documentation gives, else a stand-in of the right type.
+fn example_value(name: &str, kind: &str) -> Value {
+    let k = kind.trim();
+    if let Some(rest) = k.strip_prefix('"') {
+        return Value::String(rest.split('"').next().unwrap_or_default().to_string());
+    }
+    let first = k.split(|c: char| c.is_whitespace() || matches!(c, '|' | ',' | '(' | ')')).next().unwrap_or_default();
+    if let Ok(n) = first.parse::<i64>() {
+        return n.into();
+    }
+    if let Ok(n) = first.parse::<f64>()
+        && let Some(n) = serde_json::Number::from_f64(n)
+    {
+        return Value::Number(n);
+    }
+    let lower = k.to_ascii_lowercase();
+    if k.starts_with("[[") {
+        return serde_json::json!([[0, 0], [10, 0]]);
+    }
+    if k.starts_with('[') {
+        let inner = k.trim_start_matches('[');
+        return if inner.starts_with(['x', 'X', '0']) { serde_json::json!([0, 0]) } else { serde_json::json!([]) };
+    }
+    if k.starts_with('{') {
+        return serde_json::json!({});
+    }
+    let word = first.to_ascii_lowercase();
+    match word.as_str() {
+        "bool" | "boolean" | "true" => return Value::Bool(true),
+        "false" => return Value::Bool(false),
+        "number" | "num" | "int" | "integer" | "float" | "real" | "count" | "n" => return 1.into(),
+        _ => {}
+    }
+    let n = name.to_ascii_lowercase();
+    // A bare or loosely typed name: its meaning in drafting decides the stand-in.
+    let generic = word.is_empty() || matches!(word.as_str(), "point" | "pt" | "number" | "num" | "real" | "value" | "any");
+    if generic || lower.starts_with("point") {
+        if matches!(n.as_str(), "points" | "vertices" | "path_points") {
+            return serde_json::json!([[0, 0], [10, 0]]);
+        }
+        if matches!(
+            n.as_str(),
+            "center"
+                | "point"
+                | "p"
+                | "p1"
+                | "pt"
+                | "base"
+                | "basepoint"
+                | "start"
+                | "insert"
+                | "at"
+                | "position"
+                | "pos"
+                | "origin"
+                | "from"
+                | "first"
+                | "corner"
+        ) {
+            return serde_json::json!([0, 0]);
+        }
+        if matches!(n.as_str(), "p2" | "end" | "to" | "second" | "target" | "p3" | "third") {
+            return if n == "p3" || n == "third" { serde_json::json!([10, 10]) } else { serde_json::json!([10, 0]) };
+        }
+        if matches!(
+            n.as_str(),
+            "radius"
+                | "diameter"
+                | "height"
+                | "width"
+                | "length"
+                | "distance"
+                | "dist"
+                | "angle"
+                | "rotation"
+                | "scale"
+                | "size"
+                | "count"
+                | "offset"
+                | "ratio"
+                | "factor"
+                | "elevation"
+                | "thickness"
+                | "gap"
+                | "spacing"
+                | "rows"
+                | "columns"
+                | "n"
+        ) {
+            return 1.into();
+        }
+    }
+    if lower.contains("path") || lower.contains("folder") || n.contains("path") || n == "file" || n == "folder" {
+        return Value::String("FILE".into());
+    }
+    if n == "handle" || n.ends_with("handle") {
+        return Value::String("1A".into());
+    }
+    if n == "handles" {
+        return serde_json::json!(["1A"]);
+    }
+    // One of a list of words (`level|trade|system`): the first.
+    let listed = k.get(first.len()..).is_some_and(|r| r.trim_start().starts_with('|'));
+    if listed
+        && !word.is_empty()
+        && word.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && !matches!(word.as_str(), "string" | "str" | "text" | "name" | "id" | "value" | "any")
+    {
+        return Value::String(first.to_string());
+    }
+    Value::String("TEXT".into())
+}
+
+impl CommandSpec {
+    /// The command's help text: the hand-written text, else one generated from its label,
+    /// parameter documentation and menu, so no command has empty help.
+    pub fn help_text(&self) -> String {
+        if !self.help.is_empty() {
+            return self.help.to_string();
+        }
+        let mut t = format!("{}.", self.label.trim_end_matches(['.', '…']));
+        let doc = crate::params_doc(self);
+        let params = doc_params(doc);
+        if params.is_empty() && doc.trim().is_empty() {
+            t.push_str(" Takes no parameters: run it with {}.");
+        } else if params.is_empty() {
+            t.push_str(&format!(" Parameters: {}", doc.trim()));
+        } else {
+            let list: Vec<String> = params.iter().map(|p| format!("{} ({})", p.name, if p.optional { "optional" } else { "required" })).collect();
+            t.push_str(&format!(" JSON parameters: {}.", list.join(", ")));
+            if let Some((_, out)) = doc.split_once('→') {
+                let out = out.trim();
+                let short: String = out.chars().take(160).collect();
+                let more = if short.len() < out.len() { "…" } else { "" };
+                t.push_str(&format!(" Returns {short}{more}."));
+            }
+        }
+        if self.interactive.is_some() {
+            t.push_str(" Typed at the command line it asks for its input step by step.");
+        }
+        if !self.menu.is_empty() {
+            t.push_str(&format!(" Menu: {}.", self.menu.join(" > ")));
+        }
+        t
+    }
+
+    /// Example JSON parameters: the required ones with a documented or stand-in value.
+    pub fn example_params(&self) -> Value {
+        let mut m = serde_json::Map::new();
+        for p in doc_params(crate::params_doc(self)).into_iter().filter(|p| !p.optional) {
+            let v = example_value(&p.name, &p.kind);
+            m.insert(p.name, v);
+        }
+        Value::Object(m)
+    }
+
+    /// A copy-paste example from a shell: run the command on a drawing (and save it when the
+    /// command changes the drawing).
+    pub fn example(&self) -> String {
+        let save = if self.undoable { " --save DRAWING.dxf" } else { "" };
+        format!("cadaddy-cli run DRAWING.dxf --cmd '{} {}'{save}", self.id, self.example_params())
     }
 }
 
@@ -475,6 +746,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(revise3d::specs());
         v.extend(overrides::specs());
         v.extend(bspec::specs());
+        v.extend(planview::specs());
         v.extend(p2meval::specs());
         v.extend(schedules::specs());
         v.extend(pdfplans::specs());
@@ -489,11 +761,14 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(procure::specs());
         v.extend(tags::specs());
         v.extend(mep::specs());
+        v.extend(callouts::specs());
+        v.extend(clashreport::specs());
         v.extend(concrete::specs());
     v.extend(ugsheets::specs());
         v.extend(gear::specs());
         v.extend(labels::specs());
         v.extend(sitetakeoff::specs());
+        v.extend(framing::specs());
         v.extend(grounding::specs());
         v.extend(mepqty::specs());
         v.extend(ifcref::specs());
@@ -502,6 +777,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(part::specs());
         v.extend(cobie::specs());
         v.extend(printset::specs());
+        v.extend(readers::specs());
+        v.extend(sheetfacts::specs());
         v.extend(validate::specs());
         v.extend(printrev::specs());
         v.extend(ceilings::specs());
@@ -516,6 +793,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(redline::specs());
         v.extend(tours::specs());
         v.extend(fourd::specs());
+        v.extend(sequence::specs());
         v.extend(walkpub::specs());
         v.extend(imageclip::specs());
         v.extend(array::specs());
@@ -532,10 +810,18 @@ pub fn command_specs() -> &'static [CommandSpec] {
         );
         v.extend(models3d::specs());
         v.extend(furnish::specs());
+        v.extend(casework::specs());
+        v.extend(archread::specs());
         v.extend(perceive::specs());
         v.extend(rooms3d::specs());
         v.extend(bimprops::specs());
+        v.extend(elemprops::specs());
+        v.extend(propfill::specs());
+        v.extend(propuse::specs());
+        v.extend(identity::specs());
+        v.extend(bimlook::specs());
         v.extend(projrules::specs());
+        v.extend(codebook::specs());
         v.extend(spec_import::specs());
         v.extend(agentready::specs());
         v.extend(underlay::specs());
@@ -543,7 +829,11 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(takeoff::specs());
         v.extend(drywall::specs());
         v.extend(unittypes::specs());
+        v.extend(finishes::specs());
     v.extend(fieldview::specs());
+    v.extend(asbuilt::specs());
+    v.extend(cover::specs());
+    v.extend(bimwork::specs());
         v.extend(imageattach::specs());
         v.extend(dash_styles::specs());
         v.extend(modify2::specs());
@@ -558,6 +848,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(crate::script_tools::specs());
         v.extend(cam::specs());
         v.extend(exchange::specs());
+        v.extend(import_check::specs());
         v.extend(rasterout::specs());
         v.extend(props::specs());
         v.extend(inquiry::specs());
@@ -591,9 +882,12 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(attipedit::specs());
         v.extend(frames::specs());
         v.extend(coordination::specs());
+        v.extend(guided::specs());
         v.extend(project::specs());
         v.extend(rhai_cmd::specs());
         v.extend(plugins_cmd::specs());
+        v.extend(rulemodel::specs());
+        v.extend(lowvolt::specs());
         // Apply hand-written help texts.
         for spec in &mut v {
             let text = help_texts::lookup(spec.id);

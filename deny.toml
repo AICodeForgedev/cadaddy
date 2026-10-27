@@ -16,6 +16,9 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; only via accesskit (Linux accessibility), no vulnerability" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; only via accesskit (Linux accessibility), no vulnerability" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; only via accesskit (Linux accessibility), no vulnerability" },
+    # smartstring is "unmaintained" (informational, no vulnerability). It is a non-optional dependency of
+    # rhai 1.x (the scripting engine); drop this when rhai replaces it.
+    { id = "RUSTSEC-2026-0249", reason = "smartstring unmaintained; required by rhai 1.x (scripting), no vulnerability" },
 ]
 
 [licenses]
@@ -33,6 +36,8 @@ allow = [
     "0BSD",
     "BSL-1.0",
     "Unlicense",
+    # Public-domain dedication (tiny-keccak, via rhai's const-random); as permissive as Unlicense.
+    "CC0-1.0",
     "Unicode-3.0",
     "MPL-2.0",
     "OFL-1.1",

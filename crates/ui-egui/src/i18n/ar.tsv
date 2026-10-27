@@ -2545,6 +2545,7 @@ menu	View	عرض
 	List MEP Items	سرد عناصر MEP
 	Section Box	صندوق المقطع
 	Trade Visibility	إظهار التخصصات
+	Colour by BIM Property	التلوين حسب خاصية BIM
 	BIM Types	أنواع BIM
 	Get BIM Spec	عرض مواصفات BIM
 	Remove BIM Spec from Entities	إزالة مواصفات BIM من الكائنات
@@ -3126,3 +3127,131 @@ menu	View	عرض
 	Estimate Bid Summary	ملخص العطاء للتقدير
 	Read Panel Schedules	قراءة جداول اللوحات
 	Site Takeoff	حصر أعمال الموقع
+	Clash Report	تقرير التعارضات
+	Export PDF	تصدير PDF
+	Export the grouped clash report to PDF	تصدير تقرير التعارضات المجمّع إلى PDF
+	PDF exported to {path}.	تم تصدير PDF إلى {path}.
+	Clash detection failed.	فشل اكتشاف التعارضات.
+	Import Cost Table	استيراد جدول التكاليف
+	BIM View	عرض BIM
+	Trade Colours	ألوان التخصصات
+	Element Properties	خصائص العنصر
+	Tree	الشجرة
+	Colours	الألوان
+	Ghost Architecture	عمارة شفافة
+	Sheet Lines in 3D	خطوط اللوحة في ثلاثي الأبعاد
+	Nothing is built yet. Use Plans to Model first.	لم يُبنَ شيء بعد. استخدم «من المخططات إلى النموذج» أولاً.
+	Select one element to see its properties.	اختر عنصرًا واحدًا لعرض خصائصه.
+	Not part of the built model.	ليس جزءًا من النموذج المبني.
+	Category	الفئة
+	Trade	التخصص
+	Circuit	الدائرة
+	Source	المصدر
+	Issues	المشكلات
+	Show on Sheet	إظهار على اللوحة
+	Reset Colours	إعادة تعيين الألوان
+	Architecture	العمارة
+	Structure	الإنشاءات
+	Fire Protection	الحماية من الحريق
+	Doors and Windows	الأبواب والنوافذ
+	Supply Air Duct	مجرى هواء التغذية
+	Return Air Duct	مجرى هواء الراجع
+	Exhaust Air Duct	مجرى هواء العادم
+	Outside Air Duct	مجرى الهواء الخارجي
+	Duct	مجرى هواء
+	Air Terminals	مخارج الهواء
+	Equipment	المعدات
+	Domestic Cold Water	المياه الباردة المنزلية
+	Domestic Hot Water	المياه الساخنة المنزلية
+	Sanitary	الصرف الصحي
+	Vent	التهوية
+	Storm	مياه الأمطار
+	Gas	الغاز
+	Piping	الأنابيب
+	Plumbing Fixtures	التجهيزات الصحية
+	Conduit	الأنابيب الكهربائية
+	Cable Tray	حامل الكابلات
+	Electrical Devices	الأجهزة الكهربائية
+	Light Fixtures	وحدات الإنارة
+	Clash Check	فحص التعارضات
+	Fix Clash	إصلاح التعارض
+	Model Takeoff	حصر كميات النموذج
+	Show Takeoff Line	إظهار بند الحصر
+	Model Estimate	تقدير تكلفة النموذج
+	New Issue	مشكلة جديدة
+	Update Issue	تحديث المشكلة
+	Show Issue	إظهار المشكلة
+	Issue Marks	علامات المشكلات
+	Sheet and 3D Link	ربط اللوحة بالعرض الثلاثي الأبعاد
+	PDF to BIM	PDF إلى BIM
+	Read Casework and Fixtures	قراءة الخزائن والتجهيزات الصحية
+	Frame Walls from Prints	تأطير الجدران من المخططات
+	List Framed Walls	سرد الجدران المؤطرة
+	Framed Wall	جدار مؤطر
+	Next Stud	القائم التالي
+	Enter Field Stud	إدخال قائم مقاس في الموقع
+	Apply Shop Drawing	تطبيق رسم التنفيذ
+	Show Framing	عرض التأطير
+	Read Unit Types from Prints	قراءة أنواع الوحدات من المخططات
+	Edit Unit Type	تحرير نوع الوحدة
+	Override Unit Instance	تجاوز مثيل الوحدة
+	Place Unit Instances	وضع مثيلات الوحدات
+	List Callouts	قائمة رموز الإشارة
+	Keep Print Set Job	حفظ مهمة مجموعة الطباعة
+	Resume Print Set Job	استئناف مهمة مجموعة الطباعة
+	Finish Takeoff from Prints	حصر التشطيبات من المخططات
+	Layer Quantity Takeoff	حصر الكميات حسب الطبقة
+	Read Architecture from Prints	قراءة المعماري من المخططات
+	Read Roof and Wall Envelope	قراءة غلاف السقف والجدران
+	Element Properties (BIM)	خصائص العنصر (BIM)
+	Set Element Property (BIM)	تعيين خاصية العنصر (BIM)
+	Find Elements by Property	البحث عن العناصر حسب الخاصية
+	Element Property Summary	ملخص خصائص العناصر
+	BIM Properties	خصائص BIM
+	Kind	النوع
+	Element Identities (BIM)	هويات العناصر (BIM)
+	Room Connections	اتصالات الغرف
+	Link Print Set	ربط مجموعة الطباعة
+	Check Building Codes	التحقق من أكواد البناء
+	Code Rules	قواعد الكود
+	Select Building Codes	اختيار أكواد البناء
+	Fill Element Properties	تعبئة خصائص العناصر
+	Build Construction Sequence	إنشاء تسلسل البناء
+	Construction Sequence	تسلسل البناء
+	Edit Sequence Activity	تحرير نشاط التسلسل
+	Show Sequence at Date	عرض التسلسل في تاريخ
+	Export Construction Sequence	تصدير تسلسل البناء
+	Sequence Trade Conflicts	تعارضات المهن في التسلسل
+	Ceiling Space Fit	ملاءمة فراغ السقف
+	Takeoff by Activity	حصر الكميات حسب النشاط
+	BIM	BIM
+	Door	باب
+	Plan Views	مساقط أفقية
+	Generate Plan Views	إنشاء مساقط أفقية
+	Draw Wall (Object)	رسم جدار (كائن)
+	Place Door in Wall	وضع باب في الجدار
+	Place Window in Wall	وضع نافذة في الجدار
+	Resolve Plan Entity	تحديد عنصر المسقط
+	Record As-Built Change	تسجيل تغيير كما هو منفذ
+	Import As-Built Markups	استيراد علامات كما هو منفذ
+	List As-Built Changes	سرد تغييرات كما هو منفذ
+	Set As-Built Change Status	تعيين حالة تغيير كما هو منفذ
+	Compare Design and As-Built	مقارنة التصميم بما هو منفذ
+	Export As-Built	تصدير كما هو منفذ
+	Map Line to Price Row	ربط السطر بصف السعر
+	Start Cover Check	بدء فحص ما قبل التغطية
+	Cover Check Status	حالة فحص ما قبل التغطية
+	Check Cover Item	تأشير بند قبل التغطية
+	Reopen Cover Item	إعادة فتح بند قبل التغطية
+	Sign Inspection	توقيع الفحص
+	Ready to Cover	جاهز للتغطية
+	Cover Check Wall	جدار فحص ما قبل التغطية
+	Add In-Wall Photo	إضافة صورة داخل الجدار
+	Wall	جدار
+	Ready to cover	جاهز للتغطية
+	Not ready to cover	غير جاهز للتغطية
+	Checklist	قائمة التحقق
+	Photos	الصور
+	Photo	صورة
+	Schedule from Element Properties	جدول من خصائص العناصر
+	Check Element Properties	التحقق من خصائص العناصر

@@ -20,24 +20,27 @@ INSUNITS setting.
 
 ### Area takeoff
 
+At the first prompt, choose the **Area** keyword:
+
 ```
-TAKEOFF --mode area
+Command: TAKEOFF
+Mode [Length/Area] <Length>: Area
 ```
 
 Measures the enclosed area of closed polylines, circles, ellipses and hatches.
 
 ### Filter by layer
 
-```
-TAKEOFF --layers "E-*,P-*"
-```
+At the layers prompt, enter a wildcard pattern:
 
-Wildcard patterns select which layers to include.
+```
+Layers <*>: E-*,P-*
+```
 
 ### Add waste
 
 ```
-TAKEOFF --waste 10
+Waste % <0>: 10
 ```
 
 Adds 10% waste to every measurement. The waste percentage is also stored in the
@@ -46,7 +49,7 @@ Adds 10% waste to every measurement. The waste percentage is also stored in the
 ### Export to CSV
 
 ```
-TAKEOFF --file takeoff.csv
+File <>: takeoff.csv
 ```
 
 Writes a CSV with columns: layer, object count, drawing units, real units,
@@ -55,7 +58,7 @@ with-waste value.
 ### Insert as a table
 
 ```
-TAKEOFF --at 0,0
+Table insertion point <>: 0,0
 ```
 
 Places a TABLE entity in the drawing at the given point with the takeoff results.
@@ -63,8 +66,8 @@ Places a TABLE entity in the drawing at the given point with the takeoff results
 ### Nested objects
 
 By default, takeoff counts shapes inside block references, arrays and external
-references, applying the correct scale. Disable this with `--nested false`.
-Clipped xrefs respect their clip boundaries by default (`--clipped true`).
+references, applying the correct scale. The interactive prompts also ask about
+nested and clipped options.
 
 ### JSON parameters (for scripts and agents)
 
@@ -127,12 +130,20 @@ interactive measurement tool with several modes:
 | `LIST` | `LI` | Full property listing of selected objects |
 | `MASSPROP` | | Mass properties of 3D solids and regions |
 | `ID` | | Coordinates of a picked point |
-| `DBLIST` | | List every object in the drawing |
 
 ## Typical workflow
 
 1. Open a floor plan.
-2. Run `TAKEOFF --mode length --layers "E-*" --waste 10` to get conduit lengths
-   with waste.
-3. Run `TAKEOFF --mode area --layers "A-FLOOR-*"` to get floor areas.
+2. Run TAKEOFF and choose **Length** mode, filter to `E-*` layers, set 10% waste
+   to get conduit lengths.
+3. Run TAKEOFF again, choose **Area** mode, filter to `A-FLOOR-*` to get floor
+   areas.
 4. Export both to CSV or insert as tables for your estimate.
+
+For scripting and agents, use `execute` with JSON parameters instead of
+interactive prompts:
+
+```json
+execute {"command": "takeoff", "params": {"mode": "length", "layers": "E-*", "waste": 10, "file": "conduit.csv"}}
+execute {"command": "takeoff", "params": {"mode": "area", "layers": "A-FLOOR-*", "at": [0,0]}}
+```

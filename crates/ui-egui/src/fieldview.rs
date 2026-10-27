@@ -9,6 +9,9 @@
 //! connection comes back as it was; Send Notes hands the notes not yet sent back as a
 //! `cadaddy-fieldnotes` file that `fieldview.sync` merges into the drawing.
 //!
+//! Plan and 3D are linked (Q5242): a double tap on the plan shows that spot in 3D, and a double
+//! tap in 3D shows the spot it hits on the plan.
+//!
 //! The web app shows it with `?field` (and `?field=URL` fetches a package).
 
 use std::collections::BTreeSet;
@@ -84,6 +87,11 @@ pub struct FieldViewer {
     pub drawn_3d: usize,
     /// Open was pressed: the shell shows its file picker.
     pub open_requested: bool,
+    /// The spot the 3D view orbits when a plan point was sent to it (feet).
+    pub focus: Option<[f64; 3]>,
+    /// The wall face last tapped (index into the package's `cover`): its pre-cover checklist
+    /// and in-wall photos are shown (Q5119).
+    pub cover: Option<usize>,
 }
 
 impl Default for FieldViewer {
@@ -112,6 +120,8 @@ impl Default for FieldViewer {
             heading: 90.0,
             drawn_3d: 0,
             open_requested: false,
+            focus: None,
+            cover: None,
         }
     }
 }
@@ -129,12 +139,15 @@ impl FieldViewer {
     pub fn open(&mut self, bytes: &[u8]) -> Result<(), String> {
         let mut pkg = FieldPackage::from_json(bytes)?;
         pkg.assign_rooms();
-        // Notes made here and not sent yet stay when the same project's package is replaced.
+        // Notes made here and not in the drawing yet (unsent, or sent and not acknowledged) stay
+        // when the same project's package is replaced. One becomes synced only when the package
+        // carries its id as synced, i.e. the office ran fieldview.sync and exported again.
         if let Some(old) = &self.pkg
             && old.project == pkg.project
         {
             let mut keep = old.unsynced();
-            keep.retain(|n| !pkg.notes.iter().any(|m| m.id == n.id));
+            keep.retain(|n| !pkg.notes.iter().any(|m| m.id == n.id && m.synced));
+            pkg.notes.retain(|m| m.synced || !keep.iter().any(|n| n.id == m.id));
             pkg.notes.extend(keep);
         }
         self.status = format!("{} — {} {}", pkg.project, pkg.elements.len(), t("elements"));
@@ -180,6 +193,7 @@ impl FieldViewer {
         self.walk_at = r.at;
         self.dist = ((max[0] - min[0]).max(max[1] - min[1]) * 2.2).clamp(15.0, 400.0);
         self.room = Some(i);
+        self.focus = None;
         self.selected = None;
         self.query.clear();
         self.plan = None;
@@ -213,6 +227,7 @@ impl FieldViewer {
         let Some(pkg) = &self.pkg else { return };
         match self.tool {
             Tool::Select => {
+                self.cover = pkg.cover_at(&level, p, tol);
                 self.selected = pkg.pick_plan(&level, p, tol, &self.hidden);
                 if self.selected.is_none()
                     && let Some(r) = pkg.room_at(&level, p)
@@ -223,6 +238,54 @@ impl FieldViewer {
             Tool::Measure => self.measure_point([p[0], p[1], z]),
             Tool::Note => self.start_note([p[0], p[1], z]),
         }
+    }
+
+    /// A plan point (feet) in 3D: the 3D view orbits it, close up, on this level.
+    pub fn plan_to_3d(&mut self, p: [f64; 2]) {
+        if !(p[0].is_finite() && p[1].is_finite()) {
+            return;
+        }
+        let at = [p[0], p[1], self.floor_z() + 4.0];
+        self.focus = Some(at);
+        self.room = None;
+        self.walk_at = p;
+        self.dist = 25.0;
+        self.mode = Mode::Model;
+        self.status = format!("{} {:.1}, {:.1}", t("3D"), p[0], p[1]);
+    }
+
+    /// A 3D point (feet) on the plan: the plan centred on it, its level shown.
+    pub fn model_to_plan(&mut self, a: [f64; 3]) {
+        if !a.iter().all(|v| v.is_finite()) {
+            return;
+        }
+        if let Some(p) = &self.pkg
+            && let Some(l) = p
+                .levels
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.elevation_ft <= a[2] + 0.05)
+                .max_by(|x, y| x.1.elevation_ft.total_cmp(&y.1.elevation_ft))
+                .map(|(i, _)| i)
+        {
+            self.level = l;
+        }
+        let scale = self.plan.map_or(20.0, |(_, s)| s.max(20.0));
+        self.plan = Some(([a[0], a[1]], scale));
+        self.mode = Mode::Plan;
+        self.status = format!("{} {:.1}, {:.1}", t("Plan"), a[0], a[1]);
+    }
+
+    /// Where a ray from the camera lands: the element it hits, else the floor of this level.
+    pub fn ray_spot(&self, origin: [f64; 3], dir: [f64; 3]) -> Option<[f64; 3]> {
+        let level = self.level_name();
+        let pkg = self.pkg.as_ref()?;
+        let at = |t: f64| [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
+        if let Some((_, t)) = pkg.pick_ray(origin, dir, Some(&level), &self.hidden) {
+            return Some(at(t));
+        }
+        let z = self.floor_z();
+        (dir[2].abs() > 1e-9).then(|| (z - origin[2]) / dir[2]).filter(|t| t.is_finite() && *t > 0.0).map(at)
     }
 
     /// A tap in 3D: the ray from the camera through it.
@@ -275,21 +338,25 @@ impl FieldViewer {
         Some(id)
     }
 
-    /// Send Notes: the notes not sent yet as a notes file in the outbox, then marked sent.
+    /// Send Notes: every note not in the drawing yet (new, or sent before and not back in a
+    /// package) as a notes file in the outbox, then marked sent. Only a package exported from the
+    /// drawing marks a note synced, so a lost download is fixed by sending again.
     pub fn send_notes(&mut self) -> usize {
         let Some(pkg) = self.pkg.as_mut() else { return 0 };
-        let notes = pkg.unsynced();
+        let mut notes = pkg.unsynced();
         if notes.is_empty() {
             self.status = t("No new notes to send").into();
             return 0;
         }
         let n = notes.len();
         let ids: Vec<String> = notes.iter().map(|x| x.id.clone()).collect();
+        // `sent` is this device's bookkeeping, not part of the note the drawing keeps.
+        notes.iter_mut().for_each(|x| x.sent = false);
         let file = FieldNotes::new(&pkg.project, notes);
         let Ok(bytes) = serde_json::to_vec_pretty(&file) else { return 0 };
         let name: String = pkg.project.chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' }).take(60).collect();
         self.outbox.push((format!("{name}-fieldnotes-{}.json", self.device), bytes));
-        pkg.mark_synced(&ids);
+        pkg.mark_sent(&ids);
         self.dirty = true;
         self.status = format!("{n} {}", t("notes ready to sync"));
         n
@@ -505,6 +572,31 @@ impl FieldViewer {
             }
             ui.separator();
         }
+        // The tapped wall face: its pre-cover checklist and the photos taken behind it.
+        if let Some(c) = self.cover.and_then(|i| p.cover.get(i)) {
+            ui.label(egui::RichText::new(format!("{} {} / {}", t("Wall"), c.wall, c.face)).strong().color(tk.text));
+            if !c.rooms.is_empty() || !c.fire_rating.is_empty() {
+                ui.label(egui::RichText::new(format!("{} {}", c.rooms.join(", "), c.fire_rating).trim().to_string()).color(tk.text_dim));
+            }
+            let (ready, colour) = if c.ready { (t("Ready to cover"), tk.accent) } else { (t("Not ready to cover"), tk.text_dim) };
+            ui.label(egui::RichText::new(ready).color(colour));
+            ui.label(
+                egui::RichText::new(format!("{} ({}/{})", t("Checklist"), c.checklist.iter().filter(|i| i.done).count(), c.checklist.len()))
+                    .color(tk.text),
+            );
+            for item in &c.checklist {
+                let mut done = item.done;
+                ui.add_enabled(false, egui::Checkbox::new(&mut done, &item.description));
+            }
+            ui.label(egui::RichText::new(format!("{} ({})", t("Photos"), c.photos.len())).color(tk.text));
+            for ph in c.photos.iter().take(50) {
+                let caption = if ph.caption.is_empty() { &ph.uri } else { &ph.caption };
+                ui.label(
+                    egui::RichText::new(format!("{}: {caption} ({}, {})", ph.id, ph.uri, cadaddy_walk3d::feet(ph.elevation_ft))).color(tk.text_dim),
+                );
+            }
+            ui.separator();
+        }
         // The room: its unit, open clashes and RFIs, notes.
         if let Some(r) = self.room.and_then(|i| p.rooms.get(i)) {
             ui.label(egui::RichText::new(format!("{} {} {}", t("Room"), r.number, r.name)).strong().color(tk.text));
@@ -527,8 +619,17 @@ impl FieldViewer {
                 p.notes.iter().filter(|n| n.room.eq_ignore_ascii_case(&r.number) && n.level.eq_ignore_ascii_case(&r.level)).collect();
             ui.label(egui::RichText::new(format!("{} ({})", t("Notes"), notes.len())).color(tk.text));
             for n in notes.iter().take(50) {
-                let kind = if n.kind == NoteKind::VerifiedPoint { t("Verified") } else { t("Note") };
-                let sent = if n.synced { "" } else { " •" };
+                let kind = match n.kind {
+                    NoteKind::VerifiedPoint => t("Verified"),
+                    NoteKind::Photo => t("Photo"),
+                    NoteKind::Note => t("Note"),
+                };
+                // • not sent yet, ↑ sent and not back in a package yet, nothing once in the drawing.
+                let sent = match (n.synced, n.sent) {
+                    (true, _) => "",
+                    (false, true) => " ↑",
+                    (false, false) => " •",
+                };
                 ui.label(egui::RichText::new(format!("{kind} {}{sent}: {}", n.id, n.text)).color(tk.text_dim));
             }
             if go.is_some() {
@@ -563,9 +664,13 @@ impl FieldViewer {
                 c[1] += f64::from(pan.y / s);
                 self.plan = Some((c, s));
                 let tap = resp.clicked().then(|| resp.interact_pointer_pos()).flatten();
+                let to_plan = |at: Pos2| [c[0] + f64::from((at.x - rect.center().x) / s), c[1] - f64::from((at.y - rect.center().y) / s)];
                 if let Some(at) = tap {
-                    let p = [c[0] + f64::from((at.x - rect.center().x) / s), c[1] - f64::from((at.y - rect.center().y) / s)];
-                    self.tap_plan(p, f64::from(14.0 / s));
+                    self.tap_plan(to_plan(at), f64::from(14.0 / s));
+                }
+                if let Some(at) = resp.double_clicked().then(|| resp.interact_pointer_pos()).flatten() {
+                    self.plan_to_3d(to_plan(at));
+                    return;
                 }
                 self.draw_plan(&painter, rect, c, s);
             }
@@ -587,6 +692,12 @@ impl FieldViewer {
                     let (o, d) =
                         cam.ray(f64::from(at.x - rect.min.x), f64::from(at.y - rect.min.y), f64::from(rect.width()), f64::from(rect.height()));
                     self.tap_ray(o, d);
+                    if resp.double_clicked()
+                        && let Some(spot) = self.ray_spot(o, d)
+                    {
+                        self.model_to_plan(spot);
+                        return;
+                    }
                 }
                 self.draw_3d(&painter, rect, &cam);
                 if self.mode == Mode::Walk {
@@ -602,14 +713,15 @@ impl FieldViewer {
         match self.mode {
             Mode::Walk => Camera::walk(self.walk_at, z, self.heading),
             _ => {
-                let target = match self.room.and_then(|i| self.pkg.as_ref()?.rooms.get(i)) {
-                    Some(r) => [r.at[0], r.at[1], z + 4.0],
-                    None => {
+                let target = match (self.focus, self.room.and_then(|i| self.pkg.as_ref()?.rooms.get(i))) {
+                    (Some(f), _) => f,
+                    (None, Some(r)) => [r.at[0], r.at[1], z + 4.0],
+                    (None, None) => {
                         let (a, b) = self.level_box();
                         [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, z + 4.0]
                     }
                 };
-                let dist = if self.room.is_some() {
+                let dist = if self.room.is_some() || self.focus.is_some() {
                     self.dist
                 } else {
                     let (a, b) = self.level_box();
@@ -949,6 +1061,41 @@ mod tests {
         assert_eq!(civil(0), (1970, 1, 1));
         assert_eq!(civil(19_723), (2024, 1, 1));
         assert_eq!(civil(20_513), (2026, 3, 1));
+    }
+
+    /// Q5242: a plan point goes to 3D at that spot, and a 3D spot back to the plan on its level.
+    #[test]
+    fn plan_and_3d_are_linked() {
+        use cadaddy_walk3d::field::FieldLevel;
+        let mut v = FieldViewer::new("test");
+        v.pkg = Some(FieldPackage {
+            levels: vec![
+                FieldLevel { name: "Level 1".into(), elevation_ft: 0.0, height_ft: 14.0 },
+                FieldLevel { name: "Level 2".into(), elevation_ft: 14.0, height_ft: 14.0 },
+            ],
+            ..FieldPackage::default()
+        });
+        v.level = 1;
+        v.plan_to_3d([30.0, 12.0]);
+        assert_eq!(v.mode, Mode::Model);
+        let cam = v.camera();
+        let (eye, target) = (cam.eye, [30.0, 12.0, 18.0]);
+        let d = ((eye[0] - target[0]).powi(2) + (eye[1] - target[1]).powi(2) + (eye[2] - target[2]).powi(2)).sqrt();
+        assert!((d - 25.0).abs() < 1e-6, "orbits the spot 25' away: {eye:?}");
+        // A tap straight down onto level 1's floor (no elements): back to the plan there.
+        let spot = v.ray_spot([5.0, 6.0, 40.0], [0.0, 0.0, -1.0]).unwrap();
+        assert_eq!(spot, [5.0, 6.0, 14.0], "this level's floor");
+        v.model_to_plan([5.0, 6.0, 3.0]);
+        assert_eq!((v.mode, v.level), (Mode::Plan, 0));
+        assert_eq!(v.plan.map(|(c, _)| c), Some([5.0, 6.0]));
+        // Hostile points change nothing.
+        v.plan_to_3d([f64::NAN, 0.0]);
+        v.model_to_plan([0.0, f64::INFINITY, 0.0]);
+        assert_eq!(v.mode, Mode::Plan);
+        // Picking a room orbits the room again.
+        v.focus = Some([1.0, 1.0, 1.0]);
+        v.select_room(0);
+        assert!(v.focus.is_some(), "no room 0 in this package: nothing changes");
     }
 
     #[test]

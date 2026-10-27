@@ -4,9 +4,21 @@
 //! viewport fit the new sheet.
 
 use cadaddy_engine::Session;
+use cadaddy_engine::cmd::file::{IoHooks, set_io};
 use cadaddy_engine::doc::geom::{Bounds2, Vec2, Vec3};
 use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Line, Space, Viewport};
-use serde_json::json;
+use serde_json::{Value, json};
+
+fn plot_hooks() {
+    set_io(IoHooks {
+        read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
+        write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
+        plot: Some(|d, space, opts| cadaddy_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
+}
 
 fn viewports(s: &Session, layout: &str) -> Vec<Viewport> {
     s.doc()
@@ -135,4 +147,79 @@ fn a_paper_size_change_makes_the_sheets_viewport_fit_the_new_sheet() {
     let back = viewports(&s, "Layout1");
     let full = back.iter().find(|v| v.width > 5.0).unwrap();
     assert!((full.width - old.width()).abs() < 1e-9);
+}
+
+// ---------- PLOT and PUBLISH set up bare layouts (MUST 1) ----------
+
+#[test]
+fn plot_sets_up_a_new_drawings_layout_without_layout_set() {
+    plot_hooks();
+    let mut s = Session::empty();
+    s.new_drawing_with_viewports(false);
+    let ext = plan(&mut s);
+    // The placeholder shows only the empty drawing's limits, not the plan.
+    assert!(!shows(&viewports(&s, "Layout1")[0], ext));
+    // PLOT without any layout.set: the layout is set up in memory before plotting.
+    let r = s.execute("plot", &json!({ "layout": "Layout1" })).unwrap();
+    assert!(r.get("data").is_some() || r.get("bytes").is_some(), "plot succeeded: {r}");
+    // The viewport now shows the plan's extents.
+    let vps = viewports(&s, "Layout1");
+    assert_eq!(vps.len(), 1, "set up, not a second viewport");
+    assert!(shows(&vps[0], ext), "viewport zoomed to the plan after plot: {:?}", seen(&vps[0]));
+    // The printable area is the viewport's rectangle (same as the layout.set path).
+    let r_area = printable(&s, "Layout1");
+    assert!(vps[0].center.xy().near(r_area.center(), 1e-9));
+    assert!((vps[0].width - r_area.width()).abs() < 1e-9);
+}
+
+#[test]
+fn publish_sets_up_empty_layouts_of_a_drawing_opened_from_a_file() {
+    plot_hooks();
+    // A drawing with model content and empty layouts (read from a file via open_drawing).
+    let mut d = Drawing::new_imperial();
+    let h = d.new_handle();
+    d.space_mut(&Space::Model).unwrap().push(Entity::new(h, EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(480.0, 360.0, 0.0) })));
+    assert!(d.layouts.iter().all(|l| l.entities.is_empty()));
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Floor Plan.dwg", None);
+    // Without any layout.set, publish all layouts.
+    let r = s.execute("publish", &json!({})).unwrap();
+    assert!(r.get("sheets").is_some(), "publish succeeded: {r}");
+    // Layout1 now has a viewport showing the model content.
+    let vps = viewports(&s, "Layout1");
+    assert_eq!(vps.len(), 1, "a viewport was created for Layout1");
+    assert!(shows(&vps[0], Bounds2::new(Vec2::ZERO, Vec2::new(480.0, 360.0))), "viewport shows the drawing: {:?}", seen(&vps[0]));
+}
+
+// ---------- blank-sheet warnings (MUST 2) ----------
+
+#[test]
+fn plot_and_publish_warn_about_blank_sheets() {
+    plot_hooks();
+    // A drawing with nothing in model space: every layout plots blank.
+    let mut s = Session::empty();
+    s.new_drawing_with_viewports(false);
+    let log_before = s.log.len();
+    let r = s.execute("plot", &json!({ "layout": "Layout1" })).unwrap();
+    let w = r["warnings"].as_array().unwrap();
+    assert_eq!(w.len(), 1, "one blank warning: {r}");
+    assert!(w[0].as_str().unwrap().contains("nothing on it"), "{r}");
+    assert!(s.log[log_before..].iter().any(|l| l.starts_with("Warning:") && l.contains("Layout1")), "Warning echoed: {:?}", &s.log[log_before..]);
+
+    // Publish all layouts of the empty drawing: one warning per layout.
+    let log_before = s.log.len();
+    let r = s.execute("publish", &json!({})).unwrap();
+    let w: Vec<&str> = r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    // Layout1 and Layout2 are both blank.
+    assert_eq!(w.len(), 2, "one warning per layout: {w:?}");
+    assert!(s.log[log_before..].iter().filter(|l| l.starts_with("Warning:")).count() >= 2, "Warning lines echoed: {:?}", &s.log[log_before..]);
+
+    // A drawing with content: no warnings.
+    let mut s2 = Session::empty();
+    s2.new_drawing_with_viewports(false);
+    plan(&mut s2);
+    let r = s2.execute("plot", &json!({ "layout": "Layout1" })).unwrap();
+    assert_eq!(r["warnings"], json!([]), "no warnings for a plan: {r}");
+    let r = s2.execute("publish", &json!({})).unwrap();
+    assert_eq!(r["warnings"], json!([]), "no warnings for publish of a plan: {r}");
 }

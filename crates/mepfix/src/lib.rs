@@ -15,6 +15,8 @@
 //! building gets it), [`draw`] (how a sheet shows it) and, if readers will find it, [`score`].
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![allow(unknown_lints)] // the lint below exists only in newer clippy
+#![allow(clippy::chunks_exact_to_as_chunks)]
 
 pub mod arch;
 pub mod arch_reader;
@@ -29,8 +31,10 @@ pub mod clash;
 pub mod conduit_reader;
 pub mod covercheck;
 pub mod design;
+pub mod device_types;
 pub mod draw;
 pub mod duct_reader;
+pub mod earthwork;
 pub mod elec_reader;
 pub mod elecspec;
 pub mod envelope;
@@ -44,10 +48,14 @@ pub mod gear_reader;
 pub mod heights;
 pub mod hotel;
 pub mod layout;
+pub mod linefit;
+pub mod linkset;
+pub mod lv_reader;
 pub mod ocr;
 pub mod pipe_reader;
 pub mod printcheck;
 pub mod printed;
+pub mod printlinks;
 pub mod printset;
 pub mod revision;
 pub mod rfi;
@@ -55,6 +63,7 @@ pub mod rng;
 pub mod scan;
 pub mod scan_reader;
 pub mod score;
+pub mod sheet_facts;
 pub mod sheet_reader;
 pub mod site_reader;
 pub mod site_services;
@@ -63,8 +72,11 @@ pub mod spectag;
 pub mod sprinkler_reader;
 pub mod struct_reader;
 pub mod style;
+pub mod tagid;
 pub mod tray_reader;
 pub mod truth;
+pub mod unit_reader;
+pub mod units;
 pub mod wall_reader;
 pub mod walls;
 
@@ -153,6 +165,13 @@ pub fn generate(seed: u64) -> Result<FixtureSet, String> {
     generate_set(seed, false)
 }
 
+/// The fixture set for a seed with custom fire protection head schedule values (inches).
+pub fn generate_with_fp_schedule(seed: u64, fp_sprig_in: f64, fp_sidewall_below_in: f64) -> Result<FixtureSet, String> {
+    let (mut t, st, kinds) = designed_set_scheduled(seed, fp_sprig_in, fp_sidewall_below_in);
+    let files = draw_set(&mut t, &st, &kinds)?;
+    Ok(FixtureSet { truth: t, files })
+}
+
 /// The fixture set for a seed with gaps and conflicts planted in its prints ([`gaps`]): the
 /// same set plus the planted gaps, sleeve notes and an enlarged architectural plan (`A-401`).
 pub fn generate_with_gaps(seed: u64) -> Result<FixtureSet, String> {
@@ -198,6 +217,33 @@ pub(crate) fn designed_set(seed: u64, with_gaps: bool) -> (Truth, style::Style, 
             kinds.push((gaps::ENLARGED_SHEET.into(), layout::Kind::EnlargedFloor("1".into(), "TOILET".into())));
         }
     }
+    (t, st, kinds)
+}
+
+/// The office set's truth with its sheets planned, its style and each sheet's kind: what
+/// [`generate`] draws, for drawing single sheets with [`draw::draw`].
+pub fn office_planned(seed: u64) -> (Truth, style::Style, Vec<(String, layout::Kind)>) {
+    designed_set(seed, false)
+}
+
+/// Like [`designed_set`] but with custom fire protection head schedule values.
+fn designed_set_scheduled(seed: u64, fp_sprig_in: f64, fp_sidewall_below_in: f64) -> (Truth, style::Style, Vec<(String, layout::Kind)>) {
+    let mut r = Rng::new(seed);
+    let mut st = style::Style::new(&mut r.fork(1));
+    let d = design::design_scheduled(seed, &st, &mut r.fork(2), fp_sprig_in, fp_sidewall_below_in);
+    let mut t = d.truth;
+    layout::plan_sheets(&mut t, &st, &mut r.fork(3));
+    layout::tag_runs(&mut t, &st, &d.planted, &mut r.fork(4));
+    layout::tag_trays(&mut t, &st);
+    layout::plan_callouts(&mut t, &mut r.fork(5));
+    t.clashes = clash::clashes(&t, &d.planted);
+    t.placement_zones = clash::placement_zones(&t);
+    add_walls(&mut t, &mut st);
+    add_ceilings(&mut t, &mut st);
+    add_arch(&mut t, &mut st);
+    add_envelope(&mut t, &mut st);
+    elecspec::design(&mut t);
+    let kinds: Vec<(String, layout::Kind)> = layout::sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
     (t, st, kinds)
 }
 

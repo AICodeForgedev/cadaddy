@@ -39,7 +39,7 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
             // left is where it goes (Q282: a new user pressed Enter three times after the point).
             if app.session.running.as_ref().is_some_and(|r| r.id == "xattach") {
                 use cadaddy_engine::Input;
-                for i in [Input::Keyword("Scale".into()), Input::Text("1".into()), Input::Keyword("Rotate".into()), Input::Text("0".into())] {
+                for i in [Input::Keyword("Scale".into()), Input::Text("1".into()), Input::Keyword("Rotate".into()), Input::Enter] {
                     if let Err(e) = app.session.input(i) {
                         app.session.echo(e.to_string());
                         break;

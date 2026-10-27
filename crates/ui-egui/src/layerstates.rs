@@ -149,7 +149,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                                                 calls.push(("layerstate.edit", json!({ "name": cur.name, "layers": [{ "name": l.name, key: b }] })));
                                             }
                                         }
-                                        if ui.small_button("✕").on_hover_text(crate::tl!("Remove from the layer state")).clicked() {
+                                        if crate::icons::button(ui, crate::icons::Icon::Close, 16.0, "Remove from the layer state", false).clicked() {
                                             calls.push(("layerstate.edit", json!({ "name": cur.name, "removeLayers": [l.name] })));
                                         }
                                         ui.end_row();

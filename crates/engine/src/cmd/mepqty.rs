@@ -250,7 +250,9 @@ fn kind_str(kind: MepKind) -> &'static str {
 }
 
 fn r2(v: f64) -> f64 {
-    (v * 100.0).round() / 100.0
+    let r = (v * 100.0).round() / 100.0;
+    // + 0.0 turns -0.0 (a tiny negative sum) into 0.0, so reports never say "-0.0 ft".
+    r + 0.0
 }
 
 // ---------------- the takeoff ----------------
@@ -328,14 +330,15 @@ fn corners(pts: &[Vec2], bottoms: &[f64]) -> Vec<Corner> {
     out
 }
 
-/// An elbow's name by its turn: 90°, 45°, else the angle to the nearest 5°.
+/// An elbow's name by its turn, snapped to the standard fittings: 22.5°, 45° or 90° (a turn
+/// past 90° is still bought as a 90°).
 fn elbow_name(deg: f64) -> String {
-    if (deg - 90.0).abs() <= 10.0 {
-        "elbow 90°".into()
-    } else if (deg - 45.0).abs() <= 10.0 {
+    if deg < 33.75 {
+        "elbow 22.5°".into()
+    } else if deg < 67.5 {
         "elbow 45°".into()
     } else {
-        format!("elbow {}°", ((deg / 5.0).round() * 5.0) as i64)
+        "elbow 90°".into()
     }
 }
 
@@ -493,12 +496,13 @@ fn takeoff(sp: &BuildingSpec, st: &Settings, types: &cadaddy_doc::bimspec::BimTy
         let row = t.hangers.entry((lk, sk, kind_str(sy.kind), size)).or_default();
         row.spacing_ft = spacing;
         for (i, l) in plan_ft.iter().enumerate() {
-            if *l <= 1e-9 {
+            if !l.is_finite() || *l <= 1e-9 {
                 continue;
             }
-            let n = (l / spacing).ceil().max(1.0) as usize;
+            let nf = (l / spacing).ceil().max(1.0);
+            let n = if nf.is_finite() { (nf as usize).min(MAX_ITEMS) } else { 0 };
             let top = bottoms.get(i).copied().unwrap_or(0.0) + section_ft;
-            row.count += n;
+            row.count = row.count.saturating_add(n);
             row.rod_ft += n as f64 * (height - top).max(0.0);
         }
     }
@@ -589,7 +593,7 @@ impl Takeoff {
                 "terminals": self.terminals.values().sum::<usize>(),
                 "equipment": self.equipment.len(),
                 "equipment_by_kind": by_kind,
-                "hangers": self.hangers.values().map(|r| r.count).sum::<usize>(),
+                "hangers": self.hangers.values().map(|r| r.count).fold(0usize, usize::saturating_add),
                 "hanger_rod_ft": r2(self.hangers.values().map(|r| r.rod_ft).sum()),
             },
             "gauge_table": {"rectangular": gauge_json(&st.rect), "round": gauge_json(&st.round), "allowance_pct": st.allowance * 100.0},
@@ -792,6 +796,29 @@ fn tag(v: String) -> RawTag {
     RawTag { code: 1000, value: v.chars().take(250).collect() }
 }
 
+/// Push a JSON value into xdata as `prefix:<chunk>` tags, each at most 250 chars.
+fn push_json_tags(x: &mut Vec<RawTag>, prefix: &str, v: &Value) {
+    let s = v.to_string();
+    let limit = 250 - prefix.len() - 1; // "prefix:" + chunk
+    let mut pos = 0;
+    while pos < s.len() {
+        let end = (pos + limit).min(s.len());
+        x.push(tag(format!("{prefix}:{}", &s[pos..end])));
+        pos = end;
+    }
+}
+
+/// Read chunked JSON tags back from xdata (returns None if no chunks found).
+fn read_json_tags(tags: &[(&str, &str)], prefix: &str) -> Option<Value> {
+    let mut buf = String::new();
+    for &(k, v) in tags {
+        if k == prefix {
+            buf.push_str(v);
+        }
+    }
+    if buf.is_empty() { None } else { serde_json::from_str(&buf).ok() }
+}
+
 /// The settings a linked table keeps (in its xdata), to count again with.
 fn link_xdata(p: &Value, part: &str) -> Vec<RawTag> {
     let mut x = vec![RawTag { code: 1001, value: APP.into() }, tag(format!("part:{part}"))];
@@ -801,6 +828,15 @@ fn link_xdata(p: &Value, part: &str) -> Vec<RawTag> {
         }
     }
     x.push(tag(format!("allowance_pct:{}", p.get("allowance_pct").and_then(Value::as_f64).unwrap_or(0.0))));
+    if let Some(g) = p.get("gauges").filter(|v| !v.is_null()) {
+        push_json_tags(&mut x, "gauges", g);
+    }
+    if let Some(g) = p.get("round_gauges").filter(|v| !v.is_null()) {
+        push_json_tags(&mut x, "round_gauges", g);
+    }
+    if let Some(h) = p.get("hanger_spacing_ft").filter(|v| !v.is_null()) {
+        push_json_tags(&mut x, "hanger_spacing_ft", h);
+    }
     x
 }
 
@@ -809,14 +845,23 @@ fn link_params(xdata: &[RawTag]) -> Option<(Value, String)> {
     let at = xdata.iter().position(|t| t.code == 1001 && t.value == APP)?;
     let mut p = json!({});
     let mut part = "all".to_string();
-    for t in xdata.iter().skip(at + 1).take_while(|t| t.code != 1001) {
-        let Some((k, v)) = t.value.split_once(':') else { continue };
+    let tags: Vec<(&str, &str)> = xdata.iter().skip(at + 1).take_while(|t| t.code != 1001).filter_map(|t| t.value.split_once(':')).collect();
+    for &(k, v) in &tags {
         match k {
             "part" => part = v.to_string(),
             "level" | "system" | "group_by" => p[k] = json!(v),
             "allowance_pct" => p[k] = json!(v.parse::<f64>().unwrap_or(0.0)),
             _ => {}
         }
+    }
+    if let Some(g) = read_json_tags(&tags, "gauges") {
+        p["gauges"] = g;
+    }
+    if let Some(g) = read_json_tags(&tags, "round_gauges") {
+        p["round_gauges"] = g;
+    }
+    if let Some(h) = read_json_tags(&tags, "hanger_spacing_ft") {
+        p["hanger_spacing_ft"] = h;
     }
     Some((p, part))
 }
@@ -1014,7 +1059,10 @@ mod tests {
         assert!(matches!(c.get(1), Some(Corner::Drop(d)) if (d - 1.0).abs() < 1e-9));
         assert!(matches!(c.get(2), Some(Corner::Elbow(d)) if (d - 45.0).abs() < 1e-6));
         assert_eq!(elbow_name(88.0), "elbow 90°");
-        assert_eq!(elbow_name(30.0), "elbow 30°");
+        assert_eq!(elbow_name(30.0), "elbow 22.5°");
+        assert_eq!(elbow_name(10.0), "elbow 22.5°");
+        assert_eq!(elbow_name(50.0), "elbow 45°");
+        assert_eq!(elbow_name(175.0), "elbow 90°");
     }
 
     #[test]
@@ -1027,13 +1075,27 @@ mod tests {
 
     #[test]
     fn link_settings_round_trip() {
-        let x = link_xdata(&json!({"level": "L2", "system": "SA", "group_by": "system", "allowance_pct": 15.0}), "ducts");
+        let p_in = json!({
+            "level": "L2", "system": "SA", "group_by": "system", "allowance_pct": 15.0,
+            "gauges": [{"gauge": 20, "lb_per_sqft": 2.0}],
+            "round_gauges": [{"max_in": 18, "gauge": 24, "lb_per_sqft": 1.156}, {"gauge": 20, "lb_per_sqft": 1.656}],
+            "hanger_spacing_ft": {"duct": 10, "pipe": 8}
+        });
+        let x = link_xdata(&p_in, "ducts");
         let (p, part) = link_params(&x).unwrap();
         assert_eq!(part, "ducts");
         assert_eq!(p["level"], "L2");
         assert_eq!(p["system"], "SA");
         assert_eq!(p["group_by"], "system");
         assert_eq!(p["allowance_pct"], 15.0);
+        // Gauge tables round-trip.
+        assert_eq!(p["gauges"][0]["gauge"], 20);
+        assert_eq!(p["gauges"][0]["lb_per_sqft"], 2.0);
+        assert_eq!(p["round_gauges"].as_array().map(Vec::len), Some(2));
+        assert_eq!(p["round_gauges"][0]["max_in"], 18);
+        // Hanger spacing round-trips.
+        assert_eq!(p["hanger_spacing_ft"]["duct"], 10);
+        assert_eq!(p["hanger_spacing_ft"]["pipe"], 8);
         assert!(link_params(&[RawTag { code: 1001, value: "OTHER".into() }]).is_none());
     }
 

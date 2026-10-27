@@ -42,6 +42,11 @@ pub struct BuildingSpec {
     pub units_per_foot: f64,
     #[serde(default)]
     pub levels: Vec<Level>,
+    /// Stack the built levels into one building: `model.build` moves each level's 3D from over
+    /// its own plan (plans drawn side by side on one sheet) onto the lowest level's, by the
+    /// levels' bases (else the lower-left corners of their walls). The plans stay where they are.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stack: bool,
     /// Elevations the prints give for levels with no plan here (the roof, a parapet, a penthouse
     /// drawn elsewhere): they top the floor below and become IFC storeys (`levels.read`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -65,6 +70,21 @@ pub struct BuildingSpec {
     /// field observations.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub progress: serde_json::Value,
+    /// The BIM view (`bim.look`, `bim.trades`, `bim.tree`): the trade colour table, ghosting,
+    /// trades and tree branches shown, the level isolated.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub bim_view: serde_json::Value,
+    /// The construction sequence's settings (`schedule.*`): start date, crews, working days,
+    /// zone size, rates and the edits made to activities. The sequence itself is built from the
+    /// model each time.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub sequence: serde_json::Value,
+    /// Typical units (`unittypes.*`, Q305): the unit types read from the enlarged unit plans and
+    /// their instances on the floor plans, with hands and overrides. Kept as written.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub unit_types: serde_json::Value,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub unit_instances: serde_json::Value,
     #[serde(default)]
     pub layers: Vec<LayerRole>,
     #[serde(default)]
@@ -81,6 +101,9 @@ pub struct BuildingSpec {
     /// Stairs and ramps between the levels.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stairs: Vec<Stair>,
+    /// Elevator hoistways with their pits (`arch.read`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elevators: Vec<Hoistway>,
     /// Facades, roofs and what stands on them, from the elevations and the roof plan.
     #[serde(default, skip_serializing_if = "Exterior::is_empty")]
     pub exterior: Exterior,
@@ -137,6 +160,19 @@ pub struct BuildingSpec {
     /// agent should confirm.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub guess: BTreeMap<String, String>,
+    /// Where values read from the prints came from, by key (`levels/Level 2` → `layout:A-301:
+    /// LEVEL 2 = 14'-0"`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sources: BTreeMap<String, String>,
+    /// Hashed signatures of the sheet's print objects at the time of the first revision compare,
+    /// so later compares keep user markup (objects not in this set).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub print_baseline: Vec<u64>,
+    /// Building-code rule book selection and project-level amendments (`code.*`): which codes,
+    /// editions and jurisdiction apply to this project. The rules themselves are the starter set
+    /// shipped with CADaddy plus any user additions.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub codebook: serde_json::Value,
 }
 
 /// One part of a spec in plain language: its section, key (for approval and editing) and text.
@@ -254,6 +290,9 @@ pub struct Assembly {
     /// How its head meets what is above, and its bottom track (head of wall details).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head: Option<Head>,
+    /// Where it was read from: the legend sheet and tag (`A-501 wall type legend, tag 1B`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 /// A wall type's head and bottom, as its head of wall detail gives them.
@@ -456,6 +495,33 @@ pub struct WallMark {
     /// Why the type is a guess (no tag on the wall), when it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guess: Option<String>,
+    /// The plan sheet it was read from (`A-101`, `A-101 (no tag)`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// Its type read from a tag on the drawing, or guessed; none = not said (older specs: a mark
+    /// with a `guess` is a guess).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<MarkStatus>,
+    /// Where its height came from (`ceiling`, `deck`, `no ceiling beside it: deck`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub height_source: String,
+}
+
+/// Whether a wall mark's type is from the drawing or a guess.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkStatus {
+    /// A tag on the plan names it.
+    Drawing,
+    /// No tag: the likeliest type (`guess` says why).
+    Guess,
+}
+
+impl WallMark {
+    /// Its status as written, else a guess when it says why.
+    pub fn status(&self) -> MarkStatus {
+        self.status.unwrap_or(if self.guess.is_some() { MarkStatus::Guess } else { MarkStatus::Drawing })
+    }
 }
 
 fn is_six(v: &f64) -> bool {
@@ -463,7 +529,7 @@ fn is_six(v: &f64) -> bool {
 }
 
 /// A room, found by its tag text (`name`, or `number`) on the plan.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Room {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -476,6 +542,12 @@ pub struct Room {
     pub ceiling_ft: Option<f64>,
     #[serde(default)]
     pub materials: Surfaces,
+    /// Base finish from the room finish schedule (`RB-1 4" RUBBER BASE`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// Device plate colour from its wall finish (the finish legend).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plates: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -529,6 +601,18 @@ pub struct Stair {
     /// The plan objects it was found from (hex handles).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub objects: Vec<String>,
+    /// The code its risers and treads are checked against: "ibc" (commercial, IBC 1011.5.2:
+    /// risers 4″–7″, treads ≥ 11″; the default) or "irc" (residential, IRC R311.7.5: risers
+    /// ≤ 7¾″, treads ≥ 10″).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+impl Stair {
+    /// Checked against the residential code (`code: "irc"`) rather than the commercial one.
+    pub fn residential(&self) -> bool {
+        self.code.as_deref().is_some_and(|c| c.trim().eq_ignore_ascii_case("irc"))
+    }
 }
 
 /// The outside of the building: facades read from the elevations, roofs from the roof plan.
@@ -543,11 +627,51 @@ pub struct Exterior {
     pub crickets: Vec<Cricket>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub equipment: Vec<Equipment>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drains: Vec<RoofDrain>,
+    /// Parapet heights the elevations give, by roof level: kept here so they reach roofs read
+    /// later, whatever the reading order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parapets: Vec<LevelParapet>,
 }
 
 impl Exterior {
     pub fn is_empty(&self) -> bool {
-        self.facades.is_empty() && self.roofs.is_empty() && self.crickets.is_empty() && self.equipment.is_empty()
+        self.facades.is_empty()
+            && self.roofs.is_empty()
+            && self.crickets.is_empty()
+            && self.equipment.is_empty()
+            && self.drains.is_empty()
+            && self.parapets.is_empty()
+    }
+
+    /// The parapet height an elevation gives for a level, feet.
+    pub fn level_parapet(&self, level: &str) -> Option<f64> {
+        self.parapets.iter().find(|p| p.level.eq_ignore_ascii_case(level)).map(|p| p.height_ft)
+    }
+}
+
+/// A parapet height read from an elevation (above the roof line), for the roofs of a level.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LevelParapet {
+    pub level: String,
+    pub height_ft: f64,
+    /// The facade whose elevation gave it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facade: Option<Side>,
+}
+
+/// Whether a value was read from the drawings or is a default put in because they don't say.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueStatus {
+    Read,
+    Default,
+}
+
+impl ValueStatus {
+    pub fn is_default(status: &Option<ValueStatus>) -> bool {
+        *status == Some(ValueStatus::Default)
     }
 }
 
@@ -619,6 +743,12 @@ pub struct Roof {
     /// Parapet height above the roof's high point, feet; none = no parapet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parapet_ft: Option<f64>,
+    /// Whether the parapet height was read (`parapet_from` says where) or is a default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parapet_status: Option<ValueStatus>,
+    /// Where the parapet height came from: `roof plan` (its note), `elevation` or `default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parapet_from: Option<String>,
     /// What the roof is built of, top down (membrane, cover board, insulation, deck).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assembly: Option<Assembly>,
@@ -629,6 +759,10 @@ pub struct RoofSlope {
     pub down: [f64; 2],
     /// Rise per foot of run (¼"/ft = 0.0208, 4:12 = 0.333).
     pub rise_per_ft: f64,
+    /// Whether the downhill direction was read from the arrow's head or is a default (the
+    /// arrow's drawing order, when its head can't be told).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction_status: Option<ValueStatus>,
 }
 
 /// A cricket: a raised ridge diverting water, its outline on the roof and its height.
@@ -637,6 +771,9 @@ pub struct Cricket {
     pub level: String,
     pub outline: Vec<[f64; 2]>,
     pub height_ft: f64,
+    /// Whether the height was read from its note or is the 6" default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_status: Option<ValueStatus>,
 }
 
 /// Rooftop equipment (RTU, AHU, exhaust fan) as a box over its outline.
@@ -646,6 +783,16 @@ pub struct Equipment {
     pub level: String,
     pub outline: Vec<[f64; 2]>,
     pub height_ft: f64,
+    /// Whether the height was read from its note or is the 4'-0" default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_status: Option<ValueStatus>,
+}
+
+/// A roof drain on the roof plan (sheet units, on its level's plan).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RoofDrain {
+    pub level: String,
+    pub at: [f64; 2],
 }
 
 /// Door and window schedules read from the sheets (`schedules.read`).
@@ -708,11 +855,53 @@ impl ScheduleRow {
     }
 }
 
-/// A door or window tag on a plan: its mark and where it is (sheet units).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A door or window tag on a plan: its mark and where it is (sheet units). Read off the
+/// architectural plans (`arch.read`), a door's tag also says how it swings: its hand, the rooms
+/// it swings into and from, its hinge and latch points (sheet units) and whether its hardware
+/// has a card reader; and where it was read (`source` sheet, `status`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct OpeningTag {
     pub mark: String,
     pub at: [f64; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
+    /// `LH`, `RH`, `LHR` or `RHR`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hand: Option<String>,
+    /// Room numbers either side: the one it swings into, the one it swings from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swings_into: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_room: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hinge: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latch: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub card_reader: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// `drawing`, `schedule` or `guess`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+/// An elevator hoistway read off the plans: its box (sheet units, on the plan of the lowest level
+/// it serves), the levels it serves, its pit depth and capacity.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Hoistway {
+    pub name: String,
+    #[serde(default)]
+    pub levels: Vec<String>,
+    pub min: [f64; 2],
+    pub max: [f64; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pit_ft: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_lb: Option<u32>,
+    /// The sheet it was read from.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 /// A structural column at a grid intersection: its outline's size and shape, from its level's
@@ -728,6 +917,12 @@ pub struct GridColumn {
     pub round: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_level: Option<String>,
+    /// The drawn outline it was read from (its handle, hex); empty for a column typed in.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// How it is known: `rule` (read from the plan by `grids.columns`); empty for a column typed in.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
 }
 
 /// Mechanical, electrical and plumbing runs drawn single-line on the plans.
@@ -780,6 +975,11 @@ pub struct Mep {
     /// underground entrance laid out before the slab.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub required_services: Vec<String>,
+    /// Per-trade default elevation bands for MEP elements (configurable; overrides the hard-coded
+    /// defaults when set). Each entry maps a trade to its default bottom-of-duct/pipe/equipment
+    /// height above the floor, in feet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elevation_bands: Vec<ElevationBand>,
 }
 
 /// The grounding electrode system, the bonds and the telecom grounding.
@@ -979,6 +1179,13 @@ pub struct ElecDevice {
     /// The sheet its circuit was read from (`E-101`), empty when entered by hand.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
+    /// A light fixture's type (`A`, `B`) as the plan tags it.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub type_tag: String,
+    /// Its type's row in the light fixture schedule (column → value as printed: description,
+    /// mounting, lamp and wattage).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, String>,
 }
 
 /// One piece of gear's arc flash study result.
@@ -1015,6 +1222,7 @@ impl Mep {
             && self.grounding.is_none()
             && self.services.is_empty()
             && self.required_services.is_empty()
+            && self.elevation_bands.is_empty()
     }
 }
 
@@ -1124,6 +1332,10 @@ pub struct Termination {
     /// enter or leave the enclosure through the wall opposite it.
     pub bending_in: f64,
     pub opposite: bool,
+    /// Where these provisions came from: `LUG SCHEDULE E-601`, `one-line E-501`,
+    /// `submittal 26 24 16-01` (an approved submittal overrides the schedule). Empty: by hand.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 impl Default for Termination {
@@ -1141,6 +1353,7 @@ impl Default for Termination {
             stack_in: 0.75,
             bending_in: 0.0,
             opposite: true,
+            source: String::new(),
         }
     }
 }
@@ -1192,6 +1405,9 @@ pub struct Feeder {
     pub entry: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub from_entry: String,
+    /// Where it was read from: `FEEDER SCHEDULE E-601`, `one-line E-501`. Empty: by hand.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 impl Default for Feeder {
@@ -1215,6 +1431,7 @@ impl Default for Feeder {
             conduit_in: 0.0,
             entry: "top".into(),
             from_entry: String::new(),
+            source: String::new(),
         }
     }
 }
@@ -1246,7 +1463,9 @@ pub struct MepEquipment {
     pub title: String,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub properties: BTreeMap<String, String>,
-    /// Where its footprint, height and elevation came from (`outline`, `schedule`, `rule`…).
+    /// Where its footprint, height and elevation came from (`outline`, `schedule`, `rule`…);
+    /// gear read off the E-sheets also has `position` (`E-sheet tag E-101` until an
+    /// architectural position confirms it) and `status` (`unconfirmed` / `confirmed`).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub sources: BTreeMap<String, String>,
     pub confidence: f64,
@@ -1323,6 +1542,25 @@ pub struct MepRevision {
     pub to: String,
 }
 
+/// A per-trade default elevation band: the default bottom height (feet above the floor) for
+/// MEP elements of a given trade when no height tag is present on the drawing. The agent or
+/// owner can set these via `bspec.set` to match the project's coordination drawings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ElevationBand {
+    /// Trade identifier: `"duct"`, `"pipe"`, `"conduit"`, `"terminal"`, `"equipment"`.
+    pub trade: String,
+    /// Default bottom-of-element height above the floor, feet.
+    pub bottom_ft: f64,
+}
+
+impl Mep {
+    /// Look up the elevation band for a trade; returns `None` if no band is set (use hard-coded
+    /// default).
+    pub fn band_bottom_ft(&self, trade: &str) -> Option<f64> {
+        self.elevation_bands.iter().find(|b| b.trade == trade).map(|b| b.bottom_ft)
+    }
+}
+
 fn default_terminal_kind() -> String {
     "diffuser".into()
 }
@@ -1374,13 +1612,34 @@ impl MepSystem {
         if let Some(dt) = self.duct_type {
             return dt.default_color();
         }
+        if self.kind == MepKind::Pipe {
+            return pipe_system_default_color(&self.name);
+        }
         match self.kind {
             MepKind::Duct => 4,    // cyan (generic duct, no type set)
-            MepKind::Pipe => 3,    // green
+            MepKind::Pipe => 3,    // green (unreachable due to the check above)
             MepKind::Conduit => 6, // magenta
             MepKind::Tray => 30,   // orange
             MepKind::Cable => 210, // pink: an assumed homerun route
         }
+    }
+}
+
+/// Default ACI colour for a pipe system by name. Each major plumbing / fire-protection system
+/// gets a distinct colour so runs are visually separable in the 3D model.
+pub fn pipe_system_default_color(system: &str) -> i16 {
+    match system {
+        "CW" => 5,     // blue — cold water
+        "HW" => 1,     // red — hot water
+        "HWR" => 14,   // dark red — hot water return
+        "SAN" => 30,   // orange — sanitary
+        "V" => 3,      // green — vent
+        "G" => 50,     // yellow — gas
+        "FP" => 6,     // magenta — fire protection
+        "CHW" => 4,    // cyan — chilled water
+        "CHWR" => 140, // light blue — chilled water return
+        "ST" => 8,     // dark grey — steam
+        _ => 3,        // green — generic pipe
     }
 }
 
@@ -1434,6 +1693,25 @@ pub struct MepRun {
     /// Buried in a concrete encasement (a duct bank), as the drawings say.
     #[serde(default, skip_serializing_if = "is_false")]
     pub encased: bool,
+    /// Where the size came from: tag, note, ceiling, rule, default, override.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub size_source: String,
+    /// Where the height came from: tag, note, ceiling, rule, default, override.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub height_source: String,
+    /// Whether this run has been reviewed by a person or agent.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reviewed: bool,
+    /// Who last edited this run (empty if not edited).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub edited_by: String,
+    /// A vertical run (riser) from `bottoms_ft[0]` up to this elevation (feet above the floor of
+    /// the level it starts on). When set, the run has a single plan point and goes straight up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_ft: Option<f64>,
+    /// The sheet this run was read from (e.g. `"M-201"`, `"M-301"`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_sheet: String,
 }
 
 fn is_false(v: &bool) -> bool {
@@ -1731,12 +2009,20 @@ impl BuildingSpec {
                 if let Some(h) = &a.head {
                     let _ = write!(text, "; {}", h.text());
                 }
+                if !a.source.is_empty() {
+                    let _ = write!(text, "; from {}", a.source);
+                }
             }
             put("wall_types", format!("wall_types/{}", t.name), text);
         }
         if !self.walls.is_empty() {
-            let guessed = self.walls.iter().filter(|w| w.guess.is_some()).count();
-            put("walls", "walls".into(), format!("{} walls typed from their tags on the plans, {guessed} guessed (no tag)", self.walls.len()));
+            let guessed = self.walls.iter().filter(|w| w.status() == MarkStatus::Guess).count();
+            let drawing = self.walls.len() - guessed;
+            put(
+                "walls",
+                "walls".into(),
+                format!("{} walls: {drawing} typed from their tags on the plans (drawing), {guessed} guessed (no tag)", self.walls.len()),
+            );
         }
         for r in &self.rooms {
             let name = if r.name.trim().is_empty() { r.number.clone().unwrap_or_default() } else { r.name.clone() };
@@ -1810,7 +2096,10 @@ impl BuildingSpec {
         }
         for r in &self.exterior.roofs {
             let slope = r.slope.map_or("flat".to_string(), |s| format!("sloping {}", pitch_text(s.rise_per_ft)));
-            let parapet = r.parapet_ft.map_or(String::new(), |p| format!(", {} parapet", feet(p)));
+            let slope =
+                if r.slope.is_some_and(|s| ValueStatus::is_default(&s.direction_status)) { format!("{slope} (direction assumed)") } else { slope };
+            let assumed = if ValueStatus::is_default(&r.parapet_status) { " (assumed)" } else { "" };
+            let parapet = r.parapet_ft.map_or(String::new(), |p| format!(", {} parapet{assumed}", feet(p)));
             let asm = r.assembly.as_ref().map_or(String::new(), |a| {
                 let words: Vec<&str> = a.layers.iter().map(|l| l.material.as_str()).collect();
                 format!("; {} top down: {}", if a.tag.is_empty() { "built" } else { a.tag.as_str() }, words.join(", "))
@@ -1818,7 +2107,17 @@ impl BuildingSpec {
             put("exterior", format!("roofs/{}", r.name), format!("{}: roof on {}, {slope}{parapet}{asm}", r.name, r.level));
         }
         for (i, c) in self.exterior.crickets.iter().enumerate() {
-            put("exterior", format!("crickets/{}", i + 1), format!("Cricket {} on {}, {} high", i + 1, c.level, feet(c.height_ft)));
+            put(
+                "exterior",
+                format!("crickets/{}", i + 1),
+                format!(
+                    "Cricket {} on {}, {} high{}",
+                    i + 1,
+                    c.level,
+                    feet(c.height_ft),
+                    if ValueStatus::is_default(&c.height_status) { " (assumed)" } else { "" }
+                ),
+            );
         }
         for (i, c) in self.rcp.ceilings.iter().enumerate() {
             let what = match c.grid {
@@ -1935,7 +2234,17 @@ impl BuildingSpec {
             );
         }
         for e in &self.exterior.equipment {
-            put("exterior", format!("equipment/{}", e.name), format!("{}: rooftop equipment on {}, {} high", e.name, e.level, feet(e.height_ft)));
+            put(
+                "exterior",
+                format!("equipment/{}", e.name),
+                format!(
+                    "{}: rooftop equipment on {}, {} high{}",
+                    e.name,
+                    e.level,
+                    feet(e.height_ft),
+                    if ValueStatus::is_default(&e.height_status) { " (assumed)" } else { "" }
+                ),
+            );
         }
         let mats = materials_text(&self.materials);
         if !mats.is_empty() {
@@ -1980,12 +2289,17 @@ impl BuildingSpec {
             version: SPEC_VERSION,
             units_per_foot: r.units_per_foot,
             levels: r.levels.clone(),
+            stack: false,
             datums: Vec::new(),
             sheets: Vec::new(),
             tags: Vec::new(),
             estimate: serde_json::Value::Null,
             wholejob: serde_json::Value::Null,
+            bim_view: serde_json::Value::Null,
             progress: serde_json::Value::Null,
+            sequence: serde_json::Value::Null,
+            unit_types: serde_json::Value::Null,
+            unit_instances: serde_json::Value::Null,
             layers,
             wall_types,
             rooms: Vec::new(),
@@ -1993,6 +2307,7 @@ impl BuildingSpec {
             materials: Surfaces::default(),
             site: None,
             stairs: Vec::new(),
+            elevators: Vec::new(),
             exterior: Exterior::default(),
             rcp: Rcp::default(),
             mep: Mep::default(),
@@ -2010,6 +2325,9 @@ impl BuildingSpec {
             openings: r.openings.clone(),
             approved: Vec::new(),
             guess: BTreeMap::new(),
+            sources: BTreeMap::new(),
+            print_baseline: Vec::new(),
+            codebook: serde_json::Value::Null,
         }
     }
 
@@ -2115,8 +2433,13 @@ impl BuildingSpec {
         self.families.iter().find(|f| layer_match(&f.block, block))
     }
 
+    /// A family whose name matches a schedule row's TYPE (case-insensitive) and kind.
+    pub fn family_by_type(&self, kind: FamilyKind, type_name: &str) -> Option<&Family> {
+        self.families.iter().find(|f| f.kind == kind && f.name.eq_ignore_ascii_case(type_name.trim()))
+    }
+
     pub fn level(&self, name: &str) -> Option<&Level> {
-        self.levels.iter().find(|l| l.name.eq_ignore_ascii_case(name))
+        self.level_matching(name).and_then(|i| self.levels.get(i))
     }
 
     /// Problems found in the spec alone (see `bspec.validate` for those against the drawing).
@@ -2359,6 +2682,11 @@ impl BuildingSpec {
                 out.push(Issue::error(format!("exterior.equipment[{i}]"), "equipment needs a level, an outline and a height from 0 to 100 feet"));
             }
         }
+        for (i, p) in self.exterior.parapets.iter().enumerate().take(MAX_ITEMS) {
+            if !(fin(p.height_ft) && (0.0..=50.0).contains(&p.height_ft)) {
+                out.push(Issue::error(format!("exterior.parapets[{i}].height_ft"), "the parapet must be from 0 to 50 feet"));
+            }
+        }
         for (i, r) in self.schedule.rows.iter().enumerate().take(100_000) {
             let at = format!("schedule.rows[{i}]");
             if r.mark.trim().is_empty() {
@@ -2398,13 +2726,20 @@ impl BuildingSpec {
             if self.level(&r.level).is_none() {
                 out.push(Issue::error(format!("{at}.level"), format!("there is no level named {}", r.level)));
             }
-            if r.points.len() < 2
-                || r.bottoms_ft.len() + 1 != r.points.len()
+            let vertical = r.top_ft.is_some();
+            let min_pts = if vertical { 1 } else { 2 };
+            let btm_ok = if vertical { r.bottoms_ft.len() == 1 && r.points.len() == 1 } else { r.bottoms_ft.len() + 1 == r.points.len() };
+            if r.points.len() < min_pts
+                || !btm_ok
                 || !r.points.iter().flatten().chain(r.bottoms_ft.iter()).chain(r.size_in.iter()).all(|v| fin(*v))
                 || r.size_in[0].is_nan()
                 || r.size_in[0] <= 0.0
+                || r.top_ft.is_some_and(|t| !fin(t) || t <= r.bottoms_ft.first().copied().unwrap_or(0.0))
             {
-                out.push(Issue::error(at, "a run needs 2 points or more, a size and one bottom height per segment"));
+                out.push(Issue::error(
+                    at,
+                    "a run needs 2 points or more (or 1 point with top_ft for a vertical riser), a size, and one bottom height per segment",
+                ));
             }
         }
         for (i, e) in self.mep.equipment.iter().enumerate().take(MAX_ITEMS) {
@@ -2415,6 +2750,15 @@ impl BuildingSpec {
             let corners = e.min.iter().chain(&e.max).all(|v| fin(*v)) && e.max[0] > e.min[0] && e.max[1] > e.min[1];
             if e.tag.trim().is_empty() || !corners || !(fin(e.bottom_ft) && fin(e.height_ft) && e.height_ft > 0.0 && e.height_ft <= 100.0) {
                 out.push(Issue::error(at.clone(), "equipment needs a tag, a plan box and a height from 0 to 100 feet"));
+            }
+            // A system that isn't one of mep.systems: its runs (if any) are grouped apart from it.
+            for (k, sy) in e.systems.iter().enumerate().take(MAX_ITEMS) {
+                if !self.mep.systems.iter().any(|s| s.name == *sy) {
+                    out.push(Issue::warning(
+                        format!("{at}.systems[{k}]"),
+                        format!("{} joins {sy}, which isn't a system in mep.systems: it won't be grouped with that system's runs", e.tag),
+                    ));
+                }
             }
             for (k, t) in e.terminations.iter().enumerate().take(MAX_ITEMS) {
                 if t.point.trim().is_empty() || t.lugs == 0 || t.lugs > 1000 || t.wires_per_lug == 0 || t.wires_per_lug > 10 {
@@ -2549,6 +2893,15 @@ impl BuildingSpec {
                     out.push(Issue::error(format!("{at}.runs[{j}].treads"), "a stair run has 1 to 200 treads"));
                 }
             }
+            if let Some(c) = st.code.as_deref().filter(|c| !["ibc", "irc"].iter().any(|k| c.trim().eq_ignore_ascii_case(k))) {
+                out.push(Issue::error(
+                    format!("{at}.code"),
+                    format!(
+                        "the stair code is \"ibc\" (commercial, the default) or \"irc\" (residential), not \"{}\"",
+                        c.chars().take(40).collect::<String>()
+                    ),
+                ));
+            }
             if let Some((z0, z1)) = self.stair_heights(st) {
                 if z1 <= z0 || z1.is_nan() || z0.is_nan() {
                     out.push(Issue::error(format!("{at}.to_level"), "it must reach a level above the one it starts on"));
@@ -2559,25 +2912,32 @@ impl BuildingSpec {
                             out.push(Issue::warning(&at, format!("the ramp rises 1:{:.1}, steeper than 1:12 (IBC 1012.2)", 1.0 / slope)));
                         }
                     } else if n > 0 {
-                        if riser > crate::stairs::RISER_MAX_IN + 1e-9 {
-                            out.push(Issue::warning(
-                                &at,
-                                format!(
-                                    "{n} risers of {}: above the 7¾\" limit (IRC R311.7.5.1; 7\" under IBC 1011.5.2) — add treads",
-                                    inches(riser)
-                                ),
-                            ));
+                        let irc = st.residential();
+                        let (riser_max, tread_min) = if irc {
+                            (crate::stairs::RISER_MAX_IN, crate::stairs::TREAD_MIN_IN)
+                        } else {
+                            (crate::stairs::RISER_MAX_COMMERCIAL_IN, crate::stairs::TREAD_MIN_COMMERCIAL_IN)
+                        };
+                        if riser > riser_max + 1e-9 {
+                            let limit = if irc {
+                                "the 7¾\" limit (IRC R311.7.5.1; 7\" under IBC 1011.5.2)"
+                            } else {
+                                "the 7\" limit (IBC 1011.5.2; 7¾\" under IRC R311.7.5.1, code \"irc\")"
+                            };
+                            out.push(Issue::warning(&at, format!("{n} risers of {}: above {limit} — add treads", inches(riser))));
                         } else if riser < crate::stairs::RISER_MIN_IN - 1e-9 {
                             out.push(Issue::warning(
                                 &at,
                                 format!("{n} risers of {}: under the 4\" minimum (IBC 1011.5.2) — fewer treads", inches(riser)),
                             ));
                         }
-                        if tread.is_finite() && tread < crate::stairs::TREAD_MIN_IN - 1e-9 {
-                            out.push(Issue::warning(
-                                &at,
-                                format!("treads of {}: under the 10\" minimum (IRC R311.7.5.2; 11\" under IBC)", inches(tread)),
-                            ));
+                        if tread.is_finite() && tread < tread_min - 1e-9 {
+                            let limit = if irc {
+                                "the 10\" minimum (IRC R311.7.5.2; 11\" under IBC 1011.5.2)"
+                            } else {
+                                "the 11\" minimum (IBC 1011.5.2; 10\" under IRC R311.7.5.2, code \"irc\")"
+                            };
+                            out.push(Issue::warning(&at, format!("treads of {}: under {limit}", inches(tread))));
                         }
                     }
                 }
@@ -2639,7 +2999,7 @@ pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
                 }
                 let key = match k.as_str() {
                     "layers" => Some("layer"),
-                    "levels" | "wall_types" | "rooms" | "families" | "stairs" | "systems" => Some("name"),
+                    "levels" | "wall_types" | "rooms" | "families" | "stairs" | "elevators" | "systems" => Some("name"),
                     _ => None,
                 };
                 match (b.get_mut(k), key, v) {
@@ -2756,7 +3116,17 @@ mod tests {
         assert!((a.thickness_in() - 4.875).abs() < 1e-12);
         s.wall_types.push(WallType { name: "1B".into(), height_ft: None, thickness_in: 4.875, from: WallFrom::Pairs, assembly: Some(a) });
         let level = s.levels[0].name.clone();
-        s.walls.push(WallMark { level: level.clone(), a: [0.0, 0.0], b: [120.0, 0.0], wall_type: "1b".into(), height_ft: Some(9.5), guess: None });
+        s.walls.push(WallMark {
+            level: level.clone(),
+            a: [0.0, 0.0],
+            b: [120.0, 0.0],
+            wall_type: "1b".into(),
+            height_ft: Some(9.5),
+            guess: None,
+            source: String::new(),
+            status: None,
+            height_source: String::new(),
+        });
         assert!(s.check().iter().all(|i| !i.error), "{:?}", s.check());
         assert_eq!(BuildingSpec::from_json(&s.to_json()), Ok(s.clone()));
         let d = s.describe();
@@ -2764,7 +3134,17 @@ mod tests {
         assert!(t.contains("6\" above the ceiling") && t.contains("1 HR") && t.contains("STC 45"), "{t}");
         // A thickness the layers don't make, a mark on no type, a bad layer: said.
         s.wall_types[0].thickness_in = 6.0;
-        s.walls.push(WallMark { level, a: [0.0, 0.0], b: [0.0, 0.0], wall_type: "nope".into(), height_ft: Some(f64::NAN), guess: None });
+        s.walls.push(WallMark {
+            level,
+            a: [0.0, 0.0],
+            b: [0.0, 0.0],
+            wall_type: "nope".into(),
+            height_ft: Some(f64::NAN),
+            guess: None,
+            source: String::new(),
+            status: None,
+            height_source: String::new(),
+        });
         if let Some(a) = s.wall_types[0].assembly.as_mut() {
             a.layers[0].thickness_in = -1.0;
         }
@@ -2802,6 +3182,8 @@ mod tests {
             outline: vec![[0.0, 0.0], [100.0, 0.0], [100.0, 50.0]],
             slope: None,
             parapet_ft: Some(3.0),
+            parapet_status: None,
+            parapet_from: None,
             assembly: Some(asm.clone()),
         });
         s.exterior.facades.push(Facade {

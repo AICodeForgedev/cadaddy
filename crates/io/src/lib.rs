@@ -1,6 +1,8 @@
 //! CADaddy file formats: the native .cdy format, DXF/DWG read, SVG and SVGZ import,
 //! SVG/PNG/PDF/DWFx/DWF export (plotting), DWFx underlay reading.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![allow(unknown_lints)] // the lint below exists only in newer clippy
+#![allow(clippy::chunks_exact_to_as_chunks)]
 #![forbid(unsafe_code)]
 
 /// What a DXF file holds that CADaddy doesn't model, kept and written back (#528).
@@ -116,6 +118,16 @@ pub(crate) fn par_map<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync 
         items.iter().map(f).collect()
     }
 }
+
+/// File extensions the write dispatch ([`write_framed`]) handles — the file formats CADaddy
+/// can save to, sorted. Internal/redirect extensions (empty, `bundle`, `cdywalk`, `dwt`,
+/// `dws`) are omitted: `dwt`/`dws` are DWG content, `cdywalk` is an internal package.
+pub const SAVE_EXTENSIONS: &[&str] =
+    &["3mf", "cdy", "dgn", "dwf", "dwfx", "dwg", "dxf", "eps", "glb", "gltf", "ifc", "obj", "pdf", "png", "stl", "svg", "wmf"];
+
+/// File extensions the read dispatch ([`read`]) handles — the file formats CADaddy can open,
+/// sorted. Content-based detection (`.cdy`, `.dwg`) also works without the correct extension.
+pub const READ_EXTENSIONS: &[&str] = &["cdy", "dgn", "dwg", "dxf", "glb", "gltf", "ifc", "obj", "pdf", "stl", "svg", "svgz"];
 
 fn ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
@@ -234,7 +246,8 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
         "dgn" => dgn::read(bytes),
         "svg" | "svgz" => svg_read::read(bytes, name),
         "pdf" => {
-            let r = pdf_read::read(bytes, &pdf_read::PdfOptions::default())?;
+            // a sheet opened on its own: an E sheet's scale note is used (nothing to register to)
+            let r = pdf_read::read(bytes, &pdf_read::PdfOptions { e_sheet_at_note_scale: true, ..pdf_read::PdfOptions::default() })?;
             let mut d = r.drawing;
             d.read_notes.extend(r.notes);
             Ok(d)

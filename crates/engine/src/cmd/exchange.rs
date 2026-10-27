@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("pdfimport", "PDF Import", run_pdfimport)
             .menu(&["Insert", "PDF Import..."])
-            .params("{path | data (base64) + name, page? (1-based, default 1), scale?: number (drawing units per sheet inch: 96 = 1/8 in = 1 ft in an inch drawing) | a scale note (1/8\" = 1'-0\") | auto (default: the sheet's own scale note, else 1), layers?: pdf|pen|object (pdf: the PDF's layers, else one per colour and line weight; object: PDF_Geometry, PDF_Solid Fills, PDF_Text), whiteFills?: bool (default false), text?: bool, join?: bool (join touching pieces, round loops to circles; default true), layout?: bool (a layout showing the sheet at the scale; default true), markups?: bool (annotations on PDF-MARKUP; default true), images?: bool (raster images as IMAGE objects; default true), imageFolder?: folder for the image PNG files (default \"<PDF name> images\" next to the PDF), imagePrefix?: file name start (default \"<PDF name>-p<page>\"), newDrawing?: bool (open as a new drawing), at?: [x,y]} -> {entities, scale, scaleSource, sheet, pages, stats, notes, layers, imageFiles, imageFolder}")
+            .params("{path | data (base64) + name, page? (1-based, default 1), scale?: number (drawing units per sheet inch: 96 = 1/8 in = 1 ft in an inch drawing) | a scale note (1/8\" = 1'-0\") | auto (default: the sheet's own scale note, else 1), layers?: pdf|pen|object (pdf: the PDF's layers, else one per colour and line weight; object: PDF_Geometry, PDF_Solid Fills, PDF_Text), whiteFills?: bool (default false), text?: bool, join?: bool (join touching pieces, round loops to circles; default true), layout?: bool (a layout showing the sheet at the scale; default true), markups?: bool (annotations on PDF-MARKUP; default true), images?: bool (raster images as IMAGE objects; default true), fills?: each|merge (merge: fills under 0.06 in on the sheet (pattern dots and dashes, lettering painted as fills) as one hatch per layer and colour; default each), imageFolder?: folder for the image PNG files (default \"<drawing name> images\" next to the current drawing once it is saved, else a folder of the session's in the system temp folder that SAVE moves next to the drawing; never the PDF's folder), imagePrefix?: file name start (default \"<PDF name>-p<page>\"), newDrawing?: bool (open as a new drawing), at?: [x,y]} -> {entities, scale, scaleSource, sheet, pages, stats, notes, layers, imageFiles, imageFolder}")
             .interactive(|_| Ok(Box::new(PdfImportM::default()))),
         CommandSpec::new("import", "Import...", run_import)
             .menu(&["File", "Import..."])
@@ -412,10 +412,24 @@ fn run_pdfimport(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("imagePrefix").is_none() {
         p["imagePrefix"] = json!(format!("{stem}-p{page}"));
     }
-    if p.get("imageFolder").is_none()
-        && let Some(dir) = str_param(&p, "path").and_then(|path| std::path::Path::new(path).parent())
-    {
-        p["imageFolder"] = json!(dir.join(format!("{stem} images")).to_string_lossy());
+    // Images go with the work: next to the current drawing once it has been saved, else in this
+    // session's temp folder (SAVE moves them next to the drawing). Never next to the PDF: that
+    // is often the job's print set, which an import must leave as it was.
+    if p.get("imageFolder").is_none() {
+        let drawing = s
+            .state()
+            .ok()
+            .and_then(|st| st.path.clone())
+            .filter(|d| !p.get("newDrawing").and_then(Value::as_bool).unwrap_or(false) && !d.trim().is_empty());
+        let folder = match drawing.as_deref().map(std::path::Path::new) {
+            Some(d) => d
+                .parent()
+                .map(|dir| dir.join(format!("{} images", d.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| stem.clone())))),
+            None => super::file::session_image_folder(&stem),
+        };
+        if let Some(f) = folder {
+            p["imageFolder"] = json!(f.to_string_lossy());
+        }
     }
     let (src, mut report) = read_pdf(&bytes, &p).map_err(|e| bad("pdfimport", e))?;
     let count = src.model.len();
@@ -440,7 +454,160 @@ fn run_pdfimport(s: &mut Session, p: &Value) -> Result<Value> {
             s.echo(format!("  {n}"));
         }
     }
+    // Auto-run import accuracy check after every PDF import.
+    if let Ok(d) = s.doc() {
+        let check = super::import_check::check_drawing(d);
+        report["importCheck"] = json!(check);
+        if let Ok(d) = s.doc_mut() {
+            super::import_check::store_result(d, &check);
+        }
+        if !check.pass {
+            let fails: Vec<&str> = check.checks.iter().filter(|c| !c.pass).map(|c| c.id.as_str()).collect();
+            s.echo(format!("Import check FAIL (score {}/100): {}", check.score, fails.join(", ")));
+        }
+    }
     Ok(report)
+}
+
+/// One page for [`import_pdf_pages`]: the file, its PDFIMPORT options (`page`, `scale`, …) and
+/// where its lower left goes (`None`: to the right of the batch's previous page).
+pub(crate) struct PdfPage {
+    pub path: String,
+    pub params: Value,
+    pub at: Option<Vec2>,
+}
+
+/// What [`import_pdf_pages`] did with one page.
+pub(crate) enum PageImport {
+    /// Imported: the PDFIMPORT report, with `rect` ([x0, y0, x1, y1], where the sheet landed).
+    Done(Value),
+    /// The same lettering and object count as an earlier page of the batch (the same sheet
+    /// printed in two files): not imported again.
+    Same(usize),
+    Failed(String),
+}
+
+/// The scale a DO NOT SCALE sheet's report says it detected ("… scale 96x — sheet kept …").
+fn detected_scale(report: &Value) -> Option<f64> {
+    let src = report.get("scaleSource").and_then(Value::as_str)?;
+    let rest = src.get(src.find("scale ")? + 6..)?;
+    rest.get(..rest.find('x').unwrap_or(rest.len()))?.trim().parse::<f64>().ok().filter(|k| k.is_finite() && *k > 1.5)
+}
+
+/// What a converted page shows, for telling the same sheet in two files apart from another.
+fn page_fingerprint(d: &Drawing) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    d.model.len().hash(&mut h);
+    for e in d.model.iter() {
+        if let EntityKind::Text(t) = &e.kind {
+            t.value.hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+/// Several PDF pages into the current space, for print-set jobs: each file is read once, its
+/// pages converted on every core (a page per core at a time), then added one after another; the
+/// import check runs once at the end, not after every page. `full_scale`: a DO NOT SCALE sheet with a scale
+/// note (kept at sheet size by PDFIMPORT) is read again at that scale. `skip_same`: a page showing
+/// what an earlier one did is not imported twice. `on_page(session, i, result)` hears about each
+/// page as it is done.
+pub(crate) fn import_pdf_pages(
+    s: &mut Session,
+    pages: &[PdfPage],
+    full_scale: bool,
+    skip_same: bool,
+    on_page: &mut dyn FnMut(&mut Session, usize, &PageImport),
+) -> Result<Vec<PageImport>> {
+    let hooks = io().ok_or_else(|| bad("pdfimport", "file formats are not available in this build"))?;
+    let read_pdf = hooks.read_pdf.ok_or_else(|| bad("pdfimport", "PDF import is not available in this build"))?;
+    let mut files: BTreeMap<String, std::result::Result<Arc<Vec<u8>>, String>> = BTreeMap::new();
+    for pg in pages {
+        if !files.contains_key(&pg.path) {
+            files.insert(pg.path.clone(), read_file(&pg.path).map(Arc::new).map_err(|e| e.to_string()));
+        }
+    }
+    let convert = |pg: &PdfPage| -> std::result::Result<(Drawing, Value), String> {
+        let bytes = match files.get(&pg.path) {
+            Some(Ok(b)) => Arc::clone(b),
+            Some(Err(e)) => return Err(e.clone()),
+            None => return Err(format!("{}: not read", pg.path)),
+        };
+        let (d, report) = read_pdf(&bytes, &pg.params)?;
+        if full_scale
+            && pg.params.get("scale").is_none()
+            && report.get("needs_registration").and_then(Value::as_bool).unwrap_or(false)
+            // an E sheet already drawn at its scale note (the reader does that) needs no re-read
+            && report.get("scale").and_then(Value::as_f64).is_none_or(|k| k <= 1.5)
+            && let Some(k) = detected_scale(&report)
+        {
+            let mut p = pg.params.clone();
+            p["scale"] = json!(k);
+            return read_pdf(&bytes, &p);
+        }
+        Ok((d, report))
+    };
+    // A page per core at a time: the converted pages wait in memory until they are added.
+    #[cfg(not(target_arch = "wasm32"))]
+    let batch = rayon::current_num_threads().max(1);
+    #[cfg(target_arch = "wasm32")]
+    let batch = 1usize;
+    let mut out: Vec<PageImport> = Vec::with_capacity(pages.len());
+    let mut seen: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut x = 0.0f64;
+    for (c, chunk) in pages.chunks(batch).enumerate() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let converted: Vec<std::result::Result<(Drawing, Value), String>> = {
+            use rayon::prelude::*;
+            chunk.par_iter().map(convert).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let converted: Vec<std::result::Result<(Drawing, Value), String>> = chunk.iter().map(convert).collect();
+        for (j, (pg, r)) in chunk.iter().zip(converted).enumerate() {
+            let i = c * batch + j;
+            let result = match r {
+                Err(e) => PageImport::Failed(e),
+                Ok((src, mut report)) => {
+                    let print = page_fingerprint(&src);
+                    match seen.get(&print) {
+                        Some(&first) if skip_same => PageImport::Same(first),
+                        _ => {
+                            seen.insert(print, i);
+                            let at = pg.at.unwrap_or(Vec2::new(x, 0.0));
+                            let file = std::path::Path::new(&pg.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                            match import_drawing(s, &src, at, 1.0, &file) {
+                                Ok(_) => {
+                                    let w = report.get("sheet").and_then(|v| v.get(0)).and_then(Value::as_f64).unwrap_or(0.0);
+                                    let h = report.get("sheet").and_then(|v| v.get(1)).and_then(Value::as_f64).unwrap_or(0.0);
+                                    let k = report.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 0.0).unwrap_or(1.0);
+                                    let (w, h) = (w * k, h * k);
+                                    if w.is_finite() && h.is_finite() {
+                                        report["rect"] = json!([at.x, at.y, at.x + w, at.y + h]);
+                                        x = x.max(at.x + w + 0.05 * w);
+                                    }
+                                    report["entities"] = json!(src.model.len());
+                                    PageImport::Done(report)
+                                }
+                                Err(e) => PageImport::Failed(e.to_string()),
+                            }
+                        }
+                    }
+                }
+            };
+            on_page(s, i, &result);
+            out.push(result);
+        }
+    }
+    if out.iter().any(|r| matches!(r, PageImport::Done(_)))
+        && let Ok(d) = s.doc()
+    {
+        let check = super::import_check::check_drawing(d);
+        if let Ok(d) = s.doc_mut() {
+            super::import_check::store_result(d, &check);
+        }
+    }
+    Ok(out)
 }
 
 /// Copy `src`'s model space into the current space (scaled about the origin, then moved to
@@ -527,8 +694,10 @@ pub(crate) fn merge_tables(d: &mut Drawing, src: &Drawing) -> (usize, usize) {
 }
 
 /// Which source blocks to copy, and under which name: new names keep theirs, generated
-/// (anonymous `*…`) blocks that collide get a fresh generated name, and a named block this drawing
-/// already has keeps this drawing's definition (not copied).
+/// (anonymous `*…`, or a PDF import's `PDF-SYM-n` symbol) blocks that collide get a fresh
+/// generated name, and a named block this drawing already has keeps this drawing's definition
+/// (not copied). Every page of a print set numbers its symbols from 1: another page's
+/// `PDF-SYM-1` is another symbol.
 pub(crate) fn block_names(d: &Drawing, src: &Drawing) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     let mut taken: BTreeSet<String> = d.blocks.keys().map(|k| k.to_ascii_uppercase()).collect();
@@ -537,7 +706,7 @@ pub(crate) fn block_names(d: &Drawing, src: &Drawing) -> BTreeMap<String, String
         if upper.starts_with("*MODEL_SPACE") || upper.starts_with("*PAPER_SPACE") {
             continue;
         }
-        let anonymous = b.anonymous || name.starts_with('*');
+        let anonymous = b.anonymous || name.starts_with('*') || upper.starts_with("PDF-SYM-");
         let to = if !taken.contains(&upper) {
             name.clone()
         } else if anonymous {
@@ -824,11 +993,13 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
         }
         out.push(r);
     }
+    // Aggregate blank-sheet warnings from each plot into the publish result.
+    let all_warnings: Vec<Value> = out.iter().filter_map(|r| r.get("warnings").and_then(Value::as_array)).flatten().cloned().collect();
     let message = match &base {
         Some(_) => format!("Published {} sheet(s): {}", out.len(), out.iter().filter_map(|r| r["path"].as_str()).collect::<Vec<_>>().join(", ")),
         None => format!("Published {} sheet(s)", out.len()),
     };
-    Ok(json!({ "sheets": out, "message": message }))
+    Ok(json!({ "sheets": out, "warnings": all_warnings, "message": message }))
 }
 
 // ---------- PDFBOOK ----------
@@ -1035,6 +1206,29 @@ mod tests {
     }
 
     #[test]
+    fn a_second_pages_symbols_keep_their_own_blocks() {
+        // Two imported pages each number their repeated symbols from PDF-SYM-1.
+        let page = |r: f64| {
+            let mut src = Drawing::new_imperial();
+            src.blocks.insert("PDF-SYM-1".into(), block("PDF-SYM-1", r));
+            src.add(&Space::Model, Common::default(), insert("PDF-SYM-1")).unwrap();
+            src
+        };
+        let mut s = session();
+        import_drawing(&mut s, &page(1.0), Vec2::new(0.0, 0.0), 1.0, "a.pdf").unwrap();
+        import_drawing(&mut s, &page(2.0), Vec2::new(100.0, 0.0), 1.0, "m.pdf").unwrap();
+        let d = s.doc().unwrap();
+        let names: Vec<String> =
+            d.model.iter().filter_map(|e| if let EntityKind::Insert(i) = &e.kind { Some(i.block.clone()) } else { None }).collect();
+        assert_eq!(names, ["PDF-SYM-1", "PDF-SYM-2"]);
+        let radius = |n: &str| match d.block(n).and_then(|b| b.entities.iter().next().map(|e| e.kind.clone())) {
+            Some(EntityKind::Circle(c)) => c.radius,
+            _ => 0.0,
+        };
+        assert_eq!((radius("PDF-SYM-1"), radius("PDF-SYM-2")), (1.0, 2.0), "the second page's symbol is its own");
+    }
+
+    #[test]
     fn import_brings_objects_with_their_layers_and_blocks() {
         let mut src = Drawing::new_imperial();
         src.layers.push(Layer::new("WALLS"));
@@ -1232,5 +1426,56 @@ mod tests {
         assert!(s.running.is_none(), "{}", s.prompt_text());
         assert_eq!(s.doc().unwrap().entity_count(), before + 2);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// PDF images of a drawing with no file yet live in the session's temp folder; saving the
+    /// drawing copies them into "<drawing name> images" next to it and points the IMAGE objects
+    /// there, so the saved drawing never refers to a temp file (and never to the PDF's folder).
+    #[test]
+    fn save_moves_session_images_next_to_the_drawing() {
+        let a = super::super::file::session_image_folder("Sheet A").unwrap();
+        let b = super::super::file::session_image_folder("Sheet A").unwrap();
+        assert_ne!(a, b, "each import gets its own folder");
+        assert!(a.starts_with(std::env::temp_dir()) && a.to_string_lossy().contains("Sheet A images"), "{a:?}");
+        if !our_hooks() {
+            return;
+        }
+        std::fs::create_dir_all(&a).unwrap();
+        let png = a.join("Sheet A-p1-1.png");
+        std::fs::write(&png, b"first image").unwrap();
+        let mut s = session();
+        let image = |path: &std::path::Path| {
+            EntityKind::Image(Box::new(cadaddy_doc::Image { path: path.to_string_lossy().to_string(), ..Default::default() }))
+        };
+        let h1 = s.doc_mut().unwrap().add(&Space::Model, Common::default(), image(&png)).unwrap();
+        let h2 = s.doc_mut().unwrap().add(&Space::Model, Common::default(), image(&png)).unwrap();
+        // An image the user attached from elsewhere is left alone.
+        let own = temp("own.png");
+        std::fs::write(&own, b"own").unwrap();
+        let h3 = s.doc_mut().unwrap().add(&Space::Model, Common::default(), image(&own)).unwrap();
+        // A different file of the same name already sits in the target folder.
+        let job = temp("job");
+        let target = job.join("Plan A images");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("Sheet A-p1-1.png"), b"someone else's").unwrap();
+        let drawing = job.join("Plan A.dxf");
+        s.execute("saveas", &json!({ "path": drawing.to_string_lossy() })).unwrap();
+        let path_of = |s: &Session, h| match &s.doc().unwrap().entity(h).unwrap().kind {
+            EntityKind::Image(i) => i.path.clone(),
+            _ => String::new(),
+        };
+        let moved = target.join("Sheet A-p1-1-2.png");
+        assert_eq!(path_of(&s, h1), moved.to_string_lossy(), "the clash gets the next free name");
+        assert_eq!(path_of(&s, h2), moved.to_string_lossy(), "the same file is copied once");
+        assert_eq!(std::fs::read(&moved).unwrap(), b"first image");
+        assert_eq!(std::fs::read(target.join("Sheet A-p1-1.png")).unwrap(), b"someone else's", "the other file is kept");
+        assert_eq!(path_of(&s, h3), own.to_string_lossy());
+        assert!(!s.state().unwrap().is_dirty(), "the saved drawing is the one with the new paths");
+        // Nothing left to move on the next save.
+        s.execute("qsave", &json!({})).unwrap();
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 2);
+        let _ = std::fs::remove_dir_all(&job);
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_file(&own);
     }
 }

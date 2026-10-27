@@ -3,7 +3,7 @@
 //! a scoped re-check finds it while looking at much less, and the checks are fast.
 
 use cadaddy_mepfix::hotel::HotelSize;
-use cadaddy_mepfix::printcheck::{PLANTED, model, plant, prints};
+use cadaddy_mepfix::printcheck::{PLANTED, model, plant, prints, prints_from_readers};
 use cadaddy_walk3d::validate::{Failure, Model, Prints, Scope, Severity, new_failures, validate};
 
 fn hotel(size: HotelSize) -> (Prints, Model) {
@@ -151,4 +151,51 @@ fn prints_survive_json() {
     let (p, _) = hotel(HotelSize::Small);
     let text = serde_json::to_string(&p).unwrap();
     assert_eq!(Prints::from_json(&text).unwrap(), p.clone().capped());
+}
+
+// ---- MUST 4: Print-set feed (reader-built Prints) ----
+
+#[test]
+fn reader_built_prints_validate_a_true_model() {
+    let set = cadaddy_mepfix::generate_hotel(7, HotelSize::Small).unwrap();
+    let reader_prints = prints_from_readers(&set.truth);
+    let m = model(&set.truth);
+    let r = validate(&reader_prints, &m, &Scope::all());
+    // Allow a small number of false alarms (pass_per_mille threshold).
+    let threshold = reader_prints.symbols.len() / 10; // 10% tolerance for reader-vs-truth differences
+    assert!(
+        r.failures.len() <= threshold,
+        "reader-built prints should validate a true model with at most {} failures, got {}: {:?}",
+        threshold,
+        r.failures.len(),
+        r.failures.iter().take(5).map(|f| format!("{}: {}", f.rule, f.expected)).collect::<Vec<_>>()
+    );
+    // Symbols should be non-trivial.
+    assert!(reader_prints.symbols.len() > 100, "reader prints should have >100 symbols, got {}", reader_prints.symbols.len());
+    assert!(reader_prints.rooms.len() > 5, "reader prints should have >5 rooms, got {}", reader_prints.rooms.len());
+    assert!(reader_prints.schedule.len() > 3, "reader prints should have >3 schedule rows, got {}", reader_prints.schedule.len());
+}
+
+#[test]
+fn reader_built_prints_catch_planted_errors() {
+    let set = cadaddy_mepfix::generate_hotel(7, HotelSize::Small).unwrap();
+    let reader_prints = prints_from_readers(&set.truth);
+    let base_model = model(&set.truth);
+    let base = validate(&reader_prints, &base_model, &Scope::all());
+    // At least 5 planted errors should be caught.
+    let target_kinds = ["missing_in_model", "misplaced", "schedule_quantity", "wrong_type", "box_too_deep", "lug_mismatch", "not_on_print"];
+    let mut caught = 0;
+    let mut caught_kinds = Vec::new();
+    for kind in &target_kinds {
+        let mut m = base_model.clone();
+        if let Some(_id) = plant(&mut m, &reader_prints, kind) {
+            let r = validate(&reader_prints, &m, &Scope::all());
+            let (new, _) = new_failures(&base.failures, &r.failures);
+            if new.iter().any(|f| f.rule == *kind) {
+                caught += 1;
+                caught_kinds.push(*kind);
+            }
+        }
+    }
+    assert!(caught >= 5, "reader-built prints should catch at least 5 planted errors, caught {caught} ({caught_kinds:?})");
 }

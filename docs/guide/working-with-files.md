@@ -87,11 +87,13 @@ CONVERT input.dwg output.cdy
 
 ### Convert a folder
 
-```
-CONVERT --input "Project Files" --output "CADaddy Files" --format cdy
+Use `execute` with JSON parameters for batch conversion:
+
+```json
+execute {"command": "convert", "params": {"input": "Project Files", "output": "CADaddy Files", "format": "cdy"}}
 ```
 
-Subfolders are replicated in the output. Parameters:
+Subfolders are replicated in the output when `recursive` is true. Parameters:
 
 | Parameter | Default | Description |
 |:----------|:--------|:------------|
@@ -105,10 +107,14 @@ Subfolders are replicated in the output. Parameters:
 ### From the CLI
 
 ```sh
-cadaddy-cli convert --input "Project Files" --output "CADaddy Files" --format cdy
+cadaddy-cli convert "Project Files" "CADaddy Files" --to cdy --recurse
 ```
 
-The CLI processes files without opening a window.
+The CLI processes files without opening a window. Single file:
+
+```sh
+cadaddy-cli convert input.dwg output.cdy
+```
 
 ### Handling failures
 

@@ -1,8 +1,8 @@
 //! Stress tests for UI-level background-thread races (Q242).
 //!
-//! Opening workers, canvas rebuilds and the update poll interact with the UI thread's
-//! close, quit and tab-switch operations.  Nothing may panic, deadlock, crash, or show
-//! stale data for a closed drawing.
+//! Opening workers, DWG saves with background checks and agent requests over the control
+//! channel interact with the UI thread's save, close, quit and tab-switch operations.
+//! Nothing may panic, deadlock, lose data, or act on or show data for the wrong drawing.
 
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,55 @@ fn io_hooks() {
         read_dwf: None,
         write_dwfx: None,
     });
+    cadaddy_engine::cmd::file::set_write_as(|d, n, o| {
+        cadaddy_io::write_with(d, n, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
+    });
+}
+
+/// A DXF holding `circles` circles.
+fn dxf_with(circles: usize) -> Vec<u8> {
+    let mut s = Session::new();
+    for i in 0..circles {
+        s.execute("circle", &json!({ "center": [i as f64 * 3.0, 0], "radius": 1 })).unwrap();
+    }
+    cadaddy_io::write(s.doc().unwrap(), "x.dxf").unwrap()
+}
+
+/// The entity count of the drawing in `path`, read back through the file formats.
+fn file_count(path: &std::path::Path) -> usize {
+    let bytes = std::fs::read(path).unwrap();
+    cadaddy_io::read(&bytes, &path.to_string_lossy()).unwrap().entity_count()
+}
+
+/// The entity count of the open drawing titled `title` (exactly one must have it).
+fn count_titled(app: &CadApp, title: &str) -> usize {
+    let found: Vec<_> = app.session.docs.iter().filter(|d| d.title == title).collect();
+    assert_eq!(found.len(), 1, "exactly one drawing titled {title}: {:?}", titles(app));
+    found[0].doc.entity_count()
+}
+
+fn titles(app: &CadApp) -> Vec<String> {
+    app.session.docs.iter().map(|d| d.title.clone()).collect()
+}
+
+/// Let the open workers finish and add their drawings (bounded).
+fn drain_opening(app: &mut CadApp) {
+    let t = Instant::now();
+    while app.opening.busy() {
+        assert!(t.elapsed() < Duration::from_secs(30), "open workers did not finish");
+        app.finish_opening();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Let every background DWG check finish and be taken in (bounded).
+fn drain_checks(app: &mut CadApp) {
+    let t = Instant::now();
+    while app.session.docs.iter().any(|d| d.kept_job.is_some()) {
+        assert!(t.elapsed() < Duration::from_secs(30), "background checks did not finish");
+        app.session.poll_background();
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn temp_dir(tag: &str) -> std::path::PathBuf {
@@ -207,15 +256,19 @@ fn programmatic_close_during_close_all_keeps_queue_consistent() {
     let c_idx = app.session.docs.iter().position(|d| d.title == "C").unwrap();
     app.run("close", json!({ "index": c_idx })).unwrap();
 
-    // Now answer B with Discard.
+    // C is gone; A closed already; B is still asked about, D still waits.
+    assert_eq!(titles(&app), ["B", "D"]);
+    assert_eq!(app.close_prompt(), Some("B"));
+
+    // Now answer B with Discard: D must be asked about next (the queue skipped C, not D).
     app.answer_close(cadaddy_ui_egui::closing::Choice::Discard);
-    // D should still be asked about.
-    if let Some(title) = app.close_prompt() {
-        assert_eq!(title, "D");
-        app.answer_close(cadaddy_ui_egui::closing::Choice::Discard);
-    }
-    // The close queue should be done.
+    assert_eq!(titles(&app), ["D"]);
+    assert_eq!(app.close_prompt(), Some("D"), "D still has to be asked about");
+    app.answer_close(cadaddy_ui_egui::closing::Choice::Discard);
+    // The close queue is done and every drawing is closed.
     assert!(app.closing.is_none(), "close queue should be finished");
+    assert_eq!(app.close_prompt(), None);
+    assert!(titles(&app).is_empty(), "every drawing closed: {:?}", titles(&app));
 }
 
 // ─── rapid tab switching during opening ────────────────────────────────────
@@ -231,16 +284,21 @@ fn rapid_tab_switch_during_open() {
     let bytes = cadaddy_io::write(s0.doc().unwrap(), "x.dxf").unwrap();
     std::fs::write(&path, &bytes).unwrap();
 
+    // Changed drawings (an opened file replaces untouched new drawings, as in AutoCAD).
     let mut app = app_with(&["A", "B", "C"]);
+    for i in 0..3 {
+        dirty(&mut app, i);
+    }
     for _ in 0..5 {
         app.open_path(&path.to_string_lossy());
     }
 
-    // While opens are in flight, switch tabs rapidly.
+    // While opens are in flight, switch tabs rapidly (a fixed seed: the same run every time).
+    let mut rng = 0x2545_f491_4f6c_dd1d_u64;
     for _ in 0..30 {
         let n = app.session.docs.len();
         if n > 0 {
-            let target = fastrand_index(n);
+            let target = next_index(&mut rng, n);
             let _ = app.session.execute("document.switch", &json!({ "index": target }));
         }
         app.finish_opening();
@@ -256,14 +314,202 @@ fn rapid_tab_switch_during_open() {
     app.finish_opening();
     assert!(!app.opening.busy());
     assert!(app.session.active < app.session.docs.len(), "active index in bounds");
+    // Five opens of one file add it once: the three drawings plus one.
+    assert_eq!(app.session.docs.len(), 3 + 1, "{:?}", titles(&app));
+    assert_eq!(titles(&app), ["A", "B", "C", "Sample Floor Plan.dxf"]);
+    let opened: Vec<_> = app.session.docs.iter().filter(|d| d.path.as_deref() == Some(&*path.to_string_lossy())).collect();
+    assert_eq!(opened.len(), 1, "the file is open once");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A simple pseudo-random index (no external dep, good enough for a test).
-fn fastrand_index(n: usize) -> usize {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    std::time::Instant::now().hash(&mut h);
-    std::thread::current().id().hash(&mut h);
-    (h.finish() as usize) % n
+/// A seeded pseudo-random index (xorshift64; no external dep).
+fn next_index(state: &mut u64, n: usize) -> usize {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    (*state % n as u64) as usize
+}
+
+// ─── save while opening ────────────────────────────────────────────────────
+
+/// Start opening a file on a worker, then save the active drawing (DXF, then DWG with a
+/// background check) before the open is taken in.  Each saved file reads back with the
+/// saved drawing's exact entity count, and the opened drawing arrives with its own source
+/// content and title, not the saved one's.
+#[test]
+fn save_while_opening_keeps_both_drawings_whole() {
+    io_hooks();
+    let dir = temp_dir("save-open");
+    let src = dir.join("Opened Plan.dxf");
+    std::fs::write(&src, dxf_with(5)).unwrap();
+    assert_eq!(file_count(&src), 5);
+
+    let mut app = app_with(&["Saved Plan"]);
+    app.session.background_checks = true;
+    for i in 0..3 {
+        app.session.execute("circle", &json!({ "center": [i as f64 * 3.0, 9], "radius": 2 })).unwrap();
+    }
+    assert_eq!(count_titled(&app, "Saved Plan"), 3);
+
+    app.open_path(&src.to_string_lossy());
+    assert!(app.opening.busy(), "a worker should have started");
+
+    // DWG save with a background check (the drawing's first save, so its check runs) while
+    // the open is in flight.
+    let dwg = dir.join("Saved Plan.dwg");
+    let r = app.run("saveas", json!({ "path": &dwg, "version": "2000" })).unwrap();
+    assert_eq!(r.get("notKeptPending"), Some(&json!(true)), "background check started: {r}");
+    assert!(app.opening.busy(), "the open is not taken in yet");
+    assert_eq!(file_count(&dwg), 3, "the saved DWG holds the saved drawing");
+
+    // DXF save, still before the open is taken in.
+    let dxf = dir.join("Saved Plan.dxf");
+    app.run("saveas", json!({ "path": &dxf })).unwrap();
+    assert!(app.opening.busy(), "the open is not taken in yet");
+    assert_eq!(file_count(&dxf), 3, "the saved DXF holds the saved drawing");
+
+    // Saved as DWG again, so the drawing's file is the DWG.
+    app.run("saveas", json!({ "path": &dwg, "version": "2000" })).unwrap();
+    assert!(app.opening.busy(), "the open is not taken in yet");
+
+    drain_opening(&mut app);
+    drain_checks(&mut app);
+
+    assert_eq!(titles(&app), ["Saved Plan.dwg", "Opened Plan.dxf"]);
+    let saved = &app.session.docs[0];
+    assert_eq!(saved.path.as_deref(), Some(&*dwg.to_string_lossy()));
+    assert_eq!(saved.doc.entity_count(), 3);
+    let opened = &app.session.docs[1];
+    assert_eq!(opened.path.as_deref(), Some(&*src.to_string_lossy()));
+    assert_eq!(opened.doc.entity_count(), 5, "the opened drawing has its source's content");
+    assert!(opened.exchange_notice.is_none(), "the saved drawing's check result is not on the opened one");
+    // The files on disk are unchanged by the open.
+    assert_eq!(file_count(&dwg), 3);
+    assert_eq!(file_count(&src), 5);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ─── agent channel during save and open ────────────────────────────────────
+
+/// An agent sends control requests from its own thread (as the control server does) while
+/// a DWG save's background check and an open worker are in flight.  Every reply arrives
+/// within its time limit, in order, each request acts on the drawing it names, and the
+/// final entity counts are exact.
+#[test]
+fn agent_requests_during_dwg_save_and_open_reach_the_named_drawing() {
+    use cadaddy_ui_egui::ControlRequest;
+    const LINES: usize = 20_000;
+    const N: usize = 40;
+    io_hooks();
+    let dir = temp_dir("agent-channel");
+    let src = dir.join("Opened Plan.dxf");
+    std::fs::write(&src, dxf_with(7)).unwrap();
+
+    let mut app = app_with(&["Agent A", "Agent B"]);
+    app.session.background_checks = true;
+    // Enough geometry in A for its check to take a while; B has one change (an opened file
+    // replaces untouched new drawings).
+    app.session.execute("document.switch", &json!({ "index": 0 })).unwrap();
+    let d = app.session.doc_mut().unwrap();
+    for i in 0..LINES {
+        let (x, y) = ((i % 100) as f64, (i / 100) as f64);
+        let h = d.new_handle();
+        d.model.push(cadaddy_engine::doc::Entity::new(
+            h,
+            cadaddy_engine::doc::EntityKind::Line(cadaddy_engine::doc::Line {
+                a: cadaddy_engine::geom::Vec3::new(x, y, 0.0),
+                b: cadaddy_engine::geom::Vec3::new(x + 0.8, y + 0.5, 0.0),
+            }),
+        ));
+    }
+    dirty(&mut app, 1);
+    app.session.execute("document.switch", &json!({ "index": 0 })).unwrap();
+    let r = app.run("saveas", json!({ "path": dir.join("Agent A.dwg"), "version": "2000" })).unwrap();
+    assert_eq!(r.get("notKeptPending"), Some(&json!(true)), "background check started: {r}");
+    let a = "Agent A.dwg".to_string();
+    let b = "Agent B".to_string();
+    assert_eq!(titles(&app), [a.as_str(), b.as_str()]);
+    let (a0, b0) = (count_titled(&app, &a), count_titled(&app, &b));
+    assert_eq!((a0, b0), (LINES, 1));
+
+    app.open_path(&src.to_string_lossy());
+    assert!(app.opening.busy(), "a worker should have started");
+
+    // The agent: 40 requests, alternating between the two drawings by title.
+    let (tx, rx) = std::sync::mpsc::channel::<ControlRequest>();
+    let targets = [a.clone(), b.clone()];
+    let agent = std::thread::spawn(move || {
+        let mut replies = Vec::new();
+        for i in 0..N {
+            let title = targets[i % 2].clone();
+            let (req, pending) = ControlRequest::new(
+                "engine.executeMany",
+                json!({ "stopOnError": true, "commands": [
+                    { "command": "document.switch", "params": { "title": title } },
+                    { "command": "circle", "params": { "center": [i as f64, 50], "radius": 1 } },
+                ] }),
+            );
+            if tx.send(req).is_err() {
+                break;
+            }
+            let t = Instant::now();
+            let reply = pending.wait(Duration::from_secs(20));
+            replies.push((i, title, reply, t.elapsed()));
+        }
+        replies
+    });
+
+    // The UI thread: serve requests between "frames".  For the first half nothing else is
+    // taken in, so the check and the open are certainly still pending; then both are polled
+    // as the app does every frame.
+    let ctx = egui::Context::default();
+    let start = Instant::now();
+    let mut served = 0;
+    // How many requests ran while A's check was still pending, and whether the open was
+    // still pending half way.
+    let mut during_check = 0;
+    let mut mid = None;
+    while !agent.is_finished() {
+        assert!(start.elapsed() < Duration::from_secs(60), "agent requests stalled ({served} served)");
+        while let Ok(req) = rx.try_recv() {
+            if app.session.docs.iter().any(|d| d.kept_job.is_some()) {
+                during_check += 1;
+            }
+            app.serve_control_request(&ctx, req);
+            served += 1;
+            if served == N / 2 {
+                mid = Some(app.opening.busy());
+            }
+        }
+        if served >= N / 2 {
+            app.finish_opening();
+            app.session.poll_background();
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let replies = agent.join().expect("agent thread");
+    assert_eq!(mid, Some(true), "half the requests ran with the open pending");
+    assert!(during_check >= 1, "requests ran while the DWG check was pending");
+    assert_eq!(served, N);
+
+    // Every reply arrived, in order, in time, and succeeded.
+    assert_eq!(replies.len(), N);
+    for (k, (i, title, reply, took)) in replies.iter().enumerate() {
+        assert_eq!(*i, k, "replies in order");
+        assert!(*took < Duration::from_secs(20), "request {i} took {took:?}");
+        assert_eq!(reply.get("ok"), Some(&json!(true)), "request {i} ({title}): {reply}");
+    }
+
+    drain_opening(&mut app);
+    drain_checks(&mut app);
+
+    // Each circle landed in the drawing its request named; the opened drawing is untouched.
+    assert_eq!(titles(&app), [a.as_str(), b.as_str(), "Opened Plan.dxf"]);
+    assert_eq!(count_titled(&app, &a), a0 + N / 2, "drawing {a}");
+    assert_eq!(count_titled(&app, &b), b0 + N / 2, "drawing {b}");
+    assert_eq!(count_titled(&app, "Opened Plan.dxf"), 7, "the opened drawing has only its own content");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

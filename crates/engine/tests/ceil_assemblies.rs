@@ -226,3 +226,86 @@ fn hostile_ceiling_types_are_refused_or_survive() {
     }
     let _ = cadaddy_io::ifc::write_ifc(s.doc().unwrap(), "x.ifc").unwrap();
 }
+
+/// The WALLGEN walls' handles.
+fn walls(s: &Session) -> Vec<String> {
+    s.doc().unwrap().model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("wall")).map(|e| e.handle.hex()).collect()
+}
+
+#[test]
+fn bom_carries_ceilings_soffits_and_head_track_once() {
+    let mut s = building();
+    let toilet = 232.75 * 273.5 / 144.0;
+    let office = 232.75 * (273.5 - 36.0) / 144.0;
+    let soffit = 232.75 * 36.0 / 144.0;
+    let b = s.execute("bim.bom", &json!({})).unwrap();
+    let lines: Vec<&Value> = b["lines"].as_array().unwrap().iter().filter(|l| l["trade"] == "drywall").collect();
+    let sum = |f: &dyn Fn(&str) -> bool| lines.iter().filter(|l| f(l["item"].as_str().unwrap())).map(|l| l["net"].as_f64().unwrap()).sum::<f64>();
+    // Each takeoff row and BOM line is rounded to the cent.
+    let near = |a: f64, b: f64| (a - b).abs() < 0.05;
+    let ceiling = sum(&|i| i.starts_with("Ceiling board "));
+    assert!(near(ceiling, 2.0 * toilet + office), "{ceiling} {b:#}");
+    // By type and layer: GYP-2 has two lines, one a layer.
+    let mut gyp: Vec<&str> =
+        lines.iter().filter(|l| l["size"].as_str().unwrap().starts_with("type GYP-2, layer")).map(|l| l["size"].as_str().unwrap()).collect();
+    gyp.sort_unstable();
+    assert_eq!(gyp, ["type GYP-2, layer 1", "type GYP-2, layer 2"], "{b:#}");
+    let bottom = sum(&|i| i.starts_with("Soffit bottom board "));
+    assert!(near(bottom, 3.0 * soffit), "{bottom} {b:#}");
+    assert!(near(sum(&|i| i.starts_with("Soffit side board ")), 19.396 * 2.0 + 19.396 * 2.0), "{b:#}");
+    assert!(sum(&|i| i.starts_with("Ceiling framing ")) > 0.0 && sum(&|i| i.starts_with("Soffit framing ")) > 0.0, "{b:#}");
+    // The two marked 40' walls take slotted deflection track and bottom track from their head of wall.
+    assert_eq!(sum(&|i| i == "Slotted deflection track"), 80.0, "{b:#}");
+    assert_eq!(sum(&|i| i == "Bottom track"), 80.0, "{b:#}");
+    // Every wall's track once: 40' + 40' + 24' + 24' walls, a top and a bottom run each; the unmarked
+    // 24' walls keep the plain track.
+    assert_eq!(sum(&|i| i == "Track"), 2.0 * 48.0, "{b:#}");
+    let track = sum(&|i| i.ends_with("track") || i == "Track");
+    assert_eq!(track, 2.0 * (40.0 + 40.0 + 24.0 + 24.0), "{b:#}");
+
+    // drywall.takeoff carries the same: head track by kind in the rows, ceilings beside them.
+    let t = s.execute("drywall.takeoff", &json!({"waste": 0})).unwrap();
+    assert_eq!(t["totals"]["trackLengthFt"], 256.0, "{t:#}");
+    assert_eq!(t["totals"]["headTrackLengthFt"], 80.0, "{t:#}");
+    assert_eq!(t["totals"]["bottomTrackLengthFt"], 80.0, "{t:#}");
+    assert!(near(t["totals"]["ceilingBoardAreaSqFt"].as_f64().unwrap(), 2.0 * toilet + office), "{t:#}");
+    let head = t["rows"][0]["headTrack"].as_array().unwrap();
+    assert!(head.iter().any(|h| h["material"] == "slotted deflection track" && h["lengthFt"] == 80.0 && h["wallType"] == "X1"), "{t:#}");
+    assert!(t["ceilings"].as_array().unwrap().iter().all(|c| c["part"] != "top track" && c["part"] != "bottom track"));
+    // A wall-type filter leaves the ceilings out; a level filter keeps them.
+    let t = s.execute("drywall.takeoff", &json!({"wallTypes": ["X1"]})).unwrap();
+    assert_eq!(t["ceilings"].as_array().unwrap().len(), 0, "{t:#}");
+    let t = s.execute("drywall.takeoff", &json!({"levels": ["1"]})).unwrap();
+    assert!(!t["ceilings"].as_array().unwrap().is_empty(), "{t:#}");
+    let t = s.execute("drywall.takeoff", &json!({"levels": ["2"]})).unwrap();
+    assert_eq!(t["ceilings"].as_array().unwrap().len(), 0, "{t:#}");
+
+    // The CSV has them too.
+    let dir = std::env::temp_dir().join(format!("ceil-takeoff-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Sample Takeoff.csv");
+    s.execute("drywall.takeoff", &json!({"file": path.to_str().unwrap()})).unwrap();
+    let csv = std::fs::read_to_string(&path).unwrap();
+    assert!(csv.lines().any(|l| l.contains("slotted deflection track") && l.contains(",80.00,")), "{csv}");
+    assert!(csv.lines().any(|l| l.starts_with("ceiling GYP-2 (1),")), "{csv}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn wall_info_shows_the_head_of_wall() {
+    let mut s = building();
+    let i = s.execute("wall.info", &json!({"handles": walls(&s)})).unwrap();
+    let ws = i["walls"].as_array().unwrap();
+    assert_eq!(ws.len(), 4, "{i:#}");
+    for w in ws {
+        assert_eq!(w["wallType"], "X1");
+        let h = &w["assembly"]["head"];
+        assert_eq!(h["track"], "slotted deflection track", "{i:#}");
+        assert_eq!(h["trackKind"], "deflection");
+        assert_eq!(h["to"], "deck");
+        assert_eq!(h["deflectionIn"], 0.75);
+        assert_eq!(h["bottomTrack"], true);
+        assert_eq!(h["detail"], "5");
+        assert!(h["text"].as_str().unwrap().contains("slotted deflection track at the deck"), "{h}");
+    }
+}

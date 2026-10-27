@@ -7,6 +7,10 @@ publish = false
 
 [dependencies]
 serde_json = { workspace = true }
+# The engine's Macro type for parsing action-recorder files in `cargo xtask repro`.
+cadaddy-engine = { path = "../crates/engine" }
+# PDF import statistics for `cargo xtask pdfstats`.
+cadaddy-io = { path = "../crates/io" }
 # `cargo xtask release-key` / `sign-release` (apps/cadaddy/src/relsig.rs): pure Rust, BSD-3-Clause.
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["zeroize"] }
 sha2 = "0.11"

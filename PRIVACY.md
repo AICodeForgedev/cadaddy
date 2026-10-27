@@ -38,8 +38,10 @@ email it. The dialog lists every file in the report before you save it.
   - the log of this run and the two before it;
   - the last commands (command names only, unless you include names);
   - the versions, the operating system and the graphics adapter;
-  - crash reports, if any (which command panicked, a backtrace and recent command names; no file
-    contents, no full paths — only the drawing's file name).
+  - crash reports, if any (which command panicked, the panic location — file and line — and
+    recent command names from the session journal; no file contents, no full paths — the
+    drawing's file name, and any absolute paths in the error message are reduced to their file
+    name).
 - **Only when you tick it:**
   - a summary of the open drawings: counts only, no geometry;
   - names: file paths, layer, block, style and layout names, and what you typed;
@@ -52,8 +54,10 @@ email it. The dialog lists every file in the report before you save it.
 
 Preferences, the logs, autosaves, crash reports (at most 20, in `diagnostics/`), each drawing's
 activity history (when ACTIVITYLOG is on) and downloaded updates stay in CADaddy's folders on your
-computer. Crash reports record which command panicked, a backtrace and recent command names; they
-hold no drawing contents, no full file paths and no user names. The activity history (which
+computer. Crash reports record which command panicked, the panic location (file and line), and
+recent command names from the session journal; they hold no drawing contents, no full file
+paths (absolute paths in the error message are reduced to their file name) and no user
+names. The activity history (which
 commands changed a drawing, and when) is kept in the settings folder's `activity` folder, never
 beside the drawing: saving or exporting a drawing writes only the files you asked for, so a folder
 you send to someone holds no working history. Uninstalling removes the program; your settings

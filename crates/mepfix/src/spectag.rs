@@ -458,7 +458,7 @@ pub fn read_fixture_tags(seed: u64, rules: &ProjectRules) -> Result<(Truth, Vec<
         }
     }
     let schedules = schedules_from(&tables);
-    let ceil = crate::ceiling_reader::read_ceilings(&dxf, &map);
+    let ceil = crate::ceiling_reader::read_ceilings(&dxf, &map, None);
     // The legend's sample symbols sit outside the building: only devices within the grid count.
     let xs: Vec<f64> = map.grid_x.iter().map(|g| g.at_ft).collect();
     let ys: Vec<f64> = map.grid_y.iter().map(|g| g.at_ft).collect();

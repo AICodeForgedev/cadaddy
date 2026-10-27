@@ -20,6 +20,7 @@ const CMD_REMOVE_TYPE: &str = "bim.remove_type";
 const CMD_GET_SPEC: &str = "bim.get_spec";
 const CMD_SET_SPEC: &str = "bim.set_spec";
 const CMD_UNSET_SPEC: &str = "bim.unset_spec";
+const CMD_COLOUR: &str = "bim.colour";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -37,6 +38,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handles: [string], mark: string, create?: {category?, fields?} (auto-create the type if absent)} → {assigned, type}"),
         CommandSpec::new(CMD_UNSET_SPEC, "Remove BIM Spec from Entities", run_unset_spec)
             .params("{handles: [string]} → {cleared}"),
+        CommandSpec::new(CMD_COLOUR, "Colour by BIM Property", run_colour)
+            .params("{by: string (mark | category | none | a BIM field key)} → {legend: [{key, color (ACI)}], coloured}"),
     ]
 }
 
@@ -205,6 +208,79 @@ fn run_unset_spec(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     Ok(json!({ "cleared": cleared }))
+}
+
+// ── bim.colour ─────────────────────────────────────────────────────────
+
+/// ACI colour palette for BIM colour-by (distinct, legible colours).
+const COLOUR_PALETTE: [u8; 12] = [1, 3, 5, 30, 6, 4, 2, 140, 200, 40, 94, 220];
+
+fn run_colour(s: &mut Session, p: &Value) -> Result<Value> {
+    let by = str_param(p, "by").unwrap_or("mark").to_ascii_lowercase();
+    let d = s.doc()?;
+    let space = s.space();
+    let ents: Vec<Handle> = d.space(&space).map(|st| st.iter().map(|e| e.handle).collect()).unwrap_or_default();
+
+    // Collect (handle, key) pairs for entities with BIM specs.
+    let mut assignments: Vec<(Handle, Option<String>)> = Vec::new();
+    for h in &ents {
+        let Some(e) = d.entity(*h) else { continue };
+        let mark = bimspec::entity_type_mark(&e.common.xdata);
+        let key = if by == "none" {
+            None
+        } else if let Some(mark) = mark {
+            match by.as_str() {
+                "mark" => Some(mark.to_string()),
+                "category" => d.bim_types.get(mark).and_then(|t| if t.category.is_empty() { None } else { Some(t.category.clone()) }),
+                field_key => d.bim_types.get(mark).and_then(|t| {
+                    t.get_field(field_key)
+                        .or_else(|| {
+                            let nk = field_key.to_ascii_lowercase();
+                            t.fields.iter().find(|(k, _)| k.to_ascii_lowercase() == nk).map(|(_, f)| f)
+                        })
+                        .map(|f| f.value.clone())
+                }),
+            }
+        } else {
+            None
+        };
+        assignments.push((*h, key));
+    }
+
+    // Build legend from unique keys.
+    let mut keys: Vec<String> = Vec::new();
+    let mut set: Vec<(Handle, cadaddy_doc::color::Color)> = Vec::new();
+    for (h, key) in &assignments {
+        let colour = if by == "none" {
+            cadaddy_doc::color::Color::ByLayer
+        } else {
+            match key {
+                Some(k) => {
+                    let i = match keys.iter().position(|x| x == k) {
+                        Some(i) => i,
+                        None => {
+                            keys.push(k.clone());
+                            keys.len() - 1
+                        }
+                    };
+                    cadaddy_doc::color::Color::Index(COLOUR_PALETTE.get(i % COLOUR_PALETTE.len()).copied().unwrap_or(7))
+                }
+                None => cadaddy_doc::color::Color::Index(8), // grey for no BIM spec
+            }
+        };
+        set.push((*h, colour));
+    }
+
+    let d = s.doc_mut()?;
+    for (h, c) in &set {
+        let _ = d.modify_entity(*h, |e| e.common.color = *c);
+    }
+    let legend: Vec<Value> = keys
+        .iter()
+        .enumerate()
+        .map(|(i, k)| json!({"key": k, "color": COLOUR_PALETTE.get(i % COLOUR_PALETTE.len()).copied().unwrap_or(7)}))
+        .collect();
+    Ok(json!({ "by": by, "legend": legend, "coloured": set.len() }))
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -425,5 +501,115 @@ mod tests {
         // Non-existent handles.
         let r = s.execute("bim.get_spec", &json!({"handles": ["DEADBEEF"]})).unwrap_or_default();
         assert_eq!(r["specs"].as_array().map(|a| a.len()), Some(1));
+    }
+
+    /// MUST 3: qselect with bim.mark, bim.category, bim.<field> properties.
+    #[test]
+    fn qselect_bim_properties() {
+        let mut s = session();
+        // Create types H and A with different manufacturers.
+        s.execute("bim.set_type", &json!({"mark": "H", "category": "luminaire", "fields": {"manufacturer": "Lithonia"}})).unwrap();
+        s.execute("bim.set_type", &json!({"mark": "A", "category": "receptacle", "fields": {"manufacturer": "Leviton"}})).unwrap();
+        // Draw 5 circles: 3 assigned H, 2 assigned A.
+        let mut h_handles = Vec::new();
+        for i in 0..3 {
+            let r = s.execute("circle", &json!({"center": [i * 10, 0], "radius": 1})).unwrap();
+            let h = r["handle"].as_str().unwrap().to_string();
+            s.execute("bim.set_spec", &json!({"handles": [&h], "mark": "H"})).unwrap();
+            h_handles.push(h);
+        }
+        let mut a_handles = Vec::new();
+        for i in 0..2 {
+            let r = s.execute("circle", &json!({"center": [i * 10, 20], "radius": 1})).unwrap();
+            let h = r["handle"].as_str().unwrap().to_string();
+            s.execute("bim.set_spec", &json!({"handles": [&h], "mark": "A"})).unwrap();
+            a_handles.push(h);
+        }
+
+        // qselect bim.mark = H → exactly 3.
+        let r = s.execute("qselect", &json!({"property": "bim.mark", "operator": "=", "value": "H"})).unwrap();
+        assert_eq!(r["selected"].as_u64(), Some(3), "bim.mark=H should select 3");
+
+        // qselect bim.mark = A → exactly 2.
+        let r = s.execute("qselect", &json!({"property": "bim.mark", "operator": "=", "value": "A"})).unwrap();
+        assert_eq!(r["selected"].as_u64(), Some(2), "bim.mark=A should select 2");
+
+        // qselect bim.manufacturer = Lithonia → exactly 3 (H's manufacturer).
+        let r = s.execute("qselect", &json!({"property": "bim.manufacturer", "operator": "=", "value": "Lithonia"})).unwrap();
+        assert_eq!(r["selected"].as_u64(), Some(3), "bim.manufacturer=Lithonia should select 3");
+
+        // qselect bim.category = luminaire → exactly 3.
+        let r = s.execute("qselect", &json!({"property": "bim.category", "operator": "=", "value": "luminaire"})).unwrap();
+        assert_eq!(r["selected"].as_u64(), Some(3), "bim.category=luminaire should select 3");
+
+        // qselect.info should list bim.mark and bim.manufacturer in properties.
+        let info = s.execute("qselect.info", &json!({})).unwrap();
+        let props = info["properties"].as_array().unwrap();
+        assert!(props.iter().any(|p| p == "bim.mark"), "qselect.info should list bim.mark");
+        assert!(props.iter().any(|p| p == "bim.manufacturer"), "qselect.info should list bim.manufacturer");
+    }
+
+    /// MUST 3: bim.colour assigns distinct colours by mark.
+    #[test]
+    fn colour_by_mark() {
+        let mut s = session();
+        s.execute("bim.set_type", &json!({"mark": "H", "category": "luminaire"})).unwrap();
+        s.execute("bim.set_type", &json!({"mark": "A", "category": "receptacle"})).unwrap();
+        // 2 circles: one H, one A.
+        let c1 = s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap();
+        let h1 = c1["handle"].as_str().unwrap().to_string();
+        s.execute("bim.set_spec", &json!({"handles": [&h1], "mark": "H"})).unwrap();
+        let c2 = s.execute("circle", &json!({"center": [10, 0], "radius": 1})).unwrap();
+        let h2 = c2["handle"].as_str().unwrap().to_string();
+        s.execute("bim.set_spec", &json!({"handles": [&h2], "mark": "A"})).unwrap();
+
+        let r = s.execute("bim.colour", &json!({"by": "mark"})).unwrap();
+        let legend = r["legend"].as_array().unwrap();
+        assert_eq!(legend.len(), 2, "two distinct marks in legend");
+        let c0 = legend[0]["color"].as_u64().unwrap();
+        let c1_val = legend[1]["color"].as_u64().unwrap();
+        assert_ne!(c0, c1_val, "H and A should get different colours");
+        assert!(r["coloured"].as_u64().unwrap() >= 2);
+
+        // Reset with none.
+        let r = s.execute("bim.colour", &json!({"by": "none"})).unwrap();
+        assert_eq!(r["legend"].as_array().unwrap().len(), 0);
+    }
+
+    /// MUST 5: bulk type change — change H's manufacturer, all 3 H entities see the new value,
+    /// and undo restores the old value on all of them.
+    #[test]
+    fn bulk_type_change_and_undo() {
+        let mut s = session();
+        s.execute("bim.set_type", &json!({"mark": "H", "category": "luminaire", "fields": {"manufacturer": "Lithonia"}})).unwrap();
+        // Create 3 circles assigned to H.
+        let mut handles = Vec::new();
+        for i in 0..3 {
+            let r = s.execute("circle", &json!({"center": [i * 10, 0], "radius": 1})).unwrap();
+            let h = r["handle"].as_str().unwrap().to_string();
+            s.execute("bim.set_spec", &json!({"handles": [&h], "mark": "H"})).unwrap();
+            handles.push(h);
+        }
+        // All 3 report Lithonia.
+        let r = s.execute("bim.get_spec", &json!({"handles": &handles})).unwrap();
+        for i in 0..3 {
+            assert_eq!(r["specs"][i]["fields"]["manufacturer"]["value"], "Lithonia");
+        }
+
+        // Change H's manufacturer to "Cooper".
+        s.execute("bim.set_type", &json!({"mark": "H", "fields": {"manufacturer": "Cooper"}})).unwrap();
+
+        // All 3 now report Cooper.
+        let r = s.execute("bim.get_spec", &json!({"handles": &handles})).unwrap();
+        for i in 0..3 {
+            assert_eq!(r["specs"][i]["fields"]["manufacturer"]["value"], "Cooper", "entity {i} should see Cooper after bulk change");
+        }
+
+        // Undo: all 3 should see Lithonia again.
+        s.undo().unwrap();
+        let r = s.execute("bim.get_spec", &json!({"handles": &handles})).unwrap();
+        for i in 0..3 {
+            assert_eq!(r["specs"][i]["fields"]["manufacturer"]["value"], "Lithonia", "entity {i} should see Lithonia after undo");
+        }
     }
 }

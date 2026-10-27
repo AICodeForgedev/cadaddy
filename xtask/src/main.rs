@@ -12,6 +12,7 @@ mod layers;
 mod mcptest;
 mod mepfix;
 mod parity;
+mod pdfstats;
 mod perf;
 mod pubcost;
 mod release;
@@ -45,6 +46,8 @@ commands:
                   made-up floor plans of 10k-500k objects (seeded) round-tripped through DXF, DWG
                   and .cdy: exact differences and save/open/regen times against budgets (warnings);
                   report in target/corpus/report.md
+  pdfstats FILE.pdf [FILE2.pdf ...]
+                  print PDF import statistics: entity counts, scale, layers, quality metrics
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   parity          recompute the AutoCAD menu-breadth checklist in docs/parity-checklist.md
   ico <out.ico> <in.png>...
@@ -84,7 +87,9 @@ commands:
   supplychain     offline: shipped crates' licences (deny.toml; no GPL/AGPL/unknown), sources
                   (crates.io, the workspace, pinned allowed git), banned crates, and a secrets scan
   advisories      RustSec advisories: cargo deny check + cargo audit (needs both tools and the network)
-  command-docs    generate docs/guide/command-reference.md from the live command registry
+  command-docs [--check]
+                  generate docs/guide/command-reference.md from the live command registry;
+                  --check regenerates and fails on any diff (used by `cargo xtask ci`)
   sbom [--out FILE]
                   CycloneDX 1.5 SBOM of the shipped crates (default target/sbom/cadaddy-<version>.cdx.json),
                   to attach to the release
@@ -106,9 +111,12 @@ commands:
   repro FILE [--save OUT]
                   replay a recorded journal (.scr) or action macro (.actm) headless through
                   cadaddy-cli, to reproduce a crash or verify a workflow
-  release <version> [--dry-run] [--skip-build] [--skip-smoke] [--skip-sign]
-                  one-command release: version bump, platform build, .mcpb, sign, smoke, release
-                  notes, human checklist; stops at first failure; no network writes
+  release <version> [--dry-run] [--step STEP]... [--update-from OLD] [--dist DIR]
+          [--skip-build] [--skip-smoke] [--skip-sign]
+                  one-command release: bump (committed), build (from a git archive export),
+                  mcpb, smoke, update-gate, sign, notes, checklist; --step runs single steps
+                  (per machine; sign once over a --dist folder gathered from all machines);
+                  stops at the first failure; no network writes
   release-key --out FILE
                   make a release signing key: the secret to FILE (keep it off the repository), the
                   public key line for apps/cadaddy/src/release_keys.txt printed
@@ -136,7 +144,7 @@ fn main() -> ExitCode {
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => parity::run(&root()),
-        Some("command-docs") => commanddocs::run(&root()),
+        Some("command-docs") => commanddocs::run(&root(), rest.contains(&"--check")),
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("fuzz") => cmd_fuzz(&rest),
@@ -155,6 +163,7 @@ fn main() -> ExitCode {
         Some("verify-release") => release::verify_cmd(&root(), &rest),
         Some("soak") => soak::run(&root(), &rest),
         Some("fetch-pubcost") => pubcost::run(&root(), &args),
+        Some("pdfstats") => pdfstats::run(&root(), &rest),
         Some("supplychain") => supplychain::run(&root()),
         Some("advisories") => supplychain::advisories(&root()),
         Some("sbom") => supplychain::sbom(&root(), &rest),
@@ -274,7 +283,7 @@ fn wasm_set() -> Result<Vec<String>, String> {
     Ok(crates
         .into_iter()
         .filter(|c| match layers::classify(&c.name) {
-            Some(layers::Class::Layer(l)) => l <= 4 || layers::short_name(&c.name) == "ui-egui",
+            Some(layers::Class::Layer(l)) => l <= 5 || layers::short_name(&c.name) == "ui-egui",
             Some(layers::Class::Standalone) => true,
             _ => false,
         })
@@ -334,6 +343,7 @@ fn cmd_ci() -> Result<(), String> {
         ("web", Box::new(|| webtest::run(&root(), &[]))),
         // Two minutes of the headless app under a mixed workload: a leak or a stall fails.
         ("soak", Box::new(|| soak::run(&root(), &["--minutes", "2", "--profile", "dev"]))),
+        ("command-docs", Box::new(|| commanddocs::run(&root(), true))),
         ("supplychain", Box::new(|| supplychain::run(&root()))),
         ("advisories", Box::new(|| supplychain::advisories(&root()))),
     ];

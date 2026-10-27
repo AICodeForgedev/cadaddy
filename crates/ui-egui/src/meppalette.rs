@@ -20,15 +20,15 @@ struct State {
     guessed_only: bool,
     /// Status message at the bottom.
     status: String,
-    /// Which item is selected (by id).
-    selected: Option<u64>,
+    /// Which item is selected (by stable run id).
+    selected: Option<String>,
     /// Editing state: the item being edited.
     editing: Option<EditState>,
 }
 
 #[derive(Clone)]
 struct EditState {
-    id: u64,
+    id: String,
     size_w: String,
     size_h: String,
     bottom_ft: String,
@@ -99,10 +99,10 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         v
     };
 
-    let mut pick: Option<u64> = None;
-    let mut toggle_reviewed: Option<u64> = None;
+    let mut pick: Option<String> = None;
+    let mut toggle_reviewed: Option<String> = None;
     let mut apply_edit: Option<EditState> = None;
-    let mut start_edit: Option<u64> = None;
+    let mut start_edit: Option<String> = None;
     let mut cancel_edit = false;
     let mut do_rebuild = false;
 
@@ -152,7 +152,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 for item in &items {
                     let sys = item["system"].as_str().unwrap_or_default();
                     let lvl = item["level"].as_str().unwrap_or_default();
-                    let id = item["id"].as_u64().unwrap_or(0);
+                    let id = item["id"].as_str().unwrap_or_default().to_string();
 
                     if sys != current_system {
                         current_system = sys.to_string();
@@ -165,7 +165,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         ui.label(RichText::new(format!("  {lvl}")).small().color(t.text_dim));
                     }
 
-                    let selected = st.selected == Some(id);
+                    let selected = st.selected.as_deref() == Some(id.as_str());
                     let is_editing = st.editing.as_ref().is_some_and(|e| e.id == id);
                     let reviewed = item["reviewed"].as_bool() == Some(true);
                     let (conf_color, conf_char) = confidence_label(item["confidence"].as_str().unwrap_or("low"));
@@ -180,17 +180,17 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         // Reviewed checkbox.
                         let mut rev = reviewed;
                         if ui.checkbox(&mut rev, "").on_hover_text(crate::tl!("Mark reviewed")).changed() {
-                            toggle_reviewed = Some(id);
+                            toggle_reviewed = Some(id.clone());
                         }
                         // Main label (clickable).
                         let label = format!("{kind} {segs}seg {}  {}", format_size(&item["size_in"]), format_bottom(&item["bottoms_ft"]),);
                         let resp = ui.selectable_label(selected, label);
                         if resp.on_hover_text(crate::tf!("Size: {ss}, Height: {hs}", ss = size_src, hs = ht_src)).clicked() {
-                            pick = Some(id);
+                            pick = Some(id.clone());
                         }
                         // Edit button.
                         if !is_editing && ui.small_button(crate::tl!("Edit")).on_hover_text(crate::tl!("Edit size, height or system")).clicked() {
-                            start_edit = Some(id);
+                            start_edit = Some(id.clone());
                         }
                     });
 
@@ -241,7 +241,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 
     // Actions.
     if let Some(id) = pick
-        && let Some(item) = items.iter().find(|it| it["id"].as_u64() == Some(id))
+        && let Some(item) = items.iter().find(|it| it["id"].as_str() == Some(id.as_str()))
     {
         zoom_to_item(app, item);
         st.selected = Some(id);
@@ -250,7 +250,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         st.status = crate::tf!("Zoomed to {sys} run on {lvl}.", sys = sys, lvl = lvl);
     }
     if let Some(id) = toggle_reviewed {
-        let reviewed = items.iter().find(|it| it["id"].as_u64() == Some(id)).and_then(|it| it["reviewed"].as_bool()).unwrap_or(false);
+        let reviewed = items.iter().find(|it| it["id"].as_str() == Some(id.as_str())).and_then(|it| it["reviewed"].as_bool()).unwrap_or(false);
         match app.run("mep.edit", json!({ "id": id, "reviewed": !reviewed })) {
             Ok(_) => {
                 st.status = if !reviewed { crate::tl!("Marked as reviewed.").to_string() } else { crate::tl!("Unmarked.").to_string() };
@@ -259,7 +259,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         }
     }
     if let Some(id) = start_edit
-        && let Some(item) = items.iter().find(|it| it["id"].as_u64() == Some(id))
+        && let Some(item) = items.iter().find(|it| it["id"].as_str() == Some(id.as_str()))
     {
         let w = item["size_in"].get(0).and_then(Value::as_f64).unwrap_or(0.0);
         let h = item["size_in"].get(1).and_then(Value::as_f64).unwrap_or(0.0);
@@ -278,8 +278,8 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     if let Some(ed) = apply_edit {
         let w: f64 = ed.size_w.parse().unwrap_or(0.0);
         let h: f64 = ed.size_h.parse().unwrap_or(0.0);
-        let b: f64 = ed.bottom_ft.parse().unwrap_or(0.0);
-        let mut params = json!({ "id": ed.id });
+        let b: f64 = ed.bottom_ft.parse().unwrap_or(f64::NAN);
+        let mut params = json!({ "id": &ed.id });
         if w > 0.0 {
             params["size_in"] = json!([w, h]);
         }
@@ -328,9 +328,9 @@ mod tests {
                     {"name": "CW-1", "layer": "P-DOMW-CW", "kind": "pipe", "size_in": [2.0, 0.0], "bottom_ft": 10.0, "show": true}
                 ],
                 "runs": [
-                    {"system": "SA-1", "level": "Level 1", "points": [[0.0,0.0],[120.0,0.0],[120.0,60.0]], "size_in": [24.0, 12.0], "bottoms_ft": [10.0, 10.0], "objects": ["1A", "1B"]},
-                    {"system": "SA-1", "level": "Level 1", "points": [[0.0,60.0],[60.0,60.0]], "size_in": [18.0, 10.0], "bottoms_ft": [9.5], "objects": ["2A"]},
-                    {"system": "CW-1", "level": "Level 1", "points": [[0.0,0.0],[0.0,120.0]], "size_in": [2.0, 0.0], "bottoms_ft": [10.0], "objects": ["3A"]}
+                    {"system": "SA-1", "level": "Level 1", "points": [[0.0,0.0],[120.0,0.0],[120.0,60.0]], "size_in": [24.0, 12.0], "bottoms_ft": [10.0, 10.0], "objects": ["1A", "1B"], "size_source": "default", "height_source": "default"},
+                    {"system": "SA-1", "level": "Level 1", "points": [[0.0,60.0],[60.0,60.0]], "size_in": [18.0, 10.0], "bottoms_ft": [9.5], "objects": ["2A"], "size_source": "tag", "height_source": "tag"},
+                    {"system": "CW-1", "level": "Level 1", "points": [[0.0,0.0],[0.0,120.0]], "size_in": [2.0, 0.0], "bottoms_ft": [10.0], "objects": ["3A"], "size_source": "default", "height_source": "default"}
                 ]
             }
         });
@@ -344,13 +344,15 @@ mod tests {
         let r = app.session.execute("mep.list", &json!({})).unwrap();
         assert_eq!(r["total"].as_u64(), Some(3));
         let items = r["items"].as_array().unwrap();
-        // First run uses system defaults: low confidence.
-        assert_eq!(items[0]["confidence"].as_str(), Some("low"));
-        assert_eq!(items[0]["size_source"].as_str(), Some("default"));
-        // Second run has a different size and height (both from tags): high confidence.
-        assert_eq!(items[1]["confidence"].as_str(), Some("high"));
-        assert_eq!(items[1]["size_source"].as_str(), Some("tag"));
-        assert_eq!(items[1]["height_source"].as_str(), Some("tag"));
+        // A default run (size = system default) has low confidence.
+        let default_run = items.iter().find(|it| it["objects"] == json!(["1A", "1B"])).unwrap();
+        assert_eq!(default_run["confidence"].as_str(), Some("low"));
+        assert_eq!(default_run["size_source"].as_str(), Some("default"));
+        // The tagged run (different size and height) has high confidence.
+        let tagged_run = items.iter().find(|it| it["objects"] == json!(["2A"])).unwrap();
+        assert_eq!(tagged_run["confidence"].as_str(), Some("high"));
+        assert_eq!(tagged_run["size_source"].as_str(), Some("tag"));
+        assert_eq!(tagged_run["height_source"].as_str(), Some("tag"));
     }
 
     #[test]
@@ -375,21 +377,28 @@ mod tests {
     #[test]
     fn mep_edit_changes_size_and_marks_reviewed() {
         let mut app = mep_session();
-        let _ = app.session.execute("mep.edit", &json!({"id": 0, "size_in": [30.0, 14.0], "reviewed": true})).unwrap();
+        // Trigger id assignment via mep.list.
+        let list = app.session.execute("mep.list", &json!({})).unwrap();
+        let id0 = list["items"][0]["id"].as_str().unwrap().to_string();
+        let _ = app.session.execute("mep.edit", &json!({"id": &id0, "size_in": [30.0, 14.0], "reviewed": true})).unwrap();
         let r = app.session.execute("mep.list", &json!({})).unwrap();
-        let item = &r["items"][0];
+        let item = r["items"].as_array().unwrap().iter().find(|it| it["id"].as_str() == Some(id0.as_str())).unwrap();
         assert_eq!(item["size_in"], json!([30.0, 14.0]));
         assert_eq!(item["reviewed"].as_bool(), Some(true));
+        assert_eq!(item["size_source"].as_str(), Some("override"), "an edit sets source to override");
     }
 
     #[test]
     fn mep_edit_changes_bottom() {
         let mut app = mep_session();
-        let _ = app.session.execute("mep.edit", &json!({"id": 2, "bottom_ft": 8.5})).unwrap();
+        let list = app.session.execute("mep.list", &json!({})).unwrap();
+        let id2 = list["items"][2]["id"].as_str().unwrap().to_string();
+        let _ = app.session.execute("mep.edit", &json!({"id": &id2, "bottom_ft": 8.5})).unwrap();
         let r = app.session.execute("mep.list", &json!({})).unwrap();
-        let item = &r["items"][2];
+        let item = r["items"].as_array().unwrap().iter().find(|it| it["id"].as_str() == Some(id2.as_str())).unwrap();
         let b = item["bottoms_ft"][0].as_f64().unwrap();
         assert!((b - 8.5).abs() < 1e-6);
+        assert_eq!(item["height_source"].as_str(), Some("override"), "an edit sets source to override");
     }
 
     #[test]

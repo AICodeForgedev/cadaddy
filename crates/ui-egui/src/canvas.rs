@@ -378,6 +378,10 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         projection: st.list_projection(),
         // FIELDDISPLAY: fields on a grey background (on screen only).
         field_shading: st.doc.header.i64("FIELDDISPLAY", 1) != 0,
+        // Drywall view-mode colour overrides.
+        color_overrides: app.session.drywall_color_overrides.iter().map(|(&h, &c)| (h, c)).collect(),
+        // Drywall layer boundary lines.
+        layer_lines: app.session.drywall_layer_lines.clone(),
     };
     if view_only {
         let t = Tokens::get();
@@ -542,6 +546,8 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             cancel: None,
             projection: None,
             field_shading: st.doc.header.i64("FIELDDISPLAY", 1) != 0,
+            color_overrides: app.session.drywall_color_overrides.iter().map(|(&h, &c)| (h, c)).collect(),
+            layer_lines: app.session.drywall_layer_lines.clone(),
         };
         c.list = cadaddy_render::viewport_content(&st.doc, &st.space, h, area, &opts);
         c.key = Some(key);
@@ -1854,7 +1860,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         masked = gpu && f.outline.is_some();
     }
     if sheet.is_none() && crate::shaded::paint(app, ui, &painter, &xf, bg) {
-        // The Model tab in a 3D visual style: the shaded view stands for the display list.
+        // The Model tab in a 3D visual style: the shaded view stands for the display list, with
+        // the section box's face handles over it.
+        crate::shaded::section_box_handles(app, ui, &painter, &xf);
     } else if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
     } else if let Some(list) = &app.canvas.list {

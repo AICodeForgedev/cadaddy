@@ -9,9 +9,9 @@
 //! The project state (JSON) is the only thing kept fully in memory.
 
 use crate::sheet_reader::{self, RecognisedSheet, SheetMap};
-use crate::truth::Truth;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -20,6 +20,9 @@ const MAX_SHEETS: usize = 2000;
 
 /// Maximum file size for a single sheet, bytes (500 MB — a very large vector PDF).
 const MAX_FILE_BYTES: u64 = 500_000_000;
+
+/// Buffer size for streaming hash (64 KB).
+const HASH_BUF: usize = 65_536;
 
 // ─── Project model ───────────────────────────────────────────────────────────
 
@@ -46,6 +49,9 @@ pub struct PrintSetProject {
     pub revisions: Vec<RevisionRecord>,
     /// Aggregated dashboard, updated after each stage.
     pub dashboard: Dashboard,
+    /// Sheet index from the cover/index sheet: listed sheet numbers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheet_index: Vec<String>,
 }
 
 /// The project file's schema tag.
@@ -60,7 +66,7 @@ pub struct SheetEntry {
     pub title: String,
     /// Source file, relative to `source_dir`.
     pub file: String,
-    /// Discipline code: `G`, `A`, `S`, `M`, `P`, `FP`, `E`, `FA`, `T`, `C`.
+    /// Discipline code: `G`, `A`, `S`, `M`, `P`, `FP`, `E`, `FA`, `T`, `C`, `SL`.
     pub discipline: String,
     /// Sheet type: `plan`, `enlarged_plan`, `rcp`, `schedule`, `cover`, `section`, `elevation`,
     /// `detail`, `diagram`, `unknown`.
@@ -79,7 +85,7 @@ pub struct SheetEntry {
     /// Per-stage outcomes for this sheet.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub stage_results: BTreeMap<String, SheetStageResult>,
-    /// File content hash (SHA-256 hex, first 16 chars) for delta detection.
+    /// File content hash (FNV-1a hex) for delta detection.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub content_hash: String,
     /// True if this sheet changed in the latest re-import and needs reprocessing.
@@ -98,6 +104,25 @@ pub struct SheetEntry {
     /// Why `superseded_by` replaces this sheet (which order decided it).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub superseded_reason: String,
+    /// Where `level` came from: `title` (the sheet or a view title names it), `number` (the
+    /// sheet's place in a numbered plan series: A111…A114), empty when there is none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub level_source: String,
+    /// The latest date printed on the sheet (`YYYY-MM-DD`: issue or revision dates), empty when
+    /// none reads. The same sheet in two files: the later date is the current one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub issued: String,
+    /// Level marks a building section or elevation prints (`SECOND FLOOR` over `110'-8"`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub level_marks: Vec<LevelMark>,
+}
+
+/// A level's elevation as a section or elevation sheet marks it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LevelMark {
+    /// The level code (`1`, `2`, `R`), as plan titles give levels.
+    pub level: String,
+    pub elevation_ft: f64,
 }
 
 /// What one stage found on one sheet.
@@ -214,6 +239,11 @@ impl Stage {
             Stage::Callouts => &[],
         }
     }
+
+    /// True for stages whose items are project-level (not per-sheet).
+    pub fn is_cross_discipline(self) -> bool {
+        matches!(self, Stage::Clashes | Stage::Callouts)
+    }
 }
 
 /// A record of a completed (or failed) stage run.
@@ -259,6 +289,12 @@ pub struct Dashboard {
     pub stages_completed: usize,
     /// Stages total.
     pub stages_total: usize,
+    /// Sheet numbers on the index that have no file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_sheets: Vec<String>,
+    /// Sheet numbers present but not on the index.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unlisted_sheets: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -321,21 +357,46 @@ pub struct Progress {
 /// The progress callback type (not `'static` so callers can capture local variables).
 pub type ProgressFn<'a> = dyn FnMut(&Progress) + 'a;
 
-// ─── Content hashing ─────────────────────────────────────────────────────────
+// ─── Stage runner callback ──────────────────────────────────────────────────
 
-/// Hash file content (first 16 hex chars of SHA-256) for delta detection.
-fn content_hash(data: &[u8]) -> String {
-    use std::hash::{Hash, Hasher};
-    // A fast non-crypto hash for delta detection (not security).
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    data.hash(&mut h);
-    format!("{:016x}", h.finish())
+/// Callback that runs one stage on one sheet. Returns the result for that sheet.
+/// The production implementation loads DXF and calls readers; tests can inject a truth scorer.
+pub type StageRunnerFn<'a> = dyn FnMut(Stage, &SheetEntry) -> SheetStageResult + 'a;
+
+/// A null stage runner that returns Completed with 0 items (for when readers are stubs).
+pub fn null_stage_runner(_stage: Stage, _sheet: &SheetEntry) -> SheetStageResult {
+    SheetStageResult { stage: _stage.name().into(), status: StageStatus::Completed, items_found: 0, confidence: 0.0, ..SheetStageResult::default() }
 }
 
-/// Hash a file on disk.
+// ─── Content hashing (streaming FNV-1a) ─────────────────────────────────────
+
+/// Stream-hash a file on disk (FNV-1a, first 16 hex chars). Never reads the whole file at once.
 fn file_hash(path: &Path) -> Result<String, String> {
-    let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(content_hash(&data))
+    let mut file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
+    let mut buf = [0u8; HASH_BUF];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| format!("{}: {e}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        for &b in &buf[..n] {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x100000001b3); // FNV prime
+        }
+    }
+    Ok(format!("{hash:016x}"))
+}
+
+/// Hash in-memory bytes (for tests and small data).
+#[allow(dead_code)]
+fn content_hash(data: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in data {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 // ─── Sheet classification ───────────────────────────────────────────────────
@@ -346,7 +407,7 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
     if up.contains("COVER") || up.contains("INDEX") {
         return "cover".into();
     }
-    if up.contains("SCHEDULE") {
+    if up.contains("SCHEDULE") || up.contains("NOTES") || up.contains("LEGEND") || up.contains("ABBREVIATION") || up.contains("SYMBOLS") {
         return "schedule".into();
     }
     if up.contains("DETAIL") {
@@ -385,9 +446,19 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
 /// Infer the discipline from the sheet number prefix.
 fn infer_discipline(number: &str) -> String {
     let up = number.to_ascii_uppercase();
-    for &(prefix, code) in
-        &[("FP-", "FP"), ("FA-", "FA"), ("M-", "M"), ("P-", "P"), ("S-", "S"), ("A-", "A"), ("G-", "G"), ("E-", "E"), ("T-", "T"), ("C-", "C")]
-    {
+    for &(prefix, code) in &[
+        ("FP-", "FP"),
+        ("FA-", "FA"),
+        ("SL-", "SL"),
+        ("M-", "M"),
+        ("P-", "P"),
+        ("S-", "S"),
+        ("A-", "A"),
+        ("G-", "G"),
+        ("E-", "E"),
+        ("T-", "T"),
+        ("C-", "C"),
+    ] {
         if up.starts_with(prefix) {
             return code.into();
         }
@@ -412,6 +483,56 @@ fn infer_level(title: &str) -> String {
 /// The level [`create_from_truth`] and the classify stage give a sheet title (tests).
 pub fn level_of_title(title: &str) -> String {
     infer_level(title)
+}
+
+// ─── Sheet index reading ────────────────────────────────────────────────────
+
+/// Parse sheet numbers from a cover/index sheet's drawing list. Looks for text entities
+/// that match sheet number patterns (e.g. "M-101", "E-201", "S-100").
+pub fn read_sheet_index(drawing: &cadaddy_doc::Drawing) -> Vec<String> {
+    let mut numbers = Vec::new();
+    let is_sheet_number = |s: &str| -> bool {
+        // Match patterns like G-001, A-100, S-201, M-101, P-101, FP-101, E-201, etc.
+        let up = s.trim().to_ascii_uppercase();
+        if up.len() < 3 {
+            return false;
+        }
+        let parts: Vec<&str> = up.splitn(2, '-').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        let prefix = parts[0];
+        let suffix = parts[1];
+        let valid_prefix = matches!(prefix, "G" | "A" | "S" | "M" | "P" | "FP" | "E" | "FA" | "T" | "C" | "SL");
+        let valid_suffix = suffix.len() >= 2 && suffix.chars().next().is_some_and(|c| c.is_ascii_digit());
+        valid_prefix && valid_suffix
+    };
+
+    for entity in drawing.model.iter() {
+        let text = match &entity.kind {
+            cadaddy_doc::EntityKind::Text(t) => &t.value,
+            cadaddy_doc::EntityKind::MText(t) => &t.contents,
+            _ => continue,
+        };
+        // A drawing list may have multiple numbers per line, or one per row.
+        for word in text.split_whitespace() {
+            if is_sheet_number(word) && !numbers.contains(&word.to_ascii_uppercase()) {
+                numbers.push(word.to_ascii_uppercase());
+            }
+        }
+    }
+    numbers.sort();
+    numbers
+}
+
+/// Compare the sheet index against actual sheets. Returns (missing, unlisted).
+pub fn compare_index(project: &PrintSetProject) -> (Vec<String>, Vec<String>) {
+    let present: std::collections::HashSet<String> = project.sheets.iter().map(|s| s.number.to_ascii_uppercase()).collect();
+    let indexed: std::collections::HashSet<String> = project.sheet_index.iter().map(|s| s.to_ascii_uppercase()).collect();
+
+    let missing: Vec<String> = indexed.difference(&present).cloned().collect();
+    let unlisted: Vec<String> = present.difference(&indexed).filter(|n| !n.is_empty()).cloned().collect();
+    (missing, unlisted)
 }
 
 // ─── Project creation ────────────────────────────────────────────────────────
@@ -589,7 +710,7 @@ pub fn create_project_from_files(name: &str, dir: &Path, files: &[(String, PathB
 /// Create a project from a [`Truth`] (the synthetic fixture set's ground truth). This fills in
 /// the sheet entries from the truth's sheet list so tests can exercise the pipeline without real
 /// files on disk.
-pub fn create_from_truth(truth: &Truth) -> PrintSetProject {
+pub fn create_from_truth(truth: &crate::truth::Truth) -> PrintSetProject {
     let mut sheets = Vec::new();
     for sh in &truth.sheets {
         let discipline = infer_discipline(&sh.number);
@@ -630,7 +751,7 @@ pub fn run_classify(
     cancel: &AtomicBool,
     progress: &mut ProgressFn<'_>,
 ) -> StageRecord {
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
     let mut classified = 0usize;
     let total = project.sheets.len();
 
@@ -658,6 +779,16 @@ pub fn run_classify(
             match loader(&entry.file) {
                 Ok(drawing) => {
                     let rec = sheet_reader::recognise_dxf(&drawing);
+                    // Read the sheet index from cover/index sheets.
+                    if rec.title.to_ascii_uppercase().contains("INDEX")
+                        || rec.title.to_ascii_uppercase().contains("COVER")
+                        || rec.title.to_ascii_uppercase().contains("DRAWING LIST")
+                    {
+                        let idx = read_sheet_index(&drawing);
+                        if !idx.is_empty() {
+                            project.sheet_index = idx;
+                        }
+                    }
                     if let Some(e) = project.sheets.get_mut(i) {
                         e.number = if rec.number.is_empty() {
                             // Fall back to filename without extension.
@@ -756,7 +887,7 @@ pub fn run_classify_prints(
     cancel: &AtomicBool,
     progress: &mut ProgressFn<'_>,
 ) -> StageRecord {
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
     let total = project.sheets.len();
     let mut out: Vec<SheetEntry> = Vec::with_capacity(total);
     let mut classified = 0usize;
@@ -790,19 +921,78 @@ pub fn run_classify_prints(
                 continue;
             }
         };
-        for (rec, _) in sheet_reader::split_views(&drawing) {
+        let facts = PageFacts::read(&drawing);
+        for (mut rec, _) in sheet_reader::split_views(&drawing) {
             let mut e = entry.clone();
+            let view = !rec.printed_number.is_empty();
+            // The title block names the sheet (sheet facts); the sheet reader's own number is the
+            // fallback, and a view of a several-view sheet keeps its `<number>/<level>`.
+            if let Some(id) = &facts.ident {
+                if view {
+                    if rec.printed_number != id.number {
+                        rec.number = rec.number.replacen(&rec.printed_number, &id.number, 1);
+                        rec.printed_number = id.number.clone();
+                    }
+                } else {
+                    rec.number = id.number.clone();
+                }
+                if !id.title.is_empty() && !view {
+                    rec.title = id.title.clone();
+                }
+                if !id.discipline.is_empty() {
+                    rec.discipline = canonical_discipline(&id.discipline);
+                }
+            }
             e.number = if rec.number.is_empty() { format!("{}#{}", entry.file, entry.page) } else { rec.number.clone() };
             e.title = rec.title.clone();
             let printed = if rec.printed_number.is_empty() { rec.number.as_str() } else { rec.printed_number.as_str() };
             e.discipline = if rec.discipline.is_empty() { infer_discipline(printed) } else { rec.discipline.clone() };
-            e.sheet_type = classify_sheet_type(printed, &e.title);
-            if !rec.printed_number.is_empty() && e.sheet_type == "unknown" {
+            // A consultant's title block may carry no title: the view titles say what is drawn.
+            let type_text = if e.title.is_empty() { facts.view_titles.join(" / ") } else { e.title.clone() };
+            e.sheet_type = classify_sheet_type(printed, &type_text);
+            if view && e.sheet_type == "unknown" {
                 // One view of a several-view sheet is a plan of its level.
                 e.sheet_type = "plan".into();
             }
-            e.level = rec.level.clone().unwrap_or_else(|| infer_level(&e.title));
-            e.levels = rec.levels.clone();
+            if view {
+                e.level = rec.level.clone().unwrap_or_else(|| infer_level(&e.title));
+                e.levels = rec.levels.clone();
+            } else {
+                // The sheet title's levels, else the plan views' titles' (`FIRST FLOOR POWER PLAN`).
+                // Q6018: multi-level assignment (typical floors) only from the plan title, not
+                // from notes or different view titles on the sheet — a "TYP." note elsewhere
+                // must not make a floor-specific sheet cover several levels.
+                let mut levels = sheet_reader::detect_levels(&e.title);
+                if levels.is_empty() && is_plan_type(&e.sheet_type) {
+                    // A key plan (the small floor plan marking where an enlarged plan or detail
+                    // is) names its floor, not the sheet's.
+                    for t in facts.view_titles.iter().filter(|t| !is_key_plan(t)) {
+                        let vl = sheet_reader::detect_levels(t);
+                        if !vl.is_empty() {
+                            // Use the first view title's level only; multi-level comes from
+                            // the plan title or the typical-floor sentinel, not from combining
+                            // different views' titles (which are already split by recognise_views
+                            // when they name different levels).
+                            levels = if sheet_reader::is_typical_sentinel(&vl) {
+                                vl
+                            } else if let Some(first) = vl.into_iter().next() {
+                                vec![first]
+                            } else {
+                                continue;
+                            };
+                            break;
+                        }
+                    }
+                }
+                if levels.is_empty() {
+                    levels = rec.levels.clone();
+                }
+                e.level = levels.first().cloned().or_else(|| rec.level.clone()).unwrap_or_else(|| infer_level(&type_text));
+                e.levels = levels;
+            }
+            e.level_source = if e.level.is_empty() { String::new() } else { "title".into() };
+            e.issued = facts.issued.clone();
+            e.level_marks = if matches!(e.sheet_type.as_str(), "section" | "elevation") { facts.level_marks.clone() } else { Vec::new() };
             e.scale_text = rec.scale_text.clone();
             e.scale = rec.scale;
             e.dirty = false;
@@ -830,10 +1020,13 @@ pub fn run_classify_prints(
     // Later files replace earlier sheets of the same number. "Later" is folder order with
     // numbers by value (`Revision 10/` after `Revision 2/`), not the order entries were added
     // (a re-import appends), so the same folder always gives the same current sheets.
+    // A later printed date (an issue or revision date) decides first: the same sheet in a full
+    // set and a discipline set keeps the newer print.
     let mut latest: BTreeMap<String, usize> = BTreeMap::new();
     for (i, e) in out.iter().enumerate() {
         if !e.number.is_empty() && e.recognised.as_ref().is_some_and(|r| !r.number.is_empty()) {
             let later = match latest.get(&e.number).and_then(|&j| out.get(j)) {
+                Some(prev) if by_date(e, prev) => e.issued > prev.issued,
                 Some(prev) => path_order(&e.file, &prev.file).then(e.page.cmp(&prev.page)).is_ge(),
                 None => true,
             };
@@ -842,21 +1035,29 @@ pub fn run_classify_prints(
             }
         }
     }
-    let names: Vec<(String, u32)> = out.iter().map(|e| (e.file.clone(), e.page)).collect();
+    let names: Vec<(String, u32, String)> = out.iter().map(|e| (e.file.clone(), e.page, e.issued.clone())).collect();
     for (i, e) in out.iter_mut().enumerate() {
         (e.superseded_by, e.superseded_reason) = match latest.get(&e.number) {
-            Some(&j) if j != i && names.get(j).is_some_and(|(f, _)| *f != e.file) => {
-                let by = names.get(j).map(|(f, p)| if *p == 0 { f.clone() } else { format!("{f}#{p}") }).unwrap_or_default();
-                let later = names.get(j).map(|(f, _)| f.as_str()).unwrap_or_default();
-                let why = format!(
-                    "path order: {later} comes after {} (folders and files in name order, numbers by value; revision marks are not compared)",
-                    e.file
-                );
+            Some(&j) if j != i && names.get(j).is_some_and(|(f, _, _)| *f != e.file) => {
+                let by = names.get(j).map(|(f, p, _)| if *p == 0 { f.clone() } else { format!("{f}#{p}") }).unwrap_or_default();
+                let (later, issued) = names.get(j).map(|(f, _, d)| (f.as_str(), d.as_str())).unwrap_or_default();
+                let why = if !issued.is_empty() && !e.issued.is_empty() && issued != e.issued {
+                    format!("revision date: {later} is dated {issued}, {} {}", e.file, e.issued)
+                } else {
+                    format!(
+                        "path order: {later} comes after {} (folders and files in name order, numbers by value; revision marks are not compared)",
+                        e.file
+                    )
+                };
                 (by, why)
             }
             _ => (String::new(), String::new()),
         };
     }
+    level_by_number(&mut out);
+    // Expand "typical floor" sentinels: a sheet with levels == ["T"] gets the levels of every
+    // numeric floor that no other sheet of the same discipline already covers.
+    expand_typical_levels(&mut out);
     project.sheets = out;
     let current: Vec<RecognisedSheet> = project.sheets.iter().filter(|s| s.superseded_by.is_empty()).filter_map(|s| s.recognised.clone()).collect();
     project.grid = sheet_reader::sheet_map_from(current);
@@ -882,89 +1083,656 @@ pub fn run_classify_prints(
     rec
 }
 
-// ─── MEP reading stages ─────────────────────────────────────────────────────
+// ─── Sheet index ─────────────────────────────────────────────────────────────
 
-/// Run a MEP reading stage against the truth data (for testing without real DXF files).
-/// In production this would call the actual readers (duct_reader, pipe_reader, etc.) on
-/// DXF drawings; here we simulate by scoring against truth data.
-pub fn run_stage_from_truth(
-    project: &mut PrintSetProject,
-    stage: Stage,
-    truth: &Truth,
-    cancel: &AtomicBool,
-    progress: &mut ProgressFn<'_>,
-) -> StageRecord {
-    let start = std::time::Instant::now();
-    let stage_name = stage.name();
-    let disciplines = stage.disciplines();
+/// Reads the project's prints for [`run_classify_prints`]: a page of a PDF (no images, markups
+/// or layout: only what the title block and views say), or a drawing file. The file read last
+/// stays in memory, so a merged set's pages are read from one copy.
+pub struct PrintLoader {
+    dir: PathBuf,
+    last: std::cell::RefCell<Option<(String, std::rc::Rc<Vec<u8>>)>>,
+}
 
-    // Filter sheets by discipline.
-    let sheet_indices: Vec<usize> = project
-        .sheets
+impl PrintLoader {
+    pub fn new(dir: &Path) -> PrintLoader {
+        PrintLoader { dir: dir.to_path_buf(), last: std::cell::RefCell::new(None) }
+    }
+
+    pub fn load(&self, e: &SheetEntry) -> Result<cadaddy_doc::Drawing, String> {
+        if e.file.split(['/', '\\']).any(|part| part == "..") {
+            return Err(format!("{}: outside the project folder", e.file));
+        }
+        let cached = self.last.borrow().as_ref().filter(|(f, _)| *f == e.file).map(|(_, b)| b.clone());
+        let bytes = match cached {
+            Some(b) => b,
+            None => {
+                let path = self.dir.join(&e.file);
+                if path.metadata().map_or(true, |m| m.len() > MAX_FILE_BYTES) {
+                    return Err(format!("{}: missing or too large", e.file));
+                }
+                let b = std::rc::Rc::new(std::fs::read(&path).map_err(|err| format!("{}: {err}", e.file))?);
+                *self.last.borrow_mut() = Some((e.file.clone(), b.clone()));
+                b
+            }
+        };
+        if e.file.to_ascii_lowercase().ends_with(".pdf") {
+            let opts = cadaddy_io::pdf_read::PdfOptions { page: e.page.max(1), images: false, markups: false, layout: false, ..Default::default() };
+            return cadaddy_io::pdf_read::read(&bytes, &opts).map(|i| i.drawing).map_err(|err| err.to_string());
+        }
+        cadaddy_io::read(&bytes, &e.file).map_err(|err| err.to_string())
+    }
+}
+
+/// Short texts looked at as level marks per page (a guard against hostile files).
+const MAX_MARK_TEXTS: usize = 400;
+
+/// What a page says about itself, read once for all of its entries.
+struct PageFacts {
+    /// The title block's number, title and discipline ([`crate::sheet_facts`]).
+    ident: Option<crate::sheet_facts::SheetIdent>,
+    /// The titles of the views drawn on it.
+    view_titles: Vec<String>,
+    /// The latest date printed on it (`YYYY-MM-DD`).
+    issued: String,
+    level_marks: Vec<LevelMark>,
+}
+
+impl PageFacts {
+    fn read(d: &cadaddy_doc::Drawing) -> PageFacts {
+        let texts = crate::sheet_facts::texts(d);
+        let ident = crate::sheet_facts::identify_sheet(&texts);
+        let view_titles = crate::sheet_facts::view_titles(d, &texts).into_iter().map(|v| v.title).collect();
+        let issued = texts.iter().filter_map(|t| latest_date(&t.value)).max().unwrap_or_default();
+        PageFacts { ident, view_titles, issued, level_marks: level_marks(&texts) }
+    }
+}
+
+/// The discipline code a sheet number's letters stand for (`A` from `A111`, `FP` from `FP-1`).
+fn canonical_discipline(letters: &str) -> String {
+    letters.trim().to_ascii_uppercase()
+}
+
+fn is_plan_type(t: &str) -> bool {
+    matches!(t, "plan" | "enlarged_plan" | "rcp")
+}
+
+/// Whether a sheet of this type shows a whole level and so defines and fills it (a floor plan,
+/// a reflected ceiling plan, a trade's plan): an enlarged plan shows part of its parent floor,
+/// and details, sections, elevations, schedules, legends, notes and covers are of no level.
+pub fn is_level_plan_type(t: &str) -> bool {
+    matches!(t, "plan" | "rcp")
+}
+
+/// Whether a view title is a key plan's (`KEY PLAN`, `KEYPLAN - LEVEL 2`).
+fn is_key_plan(title: &str) -> bool {
+    let up = title.to_ascii_uppercase();
+    up.contains("KEY PLAN") || up.contains("KEYPLAN") || up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "KEY")
+}
+
+/// Level codes in building order: basements, numbered floors, then the roof.
+fn level_key(c: &str) -> (bool, u32, String) {
+    (c == "R", c.parse::<u32>().unwrap_or(u32::MAX), c.to_string())
+}
+
+/// Whether two copies of a sheet are told apart by their printed dates.
+fn by_date(a: &SheetEntry, b: &SheetEntry) -> bool {
+    !a.issued.is_empty() && !b.issued.is_empty() && a.issued != b.issued
+}
+
+/// The latest date in a text (`10/24/2026`, `10-24-26`, `2026-10-24`, `10.24.2026`) as
+/// `YYYY-MM-DD`.
+pub fn latest_date(text: &str) -> Option<String> {
+    let mut best: Option<String> = None;
+    for word in text.split(|c: char| !(c.is_ascii_digit() || matches!(c, '/' | '-' | '.'))).take(200) {
+        let w = word.trim_matches(|c: char| !c.is_ascii_digit());
+        let Some(sep) = w.chars().find(|c| matches!(c, '/' | '-' | '.')) else { continue };
+        let parts: Vec<&str> = w.split(sep).collect();
+        let [a, b, c] = parts.as_slice() else { continue };
+        let num = |s: &str| (!s.is_empty() && s.len() <= 4 && s.chars().all(|c| c.is_ascii_digit())).then(|| s.parse::<u32>().ok()).flatten();
+        let (Some(x), Some(y), Some(z)) = (num(a), num(b), num(c)) else { continue };
+        let (year, month, day) = if a.len() == 4 {
+            (x, y, z)
+        } else if c.len() == 4 || c.len() == 2 {
+            (if c.len() == 2 { 2000 + z } else { z }, x, y)
+        } else {
+            continue;
+        };
+        if !(1980..=2100).contains(&year) || !(1..=12).contains(&month) || !(1..=31).contains(&day) || (a.len() != 4 && a.len() > 2) || b.len() > 2 {
+            continue;
+        }
+        let d = format!("{year:04}-{month:02}-{day:02}");
+        if best.as_ref().is_none_or(|b| d > *b) {
+            best = Some(d);
+        }
+    }
+    best
+}
+
+/// The level code of a canonical level name (`LEVEL 2` → `2`, `ROOF` → `R`); none for a datum
+/// that is no storey of its own (a parapet, a low roof).
+fn code_of_level(name: &str) -> Option<String> {
+    if let Some(n) = name.strip_prefix("LEVEL ") {
+        return Some(n.to_string());
+    }
+    match name {
+        "ROOF" => Some("R".into()),
+        "BASEMENT" => Some("B1".into()),
+        "MEZZANINE" => Some("M".into()),
+        "PENTHOUSE" => Some("PH".into()),
+        _ => name.strip_prefix("BASEMENT ").map(|n| format!("B{n}")),
+    }
+}
+
+/// Level marks on a section or elevation: a level note in one text (`SECOND FLOOR EL. 110'-8"`)
+/// or a level name with its elevation right beside it (the two lines of a level marker).
+fn level_marks(texts: &[crate::sheet_facts::TextItem]) -> Vec<LevelMark> {
+    use cadaddy_walk3d::levels::{canonical_level, parse_elevation, parse_level_note};
+    let mut out = Vec::new();
+    let short: Vec<&crate::sheet_facts::TextItem> =
+        texts.iter().filter(|t| t.value.len() <= 40 && !t.value.contains('=')).take(MAX_MARK_TEXTS * 50).collect();
+    let mut looked = 0usize;
+    for t in &short {
+        if canonical_level(&t.value).is_none() {
+            continue;
+        }
+        looked += 1;
+        if looked > MAX_MARK_TEXTS {
+            break;
+        }
+        let note = parse_level_note(&t.value).or_else(|| {
+            short
+                .iter()
+                .filter(|u| {
+                    u.at != t.at
+                        && u.at.dist(t.at) <= 4.0 * t.height.max(u.height)
+                        && canonical_level(&u.value).is_none()
+                        && parse_elevation(&u.value).is_some()
+                })
+                .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)))
+                .and_then(|u| parse_level_note(&format!("{} {}", t.value, u.value)))
+        });
+        if let Some(n) = note
+            && let Some(level) = code_of_level(&n.name)
+        {
+            out.push(LevelMark { level, elevation_ft: n.elevation_ft });
+        }
+    }
+    out
+}
+
+/// Plan sheets of a numbered series whose titles name no level take it from their number: in a
+/// series of two or more (`A111`…`A114`) the last digit is the level.
+fn level_by_number(sheets: &mut [SheetEntry]) {
+    let series = |e: &SheetEntry| -> Option<(String, u32)> {
+        if !e.level.is_empty() || !e.superseded_by.is_empty() || !is_plan_type(&e.sheet_type) || e.number.contains('/') {
+            return None;
+        }
+        let letters: String = e.number.chars().take_while(char::is_ascii_uppercase).collect();
+        let digits = e.number.get(letters.len()..)?.trim_start_matches('-');
+        let level = digits.chars().nth(2).and_then(|c| c.to_digit(10))?;
+        (!letters.is_empty() && digits.len() == 3 && digits.starts_with('1') && digits.chars().all(|c| c.is_ascii_digit()) && level >= 1)
+            .then(|| (format!("{letters}{}", digits.get(..2).unwrap_or_default()), level))
+    };
+    let mut groups: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    for e in sheets.iter() {
+        if let Some((g, l)) = series(e) {
+            groups.entry(g).or_default().push(l);
+        }
+    }
+    for e in sheets.iter_mut() {
+        let Some((g, l)) = series(e) else { continue };
+        let mut distinct = groups.get(&g).cloned().unwrap_or_default();
+        distinct.sort_unstable();
+        distinct.dedup();
+        if distinct.len() >= 2 {
+            e.level = l.to_string();
+            e.levels = vec![e.level.clone()];
+            e.level_source = "number".into();
+        }
+    }
+}
+
+/// Expand the "typical floor" sentinel (`levels == ["T"]`): for each such sheet, determine which
+/// numeric levels it covers by looking at all plan sheets of the same discipline that already
+/// have a dedicated level. The typical sheet gets every other numeric level in the set.
+fn expand_typical_levels(sheets: &mut [SheetEntry]) {
+    // Collect all known numeric levels from non-superseded plan sheets.
+    let mut all_numeric: Vec<String> = Vec::new();
+    for e in sheets.iter().filter(|s| s.superseded_by.is_empty() && is_plan_type(&s.sheet_type)) {
+        for l in &e.levels {
+            if l != "T" && l.parse::<u32>().is_ok() && !all_numeric.contains(l) {
+                all_numeric.push(l.clone());
+            }
+        }
+        // Also check the primary level.
+        if !e.level.is_empty() && e.level != "T" && e.level.parse::<u32>().is_ok() && !all_numeric.contains(&e.level) {
+            all_numeric.push(e.level.clone());
+        }
+    }
+    all_numeric.sort_by_key(|l| l.parse::<u32>().unwrap_or(u32::MAX));
+    all_numeric.dedup();
+    if all_numeric.is_empty() {
+        return;
+    }
+    // For each "typical" sheet, expand against the discipline's dedicated levels.
+    let typical_indices: Vec<usize> = sheets
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.superseded_by.is_empty())
-        .filter(|(_, s)| if disciplines.is_empty() { true } else { disciplines.iter().any(|d| *d == s.discipline) })
-        .filter(|(_, s)| s.sheet_type == "plan" || s.sheet_type == "enlarged_plan" || s.sheet_type == "rcp")
+        .filter(|(_, e)| e.superseded_by.is_empty() && is_plan_type(&e.sheet_type) && sheet_reader::is_typical_sentinel(&e.levels))
         .map(|(i, _)| i)
         .collect();
+    for idx in typical_indices {
+        let disc = sheets[idx].discipline.clone();
+        // Levels that already have a dedicated plan of this discipline.
+        let dedicated: Vec<String> = sheets
+            .iter()
+            .filter(|e| {
+                e.superseded_by.is_empty()
+                    && is_plan_type(&e.sheet_type)
+                    && e.discipline.eq_ignore_ascii_case(&disc)
+                    && !sheet_reader::is_typical_sentinel(&e.levels)
+            })
+            .flat_map(|e| e.levels.iter().cloned())
+            .filter(|l| l.parse::<u32>().is_ok())
+            .collect();
+        let expanded = sheet_reader::expand_typical(&all_numeric, |l| dedicated.iter().any(|d| d == l));
+        if expanded.is_empty() {
+            // No expansion possible: fall back to all numeric levels.
+            sheets[idx].levels = all_numeric.clone();
+        } else {
+            sheets[idx].levels = expanded;
+        }
+        // Primary level = first of the expanded list.
+        if let Some(first) = sheets[idx].levels.first() {
+            sheets[idx].level = first.clone();
+        }
+        sheets[idx].level_source = "typical".into();
+    }
+}
 
-    let total = sheet_indices.len();
-    let mut processed = 0usize;
-    let mut total_items = 0usize;
-    let mut total_findings = 0usize;
+/// One real sheet of the set: every copy of it (the full set and a discipline set print the same
+/// sheet) is one entry.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct IndexSheet {
+    pub number: String,
+    pub title: String,
+    pub discipline: String,
+    #[serde(rename = "type")]
+    pub sheet_type: String,
+    /// The level the sheet shows (the first when it shows several); empty for a sheet of no one
+    /// level (cover, schedules, details).
+    pub level: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<String>,
+    /// `title`, `number`, `typical`, `site` (a civil, landscape or site plan: level `SITE`, a
+    /// datum), `default` (a plan whose title names no level in a building of one level: that
+    /// level, to be confirmed) or `ask` (the same in a building of several levels: no level
+    /// until someone says which).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub level_source: String,
+    /// Every copy as `file#page` (the file alone for a one-sheet file), the current one first.
+    pub sources: Vec<String>,
+    /// Copies an other copy replaces (a later revision date, else a later file).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub superseded: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub issued: String,
+}
 
-    for &idx in &sheet_indices {
+/// A building level the plans show.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct IndexLevel {
+    /// Level code: `1`, `2`, `R`.
+    pub name: String,
+    /// The plan sheets of the level: `[{sheet, typical}]` (Q6018).
+    pub sheets: Vec<serde_json::Value>,
+    /// Finished floor elevation from the sections' and elevations' level marks (above the
+    /// first floor when the prints put it at 100'-0").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elevation_ft: Option<f64>,
+    /// Floor to floor: the next level's elevation less this one's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height_ft: Option<f64>,
+}
+
+/// The set as sheets: one entry per real sheet, the levels its plans show.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct SheetIndex {
+    pub sheets: Vec<IndexSheet>,
+    pub levels: Vec<IndexLevel>,
+    /// Pages and files read.
+    pub pages: usize,
+    /// Entries whose title block gave no sheet number.
+    pub unidentified: usize,
+    /// Plan sheets whose title and number name no level (`default` or `ask`, to confirm).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub plans_without_level: Vec<String>,
+    /// Level marks not used: they break the levels' order (elevations rise with the level).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub level_warnings: Vec<String>,
+}
+
+fn source_of(e: &SheetEntry) -> String {
+    if e.page == 0 { e.file.clone() } else { format!("{}#{}", e.file, e.page) }
+}
+
+/// The project's sheet index (after [`run_classify_prints`]): copies of a sheet merged by
+/// number, the views of a several-view sheet back into their sheet, each plan with its level,
+/// and the levels with their elevations where sections or elevations mark them.
+pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
+    let base = |e: &SheetEntry| -> String {
+        match e.recognised.as_ref().map(|r| r.printed_number.as_str()).filter(|p| !p.is_empty()) {
+            Some(p) => p.to_string(),
+            None if e.number.is_empty() => source_of(e),
+            None => e.number.clone(),
+        }
+    };
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: BTreeMap<String, Vec<&SheetEntry>> = BTreeMap::new();
+    for e in project.sheets.iter().take(MAX_SHEETS) {
+        let k = base(e);
+        if !groups.contains_key(&k) {
+            order.push(k.clone());
+        }
+        groups.entry(k).or_default().push(e);
+    }
+    let mut out = SheetIndex { pages: project.sheets.len(), ..SheetIndex::default() };
+    for k in &order {
+        let Some(members) = groups.get(k) else { continue };
+        let current: Vec<&SheetEntry> = members.iter().copied().filter(|e| e.superseded_by.is_empty()).collect();
+        let Some(first) = current.first().or_else(|| members.first()).copied() else { continue };
+        let views = current.len() > 1 && current.iter().any(|e| e.recognised.as_ref().is_some_and(|r| !r.printed_number.is_empty()));
+        let mut levels: Vec<String> = Vec::new();
+        for e in &current {
+            levels.extend(e.levels.iter().cloned());
+            if !e.level.is_empty() {
+                levels.push(e.level.clone());
+            }
+        }
+        levels.sort_by_key(|c| level_key(c));
+        levels.dedup();
+        let mut sources: Vec<String> = Vec::new();
+        for e in current.iter().copied().chain(members.iter().copied().filter(|e| !e.superseded_by.is_empty())) {
+            let s = source_of(e);
+            if !sources.contains(&s) {
+                sources.push(s);
+            }
+        }
+        let mut superseded: Vec<String> = members.iter().filter(|e| !e.superseded_by.is_empty()).map(|e| source_of(e)).collect();
+        superseded.dedup();
+        if first.recognised.as_ref().is_none_or(|r| r.number.is_empty()) {
+            out.unidentified += 1;
+        }
+        let mut level = if first.level.is_empty() { levels.first().cloned().unwrap_or_default() } else { first.level.clone() };
+        let sheet_type = if views { "plan".to_string() } else { first.sheet_type.clone() };
+        // Only plans attach to a level: a detail, section, schedule, legend, cover or notes
+        // sheet that names one (`LEVEL 1 DETAILS`, a key plan) is a reference sheet.
+        if !is_plan_type(&sheet_type) {
+            level.clear();
+            levels.clear();
+        }
+        out.sheets.push(IndexSheet {
+            number: k.clone(),
+            title: first.title.clone(),
+            discipline: first.discipline.clone(),
+            sheet_type,
+            level_source: if level.is_empty() {
+                String::new()
+            } else {
+                current.iter().map(|e| e.level_source.clone()).find(|s| !s.is_empty()).unwrap_or_else(|| "title".into())
+            },
+            level,
+            levels,
+            sources,
+            superseded,
+            issued: first.issued.clone(),
+        });
+    }
+    // A civil, landscape or site plan is on the site (a datum, no storey of the building), even
+    // when its title names a floor.
+    for s in out.sheets.iter_mut().filter(|s| is_plan_type(&s.sheet_type) && crate::sheet_facts::is_site_sheet(&s.discipline, &s.title)) {
+        s.level = "SITE".into();
+        s.levels.clear();
+        s.level_source = "site".into();
+    }
+    // The building's levels: what the floor plans show (the site is no storey; an enlarged
+    // plan is part of its parent floor and defines no level).
+    // Q6018: each sheet entry is {sheet, typical} so the gate can distinguish a
+    // multi-level typical sheet from a floor-specific one.
+    let mut by_level: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+    for s in out.sheets.iter().filter(|s| is_level_plan_type(&s.sheet_type)) {
+        let typical = s.levels.len() > 1;
+        for l in s.levels.iter().chain(std::iter::once(&s.level)).filter(|l| !l.is_empty() && !cadaddy_walk3d::levels::is_datum_name(l)) {
+            let v = by_level.entry(l.clone()).or_default();
+            if !v.iter().any(|x| x.get("sheet").and_then(serde_json::Value::as_str) == Some(&s.number)) {
+                v.push(serde_json::json!({"sheet": s.number, "typical": typical}));
+            }
+        }
+    }
+    let mut codes: Vec<String> = by_level.keys().cloned().collect();
+    codes.sort_by_key(|c| level_key(c));
+    // Elevations: the value most marks give per level; above the first floor at 100'-0". A
+    // civil or site sheet's marks are spot elevations on the site datum, never the levels'.
+    let mut marks: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let site = |e: &SheetEntry| e.level.eq_ignore_ascii_case("SITE") || cadaddy_walk3d::levels::site_sheet(&e.discipline, &e.title);
+    for e in project.sheets.iter().filter(|e| e.superseded_by.is_empty() && !site(e)) {
+        for m in &e.level_marks {
+            marks.entry(m.level.clone()).or_default().push(m.elevation_ft);
+        }
+    }
+    let mut elevation: BTreeMap<String, f64> = BTreeMap::new();
+    for (l, vals) in &marks {
+        let mut best: Option<(f64, usize)> = None;
+        for v in vals {
+            let n = vals.iter().filter(|w| (*w - v).abs() < 1.0 / 96.0).count();
+            if best.is_none_or(|(_, bn)| n > bn) {
+                best = Some((*v, n));
+            }
+        }
+        if let Some((v, _)) = best {
+            elevation.insert(l.clone(), v);
+        }
+    }
+    // Elevations rise with the level: the most marks that agree win; the others are dropped.
+    let marked: Vec<(String, f64)> = elevation.iter().map(|(l, e)| (l.clone(), *e)).collect();
+    let items: Vec<(Option<i32>, f64, u32)> = marked
+        .iter()
+        .map(|(l, e)| (cadaddy_walk3d::levels::code_rank(l), *e, u32::try_from(marks.get(l).map_or(1, Vec::len)).unwrap_or(u32::MAX)))
+        .collect();
+    for ((l, e), keep) in marked.iter().zip(cadaddy_walk3d::levels::in_order(&items)) {
+        if !keep {
+            elevation.remove(l);
+            out.level_warnings
+                .push(format!("level {l}: {} not used: it breaks the levels' order (elevations rise with the level)", cadaddy_walk3d::feet(*e)));
+        }
+    }
+    let datum = if elevation.get("1").is_some_and(|e| (e - 100.0).abs() < 1e-6) { 100.0 } else { 0.0 };
+    for (i, c) in codes.iter().enumerate() {
+        let el = elevation.get(c).map(|e| e - datum);
+        let next = codes.get(i + 1).and_then(|n| elevation.get(n)).map(|e| e - datum);
+        out.levels.push(IndexLevel {
+            name: c.clone(),
+            sheets: by_level.get(c).cloned().unwrap_or_default(),
+            elevation_ft: el,
+            height_ft: el.zip(next).map(|(a, b)| b - a).filter(|h| *h > 0.0),
+        });
+    }
+    // A plan whose title names no level: in a building of one level it can only be that one
+    // (given it, to be confirmed); with several the level is uncertain, so the sheet stays off
+    // every level until someone says which (`ask`), never put on the lowest. An enlarged plan
+    // with no level belongs to its parent floor's region, found by where it is drawn.
+    let lowest = codes.iter().find(|c| c.parse::<u32>().is_ok()).cloned().unwrap_or_else(|| "1".into());
+    let one_level = codes.len() <= 1;
+    for s in out.sheets.iter_mut().filter(|s| is_level_plan_type(&s.sheet_type) && s.level.is_empty()) {
+        if one_level {
+            s.level = lowest.clone();
+            s.level_source = "default".into();
+        } else {
+            s.level_source = "ask".into();
+        }
+        out.plans_without_level.push(s.number.clone());
+    }
+    out
+}
+
+// ─── Run stages (production API — no Truth) ──────────────────────────────────
+
+/// Run recognition stages on the project's sheets via `runner`. Each stage processes sheets that
+/// match its discipline filter; cross-discipline stages (clashes, callouts) run once for the
+/// whole project, not per-sheet. If `resume` is true, completed non-dirty sheets are skipped.
+/// The project is updated in place after each sheet (for persistence/progress).
+pub fn run_stages(
+    project: &mut PrintSetProject,
+    stages: &[Stage],
+    runner: &mut StageRunnerFn<'_>,
+    cancel: &AtomicBool,
+    progress: &mut ProgressFn<'_>,
+    resume: bool,
+) -> Vec<StageRecord> {
+    let mut records = Vec::new();
+
+    for &stage in stages {
+        if stage == Stage::Classify {
+            continue; // Classify uses run_classify, not run_stages.
+        }
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        let number = project.sheets.get(idx).map(|s| s.number.clone()).unwrap_or_default();
-        let level = project.sheets.get(idx).map(|s| s.level.clone()).unwrap_or_default();
-        progress(&Progress {
-            stage: stage_name.into(),
-            sheet_index: processed,
-            sheet_number: number.clone(),
-            sheets_total: total,
-            items_so_far: total_items,
-        });
 
-        // Count truth items for this sheet's level and discipline.
-        let (items, confidence, findings) = count_truth_items(truth, stage, &level, &number);
-        total_items += items;
-        total_findings += findings.len();
+        let start = web_time::Instant::now();
+        let stage_name = stage.name();
+        let disciplines = stage.disciplines();
 
-        if let Some(e) = project.sheets.get_mut(idx) {
-            e.stage_results.insert(
-                stage_name.into(),
-                SheetStageResult {
-                    stage: stage_name.into(),
-                    status: StageStatus::Completed,
-                    items_found: items,
-                    confidence,
-                    findings,
-                    ..SheetStageResult::default()
-                },
-            );
+        // Filter sheets by discipline and type.
+        let sheet_indices: Vec<usize> = project
+            .sheets
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.superseded_by.is_empty())
+            .filter(|(_, s)| if disciplines.is_empty() { true } else { disciplines.iter().any(|d| *d == s.discipline) })
+            .filter(|(_, s)| s.sheet_type == "plan" || s.sheet_type == "enlarged_plan" || s.sheet_type == "rcp")
+            .map(|(i, _)| i)
+            .collect();
+
+        let total = sheet_indices.len();
+        let mut processed = 0usize;
+        let mut total_items = 0usize;
+        let mut total_findings = 0usize;
+
+        // For cross-discipline stages, items are counted once for the whole project.
+        // We call the runner on each sheet but only count items on the FIRST sheet processed
+        // (to avoid duplicate counting of project-level items like clashes).
+        let mut cross_counted = false;
+
+        for &idx in &sheet_indices {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let entry = match project.sheets.get(idx) {
+                Some(e) => e.clone(),
+                None => continue,
+            };
+
+            // Resume: skip completed non-dirty sheets.
+            if resume
+                && !entry.dirty
+                && let Some(existing) = entry.stage_results.get(stage_name)
+                && existing.status == StageStatus::Completed
+            {
+                processed += 1;
+                if !stage.is_cross_discipline() || !cross_counted {
+                    total_items += existing.items_found;
+                    if stage.is_cross_discipline() {
+                        cross_counted = true;
+                    }
+                }
+                total_findings += existing.findings.len();
+                continue;
+            }
+
+            progress(&Progress {
+                stage: stage_name.into(),
+                sheet_index: processed,
+                sheet_number: entry.number.clone(),
+                sheets_total: total,
+                items_so_far: total_items,
+            });
+
+            let result = runner(stage, &entry);
+
+            // For cross-discipline stages, only count items once for the whole project.
+            if !stage.is_cross_discipline() || !cross_counted {
+                total_items += result.items_found;
+                if stage.is_cross_discipline() {
+                    cross_counted = true;
+                }
+            }
+            total_findings += result.findings.len();
+
+            if let Some(e) = project.sheets.get_mut(idx) {
+                e.stage_results.insert(stage_name.into(), result);
+                if !e.dirty {
+                    // Stage ran successfully, mark clean.
+                } else {
+                    e.dirty = false;
+                }
+            }
+            processed += 1;
         }
-        processed += 1;
-    }
 
-    let rec = StageRecord {
-        stage: stage_name.into(),
-        status: if processed == total { StageStatus::Completed } else { StageStatus::Failed },
-        sheets_processed: processed,
-        sheets_total: total,
-        items_found: total_items,
-        findings: total_findings,
-        elapsed_ms: start.elapsed().as_millis() as u64,
-    };
-    project.stages.push(rec.clone());
-    update_dashboard(project);
-    rec
+        let status = if cancel.load(Ordering::Relaxed) {
+            StageStatus::Failed
+        } else if processed == 0 {
+            // 0 sheets processed ⟹ skipped/failed, never completed.
+            if total == 0 { StageStatus::Skipped } else { StageStatus::Failed }
+        } else {
+            StageStatus::Completed
+        };
+        let rec = StageRecord {
+            stage: stage_name.into(),
+            status,
+            sheets_processed: processed,
+            sheets_total: total,
+            items_found: total_items,
+            findings: total_findings,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+        };
+        project.stages.push(rec.clone());
+        update_dashboard(project);
+        records.push(rec);
+    }
+    records
 }
 
-/// Count truth items relevant to a stage on a given level.
-fn count_truth_items(truth: &Truth, stage: Stage, level: &str, _sheet: &str) -> (usize, f64, Vec<Finding>) {
+// ─── Truth-based stage running (test helper) ─────────────────────────────────
+
+/// Run a MEP reading stage against truth data. This is a **test helper** — production code
+/// uses [`run_stages`] with a real reader callback.
+pub fn run_stage_from_truth(
+    project: &mut PrintSetProject,
+    stage: Stage,
+    truth: &crate::truth::Truth,
+    cancel: &AtomicBool,
+    progress: &mut ProgressFn<'_>,
+) -> StageRecord {
+    let mut runner = |st: Stage, sh: &SheetEntry| -> SheetStageResult {
+        let (items, confidence, findings) = count_truth_items(truth, st, &sh.level, &sh.number);
+        SheetStageResult {
+            stage: st.name().into(),
+            status: StageStatus::Completed,
+            items_found: items,
+            confidence,
+            findings,
+            ..SheetStageResult::default()
+        }
+    };
+    let recs = run_stages(project, &[stage], &mut runner, cancel, progress, false);
+    recs.into_iter().next().unwrap_or_default()
+}
+
+/// Count truth items relevant to a stage on a given level (test helper for scoring).
+pub fn count_truth_items(truth: &crate::truth::Truth, stage: Stage, level: &str, _sheet: &str) -> (usize, f64, Vec<Finding>) {
     let mut findings = Vec::new();
     match stage {
         Stage::Classify => (1, 1.0, findings),
@@ -973,7 +1741,6 @@ fn count_truth_items(truth: &Truth, stage: Stage, level: &str, _sheet: &str) -> 
             let equip =
                 truth.equipment.iter().filter(|e| e.level == level && (e.kind == "ahu" || e.kind == "vav" || e.kind == "exhaust_fan")).count();
             let terms = truth.terminals.iter().filter(|t| t.level == level).count();
-            // Add findings for segments without height notes.
             for seg in truth.segments.iter().filter(|s| s.kind == "duct" && s.level == level) {
                 if let Some(h) = &seg.height
                     && h.note.is_none()
@@ -1014,6 +1781,7 @@ fn count_truth_items(truth: &Truth, stage: Stage, level: &str, _sheet: &str) -> 
             (total_segs, if total_segs > 0 { noted as f64 / total_segs as f64 } else { 0.0 }, findings)
         }
         Stage::Clashes => {
+            // Clashes are project-level, not per-sheet. Return all clashes.
             let n = truth.clashes.len();
             for c in &truth.clashes {
                 if !c.planted {
@@ -1036,10 +1804,13 @@ fn count_truth_items(truth: &Truth, stage: Stage, level: &str, _sheet: &str) -> 
     }
 }
 
-// ─── Run all stages ──────────────────────────────────────────────────────────
-
-/// Run the full pipeline (all stages in order) against truth data. Returns all stage records.
-pub fn run_all_from_truth(project: &mut PrintSetProject, truth: &Truth, cancel: &AtomicBool, progress: &mut ProgressFn<'_>) -> Vec<StageRecord> {
+/// Run the full pipeline (all stages in order) against truth data (test helper).
+pub fn run_all_from_truth(
+    project: &mut PrintSetProject,
+    truth: &crate::truth::Truth,
+    cancel: &AtomicBool,
+    progress: &mut ProgressFn<'_>,
+) -> Vec<StageRecord> {
     let mut records = Vec::new();
 
     // Classify first (uses truth data directly since project was created from truth).
@@ -1049,14 +1820,20 @@ pub fn run_all_from_truth(project: &mut PrintSetProject, truth: &Truth, cancel: 
         return records;
     }
 
-    // Then all MEP stages.
-    for &stage in &Stage::all()[1..] {
-        let rec = run_stage_from_truth(project, stage, truth, cancel, progress);
-        records.push(rec);
-        if cancel.load(Ordering::Relaxed) {
-            break;
+    // Then all MEP stages via run_stages with a truth runner.
+    let mut runner = |st: Stage, sh: &SheetEntry| -> SheetStageResult {
+        let (items, confidence, findings) = count_truth_items(truth, st, &sh.level, &sh.number);
+        SheetStageResult {
+            stage: st.name().into(),
+            status: StageStatus::Completed,
+            items_found: items,
+            confidence,
+            findings,
+            ..SheetStageResult::default()
         }
-    }
+    };
+    let stage_recs = run_stages(project, &Stage::all()[1..], &mut runner, cancel, progress, false);
+    records.extend(stage_recs);
     records
 }
 
@@ -1069,6 +1846,10 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
     // Per-level and per-discipline aggregation.
     let mut levels: BTreeMap<String, LevelSummary> = BTreeMap::new();
     let mut disciplines: BTreeMap<String, DisciplineSummary> = BTreeMap::new();
+
+    // Confidence: collect (sum, count) for true mean.
+    let mut level_conf: BTreeMap<String, (f64, usize)> = BTreeMap::new();
+    let mut disc_conf: BTreeMap<String, (f64, usize)> = BTreeMap::new();
     let mut total_confidence = 0.0f64;
     let mut confidence_count = 0usize;
 
@@ -1096,55 +1877,92 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
             ds.sheets += 1;
         }
 
-        // Per-stage results.
+        // Per-stage results — only count per-discipline stages (not cross-discipline).
         for (stage_name, result) in &sheet.stage_results {
-            if result.status == StageStatus::Completed {
+            if result.status != StageStatus::Completed {
+                continue;
+            }
+
+            // Look up the Stage to check if it's cross-discipline.
+            let is_cross = Stage::all().iter().find(|s| s.name() == stage_name).is_some_and(|s| s.is_cross_discipline());
+
+            if !is_cross {
                 d.total_items += result.items_found;
                 total_confidence += result.confidence;
                 confidence_count += 1;
 
                 // Level items.
-                if !sheet.level.is_empty()
-                    && let Some(ls) = levels.get_mut(&sheet.level)
-                {
+                if !sheet.level.is_empty() {
+                    let ls =
+                        levels.entry(sheet.level.clone()).or_insert_with(|| LevelSummary { level: sheet.level.clone(), ..LevelSummary::default() });
                     ls.items += result.items_found;
-                    ls.confidence = (ls.confidence * (ls.sheets.saturating_sub(1)) as f64 + result.confidence) / ls.sheets.max(1) as f64;
+                    let (sum, cnt) = level_conf.entry(sheet.level.clone()).or_insert((0.0, 0));
+                    *sum += result.confidence;
+                    *cnt += 1;
                 }
 
                 // Discipline items.
-                if !sheet.discipline.is_empty()
-                    && let Some(ds) = disciplines.get_mut(&sheet.discipline)
-                {
+                if !sheet.discipline.is_empty() && sheet.discipline != "unknown" {
+                    let ds = disciplines
+                        .entry(sheet.discipline.clone())
+                        .or_insert_with(|| DisciplineSummary { discipline: sheet.discipline.clone(), ..DisciplineSummary::default() });
                     ds.items += result.items_found;
-                    ds.confidence = (ds.confidence * (ds.sheets.saturating_sub(1)) as f64 + result.confidence) / ds.sheets.max(1) as f64;
+                    let (sum, cnt) = disc_conf.entry(sheet.discipline.clone()).or_insert((0.0, 0));
+                    *sum += result.confidence;
+                    *cnt += 1;
                     if !ds.stages_done.contains(stage_name) {
                         ds.stages_done.push(stage_name.clone());
                     }
                 }
+            }
 
-                // Findings → gaps and RFIs.
-                for f in &result.findings {
-                    match f.kind.as_str() {
-                        "gap" | "guessed" | "missing_tag" | "unreadable" => {
-                            d.open_gaps += 1;
-                            if !sheet.level.is_empty()
-                                && let Some(ls) = levels.get_mut(&sheet.level)
-                            {
-                                ls.gaps += 1;
-                            }
+            // Findings → gaps and RFIs (for all stages including cross-discipline).
+            for f in &result.findings {
+                match f.kind.as_str() {
+                    "gap" | "guessed" | "missing_tag" | "unreadable" => {
+                        d.open_gaps += 1;
+                        if !sheet.level.is_empty()
+                            && let Some(ls) = levels.get_mut(&sheet.level)
+                        {
+                            ls.gaps += 1;
                         }
-                        "rfi" | "conflict" => {
-                            d.open_rfis += 1;
-                            if !sheet.level.is_empty()
-                                && let Some(ls) = levels.get_mut(&sheet.level)
-                            {
-                                ls.rfis += 1;
-                            }
-                        }
-                        _ => {}
                     }
+                    "rfi" | "conflict" => {
+                        d.open_rfis += 1;
+                        if !sheet.level.is_empty()
+                            && let Some(ls) = levels.get_mut(&sheet.level)
+                        {
+                            ls.rfis += 1;
+                        }
+                    }
+                    _ => {}
                 }
             }
+        }
+    }
+
+    // Add cross-discipline stage items from StageRecords (counted once, not per-sheet).
+    for rec in &project.stages {
+        let is_cross = Stage::all().iter().find(|s| s.name() == rec.stage).is_some_and(|s| s.is_cross_discipline());
+        if is_cross && rec.status == StageStatus::Completed {
+            d.total_items += rec.items_found;
+        }
+    }
+
+    // Clashes from the last clashes stage record (already the correct unique count).
+    if let Some(clash_rec) = project.stages.iter().rev().find(|s| s.stage == "clashes") {
+        d.total_clashes = clash_rec.items_found;
+    }
+
+    // Compute true mean confidence for levels and disciplines.
+    for (level, ls) in &mut levels {
+        if let Some(&(sum, cnt)) = level_conf.get(level) {
+            ls.confidence = if cnt > 0 { sum / cnt as f64 } else { 0.0 };
+        }
+    }
+    for (disc, ds) in &mut disciplines {
+        if let Some(&(sum, cnt)) = disc_conf.get(disc) {
+            ds.confidence = if cnt > 0 { sum / cnt as f64 } else { 0.0 };
         }
     }
 
@@ -1153,9 +1971,11 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
     d.disciplines = disciplines.into_values().collect();
     d.stages_completed = project.stages.iter().filter(|s| s.status == StageStatus::Completed).count();
 
-    // Clashes from the last clashes stage.
-    if let Some(clash_rec) = project.stages.iter().rev().find(|s| s.stage == "clashes") {
-        d.total_clashes = clash_rec.items_found;
+    // Sheet index comparison.
+    if !project.sheet_index.is_empty() {
+        let (missing, unlisted) = compare_index(project);
+        d.missing_sheets = missing;
+        d.unlisted_sheets = unlisted;
     }
 
     project.dashboard = d;
@@ -1163,42 +1983,155 @@ pub fn update_dashboard(project: &mut PrintSetProject) {
 
 // ─── Re-import (revised set) ─────────────────────────────────────────────────
 
-/// Compute the delta between the current project and a new set of files.
+/// Compute the delta between the current project and new files, keyed by **sheet number**
+/// (from the title block, not the file name). Falls back to file name if the sheet has no number.
 pub fn compute_delta(project: &PrintSetProject, new_files: &[(String, PathBuf)]) -> Result<RevisionDelta, String> {
     let mut delta = RevisionDelta::default();
 
-    // Build a map of current sheets by filename.
-    let current: BTreeMap<&str, &SheetEntry> = project.sheets.iter().map(|s| (s.file.as_str(), s)).collect();
+    // Build a map of current sheets by number (primary) and file (fallback).
+    let mut by_number: BTreeMap<String, &SheetEntry> = BTreeMap::new();
+    let mut by_file: BTreeMap<&str, &SheetEntry> = BTreeMap::new();
+    for s in &project.sheets {
+        if !s.number.is_empty() {
+            by_number.insert(s.number.to_ascii_uppercase(), s);
+        }
+        by_file.insert(&s.file, s);
+    }
 
-    // Check each new file.
+    // For each new file, try to match by sheet number first (requires reading DXF or
+    // using a cached number). For now, match by hash + filename + number.
     for (name, path) in new_files {
         let new_hash = file_hash(path)?;
-        if let Some(existing) = current.get(name.as_str()) {
+        // Try filename match first (most common).
+        if let Some(existing) = by_file.get(name.as_str()) {
             if existing.content_hash == new_hash {
-                delta.unchanged.push(name.clone());
+                delta.unchanged.push(existing.number_or_file());
             } else {
-                delta.changed.push(name.clone());
+                delta.changed.push(existing.number_or_file());
             }
         } else {
-            delta.added.push(name.clone());
+            // New file — could be a reissue under a different name. Check by hash among
+            // all sheets to see if content matches but name differs.
+            let reissue = project.sheets.iter().find(|s| {
+                !s.number.is_empty() && s.content_hash != new_hash && s.file != *name && name.contains(&s.number) // heuristic: new name contains old number
+            });
+            if let Some(existing) = reissue {
+                delta.changed.push(existing.number_or_file());
+            } else {
+                delta.added.push(name.clone());
+            }
         }
     }
 
-    // Check for removed sheets.
+    // Check for removed sheets: only if the caller marks this as a full set.
+    // For addendum/partial imports, we do NOT mark absent sheets as removed.
     let new_names: std::collections::HashSet<&str> = new_files.iter().map(|(n, _)| n.as_str()).collect();
+    // The caller decides full_set via apply_reimport's flag.
+    // compute_delta alone does not remove — it reports what's missing from the new set.
     for sheet in &project.sheets {
         // A merged set has an entry per page: its file is removed once.
-        if !new_names.contains(sheet.file.as_str()) && !delta.removed.contains(&sheet.file) {
-            delta.removed.push(sheet.file.clone());
+        let multi = project.sheets.iter().filter(|s| s.file == sheet.file).nth(1).is_some();
+        let key = if multi { sheet.file.clone() } else { sheet.number_or_file() };
+        if !new_names.contains(sheet.file.as_str()) && !delta.removed.contains(&key) {
+            delta.removed.push(key);
         }
     }
 
     Ok(delta)
 }
 
-/// Apply a re-import: update the project with a new set of files, marking changed sheets dirty.
-pub fn apply_reimport(project: &mut PrintSetProject, new_files: &[(String, PathBuf)], revision_label: &str) -> Result<RevisionDelta, String> {
-    let delta = compute_delta(project, new_files)?;
+/// Apply a re-import. If `full_set` is true, sheets absent from the new folder are removed.
+/// If `full_set` is false (addendum/partial), absent sheets are kept — only sheets whose content
+/// changed are marked dirty, and new sheets are added.
+pub fn apply_reimport(
+    project: &mut PrintSetProject,
+    new_files: &[(String, PathBuf)],
+    revision_label: &str,
+    full_set: bool,
+) -> Result<RevisionDelta, String> {
+    let mut delta = RevisionDelta::default();
+
+    // Current entries by filename (a merged set has one entry per page).
+    let mut current_files: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, s) in project.sheets.iter().enumerate() {
+        current_files.entry(s.file.clone()).or_default().push(i);
+    }
+    let folder = |name: &str| name.rsplit_once('/').map_or("", |(d, _)| d).to_string();
+
+    let mut seen_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (name, path) in new_files {
+        let new_hash = file_hash(path)?;
+        seen_files.insert(name.clone());
+
+        if let Some(idxs) = current_files.get(name) {
+            let key = match idxs.as_slice() {
+                [one] => project.sheets.get(*one).map(SheetEntry::number_or_file).unwrap_or_else(|| name.clone()),
+                _ => name.clone(),
+            };
+            let same = idxs.iter().filter_map(|&i| project.sheets.get(i)).all(|e| e.content_hash == new_hash);
+            if same {
+                delta.unchanged.push(key);
+            } else {
+                // Changed: update hash, mark dirty, clear stage results.
+                delta.changed.push(key);
+            }
+            for &i in idxs {
+                if let Some(e) = project.sheets.get_mut(i) {
+                    if same {
+                        // Unchanged sheets match the new set.
+                        e.dirty = false;
+                    } else {
+                        e.content_hash = new_hash.clone();
+                        e.dirty = true;
+                        e.stage_results.clear();
+                    }
+                }
+            }
+        } else {
+            // A reissue: a single-sheet file of the same folder whose new name carries its sheet
+            // number. A file in another folder (a revision folder) is a new sheet; classify marks
+            // the one it replaces as superseded.
+            let up = name.to_ascii_uppercase();
+            let reissue_idx = project.sheets.iter().position(|s| {
+                !s.number.is_empty()
+                    && s.page <= 1
+                    && s.file != *name
+                    && folder(&s.file) == folder(name)
+                    && up.contains(&s.number.to_ascii_uppercase())
+            });
+            if let Some(e) = reissue_idx.and_then(|i| project.sheets.get_mut(i)) {
+                // Reissue under a new file name = "changed".
+                delta.changed.push(e.number_or_file());
+                e.file = name.clone();
+                e.content_hash = new_hash;
+                e.dirty = true;
+                e.stage_results.clear();
+            } else {
+                // Truly new sheet (one entry per page of a merged set).
+                delta.added.push(name.clone());
+                project.sheets.extend(entries_for_file(name, path));
+            }
+        }
+    }
+
+    // Only remove sheets if this is a full set import.
+    if full_set {
+        let mut removed = Vec::new();
+        project.sheets.retain(|s| {
+            if seen_files.contains(&s.file) {
+                true
+            } else {
+                let key = s.number_or_file();
+                if !removed.contains(&key) {
+                    removed.push(key);
+                }
+                false
+            }
+        });
+        delta.removed = removed;
+    }
+    // For partial/addendum: no removals. Absent sheets are kept.
 
     // Record the revision.
     project.revisions.push(RevisionRecord {
@@ -1210,31 +2143,6 @@ pub fn apply_reimport(project: &mut PrintSetProject, new_files: &[(String, PathB
         sheets_removed: delta.removed.len(),
     });
 
-    // Remove deleted sheets.
-    let removed_set: std::collections::HashSet<&str> = delta.removed.iter().map(|s| s.as_str()).collect();
-    project.sheets.retain(|s| !removed_set.contains(s.file.as_str()));
-
-    // Mark changed sheets dirty and update hashes.
-    let changed_set: std::collections::HashSet<&str> = delta.changed.iter().map(|s| s.as_str()).collect();
-    for sheet in &mut project.sheets {
-        if changed_set.contains(sheet.file.as_str()) {
-            sheet.dirty = true;
-            // Clear stage results so they re-run.
-            sheet.stage_results.clear();
-            // Update hash.
-            if let Some((_, path)) = new_files.iter().find(|(n, _)| n == &sheet.file) {
-                sheet.content_hash = file_hash(path).unwrap_or_default();
-            }
-        }
-    }
-
-    // Add new sheets.
-    for name in &delta.added {
-        if let Some((_, path)) = new_files.iter().find(|(n, _)| n == name) {
-            project.sheets.extend(entries_for_file(name, path));
-        }
-    }
-
     // Clear completed stages that touch changed sheets (they need to re-run).
     if !delta.changed.is_empty() || !delta.added.is_empty() {
         project.stages.retain(|s| s.stage == "classify");
@@ -1245,6 +2153,13 @@ pub fn apply_reimport(project: &mut PrintSetProject, new_files: &[(String, PathB
     update_dashboard(project);
 
     Ok(delta)
+}
+
+impl SheetEntry {
+    /// The sheet number if available, otherwise the filename.
+    pub fn number_or_file(&self) -> String {
+        if self.number.is_empty() { self.file.clone() } else { self.number.clone() }
+    }
 }
 
 // ─── Serialization ───────────────────────────────────────────────────────────
@@ -1303,6 +2218,10 @@ impl PrintSetProject {
                         "scale": s.scale_text,
                         "file": s.file,
                         "dirty": s.dirty,
+                        "page": s.page,
+                        "levels": s.levels,
+                        "level_source": s.level_source,
+                        "issued": s.issued,
                         "superseded_by": s.superseded_by,
                         "superseded_reason": s.superseded_reason,
                         "stages": s.stage_results.keys().collect::<Vec<_>>(),

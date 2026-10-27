@@ -57,7 +57,7 @@ impl Context {
 /// The build options that change what a list holds (not the cancel flag).
 fn options_key(o: &Options) -> String {
     format!(
-        "{:x}|{:x}|{}|{}|{}|{:x}|{:?}|{}|{:?}|{:?}|{}|{}",
+        "{:x}|{:x}|{}|{}|{}|{:x}|{:?}|{}|{:?}|{:?}|{}|{}|{}|{}",
         o.tolerance.to_bits(),
         o.min_dash.to_bits(),
         o.text,
@@ -70,6 +70,8 @@ fn options_key(o: &Options) -> String {
         o.projection,
         o.field_shading,
         o.plot_style_table.is_some(),
+        o.color_overrides.len(),
+        o.layer_lines.len(),
     )
 }
 

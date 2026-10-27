@@ -94,6 +94,23 @@ pub fn properties(d: &Drawing, e: &Entity) -> Vec<(String, Value)> {
             }
         }
     }
+    // BIM spec properties: expose bim.mark, bim.category, bim.<field>.
+    if let Some(mark) = cadaddy_doc::bimspec::entity_type_mark(&e.common.xdata) {
+        if !out.iter().any(|(n, _)| n == "bim.mark") {
+            out.push(("bim.mark".to_string(), Value::String(mark.to_string())));
+        }
+        if let Some(ty) = d.bim_types.get(mark) {
+            if !ty.category.is_empty() && !out.iter().any(|(n, _)| n == "bim.category") {
+                out.push(("bim.category".to_string(), Value::String(ty.category.clone())));
+            }
+            for (key, field) in &ty.fields {
+                let pname = format!("bim.{key}");
+                if !out.iter().any(|(n, _)| *n == pname) {
+                    out.push((pname, Value::String(field.value.clone())));
+                }
+            }
+        }
+    }
     out
 }
 
@@ -102,7 +119,30 @@ fn property(d: &Drawing, e: &Entity, name: &str) -> Option<Value> {
     if n == "objecttype" {
         return Some(Value::String(e.kind.type_name().into()));
     }
+    // BIM spec properties: bim.mark, bim.category, bim.<fieldKey>
+    if let Some(bim_key) = name.strip_prefix("bim.") {
+        return bim_property(d, e, bim_key);
+    }
     properties(d, e).into_iter().find(|(k, _)| norm(k) == n).map(|(_, v)| v)
+}
+
+/// Resolve a BIM spec property from an entity's type mark.
+fn bim_property(d: &Drawing, e: &Entity, key: &str) -> Option<Value> {
+    use cadaddy_doc::bimspec;
+    let mark = bimspec::entity_type_mark(&e.common.xdata)?;
+    let nk = norm(key);
+    if nk == "mark" {
+        return Some(Value::String(mark.to_string()));
+    }
+    let ty = d.bim_types.get(mark)?;
+    if nk == "category" {
+        return if ty.category.is_empty() { None } else { Some(Value::String(ty.category.clone())) };
+    }
+    // Try exact key first, then normalised match.
+    if let Some(f) = ty.get_field(key) {
+        return Some(Value::String(f.value.clone()));
+    }
+    ty.fields.iter().find(|(k, _)| norm(k) == nk).map(|(_, f)| Value::String(f.value.clone()))
 }
 
 /// Glob match, case-insensitive: `*` any run, `?` one character, `#` one digit.

@@ -338,6 +338,10 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             crate::walls::draw_plan(&mut pen, t, &st.walls, l, sh.scale, false);
             crate::arch::draw_floor(&mut pen, t, &st.arch, l, sh.scale);
             casework_plan(&mut pen, t, st, l);
+            fixture_plan(&mut pen, t, st, l);
+            casework_schedule(&mut pen, t, l);
+            // True device positions on the A-sheet (small crosses).
+            draw_devices_arch(&mut pen, t, l);
             legend.push(item("base_cabinet", "BASE CABINET"));
             legend.push(item("upper_cabinet", "UPPER CABINET"));
             legend.push(item("counter", "COUNTERTOP"));
@@ -401,6 +405,11 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             crate::arch::draw_door_schedule(&mut pen, t, &st.arch, fr.area);
             abbr.extend(["HM = HOLLOW METAL", "WD = WOOD", "AL = ALUMINUM", "MIN = MINUTES", "INSUL. = INSULATED"].map(abbrev));
         }
+        Kind::UnitPlans => {
+            let fr = frame(st);
+            crate::units::draw_unit_plans(&mut pen, t, fr.area);
+            abbr.extend(["PTAC = PACKAGED TERMINAL AIR CONDITIONER", "ADA = ACCESSIBLE UNIT", "QTY = QUANTITY"].map(abbrev));
+        }
         Kind::ArchFinishes => {
             let fr = frame(st);
             crate::arch::draw_finish_schedule(&mut pen, t, &st.arch, fr.area);
@@ -418,8 +427,18 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
         Kind::Rcp(l) => {
             background(&mut pen, t, l, true);
             grid(&mut pen, t);
+            if sh.title.contains("FLOOR PLAN") {
+                crate::units::draw_unit_tags(&mut pen, t, l);
+            }
             rcp(&mut pen, t, st, l);
             crate::ceilings::draw_callouts(&mut pen, t, &st.ceilings, l);
+            // The hotel's floor plans are drawn as ceiling plans with the casework, fixtures and
+            // their schedule on them.
+            if sh.number.starts_with("A-10") && sh.title.contains("FLOOR PLAN") && !sh.title.contains("CEILING") {
+                casework_plan(&mut pen, t, st, l);
+                fixture_plan(&mut pen, t, st, l);
+                casework_schedule(&mut pen, t, l);
+            }
             legend.push(item("act", "ACOUSTIC CEILING TILE (ACT) IN GRID"));
             legend.push(item("gyp", "GYPSUM BOARD CEILING (GYP)"));
             legend.push(item("ceiling_tag", &format!("CEILING TAG: {}", st.ceiling_text(9.0, "TYPE").join(" / "))));
@@ -523,9 +542,12 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
             legend.push(item("pipe_fp_main", "SPRINKLER MAIN"));
             legend.push(item("pipe_fp", "SPRINKLER BRANCH LINE"));
             legend.push(item("sprinkler_head", "PENDENT SPRINKLER HEAD (SH-1)"));
-            legend.push(item("sprinkler_upright", "UPRIGHT SPRINKLER HEAD ON 4\" SPRIG (SH-2)"));
+            legend.push(item("sprinkler_upright", &format!("UPRIGHT SPRINKLER HEAD ON {}\" SPRIG (SH-2)", t.fp_sprig_in.unwrap_or(4.0) as u32)));
             if t.terminals.iter().any(|x| x.mount.as_deref() == Some("sidewall")) {
-                legend.push(item("sprinkler_sidewall", "SIDEWALL SPRINKLER HEAD, 4\" BELOW CEILING (SH-3)"));
+                legend.push(item(
+                    "sprinkler_sidewall",
+                    &format!("SIDEWALL SPRINKLER HEAD, {}\" BELOW CEILING (SH-3)", t.fp_sidewall_below_in.unwrap_or(4.0) as u32),
+                ));
             }
             legend.push(item("riser_up", "RISER UP"));
             legend.push(item("riser_down", "RISER DOWN"));
@@ -580,6 +602,77 @@ pub fn draw(t: &Truth, st: &Style, sh: &Sheet, kind: &Kind) -> (Drawing, Vec<Leg
                 ]
                 .map(abbrev),
             );
+        }
+        Kind::FireAlarm(l) => {
+            background(&mut pen, t, l, true);
+            grid(&mut pen, t);
+            fa_devices(&mut pen, t, st, l, &format!("FA-10{l}"));
+            legend.push(item("fa_smoke", "SMOKE DETECTOR (SD)"));
+            legend.push(item("fa_heat", "HEAT DETECTOR (HD)"));
+            legend.push(item("fa_pull", "PULL STATION (PS)"));
+            legend.push(item("fa_horn_strobe", "HORN/STROBE (HS)"));
+            legend.push(item("fa_strobe", "STROBE (ST)"));
+            legend.push(item("fa_duct", "DUCT DETECTOR (DD)"));
+            legend.push(item("fa_speaker", "SPEAKER/STROBE (SS)"));
+            legend.push(item("fa_panel", "FIRE ALARM CONTROL PANEL (FACP)"));
+            legend.push(item("fa_nac", "NAC POWER SUPPLY"));
+            legend.push(item("fa_annunciator", "ANNUNCIATOR"));
+            legend.push(item("fa_module", "MONITOR/RELAY MODULE (MM/RM)"));
+            abbr.extend(
+                [
+                    "SD = SMOKE DETECTOR",
+                    "HD = HEAT DETECTOR",
+                    "PS = PULL STATION",
+                    "HS = HORN/STROBE",
+                    "DD = DUCT DETECTOR",
+                    "FACP = FIRE ALARM CONTROL PANEL",
+                    "NAC = NOTIFICATION APPLIANCE CIRCUIT",
+                    "SLC = SIGNALLING LINE CIRCUIT",
+                    "AFF = ABOVE FINISHED FLOOR",
+                    "CLG = CEILING",
+                ]
+                .map(abbrev),
+            );
+        }
+        Kind::Telecom(l) => {
+            background(&mut pen, t, l, true);
+            grid(&mut pen, t);
+            telecom_devices(&mut pen, t, st, l, &format!("T-10{l}"));
+            legend.push(item("tc_data", "DATA OUTLET (D)"));
+            legend.push(item("tc_tv", "TV OUTLET (TV)"));
+            legend.push(item("tc_phone", "TELEPHONE OUTLET (TEL)"));
+            legend.push(item("tc_wifi", "WIRELESS ACCESS POINT (WAP)"));
+            legend.push(item("tc_camera", "SECURITY CAMERA (CAM)"));
+            legend.push(item("tc_reader", "CARD READER (CR)"));
+            legend.push(item("tc_speaker", "SPEAKER (SPK)"));
+            legend.push(item("tc_idf", "IDF/MDF"));
+            legend.push(item("tc_nurse", "NURSE CALL STATION (NC)"));
+            legend.push(item("tc_ada_pull", "ADA PULL CORD"));
+            abbr.extend(
+                [
+                    "D = DATA OUTLET",
+                    "TV = TELEVISION OUTLET",
+                    "TEL = TELEPHONE",
+                    "WAP = WIRELESS ACCESS POINT",
+                    "CAM = CAMERA",
+                    "CR = CARD READER",
+                    "IDF = INTERMEDIATE DISTRIBUTION FRAME",
+                    "MDF = MAIN DISTRIBUTION FRAME",
+                    "NC = NURSE CALL",
+                    "ENT = ELECTRICAL NONMETALLIC TUBING",
+                ]
+                .map(abbrev),
+            );
+        }
+        Kind::SleeveLayout(l) => {
+            background(&mut pen, t, l, true);
+            grid(&mut pen, t);
+            crate::lv_reader::draw_sleeve_layout(&mut pen, t, st, l);
+            legend.push(item("sleeve_fa", "FIRE ALARM SLEEVE (RED)"));
+            legend.push(item("sleeve_data", "DATA/TELECOM SLEEVE (BLUE)"));
+            legend.push(item("sleeve_security", "SECURITY SLEEVE (GREEN)"));
+            legend.push(item("sleeve_floor", "FLOOR SLEEVE"));
+            abbr.extend(["EMT = ELECTRICAL METALLIC TUBING", "ENT = ELECTRICAL NONMETALLIC TUBING", "FS = FIRESTOP", "SL = SLEEVE"].map(abbrev));
         }
         Kind::Site => {
             site_plan(&mut pen, t, st);
@@ -730,6 +823,7 @@ fn title_block(pen: &mut Pen, t: &Truth, st: &Style, sh: &Sheet, level: &str, le
         "FA" => "FIRE ALARM",
         "T" => "TELECOM",
         "C" => "CIVIL",
+        "SL" => "SLEEVE LAYOUT",
         _ => "GENERAL",
     };
     let lvl = t.level(level).map(|l| l.name.clone()).unwrap_or_default();
@@ -1041,13 +1135,16 @@ fn plan_title(pen: &mut Pen, t: &Truth, sh: &Sheet) {
     let _ = t;
 }
 
-/// Electrical devices (receptacles, switches) as small symbols on the architectural background.
+/// Electrical devices (receptacles, switches) as small symbols on the E-sheet.
+/// Symbols are drawn at the diagrammatic position (`diag_ft`), offset from the true
+/// architectural position for readability.
 fn draw_devices(pen: &mut Pen, t: &Truth, level: &str) {
     let th = pen.st.text_in;
     for dev in t.devices.iter().filter(|d| d.level == level) {
-        let c = pen.b(dev.at_ft);
-        let r = pen.bl(0.25); // symbol radius in model units
-        // Receptacle: small circle with two parallel lines; switch: circle with S.
+        // Use the diagrammatic position for E-sheet drawing.
+        let pos = if dev.diag_ft != [0.0, 0.0] { dev.diag_ft } else { dev.at_ft };
+        let c = pen.b(pos);
+        let r = pen.bl(0.25);
         match dev.kind.as_str() {
             "receptacle" => {
                 pen.circle("ELEC", c, r);
@@ -1062,8 +1159,21 @@ fn draw_devices(pen: &mut Pen, t: &Truth, level: &str) {
                 pen.circle("ELEC", c, r * 0.7);
             }
         }
-        // Tag text beside the symbol.
         pen.text("ELEC-TEXT", Vec2::new(c.x + r * 1.5, c.y), th * 0.7, &dev.tag, 0.0, HAlign::Left, VAlign::Middle);
+    }
+}
+
+/// Electrical devices drawn at their true architectural positions on A-sheets (small X marks
+/// showing where the device actually goes on the wall).
+fn draw_devices_arch(pen: &mut Pen, t: &Truth, level: &str) {
+    let th = pen.st.text_in;
+    for dev in t.devices.iter().filter(|d| d.level == level) {
+        let c = pen.b(dev.at_ft);
+        let r = pen.bl(0.12);
+        // Small cross at the true position.
+        pen.line("ELEC-ARCH", Vec2::new(c.x - r, c.y - r), Vec2::new(c.x + r, c.y + r));
+        pen.line("ELEC-ARCH", Vec2::new(c.x - r, c.y + r), Vec2::new(c.x + r, c.y - r));
+        pen.text("ELEC-ARCH", Vec2::new(c.x + r * 1.5, c.y), th * 0.5, &dev.tag, 0.0, HAlign::Left, VAlign::Middle);
     }
 }
 
@@ -1119,6 +1229,147 @@ fn casework_plan(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
         let height_text = format!("{:.0}\" AFF", cw.height_in);
         let p2 = pen.b([cx, cy - 0.6]);
         pen.text("TEXT", p2, st.text_in * 0.6, &height_text, rot, HAlign::Center, VAlign::Middle);
+    }
+}
+
+/// Plumbing fixtures and water heaters on an architectural floor plan: a symbol centred on each
+/// (on [`crate::casework_reader::FIXTURE_LAYER`]) with its tag on it.
+fn fixture_plan(pen: &mut Pen, t: &Truth, st: &Style, level: &str) {
+    use crate::casework_reader::FIXTURE_LAYER as L;
+    let rot = readable(pen.rot());
+    let mut items: Vec<(&str, &str, [f64; 2], f64)> =
+        t.fixtures.iter().filter(|f| f.level == level).map(|f| (f.kind.as_str(), f.tag.as_str(), [f.at_ft[0], f.at_ft[1]], 0.0)).collect();
+    for e in t.equipment.iter().filter(|e| e.level == level && e.kind == "water_heater") {
+        let c = [(e.min_ft[0] + e.max_ft[0]) / 2.0, (e.min_ft[1] + e.max_ft[1]) / 2.0];
+        let r = ((e.max_ft[0] - e.min_ft[0]).min(e.max_ft[1] - e.min_ft[1]) / 2.0).clamp(0.5, 2.0);
+        items.push((e.kind.as_str(), e.tag.as_str(), c, r));
+    }
+    for (kind, tag, at, r) in items {
+        let c = pen.b(at);
+        // Half sizes, inches (along x, along y of the building).
+        let rect = |pen: &mut Pen, hx: f64, hy: f64| pen.brect(L, [at[0] - hx / 12.0, at[1] - hy / 12.0], [at[0] + hx / 12.0, at[1] + hy / 12.0]);
+        match kind {
+            "water_closet" => {
+                rect(pen, 10.0, 14.0);
+                pen.circle(L, c, 7.0);
+            }
+            "lavatory" => {
+                rect(pen, 10.0, 9.0);
+                pen.circle(L, c, 6.0);
+            }
+            "sink" => {
+                rect(pen, 12.0, 11.0);
+                pen.circle(L, c, 7.0);
+            }
+            "urinal" => {
+                rect(pen, 9.0, 7.0);
+                pen.circle(L, c, 4.0);
+            }
+            "shower" | "mop_sink" => {
+                let h = if kind == "shower" { 18.0 } else { 12.0 };
+                rect(pen, h, h);
+                pen.line(L, pen.b([at[0] - h / 12.0, at[1] - h / 12.0]), pen.b([at[0] + h / 12.0, at[1] + h / 12.0]));
+                pen.line(L, pen.b([at[0] - h / 12.0, at[1] + h / 12.0]), pen.b([at[0] + h / 12.0, at[1] - h / 12.0]));
+            }
+            "bathtub" => {
+                rect(pen, 30.0, 15.0);
+                rect(pen, 26.0, 11.0);
+            }
+            "water_heater" => pen.circle(L, c, pen.bl(r)),
+            _ => pen.circle(L, c, 3.0),
+        }
+        pen.text(L, c, st.text_in * 0.6, tag, rot, HAlign::Center, VAlign::Middle);
+    }
+}
+
+/// The rows of the casework and plumbing fixture schedule: one per tag (header first).
+pub fn casework_schedule_rows(t: &Truth) -> Vec<Vec<String>> {
+    use crate::casework_reader::description_for;
+    let inch = |v: f64| if (v - v.round()).abs() < 0.05 { format!("{:.0}\"", v) } else { format!("{:.1}\"", v) };
+    let mut rows = vec![["TAG", "DESCRIPTION", "SIZE (W x D)", "HEIGHT", "SPEC SECTION"].map(String::from).to_vec()];
+    let mut seen: Vec<String> = Vec::new();
+    for cw in &t.casework {
+        if seen.contains(&cw.tag) {
+            continue;
+        }
+        seen.push(cw.tag.clone());
+        let widths: Vec<f64> =
+            t.casework.iter().filter(|c| c.tag == cw.tag).map(|c| (c.max_ft[0] - c.min_ft[0]).max(c.max_ft[1] - c.min_ft[1]) * 12.0).collect();
+        let w0 = widths.first().copied().unwrap_or(0.0);
+        let width = if widths.iter().all(|w| (w - w0).abs() < 0.5) { inch(w0) } else { "VARIES".into() };
+        let mut desc = description_for(&cw.kind).to_string();
+        if cw.kind == "counter" && cw.spec_section.as_deref() == Some("22 40 00") {
+            desc.push_str(" WITH SINK");
+        }
+        rows.push(vec![
+            cw.tag.clone(),
+            desc,
+            format!("{width} x {}", inch(cw.depth_in)),
+            format!("{} AFF", inch(cw.height_in)),
+            cw.spec_section.clone().unwrap_or_else(|| "-".into()),
+        ]);
+    }
+    let fixtures = t.fixtures.iter().map(|f| (f.tag.as_str(), f.kind.as_str()));
+    let heaters = t.equipment.iter().filter(|e| e.kind == "water_heater").map(|e| (e.tag.as_str(), e.kind.as_str()));
+    for (tag, kind) in fixtures.chain(heaters) {
+        if tag.is_empty() || seen.iter().any(|s| s == tag) {
+            continue;
+        }
+        seen.push(tag.to_string());
+        let spec = if kind == "water_heater" { "22 33 00" } else { "22 40 00" };
+        rows.push(vec![tag.to_string(), description_for(kind).to_string(), "-".into(), "-".into(), spec.into()]);
+    }
+    rows
+}
+
+/// The casework and plumbing fixture schedule on a floor plan, in a corner of the drawing area
+/// the plan leaves free (on [`crate::casework_reader::SCHEDULE_LAYER`]).
+fn casework_schedule(pen: &mut Pen, t: &Truth, level: &str) {
+    use crate::casework_reader::{SCHEDULE_LAYER as L, SCHEDULE_TITLE};
+    let rows = casework_schedule_rows(t);
+    if rows.len() < 2 {
+        return;
+    }
+    let (h, row_h) = (0.09, 0.24);
+    let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let widths: Vec<f64> = (0..ncols).map(|c| rows.iter().filter_map(|r| r.get(c)).map(|s| text_width(s, h)).fold(0.6, f64::max) + 0.25).collect();
+    let (w, ht) = (widths.iter().sum::<f64>(), row_h * rows.len() as f64 + 0.3);
+    // The plan's extents on paper.
+    let mut lo = [f64::INFINITY; 2];
+    let mut hi = [f64::NEG_INFINITY; 2];
+    for rm in t.building.rooms.iter().filter(|r| r.level == level) {
+        for p in [rm.min_ft, rm.max_ft, [rm.min_ft[0], rm.max_ft[1]], [rm.max_ft[0], rm.min_ft[1]]] {
+            let m = pen.b(p);
+            let q = crate::layout::model_to_paper(pen.sh, [m.x, m.y]);
+            lo = [lo[0].min(q[0]), lo[1].min(q[1])];
+            hi = [hi[0].max(q[0]), hi[1].max(q[1])];
+        }
+    }
+    let fr = frame(pen.st);
+    let [[x0, y0], [x1, y1]] = fr.area;
+    let free = |at: [f64; 2]| {
+        let (a, b) = ([at[0], at[1] - ht], [at[0] + w, at[1] + 0.3]);
+        a[0] >= x0 && b[0] <= x1 && a[1] >= y0 && b[1] <= y1 && (b[0] < lo[0] - 0.5 || a[0] > hi[0] + 0.5 || b[1] < lo[1] - 0.5 || a[1] > hi[1] + 0.5)
+    };
+    // Bottom right, then top right below the north arrow, then top left; kept out of the strips
+    // along the right edge and the foot of the sheet a sheet reader takes for the title block
+    // (its title would read as the sheet's).
+    let [pw, ph] = fr.paper;
+    let right = (x1 - w - 0.2).min(0.7 * pw);
+    let cands = [[right, (y0 + ht + 0.2).max(0.25 * ph)], [right, y1 - 1.6], [x0 + 0.2, y1 - 0.5]];
+    let Some(at) = cands.iter().copied().find(|c| free(*c)).or(cands.first().copied()) else { return };
+    pen.ptext(L, [at[0], at[1] + 0.1], 0.13, SCHEDULE_TITLE, HAlign::Left);
+    let mut y = at[1];
+    for r in &rows {
+        let mut x = at[0];
+        for (c, cw) in widths.iter().enumerate() {
+            pen.prect(L, [x, y - row_h], [x + cw, y]);
+            if let Some(s) = r.get(c) {
+                pen.ptext(L, [x + 0.1, y - row_h + 0.075], h, s, HAlign::Left);
+            }
+            x += cw;
+        }
+        y -= row_h;
     }
 }
 
@@ -1796,6 +2047,19 @@ pub fn frac_in(v: f64) -> String {
     }
 }
 
+/// A light fixture type's row in the made-up light fixture schedule: description, mounting,
+/// lamp/wattage (the answer key for what a fixture of that type carries).
+pub fn light_fixture_row(type_tag: &str) -> (&'static str, &'static str, &'static str) {
+    match type_tag {
+        "A" => ("2X4 RECESSED TROFFER", "RECESSED", "LED 40W"),
+        "B" => ("2X2 RECESSED TROFFER", "RECESSED", "LED 24W"),
+        "C" => ("RECESSED DOWNLIGHT 6\"", "RECESSED", "LED 12W"),
+        "D" => ("WALL SCONCE", "WALL MOUNT", "LED 9W"),
+        "E" => ("PENDANT LINEAR 4'", "PENDANT", "LED 36W"),
+        _ => ("LIGHT FIXTURE", "SURFACE", "LED"),
+    }
+}
+
 /// The gear's schedules as printed: equipment (type, voltage, rating, size, mounting, entry
 /// plates, gutter), lugs (one row per termination point) and feeders.
 pub fn gear_tables(t: &Truth) -> Vec<(&'static str, Vec<Vec<String>>)> {
@@ -1985,6 +2249,238 @@ fn elec_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str, 
     pen.text("TEXT", note_at, st.text_in, "DO NOT SCALE - LOCATIONS PER ARCHITECTURAL", rot, HAlign::Left, VAlign::Top);
 }
 
+// ---- Fire alarm devices on FA sheets ----------------------------------------------------------------
+
+fn fa_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str) {
+    let rot = readable(pen.rot());
+    let th = st.text_in / pen.sh.scale;
+    let s = th * 0.8;
+    const FA_LAYER: &str = "FA-DEVICE";
+    const FA_TEXT: &str = "FA-TEXT";
+
+    for fa in t.fire_alarm_devices.iter().filter(|d| d.level == level && d.sheet == sheet) {
+        let c = pen.b([fa.at_ft[0], fa.at_ft[1]]);
+        let v = |dx: f64, dy: f64| Vec2::new(c.x + dx, c.y + dy);
+        match fa.kind.as_str() {
+            "smoke_detector" | "co_detector" => {
+                pen.circle(FA_LAYER, c, s * 0.5);
+                pen.text(FA_LAYER, c, st.text_in * 0.6, "SD", rot, HAlign::Center, VAlign::Middle);
+            }
+            "heat_detector" => {
+                pen.circle(FA_LAYER, c, s * 0.5);
+                pen.text(FA_LAYER, c, st.text_in * 0.6, "HD", rot, HAlign::Center, VAlign::Middle);
+            }
+            "pull_station" => {
+                let hs = s * 0.5;
+                pen.rect(FA_LAYER, v(-hs, -hs), v(hs, hs));
+                pen.text(FA_LAYER, c, st.text_in * 0.6, "PS", rot, HAlign::Center, VAlign::Middle);
+            }
+            "horn_strobe" | "speaker_strobe" => {
+                pen.circle(FA_LAYER, c, s * 0.6);
+                pen.line(FA_LAYER, v(-s * 0.4, 0.0), v(s * 0.4, 0.0));
+                pen.line(FA_LAYER, v(0.0, -s * 0.4), v(0.0, s * 0.4));
+                pen.text(FA_LAYER, c, st.text_in * 0.5, "HS", rot, HAlign::Center, VAlign::Middle);
+            }
+            "strobe" => {
+                pen.circle(FA_LAYER, c, s * 0.5);
+                pen.line(FA_LAYER, v(-s * 0.3, -s * 0.3), v(s * 0.3, s * 0.3));
+                pen.line(FA_LAYER, v(-s * 0.3, s * 0.3), v(s * 0.3, -s * 0.3));
+            }
+            "speaker" => {
+                pen.circle(FA_LAYER, c, s * 0.5);
+                pen.text(FA_LAYER, c, st.text_in * 0.5, "SPK", rot, HAlign::Center, VAlign::Middle);
+            }
+            "duct_detector" => {
+                let hw = s * 0.8;
+                let hh = s * 0.4;
+                pen.rect(FA_LAYER, v(-hw, -hh), v(hw, hh));
+                pen.text(FA_LAYER, c, st.text_in * 0.5, "DD", rot, HAlign::Center, VAlign::Middle);
+            }
+            "facp" => {
+                let hs = s * 1.2;
+                pen.rect(FA_LAYER, v(-hs, -hs * 0.8), v(hs, hs * 0.8));
+                pen.fill(FA_LAYER, [v(-hs, -hs * 0.8), v(hs, -hs * 0.8), v(hs, hs * 0.8), v(-hs, hs * 0.8)]);
+                pen.text(FA_TEXT, c, st.text_in * 0.6, "FACP", rot, HAlign::Center, VAlign::Middle);
+            }
+            "nac_panel" => {
+                let hs = s * 0.8;
+                pen.rect(FA_LAYER, v(-hs, -hs * 0.6), v(hs, hs * 0.6));
+                pen.text(FA_LAYER, c, st.text_in * 0.5, "NAC", rot, HAlign::Center, VAlign::Middle);
+            }
+            "annunciator" => {
+                let hs = s * 0.7;
+                pen.rect(FA_LAYER, v(-hs, -hs * 0.6), v(hs, hs * 0.6));
+                pen.text(FA_LAYER, c, st.text_in * 0.5, "ANN", rot, HAlign::Center, VAlign::Middle);
+            }
+            "monitor_module" | "relay_module" => {
+                let hs = s * 0.4;
+                pen.rect(FA_LAYER, v(-hs, -hs), v(hs, hs));
+                let label = if fa.kind == "monitor_module" { "MM" } else { "RM" };
+                pen.text(FA_LAYER, c, st.text_in * 0.5, label, rot, HAlign::Center, VAlign::Middle);
+            }
+            "elevator_recall" | "door_holder" | "mag_door_holder" => {
+                pen.circle(FA_LAYER, c, s * 0.4);
+                pen.fill(FA_LAYER, [v(-s * 0.3, -s * 0.3), v(s * 0.3, -s * 0.3), v(s * 0.3, s * 0.3), v(-s * 0.3, s * 0.3)]);
+            }
+            _ => {
+                pen.circle(FA_LAYER, c, s * 0.5);
+            }
+        }
+        // Tag text beside the device.
+        if !fa.tag.is_empty() {
+            let tp = v(s * 1.2, 0.0);
+            pen.text(FA_TEXT, tp, st.text_in * 0.8, &fa.tag, rot, HAlign::Left, VAlign::Middle);
+        }
+        // Candela note for notification appliances.
+        if let Some(cd) = fa.candela {
+            let tp = v(0.0, -s * 1.5);
+            pen.text(FA_TEXT, tp, st.text_in * 0.6, &format!("{cd} cd"), rot, HAlign::Center, VAlign::Top);
+        }
+        // Mounting height note (non-ceiling).
+        if fa.mounting != "CLG" && fa.mounting_in > 0.0 {
+            let ht = crate::truth::fmt_in(fa.mounting_in);
+            let tp = v(0.0, s * 1.2);
+            pen.text(FA_TEXT, tp, st.text_in * 0.6, &format!("{ht} AFF"), rot, HAlign::Center, VAlign::Bottom);
+        }
+        // SLC/NAC circuit tags (small, below device).
+        let mut note_y = -s * 2.2;
+        if !fa.slc.is_empty() {
+            let tp = v(0.0, note_y);
+            pen.text(FA_TEXT, tp, st.text_in * 0.5, &fa.slc, rot, HAlign::Center, VAlign::Top);
+            note_y -= s * 0.8;
+        }
+        if !fa.nac.is_empty() {
+            let tp = v(0.0, note_y);
+            pen.text(FA_TEXT, tp, st.text_in * 0.5, &fa.nac, rot, HAlign::Center, VAlign::Top);
+        }
+    }
+}
+
+// ---- Telecom/LV devices on T sheets ----------------------------------------------------------------
+
+fn telecom_devices(pen: &mut Pen, t: &Truth, st: &Style, level: &str, sheet: &str) {
+    let rot = readable(pen.rot());
+    let th = st.text_in / pen.sh.scale;
+    let s = th * 0.8;
+    const TC_LAYER: &str = "TC-DEVICE";
+    const TC_TEXT: &str = "TC-TEXT";
+
+    for tc in t.telecom_devices.iter().filter(|d| d.level == level && d.sheet == sheet) {
+        let c = pen.b([tc.at_ft[0], tc.at_ft[1]]);
+        let v = |dx: f64, dy: f64| Vec2::new(c.x + dx, c.y + dy);
+        match tc.kind.as_str() {
+            "data_outlet" => {
+                let hs = s * 0.5;
+                pen.poly(TC_LAYER, &[v(0.0, hs), v(-hs, -hs), v(hs, -hs)], true);
+                pen.text(TC_LAYER, c, st.text_in * 0.5, "D", rot, HAlign::Center, VAlign::Middle);
+            }
+            "tv_outlet" => {
+                let hs = s * 0.5;
+                pen.poly(TC_LAYER, &[v(0.0, hs), v(-hs, -hs), v(hs, -hs)], true);
+                pen.text(TC_LAYER, c, st.text_in * 0.5, "TV", rot, HAlign::Center, VAlign::Middle);
+            }
+            "telephone" => {
+                let hs = s * 0.5;
+                pen.poly(TC_LAYER, &[v(0.0, hs), v(-hs, -hs), v(hs, -hs)], true);
+                pen.text(TC_LAYER, c, st.text_in * 0.5, "T", rot, HAlign::Center, VAlign::Middle);
+            }
+            "wifi_ap" => {
+                pen.circle(TC_LAYER, c, s * 0.5);
+                pen.text(TC_LAYER, c, st.text_in * 0.4, "WAP", rot, HAlign::Center, VAlign::Middle);
+            }
+            "camera" => {
+                pen.circle(TC_LAYER, c, s * 0.5);
+                pen.text(TC_LAYER, c, st.text_in * 0.5, "CAM", rot, HAlign::Center, VAlign::Middle);
+            }
+            "card_reader" | "rex" => {
+                let hs = s * 0.4;
+                pen.rect(TC_LAYER, v(-hs, -hs * 1.2), v(hs, hs * 1.2));
+                let label = if tc.kind == "card_reader" { "CR" } else { "REX" };
+                pen.text(TC_LAYER, c, st.text_in * 0.5, label, rot, HAlign::Center, VAlign::Middle);
+            }
+            "door_contact" | "door_ajar" | "mag_lock" => {
+                let hs = s * 0.3;
+                pen.rect(TC_LAYER, v(-hs, -hs), v(hs, hs));
+                pen.fill(TC_LAYER, [v(-hs, -hs), v(hs, -hs), v(hs, hs), v(-hs, hs)]);
+            }
+            "nurse_call_station" | "nurse_call_display" | "ada_pull_cord" => {
+                pen.circle(TC_LAYER, c, s * 0.5);
+                let label = if tc.kind == "ada_pull_cord" { "ADA" } else { "NC" };
+                pen.text(TC_LAYER, c, st.text_in * 0.5, label, rot, HAlign::Center, VAlign::Middle);
+            }
+            "speaker" => {
+                pen.circle(TC_LAYER, c, s * 0.5);
+                pen.text(TC_LAYER, c, st.text_in * 0.5, "SPK", rot, HAlign::Center, VAlign::Middle);
+            }
+            "idf" | "mdf" | "patch_panel" | "backboard" | "rack" => {
+                let hs = s * 1.0;
+                pen.rect(TC_LAYER, v(-hs, -hs * 0.6), v(hs, hs * 0.6));
+                pen.fill(TC_LAYER, [v(-hs, -hs * 0.6), v(hs, -hs * 0.6), v(hs, hs * 0.6), v(-hs, hs * 0.6)]);
+                let label = tc.kind.to_uppercase();
+                pen.text(TC_TEXT, c, st.text_in * 0.5, &label, rot, HAlign::Center, VAlign::Middle);
+            }
+            "pool_alarm" | "door_alarm" => {
+                pen.circle(TC_LAYER, c, s * 0.4);
+                pen.text(TC_LAYER, c, st.text_in * 0.4, "ALM", rot, HAlign::Center, VAlign::Middle);
+            }
+            _ => {
+                pen.circle(TC_LAYER, c, s * 0.5);
+            }
+        }
+        // Tag text beside the device.
+        if !tc.tag.is_empty() {
+            let tp = v(s * 1.2, 0.0);
+            pen.text(TC_TEXT, tp, st.text_in * 0.8, &tc.tag, rot, HAlign::Left, VAlign::Middle);
+        }
+        // Cable spec note.
+        if let Some(ref cable) = tc.cable_spec {
+            let tp = v(0.0, -s * 1.5);
+            pen.text(TC_TEXT, tp, st.text_in * 0.5, cable, rot, HAlign::Center, VAlign::Top);
+        }
+        // LV system label.
+        if !tc.lv_system.is_empty() {
+            let tp = v(0.0, s * 1.2);
+            pen.text(TC_TEXT, tp, st.text_in * 0.5, &tc.lv_system.to_uppercase(), rot, HAlign::Center, VAlign::Bottom);
+        }
+    }
+
+    // Cable pathways on this level.
+    for cp in t.cable_pathways.iter().filter(|p| p.level == level) {
+        let a = pen.b(cp.from_ft);
+        let b = pen.b(cp.to_ft);
+        let layer = match cp.kind.as_str() {
+            "j_hook" => "TC-PATHWAY",
+            "cable_tray" => "TC-TRAY",
+            _ => "TC-PATHWAY",
+        };
+        pen.line(layer, a, b);
+        // Size/spacing label at midpoint.
+        let mid = Vec2::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+        let label = match cp.kind.as_str() {
+            "j_hook" => {
+                let sp = cp.spacing_in.unwrap_or(48.0);
+                format!("J-HOOK @ {}\" O.C.", sp as u32)
+            }
+            "ent" => {
+                let sz = cp.size_in.unwrap_or(2.0);
+                format!("{}\" ENT", sz as u32)
+            }
+            "cable_tray" => {
+                if let Some([w, d]) = cp.tray_size_in {
+                    format!("{}\"x{}\" CT", w as u32, d as u32)
+                } else {
+                    "CT".into()
+                }
+            }
+            _ => String::new(),
+        };
+        if !label.is_empty() {
+            let rot_line = readable(pen.rot());
+            pen.text(TC_TEXT, mid, st.text_in * 0.6, &label, rot_line, HAlign::Center, VAlign::Bottom);
+        }
+    }
+}
+
 // ---- Structure ----------------------------------------------------------------------------------
 
 fn framing(pen: &mut Pen, t: &Truth, level: &str) {
@@ -2148,14 +2644,7 @@ fn schedules(pen: &mut Pen, t: &Truth, disc: &str) {
                 continue;
             }
             seen_lt.push(d.type_tag.clone());
-            let (desc, mount, watt) = match d.type_tag.as_str() {
-                "A" => ("2X4 RECESSED TROFFER", "RECESSED", "LED 40W"),
-                "B" => ("2X2 RECESSED TROFFER", "RECESSED", "LED 24W"),
-                "C" => ("RECESSED DOWNLIGHT 6\"", "RECESSED", "LED 12W"),
-                "D" => ("WALL SCONCE", "WALL MOUNT", "LED 9W"),
-                "E" => ("PENDANT LINEAR 4'", "PENDANT", "LED 36W"),
-                _ => ("LIGHT FIXTURE", "SURFACE", "LED"),
-            };
+            let (desc, mount, watt) = light_fixture_row(&d.type_tag);
             lt_rows.push(vec![d.type_tag.clone(), desc.into(), mount.into(), watt.into()]);
         }
         let h1 = table(pen, [x, y], "LIGHT FIXTURE SCHEDULE", &lt_rows);
@@ -2209,10 +2698,17 @@ fn fp_schedules(pen: &mut Pen, t: &Truth) {
     let mut heads = vec![
         s(&["TAG", "TYPE", "K", "TEMP", "FINISH", "WHERE"]),
         s(&["SH-1", "PENDENT", "5.6", "155F", "CHROME", "IN CEILINGS"]),
-        s(&["SH-2", "UPRIGHT", "5.6", "155F", "BRASS", "OPEN TO STRUCTURE, 4\" SPRIG"]),
+        s(&["SH-2", "UPRIGHT", "5.6", "155F", "BRASS", &format!("OPEN TO STRUCTURE, {}\" SPRIG", t.fp_sprig_in.unwrap_or(4.0) as u32)]),
     ];
     if t.terminals.iter().any(|x| x.mount.as_deref() == Some("sidewall")) {
-        heads.push(s(&["SH-3", "HORIZ SIDEWALL", "5.6", "155F", "WHITE", "4\" BELOW CEILING"]));
+        heads.push(s(&[
+            "SH-3",
+            "HORIZ SIDEWALL",
+            "5.6",
+            "155F",
+            "WHITE",
+            &format!("{}\" BELOW CEILING", t.fp_sidewall_below_in.unwrap_or(4.0) as u32),
+        ]));
     }
     let mut pipes = vec![s(&["PIPE", "MAX HEADS"])];
     for (d, n) in crate::design::PIPE_SCHEDULE {
@@ -2264,6 +2760,7 @@ fn draw_callouts(pen: &mut Pen, t: &Truth, sh: &Sheet) {
             "detail_bubble" => draw_detail_bubble(pen, co),
             "enlarged_plan" => draw_enlarged_plan_callout(pen, co),
             "key_plan" => draw_key_plan(pen, t, sh),
+            "match_line" => draw_match_line(pen, co),
             _ => {}
         }
     }
@@ -2413,6 +2910,20 @@ fn draw_key_plan(pen: &mut Pen, t: &Truth, _sh: &Sheet) {
     pen.ptext(CALLOUT_LAYER, [kp_x, kp_y - 0.15], 0.08, "KEY PLAN", HAlign::Left);
 }
 
+/// A match line: a long dashed line across the plan with "SEE SHEET <target>" text,
+/// indicating where the adjacent sheet continues.
+fn draw_match_line(pen: &mut Pen, co: &CalloutEntry) {
+    if let (Some(from), Some(to)) = (co.cut_from_ft, co.cut_to_ft) {
+        let a = pen.b(from);
+        let b = pen.b(to);
+        pen.line("DASHED", a, b);
+        // Label: "SEE SHEET <target>"
+        let mid = pen.b(co.at_ft);
+        let label = format!("SEE SHEET {}", co.target_sheet);
+        pen.text(CALLOUT_LAYER, mid + Vec2::new(0.0, pen.pl(0.15)), 0.08, &label, 0.0, HAlign::Center, VAlign::Bottom);
+    }
+}
+
 // ---- Site plan (C-101) --------------------------------------------------------------------------
 
 /// Draw the site plan: building footprint, parking, light poles, transformer, underground
@@ -2455,6 +2966,10 @@ fn site_plan(pen: &mut Pen, t: &Truth, _st: &Style) {
             "bench" => draw_bench(pen, se, FURNISH_LAYER),
             "bike_rack" => draw_bike_rack(pen, se, FURNISH_LAYER),
             "trash_can" => draw_trash_can(pen, se, FURNISH_LAYER),
+            "pull_box" => draw_pull_box(pen, se, layer),
+            "pole_base" => draw_pole_base(pen, se, layer),
+            "ev_charger" => draw_ev_charger(pen, se, layer),
+            "monument_sign" => draw_monument_sign(pen, se, layer),
             k if k.starts_with("underground_") => draw_underground(pen, se, layer),
             _ => draw_generic_site(pen, se, layer),
         }
@@ -2580,11 +3095,67 @@ fn draw_underground(pen: &mut Pen, se: &SiteElement, layer: &str) {
         let depth_str = format!("{depth:.0}' DEEP");
         pen.text(layer, c + Vec2::new(off, -pen.pl(0.10)), 0.05, &depth_str, 0.0, HAlign::Left, VAlign::Middle);
     }
-    // Pipe size and material.
+    // Pipe size and material (with conduit count for ductbanks).
     if let Some(size) = se.size_in {
-        let pipe = format!("{size:.0}\" {}", se.material).trim_end().to_string();
+        let pipe = if let Some(count) = se.conduit_count {
+            format!("{count}-{size:.0}\" {}", se.material).trim_end().to_string()
+        } else {
+            format!("{size:.0}\" {}", se.material).trim_end().to_string()
+        };
         pen.text(layer, c + Vec2::new(off, pen.pl(0.10)), 0.05, &pipe, 0.0, HAlign::Left, VAlign::Middle);
     }
+}
+
+/// Pull box / handhole: a small square with an X inside and a tag.
+fn draw_pull_box(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+        // X inside.
+        let a = pen.b(mn);
+        let b = pen.b(mx);
+        pen.line(layer, a, b);
+        pen.line(layer, Vec2::new(a.x, b.y), Vec2::new(b.x, a.y));
+    }
+    let c = pen.b(se.at_ft);
+    let label_y = c + Vec2::new(0.0, pen.pl(0.14));
+    pen.text(layer, label_y, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Pole base: a filled square at the base of a light pole, with tag.
+fn draw_pole_base(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+        // Diagonal hatching inside.
+        let a = pen.b(mn);
+        let b = pen.b(mx);
+        pen.line(layer, a, b);
+    }
+    let c = pen.b(se.at_ft);
+    let label_y = c + Vec2::new(0.0, pen.pl(0.14));
+    pen.text(layer, label_y, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// EV charger: a small rectangle with a lightning bolt symbol (two lines) and tag.
+fn draw_ev_charger(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+    }
+    let c = pen.b(se.at_ft);
+    // A simple lightning-bolt shape: two diagonal lines.
+    let s = pen.pl(0.06);
+    pen.line(layer, c + Vec2::new(-s * 0.3, s), c + Vec2::new(s * 0.3, 0.0));
+    pen.line(layer, c + Vec2::new(s * 0.3, 0.0), c + Vec2::new(-s * 0.3, -s));
+    let label_y = c + Vec2::new(0.0, pen.pl(0.14));
+    pen.text(layer, label_y, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Bottom);
+}
+
+/// Monument sign: a larger rectangle with label inside.
+fn draw_monument_sign(pen: &mut Pen, se: &SiteElement, layer: &str) {
+    if let (Some(mn), Some(mx)) = (se.min_ft, se.max_ft) {
+        pen.brect(layer, mn, mx);
+    }
+    let c = pen.b(se.at_ft);
+    pen.text(layer, c, 0.06, &se.tag, 0.0, HAlign::Center, VAlign::Middle);
 }
 
 /// Generic site element: a point marker with tag.

@@ -2433,6 +2433,7 @@
 	List MEP Items	列出 MEP 项目
 	Section Box	剖切框
 	Trade Visibility	专业可见性
+	Colour by BIM Property	按 BIM 属性着色
 	BIM Types	BIM 类型
 	Get BIM Spec	获取 BIM 规格
 	Remove BIM Spec from Entities	从对象移除 BIM 规格
@@ -3015,3 +3016,131 @@
 	Estimate Bid Summary	估算投标摘要
 	Read Panel Schedules	读取配电盘表
 	Site Takeoff	场地工程量统计
+	Clash Report	碰撞报告
+	Export PDF	导出 PDF
+	Export the grouped clash report to PDF	将分组的碰撞报告导出为 PDF
+	PDF exported to {path}.	PDF 已导出到 {path}。
+	Clash detection failed.	碰撞检测失败。
+	Import Cost Table	导入成本表
+	BIM View	BIM 视图
+	Trade Colours	专业颜色
+	Element Properties	构件属性
+	Tree	树
+	Colours	颜色
+	Ghost Architecture	建筑半透明
+	Sheet Lines in 3D	在三维中显示图纸线条
+	Nothing is built yet. Use Plans to Model first.	尚未生成任何内容。请先使用“图纸生成模型”。
+	Select one element to see its properties.	选择一个构件以查看其属性。
+	Not part of the built model.	不属于已生成的模型。
+	Category	类别
+	Trade	专业
+	Circuit	回路
+	Source	来源
+	Issues	问题
+	Show on Sheet	在图纸上显示
+	Reset Colours	重置颜色
+	Architecture	建筑
+	Structure	结构
+	Fire Protection	消防
+	Doors and Windows	门窗
+	Supply Air Duct	送风管
+	Return Air Duct	回风管
+	Exhaust Air Duct	排风管
+	Outside Air Duct	新风管
+	Duct	风管
+	Air Terminals	风口
+	Equipment	设备
+	Domestic Cold Water	生活冷水
+	Domestic Hot Water	生活热水
+	Sanitary	污水
+	Vent	通气
+	Storm	雨水
+	Gas	燃气
+	Piping	管道
+	Plumbing Fixtures	卫生器具
+	Conduit	电线管
+	Cable Tray	电缆桥架
+	Electrical Devices	电气装置
+	Light Fixtures	灯具
+	Clash Check	碰撞检查
+	Fix Clash	修复碰撞
+	Model Takeoff	模型工程量统计
+	Show Takeoff Line	显示工程量条目
+	Model Estimate	模型估价
+	New Issue	新建问题
+	Update Issue	更新问题
+	Show Issue	显示问题
+	Issue Marks	问题标记
+	Sheet and 3D Link	图纸与三维联动
+	PDF to BIM	PDF 转 BIM
+	Read Casework and Fixtures	读取固定家具和卫生洁具
+	Frame Walls from Prints	根据图纸生成墙体龙骨
+	List Framed Walls	列出龙骨墙
+	Framed Wall	龙骨墙
+	Next Stud	下一根龙骨
+	Enter Field Stud	输入现场测量的龙骨
+	Apply Shop Drawing	应用加工图
+	Show Framing	显示龙骨
+	Read Unit Types from Prints	从图纸读取单元类型
+	Edit Unit Type	编辑单元类型
+	Override Unit Instance	覆盖单元实例
+	Place Unit Instances	放置单元实例
+	List Callouts	列出标注
+	Keep Print Set Job	保留图纸集作业
+	Resume Print Set Job	恢复图纸集作业
+	Finish Takeoff from Prints	根据图纸统计装修工程量
+	Layer Quantity Takeoff	按图层统计工程量
+	Read Architecture from Prints	从图纸读取建筑
+	Read Roof and Wall Envelope	读取屋面与墙体围护
+	Element Properties (BIM)	元素属性 (BIM)
+	Set Element Property (BIM)	设置元素属性 (BIM)
+	Find Elements by Property	按属性查找元素
+	Element Property Summary	元素属性摘要
+	BIM Properties	BIM 属性
+	Kind	种类
+	Element Identities (BIM)	元素标识 (BIM)
+	Room Connections	房间连接
+	Link Print Set	链接图纸集
+	Check Building Codes	检查建筑规范
+	Code Rules	规范规则
+	Select Building Codes	选择建筑规范
+	Fill Element Properties	填充元素属性
+	Build Construction Sequence	生成施工顺序
+	Construction Sequence	施工顺序
+	Edit Sequence Activity	编辑施工顺序活动
+	Show Sequence at Date	显示某日的施工进度
+	Export Construction Sequence	导出施工顺序
+	Sequence Trade Conflicts	施工顺序中的工种冲突
+	Ceiling Space Fit	吊顶空间校核
+	Takeoff by Activity	按活动统计工程量
+	BIM	BIM
+	Door	门
+	Plan Views	平面图视图
+	Generate Plan Views	生成平面图视图
+	Draw Wall (Object)	绘制墙体（对象）
+	Place Door in Wall	在墙中放置门
+	Place Window in Wall	在墙中放置窗
+	Resolve Plan Entity	解析平面图元素
+	Record As-Built Change	记录竣工变更
+	Import As-Built Markups	导入竣工标记
+	List As-Built Changes	列出竣工变更
+	Set As-Built Change Status	设置竣工变更状态
+	Compare Design and As-Built	比较设计与竣工
+	Export As-Built	导出竣工
+	Map Line to Price Row	将行映射到价格行
+	Start Cover Check	开始封闭前检查
+	Cover Check Status	封闭前检查状态
+	Check Cover Item	勾选封闭前项目
+	Reopen Cover Item	重新打开封闭前项目
+	Sign Inspection	签署检查
+	Ready to Cover	可以封闭
+	Cover Check Wall	封闭前检查墙
+	Add In-Wall Photo	添加墙内照片
+	Wall	墙
+	Ready to cover	可以封闭
+	Not ready to cover	尚不能封闭
+	Checklist	检查清单
+	Photos	照片
+	Photo	照片
+	Schedule from Element Properties	根据构件属性生成明细表
+	Check Element Properties	检查构件属性

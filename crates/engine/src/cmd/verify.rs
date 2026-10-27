@@ -42,10 +42,9 @@ const MAX_PX: u32 = 4096;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("model.issues", "Model Issues", run_issues)
-            .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built, limit?: 1–1000 (100), cursor?: from `next`} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page)}")
-            .noundo(),
+            .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}"),
         CommandSpec::new("model.render", "Render Model View", run_render)
-            .params("{path?: PNG file (else the PNG comes back as base64), width?, height? (800×600), style?: realistic|shaded|conceptual|hidden|wireframe, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
+            .params("{path?: PNG file (else the PNG comes back as base64), width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
             .noundo(),
         CommandSpec::new("model.overlay", "Model Overlay", run_overlay)
             .params("{path?: PNG file (else base64), width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
@@ -79,6 +78,64 @@ fn built(d: &Drawing) -> Vec<Built> {
             Some(Built { handle: e.handle, part, level: made_level(e).unwrap_or_default(), source, mesh: m.clone() })
         })
         .collect()
+}
+
+/// The parts a building stands as: what a whole-building view frames, and what each level's
+/// other built objects should stand in.
+const SHELL: &[&str] = &["wall", "floor", "curtainwall", "column", "roof"];
+
+/// How far past its level's shell a built object may stand (a condenser on its pad, a canopy):
+/// 10 feet, or 5% of the shell's size when that is more.
+fn shell_margin(b: &Bounds2, upf: f64) -> f64 {
+    (10.0 * upf).max(0.05 * b.width().max(b.height()))
+}
+
+/// The plan box of each level's shell (its walls, floors, columns and roofs) where they are
+/// built, and of all levels together.
+pub(crate) fn shell_boxes(d: &Drawing) -> (Vec<(String, Bounds2)>, Bounds2) {
+    let mut by: Vec<(String, Bounds2)> = Vec::new();
+    let mut all = Bounds2::EMPTY;
+    for e in d.model.iter() {
+        let Some(part) = made_as(e) else { continue };
+        if !SHELL.iter().any(|p| part.eq_ignore_ascii_case(p)) {
+            continue;
+        }
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        if b.is_empty() || !(b.min.is_finite() && b.max.is_finite()) {
+            continue;
+        }
+        all = all.union(&b);
+        let level = made_level(e).unwrap_or_default();
+        match by.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(&level)) {
+            Some((_, x)) => *x = x.union(&b),
+            None => by.push((level, b)),
+        }
+    }
+    (by, all)
+}
+
+/// What a built object was read from, for a message: its sheet (`prop:SOURCE sheet=`), else its
+/// own tag, else the text or layer of the plan object it was built from.
+fn built_from(d: &Drawing, e: &Entity) -> String {
+    let tag = super::bimlook::made_tag;
+    let sheet = tag(e, "prop").and_then(|v| v.split_whitespace().find_map(|w| w.strip_prefix("sheet="))).map(str::to_string);
+    let what = tag(e, "tag").map(str::to_string).filter(|t| !t.is_empty()).or_else(|| tag(e, "system").map(|v| format!("system {v}")));
+    let source = super::bimlook::made_source(e).filter(|h| h.0 != 0).and_then(|h| d.model.get(h));
+    let text = source.and_then(|x| match &x.kind {
+        EntityKind::Text(t) => Some(t.value.clone()),
+        EntityKind::MText(t) => Some(t.contents.clone()),
+        _ => None,
+    });
+    let mut out: Vec<String> = Vec::new();
+    if let Some(w) = text.or(what) {
+        out.push(format!("\"{}\"", w.chars().take(40).collect::<String>()));
+    }
+    match (sheet, source) {
+        (Some(sh), _) => out.push(format!("from {sh}")),
+        (None, Some(x)) => out.push(format!("from layer {}", x.common.layer)),
+        _ => {}
+    }
+    out.join(" ")
 }
 
 /// A mesh's plan footprint: its bottom faces (convex polygons), else the bottom edges of its
@@ -173,6 +230,53 @@ fn clip_convex(subject: &[Vec2], clip: &[Vec2]) -> Vec<Vec2> {
     out
 }
 
+/// Two built walls overlapping (more than walls meeting at a corner or a tee share).
+pub(crate) struct Overlap {
+    pub level: String,
+    pub area: f64,
+    pub at: Vec2,
+    pub handles: [Handle; 2],
+}
+
+/// Built walls overlapping each other: their boxes swept along x (each wall meets only the walls
+/// whose boxes reach it), then the common area of their footprints.
+fn overlaps(walls: &[(&Built, Footprint)]) -> Vec<Overlap> {
+    let boxes: Vec<Bounds2> = walls.iter().map(|(_, f)| f.bounds()).collect();
+    let mut order: Vec<usize> = (0..walls.len()).filter(|i| boxes.get(*i).is_some_and(|b| !b.is_empty() && b.min.is_finite())).collect();
+    order.sort_by(|a, b| boxes.get(*a).map_or(0.0, |x| x.min.x).total_cmp(&boxes.get(*b).map_or(0.0, |x| x.min.x)));
+    let mut out = Vec::new();
+    for (k, &i) in order.iter().enumerate() {
+        let (Some((a, fa)), Some(ba)) = (walls.get(i), boxes.get(i)) else { continue };
+        for &j in order.iter().skip(k + 1) {
+            let (Some((b, fb)), Some(bb)) = (walls.get(j), boxes.get(j)) else { continue };
+            if bb.min.x > ba.max.x {
+                break;
+            }
+            if a.level != b.level || !ba.intersects(bb) || fa.z1 <= fb.z0 || fb.z1 <= fa.z0 {
+                continue;
+            }
+            let area: f64 = fa.polys.iter().flat_map(|p| fb.polys.iter().map(move |q| cadaddy_geom::shoelace(&clip_convex(p, q)).abs())).sum();
+            // Walls meeting at a corner or a tee share about one thickness squared.
+            let (ta, tb) = (fa.thickness(), fb.thickness());
+            if ta.is_finite() && tb.is_finite() && area > 1.5 * ta.max(tb) * ta.max(tb) {
+                out.push(Overlap { level: a.level.clone(), area, at: ba.intersection(bb).center(), handles: [a.handle, b.handle] });
+                if out.len() >= MAX_FINDINGS {
+                    return out;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The built walls of a drawing that overlap each other (`model.clashes` reports them as
+/// same-trade clashes).
+pub(crate) fn wall_overlaps(d: &Drawing) -> Vec<Overlap> {
+    let made = built(d);
+    let walls: Vec<(&Built, Footprint)> = made.iter().filter(|b| b.part == "wall").take(MAX_WALLS).map(|b| (b, footprint(&b.mesh))).collect();
+    overlaps(&walls)
+}
+
 // ---------------- the plan ----------------
 
 /// A session holding the plan alone (nothing a build made), for tracing rooms around their tags
@@ -203,37 +307,56 @@ fn plan_openings(d: &Drawing, sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<s
     ops
 }
 
-/// A room traced around its name tag.
+/// A room traced around its name or number tag.
 struct Room {
     tag: Handle,
     name: String,
     at: Vec2,
     outline: Option<Vec<Vec2>>,
+    /// Tagged by its number only (`101`, `B12`): named by that number.
+    number: bool,
 }
 
-/// Every room name tag (names, not numbers) and the outline around it, if it closes.
+/// Every room tag and the outline around it, if it closes: names, and numbers (`101`, `2104`,
+/// `B12`) on a room tag layer or numbering a spec room. A number whose room a name tag also tags
+/// (the name inside its outline, or near it when it has none) is that room's number, not another
+/// room: the name's tag is traced instead.
 fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
     let d = plan.doc()?;
     let ents = plan_objects(d);
     let walls = super::bspec::room_plan(plan)?;
     let walls = walls.as_ref().unwrap_or(plan);
     let mut out = Vec::new();
+    let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
+    // The plan's outlines are made once for every tag (not once per tag: 60k objects).
+    let mut cache = None;
     for (h, t, at) in room_texts(sp, &ents) {
-        let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
-        let named = t.chars().filter(|c| c.is_alphabetic()).count() >= 2 && !super::perceive::geometry::room_number(&t);
-        if !named || (!tagged && !sp.rooms.iter().any(|r| names_room(r, &t))) {
+        // Equipment and device tags (a panelboard label on a room tag layer) are no rooms.
+        let named = super::perceive::geometry::room_name_score(&t) > 0;
+        let number = !named && super::perceive::geometry::room_number(&t) && !super::perceive::geometry::equipment_tag(&t);
+        if !(named || number) || (!tagged && !sp.rooms.iter().any(|r| names_room(r, &t))) {
             continue;
         }
         if out.len() >= 2_000 {
             break;
         }
-        let outline = super::hatch::loops_at(walls, at)
+        let outline = super::hatch::loops_at_lazy(walls, at, &mut cache)
             .ok()
             .and_then(|loops| loops.iter().find(|l| l.outer).or(loops.first()).cloned())
             .map(|l| cadaddy_geom::Polyline { vertices: l.vertices, closed: true }.tessellate(1e-3))
             .filter(|q| q.len() >= 3);
-        out.push(Room { tag: h, name: t, at, outline });
+        out.push(Room { tag: h, name: t, at, outline, number });
     }
+    // Tags of one room sit within a few feet of each other.
+    let near = 4.0 * units(sp);
+    let names: Vec<Vec2> = out.iter().filter(|r| !r.number).map(|r| r.at).collect();
+    out.retain(|r| {
+        !r.number
+            || !names.iter().any(|&at| match &r.outline {
+                Some(q) => cadaddy_geom::point_in_polygon(q, at),
+                None => (at - r.at).len() <= near,
+            })
+    });
     Ok(out)
 }
 
@@ -287,6 +410,43 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
             handles: Vec::new(),
         });
     }
+    // Built objects off their level's building (a legend's equipment, a ceiling traced round a
+    // grid bubble): each listed with what it was read from.
+    let (shells, _) = shell_boxes(d);
+    let mut off: Vec<((String, String, String), Vec<Handle>, Vec2, f64)> = Vec::new();
+    for e in d.model.iter() {
+        let Some(part) = made_as(e) else { continue };
+        if part.eq_ignore_ascii_case("ground") || SHELL.iter().any(|p| part.eq_ignore_ascii_case(p)) {
+            continue;
+        }
+        let level = made_level(e).unwrap_or_default();
+        let Some((_, shell)) = shells.iter().find(|(n, _)| n.eq_ignore_ascii_case(&level)) else { continue };
+        let Some(c) = centre(d, e) else { continue };
+        let by = shell_dist(shell, c);
+        if !by.is_finite() || by <= shell_margin(shell, upf) {
+            continue;
+        }
+        // MEP by what it is (duct, pipe, equipment).
+        let part = super::bimlook::made_tag(e, "kind").filter(|k| !k.is_empty()).map_or(part, str::to_string);
+        let key = (level, part, built_from(d, e));
+        match off.iter_mut().find(|o| o.0 == key) {
+            Some(o) => {
+                o.1.push(e.handle);
+                o.3 = o.3.max(by);
+            }
+            None => off.push((key, vec![e.handle], c, by)),
+        }
+    }
+    for ((level, part, from), hs, at, by) in off {
+        let what = if from.is_empty() { String::new() } else { format!(" {from}") };
+        push(Finding {
+            kind: "outside_building",
+            message: format!("{} {part}{what} built {} outside {level}'s walls and floors", hs.len(), feet(by, upf)),
+            level: Some(level),
+            at: Some(at),
+            handles: hs,
+        });
+    }
     // Rooms that leak.
     let rs = rooms(&plan, &sp)?;
     let mut reported: Vec<(Handle, Handle)> = Vec::new();
@@ -301,7 +461,11 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
                 handles: vec![r.tag],
             }),
             Some(q) => {
-                for o in rs.iter().filter(|o| o.tag != r.tag && !o.name.eq_ignore_ascii_case(&r.name) && cadaddy_geom::point_in_polygon(q, o.at)) {
+                // Names run into names, numbers into numbers.
+                let joined = |o: &&Room| {
+                    o.tag != r.tag && o.number == r.number && !o.name.eq_ignore_ascii_case(&r.name) && cadaddy_geom::point_in_polygon(q, o.at)
+                };
+                for o in rs.iter().filter(joined) {
                     let key = if r.tag.0 < o.tag.0 { (r.tag, o.tag) } else { (o.tag, r.tag) };
                     if reported.contains(&key) {
                         continue;
@@ -350,26 +514,14 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
             });
         }
     }
-    let boxes: Vec<Bounds2> = walls.iter().map(|(_, f)| f.bounds()).collect();
-    for i in 0..walls.len() {
-        for j in i + 1..walls.len() {
-            let (Some((a, fa)), Some((b, fb)), Some(ba), Some(bb)) = (walls.get(i), walls.get(j), boxes.get(i), boxes.get(j)) else { continue };
-            if a.level != b.level || !ba.intersects(bb) || fa.z1 <= fb.z0 || fb.z1 <= fa.z0 {
-                continue;
-            }
-            let area: f64 = fa.polys.iter().flat_map(|p| fb.polys.iter().map(move |q| cadaddy_geom::shoelace(&clip_convex(p, q)).abs())).sum();
-            // Walls meeting at a corner or a tee share about one thickness squared.
-            let (ta, tb) = (fa.thickness(), fb.thickness());
-            if ta.is_finite() && tb.is_finite() && area > 1.5 * ta.max(tb) * ta.max(tb) {
-                push(Finding {
-                    kind: "walls_overlap",
-                    message: format!("two walls overlap over {:.1} sq ft", area / (upf * upf)),
-                    level: Some(a.level.clone()),
-                    at: Some(ba.intersection(bb).center()).filter(|c| c.is_finite()),
-                    handles: vec![a.handle, b.handle],
-                });
-            }
-        }
+    for o in overlaps(&walls) {
+        push(Finding {
+            kind: "walls_overlap",
+            message: format!("two walls overlap over {:.1} sq ft", o.area / (upf * upf)),
+            level: Some(o.level),
+            at: Some(o.at).filter(|c| c.is_finite()),
+            handles: o.handles.to_vec(),
+        });
     }
     // Fixtures above their room's ceiling or below the floor.
     let scene = cadaddy_walk3d::derive(pd, &sp.to_rules());
@@ -465,6 +617,13 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
     Ok(out)
 }
 
+/// How far a plan point is outside a box (0 inside).
+fn shell_dist(b: &Bounds2, p: Vec2) -> f64 {
+    let dx = (b.min.x - p.x).max(p.x - b.max.x).max(0.0);
+    let dy = (b.min.y - p.y).max(p.y - b.max.y).max(0.0);
+    dx.hypot(dy)
+}
+
 fn feet(v: f64, upf: f64) -> String {
     feet_str(v / upf)
 }
@@ -500,8 +659,41 @@ fn run_issues(s: &mut Session, p: &Value) -> Result<Value> {
     if from.saturating_add(limit) < matching.len() {
         out["next"] = json!(from + limit);
     }
+    // BCF in the same call: a topic per matching issue (its objects selected), then the file.
+    let path = str_param(p, "bcf_path").map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
+    if bool_or(p, "bcf", false) || path.is_some() {
+        let picked: Vec<Value> = matching
+            .iter()
+            .take(MAX_BCF)
+            .map(|f| {
+                let mut labels = vec![json!(f.kind)];
+                if let Some(l) = &f.level {
+                    labels.push(json!(format!("level {l}")));
+                }
+                json!({
+                    "title": f.message.chars().take(200).collect::<String>(), "description": f.message, "type": "Issue", "labels": labels,
+                    "selection": f.handles.iter().filter(|h| h.0 != 0).take(MAX_HANDLES).map(|h| h.hex()).collect::<Vec<_>>(), "snapshot": false,
+                })
+            })
+            .collect();
+        let mut topics: Vec<Value> = Vec::new();
+        for t in &picked {
+            let r = s.execute("bcf.create", t).map_err(|e| bad("model.issues", format!("BCF: {e}")))?;
+            topics.push(r["guid"].clone());
+        }
+        let mut bcf = json!({ "created": topics.len(), "topics": topics, "skipped": matching.len().saturating_sub(picked.len()) });
+        if let Some(path) = path {
+            let r =
+                s.execute("bcf.export", &json!({ "path": path, "topics": topics })).map_err(|e| bad("model.issues", format!("BCF export: {e}")))?;
+            bcf["path"] = r["path"].clone();
+        }
+        out["bcf"] = bcf;
+    }
     Ok(out)
 }
+
+/// BCF topics one `model.issues` call makes, at most.
+const MAX_BCF: usize = 500;
 
 /// Issues per `model.issues` answer by default, and at most.
 const ISSUES_PAGE: usize = 100;
@@ -545,11 +737,15 @@ fn vec3(p: &Value, key: &str) -> Result<Option<Vec3>> {
 }
 
 fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
-    use cadaddy_render::shade::{VisualStyle, fit, rasterize, scene};
+    use cadaddy_render::model3::{self, Aabb};
+    use cadaddy_render::shade::{VisualStyle, fit, fit_bounds, rasterize};
+    use std::sync::atomic::AtomicUsize;
     let (w, h) = size(p, 800, 600);
+    // The BIM view's look unless another style is asked for.
+    let bim = str_param(p, "style").is_none_or(|n| n.trim().eq_ignore_ascii_case("bim"));
     let style = match str_param(p, "style") {
-        Some(n) => VisualStyle::parse(n).ok_or_else(|| bad("model.render", format!("unknown style {n}")))?,
-        None => VisualStyle::Realistic,
+        Some(n) if !bim => VisualStyle::parse(n).ok_or_else(|| bad("model.render", format!("unknown style {n} (bim, realistic, shaded…)")))?,
+        _ => VisualStyle::ShadedEdges,
     };
     let (sp, _) = current(s, "model.render")?;
     let upf = units(&sp);
@@ -582,25 +778,93 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     let target = vec3(p, "target")?;
     // Only the built model: a level's or room's objects without their ceilings (to see in).
     let only = level.clone().or_else(|| room.as_ref().map(|r| r.1.clone()));
+    // A level's floor: the slab over it (the next level's floor, tagged with this one) is left
+    // out like its ceilings.
+    let floor_z = only.as_ref().and_then(|l| sp.level(l)).map(|l| l.elevation_ft * upf);
+    let over = |b: &Built| {
+        let z0 = b.mesh.vertices.iter().map(|v| v.z).fold(f64::INFINITY, f64::min);
+        b.part == "floor" && floor_z.is_some_and(|f| z0.is_finite() && z0 > f + upf)
+    };
     let keep: Vec<Handle> = made
         .iter()
-        .filter(|b| only.as_ref().is_none_or(|l| b.level.eq_ignore_ascii_case(l) && b.part != "ceiling" && b.part != "ground"))
+        .filter(|b| only.as_ref().is_none_or(|l| b.level.eq_ignore_ascii_case(l) && b.part != "ceiling" && b.part != "ground" && !over(b)))
         .map(|b| b.handle)
         .collect();
-    let mut md = Drawing::new_imperial();
-    md.layers = d.layers.clone();
-    for h in &keep {
-        if let Some(e) = d.model.get(*h) {
-            md.model.push((**e).clone());
+    // The whole building: its storeys stacked, framed on what it stands as (walls, floors,
+    // columns, roofs); a reader's stray object off the building (model.issues lists it as
+    // outside_building) never shrinks the building to a speck in the corner of the view.
+    let whole = only.is_none() && eye.is_none() && p.get("around").is_none_or(Value::is_null) && p.get("mark").is_none_or(Value::is_null);
+    let md = if bim {
+        // Trade colours; the shell ghosted for a view from outside (`ghost`, else as the view
+        // has it), solid for a camera or a room seen from inside.
+        let mut look = super::bimlook::Look::of(d);
+        look.level = None;
+        look.sheet = false;
+        let inside = room.is_some() || eye.is_some();
+        let ghost = match p.get("ghost").and_then(Value::as_bool) {
+            Some(g) => g,
+            None => !inside && super::bimlook::ghosting(d, &look),
+        };
+        // The whole building stacks its storeys; a level, a room, a plan box, a mark or a camera
+        // are on the sheet's (and the built model's) own coordinates.
+        let keep: std::collections::HashSet<Handle> = keep.iter().copied().collect();
+        super::bimlook::compose(d, &look, ghost, whole, &|e, _| keep.contains(&e.handle))
+    } else {
+        let mut md = Drawing::new_imperial();
+        md.layers = d.layers.clone();
+        let offsets = if whole { super::bimlook::stack_offsets(d) } else { Vec::new() };
+        for h in &keep {
+            if let Some(e) = d.model.get(*h) {
+                let mut c = (**e).clone();
+                let level = made_level(e).unwrap_or_default();
+                if let Some(o) = super::bimlook::stack_move(offsets.iter().find(|(n, _)| n.eq_ignore_ascii_case(&level)).map(|o| o.1), e) {
+                    c.kind.transform(&cadaddy_geom::Mat3::translate(o));
+                }
+                md.model.push(c);
+            }
         }
-    }
+        md
+    };
+    // Frame for outlier-resistant view fitting: the building's shell (walls, floors, columns,
+    // roofs) on the whole building or on a single level, expanded by a margin.  Elements outside
+    // the frame are outliers (model.issues lists them as outside_building); the frame keeps the
+    // building in the centre of the image and outliers don't shrink it to a speck.
+    let (frame, outliers) = if whole || only.is_some() {
+        let (by_level, all_shell) = shell_boxes(&md);
+        let shell = if whole {
+            all_shell
+        } else if let Some(ln) = only.as_ref() {
+            by_level.iter().find(|(n, _)| n.eq_ignore_ascii_case(ln)).map_or(Bounds2::EMPTY, |(_, b)| *b)
+        } else {
+            Bounds2::EMPTY
+        };
+        let framed = (!shell.is_empty()).then(|| shell.expand(shell_margin(&shell, upf)));
+        // Count outliers: built objects whose plan bounds are entirely outside the frame.
+        let n_outliers = framed.as_ref().map_or(0, |f| {
+            md.model
+                .iter()
+                .filter(|e| {
+                    let b = cadaddy_doc::entity_bounds(&md, e, 0);
+                    !b.is_empty() && (b.max.x < f.min.x || b.min.x > f.max.x || b.max.y < f.min.y || b.min.y > f.max.y)
+                })
+                .count()
+        });
+        (framed, n_outliers)
+    } else {
+        (None, 0)
+    };
+    // Build the 3D model with instancing, LOD and spatial chunking instead of tessellating every
+    // entity into a flat triangle list.  Block references that share a block become instances
+    // (one set of triangles placed many times); each prototype has three levels of detail (full,
+    // simplified, bounding box); the base is split into spatial chunks for view culling.
     let ext = md.extents(&Space::Model);
     let size = ext.width().max(ext.height());
     let tol = if size.is_finite() && size > 0.0 { size / 1500.0 } else { 1.0 };
     let bg = cadaddy_color::Rgb(255, 255, 255);
-    let mut sc = scene(&md, &Space::Model, tol, bg);
+    let (progress, total) = (AtomicUsize::new(0), AtomicUsize::new(0));
+    let m3 = model3::build(&md, &Space::Model, tol, bg, &progress, &total);
     // Half-spaces `n · p >= c` the view keeps: a room's box (a foot round its outline), the
-    // space in front of a camera.
+    // space in front of a camera, the building's frame.
     let mut keep_in: Vec<(Vec3, f64)> = Vec::new();
     if let Some((outline, _)) = &room {
         let b = Bounds2::from_points(outline.iter().copied()).expand(upf);
@@ -623,6 +887,14 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         (Some(_), None) | (None, Some(_)) => return Err(bad("model.render", "a camera pose needs both `eye` and `target`")),
         _ => vec3(p, "dir")?.unwrap_or(Vec3::new(-1.0, -1.0, 1.0)),
     };
+    if let Some(b) = &frame {
+        keep_in.extend([
+            (Vec3::new(1.0, 0.0, 0.0), b.min.x),
+            (Vec3::new(-1.0, 0.0, 0.0), -b.max.x),
+            (Vec3::new(0.0, 1.0, 0.0), b.min.y),
+            (Vec3::new(0.0, -1.0, 0.0), -b.max.y),
+        ]);
+    }
     // A plan box round a place: only the model inside it.
     if let Some(a) = p.get("around").filter(|v| !v.is_null()) {
         let n: Vec<f64> = a.as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
@@ -637,13 +909,36 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
             (Vec3::new(0.0, -1.0, 0.0), -y0.max(y1)),
         ]);
     }
+    let proj = Projection::new(dir);
+    // Compute the view from the frame (if framing) or the model's bounds, not from the full
+    // triangle list — this lets us pick LODs and cull before flattening the scene.
+    let view_bounds = frame
+        .as_ref()
+        .map(|f| Aabb {
+            lo: Vec3::new(f.min.x, f.min.y, if m3.bounds.lo.z.is_finite() { m3.bounds.lo.z } else { 0.0 }),
+            hi: Vec3::new(f.max.x, f.max.y, if m3.bounds.hi.z.is_finite() { m3.bounds.hi.z } else { 1.0 }),
+        })
+        .unwrap_or(m3.bounds);
+    let initial_view = fit_bounds(&view_bounds, proj, w, h);
+    // Cull and pick LODs; flatten only the visible parts into a triangle list.
+    let mut sc = if let Some(iv) = &initial_view {
+        let vis = m3.visible(iv);
+        m3.flatten_visible(&vis)
+    } else {
+        m3.flatten()
+    };
+    // Clip by the half-spaces (room box, camera front, building frame, plan box).
     if !keep_in.is_empty() {
         let tris = std::mem::take(&mut sc.tris);
         for t in tris {
             let poly = clip_tri(&t.p, &keep_in);
             for k in 1..poly.len().saturating_sub(1) {
                 if let (Some(a), Some(b), Some(c)) = (poly.first(), poly.get(k), poly.get(k + 1)) {
-                    sc.tris.push(cadaddy_render::shade::Tri::plain([*a, *b, *c], t.color));
+                    sc.tris.push(if bim {
+                        cadaddy_render::shade::Tri { p: [*a, *b, *c], ..t }
+                    } else {
+                        cadaddy_render::shade::Tri::plain([*a, *b, *c], t.color)
+                    });
                 }
             }
         }
@@ -654,7 +949,6 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    let proj = Projection::new(dir);
     if sc.tris.is_empty() && sc.lines.is_empty() {
         return Err(bad("model.render", "nothing of the model is in view"));
     }
@@ -671,14 +965,29 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
             sc.tris.push(cadaddy_render::shade::Tri::plain([at(*a, z0), at(*b, z0), at(*b, top)], red));
             sc.tris.push(cadaddy_render::shade::Tri::plain([at(*a, z0), at(*b, top), at(*a, top)], red));
         }
-        let [a, b, cc, d] = c;
+        let [a, b, cc, dd] = c;
         sc.tris.push(cadaddy_render::shade::Tri::plain([at(a, top), at(b, top), at(cc, top)], red));
-        sc.tris.push(cadaddy_render::shade::Tri::plain([at(a, top), at(cc, top), at(d, top)], red));
+        sc.tris.push(cadaddy_render::shade::Tri::plain([at(a, top), at(cc, top), at(dd, top)], red));
     }
+    // Final fit on the clipped scene for pixel-precise framing.
     let view = fit(&sc, proj, w, h).ok_or_else(|| bad("model.render", "nothing to fit in the view"))?;
-    let raster = rasterize(&sc, &view, style, bg);
+    let raster = if bim {
+        cadaddy_render::bimview::rasterize_bim(&sc, &view, bg, &cadaddy_render::bimview::BimShade::default())
+    } else {
+        rasterize(&sc, &view, style, bg)
+    };
     let png = raster.encode_png().ok_or_else(|| bad("model.render", "the image couldn't be encoded"))?;
-    let mut out = json!({ "width": view.width_px, "height": view.height_px, "triangles": sc.tris.len() });
+    let mut out = json!({
+        "width": view.width_px,
+        "height": view.height_px,
+        "triangles": sc.tris.len(),
+        "instances": m3.instances.len(),
+        "prototypes": m3.protos.len(),
+        "style": if bim { "bim" } else { style.name() },
+    });
+    if outliers > 0 {
+        out["outliers"] = json!(outliers);
+    }
     deliver(png, p, &mut out)?;
     Ok(out)
 }
@@ -842,10 +1151,20 @@ fn run_counts(s: &mut Session, _p: &Value) -> Result<Value> {
     let scene = cadaddy_walk3d::derive(pd, &sp.to_rules());
     let mut rows: Vec<Value> = Vec::new();
     let ops = plan_openings(pd, &sp, &ents);
+    let plan_handles: std::collections::HashSet<Handle> = ents.iter().map(|e| e.handle).collect();
     let mut all_match = true;
     for (li, l) in sp.levels.iter().enumerate() {
         let here = |p: Vec2| level_at(&sp.levels, p.x, p.y).is_some_and(|x| x.name.eq_ignore_ascii_case(&l.name));
-        let plan_doors = ops.iter().filter(|o| o.kind == "door" && here(o.at)).count();
+        // The plan's doors: the swings and door blocks read here, and the swings the build read
+        // (a built door's source, when it is a plan object) — one door per plan object.
+        let mut door_objects: std::collections::HashSet<Handle> = ops.iter().filter(|o| o.kind == "door" && here(o.at)).map(|o| o.handle).collect();
+        let read_here = door_objects.len();
+        for b in made.iter().filter(|b| b.part == "door" && b.level.eq_ignore_ascii_case(&l.name) && b.source.0 != 0) {
+            if plan_handles.contains(&b.source) {
+                door_objects.insert(b.source);
+            }
+        }
+        let plan_doors = door_objects.len();
         let plan_windows = ops.iter().filter(|o| o.kind == "window" && here(o.at)).count();
         let plan_fixtures = ents
             .iter()
@@ -861,7 +1180,7 @@ fn run_counts(s: &mut Session, _p: &Value) -> Result<Value> {
         all_match &= ok;
         rows.push(json!({
             "level": l.name,
-            "plan": {"doors": plan_doors, "windows": plan_windows, "fixtures": plan_fixtures},
+            "plan": {"doors": plan_doors, "windows": plan_windows, "fixtures": plan_fixtures, "door_swings_read": read_here},
             "model": {"doors": on("door"), "windows": on("window"), "fixtures": model_fixtures},
             "match": ok,
         }));

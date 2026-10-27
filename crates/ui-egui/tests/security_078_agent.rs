@@ -98,8 +98,28 @@ fn an_agent_cannot_open_the_control_channel_wider_or_stop_updates() {
         assert!(error(&v).contains("Only the user"), "{params}: {v}");
     }
     assert_eq!((app.ui.control_token, app.ui.agent_control), (token, agents));
+    // `ui.set` writes the same state, so it goes through the same rail (Q207 rework: it didn't).
+    const ONLY_USER: &str = "Only the user can change agentControl, controlToken or checkForUpdates (Options), not an agent.";
+    for params in [
+        json!({ "controlToken": !token }),
+        json!({ "agentControl": !agents }),
+        json!({ "controlToken": !token, "showPalettes": !app.ui.show_palettes }),
+        json!({ "checkForUpdates": false }),
+    ] {
+        let v = call(&mut app, "ui.set", params.clone());
+        assert_eq!(error(&v), ONLY_USER, "{params}: {v}");
+    }
+    assert_eq!((app.ui.control_token, app.ui.agent_control), (token, agents));
     // Other preferences an agent may set; the user may set these too.
     assert_eq!(exec(&mut app, "options", json!({ "theme": "dark" }))["ok"], true);
+    let palettes = app.ui.show_palettes;
+    let v = call(&mut app, "ui.set", json!({ "showPalettes": !palettes }));
+    assert_eq!(error(&v), "", "{v}");
+    assert_eq!(app.ui.show_palettes, !palettes);
+    // Restating the current value is no change.
+    let v = call(&mut app, "ui.set", json!({ "controlToken": token, "agentControl": agents }));
+    assert_eq!(error(&v), "", "{v}");
+    assert_eq!((app.ui.control_token, app.ui.agent_control, app.ui.show_palettes), (token, agents, !palettes));
     app.run("options", json!({ "controlToken": !token })).unwrap();
     assert_eq!(app.ui.control_token, !token);
 }

@@ -6,6 +6,8 @@
 //!   exists; viewports carry its (null) handle.
 //! - R2018: the auxiliary header's maintenance versions are longs.
 //! - R2013+: fit splines say they use the knot parameterization that follows.
+//! - STYLE records store the shape-file bit before the vertical bit (the ODA's converter read
+//!   the other order as an unnamed vertical font and wouldn't write the file out as DXF).
 //! - The bridge's R2000/R2004 image definitions list their reactors (LibreCAD's reader couldn't
 //!   read a drawing with an image without them).
 //! - Underlays the ODA's converter named PDFREFERENCE read back, from DXF and through the bridge;
@@ -105,6 +107,47 @@ fn fit_splines_say_their_knot_parameterization_follows() {
         let scenario = o.d.bl().unwrap();
         let flags = o.d.bl().unwrap();
         assert_eq!((scenario, flags), (2, 1 | 8), "{code}");
+    }
+}
+
+#[test]
+fn style_records_store_the_shape_file_bit_before_vertical() {
+    let mut d = Drawing::new_imperial();
+    d.shape_files.push("made-up.shx".into());
+    let mut tall = d.text_styles.first().cloned().unwrap();
+    tall.name = "Tall".into();
+    tall.vertical = true;
+    d.text_styles.push(tall);
+    for (code, v) in [
+        ("AC1015", cadaddy_dwgcodec::Version::R2000),
+        ("AC1018", cadaddy_dwgcodec::Version::R2004),
+        ("AC1021", cadaddy_dwgcodec::Version::R2007),
+        ("AC1024", cadaddy_dwgcodec::Version::R2010),
+        ("AC1027", cadaddy_dwgcodec::Version::R2013),
+        ("AC1032", cadaddy_dwgcodec::Version::R2018),
+    ] {
+        let dwg = native(&d, code);
+        let mut bits = std::collections::BTreeMap::new();
+        for raw in dwg.objects.iter().filter(|o| o.type_code == 53) {
+            let mut o = Obj::open(raw, v).unwrap();
+            entities::object_common(&mut o).unwrap();
+            let name = o.text().unwrap();
+            o.d.b().unwrap();
+            if !o.at_least(cadaddy_dwgcodec::Version::R2007) {
+                o.d.bs().unwrap();
+            }
+            o.d.b().unwrap();
+            // (shape file, vertical)
+            bits.insert(name, (o.d.b().unwrap(), o.d.b().unwrap()));
+        }
+        let want: std::collections::BTreeMap<String, (bool, bool)> =
+            [("", (true, false)), ("Standard", (false, false)), ("Tall", (false, true))].map(|(n, b)| (n.to_string(), b)).into();
+        assert_eq!(bits, want, "{code}");
+        // And they read back as a shape file (70 bit 1) and a vertical style (70 bit 4).
+        let back = cadaddy_io::read(&cadaddy_io::dwg_write::write(&d, code).unwrap().0, "made-up.dwg").unwrap();
+        assert!(back.shape_files.iter().any(|f| f.eq_ignore_ascii_case("made-up.shx")), "{code}: {:?}", back.shape_files);
+        assert!(back.text_styles.iter().any(|s| s.name == "Tall" && s.vertical), "{code}");
+        assert!(back.text_styles.iter().all(|s| !s.name.is_empty()), "{code}: a shape file read as a text style");
     }
 }
 

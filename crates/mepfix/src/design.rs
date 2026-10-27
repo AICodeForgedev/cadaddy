@@ -210,7 +210,13 @@ pub struct Design {
 }
 
 pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
-    let mut t = Truth { schema: SCHEMA.into(), seed, ..Truth::default() };
+    design_scheduled(seed, st, r, 4.0, 4.0)
+}
+
+/// Like [`design`] but with custom sprinkler head schedule values (inches).
+pub fn design_scheduled(seed: u64, st: &Style, r: &mut Rng, fp_sprig_in: f64, fp_sidewall_below_in: f64) -> Design {
+    let mut t =
+        Truth { schema: SCHEMA.into(), seed, fp_sprig_in: Some(fp_sprig_in), fp_sidewall_below_in: Some(fp_sidewall_below_in), ..Truth::default() };
     let names = ["HARBOR POINT", "MAPLE CROSSING", "CEDAR HOLLOW", "BLUE HERON", "RIVERSTONE", "OAK MEADOW", "IRON BRIDGE", "WILLOW BEND"];
     let kinds = ["OFFICE BUILDING", "COMMONS", "BUSINESS CENTER", "OFFICE PAVILION"];
     t.project = format!("{} {}", r.pick(&names), r.pick(&kinds));
@@ -624,7 +630,8 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
     // Heads offset from their branch line on armovers; sidewall heads along the corridor.
     let armovers = sprk.chance(0.5);
     let sidewall = sprk.chance(0.4);
-    let sprig = 4.0 / 12.0;
+    let sprig = t.fp_sprig_in.unwrap_or(4.0) / 12.0;
+    let sw_offset = t.fp_sidewall_below_in.unwrap_or(4.0) / 12.0;
     let set_mount = |t: &mut Truth, id: &str, mount: &str, tag: &str| {
         if let Some(tm) = t.terminals.iter_mut().find(|x| x.id == id) {
             tm.mount = Some(mount.into());
@@ -968,7 +975,7 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
                     let wy = y2 - 0.33;
                     let a = net.node("", "FP", lv, [*x, wy, fz]);
                     net.link(n, a, "FP", "pipe", [1.0, 1.0], lv, &fsheet);
-                    (a, [*x, wy, e + f.corr_clg - sprig], "sidewall", "SH-3")
+                    (a, [*x, wy, e + f.corr_clg - sw_offset], "sidewall", "SH-3")
                 } else {
                     (n, [*x, y_fp, e + f.corr_clg], "pendent", "SH-1")
                 };
@@ -1461,10 +1468,11 @@ pub fn design(seed: u64, st: &Style, r: &mut Rng) -> Design {
     // ---- Walls, devices, rough-ins, in-wall coordination ----------------------------------
     generate_walls(&mut t);
     assign_fixture_walls(&mut t);
-    generate_rough_ins(&mut t);
+    let ri_rules = RoughInRules::default_rules();
+    generate_rough_ins(&mut t, &ri_rules);
     let plant_inwall = r.chance(0.7);
     let plant_inwall_level = r.pick(&["1", "2"]);
-    generate_devices(&mut t, &mut planted, plant_inwall, plant_inwall_level, r);
+    generate_devices(&mut t, &mut planted, plant_inwall, plant_inwall_level, &ri_rules, r);
     // ---- Architectural sections and elevations (for callouts, Q306) -------------------------
     let mid_bay = width / 2.0;
     let mid_depth = y3 / 2.0;
@@ -1646,12 +1654,16 @@ fn point_to_segment_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     ((p[0] - proj[0]).powi(2) + (p[1] - proj[1]).powi(2)).sqrt()
 }
 
-/// Generate in-wall rough-in stubs behind each plumbing fixture according to the default rules.
-fn generate_rough_ins(t: &mut Truth) {
-    let rules = RoughInRules::default_rules();
+/// Generate in-wall rough-in stubs behind each plumbing fixture according to the given rules.
+/// Vents and waste stacks are modelled as vertical runs through the cavity — vents from the
+/// stub height up to the ceiling, waste stacks from the floor through the ceiling — so any
+/// device in that cavity at any height will clash.
+fn generate_rough_ins(t: &mut Truth, rules: &RoughInRules) {
     let fixtures = t.fixtures.clone();
     let walls = t.building.walls.clone();
+    let rooms = t.building.rooms.clone();
     let mut rough_ins = Vec::new();
+    let mut stack_n = 0usize;
 
     for fx in &fixtures {
         let Some(wall_id) = fx.wall.as_ref() else { continue };
@@ -1661,16 +1673,37 @@ fn generate_rough_ins(t: &mut Truth) {
         let elev = t.level(&fx.level).map_or(0.0, |l| l.elevation_ft);
         let along_in = project_onto_wall(wall, [fx.at_ft[0], fx.at_ft[1]]);
 
+        // Ceiling height for this fixture's room (default 96" = 8').
+        let ceiling_in = rooms
+            .iter()
+            .find(|r| r.level == fx.level && (r.number == fx.room || r.id == fx.room))
+            .and_then(|r| r.ceiling.as_ref())
+            .map_or(96.0, |c| c.height_ft * 12.0);
+
+        // One stack per fixture (groups the vent + waste verticals).
+        stack_n += 1;
+        let stack_id = format!("STK{stack_n:03}");
+
         for stub in &rule.stubs {
             let offset_along = along_in + stub.offset_in;
             let cavity = stud_cavity_at(offset_along, wall.stud_spacing_in);
             let z = elev + stub.aff_in / 12.0;
-            // Project back to building coordinates.
             let dx = wall.to_ft[0] - wall.from_ft[0];
             let dy = wall.to_ft[1] - wall.from_ft[1];
             let len = (dx * dx + dy * dy).sqrt();
             let frac = if len > 1e-12 { offset_along / (len * 12.0) } else { 0.0 };
             let at = [wall.from_ft[0] + frac * dx, wall.from_ft[1] + frac * dy, z];
+
+            let od = pipe_od(stub.size_in);
+            // Vertical run extent depends on the stub kind:
+            // - vent: runs from the stub height up to the ceiling (or above)
+            // - waste at floor: runs from floor (0) to a few inches above the connection
+            // - supply: just the stub point ± half the pipe OD
+            let (run_bottom, run_top, stack) = match stub.kind.as_str() {
+                "vent" => (stub.aff_in, ceiling_in, stack_id.clone()),
+                "waste" if stub.aff_in < 1.0 => (0.0, ceiling_in, stack_id.clone()),
+                _ => (stub.aff_in - od / 2.0, stub.aff_in + od / 2.0, String::new()),
+            };
 
             let id = format!("RI{:03}", rough_ins.len() + 1);
             rough_ins.push(RoughIn {
@@ -1685,6 +1718,10 @@ fn generate_rough_ins(t: &mut Truth) {
                 offset_in: stub.offset_in,
                 stud_cavity: cavity,
                 assumed: true,
+                run_bottom_in: run_bottom,
+                run_top_in: run_top,
+                stack,
+                source: stub.id.clone(),
             });
         }
     }
@@ -1694,56 +1731,82 @@ fn generate_rough_ins(t: &mut Truth) {
 /// Generate electrical devices (receptacles, switches) on the walls of each room.
 /// NEC requires a duplex outlet within 6 ft of any point along a wall (≈ every 12 ft of wall)
 /// and a switch near each door (we place one per room).
-/// When `plant_inwall` is true, one device on `plant_level` is placed deliberately behind a
-/// plumbing fixture so it shares a stud cavity with a rough-in (planted in-wall clash).
-fn generate_devices(t: &mut Truth, planted: &mut Vec<String>, plant_inwall: bool, plant_level: &str, r: &mut Rng) {
+/// When `plant_inwall` is true, several devices are planted in conflict with rough-in stubs
+/// (receptacle in waste cavity, switch in vent cavity).  Near-misses (close but not clashing)
+/// are also planted to verify the detector does not over-flag.
+fn generate_devices(t: &mut Truth, planted: &mut Vec<String>, plant_inwall: bool, plant_level: &str, rules: &RoughInRules, r: &mut Rng) {
     let walls = t.building.walls.clone();
+    let clearance = rules.clearance_in;
     let mut devices = Vec::new();
     let mut dev_n = 0usize;
-    let mut planted_one = false;
+    let mut planted_receptacle = false;
+    let mut planted_switch_vent = false;
+    // Track near-miss device ids so tests can verify they are NOT flagged.
+    let mut near_miss_ids: Vec<String> = Vec::new();
 
     for lv_code in ["1", "2"] {
         let rooms: Vec<Room> = t.building.rooms.iter().filter(|r| r.level == lv_code).cloned().collect();
         let esheet = format!("E-30{lv_code}");
 
         for rm in &rooms {
-            // Skip the mech room (no general outlets).
             if rm.name == "MECH" {
                 continue;
             }
-            // Get all walls of this room.
             let room_walls: Vec<&Wall> = walls.iter().filter(|w| w.level == lv_code && (w.sides[0] == rm.id || w.sides[1] == rm.id)).collect();
 
-            // Place a switch on the first interior wall (near the corridor side).
-            if let Some(sw_wall) = room_walls.iter().find(|w| w.sides[0] != "EXT" && w.sides[1] != "EXT") {
-                dev_n += 1;
-                let along = 6.0; // 6" from the wall start (near the door)
-                let frac = along / wall_length_in(sw_wall).max(1.0);
-                let dx = sw_wall.to_ft[0] - sw_wall.from_ft[0];
-                let dy = sw_wall.to_ft[1] - sw_wall.from_ft[1];
-                let at = [sw_wall.from_ft[0] + frac * dx, sw_wall.from_ft[1] + frac * dy];
-                devices.push(Device {
-                    id: format!("D{dev_n:03}"),
-                    tag: format!("S-{lv_code}-{dev_n:02}"),
-                    kind: "switch".into(),
-                    level: lv_code.into(),
-                    room: rm.number.clone(),
-                    wall: sw_wall.id.clone(),
-                    at_ft: at.map(r6),
-                    aff_in: 48.0,
-                    box_in: [2.75, 4.5, 3.5],
-                    stud_cavity: stud_cavity_at(along, sw_wall.stud_spacing_in),
-                    fixed: true,
-                    sheet: esheet.clone(),
-                });
+            // ---- Switch ----
+            // Place on the first interior wall.  When planting, put it on a wall with a vent
+            // cavity (the fixture's back wall) so a switch at +48" clashes with the vent riser.
+            {
+                // Default switch wall: first interior wall.
+                let default_sw = room_walls.iter().find(|w| w.sides[0] != "EXT" && w.sides[1] != "EXT");
+                // For planting: find any room wall that has a vent rough-in.
+                let want_plant_sw = plant_inwall && !planted_switch_vent && lv_code == plant_level && is_toilet_room(&rm.name);
+                let vent_wall = if want_plant_sw { room_walls.iter().find(|w| vent_cavity_on_wall(t, &w.id).is_some()) } else { None };
+                let sw_wall = vent_wall.or(default_sw);
+                if let Some(sw_wall) = sw_wall {
+                    let sw_len = wall_length_in(sw_wall);
+                    let mut along = 6.0;
+                    let mut cavity = stud_cavity_at(along, sw_wall.stud_spacing_in);
+                    let actually_plant = want_plant_sw && vent_wall.is_some();
+                    if actually_plant && let Some(vc) = vent_cavity_on_wall(t, &sw_wall.id) {
+                        cavity = vc;
+                        along = (vc as f64 + 0.5) * sw_wall.stud_spacing_in;
+                    }
+                    let frac = along / sw_len.max(1.0);
+                    let dx = sw_wall.to_ft[0] - sw_wall.from_ft[0];
+                    let dy = sw_wall.to_ft[1] - sw_wall.from_ft[1];
+                    let at = [sw_wall.from_ft[0] + frac * dx, sw_wall.from_ft[1] + frac * dy];
+                    let diag = diag_offset(at, sw_wall, 0.4);
+                    dev_n += 1;
+                    let id = format!("D{dev_n:03}");
+                    if actually_plant {
+                        planted.push(id.clone());
+                        planted_switch_vent = true;
+                    }
+                    devices.push(Device {
+                        id,
+                        tag: format!("S-{lv_code}-{dev_n:02}"),
+                        kind: "switch".into(),
+                        level: lv_code.into(),
+                        room: rm.number.clone(),
+                        wall: sw_wall.id.clone(),
+                        at_ft: at.map(r6),
+                        diag_ft: diag.map(r6),
+                        aff_in: 48.0,
+                        box_in: [2.75, 4.5, 3.5],
+                        stud_cavity: cavity,
+                        fixed: true,
+                        sheet: esheet.clone(),
+                    });
+                }
             }
 
-            // Place receptacles: one per 12 ft of wall, on walls with enough length.
-            // Avoid stud cavities that already have a rough-in stub, unless planting a clash.
+            // ---- Receptacles ----
             for wall in &room_walls {
                 let len = wall_length_in(wall);
                 if len < 24.0 {
-                    continue; // too short for an outlet
+                    continue;
                 }
                 let count = ((len / (12.0 * 12.0)).ceil() as usize).max(1);
                 let spacing = len / (count as f64 + 1.0);
@@ -1751,20 +1814,81 @@ fn generate_devices(t: &mut Truth, planted: &mut Vec<String>, plant_inwall: bool
                     let along = spacing * (k as f64 + 1.0);
                     let cavity = stud_cavity_at(along, wall.stud_spacing_in);
 
-                    // Should we plant an in-wall clash here?
+                    // Plant: receptacle in a waste cavity.
                     let want_plant = plant_inwall
-                        && !planted_one
+                        && !planted_receptacle
                         && lv_code == plant_level
                         && is_toilet_room(&rm.name)
                         && has_roughin_in_cavity(t, &wall.id, cavity);
 
-                    // Skip cavities with rough-ins unless planting a clash.
-                    let in_roughin_zone = is_near_roughin(t, &wall.id, cavity, 1);
+                    let in_roughin_zone = is_near_roughin_inches(t, &wall.id, along, clearance, wall.stud_spacing_in, len);
                     if in_roughin_zone && !want_plant {
-                        // Shift the outlet to the next clear cavity.
+                        // Try to place a near-miss: in adjacent cavity but > clearance away.
+                        let near_miss = find_near_miss_cavity(t, &wall.id, cavity, wall.stud_spacing_in, len, clearance);
+                        if let Some((nm_cav, nm_along)) = near_miss {
+                            if !near_miss_ids.is_empty() || !r.chance(0.3) {
+                                // Already planted a near-miss or random skip: shift to a clear spot.
+                                let shifted = find_clear_cavity(t, &wall.id, cavity, wall.stud_spacing_in, len);
+                                if shifted == cavity {
+                                    continue;
+                                }
+                                let new_along = (shifted as f64 + 0.5) * wall.stud_spacing_in;
+                                if new_along > len || new_along < 0.0 {
+                                    continue;
+                                }
+                                let frac = new_along / len;
+                                let dx = wall.to_ft[0] - wall.from_ft[0];
+                                let dy = wall.to_ft[1] - wall.from_ft[1];
+                                let at = [wall.from_ft[0] + frac * dx, wall.from_ft[1] + frac * dy];
+                                let diag = diag_offset(at, wall, 0.3);
+                                dev_n += 1;
+                                devices.push(Device {
+                                    id: format!("D{dev_n:03}"),
+                                    tag: format!("R-{lv_code}-{dev_n:02}"),
+                                    kind: "receptacle".into(),
+                                    level: lv_code.into(),
+                                    room: rm.number.clone(),
+                                    wall: wall.id.clone(),
+                                    at_ft: at.map(r6),
+                                    diag_ft: diag.map(r6),
+                                    aff_in: 18.0,
+                                    box_in: [2.75, 4.5, 3.5],
+                                    stud_cavity: shifted,
+                                    fixed: r.chance(0.7),
+                                    sheet: esheet.clone(),
+                                });
+                                continue;
+                            }
+                            // Plant a near-miss.
+                            let frac = nm_along / len;
+                            let dx = wall.to_ft[0] - wall.from_ft[0];
+                            let dy = wall.to_ft[1] - wall.from_ft[1];
+                            let at = [wall.from_ft[0] + frac * dx, wall.from_ft[1] + frac * dy];
+                            let diag = diag_offset(at, wall, 0.3);
+                            dev_n += 1;
+                            let id = format!("D{dev_n:03}");
+                            near_miss_ids.push(id.clone());
+                            devices.push(Device {
+                                id,
+                                tag: format!("R-{lv_code}-{dev_n:02}"),
+                                kind: "receptacle".into(),
+                                level: lv_code.into(),
+                                room: rm.number.clone(),
+                                wall: wall.id.clone(),
+                                at_ft: at.map(r6),
+                                diag_ft: diag.map(r6),
+                                aff_in: 18.0,
+                                box_in: [2.75, 4.5, 3.5],
+                                stud_cavity: nm_cav,
+                                fixed: true,
+                                sheet: esheet.clone(),
+                            });
+                            continue;
+                        }
+                        // No near-miss opportunity: shift to clear.
                         let shifted = find_clear_cavity(t, &wall.id, cavity, wall.stud_spacing_in, len);
                         if shifted == cavity {
-                            continue; // no clear spot on this wall
+                            continue;
                         }
                         let new_along = (shifted as f64 + 0.5) * wall.stud_spacing_in;
                         if new_along > len || new_along < 0.0 {
@@ -1774,21 +1898,21 @@ fn generate_devices(t: &mut Truth, planted: &mut Vec<String>, plant_inwall: bool
                         let dx = wall.to_ft[0] - wall.from_ft[0];
                         let dy = wall.to_ft[1] - wall.from_ft[1];
                         let at = [wall.from_ft[0] + frac * dx, wall.from_ft[1] + frac * dy];
+                        let diag = diag_offset(at, wall, 0.3);
                         dev_n += 1;
-                        let id = format!("D{dev_n:03}");
-                        let fixed = r.chance(0.7);
                         devices.push(Device {
-                            id,
+                            id: format!("D{dev_n:03}"),
                             tag: format!("R-{lv_code}-{dev_n:02}"),
                             kind: "receptacle".into(),
                             level: lv_code.into(),
                             room: rm.number.clone(),
                             wall: wall.id.clone(),
                             at_ft: at.map(r6),
+                            diag_ft: diag.map(r6),
                             aff_in: 18.0,
                             box_in: [2.75, 4.5, 3.5],
                             stud_cavity: shifted,
-                            fixed,
+                            fixed: r.chance(0.7),
                             sheet: esheet.clone(),
                         });
                         continue;
@@ -1798,15 +1922,14 @@ fn generate_devices(t: &mut Truth, planted: &mut Vec<String>, plant_inwall: bool
                     let dx = wall.to_ft[0] - wall.from_ft[0];
                     let dy = wall.to_ft[1] - wall.from_ft[1];
                     let at = [wall.from_ft[0] + frac * dx, wall.from_ft[1] + frac * dy];
+                    let diag = diag_offset(at, wall, 0.3);
 
                     dev_n += 1;
                     let id = format!("D{dev_n:03}");
                     if want_plant {
                         planted.push(id.clone());
-                        planted_one = true;
+                        planted_receptacle = true;
                     }
-
-                    // Some devices are not fixed (diagrammatic E-sheet placement).
                     let fixed = !want_plant && r.chance(0.7);
 
                     devices.push(Device {
@@ -1817,6 +1940,7 @@ fn generate_devices(t: &mut Truth, planted: &mut Vec<String>, plant_inwall: bool
                         room: rm.number.clone(),
                         wall: wall.id.clone(),
                         at_ft: at.map(r6),
+                        diag_ft: diag.map(r6),
                         aff_in: 18.0,
                         box_in: [2.75, 4.5, 3.5],
                         stud_cavity: cavity,
@@ -1828,6 +1952,7 @@ fn generate_devices(t: &mut Truth, planted: &mut Vec<String>, plant_inwall: bool
         }
     }
     t.devices = devices;
+    t.near_miss_ids = near_miss_ids;
 }
 
 fn is_toilet_room(name: &str) -> bool {
@@ -1844,10 +1969,29 @@ fn is_near_roughin(t: &Truth, wall_id: &str, cavity: usize, margin: usize) -> bo
     t.rough_ins.iter().any(|ri| ri.wall == wall_id && { ri.stud_cavity.abs_diff(cavity) <= margin })
 }
 
+/// Check whether a position (inches along the wall) is within `clearance_in` of any rough-in
+/// pipe edge on this wall.  Same cavity = always too close (the device would share a stud bay).
+fn is_near_roughin_inches(t: &Truth, wall_id: &str, along_in: f64, clearance_in: f64, stud_spacing: f64, _wall_len: f64) -> bool {
+    let box_half = 2.75 / 2.0;
+    let dev_cav = stud_cavity_at(along_in, stud_spacing);
+    for ri in t.rough_ins.iter().filter(|ri| ri.wall == wall_id) {
+        // Same cavity = always a clash, regardless of inch distance.
+        if ri.stud_cavity == dev_cav {
+            return true;
+        }
+        let ri_along = (ri.stud_cavity as f64 + 0.5) * stud_spacing;
+        let od = pipe_od(ri.size_in);
+        let gap = (along_in - ri_along).abs() - box_half - od / 2.0;
+        if gap < clearance_in {
+            return true;
+        }
+    }
+    false
+}
+
 /// Find the nearest clear cavity (no rough-in within 1 cavity) starting from `start`.
 fn find_clear_cavity(t: &Truth, wall_id: &str, start: usize, spacing: f64, wall_len: f64) -> usize {
     let max_cavity = (wall_len / spacing) as usize;
-    // Search outward from start.
     for offset in 1..=max_cavity {
         if start + offset <= max_cavity && !is_near_roughin(t, wall_id, start + offset, 1) {
             return start + offset;
@@ -1857,6 +2001,61 @@ fn find_clear_cavity(t: &Truth, wall_id: &str, start: usize, spacing: f64, wall_
         }
     }
     start // fallback
+}
+
+/// Find a cavity on `wall_id` that contains a vent rough-in (for planting a switch clash).
+fn vent_cavity_on_wall(t: &Truth, wall_id: &str) -> Option<usize> {
+    t.rough_ins.iter().find(|ri| ri.wall == wall_id && ri.kind == "vent").map(|ri| ri.stud_cavity)
+}
+
+/// Find a near-miss position: a cavity adjacent to a rough-in stub but with a gap > clearance.
+/// Returns `(cavity, along_in)` or `None`.
+fn find_near_miss_cavity(t: &Truth, wall_id: &str, _start: usize, spacing: f64, wall_len: f64, clearance_in: f64) -> Option<(usize, f64)> {
+    let max_cavity = (wall_len / spacing) as usize;
+    let box_half = 2.75 / 2.0;
+    // Look for a cavity that is adjacent to a rough-in but where the gap in inches exceeds
+    // the clearance.  Specifically: 2 cavities away from any stub → gap ≈ 2×16 − box/2 − od/2
+    // which is well over 3".
+    for ri in t.rough_ins.iter().filter(|ri| ri.wall == wall_id) {
+        let od = pipe_od(ri.size_in);
+        // Try 2 cavities away (gap ≈ 32" - margins, well above 3")
+        for delta in [2isize, -2] {
+            let cav = ri.stud_cavity as isize + delta;
+            if cav < 0 || cav as usize > max_cavity {
+                continue;
+            }
+            let cav = cav as usize;
+            if has_roughin_in_cavity(t, wall_id, cav) {
+                continue;
+            }
+            let along = (cav as f64 + 0.5) * spacing;
+            if along < 0.0 || along > wall_len {
+                continue;
+            }
+            let ri_along = (ri.stud_cavity as f64 + 0.5) * spacing;
+            let gap = (along - ri_along).abs() - box_half - od / 2.0;
+            if gap > clearance_in + 1.0 {
+                return Some((cav, along));
+            }
+        }
+    }
+    None
+}
+
+/// Compute a diagrammatic offset position for an E-sheet symbol.  The symbol is shifted
+/// perpendicular to the wall by `offset_ft` (building feet) so it does not sit on the true
+/// architectural position.
+fn diag_offset(at: [f64; 2], wall: &Wall, offset_ft: f64) -> [f64; 2] {
+    let dx = wall.to_ft[0] - wall.from_ft[0];
+    let dy = wall.to_ft[1] - wall.from_ft[1];
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1e-12 {
+        return at;
+    }
+    // Normal to the wall (perpendicular, into the room).
+    let nx = -dy / len;
+    let ny = dx / len;
+    [at[0] + nx * offset_ft, at[1] + ny * offset_ft]
 }
 
 // ========================================================================================

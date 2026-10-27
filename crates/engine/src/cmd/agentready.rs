@@ -14,7 +14,8 @@
 //!   answer for many identical items: a preview and its confirm token first), `review.approve`
 //!   and `review.log` (a person reviews what agents did).
 //! - `bim.build {level?, discipline?}`: builds the model from the building spec and reports that
-//!   level's elements; building twice gives the same model.
+//!   level's elements; building twice gives the same model. With no spec yet it drafts one from
+//!   the open print set (or the plan drawing) first.
 //!
 //! Everything lives in [`cadaddy_doc::Drawing::agent`] (notes, decisions with their citations and
 //! authors, the change log, the revision) and is undoable like any edit. Review item ids are
@@ -70,7 +71,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{author?: agent|user, approved?: bool, cursor?, limit?} → {total, entries: [{rev, author, action, item, summary, citation, approved}], next_cursor?}")
             .noundo(),
         CommandSpec::new("bim.build", "Build BIM Model", run_build).params(
-            "{level?: name, discipline?: architecture|structure|mep|all} → {level, built: {discipline: count}, unchanged, warnings}: builds the model from the building spec (the same spec gives the same model)",
+            "{level?: name, discipline?: architecture|structure|mep|all, force?: bool (build even when the import check failed)} → {level, built: {discipline: count}, unchanged, warnings, drafted?}: builds the model from the building spec (the same spec gives the same model); with no spec yet, drafts one from the open print set (or the plan drawing) first",
         ),
     ]
 }
@@ -157,7 +158,14 @@ fn load(d: &Drawing) -> State {
 fn save(s: &mut Session, st: &mut State) -> Result<()> {
     st.notes = tail(std::mem::take(&mut st.notes), NOTES_KEPT);
     st.log = tail(std::mem::take(&mut st.log), LOG_KEPT);
-    s.doc_mut()?.agent = serde_json::to_string(st).ok();
+    let doc = s.doc_mut()?;
+    // Other state kept beside ours in the same JSON (the rules engine's `rulemodel`, the
+    // guided job's) stays.
+    let mut root: Value = doc.agent.as_deref().and_then(|t| serde_json::from_str(t).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}));
+    if let (Some(o), Ok(Value::Object(ours))) = (root.as_object_mut(), serde_json::to_value(&*st)) {
+        o.extend(ours);
+    }
+    doc.agent = serde_json::to_string(&root).ok();
     Ok(())
 }
 
@@ -195,8 +203,15 @@ fn hash(s: &str) -> String {
     format!("{:08x}", h & 0xffff_ffff)
 }
 
-fn author(p: &Value) -> Result<String> {
-    match str_param(p, "author").unwrap_or("agent") {
+fn author(s: &Session, p: &Value) -> Result<String> {
+    let requested = str_param(p, "author").unwrap_or("agent");
+    if s.agent.from_agent {
+        if requested == "user" {
+            return Err(bad("review", "an agent's work is tagged \"agent\" — only a person's call uses author: \"user\""));
+        }
+        return Ok("agent".to_string());
+    }
+    match requested {
         a @ ("agent" | "user") => Ok(a.to_string()),
         other => Err(bad("review", format!("author `{}` isn't known — use agent or user", cut(other, 20)))),
     }
@@ -266,9 +281,22 @@ fn items(s: &mut Session) -> Vec<Item> {
         }
     }
     // Runs whose size or height is the system's default, not read from a tag.
-    if let Ok(v) = s.execute("mep.list", &json!({})) {
-        let systems: Vec<Value> = v["systems"].as_array().cloned().unwrap_or_default();
-        for r in v["items"].as_array().into_iter().flatten() {
+    // `mep.list` answers a page at a time: walk every page (capped like the run list itself).
+    let mut mep_items: Vec<Value> = Vec::new();
+    let mut mep_systems: Option<Vec<Value>> = None;
+    let mut cursor = 0u64;
+    while let Ok(v) = s.execute("mep.list", &json!({"cursor": cursor, "limit": 200})) {
+        if mep_systems.is_none() {
+            mep_systems = Some(v["systems"].as_array().cloned().unwrap_or_default());
+        }
+        mep_items.extend(v["items"].as_array().into_iter().flatten().cloned());
+        match v["next_cursor"].as_u64() {
+            Some(n) if n > cursor && mep_items.len() < 100_000 => cursor = n,
+            _ => break,
+        }
+    }
+    if let Some(systems) = mep_systems {
+        for r in &mep_items {
             let conf = r["confidence"].as_str().unwrap_or("low");
             if conf == "high" || r["reviewed"].as_bool() == Some(true) {
                 continue;
@@ -292,7 +320,7 @@ fn items(s: &mut Session) -> Vec<Item> {
             ];
             // Sizes and heights tagged on other runs of the system.
             let mut seen = Vec::new();
-            for o in v["items"].as_array().into_iter().flatten().filter(|o| o["system"] == r["system"] && o["confidence"] == "high") {
+            for o in mep_items.iter().filter(|o| o["system"] == r["system"] && o["confidence"] == "high") {
                 let c = json!({"size_in": o["size_in"], "bottom_ft": o["bottoms_ft"].get(0)});
                 if !seen.contains(&c) && seen.len() < 3 {
                     seen.push(c.clone());
@@ -367,14 +395,63 @@ fn concern_items(st: &State) -> Vec<Item> {
 fn status_of(st: &State, id: &str) -> &'static str {
     match st.decisions.get(id).map(|d| d.status.as_str()) {
         Some("deferred") => "deferred",
+        Some("orphaned") => "orphaned",
         Some(_) => "resolved",
         None => "open",
     }
 }
 
+/// Validation failures as review items (MUST 3: Q319/Q320 wiring).
+fn validation_items(s: &mut Session) -> Vec<Item> {
+    let report = match s.execute("bim.validate", &json!({})) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for f in report["failures"].as_array().into_iter().flatten().take(200) {
+        let fid = f["id"].as_str().unwrap_or_default();
+        let rule = f["rule"].as_str().unwrap_or_default();
+        let level = f["level"].as_str().unwrap_or_default().to_string();
+        let severity = f["severity"].as_str().unwrap_or("medium");
+        let fix = f["fix"].as_str().unwrap_or_default();
+        let element = f["element"].as_str().unwrap_or_default();
+        let id = format!("RV-V{}", hash(&format!("validation|{fid}")));
+        let rank = match severity {
+            "high" => 0.5,
+            "medium" => 1.5,
+            _ => 2.5,
+        };
+        out.push(Item {
+            id,
+            kind: "validation",
+            level,
+            title: cut(&format!("{rule}: {}", f["expected"].as_str().unwrap_or_default()), 120),
+            detail: json!({
+                "failure_id": fid, "rule": rule, "element": element,
+                "expected": f["expected"], "found": f["found"],
+                "severity": severity, "fix": fix,
+            }),
+            candidates: vec![
+                json!({"answer": fix, "from": "the validator's suggestion"}),
+                json!({"answer": "override: the model is correct as-is", "from": "mark as override"}),
+            ],
+            documents: {
+                let sheet = f.get("source").and_then(|s| s["sheet"].as_str()).unwrap_or_default();
+                if sheet.is_empty() { vec![] } else { vec![sheet.to_string()] }
+            },
+            documented: true,
+            rank,
+            key: json!({"failure_id": fid, "element": element}),
+            system: String::new(),
+        });
+    }
+    out
+}
+
 fn all_items(s: &mut Session, st: &State) -> Vec<Item> {
     let mut v = items(s);
     v.extend(concern_items(st));
+    v.extend(validation_items(s));
     v.sort_by(|a, b| a.rank.total_cmp(&b.rank).then(a.id.cmp(&b.id)));
     v
 }
@@ -461,6 +538,7 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
     let all = all_items(s, &st);
     let open: Vec<&Item> = all.iter().filter(|i| status_of(&st, &i.id) == "open").collect();
     let deferred = all.iter().filter(|i| status_of(&st, &i.id) == "deferred").count();
+    let orphaned = st.decisions.values().filter(|d| d.status == "orphaned").count();
     let mut by_kind: BTreeMap<&str, usize> = BTreeMap::new();
     for i in &open {
         *by_kind.entry(i.kind).or_default() += 1;
@@ -474,8 +552,10 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
         .map(|e| json!({"rev": e.rev, "author": e.author, "action": e.action, "item": e.item, "summary": cut(&e.summary, 120)}))
         .collect();
     let notes: Vec<Value> = st.notes.iter().rev().take(5).map(|n| json!({"rev": n.rev, "author": n.author, "text": cut(&n.text, 300)})).collect();
-    let next = if !has_spec {
-        json!({"call": "bspec.draft {} or printset.open {path}", "why": "there is no building spec yet: nothing to build or review"})
+    let next = if !has_spec && (s.printset_project.is_some() || !s.doc()?.model.is_empty()) {
+        json!({"call": "bim.build {}", "why": "there is no building spec yet: the build drafts it from the prints, then builds it"})
+    } else if !has_spec {
+        json!({"call": "printset.open {path}", "why": "no prints yet: open the folder of prints (bim_job import {path}), then build"})
     } else if built.is_empty() {
         json!({"call": "bim.build {}", "why": "the building spec isn't built yet"})
     } else if !st.last_build_spec.is_empty() && st.last_build_spec != spec_hash(s.doc()?) && open.is_empty() {
@@ -492,11 +572,12 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
     let mut text = format!("Revision {}. ", st.revision);
     text += &if built.is_empty() { "Nothing built yet. ".to_string() } else { format!("Built: {}. ", built_text.join("; ")) };
     text += &format!(
-        "Review: {} open ({}), {} deferred, {} decided. ",
+        "Review: {} open ({}), {} deferred, {} decided{}. ",
         open.len(),
         by_kind.iter().map(|(k, n)| format!("{n} {k}")).collect::<Vec<_>>().join(", "),
         deferred,
-        st.decisions.len().saturating_sub(deferred)
+        st.decisions.values().filter(|d| d.status == "resolved").count(),
+        if orphaned > 0 { format!(", {orphaned} orphaned") } else { String::new() }
     );
     if let Some(n) = st.notes.last() {
         text += &format!("Last note ({}): {} ", n.author, cut(&n.text, 300));
@@ -515,11 +596,28 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
     if let Some(e) = &estimate {
         text += &format!("Estimate: ${} total, {} open finding(s). ", e["total"], e["open_findings"]);
     }
+    // MUST 3: validation score in the briefing.
+    let validation = s.execute("bim.validate", &json!({})).ok().map(|r| {
+        let by_check = r.get("byCheck").cloned().unwrap_or(Value::Null);
+        json!({
+            "pass": r["pass"],
+            "score": r["score"],
+            "total": r["total"],
+            "byCheck": by_check,
+        })
+    });
+    if let Some(v) = &validation {
+        let pass = v["pass"].as_bool().unwrap_or(false);
+        let score = v["score"].as_f64().unwrap_or(0.0);
+        let total = v["total"].as_u64().unwrap_or(0);
+        text +=
+            &format!("Validation: {} (score {score}, {total} failure{}). ", if pass { "PASS" } else { "FAIL" }, if total == 1 { "" } else { "s" });
+    }
     text += &format!("Next: {} — {}.", next["call"].as_str().unwrap_or_default(), next["why"].as_str().unwrap_or_default());
     let mut v = json!({
         "revision": st.revision,
         "built": built,
-        "review": {"open": open.len(), "deferred": deferred, "resolved": st.decisions.len().saturating_sub(deferred), "byKind": by_kind, "top": top},
+        "review": {"open": open.len(), "deferred": deferred, "resolved": st.decisions.values().filter(|d| d.status == "resolved").count(), "orphaned": orphaned, "byKind": by_kind, "top": top},
         "recent": recent,
         "notes": notes,
         "next": next,
@@ -527,6 +625,9 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
     });
     if let Some(e) = estimate {
         v["estimate"] = e;
+    }
+    if let Some(val) = validation {
+        v["validation"] = val;
     }
     // Within the page: trim the lists, longest first.
     let mut v = capped(v, "recent", BRIEFING_MAX);
@@ -577,7 +678,7 @@ fn run_note(s: &mut Session, p: &Value) -> Result<Value> {
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .ok_or_else(|| bad("project.note", "`text` is required: what the next agent or person should know"))?;
-    let who = author(p)?;
+    let who = author(s, p)?;
     let mut st = load(s.doc()?);
     let text = cut(text, NOTE_MAX);
     if st.notes.last().is_some_and(|n| n.text == text && n.author == who) {
@@ -597,22 +698,33 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("review.list", "`kind` is rfi, mep_guess, clash or concern"));
     }
     let status = str_param(p, "status").unwrap_or("open");
-    if !["open", "deferred", "resolved", "all"].contains(&status) {
-        return Err(bad("review.list", "`status` is open, deferred, resolved or all"));
+    if !["open", "deferred", "resolved", "orphaned", "all"].contains(&status) {
+        return Err(bad("review.list", "`status` is open, deferred, resolved, orphaned or all"));
     }
     let level = str_param(p, "level");
     let (cursor, limit) = page(p);
-    let all: Vec<Item> = all_items(s, &st)
-        .into_iter()
+    let mut all: Vec<Value> = all_items(s, &st)
+        .iter()
         .filter(|i| kind.is_none_or(|k| i.kind == k))
         .filter(|i| level.is_none_or(|l| i.level.eq_ignore_ascii_case(l)))
         .filter(|i| status == "all" || status_of(&st, &i.id) == status)
+        .map(|i| compact(i, &st))
         .collect();
+    // Orphaned decisions: their runs are gone from the plans but the decisions are kept.
+    if status == "orphaned" || status == "all" {
+        for (id, d) in &st.decisions {
+            if d.status != "orphaned" {
+                continue;
+            }
+            all.push(json!({"id": id, "kind": "orphaned", "level": "", "title": d.title, "status": "orphaned"}));
+        }
+    }
     let mut by_kind: BTreeMap<&str, usize> = BTreeMap::new();
     for i in &all {
-        *by_kind.entry(i.kind).or_default() += 1;
+        let k = i["kind"].as_str().unwrap_or("unknown");
+        *by_kind.entry(k).or_default() += 1;
     }
-    let items: Vec<Value> = all.iter().skip(cursor).take(limit).map(|i| compact(i, &st)).collect();
+    let items: Vec<&Value> = all.iter().skip(cursor).take(limit).collect();
     let next = (cursor + items.len() < all.len()).then(|| format!("c{}", cursor + items.len()));
     let mut v = json!({"total": all.len(), "byKind": by_kind, "items": items});
     if let (Some(n), Some(o)) = (next, v.as_object_mut()) {
@@ -647,7 +759,7 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_resolve(s: &mut Session, p: &Value) -> Result<Value> {
     let mut st = load(s.doc()?);
     let item = find_item(s, &st, "review.resolve", p)?;
-    let who = author(p)?;
+    let who = author(s, p)?;
     let answer = p.get("answer").filter(|a| !a.is_null()).cloned();
     let cite = citation(p, "review.resolve")?;
     // Code knowledge alone doesn't change a documented item: it becomes a concern to review.
@@ -770,7 +882,7 @@ fn run_defer(s: &mut Session, p: &Value) -> Result<Value> {
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .ok_or_else(|| bad("review.defer", "`reason` is required: what the field has to decide"))?;
-    let who = author(p)?;
+    let who = author(s, p)?;
     if st.decisions.get(&item.id).is_some_and(|d| d.status == "deferred") {
         return Ok(json!({"deferred": item.id, "changed": false}));
     }
@@ -800,7 +912,7 @@ fn run_rfi_draft(s: &mut Session, p: &Value) -> Result<Value> {
         .filter(|t| !t.is_empty())
         .ok_or_else(|| bad("review.rfi_draft", "`question` is required: what to ask the design team"))?;
     let question = cut(question, TEXT_MAX);
-    let who = author(p)?;
+    let who = author(s, p)?;
     let (mut sp, stored) = current(s, "review.rfi_draft")?;
     if !stored {
         return Err(bad("review.rfi_draft", "there is no building spec to keep the RFI in — call bspec.draft {} first"));
@@ -922,6 +1034,9 @@ fn run_batch(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_approve(s: &mut Session, p: &Value) -> Result<Value> {
+    if s.agent.from_agent {
+        return Err(bad("review.approve", "only a person can approve agent decisions — ask the user to open Tools \u{25b8} Agent Work"));
+    }
     let mut st = load(s.doc()?);
     let all = bool_or(p, "all", false);
     let ids: Vec<String> = p
@@ -970,9 +1085,38 @@ fn run_log(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
+    // Gate: refuse to build if the import check failed, unless --force or discipline is mep
+    // (the MEP geometry reader handles paper-scale and pen-layer drawings natively).
+    let force = bool_or(p, "force", false);
+    let disc = str_param(p, "discipline").unwrap_or("all");
+    if !force
+        && disc != "mep"
+        && let Ok(d) = s.doc()
+        && !super::import_check::passes(d)
+    {
+        let fails = super::import_check::failed_checks(d);
+        let names: Vec<&str> = fails.iter().map(|(id, _)| id.as_str()).collect();
+        return Err(bad("bim.build", format!("import check failed ({}); fix the import or pass `force: true` to override", names.join(", "))));
+    }
+    // No spec yet: draft it from the open print set, else from the plan drawing (Q5276: the
+    // build an import suggests must work as given).
+    let mut drafted = None;
+    if !current(s, "bim.build")?.1 {
+        let draft = if s.printset_project.is_some() {
+            super::guided::draft_from_prints(s)?
+        } else if s.doc().is_ok_and(|d| !d.model.is_empty()) {
+            s.execute("bspec.draft", &json!({"store": true}))?
+        } else {
+            return Err(bad(
+                "bim.build",
+                "there is no building spec and nothing to draft one from — open the prints first (printset.open {path}, or bim_job import {path}) or a plan drawing",
+            ));
+        };
+        drafted = Some(json!({"guesses": draft["guesses"].as_array().map_or(0, Vec::len), "call": "bspec.get {} shows the drafted spec"}));
+    }
     let (sp, stored) = current(s, "bim.build")?;
     if !stored {
-        return Err(bad("bim.build", "there is no building spec yet — call bspec.draft {} (from the plans) or printset.open {path} first"));
+        return Err(bad("bim.build", "the building spec couldn't be drafted — call bspec.draft {store: true} to see why"));
     }
     let level = str_param(p, "level");
     if let Some(l) = level
@@ -988,6 +1132,68 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     if !["architecture", "structure", "mep", "all"].contains(&disc) {
         return Err(bad("bim.build", "`discipline` is architecture, structure, mep or all"));
     }
+
+    // Auto-read MEP data: when building with discipline mep or all, populate the spec's
+    // MEP runs/equipment/terminals from the current drawing's geometry before building.
+    // Only re-read when (a) the drawing has entities to read from and (b) the spec does
+    // NOT already have MEP runs — pre-set runs (from bspec.set, a previous import or an
+    // agent pipeline) are authoritative and must not be overwritten by a re-read.
+    // (c) The sheet is not a notes/legend/schedule page — those have schedule-table lines
+    // that the readers misidentify as MEP runs.
+    let mut mep_warnings: Vec<String> = Vec::new();
+    let has_drawing_entities = s.doc().is_ok_and(|d| !d.model.is_empty());
+    let spec_has_mep = current(s, "bim.build").map(|(sp, _)| !sp.mep.runs.is_empty()).unwrap_or(false);
+    let is_notes_sheet = s
+        .doc()
+        .ok()
+        .map(|d| {
+            let texts = cadaddy_mepfix::sheet_facts::texts(d);
+            cadaddy_mepfix::sheet_facts::identify_sheet(&texts).is_some_and(|ident| {
+                let up = ident.title.to_ascii_uppercase();
+                // Notes/legend/schedule/section/detail sheets have no plan-view MEP geometry.
+                up.contains("NOTES")
+                    || up.contains("LEGEND")
+                    || up.contains("ABBREVIATION")
+                    || up.contains("SCHEDULE")
+                    || up.contains("SYMBOLS")
+                    || up.contains("SECTION")
+                    || up.contains("DETAIL")
+            })
+        })
+        .unwrap_or(false);
+    if (disc == "mep" || disc == "all") && has_drawing_entities && !spec_has_mep && !is_notes_sheet {
+        // First, try standard layer-based reading (mep.read {apply}).
+        if let Err(e) = s.execute("mep.read", &json!({"apply": true})) {
+            mep_warnings.push(format!("mep.read: {e}"));
+        }
+        // Then, geometry-based reading (ducts.read {apply}) for PDF-imported sheets.
+        match super::readers::read_mech_from_drawing(s) {
+            Ok(net) => {
+                let spec_before = current(s, "bim.build").map(|(sp, _)| sp.mep.runs.len()).unwrap_or(0);
+                if !net.runs.is_empty() || !net.equipment.is_empty() || !net.terminals.is_empty() {
+                    let _ = s.execute("ducts.read", &json!({"apply": true}));
+                }
+                let spec_after = current(s, "bim.build").map(|(sp, _)| sp.mep.runs.len()).unwrap_or(0);
+                if spec_after == 0 && spec_before == 0 {
+                    mep_warnings.push(
+                        "no MEP runs found in the drawing — mechanical sheets may need to be imported first, or duct lines may not be present"
+                            .to_string(),
+                    );
+                }
+            }
+            Err(_) => {
+                // mep.read already ran; proceed with whatever it found.
+            }
+        }
+    } else if (disc == "mep" || disc == "all") && !spec_has_mep {
+        // Nothing read and nothing pre-set: the MEP build comes out empty — say why.
+        mep_warnings.push(if !has_drawing_entities {
+            "no MEP runs: the drawing is empty — import the mechanical and plumbing sheets first, or set runs with bspec.set".to_string()
+        } else {
+            "no MEP runs: this sheet is a notes, legend, schedule, section or detail page — MEP is read from the plan sheets".to_string()
+        });
+    }
+
     let r = s.execute("model.build", &json!({}))?;
     let counts = built_counts(s.doc()?);
     let mut st = load(s.doc()?);
@@ -1005,6 +1211,69 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         Some(l) => pick(&counts.get(l).cloned().unwrap_or_default()),
         None => json!(counts.iter().map(|(l, m)| (l.clone(), pick(m))).collect::<BTreeMap<_, _>>()),
     };
-    let warnings: Vec<Value> = r["warnings"].as_array().into_iter().flatten().take(10).cloned().collect();
-    Ok(capped(json!({"level": level, "built": built, "unchanged": unchanged, "warnings": warnings}), "warnings", ANSWER_MAX))
+    let mut warnings: Vec<Value> = r["warnings"].as_array().into_iter().flatten().take(10).cloned().collect();
+    warnings.extend(mep_warnings.into_iter().map(Value::from));
+    let mut out = json!({"level": level, "built": built, "unchanged": unchanged, "warnings": warnings});
+    if let Some(d) = drafted {
+        out["drafted"] = d;
+    }
+    Ok(capped(out, "warnings", ANSWER_MAX))
+}
+
+// ---- Re-apply decisions after a plan re-read -------------------------------------------------------
+
+/// Re-apply resolved mep_guess decisions to the current runs.  Called after `mep.read {apply}`
+/// and `model.build` so that cited answers survive the replacement of runs in the spec.
+/// Decisions whose runs are gone become orphaned (never left "resolved" with no matching run).
+pub fn reapply_decisions(s: &mut Session) {
+    let mut st = load(match s.doc() {
+        Ok(d) => d,
+        Err(_) => return,
+    });
+    let resolved_mep: Vec<(String, Value, Option<Citation>)> = st
+        .decisions
+        .iter()
+        .filter(|(id, d)| d.status == "resolved" && id.starts_with("RV-M"))
+        .map(|(id, d)| (id.clone(), d.answer.clone(), d.citation.clone()))
+        .collect();
+    if resolved_mep.is_empty() {
+        return;
+    }
+    // Current mep_guess items with their ids (after re-read, reviewed runs dropped back to guesses).
+    let current = items(s);
+    let mep_items: Vec<&Item> = current.iter().filter(|i| i.kind == "mep_guess").collect();
+    let current_ids: Vec<&str> = mep_items.iter().map(|i| i.id.as_str()).collect();
+    let mut changed = false;
+    for (id, answer, _cite) in &resolved_mep {
+        if let Some(item) = mep_items.iter().find(|i| i.id == *id) {
+            // The run still exists: re-apply the saved answer.
+            let mut params = json!({"id": item.key, "reviewed": true});
+            if let Some(o) = params.as_object_mut() {
+                if let Some(v) = answer.get("size_in").filter(|v| !v.is_null()) {
+                    o.insert("size_in".into(), v.clone());
+                }
+                if let Some(v) = answer.get("bottom_ft").filter(|v| !v.is_null()) {
+                    o.insert("bottom_ft".into(), v.clone());
+                }
+                if let Some(v) = answer.get("system").filter(|v| !v.is_null()) {
+                    o.insert("system".into(), v.clone());
+                }
+            }
+            let _ = s.execute("mep.edit", &params);
+        } else if !current_ids.contains(&id.as_str()) {
+            // The run is gone: orphan the decision so it is never left "resolved" with no run.
+            if let Some(d) = st.decisions.get_mut(id) {
+                let author = d.author.clone();
+                let title = d.title.clone();
+                let cite = d.citation.clone();
+                d.status = "orphaned".into();
+                st.revision += 1;
+                log(&mut st, &author, "orphaned", id, &format!("the run is gone from the plans: {title}"), cite.as_ref());
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        let _ = save(s, &mut st);
+    }
 }
