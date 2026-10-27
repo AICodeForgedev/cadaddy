@@ -83,30 +83,33 @@ fn missing_commands_menus_tools_and_snap_labels(language: &str) -> Vec<String> {
 
 fn missing_marked_ui_literals(language: &str) -> BTreeSet<String> {
     let catalog = catalog(language).unwrap();
-    let sources = [
-        include_str!("../xrefs.rs"),
-        include_str!("../canvas.rs"),
-        include_str!("../chrome.rs"),
-        include_str!("../cmdline.rs"),
-        include_str!("../credits.rs"),
-        include_str!("../palettes/quickcalc.rs"),
-        include_str!("../palettes/patterns.rs"),
-        include_str!("../dialogs.rs"),
-        include_str!("../hatchdlg.rs"),
-        include_str!("../aliasdlg.rs"),
-        include_str!("../mtext_editor.rs"),
-        include_str!("../layers.rs"),
-        include_str!("../canvas/compare.rs"),
-        include_str!("../canvas/blockedit.rs"),
-        include_str!("../bedit.rs"),
-        include_str!("../palettes.rs"),
-        include_str!("../parametric.rs"),
-        include_str!("../quick.rs"),
-        include_str!("../vpscale.rs"),
-        include_str!("../options/dialog.rs"),
+    let modules = [
+        "xrefs",
+        "canvas",
+        "chrome",
+        "cmdline",
+        "credits",
+        "dialogs",
+        "hatchdlg",
+        "aliasdlg",
+        "mtext_editor",
+        "layers",
+        "bedit",
+        "palettes",
+        "parametric",
+        "quick",
+        "vpscale",
+        "options/dialog",
     ];
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    for module in modules {
+        files.push(src.join(format!("{module}.rs")));
+        module_files(&src.join(module), &mut files);
+    }
     let mut missing = BTreeSet::new();
-    for source in sources {
+    for file in files {
+        let source = std::fs::read_to_string(&file).unwrap();
         for marker in ["crate::tl!(", "crate::tf!("] {
             for rest in source.split(marker).skip(1) {
                 // These macros require a quoted literal. Use JSON's string decoding for escapes.
@@ -138,6 +141,20 @@ fn missing_marked_ui_literals(language: &str) -> BTreeSet<String> {
         }
     }
     missing
+}
+
+/// Every `.rs` file under `dir`, at any depth, so code split into submodules stays scanned.
+fn module_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            module_files(&path, files);
+        } else if path.extension().is_some_and(|x| x == "rs") {
+            files.push(path);
+        }
+    }
 }
 
 #[test]
