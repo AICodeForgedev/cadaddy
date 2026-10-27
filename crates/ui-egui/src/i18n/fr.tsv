@@ -3048,8 +3048,7 @@
 	Photo	Photo
 	Schedule from Element Properties	Nomenclature à partir des propriétés des éléments
 	Check Element Properties	Vérifier les propriétés des éléments
-Walls	Murs
-Ceiling Types	Types de plafond
-Soffit Types	Types de retombée
-Other	Autre
-Nothing changed: the building spec is the same as before.	Rien n'a changé : la spécification du bâtiment est la même qu'avant.
+	Walls	Murs
+	Ceiling Types	Types de plafond
+	Soffit Types	Types de retombée
+	Nothing changed: the building spec is the same as before.	Rien n'a changé : la spécification du bâtiment est la même qu'avant.

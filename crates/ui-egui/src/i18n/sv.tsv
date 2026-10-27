@@ -3267,8 +3267,7 @@ menu	Modify	Ändra
 	Photo	Foto
 	Schedule from Element Properties	Förteckning från elementegenskaper
 	Check Element Properties	Kontrollera elementegenskaper
-Walls	Väggar
-Ceiling Types	Taktyper
-Soffit Types	Typer av sänkta tak
-Other	Övrigt
-Nothing changed: the building spec is the same as before.	Inget ändrades: byggnadsspecifikationen är densamma som tidigare.
+	Walls	Väggar
+	Ceiling Types	Taktyper
+	Soffit Types	Typer av sänkta tak
+	Nothing changed: the building spec is the same as before.	Inget ändrades: byggnadsspecifikationen är densamma som tidigare.

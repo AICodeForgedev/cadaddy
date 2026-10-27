@@ -3077,8 +3077,7 @@
 	Photo	Foto
 	Schedule from Element Properties	Liste aus Elementeigenschaften
 	Check Element Properties	Elementeigenschaften prüfen
-Walls	Wände
-Ceiling Types	Deckentypen
-Soffit Types	Abkofferungstypen
-Other	Sonstiges
-Nothing changed: the building spec is the same as before.	Nichts geändert: Die Gebäudespezifikation ist dieselbe wie zuvor.
+	Walls	Wände
+	Ceiling Types	Deckentypen
+	Soffit Types	Abkofferungstypen
+	Nothing changed: the building spec is the same as before.	Nichts geändert: Die Gebäudespezifikation ist dieselbe wie zuvor.

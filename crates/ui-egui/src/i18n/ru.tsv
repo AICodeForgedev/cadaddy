@@ -3049,8 +3049,7 @@
 	Photo	Фото
 	Schedule from Element Properties	Спецификация по свойствам элементов
 	Check Element Properties	Проверить свойства элементов
-Walls	Стены
-Ceiling Types	Типы потолков
-Soffit Types	Типы коробов
-Other	Прочее
-Nothing changed: the building spec is the same as before.	Ничего не изменилось: спецификация здания такая же, как раньше.
+	Walls	Стены
+	Ceiling Types	Типы потолков
+	Soffit Types	Типы коробов
+	Nothing changed: the building spec is the same as before.	Ничего не изменилось: спецификация здания такая же, как раньше.
