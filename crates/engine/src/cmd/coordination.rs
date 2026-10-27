@@ -164,16 +164,26 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
         // Search filtering.
         if let Some(ref q) = search {
             let matches_level = level.name.to_ascii_lowercase().contains(q);
-            let matching_rooms: Vec<_> = rooms.iter().filter(|r| r["name"].as_str().is_some_and(|n| n.to_ascii_lowercase().contains(q))).cloned().collect();
+            let matching_rooms: Vec<_> =
+                rooms.iter().filter(|r| r["name"].as_str().is_some_and(|n| n.to_ascii_lowercase().contains(q))).cloned().collect();
             let matching_sys = sys_map.keys().any(|name| name.to_ascii_lowercase().contains(q));
-            let matching_els: Vec<_> = level_els.iter().filter(|e| {
-                e.6.to_ascii_lowercase().contains(q) || e.7.to_ascii_lowercase().contains(q)
-                    || e.2.to_ascii_lowercase().contains(q) || e.3.to_ascii_lowercase().contains(q)
-            }).collect();
+            let matching_els: Vec<_> = level_els
+                .iter()
+                .filter(|e| {
+                    e.6.to_ascii_lowercase().contains(q)
+                        || e.7.to_ascii_lowercase().contains(q)
+                        || e.2.to_ascii_lowercase().contains(q)
+                        || e.3.to_ascii_lowercase().contains(q)
+                })
+                .collect();
             if !matches_level && matching_rooms.is_empty() && matching_els.is_empty() && !matching_sys {
                 continue;
             }
-            let hits: Vec<Value> = matching_els.iter().take(200).map(|e| json!({ "handle": e.0.hex(), "category": e.2, "system": e.3, "type": e.6, "tag": e.7 })).collect();
+            let hits: Vec<Value> = matching_els
+                .iter()
+                .take(200)
+                .map(|e| json!({ "handle": e.0.hex(), "category": e.2, "system": e.3, "type": e.6, "tag": e.7 }))
+                .collect();
             levels.push(json!({
                 "name": level.name, "elevation_ft": level.elevation_ft,
                 "rooms": if matching_rooms.is_empty() { rooms.clone() } else { matching_rooms },
@@ -408,17 +418,13 @@ fn clearance_clash_id(c: &Value) -> String {
     use std::hash::{Hash, Hasher};
     let kind = c.get("kind").and_then(Value::as_str).unwrap_or("");
     let level = c.get("level").and_then(Value::as_str).unwrap_or("");
-    let mut systems: Vec<&str> = c
-        .get("systems")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
+    let mut systems: Vec<&str> = c.get("systems").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
     systems.sort();
-    let at = c.get("at").and_then(Value::as_array).map(|a| {
-        a.iter().filter_map(Value::as_f64).map(|v| ((v * 100.0).round() as i64).to_string()).collect::<Vec<_>>().join(",")
-    }).unwrap_or_default();
+    let at = c
+        .get("at")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_f64).map(|v| ((v * 100.0).round() as i64).to_string()).collect::<Vec<_>>().join(","))
+        .unwrap_or_default();
     let mut h = DefaultHasher::new();
     kind.hash(&mut h);
     level.hash(&mut h);
@@ -436,10 +442,7 @@ fn run_clashlist(s: &mut Session, p: &Value) -> Result<Value> {
         "level" => "level",
         _ => group_by,
     };
-    let raw = s.execute(
-        "bim.clash",
-        &json!({ "tolerance": p.get("tolerance_in"), "group_by": group_by_clash }),
-    )?;
+    let raw = s.execute("bim.clash", &json!({ "tolerance": p.get("tolerance_in"), "group_by": group_by_clash }))?;
     // bim.clash returns stable IDs (C-{hex-a}-{hex-b}) and persisted status — pass them through.
     let mut clashes = raw.get("clashes").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut groups = raw.get("groups").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -487,8 +490,7 @@ fn run_clashstatus(s: &mut Session, p: &Value) -> Result<Value> {
     s.execute("bim.clash.status", &clash_p)?;
     // Also persist in building_spec so status survives save/open.
     let d = s.doc()?;
-    let mut statuses: serde_json::Map<String, Value> =
-        coord_get(d, "coord_clash_statuses").as_object().cloned().unwrap_or_default();
+    let mut statuses: serde_json::Map<String, Value> = coord_get(d, "coord_clash_statuses").as_object().cloned().unwrap_or_default();
     statuses.insert(id.to_string(), json!({ "status": status, "note": p.get("note") }));
     coord_set(s, "coord_clash_statuses", &Value::Object(statuses))?;
     Ok(json!({ "id": id, "status": status }))
@@ -558,8 +560,8 @@ fn run_clashgo(s: &mut Session, p: &Value) -> Result<Value> {
 /// source sheet, and validator/review items. MUST 4.
 fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
     let handle_str = p.get("handle").and_then(Value::as_str).ok_or_else(|| EngineError::Other("coordination.inspect: `handle` required".into()))?;
-    let handle = cadaddy_doc::Handle::parse_hex(handle_str)
-        .ok_or_else(|| EngineError::Other(format!("coordination.inspect: invalid handle {handle_str}")))?;
+    let handle =
+        cadaddy_doc::Handle::parse_hex(handle_str).ok_or_else(|| EngineError::Other(format!("coordination.inspect: invalid handle {handle_str}")))?;
     let d = s.doc()?;
     let entity = d.entity(handle).ok_or_else(|| EngineError::Other(format!("coordination.inspect: no entity {handle_str}")))?;
 
@@ -586,11 +588,7 @@ fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
     let model_no = tags.iter().find_map(|t| t.strip_prefix("model:")).unwrap_or_default();
 
     // Validator/review items: any validation findings on this element.
-    let validators: Vec<Value> = tags
-        .iter()
-        .filter_map(|t| t.strip_prefix("validate:"))
-        .map(|v| json!({ "finding": v }))
-        .collect();
+    let validators: Vec<Value> = tags.iter().filter_map(|t| t.strip_prefix("validate:")).map(|v| json!({ "finding": v })).collect();
 
     Ok(json!({
         "handle": handle_str,
@@ -620,10 +618,7 @@ fn run_bcf(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
     let ifc_els = super::ifcmodel::elements(d);
     let ifc_guid = |h_hex: &str| -> String {
-        cadaddy_doc::Handle::parse_hex(h_hex)
-            .and_then(|h| ifc_els.iter().find(|e| e.handle == h))
-            .map(|e| e.tag.guid.clone())
-            .unwrap_or_default()
+        cadaddy_doc::Handle::parse_hex(h_hex).and_then(|h| ifc_els.iter().find(|e| e.handle == h)).map(|e| e.tag.guid.clone()).unwrap_or_default()
     };
 
     // Read persisted statuses for each clash.
@@ -636,14 +631,22 @@ fn run_bcf(s: &mut Session, p: &Value) -> Result<Value> {
         let mut zip = zip_mini::ZipWriter::new(&mut buf);
 
         zip.start_file("bcf.version").map_err(io)?;
-        write!(zip, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-            <Version VersionId=\"2.1\"><DetailedVersion>2.1</DetailedVersion></Version>").map_err(io)?;
+        write!(
+            zip,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <Version VersionId=\"2.1\"><DetailedVersion>2.1</DetailedVersion></Version>"
+        )
+        .map_err(io)?;
 
         let project_id = stable_uuid("cadaddy-coordination-project");
         zip.start_file("project.bcfp").map_err(io)?;
-        write!(zip, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+        write!(
+            zip,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
             <ProjectExtension><Project ProjectId=\"{project_id}\">\
-            <Name>CADaddy Coordination</Name></Project></ProjectExtension>").map_err(io)?;
+            <Name>CADaddy Coordination</Name></Project></ProjectExtension>"
+        )
+        .map_err(io)?;
 
         for clash in clashes.iter().take(1000) {
             let clash_id = clash.get("id").and_then(Value::as_str).unwrap_or_default();
@@ -654,21 +657,30 @@ fn run_bcf(s: &mut Session, p: &Value) -> Result<Value> {
             let title = escape_xml(&format!("{clash_id}: {kind}"));
             let date = iso_date();
             // Real status from persisted data or clash response.
-            let bcf_status = stored_statuses.get(clash_id).and_then(|s| s["status"].as_str())
+            let bcf_status = stored_statuses
+                .get(clash_id)
+                .and_then(|s| s["status"].as_str())
                 .or_else(|| clash.get("status").and_then(Value::as_str))
                 .unwrap_or("New");
             let bcf_status = match bcf_status {
-                "new" => "New", "active" => "Active", "resolved" => "Resolved", "approved" => "Closed",
+                "new" => "New",
+                "active" => "Active",
+                "resolved" => "Resolved",
+                "approved" => "Closed",
                 other => other,
             };
 
             // Markup with topic.
             zip.start_file(&format!("{guid}/markup.bcf")).map_err(io)?;
-            write!(zip, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            write!(
+                zip,
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
                 <Markup><Topic Guid=\"{guid}\" TopicType=\"Clash\" TopicStatus=\"{bcf_status}\">\
                 <Title>{title}</Title><Description>{msg}</Description>\
                 <CreationDate>{date}</CreationDate><CreationAuthor>CADaddy</CreationAuthor>\
-                </Topic></Markup>").map_err(io)?;
+                </Topic></Markup>"
+            )
+            .map_err(io)?;
 
             // Viewpoint with camera and components (IfcGuid).
             let vp = clash.get("viewpoint");
@@ -688,15 +700,24 @@ fn run_bcf(s: &mut Session, p: &Value) -> Result<Value> {
                 let z = at.get(2).and_then(Value::as_f64).unwrap_or(0.0);
                 let eye = vp.and_then(|v| v.get("eye")).and_then(Value::as_array);
                 let (ex, ey, ez) = eye.map_or((x - 10.0, y - 10.0, z + 10.0), |e| {
-                    (e.first().and_then(Value::as_f64).unwrap_or(x - 10.0),
-                     e.get(1).and_then(Value::as_f64).unwrap_or(y - 10.0),
-                     e.get(2).and_then(Value::as_f64).unwrap_or(z + 10.0))
+                    (
+                        e.first().and_then(Value::as_f64).unwrap_or(x - 10.0),
+                        e.get(1).and_then(Value::as_f64).unwrap_or(y - 10.0),
+                        e.get(2).and_then(Value::as_f64).unwrap_or(z + 10.0),
+                    )
                 });
-                write!(zip, "<PerspectiveCamera><CameraViewPoint>\
+                write!(
+                    zip,
+                    "<PerspectiveCamera><CameraViewPoint>\
                     <X>{ex}</X><Y>{ey}</Y><Z>{ez}</Z></CameraViewPoint>\
                     <CameraDirection><X>{}</X><Y>{}</Y><Z>{}</Z></CameraDirection>\
                     <CameraUpVector><X>0</X><Y>0</Y><Z>1</Z></CameraUpVector>\
-                    <FieldOfView>60</FieldOfView></PerspectiveCamera>", x - ex, y - ey, z - ez).map_err(io)?;
+                    <FieldOfView>60</FieldOfView></PerspectiveCamera>",
+                    x - ex,
+                    y - ey,
+                    z - ez
+                )
+                .map_err(io)?;
             }
             // Components.
             if !guid_a.is_empty() || !guid_b.is_empty() {
@@ -729,8 +750,12 @@ fn stable_uuid(input: &str) -> String {
     let b = h.finish();
     format!(
         "{:08x}-{:04x}-4{:03x}-{:x}{:03x}-{:012x}",
-        a as u32, (a >> 32) as u16, (a >> 48) & 0xfff,
-        8 | ((b >> 60) & 3), (b >> 48) & 0xfff, b & 0xffffffffffff
+        a as u32,
+        (a >> 32) as u16,
+        (a >> 48) & 0xfff,
+        8 | ((b >> 60) & 3),
+        (b >> 48) & 0xfff,
+        b & 0xffffffffffff
     )
 }
 
@@ -764,8 +789,6 @@ fn iso_date() -> String {
     }
     format!("{y:04}-{m:02}-{day:02}T{:02}:{:02}:{:02}Z", secs / 3600, (secs % 3600) / 60, secs % 60)
 }
-
-
 
 /// Minimal ZIP writer (store method, no compression).
 mod zip_mini {
@@ -1123,14 +1146,14 @@ const STATUS_COLORS: &[(&str, [u8; 3])] = &[
 
 /// Level colour scheme: deterministic colour per level index.
 const LEVEL_COLORS: &[[u8; 3]] = &[
-    [65, 105, 225],   // royal blue
-    [220, 20, 60],    // crimson
-    [34, 139, 34],    // forest green
-    [255, 140, 0],    // dark orange
-    [148, 0, 211],    // dark violet
-    [0, 206, 209],    // dark turquoise
-    [199, 21, 133],   // medium violet red
-    [255, 215, 0],    // gold
+    [65, 105, 225], // royal blue
+    [220, 20, 60],  // crimson
+    [34, 139, 34],  // forest green
+    [255, 140, 0],  // dark orange
+    [148, 0, 211],  // dark violet
+    [0, 206, 209],  // dark turquoise
+    [199, 21, 133], // medium violet red
+    [255, 215, 0],  // gold
 ];
 
 /// Colour all model elements by their source/status or by level, as render-time colour overrides.
@@ -1149,7 +1172,8 @@ fn run_colorby(s: &mut Session, p: &Value) -> Result<Value> {
                     entry.get("r").and_then(Value::as_u64),
                     entry.get("g").and_then(Value::as_u64),
                     entry.get("b").and_then(Value::as_u64),
-                ) && let Some(h) = cadaddy_doc::Handle::parse_hex(h_hex) {
+                ) && let Some(h) = cadaddy_doc::Handle::parse_hex(h_hex)
+                {
                     let _ = d.modify_entity(h, |e| {
                         e.common.color = cadaddy_color::Color::True(cadaddy_color::Rgb(r as u8, g as u8, b as u8));
                     });

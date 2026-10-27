@@ -129,11 +129,7 @@ fn must4_inspect_returns_element_info() {
     let mut s = building();
     // Get a handle from the model.
     let d = s.doc().unwrap();
-    let handle = d
-        .model
-        .iter()
-        .find(|e| cadaddy_engine::cmd::wallgen::made_as(e).is_some())
-        .map(|e| e.handle);
+    let handle = d.model.iter().find(|e| cadaddy_engine::cmd::wallgen::made_as(e).is_some()).map(|e| e.handle);
     let Some(handle) = handle else { return };
     let r = s.execute("coordination.inspect", &json!({"handle": handle.hex()})).unwrap();
     assert_eq!(r["handle"].as_str(), Some(&*handle.hex()));
@@ -245,23 +241,14 @@ fn must7_bcf_stable_guids() {
 fn must9_trades_is_undoable() {
     let mut s = building();
     // Get a trade layer's initial visibility.
-    let initial_on: Vec<bool> = s.doc().unwrap().layers.iter()
-        .filter(|l| l.name.starts_with("3D-MEP-"))
-        .map(|l| l.on)
-        .collect();
+    let initial_on: Vec<bool> = s.doc().unwrap().layers.iter().filter(|l| l.name.starts_with("3D-MEP-")).map(|l| l.on).collect();
     // Turn off a trade.
     s.execute("coordination.trades", &json!({"set": [{"system": "P-WATER", "visible": false}]})).unwrap();
-    let after: Vec<bool> = s.doc().unwrap().layers.iter()
-        .filter(|l| l.name.starts_with("3D-MEP-P-WATER"))
-        .map(|l| l.on)
-        .collect();
+    let after: Vec<bool> = s.doc().unwrap().layers.iter().filter(|l| l.name.starts_with("3D-MEP-P-WATER")).map(|l| l.on).collect();
     assert!(after.iter().any(|on| !on), "P-WATER should be hidden");
     // Undo.
     s.undo().unwrap();
-    let restored: Vec<bool> = s.doc().unwrap().layers.iter()
-        .filter(|l| l.name.starts_with("3D-MEP-"))
-        .map(|l| l.on)
-        .collect();
+    let restored: Vec<bool> = s.doc().unwrap().layers.iter().filter(|l| l.name.starts_with("3D-MEP-")).map(|l| l.on).collect();
     assert_eq!(restored, initial_on, "undo should restore trade visibility");
 }
 
