@@ -3260,10 +3260,4 @@ menu	Modify	수정
 	Photo	사진
 	Schedule from Element Properties	요소 특성으로 일람표 작성
 	Check Element Properties	요소 특성 검사
-	Walls	벽
-	Ceiling Types	천장 유형
-	Soffit Types	소핏 유형
-	Nothing changed: the building spec is the same as before.	변경된 내용이 없습니다. 건물 사양이 이전과 같습니다.
-	Clash Navigate	충돌 탐색
-	Colour By Status/Level	상태/레벨별 색상
-	Inspect Element	요소 검사
+	Drawing Set from Model	모델에서 도면 세트

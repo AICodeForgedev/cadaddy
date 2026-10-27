@@ -3048,10 +3048,4 @@
 	Photo	Photo
 	Schedule from Element Properties	Nomenclature à partir des propriétés des éléments
 	Check Element Properties	Vérifier les propriétés des éléments
-	Walls	Murs
-	Ceiling Types	Types de plafond
-	Soffit Types	Types de retombée
-	Nothing changed: the building spec is the same as before.	Rien n'a changé : la spécification du bâtiment est la même qu'avant.
-	Clash Navigate	Parcourir les conflits
-	Colour By Status/Level	Couleur par état/niveau
-	Inspect Element	Inspecter l'élément
+	Drawing Set from Model	Jeu de plans à partir du modèle
