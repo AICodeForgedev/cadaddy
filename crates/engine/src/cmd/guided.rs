@@ -3376,6 +3376,18 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         level.region = Some(r);
                     }
                 }
+                // A level without a floor plan (the roof) or with a placeholder region takes the
+                // region of the level below: a far-off placeholder put its devices a billion units
+                // away and the whole-building view framed a dot.
+                let mut below: Option<[f64; 4]> = None;
+                for level in &mut sp.levels {
+                    let placeholder = level.region.is_none_or(|r| r.iter().any(|v| !v.is_finite() || v.abs() > 1.0e8));
+                    if placeholder && let Some(r) = below {
+                        progress_line(&format!("  level {}: no plan of its own, uses the region below", level.name));
+                        level.region = Some(r);
+                    }
+                    below = level.region.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8)).or(below);
+                }
                 s.doc_mut()?.building_spec = Some(sp.to_json());
             }
             // Where each sheet of the set sits, so what lies on the other disciplines' sheets
