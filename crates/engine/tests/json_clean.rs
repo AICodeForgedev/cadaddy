@@ -57,9 +57,9 @@ fn echo_strips_control_characters() {
 #[test]
 fn sanitize_cleans_nested_values() {
     let mut v = json!({
-        "a": format!("x\x00y"),
-        "b": [format!("\x1b[1m"), "clean"],
-        "c": {"d": format!("\x07\x08")}
+        "a": "x\x00y".to_string(),
+        "b": ["\x1b[1m".to_string(), "clean"],
+        "c": {"d": "\x07\x08".to_string()}
     });
     cadaddy_engine::json_clean::sanitize(&mut v);
     let s = serde_json::to_string(&v).expect("serialise");
