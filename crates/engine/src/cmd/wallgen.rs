@@ -335,6 +335,11 @@ pub fn builds_so_far() -> usize {
 
 /// Build the drawing's 3D building from `g`; the counts.
 pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
+    build_with_progress(s, g, &(web_time::Instant::now() + std::time::Duration::from_secs(3600)))
+}
+
+/// [`build`] with per-level progress events and a deadline (Q6029 MUST 2/3).
+pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_time::Instant) -> Result<Value> {
     BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let scene = cadaddy_walk3d::derive(s.doc()?, &g.rules);
     let upf = if scene.units_per_foot.is_finite() && scene.units_per_foot > 0.0 { scene.units_per_foot } else { 12.0 };
@@ -344,6 +349,9 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
     let mut notes = Vec::new();
     let mut planned: Vec<(usize, PlanLevel)> = Vec::new();
     let total_levels = g.rules.levels.iter().filter(|l| l.sheet.is_none()).count();
+    let mut levels_done = 0usize;
+    let mut total_walls = 0usize;
+    let mut budget_exceeded = false;
     for (i, level) in g.rules.levels.iter().enumerate() {
         if level.sheet.is_some() {
             continue;
@@ -354,17 +362,50 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
         if roof_level(&g.rules.levels, &level.name) {
             continue;
         }
+        // Q6029 MUST 3: stop if the time budget is exceeded.
+        if web_time::Instant::now() > *deadline {
+            let secs = build_start.elapsed().as_secs();
+            notes.push(format!(
+                "Build stopped at level {}/{}: {} s exceeded the time budget. {} walls built so far.",
+                levels_done, total_levels, secs, total_walls
+            ));
+            budget_exceeded = true;
+            break;
+        }
+        // Q6029 MUST 2: per-level progress with ETA.
+        let eta_s = if levels_done > 0 {
+            let avg = build_start.elapsed().as_secs_f64() / levels_done as f64;
+            let remaining = total_levels.saturating_sub(levels_done);
+            Some((avg * remaining as f64).round() as u64)
+        } else {
+            None
+        };
+        s.event(
+            "build.progress",
+            json!({
+                "step": "level",
+                "level": level.name,
+                "level_num": levels_done + 1,
+                "total_levels": total_levels,
+                "walls_so_far": total_walls,
+                "eta_s": eta_s,
+            }),
+        );
         let level_start = web_time::Instant::now();
         let pl = plan_level(s.doc()?, g, level, upf, &mut notes);
         let level_ms = level_start.elapsed().as_millis();
         if !pl.walls.is_empty() {
+            let walls = pl.walls.len();
+            let openings = pl.leaves.len();
+            total_walls += walls;
             if level_ms > 100 {
-                notes.push(format!("{}: built {} walls, {} openings in {} ms.", level.name, pl.walls.len(), pl.leaves.len(), level_ms));
+                notes.push(format!("{}: built {} walls, {} openings in {} ms.", level.name, walls, openings, level_ms));
             }
             planned.push((si, pl));
         } else if i == 0 && g.rules.levels.len() == 1 && scene.tris.is_empty() {
             notes.push("Nothing to build.".into());
         }
+        levels_done += 1;
     }
     if total_levels > 1 {
         let plan_ms = build_start.elapsed().as_millis();
@@ -453,10 +494,15 @@ pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
         }
     }
     let c = |k: &str| counts.get(k).copied().unwrap_or(0);
-    Ok(json!({
+    let mut r = json!({
         "walls": c("wall"), "doors": c("door"), "windows": c("window"), "floors": c("floor"), "ceilings": c("ceiling"),
         "levels": scene.levels.len(), "removed": removed, "notes": notes,
-    }))
+    });
+    if budget_exceeded {
+        r["budget_exceeded"] = json!(true);
+        r["levels_built"] = json!(levels_done);
+    }
+    Ok(r)
 }
 
 /// Whether `name` is the roof of a building with storeys under it (`Roof`, `MAIN ROOF`, `LOW

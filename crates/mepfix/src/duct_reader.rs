@@ -763,16 +763,39 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         rectangles(d, "DEVICE")
     };
     let segs = line_segments(d);
-    let device_lines: Vec<&LineSeg> = if all_layers && pdf_filter {
+    let mut device_lines: Vec<&LineSeg> = if all_layers && pdf_filter {
         segs.iter().filter(|s| is_pdf_mep_line(&s.layer)).collect()
     } else if all_layers {
         segs.iter().filter(|s| !is_content_exclude(&s.layer)).collect()
     } else {
         segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect()
     };
+    // On a sheet of any layer (a PDF import) every symbol needs its tag beside it.
+    let mut device_rects: Vec<(Vec2, Vec2, bool)> = device_rects.into_iter().map(|(lo, hi, _)| (lo, hi, all_layers)).collect();
+    // A PDF import folds a symbol drawn many times into a block (`PDF-SYM-n`): its box and
+    // lines count as drawn where each insert puts them, with its tag beside it. A CAD sheet's
+    // device blocks on the DEVICE layer are symbols by their layer.
+    let pick = |layer: &str, block: &str| all_layers || is_pdf_symbol(block) || layer.eq_ignore_ascii_case("DEVICE");
+    let (sym_rects, sym_lines) = insert_geometry(d, &pick);
+    device_rects.extend(sym_rects.into_iter().map(|(lo, hi, block)| (lo, hi, all_layers || is_pdf_symbol(&block))));
+    if all_layers {
+        // Boxes a PDF path draws back to its start without closing it.
+        for e in d.model.iter() {
+            let EntityKind::LwPolyline(p) = &e.kind else { continue };
+            let wanted = if pdf_filter { is_pdf_mep_line(&e.common.layer) } else { !is_content_exclude(&e.common.layer) };
+            if !wanted || (p.closed && p.vertices.len() == 4) || device_rects.len() >= MAX_INSERTS * 2 {
+                continue;
+            }
+            let pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
+            if let Some((lo, hi)) = as_box(&pts, p.closed) {
+                device_rects.push((lo, hi, true));
+            }
+        }
+    }
+    device_lines.extend(sym_lines.iter());
 
-    for (min, max, _) in &device_rects {
-        let center = (*min + *max) * 0.5;
+    let mut candidates: Vec<(Vec2, Vec2, &str, bool)> = Vec::new();
+    for (min, max, needs_tag) in &device_rects {
         let w = max.x - min.x;
         let h = max.y - min.y;
 
@@ -781,12 +804,14 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
             continue;
         }
 
-        // Count internal lines to classify.
+        // Count internal lines to classify: inside the box, not its own sides (every box
+        // would be a grille by them).
+        let m = 0.05 * w.min(h);
         let internal: Vec<&&LineSeg> = device_lines
             .iter()
             .filter(|l| {
                 let mid = (l.a + l.b) * 0.5;
-                mid.x >= min.x - 0.1 && mid.x <= max.x + 0.1 && mid.y >= min.y - 0.1 && mid.y <= max.y + 0.1
+                mid.x > min.x + m && mid.x < max.x - m && mid.y > min.y + m && mid.y < max.y - m
             })
             .collect();
 
@@ -811,9 +836,209 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
             continue;
         };
 
-        terminals.push(DetectedTerminal { kind: kind.into(), at: center, confidence: 0.7 });
+        candidates.push((*min, *max, kind, *needs_tag));
+    }
+    // Repeated cells of a hatch or pattern (a ceiling grid, tile, louvre or brick fill) are
+    // not air devices: a cell with two or more same-size cells beside it is part of a pattern.
+    let near = pattern_neighbours(&candidates.iter().map(|c| (c.0, c.1)).collect::<Vec<_>>());
+    // On a sheet of any layer (a PDF import), a symbol is an air device only with its tag
+    // beside it (`CD-1`, `RG-2`, `150 CFM`, as the air device schedule names them).
+    let tags: Vec<(Vec2, f64)> = if candidates.iter().any(|c| c.3) {
+        text_entities(d).into_iter().filter(|(t, ..)| is_terminal_tag(t)).map(|(_, at, _, h)| (at, h.max(0.0))).collect()
+    } else {
+        Vec::new()
+    };
+    for (i, (min, max, kind, needs_tag)) in candidates.iter().enumerate() {
+        if near.get(i).copied().unwrap_or(0) >= 2 {
+            continue;
+        }
+        // A supply diffuser's inner frame is part of it, not an air device of its own.
+        let inside =
+            |(lo, hi): (Vec2, Vec2)| lo.x <= min.x && lo.y <= min.y && hi.x >= max.x && hi.y >= max.y && (hi - lo).len() > (*max - *min).len() * 1.2;
+        if candidates.iter().any(|(lo, hi, ..)| inside((*lo, *hi))) {
+            continue;
+        }
+        if *needs_tag {
+            let size = (max.x - min.x).max(max.y - min.y);
+            let tagged = tags.iter().any(|(at, h)| box_gap(*at, *min, *max) <= size * 1.5 + h * 6.0);
+            if !tagged {
+                continue;
+            }
+        }
+        terminals.push(DetectedTerminal { kind: (*kind).into(), at: (*min + *max) * 0.5, confidence: 0.7 });
+        if terminals.len() >= MAX_TERMINALS {
+            break;
+        }
     }
     terminals
+}
+
+/// The most inserts whose blocks [`insert_geometry`] looks into.
+const MAX_INSERTS: usize = 20_000;
+
+/// Whether `block` is a symbol a PDF import made of a drawing repeated on the page.
+fn is_pdf_symbol(block: &str) -> bool {
+    block.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("PDF-SYM"))
+}
+
+/// The closed four-sided boxes (with their block's name) and straight lines of each picked
+/// (`pick(layer, block)`) model-space insert's block, where the insert puts them (one level deep; arrays and blocks of more than 64 objects are left
+/// out: a symbol is a few strokes).
+fn insert_geometry(d: &Drawing, pick: &dyn Fn(&str, &str) -> bool) -> (Vec<(Vec2, Vec2, String)>, Vec<LineSeg>) {
+    let (mut rects, mut lines) = (Vec::new(), Vec::new());
+    for e in d.model.iter() {
+        let EntityKind::Insert(ins) = &e.kind else { continue };
+        if rects.len() >= MAX_INSERTS || lines.len() >= MAX_SEGS {
+            break;
+        }
+        if ins.cols > 1 || ins.rows > 1 || !pick(&e.common.layer, &ins.block) {
+            continue;
+        }
+        let Some(block) = d.block(&ins.block) else { continue };
+        if block.entities.len() > 64 {
+            continue;
+        }
+        let (base, at, sc, (sn, cs)) = (block.base.xy(), ins.insert.xy(), ins.scale, ins.rotation.sin_cos());
+        let place = |p: Vec2| {
+            let q = Vec2::new((p.x - base.x) * sc.x, (p.y - base.y) * sc.y);
+            Vec2::new(at.x + q.x * cs - q.y * sn, at.y + q.x * sn + q.y * cs)
+        };
+        let layer = e.common.layer.to_string();
+        for be in block.entities.iter() {
+            match &be.kind {
+                EntityKind::Line(l) => {
+                    let (a, b) = (place(l.a.xy()), place(l.b.xy()));
+                    if a.is_finite() && b.is_finite() && a.dist(b) > 1e-9 {
+                        lines.push(LineSeg { a, b, layer: layer.clone() });
+                    }
+                }
+                EntityKind::LwPolyline(p) => {
+                    let pts: Vec<Vec2> = p.vertices.iter().map(|v| place(v.p)).collect();
+                    if !pts.iter().all(|q| q.is_finite()) {
+                        continue;
+                    }
+                    if let Some((lo, hi)) = as_box(&pts, p.closed) {
+                        rects.push((lo, hi, ins.block.clone()));
+                    }
+                    let n = pts.len();
+                    let m = if p.closed { n } else { n.saturating_sub(1) };
+                    for i in 0..m {
+                        if let (Some(&a), Some(&b)) = (pts.get(i), pts.get((i + 1) % n.max(1)))
+                            && a.dist(b) > 1e-9
+                        {
+                            lines.push(LineSeg { a, b, layer: layer.clone() });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (rects, lines)
+}
+
+/// The box a polyline starts with: four corners of an upright rectangle, closed by the flag
+/// (four points) or by coming back to the first (a PDF path drawn `m l l l l`, which may go on
+/// past it, as a diffuser's box carries on into its diagonal).
+fn as_box(pts: &[Vec2], closed: bool) -> Option<(Vec2, Vec2)> {
+    let c = pts.get(..4)?;
+    let size = c.windows(2).map(|w| w[0].dist(w[1])).fold(0.0, f64::max);
+    let tol = (size * 0.02).max(1e-9);
+    let first = *c.first()?;
+    let shut = (closed && pts.len() == 4) || pts.get(4).is_some_and(|p| p.dist(first) <= tol);
+    if !shut {
+        return None;
+    }
+    // Each side is level or plumb, and they take turns.
+    let mut flats = Vec::with_capacity(4);
+    for i in 0..4 {
+        let (a, b) = (*c.get(i)?, *c.get((i + 1) % 4)?);
+        let (flat, tall) = ((a.y - b.y).abs() <= tol, (a.x - b.x).abs() <= tol);
+        if flat == tall {
+            return None;
+        }
+        flats.push(flat);
+    }
+    if flats.windows(2).any(|w| w[0] == w[1]) {
+        return None;
+    }
+    let lo = Vec2::new(c.iter().map(|q| q.x).fold(f64::INFINITY, f64::min), c.iter().map(|q| q.y).fold(f64::INFINITY, f64::min));
+    let hi = Vec2::new(c.iter().map(|q| q.x).fold(f64::NEG_INFINITY, f64::max), c.iter().map(|q| q.y).fold(f64::NEG_INFINITY, f64::max));
+    (hi.x - lo.x > tol && hi.y - lo.y > tol).then_some((lo, hi))
+}
+
+/// The most air devices read on one sheet.
+const MAX_TERMINALS: usize = 5_000;
+
+/// How far `p` is outside the box `lo..hi` (0 inside).
+fn box_gap(p: Vec2, lo: Vec2, hi: Vec2) -> f64 {
+    let dx = (lo.x - p.x).max(p.x - hi.x).max(0.0);
+    let dy = (lo.y - p.y).max(p.y - hi.y).max(0.0);
+    dx.hypot(dy)
+}
+
+/// For each box, how many boxes of the same size sit within half its size of it: the
+/// neighbours a cell of a repeated pattern has.
+fn pattern_neighbours(boxes: &[(Vec2, Vec2)]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..boxes.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (ka, kb) = (boxes.get(a).map_or(0.0, |x| x.0.x), boxes.get(b).map_or(0.0, |x| x.0.x));
+        ka.total_cmp(&kb)
+    });
+    let mut count = vec![0usize; boxes.len()];
+    for (k, &i) in order.iter().enumerate() {
+        let Some(&(lo, hi)) = boxes.get(i) else { continue };
+        let (w, h) = (hi.x - lo.x, hi.y - lo.y);
+        let gap = w.max(h) * 0.5;
+        for &j in order.iter().skip(k + 1) {
+            let Some(&(lo2, hi2)) = boxes.get(j) else { continue };
+            if lo2.x > hi.x + gap {
+                break;
+            }
+            let (w2, h2) = (hi2.x - lo2.x, hi2.y - lo2.y);
+            if (w2 - w).abs() > 0.1 * w.max(w2) || (h2 - h).abs() > 0.1 * h.max(h2) {
+                continue;
+            }
+            let dx = (lo2.x - hi.x).max(lo.x - hi2.x).max(0.0);
+            let dy = (lo2.y - hi.y).max(lo.y - hi2.y).max(0.0);
+            // Beside it (not overlapping it, as a frame inside a diffuser does).
+            let overlaps = lo2.x < hi.x && lo.x < hi2.x && lo2.y < hi.y && lo.y < hi2.y;
+            if !overlaps && dx <= gap && dy <= gap {
+                if let Some(c) = count.get_mut(i) {
+                    *c += 1;
+                }
+                if let Some(c) = count.get_mut(j) {
+                    *c += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
+/// Equipment marks, which are not air devices' tags.
+const EQUIPMENT_MARKS: &[&str] = &["AHU", "RTU", "VAV", "EF", "FCU", "CU", "HP", "ERV", "MAU", "UH", "CUH", "FPB", "SF", "RF", "WH", "P"];
+
+/// Whether `t` is an air device's tag: a type mark (`CD-1`, `RG2`, `SD-1A`) or an airflow
+/// (`150 CFM`).
+pub(crate) fn is_terminal_tag(t: &str) -> bool {
+    let t = t.trim().to_ascii_uppercase();
+    if t.len() > 40 {
+        return false;
+    }
+    if t.contains("CFM") {
+        return t.chars().any(|c| c.is_ascii_digit());
+    }
+    let letters: String = t.chars().take_while(char::is_ascii_uppercase).collect();
+    let rest = t.get(letters.len()..).unwrap_or("");
+    let rest = rest.strip_prefix('-').unwrap_or(rest);
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    let tail = rest.get(digits..).unwrap_or("");
+    (1..=3).contains(&letters.len())
+        && (1..=2).contains(&digits)
+        && tail.len() <= 1
+        && tail.chars().all(|c| c.is_ascii_uppercase())
+        && !EQUIPMENT_MARKS.contains(&letters.as_str())
 }
 
 // ---- Equipment detection ---------------------------------------------------
@@ -1688,6 +1913,98 @@ mod tests {
         assert_eq!(text_entities(&sheet(cadaddy_io::pdf_read::OCR_TEXT_STYLE)).len(), 0);
         let ocr = read_ducts_any_layer(&sheet(cadaddy_io::pdf_read::OCR_TEXT_STYLE));
         assert!(ocr.runs.is_empty() && ocr.tags.is_empty(), "an OCR guess makes no duct: {:?}", ocr.runs);
+    }
+
+    /// A sheet with `grilles` (return grille symbols: a 24" box with three cross lines, at
+    /// each centre, on `layer`), a 20x20 tile hatch of the same cells, and `texts`.
+    fn grille_sheet(layer: &str, grilles: &[[f64; 2]], hatch: bool, texts: &[(&str, [f64; 2])]) -> Drawing {
+        let mut d = Drawing::new_imperial();
+        let common = cadaddy_doc::Common { layer: layer.into(), ..Default::default() };
+        let mut add = |kind: EntityKind| {
+            d.add(&cadaddy_doc::Space::Model, common.clone(), kind).expect("add");
+        };
+        let mut cell = |c: [f64; 2]| {
+            let h = 12.0;
+            let corners = [[c[0] - h, c[1] - h], [c[0] + h, c[1] - h], [c[0] + h, c[1] + h], [c[0] - h, c[1] + h]];
+            let vertices = corners.iter().map(|p| cadaddy_geom::PolyVertex::new(Vec2::new(p[0], p[1]))).collect();
+            add(EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false }));
+            for k in [-0.5, 0.0, 0.5] {
+                let y = c[1] + k * h;
+                add(EntityKind::Line(cadaddy_doc::Line {
+                    a: cadaddy_geom::Vec3::new(c[0] - h, y, 0.0),
+                    b: cadaddy_geom::Vec3::new(c[0] + h, y, 0.0),
+                }));
+            }
+        };
+        for g in grilles {
+            cell(*g);
+        }
+        if hatch {
+            for i in 0..20 {
+                for j in 0..20 {
+                    cell([5000.0 + 24.0 * f64::from(i), 5000.0 + 24.0 * f64::from(j)]);
+                }
+            }
+        }
+        for (t, at) in texts {
+            d.add(
+                &cadaddy_doc::Space::Model,
+                cadaddy_doc::Common::default(),
+                EntityKind::Text(cadaddy_doc::Text {
+                    insert: cadaddy_geom::Vec3::new(at[0], at[1], 0.0),
+                    align_pt: None,
+                    height: 4.0,
+                    value: (*t).into(),
+                    rotation: 0.0,
+                    width_factor: 1.0,
+                    oblique: 0.0,
+                    style: "Standard".into(),
+                    halign: cadaddy_doc::HAlign::Left,
+                    valign: cadaddy_doc::VAlign::Baseline,
+                }),
+            )
+            .expect("text");
+        }
+        d
+    }
+
+    #[test]
+    fn hatch_cells_are_not_grilles() {
+        // 400 tile cells that each look like a return grille, as a PDF's hatch comes in.
+        let d = grille_sheet("M-HVAC", &[], true, &[("RG-1", [5100.0, 5100.0])]);
+        let t = detect_terminals(&d, true, false);
+        assert!(t.is_empty(), "hatch read as {} grilles", t.len());
+        // On a CAD sheet's device layer too.
+        let d = grille_sheet("DEVICE", &[], true, &[]);
+        assert!(detect_terminals(&d, false, false).is_empty());
+    }
+
+    #[test]
+    fn a_grille_needs_its_tag_on_a_pdf_sheet() {
+        // Two grilles 10 ft apart: one with its tag and airflow beside it, one with nothing.
+        let texts = [("RG-1", [40.0, 4.0]), ("150 CFM", [40.0, -6.0])];
+        let d = grille_sheet("M-HVAC", &[[0.0, 0.0], [120.0, 0.0]], true, &texts);
+        let t = detect_terminals(&d, true, false);
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert_eq!(t[0].kind, "return_grille");
+        assert!(t[0].at.dist(Vec2::new(0.0, 0.0)) < 1e-9);
+        // A legend's symbol has a description by it, not a tag; an equipment box's mark is
+        // not an air device's.
+        let d = grille_sheet("M-HVAC", &[[0.0, 0.0], [400.0, 0.0]], false, &[("RETURN GRILLE", [30.0, 0.0]), ("VAV-1", [430.0, 0.0])]);
+        assert!(detect_terminals(&d, true, false).is_empty());
+        // A CAD sheet's device layer is symbols by layer: no tag needed.
+        let d = grille_sheet("DEVICE", &[[0.0, 0.0], [120.0, 0.0]], false, &[]);
+        assert_eq!(detect_terminals(&d, false, false).len(), 2);
+    }
+
+    #[test]
+    fn terminal_tags() {
+        for t in ["CD-1", "RG-2", "EG1", "SD-1A", "150 CFM", "A1"] {
+            assert!(is_terminal_tag(t), "{t}");
+        }
+        for t in ["RETURN GRILLE", "VAV-1", "AHU-2", "EF-1", "24x12", "CFM", "A-101", "SA", "TYP"] {
+            assert!(!is_terminal_tag(t), "{t}");
+        }
     }
 
     #[test]
