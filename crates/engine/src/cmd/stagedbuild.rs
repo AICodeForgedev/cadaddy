@@ -45,6 +45,8 @@ const MAX_FRAMED: usize = 20_000;
 const MAX_STAGE_HANDLES: usize = 400_000;
 /// Questions asked per stage, at most.
 const MAX_QUESTIONS: usize = 40;
+/// Most levels the shell stage names the sheet of (a hostile spec has thousands).
+const MAX_LEVEL_NOTES: usize = 40;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -722,6 +724,30 @@ pub(crate) fn stage_model(s: &mut Session, built: &Value, readings: &Readings, r
         x.count("exterior_walls", exterior.len());
         for k in ["floors", "columns", "gridColumns", "curtainWalls", "roofs", "parapets", "stairs", "ramps", "concrete"] {
             x.count(k, n(k));
+        }
+        // Which sheet each level's plan region lies on (a check that the levels are read off
+        // the architectural plans).
+        if let Ok((sp, true)) = super::bspec::current(s, "bim.from_pdf") {
+            let on: Vec<String> = sp
+                .levels
+                .iter()
+                .take(MAX_LEVEL_NOTES)
+                .map(|l| match l.region {
+                    Some([x0, y0, x1, y1]) => {
+                        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+                        let here = places.iter().find(|p| holds(&p.rect, cx, cy) && p.view.is_none_or(|v| holds(&v, cx, cy)));
+                        let size = format!("{:.0} x {:.0}", (x1 - x0).abs(), (y1 - y0).abs());
+                        match here {
+                            Some(p) => format!("{} on {} ({}, {size})", l.name, p.number, if p.arch { "A" } else { "not A" }),
+                            None => format!("{} on no sheet ({size})", l.name),
+                        }
+                    }
+                    None => format!("{} on the whole drawing", l.name),
+                })
+                .collect();
+            if !on.is_empty() {
+                x.notes.push(format!("level plans: {}", on.join(", ")));
+            }
         }
         if !unsorted.is_empty() {
             x.notes.push(format!(

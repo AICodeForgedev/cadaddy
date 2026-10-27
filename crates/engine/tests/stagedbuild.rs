@@ -235,6 +235,10 @@ fn one_architectural_plan_never_takes_walls_from_the_trade_sheets() {
     assert_eq!(staged["wall_ratio"], json!(1.0), "{staged}");
     let notes = stage(&r, "walls")["notes"].to_string();
     assert!(notes.contains("A-101") && !notes.contains("M-10") && !notes.contains("P-10"), "{notes}");
+    // The shell names the sheet each level's plan is read off: A-101, an architectural sheet.
+    let shell = stage(&r, "shell")["notes"].to_string();
+    assert!(shell.contains("level plans: ") && shell.contains("on A-101 (A, "), "{shell}");
+    assert!(!shell.contains("(not A, "), "{shell}");
     // Each level's region is its own A plan's (none for the levels without one), never a band
     // across the sheets.
     let spec: Value = serde_json::from_str(s.doc().expect("doc").building_spec.as_deref().unwrap_or("{}")).expect("spec");
