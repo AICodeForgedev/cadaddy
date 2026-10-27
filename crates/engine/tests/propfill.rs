@@ -657,6 +657,11 @@ fn the_guided_job_reads_the_schedules_onto_fixtures_and_equipment() {
     let _g = serial();
     real_pdf_reader();
     let mut s = run_job("sched", &["A-101", "M-101", "A-102", "P-102", "M-601", "P-601"]);
+    let build = s.execute("job.explain", &json!({"stage": "bim_build"})).expect("explain");
+    let read = &build["result"]["schedules_read"];
+    assert_eq!(read["sheets"], json!(["M-601", "P-601"]), "the schedule sheets the job read: {read:#}");
+    assert!(read["rows"].as_u64().unwrap_or(0) >= 4, "{read:#}");
+    assert!(build["result"]["props"]["diagnostics"]["schedule_rows"].as_u64().unwrap_or(0) >= 4, "{:#}", build["result"]["props"]);
     let sum = s.execute("bim.props.summary", &json!({})).expect("summary");
     let k = &sum["kinds"];
     let fixtures = k["fixture"]["filled"]["connections"].as_u64().unwrap_or(0);

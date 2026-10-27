@@ -3128,8 +3128,11 @@ const MAX_SCHEDULE_PAGES: usize = 12;
 /// The rows of the set's mechanical and plumbing schedule sheets (the job imports only plans):
 /// each such sheet imported on its own into a scratch drawing and its tables read; one
 /// `{tag, sheet, row}` per row with a tag. None when the set has no such sheet or it can't be read.
-fn equipment_schedule_rows(job: &GuidedJob) -> Vec<Value> {
-    let Some(list) = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array) else { return Vec::new() };
+/// Also the sheets read and why none were.
+fn equipment_schedule_rows(job: &GuidedJob) -> (Vec<Value>, Value) {
+    let Some(list) = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array) else {
+        return (Vec::new(), json!({"why": "no sheet list"}));
+    };
     let text = |sh: &Value, k: &str| sh.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let mut seen = std::collections::HashSet::new();
     let wanted: Vec<(String, super::exchange::PdfPage)> = list
@@ -3152,7 +3155,8 @@ fn equipment_schedule_rows(job: &GuidedJob) -> Vec<Value> {
         .take(MAX_SCHEDULE_PAGES)
         .collect();
     if wanted.is_empty() {
-        return Vec::new();
+        let types: BTreeSet<String> = list.iter().take(500).map(|sh| format!("{}:{}", text(sh, "discipline"), text(sh, "sheet_type"))).collect();
+        return (Vec::new(), json!({"why": "no mechanical or plumbing schedule sheet", "sheet_kinds": types}));
     }
     let mut t = Session::new();
     let (numbers, pages): (Vec<String>, Vec<super::exchange::PdfPage>) = wanted.into_iter().unzip();
@@ -3168,16 +3172,18 @@ fn equipment_schedule_rows(job: &GuidedJob) -> Vec<Value> {
         }
         last = seed;
     };
-    if super::exchange::import_pdf_pages(&mut t, &pages, true, true, &mut on_page).is_err() {
-        return Vec::new();
+    if let Err(e) = super::exchange::import_pdf_pages(&mut t, &pages, true, true, &mut on_page) {
+        return (Vec::new(), json!({"sheets": numbers, "why": format!("could not import them: {e}")}));
     }
-    let Ok(d) = t.doc() else { return Vec::new() };
+    let Ok(d) = t.doc() else { return (Vec::new(), json!({"sheets": numbers, "why": "no drawing"})) };
     let mut out = Vec::new();
+    let mut tables = 0usize;
     for (number, span) in numbers.iter().zip(&spans) {
         let Some(span) = *span else { continue };
         let sheet = super::printmep::SheetRef { number: number.clone(), span: Some(span), ..Default::default() };
         let sub = super::printmep::sheet_drawing(d, &sheet);
         for table in cadaddy_mepfix::equip_reader::read_tables(&sub, number) {
+            tables += 1;
             let Some(key) = table.columns.iter().find(|c| {
                 let c = c.trim().to_ascii_uppercase();
                 c.contains("TAG") || c.contains("MARK") || c == "UNIT" || c == "NO." || c == "NO"
@@ -3188,12 +3194,14 @@ fn equipment_schedule_rows(job: &GuidedJob) -> Vec<Value> {
                 let Some(tag) = row.get(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) else { continue };
                 out.push(json!({"tag": tag, "sheet": number, "title": table.title, "row": row}));
                 if out.len() >= 5_000 {
-                    return out;
+                    let report = json!({"sheets": numbers, "tables": tables, "rows": out.len()});
+                    return (out, report);
                 }
             }
         }
     }
-    out
+    let report = json!({"sheets": numbers, "imported": spans.iter().filter(|x| x.is_some()).count(), "tables": tables, "rows": out.len()});
+    (out, report)
 }
 
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
@@ -3323,7 +3331,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         Err(e) => result["room_volumes_error"] = json!(e.to_string()),
     }
     // The mechanical and plumbing schedules' rows, for the equipment's capacities.
-    let schedules = equipment_schedule_rows(job);
+    let (schedules, schedules_read) = equipment_schedule_rows(job);
+    result["schedules_read"] = schedules_read;
     match s.execute("bim.props.fill", &json!({"schedules": schedules})) {
         Ok(v) => result["props"] = v,
         Err(e) => job.add_finding(
