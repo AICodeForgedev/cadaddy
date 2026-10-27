@@ -523,14 +523,10 @@ fn words(t: &str) -> BTreeSet<String> {
 }
 
 /// Q5301: system and material keywords for the never-cross rule.
-const SYSTEM_WORDS: &[&str] = &[
-    "gas", "vent", "cw", "hw", "dcw", "dhw", "supply", "return", "exhaust", "sanitary",
-    "storm", "fire", "refrigerant", "condensate",
-];
-const MATERIAL_WORDS: &[&str] = &[
-    "copper", "pvc", "steel", "galvanized", "aluminum", "cast", "iron", "fiberglass",
-    "stainless", "brass", "emt", "imc", "rigid",
-];
+const SYSTEM_WORDS: &[&str] =
+    &["gas", "vent", "cw", "hw", "dcw", "dhw", "supply", "return", "exhaust", "sanitary", "storm", "fire", "refrigerant", "condensate"];
+const MATERIAL_WORDS: &[&str] =
+    &["copper", "pvc", "steel", "galvanized", "aluminum", "cast", "iron", "fiberglass", "stainless", "brass", "emt", "imc", "rigid"];
 
 /// The cost row for a takeoff line: its index and how it matched.
 /// Q5301: exact match first, then family match (word-based, never crossing system/material/size).
@@ -642,10 +638,8 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
         } else {
             // Q6020: suggest the nearest row but never apply it.
             let item_name = l["item"].as_str().unwrap_or_default();
-            let nearest: Option<&str> = rows.iter().chain(starter.iter())
-                .filter(|r| !r.item.trim().is_empty())
-                .map(|r| r.item.as_str())
-                .min_by_key(|ri| {
+            let nearest: Option<&str> =
+                rows.iter().chain(starter.iter()).filter(|r| !r.item.trim().is_empty()).map(|r| r.item.as_str()).min_by_key(|ri| {
                     let rw = words(ri);
                     let lw = words(item_name);
                     let overlap = rw.iter().filter(|w| lw.contains(*w)).count();
