@@ -22,7 +22,7 @@ const CMD: &str = "markupimport";
 /// Most markups placed from one page.
 const MAX_MARKUPS: usize = 5000;
 
-static READER: std::sync::OnceLock<MarkupReader> = std::sync::OnceLock::new();
+pub(crate) static READER: std::sync::OnceLock<MarkupReader> = std::sync::OnceLock::new();
 
 /// Install the PDF markup reader (once).
 pub fn set_reader(f: MarkupReader) {
