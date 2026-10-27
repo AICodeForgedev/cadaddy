@@ -3236,6 +3236,15 @@ menu	Modify	Ändra
 	Sequence Trade Conflicts	Konflikter mellan yrken i byggordningen
 	Ceiling Space Fit	Utrymme ovan undertak
 	Takeoff by Activity	Mängdavtagning per aktivitet
+	BIM	BIM
+	Door	Dörr
+	Wall	Vägg
+	Plan Views	Planvyer
+	Generate Plan Views	Generera planvyer
+	Draw Wall (Object)	Rita vägg (objekt)
+	Place Door in Wall	Placera dörr i vägg
+	Place Window in Wall	Placera fönster i vägg
+	Resolve Plan Entity	Identifiera planelement
 	Record As-Built Change	Registrera relationsändring
 	Import As-Built Markups	Importera relationsmarkeringar
 	List As-Built Changes	Lista relationsändringar
