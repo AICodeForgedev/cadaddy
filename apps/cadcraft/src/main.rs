@@ -39,11 +39,22 @@ struct App {
     workspace_error: Option<String>,
     #[cfg(target_os = "macos")]
     native_menu: Option<native_menu::NativeMenu>,
+    /// The `movable` flag last set on the main window.
+    #[cfg(target_os = "macos")]
+    movable: Option<bool>,
 }
 
 impl App {
-    fn persist_workspace(&mut self, final_attempt: bool) {
-        let result = if final_attempt { self.workspace.save_on_exit(&self.cad.ui) } else { self.workspace.save_if_changed(&self.cad.ui) };
+    /// `ctx` is `None` only for the final attempt at exit.
+    fn persist_workspace(&mut self, ctx: Option<&egui::Context>) {
+        let result = match ctx {
+            None => self.workspace.save_on_exit(&self.cad.ui),
+            Some(ctx) => self.workspace.save_if_changed(&self.cad.ui, std::time::Instant::now()).map(|wait| {
+                if let Some(wait) = wait {
+                    ctx.request_repaint_after(wait);
+                }
+            }),
+        };
         if let Err(error) = result {
             if self.workspace_error.as_ref() != Some(&error) {
                 eprintln!("CADCraft workspace: {error}");
@@ -78,7 +89,7 @@ impl eframe::App for App {
             #[cfg(target_os = "macos")]
             {
                 if self.native_menu.is_none() && std::env::var_os("CADCRAFT_NO_NATIVE_MENU").is_none() {
-                    self.native_menu = Some(native_menu::NativeMenu::install(&mut self.cad));
+                    self.native_menu = Some(native_menu::NativeMenu::install(&mut self.cad, ctx));
                 }
                 if let Some(m) = &mut self.native_menu {
                     m.poll(&mut self.cad, ctx);
@@ -86,7 +97,7 @@ impl eframe::App for App {
             }
             self.spacemouse.poll(&mut self.cad, ctx);
             // After `cad.logic`, so a control command's workspace change is saved in the same frame.
-            self.persist_workspace(false);
+            self.persist_workspace(Some(ctx));
         }
         if std::mem::take(&mut self.cad.quit_requested) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -100,11 +111,13 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.cad.ui(ui);
+        #[cfg(target_os = "macos")]
+        craft_window::title_bar::sync_movable(ui.ctx(), &mut self.movable);
     }
     /// A normal exit: the workspace is saved, and this run's autosave files are not needed (a
     /// crash leaves them for recovery).
     fn on_exit(&mut self) {
-        self.persist_workspace(true);
+        self.persist_workspace(None);
         self.cad.cancel_screenshots();
         self.cad.shutdown_autosave();
     }
@@ -246,6 +259,15 @@ fn control_flag(current: Option<u16>, value: Option<String>) -> Option<u16> {
 fn main() -> eframe::Result {
     // First, so every start-up record is captured; see `logging`.
     let logger = logging::install();
+    // The update helper relaunches this binary after a self-update; it runs and exits here.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(done) = craft_update::self_update::finish(&craft_update::suite::CADCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        if let Err(e) = done {
+            eprintln!("CADCraft update helper failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     // lossy, so a value that is not Unicode is reported like any other bad port instead of ignored
     let mut control_port =
         control_port_from("CADCRAFT_CONTROL_PORT", std::env::var_os("CADCRAFT_CONTROL_PORT").map(|p| p.to_string_lossy().into_owned()));
@@ -352,6 +374,7 @@ fn main() -> eframe::Result {
             // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
             if let Some(dir) = config_dir() {
                 app.enable_autosave(&dir.join("autosave"));
+                app.enable_update_check();
                 // Startup LISP (acad.lsp, acaddoc.lsp) is read from `<settings>/support`; the
                 // folder is made so it is there to put them in.
                 let support = dir.join("support");
@@ -395,6 +418,8 @@ fn main() -> eframe::Result {
                 workspace_error,
                 #[cfg(target_os = "macos")]
                 native_menu: None,
+                #[cfg(target_os = "macos")]
+                movable: None,
             }))
         }),
     )

@@ -311,6 +311,7 @@ See [ROADMAP.md](ROADMAP.md) for the stage, measured parity and the estimate of 
 Installers and executables are code-signed.
 
 The installer adds CADCraft to the Start menu and asks whether to add a desktop shortcut too (unticked by default). For a silent install with the desktop shortcut: `msiexec /i cadcraft-<ver>-windows-x64.msi /qn DESKTOPSHORTCUT=1`.
+A silent install is per-user by default; add `ALLUSERS=1`, from an elevated terminal or deployment tool, for an all-users install.
 
 **If the app doesn't open on Windows:** the desktop app initializes only DirectX 12 by default.
 Letting wgpu also create an OpenGL instance can crash some graphics drivers (AMD's
