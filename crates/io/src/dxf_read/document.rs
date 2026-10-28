@@ -18,7 +18,7 @@ pub(super) fn parse_entities(
         let paper = t.i(67) == Some(1);
         let handle = t.s(5).and_then(|h| Handle::parse_hex(&h));
         if kind == "VIEWPORT" && crate::dxf_ext::is_paper_view(tags) {
-            rx.paper_views_dropped.push((owner.clone(), paper));
+            rx.paper_views_dropped.push((owner.clone(), paper, rx.block.clone()));
         }
         let mut kindent = entity_with_table_budget(kind, tags, table_cells_left);
         if let Some((c, _)) = kindent.as_mut()
@@ -116,7 +116,9 @@ pub(super) fn read_blocks(
                 j += 1;
             }
             let body = recs.get(i + 1..j).unwrap_or(&[]);
+            rx.block = Some(name.to_ascii_uppercase());
             let ents = parse_entities(body, d, rx, &mut n, table_cells_left);
+            rx.block = None;
             blocks.push((name, base, description, ents, xref));
             i = j + 1;
         } else {
@@ -262,7 +264,16 @@ pub(super) fn place_entities(
 /// Layouts whose generated sheet viewport (PAPERVIEW) the reader dropped: their viewports keep
 /// their ids, so the next save generates the sheet again instead of promoting one of them.
 pub(super) fn dropped_paper_views(rx: &Rx, paper_block_for: &HashMap<String, String>, first_layout: &str) -> std::collections::HashSet<String> {
-    rx.paper_views_dropped.iter().filter_map(|(o, p)| paper_layout(o.clone(), *p, rx, paper_block_for, first_layout)).collect()
+    rx.paper_views_dropped
+        .iter()
+        .filter_map(|(owner, paper, block)| match block {
+            // In a paper-space block the sheet is that block's layout, where `place_blocks` puts
+            // the block's other entities, whatever its owner group says.
+            Some(b) if b.starts_with("*PAPER_SPACE") => Some(paper_block_for.get(b).cloned().unwrap_or_else(|| first_layout.to_string())),
+            Some(_) => None,
+            None => paper_layout(owner.clone(), *paper, rx, paper_block_for, first_layout),
+        })
+        .collect()
 }
 
 pub(super) fn count_skipped(skipped: &mut std::collections::BTreeMap<String, usize>, section: &str, n: usize) {

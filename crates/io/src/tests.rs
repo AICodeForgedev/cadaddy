@@ -690,6 +690,48 @@ fn viewport_id_zero_keeps_implicit_sheet_across_saves() {
     assert!(sheet < vp0, "the generated sheet comes first");
 }
 
+/// The same for a layout written as a `*Paper_SpaceN` block (not the active one) whose PAPERVIEW
+/// sheet lost its owner group (330): the sheet still belongs to the block's layout, as
+/// `place_blocks` puts the block's other entities there, so that layout is left alone too.
+#[test]
+fn viewport_id_zero_in_paper_block_keeps_implicit_sheet_without_owner() {
+    let mut d = sample();
+    d.layouts.push(Layout::new("Layout2", 2));
+    let vp = Viewport {
+        center: Vec3::new(5.0, 4.0, 0.0),
+        width: 8.0,
+        height: 6.0,
+        view_center: Vec2::new(5.0, 4.0),
+        view_height: 6.0,
+        id: 0,
+        ..Viewport::default()
+    };
+    d.add(&Space::Paper("Layout2".into()), Common::default(), EntityKind::Viewport(vp)).unwrap();
+    let first = write_dxf(&d);
+    let lines: Vec<&str> = first.lines().collect();
+    let sheet = lines.iter().position(|l| l.trim() == "PAPERVIEW").expect("the writer adds the sheet");
+    let start = (0..sheet).rev().find(|i| lines[*i].trim() == "0" && lines[i + 1].trim() == "VIEWPORT").unwrap();
+    let owner = (start..sheet).find(|i| lines[*i].trim() == "330").expect("the sheet has an owner");
+    assert!(lines[start..sheet].iter().any(|l| l.trim().eq_ignore_ascii_case("*Paper_Space0") || l.trim() == "AcDbViewport"), "sheet record found");
+    let stripped: String = lines
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != owner && *i != owner + 1)
+        .map(|(_, l)| {
+            format!(
+                "{l}
+"
+            )
+        })
+        .collect();
+    assert!(stripped.contains("*Paper_Space0"), "the second layout is a paper-space block");
+    let back = read_dxf(stripped.as_bytes()).unwrap();
+    let l2 = back.layouts.iter().find(|l| l.name == "Layout2").expect("Layout2");
+    let ids: Vec<u32> = l2.entities.iter().filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some(v.id) } else { None }).collect();
+    assert_eq!(ids, [0], "the dropped sheet of Layout2 is not replaced by numbering its id-0 viewport");
+    assert!(write_dxf(&back).contains("PAPERVIEW"), "the second save still generates the sheet");
+}
+
 /// A layout with viewport 2 frozen on `Walls` and `A B` (both real layers), and its written DXF as
 /// (code, value) pairs.
 fn frozen_vp_dxf() -> (Drawing, Vec<(String, String)>) {

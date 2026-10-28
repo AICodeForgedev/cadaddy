@@ -57,8 +57,11 @@ struct Rx {
     block_arrays: HashMap<String, cadcraft_doc::ArrayParams>,
     /// LAYER record handle (upper case) → layer name (VIEWPORT group 341 frozen layers).
     layers: HashMap<String, String>,
-    /// Owner handle and paper flag of each generated sheet viewport (PAPERVIEW) the reader dropped.
-    paper_views_dropped: Vec<(Option<String>, bool)>,
+    /// Owner handle, paper flag and enclosing block (upper case) of each generated sheet viewport
+    /// (PAPERVIEW) the reader dropped.
+    paper_views_dropped: Vec<(Option<String>, bool, Option<String>)>,
+    /// Upper-case name of the BLOCK whose entities are being read, if any.
+    block: Option<String>,
 }
 
 /// Read a DXF file into a drawing.
