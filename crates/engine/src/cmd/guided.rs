@@ -3644,9 +3644,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s}))?;
     bim_step(s, job, "model built", t);
     if let Some(place) = placer.as_deref() {
-        let n = number_rooms_from_other_trades(s, job, place)?;
-        if n > 0 {
-            progress_line(&format!("  rooms numbered from other trades' plans: {n}"));
+        let (n, missed) = number_rooms_from_other_trades(s, job, place)?;
+        if n > 0 || !missed.is_empty() {
+            progress_line(&format!("  rooms numbered from other trades' plans: {n}; not numbered: {missed:?}"));
         }
     }
     let t = web_time::Instant::now();
@@ -4025,7 +4025,8 @@ fn number_rooms_from_other_trades(
     s: &mut Session,
     job: &GuidedJob,
     place: &dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>,
-) -> Result<usize> {
+) -> Result<(usize, BTreeMap<String, usize>)> {
+    let mut missed: BTreeMap<String, usize> = BTreeMap::new();
     let extras: Vec<(String, [f64; 2], String)> = job
         .stage(StageName::Rooms)
         .and_then(|st| st.result.as_ref())
@@ -4040,29 +4041,56 @@ fn number_rooms_from_other_trades(
             Some((n, at, r.get("level").and_then(Value::as_str).unwrap_or("").to_string()))
         })
         .collect();
-    let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(0) };
+    let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return Ok((0, missed)) };
     if extras.is_empty() {
-        return Ok(0);
+        return Ok((0, missed));
     }
     let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     // Each level's plan corner; the stack moved each level's model by the lowest's minus its own.
     let corner = |l: &cadaddy_walk3d::Level| l.region.map(|r| cadaddy_geom::Vec2::new(r[0].min(r[2]), r[1].min(r[3])));
     let lowest = sp.levels.iter().filter(|l| corner(l).is_some()).min_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft)).and_then(corner);
     let mut rooms = super::bspec::room_elements(s.doc()?);
     let mut numbered = 0;
     for (number, at, level) in extras {
-        let Some(m) = place(at, &level) else { continue };
+        let Some(m) = place(at, &level) else {
+            *missed.entry(format!("{level}: not placeable")).or_default() += 1;
+            continue;
+        };
         let q = m.apply(at);
-        let Some(lv) = sp.levels.iter().find(|l| !key(&l.name).is_empty() && key(&l.name) == key(&level)) else { continue };
+        let Some(lv) = sp.levels.iter().find(|l| !key(&l.name).is_empty() && key(&l.name) == key(&level)) else {
+            *missed.entry(format!("{level}: no such level")).or_default() += 1;
+            continue;
+        };
         let off = match (lowest, corner(lv)) {
             (Some(a), Some(b)) if sp.stack => a - b,
             _ => cadaddy_geom::Vec2::new(0.0, 0.0),
         };
         let q = cadaddy_geom::Vec2::new(q[0], q[1]) + off;
-        let Some(room) = rooms
-            .iter_mut()
-            .find(|r| r.number.is_none() && key(&r.level) == key(&level) && r.outline.len() >= 3 && cadaddy_geom::point_in_polygon(&r.outline, q))
+        // In the room, or (a tag by the room's door, in the corridor) the nearest unnumbered room
+        // of the level within 6 feet, when the point is in no room.
+        let here = |r: &super::bspec::RoomElement| key(&r.level) == key(&level) && r.outline.len() >= 3;
+        let inside = rooms.iter().position(|r| here(r) && cadaddy_geom::point_in_polygon(&r.outline, q));
+        let near = || {
+            rooms
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.number.is_none() && here(r))
+                .map(|(i, r)| (i, edge_distance(&r.outline, q)))
+                .filter(|(_, d)| *d <= 6.0 * upf)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+        };
+        let pick = match inside {
+            Some(i) if rooms[i].number.is_none() => Some(i),
+            Some(_) => None,
+            None => near(),
+        };
+        let Some(room) = pick.and_then(|i| rooms.get_mut(i))
         else {
+            // Already numbered there (its own label), or between rooms.
+            let numbered_here = rooms.iter().any(|r| r.number.is_some() && key(&r.level) == key(&level) && r.outline.len() >= 3 && cadaddy_geom::point_in_polygon(&r.outline, q));
+            *missed.entry(format!("{level}: {}", if numbered_here { "room already numbered" } else { "in no room" })).or_default() += 1;
             continue;
         };
         room.number = Some(number.clone());
@@ -4088,7 +4116,22 @@ fn number_rooms_from_other_trades(
         rooms.retain(|r| !gone.contains(&r.handle));
         numbered += 1;
     }
-    Ok(numbered)
+    Ok((numbered, missed))
+}
+
+/// How far `p` is from the nearest edge of the closed `outline`.
+fn edge_distance(outline: &[cadaddy_geom::Vec2], p: cadaddy_geom::Vec2) -> f64 {
+    let n = outline.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            let ab = b - a;
+            let len2 = ab.x * ab.x + ab.y * ab.y;
+            let t = if len2 > 0.0 { (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / len2).clamp(0.0, 1.0) } else { 0.0 };
+            let c = cadaddy_geom::Vec2::new(a.x + ab.x * t, a.y + ab.y * t);
+            (p.x - c.x).hypot(p.y - c.y)
+        })
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// Where a sheet point goes on its level's architectural plan (architecture is the rule), by the
@@ -6801,6 +6844,16 @@ mod tests {
     /// A made-up job of two plan sheets side by side, levels 1 and 2, each with a fixture
     /// schedule (types A, B) and junk tags. Every device the devices stage counts becomes one
     /// model element on its sheet's level and one BOM unit (Q5271 MUSTS 1, 2, 4, 5).
+    #[test]
+    fn a_tag_by_a_rooms_door_is_near_that_room() {
+        let v = cadaddy_geom::Vec2::new;
+        let room = [v(0.0, 0.0), v(120.0, 0.0), v(120.0, 120.0), v(0.0, 120.0)];
+        // Two feet outside its door wall, and inside (the nearest wall a foot away).
+        assert!((edge_distance(&room, v(60.0, -24.0)) - 24.0).abs() < 1e-9);
+        assert!((edge_distance(&room, v(60.0, 12.0)) - 12.0).abs() < 1e-9);
+        assert!(edge_distance(&[], v(0.0, 0.0)).is_infinite());
+    }
+
     #[test]
     fn unread_duct_sizes_and_retraced_runs_are_tidied() {
         let run = |sys: &str, pts: [[f64; 2]; 2], size: [f64; 2], source: &str| cadaddy_walk3d::MepRun {
