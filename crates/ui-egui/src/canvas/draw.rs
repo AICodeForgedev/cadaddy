@@ -1,5 +1,5 @@
 use super::list::preview_options;
-use super::{Bounds2, CanvasState, Color32, DisplayList, Handle, Kind, ListKey, Pos2, Rect, Rgb, Shape, Stroke, Vec2, Xf, vec2};
+use super::{Bounds2, CanvasState, Color32, DisplayList, Handle, Kind, ListKey, Mat3, Pos2, Rect, Rgb, Shape, Stroke, Vec2, Xf, vec2};
 
 fn color32(c: Rgb) -> Color32 {
     Color32::from_rgb(c.0, c.1, c.2)

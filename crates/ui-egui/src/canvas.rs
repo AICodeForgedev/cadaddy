@@ -304,7 +304,11 @@ fn handle_scroll_zoom(app: &mut CadApp, ui: &mut egui::Ui, nav: &Navigation<'_>,
         && let Ok(st) = app.session.state_mut()
     {
         let view = st.view();
-        st.set_view_quiet(cadcraft_engine::View { center: view.center - nav.xf.screen_delta_to_world(p.scroll), height: view.height, twist: view.twist });
+        st.set_view_quiet(cadcraft_engine::View {
+            center: view.center - nav.xf.screen_delta_to_world(p.scroll),
+            height: view.height,
+            twist: view.twist,
+        });
     }
     let opts = ui.ctx().options(|o| o.input_options);
     let wheel = ui.input(|i| wheel_zoom_points(&i.raw.events, &opts, nav.rect.height()));
@@ -339,7 +343,11 @@ fn handle_button_navigation(app: &mut CadApp, nav: &Navigation<'_>, inside: bool
             let delta = at - last;
             if let Ok(st) = app.session.state_mut() {
                 let view = st.view();
-                st.set_view_quiet(cadcraft_engine::View { center: view.center - nav.xf.screen_delta_to_world(delta), height: view.height, twist: view.twist });
+                st.set_view_quiet(cadcraft_engine::View {
+                    center: view.center - nav.xf.screen_delta_to_world(delta),
+                    height: view.height,
+                    twist: view.twist,
+                });
             }
         }
         app.canvas.pan_last = Some(at);
