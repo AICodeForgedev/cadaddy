@@ -37,6 +37,9 @@ impl Default for BimShade {
 
 /// How dark an opaque surface's edges are: its colour times this.
 pub const EDGE_SHADE: f64 = 0.45;
+/// How much a see-through surface's edge tints what is behind it: a building's thousands of
+/// ghosted walls overlap, and stronger edges pile up into a grey mass hiding the MEP inside.
+pub const GHOST_EDGE: f64 = 0.2;
 
 /// Most pixels a BIM view draws (beyond it the image is refused: a 1 × 1 raster).
 pub const MAX_PIXELS: usize = 64 << 20;
@@ -225,7 +228,7 @@ pub fn rasterize_bim(scene: &Scene, v: &ShadeView, bg: Rgb, o: &BimShade) -> Ras
                     && let Some(c) = color.get_mut(k)
                 {
                     for (ch, f) in c.iter_mut().zip(fc) {
-                        *ch = *ch * 0.45 + f * 0.55;
+                        *ch = *ch * (1.0 - GHOST_EDGE) + f * GHOST_EDGE;
                     }
                 }
             });
