@@ -237,8 +237,12 @@ pub(crate) fn room_plan_for(s: &Session, sp: Option<BuildingSpec>) -> Result<Opt
         return Ok(None);
     }
     let d = s.doc()?;
-    let sp = sp.filter(|sp| sp.layers.iter().any(|r| matches!(r.role, Role::Wall | Role::CurtainWall)));
     let generated = |e: &Entity| wallgen::made_as(e).is_some() || super::rooms3d::room_of(&e.common).is_some();
+    // Wall layers the drawing doesn't use (a default spec's `*WALL*` on a PDF import, everything
+    // on layer 0) decide nothing: kept, they would leave no object to bound a room.
+    let sp = sp
+        .filter(|sp| sp.layers.iter().any(|r| matches!(r.role, Role::Wall | Role::CurtainWall)))
+        .filter(|sp| d.model.iter().any(|e| !generated(e) && sp.role(&e.common.layer).is_some_and(|r| matches!(r.role, Role::Wall | Role::CurtainWall))));
     let keep = |e: &Entity| !generated(e) && sp.as_ref().is_none_or(|sp| bounds_rooms(sp, &e.common.layer));
     if d.model.iter().all(|e| keep(e)) && sp.as_ref().is_none_or(|sp| !sp.wall_types.iter().any(|t| t.from == cadaddy_walk3d::WallFrom::Centerline)) {
         return Ok(None);
@@ -754,7 +758,16 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     let d = s.doc()?;
     let ents = plan_objects(d);
     let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
-    let plan = room_plan(s)?;
+    // On the levels' own plans only: a whole print set side by side is so large its trace
+    // tolerance (a fraction of the extents) opens every room.
+    let regions: Vec<[f64; 4]> = sp.levels.iter().filter_map(|l| l.region).filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8)).collect();
+    let plan = if regions.is_empty() {
+        room_plan(s)?
+    } else {
+        let inside = |c: Vec2| regions.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
+        let keep: std::collections::HashSet<Handle> = plan_objects(d).into_iter().filter(|e| centre(d, e).is_some_and(inside)).map(|e| e.handle).collect();
+        room_plan_of(s, &keep)?
+    };
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<Traced> = Vec::new();
     // Q6029: spatial index for O(1) amortised duplicate detection instead of O(n) linear scan.

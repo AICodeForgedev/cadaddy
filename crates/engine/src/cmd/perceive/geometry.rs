@@ -780,7 +780,17 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     phase("labels");
     let mut numbers: Vec<Label> = all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t)).cloned().collect();
     numbers.extend(tag_numbers);
-    let plan = crate::cmd::bspec::room_plan(s)?;
+    // Read sheet by sheet: trace on the plans' own objects only (a whole print set side by side
+    // is so large its trace tolerance - a fraction of the extents - opens every room).
+    let plan = match regions.filter(|r| !r.is_empty()) {
+        Some(rs) => {
+            let inside = |c: Vec2| rs.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
+            let keep: std::collections::HashSet<cadaddy_doc::Handle> =
+                crate::cmd::bspec::plan_objects(d).into_iter().filter(|e| crate::cmd::bspec::centre(d, e).is_some_and(inside)).map(|e| e.handle).collect();
+            crate::cmd::bspec::room_plan_of(s, &keep)?
+        }
+        None => crate::cmd::bspec::room_plan(s)?,
+    };
     phase("plan");
     // Without the tag blocks: a tag's box is not its room.
     let plan = if tag_blocks.is_empty() || s.space().is_paper() {

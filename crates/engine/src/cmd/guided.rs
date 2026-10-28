@@ -2314,6 +2314,19 @@ fn zero_evidence(plans: &[String]) -> Option<QuestionEvidence> {
 
 /// Run the rooms stage: detect rooms from labels (MUST 1, 4).
 /// Uses the same readers (rooms.list) that work directly on the job's sheets.
+/// Finish and material codes of the finish legend (gypsum board, carpet, vinyl and ceramic tile,
+/// acoustic tile, paint, rubber base, wood, epoxy, sealed concrete): a tag of one is no room.
+const FINISH_CODES: [&str; 14] = ["GYP", "GWB", "CPT", "VCT", "LVT", "LVP", "ACT", "PT", "RB", "WD", "CT", "QT", "EPX", "SC"];
+
+/// A finish or material tag (GYP 01, CPT-1, VCT 2, ACT-1) traced in its room: a room read with a
+/// finish code for a name and a short number, or none.
+fn finish_tag(r: &Value) -> bool {
+    let name = r.get("name").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+    let first = name.split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("");
+    let short_number = r.get("number").and_then(Value::as_str).is_none_or(|n| n.trim().len() <= 2);
+    short_number && FINISH_CODES.contains(&first)
+}
+
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Load plan-sheet PDFs into the drawing so rooms.list finds entities.
     ensure_sheets_loaded(s, job)?;
@@ -2334,6 +2347,45 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         params["regions"] = json!(regions);
     }
     let mut rooms_result = s.execute("rooms.list", &params)?;
+    // Architecture gives the rooms; the other disciplines' plans of a floor may give their numbers
+    // (an architectural plan can tag guest rooms with the unit type only). From those plans only a
+    // numbered room whose number the architectural plans didn't give is taken: a room they'd add
+    // without one is a phantom (their notes, their equipment rooms drawn again).
+    // Added after the checks below: they are where their own sheet draws them, not on the
+    // architectural plan the building's outline is read from.
+    let mut extra_rooms: Vec<Value> = Vec::new();
+    let others: Vec<[f64; 4]> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.kind == "plan" && r.not_built.is_empty() && !r.discipline.eq_ignore_ascii_case("A"))
+        .map(SheetRegion::plan_rect)
+        .collect();
+    if !others.is_empty() && plans(true).len() == regions.len() {
+        if let Ok(more) = s.execute("rooms.list", &json!({"outline": false, "regions": others})) {
+            let extra: Vec<Value> = more
+                .get("rooms")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|r| r.get("number").and_then(Value::as_str).is_some_and(|n| !n.trim().is_empty()))
+                // On its floor by the floor's numbering: a guest floor's rooms start with its
+                // number (205 on level 2); a note's or a schedule's number doesn't.
+                .filter(|r| {
+                    let at = r.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
+                    // The floor of the sheet it was read on (the whole sheet: a room by its edge is
+                    // outside the plan area).
+                    let sheet = at.and_then(|at| job.sheet_regions.iter().filter(|r| r.kind == "plan").find(|r| in_rect(&r.rect, at)));
+                    let floor = sheet.and_then(|g| g.level.chars().find(char::is_ascii_digit));
+                    let number = r.get("number").and_then(Value::as_str).unwrap_or("").trim();
+                    floor.is_some_and(|f| number.len() >= 3 && number.starts_with(f))
+                })
+                .cloned()
+                .collect();
+            // Each number once (every discipline's plan of the floor gives it).
+            let mut seen = BTreeSet::new();
+            extra_rooms = extra.into_iter().filter(|r| seen.insert(r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase())).collect();
+        }
+    }
     // A room carries the level of the sheet it was read on (Q5291 MUST 2): the sheet's level
     // wins over a spec's guess.
     if let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) {
@@ -2355,7 +2407,22 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             o.insert("count".into(), json!(n));
         }
     }
+    if let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) {
+        list.retain(|r| !finish_tag(r));
+    }
     let duplicates = one_room_per_number(job, &mut rooms_result);
+    if !extra_rooms.is_empty()
+        && let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut)
+    {
+        // Only numbers the architectural plans' rooms (as checked) don't have.
+        let key = |r: &Value| r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+        let have: BTreeSet<String> = list.iter().map(key).filter(|n| !n.is_empty()).collect();
+        list.extend(extra_rooms.into_iter().filter(|r| !have.contains(&key(r))));
+        let n = list.len();
+        if let Some(o) = rooms_result.as_object_mut() {
+            o.insert("count".into(), json!(n));
+        }
+    }
     let (removed, renamed) = apply_room_answers(job, &mut rooms_result);
     if let Some(o) = rooms_result.as_object_mut() {
         if duplicates > 0 {
@@ -2376,6 +2443,17 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     let rooms = rooms_result.get("rooms").and_then(Value::as_array);
     let room_count = rooms.map_or(0, Vec::len);
+    {
+        let mut by: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        for r in rooms.into_iter().flatten() {
+            let e = by.entry(r.get("level").and_then(Value::as_str).unwrap_or("?").to_string()).or_default();
+            e.0 += 1;
+            if r.get("number").and_then(Value::as_str).is_some_and(|n| !n.trim().is_empty()) {
+                e.1 += 1;
+            }
+        }
+        progress_line(&format!("  rooms per level (rooms, with a number): {by:?}"));
+    }
 
     // MUST 1: No empty success — 0 rooms is a finding.
     if room_count == 0 {
@@ -3341,6 +3419,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 .filter_map(|r| {
                     let name = r.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string();
                     let number = r.get("number").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).map(String::from);
+                    // A numbered room by its number alone: its name is often its unit type (every
+                    // DOUBLE Q of the floor), and a name label would claim the first room so named.
+                    // The traced room takes its name from the labels in its outline.
+                    let name = if number.is_some() { String::new() } else { name };
                     (!name.is_empty() || number.is_some()).then(|| cadaddy_walk3d::SpecRoom { name, number, ..Default::default() })
                 })
                 .collect();
@@ -3404,7 +3486,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             // The MEP plans' runs, terminals and equipment were read in their own sheet's place
             // (the sheets sit side by side): each is put onto its level's architectural plan by
             // its sheet's registration (shared door and room numbers), so it is in the building.
-            if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+            // With no architectural plan in the set there is nothing to place onto: the items stay
+            // where their sheets draw them.
+            let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
+            if has_arch && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
                 let sim = placer.insert(Box::new(arch_placer(s.doc()?, &sp)));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
                 let before = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
@@ -3472,8 +3557,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // build: it makes each one an element carrying what was read about it (Q6002).
     if !job.devices.is_empty() {
         // Onto the architecture like the MEP: a device that can't be placed is left out.
+        let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
         let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
-            Ok((sp, true)) => {
+            Ok((sp, true)) if has_arch => {
                 if placer.is_none() {
                     placer = Some(Box::new(arch_placer(s.doc()?, &sp)));
                 }
@@ -4137,7 +4223,7 @@ fn rooms_from_model(s: &mut Session, job: &mut GuidedJob) -> Option<Value> {
         .into_iter()
         .filter_map(|mut m| {
             let (number, name) = (text(&m, "number"), m.get("name").and_then(Value::as_str).unwrap_or("").to_string());
-            let room = legible_room_name(&name) && super::autospec::room_label(&name) && !name.trim().eq_ignore_ascii_case("ROOM");
+            let room = legible_room_name(&name) && super::autospec::room_label(&name) && !name.trim().eq_ignore_ascii_case("ROOM") && !finish_tag(&m);
             let new = (number.is_empty() || !numbers.contains(&number)) && names.insert((text(&m, "level"), name.trim().to_ascii_uppercase()));
             if let Some(o) = m.as_object_mut() {
                 o.insert("from_model".into(), json!(true));
