@@ -601,9 +601,6 @@ fn links(dwg: &Dwg, classes: &Classes, ents: &[Entity]) -> std::collections::Has
 fn entity_type(t: u16, classes: &Classes) -> Option<String> {
     match t {
         t if t >= 500 => classes.get(t).filter(|c| c.item_class_id == 0x1F2).map(|c| c.dxf_name.to_string_lossy()),
-        37 => Some("REGION".into()),
-        38 => Some("3DSOLID".into()),
-        39 => Some("BODY".into()),
         74 => Some("OLE2FRAME".into()),
         t => kinds::fixed_name(t).map(str::to_string),
     }
