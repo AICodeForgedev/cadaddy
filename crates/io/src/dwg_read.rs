@@ -178,11 +178,15 @@ fn entity_record(e: &Entity) -> Vec<Tag> {
     out
 }
 
-/// What [`read`] left out.
+/// What [`read`] couldn't read, and what it kept as it was stored.
 #[derive(Debug, Default)]
 pub struct ReadReport {
-    /// Objects the codec couldn't decode, with why.
+    /// Objects the codec couldn't decode and couldn't keep either, with why.
     pub failed: Vec<(u64, String)>,
+    /// Entities the codec doesn't decode (a type not read yet, a custom class, solids, underlays,
+    /// proxies) or couldn't decode (damaged data), kept raw in the drawing as they were stored
+    /// (`dwg_keep` writes them back unchanged): handle and DXF name, with why when the data was damaged.
+    pub kept: Vec<(u64, String)>,
 }
 
 /// Reads a DWG file with the codec alone.
@@ -191,7 +195,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
     let dwg = cadaddy_dwgcodec::read(bytes).map_err(fmt)?;
     let hv = dwg.header_vars().map_err(fmt)?;
     let classes = dwg.classes().map_err(fmt)?;
-    let (ents, mut failed) = cadaddy_dwgcodec::entities::decode_all(&dwg).map_err(fmt)?;
+    let (ents, mut failed) = cadaddy_dwgcodec::entities::decode_all_keeping(&dwg).map_err(fmt)?;
     let (recs, rec_failed) = cadaddy_dwgcodec::entities::records::decode_all(&dwg).map_err(fmt)?;
     failed.extend(rec_failed);
     let lists = cadaddy_dwgcodec::entities::block_lists(&dwg, &ents).map_err(fmt)?;
@@ -384,17 +388,41 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
     }
     let tags = crate::dwg_keep::unstash_tags(&tags).unwrap_or(tags);
     let mut d = crate::dxf_read::read_tags(tags)?;
-    if !failed.is_empty() {
-        let mut kinds: Vec<String> = failed.iter().map(|(_, e)| e.split(':').next().unwrap_or("?").to_string()).collect();
+    let kept = kept_entities(&d);
+    let kinds_of = |list: &[(u64, String)]| {
+        let mut kinds: Vec<String> = list.iter().map(|(_, e)| e.split(':').next().unwrap_or("?").to_string()).collect();
         kinds.sort();
         kinds.dedup();
+        kinds.join(", ")
+    };
+    if !kept.is_empty() {
+        d.read_notes.push(format!("DWG: {} entities kept as-is, not editable ({})", kept.len(), kinds_of(&kept)));
+    }
+    if !failed.is_empty() {
         d.read_notes.push(format!(
             "DWG: {} records couldn't be read and were left out ({}); saving over the original file would lose them",
             failed.len(),
-            kinds.join(", ")
+            kinds_of(&failed)
         ));
     }
-    Ok((d, ReadReport { failed }))
+    Ok((d, ReadReport { failed, kept }))
+}
+
+/// The entities of a drawing kept raw (as stored, not decoded): handle and DXF name. Those a CADaddy
+/// writer kept through a save (`dwg_keep`) and this reader put back count too.
+fn kept_entities(d: &Drawing) -> Vec<(u64, String)> {
+    let mut out = Vec::new();
+    let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
+    for store in stores {
+        for e in store.iter() {
+            if let cadaddy_doc::EntityKind::Unknown(u) = &e.kind
+                && u.tags.iter().any(|t| t.code == 100 && t.value.trim() == cadaddy_dwgcodec::entities::RAW_SUBCLASS)
+            {
+                out.push((e.handle.0, u.dxf_type.clone()));
+            }
+        }
+    }
+    out
 }
 
 fn is_table_record(name: &str) -> bool {

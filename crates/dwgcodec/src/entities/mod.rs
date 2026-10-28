@@ -562,7 +562,7 @@ fn links(dwg: &Dwg, classes: &Classes, ents: &[Entity]) -> std::collections::Has
     if dwg.version >= Version::R2004 {
         return next;
     }
-    let decoded: std::collections::HashSet<u64> = ents.iter().map(|e| e.handle).collect();
+    let decoded: std::collections::HashSet<u64> = ents.iter().filter(|e| !e.is_raw()).map(|e| e.handle).collect();
     for raw in dwg.objects.iter().filter(|o| !decoded.contains(&o.handle)) {
         if entity_type(raw.type_code, classes).is_none() {
             continue;
@@ -609,29 +609,91 @@ fn chain_children(ents: &mut [Entity], next: &std::collections::HashMap<u64, u64
     }
 }
 
+/// The subclass marker of an entity kept as it was stored ([`raw_entity`]).
+pub const RAW_SUBCLASS: &str = "AcDbCadaddyRawDwg";
+/// Most bytes of one object kept raw (a hostile file can't make the reader hold gigabytes of hex).
+const MAX_RAW: usize = 1 << 26;
+
+impl Entity {
+    /// Whether the entity was kept raw (its stored bytes in 310 groups, not decoded).
+    pub fn is_raw(&self) -> bool {
+        self.groups.iter().any(|g| g.code == 100 && matches!(&g.value, Value::Str(s) if s == RAW_SUBCLASS))
+    }
+}
+
+/// An entity object that isn't decoded (a type not read yet, a custom class, or damaged data)
+/// kept as it was stored: its handle, owner, layer and the references its common data names
+/// where they can be read, then `100 AcDbCadaddyRawDwg`, the object type (70), the file's DWG
+/// version (1) and the object's data (310, in chunks of 127 bytes: everything between its size
+/// and its CRC, with its data, string and handle streams). `None` when `raw` isn't an entity
+/// type or is too large to keep.
+pub fn raw_entity(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> Option<Entity> {
+    let name = entity_type(raw.type_code, classes)?;
+    if raw.data.len() > MAX_RAW {
+        return None;
+    }
+    let mut groups = Vec::new();
+    let (mut owner, mut paper, mut next) = (None, false, None);
+    let common_of = Obj::open(raw, v).and_then(|mut o| common(&mut o).map(|c| (o.handle, c)));
+    match common_of {
+        Ok((handle, c)) => {
+            owner = if c.entmode == 0 { c.owner } else { None };
+            paper = c.entmode == 1;
+            next = c.next;
+            common_groups(&mut groups, handle, &c, names, owner);
+        }
+        Err(_) => groups.push(Group { code: 5, value: Value::Handle(raw.handle) }),
+    }
+    groups.push(Group { code: 100, value: Value::Str(RAW_SUBCLASS.into()) });
+    groups.push(Group { code: 70, value: Value::Int(i64::from(raw.type_code)) });
+    groups.push(Group { code: 1, value: Value::Str(v.id().into()) });
+    groups.push(Group { code: 90, value: Value::Int(i64::try_from(raw.data.len()).unwrap_or(i64::MAX)) });
+    for chunk in raw.data.chunks(127) {
+        groups.push(Group { code: 310, value: Value::Str(chunk.iter().map(|b| format!("{b:02X}")).collect()) });
+    }
+    Some(Entity { name, handle: raw.handle, owner, paper, groups, children: Vec::new(), next })
+}
+
 /// Every entity of a file decoded, with the objects that couldn't be (unknown types, or damaged
 /// data) as errors by handle.
 pub fn decode_all(dwg: &Dwg) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
+    decode_entities(dwg, false)
+}
+
+/// [`decode_all`], but an entity object that isn't decoded (a type not read yet, a custom class,
+/// proxies, solids, underlays; or damaged data) is kept raw ([`raw_entity`]) in its place, so
+/// nothing is left out: `failed` then holds only objects that couldn't be kept either.
+pub fn decode_all_keeping(dwg: &Dwg) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
+    decode_entities(dwg, true)
+}
+
+fn decode_entities(dwg: &Dwg, keep_raw: bool) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
     let classes = dwg.classes()?;
     let names = Names::read(dwg, &classes);
     let mut out = Vec::new();
     let mut failed = Vec::new();
     for raw in &dwg.objects {
-        match decode(raw, dwg.version, &classes, &names) {
-            Ok(Some(e)) => out.push(e),
-            // An entity of a type not decoded yet is left out, and said so.
-            Ok(None) => {
-                if let Some(name) = entity_type(raw.type_code, &classes) {
-                    failed.push((raw.handle, format!("{name}: not read yet")));
-                }
+        let why = match decode(raw, dwg.version, &classes, &names) {
+            Ok(Some(e)) => {
+                out.push(e);
+                continue;
             }
+            // An entity of a type not decoded yet.
+            Ok(None) => match entity_type(raw.type_code, &classes) {
+                Some(name) => format!("{name}: not read yet"),
+                None => continue,
+            },
             Err(e) => {
                 let kind = match raw.type_code {
                     t if t >= 500 => classes.get(t).map(|c| c.dxf_name.to_string_lossy()).unwrap_or_default(),
                     t => kinds::fixed_name(t).unwrap_or("?").to_string(),
                 };
-                failed.push((raw.handle, format!("{kind}: {e}")));
+                format!("{kind}: {e}")
             }
+        };
+        match keep_raw.then(|| raw_entity(raw, dwg.version, &classes, &names)).flatten() {
+            Some(e) => out.push(e),
+            None => failed.push((raw.handle, why)),
         }
     }
     // Model space and the active paper space by the header's block record handles (names can
