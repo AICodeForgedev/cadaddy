@@ -4369,7 +4369,14 @@ fn rooms_from_model(s: &mut Session, job: &mut GuidedJob) -> Option<Value> {
         .into_iter()
         .filter_map(|mut m| {
             let (number, name) = (text(&m, "number"), m.get("name").and_then(Value::as_str).unwrap_or("").to_string());
-            let room = legible_room_name(&name) && super::autospec::room_label(&name) && !name.trim().eq_ignore_ascii_case("ROOM") && !finish_tag(&m);
+            // A room known only by a one- or two-character number ("Room 01", no name of its own) is
+            // a finish or keynote tag traced in a room.
+            let bare_short = name.trim().eq_ignore_ascii_case(&format!("Room {number}")) && number.trim().chars().count() <= 2;
+            let room = legible_room_name(&name)
+                && super::autospec::room_label(&name)
+                && !name.trim().eq_ignore_ascii_case("ROOM")
+                && !finish_tag(&m)
+                && !bare_short;
             let new = (number.is_empty() || !numbers.contains(&number)) && names.insert((text(&m, "level"), name.trim().to_ascii_uppercase()));
             if let Some(o) = m.as_object_mut() {
                 o.insert("from_model".into(), json!(true));
