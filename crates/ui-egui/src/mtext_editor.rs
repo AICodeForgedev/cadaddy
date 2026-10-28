@@ -260,7 +260,10 @@ fn toolbar(ui: &mut egui::Ui, st: &mut State, base_h: f64) {
         let mut h = cur.height.unwrap_or(base_h);
         if height_field(ui, &mut h, base_h) {
             let none = (h - base_h).abs() < 1e-9;
-            change(st, |c| c.height = (!none).then_some(h));
+            change(st, |c| {
+                c.height = (!none).then_some(h);
+                c.height_rel = None;
+            });
         }
         ui.separator();
         for (flag, label, tip) in [
@@ -579,7 +582,10 @@ fn text_box(ui: &mut egui::Ui, st: &mut State, base_h: f64, px: f32, width: f32,
         .layouter(&mut layouter)
         .show(ui);
     out.response.response.clone().accessible_name(crate::tl!("Text"));
-    if !out.response.has_focus() && (!st.focused || (buf.is_empty() && st.fmt.is_empty())) {
+    // On opening, and while the text is empty, the editor takes the focus; a field of the toolbar
+    // the user clicked keeps it.
+    let free = ui.memory(|m| m.focused().is_none());
+    if !out.response.has_focus() && (!st.focused || (buf.is_empty() && st.fmt.is_empty() && free)) {
         out.response.request_focus();
     }
     st.focused = true;
@@ -631,6 +637,27 @@ mod tests {
         assert_eq!(harness.state().fmt.to_contents(), "⌀");
         assert_eq!(harness.state().sel, (1, 1));
         assert!(harness.unnamed_widgets().is_empty());
+    }
+
+    /// With the text empty, a click on the height field keeps the focus there; the editor doesn't
+    /// take it back.
+    #[test]
+    fn an_empty_editor_leaves_the_focus_on_the_height_field() {
+        let state =
+            State { fmt: Formatted::default(), typing: CharFmt::default(), typing_at: 0, top: 70.0, sel: (0, 0), caret: None, focused: false };
+        let mut harness = Harness::builder().with_size(vec2(1100.0, 300.0)).build_ui_state(
+            |ui, state| {
+                toolbar(ui, state, 2.5);
+                text_box(ui, state, 2.5, 20.0, 1000.0, &Tokens::get());
+            },
+            state,
+        );
+        harness.run();
+        assert!(harness.ctx.memory(|m| m.has_focus(edit_id())), "the editor opens with the focus");
+        harness.get_by_role_and_label(Role::SpinButton, "Text height").click();
+        harness.run();
+        harness.run();
+        assert!(!harness.ctx.memory(|m| m.has_focus(edit_id())), "the height field keeps the focus");
     }
 
     /// The ten toolbar controls listed in the test are found by semantic name under the harness's default bundled fonts, and no toolbar widget is unnamed.

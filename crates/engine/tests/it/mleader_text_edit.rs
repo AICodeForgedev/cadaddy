@@ -43,3 +43,25 @@ fn textedit_and_properties_change_a_multileaders_text() {
     s.execute("properties.set", &json!({"handles": [h.hex()], "text": "from properties"})).unwrap();
     assert_eq!(text_of(&s), "from properties");
 }
+
+#[test]
+fn a_text_too_long_for_the_editor_is_left_as_it_is() {
+    let mut s = Session::new();
+    s.execute("mleader", &json!({"points": [[0, 0], [20, 20]], "text": "example text"})).unwrap();
+    let (h, at) = s
+        .doc()
+        .unwrap()
+        .model
+        .iter()
+        .find_map(|e| if let EntityKind::MLeader(m) = &e.kind { m.text.as_ref().map(|t| (e.handle, t.insert.xy())) } else { None })
+        .unwrap();
+    let long = format!("example text {}", "x".repeat(cadcraft_engine::mtext_edit::MAX_CHARS));
+    s.execute("properties.set", &json!({"handles": [h.hex()], "text": long})).unwrap();
+    assert_eq!(text_of(&s), long);
+    s.cmdline("TEXTEDIT").unwrap();
+    s.input(Input::Point(at + Vec2::new(1.0, -0.05))).unwrap();
+    assert_eq!(s.log.last().map(String::as_str), Some("This text is too long to edit; it is left as it is."));
+    assert!(s.editing_mtext().is_none(), "the editor doesn't open");
+    s.cancel();
+    assert_eq!(text_of(&s), long, "the text is not shortened");
+}

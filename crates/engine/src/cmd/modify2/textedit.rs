@@ -104,6 +104,11 @@ impl Interactive for TextEditM {
                     EntityKind::MLeader(m) => m.text,
                     _ => None,
                 };
+                // The editor would cut a text this long short, and saving would shorten it.
+                if self.mtext.as_ref().is_some_and(|m| !crate::mtext_edit::Formatted::fits(&m.contents)) {
+                    self.mtext = None;
+                    return Err(other("This text is too long to edit; it is left as it is."));
+                }
                 self.h = Some((h, old));
                 Ok(Step::Continue)
             }
