@@ -1327,8 +1327,21 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             }
             EntityKind::Insert(_) => {
                 let insert = |k: &EntityKind| if let EntityKind::Insert(i) = k { Some(i.clone()) } else { None };
+                // A dynamic block reference shows its dynamic block's name, as with one reference;
+                // its anonymous blocks (`*U12`) differ from one reference to the next.
+                let names: Vec<String> = sel
+                    .iter()
+                    .filter_map(|h| match d.entity(*h).map(|x| &x.kind) {
+                        Some(EntityKind::Insert(i)) => Some(custom_properties(ui, app, *h).map_or_else(|| i.block.clone(), |(n, _)| n)),
+                        _ => None,
+                    })
+                    .collect();
+                let name = match names.first() {
+                    Some(n0) if names.iter().all(|n| n == n0) => n0.clone(),
+                    _ => VARIES.to_string(),
+                };
                 for (label, value) in [
-                    ("Name", shared(&|k| insert(k).map(|i| i.block))),
+                    ("Name", name),
                     ("Position X", shared(&|k| insert(k).map(|i| len(i.insert.x)))),
                     ("Position Y", shared(&|k| insert(k).map(|i| len(i.insert.y)))),
                     ("Position Z", shared(&|k| insert(k).map(|i| len(i.insert.z)))),
