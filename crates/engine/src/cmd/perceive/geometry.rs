@@ -650,7 +650,7 @@ pub(crate) struct FoundRoom {
 
 /// A room tag block's attribute: `Some(true)` for the room's name (`NAME`, `ROOM_NAME`, `RM NAME`),
 /// `Some(false)` for its number (`NUMBER`, `ROOM_NO`, `RM#`), else `None`.
-fn tag_attribute(tag: &str) -> Option<bool> {
+pub(crate) fn tag_attribute(tag: &str) -> Option<bool> {
     let t: String = tag.to_ascii_uppercase().chars().filter(char::is_ascii_alphanumeric).collect();
     let t = ["ROOM", "SPACE", "RM"].iter().find_map(|p| t.strip_prefix(p)).unwrap_or(&t);
     match t {

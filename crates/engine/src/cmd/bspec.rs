@@ -211,7 +211,20 @@ pub(crate) fn room_texts(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<(Handl
     let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
     let on: Vec<&Arc<Entity>> =
         ents.iter().copied().filter(|e| !tagged || sp.role(&e.common.layer).is_some_and(|r| r.role == Role::RoomTag)).collect();
-    super::perceive::texts(&on).into_iter().filter(|(_, t, at, _)| !t.is_empty() && at.is_finite()).map(|(h, t, at, _)| (h, t, at)).collect()
+    let mut out: Vec<(Handle, String, Vec2)> =
+        super::perceive::texts(&on).into_iter().filter(|(_, t, at, _)| !t.is_empty() && at.is_finite()).map(|(h, t, at, _)| (h, t, at)).collect();
+    // Room tag blocks: their name and number attributes, as the rooms stage reads them.
+    for e in &on {
+        let EntityKind::Insert(i) = &e.kind else { continue };
+        for a in &i.attribs {
+            let v = a.text.value.trim();
+            let at = a.text.justify_point();
+            if !v.is_empty() && v.chars().count() <= 40 && at.is_finite() && super::perceive::geometry::tag_attribute(&a.tag).is_some() {
+                out.push((e.handle, v.to_string(), at));
+            }
+        }
+    }
+    out
 }
 
 /// Whether a layer's objects bound rooms: walls, curtain walls, columns, doors and windows.

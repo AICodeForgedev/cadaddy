@@ -2383,7 +2383,16 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 .collect();
             // Each number once (every discipline's plan of the floor gives it).
             let mut seen = BTreeSet::new();
-            extra_rooms = extra.into_iter().filter(|r| seen.insert(r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase())).collect();
+            extra_rooms = extra
+                .into_iter()
+                .filter(|r| seen.insert(r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase()))
+                .map(|mut r| {
+                    if let Some(o) = r.as_object_mut() {
+                        o.insert("other_trade".into(), json!(true));
+                    }
+                    r
+                })
+                .collect();
         }
     }
     // A room carries the level of the sheet it was read on (Q5291 MUST 2): the sheet's level
@@ -3606,6 +3615,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let budget_s = super::bspec::BUILD_BUDGET_S;
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s}))?;
     bim_step(s, job, "model built", t);
+    if let Some(place) = placer.as_deref() {
+        let n = number_rooms_from_other_trades(s, job, place)?;
+        if n > 0 {
+            progress_line(&format!("  rooms numbered from other trades' plans: {n}"));
+        }
+    }
     let t = web_time::Instant::now();
     if let Some(v) = placed {
         result["devices"] = v;
@@ -3948,6 +3963,65 @@ fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
 }
 
 
+
+/// The numbers the other disciplines' plans gave rooms the architectural plans left unnumbered
+/// (rooms stage `other_trade`): each put onto its level's plan, then onto the stacked building,
+/// numbers the unnumbered room element there. How many were numbered.
+fn number_rooms_from_other_trades(
+    s: &mut Session,
+    job: &GuidedJob,
+    place: &dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>,
+) -> Result<usize> {
+    let extras: Vec<(String, [f64; 2], String)> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| r.get("other_trade").and_then(Value::as_bool) == Some(true))
+        .filter_map(|r| {
+            let n = r.get("number").and_then(Value::as_str)?.trim().to_string();
+            let at = [r.get("at")?.get(0)?.as_f64()?, r.get("at")?.get(1)?.as_f64()?];
+            Some((n, at, r.get("level").and_then(Value::as_str).unwrap_or("").to_string()))
+        })
+        .collect();
+    let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(0) };
+    if extras.is_empty() {
+        return Ok(0);
+    }
+    let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    // Each level's plan corner; the stack moved each level's model by the lowest's minus its own.
+    let corner = |l: &cadaddy_walk3d::Level| l.region.map(|r| cadaddy_geom::Vec2::new(r[0].min(r[2]), r[1].min(r[3])));
+    let lowest = sp.levels.iter().filter(|l| corner(l).is_some()).min_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft)).and_then(corner);
+    let mut rooms = super::bspec::room_elements(s.doc()?);
+    let mut numbered = 0;
+    for (number, at, level) in extras {
+        let Some(m) = place(at, &level) else { continue };
+        let q = m.apply(at);
+        let Some(lv) = sp.levels.iter().find(|l| !key(&l.name).is_empty() && key(&l.name) == key(&level)) else { continue };
+        let off = match (lowest, corner(lv)) {
+            (Some(a), Some(b)) if sp.stack => a - b,
+            _ => cadaddy_geom::Vec2::new(0.0, 0.0),
+        };
+        let q = cadaddy_geom::Vec2::new(q[0], q[1]) + off;
+        let Some(room) = rooms
+            .iter_mut()
+            .find(|r| r.number.is_none() && key(&r.level) == key(&level) && r.outline.len() >= 3 && cadaddy_geom::point_in_polygon(&r.outline, q))
+        else {
+            continue;
+        };
+        room.number = Some(number.clone());
+        let h = room.handle;
+        s.doc_mut()?.modify_entity(h, |e| {
+            let mut x = e.common.xdata.to_vec();
+            x.push(cadaddy_doc::RawTag { code: 1000, value: format!("number:{number}") });
+            e.common.xdata = x.into();
+        })?;
+        numbered += 1;
+    }
+    Ok(numbered)
+}
 
 /// Where a sheet point goes on its level's architectural plan (architecture is the rule), by the
 /// first that holds: the sheet's registration by shared door and room numbers; its view's grid
