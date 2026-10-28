@@ -3649,6 +3649,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             progress_line(&format!("  rooms numbered from other trades' plans: {n}; not numbered: {missed:?}"));
         }
     }
+    let scraps = drop_numbered_scraps(s)?;
+    if scraps > 0 {
+        progress_line(&format!("  room scraps dropped (under {SCRAP_SF} sf, a bigger room of the level has their number): {scraps}"));
+    }
     let t = web_time::Instant::now();
     if let Some(v) = placed {
         result["devices"] = v;
@@ -4090,7 +4094,10 @@ fn number_rooms_from_other_trades(
         else {
             // Already numbered there (its own label), or between rooms.
             let numbered_here = rooms.iter().any(|r| r.number.is_some() && key(&r.level) == key(&level) && r.outline.len() >= 3 && cadaddy_geom::point_in_polygon(&r.outline, q));
-            *missed.entry(format!("{level}: {}", if numbered_here { "room already numbered" } else { "in no room" })).or_default() += 1;
+            // How far the nearest unnumbered room of the level was (whole feet).
+            let nearest = rooms.iter().filter(|r| r.number.is_none() && key(&r.level) == key(&level) && r.outline.len() >= 3).map(|r| edge_distance(&r.outline, q)).fold(f64::INFINITY, f64::min) / upf;
+            let why = if numbered_here { "room already numbered".to_string() } else if nearest.is_finite() { format!("in no room (an unnumbered one {nearest:.0} ft away)") } else { "in no room (none unnumbered)".to_string() };
+            *missed.entry(format!("{level}: {why}")).or_default() += 1;
             continue;
         };
         room.number = Some(number.clone());
@@ -4117,6 +4124,34 @@ fn number_rooms_from_other_trades(
         numbered += 1;
     }
     Ok((numbered, missed))
+}
+
+/// A room smaller than this (square feet) is no room of its own when a bigger room of its level
+/// carries its number: a sliver of that room traced from its label (a tub, a closet's corner).
+const SCRAP_SF: f64 = 10.0;
+
+/// Removes the scraps ([`SCRAP_SF`]); how many.
+fn drop_numbered_scraps(s: &mut Session) -> Result<usize> {
+    let gone = numbered_scraps(&super::bspec::room_elements(s.doc()?));
+    for h in &gone {
+        s.doc_mut()?.remove_entity(*h);
+    }
+    Ok(gone.len())
+}
+
+/// The scraps ([`SCRAP_SF`]) among `rooms`.
+fn numbered_scraps(rooms: &[super::bspec::RoomElement]) -> Vec<cadaddy_doc::Handle> {
+    let norm = |n: &str| n.trim().to_ascii_uppercase();
+    rooms
+        .iter()
+        .filter(|r| r.area_sf < SCRAP_SF)
+        .filter(|r| {
+            r.number.as_deref().is_some_and(|n| {
+                rooms.iter().any(|o| o.handle != r.handle && o.level == r.level && o.area_sf >= SCRAP_SF && o.number.as_deref().is_some_and(|m| norm(m) == norm(n)))
+            })
+        })
+        .map(|r| r.handle)
+        .collect()
 }
 
 /// How far `p` is from the nearest edge of the closed `outline`.
@@ -6844,6 +6879,31 @@ mod tests {
     /// A made-up job of two plan sheets side by side, levels 1 and 2, each with a fixture
     /// schedule (types A, B) and junk tags. Every device the devices stage counts becomes one
     /// model element on its sheet's level and one BOM unit (Q5271 MUSTS 1, 2, 4, 5).
+    #[test]
+    fn a_tiny_room_with_a_bigger_rooms_number_is_a_scrap() {
+        let room = |h: u64, level: &str, number: Option<&str>, area_sf: f64| super::super::bspec::RoomElement {
+            handle: cadaddy_doc::Handle(h),
+            level: level.into(),
+            name: "Room".into(),
+            number: number.map(String::from),
+            area_sf,
+            ceiling_ft: 9.0,
+            finish: None,
+            source: cadaddy_doc::Handle(0),
+            outline: Vec::new(),
+            z: 0.0,
+        };
+        let rooms = [
+            room(1, "Level 1", Some("119"), 206.0),
+            room(2, "Level 1", Some("119"), 9.0),
+            // A closet of its own number, and another floor's 119-sized sliver: rooms.
+            room(3, "Level 1", Some("120A"), 6.0),
+            room(4, "Level 2", Some("119"), 4.0),
+            room(5, "Level 1", None, 3.0),
+        ];
+        assert_eq!(numbered_scraps(&rooms), vec![cadaddy_doc::Handle(2)]);
+    }
+
     #[test]
     fn a_tag_by_a_rooms_door_is_near_that_room() {
         let v = cadaddy_geom::Vec2::new;
