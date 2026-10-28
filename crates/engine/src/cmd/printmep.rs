@@ -377,6 +377,11 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
         e.min = at.apply(e.min);
         e.max = at.apply(e.max);
     }
+    // A segment drawn again (traced back and forth) is one run: the reading counts it once, as the
+    // model does.
+    if trade == MepKind::Duct {
+        super::runtidy::drop_repeats(&mut mep.runs, upf, &|_| true);
+    }
     read.runs = mep.runs.len();
     read.length_ft = mep.runs.iter().map(|r| path_ft(&r.points, upf)).sum();
     read.terminals = mep.terminals.len();

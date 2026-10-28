@@ -197,6 +197,31 @@ pub(crate) fn tidy_run(run: &MepRun, upf: f64) -> Vec<MepRun> {
         .collect()
 }
 
+/// Duct runs drawn over the same segment again (traced back and forth, two lines of one duct read
+/// as two runs; pipes of one system do run side by side): a run over 3 feet within a foot (`upf` drawing units) of one before it at both ends,
+/// either way round, is dropped. How many were dropped.
+pub(crate) fn drop_repeats(runs: &mut Vec<MepRun>, upf: f64, ducts: &dyn Fn(&MepRun) -> bool) -> usize {
+    let before = runs.len();
+    // A foot in the drawing's own units (twelve units is twelve feet on a plan drawn in feet).
+    let foot = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    let near = |p: &[f64; 2], q: &[f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= foot;
+    let mut seen: Vec<(String, String, [f64; 2], [f64; 2])> = Vec::new();
+    runs.retain(|r| {
+        let (Some(a), Some(b)) = (r.points.first().copied(), r.points.last().copied()) else { return true };
+        // Short pieces (at fittings, a pipe's drops) sit within a foot of each other without being
+        // one run: only a run of some length can be the same segment drawn again.
+        if !ducts(r) || r.points.len() != 2 || (a[0] - b[0]).hypot(a[1] - b[1]) <= 3.0 * foot {
+            return true;
+        }
+        if seen.iter().any(|(sy, lv, x, y)| *sy == r.system && *lv == r.level && ((near(x, &a) && near(y, &b)) || (near(x, &b) && near(y, &a)))) {
+            return false;
+        }
+        seen.push((r.system.clone(), r.level.clone(), a, b));
+        true
+    });
+    before - runs.len()
+}
+
 /// [`tidy_run`] on every run of a reading.
 pub(crate) fn tidy_runs(runs: Vec<MepRun>, upf: f64) -> Vec<MepRun> {
     runs.iter().flat_map(|r| tidy_run(r, upf)).collect()

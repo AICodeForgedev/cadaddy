@@ -3513,7 +3513,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             // run drawn over the same segment again (traced back and forth) is one run.
             if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
                 let upf = sp.units_per_foot;
-                let (sized, dropped) = tidy_runs(&mut sp.mep.runs, upf);
+                let ducts: BTreeSet<String> = sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Duct).map(|y| y.name.clone()).collect();
+                let (sized, dropped) = tidy_runs(&mut sp.mep.runs, upf, &ducts);
                 if sized + dropped > 0 {
                     progress_line(&format!("  MEP runs tidied: {sized} unread sizes set from the tags, {dropped} repeated runs dropped"));
                     s.doc_mut()?.building_spec = Some(sp.to_json());
@@ -3996,7 +3997,7 @@ fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
 /// tagged size; a run over the same two points as one before it (either way, within a foot) is
 /// dropped.
 /// (Sizes set, runs dropped.)
-fn tidy_runs(runs: &mut Vec<cadaddy_walk3d::MepRun>, upf: f64) -> (usize, usize) {
+fn tidy_runs(runs: &mut Vec<cadaddy_walk3d::MepRun>, upf: f64, ducts: &BTreeSet<String>) -> (usize, usize) {
     let mut tagged: BTreeMap<(String, String), Vec<[f64; 2]>> = BTreeMap::new();
     for r in runs.iter().filter(|r| r.size_source == "tag") {
         tagged.entry((r.system.clone(), r.level.clone())).or_default().push(r.size_in);
@@ -4013,22 +4014,7 @@ fn tidy_runs(runs: &mut Vec<cadaddy_walk3d::MepRun>, upf: f64) -> (usize, usize)
         }
     }
     let before = runs.len();
-    // Within a foot at both ends, either way round.
-    let mut seen: Vec<(String, String, [f64; 2], [f64; 2])> = Vec::new();
-    // A foot in the drawing's own units (twelve units is twelve feet on a plan drawn in feet).
-    let foot = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
-    let near = |p: &[f64; 2], q: &[f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= foot;
-    runs.retain(|r| {
-        let (Some(a), Some(b)) = (r.points.first().copied(), r.points.last().copied()) else { return true };
-        if r.points.len() != 2 {
-            return true;
-        }
-        if seen.iter().any(|(sy, lv, x, y)| *sy == r.system && *lv == r.level && ((near(x, &a) && near(y, &b)) || (near(x, &b) && near(y, &a)))) {
-            return false;
-        }
-        seen.push((r.system.clone(), r.level.clone(), a, b));
-        true
-    });
+    super::runtidy::drop_repeats(runs, upf, &|r| ducts.contains(&r.system));
     (sized, before - runs.len())
 }
 
@@ -6843,7 +6829,7 @@ mod tests {
             // A sensible unread size stays.
             run("SA", [[400.0, 0.0], [500.0, 0.0]], [10.0, 8.0], "default"),
         ];
-        let (sized, dropped) = tidy_runs(&mut runs, 12.0);
+        let (sized, dropped) = tidy_runs(&mut runs, 12.0, &BTreeSet::from(["SA".to_string()]));
         assert_eq!((sized, dropped), (2, 1));
         assert_eq!(runs.len(), 5);
         assert_eq!(runs[3].size_in, [12.0, 10.0], "the median tagged size");
