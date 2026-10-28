@@ -2370,16 +2370,25 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 .filter(|r| r.get("number").and_then(Value::as_str).is_some_and(|n| !n.trim().is_empty()))
                 // On its floor by the floor's numbering: a guest floor's rooms start with its
                 // number (205 on level 2); a note's or a schedule's number doesn't.
-                .filter(|r| {
+                .filter_map(|r| {
                     let at = r.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
                     // The floor of the sheet it was read on (the whole sheet: a room by its edge is
                     // outside the plan area).
-                    let sheet = at.and_then(|at| job.sheet_regions.iter().filter(|r| r.kind == "plan").find(|r| in_rect(&r.rect, at)));
-                    let floor = sheet.and_then(|g| g.level.chars().find(char::is_ascii_digit));
+                    let sheet = at.and_then(|at| job.sheet_regions.iter().filter(|r| r.kind == "plan").find(|r| in_rect(&r.rect, at)))?;
+                    let floor = sheet.level.chars().find(char::is_ascii_digit)?;
                     let number = r.get("number").and_then(Value::as_str).unwrap_or("").trim();
-                    floor.is_some_and(|f| number.len() >= 3 && number.starts_with(f))
+                    if number.len() < 3 || !number.starts_with(floor) {
+                        return None;
+                    }
+                    // On that sheet's level, not the one the read guessed (a third-floor number
+                    // numbered a first-floor room).
+                    let mut r = r.clone();
+                    if let Some(o) = r.as_object_mut() {
+                        o.insert("level".into(), json!(sheet.level));
+                        o.insert("sheet".into(), json!(sheet.number));
+                    }
+                    Some(r)
                 })
-                .cloned()
                 .collect();
             // Each number once (every discipline's plan of the floor gives it).
             let mut seen = BTreeSet::new();
@@ -3503,7 +3512,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             // level is two unrelated lines measured; it takes the system's usual tagged size. And a
             // run drawn over the same segment again (traced back and forth) is one run.
             if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-                let (sized, dropped) = tidy_runs(&mut sp.mep.runs);
+                let upf = sp.units_per_foot;
+                let (sized, dropped) = tidy_runs(&mut sp.mep.runs, upf);
                 if sized + dropped > 0 {
                     progress_line(&format!("  MEP runs tidied: {sized} unread sizes set from the tags, {dropped} repeated runs dropped"));
                     s.doc_mut()?.building_spec = Some(sp.to_json());
@@ -3986,7 +3996,7 @@ fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
 /// tagged size; a run over the same two points as one before it (either way, within a foot) is
 /// dropped.
 /// (Sizes set, runs dropped.)
-fn tidy_runs(runs: &mut Vec<cadaddy_walk3d::MepRun>) -> (usize, usize) {
+fn tidy_runs(runs: &mut Vec<cadaddy_walk3d::MepRun>, upf: f64) -> (usize, usize) {
     let mut tagged: BTreeMap<(String, String), Vec<[f64; 2]>> = BTreeMap::new();
     for r in runs.iter().filter(|r| r.size_source == "tag") {
         tagged.entry((r.system.clone(), r.level.clone())).or_default().push(r.size_in);
@@ -4005,7 +4015,9 @@ fn tidy_runs(runs: &mut Vec<cadaddy_walk3d::MepRun>) -> (usize, usize) {
     let before = runs.len();
     // Within a foot at both ends, either way round.
     let mut seen: Vec<(String, String, [f64; 2], [f64; 2])> = Vec::new();
-    let near = |p: &[f64; 2], q: &[f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= 12.0;
+    // A foot in the drawing's own units (twelve units is twelve feet on a plan drawn in feet).
+    let foot = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    let near = |p: &[f64; 2], q: &[f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= foot;
     runs.retain(|r| {
         let (Some(a), Some(b)) = (r.points.first().copied(), r.points.last().copied()) else { return true };
         if r.points.len() != 2 {
@@ -4069,11 +4081,25 @@ fn number_rooms_from_other_trades(
         };
         room.number = Some(number.clone());
         let h = room.handle;
+        let lk = key(&room.level);
         s.doc_mut()?.modify_entity(h, |e| {
             let mut x = e.common.xdata.to_vec();
             x.push(cadaddy_doc::RawTag { code: 1000, value: format!("number:{number}") });
             e.common.xdata = x.into();
         })?;
+        // The number is that room's: a room of the level known by the number alone ("Room 302",
+        // traced from the same label) is the same room again.
+        let bare = |r: &super::bspec::RoomElement| {
+            r.handle != h
+                && key(&r.level) == lk
+                && r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(number.trim()))
+                && (r.name.trim().eq_ignore_ascii_case("Room") || r.name.trim().eq_ignore_ascii_case(&format!("Room {}", number.trim())))
+        };
+        let gone: Vec<cadaddy_doc::Handle> = rooms.iter().filter(|r| bare(r)).map(|r| r.handle).collect();
+        for g in &gone {
+            s.doc_mut()?.remove_entity(*g);
+        }
+        rooms.retain(|r| !gone.contains(&r.handle));
         numbered += 1;
     }
     Ok(numbered)
@@ -6817,7 +6843,7 @@ mod tests {
             // A sensible unread size stays.
             run("SA", [[400.0, 0.0], [500.0, 0.0]], [10.0, 8.0], "default"),
         ];
-        let (sized, dropped) = tidy_runs(&mut runs);
+        let (sized, dropped) = tidy_runs(&mut runs, 12.0);
         assert_eq!((sized, dropped), (2, 1));
         assert_eq!(runs.len(), 5);
         assert_eq!(runs[3].size_in, [12.0, 10.0], "the median tagged size");

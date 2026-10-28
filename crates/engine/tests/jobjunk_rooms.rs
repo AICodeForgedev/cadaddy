@@ -66,6 +66,15 @@ fn every_floor_gives_its_numbered_rooms_and_no_schedule_cells() {
         let missing: Vec<&String> = numbers.iter().filter(|n| !read.iter().any(|r| r.ends_with(&format!(" {n}")))).collect();
         assert!(missing.len() * 10 <= numbers.len(), "level {level}: missing {missing:?} of {numbers:?}; read {read:?}");
     }
+    // A floor's numbered room is on that floor's level (an other discipline's third-floor plan
+    // numbered a first-floor room).
+    for r in &list {
+        let number = r["number"].as_str().unwrap_or("");
+        let level = r["level"].as_str().unwrap_or("");
+        if let (Some(f), Some(l)) = (number.chars().next().filter(char::is_ascii_digit), level.chars().find(char::is_ascii_digit)) {
+            assert!(number.len() < 3 || f == l, "{number} on {level}: {r}");
+        }
+    }
     // A sheet's schedule cells and garbled print text are no rooms.
     for r in &list {
         let name = r["name"].as_str().unwrap_or("").to_ascii_uppercase();
