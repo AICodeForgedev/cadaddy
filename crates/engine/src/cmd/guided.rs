@@ -3871,7 +3871,10 @@ fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
 fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<> {
     let sheets = super::identity::sheets_of(Some(&sp));
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let clock = web_time::Instant::now();
+    let lap = |what: &str| progress_line(&format!("  placer: {what} at {:.1} s", clock.elapsed().as_secs_f64()));
     let reg = super::identity::register(d, &sheets, upf);
+    lap("sheets registered by tags");
     // Each level's architectural plan (the sheet the registration takes as its reference) and
     // the other sheets: their grid intersections, for views no tag fit reaches.
     let level_key0 = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), { let u = l.trim().to_ascii_uppercase(); u.contains("ROOF") || u == "R" });
@@ -3882,6 +3885,7 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
         .collect();
     let others: Vec<[f64; 4]> = sheets.iter().filter(|b| !b.discipline.eq_ignore_ascii_case("A")).map(|b| b.rect).collect();
     let grid = super::grids::GridPlacer::new(d, upf, &plans, &others);
+    lap("grid intersections read");
     progress_line(&format!("  grid intersections: {}", grid.summary()));
     let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
     let level_key = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), { let u = l.trim().to_ascii_uppercase(); u.contains("ROOF") || u == "R" });
@@ -3935,6 +3939,7 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
     };
     // A view with neither grids nor tags: its screened background laid over the floor plan.
     let backgrounds = super::grids::Backgrounds::new(d, &others);
+    lap("backgrounds grouped");
     // Each level's floor plan linework (points every foot), for laying a view's background on it.
     let k_in = super::perceive::units_per_inch(d);
     let plan_lines: Vec<(String, Vec<cadaddy_geom::Vec2>)> = plans
@@ -3947,6 +3952,7 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
             (key.clone(), super::grids::line_samples(&mine, 12.0 * k_in))
         })
         .collect();
+    lap("floor plan linework sampled");
     let fits: std::sync::Mutex<std::collections::HashMap<(i64, i64, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
     let place = move |p: [f64; 2], level: &str| {
         place(p, level).or_else(|| {
@@ -3957,7 +3963,9 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
                 return *f;
             }
             let tgt = plan_lines.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
+            let started = web_time::Instant::now();
             let fit = super::grids::linework_fit(&backgrounds.points_in(&bg), tgt, k_in);
+            progress_line(&format!("  placer: a view's background fitted in {:.1} s", started.elapsed().as_secs_f64()));
             if let Some((s, _, score, margin)) = fit {
                 progress_line(&format!("  background view at {:?} onto level {level}: scale {s:.3}, {:.0}% on the plan, {:.0} points over the next best", [bg.min.x.round(), bg.min.y.round()], score * 100.0, margin * 100.0));
             }

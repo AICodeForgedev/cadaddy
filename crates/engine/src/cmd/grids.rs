@@ -1077,23 +1077,26 @@ pub(crate) fn linework_fit(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<(f64, V
     // Coverage is measured against the view's lines in full (a thinned sample leaves gaps that
     // read as plan lines the view doesn't have).
     let dense: Vec<Vec2> = src.iter().step_by((src.len() / 12_000).max(1)).copied().collect();
-    let f1 = |s: f64, t: Vec2| {
+    // `mine`: the view's lines on a grid in its own terms, made for scale near `s` (a plan point is
+    // mapped back into it rather than the view mapped out for each trial placement).
+    let view_grid = |s: f64| Occupancy::new(&dense, 12.0 * k / s, 1);
+    let f1 = |s: f64, t: Vec2, mine: &Occupancy| {
         let r = fine.score(&few, s, t);
-        let mine = Occupancy::new(&dense.iter().map(|p| *p * s + t).collect::<Vec<_>>(), 12.0 * k, 1);
         let placed = cadaddy_geom::Bounds2::from_points(few.iter().map(|p| *p * s + t));
         let under: Vec<Vec2> = tgt.iter().copied().filter(|p| placed.contains(*p)).step_by((tgt.len() / 20_000).max(1)).collect();
-        let p = if under.is_empty() { 0.0 } else { under.iter().filter(|q| mine.hit(**q)).count() as f64 / under.len() as f64 };
+        let p = if under.is_empty() { 0.0 } else { under.iter().filter(|q| mine.hit((**q - t) * (1.0 / s))).count() as f64 / under.len() as f64 };
         if r + p > 0.0 { 2.0 * r * p / (r + p) } else { 0.0 }
     };
     for cand in refined.iter_mut().take(4) {
         let (_, s0, t0) = *cand;
-        let mut best = (f1(s0, t0), s0, t0);
+        let mine = view_grid(s0);
+        let mut best = (f1(s0, t0, &mine), s0, t0);
         for si in -2..=2 {
             let s = s0 * (1.0 + 0.001 * f64::from(si));
             for dx in -4..=4 {
                 for dy in -4..=4 {
                     let t = t0 + Vec2::new(f64::from(dx), f64::from(dy)) * (3.0 * k);
-                    let sc = f1(s, t);
+                    let sc = f1(s, t, &mine);
                     if sc > best.0 {
                         best = (sc, s, t);
                     }
@@ -1104,7 +1107,7 @@ pub(crate) fn linework_fit(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<(f64, V
     }
     // The rest scored the same way, so the margin compares like with like.
     for cand in refined.iter_mut().skip(4) {
-        cand.0 = f1(cand.1, cand.2);
+        cand.0 = f1(cand.1, cand.2, &view_grid(cand.1));
     }
     refined.sort_by(|a, b| b.0.total_cmp(&a.0));
     let (score, s, t) = *refined.first()?;
