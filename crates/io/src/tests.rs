@@ -661,6 +661,35 @@ fn viewport_ids_unknown_sheet_becomes_one() {
     assert!(!write_dxf(&back).contains("PAPERVIEW"), "the first viewport is the sheet");
 }
 
+/// A layout whose only viewport has id 0 (entmake, MCP): the writer adds the PAPERVIEW sheet ahead
+/// of it and the reader drops that sheet again. The id-0 viewport must not be numbered 1, or the
+/// next save takes it as the sheet and the generated sheet is lost (#2107).
+#[test]
+fn viewport_id_zero_keeps_implicit_sheet_across_saves() {
+    let mut d = sample();
+    let vp = Viewport {
+        center: Vec3::new(5.0, 4.0, 0.0),
+        width: 8.0,
+        height: 6.0,
+        view_center: Vec2::new(5.0, 4.0),
+        view_height: 6.0,
+        id: 0,
+        ..Viewport::default()
+    };
+    d.add(&Space::Paper("Layout1".into()), Common::default(), EntityKind::Viewport(vp)).unwrap();
+    let first = write_dxf(&d);
+    assert!(first.contains("PAPERVIEW"), "the writer adds the sheet");
+    let back = read_dxf(first.as_bytes()).unwrap();
+    let ids: Vec<u32> =
+        back.layouts[0].entities.iter().filter_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some(v.id) } else { None }).collect();
+    assert_eq!(ids, [0], "the dropped sheet is not replaced by numbering the id-0 viewport");
+    let second = write_dxf(&back);
+    let lines: Vec<&str> = second.lines().map(str::trim).collect();
+    let sheet = lines.iter().position(|l| *l == "PAPERVIEW").expect("the second save still generates the sheet");
+    let vp0 = (0..lines.len() - 1).find(|i| lines[*i] == "69" && lines[i + 1] == "0").expect("the id-0 viewport is written");
+    assert!(sheet < vp0, "the generated sheet comes first");
+}
+
 /// A layout with viewport 2 frozen on `Walls` and `A B` (both real layers), and its written DXF as
 /// (code, value) pairs.
 fn frozen_vp_dxf() -> (Drawing, Vec<(String, String)>) {

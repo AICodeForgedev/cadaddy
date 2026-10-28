@@ -17,6 +17,9 @@ pub(super) fn parse_entities(
         let owner = crate::dxf_ext::owner(tags);
         let paper = t.i(67) == Some(1);
         let handle = t.s(5).and_then(|h| Handle::parse_hex(&h));
+        if kind == "VIEWPORT" && crate::dxf_ext::is_paper_view(tags) {
+            rx.paper_views_dropped.push((owner.clone(), paper));
+        }
         let mut kindent = entity_with_table_budget(kind, tags, table_cells_left);
         if let Some((c, _)) = kindent.as_mut()
             && let Some(n) = entity_plot_style(tags, rx)
@@ -227,6 +230,14 @@ pub(super) fn place_blocks(d: &mut Drawing, blocks: Vec<BlockDef>, rx: &mut Rx, 
     }
 }
 
+/// The layout an entity record belongs to: paper space when flagged (67=1) or owned by a
+/// `*PAPER_SPACE` block, else `None` for model space.
+fn paper_layout(owner: Option<String>, paper: bool, rx: &Rx, paper_block_for: &HashMap<String, String>, first_layout: &str) -> Option<String> {
+    let owner_name = owner.and_then(|o| rx.brs.get(&o.trim().to_ascii_uppercase()).cloned()).map(|n| n.to_ascii_uppercase());
+    let to_paper = paper || owner_name.as_deref().is_some_and(|n| n.starts_with("*PAPER_SPACE"));
+    to_paper.then(|| owner_name.and_then(|n| paper_block_for.get(&n).cloned()).unwrap_or_else(|| first_layout.to_string()))
+}
+
 /// Place the ENTITIES section: model space, or paper space when flagged (67=1).
 pub(super) fn place_entities(
     d: &mut Drawing,
@@ -237,17 +248,21 @@ pub(super) fn place_entities(
 ) {
     for (owner, paper, e) in entities {
         d.ensure_layer(&e.common.layer);
-        let owner_name = owner.and_then(|o| rx.brs.get(&o.trim().to_ascii_uppercase()).cloned()).map(|n| n.to_ascii_uppercase());
-        let to_paper = paper || owner_name.as_deref().is_some_and(|n| n.starts_with("*PAPER_SPACE"));
-        if to_paper {
-            let lname = owner_name.and_then(|n| paper_block_for.get(&n).cloned()).unwrap_or_else(|| first_layout.to_string());
-            if let Some(l) = d.layouts.iter_mut().find(|l| l.name == lname) {
-                l.entities.push(e);
+        match paper_layout(owner, paper, rx, paper_block_for, first_layout) {
+            Some(lname) => {
+                if let Some(l) = d.layouts.iter_mut().find(|l| l.name == lname) {
+                    l.entities.push(e);
+                }
             }
-        } else {
-            d.model.push(e);
+            None => d.model.push(e),
         }
     }
+}
+
+/// Layouts whose generated sheet viewport (PAPERVIEW) the reader dropped: their viewports keep
+/// their ids, so the next save generates the sheet again instead of promoting one of them.
+pub(super) fn dropped_paper_views(rx: &Rx, paper_block_for: &HashMap<String, String>, first_layout: &str) -> std::collections::HashSet<String> {
+    rx.paper_views_dropped.iter().filter_map(|(o, p)| paper_layout(o.clone(), *p, rx, paper_block_for, first_layout)).collect()
 }
 
 pub(super) fn count_skipped(skipped: &mut std::collections::BTreeMap<String, usize>, section: &str, n: usize) {
