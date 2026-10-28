@@ -3267,6 +3267,9 @@ fn bim_step(s: &mut Session, job: &GuidedJob, step: &str, started: web_time::Ins
 }
 
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
+    // Where a sheet point goes on its level's plan: made once (its view fits are the slow part)
+    // for the MEP and the devices both.
+    let mut placer: Option<Box<dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>> = None;
     // Ensure sheet content is in the drawing so bspec.draft can read geometry.
     let t = web_time::Instant::now();
     ensure_sheets_loaded(s, job)?;
@@ -3402,7 +3405,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             // (the sheets sit side by side): each is put onto its level's architectural plan by
             // its sheet's registration (shared door and room numbers), so it is in the building.
             if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-                let sim = arch_placer(s.doc()?, &sp);
+                let sim = placer.insert(Box::new(arch_placer(s.doc()?, &sp)));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
                 let before = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
                 sp.mep.runs.retain_mut(|r| match r.points.first().and_then(|p| sim(*p, &r.level)).filter(|_| r.points.last().is_some_and(|p| sim(*p, &r.level).is_some())) {
@@ -3471,7 +3474,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // Onto the architecture like the MEP: a device that can't be placed is left out.
         let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
             Ok((sp, true)) => {
-                let sim = arch_placer(s.doc()?, &sp);
+                if placer.is_none() {
+                    placer = Some(Box::new(arch_placer(s.doc()?, &sp)));
+                }
+                let Some(sim) = placer.as_deref() else { unreachable!() };
                 let out: Vec<_> = job
                     .devices
                     .iter()
@@ -3483,15 +3489,6 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     })
                     .collect();
                 progress_line(&format!("  devices onto the plans: {} placed, {} not placeable", out.len(), job.devices.len() - out.len()));
-                let explain = arch_explainer(s.doc()?, &sp);
-                let mut shown: BTreeMap<String, usize> = BTreeMap::new();
-                for dv in job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()) {
-                    let n = shown.entry(dv.sheet.clone()).or_default();
-                    if *n < 2 {
-                        *n += 1;
-                        progress_line(&format!("  why not placed: {} on {} at {:?}: {}", dv.sheet, dv.level, dv.at.map(|v| v.round()), explain(dv.at, &dv.level)));
-                    }
-                }
                 let mut why: BTreeMap<String, usize> = BTreeMap::new();
                 for dv in job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()) {
                     *why.entry(format!("{} on {}", if dv.sheet.is_empty() { "?" } else { &dv.sheet }, if dv.level.is_empty() { "?" } else { &dv.level })).or_default() += 1;
@@ -3866,24 +3863,11 @@ fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
 
 
 
-/// Where a sheet point goes on its level's architectural plan (architecture is the rule): the
-/// sheet's registration when it fits on enough tags at 1:1, else the frame of a same-size
-/// architectural sheet of the level; `None` when it can't be placed.
-/// [`arch_placer`]'s grid fit explained, for the progress lines.
-fn arch_explainer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> impl Fn([f64; 2], &str) -> String + use<> {
-    let sheets = super::identity::sheets_of(Some(sp));
-    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-    let level_key = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), { let u = l.trim().to_ascii_uppercase(); u.contains("ROOF") || u == "R" });
-    let plans: Vec<(String, [f64; 4])> = sp
-        .levels
-        .iter()
-        .filter_map(|l| Some((level_key(&l.name), l.region.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8))?)))
-        .collect();
-    let others: Vec<[f64; 4]> = sheets.iter().filter(|b| !b.discipline.eq_ignore_ascii_case("A")).map(|b| b.rect).collect();
-    let grid = super::grids::GridPlacer::new(d, upf, &plans, &others);
-    move |p, level| grid.explain(p, &level_key(level))
-}
-
+/// Where a sheet point goes on its level's architectural plan (architecture is the rule), by the
+/// first that holds: the sheet's registration by shared door and room numbers; its view's grid
+/// intersections (an enlarged plan); the frame of a same-size architectural sheet; its view's
+/// screened background laid over the floor plan (a fire alarm or low-voltage plan). `None` when
+/// none holds, or the point would land off the level's plan.
 fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<> {
     let sheets = super::identity::sheets_of(Some(&sp));
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -3910,14 +3894,6 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
             let (mx, my) = (0.05 * (r[2] - r[0]).abs(), 0.05 * (r[3] - r[1]).abs());
             Some((level_key(&l.name), [r[0].min(r[2]) - mx, r[1].min(r[3]) - my, r[0].max(r[2]) + mx, r[1].max(r[3]) + my]))
         })
-        .collect();
-    // The MEP sheets registered by their tags (number, level, rectangle): their backgrounds give
-    // each level's building outline.
-    let tagged: Vec<(String, [f64; 4])> = sheets
-        .iter()
-        .filter(|b| !b.discipline.eq_ignore_ascii_case("A"))
-        .filter(|b| reg.transforms.iter().any(|t| t.sheet.eq_ignore_ascii_case(&b.number) && t.method == "tags" && t.matched >= 8))
-        .map(|b| (b.level.clone(), b.rect))
         .collect();
     let place = move |p: [f64; 2], level: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
         let sheet = sheets.iter().find(|b| inside(&b.rect, p))?;
@@ -3957,31 +3933,39 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
         })?;
         Some(cadaddy_mepfix::tagid::Sim::scale_offset(1.0, [arch.rect[0] - sheet.rect[0], arch.rect[1] - sheet.rect[1]]))
     };
-    // Each level's building outline in plan terms: the background of a sheet registered by its
-    // tags, put onto the plan; a view with neither grids nor tags fits its background onto it.
+    // A view with neither grids nor tags: its screened background laid over the floor plan.
     let backgrounds = super::grids::Backgrounds::new(d, &others);
-    let targets: Vec<(String, cadaddy_geom::Bounds2)> = plans
+    // Each level's floor plan linework (points every foot), for laying a view's background on it.
+    let k_in = super::perceive::units_per_inch(d);
+    let plan_lines: Vec<(String, Vec<cadaddy_geom::Vec2>)> = plans
         .iter()
-        .filter_map(|(key, _)| {
-            tagged
-                .iter()
-                .filter(|(l, _)| level_key(l) == *key)
-                .find_map(|(l, r)| {
-                    let c = [0.5 * (r[0] + r[2]), 0.5 * (r[1] + r[3])];
-                    let bg = backgrounds.largest(c)?;
-                    let (lo, hi) = (place([bg.min.x, bg.min.y], l)?, place([bg.max.x, bg.max.y], l)?);
-                    let (a, z) = (lo.apply([bg.min.x, bg.min.y]), hi.apply([bg.max.x, bg.max.y]));
-                    Some((key.clone(), cadaddy_geom::Bounds2::new(cadaddy_geom::Vec2::new(a[0], a[1]), cadaddy_geom::Vec2::new(z[0], z[1]))))
-                })
+        .map(|(key, r)| {
+            let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = super::bspec::plan_objects(d)
+                .into_iter()
+                .filter(|e| super::bspec::centre(d, e).is_some_and(|c| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3])))
+                .collect();
+            (key.clone(), super::grids::line_samples(&mine, 12.0 * k_in))
         })
         .collect();
-    progress_line(&format!("  building outlines from registered backgrounds: {} level(s)", targets.len()));
+    let fits: std::sync::Mutex<std::collections::HashMap<(i64, i64, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
     let place = move |p: [f64; 2], level: &str| {
         place(p, level).or_else(|| {
             let bg = backgrounds.around(p)?;
-            let (_, to) = targets.iter().find(|(k, _)| *k == level_key(level))?;
-            let (k, t) = super::grids::outline_fit(&bg, to)?;
-            Some(cadaddy_mepfix::tagid::Sim::scale_offset(k, t))
+            let key = level_key(level);
+            let id = (bg.min.x.round() as i64, bg.min.y.round() as i64, key.clone());
+            if let Some(f) = fits.lock().ok()?.get(&id) {
+                return *f;
+            }
+            let tgt = plan_lines.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
+            let fit = super::grids::linework_fit(&backgrounds.points_in(&bg), tgt, k_in);
+            if let Some((s, _, score, margin)) = fit {
+                progress_line(&format!("  background view at {:?} onto level {level}: scale {s:.3}, {:.0}% on the plan, {:.0} points over the next best", [bg.min.x.round(), bg.min.y.round()], score * 100.0, margin * 100.0));
+            }
+            // 90% of both ways, and 3 points over the best placement 10' or more away: a floor of
+            // repeating bays one bay over scores close behind (only its ends differ).
+            let got = fit.filter(|f| f.2 >= 0.9 && f.3 >= 0.03).map(|(s, t, _, _)| cadaddy_mepfix::tagid::Sim::scale_offset(s, [t.x, t.y]));
+            fits.lock().ok()?.insert(id, got);
+            got
         })
     };
     move |p: [f64; 2], level: &str| {

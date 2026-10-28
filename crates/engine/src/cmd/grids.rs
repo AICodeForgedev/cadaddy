@@ -692,15 +692,42 @@ mod tests {
         assert!(round_path(&arc).is_none());
     }
 
+    /// Points every 12 along the walls of a floor `n` bays long: a corridor and the bay walls,
+    /// with an odd end (a stair) so one bay over is no fit.
+    fn floor_lines(n: i32, o: Vec2, s: f64) -> Vec<Vec2> {
+        let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
+        let w = f64::from(n) * 180.0;
+        for y in [0.0, 300.0, 360.0, 660.0] {
+            segs.push((Vec2::new(0.0, y), Vec2::new(w, y)));
+        }
+        for i in 0..=n {
+            let x = f64::from(i) * 180.0;
+            segs.push((Vec2::new(x, 0.0), Vec2::new(x, 300.0)));
+            segs.push((Vec2::new(x, 360.0), Vec2::new(x, 660.0)));
+        }
+        segs.push((Vec2::new(w, 0.0), Vec2::new(w + 240.0, -120.0)));
+        segs.push((Vec2::new(w + 240.0, -120.0), Vec2::new(w + 240.0, 660.0)));
+        let mut out = Vec::new();
+        for (a, b) in segs {
+            let m = ((a.dist(b) / 12.0).ceil() as usize).max(1);
+            out.extend((0..=m).map(|i| o + (a + (b - a) * (i as f64 / m as f64)) * s));
+        }
+        out
+    }
+
     #[test]
-    fn a_background_outline_fits_the_floor_of_its_shape_only() {
-        let b = |x0: f64, y0: f64, x1: f64, y1: f64| cadaddy_geom::Bounds2::new(Vec2::new(x0, y0), Vec2::new(x1, y1));
-        // A half-size view of a 300 x 60 floor, drawn at (5000, 100).
-        let (view, floor) = (b(5000.0, 100.0, 5150.0, 130.0), b(0.0, 0.0, 300.0, 60.0));
-        let (k, t) = outline_fit(&view, &floor).expect("same shape");
-        assert!((k - 2.0).abs() < 1e-9 && (5075.0 * k + t[0] - 150.0).abs() < 1e-9 && (115.0 * k + t[1] - 30.0).abs() < 1e-9);
-        // Another shape (a square room's background) is no fit.
-        assert!(outline_fit(&b(0.0, 0.0, 100.0, 100.0), &floor).is_none());
+    fn a_background_view_lands_on_its_floor_plan() {
+        // The plan at full size with clutter (furniture: a dot field), the view at half size elsewhere.
+        let mut plan = floor_lines(12, Vec2::new(1000.0, 2000.0), 1.0);
+        plan.extend((0..120).map(|i| Vec2::new(1030.0 + f64::from(i % 20) * 107.0, 2040.0 + f64::from(i / 20) * 97.0)));
+        let view = floor_lines(12, Vec2::new(50000.0, 300.0), 0.5);
+        let (s, t, score, margin) = linework_fit(&view, &plan, 1.0).expect("a fit");
+        let corner = Vec2::new(50000.0, 300.0) * s + t;
+        assert!((s - 2.0).abs() < 0.02 && corner.dist(Vec2::new(1000.0, 2000.0)) < 18.0, "scale {s}, corner at {corner:?}");
+        assert!(score >= 0.9 && margin >= 0.04, "score {score}, margin {margin}");
+        // A view of another building (a square block) is refused.
+        let other: Vec<Vec2> = (0..400).flat_map(|i| [Vec2::new(f64::from(i) * 3.0, 0.0), Vec2::new(0.0, f64::from(i) * 3.0)]).collect();
+        assert!(linework_fit(&other, &plan, 1.0).is_none_or(|f| f.2 < 0.9 || f.3 < 0.04));
     }
 
     #[test]
@@ -776,35 +803,6 @@ impl GridPlacer {
         format!("plans {lv:?} (objects, bubbles, grids {:?}); sheets {sh:?}", &self.counts[..n.min(self.counts.len())])
     }
 
-    /// Why `p` was or wasn't placed (for the progress lines).
-    pub(crate) fn explain(&self, p: [f64; 2], level: &str) -> String {
-        let at = Vec2::new(p[0], p[1]);
-        let inside = |r: &[f64; 4]| p[0] >= r[0].min(r[2]) && p[0] <= r[0].max(r[2]) && p[1] >= r[1].min(r[3]) && p[1] <= r[1].max(r[3]);
-        let Some((_, xs)) = self.sheets.iter().find(|(r, _)| inside(r)) else { return "on no sheet".into() };
-        let Some((_, plan)) = self.levels.iter().find(|(key, _)| key == level) else { return format!("no plan for level {level}") };
-        let mut near: Vec<(&str, Vec2, f64)> = Vec::new();
-        for (label, q) in xs {
-            let d = q.dist(at);
-            match near.iter_mut().find(|(l, _, _)| *l == label.as_str()) {
-                Some(n) if d < n.2 => *n = (label.as_str(), *q, d),
-                Some(_) => {}
-                None => near.push((label.as_str(), *q, d)),
-            }
-        }
-        near.sort_by(|a, b| a.2.total_cmp(&b.2));
-        let on: Vec<String> = near.iter().take(8).map(|(l, _, d)| format!("{l}@{d:.0}:{}", plan.iter().filter(|(x, _)| x == l).count())).collect();
-        let pairs: Vec<(Vec2, Vec2)> = near
-            .iter()
-            .take(8)
-            .filter_map(|(l, q, _)| {
-                let hits: Vec<Vec2> = plan.iter().filter(|(x, _)| x == l).map(|(_, q)| *q).collect();
-                (hits.len() == 1).then(|| (*q, hits[0]))
-            })
-            .collect();
-        let f = fit(&pairs).map(|(s, _, m)| format!("scale {s:.3} miss {m:.1}"));
-        format!("nearest (label@dist:on-plan) {on:?}; {} pairs; {f:?}", pairs.len())
-    }
-
     /// The scale and offset that put `p` (on one of the sheets) onto the plan of the level keyed
     /// `level`, from the grid intersections of `p`'s own view (the nearest of each label).
     pub(crate) fn place(&self, p: [f64; 2], level: &str) -> Option<(f64, [f64; 2])> {
@@ -861,6 +859,8 @@ impl GridPlacer {
 pub(crate) struct Backgrounds {
     /// Per sheet rectangle, the outlines of its background drawings, largest first.
     sheets: Vec<([f64; 4], Vec<cadaddy_geom::Bounds2>)>,
+    /// Per sheet, points along its background lines (every foot).
+    lines: Vec<Vec<Vec2>>,
 }
 
 /// Grid cell for joining background lines into drawings, inches of the drawing.
@@ -878,6 +878,7 @@ impl Backgrounds {
         };
         let cell = BACKGROUND_CELL_IN * k;
         let mut by_sheet: Vec<Vec<Vec2>> = vec![Vec::new(); sheets.len()];
+        let mut lines: Vec<Vec<Vec2>> = vec![Vec::new(); sheets.len()];
         for e in plan_objects(d) {
             if !grey(&e.common.color) || !matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
                 continue;
@@ -889,6 +890,7 @@ impl Backgrounds {
             let c = b.center();
             if let Some(i) = sheets.iter().position(|r| c.x >= r[0] && c.x <= r[2] && c.y >= r[1] && c.y <= r[3]) {
                 by_sheet[i].extend([b.min, b.max, c]);
+                lines[i].extend(line_samples(&[e], 12.0 * k));
             }
         }
         let clusters = |pts: &[Vec2]| -> Vec<cadaddy_geom::Bounds2> {
@@ -926,12 +928,14 @@ impl Backgrounds {
             out.sort_by(|a, b| ((b.max.x - b.min.x) * (b.max.y - b.min.y)).total_cmp(&((a.max.x - a.min.x) * (a.max.y - a.min.y))));
             out
         };
-        Backgrounds { sheets: sheets.iter().zip(&by_sheet).map(|(r, pts)| (*r, clusters(pts))).collect() }
+        Backgrounds { sheets: sheets.iter().zip(&by_sheet).map(|(r, pts)| (*r, clusters(pts))).collect(), lines }
     }
 
-    /// The largest background outline of the sheet holding `p`.
-    pub(crate) fn largest(&self, p: [f64; 2]) -> Option<cadaddy_geom::Bounds2> {
-        self.sheets.iter().find(|(r, _)| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3]).and_then(|(_, c)| c.first().copied())
+    /// The background line points inside `b` (one view's).
+    pub(crate) fn points_in(&self, b: &cadaddy_geom::Bounds2) -> Vec<Vec2> {
+        let c = b.center();
+        let Some(i) = self.sheets.iter().position(|(r, _)| c.x >= r[0] && c.x <= r[2] && c.y >= r[1] && c.y <= r[3]) else { return Vec::new() };
+        self.lines[i].iter().copied().filter(|p| b.contains(*p)).collect()
     }
 
     /// The background outline holding `p` (the smallest that does: a view, not the sheet).
@@ -942,17 +946,171 @@ impl Backgrounds {
     }
 }
 
-/// The scale and offset that put outline `from` onto outline `to`, when they are the same shape
-/// (widths and heights in one ratio, within 5%).
-pub(crate) fn outline_fit(from: &cadaddy_geom::Bounds2, to: &cadaddy_geom::Bounds2) -> Option<(f64, [f64; 2])> {
-    let (fw, fh, tw, th) = (from.max.x - from.min.x, from.max.y - from.min.y, to.max.x - to.min.x, to.max.y - to.min.y);
-    if fw <= 0.0 || fh <= 0.0 || tw <= 0.0 || th <= 0.0 {
+/// Points every `step` along the lines and polylines of `ents`.
+pub(crate) fn line_samples(ents: &[&Arc<Entity>], step: f64) -> Vec<Vec2> {
+    let mut out = Vec::new();
+    let mut along = |a: Vec2, b: Vec2| {
+        let n = ((a.dist(b) / step).ceil() as usize).clamp(1, 10_000);
+        for i in 0..=n {
+            out.push(a + (b - a) * (i as f64 / n as f64));
+        }
+    };
+    for e in ents {
+        match &e.kind {
+            EntityKind::Line(l) => along(l.a.xy(), l.b.xy()),
+            EntityKind::LwPolyline(pl) => {
+                for w in pl.vertices.windows(2) {
+                    along(w[0].p, w[1].p);
+                }
+                if pl.closed && pl.vertices.len() > 2 {
+                    along(pl.vertices[pl.vertices.len() - 1].p, pl.vertices[0].p);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Cells holding linework, for scoring an overlay.
+struct Occupancy {
+    cell: f64,
+    cells: std::collections::HashSet<(i64, i64)>,
+}
+
+impl Occupancy {
+    /// `pts` in cells of `cell`, each grown by `grow` cells (a tolerance).
+    fn new(pts: &[Vec2], cell: f64, grow: i64) -> Self {
+        let mut cells = std::collections::HashSet::new();
+        for p in pts {
+            let (i, j) = ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+            for di in -grow..=grow {
+                for dj in -grow..=grow {
+                    cells.insert((i + di, j + dj));
+                }
+            }
+        }
+        Occupancy { cell, cells }
+    }
+    fn hit(&self, p: Vec2) -> bool {
+        self.cells.contains(&((p.x / self.cell).floor() as i64, (p.y / self.cell).floor() as i64))
+    }
+    /// The share of `pts` under `p ↦ p·s + t` that land on linework.
+    fn score(&self, pts: &[Vec2], s: f64, t: Vec2) -> f64 {
+        if pts.is_empty() {
+            return 0.0;
+        }
+        pts.iter().filter(|p| self.hit(**p * s + t)).count() as f64 / pts.len() as f64
+    }
+}
+
+/// The scale and offset that lay linework `src` (a view's background) over `tgt` (a floor plan),
+/// with its score (F1 of the view's lines on the plan and the plan's lines under the view that the
+/// view has) and its margin over the best fit 10' or more away; `None` without one.
+/// Votes on a 4' grid over scales 0.4-2.5, then refines on a 1' grid.
+pub(crate) fn linework_fit(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<(f64, Vec2, f64, f64)> {
+    if src.len() < 50 || tgt.len() < 50 {
         return None;
     }
-    let (sx, sy) = (tw / fw, th / fh);
-    if (sx / sy - 1.0).abs() > 0.05 {
-        return None;
+    let coarse = 48.0 * k;
+    let tcells: std::collections::HashSet<(i64, i64)> =
+        tgt.iter().map(|p| ((p.x / coarse).floor() as i64, (p.y / coarse).floor() as i64)).collect();
+    // A few thousand source points are enough to score with.
+    let stride = (src.len() / 2000).max(1);
+    let few: Vec<Vec2> = src.iter().step_by(stride).copied().collect();
+    let mut cands: Vec<(f64, f64, (i64, i64))> = Vec::new();
+    // A view with neither grids nor tags is the whole floor: placed, it spans half the plan's
+    // linework or more (not a shrunk copy in a dense corner).
+    let (sb, tb) = (cadaddy_geom::Bounds2::from_points(few.iter().copied()), cadaddy_geom::Bounds2::from_points(tgt.iter().copied()));
+    let (sw, tw) = (sb.width().max(sb.height()), tb.width().max(tb.height()));
+    let mut s = 0.4;
+    while s <= 2.5 {
+        if sw * s < 0.5 * tw || sw * s > 1.2 * tw {
+            s *= 1.01;
+            continue;
+        }
+        let scells: std::collections::HashSet<(i64, i64)> =
+            few.iter().map(|p| ((p.x * s / coarse).floor() as i64, (p.y * s / coarse).floor() as i64)).collect();
+        let mut votes: std::collections::HashMap<(i64, i64), u32> = std::collections::HashMap::new();
+        for u in &scells {
+            for v in &tcells {
+                *votes.entry((v.0 - u.0, v.1 - u.1)).or_default() += 1;
+            }
+        }
+        // The coarse grid only proposes an offset per scale: a dense plan has lines in nearly
+        // every coarse cell, so placements are told apart on the fine grid.
+        if let Some((o, n)) = votes.into_iter().max_by_key(|(_, n)| *n) {
+            cands.push((f64::from(n) / scells.len() as f64, s, o));
+        }
+        s *= 1.01;
     }
-    let s = 0.5 * (sx + sy);
-    Some((s, [to.min.x - from.min.x * s, to.min.y - from.min.y * s]))
+    let fine = Occupancy::new(tgt, 12.0 * k, 1);
+    // Refine every scale's proposal on the 1' grid: scale ±0.5%, offset within two coarse cells.
+    let mut refined: Vec<(f64, f64, Vec2)> = Vec::new();
+    for &(_, s0, o) in &cands {
+        let t0 = Vec2::new(o.0 as f64 * coarse, o.1 as f64 * coarse);
+        let mut best = (0.0, s0, t0);
+        for si in -1..=1 {
+            let s = s0 * (1.0 + 0.005 * f64::from(si));
+            for dx in -8..=8 {
+                for dy in -8..=8 {
+                    let t = t0 + Vec2::new(f64::from(dx), f64::from(dy)) * (coarse / 4.0);
+                    let sc = fine.score(&few, s, t);
+                    if sc > best.0 {
+                        best = (sc, s, t);
+                    }
+                }
+            }
+        }
+        // F1 of the refined placement: the plan's lines under the view that the view has too.
+        let (_, s, t) = best;
+        let mine = Occupancy::new(&few.iter().map(|p| *p * s + t).collect::<Vec<_>>(), 12.0 * k, 1);
+        let placed = cadaddy_geom::Bounds2::from_points(few.iter().map(|p| *p * s + t));
+        let under: Vec<Vec2> = tgt.iter().copied().filter(|p| placed.contains(*p)).step_by((tgt.len() / 20_000).max(1)).collect();
+        let precision = if under.is_empty() { 0.0 } else { under.iter().filter(|p| mine.hit(**p)).count() as f64 / under.len() as f64 };
+        let f = if best.0 + precision > 0.0 { 2.0 * best.0 * precision / (best.0 + precision) } else { 0.0 };
+        refined.push((f, s, t));
+    }
+    refined.sort_by(|a, b| b.0.total_cmp(&a.0));
+    // Polish the best few on 3" steps and 0.1% of scale: a right fit a few inches off loses
+    // points to a wrong one that happens to sit on lines.
+    // Coverage is measured against the view's lines in full (a thinned sample leaves gaps that
+    // read as plan lines the view doesn't have).
+    let dense: Vec<Vec2> = src.iter().step_by((src.len() / 12_000).max(1)).copied().collect();
+    let f1 = |s: f64, t: Vec2| {
+        let r = fine.score(&few, s, t);
+        let mine = Occupancy::new(&dense.iter().map(|p| *p * s + t).collect::<Vec<_>>(), 12.0 * k, 1);
+        let placed = cadaddy_geom::Bounds2::from_points(few.iter().map(|p| *p * s + t));
+        let under: Vec<Vec2> = tgt.iter().copied().filter(|p| placed.contains(*p)).step_by((tgt.len() / 20_000).max(1)).collect();
+        let p = if under.is_empty() { 0.0 } else { under.iter().filter(|q| mine.hit(**q)).count() as f64 / under.len() as f64 };
+        if r + p > 0.0 { 2.0 * r * p / (r + p) } else { 0.0 }
+    };
+    for cand in refined.iter_mut().take(4) {
+        let (_, s0, t0) = *cand;
+        let mut best = (f1(s0, t0), s0, t0);
+        for si in -2..=2 {
+            let s = s0 * (1.0 + 0.001 * f64::from(si));
+            for dx in -4..=4 {
+                for dy in -4..=4 {
+                    let t = t0 + Vec2::new(f64::from(dx), f64::from(dy)) * (3.0 * k);
+                    let sc = f1(s, t);
+                    if sc > best.0 {
+                        best = (sc, s, t);
+                    }
+                }
+            }
+        }
+        *cand = best;
+    }
+    // The rest scored the same way, so the margin compares like with like.
+    for cand in refined.iter_mut().skip(4) {
+        cand.0 = f1(cand.1, cand.2);
+    }
+    refined.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let (score, s, t) = *refined.first()?;
+    // The best placement well away from it (one bay over, another view).
+    let probe = few.iter().fold(Vec2::new(0.0, 0.0), |a, p| a + *p) * (1.0 / few.len() as f64);
+    let at = probe * s + t;
+    let second = refined.iter().skip(1).filter(|(_, s2, t2)| (probe * *s2 + *t2).dist(at) >= 120.0 * k).map(|r| r.0).fold(0.0, f64::max);
+    Some((s, t, score, score - second))
 }
