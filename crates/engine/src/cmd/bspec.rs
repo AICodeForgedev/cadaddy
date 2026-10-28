@@ -794,6 +794,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     // Names first, then numbers: a number inside a room already traced from its name numbers that
     // room (a guest room's number and its unit type sit in different parts of it, and traced from
     // each the room came out twice).
+    let mut claimed: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut texts = room_texts(sp, &ents);
     texts.sort_by_key(|(_, t, _)| super::perceive::geometry::room_number(t));
     for (h, text, at) in texts {
@@ -867,7 +868,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
             Some(idx) => {
                 let o = &mut out[idx];
                 if o.room.is_none() {
-                    o.room = room;
+                    o.room = room.filter(|i| claimed.insert(*i));
                 }
                 // The best room label names it (a room or unit-type word first).
                 let better = |n: &String| {
@@ -879,6 +880,9 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
                 o.number = o.number.take().or(number);
             }
             None => {
+                // A spec room is one room: a second label naming it (its name printed twice on the
+                // plan) gives another room that name, not its number.
+                let room = room.filter(|i| claimed.insert(*i));
                 let idx = out.len();
                 grid.entry((gx, gy)).or_default().push(idx);
                 out.push(Traced { room, level: level.name.clone(), outline, tag: h, at, name, number, cached_area: area, cached_bounds: bounds });
