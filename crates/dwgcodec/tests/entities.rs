@@ -156,10 +156,11 @@ fn same(ours: &Value, theirs: &str) -> bool {
     }
 }
 
-/// Group codes compared: the entity's own data and common properties (not subclass markers,
-/// owners or handles, whose layout differs between writers).
+/// Group codes compared: the entity's own data and common properties, owners (330), reactors and
+/// extension dictionaries (102, 330, 360) included (not handles and subclass markers, whose
+/// layout differs between writers; the material and plot style handles, 347 and 390).
 fn compared(code: i32) -> bool {
-    !matches!(code, 5 | 100 | 102 | 330 | 360 | 347 | 390)
+    !matches!(code, 5 | 100 | 347 | 390)
 }
 
 /// The values a group defaults to when left out (DXF Reference).

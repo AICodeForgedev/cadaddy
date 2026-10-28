@@ -258,7 +258,15 @@ pub fn common(o: &mut Obj) -> Result<Common> {
         let raw = o.d.bs()? as u16;
         c.color = (raw & 0x1ff) as i16;
         if raw & 0x8000 != 0 {
-            c.rgb = Some(o.d.bl()? as u32);
+            // The colour value (method byte 0xC0–0xC8, then the colour). A colour book colour
+            // (0x4000) from some writers has none: what follows is then the transparency or
+            // the next field, never a value with a method byte, so it is left unread.
+            let mut ahead = o.d.clone();
+            let rgb = ahead.bl()? as u32;
+            if raw & 0x4000 == 0 || (0xC0..=0xC8).contains(&(rgb >> 24)) {
+                o.d = ahead;
+                c.rgb = Some(rgb);
+            }
         }
         if raw & 0x2000 != 0 {
             c.transparency = Some(o.d.bl()? as u32);
@@ -448,6 +456,16 @@ pub fn common_groups(e: &mut Vec<Group>, handle: u64, c: &Common, names: &Names,
     if let Some(o) = owner {
         e.push(Group { code: 330, value: Value::Handle(o) });
     }
+    if !c.reactors.is_empty() {
+        e.push(s(102, "{ACAD_REACTORS"));
+        e.extend(c.reactors.iter().map(|r| Group { code: 330, value: Value::Handle(*r) }));
+        e.push(s(102, "}"));
+    }
+    if let Some(x) = c.xdict {
+        e.push(s(102, "{ACAD_XDICTIONARY"));
+        e.push(Group { code: 360, value: Value::Handle(x) });
+        e.push(s(102, "}"));
+    }
     e.push(s(100, "AcDbEntity"));
     if c.entmode == 1 {
         e.push(i(67, 1));
@@ -483,6 +501,9 @@ pub fn common_groups(e: &mut Vec<Group>, handle: u64, c: &Common, names: &Names,
         && rgb >> 24 == 0xC2
     {
         e.push(i(420, i64::from(rgb & 0xFF_FFFF)));
+    }
+    if let Some(n) = c.color_ref.and_then(|h| names.color(h)) {
+        e.push(s(430, n));
     }
     if let Some(t) = c.transparency
         && t >> 24 == 0x02
