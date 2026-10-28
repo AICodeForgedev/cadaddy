@@ -108,7 +108,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     let (rect, scale) = app.canvas.xf.map_or((ctx.content_rect(), 20.0), |x| (x.rect, x.scale.max(1e-6)));
     let mut st = ctx.data_mut(|d| d.get_temp::<State>(state_id())).unwrap_or_else(|| {
         // An existing MTEXT (TEXTEDIT) starts with its contents and their formats.
-        let mut fmt = if mt.contents.is_empty() { Formatted::default() } else { Formatted::from_contents(&mt.contents) };
+        let mut fmt = if mt.contents.is_empty() { Formatted::default() } else { Formatted::from_contents_with_height(&mt.contents, Some(mt.height)) };
         if let Some(f) = app.session.doc().ok().and_then(|d| d.text_style(&mt.style).map(|s| s.font.clone())) {
             // A family name, not a font file (`txt.shx`, `arial.ttf`).
             if !f.is_empty() && !f.contains('.') {
@@ -760,5 +760,40 @@ mod tests {
             cadcraft_engine::doc::EntityKind::MText(m) => assert!(m.contents.contains("third") && m.contents.contains("b1"), "{}", m.contents),
             _ => panic!(),
         }
+    }
+
+    /// A multileader's text with a relative height code (`\H2x;`) opens in the editor at twice
+    /// its text height, so saving it back keeps the bigger letters.
+    #[test]
+    fn a_relative_height_in_a_multileaders_text_is_kept() {
+        let ctx = egui::Context::default();
+        let mut app = CadApp::new(Session::new(), Services::default());
+        let frame = |app: &mut CadApp| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0))), ..Default::default() };
+            for _ in 0..2 {
+                let mut out = ctx.run_ui(input.clone(), |ui| show(app, ui.ctx()));
+                out.textures_delta.clear();
+            }
+        };
+        app.run("mleader", serde_json::json!({ "points": [[16, -10], [20, -5]], "text": "{\\H2x;big} small" })).unwrap();
+        let (at, height) = app
+            .session
+            .doc()
+            .unwrap()
+            .model
+            .iter()
+            .find_map(|e| {
+                if let cadcraft_engine::doc::EntityKind::MLeader(m) = &e.kind { m.text.as_ref().map(|t| (t.insert.xy(), t.height)) } else { None }
+            })
+            .unwrap();
+        app.start("textedit");
+        app.session.input(cadcraft_engine::Input::Point(at + cadcraft_geom::Vec2::new(0.5, -0.05))).unwrap();
+        assert!(app.session.editing_mtext().is_some(), "the multileader's text is being edited");
+        frame(&mut app);
+        let st = ctx.data_mut(|d| d.get_temp::<State>(state_id())).expect("editor open");
+        assert_eq!(st.fmt.text(), "big small");
+        let big = st.fmt.fmt_at(0).height.expect("the relative height is kept");
+        assert!((big - 2.0 * height).abs() < 1e-9, "{big} for a {height} text");
+        assert_eq!(st.fmt.fmt_at(5).height, None, "the rest keeps the text's height");
     }
 }

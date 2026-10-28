@@ -99,6 +99,12 @@ fn arg_end(chars: &[char], from: usize) -> usize {
 impl Formatted {
     /// Parse MTEXT contents. Never fails: what isn't understood is kept as atoms or dropped.
     pub fn from_contents(contents: &str) -> Formatted {
+        Self::from_contents_with_height(contents, None)
+    }
+
+    /// [`Self::from_contents`] for a text `height` high: a relative height code (`\H2x;`) with no
+    /// inline height before it scales that one instead of being dropped.
+    pub fn from_contents_with_height(contents: &str, height: Option<f64>) -> Formatted {
         let mut f = Formatted::default();
         let chars: Vec<char> = contents.chars().collect();
         let mut stack: Vec<CharFmt> = Vec::new();
@@ -153,7 +159,7 @@ impl Formatted {
                             i = end + 1;
                             match k {
                                 'f' | 'F' => apply_font(&mut cur, &a),
-                                'H' => cur.height = parse_height(&a, cur.height),
+                                'H' => cur.height = parse_height(&a, cur.height.or(height)),
                                 'C' => {
                                     cur.color = a.trim().parse::<u16>().ok().and_then(|v| (v > 0 && v < 256).then_some(MTextColor::Aci(v)));
                                 }
