@@ -54,61 +54,11 @@ fn every_prompt_step_on_the_model_tab() {
     let only = s.display_only().unwrap();
     assert!(only.handles.is_empty());
     assert!(only.extra.len() > 10 && only.extra.iter().all(|e| matches!(e.kind, EntityKind::Line(_))));
-
-    // TWist: the current twist is the default; a typed angle turns the view.
-    s.cmdline("tw").unwrap();
-    assert_eq!(prompt(&s), "Specify view twist angle <0>:");
-    s.cmdline("30").unwrap();
-    assert!(near(twist_deg(&s), 30.0));
-    assert_eq!(prompt(&s), OPTION);
-    s.cmdline("TWist").unwrap();
-    assert_eq!(prompt(&s), "Specify view twist angle <30>:");
-    // Enter keeps it.
-    s.cmdline("").unwrap();
-    assert!(near(twist_deg(&s), 30.0));
-
-    // PAn: base point, second point.
-    s.cmdline("pa").unwrap();
-    assert_eq!(prompt(&s), "Specify displacement base point:");
-    s.cmdline("0,0").unwrap();
-    assert_eq!(prompt(&s), "Specify second point:");
-    s.cmdline("4,0").unwrap();
-    assert_eq!(view(&s).center, Vec2::new(6.0, 10.0));
-    assert_eq!(prompt(&s), OPTION);
-
-    // Zoom: a scale factor of the current view.
-    s.cmdline("z").unwrap();
-    assert_eq!(prompt(&s), "Specify zoom scale factor <1>:");
-    s.cmdline("2").unwrap();
-    assert!(near(view(&s).height, 10.0));
+    twist_pan_and_zoom(&mut s);
     // The sample house stays where it was put: the view moves over it.
     assert_eq!(s.display_only().unwrap(), only);
-
-    // Off: perspective is never on in a 2D view, so nothing changes.
-    let before = view(&s);
-    s.cmdline("o").unwrap();
-    assert_eq!(prompt(&s), OPTION);
-    assert_eq!(view(&s), before);
-
-    // The options that need a 3D camera are not available yet and stay at the option prompt.
-    for (typed, name) in [("ca", "CAmera"), ("ta", "TArget"), ("d", "Distance"), ("po", "POints"), ("cl", "CLip"), ("h", "Hide")] {
-        s.cmdline(typed).unwrap();
-        assert!(logged(&s, &format!("DVIEW {name} is not available yet.")), "{name}: {:?}", s.log);
-        assert_eq!(prompt(&s), OPTION);
-    }
-    assert!(!s.log.iter().any(|l| l.contains("Only the view twist")));
-
-    // Undo takes back one DVIEW action at a time: zoom, pan, twist.
-    s.cmdline("u").unwrap();
-    assert!(near(view(&s).height, 20.0));
-    s.cmdline("u").unwrap();
-    assert_eq!(view(&s).center, Vec2::new(10.0, 10.0));
-    assert!(near(twist_deg(&s), 30.0));
-    s.cmdline("u").unwrap();
-    assert_eq!(view(&s).twist, 0.0);
-    // Nothing left to undo: still at the option prompt.
-    s.cmdline("u").unwrap();
-    assert_eq!(prompt(&s), OPTION);
+    off_and_unavailable_options(&mut s);
+    undo_steps(&mut s);
 
     // An unknown option is refused and asked again.
     assert!(s.cmdline("bogus").is_ok());
@@ -122,6 +72,68 @@ fn every_prompt_step_on_the_model_tab() {
     assert!(s.display_only().is_none());
     assert!(near(twist_deg(&s), 45.0));
     assert_eq!(s.state().unwrap().undo.len(), undo);
+}
+
+/// DVIEW's TWist, PAn and Zoom steps from the option prompt of a fresh Model tab session.
+fn twist_pan_and_zoom(s: &mut Session) {
+    // TWist: the current twist is the default; a typed angle turns the view.
+    s.cmdline("tw").unwrap();
+    assert_eq!(prompt(s), "Specify view twist angle <0>:");
+    s.cmdline("30").unwrap();
+    assert!(near(twist_deg(s), 30.0));
+    assert_eq!(prompt(s), OPTION);
+    s.cmdline("TWist").unwrap();
+    assert_eq!(prompt(s), "Specify view twist angle <30>:");
+    // Enter keeps it.
+    s.cmdline("").unwrap();
+    assert!(near(twist_deg(s), 30.0));
+
+    // PAn: base point, second point.
+    s.cmdline("pa").unwrap();
+    assert_eq!(prompt(s), "Specify displacement base point:");
+    s.cmdline("0,0").unwrap();
+    assert_eq!(prompt(s), "Specify second point:");
+    s.cmdline("4,0").unwrap();
+    assert_eq!(view(s).center, Vec2::new(6.0, 10.0));
+    assert_eq!(prompt(s), OPTION);
+
+    // Zoom: a scale factor of the current view.
+    s.cmdline("z").unwrap();
+    assert_eq!(prompt(s), "Specify zoom scale factor <1>:");
+    s.cmdline("2").unwrap();
+    assert!(near(view(s).height, 10.0));
+}
+
+/// DVIEW's Off option and the options that need a 3D camera.
+fn off_and_unavailable_options(s: &mut Session) {
+    // Off: perspective is never on in a 2D view, so nothing changes.
+    let before = view(s);
+    s.cmdline("o").unwrap();
+    assert_eq!(prompt(s), OPTION);
+    assert_eq!(view(s), before);
+
+    // The options that need a 3D camera are not available yet and stay at the option prompt.
+    for (typed, name) in [("ca", "CAmera"), ("ta", "TArget"), ("d", "Distance"), ("po", "POints"), ("cl", "CLip"), ("h", "Hide")] {
+        s.cmdline(typed).unwrap();
+        assert!(logged(s, &format!("DVIEW {name} is not available yet.")), "{name}: {:?}", s.log);
+        assert_eq!(prompt(s), OPTION);
+    }
+    assert!(!s.log.iter().any(|l| l.contains("Only the view twist")));
+}
+
+/// DVIEW's Undo after [`twist_pan_and_zoom`].
+fn undo_steps(s: &mut Session) {
+    // Undo takes back one DVIEW action at a time: zoom, pan, twist.
+    s.cmdline("u").unwrap();
+    assert!(near(view(s).height, 20.0));
+    s.cmdline("u").unwrap();
+    assert_eq!(view(s).center, Vec2::new(10.0, 10.0));
+    assert!(near(twist_deg(s), 30.0));
+    s.cmdline("u").unwrap();
+    assert_eq!(view(s).twist, 0.0);
+    // Nothing left to undo: still at the option prompt.
+    s.cmdline("u").unwrap();
+    assert_eq!(prompt(s), OPTION);
 }
 
 #[test]
