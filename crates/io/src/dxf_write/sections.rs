@@ -1124,11 +1124,20 @@ pub(super) fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Ta
 }
 
 /// Paper size (groups 44, 45) and plot rotation (group 73) for a LAYOUT object. Page setups
-/// keep a portrait size and a landscape flag. A media whose name makes it wider than tall, such
-/// as `ISO_full_bleed_A3_(420.00_x_297.00_MM)`, gets its size in that order and the rotation
-/// relative to it, so readers that take the media's size from its name agree with groups 44 and
-/// 45 (#1463). Other media are written as before.
+/// keep a portrait size and a landscape flag. The values read from the file are written back
+/// as they were while they still describe that size and orientation, whatever convention the
+/// program that wrote them follows. Otherwise a media whose name makes it wider than tall,
+/// such as `ISO_full_bleed_A3_(420.00_x_297.00_MM)`, gets its size in that order and the
+/// rotation relative to it, so readers that take the media's size from its name agree with
+/// groups 44 and 45 (#1463). Other media are written as before.
 fn plot_paper(page: &PageSetup) -> (f64, f64, i64) {
+    if let Some((w, h, rotation)) = page.file_paper {
+        let same = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        let landscape = matches!(rotation, 1 | 3) != (w > h);
+        if same(w.min(h), page.width_mm) && same(w.max(h), page.height_mm) && landscape == page.landscape {
+            return (w, h, rotation);
+        }
+    }
     if media_is_landscape(&page.paper) {
         let (short, long) = (page.width_mm.min(page.height_mm), page.width_mm.max(page.height_mm));
         (long, short, i64::from(!page.landscape))
