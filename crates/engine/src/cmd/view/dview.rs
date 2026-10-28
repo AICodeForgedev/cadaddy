@@ -21,7 +21,7 @@ use cadcraft_geom::{Vec2, Vec3};
 use serde_json::{Value, json};
 
 use super::super::machines::{SelOutcome, SelectPhase, number};
-use super::super::*;
+use super::super::{CommandSpec, bad, f64_req};
 use crate::{Accept, DisplayOnly, EngineError, Input, Interactive, Prompt, Result, Session, Snapshot, Step, View};
 
 /// What DVIEW (and a view twist asked for anywhere) says on a layout with no active viewport.
