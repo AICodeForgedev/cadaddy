@@ -3492,6 +3492,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 add_sheet_links(&mut sp, &job.sheet_regions);
                 s.doc_mut()?.building_spec = Some(sp.to_json());
             }
+            // Runs whose size wasn't read: one larger than any size the system's tags give on its
+            // level is two unrelated lines measured; it takes the system's usual tagged size. And a
+            // run drawn over the same segment again (traced back and forth) is one run.
+            if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+                let (sized, dropped) = tidy_runs(&mut sp.mep.runs);
+                if sized + dropped > 0 {
+                    progress_line(&format!("  MEP runs tidied: {sized} unread sizes set from the tags, {dropped} repeated runs dropped"));
+                    s.doc_mut()?.building_spec = Some(sp.to_json());
+                }
+            }
             // The MEP plans' runs, terminals and equipment were read in their own sheet's place
             // (the sheets sit side by side): each is put onto its level's architectural plan by
             // its sheet's registration (shared door and room numbers), so it is in the building.
@@ -3964,6 +3974,45 @@ fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
 
 
 
+/// [`run_bim_build`]'s tidy of the runs read: a duct run whose size wasn't read (`size_source`
+/// not a tag) and is larger than any tagged run of its system on its level takes the median
+/// tagged size; a run over the same two points as one before it (either way, within a foot) is
+/// dropped.
+/// (Sizes set, runs dropped.)
+fn tidy_runs(runs: &mut Vec<cadaddy_walk3d::MepRun>) -> (usize, usize) {
+    let mut tagged: BTreeMap<(String, String), Vec<[f64; 2]>> = BTreeMap::new();
+    for r in runs.iter().filter(|r| r.size_source == "tag") {
+        tagged.entry((r.system.clone(), r.level.clone())).or_default().push(r.size_in);
+    }
+    let mut sized = 0;
+    for r in runs.iter_mut().filter(|r| r.size_source != "tag") {
+        let Some(sizes) = tagged.get(&(r.system.clone(), r.level.clone())) else { continue };
+        let biggest = sizes.iter().map(|s| s[0].max(s[1])).fold(0.0, f64::max);
+        if r.size_in[0].max(r.size_in[1]) > biggest {
+            let mut by_area: Vec<[f64; 2]> = sizes.clone();
+            by_area.sort_by(|a, b| (a[0] * a[1]).total_cmp(&(b[0] * b[1])));
+            r.size_in = by_area[by_area.len() / 2];
+            sized += 1;
+        }
+    }
+    let before = runs.len();
+    // Within a foot at both ends, either way round.
+    let mut seen: Vec<(String, String, [f64; 2], [f64; 2])> = Vec::new();
+    let near = |p: &[f64; 2], q: &[f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= 12.0;
+    runs.retain(|r| {
+        let (Some(a), Some(b)) = (r.points.first().copied(), r.points.last().copied()) else { return true };
+        if r.points.len() != 2 {
+            return true;
+        }
+        if seen.iter().any(|(sy, lv, x, y)| *sy == r.system && *lv == r.level && ((near(x, &a) && near(y, &b)) || (near(x, &b) && near(y, &a)))) {
+            return false;
+        }
+        seen.push((r.system.clone(), r.level.clone(), a, b));
+        true
+    });
+    (sized, before - runs.len())
+}
+
 /// The numbers the other disciplines' plans gave rooms the architectural plans left unnumbered
 /// (rooms stage `other_trade`): each put onto its level's plan, then onto the stacked building,
 /// numbers the unnumbered room element there. How many were numbered.
@@ -4024,8 +4073,8 @@ fn number_rooms_from_other_trades(
 }
 
 /// Where a sheet point goes on its level's architectural plan (architecture is the rule), by the
-/// first that holds: the sheet's registration by shared door and room numbers; its view's grid
-/// intersections (an enlarged plan); the frame of a same-size architectural sheet; its view's
+/// first that holds: its view's grid intersections; the sheet's registration by shared door and
+/// room numbers; the frame of a same-size architectural sheet; its view's
 /// screened background laid over the floor plan (a fire alarm or low-voltage plan). `None` when
 /// none holds, or the point would land off the level's plan.
 fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<> {
@@ -4059,12 +4108,32 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
             Some((level_key(&l.name), [r[0].min(r[2]) - mx, r[1].min(r[3]) - my, r[0].max(r[2]) + mx, r[1].max(r[3]) + my]))
         })
         .collect();
+    // Views that aren't plans (an elevation, a section, a riser diagram): what they draw is no plan
+    // geometry, and their grid bubbles would place it on the plan all the same.
+    // A view's region can take in its neighbour's linework: a point in any plan view's region stays
+    // a plan's.
+    let views = cadaddy_mepfix::sheet_facts::view_titles(d, &cadaddy_mepfix::sheet_facts::texts(d));
+    let plan_word = |t: &str| t.to_ascii_uppercase().contains("PLAN");
+    let not_plan_word =
+        |t: &str| ["ELEVATION", "SECTION", "DETAIL", "RISER", "DIAGRAM", "SCHEDULE", "ISOMETRIC"].iter().any(|w| t.to_ascii_uppercase().contains(w));
+    // A view not titled as something else is a plan ("MECHANICAL - 1ST FLOOR CORE AREA").
+    let plan_views: Vec<[f64; 4]> = views.iter().filter(|v| plan_word(&v.title) || !not_plan_word(&v.title)).filter_map(|v| v.region).collect();
+    let not_plan: Vec<[f64; 4]> = views.iter().filter(|v| !plan_word(&v.title) && not_plan_word(&v.title)).filter_map(|v| v.region).collect();
+    lap(&format!("views read ({} plans, {} not plans)", plan_views.len(), not_plan.len()));
     let place = move |p: [f64; 2], level: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
+        if not_plan.iter().any(|r| inside(r, p)) && !plan_views.iter().any(|r| inside(r, p)) {
+            return None;
+        }
         let sheet = sheets.iter().find(|b| inside(&b.rect, p))?;
         let on = |t: &&cadaddy_mepfix::tagid::SheetTransform| t.registered && t.sheet.eq_ignore_ascii_case(&sheet.number);
         let ts: Vec<_> = reg.transforms.iter().filter(on).collect();
         let fit = ts.iter().find(|t| level_key(&t.level) == level_key(level)).or(ts.first());
-        // A fit on a few tags or off 1:1 (an enlarged plan) is no fit.
+        // The grid lines its own view shows first: a sheet of enlarged plans has views at their
+        // own scales, and one fit of the whole sheet by its tags puts at most one of them right.
+        if let Some((k, t)) = grid.place(p, &level_key(level)) {
+            return Some(cadaddy_mepfix::tagid::Sim::scale_offset(k, t));
+        }
+        // Else the sheet's fit by its tags; one on a few tags or off 1:1 is no fit.
         if let Some(t) = fit.filter(|t| t.matched >= 4 && (0.85..=1.18).contains(&t.transform.scale())) {
             // The fit puts the sheet onto its reference plan, which for a several-level sheet
             // may be another level's: from there onto this level's own plan, by their frames.
@@ -4082,10 +4151,6 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
                 m.ty += to.rect[1] - from.rect[1];
             }
             return Some(m);
-        }
-        // Else the grid lines its view shows (an enlarged plan's view).
-        if let Some((k, t)) = grid.place(p, &level_key(level)) {
-            return Some(cadaddy_mepfix::tagid::Sim::scale_offset(k, t));
         }
         // Else the frame: a sheet the size of the level's architectural plan sheet has
         // its plan in the same place on the page.
@@ -6710,6 +6775,41 @@ mod tests {
     /// A made-up job of two plan sheets side by side, levels 1 and 2, each with a fixture
     /// schedule (types A, B) and junk tags. Every device the devices stage counts becomes one
     /// model element on its sheet's level and one BOM unit (Q5271 MUSTS 1, 2, 4, 5).
+    #[test]
+    fn unread_duct_sizes_and_retraced_runs_are_tidied() {
+        let run = |sys: &str, pts: [[f64; 2]; 2], size: [f64; 2], source: &str| cadaddy_walk3d::MepRun {
+            system: sys.into(),
+            level: "Level 1".into(),
+            points: pts.to_vec(),
+            size_in: size,
+            bottoms_ft: vec![10.0],
+            objects: Vec::new(),
+            id: String::new(),
+            encased: false,
+            size_source: source.into(),
+            height_source: String::new(),
+            reviewed: false,
+            edited_by: String::new(),
+            top_ft: None,
+            source_sheet: "M-1".into(),
+        };
+        let mut runs = vec![
+            run("SA", [[0.0, 0.0], [100.0, 0.0]], [12.0, 10.0], "tag"),
+            run("SA", [[0.0, 50.0], [100.0, 50.0]], [14.0, 10.0], "tag"),
+            run("SA", [[0.0, 90.0], [100.0, 90.0]], [10.0, 8.0], "tag"),
+            // Two unrelated lines measured as one duct, then the same segment traced back.
+            run("SA", [[200.0, 0.0], [300.0, 0.0]], [60.0, 12.0], "default"),
+            run("SA", [[301.0, 2.0], [199.0, -1.0]], [60.0, 12.0], "default"),
+            // A sensible unread size stays.
+            run("SA", [[400.0, 0.0], [500.0, 0.0]], [10.0, 8.0], "default"),
+        ];
+        let (sized, dropped) = tidy_runs(&mut runs);
+        assert_eq!((sized, dropped), (2, 1));
+        assert_eq!(runs.len(), 5);
+        assert_eq!(runs[3].size_in, [12.0, 10.0], "the median tagged size");
+        assert_eq!(runs[4].size_in, [10.0, 8.0]);
+    }
+
     #[test]
     fn devices_read_reach_the_model_and_the_bom() {
         let mut s = crate::Session::new();
