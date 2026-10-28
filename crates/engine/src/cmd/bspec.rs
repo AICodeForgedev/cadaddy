@@ -791,9 +791,23 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         ((c.x / ROOM_GRID_CELL).floor() as i64, (c.y / ROOM_GRID_CELL).floor() as i64)
     };
     let mut outline_cache = None;
-    for (h, text, at) in room_texts(sp, &ents) {
+    // Names first, then numbers: a number inside a room already traced from its name numbers that
+    // room (a guest room's number and its unit type sit in different parts of it, and traced from
+    // each the room came out twice).
+    let mut texts = room_texts(sp, &ents);
+    texts.sort_by_key(|(_, t, _)| super::perceive::geometry::room_number(t));
+    for (h, text, at) in texts {
         if out.len() >= MAX_ROOMS {
             break;
+        }
+        if super::perceive::geometry::room_number(&text) {
+            let here = level_at(&sp.levels, at.x, at.y).map(|l| l.name.clone());
+            if let Some(o) = out.iter_mut().find(|o| o.number.is_none() && here.as_ref().is_none_or(|l| *l == o.level) && cadaddy_geom::point_in_polygon(&o.outline, at)) {
+                if sp.rooms.iter().any(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(text.trim()))) {
+                    o.number = Some(text.trim().to_string());
+                }
+                continue;
+            }
         }
         // A spec room on a level is looked for on that level's plan only (every floor has its
         // OFFICE).
