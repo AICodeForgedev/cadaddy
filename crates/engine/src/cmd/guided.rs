@@ -3418,20 +3418,27 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
             // The rooms stage's rooms go in too: the drafted spec had none, so the build made no
             // room elements (and every later room read traced the whole print set again).
-            let found: Vec<cadaddy_walk3d::SpecRoom> = job
-                .stage(StageName::Rooms)
-                .and_then(|st| st.result.as_ref())
-                .and_then(|r| r.get("rooms"))
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
+            let read: Vec<Value> =
+                job.stage(StageName::Rooms).and_then(|st| st.result.as_ref()).and_then(|r| r.get("rooms")).and_then(Value::as_array).cloned().unwrap_or_default();
+            // How many rooms of a level carry each name: a name several carry is a unit type
+            // (every DOUBLE Q of the floor), one a single room carries is that room's (LOBBY).
+            let mut named: BTreeMap<(String, String), usize> = BTreeMap::new();
+            for r in &read {
+                let level = r.get("level").and_then(Value::as_str).unwrap_or("").to_string();
+                let name = r.get("name").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+                *named.entry((level, name)).or_default() += 1;
+            }
+            let found: Vec<cadaddy_walk3d::SpecRoom> = read
+                .iter()
                 .filter_map(|r| {
                     let name = r.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string();
                     let number = r.get("number").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).map(String::from);
-                    // A numbered room by its number alone: its name is often its unit type (every
-                    // DOUBLE Q of the floor), and a name label would claim the first room so named.
-                    // The traced room takes its name from the labels in its outline.
-                    let name = if number.is_some() { String::new() } else { name };
+                    // A numbered room with a unit type for a name goes by its number alone: a type
+                    // label would claim the first room so named. The traced room takes its name
+                    // from the labels in its outline.
+                    let level = r.get("level").and_then(Value::as_str).unwrap_or("").to_string();
+                    let type_name = named.get(&(level, name.to_ascii_uppercase())).is_some_and(|n| *n > 1);
+                    let name = if number.is_some() && type_name { String::new() } else { name };
                     (!name.is_empty() || number.is_some()).then(|| cadaddy_walk3d::SpecRoom { name, number, ..Default::default() })
                 })
                 .collect();
