@@ -374,6 +374,19 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
         tags.extend(r.groups.iter().map(tag));
     }
     end(&mut tags);
+
+    // From 2013 the ACIS data of solids, regions and bodies is in the data storage section, one
+    // record per entity.
+    let mut store_note = None;
+    if dwg.version >= cadaddy_dwgcodec::Version::R2013
+        && let Some(section) = dwg.section("AcDb:AcDsPrototype_1b")
+    {
+        match cadaddy_dwgcodec::acds::decode(&section.data) {
+            Ok(records) if !records.is_empty() => data_store(&mut tags, &records),
+            Ok(_) => {}
+            Err(e) => store_note = Some(format!("DWG: the data storage section (the ACIS data of solids) couldn't be read and was left out ({e})")),
+        }
+    }
     tags.push(s(0, "EOF"));
 
     if dwg.version < cadaddy_dwgcodec::Version::R2007 {
@@ -388,6 +401,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
     }
     let tags = crate::dwg_keep::unstash_tags(&tags).unwrap_or(tags);
     let mut d = crate::dxf_read::read_tags(tags)?;
+    d.read_notes.extend(store_note);
     let kept = kept_entities(&d);
     let kinds_of = |list: &[(u64, String)]| {
         let mut kinds: Vec<String> = list.iter().map(|(_, e)| e.split(':').next().unwrap_or("?").to_string()).collect();
@@ -406,6 +420,30 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
         ));
     }
     Ok((d, ReadReport { failed, kept }))
+}
+
+/// The ACDSDATA section of `records` (handle and ASM data): the schema of the ACIS data and a
+/// record for each.
+fn data_store(tags: &mut Vec<Tag>, records: &[(u64, Vec<u8>)]) {
+    tags.extend([s(0, "SECTION"), s(2, "ACDSDATA"), i(70, 2), i(71, records.len() as i64)]);
+    tags.extend([
+        s(0, "ACDSSCHEMA"),
+        i(90, 1),
+        s(1, "AcDb3DSolid_ASM_Data"),
+        s(2, "AcDbDs::ID"),
+        i(280, 10),
+        i(91, 8),
+        s(2, "ASM_Data"),
+        i(280, 15),
+        i(91, 0),
+    ]);
+    for (handle, data) in records {
+        tags.extend([s(0, "ACDSRECORD"), i(90, 1), s(2, "AcDbDs::ID"), i(280, 10), hex(320, *handle), s(2, "ASM_Data"), i(280, 15), i(94, data.len() as i64)]);
+        for chunk in data.chunks(127) {
+            tags.push(tag(&Group { code: 310, value: Value::Str(chunk.iter().map(|b| format!("{b:02X}")).collect()) }));
+        }
+    }
+    tags.push(s(0, "ENDSEC"));
 }
 
 /// The entities of a drawing kept raw (as stored, not decoded): handle and DXF name. Those a CADaddy

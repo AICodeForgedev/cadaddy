@@ -449,6 +449,11 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>, full: bool) -> Resu
     // empty preview.
     let measurement = header.iter().find(|r| r.name == "MEASUREMENT").and_then(|r| r.rec().i(70)).unwrap_or(0) as u16;
     dwg.sections = cadaddy_dwgcodec::Dwg::new_file_sections(v, dwg.objects.len(), seed, measurement);
+    if v >= Version::R2013
+        && let Some(data) = data_store_section(secs, &written)
+    {
+        dwg.set_section("AcDb:AcDsPrototype_1b", data).map_err(|e| IoError::Format(format!("DWG: {e}")))?;
+    }
     let bytes = cadaddy_dwgcodec::write(&dwg).map_err(|e| IoError::Format(format!("DWG: {e}")))?;
     let mut skipped: Vec<(String, usize)> = skipped.into_iter().collect();
     skipped.sort();
@@ -636,6 +641,12 @@ fn encode(
     p: &mut EntityPass,
 ) -> bool {
     let rec = r.rec();
+    // An entity kept as it was stored (`dwg_read`), of the version being written: its object as
+    // it was, if it needs no links of its own to its neighbours (from R2004).
+    if let Some(raw) = raw_object(v, r, h) {
+        p.out.push(raw);
+        return true;
+    }
     let lt = rec.s(6).unwrap_or("ByLayer");
     let (ltype_flags, ltype) = match lt.to_ascii_uppercase().as_str() {
         "BYLAYER" => (0, None),
@@ -665,6 +676,58 @@ fn encode(
             false
         }
     }
+}
+
+/// The object of an entity record that `dwg_read` kept raw ([`cadaddy_dwgcodec::entities::
+/// RAW_SUBCLASS`]), when it can be written back as an object as it was stored: a fixed object
+/// type (not a custom class, whose number the file's classes fix), of the same DWG version and
+/// from R2004 on (R2000 links an entity to its neighbours in its own data).
+fn raw_object(v: Version, r: &Record, handle: u64) -> Option<RawObject> {
+    let rec = r.rec();
+    if rec.s(100) != Some(cadaddy_dwgcodec::entities::RAW_SUBCLASS) && !rec.all(100).any(|g| matches!(&g.value, Value::Str(s) if s == cadaddy_dwgcodec::entities::RAW_SUBCLASS)) {
+        return None;
+    }
+    let type_code = u16::try_from(rec.i(70)?).ok().filter(|t| *t < 500)?;
+    let stored = rec.s(1)?;
+    if v < Version::R2004 || version(stored).map(|(sv, _)| sv) != Some(v) {
+        return None;
+    }
+    let len = usize::try_from(rec.i(90)?).ok()?;
+    let mut data: Vec<u8> = Vec::with_capacity(len.min(1 << 26));
+    for g in rec.all(310) {
+        let Value::Str(hex) = &g.value else { return None };
+        let hex = hex.trim();
+        if hex.len() % 2 != 0 {
+            return None;
+        }
+        for i in (0..hex.len()).step_by(2) {
+            data.push(u8::from_str_radix(hex.get(i..i + 2)?, 16).ok()?);
+        }
+    }
+    (data.len() == len).then_some(RawObject { handle, type_code, data })
+}
+
+/// The data storage section (ACIS data of solids, regions and bodies, from 2013) for the ASM
+/// records of the drawing's ACDSDATA section whose entities are written as objects.
+fn data_store_section(secs: &HashMap<String, Vec<Record>>, written: &HashSet<u64>) -> Option<Vec<u8>> {
+    let mut records: Vec<(u64, Vec<u8>)> = Vec::new();
+    for r in secs.get("ACDSDATA")?.iter().filter(|r| r.name == "ACDSRECORD") {
+        let rec = r.rec();
+        if !rec.all(2).any(|g| matches!(&g.value, Value::Str(s) if s == "ASM_Data")) {
+            continue;
+        }
+        let Some(h) = rec.h(320).filter(|h| written.contains(h)) else { continue };
+        let mut data: Vec<u8> = Vec::new();
+        for g in rec.all(310) {
+            let Value::Str(hex) = &g.value else { continue };
+            let hex = hex.trim();
+            for i in (0..hex.len()).step_by(2) {
+                data.push(hex.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok())?);
+            }
+        }
+        records.push((h, data));
+    }
+    cadaddy_dwgcodec::acds::encode(&records)
 }
 
 /// A new drawing's values for the variables a DXF header may leave out (the DXF Reference's

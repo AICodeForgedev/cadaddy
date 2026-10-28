@@ -193,6 +193,21 @@ impl Dwg {
         ]
     }
 
+    /// Sets the section `name` to `data`, adding it to the file when it has none (R2004 and
+    /// later; an R2000 or R2007 file doesn't take a section it didn't have).
+    pub fn set_section(&mut self, name: &str, data: Vec<u8>) -> Result<()> {
+        if let Some(s) = self.sections.iter_mut().find(|s| s.name == name) {
+            s.data = data;
+            return Ok(());
+        }
+        match &mut self.layout {
+            Layout::R2004(l) => r2004::add_section(l, name),
+            _ => return Err(Error::Unsupported(format!("adding the {name} section to a {} file", self.version.id()))),
+        }
+        self.sections.push(Section { name: name.to_string(), data });
+        Ok(())
+    }
+
     /// The drawing's code page number (the file header's, byte 0x13; 30 is ANSI 1252).
     pub fn code_page(&self) -> u16 {
         match &self.layout {
