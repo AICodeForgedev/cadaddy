@@ -31,6 +31,8 @@ enum Tab {
 #[derive(Clone, Default)]
 struct State {
     tab: Tab,
+    /// The drawing the cached results are of (title and path): another tab's are read afresh.
+    doc_key: String,
     tree_data: Option<Value>,
     trades_data: Option<Value>,
     clash_data: Option<Value>,
@@ -83,8 +85,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         ];
         for (tab, label) in tabs {
             let selected = st.tab == tab;
-            let text =
-                if selected { RichText::new(crate::i18n::t(label)).color(t.accent) } else { RichText::new(crate::i18n::t(label)).color(t.text_dim) };
+            // Selected: the selection's own text colour (accent text on the accent fill vanished).
+            let text = if selected { RichText::new(crate::i18n::t(label)).strong() } else { RichText::new(crate::i18n::t(label)).color(t.text_dim) };
             if ui.selectable_label(selected, text).clicked() {
                 st.tab = tab;
             }
@@ -193,6 +195,12 @@ fn branch(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, path: &[String], 
 }
 
 fn tree_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
+    let key = app.session.state().map(|d| format!("{}|{:?}", d.title, d.path)).unwrap_or_default();
+    if st.doc_key != key {
+        st.doc_key = key;
+        st.tree_data = None;
+        st.look = None;
+    }
     look_row(app, ui, st);
     ui.horizontal(|ui| {
         if ui.button(crate::i18n::t("Refresh")).clicked() {
@@ -210,6 +218,7 @@ fn tree_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
         ui.label(crate::i18n::t("Nothing is built yet. Use Plans to Model first."));
         return;
     }
+    trades_row(app, ui, st, &levels);
     let filter = st.search.to_ascii_lowercase();
     let height = (ui.available_height() * 0.6).max(120.0);
     egui::ScrollArea::vertical().id_salt("bim-tree").max_height(height).auto_shrink([false, false]).show(ui, |ui| {
@@ -222,6 +231,45 @@ fn tree_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
     });
     ui.separator();
     properties(app, ui, st);
+}
+
+/// One switch per trade for the whole building (every level's branch of it at once): ticked when
+/// it shows on every level that has it.
+fn trades_row(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, levels: &[Value]) {
+    let mut trades: Vec<(String, bool, Vec<String>)> = Vec::new();
+    for level in levels {
+        for trade in kids(level, "trades") {
+            let (name, vis) = (name_of(trade), trade.get("visible").and_then(Value::as_bool).unwrap_or(true));
+            match trades.iter_mut().find(|(n, _, _)| *n == name) {
+                Some(t) => {
+                    t.1 &= vis;
+                    t.2.push(name_of(level));
+                }
+                None => trades.push((name, vis, vec![name_of(level)])),
+            }
+        }
+    }
+    if trades.is_empty() {
+        return;
+    }
+    let mut changed: Option<(String, bool, Vec<String>)> = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(crate::i18n::t("Whole building:")).color(Tokens::get().text_dim));
+        for (name, vis, on) in &trades {
+            let mut v = *vis;
+            if ui.checkbox(&mut v, crate::i18n::t(name)).changed() {
+                changed = Some((name.clone(), v, on.clone()));
+            }
+        }
+    });
+    if let Some((trade, vis, on)) = changed {
+        for level in on {
+            if let Err(e) = app.session.execute("bim.tree", &json!({ "path": [level, trade], "visible": vis })) {
+                app.set_status(e.to_string());
+            }
+        }
+        st.tree_data = app.session.execute("bim.tree", &json!({})).ok();
+    }
 }
 
 /// The one selected element's properties (type, size, level, system, circuit, quantity,
