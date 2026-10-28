@@ -85,7 +85,7 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
     crate::i18n::with_language(app.language(), || run_ui_command_inner(app, id, params))
 }
 
-fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+fn route_ui_subsystems(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if let Some(result) = crate::spacemouse::route(app, id, params) {
         return Some(result);
     }
@@ -118,14 +118,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     if let Some(r) = crate::options::route(app, id, params) {
         return Some(r);
     }
-    let toggle = |b: &mut bool, p: &Value| {
-        *b = p.get("on").and_then(Value::as_bool).unwrap_or(!*b);
-    };
-    // When a file command should ask for a file. The `ui.*` commands are the pickers; the engine's
-    // OPEN/SAVEAS/QSAVE ask only when typed or chosen from a menu (no parameters), so JSON calls
-    // never open a picker.
-    let no_path =
-        if id.starts_with("ui.") { params.is_null() || (params.get("path").is_none() && params.get("data").is_none()) } else { params.is_null() };
+    None
+}
+
+fn run_recent_file_command(app: &mut CadApp, id: &str) -> Option<Result<Value, String>> {
     if id == RECENT_CLEAR {
         app.ui.recent_files.clear();
         return Some(Ok(Value::Null));
@@ -135,26 +131,193 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         app.open_path(&path);
         return Some(Ok(Value::Null));
     }
+    None
+}
+
+fn run_preference_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     let r = match id {
-        "ui.language" => {
-            let Some(preference) = params.get("lang").and_then(Value::as_str).and_then(crate::i18n::Preference::parse) else {
-                return Some(Err(format!("language must be {}", crate::i18n::Preference::codes())));
-            };
-            app.ui.interface_language = preference;
-            let shown = app.language();
-            if shown != preference.resolve(&app.system_languages) {
-                app.set_status(match preference.resolve(&app.system_languages) {
-                    "ko" => {
-                        "No font covers the Korean interface, so it stays in English. Install a Hangul font (Malgun Gothic or Nanum Gothic), or build with a Hang/Kore craft-fonts face."
-                    }
-                    "ka" => "This build has no Georgian font, so the interface stays in English. Build with craft-fonts (its Geor face) to use Georgian.",
-                    _ => {
-                        "No Chinese font is installed, so the interface stays in English. Install one (Noto Sans CJK, for example) to use Chinese."
-                    }
-                });
-            }
-            Ok(json!({"interfaceLanguage": preference.code(), "shown": shown}))
+        "ui.theme.system" | "ui.theme.light" | "ui.theme.dark" => {
+            let pref = crate::theme::ThemePref::parse(id.trim_start_matches("ui.theme.")).unwrap_or_default();
+            set_theme(app, pref)
         }
+        // `{"theme": "system"|"light"|"dark"}` sets the choice; without it, reports it.
+        "ui.theme" => match params.get("theme").and_then(Value::as_str) {
+            Some(name) => match crate::theme::ThemePref::parse(name) {
+                Some(pref) => set_theme(app, pref),
+                None => Err(format!("unknown theme \"{name}\" (system, light or dark)")),
+            },
+            None => Ok(theme_json(app)),
+        },
+        "ui.animations.system" | "ui.animations.on" | "ui.animations.off" => {
+            let pref = crate::animation::AnimationPref::parse(id.trim_start_matches("ui.animations.")).unwrap_or_default();
+            Ok(set_animations(app, pref))
+        }
+        // `{"animations": "system"|"on"|"off"}` sets the choice; without it, reports it.
+        "ui.animations" => match params.get("animations").and_then(Value::as_str) {
+            Some(name) => match crate::animation::AnimationPref::parse(name) {
+                Some(pref) => Ok(set_animations(app, pref)),
+                None => Err(format!("unknown animations choice \"{}\" (system, on or off)", name.chars().take(40).collect::<String>())),
+            },
+            None => Ok(animations_json(app)),
+        },
+        "ui.saveformat.dxf" | "ui.saveformat.dwg" => {
+            let format = crate::SaveFormat::parse(id.trim_start_matches("ui.saveformat.")).unwrap_or_default();
+            Ok(set_save_format(app, format))
+        }
+        // `{"format": "dxf"|"dwg"}` sets the default save format for new drawings; without it,
+        // reports it.
+        "ui.saveformat" => match params.get("format").and_then(Value::as_str) {
+            Some(name) => match crate::SaveFormat::parse(name) {
+                Some(format) => Ok(set_save_format(app, format)),
+                None => Err(format!("unknown save format \"{name}\" (dxf or dwg)")),
+            },
+            None => Ok(json!({ "saveFormat": app.ui.save_format.as_str() })),
+        },
+        // `{"version": "2000"…"2018"}` sets the version new drawings are saved in; without it,
+        // reports it.
+        id if id.starts_with("ui.saveversion") => {
+            let name = id
+                .strip_prefix("ui.saveversion.")
+                .map(str::to_string)
+                .or_else(|| params.get("version").map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string)));
+            match name {
+                Some(name) => match crate::SaveVersion::parse(&name) {
+                    Some(v) => {
+                        app.ui.save_version = v.year().to_string();
+                        app.session.echo(format!("New drawings will be saved as version {v}"));
+                        Ok(json!({ "saveVersion": app.ui.save_version }))
+                    }
+                    None => Err(format!("unknown version \"{}\" (2000, 2004, 2007, 2010, 2013 or 2018)", name.chars().take(40).collect::<String>())),
+                },
+                None => Ok(json!({ "saveVersion": app.ui.save_version })),
+            }
+        }
+        _ => return None,
+    };
+    Some(r)
+}
+
+fn run_ui_toggle_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    let toggle = |b: &mut bool, p: &Value| {
+        *b = p.get("on").and_then(Value::as_bool).unwrap_or(!*b);
+    };
+    let result = match id {
+        "ui.toggle.toolsets" => {
+            if params.get("on").and_then(Value::as_bool) == Some(true) {
+                return Some(crate::docking::command(app, false, &json!({"operation":"open", "panel":"toolSets"})));
+            }
+            toggle(&mut app.ui.show_toolsets, params);
+            Ok(Value::Null)
+        }
+        "ui.toggle.palettes" => {
+            toggle(&mut app.ui.show_palettes, params);
+            Ok(Value::Null)
+        }
+        "ui.toggle.toolbar" => {
+            toggle(&mut app.ui.show_toolbar, params);
+            Ok(Value::Null)
+        }
+        "ui.toggle.filetabs" => {
+            toggle(&mut app.ui.show_file_tabs, params);
+            Ok(Value::Null)
+        }
+        "ui.toggle.statusbar" => {
+            toggle(&mut app.ui.show_status_bar, params);
+            Ok(Value::Null)
+        }
+        "ui.toggle.cmdline" => {
+            toggle(&mut app.ui.show_command_line, params);
+            Ok(Value::Null)
+        }
+        "ui.toggle.systemcursor" => {
+            toggle(&mut app.ui.system_cursor, params);
+            Ok(Value::Null)
+        }
+        "ui.toggle.viewcube" => {
+            toggle(&mut app.ui.show_viewcube, params);
+            Ok(Value::Null)
+        }
+        "ui.toggle.ucsicon" => {
+            toggle(&mut app.ui.show_ucs_icon, params);
+            Ok(Value::Null)
+        }
+        "ui.toggle.menubar" => {
+            toggle(&mut app.ui.in_window_menu, params);
+            Ok(Value::Null)
+        }
+        "ui.toggle.history" | "textscr" => {
+            let open = json!({"on": true});
+            toggle(&mut app.cmd.expanded, if id == "textscr" { &open } else { params });
+            Ok(json!({ "on": app.cmd.expanded }))
+        }
+        _ => return None,
+    };
+    Some(result)
+}
+
+fn run_language_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if id != "ui.language" {
+        return None;
+    }
+    let Some(preference) = params.get("lang").and_then(Value::as_str).and_then(crate::i18n::Preference::parse) else {
+        return Some(Err(format!("language must be {}", crate::i18n::Preference::codes())));
+    };
+    app.ui.interface_language = preference;
+    let shown = app.language();
+    if shown != preference.resolve(&app.system_languages) {
+        app.set_status(match preference.resolve(&app.system_languages) {
+            "ko" => {
+                "No font covers the Korean interface, so it stays in English. Install a Hangul font (Malgun Gothic or Nanum Gothic), or build with a Hang/Kore craft-fonts face."
+            }
+            "ka" => "This build has no Georgian font, so the interface stays in English. Build with craft-fonts (its Geor face) to use Georgian.",
+            _ => "No Chinese font is installed, so the interface stays in English. Install one (Noto Sans CJK, for example) to use Chinese.",
+        });
+    }
+    Some(Ok(json!({"interfaceLanguage": preference.code(), "shown": shown})))
+}
+
+fn run_close_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    match id {
+        "close" if params.is_null() => {
+            app.request_close(None);
+            Some(Ok(Value::Null))
+        }
+        "closeall" if params.is_null() => {
+            app.request_close_all();
+            Some(Ok(Value::Null))
+        }
+        _ => None,
+    }
+}
+
+fn should_pick_file_path(id: &str, params: &Value) -> bool {
+    if id.starts_with("ui.") { params.is_null() || (params.get("path").is_none() && params.get("data").is_none()) } else { params.is_null() }
+}
+
+fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if let Some(result) = route_ui_subsystems(app, id, params) {
+        return Some(result);
+    }
+    // When a file command should ask for a file. The `ui.*` commands are the pickers; the engine's
+    // OPEN/SAVEAS/QSAVE ask only when typed or chosen from a menu (no parameters), so JSON calls
+    // never open a picker.
+    let no_path = should_pick_file_path(id, params);
+    if let Some(result) = run_recent_file_command(app, id) {
+        return Some(result);
+    }
+    if let Some(result) = run_preference_command(app, id, params) {
+        return Some(result);
+    }
+    if let Some(result) = run_ui_toggle_command(app, id, params) {
+        return Some(result);
+    }
+    if let Some(result) = run_language_command(app, id, params) {
+        return Some(result);
+    }
+    if let Some(result) = run_close_command(app, id, params) {
+        return Some(result);
+    }
+    let r = match id {
         "ui.open" | "open" if no_path => {
             let picked = app.services.pick_open.as_ref().and_then(|f| f());
             if let Some(p) = picked {
@@ -232,108 +395,8 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.start_tab = false;
             Ok(Value::Null)
         }
-        "ui.toggle.toolsets" => {
-            if params.get("on").and_then(Value::as_bool) == Some(true) {
-                return Some(crate::docking::command(app, false, &json!({"operation":"open", "panel":"toolSets"})));
-            }
-            toggle(&mut app.ui.show_toolsets, params);
-            Ok(Value::Null)
-        }
-        "ui.toggle.palettes" => {
-            toggle(&mut app.ui.show_palettes, params);
-            Ok(Value::Null)
-        }
-        "ui.toggle.toolbar" => {
-            toggle(&mut app.ui.show_toolbar, params);
-            Ok(Value::Null)
-        }
-        "ui.toggle.filetabs" => {
-            toggle(&mut app.ui.show_file_tabs, params);
-            Ok(Value::Null)
-        }
-        // Typed or chosen from a menu or the tool bar: ask for the file (or show the preview).
         "export" | "exp" | "import" | "imp" | "publish" | "preview" | "pre" if params.is_null() && app.session.state().is_ok() => {
             return Some(crate::exchange::route(app, id));
-        }
-        "ui.toggle.statusbar" => {
-            toggle(&mut app.ui.show_status_bar, params);
-            Ok(Value::Null)
-        }
-        "ui.toggle.cmdline" => {
-            toggle(&mut app.ui.show_command_line, params);
-            Ok(Value::Null)
-        }
-        "ui.toggle.systemcursor" => {
-            toggle(&mut app.ui.system_cursor, params);
-            Ok(Value::Null)
-        }
-        "ui.toggle.viewcube" => {
-            toggle(&mut app.ui.show_viewcube, params);
-            Ok(Value::Null)
-        }
-        "ui.toggle.ucsicon" => {
-            toggle(&mut app.ui.show_ucs_icon, params);
-            Ok(Value::Null)
-        }
-        "ui.toggle.menubar" => {
-            toggle(&mut app.ui.in_window_menu, params);
-            Ok(Value::Null)
-        }
-        "ui.theme.system" | "ui.theme.light" | "ui.theme.dark" => {
-            let pref = crate::theme::ThemePref::parse(id.trim_start_matches("ui.theme.")).unwrap_or_default();
-            set_theme(app, pref)
-        }
-        // `{"theme": "system"|"light"|"dark"}` sets the choice; without it, reports it.
-        "ui.theme" => match params.get("theme").and_then(Value::as_str) {
-            Some(name) => match crate::theme::ThemePref::parse(name) {
-                Some(pref) => set_theme(app, pref),
-                None => Err(format!("unknown theme \"{name}\" (system, light or dark)")),
-            },
-            None => Ok(theme_json(app)),
-        },
-        "ui.animations.system" | "ui.animations.on" | "ui.animations.off" => {
-            let pref = crate::animation::AnimationPref::parse(id.trim_start_matches("ui.animations.")).unwrap_or_default();
-            Ok(set_animations(app, pref))
-        }
-        // `{"animations": "system"|"on"|"off"}` sets the choice; without it, reports it.
-        "ui.animations" => match params.get("animations").and_then(Value::as_str) {
-            Some(name) => match crate::animation::AnimationPref::parse(name) {
-                Some(pref) => Ok(set_animations(app, pref)),
-                None => Err(format!("unknown animations choice \"{}\" (system, on or off)", name.chars().take(40).collect::<String>())),
-            },
-            None => Ok(animations_json(app)),
-        },
-        "ui.saveformat.dxf" | "ui.saveformat.dwg" => {
-            let format = crate::SaveFormat::parse(id.trim_start_matches("ui.saveformat.")).unwrap_or_default();
-            Ok(set_save_format(app, format))
-        }
-        // `{"format": "dxf"|"dwg"}` sets the default save format for new drawings; without it,
-        // reports it.
-        "ui.saveformat" => match params.get("format").and_then(Value::as_str) {
-            Some(name) => match crate::SaveFormat::parse(name) {
-                Some(format) => Ok(set_save_format(app, format)),
-                None => Err(format!("unknown save format \"{name}\" (dxf or dwg)")),
-            },
-            None => Ok(json!({ "saveFormat": app.ui.save_format.as_str() })),
-        },
-        // `{"version": "2000"…"2018"}` sets the version new drawings are saved in; without it,
-        // reports it.
-        id if id.starts_with("ui.saveversion") => {
-            let name = id
-                .strip_prefix("ui.saveversion.")
-                .map(str::to_string)
-                .or_else(|| params.get("version").map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string)));
-            match name {
-                Some(name) => match crate::SaveVersion::parse(&name) {
-                    Some(v) => {
-                        app.ui.save_version = v.year().to_string();
-                        app.session.echo(format!("New drawings will be saved as version {v}"));
-                        Ok(json!({ "saveVersion": app.ui.save_version }))
-                    }
-                    None => Err(format!("unknown version \"{}\" (2000, 2004, 2007, 2010, 2013 or 2018)", name.chars().take(40).collect::<String>())),
-                },
-                None => Ok(json!({ "saveVersion": app.ui.save_version })),
-            }
         }
         "ui.hidepalettes" => {
             app.ui.show_palettes = false;
@@ -351,12 +414,6 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         // The expanded command history (AutoCAD's text window; TEXTSCR opens it).
-        "ui.toggle.history" | "textscr" => {
-            let open = json!({"on": true});
-            toggle(&mut app.cmd.expanded, if id == "textscr" { &open } else { params });
-            Ok(json!({ "on": app.cmd.expanded }))
-        }
-        // `{"lines": n}`: how many history lines show above the command line (0–12); without it, reports it.
         "ui.cmdline.lines" => {
             if let Some(n) = params.get("lines").and_then(Value::as_u64) {
                 app.ui.history_lines = n.min(crate::cmdline::MAX_LINES as u64) as usize;
@@ -393,14 +450,6 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "ui.noop" => Ok(Value::Null),
         // From a menu or typed, closing asks about unsaved changes; JSON calls close without asking.
-        "close" if params.is_null() => {
-            app.request_close(None);
-            Ok(Value::Null)
-        }
-        "closeall" if params.is_null() => {
-            app.request_close_all();
-            Ok(Value::Null)
-        }
         "layer" | "la" | "layers" if params.is_null() => {
             app.ui.dialog = Some("layers".into());
             Ok(Value::Null)
