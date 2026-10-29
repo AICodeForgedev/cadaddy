@@ -552,25 +552,27 @@ fn copy_blocks<'a>(
     let mut left_out = false;
     // `d`'s relative paths were made absolute from its own folder before the copy.
     let (mut mine, mut theirs) = (super::Signer::with_frames(d, None), super::Signer::with_frames(other, folder));
+    // Whether `d`'s block `n` draws what `other`'s block `b` draws. Past the signers' work limit
+    // the signatures no longer cover every object, so the blocks count as different.
+    let mut same = |n: &str, b: &Block| {
+        !b.anonymous
+            && d.block(n).is_some()
+            && mine.block(n, 0) == theirs.block(n, 0)
+            && mine.work < super::MAX_BLOCK_WORK
+            && theirs.work < super::MAX_BLOCK_WORK
+    };
     while let Some(n) = frontier.pop() {
         let key = n.to_ascii_uppercase();
         if seen.contains(&key) {
             continue;
         }
         if seen.len() >= MAX_BLOCKS {
-            left_out |= other.block(&n).is_some() && d.block(&n).is_none();
+            left_out |= other.block(&n).is_some_and(|b| !same(&n, b));
             continue;
         }
         seen.insert(key);
         let Some(b) = other.block(&n) else { continue };
-        // Past the signers' work limit the signatures no longer cover every object, so the block
-        // is copied.
-        if !b.anonymous
-            && d.block(&n).is_some()
-            && mine.block(&n, 0) == theirs.block(&n, 0)
-            && mine.work < super::MAX_BLOCK_WORK
-            && theirs.work < super::MAX_BLOCK_WORK
-        {
+        if same(&n, b) {
             continue;
         }
         if tinted.copied.saturating_add(b.entities.len()) > MAX_COPIED {
