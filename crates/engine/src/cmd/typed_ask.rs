@@ -16,7 +16,7 @@ fn questions(id: &str) -> Option<Vec<Ask>> {
         "delay" => vec![ask("ms", "Enter delay time (in milliseconds)", Kind::Number)],
         "vpoint" => vec![ask("dir", "Specify a view point (x,y,z)", Kind::Point3)],
         "saveimg" => vec![file("path", "Enter file name for the image (.png or .jpg)")],
-        "dwgconvert" => vec![
+        "dwgconvert" | "convert" => vec![
             file("folder", "Enter the folder of drawings to convert"),
             ask_or("to", "Enter output format", Kind::Keyword(&["CDY", "DWG", "DXF"]), |_| Some("DWG".into())),
         ],
