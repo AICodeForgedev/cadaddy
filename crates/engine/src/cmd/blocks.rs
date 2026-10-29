@@ -19,7 +19,6 @@ use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, St
 mod actionbar;
 pub use actionbar::action_bars;
 mod attedit;
-mod burst;
 mod dynauthor;
 mod dyngrip;
 pub(crate) mod extract;
@@ -82,7 +81,6 @@ pub fn specs() -> Vec<CommandSpec> {
         battman::battman_spec(),
         attribs::attdisp_spec(),
         attribs::attsync_spec(),
-        burst::burst_spec(),
         extract::dataextraction_spec(),
         extract::eattext_spec(),
     ]
