@@ -112,6 +112,7 @@ pub mod managers;
 pub mod markuppalette;
 pub mod matchpropdlg;
 pub mod menus;
+pub mod modal;
 pub mod meppalette;
 pub mod multiprops;
 pub mod navwheel;
