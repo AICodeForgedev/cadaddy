@@ -784,9 +784,13 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     // is so large its trace tolerance - a fraction of the extents - opens every room).
     let plan = match regions.filter(|r| !r.is_empty()) {
         Some(rs) => {
-            let inside = |c: Vec2| rs.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
-            let keep: std::collections::HashSet<cadaddy_doc::Handle> =
-                crate::cmd::bspec::plan_objects(d).into_iter().filter(|e| crate::cmd::bspec::centre(d, e).is_some_and(inside)).map(|e| e.handle).collect();
+            let inside =
+                |c: Vec2| rs.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
+            let keep: std::collections::HashSet<cadaddy_doc::Handle> = crate::cmd::bspec::plan_objects(d)
+                .into_iter()
+                .filter(|e| crate::cmd::bspec::centre(d, e).is_some_and(inside))
+                .map(|e| e.handle)
+                .collect();
             crate::cmd::bspec::room_plan_of(s, &keep)?
         }
         None => crate::cmd::bspec::room_plan(s)?,

@@ -90,7 +90,9 @@ fn the_job_reads_ducts_on_mechanical_plans_and_pipes_on_plumbing_plans() {
     // be placed isn't drawn, and says so.
     let q = s.execute("mep.qty", &json!({})).expect("mep.qty");
     let not_placed = job["guided_job"]["findings"].to_string().contains("MEP items not placed");
-    for (model, read) in [(q["totals"]["duct_length_ft"].as_f64().expect("duct"), duct_ft), (q["totals"]["pipe_length_ft"].as_f64().expect("pipe"), pipe_ft)] {
+    for (model, read) in
+        [(q["totals"]["duct_length_ft"].as_f64().expect("duct"), duct_ft), (q["totals"]["pipe_length_ft"].as_f64().expect("pipe"), pipe_ft)]
+    {
         assert!(model <= read + 1.0 && model >= 0.95 * read, "{} read {duct_ft} {pipe_ft}", q["totals"]);
         assert!(model >= read - 1.0 || not_placed, "runs left out without a finding: {} read {read}", q["totals"]);
     }

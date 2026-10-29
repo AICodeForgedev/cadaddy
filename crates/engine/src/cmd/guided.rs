@@ -3428,8 +3428,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
             // The rooms stage's rooms go in too: the drafted spec had none, so the build made no
             // room elements (and every later room read traced the whole print set again).
-            let read: Vec<Value> =
-                job.stage(StageName::Rooms).and_then(|st| st.result.as_ref()).and_then(|r| r.get("rooms")).and_then(Value::as_array).cloned().unwrap_or_default();
+            let read: Vec<Value> = job
+                .stage(StageName::Rooms)
+                .and_then(|st| st.result.as_ref())
+                .and_then(|r| r.get("rooms"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             // How many rooms of a level carry each name: a name several carry is a unit type
             // (every DOUBLE Q of the floor), one a single room carries is that room's (LOBBY).
             let mut named: BTreeMap<(String, String), usize> = BTreeMap::new();
@@ -3482,7 +3487,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     let want = key(&level.name);
                     let rects: Vec<[f64; 4]> = arch_plans.iter().filter(|(l, _)| !l.is_empty() && key(l) == want).map(|(_, r)| *r).collect();
                     // The largest view of the level (a several-view sheet's floor plan, not its enlarged plans).
-                    if let Some(r) = rects.into_iter().max_by(|a, b| ((a[2] - a[0]).abs() * (a[3] - a[1]).abs()).total_cmp(&((b[2] - b[0]).abs() * (b[3] - b[1]).abs()))) {
+                    if let Some(r) = rects
+                        .into_iter()
+                        .max_by(|a, b| ((a[2] - a[0]).abs() * (a[3] - a[1]).abs()).total_cmp(&((b[2] - b[0]).abs() * (b[3] - b[1]).abs())))
+                    {
                         progress_line(&format!("  level {}: region from its architectural plan {:?}", level.name, r.map(|v| v.round())));
                         level.region = Some(r);
                     }
@@ -3514,7 +3522,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             // run drawn over the same segment again (traced back and forth) is one run.
             if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
                 let upf = sp.units_per_foot;
-                let ducts: BTreeSet<String> = sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Duct).map(|y| y.name.clone()).collect();
+                let ducts: BTreeSet<String> =
+                    sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Duct).map(|y| y.name.clone()).collect();
                 let (sized, dropped) = tidy_runs(&mut sp.mep.runs, upf, &ducts);
                 if sized + dropped > 0 {
                     progress_line(&format!("  MEP runs tidied: {sized} unread sizes set from the tags, {dropped} repeated runs dropped"));
@@ -3531,12 +3540,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let sim = placer.insert(Box::new(arch_placer(s.doc()?, &sp)));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
                 let before = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
-                sp.mep.runs.retain_mut(|r| match r.points.first().and_then(|p| sim(*p, &r.level)).filter(|_| r.points.last().is_some_and(|p| sim(*p, &r.level).is_some())) {
-                    Some(t) => {
-                        r.points.iter_mut().for_each(|p| *p = t.apply(*p));
-                        true
+                sp.mep.runs.retain_mut(|r| {
+                    match r.points.first().and_then(|p| sim(*p, &r.level)).filter(|_| r.points.last().is_some_and(|p| sim(*p, &r.level).is_some())) {
+                        Some(t) => {
+                            r.points.iter_mut().for_each(|p| *p = t.apply(*p));
+                            true
+                        }
+                        None => false,
                     }
-                    None => false,
                 });
                 sp.mep.terminals.retain_mut(|t| match sim(t.at, &t.level) {
                     Some(m) => {
@@ -3557,7 +3568,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let dropped = (before.0 - sp.mep.runs.len(), before.1 - sp.mep.terminals.len(), before.2 - sp.mep.equipment.len());
                 progress_line(&format!(
                     "  MEP onto the plans: {} runs, {} terminals, {} equipment placed; not placeable (no fit to the architecture): {} runs, {} terminals, {} equipment",
-                    sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len(), dropped.0, dropped.1, dropped.2
+                    sp.mep.runs.len(),
+                    sp.mep.terminals.len(),
+                    sp.mep.equipment.len(),
+                    dropped.0,
+                    dropped.1,
+                    dropped.2
                 ));
                 if dropped.0 + dropped.1 + dropped.2 > 0 {
                     job.add_finding(
@@ -3615,7 +3631,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 progress_line(&format!("  devices onto the plans: {} placed, {} not placeable", out.len(), job.devices.len() - out.len()));
                 let mut why: BTreeMap<String, usize> = BTreeMap::new();
                 for dv in job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()) {
-                    *why.entry(format!("{} on {}", if dv.sheet.is_empty() { "?" } else { &dv.sheet }, if dv.level.is_empty() { "?" } else { &dv.level })).or_default() += 1;
+                    *why.entry(format!(
+                        "{} on {}",
+                        if dv.sheet.is_empty() { "?" } else { &dv.sheet },
+                        if dv.level.is_empty() { "?" } else { &dv.level }
+                    ))
+                    .or_default() += 1;
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
                 let unplaced: Vec<&super::readers::ReadDevice> = job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
@@ -4002,8 +4023,6 @@ fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     job.audit("identity", "pipeline", None, Some(StageName::BimBuild), Some(json!({"merged": run.answer.get("merged"), "findings": findings.len()})));
 }
 
-
-
 /// [`run_bim_build`]'s tidy of the runs read: a duct run whose size wasn't read (`size_source`
 /// not a tag) and is larger than any tagged run of its system on its level takes the median
 /// tagged size; a run over the same two points as one before it (either way, within a foot) is
@@ -4098,13 +4117,25 @@ fn number_rooms_from_other_trades(
             Some(_) => None,
             None => near(),
         };
-        let Some(room) = pick.and_then(|i| rooms.get_mut(i))
-        else {
+        let Some(room) = pick.and_then(|i| rooms.get_mut(i)) else {
             // Already numbered there (its own label), or between rooms.
-            let numbered_here = rooms.iter().any(|r| r.number.is_some() && key(&r.level) == key(&level) && r.outline.len() >= 3 && cadaddy_geom::point_in_polygon(&r.outline, q));
+            let numbered_here = rooms
+                .iter()
+                .any(|r| r.number.is_some() && key(&r.level) == key(&level) && r.outline.len() >= 3 && cadaddy_geom::point_in_polygon(&r.outline, q));
             // How far the nearest unnumbered room of the level was (whole feet).
-            let nearest = rooms.iter().filter(|r| r.number.is_none() && key(&r.level) == key(&level) && r.outline.len() >= 3).map(|r| edge_distance(&r.outline, q)).fold(f64::INFINITY, f64::min) / upf;
-            let why = if numbered_here { "room already numbered".to_string() } else if nearest.is_finite() { format!("in no room (an unnumbered one {nearest:.0} ft away)") } else { "in no room (none unnumbered)".to_string() };
+            let nearest = rooms
+                .iter()
+                .filter(|r| r.number.is_none() && key(&r.level) == key(&level) && r.outline.len() >= 3)
+                .map(|r| edge_distance(&r.outline, q))
+                .fold(f64::INFINITY, f64::min)
+                / upf;
+            let why = if numbered_here {
+                "room already numbered".to_string()
+            } else if nearest.is_finite() {
+                format!("in no room (an unnumbered one {nearest:.0} ft away)")
+            } else {
+                "in no room (none unnumbered)".to_string()
+            };
             *missed.entry(format!("{level}: {why}")).or_default() += 1;
             continue;
         };
@@ -4193,8 +4224,12 @@ fn stamp_typical_rooms(
         .filter_map(|r| {
             let name = r.get("name").and_then(Value::as_str)?.trim().to_string();
             let level = r.get("level").and_then(Value::as_str).unwrap_or("").to_string();
-            let outline: Vec<cadaddy_geom::Vec2> =
-                r.get("outline")?.as_array()?.iter().filter_map(|q| Some(cadaddy_geom::Vec2::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?))).collect();
+            let outline: Vec<cadaddy_geom::Vec2> = r
+                .get("outline")?
+                .as_array()?
+                .iter()
+                .filter_map(|q| Some(cadaddy_geom::Vec2::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?)))
+                .collect();
             (outline.len() >= 3 && !name.is_empty()).then_some((name, level, outline))
         })
         .collect();
@@ -4208,11 +4243,14 @@ fn stamp_typical_rooms(
         return (out, report);
     }
     let bbox = |o: &[cadaddy_geom::Vec2]| {
-        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)])
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
     };
     // A room the floor's plans already put devices in: two or more.
     let furnished = |level: &str, o: &[cadaddy_geom::Vec2]| {
-        placed.iter().filter(|dv| dv.level == level && cadaddy_geom::point_in_polygon(o, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))).take(2).count() >= 2
+        placed.iter().filter(|dv| dv.level == level && cadaddy_geom::point_in_polygon(o, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))).take(2).count()
+            >= 2
     };
     let refs = job_sheet_refs(job);
     let sheet_key = |n: &str| n.split('/').next().unwrap_or(n).trim().to_ascii_uppercase();
@@ -4223,19 +4261,23 @@ fn stamp_typical_rooms(
     for (sheet, devices) in by_sheet.into_iter().filter(|(_, v)| v.len() >= 3).take(MAX_STAMP_SHEETS) {
         let Some(sh) = refs.iter().find(|r| sheet_key(&r.number) == sheet && r.view.is_none()) else { continue };
         let sub = super::printmep::sheet_drawing(d, sh);
-        let views: Vec<(String, [f64; 4], BTreeSet<String>)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &cadaddy_mepfix::sheet_facts::texts(&sub))
-            .into_iter()
-            .filter_map(|v| {
-                // A plan of the room, not an elevation of one of its walls or a section.
-                let upper = v.title.to_ascii_uppercase();
-                let plan = !["WALL", "ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
-                let words = type_words(&v.title, Some(&vocabulary));
-                (plan && types.contains(&words)).then_some((v.title, v.region?, words))
-            })
-            .collect();
+        let views: Vec<(String, [f64; 4], BTreeSet<String>)> =
+            cadaddy_mepfix::sheet_facts::view_titles(&sub, &cadaddy_mepfix::sheet_facts::texts(&sub))
+                .into_iter()
+                .filter_map(|v| {
+                    // A plan of the room, not an elevation of one of its walls or a section.
+                    let upper = v.title.to_ascii_uppercase();
+                    let plan = !["WALL", "ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
+                    let words = type_words(&v.title, Some(&vocabulary));
+                    (plan && types.contains(&words)).then_some((v.title, v.region?, words))
+                })
+                .collect();
         for dv in devices {
             let inside = |r: &[f64; 4]| dv.at[0] >= r[0] && dv.at[0] <= r[2] && dv.at[1] >= r[1] && dv.at[1] <= r[3];
-            let Some((title, view, words)) = views.iter().filter(|(_, r, _)| inside(r)).min_by(|a, b| ((a.1[2] - a.1[0]) * (a.1[3] - a.1[1])).total_cmp(&((b.1[2] - b.1[0]) * (b.1[3] - b.1[1]))))
+            let Some((title, view, words)) = views
+                .iter()
+                .filter(|(_, r, _)| inside(r))
+                .min_by(|a, b| ((a.1[2] - a.1[0]) * (a.1[3] - a.1[1])).total_cmp(&((b.1[2] - b.1[0]) * (b.1[3] - b.1[1]))))
             else {
                 if !views.is_empty() {
                     *report.entry(format!("{sheet}: in no typical-room view")).or_default() += 1;
@@ -4283,7 +4325,9 @@ fn numbered_scraps(rooms: &[super::bspec::RoomElement]) -> Vec<cadaddy_doc::Hand
         .filter(|r| r.area_sf < SCRAP_SF)
         .filter(|r| {
             r.number.as_deref().is_some_and(|n| {
-                rooms.iter().any(|o| o.handle != r.handle && o.level == r.level && o.area_sf >= SCRAP_SF && o.number.as_deref().is_some_and(|m| norm(m) == norm(n)))
+                rooms.iter().any(|o| {
+                    o.handle != r.handle && o.level == r.level && o.area_sf >= SCRAP_SF && o.number.as_deref().is_some_and(|m| norm(m) == norm(n))
+                })
             })
         })
         .map(|r| r.handle)
@@ -4319,7 +4363,12 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
     lap("sheets registered by tags");
     // Each level's architectural plan (the sheet the registration takes as its reference) and
     // the other sheets: their grid intersections, for views no tag fit reaches.
-    let level_key0 = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), { let u = l.trim().to_ascii_uppercase(); u.contains("ROOF") || u == "R" });
+    let level_key0 = |l: &str| {
+        format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), {
+            let u = l.trim().to_ascii_uppercase();
+            u.contains("ROOF") || u == "R"
+        })
+    };
     let plans: Vec<(String, [f64; 4])> = sp
         .levels
         .iter()
@@ -4330,7 +4379,12 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
     lap("grid intersections read");
     progress_line(&format!("  grid intersections: {}", grid.summary()));
     let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
-    let level_key = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), { let u = l.trim().to_ascii_uppercase(); u.contains("ROOF") || u == "R" });
+    let level_key = |l: &str| {
+        format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), {
+            let u = l.trim().to_ascii_uppercase();
+            u.contains("ROOF") || u == "R"
+        })
+    };
     // Architecture is the rule: a placed point must land on its level's plan (5% margin).
     let regions: Vec<(String, [f64; 4])> = sp
         .levels
@@ -4376,8 +4430,7 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
                     && level_key(&b.level) == level_key(level)
                     && reg.transforms.iter().any(|x| x.sheet.eq_ignore_ascii_case(&b.number) && x.method == "reference")
             };
-            if let (Some(from), Some(to)) =
-                (sheets.iter().find(|b| b.number.eq_ignore_ascii_case(&t.reference)), sheets.iter().find(own))
+            if let (Some(from), Some(to)) = (sheets.iter().find(|b| b.number.eq_ignore_ascii_case(&t.reference)), sheets.iter().find(own))
                 && !from.number.eq_ignore_ascii_case(&to.number)
             {
                 m.tx += to.rect[0] - from.rect[0];
@@ -4390,7 +4443,9 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
         let size = |b: &super::identity::SheetBox| [b.rect[2] - b.rect[0], b.rect[3] - b.rect[1]];
         let alike = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() <= 0.01 * b[0] && (a[1] - b[1]).abs() <= 0.01 * b[1];
         let arch = sheets.iter().find(|b| {
-            b.discipline.eq_ignore_ascii_case("A") && level_key(&b.level) == level_key(level) && alike(size(b), size(sheet))
+            b.discipline.eq_ignore_ascii_case("A")
+                && level_key(&b.level) == level_key(level)
+                && alike(size(b), size(sheet))
                 && reg.transforms.iter().any(|t| t.sheet.eq_ignore_ascii_case(&b.number) && t.method == "reference")
         })?;
         Some(cadaddy_mepfix::tagid::Sim::scale_offset(1.0, [arch.rect[0] - sheet.rect[0], arch.rect[1] - sheet.rect[1]]))
@@ -4405,7 +4460,10 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
         .map(|(key, r)| {
             let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = super::bspec::plan_objects(d)
                 .into_iter()
-                .filter(|e| super::bspec::centre(d, e).is_some_and(|c| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3])))
+                .filter(|e| {
+                    super::bspec::centre(d, e)
+                        .is_some_and(|c| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]))
+                })
                 .collect();
             (key.clone(), super::grids::line_samples(&mine, 12.0 * k_in))
         })
@@ -4425,7 +4483,12 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
             let fit = super::grids::linework_fit(&backgrounds.points_in(&bg), tgt, k_in);
             progress_line(&format!("  placer: a view's background fitted in {:.1} s", started.elapsed().as_secs_f64()));
             if let Some((s, _, score, margin)) = fit {
-                progress_line(&format!("  background view at {:?} onto level {level}: scale {s:.3}, {:.0}% on the plan, {:.0} points over the next best", [bg.min.x.round(), bg.min.y.round()], score * 100.0, margin * 100.0));
+                progress_line(&format!(
+                    "  background view at {:?} onto level {level}: scale {s:.3}, {:.0}% on the plan, {:.0} points over the next best",
+                    [bg.min.x.round(), bg.min.y.round()],
+                    score * 100.0,
+                    margin * 100.0
+                ));
             }
             // 90% of both ways, and 3 points over the best placement 10' or more away: a floor of
             // repeating bays one bay over scores close behind (only its ends differ).

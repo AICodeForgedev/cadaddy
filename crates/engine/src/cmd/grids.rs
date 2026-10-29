@@ -942,7 +942,10 @@ impl Backgrounds {
     pub(crate) fn around(&self, p: [f64; 2]) -> Option<cadaddy_geom::Bounds2> {
         let at = Vec2::new(p[0], p[1]);
         let (_, cs) = self.sheets.iter().find(|(r, _)| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3])?;
-        cs.iter().filter(|b| b.contains(at)).min_by(|a, b| ((a.max.x - a.min.x) * (a.max.y - a.min.y)).total_cmp(&((b.max.x - b.min.x) * (b.max.y - b.min.y)))).copied()
+        cs.iter()
+            .filter(|b| b.contains(at))
+            .min_by(|a, b| ((a.max.x - a.min.x) * (a.max.y - a.min.y)).total_cmp(&((b.max.x - b.min.x) * (b.max.y - b.min.y))))
+            .copied()
     }
 }
 
@@ -1013,8 +1016,7 @@ pub(crate) fn linework_fit(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<(f64, V
         return None;
     }
     let coarse = 48.0 * k;
-    let tcells: std::collections::HashSet<(i64, i64)> =
-        tgt.iter().map(|p| ((p.x / coarse).floor() as i64, (p.y / coarse).floor() as i64)).collect();
+    let tcells: std::collections::HashSet<(i64, i64)> = tgt.iter().map(|p| ((p.x / coarse).floor() as i64, (p.y / coarse).floor() as i64)).collect();
     // A few thousand source points are enough to score with.
     let stride = (src.len() / 2000).max(1);
     let few: Vec<Vec2> = src.iter().step_by(stride).copied().collect();
