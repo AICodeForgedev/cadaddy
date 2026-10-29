@@ -12,7 +12,6 @@ use super::machines::number;
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
-pub(crate) mod breakline;
 pub(crate) mod mline;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -134,7 +133,6 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(CenterM { first: None, mark: false }))),
     ];
     v.extend(mline::specs());
-    v.extend(breakline::specs());
     v
 }
 
