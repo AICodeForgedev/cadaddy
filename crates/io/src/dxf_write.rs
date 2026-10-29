@@ -1332,7 +1332,10 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             };
             w.i(70, ty | 32 | if dm.user_text_pos { 128 } else { 0 });
             // The actual measurement (read-only in DXF): AutoLISP's entget shows it.
-            w.f(42, g.measurement);
+            // (the stored one is the file's, or worked out when the dimension last changed: it
+            // counts what the geometry here leaves out, a linear factor on a radius)
+            let measured = if dm.measurement.is_finite() && dm.measurement >= 0.0 { dm.measurement } else { g.measurement };
+            w.f(42, measured);
             if !dm.text.is_empty() {
                 w.s(1, &dm.text);
             }

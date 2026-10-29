@@ -62,8 +62,15 @@ fn parts(d: &Drawing) -> Vec<(&'static str, serde_json::Value)> {
         let list = s.iter().step_by(step(n)).map(|e| content(v(&e.kind))).collect::<Vec<_>>();
         serde_json::json!({ "count": n, "objects": list })
     };
-    let blocks: Vec<_> = d.blocks.iter().filter(|(_, b)| !b.anonymous).map(|(n, b)| (n.clone(), block_head(b), objects(&b.entities))).collect();
-    let layouts: Vec<_> = d.layouts.iter().map(|l| (l.name.clone(), objects(&l.entities))).collect();
+    // By name, not by place: a block a writer adds (a dynamic block's definition made again from
+    // its anonymous copy) or a layout it puts elsewhere in the list loses nothing.
+    let blocks: serde_json::Map<String, serde_json::Value> = d
+        .blocks
+        .iter()
+        .filter(|(_, b)| !b.anonymous)
+        .map(|(n, b)| (n.to_ascii_lowercase(), serde_json::json!({ "head": block_head(b), "objects": objects(&b.entities) })))
+        .collect();
+    let layouts: serde_json::Map<String, serde_json::Value> = d.layouts.iter().map(|l| (l.name.to_ascii_lowercase(), objects(&l.entities))).collect();
     vec![
         ("objects", v(&objects(&d.model))),
         ("object properties", v(&d.model.iter().step_by(step(d.model.len())).map(|e| v(&e.common)).collect::<Vec<_>>())),
@@ -630,6 +637,20 @@ mod tests {
         // A file that can't be written or read back: nothing to say here (saving reports it).
         let fails: fn(&Drawing, &str) -> Result<Vec<u8>, String> = |_, _| Err("no".into());
         assert!(not_kept(&d, "x.dwg", fails, read).is_empty());
+    }
+
+    #[test]
+    fn blocks_are_matched_by_name_not_by_place() {
+        let block = |n: &str| std::sync::Arc::new(cadaddy_doc::Block::new(n));
+        let mut d = Drawing::new_imperial();
+        d.blocks.insert("Door".into(), block("Door"));
+        let mut back = d.clone();
+        // A block the file has more, or earlier in its list, loses nothing.
+        back.blocks.insert("Alpha".into(), block("Alpha"));
+        assert!(lost_parts(&d, &back).is_empty());
+        // One it lacks is a loss.
+        back.blocks.remove("Door");
+        assert_eq!(lost_parts(&d, &back), vec!["blocks"]);
     }
 
     #[test]
