@@ -36,6 +36,54 @@ pub(crate) fn decode_contents(s: &str) -> String {
     out
 }
 
+/// The caret codes of the DXF the DWG bridge writes from a DWG, put right before the groups are
+/// read. The bridge escapes a caret as `^ ` and then also the caret of the code it made from a
+/// control character: an MTEXT tab comes out as `^ I` and a line feed as `^ J` (a tab in TEXT,
+/// attribute, dimension and multileader text comes out as itself, a typed `^I` as `^ I`). Observed on files
+/// from AutoCAD and from CADaddy. MTEXT groups get the single-escaped codes [`decode_contents`]
+/// reads; the other text groups lose the escape of their carets. A typed `^I` in MTEXT cannot be
+/// told from a tab in the bridge's output and reads as a tab.
+pub(crate) fn bridge_carets_undone(tags: &mut [Tag]) {
+    let mut kind = String::new();
+    for t in tags.iter_mut() {
+        if t.code == 0 {
+            kind = t.str();
+            continue;
+        }
+        let mtext = kind == "MTEXT" && matches!(t.code, 1 | 3);
+        let plain = (matches!(kind.as_str(), "TEXT" | "ATTRIB" | "ATTDEF" | "DIMENSION") && matches!(t.code, 1 | 3))
+            || (kind == "MULTILEADER" && t.code == 304);
+        if !(mtext || plain) {
+            continue;
+        }
+        let s = t.str();
+        if !s.contains('^') {
+            continue;
+        }
+        let fixed = if mtext { single_escaped(&s) } else { s.replace("^ ", "^") };
+        *t = Tag::s(t.code, fixed);
+    }
+}
+
+/// `^ I` and `^ J` as `^I` and `^J`, scanning from the left so `^ ^ I` keeps its first caret.
+fn single_escaped(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(c) = rest.chars().next() {
+        if let Some(tail) = rest.strip_prefix("^ I") {
+            out.push_str("^I");
+            rest = tail;
+        } else if let Some(tail) = rest.strip_prefix("^ J") {
+            out.push_str("^J");
+            rest = tail;
+        } else {
+            out.push(c);
+            rest = rest.get(c.len_utf8()..).unwrap_or_default();
+        }
+    }
+    out
+}
+
 /// Encoded contents split into the 250-character strings of MTEXT's 3 and 1 groups, never
 /// between a caret and the character after it: readers that decode each string on its own
 /// (acadrust, so DWG save) would keep a split `^I` as the two characters.
@@ -151,5 +199,26 @@ mod chunk_tests {
         assert_eq!(parts.concat(), enc);
         assert!(parts.iter().all(|p| decode_contents(p).matches('^').count() == 0));
         assert!(chunks("").is_empty());
+    }
+
+    #[test]
+    fn the_bridges_escapes_are_undone_per_entity() {
+        let mut tags = vec![
+            Tag::s(0, "MTEXT"),
+            Tag::s(1, "a^ Ib^ Jc^ d^ ^ Ie"),
+            Tag::s(0, "TEXT"),
+            Tag::s(1, "a^ Ib\tc"),
+            Tag::s(0, "MULTILEADER"),
+            Tag::s(304, "x^ J"),
+            Tag::s(0, "LINE"),
+            Tag::s(1, "keep^ I"),
+        ];
+        bridge_carets_undone(&mut tags);
+        let got: Vec<String> = tags.iter().map(Tag::str).collect();
+        assert_eq!(got[1], "a^Ib^Jc^ d^ ^Ie");
+        assert_eq!(decode_contents(&got[1]), "a\tb\nc^d^\te");
+        assert_eq!(got[3], "a^Ib\tc");
+        assert_eq!(got[5], "x^J");
+        assert_eq!(got[7], "keep^ I");
     }
 }

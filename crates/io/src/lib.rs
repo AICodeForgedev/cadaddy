@@ -211,8 +211,9 @@ fn read_dwg_bridge(bytes: &[u8]) -> Result<Drawing> {
     let dxf = dwg_keep::unstash(&dxf).unwrap_or(dxf);
     let bad = |e: String| IoError::Format(format!("{e} (in the DXF converted from this DWG)"));
     // The text is let go once parsed: the drawing is built from the groups alone.
-    let tags = cadaddy_dxf::parse(&dxf).map_err(|e| bad(e.to_string()))?;
+    let mut tags = cadaddy_dxf::parse(&dxf).map_err(|e| bad(e.to_string()))?;
     drop(dxf);
+    dxf_read::mtext_dxf::bridge_carets_undone(&mut tags);
     let mut d = dxf_read::read_tags(tags).map_err(|e| bad(e.to_string()))?;
     d.read_notes = notes;
     Ok(d)
