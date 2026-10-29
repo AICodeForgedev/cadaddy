@@ -308,15 +308,17 @@ pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
 }
 
 /// The block a title labels: the largest block holding the title, else the nearest block right
-/// above it that spans the title's start.
+/// above it that spans the title's start. A block under 8 letters thin is the title's own rule or
+/// underline, never the view.
 fn region_for(regions: &[([f64; 4], usize)], at: Vec2, h: f64) -> Option<[f64; 4]> {
+    let drawn = |r: &[f64; 4]| r[3] - r[1] > 8.0 * h && r[2] - r[0] > 8.0 * h;
     let inside = |r: &[f64; 4]| r[0] <= at.x && at.x <= r[2] && r[1] <= at.y && at.y <= r[3];
-    if let Some((r, _)) = regions.iter().filter(|(r, _)| inside(r)).max_by_key(|(_, n)| *n) {
+    if let Some((r, _)) = regions.iter().filter(|(r, _)| inside(r) && drawn(r)).max_by_key(|(_, n)| *n) {
         return Some(*r);
     }
     regions
         .iter()
-        .filter(|(r, _)| r[1] >= at.y && r[1] - at.y <= 12.0 * h && r[0] <= at.x + 4.0 * h && at.x <= r[2])
+        .filter(|(r, _)| drawn(r) && r[1] >= at.y && r[1] - at.y <= 12.0 * h && r[0] <= at.x + 4.0 * h && at.x <= r[2])
         .min_by(|a, b| (a.0[1] - at.y).total_cmp(&(b.0[1] - at.y)))
         .map(|(r, _)| *r)
 }

@@ -2342,7 +2342,8 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Rooms come from the architectural floor plans: other trades' plans show the same rooms
     // again (and phantom ones). Any plan when the set has no architectural ones.
     let regions = Some(plans(true)).filter(|r| !r.is_empty()).unwrap_or_else(|| plans(false));
-    let mut params = json!({"outline": false});
+    // With outlines: the typical-room plans' devices are stamped into each room of the type.
+    let mut params = json!({"outline": true});
     if !regions.is_empty() {
         params["regions"] = json!(regions);
     }
@@ -3617,6 +3618,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     *why.entry(format!("{} on {}", if dv.sheet.is_empty() { "?" } else { &dv.sheet }, if dv.level.is_empty() { "?" } else { &dv.level })).or_default() += 1;
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
+                let unplaced: Vec<&super::readers::ReadDevice> = job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
+                let (stamped, report) = stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                if !report.is_empty() {
+                    progress_line(&format!("  typical-room devices stamped into rooms of their type: {} ({report:?})", stamped.len()));
+                }
+                let mut out = out;
+                out.extend(stamped);
                 out
             }
             _ => job.devices.clone(),
@@ -4125,6 +4133,134 @@ fn number_rooms_from_other_trades(
     }
     Ok((numbered, missed))
 }
+
+/// A typical-room plan's room type, as the words its title and a room's type name share: QUEEN
+/// is Q, ACC./ACCESSIBLE is ADA, SINGLE is dropped (a QUEEN room is the single one), the rest
+/// kept for a room name and, for a title, only the words some room type uses.
+fn type_words(text: &str, vocabulary: Option<&BTreeSet<String>>) -> BTreeSet<String> {
+    let upper = text.to_ascii_uppercase().replace("ACC.", "ADA ");
+    upper
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| match w {
+            "QUEEN" => "Q".to_string(),
+            "ACC" | "ACCESSIBLE" => "ADA".to_string(),
+            w => w.to_string(),
+        })
+        .filter(|w| w != "SINGLE")
+        .filter(|w| vocabulary.is_none_or(|v| v.contains(w)))
+        .collect()
+}
+
+/// Where `p` of a typical-room view (its block of linework `view`) falls in a room whose outline
+/// spans `room` (both `[x0, y0, x1, y1]`): the same share across and up, the view turned a quarter
+/// when the room runs the other way.
+fn into_room(p: [f64; 2], view: [f64; 4], room: [f64; 4]) -> Option<[f64; 2]> {
+    let (vw, vh) = (view[2] - view[0], view[3] - view[1]);
+    let (rw, rh) = (room[2] - room[0], room[3] - room[1]);
+    if !(vw > 0.0 && vh > 0.0 && rw > 0.0 && rh > 0.0) {
+        return None;
+    }
+    let (u, v) = (((p[0] - view[0]) / vw).clamp(0.0, 1.0), ((p[1] - view[1]) / vh).clamp(0.0, 1.0));
+    let (u, v) = if (vw > vh) != (rw > rh) { (v, 1.0 - u) } else { (u, v) };
+    Some([room[0] + u * rw, room[1] + v * rh])
+}
+
+/// The devices of the typical-room plans (UNIT ELECTRICAL PLAN - DOUBLE QUEEN, ENLARGED ACC.
+/// QUEEN) that no plan registration placed: each put into every room of the type its view's
+/// title names, at the same place in the room. A room the floor's own plans already put devices
+/// in is left alone (they show its devices: no second count). With the stamped count per view.
+fn stamp_typical_rooms(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    placed: &[super::readers::ReadDevice],
+    unplaced: &[&super::readers::ReadDevice],
+) -> (Vec<super::readers::ReadDevice>, BTreeMap<String, usize>) {
+    let mut out = Vec::new();
+    let mut report: BTreeMap<String, usize> = BTreeMap::new();
+    if unplaced.is_empty() {
+        return (out, report);
+    }
+    // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
+    let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| r.get("other_trade").and_then(Value::as_bool) != Some(true))
+        .filter_map(|r| {
+            let name = r.get("name").and_then(Value::as_str)?.trim().to_string();
+            let level = r.get("level").and_then(Value::as_str).unwrap_or("").to_string();
+            let outline: Vec<cadaddy_geom::Vec2> =
+                r.get("outline")?.as_array()?.iter().filter_map(|q| Some(cadaddy_geom::Vec2::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?))).collect();
+            (outline.len() >= 3 && !name.is_empty()).then_some((name, level, outline))
+        })
+        .collect();
+    let mut count: BTreeMap<BTreeSet<String>, usize> = BTreeMap::new();
+    for (name, _, _) in &rooms {
+        *count.entry(type_words(name, None)).or_default() += 1;
+    }
+    let types: BTreeSet<BTreeSet<String>> = count.into_iter().filter(|(k, n)| *n > 1 && !k.is_empty()).map(|(k, _)| k).collect();
+    let vocabulary: BTreeSet<String> = types.iter().flatten().cloned().collect();
+    if types.is_empty() {
+        return (out, report);
+    }
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)])
+    };
+    // A room the floor's plans already put devices in: two or more.
+    let furnished = |level: &str, o: &[cadaddy_geom::Vec2]| {
+        placed.iter().filter(|dv| dv.level == level && cadaddy_geom::point_in_polygon(o, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))).take(2).count() >= 2
+    };
+    let refs = job_sheet_refs(job);
+    let sheet_key = |n: &str| n.split('/').next().unwrap_or(n).trim().to_ascii_uppercase();
+    let mut by_sheet: BTreeMap<String, Vec<&super::readers::ReadDevice>> = BTreeMap::new();
+    for dv in unplaced {
+        by_sheet.entry(sheet_key(&dv.sheet)).or_default().push(dv);
+    }
+    for (sheet, devices) in by_sheet.into_iter().filter(|(_, v)| v.len() >= 3).take(MAX_STAMP_SHEETS) {
+        let Some(sh) = refs.iter().find(|r| sheet_key(&r.number) == sheet && r.view.is_none()) else { continue };
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let views: Vec<(String, [f64; 4], BTreeSet<String>)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &cadaddy_mepfix::sheet_facts::texts(&sub))
+            .into_iter()
+            .filter_map(|v| {
+                // A plan of the room, not an elevation of one of its walls or a section.
+                let upper = v.title.to_ascii_uppercase();
+                let plan = !["WALL", "ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
+                let words = type_words(&v.title, Some(&vocabulary));
+                (plan && types.contains(&words)).then_some((v.title, v.region?, words))
+            })
+            .collect();
+        for dv in devices {
+            let inside = |r: &[f64; 4]| dv.at[0] >= r[0] && dv.at[0] <= r[2] && dv.at[1] >= r[1] && dv.at[1] <= r[3];
+            let Some((title, view, words)) = views.iter().filter(|(_, r, _)| inside(r)).min_by(|a, b| ((a.1[2] - a.1[0]) * (a.1[3] - a.1[1])).total_cmp(&((b.1[2] - b.1[0]) * (b.1[3] - b.1[1]))))
+            else {
+                if !views.is_empty() {
+                    *report.entry(format!("{sheet}: in no typical-room view")).or_default() += 1;
+                }
+                continue;
+            };
+            for (_, level, outline) in rooms.iter().filter(|(n, _, _)| type_words(n, None) == *words) {
+                if out.len() >= MAX_STAMPED || furnished(level, outline) {
+                    continue;
+                }
+                let Some(at) = into_room(dv.at, *view, bbox(outline)) else { continue };
+                let mut copy = (*dv).clone();
+                copy.at = at;
+                copy.level.clone_from(level);
+                out.push(copy);
+                *report.entry(format!("{sheet} {title}")).or_default() += 1;
+            }
+        }
+    }
+    (out, report)
+}
+
+/// At most this many sheets are looked over for typical-room plans, and this many devices stamped.
+const MAX_STAMP_SHEETS: usize = 40;
+const MAX_STAMPED: usize = 20_000;
 
 /// A room smaller than this (square feet) is no room of its own when a bigger room of its level
 /// carries its number: a sliver of that room traced from its label (a tub, a closet's corner).
@@ -6879,6 +7015,28 @@ mod tests {
     /// A made-up job of two plan sheets side by side, levels 1 and 2, each with a fixture
     /// schedule (types A, B) and junk tags. Every device the devices stage counts becomes one
     /// model element on its sheet's level and one BOM unit (Q5271 MUSTS 1, 2, 4, 5).
+    #[test]
+    fn a_typical_room_plans_title_names_its_room_type() {
+        let words = |t: &str| type_words(t, None);
+        let vocabulary: BTreeSet<String> = ["DOUBLE Q", "SINGLE Q", "SINGLE Q ADA"].iter().flat_map(|n| words(n)).collect();
+        let title = |t: &str| type_words(t, Some(&vocabulary));
+        assert_eq!(title("ENLARGED DOUBLE QUEEN"), words("DOUBLE Q"));
+        assert_eq!(title("UNIT ELECTRICAL PLAN - SINGLE QUEEN"), words("SINGLE Q"));
+        assert_eq!(title("ENLARGED QUEEN"), words("SINGLE Q"), "a QUEEN room is the single one");
+        assert_eq!(title("ENLARGED ACC. QUEEN"), words("SINGLE Q ADA"));
+        assert_ne!(title("ENLARGED ACC. DOUBLE QUEEN"), words("DOUBLE Q"));
+        assert!(title("ELECTRICAL - 1ST FLOOR - MEP ROOM").is_empty());
+    }
+
+    #[test]
+    fn a_typical_rooms_device_lands_at_the_same_place_in_each_room() {
+        // A 12' x 24' view (inches) and a room the same way round, then one turned a quarter.
+        let view = [0.0, 0.0, 144.0, 288.0];
+        assert_eq!(into_room([36.0, 72.0], view, [1000.0, 0.0, 1144.0, 288.0]), Some([1036.0, 72.0]));
+        assert_eq!(into_room([36.0, 72.0], view, [0.0, 0.0, 288.0, 144.0]), Some([72.0, 108.0]));
+        assert_eq!(into_room([36.0, 72.0], [0.0, 0.0, 0.0, 288.0], view), None);
+    }
+
     #[test]
     fn a_tiny_room_with_a_bigger_rooms_number_is_a_scrap() {
         let room = |h: u64, level: &str, number: Option<&str>, area_sf: f64| super::super::bspec::RoomElement {
