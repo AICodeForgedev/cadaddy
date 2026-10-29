@@ -1177,7 +1177,7 @@ fn polyline_vertex_dimensions_round_trip_by_segment() {
         DimAssoc { point: "p13".into(), handle: pl, snap: AssocSnap::Vertex { index: 0 } },
         DimAssoc { point: "p14".into(), handle: pl, snap: AssocSnap::Vertex { index: 3 } },
     ];
-    let hp = d.add(&Space::Model, c(), EntityKind::Dimension(on_pl.clone())).unwrap();
+    let hp = d.add(&Space::Model, c(), EntityKind::Dimension(Box::new(on_pl.clone()))).unwrap();
     let text = write_dxf(&d);
     let tags = cadaddy_dxf::parse(text.as_bytes()).unwrap();
     // Each reference to the polyline: (72, 73, 91).
