@@ -135,3 +135,41 @@ fn the_text_middle_of_a_dimension_is_the_one_the_file_gave() {
         }
     }
 }
+
+#[test]
+fn the_measurement_of_a_dimension_is_the_stored_one() {
+    // A radius of 3 that the file measures as 5 (a linear factor of 5/3 in its style): the
+    // value is what properties and takeoffs read, so it must not come back worked out again
+    // (doubled, for the radial dimensions of a real drawing).
+    let radial = groups(&[
+        (0, "DIMENSION"),
+        (5, "61"),
+        (8, "0"),
+        (100, "AcDbDimension"),
+        (2, "*D2"),
+        (10, "0"),
+        (20, "0"),
+        (30, "0"),
+        (11, "2"),
+        (21, "1"),
+        (31, "0"),
+        (70, "36"),
+        (42, "5"),
+        (100, "AcDbRadialDimension"),
+        (15, "3"),
+        (25, "0"),
+        (35, "0"),
+        (40, "0"),
+    ]);
+    let d = read(&radial);
+    let measurement = |d: &Drawing| match &get(d, 0x61).kind {
+        EntityKind::Dimension(dm) => dm.measurement,
+        k => panic!("{k:?}"),
+    };
+    assert!((measurement(&d) - 5.0).abs() < 1e-12);
+    for id in VERSIONS {
+        for back in generations(&d, id) {
+            assert!((measurement(&back) - 5.0).abs() < 1e-9, "{id}: {}", measurement(&back));
+        }
+    }
+}
