@@ -408,7 +408,7 @@ fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
         "linetypes": d.linetypes.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
         "textStyles": d.text_styles.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
         "dimStyles": d.dim_styles.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
-        "blocks": d.blocks.keys().filter(|k| !k.starts_with('*')).cloned().collect::<Vec<_>>(),
+        "blocks": d.blocks.iter().filter(|(k, b)| !k.starts_with('*') && !b.anonymous).map(|(k, _)| k.clone()).collect::<Vec<_>>(),
         "layouts": d.layouts.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
         "selection": st.selection.iter().map(|h| h.hex()).collect::<Vec<_>>(),
         "undo": st.undo.iter().rev().take(20).map(|u| u.label.clone()).collect::<Vec<_>>(),

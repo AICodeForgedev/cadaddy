@@ -355,6 +355,18 @@ pub fn display_name(d: &Drawing, name: &str) -> String {
     }
 }
 
+/// Whether block `name` is one of AutoCAD's anonymous copies of a dynamic block that a reader
+/// gave the dynamic block's own name: its record carries `AcDbDynamicBlockTrueName` xdata that
+/// names the block itself. (AutoCAD writes that xdata on the `*U` copies only.)
+pub fn is_named_anonymous_copy(d: &Drawing, name: &str) -> bool {
+    !name.starts_with('*') && display_name(d, name).eq_ignore_ascii_case(name.trim()) && has_true_name(d, name)
+}
+
+fn has_true_name(d: &Drawing, name: &str) -> bool {
+    let key = ("BLOCK_RECORD".to_string(), name.trim().to_ascii_uppercase());
+    d.foreign.records.get(&key).is_some_and(|r| r.xdata.iter().any(|t| t.code == 1001 && t.value.trim() == "AcDbDynamicBlockTrueName"))
+}
+
 /// The dynamic block data of block `name` (any case; `*Model_Space` for a drawing that is a
 /// block's own drawing), or `None` when it has none.
 pub fn dynamic_block(d: &Drawing, name: &str) -> Option<DynamicBlock> {
