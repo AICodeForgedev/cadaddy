@@ -211,8 +211,10 @@ pub(crate) fn room_texts(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<(Handl
     let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
     let on: Vec<&Arc<Entity>> =
         ents.iter().copied().filter(|e| !tagged || sp.role(&e.common.layer).is_some_and(|r| r.role == Role::RoomTag)).collect();
+    let mut read = super::perceive::texts(&on);
+    super::perceive::geometry::lift_qualifiers(&mut read);
     let mut out: Vec<(Handle, String, Vec2)> =
-        super::perceive::texts(&on).into_iter().filter(|(_, t, at, _)| !t.is_empty() && at.is_finite()).map(|(h, t, at, _)| (h, t, at)).collect();
+        read.into_iter().filter(|(_, t, at, _)| !t.is_empty() && at.is_finite()).map(|(h, t, at, _)| (h, t, at)).collect();
     // Room tag blocks: their name and number attributes, as the rooms stage reads them.
     for e in &on {
         let EntityKind::Insert(i) = &e.kind else { continue };
