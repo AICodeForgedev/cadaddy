@@ -1140,8 +1140,7 @@ fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
     }
     // When no --connect is given, check CADADDY_CONTROL_PORT / CADADDY_CONTROL_PORT.
     if addr.is_none() && !headless {
-        let port_str =
-            std::env::var("CADADDY_CONTROL_PORT").or_else(|_| std::env::var("CADADDY_CONTROL_PORT")).ok().filter(|v| !v.trim().is_empty());
+        let port_str = std::env::var("CADADDY_CONTROL_PORT").or_else(|_| std::env::var("CADADDY_CONTROL_PORT")).ok().filter(|v| !v.trim().is_empty());
         if let Some(ps) = port_str {
             let p = ps.trim();
             if let Ok(port) = p.parse::<u16>() {

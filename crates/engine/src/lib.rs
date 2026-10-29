@@ -2671,8 +2671,9 @@ impl Session {
         // At "Select objects" prompts the selection modes (Previous, Last, ALL) win over a keyword
         // they only begin (HATCH's "picK internal point" against `P`); a keyword typed whole or
         // by its shortcut wins (COUNT's `L` is List, as in AutoCAD).
-        let selection_mode =
-            prompt.accept.select && matches!(tt.strip_prefix('_').unwrap_or(tt).to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous") && !prompt.exact_keyword(tt);
+        let selection_mode = prompt.accept.select
+            && matches!(tt.strip_prefix('_').unwrap_or(tt).to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous")
+            && !prompt.exact_keyword(tt);
         // A leading underscore asks for a keyword by its English name, whatever the interface
         // language (`_M`, `_Yes`): scripts and LISP routines write them that way. (Snap
         // overrides such as `_cen` were taken above.)
