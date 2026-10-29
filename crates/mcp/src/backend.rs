@@ -583,7 +583,8 @@ impl Backend for Headless {
                 let png =
                     cadaddy_render::raster::render_png(&list, &view, &cadaddy_render::raster::RasterOptions::default()).ok_or("render failed")?;
                 if let Some(path) = str_p("path") {
-                    std::fs::write(&path, &png).map_err(|e| format!("{path}: {e}"))?;
+                    cadaddy_engine::atomic_write::write_atomic(std::path::Path::new(&path), &png)
+                        .map_err(|e| format!("{path}: {e}"))?;
                 }
                 Ok(json!({"pngBase64": cadaddy_engine::cmd::file::base64_encode(&png), "width": w, "height": h, "truncated": list.truncated}))
             }
