@@ -134,11 +134,16 @@ fn mtext_from_groups(tags: &[cadcraft_dxf::Tag]) -> (Common, MText) {
     (common, t)
 }
 
-fn dxf_as(t: &MText, version: Version) -> String {
+/// The DXF of `t` written as `version` and its MTEXT record only (other sections reuse the codes).
+fn dxf_as(t: &MText, version: Version) -> (String, String) {
     let mut d = Drawing::new_metric();
     d.add(&Space::Model, Common::default(), EntityKind::MText(t.clone())).unwrap();
     let bytes = write_with(&d, "x.dxf", &SaveOptions { version: Some(version), binary: false }).unwrap();
-    String::from_utf8_lossy(&bytes).into_owned()
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let from = text.find("  0\r\nMTEXT\r\n").expect("an MTEXT");
+    let len = text[from + 5..].find("  0\r\n").map_or(text.len() - from, |n| n + 5);
+    let record = text[from..from + len].to_string();
+    (text, record)
 }
 
 #[test]
@@ -163,16 +168,19 @@ fn embedded_static_columns_are_read() {
 #[test]
 fn r2018_writes_the_embedded_object_and_older_versions_the_legacy_groups() {
     let (_, t) = mtext_from_groups(&embedded_tags(3, 12.5, 2.5, &[20.0, 20.0, 20.0]));
-    let r2018 = dxf_as(&t, Version::R2018);
+    let (full, r2018) = dxf_as(&t, Version::R2018);
     assert!(r2018.contains("101\r\nEmbedded Object\r\n"), "R2018 keeps the embedded object");
     assert!(!r2018.contains(" 75\r\n"), "no legacy column groups in R2018");
     assert!(r2018.contains(" 72\r\n5\r\n"), "the flow direction (72) is kept");
     assert!(r2018.contains(" 44\r\n12.5\r\n 45\r\n2.5\r\n"), "column width and gutter");
-    assert!(!r2018.contains(" 44\r\n1.0\r\n"), "the entity's line spacing is not the column width");
-    let back = read_dxf(r2018.as_bytes()).unwrap();
-    let Some(EntityKind::MText(b)) = back.model.iter().map(|e| e.kind.clone()).find(|k| matches!(k, EntityKind::MText(_))) else { panic!("no mtext") };
+    let own = r2018.split("Embedded Object").next().unwrap_or_default();
+    assert!(own.contains(" 44\r\n1.0\r\n") && !own.contains(" 44\r\n12.5\r\n"), "the entity's line spacing is not the column width");
+    let back = read_dxf(full.as_bytes()).unwrap();
+    let Some(EntityKind::MText(b)) = back.model.iter().map(|e| e.kind.clone()).find(|k| matches!(k, EntityKind::MText(_))) else {
+        panic!("no mtext")
+    };
     assert_eq!(b.columns, t.columns);
-    let r2000 = dxf_as(&t, Version::R2000);
+    let (_, r2000) = dxf_as(&t, Version::R2000);
     assert!(!r2000.contains("Embedded Object"), "R2000 has no embedded object");
     assert!(r2000.contains(" 75\r\n1\r\n"), "R2000 keeps the legacy column groups");
 }
