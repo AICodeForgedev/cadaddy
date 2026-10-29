@@ -502,6 +502,9 @@ fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
         let h = targets(s, p)?.first().copied().ok_or_else(|| bad("area", "`points` or `handle` is required"))?;
         object_area(s, h)?
     };
+    if let Some(what) = too_large(a, per) {
+        return Err(bad("area", format!("the {what} is too large")));
+    }
     (s.last_used.area, s.last_used.perimeter) = (a, per);
     Ok(json!({ "area": a, "perimeter": per, "message": area_text(s, a, per) }))
 }
@@ -530,6 +533,17 @@ pub(super) fn run_volume(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn volume_text(s: &Session, v: f64) -> String {
     format!("Volume = {}", fmt_n(s, v))
+}
+
+/// "area" or "perimeter" when that value is past f64's range, `None` when both can be reported.
+fn too_large(a: f64, per: f64) -> Option<&'static str> {
+    if !a.is_finite() {
+        Some("area")
+    } else if !per.is_finite() {
+        Some("perimeter")
+    } else {
+        None
+    }
 }
 
 pub(crate) fn area_text(s: &Session, a: f64, per: f64) -> String {
@@ -1143,14 +1157,23 @@ impl AreaM {
         }
     }
     /// Report an area (and the running total in add/subtract mode); ends the command in single mode.
+    /// An area, perimeter or total past f64's range is not reported or added to the total.
     fn measured(&mut self, s: &mut Session, a: f64, per: f64) -> Step {
+        let total = match self.mode {
+            AreaMode::Single => self.total,
+            AreaMode::Add => self.total + a,
+            AreaMode::Subtract => self.total - a,
+        };
+        if let Some(what) = too_large(a, per).or_else(|| (!total.is_finite()).then_some("total area")) {
+            s.echo(format!("The {what} is too large."));
+            return if self.mode == AreaMode::Single { Step::Done } else { Step::Continue };
+        }
         (s.last_used.area, s.last_used.perimeter) = (a, per);
         s.echo(area_text(s, a, per));
-        match self.mode {
-            AreaMode::Single => return Step::Done,
-            AreaMode::Add => self.total += a,
-            AreaMode::Subtract => self.total -= a,
+        if self.mode == AreaMode::Single {
+            return Step::Done;
         }
+        self.total = total;
         s.echo(format!("Total area = {}", fmt_area(s, self.total)));
         Step::Continue
     }
