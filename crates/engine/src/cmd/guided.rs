@@ -4484,7 +4484,8 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
     let plan_views: Vec<[f64; 4]> = views.iter().filter(|v| plan_word(&v.title) || !not_plan_word(&v.title)).filter_map(|v| v.region).collect();
     let not_plan: Vec<[f64; 4]> = views.iter().filter(|v| !plan_word(&v.title) && not_plan_word(&v.title)).filter_map(|v| v.region).collect();
     lap(&format!("views read ({} plans, {} not plans)", plan_views.len(), not_plan.len()));
-    let view_rects: Vec<(String, [f64; 4])> = sp.sheets.iter().filter_map(|l| Some((level_key(l.level.as_deref()?), l.view.as_ref()?.rect))).collect();
+    let view_rects: Vec<(String, [f64; 4])> =
+        sp.sheets.iter().filter_map(|l| Some((level_key(l.level.as_deref()?), l.view.as_ref()?.rect))).collect();
     let place = move |p: [f64; 2], level: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
         if not_plan.iter().any(|r| inside(r, p)) && !plan_views.iter().any(|r| inside(r, p)) {
             return None;
@@ -4565,67 +4566,83 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
             }
         }
         // Its plan: the biggest block of its lines (a legend, notes and the title stand apart).
-        views.into_iter().zip(mine).map(|((k, r), es)| (k, r, super::grids::largest_block(&super::grids::line_samples(&es, 12.0 * k_in), 48.0 * k_in))).collect()
+        views
+            .into_iter()
+            .zip(mine)
+            .map(|((k, r), es)| (k, r, super::grids::largest_block(&super::grids::line_samples(&es, 12.0 * k_in), 48.0 * k_in)))
+            .collect()
     };
     lap("level views sampled");
     let view_fits: std::sync::Mutex<std::collections::HashMap<usize, Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
     let plan_lines_v = plan_lines.clone();
     let fits: std::sync::Mutex<std::collections::HashMap<(i64, i64, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
     let place = move |p: [f64; 2], level: &str| {
-        place(p, level).or_else(|| {
-            let bg = backgrounds.around(p)?;
-            let key = level_key(level);
-            let id = (bg.min.x.round() as i64, bg.min.y.round() as i64, key.clone());
-            if let Some(f) = fits.lock().ok()?.get(&id) {
-                return *f;
-            }
-            let tgt = plan_lines.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
-            let started = web_time::Instant::now();
-            let fit = super::grids::linework_fit(&backgrounds.points_in(&bg), tgt, k_in);
-            progress_line(&format!("  placer: a view's background fitted in {:.1} s", started.elapsed().as_secs_f64()));
-            if let Some((s, _, score, margin)) = fit {
-                progress_line(&format!(
-                    "  background view at {:?} onto level {level}: scale {s:.3}, {:.0}% on the plan, {:.0} points over the next best",
-                    [bg.min.x.round(), bg.min.y.round()],
-                    score * 100.0,
-                    margin * 100.0
-                ));
-            }
-            // 90% of both ways, and 3 points over the best placement 10' or more away: a floor of
-            // repeating bays one bay over scores close behind (only its ends differ).
-            let got = fit.filter(|f| f.2 >= 0.9 && f.3 >= 0.03).map(|(s, t, _, _)| cadaddy_mepfix::tagid::Sim::scale_offset(s, [t.x, t.y]));
-            fits.lock().ok()?.insert(id, got);
-            got
-        })
-        .or_else(|| {
-            // A level's view on a sheet of several levels' plans: its whole linework laid on the
-            // level's plan.
-            let key = level_key(level);
-            let i = level_views.iter().position(|(k, r, _)| *k == key && inside(r, p))?;
-            if let Some(f) = view_fits.lock().ok()?.get(&i) {
-                return *f;
-            }
-            let tgt = plan_lines_v.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
-            // Sheets are imported at their printed scales: a level's view lies on its plan one to
-            // one (another scale is another drawing that happens to share lines with it).
-            let fit = super::grids::linework_fit_within(&level_views[i].2, tgt, k_in, 0.97, 1.03);
-            if fit.is_none() {
-                progress_line(&format!("  level view {:?} onto level {level}: no fit ({} view points, {} plan points)", level_views[i].1.map(f64::round), level_views[i].2.len(), tgt.len()));
-            }
-            if let Some((sc, t, score, margin)) = fit {
-                progress_line(&format!("  level view {:?} onto level {level}: scale {sc:.3}, offset {:?}, {:.0}% on the plan, {:.0} points over the next best", level_views[i].1.map(f64::round), [t.x.round(), t.y.round()], score * 100.0, margin * 100.0));
-            }
-            // A fit a few percent off one to one is its sampling's error (lengths would shrink with
-            // it): one to one, about the view's middle.
-            let pts = &level_views[i].2;
-            let mid = pts.iter().fold(cadaddy_geom::Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / pts.len().max(1) as f64);
-            let got = fit.filter(|f| f.2 >= LEVEL_VIEW_F1 && f.3 >= 0.03).map(|(s, t, _, _)| {
-                let (s, t) = if (s - 1.0).abs() < 0.03 { (1.0, t + mid * (s - 1.0)) } else { (s, t) };
-                cadaddy_mepfix::tagid::Sim::scale_offset(s, [t.x, t.y])
-            });
-            view_fits.lock().ok()?.insert(i, got);
-            got
-        })
+        place(p, level)
+            .or_else(|| {
+                let bg = backgrounds.around(p)?;
+                let key = level_key(level);
+                let id = (bg.min.x.round() as i64, bg.min.y.round() as i64, key.clone());
+                if let Some(f) = fits.lock().ok()?.get(&id) {
+                    return *f;
+                }
+                let tgt = plan_lines.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
+                let started = web_time::Instant::now();
+                let fit = super::grids::linework_fit(&backgrounds.points_in(&bg), tgt, k_in);
+                progress_line(&format!("  placer: a view's background fitted in {:.1} s", started.elapsed().as_secs_f64()));
+                if let Some((s, _, score, margin)) = fit {
+                    progress_line(&format!(
+                        "  background view at {:?} onto level {level}: scale {s:.3}, {:.0}% on the plan, {:.0} points over the next best",
+                        [bg.min.x.round(), bg.min.y.round()],
+                        score * 100.0,
+                        margin * 100.0
+                    ));
+                }
+                // 90% of both ways, and 3 points over the best placement 10' or more away: a floor of
+                // repeating bays one bay over scores close behind (only its ends differ).
+                let got = fit.filter(|f| f.2 >= 0.9 && f.3 >= 0.03).map(|(s, t, _, _)| cadaddy_mepfix::tagid::Sim::scale_offset(s, [t.x, t.y]));
+                fits.lock().ok()?.insert(id, got);
+                got
+            })
+            .or_else(|| {
+                // A level's view on a sheet of several levels' plans: its whole linework laid on the
+                // level's plan.
+                let key = level_key(level);
+                let i = level_views.iter().position(|(k, r, _)| *k == key && inside(r, p))?;
+                if let Some(f) = view_fits.lock().ok()?.get(&i) {
+                    return *f;
+                }
+                let tgt = plan_lines_v.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
+                // Sheets are imported at their printed scales: a level's view lies on its plan one to
+                // one (another scale is another drawing that happens to share lines with it).
+                let fit = super::grids::linework_fit_within(&level_views[i].2, tgt, k_in, 0.97, 1.03);
+                if fit.is_none() {
+                    progress_line(&format!(
+                        "  level view {:?} onto level {level}: no fit ({} view points, {} plan points)",
+                        level_views[i].1.map(f64::round),
+                        level_views[i].2.len(),
+                        tgt.len()
+                    ));
+                }
+                if let Some((sc, t, score, margin)) = fit {
+                    progress_line(&format!(
+                        "  level view {:?} onto level {level}: scale {sc:.3}, offset {:?}, {:.0}% on the plan, {:.0} points over the next best",
+                        level_views[i].1.map(f64::round),
+                        [t.x.round(), t.y.round()],
+                        score * 100.0,
+                        margin * 100.0
+                    ));
+                }
+                // A fit a few percent off one to one is its sampling's error (lengths would shrink with
+                // it): one to one, about the view's middle.
+                let pts = &level_views[i].2;
+                let mid = pts.iter().fold(cadaddy_geom::Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / pts.len().max(1) as f64);
+                let got = fit.filter(|f| f.2 >= LEVEL_VIEW_F1 && f.3 >= 0.03).map(|(s, t, _, _)| {
+                    let (s, t) = if (s - 1.0).abs() < 0.03 { (1.0, t + mid * (s - 1.0)) } else { (s, t) };
+                    cadaddy_mepfix::tagid::Sim::scale_offset(s, [t.x, t.y])
+                });
+                view_fits.lock().ok()?.insert(i, got);
+                got
+            })
     };
     move |p: [f64; 2], level: &str| {
         let m = place(p, level)?;
