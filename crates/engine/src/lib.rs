@@ -328,13 +328,16 @@ pub struct DocState {
 /// The view that shows `ext` with `margin` (1.05 = 5% more) in a viewport `px` wide and high,
 /// between the `inset` pixels covered at its top and bottom (each at most 40% of it). `aspect`
 /// turns the free area's width/height into the one to fit (tiled viewports adjust it).
+/// The largest coordinate a view is fitted to (the export limit).
+pub const VIEW_LIMIT: f64 = 1e12;
+
 fn framed(ext: cadaddy_geom::Bounds2, px: (f64, f64), inset: (f64, f64), aspect: impl Fn(f64) -> f64, margin: f64) -> View {
     let (w, h) = (px.0.max(1.0), px.1.max(1.0));
     let clamp = |v: f64| if v.is_finite() { v.clamp(0.0, h * 0.4) } else { 0.0 };
     let (top, bottom) = (clamp(inset.0), clamp(inset.1));
     let free = (h - top - bottom).max(1.0);
     let fit = ext.height().max(ext.width() / aspect(w / free).max(1e-6)).max(1e-6) * margin;
-    let height = fit * h / free;
+    let height = (fit * h / free).clamp(1e-9, VIEW_LIMIT);
     // The free area's middle is (bottom - top) / 2 pixels above the viewport's.
     let shift = (bottom - top) / 2.0 * height / h;
     View { center: ext.center() - Vec2::new(0.0, shift), height }
@@ -2895,8 +2898,11 @@ impl Session {
         {
             return Ok(sheet.bounds());
         }
-        let lo = d.header.point("LIMMIN").map(|p| p.xy()).unwrap_or(Vec2::ZERO);
-        let hi = d.header.point("LIMMAX").map(|p| p.xy()).unwrap_or(Vec2::new(12.0, 9.0));
+        let finite = |name: &str, default: Vec2| {
+            d.header.point(name).map(|p| p.xy()).filter(|p| p.is_finite() && p.x.abs() <= VIEW_LIMIT && p.y.abs() <= VIEW_LIMIT).unwrap_or(default)
+        };
+        let lo = finite("LIMMIN", Vec2::ZERO);
+        let hi = finite("LIMMAX", Vec2::new(12.0, 9.0));
         Ok(Bounds2::new(lo, hi))
     }
 
@@ -2910,7 +2916,18 @@ impl Session {
     }
 
     pub fn zoom_extents(&mut self) -> Result<()> {
-        let ext = self.view_extents()?;
+        let mut ext = self.view_extents()?;
+        if !cadaddy_doc::within_limit(&ext, VIEW_LIMIT) {
+            // Fit to the finite part and say what was left out.
+            let (finite, skipped) = {
+                let st = self.state()?;
+                st.doc.extents_within(&self.space(), VIEW_LIMIT)
+            };
+            if skipped > 0 {
+                self.echo(format!("Zoom extents: {skipped} object(s) lie beyond \u{b1}1e12 or have non-finite bounds and were left out of the fit."));
+            }
+            ext = finite;
+        }
         let (w, h) = self.viewport_px;
         let ext = if ext.is_empty() { self.zoom_limits()? } else { ext };
         let inset = self.viewport_inset_px;

@@ -394,7 +394,7 @@ pub fn parse_point_in(text: &str, last: Vec2, angles: &crate::units::AngleSettin
     };
     let f = if world { &crate::ucs::Frame::WORLD } else { frame };
     let r = if rel { last + f.dir_to_wcs(p) } else { f.to_wcs(p) };
-    r.is_finite().then_some(r)
+    (r.is_finite() && r.x.abs() <= crate::VIEW_LIMIT && r.y.abs() <= crate::VIEW_LIMIT).then_some(r)
 }
 
 #[cfg(test)]
