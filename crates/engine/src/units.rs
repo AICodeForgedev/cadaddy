@@ -118,7 +118,7 @@ pub fn parse_distance(s: &str) -> Option<f64> {
         return None;
     }
     if let Ok(v) = t.parse::<f64>() {
-        return v.is_finite().then_some(v);
+        return (v.is_finite() && v.abs() <= crate::VIEW_LIMIT).then_some(v);
     }
     let (neg, t) = match t.strip_prefix('-') {
         Some(r) => (true, r.trim()),
@@ -136,7 +136,7 @@ pub fn parse_distance(s: &str) -> Option<f64> {
         total += parse_mixed(rest)?;
     }
     let v = if neg { -total } else { total };
-    v.is_finite().then_some(v)
+    (v.is_finite() && v.abs() <= crate::VIEW_LIMIT).then_some(v)
 }
 
 fn parse_mixed(s: &str) -> Option<f64> {

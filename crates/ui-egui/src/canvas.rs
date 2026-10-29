@@ -747,6 +747,17 @@ fn adaptive(unit: f64, scale: f64, min_px: f64) -> f64 {
     u
 }
 
+/// The grid line indices covering `lo..=hi` at spacing `minor`, or `None` when the range is
+/// not finite, the spacing is unusable, or it would take 2000 lines or more.
+fn grid_span(lo: f64, hi: f64, minor: f64) -> Option<(i64, i64)> {
+    if !(lo.is_finite() && hi.is_finite() && minor.is_finite() && minor > 0.0) {
+        return None;
+    }
+    let (a, b) = ((lo / minor).floor(), (hi / minor).ceil());
+    // 2000 lines at most; this also keeps both ends far from the i64 limits.
+    (a.is_finite() && b.is_finite() && b - a < 2000.0 && a.abs() < 1e15 && b.abs() < 1e15).then_some((a as i64, b as i64))
+}
+
 fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     // The grid lies on the XY plane; 3D views don't draw it yet.
     if xf.proj.is_some() {
@@ -763,11 +774,7 @@ fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
         let minor = adaptive(unit, xf.scale, 8.0);
         let major = minor * major_n;
         let mut lines = Vec::new();
-        let x0 = (wb.min.x / minor).floor() as i64;
-        let x1 = (wb.max.x / minor).ceil() as i64;
-        let y0 = (wb.min.y / minor).floor() as i64;
-        let y1 = (wb.max.y / minor).ceil() as i64;
-        if (x1 - x0) < 2000 && (y1 - y0) < 2000 {
+        if let (Some((x0, x1)), Some((y0, y1))) = (grid_span(wb.min.x, wb.max.x, minor), grid_span(wb.min.y, wb.max.y, minor)) {
             for i in x0..=x1 {
                 let x = i as f64 * minor;
                 let is_major = (x / major).round() * major - x == 0.0 || ((x / major) - (x / major).round()).abs() < 1e-6;
@@ -2993,6 +3000,26 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
 pub(crate) mod tests {
     use super::*;
     use cadaddy_render::DPrim;
+
+    #[test]
+    fn grid_span_refuses_unbounded_ranges() {
+        assert_eq!(grid_span(-10.0, 10.0, 1.0), Some((-10, 10)));
+        assert_eq!(grid_span(0.0, 1999.0, 1.0), Some((0, 1999)));
+        for (lo, hi) in [
+            (f64::NAN, 1.0),
+            (0.0, f64::NAN),
+            (f64::NEG_INFINITY, f64::INFINITY),
+            (-1e60, 1e60),
+            (-1e300, 1e300),
+            (0.0, 2000.0),
+            (-1e20, -1e20 + 1.0),
+        ] {
+            assert_eq!(grid_span(lo, hi, 1.0), None, "{lo}..{hi}");
+        }
+        assert_eq!(grid_span(0.0, 1.0, 0.0), None);
+        assert_eq!(grid_span(0.0, 1.0, f64::NAN), None);
+        assert_eq!(grid_span(0.0, 1.0, f64::INFINITY), None);
+    }
 
     fn list(handles: &[u64]) -> DisplayList {
         let prim =

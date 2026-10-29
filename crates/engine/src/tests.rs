@@ -522,6 +522,55 @@ fn zoom_extents_fits_drawing() {
 }
 
 #[test]
+fn zoom_extents_fits_the_finite_part_when_geometry_is_huge() {
+    for r in [1e60, 1e100, 1e300] {
+        let mut s = Session::new();
+        s.viewport_px = (1000.0, 500.0);
+        s.execute("line", &json!({"points": [[0, 0], [100, 10]]})).unwrap();
+        s.execute("circle", &json!({"center": [0, 0], "radius": r})).unwrap();
+        s.execute("zoom.extents", &json!({})).unwrap();
+        let v = s.state().unwrap().view();
+        assert!(v.center.is_finite() && v.height.is_finite() && v.height <= VIEW_LIMIT, "radius {r}: {v:?}");
+        assert!((v.center.x - 50.0).abs() < 1e-6 && v.height < 1000.0, "radius {r}: fit to the line, got {v:?}");
+    }
+}
+
+#[test]
+fn zoom_extents_with_only_huge_geometry_is_finite() {
+    let mut s = Session::new();
+    s.viewport_px = (1000.0, 500.0);
+    s.execute("circle", &json!({"center": [0, 0], "radius": 1e200})).unwrap();
+    s.execute("zoom.extents", &json!({})).unwrap();
+    let v = s.state().unwrap().view();
+    assert!(v.center.is_finite() && v.height.is_finite() && v.height > 0.0 && v.height <= VIEW_LIMIT, "{v:?}");
+}
+
+#[test]
+fn damaged_limits_header_still_zooms_to_a_finite_view() {
+    let mut s = Session::new();
+    s.viewport_px = (1000.0, 500.0);
+    let st = s.state_mut().unwrap();
+    let mut d = (*st.doc).clone();
+    d.header.set("LIMMIN", cadaddy_doc::HVal::Point(cadaddy_geom::Vec3::new(f64::NAN, f64::NEG_INFINITY, 0.0)));
+    d.header.set("LIMMAX", cadaddy_doc::HVal::Point(cadaddy_geom::Vec3::new(1e300, f64::INFINITY, 0.0)));
+    st.doc = std::sync::Arc::new(d);
+    s.zoom_extents().unwrap();
+    let v = s.state().unwrap().view();
+    assert!(v.center.is_finite() && v.height.is_finite() && v.height > 0.0 && v.height <= VIEW_LIMIT, "{v:?}");
+}
+
+#[test]
+fn typed_coordinates_beyond_the_export_limit_are_refused() {
+    use crate::prompt::parse_point;
+    assert!(parse_point("1e11,5", Vec2::ZERO).is_some());
+    for t in ["1e13,0", "0,-1e60", "1e300,1e300", "@1e13,0", "1e13<45"] {
+        assert!(parse_point(t, Vec2::ZERO).is_none(), "{t}");
+    }
+    assert!(crate::units::parse_distance("1e60").is_none());
+    assert_eq!(crate::units::parse_distance("1e12"), Some(1e12));
+}
+
+#[test]
 fn zoom_extents_keeps_the_drawing_clear_of_the_covered_bottom() {
     // A first-run finding: the floating command line hid the bottom of a freshly opened plan.
     let mut s = Session::new();

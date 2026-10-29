@@ -505,6 +505,27 @@ impl Drawing {
         b
     }
 
+    /// The extents of the entities whose own bounds are finite and within `limit` of the origin,
+    /// and how many visible entities were left out for being beyond it.
+    pub fn extents_within(&self, space: &Space, limit: f64) -> (cadaddy_geom::Bounds2, usize) {
+        let mut b = cadaddy_geom::Bounds2::EMPTY;
+        let mut skipped = 0;
+        if let Some(store) = self.space(space) {
+            for e in store.iter().filter(|e| self.is_visible(e)) {
+                let eb = entity_bounds(self, e, 0);
+                if eb.is_empty() {
+                    continue;
+                }
+                if within_limit(&eb, limit) {
+                    b = b.union(&eb);
+                } else {
+                    skipped += 1;
+                }
+            }
+        }
+        (b, skipped)
+    }
+
     /// Total entity count across model and paper space.
     pub fn entity_count(&self) -> usize {
         self.model.len() + self.layouts.iter().map(|l| l.entities.len()).sum::<usize>()
@@ -528,3 +549,8 @@ pub use anno::*;
 
 #[cfg(test)]
 mod tests;
+
+/// Whether both corners of `b` are finite and no further than `limit` from the origin on each axis.
+pub fn within_limit(b: &cadaddy_geom::Bounds2, limit: f64) -> bool {
+    [b.min.x, b.min.y, b.max.x, b.max.y].iter().all(|v| v.is_finite() && v.abs() <= limit)
+}
