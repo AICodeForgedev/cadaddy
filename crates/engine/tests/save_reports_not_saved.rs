@@ -22,7 +22,7 @@ fn save_lists_the_entities_the_file_does_not_keep() {
         write_dwfx: None,
     });
     let mut d = Drawing::new_imperial();
-    for k in ["MLINE", "3DSOLID", "MLINE"] {
+    for k in ["MLINE", "3DSOLID", "OLE2FRAME", "MLINE"] {
         d.add(&Space::Model, Common::default(), unknown(k)).unwrap();
     }
     let mut b = Block::new("Part");
