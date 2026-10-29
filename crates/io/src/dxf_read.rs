@@ -933,13 +933,18 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
     // of some patterns (AR-CONC) only approximate AutoCAD's, and drawing them at the file's scale
     // could be hundreds of times denser than the hatch the author saw.
     let pattern_lines = if solid { Vec::new() } else { pattern_definition(tags, scale, angle, origin) };
+    // The writer's `NOSOURCE` xdata mark: an associative hatch with no source boundary objects,
+    // whose flag a DWG bridge drops.
+    let associative = t.i(71).unwrap_or(0) != 0
+        || (loops.iter().all(|l| l.sources.is_empty())
+            && crate::dxf_ext::xdata(tags, crate::dxf_ext::APP).iter().any(|x| x.code == 1000 && x.str() == crate::dxf_write::HATCH_NO_SOURCE));
     Some(EntityKind::Hatch(Box::new(Hatch {
         pattern: pattern.to_ascii_uppercase(),
         solid,
         loops,
         scale,
         angle,
-        associative: t.i(71).unwrap_or(0) != 0,
+        associative,
         style: t.i(75).unwrap_or(0) as u8,
         // The first 30 is the elevation point's z (boundary points are 2D).
         elevation: t.f(30).filter(|z| z.is_finite()).unwrap_or(0.0),

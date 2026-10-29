@@ -262,6 +262,9 @@ struct Ctx {
     /// The version the file ends up in (the DWG version for a DWG save): it decides which
     /// entity types exist (MULTILEADER from 2007).
     target: Version,
+    /// The tags become a DWG: a pre-2007 DWG has no fields for the newer style variables (DIMFXL
+    /// and the like), so they go in the style's xdata, even at their default (read back as 0).
+    dwg: bool,
 }
 
 impl Ctx {
@@ -1866,16 +1869,28 @@ fn thickness(w: &mut W, e: &Entity) {
 /// readers get the origin through the pattern lines' base points (43/44), the background isn't
 /// carried. Appended to the gradient's `CADADDY` xdata when there is one.
 fn hatch_xdata(w: &mut W, h: &Hatch) {
-    if h.origin == Vec2::ZERO && h.background.is_none() {
+    // An associative hatch with no source boundary objects (imported so): the DWG bridge's writer
+    // clears the flag of one that names no boundary, so the flag also travels as `1000 NOSOURCE`.
+    let no_source = h.associative && h.loops.iter().all(|l| l.sources.is_empty());
+    let placed = h.origin != Vec2::ZERO || h.background.is_some();
+    if !placed && !no_source {
         return;
     }
     if h.gradient.is_none() {
         w.s(1001, dxf_ext::APP);
     }
-    w.s(1000, "HATCH");
-    w.p(1011, h.origin.to3(0.0));
-    w.s(1000, h.background.map(Color::name).unwrap_or_default());
+    if placed {
+        w.s(1000, "HATCH");
+        w.p(1011, h.origin.to3(0.0));
+        w.s(1000, h.background.map(Color::name).unwrap_or_default());
+    }
+    if no_source {
+        w.s(1000, HATCH_NO_SOURCE);
+    }
 }
+
+/// The `CADADDY` xdata marker of an associative hatch without source boundary objects.
+pub(crate) const HATCH_NO_SOURCE: &str = "NOSOURCE";
 
 /// What happens to the anonymous `*D` blocks read from a file (#495): a dimension that still
 /// names its block regenerates its geometry under that name, keeping the block's entity
@@ -2260,14 +2275,19 @@ pub fn write(d: &Drawing) -> String {
 
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`.
 pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
-    tags_for(d, version, version)
+    tags_for(d, version, version, false)
+}
+
+/// The tags CADaddy's own DWG codec encodes into a `version` DWG.
+pub(crate) fn dwg_tags(d: &Drawing, version: Version) -> Vec<Tag> {
+    tags_for(d, version, version, true)
 }
 
 /// The R2000 DXF the DWG bridge converts to a `dwg` version DWG: its entity types are the DWG
 /// version's (MULTILEADER from 2007). Binary DXF (the converter reads it in about two thirds of
 /// the time of ASCII, and it is smaller and quicker to write), with the LTYPE table's names.
 pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>) {
-    let mut tags = tags_for(d, Version::R2000, dwg);
+    let mut tags = tags_for(d, Version::R2000, dwg, true);
     bridge_markers(&mut tags);
     let mut names = Vec::new();
     let mut in_ltype = false;
@@ -2392,7 +2412,7 @@ fn bridge_markers(tags: &mut [Tag]) {
 
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`, with what `target` (the version the
 /// file ends up in: `version`, or the DWG version the bridge writes) has.
-fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
+fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Tag> {
     // An in-place block edit in progress is not written: the drawing as before it.
     let committed = d.committed();
     let d: &Drawing = &committed;
@@ -2458,7 +2478,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
             (n, h, b)
         })
         .collect();
-    let mut cx = Ctx { paper_views: paper_views(d), target, write_fields: true, ..Ctx::default() };
+    let mut cx = Ctx { paper_views: paper_views(d), target, dwg, write_fields: true, ..Ctx::default() };
     cx.block_records = user_blocks.iter().map(|(n, h, _)| (n.to_ascii_uppercase(), h.clone())).collect();
     // Dimension blocks.
     let mut dim_defs: Vec<(String, String, Vec<Entity>)> = Vec::new(); // filled below
@@ -2880,8 +2900,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
             w.i(420, i64::from(rgb.to_u32()));
         }
         w.s(6, &l.linetype);
-        if !l.plot {
-            w.i(290, 0);
+        // The reader defaults a missing 290 to no-plot for Defpoints, so a plotting Defpoints says so.
+        if !l.plot || l.name.eq_ignore_ascii_case("Defpoints") {
+            w.i(290, i64::from(l.plot));
         }
         w.i(370, i64::from(l.lineweight.to_dxf()));
         let normal = w.pstyles.get(&cadaddy_doc::NORMAL_STYLE.to_ascii_uppercase()).cloned();
@@ -3084,9 +3105,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
                 continue;
             }
             // Table groups where the file version has them, else xdata.
-            if !own && version >= dxf_ext::newer_since(*code) {
+            let pre2007_dwg = cx.dwg && cx.target < Version::R2007;
+            if !own && version >= dxf_ext::newer_since(*code) && !pre2007_dwg {
                 w.dimval(*code, enc, false);
-            } else if v.get(*field) != defaults.get(*field) {
+            } else if v.get(*field) != defaults.get(*field) || (pre2007_dwg && !own) {
                 newer.i(1070, i64::from(*code));
                 newer.dimval(*code, enc, true);
             }
