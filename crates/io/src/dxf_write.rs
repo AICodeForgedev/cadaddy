@@ -1316,7 +1316,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             let g = cadaddy_render::dimension_geometry(dm, &style, d.header.f64("DIMSCALE", 1.0));
             // The text's middle as the file gave it, also when the text is not placed by hand: the
             // program that drew it knows its text style better than the dimension's geometry here.
-            let stored = dm.text_mid.is_finite() && dm.text_mid != Vec3::ZERO;
+            // (A dimension made here has no block yet, and its middle is not set: calculated.)
+            let stored = dm.block.is_some() && dm.text_mid.is_finite() && dm.text_mid != Vec3::ZERO;
             w.p(11, if dm.user_text_pos || stored { dm.text_mid } else { g.text_pos.to3(0.0) });
             let ty: i64 = match dm.kind {
                 DimKind::Linear { .. } => 0,
