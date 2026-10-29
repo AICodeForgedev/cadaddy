@@ -983,7 +983,7 @@ mod tests {
     fn tagged(h: u64, tag_value: Option<&str>) -> Entity {
         let mut e = Entity::new(Handle(h), EntityKind::Line(crate::Line { a: Vec3::ZERO, b: Vec3::ZERO }));
         if let Some(v) = tag_value {
-            e.common.xdata = vec![tag(1001, ETAG), tag(1071, v)];
+            e.common.xdata = vec![tag(1001, ETAG), tag(1071, v)].into();
         }
         e
     }
