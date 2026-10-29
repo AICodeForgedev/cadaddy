@@ -895,7 +895,8 @@ fn a_dimension_whose_block_is_past_the_nesting_limit_is_drawn_again() {
     };
     for k in 1..=MAX_BLOCK_DEPTH {
         let mut b = Block::new(&format!("B{k}"));
-        let kind = if k == MAX_BLOCK_DEPTH { EntityKind::Dimension(Box::new(dim.clone())) } else { EntityKind::Insert(insert(&format!("B{}", k + 1))) };
+        let kind =
+            if k == MAX_BLOCK_DEPTH { EntityKind::Dimension(Box::new(dim.clone())) } else { EntityKind::Insert(insert(&format!("B{}", k + 1))) };
         b.entities.push(Entity::new(Handle(0x700 + k as u64), kind));
         d.blocks.insert(b.name.clone(), Arc::new(b));
     }

@@ -90,7 +90,9 @@ impl Interactive for MeasureM {
             Mode::Volume => Prompt::new("Specify next point or press Enter to total", Accept::POINT).base_opt(last),
             Mode::VolumeHeight if self.height_from.is_none() => Prompt::new("Specify height", Accept::POINT_OR_NUMBER),
             Mode::VolumeHeight => Prompt::new("Specify second point of the height", Accept::POINT).base_opt(self.height_from),
-            Mode::Quick => Prompt::new("Move cursor or", Accept::POINT).kw(&["Distance", "Radius", "Angle", "ARea", "Volume", "eXit"]).default("eXit"),
+            Mode::Quick => {
+                Prompt::new("Move cursor or", Accept::POINT).kw(&["Distance", "Radius", "Angle", "ARea", "Volume", "eXit"]).default("eXit")
+            }
         }
     }
 

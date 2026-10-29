@@ -193,8 +193,8 @@ fn blockreplace_without_purge_and_refusals() {
 
 #[test]
 fn blockreplace_refuses_a_dynamic_block_and_a_container_as_soon_as_named() {
-    use cadaddy_engine::doc::foreign::{Foreign, ForeignExtra, ForeignObject};
     use cadaddy_engine::doc::RawTag;
+    use cadaddy_engine::doc::foreign::{Foreign, ForeignExtra, ForeignObject};
     let (mut s, _) = blocks();
     // HOLDER contains OLD: refused at the replacement prompt, which asks again.
     s.cmdline("blockreplace").unwrap();
@@ -209,7 +209,11 @@ fn blockreplace_refuses_a_dynamic_block_and_a_container_as_soon_as_named() {
     let mut f = Foreign::default();
     f.records.insert(("BLOCK_RECORD".into(), "OLD".into()), ForeignExtra { xdict: Some(Handle(0xF00)), ..Default::default() });
     let tags = |t: &[(i32, &str)]| t.iter().map(|(c, v)| RawTag { code: *c, value: (*v).into() }).collect();
-    f.objects.push(ForeignObject { handle: Handle(0xF00), kind: "DICTIONARY".into(), tags: tags(&[(100, "AcDbDictionary"), (3, "ACAD_ENHANCEDBLOCK"), (360, "F01")]) });
+    f.objects.push(ForeignObject {
+        handle: Handle(0xF00),
+        kind: "DICTIONARY".into(),
+        tags: tags(&[(100, "AcDbDictionary"), (3, "ACAD_ENHANCEDBLOCK"), (360, "F01")]),
+    });
     f.objects.push(ForeignObject { handle: Handle(0xF01), kind: "ACAD_EVALUATION_GRAPH".into(), tags: tags(&[(100, "AcDbEvalGraph")]) });
     d.foreign = std::sync::Arc::new(f);
     s.open_drawing(d, "dynamic", None);

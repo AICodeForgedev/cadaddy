@@ -218,17 +218,19 @@ impl Interactive for Asker {
                     Ok(Step::Continue)
                 }
             },
-            (Kind::Bounded(max), Input::Text(t) | Input::Keyword(t)) => match t.trim().parse::<f64>().ok().or_else(|| units::parse_distance(t.trim())).filter(|v| v.is_finite()) {
-                Some(v) if v.abs() <= max => self.take(s, json!(v)),
-                Some(_) => {
-                    s.echo(format!("Requires a value between -{max:e} and {max:e}."));
-                    Ok(Step::Continue)
+            (Kind::Bounded(max), Input::Text(t) | Input::Keyword(t)) => {
+                match t.trim().parse::<f64>().ok().or_else(|| units::parse_distance(t.trim())).filter(|v| v.is_finite()) {
+                    Some(v) if v.abs() <= max => self.take(s, json!(v)),
+                    Some(_) => {
+                        s.echo(format!("Requires a value between -{max:e} and {max:e}."));
+                        Ok(Step::Continue)
+                    }
+                    None => {
+                        s.echo("Requires a number.");
+                        Ok(Step::Continue)
+                    }
                 }
-                None => {
-                    s.echo("Requires a number.");
-                    Ok(Step::Continue)
-                }
-            },
+            }
             (Kind::Number | Kind::Bounded(_), Input::Enter) => match default.as_deref().and_then(|d| d.trim().parse::<f64>().ok()) {
                 Some(v) => self.take(s, json!(v)),
                 None => Ok(Step::Done),

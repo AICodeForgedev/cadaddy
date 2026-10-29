@@ -538,7 +538,8 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
         "message": message,
     });
     let changed = changed.into_iter().map(|(a, b, _, _)| (a, b)).collect();
-    s.compare = Some(Comparison { uid, space, other_name: name, other, other_path, added, removed, changed, common, truncated, regions, at: None, layouts });
+    s.compare =
+        Some(Comparison { uid, space, other_name: name, other, other_path, added, removed, changed, common, truncated, regions, at: None, layouts });
     s.touch();
     Ok(out)
 }

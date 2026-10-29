@@ -1524,7 +1524,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // or a floating palette lives on a layer above the canvas, where `hovered()` alone still
     // counts the canvas. Over those the OS cursor stays visible and the crosshair stays put, as
     // over the menu bar (#1701).
-    let inside = hover_pos.is_some_and(|p| rect.contains(p) && (lifted_at.is_some() || (ui.ctx().layer_id_at(p) == Some(ui.layer_id()) && resp.hovered())));
+    let inside =
+        hover_pos.is_some_and(|p| rect.contains(p) && (lifted_at.is_some() || (ui.ctx().layer_id_at(p) == Some(ui.layer_id()) && resp.hovered())));
     // Whether Ctrl is held right now. Written every frame (not just while a command prompts), so
     // previews that read `Session::ctrl_down` always see the current state. The engine
     // deliberately does not carry modifiers through `Input`, which is UI-agnostic (see PR

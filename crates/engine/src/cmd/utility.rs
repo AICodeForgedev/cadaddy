@@ -301,7 +301,11 @@ fn run_radius(s: &mut Session, p: &Value) -> Result<Value> {
         Some(EntityKind::Arc(a)) => a.radius,
         Some(EntityKind::LwPolyline(pl)) => {
             // The arc segment at `point`; a polyline with a single arc segment needs no point.
-            let arcs: Vec<f64> = cadaddy_geom::Polyline { vertices: pl.vertices.clone(), closed: pl.closed }.segments().iter().filter_map(|sg| if let cadaddy_geom::Segment::Arc { arc, .. } = sg { Some(arc.radius) } else { None }).collect();
+            let arcs: Vec<f64> = cadaddy_geom::Polyline { vertices: pl.vertices.clone(), closed: pl.closed }
+                .segments()
+                .iter()
+                .filter_map(|sg| if let cadaddy_geom::Segment::Arc { arc, .. } = sg { Some(arc.radius) } else { None })
+                .collect();
             match point_param(p, "point") {
                 Some(at) => match super::annotate::segment_at(s, h, at) {
                     Some(cadaddy_geom::Segment::Arc { arc, .. }) => arc.radius,

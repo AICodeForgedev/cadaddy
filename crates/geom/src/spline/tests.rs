@@ -73,12 +73,7 @@ fn stack_basis_matches_the_heap_basis_bit_for_bit() {
             let t = lo + (hi - lo) * i as f64 / 1000.0;
             let got = s.eval(t);
             let want = eval_ref(&s, t);
-            assert_eq!(
-                (got.x.to_bits(), got.y.to_bits()),
-                (want.x.to_bits(), want.y.to_bits()),
-                "degree {} at {t}: {got:?} vs {want:?}",
-                s.degree
-            );
+            assert_eq!((got.x.to_bits(), got.y.to_bits()), (want.x.to_bits(), want.y.to_bits()), "degree {} at {t}: {got:?} vs {want:?}", s.degree);
             let span = find_span(s.control.len() - 1, s.degree, t.clamp(lo, hi), &s.knots);
             let b = basis(span, t.clamp(lo, hi), s.degree, &s.knots);
             let r = basis_ref(span, t.clamp(lo, hi), s.degree, &s.knots);
@@ -184,10 +179,8 @@ fn bounds_keep_their_cap_over_many_spans() {
             assert!(b.contains(want.min) && b.contains(want.max), "{b:?} vs {want:?}");
         }
         let diag = want.min.dist(want.max);
-        let err = [b.min.x - want.min.x, b.min.y - want.min.y, b.max.x - want.max.x, b.max.y - want.max.y]
-            .into_iter()
-            .map(f64::abs)
-            .fold(0.0, f64::max);
+        let err =
+            [b.min.x - want.min.x, b.min.y - want.min.y, b.max.x - want.max.x, b.max.y - want.max.y].into_iter().map(f64::abs).fold(0.0, f64::max);
         assert!(err <= 1e-3 * diag, "{n} control points: {b:?} vs {want:?}");
     }
 }

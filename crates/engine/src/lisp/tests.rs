@@ -1049,4 +1049,3 @@ fn getvar_cecolor_is_a_string() {
     assert_eq!(ok(&mut s, "(setvar \"CECOLOR\" \"red\") (getvar \"CECOLOR\")"), "\"1\"");
     assert_eq!(ok(&mut s, "(setvar \"CECOLOR\" \"10,20,30\") (getvar \"CECOLOR\")"), "\"RGB:10,20,30\"");
 }
-

@@ -612,8 +612,7 @@ mod native {
             }
             self.last_beat = Some(now);
             let dir = Path::new(dir);
-            let r =
-                create_folder(dir).and_then(|()| crate::writefile::write(lock_path(dir, &self.instance), std::process::id().to_string()));
+            let r = create_folder(dir).and_then(|()| crate::writefile::write(lock_path(dir, &self.instance), std::process::id().to_string()));
             if let Err(e) = r {
                 log::warn!("autosave: lock file in {}: {e}", dir.display());
             }
