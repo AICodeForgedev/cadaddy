@@ -19,11 +19,11 @@ fn content(mut v: serde_json::Value) -> serde_json::Value {
     {
         o.remove("id");
     }
-    // A dimension's anonymous block (*D1, *D2…) is numbered again by the writer: the name is not
-    // content, the block's own geometry is what the dimension draws.
-    if v.get("type").and_then(serde_json::Value::as_str) == Some("dimension")
+    // An anonymous block (a dimension's *D1, a hatch or group's *U2…) is numbered again by the
+    // writer: the name is not content, the block's own geometry is what the object draws.
+    if matches!(v.get("type").and_then(serde_json::Value::as_str), Some("dimension" | "insert"))
         && let Some(o) = v.as_object_mut()
-        && o.get("block").and_then(serde_json::Value::as_str).is_some_and(is_dim_block_name)
+        && o.get("block").and_then(serde_json::Value::as_str).is_some_and(is_anonymous_block_name)
     {
         o.remove("block");
     }
@@ -35,9 +35,10 @@ fn content(mut v: serde_json::Value) -> serde_json::Value {
     v
 }
 
-/// Whether `n` is an anonymous dimension block's name: `*D` and a number.
-fn is_dim_block_name(n: &str) -> bool {
-    n.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("*D")) && n.len() > 2 && n.bytes().skip(2).all(|c| c.is_ascii_digit())
+/// Whether `n` is an anonymous block's name: `*`, a letter and a number (`*D12`, `*U3`, `*X1`).
+fn is_anonymous_block_name(n: &str) -> bool {
+    let b = n.as_bytes();
+    b.len() > 2 && b.first() == Some(&b'*') && b.get(1).is_some_and(u8::is_ascii_alphabetic) && b.iter().skip(2).all(u8::is_ascii_digit)
 }
 
 /// Most objects of one space or block compared one by one: past it, objects spread evenly
@@ -98,6 +99,13 @@ fn block_head(b: &cadaddy_doc::Block) -> serde_json::Value {
     v
 }
 
+/// The size of the difference between two numbers that is rounding noise of a calculation (an
+/// extrusion of (-1e-16, 0, -1), a pattern line's offset of 1e-17), not a change.
+const FLOAT_NOISE: f64 = 1e-15;
+
+/// Fields that name a table record (a layer, linetype, style), compared without case.
+const SYMBOL_KEYS: [&str; 5] = ["linetype", "textStyle", "style", "dimStyle", "layer"];
+
 /// Deepest nesting compared (model data nests a dozen levels).
 const MAX_DEPTH: usize = 64;
 
@@ -122,13 +130,18 @@ fn kept(a: &serde_json::Value, b: &serde_json::Value, depth: usize) -> bool {
         (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
             // Relative only: a drawing in tiny units (or a thickness of 1e-10 a format drops) is
             // compared as closely as any other (savefuzz found 1e-10 thicknesses dropped unreported).
-            (Some(x), Some(y)) => (x - y).abs() <= 1e-9 * x.abs().max(y.abs()),
+            // Below FLOAT_NOISE, a number is arithmetic noise (a cosine of 1e-17): equal to zero.
+            (Some(x), Some(y)) => (x - y).abs() <= 1e-9 * x.abs().max(y.abs()) || (x - y).abs() <= FLOAT_NOISE,
             _ => false,
         },
         (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(a, b)| kept(a, b, depth + 1)),
-        (Value::Object(x), Value::Object(y)) => {
-            x.iter().all(|(k, a)| y.get(k).map_or_else(|| kept(a, &Value::Null, depth + 1), |b| kept(a, b, depth + 1)))
-        }
+        (Value::Object(x), Value::Object(y)) => x.iter().all(|(k, a)| match (y.get(k), a) {
+            // Symbol names are not case sensitive: a writer may give a table record's name in
+            // capitals (CONTINUOUS for Continuous), which every reference to it follows.
+            (Some(Value::String(b)), Value::String(a)) if SYMBOL_KEYS.contains(&k.as_str()) => a.eq_ignore_ascii_case(b),
+            (Some(b), a) => kept(a, b, depth + 1),
+            (None, a) => kept(a, &Value::Null, depth + 1),
+        }),
         _ => a == b,
     }
 }
@@ -226,7 +239,16 @@ fn changed_fields(a: &serde_json::Value, b: &serde_json::Value) -> Vec<String> {
     match (a.as_object(), b.as_object()) {
         (Some(x), Some(y)) => x
             .iter()
-            .filter(|(k, v)| k.as_str() != "type" && !y.get(k.as_str()).map_or_else(|| kept(v, &serde_json::Value::Null, 1), |w| kept(v, w, 1)))
+            .filter(|(k, v)| {
+                k.as_str() != "type"
+                    && !match (y.get(k.as_str()), v) {
+                        (Some(serde_json::Value::String(w)), serde_json::Value::String(v)) if SYMBOL_KEYS.contains(&k.as_str()) => {
+                            v.eq_ignore_ascii_case(w)
+                        }
+                        (Some(w), v) => kept(v, w, 1),
+                        (None, v) => kept(v, &serde_json::Value::Null, 1),
+                    }
+            })
             .map(|(k, _)| k.clone())
             .collect(),
         _ => vec![String::new()],
@@ -623,5 +645,35 @@ mod tests {
         let a = json!({"type": "unknown", "tags": [{"code": 8, "value": "0"}, {"code": 5, "value": "3A0"}, {"code": 10, "value": "1.0"}]});
         let b = json!({"type": "unknown", "tags": [{"code": 5, "value": "3A1"}, {"code": 330, "value": "1F"}, {"code": 8, "value": "0"}, {"code": 10, "value": "1.0"}]});
         assert!(kept(&content(a), &content(b), 0));
+    }
+
+    #[test]
+    fn rounding_noise_is_not_a_change() {
+        // An extrusion of (-1e-16, 0, -1) written and read back as (0, 0, -1); a pattern line's
+        // offset of 1e-17 as 2e-17.
+        assert!(kept(&json!({"x": -9.8e-17, "z": -1.0}), &json!({"x": 0.0, "z": -1.0}), 0));
+        assert!(kept(&json!([1.1e-17]), &json!([2.2e-17]), 0));
+        // A real difference, a tiny one included, still is one.
+        assert!(!kept(&json!([1e-10]), &json!([0.0]), 0));
+        assert!(!kept(&json!({"z": -1.0}), &json!({"z": 1.0}), 0));
+    }
+
+    #[test]
+    fn table_references_are_matched_without_case() {
+        assert!(kept(&json!({"linetype": "Continuous"}), &json!({"linetype": "CONTINUOUS"}), 0));
+        assert!(changed_fields(&json!({"textStyle": "Standard"}), &json!({"textStyle": "STANDARD"})).is_empty());
+        // Text is compared as it is.
+        assert!(!kept(&json!({"contents": "Abc"}), &json!({"contents": "ABC"}), 0));
+    }
+
+    #[test]
+    fn anonymous_block_numbers_are_not_content() {
+        let dim = |b: &str| content(json!({"type": "dimension", "block": b, "text": "<>"}));
+        assert_eq!(dim("*D20"), dim("*D7"));
+        let ins = |b: &str| content(json!({"type": "insert", "block": b}));
+        assert_eq!(ins("*U2"), ins("*U3"));
+        // A named block is content.
+        assert_ne!(ins("Door"), ins("Window"));
+        assert_ne!(ins("*Model_Space"), ins("*Paper_Space"));
     }
 }
