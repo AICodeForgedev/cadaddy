@@ -4376,8 +4376,9 @@ const MAX_STAMP_SHEETS: usize = 40;
 const MAX_STAMPED: usize = 20_000;
 
 /// A room smaller than this (square feet) is no room of its own when a bigger room of its level
-/// carries its number: a sliver of that room traced from its label (a tub, a closet's corner).
-const SCRAP_SF: f64 = 10.0;
+/// carries its number (or, unnumbered, its name): a sliver of that room traced from its label (a
+/// tub, a closet's corner).
+const SCRAP_SF: f64 = 15.0;
 
 /// Removes the scraps ([`SCRAP_SF`]); how many.
 fn drop_numbered_scraps(s: &mut Session) -> Result<usize> {
@@ -4395,11 +4396,12 @@ fn numbered_scraps(rooms: &[super::bspec::RoomElement]) -> Vec<cadaddy_doc::Hand
         .iter()
         .filter(|r| r.area_sf < SCRAP_SF)
         .filter(|r| {
-            r.number.as_deref().is_some_and(|n| {
-                rooms.iter().any(|o| {
-                    o.handle != r.handle && o.level == r.level && o.area_sf >= SCRAP_SF && o.number.as_deref().is_some_and(|m| norm(m) == norm(n))
-                })
-            })
+            let bigger = |o: &&super::bspec::RoomElement| o.handle != r.handle && o.level == r.level && o.area_sf >= SCRAP_SF;
+            match r.number.as_deref() {
+                Some(n) => rooms.iter().filter(bigger).any(|o| o.number.as_deref().is_some_and(|m| norm(m) == norm(n))),
+                // Unnumbered: by its name, a real one (not the bare "Room").
+                None => !norm(&r.name).is_empty() && norm(&r.name) != "ROOM" && rooms.iter().filter(bigger).any(|o| norm(&o.name) == norm(&r.name)),
+            }
         })
         .map(|r| r.handle)
         .collect()
@@ -7192,8 +7194,14 @@ mod tests {
             room(3, "Level 1", Some("120A"), 6.0),
             room(4, "Level 2", Some("119"), 4.0),
             room(5, "Level 1", None, 3.0),
+            // A 13 sf sliver of 119; an unnumbered sliver named as a bigger room of its level.
+            room(6, "Level 1", Some("119"), 13.0),
         ];
-        assert_eq!(numbered_scraps(&rooms), vec![cadaddy_doc::Handle(2)]);
+        assert_eq!(numbered_scraps(&rooms), vec![cadaddy_doc::Handle(2), cadaddy_doc::Handle(6)]);
+        let mut named = rooms.to_vec();
+        named[4].name = "SINGLE Q ADA".into();
+        named[0].name = "SINGLE Q ADA".into();
+        assert!(numbered_scraps(&named).contains(&cadaddy_doc::Handle(5)), "an unnumbered sliver named as room 119");
     }
 
     #[test]
