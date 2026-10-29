@@ -2795,6 +2795,7 @@ fn page_setup(t: &T) -> PageSetup {
     if let Some(s) = pos(ratio).or_else(|| pos(t.f(147))) {
         p.scale = s;
     }
+    p.plot_window = [t.f(48), t.f(49), t.f(140), t.f(141)].map(|v| v.filter(|v| v.is_finite()).unwrap_or(0.0));
     p.plot_area = match t.i(74) {
         Some(0) => "display",
         Some(1) => "extents",
