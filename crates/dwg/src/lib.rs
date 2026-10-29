@@ -460,13 +460,32 @@ mod native {
     /// Convert DXF bytes into a DWG file of the DXF's version, and at least AutoCAD 2004
     /// (AC1018).
     pub fn dxf_to_dwg(dxf: &[u8]) -> Result<Vec<u8>, String> {
-        convert(dxf, None)
+        convert(dxf, None, None)
     }
 
     /// Convert DXF bytes into a DWG file of `version`, a code from [`super::VERSIONS`] ("AC1032"),
     /// whatever version the DXF declares.
     pub fn dxf_to_dwg_as(dxf: &[u8], version: &str) -> Result<Vec<u8>, String> {
-        let v = match version.trim().to_ascii_uppercase().as_str() {
+        convert(dxf, Some(writable(version)?), None)
+    }
+
+    /// Like [`dxf_to_dwg_as`], for a DXF that declares an older version than the groups it carries
+    /// over from another file. CADCraft's R2000 DWG bridge holds the objects it keeps without
+    /// modelling them (render settings, fields, associative and dynamic block data) as they were
+    /// read from a file of version `kept` ("AC1032"), and acadrust reads several of those
+    /// differently by version: read as R2000, an AC1032 file's mental ray render settings came out
+    /// a class version too high, for which the ODA rejects the whole DWG, and a field lost its
+    /// cached value. So the DXF is read as `kept` declares. A `kept` version that is unknown, or
+    /// not newer than the DXF's own, changes nothing.
+    pub fn dxf_to_dwg_kept_as(dxf: &[u8], version: &str, kept: &str) -> Result<Vec<u8>, String> {
+        let kept = acadrust::DxfVersion::from_version_string(kept.trim().to_ascii_uppercase().as_str());
+        let kept = (kept != acadrust::DxfVersion::Unknown).then_some(kept);
+        convert(dxf, Some(writable(version)?), kept)
+    }
+
+    /// The DWG version for a code from [`super::VERSIONS`].
+    fn writable(version: &str) -> Result<acadrust::DxfVersion, String> {
+        Ok(match version.trim().to_ascii_uppercase().as_str() {
             "AC1015" => acadrust::DxfVersion::AC1015,
             "AC1018" => acadrust::DxfVersion::AC1018,
             "AC1021" => acadrust::DxfVersion::AC1021,
@@ -474,8 +493,66 @@ mod native {
             "AC1027" => acadrust::DxfVersion::AC1027,
             "AC1032" => acadrust::DxfVersion::AC1032,
             _ => return Err(super::unsupported(version)),
+        })
+    }
+
+    /// The ASCII DXF with its `$ACADVER` set to `kept` when that is newer than the version it
+    /// declares, or `None` to read it as it is (binary, no `$ACADVER`, or non-ASCII text without a
+    /// `$DWGCODEPAGE` to decode it by). From AutoCAD 2007 (AC1021) a DXF is UTF-8, so other bytes
+    /// are first decoded with the code page the DXF declares; `\U+XXXX` escapes read the same in
+    /// every version, and CADCraft's R2000 DXF is ASCII with such escapes.
+    pub(super) fn declare_version(dxf: &[u8], kept: acadrust::DxfVersion) -> Option<Vec<u8>> {
+        if dxf.starts_with(b"AutoCAD Binary DXF") {
+            return None;
+        }
+        let (_, declared) = header_value(dxf, b"$ACADVER")?;
+        let declared = acadrust::DxfVersion::from_version_string(std::str::from_utf8(declared).ok()?);
+        if declared >= kept {
+            return None;
+        }
+        let text: std::borrow::Cow<'_, [u8]> = if dxf.is_ascii() || kept < acadrust::DxfVersion::AC1021 {
+            std::borrow::Cow::Borrowed(dxf)
+        } else {
+            // As acadrust decodes an older DXF: by its code page, Windows-1252 for one it doesn't
+            // know; a code page that names UTF-8 needs no decoding.
+            let (_, code_page) = header_value(dxf, b"$DWGCODEPAGE")?;
+            match acadrust::io::dxf::code_page::encoding_from_code_page(std::str::from_utf8(code_page).ok()?) {
+                Some(encoding) => {
+                    let (text, errors) = encoding.decode_without_bom_handling(dxf);
+                    if errors {
+                        return None;
+                    }
+                    std::borrow::Cow::Owned(text.into_owned().into_bytes())
+                }
+                None => std::borrow::Cow::Borrowed(std::str::from_utf8(dxf).ok()?.as_bytes()),
+            }
         };
-        convert(dxf, Some(v))
+        let (at, value) = header_value(&text, b"$ACADVER")?;
+        let code = kept.to_string();
+        let mut out = Vec::with_capacity(text.len().saturating_add(code.len()));
+        out.extend_from_slice(text.get(..at)?);
+        out.extend_from_slice(code.as_bytes());
+        out.extend_from_slice(text.get(at.checked_add(value.len())?..)?);
+        Some(out)
+    }
+
+    /// The byte offset and the trimmed value of header variable `name` in an ASCII DXF: the value
+    /// line after the group code that follows the `9` group naming it. Only the HEADER section
+    /// (up to the first `ENDSEC`) is searched; lines may end in `\r\n`.
+    fn header_value<'a>(dxf: &'a [u8], name: &[u8]) -> Option<(usize, &'a [u8])> {
+        let mut lines: Vec<(usize, &[u8])> = Vec::new();
+        let mut offset = 0usize;
+        for line in dxf.split(|b| *b == b'\n') {
+            let trimmed = line.trim_ascii();
+            let lead = line.len() - line.trim_ascii_start().len();
+            lines.push((offset.saturating_add(lead), trimmed));
+            offset = offset.saturating_add(line.len()).saturating_add(1);
+            if trimmed == b"ENDSEC" {
+                break;
+            }
+        }
+        let at = lines.windows(2).position(|w| w[0].1 == b"9" && w[1].1 == name)?;
+        lines.get(at.checked_add(3)?).copied()
     }
 
     /// The current dimension and text styles' names from their handles: a DWG stores the
@@ -512,7 +589,8 @@ mod native {
         }
     }
 
-    fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
+    /// `kept`: the version the DXF's carried-over groups were read from ([`dxf_to_dwg_kept_as`]).
+    fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>, kept: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
         // Reject a pathologically large DXF before handing it to the third-party decoder, which
         // allocates tables and section buffers from the input's declared sizes and cannot be
         // interrupted once it starts (CWE-789). This bounds the large-input variant; the decoder
@@ -524,7 +602,18 @@ mod native {
                 mb(Limits::DEFAULT.max_dxf_bytes as u64)
             ));
         }
-        let data = dxf.to_vec();
+        // Decoding a code page to UTF-8 can grow the text, so the limit applies again.
+        let data = match kept.and_then(|k| declare_version(dxf, k)) {
+            Some(d) if d.len() > Limits::DEFAULT.max_dxf_bytes => {
+                return Err(format!(
+                    "DXF: the input is {} as UTF-8, larger than the {} CADCraft converts to DWG",
+                    mb(d.len() as u64),
+                    mb(Limits::DEFAULT.max_dxf_bytes as u64)
+                ));
+            }
+            Some(d) => d,
+            None => dxf.to_vec(),
+        };
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
             .map_err(|_| "the DXF→DWG conversion failed".to_string())?
             .map_err(|e| format!("DXF: {e}"))?;
@@ -642,7 +731,7 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as};
+pub use native::{dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_kept_as};
 
 /// The error for a DWG version CADCraft can't write.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -669,6 +758,10 @@ pub fn dxf_to_dwg(_dxf: &[u8]) -> Result<Vec<u8>, String> {
 }
 #[cfg(target_arch = "wasm32")]
 pub fn dxf_to_dwg_as(_dxf: &[u8], _version: &str) -> Result<Vec<u8>, String> {
+    Err("DWG files can't be written in the web build yet; save as DXF".into())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn dxf_to_dwg_kept_as(_dxf: &[u8], _version: &str, _kept: &str) -> Result<Vec<u8>, String> {
     Err("DWG files can't be written in the web build yet; save as DXF".into())
 }
 
@@ -910,5 +1003,72 @@ mod tests {
         assert_eq!(ls.iter().filter(|t| t.ends_with("COMPONENT")).count(), 5, "{ls:?}");
         assert!(ls.contains(&"LSDEFINITION") && !ls.contains(&"LSINTERNALCOMPONENT"), "{ls:?}");
         assert_eq!(notes, ["DWG: 3 DGN line style components that no line style definition uses were left out"]);
+    }
+
+    /// An R2000 DXF header (`\r\n` lines, as CADCraft writes them) with `extra` after `$ACADVER`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn r2000(extra: &[u8]) -> Vec<u8> {
+        let mut dxf = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\nAC1015\r\n  9\r\n$DWGCODEPAGE\r\n  3\r\nANSI_1252\r\n".to_vec();
+        dxf.extend_from_slice(b"  0\r\nENDSEC\r\n  0\r\nSECTION\r\n  2\r\nENTITIES\r\n  0\r\nTEXT\r\n  1\r\n");
+        dxf.extend_from_slice(extra);
+        dxf.extend_from_slice(b"\r\n  0\r\nENDSEC\r\n  0\r\nEOF\r\n");
+        dxf
+    }
+
+    /// The kept version replaces only the `$ACADVER` value; everything else stays byte for byte.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn declare_version_changes_only_acadver() {
+        let dxf = r2000(b"A\\U+00E7\\U+00E3o");
+        let out = native::declare_version(&dxf, acadrust::DxfVersion::AC1032).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), String::from_utf8(dxf).unwrap().replacen("AC1015", "AC1032", 1));
+    }
+
+    /// A kept version not newer than the declared one, a binary DXF and a DXF without `$ACADVER`
+    /// are read as they are.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn declare_version_leaves_what_it_need_not_change() {
+        let dxf = r2000(b"x");
+        assert_eq!(native::declare_version(&dxf, acadrust::DxfVersion::AC1015), None);
+        assert_eq!(native::declare_version(&dxf, acadrust::DxfVersion::AC1009), None);
+        assert_eq!(native::declare_version(b"AutoCAD Binary DXF\r\n\x1a\0", acadrust::DxfVersion::AC1032), None);
+        let no_version = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  0\r\nENDSEC\r\n  0\r\nEOF\r\n";
+        assert_eq!(native::declare_version(no_version, acadrust::DxfVersion::AC1032), None);
+        // A `$ACADVER` outside the HEADER section is not the file's version.
+        let late = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  0\r\nENDSEC\r\n  9\r\n$ACADVER\r\n  1\r\nAC1015\r\n";
+        assert_eq!(native::declare_version(late, acadrust::DxfVersion::AC1032), None);
+    }
+
+    /// Declared as 2007 or later, a DXF is UTF-8: code page text is decoded first. Declared as an
+    /// older version, the code page bytes stay as they are.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn declare_version_decodes_a_code_page_for_utf8_versions() {
+        let dxf = r2000(b"A\xe7\xe3o");
+        let utf8 = native::declare_version(&dxf, acadrust::DxfVersion::AC1032).unwrap();
+        let text = String::from_utf8(utf8).unwrap();
+        assert!(text.contains("\r\nAção\r\n") && text.contains("$ACADVER\r\n  1\r\nAC1032\r\n"), "{text}");
+        let legacy = native::declare_version(&dxf, acadrust::DxfVersion::AC1018).unwrap();
+        assert!(legacy.windows(4).any(|w| w == b"A\xe7\xe3o"), "the code page bytes stay");
+        assert!(legacy.windows(6).any(|w| w == b"AC1018"));
+        // A code page it doesn't know is read as Windows-1252, as acadrust reads an older DXF.
+        let at = dxf.windows(9).position(|w| w == b"ANSI_1252").unwrap();
+        let unknown = [&dxf[..at], b"NO_SUCH_CP".as_slice(), &dxf[at + 9..]].concat();
+        let text = String::from_utf8(native::declare_version(&unknown, acadrust::DxfVersion::AC1032).unwrap()).unwrap();
+        assert!(text.contains("\r\nAção\r\n"), "{text}");
+        // Without a `$DWGCODEPAGE` there is nothing to decode it by: it is read as it is.
+        let none = [&dxf[..at - 21], &dxf[at + 11..]].concat();
+        assert!(!none.windows(12).any(|w| w == b"$DWGCODEPAGE"), "{}", String::from_utf8_lossy(&none));
+        assert_eq!(native::declare_version(&none, acadrust::DxfVersion::AC1032), None);
+    }
+
+    /// An unknown kept version converts as [`dxf_to_dwg_as`] does.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn unknown_kept_version_converts_as_before() {
+        let dxf = r2000(b"x");
+        assert_eq!(dxf_to_dwg_kept_as(&dxf, "AC1032", "AC9999"), dxf_to_dwg_as(&dxf, "AC1032"));
+        assert!(dxf_to_dwg_kept_as(&dxf, "AC0000", "AC1032").is_err(), "an unwritable version is still an error");
     }
 }
