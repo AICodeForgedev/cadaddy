@@ -3252,6 +3252,11 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
             // Table groups where the file version has them, else xdata.
             let pre2007_dwg = cx.dwg && cx.target < Version::R2007;
             if !own && version >= dxf_ext::newer_since(*code) && !pre2007_dwg {
+                // DIMTFILL and DIMTFILLCLR are written only when set, as other writers do, so a
+                // style without a text background has a single 70 (its flags).
+                if matches!(*code, 69 | 70) && v.get(*field) == defaults.get(*field) {
+                    continue;
+                }
                 w.dimval(*code, enc, false);
             } else if v.get(*field) != defaults.get(*field) || (pre2007_dwg && !own) {
                 newer.i(1070, i64::from(*code));

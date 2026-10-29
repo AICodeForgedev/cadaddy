@@ -213,8 +213,13 @@ fn a_named_block_defined_differently_in_the_other_drawing_shows_the_other_defini
             arrow_size: 1.0,
             spline: false,
             block: Some(insert("SYMBOL")),
+            roots: Vec::new(),
+            leader_color: None,
+            leader_linetype: None,
+            arrow: None,
+            text_frame: false,
         };
-        part.entities.push(Entity::new(Handle(first + 2), EntityKind::MLeader(leader)));
+        part.entities.push(Entity::new(Handle(first + 2), EntityKind::MLeader(Box::new(leader))));
         let mut sub = Block::new("SUB");
         sub.base = Vec3::new(sub_base, 0.0, 0.0);
         sub.entities.push(Entity::new(Handle(first + 3), line(2.0)));
@@ -315,7 +320,7 @@ fn a_named_block_whose_dimension_draws_another_block_shows_the_other_definition(
     };
     let blocks = |dim_end: f64, first: u64| {
         let mut part = Block::new("PART");
-        part.entities.push(Entity::new(Handle(first), EntityKind::Dimension(dim.clone())));
+        part.entities.push(Entity::new(Handle(first), EntityKind::Dimension(Box::new(dim.clone()))));
         let mut drawn = Block::new("*D1");
         drawn.entities.push(Entity::new(Handle(first + 1), line(dim_end)));
         [part, drawn]
@@ -351,6 +356,13 @@ fn a_named_block_whose_dimension_draws_another_block_shows_the_other_definition(
         .unwrap_or_default();
     assert_eq!(drawn, [Some("*D2".to_string())], "the other drawing's PART is copied with its dimension block");
     assert_eq!(ends(&s, "*D2"), vec![5.0]);
+    // The colored copies redraw their dimensions instead of keeping colored copies of `*D` blocks.
+    let d = s.doc().unwrap();
+    let dim_copy = |n: &str| {
+        n.starts_with("COMPARE_")
+            && n.rsplit('_').next().is_some_and(|t| t.len() > 1 && t.starts_with('D') && t[1..].bytes().all(|c| c.is_ascii_digit()))
+    };
+    assert!(!d.blocks.keys().any(|n| dim_copy(n)), "{:?}", d.blocks.keys().collect::<Vec<_>>());
 }
 
 #[test]
@@ -378,7 +390,7 @@ fn a_named_block_whose_dimension_block_has_another_generated_name_keeps_this_dra
             marks: Default::default(),
         };
         let mut part = Block::new("PART");
-        part.entities.push(Entity::new(Handle(first), EntityKind::Dimension(dim)));
+        part.entities.push(Entity::new(Handle(first), EntityKind::Dimension(Box::new(dim))));
         let mut drawn = Block::new(drawn_name);
         drawn.entities.push(Entity::new(Handle(first + 1), line(1.0)));
         [part, drawn]
@@ -495,7 +507,7 @@ fn a_dimension_block_copy_keeps_its_geometry_when_the_snapshot_is_saved() {
     let mut drawn = Block::new("*D1");
     drawn.entities.push(Entity::new(Handle(0x701), line(123.0)));
     s.doc_mut().unwrap().blocks.insert("*D1".into(), Arc::new(drawn));
-    s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Dimension(dim)).unwrap();
+    s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Dimension(Box::new(dim))).unwrap();
     s.open_drawing(Drawing::new_imperial(), "Other", None);
     s.execute("document.switch", &json!({"index": 0})).unwrap();
     s.execute("compare", &json!({"document": "Other"})).unwrap();
@@ -624,7 +636,7 @@ fn inline_colors_of_multiline_attributes_are_replaced() {
     };
     let mut s = Session::new();
     let mut part = Block::new("PART");
-    part.entities.push(Entity::new(Handle(0x700), EntityKind::AttDef(attrib("\\C1;x"))));
+    part.entities.push(Entity::new(Handle(0x700), EntityKind::AttDef(Box::new(attrib("\\C1;x")))));
     s.doc_mut().unwrap().blocks.insert("PART".into(), Arc::new(part));
     let reference = Insert { attribs: vec![attrib("\\C3;x")], ..insert("PART") };
     s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Insert(reference)).unwrap();
