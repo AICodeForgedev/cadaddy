@@ -200,6 +200,11 @@ pub enum Read {
 /// The chunk at `at`, and where the next one starts.
 pub(super) fn chunk_at(b: &[u8], at: usize) -> Option<(Read, usize)> {
     let tag: [u8; 4] = b.get(at..at.checked_add(4)?)?.try_into().ok()?;
+    // Tags are letters and digits: a run of zeros (a file padded at the end) is not a million
+    // empty chunks.
+    if !tag.iter().all(u8::is_ascii_alphanumeric) {
+        return None;
+    }
     let version = u16_at(b, at + 4)?;
     let flags = u16_at(b, at + 6)?;
     let len = u64_at(b, at + 8)?;
@@ -374,6 +379,27 @@ pub fn find(b: &[u8], tag: &[u8; 4]) -> Option<Chunk> {
         Read::Ok(c) if &c.tag == tag => Some(c),
         _ => None,
     }
+}
+
+/// Where the last complete save ends (the end of its trailer) when bytes follow it: the file's
+/// length minus that, i.e. the bytes appended after the end; `None` when the file ends at a
+/// trailer or no complete save is found.
+pub(super) fn trailing_bytes(b: &[u8]) -> Option<u64> {
+    let m = TRAILER_MAGIC.len();
+    let mut end = b.len();
+    // The last few places a trailer could end: more than that is garbage, not an appended save.
+    for _ in 0..16 {
+        let pos = b.get(..end)?.windows(m).rposition(|w| w == TRAILER_MAGIC)?;
+        let save_end = pos + m;
+        if save_end < TRAILER_LEN {
+            return None;
+        }
+        if index(b.get(..save_end)?).is_some() {
+            return (save_end < b.len()).then(|| (b.len() - save_end) as u64);
+        }
+        end = pos;
+    }
+    None
 }
 
 /// The index entries, when trailer and index are sound.

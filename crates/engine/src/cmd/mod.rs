@@ -166,7 +166,7 @@ pub mod wallgen;
 pub use props::MatchProps;
 pub mod actions;
 pub(crate) mod qselect;
-mod render;
+pub(crate) mod render;
 pub mod rulemodel;
 mod sections;
 mod selecttools;
@@ -192,6 +192,7 @@ pub mod curves;
 pub mod helpers;
 pub mod machines;
 pub mod options;
+pub mod typed_ask;
 
 use cadaddy_doc::Handle;
 use cadaddy_geom::Vec2;

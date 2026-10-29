@@ -696,3 +696,56 @@ fn remote_presents_the_control_token_first() {
         assert_eq!(first["params"]["token"], token);
     }
 }
+
+/// B4-032: a tool call with an argument the tool doesn't have still runs, and says so.
+#[test]
+fn unknown_tool_arguments_are_warned_about() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let r = call(&mut s, 1, "tools/call", json!({"name": "list_commands", "arguments": {"filter": "circle", "zzz": 1}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    let text = r["result"]["content"].as_array().unwrap().iter().map(|c| c["text"].as_str().unwrap_or("")).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("`zzz` is not a parameter of list_commands"), "{text}");
+    // Known arguments alone: no warning.
+    let r = call(&mut s, 2, "tools/call", json!({"name": "list_commands", "arguments": {"filter": "circle"}}));
+    assert!(!r.to_string().contains("is not a parameter"), "{r}");
+    // A tool with no arguments warns too.
+    let r = call(&mut s, 3, "tools/call", json!({"name": "cancel", "arguments": {"force": true}}));
+    assert!(r.to_string().contains("`force` is not a parameter of cancel"), "{r}");
+}
+
+/// B4-032: a schema error is worded for people, not as the JSON Schema it came from.
+#[test]
+fn argument_errors_are_plain_words() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let msg = |s: &mut Server, name: &str, args: Value| {
+        call(s, 1, "tools/call", json!({"name": name, "arguments": args}))["error"]["message"].as_str().unwrap_or("").to_string()
+    };
+    assert_eq!(msg(&mut s, "undo", json!({"count": "x"})), "`count` of `undo` must be a whole number \u{2265} 1");
+    assert_eq!(msg(&mut s, "undo", json!({"count": 0})), "`count` of `undo` must be a whole number \u{2265} 1");
+    assert_eq!(msg(&mut s, "get_variable", json!({"name": 5})), "`name` of `get_variable` must be text");
+    assert_eq!(msg(&mut s, "select", json!({"all": "yes"})), "`all` of `select` must be true or false");
+    assert_eq!(msg(&mut s, "render", json!({"window": [1]})), "`window` of `render` must be a list of 2 lists of 2 numbers");
+    for bad in ["{", "}", "\"type\"", "minimum"] {
+        for args in [json!({"count": "x"}), json!({"count": 0})] {
+            assert!(!msg(&mut s, "undo", args).contains(bad), "raw schema in the message");
+        }
+    }
+}
+
+/// B4-019: a cancel that arrives while a call runs reaches it: the reader thread sets the cancel
+/// request as soon as the line is read, before the calls ahead of it are answered.
+#[test]
+fn serve_cancellable_passes_cancels_on_while_serving() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let lines = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+        json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}}),
+    ];
+    let input = lines.iter().map(|l| format!("{l}\n")).collect::<String>();
+    let mut out = Vec::new();
+    s.serve_cancellable(std::io::Cursor::new(input.into_bytes()), &mut out).unwrap();
+    let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(replies[0]["id"], 1);
+    assert!(cadaddy_engine::cancel_pending());
+}

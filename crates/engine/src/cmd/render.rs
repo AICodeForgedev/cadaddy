@@ -16,11 +16,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("render", "Render", run_render)
             .menu(&["View", "Render", "Render"])
             .alias(&["rr"])
-            .params("{preset?: draft|medium|high, samples?, bounces?, width?, height? (pixels; the view's size), denoise? (true), output?: path (.png or .jpg), crop?: [[x0,y0],[x1,y1]] (pixels)} → {width, height, samples, seconds, secondsPerSample, output?}")
+            .params("{preset?: draft|medium|high, samples? (1 to 65536), bounces?, width?, height? (pixels; the view's size), denoise? (true), output?: path (.png or .jpg), path?: same as output, crop?: [[x0,y0],[x1,y1]] (pixels)} → {width, height, samples, seconds, secondsPerSample, output?}")
             .noundo(),
         CommandSpec::new("rendercrop", "Render Region", run_rendercrop)
             .menu(&["View", "Render", "Render Region"])
-            .params("{corner1: [x,y], corner2: [x,y] (on the view), preset?, samples?, output?}")
+            .params("{corner1: [x,y], corner2: [x,y] (on the view), preset?, samples?, output?, path?: same as output}")
             .noundo()
             .interactive(|_| Ok(Box::new(CropM::default()))),
         // Saved from the Render window (its Save button); scripts and agents give the path.
@@ -30,6 +30,24 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["renderenv"])
             .params("{background?: {kind: sky|solid|gradient|image, color?, bottom?, top?, path? (image: PNG, JPEG, BMP, TIFF)}, fog?: {enabled, color?: [r,g,b] 0-1, near?, far? (distances in drawing units from the front of the model, along the view)}, ibl?: path (a Radiance .hdr file) | null, exposure?: stops, whiteBalance?: {temperature?: kelvin, tint?: -1 to 1}} → {environment}: the live view and RENDER show it"),
     ]
+}
+
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Ask the running RENDER (if any) to stop at its next sample pass. Safe to call from any thread;
+/// the MCP server calls it when a `notifications/cancelled` or the `cancel` tool arrives.
+pub fn request_cancel() {
+    CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether a cancel has been asked for and no render has taken it yet.
+pub fn cancel_pending() -> bool {
+    CANCEL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether a cancel was requested; clears the request.
+fn take_cancel() -> bool {
+    CANCEL.swap(false, std::sync::atomic::Ordering::Relaxed)
 }
 
 fn other(m: impl Into<String>) -> crate::EngineError {
@@ -88,6 +106,7 @@ fn size(p: &Value, key: &str) -> Result<Option<u32>> {
 
 /// Render the current view, keep the image (and write it to `output`).
 fn render(s: &mut Session, p: &Value, crop: Option<(u32, u32, u32, u32)>) -> Result<Value> {
+    take_cancel();
     let (samples, mut opts) = options(p)?;
     opts.crop = crop;
     let (view, w, h) = view_of(s, size(p, "width")?, size(p, "height")?)?;
@@ -108,7 +127,11 @@ fn render(s: &mut Session, p: &Value, crop: Option<(u32, u32, u32, u32)>) -> Res
     let mut lit = sc.lighting.clone().unwrap_or_else(|| cadaddy_render::light::Lighting::of(d, &Space::Model));
     apply_environment(s, &mut lit)?;
     let mut r = Render::new(sc, view, lit, opts);
-    for _ in 0..samples {
+    for done in 0..samples {
+        // Between sample passes: an MCP cancel stops the render within one pass.
+        if take_cancel() {
+            return Err(other(format!("Render cancelled after {done} of {samples} samples.")));
+        }
         r.pass();
     }
     let image = Arc::new(r.image());
@@ -116,7 +139,7 @@ fn render(s: &mut Session, p: &Value, crop: Option<(u32, u32, u32, u32)>) -> Res
     let serial = s.last_render.as_ref().map_or(1, |l| l.serial + 1);
     s.last_render = Some(RenderResult { image, samples: r.samples, seconds: r.seconds, seconds_per_sample: r.seconds_per_sample(), serial });
     let mut out = out;
-    if let Some(path) = str_param(p, "output") {
+    if let Some(path) = str_param(p, "output").or_else(|| str_param(p, "path")) {
         save(s, path)?;
         if let Some(o) = out.as_object_mut() {
             o.insert("output".into(), json!(path));

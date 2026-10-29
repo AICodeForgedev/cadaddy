@@ -454,10 +454,138 @@ pub fn format_angle_list(angles: &[f64]) -> String {
     angles.iter().map(|a| format!("{}", (a.to_degrees() * 1e6).round() / 1e6)).collect::<Vec<_>>().join(";")
 }
 
+/// How a numeric variable's value is bounded.
+#[derive(Clone, Copy)]
+enum Bound {
+    /// A whole number from the first to the second.
+    Whole(i64, i64),
+    /// A number from the first to the second.
+    Between(f64, f64),
+    /// A number greater than 0 (and at most [`Bound::LARGEST`]).
+    Positive,
+}
+
+impl Bound {
+    /// The largest coordinate or size a value may be (the export limit).
+    const LARGEST: f64 = 1e12;
+    /// A number of 0 or more.
+    const NONNEGATIVE: Bound = Bound::Between(0.0, Bound::LARGEST);
+}
+
+/// AutoCAD's ranges for the numeric variables that have one (SETVAR refuses the rest with its
+/// own message: "Requires an integer value between 0 and 8.").
+const RANGES: &[(&str, Bound)] = &[
+    ("ANGDIR", Bound::Whole(0, 1)),
+    ("ANNOALLVISIBLE", Bound::Whole(0, 1)),
+    ("APERTURE", Bound::Between(1.0, 50.0)),
+    ("ATTMODE", Bound::Whole(0, 2)),
+    ("AUNITS", Bound::Whole(0, 4)),
+    ("AUPREC", Bound::Whole(0, 8)),
+    ("CELTSCALE", Bound::Positive),
+    ("CENTEREXE", Bound::NONNEGATIVE),
+    ("CHAMFERA", Bound::NONNEGATIVE),
+    ("CHAMFERB", Bound::NONNEGATIVE),
+    ("CHAMFERC", Bound::NONNEGATIVE),
+    ("CIRCLERAD", Bound::NONNEGATIVE),
+    ("CURSORSIZE", Bound::Between(1.0, 100.0)),
+    ("DIMADEC", Bound::Whole(-1, 8)),
+    ("DIMALTD", Bound::Whole(0, 8)),
+    ("DIMALTF", Bound::Positive),
+    ("DIMALTRND", Bound::NONNEGATIVE),
+    ("DIMALTTD", Bound::Whole(0, 8)),
+    ("DIMALTTZ", Bound::Whole(0, 15)),
+    ("DIMALTU", Bound::Whole(1, 8)),
+    ("DIMALTZ", Bound::Whole(0, 15)),
+    ("DIMARCSYM", Bound::Whole(0, 2)),
+    ("DIMASZ", Bound::NONNEGATIVE),
+    ("DIMATFIT", Bound::Whole(0, 3)),
+    ("DIMAUNIT", Bound::Whole(0, 4)),
+    ("DIMAZIN", Bound::Whole(0, 3)),
+    ("DIMDEC", Bound::Whole(0, 8)),
+    ("DIMDLI", Bound::NONNEGATIVE),
+    ("DIMEXE", Bound::NONNEGATIVE),
+    ("DIMFRAC", Bound::Whole(0, 2)),
+    ("DIMFXL", Bound::NONNEGATIVE),
+    ("DIMJOGANG", Bound::Between(5.0, 90.0)),
+    ("DIMJUST", Bound::Whole(0, 4)),
+    ("DIMLUNIT", Bound::Whole(1, 6)),
+    ("DIMRND", Bound::NONNEGATIVE),
+    ("DIMSCALE", Bound::NONNEGATIVE),
+    ("DIMTAD", Bound::Whole(0, 4)),
+    ("DIMTDEC", Bound::Whole(0, 8)),
+    ("DIMTFAC", Bound::Positive),
+    ("DIMTFILL", Bound::Whole(0, 2)),
+    ("DIMTMOVE", Bound::Whole(0, 2)),
+    ("DIMTOLJ", Bound::Whole(0, 2)),
+    ("DIMTSZ", Bound::NONNEGATIVE),
+    ("DIMTXT", Bound::Positive),
+    ("DIMTZIN", Bound::Whole(0, 3)),
+    ("DIMZIN", Bound::Whole(0, 15)),
+    ("DONUTID", Bound::NONNEGATIVE),
+    ("DONUTOD", Bound::Positive),
+    ("FILLETRAD", Bound::NONNEGATIVE),
+    ("FILLMODE", Bound::Whole(0, 1)),
+    ("GRIDMAJOR", Bound::Whole(1, 100)),
+    ("GRIPSIZE", Bound::Between(1.0, 255.0)),
+    ("HPSCALE", Bound::Positive),
+    ("HPSPACE", Bound::Positive),
+    ("INSUNITS", Bound::Whole(0, 24)),
+    ("LENSLENGTH", Bound::Positive),
+    ("LTSCALE", Bound::Positive),
+    ("LUNITS", Bound::Whole(1, 5)),
+    ("LUPREC", Bound::Whole(0, 8)),
+    ("MAXARRAY", Bound::Whole(100, 10_000_000)),
+    ("MEASUREMENT", Bound::Whole(0, 1)),
+    ("MIRRTEXT", Bound::Whole(0, 1)),
+    ("MLEADERSCALE", Bound::NONNEGATIVE),
+    ("PICKBOX", Bound::Between(0.0, 50.0)),
+    ("PLINEWID", Bound::NONNEGATIVE),
+    ("PSLTSCALE", Bound::Whole(0, 1)),
+    ("PSVPSCALE", Bound::NONNEGATIVE),
+    ("REVCLOUDARCLEN", Bound::Positive),
+    ("SKETCHINC", Bound::Positive),
+    ("TEXTSIZE", Bound::Positive),
+    ("TRACEWID", Bound::NONNEGATIVE),
+    ("USERI1", Bound::Whole(-32768, 32767)),
+    ("USERI2", Bound::Whole(-32768, 32767)),
+    ("USERI3", Bound::Whole(-32768, 32767)),
+    ("USERI4", Bound::Whole(-32768, 32767)),
+    ("USERI5", Bound::Whole(-32768, 32767)),
+];
+
+/// Why `v` is outside the range AutoCAD gives variable `n`; `None` when it is inside, has no
+/// range here, or isn't a number (the variable's own check says what it takes then).
+fn out_of_range(n: &str, v: &Value) -> Option<String> {
+    let x = v.as_f64().or_else(|| v.as_str().and_then(|t| t.trim().parse::<f64>().ok()))?;
+    // PDMODE: 0-4, plus 32, 64 or 96 for the shape around the point.
+    if n == "PDMODE" {
+        let ok = x.fract() == 0.0 && (0.0..=100.0).contains(&x) && (x as i64 & 31) <= 4;
+        return (!ok).then(|| "PDMODE must be 0 to 4, 32 to 36, 64 to 68 or 96 to 100.".to_string());
+    }
+    let (_, bound) = RANGES.iter().find(|(name, _)| *name == n)?;
+    let fits = match *bound {
+        Bound::Whole(lo, hi) => x.fract() == 0.0 && x >= lo as f64 && x <= hi as f64,
+        Bound::Between(lo, hi) => x.is_finite() && x >= lo && x <= hi,
+        Bound::Positive => x.is_finite() && x > 0.0 && x <= Bound::LARGEST,
+    };
+    if fits {
+        return None;
+    }
+    Some(match *bound {
+        Bound::Whole(lo, hi) => format!("{n} must be a whole number from {lo} to {hi}."),
+        Bound::Between(lo, hi) if hi >= Bound::LARGEST => format!("{n} must be {lo} or more."),
+        Bound::Between(lo, hi) => format!("{n} must be from {lo} to {hi}."),
+        Bound::Positive => format!("{n} must be greater than 0."),
+    })
+}
+
 pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     let n = name.trim().to_ascii_uppercase();
     if is_read_only(&n) {
         return Err(EngineError::BadParams { cmd: "setvar".into(), msg: format!("{n} is read-only") });
+    }
+    if let Some(why) = out_of_range(&n, v) {
+        return Err(EngineError::BadParams { cmd: "setvar".into(), msg: why });
     }
     // A routine or script can't loosen what loads routines and scripts.
     if matches!(n.as_str(), "SECURELOAD" | "TRUSTEDPATHS") && s.running_code() {

@@ -242,6 +242,11 @@ fn kept_back(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     }
 }
 
+/// `bytes` without a leading UTF-8 byte-order mark (some editors and exporters write one).
+fn without_bom(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
+}
+
 /// Read a drawing; the format comes from the content (DXF ASCII/binary, DWG) or the name
 /// (SVG and gzip-compressed SVGZ); a .cdy file is known by its content.
 pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
@@ -267,13 +272,20 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
             d.read_notes.extend(r.notes);
             Ok(d)
         }
-        "dxf" | "" => dxf_read::read(&kept_back(bytes)),
+        "dxf" | "" => dxf_read::read(&kept_back(without_bom(bytes))),
         "obj" => mesh3d_io::read_obj(bytes, name),
         "stl" => mesh3d_io::read_stl(bytes),
         "glb" | "gltf" => mesh3d_io::read_gltf(bytes, name),
         "ifc" => ifc::read_ifc(bytes),
-        e if bytes.len() > 4 => dxf_read::read(bytes).map_err(|_| IoError::Unsupported(e.to_string())),
-        e => Err(IoError::Unsupported(e.to_string())),
+        e => {
+            // A name that says one thing and content that is another: say so, not "unsupported".
+            let wrong = |e: &str| match e {
+                "dwg" => IoError::Format("not a DWG file (no AC10xx header)".into()),
+                "cdy" => IoError::Format("not a CADaddy .cdy file".into()),
+                e => IoError::Unsupported(e.to_string()),
+            };
+            if bytes.len() > 4 { dxf_read::read(without_bom(bytes)).map_err(|_| wrong(e)) } else { Err(wrong(e)) }
+        }
     }
 }
 

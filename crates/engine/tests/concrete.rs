@@ -367,7 +367,8 @@ fn hostile_concrete_never_panics() {
         ("mep.qty", json!({})),
     ] {
         let r = s.execute(cmd, &p);
-        assert!(r.is_ok(), "{cmd}: {r:?}");
+        // The model of absurd sizes is refused (beyond the export limit), not built.
+        assert!(r.is_ok() || r.as_ref().is_err_and(|e| e.to_string().contains("too large")), "{cmd}: {r:?}");
         if let Ok(v) = r {
             assert!(!v.to_string().contains("NaN"), "{cmd}");
         }
