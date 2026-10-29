@@ -4,7 +4,7 @@
 //! viewport fit the new sheet.
 
 use cadaddy_engine::Session;
-use cadaddy_engine::cmd::file::{IoHooks, set_io};
+use cadaddy_engine::cmd::file::{IoHooks, set_io, set_pdf_merge};
 use cadaddy_engine::doc::geom::{Bounds2, Vec2, Vec3};
 use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Line, Space, Viewport};
 use serde_json::{Value, json};
@@ -18,6 +18,7 @@ fn plot_hooks() {
         read_dwf: None,
         write_dwfx: None,
     });
+    set_pdf_merge(|parts| cadaddy_io::pdf_merge::merge(parts).map_err(|e| e.to_string()));
 }
 
 fn viewports(s: &Session, layout: &str) -> Vec<Viewport> {
@@ -151,44 +152,79 @@ fn a_paper_size_change_makes_the_sheets_viewport_fit_the_new_sheet() {
 
 // ---------- PLOT and PUBLISH set up bare layouts (MUST 1) ----------
 
+/// A drawing read from a file: model content, three layouts with nothing on them.
+fn opened_without_viewports() -> Session {
+    let mut d = Drawing::new_imperial();
+    let h = d.new_handle();
+    d.space_mut(&Space::Model).unwrap().push(Entity::new(h, EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(480.0, 360.0, 0.0) })));
+    let mut extra = d.layouts[0].clone();
+    for n in ["Layout2", "Layout3"] {
+        extra.name = n.into();
+        d.layouts.push(extra.clone());
+    }
+    assert!(d.layouts.len() >= 3 && d.layouts.iter().all(|l| l.entities.is_empty()));
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Floor Plan.dwg", None);
+    s
+}
+
+/// Everything plotting must leave alone.
+fn state(s: &mut Session) -> (usize, bool, usize) {
+    let d = s.doc().unwrap();
+    let vps: usize = d.layouts.iter().map(|l| l.entities.len()).sum();
+    (d.entity_count(), s.state().unwrap().is_dirty(), vps)
+}
+
 #[test]
-fn plot_sets_up_a_new_drawings_layout_without_layout_set() {
+fn plot_does_not_change_a_new_drawing_but_plots_the_set_up_view() {
     plot_hooks();
     let mut s = Session::empty();
     s.new_drawing_with_viewports(false);
     let ext = plan(&mut s);
-    // The placeholder shows only the empty drawing's limits, not the plan.
-    assert!(!shows(&viewports(&s, "Layout1")[0], ext));
-    // PLOT without any layout.set: the layout is set up in memory before plotting.
+    let before = viewports(&s, "Layout1");
+    assert!(!shows(&before[0], ext));
+    let dirty = s.state().unwrap().is_dirty();
     let r = s.execute("plot", &json!({ "layout": "Layout1" })).unwrap();
     assert!(r.get("data").is_some() || r.get("bytes").is_some(), "plot succeeded: {r}");
-    // The viewport now shows the plan's extents.
-    let vps = viewports(&s, "Layout1");
-    assert_eq!(vps.len(), 1, "set up, not a second viewport");
-    assert!(shows(&vps[0], ext), "viewport zoomed to the plan after plot: {:?}", seen(&vps[0]));
-    // The printable area is the viewport's rectangle (same as the layout.set path).
-    let r_area = printable(&s, "Layout1");
-    assert!(vps[0].center.xy().near(r_area.center(), 1e-9));
-    assert!((vps[0].width - r_area.width()).abs() < 1e-9);
+    let after = viewports(&s, "Layout1");
+    assert_eq!(after.len(), 1);
+    assert!(!shows(&after[0], ext), "the document's viewport is untouched by the plot");
+    assert_eq!(s.state().unwrap().is_dirty(), dirty);
+    // Opening the layout still sets it up, as before.
+    s.execute("layout", &json!({ "option": "set", "name": "Layout1" })).unwrap();
+    assert!(shows(&viewports(&s, "Layout1")[0], ext));
 }
 
 #[test]
-fn publish_sets_up_empty_layouts_of_a_drawing_opened_from_a_file() {
+fn publish_and_redline_never_change_a_drawing_whose_layouts_have_no_viewport() {
     plot_hooks();
-    // A drawing with model content and empty layouts (read from a file via open_drawing).
-    let mut d = Drawing::new_imperial();
-    let h = d.new_handle();
-    d.space_mut(&Space::Model).unwrap().push(Entity::new(h, EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(480.0, 360.0, 0.0) })));
-    assert!(d.layouts.iter().all(|l| l.entities.is_empty()));
-    let mut s = Session::empty();
-    s.open_drawing(d, "Sample Floor Plan.dwg", None);
-    // Without any layout.set, publish all layouts.
+    let mut s = opened_without_viewports();
+    let before = state(&mut s);
+    assert!(!before.1, "a freshly opened drawing is not modified");
     let r = s.execute("publish", &json!({})).unwrap();
     assert!(r.get("sheets").is_some(), "publish succeeded: {r}");
-    // Layout1 now has a viewport showing the model content.
-    let vps = viewports(&s, "Layout1");
-    assert_eq!(vps.len(), 1, "a viewport was created for Layout1");
-    assert!(shows(&vps[0], Bounds2::new(Vec2::ZERO, Vec2::new(480.0, 360.0))), "viewport shows the drawing: {:?}", seen(&vps[0]));
+    assert_eq!(state(&mut s), before, "publish left the count, the flag and the layouts alone");
+    assert_eq!(s.undo().unwrap(), None, "nothing to undo");
+    let out = std::env::temp_dir().join(format!("cadaddy-plotnomodify-{}.pdf", std::process::id()));
+    let r = s.execute("redline", &json!({ "path": out.to_string_lossy() })).unwrap();
+    assert!(r.get("path").is_some(), "redline succeeded: {r}");
+    std::fs::remove_file(&out).ok();
+    assert_eq!(state(&mut s), before, "redline left the count, the flag and the layouts alone");
+    assert_eq!(s.undo().unwrap(), None, "nothing to undo after redline");
+    // Plotting each layout directly is the same.
+    for n in ["Layout1", "Layout2", "Layout3"] {
+        s.execute("plot", &json!({ "layout": n })).unwrap();
+    }
+    assert_eq!(state(&mut s), before);
+}
+
+#[test]
+fn a_layout_without_a_viewport_still_plots_the_model_through_a_temporary_view() {
+    plot_hooks();
+    let mut s = opened_without_viewports();
+    let r = s.execute("plot", &json!({ "layout": "Layout1" })).unwrap();
+    assert_eq!(r["warnings"], json!([]), "the temporary view shows the drawing, so the sheet is not blank: {r}");
+    assert!(viewports(&s, "Layout1").is_empty(), "and the document got no viewport");
 }
 
 // ---------- blank-sheet warnings (MUST 2) ----------
