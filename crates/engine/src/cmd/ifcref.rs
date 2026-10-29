@@ -380,10 +380,15 @@ fn run_attach(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
     let (classes, levels) = summary(d, &key, &spec);
     let elements: usize = classes.values().sum();
+    // What reading the file left out (a damaged IFC), as the DWG/DXF readers report it.
+    let warnings: Vec<String> = d.block(&key).map(|b| b.xref_reason.clone()).filter(|r| !r.is_empty()).into_iter().collect();
     s.echo(format!("IFC reference \"{key}\": {elements} objects in {} classes on {} storeys.", classes.len(), levels.len()));
+    for w in &warnings {
+        s.echo(w.clone());
+    }
     Ok(json!({
         "name": key, "handle": h.hex(), "file": path, "scale": r6(scale),
-        "elements": elements, "classes": classes, "levels": levels,
+        "elements": elements, "classes": classes, "levels": levels, "warnings": warnings,
     }))
 }
 

@@ -309,11 +309,17 @@ fn load_in(d: &mut Drawing, name: &str, host: Option<&Path>, chosen: bool, cx: &
     let key = b.name.clone();
     let Some(path) = b.xref_path.clone() else { return (XrefStatus::Unresolved, "not an xref".into()) };
     clear(d, &key);
+    // What reading the file left out is kept with the loaded xref (`xref_reason`), so the
+    // attach reply and OPEN's warnings can say so.
+    let mut read_loss = String::new();
     let (status, detail) = match fetch(&path, host, chosen, cx, depth) {
-        Ok((x, file)) => match import(d, &key, &x, cx) {
-            Ok(()) => (XrefStatus::Loaded, file.to_string_lossy().into_owned()),
-            Err(e) => (XrefStatus::Unresolved, e),
-        },
+        Ok((x, file)) => {
+            read_loss = x.read_notes.join("; ");
+            match import(d, &key, &x, cx) {
+                Ok(()) => (XrefStatus::Loaded, file.to_string_lossy().into_owned()),
+                Err(e) => (XrefStatus::Unresolved, e),
+            }
+        }
         Err(e) => e,
     };
     if status != XrefStatus::Loaded {
@@ -322,7 +328,7 @@ fn load_in(d: &mut Drawing, name: &str, host: Option<&Path>, chosen: bool, cx: &
     }
     set_status(d, &key, status);
     if let Some(b) = d.blocks.get_mut(&key) {
-        Arc::make_mut(b).xref_reason = if status == XrefStatus::Loaded { String::new() } else { detail.clone() };
+        Arc::make_mut(b).xref_reason = if status == XrefStatus::Loaded { read_loss } else { detail.clone() };
     }
     (status, detail)
 }
