@@ -1314,7 +1314,10 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.p(10, dm.defpt);
             let style = d.dim_style(&dm.style).cloned().unwrap_or_default();
             let g = cadaddy_render::dimension_geometry(dm, &style, d.header.f64("DIMSCALE", 1.0));
-            w.p(11, if dm.user_text_pos { dm.text_mid } else { g.text_pos.to3(0.0) });
+            // The text's middle as the file gave it, also when the text is not placed by hand: the
+            // program that drew it knows its text style better than the dimension's geometry here.
+            let stored = dm.text_mid.is_finite() && dm.text_mid != Vec3::ZERO;
+            w.p(11, if dm.user_text_pos || stored { dm.text_mid } else { g.text_pos.to3(0.0) });
             let ty: i64 = match dm.kind {
                 DimKind::Linear { .. } => 0,
                 DimKind::Aligned => 1,
@@ -2285,8 +2288,9 @@ pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>) {
     let uses_materials = !d.materials.is_empty()
         || d.layers.iter().any(|l| l.material.is_some())
         || d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())).any(|e| e.common.material.is_some());
-    let write =
-        |tags: &[Tag]| if uses_materials { cadaddy_dxf::write_ascii_as(tags, false).into_bytes() } else { cadaddy_dxf::write_binary_keeping_breaks(tags, false) };
+    let write = |tags: &[Tag]| {
+        if uses_materials { cadaddy_dxf::write_ascii_as(tags, false).into_bytes() } else { cadaddy_dxf::write_binary_keeping_breaks(tags, false) }
+    };
     if !uses_materials {
         mtext_carets_decoded(&mut tags);
     }
