@@ -43,23 +43,37 @@ from other programs; `CADADDY_DWG=native` for both ways). Each line is a gap to 
 
 | test | reading others' files | both ways | why |
 |---|---|---|---|
-| `acis_data_store::dwg_keeps_the_solids_geometry`, `solids_dxf::solids_survive_dwg`, `composites_round_trip…` | ✗ | ✗ (first) | 3DSOLID / REGION / BODY and their ACIS data aren't decoded |
-| `mesh_roundtrip::meshes_survive_dwg` | ✗ | | MESH isn't decoded |
-| `helix_roundtrip::helix_survives_dwg_save_and_reopen` | ✗ | | HELIX isn't decoded |
+| `acis_data_store::dwg_keeps_the_solids_geometry` | ✓ | ✓ | 3DSOLID / REGION / BODY are decoded and encoded (SAT text before 2013, an empty body's fields from 2013) and the data storage section (the ACIS data from 2013) is read and written; other forms are kept as stored |
+| `solids_dxf::solids_survive_dwg`, `composites_round_trip…` | ✗ | ✓ | the files the bridge writes hold CADaddy's solids as MESH entities (with their definition in extended data), and MESH is kept as stored, not decoded |
+| `mesh_roundtrip::meshes_survive_dwg` | ✗ | ✓ | MESH isn't decoded (a native read keeps it as stored, not editable, and a native write writes it back) |
+| `helix_roundtrip::helix_survives_dwg_save_and_reopen` | ✗ | ✓ | HELIX isn't decoded (kept as stored) |
 | `pdf_underlay_roundtrip::dwg_keeps_underlays` | ✗ | | PDF/DWF/DGN underlays and their definitions aren't decoded |
 | `xclip_roundtrip::*clip_survives_dxf_and_dwg` | ✗ | | SPATIAL_FILTER (block clips) isn't decoded |
 | `materials_roundtrip::materials_survive_dxf_and_dwg` | ✗ | ✗ | MATERIAL isn't decoded or encoded |
 | `dwg_roundtrip_losses::dwg_keeps_table_styles` | ✗ | | TABLESTYLE isn't decoded |
 | `tests::dwg_roundtrip_keeps_extension_data` | ✗ | | ACAD_TABLE isn't decoded |
-| `fields_dxf::fields_survive_a_dwg_round_trip` | ✗ | ✗ | FIELD / FIELDLIST aren't decoded (text shows the evaluated value) |
+| `fields_dxf::fields_survive_a_dwg_round_trip` | ✗ | ✓ | FIELD / FIELDLIST aren't decoded (text shows the evaluated value) |
 | `dynblock_read::a_saved_drawing_keeps_the_dynamic_block_as_read` | ✗ | ✗ | dynamic-block data (EVALUATION_GRAPH, parameters) isn't decoded |
-| `roundtrip_audit::dwg_keeps_extension_dictionaries_xrecords_and_entity_xdata` | ✗ | ✗ | an entity's extension dictionary isn't written as DXF's 102 block |
+| `roundtrip_audit::dwg_keeps_extension_dictionaries_xrecords_and_entity_xdata` | ✗ | ✗ | an entity's reactors and extension dictionary are read as DXF's 102 blocks now; the LAYER table's extension dictionary (layer states) isn't kept |
 | `dwg_keeps_custom_records::*` | ✗ | ✗ | proxies and other programs' classes: one flag differs after the keep (R2000) |
 | `dwg_keeps_custom_records::a_drawing_without_custom_data_is_written_as_before` | | ✗ | the writer keeps DIMASSOC/MATERIAL in CADADDY_KEEP (no encoder) |
 | `codepages::pre_2007_dwg_text_decodes_through_the_bridge`, `dxf_versions::dwg_at_every_version_reads_back` | ✗ | ✗ | pre-2007 strings are read as Latin-1, not in the file's code page |
 | `dwg_header_vars::header_settings_round_trip_through_dwg` | ✗ | | $ANGBASE (and angles like it) taken as degrees: DWG stores radians |
 | `dwg_roundtrip_losses::the_current_dimension_style_survives…` | | ✗ | DIMSCALE written 0 in the header when the drawing doesn't set it |
 | `dwg_roundtrip_losses::mtext_background_masks_survive_dxf_and_dwg` | ✗ | | the mask colour's index (63) read as ByBlock |
+
+### Entities the codec doesn't decode are kept
+
+A native read keeps every entity object it doesn't decode (ACAD_TABLE, MESH, LIGHT, HELIX,
+ARC_DIMENSION, SHAPE, OLE2FRAME, the underlays, proxies, other programs' classes, and any entity whose
+data is damaged or in a form not read) in the drawing as it was stored: its handle, type, owner
+and layer, the references its common data names, and the object's bytes
+(`cadaddy_dwgcodec::entities::raw_entity`; `ReadReport::kept` lists them). The read note says "kept
+as-is, not editable"; nothing is left out. The writer writes such an object back as an object, as
+it was, when it is of a fixed type and the file is of the same version from R2004 on, and keeps
+every other (a custom class, another version, R2000) in the CADADDY_KEEP dictionary, which a read
+puts back. Test: `io/tests/dwg_native_raw_keep.rs` (a custom class's entity, a REGION, a MESH and
+a LIGHT, in every version).
 | `tests::gradient_hatch_roundtrips_through_dwg` | ✗ | ✗ | a gradient's index colours (63 rather than 421) |
 | `hatch_exact_edges::elliptical_and_spline_edges_roundtrip_in_dwg` | ✗ | | an elliptical edge's angles (degrees vs radians) |
 | `attrib_modes::modes_survive_dxf_and_dwg` | | ✗ | ATTRIB/ATTDEF lock-position bit (R2007+) not written |

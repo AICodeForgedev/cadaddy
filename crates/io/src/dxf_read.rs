@@ -295,7 +295,14 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
     }
     let t = T(tags);
     let c = common(&t);
+    // An entity the DWG reader kept as stored (not decoded): its groups as they are, whatever
+    // its name (a LIGHT or MESH without the groups of one would be read as an empty one).
+    let raw = tags.iter().any(|g| g.code == 100 && g.str().trim() == cadaddy_dwgcodec::entities::RAW_SUBCLASS);
     let k = match kind {
+        _ if raw => EntityKind::Unknown(Unknown {
+            dxf_type: kind.to_string(),
+            tags: tags.iter().map(|tg| RawTag { code: tg.code, value: tg.str() }).collect(),
+        }),
         "LINE" => match crate::dxf_solid::read_section(tags) {
             Some(sp) => EntityKind::SectionPlane(sp),
             None => EntityKind::Line(Line { a: t.p(10), b: t.p(11) }),

@@ -258,7 +258,15 @@ pub fn common(o: &mut Obj) -> Result<Common> {
         let raw = o.d.bs()? as u16;
         c.color = (raw & 0x1ff) as i16;
         if raw & 0x8000 != 0 {
-            c.rgb = Some(o.d.bl()? as u32);
+            // The colour value (method byte 0xC0–0xC8, then the colour). A colour book colour
+            // (0x4000) from some writers has none: what follows is then the transparency or
+            // the next field, never a value with a method byte, so it is left unread.
+            let mut ahead = o.d.clone();
+            let rgb = ahead.bl()? as u32;
+            if raw & 0x4000 == 0 || (0xC0..=0xC8).contains(&(rgb >> 24)) {
+                o.d = ahead;
+                c.rgb = Some(rgb);
+            }
         }
         if raw & 0x2000 != 0 {
             c.transparency = Some(o.d.bl()? as u32);
@@ -448,6 +456,16 @@ pub fn common_groups(e: &mut Vec<Group>, handle: u64, c: &Common, names: &Names,
     if let Some(o) = owner {
         e.push(Group { code: 330, value: Value::Handle(o) });
     }
+    if !c.reactors.is_empty() {
+        e.push(s(102, "{ACAD_REACTORS"));
+        e.extend(c.reactors.iter().map(|r| Group { code: 330, value: Value::Handle(*r) }));
+        e.push(s(102, "}"));
+    }
+    if let Some(x) = c.xdict {
+        e.push(s(102, "{ACAD_XDICTIONARY"));
+        e.push(Group { code: 360, value: Value::Handle(x) });
+        e.push(s(102, "}"));
+    }
     e.push(s(100, "AcDbEntity"));
     if c.entmode == 1 {
         e.push(i(67, 1));
@@ -483,6 +501,9 @@ pub fn common_groups(e: &mut Vec<Group>, handle: u64, c: &Common, names: &Names,
         && rgb >> 24 == 0xC2
     {
         e.push(i(420, i64::from(rgb & 0xFF_FFFF)));
+    }
+    if let Some(n) = c.color_ref.and_then(|h| names.color(h)) {
+        e.push(s(430, n));
     }
     if let Some(t) = c.transparency
         && t >> 24 == 0x02
@@ -562,7 +583,7 @@ fn links(dwg: &Dwg, classes: &Classes, ents: &[Entity]) -> std::collections::Has
     if dwg.version >= Version::R2004 {
         return next;
     }
-    let decoded: std::collections::HashSet<u64> = ents.iter().map(|e| e.handle).collect();
+    let decoded: std::collections::HashSet<u64> = ents.iter().filter(|e| !e.is_raw()).map(|e| e.handle).collect();
     for raw in dwg.objects.iter().filter(|o| !decoded.contains(&o.handle)) {
         if entity_type(raw.type_code, classes).is_none() {
             continue;
@@ -580,9 +601,6 @@ fn links(dwg: &Dwg, classes: &Classes, ents: &[Entity]) -> std::collections::Has
 fn entity_type(t: u16, classes: &Classes) -> Option<String> {
     match t {
         t if t >= 500 => classes.get(t).filter(|c| c.item_class_id == 0x1F2).map(|c| c.dxf_name.to_string_lossy()),
-        37 => Some("REGION".into()),
-        38 => Some("3DSOLID".into()),
-        39 => Some("BODY".into()),
         74 => Some("OLE2FRAME".into()),
         t => kinds::fixed_name(t).map(str::to_string),
     }
@@ -609,29 +627,91 @@ fn chain_children(ents: &mut [Entity], next: &std::collections::HashMap<u64, u64
     }
 }
 
+/// The subclass marker of an entity kept as it was stored ([`raw_entity`]).
+pub const RAW_SUBCLASS: &str = "AcDbCadaddyRawDwg";
+/// Most bytes of one object kept raw (a hostile file can't make the reader hold gigabytes of hex).
+const MAX_RAW: usize = 1 << 26;
+
+impl Entity {
+    /// Whether the entity was kept raw (its stored bytes in 310 groups, not decoded).
+    pub fn is_raw(&self) -> bool {
+        self.groups.iter().any(|g| g.code == 100 && matches!(&g.value, Value::Str(s) if s == RAW_SUBCLASS))
+    }
+}
+
+/// An entity object that isn't decoded (a type not read yet, a custom class, or damaged data)
+/// kept as it was stored: its handle, owner, layer and the references its common data names
+/// where they can be read, then `100 AcDbCadaddyRawDwg`, the object type (70), the file's DWG
+/// version (1) and the object's data (310, in chunks of 127 bytes: everything between its size
+/// and its CRC, with its data, string and handle streams). `None` when `raw` isn't an entity
+/// type or is too large to keep.
+pub fn raw_entity(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> Option<Entity> {
+    let name = entity_type(raw.type_code, classes)?;
+    if raw.data.len() > MAX_RAW {
+        return None;
+    }
+    let mut groups = Vec::new();
+    let (mut owner, mut paper, mut next) = (None, false, None);
+    let common_of = Obj::open(raw, v).and_then(|mut o| common(&mut o).map(|c| (o.handle, c)));
+    match common_of {
+        Ok((handle, c)) => {
+            owner = if c.entmode == 0 { c.owner } else { None };
+            paper = c.entmode == 1;
+            next = c.next;
+            common_groups(&mut groups, handle, &c, names, owner);
+        }
+        Err(_) => groups.push(Group { code: 5, value: Value::Handle(raw.handle) }),
+    }
+    groups.push(Group { code: 100, value: Value::Str(RAW_SUBCLASS.into()) });
+    groups.push(Group { code: 70, value: Value::Int(i64::from(raw.type_code)) });
+    groups.push(Group { code: 1, value: Value::Str(v.id().into()) });
+    groups.push(Group { code: 90, value: Value::Int(i64::try_from(raw.data.len()).unwrap_or(i64::MAX)) });
+    for chunk in raw.data.chunks(127) {
+        groups.push(Group { code: 310, value: Value::Str(chunk.iter().map(|b| format!("{b:02X}")).collect()) });
+    }
+    Some(Entity { name, handle: raw.handle, owner, paper, groups, children: Vec::new(), next })
+}
+
 /// Every entity of a file decoded, with the objects that couldn't be (unknown types, or damaged
 /// data) as errors by handle.
 pub fn decode_all(dwg: &Dwg) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
+    decode_entities(dwg, false)
+}
+
+/// [`decode_all`], but an entity object that isn't decoded (a type not read yet, a custom class,
+/// proxies, solids, underlays; or damaged data) is kept raw ([`raw_entity`]) in its place, so
+/// nothing is left out: `failed` then holds only objects that couldn't be kept either.
+pub fn decode_all_keeping(dwg: &Dwg) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
+    decode_entities(dwg, true)
+}
+
+fn decode_entities(dwg: &Dwg, keep_raw: bool) -> Result<(Vec<Entity>, Vec<(u64, String)>)> {
     let classes = dwg.classes()?;
     let names = Names::read(dwg, &classes);
     let mut out = Vec::new();
     let mut failed = Vec::new();
     for raw in &dwg.objects {
-        match decode(raw, dwg.version, &classes, &names) {
-            Ok(Some(e)) => out.push(e),
-            // An entity of a type not decoded yet is left out, and said so.
-            Ok(None) => {
-                if let Some(name) = entity_type(raw.type_code, &classes) {
-                    failed.push((raw.handle, format!("{name}: not read yet")));
-                }
+        let why = match decode(raw, dwg.version, &classes, &names) {
+            Ok(Some(e)) => {
+                out.push(e);
+                continue;
             }
+            // An entity of a type not decoded yet.
+            Ok(None) => match entity_type(raw.type_code, &classes) {
+                Some(name) => format!("{name}: not read yet"),
+                None => continue,
+            },
             Err(e) => {
                 let kind = match raw.type_code {
                     t if t >= 500 => classes.get(t).map(|c| c.dxf_name.to_string_lossy()).unwrap_or_default(),
                     t => kinds::fixed_name(t).unwrap_or("?").to_string(),
                 };
-                failed.push((raw.handle, format!("{kind}: {e}")));
+                format!("{kind}: {e}")
             }
+        };
+        match keep_raw.then(|| raw_entity(raw, dwg.version, &classes, &names)).flatten() {
+            Some(e) => out.push(e),
+            None => failed.push((raw.handle, why)),
         }
     }
     // Model space and the active paper space by the header's block record handles (names can
