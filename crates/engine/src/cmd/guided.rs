@@ -3596,6 +3596,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if !job.devices.is_empty() {
         // Onto the architecture like the MEP: a device that can't be placed is left out.
         let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
+        // (Not placed onto the architecture, stamped from typical-room plans.)
+        let mut counts = (0usize, 0usize);
         let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
             Ok((sp, true)) if has_arch => {
                 if placer.is_none() {
@@ -3623,6 +3625,19 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if !report.is_empty() {
                     progress_line(&format!("  typical-room devices stamped into rooms of their type: {} ({report:?})", stamped.len()));
                 }
+                let not_placed = job.devices.len() - out.len();
+                if not_placed > 0 {
+                    job.add_finding(
+                        StageName::BimBuild,
+                        "Devices not placed",
+                        &format!("{not_placed} devices are on sheets or views that don't line up with an architectural plan (and no typical-room plan); they are not drawn"),
+                        2,
+                        vec!["Register those sheets onto their level's plan".into()],
+                        None,
+                        false,
+                    );
+                }
+                counts = (not_placed, stamped.len());
                 let mut out = out;
                 out.extend(stamped);
                 out
@@ -3630,7 +3645,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             _ => job.devices.clone(),
         };
         match super::readers::place_devices(s, &devices, "guided job") {
-            Ok(v) => placed = Some(v),
+            Ok(mut v) => {
+                // What the devices stage read and the model doesn't hold, and what typical-room
+                // plans added: read = inserted + not placed - stamped.
+                v["not_placed"] = json!(counts.0);
+                v["stamped"] = json!(counts.1);
+                placed = Some(v);
+            }
             Err(e) => job.add_finding(
                 StageName::BimBuild,
                 &format!("The devices could not be put in the model: {e}"),

@@ -257,16 +257,25 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
     eprintln!("devices stage: {:#}", devices["result"]["devices"]["by_type"]);
     assert!(counted > 0, "the generated E plans have tagged devices: {:#}", devices["result"]);
     let built = s.execute("job.explain", &json!({"stage": "bim_build"})).expect("explain bim_build");
-    assert_eq!(built["result"]["devices"]["inserted"].as_u64(), Some(counted), "{:#}", built["result"]["devices"]);
+    // Every device read is in the model, or left out (it can't be put onto the architecture) with
+    // a finding; a typical-room plan's devices are added to each room of its type.
+    let dv = &built["result"]["devices"];
+    let (inserted, not_placed, stamped) = (dv["inserted"].as_u64().unwrap_or(0), dv["not_placed"].as_u64().unwrap_or(0), dv["stamped"].as_u64().unwrap_or(0));
+    assert_eq!(inserted + not_placed, counted + stamped, "{dv:#}");
+    assert!(not_placed * 20 <= counted, "most devices land on the architecture: {dv:#}");
+    if not_placed > 0 {
+        let state = s.doc().ok().and_then(|d| d.agent.clone()).unwrap_or_default();
+        assert!(state.contains("Devices not placed"), "left out with a finding");
+    }
     let next = s.execute("job.next", &json!({})).expect("job.next");
-    assert_eq!(next["summary"]["devices"]["count"].as_u64(), Some(counted), "{:#}", next["summary"]);
+    assert_eq!(next["summary"]["devices"]["count"].as_u64(), Some(inserted), "the model's devices: {:#}", next["summary"]);
     let by_level = next["summary"]["devices"]["by_level"].as_object().cloned().unwrap_or_default();
     eprintln!("devices by level: {by_level:?}");
     assert!(by_level.keys().all(|l| !l.is_empty()), "every device has a level: {by_level:?}");
     let bom = s.execute("bim.bom", &json!({"group_by": "level"})).expect("bom");
     let lines: Vec<&serde_json::Value> = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").collect();
     let units: f64 = lines.iter().filter_map(|l| l["net"].as_f64()).sum();
-    assert_eq!(units, counted as f64, "{lines:#?}");
+    assert_eq!(units, inserted as f64, "the BOM counts the model's devices: {lines:#?}");
     assert!(lines.iter().all(|l| l["trade"] == "electrical" && l["level"].as_str().is_some_and(|v| !v.is_empty())));
     let _ = std::fs::remove_dir_all(&dir);
 }
