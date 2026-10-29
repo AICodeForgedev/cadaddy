@@ -34,17 +34,25 @@ pub struct Names {
     names: HashMap<u64, String>,
     kinds: HashMap<u64, u16>,
     blocks: HashMap<u64, Contents>,
+    /// Colour book colours (DBCOLOR objects) by handle: `Book$Name`, or the name alone.
+    colors: HashMap<u64, String>,
 }
 
 impl Names {
     /// The names of `dwg`'s table records and multiline styles; a record that can't be read is
     /// left out (entities pointing at it get the default name).
-    pub fn read(dwg: &Dwg, _classes: &Classes) -> Names {
+    pub fn read(dwg: &Dwg, classes: &Classes) -> Names {
         let mut n = Names::default();
         // Block names told apart: AutoCAD stores every anonymous block of a kind under the
         // same name (`*D`, `*U`, `*T`…) and numbers them only when it loads the file.
         let mut blocks_taken: std::collections::HashSet<String> = std::collections::HashSet::new();
         for raw in &dwg.objects {
+            if raw.type_code >= 500 && classes.get(raw.type_code).is_some_and(|c| c.dxf_name.to_string_lossy() == "DBCOLOR") {
+                if let Some(name) = color_book_name(raw, dwg.version) {
+                    n.colors.insert(raw.handle, name);
+                }
+                continue;
+            }
             if !matches!(raw.type_code, BLOCK_HEADER | LAYER | STYLE | LTYPE | VIEW | UCS | VPORT | APPID | DIMSTYLE | MLINESTYLE) {
                 continue;
             }
@@ -76,6 +84,11 @@ impl Names {
     /// The name of the record with `handle`.
     pub fn name(&self, handle: u64) -> Option<&str> {
         self.names.get(&handle).map(String::as_str)
+    }
+
+    /// The name of the colour book colour (DBCOLOR) with `handle`, as DXF 430 gives it.
+    pub fn color(&self, handle: u64) -> Option<&str> {
+        self.colors.get(&handle).map(String::as_str)
     }
 
     /// The application name of an APPID record.
@@ -135,5 +148,26 @@ fn contents(o: &mut Obj) -> crate::Result<Contents> {
             (Some(first), Some(last)) => Ok(Contents::Chain(first, last)),
             _ => Ok(Contents::Owned(Vec::new())),
         }
+    }
+}
+
+/// A DBCOLOR object's colour name, with its book's before a `$` when it has one: the object's
+/// common data, then a colour (spec §2.11: index, from R2004 the value and a byte saying which
+/// of the colour's name and book name follow).
+fn color_book_name(raw: &crate::objects::RawObject, v: crate::Version) -> Option<String> {
+    let mut o = Obj::open(raw, v).ok()?;
+    object_common(&mut o).ok()?;
+    o.d.bs().ok()?;
+    if v < crate::Version::R2004 {
+        return None;
+    }
+    o.d.bl().ok()?;
+    let flags = o.d.rc().ok()?;
+    let name = if flags & 1 != 0 { o.text().ok()? } else { String::new() };
+    let book = if flags & 2 != 0 { o.text().ok()? } else { String::new() };
+    match (book.is_empty(), name.is_empty()) {
+        (_, true) => None,
+        (true, false) => Some(name),
+        (false, false) => Some(format!("{book}${name}")),
     }
 }

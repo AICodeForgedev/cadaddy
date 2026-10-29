@@ -295,7 +295,14 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
     }
     let t = T(tags);
     let c = common(&t);
+    // An entity the DWG reader kept as stored (not decoded): its groups as they are, whatever
+    // its name (a LIGHT or MESH without the groups of one would be read as an empty one).
+    let raw = tags.iter().any(|g| g.code == 100 && g.str().trim() == cadaddy_dwgcodec::entities::RAW_SUBCLASS);
     let k = match kind {
+        _ if raw => EntityKind::Unknown(Unknown {
+            dxf_type: kind.to_string(),
+            tags: tags.iter().map(|tg| RawTag { code: tg.code, value: tg.str() }).collect(),
+        }),
         "LINE" => match crate::dxf_solid::read_section(tags) {
             Some(sp) => EntityKind::SectionPlane(sp),
             None => EntityKind::Line(Line { a: t.p(10), b: t.p(11) }),
@@ -2113,7 +2120,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
             "OBJECTS" => {
                 for (k, tg) in records(&s.tags) {
                     objs.add(&k, &tg);
-                    if k == "LAYOUT" {
+                    if k == "LAYOUT" && !tg.iter().any(|x| x.code == 100 && x.str().trim() == cadaddy_dwgcodec::entities::RAW_SUBCLASS) {
                         // Fields after the AcDbLayout marker (AcDbPlotSettings also has a code 1).
                         let start = tg.iter().position(|x| x.code == 100 && x.str() == "AcDbLayout").unwrap_or(0);
                         let tail = tg.get(start..).unwrap_or(&[]);
@@ -2375,6 +2382,11 @@ const MAX_OBJECTS: usize = 1_000_000;
 
 impl Objects {
     fn add(&mut self, kind: &str, tags: &[Tag]) {
+        // An object the DWG reader kept as stored (not decoded) has none of the groups of its
+        // name: it is kept as it is (`dxf_raw`), never read as a field, style or the like.
+        if tags.iter().any(|t| t.code == 100 && t.str().trim() == cadaddy_dwgcodec::entities::RAW_SUBCLASS) {
+            return;
+        }
         let h = T(tags).s(5).map(|h| h.trim().to_ascii_uppercase()).unwrap_or_default();
         match kind {
             "SCALE" if self.scales.len() < cadaddy_doc::MAX_SCALES => {

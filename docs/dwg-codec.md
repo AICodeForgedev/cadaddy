@@ -153,13 +153,32 @@ TRACE, 3DFACE, RAY, XLINE, SPLINE (control and fit points), MTEXT, LWPOLYLINE, H
 edge boundaries — lines, arcs, elliptical arcs, splines — patterns, gradients, seeds, boundary
 objects), DIMENSION (linear, aligned, angular 2-line and 3-point, radius, diameter, ordinate),
 LEADER, TOLERANCE, MLINE, IMAGE, WIPEOUT, VIEWPORT and MULTILEADER (context data, leader roots
-and lines, text or block content, block attribute labels).
+and lines, text or block content, block attribute labels). The common data of every entity (spec
+§20.4.1) is in its groups: extended data, transparency (440), a colour book colour (430, from
+its DBCOLOR object), reactors and the extension dictionary (the 102 blocks), the owner (330).
 
-Not decoded yet (the reader keeps the bridge's record for them): 3DSOLID, REGION and BODY (their
-ACIS data is in the AcDs section from R2013), ACAD_TABLE (its contents are TABLECONTENT objects,
-Q200), MESH, LIGHT, the underlays, HELIX, ARC_DIMENSION, SHAPE (its name comes from the shape
-file), OLE2FRAME, proxies and custom classes. A VIEWPORT's status (68) and id (69) aren't stored
-in a DWG; they come from the layout's viewport list (Q200), so the bridge's are used meanwhile.
+3DSOLID, REGION and BODY are decoded in the forms files of another writer have (spec §20.4.39):
+before 2013 the ACIS data as SAT text, version 1, in blocks (the 1 and 3 groups); from 2013 an
+empty body's fields (290, 2), the geometry being in the data storage section (below). A solid's
+history object (350) from 2007. Any other form (version 2 data, a body with geometry in the
+object) is kept as stored (below).
+
+Not decoded (a native read keeps each as stored, not editable: `entities::raw_entity`, the
+`AcDbCadaddyRawDwg` marker, the object's bytes in 310 groups; `ReadReport::kept`): ACAD_TABLE (its
+contents are TABLECONTENT objects, Q200), MESH, LIGHT (kept as stored on purpose: the DXF reader
+would make an empty MESH or a default LIGHT from a record without their groups, so the marker
+makes it keep the record as it is), the underlays, HELIX, ARC_DIMENSION, SHAPE (its name comes
+from the shape file), OLE2FRAME, proxies and custom classes. A VIEWPORT's status (68) and id (69)
+aren't stored in a DWG; they come from the layout's viewport list (Q200), so the bridge's are
+used meanwhile.
+
+The data storage section (`AcDb:AcDsPrototype_1b`, `dwgcodec::acds`) holds from 2013 the ACIS data
+of solids, regions and bodies, one record per entity by its handle. `acds::decode` and `encode`
+read and write the layout the files we have seen use; that layout was observed in files of another
+writer (acadrust, a black box: its section decodes to the handles and bytes it was given, ours is
+the same bytes, and it reads ours); no AutoCAD file was at hand, so whether AutoCAD opens it is
+untested. The io layer makes the ACDSDATA records (`Foreign::data_store`) from it and back.
+Everything else about the section (schemas, thumbnails) is fixed, not read.
 
 `cadaddy_io::dwg_native::read_with_native_entities` reads a file through the bridge into groups
 and puts the codec's groups in place of every entity it decoded (an entity's VERTEXes, ATTRIBs and
@@ -170,6 +189,13 @@ group by group, in R2000, R2004, R2010, R2013 and R2018; mutated object data nev
 `io/tests/dwg_native_entities.rs` (the drawing read with native entities equals the bridge's,
 entity by entity and field by field, every record from the codec) and
 `io/tests/dwg_native_groups.rs` (multileaders with text and with block content and attributes).
+The common data of an entity (extended data, transparency, a colour book colour, reactors, an
+extension dictionary, the owner) is compared group by group with acadrust's in every version by
+`dwgcodec/tests/entity_common.rs` and, as drawings, by `io/tests/dwg_native_common_data.rs`;
+solids by `dwgcodec/tests/solids.rs` (decoded groups equal acadrust's, written objects are its
+bytes, damaged data never panics) and the data storage section by `dwgcodec/tests/acds.rs` and
+`io/tests/dwg_acds.rs` (the bridge reads the section written here); kept entities by
+`io/tests/dwg_native_raw_keep.rs`.
 
 Entity facts found by observation (files acadrust wrote; to be confirmed on AutoCAD's own files):
 
@@ -201,14 +227,36 @@ and the active paper space are the header's BLOCK_RECORD_MODEL_SPACE and BLOCK_R
 any other block — another layout's paper space among them — becomes the entity's owner (330).
 The entity mode alone marks every paper space entity as the active layout's.
 
-Not decoded yet (kept from the bridge): MLEADERSTYLE, TABLESTYLE, TABLECONTENT, FIELD and
-FIELDLIST, MATERIAL, VISUALSTYLE, SUN, dynamic-block data, SORTENTSTABLE, SPATIAL_FILTER,
-proxies and custom classes.
+Also decoded (Q5125): SPATIAL_FILTER (the clip boundary of an XCLIP: polygon, plane normal and
+origin, display and front/back clip with their distances, both 4x3 transforms) and the underlay
+definitions PDFDEFINITION, DWFDEFINITION and DGNDEFINITION (file path, page/sheet name), each
+equal to acadrust's DXF group by group in every version.
 
-Tested: `dwgcodec/tests/records.rs` (records = acadrust's DXF, group by group, five versions;
-mutated data never panics) and `io/tests/dwg_native_objects.rs` (the drawing read with native
-tables and objects equals the bridge's: layers, linetypes, text and dimension styles, layer
-states, layouts with their viewports, groups, views, UCSs, multiline styles).
+Stashed, not decoded (the Q5004 decision stands): TABLESTYLE, MATERIAL, VISUALSTYLE and FIELD.
+
+**Nothing is dropped without a word (Q5125).** `records::decode_all_keeping` (what `dwg_read::read`
+uses) keeps every object it doesn't decode — a custom class, a proxy (ACAD_PROXY_OBJECT), dynamic
+block data, SUN, FIELDLIST, a fixed type without a decoder (LONG_TRANSACTION, VBA_PROJECT…) — or
+can't decode (damaged data of a decoded class) as a raw record: its handle, extension dictionary,
+owner and extended data where the common data can be read, then `100 AcDbCadaddyRawDwg`, the
+object type (70), the DWG version (1), the data's length (90) and its bytes (310), as entities are
+kept. It names them in `ReadReport::kept_objects` (handle and class name, with why when damaged)
+and in the drawing's read notes. `dxf_raw` keeps them in `Drawing::foreign` like any other
+program's object; `dwg_write` writes one of a fixed type back as the object it was (same version,
+from R2004), any other through CADADDY_KEEP with its bytes. A damaged object of a table type
+(LAYER…) is still a failure, listed in `failed`; controls and entities are decoded elsewhere.
+An object the keep path can't reach (not under an entry of the named object dictionary, an
+extension dictionary or a kept owner) is reported, but, as for any other foreign object, not
+carried into the drawing.
+
+Tested: `dwgcodec/tests/records.rs` (records = acadrust's DXF, group by group, six versions, with a
+minimum number of records checked per type so that a type that stopped being decoded fails;
+clip boundary and underlay values asserted; mutated data never panics),
+`io/tests/dwg_native_objects.rs` (the drawing read with native tables and objects equals the
+bridge's: layers, linetypes, text and dimension styles, layer states, layouts with their
+viewports, groups, views, UCSs, multiline styles; and `NativeReport::records` asserts how many of
+each type came from the codec) and `io/tests/dwg_native_raw_keep_objects.rs` (undecoded objects
+reported, kept and written back).
 
 Facts found by observation:
 
@@ -320,9 +368,12 @@ Facts found by observation (the files acadrust writes, and what its reader accep
 
 Known limits:
 
-- Left out: MATERIAL, TABLESTYLE, VISUALSTYLE, FIELD, SORTENTSTABLE, ACIS solids, proxies and
-  other programs' custom records (the drawing's kept DXF records; raw DWG records kept from a file
-  need the native reader to keep them, Q203).
+- Left out: MATERIAL, TABLESTYLE, VISUALSTYLE, FIELD, SORTENTSTABLE (objects: kept from a drawing's
+  DXF records). Entities the reader doesn't decode are kept as stored and written back as the
+  objects they were when they are of a fixed type, from R2004 on, in a file of the same version;
+  any other is kept in the CADADDY_KEEP dictionary. A solid made from DXF groups is written as an
+  object when its ACIS data has the form written here (SAT text version 1 before 2013, none in
+  the record from 2013: the data storage section has it) and is kept in the dictionary otherwise.
 - acadrust can't read an R2000 VIEWPORT linked to its neighbours (its own files store none of
   the links §20.4.1 has there); our files keep the links, our reader reads them.
 - Not yet opened in AutoCAD (not installed on this machine; Q83's acadverify is the check).
@@ -335,3 +386,7 @@ Known limits:
   (a new file writes them as observed, Q201).
 - Code-page strings are decoded as Latin-1 (`Text::to_string_lossy`). Code-page mapping belongs
   in the model layer.
+- A colour book colour (430) is stored by a DBCOLOR object and the entity's colour flags (0x4000);
+  the entity's colour value (0x8000) is absent in files of acadrust (a book colour then has the
+  transparency or the next field right after the flags), so a value without the method byte
+  0xC0–0xC8 is left unread when the book flag is set.

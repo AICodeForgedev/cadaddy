@@ -25,6 +25,9 @@ pub fn fixed_name(t: u16) -> Option<&'static str> {
         32 => "TRACE",
         35 => "ELLIPSE",
         36 => "SPLINE",
+        37 => "REGION",
+        38 => "3DSOLID",
+        39 => "BODY",
         40 => "RAY",
         41 => "XLINE",
         34 => "VIEWPORT",
@@ -73,6 +76,9 @@ pub fn known(name: &str) -> bool {
             | "WIPEOUT"
             | "VIEWPORT"
             | "MULTILEADER"
+            | "3DSOLID"
+            | "REGION"
+            | "BODY"
     )
 }
 
@@ -217,6 +223,7 @@ pub fn decode(name: &str, o: &mut Obj, c: &Common, names: &Names, out: &mut Vec<
             g.p(11, xdir);
             Ok(())
         }
+        "3DSOLID" | "REGION" | "BODY" => modeler_geometry(name == "3DSOLID", o, &mut g),
         _ => Err(Error::Unsupported(format!("{name} entities are not decoded yet"))),
     }
 }
@@ -1710,3 +1717,60 @@ fn mleader(o: &mut Obj, g: &mut G) -> Result<()> {
     }
     Ok(())
 }
+
+/// The ACIS (SAT text) lines of a 3DSOLID, REGION or BODY of a file before AutoCAD 2013: DXF
+/// carries each line as a 1 group, a line past 255 characters as 3 groups and a final 1.
+fn sat_groups(text: &str, g: &mut G) {
+    for line in text.split("\r\n").filter(|l| !l.is_empty()) {
+        let chars: Vec<char> = line.chars().collect();
+        let mut at = 0;
+        while chars.len() - at > 255 {
+            g.s(3, chars[at..at + 255].iter().collect::<String>());
+            at += 255;
+        }
+        g.s(1, chars[at..].iter().collect::<String>());
+    }
+}
+
+/// A 3DSOLID, REGION or BODY (spec §20.4.39): before 2013 the ACIS data as SAT text in blocks
+/// (version 1; the formats this doesn't read — version 2, or an empty ACIS flag — are refused and
+/// the object is kept as stored); from 2013 an empty body's fields, the geometry being in the data
+/// storage section. After the data the history object (350) of a solid, from 2007.
+fn modeler_geometry(solid: bool, o: &mut Obj, g: &mut G) -> Result<()> {
+    g.s(100, "AcDbModelerGeometry");
+    if o.v >= Version::R2013 {
+        // The fields of an empty body, as other writers' files have them.
+        let fields = (o.d.b()?, o.d.b()?, o.d.b()?, o.d.b()?, o.d.bl()?, o.d.bl()?, o.d.bl()?, o.d.rl()?, o.d.rl()?, o.d.b()?, o.d.b()?);
+        if fields != (false, true, false, false, 0, 0, 0, 0, 0, true, false) {
+            return Err(Error::Unsupported("a solid with geometry in the object is kept as stored".into()));
+        }
+        g.i(290, 0);
+        g.s(2, "{00000000-0000-0000-0000-000000000000}");
+    } else {
+        if o.d.b()? || !o.d.b()? || o.d.bs()? != 1 {
+            return Err(Error::Unsupported("ACIS data in this form is kept as stored".into()));
+        }
+        let mut text: Vec<u8> = Vec::new();
+        loop {
+            let n = usize::try_from(o.d.bl()?).map_err(|_| corrupt("an ACIS block's size"))?;
+            if n == 0 {
+                break;
+            }
+            if n > o.d.remaining_bits() / 8 || text.len() + n > MAX_ACIS {
+                return Err(Error::TooLarge("ACIS data"));
+            }
+            text.extend(o.d.bytes(n)?);
+        }
+        g.i(70, 1);
+        sat_groups(&crate::bits::Text::Bytes(text).to_string_lossy(), g);
+    }
+    if solid && o.v >= Version::R2007 {
+        let history = o.href()?;
+        g.s(100, "AcDb3dSolid");
+        g.h(350, history.unwrap_or(0));
+    }
+    Ok(())
+}
+
+/// Most bytes of ACIS text in one entity.
+const MAX_ACIS: usize = 1 << 28;

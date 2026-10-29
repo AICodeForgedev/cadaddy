@@ -74,6 +74,77 @@ pub mod types {
     pub const XRECORD: u16 = 79;
     pub const PLACEHOLDER: u16 = 80;
     pub const LAYOUT: u16 = 82;
+    pub const REGION: u16 = 37;
+    pub const SOLID3D: u16 = 38;
+    pub const BODY: u16 = 39;
+}
+
+/// Whether a 3DSOLID, REGION or BODY record's ACIS data has the form written here: SAT text
+/// (version 1) before 2013; from 2013 none in the record (the data storage section has it). Any
+/// other is left to be kept as its groups.
+fn modeler_encodable(v: Version, r: &Rec) -> bool {
+    let sat = r.0.iter().any(|g| matches!(g.code, 1 | 3));
+    if v >= Version::R2013 { !sat && r.i(70).is_none() } else { sat && r.i(70).is_none_or(|n| n == 1) }
+}
+
+/// A 3DSOLID, REGION or BODY of a file from AutoCAD 2013 on: no ACIS data in the object (it is in
+/// the data storage section, by this entity's handle), only the flags and counts of an empty
+/// body and, for a solid, the history object (350). The layout is the one files of another
+/// writer have; the entity's flag (290) and GUID (2) aren't stored.
+fn modeler_geometry(w: &mut ObjWriter, r: &Rec, solid: bool) {
+    if !w.at_least(Version::R2013) {
+        sat_data(w, r);
+        if w.at_least(Version::R2007) {
+            w.href(4, r.h(350).filter(|h| *h != 0));
+        }
+        return;
+    }
+    w.d.b(false);
+    w.d.b(true);
+    w.d.b(false);
+    w.d.b(false);
+    for _ in 0..3 {
+        w.d.bl(0);
+    }
+    w.d.rl(0);
+    w.d.rl(0);
+    w.d.b(true);
+    w.d.b(false);
+    if solid {
+        w.href(4, r.h(350).filter(|h| *h != 0));
+    }
+}
+
+/// The ACIS data before 2013: SAT text (version 1) from the entity's 1 and 3 groups, one block,
+/// each line ended with a carriage return and line feed, and the fields that follow it.
+fn sat_data(w: &mut ObjWriter, r: &Rec) {
+    let mut text = String::new();
+    for g in r.0.iter().filter(|g| matches!(g.code, 1 | 3)) {
+        if let super::Value::Str(s) = &g.value {
+            text.push_str(s);
+            if g.code == 1 {
+                text.push_str("\r\n");
+            }
+        }
+    }
+    let bytes = crate::bits::code_page_bytes(&text);
+    w.d.b(false);
+    w.d.b(true);
+    w.d.bs(1);
+    w.d.bl(i32::try_from(bytes.len()).unwrap_or(i32::MAX));
+    for b in bytes {
+        w.d.rc(b);
+    }
+    // The end of the blocks, then the counts of wires and silhouettes (none) and two flags.
+    w.d.bl(0);
+    w.d.bl(0);
+    w.d.bl(0);
+    w.d.b(false);
+    w.d.b(true);
+    if w.at_least(Version::R2007) {
+        w.d.b(true);
+        w.d.b(false);
+    }
 }
 
 fn rad(deg: f64) -> f64 {
@@ -124,6 +195,11 @@ pub fn entity(
         "MULTILEADER" => names.class("MULTILEADER")?,
         "MLINE" => types::MLINE,
         "IMAGE" | "WIPEOUT" => names.class(name)?,
+        // From 2013 the geometry is in the data storage section (no ACIS data in the object).
+        "REGION" | "3DSOLID" | "BODY" if !modeler_encodable(v, r) => return None,
+        "REGION" => types::REGION,
+        "3DSOLID" => types::SOLID3D,
+        "BODY" => types::BODY,
         "DIMENSION" => match r.id(70, 0) & 7 {
             0 => types::DIMENSION_LINEAR,
             1 => types::DIMENSION_ALIGNED,
@@ -294,6 +370,7 @@ pub fn entity(
         "IMAGE" | "WIPEOUT" => image(&mut w, r),
         "DIMENSION" => dimension(&mut w, r, names, t),
         "BLOCK" => w.text(r.s(2).unwrap_or("")),
+        "REGION" | "3DSOLID" | "BODY" => modeler_geometry(&mut w, r, name == "3DSOLID"),
         _ => {}
     }
     Some(w.finish())
