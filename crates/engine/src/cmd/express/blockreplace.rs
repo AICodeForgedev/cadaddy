@@ -48,6 +48,12 @@ fn replaced(ins: &Insert, to: &cadaddy_doc::Block) -> Insert {
     out
 }
 
+/// Why the references of block `old` cannot be replaced: a dynamic block's references keep their
+/// property values in data that names the block.
+fn not_replaceable(d: &Drawing, old: &str) -> Option<String> {
+    cadaddy_doc::dynblock::dynamic_block(d, old).map(|_| format!("Block \"{old}\" is a dynamic block; its references cannot be replaced."))
+}
+
 /// Replace the references in `d`; returns how many.
 fn replace_all(d: &mut Drawing, from: &str, to: &Arc<cadaddy_doc::Block>) -> usize {
     let is_old = |k: &EntityKind| matches!(k, EntityKind::Insert(i) if i.block.eq_ignore_ascii_case(from));
@@ -88,6 +94,9 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let from = old.name.clone();
     if from.eq_ignore_ascii_case(&to.name) {
         return Err(bad(cmd, "the two blocks are the same"));
+    }
+    if let Some(why) = not_replaceable(d, &from) {
+        return Err(EngineError::Other(why));
     }
     if to.name.starts_with('*') || to.anonymous || to.xref_path.is_some() {
         return Err(bad(cmd, format!("\"{}\" can't replace a block", to.name)));
@@ -173,6 +182,9 @@ impl Interactive for BlockReplaceM {
             Stage::From => match block_of(s, &i)? {
                 None => Ok(Step::Done),
                 Some(b) => {
+                    if let Some(why) = not_replaceable(s.doc()?, &b) {
+                        return Err(EngineError::Other(why));
+                    }
                     self.from = b;
                     self.stage = Stage::To;
                     Ok(Step::Continue)
@@ -182,6 +194,9 @@ impl Interactive for BlockReplaceM {
                 None => Ok(Step::Done),
                 Some(b) if b.eq_ignore_ascii_case(&self.from) => Err(EngineError::Other("Pick a different block.".into())),
                 Some(b) => {
+                    if contains(s.doc()?, &b, &self.from) {
+                        return Err(EngineError::Other(format!("Block \"{b}\" contains \"{}\": it can't replace it.", self.from)));
+                    }
                     self.to = b;
                     self.stage = Stage::Purge;
                     Ok(Step::Continue)
