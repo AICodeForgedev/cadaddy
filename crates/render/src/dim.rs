@@ -10,7 +10,7 @@ use cadaddy_doc::{DimKind, DimStyle, Dimension};
 use cadaddy_fonts::{MTextParams, TextFont};
 use cadaddy_geom::{Arc, Vec2, ccw_sweep};
 
-use crate::units::{NumFormat, format_angle, format_decimal, format_linear};
+use crate::units::{NumFormat, format_angle_with_separator, format_decimal, format_linear};
 
 /// Most DIMBREAK gaps drawn per dimension.
 const MAX_BREAKS: usize = 1000;
@@ -924,7 +924,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             g.measurement = sweep;
             // DIMAZIN 1 / 2 suppress leading / trailing zeros (DIMZIN's bits 4 / 8).
             let azin = (st.angular_zero_suppression & 3) * 4;
-            let txt = format_angle(sweep, st.angular_unit, st.angular_decimals, azin);
+            let txt = format_angle_with_separator(sweep, st.angular_unit, st.angular_decimals, azin, &st.decimal_separator);
             // DIMPOST is a linear-dimension prefix/suffix; angles have their own format only.
             g.mtext = inspected(apply_override(&txt, d), d);
             let mut pts = Vec::new();
