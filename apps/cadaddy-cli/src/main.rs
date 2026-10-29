@@ -559,6 +559,11 @@ fn convert_file(i: &str, o: &str, framing: Framing) -> Result<(), String> {
     if let Some(m) = skipped_message(s.doc().map_err(|e| e.to_string())?, i) {
         eprintln!("{m}");
     }
+    if cadaddy_io::is_image(o)
+        && let Some(m) = undrawn_message(s.doc().map_err(|e| e.to_string())?, i)
+    {
+        eprintln!("{m}");
+    }
     let window = export_window(&s, framing, None)?;
     export_framed(&s, o, window)
 }
@@ -733,6 +738,25 @@ fn plot(args: &[String]) -> Result<(), String> {
     outln!("{}", serde_json::to_string_pretty(&json!({ "plotted": r["drawings"], "failed": r["failed"] })).unwrap_or_default());
     let failed = r["failed"].as_array().map_or(0, Vec::len);
     if failed == 0 { Ok(()) } else { Err(format!("{failed} drawing(s) could not be plotted")) }
+}
+
+/// The warning for the model-space entities of `path` an image can't show, by type (those kept
+/// as unknown objects, `Proxy` in `info`), or `None` when there are none.
+fn undrawn_message(d: &cadaddy_engine::doc::Drawing, path: &str) -> Option<String> {
+    let mut types: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for e in d.model.iter() {
+        if let cadaddy_engine::doc::EntityKind::Unknown(u) = &e.kind {
+            let n = types.entry(u.dxf_type.as_str()).or_insert(0);
+            *n = n.saturating_add(1);
+        }
+    }
+    let n = types.values().fold(0usize, |a, n| a.saturating_add(*n));
+    if n == 0 {
+        return None;
+    }
+    let list: Vec<String> = types.iter().map(|(t, n)| format!("{t}: {n}")).collect();
+    let entities = if n == 1 { "entity" } else { "entities" };
+    Some(format!("{path}: {n} {entities} not drawn ({})", list.join(", ")))
 }
 
 /// The warning for the records of `path` the reader could not place, or `None` when there are none.
@@ -1086,7 +1110,7 @@ enum McpTarget {
 
 /// Parses the arguments after `mcp`. `--connect` must be followed by a `HOST:PORT`; a missing,
 /// empty or flag-like value is an error, never a silent fall back to a headless session (#103).
-/// When no `--connect` is given, `CADADDY_CONTROL_PORT` and the legacy `CADCRAFT_CONTROL_PORT` are
+/// When no `--connect` is given, `CADADDY_CONTROL_PORT` and the legacy `CADADDY_CONTROL_PORT` are
 /// checked: a port there becomes `--connect 127.0.0.1:PORT --launch`.
 fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
     let mut addr: Option<String> = None;
@@ -1114,10 +1138,10 @@ fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
             other => return Err(format!("mcp: unknown argument {other}\n{USAGE}")),
         }
     }
-    // When no --connect is given, check CADADDY_CONTROL_PORT / CADCRAFT_CONTROL_PORT.
+    // When no --connect is given, check CADADDY_CONTROL_PORT / CADADDY_CONTROL_PORT.
     if addr.is_none() && !headless {
         let port_str =
-            std::env::var("CADADDY_CONTROL_PORT").or_else(|_| std::env::var("CADCRAFT_CONTROL_PORT")).ok().filter(|v| !v.trim().is_empty());
+            std::env::var("CADADDY_CONTROL_PORT").or_else(|_| std::env::var("CADADDY_CONTROL_PORT")).ok().filter(|v| !v.trim().is_empty());
         if let Some(ps) = port_str {
             let p = ps.trim();
             if let Ok(port) = p.parse::<u16>() {
