@@ -187,7 +187,8 @@ pub fn directory_files(a: &[Value]) -> R {
         Some(v) => int(v)?,
     };
     let mut budget: u64 = 200_000_000;
-    let pats = split_patterns(if pattern == "*.*" { "*" } else { &pattern }, &mut budget).map_err(|()| LispError::new("vl-directory-files: pattern too complex"))?;
+    let pats = split_patterns(if pattern == "*.*" { "*" } else { &pattern }, &mut budget)
+        .map_err(|()| LispError::new("vl-directory-files: pattern too complex"))?;
     let Some(entries) = list_dir(&dir) else { return Ok(Value::Nil) };
     let mut names: Vec<String> = Vec::new();
     for (n, is_dir) in entries {
