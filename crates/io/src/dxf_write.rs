@@ -2556,7 +2556,7 @@ const DWG_NATIVE_OBJECTS: &[&str] = &[
 /// bridge DXF checked record by record (a second read of it).
 fn has_custom(d: &Drawing) -> bool {
     let custom =
-        |s: &cadaddy_doc::EntityStore| s.iter().any(|e| matches!(&e.kind, EntityKind::Unknown(_)));
+        |s: &cadaddy_doc::EntityStore| s.iter().any(|e| matches!(&e.kind, EntityKind::Unknown(u) if !cadaddy_dxf::is_entity_type(&u.dxf_type)));
     d.foreign.objects.iter().any(|o| !DWG_NATIVE_OBJECTS.iter().any(|n| n.eq_ignore_ascii_case(o.kind.trim())))
         || custom(&d.model)
         || d.layouts.iter().any(|l| custom(&l.entities))
