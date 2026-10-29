@@ -214,6 +214,143 @@ impl CdySaved {
     }
 }
 
+/// Files larger than this are identified by size, modification time and inode only (no content
+/// hash): hashing them on every save would cost more than the save.
+const HASH_LIMIT: u64 = 64 << 20;
+
+/// What the file at a drawing's path looked like when the drawing was read from it or last saved
+/// there. A save to the same path first checks the file is still this: anything else that wrote
+/// it in between (another session, another program) would be overwritten without a word.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiskId {
+    path: String,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    inode: Option<u64>,
+    /// A hash of the contents (files up to [`HASH_LIMIT`]): a file only touched is not changed.
+    hash: Option<u64>,
+}
+
+/// How the file a drawing came from stands now.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DiskState {
+    /// As it was (or no record to compare with).
+    Same,
+    /// No longer there (deleted or moved): saving writes it again.
+    Gone,
+    /// Changed by someone else; says how.
+    Changed(String),
+}
+
+fn content_hash(bytes: &[u8]) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    h.write(bytes);
+    h.finish()
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn inode_of(m: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(m.ino())
+}
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn inode_of(_: &std::fs::Metadata) -> Option<u64> {
+    None
+}
+
+impl DiskId {
+    /// The file at `path` now; `bytes` are its contents when the caller has them (saves the read
+    /// for the hash).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn of(path: &str, bytes: Option<&[u8]>) -> Option<DiskId> {
+        let m = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file)?;
+        let hash = match bytes {
+            Some(b) if b.len() as u64 == m.len() => Some(content_hash(b)),
+            _ if m.len() <= HASH_LIMIT => std::fs::read(path).ok().map(|b| content_hash(&b)),
+            _ => None,
+        };
+        Some(DiskId { path: path.to_string(), len: m.len(), modified: m.modified().ok(), inode: inode_of(&m), hash })
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn of(_path: &str, _bytes: Option<&[u8]>) -> Option<DiskId> {
+        None
+    }
+
+    /// Whether the file at `path` is still what this describes. Only a save to the same path is
+    /// compared.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn state(&self, path: &str) -> DiskState {
+        if !same_file(&self.path, path) {
+            return DiskState::Same;
+        }
+        let Some(m) = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file) else { return DiskState::Gone };
+        let size = |a: u64, b: u64| format!("its size went from {a} to {b} bytes");
+        if m.len() != self.len {
+            return DiskState::Changed(size(self.len, m.len()));
+        }
+        if self.inode.is_some() && inode_of(&m) != self.inode {
+            return DiskState::Changed("the file was replaced by another one".into());
+        }
+        if m.modified().ok() == self.modified {
+            return DiskState::Same;
+        }
+        // Same size, newer stamp: the contents decide (a file only touched is not changed).
+        match (self.hash, std::fs::read(path).ok().map(|b| content_hash(&b))) {
+            (Some(was), Some(now)) if was == now => DiskState::Same,
+            _ => DiskState::Changed("its contents changed".into()),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub fn state(&self, _path: &str) -> DiskState {
+        DiskState::Same
+    }
+}
+
+thread_local! {
+    /// `force: true` on the save being run: overwrite a file changed on disk.
+    static FORCE_SAVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with the `force` parameter of `p` in effect for the saves inside it.
+fn with_force<T>(p: &Value, f: impl FnOnce() -> T) -> T {
+    let before = FORCE_SAVE.replace(p.get("force").and_then(Value::as_bool).unwrap_or(false));
+    let r = f();
+    FORCE_SAVE.set(before);
+    r
+}
+
+/// The refusal to save over `path` when it changed on disk since the drawing was read or saved,
+/// unless the save is forced; a deleted file is saved with a note.
+fn check_disk(s: &Session, cmd: &str, path: &str) -> Result<Option<String>> {
+    let Some(id) = s.state()?.disk_id.as_ref() else { return Ok(None) };
+    match id.state(path) {
+        DiskState::Same => Ok(None),
+        DiskState::Gone => Ok(Some(format!("{} was deleted or moved since it was opened; it is written again.", file_name(path)))),
+        DiskState::Changed(how) if FORCE_SAVE.get() => {
+            Ok(Some(format!("{} changed on disk ({how}); overwritten because force was given.", file_name(path))))
+        }
+        DiskState::Changed(how) => Err(bad(
+            cmd,
+            format!(
+                "{path} changed on disk since it was opened or last saved ({how}). Saving would overwrite that. \
+                 Save under another name (saveas), reopen it, or pass force:true to overwrite it."
+            ),
+        )),
+    }
+}
+
+impl Session {
+    /// How the active drawing's file stands on disk, when someone else changed it since the
+    /// drawing was read or saved (the question put to the user before an agent saves).
+    pub fn changed_on_disk(&self, path: &str) -> Option<String> {
+        match self.state().ok()?.disk_id.as_ref()?.state(path) {
+            DiskState::Changed(how) => Some(how),
+            _ => None,
+        }
+    }
+}
+
 /// Append a .cdy save to `path`: the chunks, made durable, then the index and trailer. A file no
 /// longer `from` bytes long is left alone; a failed append cuts the file back to what it was, so
 /// it still holds the previous save.
@@ -395,11 +532,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("closeall", "Close All", run_closeall)
             .files().menu(&["File", "Close All"]).enabled(always).noundo(),
         CommandSpec::new("qsave", "Save", run_qsave_reporting)
-            .files().menu(&["File", "Save"]).key("Cmd+S").alias(&["save"]).params("{path?}").noundo(),
+            .files().menu(&["File", "Save"]).key("Cmd+S").alias(&["save"]).params("{path?, force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved; otherwise that save is refused)} → {path, bytes, note?}").noundo(),
         CommandSpec::new("saveas", "Save As...", run_saveas_reporting)
             .menu(&["File", "Save As..."])
             .key("Cmd+Shift+S")
-            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), 12 (Release 12 DXF: newer objects converted, some left out), binary?: bool (DXF)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved}")
+            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), 12 (Release 12 DXF: newer objects converted, some left out), binary?: bool (DXF), force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved there; otherwise refused)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved}")
             .noundo()
             .interactive(|_| Ok(Box::new(SaveAsM::default()))),
         CommandSpec::new("checkexchange", "Check Exchange", run_checkexchange)
@@ -517,6 +654,8 @@ pub struct ReadFile {
     path: Option<String>,
     /// For a .cdy file: what it holds, for incremental saves.
     cdy: Option<CdyState>,
+    /// The file as it was when read, to notice something else changing it before a save.
+    disk: Option<DiskId>,
     /// Read from a walkthrough package (`.cdywalk`): its baked lightmap, if it has one.
     walkthrough: Option<Option<cadaddy_render::lightmap::Lightmap>>,
 }
@@ -677,12 +816,12 @@ pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
 
 /// Add a [`read_file`] result to the session as the active drawing: the fast half of OPEN.
 pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
-    let ReadFile { drawing, binary_dxf, name, path, cdy, walkthrough } = f;
+    let ReadFile { drawing, binary_dxf, name, path, cdy, disk, walkthrough } = f;
     if let Some(i) = path.as_deref().and_then(|p| already_open(s, p)) {
         return Ok(switch_to_open(s, i));
     }
     let is_pdf = name.rsplit('.').next().is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"));
-    let i = add_read(s, drawing, binary_dxf, &name, path, cdy);
+    let i = add_read(s, drawing, binary_dxf, &name, path, (cdy, disk));
     mark_walkthrough(s, i, walkthrough);
     super::blocks::xref::after_open(s, i);
     crate::activity::after_open(s, i);
@@ -709,7 +848,8 @@ fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile
     let path = path.filter(|p| is_drawing_file(p));
     let cdy = path.as_ref().filter(|p| is_cdy(p)).and_then(|_| cdy_hooks()).and_then(|h| (h.seed)(&drawing, bytes));
     let walkthrough = cadaddy_walk3d::package::is_package(bytes).then(|| package_lightmap(bytes));
-    Ok(ReadFile { drawing, binary_dxf: cadaddy_dxf::is_binary(bytes), name: name.to_string(), path, cdy, walkthrough })
+    let disk = path.as_deref().and_then(|p| DiskId::of(p, Some(bytes)));
+    Ok(ReadFile { drawing, binary_dxf: cadaddy_dxf::is_binary(bytes), name: name.to_string(), path, cdy, disk, walkthrough })
 }
 
 /// The baked lightmap in a walkthrough package, when it has a whole one.
@@ -732,7 +872,14 @@ fn mark_walkthrough(s: &mut Session, i: usize, w: Option<Option<cadaddy_render::
     }
 }
 
-fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str, path: Option<String>, cdy: Option<CdyState>) -> usize {
+fn add_read(
+    s: &mut Session,
+    mut drawing: Drawing,
+    binary_dxf: bool,
+    name: &str,
+    path: Option<String>,
+    (cdy, disk): (Option<CdyState>, Option<DiskId>),
+) -> usize {
     let reset = crate::audit::current_styles(&mut drawing);
     // Every way a drawing is opened (the OPEN command, the background open, scripts) looks for
     // its relative image paths in its folder first, and images that moved are looked up again.
@@ -753,6 +900,7 @@ fn add_read(s: &mut Session, mut drawing: Drawing, binary_dxf: bool, name: &str,
         st.read_loss = loss.filter(|_| has_path);
         st.open_notes = reset.clone();
         st.cdy_saved = cdy_saved;
+        st.disk_id = disk;
     }
     // Fields worked out on opening (FIELDEVAL 1): what they show isn't an edit to save.
     if s.active == i
@@ -807,8 +955,8 @@ fn switch_to_open(s: &mut Session, i: usize) -> Value {
 }
 
 pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option<String>) -> Result<usize> {
-    let ReadFile { drawing, binary_dxf, name, path, cdy, walkthrough } = read_bytes(bytes, name, path)?;
-    let i = add_read(s, drawing, binary_dxf, &name, path, cdy);
+    let ReadFile { drawing, binary_dxf, name, path, cdy, disk, walkthrough } = read_bytes(bytes, name, path)?;
+    let i = add_read(s, drawing, binary_dxf, &name, path, (cdy, disk));
     mark_walkthrough(s, i, walkthrough);
     Ok(i)
 }
@@ -913,6 +1061,8 @@ pub(crate) struct Saved {
     copy: Option<std::result::Result<String, String>>,
     /// Appended to the .cdy file (only what changed) rather than written in full.
     incremental: bool,
+    /// Something worth telling: the file was deleted since it was opened, or was overwritten by force.
+    note: Option<String>,
 }
 
 pub(crate) fn save_to(s: &mut Session, path: &str) -> Result<Saved> {
@@ -925,6 +1075,12 @@ pub(crate) fn save_to(s: &mut Session, path: &str) -> Result<Saved> {
 fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Saved> {
     if s.doc()?.refedit.is_some() {
         return Err(bad(cmd, "A block reference is being edited in place: finish with REFCLOSE (Save or Discard) before saving."));
+    }
+    // A file someone else changed since this drawing was read or saved would be overwritten
+    // without a word: refuse unless forced.
+    let note = if is_drawing_file(path) { check_disk(s, cmd, path)? } else { None };
+    if let Some(n) = &note {
+        s.echo(n.clone());
     }
     // Saving over the file a drawing was read from with parts left out loses them for good: the
     // first save there explains and stops; saving again overwrites (keeping a .bak).
@@ -999,7 +1155,7 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
         crate::activity::after_save(s, path);
     }
     let copy = (is_cdy(path) && dwg_copy()).then(|| save_dwg_copy(s, cmd, path));
-    Ok(Saved { bytes: n, copy, incremental })
+    Ok(Saved { bytes: n, copy, incremental, note })
 }
 
 /// Save to a .cdy file through the .cdy saver: appended to the file when it is the one the drawing
@@ -1133,6 +1289,9 @@ fn commit_save(s: &mut Session, path: &str, bytes: &[u8], store: impl FnOnce(&st
     st.saved = st.drawing().clone();
     st.path = Some(path.to_string());
     st.title = file_name(path);
+    // The file as this save left it: the next save there is checked against it. (A .cdy save may
+    // have appended, so its bytes are not the file.)
+    st.disk_id = DiskId::of(path, Some(bytes).filter(|_| !is_cdy(path)));
     // A BEgin group still open when the drawing is saved ends there.
     st.end_undo_group();
     Ok(bytes.len())
@@ -1141,6 +1300,9 @@ fn commit_save(s: &mut Session, path: &str, bytes: &[u8], store: impl FnOnce(&st
 /// The save result; on the web it also names the file the browser downloaded.
 fn saved(path: &str, sv: &Saved) -> Value {
     let mut r = json!({ "path": path, "bytes": sv.bytes });
+    if let Some(n) = &sv.note {
+        r["note"] = json!(n);
+    }
     if sv.incremental {
         r["incremental"] = json!(true);
     }
@@ -1160,7 +1322,7 @@ fn run_save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(p) => p.to_string(),
         None => s.state()?.path.clone().ok_or_else(|| bad("qsave", "drawing has no file name yet; use saveas {path}"))?,
     };
-    let sv = save_to(s, &path)?;
+    let sv = with_force(p, || save_to(s, &path))?;
     Ok(saved(&path, &sv))
 }
 
@@ -1178,7 +1340,7 @@ fn run_saveas(s: &mut Session, p: &Value) -> Result<Value> {
     if is_cdy(&path) {
         opts.version = None;
     }
-    let sv = save_as(s, "saveas", &path, &opts)?;
+    let sv = with_force(p, || save_as(s, "saveas", &path, &opts))?;
     let mut r = saved(&path, &sv);
     if is_exchange_file(&path) {
         r["version"] = json!(opts.version.unwrap_or_else(|| drawing_version(s, &path)).year());
@@ -1737,7 +1899,7 @@ mod pr193_tests {
         let st = s.state().unwrap();
         assert!(!st.is_dirty());
         assert_eq!((st.path.as_deref(), st.title.as_str()), (Some("a/Owned.dxf"), "Owned.dxf"));
-        assert_eq!(saved("a/Owned.dxf", &Saved { bytes: n, copy: None, incremental: false })["bytes"], 6);
+        assert_eq!(saved("a/Owned.dxf", &Saved { bytes: n, copy: None, incremental: false, note: None })["bytes"], 6);
     }
 }
 

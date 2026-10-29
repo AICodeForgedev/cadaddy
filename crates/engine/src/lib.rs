@@ -294,6 +294,9 @@ pub struct DocState {
     /// The .cdy file this drawing was last saved to or read from, and what it holds: the next
     /// save there appends only what changed ([`cmd::file::CdySaved`]).
     pub cdy_saved: Option<cmd::file::CdySaved>,
+    /// The file at `path` as it was when the drawing was read from it or last saved there: a save
+    /// refuses to overwrite a file something else changed since ([`cmd::file::DiskId`]).
+    pub disk_id: Option<cmd::file::DiskId>,
     /// The drawing's associative 3D building (WALLGEN): what it builds again from.
     pub wallgen: Option<cmd::wallgen::WallGen>,
     /// The plan the model was last built from and what that build made (`model.revise`).
@@ -382,6 +385,7 @@ impl DocState {
             exchange_notice: None,
             kept_job: None,
             cdy_saved: None,
+            disk_id: None,
             wallgen: None,
             model_record: None,
             last_revision: None,

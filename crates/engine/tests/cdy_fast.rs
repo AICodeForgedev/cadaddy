@@ -92,7 +92,9 @@ fn a_file_changed_by_something_else_is_written_in_full() {
     other.execute("saveas", &json!({ "path": dir.join("other.cdy").to_string_lossy() })).unwrap();
     std::fs::copy(dir.join("other.cdy"), &p).unwrap();
     s.execute("line", &json!({ "points": [[0, 5], [9, 5]] })).unwrap();
-    let r = s.execute("qsave", &json!({})).unwrap();
+    // The save is refused; forced, it never appends to a file it didn't write: it writes in full.
+    assert!(s.execute("qsave", &json!({})).unwrap_err().to_string().contains("changed on disk"));
+    let r = s.execute("qsave", &json!({ "force": true })).unwrap();
     assert!(r.get("incremental").is_none(), "{r}");
     let mut t = Session::new();
     t.execute("open", &json!({ "path": p })).unwrap();
