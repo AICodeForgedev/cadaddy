@@ -1387,8 +1387,10 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 });
                 prop_row(ui, "Area", |ui| read_only(ui, &area));
                 let closed = shared("poly.closed", &|k| {
-                    if let EntityKind::LwPolyline(p) = k { Some(crate::i18n::t(if p.closed { "Yes" } else { "No" }).to_string()) } else { None }
+                    if let EntityKind::LwPolyline(p) = k { Some(if p.closed { "Yes" } else { "No" }.to_string()) } else { None }
                 });
+                // Kept untranslated, so a change of language does not show stale text.
+                let closed = if closed == VARIES { closed } else { crate::i18n::t(&closed).to_string() };
                 prop_row(ui, "Closed", |ui| {
                     if let Some(n) = pick_menu(ui, &closed, ["Yes", "No"].map(|s| crate::i18n::t(s).to_string())) {
                         set = Some(json!({ "handles": ids, "closed": n == crate::i18n::t("Yes") }));
