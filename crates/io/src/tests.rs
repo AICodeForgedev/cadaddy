@@ -2842,8 +2842,6 @@ fn file_arrowhead_blocks_with_standard_names_are_kept() {
     }
 }
 
-
-
 /// Issue #1209: a file that declares no units ($INSUNITS absent or 0) stays unitless when written
 /// again; only a new drawing takes its template's units.
 #[test]
