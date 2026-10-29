@@ -1454,6 +1454,14 @@ fn wheel_zoom_points(events: &[egui::Event], opts: &egui::InputOptions, page: f3
     if points.is_finite() { points } else { 0.0 }
 }
 
+/// Draw the drawing area and handle its input (zoom and pan, picking, the crosshair) for this
+/// frame.
+///
+/// It also owns the cursor-visibility contract: the OS cursor is hidden only while the pointer is
+/// over the drawing area *and* the canvas is the topmost layer under it, so the drawn crosshair
+/// replaces the pointer over the drawing alone. A menu bar, an open menu (including its frame, not
+/// just its items), a tooltip or a floating palette above the canvas keeps the normal OS cursor
+/// visible (#1701), and so do the menus painted on the canvas itself (see [`over_canvas_menu`]).
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     let full = ui.available_rect_before_wrap();
@@ -1512,7 +1520,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         None
     };
     let hover_pos = hover_pos.or(lifted_at);
-    let inside = hover_pos.is_some_and(|p| rect.contains(p)) && (resp.hovered() || lifted_at.is_some());
+    // The drawing area alone: a menu popup's frame (between its items and its border), a tooltip
+    // or a floating palette lives on a layer above the canvas, where `hovered()` alone still
+    // counts the canvas. Over those the OS cursor stays visible and the crosshair stays put, as
+    // over the menu bar (#1701).
+    let inside = hover_pos.is_some_and(|p| rect.contains(p) && (lifted_at.is_some() || (ui.ctx().layer_id_at(p) == Some(ui.layer_id()) && resp.hovered())));
     // Whether Ctrl is held right now. Written every frame (not just while a command prompts), so
     // previews that read `Session::ctrl_down` always see the current state. The engine
     // deliberately does not carry modifiers through `Input`, which is UI-agnostic (see PR
