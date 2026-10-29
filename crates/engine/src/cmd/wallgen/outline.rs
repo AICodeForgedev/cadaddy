@@ -39,6 +39,16 @@ impl Outline {
 /// The outline of the building the walls (centreline ends and thickness, sheet units, `upf` per
 /// foot) stand round, inside `lo`–`hi` (their faces' extents); none when they do not enclose it.
 pub(super) fn building(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64) -> Option<Outline> {
+    building_with(walls, lo, hi, upf, false)
+}
+
+/// [`building`] with every gap up to the widest closed ([`CLOSE_FT`]): the whole building, a
+/// corridor open at its ends to the outside included (what may stand in it, not its slab).
+pub(super) fn building_whole(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64) -> Option<Outline> {
+    building_with(walls, lo, hi, upf, true)
+}
+
+fn building_with(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, whole: bool) -> Option<Outline> {
     let (w, h) = (hi.x - lo.x, hi.y - lo.y);
     if !(w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite() && upf.is_finite() && upf > 0.0) {
         return None;
@@ -62,7 +72,7 @@ pub(super) fn building(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64
     if widest == 0 || (widest as f64) < 0.25 * (w * h) / (cell * cell) || widest <= walls_only + walls_only / 2 {
         return None;
     }
-    let fill = fills.iter().find(|g| total(g) as f64 >= 0.8 * widest as f64)?;
+    let fill = if whole { fills.last()? } else { fills.iter().find(|g| total(g) as f64 >= 0.8 * widest as f64)? };
     let x_at = |i: usize| (origin.x + i as f64 * cell).clamp(lo.x, hi.x);
     let y_at = |j: usize| (origin.y + j as f64 * cell).clamp(lo.y, hi.y);
     let at = |i: usize, j: usize| i < nx && j < ny && fill.get(j * nx + i).copied().unwrap_or(false);
@@ -285,6 +295,20 @@ mod tests {
         let o = building(&walls, Vec2::new(0.0, 0.0), Vec2::new(1440.0, 960.0), 12.0).unwrap();
         let want = 120.0 * 80.0 - 40.0 * 49.5;
         assert!((sf(&o) - want).abs() < 0.01 * want, "{} sf, want {want}", sf(&o));
+    }
+
+    #[test]
+    fn the_whole_building_holds_its_corridor_open_at_both_ends() {
+        // Two rows of rooms 200' × 30', a 6' corridor between them open at both ends.
+        let mut walls = ring(&[(0.25, 0.25), (199.75, 0.25), (199.75, 29.75), (0.25, 29.75)]);
+        walls.extend(ring(&[(0.25, 36.25), (199.75, 36.25), (199.75, 65.75), (0.25, 65.75)]));
+        let (lo, hi) = (Vec2::new(0.0, 0.0), Vec2::new(2400.0, 792.0));
+        let slab = building(&walls, lo, hi, 12.0).unwrap();
+        let whole = building_whole(&walls, lo, hi, 12.0).unwrap();
+        // The slab is the two rows; the whole building has the corridor between them too.
+        assert!(sf(&slab) < 200.0 * 61.0, "{} sf", sf(&slab));
+        let want = 200.0 * 66.0;
+        assert!((sf(&whole) - want).abs() < 0.02 * want, "{} sf, want {want}", sf(&whole));
     }
 
     #[test]

@@ -511,6 +511,25 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     Ok(r)
 }
 
+/// Each storey's shell, before anything is built: the outline of the building its walls stand
+/// round (rectangles, sheet units), its walls planned from the plan as `model.build` plans them.
+/// The roof, and a storey whose walls don't close round the building, have none.
+pub(crate) fn shells(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> Vec<(String, Vec<[Vec2; 2]>)> {
+    let g = WallGen { rules: sp.to_rules(), auto: false, slab_ft: 0.0, layers: None, spec: Some(sp.clone()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let mut notes = Vec::new();
+    let mut out = Vec::new();
+    for level in g.rules.levels.iter().filter(|l| l.sheet.is_none() && !roof_level(&g.rules.levels, &l.name)) {
+        let pl = plan_level(d, &g, level, upf, &mut notes);
+        let Some((lo, hi)) = pl.footprint() else { continue };
+        let walls: Vec<(Vec2, Vec2, f64)> = pl.walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
+        if let Some(o) = outline::building_whole(&walls, lo, hi, upf) {
+            out.push((level.name.clone(), o.rects));
+        }
+    }
+    out
+}
+
 /// Whether `name` is the roof of a building with storeys under it (`Roof`, `MAIN ROOF`, `LOW
 /// ROOF`): it holds the roof, its parapets and what stands on it, not walls, a floor or rooms. A
 /// drawing of one level named so is still built as a storey.
