@@ -74,7 +74,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(super::ask::machine(
                     "thickness",
                     "THICKNESS",
-                    [super::ask::ask_or("thickness", "Enter new value for THICKNESS", super::ask::Kind::Number, |s| {
+                    [super::ask::ask_or("thickness", "Enter new value for THICKNESS", super::ask::Kind::Bounded(MAX_THICKNESS), |s| {
                         Some(format!("{:.4}", s.doc().ok()?.header.f64("THICKNESS", 0.0)))
                     })],
                 ))
@@ -670,10 +670,17 @@ fn run_ltscale(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "message": "Regenerating model." }))
 }
 
+/// The largest THICKNESS, either way.
+const MAX_THICKNESS: f64 = 1e12;
+
+fn thickness_in_range(t: f64) -> bool {
+    t.is_finite() && t.abs() <= MAX_THICKNESS
+}
+
 fn run_thickness(s: &mut Session, p: &Value) -> Result<Value> {
     let t = f64_req("thickness", p, "thickness")?;
-    if !t.is_finite() || t.abs() > 1e12 {
-        return Err(bad("thickness", "thickness is out of range"));
+    if !thickness_in_range(t) {
+        return Err(bad("thickness", "thickness is out of range (-1e12 to 1e12)"));
     }
     s.doc_mut()?.header.set_f64("THICKNESS", t);
     Ok(json!({ "thickness": t }))
