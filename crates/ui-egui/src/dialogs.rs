@@ -657,7 +657,7 @@ fn language(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
             egui::ComboBox::from_id_salt("interface_language_choice").selected_text(app.ui.interface_language.name()).show_ui(ui, |ui| {
-                for preference in crate::i18n::Preference::ALL {
+                for preference in crate::i18n::Preference::for_picker() {
                     if ui.selectable_label(app.ui.interface_language == preference, preference.name()).clicked() {
                         let _ = app.run("ui.language", serde_json::json!({"lang": preference.code()}));
                         ui.ctx().request_repaint();
