@@ -76,7 +76,9 @@ pub fn circle_circle(c1: &Circle, c2: &Circle) -> Vec<Vec2> {
     let h2 = (rs - a) * (rs + a);
     // Tangency is judged against the smaller circle, which sets the size of the chord, with
     // room for the rounding in `a` (a few ulps of the unit scale over ds, times 2a in h2).
-    let tol = (1e-12 * rs * rs).max(8.0 * f64::EPSILON * rs / ds);
+    // Capped, so near-coincident circles (ds ~ 0, equal radii: concentric arcs whose centres differ
+    // by rounding) are not all called tangent.
+    let tol = (1e-12 * rs * rs).max(8.0 * f64::EPSILON * rs / ds).min(1e-6 * rs * rs);
     if h2 < -tol {
         return Vec::new();
     }
