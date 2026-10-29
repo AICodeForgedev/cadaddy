@@ -616,8 +616,8 @@ impl Model {
 #[cfg(test)]
 mod budget_tests {
     use super::*;
-    use cadcraft_doc::{Block, Common, Entity, Line, Space};
-    use cadcraft_geom::Vec3;
+    use cadaddy_doc::{Block, Common, Entity, Line, Space};
+    use cadaddy_geom::Vec3;
     use std::sync::Arc;
 
     #[test]
@@ -625,7 +625,7 @@ mod budget_tests {
         let mut drawing = Drawing::default();
         let mut spline = GSpline::from_control(vec![Vec2::ZERO, Vec2::new(1.0, 2.0), Vec2::new(3.0, 0.0)], 2);
         spline.weights = vec![2.0, 0.5];
-        let h = drawing.add(&Space::Model, Common::default(), EntityKind::Spline(spline.clone())).unwrap();
+        let h = drawing.add(&Space::Model, Common::default(), EntityKind::Spline(Box::new(spline.clone()))).unwrap();
         let model = Model::build(&drawing, &[h]);
         model.write_back(&mut drawing, &model.x0);
         let EntityKind::Spline(after) = &drawing.entity(h).unwrap().kind else { panic!("spline") };
@@ -657,6 +657,7 @@ mod budget_tests {
             rows: 1,
             col_spacing: 0.0,
             row_spacing: 0.0,
+            clip: None,
         };
         let h = d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).unwrap();
         let mut budget = 2;

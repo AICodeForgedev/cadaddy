@@ -375,7 +375,7 @@ fn vertex_constraints_on_large_fit_spline_do_not_charge_reconstruction() {
     let pts: Vec<_> = (0..500).map(|i| Vec2::new(i as f64, (i % 3) as f64)).collect();
     let mut sp = GSpline::from_control(pts.clone(), 3);
     sp.fit = pts;
-    let h = put(&mut d, EntityKind::Spline(sp));
+    let h = put(&mut d, EntityKind::Spline(Box::new(sp)));
     for i in 0..5 {
         let p = point(&mut d, (i as f64, (i % 3) as f64));
         let mut c = con(K::Coincident, &[s(h, Sub::Vertex(i)), w(p)]);
