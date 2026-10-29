@@ -2,6 +2,10 @@
 
 use std::f64::consts::PI;
 
+/// Largest scaled value (below `i64::MAX`) that the integer feet/inch splitting handles; larger
+/// distances fall back to decimal.
+const I64_SAFE_MAX: f64 = 9.0e18;
+
 /// A distance in the current drawing's units (LUNITS, LUPREC; decimal at 4 places without a
 /// drawing), as prompt defaults and messages show it.
 pub fn dist(s: &crate::Session, v: f64) -> String {
@@ -32,7 +36,11 @@ pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {
             let neg = v < 0.0;
             let a = v.abs();
             let denom = 1i64 << prec.min(8);
-            let total = (a * denom as f64).round() as i64;
+            let scaled = (a * denom as f64).round();
+            if scaled >= I64_SAFE_MAX {
+                return format!("{:.*}", prec, v);
+            }
+            let total = scaled as i64;
             let ft = total / (12 * denom);
             let rem = total - ft * 12 * denom;
             let inch = rem / denom;
@@ -49,7 +57,11 @@ pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {
             let neg = v < 0.0;
             let a = v.abs();
             let denom = 1i64 << prec.min(8);
-            let total = (a * denom as f64).round() as i64;
+            let scaled = (a * denom as f64).round();
+            if scaled >= I64_SAFE_MAX {
+                return format!("{:.*}", prec, v);
+            }
+            let total = scaled as i64;
             let whole = total / denom;
             let frac = total % denom;
             let fs = if frac == 0 {
@@ -354,6 +366,17 @@ pub const DEG: f64 = PI / 180.0;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn huge_architectural_and_fractional_distances_do_not_saturate() {
+        for lunits in [4, 5] {
+            for v in [1e30, -1e30] {
+                assert_eq!(format_distance(v, lunits, 4), format!("{:.4}", v), "lunits {lunits}");
+            }
+        }
+        assert_eq!(format_distance(1e15, 5, 4), "1000000000000000");
+        assert_eq!(format_distance(12.5, 4, 4), "1'-0 1/2\"");
+    }
 
     #[test]
     fn dash_joins_inches_and_a_fraction() {
