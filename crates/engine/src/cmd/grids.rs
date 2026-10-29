@@ -813,6 +813,44 @@ impl Backgrounds {
     }
 }
 
+/// The biggest block of `pts`: the points of the largest group of `cell`-sized grid cells that
+/// touch (a view's plan, not its legend, notes and title beside it).
+pub(crate) fn largest_block(pts: &[Vec2], cell: f64) -> Vec<Vec2> {
+    use std::collections::{BTreeMap, BTreeSet};
+    if !(cell.is_finite() && cell > 0.0) {
+        return pts.to_vec();
+    }
+    let key = |p: &Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    let mut cells: BTreeMap<(i64, i64), usize> = BTreeMap::new();
+    for p in pts {
+        *cells.entry(key(p)).or_default() += 1;
+    }
+    let mut seen: BTreeSet<(i64, i64)> = BTreeSet::new();
+    let mut best: (usize, BTreeSet<(i64, i64)>) = (0, BTreeSet::new());
+    for &start in cells.keys() {
+        if !seen.insert(start) {
+            continue;
+        }
+        let (mut group, mut n, mut stack) = (BTreeSet::from([start]), 0usize, vec![start]);
+        while let Some((x, y)) = stack.pop() {
+            n += cells.get(&(x, y)).copied().unwrap_or(0);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    let c = (x + dx, y + dy);
+                    if cells.contains_key(&c) && seen.insert(c) {
+                        group.insert(c);
+                        stack.push(c);
+                    }
+                }
+            }
+        }
+        if n > best.0 {
+            best = (n, group);
+        }
+    }
+    pts.iter().filter(|p| best.1.contains(&key(p))).copied().collect()
+}
+
 /// Points every `step` along the lines and polylines of `ents`.
 pub(crate) fn line_samples(ents: &[&Arc<Entity>], step: f64) -> Vec<Vec2> {
     let mut out = Vec::new();
@@ -876,7 +914,12 @@ impl Occupancy {
 /// view has) and its margin over the best fit 10' or more away; `None` without one.
 /// Votes on a 4' grid over scales 0.4-2.5, then refines on a 1' grid.
 pub(crate) fn linework_fit(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<(f64, Vec2, f64, f64)> {
-    if src.len() < 50 || tgt.len() < 50 {
+    linework_fit_within(src, tgt, k, 0.4, 2.5)
+}
+
+/// [`linework_fit`] over scales `lo..=hi` only (a view known to be drawn at the plan's scale).
+pub(crate) fn linework_fit_within(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64) -> Option<(f64, Vec2, f64, f64)> {
+    if src.len() < 50 || tgt.len() < 50 || !(lo.is_finite() && hi.is_finite() && lo > 0.0 && hi >= lo) {
         return None;
     }
     let coarse = 48.0 * k;
@@ -889,8 +932,8 @@ pub(crate) fn linework_fit(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<(f64, V
     // linework or more (not a shrunk copy in a dense corner).
     let (sb, tb) = (cadaddy_geom::Bounds2::from_points(few.iter().copied()), cadaddy_geom::Bounds2::from_points(tgt.iter().copied()));
     let (sw, tw) = (sb.width().max(sb.height()), tb.width().max(tb.height()));
-    let mut s = 0.4;
-    while s <= 2.5 {
+    let mut s = lo;
+    while s <= hi {
         if sw * s < 0.5 * tw || sw * s > 1.2 * tw {
             s *= 1.01;
             continue;
@@ -1080,6 +1123,18 @@ mod tests {
             out.extend((0..=m).map(|i| o + (a + (b - a) * (i as f64 / m as f64)) * s));
         }
         out
+    }
+
+    #[test]
+    fn a_views_plan_is_its_biggest_block_of_lines() {
+        // A plan of 400 points, a legend of 40 well apart, a stray point.
+        let mut pts: Vec<Vec2> = (0..400).map(|i| Vec2::new(f64::from(i % 20) * 10.0, f64::from(i / 20) * 10.0)).collect();
+        pts.extend((0..40).map(|i| Vec2::new(1000.0 + f64::from(i) * 5.0, 0.0)));
+        pts.push(Vec2::new(-500.0, -500.0));
+        let plan = largest_block(&pts, 48.0);
+        assert_eq!(plan.len(), 400);
+        assert!(plan.iter().all(|p| p.x < 500.0 && p.y > -100.0));
+        assert!(largest_block(&[], 48.0).is_empty());
     }
 
     #[test]
