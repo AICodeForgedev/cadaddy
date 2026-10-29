@@ -183,7 +183,7 @@ fn without_cadaddy_xdata(text: &str) -> String {
     let mut skipping = false;
     for (c, v) in pairs(text) {
         if c == 1001 {
-            skipping = v == "CADCRAFT";
+            skipping = v == "CADADDY";
         } else if c < 1000 {
             skipping = false;
         }
