@@ -342,6 +342,17 @@ fn angle_precisions(aunits: i64) -> Vec<(i64, String)> {
     (0..=8).map(|p| (p, cadaddy_engine::units::format_angle(zero, aunits, p))).collect()
 }
 
+/// Length precision choices for a LUNITS format. Architectural (4) and Fractional (5) step through
+/// binary fractions of an inch (LUPREC n is 1/2^n, 0 is whole inches); the other formats show a decimal sample.
+fn length_precisions(lunits: i64) -> Vec<(i64, String)> {
+    use cadaddy_engine::units::format_distance;
+    if matches!(lunits, 4 | 5) {
+        (0..=8).map(|p| (p, if p == 0 { "1\"".to_string() } else { format!("1/{}\"", 1i64 << p) })).collect()
+    } else {
+        (0..=8).map(|p| (p, format_distance(1.5, lunits, p))).collect()
+    }
+}
+
 /// Drawing Units (UNITS): edits a copy of LUNITS/LUPREC/AUNITS/AUPREC/INSUNITS and applies it
 /// through the `units` command on OK.
 fn units(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
@@ -373,7 +384,7 @@ fn units(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 pick(ui, "units_lunits", lu, &types(&LENGTH_TYPES));
                 ui.end_row();
                 ui.label("Precision");
-                pick(ui, "units_luprec", lp, &(0..=8).map(|p| (p, format_distance(1.5, *lu, p))).collect::<Vec<_>>());
+                pick(ui, "units_luprec", lp, &length_precisions(*lu));
                 ui.end_row();
                 ui.strong("Angle");
                 ui.end_row();
@@ -684,6 +695,15 @@ mod tests {
         assert_eq!(labels(2)[0], "0g");
         assert_eq!(labels(3)[1], "0.0r");
         assert_eq!(labels(4)[0], "N 0d E");
+    }
+
+    #[test]
+    fn fractional_length_precisions_list_binary_fractions() {
+        let labels = ["1\"", "1/2\"", "1/4\"", "1/8\"", "1/16\"", "1/32\"", "1/64\"", "1/128\"", "1/256\""];
+        let want: Vec<(i64, String)> = labels.iter().enumerate().map(|(k, l)| (k as i64, l.to_string())).collect();
+        assert_eq!(super::length_precisions(4), want);
+        assert_eq!(super::length_precisions(5), want);
+        assert_eq!(super::length_precisions(2).len(), 9);
     }
 
     #[test]
