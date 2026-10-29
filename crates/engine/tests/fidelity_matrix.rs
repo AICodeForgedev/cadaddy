@@ -21,6 +21,38 @@ use serde_json::{Value, json};
 
 /// Known differences: `format|type|field`. Each is a loss to fix, or a version limit.
 const KNOWN: &[&str] = &[
+    // A justified TEXT is written as AutoCAD writes it: group 10 is where its baseline starts, the
+    // alignment point is group 11 (it drew centred and right-aligned text from the wrong end
+    // otherwise). Read back, `insert` holds the baseline start and `align_pt` the point it was
+    // made at: the same text, stored the way AutoCAD stores it.
+    "DWG 2000|Text|kind.insert.x",
+    "DWG 2000|Text|kind.insert.y",
+    "DWG 2004|Text|kind.insert.x",
+    "DWG 2004|Text|kind.insert.y",
+    "DWG 2007|Text|kind.insert.x",
+    "DWG 2007|Text|kind.insert.y",
+    "DWG 2010|Text|kind.insert.x",
+    "DWG 2010|Text|kind.insert.y",
+    "DWG 2013|Text|kind.insert.x",
+    "DWG 2013|Text|kind.insert.y",
+    "DWG 2018|Text|kind.insert.x",
+    "DWG 2018|Text|kind.insert.y",
+    "DWG native 2000|Text|kind.insert.x",
+    "DWG native 2000|Text|kind.insert.y",
+    "DWG native 2004|Text|kind.insert.x",
+    "DWG native 2004|Text|kind.insert.y",
+    "DWG native 2007|Text|kind.insert.x",
+    "DWG native 2007|Text|kind.insert.y",
+    "DWG native 2010|Text|kind.insert.x",
+    "DWG native 2010|Text|kind.insert.y",
+    "DWG native 2013|Text|kind.insert.x",
+    "DWG native 2013|Text|kind.insert.y",
+    "DWG native 2018|Text|kind.insert.x",
+    "DWG native 2018|Text|kind.insert.y",
+    "DXF|Text|kind.insert.x",
+    "DXF|Text|kind.insert.y",
+    "DXF binary|Text|kind.insert.x",
+    "DXF binary|Text|kind.insert.y",
     // Versions older than the feature: AutoCAD 2000/2004 have no multileaders (written as a
     // leader with its text), multileader or table styles (2000); MESH
     // came with 2010 (older versions get a polyface mesh).

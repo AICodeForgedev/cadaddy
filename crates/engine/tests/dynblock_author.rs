@@ -86,9 +86,9 @@ fn an_authored_stretch_follows_the_distance_and_its_value_list() {
     s.execute("blocks.reference.set", &json!({ "handle": h, "name": "Width", "value": "27" })).unwrap();
     assert!((right_edge(s.doc().unwrap(), &h) - 30.0).abs() < 1e-9);
     assert_eq!(property(&mut s, &h, "Width"), json!("30.0000"));
-    // Its grips: the distance's two arrows.
+    // Its grips: the distance's arrow at the end the stretch follows (not the start, no action there).
     let g = s.execute("blocks.reference.grips", &json!({ "handle": h })).unwrap();
-    assert_eq!(g.as_array().unwrap().len(), 2, "{g}");
+    assert_eq!(g.as_array().unwrap().len(), 1, "{g}");
     // Authoring is one undo step per command.
     s.execute("undo", &json!({})).unwrap();
     s.execute("undo", &json!({})).unwrap();

@@ -80,7 +80,6 @@ fn settable() -> Vec<(&'static str, Value, Value, Value)> {
         ("PEDITACCEPT", i(0, 1, 2)),
         ("PELLIPSE", i(0, 1, 2)),
         ("PICKAUTO", i(5, 0, 6)),
-        ("PICKDRAG", i(2, 1, 3)),
         ("PLINEGEN", i(0, 1, 2)),
         ("PLINETYPE", i(2, 0, 3)),
         ("PLOTROTMODE", i(2, 1, 3)),
