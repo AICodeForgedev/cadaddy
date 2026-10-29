@@ -23,9 +23,10 @@ fn convert_to_an_image_warns_about_entities_it_cannot_draw() {
     std::fs::write(&input, PROXIES).unwrap();
     let input = input.to_str().unwrap();
 
+    // The reader keeps the three as unknown entities (`info` counts the drawing's entities: 4).
     let out = cli(&["info", input]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["counts"]["Proxy"], 3, "{v}");
+    assert_eq!(v["entities"], 4, "{v}");
 
     for ext in ["svg", "png", "pdf"] {
         let image = dir.join(format!("out.{ext}"));
