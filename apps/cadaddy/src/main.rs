@@ -638,7 +638,9 @@ fn main() -> eframe::Result {
                     app.open_path(f);
                 }
                 if app.session.docs.is_empty() {
-                    app.session.new_drawing_with_viewports(false);
+                    // In the units the profile asks for (MEASUREINIT, restored above).
+                    let metric = app.session.settings.measureinit;
+                    app.session.new_drawing_with_viewports(metric);
                 }
                 cadaddy_ui_egui::startup::mark("drawings opened");
                 let ctx = cc.egui_ctx.clone();

@@ -80,6 +80,7 @@ const SESSION_VARS: &[&str] = &[
     "CURSORSIZE",
     "MAXARRAY",
     "ZOOMFACTOR",
+    "MEASUREINIT",
     "LASTPOINT",
     "FONTALT",
     "FONTFALLBACK",
@@ -173,6 +174,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "GRIPSIZE" => json!(st.gripsize),
         "CURSORSIZE" => json!(st.cursorsize),
         "MAXARRAY" => json!(st.maxarray),
+        "MEASUREINIT" => json!(i32::from(st.measureinit)),
         "ZOOMFACTOR" => json!(st.zoomfactor),
         "LASTPOINT" => json!([s.last_point.x, s.last_point.y, 0.0]),
         // Held in radians (as `$ANGBASE` in DXF); reported in degrees, like POLARANG.
@@ -719,6 +721,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "CURSORSIZE" => st.cursorsize = as_f64(v).ok_or_else(bad)?.clamp(1.0, 100.0),
         "MAXARRAY" => st.maxarray = as_f64(v).ok_or_else(bad)?.clamp(100.0, 10_000_000.0) as u64,
         "ZOOMFACTOR" => st.zoomfactor = as_i(v).filter(|z| (3..=100).contains(z)).ok_or_else(bad)? as u32,
+        "MEASUREINIT" => st.measureinit = small(v, 1).ok_or_else(bad)? == 1,
         "FONTALT" => cadaddy_fonts::ttf::set_font_alt(v.as_str().ok_or_else(bad)?),
         "FONTFALLBACK" => cadaddy_fonts::ttf::set_fallback_fonts(v.as_str().ok_or_else(bad)?),
         "SAVETIME" => crate::autosave::set_savetime(
