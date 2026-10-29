@@ -66,6 +66,19 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(super::ask::machine("ltscale", "LTSCALE", [super::ask::ask_or("scale", "Enter new linetype scale factor", super::ask::Kind::Number, |s| var(s, "LTSCALE"))]))
         }),
         CommandSpec::new("units", "Units...", run_units).menu(&["Format", "Units..."]).alias(&["un"]).params("{lunits?: 1..5, luprec?: 0..8, aunits?: 0..4, auprec?: 0..8, insunits?}"),
+        CommandSpec::new("thickness", "Thickness", run_thickness)
+            .menu(&["Format", "Thickness"])
+            .params("{thickness} (THICKNESS: the 3D thickness given to new lines, arcs, circles, points and polylines; may be negative) → {thickness}")
+            .transparent()
+            .interactive(|_| {
+                Ok(super::ask::machine(
+                    "thickness",
+                    "THICKNESS",
+                    [super::ask::ask_or("thickness", "Enter new value for THICKNESS", super::ask::Kind::Number, |s| {
+                        Some(format!("{:.4}", s.doc().ok()?.header.f64("THICKNESS", 0.0)))
+                    })],
+                ))
+            }),
         CommandSpec::new("limits", "Drawing Limits", run_limits).menu(&["Format", "Drawing Limits"]).params("{min: [x,y], max: [x,y]}").interactive(|_| {
             Ok(super::ask::machine(
                 "limits",
@@ -655,6 +668,15 @@ fn run_ltscale(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.doc_mut()?.header.set_f64("LTSCALE", v);
     Ok(json!({ "message": "Regenerating model." }))
+}
+
+fn run_thickness(s: &mut Session, p: &Value) -> Result<Value> {
+    let t = f64_req("thickness", p, "thickness")?;
+    if !t.is_finite() || t.abs() > 1e12 {
+        return Err(bad("thickness", "thickness is out of range"));
+    }
+    s.doc_mut()?.header.set_f64("THICKNESS", t);
+    Ok(json!({ "thickness": t }))
 }
 
 fn run_units(s: &mut Session, p: &Value) -> Result<Value> {
