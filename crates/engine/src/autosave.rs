@@ -262,13 +262,19 @@ impl Autosaver {
             // The journal (files on disk with the .cdy saver): written at once, appended to after
             // that, in full again every SAVETIME minutes.
             let journal = minutes > 0 && !dir.trim().is_empty() && !dir.contains("://") && crate::cmd::file::cdy_hooks().is_some();
+            // In the Block Editor: the drawing with the editor's unsaved changes in the block. When
+            // they can't be put there, nothing is written and nothing is marked as covered, so the
+            // next pass tries again instead of keeping the host without them.
+            let Ok(doc) = st.recovery_drawing() else {
+                continue;
+            };
             if journal && let Some(path) = t.file.clone() {
                 let due_full = t.full_at.is_none_or(|f| now - f >= f64::from(minutes) * 60.0);
                 if let (Some((held, from)), false) = (&t.held, due_full) {
                     t.written = Some(Arc::downgrade(&st.doc));
                     t.host = Some(Arc::downgrade(st.drawing()));
                     t.since = None;
-                    jobs.push(Job::Append { uid: st.uid, path, doc: st.recovery_drawing(), held: held.clone(), from: *from });
+                    jobs.push(Job::Append { uid: st.uid, path, doc: doc.clone(), held: held.clone(), from: *from });
                     continue;
                 }
             }
@@ -285,8 +291,7 @@ impl Autosaver {
             t.written = Some(Arc::downgrade(&st.doc));
             t.host = Some(Arc::downgrade(st.drawing()));
             t.since = None;
-            // In the Block Editor: the drawing with the editor's unsaved changes in the block.
-            jobs.push(Job::Write { uid: st.uid, path, doc: st.recovery_drawing() });
+            jobs.push(Job::Write { uid: st.uid, path, doc });
         }
         jobs
     }
