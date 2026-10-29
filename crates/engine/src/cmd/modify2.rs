@@ -2345,7 +2345,7 @@ pub(crate) fn arraypath(
 fn run_arraypath(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let path = curves::handle_param(p, "path").ok_or_else(|| bad("arraypath", "`path` (handle) is required"))?;
-    let count = p.get("count").and_then(Value::as_u64).map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+    let count = count_param("arraypath", p, "count", 1, u64::MAX)?.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
     let spacing = p.get("spacing").and_then(Value::as_f64);
     let align = bool_or(p, "align", true);
     if p.get("associative").and_then(Value::as_bool).unwrap_or_else(|| super::array::assoc_default(s)) {

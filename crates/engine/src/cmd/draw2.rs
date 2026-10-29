@@ -745,10 +745,7 @@ pub(crate) fn measure_points(c: &Chain, step: f64) -> Vec<(Vec2, Vec2)> {
 
 fn run_divide(s: &mut Session, p: &Value) -> Result<Value> {
     let h = targets(s, p)?.first().copied().ok_or_else(|| bad("divide", "`handle` is required"))?;
-    let n = p.get("segments").and_then(Value::as_u64).ok_or_else(|| bad("divide", "`segments` (2..32767) is required"))?;
-    if !(2..=32767).contains(&n) {
-        return Err(bad("divide", "segments must be 2..32767"));
-    }
+    let n = count_param("divide", p, "segments", 2, 32767)?.ok_or_else(|| bad("divide", "`segments` (2..32767) is required"))?;
     let block = str_param(p, "block").map(str::to_string);
     check_block(s, block.as_deref())?;
     let c = chain_of(s, h)?;
@@ -761,8 +758,8 @@ fn run_measure(s: &mut Session, p: &Value) -> Result<Value> {
     let h = targets(s, p)?.first().copied().ok_or_else(|| bad("measure", "`handle` is required"))?;
     let step = f64_req("measure", p, "length")?;
     let mut c = chain_of(s, h)?;
-    if step.is_nan() || step <= 0.0 || c.len() / step > MAX_GEN as f64 {
-        return Err(bad("measure", "length must be positive (and not tiny)"));
+    if !step.is_finite() || step <= 0.0 || c.len() / step > MAX_GEN as f64 {
+        return Err(bad("measure", "`length` must be a positive number (and not tiny)"));
     }
     let block = str_param(p, "block").map(str::to_string);
     check_block(s, block.as_deref())?;

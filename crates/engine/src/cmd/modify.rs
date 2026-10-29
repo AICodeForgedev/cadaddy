@@ -322,7 +322,7 @@ fn run_move(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_copy(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let d = delta_of("copy", p)?;
-    let n = p.get("count").and_then(Value::as_u64).unwrap_or(1).clamp(1, 10_000);
+    let n = count_param("copy", p, "count", 1, 10_000)?.unwrap_or(1);
     let mut out = Vec::new();
     for k in 1..=n {
         out.extend(transform_entities(s, &hs, &Mat3::translate(d * k as f64), true)?.into_iter().map(|h| h.hex()));
@@ -835,9 +835,12 @@ fn poly_len(k: &EntityKind) -> f64 {
 fn run_offset(s: &mut Session, p: &Value) -> Result<Value> {
     let h = targets(s, p)?.first().copied().ok_or_else(|| bad("offset", "`handle` is required"))?;
     let dist = f64_req("offset", p, "distance")?;
+    if !(dist.is_finite() && dist > 0.0) {
+        return Err(bad("offset", "`distance` must be a positive number"));
+    }
     let side = point_req("offset", p, "side")?;
     let e = s.doc()?.entity(h).map(|e| (**e).clone()).ok_or_else(|| bad("offset", "no such object"))?;
-    let ks = offset_kinds(&e.kind, dist.abs(), side);
+    let ks = offset_kinds(&e.kind, dist, side);
     if ks.is_empty() {
         return Err(bad("offset", "cannot offset that object"));
     }
