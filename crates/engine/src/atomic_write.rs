@@ -37,9 +37,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         Err(e) => return Err(e),
     };
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        return Err(e);
-    }
+    std::fs::create_dir_all(&dir)?;
     let (mut file, tmp) = create_temp(&dir, permissions.as_ref())?;
     let write = (|| {
         if let Some(permissions) = permissions {
