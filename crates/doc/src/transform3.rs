@@ -66,7 +66,7 @@ impl EntityKind {
                 }
             }
             EntityKind::Dimension(d) => {
-                for p in [&mut d.defpt, &mut d.text_mid, &mut d.p13, &mut d.p14, &mut d.p15, &mut d.p16] {
+                for p in d.used_points_mut() {
                     z(p);
                 }
             }
