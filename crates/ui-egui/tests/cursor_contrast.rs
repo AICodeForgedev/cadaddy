@@ -165,7 +165,7 @@ fn mspace_and_isometric_cursor_use_the_paper_display_transform() {
         .add(
             &Space::Paper("Layout1".into()),
             Common::default(),
-            EntityKind::Viewport(Viewport {
+            EntityKind::Viewport(Box::new(Viewport {
                 center: Vec3::new(70.0, 60.0, 0.0),
                 width: 100.0,
                 height: 80.0,
@@ -174,7 +174,7 @@ fn mspace_and_isometric_cursor_use_the_paper_display_transform() {
                 id: 2,
                 on: true,
                 ..Default::default()
-            }),
+            })),
         )
         .unwrap();
     let at = c.screen(Vec2::new(70.0, 60.0));
