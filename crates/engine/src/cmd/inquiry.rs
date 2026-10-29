@@ -506,6 +506,32 @@ fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "area": a, "perimeter": per, "message": area_text(s, a, per) }))
 }
 
+/// MEASUREGEOM's Volume option: the area of a polygon of three or more points, or of a closed 2D
+/// object (as AREA measures it), times the absolute value of a height.
+pub(super) fn run_volume(s: &mut Session, p: &Value) -> Result<Value> {
+    let a = if let Some(pts) = points_param(p, "points") {
+        if pts.len() < 3 {
+            return Err(bad("volume.measure", "`points` needs 3 or more [x,y] points"));
+        }
+        area_of(&pts).0
+    } else if p.get("points").is_some_and(|v| !v.is_null()) {
+        return Err(bad("volume.measure", "`points` must be a list of finite [x,y] points"));
+    } else {
+        let h = targets(s, p)?.first().copied().ok_or_else(|| bad("volume.measure", "`points` or `handle` is required"))?;
+        object_area(s, h)?.0
+    };
+    let height = f64_req("volume.measure", p, "height")?;
+    let v = a * height.abs();
+    if !v.is_finite() {
+        return Err(bad("volume.measure", "the volume is too large"));
+    }
+    Ok(json!({ "volume": v, "area": a, "height": height, "message": volume_text(s, v) }))
+}
+
+fn volume_text(s: &Session, v: f64) -> String {
+    format!("Volume = {}", fmt_n(s, v))
+}
+
 pub(crate) fn area_text(s: &Session, a: f64, per: f64) -> String {
     format!("Area = {}, Perimeter = {}", fmt_area(s, a), fmt_d(s, per))
 }

@@ -52,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(super::ask::machine("find", "FIND", [super::ask::ask("find", "Enter text to find", super::ask::Kind::Text)]))),
         CommandSpec::new("measuregeom", "Measure Geometry", run_measuregeom)
             .alias(&["mea"])
-            .params("{mode: distance|radius|angle|area|quick, ...} (quick: {at: [x,y], reach?} → distances to the nearest geometry left, right, down, up, and the area around the point)")
+            .params("{mode: distance|radius|angle|area|volume|quick, ...} (volume: {points | handle, height}; quick: {at: [x,y], reach?} → distances to the nearest geometry left, right, down, up, and the area around the point)")
             .noundo()
             .interactive(|_| Ok(Box::new(super::measuregeom::MeasureM::default()))),
         CommandSpec::new("radius.measure", "Radius", run_radius).menu(&["Tools", "Inquiry", "Radius"]).params("{handle}").noundo().interactive(
@@ -63,6 +63,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{vertex, p1, p2} | {h1, h2}")
             .noundo()
             .interactive(|_| Ok(Box::new(super::measuregeom::MeasureM::angle()))),
+        CommandSpec::new("volume.measure", "Volume", super::inquiry::run_volume)
+            .menu(&["Tools", "Inquiry", "Volume"])
+            .params("{points: [[x,y],...] (3 or more) | handle (a closed 2D object), height} → {volume, area, height}")
+            .noundo()
+            .interactive(|_| Ok(Box::new(super::measuregeom::MeasureM::volume()))),
     ]
 }
 
@@ -334,6 +339,7 @@ fn run_measuregeom(s: &mut Session, p: &Value) -> Result<Value> {
         "radius" | "r" => run_radius(s, p),
         "angle" | "a" => run_angle(s, p),
         "area" | "ar" => s.execute("area", p),
+        "volume" | "v" => super::inquiry::run_volume(s, p),
         "quick" | "q" => {
             let at = point_req("measuregeom", p, "at")?;
             let st = s.state()?;
@@ -348,7 +354,7 @@ fn run_measuregeom(s: &mut Session, p: &Value) -> Result<Value> {
             r["message"] = json!(q.text(s));
             Ok(r)
         }
-        _ => Err(bad("measuregeom", "mode must be distance, radius, angle, area or quick")),
+        _ => Err(bad("measuregeom", "mode must be distance, radius, angle, area, volume or quick")),
     }
 }
 
