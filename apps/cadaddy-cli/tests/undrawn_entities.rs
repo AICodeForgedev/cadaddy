@@ -7,7 +7,8 @@ fn cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_cadaddy-cli")).args(args).output().unwrap()
 }
 
-/// A line, two foreign REGIONs and a PDF underlay: the last three are kept as unknown entities.
+/// A line, two foreign REGIONs and a PDF underlay: the REGIONs are kept as unknown entities (the
+/// underlay is a real entity here, drawn as its frame).
 const PROXIES: &str = "0\nSECTION\n2\nENTITIES\n\
 0\nLINE\n8\n0\n10\n0\n20\n0\n11\n5\n21\n5\n\
 0\nREGION\n8\n0\n70\n1\n1\nabc\n\
@@ -23,7 +24,7 @@ fn convert_to_an_image_warns_about_entities_it_cannot_draw() {
     std::fs::write(&input, PROXIES).unwrap();
     let input = input.to_str().unwrap();
 
-    // The reader keeps the three as unknown entities (`info` counts the drawing's entities: 4).
+    // The reader keeps the two REGIONs as unknown entities (`info` counts the drawing's entities: 4).
     let out = cli(&["info", input]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["entities"], 4, "{v}");
@@ -35,7 +36,7 @@ fn convert_to_an_image_warns_about_entities_it_cannot_draw() {
         let err = String::from_utf8_lossy(&out.stderr);
         let warnings: Vec<&str> = err.lines().filter(|l| l.contains("not drawn")).collect();
         assert_eq!(warnings.len(), 1, "{ext}: {err}");
-        assert_eq!(warnings[0], format!("{input}: 3 entities not drawn (PDFUNDERLAY: 1, REGION: 2)"), "{ext}");
+        assert_eq!(warnings[0], format!("{input}: 2 entities not drawn (REGION: 2)"), "{ext}");
     }
 
     // A DXF copy keeps them, so there is nothing to warn about.
