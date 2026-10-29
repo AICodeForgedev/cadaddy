@@ -210,8 +210,8 @@ pub fn dof(d: &Drawing, handles: &[Handle]) -> Result<DofReport, SolveError> {
 mod budget_tests {
     use super::*;
     use crate::residual::{Built, Form};
-    use cadcraft_doc::{Common, ConstraintKind, EntityKind, GeomRef, Space};
-    use cadcraft_geom::{Spline, Vec2};
+    use cadaddy_doc::{Common, ConstraintKind, EntityKind, GeomRef, Space};
+    use cadaddy_geom::{Spline, Vec2};
 
     #[test]
     fn endpoint_analysis_rejects_cubic_fit_work_before_differentiation() {
@@ -219,7 +219,7 @@ mod budget_tests {
         let pts: Vec<_> = (0..500).map(|i| Vec2::new(i as f64, (i % 3) as f64)).collect();
         let mut spline = Spline::from_control(pts.clone(), 3);
         spline.fit = pts;
-        let h = d.add(&Space::Model, Common::default(), EntityKind::Spline(spline)).unwrap();
+        let h = d.add(&Space::Model, Common::default(), EntityKind::Spline(Box::new(spline))).unwrap();
         let model = Model::build(&d, &[h]);
         let endpoint = Built {
             id: 1,
