@@ -1600,7 +1600,12 @@ impl Session {
         // A call from outside while a command runs (an agent's `engine.execute` while the user
         // is in TEXT): the command's work so far, the call's and the command's rest are undo
         // steps of their own, so U never takes the call's work away with the command's.
-        let uid = if outer && self.running.is_some() { self.split_running_undo() } else { None };
+        // A call that records no undo step of its own (queries, `document.list`, the MCP server's
+        // read after every tool call) splits nothing unless it changes the drawing: a typed
+        // command stays one undo step however many calls come between its inputs.
+        let lazy = outer && self.running.is_some() && find_command(&cmd::resolve_alias(id)).is_none_or(|c| !c.undoable && !c.restores_history);
+        let lazy_pre = if lazy { self.state().ok().map(|st| (st.uid, Arc::clone(&st.doc), st.selection.clone())) } else { None };
+        let uid = if outer && !lazy && self.running.is_some() { self.split_running_undo() } else { None };
         // An agent's or script's call of a command that edits the drawing sets off reactors, as
         // the same command typed does (`start`).
         let react = outer && find_command(id).is_some_and(|c| c.undoable);
@@ -1618,6 +1623,9 @@ impl Session {
         }
         if let Some(uid) = uid {
             self.rebase_running(uid);
+        }
+        if let Some(pre) = lazy_pre {
+            self.split_running_undo_after(id, pre);
         }
         self.journal.leave();
         if react {
@@ -1657,6 +1665,30 @@ impl Session {
         }
         owner.before = Arc::clone(&st.doc);
         Some(st.uid)
+    }
+
+    /// [`Self::split_running_undo`] for a call that records no step of its own, decided after it
+    /// ran: `pre` is the drawing's uid, document and selection from before the call. A call that
+    /// left the drawing as it was splits nothing; one that changed it (the command's work so far
+    /// and the call's are steps of their own, as when the split comes first) does.
+    fn split_running_undo_after(&mut self, id: &str, pre: (u64, Arc<Drawing>, Vec<Handle>)) {
+        let (uid, doc, selection) = pre;
+        let Some(idx) = self.docs.iter().position(|d| d.uid == uid) else { return };
+        if self.docs.get(idx).is_none_or(|st| Arc::ptr_eq(&st.doc, &doc)) {
+            return;
+        }
+        let Some(owner) = self.suspended.as_ref().or(self.running.as_ref()) else { return };
+        let owner_spec = find_command(&owner.id);
+        let (label, before, sel_before) = (owner_spec.map_or("Command", |c| c.label), Arc::clone(&owner.before), owner.selection_before.clone());
+        let undoable = owner_spec.is_some_and(|c| c.undoable);
+        let call_label = find_command(&cmd::resolve_alias(id)).map_or("Command", |c| c.label);
+        let Some(st) = self.docs.get_mut(idx) else { return };
+        if undoable && !Arc::ptr_eq(&before, &doc) {
+            st.push_undo(Snapshot { label: label.to_string(), doc: Arc::clone(&before), selection: sel_before, bytes: 0 });
+        }
+        st.push_undo(Snapshot { label: call_label.to_string(), doc, selection, bytes: 0 });
+        st.revision += 1;
+        self.rebase_running(uid);
     }
 
     /// After a call from outside: the running command's step starts from the drawing the call
