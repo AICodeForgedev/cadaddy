@@ -35,6 +35,22 @@ fn content(mut v: serde_json::Value) -> serde_json::Value {
     v
 }
 
+/// Removes from the compared forms of `kind` the fields that mean nothing for it: a linear
+/// dimension's `p15` and `p16` placeholders, the pattern angle and scale of a solid fill. They are
+/// not content, so a file that doesn't hold them, or an edit that carried them along, loses nothing.
+fn drop_placeholders(kind: &cadaddy_doc::EntityKind, forms: &mut [&mut serde_json::Value]) {
+    let unused: Vec<&str> = match kind {
+        cadaddy_doc::EntityKind::Dimension(d) => d.unused_points().to_vec(),
+        cadaddy_doc::EntityKind::Hatch(h) if h.solid => vec!["angle", "scale"],
+        _ => return,
+    };
+    for o in forms.iter_mut().filter_map(|f| f.as_object_mut()) {
+        for k in &unused {
+            o.remove(*k);
+        }
+    }
+}
+
 /// Whether `n` is an anonymous block's name: `*`, a letter and a number (`*D12`, `*U3`, `*X1`).
 fn is_anonymous_block_name(n: &str) -> bool {
     let b = n.as_bytes();
@@ -321,7 +337,8 @@ fn compare_pair(e: &cadaddy_doc::Entity, f: &cadaddy_doc::Entity, out: &mut Loss
     fn v<T: Serialize>(t: &T) -> serde_json::Value {
         serde_json::to_value(t).unwrap_or_default()
     }
-    let (ka, kb) = (content(v(&e.kind)), content(v(&f.kind)));
+    let (mut ka, mut kb) = (content(v(&e.kind)), content(v(&f.kind)));
+    drop_placeholders(&e.kind, &mut [&mut ka, &mut kb]);
     let (kind, h) = (kind_name(&ka), Some(e.handle.hex()));
     if kind_name(&kb) != kind {
         out.add(format!("{kind} objects (written as {})", kind_name(&kb)), "changed", h, name);
@@ -696,5 +713,97 @@ mod tests {
         // A named block is content.
         assert_ne!(ins("Door"), ins("Window"));
         assert_ne!(ins("*Model_Space"), ins("*Paper_Space"));
+    }
+
+    fn linear() -> cadaddy_doc::Dimension {
+        let z = cadaddy_geom::Vec3::ZERO;
+        cadaddy_doc::Dimension {
+            kind: cadaddy_doc::DimKind::Linear { rotation: 0.0 },
+            defpt: z,
+            text_mid: z,
+            p13: z,
+            p14: cadaddy_geom::Vec3::new(5.0, 0.0, 0.0),
+            p15: z,
+            p16: z,
+            text: String::new(),
+            style: "Standard".into(),
+            measurement: 5.0,
+            text_rotation: 0.0,
+            user_text_pos: false,
+            block: None,
+            overrides: Default::default(),
+            assoc: Vec::new(),
+            marks: Default::default(),
+        }
+    }
+
+    /// The compared forms of two dimensions, as `compare_pair` makes them.
+    fn dim_changes(a: &cadaddy_doc::Dimension, b: &cadaddy_doc::Dimension) -> Vec<String> {
+        let kind = cadaddy_doc::EntityKind::Dimension(Box::new(a.clone()));
+        let (mut x, mut y) = (content(serde_json::to_value(a).unwrap_or_default()), content(serde_json::to_value(b).unwrap_or_default()));
+        for v in [&mut x, &mut y] {
+            if let Some(o) = v.as_object_mut() {
+                o.insert("type".into(), json!("dimension"));
+            }
+        }
+        drop_placeholders(&kind, &mut [&mut x, &mut y]);
+        changed_fields(&x, &y)
+    }
+
+    #[test]
+    fn a_linear_dimensions_placeholder_points_are_not_content() {
+        let a = linear();
+        let mut b = a.clone();
+        // The file holds other values for the points a linear dimension doesn't use.
+        let q = cadaddy_geom::Vec3::new(3.3, -1.7, 0.0);
+        (b.p15, b.p16, b.text_mid) = (q, q, q);
+        assert!(dim_changes(&a, &b).is_empty());
+        // A moved dimension carries only the points it uses.
+        let mut m = a.clone();
+        for p in m.used_points_mut() {
+            *p = *p + q;
+        }
+        assert_eq!((m.p15, m.p16, m.text_mid), (a.p15, a.p16, a.text_mid));
+        assert_ne!(m.p14, a.p14);
+        // A real loss still shows: the measurement, or a used point.
+        let mut c = a.clone();
+        c.measurement = 6.0;
+        assert_eq!(dim_changes(&a, &c), vec!["measurement"]);
+        let mut d = a.clone();
+        d.p14 = q;
+        assert_eq!(dim_changes(&a, &d), vec!["p14"]);
+        // Text the user placed is content.
+        let (mut e, mut f) = (a.clone(), a.clone());
+        (e.user_text_pos, f.user_text_pos) = (true, true);
+        e.text_mid = q;
+        assert_eq!(dim_changes(&e, &f), vec!["textMid"]);
+    }
+
+    #[test]
+    fn a_solid_fills_pattern_angle_and_scale_are_not_content_but_a_patterns_are() {
+        let hatch = |solid: bool, scale: f64| {
+            cadaddy_doc::EntityKind::Hatch(Box::new(cadaddy_doc::Hatch {
+                pattern: if solid { "SOLID" } else { "ANSI31" }.into(),
+                solid,
+                loops: Vec::new(),
+                scale,
+                angle: 0.0,
+                associative: false,
+                style: 0,
+                elevation: 0.0,
+                gradient: None,
+                origin: cadaddy_geom::Vec2::ZERO,
+                background: None,
+                pattern_lines: Vec::new(),
+            }))
+        };
+        let form = |k: &cadaddy_doc::EntityKind| content(serde_json::to_value(k).unwrap_or_default());
+        let changes = |a: cadaddy_doc::EntityKind, b: cadaddy_doc::EntityKind| {
+            let (mut x, mut y) = (form(&a), form(&b));
+            drop_placeholders(&a, &mut [&mut x, &mut y]);
+            changed_fields(&x, &y)
+        };
+        assert!(changes(hatch(true, 1.0), hatch(true, 0.526)).is_empty());
+        assert_eq!(changes(hatch(false, 1.0), hatch(false, 0.526)), vec!["scale"]);
     }
 }
