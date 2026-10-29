@@ -1,9 +1,9 @@
 //! A point held by GCFIX stays where it is when its grip is dragged (#1134): the Fix locks the
 //! position the point had, not wherever the edit left it.
 
-use cadcraft_engine::Session;
-use cadcraft_engine::doc::{EntityKind, Handle};
-use cadcraft_engine::geom::Vec2;
+use cadaddy_engine::Session;
+use cadaddy_engine::doc::{EntityKind, Handle};
+use cadaddy_engine::geom::Vec2;
 use serde_json::json;
 
 fn line(s: &mut Session, a: [f64; 2], b: [f64; 2]) -> Handle {

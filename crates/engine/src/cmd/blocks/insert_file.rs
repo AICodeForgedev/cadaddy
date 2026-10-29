@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn inserted_file_brings_its_mline_styles() {
         let mut src = Drawing::default();
-        src.mline_styles.push(cadcraft_doc::MLineStyle { name: "WALL".into(), ..Default::default() });
+        src.mline_styles.push(cadaddy_doc::MLineStyle { name: "WALL".into(), ..Default::default() });
         let mut d = Drawing::default();
         merge_tables(&mut d, &src);
         assert!(d.mline_styles.iter().any(|m| m.name == "WALL"));

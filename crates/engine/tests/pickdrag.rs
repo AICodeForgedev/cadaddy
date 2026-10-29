@@ -1,6 +1,6 @@
 //! The saved two-click preference disables drag windows without changing typed selection.
-use cadcraft_engine::geom::Vec2;
-use cadcraft_engine::{Session, cmd::options};
+use cadaddy_engine::geom::Vec2;
+use cadaddy_engine::{Session, cmd::options};
 use serde_json::json;
 
 #[test]

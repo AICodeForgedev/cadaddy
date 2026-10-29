@@ -236,7 +236,7 @@ fn delconstraint_rejects_referenced_dimension() {
 /// DCANGULAR draws.
 fn drawn_angle(s: &Session, a: &str, b: &str) -> f64 {
     let ((a0, a1), (b0, b1)) = (ends(s, a), ends(s, b));
-    let (o, _, _) = cadcraft_geom::line_line_infinite(a0, a1, b0, b1).unwrap();
+    let (o, _, _) = cadaddy_geom::line_line_infinite(a0, a1, b0, b1).unwrap();
     let far = |p: Vec2, q: Vec2| if p.dist(o) > q.dist(o) { p } else { q };
     let (u, v) = (far(a0, a1) - o, far(b0, b1) - o);
     u.cross(v).atan2(u.dot(v)).abs().to_degrees()

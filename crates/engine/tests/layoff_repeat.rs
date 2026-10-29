@@ -1,8 +1,8 @@
 //! LAYOFF stays active until Enter or Esc (#1418): every pick turns off its object's layer and the
 //! prompt comes straight back, the way AutoCAD's Layer Off works.
 
-use cadcraft_engine::doc::Handle;
-use cadcraft_engine::{Input, Session};
+use cadaddy_engine::doc::Handle;
+use cadaddy_engine::{Input, Session};
 use serde_json::json;
 
 /// The handles of the objects on `layer`.

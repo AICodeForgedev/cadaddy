@@ -1,8 +1,8 @@
 //! The Parametric category of the Tool Sets offers the constraint tools that only Tools ›
 //! Parametric used to reach: Fix, Symmetric, Delete Constraints and the rest (#1134).
 
-use cadcraft_engine::Session;
-use cadcraft_ui_egui::{CadApp, Services};
+use cadaddy_engine::Session;
+use cadaddy_ui_egui::{CadApp, Services};
 use egui::accesskit::Role;
 use egui::vec2;
 use egui_kittest::Harness;
@@ -26,7 +26,7 @@ fn harness() -> Harness<'static, CadApp> {
 
 #[test]
 fn the_parametric_category_lists_fix_symmetric_and_delete_constraints() {
-    let parametric = cadcraft_ui_egui::palettes::DRAFTING.iter().find(|(name, _, _)| *name == "Parametric").unwrap();
+    let parametric = cadaddy_ui_egui::palettes::DRAFTING.iter().find(|(name, _, _)| *name == "Parametric").unwrap();
     let ids: Vec<&str> = parametric.1.iter().chain(parametric.2).map(|(_, cmd, _)| *cmd).collect();
     for id in [
         "gcfix",

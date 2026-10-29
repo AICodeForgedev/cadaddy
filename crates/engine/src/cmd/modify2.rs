@@ -1044,7 +1044,7 @@ pub(crate) fn lengthen_kind(k: &EntityKind, pick: Option<Vec2>, mode: LenMode) -
                 return Err(other("The new arc would be zero length or a full circle."));
             }
             let na = if at_end { Arc::new(g.center, g.radius, g.start, g.start + ns) } else { Arc::new(g.center, g.radius, g.end - ns, g.end) };
-            Ok(EntityKind::Arc(cadcraft_doc::Arc { radius: na.radius, start: na.start, end: na.end, ..ar.clone() }))
+            Ok(EntityKind::Arc(cadaddy_doc::Arc { radius: na.radius, start: na.start, end: na.end, ..ar.clone() }))
         }
         EntityKind::LwPolyline(p) if !p.closed && p.vertices.len() >= 2 => {
             let total = Polyline { vertices: p.vertices.clone(), closed: false }.len();

@@ -2,23 +2,23 @@
 //! at that point (group 11, flag 70 bit 128), as for a location inside; the leader stops short
 //! of the text instead of running into it.
 
-use cadcraft_engine::Session;
-use cadcraft_engine::doc::{Dimension, EntityKind};
-use cadcraft_engine::geom::Vec2;
-use cadcraft_engine::render::{DimGeometry, LineRole};
+use cadaddy_engine::Session;
+use cadaddy_engine::doc::{Dimension, EntityKind};
+use cadaddy_engine::geom::Vec2;
+use cadaddy_engine::render::{DimGeometry, LineRole};
 use serde_json::json;
 
 fn last_dim(s: &Session) -> (Dimension, DimGeometry) {
     let d = s.doc().unwrap();
     match &d.model.last().unwrap().kind {
-        EntityKind::Dimension(dm) => (dm.clone(), cadcraft_engine::render::dimension_in(d, dm)),
+        EntityKind::Dimension(dm) => (dm.clone(), cadaddy_engine::render::dimension_in(d, dm)),
         other => panic!("not a dimension: {other:?}"),
     }
 }
 
 /// Group 70 of every DIMENSION in the saved DXF.
 fn dxf_flags(s: &Session) -> Vec<i64> {
-    let text = cadcraft_io::write_dxf(s.doc().unwrap());
+    let text = cadaddy_io::write_dxf(s.doc().unwrap());
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
     let mut flags = Vec::new();
     let mut in_dim = false;

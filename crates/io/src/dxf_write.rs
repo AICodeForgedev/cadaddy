@@ -497,7 +497,16 @@ fn dim_header_vars(w: &mut W, d: &Drawing) {
     // override the style (an architectural style reopening with decimal units).
     let style = d.dim_style(&d.header.str("DIMSTYLE", "Standard")).and_then(|s| serde_json::to_value(s).ok());
     let from_style = |field: &str| -> Option<HVal> {
-        match style.as_ref()?.get(field)? {
+        let value = style.as_ref()?.get(field)?;
+        // A colour is an object in the style, an ACI number in the header (DIMCLRD, DIMCLRE, DIMCLRT).
+        if dxf_ext::DIM_CODES.iter().any(|(f, _, k)| *f == field && *k == K::Color) {
+            let none = |_: &str| None;
+            return match dxf_ext::encode(K::Color, value, &none, &none, &none)? {
+                DimVal::Int(i) => Some(HVal::Int(i)),
+                _ => None,
+            };
+        }
+        match value {
             serde_json::Value::Bool(b) => Some(HVal::Int(i64::from(*b))),
             serde_json::Value::Number(n) if n.is_i64() || n.is_u64() => n.as_i64().map(HVal::Int),
             serde_json::Value::Number(n) => n.as_f64().map(HVal::Real),
@@ -983,6 +992,7 @@ fn computed_text_insert(d: &Drawing, t: &Text) -> Vec3 {
         v,
         backwards: ts.backwards,
         upside_down: ts.upside_down,
+        vertical: ts.vertical,
     };
     let q = cadaddy_fonts::baseline_start(&cadaddy_fonts::TextFont::resolve(&ts.font), &t.value, &p);
     if q.is_finite() { Vec3::new(q.x, q.y, a.z) } else { t.insert }
@@ -2795,16 +2805,6 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
     let scale_dict = w.h_kept("DICT/ACAD_SCALELIST");
     let scales: Vec<(&cadaddy_doc::AnnoScale, String)> = d.scales.iter().filter(|s| s.is_valid()).map(|s| (s, w.h())).collect();
     // Plot style names used by layers and objects (Normal always), each a placeholder object.
-            // DIMPOST is written even when empty: a reader that defaults a missing one to "<>"
-            // (the DWG bridge's) would otherwise give radius and diameter dimensions no "R" or
-            // "Ø" in AutoCAD (#1053).
-            if *code == dxf_ext::DIMPOST
-                && let DimVal::Str(t) = &enc
-                && t.is_empty()
-            {
-                w.s(*code, "");
-                continue;
-            }
     let pstyle_dict = w.h_kept("DICT/ACAD_PLOTSTYLENAME");
     let mut pstyle_names: Vec<String> = vec![cadaddy_doc::NORMAL_STYLE.to_string()];
     let named = d.layers.iter().map(|l| l.plot_style.as_str()).chain(every.iter().map(|e| e.common.plot_style.as_str()));
@@ -3170,6 +3170,16 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
         };
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
+            // DIMPOST is written even when empty: a reader that defaults a missing one to "<>"
+            // (the DWG bridge's) would otherwise give radius and diameter dimensions no "R" or
+            // "Ø" in AutoCAD (#1053).
+            if *code == dxf_ext::DIMPOST
+                && let DimVal::Str(t) = &enc
+                && t.is_empty()
+            {
+                w.s(*code, "");
+                continue;
+            }
             let own = dxf_ext::STYLE_XDATA.contains(code);
             if !own && !dxf_ext::NEWER_CODES.contains(code) {
                 w.dimval(*code, enc, false);

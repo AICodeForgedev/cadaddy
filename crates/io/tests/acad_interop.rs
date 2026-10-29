@@ -91,7 +91,7 @@ fn s25(kind: DimKind, p13: Vec3, p14: Vec3, defpt: Vec3) -> Drawing {
         p16: Vec3::ZERO,
         text: String::new(),
         style: "S25".into(),
-        measurement: 0.0,
+        measurement: f64::NAN,
         text_rotation: 0.0,
         user_text_pos: false,
         block: None,
@@ -99,7 +99,7 @@ fn s25(kind: DimKind, p13: Vec3, p14: Vec3, defpt: Vec3) -> Drawing {
         assoc: Vec::new(),
         marks: Default::default(),
     };
-    d.add(&Space::Model, Common::default(), EntityKind::Dimension(dm)).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Dimension(Box::new(dm))).unwrap();
     d
 }
 
