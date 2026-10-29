@@ -2835,22 +2835,30 @@ fn draw_viewcube_parts(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect, l: &crat
     // WCS pill.
     let pill = l.pill;
     p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
-    // The current UCS: WCS, its name, or Unnamed.
+    // The current UCS: WCS, its name, or Unnamed, with a down chevron drawn as lines rather than a
+    // "⌄" glyph that a UI font may lack (it showed as a box, #1541).
     let ucs = app.session.ucs();
     let label = if ucs.is_world() && ucs.name.is_empty() {
-        format!("{} ⌄", crate::tl!("WCS"))
+        crate::tl!("WCS").to_string()
     } else if ucs.name.is_empty() {
-        format!("{} ⌄", crate::tl!("Unnamed"))
+        crate::tl!("Unnamed").to_string()
     } else {
-        format!("{} ⌄", ucs.name)
+        ucs.name.clone()
     };
-    let pill = if label.chars().count() > 6 {
-        Rect::from_center_size(pill.center(), vec2(56f32.max(label.chars().count() as f32 * 7.0 + 8.0), 16.0))
+    let pill = if label.chars().count() > 4 {
+        Rect::from_center_size(pill.center(), vec2(56f32.max(label.chars().count() as f32 * 7.0 + 16.0), 16.0))
     } else {
         pill
     };
     p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
-    p.text(pill.center(), egui::Align2::CENTER_CENTER, label, crate::theme::small(), Tokens::DARK.canvas_ink);
+    let ink = Tokens::DARK.canvas_ink;
+    let label = p.layout_no_wrap(label, crate::theme::small(), ink);
+    let (gap, chevron) = (4.0, 6.0);
+    let left = pill.center().x - (label.size().x + gap + chevron) / 2.0;
+    let mid = pill.center().y;
+    p.galley(pos2(left, mid - label.size().y / 2.0), label.clone(), ink);
+    let x = left + label.size().x + gap;
+    p.line(vec![pos2(x, mid - 1.5), pos2(x + chevron / 2.0, mid + 1.5), pos2(x + chevron, mid - 1.5)], Stroke::new(1.2, ink));
 }
 
 /// A click on grip `g` (idle): Shift+click makes it hot or cold again; a plain click starts
