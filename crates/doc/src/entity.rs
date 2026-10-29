@@ -682,6 +682,35 @@ pub struct Dimension {
 }
 
 impl Dimension {
+    /// The definition points this kind of dimension keeps in its fields (JSON names), besides
+    /// `defpt`. The others are placeholders (a linear dimension has no `p15`/`p16`, a radius or
+    /// diameter dimension no `p13`/`p14`/`p16`, and the text of a linear or aligned dimension
+    /// that the user didn't move is placed by the style, not by `text_mid`): moving the
+    /// dimension must not move them, and a file need not keep them.
+    pub fn unused_points(&self) -> &'static [&'static str] {
+        match (&self.kind, self.user_text_pos) {
+            (DimKind::Linear { .. } | DimKind::Aligned, false) => &["p15", "p16", "textMid"],
+            (DimKind::Linear { .. } | DimKind::Aligned, true) => &["p15", "p16"],
+            (DimKind::Radius | DimKind::Diameter, _) => &["p13", "p14", "p16"],
+            _ => &[],
+        }
+    }
+
+    /// The points a move, copy, rotation, scaling or mirror carries along: `defpt` and every
+    /// point of [`Self::unused_points`]'s complement.
+    pub fn used_points_mut(&mut self) -> Vec<&mut Vec3> {
+        let unused = self.unused_points();
+        let is = |n: &str| !unused.contains(&n);
+        let Self { defpt, text_mid, p13, p14, p15, p16, .. } = self;
+        let mut v = vec![defpt];
+        for (n, p) in [("textMid", text_mid), ("p13", p13), ("p14", p14), ("p15", p15), ("p16", p16)] {
+            if is(n) {
+                v.push(p);
+            }
+        }
+        v
+    }
+
     /// The direction of a linear or aligned dimension's line (`None` for other kinds).
     fn line_dir(&self) -> Option<Vec2> {
         let dir = match self.kind {
@@ -1956,7 +1985,7 @@ impl EntityKind {
                 i.row_spacing *= s;
             }
             EntityKind::Dimension(d) => {
-                for p in [&mut d.defpt, &mut d.text_mid, &mut d.p13, &mut d.p14, &mut d.p15, &mut d.p16] {
+                for p in d.used_points_mut() {
                     t3(p);
                 }
                 if let DimKind::Linear { rotation } = &mut d.kind {
