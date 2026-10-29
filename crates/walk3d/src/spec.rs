@@ -670,6 +670,10 @@ pub struct Room {
     /// Device plate colour from its wall finish (the finish legend).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plates: Option<String>,
+    /// Where its tag is when the plans print none (another trade's plan tags it): the room is
+    /// traced from here, and no label of the plans claims it by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<[f64; 2]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

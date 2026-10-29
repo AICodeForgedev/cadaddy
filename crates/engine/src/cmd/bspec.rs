@@ -806,6 +806,12 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     // each the room came out twice).
     let mut claimed: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut texts = room_texts(sp, &ents);
+    // A room another trade's plan tags (none of the plans' labels does): traced from its tag.
+    for r in &sp.rooms {
+        if let (Some(at), Some(n)) = (r.at, r.number.as_deref().filter(|n| !n.trim().is_empty())) {
+            texts.push((Handle(0), n.trim().to_string(), Vec2::new(at[0], at[1])));
+        }
+    }
     texts.sort_by_key(|(_, t, _)| super::perceive::geometry::room_number(t));
     for (h, text, at) in texts {
         if out.len() >= MAX_ROOMS {
@@ -824,14 +830,15 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         // A spec room on a level is looked for on that level's plan only (every floor has its
         // OFFICE).
         let here = level_at(&sp.levels, at.x, at.y);
-        let room = sp
-            .rooms
-            .iter()
-            .position(|r| names_room(r, &text) && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l))));
+        // A room traced from its own tag (`at`) is found by its number only: the plans' unit-type
+        // label elsewhere names other rooms.
+        let is_number = super::perceive::geometry::room_number(&text);
+        let room = sp.rooms.iter().position(|r| {
+            names_room(r, &text) && (is_number || r.at.is_none()) && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l)))
+        });
         // Without room tag layers only the spec's rooms are looked for. On them, a room's name
         // or number only (not a grid bubble's letter, a note's word): a note, a sentence, a stamp
         // or a title block's line is never a room.
-        let is_number = super::perceive::geometry::room_number(&text);
         let score = super::perceive::geometry::room_name_score(&text);
         if room.is_none() && (!tagged || !(room_tag_text(&text) && (is_number || (score > 0 && super::autospec::room_like_name(&text))))) {
             continue;
