@@ -433,7 +433,7 @@ pub fn write_ascii_as(tags: &[Tag], utf8: bool) -> String {
         let _ = write!(out, "{:>3}\r\n", t.code);
         match &t.value {
             Value::Str(s) if utf8 => out.extend(s.chars().map(|c| if matches!(c, '\r' | '\n') { ' ' } else { c })),
-            Value::Str(s) => escape_unicode(s, &mut out),
+            Value::Str(s) => escape_unicode(s, &mut out, false),
             Value::Real(r) => out.push_str(&format_real(*r)),
             Value::Int(i) => out.push_str(&i.to_string()),
             Value::Bool(b) => out.push_str(&i64::from(*b).to_string()),
@@ -452,6 +452,16 @@ pub fn write_ascii_as(tags: &[Tag], utf8: bool) -> String {
 /// in [`write_ascii`]. A tag's value is converted to its code's kind, so a number written as text
 /// is stored as a number; a code outside the 16-bit range is skipped.
 pub fn write_binary(tags: &[Tag], utf8: bool) -> Vec<u8> {
+    binary(tags, utf8, false)
+}
+
+/// [`write_binary`] with the line breaks of text kept as they are (strings end at their zero
+/// byte, so a break cannot split a record), for a reader that wants the text as it was.
+pub fn write_binary_keeping_breaks(tags: &[Tag], utf8: bool) -> Vec<u8> {
+    binary(tags, utf8, true)
+}
+
+fn binary(tags: &[Tag], utf8: bool, keep_breaks: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(BINARY_SENTINEL.len() + tags.len() * 12);
     out.extend_from_slice(BINARY_SENTINEL);
     for t in tags {
@@ -466,9 +476,9 @@ pub fn write_binary(tags: &[Tag], utf8: bool) -> Vec<u8> {
                 };
                 let mut text = String::with_capacity(s.len());
                 if utf8 {
-                    text.extend(s.chars().map(|c| if matches!(c, '\r' | '\n') { ' ' } else { c }));
+                    text.extend(s.chars().map(|c| if !keep_breaks && matches!(c, '\r' | '\n') { ' ' } else { c }));
                 } else {
-                    escape_unicode(&s, &mut text);
+                    escape_unicode(&s, &mut text, keep_breaks);
                 }
                 out.extend(text.bytes().filter(|&b| b != 0));
                 out.push(0);
@@ -527,10 +537,10 @@ pub fn is_binary(bytes: &[u8]) -> bool {
 /// Escape a string for a pre-R2007 DXF, whose text is in the `$DWGCODEPAGE` code page: ASCII
 /// stays as it is and every other character becomes `\U+XXXX` (a surrogate pair of escapes
 /// above U+FFFF), so the bytes are valid in any code page. Line breaks become spaces.
-fn escape_unicode(s: &str, out: &mut String) {
+fn escape_unicode(s: &str, out: &mut String, keep_breaks: bool) {
     for c in s.chars() {
         match c {
-            '\r' | '\n' => out.push(' '),
+            '\r' | '\n' if !keep_breaks => out.push(' '),
             c if c.is_ascii() => out.push(c),
             c => {
                 let mut units = [0u16; 2];

@@ -19,12 +19,25 @@ fn content(mut v: serde_json::Value) -> serde_json::Value {
     {
         o.remove("id");
     }
+    // A dimension's anonymous block (*D1, *D2…) is numbered again by the writer: the name is not
+    // content, the block's own geometry is what the dimension draws.
+    if v.get("type").and_then(serde_json::Value::as_str) == Some("dimension")
+        && let Some(o) = v.as_object_mut()
+        && o.get("block").and_then(serde_json::Value::as_str).is_some_and(is_dim_block_name)
+    {
+        o.remove("block");
+    }
     if v.get("type").and_then(serde_json::Value::as_str) == Some("unknown")
         && let Some(serde_json::Value::Array(tags)) = v.get_mut("tags")
     {
         tags.retain(|t| !t.get("code").and_then(serde_json::Value::as_i64).is_some_and(|c| BOOKKEEPING.contains(&c)));
     }
     v
+}
+
+/// Whether `n` is an anonymous dimension block's name: `*D` and a number.
+fn is_dim_block_name(n: &str) -> bool {
+    n.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("*D")) && n.len() > 2 && n.bytes().skip(2).all(|c| c.is_ascii_digit())
 }
 
 /// Most objects of one space or block compared one by one: past it, objects spread evenly

@@ -93,6 +93,19 @@ fn viewport_twist(t: &T) -> f64 {
     t.f(51).filter(|a| a.is_finite()).map_or(0.0, |a| a.rem_euclid(360.0).to_radians())
 }
 
+/// An object whose points were turned into the world system on reading: its extrusion is plain
+/// up again (a thickness along (0, 0, -1) is a negative one), so what is written (without it)
+/// reads back as it was. A tilted extrusion is left alone.
+fn world_extrusion(c: &mut Common) {
+    let n = c.extrusion;
+    if n.x.abs() < 1e-9 && n.y.abs() < 1e-9 && n.z != 0.0 && n.z.is_finite() {
+        if n.z < 0.0 {
+            c.thickness = -c.thickness;
+        }
+        c.extrusion = Vec3::Z;
+    }
+}
+
 fn ocs(c: &Common, p: Vec3) -> Vec3 {
     ocs_n(c.extrusion, p)
 }
@@ -1398,7 +1411,12 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
             "SEQEND" => continue,
             _ => {}
         }
-        if let Some((c, mut k)) = kindent {
+        if let Some((mut c, mut k)) = kindent {
+            // Circles, arcs, solids and traces keep their extrusion (the writer puts them in it
+            // again); every other kind is in the world coordinate system by now.
+            if !matches!(k, EntityKind::Circle(_) | EntityKind::Arc(_) | EntityKind::Solid(_) | EntityKind::Trace(_)) {
+                world_extrusion(&mut c);
+            }
             let h = match handle {
                 Some(h) => {
                     d.bump_handseed(h);

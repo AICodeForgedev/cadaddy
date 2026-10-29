@@ -1015,18 +1015,28 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.s(0, "CIRCLE");
             common(w, e, owner, paper, "AcDbCircle");
             thickness(w, e);
-            w.p(10, c.center);
+            let n = extrusion_of(e);
+            w.p(10, to_ocs(n, c.center));
             w.f(40, c.radius);
+            extrusion(w, n);
         }
         EntityKind::Arc(a) => {
             w.s(0, "ARC");
             common(w, e, owner, paper, "AcDbCircle");
             thickness(w, e);
-            w.p(10, a.center);
+            let n = extrusion_of(e);
+            w.p(10, to_ocs(n, a.center));
             w.f(40, a.radius);
             w.s(100, "AcDbArc");
-            w.f(50, a.start.to_degrees());
-            w.f(51, a.end.to_degrees());
+            // The reader turns the angles of an arc under a mirrored OCS (the same step undoes it).
+            let (s, en) = if n.z < 0.0 {
+                (cadaddy_geom::norm_angle(std::f64::consts::PI - a.end), cadaddy_geom::norm_angle(std::f64::consts::PI - a.start))
+            } else {
+                (a.start, a.end)
+            };
+            w.f(50, s.to_degrees());
+            w.f(51, en.to_degrees());
+            extrusion(w, n);
         }
         EntityKind::Ellipse(el) => {
             w.s(0, "ELLIPSE");
@@ -1487,11 +1497,12 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             let solid = matches!(e.kind, EntityKind::Solid(_));
             w.s(0, if solid { "SOLID" } else { "TRACE" });
             common(w, e, owner, paper, "AcDbTrace");
-            w.p(10, s.corners[0]);
-            w.p(11, s.corners[1]);
-            w.p(12, s.corners[2]);
-            w.p(13, s.corners[3]);
+            let n = extrusion_of(e);
+            for (k, c) in s.corners.iter().enumerate() {
+                w.p(10 + k as i32, to_ocs(n, *c));
+            }
             thickness(w, e);
+            extrusion(w, n);
         }
         EntityKind::Mesh(m) => mesh(w, e, m, owner, paper, cx.target, &[]),
         EntityKind::SectionPlane(sp) => {
@@ -1805,6 +1816,36 @@ fn gradient(w: &mut W, g: &Gradient) {
 }
 
 /// Group 39 (thickness) of the entities whose DXF Reference record has one; only when set.
+/// The entity's extrusion direction when it is a usable one (finite, not zero): else the default.
+fn extrusion_of(e: &Entity) -> Vec3 {
+    let n = e.common.extrusion;
+    if n.is_finite() && n.len() > 1e-12 { n.normalized() } else { Vec3::Z }
+}
+
+/// A WCS point in the object coordinate system an extrusion direction `n` makes (the reader's
+/// `ocs` backwards).
+fn to_ocs(n: Vec3, p: Vec3) -> Vec3 {
+    if is_default_extrusion(n) {
+        return p;
+    }
+    let m = cadaddy_geom::Mat4::ocs(n);
+    let o = m.apply(Vec3::ZERO);
+    let axis = |a: Vec3| m.apply(a) - o;
+    Vec3::new(p.dot(axis(Vec3::new(1.0, 0.0, 0.0))), p.dot(axis(Vec3::new(0.0, 1.0, 0.0))), p.dot(axis(Vec3::Z)))
+}
+
+fn is_default_extrusion(n: Vec3) -> bool {
+    n.x.abs() < 1e-12 && n.y.abs() < 1e-12 && n.z > 0.0
+}
+
+/// The extrusion groups (210, 220, 230) of an object whose coordinates are in the OCS of `n`;
+/// the default direction (0, 0, 1) is left out.
+fn extrusion(w: &mut W, n: Vec3) {
+    if !is_default_extrusion(n) {
+        w.p(210, n);
+    }
+}
+
 fn thickness(w: &mut W, e: &Entity) {
     if e.common.thickness != 0.0 {
         w.f(39, e.common.thickness);
@@ -2245,7 +2286,10 @@ pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>) {
         || d.layers.iter().any(|l| l.material.is_some())
         || d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())).any(|e| e.common.material.is_some());
     let write =
-        |tags: &[Tag]| if uses_materials { cadaddy_dxf::write_ascii_as(tags, false).into_bytes() } else { cadaddy_dxf::write_binary(tags, false) };
+        |tags: &[Tag]| if uses_materials { cadaddy_dxf::write_ascii_as(tags, false).into_bytes() } else { cadaddy_dxf::write_binary_keeping_breaks(tags, false) };
+    if !uses_materials {
+        mtext_carets_decoded(&mut tags);
+    }
     let dxf = write(&tags);
     // Other programs' custom entities and objects, which the DWG writer can't write from their
     // DXF groups, go in a kept dictionary of XRECORDs instead (`dwg_keep`; reading the DWG back
@@ -2299,11 +2343,30 @@ const DWG_NATIVE_OBJECTS: &[&str] = &[
 /// bridge DXF checked record by record (a second read of it).
 fn has_custom(d: &Drawing) -> bool {
     let custom =
-        |s: &cadaddy_doc::EntityStore| s.iter().any(|e| matches!(&e.kind, EntityKind::Unknown(u) if !cadaddy_dxf::is_entity_type(&u.dxf_type)));
+        |s: &cadaddy_doc::EntityStore| s.iter().any(|e| matches!(&e.kind, EntityKind::Unknown(_)));
     d.foreign.objects.iter().any(|o| !DWG_NATIVE_OBJECTS.iter().any(|n| n.eq_ignore_ascii_case(o.kind.trim())))
         || custom(&d.model)
         || d.layouts.iter().any(|l| custom(&l.entities))
         || d.blocks.values().any(|b| custom(&b.entities))
+}
+
+/// The caret codes (`^I`, `^J`, `^ `) of MTEXT contents turned into the characters. The bridge
+/// reads the binary DXF without decoding them (only its ASCII reader does), so a tab or line
+/// break would be stored in the DWG as the two characters.
+fn mtext_carets_decoded(tags: &mut [Tag]) {
+    let mut in_mtext = false;
+    for t in tags.iter_mut() {
+        match t.code {
+            0 => in_mtext = t.str() == "MTEXT",
+            1 | 3 if in_mtext => {
+                let s = t.str();
+                if s.contains('^') {
+                    *t = Tag::s(t.code, crate::dxf_read::mtext_dxf::decode_contents(&s));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Subclass markers the DWG bridge knows by another spelling (it matches them exactly):
