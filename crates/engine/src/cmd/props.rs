@@ -17,7 +17,7 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
-        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, type?: object type (only the selected objects of that type change: line, circle, text…), layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, background?: true | false | {color?, scale?} (MTEXT mask), <geometry fields: radius, center, centerX, centerY, start, end, startX, startY, endX, endY, text, height, rotation…>}"),
+        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, type?: object type (only the selected objects of that type change: line, circle, text…), layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, background?: true | false | {color?, scale?} (MTEXT mask), <geometry fields: radius, center, centerX, centerY, start, end, startX, startY, endX, endY, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides)}"),
         CommandSpec::new("chprop", "Change Properties", run_set)
             .params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?, ...properties.set fields} (typed: AutoCAD's property prompts)")
             .interactive(|_| Ok(Box::new(chprop::ChpropM::new(false)))),
@@ -281,6 +281,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let dim_style = str_param(p, "dimStyle")
         .map(|n| d.dim_style(n).map(|st| st.name.clone()).ok_or_else(|| bad("properties.set", format!("dimension style `{n}` not found"))))
         .transpose()?;
+    let dim_over = dim_overrides(p)?;
     // MTEXT background mask: true (the drawing's background colour), {color?, scale?}, or
     // false / null to remove it.
     let background: Option<Option<cadaddy_doc::MTextBackground>> = match p.get("background") {
@@ -491,6 +492,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 if let Some(st) = &dim_style {
                     dm.style.clone_from(st);
+                    dm.block = None;
+                }
+                if !dim_over.is_empty() {
+                    dm.overrides.extend(dim_over.clone());
                     dm.block = None;
                 }
             }
@@ -985,6 +990,26 @@ fn run_dimstyle_delete(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("dimstyle.delete", format!("no dimension style `{name}`")));
     }
     Ok(dimstyles_json(d))
+}
+
+/// A dimension's text height, arrow size, overall scale (DIMSCALE) and precision as Properties
+/// sets them: per-dimension overrides, as in AutoCAD's Properties palette.
+fn dim_overrides(p: &Value) -> Result<serde_json::Map<String, Value>> {
+    let mut o = serde_json::Map::new();
+    for (key, field, zero_ok) in [("textHeight", "textHeight", false), ("arrowSize", "arrowSize", true), ("dimScale", "scale", false)] {
+        if let Some(v) = p.get(key).filter(|v| !v.is_null()) {
+            let x = v
+                .as_f64()
+                .filter(|x| x.is_finite() && (*x > 0.0 || (zero_ok && *x == 0.0)))
+                .ok_or_else(|| bad("properties.set", format!("`{key}` must be a positive number")))?;
+            o.insert(field.into(), json!(x));
+        }
+    }
+    if let Some(v) = p.get("precision").filter(|v| !v.is_null()) {
+        let n = v.as_u64().filter(|n| *n <= 8).ok_or_else(|| bad("properties.set", "`precision` must be 0 to 8 decimal places"))?;
+        o.insert("decimals".into(), json!(n));
+    }
+    Ok(o)
 }
 
 /// Per-dimension style overrides (DIMOVERRIDE): merge fields, or `clear` them.
