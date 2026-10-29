@@ -280,7 +280,20 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
     section(&mut tags, "TABLES");
     for table in ["VPORT", "LTYPE", "LAYER", "STYLE", "VIEW", "UCS", "APPID", "DIMSTYLE", "BLOCK_RECORD"] {
         let rows: Vec<&Record> = recs.iter().filter(|r| r.name == table).collect();
-        tags.extend([s(0, "TABLE"), s(2, table), s(100, "AcDbSymbolTable"), i(70, rows.len() as i64)]);
+        tags.extend([s(0, "TABLE"), s(2, table)]);
+        // The table head's handle: the header's control variable names it (it is what a drawing
+        // keeps as `TABLE/<name>` in `kept_handles`).
+        let control = match table {
+            "LTYPE" => "LINETYPE_CONTROL".to_string(),
+            "BLOCK_RECORD" => "BLOCK_CONTROL".to_string(),
+            t => format!("{t}_CONTROL"),
+        };
+        if let Some(HV::Handle(h)) = hv.get(&control) {
+            if h.value != 0 {
+                tags.push(s(5, format!("{:X}", h.value)));
+            }
+        }
+        tags.extend([s(100, "AcDbSymbolTable"), i(70, rows.len() as i64)]);
         if table == "DIMSTYLE" {
             tags.push(s(100, "AcDbDimStyleTable"));
         }

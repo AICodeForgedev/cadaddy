@@ -177,6 +177,17 @@ pub fn write(d: &Drawing, version_code: &str) -> Result<(Vec<u8>, WriteReport)> 
     Ok((bytes, report))
 }
 
+/// The handle after the highest of `out` (the handle seed, a new control's handle): an error, not
+/// a panic or a wrap to 0 (duplicate handles), when a hostile file's handle leaves no room.
+fn next_handle(out: &[RawObject]) -> Result<u64> {
+    out.iter()
+        .map(|o| o.handle)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| IoError::Format("DWG: a handle is too large to write (no free handle is left after it)".into()))
+}
+
 /// Takes out of the records the references to objects not in `written`.
 fn prune(secs: &mut HashMap<String, Vec<Record>>, written: &std::collections::HashSet<u64>) {
     for recs in secs.values_mut() {
@@ -435,11 +446,11 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>, full: bool) -> Resu
     // R2000: the viewport entity header control (empty), which readers look up for every
     // viewport; without it the ODA's reader rejects a file with a paper space viewport.
     if v == Version::R2000 {
-        let h = out.iter().map(|o| o.handle).max().unwrap_or(0) + 1;
+        let h = next_handle(&out)?;
         out.push(ek::control(v, types::VX_CONTROL, h, &[], &[]));
         hv.set("VIEWPORT_ENTITY_HEADER_CONTROL", soft(Some(h)));
     }
-    let seed = out.iter().map(|o| o.handle).max().unwrap_or(0) + 1;
+    let seed = next_handle(&out)?;
     hv.set("HANDSEED", HV::Handle(HandleRef { code: 0, value: seed }));
     let _ = href;
 

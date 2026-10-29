@@ -636,3 +636,67 @@ fn complex_linetype_text_survives_the_native_writer() {
         assert!((t.length + 0.25).abs() < 1e-9, "{v}: {t:?}");
     }
 }
+
+include!("support/foreign_dxf.rs");
+
+/// Handles another program gave its table records and objects (`Drawing::kept_handles`) are the
+/// handles of the DWG file written natively, in every version, read by the codec and by the
+/// bridge. (Fails if `dwg_write` ignores `Drawing::kept_handles`.)
+#[test]
+fn kept_handles_survive_the_native_writer() {
+    let src = cadaddy_io::read(foreign().as_bytes(), "plan.dxf").unwrap();
+    let want = [
+        ("TABLE/LAYER", 0xB1u64),
+        ("LAYER/WALLS", 0xB3),
+        ("LTYPE/DASHED", 0xA3),
+        ("STYLE/NOTES", 0xC2),
+        ("APPID/ACAD", 0xD2),
+        ("BLOCK_RECORD/DOOR", 0xE4),
+        ("BLOCK_RECORD/*MODEL_SPACE", 0xE2),
+        ("BLOCK/DOOR", 0xE9),
+        ("ENDBLK/DOOR", 0xEA),
+        ("DICT/", 0xC),
+        ("DICT/ACAD_GROUP", 0xD),
+        ("GROUP/OUTLINE", 0x2F),
+        ("LAYOUT/LAYOUT1", 0xF3),
+    ];
+    for (k, h) in want {
+        assert_eq!(src.kept_handles.get(k).copied(), Some(h), "{k} in the source drawing");
+    }
+    for v in VERSIONS {
+        let (bytes, _) = cadaddy_io::dwg_write::write(&src, v).unwrap();
+        let (native, _) = cadaddy_io::dwg_read::read(&bytes).unwrap();
+        let bridge = cadaddy_io::read_dwg(&bytes, cadaddy_io::DwgEngine::Bridge).unwrap();
+        for (reader, d) in [("native reader", &native), ("bridge", &bridge)] {
+            for (k, h) in want {
+                assert_eq!(d.kept_handles.get(k).copied(), Some(h), "{v} via the {reader}: {k}");
+            }
+        }
+    }
+}
+
+/// A handle of u64::MAX (or one too large to take a handle after it) is an error from the native
+/// writer, not a panic or a wrap to a seed of 0.
+#[test]
+fn native_writer_refuses_overflowing_handles() {
+    for big in [u64::MAX, u64::MAX - 1] {
+        let dxf = format!("0\nSECTION\n2\nENTITIES\n0\nLINE\n5\n{big:X}\n8\n0\n10\n0\n20\n0\n30\n0\n11\n5\n21\n5\n31\n0\n0\nENDSEC\n0\nEOF\n");
+        let d = cadaddy_io::read(dxf.as_bytes(), "big.dxf").unwrap();
+        assert!(d.model.iter().any(|e| e.handle.0 == big), "the source keeps handle {big:X}");
+        for v in VERSIONS {
+            let r = std::panic::catch_unwind(|| cadaddy_io::dwg_write::write(&d, v));
+            let r = r.unwrap_or_else(|_| panic!("{v}: the writer panicked on handle {big:X}"));
+            if let Ok((bytes, _)) = &r {
+                // Taking it is fine only if no other handle is duplicated or wrapped.
+                let dwg = cadaddy_dwgcodec::read(bytes).unwrap();
+                let mut seen = std::collections::HashSet::new();
+                for o in &dwg.objects {
+                    assert!(seen.insert(o.handle), "{v}: handle {:X} twice after {big:X}", o.handle);
+                }
+            }
+            if big == u64::MAX {
+                assert!(r.is_err(), "{v}: a handle of u64::MAX must be refused");
+            }
+        }
+    }
+}
