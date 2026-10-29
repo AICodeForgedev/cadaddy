@@ -905,7 +905,9 @@ pub(crate) fn linework_fit(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<(f64, V
         }
         // The coarse grid only proposes an offset per scale: a dense plan has lines in nearly
         // every coarse cell, so placements are told apart on the fine grid.
-        if let Some((o, n)) = votes.into_iter().max_by_key(|(_, n)| *n) {
+        // Ties go to the smallest offset: a hash map's order differs run to run, and with it the
+        // fit a tie picked (the same job placed 71 fewer devices one run than the next).
+        if let Some((o, n)) = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))) {
             cands.push((f64::from(n) / scells.len() as f64, s, o));
         }
         s *= 1.01;
@@ -1078,6 +1080,25 @@ mod tests {
             out.extend((0..=m).map(|i| o + (a + (b - a) * (i as f64 / m as f64)) * s));
         }
         out
+    }
+
+    #[test]
+    fn a_repeating_plan_fits_the_same_way_every_time() {
+        // Bays repeating every 30' tie many offsets: the pick must not follow a hash map's order.
+        let k = 1.0;
+        let mut tgt = Vec::new();
+        for bay in 0..8 {
+            let x0 = f64::from(bay) * 360.0;
+            for i in 0..=60 {
+                tgt.push(Vec2::new(x0, f64::from(i) * 12.0));
+                tgt.push(Vec2::new(x0 + f64::from(i % 31) * 12.0, 0.0));
+            }
+        }
+        let src: Vec<Vec2> = tgt.iter().filter(|p| p.x < 1100.0).map(|p| *p + Vec2::new(5.0, 3.0)).collect();
+        let first = linework_fit(&src, &tgt, k).map(|f| (f.0.to_bits(), f.1.x.to_bits(), f.1.y.to_bits()));
+        for _ in 0..12 {
+            assert_eq!(linework_fit(&src, &tgt, k).map(|f| (f.0.to_bits(), f.1.x.to_bits(), f.1.y.to_bits())), first);
+        }
     }
 
     #[test]

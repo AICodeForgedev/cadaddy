@@ -2906,11 +2906,16 @@ impl Session {
         Ok(Bounds2::new(lo, hi))
     }
 
-    /// The extents of the current space as seen on screen: on the view plane in a 3D view.
+    /// The extents of the current space as seen on screen: on the view plane in a 3D view, of
+    /// what 3D draws (the BIM view's built model, levels stacked, without the sheets' lines a
+    /// print set's import spreads far and wide).
     pub fn view_extents(&self) -> Result<Bounds2> {
         let st = self.state()?;
         Ok(match st.projection() {
-            Some(p) => cmd::view::view3d::projected_extents(&st.doc, &p),
+            Some(p) => match cmd::bimlook::display(&st.doc) {
+                Some(shown) => cmd::view::view3d::projected_extents(&shown, &p),
+                None => cmd::view::view3d::projected_extents(&st.doc, &p),
+            },
             None => cached_extents(&st.doc, &self.space()),
         })
     }

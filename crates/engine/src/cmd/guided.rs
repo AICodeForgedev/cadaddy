@@ -3613,6 +3613,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if !job.devices.is_empty() {
         // Onto the architecture like the MEP: a device that can't be placed is left out.
         let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
+        // (Not placed onto the architecture, stamped from typical-room plans.)
+        let mut counts = (0usize, 0usize);
         let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
             Ok((sp, true)) if has_arch => {
                 if placer.is_none() {
@@ -3645,6 +3647,19 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if !report.is_empty() {
                     progress_line(&format!("  typical-room devices stamped into rooms of their type: {} ({report:?})", stamped.len()));
                 }
+                let not_placed = job.devices.len() - out.len();
+                if not_placed > 0 {
+                    job.add_finding(
+                        StageName::BimBuild,
+                        "Devices not placed",
+                        &format!("{not_placed} devices are on sheets or views that don't line up with an architectural plan (and no typical-room plan); they are not drawn"),
+                        2,
+                        vec!["Register those sheets onto their level's plan".into()],
+                        None,
+                        false,
+                    );
+                }
+                counts = (not_placed, stamped.len());
                 let mut out = out;
                 out.extend(stamped);
                 out
@@ -3652,7 +3667,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             _ => job.devices.clone(),
         };
         match super::readers::place_devices(s, &devices, "guided job") {
-            Ok(v) => placed = Some(v),
+            Ok(mut v) => {
+                // What the devices stage read and the model doesn't hold, and what typical-room
+                // plans added: read = inserted + not placed - stamped.
+                v["not_placed"] = json!(counts.0);
+                v["stamped"] = json!(counts.1);
+                placed = Some(v);
+            }
             Err(e) => job.add_finding(
                 StageName::BimBuild,
                 &format!("The devices could not be put in the model: {e}"),
@@ -3670,6 +3691,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Q6029 MUST 3: pass a configurable time budget (default 20 min).
     bim_step(s, job, "devices placed", t);
     let t = web_time::Instant::now();
+    if let Some(place) = placer.as_deref() {
+        let n = anchor_other_trade_rooms(s, job, place)?;
+        if n > 0 {
+            progress_line(&format!("  rooms traced from other trades' tags: {n}"));
+        }
+    }
     let budget_s = super::bspec::BUILD_BUDGET_S;
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s}))?;
     bim_step(s, job, "model built", t);
@@ -4048,6 +4075,52 @@ fn tidy_runs(runs: &mut Vec<cadaddy_walk3d::MepRun>, upf: f64, ducts: &BTreeSet<
     let before = runs.len();
     super::runtidy::drop_repeats(runs, upf, &|r| ducts.contains(&r.system));
     (sized, before - runs.len())
+}
+
+/// The rooms only the other disciplines' plans tag (rooms stage `other_trade`): each spec room
+/// of such a number gets its tag's place on its level's architectural plan (`at`), so the build
+/// traces the room there, and the tag's name when it reads as one (a unit type). A door's tag
+/// is no room's. How many were anchored.
+fn anchor_other_trade_rooms(
+    s: &mut Session,
+    job: &GuidedJob,
+    place: &dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>,
+) -> Result<usize> {
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(0) };
+    let extras: Vec<(String, String, [f64; 2], String)> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| r.get("other_trade").and_then(Value::as_bool) == Some(true))
+        .filter_map(|r| {
+            let n = r.get("number").and_then(Value::as_str)?.trim().to_string();
+            let name = r.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let at = [r.get("at")?.get(0)?.as_f64()?, r.get("at")?.get(1)?.as_f64()?];
+            Some((n, name, at, r.get("level").and_then(Value::as_str).unwrap_or("").to_string()))
+        })
+        .collect();
+    let mut anchored = 0;
+    for (number, name, at, level) in extras {
+        if name.to_ascii_uppercase().contains("DOOR") {
+            continue;
+        }
+        let Some(m) = place(at, &level) else { continue };
+        let Some(r) = sp.rooms.iter_mut().find(|r| r.at.is_none() && r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(&number))) else {
+            continue;
+        };
+        r.at = Some(m.apply(at));
+        if r.name.trim().is_empty() && legible_room_name(&name) && super::perceive::geometry::room_name_score(&name) > 0 {
+            r.name = name;
+        }
+        anchored += 1;
+    }
+    if anchored > 0 {
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    Ok(anchored)
 }
 
 /// The numbers the other disciplines' plans gave rooms the architectural plans left unnumbered

@@ -674,3 +674,18 @@ fn every_parameter_the_view_takes_is_documented() {
         assert_eq!(cadaddy_engine::unknown_params(spec(id), &p), Vec::<String>::new(), "{id}");
     }
 }
+
+/// Zoom extents in 3D frames what 3D draws: the built model, not a print set's sheets spread
+/// far off (their lines aren't drawn in the BIM view, so the building was a speck in a corner).
+#[test]
+fn zoom_extents_in_3d_frames_the_built_model_not_the_sheets() {
+    let mut s = building();
+    s.execute("line", &json!({"points": [[200_000.0, 200_000.0], [201_000.0, 200_000.0]]})).unwrap();
+    s.execute("view.swiso", &json!({})).unwrap();
+    let bim = s.view_extents().unwrap();
+    assert!(bim.max.x - bim.min.x < 50_000.0 && bim.max.y - bim.min.y < 50_000.0, "the building only: {bim:?}");
+    // The BIM view off: 3D draws the drawing as it is, the far line too.
+    s.execute("bim.look", &json!({"on": false})).unwrap();
+    let all = s.view_extents().unwrap();
+    assert!(all.max.x - all.min.x > 100_000.0 || all.max.y - all.min.y > 100_000.0, "everything: {all:?}");
+}

@@ -247,3 +247,30 @@ fn a_room_element_holds_its_properties_once_and_keeps_user_edits_through_a_rebui
     assert!(g2.to_string().contains("\"user\""), "{g2}");
     assert!(g2.to_string().contains("\"101\""), "{g2}");
 }
+
+/// A room the architectural plan doesn't label (another trade's plan tags it): its spec room
+/// carries where the tag is, and the build traces and numbers the room from there. A name label
+/// elsewhere on the plan never claims it.
+#[test]
+fn a_room_only_another_trade_tags_is_traced_from_its_tag() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    floor(&mut s, 0.0, 0.0, 1.0, &["STORAGE", "101"], &[]);
+    let levels = json!([{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0, "region": L1}]);
+    s.execute("bspec.draft", &json!({"store": true, "levels": levels, "stack": true})).unwrap();
+    let mut spec = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
+    spec["rooms"] = json!([
+        {"name": "STORAGE", "number": "101"},
+        {"name": "STORAGE", "number": "102", "at": [340.0, 200.0]}
+    ]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let list = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = list["rooms"].as_array().unwrap();
+    let get = |n: &str| rooms.iter().find(|x| x["number"] == json!(n)).unwrap_or_else(|| panic!("room {n}: {list}"));
+    // The east room, traced from the other trade's tag; the west one from its own labels.
+    assert!(get("102")["at"][0].as_f64().unwrap() > 240.0, "{list}");
+    assert!(get("101")["at"][0].as_f64().unwrap() < 240.0, "{list}");
+    assert_eq!(rooms.len(), 2, "{list}");
+}

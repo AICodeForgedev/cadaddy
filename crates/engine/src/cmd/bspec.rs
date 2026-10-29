@@ -211,8 +211,10 @@ pub(crate) fn room_texts(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<(Handl
     let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
     let on: Vec<&Arc<Entity>> =
         ents.iter().copied().filter(|e| !tagged || sp.role(&e.common.layer).is_some_and(|r| r.role == Role::RoomTag)).collect();
+    let mut read = super::perceive::texts(&on);
+    super::perceive::geometry::lift_qualifiers(&mut read);
     let mut out: Vec<(Handle, String, Vec2)> =
-        super::perceive::texts(&on).into_iter().filter(|(_, t, at, _)| !t.is_empty() && at.is_finite()).map(|(h, t, at, _)| (h, t, at)).collect();
+        read.into_iter().filter(|(_, t, at, _)| !t.is_empty() && at.is_finite()).map(|(h, t, at, _)| (h, t, at)).collect();
     // Room tag blocks: their name and number attributes, as the rooms stage reads them.
     for e in &on {
         let EntityKind::Insert(i) = &e.kind else { continue };
@@ -777,11 +779,17 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     let plan = if regions.is_empty() {
         room_plan(s)?
     } else {
-        let inside =
-            |c: Vec2| regions.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
-        let keep: std::collections::HashSet<Handle> =
-            plan_objects(d).into_iter().filter(|e| centre(d, e).is_some_and(inside)).map(|e| e.handle).collect();
-        room_plan_of(s, &keep)?
+        let inside = |c: Vec2| regions.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
+        let keep: std::collections::HashSet<Handle> = plan_objects(d).into_iter().filter(|e| centre(d, e).is_some_and(inside)).map(|e| e.handle).collect();
+        // Those objects as `room_plan` makes a plan of them: room-bounding layers only, each
+        // centreline wall as its two faces.
+        match room_plan_of(s, &keep)? {
+            Some(t) => match room_plan_for(&t, Some(sp.clone()))? {
+                Some(faced) => Some(faced),
+                None => Some(t),
+            },
+            None => None,
+        }
     };
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<Traced> = Vec::new();
@@ -798,6 +806,12 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     // each the room came out twice).
     let mut claimed: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut texts = room_texts(sp, &ents);
+    // A room another trade's plan tags (none of the plans' labels does): traced from its tag.
+    for r in &sp.rooms {
+        if let (Some(at), Some(n)) = (r.at, r.number.as_deref().filter(|n| !n.trim().is_empty())) {
+            texts.push((Handle(0), n.trim().to_string(), Vec2::new(at[0], at[1])));
+        }
+    }
     texts.sort_by_key(|(_, t, _)| super::perceive::geometry::room_number(t));
     for (h, text, at) in texts {
         if out.len() >= MAX_ROOMS {
@@ -805,11 +819,9 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         }
         if super::perceive::geometry::room_number(&text) {
             let here = level_at(&sp.levels, at.x, at.y).map(|l| l.name.clone());
-            if let Some(o) = out
-                .iter_mut()
-                .find(|o| o.number.is_none() && here.as_ref().is_none_or(|l| *l == o.level) && cadaddy_geom::point_in_polygon(&o.outline, at))
-            {
-                if sp.rooms.iter().any(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(text.trim()))) {
+            if let Some(o) = out.iter_mut().find(|o| o.number.is_none() && here.as_ref().is_none_or(|l| *l == o.level) && cadaddy_geom::point_in_polygon(&o.outline, at)) {
+                // On a room tag layer any number is a room's; else only the spec's rooms' numbers.
+                if tagged || sp.rooms.iter().any(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(text.trim()))) {
                     o.number = Some(text.trim().to_string());
                 }
                 continue;
@@ -818,14 +830,15 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         // A spec room on a level is looked for on that level's plan only (every floor has its
         // OFFICE).
         let here = level_at(&sp.levels, at.x, at.y);
-        let room = sp
-            .rooms
-            .iter()
-            .position(|r| names_room(r, &text) && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l))));
+        // A room traced from its own tag (`at`) is found by its number only: the plans' unit-type
+        // label elsewhere names other rooms.
+        let is_number = super::perceive::geometry::room_number(&text);
+        let room = sp.rooms.iter().position(|r| {
+            names_room(r, &text) && (is_number || r.at.is_none()) && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l)))
+        });
         // Without room tag layers only the spec's rooms are looked for. On them, a room's name
         // or number only (not a grid bubble's letter, a note's word): a note, a sentence, a stamp
         // or a title block's line is never a room.
-        let is_number = super::perceive::geometry::room_number(&text);
         let score = super::perceive::geometry::room_name_score(&text);
         if room.is_none() && (!tagged || !(room_tag_text(&text) && (is_number || (score > 0 && super::autospec::room_like_name(&text))))) {
             continue;
