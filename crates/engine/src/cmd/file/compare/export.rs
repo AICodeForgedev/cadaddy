@@ -355,13 +355,21 @@ fn paint(d: &mut Drawing, e: &mut Entity, color: Color, tinted: &mut Tinted, dep
     };
     for a in attribs.into_iter().flatten() {
         a.props.color = Some(color);
+        if let Some(ml) = a.multiline.as_mut() {
+            ml.mtext.contents = without_color_codes(&ml.mtext.contents);
+        }
     }
-    // Colors an object carries apart from its own: inline MTEXT colors, a dimension style's
-    // DIMCLRD, DIMCLRE and DIMCLRT, gradient colors, multiline element colors, the style colors of
-    // a table or a tolerance (through a recolored copy of the style) and inline cell colors. Hatch
-    // backgrounds, multiline fills and table cell fills are left out.
+    // Colors an object carries apart from its own: inline MTEXT colors (in multiline attributes
+    // too), a dimension style's DIMCLRD, DIMCLRE and DIMCLRT, gradient colors, multiline element
+    // colors, the style colors of a table or a tolerance (through a recolored copy of the style)
+    // and inline cell colors. Hatch backgrounds, multiline fills and table cell fills are left out.
     match &mut e.kind {
         EntityKind::MText(t) => t.contents = without_color_codes(&t.contents),
+        EntityKind::AttDef(a) => {
+            if let Some(ml) = a.multiline.as_mut() {
+                ml.mtext.contents = without_color_codes(&ml.mtext.contents);
+            }
+        }
         EntityKind::MLeader(m) => {
             if let Some(t) = m.text.as_mut() {
                 t.contents = without_color_codes(&t.contents);
