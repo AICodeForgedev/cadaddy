@@ -408,7 +408,7 @@ fn stretch_entity(e: &mut Entity, wins: &[StretchArea], d: Vec2) {
         }
         EntityKind::Solid(so) | EntityKind::Trace(so) => so.corners.iter_mut().for_each(mv),
         EntityKind::Dimension(dm) => {
-            for p in [&mut dm.p13, &mut dm.p14, &mut dm.defpt, &mut dm.text_mid] {
+            for p in dm.used_points_mut() {
                 mv(p);
             }
             dm.block = None;
