@@ -177,7 +177,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "MEASUREINIT" => json!(i32::from(st.measureinit)),
         "ZOOMFACTOR" => json!(st.zoomfactor),
         "LASTPOINT" => json!([s.last_point.x, s.last_point.y, 0.0]),
-        // Held in radians (as `$ANGBASE` in DXF); reported in degrees, like POLARANG.
+        // Held in radians (`$ANGBASE` in DXF is in degrees); reported in degrees, like POLARANG.
         "ANGBASE" => json!(s.doc().ok()?.header.f64("ANGBASE", 0.0).to_degrees()),
         "CONSTRAINTINFER" => json!(i32::from(s.doc().ok()?.parametric.settings.infer)),
         // Text, as AutoCAD reads it back; the header keeps the index (and CECOLOR_RGB) for DXF.

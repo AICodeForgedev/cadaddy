@@ -1490,6 +1490,9 @@ fn header(tags: &[Tag], d: &mut Drawing) {
                 },
                 // $DIMJOGANG is in radians; the variable (like the style) holds degrees.
                 HVal::Real(r) if name == "DIMJOGANG" => HVal::Real((r.to_degrees() * 1e9).round() / 1e9),
+                // $ANGBASE is in degrees (a drawing measured from north has 90.0); the variable
+                // holds radians.
+                HVal::Real(r) if name == "ANGBASE" => HVal::Real(r.to_radians()),
                 hv => hv,
             };
             d.header.set(&name, hv);
@@ -2029,6 +2032,8 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     }
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
+    // A file without $INSUNITS declares no units (#1209); only new drawings take the template's.
+    d.header.set_i64("INSUNITS", 0);
     let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
     if let Some(objects) = secs.iter().find(|s| s.name == "OBJECTS") {
         let (materials, names) = crate::dxf_material::read(&records(&objects.tags));
@@ -2164,7 +2169,12 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
         d.layouts.push(Layout::new("Layout1", 1));
         paper_block_for.insert("*PAPER_SPACE".into(), "Layout1".into());
     }
-    let first_layout = d.layouts.first().map(|l| l.name.clone()).unwrap_or_else(|| "Layout1".into());
+    // The layout in `*Paper_Space` is the active one, kept when it isn't the first tab (the first
+    // is active by default); paper-space entities without an owner go there.
+    let active = paper_block_for.get("*PAPER_SPACE").cloned();
+    let first_tab = d.layouts.iter().min_by_key(|l| l.tab_order).map(|l| l.name.clone());
+    d.active_layout = active.clone().filter(|a| Some(a) != first_tab.as_ref());
+    let first_layout = active.or_else(|| d.layouts.first().map(|l| l.name.clone())).unwrap_or_else(|| "Layout1".into());
     // Blocks: model/paper space blocks hold entities in newer files.
     for (name, base, description, ents, xref) in blocks {
         let up = name.to_ascii_uppercase();
@@ -2185,8 +2195,13 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
             continue;
         }
         // Generated geometry we rebuild on save: table blocks, and standard arrowhead blocks
-        // nothing inserts.
-        if rx.table_blocks.contains(&up) || (crate::dxf_ext::is_standard_arrow(&name) && !rx.inserted.contains(&up)) {
+        // nothing inserts whose content is the one CADaddy writes. An arrowhead block with other
+        // content (AutoCAD's `_Dot`, a user's redefinition) is kept, so dimensions keep it.
+        let generated_arrow = || {
+            let own: Vec<&Entity> = ents.iter().map(|(_, _, e)| &**e).collect();
+            crate::dxf_ext::is_standard_arrow(&name) && !rx.inserted.contains(&up) && crate::dxf_write::is_generated_arrow(&name, &own)
+        };
+        if rx.table_blocks.contains(&up) || generated_arrow() {
             continue;
         }
         let mut b = Block::new(&name);
@@ -2352,6 +2367,8 @@ struct Objects {
     layer_filters: Vec<(String, Vec<String>)>,
     /// The first GEODATA object (the drawing's geographic location).
     geodata: Option<Vec<Tag>>,
+    /// WIPEOUTVARIABLES: the drawing's WIPEOUTFRAME (0 = frames hidden, 1 = shown).
+    wipeout_frame: Option<i64>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -2405,6 +2422,7 @@ impl Objects {
             "FIELD" | "ACAD_FIELD" if self.fields.len() < MAX_OBJECTS => {
                 self.fields.insert(h, tags.to_vec());
             }
+            "WIPEOUTVARIABLES" => self.wipeout_frame = T(tags).i(70).filter(|v| (0..=2).contains(v)),
             "SORTENTSTABLE" if self.sortents.len() < MAX_OBJECTS => {
                 if let Some(t) = sortents_table(tags) {
                     self.sortents.push(t);
@@ -2438,6 +2456,9 @@ impl Objects {
         // Fields: codes back into their texts, cached values kept.
         crate::dxf_field::apply(d, &rx.text_fields, &self.fields, &self.field_dicts);
         d.geo = self.geodata.as_deref().and_then(crate::dxf_geo::read);
+        if let Some(v) = self.wipeout_frame {
+            d.header.set_i64("WIPEOUTFRAME", v);
+        }
         if let Some(style) = self.xrecord_text(crate::dxf_ext::MLEADER_STYLE_KEY).filter(|s| !s.trim().is_empty()) {
             d.header.set_str("CMLEADERSTYLE", &style);
         }
@@ -2667,10 +2688,25 @@ fn dimassoc(d: &mut Drawing, tags: &[Tag]) {
     if !dm.assoc.is_empty() {
         return;
     }
+    // A radial or diametric dimension names its circle once, by its centre.
+    if matches!(dm.kind, DimKind::Radius | DimKind::Diameter) {
+        let links = radial_links(d, dm, tail);
+        if !links.is_empty() {
+            let _ = d.modify_entity(dim_h, |e| {
+                if let EntityKind::Dimension(dm) = &mut e.kind {
+                    dm.assoc = links;
+                }
+            });
+        }
+        return;
+    }
     let slots: &[&str] = match dm.kind {
         DimKind::Linear { .. } | DimKind::Aligned => &["p13", "p14"],
+        DimKind::Angular => &["p13", "p14", "p15", "p16"],
+        DimKind::Angular3P => &["p13", "p14", "p15"],
+        DimKind::ArcLength => &["p13", "p14"],
         DimKind::Ordinate { .. } => &["p13"],
-        _ => return,
+        DimKind::Radius | DimKind::Diameter => return,
     };
     let flags = T(tail).i(90).unwrap_or(0);
     let used: Vec<&str> = slots.iter().enumerate().filter(|(i, _)| flags & (1 << i) != 0).map(|(_, s)| *s).collect();
@@ -2699,9 +2735,51 @@ fn dimassoc(d: &mut Drawing, tags: &[Tag]) {
     }
 }
 
-/// A CADaddy snap from a DIMASSOC object snap type and point, and for a polyline the segment
-/// the point is an end of: AutoCAD writes no usable point there (10/20 are 0, #1049), the segment
-/// and the osnap (1 its end, 13 its start) name the vertex.
+/// Associations of a radial or diametric dimension from its one standard reference: the circle
+/// or arc it measures, by its centre (osnap 3). The definition points are then on that circle,
+/// so the dimension follows its radius or diameter.
+fn radial_links(d: &Drawing, dm: &Dimension, tail: &[Tag]) -> Vec<DimAssoc> {
+    let starts: Vec<usize> = tail.iter().enumerate().filter(|(_, x)| x.code == 1 && x.str() == "AcDbOsnapPointRef").map(|(i, _)| i).take(8).collect();
+    for (k, s) in starts.iter().enumerate() {
+        let end = starts.get(k + 1).copied().unwrap_or(tail.len());
+        let r = T(tail.get(s + 1..end).unwrap_or(&[]));
+        if !matches!(r.i(72), Some(3 | 4)) {
+            continue;
+        }
+        let Some(handle) = r.s(331).and_then(|h| Handle::parse_hex(&h)) else { continue };
+        let Some(centre) = circle_centre(d, handle) else { continue };
+        let on = |point: &str, p: Vec3| {
+            let angle = centre.angle_to(p.xy());
+            angle.is_finite().then(|| DimAssoc { point: point.into(), handle, snap: AssocSnap::OnCircle { angle } })
+        };
+        let links = match dm.kind {
+            DimKind::Radius => on("p15", dm.p15).map(|p15| vec![DimAssoc { point: "defpt".into(), handle, snap: AssocSnap::Center }, p15]),
+            DimKind::Diameter => [on("defpt", dm.defpt), on("p15", dm.p15)].into_iter().collect::<Option<Vec<_>>>(),
+            _ => None,
+        };
+        if let Some(links) = links {
+            return links;
+        }
+    }
+    Vec::new()
+}
+
+/// The planar centre of a circle or arc, or `None` for any other entity: the point a radial or
+/// diametric dimension's single DIMASSOC reference names.
+fn circle_centre(d: &Drawing, h: Handle) -> Option<Vec2> {
+    match &d.entity(h)?.kind {
+        EntityKind::Circle(c) => Some(c.center.xy()),
+        EntityKind::Arc(a) => Some(a.center.xy()),
+        _ => None,
+    }
+}
+
+/// A CADaddy snap from a DIMASSOC object snap type and point. For a line or arc the osnap alone
+/// says which end: 13 is the start and 1 the end, whatever the stored point (the point is
+/// 0,0,0 for curves, and choosing by distance gave the wrong end for arcs). A point entity has
+/// only one position, so both codes mean it.
+/// For a polyline the segment the point is an end of is given too: AutoCAD writes no usable
+/// point there (10/20 are 0, #1049), the segment and the osnap name the vertex.
 fn infer_snap(d: &Drawing, osnap: i64, main: Handle, other: Option<Handle>, at: Vec2, segment: Option<i64>) -> Option<AssocSnap> {
     let e = d.entity(main)?;
     if let (EntityKind::LwPolyline(p), Some(k), 1 | 13) = (&e.kind, segment, osnap) {
@@ -2714,15 +2792,18 @@ fn infer_snap(d: &Drawing, osnap: i64, main: Handle, other: Option<Handle>, at: 
     Some(match osnap {
         1 | 13 => match &e.kind {
             EntityKind::Line(l) => {
-                if osnap == 13 || l.a.xy().dist(at) <= l.b.xy().dist(at) {
+                if osnap == 13 || (at != Vec2::ZERO && l.a.xy().dist(at) <= l.b.xy().dist(at)) {
                     AssocSnap::Start
                 } else {
                     AssocSnap::End
                 }
             }
-            EntityKind::Arc(a) => {
-                let g = cadaddy_geom::Arc::new(a.center.xy(), a.radius, a.start, a.end);
-                if osnap == 13 || g.start_point().dist(at) <= g.end_point().dist(at) { AssocSnap::Start } else { AssocSnap::End }
+            EntityKind::Arc(_) => {
+                if osnap == 13 {
+                    AssocSnap::Start
+                } else {
+                    AssocSnap::End
+                }
             }
             EntityKind::LwPolyline(p) => {
                 let index = p.vertices.iter().enumerate().min_by(|x, y| x.1.p.dist(at).total_cmp(&y.1.p.dist(at))).map(|(i, _)| i)?;
@@ -2792,6 +2873,7 @@ fn page_setup(t: &T) -> PageSetup {
     if let Some(s) = pos(ratio).or_else(|| pos(t.f(147))) {
         p.scale = s;
     }
+    p.plot_window = [t.f(48), t.f(49), t.f(140), t.f(141)].map(|v| v.filter(|v| v.is_finite()).unwrap_or(0.0));
     p.plot_area = match t.i(74) {
         Some(0) => "display",
         Some(1) => "extents",

@@ -3541,15 +3541,34 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let sim = placer.insert(Box::new(arch_placer(s.doc()?, &sp)));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
                 let before = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
+                // Which sheets' runs can't be placed (both ends, or one end off the plan), and how
+                // much of them: where a registration is missing.
+                let upf_runs = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+                let mut unplaced: BTreeMap<String, (usize, f64)> = BTreeMap::new();
                 sp.mep.runs.retain_mut(|r| {
-                    match r.points.first().and_then(|p| sim(*p, &r.level)).filter(|_| r.points.last().is_some_and(|p| sim(*p, &r.level).is_some())) {
-                        Some(t) => {
+                    let start = r.points.first().and_then(|p| sim(*p, &r.level));
+                    let end = start.and_then(|_| r.points.last().and_then(|p| sim(*p, &r.level)));
+                    match (start, end) {
+                        (Some(t), Some(_)) => {
                             r.points.iter_mut().for_each(|p| *p = t.apply(*p));
                             true
                         }
-                        None => false,
+                        _ => {
+                            let why = if start.is_some() { " one end" } else { "" };
+                            let ft = r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf_runs;
+                            let e = unplaced
+                                .entry(format!("{} on {}{why}", if r.source_sheet.is_empty() { "?" } else { &r.source_sheet }, r.level))
+                                .or_default();
+                            e.0 += 1;
+                            e.1 += ft;
+                            false
+                        }
                     }
                 });
+                if !unplaced.is_empty() {
+                    let list: Vec<String> = unplaced.iter().map(|(k, (n, ft))| format!("{k}: {n} ({ft:.0} ft)")).collect();
+                    progress_line(&format!("  MEP runs not placeable by sheet: {}", list.join(", ")));
+                }
                 sp.mep.terminals.retain_mut(|t| match sim(t.at, &t.level) {
                     Some(m) => {
                         t.at = m.apply(t.at);
@@ -3709,6 +3728,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let scraps = drop_numbered_scraps(s)?;
     if scraps > 0 {
         progress_line(&format!("  room scraps dropped (under {SCRAP_SF} sf, a bigger room of the level has their number): {scraps}"));
+    }
+    let stacked = number_stacked_rooms(s)?;
+    if stacked > 0 {
+        progress_line(&format!("  rooms numbered from the same room on another floor: {stacked}"));
     }
     let t = web_time::Instant::now();
     if let Some(v) = placed {
@@ -4383,6 +4406,71 @@ const MAX_STAMPED: usize = 20_000;
 /// carries its number (or, unnumbered, its name): a sliver of that room traced from its label (a
 /// tub, a closet's corner).
 const SCRAP_SF: f64 = 15.0;
+
+/// Numbers each unnumbered room from the same room on another floor (typical floors: room 305
+/// over 205 and under 405); how many.
+fn number_stacked_rooms(s: &mut Session) -> Result<usize> {
+    let upf = match super::bspec::current(s, "bim_build") {
+        Ok((sp, true)) if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 => sp.units_per_foot,
+        _ => 12.0,
+    };
+    let numbers = stacked_numbers(&super::bspec::room_elements(s.doc()?), upf);
+    for (h, n) in &numbers {
+        s.doc_mut()?.modify_entity(*h, |e| {
+            let mut x = e.common.xdata.to_vec();
+            x.push(cadaddy_doc::RawTag { code: 1000, value: format!("number:{n}") });
+            e.common.xdata = x.into();
+        })?;
+    }
+    Ok(numbers.len())
+}
+
+/// The numbers [`number_stacked_rooms`] gives: an unnumbered room of a level takes the number of a
+/// room stacked on it on another level (the same name, or that room known by its number alone; its
+/// middle within 2 feet; its area within a third: the floors' outlines of one room differ), that
+/// level's floor (the digits of its name, the number's first characters) swapped for its own.
+/// Only when every such room agrees and the number is new on its level.
+fn stacked_numbers(rooms: &[super::bspec::RoomElement], upf: f64) -> Vec<(cadaddy_doc::Handle, String)> {
+    let floor = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let norm = |n: &str| n.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_uppercase();
+    // Known by its number alone ("Room 305"): no name to tell it from another.
+    let bare = |o: &super::bspec::RoomElement| {
+        let n = norm(&o.name);
+        n == "ROOM" || o.number.as_deref().is_some_and(|num| n == format!("ROOM {}", num.trim().to_ascii_uppercase()))
+    };
+    let mid = |r: &super::bspec::RoomElement| {
+        let b = cadaddy_geom::Bounds2::from_points(r.outline.iter().copied());
+        (!b.is_empty()).then(|| b.center())
+    };
+    let mut out: Vec<(cadaddy_doc::Handle, String, String)> = Vec::new();
+    for r in rooms.iter().filter(|r| r.number.is_none()) {
+        let (name, here) = (norm(&r.name), floor(&r.level));
+        let Some(m) = mid(r) else { continue };
+        if name.is_empty() || name == "ROOM" || here.is_empty() || r.area_sf.is_nan() || r.area_sf <= 0.0 {
+            continue;
+        }
+        let proposed: BTreeSet<String> = rooms
+            .iter()
+            .filter(|o| o.level != r.level && (norm(&o.name) == name || bare(o)) && (o.area_sf - r.area_sf).abs() <= 0.35 * r.area_sf.max(o.area_sf))
+            .filter(|o| mid(o).is_some_and(|c| c.dist(m) <= 2.0 * upf))
+            .filter_map(|o| {
+                let (n, there) = (o.number.as_deref()?.trim(), floor(&o.level));
+                let rest = n.strip_prefix(there.as_str()).filter(|_| !there.is_empty() && n.len() >= 3)?;
+                (!rest.is_empty()).then(|| format!("{here}{rest}"))
+            })
+            .collect();
+        if proposed.len() == 1
+            && let Some(n) = proposed.into_iter().next()
+        {
+            out.push((r.handle, r.level.clone(), n));
+        }
+    }
+    // New on its level: neither a room of the level has it nor two rooms are given it.
+    let taken =
+        |level: &str, n: &str| rooms.iter().any(|o| o.level == level && o.number.as_deref().is_some_and(|m| m.trim().eq_ignore_ascii_case(n)));
+    let twice = |level: &str, n: &str| out.iter().filter(|(_, l, m)| l == level && m == n).count() > 1;
+    out.iter().filter(|(_, l, n)| !taken(l, n) && !twice(l, n)).map(|(h, _, n)| (*h, n.clone())).collect()
+}
 
 /// Removes the scraps ([`SCRAP_SF`]); how many.
 fn drop_numbered_scraps(s: &mut Session) -> Result<usize> {
@@ -7245,6 +7333,40 @@ mod tests {
         assert_eq!(into_room([36.0, 72.0], view, [1000.0, 0.0, 1144.0, 288.0]), Some([1036.0, 72.0]));
         assert_eq!(into_room([36.0, 72.0], view, [0.0, 0.0, 288.0, 144.0]), Some([72.0, 108.0]));
         assert_eq!(into_room([36.0, 72.0], [0.0, 0.0, 0.0, 288.0], view), None);
+    }
+
+    #[test]
+    fn a_typical_floors_room_takes_the_number_of_the_same_room_above_it() {
+        let v = cadaddy_geom::Vec2::new;
+        let room = |h: u64, level: &str, name: &str, number: Option<&str>, x: f64| super::super::bspec::RoomElement {
+            handle: cadaddy_doc::Handle(h),
+            level: level.into(),
+            name: name.into(),
+            number: number.map(String::from),
+            area_sf: 200.0,
+            ceiling_ft: 9.0,
+            finish: None,
+            source: cadaddy_doc::Handle(0),
+            outline: vec![v(x, 0.0), v(x + 120.0, 0.0), v(x + 120.0, 240.0), v(x, 240.0)],
+            z: 0.0,
+        };
+        let rooms = [
+            room(1, "Level 3", "SINGLE Q", Some("305"), 0.0),
+            room(2, "Level 2", "SINGLE Q", None, 6.0),
+            // Another kind of room over it, and one a bay over: no number from them.
+            room(3, "Level 4", "DOUBLE Q", None, 0.0),
+            room(4, "Level 4", "SINGLE Q", None, 400.0),
+            // 205 is already a room of level 2's: never twice.
+            room(5, "Level 3", "SINGLE Q", Some("306"), 1000.0),
+            room(6, "Level 2", "SINGLE Q", None, 1000.0),
+            room(7, "Level 2", "STORAGE", Some("206"), 3000.0),
+            // Known by its number alone above; the same room traced a little bigger below.
+            room(8, "Level 3", "Room 309", Some("309"), 2000.0),
+            room(9, "Level 2", "SINGLE Q", None, 2004.0),
+        ];
+        let mut rooms = rooms.to_vec();
+        rooms[8].area_sf = 250.0;
+        assert_eq!(stacked_numbers(&rooms, 12.0), vec![(cadaddy_doc::Handle(2), "205".to_string()), (cadaddy_doc::Handle(9), "209".to_string())]);
     }
 
     #[test]
