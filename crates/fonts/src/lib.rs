@@ -875,21 +875,25 @@ mod justify_tests {
 
     /// With a TrueType font, a bottom-justified text's alignment point is at the face's descent,
     /// where its descenders end, as AutoCAD places it (#2229: Arial's is 0.296 of the height).
-    /// Skips when Arial isn't installed.
+    /// Uses the first of these common fonts that is installed (Windows, macOS and Linux each have
+    /// one); skips without any.
     #[test]
     fn a_bottom_justified_truetype_text_sits_on_its_descent() {
-        let Some(face) = ttf::find("Arial") else { return };
+        let found = ["Arial", "Helvetica", "DejaVuSans", "Verdana", "LiberationSans-Regular"].into_iter().find_map(|n| ttf::find(n).map(|f| (n, f)));
+        let Some((name, face)) = found else { return };
         let ratio = ttf::descent_ratio(&face).unwrap();
-        assert!((ratio - 0.296).abs() < 0.01, "Arial's descent over cap height: {ratio}");
         let font = TextFont::Outline(face);
         let (sh, start) = placed(&font, "gjpqy", Align::Left, VAlign::Bottom);
-        assert!((start.y - ratio * H).abs() < 1e-9, "{start:?}");
-        // The descenders reach the alignment point's line: h/3 left them 0.1 above it.
-        let (lo, _) = ink_y(&sh);
-        assert!(lo.abs() < 0.02 * H, "descender bottom {lo} from the alignment point");
+        assert!((start.y - ratio * H).abs() < 1e-9, "{name}: {start:?}");
+        if name == "Arial" {
+            assert!((ratio - 0.296).abs() < 0.01, "Arial's descent over cap height: {ratio}");
+            // The descenders reach the alignment point's line: h/3 left them 0.1 above it.
+            let (lo, _) = ink_y(&sh);
+            assert!(lo.abs() < 0.02 * H, "descender bottom {lo} from the alignment point");
+        }
         // And Middle centres the ink, as with the stroke font.
         let (sh, _) = placed(&font, "Tg 1234 ABC", Align::Middle, VAlign::Baseline);
         let (lo, hi) = ink_y(&sh);
-        assert!(((lo + hi) / 2.0).abs() < 1e-9, "{lo}..{hi}");
+        assert!(((lo + hi) / 2.0).abs() < 1e-9, "{name}: {lo}..{hi}");
     }
 }
