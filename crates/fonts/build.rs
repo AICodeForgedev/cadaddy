@@ -20,7 +20,9 @@ fn main() {
             Err(e) if std::env::var_os("CRAFT_FONTS_REQUIRED").is_some() => {
                 println!("cargo::error=CRAFT_FONTS_DIR={}: {}", one_line(&dir.display().to_string()), one_line(&e));
             }
-            Err(e) => println!("cargo::warning=building without craft-fonts: CRAFT_FONTS_DIR={}: {}", one_line(&dir.display().to_string()), one_line(&e)),
+            Err(e) => {
+                println!("cargo::warning=building without craft-fonts: CRAFT_FONTS_DIR={}: {}", one_line(&dir.display().to_string()), one_line(&e))
+            }
         }
     }
     src.push_str("];\n");
