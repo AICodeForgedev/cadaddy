@@ -972,3 +972,12 @@ fn a_multiline_names_its_style_as_an_entity() {
     assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget (entlast))))"), "\"MLINE\"");
     assert_eq!(ok(&mut s, "(cdr (assoc 2 (entget (entlast))))"), "\"STANDARD\"");
 }
+
+#[test]
+fn angtof_reads_the_string_in_the_given_units() {
+    let mut s = Session::new();
+    assert_eq!(ok(&mut s, "(angtof \"1.5\" 3)"), "1.5");
+    assert_eq!(ok(&mut s, "(angtof \"180\" 0)"), "3.14159");
+    assert_eq!(ok(&mut s, "(angtof \"180\" 7)"), "nil");
+    assert_eq!(ok(&mut s, "(angtof \"180\" \"x\")"), "nil");
+}
