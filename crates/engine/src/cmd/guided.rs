@@ -3541,15 +3541,34 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let sim = placer.insert(Box::new(arch_placer(s.doc()?, &sp)));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
                 let before = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
+                // Which sheets' runs can't be placed (both ends, or one end off the plan), and how
+                // much of them: where a registration is missing.
+                let upf_runs = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+                let mut unplaced: BTreeMap<String, (usize, f64)> = BTreeMap::new();
                 sp.mep.runs.retain_mut(|r| {
-                    match r.points.first().and_then(|p| sim(*p, &r.level)).filter(|_| r.points.last().is_some_and(|p| sim(*p, &r.level).is_some())) {
-                        Some(t) => {
+                    let start = r.points.first().and_then(|p| sim(*p, &r.level));
+                    let end = start.and_then(|_| r.points.last().and_then(|p| sim(*p, &r.level)));
+                    match (start, end) {
+                        (Some(t), Some(_)) => {
                             r.points.iter_mut().for_each(|p| *p = t.apply(*p));
                             true
                         }
-                        None => false,
+                        _ => {
+                            let why = if start.is_some() { " one end" } else { "" };
+                            let ft = r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf_runs;
+                            let e = unplaced
+                                .entry(format!("{} on {}{why}", if r.source_sheet.is_empty() { "?" } else { &r.source_sheet }, r.level))
+                                .or_default();
+                            e.0 += 1;
+                            e.1 += ft;
+                            false
+                        }
                     }
                 });
+                if !unplaced.is_empty() {
+                    let list: Vec<String> = unplaced.iter().map(|(k, (n, ft))| format!("{k}: {n} ({ft:.0} ft)")).collect();
+                    progress_line(&format!("  MEP runs not placeable by sheet: {}", list.join(", ")));
+                }
                 sp.mep.terminals.retain_mut(|t| match sim(t.at, &t.level) {
                     Some(m) => {
                         t.at = m.apply(t.at);
