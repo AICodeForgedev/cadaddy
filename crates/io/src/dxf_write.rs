@@ -226,6 +226,8 @@ struct OsnapRef {
 /// Handles and names the entity writer needs from the rest of the file.
 #[derive(Default)]
 struct Ctx {
+    /// MTEXT columns as the legacy groups 75..79 even from R2018 (the groups AutoLISP lists).
+    legacy_columns: bool,
     /// Write texts' fields as FIELD objects (a whole drawing; entity records alone keep the codes).
     write_fields: bool,
     /// The FIELD objects of the texts written so far, for the OBJECTS section.
@@ -1294,7 +1296,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.f(40, t.height);
             w.f(41, t.width);
             w.i(71, i64::from(t.attach));
-            w.i(72, 1);
+            // Drawing direction: 5, by style.
+            w.i(72, 5);
             // Long contents go in 250-char 3-chunks, the remainder in 1. Fields show their values.
             let contents = f.as_ref().map_or(t.contents.as_str(), |f| f.0.as_str());
             let chunks = crate::dxf_read::mtext_dxf::chunks(&crate::dxf_read::mtext_dxf::encode_contents(contents));
@@ -1327,7 +1330,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.f(45, bg.scale);
                 w.i(441, bg.transparency);
             }
-            w.t.extend(crate::dxf_read::mtext_dxf::column_tags(t));
+            w.t.extend(crate::dxf_read::mtext_dxf::column_tags(t, cx.target >= Version::R2018 && !cx.legacy_columns));
         }
         EntityKind::Insert(i) => {
             w.s(0, "INSERT");
@@ -4011,7 +4014,7 @@ pub fn entity_records(d: &Drawing, e: &Entity) -> Vec<(String, Vec<Tag>)> {
         kept: std::collections::BTreeMap::new(),
         used: std::collections::HashSet::new(),
     };
-    let cx = Ctx { target: Version::R2018, ..Ctx::default() };
+    let cx = Ctx { target: Version::R2018, legacy_columns: true, ..Ctx::default() };
     let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadaddy_doc::Space::Model));
     entity(&mut w, d, e, "0", paper, &cx);
     cadaddy_dxf::records(&w.t).into_iter().map(|(k, tags)| (k, tags.into_iter().filter(|t| t.code != 330).collect())).collect()
