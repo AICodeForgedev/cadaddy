@@ -1331,6 +1331,10 @@ pub fn not_saved(d: &Drawing) -> std::collections::BTreeMap<String, usize> {
 /// store section, which is written back with the drawing (`Foreign::data_store`).
 const MODELER_TYPES: [&str; 3] = ["3DSOLID", "REGION", "BODY"];
 
+/// Entity types of the DXF Reference that stay `Unknown` in a drawing but that both DWG writers
+/// do write, with their frame and data bytes (tests `dwg_save_keeps_ole`): not counted as unsaved.
+const WRITTEN_UNKNOWN_TYPES: [&str; 1] = ["OLE2FRAME"];
+
 /// [`not_saved`] for a file saved as `version`. From 2013 on, a 3D solid, region or body the data
 /// store has a record for keeps its geometry and is not counted; other programs' custom entities
 /// (types outside the DXF Reference's, [`cadaddy_dxf::is_entity_type`]) are kept and not counted
@@ -1344,7 +1348,7 @@ pub fn not_saved_as(d: &Drawing, version: Version) -> std::collections::BTreeMap
             if MODELER_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t)) && stored.contains(&e.handle) {
                 continue;
             }
-            if !cadaddy_dxf::is_entity_type(&u.dxf_type) {
+            if !cadaddy_dxf::is_entity_type(&u.dxf_type) || WRITTEN_UNKNOWN_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t)) {
                 continue;
             }
             let n = out.entry(u.dxf_type.clone()).or_insert(0);
