@@ -242,8 +242,10 @@ owner and extended data where the common data can be read, then `100 AcDbCadaddy
 object type (70), the DWG version (1), the data's length (90) and its bytes (310), as entities are
 kept. It names them in `ReadReport::kept_objects` (handle and class name, with why when damaged)
 and in the drawing's read notes. `dxf_raw` keeps them in `Drawing::foreign` like any other
-program's object; `dwg_write` writes one of a fixed type back as the object it was (same version,
-from R2004), any other through CADADDY_KEEP with its bytes. A damaged object of a table type
+program's object; `dwg_write` writes one back as the object it was (same version): its handle, its
+type (a custom class by the number its CLASS record has in the written file), its owner and handle
+references and its data bytes are the ones it had; one of another version goes through CADADDY_KEEP
+with its bytes. A damaged object of a table type
 (LAYER…) is still a failure, listed in `failed`; controls and entities are decoded elsewhere.
 An object the keep path can't reach (not under an entry of the named object dictionary, an
 extension dictionary or a kept owner) is reported, but, as for any other foreign object, not
@@ -321,7 +323,11 @@ AC1027, AC1032) with the codec alone, no bridge:
 
 1. The drawing's DXF groups as the DXF writer makes them (in memory), split into records by
    section; each record's reactors and extension dictionary (DXF's 102 blocks) are taken apart.
-2. Names to handles from the TABLES section; the classes from CLASSES, numbered from 500.
+2. Names to handles from the TABLES section; the classes from CLASSES, numbered from 500 (the
+   first of a name when it repeats). The handle seed is one above the highest handle; a handle
+   with no free handle after it (u64::MAX) is an `IoError`, not a wrapped seed. Kept handles
+   (`Drawing::kept_handles`) are the handles of the table heads and records, blocks, dictionaries,
+   groups and layouts written (`io/tests/dwg_write_native.rs`, `kept_handles_survive_the_native_writer`).
 3. Each record encoded (`entities::encode`, `entities::encode_kinds`): the inverse of its decoder,
    field for field, so `decode(encode(groups))` gives the groups back. The handles are the
    drawing's own (kept handles stay). INSERTs own their attributes and POLYLINEs their vertices
@@ -370,8 +376,10 @@ Known limits:
 
 - Left out: MATERIAL, TABLESTYLE, VISUALSTYLE, FIELD, SORTENTSTABLE (objects: kept from a drawing's
   DXF records). Entities the reader doesn't decode are kept as stored and written back as the
-  objects they were when they are of a fixed type, from R2004 on, in a file of the same version;
-  any other is kept in the CADADDY_KEEP dictionary. A solid made from DXF groups is written as an
+  objects they were (custom classes too) in a file of the same version; in R2000 only when the
+  links to its neighbours that it stores are the ones the file gives it (a changed neighbour
+  list means the stored links are stale, and the entity goes to the CADADDY_KEEP dictionary, as
+  does any record of another version). A solid made from DXF groups is written as an
   object when its ACIS data has the form written here (SAT text version 1 before 2013, none in
   the record from 2013: the data storage section has it) and is kept in the dictionary otherwise.
 - acadrust can't read an R2000 VIEWPORT linked to its neighbours (its own files store none of

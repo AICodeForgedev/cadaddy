@@ -218,6 +218,8 @@ pub struct Common {
     /// R2000: the next entity of the same block (the chain a block record's first and last
     /// entities bound).
     pub next: Option<u64>,
+    /// R2000: the previous entity of the same block.
+    pub prev: Option<u64>,
 }
 
 /// The DXF lineweight (hundredths of a millimetre) of a stored lineweight index.
@@ -303,10 +305,11 @@ pub fn common(o: &mut Obj) -> Result<Common> {
         c.xdict = o.href()?;
     }
     if !nolinks {
-        o.href()?;
+        c.prev = o.href()?;
         c.next = o.href()?;
     } else if o.v < Version::R2004 {
-        // No links: the next entity is the next handle (spec §20.4.1).
+        // No links: the previous and next entities are the handles just below and above (spec §20.4.1).
+        c.prev = o.handle.checked_sub(1);
         c.next = o.handle.checked_add(1);
     }
     if color_ref {
@@ -670,6 +673,14 @@ pub fn raw_entity(raw: &RawObject, v: Version, classes: &Classes, names: &Names)
         groups.push(Group { code: 310, value: Value::Str(chunk.iter().map(|b| format!("{b:02X}")).collect()) });
     }
     Some(Entity { name, handle: raw.handle, owner, paper, groups, children: Vec::new(), next })
+}
+
+/// An entity object's previous and next entity as it stores them (R2000: its links; no links
+/// mean the handles just below and above). `None` when its common data can't be read.
+pub fn stored_links(raw: &RawObject, v: Version) -> Option<(Option<u64>, Option<u64>)> {
+    let mut o = Obj::open(raw, v).ok()?;
+    let c = common(&mut o).ok()?;
+    Some((c.prev, c.next))
 }
 
 /// Every entity of a file decoded, with the objects that couldn't be (unknown types, or damaged

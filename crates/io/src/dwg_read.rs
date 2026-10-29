@@ -296,10 +296,10 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
             "BLOCK_RECORD" => "BLOCK_CONTROL".to_string(),
             t => format!("{t}_CONTROL"),
         };
-        if let Some(HV::Handle(h)) = hv.get(&control) {
-            if h.value != 0 {
-                tags.push(s(5, format!("{:X}", h.value)));
-            }
+        if let Some(HV::Handle(h)) = hv.get(&control)
+            && h.value != 0
+        {
+            tags.push(s(5, format!("{:X}", h.value)));
         }
         tags.extend([s(100, "AcDbSymbolTable"), i(70, rows.len() as i64)]);
         if table == "DIMSTYLE" {

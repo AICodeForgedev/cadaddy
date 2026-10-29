@@ -260,7 +260,7 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>, full: bool) -> Resu
         let Ok(number) = i16::try_from(500 + i) else { break };
         let rec = r.rec();
         let dxf_name = rec.s(1).unwrap_or("").to_string();
-        names.classes.insert(dxf_name.clone(), number as u16);
+        names.classes.entry(dxf_name.clone()).or_insert(number as u16);
         let is_entity = rec.id(281, 0) != 0;
         class_list.push(Class {
             number,
@@ -377,7 +377,7 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>, full: bool) -> Resu
         // fixed one and the version the same; any other is kept in an XRECORD (`dwg_keep`), never
         // made again from the few groups it has.
         if is_raw(r) {
-            match raw_object(v, r, h) {
+            match raw_object(v, r, h, &names, None) {
                 Some(raw) => out.push(raw),
                 None => *skipped.entry(r.name.clone()).or_default() += 1,
             }
@@ -665,7 +665,7 @@ fn encode(
     // An entity kept as it was stored (`dwg_read`), of the version being written: its object as
     // it was, if it needs no links of its own to its neighbours (from R2004).
     if is_raw(r) {
-        return match raw_object(v, r, h) {
+        return match raw_object(v, r, h, names, Some(links)) {
             Some(raw) => {
                 p.out.push(raw);
                 true
@@ -713,15 +713,19 @@ fn is_raw(r: &Record) -> bool {
     r.rec().all(100).any(|g| matches!(&g.value, Value::Str(s) if s == cadaddy_dwgcodec::entities::RAW_SUBCLASS))
 }
 
-/// The object of an entity record that `dwg_read` kept raw ([`cadaddy_dwgcodec::entities::
-/// RAW_SUBCLASS`]), when it can be written back as an object as it was stored: a fixed object
-/// type (not a custom class, whose number the file's classes fix), of the same DWG version and
-/// from R2004 on (R2000 links an entity to its neighbours in its own data).
-fn raw_object(v: Version, r: &Record, handle: u64) -> Option<RawObject> {
+/// The object of a record that `dwg_read` kept raw ([`cadaddy_dwgcodec::entities::
+/// RAW_SUBCLASS`]), written back as it was stored — with its handle, its type (a custom class by
+/// the number its CLASS record has in this file), its owner and handle references, and its data
+/// bytes — when the version is the one it was stored in. R2000 links an entity to its
+/// neighbours in its own data (`entity_links`: the entity's block's links, `None` for an object):
+/// it is written back only when the links it stores are the ones this file gives it. Any other
+/// is kept in an XRECORD (`dwg_keep`), never made again from the few groups it has.
+fn raw_object(v: Version, r: &Record, handle: u64, names: &Handles, entity_links: Option<&Links>) -> Option<RawObject> {
     let rec = r.rec();
-    let type_code = u16::try_from(rec.i(70)?).ok().filter(|t| *t < 500)?;
+    let stored_type = u16::try_from(rec.i(70)?).ok()?;
+    let type_code = if stored_type < 500 { stored_type } else { names.class(&r.name)? };
     let stored = rec.s(1)?;
-    if v < Version::R2004 || version(stored).map(|(sv, _)| sv) != Some(v) {
+    if version(stored).map(|(sv, _)| sv) != Some(v) {
         return None;
     }
     let len = usize::try_from(rec.i(90)?).ok()?;
@@ -736,7 +740,18 @@ fn raw_object(v: Version, r: &Record, handle: u64) -> Option<RawObject> {
             data.push(u8::from_str_radix(hex.get(i..i + 2)?, 16).ok()?);
         }
     }
-    (data.len() == len).then_some(RawObject { handle, type_code, data })
+    if data.len() != len {
+        return None;
+    }
+    let raw = RawObject { handle, type_code, data };
+    if let (Some(links), true) = (entity_links, v < Version::R2004) {
+        // The links it stores, against the ones this file gives it (none yet on the first pass).
+        let (prev, next) = cadaddy_dwgcodec::entities::stored_links(&raw, v)?;
+        if links.get(&handle).is_some_and(|l| *l != (prev, next)) {
+            return None;
+        }
+    }
+    Some(raw)
 }
 
 /// The data storage section (ACIS data of solids, regions and bodies, from 2013) for the ASM

@@ -157,15 +157,26 @@ fn undecoded_objects_are_reported_kept_and_written_back_in_every_version() {
         // Written by the native writer and read again: the same handles, names and bytes.
         let (out, wr) = cadaddy_io::dwg_write::write(&d, id).unwrap_or_else(|e| panic!("{id}: {e}"));
         let written = cadaddy_dwgcodec::read(&out).unwrap();
-        let old_type = want.iter().find(|w| w.1 == "LONG_TRANSACTION").unwrap();
-        let object = written.object(old_type.0).filter(|o| o.type_code == 76);
-        if id == "AC1015" {
-            // R2000 is written the way entities are: every other kept record goes to CADADDY_KEEP.
-            assert!(wr.kept >= 5, "{id}: kept {}", wr.kept);
-        } else {
-            assert_eq!(object.map(|o| &o.data), Some(&old_type.2), "{id}: the fixed-type object is written back with the bytes it had");
-            assert!(wr.kept >= 4, "{id}: the four custom classes are kept: {}", wr.kept);
+        // Every kept object is written back as the object it was, in every version: its handle,
+        // its type (a custom class by the number its CLASS record has in the written file) and its
+        // data bytes are the ones it had; none is wrapped in an XRECORD or reported as left out.
+        let classes = written.classes().unwrap();
+        for (h, name, data) in &want {
+            let o = written.object(*h).unwrap_or_else(|| panic!("{id}: {name} {h:X} is not an object of the written file"));
+            let expected_type = if name == "LONG_TRANSACTION" {
+                76
+            } else {
+                classes
+                    .classes
+                    .iter()
+                    .find(|c| c.dxf_name.to_string_lossy() == *name)
+                    .map(|c| c.number as u16)
+                    .unwrap_or_else(|| panic!("{id}: no class {name}"))
+            };
+            assert_eq!(o.type_code, expected_type, "{id}: {name} {h:X} type");
+            assert_eq!(&o.data, data, "{id}: {name} {h:X} bytes");
         }
+        assert!(wr.skipped.is_empty(), "{id}: {:?}", wr.skipped);
         let (back, report2) = cadaddy_io::dwg_read::read(&out).unwrap_or_else(|e| panic!("{id}: {e}"));
         assert!(report2.failed.is_empty(), "{id}: {:?}", report2.failed);
         assert_eq!(kept(&back), want, "{id}: kept through the writer");

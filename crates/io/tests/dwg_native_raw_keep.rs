@@ -78,7 +78,7 @@ fn synthetic(id: &str) -> (Vec<u8>, Want) {
             ltype_flags: 0,
             material: None,
             plotstyle: None,
-            links: Some((handle.checked_sub(1), c.next)),
+            links: Some((k.checked_sub(1).and_then(|j| lines.get(j)).copied(), lines.get(k + 1).copied())),
         };
         let mut w = ObjWriter::new(v, type_code, handle);
         entity_common(&mut w, &Rec(&[]), &head, &Handles::default());
@@ -134,16 +134,27 @@ fn undecoded_entities_are_kept_and_written_back_in_every_version() {
 
         // Written by the native writer and read again: the same.
         let (out, wr) = cadaddy_io::dwg_write::write(&d, id).unwrap_or_else(|e| panic!("{id}: {e}"));
-        assert!(wr.kept >= 4, "{id}: kept in the written file: {}", wr.kept);
-        // A kept object of a fixed type, in a file of the version it came from (R2004 on), is
-        // written back as the object it was: its bytes are the ones it had.
+        // Every kept entity is written back as the object it was, in every version (R2000 too:
+        // the links it stores are the ones the file gives it): its handle, its type (a custom
+        // class by the number its CLASS record has in the written file) and its bytes are the
+        // ones it had; none is wrapped in an XRECORD (the type and bytes are asserted below) or reported as left out.
+        assert!(wr.skipped.is_empty(), "{id}: {:?}", wr.skipped);
         let written = cadaddy_dwgcodec::read(&out).unwrap();
-        let region = want.iter().find(|w| w.1 == "REGION").unwrap();
-        let object = written.object(region.0).filter(|o| o.type_code == 37);
-        if id == "AC1015" {
-            assert!(object.is_none(), "{id}: R2000 links entities to each other, so a kept one isn't written as an object");
-        } else {
-            assert_eq!(object.map(|o| &o.data), Some(&region.2), "{id}: the REGION as an object");
+        let classes = written.classes().unwrap();
+        for (h, name, data) in &want {
+            let o = written.object(*h).unwrap_or_else(|| panic!("{id}: {name} {h:X} is not an object of the written file"));
+            let expected_type = if name == "REGION" {
+                37
+            } else {
+                classes
+                    .classes
+                    .iter()
+                    .find(|c| c.dxf_name.to_string_lossy() == *name)
+                    .map(|c| c.number as u16)
+                    .unwrap_or_else(|| panic!("{id}: no class {name}"))
+            };
+            assert_eq!(o.type_code, expected_type, "{id}: {name} {h:X} type");
+            assert_eq!(&o.data, data, "{id}: {name} {h:X} bytes");
         }
         let (back, report2) = cadaddy_io::dwg_read::read(&out).unwrap_or_else(|e| panic!("{id}: {e}"));
         assert!(report2.failed.is_empty(), "{id}: {:?}", report2.failed);
