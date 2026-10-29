@@ -115,11 +115,14 @@ fn read_embedded_columns(tags: &[Tag]) -> Option<(MTextColumns, f64)> {
     let heights: Vec<f64> = obj.iter().filter(|t| t.code == 46).take(MAX_COLUMNS).map(|t| finite(t.f64()).max(0.0)).collect();
     let auto_height = first(73).map(Tag::i64).unwrap_or(0) != 0;
     let manual = kind == MTextColumnType::Dynamic && !auto_height;
+    // The column height: the entity's own 46 (defined height), else the object's 41 or first 46.
+    let own_46 = own(tags).iter().find(|t| t.code == 46).map(|t| finite(t.f64()).max(0.0));
+    let defined = [own_46, first(41).map(|t| finite(t.f64())), heights.first().copied()].into_iter().flatten().find(|h| *h > 0.0).unwrap_or(0.0);
     let c = MTextColumns {
         kind,
         count: u16::try_from(first(72).map(Tag::i64).unwrap_or(1).clamp(1, MAX_COLUMNS as i64)).unwrap_or(1),
         gutter: first(45).map(|t| finite(t.f64()).max(0.0)).unwrap_or(0.0),
-        height: if manual { heights.iter().copied().fold(0.0, f64::max) } else { heights.first().copied().unwrap_or(0.0) },
+        height: if manual { heights.iter().copied().fold(0.0, f64::max) } else { defined },
         auto_height,
         heights: if manual { heights } else { Vec::new() },
         flow_reversed: first(74).map(Tag::i64).unwrap_or(0) != 0,
@@ -137,7 +140,10 @@ pub(crate) fn column_tags(t: &MText, embedded: bool) -> Vec<Tag> {
     if embedded {
         let (sin, cos) = t.rotation.sin_cos();
         let total_width = t.width * count as f64 + c.gutter * (count as f64 - 1.0);
+        // The column height (static, and dynamic with auto height) is the entity's group 46.
+        let height = if manual { heights.iter().copied().fold(0.0, f64::max) } else { c.height };
         let mut v = vec![
+            Tag::f(46, height),
             Tag::s(101, "Embedded Object"),
             Tag::i(70, 1),
             Tag::f(10, cos),
@@ -147,9 +153,9 @@ pub(crate) fn column_tags(t: &MText, embedded: bool) -> Vec<Tag> {
             Tag::f(21, t.insert.y),
             Tag::f(31, t.insert.z),
             Tag::f(40, t.width),
-            Tag::f(41, 0.0),
+            Tag::f(41, height),
             Tag::f(42, total_width),
-            Tag::f(43, heights.iter().copied().fold(0.0, f64::max)),
+            Tag::f(43, height),
             Tag::i(71, if c.kind == MTextColumnType::Dynamic { 2 } else { 1 }),
             Tag::i(72, count as i64),
             Tag::f(44, t.width),
@@ -157,7 +163,9 @@ pub(crate) fn column_tags(t: &MText, embedded: bool) -> Vec<Tag> {
             Tag::i(73, i64::from(c.auto_height)),
             Tag::i(74, i64::from(c.flow_reversed)),
         ];
-        v.extend(heights.into_iter().map(|h| Tag::f(46, h)));
+        if manual {
+            v.extend(heights.into_iter().map(|h| Tag::f(46, h)));
+        }
         return v;
     }
     let mut v = vec![

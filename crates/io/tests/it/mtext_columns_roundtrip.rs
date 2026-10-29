@@ -166,6 +166,16 @@ fn embedded_static_columns_are_read() {
 }
 
 #[test]
+fn embedded_column_height_is_the_entitys_defined_height() {
+    // As ezdxf and AutoCAD write static columns: the height in the entity's 46, none in the object.
+    let mut tags = embedded_tags(3, 12.5, 2.5, &[]);
+    let at = tags.iter().position(|t| t.code == 101).unwrap();
+    tags.insert(at, cadcraft_dxf::Tag::f(46, 20.0));
+    let (_, t) = mtext_from_groups(&tags);
+    assert_eq!(t.columns.map(|c| c.height), Some(20.0));
+}
+
+#[test]
 fn r2018_writes_the_embedded_object_and_older_versions_the_legacy_groups() {
     let (_, t) = mtext_from_groups(&embedded_tags(3, 12.5, 2.5, &[20.0, 20.0, 20.0]));
     let (full, r2018) = dxf_as(&t, Version::R2018);
