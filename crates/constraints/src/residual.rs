@@ -305,7 +305,7 @@ impl Built {
                 if let (2, Some((a1, b1)), Some((a2, b2))) = (n, ln(0), ln(1)) {
                     // Start-to-end directions would measure the supplement when a line is drawn
                     // towards the vertex, so use the rays the dimension draws.
-                    let rev = match cadcraft_geom::line_line_infinite(a1, b1, a2, b2) {
+                    let rev = match cadaddy_geom::line_line_infinite(a1, b1, a2, b2) {
                         Some((_, t, u)) => [t > 0.5, u > 0.5],
                         None => [false, false],
                     };

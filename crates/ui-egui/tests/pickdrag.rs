@@ -1,7 +1,7 @@
 //! OPTIONS checkbox and real pointer gestures share the saved PICKDRAG preference.
-use cadcraft_engine::Session;
-use cadcraft_engine::geom::Vec2;
-use cadcraft_ui_egui::{CadApp, Services};
+use cadaddy_engine::Session;
+use cadaddy_engine::geom::Vec2;
+use cadaddy_ui_egui::{CadApp, Services};
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 use serde_json::json;
@@ -50,7 +50,7 @@ fn selection_tab_checkbox_updates_and_persists_the_preference() {
     let mut restored = CadApp::new(Session::new(), Services::default());
     restored.load_profile(&saved);
     assert!(!restored.session.settings.pickdrag);
-    if let Some(dir) = std::env::var_os("CADCRAFT_SELECTION_SHOTS") {
+    if let Some(dir) = std::env::var_os("CADADDY_SELECTION_SHOTS") {
         let dir = std::path::PathBuf::from(dir);
         std::fs::create_dir_all(&dir).unwrap();
         h.render().unwrap().save(dir.join("selection-two-clicks.png")).unwrap();

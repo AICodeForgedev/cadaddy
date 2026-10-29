@@ -2,8 +2,8 @@
 //! error that changes nothing (issue #935: a misspelt value erased the objects without making a
 //! reference to the new block).
 
-use cadcraft_engine::Session;
-use cadcraft_engine::doc::{EntityKind, Handle};
+use cadaddy_engine::Session;
+use cadaddy_engine::doc::{EntityKind, Handle};
 use serde_json::{Value, json};
 
 fn line(s: &mut Session) -> Value {

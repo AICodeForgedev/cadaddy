@@ -1,6 +1,6 @@
 use super::*;
 use crate::Services;
-use cadcraft_engine::Session;
+use cadaddy_engine::Session;
 use egui::Shape;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -50,6 +50,6 @@ fn selected_entity_layer_menu_scrolls_to_its_last_layer() {
     assert!(shown, "{last} was not scrolled into the visible layer menu: {painted:?}");
     if let Some(directory) = shot_dir {
         std::fs::create_dir_all(&directory).unwrap();
-        h.render().unwrap().save(directory.join("cadcraft-properties-layer-menu.png")).unwrap();
+        h.render().unwrap().save(directory.join("cadaddy-properties-layer-menu.png")).unwrap();
     }
 }
