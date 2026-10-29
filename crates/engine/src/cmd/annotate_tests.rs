@@ -1,4 +1,4 @@
-use cadaddy_doc::{AssocSnap, DimKind, Dimension, EntityKind, Handle};
+use cadaddy_doc::{DimKind, Dimension, EntityKind, Handle};
 use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 

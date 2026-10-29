@@ -494,7 +494,6 @@ pub fn entget(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     };
     let head = vec![Value::cons(Value::Int(-1), Value::Ename(h)), Value::cons(Value::Int(0), Value::str(&kind))];
     // Other applications' xdata travels with the object, not in its written record.
-    let mut tags = tags;
     tags.extend(e.common.xdata.iter().map(raw_tag));
     let (mut items, xdata) = entget_items(&kind, &tags, &apps);
     // A multiline points (340) to its MLINESTYLE, which gets its handle only when written: name
