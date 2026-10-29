@@ -10,6 +10,9 @@ use egui_kittest::kittest::{NodeT, Queryable};
 
 fn harness() -> Harness<'static, CadApp> {
     let mut app = CadApp::new(Session::default(), Services::default());
+    // the classic workspace (tool bar and Tool Sets); the default is the ribbon
+    app.ui.ribbon = false;
+    app.ui.show_toolsets = true;
     app.ui.in_window_menu = false;
     app.integrated_titlebar = true;
     // Tall enough that the Parametric category, last in Drafting, is on screen.

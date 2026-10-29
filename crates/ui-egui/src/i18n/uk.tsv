@@ -3368,3 +3368,15 @@
 	Inspect Element	Переглянути елемент
 	Select using two clicks only	Вибирати лише двома клацаннями
 	Define each corner of the selection window with a separate click.	Задайте кожен кут рамки вибору окремим клацанням.
+	Center the plot	Центрувати друк
+	Fit to paper	Вписати в аркуш
+	Plot area	Область друку
+	Plot object lineweights	Друкувати товщини ліній об’єктів
+	Plot offset	Зсув друку
+	Plot transparency	Друкувати прозорість
+	Printer/plotter	Принтер/плотер
+	X offset (mm)	Зсув по X (мм)
+	Y offset (mm)	Зсув по Y (мм)
+	Arrow size	Розмір стрілки
+	Dim scale overall	Загальний масштаб розмірів
+	Precision	Точність

@@ -17,6 +17,8 @@ const IN_ZOOM: &str = "Extents";
 
 fn harness() -> Harness<'static, CadApp> {
     let mut app = CadApp::new(Session::default(), Services::default());
+    // the classic workspace; the default is the ribbon
+    app.ui.ribbon = false;
     app.ui.in_window_menu = true;
     let mut harness = Harness::builder().with_size(vec2(1280.0, 760.0)).build_ui_state(
         |ui, app: &mut CadApp| {
