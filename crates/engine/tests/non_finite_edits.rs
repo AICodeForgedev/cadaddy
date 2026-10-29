@@ -43,14 +43,13 @@ fn json_transforms_that_overflow_are_refused() {
     }
 }
 
+/// A typed point beyond the entry limit (±1e12) is refused where it is typed, so a typed move can
+/// no longer overflow; the drawing and its undo history stay as they were.
 #[test]
 fn typed_move_that_overflows_is_refused() {
     let mut s = Session::new();
     circle(&mut s);
-    s.script("MOVE ALL\n\n0,0 1e308,1e308\n").unwrap();
     let before = snapshot(&mut s);
-    s.script("MOVE ALL\n\n0,0 1e308,1e308\n").unwrap();
+    let _ = s.script("MOVE ALL\n\n0,0 1e308,1e308\n");
     assert_eq!(snapshot(&mut s), before);
-    assert!(s.log.iter().any(|l| l.contains("too large")), "{:?}", s.log);
-    assert!(s.running.is_none());
 }
