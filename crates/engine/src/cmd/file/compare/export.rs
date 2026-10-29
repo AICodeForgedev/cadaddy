@@ -327,6 +327,34 @@ struct Tinted {
     uncolored: bool,
     /// Objects copied into block definitions so far, counted against [`MAX_COPIED`].
     copied: usize,
+    next: NextFree,
+    /// The drawing's block names in upper case, filled on the first block copy. Only
+    /// [`tinted_block`] adds blocks after that, and it adds their names here too.
+    blocks: Option<HashSet<String>>,
+}
+
+/// The next index to try for each name base. Names are only added while a snapshot is built,
+/// so an index found taken stays taken, and each search starts where the last one for the same
+/// base stopped: a name costs O(1) amortised instead of a scan from 1.
+#[derive(Default)]
+struct NextFree(HashMap<(&'static str, String), usize>);
+
+impl NextFree {
+    /// The first of `name(i)` for `i` from 1 that `taken` doesn't hold, skipping the indices
+    /// earlier searches for `base` in namespace `kind` passed. `n` is how many names there are,
+    /// so one of `name(1)`…`name(n + 1)` is free. The caller adds the returned name.
+    fn find(&mut self, kind: &'static str, base: &str, n: usize, name: impl Fn(usize) -> String, taken: impl Fn(&str) -> bool) -> String {
+        let key = (kind, base.to_ascii_uppercase());
+        let start = self.0.get(&key).copied().unwrap_or(1);
+        let i = (start..=n.saturating_add(1)).find(|&i| !taken(&name(i))).unwrap_or_else(|| n.saturating_add(2).max(start));
+        self.0.insert(key, i.saturating_add(1));
+        name(i)
+    }
+}
+
+/// `base` for 1, `base_2`, `base_3`… after it.
+fn suffixed(base: &str, i: usize) -> String {
+    if i == 1 { base.to_string() } else { format!("{base}_{i}") }
 }
 
 /// The word a comparison color adds to the names of its recolored copies.
@@ -342,10 +370,7 @@ fn tag(color: Color) -> &'static str {
 
 /// `base`, or `base_2`, `base_3`… when `taken` holds that name. `n` is how many names there are.
 fn free_name(base: &str, n: usize, taken: impl Fn(&str) -> bool) -> String {
-    (1..=n + 1)
-        .map(|i| if i == 1 { base.to_string() } else { format!("{base}_{i}") })
-        .find(|c| !taken(c))
-        .unwrap_or_else(|| format!("{base}_{}", n + 2))
+    (1..=n + 1).map(|i| suffixed(base, i)).find(|c| !taken(c)).unwrap_or_else(|| suffixed(base, n + 2))
 }
 
 /// Give an object its comparison color: its own color, its attributes' colors, and, through
@@ -429,7 +454,8 @@ fn tinted_dim_style(d: &mut Drawing, name: &str, color: Color, tinted: &mut Tint
         return Some(n.clone());
     }
     let st = d.dim_styles.iter().find(|s| s.name.eq_ignore_ascii_case(name))?.clone();
-    let new = free_name(&format!("COMPARE_{}_{}", tag(color), st.name), d.dim_styles.len(), |n| {
+    let base = format!("COMPARE_{}_{}", tag(color), st.name);
+    let new = tinted.next.find("dimension style", &base, d.dim_styles.len(), |i| suffixed(&base, i), |n| {
         d.dim_styles.iter().any(|s| s.name.eq_ignore_ascii_case(n))
     });
     d.dim_styles.push(DimStyle {
@@ -451,7 +477,8 @@ fn tinted_table_style(d: &mut Drawing, name: &str, color: Color, tinted: &mut Ti
         return Some(n.clone());
     }
     let st = d.table_styles.iter().find(|s| s.name.eq_ignore_ascii_case(name))?.clone();
-    let new = free_name(&format!("COMPARE_{}_{}", tag(color), st.name), d.table_styles.len(), |n| {
+    let base = format!("COMPARE_{}_{}", tag(color), st.name);
+    let new = tinted.next.find("table style", &base, d.table_styles.len(), |i| suffixed(&base, i), |n| {
         d.table_styles.iter().any(|s| s.name.eq_ignore_ascii_case(n))
     });
     let names =
@@ -525,11 +552,16 @@ fn tinted_block(d: &mut Drawing, name: &str, color: Color, tinted: &mut Tinted, 
     // A dimension's block copy stays a `*D` block, so saving keeps its geometry instead of
     // drawing the dimension again.
     let dim_block = b.anonymous && b.name.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("*D"));
+    let Tinted { next, blocks, .. } = tinted;
+    let taken = blocks.get_or_insert_with(|| d.blocks.keys().map(|k| k.to_ascii_uppercase()).collect());
+    let is_taken = |n: &str| taken.contains(&n.to_ascii_uppercase());
     let new = if dim_block {
-        (1..=d.blocks.len() + 1).map(|i| format!("*D{i}")).find(|n| d.block(n).is_none()).unwrap_or_else(|| format!("*D{}", d.blocks.len() + 2))
+        next.find("block", "*D", d.blocks.len(), |i| format!("*D{i}"), is_taken)
     } else {
-        free_name(&format!("COMPARE_{}_{}", tag(color), b.name.trim_start_matches('*')), d.blocks.len(), |n| d.block(n).is_some())
+        let base = format!("COMPARE_{}_{}", tag(color), b.name.trim_start_matches('*'));
+        next.find("block", &base, d.blocks.len(), |i| suffixed(&base, i), is_taken)
     };
+    taken.insert(new.to_ascii_uppercase());
     tinted.names.insert(key, new.clone());
     // Hold the name while the nested copies pick theirs.
     d.blocks.insert(new.clone(), Arc::new(Block::new(&new)));
@@ -605,18 +637,19 @@ fn copy_blocks<'a>(
     // Names `d` does not use stay; the others get free names, avoiding the kept ones.
     let mut renames = Renames::new();
     let mut taken: HashSet<String> = d.blocks.keys().map(|k| k.to_ascii_uppercase()).collect();
+    let mut next = NextFree::default();
     for b in needed.iter().filter(|b| d.block(&b.name).is_none()) {
         taken.insert(b.name.to_ascii_uppercase());
         renames.insert(b.name.to_ascii_uppercase(), b.name.clone());
     }
     for b in needed.iter().filter(|b| d.block(&b.name).is_some()) {
+        let is_taken = |n: &str| taken.contains(&n.to_ascii_uppercase());
         let free = if b.anonymous {
             let prefix: String = b.name.chars().take_while(|c| *c == '*' || c.is_ascii_alphabetic()).collect();
-            (1..=taken.len() + 1).map(|i| format!("{prefix}{i}")).find(|n| !taken.contains(&n.to_ascii_uppercase()))
+            next.find("anonymous block", &prefix, taken.len(), |i| format!("{prefix}{i}"), is_taken)
         } else {
-            Some(free_name(&b.name, taken.len(), |n| taken.contains(&n.to_ascii_uppercase())))
+            next.find("block", &b.name, taken.len(), |i| suffixed(&b.name, i), is_taken)
         };
-        let Some(free) = free else { continue };
         taken.insert(free.to_ascii_uppercase());
         renames.insert(b.name.to_ascii_uppercase(), free);
     }
