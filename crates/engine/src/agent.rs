@@ -188,7 +188,10 @@ impl Session {
                 let exists = std::path::Path::new(&path).exists();
                 #[cfg(target_arch = "wasm32")]
                 let exists = false;
-                exists.then(|| format!("an agent wants to save over {path}"))
+                exists.then(|| match self.changed_on_disk(&path) {
+                    Some(how) => format!("an agent wants to save over {path}, which changed on disk since it was opened ({how})"),
+                    None => format!("an agent wants to save over {path}"),
+                })
             }
             "close" => {
                 let i = params.get("index").and_then(Value::as_u64).map_or(self.active, |i| i as usize);
