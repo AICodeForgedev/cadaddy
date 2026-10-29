@@ -1564,6 +1564,12 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
     let mut active_vport = false;
     // Linetype names already read from this file (upper case), so its first record wins.
     let mut seen_ltypes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Layer name (ASCII lower case) → index in `d.layers`, so a table of 100k layers loads in
+    // linear time (a name scan per record was quadratic). The first of equal names wins, as `layer_mut` does.
+    let mut layer_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, x) in d.layers.iter().enumerate() {
+        layer_index.entry(x.name.to_ascii_lowercase()).or_insert(i);
+    }
     for (kind, tg) in recs {
         let t = T(&tg);
         match kind.as_str() {
@@ -1603,9 +1609,12 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 if let Some(desc) = crate::dxf_ext::xdata(&tg, crate::dxf_ext::LAYER_DESCRIPTION_APP).iter().filter(|x| x.code == 1000).nth(1) {
                     l.description = desc.str();
                 }
-                match d.layer_mut(&name) {
+                match layer_index.get(&name.to_ascii_lowercase()).and_then(|&i| d.layers.get_mut(i)) {
                     Some(x) => *x = l,
-                    None => d.layers.push(l),
+                    None => {
+                        layer_index.insert(name.to_ascii_lowercase(), d.layers.len());
+                        d.layers.push(l);
+                    }
                 }
             }
             "LTYPE" => {
