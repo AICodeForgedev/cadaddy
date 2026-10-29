@@ -757,6 +757,7 @@ dependencies = [
 name = "cadaddy-io"
 version = "0.7.10"
 dependencies = [
+ "acadrust",
  "cadaddy-color",
  "cadaddy-doc",
  "cadaddy-dwg",
