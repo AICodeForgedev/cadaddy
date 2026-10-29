@@ -520,6 +520,8 @@ fn run_bytes(s: &mut Session, p: &Value) -> Result<Value> {
     let mut r = json!({ "data": base64_encode(&bytes), "bytes": bytes.len() });
     if drops_unknown(format!("drawing.{fmt}")) {
         report_not_saved(s, &mut r, &lost);
+    } else if version >= Version::R2013 && is_dxf_file(format!("drawing.{fmt}")) {
+        report_sat_text_dropped(s, &mut r);
     }
     Ok(r)
 }
@@ -575,6 +577,28 @@ fn is_drawing_file(path: impl AsRef<std::path::Path>) -> bool {
     Format::from_path(path).is_some_and(Format::is_drawing)
 }
 
+/// Whether `path` is a DXF file.
+fn is_dxf_file(path: impl AsRef<std::path::Path>) -> bool {
+    Format::from_path(path) == Some(Format::Dxf)
+}
+
+/// Say on the command line which solid modeler entities a DXF of 2013 or later left out because
+/// they hold SAT-text ACIS data, which such files keep in a data store instead (#2334).
+fn report_sat_text_dropped(s: &mut Session, r: &mut Value) {
+    let lost = s.doc().map(cadcraft_doc::foreign::sat_text_dropped).unwrap_or_default();
+    if lost.is_empty() {
+        return;
+    }
+    let list: Vec<String> = lost.iter().map(|(t, n)| format!("{n} {t}")).collect();
+    s.echo(format!(
+        "Not saved in the DXF file (2013 and later keep ACIS geometry in a data store these entities have no record in; save as 2010 or earlier to keep them): {}",
+        list.join(", ")
+    ));
+    if let Some(o) = r.as_object_mut() {
+        o.insert("notSaved".into(), json!(lost));
+    }
+}
+
 /// Say on the command line what the file couldn't keep, and list it in the result's `notSaved`.
 fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTreeMap<String, usize>) {
     let Some(msg) = not_saved_message(lost) else { return };
@@ -593,6 +617,8 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
     let mut r = run(s, p)?;
     if r.get("path").and_then(Value::as_str).is_some_and(drops_unknown) {
         report_not_saved(s, &mut r, &lost);
+    } else if version >= Version::R2013 && r.get("path").and_then(Value::as_str).is_some_and(is_dxf_file) {
+        report_sat_text_dropped(s, &mut r);
     }
     Ok(r)
 }

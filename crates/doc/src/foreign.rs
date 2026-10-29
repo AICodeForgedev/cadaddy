@@ -94,3 +94,29 @@ impl Foreign {
         self.data_store.iter().filter(|t| t.code == 320).filter_map(|t| Handle::parse_hex(t.value.trim())).collect()
     }
 }
+
+/// Whether a solid modeler entity (3DSOLID, REGION, BODY) holds its ACIS geometry as SAT text
+/// (groups 1 and 3), which DXF 2013 and later no longer has: those files keep it in the data
+/// store section, so an entity with SAT text and no record there can't be written to one (#2334).
+pub fn sat_text_acis(u: &crate::Unknown, handle: Handle, stored: &std::collections::BTreeSet<Handle>) -> bool {
+    ["3DSOLID", "REGION", "BODY"].iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t))
+        && !stored.contains(&handle)
+        && u.tags.iter().take_while(|r| r.code < 1000).any(|r| r.code == 1 || r.code == 3)
+}
+
+/// The entities a DXF of 2013 or later leaves out because they hold SAT-text ACIS data
+/// ([`sat_text_acis`]), counted by DXF type, across model space, layouts and block definitions.
+pub fn sat_text_dropped(d: &crate::Drawing) -> BTreeMap<String, usize> {
+    let stored = d.foreign.data_store_entities();
+    let mut out = BTreeMap::new();
+    let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
+    for e in stores.flat_map(|s| s.iter()) {
+        if let crate::EntityKind::Unknown(u) = &e.kind
+            && sat_text_acis(u, e.handle, &stored)
+        {
+            let n: &mut usize = out.entry(u.dxf_type.to_ascii_uppercase()).or_default();
+            *n = n.saturating_add(1);
+        }
+    }
+    out
+}

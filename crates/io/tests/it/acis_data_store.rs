@@ -101,3 +101,31 @@ fn dwg_keeps_the_solids_geometry() {
     let again = cadcraft_io::read(&dwg, "x.dwg").unwrap();
     assert_eq!(again.foreign.data_store_entities().len(), 2);
 }
+
+/// A solid with SAT-text ACIS data (an R2000-style file) can't be written to a DXF of 2013 or
+/// later, whose files keep that data in the data store: it is left out there and counted, while
+/// 2010 and earlier keep it, and solids with a data store record are kept everywhere (#2334).
+#[test]
+fn sat_text_solids_are_left_out_of_dxf_2013_and_later() {
+    let sat = "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n\
+        0\nREGION\n5\n2B\n100\nAcDbEntity\n8\n0\n100\nAcDbModelerGeometry\n70\n1\n1\n400 1 1 0\n1\n16 ZWCAD\n3\nEnd-of-ACIS-data\n\
+        0\n3DSOLID\n5\n2C\n100\nAcDbEntity\n8\n0\n100\nAcDbModelerGeometry\n70\n1\n1\n400 1 1 0\n3\nEnd-of-ACIS-data\n\
+        0\nLINE\n5\n2D\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDSEC\n0\nEOF\n";
+    let d = cadcraft_io::read_dxf(sat.as_bytes()).unwrap();
+    let count = |v: cadcraft_io::Version, ty: &str| {
+        let out = cadcraft_io::write_with(&d, "x.dxf", &cadcraft_io::SaveOptions { version: Some(v), binary: false }).unwrap();
+        let t = String::from_utf8(out).unwrap().replace("\r\n", "\n");
+        t.matches(&format!("\n0\n{ty}\n")).count() + t.matches(&format!("\n  0\n{ty}\n")).count()
+    };
+    assert_eq!(cadcraft_doc::foreign::sat_text_dropped(&d), [("3DSOLID".to_string(), 1), ("REGION".to_string(), 1)].into());
+    for v in [cadcraft_io::Version::R2000, cadcraft_io::Version::R2010] {
+        assert_eq!((count(v, "REGION"), count(v, "3DSOLID")), (1, 1), "{v:?} keeps them");
+    }
+    for v in [cadcraft_io::Version::R2013, cadcraft_io::Version::R2018] {
+        assert_eq!((count(v, "REGION"), count(v, "3DSOLID")), (0, 0), "{v:?} leaves them out");
+        assert_eq!(count(v, "LINE"), 1, "{v:?} keeps the rest");
+    }
+    // Solids with a data store record keep their geometry in 2013 and later.
+    let stored = cadcraft_io::read_dxf(dxf().as_bytes()).unwrap();
+    assert!(cadcraft_doc::foreign::sat_text_dropped(&stored).is_empty());
+}

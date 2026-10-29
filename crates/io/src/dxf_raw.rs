@@ -848,7 +848,7 @@ fn unknown_handles(d: &Drawing) -> HashSet<String> {
 }
 
 /// Put the drawing's foreign data back into a written file's tags (see the module comment).
-pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
+pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing, modern: bool) {
     let f = d.foreign.as_ref();
     let unknown = unknown_handles(d);
     let xd: XdataOf = all_entities(d).filter(|e| !e.common.xdata.is_empty()).map(|e| (e.handle, e.common.xdata.as_slice())).collect();
@@ -877,7 +877,7 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
     }
     let renumber = |old: Option<i64>| class_index(old).and_then(|i| f.class_order.get(i)).and_then(|n| numbers.get(n).copied());
     // Entities of types CADCraft doesn't model, placed among the written ones.
-    let mut planned = plan_unknown(d, &recs, tags, &roles);
+    let mut planned = plan_unknown(d, &recs, tags, &roles, modern);
     for list in planned.values_mut() {
         list.retain_mut(|(_, t)| {
             if !t.first().is_some_and(|z| is_proxy(&z.str())) {
@@ -1019,7 +1019,14 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
 /// Where the entities of types CADCraft doesn't model go: each before the next written entity of
 /// its space or block (else at the end of it), as `(section, record)` lists by the index of the
 /// record they precede. Owners come from the written block records.
-fn plan_unknown(d: &Drawing, recs: &[Rec], tags: &[Tag], roles: &HashMap<ForeignKey, String>) -> HashMap<usize, Vec<(String, Vec<Tag>)>> {
+fn plan_unknown(
+    d: &Drawing,
+    recs: &[Rec],
+    tags: &[Tag],
+    roles: &HashMap<ForeignKey, String>,
+    modern: bool,
+) -> HashMap<usize, Vec<(String, Vec<Tag>)>> {
+    let stored = d.foreign.data_store_entities();
     let mut out: HashMap<usize, Vec<(String, Vec<Tag>)>> = HashMap::new();
     let body = |r: &Rec| tags.get(r.start + 1..r.end).unwrap_or(&[]);
     let mut at: HashMap<String, usize> = HashMap::new();
@@ -1057,6 +1064,9 @@ fn plan_unknown(d: &Drawing, recs: &[Rec], tags: &[Tag], roles: &HashMap<Foreign
         for e in store.iter() {
             match &e.kind {
                 EntityKind::Unknown(u) => {
+                    if modern && cadcraft_doc::foreign::sat_text_acis(u, e.handle, &stored) {
+                        continue;
+                    }
                     let t = unknown_entity(u, e, &owner, paper);
                     if !t.is_empty() {
                         pending.push((sec.to_string(), t));
