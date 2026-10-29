@@ -9,6 +9,7 @@ use crate::units::format_angle;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 pub(super) mod live;
+mod loops;
 mod regions;
 mod shapes;
 
@@ -48,6 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{type?, layer?, selected?: bool (default false; true = current selection in active space), window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
             .noundo(),
         CommandSpec::new("shapes", "Analyze Shapes", shapes::run).params(shapes::PARAMS).noundo(),
+        CommandSpec::new("loops", "Implied Loops", loops::run).params(loops::PARAMS).noundo(),
         CommandSpec::new("texts", "Query Texts", run_texts)
             .params("{contains?: text (any case), layer?, window?: [[x,y],[x,y]] (by insertion point), limit? (default 200), offset?} → {count (all matches), returned, offset, texts: [{handle, type, layer, text, at, height, rotation (degrees), style, tag? (attributes)}]}: the readable text of TEXT, MTEXT (formatting removed), block attributes and multileaders")
             .noundo(),
