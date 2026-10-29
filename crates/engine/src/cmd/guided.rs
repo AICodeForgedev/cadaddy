@@ -4446,7 +4446,7 @@ fn stacked_numbers(rooms: &[super::bspec::RoomElement], upf: f64) -> Vec<(cadadd
     for r in rooms.iter().filter(|r| r.number.is_none()) {
         let (name, here) = (norm(&r.name), floor(&r.level));
         let Some(m) = mid(r) else { continue };
-        if name.is_empty() || name == "ROOM" || here.is_empty() || !(r.area_sf > 0.0) {
+        if name.is_empty() || name == "ROOM" || here.is_empty() || r.area_sf.is_nan() || r.area_sf <= 0.0 {
             continue;
         }
         let proposed: BTreeSet<String> = rooms
