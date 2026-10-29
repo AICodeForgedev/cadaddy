@@ -1337,7 +1337,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             let measured = if dm.measurement.is_finite() && dm.measurement >= 0.0 { dm.measurement } else { g.measurement };
             w.f(42, measured);
             if !dm.text.is_empty() {
-                w.s(1, &dm.text);
+                // A line break is `\P` in a DXF string (a raw one would end the line).
+                w.s(1, dm.text.replace('\n', "\\P"));
             }
             w.s(3, &dm.style);
             if dm.text_rotation != 0.0 {
