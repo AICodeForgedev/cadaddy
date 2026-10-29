@@ -666,24 +666,30 @@ impl VportsM {
 /// Named Viewports... without the dialog: -VPORTS Restore in the Model tab, MVIEW Restore in a
 /// layout.
 fn named_factory(s: &Session) -> Result<Box<dyn Interactive>> {
-    Ok(Box::new(Restoring(vports_factory(s)?)))
+    Ok(Box::new(Restoring(vports_factory(s)?, false)))
 }
 
-/// -VPORTS or MVIEW started at its Restore option.
-struct Restoring(Box<dyn Interactive>);
+/// -VPORTS or MVIEW started at its Restore option. The flag is whether `begin` has taken it there.
+struct Restoring(Box<dyn Interactive>, bool);
 
 impl Interactive for Restoring {
     fn name(&self) -> &'static str {
         self.0.name()
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        self.1 = true;
         match self.0.begin(s)? {
             Step::Continue => self.0.input(s, Input::Keyword("Restore".into())),
             other => Ok(other),
         }
     }
     fn prompt(&self, s: &Session) -> Prompt {
-        self.0.prompt(s)
+        if self.1 {
+            self.0.prompt(s)
+        } else {
+            // Before `begin` (a help page asking what the command asks first): the Restore prompt.
+            Prompt::new("Enter name of viewport configuration to restore", Accept::TEXT).kw(&["?"])
+        }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         self.0.input(s, i)

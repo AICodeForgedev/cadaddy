@@ -15,7 +15,6 @@ fn h(v: &Value) -> Handle {
 /// of a circle of radius 30.
 fn session() -> (Session, Handle) {
     let mut s = Session::new();
-    s.execute("units", &json!({"measurement": "metric"})).ok();
     s.execute("style", &json!({"name": "R", "font": "romans.shx", "current": true})).unwrap();
     s.execute("dimstyle", &json!({"name": "D", "current": true, "DIMTXSTY": "R", "DIMTXT": 5, "DIMASZ": 5, "DIMDEC": 0})).unwrap();
     let c = h(&s.execute("circle", &json!({"center": [0, 0], "radius": 30})).unwrap());
