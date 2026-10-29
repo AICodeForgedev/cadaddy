@@ -589,6 +589,103 @@ mod native {
         }
     }
 
+    /// The DXF names of an ASCII DXF's CLASS records, in CLASSES order: a proxy's class number
+    /// (group 91) is 500 plus its class's place here (DXF Reference, ACAD_PROXY_OBJECT). Empty for
+    /// a binary DXF or one without a CLASSES section.
+    pub(super) fn dxf_class_names(dxf: &[u8]) -> Vec<String> {
+        let mut names = Vec::new();
+        if dxf.starts_with(b"AutoCAD Binary DXF") {
+            return names;
+        }
+        let mut lines = dxf.split(|b| *b == b'\n').map(|l| l.trim_ascii());
+        let (mut in_classes, mut in_class) = (false, false);
+        while let (Some(code), Some(value)) = (lines.next(), lines.next()) {
+            match (code, value) {
+                (b"0", b"ENDSEC") if in_classes => break,
+                (b"2", b"CLASSES") => in_classes = true,
+                (b"0", v) if in_classes => in_class = v == b"CLASS",
+                (b"1", v) if in_class => {
+                    names.push(String::from_utf8_lossy(v).into_owned());
+                    in_class = false;
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+
+    /// Proxy objects' and entities' class numbers as the DWG numbers its classes. A DXF proxy
+    /// names its class by its place in the DXF's CLASSES (`classes`, from 500), but acadrust's
+    /// reader puts its own default classes first and numbers the DXF's after them, so the DXF
+    /// number named another class in the DWG: a 2018 drawing's piping proxies became
+    /// LARGE_RADIAL_DIMENSION and SECTIONOBJECT, and the ODA File Converter refused the file. A
+    /// number that names no class of the DXF is left as it is.
+    ///
+    /// Before 2013 (AC1027) acadrust writes only the classes it knows a pre-2013 DWG needs, and a
+    /// proxy's class is not one of them: the proxy would name a missing class (the ODA refuses
+    /// the file: "No ClassId") or, by its old number, some other class. Such a DWG leaves the
+    /// proxies out instead, as it does other programs' data it can't write (`not_saved` reports
+    /// the entities). Returns how many proxies were left out.
+    fn proxy_classes(doc: &mut acadrust::CadDocument, classes: &[String]) -> usize {
+        if doc.version < acadrust::DxfVersion::AC1027 {
+            let entities: Vec<acadrust::Handle> = doc
+                .entities()
+                .filter_map(|e| match e {
+                    acadrust::entities::EntityType::Extended(x) if matches!(x.data, acadrust::entities::ExtendedEntityData::Proxy(_)) => {
+                        Some(x.common.handle)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let objects: Vec<acadrust::Handle> =
+                doc.objects.iter().filter_map(|(h, o)| matches!(o, acadrust::objects::ObjectType::ProxyObject(_)).then_some(*h)).collect();
+            for h in &entities {
+                doc.remove_entity(*h);
+            }
+            for h in &objects {
+                doc.objects.remove(h);
+            }
+            return entities.len() + objects.len();
+        }
+        let number = |id: i32| -> Option<i32> {
+            let name = classes.get(usize::try_from(id.checked_sub(500)?).ok()?)?;
+            doc.classes.get_by_name(name).map(|c| i32::from(c.class_number))
+        };
+        let objects: Vec<(acadrust::Handle, i32)> = doc
+            .objects
+            .iter()
+            .filter_map(|(h, o)| match o {
+                acadrust::objects::ObjectType::ProxyObject(p) => number(p.class_id).map(|n| (*h, n)),
+                _ => None,
+            })
+            .collect();
+        let entities: Vec<(acadrust::Handle, i32)> = doc
+            .entities()
+            .filter_map(|e| match e {
+                acadrust::entities::EntityType::Extended(x) => match &x.data {
+                    acadrust::entities::ExtendedEntityData::Proxy(p) => number(p.class_id).map(|n| (x.common.handle, n)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        for (h, n) in objects {
+            if let Some(acadrust::objects::ObjectType::ProxyObject(p)) = doc.objects.get_mut(&h) {
+                p.class_id = n;
+            }
+        }
+        let entities: std::collections::HashMap<acadrust::Handle, i32> = entities.into_iter().collect();
+        for e in doc.entities_mut() {
+            if let acadrust::entities::EntityType::Extended(x) = e {
+                let Some(n) = entities.get(&x.common.handle).copied() else { continue };
+                if let acadrust::entities::ExtendedEntityData::Proxy(p) = &mut x.data {
+                    p.class_id = n;
+                }
+            }
+        }
+        0
+    }
+
     /// `kept`: the version the DXF's carried-over groups were read from ([`dxf_to_dwg_kept_as`]).
     fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>, kept: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
         // Reject a pathologically large DXF before handing it to the third-party decoder, which
@@ -614,6 +711,7 @@ mod native {
             Some(d) => d,
             None => dxf.to_vec(),
         };
+        let classes = dxf_class_names(&data);
         let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
             .map_err(|_| "the DXF→DWG conversion failed".to_string())?
             .map_err(|e| format!("DXF: {e}"))?;
@@ -625,6 +723,7 @@ mod native {
             None if doc.version < MIN_DWG_VERSION => doc.version = MIN_DWG_VERSION,
             None => {}
         }
+        proxy_classes(&mut doc, &classes);
         other_layout_owners(&mut doc);
         table_style_rows(&mut doc, true);
         dimension_flags(&mut doc);
@@ -1070,5 +1169,15 @@ mod tests {
         let dxf = r2000(b"x");
         assert_eq!(dxf_to_dwg_kept_as(&dxf, "AC1032", "AC9999"), dxf_to_dwg_as(&dxf, "AC1032"));
         assert!(dxf_to_dwg_kept_as(&dxf, "AC0000", "AC1032").is_err(), "an unwritable version is still an error");
+    }
+
+    /// The CLASS names in CLASSES order; nothing for a binary DXF or one without CLASSES.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dxf_class_names_in_classes_order() {
+        let dxf = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  0\r\nENDSEC\r\n  0\r\nSECTION\r\n  2\r\nCLASSES\r\n  0\r\nCLASS\r\n  1\r\nWIDGETA\r\n  2\r\nAcDbWidgetA\r\n  3\r\nApp\r\n  0\r\nCLASS\r\n  1\r\nWIDGETB\r\n  2\r\nAcDbWidgetB\r\n  0\r\nENDSEC\r\n  0\r\nSECTION\r\n  2\r\nENTITIES\r\n  0\r\nTEXT\r\n  1\r\nNOT_A_CLASS\r\n  0\r\nENDSEC\r\n  0\r\nEOF\r\n";
+        assert_eq!(native::dxf_class_names(dxf), ["WIDGETA", "WIDGETB"]);
+        assert!(native::dxf_class_names(b"  0\nSECTION\n  2\nHEADER\n  0\nENDSEC\n  0\nEOF\n").is_empty());
+        assert!(native::dxf_class_names(b"AutoCAD Binary DXF\r\n\x1a\0").is_empty());
     }
 }

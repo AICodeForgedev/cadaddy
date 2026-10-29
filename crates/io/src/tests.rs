@@ -2814,6 +2814,50 @@ fn proxies_keep_their_class_when_classes_are_rewritten() {
     assert_eq!(names, ["VISUALSTYLE", "WIDGETX"]);
 }
 
+/// The proxies of [`proxy_file`] keep their classes in a DWG too. A proxy names its class by
+/// number, 500 plus the class's place in the CLASSES the file lists; acadrust numbers the classes
+/// it writes in its own order (its default classes first), so the DXF's numbers named other
+/// classes there: a 2018 drawing's piping proxies came out as LARGE_RADIAL_DIMENSION and
+/// SECTIONOBJECT, and the ODA File Converter refused the file ("AcDbProxyObject can't be cast to
+/// AcDbBlockTableRecord"). A DWG before 2013 leaves them out (acadrust writes no class for them).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn proxies_keep_their_class_in_dwg() {
+    use acadrust::entities::{EntityType, ExtendedEntityData};
+    use acadrust::objects::ObjectType;
+    let d = read(&proxy_file(), "p.dxf").unwrap();
+    for version in [Version::R2018, Version::R2013, Version::R2010, Version::R2004] {
+        let dwg = write_with(&d, "p.dwg", &SaveOptions { version: Some(version), binary: false }).unwrap();
+        let doc = acadrust::DwgReader::from_stream(std::io::Cursor::new(dwg)).read().unwrap();
+        let class_of = |id: i32| doc.classes.iter().find(|c| i32::from(c.class_number) == id).map(|c| c.dxf_name.clone());
+        let mut objects: Vec<Option<String>> = doc
+            .objects
+            .values()
+            .filter_map(|o| match o {
+                ObjectType::ProxyObject(p) => Some(class_of(p.class_id)),
+                _ => None,
+            })
+            .collect();
+        objects.sort();
+        // Before 2013 acadrust writes no class for a proxy, so the DWG leaves the proxies out.
+        let legacy = version < Version::R2013;
+        let expected = if legacy { vec![] } else { vec![Some("VISUALSTYLE".to_string()), Some("WIDGETX".to_string())] };
+        assert_eq!(objects, expected, "{version:?}: proxy objects");
+        let entities: Vec<Option<String>> = doc
+            .entities()
+            .filter_map(|e| match e {
+                EntityType::Extended(x) => match &x.data {
+                    ExtendedEntityData::Proxy(p) => Some(class_of(p.class_id)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let expected = if legacy { vec![] } else { vec![Some("WIDGETX".to_string())] };
+        assert_eq!(entities, expected, "{version:?}: proxy entity");
+    }
+}
+
 /// A name that isn't valid Unicode still picks its format by extension.
 #[cfg(unix)]
 #[test]
