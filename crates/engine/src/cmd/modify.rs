@@ -1075,19 +1075,112 @@ pub(crate) fn trim(s: &mut Session, h: Handle, pick: Vec2, edges: Edges) -> Resu
         k => super::modify2::trim_other(k, &cut, pick)?,
     };
     let pieces = super::exact_ends::polish(pieces, &e.kind, &curved_edges(s, edges, h)?);
-    let common = e.common.clone();
+    replace_in_place(s, h, &e, pieces)
+}
+
+/// Replace `h` by `pieces` the way AutoCAD shortens an object: the original handle keeps the
+/// first piece (the one holding the start point) with its layer, properties, xdata and extension
+/// dictionary, and each further piece is a new object copying the properties and xdata. No
+/// piece: the object is erased. Dimensions attached to `h` follow (see [`reassociate`]).
+/// Returns the handles left, `h` first.
+pub(crate) fn replace_in_place(s: &mut Session, h: Handle, orig: &Entity, pieces: Vec<EntityKind>) -> Result<Vec<Handle>> {
     let space = s.space();
+    let mut it = pieces.into_iter();
+    let Some(first) = it.next() else {
+        s.doc_mut()?.remove_entity(h);
+        return Ok(Vec::new());
+    };
     let d = s.doc_mut()?;
-    d.remove_entity(h);
-    let mut out = Vec::new();
-    for k in pieces {
+    d.modify_entity(h, |e| e.kind = first)?;
+    let mut out = vec![h];
+    for k in it {
         let nh = d.new_handle();
         if let Some(st) = d.space_mut(&space) {
-            st.push(Entity { handle: nh, common: common.clone(), kind: k });
+            st.push(Entity { handle: nh, common: orig.common.clone(), kind: k });
             out.push(nh);
         }
     }
+    let notes = reassociate(d, h, &out);
+    for n in notes {
+        s.echo(n);
+    }
     Ok(out)
+}
+
+/// After `h` was shortened or split into `pieces` (`h` first), fix the associative dimensions
+/// attached to it. A definition point that now sits on a further piece moves its attachment
+/// there; an end point cut off follows the new end of `h`; a point that cannot follow (a
+/// midpoint, vertex or arc position that is no longer where it was) lets go, is marked orphaned
+/// and a note is returned, never left silently stale.
+fn reassociate(d: &mut cadaddy_doc::Drawing, h: Handle, pieces: &[Handle]) -> Vec<String> {
+    use cadaddy_doc::{AssocSnap, DimAssoc};
+    let mut edits: Vec<(Handle, Vec<(usize, Option<DimAssoc>)>)> = Vec::new();
+    {
+        let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities));
+        for store in stores {
+            for e in store.iter_kinds(cadaddy_doc::KIND_DIMENSION) {
+                let EntityKind::Dimension(dm) = &e.kind else { continue };
+                let mut ch = Vec::new();
+                for (i, a) in dm.assoc.iter().enumerate().filter(|(_, a)| a.handle == h) {
+                    let Some(old) = crate::assoc::def_point(dm, &a.point).map(|p| p.xy()) else { continue };
+                    let near = |q: Vec2| q.dist(old) <= 1e-6 * (1.0 + old.x.abs().max(old.y.abs()));
+                    let on_h = crate::assoc::snap_point(d, a).is_some_and(near);
+                    if on_h {
+                        continue;
+                    }
+                    match a.snap {
+                        AssocSnap::Start | AssocSnap::End => {
+                            let moved = pieces.iter().skip(1).find_map(|p| {
+                                [AssocSnap::Start, AssocSnap::End].into_iter().find_map(|sn| {
+                                    let b = DimAssoc { point: a.point.clone(), handle: *p, snap: sn };
+                                    crate::assoc::snap_point(d, &b).is_some_and(near).then_some(b)
+                                })
+                            });
+                            if let Some(b) = moved {
+                                ch.push((i, Some(b)));
+                            }
+                        }
+                        AssocSnap::Center | AssocSnap::Intersection { .. } => {}
+                        _ => ch.push((i, None)),
+                    }
+                }
+                if !ch.is_empty() {
+                    edits.push((e.handle, ch));
+                }
+            }
+        }
+    }
+    let mut notes = Vec::new();
+    for (dh, ch) in edits {
+        let mut lost = 0;
+        let _ = d.modify_entity(dh, |e| {
+            let EntityKind::Dimension(dm) = &mut e.kind else { return };
+            let mut drop_idx = Vec::new();
+            for (i, b) in ch {
+                match b {
+                    Some(b) => {
+                        if let Some(slot) = dm.assoc.get_mut(i) {
+                            *slot = b;
+                        }
+                    }
+                    None => drop_idx.push(i),
+                }
+            }
+            for i in drop_idx.into_iter().rev() {
+                if i < dm.assoc.len() {
+                    let a = dm.assoc.remove(i);
+                    if !dm.marks.orphaned.contains(&a.point) {
+                        dm.marks.orphaned.push(a.point);
+                    }
+                    lost += 1;
+                }
+            }
+        });
+        if lost > 0 {
+            notes.push(format!("Dimension {} is no longer associative: its definition point is on the part that was removed.", dh.hex()));
+        }
+    }
+    notes
 }
 
 /// Sub-polyline between length parameters `a` and `b` (open polylines).
@@ -1815,19 +1908,7 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
         }
         _ => return Err(EngineError::Other("Cannot break that object.".into())),
     };
-    let common = e.common.clone();
-    let space = s.space();
-    let d = s.doc_mut()?;
-    d.remove_entity(h);
-    let mut out = Vec::new();
-    for k in pieces {
-        let nh = d.new_handle();
-        if let Some(st) = d.space_mut(&space) {
-            st.push(Entity { handle: nh, common: common.clone(), kind: k });
-            out.push(nh);
-        }
-    }
-    Ok(out)
+    replace_in_place(s, h, &e, pieces)
 }
 
 /// The distance along `segs` to the point nearest `q`.
