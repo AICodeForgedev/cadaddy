@@ -90,6 +90,9 @@ pub struct Env {
     pub order: Option<(usize, Arc<Vec<Handle>>)>,
     /// `tblnext`'s place in each table.
     pub tblnext: HashMap<String, usize>,
+    /// A block definition `entmake` has begun (a BLOCK list) and not yet ended (ENDBLK): the
+    /// entities made meanwhile go into it, numbered when it ends.
+    pub pending_block: Option<(cadaddy_doc::Block, Vec<cadaddy_doc::Entity>)>,
     /// Names given to what isn't an entity of its own here but is in AutoCAD: a block
     /// reference's ATTRIBs and SEQEND, and symbol table records (`tblobjname`).
     pub subs: HashMap<Handle, Sub>,
@@ -116,6 +119,7 @@ impl Default for Env {
             deleted: HashMap::new(),
             order: None,
             tblnext: HashMap::new(),
+            pending_block: None,
             subs: HashMap::new(),
             sub_names: HashMap::new(),
             apps: Vec::new(),
@@ -559,6 +563,12 @@ impl Session {
     /// A LISP error: run `*error*` when the routine defined one, else print it.
     fn lisp_error(&mut self, e: LispError) {
         let Some(mut run) = self.lisp.run.take() else { return };
+        // A block definition the failed routine began is dropped: a later routine's entities
+        // would otherwise go into it instead of the drawing (#1662). A definition still spans
+        // runs that end normally.
+        if let Some(env) = self.lisp.envs.get_mut(&run.uid) {
+            env.pending_block = None;
+        }
         // The command a failed routine left running is cancelled.
         if self.running.is_some() {
             self.cancel();
@@ -742,3 +752,6 @@ fn file_key(name: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod block_tests;
