@@ -7,6 +7,7 @@
 use std::collections::VecDeque;
 
 use cadaddy_geom::Vec2;
+use cadaddy_walk3d::CirculationKind;
 
 /// A grid cell, feet (when it fits [`MAX_CELLS`]).
 const CELL_FT: f64 = 0.25;
@@ -76,39 +77,7 @@ fn building_with(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, whol
     let x_at = |i: usize| (origin.x + i as f64 * cell).clamp(lo.x, hi.x);
     let y_at = |j: usize| (origin.y + j as f64 * cell).clamp(lo.y, hi.y);
     let at = |i: usize, j: usize| i < nx && j < ny && fill.get(j * nx + i).copied().unwrap_or(false);
-    let mut out = Outline::default();
-    // Rectangles: each row's runs, a run carried up while the rows above repeat it.
-    let mut open: Vec<(usize, usize, usize)> = Vec::new(); // (i0, i1, j0) — still growing
-    for j in 0..=ny {
-        let mut runs: Vec<(usize, usize)> = Vec::new();
-        let mut i = 0;
-        while j < ny && i < nx {
-            if at(i, j) {
-                let i0 = i;
-                while at(i, j) {
-                    i += 1;
-                }
-                runs.push((i0, i));
-            } else {
-                i += 1;
-            }
-        }
-        let mut next = Vec::new();
-        for (i0, i1, j0) in open.drain(..) {
-            if let Some(k) = runs.iter().position(|r| *r == (i0, i1)) {
-                runs.remove(k);
-                next.push((i0, i1, j0));
-            } else {
-                out.rects.push([Vec2::new(x_at(i0), y_at(j0)), Vec2::new(x_at(i1), y_at(j))]);
-            }
-        }
-        next.extend(runs.into_iter().map(|(i0, i1)| (i0, i1, j)));
-        open = next;
-        if out.rects.len() > MAX_RECTS {
-            return None;
-        }
-    }
-    out.rects.retain(|[a, b]| b.x > a.x && b.y > a.y);
+    let mut out = Outline { rects: rects_of(fill, nx, ny, x_at, y_at)?, edges: Vec::new() };
     // Edges: a cell side with no plate across it, joined along its row or column.
     for j in 0..=ny {
         // Below the cells of row j (plate above, none below): runs west to east.
@@ -148,6 +117,254 @@ fn building_with(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, whol
     }
     out.edges.retain(|(a, b)| a.dist(*b) > 0.0);
     (!out.rects.is_empty()).then_some(out)
+}
+
+/// The cells of `fill` as rectangles: each row's runs, a run carried up while the rows above
+/// repeat it. None past [`MAX_RECTS`].
+fn rects_of(fill: &[bool], nx: usize, ny: usize, x_at: impl Fn(usize) -> f64, y_at: impl Fn(usize) -> f64) -> Option<Vec<[Vec2; 2]>> {
+    let at = |i: usize, j: usize| i < nx && j < ny && fill.get(j * nx + i).copied().unwrap_or(false);
+    let mut rects = Vec::new();
+    let mut open: Vec<(usize, usize, usize)> = Vec::new(); // (i0, i1, j0) — still growing
+    for j in 0..=ny {
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        let mut i = 0;
+        while j < ny && i < nx {
+            if at(i, j) {
+                let i0 = i;
+                while at(i, j) {
+                    i += 1;
+                }
+                runs.push((i0, i));
+            } else {
+                i += 1;
+            }
+        }
+        let mut next = Vec::new();
+        for (i0, i1, j0) in open.drain(..) {
+            if let Some(k) = runs.iter().position(|r| *r == (i0, i1)) {
+                runs.remove(k);
+                next.push((i0, i1, j0));
+            } else {
+                rects.push([Vec2::new(x_at(i0), y_at(j0)), Vec2::new(x_at(i1), y_at(j))]);
+            }
+        }
+        next.extend(runs.into_iter().map(|(i0, i1)| (i0, i1, j)));
+        open = next;
+        if rects.len() > MAX_RECTS {
+            return None;
+        }
+    }
+    rects.retain(|[a, b]| b.x > a.x && b.y > a.y);
+    Some(rects)
+}
+
+/// Door gaps closed tracing a space, feet each side: a door up to twice as wide.
+const DOOR_FT: f64 = 2.0;
+/// How far from its label a space's floor is looked for, feet (a label set against its wall).
+const LABEL_REACH_FT: f64 = 3.0;
+/// The widest corridor, feet: a wider space a label calls a corridor is traced whole.
+const CORRIDOR_FT: f64 = 14.0;
+/// How far a corridor's walls may step out along it, feet (a door's alcove does not widen it).
+const CORRIDOR_JOG_FT: f64 = 1.0;
+
+/// The floor area a space of the kind can have, square feet: less is a symbol's or a tag's box,
+/// more a trace that got out (a stair open to its lobby, a hoistway's door wider than a door).
+fn space_sf(kind: CirculationKind) -> (f64, f64) {
+    match kind {
+        CirculationKind::Hoistway => (20.0, 300.0),
+        CirculationKind::Stair => (30.0, 800.0),
+        CirculationKind::Corridor => (30.0, 20_000.0),
+    }
+}
+
+/// The thinnest wall round a hoistway, inches: the shaft's rated walls (masonry, shaft wall); the
+/// car drawn inside it is thinner.
+const HOISTWAY_WALL_IN: f64 = 4.0;
+
+/// The circulation spaces the labels (kind, centre) name on a storey: each traced on the walls'
+/// grid inside the shell (rectangles), its door gaps closed — the hoistways first (on their
+/// shaft walls, [`HOISTWAY_WALL_IN`]), then the corridors, then the stairs, each in what those
+/// before it leave. A corridor runs along its axis between its walls (through a lobby or a
+/// stair's landing it opens onto, not across it), so a stair open to it stays in its own
+/// enclosure. Why not, for a label on a wall or in a space already traced, and for a trace
+/// bigger or smaller than its kind's ([`space_sf`]).
+pub(super) fn spaces(
+    walls: &[(Vec2, Vec2, f64)],
+    shell: &[[Vec2; 2]],
+    upf: f64,
+    labels: &[(CirculationKind, Vec2)],
+) -> Vec<Result<Vec<[Vec2; 2]>, String>> {
+    let mut out = vec![Err("no shell to trace in".to_string()); labels.len()];
+    if labels.is_empty() || shell.is_empty() || !(upf.is_finite() && upf > 0.0) {
+        return out;
+    }
+    let lo = Vec2::new(shell.iter().map(|r| r[0].x).fold(f64::INFINITY, f64::min), shell.iter().map(|r| r[0].y).fold(f64::INFINITY, f64::min));
+    let hi =
+        Vec2::new(shell.iter().map(|r| r[1].x).fold(f64::NEG_INFINITY, f64::max), shell.iter().map(|r| r[1].y).fold(f64::NEG_INFINITY, f64::max));
+    let (w, h) = (hi.x - lo.x, hi.y - lo.y);
+    if !(w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite()) {
+        return out;
+    }
+    let cell = (CELL_FT * upf).max((w * h / MAX_CELLS).sqrt());
+    let nx = (w / cell).ceil() as usize + 4;
+    let ny = (h / cell).ceil() as usize + 4;
+    if nx as f64 * ny as f64 > MAX_CELLS * 1.5 {
+        return out;
+    }
+    let origin = Vec2::new(lo.x - 2.0 * cell, lo.y - 2.0 * cell);
+    let Some(wall) = raster(walls, origin, cell, nx, ny) else { return out };
+    let thick: Vec<(Vec2, Vec2, f64)> = walls.iter().copied().filter(|w| w.2 >= HOISTWAY_WALL_IN * upf / 12.0).collect();
+    let Some(shaft_wall) = raster(&thick, origin, cell, nx, ny) else { return out };
+    let centre = |i: usize, j: usize| Vec2::new(origin.x + (i as f64 + 0.5) * cell, origin.y + (j as f64 + 0.5) * cell);
+    let outside: Vec<bool> = (0..nx * ny)
+        .map(|k| {
+            let p = centre(k % nx, k / nx);
+            !shell.iter().any(|[a, b]| p.x >= a.x && p.x <= b.x && p.y >= a.y && p.y <= b.y)
+        })
+        .collect();
+    // Blocked: a wall, outside the shell, or a space already traced; for a hoistway, its shaft's
+    // walls only.
+    let mut blocked: Vec<bool> = wall.iter().zip(&outside).map(|(w, o)| *w || *o).collect();
+    let mut shaft_blocked: Vec<bool> = shaft_wall.iter().zip(&outside).map(|(w, o)| *w || *o).collect();
+    let r = (DOOR_FT * upf / cell).ceil() as usize;
+    let reach = (LABEL_REACH_FT * upf / cell).ceil() as usize;
+    let jog = (CORRIDOR_JOG_FT * upf / cell).ceil() as usize;
+    let sf = cell * cell / (upf * upf);
+    let x_at = |i: usize| origin.x + i as f64 * cell;
+    let y_at = |j: usize| origin.y + j as f64 * cell;
+    let rank = |k: CirculationKind| match k {
+        CirculationKind::Hoistway => 0,
+        CirculationKind::Corridor => 1,
+        CirculationKind::Stair => 2,
+    };
+    let mut order: Vec<usize> = (0..labels.len()).collect();
+    order.sort_by_key(|i| labels.get(*i).map_or(3, |l| rank(l.0)));
+    for n in order {
+        let Some(&(kind, at)) = labels.get(n) else { continue };
+        let Some(o) = out.get_mut(n) else { continue };
+        let (i0, j0) = ((at.x - origin.x) / cell, (at.y - origin.y) / cell);
+        if !(i0 >= 0.0 && j0 >= 0.0 && (i0 as usize) < nx && (j0 as usize) < ny) {
+            *o = Err("outside the shell".into());
+            continue;
+        }
+        let k0 = j0 as usize * nx + i0 as usize;
+        let (here, walls_here) = if kind == CirculationKind::Hoistway { (&shaft_blocked, &shaft_wall) } else { (&blocked, &wall) };
+        if here.get(k0).copied().unwrap_or(true) {
+            *o = Err(if outside.get(k0).copied().unwrap_or(true) {
+                "outside the shell"
+            } else if walls_here.get(k0).copied().unwrap_or(true) {
+                "on a wall"
+            } else {
+                "in a space already traced"
+            }
+            .into());
+            continue;
+        }
+        let grown = grow(here, nx, ny, r);
+        // The floor nearest the label, not across a wall from it.
+        let Some(start) = nearest(here, &grown, nx, ny, k0, reach) else {
+            *o = Err(format!("no floor within {LABEL_REACH_FT}' (walls closer than a door's width)"));
+            continue;
+        };
+        let (si, sj) = (start % nx, start / nx);
+        let free = |i: usize, j: usize| !grown.get(j * nx + i).copied().unwrap_or(true);
+        let run = |di: isize, dj: isize| {
+            let (mut i, mut j, mut n) = (si as isize, sj as isize, 0usize);
+            while i + di >= 0 && j + dj >= 0 && ((i + di) as usize) < nx && ((j + dj) as usize) < ny && free((i + di) as usize, (j + dj) as usize) {
+                i += di;
+                j += dj;
+                n += 1;
+            }
+            n
+        };
+        // A corridor's band: across its axis, its width at the label (its walls' faces).
+        let band: Option<(bool, usize, usize)> = (kind == CirculationKind::Corridor)
+            .then(|| {
+                let (west, east, south, north) = (run(-1, 0), run(1, 0), run(0, -1), run(0, 1));
+                let along_x = west + east >= south + north;
+                let (a, b) = if along_x { (sj - south, sj + north) } else { (si - west, si + east) };
+                ((b - a + 1 + 2 * r) as f64 * cell <= CORRIDOR_FT * upf).then_some((along_x, a.saturating_sub(jog), b + jog))
+            })
+            .flatten();
+        let in_band = |i: usize, j: usize, widen: usize| {
+            band.is_none_or(|(along_x, a, b)| {
+                let c = if along_x { j } else { i };
+                c + widen >= a && c <= b + widen
+            })
+        };
+        let mut floor = vec![false; nx * ny];
+        let mut queue = VecDeque::from([start]);
+        floor[start] = true;
+        while let Some(k) = queue.pop_front() {
+            let (i, j) = (k % nx, k / nx);
+            let mut step = |i: usize, j: usize| {
+                let q = j * nx + i;
+                if free(i, j) && in_band(i, j, 0) && !floor[q] {
+                    floor[q] = true;
+                    queue.push_back(q);
+                }
+            };
+            if i > 0 {
+                step(i - 1, j);
+            }
+            if i + 1 < nx {
+                step(i + 1, j);
+            }
+            if j > 0 {
+                step(i, j - 1);
+            }
+            if j + 1 < ny {
+                step(i, j + 1);
+            }
+        }
+        // Back out to the walls' faces: the gaps' closing undone.
+        let floor: Vec<bool> = grow(&floor, nx, ny, r)
+            .into_iter()
+            .enumerate()
+            .map(|(k, f)| f && !here.get(k).copied().unwrap_or(true) && in_band(k % nx, k / nx, r))
+            .collect();
+        let area = floor.iter().filter(|f| **f).count() as f64 * sf;
+        let (min, max) = space_sf(kind);
+        let Some(o) = out.get_mut(n) else { continue };
+        if !(min..=max).contains(&area) {
+            *o = Err(format!("traced {area:.0} sf, not {min:.0}–{max:.0} sf"));
+            continue;
+        }
+        let Some(rects) = rects_of(&floor, nx, ny, x_at, y_at) else {
+            *o = Err("too many pieces".into());
+            continue;
+        };
+        for ((b, sb), f) in blocked.iter_mut().zip(shaft_blocked.iter_mut()).zip(&floor) {
+            *b |= *f;
+            *sb |= *f;
+        }
+        *o = Ok(rects);
+    }
+    out
+}
+
+/// The cell nearest `k0` (within `reach` cells, through open cells) that is open once the gaps
+/// are closed (`grown` clear).
+fn nearest(blocked: &[bool], grown: &[bool], nx: usize, ny: usize, k0: usize, reach: usize) -> Option<usize> {
+    let (i0, j0) = (k0 % nx, k0 / nx);
+    let mut seen = std::collections::HashSet::from([k0]);
+    let mut queue = VecDeque::from([k0]);
+    while let Some(k) = queue.pop_front() {
+        if !grown.get(k).copied().unwrap_or(true) {
+            return Some(k);
+        }
+        let (i, j) = (k % nx, k / nx);
+        let near = [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)];
+        for (a, b) in near {
+            if a < nx && b < ny && a.abs_diff(i0).max(b.abs_diff(j0)) <= reach {
+                let q = b * nx + a;
+                if !blocked.get(q).copied().unwrap_or(true) && seen.insert(q) {
+                    queue.push_back(q);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The cells whose centre lies within a wall (or the most of a cell from its line, so a thin
@@ -309,6 +526,110 @@ mod tests {
         assert!(sf(&slab) < 200.0 * 61.0, "{} sf", sf(&slab));
         let want = 200.0 * 66.0;
         assert!((sf(&whole) - want).abs() < 0.02 * want, "{} sf, want {want}", sf(&whole));
+    }
+
+    /// 6" walls on centrelines (feet, 12 units per foot).
+    fn wall(a: (f64, f64), b: (f64, f64)) -> (Vec2, Vec2, f64) {
+        (Vec2::new(a.0 * 12.0, a.1 * 12.0), Vec2::new(b.0 * 12.0, b.1 * 12.0), 6.0)
+    }
+
+    /// A storey 130' × 46': a stair (0–10') behind a 3' door at the west end of a 6' corridor
+    /// (y 20–26') between two rows of rooms with 3' doors onto it, a second stair (10–20') beside
+    /// the corridor with its landing open onto it, the corridor open at its east end into a lobby
+    /// (100–130'), and an 8' × 8' hoistway in the lobby with a 4' door and its car drawn inside
+    /// (2" lines).
+    fn storey() -> (Vec<(Vec2, Vec2, f64)>, Vec<[Vec2; 2]>) {
+        let mut w = ring(&[(0.0, 0.0), (130.0, 0.0), (130.0, 46.0), (0.0, 46.0)]);
+        // The corridor's walls, broken for the rooms' doors.
+        w.extend([wall((10.0, 20.0), (30.0, 20.0)), wall((33.0, 20.0), (60.0, 20.0)), wall((63.0, 20.0), (100.0, 20.0))]);
+        // None between the corridor and the second stair.
+        w.extend([wall((20.0, 26.0), (40.0, 26.0)), wall((43.0, 26.0), (100.0, 26.0)), wall((20.0, 26.0), (20.0, 46.0))]);
+        // The car: 2" lines 1' in from the shaft's walls.
+        let car = |a: (f64, f64), b: (f64, f64)| (Vec2::new(a.0 * 12.0, a.1 * 12.0), Vec2::new(b.0 * 12.0, b.1 * 12.0), 2.0);
+        w.extend([
+            car((111.0, 31.0), (117.0, 31.0)),
+            car((117.0, 31.0), (117.0, 37.0)),
+            car((117.0, 37.0), (111.0, 37.0)),
+            car((111.0, 37.0), (111.0, 31.0)),
+        ]);
+        // The rooms' party walls.
+        for x in [40.0, 70.0] {
+            w.push(wall((x, 0.0), (x, 20.0)));
+            w.push(wall((x, 26.0), (x, 46.0)));
+        }
+        // The stair's wall and its door onto the corridor; the lobby's walls stop at the corridor.
+        w.extend([wall((10.0, 0.0), (10.0, 21.5)), wall((10.0, 24.5), (10.0, 46.0))]);
+        w.extend([wall((100.0, 0.0), (100.0, 20.0)), wall((100.0, 26.0), (100.0, 46.0))]);
+        // The hoistway: its door (4') on the north side.
+        w.extend([wall((110.0, 30.0), (118.0, 30.0)), wall((110.0, 30.0), (110.0, 38.0)), wall((118.0, 30.0), (118.0, 38.0))]);
+        w.extend([wall((110.0, 38.0), (112.0, 38.0)), wall((116.0, 38.0), (118.0, 38.0))]);
+        (w, vec![[Vec2::new(-3.0, -3.0), Vec2::new(130.0 * 12.0 + 3.0, 46.0 * 12.0 + 3.0)]])
+    }
+
+    fn sf_of(rects: &[[Vec2; 2]]) -> f64 {
+        rects.iter().map(|[a, b]| (b.x - a.x) * (b.y - a.y)).sum::<f64>() / 144.0
+    }
+
+    fn extents(rects: &[[Vec2; 2]]) -> [f64; 4] {
+        rects.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |m, [a, b]| {
+            [m[0].min(a.x / 12.0), m[1].min(a.y / 12.0), m[2].max(b.x / 12.0), m[3].max(b.y / 12.0)]
+        })
+    }
+
+    #[test]
+    fn the_stair_and_hoistway_close_at_their_doors_and_the_corridor_runs_between_its_walls() {
+        let (walls, shell) = storey();
+        let p = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        let labels = [
+            (CirculationKind::Corridor, p(50.0, 23.0)),
+            (CirculationKind::Stair, p(5.0, 10.0)),
+            (CirculationKind::Hoistway, p(114.0, 34.0)),
+            (CirculationKind::Stair, p(15.0, 40.0)),
+        ];
+        let found = spaces(&walls, &shell, 12.0, &labels);
+        let [Ok(corridor), Ok(stair), Ok(hoistway), Ok(open_stair)] = &found[..] else { panic!("{found:?}") };
+        // The stair open onto the corridor: its own enclosure (9.5' × 19.75' less the corridor's
+        // 1' of give), not the corridor.
+        let want = 9.5 * 18.75;
+        assert!((sf_of(open_stair) - want).abs() < 0.1 * want, "open stair {} sf, want {want}", sf_of(open_stair));
+        assert!(extents(open_stair)[1] > 26.0, "{:?}", extents(open_stair));
+        // The stair: inside its walls (9.5' × 45.5'), the door onto the corridor closed.
+        let want = 9.5 * 45.5;
+        assert!((sf_of(stair) - want).abs() < 0.05 * want, "stair {} sf, want {want}", sf_of(stair));
+        // The hoistway: 7.5' × 7.5' inside its shaft's walls (not the car), its door closed (the
+        // lobby is not in it).
+        let want = 7.5 * 7.5;
+        assert!((sf_of(hoistway) - want).abs() < 0.1 * want, "hoistway {} sf, want {want}", sf_of(hoistway));
+        // The corridor: from the stair's door to the lobby's far wall along its band, the rooms'
+        // doors closed, not spread across the lobby.
+        let e = extents(corridor);
+        assert!(e[0] > 9.0 && e[0] < 11.5 && e[2] > 128.0, "corridor {e:?}");
+        assert!(e[1] > 18.5 && e[3] < 27.5, "corridor {e:?}");
+        assert!(sf_of(corridor) < 120.0 * 7.5, "corridor {} sf", sf_of(corridor));
+    }
+
+    #[test]
+    fn a_label_on_a_wall_or_in_a_space_already_traced_traces_nothing() {
+        let (walls, shell) = storey();
+        let p = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        let labels = [
+            // On the stair's wall: a tag, not the stair's label.
+            (CirculationKind::Stair, p(10.0, 30.0)),
+            (CirculationKind::Stair, p(5.0, 10.0)),
+            // The stair labelled twice.
+            (CirculationKind::Stair, p(5.0, 40.0)),
+            // A "corridor" label in a guest room is a room 30' × 20': it traces the room whole,
+            // not a band (wider than a corridor), and is a corridor's size.
+            (CirculationKind::Hoistway, p(55.0, 10.0)),
+        ];
+        let found = spaces(&walls, &shell, 12.0, &labels);
+        assert!(found[1].is_ok(), "{found:?}");
+        assert_eq!(
+            (found[0].as_ref().err().map(String::as_str), found[2].as_ref().err().map(String::as_str)),
+            (Some("on a wall"), Some("in a space already traced"))
+        );
+        // A "hoistway" the size of a guest room is no hoistway.
+        assert!(found[3].as_ref().is_err_and(|e| e.starts_with("traced 5")), "{:?}", found[3].as_ref().map(|r| sf_of(r)));
     }
 
     #[test]

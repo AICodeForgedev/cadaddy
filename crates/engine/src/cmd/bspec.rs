@@ -753,6 +753,8 @@ struct Traced {
     /// Cached area and bounds for fast duplicate detection (Q6029).
     cached_area: f64,
     cached_bounds: cadaddy_geom::Bounds2,
+    /// A corridor, stair or hoistway of the spec's circulation: its outline is its traced floor.
+    circulation: bool,
 }
 
 /// Grid cell size for the spatial index of traced rooms (Q6029): two rooms are the same only when
@@ -793,6 +795,11 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
             None => None,
         }
     };
+    // The corridors, stairs and hoistways traced before the rooms: their edges bound the rooms.
+    let mut plan = plan;
+    if let Some(p) = plan.as_mut() {
+        add_circulation_edges(p.doc_mut()?, sp);
+    }
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<Traced> = Vec::new();
     // Q6029: spatial index for O(1) amortised duplicate detection instead of O(n) linear scan.
@@ -815,6 +822,33 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         }
     }
     texts.sort_by_key(|(_, t, _)| super::perceive::geometry::room_number(t));
+    // The corridors, stairs and hoistways first: each is the room its traced floor is, the spec's
+    // room of its name on its level its own.
+    for c in &sp.circulation {
+        let outline: Vec<Vec2> = c.outline().into_iter().map(|p| Vec2::new(p[0], p[1])).collect();
+        let area = cadaddy_geom::shoelace(&outline).abs();
+        if outline.len() < 3 || area < 1e-9 || out.len() >= MAX_ROOMS {
+            continue;
+        }
+        // As a label names a spec room: the first of its name on its level, once (a corridor
+        // walls cut in two is one room's).
+        let room = sp.rooms.iter().position(|r| names_room(r, &c.name) && r.level.as_ref().is_none_or(|l| l.eq_ignore_ascii_case(&c.level)));
+        let room = room.filter(|i| claimed.insert(*i));
+        let bounds = cadaddy_geom::Bounds2::from_points(outline.iter().copied());
+        out.push(Traced {
+            room,
+            level: c.level.clone(),
+            outline,
+            tag: Handle(0),
+            at: Vec2::new(c.at[0], c.at[1]),
+            name: Some(c.name.clone()),
+            number: None,
+            cached_area: area,
+            cached_bounds: bounds,
+            circulation: true,
+        });
+    }
+    let n_circulation = out.len();
     for (h, text, at) in texts {
         if out.len() >= MAX_ROOMS {
             break;
@@ -831,6 +865,18 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
                 }
                 continue;
             }
+        }
+        // A stair's direction note names no room.
+        if matches!(text.trim().trim_end_matches('.').to_ascii_uppercase().as_str(), "DN" | "UP" | "DOWN") {
+            continue;
+        }
+        // A label on a corridor's, stair's or hoistway's floor names no other room (its own
+        // label, a stair's DN, its number once it has one).
+        let on_circulation = out.iter().take(n_circulation).any(|o| {
+            level_at(&sp.levels, at.x, at.y).is_some_and(|l| l.name.eq_ignore_ascii_case(&o.level)) && cadaddy_geom::point_in_polygon(&o.outline, at)
+        });
+        if on_circulation {
+            continue;
         }
         // A spec room on a level is looked for on that level's plan only (every floor has its
         // OFFICE).
@@ -910,7 +956,18 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
                 let room = room.filter(|i| claimed.insert(*i));
                 let idx = out.len();
                 grid.entry((gx, gy)).or_default().push(idx);
-                out.push(Traced { room, level: level.name.clone(), outline, tag: h, at, name, number, cached_area: area, cached_bounds: bounds });
+                out.push(Traced {
+                    room,
+                    level: level.name.clone(),
+                    outline,
+                    tag: h,
+                    at,
+                    name,
+                    number,
+                    cached_area: area,
+                    cached_bounds: bounds,
+                    circulation: false,
+                });
             }
         }
     }
@@ -1006,9 +1063,21 @@ const MAX_ROOM_SF: f64 = 50_000.0;
 /// Most tags traced again on the built walls per build.
 const MAX_RETRACE: usize = 5_000;
 
-/// A drawing of the built footprints' edges (each once), every level's where it was built: the
-/// boundaries a room is traced on when its drawn outline isn't one.
-fn walls_session(bounds: &std::collections::BTreeMap<String, Vec<Vec<Vec2>>>) -> Option<Session> {
+/// Lines along the edges of the spec's circulation spaces (`sp.circulation`), so a room traced
+/// on the drawing stops at a corridor, a stair or a hoistway.
+fn add_circulation_edges(d: &mut Drawing, sp: &BuildingSpec) {
+    for (a, b) in sp.circulation.iter().flat_map(|c| c.edges()) {
+        let line = cadaddy_doc::Line { a: Vec3::new(a[0], a[1], 0.0), b: Vec3::new(b[0], b[1], 0.0) };
+        if d.add(&Space::Model, Common::default(), EntityKind::Line(line)).is_err() {
+            break;
+        }
+    }
+}
+
+/// A drawing of the built footprints' edges (each once), every level's where it was built, and
+/// the circulation spaces' edges: the boundaries a room is traced on when its drawn outline isn't
+/// one.
+fn walls_session(bounds: &std::collections::BTreeMap<String, Vec<Vec<Vec2>>>, sp: &BuildingSpec) -> Option<Session> {
     let mut d = Drawing::default();
     let mut seen: std::collections::HashSet<[i64; 4]> = std::collections::HashSet::new();
     let key = |p: Vec2| ((p.x * 1e4).round() as i64, (p.y * 1e4).round() as i64);
@@ -1027,6 +1096,7 @@ fn walls_session(bounds: &std::collections::BTreeMap<String, Vec<Vec<Vec2>>>) ->
     if d.model.is_empty() {
         return None;
     }
+    add_circulation_edges(&mut d, sp);
     let mut t = Session::empty();
     t.open_drawing(d, "Built walls", None);
     Some(t)
@@ -1064,7 +1134,7 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
 /// frame, an enlarged view (its walls are not built) or a schedule's cell closes no room. A
 /// numbered room traced twice on its level (a floor plan and an enlarged plan of it) is one
 /// room: the smaller outline, the plan's own scale.
-fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<String>) {
+fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<String>) {
     if rooms.is_empty() {
         return;
     }
@@ -1104,6 +1174,11 @@ fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<
         bounds.iter().map(|(l, polys)| (l, cadaddy_geom::Bounds2::from_points(polys.iter().flatten().copied()))).collect();
     let mut kept: Vec<Traced> = Vec::new();
     for mut t in std::mem::take(rooms) {
+        // A corridor, stair or hoistway was traced on the walls themselves.
+        if t.circulation {
+            keep_room(&mut kept, t);
+            continue;
+        }
         let key = t.level.trim().to_ascii_uppercase();
         let a = cadaddy_geom::shoelace(&t.outline).abs();
         let big = a >= min_area || t.room.is_some();
@@ -1119,7 +1194,7 @@ fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<
         }
         // Only a tag among the level's built walls (a schedule's or a note's text isn't).
         let inside = extents.get(&key).is_some_and(|b| b.contains(t.at)) && retraced_or_tried < MAX_RETRACE;
-        let plan = walls_plan.get_or_insert_with(|| walls_session(&bounds));
+        let plan = walls_plan.get_or_insert_with(|| walls_session(&bounds, sp));
         let outline = plan.as_ref().filter(|_| inside).and_then(|plan| {
             retraced_or_tried += 1;
             let loops = super::hatch::loops_at_lazy(plan, t.at, &mut cache).ok()?;
@@ -1147,14 +1222,24 @@ fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<
     for (level, n) in &unwalled {
         notes.push(format!("{level}: {n} room tag(s) not inside built walls (an enlarged view, a note's or the title block's box) — no room built."));
     }
-    // One room per number and level: the smaller outline.
+    // One room per number and level (its tag's, else its spec room's): a corridor's, stair's or
+    // hoistway's (its number tag on a piece of it the trace left out is no room of its own), else
+    // the smaller outline.
     let area = |t: &Traced| cadaddy_geom::shoelace(&t.outline).abs();
+    let number = |t: &Traced| {
+        t.number
+            .clone()
+            .or_else(|| t.room.and_then(|i| sp.rooms.get(i)).and_then(|r| r.number.clone()))
+            .map(|n| n.trim().to_ascii_uppercase())
+            .filter(|n| !n.is_empty())
+    };
+    let better = |t: &Traced, o: &Traced| (t.circulation && !o.circulation) || (t.circulation == o.circulation && area(t) < area(o));
     let mut best: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
     for (i, t) in rooms.iter().enumerate() {
-        let Some(n) = t.number.as_deref().map(|n| n.trim().to_ascii_uppercase()).filter(|n| !n.is_empty()) else { continue };
+        let Some(n) = number(t) else { continue };
         let key = (t.level.trim().to_ascii_uppercase(), n);
         match best.get(&key).and_then(|j| rooms.get(*j)) {
-            Some(o) if area(o) <= area(t) => {}
+            Some(o) if !better(t, o) => {}
             _ => {
                 best.insert(key, i);
             }
@@ -1163,7 +1248,7 @@ fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<
     let before = rooms.len();
     let mut i = 0usize;
     rooms.retain(|t| {
-        let keep = match t.number.as_deref().map(|n| n.trim().to_ascii_uppercase()).filter(|n| !n.is_empty()) {
+        let keep = match number(t) {
             Some(n) => best.get(&(t.level.trim().to_ascii_uppercase(), n)) == Some(&i),
             None => true,
         };
@@ -1408,7 +1493,7 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     }
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     s.event("build.progress", json!({"step": "validate_rooms", "rooms": rooms.len()}));
-    walled_rooms(s.doc_mut()?, &mut rooms, upf, &mut notes);
+    walled_rooms(s.doc_mut()?, &sp, &mut rooms, upf, &mut notes);
     build_step(s, "rooms validated", build_start);
     s.event("build.progress", json!({"step": "validate_rooms_done", "rooms": rooms.len()}));
     let mark = |step: &str| super::guided::progress_line(&format!("  model.build: {step} at {:.1} s", build_start.elapsed().as_secs_f64()));

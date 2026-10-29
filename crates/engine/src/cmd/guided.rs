@@ -3371,6 +3371,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The building's shell first: each storey's outline from its exterior walls, before anything
     // is placed in it (rooms, MEP and devices go inside it).
     let mut shells: Option<Vec<(String, Vec<[cadaddy_geom::Vec2; 2]>)>> = None;
+    // Then the corridors, stairs and elevator hoistways inside it, before the rooms.
+    let mut circulation: Vec<cadaddy_walk3d::Circulation> = Vec::new();
     // Ensure sheet content is in the drawing so bspec.draft can read geometry.
     let t = web_time::Instant::now();
     ensure_sheets_loaded(s, job)?;
@@ -3541,7 +3543,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             // where their sheets draw them.
             let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
             if has_arch && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-                let shell = shells.get_or_insert_with(|| building_shells(s, &sp, job)).clone();
+                let shell = shells
+                    .get_or_insert_with(|| {
+                        let (shells, found) = building_shells(s, &sp, job);
+                        circulation = found;
+                        shells
+                    })
+                    .clone();
                 let sim = placer.insert(Box::new(arch_placer(s.doc()?, &sp, &shell)));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
                 let before = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
@@ -3599,6 +3607,28 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     dropped.1,
                     dropped.2
                 ));
+                // An elevator hoistway is closed floor to roof: a duct, pipe or conduit through
+                // one is a clash.
+                let through = runs_through_hoistways(&sp.mep.runs, &circulation, upf_runs);
+                if !through.is_empty() {
+                    let mut by: BTreeMap<String, usize> = BTreeMap::new();
+                    for r in through.iter().filter_map(|i| sp.mep.runs.get(*i)) {
+                        *by.entry(format!("{} on {}", r.system, r.level)).or_default() += 1;
+                    }
+                    progress_line(&format!("  MEP runs through an elevator hoistway: {} {by:?}", through.len()));
+                    job.add_finding(
+                        StageName::BimBuild,
+                        "MEP through an elevator hoistway",
+                        &format!(
+                            "{} duct, pipe or conduit runs pass through an elevator shaft, which nothing may run through: {by:?}",
+                            through.len()
+                        ),
+                        3,
+                        vec!["Route them round the shaft".into()],
+                        None,
+                        false,
+                    );
+                }
                 if dropped.0 + dropped.1 + dropped.2 > 0 {
                     job.add_finding(
                         StageName::BimBuild,
@@ -3641,7 +3671,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
             Ok((sp, true)) if has_arch => {
                 if placer.is_none() {
-                    let shell = shells.get_or_insert_with(|| building_shells(s, &sp, job)).clone();
+                    let shell = shells
+                        .get_or_insert_with(|| {
+                            let (shells, found) = building_shells(s, &sp, job);
+                            circulation = found;
+                            shells
+                        })
+                        .clone();
                     placer = Some(Box::new(arch_placer(s.doc()?, &sp, &shell)));
                 }
                 let Some(sim) = placer.as_deref() else { return Err(bad("bim_build", "device placer missing".to_string())) };
@@ -3720,6 +3756,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         if n > 0 {
             progress_line(&format!("  rooms traced from other trades' tags: {n}"));
         }
+    }
+    // The circulation goes in the spec before the rooms are traced: they are traced in what it
+    // leaves.
+    if !circulation.is_empty()
+        && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+    {
+        sp.circulation = std::mem::take(&mut circulation);
+        s.doc_mut()?.building_spec = Some(sp.to_json());
     }
     let budget_s = super::bspec::BUILD_BUDGET_S;
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s}))?;
@@ -4231,6 +4275,10 @@ fn number_rooms_from_other_trades(
             Some(_) => None,
             None => near(),
         };
+        if number_taken(&rooms, &level, &number) {
+            *missed.entry(format!("{level}: number already on the level")).or_default() += 1;
+            continue;
+        }
         let Some(room) = pick.and_then(|i| rooms.get_mut(i)) else {
             // Already numbered there (its own label), or between rooms.
             let numbered_here = rooms
@@ -4277,6 +4325,19 @@ fn number_rooms_from_other_trades(
         numbered += 1;
     }
     Ok((numbered, missed))
+}
+
+/// Whether a room of the level (digits of its name) already has the number: one number per level
+/// (the other piece of a corridor walls cut in two doesn't take it again). A "Room NNN" traced
+/// from the same label doesn't count: it is the room the number goes to, again.
+fn number_taken(rooms: &[super::bspec::RoomElement], level: &str, number: &str) -> bool {
+    let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let number = number.trim();
+    rooms.iter().any(|r| {
+        key(&r.level) == key(level)
+            && r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(number))
+            && !(r.name.trim().eq_ignore_ascii_case("Room") || r.name.trim().eq_ignore_ascii_case(&format!("Room {number}")))
+    })
 }
 
 /// How much of a level view's linework (its plan's background and its trade's own lines) must lie on
@@ -4776,9 +4837,14 @@ fn arch_placer(
 
 /// Each storey's shell ([`super::wallgen::shells`]) the rooms stage's rooms confirm: one holding
 /// fewer than [`SHELL_ROOMS`] of its level's rooms is walls the plan didn't close round the
-/// building (a part of it), no shell. With a progress line per level.
-fn building_shells(s: &Session, sp: &cadaddy_walk3d::BuildingSpec, job: &GuidedJob) -> Vec<(String, Vec<[cadaddy_geom::Vec2; 2]>)> {
-    let Ok(d) = s.doc() else { return Vec::new() };
+/// building (a part of it), no shell. And the corridors, stairs and hoistways traced inside the
+/// shells. With a progress line per level.
+fn building_shells(
+    s: &Session,
+    sp: &cadaddy_walk3d::BuildingSpec,
+    job: &GuidedJob,
+) -> (Vec<(String, Vec<[cadaddy_geom::Vec2; 2]>)>, Vec<cadaddy_walk3d::Circulation>) {
+    let Ok(d) = s.doc() else { return (Vec::new(), Vec::new()) };
     let started = web_time::Instant::now();
     let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let rooms: Vec<(String, [f64; 2])> = job
@@ -4791,9 +4857,13 @@ fn building_shells(s: &Session, sp: &cadaddy_walk3d::BuildingSpec, job: &GuidedJ
         .filter(|r| r.get("other_trade").and_then(Value::as_bool) != Some(true))
         .filter_map(|r| Some((key(r.get("level")?.as_str()?), [r.get("at")?.get(0)?.as_f64()?, r.get("at")?.get(1)?.as_f64()?])))
         .collect();
-    let mut shells = super::wallgen::shells(d, sp);
+    let storeys = super::wallgen::shells(d, sp);
     let mut untrusted = Vec::new();
-    shells.retain(|(l, rects)| {
+    let mut circulation = Vec::new();
+    let mut missed = Vec::new();
+    let mut shells = Vec::new();
+    for storey in storeys {
+        let (l, rects) = (&storey.level, &storey.shell);
         // The level's rooms on its own plan (the rooms stage also reads its other sheets: a
         // schedule's cells, an elevation's notes).
         let region = sp.levels.iter().find(|x| x.name.eq_ignore_ascii_case(l)).and_then(|x| x.region);
@@ -4804,9 +4874,14 @@ fn building_shells(s: &Session, sp: &cadaddy_walk3d::BuildingSpec, job: &GuidedJ
         let (ok, held) = shell_holds_rooms(rects, &mine);
         if !ok {
             untrusted.push(format!("{l} (holds {held} of {} rooms)", mine.len()));
+            continue;
         }
-        ok
-    });
+        circulation.extend(storey.circulation);
+        if !storey.missed.is_empty() {
+            missed.push(format!("{} {}", storey.level, storey.missed.join(", ")));
+        }
+        shells.push((storey.level, storey.shell));
+    }
     if !untrusted.is_empty() {
         progress_line(&format!("  building shell not used (the walls don't close round the building): {}", untrusted.join(", ")));
     }
@@ -4814,7 +4889,20 @@ fn building_shells(s: &Session, sp: &cadaddy_walk3d::BuildingSpec, job: &GuidedJ
     let each: Vec<String> =
         shells.iter().map(|(l, r)| format!("{l} {:.0} sf", r.iter().map(|[a, b]| (b.x - a.x) * (b.y - a.y)).sum::<f64>() / (upf * upf))).collect();
     progress_line(&format!("  building shell (exterior walls) in {:.1} s: {}", started.elapsed().as_secs_f64(), each.join(", ")));
-    shells
+    let each: Vec<String> = circulation
+        .iter()
+        .map(|c| {
+            let b = c.rects.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |m, [a, z]| {
+                [m[0].min(a[0]), m[1].min(a[1]), m[2].max(z[0]), m[3].max(z[1])]
+            });
+            format!("{} {:?} '{}' {:.0} sf {:?}", c.level, c.kind, c.name, c.area() / (upf * upf), b.map(|v| v.round()))
+        })
+        .collect();
+    progress_line(&format!("  circulation (corridors, stairs, hoistways) traced: {}: {}", circulation.len(), each.join("; ")));
+    if !missed.is_empty() {
+        progress_line(&format!("  circulation labels not traced: {}", missed.join("; ")));
+    }
+    (shells, circulation)
 }
 
 /// Removes the room elements whose middle is outside their level's shell (the levels stacked:
@@ -4843,6 +4931,52 @@ fn drop_rooms_outside_shell(s: &mut Session, shells: &[(String, Vec<[cadaddy_geo
         s.doc_mut()?.remove_entity(*h);
     }
     Ok(gone.len())
+}
+
+/// How far inside a hoistway's walls (feet) a run must pass to go through it: one along the
+/// face of its wall runs beside it.
+const HOISTWAY_CLEAR_FT: f64 = 0.25;
+
+/// The MEP runs (indices) that pass through an elevator hoistway on their level.
+fn runs_through_hoistways(runs: &[cadaddy_walk3d::MepRun], circulation: &[cadaddy_walk3d::Circulation], upf: f64) -> Vec<usize> {
+    runs.iter().enumerate().filter(|(_, r)| hoistway_crossed(r, circulation, upf).is_some()).map(|(i, _)| i).collect()
+}
+
+/// The elevator hoistway of its level (by the level's digits) a run passes through, if any.
+pub(crate) fn hoistway_crossed<'a>(
+    run: &cadaddy_walk3d::MepRun,
+    circulation: &'a [cadaddy_walk3d::Circulation],
+    upf: f64,
+) -> Option<&'a cadaddy_walk3d::Circulation> {
+    let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let inset = HOISTWAY_CLEAR_FT * upf;
+    let level = key(&run.level);
+    circulation.iter().filter(|c| c.kind == cadaddy_walk3d::CirculationKind::Hoistway && !level.is_empty() && key(&c.level) == level).find(|c| {
+        c.rects
+            .iter()
+            .map(|[a, b]| [a[0] + inset, a[1] + inset, b[0] - inset, b[1] - inset])
+            .filter(|r| r[2] > r[0] && r[3] > r[1])
+            .any(|rect| run.points.windows(2).any(|w| crosses_rect(w[0], w[1], &rect)))
+    })
+}
+
+/// Whether the segment a–b runs through the rectangle `[x0, y0, x1, y1]` (Liang–Barsky): some
+/// length of it inside.
+fn crosses_rect(a: [f64; 2], b: [f64; 2], r: &[f64; 4]) -> bool {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for (p, q) in [(-d[0], a[0] - r[0]), (d[0], r[2] - a[0]), (-d[1], a[1] - r[1]), (d[1], r[3] - a[1])] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return false;
+            }
+        } else if p < 0.0 {
+            t0 = t0.max(q / p);
+        } else {
+            t1 = t1.min(q / p);
+        }
+    }
+    t0 < t1
 }
 
 /// The share of its level's rooms a shell must hold to be the building's.
@@ -7485,6 +7619,61 @@ mod tests {
         let mut rooms = rooms.to_vec();
         rooms[8].area_sf = 250.0;
         assert_eq!(stacked_numbers(&rooms, 12.0), vec![(cadaddy_doc::Handle(2), "205".to_string()), (cadaddy_doc::Handle(9), "209".to_string())]);
+    }
+
+    #[test]
+    fn a_number_a_room_of_the_level_has_is_not_given_again() {
+        let room = |level: &str, name: &str, number: Option<&str>| super::super::bspec::RoomElement {
+            handle: cadaddy_doc::Handle(1),
+            level: level.into(),
+            name: name.into(),
+            number: number.map(String::from),
+            area_sf: 100.0,
+            ceiling_ft: 9.0,
+            finish: None,
+            source: cadaddy_doc::Handle(0),
+            outline: Vec::new(),
+            z: 0.0,
+        };
+        let rooms = [room("Level 1", "CORRIDOR", Some("100")), room("Level 1", "Room 102", Some("102")), room("Level 2", "CORRIDOR", None)];
+        // The corridor's other piece doesn't take 100 again; level 2's corridor may.
+        assert!(number_taken(&rooms, "1", "100") && number_taken(&rooms, "Level 1", " 100 "));
+        assert!(!number_taken(&rooms, "Level 2", "100") && !number_taken(&rooms, "Level 1", "101"));
+        // A "Room 102" traced from the label is the room 102 goes to.
+        assert!(!number_taken(&rooms, "Level 1", "102"));
+    }
+
+    #[test]
+    fn a_run_through_the_elevator_shaft_is_a_clash_and_one_beside_it_is_not() {
+        let shaft = cadaddy_walk3d::Circulation {
+            kind: cadaddy_walk3d::CirculationKind::Hoistway,
+            level: "Level 2".into(),
+            name: "ELEV.".into(),
+            at: [100.0, 100.0],
+            rects: vec![[[60.0, 60.0], [156.0, 156.0]]],
+        };
+        let corridor = cadaddy_walk3d::Circulation {
+            kind: cadaddy_walk3d::CirculationKind::Corridor,
+            rects: vec![[[0.0, 0.0], [600.0, 60.0]]],
+            ..shaft.clone()
+        };
+        let run = |level: &str, points: Vec<[f64; 2]>| -> cadaddy_walk3d::MepRun {
+            serde_json::from_value(json!({"system": "SA", "level": level, "points": points, "size_in": [12, 8], "bottoms_ft": [9]})).unwrap()
+        };
+        let runs = [
+            // Straight through the shaft.
+            run("2", vec![[0.0, 100.0], [300.0, 100.0]]),
+            // Along the face of its wall (inside the clearance), and past it.
+            run("Level 2", vec![[0.0, 59.0], [300.0, 59.0], [300.0, 300.0]]),
+            run("Level 2", vec![[0.0, 160.0], [300.0, 160.0]]),
+            // Through it, but on another floor.
+            run("Level 3", vec![[100.0, 0.0], [100.0, 300.0]]),
+            // A corner of it cut by the last leg.
+            run("Level 2", vec![[0.0, 0.0], [40.0, 40.0], [140.0, 200.0]]),
+            // Down the corridor: allowed.
+            run("Level 2", vec![[0.0, 30.0], [600.0, 30.0]]),
+        ];
+        assert_eq!(runs_through_hoistways(&runs, &[shaft, corridor], 12.0), vec![0, 4]);
     }
 
     #[test]
