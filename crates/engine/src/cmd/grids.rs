@@ -619,142 +619,6 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> usize {
     n
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn labels_and_fits() {
-        assert!(grid_label("A") && grid_label("12") && grid_label("C.1") && !grid_label("ROOM 1") && !grid_label(""));
-        let pairs =
-            [(Vec2::new(0.0, 0.0), Vec2::new(10.0, 5.0)), (Vec2::new(4.0, 0.0), Vec2::new(14.0, 5.0)), (Vec2::new(0.0, 2.0), Vec2::new(10.0, 7.0))];
-        let (s, t, miss) = fit(&pairs).unwrap_or((0.0, Vec2::new(0.0, 0.0), 1.0));
-        assert!((s - 1.0).abs() < 1e-12 && t.dist(Vec2::new(10.0, 5.0)) < 1e-12 && miss < 1e-12);
-        let half: Vec<(Vec2, Vec2)> = pairs.iter().map(|(p, q)| (*p * 0.5, *q)).collect();
-        assert!((fit(&half).map_or(0.0, |f| f.0) - 2.0).abs() < 1e-12);
-    }
-
-    /// Grids `xs` (vertical, bubbled below) and `ys` (horizontal, bubbled left), 300 apart,
-    /// drawn at `o` scaled `k`.
-    fn grid_view(s: &mut crate::Session, o: [f64; 2], k: f64, xs: &[(f64, &str)], ys: &[(f64, &str)]) {
-        let p = |x: f64, y: f64| [o[0] + x * k, o[1] + y * k];
-        for &(x, label) in xs {
-            s.execute("line", &json!({"points": [p(x, -78.0), p(x, 700.0)]})).unwrap();
-            s.execute("circle", &json!({"center": p(x, -96.0), "radius": 18.0 * k})).unwrap();
-            s.execute("text", &json!({"at": p(x - 4.0, -100.0), "text": label, "height": 8.0 * k})).unwrap();
-        }
-        for &(y, label) in ys {
-            s.execute("line", &json!({"points": [p(-78.0, y), p(1000.0, y)]})).unwrap();
-            s.execute("circle", &json!({"center": p(-96.0, y), "radius": 18.0 * k})).unwrap();
-            s.execute("text", &json!({"at": p(-100.0, y - 4.0), "text": label, "height": 8.0 * k})).unwrap();
-        }
-    }
-
-    /// [`grid_view`] as a PDF draws it: each bubble a 24-point path, each grid line dashes.
-    fn pdf_grid_view(s: &mut crate::Session, o: [f64; 2], k: f64, xs: &[(f64, &str)], ys: &[(f64, &str)]) {
-        let p = |x: f64, y: f64| [o[0] + x * k, o[1] + y * k];
-        let ring = |c: [f64; 2], r: f64| -> Vec<[f64; 2]> {
-            (0..24).map(|i| f64::from(i) * std::f64::consts::TAU / 24.0).map(|a| [c[0] + r * a.cos(), c[1] + r * a.sin()]).collect()
-        };
-        let dashes = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
-            let n = 30;
-            for i in (0..n).step_by(2) {
-                let t = |j: i32| [a[0] + (b[0] - a[0]) * f64::from(j) / f64::from(n), a[1] + (b[1] - a[1]) * f64::from(j) / f64::from(n)];
-                s.execute("line", &json!({"points": [t(i), t(i + 1)]})).unwrap();
-            }
-        };
-        for &(x, label) in xs {
-            dashes(s, p(x, -70.0), p(x, 700.0));
-            s.execute("pline", &json!({"points": ring(p(x, -96.0), 26.0 * k)})).unwrap();
-            s.execute("text", &json!({"at": p(x - 4.0, -100.0), "text": label, "height": 18.0 * k})).unwrap();
-        }
-        for &(y, label) in ys {
-            dashes(s, p(-70.0, y), p(1000.0, y));
-            s.execute("pline", &json!({"points": ring(p(-96.0, y), 26.0 * k)})).unwrap();
-            s.execute("text", &json!({"at": p(-100.0, y - 4.0), "text": label, "height": 18.0 * k})).unwrap();
-        }
-    }
-
-    #[test]
-    fn path_bubbles_and_dashed_grids_still_place_a_view() {
-        let mut s = crate::Session::new();
-        let (gx, gy) = ([(0.0, "A"), (300.0, "B"), (600.0, "C")], [(0.0, "1"), (300.0, "2")]);
-        pdf_grid_view(&mut s, [0.0, 0.0], 1.0, &gx, &gy);
-        pdf_grid_view(&mut s, [5000.0, 0.0], 0.5, &gx, &gy);
-        let plan = [("1false".to_string(), [-200.0, -200.0, 1100.0, 800.0])];
-        let g = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &[[4700.0, -300.0, 6000.0, 1000.0]]);
-        let at = [5000.0 + 450.0 * 0.5, 150.0 * 0.5];
-        let (k, t) = g.place(at, "1false").expect("placed by path bubbles and dashed grids");
-        let q = [at[0] * k + t[0], at[1] * k + t[1]];
-        assert!((k - 2.0).abs() < 1e-6 && (q[0] - 450.0).abs() < 1e-3 && (q[1] - 150.0).abs() < 1e-3, "scale {k}, landed at {q:?}");
-        // A door swing (a quarter arc of points) is no bubble.
-        let arc: Vec<Vec2> = (0..12).map(|i| f64::from(i) * std::f64::consts::FRAC_PI_2 / 11.0).map(|a| Vec2::new(a.cos(), a.sin()) * 30.0).collect();
-        assert!(round_path(&arc).is_none());
-    }
-
-    /// Points every 12 along the walls of a floor `n` bays long: a corridor and the bay walls,
-    /// with an odd end (a stair) so one bay over is no fit.
-    fn floor_lines(n: i32, o: Vec2, s: f64) -> Vec<Vec2> {
-        let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
-        let w = f64::from(n) * 180.0;
-        for y in [0.0, 300.0, 360.0, 660.0] {
-            segs.push((Vec2::new(0.0, y), Vec2::new(w, y)));
-        }
-        for i in 0..=n {
-            let x = f64::from(i) * 180.0;
-            segs.push((Vec2::new(x, 0.0), Vec2::new(x, 300.0)));
-            segs.push((Vec2::new(x, 360.0), Vec2::new(x, 660.0)));
-        }
-        segs.push((Vec2::new(w, 0.0), Vec2::new(w + 240.0, -120.0)));
-        segs.push((Vec2::new(w + 240.0, -120.0), Vec2::new(w + 240.0, 660.0)));
-        let mut out = Vec::new();
-        for (a, b) in segs {
-            let m = ((a.dist(b) / 12.0).ceil() as usize).max(1);
-            out.extend((0..=m).map(|i| o + (a + (b - a) * (i as f64 / m as f64)) * s));
-        }
-        out
-    }
-
-    #[test]
-    fn a_background_view_lands_on_its_floor_plan() {
-        // The plan at full size with clutter (furniture: a dot field), the view at half size elsewhere.
-        let mut plan = floor_lines(12, Vec2::new(1000.0, 2000.0), 1.0);
-        plan.extend((0..120).map(|i| Vec2::new(1030.0 + f64::from(i % 20) * 107.0, 2040.0 + f64::from(i / 20) * 97.0)));
-        let view = floor_lines(12, Vec2::new(50000.0, 300.0), 0.5);
-        let (s, t, score, margin) = linework_fit(&view, &plan, 1.0).expect("a fit");
-        let corner = Vec2::new(50000.0, 300.0) * s + t;
-        assert!((s - 2.0).abs() < 0.02 && corner.dist(Vec2::new(1000.0, 2000.0)) < 18.0, "scale {s}, corner at {corner:?}");
-        assert!(score >= 0.9 && margin >= 0.04, "score {score}, margin {margin}");
-        // A view of another building (a square block) is refused.
-        let other: Vec<Vec2> = (0..400).flat_map(|i| [Vec2::new(f64::from(i) * 3.0, 0.0), Vec2::new(0.0, f64::from(i) * 3.0)]).collect();
-        assert!(linework_fit(&other, &plan, 1.0).is_none_or(|f| f.2 < 0.9 || f.3 < 0.04));
-    }
-
-    #[test]
-    fn an_enlarged_view_goes_onto_the_plan_by_its_own_grids() {
-        let mut s = crate::Session::new();
-        // The floor plan: grids A B C (x 0, 300, 600) and 1 2 (y 0, 300).
-        let (gx, gy) = ([(0.0, "A"), (300.0, "B"), (600.0, "C")], [(0.0, "1"), (300.0, "2")]);
-        grid_view(&mut s, [0.0, 0.0], 1.0, &gx, &gy);
-        // An enlarged sheet with two views at 1.2x: A-B, then B-C (B, 1 and 2 shown twice).
-        grid_view(&mut s, [5000.0, 0.0], 1.2, &gx[..2], &gy);
-        grid_view(&mut s, [7000.0, 0.0], 1.2, &[(300.0, "B"), (600.0, "C")], &gy);
-        let plan = [("1false".to_string(), [-200.0, -200.0, 1100.0, 800.0])];
-        let g = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &[[4700.0, -300.0, 9000.0, 1000.0]]);
-        // A decoy near the second view: a tag in a circle labelled like a grid on the plan.
-        s.execute("circle", &json!({"center": [7000.0 + 200.0, 500.0], "radius": 20.0})).unwrap();
-        s.execute("text", &json!({"at": [7000.0 + 196.0, 496.0], "text": "A", "height": 9.6})).unwrap();
-        // A point between B and C in the second view: (450, 150) on the plan.
-        let at = [7000.0 + 450.0 * 1.2, 150.0 * 1.2];
-        let (k, t) = g.place(at, "1false").expect("placed by its view's grids");
-        let q = [at[0] * k + t[0], at[1] * k + t[1]];
-        assert!((k - 1.0 / 1.2).abs() < 1e-6, "scale {k}");
-        assert!((q[0] - 450.0).abs() < 1e-3 && (q[1] - 150.0).abs() < 1e-3, "landed at {q:?}");
-        // Nothing for a level without a plan, or a point on no sheet.
-        assert!(g.place(at, "2false").is_none() && g.place([20000.0, 0.0], "1false").is_none());
-    }
-}
-
 /// Grid intersections per level (on its architectural plan) and per sheet, to put a point of an
 /// enlarged or partial plan onto its level's plan by the grid lines its view shows (a view of an
 /// enlarged sheet shares no room number with the floor plan, but shows the same grid bubbles).
@@ -1118,4 +982,140 @@ pub(crate) fn linework_fit(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<(f64, V
     let at = probe * s + t;
     let second = refined.iter().skip(1).filter(|(_, s2, t2)| (probe * *s2 + *t2).dist(at) >= 120.0 * k).map(|r| r.0).fold(0.0, f64::max);
     Some((s, t, score, score - second))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_and_fits() {
+        assert!(grid_label("A") && grid_label("12") && grid_label("C.1") && !grid_label("ROOM 1") && !grid_label(""));
+        let pairs =
+            [(Vec2::new(0.0, 0.0), Vec2::new(10.0, 5.0)), (Vec2::new(4.0, 0.0), Vec2::new(14.0, 5.0)), (Vec2::new(0.0, 2.0), Vec2::new(10.0, 7.0))];
+        let (s, t, miss) = fit(&pairs).unwrap_or((0.0, Vec2::new(0.0, 0.0), 1.0));
+        assert!((s - 1.0).abs() < 1e-12 && t.dist(Vec2::new(10.0, 5.0)) < 1e-12 && miss < 1e-12);
+        let half: Vec<(Vec2, Vec2)> = pairs.iter().map(|(p, q)| (*p * 0.5, *q)).collect();
+        assert!((fit(&half).map_or(0.0, |f| f.0) - 2.0).abs() < 1e-12);
+    }
+
+    /// Grids `xs` (vertical, bubbled below) and `ys` (horizontal, bubbled left), 300 apart,
+    /// drawn at `o` scaled `k`.
+    fn grid_view(s: &mut crate::Session, o: [f64; 2], k: f64, xs: &[(f64, &str)], ys: &[(f64, &str)]) {
+        let p = |x: f64, y: f64| [o[0] + x * k, o[1] + y * k];
+        for &(x, label) in xs {
+            s.execute("line", &json!({"points": [p(x, -78.0), p(x, 700.0)]})).unwrap();
+            s.execute("circle", &json!({"center": p(x, -96.0), "radius": 18.0 * k})).unwrap();
+            s.execute("text", &json!({"at": p(x - 4.0, -100.0), "text": label, "height": 8.0 * k})).unwrap();
+        }
+        for &(y, label) in ys {
+            s.execute("line", &json!({"points": [p(-78.0, y), p(1000.0, y)]})).unwrap();
+            s.execute("circle", &json!({"center": p(-96.0, y), "radius": 18.0 * k})).unwrap();
+            s.execute("text", &json!({"at": p(-100.0, y - 4.0), "text": label, "height": 8.0 * k})).unwrap();
+        }
+    }
+
+    /// [`grid_view`] as a PDF draws it: each bubble a 24-point path, each grid line dashes.
+    fn pdf_grid_view(s: &mut crate::Session, o: [f64; 2], k: f64, xs: &[(f64, &str)], ys: &[(f64, &str)]) {
+        let p = |x: f64, y: f64| [o[0] + x * k, o[1] + y * k];
+        let ring = |c: [f64; 2], r: f64| -> Vec<[f64; 2]> {
+            (0..24).map(|i| f64::from(i) * std::f64::consts::TAU / 24.0).map(|a| [c[0] + r * a.cos(), c[1] + r * a.sin()]).collect()
+        };
+        let dashes = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            let n = 30;
+            for i in (0..n).step_by(2) {
+                let t = |j: i32| [a[0] + (b[0] - a[0]) * f64::from(j) / f64::from(n), a[1] + (b[1] - a[1]) * f64::from(j) / f64::from(n)];
+                s.execute("line", &json!({"points": [t(i), t(i + 1)]})).unwrap();
+            }
+        };
+        for &(x, label) in xs {
+            dashes(s, p(x, -70.0), p(x, 700.0));
+            s.execute("pline", &json!({"points": ring(p(x, -96.0), 26.0 * k)})).unwrap();
+            s.execute("text", &json!({"at": p(x - 4.0, -100.0), "text": label, "height": 18.0 * k})).unwrap();
+        }
+        for &(y, label) in ys {
+            dashes(s, p(-70.0, y), p(1000.0, y));
+            s.execute("pline", &json!({"points": ring(p(-96.0, y), 26.0 * k)})).unwrap();
+            s.execute("text", &json!({"at": p(-100.0, y - 4.0), "text": label, "height": 18.0 * k})).unwrap();
+        }
+    }
+
+    #[test]
+    fn path_bubbles_and_dashed_grids_still_place_a_view() {
+        let mut s = crate::Session::new();
+        let (gx, gy) = ([(0.0, "A"), (300.0, "B"), (600.0, "C")], [(0.0, "1"), (300.0, "2")]);
+        pdf_grid_view(&mut s, [0.0, 0.0], 1.0, &gx, &gy);
+        pdf_grid_view(&mut s, [5000.0, 0.0], 0.5, &gx, &gy);
+        let plan = [("1false".to_string(), [-200.0, -200.0, 1100.0, 800.0])];
+        let g = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &[[4700.0, -300.0, 6000.0, 1000.0]]);
+        let at = [5000.0 + 450.0 * 0.5, 150.0 * 0.5];
+        let (k, t) = g.place(at, "1false").expect("placed by path bubbles and dashed grids");
+        let q = [at[0] * k + t[0], at[1] * k + t[1]];
+        assert!((k - 2.0).abs() < 1e-6 && (q[0] - 450.0).abs() < 1e-3 && (q[1] - 150.0).abs() < 1e-3, "scale {k}, landed at {q:?}");
+        // A door swing (a quarter arc of points) is no bubble.
+        let arc: Vec<Vec2> = (0..12).map(|i| f64::from(i) * std::f64::consts::FRAC_PI_2 / 11.0).map(|a| Vec2::new(a.cos(), a.sin()) * 30.0).collect();
+        assert!(round_path(&arc).is_none());
+    }
+
+    /// Points every 12 along the walls of a floor `n` bays long: a corridor and the bay walls,
+    /// with an odd end (a stair) so one bay over is no fit.
+    fn floor_lines(n: i32, o: Vec2, s: f64) -> Vec<Vec2> {
+        let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
+        let w = f64::from(n) * 180.0;
+        for y in [0.0, 300.0, 360.0, 660.0] {
+            segs.push((Vec2::new(0.0, y), Vec2::new(w, y)));
+        }
+        for i in 0..=n {
+            let x = f64::from(i) * 180.0;
+            segs.push((Vec2::new(x, 0.0), Vec2::new(x, 300.0)));
+            segs.push((Vec2::new(x, 360.0), Vec2::new(x, 660.0)));
+        }
+        segs.push((Vec2::new(w, 0.0), Vec2::new(w + 240.0, -120.0)));
+        segs.push((Vec2::new(w + 240.0, -120.0), Vec2::new(w + 240.0, 660.0)));
+        let mut out = Vec::new();
+        for (a, b) in segs {
+            let m = ((a.dist(b) / 12.0).ceil() as usize).max(1);
+            out.extend((0..=m).map(|i| o + (a + (b - a) * (i as f64 / m as f64)) * s));
+        }
+        out
+    }
+
+    #[test]
+    fn a_background_view_lands_on_its_floor_plan() {
+        // The plan at full size with clutter (furniture: a dot field), the view at half size elsewhere.
+        let mut plan = floor_lines(12, Vec2::new(1000.0, 2000.0), 1.0);
+        plan.extend((0..120).map(|i| Vec2::new(1030.0 + f64::from(i % 20) * 107.0, 2040.0 + f64::from(i / 20) * 97.0)));
+        let view = floor_lines(12, Vec2::new(50000.0, 300.0), 0.5);
+        let (s, t, score, margin) = linework_fit(&view, &plan, 1.0).expect("a fit");
+        let corner = Vec2::new(50000.0, 300.0) * s + t;
+        assert!((s - 2.0).abs() < 0.02 && corner.dist(Vec2::new(1000.0, 2000.0)) < 18.0, "scale {s}, corner at {corner:?}");
+        assert!(score >= 0.9 && margin >= 0.04, "score {score}, margin {margin}");
+        // A view of another building (a square block) is refused.
+        let other: Vec<Vec2> = (0..400).flat_map(|i| [Vec2::new(f64::from(i) * 3.0, 0.0), Vec2::new(0.0, f64::from(i) * 3.0)]).collect();
+        assert!(linework_fit(&other, &plan, 1.0).is_none_or(|f| f.2 < 0.9 || f.3 < 0.04));
+    }
+
+    #[test]
+    fn an_enlarged_view_goes_onto_the_plan_by_its_own_grids() {
+        let mut s = crate::Session::new();
+        // The floor plan: grids A B C (x 0, 300, 600) and 1 2 (y 0, 300).
+        let (gx, gy) = ([(0.0, "A"), (300.0, "B"), (600.0, "C")], [(0.0, "1"), (300.0, "2")]);
+        grid_view(&mut s, [0.0, 0.0], 1.0, &gx, &gy);
+        // An enlarged sheet with two views at 1.2x: A-B, then B-C (B, 1 and 2 shown twice).
+        grid_view(&mut s, [5000.0, 0.0], 1.2, &gx[..2], &gy);
+        grid_view(&mut s, [7000.0, 0.0], 1.2, &[(300.0, "B"), (600.0, "C")], &gy);
+        let plan = [("1false".to_string(), [-200.0, -200.0, 1100.0, 800.0])];
+        let g = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &[[4700.0, -300.0, 9000.0, 1000.0]]);
+        // A decoy near the second view: a tag in a circle labelled like a grid on the plan.
+        s.execute("circle", &json!({"center": [7000.0 + 200.0, 500.0], "radius": 20.0})).unwrap();
+        s.execute("text", &json!({"at": [7000.0 + 196.0, 496.0], "text": "A", "height": 9.6})).unwrap();
+        // A point between B and C in the second view: (450, 150) on the plan.
+        let at = [7000.0 + 450.0 * 1.2, 150.0 * 1.2];
+        let (k, t) = g.place(at, "1false").expect("placed by its view's grids");
+        let q = [at[0] * k + t[0], at[1] * k + t[1]];
+        assert!((k - 1.0 / 1.2).abs() < 1e-6, "scale {k}");
+        assert!((q[0] - 450.0).abs() < 1e-3 && (q[1] - 150.0).abs() < 1e-3, "landed at {q:?}");
+        // Nothing for a level without a plan, or a point on no sheet.
+        assert!(g.place(at, "2false").is_none() && g.place([20000.0, 0.0], "1false").is_none());
+    }
 }

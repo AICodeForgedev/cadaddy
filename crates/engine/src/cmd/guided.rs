@@ -2361,49 +2361,50 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         .filter(|r| r.kind == "plan" && r.not_built.is_empty() && !r.discipline.eq_ignore_ascii_case("A"))
         .map(SheetRegion::plan_rect)
         .collect();
-    if !others.is_empty() && plans(true).len() == regions.len() {
-        if let Ok(more) = s.execute("rooms.list", &json!({"outline": false, "regions": others})) {
-            let extra: Vec<Value> = more
-                .get("rooms")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter(|r| r.get("number").and_then(Value::as_str).is_some_and(|n| !n.trim().is_empty()))
-                // On its floor by the floor's numbering: a guest floor's rooms start with its
-                // number (205 on level 2); a note's or a schedule's number doesn't.
-                .filter_map(|r| {
-                    let at = r.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
-                    // The floor of the sheet it was read on (the whole sheet: a room by its edge is
-                    // outside the plan area).
-                    let sheet = at.and_then(|at| job.sheet_regions.iter().filter(|r| r.kind == "plan").find(|r| in_rect(&r.rect, at)))?;
-                    let floor = sheet.level.chars().find(char::is_ascii_digit)?;
-                    let number = r.get("number").and_then(Value::as_str).unwrap_or("").trim();
-                    if number.len() < 3 || !number.starts_with(floor) {
-                        return None;
-                    }
-                    // On that sheet's level, not the one the read guessed (a third-floor number
-                    // numbered a first-floor room).
-                    let mut r = r.clone();
-                    if let Some(o) = r.as_object_mut() {
-                        o.insert("level".into(), json!(sheet.level));
-                        o.insert("sheet".into(), json!(sheet.number));
-                    }
-                    Some(r)
-                })
-                .collect();
-            // Each number once (every discipline's plan of the floor gives it).
-            let mut seen = BTreeSet::new();
-            extra_rooms = extra
-                .into_iter()
-                .filter(|r| seen.insert(r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase()))
-                .map(|mut r| {
-                    if let Some(o) = r.as_object_mut() {
-                        o.insert("other_trade".into(), json!(true));
-                    }
-                    r
-                })
-                .collect();
-        }
+    if !others.is_empty()
+        && plans(true).len() == regions.len()
+        && let Ok(more) = s.execute("rooms.list", &json!({"outline": false, "regions": others}))
+    {
+        let extra: Vec<Value> = more
+            .get("rooms")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|r| r.get("number").and_then(Value::as_str).is_some_and(|n| !n.trim().is_empty()))
+            // On its floor by the floor's numbering: a guest floor's rooms start with its
+            // number (205 on level 2); a note's or a schedule's number doesn't.
+            .filter_map(|r| {
+                let at = r.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
+                // The floor of the sheet it was read on (the whole sheet: a room by its edge is
+                // outside the plan area).
+                let sheet = at.and_then(|at| job.sheet_regions.iter().filter(|r| r.kind == "plan").find(|r| in_rect(&r.rect, at)))?;
+                let floor = sheet.level.chars().find(char::is_ascii_digit)?;
+                let number = r.get("number").and_then(Value::as_str).unwrap_or("").trim();
+                if number.len() < 3 || !number.starts_with(floor) {
+                    return None;
+                }
+                // On that sheet's level, not the one the read guessed (a third-floor number
+                // numbered a first-floor room).
+                let mut r = r.clone();
+                if let Some(o) = r.as_object_mut() {
+                    o.insert("level".into(), json!(sheet.level));
+                    o.insert("sheet".into(), json!(sheet.number));
+                }
+                Some(r)
+            })
+            .collect();
+        // Each number once (every discipline's plan of the floor gives it).
+        let mut seen = BTreeSet::new();
+        extra_rooms = extra
+            .into_iter()
+            .filter(|r| seen.insert(r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase()))
+            .map(|mut r| {
+                if let Some(o) = r.as_object_mut() {
+                    o.insert("other_trade".into(), json!(true));
+                }
+                r
+            })
+            .collect();
     }
     // A room carries the level of the sheet it was read on (Q5291 MUST 2): the sheet's level
     // wins over a spec's guess.
@@ -3617,7 +3618,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if placer.is_none() {
                     placer = Some(Box::new(arch_placer(s.doc()?, &sp)));
                 }
-                let Some(sim) = placer.as_deref() else { unreachable!() };
+                let Some(sim) = placer.as_deref() else { return Err(bad("bim_build", "device placer missing".to_string())) };
                 let out: Vec<_> = job
                     .devices
                     .iter()
@@ -4355,7 +4356,7 @@ fn edge_distance(outline: &[cadaddy_geom::Vec2], p: cadaddy_geom::Vec2) -> f64 {
 /// screened background laid over the floor plan (a fire alarm or low-voltage plan). `None` when
 /// none holds, or the point would land off the level's plan.
 fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<> {
-    let sheets = super::identity::sheets_of(Some(&sp));
+    let sheets = super::identity::sheets_of(Some(sp));
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let clock = web_time::Instant::now();
     let lap = |what: &str| progress_line(&format!("  placer: {what} at {:.1} s", clock.elapsed().as_secs_f64()));
