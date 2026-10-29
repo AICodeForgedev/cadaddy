@@ -109,9 +109,6 @@
 	CADaddy	CADaddy
 	CADaddy Help	Ajuda do CADaddy
 	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	O CADaddy mantém estas preferências, modos de referência a objetos e alternâncias de desenho na sua conta de usuário e as restaura ao iniciar.
-	CADaddy	CADaddy
-	CADaddy Help	Ajuda do CADaddy
-	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	O CADaddy mantém estas preferências, os modos de snap a objetos e as opções de desenho na sua conta de usuário e os restaura ao iniciar.
 	Cancel	Cancelar
 	Cartesian (x, y)	Cartesiano (x, y)
 	Center	Centro
@@ -794,7 +791,6 @@
 	Quick Select Properties	Propriedades da seleção rápida
 	Quick Select...	Seleção rápida...
 	QuickCalc	Calculadora
-	Quit CADaddy	Sair do CADaddy
 	Quit CADaddy	Sair do CADaddy
 	Radius	Raio
 	Raster Image	Imagem raster

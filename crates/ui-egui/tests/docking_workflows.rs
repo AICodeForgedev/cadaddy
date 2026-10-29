@@ -380,7 +380,8 @@ fn collapsed_tool_sets_leave_a_visible_control_that_expands_them() {
     assert!(h.query_by_label("Expand Tool Sets").is_none());
     h.get_by_role_and_label(egui::accesskit::Role::Tab, "Tool Sets").click();
     h.run_steps(3);
-    h.get_by_label("Line").click();
+    // the ribbon has a Line button too; the Tool Sets one is below it
+    h.get_all_by_label("Line").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap().click();
     h.run_steps(3);
     assert_eq!(h.state().session.running.as_ref().map(|command| command.id.as_str()), Some("line"));
     h.state_mut().session.cancel();

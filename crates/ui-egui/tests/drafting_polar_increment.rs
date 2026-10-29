@@ -15,6 +15,8 @@ fn shown_increment(degrees: f64) -> (String, f64, f64) {
     let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
         |ui, app: &mut CadApp| {
             theme::apply(ui.ctx(), egui::Theme::Dark, false);
+            // the Polar Tracking tab (the dialog opens on Snap and Grid)
+            ui.data_mut(|d| d.insert_temp(egui::Id::new("dsettings_tab"), 1usize));
             dialogs::show(app, ui.ctx());
         },
         app,
