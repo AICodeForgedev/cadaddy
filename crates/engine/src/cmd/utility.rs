@@ -55,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{mode: distance|radius|angle|area|volume|quick, ...} (volume: {points | handle, height}; quick: {at: [x,y], reach?} → distances to the nearest geometry left, right, down, up, and the area around the point)")
             .noundo()
             .interactive(|_| Ok(Box::new(super::measuregeom::MeasureM::default()))),
-        CommandSpec::new("radius.measure", "Radius", run_radius).menu(&["Tools", "Inquiry", "Radius"]).params("{handle}").noundo().interactive(
+        CommandSpec::new("radius.measure", "Radius", run_radius).menu(&["Tools", "Inquiry", "Radius"]).params("{handle, point?: [x,y] (picks the arc segment of a polyline)}").noundo().interactive(
             |_| Ok(super::ask::machine("radius.measure", "MEASUREGEOM", [super::ask::ask("handle", "Select arc or circle", super::ask::Kind::One)])),
         ),
         CommandSpec::new("angle.measure", "Angle", run_angle)
@@ -299,7 +299,22 @@ fn run_radius(s: &mut Session, p: &Value) -> Result<Value> {
     let r = match s.doc()?.entity(h).map(|e| e.kind.clone()) {
         Some(EntityKind::Circle(c)) => c.radius,
         Some(EntityKind::Arc(a)) => a.radius,
-        _ => return Err(bad("radius.measure", "select an arc or circle")),
+        Some(EntityKind::LwPolyline(pl)) => {
+            // The arc segment at `point`; a polyline with a single arc segment needs no point.
+            let arcs: Vec<f64> = cadaddy_geom::Polyline { vertices: pl.vertices.clone(), closed: pl.closed }.segments().iter().filter_map(|sg| if let cadaddy_geom::Segment::Arc { arc, .. } = sg { Some(arc.radius) } else { None }).collect();
+            match point_param(p, "point") {
+                Some(at) => match super::annotate::segment_at(s, h, at) {
+                    Some(cadaddy_geom::Segment::Arc { arc, .. }) => arc.radius,
+                    _ => return Err(bad("radius.measure", "the polyline segment at `point` is not an arc")),
+                },
+                None => match arcs.as_slice() {
+                    [r] => *r,
+                    [] => return Err(bad("radius.measure", "the polyline has no arc segment")),
+                    _ => return Err(bad("radius.measure", "`point` on the polyline's arc segment is required")),
+                },
+            }
+        }
+        _ => return Err(bad("radius.measure", "select an arc, circle or polyline arc")),
     };
     let f = |v: f64| super::inquiry::fmt_d(s, v);
     Ok(json!({ "radius": r, "diameter": 2.0 * r, "message": format!("Radius = {}\nDiameter = {}", f(r), f(2.0 * r)) }))

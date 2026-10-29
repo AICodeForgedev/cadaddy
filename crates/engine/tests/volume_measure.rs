@@ -49,3 +49,17 @@ fn the_volume_tool_asks_for_points_then_a_height() {
     assert!(s.log.iter().any(|l| l == "Volume = 12.0000"), "{:?}", s.log);
     assert!(s.current_prompt().is_none(), "the tool ends after one volume");
 }
+
+#[test]
+fn radius_measures_a_polyline_arc_segment() {
+    let mut s = Session::new();
+    // One straight segment, then a half circle of radius 2 (bulge 1) from (4,0) to (4,4).
+    let r = s.execute("pline", &json!({ "vertices": [[0, 0], { "p": [4, 0], "bulge": 1 }, [4, 4]] })).unwrap();
+    let h = r["handle"].clone();
+    let got = s.execute("radius.measure", &json!({ "handle": h })).unwrap();
+    assert!((got["radius"].as_f64().unwrap() - 2.0).abs() < 1e-9, "{got}");
+    // At a point on the straight segment: not an arc.
+    assert!(s.execute("radius.measure", &json!({ "handle": h, "point": [2, 0] })).is_err());
+    let line = s.execute("line", &json!({ "points": [[0, 0], [1, 1]] })).unwrap();
+    assert!(s.execute("radius.measure", &json!({ "handle": line["handle"] })).is_err());
+}
