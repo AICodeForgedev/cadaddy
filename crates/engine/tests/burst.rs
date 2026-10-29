@@ -38,7 +38,7 @@ fn texts(s: &Session) -> Vec<(String, String, f64, f64, f64)> {
     model(s)
         .iter()
         .filter_map(|e| match &e.kind {
-            EntityKind::Text(t) => Some((t.value.clone(), e.common.layer.to_string(), t.insert.x, t.insert.y, t.height)),
+            EntityKind::Text(t) => Some((t.value.clone(), e.common.layer.clone(), t.insert.x, t.insert.y, t.height)),
             _ => None,
         })
         .collect()
