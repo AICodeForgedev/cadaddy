@@ -2080,7 +2080,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
             "OBJECTS" => {
                 for (k, tg) in records(&s.tags) {
                     objs.add(&k, &tg);
-                    if k == "LAYOUT" {
+                    if k == "LAYOUT" && !tg.iter().any(|x| x.code == 100 && x.str().trim() == cadaddy_dwgcodec::entities::RAW_SUBCLASS) {
                         // Fields after the AcDbLayout marker (AcDbPlotSettings also has a code 1).
                         let start = tg.iter().position(|x| x.code == 100 && x.str() == "AcDbLayout").unwrap_or(0);
                         let tail = tg.get(start..).unwrap_or(&[]);
@@ -2330,6 +2330,11 @@ const MAX_OBJECTS: usize = 1_000_000;
 
 impl Objects {
     fn add(&mut self, kind: &str, tags: &[Tag]) {
+        // An object the DWG reader kept as stored (not decoded) has none of the groups of its
+        // name: it is kept as it is (`dxf_raw`), never read as a field, style or the like.
+        if tags.iter().any(|t| t.code == 100 && t.str().trim() == cadaddy_dwgcodec::entities::RAW_SUBCLASS) {
+            return;
+        }
         let h = T(tags).s(5).map(|h| h.trim().to_ascii_uppercase()).unwrap_or_default();
         match kind {
             "SCALE" if self.scales.len() < cadaddy_doc::MAX_SCALES => {

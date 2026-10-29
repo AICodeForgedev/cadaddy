@@ -362,6 +362,16 @@ fn assemble(v: Version, secs: &HashMap<String, Vec<Record>>, full: bool) -> Resu
             let values = rec.0.iter().filter(|g| g.code == 350 || g.code == 360).filter_map(|g| handle_value(&g.value));
             dict_entries.insert(h, keys.zip(values).collect());
         }
+        // An object kept as it was stored (`dwg_read`): written back as it was when its type is a
+        // fixed one and the version the same; any other is kept in an XRECORD (`dwg_keep`), never
+        // made again from the few groups it has.
+        if is_raw(r) {
+            match raw_object(v, r, h) {
+                Some(raw) => out.push(raw),
+                None => *skipped.entry(r.name.clone()).or_default() += 1,
+            }
+            continue;
+        }
         let block = rec.all(330).nth(1).and_then(|g| handle_value(&g.value));
         let vps = if r.name == "LAYOUT" { block.and_then(|b| viewports_of.get(&b)).cloned().unwrap_or_default() } else { Vec::new() };
         match ek::object(v, &r.name, h, r.owner(), &r.reactors, r.xdict, &rec, &names, &vps) {

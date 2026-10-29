@@ -7,7 +7,7 @@
 //! bridge's), and builds the drawing from that. Comparing that drawing with the bridge's alone
 //! shows, entity by entity, that the codec reads what the bridge reads.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use cadaddy_doc::Drawing;
 use cadaddy_dwgcodec::entities::records::Record;
@@ -46,13 +46,14 @@ fn record(e: &Entity) -> Vec<Tag> {
 
 /// The entity records of `tags` (sections ENTITIES and BLOCKS) with every entity in `ents` in
 /// place of the record with its handle, followed by the entities it owns.
-fn replace(tags: Vec<Tag>, ents: &[Entity], recs: &[Record]) -> (Vec<Tag>, usize) {
+fn replace(tags: Vec<Tag>, ents: &[Entity], recs: &[Record]) -> (Vec<Tag>, usize, BTreeMap<String, usize>) {
     let by_handle: HashMap<u64, &Entity> = ents.iter().map(|e| (e.handle, e)).collect();
     let records: HashMap<u64, &Record> = recs.iter().map(|r| (r.handle, r)).collect();
     let owned: HashSet<u64> = ents.iter().flat_map(|e| e.children.iter().copied()).collect();
     let mut out = Vec::with_capacity(tags.len());
     let mut section = String::new();
     let mut replaced = 0usize;
+    let mut by_name: BTreeMap<String, usize> = BTreeMap::new();
     let mut i = 0;
     while i < tags.len() {
         let Some(t) = tags.get(i) else { break };
@@ -75,6 +76,7 @@ fn replace(tags: Vec<Tag>, ents: &[Entity], recs: &[Record]) -> (Vec<Tag>, usize
             match handle.and_then(|h| records.get(&h)) {
                 Some(r) => {
                     replaced += 1;
+                    *by_name.entry(r.name.clone()).or_default() += 1;
                     out.push(Tag::s(0, r.name.clone()));
                     // A block record's name: the bridge's (files from some writers call every
                     // layout's block *Paper_Space; DXF needs them distinct, *Paper_Space0 …).
@@ -114,7 +116,7 @@ fn replace(tags: Vec<Tag>, ents: &[Entity], recs: &[Record]) -> (Vec<Tag>, usize
         }
         i = end;
     }
-    (out, replaced)
+    (out, replaced, by_name)
 }
 
 /// What [`read_with_native_entities`] did besides reading.
@@ -122,6 +124,10 @@ fn replace(tags: Vec<Tag>, ents: &[Entity], recs: &[Record]) -> (Vec<Tag>, usize
 pub struct NativeReport {
     /// Entity records taken from the codec.
     pub replaced: usize,
+    /// Table records and objects taken from the codec, by DXF name (a record type the codec stops
+    /// decoding drops to 0 here, which a test of the whole drawing can't see: the bridge's record
+    /// is kept in its place and the drawings still match).
+    pub records: BTreeMap<String, usize>,
     /// Entities the codec couldn't decode (kept from the bridge), and why.
     pub failed: Vec<(u64, String)>,
 }
@@ -135,8 +141,8 @@ pub fn read_with_native_entities(bytes: &[u8]) -> Result<(Drawing, NativeReport)
     let (ents, mut failed) = decode_all(&dwg).map_err(|e| IoError::Format(format!("DWG: {e}")))?;
     let (recs, rec_failed) = cadaddy_dwgcodec::entities::records::decode_all(&dwg).map_err(|e| IoError::Format(format!("DWG: {e}")))?;
     failed.extend(rec_failed);
-    let (tags, replaced) = replace(tags, &ents, &recs);
+    let (tags, replaced, records) = replace(tags, &ents, &recs);
     let mut d = crate::dxf_read::read_tags(tags)?;
     d.read_notes = notes;
-    Ok((d, NativeReport { replaced, failed }))
+    Ok((d, NativeReport { replaced, records, failed }))
 }
