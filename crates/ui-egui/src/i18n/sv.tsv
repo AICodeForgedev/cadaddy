@@ -3347,11 +3347,8 @@ menu	Modify	Ändra
 	Groups	Grupper
 	Multiline text	Flerradstext
 	Hatches	Skrafferingar
-	Break-line Symbol	Brytlinjesymbol
 	Convert Text to Mtext	Konvertera text till MText
 	Explode Attributes to Text	Lös upp attribut till text
-	Express Tools	Express Tools
-	Move/Copy/Rotate	Flytta/kopiera/rotera
 	Interface scale	Gränssnittsskala
 	Analyze Shapes	Analysera former
 	Select boundaries to remove	Markera gränser att ta bort
@@ -3365,15 +3362,12 @@ menu	Modify	Ändra
 	More than {n} aliases.	Fler än {n} alias.
 	Alias file: {file}	Aliasfil: {file}
 	No alias file loaded. REINIT replaces these aliases with a file's.	Ingen aliasfil inläst. REINIT ersätter dessa alias med en fils alias.
-	Alias	Alias
-	Command	Kommando
 	overrides built-in	åsidosätter inbyggt
 	built-in	inbyggt
 	Add…	Lägg till…
 	Edit…	Redigera…
 	Save alias	Spara alias
 	Discard	Släng
-	Customize	Anpassa
 	Edit Command Aliases (PGP)...	Redigera kommandoalias (PGP)...
 	Apply to Layout	Använd på layout
 	Arrow size	Pilstorlek
@@ -3384,16 +3378,12 @@ menu	Modify	Ändra
 	Enter name of LISP file to load	Ange namn på LISP-fil att läsa in
 	First corner	Första hörnet
 	Fit to paper	Anpassa till papper
-	Landscape	Liggande
 	Limits	Ritningsgränser
 	Opposite corner	Motsatt hörn
-	Orientation	Orientering
-	Paper size	Pappersstorlek
 	Plot area	Plottområde
 	Plot object lineweights	Plotta objektens linjebredder
 	Plot offset	Plottförskjutning
 	Plot transparency	Plotta genomskinlighet
-	Portrait	Stående
 	Precision	Precision
 	Printer/plotter	Skrivare/plotter
 	Window <	Fönster <
@@ -3407,7 +3397,6 @@ menu	Modify	Ändra
 	Analyze Usage	Analysera användning
 	Implied Loops	Implicita slingor
 	Angstroms	Ångström
-	Architectural	Arkitektonisk
 	Astronomical Units	Astronomiska enheter
 	Centimeters	Centimeter
 	Decameters	Dekameter
@@ -3423,7 +3412,6 @@ menu	Modify	Ändra
 	Gigameters	Gigameter
 	Grads	Gon
 	Hectometers	Hektometer
-	Inches	Tum
 	Insertion scale	Insättningsskala
 	Kilometers	Kilometer
 	Light Years	Ljusår
@@ -3431,7 +3419,6 @@ menu	Modify	Ändra
 	Microinches	Mikrotum
 	Microns	Mikrometer
 	Miles	Engelska mil
-	Millimeters	Millimeter
 	Mils	Tusendels tum
 	Nanometers	Nanometer
 	Parsecs	Parsek

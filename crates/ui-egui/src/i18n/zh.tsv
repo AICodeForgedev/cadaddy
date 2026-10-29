@@ -3197,7 +3197,6 @@
 	Plotter Manager	打印机管理
 	Clear Command History	清除命令历史记录
 	Degrees of freedom: {n}	自由度: {n}
-	Open	打开
 	Arrow size	箭头大小
 	Viewport scale	视口比例
 	Unresolved	未解析
@@ -3207,7 +3206,6 @@
 	min	最小
 	Grip Option	夹点选项
 	Interface language	界面语言
-	Command Aliases	命令别名
 	Version 2013	2013 版
 	Reload	重新加载
 	Default Save Version	默认保存版本
@@ -3243,16 +3241,13 @@
 	Unlock viewport	解除锁定视口
 	Not loaded	未加载
 	References: {n}	参照: {n}
-	Volume	体积
 	Remove Vertex	移除顶点
 	Evaluate	求值
 	To	到
 	Count Table	计数表
 	Only in this drawing: {n}	仅在此图形中: {n}
-	Reinitialize	重新初始化
 	Update Data Links	更新数据链接
 	Dim scale overall	全局标注比例
-	Enter	输入
 	Temporary track point	临时追踪点
 	Plot Window	窗口打印
 	Show and hide the tools of this category	显示和隐藏此类别的工具
@@ -3280,7 +3275,6 @@
 	Precision	精度
 	Version 2004	2004 版
 	Saved Path	保存的路径
-	Apply	应用
 	Lock viewport	锁定视口
 	Bind	绑定
 	Only in {name}: {n}	仅在 {name} 中: {n}
@@ -3306,26 +3300,8 @@
 	Save changes to {name}?	是否保存对 {name} 的更改？
 	Your changes will be lost if you don't save them.	如果不保存，您的更改将丢失。
 	Don't Save	不保存
-	Hatch and Gradient	填充和渐变
-	Boundaries	边界
-	Add: Pick points	添加：拾取点
-	Add: Select objects	添加：选择对象
 	Boundaries picked: {n}	已拾取边界：{n}
 	Associate	关联
-	Create separate hatches	创建独立的填充
-	Island detection	孤岛检测
-	Normal	普通
-	Outer	外部
-	Ignore	忽略
-	Hatch origin	填充原点
-	Use current origin	使用当前原点
-	Specified origin	指定原点
-	Click to set new origin	点击设置新原点
-	Default to boundary extents	默认至边界范围
-	Bottom left	左下
-	Bottom right	右下
-	Top right	右上
-	Top left	左上
 	Color 1	颜色 1
 	Color 2	颜色 2
 	Shape	形状
@@ -3338,7 +3314,6 @@
 	Insertion scale	插入比例
 	Units to scale inserted content	用于缩放插入内容的单位
 	Sample output	示例输出
-	Architectural	建筑
 	Decimal	十进制
 	Engineering	工程
 	Fractional	分数
@@ -3349,10 +3324,8 @@
 	Radians	弧度
 	Surveyor's Units	测量员单位
 	Unitless	无单位
-	Inches	英寸
 	Feet	英尺
 	Miles	英里
-	Millimeters	毫米
 	Centimeters	厘米
 	Meters	米
 	Kilometers	千米

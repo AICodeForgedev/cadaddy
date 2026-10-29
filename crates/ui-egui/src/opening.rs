@@ -112,17 +112,7 @@ mod tests {
     fn open_path_reads_in_the_background_and_reports_failure() {
         let mut app = CadApp::new(
             Session::new(),
-            Services {
-                pick_folder: None,
-                pick_open: None,
-                pick_save: None,
-                pick_pdf: None,
-                pick_image: None,
-                read_clipboard: None,
-                system_clipboard: None,
-                thumbnail: None,
-                pick_save_image: None,
-            },
+            Services::default(),
         );
         let before = app.session.docs.len();
         let missing = std::env::temp_dir().join(format!("cadaddy-missing-{}.dxf", std::process::id()));

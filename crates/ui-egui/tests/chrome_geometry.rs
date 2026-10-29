@@ -86,6 +86,9 @@ fn status_labels_never_overlap_at_standard_and_compact_sizes() {
 fn layout_tabs_stay_anchored_when_toolsets_toggle_resize_or_move() {
     for scale in [1.0, 2.0] {
         let mut h = harness(1200.0, 760.0, scale, false);
+        // The classic workspace with its Tool Sets palette (the default is the ribbon).
+        h.state_mut().ui.show_toolsets = true;
+        h.run_steps(5);
         let tab_rects =
             |h: &Harness<'_, CadApp>| ["Model", "Layout1", "Layout2"].map(|name| h.get_by_role_and_label(egui::accesskit::Role::Tab, name).rect());
         let original = tab_rects(&h);
