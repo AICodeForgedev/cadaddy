@@ -2455,8 +2455,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
         }
     }
     // Pre-allocate handles for block records.
-    let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
-    paper_layouts.sort_by_key(|l| l.tab_order);
+    let paper_layouts = d.paper_space_layouts();
     let ms_br = w.h_kept("BLOCK_RECORD/*MODEL_SPACE");
     // The geographic location: model space's extension dictionary and its GEODATA object.
     let geo_handles: Option<(String, String)> = d.geo.as_ref().filter(|g| g.is_valid()).map(|_| (w.h(), w.h()));
