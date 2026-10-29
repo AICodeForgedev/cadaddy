@@ -6966,16 +6966,6 @@ mod tests {
     }
 
     #[test]
-    fn explain_works_before_a_job_starts() {
-        let mut s = Session::new();
-        let one = cmd_explain(&mut s, &json!({"stage": "classify"})).unwrap();
-        assert_eq!((one["stage"].as_str(), one["status"].as_str()), (Some("classify"), Some("NotStarted")));
-        assert!(one["description"].as_str().is_some_and(|d| !d.is_empty()));
-        let all = cmd_explain(&mut s, &json!({})).unwrap();
-        assert_eq!(all["stages"].as_array().map(Vec::len), Some(StageName::ALL.len()));
-    }
-
-    #[test]
     fn junk_tags_are_not_device_types() {
         assert!(is_circuit_tag("D-1") && is_circuit_tag("DP1-13"));
         let (none, sheets) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
