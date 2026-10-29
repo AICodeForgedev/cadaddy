@@ -1041,6 +1041,9 @@ fn damaged_dwg_opens_partially_and_says_what_it_left_out() {
     assert!(partial > 0, "no damaged copy read partially");
 }
 
+/// A dimension's standard DIMASSOC objects carry the same associations as CADaddy's xdata, so
+/// a file from another writer (xdata stripped) still follows its geometry; since #1651 a radial
+/// dimension's circle comes back as a `Center` link and its rim point as `OnCircle`.
 #[test]
 fn dimension_associativity_roundtrips() {
     let mut d = Drawing::new_imperial();
@@ -1112,7 +1115,10 @@ fn dimension_associativity_roundtrips() {
     assert_eq!(fa.len(), 2);
     assert_eq!(fa[1], ali.assoc[1]);
     assert!(matches!(fa[0].snap, AssocSnap::OnCircle { angle } if angle.abs() < 1e-9));
-    assert!(assoc_of(&foreign, hr).is_empty(), "radial links are CADaddy-only");
+    let fr = assoc_of(&foreign, hr);
+    assert_eq!(fr.len(), 2, "a radial dimension's circle comes from the standard DIMASSOC");
+    assert_eq!(fr[0], rad.assoc[0], "the centre");
+    assert!(matches!(fr[1].snap, AssocSnap::OnCircle { angle } if angle.is_finite()));
 }
 
 fn parametric_sample(d: &mut Drawing) -> (Vec<Constraint>, Parametric) {
