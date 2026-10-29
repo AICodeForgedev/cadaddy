@@ -1727,7 +1727,12 @@ fn text_style(d: &Drawing, name: &str) -> cadaddy_doc::TextStyle {
     d.text_style(name).cloned().unwrap_or_default()
 }
 
-/// Shape a TEXT / ATTRIB / ATTDEF with its style's font and generation flags.
+/// The most characters of one TEXT / ATTRIB / ATTDEF that are shaped; a hostile 5 MB string would
+/// otherwise build gigabytes of strokes (AutoCAD's own limit is 255 characters).
+pub const MAX_SHAPED_TEXT_CHARS: usize = 100_000;
+
+/// Shape a TEXT / ATTRIB / ATTDEF with its style's font and generation flags (the first
+/// [`MAX_SHAPED_TEXT_CHARS`] characters of a longer value).
 pub fn place_text_entity(d: &Drawing, t: &cadaddy_doc::Text, value: &str) -> (cadaddy_fonts::Shaped, Bounds2) {
     let ts = text_style(d, &t.style);
     let font = cadaddy_fonts::TextFont::resolve_style(&ts.font, &ts.big_font);
@@ -1745,6 +1750,7 @@ pub fn place_text_entity(d: &Drawing, t: &cadaddy_doc::Text, value: &str) -> (ca
         upside_down: ts.upside_down,
         vertical: ts.vertical,
     };
+    let value = value.char_indices().nth(MAX_SHAPED_TEXT_CHARS).map_or(value, |(i, _)| value.get(..i).unwrap_or(value));
     cadaddy_fonts::place(&font, value, &p)
 }
 

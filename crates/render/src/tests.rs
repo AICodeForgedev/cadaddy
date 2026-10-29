@@ -1087,3 +1087,26 @@ fn the_rest_of_the_drawing_is_faded_while_a_reference_is_edited_in_place() {
     d.refedit = None;
     assert_eq!(fade(&d), (Some(0), Some(0)));
 }
+
+#[test]
+fn a_five_megabyte_text_shapes_a_bounded_prefix() {
+    let d = Drawing::new_imperial();
+    let t = cadaddy_doc::Text {
+        insert: cadaddy_geom::Vec3::ZERO,
+        align_pt: None,
+        height: 1.0,
+        value: "X".repeat(5_000_000),
+        rotation: 0.0,
+        width_factor: 1.0,
+        oblique: 0.0,
+        style: "Standard".into(),
+        halign: cadaddy_doc::HAlign::Left,
+        valign: cadaddy_doc::VAlign::Baseline,
+    };
+    let start = std::time::Instant::now();
+    let (sh, _) = place_text_entity(&d, &t, &t.value);
+    assert!(start.elapsed().as_secs() < 20, "shaping took {:?}", start.elapsed());
+    // 100,000 characters at most, each a handful of strokes.
+    assert!(sh.strokes.len() <= MAX_SHAPED_TEXT_CHARS * 8, "{} strokes", sh.strokes.len());
+    assert!(sh.text.len() <= MAX_SHAPED_TEXT_CHARS * 8);
+}
