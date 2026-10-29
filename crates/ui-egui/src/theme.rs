@@ -779,10 +779,24 @@ pub fn can_show(language: &str) -> bool {
     match language {
         "ko" => shows_hangul("ko"),
         "ja" => shows_japanese(),
-        "ar" => arabic_font().is_some(),
-        l if l.starts_with("zh") => cjk_font().is_some(),
+        "ar" => arabic_font().is_some() || embedded_script("Arab"),
+        l if l.starts_with("zh") => cjk_font().is_some() || embedded_script("Hans") || embedded_script("Hant"),
         _ => true,
     }
+}
+
+/// Whether a face this build embedded from craft-fonts carries `script` (ISO 15924). The web
+/// build has no system fonts, so there the interface rides on the embedded faces alone; the
+/// Korean gate already asks this way ([`korean_font`]) and Arabic and Chinese match it. Only a
+/// build made with `CRAFT_FONTS_DIR` embeds any (`build.rs`), so the rest is unchanged.
+fn embedded_script(script: &str) -> bool {
+    any_script(cadaddy_fonts::CRAFT_FONTS, script)
+}
+
+/// Whether any face of `faces` carries `script` (ISO 15924), the question [`embedded_script`]
+/// asks of the table this build embedded.
+fn any_script(faces: &[cadaddy_fonts::CraftFont], script: &str) -> bool {
+    faces.iter().any(|f| f.style == "Regular" && f.scripts.contains(&script))
 }
 
 /// egui's visuals for `theme`, from its tokens.
@@ -853,6 +867,22 @@ pub fn apply(ctx: &egui::Context, theme: Theme, follow_system: bool) {
 
 #[cfg(test)]
 mod tests {
+    /// What the gate asks of the table: an embedded face of the script stands in for an installed
+    /// font, which the web build never has. The default (no `CRAFT_FONTS_DIR`) table answers no,
+    /// leaving the installed-font answer the gate had before.
+    #[test]
+    fn embedded_faces_answer_for_their_scripts() {
+        let face = |family, scripts| cadaddy_fonts::CraftFont { family, style: "Regular", scripts, bytes: &[] };
+        let faces = [face("BIZ UDPGothic", &["Jpan", "Latn"][..]), face("Noto Sans Arabic", &["Arab"][..])];
+        assert!(super::any_script(&faces, "Jpan") && super::any_script(&faces, "Arab"));
+        assert!(!super::any_script(&faces, "Hans") && !super::any_script(&faces, "Hant"));
+        // A `Bold`-only face is not the interface's, and a script code is matched whole.
+        let bold = cadaddy_fonts::CraftFont { family: "Some Han Bold", style: "Bold", scripts: &["Hans"], bytes: &[] };
+        assert!(!super::any_script(&[bold], "Hans") && !super::any_script(&faces, "Ara"));
+        assert!(!super::embedded_script("Hans") || super::can_show("zh"));
+        assert!(super::can_show("en") && super::can_show("uk"));
+    }
+
     #[test]
     fn korean_font_rejects_invalid_or_glyphless_files() {
         for bytes in [vec![], vec![0xff; 32], vec![0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]] {
