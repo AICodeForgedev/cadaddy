@@ -197,13 +197,7 @@ fn run_arc(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_polygon(s: &mut Session, p: &Value) -> Result<Value> {
     // A `sides` that is not a whole number (e.g. -3) is refused, not replaced by the default 4.
-    let n = match p.get("sides") {
-        None | Some(Value::Null) => 4,
-        Some(v) => v.as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0),
-    };
-    if !(3..=1024).contains(&n) {
-        return Err(bad("polygon", "sides must be 3..1024"));
-    }
+    let n = usize::try_from(count_param("polygon", p, "sides", 3, 1024)?.unwrap_or(4)).unwrap_or(4);
     let vs = if let Some(e) = points_param(p, "edge") {
         let (Some(a), Some(b)) = (e.first(), e.get(1)) else { return Err(bad("polygon", "edge needs 2 points")) };
         if a.near(*b, 1e-12) {
@@ -771,9 +765,12 @@ impl Interactive for CircleM {
         let last_r = s.doc().map(|d| d.header.f64("CIRCLERAD", 0.0)).unwrap_or(0.0);
         match (self.mode, n) {
             (0, 0) => Prompt::new("Specify center point for circle", Accept::POINT).kw(&["3P", "2P", "Ttr (tan tan radius)"]),
-            (0, _) if self.diameter => Prompt::new("Specify diameter of circle", Accept::POINT_OR_NUMBER).base_opt(self.pts.first().copied()),
+            (0, _) if self.diameter => {
+                Prompt::new("Specify diameter of circle", Accept::POINT_OR_NUMBER).base_opt(self.pts.first().copied()).distance()
+            }
             (0, _) => {
-                let p = Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).kw(&["Diameter"]).base_opt(self.pts.first().copied());
+                let p =
+                    Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).kw(&["Diameter"]).base_opt(self.pts.first().copied()).distance();
                 if last_r > 0.0 { p.default(crate::units::dist(s, last_r)) } else { p }
             }
             (1, k) => Prompt::new(
@@ -906,7 +903,7 @@ impl Interactive for PolygonM {
             (Some(_), false, Some(_), None) => Prompt::new("Enter an option", Accept::TEXT)
                 .kw(&["Inscribed in circle", "Circumscribed about circle"])
                 .default(if s.last_used.polygon_circumscribed { "C" } else { "I" }),
-            (Some(_), false, Some(c), Some(_)) => Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).base(c),
+            (Some(_), false, Some(c), Some(_)) => Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).base(c).distance(),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {

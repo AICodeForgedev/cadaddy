@@ -52,8 +52,18 @@ fn entities_drawing() -> Drawing {
     cadaddy_io::read(dxf.as_bytes(), "made-up.dxf").unwrap()
 }
 
-fn objects_drawing() -> Drawing {
+/// A metric drawing whose Standard multileader and table styles are the plain ones: the bridge
+/// writes its own defaults for those two, so the comparison with it leaves the metric ones out.
+fn metric_for_bridge() -> Drawing {
     let mut d = Drawing::new_metric();
+    let plain = Drawing::new_imperial();
+    d.mleader_styles = plain.mleader_styles;
+    d.table_styles = plain.table_styles;
+    d
+}
+
+fn objects_drawing() -> Drawing {
+    let mut d = metric_for_bridge();
     let mut walls = Layer::new("WALLS");
     walls.color = cadaddy_color::Color::Index(1);
     walls.lineweight = Lineweight::Mm100(50);
@@ -235,7 +245,7 @@ fn tables_and_objects_written_natively_read_back_as_through_the_bridge() {
 }
 
 fn mleader_drawing() -> Drawing {
-    let mut d = Drawing::new_metric();
+    let mut d = metric_for_bridge();
     d.text_styles.push(TextStyle { name: "Notes".into(), ..TextStyle::default() });
     d.mleader_styles.push(MLeaderStyle { name: "Callout".into(), arrow_size: 0.3, ..MLeaderStyle::default() });
     let m = MLeader {

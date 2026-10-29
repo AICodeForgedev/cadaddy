@@ -95,7 +95,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("join", "Join", run_join)
             .menu(&["Modify", "Join"])
             .alias(&["j"])
-            .params("{handles?}")
+            .params("{handles?, close?: bool (a single arc becomes its circle, an elliptical arc its full ellipse)}")
             .interactive(|_| Ok(Box::new(SelectThen::new(Op::Join)))),
     ]
 }
@@ -322,7 +322,7 @@ fn run_move(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_copy(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let d = delta_of("copy", p)?;
-    let n = p.get("count").and_then(Value::as_u64).unwrap_or(1).clamp(1, 10_000);
+    let n = count_param("copy", p, "count", 1, 10_000)?.unwrap_or(1);
     let mut out = Vec::new();
     for k in 1..=n {
         out.extend(transform_entities(s, &hs, &Mat3::translate(d * k as f64), true)?.into_iter().map(|h| h.hex()));
@@ -581,6 +581,8 @@ impl StretchM {
                 let d = s.doc()?;
                 let store = d.space(&s.space());
                 let word = t.trim().to_ascii_lowercase();
+                // `_C`, `_L`: the English name, as scripts write it.
+                let word = word.strip_prefix('_').unwrap_or(&word).to_string();
                 if let Some(m) = SelectMode::from_keyword(&word).filter(|m| m.kind != SelectKind::Group) {
                     self.mode = Some(m);
                     return Ok(Step::Continue);
@@ -646,7 +648,7 @@ impl Interactive for StretchM {
             return m.prompt();
         }
         match (self.phase, self.corner) {
-            (StretchPhase::Select, Some(c)) => Prompt::new("Specify opposite corner", Accept::POINT).base(c),
+            (StretchPhase::Select, Some(c)) => Prompt::new("Specify opposite corner", Accept::POINT).corner(c),
             (StretchPhase::Select, None) => Prompt::new(if self.removing { "Remove objects" } else { "Select objects" }, Accept::POINT),
             (StretchPhase::Base, _) => Prompt::new("Specify base point", Accept::POINT).kw(&["Displacement"]).default("Displacement"),
             (StretchPhase::Displacement, _) => Prompt::new("Specify displacement", Accept::POINT).default("0,0"),
@@ -744,10 +746,14 @@ pub(crate) fn offset_kind(k: &EntityKind, dist: f64, side: Vec2) -> Option<Entit
         EntityKind::Ellipse(e) => {
             // Approximate with a polyline offset of the tessellation.
             let ge = cadaddy_geom::Ellipse { center: e.center.xy(), major: e.major.xy(), ratio: e.ratio, start: e.start, end: e.end };
+            // Inside = on the centre side of the full ellipse, even for an open arc.
             let inside = {
-                let mut pts = Vec::new();
-                ge.tessellate(e.major.xy().len() * 1e-3, &mut pts);
-                cadaddy_geom::point_in_polygon(&pts, side)
+                let a = e.major.xy().len();
+                let b = a * e.ratio.abs();
+                let u = e.major.xy().normalized();
+                let d = side - e.center.xy();
+                let (x, y) = (d.dot(u) * b, d.dot(u.perp()) * a);
+                x * x + y * y < (a * b) * (a * b)
             };
             // The offset of an ellipse is no ellipse: like AutoCAD, a spline that stays within a
             // millionth of the ellipse's size of the true offset. Positive distances go left, into
@@ -835,9 +841,12 @@ fn poly_len(k: &EntityKind) -> f64 {
 fn run_offset(s: &mut Session, p: &Value) -> Result<Value> {
     let h = targets(s, p)?.first().copied().ok_or_else(|| bad("offset", "`handle` is required"))?;
     let dist = f64_req("offset", p, "distance")?;
+    if !(dist.is_finite() && dist > 0.0) {
+        return Err(bad("offset", "`distance` must be a positive number"));
+    }
     let side = point_req("offset", p, "side")?;
     let e = s.doc()?.entity(h).map(|e| (**e).clone()).ok_or_else(|| bad("offset", "no such object"))?;
-    let ks = offset_kinds(&e.kind, dist.abs(), side);
+    let ks = offset_kinds(&e.kind, dist, side);
     if ks.is_empty() {
         return Err(bad("offset", "cannot offset that object"));
     }
@@ -1748,6 +1757,16 @@ fn run_explode(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// Gives a rebuilt arc piece its source centre Z, or a rebuilt polyline piece its source elevation.
+fn with_z(mut k: EntityKind, z: f64) -> EntityKind {
+    match &mut k {
+        EntityKind::Arc(a) => a.center.z = z,
+        EntityKind::LwPolyline(p) => p.elevation = z,
+        _ => {}
+    }
+    k
+}
+
 /// Break `h` between two points (or at one point when p1 == p2).
 pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Result<Vec<Handle>> {
     if super::curves::is_locked(s, h) {
@@ -1761,12 +1780,13 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
             if t1 > t2 {
                 std::mem::swap(&mut t1, &mut t2);
             }
+            let at3 = |t: f64| ln.at(t).to3(l.a.z + (l.b.z - l.a.z) * t);
             let mut v = Vec::new();
             if t1 > 1e-12 {
-                v.push(line(ln.a, ln.at(t1)));
+                v.push(EntityKind::Line(cadaddy_doc::Line { a: l.a, b: at3(t1) }));
             }
             if t2 < 1.0 - 1e-12 {
-                v.push(line(ln.at(t2), ln.b));
+                v.push(EntityKind::Line(cadaddy_doc::Line { a: at3(t2), b: l.b }));
             }
             v
         }
@@ -1777,7 +1797,7 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
             let a1 = c.center.xy().angle_to(p1);
             let a2 = c.center.xy().angle_to(p2);
             // AutoCAD removes the CCW portion from the first to the second point.
-            vec![arc(&Arc::new(c.center.xy(), c.radius, a2, a1))]
+            vec![with_z(arc(&Arc::new(c.center.xy(), c.radius, a2, a1)), c.center.z)]
         }
         EntityKind::Arc(a) => {
             let ga = Arc::new(a.center.xy(), a.radius, a.start, a.end);
@@ -1788,10 +1808,10 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
             }
             let mut v = Vec::new();
             if t1 > 1e-12 {
-                v.push(arc(&Arc::new(ga.center, ga.radius, ga.start, ga.start + t1)));
+                v.push(with_z(arc(&Arc::new(ga.center, ga.radius, ga.start, ga.start + t1)), a.center.z));
             }
             if t2 < ga.sweep() - 1e-12 {
-                v.push(arc(&Arc::new(ga.center, ga.radius, ga.start + t2, ga.end)));
+                v.push(with_z(arc(&Arc::new(ga.center, ga.radius, ga.start + t2, ga.end)), a.center.z));
             }
             v
         }
@@ -1899,10 +1919,10 @@ pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Re
             }
             let mut v = Vec::new();
             if t1 > 1e-12 {
-                v.push(lwpoly(sub_polyline(&segs, 0.0, t1), false));
+                v.push(with_z(lwpoly(sub_polyline(&segs, 0.0, t1), false), p.elevation));
             }
             if t2 < total - 1e-12 {
-                v.push(lwpoly(sub_polyline(&segs, t2, total), false));
+                v.push(with_z(lwpoly(sub_polyline(&segs, t2, total), false), p.elevation));
             }
             v
         }
@@ -2027,6 +2047,10 @@ pub(crate) fn join(s: &mut Session, hs: &[Handle]) -> Result<Option<Handle>> {
 
 fn run_join(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
+    if p.get("close").and_then(Value::as_bool) == Some(true) {
+        let h = super::modify2::join_close(s, &hs)?;
+        return Ok(json!({ "handle": h.hex() }));
+    }
     let r = join(s, &hs)?;
     Ok(json!({ "handle": r.map(|h| h.hex()) }))
 }
@@ -2069,6 +2093,8 @@ struct SelectThen {
     array_fit: bool,
     /// COPY: the objects each placement made, for Undo.
     copies: Vec<Vec<Handle>>,
+    /// JOIN of a single arc or elliptical arc: the prompt asks for arcs to join to it, or cLose.
+    join_source: Option<Handle>,
 }
 
 /// Most items COPY Array makes in one go.
@@ -2091,6 +2117,7 @@ impl SelectThen {
             copy_array: None,
             array_fit: false,
             copies: Vec::new(),
+            join_source: None,
         }
     }
     fn apply(&mut self, s: &mut Session) -> Result<Step> {
@@ -2112,23 +2139,57 @@ impl SelectThen {
                 Ok(Step::Done)
             }
             Op::Join => {
-                match join(s, &self.objs) {
-                    Ok(h) => {
-                        // Objects outside the joined chain are kept, so count only the ones JOIN consumed
-                        // (and the source object an ellipse or spline join keeps).
-                        let d = s.doc()?;
-                        let n = self.objs.iter().filter(|o| d.entity(**o).is_none() || h == Some(**o)).count();
-                        let what = match h.and_then(|h| d.entity(h)).map(|e| &e.kind) {
-                            Some(EntityKind::Spline(_)) => "spline",
-                            Some(EntityKind::Ellipse(_)) => "ellipse",
-                            _ => "polyline",
-                        };
-                        s.echo(format!("{n} objects joined into 1 {what}"))
-                    }
-                    Err(e) => s.echo(e.to_string()),
+                if let [h] = self.objs[..]
+                    && s.doc()?.entity(h).is_some_and(|e| super::modify2::closed_kind(&e.kind).is_some())
+                {
+                    self.join_source = Some(h);
+                    return Ok(Step::Continue);
                 }
+                self.join_now(s)
+            }
+            _ => Ok(Step::Continue),
+        }
+    }
+
+    /// JOIN the selected objects and report what they became.
+    fn join_now(&mut self, s: &mut Session) -> Result<Step> {
+        match join(s, &self.objs) {
+            Ok(h) => {
+                // Objects outside the joined chain are kept, so count only the ones JOIN consumed
+                // (and the source object an ellipse or spline join keeps).
+                let d = s.doc()?;
+                let n = self.objs.iter().filter(|o| d.entity(**o).is_none() || h == Some(**o)).count();
+                let what = match h.and_then(|h| d.entity(h)).map(|e| &e.kind) {
+                    Some(EntityKind::Spline(_)) => "spline",
+                    Some(EntityKind::Ellipse(_)) => "ellipse",
+                    _ => "polyline",
+                };
+                s.echo(format!("{n} objects joined into 1 {what}"))
+            }
+            Err(e) => s.echo(e.to_string()),
+        }
+        Ok(Step::Done)
+    }
+
+    /// JOIN of a single arc or elliptical arc: more arcs picked join to it on Enter, cLose makes
+    /// it its circle or full ellipse.
+    fn join_source_input(&mut self, s: &mut Session, src: Handle, i: Input) -> Result<Step> {
+        match i {
+            Input::Keyword(k) if k == "cLose" => {
+                let ellipse = matches!(s.doc()?.entity(src).map(|e| &e.kind), Some(EntityKind::Ellipse(_)));
+                super::modify2::join_close(s, &[src])?;
+                s.echo(if ellipse { "The elliptical arc is now an ellipse." } else { "The arc is now a circle." });
                 Ok(Step::Done)
             }
+            Input::Point(p) => {
+                if let Some(h) = super::curves::pick_at(s, p)
+                    && !self.objs.contains(&h)
+                {
+                    self.objs.push(h);
+                }
+                Ok(Step::Continue)
+            }
+            Input::Enter => self.join_now(s),
             _ => Ok(Step::Continue),
         }
     }
@@ -2313,6 +2374,11 @@ impl Interactive for SelectThen {
         if self.ask_erase {
             return Prompt::new("Erase source objects?", Accept::TEXT).kw(&["Yes", "No"]).default("No");
         }
+        if let Some(src) = self.join_source {
+            let ellipse = s.doc().is_ok_and(|d| matches!(d.entity(src).map(|e| &e.kind), Some(EntityKind::Ellipse(_))));
+            let msg = if ellipse { "Select elliptical arcs to join to source" } else { "Select arcs to join to source" };
+            return Prompt::new(msg, Accept::POINT).kw(&["cLose"]);
+        }
         let k = self.pts.len();
         let base = self.pts.first().copied();
         if self.op == Op::Scale && self.reference {
@@ -2364,6 +2430,9 @@ impl Interactive for SelectThen {
                     return self.apply(s);
                 }
             }
+        }
+        if let Some(src) = self.join_source {
+            return self.join_source_input(s, src, i);
         }
         if self.ask_erase {
             let yes = matches!(&i, Input::Keyword(k) if k == "Yes") || matches!(&i, Input::Text(t) if t.trim().to_ascii_lowercase().starts_with('y'));

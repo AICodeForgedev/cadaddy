@@ -104,10 +104,25 @@ pub use cadaddy_render as render;
 pub use cadaddy_walk3d as walk3d;
 pub use cmd::blocks::extract::EXTRACT_PROPERTIES;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
+pub use cmd::render::{cancel_pending, request_cancel};
 /// A shaded or 3D view of model space as a PNG (exports; see the function).
 pub use cmd::view::view3d::shaded_png;
 pub use cmd::{CommandInfo, CommandSpec, HelpPage, command_specs, commands_without_help, find_by_id_or_alias, find_command};
 pub use prompt::{Accept, Drag, Input, Interactive, LiveLabel, Picker, Prompt, Step};
+
+/// Most characters of typed input an error or the history repeats.
+const ECHO_CHARS: usize = 80;
+
+/// `text` as an error or the history repeats it: the first 80 characters, then `… (N chars)` when
+/// there are more (a 30 MB line typed as a command comes back as a short message, not 90 MB).
+pub fn clip_input(text: &str) -> String {
+    let n = text.chars().count();
+    if n <= ECHO_CHARS {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(ECHO_CHARS).collect();
+    format!("{head}\u{2026} ({n} chars)")
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -726,6 +741,9 @@ pub struct Settings {
     pub expert: u8,
     /// ATTDIA: 1 asks for attribute values in a dialog when inserting, 0 on the command line.
     pub attdia: u8,
+    /// PICKDRAG: false = two-click windows (0), true = clicks or dragging (2).
+    /// Drag-only mode (1) is not supported yet.
+    pub pickdrag: bool,
     /// PICKSTYLE: bit 1 picks whole selectable groups ([`cmd::groups`]), bit 2 associative hatches
     /// with their boundaries (stored, not used yet).
     pub pickstyle: u8,
@@ -839,6 +857,7 @@ impl Default for Settings {
             cmdecho: 1,
             expert: 0,
             attdia: 0,
+            pickdrag: true,
             pickstyle: 1,
             groupdisplaymode: 2,
             objectisolationmode: 0,
@@ -1199,6 +1218,10 @@ pub struct Session {
     /// The deferred tangent/perpendicular snap under the cursor, if any (from the UI; lets the
     /// rubber band show the line it resolves to).
     pub cursor_deferred: Option<snap::Deferred>,
+    /// Whether Ctrl is held right now (from the UI, overwritten every frame). Commands that
+    /// change behavior on Ctrl — currently only ARC's "hold Ctrl to switch direction" — read
+    /// this instead of receiving modifiers through `Input`, which stays free of UI state.
+    pub ctrl_down: bool,
     /// Origin of the point currently being fed by `input_snapped`; never reused by typed points.
     picked_viewport: Option<snap::ViewportPoint>,
     /// The last drawing comparison (COMPARE), drawn over the drawing it was made for.
@@ -1355,6 +1378,7 @@ impl Session {
             point_mods: Vec::new(),
             cursor: Vec2::ZERO,
             cursor_deferred: None,
+            ctrl_down: false,
             picked_viewport: None,
             compare: None,
             tracking: snap::tracking::Tracker::default(),
@@ -1879,7 +1903,7 @@ impl Session {
                 self.start(if transparent { "'setvar" } else { "setvar" })?;
                 return self.input(Input::Text(var));
             }
-            return Err(EngineError::UnknownCommand(name.to_string()));
+            return Err(EngineError::UnknownCommand(clip_input(name)));
         };
         if transparent && spec.transparent && self.running.is_some() {
             // Transparent commands (zoom, pan…) run without cancelling the active one.
@@ -1932,6 +1956,16 @@ impl Session {
                 Ok(())
             }
             None => {
+                // Typed with nothing after it, a command with no prompts of its own asks for what
+                // it needs (DELAY: "Enter delay time (in milliseconds):").
+                if let Some(machine) = cmd::typed_ask::machine_for(spec.id) {
+                    let st = self.state()?;
+                    let (before, selection_before) = (st.doc.clone(), st.selection.clone());
+                    self.running = Some(Running { id: spec.id.to_string(), machine: guard::Guarded::wrap(machine), before, selection_before });
+                    self.pending_window = None;
+                    self.feed(None)?;
+                    return Ok(());
+                }
                 let r = self.execute(spec.id, &Value::Null);
                 let event = if r.is_ok() { lisp::reactor::CommandEvent::Ended } else { lisp::reactor::CommandEvent::Failed };
                 self.lisp_command_event(event, spec.id);
@@ -2061,6 +2095,11 @@ impl Session {
         if self.select_mode.is_some() {
             return self.select_mode_input(input);
         }
+        // `_L`, `_ALL`, `_W`: the English name of a selection keyword, as scripts write it.
+        let input = match input {
+            Input::Text(t) => Input::Text(t.trim().strip_prefix('_').map(str::to_string).unwrap_or(t)),
+            other => other,
+        };
         if let Input::Text(t) | Input::Keyword(t) = &input
             && let Some(m) = select::SelectMode::from_keyword(t)
         {
@@ -2473,15 +2512,21 @@ impl Session {
         }
     }
 
-    /// Rubber-band preview entities for the cursor.
+    /// Preview entities for the cursor: objects drawn with their own properties
+    /// ([`Interactive::preview_objects`]), then the rubber band with the current properties, in
+    /// the grip blue over such objects (so it shows over their fills, whatever their colour).
     pub fn preview(&self, cursor: Vec2) -> Vec<Entity> {
-        let common = self.current_common();
-        let kinds = match (self.lisp_preview(cursor), &self.running) {
-            (Some(k), _) => k,
-            (None, Some(r)) => r.machine.preview(self, cursor),
-            (None, None) => Vec::new(),
+        let mut common = self.current_common();
+        let (kinds, mut out) = match (self.lisp_preview(cursor), &self.running) {
+            (Some(k), _) => (k, Vec::new()),
+            (None, Some(r)) => (r.machine.preview(self, cursor), r.machine.preview_objects(self, cursor)),
+            (None, None) => (Vec::new(), Vec::new()),
         };
-        kinds.into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }).collect()
+        if !out.is_empty() {
+            common.color = cadaddy_doc::color::Color::True(cadaddy_doc::color::Rgb(0x2f, 0x6b, 0xff));
+        }
+        out.extend(kinds.into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }));
+        out
     }
 
     /// The active command's live measurement labels for the cursor (MEASURELABELS; see
@@ -2620,8 +2665,9 @@ impl Session {
         // At "Select objects" prompts the selection modes (Previous, Last, ALL) win over a keyword
         // they only begin (HATCH's "picK internal point" against `P`); a keyword typed whole or
         // by its shortcut wins (COUNT's `L` is List, as in AutoCAD).
-        let selection_mode =
-            prompt.accept.select && matches!(tt.to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous") && !prompt.exact_keyword(tt);
+        let selection_mode = prompt.accept.select
+            && matches!(tt.strip_prefix('_').unwrap_or(tt).to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous")
+            && !prompt.exact_keyword(tt);
         // A leading underscore asks for a keyword by its English name, whatever the interface
         // language (`_M`, `_Yes`): scripts and LISP routines write them that way. (Snap
         // overrides such as `_cen` were taken above.)
@@ -2790,7 +2836,7 @@ impl Session {
     /// command running, or a command asking for objects. Returns whether a window was opened.
     pub fn begin_window(&mut self, corner: Vec2) -> bool {
         let during_command = self.running.is_some();
-        if !corner.is_finite() || (during_command && !self.current_prompt().is_some_and(|p| p.accept.select)) {
+        if !self.settings.pickdrag || !corner.is_finite() || (during_command && !self.current_prompt().is_some_and(|p| p.accept.select)) {
             return false;
         }
         self.pending_window = Some(PendingWindow { corner, during_command });

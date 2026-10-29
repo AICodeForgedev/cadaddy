@@ -17,6 +17,23 @@ fn new_drawing_has_standard_tables() {
 }
 
 #[test]
+fn new_metric_drawing_has_metric_multileader_and_table_styles() {
+    let m = Drawing::new_metric();
+    let iso = m.dim_style("ISO-25").unwrap();
+    let ml = m.mleader_styles.iter().find(|s| s.name == "Standard").unwrap();
+    assert_eq!((ml.text_height, ml.arrow_size), (iso.text_height, iso.arrow_size));
+    assert_eq!(ml.dogleg, 5.0);
+    let ts = m.table_styles.iter().find(|s| s.name == "Standard").unwrap();
+    assert_eq!(ts.text_height, iso.text_height);
+    assert_eq!(iso.text_height, 2.5);
+
+    let i = Drawing::new_imperial();
+    assert_eq!(i.mleader_styles, vec![MLeaderStyle::default()]);
+    assert_eq!(i.table_styles, vec![TableStyle::default()]);
+    assert_eq!((i.mleader_styles[0].text_height, i.table_styles[0].text_height), (0.18, 0.18));
+}
+
+#[test]
 fn add_and_extents() {
     let mut d = Drawing::new_imperial();
     d.add(&Space::Model, Common::default(), line((0.0, 0.0), (10.0, 5.0))).unwrap();

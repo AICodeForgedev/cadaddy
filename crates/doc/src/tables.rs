@@ -670,6 +670,13 @@ impl Default for MLeaderStyle {
     }
 }
 
+impl MLeaderStyle {
+    /// The Standard style for metric drawings: text and arrows as high as ISO-25's.
+    pub fn metric() -> Self {
+        MLeaderStyle { arrow_size: 2.5, text_height: 2.5, landing_gap: 0.625, dogleg: 5.0, ..Default::default() }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct TableStyle {
@@ -687,6 +694,13 @@ pub struct TableStyle {
 impl Default for TableStyle {
     fn default() -> Self {
         TableStyle { name: "Standard".into(), text_height: 0.18, margin: 0.06, title: true, header: true, cell_styles: Vec::new() }
+    }
+}
+
+impl TableStyle {
+    /// The Standard style for metric drawings: text as high as ISO-25's.
+    pub fn metric() -> Self {
+        TableStyle { text_height: 2.5, margin: 1.0, ..Default::default() }
     }
 }
 
@@ -796,6 +810,8 @@ pub struct PageSetup {
     pub landscape: bool,
     /// "layout" | "extents" | "display" | "window" | "limits".
     pub plot_area: String,
+    /// Plot window corners `[x1, y1, x2, y2]` (DXF plot layout groups 48, 49, 140, 141); used when `plot_area` is "window".
+    pub plot_window: [f64; 4],
     pub scale_to_fit: bool,
     /// Paper units per drawing unit.
     pub scale: f64,
@@ -825,6 +841,7 @@ impl Default for PageSetup {
             margins_mm: [6.35, 6.35, 6.35, 6.35],
             landscape: true,
             plot_area: "layout".into(),
+            plot_window: [0.0; 4],
             scale_to_fit: false,
             scale: 1.0,
             plot_style_table: String::new(),

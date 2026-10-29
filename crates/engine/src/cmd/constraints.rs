@@ -1031,6 +1031,13 @@ fn run_constraintsettings(s: &mut Session, p: &Value) -> Result<Value> {
     set.dims_visible = bool_or(p, "dimsVisible", set.dims_visible);
     set.tangent_intersect = bool_or(p, "tangentIntersect", set.tangent_intersect);
     set.perpendicular_intersect = bool_or(p, "perpendicularIntersect", set.perpendicular_intersect);
+    // The checkboxes act like Show All / Hide All: exceptions are relative to the old value and would flip.
+    if set.bars_visible != cur.bars_visible {
+        set.bar_exceptions.clear();
+    }
+    if set.dims_visible != cur.dims_visible {
+        set.dim_exceptions.clear();
+    }
     if let Some(f) = p.get("nameFormat").filter(|v| !v.is_null()) {
         set.name_format =
             f.as_u64()
@@ -1221,8 +1228,9 @@ pub fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, ok: bool) {
     }
     let mut d = (*st.doc).clone();
     let purged = cs::purge_invalid(&mut d);
+    let restored = cs::restore_fixed(&mut d, before);
     let satisfied = cs::all_satisfied(&d);
-    if purged.is_empty() && satisfied {
+    if purged.is_empty() && !restored && satisfied {
         return;
     }
     let mut msg = Vec::new();

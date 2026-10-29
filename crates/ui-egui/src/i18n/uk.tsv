@@ -1,6 +1,6 @@
-# CADCraft Ukrainian interface catalog — original translations by @dmatviichuk.
+# CADaddy Ukrainian interface catalog — original translations by @dmatviichuk.
 # License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
-# Written from CADCraft's English strings; no proprietary translations were copied.
+# Written from CADaddy's English strings; no proprietary translations were copied.
 # UTF-8: context<TAB>English source<TAB>Ukrainian translation.
 # Empty context = ordinary label; @plural = one|few|many forms with {n}.
 # Keep command IDs, keywords, technology/product names and user data unchanged.
@@ -1221,6 +1221,7 @@
 	Show System Cursor	Показувати системний курсор
 	Animation Effects	Ефекти анімації
 	Animation effects	Ефекти анімації
+	Interface scale	Масштаб інтерфейсу
 	Import...	Імпорт...
 	Export...	Експорт...
 	Batch Publish...	Пакетна публікація...
@@ -1276,6 +1277,7 @@
 	Search for pattern	Пошук зразка
 	Run Script...	Виконати сценарій...
 	Query Texts	Запит текстів
+	Analyze Shapes	Аналіз фігур
 	Hatch Pick	Вибір для штрихування
 # Hatch and Gradient dialog
 	Hatch and Gradient	Штрихування та градієнт
@@ -3364,3 +3366,17 @@
 	Clash Navigate	Перехід між колізіями
 	Colour By Status/Level	Колір за статусом/рівнем
 	Inspect Element	Переглянути елемент
+	Select using two clicks only	Вибирати лише двома клацаннями
+	Define each corner of the selection window with a separate click.	Задайте кожен кут рамки вибору окремим клацанням.
+	Center the plot	Центрувати друк
+	Fit to paper	Вписати в аркуш
+	Plot area	Область друку
+	Plot object lineweights	Друкувати товщини ліній об’єктів
+	Plot offset	Зсув друку
+	Plot transparency	Друкувати прозорість
+	Printer/plotter	Принтер/плотер
+	X offset (mm)	Зсув по X (мм)
+	Y offset (mm)	Зсув по Y (мм)
+	Arrow size	Розмір стрілки
+	Dim scale overall	Загальний масштаб розмірів
+	Precision	Точність

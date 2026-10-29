@@ -36,6 +36,19 @@ fn ok(s: &mut Session, code: &str) -> String {
 }
 
 #[test]
+fn real_print_subnormal_and_rounding() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "1e-310"), "1.0e-310");
+    assert_eq!(ok(&mut s, "5e-324"), "4.94066e-324");
+    assert_eq!(ok(&mut s, "9.9999996e10"), "1.0e+011");
+    assert_eq!(ok(&mut s, "9.9999996e-7"), "1.0e-006");
+    assert_eq!(super::value::real_text(-1e-310), "-1.0e-310");
+    assert_eq!(super::value::real_text(1e308), "1.0e+308");
+    assert_eq!(super::value::real_text(999999.5), "1.0e+006");
+    assert_eq!(super::value::real_text(0.000009999996), "0.00001");
+}
+
+#[test]
 fn arithmetic_follows_autolisp() {
     let mut s = session();
     assert_eq!(ok(&mut s, "(+ 1 2 3)"), "6");
@@ -60,6 +73,39 @@ fn arithmetic_follows_autolisp() {
     assert_eq!(ok(&mut s, "(= \"a\" \"a\")"), "T");
     assert_eq!(eval(&mut s, "(/ 1 0)"), Err("divide by zero".into()));
     assert_eq!(eval(&mut s, "(+ 1 nil)"), Err("bad argument type: numberp: nil".into()));
+}
+
+/// `=` answers for the symbols `type` returns, which is how AutoLISP routines test a type:
+/// `(= (type x) 'INT)`. Coercing the symbol to a number failed the whole routine with "bad
+/// argument type" instead, so a routine written for AutoLISP stopped at its first type test
+/// (#1597). The ordering comparisons are still numbers and strings, as AutoLISP has them.
+#[test]
+fn equality_compares_symbols_as_autolisp_does() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "(= (type 1) 'INT)"), "T");
+    assert_eq!(ok(&mut s, "(= (type 1.0) 'INT)"), "nil");
+    assert_eq!(ok(&mut s, "(= (type '(1 2)) 'LIST)"), "T");
+    assert_eq!(ok(&mut s, "(= (type \"a\") 'STR)"), "T");
+    assert_eq!(ok(&mut s, "(/= (type 1) 'REAL)"), "T");
+    assert_eq!(ok(&mut s, "(= 'a 'a 'a)"), "T");
+    assert_eq!(ok(&mut s, "(= 'a 'b)"), "nil");
+
+    // The routine from the report runs.
+    ok(&mut s, "(defun isint (a) (if (= (type a) 'INT) T nil))");
+    assert_eq!(ok(&mut s, "(isint 3)"), "T");
+    assert_eq!(ok(&mut s, "(isint 3.0)"), "nil");
+    assert_eq!(ok(&mut s, "(isint \"3\")"), "nil");
+
+    // A mismatch of kinds is nil, not an error; numbers and strings are unchanged.
+    assert_eq!(ok(&mut s, "(= 1 \"1\")"), "nil");
+    assert_eq!(ok(&mut s, "(= '(1) '(1))"), "nil", "`=` is not `equal`");
+    assert_eq!(ok(&mut s, "(= nil nil)"), "T");
+    assert_eq!(ok(&mut s, "(= 1 1.0)"), "T");
+    assert_eq!(ok(&mut s, "(= \"a\" \"a\" \"a\")"), "T");
+    assert_eq!(ok(&mut s, "(= 1 1 2)"), "nil");
+
+    // Ordering still refuses what AutoLISP refuses.
+    assert_eq!(eval(&mut s, "(< 'a 'b)"), Err("bad argument type: numberp: A".into()));
 }
 
 #[test]
@@ -316,6 +362,61 @@ fn entity_lists_round_trip() {
 }
 
 #[test]
+fn entity_lists_hold_angles_in_radians() {
+    let mut s = session();
+    let near = |s: &mut Session, expr: &str, want: &str| {
+        let code = format!("(equal {expr} {want} 1e-9)");
+        assert_eq!(ok(s, &code), "T", "{expr} is {}, not {want}", ok(s, expr));
+    };
+    // A DXF file holds an ARC's 50 and 51 in degrees; entget gives radians (#1165).
+    s.script("ARC\nC\n0,0\n10,0\n0,10\n").unwrap();
+    near(&mut s, "(cdr (assoc 50 (entget (entlast))))", "0.0");
+    near(&mut s, "(cdr (assoc 51 (entget (entlast))))", "(/ pi 2)");
+    // ssget filters compare against the values entget shows.
+    assert_eq!(ok(&mut s, "(sslength (ssget \"X\" '((0 . \"ARC\") (-4 . \"<\") (51 . 2.0))))"), "1");
+    // entmod takes radians.
+    ok(&mut s, "(setq d (entget (entlast))) (entmod (subst (cons 51 pi) (assoc 51 d) d))");
+    let end = s.doc().unwrap().model.iter().find_map(|e| match &e.kind {
+        cadaddy_doc::EntityKind::Arc(a) => Some(a.end),
+        _ => None,
+    });
+    assert!(end.is_some_and(|a| (a - std::f64::consts::PI).abs() < 1e-9), "{end:?}");
+
+    // TEXT rotation (50) and oblique angle (51), through entmake.
+    ok(&mut s, "(entmake (list '(0 . \"TEXT\") '(10 0.0 0.0 0.0) '(40 . 2.5) '(1 . \"abc\") (cons 50 (/ pi 6)) '(51 . 0.25)))");
+    let text = s.doc().unwrap().model.iter().find_map(|e| match &e.kind {
+        cadaddy_doc::EntityKind::Text(t) => Some((t.rotation, t.oblique)),
+        _ => None,
+    });
+    assert!(text.is_some_and(|(r, o)| (r - std::f64::consts::FRAC_PI_6).abs() < 1e-9 && (o - 0.25).abs() < 1e-9), "{text:?}");
+    near(&mut s, "(cdr (assoc 50 (entget (entlast))))", "(/ pi 6)");
+    near(&mut s, "(cdr (assoc 51 (entget (entlast))))", "0.25");
+
+    // HATCH pattern angle (52) and pattern line angle (53): ANSI31 at 0 has its lines at 45°.
+    s.script("CIRCLE\n0,0\n10\n-HATCH\nP\nANSI31\n1\n0\n0,0\n\n").unwrap();
+    assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget (entlast))))"), "\"HATCH\"");
+    near(&mut s, "(cdr (assoc 52 (entget (entlast))))", "0.0");
+    near(&mut s, "(cdr (assoc 53 (entget (entlast))))", "(/ pi 4)");
+
+    // MTEXT: 50 before the column type (75) is the rotation, after it a column height.
+    ok(
+        &mut s,
+        "(entmake (list '(0 . \"MTEXT\") '(10 0.0 0.0 0.0) '(40 . 2.5) '(41 . 10.0) '(1 . \"abc\") (cons 50 (/ pi 3)) '(75 . 2) '(76 . 2) '(79 . 0) '(48 . 10.0) '(49 . 1.0) '(50 . 30.0) '(50 . 20.0)))",
+    );
+    let mtext = s.doc().unwrap().model.iter().find_map(|e| match &e.kind {
+        cadaddy_doc::EntityKind::MText(t) => Some((t.rotation, t.columns.as_ref().map(|c| c.heights.clone()))),
+        _ => None,
+    });
+    assert!(
+        mtext.as_ref().is_some_and(|(r, h)| (r - std::f64::consts::FRAC_PI_3).abs() < 1e-9 && h.as_deref() == Some(&[30.0, 20.0][..])),
+        "{mtext:?}"
+    );
+    near(&mut s, "(cdr (assoc 50 (entget (entlast))))", "(/ pi 3)");
+    let d = ok(&mut s, "(entget (entlast))");
+    assert!(d.contains("(50 . 30.0) (50 . 20.0)"), "{d}");
+}
+
+#[test]
 fn selection_sets_and_filters() {
     let mut s = session();
     ok(&mut s, "(command \"_.CIRCLE\" '(0 0) 1) (command \"_.CIRCLE\" '(10 0) 2) (command \"_.LINE\" '(0 5) '(20 5) \"\")");
@@ -453,6 +554,37 @@ fn hostile_lisp_never_panics() {
         let _ = eval(&mut s, code);
     }
     assert!(!s.lisp_running());
+}
+
+/// `entsel` and `nentsel` pick one object, so the cursor shows the pick box at their prompt. It
+/// was read off the message's first word, and a routine's own message begins with a newline -- so
+/// the same call showed the pick box without a message and lost it with one (#1598).
+#[test]
+fn an_entsel_prompt_picks_objects_whatever_its_message_says() {
+    let mut s = session();
+    // No message: the default "Select object: ".
+    s.cmdline("(nentsel)").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // The reported case: the routine's own message, starting with a newline.
+    s.cmdline("(nentsel \"\nSelect second line or polyline: \")").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // Wording that never says "select" picks an object just the same.
+    s.cmdline("(entsel \"\nPick a line: \")").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // A point prompt is not a pick, and keeps its point modifiers -- including one whose own
+    // message happens to begin with the word the built-in commands are read by. `picks_one` says
+    // which calls pick, so the wording is only ever read where the engine wrote it (#1635 review).
+    for point in ["(getpoint \"\nSpecify a point: \")", "(getpoint \"\nSelect a point: \")", "(getpoint \"Select a point: \")"] {
+        s.cmdline(point).unwrap();
+        assert!(!s.current_prompt().unwrap().picks_objects(), "{point}: {}", s.prompt_text());
+        s.cancel();
+    }
 }
 
 #[test]

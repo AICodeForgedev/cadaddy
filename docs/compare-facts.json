@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1159,
-    "count": 1159,
+    "callableAsJson": 1160,
+    "count": 1160,
     "ids": [
       "-attedit",
       "-block",
@@ -946,6 +946,7 @@
       "setbylayer",
       "setvar",
       "shape",
+      "shapes",
       "share",
       "sheet.facts",
       "sheetset",
@@ -1164,7 +1165,7 @@
       "zoom.window"
     ],
     "inMenus": 513,
-    "typed": 551
+    "typed": 552
   },
   "features": {
     "ifcExport": true,
@@ -1231,6 +1232,7 @@
       "ar",
       "cs",
       "de",
+      "el",
       "es",
       "fr",
       "hu",
@@ -1246,7 +1248,7 @@
       "zh",
       "zh_tw"
     ],
-    "count": 18
+    "count": 19
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {

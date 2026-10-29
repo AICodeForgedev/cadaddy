@@ -463,6 +463,18 @@ impl Builder<'_> {
         }
         self.note_pen(color);
         let (color, lw) = self.styled(color, lw);
+        self.push_polyline(ctx, color, lw, pts);
+    }
+    /// A one-pixel line in `color` as the plot style prints it, without the style's lineweight
+    /// or pen: the centre line drawn on screen over a thin wide polyline.
+    fn hairline(&mut self, ctx: &Ctx, color: Ink, pts: &[Vec2]) {
+        if pts.len() < 2 {
+            return;
+        }
+        let (color, _) = self.styled(color, 0.0);
+        self.push_polyline(ctx, color, 0.0, pts);
+    }
+    fn push_polyline(&mut self, ctx: &Ctx, color: Ink, lw: f32, pts: &[Vec2]) {
         let start = self.list.verts.len() as u32;
         for p in pts {
             let q = ctx.xf.apply(*p);
@@ -1525,12 +1537,24 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         EntityKind::MLine(m) => mline::draw(b, ctx, e, m, rgb, lw, tol),
         EntityKind::LwPolyline(p) if p.const_width > 0.0 || p.vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) => {
             if b.opts.fill && ctx.d.header.i64("FILLMODE", 1) != 0 {
+                // The GPU canvas has no MSAA: a band narrower than a pixel lights only where it
+                // covers pixel centres, so whole sides vanish at some zooms (#1434). On screen the
+                // centre line is drawn too, as a hairline (wide bands are drawn without lineweight),
+                // so a thin band still shows as a one-pixel line. Always, not below a threshold:
+                // the list serves a whole band of zooms. Plots and exports draw the band alone, and
+                // a transparent band gets none (its alpha would add up along the centre).
+                let hairline = !b.plotting && b.opts.min_dash > 0.0 && b.transparency == 0;
                 match &lt {
                     // Dashed: each dash a filled piece of the band; dots a line across it.
                     Some(lt) => {
                         let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
-                        let (tris, ticks) = wide::dashed(p, tol, lt, ltscale, min);
+                        let (tris, ticks, centres) = wide::dashed(p, tol, lt, ltscale, min);
                         b.tris(ctx, rgb, &tris);
+                        if hairline {
+                            for c in &centres {
+                                b.hairline(ctx, rgb, c);
+                            }
+                        }
                         for t in &ticks {
                             match t.as_slice() {
                                 [q] => b.point(ctx, rgb, *q),
@@ -1538,7 +1562,13 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                             }
                         }
                     }
-                    None => b.tris(ctx, rgb, &fill::wide_polyline(p, tol)),
+                    None => {
+                        b.tris(ctx, rgb, &fill::wide_polyline(p, tol));
+                        if hairline {
+                            let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
+                            b.hairline(ctx, rgb, &pl.tessellate(tol));
+                        }
+                    }
                 }
             } else {
                 let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
@@ -2084,6 +2114,11 @@ pub use table::{MAX_LAYOUT_CELLS, TableFill, TableGeom, TableLine, TableText, fi
 
 fn table(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::Table, rgb: Ink, lw: f32) {
     table::draw(b, ctx, t, rgb, lw);
+}
+
+/// A TEXT's justification as the fonts' alignment (used where text is placed outside a build).
+pub fn text_align(h: cadaddy_doc::HAlign, v: cadaddy_doc::VAlign) -> (cadaddy_fonts::Align, cadaddy_fonts::VAlign) {
+    align(h, v)
 }
 
 fn align(h: cadaddy_doc::HAlign, v: cadaddy_doc::VAlign) -> (cadaddy_fonts::Align, cadaddy_fonts::VAlign) {

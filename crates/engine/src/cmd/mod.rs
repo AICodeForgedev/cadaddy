@@ -166,7 +166,7 @@ pub mod wallgen;
 pub use props::MatchProps;
 pub mod actions;
 pub(crate) mod qselect;
-mod render;
+pub(crate) mod render;
 pub mod rulemodel;
 mod sections;
 mod selecttools;
@@ -192,6 +192,7 @@ pub mod curves;
 pub mod helpers;
 pub mod machines;
 pub mod options;
+pub mod typed_ask;
 
 use cadaddy_doc::Handle;
 use cadaddy_geom::Vec2;
@@ -940,6 +941,21 @@ pub(crate) fn size_param(cmd: &str, p: &Value, key: &str, zero_ok: bool) -> Resu
             Some(x) if x > 0.0 || (zero_ok && x == 0.0) => Ok(Some(x)),
             _ => Err(bad(cmd, format!("`{key}` must be {}", if zero_ok { "zero or positive" } else { "positive" }))),
         },
+    }
+}
+/// An optional whole-number count parameter in `min..=max`. Absent or null gives `None`; a
+/// fraction, a negative number, a non-number or a value out of range is refused, naming the
+/// parameter and the rule (as the typed prompts do).
+pub(crate) fn count_param(cmd: &str, p: &Value, key: &str, min: u64, max: u64) -> Result<Option<u64>> {
+    let v = match p.get(key) {
+        None | Some(Value::Null) => return Ok(None),
+        Some(v) => v,
+    };
+    let n = v.as_u64().or_else(|| v.as_f64().filter(|x| x.is_finite() && x.fract() == 0.0 && *x >= 0.0 && *x <= 1e15).map(|x| x as u64));
+    match n {
+        Some(n) if (min..=max).contains(&n) => Ok(Some(n)),
+        _ if max == u64::MAX => Err(bad(cmd, format!("`{key}` must be a whole number of {min} or more"))),
+        _ => Err(bad(cmd, format!("`{key}` must be a whole number from {min} to {max}"))),
     }
 }
 /// `pts` without consecutive repeats (closer than `1e-12`), as the interactive LINE ignores a

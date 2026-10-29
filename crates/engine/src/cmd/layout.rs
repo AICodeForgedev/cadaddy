@@ -286,8 +286,12 @@ fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let from = layout_name("layout.rename", s.doc()?, &from)?;
     let to = str_param(p, "to").ok_or_else(|| bad("layout.rename", "`to` is required"))?;
     let to = check_name("layout.rename", s.doc()?, to, Some(&from))?;
-    if let Some(l) = s.doc_mut()?.layouts.iter_mut().find(|l| l.name == from) {
+    let d = s.doc_mut()?;
+    if let Some(l) = d.layouts.iter_mut().find(|l| l.name == from) {
         l.name = to.clone();
+    }
+    if d.active_layout.as_ref().is_some_and(|a| a.eq_ignore_ascii_case(&from)) {
+        d.active_layout = Some(to.clone());
     }
     let (old, new) = (Space::Paper(from.clone()), Space::Paper(to.clone()));
     let st = s.state_mut()?;
@@ -1162,27 +1166,32 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             Space::Model => vec![],
         },
     };
+    // The set-up is on a temporary copy that only the plotter sees: plotting never changes the
+    // drawing, its modified flag or its undo history.
+    let mut temp_doc: Option<Drawing> = None;
     if !paper_layouts.is_empty() {
-        let st = s.state_mut()?;
+        let st = s.state()?;
         let has_work = paper_layouts.iter().any(|n| st.bare_layouts.contains(n) || st.doc.layout(n).is_some_and(|l| l.pending_setup));
         if has_work {
             let mut doc = (*st.doc).clone();
             for name in &paper_layouts {
-                if let Some(i) = st.bare_layouts.iter().position(|b| b == name) {
-                    st.bare_layouts.remove(i);
-                    if let Some(l) = doc.layouts.iter_mut().find(|l| l.name == *name) {
-                        l.pending_setup = true;
-                    }
+                if st.bare_layouts.contains(name)
+                    && let Some(l) = doc.layouts.iter_mut().find(|l| l.name == *name)
+                {
+                    l.pending_setup = true;
                 }
                 set_up_layout(&mut doc, name);
             }
-            st.doc = std::sync::Arc::new(doc);
+            temp_doc = Some(doc);
         }
     }
     // Warn about sheets that would plot blank.
     let mut warnings: Vec<String> = Vec::new();
     {
-        let d = s.doc()?;
+        let d = match &temp_doc {
+            Some(d) => d,
+            None => s.doc()?,
+        };
         for name in &paper_layouts {
             if sheet_is_blank(d, name) {
                 warnings.push(format!("{name} has nothing on it: its page is blank."));
@@ -1192,7 +1201,15 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     for w in &warnings {
         s.echo(format!("Warning: {w}"));
     }
-    let bytes = hook(s.doc()?, &space, &opts).map_err(|e| bad(cmd, e))?;
+    let bytes = hook(
+        match &temp_doc {
+            Some(d) => d,
+            None => s.doc()?,
+        },
+        &space,
+        &opts,
+    )
+    .map_err(|e| bad(cmd, e))?;
     if let (Some(name), Some(h)) = (&printer, print) {
         let title = s.state().map(|st| st.title.clone()).unwrap_or_default();
         (h.print)(name, &bytes, &title).map_err(|e| bad(cmd, format!("printer `{name}`: {e}")))?;
@@ -1326,6 +1343,14 @@ mod tests {
         // Undo removes the layout.
         s.undo().unwrap();
         assert!(s.doc().unwrap().layout("Layout3").is_none());
+    }
+
+    #[test]
+    fn rename_keeps_the_active_layout_whatever_its_case() {
+        let mut s = session_with_model();
+        s.doc_mut().unwrap().active_layout = Some("layout1".into());
+        s.execute("layout.rename", &json!({"from": "Layout1", "to": "Sheet A"})).unwrap();
+        assert_eq!(s.doc().unwrap().active_layout.as_deref(), Some("Sheet A"));
     }
 
     #[test]

@@ -215,6 +215,9 @@ struct AssocObj {
 struct OsnapRef {
     osnap: i64,
     main: Handle,
+    /// The 1-based segment of a polyline the point is an end of (group 91, with subentity type
+    /// 73 = 2, edge); 0 for an object made of one curve.
+    segment: i64,
     param: f64,
     point: Vec3,
     other: Option<Handle>,
@@ -467,6 +470,8 @@ fn header_vars(w: &mut W, d: &Drawing) {
             (-2 | -3, _) => {}
             (c @ (40 | 50), v) => {
                 if let Some(f) = v.as_f64() {
+                    // ANGBASE is held in radians; `$ANGBASE` is in degrees.
+                    let f = if *name == "ANGBASE" { f.to_degrees() } else { f };
                     w.s(9, format!("${name}"));
                     w.f(c, f);
                 }
@@ -497,7 +502,16 @@ fn dim_header_vars(w: &mut W, d: &Drawing) {
     // override the style (an architectural style reopening with decimal units).
     let style = d.dim_style(&d.header.str("DIMSTYLE", "Standard")).and_then(|s| serde_json::to_value(s).ok());
     let from_style = |field: &str| -> Option<HVal> {
-        match style.as_ref()?.get(field)? {
+        let value = style.as_ref()?.get(field)?;
+        // A colour is an object in the style, an ACI number in the header (DIMCLRD, DIMCLRE, DIMCLRT).
+        if dxf_ext::DIM_CODES.iter().any(|(f, _, k)| *f == field && *k == K::Color) {
+            let none = |_: &str| None;
+            return match dxf_ext::encode(K::Color, value, &none, &none, &none)? {
+                DimVal::Int(i) => Some(HVal::Int(i)),
+                _ => None,
+            };
+        }
+        match value {
             serde_json::Value::Bool(b) => Some(HVal::Int(i64::from(*b))),
             serde_json::Value::Number(n) if n.is_i64() || n.is_u64() => n.as_i64().map(HVal::Int),
             serde_json::Value::Number(n) => n.as_f64().map(HVal::Real),
@@ -935,8 +949,62 @@ fn seqend(w: &mut W, e: &Entity) {
     w.s(8, e.common.layer.as_str());
 }
 
-fn text_tags(w: &mut W, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
-    w.p(10, t.insert);
+/// The insertion point (group 10) to write for `t`. A justified text is placed by its alignment
+/// point (group 11), and its insertion point is the start of its baseline, which AutoCAD reads
+/// from DWG as is (it recomputes it only for DXF): writing the alignment point there drew centred
+/// and right-aligned text from the wrong end in AutoCAD (#1050).
+///
+/// The stored point is kept when it is close to where CADaddy's font puts the baseline start:
+/// then it is AutoCAD's own (exact for its fonts). It is replaced when it is clearly stale: the
+/// alignment point itself (text made here) or a text whose length changed since. Close means
+/// along the baseline within a tenth of the text's width plus half its height (AutoCAD's fonts,
+/// or the ones CADaddy substitutes for them, differ most in width, and most on short texts) and
+/// across it within a fifth of its height: Left Middle and Left Bottom text made here, whose
+/// alignment point is only half or a third of a height from the baseline start, must not pass
+/// for AutoCAD's.
+fn text_insert(d: &Drawing, t: &Text) -> Vec3 {
+    let computed = computed_text_insert(d, t);
+    if t.align_pt.is_some_and(|a| a.xy() == t.insert.xy()) {
+        return computed;
+    }
+    let h = t.height.abs();
+    let off = (t.insert.xy() - computed.xy()).rotate(-t.rotation);
+    let close = if t.value.contains('\n') {
+        // A multiline attribute's lines are placed by its embedded MTEXT: a one-line baseline
+        // start says little about them, so only the distance counts.
+        let width = t.align_pt.map_or(0.0, |a| 2.0 * a.xy().dist(computed.xy()));
+        off.len() <= 0.1 * width + 0.5 * h
+    } else {
+        let width = cadaddy_fonts::line_width(&t.value, h, t.width_factor.abs());
+        off.x.abs() <= 0.1 * width + 0.5 * h && off.y.abs() <= 0.2 * h
+    };
+    if close { t.insert } else { computed }
+}
+
+fn computed_text_insert(d: &Drawing, t: &Text) -> Vec3 {
+    let justified = !matches!((t.halign, t.valign), (HAlign::Left, VAlign::Baseline) | (HAlign::Aligned | HAlign::Fit, _));
+    let Some(a) = t.align_pt.filter(|_| justified) else { return t.insert };
+    let ts = d.text_style(&t.style).cloned().unwrap_or_default();
+    let (h, v) = cadaddy_render::text_align(t.halign, t.valign);
+    let p = cadaddy_fonts::TextParams {
+        insert: t.insert.xy(),
+        align_pt: Some(a.xy()),
+        height: t.height,
+        rotation: t.rotation,
+        width_factor: t.width_factor,
+        oblique: t.oblique,
+        h,
+        v,
+        backwards: ts.backwards,
+        upside_down: ts.upside_down,
+        vertical: ts.vertical,
+    };
+    let q = cadaddy_fonts::baseline_start(&cadaddy_fonts::TextFont::resolve(&ts.font), &t.value, &p);
+    if q.is_finite() { Vec3::new(q.x, q.y, a.z) } else { t.insert }
+}
+
+fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
+    w.p(10, text_insert(d, t));
     w.f(40, t.height);
     w.s(1, &t.value);
     if t.rotation != 0.0 {
@@ -1181,8 +1249,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             common_x(w, e, owner, paper, "AcDbText", None, f.as_ref().map(|f| f.1.as_str()));
             thickness(w, e);
             match &f {
-                Some((shown, _)) => text_tags(w, &Text { value: shown.clone(), ..t.clone() }, None, None),
-                None => text_tags(w, t, None, None),
+                Some((shown, _)) => text_tags(w, d, &Text { value: shown.clone(), ..t.clone() }, None, None),
+                None => text_tags(w, d, t, None, None),
             }
         }
         // Closed polylines, one per loop (`dxf_region`): REGION's own data is ACIS.
@@ -1205,8 +1273,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             let f = plan_fields(w, d, cx, &e.handle.hex(), e, 0, &a.text.value);
             common_x(w, e, owner, paper, "AcDbText", None, f.as_ref().map(|f| f.1.as_str()));
             match &f {
-                Some((shown, _)) => text_tags(w, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), Some(&a.prompt)),
-                None => text_tags(w, &a.text, Some((a, cx.target)), Some(&a.prompt)),
+                Some((shown, _)) => text_tags(w, d, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), Some(&a.prompt)),
+                None => text_tags(w, d, &a.text, Some((a, cx.target)), Some(&a.prompt)),
             }
             if cx.target >= Version::R2007 {
                 multiline_tags(w, a, true);
@@ -1293,8 +1361,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     }
                     w.s(100, "AcDbText");
                     match &f {
-                        Some((shown, _)) => text_tags(w, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), None),
-                        None => text_tags(w, &a.text, Some((a, cx.target)), None),
+                        Some((shown, _)) => text_tags(w, d, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), None),
+                        None => text_tags(w, d, &a.text, Some((a, cx.target)), None),
                     }
                     if cx.target >= Version::R2007 {
                         multiline_tags(w, a, false);
@@ -1962,8 +2030,16 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
     let style = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
     let g = cadaddy_render::dimension_in(d, dm);
     let mut out = Vec::new();
-    let c = Common { layer: layer.into(), color: Color::ByBlock, ..Common::default() };
-    for l in &g.lines {
+    // Each part in its style colour (DIMCLRD, DIMCLRE, DIMCLRT), ByBlock when the style says so,
+    // as AutoCAD writes them: readers that draw the block drew every part ByBlock, i.e. in the
+    // dimension's own colour (#1052).
+    let in_color = |color: Color| Common { layer: layer.into(), color, ..Common::default() };
+    let (dim_c, ext_c, text_c) = (in_color(style.dim_line_color), in_color(style.ext_line_color), in_color(style.text_color));
+    for (i, l) in g.lines.iter().enumerate() {
+        let c = match g.line_roles.get(i) {
+            Some(cadaddy_render::LineRole::Ext) => &ext_c,
+            _ => &dim_c,
+        };
         for seg in l.windows(2) {
             if let [a, b] = seg {
                 out.push(Entity { handle: Handle(0), common: c.clone(), kind: EntityKind::Line(Line { a: a.to3(0.0), b: b.to3(0.0) }) });
@@ -1974,7 +2050,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
         if let [a, b, cc] = t.as_slice() {
             out.push(Entity {
                 handle: Handle(0),
-                common: c.clone(),
+                common: dim_c.clone(),
                 kind: EntityKind::Solid(Solid { corners: [a.to3(0.0), b.to3(0.0), cc.to3(0.0), cc.to3(0.0)] }),
             });
         }
@@ -1982,7 +2058,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
     if !g.value.is_empty() {
         out.push(Entity {
             handle: Handle(0),
-            common: c,
+            common: text_c,
             kind: EntityKind::MText(MText {
                 background: None,
                 insert: g.text_pos.to3(0.0),
@@ -2008,8 +2084,11 @@ fn table_size(t: &Table) -> (usize, usize) {
 
 /// The anonymous `*T` block of a table: cell fills, borders and texts as its cell styles draw
 /// them, for readers that only draw the block.
-fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
-    let g = cadaddy_render::table_geometry(d, t);
+///
+/// The block is relative to its own origin: the ACAD_TABLE reference adds the insertion point.
+pub(crate) fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
+    let at_origin = Table { insert: Vec3::ZERO, ..t.clone() };
+    let g = cadaddy_render::table_geometry(d, &at_origin);
     let c = Common { layer: layer.into(), color: Color::ByBlock, ..Common::default() };
     let mut out = Vec::new();
     for f in &g.fills {
@@ -2122,37 +2201,133 @@ fn arrow_block_entities(kind: cadaddy_render::Arrowhead) -> Vec<Entity> {
     out
 }
 
+/// Whether the entities of the block `name` are the arrowhead block CADaddy writes for that
+/// standard arrow name ([`arrow_block_entities`]): the same lines and solids with the same
+/// properties (layer 0, ByBlock). Any other content (AutoCAD's own `_Dot`, a user's
+/// redefinition, an older CADaddy's geometry) is the file's.
+pub(crate) fn is_generated_arrow(name: &str, entities: &[&Entity]) -> bool {
+    let Some((_, kind)) = dxf_ext::arrow_block_name(name) else { return false };
+    let ours = arrow_block_entities(kind);
+    ours.len() == entities.len() && ours.iter().zip(entities).all(|(a, b)| a.kind == b.kind && a.common == b.common)
+}
+
+/// Whether a DIMASSOC point reference to `k` names a point of it without naming a segment:
+/// true for objects made of one curve. Polylines are referenced by segment ([`polyline_vertex_ref`]);
+/// 3D polylines and multilines can't be yet, and references to them are left out, as AutoCAD
+/// otherwise resolved them to the first segment and changed the dimension's value (#1049).
+fn whole_object_ref(k: &EntityKind) -> bool {
+    !matches!(k, EntityKind::LwPolyline(_) | EntityKind::Polyline3d(_) | EntityKind::MLine(_))
+}
+
+/// A polyline vertex as AutoCAD references it (#1049): an end of one of its two segments,
+/// which are numbered from 1 (segment k runs from vertex k−1 to vertex k; a closed polyline's
+/// closing segment is the last). Returns (osnap, parameter, segment): the end of the incoming
+/// segment (osnap 1, parameter 1.0), else the start of the outgoing one (osnap 13, 0.0). Only
+/// straight segments are used, whose parameters are 0 and 1; a vertex between two arcs gets no
+/// reference.
+pub(crate) fn polyline_vertex_ref(p: &LwPolyline, index: usize) -> Option<(i64, f64, i64)> {
+    let n = p.vertices.len();
+    if index >= n || n < 2 {
+        return None;
+    }
+    let segments = if p.closed { n } else { n - 1 };
+    // Segment k (1-based) starts at vertex k−1; its bulge is that vertex's.
+    let straight = |k: usize| k >= 1 && k <= segments && p.vertices.get(k - 1).is_some_and(|v| v.bulge == 0.0);
+    let incoming = if index == 0 { if p.closed { Some(n) } else { None } } else { Some(index) };
+    let outgoing = (index < segments).then_some(index + 1);
+    // Vertex 0 as the start of segment 1, the others as the end of the segment before, as
+    // AutoCAD writes them when it can.
+    let preferred = if index == 0 {
+        [outgoing.map(|k| (13, 0.0, k)), incoming.map(|k| (1, 1.0, k))]
+    } else {
+        [incoming.map(|k| (1, 1.0, k)), outgoing.map(|k| (13, 0.0, k))]
+    };
+    preferred.into_iter().flatten().find(|(_, _, k)| straight(*k)).map(|(o, t, k)| (o, t, i64::try_from(k).unwrap_or(0)))
+}
+
 /// Standard DIMASSOC point references of an associative dimension: the extension-line
 /// origins of linear/aligned dimensions and the feature point of ordinate dimensions, linked
-/// to objects that exist. CADaddy's exact links travel in xdata as well.
+/// to objects that exist ([`whole_object_ref`]). CADaddy's exact links travel in xdata as well.
 fn std_assoc_refs(d: &Drawing, dm: &Dimension) -> (i64, Vec<OsnapRef>) {
+    if matches!(dm.kind, DimKind::Radius | DimKind::Diameter) {
+        return radial_ref(d, &dm.assoc);
+    }
     let slots: &[&str] = match dm.kind {
         DimKind::Linear { .. } | DimKind::Aligned => &["p13", "p14"],
+        DimKind::Angular => &["p13", "p14", "p15", "p16"],
+        DimKind::Angular3P => &["p13", "p14", "p15"],
+        // Saved as an aligned dimension (`dim_xdata` marks it): its extension origins are the arc ends.
+        DimKind::ArcLength => &["p13", "p14"],
         DimKind::Ordinate { .. } => &["p13"],
-        _ => &[],
+        DimKind::Radius | DimKind::Diameter => &[],
     };
     let mut flags = 0;
     let mut refs = Vec::new();
     for (slot, name) in slots.iter().enumerate() {
         let Some(a) = dm.assoc.iter().find(|a| a.point == *name) else { continue };
         let Some(ent) = d.entity(a.handle) else { continue };
-        let point = if *name == "p13" { dm.p13 } else { dm.p14 };
+        let point = match *name {
+            "p13" => dm.p13,
+            "p14" => dm.p14,
+            "p15" => dm.p15,
+            "p16" => dm.p16,
+            _ => continue,
+        };
+        if let EntityKind::LwPolyline(p) = &ent.kind {
+            let index = match &a.snap {
+                AssocSnap::Vertex { index } => Some(*index),
+                AssocSnap::Start => Some(0),
+                AssocSnap::End => p.vertices.len().checked_sub(1),
+                _ => None,
+            };
+            let Some((osnap, param, segment)) = index.and_then(|i| polyline_vertex_ref(p, i)) else { continue };
+            flags |= 1 << slot;
+            refs.push(OsnapRef { osnap, main: a.handle, segment, param, point, other: None });
+            continue;
+        }
+        if !whole_object_ref(&ent.kind) {
+            continue;
+        }
         let (osnap, param, other) = match &a.snap {
-            AssocSnap::Start | AssocSnap::End | AssocSnap::Vertex { .. } => (1, 0.0, None),
+            // AutoCAD marks a curve's start with osnap 13 and its end with osnap 1 (group 72).
+            AssocSnap::Start => (if matches!(ent.kind, EntityKind::Point(_)) { 1 } else { 13 }, 0.0, None),
+            AssocSnap::End => (1, 1.0, None),
+            AssocSnap::Vertex { .. } => (1, 0.0, None),
             AssocSnap::Mid => (2, 0.0, None),
             AssocSnap::Center => (if matches!(ent.kind, EntityKind::Point(_)) { 4 } else { 3 }, 0.0, None),
             AssocSnap::OnCircle { angle } => (10, *angle, None),
             AssocSnap::Intersection { other } => {
-                if d.entity(*other).is_none() {
+                if !d.entity(*other).is_some_and(|o| whole_object_ref(&o.kind)) {
                     continue;
                 }
                 (6, 0.0, Some(*other))
             }
         };
         flags |= 1 << slot;
-        refs.push(OsnapRef { osnap, main: a.handle, param, point, other });
+        refs.push(OsnapRef { osnap, main: a.handle, segment: 0, param, point, other });
     }
     (flags, refs)
+}
+
+/// The single standard reference of a radial or diametric dimension: the circle or arc it
+/// measures, by its centre, with associativity flag 2. AutoCAD writes radial and diametric
+/// dimensions that way: the one reference names the geometry, whose radius or diameter the
+/// dimension then follows. Returns no flags and no references when the association does not name
+/// a circle or arc, so such a dimension is saved unassociated rather than pointing at nothing.
+fn radial_ref(d: &Drawing, assoc: &[DimAssoc]) -> (i64, Vec<OsnapRef>) {
+    for a in assoc {
+        let Some(ent) = d.entity(a.handle) else { continue };
+        let centre = match &ent.kind {
+            EntityKind::Circle(c) => c.center.xy(),
+            EntityKind::Arc(arc) => arc.center.xy(),
+            _ => continue,
+        };
+        if !centre.is_finite() {
+            continue;
+        }
+        return (2, vec![OsnapRef { osnap: 3, main: a.handle, segment: 0, param: 0.0, point: centre.to3(0.0), other: None }]);
+    }
+    (0, Vec::new())
 }
 
 /// Layouts with viewports but without the paper-space viewport (id 1, the sheet itself), keyed
@@ -2443,8 +2618,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
         }
     }
     // Pre-allocate handles for block records.
-    let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
-    paper_layouts.sort_by_key(|l| l.tab_order);
+    let paper_layouts = d.paper_space_layouts();
     let ms_br = w.h_kept("BLOCK_RECORD/*MODEL_SPACE");
     // The geographic location: model space's extension dictionary and its GEODATA object.
     let geo_handles: Option<(String, String)> = d.geo.as_ref().filter(|g| g.is_valid()).map(|_| (w.h(), w.h()));
@@ -3099,6 +3273,16 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
         };
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
+            // DIMPOST is written even when empty: a reader that defaults a missing one to "<>"
+            // (the DWG bridge's) would otherwise give radius and diameter dimensions no "R" or
+            // "Ø" in AutoCAD (#1053).
+            if *code == dxf_ext::DIMPOST
+                && let DimVal::Str(t) = &enc
+                && t.is_empty()
+            {
+                w.s(*code, "");
+                continue;
+            }
             let own = dxf_ext::STYLE_XDATA.contains(code);
             if !own && !dxf_ext::NEWER_CODES.contains(code) {
                 w.dimval(*code, enc, false);
@@ -3426,8 +3610,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
             w.s(1, "AcDbOsnapPointRef");
             w.i(72, r.osnap);
             w.s(331, r.main.hex());
-            w.i(73, 0);
-            w.i(91, 0);
+            w.i(73, if r.segment > 0 { 2 } else { 0 });
+            w.i(91, r.segment);
             w.s(301, "");
             w.f(40, r.param);
             w.p(10, r.point);
@@ -3488,10 +3672,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
                 (45, page.height_mm),
                 (46, 0.0),
                 (47, 0.0),
-                (48, 0.0),
-                (49, 0.0),
-                (140, 0.0),
-                (141, 0.0),
+                (48, page.plot_window[0]),
+                (49, page.plot_window[1]),
+                (140, page.plot_window[2]),
+                (141, page.plot_window[3]),
                 (142, scale),
                 (143, 1.0),
             ] {

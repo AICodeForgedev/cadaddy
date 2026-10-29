@@ -696,7 +696,7 @@ fn run_attredef(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("attredef", "`handles` (the objects of the new definition) is required"));
     }
     let description = s.doc()?.blocks.get(&name).map(|b| b.description.clone()).unwrap_or_default();
-    super::blocks::make_block(s, &name, base, &hs, "delete", &description)?;
+    super::blocks::make_block(s, &name, base, &hs, super::blocks::Keep::Delete, &description)?;
     let mut r = call(s, "attsync", &json!({ "name": name }))?;
     r["message"] = json!(format!("Block \"{name}\" redefined; its references keep the values of the attributes it still has."));
     Ok(r)

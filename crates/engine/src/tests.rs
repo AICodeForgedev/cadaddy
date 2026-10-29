@@ -4,6 +4,15 @@ use serde_json::json;
 
 use crate::*;
 
+/// A circle of any radius put straight into the drawing (as a file can hold one); the commands
+/// refuse sizes beyond the export limit.
+fn push_circle(s: &mut Session, radius: f64) {
+    use cadaddy_doc::{Circle, Common, Space};
+    let circle = Circle { center: cadaddy_geom::Vec3::new(0.0, 0.0, 0.0), radius };
+    let st = s.state_mut().unwrap();
+    std::sync::Arc::make_mut(&mut st.doc).add(&Space::Model, Common::default(), EntityKind::Circle(circle)).unwrap();
+}
+
 fn kinds(s: &Session) -> Vec<&'static str> {
     s.doc().unwrap().model.iter().map(|e| e.kind.type_name()).collect()
 }
@@ -259,8 +268,9 @@ fn properties_set_circle_size_and_dim_style() {
         s.execute("properties.set", &json!({"handles": [c.hex()], "circumference": v, "area": v})).unwrap();
         assert!((radius(&s) - 3.0).abs() < 1e-12, "{v}");
     }
-    s.execute("properties.set", &json!({"handles": [c.hex()], "area": 1e308})).unwrap();
-    assert!(radius(&s).is_finite());
+    // A size beyond the export limit is refused, and the circle stays as it was.
+    assert!(s.execute("properties.set", &json!({"handles": [c.hex()], "area": 1e308})).is_err());
+    assert!(radius(&s).is_finite() && (radius(&s) - 3.0).abs() < 1e-12);
 
     s.execute("dimstyle", &json!({"name": "Big", "current": false})).unwrap();
     s.execute("dimlinear", &json!({"p1": [0, 0], "p2": [3, 8], "at": [6, 4]})).unwrap();
@@ -527,7 +537,7 @@ fn zoom_extents_fits_the_finite_part_when_geometry_is_huge() {
         let mut s = Session::new();
         s.viewport_px = (1000.0, 500.0);
         s.execute("line", &json!({"points": [[0, 0], [100, 10]]})).unwrap();
-        s.execute("circle", &json!({"center": [0, 0], "radius": r})).unwrap();
+        push_circle(&mut s, r);
         s.execute("zoom.extents", &json!({})).unwrap();
         let v = s.state().unwrap().view();
         assert!(v.center.is_finite() && v.height.is_finite() && v.height <= VIEW_LIMIT, "radius {r}: {v:?}");
@@ -539,7 +549,7 @@ fn zoom_extents_fits_the_finite_part_when_geometry_is_huge() {
 fn zoom_extents_with_only_huge_geometry_is_finite() {
     let mut s = Session::new();
     s.viewport_px = (1000.0, 500.0);
-    s.execute("circle", &json!({"center": [0, 0], "radius": 1e200})).unwrap();
+    push_circle(&mut s, 1e200);
     s.execute("zoom.extents", &json!({})).unwrap();
     let v = s.state().unwrap().view();
     assert!(v.center.is_finite() && v.height.is_finite() && v.height > 0.0 && v.height <= VIEW_LIMIT, "{v:?}");
@@ -1414,4 +1424,73 @@ fn hostile_variable_like_input_never_panics() {
     // The session is still usable afterwards.
     s.cmdline("pickadd").unwrap();
     assert!(setvar_prompt_open(&s));
+}
+
+/// JSON count and distance parameters follow the typed rules: each bad value class (zero,
+/// negative, fraction, text) is refused, the error names the parameter, and nothing is drawn.
+#[test]
+fn json_counts_and_distances_match_typed_rules() {
+    let bad_counts = [json!(0), json!(-1), json!(2.5), json!("3"), json!(-0.5)];
+    // (command, extra params, the parameter under test, extra bad values for that command)
+    let cases: Vec<(&str, serde_json::Value, &str)> = vec![
+        ("copy", json!({"delta": [0, 5]}), "count"),
+        ("arrayrect", json!({"rowSpacing": 1, "colSpacing": 1}), "rows"),
+        ("arrayrect", json!({"rowSpacing": 1, "colSpacing": 1}), "cols"),
+        ("arrayrect", json!({"rowSpacing": 1, "colSpacing": 1}), "levels"),
+        ("arraypolar", json!({"center": [20, 20]}), "count"),
+        ("arraypolar", json!({"center": [20, 20]}), "rows"),
+        ("arraypolar", json!({"center": [20, 20]}), "levels"),
+        ("array", json!({"type": "rectangular", "rowSpacing": 1, "colSpacing": 1}), "rows"),
+        ("undo", json!({}), "count"),
+        ("redo", json!({}), "count"),
+    ];
+    for (cmd, extra, key) in &cases {
+        for v in &bad_counts {
+            let mut s = Session::new();
+            s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+            let l = json!({"handle": s.doc().unwrap().model.handles()[0].hex()});
+            let before = s.doc().unwrap().model.handles().len();
+            let mut p = extra.clone();
+            p["handles"] = json!([l["handle"]]);
+            p[*key] = v.clone();
+            let e = s.execute(cmd, &p).expect_err(&format!("{cmd} {key}={v} must be refused"));
+            assert!(e.to_string().contains(key), "{cmd} {key}={v}: the error names the parameter: {e}");
+            assert_eq!(s.doc().unwrap().model.handles().len(), before, "{cmd} {key}={v} drew something");
+        }
+    }
+    // Path array, divide and polygon counts.
+    for v in &bad_counts {
+        let mut s = Session::new();
+        s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+        let l = json!({"handle": s.doc().unwrap().model.handles()[0].hex()});
+        let c = s.execute("circle", &json!({"center": [0, 5], "radius": 1})).unwrap();
+        let e = s.execute("arraypath", &json!({"handles": [c["handle"]], "path": l["handle"], "count": v})).unwrap_err();
+        assert!(e.to_string().contains("count"), "arraypath count={v}: {e}");
+        let e = s.execute("divide", &json!({"handle": l["handle"], "segments": v})).unwrap_err();
+        assert!(e.to_string().contains("segments"), "divide segments={v}: {e}");
+        let e = s.execute("polygon", &json!({"center": [0, 0], "radius": 1, "sides": v})).unwrap_err();
+        assert!(e.to_string().contains("sides"), "polygon sides={v}: {e}");
+    }
+    for n in [1, 2, 1025, 100_000] {
+        let mut s = Session::new();
+        assert!(s.execute("polygon", &json!({"center": [0, 0], "radius": 1, "sides": n})).is_err(), "sides {n}");
+    }
+    // Offset distance and measure length must be positive numbers.
+    let mut s = Session::new();
+    s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+    let l = json!({"handle": s.doc().unwrap().model.handles()[0].hex()});
+    let before = s.doc().unwrap().model.handles().len();
+    for d in [json!(0), json!(-1), json!(-0.0), json!("2"), json!(null)] {
+        let e = s.execute("offset", &json!({"handle": l["handle"], "distance": d, "side": [5, 5]})).unwrap_err();
+        assert!(e.to_string().contains("distance"), "offset distance={d}: {e}");
+    }
+    for d in [json!(0), json!(-1), json!("2")] {
+        let e = s.execute("measure", &json!({"handle": l["handle"], "length": d})).unwrap_err();
+        assert!(e.to_string().contains("length"), "measure length={d}: {e}");
+    }
+    assert_eq!(s.doc().unwrap().model.handles().len(), before);
+    // The valid forms still work, including a whole number written as 3.0.
+    s.execute("offset", &json!({"handle": l["handle"], "distance": 2, "side": [5, 5]})).unwrap();
+    let r = s.execute("copy", &json!({"handles": [l["handle"]], "delta": [0, 5], "count": 3.0})).unwrap();
+    assert_eq!(r["handles"].as_array().unwrap().len(), 3);
 }

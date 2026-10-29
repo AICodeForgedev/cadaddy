@@ -472,6 +472,8 @@ pub struct CadApp {
     shown_contrast: bool,
     /// Whether egui was last told to animate (`None` until the first frame).
     shown_animations: Option<bool>,
+    /// The interface scale last handed to egui (`None` until the first frame).
+    shown_interface_scale: Option<f32>,
     pub frame_ms: f64,
     pub quit_requested: bool,
     /// A web page to open in the browser on the next frame (Report a Bug, Donate).
@@ -589,6 +591,7 @@ impl CadApp {
             shown_follows_system: false,
             shown_contrast: false,
             shown_animations: None,
+            shown_interface_scale: None,
             frame_ms: 0.0,
             quit_requested: false,
             pending_url: None,
@@ -1212,6 +1215,13 @@ impl CadApp {
         }
         let t1 = now_ms();
         self.note_time("logicBeforeControl", t1 - t0);
+        // Applied only when the saved scale changes, so egui's own keyboard zoom keeps working
+        // within a session (and is never saved).
+        let scale = self.options.interface_scale;
+        if self.shown_interface_scale != Some(scale) {
+            ctx.set_zoom_factor(scale);
+            self.shown_interface_scale = Some(scale);
+        }
         self.drain_control(ctx);
         let t2 = now_ms();
         self.note_time("control", t2 - t1);
@@ -1299,6 +1309,9 @@ impl CadApp {
             chrome::file_tabs(self, ui);
         }
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
+        if has_doc && !self.ui.show_toolsets {
+            palettes::toolsets_strip(self, ui);
+        }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             // Walk mode shows in the drawing's own tab (docking), the palettes beside it.
             if has_doc {

@@ -392,8 +392,8 @@ fn install_io() {
     });
 }
 
-fn open(s: &mut Session, path: &str) -> Result<(), String> {
-    s.execute("open", &json!({ "path": path })).map(|_| ()).map_err(|e| e.to_string())
+fn open(s: &mut Session, path: &str) -> Result<Value, String> {
+    s.execute("open", &json!({ "path": path })).map_err(|e| e.to_string())
 }
 
 #[derive(Clone, Copy)]
@@ -427,41 +427,54 @@ const NO_OPTIONS: &[OptionSpec] = &[];
 /// what each kind of chunk takes, the bytes earlier saves left behind). `full` adds entity
 /// details and container internals; the default is a compact summary.
 fn info(path: &str, full: bool) -> Result<(), String> {
+    let v = info_value(path, full)?;
+    outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    Ok(())
+}
+
+/// The document [`info`] prints. What opening the file said about it (a damaged index, parts it
+/// lost) is in `warnings`, as `open` reports it.
+fn info_value(path: &str, full: bool) -> Result<Value, String> {
     let container = std::fs::read(path).ok().and_then(|bytes| {
         let m = cadaddy_io::cdy::manifest(&bytes)?;
         let check = cadaddy_io::cdy::verify(&bytes).unwrap_or_default();
         Some(json!({ "manifest": m, "chunks": check["sizes"], "waste": check["waste"], "bytes": bytes.len() }))
     });
     let mut s = Session::for_app();
-    open(&mut s, path)?;
+    let opened = open(&mut s, path)?;
     let mut v = s.execute("drawing.inspect", &json!({ "entities": false })).map_err(|e| e.to_string())?;
     if let (Some(obj), Some(serde_json::Value::Object(c))) = (v.as_object_mut(), container) {
         obj.extend(c);
     }
-    if full {
-        outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-    } else {
-        // Short summary: file, format, entities, extents, units, layer/block counts.
-        let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("?");
-        let entities = v.get("entityCount").and_then(Value::as_u64).unwrap_or(0);
-        let layers = v.get("layers").and_then(Value::as_array).map_or(0, Vec::len);
-        let blocks = v.get("blocks").and_then(Value::as_array).map_or(0, Vec::len);
-        let units = v.get("units").and_then(Value::as_str).unwrap_or("?");
-        let extents = v.get("extents").cloned().unwrap_or(Value::Null);
-        let short = json!({
-            "file": path,
-            "format": ext,
-            "entities": entities,
-            "layers": layers,
-            "blocks": blocks,
-            "units": units,
-            "extents": extents,
-            // Records a damaged file lost stay visible without --full.
-            "skipped": v.get("skipped").cloned().unwrap_or(Value::Null),
-        });
-        outln!("{}", serde_json::to_string_pretty(&short).unwrap_or_default());
+    let warnings = opened.get("warnings").cloned().filter(|w| w.as_array().is_some_and(|a| !a.is_empty()));
+    if let (Some(obj), Some(w)) = (v.as_object_mut(), &warnings) {
+        obj.insert("warnings".into(), w.clone());
     }
-    Ok(())
+    if full {
+        return Ok(v);
+    }
+    // Short summary: file, format, entities, extents, units, layer/block counts.
+    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("?");
+    let entities = v.get("entityCount").and_then(Value::as_u64).unwrap_or(0);
+    let layers = v.get("layers").and_then(Value::as_array).map_or(0, Vec::len);
+    let blocks = v.get("blocks").and_then(Value::as_array).map_or(0, Vec::len);
+    let units = v.get("units").and_then(Value::as_str).unwrap_or("?");
+    let extents = v.get("extents").cloned().unwrap_or(Value::Null);
+    let mut short = json!({
+        "file": path,
+        "format": ext,
+        "entities": entities,
+        "layers": layers,
+        "blocks": blocks,
+        "units": units,
+        "extents": extents,
+        // Records a damaged file lost stay visible without --full.
+        "skipped": v.get("skipped").cloned().unwrap_or(Value::Null),
+    });
+    if let (Some(obj), Some(w)) = (short.as_object_mut(), warnings) {
+        obj.insert("warnings".into(), w);
+    }
+    Ok(short)
 }
 
 fn export(s: &Session, out: &str) -> Result<(), String> {
@@ -546,6 +559,11 @@ fn convert_file(i: &str, o: &str, framing: Framing) -> Result<(), String> {
     if let Some(m) = skipped_message(s.doc().map_err(|e| e.to_string())?, i) {
         eprintln!("{m}");
     }
+    if cadaddy_io::is_image(o)
+        && let Some(m) = undrawn_message(s.doc().map_err(|e| e.to_string())?, i)
+    {
+        eprintln!("{m}");
+    }
     let window = export_window(&s, framing, None)?;
     export_framed(&s, o, window)
 }
@@ -602,16 +620,29 @@ fn verify(path: &str) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let check = cadaddy_io::cdy::verify(&bytes).map_err(|e| format!("{path}: {e}"))?;
     outln!("{}", serde_json::to_string_pretty(&check).unwrap_or_default());
-    if check["ok"] == json!(true) {
-        Ok(())
-    } else {
-        let bad = check["chunks"].as_array().map_or(0, |c| c.iter().filter(|c| c.get("damage").is_some() && c["live"] == json!(true)).count());
-        Err(format!("{path}: damaged ({bad} damaged parts, index {}; see the report)", check["index"].as_str().unwrap_or("?")))
+    match verify_failure(path, &check) {
+        Some(why) => Err(why),
+        None => Ok(()),
     }
 }
 
-/// `check-import FILE.cdy [--json]`: run import accuracy checks on a drawing file.
-/// Exit 1 on fail.
+/// Why `check` (from [`cadaddy_io::cdy::verify`]) is not a clean bill of health, in words; `None`
+/// when it is clean. Bytes after the end of a sound file are named as that, not as damage.
+fn verify_failure(path: &str, check: &Value) -> Option<String> {
+    if check["ok"] == json!(true) {
+        return None;
+    }
+    let damaged = |c: &Value| c.get("damage").is_some();
+    let chunks = check["chunks"].as_array();
+    if let Some(n) = check["trailing"].as_u64().filter(|n| *n > 0)
+        && chunks.is_some_and(|c| !c.iter().any(damaged))
+    {
+        return Some(format!("{path}: {n} bytes of trailing data after the end of the file (the drawing before them is sound)"));
+    }
+    let bad = chunks.map_or(0, |c| c.iter().filter(|c| damaged(c) && c["live"] == json!(true)).count());
+    Some(format!("{path}: damaged ({bad} damaged parts, index {}; see the report)", check["index"].as_str().unwrap_or("?")))
+}
+
 /// `cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]`: one-call PDF → BIM pipeline.
 fn bim(args: &[String]) -> Result<(), String> {
     let mut path: Option<&str> = None;
@@ -709,6 +740,25 @@ fn plot(args: &[String]) -> Result<(), String> {
     if failed == 0 { Ok(()) } else { Err(format!("{failed} drawing(s) could not be plotted")) }
 }
 
+/// The warning for the model-space entities of `path` an image can't show, by type (those kept
+/// as unknown objects, `Proxy` in `info`), or `None` when there are none.
+fn undrawn_message(d: &cadaddy_engine::doc::Drawing, path: &str) -> Option<String> {
+    let mut types: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for e in d.model.iter() {
+        if let cadaddy_engine::doc::EntityKind::Unknown(u) = &e.kind {
+            let n = types.entry(u.dxf_type.as_str()).or_insert(0);
+            *n = n.saturating_add(1);
+        }
+    }
+    let n = types.values().fold(0usize, |a, n| a.saturating_add(*n));
+    if n == 0 {
+        return None;
+    }
+    let list: Vec<String> = types.iter().map(|(t, n)| format!("{t}: {n}")).collect();
+    let entities = if n == 1 { "entity" } else { "entities" };
+    Some(format!("{path}: {n} {entities} not drawn ({})", list.join(", ")))
+}
+
 /// The warning for the records of `path` the reader could not place, or `None` when there are none.
 fn skipped_message(d: &cadaddy_engine::doc::Drawing, path: &str) -> Option<String> {
     let n = d.skipped_records.values().fold(0usize, |a, n| a.saturating_add(*n));
@@ -758,7 +808,7 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             "--save" => save = Some(it.next().ok_or("--save needs a path")?.clone()),
             "--export" => exp = Some(it.next().ok_or("--export needs a path")?.clone()),
-            f if !f.starts_with("--") => open(&mut s, f)?,
+            f if !f.starts_with("--") => open(&mut s, f).map(|_| ())?,
             other => return Err(format!("unknown option {other}")),
         }
     }
@@ -1060,7 +1110,7 @@ enum McpTarget {
 
 /// Parses the arguments after `mcp`. `--connect` must be followed by a `HOST:PORT`; a missing,
 /// empty or flag-like value is an error, never a silent fall back to a headless session (#103).
-/// When no `--connect` is given, `CADADDY_CONTROL_PORT` and the legacy `CADCRAFT_CONTROL_PORT` are
+/// When no `--connect` is given, `CADADDY_CONTROL_PORT` and the legacy `CADADDY_CONTROL_PORT` are
 /// checked: a port there becomes `--connect 127.0.0.1:PORT --launch`.
 fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
     let mut addr: Option<String> = None;
@@ -1088,10 +1138,9 @@ fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
             other => return Err(format!("mcp: unknown argument {other}\n{USAGE}")),
         }
     }
-    // When no --connect is given, check CADADDY_CONTROL_PORT / CADCRAFT_CONTROL_PORT.
+    // When no --connect is given, check CADADDY_CONTROL_PORT / CADADDY_CONTROL_PORT.
     if addr.is_none() && !headless {
-        let port_str =
-            std::env::var("CADADDY_CONTROL_PORT").or_else(|_| std::env::var("CADCRAFT_CONTROL_PORT")).ok().filter(|v| !v.trim().is_empty());
+        let port_str = std::env::var("CADADDY_CONTROL_PORT").or_else(|_| std::env::var("CADADDY_CONTROL_PORT")).ok().filter(|v| !v.trim().is_empty());
         if let Some(ps) = port_str {
             let p = ps.trim();
             if let Ok(port) = p.parse::<u16>() {
@@ -1194,7 +1243,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
         watch_events(addr, out.clone());
         server = server.with_event_watcher();
     }
-    server.serve(stdin.lock(), out).map_err(|e| e.to_string())
+    server.serve_cancellable(std::io::BufReader::new(stdin), out).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1571,5 +1620,56 @@ mod tests {
         assert_eq!(validate_options("info", &args(&["missing.dxf", "--typo"]), NO_OPTIONS), Err("info: unknown option --typo".into()));
         assert_eq!(validate_options("perf", &args(&["1", "--typo"]), NO_OPTIONS), Err("perf: unknown option --typo".into()));
         assert_eq!(validate_options("sample", &args(&["bracket", "out.dxf", "--typo"]), NO_OPTIONS), Err("sample: unknown option --typo".into()));
+    }
+}
+
+#[cfg(test)]
+mod b4polish_tests {
+    use super::*;
+
+    fn temp_file(tag: &str, bytes: &[u8]) -> String {
+        let dir = std::env::temp_dir().join(format!("cadaddy-cli-b4-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sample.cdy");
+        std::fs::write(&path, bytes).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    /// B4-028: `info` reports what opening a damaged file said, in the short summary too.
+    #[test]
+    fn info_reports_the_warnings_open_does() {
+        let good = cadaddy_io::write(&cadaddy_engine::sample::floor_plan(), "a.cdy").unwrap();
+        install_io();
+        let path = temp_file("cut", &good[..good.len() / 2]);
+        let mut s = Session::for_app();
+        let opened = open(&mut s, &path).unwrap();
+        let said = opened["warnings"].as_array().cloned().unwrap_or_default();
+        assert!(!said.is_empty(), "open said nothing about a cut-short file: {opened}");
+        for full in [false, true] {
+            let v = info_value(&path, full).unwrap();
+            assert_eq!(v["warnings"].as_array(), Some(&said), "full={full}: {v}");
+        }
+        // A sound file has none.
+        let ok = temp_file("ok", &good);
+        assert!(info_value(&ok, false).unwrap().get("warnings").is_none());
+    }
+
+    /// B4-031: `verify` on a file with only bytes appended says exactly that.
+    #[test]
+    fn verify_names_trailing_data() {
+        let good = cadaddy_io::write(&cadaddy_engine::sample::floor_plan(), "a.cdy").unwrap();
+        let check = cadaddy_io::cdy::verify(&good).unwrap();
+        assert_eq!(verify_failure("f.cdy", &check), None);
+        let mut longer = good.clone();
+        longer.extend_from_slice(&[0u8; 1234]);
+        let why = verify_failure("f.cdy", &cadaddy_io::cdy::verify(&longer).unwrap()).unwrap();
+        assert!(why.contains("1234 bytes of trailing data after the end") && !why.contains("damaged"), "{why}");
+        // Real damage is still damage.
+        let mut hurt = good.clone();
+        if let Some(b) = hurt.get_mut(200) {
+            *b ^= 0xff;
+        }
+        let why = verify_failure("f.cdy", &cadaddy_io::cdy::verify(&hurt).unwrap()).unwrap();
+        assert!(why.contains("damaged"), "{why}");
     }
 }

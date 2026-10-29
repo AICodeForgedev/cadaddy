@@ -1213,6 +1213,24 @@ fn bak_path(path: &str) -> String {
     std::path::Path::new(path).with_extension("bak").to_string_lossy().into_owned()
 }
 
+/// The longest file name (one path component, in bytes) the file systems CADaddy saves to accept.
+const MAX_NAME_BYTES: usize = 255;
+
+/// An error naming the limit when the file name (or the `.bak` kept beside it) is longer than a
+/// file system takes, instead of the operating system's "File name too long (os error 63)".
+fn name_fits(path: &str) -> Result<()> {
+    let p = std::path::Path::new(path);
+    let len = |p: &std::path::Path| p.file_name().map_or(0, |n| n.len());
+    let longest = len(p).max(len(std::path::Path::new(&bak_path(path))));
+    if longest > MAX_NAME_BYTES {
+        return Err(bad(
+            "save",
+            format!("the file name is too long ({longest} bytes; the limit is {MAX_NAME_BYTES}). Save it under a shorter name."),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn store(path: &str, bytes: &[u8]) -> Result<()> {
     store_keeping(path, bytes, true)
 }
@@ -1221,6 +1239,7 @@ pub(crate) fn store(path: &str, bytes: &[u8]) -> Result<()> {
 /// (DWGCOPY) keeps none, as its `.bak` would replace the drawing's own.
 pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<()> {
     crate::writefile::protected(std::path::Path::new(path)).map_err(|e| bad("save", e.to_string()))?;
+    name_fits(path)?;
     // An agent's dry run changes nothing, files included.
     if !crate::agent::writes_allowed() {
         return Err(crate::EngineError::Other(format!("Dry run: {path} was not written.")));

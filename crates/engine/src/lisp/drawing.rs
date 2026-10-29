@@ -304,13 +304,7 @@ fn list_to_groups(list: &Value) -> Result<(String, Vec<Tag>), LispError> {
     }
     let kind = kind.ok_or_else(|| LispError::new("bad DXF group: no entity type (0)"))?;
     // Angles come in radians, as entget lists them; DXF holds most in degrees.
-    if degree_angles(&kind) {
-        for t in &mut tags {
-            if angle_code(t.code) && matches!(t.value, cadaddy_dxf::Value::Real(_) | cadaddy_dxf::Value::Int(_)) {
-                *t = Tag::f(t.code, t.value.as_f64().to_degrees());
-            }
-        }
-    }
+    convert_angles(&kind, &mut tags, f64::to_degrees);
     Ok((kind, tags))
 }
 
@@ -332,20 +326,37 @@ fn angle_code(code: i32) -> bool {
     (50..=58).contains(&code)
 }
 
+/// Converts the angle groups (50–58) of a record with `f`: degrees in a DXF record, radians in an
+/// entity list. An MTEXT's 50 after its column type (75) is a column height, left alone.
+fn convert_angles(kind: &str, tags: &mut [Tag], f: fn(f64) -> f64) {
+    if !degree_angles(kind) && !kind.eq_ignore_ascii_case("MTEXT") {
+        return;
+    }
+    let mtext = kind.eq_ignore_ascii_case("MTEXT");
+    for t in tags {
+        if mtext && t.code == 75 {
+            break;
+        }
+        if !angle_code(t.code) {
+            continue;
+        }
+        let v = match t.value {
+            cadaddy_dxf::Value::Real(r) => r,
+            cadaddy_dxf::Value::Int(i) => i as f64,
+            _ => continue,
+        };
+        t.value = cadaddy_dxf::Value::Real(f(v));
+    }
+}
+
 /// A record's groups as `entget` lists them: angles in radians, the groups a TEXT or an
 /// attribute always has in AutoCAD added at their defaults when the file leaves them out, and
 /// extended data (1000 and up) only for the applications asked for, as `(-3 ("APP" …))`.
 fn entget_items(kind: &str, tags: &[Tag], apps: &[String]) -> (Vec<Value>, Option<Value>) {
     let split = tags.iter().position(|t| t.code >= 1000).unwrap_or(tags.len());
     let (own, xdata) = tags.split_at(split);
-    let mut own: Vec<Tag> = own
-        .iter()
-        .map(|t| match (&t.value, degree_angles(kind) && angle_code(t.code)) {
-            (cadaddy_dxf::Value::Real(r), true) => Tag::f(t.code, r.to_radians()),
-            (cadaddy_dxf::Value::Int(i), true) => Tag::f(t.code, (*i as f64).to_radians()),
-            _ => t.clone(),
-        })
-        .collect();
+    let mut own: Vec<Tag> = own.to_vec();
+    convert_angles(kind, &mut own, f64::to_radians);
     let up = kind.to_ascii_uppercase();
     if matches!(up.as_str(), "TEXT" | "ATTRIB" | "ATTDEF") {
         let has = |own: &[Tag], c: i32| own.iter().any(|t| t.code == c);
@@ -935,6 +946,9 @@ fn matches_filter(d: &cadaddy_doc::Drawing, e: &Entity, f: &Filter) -> bool {
     let groups = || match crate::cmd::file::entity_codec() {
         Some(c) => {
             let (kind, tags) = (c.groups)(d, e);
+            // Compared against the values entget shows: angles in radians (#1165).
+            let mut tags = tags;
+            convert_angles(&kind, &mut tags, f64::to_radians);
             let mut l = vec![Value::cons(Value::Int(0), Value::str(&kind))];
             l.extend(groups_to_list(&tags));
             l

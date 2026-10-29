@@ -151,7 +151,7 @@ fn run_undo(s: &mut Session, p: &Value) -> Result<Value> {
             if control == Control::None {
                 return Err(undo_off());
             }
-            let n = p.get("count").and_then(Value::as_u64).unwrap_or(1).clamp(1, 1000);
+            let n = count_param("undo", p, "count", 1, 1000)?.unwrap_or(1);
             // Undoing inside a BEgin group ends it: the whole group is undone as one step.
             s.state_mut()?.end_undo_group();
             let mut labels = Vec::new();
@@ -412,7 +412,7 @@ fn redo_steps(s: &mut Session, n: u64) -> Result<Value> {
 }
 
 fn run_redo(s: &mut Session, p: &Value) -> Result<Value> {
-    redo_steps(s, p.get("count").and_then(Value::as_u64).unwrap_or(1).clamp(1, 1000))
+    redo_steps(s, count_param("redo", p, "count", 1, 1000)?.unwrap_or(1))
 }
 
 /// MREDO: `{count}` steps, or `{all: true}` every undone step.
