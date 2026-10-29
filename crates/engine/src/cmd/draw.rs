@@ -197,13 +197,7 @@ fn run_arc(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_polygon(s: &mut Session, p: &Value) -> Result<Value> {
     // A `sides` that is not a whole number (e.g. -3) is refused, not replaced by the default 4.
-    let n = match p.get("sides") {
-        None | Some(Value::Null) => 4,
-        Some(v) => v.as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0),
-    };
-    if !(3..=1024).contains(&n) {
-        return Err(bad("polygon", "sides must be 3..1024"));
-    }
+    let n = usize::try_from(count_param("polygon", p, "sides", 3, 1024)?.unwrap_or(4)).unwrap_or(4);
     let vs = if let Some(e) = points_param(p, "edge") {
         let (Some(a), Some(b)) = (e.first(), e.get(1)) else { return Err(bad("polygon", "edge needs 2 points")) };
         if a.near(*b, 1e-12) {
