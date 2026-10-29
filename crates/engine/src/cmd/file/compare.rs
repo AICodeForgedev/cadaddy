@@ -18,6 +18,8 @@ use super::super::*;
 use super::{base64_decode, io};
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
+mod export;
+
 /// Objects compared per drawing; more are left out (and the result says so).
 pub const MAX_OBJECTS: usize = 200_000;
 /// Objects listed per kind of difference in the JSON result.
@@ -38,6 +40,9 @@ pub struct Comparison {
     pub other_name: String,
     /// The other drawing (its objects are drawn where they differ).
     pub other: Arc<Drawing>,
+    /// The other drawing's file, when it has one: COMPAREEXPORT resolves its relative xref
+    /// paths from that file's folder.
+    pub other_path: Option<String>,
     /// Only in this drawing (handles here).
     pub added: Vec<Handle>,
     /// Only in the other drawing (handles there).
@@ -96,6 +101,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("compare.next", "Next Change", |s, _| step(s, 1)).params("→ {region, of}: zoom to the next area with changes").noundo(),
         CommandSpec::new("compare.previous", "Previous Change", |s, _| step(s, -1)).params("→ {region, of}").noundo(),
         CommandSpec::new("compareclose", "Close Comparison", run_close).params("{}: end the comparison and its overlay").noundo(),
+        export::spec(),
         CommandSpec::new("compareexport", "Export Comparison Report...", run_export)
             .params(
                 "{path?: .html file (else returns `html`)} → {path?, rows}: the last COMPARE as an HTML report: a summary per layout, then \
@@ -399,6 +405,7 @@ fn space_name(space: &Space) -> String {
 
 fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
     let (other, name) = other_drawing(s, p)?;
+    let other_path = export::source_path(s, p, &other);
     let st = s.state()?;
     let (uid, space, cur) = (st.uid, st.space.clone(), st.doc.clone());
     if Arc::ptr_eq(&cur, &other) {
@@ -482,7 +489,7 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
         "message": message,
     });
     let changed = changed.into_iter().map(|(a, b, _, _)| (a, b)).collect();
-    s.compare = Some(Comparison { uid, space, other_name: name, other, added, removed, changed, common, truncated, regions, at: None, layouts });
+    s.compare = Some(Comparison { uid, space, other_name: name, other, other_path, added, removed, changed, common, truncated, regions, at: None, layouts });
     s.touch();
     Ok(out)
 }
