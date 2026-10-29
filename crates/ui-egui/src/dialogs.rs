@@ -183,7 +183,10 @@ fn polar_tab(ui: &mut egui::Ui, s: &mut cadaddy_engine::Settings) {
     if ui.checkbox(&mut s.polarmode, crate::tl!("Polar Tracking On (F10)")).changed() && s.polarmode {
         s.orthomode = false;
     }
-    let mut deg = s.polarang.to_degrees();
+    // POLARANG is held in radians and 15 or 30 come back as 14.999999999999998: round like the
+    // additional angles, and write back only a newly picked angle.
+    let current = (s.polarang.to_degrees() * 1e6).round() / 1e6;
+    let mut deg = current;
     ui.horizontal(|ui| {
         ui.label(crate::tl!("Increment angle"));
         egui::ComboBox::from_id_salt("polarang").selected_text(format!("{deg}")).show_ui(ui, |ui| {
@@ -192,7 +195,9 @@ fn polar_tab(ui: &mut egui::Ui, s: &mut cadaddy_engine::Settings) {
             }
         });
     });
-    s.polarang = deg.to_radians();
+    if deg != current {
+        s.polarang = deg.to_radians();
+    }
     tracking_options(ui, s);
 }
 
