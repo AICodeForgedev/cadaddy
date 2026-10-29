@@ -326,7 +326,9 @@ fn revcloud_json() {
     s.execute("revcloud", &json!({"handle": c, "arcLength": 0.5})).unwrap();
     assert_eq!(s.doc().unwrap().model.len(), n, "the circle is replaced");
     assert!(s.execute("revcloud", &json!({"points": [[0, 0], [1, 1], [2, 2]]})).is_err());
-    assert!(s.execute("revcloud", &json!({"p1": [0, 0], "p2": [1e300, 1e300], "arcLength": 1e-300})).is_ok());
+    // Hostile sizes end without a hang or a panic: refused, as the cloud would lie beyond the export limit.
+    let e = s.execute("revcloud", &json!({"p1": [0, 0], "p2": [1e300, 1e300], "arcLength": 1e-300}));
+    assert!(e.is_ok() || e.unwrap_err().to_string().contains("too large"));
 }
 
 #[test]

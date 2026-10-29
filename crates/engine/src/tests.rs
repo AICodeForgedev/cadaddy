@@ -4,6 +4,15 @@ use serde_json::json;
 
 use crate::*;
 
+/// A circle of any radius put straight into the drawing (as a file can hold one); the commands
+/// refuse sizes beyond the export limit.
+fn push_circle(s: &mut Session, radius: f64) {
+    use cadaddy_doc::{Circle, Common, Space};
+    let circle = Circle { center: cadaddy_geom::Vec3::new(0.0, 0.0, 0.0), radius };
+    let st = s.state_mut().unwrap();
+    std::sync::Arc::make_mut(&mut st.doc).add(&Space::Model, Common::default(), EntityKind::Circle(circle)).unwrap();
+}
+
 fn kinds(s: &Session) -> Vec<&'static str> {
     s.doc().unwrap().model.iter().map(|e| e.kind.type_name()).collect()
 }
@@ -259,8 +268,9 @@ fn properties_set_circle_size_and_dim_style() {
         s.execute("properties.set", &json!({"handles": [c.hex()], "circumference": v, "area": v})).unwrap();
         assert!((radius(&s) - 3.0).abs() < 1e-12, "{v}");
     }
-    s.execute("properties.set", &json!({"handles": [c.hex()], "area": 1e308})).unwrap();
-    assert!(radius(&s).is_finite());
+    // A size beyond the export limit is refused, and the circle stays as it was.
+    assert!(s.execute("properties.set", &json!({"handles": [c.hex()], "area": 1e308})).is_err());
+    assert!(radius(&s).is_finite() && (radius(&s) - 3.0).abs() < 1e-12);
 
     s.execute("dimstyle", &json!({"name": "Big", "current": false})).unwrap();
     s.execute("dimlinear", &json!({"p1": [0, 0], "p2": [3, 8], "at": [6, 4]})).unwrap();
@@ -527,7 +537,7 @@ fn zoom_extents_fits_the_finite_part_when_geometry_is_huge() {
         let mut s = Session::new();
         s.viewport_px = (1000.0, 500.0);
         s.execute("line", &json!({"points": [[0, 0], [100, 10]]})).unwrap();
-        s.execute("circle", &json!({"center": [0, 0], "radius": r})).unwrap();
+        push_circle(&mut s, r);
         s.execute("zoom.extents", &json!({})).unwrap();
         let v = s.state().unwrap().view();
         assert!(v.center.is_finite() && v.height.is_finite() && v.height <= VIEW_LIMIT, "radius {r}: {v:?}");
@@ -539,7 +549,7 @@ fn zoom_extents_fits_the_finite_part_when_geometry_is_huge() {
 fn zoom_extents_with_only_huge_geometry_is_finite() {
     let mut s = Session::new();
     s.viewport_px = (1000.0, 500.0);
-    s.execute("circle", &json!({"center": [0, 0], "radius": 1e200})).unwrap();
+    push_circle(&mut s, 1e200);
     s.execute("zoom.extents", &json!({})).unwrap();
     let v = s.state().unwrap().view();
     assert!(v.center.is_finite() && v.height.is_finite() && v.height > 0.0 && v.height <= VIEW_LIMIT, "{v:?}");

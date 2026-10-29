@@ -104,10 +104,25 @@ pub use cadaddy_render as render;
 pub use cadaddy_walk3d as walk3d;
 pub use cmd::blocks::extract::EXTRACT_PROPERTIES;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
+pub use cmd::render::{cancel_pending, request_cancel};
 /// A shaded or 3D view of model space as a PNG (exports; see the function).
 pub use cmd::view::view3d::shaded_png;
 pub use cmd::{CommandInfo, CommandSpec, HelpPage, command_specs, commands_without_help, find_by_id_or_alias, find_command};
 pub use prompt::{Accept, Drag, Input, Interactive, LiveLabel, Picker, Prompt, Step};
+
+/// Most characters of typed input an error or the history repeats.
+const ECHO_CHARS: usize = 80;
+
+/// `text` as an error or the history repeats it: the first 80 characters, then `… (N chars)` when
+/// there are more (a 30 MB line typed as a command comes back as a short message, not 90 MB).
+pub fn clip_input(text: &str) -> String {
+    let n = text.chars().count();
+    if n <= ECHO_CHARS {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(ECHO_CHARS).collect();
+    format!("{head}\u{2026} ({n} chars)")
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -1879,7 +1894,7 @@ impl Session {
                 self.start(if transparent { "'setvar" } else { "setvar" })?;
                 return self.input(Input::Text(var));
             }
-            return Err(EngineError::UnknownCommand(name.to_string()));
+            return Err(EngineError::UnknownCommand(clip_input(name)));
         };
         if transparent && spec.transparent && self.running.is_some() {
             // Transparent commands (zoom, pan…) run without cancelling the active one.
@@ -1932,6 +1947,16 @@ impl Session {
                 Ok(())
             }
             None => {
+                // Typed with nothing after it, a command with no prompts of its own asks for what
+                // it needs (DELAY: "Enter delay time (in milliseconds):").
+                if let Some(machine) = cmd::typed_ask::machine_for(spec.id) {
+                    let st = self.state()?;
+                    let (before, selection_before) = (st.doc.clone(), st.selection.clone());
+                    self.running = Some(Running { id: spec.id.to_string(), machine: guard::Guarded::wrap(machine), before, selection_before });
+                    self.pending_window = None;
+                    self.feed(None)?;
+                    return Ok(());
+                }
                 let r = self.execute(spec.id, &Value::Null);
                 let event = if r.is_ok() { lisp::reactor::CommandEvent::Ended } else { lisp::reactor::CommandEvent::Failed };
                 self.lisp_command_event(event, spec.id);

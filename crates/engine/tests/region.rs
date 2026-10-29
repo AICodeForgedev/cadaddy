@@ -164,7 +164,9 @@ fn regions_move_grip_explode_and_snap() {
 #[test]
 fn hostile_region_params_never_panic() {
     let mut s = Session::new();
-    let a = rect_region(&mut s, [0.0, 0.0], [1e300, 1e300]);
+    // A rectangle beyond the export limit is refused; the biggest allowed is the hostile one here.
+    assert!(s.execute("rectang", &json!({"p1": [0.0, 0.0], "p2": [1e300, 1e300]})).is_err());
+    let a = rect_region(&mut s, [0.0, 0.0], [1e11, 1e11]);
     let b = circle_region(&mut s, [1.0, 1.0], 1e-9);
     for (id, p) in [
         ("union", json!({"handles": [a.hex(), b.hex(), "zz"]})),

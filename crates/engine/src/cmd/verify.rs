@@ -44,10 +44,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("model.issues", "Model Issues", run_issues)
             .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}"),
         CommandSpec::new("model.render", "Render Model View", run_render)
-            .params("{path?: PNG file (else the PNG comes back as base64), width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
+            .params("{path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
             .noundo(),
         CommandSpec::new("model.overlay", "Model Overlay", run_overlay)
-            .params("{path?: PNG file (else base64), width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
+            .params("{path?: PNG file (else base64), output?: same as path, width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
             .noundo(),
         CommandSpec::new("model.counts", "Model Counts", run_counts)
             .params("{} → {levels: [{level, plan: {doors, windows, fixtures}, model: {doors, windows, fixtures}, match}], match}")
@@ -708,7 +708,7 @@ fn size(p: &Value, w: u32, h: u32) -> (u32, u32) {
 
 /// The PNG written to `path`, or returned as base64.
 pub(crate) fn deliver(png: Vec<u8>, p: &Value, out: &mut Value) -> Result<()> {
-    match str_param(p, "path") {
+    match str_param(p, "path").or_else(|| str_param(p, "output")) {
         Some(path) => {
             #[cfg(not(target_arch = "wasm32"))]
             {

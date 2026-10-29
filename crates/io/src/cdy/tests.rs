@@ -859,3 +859,15 @@ fn verify_tells_live_parts_from_superseded_ones() {
         let _ = verify(&file[..n]);
     }
 }
+
+/// B4-021: a hostile file listing thousands of chunks is reported in part, not in full.
+#[test]
+fn verify_lists_a_bounded_number_of_chunks() {
+    let mut w = super::container::Writer::new();
+    for _ in 0..5000 {
+        w.chunk(*b"JUNK", 1, b"x", false);
+    }
+    let check = verify(&w.finish()).unwrap();
+    assert!(check["chunksTotal"].as_u64().unwrap() >= 5000);
+    assert!(check["chunks"].as_array().unwrap().len() <= 2000);
+}
