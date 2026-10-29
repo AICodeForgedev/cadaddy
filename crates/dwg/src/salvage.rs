@@ -35,6 +35,17 @@ const MAX_PAGE: usize = 0x2_0000;
 const MAX_RECORD: usize = 1 << 20;
 /// Bytes of checksumming spent looking for object records in damaged data, at most.
 const SCAN_BUDGET: usize = 256 << 20;
+/// Pages' worth of zero padding a section may be given beyond the pages found for it.
+const MAX_PAD_PAGES: usize = 4;
+/// Checksumming a section may cost, as a multiple of its length (plus `SCAN_SLACK`), so the work
+/// stays linear in the input however much of it is damage.
+const SCAN_FACTOR: usize = 4;
+const SCAN_SLACK: usize = 64 << 10;
+
+/// The checksum budget for scanning `len` bytes of records.
+fn scan_budget(len: usize) -> usize {
+    len.saturating_mul(SCAN_FACTOR).saturating_add(SCAN_SLACK).min(SCAN_BUDGET)
+}
 /// Sections a file may name, at most.
 const MAX_SECTIONS: usize = 64;
 
@@ -421,6 +432,10 @@ fn record_at(objs: &[u8], p: usize, r2010: bool, budget: &mut usize) -> Option<(
         q
     };
     let end = data.checked_add(size)?;
+    // A record that runs past the section is damage: refuse it before it costs any budget.
+    if end.checked_add(2)? > objs.len() {
+        return None;
+    }
     let stored = u16_le(objs, end)?;
     *budget = budget.checked_sub(end - p)?;
     if crc16(objs.get(p..end)?) != stored {
@@ -439,8 +454,14 @@ fn record_at(objs: &[u8], p: usize, r2010: bool, budget: &mut usize) -> Option<(
 /// Walk the objects section's records (from offset 4, after its 0x0DCA word), stepping over
 /// damage byte by byte until the next sound record: (handle, offset) of each.
 fn walk_records(objs: &[u8], r2010: bool) -> Vec<(u64, usize)> {
+    walk_records_counted(objs, r2010).0
+}
+
+/// `walk_records`, and the bytes of checksumming it spent.
+fn walk_records_counted(objs: &[u8], r2010: bool) -> (Vec<(u64, usize)>, usize) {
     let mut out = Vec::new();
-    let mut budget = SCAN_BUDGET;
+    let start = scan_budget(objs.len());
+    let mut budget = start;
     let mut p = 4;
     while p + 4 < objs.len() && budget > 0 {
         match record_at(objs, p, r2010, &mut budget) {
@@ -453,7 +474,7 @@ fn walk_records(objs: &[u8], r2010: bool) -> Vec<(u64, usize)> {
             None => p += 1,
         }
     }
-    out
+    (out, start - budget)
 }
 
 /// The entries of an object map (the Handles section): (handle, offset) pairs, as far as its
@@ -681,7 +702,10 @@ pub fn salvage(b: &[u8]) -> Option<Salvaged> {
         if known == 0 || known > buf.len() as u64 {
             known = known.max(buf.len() as u64);
         }
-        buf.resize(usize::try_from(known).unwrap_or(buf.len()).min(1 << 31), 0);
+        // A claimed size beyond the pages found pads with zeros, which hold no records; a lying
+        // header must not grow the section (and the scan of it) past a few pages' worth.
+        let room = buf.len().saturating_add(s.page_data.saturating_mul(MAX_PAD_PAGES));
+        buf.resize(usize::try_from(known).unwrap_or(buf.len()).min(room), 0);
         s.size = buf.len() as u64;
         content.insert(*id, buf);
     }
@@ -694,7 +718,7 @@ pub fn salvage(b: &[u8]) -> Option<Salvaged> {
     let mut entries: BTreeMap<u64, usize> = walked.iter().copied().collect();
     let mut kept_old = 0usize;
     if let Some(map) = id_of("AcDb:Handles", &sections).and_then(|id| content.get(&id)) {
-        let mut budget = SCAN_BUDGET;
+        let mut budget = scan_budget(objs.len());
         for (h, o) in read_object_map(map) {
             if !entries.contains_key(&h) && record_at(objs, o, r2010, &mut budget).is_some() {
                 entries.insert(h, o);
@@ -886,6 +910,38 @@ mod tests {
     fn object_maps_round_trip() {
         let entries: Vec<(u64, usize)> = (0..2000u64).map(|i| (0x100 + i * 3, 4 + i as usize * 41)).collect();
         assert_eq!(read_object_map(&write_object_map(&entries)), entries);
+    }
+
+    /// Valid-looking record headers (a small size, then garbage) at every offset: the checksum
+    /// work must grow with the input, not with its square.
+    #[test]
+    fn damage_scan_work_is_linear_in_the_input() {
+        let work = |n: usize| {
+            // Every other offset reads as "a record of 2048 bytes follows"; none checksums.
+            let b: Vec<u8> = (0..n).map(|i| if i % 2 == 1 { 8 } else { 0 }).collect();
+            let (found, spent) = walk_records_counted(&b, false);
+            assert!(found.is_empty());
+            spent
+        };
+        let (small, big) = (work(20_000), work(80_000));
+        assert!(small <= scan_budget(20_000), "{small}");
+        assert!(big <= scan_budget(80_000), "{big}");
+        assert!(small > 0 && big <= small * 5, "work grew faster than the input: {small} -> {big}");
+        // A record claiming more than is left costs nothing.
+        let mut b = vec![0u8; 64];
+        b[4] = 0xff;
+        b[5] = 0xff;
+        assert_eq!(walk_records_counted(&b, false).1, 0);
+    }
+
+    /// A header claiming a huge section size must not pad the section (and the scan of it) to that
+    /// size: the same 129 objects (23 of them drawing entities) come back from a small repaired file.
+    #[test]
+    fn a_lying_section_size_does_not_inflate_the_salvage() {
+        let bytes = include_bytes!("../tests/regress/ac18-section-size.dwg");
+        let s = salvage(bytes).expect("salvaged");
+        assert_eq!(s.objects, 129);
+        assert!(s.bytes.len() < 1 << 20, "{}", s.bytes.len());
     }
 
     #[test]
