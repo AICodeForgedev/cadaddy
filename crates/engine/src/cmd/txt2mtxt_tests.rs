@@ -26,7 +26,7 @@ fn mtexts(s: &Session) -> Vec<(String, MText)> {
         .model
         .iter()
         .filter_map(|e| match &e.kind {
-            EntityKind::MText(m) => Some((e.common.layer.to_string(), m.clone())),
+            EntityKind::MText(m) => Some((e.common.layer.clone(), m.clone())),
             _ => None,
         })
         .collect()
