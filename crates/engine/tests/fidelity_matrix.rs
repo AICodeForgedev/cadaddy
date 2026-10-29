@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 /// Known differences: `format|type|field`. Each is a loss to fix, or a version limit.
 const KNOWN: &[&str] = &[
     // Versions older than the feature: AutoCAD 2000/2004 have no multileaders (written as a
-    // leader with its text), multileader or table styles (2000),; MESH
+    // leader with its text), multileader or table styles (2000); MESH
     // came with 2010 (older versions get a polyface mesh).
     "DWG 2000|Leader|count 1→2",
     "DWG 2000|MLeaderStyle|CALLOUT missing",
