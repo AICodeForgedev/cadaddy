@@ -17,7 +17,7 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
-        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, type?: object type (only the selected objects of that type change: line, circle, text…), layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, background?: true | false | {color?, scale?} (MTEXT mask), <geometry fields: radius, center, centerX, centerY, start, end, startX, startY, endX, endY, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides)}"),
+        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, type?: object type (only the selected objects of that type change: line, circle, text…), layer?, color?, linetype?, lineweight?, ltscale?, thickness?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, background?: true | false | {color?, scale?} (MTEXT mask), <geometry fields: radius, center, centerX, centerY, start, end, startX, startY, endX, endY, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides)}"),
         CommandSpec::new("chprop", "Change Properties", run_set)
             .params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?, ...properties.set fields} (typed: AutoCAD's property prompts)")
             .interactive(|_| Ok(Box::new(chprop::ChpropM::new(false)))),
@@ -125,6 +125,7 @@ pub(super) fn entity_props(d: &cadaddy_doc::Drawing, e: &cadaddy_doc::Entity) ->
         "lineweight": e.common.lineweight.name(),
         "ltscale": e.common.ltscale,
         "transparency": transparency_value(e.common.transparency),
+        "thickness": e.common.thickness,
         "visible": e.common.visible,
     });
     if cadaddy_doc::can_be_annotative(&e.kind)
@@ -263,6 +264,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         .get("transparency")
         .map(|v| parse_transparency(v).ok_or_else(|| bad("properties.set", "transparency must be ByLayer, ByBlock or a percentage from 0 to 90")))
         .transpose()?;
+    let thickness = p
+        .get("thickness")
+        .map(|v| v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("properties.set", "thickness must be a finite number")))
+        .transpose()?;
     let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("properties.set", "bad lineweight"))).transpose()?;
     let d = s.doc_mut()?;
     // An explicit object linetype must be ByLayer, ByBlock or a loaded definition (as `linetype current` requires).
@@ -325,6 +330,9 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(t) = transparency {
             e.common.transparency = t;
+        }
+        if let Some(th) = thickness {
+            e.common.thickness = th;
         }
         if let Some(v) = p.get("visible").and_then(Value::as_bool) {
             e.common.visible = v;
