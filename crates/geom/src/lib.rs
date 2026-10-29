@@ -28,7 +28,9 @@ pub mod vectorize;
 pub mod view3;
 
 pub use bounds::Bounds2;
-pub use curve::{Arc, Circle, Ellipse, Line, PolyVertex, Polyline, Segment, arc_to_bulge, bulge_to_arc, point_in_polygon, polygon_centroid, shoelace};
+pub use curve::{
+    Arc, Circle, Ellipse, Line, PolyVertex, Polyline, Segment, arc_to_bulge, bulge_to_arc, point_in_polygon, polygon_centroid, shoelace,
+};
 pub use edges::{LoopEdge, loop_area, loop_vertices};
 pub use fillet::{CornerFit, TanCurve, tangent_circles};
 pub use intersect::{circle_circle, intersect_ext, intersect_segments, intersect_segments_ext, line_circle, line_line, line_line_infinite};

@@ -769,7 +769,8 @@ impl Interactive for CircleM {
                 Prompt::new("Specify diameter of circle", Accept::POINT_OR_NUMBER).base_opt(self.pts.first().copied()).distance()
             }
             (0, _) => {
-                let p = Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).kw(&["Diameter"]).base_opt(self.pts.first().copied()).distance();
+                let p =
+                    Prompt::new("Specify radius of circle", Accept::POINT_OR_NUMBER).kw(&["Diameter"]).base_opt(self.pts.first().copied()).distance();
                 if last_r > 0.0 { p.default(crate::units::dist(s, last_r)) } else { p }
             }
             (1, k) => Prompt::new(
