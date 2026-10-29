@@ -797,6 +797,22 @@ pub(crate) fn fresh(version: Version) -> Layout {
     }
 }
 
+/// Adds a section `name` (compressed, as the others) to a layout that has no page for it yet, if
+/// it hasn't one by that name.
+pub(crate) fn add_section(l: &mut Layout, name: &str) {
+    if l.descs.iter().any(|d| d.name() == name) || name.len() >= 64 {
+        return;
+    }
+    let mut n = [0u8; 64];
+    n[..name.len()].copy_from_slice(name.as_bytes());
+    let id = l.descs.iter().map(|d| d.id).max().map_or(0, |m| m + 1);
+    l.descs.push(Desc { size: 0, max_size: 0x7400, unknown: 1, compressed: 2, id, encrypted: 0, name: n, pages: Vec::new() });
+    l.original.push((usize::MAX, 0));
+    let count = u32::try_from(l.descs.len()).unwrap_or(u32::MAX);
+    l.map_head[0] = count;
+    l.map_head[4] = count;
+}
+
 /// The maintenance version a new file of `version` states: the ones AutoCAD 2010 and 2013 files
 /// carry (6, 105), 4 for R2018, none before. Readers other than the ODA's (LibreCAD's) take the
 /// R2010 and R2013 header and classes sections to have the second size field whatever the

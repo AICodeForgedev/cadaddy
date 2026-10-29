@@ -178,11 +178,19 @@ fn entity_record(e: &Entity) -> Vec<Tag> {
     out
 }
 
-/// What [`read`] left out.
+/// What [`read`] couldn't read, and what it kept as it was stored.
 #[derive(Debug, Default)]
 pub struct ReadReport {
-    /// Objects the codec couldn't decode, with why.
+    /// Objects the codec couldn't decode and couldn't keep either, with why.
     pub failed: Vec<(u64, String)>,
+    /// Entities the codec doesn't decode (a type not read yet, a custom class, solids, underlays,
+    /// proxies) or couldn't decode (damaged data), kept raw in the drawing as they were stored
+    /// (`dwg_keep` writes them back unchanged): handle and DXF name, with why when the data was damaged.
+    pub kept: Vec<(u64, String)>,
+    /// Objects (not entities) the codec doesn't decode (proxies, custom classes, dynamic block data,
+    /// SUN, FIELDLIST, a type not read yet) or couldn't decode (damaged data), kept raw as they
+    /// were stored: handle and DXF class name, with why when the data was damaged.
+    pub kept_objects: Vec<(u64, String)>,
 }
 
 /// Reads a DWG file with the codec alone.
@@ -191,8 +199,8 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
     let dwg = cadaddy_dwgcodec::read(bytes).map_err(fmt)?;
     let hv = dwg.header_vars().map_err(fmt)?;
     let classes = dwg.classes().map_err(fmt)?;
-    let (ents, mut failed) = cadaddy_dwgcodec::entities::decode_all(&dwg).map_err(fmt)?;
-    let (recs, rec_failed) = cadaddy_dwgcodec::entities::records::decode_all(&dwg).map_err(fmt)?;
+    let (ents, mut failed) = cadaddy_dwgcodec::entities::decode_all_keeping(&dwg).map_err(fmt)?;
+    let (recs, rec_failed, kept_objects) = cadaddy_dwgcodec::entities::records::decode_all_keeping(&dwg).map_err(fmt)?;
     failed.extend(rec_failed);
     let lists = cadaddy_dwgcodec::entities::block_lists(&dwg, &ents).map_err(fmt)?;
     let names = cadaddy_dwgcodec::entities::Names::read(&dwg, &classes);
@@ -383,6 +391,19 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
         tags.extend(r.groups.iter().map(tag));
     }
     end(&mut tags);
+
+    // From 2013 the ACIS data of solids, regions and bodies is in the data storage section, one
+    // record per entity.
+    let mut store_note = None;
+    if dwg.version >= cadaddy_dwgcodec::Version::R2013
+        && let Some(section) = dwg.section("AcDb:AcDsPrototype_1b")
+    {
+        match cadaddy_dwgcodec::acds::decode(&section.data) {
+            Ok(records) if !records.is_empty() => data_store(&mut tags, &records),
+            Ok(_) => {}
+            Err(e) => store_note = Some(format!("DWG: the data storage section (the ACIS data of solids) couldn't be read and was left out ({e})")),
+        }
+    }
     tags.push(s(0, "EOF"));
 
     if dwg.version < cadaddy_dwgcodec::Version::R2007 {
@@ -397,17 +418,78 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
     }
     let tags = crate::dwg_keep::unstash_tags(&tags).unwrap_or(tags);
     let mut d = crate::dxf_read::read_tags(tags)?;
-    if !failed.is_empty() {
-        let mut kinds: Vec<String> = failed.iter().map(|(_, e)| e.split(':').next().unwrap_or("?").to_string()).collect();
+    d.read_notes.extend(store_note);
+    let kept = kept_entities(&d);
+    let kinds_of = |list: &[(u64, String)]| {
+        let mut kinds: Vec<String> = list.iter().map(|(_, e)| e.split(':').next().unwrap_or("?").to_string()).collect();
         kinds.sort();
         kinds.dedup();
+        kinds.join(", ")
+    };
+    if !kept.is_empty() {
+        d.read_notes.push(format!("DWG: {} entities kept as-is, not editable ({})", kept.len(), kinds_of(&kept)));
+    }
+    if !kept_objects.is_empty() {
+        d.read_notes.push(format!("DWG: {} objects kept as-is, not editable ({})", kept_objects.len(), kinds_of(&kept_objects)));
+    }
+    if !failed.is_empty() {
         d.read_notes.push(format!(
             "DWG: {} records couldn't be read and were left out ({}); saving over the original file would lose them",
             failed.len(),
-            kinds.join(", ")
+            kinds_of(&failed)
         ));
     }
-    Ok((d, ReadReport { failed }))
+    Ok((d, ReadReport { failed, kept, kept_objects }))
+}
+
+/// The ACDSDATA section of `records` (handle and ASM data): the schema of the ACIS data and a
+/// record for each.
+fn data_store(tags: &mut Vec<Tag>, records: &[(u64, Vec<u8>)]) {
+    tags.extend([s(0, "SECTION"), s(2, "ACDSDATA"), i(70, 2), i(71, records.len() as i64)]);
+    tags.extend([
+        s(0, "ACDSSCHEMA"),
+        i(90, 1),
+        s(1, "AcDb3DSolid_ASM_Data"),
+        s(2, "AcDbDs::ID"),
+        i(280, 10),
+        i(91, 8),
+        s(2, "ASM_Data"),
+        i(280, 15),
+        i(91, 0),
+    ]);
+    for (handle, data) in records {
+        tags.extend([
+            s(0, "ACDSRECORD"),
+            i(90, 1),
+            s(2, "AcDbDs::ID"),
+            i(280, 10),
+            hex(320, *handle),
+            s(2, "ASM_Data"),
+            i(280, 15),
+            i(94, data.len() as i64),
+        ]);
+        for chunk in data.chunks(127) {
+            tags.push(tag(&Group { code: 310, value: Value::Str(chunk.iter().map(|b| format!("{b:02X}")).collect()) }));
+        }
+    }
+    tags.push(s(0, "ENDSEC"));
+}
+
+/// The entities of a drawing kept raw (as stored, not decoded): handle and DXF name. Those a CADaddy
+/// writer kept through a save (`dwg_keep`) and this reader put back count too.
+fn kept_entities(d: &Drawing) -> Vec<(u64, String)> {
+    let mut out = Vec::new();
+    let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
+    for store in stores {
+        for e in store.iter() {
+            if let cadaddy_doc::EntityKind::Unknown(u) = &e.kind
+                && u.tags.iter().any(|t| t.code == 100 && t.value.trim() == cadaddy_dwgcodec::entities::RAW_SUBCLASS)
+            {
+                out.push((e.handle.0, u.dxf_type.clone()));
+            }
+        }
+    }
+    out
 }
 
 fn is_table_record(name: &str) -> bool {
