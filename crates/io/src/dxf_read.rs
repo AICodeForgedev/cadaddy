@@ -2697,10 +2697,25 @@ fn dimassoc(d: &mut Drawing, tags: &[Tag]) {
     if !dm.assoc.is_empty() {
         return;
     }
+    // A radial or diametric dimension names its circle once, by its centre.
+    if matches!(dm.kind, DimKind::Radius | DimKind::Diameter) {
+        let links = radial_links(d, dm, tail);
+        if !links.is_empty() {
+            let _ = d.modify_entity(dim_h, |e| {
+                if let EntityKind::Dimension(dm) = &mut e.kind {
+                    dm.assoc = links;
+                }
+            });
+        }
+        return;
+    }
     let slots: &[&str] = match dm.kind {
         DimKind::Linear { .. } | DimKind::Aligned => &["p13", "p14"],
+        DimKind::Angular => &["p13", "p14", "p15", "p16"],
+        DimKind::Angular3P => &["p13", "p14", "p15"],
+        DimKind::ArcLength => &["p13", "p14"],
         DimKind::Ordinate { .. } => &["p13"],
-        _ => return,
+        DimKind::Radius | DimKind::Diameter => return,
     };
     let flags = T(tail).i(90).unwrap_or(0);
     let used: Vec<&str> = slots.iter().enumerate().filter(|(i, _)| flags & (1 << i) != 0).map(|(_, s)| *s).collect();
@@ -2727,21 +2742,66 @@ fn dimassoc(d: &mut Drawing, tags: &[Tag]) {
     }
 }
 
-/// A CADaddy snap from a DIMASSOC object snap type and point.
+/// Associations of a radial or diametric dimension from its one standard reference: the circle
+/// or arc it measures, by its centre (osnap 3). The definition points are then on that circle,
+/// so the dimension follows its radius or diameter.
+fn radial_links(d: &Drawing, dm: &Dimension, tail: &[Tag]) -> Vec<DimAssoc> {
+    let starts: Vec<usize> = tail.iter().enumerate().filter(|(_, x)| x.code == 1 && x.str() == "AcDbOsnapPointRef").map(|(i, _)| i).take(8).collect();
+    for (k, s) in starts.iter().enumerate() {
+        let end = starts.get(k + 1).copied().unwrap_or(tail.len());
+        let r = T(tail.get(s + 1..end).unwrap_or(&[]));
+        if !matches!(r.i(72), Some(3 | 4)) {
+            continue;
+        }
+        let Some(handle) = r.s(331).and_then(|h| Handle::parse_hex(&h)) else { continue };
+        let Some(centre) = circle_centre(d, handle) else { continue };
+        let on = |point: &str, p: Vec3| {
+            let angle = centre.angle_to(p.xy());
+            angle.is_finite().then(|| DimAssoc { point: point.into(), handle, snap: AssocSnap::OnCircle { angle } })
+        };
+        let links = match dm.kind {
+            DimKind::Radius => on("p15", dm.p15).map(|p15| vec![DimAssoc { point: "defpt".into(), handle, snap: AssocSnap::Center }, p15]),
+            DimKind::Diameter => [on("defpt", dm.defpt), on("p15", dm.p15)].into_iter().collect::<Option<Vec<_>>>(),
+            _ => None,
+        };
+        if let Some(links) = links {
+            return links;
+        }
+    }
+    Vec::new()
+}
+
+/// The planar centre of a circle or arc, or `None` for any other entity: the point a radial or
+/// diametric dimension's single DIMASSOC reference names.
+fn circle_centre(d: &Drawing, h: Handle) -> Option<Vec2> {
+    match &d.entity(h)?.kind {
+        EntityKind::Circle(c) => Some(c.center.xy()),
+        EntityKind::Arc(a) => Some(a.center.xy()),
+        _ => None,
+    }
+}
+
+/// A CADaddy snap from a DIMASSOC object snap type and point. For a line or arc the osnap alone
+/// says which end: 13 is the start and 1 the end, whatever the stored point (the point is
+/// 0,0,0 for curves, and choosing by distance gave the wrong end for arcs). A point entity has
+/// only one position, so both codes mean it.
 fn infer_snap(d: &Drawing, osnap: i64, main: Handle, other: Option<Handle>, at: Vec2) -> Option<AssocSnap> {
     let e = d.entity(main)?;
     Some(match osnap {
         1 | 13 => match &e.kind {
             EntityKind::Line(l) => {
-                if osnap == 13 || l.a.xy().dist(at) <= l.b.xy().dist(at) {
+                if osnap == 13 || (at != Vec2::ZERO && l.a.xy().dist(at) <= l.b.xy().dist(at)) {
                     AssocSnap::Start
                 } else {
                     AssocSnap::End
                 }
             }
-            EntityKind::Arc(a) => {
-                let g = cadaddy_geom::Arc::new(a.center.xy(), a.radius, a.start, a.end);
-                if osnap == 13 || g.start_point().dist(at) <= g.end_point().dist(at) { AssocSnap::Start } else { AssocSnap::End }
+            EntityKind::Arc(_) => {
+                if osnap == 13 {
+                    AssocSnap::Start
+                } else {
+                    AssocSnap::End
+                }
             }
             EntityKind::LwPolyline(p) => {
                 let index = p.vertices.iter().enumerate().min_by(|x, y| x.1.p.dist(at).total_cmp(&y.1.p.dist(at))).map(|(i, _)| i)?;
