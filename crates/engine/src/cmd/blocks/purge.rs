@@ -15,8 +15,9 @@ use super::super::qselect::wildcard;
 use super::super::{bad, find_command, str_param};
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
+/// The named objects PURGE can remove. `USAGE` runs the same scan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
+pub(in crate::cmd) enum Kind {
     Blocks,
     Dimstyles,
     Groups,
@@ -120,7 +121,7 @@ fn entities(d: &Drawing) -> impl Iterator<Item = &std::sync::Arc<cadaddy_doc::En
 }
 
 /// Upper-case names of blocks reachable from model space, the layouts and dimensions.
-fn used_blocks(d: &Drawing) -> HashSet<String> {
+pub(in crate::cmd) fn used_blocks(d: &Drawing) -> HashSet<String> {
     let mut used = HashSet::new();
     let mut frontier: Vec<String> = Vec::new();
     for e in d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())) {
@@ -155,8 +156,9 @@ fn is(name: &str, list: &[&str]) -> bool {
     list.iter().any(|n| n.eq_ignore_ascii_case(name))
 }
 
-/// Names of the unused objects of a named kind, in table order.
-fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
+/// Names of the unused objects of a named kind, in table order. This is PURGE's scan; `USAGE`
+/// reads it too, without purging anything.
+pub(in crate::cmd) fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
     let lower = |it: &mut dyn Iterator<Item = String>| it.map(|n| n.to_ascii_lowercase()).collect::<HashSet<String>>();
     match kind {
         Kind::Blocks => {
