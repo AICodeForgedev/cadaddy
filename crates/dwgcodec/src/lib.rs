@@ -1,6 +1,7 @@
 //! CADaddy's own DWG codec, written from the Open Design Alliance's public "Open Design
 //! Specification for .dwg files" (cited below as "spec §n"). Nothing here comes from any other
-//! DWG implementation.
+//! DWG implementation's source; the layout of the data storage section ([`acds`]) and of an empty
+//! solid's fields were observed in files of another writer (a black box).
 //!
 //! This crate reads and writes the containers of a DWG file: the bit-coded values (spec §2), the
 //! R2000 file layout (spec §3), the R2004+ section and page maps and their LZ77 compression

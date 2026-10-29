@@ -438,7 +438,16 @@ fn data_store(tags: &mut Vec<Tag>, records: &[(u64, Vec<u8>)]) {
         i(91, 0),
     ]);
     for (handle, data) in records {
-        tags.extend([s(0, "ACDSRECORD"), i(90, 1), s(2, "AcDbDs::ID"), i(280, 10), hex(320, *handle), s(2, "ASM_Data"), i(280, 15), i(94, data.len() as i64)]);
+        tags.extend([
+            s(0, "ACDSRECORD"),
+            i(90, 1),
+            s(2, "AcDbDs::ID"),
+            i(280, 10),
+            hex(320, *handle),
+            s(2, "ASM_Data"),
+            i(280, 15),
+            i(94, data.len() as i64),
+        ]);
         for chunk in data.chunks(127) {
             tags.push(tag(&Group { code: 310, value: Value::Str(chunk.iter().map(|b| format!("{b:02X}")).collect()) }));
         }

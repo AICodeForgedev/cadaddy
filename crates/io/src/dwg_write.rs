@@ -643,9 +643,18 @@ fn encode(
     let rec = r.rec();
     // An entity kept as it was stored (`dwg_read`), of the version being written: its object as
     // it was, if it needs no links of its own to its neighbours (from R2004).
-    if let Some(raw) = raw_object(v, r, h) {
-        p.out.push(raw);
-        return true;
+    if is_raw(r) {
+        return match raw_object(v, r, h) {
+            Some(raw) => {
+                p.out.push(raw);
+                true
+            }
+            // Any other is kept in an XRECORD (`dwg_keep`), not made again from the few groups it has.
+            None => {
+                *p.skipped.entry(r.name.clone()).or_default() += 1;
+                false
+            }
+        };
     }
     let lt = rec.s(6).unwrap_or("ByLayer");
     let (ltype_flags, ltype) = match lt.to_ascii_uppercase().as_str() {
@@ -678,15 +687,17 @@ fn encode(
     }
 }
 
+/// Whether `r` is an entity `dwg_read` kept raw (not decoded).
+fn is_raw(r: &Record) -> bool {
+    r.rec().all(100).any(|g| matches!(&g.value, Value::Str(s) if s == cadaddy_dwgcodec::entities::RAW_SUBCLASS))
+}
+
 /// The object of an entity record that `dwg_read` kept raw ([`cadaddy_dwgcodec::entities::
 /// RAW_SUBCLASS`]), when it can be written back as an object as it was stored: a fixed object
 /// type (not a custom class, whose number the file's classes fix), of the same DWG version and
 /// from R2004 on (R2000 links an entity to its neighbours in its own data).
 fn raw_object(v: Version, r: &Record, handle: u64) -> Option<RawObject> {
     let rec = r.rec();
-    if rec.s(100) != Some(cadaddy_dwgcodec::entities::RAW_SUBCLASS) && !rec.all(100).any(|g| matches!(&g.value, Value::Str(s) if s == cadaddy_dwgcodec::entities::RAW_SUBCLASS)) {
-        return None;
-    }
     let type_code = u16::try_from(rec.i(70)?).ok().filter(|t| *t < 500)?;
     let stored = rec.s(1)?;
     if v < Version::R2004 || version(stored).map(|(sv, _)| sv) != Some(v) {

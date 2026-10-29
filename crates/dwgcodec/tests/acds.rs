@@ -20,8 +20,13 @@ fn dxf(sizes: &[usize]) -> String {
     for i in 0..sizes.len() {
         s.push_str(&format!("0\n3DSOLID\n5\n{:X}\n330\n1F\n100\nAcDbEntity\n8\n0\n100\nAcDbModelerGeometry\n290\n0\n2\n{{00000000-0000-0000-0000-000000000000}}\n100\nAcDb3dSolid\n350\n0\n", 0x2A + i));
     }
-    s.push_str("0\nENDSEC\n0\nSECTION\n2\nOBJECTS\n0\nDICTIONARY\n5\nC\n330\n0\n100\nAcDbDictionary\n0\nENDSEC\n0\nSECTION\n2\nACDSDATA\n70\n2\n71\n");
-    s.push_str(&format!("{}\n0\nACDSSCHEMA\n90\n1\n1\nAcDb3DSolid_ASM_Data\n2\nAcDbDs::ID\n280\n10\n91\n8\n2\nASM_Data\n280\n15\n91\n0\n", sizes.len()));
+    s.push_str(
+        "0\nENDSEC\n0\nSECTION\n2\nOBJECTS\n0\nDICTIONARY\n5\nC\n330\n0\n100\nAcDbDictionary\n0\nENDSEC\n0\nSECTION\n2\nACDSDATA\n70\n2\n71\n",
+    );
+    s.push_str(&format!(
+        "{}\n0\nACDSSCHEMA\n90\n1\n1\nAcDb3DSolid_ASM_Data\n2\nAcDbDs::ID\n280\n10\n91\n8\n2\nASM_Data\n280\n15\n91\n0\n",
+        sizes.len()
+    ));
     for (i, n) in sizes.iter().enumerate() {
         let b = blob(*n);
         let chunks: String = b.chunks(127).map(|c| format!("310\n{}\n", hex(c))).collect();

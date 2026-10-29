@@ -142,7 +142,11 @@ fn common_entity_data_matches_acadrust_in_every_version() {
                 // Compared as the groups they are: the same number of each code and the same
                 // values in order (handles by what they name: both read the one file).
                 if a.len() != b.len() || a.iter().zip(&b).any(|(x, y)| !same(x, y)) {
-                    report.push(format!("{id} {} {handle:x} group {code}: ours {:?} theirs {b:?}", e.name, a.iter().map(|v| text_of(v)).collect::<Vec<_>>()));
+                    report.push(format!(
+                        "{id} {} {handle:x} group {code}: ours {:?} theirs {b:?}",
+                        e.name,
+                        a.iter().map(|v| text_of(v)).collect::<Vec<_>>()
+                    ));
                 }
             }
         }

@@ -135,6 +135,16 @@ fn undecoded_entities_are_kept_and_written_back_in_every_version() {
         // Written by the native writer and read again: the same.
         let (out, wr) = cadaddy_io::dwg_write::write(&d, id).unwrap_or_else(|e| panic!("{id}: {e}"));
         assert!(wr.kept >= 4, "{id}: kept in the written file: {}", wr.kept);
+        // A kept object of a fixed type, in a file of the version it came from (R2004 on), is
+        // written back as the object it was: its bytes are the ones it had.
+        let written = cadaddy_dwgcodec::read(&out).unwrap();
+        let region = want.iter().find(|w| w.1 == "REGION").unwrap();
+        let object = written.object(region.0).filter(|o| o.type_code == 37);
+        if id == "AC1015" {
+            assert!(object.is_none(), "{id}: R2000 links entities to each other, so a kept one isn't written as an object");
+        } else {
+            assert_eq!(object.map(|o| &o.data), Some(&region.2), "{id}: the REGION as an object");
+        }
         let (back, report2) = cadaddy_io::dwg_read::read(&out).unwrap_or_else(|e| panic!("{id}: {e}"));
         assert!(report2.failed.is_empty(), "{id}: {:?}", report2.failed);
         assert_eq!(kept(&back), want, "{id}: kept through the writer");

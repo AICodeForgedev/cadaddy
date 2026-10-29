@@ -26,7 +26,8 @@ fn an_empty_body_is_written_as_another_writer_writes_it() {
                 if kind != "3DSOLID" && history != 0 {
                     continue;
                 }
-                let mut doc = acadrust::DxfReader::from_reader(Cursor::new(dxf(kind, history).into_bytes())).and_then(|r| r.read()).expect("reads the DXF");
+                let mut doc =
+                    acadrust::DxfReader::from_reader(Cursor::new(dxf(kind, history).into_bytes())).and_then(|r| r.read()).expect("reads the DXF");
                 doc.version = if id == "AC1027" { acadrust::DxfVersion::AC1027 } else { acadrust::DxfVersion::AC1032 };
                 let bytes = acadrust::DwgWriter::write_to_vec(&doc).expect("writes the DWG");
                 let d = cadaddy_dwgcodec::read(&bytes).unwrap();
@@ -70,7 +71,8 @@ fn sat_dxf(kind: &str, ver: &str) -> String {
 fn sat_text_is_written_as_another_writer_writes_it() {
     for id in ["AC1015", "AC1018", "AC1021", "AC1024"] {
         for kind in ["3DSOLID", "REGION", "BODY"] {
-            let mut doc = acadrust::DxfReader::from_reader(Cursor::new(sat_dxf(kind, id).into_bytes())).and_then(|r| r.read()).expect("reads the DXF");
+            let mut doc =
+                acadrust::DxfReader::from_reader(Cursor::new(sat_dxf(kind, id).into_bytes())).and_then(|r| r.read()).expect("reads the DXF");
             doc.version = match id {
                 "AC1015" => acadrust::DxfVersion::AC1015,
                 "AC1018" => acadrust::DxfVersion::AC1018,
@@ -170,8 +172,50 @@ fn solids_decode_to_the_groups_another_writer_gives() {
                     (g.code, v)
                 })
                 .collect();
-            let theirs: Vec<(i32, String)> = theirs.into_iter().filter(|g| matches!(g.0, 70 | 1 | 3 | 290 | 2 | 350) || (g.0 == 100 && g.1 != "AcDbEntity")).collect();
+            let theirs: Vec<(i32, String)> =
+                theirs.into_iter().filter(|g| matches!(g.0, 70 | 1 | 3 | 290 | 2 | 350) || (g.0 == 100 && g.1 != "AcDbEntity")).collect();
             assert_eq!(ours, theirs, "{id} {kind}");
+        }
+    }
+}
+
+/// Damaged solid data (and any damaged entity kept as stored) is decoded, kept or refused, never
+/// a panic or a runaway allocation.
+#[test]
+fn hostile_solid_data_never_panics() {
+    use cadaddy_dwgcodec::entities::{Names, decode, raw_entity};
+    for id in ["AC1015", "AC1021", "AC1024", "AC1032"] {
+        let text = if id >= "AC1027" { dxf("3DSOLID", 0x21) } else { sat_dxf("3DSOLID", id) };
+        let mut doc = acadrust::DxfReader::from_reader(Cursor::new(text.into_bytes())).and_then(|r| r.read()).expect("reads the DXF");
+        doc.version = match id {
+            "AC1015" => acadrust::DxfVersion::AC1015,
+            "AC1021" => acadrust::DxfVersion::AC1021,
+            "AC1024" => acadrust::DxfVersion::AC1024,
+            _ => acadrust::DxfVersion::AC1032,
+        };
+        let d = cadaddy_dwgcodec::read(&acadrust::DwgWriter::write_to_vec(&doc).expect("writes the DWG")).unwrap();
+        let classes = d.classes().unwrap();
+        let names = Names::read(&d, &classes);
+        let mut x = 0x2545_f491u32;
+        for raw in d.objects.iter().filter(|o| o.type_code == 38) {
+            for round in 0..200 {
+                let mut o = raw.clone();
+                match round % 3 {
+                    0 => {
+                        for _ in 0..4 {
+                            x ^= x << 13;
+                            x ^= x >> 17;
+                            x ^= x << 5;
+                            let i = x as usize % o.data.len();
+                            o.data[i] ^= (x >> 8) as u8 | 1;
+                        }
+                    }
+                    1 => o.data.truncate(o.data.len() * round / 200),
+                    _ => o.data.iter_mut().skip(round % 40).for_each(|b| *b = 0xff),
+                }
+                let _ = decode(&o, d.version, &classes, &names);
+                let _ = raw_entity(&o, d.version, &classes, &names);
+            }
         }
     }
 }

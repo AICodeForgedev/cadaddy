@@ -79,6 +79,14 @@ pub mod types {
     pub const BODY: u16 = 39;
 }
 
+/// Whether a 3DSOLID, REGION or BODY record's ACIS data has the form written here: SAT text
+/// (version 1) before 2013; from 2013 none in the record (the data storage section has it). Any
+/// other is left to be kept as its groups.
+fn modeler_encodable(v: Version, r: &Rec) -> bool {
+    let sat = r.0.iter().any(|g| matches!(g.code, 1 | 3));
+    if v >= Version::R2013 { !sat && r.i(70).is_none() } else { sat && r.i(70).is_none_or(|n| n == 1) }
+}
+
 /// A 3DSOLID, REGION or BODY of a file from AutoCAD 2013 on: no ACIS data in the object (it is in
 /// the data storage section, by this entity's handle), only the flags and counts of an empty
 /// body and, for a solid, the history object (350). The layout is the one files of another
@@ -188,6 +196,7 @@ pub fn entity(
         "MLINE" => types::MLINE,
         "IMAGE" | "WIPEOUT" => names.class(name)?,
         // From 2013 the geometry is in the data storage section (no ACIS data in the object).
+        "REGION" | "3DSOLID" | "BODY" if !modeler_encodable(v, r) => return None,
         "REGION" => types::REGION,
         "3DSOLID" => types::SOLID3D,
         "BODY" => types::BODY,
