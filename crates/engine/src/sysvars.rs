@@ -604,6 +604,8 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     }
     let st = &mut s.settings;
     match n.as_str() {
+        // The `color` command's input: ByLayer, ByBlock, a name, an index or a true colour.
+        "CECOLOR" => crate::cmd::set_current_color_value(s, v).ok_or_else(bad)?,
         "OSMODE" => st.osmode = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & 0x7fff,
         "3DOSMODE" => {
             st.osmode3 = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & crate::snap3::mode::MASK

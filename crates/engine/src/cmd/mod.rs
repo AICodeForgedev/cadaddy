@@ -164,6 +164,7 @@ pub mod verify;
 pub mod walkpub;
 pub mod wallgen;
 pub use props::MatchProps;
+pub(crate) use props::set_current_color_value;
 pub mod actions;
 pub(crate) mod qselect;
 pub(crate) mod render;
