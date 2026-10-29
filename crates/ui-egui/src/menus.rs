@@ -37,7 +37,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.toggle.toolsets", "Tool Sets", &["Window", "Tool Sets"], Some("Cmd+3")),
     ("ui.panel.properties", "Properties Inspector", &["Window", "Properties Inspector"], Some("Cmd+1")),
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
-    ("ui.panel.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
+    ("ui.toggle.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
+    ("ui.panel.quickcalc", "QuickCalc", &[], None),
     ("ui.panel.symbols", "Symbols", &["Window", "Symbols"], None),
     ("ui.float.toolSets", "Tool Sets", &["Window", "Palette Windows", "Tool Sets"], None),
     ("ui.float.properties", "Properties", &["Window", "Palette Windows", "Properties"], None),
@@ -270,7 +271,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         let _ = crate::docking::command(app, false, &json!({"operation":"setStackOpen", "panel":"symbols", "open": true}));
         return Some(open);
     }
-    // QUICKCALC typed or from a menu opens the palette; with parameters it is CAL.
+    if id == "ui.toggle.quickcalc" {
+        return Some(crate::palettes::quickcalc::toggle(app));
+    }
+    // Explicit opens remain idempotent; typed QUICKCALC with JSON parameters uses the engine's CAL alias.
     if id == "ui.panel.quickcalc" || (matches!(id, "quickcalc" | "qc") && params.is_null()) {
         return Some(crate::palettes::quickcalc::open(app));
     }
@@ -1335,8 +1339,13 @@ fn switch_on_hover(ctx: &egui::Context, titles: &[egui::Response]) {
     }
 }
 
-/// Like choosing a menu item: starts the command interactively.
+/// Activate a menu command. QuickCalc toggles transparently; other items clear pending
+/// command-line text and start their command interactively.
 pub fn activate(app: &mut CadApp, id: &str) {
+    if id == "ui.toggle.quickcalc" {
+        run_transparent(app, id);
+        return;
+    }
     app.cmd.buffer.clear();
     app.start(id);
 }
@@ -1401,7 +1410,14 @@ pub fn default_shortcuts() -> Vec<(egui::KeyboardShortcut, &'static str)> {
 pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
     let pairs = crate::aliasdlg::effective_shortcuts(app);
     crate::clipboard::mirror(app, ctx);
-    if ctx.egui_wants_keyboard_input() || app.closing.is_some() {
+    if app.closing.is_some() {
+        return;
+    }
+    // A palette toggle is global even while its expression field owns keyboard focus.
+    if ctx.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Num8))) {
+        run_transparent(app, "ui.toggle.quickcalc");
+    }
+    if ctx.egui_wants_keyboard_input() {
         return;
     }
     // Cmd/Ctrl+C, X and V arrive as clipboard events, not key presses.

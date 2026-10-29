@@ -485,7 +485,7 @@ pub const TABS: &[Tab] = &[
                     Item::Smalls(&[
                         b(Icon::Workspace, "ui.toggle.toolsets", "Tool Sets"),
                         b(Icon::Blocks, "ui.dialog.blocks", "Blocks"),
-                        b(Icon::Measure, "ui.panel.quickcalc", "QuickCalc"),
+                        b(Icon::Measure, "ui.toggle.quickcalc", "QuickCalc"),
                     ]),
                     Item::Smalls(&[b(Icon::List, "countlist", "Count")]),
                 ],
