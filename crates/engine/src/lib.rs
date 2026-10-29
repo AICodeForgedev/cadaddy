@@ -1059,8 +1059,6 @@ pub struct LastUsed {
     pub rotate_angle: f64,
     /// SCALE factor.
     pub scale_factor: f64,
-    /// TXT2MTXT's Settings.
-    pub txt2mtxt: cmd::Txt2MtxtOptions,
     /// MATCHPROP Settings: the properties it copies.
     pub matchprop: cmd::MatchProps,
     /// MLEADER placement order and Options.
@@ -1087,7 +1085,6 @@ impl Default for LastUsed {
             polygon_circumscribed: false,
             rotate_angle: 0.0,
             scale_factor: 1.0,
-            txt2mtxt: cmd::Txt2MtxtOptions::default(),
             matchprop: cmd::MatchProps::default(),
             mleader: MLeaderOptions::default(),
             mleader_block: String::new(),
