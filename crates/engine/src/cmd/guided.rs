@@ -4081,11 +4081,7 @@ fn tidy_runs(runs: &mut Vec<cadaddy_walk3d::MepRun>, upf: f64, ducts: &BTreeSet<
 /// of such a number gets its tag's place on its level's architectural plan (`at`), so the build
 /// traces the room there, and the tag's name when it reads as one (a unit type). A door's tag
 /// is no room's. How many were anchored.
-fn anchor_other_trade_rooms(
-    s: &mut Session,
-    job: &GuidedJob,
-    place: &dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>,
-) -> Result<usize> {
+fn anchor_other_trade_rooms(s: &mut Session, job: &GuidedJob, place: &dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>) -> Result<usize> {
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(0) };
     let extras: Vec<(String, String, [f64; 2], String)> = job
         .stage(StageName::Rooms)
@@ -4108,7 +4104,8 @@ fn anchor_other_trade_rooms(
             continue;
         }
         let Some(m) = place(at, &level) else { continue };
-        let Some(r) = sp.rooms.iter_mut().find(|r| r.at.is_none() && r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(&number))) else {
+        let Some(r) = sp.rooms.iter_mut().find(|r| r.at.is_none() && r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(&number)))
+        else {
             continue;
         };
         r.at = Some(m.apply(at));

@@ -260,7 +260,8 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
     // Every device read is in the model, or left out (it can't be put onto the architecture) with
     // a finding; a typical-room plan's devices are added to each room of its type.
     let dv = &built["result"]["devices"];
-    let (inserted, not_placed, stamped) = (dv["inserted"].as_u64().unwrap_or(0), dv["not_placed"].as_u64().unwrap_or(0), dv["stamped"].as_u64().unwrap_or(0));
+    let (inserted, not_placed, stamped) =
+        (dv["inserted"].as_u64().unwrap_or(0), dv["not_placed"].as_u64().unwrap_or(0), dv["stamped"].as_u64().unwrap_or(0));
     assert_eq!(inserted + not_placed, counted + stamped, "{dv:#}");
     assert!(not_placed * 20 <= counted, "most devices land on the architecture: {dv:#}");
     if not_placed > 0 {

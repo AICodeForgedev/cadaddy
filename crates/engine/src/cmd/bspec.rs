@@ -779,8 +779,10 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     let plan = if regions.is_empty() {
         room_plan(s)?
     } else {
-        let inside = |c: Vec2| regions.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
-        let keep: std::collections::HashSet<Handle> = plan_objects(d).into_iter().filter(|e| centre(d, e).is_some_and(inside)).map(|e| e.handle).collect();
+        let inside =
+            |c: Vec2| regions.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
+        let keep: std::collections::HashSet<Handle> =
+            plan_objects(d).into_iter().filter(|e| centre(d, e).is_some_and(inside)).map(|e| e.handle).collect();
         // Those objects as `room_plan` makes a plan of them: room-bounding layers only, each
         // centreline wall as its two faces.
         match room_plan_of(s, &keep)? {
@@ -819,7 +821,10 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         }
         if super::perceive::geometry::room_number(&text) {
             let here = level_at(&sp.levels, at.x, at.y).map(|l| l.name.clone());
-            if let Some(o) = out.iter_mut().find(|o| o.number.is_none() && here.as_ref().is_none_or(|l| *l == o.level) && cadaddy_geom::point_in_polygon(&o.outline, at)) {
+            if let Some(o) = out
+                .iter_mut()
+                .find(|o| o.number.is_none() && here.as_ref().is_none_or(|l| *l == o.level) && cadaddy_geom::point_in_polygon(&o.outline, at))
+            {
                 // On a room tag layer any number is a room's; else only the spec's rooms' numbers.
                 if tagged || sp.rooms.iter().any(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(text.trim()))) {
                     o.number = Some(text.trim().to_string());
@@ -834,7 +839,9 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         // label elsewhere names other rooms.
         let is_number = super::perceive::geometry::room_number(&text);
         let room = sp.rooms.iter().position(|r| {
-            names_room(r, &text) && (is_number || r.at.is_none()) && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l)))
+            names_room(r, &text)
+                && (is_number || r.at.is_none())
+                && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l)))
         });
         // Without room tag layers only the spec's rooms are looked for. On them, a room's name
         // or number only (not a grid bubble's letter, a note's word): a note, a sentence, a stamp
