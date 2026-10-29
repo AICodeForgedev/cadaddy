@@ -1,4 +1,4 @@
-# Greek interface catalog for CADCraft. Original, AI-assisted translation by @Camthalion77 with ChatGPT.
+# Greek interface catalog for CADaddy. Original, AI-assisted translation by @Camthalion77 with ChatGPT.
 # context<TAB>English source<TAB>Greek translation. Preserve English keys and formatting.
 	  Cancel  	  Ακύρωση
 	  OK  	  Εντάξει
@@ -35,7 +35,7 @@
 	A drawing opened from a file keeps that file's format.	Ένα σχέδιο που ανοίγεται από αρχείο διατηρεί τη μορφή του αρχείου του.
 	A variable name starts with a letter and has only letters, digits and _	Το όνομα μιας μεταβλητής αρχίζει με γράμμα και περιέχει μόνο γράμματα, ψηφία και _
 	About	Πληροφορίες
-	About CADCraft	Πληροφορίες για το CADCraft
+	About CADaddy	Πληροφορίες για το CADaddy
 	Absolute	Απόλυτο
 	Accessibility	Προσβασιμότητα
 	Add	Προσθήκη
@@ -124,9 +124,9 @@
 	ByBlock	Κατά μπλοκ (ByBlock)
 	ByColor	Κατά χρώμα (ByColor)
 	ByLayer	Κατά επίπεδο (ByLayer)
-	CADCraft	CADCraft
-	CADCraft Help	Βοήθεια CADCraft
-	CADCraft keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	Το CADCraft αποθηκεύει τις προτιμήσεις, τις λειτουργίες έλξης αντικειμένων και τους διακόπτες σχεδίασης στον λογαριασμό σας και τις επαναφέρει στην εκκίνηση.
+	CADaddy	CADaddy
+	CADaddy Help	Βοήθεια CADaddy
+	CADaddy keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	Το CADaddy αποθηκεύει τις προτιμήσεις, τις λειτουργίες έλξης αντικειμένων και τους διακόπτες σχεδίασης στον λογαριασμό σας και τις επαναφέρει στην εκκίνηση.
 	Calibrate	Βαθμονόμηση
 	Calibrate 3D Mouse	Βαθμονόμηση ποντικιού 3Δ
 	Cancel	Ακύρωση
@@ -464,7 +464,7 @@
 	Hide All	Απόκρυψη όλων
 	Hide All Constraint Bars	Απόκρυψη όλων των γραμμών περιορισμών
 	Hide All Dynamic Dimensions	Απόκρυψη όλων των δυναμικών διαστάσεων
-	Hide CADCraft	Απόκρυψη CADCraft
+	Hide CADaddy	Απόκρυψη CADaddy
 	Hide Layer List	Απόκρυψη λίστας επιπέδων
 	Hide Objects	Απόκρυψη αντικειμένων
 	Hide Others	Απόκρυψη άλλων
@@ -807,7 +807,7 @@
 	Quick Select...	Γρήγορη επιλογή...
 	QuickCalc	Γρήγορη αριθμομηχανή (QuickCalc)
 	QuickCalc Pick	Επιλογή στη γρήγορη αριθμομηχανή
-	Quit CADCraft	Έξοδος από το CADCraft
+	Quit CADaddy	Έξοδος από το CADaddy
 	Radius	Ακτίνα
 	Raster Image	Εικόνα ψηφίδων (Raster Image)
 	Ray	Ημιευθεία (Ray)
