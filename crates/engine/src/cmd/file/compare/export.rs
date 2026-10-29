@@ -439,6 +439,12 @@ fn paint(d: &mut Drawing, e: &mut Entity, color: Color, tinted: &mut Tinted, dep
         }
         _ => {}
     }
+    if let EntityKind::Dimension(dm) = &mut e.kind {
+        // A dimension whose block can't be copied (past the limits) is drawn again from its
+        // geometry: its DIMCLR* overrides are ByBlock, so the original block would keep its colors.
+        dm.block = dm.block.take().and_then(|n| tinted_block(d, &n, color, tinted, depth));
+        return;
+    }
     each_ref(&mut e.kind, |n| {
         if let Some(copy) = tinted_block(d, n, color, tinted, depth) {
             *n = copy;

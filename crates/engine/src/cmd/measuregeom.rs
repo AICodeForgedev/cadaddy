@@ -132,6 +132,10 @@ impl Interactive for MeasureM {
                     }
                     Some(a) => a.dist(*p),
                 },
+                Input::Text(_) | Input::Keyword(_) if self.height_from.is_some() => {
+                    s.echo("The second point of the height needs a point.");
+                    return Ok(Step::Continue);
+                }
                 Input::Text(t) | Input::Keyword(t) => match super::machines::number(t).filter(|v| v.is_finite()) {
                     Some(h) => h,
                     None => {
