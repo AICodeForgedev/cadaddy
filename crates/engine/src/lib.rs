@@ -1074,8 +1074,6 @@ pub struct LastUsed {
     pub distance: f64,
     /// The last height a solid command (BOX, EXTRUDE…) used: its next `<default>`.
     pub solid_height: Option<f64>,
-    /// BREAKLINE's Block, Size and Extension.
-    pub breakline: cmd::BreaklineOptions,
 }
 
 impl Default for LastUsed {
@@ -1093,7 +1091,6 @@ impl Default for LastUsed {
             perimeter: 0.0,
             distance: 0.0,
             solid_height: None,
-            breakline: cmd::BreaklineOptions::default(),
         }
     }
 }

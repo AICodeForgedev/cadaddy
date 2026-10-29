@@ -163,7 +163,6 @@ pub mod validate;
 pub mod verify;
 pub mod walkpub;
 pub mod wallgen;
-pub use draw2::breakline::BreaklineOptions;
 pub use props::MatchProps;
 pub mod actions;
 pub(crate) mod qselect;
