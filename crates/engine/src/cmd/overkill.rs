@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use cadaddy_doc::{Circle, Common, Entity, EntityKind, Handle};
-use cadaddy_geom::{Polyline, Segment, TAU, Vec2, Vec3, angle_in_sweep, ccw_sweep, norm_angle};
+use cadaddy_geom::{Polyline, Segment, TAU, Vec2, Vec3, ccw_sweep, norm_angle};
 use serde_json::{Value, json};
 
 use super::machines::{SelOutcome, SelectPhase, number};
@@ -634,12 +634,13 @@ fn on_polylines(cands: &[Cand], o: &Opts, gone: &mut [bool], rep: &mut Report) {
                 (EntityKind::Line(l), Segment::Line(sl)) => seg_dist(sl.a, sl.b, l.a.xy()) <= q && seg_dist(sl.a, sl.b, l.b.xy()) <= q,
                 (EntityKind::Arc(a), Segment::Arc { arc, .. }) => {
                     let atol = (q / arc.radius.max(1e-12)).min(1.0);
-                    a.center.xy().dist(arc.center) <= q
-                        && (a.radius - arc.radius).abs() <= q
-                        && ccw_sweep(a.start, a.end) <= ccw_sweep(arc.start, arc.end) + atol
-                        && (angle_in_sweep(a.start, arc.start, arc.end)
-                            || norm_angle(a.start - arc.start).min(TAU - norm_angle(a.start - arc.start)) <= atol)
-                        && (angle_in_sweep(a.end, arc.start, arc.end) || norm_angle(a.end - arc.end).min(TAU - norm_angle(a.end - arc.end)) <= atol)
+                    a.center.xy().dist(arc.center) <= q && (a.radius - arc.radius).abs() <= q && {
+                        // Inside the segment's sweep, measured from the segment's start: a start
+                        // just before it counts as at it, and the arc must not run past the end.
+                        let from = norm_angle(a.start - arc.start);
+                        let from = if from > TAU - atol { 0.0 } else { from };
+                        from + ccw_sweep(a.start, a.end) <= ccw_sweep(arc.start, arc.end) + atol
+                    }
                 }
                 _ => false,
             }

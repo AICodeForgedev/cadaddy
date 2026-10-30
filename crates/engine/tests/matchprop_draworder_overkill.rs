@@ -44,6 +44,24 @@ fn matchprop_settings_include_the_new_properties_and_offer_the_dialog() {
     assert!(s.execute("matchprop", &json!({"source": a.hex(), "targets": [b.hex()], "properties": ["shine"]})).is_err());
 }
 
+#[test]
+fn matchprop_copies_the_material_only_when_the_setting_is_on() {
+    let mut s = Session::new();
+    s.execute("material.new", &json!({"name": "Oak"})).unwrap();
+    let src = h(&s.execute("line", &json!({"points": [[0, 0], [1, 0]]})).unwrap());
+    let on = h(&s.execute("line", &json!({"points": [[0, 1], [1, 1]]})).unwrap());
+    let off = h(&s.execute("line", &json!({"points": [[0, 2], [1, 2]]})).unwrap());
+    s.execute("materialassign", &json!({"handles": [src.hex()], "material": "Oak"})).unwrap();
+    let mat = |s: &Session, x: Handle| s.doc().unwrap().entity(x).unwrap().common.material.as_deref().map(str::to_string);
+    assert_eq!(mat(&s, src).as_deref(), Some("Oak"));
+    assert_eq!(mat(&s, on), None);
+    s.execute("matchprop", &json!({"source": src.hex(), "targets": [on.hex()], "properties": ["material"]})).unwrap();
+    assert_eq!(mat(&s, on), mat(&s, src));
+    // With material off (another property only) the third object keeps its own material.
+    s.execute("matchprop", &json!({"source": src.hex(), "targets": [off.hex()], "properties": ["color"]})).unwrap();
+    assert_eq!(mat(&s, off), None);
+}
+
 // ---------- TEXTTOFRONT / HATCHTOBACK ----------
 
 fn order(s: &Session, space: &Space) -> Vec<Handle> {
@@ -134,6 +152,29 @@ fn overkill_deletes_lines_and_arcs_on_polyline_segments() {
         s.doc().unwrap().entity(pl).map(|e| e.kind.clone())
     );
     assert!(exists(&s, past) && exists(&s, off) && exists(&s, arc_off));
+}
+
+#[test]
+fn overkill_keeps_arcs_outside_the_polyline_arc_sweep() {
+    let mut s = Session::new();
+    // Bulge 1 from (10,0) to (10,10): centre 10,5, radius 5, -90°..90°.
+    s.execute("pline", &json!({"vertices": [[0, 0], {"p": [10, 0], "bulge": 1}, [10, 10], [0, 10]]})).unwrap();
+    let other_half = h(&s.execute("arc", &json!({"center": [10, 5], "radius": 5, "start": 90, "end": 270})).unwrap());
+    let sub = h(&s.execute("arc", &json!({"center": [10, 5], "radius": 5, "start": -60, "end": 30})).unwrap());
+    s.execute("overkill", &json!({})).unwrap();
+    assert!(exists(&s, other_half), "the complementary arc is not on the polyline");
+    assert!(!exists(&s, sub), "a sub-arc is");
+
+    // A 270° polyline arc segment (bulge tan(270°/4)): centre (0,0), radius 5, from 0° to 270°.
+    let mut s = Session::new();
+    let bulge = (270f64.to_radians() / 4.0).tan();
+    s.execute("pline", &json!({"vertices": [{"p": [5, 0], "bulge": bulge}, [0, -5]]})).unwrap();
+    // Starts inside (45°) and wraps past the end (270°) back to the start: not covered.
+    let wrap = h(&s.execute("arc", &json!({"center": [0, 0], "radius": 5, "start": 45, "end": 315})).unwrap());
+    let inside = h(&s.execute("arc", &json!({"center": [0, 0], "radius": 5, "start": 45, "end": 200})).unwrap());
+    s.execute("overkill", &json!({})).unwrap();
+    assert!(exists(&s, wrap));
+    assert!(!exists(&s, inside));
 }
 
 #[test]
