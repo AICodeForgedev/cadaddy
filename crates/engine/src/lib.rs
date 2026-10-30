@@ -299,9 +299,10 @@ pub struct DocState {
     /// The user was told that saving over the file would lose what reading left out: saving
     /// again overwrites it.
     pub loss_warned: bool,
-    /// Saving into DWG or DXF has checked what that file wouldn't keep of the drawing (and said
-    /// so, when anything): it is checked once per drawing.
-    pub kept_checked: bool,
+    /// The DWG/DXF targets (format, version, binary) whose save was checked for what that file
+    /// wouldn't keep of the drawing (and said so, when anything): each is checked once, and only
+    /// a check that succeeded is recorded.
+    pub kept_checked: Vec<cmd::file::KeptKey>,
     /// What the first DWG or DXF save of the drawing couldn't keep, feature by feature
     /// (`{path, format, losses}`), for the app to show once in a dialog; taken by the app.
     pub exchange_notice: Option<serde_json::Value>,
@@ -401,7 +402,7 @@ impl DocState {
             binary_dxf: false,
             read_loss: None,
             loss_warned: false,
-            kept_checked: false,
+            kept_checked: Vec::new(),
             exchange_notice: None,
             kept_job: None,
             cdy_saved: None,
@@ -1432,7 +1433,10 @@ impl Session {
         for st in &mut self.docs {
             let Some(done) = st.kept_job.as_ref().and_then(cmd::file::KeptJob::take) else { continue };
             st.kept_job = None;
-            if let Some((notice, line)) = done {
+            if done.succeeded && !st.kept_checked.contains(&done.key) {
+                st.kept_checked.push(done.key);
+            }
+            if let Some((notice, line)) = done.notice {
                 st.exchange_notice = Some(notice);
                 lines.push(line);
             }

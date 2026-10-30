@@ -718,7 +718,11 @@ impl CadApp {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             return r;
         }
+        // Programmatic saves are checked for what DWG/DXF keep as they run: the reply holds the
+        // list (`notKeptDetail`), not a background notice nobody could collect.
+        let background = std::mem::replace(&mut self.session.background_checks, false);
         let r = self.session.execute(id, &params);
+        self.session.background_checks = background;
         if let Ok(v) = &r
             && let Some(m) = v.get("message").and_then(Value::as_str)
         {

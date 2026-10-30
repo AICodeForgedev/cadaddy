@@ -1,7 +1,8 @@
-//! The exchange notice: after the first DWG or DXF save of a drawing that loses something, a
-//! dialog lists what that file didn't keep — feature, count, dropped or changed — with Select for
-//! the objects concerned. Shown once per drawing, for saves the user started (scripts, the control
-//! channel and MCP get the same list in the save reply's `notKeptDetail` instead).
+//! The exchange notice: after a DWG or DXF save into a target (format, version) not yet checked
+//! that loses something, a dialog lists what that file didn't keep — feature, count, dropped or
+//! changed — with Select for the objects concerned. Shown once per target, for saves the user
+//! started. Saves made through `CadApp::run` (scripts, the control channel and MCP) are checked
+//! as they run and get the same list in the save reply's `notKeptDetail` instead.
 
 use egui::{RichText, vec2};
 use serde_json::Value;
