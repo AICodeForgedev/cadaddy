@@ -495,6 +495,7 @@ fn cut(s: &mut Session, hs: Vec<Handle>, base: Option<Vec2>) -> Result<(usize, O
     let mut seen = std::collections::HashSet::new();
     let live: Vec<Handle> = {
         let d = s.doc()?;
+        let hs = super::clip_partners::with_partners(d, &hs);
         hs.into_iter().filter(|h| seen.insert(*h) && d.entity(*h).is_some()).collect()
     };
     let (hs, locked): (Vec<Handle>, Vec<Handle>) = live.into_iter().partition(|h| !super::curves::is_locked(s, *h));
@@ -737,7 +738,7 @@ fn run_pasteorig(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 fn run_clear(s: &mut Session, _p: &Value) -> Result<Value> {
-    let mut hs = s.selection();
+    let mut hs = super::clip_partners::with_partners(s.doc()?, &s.selection());
     hs.retain(|h| !super::curves::is_locked(s, *h));
     let d = s.doc_mut()?;
     let mut gone = Vec::new();

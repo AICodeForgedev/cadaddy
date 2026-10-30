@@ -108,6 +108,9 @@ pub(crate) fn paste(s: &mut Session, m: &Mat3) -> Result<Vec<Handle>> {
         }
     }
     super::groups::copy_groups(d, &groups, &copies);
+    // Pasted viewports clip their pasted boundary and get their own ids.
+    let moved: Vec<(Handle, Handle)> = copies.into_iter().collect();
+    super::clip_partners::after_transform(d, &moved, m, true)?;
     s.set_selection(out.clone());
     Ok(out)
 }
