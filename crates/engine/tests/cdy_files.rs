@@ -109,6 +109,69 @@ fn dwg_copy_is_saved_beside_a_cdy_file_when_asked() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn dwg_copy_keeps_an_existing_dwg_that_is_not_its_own_copy() {
+    let _turn = DWGCOPY.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = folder("copykeep");
+    let mut s = drawn();
+    let original = path(&dir, "Site.dwg");
+    s.execute("saveas", &json!({"path": original})).unwrap();
+    let original_bytes = std::fs::read(&original).unwrap();
+    // Open it in a fresh session (the file a drawing was received as), then keep it as .cdy.
+    let mut t = Session::new();
+    t.execute("open", &json!({"path": original})).unwrap();
+    set_dwg_copy(true);
+    let p = path(&dir, "Site.cdy");
+    let r = t.execute("saveas", &json!({"path": p})).unwrap();
+    let bak = path(&dir, "Site.dwg.bak");
+    assert_eq!(r["dwgCopyKept"], json!(bak), "{r}");
+    assert!(r.get("dwgCopyError").is_none(), "{r}");
+    assert_eq!(std::fs::read(&bak).unwrap(), original_bytes, "the received file survives as the kept backup");
+    assert!(std::fs::read(&original).unwrap().starts_with(b"AC10"), "the copy is written");
+    // The next save updates the copy normally: nothing more is kept.
+    t.execute("line", &json!({"points": [[0, 0], [4, 4]]})).unwrap();
+    let r = t.execute("qsave", &json!({})).unwrap();
+    assert_eq!(r["dwgCopy"], json!(original), "{r}");
+    assert!(r.get("dwgCopyKept").is_none() && r.get("dwgCopyError").is_none(), "{r}");
+    assert_eq!(std::fs::read(&bak).unwrap(), original_bytes);
+    // The drawing's own .bak is not the DWG one.
+    assert!(cadaddy_io::cdy::is_cdy(&std::fs::read(path(&dir, "Site.bak")).unwrap()));
+    set_dwg_copy(false);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dwg_copy_refuses_a_dwg_open_in_another_tab_and_a_taken_backup() {
+    let _turn = DWGCOPY.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = folder("copytab");
+    let mut s = drawn();
+    let other = path(&dir, "Site.dwg");
+    s.execute("saveas", &json!({"path": other})).unwrap();
+    let before = std::fs::read(&other).unwrap();
+    // The DWG stays open in its tab; a second drawing is saved as Site.cdy.
+    s.execute("new", &json!({})).unwrap();
+    s.execute("line", &json!({"points": [[0, 0], [7, 1]]})).unwrap();
+    set_dwg_copy(true);
+    let r = s.execute("saveas", &json!({"path": path(&dir, "Site.cdy")})).unwrap();
+    let why = r["dwgCopyError"].as_str().unwrap_or_default();
+    assert!(why.contains("open in another tab"), "{r}");
+    assert!(r.get("dwgCopy").is_none(), "{r}");
+    assert_eq!(std::fs::read(&other).unwrap(), before, "the file is untouched");
+    assert!(!std::path::Path::new(&path(&dir, "Site.dwg.bak")).exists());
+    // A .dwg.bak already in the way: the copy is skipped with how to go on.
+    let dir2 = folder("copytaken");
+    let mut u = drawn();
+    std::fs::write(path(&dir2, "Plan.dwg"), b"foreign").unwrap();
+    std::fs::write(path(&dir2, "Plan.dwg.bak"), b"older").unwrap();
+    let r = u.execute("saveas", &json!({"path": path(&dir2, "Plan.cdy")})).unwrap();
+    assert!(r["dwgCopyError"].as_str().unwrap_or_default().contains("already taken"), "{r}");
+    assert_eq!(std::fs::read(path(&dir2, "Plan.dwg")).unwrap(), b"foreign");
+    assert_eq!(std::fs::read(path(&dir2, "Plan.dwg.bak")).unwrap(), b"older");
+    set_dwg_copy(false);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&dir2);
+}
+
 /// DXF text from lines of `code value`.
 fn dxf(src: &str) -> String {
     src.lines()
