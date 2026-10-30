@@ -14,6 +14,12 @@ use crate::cmd::file::zip;
 
 /// Most cells read from one sheet.
 const MAX_CELLS: usize = 1_000_000;
+/// Most elements any one part may hold (a hostile part stops here, before its tree is built).
+const MAX_NODES: usize = 4 * MAX_CELLS;
+/// Most bytes one unpacked part of a workbook may have.
+const MAX_PART_BYTES: usize = 64 << 20;
+/// Most bytes a whole workbook may unpack to (declared in the ZIP directory, checked before inflating).
+const MAX_BOOK_BYTES: usize = 256 << 20;
 /// Largest row and column read (Excel's own limits).
 const MAX_ROW: usize = 1_048_576;
 const MAX_COL: usize = 16_384;
@@ -112,7 +118,16 @@ fn unescape(s: &str) -> String {
 
 /// Parse an XML document into its root element (namespaces dropped from names). Malformed input
 /// gives what could be read.
+#[cfg(test)]
 fn parse_xml(src: &str) -> Option<Element> {
+    parse_xml_capped(src, MAX_CELLS).ok().flatten()
+}
+
+/// [`parse_xml`] that stops with an error as soon as the document holds more than `max_cells`
+/// `<c>` elements, or more than [`MAX_NODES`] elements, instead of building them all. `Ok(None)`
+/// is a document with no root.
+fn parse_xml_capped(src: &str, max_cells: usize) -> Result<Option<Element>, String> {
+    let (mut nodes, mut cells) = (0usize, 0usize);
     let mut stack: Vec<Element> = vec![Element::default()];
     let mut rest = src;
     while !rest.is_empty() {
@@ -138,7 +153,7 @@ fn parse_xml(src: &str) -> Option<Element> {
             rest = rest.find('>').and_then(|e| rest.get(e + 1..)).unwrap_or("");
             continue;
         }
-        let gt = find_tag_end(rest)?;
+        let Some(gt) = find_tag_end(rest) else { return Ok(None) };
         let tag = rest.get(1..gt).unwrap_or("");
         rest = rest.get(gt + 1..).unwrap_or("");
         if let Some(name) = tag.strip_prefix('/') {
@@ -159,6 +174,16 @@ fn parse_xml(src: &str) -> Option<Element> {
         let selfclose = tag.ends_with('/');
         let tag = tag.trim_end_matches('/');
         let (name, attrs) = parse_tag(tag);
+        nodes += 1;
+        if name == "c" {
+            cells += 1;
+        }
+        if cells > max_cells {
+            return Err(format!("more than {max_cells} cells (size limit)"));
+        }
+        if nodes > MAX_NODES {
+            return Err(format!("more than {MAX_NODES} elements (size limit)"));
+        }
         let el = Element { name, attrs, children: Vec::new() };
         if selfclose {
             if let Some(top) = stack.last_mut() {
@@ -166,17 +191,18 @@ fn parse_xml(src: &str) -> Option<Element> {
             }
         } else {
             if stack.len() > 256 {
-                return None;
+                return Ok(None);
             }
             stack.push(el);
         }
     }
     while stack.len() > 1 {
-        let done = stack.pop()?;
-        stack.last_mut()?.children.push(Node::El(done));
+        let Some(done) = stack.pop() else { return Ok(None) };
+        let Some(top) = stack.last_mut() else { return Ok(None) };
+        top.children.push(Node::El(done));
     }
-    let root = stack.pop()?;
-    root.children.into_iter().find_map(|n| if let Node::El(e) = n { Some(e) } else { None })
+    let Some(root) = stack.pop() else { return Ok(None) };
+    Ok(root.children.into_iter().find_map(|n| if let Node::El(e) = n { Some(e) } else { None }))
 }
 
 fn push_text(stack: &mut [Element], t: &str) {
@@ -299,10 +325,14 @@ fn builtin_format(id: u32) -> Option<&'static str> {
     })
 }
 
+/// Last serial day number Excel shows as a date (31 Dec 9999, 23:59:59.999).
+const MAX_SERIAL: f64 = 2_958_465.999_99;
+
 /// A serial day number (1900 date system) as (year, month, day). Excel counts 29 Feb 1900,
 /// which didn't exist: from serial 61 on, day 0 is 30 Dec 1899; before it, 31 Dec 1899.
 fn serial_date(serial: f64) -> (i64, u32, u32) {
-    let n = serial.floor() as i64;
+    // Total for any f64: clamped to Excel's own range (NaN counts as 0), so no sum can overflow.
+    let n = serial.clamp(0.0, MAX_SERIAL).floor() as i64;
     // Days since 1970-01-01.
     let days = if n >= 61 { n - 25_569 } else { n - 25_568 };
     // Howard Hinnant's civil_from_days.
@@ -352,6 +382,10 @@ pub fn format_number(v: f64, code: &str) -> String {
     let is_date =
         ul.contains('y') || ul.contains('d') || (ul.contains('m') && !ul.contains('0') && !ul.contains('#')) || ul.contains('h') || ul.contains("ss");
     if is_date && !ul.contains('0') {
+        // Outside Excel's date range it shows a row of hashes, not a date.
+        if !(0.0..=MAX_SERIAL).contains(&v) {
+            return "#######".into();
+        }
         let (y, m, d) = serial_date(v);
         let secs = ((v.fract()) * 86_400.0).round() as i64;
         let (hh, mm, ss) = (secs / 3600, secs % 3600 / 60, secs % 60);
@@ -446,24 +480,40 @@ pub fn format_number(v: f64, code: &str) -> String {
 
 /// A workbook read from an .xlsx file: its sheet names, and per sheet its cells as shown.
 pub struct Workbook {
-    parts: HashMap<String, Vec<u8>>,
+    /// The file as read; a sheet's part is inflated only when its cells are asked for.
+    bytes: Vec<u8>,
     pub sheets: Vec<(String, String)>,
     shared: Vec<String>,
     /// Per cell style index, its number format code.
     formats: Vec<String>,
 }
 
-fn part_text(parts: &HashMap<String, Vec<u8>>, name: &str) -> Option<String> {
-    parts.get(name).map(|b| String::from_utf8_lossy(b).into_owned())
+fn clean_name(n: &str) -> &str {
+    n.trim_start_matches('/')
 }
 
-/// Read an .xlsx file's bytes.
+/// The named parts of an .xlsx file's bytes, inflated within the workbook budget (the sizes the
+/// ZIP directory declares are checked before anything is inflated).
+fn parts_of(bytes: &[u8], names: &[&str]) -> Result<HashMap<String, Vec<u8>>, String> {
+    let entries = zip::read_parts(bytes, |n| names.contains(&clean_name(n)), MAX_PART_BYTES, MAX_BOOK_BYTES)
+        .map_err(|e| format!("not an .xlsx workbook: {e}"))?;
+    Ok(entries.into_iter().map(|(n, b)| (clean_name(&n).to_string(), b)).collect())
+}
+
+/// A part parsed with the cell and element caps; `Ok(None)` when it is missing or not XML.
+fn part_xml(parts: &HashMap<String, Vec<u8>>, name: &str) -> Result<Option<Element>, String> {
+    match parts.get(name) {
+        Some(b) => parse_xml_capped(&String::from_utf8_lossy(b), MAX_CELLS).map_err(|e| format!("{name}: {e}")),
+        None => Ok(None),
+    }
+}
+
+/// Read an .xlsx file's bytes. Only the workbook, its relationships, the shared strings and the
+/// styles are inflated here (each within the part budget); a sheet is inflated when asked for.
 pub fn open(bytes: &[u8]) -> Result<Workbook, String> {
-    let entries = zip::read(bytes).map_err(|e| format!("not an .xlsx workbook: {e}"))?;
-    let parts: HashMap<String, Vec<u8>> = entries.into_iter().map(|(n, b)| (n.trim_start_matches('/').to_string(), b)).collect();
-    let wb = part_text(&parts, "xl/workbook.xml").and_then(|t| parse_xml(&t)).ok_or("not an .xlsx workbook (no xl/workbook.xml)")?;
-    let rels: HashMap<String, String> = part_text(&parts, "xl/_rels/workbook.xml.rels")
-        .and_then(|t| parse_xml(&t))
+    let parts = parts_of(bytes, &["xl/workbook.xml", "xl/_rels/workbook.xml.rels", "xl/sharedStrings.xml", "xl/styles.xml"])?;
+    let wb = part_xml(&parts, "xl/workbook.xml")?.ok_or("not an .xlsx workbook (no xl/workbook.xml)")?;
+    let rels: HashMap<String, String> = part_xml(&parts, "xl/_rels/workbook.xml.rels")?
         .map(|r| {
             r.elements()
                 .filter_map(|e| {
@@ -485,8 +535,7 @@ pub fn open(bytes: &[u8]) -> Result<Workbook, String> {
             Some((name, path))
         })
         .collect();
-    let shared: Vec<String> = part_text(&parts, "xl/sharedStrings.xml")
-        .and_then(|t| parse_xml(&t))
+    let shared: Vec<String> = part_xml(&parts, "xl/sharedStrings.xml")?
         .map(|sst| {
             sst.elements()
                 .filter(|e| e.name == "si")
@@ -505,8 +554,7 @@ pub fn open(bytes: &[u8]) -> Result<Workbook, String> {
                 .collect()
         })
         .unwrap_or_default();
-    let formats = part_text(&parts, "xl/styles.xml")
-        .and_then(|t| parse_xml(&t))
+    let formats = part_xml(&parts, "xl/styles.xml")?
         .map(|st| {
             let custom: HashMap<u32, String> = st
                 .child("numFmts")
@@ -524,7 +572,7 @@ pub fn open(bytes: &[u8]) -> Result<Workbook, String> {
                 .unwrap_or_default()
         })
         .unwrap_or_default();
-    Ok(Workbook { parts, sheets, shared, formats })
+    Ok(Workbook { bytes: bytes.to_vec(), sheets, shared, formats })
 }
 
 impl Workbook {
@@ -535,7 +583,9 @@ impl Workbook {
             Some(n) => self.sheets.iter().find(|(s, _)| s.eq_ignore_ascii_case(n.trim())).ok_or_else(|| format!("no sheet \"{n}\""))?,
             None => self.sheets.first().ok_or("the workbook has no sheets")?,
         };
-        let xml = part_text(&self.parts, path).and_then(|t| parse_xml(&t)).ok_or_else(|| format!("sheet \"{name}\" can't be read"))?;
+        let key = clean_name(path);
+        let part = parts_of(&self.bytes, &[key])?;
+        let xml = part_xml(&part, key).map_err(|e| format!("sheet \"{name}\": {e}"))?.ok_or_else(|| format!("sheet \"{name}\" can't be read"))?;
         let bounds = match range {
             Some(r) => {
                 let (a, b) = r.split_once(':').unwrap_or((r, r));
@@ -747,5 +797,34 @@ mod tests {
         assert_eq!(format_number(0.5, "h:mm"), "12:00");
         assert_eq!(format_number(12.5, "\"$\"#,##0.00"), "$12.50");
         assert_eq!(format_number(-2.0, "0.00"), "-2.00");
+    }
+
+    #[test]
+    fn hostile_numbers_never_overflow_a_date() {
+        // No panic in a debug build for any finite value, and Excel's row of hashes outside its range.
+        assert_eq!(format_number(1e20, "mm-dd-yy"), "#######");
+        assert_eq!(format_number(-1e20, "yyyy-mm-dd"), "#######");
+        assert_eq!(format_number(f64::MAX, "h:mm:ss AM/PM"), "#######");
+        assert_eq!(format_number(f64::MIN, "d-mmm-yy"), "#######");
+        assert_eq!(format_number(-1.0, "mm-dd-yy"), "#######");
+        assert_eq!(format_number(2_958_466.0, "yyyy-mm-dd"), "#######");
+        // The edges of the range still read as dates.
+        assert_eq!(format_number(2_958_465.5, "yyyy-mm-dd"), "9999-12-31");
+        assert_eq!(format_number(1.0, "yyyy-mm-dd"), "1900-01-01");
+        // The date maths itself is total.
+        for v in [f64::MAX, f64::MIN, f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 9.3e18, -9.3e18] {
+            let _ = serial_date(v);
+            let _ = format_number(v, "m/d/yy h:mm");
+        }
+    }
+
+    #[test]
+    fn cell_and_element_caps_stop_the_parse_early() {
+        let sheet = format!("<w><sheetData><row>{}</row></sheetData></w>", "<c/>".repeat(1000));
+        let e = parse_xml_capped(&sheet, 10).unwrap_err();
+        assert!(e.contains("more than 10 cells") && e.contains("size limit"), "{e}");
+        assert!(parse_xml_capped(&sheet, 1000).unwrap().is_some(), "at the cap is fine");
+        // Elements other than cells are counted too.
+        assert!(parse_xml_capped(&"<a/>".repeat(MAX_NODES + 1), usize::MAX).unwrap_err().contains("elements"));
     }
 }
