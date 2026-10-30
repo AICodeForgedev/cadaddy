@@ -85,6 +85,7 @@ mod offset_move;
 mod options_profile;
 mod overkill;
 mod parallel_display_list;
+mod pedit_multiple;
 mod pedit_splinedit;
 mod pick_text;
 mod pickdrag;

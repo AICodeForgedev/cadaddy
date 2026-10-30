@@ -1,6 +1,6 @@
 # Geometry parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (bounded constraint expression and parameter depth) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (PEDIT Multiple at the command line) · **Target:** Autodesk AutoCAD 2027
 
 CAD users trust numbers: a trimmed endpoint, an offset, an intersection or an area is either right
 to the last displayed digit or the tool is unusable for production drawings. This document
@@ -157,6 +157,7 @@ Total ≈ 90–140 h; items 1–6 parallelise across two or three agents.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | PEDIT Multiple at the command line (#2182): select objects, lines and arcs turned into polylines on Yes, then Close/Open/Join/Width/Fit/Spline/Decurve/Ltype gen/Reverse/Undo apply to all; Join joins the selected objects with each other within a fuzz distance |
 | 2026-10-22 | minor | Constraint expressions count operator chains toward the syntax-tree depth limit; evaluation shares one depth limit across operators and parameter references, with a 1 MiB-stack regression (#1936) |
 | 2026-10-14 | trivial | JOIN Close: a single arc becomes its circle, a single elliptical arc its full ellipse (#1175) |
 | 2026-10-12 | trivial | TRIM on a closed polyline keeps only the complementary run when the pick lies past the last cut (#726) |
