@@ -947,3 +947,29 @@ fn a_multiline_names_its_style_as_an_entity() {
     assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget (entlast))))"), "\"MLINE\"");
     assert_eq!(ok(&mut s, "(cdr (assoc 2 (entget (entlast))))"), "\"STANDARD\"");
 }
+
+#[test]
+fn closing_drawings_lets_go_of_their_environments() {
+    let mut s = session();
+    ok(&mut s, "(setq kept 1)");
+    let first = s.state().unwrap().uid;
+    // A long session: drawings opened, given a variable by LISP and closed again.
+    for i in 0..200 {
+        s.execute("new", &serde_json::json!({"template": "."})).unwrap();
+        ok(&mut s, &format!("(setq n {i})"));
+        if i % 2 == 0 {
+            s.execute("close", &serde_json::json!({})).unwrap();
+        } else {
+            s.execute("document.close", &serde_json::json!({"discard": true})).unwrap();
+        }
+    }
+    // One environment per open drawing (plus the one used with none open), not one per drawing ever opened.
+    assert_eq!(s.docs.len(), 1);
+    assert!(s.lisp.envs.len() <= 2, "{} environments kept", s.lisp.envs.len());
+    assert!(s.lisp.autoloaded.len() <= 2, "{} autoload marks kept", s.lisp.autoloaded.len());
+    // The open drawing keeps its variables.
+    assert_eq!(s.state().unwrap().uid, first);
+    assert_eq!(ok(&mut s, "kept"), "1");
+    s.execute("closeall", &serde_json::json!({})).unwrap();
+    assert!(s.lisp.envs.keys().all(|&uid| uid == 0));
+}

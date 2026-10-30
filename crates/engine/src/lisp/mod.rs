@@ -239,6 +239,18 @@ impl Session {
         self.lisp.envs.insert(uid, env);
     }
 
+    /// Let go of the environments of drawings no longer open. Each holds its own table of every
+    /// builtin (about 25 KB) and the drawing's variables; a session that opened and closed
+    /// drawings for hours kept one per drawing that had run LISP (B5-005).
+    pub(crate) fn lisp_forget_closed(&mut self) {
+        let open: std::collections::HashSet<u64> = self.docs.iter().map(|st| st.uid).collect();
+        let running = self.lisp.run.as_ref().map(|r| r.uid);
+        // Uid 0 is the environment used while no drawing is open.
+        let keep = |uid: &u64| *uid == 0 || open.contains(uid) || running == Some(*uid);
+        self.lisp.envs.retain(|uid, _| keep(uid));
+        self.lisp.autoloaded.retain(keep);
+    }
+
     /// A routine is running (possibly waiting for input).
     pub fn lisp_running(&self) -> bool {
         self.lisp.active
