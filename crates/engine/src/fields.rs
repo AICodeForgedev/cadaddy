@@ -583,7 +583,12 @@ fn format_number(d: &Drawing, v: f64, fmt: Option<&str>, area: bool) -> String {
     let v = v * k;
     let body = if area || lu == 2 {
         let p = usize::try_from(pr).unwrap_or(4);
-        if lu == 1 { format!("{v:.p$E}") } else { format!("{v:.p$}") }
+        if lu == 1 {
+            let (m, e) = cadaddy_doc::numfmt::sci_parts(v, p);
+            format!("{m}E{e}")
+        } else {
+            cadaddy_doc::numfmt::fixed(v, p)
+        }
     } else {
         crate::units::format_distance(v, lu, pr)
     };

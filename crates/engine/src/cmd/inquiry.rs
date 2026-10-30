@@ -84,7 +84,7 @@ pub(crate) fn fmt_d(s: &Session, v: f64) -> String {
 pub(crate) fn fmt_n(s: &Session, v: f64) -> String {
     let (lunits, prec) = s.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
     let p = if matches!(lunits, 4 | 5) { 4 } else { usize::try_from(prec.clamp(0, 8)).unwrap_or(4) };
-    format!("{v:.p$}")
+    cadaddy_doc::numfmt::fixed(v, p)
 }
 /// An area as AutoCAD reports it: square inches with square feet in architectural and engineering
 /// units ("11520.0000 square in. (80.0000 square ft.)"), else a plain number at LUPREC.
@@ -94,9 +94,9 @@ pub(crate) fn fmt_area(s: &Session, v: f64) -> String {
     if matches!(lunits, 3 | 4) {
         // Architectural precision counts fraction steps; areas show at least 4 decimals.
         let p = if lunits == 4 { 4 } else { p };
-        format!("{v:.p$} square in. ({:.p$} square ft.)", v / 144.0)
+        format!("{} square in. ({} square ft.)", cadaddy_doc::numfmt::fixed(v, p), cadaddy_doc::numfmt::fixed(v / 144.0, p))
     } else {
-        format!("{v:.p$}")
+        cadaddy_doc::numfmt::fixed(v, p)
     }
 }
 fn fmt_a(s: &Session, v: f64) -> String {
@@ -1306,6 +1306,16 @@ impl Interactive for AreaM {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quantities_round_exact_halves_up() {
+        let mut s = Session::new();
+        s.cmdline("SETVAR LUPREC 0").unwrap();
+        assert_eq!(fmt_d(&s, 2.5), "3");
+        assert_eq!(fmt_n(&s, 2.5), "3");
+        assert_eq!(fmt_area(&s, 0.5), "1");
+        assert_eq!(fmt_area(&s, 3.5), "4");
+    }
 
     /// #1440 review: a value one ulp past its bound (a border rectangle's shoelace area against
     /// the extents' `width * height`) is rounding, not a bug; a value clearly past it still is.

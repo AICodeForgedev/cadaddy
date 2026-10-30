@@ -1528,7 +1528,7 @@ pub fn rtos(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 }
 
 fn decimal(v: f64, prec: usize, dimzin: i64) -> String {
-    let mut s = format!("{v:.prec$}");
+    let mut s = cadaddy_doc::numfmt::fixed(v, prec);
     if s.starts_with("-0") && s.trim_start_matches(['-', '0', '.']).is_empty() {
         s = s.trim_start_matches('-').to_string();
     }
