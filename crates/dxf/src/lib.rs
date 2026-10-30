@@ -547,18 +547,21 @@ pub fn is_binary(bytes: &[u8]) -> bool {
 /// its bytes, and every other one `\U+XXXX` (a surrogate pair of escapes above U+FFFF). Without
 /// a code page the result is ASCII, so it is valid in any code page. In every form a backslash
 /// that would start a `\U+` or `\M+` sequence is written as `\U+005C`, so the reader gives back
-/// the literal text (#2050).
+/// the literal text (#2050). So is a double-byte character whose trail byte is 0x5C (`\`) in that
+/// place, such as Shift-JIS `表` or Big5 `許`: CADCraft decodes the code page before it looks for
+/// escapes, but a reader that looks first would take that byte and the `U+` after it for one.
 fn push_string(s: &str, strings: Strings, out: &mut Vec<u8>) {
     let chars: Vec<char> = s.chars().collect();
+    let escape_at = |j: usize| matches!(chars.get(j), Some('U' | 'M')) && chars.get(j + 1) == Some(&'+');
     for (i, &c) in chars.iter().enumerate() {
         match (c, strings) {
             ('\r' | '\n', _) => out.push(b' '),
-            ('\\', _) if matches!(chars.get(i + 1), Some('U' | 'M')) && chars.get(i + 2) == Some(&'+') => {
+            ('\\', _) if escape_at(i + 1) => {
                 out.extend_from_slice(b"\\U+005C");
             }
             (c, Strings::Utf8) => out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes()),
             (c, _) if c.is_ascii() => out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes()),
-            (c, Strings::Escaped(Some(d))) if codepage::encode_char(c, d, out) => {}
+            (c, Strings::Escaped(Some(d))) if code_page_bytes(c, d, escape_at(i + 1), out) => {}
             (c, Strings::Escaped(_)) => {
                 let mut units = [0u16; 2];
                 for u in c.encode_utf16(&mut units) {
@@ -567,6 +570,20 @@ fn push_string(s: &str, strings: Strings, out: &mut Vec<u8>) {
             }
         }
     }
+}
+
+/// `c` in the code page `d`, if it has it, unless it is a double-byte character whose trail byte
+/// is 0x5C and an escape's `U+` or `M+` follows (`before_escape`): see [`push_string`].
+fn code_page_bytes(c: char, d: codepage::Decoder, before_escape: bool, out: &mut Vec<u8>) -> bool {
+    let start = out.len();
+    if !codepage::encode_char(c, d, out) {
+        return false;
+    }
+    if before_escape && out.len() - start > 1 && out.last() == Some(&b'\\') {
+        out.truncate(start);
+        return false;
+    }
+    true
 }
 
 /// A section: `0 SECTION / 2 NAME ... 0 ENDSEC`.

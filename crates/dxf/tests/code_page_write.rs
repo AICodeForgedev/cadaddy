@@ -92,3 +92,25 @@ fn literal_escapes_survive_code_page_text() {
         }
     }
 }
+
+/// Double-byte code pages whose trail byte can be 0x5C (`\\`): Shift-JIS `表` (95 5C) and `ソ`
+/// (83 5C), Big5 `許` (B3 5C), GBK `乗` (81 5C). Right before `U+` or `M+`, such a character is
+/// written as an escape, so even a reader that looks for escapes before it decodes the code page
+/// reads it right. Elsewhere it stays as its bytes. Both forms read back as written.
+#[test]
+fn a_trail_byte_backslash_never_starts_an_escape() {
+    let cases: [(&str, &str, &[u8], &[u8]); 4] = [
+        ("ANSI_932", "表U+0041 表示", b"\\U+8868U+0041 \x95\x5C\x8E\xA6", b"\x95\x5CU+"),
+        ("ANSI_932", "ソM+1A2B", b"\\U+30BDM+1A2B", b"\x83\x5CM+"),
+        ("ANSI_950", "許U+0041", b"\\U+8A31U+0041", b"\xB3\x5CU+"),
+        ("ANSI_936", "乗U+0041", b"\\U+4E57U+0041", b"\x81\x5CU+"),
+    ];
+    for (cp, text, written, never) in cases {
+        let tags = file(cp, text);
+        for (bytes, what) in [(write_ascii_in(&tags, cp), "ASCII"), (write_binary_in(&tags, cp), "binary")] {
+            assert!(contains(&bytes, written), "{cp} {what}: {:?}", String::from_utf8_lossy(&bytes));
+            assert!(!contains(&bytes, never), "{cp} {what}: a trail byte starts an escape");
+            assert_eq!(parse(&bytes).unwrap()[10].str(), text, "{cp} {what}");
+        }
+    }
+}
