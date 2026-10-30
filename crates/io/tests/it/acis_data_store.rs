@@ -156,3 +156,32 @@ fn sat_text_solids_stay_in_dwg_2018_and_xref_contents_are_not_counted() {
     x.blocks.insert("REF|PART".into(), std::sync::Arc::new(dep));
     assert_eq!(cadcraft_doc::foreign::sat_text_dropped(&x), [("REGION".to_string(), 1)].into(), "only the model-space region");
 }
+
+/// Only groups 1 and 3 of the modeler geometry subclass are SAT text, and only a record holding
+/// the entity's ASM_Data keeps its geometry in the data store (#2334).
+#[test]
+fn sat_text_is_told_by_its_subclass_and_a_geometry_record() {
+    use cadcraft_doc::foreign::{Foreign, sat_text_acis};
+    use cadcraft_doc::{Handle, RawTag, Unknown};
+    let tag = |code: i32, value: &str| RawTag { code, value: value.into() };
+    let solid = |tags: Vec<RawTag>| Unknown { dxf_type: "3DSOLID".into(), tags };
+    let none = std::collections::BTreeSet::new();
+    let h = Handle(0x2B);
+    // A stray 1 or 3 outside AcDbModelerGeometry is not SAT text.
+    let stray =
+        solid(vec![tag(100, "AcDbEntity"), tag(1, "name"), tag(100, "AcDbModelerGeometry"), tag(70, "1"), tag(100, "AcDb3dSolid"), tag(3, "x")]);
+    assert!(!sat_text_acis(&stray, h, &none));
+    let real = solid(vec![tag(100, "AcDbEntity"), tag(100, "AcDbModelerGeometry"), tag(70, "1"), tag(1, "400 1 1 0"), tag(100, "AcDb3dSolid")]);
+    assert!(sat_text_acis(&real, h, &none));
+    // Without subclass markers (an old file) the groups are the entity's own.
+    assert!(sat_text_acis(&solid(vec![tag(8, "0"), tag(1, "400 1 1 0")]), h, &none));
+
+    // A 320 in the data store without an ASM_Data record doesn't keep the geometry.
+    let store = |asm: bool| {
+        let mut t = vec![tag(0, "ACDSRECORD"), tag(90, "1"), tag(320, "2B")];
+        t.push(tag(2, if asm { "ASM_Data" } else { "Other" }));
+        Foreign { data_store: t, ..Foreign::default() }
+    };
+    assert!(store(true).data_store_entities().contains(&h));
+    assert!(store(false).data_store_entities().is_empty());
+}

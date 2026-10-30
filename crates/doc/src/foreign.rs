@@ -89,9 +89,17 @@ impl Foreign {
             && self.data_store.is_empty()
     }
 
-    /// The entities the data store has records for (their 320 handles).
+    /// The entities with a geometry record in the data store: an `ACDSRECORD` naming the entity
+    /// (320) that holds its `ASM_Data`. A 320 without one doesn't keep an entity's geometry.
     pub fn data_store_entities(&self) -> std::collections::BTreeSet<Handle> {
-        self.data_store.iter().filter(|t| t.code == 320).filter_map(|t| Handle::parse_hex(t.value.trim())).collect()
+        let mut out = std::collections::BTreeSet::new();
+        for rec in data_store_records(&self.data_store) {
+            let is_record = rec.first().is_some_and(|t| t.value.trim().eq_ignore_ascii_case("ACDSRECORD"));
+            if is_record && rec.iter().any(|t| t.code == 2 && t.value.trim().eq_ignore_ascii_case("ASM_Data")) {
+                out.extend(rec.iter().filter(|t| t.code == 320).filter_map(|t| Handle::parse_hex(t.value.trim())));
+            }
+        }
+        out
     }
 }
 
@@ -99,9 +107,7 @@ impl Foreign {
 /// (groups 1 and 3), which DXF 2013 and later no longer has: those files keep it in the data
 /// store section, so an entity with SAT text and no record there can't be written to one (#2334).
 pub fn sat_text_acis(u: &crate::Unknown, handle: Handle, stored: &std::collections::BTreeSet<Handle>) -> bool {
-    ["3DSOLID", "REGION", "BODY"].iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t))
-        && !stored.contains(&handle)
-        && u.tags.iter().take_while(|r| r.code < 1000).any(|r| r.code == 1 || r.code == 3)
+    ["3DSOLID", "REGION", "BODY"].iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t)) && !stored.contains(&handle) && has_sat_text(&u.tags)
 }
 
 /// The entities a DXF of 2013 or later leaves out because they hold SAT-text ACIS data
@@ -127,4 +133,34 @@ pub fn sat_text_dropped(d: &crate::Drawing) -> BTreeMap<String, usize> {
 /// symbols out, and the contents of xref blocks too ([`Block::xref_path`](crate::Block::xref_path)).
 pub fn xref_dependent(name: &str) -> bool {
     name.contains('|')
+}
+
+/// The records of a data store section's groups: each starts at a `0` group and runs to the next
+/// (the section's own groups before the first record are not part of one).
+pub fn data_store_records(tags: &[RawTag]) -> Vec<&[RawTag]> {
+    let mut out = Vec::new();
+    let mut start = tags.iter().position(|t| t.code == 0).unwrap_or(tags.len());
+    while start < tags.len() {
+        let end = tags.iter().skip(start + 1).position(|t| t.code == 0).map_or(tags.len(), |k| start + 1 + k);
+        out.push(tags.get(start..end).unwrap_or(&[]));
+        start = end;
+    }
+    out
+}
+
+/// Whether an entity's groups hold SAT text: groups 1 and 3 inside its `AcDbModelerGeometry`
+/// subclass. A file of a version before the subclass markers has no `100` groups: all of its
+/// groups (before the extended data) are the entity's.
+fn has_sat_text(tags: &[RawTag]) -> bool {
+    let own = tags.iter().take_while(|r| r.code < 1000);
+    let marked = tags.iter().take_while(|r| r.code < 1000).any(|r| r.code == 100);
+    let mut in_modeler = !marked;
+    for r in own {
+        if r.code == 100 {
+            in_modeler = r.value.trim().eq_ignore_ascii_case("AcDbModelerGeometry");
+        } else if in_modeler && (r.code == 1 || r.code == 3) {
+            return true;
+        }
+    }
+    false
 }

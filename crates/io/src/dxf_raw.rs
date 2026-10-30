@@ -601,17 +601,13 @@ pub(crate) fn data_store(tags: &mut Vec<Tag>, d: &Drawing, modern: bool) {
     let first = ds.iter().position(|t| t.code == 0).unwrap_or(ds.len());
     out.extend(ds.iter().take(first).map(tag));
     let mut records = 0usize;
-    let mut i = first;
-    while i < ds.len() {
-        let end = ds.iter().skip(i + 1).position(|t| t.code == 0).map_or(ds.len(), |k| i + 1 + k);
-        let rec = ds.get(i..end).unwrap_or(&[]);
+    for rec in cadcraft_doc::foreign::data_store_records(ds) {
         let is_record = rec.first().is_some_and(|t| t.value.trim().eq_ignore_ascii_case("ACDSRECORD"));
         let owner = rec.iter().find(|t| t.code == 320).map(|t| norm(&t.value));
         if !is_record || owner.as_ref().is_some_and(|h| written.contains(h)) {
             records += usize::from(is_record);
             out.extend(rec.iter().map(tag));
         }
-        i = end;
     }
     if records == 0 {
         return;
