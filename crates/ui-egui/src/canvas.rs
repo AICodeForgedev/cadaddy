@@ -13,6 +13,28 @@ use crate::CadApp;
 use crate::theme::Tokens;
 
 /// World ↔ screen transform for the canvas rect.
+/// Tells a lone Ctrl tap from Ctrl used with something else. Fed once per frame with whether Ctrl
+/// is down and whether a click or key came in that frame; a tap is reported on release.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CtrlTap {
+    down: bool,
+    clean: bool,
+}
+
+impl CtrlTap {
+    pub(crate) fn update(&mut self, ctrl: bool, interrupted: bool) -> bool {
+        if ctrl && !self.down {
+            self.clean = true;
+        }
+        if interrupted {
+            self.clean = false;
+        }
+        let tap = !ctrl && self.down && self.clean;
+        self.down = ctrl;
+        tap
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Xf {
     pub rect: Rect,
@@ -149,8 +171,8 @@ pub struct CanvasState {
     /// multifunctional grip shows its options when the cursor stays on it.
     grip_hover: Option<((Handle, usize), f64)>,
     hover_menu: Option<(Handle, usize)>,
-    /// Ctrl was down last frame (a Ctrl tap during a grip edit cycles the grip's options).
-    ctrl_down: bool,
+    /// A Ctrl tap during a grip edit cycles the grip's options (see `CtrlTap`).
+    ctrl_tap: CtrlTap,
     /// Dynamic block grips of the selection (cached), the one being dragged, and the list grip
     /// whose choices are open (and whether it opened this frame).
     pub(crate) dyn_grips: crate::dyngrips::Cache,
@@ -1884,8 +1906,23 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     crate::dyngrips::menu(app, ui.ctx(), &xf);
     // Ctrl tapped while a grip is edited: the grip's next option (Stretch, then its options).
-    let ctrl_tap = mods.ctrl && !app.canvas.ctrl_down;
-    app.canvas.ctrl_down = mods.ctrl;
+    // Only a real tap counts: Ctrl pressed and released with no click and no other key between
+    // (Ctrl+click makes a copy, Ctrl+Z / C / V are shortcuts; neither cycles).
+    let interrupted = pressed_primary
+        || ui.input(|i| {
+            i.raw.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::PointerButton { pressed: true, .. }
+                        | egui::Event::Key { pressed: true, .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Paste(_)
+                )
+            })
+        });
+    let ctrl_tap = app.canvas.ctrl_tap.update(mods.ctrl, interrupted);
     if ctrl_tap && app.session.running.as_ref().is_some_and(|r| r.id == "grip") {
         let _ = app.session.input(Input::Keyword(cadaddy_engine::grips::CYCLE_OPTIONS.into()));
         ui.ctx().request_repaint();
@@ -3557,5 +3594,41 @@ fn view_background(app: &CadApp) -> Option<Rgb> {
         cadaddy_color::Color::Index(i) => Some(cadaddy_color::aci_rgb(i)),
         cadaddy_color::Color::True(c) => Some(c),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod ctrl_tap_tests {
+    use super::CtrlTap;
+
+    #[test]
+    fn press_and_release_is_a_tap() {
+        let mut t = CtrlTap::default();
+        assert!(!t.update(true, false), "pressing alone does not cycle yet");
+        assert!(!t.update(true, false));
+        assert!(t.update(false, false), "release without anything between cycles");
+        assert!(!t.update(false, false), "reported once");
+    }
+
+    #[test]
+    fn ctrl_click_is_not_a_tap() {
+        let mut t = CtrlTap::default();
+        assert!(!t.update(true, false));
+        assert!(!t.update(true, true), "the click frame");
+        assert!(!t.update(true, false));
+        assert!(!t.update(false, false), "release after a click does not cycle");
+        // The next lone tap works again.
+        assert!(!t.update(true, false));
+        assert!(t.update(false, false));
+    }
+
+    #[test]
+    fn ctrl_with_a_key_is_not_a_tap() {
+        let mut t = CtrlTap::default();
+        assert!(!t.update(true, true), "Ctrl and Z in the same frame");
+        assert!(!t.update(false, false));
+        assert!(!t.update(true, false));
+        assert!(!t.update(true, true), "Z after Ctrl");
+        assert!(!t.update(false, false));
     }
 }

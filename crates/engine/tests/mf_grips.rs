@@ -218,3 +218,24 @@ fn ctrl_cycles_a_hot_grips_options_then_back_to_stretch() {
     s.input(Input::Keyword(CYCLE_OPTIONS.into())).unwrap();
     assert!(prompt(&s).contains("STRETCH"));
 }
+
+#[test]
+fn ctrl_click_on_a_hot_dimension_text_grip_copies_in_stretch_mode() {
+    // The canvas sends "Copy" and then the clicked point for a Ctrl+click, with no CYCLE_OPTIONS
+    // in between (a Ctrl tap cycles only on release, when nothing else happened meanwhile).
+    let (mut s, h) = dim();
+    let before = dimension(&s, h);
+    let count = s.doc().unwrap().model.len();
+    s.set_selection(vec![h]);
+    s.start_grip_edit(&[(h, 3)]).unwrap();
+    s.input(Input::Keyword("Copy".into())).unwrap();
+    assert!(!s.current_prompt().unwrap().message.contains("MOVE WITH DIM LINE"));
+    s.input(Input::Point(Vec2::new(5.0, 9.0))).unwrap();
+    s.input(Input::Enter).unwrap();
+    assert!(s.running.is_none());
+    let after = dimension(&s, h);
+    assert!(after.text_mid.xy().near(before.text_mid.xy(), 1e-9), "the original dimension text stays");
+    assert!((after.defpt.y - before.defpt.y).abs() < 1e-9, "the original dimension line stays");
+    assert_eq!(after.overrides.get("textMove"), before.overrides.get("textMove"));
+    assert_eq!(s.doc().unwrap().model.len(), count + 1, "a second dimension was added");
+}
