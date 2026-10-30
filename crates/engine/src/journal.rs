@@ -79,6 +79,12 @@ impl Journal {
         self.lines.get(position.saturating_sub(self.dropped)..).unwrap_or_default()
     }
 
+    /// Positions of the comment lines marking what the script can't redo (picked objects and
+    /// selections), from `position` on, oldest first.
+    pub fn picks_from(&self, position: usize) -> impl Iterator<Item = usize> + '_ {
+        self.gaps.iter().copied().filter(move |at| *at >= position)
+    }
+
     /// Bytes of text kept.
     pub fn bytes(&self) -> usize {
         self.bytes
