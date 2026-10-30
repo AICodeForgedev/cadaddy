@@ -17,7 +17,7 @@ use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 
 use self::load::{Outcome, Sym};
-use super::{InsStage, InsertM, insert_with, valid_block_name};
+use super::{InsStage, InsertM, insert_file, insert_with, valid_block_name};
 use crate::cmd::{CommandSpec, bad, bool_or, f64_or, point_param, point_value, str_param};
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
@@ -202,11 +202,17 @@ fn run_xattach(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("xattach", "`rotation` must be a number"));
     }
     let key = attach(s, &name, &path, overlay)?;
-    let h = insert_with(s, &key, at, scale, rotation, None, &serde_json::Map::new())?;
+    // The xref's INSUNITS over this drawing's (1.0 when either has none).
+    let factor = insert_file::block_factor(s, &key);
+    let h = insert_with(s, &key, at, scale * factor, rotation, None, &serde_json::Map::new())?;
     let host = host(s);
     let d = s.doc()?;
     let info = d.block(&key).map(|b| describe(d, b, host.as_deref()));
-    Ok(json!({ "name": key, "handle": h.hex(), "xref": info }))
+    let mut reply = json!({ "name": key, "handle": h.hex(), "xref": info, "unitFactor": factor });
+    if factor != 1.0 {
+        reply["note"] = json!(insert_file::factor_note(factor));
+    }
+    Ok(reply)
 }
 
 /// The xrefs a JSON call names (`names`, default all); an error when none match.
@@ -538,7 +544,8 @@ impl Interactive for XrefM {
                         return Ok(Step::Continue);
                     }
                 };
-                self.stage = XStage::Insert(Box::new(InsertM { name: Some(key), stage: InsStage::Point, ..InsertM::default() }));
+                let unit_factor = Some(insert_file::block_factor(s, &key));
+                self.stage = XStage::Insert(Box::new(InsertM { name: Some(key), stage: InsStage::Point, unit_factor, ..InsertM::default() }));
                 Ok(Step::Continue)
             }
             XStage::Insert(m) => m.input(s, i),

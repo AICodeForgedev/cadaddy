@@ -296,6 +296,7 @@ fn run_block(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
+    let from_file = str_param(p, "file").is_some();
     let p = &insert_file::json_params(s, p)?;
     let name = str_param(p, "name").ok_or_else(|| bad("insert", "`name` is required"))?.to_string();
     let at = point_req("insert", p, "at")?;
@@ -312,13 +313,23 @@ fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let rot = f64_or(p, "rotation", 0.0).to_radians();
     let vals = p.get("attribs").and_then(Value::as_object).cloned().unwrap_or_default();
-    let h = insert_with(s, &name, at, scale, rot, point_param(p, "basePoint"), &vals)?;
-    if bool_or(p, "explode", false) {
+    // A drawing file is scaled by its INSUNITS over this drawing's (1.0 when either has none).
+    let factor = if from_file { insert_file::block_factor(s, &name) } else { 1.0 };
+    let h = insert_with(s, &name, at, scale * factor, rot, point_param(p, "basePoint"), &vals)?;
+    let mut reply = if bool_or(p, "explode", false) {
         // The EXPLODE command body, not `execute`: INSERT records the one undo step.
         let explode = find_command("explode").ok_or_else(|| EngineError::UnknownCommand("explode".into()))?;
-        return (explode.run)(s, &json!({ "handles": [h.hex()] }));
+        (explode.run)(s, &json!({ "handles": [h.hex()] }))?
+    } else {
+        attedit::with_unknown_tags(s, h, &vals, json!({ "handle": h.hex() }))
+    };
+    if from_file && let Some(o) = reply.as_object_mut() {
+        o.insert("unitFactor".into(), json!(factor));
+        if factor != 1.0 {
+            o.insert("note".into(), json!(insert_file::factor_note(factor)));
+        }
     }
-    Ok(attedit::with_unknown_tags(s, h, &vals, json!({ "handle": h.hex() })))
+    Ok(reply)
 }
 
 fn attdef_kind(s: &Session, tag: &str, prompt: &str, default: &str, at: Vec2, height: f64, invisible: bool) -> EntityKind {
@@ -611,6 +622,8 @@ struct InsertM {
     explode: bool,
     /// The file waiting for the Redefine answer.
     file: Option<insert_file::FileRef>,
+    /// The INSUNITS factor of a drawing file or xref being placed (None: a plain block).
+    unit_factor: Option<f64>,
 }
 
 /// INSERT's prompts for block `name`, already chosen, from the insertion point on; with `scale`
@@ -638,7 +651,11 @@ impl InsertM {
             && self.asked >= self.attdefs.len()
             && let (Some(n), Some(a), Some(sc), Some(r)) = (self.name.clone(), self.at, self.scale, self.rotation)
         {
-            let h = insert_with(s, &n, a, sc, r, self.base, &self.values)?;
+            let factor = self.unit_factor.unwrap_or(1.0);
+            if factor != 1.0 {
+                s.echo(insert_file::factor_note(factor));
+            }
+            let h = insert_with(s, &n, a, sc * factor, r, self.base, &self.values)?;
             if self.explode {
                 insert_file::explode_insert(s, h)?;
             }
@@ -686,7 +703,10 @@ impl InsertM {
     /// Define the block from a file, then choose it; a file that can't be read is reported.
     fn choose_file(&mut self, s: &mut Session, f: &insert_file::FileRef) -> Result<()> {
         match f.define(s) {
-            Ok(name) => self.choose(s, &name),
+            Ok(name) => {
+                self.unit_factor = Some(insert_file::block_factor(s, &name));
+                self.choose(s, &name)
+            }
             Err(e) => {
                 s.echo(e.to_string());
                 Ok(())
