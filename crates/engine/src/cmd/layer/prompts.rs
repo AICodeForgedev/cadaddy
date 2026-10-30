@@ -53,6 +53,7 @@ enum Change {
     Transparency(u64),
     Plot(bool),
     Description(String),
+    Material(String),
 }
 
 impl Change {
@@ -70,6 +71,7 @@ impl Change {
             Change::Transparency(t) => json!({ "transparency": t }),
             Change::Plot(p) => json!({ "plot": p }),
             Change::Description(d) => json!({ "description": d }),
+            Change::Material(m) => json!({ "material": m }),
         }
     }
     /// The layer-list prompt for this change; `true` when Enter means the current layer.
@@ -87,6 +89,7 @@ impl Change {
             Change::Transparency(t) => (format!("Enter name list of layer(s) for transparency {t}%"), true),
             Change::Plot(_) => ("Enter layer name(s) for this plot preference".into(), true),
             Change::Description(_) => ("Enter name list of layer(s) to apply description".into(), true),
+            Change::Material(m) => (format!("Enter name list of layer(s) for material \"{m}\""), true),
         }
     }
 }
@@ -111,6 +114,8 @@ enum Stage {
     Transparency,
     Plot,
     Description,
+    /// MATerial: the material's name (or Global).
+    Material,
     Layers(Change),
     /// Turning the current layer off asks first.
     ConfirmOff(Vec<String>),
@@ -210,10 +215,7 @@ impl LayerM {
             "Unlock" => Stage::Layers(Change::Unlock),
             "Description" => Stage::Description,
             "stAte" => Stage::State,
-            "MATerial" => {
-                s.echo("-LAYER MATerial needs material definitions, which this drawing model doesn't keep yet (MATERIALS).");
-                Stage::Option
-            }
+            "MATerial" => Stage::Material,
             "rEconcile" => {
                 let pending = s.doc().map(super::notify::unreconciled).unwrap_or_default();
                 if pending.is_empty() {
@@ -270,7 +272,11 @@ impl LayerM {
             if let Some(o) = p.as_object_mut() {
                 o.insert("name".into(), json!(n));
             }
-            if let Err(e) = call(s, "layer.set", &p) {
+            let (cmd, p) = match change {
+                Change::Material(m) => ("materialattach", json!({ "layer": n, "material": m })),
+                _ => ("layer.set", p),
+            };
+            if let Err(e) = call(s, cmd, &p) {
                 s.echo(format!("Layer \"{n}\": {}", message(&e)));
             }
         }
@@ -516,6 +522,24 @@ impl LayerM {
                 }
             },
             Stage::Description => back(self, Stage::Layers(Change::Description(text.unwrap_or_default()))),
+            Stage::Material => {
+                let name = text.unwrap_or_else(|| cadaddy_doc::material::GLOBAL.to_string());
+                let known = name.eq_ignore_ascii_case(cadaddy_doc::material::GLOBAL) || s.doc()?.material(&name).is_some();
+                if known {
+                    back(self, Stage::Layers(Change::Material(name)))
+                } else {
+                    let have: Vec<&str> = s.doc()?.materials.iter().map(|m| m.name.as_str()).collect();
+                    self.stage = Stage::Material;
+                    Err(retry(format!(
+                        "No material named \"{name}\". Available: {}.",
+                        if have.is_empty() {
+                            cadaddy_doc::material::GLOBAL.to_string()
+                        } else {
+                            format!("{}, {}", cadaddy_doc::material::GLOBAL, have.join(", "))
+                        }
+                    )))
+                }
+            }
             Stage::Layers(change) => self.layers(s, change, text.as_deref()),
             Stage::ConfirmOff(names) => {
                 let cur = current_layer(s);
@@ -556,6 +580,7 @@ impl Interactive for LayerM {
             Stage::Transparency => Prompt::new("Enter transparency value (0-90)", NAME).default("0"),
             Stage::Plot => Prompt::new("Enter a plotting preference", KW).kw(&["Plot", "No"]).default("Plot"),
             Stage::Description => Prompt::new("Enter layer description", Accept::TEXT),
+            Stage::Material => Prompt::new("Enter material name or Global", NAME).default(cadaddy_doc::material::GLOBAL),
             Stage::Layers(c) => {
                 let (msg, enter_is_current) = c.prompt();
                 let p = Prompt::new(msg, NAME);

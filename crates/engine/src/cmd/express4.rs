@@ -1214,7 +1214,7 @@ pub fn trim_specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(BlockEdgesM::new(true)))),
         CommandSpec::new("superhatch", "Super Hatch", run_superhatch)
             .menu(&["Tools", "Express Tools", "Super Hatch"])
-            .params("{boundary (handle of a closed polyline, circle, ellipse or spline), block (name), spacing?: [dx, dy] (default the block's extents), mode?: block (the only mode available)} → {count, whole, clipped, group, handles}: the block tiled on a grid from the boundary's lower left corner; a tile is placed where its cell is inside or crosses the boundary, and tiles crossing it are clipped to it (XCLIP); grouped. Image, wipeout and xref modes are not available yet")
+            .params("{boundary (handle of a closed polyline, circle, ellipse or spline), block (name), spacing?: [dx, dy] (default the block's extents), mode?: block (the only mode available)} → {count, whole, clipped, group, handles}: the block tiled on a grid from the boundary's lower left corner; a tile is placed where its cell is inside or crosses the boundary, and tiles crossing it are clipped to it (XCLIP); grouped. Image, wipeout and xref modes are not supported")
             .interactive(|_| Ok(Box::new(SuperhatchM::default()))),
     ]
 }
@@ -1646,16 +1646,13 @@ fn cadaddy_engine_point(v: &Value) -> Option<Vec2> {
 fn run_superhatch(s: &mut Session, p: &Value) -> Result<Value> {
     for key in ["image", "wipeout", "xref"] {
         if p.get(key).is_some_and(|v| !v.is_null()) {
-            return Err(bad("superhatch", format!("the {key} mode is not available yet; SUPERHATCH tiles a block (`block`)")));
+            return Err(bad("superhatch", format!("the {key} mode is not supported; SUPERHATCH tiles a block (`block`)")));
         }
     }
     if let Some(m) = p.get("mode").and_then(Value::as_str)
         && !m.trim().eq_ignore_ascii_case("block")
     {
-        return Err(bad(
-            "superhatch",
-            format!("the {} mode is not available yet; SUPERHATCH tiles a block (`block`)", m.trim().to_ascii_lowercase()),
-        ));
+        return Err(bad("superhatch", format!("the {} mode is not supported; SUPERHATCH tiles a block (`block`)", m.trim().to_ascii_lowercase())));
     }
     let boundary = handle_param("superhatch", p, "boundary")?;
     let name = str_param(p, "block").ok_or_else(|| bad("superhatch", "`block` (a block name) is required"))?.to_string();
