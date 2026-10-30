@@ -187,7 +187,7 @@ impl Session {
         if g.shape == GripShape::List {
             return Err(EngineError::Other("a list grip is chosen from, not dragged".into()));
         }
-        let edit = DynGripEdit { handle, node, part, from: g.at, property: g.property, distance: g.shape == GripShape::Linear };
+        let edit = DynGripEdit { handle, node, part, from: g.at, property: g.property, distance: matches!(g.shape, GripShape::Linear | GripShape::Polar) };
         let machine = crate::guard::Guarded::wrap(Box::new(edit));
         let st = self.state()?;
         let (before, selection_before) = (st.doc.clone(), st.selection.clone());

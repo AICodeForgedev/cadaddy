@@ -133,6 +133,12 @@ pub fn reference(d: &Drawing, insert: Handle) -> Option<Reference> {
     Some(Reference { definition, values })
 }
 
+/// The direction of `end` from `base` in degrees (0 to 360).
+fn angle(base: Vec3, end: Vec3) -> f64 {
+    let a = (end.y - base.y).atan2(end.x - base.x).to_degrees();
+    if a < 0.0 { a + 360.0 } else { a }
+}
+
 /// A number as the drawing shows lengths (LUPREC decimals).
 fn number(d: &Drawing, v: f64) -> String {
     let prec = usize::try_from(d.header.i64("LUPREC", 4).clamp(0, 8)).unwrap_or(4);
@@ -246,6 +252,38 @@ pub fn custom_properties(d: &Drawing, insert: Handle) -> Option<(String, Vec<Cus
                 };
                 out.push(CustomProperty { name: format!("{label} X"), value: number(d, (at.x - base.x) * sx), choices: Vec::new(), editable: true });
                 out.push(CustomProperty { name: format!("{label} Y"), value: number(d, (at.y - base.y) * sy), choices: Vec::new(), editable: true });
+            }
+            ParameterKind::Polar { base: b, end: e, label, angle_label, values, .. } => {
+                let (b, e) = match v {
+                    Some(Value::Points { base, end }) => (*base, *end),
+                    _ => (*b, *e),
+                };
+                let choices = if values.is_list() { values.list.iter().map(|x| number(d, x * sx)).collect() } else { Vec::new() };
+                out.push(CustomProperty { name: label.clone(), value: number(d, (e - b).len() * sx), choices, editable: true });
+                out.push(CustomProperty { name: angle_label.clone(), value: number(d, angle(b, e)), choices: Vec::new(), editable: true });
+            }
+            ParameterKind::Xy { base: b, end: e, label, y_label, values, .. } => {
+                let (b, e) = match v {
+                    Some(Value::Points { base, end }) => (*base, *end),
+                    _ => (*b, *e),
+                };
+                let choices = if values.is_list() { values.list.iter().map(|x| number(d, x * sx)).collect() } else { Vec::new() };
+                out.push(CustomProperty { name: label.clone(), value: number(d, (e.x - b.x) * sx), choices, editable: true });
+                out.push(CustomProperty { name: y_label.clone(), value: number(d, (e.y - b.y) * sy), choices: Vec::new(), editable: true });
+            }
+            ParameterKind::Rotation { base: b, end: e, label, .. } | ParameterKind::Alignment { base: b, end: e, label, .. } => {
+                let (b, e) = match v {
+                    Some(Value::Points { base, end }) => (*base, *end),
+                    _ => (*b, *e),
+                };
+                out.push(CustomProperty { name: label.clone(), value: number(d, angle(b, e)), choices: Vec::new(), editable: true });
+            }
+            ParameterKind::Flip { label, base_state, flipped_state, .. } => {
+                let value = match v {
+                    Some(Value::Text { value }) => value.clone(),
+                    _ => base_state.clone(),
+                };
+                out.push(CustomProperty { name: label.clone(), value, choices: vec![base_state.clone(), flipped_state.clone()], editable: true });
             }
             ParameterKind::Visibility { label, states, .. } => {
                 let value = cur.property(p.node, "VisibilityState").unwrap_or_default();

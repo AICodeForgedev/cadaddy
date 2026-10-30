@@ -56,6 +56,14 @@ pub enum GripShape {
     Point,
     /// A down-pointing triangle: click it for the property's choices.
     List,
+    /// An arrow at the end of a polar parameter: drag it to change the distance and the angle.
+    Polar,
+    /// A square at the end of an XY parameter: drag it to change both distances.
+    Xy,
+    /// A round grip at the end of a rotation parameter: drag it to turn.
+    Rotation,
+    /// A grip that aligns the reference's direction.
+    Alignment,
 }
 
 /// One grip of a dynamic block reference.
@@ -189,6 +197,44 @@ pub fn grips(d: &Drawing, insert: Handle) -> Vec<DynGrip> {
                     });
                 }
             }
+            ParameterKind::Polar { base, end, label, .. }
+            | ParameterKind::Xy { base, end, label, .. }
+            | ParameterKind::Rotation { base, end, label, .. }
+            | ParameterKind::Alignment { base, end, label, .. } => {
+                let (b, e) = match r.values.get(&p.node) {
+                    Some(Value::Points { base, end }) => (*base, *end),
+                    _ => (*base, *end),
+                };
+                let id = if p.grips.len() >= 2 { grip(1) } else { grip(0) };
+                if shown(p.node, id) {
+                    let shape = match &p.kind {
+                        ParameterKind::Polar { .. } => GripShape::Polar,
+                        ParameterKind::Xy { .. } => GripShape::Xy,
+                        ParameterKind::Rotation { .. } => GripShape::Rotation,
+                        _ => GripShape::Alignment,
+                    };
+                    let dir = if shape == GripShape::Polar { toward(e, e - b) } else { Vec2::ZERO };
+                    out.push(DynGrip { node: p.node, part: GripPart::End, shape, at: world(e), dir, property: label.clone(), choices: Vec::new() });
+                }
+            }
+            ParameterKind::Flip { base, end, label, .. } => {
+                let (b, e) = match r.values.get(&p.node) {
+                    Some(Value::Points { base, end }) => (*base, *end),
+                    _ => (*base, *end),
+                };
+                let Some(list) = choices.get(&label.to_ascii_uppercase()).filter(|c| !c.is_empty()) else { continue };
+                if shown(p.node, grip(0)) {
+                    out.push(DynGrip {
+                        node: p.node,
+                        part: GripPart::At,
+                        shape: GripShape::List,
+                        at: world((b + e) * 0.5),
+                        dir: Vec2::ZERO,
+                        property: label.clone(),
+                        choices: list.clone(),
+                    });
+                }
+            }
             ParameterKind::Visibility { at, label, .. } | ParameterKind::Lookup { at, label, .. } => {
                 let Some(list) = choices.get(&label.to_ascii_uppercase()).filter(|c| !c.is_empty()) else { continue };
                 if shown(p.node, grip(0)) {
@@ -204,7 +250,7 @@ pub fn grips(d: &Drawing, insert: Handle) -> Vec<DynGrip> {
                     });
                 }
             }
-            _ => {}
+            ParameterKind::BasePoint { .. } | ParameterKind::Other { .. } => {}
         }
         if out.len() >= MAX_GRIPS {
             break;
