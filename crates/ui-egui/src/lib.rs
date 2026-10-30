@@ -726,6 +726,9 @@ impl CadApp {
         }
         // Programmatic saves are checked for what DWG/DXF keep as they run: the reply holds the
         // list (`notKeptDetail`), not a background notice nobody could collect.
+        // A check a person's save left running that finished since the last frame is theirs: it
+        // opens its dialog now, before this run's own `take(false)` could discard it.
+        exchangeloss::poll_background(self);
         let background = std::mem::replace(&mut self.session.background_checks, false);
         let r = self.session.execute(id, &params);
         self.session.background_checks = background;
@@ -1133,7 +1136,7 @@ impl CadApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         let _busy = diag::busy("logic");
         // Checks a save left running (what a DWG or DXF file didn't keep) report when done.
-        self.session.poll_background();
+        exchangeloss::poll_background(self);
         // A Script Editor script on its worker thread: its calls into the drawing run here.
         if self.session.rhai_pump(std::time::Duration::from_millis(8)) {
             ctx.request_repaint();
