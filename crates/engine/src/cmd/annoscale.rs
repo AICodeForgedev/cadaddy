@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(SelectRun::new("aiobjectscaleremove", "AIOBJECTSCALEREMOVE")))),
         CommandSpec::new("annoreset", "Synchronize Multiple-scale Positions", run_annoreset)
             .menu(&["Modify", "Annotative Object Scale", "Synchronize Multiple-scale Positions"])
-            .params("{handles?} (every scale of an annotative object shares one position)")
+            .params("{handles?} (every scale of an annotative object goes to the position of the current scale; the others keep their own sizes) → objects, changed")
             .interactive(|_| Ok(Box::new(SelectRun::new("annoreset", "ANNORESET")))),
         CommandSpec::new("annoupdate", "Annotative Update", run_annoupdate)
             .params("{handles?} (makes text, dimensions, multileaders and block references annotative or not as their style or block is)")
@@ -226,7 +226,8 @@ fn current_representation(d: &Drawing, e: &cadaddy_doc::Entity) -> Option<usize>
 
 /// MOVE of an annotative object with several scales moves only its representation at the current
 /// scale, as AutoCAD does: the move becomes that scale's offset. `false` (nothing done) when `m`
-/// isn't a pure translation or the object has no such representation.
+/// isn't a pure translation, the object has no such representation, or its kind can't shift one
+/// (hatches, radial dimensions with automatic text): the caller then moves the whole object.
 pub(crate) fn move_current_representation(d: &mut Drawing, h: Handle, m: &cadaddy_geom::Mat3) -> bool {
     let delta = m.apply(cadaddy_geom::Vec2::ZERO);
     let linear_identity = (m.apply_vec(cadaddy_geom::Vec2::X) - cadaddy_geom::Vec2::X).len() < 1e-12
@@ -234,7 +235,9 @@ pub(crate) fn move_current_representation(d: &mut Drawing, h: Handle, m: &cadadd
     if !linear_identity || !delta.is_finite() {
         return false;
     }
-    let Some(i) = d.entity(h).and_then(|e| current_representation(d, e)) else { return false };
+    let Some(i) = d.entity(h).filter(|e| cadaddy_doc::can_shift_representation(&e.kind)).and_then(|e| current_representation(d, e)) else {
+        return false;
+    };
     d.modify_entity(h, |e| {
         if let Some(sc) = e.common.anno_scales.get_mut(i) {
             sc.offset += delta;
