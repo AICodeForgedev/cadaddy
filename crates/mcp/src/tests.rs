@@ -729,8 +729,8 @@ fn unknown_tool_arguments_are_warned_about() {
     let r = call(&mut s, 2, "tools/call", json!({"name": "list_commands", "arguments": {"filter": "circle"}}));
     assert!(!r.to_string().contains("is not a parameter"), "{r}");
     // A tool with no arguments warns too.
-    let r = call(&mut s, 3, "tools/call", json!({"name": "cancel", "arguments": {"force": true}}));
-    assert!(r.to_string().contains("`force` is not a parameter of cancel"), "{r}");
+    let r = call(&mut s, 3, "tools/call", json!({"name": "cancel", "arguments": {"zzz": true}}));
+    assert!(r.to_string().contains("`zzz` is not a parameter of cancel"), "{r}");
 }
 
 /// B4-032: a schema error is worded for people, not as the JSON Schema it came from.
@@ -768,4 +768,130 @@ fn serve_cancellable_passes_cancels_on_while_serving() {
     assert_eq!(replies.len(), 1, "{replies:?}");
     assert_eq!(replies[0]["id"], 1);
     assert!(cadaddy_engine::cancel_pending());
+}
+
+/// B7-017: `save` lists `force` (its refusal says to pass it), and a forced save does not warn that it was ignored.
+#[test]
+fn save_has_a_force_parameter() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let tools = call(&mut s, 1, "tools/list", json!({}));
+    for name in ["save", "bim_from_pdf"] {
+        let t = tools["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == name).unwrap();
+        assert_eq!(t["inputSchema"]["properties"]["force"]["type"], "boolean", "{name}");
+    }
+    let save = tools["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "save").unwrap();
+    assert!(save["description"].as_str().unwrap().contains("force"));
+    let path = std::env::temp_dir().join(format!("cadaddy-mcp-force-{}.cdy", std::process::id()));
+    let r = call(&mut s, 2, "tools/call", json!({"name": "save", "arguments": {"path": path.to_string_lossy(), "force": true}}));
+    let _ = std::fs::remove_file(&path);
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert!(!r.to_string().contains("is not a parameter"), "{r}");
+}
+
+/// B7-027: a tool whose result starts with an image (render) still carries the unknown-argument warning.
+#[test]
+fn render_warns_about_unknown_arguments() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
+    let r = call(&mut s, 1, "tools/call", json!({"name": "render", "arguments": {"width": 64, "height": 64, "zzz_unknown": 1}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    let content = r["result"]["content"].as_array().unwrap();
+    assert_eq!(content[0]["type"], "image", "{r}");
+    assert!(r.to_string().contains("`zzz_unknown` is not a parameter of render"), "{r}");
+    let r = call(&mut s, 2, "tools/call", json!({"name": "render", "arguments": {"width": 64, "height": 64}}));
+    assert!(!r.to_string().contains("is not a parameter"), "{r}");
+}
+
+/// A control port that talks JSON lines: `handler` gets each (connection number, request) and returns the reply line
+/// (`None`: close the connection without a reply).
+fn fake_app(handler: impl Fn(usize, &Value) -> Option<Value> + Send + Sync + 'static) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handler = std::sync::Arc::new(handler);
+    std::thread::spawn(move || {
+        for (n, conn) in listener.incoming().flatten().enumerate() {
+            let handler = std::sync::Arc::clone(&handler);
+            std::thread::spawn(move || {
+                let mut out = conn.try_clone().unwrap();
+                for line in BufReader::new(conn).lines().map_while(Result::ok) {
+                    let req: Value = serde_json::from_str(&line).unwrap();
+                    let Some(mut reply) = handler(n, &req) else { return };
+                    reply["id"] = req["id"].clone();
+                    if writeln!(out, "{reply}").is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    addr
+}
+
+/// B7-026: an app that wants a token and got none says so; only a real transport loss says the reply was lost.
+#[test]
+fn connect_without_a_token_says_unauthorized_not_lost() {
+    if std::env::var_os(cadaddy_engine::control_auth::TOKEN_ENV).is_some() {
+        return;
+    }
+    // Like the app: answer the first request with `unauthorized` and close the connection.
+    let addr = fake_app(|_, _| Some(json!({"ok": false, "error": "unauthorized: send auth first"})));
+    let mut remote = crate::backend::Remote::lazy(&addr, false);
+    let err = crate::Backend::call(&mut remote, "app.open", json!({"path": "x.dwg"})).unwrap_err();
+    assert!(err.contains(&format!("CADaddy at {addr} refused the connection: no control token (looked in ")), "{err}");
+    assert!(err.contains("set CADADDY_CONTROL_TOKEN"), "{err}");
+    assert!(!err.contains("reply was lost"), "{err}");
+    // A genuine loss still says so.
+    let addr = fake_app(|_, req| (req["method"] == "ping").then(|| json!({"ok": true, "result": "pong"})));
+    let mut remote = crate::backend::Remote::lazy(&addr, false);
+    let err = crate::Backend::call(&mut remote, "app.open", json!({"path": "x.dwg"})).unwrap_err();
+    assert!(err.contains("the reply was lost"), "{err}");
+}
+
+/// The hello names the window that answered (title, process id) and whether it holds the agent port.
+#[test]
+fn connect_reports_which_window_it_drives() {
+    let addr = fake_app(|_, req| {
+        (req["method"] == "ping").then(|| {
+            json!({"ok": true, "result": {"pong": true, "version": env!("CARGO_PKG_VERSION"), "pid": 4242, "title": "CADaddy - Plan A.dwg", "agentPortHeldElsewhere": false}})
+        })
+    });
+    let remote = crate::backend::Remote::connect(&addr).unwrap();
+    let d = crate::Backend::describe(&remote);
+    assert!(d.contains("window \"CADaddy - Plan A.dwg\", pid 4242"), "{d}");
+    assert!(!d.contains("holds the agent port"), "{d}");
+    let r = json!({"pid": 7, "title": "T", "agentPortHeldElsewhere": true});
+    assert_eq!(crate::backend::window_description(&r).unwrap(), "window \"T\", pid 7; another window holds the agent port");
+    assert!(crate::backend::window_description(&json!("pong")).is_none());
+}
+
+/// B4-019: through `--connect` the cancel reaches the app on a connection of its own at once, while the render holds the first.
+#[test]
+fn cancel_through_connect_reaches_the_app_while_a_render_runs() {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let (tx, rx) = (std::sync::Mutex::new(tx), std::sync::Mutex::new(rx));
+    let addr = fake_app(move |_, req| match req["method"].as_str() {
+        Some("ping") => Some(json!({"ok": true, "result": "pong"})),
+        Some("control.cancel") => {
+            tx.lock().unwrap().send(()).unwrap();
+            Some(json!({"ok": true, "result": {"cancelRequested": true}}))
+        }
+        // The render: runs until the cancel arrives (the real one takes 30 s).
+        Some("ui.render") => {
+            let got = rx.lock().unwrap().recv_timeout(std::time::Duration::from_secs(20)).is_ok();
+            Some(json!({"ok": false, "error": if got { "render cancelled" } else { "render ran to the end" }}))
+        }
+        _ => Some(json!({"ok": true, "result": {}})),
+    });
+    let mut s = Server::new(Box::new(crate::backend::Remote::lazy(&addr, false)));
+    let input = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "render", "arguments": {}}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "cancel", "arguments": {}}}),
+    ];
+    let input = input.iter().map(|l| format!("{l}\n")).collect::<String>();
+    let start = std::time::Instant::now();
+    let mut out = Vec::new();
+    s.serve_cancellable(std::io::Cursor::new(input.into_bytes()), &mut out).unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "the render waited for the whole run: {:?}", start.elapsed());
+    assert!(String::from_utf8(out).unwrap().contains("render cancelled"));
 }
