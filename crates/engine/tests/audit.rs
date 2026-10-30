@@ -334,3 +334,41 @@ fn auditctl_writes_an_adt_log_beside_the_drawing() {
     s.execute("setvar", &json!({"name": "AUDITCTL", "value": 0})).unwrap();
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn audit_removes_viewport_lineweight_and_linetype_overrides_for_missing_layers() {
+    use cadaddy_engine::doc::Lineweight;
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({ "name": "Walls" })).unwrap();
+    s.execute("layout.set", &json!({ "name": "Layout1" })).unwrap();
+    let vp = s.execute("mview", &json!({ "layout": "Layout1" })).unwrap()["viewports"][0].as_str().unwrap().to_string();
+    s.execute("linetype", &json!({ "load": "DASHED" })).unwrap();
+    s.execute("vplayer", &json!({ "handle": vp, "lineweights": { "Walls": 0.5 }, "linetypes": { "Walls": "DASHED" } })).unwrap();
+    // A dangling lineweight entry (and no other kind of damage) for a layer that doesn't exist.
+    let mut d = (*s.doc().unwrap()).clone();
+    let layout = d.layouts.iter_mut().find(|l| l.name == "Layout1").unwrap();
+    let h = layout.entities.iter().find(|e| matches!(e.kind, EntityKind::Viewport(_))).unwrap().handle;
+    layout.entities.modify(h, |e| {
+        if let EntityKind::Viewport(v) = &mut e.kind {
+            v.layer_lineweights.push(("Gone".into(), Lineweight::Mm100(50)));
+        }
+    });
+    let st = s.state_mut().unwrap();
+    st.doc = Arc::new(d);
+    st.saved = st.doc.clone();
+
+    let r = s.execute("audit", &json!({})).unwrap();
+    assert_eq!(kinds(&r), vec!["danglingReference".to_string()], "{r:#}");
+    let r = s.execute("audit", &json!({"fix": true})).unwrap();
+    assert_eq!(r["fixed"], 1, "{r:#}");
+    let d = s.doc().unwrap();
+    let v = d
+        .layouts
+        .iter()
+        .flat_map(|l| l.entities.iter())
+        .find_map(|e| if let EntityKind::Viewport(v) = &e.kind { Some(v.clone()) } else { None })
+        .unwrap();
+    assert_eq!(v.layer_lineweights, vec![("Walls".to_string(), Lineweight::Mm100(50))]);
+    assert_eq!(v.layer_linetypes, vec![("Walls".to_string(), "DASHED".to_string())]);
+    assert!(kinds(&s.execute("audit", &json!({})).unwrap()).is_empty());
+}

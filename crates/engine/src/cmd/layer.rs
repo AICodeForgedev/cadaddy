@@ -536,7 +536,7 @@ fn run_state_rename(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 // LAYMRG and LAYDEL.
-mod merge;
+pub mod merge;
 
 #[cfg(test)]
 mod tests {

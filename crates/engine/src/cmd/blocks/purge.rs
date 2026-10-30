@@ -202,7 +202,12 @@ pub(in crate::cmd) fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
                 .collect()
         }
         Kind::Linetypes => {
-            let used = lower(&mut entities(d).map(|e| e.common.linetype.to_string()).chain(d.layers.iter().map(|l| l.linetype.clone())));
+            let vp_types = entities(d).flat_map(|e| match &e.kind {
+                EntityKind::Viewport(v) => v.layer_linetypes.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>(),
+                _ => Vec::new(),
+            });
+            let used =
+                lower(&mut entities(d).map(|e| e.common.linetype.to_string()).chain(d.layers.iter().map(|l| l.linetype.clone())).chain(vp_types));
             let cur = d.header.str("CELTYPE", "ByLayer");
             d.linetypes
                 .iter()

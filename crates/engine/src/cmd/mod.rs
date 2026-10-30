@@ -82,6 +82,7 @@ pub mod wholejob;
 mod xplode;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
+pub use layer::merge::{objects_per_layer, removal_refusal as layer_removal_refusal};
 pub use layer::notify::unreconciled as unreconciled_layers;
 pub use qselect::wildcard;
 pub use render::apply_environment;

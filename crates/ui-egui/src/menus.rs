@@ -1068,6 +1068,12 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some(crate::laywalkdlg::DIALOG.into());
             Ok(Value::Null)
         }
+        // From the menu or the ribbon: the Layer Merge / Layer Delete dialogs. JSON calls and typed
+        // lines keep running the command.
+        "laymrg" | "laydel" if params.is_null() && app.session.state().is_ok() => {
+            crate::layerremovedlg::open(app, id == "laydel");
+            Ok(Value::Null)
+        }
         "activity" if params.is_null() && app.session.state().is_ok() => {
             app.ui.dialog = Some(crate::activitypalette::DIALOG.into());
             Ok(Value::Null)

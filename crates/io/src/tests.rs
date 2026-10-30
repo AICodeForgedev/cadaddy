@@ -643,6 +643,47 @@ fn viewport_frozen_layers_roundtrip() {
     assert!(frozen.contains(&(3, Vec::new())), "{frozen:?}");
 }
 
+#[test]
+fn viewport_layer_linetypes_and_lineweights_roundtrip() {
+    let mut d = sample();
+    let paper = Space::Paper("Layout1".into());
+    let mk = |id: u32, lt: Vec<(String, String)>, lw: Vec<(String, Lineweight)>| {
+        EntityKind::Viewport(Box::new(Viewport {
+            center: Vec3::new(5.0, 4.0, 0.0),
+            width: 8.0,
+            height: 6.0,
+            view_center: Vec2::new(5.0, 2.5),
+            view_height: 12.0,
+            id,
+            locked: false,
+            frozen_layers: Vec::new(),
+            layer_colors: Vec::new(),
+            layer_linetypes: lt,
+            layer_lineweights: lw,
+            clip: None,
+            on: true,
+            twist: 0.0,
+            anno_scale: None,
+        }))
+    };
+    let lt = vec![("Walls".to_string(), "DASHED".to_string()), ("A B".to_string(), "Center Line".to_string())];
+    let lw = vec![("A B".to_string(), Lineweight::Mm100(50)), ("Walls".to_string(), Lineweight::Mm100(0))];
+    d.add(&paper, Common::default(), mk(2, lt.clone(), lw.clone())).unwrap();
+    d.add(&paper, Common::default(), mk(3, Vec::new(), Vec::new())).unwrap();
+    let back = roundtrip(&d);
+    let found: Vec<(u32, Vec<(String, String)>, Vec<(String, Lineweight)>)> = back
+        .layouts
+        .iter()
+        .flat_map(|l| l.entities.iter())
+        .filter_map(|e| match &e.kind {
+            EntityKind::Viewport(v) => Some((v.id, v.layer_linetypes.clone(), v.layer_lineweights.clone())),
+            _ => None,
+        })
+        .collect();
+    assert!(found.contains(&(2, lt, lw)), "{found:?}");
+    assert!(found.contains(&(3, Vec::new(), Vec::new())), "{found:?}");
+}
+
 /// A layout with viewport 2 frozen on `Walls` and `A B` (both real layers), and its written DXF as
 /// (code, value) pairs.
 fn frozen_vp_dxf() -> (Drawing, Vec<(String, String)>) {
