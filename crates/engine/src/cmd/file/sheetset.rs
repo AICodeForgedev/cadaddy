@@ -144,7 +144,7 @@ pub(super) fn spec() -> CommandSpec {
              | properties {sheet?, values: {name: value | null}, description?} (custom properties of the set, or of a sheet) \
              | pagesetup {name, page?: page setup fields | from?: sheet (its layout's), remove?: name, use?: name (\"\" each layout's own), subset?} \
              | view {sheet, view: the drawing's named view, at: [x, y] on the sheet, scale? (paper per drawing unit, 1), number?, title?, height? (label text, 3.5)} \
-             | callout {sheet (where it goes), view: view number or id, at: [x, y], height?} | fields (the field codes the set offers) \
+             | callout {sheet (where it goes), view: a view number (refused when several sheets have it: use `number/sheet`), or a JSON number = a view id, at: [x, y], height?} | fields (the field codes the set offers) \
              | insertField {sheet, field: e.g. SheetSet.Name, Sheet.Number, Sheet.Client, at: [x, y], height?}} → the set's listing (and {path, pages} for publish). AutoCAD .dst files are not read.",
         )
         .noundo()
@@ -408,14 +408,14 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         }
-        "sync" => sync(&path, &mut set)?,
+        "sync" => sync(s, &path, &mut set)?,
         "publish" => return publish(s, &path, &set, p),
         "properties" => properties(&mut set, p)?,
         "pagesetup" => page_setup(&path, &mut set, p)?,
-        "view" => place_view(&path, &mut set, p)?,
-        "callout" => callout(&path, &mut set, p)?,
+        "view" => place_view(s, &path, &mut set, p)?,
+        "callout" => callout(s, &path, &mut set, p)?,
         "fields" => return Ok(json!({ "fields": field_names(&set) })),
-        "insertfield" | "insert_field" => insert_field(&path, &set, p)?,
+        "insertfield" | "insert_field" => insert_field(s, &path, &set, p)?,
         other => {
             return Err(bad(
                 CMD,
@@ -479,47 +479,66 @@ fn add(path: &Path, set: &mut SheetSet, p: &Value) -> Result<()> {
 /// version kept as .bak), so the drawing's sheet number and title fields show them; write the
 /// set's data for the `\AcSm` fields into each drawing; put the current numbers and titles in the
 /// views' labels and the callouts.
-fn sync(path: &Path, set: &mut SheetSet) -> Result<()> {
+fn sync(s: &Session, path: &Path, set: &mut SheetSet) -> Result<()> {
     let hooks = io().ok_or_else(|| bad(CMD, "file formats are not available in this build"))?;
     let mut files: Vec<String> = set.sheets.iter().map(|s| s.drawing.clone()).collect();
     files.sort();
     files.dedup();
+    // All-or-nothing: read every drawing and check every rename on a copy of the set, and write
+    // nothing until all of them passed, so a failure leaves the drawings and the set agreeing.
+    let mut next = set.clone();
+    let mut changed: Vec<(PathBuf, cadaddy_doc::Drawing)> = Vec::new();
     for stored in files {
         let file = drawing_file(path, &stored)?;
+        refuse_if_open(s, &file)?;
         let mut d = read_drawing(&file)?;
         let before = d.clone();
-        for sh in set.sheets.iter_mut().filter(|s| s.drawing == stored) {
+        for i in 0..next.sheets.len() {
+            let Some(sh) = next.sheets.get(i).filter(|s| s.drawing == stored) else { continue };
             let want: String = format!("{} {}", sh.number, sh.title).trim().chars().take(255).collect();
             if want.is_empty() || want == sh.layout {
                 continue;
             }
-            if d.layout(&want).is_some() {
-                return Err(bad(CMD, format!("{stored}: a layout `{want}` already exists")));
-            }
-            let Some(l) = d.layouts.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&sh.layout)) else {
-                return Err(bad(CMD, format!("{stored}: no layout `{}`", sh.layout)));
+            let have = d.layouts.iter().position(|l| l.name.eq_ignore_ascii_case(&sh.layout));
+            let adopt = d.layout(&want).map(|l| l.name.clone());
+            let new_name = match (have, adopt) {
+                // A previous sync got as far as the drawing: take the layout it already named.
+                (None, Some(name)) => name,
+                (_, Some(_)) => return Err(bad(CMD, format!("{stored}: a layout `{want}` already exists"))),
+                (None, None) => return Err(bad(CMD, format!("{stored}: no layout `{}`", sh.layout))),
+                (Some(at), None) => {
+                    if let Some(l) = d.layouts.get_mut(at) {
+                        l.name = want.clone();
+                    }
+                    want
+                }
             };
-            l.name = want.clone();
-            sh.layout = want;
+            if let Some(sh) = next.sheets.get_mut(i) {
+                sh.layout = new_name;
+            }
         }
-        d.header.set_str(SHEET_SET_VAR, &sheet_data(set, &stored).to_string());
+        d.header.set_str(SHEET_SET_VAR, &sheet_data(&next, &stored).to_string());
         // Labels and callouts in this drawing.
-        let number_of = |id: u64| set.sheet(id).map(|s| s.number.clone()).unwrap_or_default();
-        for v in set.views.iter().filter(|v| set.sheet(v.sheet).is_some_and(|s| s.drawing == stored)) {
+        let number_of = |id: u64| next.sheet(id).map(|s| s.number.clone()).unwrap_or_default();
+        for v in next.views.iter().filter(|v| next.sheet(v.sheet).is_some_and(|s| s.drawing == stored)) {
             let label = format!("{} {}", v.number, v.title).trim().to_string();
             set_text(&mut d, &v.label, &label);
         }
-        for c in set.callouts.iter().filter(|c| set.sheet(c.sheet).is_some_and(|s| s.drawing == stored)) {
-            if let Some(v) = set.views.iter().find(|v| v.id == c.view) {
+        for c in next.callouts.iter().filter(|c| next.sheet(c.sheet).is_some_and(|s| s.drawing == stored)) {
+            if let Some(v) = next.views.iter().find(|v| v.id == c.view) {
                 set_text(&mut d, &c.handle, &format!("{}/{}", v.number, number_of(v.sheet)));
             }
         }
         if d != before {
-            let name = file.to_string_lossy().into_owned();
-            let bytes = (hooks.write)(&d, &name).map_err(|e| bad(CMD, format!("{name}: {e}")))?;
-            store(&name, &bytes)?;
+            changed.push((file, d));
         }
     }
+    for (file, d) in changed {
+        let name = file.to_string_lossy().into_owned();
+        let bytes = (hooks.write)(&d, &name).map_err(|e| bad(CMD, format!("{name}: {e}")))?;
+        store(&name, &bytes)?;
+    }
+    *set = next;
     Ok(())
 }
 
@@ -545,11 +564,30 @@ fn set_text(d: &mut cadaddy_doc::Drawing, hex: &str, text: &str) {
     });
 }
 
+/// Every sheet-set write to a drawing file goes through here: a drawing that is open in the
+/// session would be clobbered (the open copy is stale the moment the file changes, and saving it
+/// later overwrites the set's work), so it is refused with a way out.
+fn refuse_if_open(s: &Session, file: &Path) -> Result<()> {
+    let same = |a: &Path, b: &Path| {
+        let (a, b) = (std::fs::canonicalize(a).unwrap_or_else(|_| a.to_path_buf()), std::fs::canonicalize(b).unwrap_or_else(|_| b.to_path_buf()));
+        a == b
+    };
+    if s.docs.iter().any(|d| d.path.as_deref().is_some_and(|p| same(Path::new(p), file))) {
+        let name = file.file_name().map_or_else(|| file.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
+        return Err(bad(
+            CMD,
+            format!("{name} is open in CADaddy: save and close it first, then run this again (the set would overwrite the open copy)"),
+        ));
+    }
+    Ok(())
+}
+
 /// Read the drawing of `sheet`, change it with `f` and write it again (its previous version kept
 /// as .bak).
-fn edit_drawing<R>(path: &Path, sheet: &Sheet, f: impl FnOnce(&mut cadaddy_doc::Drawing, &str) -> Result<R>) -> Result<R> {
+fn edit_drawing<R>(s: &Session, path: &Path, sheet: &Sheet, f: impl FnOnce(&mut cadaddy_doc::Drawing, &str) -> Result<R>) -> Result<R> {
     let hooks = io().ok_or_else(|| bad(CMD, "file formats are not available in this build"))?;
     let file = drawing_file(path, &sheet.drawing)?;
+    refuse_if_open(s, &file)?;
     let mut d = read_drawing(&file)?;
     let layout =
         d.layout(&sheet.layout).map(|l| l.name.clone()).ok_or_else(|| bad(CMD, format!("{}: no layout `{}`", sheet.drawing, sheet.layout)))?;
@@ -690,7 +728,7 @@ fn page_setup(path: &Path, set: &mut SheetSet, p: &Value) -> Result<()> {
 
 /// Place a named view of a sheet's drawing on the sheet: a viewport showing it, and a label
 /// under it with the view's number and title.
-fn place_view(path: &Path, set: &mut SheetSet, p: &Value) -> Result<()> {
+fn place_view(s: &Session, path: &Path, set: &mut SheetSet, p: &Value) -> Result<()> {
     if set.views.len() >= MAX_ITEMS {
         return Err(bad(CMD, format!("at most {MAX_ITEMS} views")));
     }
@@ -705,7 +743,7 @@ fn place_view(path: &Path, set: &mut SheetSet, p: &Value) -> Result<()> {
     let title = text(p, "title").filter(|t| !t.is_empty()).unwrap_or_else(|| view.clone());
     let label_text = format!("{number} {title}").trim().to_string();
     let h = height(p);
-    let (viewport, label) = edit_drawing(path, &sheet, |d, layout| {
+    let (viewport, label) = edit_drawing(s, path, &sheet, |d, layout| {
         let nv = d
             .views
             .iter()
@@ -742,27 +780,42 @@ fn place_view(path: &Path, set: &mut SheetSet, p: &Value) -> Result<()> {
 
 /// Put a callout on a sheet pointing at a view: it shows "view number/sheet number" (kept up to
 /// date by sync).
-fn callout(path: &Path, set: &mut SheetSet, p: &Value) -> Result<()> {
+fn callout(s: &Session, path: &Path, set: &mut SheetSet, p: &Value) -> Result<()> {
     if set.callouts.len() >= MAX_ITEMS {
         return Err(bad(CMD, format!("at most {MAX_ITEMS} callouts")));
     }
     let i = sheet_index(set, p.get("sheet"))?;
     let sheet = set.sheets.get(i).cloned().ok_or_else(|| bad(CMD, "no such sheet"))?;
     let view = match p.get("view") {
-        Some(Value::Number(n)) => set.views.iter().find(|v| Some(v.id) == n.as_u64()),
+        // A JSON number is a view id, nothing else.
+        Some(Value::Number(n)) => set.views.iter().find(|v| Some(v.id) == n.as_u64()).cloned(),
         Some(Value::String(s)) => {
             // A view number, on its own or as "number/sheet".
             let (vn, sn) = s.split_once('/').map_or((s.trim(), None), |(a, b)| (a.trim(), Some(b.trim())));
-            set.views.iter().find(|v| v.number == vn && sn.is_none_or(|sn| set.sheet(v.sheet).is_some_and(|s| s.number == sn)))
+            let hits: Vec<&SheetView> =
+                set.views.iter().filter(|v| v.number == vn && sn.is_none_or(|sn| set.sheet(v.sheet).is_some_and(|s| s.number == sn))).collect();
+            if hits.len() > 1 {
+                let mut sheets: Vec<String> = hits.iter().map(|v| set.sheet(v.sheet).map_or_else(String::new, |s| s.number.clone())).collect();
+                sheets.sort();
+                sheets.dedup();
+                return Err(bad(
+                    CMD,
+                    format!(
+                        "view \"{vn}\" is on more than one sheet ({}): use the \"number/sheet\" form, e.g. \"{vn}/{}\"",
+                        sheets.join(", "),
+                        sheets.first().map_or("", String::as_str)
+                    ),
+                ));
+            }
+            hits.first().map(|v| (*v).clone())
         }
         _ => None,
     }
-    .cloned()
-    .ok_or_else(|| bad(CMD, "`view` (a view's number, \"number/sheet\", or id) is required"))?;
+    .ok_or_else(|| bad(CMD, "`view` (a view's number, \"number/sheet\", or a numeric view id) is required"))?;
     let at = point(p, "at")?;
     let target = set.sheet(view.sheet).map(|s| s.number.clone()).unwrap_or_default();
     let h = height(p);
-    let handle = edit_drawing(path, &sheet, |d, layout| Ok(add_text(d, layout, at, h, &format!("{}/{}", view.number, target))?.hex()))?;
+    let handle = edit_drawing(s, path, &sheet, |d, layout| Ok(add_text(d, layout, at, h, &format!("{}/{}", view.number, target))?.hex()))?;
     set.callouts.push(Callout { sheet: sheet.id, view: view.id, handle });
     Ok(())
 }
@@ -794,7 +847,7 @@ fn field_names(set: &SheetSet) -> Vec<Value> {
 }
 
 /// Put one of the set's fields on a sheet (an MTEXT holding the field code).
-fn insert_field(path: &Path, set: &SheetSet, p: &Value) -> Result<()> {
+fn insert_field(s: &Session, path: &Path, set: &SheetSet, p: &Value) -> Result<()> {
     let i = sheet_index(set, p.get("sheet"))?;
     let sheet = set.sheets.get(i).cloned().ok_or_else(|| bad(CMD, "no such sheet"))?;
     let field = text(p, "field").filter(|f| !f.is_empty()).ok_or_else(|| bad(CMD, "`field` (e.g. SheetSet.Name or Sheet.Number) is required"))?;
@@ -803,7 +856,7 @@ fn insert_field(path: &Path, set: &SheetSet, p: &Value) -> Result<()> {
     }
     let at = point(p, "at")?;
     let h = height(p);
-    edit_drawing(path, &sheet, |d, layout| add_text(d, layout, at, h, &format!("%<\\AcSm {field}>%")).map(|_| ()))
+    edit_drawing(s, path, &sheet, |d, layout| add_text(d, layout, at, h, &format!("%<\\AcSm {field}>%")).map(|_| ()))
 }
 
 /// Every sheet into one PDF, in order, with a bookmark per sheet ("number title") under its subset.

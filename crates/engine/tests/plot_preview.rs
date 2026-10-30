@@ -84,13 +84,20 @@ fn a_sheet_list_from_two_drawings_publishes_to_one_pdf() {
     let theirs = r["sheets"].as_array().unwrap().clone();
     assert_eq!(theirs.iter().map(|x| x["layout"].as_str().unwrap()).collect::<Vec<_>>(), ["Plan", "Section"]);
     let mut sheets = vec![json!({ "layout": "Layout1", "title": "A-1 Cover", "page": { "paper": "ISO A3", "landscape": true } })];
-    sheets.extend(theirs.into_iter().rev());
+    // The other drawing's Plan gets its own paper; Section keeps the drawing's own page setup.
+    sheets.extend(theirs.into_iter().rev().map(|mut x| {
+        if x["layout"] == "Plan" {
+            x["page"] = json!({ "paper": "ANSI B", "landscape": false });
+        }
+        x
+    }));
     // Saved and loaded again as a list.
     let list = dir.join("job.publish.json");
     s.execute("publishlist", &json!({ "action": "save", "path": list.to_string_lossy(), "sheets": sheets })).unwrap();
     let back = s.execute("publishlist", &json!({ "action": "load", "path": list.to_string_lossy() })).unwrap();
     assert_eq!(back["sheets"].as_array().unwrap().len(), 3);
     assert_eq!(back["sheets"][0]["page"]["paper"], "ISO A3");
+    assert_eq!(back["sheets"][2]["page"]["paper"], "ANSI B");
 
     let out = dir.join("job.pdf");
     let r = s.execute("publish", &json!({ "list": list.to_string_lossy(), "single": true, "path": out.to_string_lossy() })).unwrap();
@@ -98,6 +105,20 @@ fn a_sheet_list_from_two_drawings_publishes_to_one_pdf() {
     let marks = cadaddy_io::pdf_merge::bookmarks(&std::fs::read(&out).unwrap()).unwrap();
     let titles: Vec<(String, usize)> = marks.into_iter().map(|(t, _, p)| (t, p)).collect();
     assert_eq!(titles, vec![("A-1 Cover".to_string(), 1), ("site - Section".to_string(), 2), ("site - Plan".to_string(), 3)]);
+
+    // The per-sheet `page` overrides reach the published pages: this drawing (A3 landscape) and the
+    // other drawing (ANSI B portrait); a sheet with no override keeps its layout's own size.
+    let sizes = cadaddy_io::pdf_merge::page_sizes(&std::fs::read(&out).unwrap()).unwrap();
+    assert_eq!(sizes.len(), 3);
+    let near = |got: (f64, f64), w: f64, h: f64| (got.0 - w).abs() <= 1.0 && (got.1 - h).abs() <= 1.0;
+    assert!(near(sizes[0], 1190.6, 841.9), "sheet 1 should be A3 landscape: {:?}", sizes[0]);
+    assert!(near(sizes[2], 792.0, 1224.0), "other-drawing sheet should be ANSI B portrait: {:?}", sizes[2]);
+    let plain = dir.join("plain.pdf");
+    let section = json!({ "drawing": other.to_string_lossy(), "layout": "Section" });
+    s.execute("publish", &json!({ "sheets": [section], "single": true, "path": plain.to_string_lossy() })).unwrap();
+    let own = cadaddy_io::pdf_merge::page_sizes(&std::fs::read(&plain).unwrap()).unwrap()[0];
+    assert!(near(sizes[1], own.0, own.1), "sheet 2 keeps its own size: {:?} vs {own:?}", sizes[1]);
+    assert!(!near(sizes[1], 1190.6, 841.9) && !near(sizes[1], 792.0, 1224.0), "{:?}", sizes[1]);
 
     // Without `single`, one PDF per sheet, as before; `single` alone publishes this drawing's sheets.
     let r = s.execute("publish", &json!({ "single": true })).unwrap();

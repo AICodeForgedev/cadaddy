@@ -340,24 +340,72 @@ fn round(v: &mut Value, depth: usize) {
     }
 }
 
+/// Loose objects of one (type, shape): in scan order, and by anchor cell so a part lookup is a
+/// hash lookup. Cells are 2e-6 wide; the 3x3 neighbourhood of a wanted anchor covers the 1e-6
+/// match radius.
+#[derive(Default)]
+struct Bucket {
+    list: Vec<(Vec2, Handle)>,
+    grid: HashMap<(i64, i64), Vec<usize>>,
+}
+
+fn cell(p: Vec2) -> (i64, i64) {
+    // Saturating float-to-int casts keep hostile coordinates harmless.
+    ((p.x / 2e-6).floor() as i64, (p.y / 2e-6).floor() as i64)
+}
+
+impl Bucket {
+    fn push(&mut self, at: Vec2, h: Handle) {
+        self.grid.entry(cell(at)).or_default().push(self.list.len());
+        self.list.push((at, h));
+    }
+
+    /// The first object (in scan order) anchored within 1e-6 of `want` that `skip` does not refuse.
+    fn find(&self, want: Vec2, skip: impl Fn(Handle) -> bool) -> Option<Handle> {
+        let (cx, cy) = cell(want);
+        let mut best: Option<(usize, Handle)> = None;
+        for dx in -1..=1i64 {
+            for dy in -1..=1i64 {
+                let key = (cx.saturating_add(dx), cy.saturating_add(dy));
+                for &i in self.grid.get(&key).into_iter().flatten() {
+                    let Some(&(p, h)) = self.list.get(i) else { continue };
+                    if (p - want).len() < 1e-6 && !skip(h) && best.is_none_or(|(j, _)| i < j) {
+                        best = Some((i, h));
+                    }
+                }
+            }
+        }
+        best.map(|(_, h)| h)
+    }
+}
+
 /// Loose (non-reference) objects in scope by (type, shape): their anchor and handle.
-type ShapeIndex = HashMap<(&'static str, String), Vec<(Vec2, Handle)>>;
+struct ShapeIndex {
+    shapes: HashMap<(&'static str, String), Bucket>,
+    /// The scan stopped at the object cap.
+    capped: bool,
+}
+
+const MAX_INDEXED: usize = 200_000;
 
 fn shape_index(d: &Drawing, scope: &Scope) -> ShapeIndex {
-    let mut idx: ShapeIndex = HashMap::new();
-    for (_, e) in scope.objects(d).into_iter().take(200_000) {
+    let mut idx = ShapeIndex { shapes: HashMap::new(), capped: false };
+    let objects = scope.objects(d);
+    idx.capped = objects.len() > MAX_INDEXED;
+    for (_, e) in objects.into_iter().take(MAX_INDEXED) {
         if matches!(e.kind, EntityKind::Insert(_)) {
             continue;
         }
         let (Some(key), Some(at)) = (shape_key(&e.kind), e.kind.grips().first().copied().filter(|p| p.is_finite())) else { continue };
-        idx.entry((e.kind.type_name(), key)).or_default().push((at, e.handle));
+        idx.shapes.entry((e.kind.type_name(), key)).or_default().push(at, e.handle);
     }
     idx
 }
 
 /// Groups of loose objects that repeat block `name`'s definition moved (an exploded copy, at
-/// its own scale and unrotated).
-fn exploded(d: &Drawing, idx: &ShapeIndex, name: &str, work: &mut u64) -> Vec<Vec<Handle>> {
+/// its own scale and unrotated). Every candidate and part lookup is charged to `work`; when it
+/// runs out the groups found so far come back and `truncated` is set.
+fn exploded(d: &Drawing, idx: &ShapeIndex, name: &str, work: &mut u64, truncated: &mut bool) -> Vec<Vec<Handle>> {
     let Some(b) = d.block(name) else { return Vec::new() };
     let parts: Vec<(&'static str, String, Vec2)> = b
         .entities
@@ -372,22 +420,28 @@ fn exploded(d: &Drawing, idx: &ShapeIndex, name: &str, work: &mut u64) -> Vec<Ve
     let Some((t0, k0, a0)) = parts.first().cloned() else { return Vec::new() };
     let mut used: std::collections::HashSet<Handle> = std::collections::HashSet::new();
     let mut out = Vec::new();
-    for (at, h) in idx.get(&(t0, k0)).into_iter().flatten() {
+    let Some(first) = idx.shapes.get(&(t0, k0)) else { return out };
+    // Look the later parts' buckets up once, not once per candidate.
+    let rest: Vec<(Option<&Bucket>, Vec2)> = parts.iter().skip(1).map(|(t, k, a)| (idx.shapes.get(&(*t, k.clone())), *a)).collect();
+    for (at, h) in &first.list {
+        *work = work.saturating_add(1);
+        if *work > MAX_WORK {
+            *truncated = true;
+            return out;
+        }
         if used.contains(h) {
             continue;
         }
         let off = *at - a0;
         let mut group = vec![*h];
         let mut ok = true;
-        for (t, k, a) in parts.iter().skip(1) {
+        for (bucket, a) in &rest {
             *work = work.saturating_add(1);
             if *work > MAX_WORK {
+                *truncated = true;
                 return out;
             }
-            let want = *a + off;
-            let hit = idx
-                .get(&(*t, k.clone()))
-                .and_then(|v| v.iter().find(|(p, hh)| (*p - want).len() < 1e-6 && !used.contains(hh) && !group.contains(hh)).map(|(_, hh)| *hh));
+            let hit = bucket.and_then(|bk| bk.find(*a + off, |hh| used.contains(&hh) || group.contains(&hh)));
             match hit {
                 Some(hh) => group.push(hh),
                 None => {
@@ -406,10 +460,11 @@ fn exploded(d: &Drawing, idx: &ShapeIndex, name: &str, work: &mut u64) -> Vec<Ve
 
 /// Similar but not identical: per block, its references at another scale and its exploded
 /// copies.
-fn similar(d: &Drawing, scope: &Scope) -> serde_json::Map<String, Value> {
+fn similar(d: &Drawing, scope: &Scope) -> (serde_json::Map<String, Value>, bool) {
     let mut out = serde_json::Map::new();
     let idx = shape_index(d, scope);
     let mut work = 0u64;
+    let mut truncated = idx.capped;
     let mut scaled: BTreeMap<String, Vec<Handle>> = BTreeMap::new();
     for (_, e) in scope.objects(d) {
         if let EntityKind::Insert(i) = &e.kind
@@ -423,14 +478,14 @@ fn similar(d: &Drawing, scope: &Scope) -> serde_json::Map<String, Value> {
         d.blocks.values().filter(|b| reported(&b.name) && b.xref_path.is_none() && !b.name.contains('|')).map(|b| b.name.clone()).collect();
     names.sort();
     for n in names {
-        let ex = exploded(d, &idx, &n, &mut work);
+        let ex = exploded(d, &idx, &n, &mut work, &mut truncated);
         let sc = scaled.remove(&n).unwrap_or_default();
         if ex.is_empty() && sc.is_empty() {
             continue;
         }
         out.insert(n, json!({ "scaled": hex(&sc), "exploded": ex.iter().map(|g| hex(g)).collect::<Vec<_>>() }));
     }
-    out
+    (out, truncated)
 }
 
 fn hex(hs: &[Handle]) -> Vec<String> {
@@ -550,7 +605,18 @@ fn run(s: &mut Session, cmd: &str, p: &Value, default_all: bool) -> Result<Value
         if bool_or(p, "similar", false)
             && let Some(o) = r.as_object_mut()
         {
-            o.insert("similar".into(), Value::Object(similar(d, &scope)));
+            let (sim, cut) = similar(d, &scope);
+            o.insert("similar".into(), Value::Object(sim));
+            if cut {
+                // The similar-copies scan ran out of work: say so, never a silent partial.
+                o.insert("truncated".into(), json!(true));
+                if let Some(caps) = o.get_mut("selfCheck").and_then(|c| c.get_mut("caps")).and_then(Value::as_object_mut) {
+                    caps.insert("work".into(), json!(MAX_WORK));
+                }
+                if let Some(m) = o.get("message").and_then(Value::as_str).map(|m| format!("{m}\n  (similar-copies scan too large: partial)")) {
+                    o.insert("message".into(), json!(m));
+                }
+            }
         }
         r
     };

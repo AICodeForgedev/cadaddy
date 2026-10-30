@@ -64,7 +64,10 @@ struct Pack {
     items: Vec<Item>,
     left: Vec<Left>,
     /// Source files already packed (canonical path → target), so each goes in once.
+    /// Only files that were read: a path is never rewritten to a target missing from the package.
     placed: HashMap<PathBuf, String>,
+    /// Source files that couldn't be read (listed once, however often they are referenced).
+    unreadable: HashSet<PathBuf>,
     /// Targets taken (lower case).
     taken: HashSet<String>,
     fonts: BTreeSet<String>,
@@ -166,16 +169,20 @@ impl Pack {
         if let Some(t) = self.placed.get(&canon) {
             return Ok(Some(relative(me, t)));
         }
+        if self.unreadable.contains(&canon) {
+            return Ok(None);
+        }
         self.room()?;
-        let target = self.place(kind, &file_name(&file));
-        self.placed.insert(canon, target.clone());
         let bytes = match self.read(&file) {
             Ok(b) => b,
             Err(e) => {
+                self.unreadable.insert(canon);
                 self.left.push(Left { kind, name: stored.to_string(), note: format!("couldn't be read: {e}") });
                 return Ok(None);
             }
         };
+        let target = self.place(kind, &file_name(&file));
+        self.placed.insert(canon, target.clone());
         self.items.push(Item { target: target.clone(), kind, source: file.to_string_lossy().into_owned(), bytes, note: String::new() });
         Ok(Some(relative(me, &target)))
     }
@@ -190,20 +197,25 @@ impl Pack {
             }
         };
         let canon = std::fs::canonicalize(&file).unwrap_or_else(|_| file.clone());
-        // Packed already (or being packed further up: a circular reference).
+        // Packed already (or being packed further up: a circular reference; it is recorded before
+        // its own references are followed, but only once its bytes were read).
         if let Some(t) = self.placed.get(&canon) {
             return Ok(Some(relative(me, t)));
         }
+        if self.unreadable.contains(&canon) {
+            return Ok(None);
+        }
         self.room()?;
-        let target = self.place("xref", &file_name(&file));
-        self.placed.insert(canon, target.clone());
         let bytes = match self.read(&file) {
             Ok(b) => b,
             Err(e) => {
+                self.unreadable.insert(canon);
                 self.left.push(Left { kind: "xref", name: stored.to_string(), note: format!("couldn't be read: {e}") });
                 return Ok(None);
             }
         };
+        let target = self.place("xref", &file_name(&file));
+        self.placed.insert(canon, target.clone());
         let source = file.to_string_lossy().into_owned();
         let (bytes, note) = match (self.hooks.read)(&bytes, &source) {
             Ok(mut x) if depth < MAX_BLOCK_DEPTH => {
@@ -447,6 +459,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         items: Vec::new(),
         left: Vec::new(),
         placed: HashMap::new(),
+        unreadable: HashSet::new(),
         taken: HashSet::new(),
         fonts: BTreeSet::new(),
         tables: BTreeSet::new(),

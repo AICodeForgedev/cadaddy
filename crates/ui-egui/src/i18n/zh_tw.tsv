@@ -2268,3 +2268,8 @@
 	Regenerate Dimensions	重新產生標註
 	Enter layer name for new dimensions (. for the current layer)	輸入新標註的圖層名稱 (. 表示目前圖層)
 	Colour by BIM Property	依 BIM 屬性著色
+	Extended Trim	延伸修剪
+	Trim and Extend	修剪並延伸
+	Trim to Block Objects	修剪至圖塊物件
+	Extend to Block Objects	延伸至圖塊物件
+	Super Hatch	超級填充線

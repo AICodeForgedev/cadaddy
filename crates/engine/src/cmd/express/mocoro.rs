@@ -302,7 +302,7 @@ impl Interactive for MocoroM {
                             Mode::Rotate => {
                                 let a = s
                                     .angle_settings()
-                                    .direction(&t)
+                                    .rotation(&t)
                                     .ok_or_else(|| EngineError::Other("Requires an angle, a point or an option.".into()))?;
                                 let snapshot = s.state()?.doc.clone();
                                 let before = self.base;

@@ -1,7 +1,9 @@
 //! EPS export (Encapsulated PostScript, vector): the same display list the SVG and PDF exports
 //! draw, fitted into a box of at most 720 points on its longer side. Lines keep their colours and
 //! lineweights (paper millimetres as points), filled areas fill, wipeouts paint white, raster
-//! images are embedded (RGB, clipped to what shows). Text is drawn as its strokes, as on screen.
+//! images are embedded (RGB, clipped to what shows). Text keeps its strokes, as on screen, and each
+//! word is also written over them as real text (standard Helvetica, Latin-1), so the file reads and
+//! searches as its lettering.
 
 use std::fmt::Write as _;
 
@@ -17,7 +19,7 @@ const MAX_IMAGE_PX: u32 = 1024;
 
 /// A space as EPS, showing `window` (or the extents with a 2% margin).
 pub fn export(d: &Drawing, space: &Space, window: Option<Bounds2>) -> String {
-    let list = cadaddy_render::build(d, space, &cadaddy_render::Options::default());
+    let list = cadaddy_render::build_plot(d, space, &cadaddy_render::Options::default());
     export_list(&list, window)
 }
 
@@ -101,8 +103,55 @@ pub fn export_list(list: &cadaddy_render::DisplayList, window: Option<Bounds2>) 
             }
         }
     }
+    words(&mut s, list, &tx, &ty, k);
     s.push_str("grestore\n%%EOF\n");
     s
+}
+
+/// Each word of the list as PostScript text over its strokes, in the colour of the first stroke
+/// drawn for it: Helvetica at the word's height, set with a matrix that places its origin and
+/// baseline direction.
+fn words(s: &mut String, list: &cadaddy_render::DisplayList, tx: &dyn Fn(f64) -> f64, ty: &dyn Fn(f64) -> f64, k: f64) {
+    let white = Rgb(255, 255, 255);
+    for w in list.words.iter().take(100_000) {
+        let size = w.height * k;
+        if !(size.is_finite() && size > 0.0 && w.dir.is_finite() && w.origin.is_finite()) {
+            continue;
+        }
+        let c = list.prims.get(w.prim as usize).map_or(Rgb(0, 0, 0), |p| p.display_rgb(white));
+        rgb(s, c);
+        let _ = writeln!(
+            s,
+            "/Helvetica findfont {size:.3} scalefont setfont gsave [{:.5} {:.5} {:.5} {:.5} {:.3} {:.3}] concat 0 0 m {} show grestore",
+            w.dir.x,
+            w.dir.y,
+            -w.dir.y,
+            w.dir.x,
+            tx(w.origin.x),
+            ty(w.origin.y),
+            ps_string(&w.text)
+        );
+    }
+}
+
+/// A PostScript string: Latin-1 characters (others become `?`), `(`, `)` and `\` escaped, the
+/// rest of 128–255 as octal escapes.
+fn ps_string(text: &str) -> String {
+    let mut esc = String::from("(");
+    for ch in text.chars().take(1000).map(|ch| if (ch as u32) < 256 && !ch.is_control() { ch } else { '?' }) {
+        match ch {
+            '(' | ')' | '\\' => {
+                esc.push('\\');
+                esc.push(ch);
+            }
+            ch if ch.is_ascii() => esc.push(ch),
+            ch => {
+                let _ = write!(esc, "\\{:03o}", ch as u32);
+            }
+        }
+    }
+    esc.push(')');
+    esc
 }
 
 /// An image: clipped to its visible triangles, its pixels (RGB over white) placed by its

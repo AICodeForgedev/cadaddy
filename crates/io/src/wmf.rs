@@ -74,10 +74,16 @@ pub fn export_list(list: &cadaddy_render::DisplayList, window: Option<Bounds2>) 
     let (lw_units, lh_units) = ((vw * k).round().clamp(1.0, SIZE) as i16, (vh * k).round().clamp(1.0, SIZE) as i16);
     // Drawing units → logical units (y down).
     let px = |p: Vec2| -> [u16; 2] {
-        let x = ((p.x - x0) * k).round().clamp(-32000.0, 32000.0) as i16;
-        let y = ((y1 - p.y) * k).round().clamp(-32000.0, 32000.0) as i16;
+        // Everything reaching here was clipped to `view` (within the picture plus a margin), so
+        // the values fit 16 bits without bending any line.
+        let x = ((p.x - x0) * k).round() as i16;
+        let y = ((y1 - p.y) * k).round() as i16;
         [x as u16, y as u16]
     };
+    // The picture plus a small margin, in drawing coordinates: far points are clipped to this
+    // along the line, never clamped per axis.
+    let e = vw.max(vh) * 0.02;
+    let view = Bounds2::new(Vec2::new(x0 - e, y1 - vh - e), Vec2::new(x0 + vw + e, y1 + e));
     let mut r = Records { words: Vec::new(), max_record: 0 };
     r.push(META_SETWINDOWORG, &[0, 0]);
     r.push(META_SETWINDOWEXT, &[lh_units as u16, lw_units as u16]);
@@ -112,28 +118,43 @@ pub fn export_list(list: &cadaddy_render::DisplayList, window: Option<Bounds2>) 
         let pts = list.points(p);
         match p.kind {
             Kind::Polyline => {
-                // Runs overlap by one point so the line stays joined.
-                let mut start = 0;
-                while start + 1 < pts.len() {
-                    let end = (start + MAX_RUN).min(pts.len());
-                    let run = pts.get(start..end).unwrap_or(&[]);
-                    let mut params = vec![run.len() as u16];
-                    params.extend(run.iter().flat_map(|q| px(*q)));
-                    r.push(META_POLYLINE, &params);
-                    start = end - 1;
+                // Each segment is clipped to the view; pieces that stay joined form one run.
+                let mut run: Vec<Vec2> = Vec::new();
+                for seg in pts.windows(2) {
+                    let (Some(a), Some(b2)) = (seg.first(), seg.get(1)) else { continue };
+                    match clip_segment(*a, *b2, &view) {
+                        Some((ca, cb)) => {
+                            if run.last().is_some_and(|l| l.dist(ca) > 1e-9) {
+                                polyline(&mut r, &run, &px);
+                                run.clear();
+                            }
+                            if run.is_empty() {
+                                run.push(ca);
+                            }
+                            run.push(cb);
+                        }
+                        None => {
+                            polyline(&mut r, &run, &px);
+                            run.clear();
+                        }
+                    }
                 }
+                polyline(&mut r, &run, &px);
             }
             Kind::Tris | Kind::Mask => {
                 for t in pts.chunks(3) {
                     if let [a, b2, cc] = t {
-                        let mut params = vec![3];
-                        params.extend([*a, *b2, *cc].iter().flat_map(|q| px(*q)));
-                        r.push(META_POLYGON, &params);
+                        let poly = clip_polygon(&[*a, *b2, *cc], &view);
+                        if poly.len() >= 3 {
+                            let mut params = vec![poly.len() as u16];
+                            params.extend(poly.iter().flat_map(|q| px(*q)));
+                            r.push(META_POLYGON, &params);
+                        }
                     }
                 }
             }
             Kind::Point => {
-                if let Some(q) = pts.first() {
+                if let Some(q) = pts.first().filter(|q| view.contains(**q)) {
                     let [x, y] = px(*q);
                     let (x, y) = (x as i16, y as i16);
                     let rad = (width as i16).max(10);
@@ -148,10 +169,10 @@ pub fn export_list(list: &cadaddy_render::DisplayList, window: Option<Bounds2>) 
                 if let (Some(bp), Some(dir)) = (pts.first(), pts.get(1)) {
                     let far = (vw + vh) * 2.0 + bp.dist(b.center());
                     let a = if ray { *bp } else { *bp - *dir * far };
-                    let e = *bp + *dir * far;
-                    let mut params = vec![2];
-                    params.extend([a, e].iter().flat_map(|q| px(*q)));
-                    r.push(META_POLYLINE, &params);
+                    let en = *bp + *dir * far;
+                    if let Some((ca, ce)) = clip_segment(a, en, &view) {
+                        polyline(&mut r, &[ca, ce], &px);
+                    }
                 }
             }
             Kind::Image(_) => {}
@@ -180,4 +201,72 @@ pub fn export_list(list: &cadaddy_render::DisplayList, window: Option<Bounds2>) 
         out.extend_from_slice(&w.to_le_bytes());
     }
     out
+}
+
+/// Write a run of points as POLYLINE records (longer runs are split, overlapping by one point so
+/// the line stays joined).
+fn polyline(r: &mut Records, run: &[Vec2], px: &dyn Fn(Vec2) -> [u16; 2]) {
+    let mut start = 0;
+    while start + 1 < run.len() {
+        let end = (start + MAX_RUN).min(run.len());
+        let part = run.get(start..end).unwrap_or(&[]);
+        let mut params = vec![part.len() as u16];
+        params.extend(part.iter().flat_map(|q| px(*q)));
+        r.push(META_POLYLINE, &params);
+        start = end - 1;
+    }
+}
+
+/// The part of segment `a`–`b` inside `r` (Liang–Barsky), or `None`; the line keeps its slope.
+fn clip_segment(a: Vec2, b: Vec2, r: &Bounds2) -> Option<(Vec2, Vec2)> {
+    if !(a.x.is_finite() && a.y.is_finite() && b.x.is_finite() && b.y.is_finite()) {
+        return None;
+    }
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for (p, q) in [(-dx, a.x - r.min.x), (dx, r.max.x - a.x), (-dy, a.y - r.min.y), (dy, r.max.y - a.y)] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else {
+            let t = q / p;
+            if p < 0.0 {
+                t0 = t0.max(t);
+            } else {
+                t1 = t1.min(t);
+            }
+        }
+    }
+    (t0 <= t1).then(|| (Vec2::new(a.x + t0 * dx, a.y + t0 * dy), Vec2::new(a.x + t1 * dx, a.y + t1 * dy)))
+}
+
+/// A polygon clipped to the rectangle `r` (Sutherland–Hodgman).
+fn clip_polygon(poly: &[Vec2], r: &Bounds2) -> Vec<Vec2> {
+    if poly.iter().any(|p| !(p.x.is_finite() && p.y.is_finite())) {
+        return Vec::new();
+    }
+    let mut pts = poly.to_vec();
+    // Edges: (axis is x, keep greater-or-equal, bound).
+    for (is_x, ge, bound) in [(true, true, r.min.x), (true, false, r.max.x), (false, true, r.min.y), (false, false, r.max.y)] {
+        let val = |p: Vec2| if is_x { p.x } else { p.y };
+        let inside = |p: Vec2| if ge { val(p) >= bound } else { val(p) <= bound };
+        let mut out = Vec::with_capacity(pts.len() + 2);
+        for (i, cur) in pts.iter().enumerate() {
+            let Some(prev) = pts.get((i + pts.len() - 1) % pts.len()) else { continue };
+            if inside(*cur) != inside(*prev) {
+                let d = val(*cur) - val(*prev);
+                let t = if d == 0.0 { 0.0 } else { (bound - val(*prev)) / d };
+                out.push(*prev + (*cur - *prev) * t);
+            }
+            if inside(*cur) {
+                out.push(*cur);
+            }
+        }
+        pts = out;
+        if pts.is_empty() {
+            break;
+        }
+    }
+    pts
 }

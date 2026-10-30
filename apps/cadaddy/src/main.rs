@@ -225,6 +225,26 @@ fn services() -> Services {
             }
             cadaddy_io::cdy::thumbnail(&std::fs::read(path).ok()?)
         })),
+        pick_plot_style: Some(Box::new(|| {
+            if !cadaddy_ui_egui::file_dialogs_allowed() {
+                return None;
+            }
+            rfd::FileDialog::new()
+                .add_filter(i18n::t("Plot style tables"), &["ctb", "stb", "json"])
+                .add_filter(i18n::t("All files"), &["*"])
+                .pick_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
+        pick_save_plot_style: Some(Box::new(|name: &str| {
+            if !cadaddy_ui_egui::file_dialogs_allowed() {
+                return None;
+            }
+            rfd::FileDialog::new()
+                .set_file_name(name)
+                .add_filter(i18n::t("Plot style tables"), &["ctb", "stb", "json"])
+                .save_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
         pick_pdf: Some(Box::new(|| {
             if !cadaddy_ui_egui::file_dialogs_allowed() {
                 return None;

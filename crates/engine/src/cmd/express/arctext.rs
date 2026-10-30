@@ -27,9 +27,12 @@ enum Align {
 /// Where each character goes: its middle point and rotation (radians).
 #[allow(clippy::too_many_arguments)]
 fn layout(center: Vec2, radius: f64, start: f64, end: f64, widths: &[f64], align: Align, convex: bool, gap: f64) -> Result<Vec<(Vec2, f64)>> {
-    let mut sweep = end - start;
-    while sweep <= 0.0 {
-        sweep += std::f64::consts::TAU;
+    if !(center.x.is_finite() && center.y.is_finite() && radius.is_finite() && start.is_finite() && end.is_finite()) {
+        return Err(other("The arc is not finite."));
+    }
+    let mut sweep = cadaddy_geom::ccw_sweep(start, end);
+    if sweep <= 0.0 {
+        sweep = std::f64::consts::TAU;
     }
     let n = widths.len();
     let natural: f64 = widths.iter().sum::<f64>() + gap * n.saturating_sub(1) as f64;
@@ -70,6 +73,10 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(other("Select an arc."));
     };
     let arc = arc.clone();
+    let c = arc.center;
+    if ![c.x, c.y, c.z, arc.radius, arc.start, arc.end].iter().all(|v| v.is_finite()) || arc.radius <= 0.0 {
+        return Err(other("The arc is not finite."));
+    }
     let style = p.get("style").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| d.header.str("TEXTSTYLE", "Standard"));
     let ts = d.text_style(&style).cloned().ok_or_else(|| other(format!("No text style named \"{style}\".")))?;
     let height = p.get("height").and_then(Value::as_f64).unwrap_or(if ts.height > 0.0 { ts.height } else { d.header.f64("TEXTSIZE", 0.2) });
