@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("redline", "Send to Redline", run_send)
             .menu(&["File", "Send to Redline"])
-            .params("{path?: where to write the PDF (default beside the drawing, same name; an unsaved drawing: the temporary folder), layouts?: [names] (default as PUBLISH: Model if it has objects, then every layout)} → {path, pages, opened: bool (Redline took it; false: not installed, the PDF is saved)}")
+            .params("{path?: where to write the PDF (default beside the drawing, same name; an unsaved drawing: the temporary folder), force?: bool (replace an existing `path`; the default path never replaces a file: it becomes NAME-redline.pdf), layouts?: [names] (default as PUBLISH: Model if it has objects, then every layout)} → {path, pages, opened: bool (Redline took it; false: not installed, the PDF is saved)}")
             .noundo()
             .enabled(has_doc),
         CommandSpec::new("redline.import", "Import Redline Markups", run_import)
@@ -59,11 +59,23 @@ fn default_path(s: &Session) -> Result<String> {
 }
 
 fn run_send(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut moved = false;
     let path = match str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()) {
-        Some(x) => x.to_string(),
-        None => default_path(s)?,
+        Some(x) => {
+            super::exchange::refuse_existing("redline", p, x)?;
+            x.to_string()
+        }
+        None => {
+            // Beside the drawing a PDF of that name may be the original print: never replace it.
+            let (path, m) = super::exchange::unused_path(&default_path(s)?, "redline");
+            moved = m;
+            path
+        }
     };
     let mut q = json!({ "path": path, "single": true });
+    if let Some(f) = p.get("force") {
+        q["force"] = f.clone();
+    }
     if let Some(l) = p.get("layouts").filter(|v| v.is_array()) {
         q["layouts"] = l.clone();
     }
@@ -75,6 +87,9 @@ fn run_send(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     let pages = r.get("pages").cloned().unwrap_or(Value::Null);
     let written = r.get("path").and_then(Value::as_str).unwrap_or(&path).to_string();
+    if moved {
+        s.echo(format!("A PDF of that name already exists, so it was kept; the redline PDF is {written}."));
+    }
     let opened = match OPENER.get() {
         Some(open) => open(&written).unwrap_or(false),
         None => false,
@@ -84,7 +99,7 @@ fn run_send(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         format!("Saved {written}. Redline isn't installed here (it's free from aicodeforge.dev); the PDF opens in any PDF reader.")
     });
-    Ok(json!({ "path": written, "pages": pages, "opened": opened }))
+    Ok(json!({ "path": written, "pages": pages, "opened": opened, "keptExisting": moved }))
 }
 
 fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
