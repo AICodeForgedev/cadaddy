@@ -301,8 +301,7 @@ pub fn set_property(d: &mut Drawing, insert: Handle, name: &str, value: &str) ->
         .parameters
         .iter()
         .find(|p| {
-            p.show_properties
-                && p.kind.labels().iter().any(|l| l.eq_ignore_ascii_case(want) || (axis.is_some() && l.eq_ignore_ascii_case(label)))
+            p.show_properties && p.kind.labels().iter().any(|l| l.eq_ignore_ascii_case(want) || (axis.is_some() && l.eq_ignore_ascii_case(label)))
         })
         .ok_or_else(|| format!("The reference has no property \"{name}\"."))?;
     let mut plan = Plan::default();
@@ -358,9 +357,10 @@ pub fn set_property(d: &mut Drawing, insert: Handle, name: &str, value: &str) ->
             plan.chain(&m, &r.values, p.node, if is_length { "UpdatedDistance" } else { "UpdatedAngle" })?;
         }
         (ParameterKind::Flip { label, base_state, flipped_state, .. }, None) => {
-            let state = [base_state, flipped_state].into_iter().find(|s| s.eq_ignore_ascii_case(value.trim())).ok_or_else(|| {
-                format!("\"{value}\" is not a state of {label}: {base_state}, {flipped_state}.")
-            })?;
+            let state = [base_state, flipped_state]
+                .into_iter()
+                .find(|s| s.eq_ignore_ascii_case(value.trim()))
+                .ok_or_else(|| format!("\"{value}\" is not a state of {label}: {base_state}, {flipped_state}."))?;
             plan.set.insert(p.node, Val::Text(state.clone()));
         }
         _ => return Err(format!("CADaddy can't change {name} yet.")),
@@ -587,11 +587,15 @@ fn apply(
         if let ActionKind::Array { column_offset, row_offset } = &a.kind {
             // Arrays show the parameter's value whether or not this change is to it.
             let Some((n, _)) = a.connections.first() else { continue };
-            let (Some(p), Some(Val::Points(nb, ne))) = (m.parameters.iter().find(|p| p.node == *n), new.get(n).cloned().or_else(|| current(&m, values, *n)))
+            let (Some(p), Some(Val::Points(nb, ne))) =
+                (m.parameters.iter().find(|p| p.node == *n), new.get(n).cloned().or_else(|| current(&m, values, *n)))
             else {
                 continue;
             };
-            let count = |len: f64, step: f64| if step > 1e-12 { ((len / step + 1e-9).floor().max(1.0)).min(MAX_ARRAY_SIDE) } else { 1.0 };
+            let count = |len: f64, step: f64| {
+                let n = (len / step + 1e-9).floor();
+                if step > 1e-12 && n.is_finite() { n.clamp(1.0, MAX_ARRAY_SIDE) } else { 1.0 }
+            };
             let (cols, rows, ucol, urow) = if matches!(p.kind, ParameterKind::Xy { .. }) {
                 let (dx, dy) = (ne.x - nb.x, ne.y - nb.y);
                 (
@@ -1128,7 +1132,9 @@ fn write_history(tags: &mut Vec<RawTag>, p: &super::Parameter, old: Option<&Val>
             c
         }
         (ParameterKind::Point { at, .. }, Val::Point(q)) => grips(&[(was.unwrap_or(*at), *q, *at)]),
-        (ParameterKind::Flip { label, .. }, Val::Text(t)) => vec![(p.node, vec![tag(1071, p.node.to_string()), tag(300, label.clone()), tag(1, t.clone())])],
+        (ParameterKind::Flip { label, .. }, Val::Text(t)) => {
+            vec![(p.node, vec![tag(1071, p.node.to_string()), tag(300, label.clone()), tag(1, t.clone())])]
+        }
         (
             ParameterKind::Polar { base, end, .. }
             | ParameterKind::Xy { base, end, .. }

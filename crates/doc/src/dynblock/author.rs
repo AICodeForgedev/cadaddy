@@ -152,9 +152,16 @@ pub enum NewActionKind {
     Flip,
     /// Copies along the parameter every `column_offset` (and, for an XY parameter, `row_offset`
     /// along its vertical distance).
-    Array { column_offset: f64, row_offset: f64 },
+    Array {
+        column_offset: f64,
+        row_offset: f64,
+    },
     /// A stretch by a polar parameter's end point; the `rotate` objects turn about its base.
-    PolarStretch { frame: Vec<Vec2>, vertices: Vec<(Handle, Vec<i32>)>, rotate: Vec<Handle> },
+    PolarStretch {
+        frame: Vec<Vec2>,
+        vertices: Vec<(Handle, Vec<i32>)>,
+        rotate: Vec<Handle>,
+    },
     /// Each row sets the columns' parameter values together.
     Lookup {
         columns: Vec<(i32, String, bool)>,
@@ -366,13 +373,15 @@ pub fn add_parameter(d: &mut Drawing, name: &str, p: &NewParameter, label: Optio
             "A parameter with two points needs two different ones.".into()
         });
     }
-    if let NewParameter::Linear { values, .. } | NewParameter::Polar { values, .. } | NewParameter::Xy { values, .. } | NewParameter::Rotation { values, .. } = p {
-        if values.list.len() > MAX_LIST
+    if let NewParameter::Linear { values, .. }
+    | NewParameter::Polar { values, .. }
+    | NewParameter::Xy { values, .. }
+    | NewParameter::Rotation { values, .. } = p
+        && (values.list.len() > MAX_LIST
             || values.list.iter().any(|v| !v.is_finite() || *v <= 0.0)
-            || ![values.minimum, values.maximum, values.increment].iter().all(|v| v.is_finite())
-        {
-            return Err("The value set must be positive numbers.".into());
-        }
+            || ![values.minimum, values.maximum, values.increment].iter().all(|v| v.is_finite()))
+    {
+        return Err("The value set must be positive numbers.".into());
     }
     let (record, dict, graph) = ensure_graph(d, name)?;
     let _ = (record, dict);
@@ -554,7 +563,10 @@ pub fn add_action(
         (NewActionKind::Flip, ParameterKind::Flip { .. }) => true,
         (NewActionKind::Array { .. }, ParameterKind::Linear { .. } | ParameterKind::Polar { .. } | ParameterKind::Xy { .. }) => true,
         (NewActionKind::PolarStretch { .. }, ParameterKind::Polar { .. }) => true,
-        (NewActionKind::Scale | NewActionKind::Rotate | NewActionKind::Flip | NewActionKind::Array { .. } | NewActionKind::PolarStretch { .. }, _) => false,
+        (
+            NewActionKind::Scale | NewActionKind::Rotate | NewActionKind::Flip | NewActionKind::Array { .. } | NewActionKind::PolarStretch { .. },
+            _,
+        ) => false,
         _ => true,
     };
     if !follows {
@@ -638,7 +650,11 @@ pub fn add_action(
                 return Err("An array along an XY parameter needs a row offset above 0.".into());
             }
             tags.push(tag(100, "AcDbBlockArrayAction"));
-            let (c0, c1) = if matches!(p.kind, ParameterKind::Xy { .. }) { ("UpdatedXDistance", "UpdatedYDistance") } else { ("UpdatedDistance", "UpdatedDistance") };
+            let (c0, c1) = if matches!(p.kind, ParameterKind::Xy { .. }) {
+                ("UpdatedXDistance", "UpdatedYDistance")
+            } else {
+                ("UpdatedDistance", "UpdatedDistance")
+            };
             tags.extend([tag(92, node.to_string()), tag(93, node.to_string()), tag(94, "0"), tag(95, "0")]);
             tags.extend([tag(301, c0), tag(302, c1), tag(303, ""), tag(304, "")]);
             tags.extend([tag(140, real(*row_offset)), tag(141, real(*column_offset))]);
@@ -818,7 +834,9 @@ fn value_set(tags: &mut Vec<RawTag>, v: &ValueSet, (description, flags, first, c
 fn in_stretch_frame(frame: &[Vec2], p: Vec2) -> bool {
     let rect = match frame {
         [a, b] => Some((*a, *b)),
-        [a, b, c, d] if (a.x == b.x && b.y == c.y && c.x == d.x && d.y == a.y) || (a.y == b.y && b.x == c.x && c.y == d.y && d.x == a.x) => Some((*a, *c)),
+        [a, b, c, d] if (a.x == b.x && b.y == c.y && c.x == d.x && d.y == a.y) || (a.y == b.y && b.x == c.x && c.y == d.y && d.x == a.x) => {
+            Some((*a, *c))
+        }
         _ => None,
     };
     match rect {

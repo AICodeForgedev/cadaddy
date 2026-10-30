@@ -15,7 +15,12 @@ fn line(s: &mut Session, a: [f64; 2], b: [f64; 2]) -> Value {
 /// Block "Box": a 10 × 5 rectangle of lines whose base point is (2, 0).
 fn boxed() -> Session {
     let mut s = Session::new();
-    let ls = vec![line(&mut s, [0.0, 0.0], [10.0, 0.0]), line(&mut s, [10.0, 0.0], [10.0, 5.0]), line(&mut s, [10.0, 5.0], [0.0, 5.0]), line(&mut s, [0.0, 5.0], [0.0, 0.0])];
+    let ls = vec![
+        line(&mut s, [0.0, 0.0], [10.0, 0.0]),
+        line(&mut s, [10.0, 0.0], [10.0, 5.0]),
+        line(&mut s, [10.0, 5.0], [0.0, 5.0]),
+        line(&mut s, [0.0, 5.0], [0.0, 0.0]),
+    ];
     s.execute("block", &json!({ "name": "Box", "base": [2, 0], "handles": ls })).unwrap();
     s
 }
@@ -59,7 +64,13 @@ fn the_palette_offers_every_parameter_and_action_type() {
     // Every parameter tool is a type BPARAMETER takes; every action tool one BACTIONTOOL takes.
     for id in ids(0) {
         let two = ["linear", "polar", "xy", "rotation", "alignment", "flip"].contains(&id.as_str());
-        let params = if two { json!({ "type": id, "base": [0, 0], "end": [3, 0], "label": format!("T{id}") }) } else if id == "visibility" { json!({ "type": id, "at": [0, 1] }) } else { json!({ "type": id, "at": [0, 1], "label": format!("T{id}") }) };
+        let params = if two {
+            json!({ "type": id, "base": [0, 0], "end": [3, 0], "label": format!("T{id}") })
+        } else if id == "visibility" {
+            json!({ "type": id, "at": [0, 1] })
+        } else {
+            json!({ "type": id, "at": [0, 1], "label": format!("T{id}") })
+        };
         s.execute("bparameter", &params).unwrap_or_else(|e| panic!("{id}: {e}"));
     }
     // Hide, show and toggle.
@@ -72,7 +83,18 @@ fn the_palette_offers_every_parameter_and_action_type() {
 #[test]
 fn a_parameter_tool_asks_for_its_points_in_the_editor() {
     let mut s = boxed();
-    s.start("bparameter").unwrap_err();
+    // Outside the editor the block is named first, and the points are the block's own.
+    s.start("bparameter").unwrap();
+    assert_eq!(s.current_prompt().map(|p| p.message), Some("Enter block name".to_string()));
+    let _ = s.input(Input::Text("Nope".into()));
+    assert_eq!(s.current_prompt().map(|p| p.message), Some("Enter block name".to_string()), "no such block: it asks again");
+    s.input(Input::Text("box".into())).unwrap();
+    s.input(Input::Keyword("Point".into())).unwrap();
+    s.input(p(3.0, 4.0)).unwrap();
+    assert!(s.running.is_none());
+    let d = s.execute("blocks.dynamic", &json!({ "name": "Box" })).unwrap();
+    assert_eq!((d["parameters"][0]["kind"]["at"]["x"].as_f64(), d["parameters"][0]["kind"]["at"]["y"].as_f64()), (Some(3.0), Some(4.0)));
+    s.execute("bremove", &json!({ "block": "Box", "element": "Position1" })).unwrap();
     s.execute("bedit", &json!({ "name": "Box" })).unwrap();
     s.start("bparameter").unwrap();
     s.input(Input::Keyword("Linear".into())).unwrap();
@@ -163,9 +185,11 @@ fn array_and_polar_stretch_tools_ask_for_their_extra_picks() {
 fn the_test_window_works_on_a_copy_and_closing_it_changes_nothing() {
     let mut s = boxed();
     s.execute("bedit", &json!({ "name": "Box" })).unwrap();
-    s.execute("bparameter", &json!({ "type": "linear", "base": [2, 0], "end": [12, 0], "label": "Width", "values": { "list": [10, 20, 30] } })).unwrap();
+    s.execute("bparameter", &json!({ "type": "linear", "base": [2, 0], "end": [12, 0], "label": "Width", "values": { "list": [10, 20, 30] } }))
+        .unwrap();
     let hs: Vec<String> = s.doc().unwrap().model.handles().iter().map(|h| h.hex()).collect();
-    s.execute("bactiontool", &json!({ "type": "stretch", "parameter": "Width", "handles": hs, "frame": [[8, -1], [12, -1], [12, 6], [8, 6]] })).unwrap();
+    s.execute("bactiontool", &json!({ "type": "stretch", "parameter": "Width", "handles": hs, "frame": [[8, -1], [12, -1], [12, 6], [8, 6]] }))
+        .unwrap();
     assert!(s.execute("btestblock", &json!({ "action": "close" })).is_err(), "no test window yet");
     // An unsaved change in the editor is in the test: a mark line drawn there.
     line(&mut s, [-2.0, 2.0], [-1.0, 2.0]);
@@ -200,7 +224,11 @@ fn the_test_window_works_on_a_copy_and_closing_it_changes_nothing() {
     // And the drawing behind the editor never saw it.
     s.execute("bclose", &json!({ "save": false })).unwrap();
     assert_lines(&lines_in(s.doc().unwrap(), "Box"), &[[0.0, 0.0, 10.0, 0.0], [10.0, 0.0, 10.0, 5.0], [10.0, 5.0, 0.0, 5.0], [0.0, 5.0, 0.0, 0.0]]);
-    assert!(s.doc().unwrap().blocks.keys().all(|k| !k.starts_with("*U")), "no anonymous copies left: {:?}", s.doc().unwrap().blocks.keys().collect::<Vec<_>>());
+    assert!(
+        s.doc().unwrap().blocks.keys().all(|k| !k.starts_with("*U")),
+        "no anonymous copies left: {:?}",
+        s.doc().unwrap().blocks.keys().collect::<Vec<_>>()
+    );
     assert_eq!(s.doc().unwrap().model.len(), 1, "the one reference BLOCK left was all that was here");
 }
 

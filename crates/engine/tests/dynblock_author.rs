@@ -256,16 +256,10 @@ fn a_stretch_moves_only_the_vertices_in_its_frame() {
     s.execute("blocks.reference.set", &json!({ "handle": h, "name": "Width", "value": "20" })).unwrap();
     // Widened from 10 to 20: the left edge stays at x = 0, the right edge is at x = 20, and the
     // top and bottom run the whole width. (A whole-object move would shift all four sides.)
-    assert_lines(
-        &lines_of(s.doc().unwrap(), &h),
-        &[[0.0, 0.0, 20.0, 0.0], [20.0, 0.0, 20.0, 5.0], [20.0, 5.0, 0.0, 5.0], [0.0, 5.0, 0.0, 0.0]],
-    );
+    assert_lines(&lines_of(s.doc().unwrap(), &h), &[[0.0, 0.0, 20.0, 0.0], [20.0, 0.0, 20.0, 5.0], [20.0, 5.0, 0.0, 5.0], [0.0, 5.0, 0.0, 0.0]]);
     // And back down, from the stretched copy.
     s.execute("blocks.reference.set", &json!({ "handle": h, "name": "Width", "value": "10" })).unwrap();
-    assert_lines(
-        &lines_of(s.doc().unwrap(), &h),
-        &[[0.0, 0.0, 10.0, 0.0], [10.0, 0.0, 10.0, 5.0], [10.0, 5.0, 0.0, 5.0], [0.0, 5.0, 0.0, 0.0]],
-    );
+    assert_lines(&lines_of(s.doc().unwrap(), &h), &[[0.0, 0.0, 10.0, 0.0], [10.0, 0.0, 10.0, 5.0], [10.0, 5.0, 0.0, 5.0], [0.0, 5.0, 0.0, 0.0]]);
 }
 
 #[test]

@@ -77,6 +77,7 @@ pub mod actionsdlg;
 pub mod activitypalette;
 pub mod agentdlg;
 pub mod agentpalette;
+pub mod authorpalette;
 pub mod bimpalette;
 pub mod clashpalette;
 pub mod convertdlg;
@@ -1347,6 +1348,7 @@ impl CadApp {
         });
         tearoff::show_windows(self, ui.ctx());
         dialogs::show(self, ui.ctx());
+        authorpalette::show(self, ui.ctx());
         layers::off_prompt(self, ui.ctx());
         palettes::patterns::prompt_picker(self, ui.ctx());
         layouttabs::move_copy_dialog(self, ui.ctx());

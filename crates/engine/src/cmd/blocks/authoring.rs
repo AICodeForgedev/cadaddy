@@ -167,17 +167,25 @@ fn parameter_tool(text: &str) -> Option<&'static str> {
 
 /// BPARAMETER typed without parameters: the parameter type, then its points, in the Block Editor.
 pub(super) struct ParameterRun {
-    block: String,
-    /// The editor's origin in block coordinates.
-    base: Vec2,
+    /// The block, with the editor's origin in block coordinates: the Block Editor's, else the
+    /// one named at the first prompt.
+    block: Option<(String, Vec2)>,
     tool: Option<(&'static str, usize)>,
     points: Vec<Vec2>,
 }
 
+/// The block named `text` for an authoring command outside the Block Editor.
+fn named_block(s: &Session, text: &str) -> Result<(String, Vec2)> {
+    let b = s.doc()?.block(text.trim()).ok_or_else(|| EngineError::Other(format!("Block \"{}\" not found.", text.trim())))?;
+    if b.anonymous || b.name.starts_with('*') {
+        return Err(EngineError::Other("Layouts and anonymous blocks can't be made dynamic.".into()));
+    }
+    Ok((b.name.clone(), Vec2::ZERO))
+}
+
 impl ParameterRun {
     pub(super) fn new(s: &Session) -> Result<Self> {
-        let (block, base) = edited(s, "bparameter").map_err(|_| EngineError::Other("Open a block in the Block Editor first (BEDIT).".into()))?;
-        Ok(ParameterRun { block, base, tool: None, points: Vec::new() })
+        Ok(ParameterRun { block: edited(s, "bparameter").ok(), tool: None, points: Vec::new() })
     }
 
     fn choose(&mut self, text: &str) -> Result<Step> {
@@ -188,9 +196,9 @@ impl ParameterRun {
     }
 
     fn finish(&self, s: &mut Session) -> Result<()> {
-        let Some((id, points)) = self.tool else { return Ok(()) };
-        let at = |p: &Vec2| json!([p.x + self.base.x, p.y + self.base.y]);
-        let mut p = json!({ "block": self.block, "type": id });
+        let (Some((id, points)), Some((block, base))) = (self.tool, &self.block) else { return Ok(()) };
+        let at = |p: &Vec2| json!([p.x + base.x, p.y + base.y]);
+        let mut p = json!({ "block": block, "type": id });
         if points == 2 {
             p["base"] = self.points.first().map(at).unwrap_or(Value::Null);
             p["end"] = self.points.get(1).map(at).unwrap_or(Value::Null);
@@ -200,7 +208,7 @@ impl ParameterRun {
         let spec = find_command("bparameter").ok_or_else(|| EngineError::UnknownCommand("bparameter".into()))?;
         let r = (spec.run)(s, &p)?;
         let label = r.get("label").and_then(Value::as_str).unwrap_or(id);
-        s.echo(format!("Parameter \"{label}\" added to block \"{}\".", self.block));
+        s.echo(format!("Parameter \"{label}\" added to block \"{block}\"."));
         Ok(())
     }
 }
@@ -211,8 +219,22 @@ impl Interactive for ParameterRun {
     }
 
     fn prompt(&self, _s: &Session) -> Prompt {
+        if self.block.is_none() {
+            return Prompt::new("Enter block name", Accept::TEXT);
+        }
         match self.tool {
-            None => Prompt::new("Enter parameter type", Accept::TEXT).kw(&["Point", "Linear", "POlar", "XY", "Rotation", "ALignment", "Flip", "Visibility", "LOokup", "Basepoint"]),
+            None => Prompt::new("Enter parameter type", Accept::TEXT).kw(&[
+                "Point",
+                "Linear",
+                "POlar",
+                "XY",
+                "Rotation",
+                "ALignment",
+                "Flip",
+                "Visibility",
+                "LOokup",
+                "Basepoint",
+            ]),
             Some((_, 2)) if self.points.is_empty() => Prompt::new("Specify start point", Accept::POINT),
             Some((_, 2)) => Prompt::new("Specify end point", Accept::POINT).base_opt(self.points.first().copied()),
             Some(_) => Prompt::new("Specify parameter location", Accept::POINT),
@@ -220,6 +242,16 @@ impl Interactive for ParameterRun {
     }
 
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if self.block.is_none() {
+            return match i {
+                Input::Keyword(k) | Input::Text(k) => {
+                    self.block = Some(named_block(s, &k)?);
+                    Ok(Step::Continue)
+                }
+                Input::Enter | Input::Cancel => Ok(Step::Cancel),
+                _ => Err(EngineError::Other("Requires a block name.".into())),
+            };
+        }
         match (self.tool, i) {
             (None, Input::Keyword(k) | Input::Text(k)) => self.choose(&k),
             (Some((_, n)), Input::Point(p)) => {
@@ -274,8 +306,8 @@ fn follows(tool: &str, kind: &ParameterKind) -> bool {
 
 /// BACTIONTOOL typed without parameters: the action, the parameter it follows, then its picks.
 pub(super) struct ActionRun {
-    block: String,
-    base: Vec2,
+    /// The block and the editor's origin in block coordinates, as for [`ParameterRun`].
+    block: Option<(String, Vec2)>,
     tool: Option<&'static str>,
     stage: Stage,
     parameter: Option<i32>,
@@ -291,10 +323,8 @@ pub(super) struct ActionRun {
 
 impl ActionRun {
     pub(super) fn new(s: &Session) -> Result<Self> {
-        let (block, base) = edited(s, "bactiontool").map_err(|_| EngineError::Other("Open a block in the Block Editor first (BEDIT).".into()))?;
         Ok(ActionRun {
-            block,
-            base,
+            block: edited(s, "bactiontool").ok(),
             tool: None,
             stage: Stage::Tool,
             parameter: None,
@@ -309,9 +339,13 @@ impl ActionRun {
         })
     }
 
+    fn block_name(&self) -> &str {
+        self.block.as_ref().map_or("", |(n, _)| n.as_str())
+    }
+
     fn model(&self, s: &Session) -> Result<DynamicBlock> {
-        dynblock::dynamic_block(s.doc()?, &self.block)
-            .ok_or_else(|| EngineError::Other(format!("Block \"{}\" has no parameters yet; add one first (BPARAMETER).", self.block)))
+        dynblock::dynamic_block(s.doc()?, self.block_name())
+            .ok_or_else(|| EngineError::Other(format!("Block \"{}\" has no parameters yet; add one first (BPARAMETER).", self.block_name())))
     }
 
     /// The parameters of the block the chosen tool can follow.
@@ -336,7 +370,9 @@ impl ActionRun {
             EngineError::Other(format!("\"{}\" is not an action type (move, scale, stretch, polar stretch, rotate, flip, array).", text.trim()))
         })?;
         if *id == "lookup" {
-            return Err(EngineError::Other("A lookup table is entered as BACTIONTOOL parameters (type: lookup, columns, rows), not at the prompt.".into()));
+            return Err(EngineError::Other(
+                "A lookup table is entered as BACTIONTOOL parameters (type: lookup, columns, rows), not at the prompt.".into(),
+            ));
         }
         self.tool = Some(id);
         let found = self.suitable(s)?;
@@ -376,11 +412,11 @@ impl ActionRun {
     }
 
     fn finish(&self, s: &mut Session) -> Result<()> {
-        let Some(tool) = self.tool else { return Ok(()) };
+        let (Some(tool), Some((block, base))) = (self.tool, &self.block) else { return Ok(()) };
         let hexes = |hs: &[Handle]| hs.iter().map(|h| h.hex()).collect::<Vec<_>>();
-        let mut p = json!({ "block": self.block, "type": tool, "parameter": self.parameter, "handles": hexes(&self.objects) });
+        let mut p = json!({ "block": block, "type": tool, "parameter": self.parameter, "handles": hexes(&self.objects) });
         if matches!(tool, "stretch" | "polarstretch") {
-            p["frame"] = json!(self.frame.iter().map(|f| [f.x + self.base.x, f.y + self.base.y]).collect::<Vec<_>>());
+            p["frame"] = json!(self.frame.iter().map(|f| [f.x + base.x, f.y + base.y]).collect::<Vec<_>>());
         }
         if tool == "polarstretch" {
             p["rotate"] = json!(hexes(&self.rotate));
@@ -394,7 +430,7 @@ impl ActionRun {
         let spec = find_command("bactiontool").ok_or_else(|| EngineError::UnknownCommand("bactiontool".into()))?;
         let r = (spec.run)(s, &p)?;
         let name = r.get("name").and_then(Value::as_str).unwrap_or(tool);
-        s.echo(format!("Action \"{name}\" added to block \"{}\".", self.block));
+        s.echo(format!("Action \"{name}\" added to block \"{block}\"."));
         Ok(())
     }
 
@@ -434,8 +470,13 @@ impl Interactive for ActionRun {
     }
 
     fn prompt(&self, s: &Session) -> Prompt {
+        if self.block.is_none() {
+            return Prompt::new("Enter block name", Accept::TEXT);
+        }
         match self.stage {
-            Stage::Tool => Prompt::new("Enter action type", Accept::TEXT).kw(&["Move", "Scale", "Stretch", "POlarstretch", "Rotate", "Flip", "Array"]),
+            Stage::Tool => {
+                Prompt::new("Enter action type", Accept::TEXT).kw(&["Move", "Scale", "Stretch", "POlarstretch", "Rotate", "Flip", "Array"])
+            }
             Stage::Parameter => {
                 let names: Vec<String> = self.suitable(s).map(|f| f.into_iter().map(|(_, l)| l).collect()).unwrap_or_default();
                 Prompt::new(format!("Select parameter [{}]", names.join("/")), Accept::TEXT)
@@ -458,6 +499,16 @@ impl Interactive for ActionRun {
     }
 
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if self.block.is_none() {
+            return match i {
+                Input::Keyword(k) | Input::Text(k) => {
+                    self.block = Some(named_block(s, &k)?);
+                    Ok(Step::Continue)
+                }
+                Input::Enter | Input::Cancel => Ok(Step::Cancel),
+                _ => Err(EngineError::Other("Requires a block name.".into())),
+            };
+        }
         match (self.stage, i) {
             (_, Input::Cancel) => Ok(Step::Cancel),
             (Stage::Tool, Input::Keyword(k) | Input::Text(k)) => self.choose_tool(s, &k),
