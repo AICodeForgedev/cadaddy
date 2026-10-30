@@ -1444,3 +1444,22 @@ fn hostile_variable_like_input_never_panics() {
     s.cmdline("pickadd").unwrap();
     assert!(setvar_prompt_open(&s));
 }
+
+#[test]
+fn array_counts_reject_invalid_values() {
+    let mut s = Session::new();
+    s.execute("line", &json!({"points": [[0, 0], [1, 0]]})).unwrap();
+    for bad in [json!(-3), json!(0), json!(2.5)] {
+        for key in ["count", "rows", "levels"] {
+            let mut p = json!({"center": [0, 0], "associative": false});
+            p[key] = bad.clone();
+            assert!(s.execute("arraypolar", &p).is_err(), "arraypolar {key}={bad}");
+        }
+        for key in ["rows", "cols", "levels"] {
+            let mut p = json!({"associative": false});
+            p[key] = bad.clone();
+            assert!(s.execute("arrayrect", &p).is_err(), "arrayrect {key}={bad}");
+        }
+    }
+    s.execute("arraypolar", &json!({"center": [0, 0], "count": 1, "associative": false})).unwrap();
+}
