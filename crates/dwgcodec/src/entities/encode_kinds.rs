@@ -602,8 +602,11 @@ fn spline(w: &mut ObjWriter, r: &Rec) {
     let ctrls: Vec<[f64; 3]> = points(r, 10);
     let knots: Vec<f64> = r.all(40).filter_map(|g| num(&g.value)).collect();
     let weights: Vec<f64> = r.all(41).filter_map(|g| num(&g.value)).collect();
-    // Fit points when there are any (DWG stores one or the other: the curve follows from them).
-    let by_fit = !fits.is_empty();
+    // Fit points when there are any (DWG stores one or the other: the curve follows from them),
+    // except a closed or periodic spline with control points: the fit layout has no closed or
+    // periodic flag and drops the control points and knots, so the reader would refit it open.
+    let closed_or_periodic = flags & 3 != 0 && !ctrls.is_empty();
+    let by_fit = !fits.is_empty() && !closed_or_periodic;
     let scenario = if by_fit { 2 } else { 1 };
     w.d.bl(scenario);
     if w.at_least(Version::R2013) {
