@@ -21,6 +21,7 @@ mod burst;
 mod compare_export;
 mod constraint_geometry;
 mod constraint_infer;
+mod copy_count;
 mod count;
 mod dash_block;
 mod data_extraction;
