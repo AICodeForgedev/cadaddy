@@ -3195,3 +3195,145 @@ fn proxies_keep_their_class_when_classes_are_rewritten() {
         dxf_records(&pairs, "ACAD_PROXY_OBJECT").iter().map(|r| classes[own_91(r).parse::<usize>().unwrap() - 500].clone()).collect();
     assert_eq!(names, ["VISUALSTYLE", "WIDGETX"]);
 }
+
+/// Battle test 5 (B7-009, B7-023): damaged files say so; nothing damaged opens as a quiet drawing.
+mod damaged_files {
+    use super::*;
+
+    fn notes(d: &Drawing) -> String {
+        d.read_notes.join(" | ")
+    }
+
+    #[test]
+    fn a_file_with_nothing_in_it_is_refused_in_every_format() {
+        for name in ["a.svg", "a.svgz", "a.pdf", "a.dgn", "a.dxf", "a.dwg", "a.cdy", "a.obj", "a.stl", "a.glb", "a.ifc", "a"] {
+            let e = read(b"", name).err().unwrap_or_else(|| panic!("{name}: a zero-byte file opened")).to_string();
+            assert!(e.contains("empty"), "{name}: {e}");
+        }
+        let e = read(b" \r\n\t ", "a.svg").expect_err("blank svg").to_string();
+        assert!(e.contains("no content"), "{e}");
+        let e = read(b"\xEF\xBB\xBF", "a.dxf").expect_err("BOM only").to_string();
+        assert!(e.contains("empty") || e.contains("no content"), "{e}");
+    }
+
+    fn plain_pdf() -> Vec<u8> {
+        let svg = write(&sample(), "a.pdf").unwrap();
+        let said = notes(&read(&svg, "a.pdf").unwrap());
+        assert!(!said.contains("could not be decoded"), "an intact PDF opens without a decode warning: {said}");
+        svg
+    }
+
+    /// Overwrites the middle of the first Flate content stream so it no longer decodes.
+    fn with_damaged_stream(pdf: &[u8]) -> Vec<u8> {
+        let mut out = pdf.to_vec();
+        let at = out.windows(6).position(|w| w == b"stream").expect("a stream");
+        let start = at + 7;
+        let end = start + out[start..].windows(9).position(|w| w == b"endstream").expect("endstream");
+        assert!(end - start > 40, "a stream long enough to damage");
+        let mid = start + (end - start) / 3;
+        for (i, b) in out[mid..mid + (end - start) / 3].iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(37).wrapping_add(11);
+        }
+        out
+    }
+
+    #[test]
+    fn a_pdf_whose_content_stream_fails_to_decode_says_so() {
+        let pdf = plain_pdf();
+        let hurt = with_damaged_stream(&pdf);
+        let d = read(&hurt, "a.pdf").unwrap();
+        let said = notes(&d);
+        assert!(said.contains("content stream") && said.contains("could not be decoded"), "{said}");
+    }
+
+    fn dgn_bytes() -> Vec<u8> {
+        let (bytes, _) = dgn::write(&sample()).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn a_truncated_dgn_warns_or_is_refused() {
+        let good = dgn_bytes();
+        let whole = read(&good, "a.dgn").unwrap();
+        assert!(!notes(&whole).contains("ended early"), "{}", notes(&whole));
+        let half = read(good.get(..good.len() / 2).unwrap(), "a.dgn");
+        match half {
+            Ok(d) => {
+                let said = notes(&d);
+                assert!(said.contains("ended early") && said.contains("elements were read"), "{said}");
+                assert!(d.entity_count() < whole.entity_count(), "the cut file has fewer objects");
+            }
+            Err(e) => assert!(e.to_string().contains("ended early"), "{e}"),
+        }
+        // Cut inside the first element: nothing to read, so the file is refused, not opened empty.
+        let e = read(good.get(..20).unwrap(), "a.dgn").expect_err("a stump opened").to_string();
+        assert!(e.contains("ended early"), "{e}");
+    }
+
+    #[test]
+    fn dxf_with_undefined_numbers_drops_those_objects_and_says_so() {
+        let line = |x: &str, y: &str| format!("0\nLINE\n8\n0\n10\n{x}\n20\n{y}\n30\n0\n11\n1\n21\n1\n31\n0\n");
+        let text = format!(
+            "0\nSECTION\n2\nENTITIES\n{}{}{}{}{}0\nENDSEC\n0\nEOF\n",
+            line("nan", "nan"),
+            line("inf", "0"),
+            line("-inf", "1"),
+            line("1e999", "0"),
+            line("2", "3"),
+        );
+        let d = read_dxf(text.as_bytes()).unwrap();
+        assert_eq!(d.entity_count(), 1, "only the finite line is kept");
+        let said = notes(&d);
+        assert!(said.contains("4 objects had undefined (NaN/inf) coordinates and were dropped"), "{said}");
+        match d.model.iter().next().map(|e| &e.kind) {
+            Some(EntityKind::Line(l)) => assert_eq!((l.a.x, l.a.y), (2.0, 3.0)),
+            other => panic!("{other:?}"),
+        }
+        // A good file has no such note, and a large finite number is not undefined.
+        let ok = format!("0\nSECTION\n2\nENTITIES\n{}0\nENDSEC\n0\nEOF\n", line("1e300", "5"));
+        let d = read_dxf(ok.as_bytes()).unwrap();
+        assert_eq!(d.entity_count(), 1);
+        assert!(!notes(&d).contains("undefined"), "{}", notes(&d));
+    }
+
+    #[test]
+    fn dxf_polyline_with_an_undefined_vertex_is_dropped_whole() {
+        let text = "0\nSECTION\n2\nENTITIES\n0\nPOLYLINE\n8\n0\n66\n1\n70\n0\n0\nVERTEX\n8\n0\n10\n0\n20\n0\n0\nVERTEX\n8\n0\n10\nnan\n20\n1\n0\nVERTEX\n8\n0\n10\n5\n20\n5\n0\nSEQEND\n8\n0\n\
+                    0\nLINE\n8\n0\n10\n0\n20\n0\n30\n0\n11\n1\n21\n1\n31\n0\n0\nENDSEC\n0\nEOF\n";
+        let d = read_dxf(text.as_bytes()).unwrap();
+        let kinds: Vec<_> = d.model.iter().map(|e| e.kind.type_name()).collect();
+        assert_eq!(kinds, ["Line"], "{kinds:?}");
+        assert!(notes(&d).contains("undefined"), "{}", notes(&d));
+    }
+
+    #[test]
+    fn a_cdy_that_lost_its_objects_says_how_many() {
+        let d = sample();
+        let n = d.entity_count();
+        let good = write(&d, "a.cdy").unwrap();
+        assert!(cdy::read_cdy(&good).unwrap().read_notes.is_empty());
+        // Cut after the manifest and header: the parts that follow are gone with the index.
+        let cut = good.get(..good.len() / 2).unwrap();
+        let hurt = cdy::read_cdy(cut).unwrap();
+        let said = notes(&hurt);
+        assert!(said.contains("index was damaged"), "{said}");
+        if hurt.entity_count() < n {
+            assert!(said.contains(&format!("of {n} model space objects could not be read")), "{said}");
+        }
+        // Parts lost along with the manifest: the count is unknown, and the note says that.
+        let stump = good.get(..40).unwrap();
+        if let Ok(d) = cdy::read_cdy(stump) {
+            assert!(notes(&d).contains("could not be read"), "{}", notes(&d));
+        }
+    }
+
+    #[test]
+    fn verify_finds_a_second_copy_appended() {
+        let good = write(&sample(), "a.cdy").unwrap();
+        assert!(cdy::verify(&good).unwrap()["appendedCopy"].is_null());
+        let mut twice = good.clone();
+        twice.extend_from_slice(&good);
+        let check = cdy::verify(&twice).unwrap();
+        assert_eq!(check["appendedCopy"].as_u64(), Some(good.len() as u64), "{check}");
+    }
+}

@@ -140,7 +140,7 @@ pub fn export_list(list: &cadaddy_render::DisplayList, window: Option<Bounds2>) 
                 }
                 s.push_str(r#""/>"#);
             }
-            Kind::Tris | Kind::Mask => {
+            Kind::Tris | Kind::InkMask | Kind::Mask => {
                 // A wipeout's mask hides what lies under it with the white background.
                 let c = if p.kind == Kind::Mask { white.hex() } else { c };
                 let _ = write!(s, r#"<path fill="{c}"{op} d=""#);

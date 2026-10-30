@@ -156,7 +156,9 @@ pub fn kind_of(code: i32) -> Kind {
 fn typed(code: i32, text: &str) -> Value {
     let t = text.trim();
     match kind_of(code) {
-        Kind::Real => t.parse::<f64>().ok().filter(|v| v.is_finite()).map(Value::Real).unwrap_or(Value::Real(0.0)),
+        // NaN and infinite values are kept as NaN (they read as 0 through `as_f64`): the DXF reader
+        // finds them and says so instead of reading them as 0 unseen.
+        Kind::Real => t.parse::<f64>().ok().map(|v| Value::Real(if v.is_finite() { v } else { f64::NAN })).unwrap_or(Value::Real(0.0)),
         Kind::Int16 | Kind::Int32 | Kind::Int64 => {
             t.parse::<i64>().map(Value::Int).unwrap_or_else(|_| Value::Int(t.parse::<f64>().map(|f| f as i64).unwrap_or(0)))
         }

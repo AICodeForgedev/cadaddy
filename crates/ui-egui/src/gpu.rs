@@ -244,7 +244,10 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
                     }
                 }
             },
-            Kind::Tris => {
+            Kind::Tris | Kind::InkMask => {
+                if prim.kind == Kind::InkMask {
+                    m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
+                }
                 for t in pts.as_chunks::<3>().0 {
                     for q in t {
                         push_vertex(&mut m.tris, rel(*q, origin), col);
@@ -319,7 +322,7 @@ pub fn build_highlight_mesh(list: &DisplayList, prims: &[usize], origin: Vec2, c
                     }
                 }
             }
-            Kind::Tris | Kind::Mask | Kind::Image(_) => {
+            Kind::Tris | Kind::InkMask | Kind::Mask | Kind::Image(_) => {
                 for line in list.fill_outlines(prim) {
                     let mut run = 0.0;
                     for s in line.windows(2) {
@@ -1154,6 +1157,36 @@ mod tests {
             l.bounds.add(v);
         }
         l
+    }
+
+    /// Hatch lines, then a filled box in the entity colour (green) of the given kind.
+    fn hatch_then_fill(kind: Kind) -> DisplayList {
+        let mut l = DisplayList {
+            verts: vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0), Vec2::new(1.0, 2.0)],
+            tris: vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)],
+            ..Default::default()
+        };
+        let p = |kind, color, start, len| DPrim { handle: Handle(1), color, aci7: false, lw: 0.0, transparency: 0, kind, start, len };
+        l.prims = vec![p(Kind::Polyline, Rgb(255, 0, 0), 0, 2), p(Kind::Polyline, Rgb(255, 0, 0), 2, 2), p(kind, Rgb(0, 255, 0), 0, 3)];
+        l
+    }
+
+    #[test]
+    fn coloured_masks_start_a_draw_order_group_and_keep_their_colour() {
+        // MTEXT background with a colour, DIMTFILL 2 and a TEXTMASK solid are all `InkMask`: the
+        // hatch's four line vertices are drawn before the group break, the fill after it.
+        let m = build_mesh(&hatch_then_fill(Kind::InkMask), Vec2::ZERO, Rgb(0, 0, 0), false);
+        assert_eq!(m.breaks, vec![[0, 4, 0]], "one break, after the hatch's line vertices");
+        assert_eq!(m.line_vertices(), 4);
+        assert_eq!(m.tri_vertices(), 3);
+        assert_eq!(&m.tris[8..12], &[0, 255, 0, 255], "filled in the entity colour, not the background (black)");
+        // A plain fill starts no group (lines of an earlier object would show over it).
+        let m = build_mesh(&hatch_then_fill(Kind::Tris), Vec2::ZERO, Rgb(0, 0, 0), false);
+        assert!(m.breaks.is_empty());
+        // A background mask breaks too, but in the background colour.
+        let m = build_mesh(&hatch_then_fill(Kind::Mask), Vec2::ZERO, Rgb(9, 8, 7), false);
+        assert_eq!(m.breaks, vec![[0, 4, 0]]);
+        assert_eq!(&m.tris[8..12], &[9, 8, 7, 255]);
     }
 
     #[test]

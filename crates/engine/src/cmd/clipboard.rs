@@ -241,6 +241,18 @@ pub fn system_image(s: &Session, side: u32) -> Option<cadaddy_render::images::Ra
     cadaddy_render::images::decode(&png)
 }
 
+/// The clipboard as a display list (vector), for the picture formats the platform layer writes
+/// itself (Windows' enhanced metafile). `None` when the clipboard is empty or very large.
+pub fn system_display_list(s: &Session) -> Option<cadaddy_render::DisplayList> {
+    if s.clipboard.is_empty() || s.clipboard.len() > MAX_SYSTEM_OBJECTS {
+        return None;
+    }
+    let d = clip_drawing(s);
+    let list = cadaddy_render::build(&d, &cadaddy_doc::Space::Model, &cadaddy_render::Options::default());
+    let b = list.bounds;
+    (!b.is_empty() && b.width().is_finite() && b.height().is_finite()).then_some(list)
+}
+
 /// Paste `image` as a raster IMAGE: saved as a PNG beside the (saved) drawing and attached with a
 /// relative path, its lower-left corner at `at` and `width` drawing units wide; by default half
 /// the view tall and centred in it.

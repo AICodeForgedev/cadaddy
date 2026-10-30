@@ -1,22 +1,22 @@
 # Parity checklist
 
-> **Generated:** 2026-10-21 by `cargo xtask parity`. Do not edit by hand.
+> **Generated:** 2026-10-30 by `cargo xtask parity`. Do not edit by hand.
 
 Menu-breadth parity: a reference menu item counts as covered when a CADaddy command is registered under the same menu label. It measures breadth, not depth; see [target-app-parity.md](target-app-parity.md) for the weighted assessment.
 
-**Menu breadth: 364 / 491 items (74%)** · 744 registered commands.
+**Menu breadth: 379 / 491 items (77%)** · 1175 registered commands.
 
 | Menu | Items | Covered | % |
 |---|---|---|---|
 | File | 22 | 14 | 64% |
 | Edit | 13 | 12 | 92% |
-| View | 75 | 54 | 72% |
+| View | 75 | 55 | 73% |
 | Insert | 11 | 8 | 73% |
-| Format | 27 | 26 | 96% |
-| Tools | 85 | 70 | 82% |
-| Draw | 87 | 77 | 89% |
+| Format | 27 | 27 | 100% |
+| Tools | 85 | 71 | 84% |
+| Draw | 87 | 79 | 91% |
 | Dimension | 28 | 28 | 100% |
-| Modify | 113 | 71 | 63% |
+| Modify | 113 | 81 | 72% |
 | Window | 22 | 4 | 18% |
 | Help | 8 | 0 | 0% |
 
@@ -35,7 +35,6 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - View > Orbit > Free Orbit
 - View > Camera > Adjust Distance
 - View > Camera > Swivel
-- View > Viewports > Named Viewports...
 - View > 3D Views > Viewpoint
 - View > 3D Views > Plan View > Named UCS
 - View > Hide
@@ -55,8 +54,6 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - Insert > Layout > Layout from Template...
 - Insert > ACIS File...
 - Insert > Drawing Exchange Binary...
-- Format > Thickness
-- Tools > Inquiry > Volume
 - Tools > Edit Xref in Place
 - Tools > New UCS > Face
 - Tools > New UCS > Z Axis Vector
@@ -72,9 +69,7 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - Tools > Express Tools > Super Hatch > Xref...
 - Tools > Express Tools > Super Hatch > Select Existing Object
 - Draw > 3D Modeling > Polysolid
-- Draw > 3D Modeling > Surfaces > Planar
 - Draw > 3D Modeling > Surfaces > Network
-- Draw > 3D Modeling > Surfaces > Patch
 - Draw > 3D Modeling > Meshes > Smooth Mesh
 - Draw > 3D Modeling > Meshes > 3D Face
 - Draw > 3D Modeling > Meshes > Meshes, Revolved Surface
@@ -82,10 +77,6 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - Draw > 3D Modeling > Meshes > Meshes, Ruled Surface
 - Draw > 3D Modeling > Meshes > Meshes, Edge Surface
 - Modify > Object > Image > Quality
-- Modify > Object > Block Description...
-- Modify > 3D Operations > Interference Checking
-- Modify > 3D Operations > Convert to Solid
-- Modify > 3D Operations > Convert to Surface
 - Modify > 3D Operations > Extract Edges
 - Modify > 3D Operations > Extract Isolines
 - Modify > Solid Editing > Imprint Edges
@@ -99,15 +90,9 @@ Menu-breadth parity: a reference menu item counts as covered when a CADaddy comm
 - Modify > Solid Editing > Clean
 - Modify > Solid Editing > Separate
 - Modify > Solid Editing > Check
-- Modify > Surface Editing > Untrim
 - Modify > Surface Editing > Sculpt
 - Modify > Surface Editing > Convert to NURBS
 - Modify > Surface Editing > Convert to Mesh
-- Modify > Surface Editing > NURBS Surface Editing > Show CV
-- Modify > Surface Editing > NURBS Surface Editing > Hide CV
-- Modify > Surface Editing > NURBS Surface Editing > Add CV
-- Modify > Surface Editing > NURBS Surface Editing > Remove CV
-- Modify > Surface Editing > NURBS Surface Editing > Rebuild
 - Modify > Mesh Editing > Smooth More
 - Modify > Mesh Editing > Smooth Less
 - Modify > Mesh Editing > Refine Mesh

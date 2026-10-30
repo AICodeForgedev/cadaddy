@@ -128,7 +128,7 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
                     flush(&mut pm, &mut run);
                 }
             }
-            Kind::Tris | Kind::Mask => {
+            Kind::Tris | Kind::InkMask | Kind::Mask => {
                 if p.kind == Kind::Mask {
                     paint.set_color_rgba8(o.background.0, o.background.1, o.background.2, 255);
                 }

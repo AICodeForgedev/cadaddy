@@ -92,3 +92,63 @@ fn a_mask_hides_an_image_beneath_it() {
     assert!(after < 0.01, "the mask hides the image: {after}");
     cadaddy_render::images::forget(&path);
 }
+
+/// Share of pixels of a colour (by `pick`) in a drawing-unit rectangle.
+fn share(img: &(u32, u32, Vec<u8>), (x0, y0, x1, y1): (f64, f64, f64, f64), pick: impl Fn(&[u8]) -> bool) -> f64 {
+    let (w, hgt, px) = img;
+    let to = |x: f64, y: f64| ((x / 100.0 * f64::from(*w)) as u32, ((1.0 - y / 100.0) * f64::from(*hgt)) as u32);
+    let ((ax, ay), (bx, by)) = (to(x0, y1), to(x1, y0));
+    let (mut hit, mut n) = (0, 0);
+    for y in ay..by {
+        for x in ax..bx {
+            let i = ((y * w + x) * 4) as usize;
+            n += 1;
+            if pick(&px[i..i + 4]) {
+                hit += 1;
+            }
+        }
+    }
+    f64::from(hit) / f64::from(n.max(1))
+}
+
+#[test]
+fn coloured_masks_hide_the_hatch_and_keep_their_colour() {
+    use cadaddy_render::{Kind, Options, build};
+    let is_red = |p: &[u8]| p[0] > 150 && p[1] < 90 && p[2] < 90;
+    let is_green = |p: &[u8]| p[1] > 150 && p[0] < 90 && p[2] < 90;
+    let mut s = Session::new();
+    let b = h(&s.execute("rectang", &json!({"p1": [5, 5], "p2": [95, 95]})).unwrap());
+    let hatch = h(&s.execute("hatch", &json!({"handles": [b], "pattern": "ANSI31", "scale": 0.5})).unwrap());
+    s.execute("properties.set", &json!({"handles": [hatch], "color": 1})).unwrap();
+    // An MTEXT whose background mask is green (colour 3).
+    let t = h(&s.execute("mtext", &json!({"at": [20, 70], "text": "MASKED", "height": 6})).unwrap());
+    s.execute("properties.set", &json!({"handles": [t], "background": {"color": 3}})).unwrap();
+    // A dimension whose text box is filled with colour 3 (DIMTFILL 2, DIMTFILLCLR 3).
+    s.execute("setvar", &json!({"name": "DIMTFILL", "value": 2})).unwrap();
+    s.execute("setvar", &json!({"name": "DIMTFILLCLR", "value": 3})).unwrap();
+    s.execute("setvar", &json!({"name": "DIMSCALE", "value": 25})).unwrap();
+    s.execute("dimlinear", &json!({"p1": [20, 30], "p2": [80, 30], "at": [50, 25]})).unwrap();
+    let img = render(&s);
+    for (what, r) in [("MTEXT colour mask", (21.0, 65.5, 55.0, 69.0)), ("DIMTFILL 2", (37.0, 22.0, 63.0, 25.0))] {
+        let red = share(&img, r, is_red);
+        let green = share(&img, r, is_green);
+        assert!(red < 0.01, "{what} hides the hatch: red {red}");
+        assert!(green > 0.5, "{what} shows its own colour: green {green}");
+    }
+    // Both are coloured masks in the display list (they start a GPU draw-order group).
+    let l = build(s.doc().unwrap(), &cadaddy_doc::Space::Model, &Options::default());
+    assert!(l.prims.iter().filter(|p| p.kind == Kind::InkMask).count() >= 2);
+}
+
+#[test]
+fn a_textmask_solid_is_a_coloured_mask_primitive() {
+    use cadaddy_render::{Kind, Options, build};
+    let mut s = Session::new();
+    let t = h(&s.execute("text", &json!({"at": [20, 70], "text": "MASKED", "height": 6})).unwrap());
+    let kinds = |s: &Session| {
+        build(s.doc().unwrap(), &cadaddy_doc::Space::Model, &Options::default()).prims.iter().filter(|p| p.kind == Kind::InkMask).count()
+    };
+    assert_eq!(kinds(&s), 0);
+    s.execute("textmask", &json!({"handles": [t], "type": "solid"})).unwrap();
+    assert_eq!(kinds(&s), 1, "the TEXTMASK solid starts a draw-order group in its own colour");
+}

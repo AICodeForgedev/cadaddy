@@ -388,7 +388,7 @@ fn sheet_geom(d: &Drawing, space: &Space, o: &ExportOptions, links: &HashMap<cad
         let pts = list.points(p);
         let shape = match p.kind {
             Kind::Polyline if pts.len() >= 2 => Shape::Line(pts.iter().map(|q| to_sheet(*q)).collect()),
-            Kind::Tris | Kind::Mask if pts.len() >= 3 => Shape::Tris(pts.iter().map(|q| to_sheet(*q)).collect()),
+            Kind::Tris | Kind::InkMask | Kind::Mask if pts.len() >= 3 => Shape::Tris(pts.iter().map(|q| to_sheet(*q)).collect()),
             Kind::Point => match pts.first() {
                 Some(q) => Shape::Dot(to_sheet(*q)),
                 None => continue,

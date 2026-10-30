@@ -887,7 +887,7 @@ pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb,
                     shapes.push(Shape::line(screen, Stroke::new(w, col)));
                 }
             }
-            Kind::Tris | Kind::Mask => {
+            Kind::Tris | Kind::InkMask | Kind::Mask => {
                 // A wipeout's mask hides what was drawn before it with the background colour.
                 let col = if prim.kind == Kind::Mask { color32(bg) } else { col };
                 let mut mesh = egui::Mesh::default();
@@ -1191,7 +1191,7 @@ pub(crate) fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, pri
                     fill.indices.push(i);
                 }
             }
-            Kind::Tris | Kind::Mask | Kind::Image(_) => {
+            Kind::Tris | Kind::InkMask | Kind::Mask | Kind::Image(_) => {
                 for outline in list.fill_outlines(prim) {
                     line(outline.iter().map(|q| xf.to_screen(*q)).collect(), &mut shapes);
                 }

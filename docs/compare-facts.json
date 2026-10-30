@@ -1327,9 +1327,9 @@
     ]
   },
   "parity": {
-    "menuCovered": 364,
+    "menuCovered": 379,
     "menuItems": 491,
-    "registeredCommands": 744
+    "registeredCommands": 1175
   },
   "signedUpdates": true,
   "version": "0.7.10",

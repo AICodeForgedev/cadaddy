@@ -735,6 +735,22 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
         rep.notes.push("the tables were missing; the standard ones are used".into());
     }
     d.model = model;
+    // How much of model space the damage cost, by the count the file's manifest kept at the save.
+    let saved = rep.manifest.as_ref().and_then(|m| m.get("objects")).and_then(Value::as_u64);
+    match saved {
+        Some(n) if n > d.model.len() as u64 => {
+            let lost = n - d.model.len() as u64;
+            rep.notes.push(if d.model.is_empty() {
+                format!("all {n} model space objects could not be read")
+            } else {
+                format!("{lost} of {n} model space objects could not be read")
+            });
+        }
+        None if !rep.notes.is_empty() => {
+            rep.notes.push("how many model space objects could not be read is unknown (the file's manifest is damaged or missing)".into());
+        }
+        _ => {}
+    }
     // Handles allocated from here on can't collide with the ones read.
     let blocks = d.blocks.values().flat_map(|b| b.entities.iter());
     let papers = d.layouts.iter().flat_map(|l| l.entities.iter());

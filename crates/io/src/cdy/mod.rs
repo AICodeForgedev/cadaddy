@@ -128,6 +128,8 @@ pub fn verify(bytes: &[u8]) -> std::result::Result<serde_json::Value, String> {
         "chunksTotal": chunks_total,
         "unreadable": lost.iter().take(MAX_LISTED_CHUNKS).collect::<Vec<_>>(),
         "trailing": trailing,
+        // Where a whole second copy of a file begins after the first one's end, if one does.
+        "appendedCopy": container::appended_copy(bytes),
         "sizes": sizes,
         "waste": waste,
         "notes": notes,
