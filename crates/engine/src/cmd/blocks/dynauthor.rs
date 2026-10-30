@@ -211,7 +211,8 @@ fn run_action(s: &mut Session, p: &Value) -> Result<Value> {
         "flip" => NewActionKind::Flip,
         "array" => {
             let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|n| n.is_finite());
-            let column_offset = num("columnOffset").ok_or_else(|| bad(cmd, "`columnOffset` (the distance between copies) is required for an array"))?;
+            let column_offset =
+                num("columnOffset").ok_or_else(|| bad(cmd, "`columnOffset` (the distance between copies) is required for an array"))?;
             NewActionKind::Array { column_offset, row_offset: num("rowOffset").unwrap_or(0.0) }
         }
         "polarstretch" => {

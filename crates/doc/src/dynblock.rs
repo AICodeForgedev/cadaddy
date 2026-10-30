@@ -130,7 +130,10 @@ impl ParameterKind {
             | ParameterKind::Rotation { base, .. }
             | ParameterKind::Alignment { base, .. }
             | ParameterKind::Flip { base, .. } => *base,
-            ParameterKind::Point { at, .. } | ParameterKind::Visibility { at, .. } | ParameterKind::Lookup { at, .. } | ParameterKind::BasePoint { at } => *at,
+            ParameterKind::Point { at, .. }
+            | ParameterKind::Visibility { at, .. }
+            | ParameterKind::Lookup { at, .. }
+            | ParameterKind::BasePoint { at } => *at,
             ParameterKind::Other { .. } => Vec3::default(),
         }
     }
@@ -236,15 +239,9 @@ pub enum ActionKind {
         angle_offset: f64,
     },
     /// A table: each row sets the listed parameter values together.
-    Lookup {
-        columns: Vec<LookupColumn>,
-        rows: Vec<Vec<String>>,
-    },
+    Lookup { columns: Vec<LookupColumn>, rows: Vec<Vec<String>> },
     /// Moves the objects by the change of the parameter values it follows.
-    Move {
-        multiplier: f64,
-        angle_offset: f64,
-    },
+    Move { multiplier: f64, angle_offset: f64 },
     /// Scales the objects about the parameter's base point by the change of its distance.
     Scale,
     /// Rotates the objects about the parameter's base point by the change of its angle.
@@ -264,9 +261,7 @@ pub enum ActionKind {
         rotate: Vec<Handle>,
     },
     /// An action type not modelled yet.
-    Other {
-        dxf_type: String,
-    },
+    Other { dxf_type: String },
 }
 
 /// A lookup table column: the parameter value it reads or sets.
@@ -625,10 +620,7 @@ fn action(handle: Handle, node: i32, name: String, kind: &str, secs: &[(&str, &[
 /// `count` connections written as parameter ids from `code` and names from `name_code`, the
 /// ones that name something.
 fn named_connections(tags: &[RawTag], code: i32, name_code: i32, count: i32) -> Vec<(i32, String)> {
-    (0..count)
-        .map(|i| (Cursor::new(tags).int(code + i), Cursor::new(tags).string(name_code + i)))
-        .filter(|(_, name)| !name.is_empty())
-        .collect()
+    (0..count).map(|i| (Cursor::new(tags).int(code + i), Cursor::new(tags).string(name_code + i))).filter(|(_, name)| !name.is_empty()).collect()
 }
 
 /// Two connections: parameter ids (92, 93) and the values they read (301, 302). Writers order

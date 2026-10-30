@@ -126,10 +126,7 @@ fn array_makes_a_column_per_offset_and_remakes_them() {
     s.execute("bactiontool", &json!({ "block": "Post", "type": "array", "parameter": "Run", "handles": hs, "columnOffset": 2 })).unwrap();
     let h = insert(&mut s, "Post");
     set(&mut s, &h, "Run", "8");
-    assert_lines(
-        &lines_of(s.doc().unwrap(), &h),
-        &[[0.0, 1.0, 0.0, 2.0], [2.0, 1.0, 2.0, 2.0], [4.0, 1.0, 4.0, 2.0], [6.0, 1.0, 6.0, 2.0]],
-    );
+    assert_lines(&lines_of(s.doc().unwrap(), &h), &[[0.0, 1.0, 0.0, 2.0], [2.0, 1.0, 2.0, 2.0], [4.0, 1.0, 4.0, 2.0], [6.0, 1.0, 6.0, 2.0]]);
     // Shorter by its grip: the earlier copies are made again, not kept.
     drag(&mut s, &h, &node, "end", [5.0, 0.0]);
     assert_lines(&lines_of(s.doc().unwrap(), &h), &[[0.0, 1.0, 0.0, 2.0], [2.0, 1.0, 2.0, 2.0]]);
@@ -214,7 +211,8 @@ fn actions_only_follow_the_parameters_they_suit() {
     let hs = block_of(&mut s, "Odd", &[[0.0, 0.0, 1.0, 0.0]]);
     s.execute("bparameter", &json!({ "block": "Odd", "type": "point", "at": [0, 0], "label": "Spot" })).unwrap();
     for t in ["scale", "rotate", "flip", "polarstretch"] {
-        let r = s.execute("bactiontool", &json!({ "block": "Odd", "type": t, "parameter": "Spot", "handles": hs, "frame": [[0, 0], [1, 0], [1, 1]] }));
+        let r =
+            s.execute("bactiontool", &json!({ "block": "Odd", "type": t, "parameter": "Spot", "handles": hs, "frame": [[0, 0], [1, 0], [1, 1]] }));
         assert!(r.is_err(), "{t}");
     }
     let r = s.execute("bactiontool", &json!({ "block": "Odd", "type": "array", "parameter": "Spot", "handles": hs, "columnOffset": 1 }));
@@ -225,12 +223,17 @@ fn actions_only_follow_the_parameters_they_suit() {
 fn the_new_parameters_and_actions_survive_saving_to_dxf() {
     let mut s = Session::new();
     let hs = block_of(&mut s, "Gear", &[[1.0, 0.0, 3.0, 0.0]]);
-    s.execute("bparameter", &json!({ "block": "Gear", "type": "rotation", "base": [0, 0], "end": [5, 0], "label": "Turn", "values": { "list": [90, 180] } })).unwrap();
+    s.execute(
+        "bparameter",
+        &json!({ "block": "Gear", "type": "rotation", "base": [0, 0], "end": [5, 0], "label": "Turn", "values": { "list": [90, 180] } }),
+    )
+    .unwrap();
     s.execute("bparameter", &json!({ "block": "Gear", "type": "flip", "base": [0, 0], "end": [0, 9], "label": "Mirror" })).unwrap();
     s.execute("bparameter", &json!({ "block": "Gear", "type": "xy", "base": [0, 0], "end": [3, 4], "label": "Slide" })).unwrap();
     s.execute("bactiontool", &json!({ "block": "Gear", "type": "rotate", "parameter": "Turn", "handles": hs })).unwrap();
     s.execute("bactiontool", &json!({ "block": "Gear", "type": "flip", "parameter": "Mirror", "handles": hs })).unwrap();
-    s.execute("bactiontool", &json!({ "block": "Gear", "type": "array", "parameter": "Slide", "handles": hs, "columnOffset": 1, "rowOffset": 2 })).unwrap();
+    s.execute("bactiontool", &json!({ "block": "Gear", "type": "array", "parameter": "Slide", "handles": hs, "columnOffset": 1, "rowOffset": 2 }))
+        .unwrap();
     let before = s.execute("blocks.dynamic", &json!({ "name": "Gear" })).unwrap();
     let text = cadaddy_io::write_dxf(s.doc().unwrap());
     let back = cadaddy_io::read(text.as_bytes(), "gear.dxf").unwrap();
@@ -262,14 +265,7 @@ fn the_new_parameters_and_actions_survive_saving_to_dxf() {
     set(&mut s2, &h, "Turn", "100");
     assert_lines(
         &lines_of(s2.doc().unwrap(), &h),
-        &[
-            [0.0, 1.0, 0.0, 3.0],
-            [1.0, 1.0, 1.0, 3.0],
-            [2.0, 1.0, 2.0, 3.0],
-            [0.0, 3.0, 0.0, 5.0],
-            [1.0, 3.0, 1.0, 5.0],
-            [2.0, 3.0, 2.0, 5.0],
-        ],
+        &[[0.0, 1.0, 0.0, 3.0], [1.0, 1.0, 1.0, 3.0], [2.0, 1.0, 2.0, 3.0], [0.0, 3.0, 0.0, 5.0], [1.0, 3.0, 1.0, 5.0], [2.0, 3.0, 2.0, 5.0]],
     );
 }
 
@@ -299,28 +295,34 @@ fn an_authored_block_survives_a_dwg_round_trip() {
     use cadaddy_io::{DwgEngine, Version};
     let mut s = Session::new();
     let hs = block_of(&mut s, "Panel", &[[0.0, 0.0, 10.0, 0.0], [10.0, 0.0, 10.0, 5.0], [10.0, 5.0, 0.0, 5.0], [0.0, 5.0, 0.0, 0.0]]);
-    s.execute("bparameter", &json!({ "block": "Panel", "type": "linear", "base": [0, 0], "end": [10, 0], "label": "Width", "values": { "list": [10, 20, 30] } })).unwrap();
+    s.execute(
+        "bparameter",
+        &json!({ "block": "Panel", "type": "linear", "base": [0, 0], "end": [10, 0], "label": "Width", "values": { "list": [10, 20, 30] } }),
+    )
+    .unwrap();
     s.execute("bparameter", &json!({ "block": "Panel", "type": "rotation", "base": [0, 0], "end": [5, 0], "label": "Tilt" })).unwrap();
-    s.execute("bactiontool", &json!({ "block": "Panel", "type": "stretch", "parameter": "Width", "handles": hs, "frame": [[8, -1], [12, -1], [12, 6], [8, 6]] })).unwrap();
+    s.execute(
+        "bactiontool",
+        &json!({ "block": "Panel", "type": "stretch", "parameter": "Width", "handles": hs, "frame": [[8, -1], [12, -1], [12, 6], [8, 6]] }),
+    )
+    .unwrap();
     s.execute("bactiontool", &json!({ "block": "Panel", "type": "rotate", "parameter": "Tilt", "handles": [hs[0]] })).unwrap();
     let before = shape(&mut s, "Panel");
     assert_eq!((before.0.as_array().unwrap().len(), before.1.as_array().unwrap().len()), (2, 2));
     for version in [Version::R2004, Version::R2018] {
         for engine in [DwgEngine::Bridge, DwgEngine::Native] {
             let bytes = cadaddy_io::write_dwg(s.doc().unwrap(), version, engine).unwrap();
-            for read in [DwgEngine::Bridge] {
-                let mut s2 = Session::new();
-                s2.open_drawing(cadaddy_io::read_dwg(&bytes, read).unwrap(), "panel", None);
-                let label = format!("{version:?} written by {engine:?}, read by {read:?}");
-                assert_eq!(shape(&mut s2, "Panel"), before, "{label}");
-                // A new reference stretches to the set width, with all four sides.
-                let h = insert(&mut s2, "Panel");
-                set(&mut s2, &h, "Width", "30");
-                assert_lines(
-                    &lines_of(s2.doc().unwrap(), &h),
-                    &[[0.0, 0.0, 30.0, 0.0], [30.0, 0.0, 30.0, 5.0], [30.0, 5.0, 0.0, 5.0], [0.0, 5.0, 0.0, 0.0]],
-                );
-            }
+            let mut s2 = Session::new();
+            s2.open_drawing(cadaddy_io::read_dwg(&bytes, DwgEngine::Bridge).unwrap(), "panel", None);
+            let label = format!("{version:?} written by {engine:?}, read by the bridge");
+            assert_eq!(shape(&mut s2, "Panel"), before, "{label}");
+            // A new reference stretches to the set width, with all four sides.
+            let h = insert(&mut s2, "Panel");
+            set(&mut s2, &h, "Width", "30");
+            assert_lines(
+                &lines_of(s2.doc().unwrap(), &h),
+                &[[0.0, 0.0, 30.0, 0.0], [30.0, 0.0, 30.0, 5.0], [30.0, 5.0, 0.0, 5.0], [0.0, 5.0, 0.0, 0.0]],
+            );
         }
     }
 }
@@ -367,7 +369,9 @@ fn every_parameter_and_action_type_survives_a_dwg_round_trip() {
             // Parameter kinds (with their own data) and action kinds are what was authored; the
             // action parts that name objects follow the file's handles.
             assert_eq!(params, before.0, "{label}");
-            let kinds = |a: &Value| a.as_array().unwrap().iter().map(|x| (x["name"].clone(), x["kind"]["type"].clone(), x["connections"].clone())).collect::<Vec<_>>();
+            let kinds = |a: &Value| {
+                a.as_array().unwrap().iter().map(|x| (x["name"].clone(), x["kind"]["type"].clone(), x["connections"].clone())).collect::<Vec<_>>()
+            };
             assert_eq!(kinds(&actions), kinds(&before.1), "{label}");
             // The reloaded block behaves: the polar parameter sets 20 (snapped by its value set)
             // and the rotate-only line follows a quarter turn.

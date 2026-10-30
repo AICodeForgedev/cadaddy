@@ -24,6 +24,9 @@ use crate::{DocState, EngineError, Result, Snapshot};
 /// The Block Editor's action bars (BACTIONBAR), for the UI to draw.
 pub use crate::cmd::blocks::action_bars;
 
+/// The Block Authoring Palettes' tabs and tools (BAUTHORPALETTE), for the UI to draw.
+pub use crate::cmd::blocks::authoring::palette_tabs;
+
 /// The undo step a save into the block records in the drawing.
 const UNDO_LABEL: &str = "Block Editor";
 
