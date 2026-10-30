@@ -2915,7 +2915,7 @@ impl Interactive for OffsetM {
             (None, Input::Point(p)) => {
                 let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
                 let space = s.space();
-                match crate::select::pick(s.doc()?, &space, p, ap) {
+                match s.pick_object(&space, p, ap)? {
                     Some(h) => {
                         self.picked = Some(h);
                         s.set_selection(vec![h]);
@@ -3184,7 +3184,7 @@ impl Interactive for FilletM {
             Input::Point(p) => {
                 let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
                 let space = s.space();
-                let Some(h) = crate::select::pick(s.doc()?, &space, p, ap) else {
+                let Some(h) = s.pick_object(&space, p, ap)? else {
                     s.echo("*Invalid selection*");
                     return Ok(Step::Continue);
                 };
@@ -3455,7 +3455,7 @@ impl Interactive for BreakM {
             (None, Input::Point(p)) => {
                 let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
                 let space = s.space();
-                match crate::select::pick(s.doc()?, &space, p, ap) {
+                match s.pick_object(&space, p, ap)? {
                     Some(h) => {
                         self.obj = Some((h, p));
                         s.set_selection(vec![h]);

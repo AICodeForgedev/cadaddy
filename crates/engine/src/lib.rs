@@ -2233,6 +2233,10 @@ pub struct Session {
     lisp_last: Option<std::result::Result<lisp::value::Value, String>>,
     /// What the last HATCHPICK kept (the Hatch and Gradient dialog's picks).
     pub hatch_picks: Option<cmd::hatch::HatchPicks>,
+    /// The object named with a point for the input a prompt picking one object is taking
+    /// ([`Session::input_object`]): a pick at exactly that point picks that object
+    /// ([`Session::pick_object`]).
+    pick_hint: Option<(Handle, Vec2)>,
     /// Reads electrical prints and returns element tags; set by whoever has the reader pipeline.
     pub tag_reader: Option<cadaddy_walk3d::tags::TagReaderFn>,
     /// Safety rails for agents: requests, dry run, confirmations, the change journal.
@@ -2383,6 +2387,7 @@ impl Session {
             lisp: lisp::LispState::default(),
             lisp_last: None,
             hatch_picks: None,
+            pick_hint: None,
             tag_reader: None,
             agent: agent::AgentGuard::default(),
             events: events::EventLog::default(),
@@ -2943,6 +2948,7 @@ impl Session {
 
     /// Start a command by name or alias as if typed at the command line.
     pub fn start(&mut self, name: &str) -> Result<()> {
+        self.pick_hint = None;
         // A command an agent types has the rails of its `execute` calls (dry run, confirmations).
         if self.journal.is_outer()
             && self.agent.from_agent
@@ -4042,6 +4048,37 @@ impl Session {
         true
     }
 
+    /// Give the running command an object by name, as AutoLISP's `command` does with an entity
+    /// name or an `entsel` list (name and point). A prompt picking one object with a point
+    /// (BREAK's "Select object", MEASURE's "Select object to measure"…) takes the point, and a
+    /// pick there finds that object ([`Session::pick_object`]) wherever it lies. A bare name
+    /// stands at the object's DXF group 10 point (a line's start, a circle's centre, a
+    /// polyline's first vertex), the point AutoCAD picks it at. The name holds for that input
+    /// only: a later pick at the same point finds what lies there. Other prompts take the object
+    /// as a pick.
+    pub fn input_object(&mut self, h: Handle, at: Option<Vec2>) -> Result<()> {
+        let one = self.current_prompt().is_some_and(|p| p.accept.point && !p.accept.select && p.picks_objects());
+        let p = if one { at.or_else(|| self.doc().ok().and_then(|d| group_10(d, d.entity(h)?))) } else { None };
+        let Some(p) = p.filter(|p| p.is_finite()) else { return self.input(Input::Pick(vec![h])) };
+        self.pick_hint = Some((h, p));
+        let r = self.input(Input::Point(p));
+        self.pick_hint = None;
+        r
+    }
+
+    /// The object a prompt picking one object finds at `p` in `space`: the one named for that
+    /// point ([`Session::input_object`]), which is none when it lies in another space, else the
+    /// object under `p` within `aperture`.
+    pub fn pick_object(&self, space: &Space, p: Vec2, aperture: f64) -> Result<Option<Handle>> {
+        let d = self.doc()?;
+        if let Some((h, q)) = self.pick_hint
+            && q == p
+        {
+            return Ok((d.space_of(h).as_ref() == Some(space)).then_some(h));
+        }
+        Ok(select::pick(d, space, p, aperture))
+    }
+
     /// A click with no command running: pick/toggle objects or start a selection window.
     ///
     /// PICKADD on (the default): picks add to the selection and Shift removes. PICKADD off: each pick
@@ -4345,3 +4382,13 @@ fn next_token(rest: &str) -> (&str, Option<&str>) {
 
 #[cfg(test)]
 mod tests;
+
+/// An object's DXF group 10 point: the first point of its entity list, or its first grip where
+/// entity lists are not built in.
+fn group_10(d: &Drawing, e: &Entity) -> Option<Vec2> {
+    let Some(codec) = cmd::file::entity_codec() else { return e.kind.grips().first().copied() };
+    let (_, tags) = (codec.groups)(d, e);
+    let i = tags.iter().position(|t| t.code == 10)?;
+    let y = tags.get(i + 1).filter(|t| t.code == 20)?;
+    Some(Vec2::new(tags.get(i)?.value.as_f64(), y.value.as_f64()))
+}
