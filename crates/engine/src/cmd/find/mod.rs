@@ -67,22 +67,84 @@ fn spaces(d: &Drawing, all: bool, current: &Space) -> Vec<Space> {
     if all { std::iter::once(Space::Model).chain(d.layouts.iter().map(|l| Space::Paper(l.name.clone()))).collect() } else { vec![current.clone()] }
 }
 
-/// Apply `f` to each text of `k` FIND looks in.
-fn texts(k: &mut EntityKind, inc: Include, f: &mut dyn FnMut(&mut String)) {
+/// Apply `f` to each text of `k` FIND looks in; the flag is true for multiline-text contents
+/// (MText, MLeader, table cells), which carry format codes that FIND must not match or change.
+fn texts(k: &mut EntityKind, inc: Include, f: &mut dyn FnMut(&mut String, bool)) {
     match k {
-        EntityKind::Text(t) if inc.text => f(&mut t.value),
-        EntityKind::MText(t) if inc.text => f(&mut t.contents),
-        EntityKind::Insert(i) if inc.attributes => i.attribs.iter_mut().for_each(|a| f(&mut a.text.value)),
-        EntityKind::AttDef(a) if inc.attributes => f(&mut a.text.value),
-        EntityKind::Dimension(dm) if inc.dimensions => f(&mut dm.text),
+        EntityKind::Text(t) if inc.text => f(&mut t.value, false),
+        EntityKind::MText(t) if inc.text => f(&mut t.contents, true),
+        EntityKind::Insert(i) if inc.attributes => i.attribs.iter_mut().for_each(|a| f(&mut a.text.value, false)),
+        EntityKind::AttDef(a) if inc.attributes => f(&mut a.text.value, false),
+        EntityKind::Dimension(dm) if inc.dimensions => f(&mut dm.text, false),
         EntityKind::MLeader(m) if inc.mleaders => {
             if let Some(t) = &mut m.text {
-                f(&mut t.contents)
+                f(&mut t.contents, true)
             }
         }
-        EntityKind::Table(t) if inc.tables => t.cells.iter_mut().flatten().for_each(|c| f(&mut c.text)),
+        EntityKind::Table(t) if inc.tables => t.cells.iter_mut().flatten().for_each(|c| f(&mut c.text, true)),
         _ => {}
     }
+}
+
+/// The shown text of multiline-text `src`: format codes dropped, a paragraph break `\P` a line
+/// break. Also, for each shown char, the byte range it covers in `src`.
+fn shown(src: &str) -> (String, Vec<(usize, usize)>) {
+    let idx: Vec<(usize, char)> = src.char_indices().collect();
+    let chars: Vec<char> = idx.iter().map(|(_, c)| *c).collect();
+    let mask = super::spell::literal_mask(&chars, true);
+    let byte = |i: usize| idx.get(i).map_or(src.len(), |(b, _)| *b);
+    let (mut out, mut spans) = (String::new(), Vec::new());
+    let mut i = 0;
+    while i < chars.len() {
+        if mask.get(i) == Some(&true) {
+            out.push(chars[i]);
+            spans.push((byte(i), byte(i + 1)));
+            i += 1;
+        } else if chars.get(i) == Some(&'\\') && chars.get(i + 1) == Some(&'P') {
+            out.push('\n');
+            spans.push((byte(i), byte(i + 2)));
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    (out, spans)
+}
+
+/// The matches of `pat` in the shown text of multiline text `src`.
+fn count_in(pat: &Pattern, src: &str, coded: bool) -> usize {
+    if coded { pat.find_all(&shown(src).0).len() } else { pat.find_all(src).len() }
+}
+
+/// `src` with the matches of `pat` in its shown text replaced; format codes stay where they are
+/// (codes inside a match stay after the replacement).
+fn replace_in(pat: &Pattern, src: &str, rep: &str, groups: bool, coded: bool) -> String {
+    if !coded {
+        return pat.replace_all(src, rep, groups).0;
+    }
+    let (vis, spans) = shown(src);
+    // Char index of each byte offset of `vis`.
+    let mut at = vec![0usize; vis.len() + 1];
+    for (k, (b, c)) in vis.char_indices().enumerate() {
+        at.iter_mut().skip(b).take(c.len_utf8()).for_each(|a| *a = k);
+    }
+    at[vis.len()] = vis.chars().count();
+    let mut out = String::with_capacity(src.len());
+    let mut cursor = 0usize;
+    for h in pat.find_all(&vis) {
+        let (vs, ve) = (at.get(h.start).copied().unwrap_or(0), at.get(h.end).copied().unwrap_or(0));
+        let (Some(first), true) = (spans.get(vs), ve > vs) else { continue };
+        out.push_str(src.get(cursor..first.0).unwrap_or(""));
+        pat.expand(&vis, &h, rep, groups, &mut out);
+        for k in vs..ve - 1 {
+            if let (Some(a), Some(b)) = (spans.get(k), spans.get(k + 1)) {
+                out.push_str(src.get(a.1..b.0).unwrap_or(""));
+            }
+        }
+        cursor = spans.get(ve - 1).map_or(src.len(), |l| l.1);
+    }
+    out.push_str(src.get(cursor..).unwrap_or(""));
+    out
 }
 
 fn snippet(t: &str) -> String {
@@ -128,13 +190,13 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         let mut n = 0usize;
         let mut found_in: Option<String> = None;
         let replacing = rep.is_some() && only.as_ref().is_none_or(|o| o.contains(&h));
-        texts(&mut k, inc, &mut |t: &mut String| {
-            let c = pat.find_all(t).len();
+        texts(&mut k, inc, &mut |t: &mut String, coded: bool| {
+            let c = count_in(&pat, t, coded);
             if c > 0 {
                 n += c;
-                found_in.get_or_insert_with(|| snippet(t));
+                found_in.get_or_insert_with(|| snippet(&if coded { shown(t).0 } else { t.clone() }));
                 if replacing && let Some(r) = &rep {
-                    *t = pat.replace_all(t, r, groups).0;
+                    *t = replace_in(&pat, t, r, groups, coded);
                 }
             }
         });
@@ -181,7 +243,11 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
             }
             total += c;
             hits.push(json!({ "name": name, "type": if table == "layer" { "Layer name" } else { "Block name" }, "text": name, "count": c }));
-            let wanted = p.get("names").and_then(Value::as_array).is_none_or(|a| a.iter().any(|v| v.as_str() == Some(name.as_str())));
+            // Limited to chosen objects (`handles`) and no `names` given: names stay as they are.
+            let wanted = match p.get("names").and_then(Value::as_array) {
+                Some(a) => a.iter().any(|v| v.as_str() == Some(name.as_str())),
+                None => only.is_none(),
+            };
             if let (Some(r), true) = (&rep, wanted) {
                 let to = pat.replace_all(&name, r, groups).0;
                 if to != name && !to.trim().is_empty() {

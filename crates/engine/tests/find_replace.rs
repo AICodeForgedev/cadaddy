@@ -148,3 +148,57 @@ fn replacing_one_all_names_and_links_in_one_undo_step() {
     let EntityKind::Dimension(dm) = kind(&f.s, &f.dim) else { panic!() };
     assert_eq!(dm.text, "DOOR WIDTH <>");
 }
+
+fn set_mtext(f: &mut Fixture, contents: &str) {
+    let hd = Handle::parse_hex(&f.mtext).unwrap();
+    f.s.doc_mut()
+        .unwrap()
+        .modify_entity(hd, |e| {
+            if let EntityKind::MText(m) = &mut e.kind {
+                m.contents = contents.to_string();
+            }
+        })
+        .unwrap();
+}
+
+#[test]
+fn mtext_format_codes_are_not_matched_or_changed() {
+    let mut f = fixture();
+    let src = r"Pipe\Pspec {\fArial|b1;door} frame";
+    set_mtext(&mut f, src);
+    let inc = json!(["mtext"]);
+    // Plain replace: only shown letters change; \P, braces and the font code stay.
+    f.s.execute("find", &json!({ "find": "p", "replace": "x", "include": inc, "handles": [f.mtext] })).unwrap();
+    let EntityKind::MText(m) = kind(&f.s, &f.mtext) else { panic!() };
+    // The shown text of "spec" has a `p` too, so it changes: "spec" -> "sxec".
+    assert_eq!(m.contents, r"xixe\Psxec {\fArial|b1;door} frame");
+    set_mtext(&mut f, src);
+    // A paragraph break is a line break; codes between the words are skipped.
+    let r = f.s.execute("find", &json!({ "find": r"spec\s+door", "mode": "regex", "include": inc })).unwrap();
+    assert_eq!(r["total"], 1);
+    let r = f.s.execute("find", &json!({ "find": "fArial", "include": inc })).unwrap();
+    assert_eq!(r["total"], 0);
+    let r = f.s.execute("find", &json!({ "find": "Pspec", "include": inc })).unwrap();
+    assert_eq!(r["total"], 0, "the \\P is not a letter P");
+    // A phrase that wraps onto a second paragraph is found, and replaced around the codes.
+    let r = f.s.execute("find", &json!({ "find": r"Pipe\sspec", "mode": "regex", "include": inc })).unwrap();
+    assert_eq!(r["total"], 1);
+    f.s.execute("find", &json!({ "find": "door", "replace": "gate", "include": inc, "handles": [f.mtext] })).unwrap();
+    let EntityKind::MText(m) = kind(&f.s, &f.mtext) else { panic!() };
+    assert_eq!(m.contents, r"Pipe\Pspec {\fArial|b1;gate} frame");
+}
+
+#[test]
+fn replace_limited_by_handles_renames_no_names_unless_asked() {
+    let mut f = fixture();
+    let r = f.s.execute("find", &json!({ "find": "door", "replace": "gate", "include": ["text", "names"], "handles": [f.text.clone()] })).unwrap();
+    assert!(r["total"].as_u64().unwrap() > 1, "names are still listed");
+    let EntityKind::Text(t) = kind(&f.s, &f.text) else { panic!() };
+    assert_eq!(t.value, "gate 1");
+    assert!(f.s.doc().unwrap().layer("DOORS").is_some(), "layer kept");
+    assert!(f.s.doc().unwrap().blocks.contains_key("DOORTAG"), "block kept");
+    // Asked for by name, it is renamed.
+    f.s.execute("find", &json!({ "find": "door", "replace": "gate", "include": ["names"], "handles": [], "names": ["DOORS"] })).unwrap();
+    assert!(f.s.doc().unwrap().layer("DOORS").is_none());
+    assert!(f.s.doc().unwrap().blocks.contains_key("DOORTAG"));
+}
