@@ -1541,6 +1541,14 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if !b.opts.text {
                 return;
             }
+            // Annotative text with "Match orientation to layout" is drawn upright (#2498).
+            let upright;
+            let t = if e.common.matches_layout_orientation() && t.rotation != 0.0 {
+                upright = cadaddy_doc::Text { rotation: 0.0, ..t.clone() };
+                &upright
+            } else {
+                t
+            };
             let mut vals = field_values(ctx.d, e.handle);
             let text: String = match with_fields(&t.value, &mut vals, b.opts.field_shading) {
                 Some(marked) => {
@@ -1572,6 +1580,14 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if !b.opts.text {
                 return;
             }
+            // Annotative text with "Match orientation to layout" is drawn upright (#2498).
+            let upright;
+            let t = if e.common.matches_layout_orientation() && t.rotation != 0.0 {
+                upright = cadaddy_doc::MText { rotation: 0.0, ..t.clone() };
+                &upright
+            } else {
+                t
+            };
             let mut vals = field_values(ctx.d, e.handle);
             let substituted = with_fields(&t.contents, &mut vals, b.opts.field_shading).map(|contents| cadaddy_doc::MText { contents, ..t.clone() });
             let t = substituted.as_ref().unwrap_or(t);
