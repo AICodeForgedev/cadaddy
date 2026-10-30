@@ -164,3 +164,19 @@ fn without_a_picker_appload_asks_for_the_name_on_the_command_line() {
     assert_eq!(app.session.log.last().map(String::as_str), Some("hi"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn typed_appload_with_filedia_0_asks_on_the_command_line_and_never_picks() {
+    let dir = temp_dir("filedia");
+    let path = write(&dir, "tools.lsp", "(defun c:hi () (princ \"hi\") (princ))");
+    let (mut app, asked) = app_with_picker(Some(path.clone()));
+    app.session.execute("setvar", &json!({ "name": "FILEDIA", "value": 0 })).expect("FILEDIA is settable");
+
+    app.cmdline("appload");
+    assert!(asked.borrow().is_empty(), "FILEDIA 0 never opens the picker");
+    assert!(app.session.prompting());
+    assert!(app.session.prompt_text().contains("Enter name of LISP file to load"), "{}", app.session.prompt_text());
+    app.cmdline(&path);
+    assert!(app.session.log.iter().any(|l| l == "tools.lsp successfully loaded."), "{:?}", app.session.log);
+    let _ = std::fs::remove_dir_all(&dir);
+}

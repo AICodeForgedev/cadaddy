@@ -354,6 +354,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
                 app.set_status(hint);
                 return Some(Ok(Value::Null));
             }
+            // FILEDIA 0 or an agent's request: the engine asks for the name on the command line.
+            if file_dialogs_off(app) || crate::agent_call_active() {
+                return None;
+            }
             let pick = app.services.pick_lisp.as_ref()?;
             let dir = app.ui.last_lisp_dir.clone().unwrap_or_default();
             let Some(path) = pick(&dir) else { return Some(Ok(Value::Null)) };
