@@ -261,6 +261,9 @@ fn services() -> Services {
                 .map(|p| p.to_string_lossy().to_string())
         })),
         pick_save_image: Some(Box::new(|name: &str| {
+            if !cadaddy_ui_egui::file_dialogs_allowed() {
+                return None;
+            }
             rfd::FileDialog::new()
                 .set_file_name(name)
                 .add_filter(i18n::t("PNG image"), &["png"])
@@ -292,6 +295,9 @@ fn services() -> Services {
         })),
         // APPLOAD: AutoLISP routines only, starting where the last one was loaded from.
         pick_lisp: Some(Box::new(|dir: &str| {
+            if !cadaddy_ui_egui::file_dialogs_allowed() {
+                return None;
+            }
             let dialog = rfd::FileDialog::new().add_filter(i18n::t("AutoLISP (LSP)"), &["lsp"]).add_filter(i18n::t("All files"), &["*"]);
             let dialog = if dir.is_empty() { dialog } else { dialog.set_directory(dir) };
             dialog.pick_file().map(|p| p.to_string_lossy().to_string())
@@ -707,6 +713,25 @@ mod tests {
 
     fn env<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |k| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| OsString::from(v))
+    }
+
+    /// Every native file dialog in this file sits behind `file_dialogs_allowed()` (FILEDIA 0 or an
+    /// agent's request closes it), checked before the dialog is built. A picker without the check
+    /// froze the app and its control port (APPLOAD, battle test 5). Call sites: pick_open,
+    /// pick_plot_style, pick_save_plot_style, pick_pdf, pick_image, pick_save_image, pick_folder,
+    /// pick_save, pick_lisp.
+    #[test]
+    fn every_file_dialog_call_site_is_behind_the_guard() {
+        let src = include_str!("main.rs");
+        let body = src.split("#[cfg(test)]").next().unwrap_or_default();
+        let mut sites = 0;
+        for (i, _) in body.match_indices("rfd::FileDialog::new()") {
+            sites += 1;
+            let before = &body[..i];
+            let start = before.rfind("Some(Box::new(").unwrap_or(0);
+            assert!(before[start..].contains("file_dialogs_allowed()"), "a file dialog without the FILEDIA/agent guard near byte {i}");
+        }
+        assert_eq!(sites, 9, "a file dialog was added or removed: list it above and guard it");
     }
 
     #[test]

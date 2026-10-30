@@ -35,6 +35,12 @@ pub(crate) fn palette_pos(app: &CadApp) -> egui::Pos2 {
     app.canvas.rect.map_or(egui::pos2(16.0, 160.0), |r| r.min + egui::vec2(12.0, 12.0))
 }
 
+/// Whether an agent's control request is being handled: commands that would pick a file ask for
+/// its name on the command line instead.
+pub(crate) fn agent_call_active() -> bool {
+    AGENT_CALL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Whether a file dialog was refused during the agent request being handled
 /// ([`file_dialogs_allowed`]), so a picker's `None` isn't a cancel.
 pub(crate) fn dialog_refused() -> bool {
