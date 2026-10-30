@@ -1,8 +1,10 @@
 //! The exchange notice: after a DWG or DXF save into a target (format, version) not yet checked
 //! that loses something, a dialog lists what that file didn't keep — feature, count, dropped or
 //! changed — with Select for the objects concerned. Shown once per target, for saves the user
-//! started. Saves made through `CadApp::run` (scripts, the control channel and MCP) are checked
-//! as they run and get the same list in the save reply's `notKeptDetail` instead.
+//! started: the check runs on a worker and `CadApp::logic` opens the dialog when it finishes (a
+//! `CadApp::run` in between hands it on too, it is never dropped). Saves made through
+//! `CadApp::run` (scripts, the control channel and MCP) are checked as they run and get the same
+//! list in the save reply's `notKeptDetail` instead.
 
 use egui::{RichText, vec2};
 use serde_json::Value;
@@ -18,6 +20,17 @@ pub fn take(app: &mut CadApp, show: bool) {
     if show {
         app.exchange_notice = Some(notice);
         app.ui.dialog = Some(DIALOG.into());
+    }
+}
+
+/// Collect the checks a user's save left running; a notice one of them has just produced opens
+/// the dialog. (A notice already waiting was left by the command now running, not by a worker.)
+pub fn poll_background(app: &mut CadApp) {
+    let waiting = |app: &CadApp| app.session.state().ok().is_some_and(|st| st.exchange_notice.is_some());
+    let before = waiting(app);
+    app.session.poll_background();
+    if !before && waiting(app) {
+        take(app, true);
     }
 }
 
