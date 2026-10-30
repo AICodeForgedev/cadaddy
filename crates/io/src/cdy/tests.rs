@@ -871,3 +871,106 @@ fn verify_lists_a_bounded_number_of_chunks() {
     assert!(check["chunksTotal"].as_u64().unwrap() >= 5000);
     assert!(check["chunks"].as_array().unwrap().len() <= 2000);
 }
+
+/// A drawing with every part type set: all the text parts, an embedded file, objects, a block
+/// and a layout. `text` gives the value of each text part (`variant` picks one of two).
+fn every_part(variant: usize) -> Drawing {
+    let mut d = every_kind();
+    d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(1.0, 2.0, 0.0) })).unwrap();
+    d.embedded.insert("notes.txt".into(), std::sync::Arc::new(b"embedded notes".to_vec()));
+    for (tag, _) in model::TEXT_PARTS {
+        set_text(&mut d, &tag, Some(text(&tag, variant)));
+    }
+    d
+}
+
+/// A text for the part `tag` that reads back as itself (the schedule and the overrides are read
+/// through their own parsers, which write them in one fixed form).
+fn text(tag: &[u8; 4], variant: usize) -> String {
+    let n = variant + 1;
+    match tag {
+        b"SCH4" => {
+            let raw = format!(r#"{{"version":1,"tasks":[{{"id":"T{n}","start":"2026-03-02","finish":"2026-03-06","add":["2A"]}}]}}"#);
+            cadaddy_walk3d::fourd::Schedule4d::from_json(Some(&raw)).unwrap().to_json().unwrap()
+        }
+        b"OVRD" => cadaddy_doc::overrides::Overrides::from_json(&format!(r#"{{"version":1,"next_id":{n},"items":[]}}"#)).unwrap().to_json().unwrap(),
+        b"AGNT" | b"IMCK" => format!(r#"{{"note":"{} {n}"}}"#, String::from_utf8_lossy(tag)),
+        _ => format!("{} text {n}", String::from_utf8_lossy(tag)),
+    }
+}
+
+fn set_text(d: &mut Drawing, tag: &[u8; 4], t: Option<String>) {
+    let slot = match tag {
+        b"BSPC" => &mut d.building_spec,
+        b"TOUR" => &mut d.tours,
+        b"BCFI" => &mut d.bcf,
+        b"SCH4" => &mut d.schedule4d,
+        b"PRTS" => &mut d.parts,
+        b"OVRD" => &mut d.overrides,
+        b"AGNT" => &mut d.agent,
+        b"IMCK" => &mut d.import_check,
+        other => panic!("a text part this test doesn't know: {}", String::from_utf8_lossy(other)),
+    };
+    *slot = t;
+}
+
+/// No part but the ones with many chunks is listed twice in the file's index.
+fn assert_one_of_each(file: &[u8], what: &str) {
+    let entries = container::index(file).expect("an index");
+    for e in &entries {
+        if [b"ENTS", b"BLKS", b"LAYO", b"EMBD"].contains(&&e.tag) {
+            continue;
+        }
+        let n = entries.iter().filter(|o| o.tag == e.tag).count();
+        assert_eq!(n, 1, "{what}: {} is listed {n} times", String::from_utf8_lossy(&e.tag));
+    }
+}
+
+#[test]
+fn every_text_part_is_a_known_tag_and_the_table_has_no_repeats() {
+    for (i, (tag, _)) in model::TEXT_PARTS.iter().enumerate() {
+        assert!(model::KNOWN.contains(&tag), "{} is not in KNOWN", String::from_utf8_lossy(tag));
+        assert!(model::TEXT_PARTS[..i].iter().all(|(t, _)| t != tag), "{} twice", String::from_utf8_lossy(tag));
+    }
+}
+
+#[test]
+fn an_opened_file_saves_every_text_part_edit_and_removal_incrementally() {
+    let d = every_part(0);
+    let (out, _) = save(&d, None, &no_thumb).unwrap();
+    let file = stored(&[], &out);
+    let (opened, rep) = model::read(&file).unwrap();
+    assert!(rep.notes.is_empty(), "{:?}", rep.notes);
+    assert_eq!(opened, d, "every part reads back");
+    for (tag, get) in model::TEXT_PARTS {
+        let name = String::from_utf8_lossy(&tag).into_owned();
+        assert!(get(&opened).is_some(), "{name} set");
+        // Nothing changed: only an index and trailer are appended.
+        let state = seed(&opened, &file).unwrap_or_else(|| panic!("seeded with {name}"));
+        let (out, _) = save(&opened, Some(&state), &no_thumb).unwrap();
+        let Output::Append { bytes, .. } = &out else { panic!("{name}: expected an append") };
+        assert!(bytes.len() < 600, "{name}: {} bytes appended for no change", bytes.len());
+        assert_one_of_each(&stored(&file, &out), &name);
+        // The text edited.
+        let mut edited = opened.clone();
+        set_text(&mut edited, &tag, Some(text(&tag, 1)));
+        assert_ne!(edited, opened, "{name}: the edit changes the drawing");
+        let (out, _) = save(&edited, Some(&state), &no_thumb).unwrap();
+        let Output::Append { .. } = &out else { panic!("{name}: expected an append") };
+        let after = stored(&file, &out);
+        assert_one_of_each(&after, &name);
+        let (back, rep) = model::read(&after).unwrap();
+        assert!(rep.notes.is_empty(), "{name}: {:?}", rep.notes);
+        assert_eq!(back, edited, "{name}: the edit is what reads back");
+        // The text removed.
+        let mut removed = opened.clone();
+        set_text(&mut removed, &tag, None);
+        let (out, _) = save(&removed, Some(&state), &no_thumb).unwrap();
+        let Output::Append { .. } = &out else { panic!("{name}: expected an append") };
+        let after = stored(&file, &out);
+        assert_one_of_each(&after, &name);
+        let (back, _) = model::read(&after).unwrap();
+        assert!(get(&back).is_none(), "{name}: the removal is what reads back");
+        assert_eq!(back, removed);
+    }
+}

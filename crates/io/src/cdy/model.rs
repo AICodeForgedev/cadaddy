@@ -44,6 +44,19 @@ pub(super) const KNOWN: [&[u8; 4]; 17] = [
     b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"BCFI", b"SCH4", b"PRTS", b"OVRD", b"AGNT", b"IMCK", b"EMBD",
     b"THMB",
 ];
+/// The parts that are one text each: their tag and where the drawing keeps them. The writer, the
+/// incremental-save seed and (through the tests) the reader all go by this one table, so a new
+/// tag can't be added to one and missed in another. Each tag must also be in `KNOWN`.
+pub(super) const TEXT_PARTS: [([u8; 4], fn(&Drawing) -> Option<&String>); 8] = [
+    (*b"BSPC", |d| d.building_spec.as_ref()),
+    (*b"TOUR", |d| d.tours.as_ref()),
+    (*b"BCFI", |d| d.bcf.as_ref()),
+    (*b"SCH4", |d| d.schedule4d.as_ref()),
+    (*b"PRTS", |d| d.parts.as_ref()),
+    (*b"OVRD", |d| d.overrides.as_ref()),
+    (*b"AGNT", |d| d.agent.as_ref()),
+    (*b"IMCK", |d| d.import_check.as_ref()),
+];
 /// Most files one drawing embeds.
 const MAX_EMBEDDED: usize = 100_000;
 
