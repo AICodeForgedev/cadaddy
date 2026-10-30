@@ -1,6 +1,6 @@
 //! Where MCP tool calls end up: a control-channel method call.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
@@ -36,6 +36,8 @@ pub struct Remote {
     launch: bool,
     /// Which window answered the last hello (title and process id), when the app says.
     window: Option<String>,
+    /// Longest reply line accepted (`MAX_REPLY_LINE`; smaller in tests).
+    max_reply: usize,
 }
 
 /// How long a launched app has to open its control port.
@@ -44,9 +46,28 @@ const LAUNCH_WAIT: Duration = Duration::from_secs(30);
 /// keeps running at the next call; `cancel` stops it).
 const HEADLESS_LISP_LIMIT: Duration = Duration::from_secs(30);
 
+/// Longest reply line in bytes the client will buffer. It matches the control server's request
+/// cap (256 MiB, room for whole drawings and images as base64), so a peer squatting on the port
+/// can't make the client allocate without bound (#1925).
+const MAX_REPLY_LINE: usize = 256 * 1024 * 1024;
+
+/// Read one `\n`-terminated reply of at most `max` bytes (newline excluded). `Ok(0)` is end of
+/// stream; a longer line is an `InvalidData` error and the rest of it stays unread.
+fn read_reply_line(reader: &mut impl BufRead, reply: &mut String, max: usize) -> std::io::Result<usize> {
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    let n = reader.take(limit).read_line(reply)?;
+    if n > max && !reply.ends_with('\n') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("reply from the control port is longer than {max} bytes; is that CADaddy's control server?"),
+        ));
+    }
+    Ok(n)
+}
+
 impl Remote {
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, launch: false, window: None };
+        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, launch: false, window: None, max_reply: MAX_REPLY_LINE };
         r.reconnect()?;
         Ok(r)
     }
@@ -54,7 +75,7 @@ impl Remote {
     /// the server before the app is open. With `launch`, a call that finds nothing at `addr`
     /// opens the app with that control port first (macOS) and waits for it.
     pub fn lazy(addr: &str, launch: bool) -> Self {
-        Self { addr: addr.to_string(), conn: None, next_id: 1, launch, window: None }
+        Self { addr: addr.to_string(), conn: None, next_id: 1, launch, window: None, max_reply: MAX_REPLY_LINE }
     }
     /// Connect, opening the app first when asked to and nothing answers.
     fn reach(&mut self) -> std::io::Result<()> {
@@ -122,7 +143,7 @@ impl Remote {
             return Err((e, false));
         }
         let mut reply = String::new();
-        match reader.read_line(&mut reply) {
+        match read_reply_line(reader, &mut reply, self.max_reply) {
             Ok(0) => {
                 self.conn = None;
                 Err((std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "connection closed"), true))
@@ -150,7 +171,7 @@ pub(crate) fn authenticate_with(reader: &mut BufReader<TcpStream>, writer: &mut 
     writer.write_all(line.as_bytes())?;
     writer.flush()?;
     let mut reply = String::new();
-    reader.read_line(&mut reply)?;
+    read_reply_line(reader, &mut reply, MAX_REPLY_LINE)?;
     let v: Value = serde_json::from_str(reply.trim()).unwrap_or(Value::Null);
     if v.get("error").and_then(Value::as_str).is_some_and(|e| e.starts_with("unauthorized")) {
         return Err(std::io::Error::new(
@@ -172,7 +193,7 @@ fn version_handshake(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, 
         return Ok(None);
     }
     let mut reply = String::new();
-    if reader.read_line(&mut reply).is_err() {
+    if read_reply_line(reader, &mut reply, MAX_REPLY_LINE).is_err() {
         return Ok(None);
     }
     let v: Value = match serde_json::from_str(reply.trim()) {
@@ -234,7 +255,7 @@ fn cancel_remote(addr: &str) {
     let line = format!("{}\n", json!({"id": 1, "method": "control.cancel", "params": {}}));
     if s.write_all(line.as_bytes()).is_ok() && s.flush().is_ok() {
         let mut reply = String::new();
-        let _ = reader.read_line(&mut reply);
+        let _ = read_reply_line(&mut reader, &mut reply, MAX_REPLY_LINE);
     }
 }
 
@@ -617,6 +638,42 @@ impl Backend for Headless {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    /// A peer squatting on the control port can't make the client buffer an endless reply line (#1925).
+    #[test]
+    fn an_overlong_reply_is_refused_without_buffering_it() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut rd = BufReader::new(conn.try_clone().unwrap());
+            // The version handshake on connect: answered with an empty object.
+            let mut line = String::new();
+            rd.read_line(&mut line).unwrap();
+            conn.write_all(b"{}\n").unwrap();
+            // The request: no newline in the reply, so it never ends. A bounded client gives up after the limit.
+            line.clear();
+            rd.read_line(&mut line).unwrap();
+            let _ = conn.write_all(&[b'x'; 4096]);
+            let _ = conn.flush();
+            std::thread::sleep(Duration::from_millis(500));
+        });
+        let mut remote = Remote::connect(&addr).unwrap();
+        remote.max_reply = 100;
+        let err = remote.roundtrip("{}").unwrap_err().0;
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
+        assert!(err.to_string().contains("longer than 100 bytes"), "{err}");
+        assert!(remote.conn.is_none());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn replies_up_to_the_limit_are_read() {
+        let mut input: &[u8] = b"0123456789\nrest\n";
+        let mut reply = String::new();
+        assert_eq!(read_reply_line(&mut input, &mut reply, 10).unwrap(), 11);
+        assert_eq!(reply, "0123456789\n");
+    }
 
     /// A server that reads one request per connection and closes without replying must not see the request twice.
     #[test]
