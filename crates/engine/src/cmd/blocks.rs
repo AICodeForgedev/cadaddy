@@ -180,8 +180,18 @@ pub(crate) fn make_block(s: &mut Session, name: &str, base: Vec2, hs: &[Handle],
     b.base = v3(base);
     b.description = description.to_string();
     let doc = s.doc_mut()?;
+    let mut copies = std::collections::HashMap::new();
+    let mut made = Vec::new();
     for mut e in ents {
+        let old = e.handle;
         e.handle = doc.new_handle();
+        copies.insert(old, e.handle);
+        made.push(e);
+    }
+    for mut e in made {
+        if let EntityKind::Hatch(h) = &mut e.kind {
+            h.remap_sources(&copies);
+        }
         b.entities.push(e);
     }
     doc.blocks.insert(name.to_string(), Arc::new(b));
@@ -404,8 +414,18 @@ fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
             })
             .collect()
     };
+    let mut copies = std::collections::HashMap::new();
+    let mut made = Vec::new();
     for mut e in ents {
+        let old = e.handle;
         e.handle = d.new_handle();
+        copies.insert(old, e.handle);
+        made.push(e);
+    }
+    for mut e in made {
+        if let EntityKind::Hatch(h) = &mut e.kind {
+            h.remap_sources(&copies);
+        }
         d.model.push(e);
     }
     let hooks = super::file::io().ok_or_else(|| bad("wblock", "file formats are not available in this build"))?;
