@@ -59,7 +59,6 @@ fn group_filters_list_chosen_layers() {
     assert_eq!(layers(&mut s, json!({"name": "Plot set"})), ["WALLS", "E-POWER"]);
     s.execute("layer.filter.edit", &json!({"name": "Plot set", "addLayers": ["DOORS"], "removeLayers": ["WALLS"]})).unwrap();
     assert_eq!(layers(&mut s, json!({"name": "Plot set"})), ["DOORS", "E-POWER"]);
-    // A renamed layer: still listed? It is listed by name, as AutoCAD keeps it.
     // Errors.
     for bad in [
         json!({"name": "Plot set", "type": "group"}),
@@ -74,6 +73,26 @@ fn group_filters_list_chosen_layers() {
     }
     assert!(s.execute("layer.filter.layers", &json!({"name": "missing"})).is_err());
     assert_eq!(layers(&mut s, json!({})).len(), 7, "All: every layer");
+}
+
+#[test]
+fn group_filters_follow_layer_renames_and_drop_deleted_layers() {
+    let mut s = drawing();
+    s.execute("layer.filter.new", &json!({"name": "Plot set", "type": "group", "layers": ["WALLS"]})).unwrap();
+    s.execute("layer.set", &json!({"name": "WALLS", "newName": "A-WALL"})).unwrap();
+    assert_eq!(layers(&mut s, json!({"name": "Plot set"})), ["A-WALL"]);
+    let list = s.execute("layer.filter.list", &json!({})).unwrap();
+    assert_eq!(list["filters"][0]["members"], json!(["A-WALL"]), "{list}");
+    // A member that is deleted is no longer listed.
+    s.execute("layer.filter.edit", &json!({"name": "Plot set", "addLayers": ["E-POWER", "DOORS"]})).unwrap();
+    s.execute("laydel", &json!({"names": ["E-POWER"]})).unwrap();
+    let list = s.execute("layer.filter.list", &json!({})).unwrap();
+    assert_eq!(list["filters"][0]["members"], json!(["A-WALL", "DOORS"]), "{list}");
+    // ...and neither is one that is merged away.
+    s.execute("laymrg", &json!({"from": ["DOORS"], "to": "A-ANNO"})).unwrap();
+    let list = s.execute("layer.filter.list", &json!({})).unwrap();
+    assert_eq!(list["filters"][0]["members"], json!(["A-WALL"]), "{list}");
+    assert_eq!(layers(&mut s, json!({"name": "Plot set"})), ["A-WALL"]);
 }
 
 #[test]

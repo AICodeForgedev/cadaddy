@@ -920,9 +920,13 @@ struct LayerFiltersPayload {
 /// Most layer filters read.
 const MAX_LAYER_FILTERS: usize = 10_000;
 
-/// JSON chunks for the layer filters XRECORD, or `None` when the drawing has none.
-pub(crate) fn layer_filter_chunks(filters: &[cadaddy_doc::LayerFilter]) -> Option<Vec<String>> {
-    if filters.is_empty() {
+/// JSON chunks for the layer filters XRECORD, or `None` when the drawing has none. With
+/// LAYER_FILTER objects of other programs kept in the file, an empty list is still written: it
+/// says the filters were deleted, so those objects are not read back as group filters.
+pub(crate) fn layer_filter_chunks(d: &cadaddy_doc::Drawing) -> Option<Vec<String>> {
+    let filters = &d.layer_filters;
+    let foreign = d.foreign.objects.iter().any(|o| o.kind.eq_ignore_ascii_case("LAYER_FILTER"));
+    if filters.is_empty() && !foreign {
         return None;
     }
     let json = serde_json::to_string(&LayerFiltersPayload { version: 1, filters: filters.to_vec() }).ok()?;
