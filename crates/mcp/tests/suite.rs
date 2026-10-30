@@ -260,7 +260,7 @@ fn huge_inputs_stay_within_caps_and_time() {
     tool(&mut s, "command_line", json!({ "text": "circle 0,0 1" })).unwrap();
     let q: Value = serde_json::from_str(&tool(&mut s, "query_entities", json!({ "limit": 1u64 << 60, "offset": 0 })).unwrap()).unwrap();
     assert_eq!(q["returned"], q["count"]);
-    // An enormous render is clamped (8192 px a side).
+    // An enormous render is refused (16 to 8192 px a side).
     let r = rpc(&mut s, "tools/call", json!({ "name": "render", "arguments": { "width": 1_000_000, "height": 20 } }));
     assert!(r.get("error").is_some() || r["result"]["content"][0]["type"] == "image", "{}", r.to_string().chars().take(200).collect::<String>());
     // A long script: 5000 commands.

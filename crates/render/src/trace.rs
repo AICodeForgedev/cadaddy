@@ -56,7 +56,7 @@ impl Preset {
 }
 
 /// Most samples per pixel and bounces a render takes.
-pub const MAX_SAMPLES: u32 = 65_536;
+pub const MAX_SAMPLES: u32 = 4096;
 pub const MAX_BOUNCES: u32 = 32;
 
 /// `f` over `range`, in parallel where threads are available (not in the browser).
