@@ -154,7 +154,7 @@ pub fn export_list(list: &crate::DisplayList) -> Vec<u8> {
                 }
                 polyline(&mut r, &run, &px);
             }
-            Kind::Tris | Kind::Mask => {
+            Kind::Tris | Kind::InkMask | Kind::Mask => {
                 for t in pts.chunks(3) {
                     if let [a, b2, cc] = t {
                         let poly = clip_polygon(&[*a, *b2, *cc], &view);
