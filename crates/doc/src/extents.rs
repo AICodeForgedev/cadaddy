@@ -67,7 +67,9 @@ fn blank(s: &str) -> bool {
 fn mtext_box(t: &crate::MText) -> Bounds2 {
     let lines = t.contents.split("\\P").count().max(1);
     let longest = t.contents.split("\\P").map(|l| l.chars().count()).max().unwrap_or(1);
-    let mut w = if t.width > 0.0 { t.width } else { t.height * 0.8 * longest as f64 };
+    let estimate = t.height * 0.8 * longest as f64;
+    // The wrap width only narrows the box: a garbage width must not stretch the drawing extents (#2465).
+    let mut w = if t.width > 0.0 { t.width.min(estimate) } else { estimate };
     let mut h = t.height * 1.66 * lines as f64;
     if let Some(c) = t.columns.as_ref().filter(|_| t.width > 0.0) {
         // Columns side by side, the text flowing down each in turn.
@@ -335,6 +337,37 @@ mod tests {
         entity_bounds(&Drawing::default(), &Entity::new(crate::Handle(1), kind), 0)
     }
 
+    fn mtext(contents: &str, width: f64) -> crate::MText {
+        crate::MText {
+            insert: Vec3::new(10.0, 10.0, 0.0),
+            height: 2.5,
+            width,
+            attach: 1,
+            rotation: 0.0,
+            style: "Standard".into(),
+            contents: contents.into(),
+            line_spacing: 1.0,
+            line_spacing_exact: false,
+            columns: None,
+        }
+    }
+
+    /// A garbage wrap width only narrows an MTEXT's box, never widens it: a huge group 41 must not
+    /// stretch the drawing extents (#2465).
+    #[test]
+    fn a_huge_mtext_wrap_width_does_not_inflate_the_extents() {
+        let b = bounds(EntityKind::MText(mtext("AB", 300_000_009_519_104.0)));
+        // "AB" at height 2.5 is 2 chars * 0.8 * 2.5 = 4 wide.
+        assert!(b.max.x <= 10.0 + 4.0 + 1e-9, "box ends at x = {}", b.max.x);
+        assert!(b.min.x >= 10.0 - 1e-9);
+    }
+
+    /// A wrap width narrower than the text still bounds the box to that width.
+    #[test]
+    fn a_narrow_mtext_wrap_width_still_sets_the_box_width() {
+        let b = bounds(EntityKind::MText(mtext("A LONG LINE OF WRAPPING TEXT", 5.0)));
+        assert!((b.max.x - b.min.x - 5.0).abs() < 1e-9, "width {}", b.max.x - b.min.x);
+    }
     #[test]
     fn right_justified_text_is_left_of_alignment_point() {
         let b = bounds(EntityKind::Text(text(HAlign::Right, VAlign::Baseline)));
