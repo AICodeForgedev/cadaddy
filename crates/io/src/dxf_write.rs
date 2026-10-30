@@ -3293,6 +3293,12 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
                 continue;
             }
             let own = dxf_ext::STYLE_XDATA.contains(code);
+            // DIMTFILLCLR: a DWG R2007+ DIMSTYLE has a native colour field, which the codec reads
+            // from a second group 70 (after the record's flags). DXF never gets it (one 70 only);
+            // the xdata below still carries it for CADaddy's own round trip.
+            if cx.dwg && cx.target >= Version::R2007 && *code == 70 {
+                w.dimval(*code, enc.clone(), false);
+            }
             if !own && !dxf_ext::NEWER_CODES.contains(code) {
                 w.dimval(*code, enc, false);
                 continue;

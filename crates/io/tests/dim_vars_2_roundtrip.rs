@@ -7,7 +7,7 @@
 use cadaddy_color::Color;
 use cadaddy_doc::{Common, DimKind, DimStyle, Dimension, Drawing, EntityKind, Space};
 use cadaddy_geom::Vec3;
-use cadaddy_io::{SaveOptions, Version, read, write_with};
+use cadaddy_io::{DwgEngine, SaveOptions, Version, read, read_dwg, write_dwg, write_with};
 
 fn styled() -> DimStyle {
     DimStyle {
@@ -117,4 +117,103 @@ fn dwg_keeps_the_new_style_variables() {
     let bytes = write_with(&d, "t.dwg", &SaveOptions::default()).unwrap();
     let back = read(&bytes, "t.dwg").unwrap();
     assert_eq!(back.dim_style("Filled"), Some(&styled()));
+}
+
+/// The DWG records of a file as the codec decodes them (the DXF groups an AutoCAD DWG gives).
+fn dim_style_record(dwg: &cadaddy_dwgcodec::Dwg, name: &str) -> cadaddy_dwgcodec::entities::records::Record {
+    use cadaddy_dwgcodec::entities::Value;
+    let (records, _) = cadaddy_dwgcodec::entities::records::decode_all(dwg).expect("the records decode");
+    records
+        .into_iter()
+        .find(|r| r.name == "DIMSTYLE" && r.groups.iter().any(|g| g.code == 2 && matches!(&g.value, Value::Str(s) if s == name)))
+        .expect("the DIMSTYLE record")
+}
+
+fn int(g: &cadaddy_dwgcodec::entities::Group) -> Option<i64> {
+    match g.value {
+        cadaddy_dwgcodec::entities::Value::Int(i) => Some(i),
+        _ => None,
+    }
+}
+
+#[test]
+fn dwg_writes_the_fill_colour_into_the_native_dimstyle_field() {
+    let mut d = Drawing::new_imperial();
+    d.dim_styles.push(DimStyle { name: "Filled".into(), text_fill: 2, text_fill_color: Color::Index(5), ..DimStyle::default() });
+    for engine in [DwgEngine::Native, DwgEngine::Bridge] {
+        for v in [Version::R2007, Version::R2018] {
+            let bytes = write_dwg(&d, v, engine).unwrap();
+            let rec = dim_style_record(&cadaddy_dwgcodec::read(&bytes).expect("the codec reads the DWG"), "Filled");
+            let seventies: Vec<i64> = rec.groups.iter().filter(|g| g.code == 70).filter_map(int).collect();
+            // The flags first, then the native colour field: 5, not ByBlock (0).
+            assert_eq!(seventies, vec![0, 5], "{engine:?} {v:?}");
+            // And it comes back.
+            let back = read_dwg(&bytes, engine).unwrap();
+            assert_eq!(back.dim_style("Filled").map(|s| s.text_fill_color), Some(Color::Index(5)), "{engine:?} {v:?}");
+        }
+    }
+    // The codec's writer also has the background mode natively.
+    let bytes = write_dwg(&d, Version::R2018, DwgEngine::Native).unwrap();
+    let rec = dim_style_record(&cadaddy_dwgcodec::read(&bytes).expect("the codec reads the DWG"), "Filled");
+    assert_eq!(rec.groups.iter().find(|g| g.code == 69).and_then(int), Some(2));
+    // DXF output of the same style still has exactly one group 70 in the record.
+    for v in [Version::R2007, Version::R2018] {
+        let text = String::from_utf8_lossy(&dxf(&d, v)).to_string();
+        assert_eq!(record_groups(&text).iter().filter(|g| g.0 == 70).count(), 1, "{v:?}");
+    }
+}
+
+#[test]
+fn a_native_dwg_dimstyle_without_cadaddy_xdata_is_read_in_full() {
+    use cadaddy_dwgcodec::entities::encode::{Handles, Rec};
+    use cadaddy_dwgcodec::entities::{Group, Value};
+    // A DWG with a plain style (no CADADDY xdata: every variable at its default).
+    let mut d = Drawing::new_imperial();
+    d.dim_styles.push(DimStyle { name: "Native".into(), ..DimStyle::default() });
+    let bytes = write_dwg(&d, Version::R2010, DwgEngine::Native).unwrap();
+    let mut dwg = cadaddy_dwgcodec::read(&bytes).expect("the codec reads the DWG");
+    let mut rec = dim_style_record(&dwg, "Native");
+    // The groups as AutoCAD's DWG decodes: flags 70, then the colour 70 = 1, 69 = 2, 294 = 1,
+    // 288 = 1, 274 = 4, 286 = 8.
+    let mut sevens = 0;
+    for g in rec.groups.iter_mut() {
+        let new = match g.code {
+            70 => {
+                sevens += 1;
+                (sevens == 2).then_some(1)
+            }
+            69 => Some(2),
+            294 | 288 => Some(1),
+            274 => Some(4),
+            286 => Some(8),
+            _ => None,
+        };
+        if let Some(n) = new {
+            g.value = Value::Int(n);
+        }
+    }
+    assert_eq!(sevens, 2, "the decoder emits flags and the colour");
+    for code in [69, 294, 288, 274, 286] {
+        assert!(rec.groups.iter().any(|g: &Group| g.code == code), "group {code}");
+    }
+    let owner = rec.owner;
+    let raw =
+        cadaddy_dwgcodec::entities::encode_kinds::table_record(dwg.version, "DIMSTYLE", rec.handle, owner, &Rec(&rec.groups), &Handles::default())
+            .expect("the record encodes");
+    let at = dwg.objects.iter().position(|o| o.handle == rec.handle).expect("the object");
+    dwg.objects[at] = raw;
+    let edited = cadaddy_dwgcodec::write(&dwg).expect("the codec writes the DWG");
+    for engine in [DwgEngine::Native, DwgEngine::Bridge] {
+        let st = read_dwg(&edited, engine).unwrap().dim_style("Native").cloned().expect("the style");
+        assert_eq!(st.text_fill, 2, "{engine:?}");
+        assert_eq!(st.text_fill_color, Color::Index(1), "{engine:?}");
+        assert!(st.user_text_places_line, "{engine:?}");
+        assert_eq!(st.alt_tol_decimals, 4, "{engine:?}");
+        assert_eq!(st.alt_tol_zero_suppression, 8, "{engine:?}");
+        // The DWG bridge's reader (acadrust) does not hand on DIMTXTDIRECTION (group 294); the
+        // codec's reader does.
+        if engine == DwgEngine::Native {
+            assert!(st.text_right_to_left);
+        }
+    }
 }
