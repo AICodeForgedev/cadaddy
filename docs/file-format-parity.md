@@ -40,10 +40,14 @@ bytes, hostile input, damaged chunks skipped).
 ## DWG, version by version
 
 AutoCAD 2027 opens every DWG version from R2.0 onward and saves 2018 (AC1032, still the current
-DWG format), 2013, 2010, 2007, 2004, 2000 and R14. CADaddy reads DWG by converting it to DXF
-with the `acadrust` 0.6.3 crate and reading that DXF; it saves by writing its own R2000 DXF and
+DWG format), 2013, 2010, 2007, 2004, 2000 and R14. By default CADaddy reads DWG by converting it to DXF
+with the `acadrust` 0.6.3 crate ("the bridge") and reading that DXF; it saves by writing its own R2000 DXF and
 converting it to a DWG of the chosen version (#421): SAVEAS `version`, else the drawing's own
 version (the file's `$ACADVER`, 2018 for a new drawing), at least 2004 unless 2000 is asked for.
+CADaddy's own DWG codec (`crates/dwgcodec`, [dwg-codec.md](dwg-codec.md)) also reads and writes DWG without the DXF
+detour; it is behind the switch `CADADDY_DWG=native` (or `CADADDY_DWG_READ` / `CADADDY_DWG_WRITE` per direction) and is not
+the default yet. When the native reader rejects a file the bridge reads it and leaves a read note. What the native reader
+still loses is listed in [dwg-parity.md](dwg-parity.md).
 The bridge repairs two acadrust 0.6.3 gaps in 2010+ DWG: merged table cells and table-style
 title/header suppression.
 
@@ -52,7 +56,7 @@ title/header suppression.
 | R1.0–R2.6, R9, R10, R11/R12 | MC0.0–AC1009 | read | **no** (`is_dwg` accepts only `AC10xx` magic; acadrust doesn't target pre-R13) | no | — |
 | R13 | AC1012 | read | acadrust claims support; untested | no | none |
 | R14 | AC1014 | read, write | acadrust claims support; untested | **no** | none |
-| 2000–2002 | AC1015 | read, write | yes via bridge | yes, when asked for (no true colours, transparency or table styles: the format has none) | synthetic round trips (`dwg_at_every_version_reads_back`, `dwg_roundtrip_keeps_non_ascii_text`) |
+| 2000–2002 | AC1015 | read, write | yes via bridge (default); native behind the switch | yes, when asked for (no true colours, transparency or table styles: the format has none) | synthetic round trips (`dwg_at_every_version_reads_back`, `dwg_roundtrip_keeps_non_ascii_text`) |
 | 2004–2006 | AC1018 | read, write | via bridge | yes | `dwg_at_every_version_reads_back`, `dwg_roundtrip_keeps_extension_data` |
 | 2007–2009 | AC1021 | read, write | via bridge | yes | `dwg_at_every_version_reads_back` |
 | 2010–2012 | AC1024 | read, write | via bridge | yes | `dwg_at_every_version_reads_back`, `ac1024_dwg_with_many_entities_opens` |

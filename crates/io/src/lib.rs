@@ -144,9 +144,15 @@ pub enum DwgEngine {
 /// `CADADDY_DWG_WRITE` names for that direction, else the one `CADADDY_DWG` names for both
 /// (`native`, or `acadrust`/`bridge`), else [`DEFAULT_DWG_READ`] / [`DEFAULT_DWG_WRITE`].
 pub fn dwg_engine(read: bool) -> DwgEngine {
-    let named = |var: &str| match std::env::var(var).map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-        Ok("native") => Some(DwgEngine::Native),
-        Ok("acadrust" | "bridge") => Some(DwgEngine::Bridge),
+    dwg_engine_from(read, |var| std::env::var(var).ok())
+}
+
+/// [`dwg_engine`] over an explicit variable lookup (so the precedence is testable without
+/// touching the process environment).
+pub fn dwg_engine_from(read: bool, lookup: impl Fn(&str) -> Option<String>) -> DwgEngine {
+    let named = |var: &str| match lookup(var).map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("native") => Some(DwgEngine::Native),
+        Some("acadrust" | "bridge") => Some(DwgEngine::Bridge),
         _ => None,
     };
     named(if read { "CADADDY_DWG_READ" } else { "CADADDY_DWG_WRITE" }).or_else(|| named("CADADDY_DWG")).unwrap_or(if read {
