@@ -1650,6 +1650,9 @@ impl Session {
             return r;
         }
         let outer = self.journal.enter();
+        if outer && find_command(&cmd::resolve_alias(id)).is_some_and(|c| c.undoable) {
+            self.note_selection_gap();
+        }
         // A call from outside while a command runs (an agent's `engine.execute` while the user
         // is in TEXT): the command's work so far, the call's and the command's rest are undo
         // steps of their own, so U never takes the call's work away with the command's.
@@ -1681,6 +1684,9 @@ impl Session {
             self.split_running_undo_after(id, pre);
         }
         self.journal.leave();
+        if outer {
+            self.journal_selection();
+        }
         if react {
             let event = if r.is_ok() { lisp::reactor::CommandEvent::Ended } else { lisp::reactor::CommandEvent::Failed };
             self.lisp_command_event(event, id);
@@ -1886,19 +1892,56 @@ impl Session {
     pub fn start(&mut self, name: &str) -> Result<()> {
         let outer = self.journal.enter();
         if outer {
+            self.note_selection_gap();
             self.journal.started(name);
         }
         let r = self.start_inner(name);
         self.journal.leave();
-        if outer && self.running.is_none() {
-            // Done at once (or refused): nothing more of it to cancel.
-            self.journal.ended(r.is_ok());
+        if outer {
+            // Written now the commands it cancelled have ended; kept when it is running, or done
+            // at once, and left out when refused.
+            self.journal.start_over(r.is_ok(), self.open_commands());
+            self.journal_selection();
         }
         if outer && r.is_ok() {
             let id = self.running.as_ref().map_or_else(|| name.trim().to_ascii_lowercase(), |run| run.id.clone());
             self.event("command.started", serde_json::json!({ "command": id, "running": self.running.is_some() }));
         }
         r
+    }
+
+    /// Commands running, as the journal counts them: the running one and the one it interrupted.
+    fn open_commands(&self) -> usize {
+        usize::from(self.running.is_some()) + usize::from(self.suspended.is_some())
+    }
+
+    /// The selection in a form the journal compares: how many objects and the sum of their handles.
+    fn selection_print(&self) -> (usize, u64) {
+        self.state().map(|st| (st.selection.len(), st.selection.iter().fold(0u64, |a, h| a.wrapping_add(h.0)))).unwrap_or_default()
+    }
+
+    /// Before a command that may take the selection: objects selected since the last journaled
+    /// call (a click, a window) are a gap in the script, as picks are.
+    fn note_selection_gap(&mut self) {
+        let now = self.selection_print();
+        if self.journal.selection_differs(now) {
+            self.journal.gap("objects were selected outside a command");
+        }
+    }
+
+    /// The selection a journaled call left: what the script, replayed, leaves too.
+    fn journal_selection(&mut self) {
+        let now = self.selection_print();
+        self.journal.selection_left(now);
+    }
+
+    /// A command running was cancelled: its lines stay, ended by a cancel, when it changed the
+    /// drawing (Esc keeps what the command drew), else they go.
+    fn journal_cancel(&mut self, before: &Arc<cadaddy_doc::Drawing>) {
+        if self.journal.at_top() {
+            let changed = self.state().is_ok_and(|st| !Arc::ptr_eq(before, &st.doc));
+            self.journal.cancelled(changed);
+        }
     }
 
     fn start_inner(&mut self, name: &str) -> Result<()> {
@@ -2056,8 +2099,13 @@ impl Session {
         {
             // Enter at `Command:` repeated the last command.
             self.journal.started(&id);
-        } else if outer && running && self.running.is_none() {
-            self.journal.ended(!matches!(input, Input::Cancel));
+            self.journal.start_over(true, self.open_commands());
+        } else if outer && running {
+            // Commands that finished keep their lines (a cancel was written by `feed`).
+            self.journal.settle(self.open_commands());
+        }
+        if outer {
+            self.journal_selection();
         }
         r
     }
@@ -2308,6 +2356,7 @@ impl Session {
             Ok(Step::Cancel) => {
                 self.multiple = None;
                 self.echo("*Cancel*");
+                self.journal_cancel(&run.before);
                 self.finish(run, true);
                 self.resume_suspended();
                 Ok(())
@@ -2474,6 +2523,7 @@ impl Session {
         if self.running.is_some() {
             if self.suspended.is_some() {
                 if let Some(nested) = self.running.take() {
+                    self.journal_cancel(&nested.before);
                     self.finish(nested, true);
                 }
                 self.running = self.suspended.take();
@@ -2482,6 +2532,12 @@ impl Session {
         } else {
             self.pending_window = None;
             self.set_selection(Vec::new());
+        }
+        if self.journal.at_top() {
+            self.journal.settle(self.open_commands());
+            if self.journal.is_outer() {
+                self.journal_selection();
+            }
         }
     }
 
@@ -2632,6 +2688,9 @@ impl Session {
             let (tok, more) = next_token(rest);
             if self.running.is_some() || self.lisp_prompt().is_some() {
                 self.typed(tok)?;
+            } else if tok.trim() == journal::CANCEL {
+                // Esc with no command running clears the selection.
+                self.cancel();
             } else if tok.trim().is_empty() {
                 self.input(Input::Enter)?;
             } else if lisp_expression(tok) {
@@ -2652,6 +2711,10 @@ impl Session {
 
     /// One token typed while a command runs.
     fn typed(&mut self, t: &str) -> Result<()> {
+        // The cancel a saved session script ends a command with ([`journal::CANCEL`]).
+        if t.trim() == journal::CANCEL && self.current_prompt().is_some() {
+            return self.input(Input::Cancel);
+        }
         let Some(prompt) = self.current_prompt() else { return Ok(()) };
         let tt = t.trim();
         if tt.is_empty() {

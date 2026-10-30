@@ -1,9 +1,12 @@
 //! The session as a script: what was done at the top level (not what commands do inside), one
 //! input per line in the SCRIPT format, so replaying it redoes the work. A command started is
 //! its name; each input is a line (a point `*x,y` in world coordinates, typed text or a keyword
-//! as typed, Enter an empty line); a command cancelled leaves no lines; a call with parameters
-//! (from a dialog, an agent) is `command {json}`. Objects picked one by one can't be written as
-//! script input and are left out.
+//! as typed, Enter an empty line); a command cancelled after it changed the drawing keeps its
+//! lines and ends with [`CANCEL`], which the SCRIPT runner turns back into Esc, and one cancelled
+//! with nothing changed leaves no lines; a call with parameters (from a dialog, an agent) is
+//! `command {json}`. Objects picked one by one, and selections made outside the commands, can't
+//! be written as script input: each is a comment line marking the gap, and is counted
+//! ([`Journal::unscriptable`]) so a saved script never claims to be whole when it isn't.
 
 use serde_json::Value;
 
@@ -15,6 +18,9 @@ pub const MAX_LINES: usize = 100_000;
 /// session kept 100,000 of them (Q240).
 pub const MAX_BYTES: usize = 16 << 20;
 
+/// The line that ends a command cancelled after it did work: SCRIPT feeds it as Esc.
+pub const CANCEL: &str = "^C";
+
 #[derive(Clone, Debug, Default)]
 pub struct Journal {
     lines: Vec<String>,
@@ -25,8 +31,18 @@ pub struct Journal {
     dropped: usize,
     /// Nesting of `Session::execute`, `start` and `input`: only the outermost is written.
     depth: u32,
-    /// Where the running command's lines start (a cancel removes them).
-    command: Option<usize>,
+    /// Where the lines of each command still running start, outermost first (a transparent
+    /// command nests inside the one it interrupted); a cancel with nothing changed removes them.
+    commands: Vec<usize>,
+    /// The name of a command being started: written once its start is over, so the commands it
+    /// cancels end first.
+    pending: Option<String>,
+    /// Positions of the comment lines marking what the script can't redo.
+    gaps: Vec<usize>,
+    /// A print of the selection as the last journaled call left it ([`Self::selection_print`]): a
+    /// different one at the next command means objects were selected by something the script
+    /// doesn't hold (a click, a window).
+    selection: Option<(usize, u64)>,
 }
 
 impl Journal {
@@ -72,7 +88,41 @@ impl Journal {
         self.dropped = self.position();
         self.lines.clear();
         self.bytes = 0;
-        self.command = None;
+        self.commands.clear();
+        self.pending = None;
+        self.gaps.clear();
+        self.selection = None;
+    }
+
+    /// How many inputs and selections the script can't redo (those still in the journal).
+    pub fn unscriptable(&self) -> usize {
+        self.gaps.len()
+    }
+
+    /// The 1-based line (in [`Self::script`]) of the first gap, if any.
+    pub fn first_gap_line(&self) -> Option<usize> {
+        self.gaps.first().map(|g| g.saturating_sub(self.dropped) + 1)
+    }
+
+    /// The selection a call left (its size and a sum of its handles).
+    pub(crate) fn selection_left(&mut self, print: (usize, u64)) {
+        self.selection = Some(print);
+    }
+
+    /// Whether the selection is new objects the script can't have selected.
+    pub(crate) fn selection_differs(&self, print: (usize, u64)) -> bool {
+        print.0 > 0 && self.selection != Some(print)
+    }
+
+    /// Calls are being written at the top level (the only place the journal changes).
+    pub(crate) fn at_top(&self) -> bool {
+        self.depth <= 1
+    }
+
+    /// Something the script can't redo happened: a comment line says what, and it is counted.
+    pub(crate) fn gap(&mut self, what: &str) {
+        self.gaps.push(self.position());
+        self.push(format!("; cannot be replayed: {what}"));
     }
 
     /// A call begins; whether it is the outermost.
@@ -104,25 +154,50 @@ impl Journal {
                 let freed: usize = self.lines.drain(..n).map(|l| l.len()).sum();
                 self.bytes = self.bytes.saturating_sub(freed);
                 self.dropped = self.dropped.saturating_add(n);
-                self.command = self.command.map(|c| c.saturating_sub(n));
+                for c in &mut self.commands {
+                    *c = c.saturating_sub(n);
+                }
+                self.gaps.retain(|g| *g >= self.dropped);
             }
         }
     }
 
-    /// A command started by name.
+    /// A command is being started by name.
     pub(crate) fn started(&mut self, name: &str) {
-        self.command = Some(self.lines.len());
-        self.push(name.trim().to_string());
+        self.pending = Some(name.trim().to_string());
     }
 
-    /// The command ended: done (its lines stay) or cancelled (they go).
-    pub(crate) fn ended(&mut self, done: bool) {
-        if let (false, Some(start)) = (done, self.command) {
-            let freed: usize = self.lines.get(start..).map_or(0, |l| l.iter().map(String::len).sum());
-            self.lines.truncate(start);
-            self.bytes = self.bytes.saturating_sub(freed);
+    /// The start is over: the command is written, and registered as running when `running` (it
+    /// is the one beyond those already open); a start that was refused leaves nothing.
+    pub(crate) fn start_over(&mut self, ok: bool, open: usize) {
+        let Some(name) = self.pending.take() else { return };
+        let new = open > self.commands.len();
+        if ok || new {
+            if new {
+                self.commands.push(self.lines.len());
+            }
+            self.push(name);
         }
-        self.command = None;
+    }
+
+    /// A running command was cancelled: with `changed` its lines stay and [`CANCEL`] ends them
+    /// (Esc keeps what the command drew), else they go.
+    pub(crate) fn cancelled(&mut self, changed: bool) {
+        let Some(start) = self.commands.pop() else { return };
+        if changed {
+            self.push(CANCEL.to_string());
+            return;
+        }
+        let freed: usize = self.lines.get(start..).map_or(0, |l| l.iter().map(String::len).sum());
+        self.lines.truncate(start);
+        self.bytes = self.bytes.saturating_sub(freed);
+        let end = self.position();
+        self.gaps.retain(|g| *g < end);
+    }
+
+    /// Commands beyond the `open` still running are over (they finished: their lines stay).
+    pub(crate) fn settle(&mut self, open: usize) {
+        self.commands.truncate(open);
     }
 
     /// An input to the running command.
@@ -133,8 +208,10 @@ impl Journal {
             Input::Deferred(d) => format!("*{},{}", d.at.x, d.at.y),
             Input::Keyword(t) | Input::Text(t) => t.clone(),
             Input::Enter => String::new(),
-            // Picked objects have no script form; a cancel removes the command (`ended`).
-            Input::Pick(_) | Input::Cancel => return,
+            // A cancel is written by `cancelled`, once it is known whether the command did work.
+            Input::Cancel => return,
+            // Picked objects have no script form.
+            Input::Pick(_) => return self.gap("objects picked by handle"),
         };
         self.push(line);
     }
@@ -159,6 +236,7 @@ mod tests {
     fn the_journal_keeps_to_its_budget_and_its_positions() {
         let mut j = Journal::default();
         j.started("line");
+        j.start_over(true, 1);
         let mark = j.position();
         j.input(&Input::Text("0,0".into()));
         assert_eq!(j.lines_from(mark), ["0,0".to_string()]);
@@ -179,9 +257,17 @@ mod tests {
         j.clear();
         let at = j.position();
         j.started("circle");
+        j.start_over(true, 1);
         j.input(&Input::Text("5".into()));
-        j.ended(false);
+        j.cancelled(false);
         assert_eq!((j.lines().len(), j.bytes(), j.position()), (0, 0, at));
+        // Cancelled after work, the lines stay and the cancel ends them; a gap is marked and counted.
+        j.started("line");
+        j.start_over(true, 1);
+        j.input(&Input::Pick(vec![]));
+        j.cancelled(true);
+        assert_eq!(j.lines().last().map(String::as_str), Some(CANCEL));
+        assert_eq!((j.unscriptable(), j.first_gap_line()), (1, Some(2)));
     }
 
     #[test]

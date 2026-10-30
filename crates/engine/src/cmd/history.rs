@@ -19,7 +19,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .restores_history()
             .enabled(always),
         CommandSpec::new("commandhistory", "Command History", run_commands)
-            .params("{action?: list (default) | save (path) | clear, filter?: text} → {lines} | {path, lines}")
+            .params("{action?: list (default) | save (path) | clear, filter?: text} → {lines, unscriptable, first_at?, message?} | {path, lines, unscriptable, first_at?, message?}")
             .noundo()
             .enabled(always),
         CommandSpec::new("activity", "Activity History", run_activity)
@@ -85,16 +85,26 @@ fn run_undo(s: &mut Session, p: &Value) -> Result<Value> {
         "list" => listing(s),
         "to" => {
             let target = p.get("step").and_then(Value::as_u64).ok_or_else(|| bad("undohistory", "`step` is required"))?;
-            let (done, total) = {
+            let (done, total, group) = {
                 let st = s.state()?;
-                (st.undo.len(), st.undo.len() + st.redo.len())
+                (st.undo.len(), st.undo.len() + st.redo.len(), st.undo_ctl.group)
             };
             let target = usize::try_from(target).unwrap_or(usize::MAX);
             if target > total {
                 return Err(bad("undohistory", format!("there are {total} steps")));
             }
-            // A BEgin group still open is one step from here on.
+            // A BEgin group still open is one step from here on: the steps inside it no longer
+            // exist, so a step inside it is the group step (its end state), and the counts are
+            // read after it collapsed. Nothing is ever undone past the step clicked.
+            let mut target = target;
             s.state_mut()?.end_undo_group();
+            if let Some(g) = group.filter(|g| *g < done)
+                && target > g
+            {
+                // Steps g+1..=done became the one step g+1; redo steps come after it.
+                target = (g + 1).saturating_add(target.saturating_sub(done));
+            }
+            let done = s.state()?.undo.len();
             if target < done {
                 s.execute("undo", &json!({ "count": done - target }))?;
             } else if target > done {
@@ -106,22 +116,39 @@ fn run_undo(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
+/// What the script can't redo (picked objects, selections made outside a command): how many,
+/// where the first is (its line in the saved script) and a message saying so.
+fn with_gaps(s: &Session, mut v: Value) -> Value {
+    let n = s.journal.unscriptable();
+    if let Some(o) = v.as_object_mut() {
+        o.insert("unscriptable".into(), json!(n));
+        if let Some(at) = s.journal.first_gap_line() {
+            o.insert("first_at".into(), json!(at));
+            o.insert(
+                "message".into(),
+                json!(format!("{n} input(s) in this session cannot be replayed (objects picked or selected outside a command); the first is at line {at}, marked by a comment: a replay may not give the same drawing.")),
+            );
+        }
+    }
+    v
+}
+
 fn run_commands(s: &mut Session, p: &Value) -> Result<Value> {
     let filter = str_param(p, "filter").map(str::to_lowercase).filter(|f| !f.is_empty());
     let lines = |s: &Session| -> Vec<String> {
         s.journal.lines().iter().filter(|l| filter.as_ref().is_none_or(|f| l.to_lowercase().contains(f))).cloned().collect()
     };
     match str_param(p, "action").unwrap_or("list").to_ascii_lowercase().as_str() {
-        "list" => Ok(json!({ "lines": lines(s) })),
+        "list" => Ok(with_gaps(s, json!({ "lines": lines(s) }))),
         "clear" => {
             s.journal.clear();
-            Ok(json!({ "lines": [] }))
+            Ok(json!({ "lines": [], "unscriptable": 0 }))
         }
         "save" => {
             let path = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| bad("commandhistory", "`path` is required"))?;
             let text = s.journal.script();
             super::file::store(path, text.as_bytes())?;
-            Ok(json!({ "path": path, "lines": s.journal.lines().len() }))
+            Ok(with_gaps(s, json!({ "path": path, "lines": s.journal.lines().len() })))
         }
         other => Err(bad("commandhistory", format!("unknown action \"{other}\" (list, save or clear)"))),
     }
