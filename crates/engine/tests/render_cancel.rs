@@ -42,7 +42,7 @@ fn a_running_render_stops_when_cancelled() {
     });
     let start = std::time::Instant::now();
     // At the largest sample count this runs for many minutes unless it is cancelled.
-    let r = s.execute("render", &json!({ "width": 256, "height": 160, "samples": 65536, "preset": "draft" }));
+    let r = s.execute("render", &json!({ "width": 256, "height": 160, "samples": 4096, "preset": "draft" }));
     let took = start.elapsed();
     canceller.join().unwrap();
     let e = r.expect_err("the render was cancelled").to_string();
@@ -56,7 +56,7 @@ fn a_running_render_stops_when_cancelled() {
 fn samples_has_a_documented_maximum() {
     let mut s = session_with_box();
     let spec = cadaddy_engine::find_command("render").unwrap();
-    assert!(spec.params.contains("samples? (1 to 65536)"), "{}", spec.params);
-    let e = s.execute("render", &json!({ "samples": 65537 })).unwrap_err().to_string();
-    assert!(e.contains("65536"), "{e}");
+    assert!(spec.params.contains("samples? (1 to 4096)"), "{}", spec.params);
+    let e = s.execute("render", &json!({ "samples": 4097 })).unwrap_err().to_string();
+    assert!(e.contains("4096"), "{e}");
 }

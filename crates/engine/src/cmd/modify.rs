@@ -1496,16 +1496,24 @@ fn h_param(p: &Value, k: &str) -> Option<Handle> {
     p.get(k).and_then(|v| v.as_str().and_then(Handle::parse_hex).or_else(|| v.as_u64().map(Handle)))
 }
 
+/// An optional distance: the default when absent or null, else a finite number >= 0.
+fn dist_or(cmd: &str, p: &Value, key: &str, default: f64) -> Result<f64> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(v) => v.as_f64().filter(|d| d.is_finite() && *d >= 0.0).ok_or_else(|| bad(cmd, format!("`{key}` must be a non-negative distance"))),
+    }
+}
+
 fn run_fillet(s: &mut Session, p: &Value) -> Result<Value> {
     if bool_or(p, "polyline", false) {
         let h = h_param(p, "handle").or_else(|| h_param(p, "h1")).ok_or_else(|| bad("fillet", "`handle` (polyline) is required"))?;
-        let r = f64_or(p, "radius", s.doc()?.header.f64("FILLETRAD", 0.0));
+        let r = dist_or("fillet", p, "radius", s.doc()?.header.f64("FILLETRAD", 0.0))?;
         let n = super::modify2::fillet_polyline(s, h, r)?;
         return Ok(json!({ "filleted": n }));
     }
     let h1 = h_param(p, "h1").ok_or_else(|| bad("fillet", "`h1` is required"))?;
     let h2 = h_param(p, "h2").ok_or_else(|| bad("fillet", "`h2` is required"))?;
-    let r = f64_or(p, "radius", s.doc()?.header.f64("FILLETRAD", 0.0));
+    let r = dist_or("fillet", p, "radius", s.doc()?.header.f64("FILLETRAD", 0.0))?;
     let p1 = point_param(p, "p1").unwrap_or_default();
     let p2 = point_param(p, "p2").unwrap_or_default();
     let a = fillet_corner(s, h1, p1, h2, p2, r, None, bool_or(p, "trim", true))?;
@@ -1518,8 +1526,8 @@ fn run_chamfer(s: &mut Session, p: &Value) -> Result<Value> {
             ChamferCut::Angle(len, deg.to_radians())
         }
         (None, None) => {
-            let d1 = f64_or(p, "d1", s.doc()?.header.f64("CHAMFERA", 0.0));
-            ChamferCut::Dist(d1, f64_or(p, "d2", d1))
+            let d1 = dist_or("chamfer", p, "d1", s.doc()?.header.f64("CHAMFERA", 0.0))?;
+            ChamferCut::Dist(d1, dist_or("chamfer", p, "d2", d1)?)
         }
         _ => return Err(bad("chamfer", "`length` (>= 0) and `angle` (degrees, 0 to 180) go together")),
     };

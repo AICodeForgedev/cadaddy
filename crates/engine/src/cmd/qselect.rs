@@ -263,6 +263,14 @@ fn candidates(s: &Session, p: &Value) -> Result<Vec<Handle>> {
 
 fn run_qselect(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "qselect";
+    // A filter of the wrong type is refused, never read as "no filter" (which selects everything).
+    for key in ["type", "operator", "property", "layer", "mode", "applyTo"] {
+        if p.get(key).is_some_and(|v| !v.is_null() && !v.is_string()) {
+            let what = if key == "type" { "an object type name".to_string() } else { "text".to_string() };
+            return Err(bad(cmd, format!("`{key}` must be {what}")));
+        }
+    }
+    // `type: ""` (or `*`, `all`, `multiple`) means any type.
     let ty = str_param(p, "type");
     let op = match str_param(p, "operator") {
         Some(o) => Some(Op::parse(o).ok_or_else(|| bad(cmd, format!("unknown operator `{o}` (use =, !=, >, <, *)")))?),

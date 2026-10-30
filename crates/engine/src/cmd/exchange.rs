@@ -240,6 +240,53 @@ fn extension(path: &str) -> String {
     std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// Vets the `path` an output command (PLOT, EXPORT, PUBLISH…) is about to write: its extension must
+/// be one of `exts` (the first is added when it has none) and it must not be the file of any open
+/// drawing, whose bytes the output would replace. Returns the path to write.
+pub(crate) fn output_path(s: &Session, cmd: &str, path: &str, exts: &[&str]) -> Result<String> {
+    let want = exts.first().copied().unwrap_or("pdf");
+    let got = extension(path);
+    if got.is_empty() {
+        return Ok(format!("{}.{want}", path.trim_end_matches('.')));
+    }
+    if !exts.contains(&got.as_str()) {
+        return Err(bad(cmd, format!("`path` ends in .{got} but this writes a .{want} file: use a .{want} name (or change the output type)")));
+    }
+    if let Some(d) = s.docs.iter().find(|d| d.path.as_deref().is_some_and(|p| super::file::same_file(p, path))) {
+        return Err(bad(cmd, format!("{path} is the open drawing {}: choose another file name so it isn't replaced", d.title)));
+    }
+    Ok(path.to_string())
+}
+
+/// A default output path that doesn't replace anything: `path` when nothing is there, else
+/// `<name>-<tag>.<ext>`, then `<name>-<tag>-2.<ext>`, `-3`… Returns the path and whether it moved.
+pub(crate) fn unused_path(path: &str, tag: &str) -> (String, bool) {
+    if !std::path::Path::new(path).exists() {
+        return (path.to_string(), false);
+    }
+    let pb = std::path::Path::new(path);
+    let stem = pb.file_stem().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = pb.extension().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+    let dir = pb.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+    let mut found = path.to_string();
+    for n in 1..=1000 {
+        let name = if n == 1 { format!("{stem}-{tag}.{ext}") } else { format!("{stem}-{tag}-{n}.{ext}") };
+        found = dir.join(name).to_string_lossy().into_owned();
+        if !std::path::Path::new(&found).exists() {
+            break;
+        }
+    }
+    (found, true)
+}
+
+/// An explicit output `path` that already exists is replaced only when the call says `force: true`.
+pub(crate) fn refuse_existing(cmd: &str, p: &Value, path: &str) -> Result<()> {
+    if std::path::Path::new(path).exists() && p.get("force").and_then(Value::as_bool) != Some(true) {
+        return Err(bad(cmd, format!("{path} already exists: choose another name, or pass force:true to replace it")));
+    }
+    Ok(())
+}
+
 /// Write `bytes` to `path` through a temporary file, so a failed write keeps the old file.
 pub(crate) fn write_file(cmd: &str, path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
@@ -262,6 +309,11 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         Some(f) => f.trim().trim_start_matches('.').to_ascii_lowercase(),
         None => path.map(extension).unwrap_or_default(),
     };
+    let checked = match path {
+        Some(x) if EXPORT_FORMATS.contains(&format.as_str()) => Some(output_path(s, "export", x, &[format.as_str()])?),
+        _ => None,
+    };
+    let path = checked.as_deref().or(path);
     if !EXPORT_FORMATS.contains(&format.as_str()) {
         return Err(bad(
             "export",
@@ -388,7 +440,19 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let src = (hooks.read)(&bytes, &name).map_err(|e| bad("import", e))?;
     let file = std::path::Path::new(&name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    import_drawing(s, &src, at, scale, &file)
+    // What reading left out says so here as it does in OPEN (a damaged DGN, a cut-off DXF).
+    let mut notes = src.read_notes.clone();
+    if let Some(loss) = super::file::read_loss(&src).filter(|_| notes.is_empty()) {
+        notes.push(loss);
+    }
+    let mut r = import_drawing(s, &src, at, scale, &file)?;
+    if !notes.is_empty() {
+        for n in &notes {
+            s.echo(n.clone());
+        }
+        r["warnings"] = json!(notes);
+    }
+    Ok(r)
 }
 
 /// PDFIMPORT: a PDF page as CAD objects — into this drawing, or (`newDrawing`) as a new drawing
@@ -962,6 +1026,8 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
         let mut r = json!({ "format": format, "pages": spaces.len(), "sheets": sheets, "bytes": bytes.len() });
         match str_param(p, "path") {
             Some(path) => {
+                let checked = output_path(s, "publish", path, &[format.as_str()])?;
+                let path = checked.as_str();
                 write_file("publish", path, &bytes)?;
                 r["path"] = json!(path);
                 r["message"] = json!(format!("Published {} sheet(s) to {path}", spaces.len()));

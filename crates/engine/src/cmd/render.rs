@@ -16,7 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("render", "Render", run_render)
             .menu(&["View", "Render", "Render"])
             .alias(&["rr"])
-            .params("{preset?: draft|medium|high, samples? (1 to 65536), bounces?, width?, height? (pixels; the view's size), denoise? (true), output?: path (.png or .jpg), path?: same as output, crop?: [[x0,y0],[x1,y1]] (pixels)} → {width, height, samples, seconds, secondsPerSample, output?}")
+            .params("{preset?: draft|medium|high, samples? (1 to 4096), bounces?, width?, height? (pixels; the view's size), denoise? (true), output?: path (.png or .jpg), path?: same as output, crop?: [[x0,y0],[x1,y1]] (pixels)} → {width, height, samples, seconds, secondsPerSample, output?}")
             .noundo(),
         CommandSpec::new("rendercrop", "Render Region", run_rendercrop)
             .menu(&["View", "Render", "Render Region"])

@@ -161,3 +161,26 @@ fn an_agents_markupimport_says_what_happened() {
         assert!(outcome["warning"].as_str().unwrap_or("").contains("file dialog"), "{outcome}");
     }
 }
+
+/// A typed APPLOAD from an agent asks for the file name on the command line: no `.lsp` picker
+/// opens, so the app and its control port keep answering (battle test 5, B7-014).
+#[test]
+fn an_agents_typed_appload_prompts_and_never_picks() {
+    let _one_at_a_time = FILE_DIALOG_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static OPENED: AtomicBool = AtomicBool::new(false);
+    let services = cadaddy_ui_egui::Services {
+        pick_lisp: Some(Box::new(|_| {
+            OPENED.store(true, Ordering::Relaxed);
+            Some("never.lsp".into())
+        })),
+        ..Default::default()
+    };
+    let mut app = CadApp::new(Session::new(), services);
+    let ctx = egui::Context::default();
+    let (req, reply) = ControlRequest::new("cmdline.input", json!({"text": "appload"}));
+    app.serve_control_request(&ctx, req);
+    let _ = reply.wait(std::time::Duration::from_secs(2));
+    assert!(!OPENED.load(Ordering::Relaxed), "the .lsp picker opened for an agent");
+    assert!(app.session.prompting(), "APPLOAD asks for the file name instead");
+}
