@@ -45,6 +45,90 @@ pub struct ShxFont {
     names: HashMap<String, u32>,
     /// Big fonts: lead-byte ranges of the double-byte codes.
     escapes: Vec<(u8, u8)>,
+    /// Big fonts: the one code page the font's double-byte codes are in.
+    code_page: CodePage,
+}
+
+/// The Asian code page a big font's double-byte codes are in. A font has exactly one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodePage {
+    ShiftJis,
+    Gbk,
+    Big5,
+    EucKr,
+}
+
+impl CodePage {
+    /// The code page of a drawing's `DWGCODEPAGE` (`ANSI_950`, `950`, `dos932`, `ANSI_936`, …);
+    /// `None` for a Western or unknown one.
+    pub fn from_dwg(name: &str) -> Option<CodePage> {
+        let n = name.trim().to_ascii_lowercase();
+        let digits: String = n.chars().filter(char::is_ascii_digit).collect();
+        match digits.as_str() {
+            "932" => Some(CodePage::ShiftJis),
+            "936" => Some(CodePage::Gbk),
+            "949" | "1361" => Some(CodePage::EucKr),
+            "950" => Some(CodePage::Big5),
+            _ => None,
+        }
+    }
+
+    /// The code page a big font's file name suggests (`big5`, `chineset` → Big5; `gb…`, `gbcbig` →
+    /// GBK; `whgtxt`, `kor…`, `hangul` → EUC-KR); `None` for any other name.
+    pub fn from_file_name(file: &str) -> Option<CodePage> {
+        let base = file.rsplit(['/', '\\']).next().unwrap_or(file).to_ascii_lowercase();
+        if base.contains("big5") || base.contains("chineset") {
+            Some(CodePage::Big5)
+        } else if base.starts_with("gb") || base.contains("gbcbig") || base.contains("chines") {
+            Some(CodePage::Gbk)
+        } else if base.contains("whgtxt") || base.contains("kor") || base.contains("hangul") {
+            Some(CodePage::EucKr)
+        } else {
+            None
+        }
+    }
+
+    /// The lead-byte ranges of this code page's double-byte codes.
+    fn leads(self) -> &'static [(u8, u8)] {
+        match self {
+            CodePage::ShiftJis => &[(0x81, 0x9f), (0xe0, 0xfc)],
+            CodePage::Gbk => &[(0x81, 0xfe)],
+            CodePage::Big5 => &[(0xa1, 0xf9)],
+            CodePage::EucKr => &[(0xa1, 0xfe)],
+        }
+    }
+
+    fn encoding(self) -> &'static encoding_rs::Encoding {
+        match self {
+            CodePage::ShiftJis => encoding_rs::SHIFT_JIS,
+            CodePage::Gbk => encoding_rs::GBK,
+            CodePage::Big5 => encoding_rs::BIG5,
+            CodePage::EucKr => encoding_rs::EUC_KR,
+        }
+    }
+
+    /// The code page whose lead bytes fit a font's escape ranges best (the tiebreak when neither
+    /// the caller nor the file name says): bytes both have, minus bytes only one has.
+    fn from_escapes(escapes: &[(u8, u8)]) -> Option<CodePage> {
+        let covers = |r: &[(u8, u8)], b: u8| r.iter().any(|(lo, hi)| (*lo..=*hi).contains(&b));
+        let mut best: Option<(i32, CodePage)> = None;
+        if escapes.is_empty() {
+            return None;
+        }
+        for cp in [CodePage::ShiftJis, CodePage::Gbk, CodePage::Big5, CodePage::EucKr] {
+            let score: i32 = (0..=255u8)
+                .map(|b| match (covers(escapes, b), covers(cp.leads(), b)) {
+                    (true, true) => 1,
+                    (false, false) => 0,
+                    _ => -1,
+                })
+                .sum();
+            if best.is_none_or(|(s, _)| score > s) {
+                best = Some((score, cp));
+            }
+        }
+        best.map(|(_, cp)| cp)
+    }
 }
 
 /// One drawn glyph in font units (baseline at y = 0): its strokes and where the pen ended (the
@@ -93,8 +177,27 @@ fn font_info(spec: &[u8]) -> (f64, f64) {
 }
 
 impl ShxFont {
-    /// Parse a compiled shape font; `None` when it isn't one or is damaged.
+    /// Parse a compiled shape font; `None` when it isn't one or is damaged. A big font's code page
+    /// comes from its escape ranges alone; see [`ShxFont::parse_for`].
     pub fn parse(bytes: &[u8]) -> Option<ShxFont> {
+        Self::parse_for(bytes, None, None)
+    }
+
+    /// Parse a compiled font read from `file_name`. A big font's one code page is the caller's
+    /// (the drawing's `DWGCODEPAGE`, when known), else the one its file name says, else the one
+    /// its escape ranges fit best, else Shift-JIS.
+    pub fn parse_for(bytes: &[u8], file_name: Option<&str>, drawing: Option<CodePage>) -> Option<ShxFont> {
+        let mut font = Self::parse_any(bytes)?;
+        if font.kind == Kind::Bigfont {
+            font.code_page = drawing
+                .or_else(|| file_name.and_then(CodePage::from_file_name))
+                .or_else(|| CodePage::from_escapes(&font.escapes))
+                .unwrap_or(CodePage::ShiftJis);
+        }
+        Some(font)
+    }
+
+    fn parse_any(bytes: &[u8]) -> Option<ShxFont> {
         let end = bytes.iter().take(64).position(|b| *b == 0x1a)?;
         let header = String::from_utf8_lossy(bytes.get(..end)?).to_ascii_lowercase();
         let body = bytes.get(end + 1..)?;
@@ -128,7 +231,7 @@ impl ShxFont {
             at += len;
         }
         let (above, below) = shapes.get(&0).map_or((1.0, 0.0), |s| font_info(s));
-        Some(ShxFont { kind: Kind::Shapes, above, below, shapes, names, escapes: Vec::new() })
+        Some(ShxFont { kind: Kind::Shapes, above, below, shapes, names, escapes: Vec::new(), code_page: CodePage::ShiftJis })
     }
 
     /// `count` (u32), font information (u16 length, then name and above, below, …), then each
@@ -149,7 +252,7 @@ impl ShxFont {
             shapes.insert(u32::from(num), spec_of(def));
             at += 4 + len;
         }
-        Some(ShxFont { kind: Kind::Unifont, above, below, shapes, names, escapes: Vec::new() })
+        Some(ShxFont { kind: Kind::Unifont, above, below, shapes, names, escapes: Vec::new(), code_page: CodePage::ShiftJis })
     }
 
     /// Index size (u16), shape count (u16), escape range count (u16), the lead-byte ranges
@@ -164,7 +267,6 @@ impl ShxFont {
         }
         let index = 6 + 4 * ranges;
         let mut shapes = HashMap::new();
-        let mut names = HashMap::new();
         for k in 0..n {
             let at = index + 8 * k;
             let (Some(num), Some(len), Some(off)) = (u16_at(b, at), u16_at(b, at + 2), u32_at(b, at + 4)) else { break };
@@ -172,17 +274,24 @@ impl ShxFont {
             // Offsets count from the start of the file; also accept them from the data's start.
             let def = file.get(off..off.saturating_add(usize::from(len))).or_else(|| b.get(off.saturating_sub(body_at)..)?.get(..usize::from(len)));
             if let Some(def) = def {
-                add_name(&mut names, u32::from(num), def);
                 shapes.insert(u32::from(num), spec_of(def));
             }
         }
         let (above, below) = shapes.get(&0).map_or((1.0, 0.0), |s| font_info(s));
-        Some(ShxFont { kind: Kind::Bigfont, above, below, shapes, names: HashMap::new(), escapes })
+        Some(ShxFont { kind: Kind::Bigfont, above, below, shapes, names: HashMap::new(), escapes, code_page: CodePage::ShiftJis })
     }
 
     /// A shape file with no shapes.
     pub fn empty_shapes() -> ShxFont {
-        ShxFont { kind: Kind::Shapes, above: 1.0, below: 0.0, shapes: HashMap::new(), names: HashMap::new(), escapes: Vec::new() }
+        ShxFont {
+            kind: Kind::Shapes,
+            above: 1.0,
+            below: 0.0,
+            shapes: HashMap::new(),
+            names: HashMap::new(),
+            escapes: Vec::new(),
+            code_page: CodePage::ShiftJis,
+        }
     }
 
     /// The number of the shape called `name` (any case), in a shape file.
@@ -230,25 +339,25 @@ impl ShxFont {
             Kind::Bigfont => {
                 let mut buf = [0u8; 4];
                 let s = c.encode_utf8(&mut buf);
-                for enc in [encoding_rs::SHIFT_JIS, encoding_rs::GBK, encoding_rs::BIG5, encoding_rs::EUC_KR] {
-                    let (bytes, _, bad) = enc.encode(s);
-                    if bad {
-                        continue;
-                    }
-                    let code = match bytes.as_ref() {
-                        [lead, trail] if self.escapes.is_empty() || self.escapes.iter().any(|(a, b)| (*a..=*b).contains(lead)) => {
-                            (u32::from(*lead) << 8) | u32::from(*trail)
-                        }
-                        [one] => u32::from(*one),
-                        _ => continue,
-                    };
-                    if self.has(code) {
-                        return Some(code);
-                    }
+                let (bytes, _, bad) = self.code_page.encoding().encode(s);
+                if bad {
+                    return None;
                 }
-                None
+                let code = match bytes.as_ref() {
+                    [lead, trail] if self.escapes.is_empty() || self.escapes.iter().any(|(a, b)| (*a..=*b).contains(lead)) => {
+                        (u32::from(*lead) << 8) | u32::from(*trail)
+                    }
+                    [one] => u32::from(*one),
+                    _ => return None,
+                };
+                Some(code).filter(|k| self.has(*k))
             }
         }
+    }
+
+    /// The code page of a big font's double-byte codes.
+    pub fn code_page(&self) -> CodePage {
+        self.code_page
     }
 
     /// Draw shape `code` (`vertical`: the vertical-text-only commands run too).
@@ -548,6 +657,23 @@ pub fn forget_cached() {
     }
 }
 
+/// The current drawing's code page (`DWGCODEPAGE`), when it is an Asian one: big fonts read
+/// with it ([`set_drawing_code_page`]).
+static DRAWING_CODE_PAGE: RwLock<Option<CodePage>> = RwLock::new(None);
+
+/// The drawing's `DWGCODEPAGE` (`ANSI_950`, …), so big fonts map characters through it. A change
+/// forgets the fonts read so far.
+pub fn set_drawing_code_page(name: &str) {
+    let cp = CodePage::from_dwg(name);
+    if let Ok(mut d) = DRAWING_CODE_PAGE.write() {
+        if *d == cp {
+            return;
+        }
+        *d = cp;
+    }
+    forget_cached();
+}
+
 /// The current drawing's folder: searched first, as AutoCAD does ([`set_drawing_dir`]).
 static DRAWING_DIR: RwLock<Option<String>> = RwLock::new(None);
 
@@ -659,7 +785,9 @@ fn load(name: &str) -> Option<Arc<ShxFont>> {
         if !meta.is_file() || meta.len() > MAX_FILE {
             continue;
         }
-        if let Some(f) = std::fs::read(&c).ok().and_then(|b| ShxFont::parse(&b)) {
+        let name = c.file_name().map(|n| n.to_string_lossy().into_owned());
+        let page = DRAWING_CODE_PAGE.read().ok().and_then(|d| *d);
+        if let Some(f) = std::fs::read(&c).ok().and_then(|b| ShxFont::parse_for(&b, name.as_deref(), page)) {
             return Some(Arc::new(f));
         }
     }
@@ -744,6 +872,24 @@ pub fn compile_shapes(above: u8, below: u8, shapes: &[(u16, &str, &[u8])]) -> Ve
         defs.push((*n, [name.as_bytes(), &[0], spec].concat()));
     }
     compile_defs(defs)
+}
+
+/// A compiled Unicode shape font built from shape definitions (code point, name, spec bytes), as
+/// [`compile_shapes`]: the count, the font information, then each shape as number, length and
+/// definition.
+pub fn compile_unifont(above: u8, below: u8, shapes: &[(u16, &str, &[u8])]) -> Vec<u8> {
+    let info = [b"UNIFONT".as_slice(), &[0, above, below, 0, 0]].concat();
+    let mut out = b"AutoCAD-86 unifont 1.0\r\n\x1a".to_vec();
+    out.extend(u32::try_from(shapes.len()).unwrap_or(u32::MAX).to_le_bytes());
+    out.extend(u16::try_from(info.len()).unwrap_or(u16::MAX).to_le_bytes());
+    out.extend(&info);
+    for (n, name, spec) in shapes {
+        let def = [name.as_bytes(), &[0], spec].concat();
+        out.extend(n.to_le_bytes());
+        out.extend(u16::try_from(def.len()).unwrap_or(u16::MAX).to_le_bytes());
+        out.extend(def);
+    }
+    out
 }
 
 /// A compiled shape file of whole definitions (number; name, zero, spec), sorted by number.
@@ -878,6 +1024,35 @@ mod tests {
         let g = f.glyph(66, false).unwrap();
         assert!(g.strokes.iter().map(Vec::len).sum::<usize>() <= MAX_POINTS + 64);
         assert!(ShxFont::parse(b"not a font").is_none());
+        // Every truncation of a compiled big font and a compiled Unicode font too.
+        let sq = square(4);
+        let big = compile_bigfont(4, &[(0x81, 0x9f), (0xe0, 0xfc)], &[(0x93fa, "NICHI", &sq), (0xa4a4, "B", &sq)]);
+        let uni = compile_unifont(4, 1, &[(0x0141, "A", &sq), (0x4e2d, "B", &[7, 0x01, 0x41, 0])]);
+        let shapes = compile_shapes(4, 1, &[(65, "A", &sq)]);
+        for good in [&shapes, &big, &uni] {
+            for cut in 0..good.len() {
+                if let Some(f) = ShxFont::parse_for(good.get(..cut).unwrap_or(&[]), Some("big5.shx"), None) {
+                    for c in ['日', '中', 'Ł', 'A'] {
+                        if let Some(k) = f.code_of(c) {
+                            let _ = f.glyph(k, false);
+                            let _ = f.glyph(k, true);
+                        }
+                    }
+                }
+            }
+            assert!(ShxFont::parse(good).is_some());
+        }
+        // A unicode shape that calls itself, and a big font with a mangled index.
+        let me = compile_unifont(1, 0, &[(0x100, "S", &[7, 0x01, 0x00, 0])]);
+        let f = ShxFont::parse(&me).unwrap();
+        assert!(f.glyph(0x100, false).is_some());
+        let mut bad = big.clone();
+        for b in bad.iter_mut().skip(30) {
+            *b = 0xff;
+        }
+        if let Some(f) = ShxFont::parse(&bad) {
+            let _ = f.code_of('日');
+        }
     }
 
     #[test]
@@ -893,6 +1068,71 @@ mod tests {
         // L (3 wide), 日 (5), then Z from the stroke font.
         assert!(sh.width > 8.0, "{}", sh.width);
         assert!(sh.strokes.iter().flatten().any(|p| p.x > 3.0 && p.x < 8.0), "the big font glyph is drawn");
+    }
+
+    /// A small square, `w` wide: pen down, right `w`, up `w`, left `w`, down `w`, pen up, on to `w + 1`.
+    fn square(w: u8) -> Vec<u8> {
+        vec![1, w << 4, (w << 4) | 4, (w << 4) | 8, (w << 4) | 12, 2, 0x10, 0]
+    }
+
+    #[test]
+    fn a_big5_font_draws_the_big5_code_not_a_decoy_gbk_one() {
+        // 中 is 0xA4A4 in Big5 and 0xD6D0 in GBK; 0xD6D0 is another Big5 character, with other strokes.
+        let (real, decoy) = (square(2), square(3));
+        let shapes: &[(u16, &str, &[u8])] = &[(0xa4a4, "ZHONG", &real), (0xd6d0, "DECOY", &decoy)];
+        let bytes = compile_bigfont(4, &[(0xa1, 0xf9)], shapes);
+        for f in [
+            ShxFont::parse_for(&bytes, Some("chineset.shx"), None).unwrap(),
+            ShxFont::parse_for(&bytes, None, Some(CodePage::from_dwg("ANSI_950").unwrap())).unwrap(),
+            ShxFont::parse(&bytes).unwrap(),
+        ] {
+            assert_eq!(f.code_page(), CodePage::Big5);
+            assert_eq!(f.code_of('中'), Some(0xa4a4));
+            let g = f.glyph(f.code_of('中').unwrap(), false).unwrap();
+            assert_eq!(g.strokes, vec![vec![Vec2::ZERO, Vec2::new(2.0, 0.0), Vec2::new(2.0, 2.0), Vec2::new(0.0, 2.0), Vec2::ZERO]]);
+            assert_eq!(g.advance, Vec2::new(1.0, 0.0));
+        }
+        // The caller's code page beats the file name.
+        let f = ShxFont::parse_for(&bytes, Some("big5.shx"), CodePage::from_dwg("936")).unwrap();
+        assert_eq!(f.code_of('中'), Some(0xd6d0));
+    }
+
+    #[test]
+    fn a_gbk_font_draws_zhong_from_d6d0() {
+        let (real, other) = (square(3), square(2));
+        let shapes: &[(u16, &str, &[u8])] = &[(0xd6d0, "ZHONG", &real), (0xa4a4, "OTHER", &other)];
+        let bytes = compile_bigfont(4, &[(0x81, 0xfe)], shapes);
+        for f in [ShxFont::parse_for(&bytes, Some("GBCBIG.SHX"), None).unwrap(), ShxFont::parse(&bytes).unwrap()] {
+            assert_eq!(f.code_page(), CodePage::Gbk);
+            assert_eq!(f.code_of('中'), Some(0xd6d0));
+            let g = f.glyph(0xd6d0, false).unwrap();
+            assert_eq!(g.strokes.first().and_then(|l| l.get(1)), Some(&Vec2::new(3.0, 0.0)));
+        }
+        // Korean and Japanese names choose their own pages.
+        assert_eq!(CodePage::from_file_name("whgtxt.shx"), Some(CodePage::EucKr));
+        assert_eq!(CodePage::from_file_name("bigfont.shx"), None);
+    }
+
+    #[test]
+    fn a_unicode_font_reads_back_exact_strokes_and_two_byte_subshapes() {
+        // U+0141 is a unit-4 square; U+4E2D calls it as a subshape (code 7, high byte then low byte)
+        // and then moves on 2 to the right (a 2-wide displacement: code 8, dx 2, dy 0).
+        let sq = square(4);
+        let caller: &[u8] = &[7, 0x01, 0x41, 8, 2, 0, 0];
+        let f = ShxFont::parse(&compile_unifont(6, 2, &[(0x0141, "L-STROKE", &sq), (0x4e2d, "ZHONG", caller)])).unwrap();
+        assert_eq!((f.kind, f.above, f.below), (Kind::Unifont, 6.0, 2.0));
+        assert_eq!(f.code_of('Ł'), Some(0x141));
+        assert_eq!(f.code_of('中'), Some(0x4e2d));
+        assert_eq!(f.code_of('A'), None);
+        let square_pts = vec![vec![Vec2::ZERO, Vec2::new(4.0, 0.0), Vec2::new(4.0, 4.0), Vec2::new(0.0, 4.0), Vec2::ZERO]];
+        let g = f.glyph(0x141, false).unwrap();
+        assert_eq!(g.strokes, square_pts);
+        assert_eq!(g.advance, Vec2::new(1.0, 0.0));
+        let z = f.glyph(0x4e2d, false).unwrap();
+        assert_eq!(z.strokes, square_pts);
+        // The subshape ends 1 right of its start (pen up), then the displacement adds 2.
+        assert_eq!(z.advance, Vec2::new(3.0, 0.0));
+        assert_eq!(f.shape_number("zhong"), Some(0x4e2d));
     }
 
     #[test]
