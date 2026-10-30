@@ -535,9 +535,18 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 && let EntityKind::Hatch(h) = &mut k
             {
                 // Boundary in the mirrored OCS, like LWPOLYLINE; the pattern direction mirrors too.
-                for v in h.loops.iter_mut().flat_map(|l| l.vertices.iter_mut()) {
-                    v.p.x = -v.p.x;
-                    v.bulge = -v.bulge;
+                // A loop with exact edges mirrors them (and re-tessellates its points); the others
+                // flip their points and bulges.
+                let flip = cadaddy_geom::Mat3::scale(-1.0, 1.0);
+                for l in &mut h.loops {
+                    if l.curves.is_empty() {
+                        for v in &mut l.vertices {
+                            v.p.x = -v.p.x;
+                            v.bulge = -v.bulge;
+                        }
+                    } else {
+                        l.transform(&flip, true);
+                    }
                 }
                 h.angle = cadaddy_geom::norm_angle(std::f64::consts::PI - h.angle);
             }
