@@ -126,6 +126,7 @@ mod snap_nearest;
 mod snap_overrides;
 mod snap_tracking;
 mod snaps_more;
+mod solid_command;
 mod space_is_enter;
 mod spline_degree;
 mod spline_options;
