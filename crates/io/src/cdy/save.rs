@@ -85,9 +85,8 @@ enum Part<'a> {
     Objects(ChunkRef),
     Layout(&'a cadaddy_doc::Layout),
     Foreign(&'a Arc<Foreign>),
-    /// The building spec (BSPC), the camera tours (TOUR), the 4D schedule (SCH4) or the overrides
-    /// (OVRD).
-    Text([u8; 4], &'a str),
+    /// One of the text parts ([`model::TEXT_PARTS`]).
+    Text([u8; 4], std::borrow::Cow<'a, str>),
     Embedded(&'a str, &'a Arc<Vec<u8>>),
 }
 
@@ -99,30 +98,7 @@ fn parts(d: &Drawing) -> Vec<Part<'_>> {
     if !d.foreign.is_empty() {
         out.push(Part::Foreign(&d.foreign));
     }
-    if let Some(t) = &d.building_spec {
-        out.push(Part::Text(*b"BSPC", t));
-    }
-    if let Some(t) = &d.tours {
-        out.push(Part::Text(*b"TOUR", t));
-    }
-    if let Some(t) = &d.bcf {
-        out.push(Part::Text(*b"BCFI", t));
-    }
-    if let Some(t) = &d.schedule4d {
-        out.push(Part::Text(*b"SCH4", t));
-    }
-    if let Some(t) = &d.parts {
-        out.push(Part::Text(*b"PRTS", t));
-    }
-    if let Some(t) = &d.overrides {
-        out.push(Part::Text(*b"OVRD", t));
-    }
-    if let Some(t) = &d.agent {
-        out.push(Part::Text(*b"AGNT", t));
-    }
-    if let Some(t) = &d.import_check {
-        out.push(Part::Text(*b"IMCK", t));
-    }
+    out.extend(model::TEXT_PARTS.iter().filter_map(|(tag, _)| model::text_of(d, tag).map(|t| Part::Text(**tag, t))));
     out.extend(d.embedded.iter().map(|(n, b)| Part::Embedded(n, b)));
     out
 }
@@ -304,7 +280,7 @@ pub fn seed(d: &Drawing, bytes: &[u8]) -> Option<SaveState> {
     let blocks: Vec<(&String, &Arc<Block>)> = d.blocks.iter().collect();
     let count = |tag: &[u8; 4]| entries.iter().filter(|e| &e.tag == tag).count();
     // The reader makes one store chunk and one block per chunk: anything else isn't this file.
-    let known = |e: &IndexEntry| model::KNOWN.contains(&&e.tag);
+    let known = |e: &IndexEntry| model::is_known(&e.tag);
     if count(b"ENTS") != objects.len()
         || count(b"BLKS") != blocks.len()
         || count(b"EMBD") != d.embedded.len()
@@ -329,7 +305,7 @@ pub fn seed(d: &Drawing, bytes: &[u8]) -> Option<SaveState> {
                 Source::Embedded(name, b)
             }
             b"THMB" => Source::Thumbnail,
-            b"MANI" | b"HEAD" | b"TABL" | b"LAYO" | b"BSPC" | b"TOUR" | b"SCH4" | b"OVRD" | b"AGNT" | b"IMCK" => {
+            tag if matches!(tag, b"MANI" | b"HEAD" | b"TABL" | b"LAYO") || model::is_text(tag) => {
                 let (container::Read::Ok(c), _) = container::chunk_at(bytes, usize::try_from(e.offset).ok()?)? else { return None };
                 Source::Bytes(e.tag, crc32fast::hash(&c.data), c.data.len() as u64)
             }
