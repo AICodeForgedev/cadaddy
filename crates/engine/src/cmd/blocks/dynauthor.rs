@@ -14,11 +14,13 @@ use crate::{Result, Session};
 pub(super) fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bparameter", "Parameter", run_parameter)
-            .params("{block, type: point|linear|polar|xy|rotation|alignment|flip|visibility|lookup|basepoint, base?: [x,y], end?: [x,y] (two-point types), at?: [x,y] (one-point types), label?, description?, values?: {list: [d…]} | {minimum?, maximum?, increment?} (linear), fromMidpoint?: bool, states?: [{name, handles}] (visibility)} → {node, label, dynamic}")
-            .enabled(has_doc),
+            .params("{block (default the Block Editor's), type: point|linear|polar|xy|rotation|alignment|flip|visibility|lookup|basepoint, base?: [x,y], end?: [x,y] (two-point types), at?: [x,y] (one-point types), label?, description?, values?: {list: [d…]} | {minimum?, maximum?, increment?} (linear), fromMidpoint?: bool, states?: [{name, handles}] (visibility)} → {node, label, dynamic}")
+            .enabled(has_doc)
+            .interactive(|s| Ok(Box::new(super::authoring::ParameterRun::new(s)?))),
         CommandSpec::new("bactiontool", "Action", run_action)
-            .params("{block, type: move|stretch|scale|rotate|flip|array|polarstretch|lookup, parameter (its label or graph id), handles: [objects of the block], frame?: [[x,y]…] (stretch), at?: [x,y], name?, columns?: [{parameter, property?, lookup?: bool}], rows?: [[value…]] (lookup), columnOffset?, rowOffset? (array), rotate?: [objects to turn] (polarstretch)} → {node, name, dynamic}")
-            .enabled(has_doc),
+            .params("{block (default the Block Editor's), type: move|stretch|scale|rotate|flip|array|polarstretch|lookup, parameter (its label or graph id), handles: [objects of the block], frame?: [[x,y]…] (stretch), at?: [x,y], name?, columns?: [{parameter, property?, lookup?: bool}], rows?: [[value…]] (lookup), columnOffset?, rowOffset? (array), rotate?: [objects to turn] (polarstretch)} → {node, name, dynamic}")
+            .enabled(has_doc)
+            .interactive(|s| Ok(Box::new(super::authoring::ActionRun::new(s)?))),
         CommandSpec::new("bvstate", "Visibility States", run_vstate)
             .params("{block (default the Block Editor's), action?: list (default) | new | set | rename | delete | current (the state the Block Editor shows), name?, newName?, handles?: [the state's visible objects]} → {states: [{name, visible}], current?}")
             .enabled(has_doc),
@@ -29,7 +31,9 @@ pub(super) fn specs() -> Vec<CommandSpec> {
 }
 
 fn block_name(s: &Session, cmd: &str, p: &Value) -> Result<String> {
-    let name = str_param(p, "block").or_else(|| str_param(p, "name")).ok_or_else(|| bad(cmd, "`block` is required"))?;
+    // In the Block Editor the block is the one edited unless another is named.
+    let editing = s.state()?.block_edit.as_ref().filter(|b| !b.current).map(|b| b.name.as_str());
+    let name = str_param(p, "block").or_else(|| str_param(p, "name")).or(editing).ok_or_else(|| bad(cmd, "`block` is required"))?;
     let b = s.doc()?.block(name).ok_or_else(|| bad(cmd, format!("no block `{name}`")))?;
     if b.name.starts_with('*') {
         return Err(bad(cmd, "layouts and anonymous blocks can't be made dynamic"));
