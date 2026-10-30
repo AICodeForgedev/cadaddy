@@ -913,32 +913,85 @@ pub struct Running {
 /// The names a command's parameter documentation mentions (`{center, radius?: …}`): every word
 /// after `{` `,` `|` `(` `:` `;` `/` or `+` and followed by `:` `?` `,` `}` `)` `|` `+` `/` `→` or a
 /// note in brackets (`base | baseHandle+index`, `first?/second?`, `path arrays: method?`) — nested
-/// ones too, so it errs towards accepting.
+/// ones too, so it errs towards accepting. Only the parameter part counts: nothing after the
+/// top-level `→` (the result's keys), and no type word after a `:` (`closed?: bool`,
+/// `tolerance_in?: inches`), battle test 5 B7-019.
 pub fn documented_params(doc: &str) -> Vec<&str> {
     let b = doc.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
+    let mut nest = 0usize;
     while i < b.len() {
-        if b[i].is_ascii_alphabetic() || b[i] == b'_' {
+        let c = b[i];
+        if c.is_ascii_alphabetic() || c == b'_' {
             let start = i;
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
                 i += 1;
             }
             let prev = doc[..start].trim_end().chars().last();
             let next = doc[i..].trim_start().chars().next();
+            // A value's type word after a colon (`closed?: bool`) isn't a name; one followed by
+            // `?` or `:` (`path arrays: method?`) is.
+            let word = &doc[start..i];
+            let value = prev == Some(':') && !matches!(next, Some('?' | ':')) && VALUE_WORDS.contains(&word);
             // `{name (e.g. …), at: …}`: a name with a note in brackets counts too (models3d.place
             // warned that its own `name` was ignored; tester 0.7.7f).
-            if matches!(prev, Some('{' | ',' | '|' | '(' | ':' | ';' | '/' | '+'))
+            if !value
+                && matches!(prev, Some('{' | ',' | '|' | '(' | ':' | ';' | '/' | '+'))
                 && matches!(next, Some(':' | '?' | ',' | '}' | ')' | '(' | '|' | '+' | '/' | '→'))
             {
                 out.push(&doc[start..i]);
             }
         } else {
+            match c {
+                b'{' | b'[' => nest += 1,
+                b'}' | b']' => nest = nest.saturating_sub(1),
+                // The result of the command, not its parameters: the group after the arrow (and
+                // a note in brackets after it). Docs of several forms go on after it.
+                _ if nest == 0 && doc.get(i..).is_some_and(|r| r.starts_with('→')) => {
+                    i += '→'.len_utf8();
+                    i = skip_group(doc, skip_group(doc, i, b'{', b'}', true), b'(', b')', false);
+                    continue;
+                }
+                _ => {}
+            }
             i += 1;
         }
     }
     out
 }
+
+/// `at` moved past the balanced `open … close` group that starts there (after spaces); `at` itself
+/// when none does. `any` also takes a `[…]` group in place of `{…}`.
+fn skip_group(doc: &str, at: usize, open: u8, close: u8, any: bool) -> usize {
+    let b = doc.as_bytes();
+    let mut i = at;
+    while b.get(i).is_some_and(|c| *c == b' ') {
+        i += 1;
+    }
+    let first = b.get(i).copied();
+    let (open, close) = if any && first == Some(b'[') { (b'[', b']') } else { (open, close) };
+    if first != Some(open) {
+        return at;
+    }
+    let mut depth = 0usize;
+    while let Some(&c) = b.get(i) {
+        i += 1;
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            depth -= 1;
+            if depth == 0 {
+                return i;
+            }
+        }
+    }
+    i
+}
+
+/// Words that follow a `:` in a parameter list as a value's type or unit, never as a name.
+const VALUE_WORDS: [&str; 16] =
+    ["bool", "boolean", "number", "string", "int", "integer", "degrees", "deg", "inches", "feet", "hex", "base64", "true", "false", "null", "typed"];
 
 /// Parameters every command takes: the objects it works on, and the agent rails' own
 /// (`confirmed`: an agent claiming the user's answer gets "Waiting for the user", not a refusal).
@@ -983,7 +1036,7 @@ fn closes(rest: &str) -> bool {
 }
 
 /// The documentation of `spec`'s parameters: `same as `other`` is the other command's.
-pub(crate) fn params_doc(spec: &CommandSpec) -> &'static str {
+pub fn params_doc(spec: &CommandSpec) -> &'static str {
     let doc = spec.params;
     let same = doc.trim().strip_prefix("same as `").or_else(|| doc.trim().strip_prefix("as ")).and_then(|r| r.split(['`', ' ']).next());
     match same.filter(|id| !id.is_empty()).and_then(find_command) {
@@ -1026,6 +1079,71 @@ fn refuse_unknown_params(spec: &CommandSpec, params: &Value) -> Result<()> {
         cmd: spec.id.into(),
         msg: format!("{} {} not a parameter of {}; it takes {}", list(&names), if names.len() == 1 { "is" } else { "are" }, spec.id, list(&known)),
     })
+}
+
+/// What a parameter's documentation says its value is, where it says so plainly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParamKind {
+    /// `radius?: number`, `count?: n`, `fade?: 0-80`, `angle?: degrees`.
+    Number,
+    /// `closed?: bool`.
+    Bool,
+    /// `text?: string`, `path: the reviewed PDF`.
+    Text,
+    /// A single value of a kind the doc doesn't name (`page?: 1`, `scale?: 1:50`).
+    Single,
+}
+
+/// The kind the documentation `doc` gives parameter `key`, when it gives a plain one (not a
+/// point, a list, an object or a choice among those).
+pub fn param_kind(doc: &str, key: &str) -> Option<ParamKind> {
+    let at = documented_params(doc).into_iter().find(|n| *n == key).map(|n| n.as_ptr() as usize - doc.as_ptr() as usize)?;
+    let rest = doc.get(at + key.len()..)?.trim_start().strip_prefix('?').unwrap_or(doc.get(at + key.len()..)?.trim_start());
+    let ann = rest.trim_start().strip_prefix(':')?.trim_start();
+    let first = ann.split(|c: char| c.is_whitespace() || matches!(c, ',' | '}' | '|' | '(' | ')' | '/')).next().unwrap_or("");
+    // A choice that includes a structure (`bool | {…}`, `number | [x,y]`) takes both.
+    let tail = ann.split([',', '}']).next().unwrap_or(ann);
+    if tail.contains(['{', '[']) || tail.contains('|') && !matches!(first, "true" | "false") {
+        return None;
+    }
+    match first {
+        "number" | "n" | "count" | "degrees" | "deg" | "inches" | "feet" | "ft" | "mm" => Some(ParamKind::Number),
+        "bool" | "boolean" => Some(ParamKind::Bool),
+        "string" | "text" => Some(ParamKind::Text),
+        f if f.starts_with(|c: char| c.is_ascii_digit()) => Some(ParamKind::Single),
+        _ => None,
+    }
+}
+
+/// An agent's call with a parameter of the wrong JSON type is refused before it runs, naming the
+/// parameter and the type it takes (battle test 5 B7-019: `mleaderstyle {arrowSize: {}}` and
+/// `purge {layers: 12345}` ran and used the default). Only where the documentation says plainly
+/// what the value is ([`param_kind`]); `null` is "not given".
+fn refuse_wrong_typed_params(spec: &CommandSpec, params: &Value) -> Result<()> {
+    let Some(given) = params.as_object() else { return Ok(()) };
+    let doc = params_doc(spec);
+    for (k, v) in given {
+        if v.is_null() {
+            continue;
+        }
+        let Some(kind) = param_kind(doc, k) else { continue };
+        let ok = match kind {
+            ParamKind::Number => v.is_number(),
+            ParamKind::Bool => v.is_boolean() || v.is_number() || v.is_string(),
+            ParamKind::Text => v.is_string(),
+            ParamKind::Single => !v.is_object() && !v.is_array(),
+        };
+        if !ok {
+            let want = match kind {
+                ParamKind::Number => "a number",
+                ParamKind::Bool => "true or false",
+                ParamKind::Text => "a string",
+                ParamKind::Single => "a single value, not a list or an object",
+            };
+            return Err(EngineError::BadParams { cmd: spec.id.into(), msg: format!("`{k}` must be {want}") });
+        }
+    }
+    Ok(())
 }
 
 /// A command's JSON result with `warnings` naming parameters it doesn't take (a misspelt
@@ -1643,6 +1761,7 @@ impl Session {
             && let Some(spec) = find_command(&cmd::resolve_alias(id))
         {
             refuse_unknown_params(spec, params)?;
+            refuse_wrong_typed_params(spec, params)?;
         }
         if self.journal.is_outer()
             && let Some(r) = self.guard_call(id, params)
@@ -2307,6 +2426,7 @@ impl Session {
         let base = if matches!(input, Some(Input::Point(_))) { self.current_prompt().and_then(|p| p.base) } else { None };
         let enter = matches!(input, Some(Input::Enter));
         let beginning = input.is_none();
+        let too_large = matches!(&input, Some(Input::Text(t)) if beyond_limit(t));
         let Some(mut run) = self.running.take() else { return Ok(()) };
         let step = match input {
             Some(Input::Cancel) => Ok(Step::Cancel),
@@ -2383,8 +2503,9 @@ impl Session {
                 Ok(())
             }
             Err(e) => {
-                // Invalid input: report and keep prompting (AutoCAD re-prompts).
-                self.echo(e.user_message());
+                // Invalid input: report and keep prompting (AutoCAD re-prompts). A number past
+                // the limit is named as that, not as "requires a distance" (battle test 5 B7-021).
+                self.echo(if too_large { TOO_LARGE.to_string() } else { e.user_message() });
                 self.running = Some(run);
                 Ok(())
             }
@@ -3160,6 +3281,16 @@ impl Session {
 /// must not run on the restored drawing). Uses the [`CommandSpec::restores_history`] flag.
 fn moves_through_history(id: &str) -> bool {
     find_command(id).is_some_and(|c| c.restores_history)
+}
+
+/// What a typed number or point beyond the export limit is told.
+const TOO_LARGE: &str = "The value is too large (limit ±1e12).";
+
+/// Whether typed `t` is a number, or a point (`x,y`, `@x,y`), with a part beyond ±1e12.
+fn beyond_limit(t: &str) -> bool {
+    let t = t.trim().trim_start_matches('@');
+    let parts: Vec<Option<f64>> = t.split(',').take(4).map(|x| x.trim().parse::<f64>().ok().filter(|v| v.is_finite())).collect();
+    parts.iter().all(Option::is_some) && parts.iter().flatten().any(|v| v.abs() > 1e12)
 }
 
 /// Typed text that is LISP: `(expression)` or `!variable`.

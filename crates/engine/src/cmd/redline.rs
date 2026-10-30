@@ -164,6 +164,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     };
 
     let mut pages_result: Vec<Value> = Vec::new();
+    let mut total_placed = 0usize;
     let mut unmatched: Vec<Value> = Vec::new();
 
     for pg in 1..=total {
@@ -202,8 +203,10 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
                 });
                 match (import.run)(s, &q) {
                     Ok(r) => {
-                        let placed = r.get("placed").cloned().unwrap_or(json!([]));
-                        if placed.as_array().is_some_and(|a| !a.is_empty()) {
+                        let placed = r.pointer("/placed").cloned().unwrap_or(json!([]));
+                        let n = placed.as_array().map_or(0, Vec::len);
+                        if n > 0 {
+                            total_placed += n;
                             pages_result.push(json!({
                                 "page": pg,
                                 "layout": name,
@@ -232,7 +235,6 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         let _ = s.execute("layout", &json!({ "option": "set", "name": current_layout }));
     }
 
-    let total_placed: usize = pages_result.iter().filter_map(|p| p["placed"].as_array().map(|a| a.len())).sum();
     let msg = format!(
         "{total_placed} markup(s) imported from {pg} page(s){unm}.",
         pg = pages_result.len(),

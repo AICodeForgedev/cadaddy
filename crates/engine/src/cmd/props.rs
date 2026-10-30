@@ -115,7 +115,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mleaderstyle", "Multileader Style...", run_mleaderstyle)
             .menu(&["Format", "Multileader Style..."])
             .alias(&["mls"])
-            .params("{name, arrowSize?, textHeight?, landingGap?, dogleg?, textStyle?, annotative?, leaderType?: straight|spline|none, block?: block name (\"\" for text content), blockAttach?: center|insertion, current?} → styles"),
+            .params("{name: string, arrowSize?: number, textHeight?: number, landingGap?: number, dogleg?: number, textStyle?: string, annotative?: bool, leaderType?: straight|spline|none, block?: block name (\"\" for text content), blockAttach?: center|insertion, current?} → styles"),
         CommandSpec::new("ddptype", "Point Style...", run_ptype)
             .menu(&["Format", "Point Style..."])
             .alias(&["ptype"])
