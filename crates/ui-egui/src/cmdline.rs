@@ -1207,6 +1207,28 @@ mod autocomplete_tests {
     }
 
     #[test]
+    fn a_dimension_style_prompt_completes_dimension_styles_not_text_styles() {
+        let mut app = app();
+        app.run("style", serde_json::json!({ "name": "Arial" })).unwrap();
+        app.run("dimstyle", serde_json::json!({ "name": "Arch" })).unwrap();
+        app.cmdline("-dimstyle");
+        app.cmdline("Restore");
+        assert!(app.session.prompt_text().contains("dimension style name"), "{}", app.session.prompt_text());
+        app.cmd.buffer = "ar".into();
+        // Mid-string search also finds the default "Standard"; the text style "Arial" never shows.
+        let ids: Vec<String> = current_suggestions(&app).into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["Arch", "Standard"]);
+        app.run("ui.autocomplete", serde_json::json!({ "toggle": "midString" })).unwrap();
+        let ids: Vec<String> = current_suggestions(&app).into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["Arch"]);
+        tab(&mut app);
+        assert_eq!(app.cmd.buffer, "Arch");
+        submit(&mut app);
+        app.cmdline("");
+        assert_eq!(app.session.doc().unwrap().header.str("DIMSTYLE", ""), "Arch");
+    }
+
+    #[test]
     fn typed_commands_rank_autocomplete_and_settings_apply() {
         let mut app = app();
         app.cmd.buffer = "di".into();
