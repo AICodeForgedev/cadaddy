@@ -99,7 +99,7 @@ fn hatch_by_point_in_a_block_is_kept() {
 fn paste_as_block_follows_the_copied_boundary() {
     hooks();
     let (mut s, h, r) = hatched();
-    s.execute("copyclip", &json!({"handles": [h, r], "base": [0, 0]})).unwrap();
+    s.execute("copybase", &json!({"handles": [h, r], "base": [0, 0]})).unwrap();
     let ins = handle(&s.execute("pasteblock", &json!({"at": [20, 0]})).unwrap());
     let name = match &s.doc().unwrap().entity(cadaddy_engine::doc::Handle::parse_hex(&ins).unwrap()).unwrap().kind {
         EntityKind::Insert(i) => i.block.clone(),
