@@ -139,3 +139,52 @@ fn other_programs_data_goes_through_dwg_and_its_loss_is_listed() {
     assert_eq!(loss(&r, "reactors").map(|l| &l["handles"]), Some(&json!(["100"])), "{r}");
     assert_eq!(loss(&r, "acme_gadget objects").map(|l| &l["what"]), Some(&json!("dropped")), "{r}");
 }
+
+#[path = "../../io/tests/support/custom_dwg.rs"]
+mod custom_dwg;
+
+/// Another program's DWG-only custom records (a custom class's entity and object, which have no
+/// DXF groups) read from a DWG are kept, and a save as DWG keeps them: CHECKEXCHANGE lists
+/// nothing of them in a DWG of the version they came from, and lists them (a real positive control) for Release 12
+/// DXF, which has no objects or classes (Q5225).
+#[test]
+fn other_programs_dwg_only_records_are_not_listed_as_lost_in_dwg() {
+    hooks();
+    for (id, year) in custom_dwg::VERSIONS.into_iter().zip([2000, 2004, 2007, 2010, 2013, 2018]) {
+        let (bytes, want) = custom_dwg::synthetic(id);
+        let d = cadaddy_io::read(&bytes, "acme.dwg").unwrap();
+        assert_eq!(custom_dwg::kept(&d).len(), want.len(), "{id}: both records are kept in the drawing");
+        let mut s = Session::new();
+        s.open_drawing(d, "acme", None);
+        let r = s.execute("checkexchange", &json!({"format": "dwg", "version": year})).unwrap();
+        let listed: Vec<&str> = r["losses"].as_array().unwrap().iter().filter_map(|l| l["feature"].as_str()).collect();
+        assert!(!listed.iter().any(|f| f.contains("acme") || f.contains("other programs") || f.contains("classes")), "{id}: {r}");
+        let r = s.execute("checkexchange", &json!({"format": "dxf", "version": 12})).unwrap();
+        assert!(loss(&r, "acme_widget objects of other programs").is_some(), "{id}: {r}");
+        assert!(loss(&r, "acme_gadget objects").is_some(), "{id}: {r}");
+    }
+}
+
+/// Records kept as their DWG bytes are listed by handle when the file is of another DWG version
+/// than they were stored in (they stay in the file as kept data, but are not that version's
+/// objects); in a file of their own version nothing is listed.
+#[test]
+fn dwg_only_records_of_another_version_are_listed_by_handle() {
+    hooks();
+    assert_eq!(cadaddy_dwgcodec::entities::RAW_SUBCLASS, "AcDbCadaddyRawDwg", "the engine's copy of the marker");
+    let (bytes, want) = custom_dwg::synthetic("AC1032");
+    let mut s = Session::new();
+    s.open_drawing(cadaddy_io::read(&bytes, "acme.dwg").unwrap(), "acme", None);
+    let feature = "objects of other programs from another DWG version";
+    let r = s.execute("checkexchange", &json!({"format": "dwg", "version": 2018})).unwrap();
+    assert!(loss(&r, feature).is_none(), "{r}");
+    for version in [2000, 2004, 2007, 2010, 2013] {
+        let r = s.execute("checkexchange", &json!({"format": "dwg", "version": version})).unwrap();
+        let l = loss(&r, feature).unwrap_or_else(|| panic!("{version}: {r}"));
+        let mut handles: Vec<String> = l["handles"].as_array().unwrap().iter().map(|h| h.as_str().unwrap().to_string()).collect();
+        handles.sort();
+        let mut expect: Vec<String> = want.iter().map(|w| format!("{:X}", w.0)).collect();
+        expect.sort();
+        assert_eq!(handles, expect, "{version}: {r}");
+    }
+}

@@ -59,6 +59,62 @@ fn kept_in(a: &Drawing, b: &Drawing) -> bool {
     })
 }
 
+/// Where the made-up drawing's references lead, by resolved handle: no handle is compared by its
+/// number except the line's, which no writer renumbers.
+#[derive(Debug, PartialEq, Eq)]
+struct Links {
+    /// The line's reactors are exactly the ACME_WIDGET's handle.
+    line_reactor_is_widget: bool,
+    /// The widget's reactors are exactly the line's handle.
+    widget_reactor_is_line: bool,
+    /// The named object dictionary's ACME_WIDGETS entry is the widget's handle.
+    entry_is_widget: bool,
+    /// The line's extension dictionary is the DICTIONARY that holds ACME_DATA...
+    xdict_has_acme_data: bool,
+    /// ...which names the XRECORD with the per-line payload.
+    acme_data_is_the_payload: bool,
+    /// The line's xdata: 1001 ACME_APP, 1000 widget-tag, 1070 42.
+    xdata: Vec<(i32, String)>,
+}
+
+fn links(d: &Drawing) -> Links {
+    let f = &d.foreign;
+    let line = Handle(0x100);
+    let widget = f.objects.iter().find(|o| o.kind == "ACME_WIDGET");
+    let handles_in = |tags: &[RawTag], block: &str| -> Vec<Handle> {
+        let open = tags.iter().position(|t| t.code == 102 && t.value.trim() == block);
+        let Some(open) = open else { return Vec::new() };
+        tags.iter()
+            .skip(open + 1)
+            .take_while(|t| !(t.code == 102 && t.value.trim() == "}"))
+            .filter(|t| t.code == 330)
+            .filter_map(|t| Handle::parse_hex(t.value.trim()))
+            .collect()
+    };
+    let extra = f.entities.get(&line);
+    let xdict = extra.and_then(|x| x.xdict).and_then(|h| f.objects.iter().find(|o| o.handle == h));
+    let acme_data = xdict.and_then(|x| {
+        let at = x.tags.iter().position(|t| t.code == 3 && t.value.trim() == "ACME_DATA")?;
+        x.tags.iter().skip(at).find(|t| matches!(t.code, 350 | 360)).and_then(|t| Handle::parse_hex(t.value.trim()))
+    });
+    let xdata = d
+        .model
+        .iter()
+        .find(|e| e.handle == line)
+        .map(|e| e.common.xdata.iter().map(|t| (t.code, t.value.trim().to_string())).collect())
+        .unwrap_or_default();
+    Links {
+        line_reactor_is_widget: widget.is_some_and(|w| extra.is_some_and(|x| x.reactors == [w.handle])),
+        widget_reactor_is_line: widget.is_some_and(|w| handles_in(&w.tags, "{ACAD_REACTORS") == [line]),
+        entry_is_widget: widget.is_some_and(|w| f.dictionary.iter().any(|(k, h)| k == "ACME_WIDGETS" && *h == w.handle)),
+        xdict_has_acme_data: acme_data.is_some(),
+        acme_data_is_the_payload: acme_data
+            .and_then(|h| f.objects.iter().find(|o| o.handle == h))
+            .is_some_and(|o| o.kind == "XRECORD" && o.tags.iter().any(|t| t.code == 1 && t.value.trim() == "per-line payload")),
+        xdata,
+    }
+}
+
 fn through_dwg(d: &Drawing, version: Option<cadaddy_dxf::Version>) -> Drawing {
     let dwg = cadaddy_io::write_with(d, "x.dwg", &cadaddy_io::SaveOptions { version, binary: false }).unwrap();
     let back = cadaddy_io::read(&dwg, "x.dwg").unwrap();
@@ -119,4 +175,33 @@ fn a_drawing_without_custom_data_is_written_as_before() {
     let dwg = cadaddy_io::write(&d, "x.dwg").unwrap();
     let dxf = cadaddy_dwg::dwg_to_dxf(&dwg).unwrap();
     assert!(!String::from_utf8_lossy(&dxf).contains("CADADDY_KEEP"));
+}
+
+/// The references between the records and the line's xdata are intact, resolved to the handles
+/// they name, after one and after two DWG trips, in every DWG version (Q5225 MUST 2).
+#[test]
+fn links_and_xdata_resolve_after_one_and_two_trips_in_every_version() {
+    let d = cadaddy_io::read(DXF.as_bytes(), "acme.dxf").unwrap();
+    let want = Links {
+        line_reactor_is_widget: true,
+        widget_reactor_is_line: true,
+        entry_is_widget: true,
+        xdict_has_acme_data: true,
+        acme_data_is_the_payload: true,
+        xdata: vec![(1001, "ACME_APP".into()), (1000, "widget-tag".into()), (1070, "42".into())],
+    };
+    assert_eq!(links(&d), want, "the made-up drawing, read from its DXF");
+    for v in [
+        cadaddy_dxf::Version::R2000,
+        cadaddy_dxf::Version::R2004,
+        cadaddy_dxf::Version::R2007,
+        cadaddy_dxf::Version::R2010,
+        cadaddy_dxf::Version::R2013,
+        cadaddy_dxf::Version::R2018,
+    ] {
+        let once = through_dwg(&d, Some(v));
+        assert_eq!(links(&once), want, "{v:?}: after one DWG trip");
+        let twice = through_dwg(&once, Some(v));
+        assert_eq!(links(&twice), want, "{v:?}: after two DWG trips");
+    }
 }

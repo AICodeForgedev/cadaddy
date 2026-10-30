@@ -529,9 +529,45 @@ fn losses_of(d: &Drawing, back: &Drawing) -> Vec<Loss> {
         }
     }
     compare_foreign(&d.foreign, &back.foreign, &mut out);
+    other_version_records(d, back, &mut out);
     let mut list: Vec<Loss> = out.0.into_values().collect();
     list.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.feature.cmp(&b.feature)));
     list
+}
+
+/// The subclass marker of a record kept as its DWG bytes (`cadaddy_dwgcodec::entities::
+/// RAW_SUBCLASS`; the engine does not depend on the codec, a test checks the two agree).
+const RAW_DWG: &str = "AcDbCadaddyRawDwg";
+
+/// Other programs' records kept as their DWG bytes (marked with [`RAW_DWG`],
+/// group 1 the DWG version they were stored in) that the file is not of that version: they stay
+/// in the file as kept data and come back when it is read again, but they are not objects of that
+/// file's version for the program that made them. Listed by handle, never silently.
+fn other_version_records(d: &Drawing, back: &Drawing, out: &mut Losses) {
+    let Some(target) = back.header.get("ACADVER").and_then(cadaddy_doc::HVal::as_str).map(|v| v.trim().to_ascii_uppercase()) else { return };
+    if !target.starts_with("AC10") || target == "AC1009" {
+        return;
+    }
+    let stored = |tags: &[cadaddy_doc::RawTag]| -> Option<String> {
+        let raw = tags.iter().any(|t| t.code == 100 && t.value.trim() == RAW_DWG);
+        raw.then(|| tags.iter().find(|t| t.code == 1).map(|t| t.value.trim().to_ascii_uppercase())).flatten()
+    };
+    let feature = "objects of other programs from another DWG version";
+    for o in &d.foreign.objects {
+        if stored(&o.tags).is_some_and(|v| v != target) {
+            out.add(feature.into(), "changed", Some(o.handle.hex()), Some(o.kind.to_ascii_lowercase()));
+        }
+    }
+    let spaces = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
+    for store in spaces {
+        for e in store.iter() {
+            if let cadaddy_doc::EntityKind::Unknown(u) = &e.kind
+                && stored(&u.tags).is_some_and(|v| v != target)
+            {
+                out.add(feature.into(), "changed", Some(e.handle.hex()), Some(u.dxf_type.to_ascii_lowercase()));
+            }
+        }
+    }
 }
 
 /// Whether group `code` holds a handle (the object's own, or a reference to another), which a

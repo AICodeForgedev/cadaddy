@@ -825,6 +825,11 @@ fn unknown_handles(d: &Drawing) -> HashSet<String> {
     all_entities(d).filter(|e| matches!(e.kind, EntityKind::Unknown(_))).map(|e| e.handle.hex()).collect()
 }
 
+/// Whether a kept object's groups are an object stored as its DWG bytes (`RAW_SUBCLASS`).
+fn is_raw_dwg(tags: &[RawTag]) -> bool {
+    tags.iter().any(|t| t.code == 100 && t.value.trim() == cadaddy_dwgcodec::entities::RAW_SUBCLASS)
+}
+
 /// Put the drawing's foreign data back into a written file's tags (see the module comment).
 pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
     let f = d.foreign.as_ref();
@@ -941,7 +946,22 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
     // New handles for the written kept objects, above every written handle and the seed.
     let mut next = seed(tags).max(max_handle(tags).saturating_add(1));
     let mut alive: HashMap<String, String> = HashMap::new();
-    for o in f.objects.iter().filter(|o| alive_memo.get(&o.handle.hex()) == Some(&true)) {
+    // An object kept as its DWG bytes (`dwg_read`, the bridge read) keeps its own handle when
+    // nothing written has it: the references in its bytes name handles, and a save writes it back
+    // with the handle it had. One whose handle is taken is renumbered like the others.
+    let live = |o: &&ForeignObject| alive_memo.get(&o.handle.hex()) == Some(&true);
+    let mut taken: HashSet<u64> = HashSet::new();
+    for o in f.objects.iter().filter(live).filter(|o| is_raw_dwg(&o.tags)) {
+        if !written.contains(&o.handle.hex()) && taken.insert(o.handle.0) {
+            alive.insert(o.handle.hex(), o.handle.hex());
+        }
+    }
+    let renumbered: Vec<&ForeignObject> = f.objects.iter().filter(live).filter(|o| !alive.contains_key(&o.handle.hex())).collect();
+    for o in renumbered {
+        while next < u64::MAX && taken.contains(&next) {
+            next += 1;
+        }
+        taken.insert(next);
         alive.insert(o.handle.hex(), format!("{next:X}"));
         next = next.saturating_add(1);
     }

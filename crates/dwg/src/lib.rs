@@ -130,6 +130,8 @@ mod native {
             return Err(format!("DWG: {}", why.unwrap_or_else(|| "the file's objects couldn't be read".to_string())));
         }
         let mut notes = read_notes(&outcome.stats);
+        let mut doc = outcome.document;
+        notes.extend(keep_dwg_only(&mut doc));
         if !salvaged.is_empty() {
             notes.insert(
                 0,
@@ -140,7 +142,6 @@ mod native {
                 ),
             );
         }
-        let mut doc = outcome.document;
         notes.extend(unkept_note(&doc));
         names_by_current(&mut doc);
         table_merges(&mut doc);
@@ -328,8 +329,83 @@ mod native {
         }
     }
 
+    /// The marker subclass of a record kept as its DWG bytes (`cadaddy_dwgcodec::entities::
+    /// RAW_SUBCLASS`, the form CADaddy's own DWG reader keeps undecoded records in; cadaddy-io
+    /// tests that the two agree).
+    pub const RAW_SUBCLASS: &str = "AcDbCadaddyRawDwg";
+
+    /// Most bytes of one kept record (as CADaddy's own reader caps them).
+    const MAX_RAW: usize = 64 << 20;
+
+    /// Other programs' custom entities and objects that came from a DWG and have only their
+    /// own DWG encoding (no DXF groups): given the groups of a kept record (`RAW_SUBCLASS`, the
+    /// object type when known, the source version, the length and the bytes in 310 groups) so
+    /// the DXF written next carries them with their handle, owner and class name. The returned
+    /// note lists them by class; they are not editable, and saving writes them back.
+    pub(crate) fn keep_dwg_only(doc: &mut acadrust::CadDocument) -> Option<String> {
+        let doc_version = doc.dwg_source_version.unwrap_or(doc.version);
+        let groups = |data: &[u8], handle_bits: i64, type_code: Option<i64>, version: acadrust::DxfVersion| {
+            // From R2010 a record starts with its handle stream's size in bits (a modular char,
+            // ODA DWG specification §2.12), which acadrust holds apart from the bytes.
+            let mut framed: Vec<u8> = Vec::with_capacity(data.len() + 4);
+            if version >= acadrust::DxfVersion::AC1024 {
+                let mut n = u64::try_from(handle_bits).unwrap_or(0);
+                while n >= 0x80 {
+                    framed.push((n & 0x7F) as u8 | 0x80);
+                    n >>= 7;
+                }
+                framed.push(n as u8);
+            }
+            framed.extend_from_slice(data);
+            let data = framed.as_slice();
+            let mut g: Vec<(i32, String)> = vec![(100, RAW_SUBCLASS.to_string())];
+            if let Some(t) = type_code {
+                g.push((70, t.to_string()));
+            }
+            g.push((1, version.as_str().to_string()));
+            g.push((90, data.len().to_string()));
+            for chunk in data.chunks(127) {
+                g.push((310, chunk.iter().map(|b| format!("{b:02X}")).collect()));
+            }
+            g
+        };
+        let mut by_type: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for e in doc.entities_mut() {
+            if let acadrust::entities::EntityType::Unknown(u) = e
+                && u.raw_dxf_codes.is_none()
+                && let Some(data) = u.raw_dwg_data.as_deref().filter(|d| d.len() <= MAX_RAW)
+            {
+                let t = (u.dwg_type_code > 0).then_some(i64::from(u.dwg_type_code));
+                u.raw_dxf_codes = Some(groups(data, u.dwg_handle_bits, t, u.dwg_source_version.unwrap_or(doc_version)));
+                *by_type.entry(u.dxf_name.clone()).or_default() += 1;
+            }
+        }
+        for o in doc.objects.values_mut() {
+            if let acadrust::objects::ObjectType::Unknown { type_name, raw_dxf_codes, raw_dwg_data, raw_dwg_handle_bits, raw_dwg_version, .. } = o
+                && raw_dxf_codes.is_none()
+                && let Some(data) = raw_dwg_data.as_deref().filter(|d| d.len() <= MAX_RAW)
+            {
+                let t = type_name.strip_prefix("DWG_OBJ_").and_then(|n| n.parse::<i64>().ok());
+                *raw_dxf_codes = Some(groups(data, *raw_dwg_handle_bits, t, raw_dwg_version.unwrap_or(doc_version)));
+                *by_type.entry(type_name.clone()).or_default() += 1;
+            }
+        }
+        let total: usize = by_type.values().sum();
+        if total == 0 {
+            return None;
+        }
+        let mut types: Vec<(String, usize)> = by_type.into_iter().collect();
+        types.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let mut list: Vec<String> = types.iter().take(NOTE_TYPES).map(|(t, n)| format!("{t} × {n}")).collect();
+        if types.len() > NOTE_TYPES {
+            list.push(format!("{} more types", types.len() - NOTE_TYPES));
+        }
+        Some(format!("DWG: {total} objects of other programs ({}) kept as stored, not editable; saving writes them back", list.join(", ")))
+    }
+
     /// Other programs' custom entities and objects read from a DWG that a DXF can't hold (they
-    /// have only their own DWG encoding): left out of the drawing, so the note says so, by type.
+    /// have only their own DWG encoding) and that [`keep_dwg_only`] did not keep (it keeps all
+    /// that have their bytes): left out of the drawing, so the note says so, by type.
     pub(crate) fn unkept_note(doc: &acadrust::CadDocument) -> Option<String> {
         let mut by_type: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
         for e in doc.entities() {
@@ -1008,6 +1084,40 @@ mod tests {
         }
         let note = native::unkept_note(&doc).unwrap();
         assert!(note.starts_with("DWG: 2 objects of other programs (ACME_WIDGET × 2)") && note.contains("would lose them"), "{note}");
+    }
+
+    /// A custom object and entity with only DWG bytes get the groups of a kept record (marker,
+    /// type when known, source version, length, bytes), so the DXF carries them; none is left out.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dwg_only_records_are_given_the_groups_of_a_kept_record() {
+        let mut doc = acadrust::CadDocument::new();
+        let h = acadrust::Handle::from(0x900u64);
+        doc.objects.insert(
+            h,
+            acadrust::objects::ObjectType::Unknown {
+                type_name: "ACME_WIDGET".into(),
+                handle: h,
+                owner: acadrust::Handle::from(0xCu64),
+                raw_dxf_codes: None,
+                raw_dwg_data: Some((0..200u8).collect()),
+                raw_dwg_handle_bits: 50,
+                raw_dwg_version: Some(acadrust::DxfVersion::AC1024),
+            },
+        );
+        let note = native::keep_dwg_only(&mut doc).unwrap();
+        assert!(note.starts_with("DWG: 1 objects of other programs (ACME_WIDGET × 1) kept as stored") && !note.contains("left out"), "{note}");
+        assert_eq!(native::unkept_note(&doc), None);
+        let Some(acadrust::objects::ObjectType::Unknown { raw_dxf_codes: Some(g), .. }) = doc.objects.get(&h) else { panic!("not kept") };
+        assert_eq!(g[0], (100, native::RAW_SUBCLASS.to_string()));
+        assert_eq!(g[1], (1, "AC1024".to_string()));
+        // R2010 and later: the handle stream's size in bits (a modular char) starts the data.
+        assert_eq!(g[2], (90, "201".to_string()));
+        assert_eq!(g[3].0, 310);
+        assert!(g[3].1.starts_with("32000102"), "{:?}", g[3]);
+        assert_eq!(g.iter().filter(|x| x.0 == 310).map(|x| x.1.len() / 2).sum::<usize>(), 201);
+        // Nothing to keep: no note.
+        assert_eq!(native::keep_dwg_only(&mut acadrust::CadDocument::new()), None);
     }
 
     #[test]

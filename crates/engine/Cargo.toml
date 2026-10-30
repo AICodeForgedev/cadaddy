@@ -46,6 +46,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 [dev-dependencies]
 # Real DXF files for the external reference tests (io is a lower layer).
 cadaddy-io = { workspace = true }
+# Made-up DWGs with another program's DWG-only records (exchange report tests).
+cadaddy-dwgcodec = { workspace = true }
 # WAT-to-WASM for the plug-in fuel-exhaustion test (MIT OR Apache-2.0).
 wat = "1"
 # Made-up print sets and their revisions (Q270 print comparison tests).
