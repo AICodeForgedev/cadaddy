@@ -484,42 +484,60 @@ fn sync(path: &Path, set: &mut SheetSet) -> Result<()> {
     let mut files: Vec<String> = set.sheets.iter().map(|s| s.drawing.clone()).collect();
     files.sort();
     files.dedup();
+    // All-or-nothing: read every drawing and check every rename on a copy of the set, and write
+    // nothing until all of them passed, so a failure leaves the drawings and the set agreeing.
+    let mut next = set.clone();
+    let mut changed: Vec<(PathBuf, cadaddy_doc::Drawing)> = Vec::new();
     for stored in files {
         let file = drawing_file(path, &stored)?;
         let mut d = read_drawing(&file)?;
         let before = d.clone();
-        for sh in set.sheets.iter_mut().filter(|s| s.drawing == stored) {
+        for i in 0..next.sheets.len() {
+            let Some(sh) = next.sheets.get(i).filter(|s| s.drawing == stored) else { continue };
             let want: String = format!("{} {}", sh.number, sh.title).trim().chars().take(255).collect();
             if want.is_empty() || want == sh.layout {
                 continue;
             }
-            if d.layout(&want).is_some() {
-                return Err(bad(CMD, format!("{stored}: a layout `{want}` already exists")));
-            }
-            let Some(l) = d.layouts.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&sh.layout)) else {
-                return Err(bad(CMD, format!("{stored}: no layout `{}`", sh.layout)));
+            let have = d.layouts.iter().position(|l| l.name.eq_ignore_ascii_case(&sh.layout));
+            let adopt = d.layout(&want).map(|l| l.name.clone());
+            let new_name = match (have, adopt) {
+                // A previous sync got as far as the drawing: take the layout it already named.
+                (None, Some(name)) => name,
+                (_, Some(_)) => return Err(bad(CMD, format!("{stored}: a layout `{want}` already exists"))),
+                (None, None) => return Err(bad(CMD, format!("{stored}: no layout `{}`", sh.layout))),
+                (Some(at), None) => {
+                    if let Some(l) = d.layouts.get_mut(at) {
+                        l.name = want.clone();
+                    }
+                    want
+                }
             };
-            l.name = want.clone();
-            sh.layout = want;
+            if let Some(sh) = next.sheets.get_mut(i) {
+                sh.layout = new_name;
+            }
         }
-        d.header.set_str(SHEET_SET_VAR, &sheet_data(set, &stored).to_string());
+        d.header.set_str(SHEET_SET_VAR, &sheet_data(&next, &stored).to_string());
         // Labels and callouts in this drawing.
-        let number_of = |id: u64| set.sheet(id).map(|s| s.number.clone()).unwrap_or_default();
-        for v in set.views.iter().filter(|v| set.sheet(v.sheet).is_some_and(|s| s.drawing == stored)) {
+        let number_of = |id: u64| next.sheet(id).map(|s| s.number.clone()).unwrap_or_default();
+        for v in next.views.iter().filter(|v| next.sheet(v.sheet).is_some_and(|s| s.drawing == stored)) {
             let label = format!("{} {}", v.number, v.title).trim().to_string();
             set_text(&mut d, &v.label, &label);
         }
-        for c in set.callouts.iter().filter(|c| set.sheet(c.sheet).is_some_and(|s| s.drawing == stored)) {
-            if let Some(v) = set.views.iter().find(|v| v.id == c.view) {
+        for c in next.callouts.iter().filter(|c| next.sheet(c.sheet).is_some_and(|s| s.drawing == stored)) {
+            if let Some(v) = next.views.iter().find(|v| v.id == c.view) {
                 set_text(&mut d, &c.handle, &format!("{}/{}", v.number, number_of(v.sheet)));
             }
         }
         if d != before {
-            let name = file.to_string_lossy().into_owned();
-            let bytes = (hooks.write)(&d, &name).map_err(|e| bad(CMD, format!("{name}: {e}")))?;
-            store(&name, &bytes)?;
+            changed.push((file, d));
         }
     }
+    for (file, d) in changed {
+        let name = file.to_string_lossy().into_owned();
+        let bytes = (hooks.write)(&d, &name).map_err(|e| bad(CMD, format!("{name}: {e}")))?;
+        store(&name, &bytes)?;
+    }
+    *set = next;
     Ok(())
 }
 
