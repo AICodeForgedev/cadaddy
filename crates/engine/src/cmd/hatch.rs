@@ -126,7 +126,12 @@ fn closed_vertices(d: &Drawing, e: &Entity) -> Option<Vec<PolyVertex>> {
             Some(vec![PolyVertex::with_bulge(ctr - Vec2::X * c.radius, 1.0), PolyVertex::with_bulge(ctr + Vec2::X * c.radius, 1.0)])
         }
         EntityKind::LwPolyline(p) if p.closed || p.vertices.first().zip(p.vertices.last()).is_some_and(|(a, b)| a.p.near(b.p, 1e-9)) => {
-            Some(p.vertices.clone())
+            // A closing vertex repeating the first is dropped, as the file readers drop it.
+            let mut v = p.vertices.clone();
+            if v.len() > 2 && v.first().zip(v.last()).is_some_and(|(a, b)| a.p.near(b.p, 1e-9)) {
+                v.pop();
+            }
+            Some(v)
         }
         EntityKind::Ellipse(el) => {
             let ge = cadaddy_geom::Ellipse { center: el.center.xy(), major: el.major.xy(), ratio: el.ratio, start: el.start, end: el.end };
@@ -1306,6 +1311,19 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// A polyline closed by a repeated first point makes a loop without the repeat (the same
+    /// loop a file reads back); a real vertex loss still differs.
+    #[test]
+    fn a_polyline_closed_by_a_repeated_point_gives_a_loop_without_the_repeat() {
+        let mut s = Session::new();
+        s.execute("pline", &json!({ "vertices": [[0, 0], [8, 0], [8, 8], [0, 8], [0, 0]] })).unwrap();
+        let d = s.doc().unwrap();
+        let e = d.model.iter().next().expect("the polyline");
+        let v = closed_vertices(d, e).expect("a loop");
+        assert_eq!(v.len(), 4);
+        assert!(!v[0].p.near(v[3].p, 1e-9));
+    }
 
     /// A row of rooms with a column, a circle island and an infinite line: the outlines made
     /// once give the same loops at every point as outlining the drawing for each search.
