@@ -345,6 +345,15 @@ fn fillet_two_lines() {
 }
 
 #[test]
+fn offset_zero_distance_is_rejected() {
+    let mut s = Session::new();
+    s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+    let r = s.execute("offset", &json!({"handle": "100", "distance": 0, "side": [1, 1]}));
+    assert!(r.is_err(), "offset distance 0 made a coincident copy: {r:?}");
+    assert_eq!(s.doc().unwrap().model.len(), 1);
+}
+
+#[test]
 fn offset_circle_and_polyline() {
     let mut s = Session::new();
     let c = s.execute("circle", &json!({"center": [0, 0], "radius": 5})).unwrap();
