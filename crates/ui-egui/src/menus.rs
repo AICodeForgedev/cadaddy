@@ -128,7 +128,7 @@ fn run_recent_file_command(app: &mut CadApp, id: &str) -> Option<Result<Value, S
     }
     if let Some(i) = id.strip_prefix(RECENT_ITEM).and_then(|n| n.parse::<usize>().ok()) {
         let Some(path) = app.ui.recent_files.get(i).cloned() else { return Some(Err(format!("no recent file {i}"))) };
-        app.open_path(&path);
+        app.open_path(std::path::Path::new(&path));
         return Some(Ok(Value::Null));
     }
     None
@@ -321,7 +321,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         "ui.open" | "open" if no_path => {
             let picked = app.services.pick_open.as_ref().and_then(|f| f());
             if let Some(p) = picked {
-                app.open_path(&p);
+                app.open_path(std::path::Path::new(&p));
             }
             Ok(Value::Null)
         }
@@ -406,7 +406,17 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         "ui.resetpalettes" => {
             let (menu, theme, interface_language, save_format) = (app.ui.in_window_menu, app.ui.theme, app.ui.interface_language, app.ui.save_format);
             let (animations, save_version) = (app.ui.animations, std::mem::take(&mut app.ui.save_version));
-            app.ui = crate::UiState { in_window_menu: menu, theme, animations, interface_language, save_format, save_version, ..Default::default() };
+            let system_cursor = app.system_cursor_default;
+            app.ui = crate::UiState {
+                in_window_menu: menu,
+                theme,
+                animations,
+                interface_language,
+                save_format,
+                save_version,
+                system_cursor,
+                ..Default::default()
+            };
             Ok(Value::Null)
         }
         "ui.start" => {
@@ -512,7 +522,7 @@ fn saveas_params(ui: &crate::UiState, session: &cadcraft_engine::Session, path: 
 
 fn set_save_format(app: &mut CadApp, format: crate::SaveFormat) -> Value {
     app.ui.save_format = format;
-    app.session.echo(format!("New drawings will be saved as {}", format.as_str().to_ascii_uppercase()));
+    app.session.echo(format!("Save As will suggest {}", format.as_str().to_ascii_uppercase()));
     json!({ "saveFormat": format.as_str() })
 }
 
