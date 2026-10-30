@@ -14,6 +14,7 @@ pub use cache::{ChunkCache, build_cached, build_cached_into};
 pub mod clip;
 pub mod clouds;
 mod dim;
+pub mod emf;
 pub mod encode;
 mod fill;
 mod hatch;

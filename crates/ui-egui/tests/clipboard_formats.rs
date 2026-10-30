@@ -32,6 +32,22 @@ impl SystemClipboard for Shared {
     }
 }
 
+/// The same clipboard, but a host that takes an enhanced metafile (as on Windows).
+#[derive(Clone, Default)]
+struct WithEmf(Shared);
+
+impl SystemClipboard for WithEmf {
+    fn set(&mut self, formats: &[(Format, Vec<u8>)]) -> bool {
+        self.0.set(formats)
+    }
+    fn get(&mut self, format: Format) -> Option<Vec<u8>> {
+        self.0.get(format)
+    }
+    fn takes_emf(&self) -> bool {
+        true
+    }
+}
+
 /// The app with the real file formats (a copy travels as DXF) and the test double clipboard.
 fn app_with(clip: &Shared) -> CadApp {
     set_io(IoHooks {
@@ -72,6 +88,41 @@ fn the_app_puts_each_copy_on_the_system_clipboard_with_its_picture() {
     assert!(app.run("pasteorig", json!({})).is_err());
     let r = app.run("pasteclip", json!({ "at": [20, 0] })).unwrap();
     assert_eq!(r["handles"].as_array().map(Vec::len), Some(2));
+}
+
+#[test]
+fn a_host_that_takes_a_metafile_gets_the_vector_picture_after_the_objects() {
+    let clip = WithEmf::default();
+    set_io(IoHooks {
+        read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
+        write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    let services = Services { system_clipboard: Some(Box::new(clip.clone())), ..Services::default() };
+    let mut app = CadApp::new(Session::new(), services);
+    let ctx = egui::Context::default();
+    app.run("line", json!({ "points": [[0, 0], [10, 5]] })).unwrap();
+    app.run("selectall", json!({})).unwrap();
+    app.run("copyclip", json!({})).unwrap();
+    mirror(&mut app, &ctx);
+    let held = clip.0.0.borrow();
+    let order: Vec<Format> = held.formats.iter().map(|(f, _)| *f).collect();
+    assert_eq!(order, [Format::Drawing, Format::Emf, Format::Png, Format::Dib]);
+    let emf = &held.formats[1].1;
+    assert_eq!(&emf[40..44], b" EMF");
+    // The copied line is in it: one polyline record.
+    let mut at = cadaddy_render::emf::HEADER_BYTES as usize;
+    let mut polylines = 0;
+    while at + 8 <= emf.len() {
+        let (kind, size) =
+            (u32::from_le_bytes(emf[at..at + 4].try_into().unwrap()), u32::from_le_bytes(emf[at + 4..at + 8].try_into().unwrap()) as usize);
+        polylines += usize::from(kind == cadaddy_render::emf::EMR_POLYLINE);
+        at += size.max(8);
+    }
+    assert_eq!(polylines, 1);
 }
 
 #[test]
