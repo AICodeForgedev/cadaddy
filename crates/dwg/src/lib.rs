@@ -512,6 +512,17 @@ mod native {
         }
     }
 
+    /// The current layer (`$CLAYER`) by its name, the same way as [`current_dimstyle`]: a DWG
+    /// stores the handle of the layer, and the one read with the DXF needn't be the layer's in
+    /// the document, so the drawing reopened with layer "0" current (#2252).
+    fn current_layer(doc: &mut acadrust::CadDocument) {
+        let name = doc.header.current_layer_name.clone();
+        // The table's own lookup compares Unicode case-insensitively ("Survey_Ä" = "Survey_ä").
+        if let Some(layer) = doc.layers.get(&name) {
+            doc.header.current_layer_handle = layer.handle;
+        }
+    }
+
     fn convert(dxf: &[u8], version: Option<acadrust::DxfVersion>) -> Result<Vec<u8>, String> {
         // Reject a pathologically large DXF before handing it to the third-party decoder, which
         // allocates tables and section buffers from the input's declared sizes and cannot be
@@ -543,6 +554,7 @@ mod native {
         current_dimstyle(&mut doc);
         add_variable_dictionary(&mut doc);
         current_text_style(&mut doc);
+        current_layer(&mut doc);
         std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
             .map_err(|e| format!("DWG write: {e}"))
