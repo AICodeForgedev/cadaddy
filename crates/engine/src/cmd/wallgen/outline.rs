@@ -343,6 +343,122 @@ pub(super) fn spaces(
     out
 }
 
+/// The smallest and largest room traced on a storey's floor grid, square feet: less is a symbol's
+/// or a tag's box, more a trace that got out through an opening wider than a door.
+const ROOM_SF: (f64, f64) = (16.0, 3_000.0);
+
+/// A storey's floor for tracing its rooms: its walls drawn in with their door gaps closed, the
+/// shell's outside and its circulation's floor taken. Each room is traced once, from the first
+/// label on it; another label on the same floor finds that room again.
+pub(crate) struct Floors {
+    nx: usize,
+    ny: usize,
+    cell: f64,
+    origin: Vec2,
+    upf: f64,
+    /// A wall, outside the shell, or circulation.
+    blocked: Vec<bool>,
+    grown: Vec<bool>,
+    /// Which traced room (1-based) a cell is on; 0 none.
+    owner: Vec<u32>,
+    rooms: Vec<Vec<[Vec2; 2]>>,
+}
+
+impl Floors {
+    /// The floor of the storey the walls (centreline ends and thickness) stand on inside its shell
+    /// (rectangles), less what is `taken` (its circulation's rectangles). None for a hostile or
+    /// vast plan.
+    pub(crate) fn new(walls: &[(Vec2, Vec2, f64)], shell: &[[Vec2; 2]], upf: f64, taken: &[[Vec2; 2]]) -> Option<Floors> {
+        if shell.is_empty() || !(upf.is_finite() && upf > 0.0) {
+            return None;
+        }
+        let lo = Vec2::new(shell.iter().map(|r| r[0].x).fold(f64::INFINITY, f64::min), shell.iter().map(|r| r[0].y).fold(f64::INFINITY, f64::min));
+        let hi =
+            Vec2::new(shell.iter().map(|r| r[1].x).fold(f64::NEG_INFINITY, f64::max), shell.iter().map(|r| r[1].y).fold(f64::NEG_INFINITY, f64::max));
+        let (w, h) = (hi.x - lo.x, hi.y - lo.y);
+        if !(w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite()) {
+            return None;
+        }
+        let cell = (CELL_FT * upf).max((w * h / MAX_CELLS).sqrt());
+        let (nx, ny) = ((w / cell).ceil() as usize + 4, (h / cell).ceil() as usize + 4);
+        if nx as f64 * ny as f64 > MAX_CELLS * 1.5 {
+            return None;
+        }
+        let origin = Vec2::new(lo.x - 2.0 * cell, lo.y - 2.0 * cell);
+        let wall = raster(walls, origin, cell, nx, ny)?;
+        let inside = |p: Vec2, rects: &[[Vec2; 2]]| rects.iter().any(|[a, b]| p.x >= a.x && p.x <= b.x && p.y >= a.y && p.y <= b.y);
+        let blocked: Vec<bool> = (0..nx * ny)
+            .map(|k| {
+                let p = Vec2::new(origin.x + ((k % nx) as f64 + 0.5) * cell, origin.y + ((k / nx) as f64 + 0.5) * cell);
+                wall.get(k).copied().unwrap_or(true) || !inside(p, shell) || inside(p, taken)
+            })
+            .collect();
+        let grown = grow(&blocked, nx, ny, (DOOR_FT * upf / cell).ceil() as usize);
+        Some(Floors { nx, ny, cell, origin, upf, blocked, grown, owner: vec![0; nx * ny], rooms: Vec::new() })
+    }
+
+    /// The room whose floor holds `at` (a room label): which one (traced in order) and its
+    /// rectangles, traced the first time a label is on it. Why not, for a label on a wall, outside
+    /// the shell or on the circulation, and for a trace smaller or bigger than a room ([`ROOM_SF`]).
+    pub(crate) fn room_at(&mut self, at: Vec2) -> Result<(usize, &[[Vec2; 2]]), String> {
+        let (nx, ny, cell) = (self.nx, self.ny, self.cell);
+        let (i0, j0) = ((at.x - self.origin.x) / cell, (at.y - self.origin.y) / cell);
+        if !(i0 >= 0.0 && j0 >= 0.0 && (i0 as usize) < nx && (j0 as usize) < ny) {
+            return Err("outside the shell".into());
+        }
+        let k0 = j0 as usize * nx + i0 as usize;
+        if self.blocked.get(k0).copied().unwrap_or(true) {
+            return Err("on a wall, the circulation or outside the shell".into());
+        }
+        let known = |owner: &[u32], k: usize| owner.get(k).copied().filter(|o| *o > 0).map(|o| o as usize - 1);
+        if let Some(n) = known(&self.owner, k0) {
+            return Ok((n, &self.rooms[n]));
+        }
+        let r = (DOOR_FT * self.upf / cell).ceil() as usize;
+        let reach = (LABEL_REACH_FT * self.upf / cell).ceil() as usize;
+        let Some(start) = nearest(&self.blocked, &self.grown, nx, ny, k0, reach) else {
+            return Err(format!("no floor within {LABEL_REACH_FT}' (walls closer than a door's width)"));
+        };
+        if let Some(n) = known(&self.owner, start) {
+            return Ok((n, &self.rooms[n]));
+        }
+        let mut floor = vec![false; nx * ny];
+        let mut queue = VecDeque::from([start]);
+        floor[start] = true;
+        while let Some(k) = queue.pop_front() {
+            let (i, j) = (k % nx, k / nx);
+            for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                let q = b * nx + a;
+                if a < nx && b < ny && !self.grown[q] && !floor[q] {
+                    floor[q] = true;
+                    queue.push_back(q);
+                }
+            }
+        }
+        // Back out to the walls' faces; a cell another room already has stays its.
+        let floor: Vec<bool> = grow(&floor, nx, ny, r)
+            .into_iter()
+            .enumerate()
+            .map(|(k, f)| f && !self.blocked.get(k).copied().unwrap_or(true) && self.owner.get(k) == Some(&0))
+            .collect();
+        let area = floor.iter().filter(|f| **f).count() as f64 * cell * cell / (self.upf * self.upf);
+        if !(ROOM_SF.0..=ROOM_SF.1).contains(&area) {
+            return Err(format!("traced {area:.0} sf, not {:.0}–{:.0} sf", ROOM_SF.0, ROOM_SF.1));
+        }
+        let (ox, oy) = (self.origin.x, self.origin.y);
+        let rects = rects_of(&floor, nx, ny, |i| ox + i as f64 * cell, |j| oy + j as f64 * cell).ok_or("too many pieces")?;
+        let n = self.rooms.len();
+        let id = u32::try_from(n + 1).map_err(|_| "too many rooms".to_string())?;
+        for (o, f) in self.owner.iter_mut().zip(&floor) {
+            if *f {
+                *o = id;
+            }
+        }
+        self.rooms.push(rects);
+        Ok((n, &self.rooms[n]))
+    }
+}
+
 /// The cell nearest `k0` (within `reach` cells, through open cells) that is open once the gaps
 /// are closed (`grown` clear).
 fn nearest(blocked: &[bool], grown: &[bool], nx: usize, ny: usize, k0: usize, reach: usize) -> Option<usize> {
@@ -606,6 +722,24 @@ mod tests {
         assert!(e[0] > 9.0 && e[0] < 11.5 && e[2] > 128.0, "corridor {e:?}");
         assert!(e[1] > 18.5 && e[3] < 27.5, "corridor {e:?}");
         assert!(sf_of(corridor) < 120.0 * 7.5, "corridor {} sf", sf_of(corridor));
+    }
+
+    #[test]
+    fn a_room_is_its_floor_inside_its_walls_and_two_labels_in_it_find_it_once() {
+        let (walls, shell) = storey();
+        let p = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        let corridor = spaces(&walls, &shell, 12.0, &[(CirculationKind::Corridor, p(50.0, 23.0))]);
+        let taken = corridor[0].clone().unwrap();
+        let mut f = Floors::new(&walls, &shell, 12.0, &taken).unwrap();
+        // A guest room between the party walls at 40' and 70', its door onto the corridor closed.
+        let (a, rects) = f.room_at(p(55.0, 10.0)).unwrap();
+        let want = 29.5 * 19.5;
+        assert!((sf_of(rects) - want).abs() < 0.05 * want, "room {} sf, want {want}", sf_of(rects));
+        // Its number elsewhere in it finds it again; the next room is its own; the corridor is taken.
+        assert_eq!(f.room_at(p(65.0, 5.0)).unwrap().0, a);
+        let (b, _) = f.room_at(p(85.0, 10.0)).unwrap();
+        assert_ne!(a, b);
+        assert!(f.room_at(p(50.0, 23.0)).is_err());
     }
 
     #[test]

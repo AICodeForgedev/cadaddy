@@ -755,6 +755,8 @@ struct Traced {
     cached_bounds: cadaddy_geom::Bounds2,
     /// A corridor, stair or hoistway of the spec's circulation: its outline is its traced floor.
     circulation: bool,
+    /// Traced on its storey's floor grid (inside the walls themselves), as circulation is.
+    on_floor: bool,
 }
 
 /// Grid cell size for the spatial index of traced rooms (Q6029): two rooms are the same only when
@@ -810,6 +812,9 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         ((c.x / ROOM_GRID_CELL).floor() as i64, (c.y / ROOM_GRID_CELL).floor() as i64)
     };
     let mut outline_cache = None;
+    // Each storey's floor grid, made the first time one of its rooms is traced.
+    let mut floors: std::collections::HashMap<String, Option<wallgen::Floors>> = std::collections::HashMap::new();
+    let mut floor_misses: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     // Names first, then numbers: a number inside a room already traced from its name numbers that
     // room (a guest room's number and its unit type sit in different parts of it, and traced from
     // each the room came out twice).
@@ -846,6 +851,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
             cached_area: area,
             cached_bounds: bounds,
             circulation: true,
+            on_floor: true,
         });
     }
     let n_circulation = out.len();
@@ -855,6 +861,14 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         }
         if super::perceive::geometry::room_number(&text) {
             let here = level_at(&sp.levels, at.x, at.y).map(|l| l.name.clone());
+            // One number per level: a room of it numbered already (by its own label on the plan,
+            // read first) keeps it; another trade's tag for it that lands elsewhere numbers nothing.
+            if out
+                .iter()
+                .any(|o| here.as_ref().is_none_or(|l| *l == o.level) && o.number.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(text.trim())))
+            {
+                continue;
+            }
             // The smallest room traced round the number (a trace from another label that got out
             // into the next room holds it too).
             if let Some(o) = out
@@ -904,9 +918,36 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         else {
             continue;
         };
-        let Ok(loops) = super::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
-        let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
-        let outline = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
+        // On a storey whose circulation was traced: the room on its floor (inside its walls, door
+        // gaps closed, in what the circulation leaves); else the drawn outline round the tag.
+        let on_floor = floors
+            .entry(level.name.to_ascii_uppercase())
+            .or_insert_with(|| wallgen::room_floors(d, sp, &level.name))
+            .as_mut()
+            .and_then(|f| match f.room_at(at) {
+                Ok(found) => Some(found),
+                Err(why) => {
+                    *floor_misses.entry(why).or_default() += 1;
+                    None
+                }
+            })
+            .map(|(_, rects)| {
+                cadaddy_walk3d::Circulation { rects: rects.iter().map(|[a, b]| [[a.x, a.y], [b.x, b.y]]).collect(), ..Default::default() }
+                    .outline()
+                    .into_iter()
+                    .map(|p| Vec2::new(p[0], p[1]))
+                    .collect::<Vec<Vec2>>()
+            })
+            .filter(|o| o.len() >= 3);
+        let traced_on_floor = on_floor.is_some();
+        let outline = match on_floor {
+            Some(o) => o,
+            None => {
+                let Ok(loops) = super::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
+                let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
+                Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3)
+            }
+        };
         if outline.len() < 3 || cadaddy_geom::shoelace(&outline).abs() < 1e-9 {
             continue;
         }
@@ -970,9 +1011,17 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
                     cached_area: area,
                     cached_bounds: bounds,
                     circulation: false,
+                    on_floor: traced_on_floor,
                 });
             }
         }
+    }
+    if floors.values().any(Option::is_some) {
+        let on = out.iter().filter(|t| t.on_floor && !t.circulation).count();
+        super::guided::progress_line(&format!(
+            "  rooms traced on the storeys' floors: {on}; by the drawing: {}; labels the floors refused: {floor_misses:?}",
+            out.iter().filter(|t| !t.on_floor).count()
+        ));
     }
     for (i, r) in sp.rooms.iter().enumerate() {
         if !out.iter().any(|t| t.room == Some(i)) {
@@ -1177,8 +1226,9 @@ fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f6
         bounds.iter().map(|(l, polys)| (l, cadaddy_geom::Bounds2::from_points(polys.iter().flatten().copied()))).collect();
     let mut kept: Vec<Traced> = Vec::new();
     for mut t in std::mem::take(rooms) {
-        // A corridor, stair or hoistway was traced on the walls themselves.
-        if t.circulation {
+        // A corridor, stair or hoistway, or a room on its storey's floor, was traced on the walls
+        // themselves.
+        if t.on_floor {
             keep_room(&mut kept, t);
             continue;
         }
@@ -1224,6 +1274,9 @@ fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f6
     }
     for (level, n) in &unwalled {
         notes.push(format!("{level}: {n} room tag(s) not inside built walls (an enlarged view, a note's or the title block's box) — no room built."));
+    }
+    if !unwalled.is_empty() {
+        super::guided::progress_line(&format!("  room tags not inside built walls (no room): {unwalled:?}"));
     }
     // One room per number and level (its tag's, else its spec room's): a corridor's, stair's or
     // hoistway's (its number tag on a piece of it the trace left out is no room of its own), else
@@ -2053,6 +2106,7 @@ mod tests {
             number: number.map(String::from),
             cached_bounds: bounds,
             circulation,
+            on_floor: circulation,
         }
     }
 

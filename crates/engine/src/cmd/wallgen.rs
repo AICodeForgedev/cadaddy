@@ -20,6 +20,7 @@ use super::*;
 use crate::{Result, Session};
 
 mod outline;
+pub(crate) use outline::Floors;
 
 /// The extended data application that marks what WALLGEN made (part, level, source object).
 pub const APP: &str = "CADADDY_WALLGEN";
@@ -53,7 +54,42 @@ pub fn specs() -> Vec<CommandSpec> {
         .menu(&["Draw", "Modeling", "3D Building from Plan"])
         .params(
             "{rules?: walk rules (as in <drawing>.walk.json), rulesFile?: path, layers?: wall layers (wildcards, comma-separated; default the rules' wall layers), slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true (remove what WALLGEN made)} → {walls, doors, windows, floors, ceilings, levels, removed, notes: [why walls were or weren't found]}",
-        )]
+        ),
+        CommandSpec::new("wallgen.plan", "Planned Walls", run_plan)
+            .params("{level: name (of the building spec), window?: [[x,y],[x,y]] (only walls with an end inside), limit?: walls listed (2000, at most 20000)} → {level, walls: [{a: [x,y], b: [x,y], thickness}], total, truncated, notes}: what the level's plan was read as — the walls model.build would build there (centrelines and thickness, sheet units, before openings are cut)")
+            .noundo(),
+    ]
+}
+
+/// Most walls `wallgen.plan` lists.
+const MAX_PLAN_LIST: usize = 20_000;
+
+fn run_plan(s: &mut Session, p: &Value) -> Result<Value> {
+    let (sp, _) = super::bspec::current(s, "wallgen.plan")?;
+    let name = p.get("level").and_then(Value::as_str).ok_or_else(|| bad("wallgen.plan", "`level` is required"))?;
+    let g = WallGen { rules: sp.to_rules(), auto: false, slab_ft: 0.0, layers: None, spec: Some(sp.clone()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let level =
+        g.rules.levels.iter().find(|l| l.name.eq_ignore_ascii_case(name.trim())).ok_or_else(|| bad("wallgen.plan", format!("no level {name:?}")))?;
+    let window = p.get("window").and_then(Value::as_array).and_then(|w| {
+        let pt = |v: &Value| Some(Vec2::new(v.get(0)?.as_f64()?, v.get(1)?.as_f64()?));
+        let (a, b) = (pt(w.first()?)?, pt(w.get(1)?)?);
+        Some((Vec2::new(a.x.min(b.x), a.y.min(b.y)), Vec2::new(a.x.max(b.x), a.y.max(b.y))))
+    });
+    let limit = p.get("limit").and_then(Value::as_u64).map_or(2000, |n| (n as usize).min(MAX_PLAN_LIST));
+    let mut notes = Vec::new();
+    let pl = plan_level(s.doc()?, &g, level, upf, &mut notes);
+    let inside = |q: Vec2| window.is_none_or(|(lo, hi)| q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y);
+    let walls: Vec<Value> = pl
+        .walls
+        .iter()
+        .filter(|w| inside(w.a) || inside(w.b))
+        .map(|w| json!({"a": [w.a.x, w.a.y], "b": [w.b.x, w.b.y], "thickness": w.thickness}))
+        .collect();
+    let total = walls.len();
+    Ok(
+        json!({"level": level.name, "walls": walls.into_iter().take(limit).collect::<Vec<_>>(), "total": total, "truncated": total > limit, "notes": notes}),
+    )
 }
 
 /// The layer each part goes on.
@@ -578,6 +614,30 @@ pub(crate) fn shells(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> Vec<Stor
         out.push(Storey { level: level.clone(), shell: shell.clone(), circulation, missed });
     }
     out
+}
+
+/// A storey's floor to trace its rooms on ([`Floors`]): its walls planned as `model.build` plans
+/// them, inside its shell, its circulation (`sp.circulation`) taken. None for the roof, a storey
+/// whose walls don't close round the building, or one whose circulation wasn't traced (its shell
+/// wasn't trusted).
+pub(crate) fn room_floors(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, level: &str) -> Option<Floors> {
+    if !sp.circulation.iter().any(|c| c.level.eq_ignore_ascii_case(level)) {
+        return None;
+    }
+    let g = WallGen { rules: sp.to_rules(), auto: false, slab_ft: 0.0, layers: None, spec: Some(sp.clone()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let lv = g.rules.levels.iter().find(|l| l.sheet.is_none() && l.name.eq_ignore_ascii_case(level) && !roof_level(&g.rules.levels, &l.name))?;
+    let pl = plan_level(d, &g, lv, upf, &mut Vec::new());
+    let (lo, hi) = pl.footprint()?;
+    let walls: Vec<(Vec2, Vec2, f64)> = pl.walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
+    let shell = outline::building_whole(&walls, lo, hi, upf)?;
+    let taken: Vec<[Vec2; 2]> = sp
+        .circulation
+        .iter()
+        .filter(|c| c.level.eq_ignore_ascii_case(level))
+        .flat_map(|c| c.rects.iter().map(|[a, b]| [Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1])]))
+        .collect();
+    Floors::new(&walls, &shell.rects, upf, &taken)
 }
 
 /// How much two storeys' shells may differ in size (feet) and still be the same building, their
@@ -1158,6 +1218,14 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         None => matches!(g.rules.layer(layer), Some(cadaddy_walk3d::LayerKind::Wall { .. })),
     };
     let wall_ents: Vec<&Arc<Entity>> = ents.iter().copied().filter(|e| on_walls(&e.common.layer)).collect();
+    // A print screens what isn't built there in grey (furniture, fixtures, grids, other trades'
+    // work): on a plan with solid linework, a screened line is no wall's face.
+    let solid = wall_ents.iter().filter(|e| !screened(e.common.color)).count();
+    let (wall_ents, screened_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) = if solid > 0 && solid as f64 >= SOLID_SHARE * wall_ents.len() as f64 {
+        wall_ents.into_iter().partition(|e| !screened(e.common.color))
+    } else {
+        (wall_ents, Vec::new())
+    };
     let rule_names = || match &g.layers {
         Some(p) => p.clone(),
         None => g
@@ -1195,7 +1263,14 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     let (centre_ents, pair_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) =
         wall_ents.iter().copied().partition(|e| wall_type(g, &e.common.layer).is_some_and(|t| t.from == cadaddy_walk3d::WallFrom::Centerline));
     let segs = segments(&pair_ents);
-    let found = pairs(d, &segs, &lim);
+    let mut found = pairs(d, &segs, &lim);
+    // A screened pair in line with a solid wall and meeting its end fills a gap in the wall (a
+    // window's glazing drawn lighter): it is wall too.
+    if !screened_ents.is_empty() && !found.is_empty() {
+        let fills: Vec<_> =
+            pairs(d, &segments(&screened_ents), &lim).into_iter().filter(|p| fills_a_wall(p.c0, p.c1, p.thickness, &found, k)).collect();
+        found.extend(fills);
+    }
     if found.is_empty() && centre_ents.is_empty() {
         notes.push(format!(
             "{}: {} objects on the wall layers, but no parallel faces 2½\"–20\" apart (single-line walls are built one per line).",
@@ -1607,6 +1682,42 @@ fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
 /// Walls looked at for the building's outline, at most (a level; hostile drawings).
 const MAX_CLUSTERED: usize = 20_000;
 
+/// Whether a pair (centreline `a`–`b`, `t` thick) runs in line with one of the walls and meets
+/// its end (within its thickness and 3"): the rest of that wall across a gap, not a thing beside it.
+fn fills_a_wall(a: Vec2, b: Vec2, t: f64, walls: &[super::perceive::geometry::Pair], k: f64) -> bool {
+    let len = a.dist(b);
+    if !(len > 1e-9) {
+        return false;
+    }
+    let u = (b - a) * (1.0 / len);
+    walls.iter().any(|w| {
+        let wl = w.c0.dist(w.c1);
+        if !(wl > 1e-9) || (w.c1 - w.c0).cross(u).abs() > 0.05 * wl {
+            return false;
+        }
+        let off = (w.c0 - a).cross(u).abs();
+        let reach = t.max(w.thickness) + 3.0 * k;
+        off <= 0.5 * t.max(w.thickness) && [a, b].iter().any(|p| p.dist(w.c0).min(p.dist(w.c1)) <= reach)
+    })
+}
+
+/// The share of a plan's lines (on its wall layers) drawn solid for its screened lines to be left
+/// out of its walls: less, the plan is drawn in grey throughout (an underlay, a faded set).
+const SOLID_SHARE: f64 = 0.2;
+
+/// Whether a colour is a light screen: a grey nearer white than black (true colour, or ACI 9,
+/// 253, 254), which a print draws what isn't built in. A mid grey (ACI 8) can be built work drawn
+/// lighter (the windows in a wall).
+fn screened(c: cadaddy_color::Color) -> bool {
+    match c {
+        cadaddy_color::Color::True(cadaddy_color::Rgb(r, g, b)) => {
+            r.abs_diff(g) <= 8 && g.abs_diff(b) <= 8 && r.abs_diff(b) <= 8 && (150..=240).contains(&r)
+        }
+        cadaddy_color::Color::Index(i) => matches!(i, 9 | 253 | 254),
+        _ => false,
+    }
+}
+
 /// The root of `i` in a union-find forest (halving the path on the way).
 fn root(parent: &mut [usize], mut i: usize) -> usize {
     for _ in 0..parent.len() {
@@ -1917,6 +2028,101 @@ fn one_door_per_opening(leaves: &mut Vec<Leaf>, tol: f64) -> usize {
 mod tests {
     use super::*;
     use cadaddy_walk3d::CirculationKind::{Corridor, Hoistway, Stair};
+
+    /// The walls planned on a 20' × 10' room of 6" walls (solid lines, or `all_grey`) with a bed's
+    /// headboard drawn in it as two screened lines 3" apart.
+    fn planned_with_a_grey_headboard(all_grey: bool) -> usize {
+        let mut d = Drawing::new_imperial();
+        let grey = cadaddy_color::Color::True(cadaddy_color::Rgb(170, 170, 170));
+        let mut add = |a: (f64, f64), b: (f64, f64), screened: bool| {
+            let h = Handle(d.handseed);
+            d.handseed = h.0 + 1;
+            let line = cadaddy_doc::Line { a: Vec3::new(a.0 * 12.0, a.1 * 12.0, 0.0), b: Vec3::new(b.0 * 12.0, b.1 * 12.0, 0.0) };
+            let mut e = Entity::new(h, EntityKind::Line(line));
+            e.common.layer = "A-WALL".into();
+            if screened || all_grey {
+                e.common.color = grey;
+            }
+            d.model.push(e);
+        };
+        for (a, b) in [((0.0, 0.0), (20.0, 0.0)), ((20.0, 0.0), (20.0, 10.0)), ((20.0, 10.0), (0.0, 10.0)), ((0.0, 10.0), (0.0, 0.0))] {
+            add(a, b, false);
+        }
+        for (a, b) in [((0.5, 0.5), (19.5, 0.5)), ((19.5, 0.5), (19.5, 9.5)), ((19.5, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))] {
+            add(a, b, false);
+        }
+        add((5.0, 9.0), (10.0, 9.0), true);
+        add((5.0, 8.75), (10.0, 8.75), true);
+        let rules: Rules = serde_json::from_value(json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 9.5, "ceiling_ft": 8, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        }))
+        .unwrap();
+        let level = rules.levels[0].clone();
+        let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
+        plan_level(&d, &g, &level, 12.0, &mut Vec::new()).walls.len()
+    }
+
+    #[test]
+    fn grey_glazing_in_line_with_a_wall_fills_its_gap_but_a_grey_headboard_is_no_wall() {
+        let mut d = Drawing::new_imperial();
+        let grey = cadaddy_color::Color::True(cadaddy_color::Rgb(170, 170, 170));
+        let mut add = |a: (f64, f64), b: (f64, f64), screened: bool| {
+            let h = Handle(d.handseed);
+            d.handseed = h.0 + 1;
+            let line = cadaddy_doc::Line { a: Vec3::new(a.0 * 12.0, a.1 * 12.0, 0.0), b: Vec3::new(b.0 * 12.0, b.1 * 12.0, 0.0) };
+            let mut e = Entity::new(h, EntityKind::Line(line));
+            e.common.layer = "A-WALL".into();
+            if screened {
+                e.common.color = grey;
+            }
+            d.model.push(e);
+        };
+        // The room's south wall broken for a 4' window (8'–12'), its glazing two grey lines in line.
+        for (a, b) in [
+            ((0.0, 0.0), (8.0, 0.0)),
+            ((12.0, 0.0), (20.0, 0.0)),
+            ((20.0, 0.0), (20.0, 10.0)),
+            ((20.0, 10.0), (0.0, 10.0)),
+            ((0.0, 10.0), (0.0, 0.0)),
+        ] {
+            add(a, b, false);
+        }
+        for (a, b) in
+            [((0.5, 0.5), (8.0, 0.5)), ((12.0, 0.5), (19.5, 0.5)), ((19.5, 0.5), (19.5, 9.5)), ((19.5, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))]
+        {
+            add(a, b, false);
+        }
+        add((8.0, 0.1), (12.0, 0.1), true);
+        add((8.0, 0.4), (12.0, 0.4), true);
+        add((5.0, 9.0), (10.0, 9.0), true);
+        add((5.0, 8.75), (10.0, 8.75), true);
+        let rules: Rules = serde_json::from_value(json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 9.5, "ceiling_ft": 8, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        }))
+        .unwrap();
+        let level = rules.levels[0].clone();
+        let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
+        let walls = plan_level(&d, &g, &level, 12.0, &mut Vec::new()).walls;
+        // The two pieces of the south wall, the glazing between them, and the other three walls.
+        assert_eq!(walls.len(), 6, "{:?}", walls.iter().map(|w| (w.a / 12.0, w.b / 12.0)).collect::<Vec<_>>());
+        assert!(walls.iter().all(|w| w.a.y.min(w.b.y) / 12.0 < 0.5 || w.a.y.max(w.b.y) / 12.0 > 9.0 || (w.a.x - w.b.x).abs() < 1.0));
+    }
+
+    #[test]
+    fn a_screened_grey_pair_is_furniture_not_a_wall_unless_the_plan_is_all_grey() {
+        assert_eq!(planned_with_a_grey_headboard(false), 4);
+        // An underlay drawn in grey throughout: every pair is read as before (the headboard too).
+        assert!(planned_with_a_grey_headboard(true) > 4);
+        assert!(screened(cadaddy_color::Color::True(cadaddy_color::Rgb(170, 170, 170))) && screened(cadaddy_color::Color::Index(9)));
+        // A mid grey (a window drawn lighter in its wall) is not.
+        assert!(!screened(cadaddy_color::Color::True(cadaddy_color::Rgb(128, 128, 128))) && !screened(cadaddy_color::Color::Index(8)));
+        assert!(!screened(cadaddy_color::Color::Index(7)) && !screened(cadaddy_color::Color::True(cadaddy_color::Rgb(0, 0, 0))));
+        assert!(!screened(cadaddy_color::Color::True(cadaddy_color::Rgb(255, 0, 0))) && !screened(cadaddy_color::Color::ByLayer));
+    }
 
     #[test]
     fn a_label_names_a_corridor_a_stair_or_an_elevator_and_a_note_does_not() {
