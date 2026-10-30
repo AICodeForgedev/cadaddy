@@ -2042,10 +2042,11 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     let cut_off = !tags.iter().rev().take(4).any(|t| t.code == 0 && t.str().trim().eq_ignore_ascii_case("EOF"));
     let outside = outside_sections(&tags);
     // The sections take the tags (no second copy of the file's text).
-    let secs = cadaddy_dxf::sections_owned(tags);
+    let mut secs = cadaddy_dxf::sections_owned(tags);
     if secs.is_empty() {
         return Err(IoError::Format("no sections found".into()));
     }
+    let undefined = drop_undefined(&mut secs);
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
     // A file without $INSUNITS declares no units (#1209); only new drawings take the template's.
@@ -2276,7 +2277,76 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     if cut_off {
         d.read_notes.push(CUT_OFF_NOTE.into());
     }
+    if undefined.0 > 0 {
+        let n = undefined.0;
+        d.read_notes.push(format!(
+            "DXF: {n} object{} had undefined (NaN/inf) coordinates and {} dropped",
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "was" } else { "were" }
+        ));
+    }
+    if undefined.1 > 0 {
+        let n = undefined.1;
+        d.read_notes.push(format!("DXF: {n} undefined (NaN/inf) number{} in the header, tables or objects read as 0", if n == 1 { "" } else { "s" }));
+    }
     Ok(d)
+}
+
+/// Objects with a NaN or infinite number (the parser keeps those as NaN) are dropped from the
+/// ENTITIES section and from blocks, with the vertices and attributes that follow a dropped
+/// POLYLINE or INSERT; returns how many objects were dropped and how many other records
+/// (tables, header, objects) hold such a number, which reads as 0 there.
+fn drop_undefined(secs: &mut [cadaddy_dxf::Section]) -> (usize, usize) {
+    // Coordinates (10-39) decide where an object is; other numbers (radii, pattern line offsets,
+    // extended data) have their own readers, which take a bad one for 0 or skip it.
+    let bad = |t: &Tag| (10..=39).contains(&t.code) && matches!(t.value, cadaddy_dxf::Value::Real(r) if !r.is_finite());
+    let (mut objects, mut others) = (0usize, 0usize);
+    for s in secs.iter_mut() {
+        if !s.tags.iter().any(bad) {
+            continue;
+        }
+        if !matches!(s.name.as_str(), "ENTITIES" | "BLOCKS") {
+            others = others.saturating_add(s.tags.iter().filter(|t| bad(t)).count());
+            continue;
+        }
+        let tags = std::mem::take(&mut s.tags);
+        let mut kept = Vec::with_capacity(tags.len());
+        let mut i = 0;
+        // Inside a dropped POLYLINE or INSERT with attributes, up to its SEQEND.
+        let mut in_dropped_group = false;
+        // Where the open POLYLINE or INSERT-with-attributes group began in `kept`.
+        let mut group_at: Option<usize> = None;
+        while i < tags.len() {
+            let end = tags.get(i + 1..).and_then(|r| r.iter().position(|t| t.code == 0)).map_or(tags.len(), |p| i + 1 + p);
+            let rec = tags.get(i..end).unwrap_or(&[]);
+            let kind = rec.first().map(|t| t.str().to_ascii_uppercase()).unwrap_or_default();
+            let structural = matches!(kind.as_str(), "BLOCK" | "ENDBLK" | "SEQEND");
+            if in_dropped_group {
+                if kind == "SEQEND" {
+                    in_dropped_group = false;
+                }
+            } else if !structural && rec.iter().any(bad) {
+                objects = objects.saturating_add(1);
+                if let Some(at) = group_at.take().filter(|_| matches!(kind.as_str(), "VERTEX" | "ATTRIB")) {
+                    // A vertex or attribute with an undefined number: its whole polyline or insert goes.
+                    kept.truncate(at);
+                    in_dropped_group = true;
+                } else {
+                    in_dropped_group = kind == "POLYLINE" || (kind == "INSERT" && rec.iter().any(|t| t.code == 66 && t.value.as_i64() == 1));
+                }
+            } else {
+                if kind == "POLYLINE" || (kind == "INSERT" && rec.iter().any(|t| t.code == 66 && t.value.as_i64() == 1)) {
+                    group_at = Some(kept.len());
+                } else if kind == "SEQEND" {
+                    group_at = None;
+                }
+                kept.extend(rec.iter().cloned());
+            }
+            i = end;
+        }
+        s.tags = kept;
+    }
+    (objects, others)
 }
 
 fn count_skipped(skipped: &mut std::collections::BTreeMap<String, usize>, section: &str, n: usize) {

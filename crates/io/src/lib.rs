@@ -256,6 +256,14 @@ fn without_bom(bytes: &[u8]) -> &[u8] {
 /// Read a drawing; the format comes from the content (DXF ASCII/binary, DWG) or the name
 /// (SVG and gzip-compressed SVGZ); a .cdy file is known by its content.
 pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
+    // Nothing to read is never an empty drawing, whatever the format.
+    if without_bom(bytes).iter().all(u8::is_ascii_whitespace) {
+        return Err(IoError::Format(if bytes.is_empty() {
+            "the file is empty (0 bytes)".into()
+        } else {
+            "the file has no content (only blank space)".into()
+        }));
+    }
     if cadaddy_walk3d::package::is_package(bytes) {
         return walkpkg::read(bytes);
     }
