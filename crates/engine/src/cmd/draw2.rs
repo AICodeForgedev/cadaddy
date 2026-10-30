@@ -78,7 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(TanCircleM::new(false)))),
         CommandSpec::new("ellipse.axis", "Axis, End", run_ellipse_axis)
             .menu(&["Draw", "Ellipse", "Axis, End"])
-            .params("{p1, p2, distance} | {p1, p2, p3} (axis endpoints, then half the other axis)")
+            .params("{p1, p2, distance} | {p1, p2, p3} (axis endpoints, then half the other axis: a distance, or a point that far from the center)")
             .interactive(|_| Ok(super::draw::ellipse_machine(false, false))),
         CommandSpec::new("ellipse.arc", "Elliptical Arc", run_ellipse_arc)
             .menu(&["Draw", "Ellipse", "Arc"])
@@ -677,10 +677,8 @@ fn axis_ellipse_params(cmd: &str, p: &Value) -> Result<Ellipse> {
     let p1 = point_req(cmd, p, "p1")?;
     let p2 = point_req(cmd, p, "p2")?;
     let half = match point_param(p, "p3") {
-        Some(p3) => {
-            let ax = Line::new(p1, p2);
-            ax.project(p3).dist(p3)
-        }
+        // As at the prompt: the point's distance from the center, not from the first axis.
+        Some(p3) => p3.dist(p1.mid(p2)),
         None => f64_req(cmd, p, "distance")?,
     };
     ellipse_from_axis(p1, p2, half).ok_or_else(|| bad(cmd, "degenerate ellipse"))
