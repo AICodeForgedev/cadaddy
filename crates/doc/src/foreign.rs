@@ -96,7 +96,7 @@ impl Foreign {
         for rec in data_store_records(&self.data_store) {
             let is_record = rec.first().is_some_and(|t| t.value.trim().eq_ignore_ascii_case("ACDSRECORD"));
             if is_record && rec.iter().any(|t| t.code == 2 && t.value.trim().eq_ignore_ascii_case("ASM_Data")) {
-                out.extend(rec.iter().filter(|t| t.code == 320).filter_map(|t| Handle::parse_hex(t.value.trim())));
+                out.extend(data_store_owner(rec).and_then(|t| Handle::parse_hex(t.value.trim())));
             }
         }
         out
@@ -151,7 +151,7 @@ pub fn data_store_records(tags: &[RawTag]) -> Vec<&[RawTag]> {
 /// Whether an entity's groups hold SAT text: groups 1 and 3 inside its `AcDbModelerGeometry`
 /// subclass. A file of a version before the subclass markers has no `100` groups: all of its
 /// groups (before the extended data) are the entity's.
-fn has_sat_text(tags: &[RawTag]) -> bool {
+pub fn has_sat_text(tags: &[RawTag]) -> bool {
     let own = tags.iter().take_while(|r| r.code < 1000);
     let marked = tags.iter().take_while(|r| r.code < 1000).any(|r| r.code == 100);
     let mut in_modeler = !marked;
@@ -163,4 +163,10 @@ fn has_sat_text(tags: &[RawTag]) -> bool {
         }
     }
     false
+}
+
+/// The group naming the entity a data store record belongs to: its first `320`. A record is kept
+/// or dropped by this handle alone, in the writer and wherever the store is read.
+pub fn data_store_owner(record: &[RawTag]) -> Option<&RawTag> {
+    record.iter().find(|t| t.code == 320)
 }
