@@ -15,7 +15,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("walk.publish", "Publish Walkthrough", run)
             .menu(&["View", "Walk and Fly", "Publish Walkthrough"])
-            .params("{path?: where to write the .cdywalk (default beside the drawing, same name; on the web a download)} → {path, bytes, files: [names], spec: \"drawing\"|\"drafted\", model: bool (the built model is in it as glTF), lightmap: bool}"),
+            .params("{path?: where to write the .cdywalk (default beside the drawing, same name, or NAME-walk.cdywalk when that exists; on the web a download), force?: bool (replace an existing `path`)} → {path, bytes, files: [names], spec: \"drawing\"|\"drafted\", model: bool (the built model is in it as glTF), lightmap: bool}"),
     ]
 }
 
@@ -76,15 +76,28 @@ pub fn package(s: &mut Session) -> Result<(Package, Value)> {
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "walk.publish";
+    let mut moved = false;
     let path = match str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()) {
-        Some(x) => x.to_string(),
-        None => default_path(s)?,
+        Some(x) => {
+            let x = super::exchange::output_path(s, cmd, x, &[cadaddy_walk3d::package::EXTENSION])?;
+            super::exchange::refuse_existing(cmd, p, &x)?;
+            x
+        }
+        None => {
+            let (path, m) = super::exchange::unused_path(&default_path(s)?, "walk");
+            moved = m;
+            path
+        }
     };
     let (pkg, mut info) = package(s)?;
     let bytes = pkg.encode().map_err(|e| bad(cmd, e))?;
     super::file::store_keeping(&path, &bytes, false)?;
+    if moved {
+        s.echo("A walkthrough of that name already exists, so it was kept.".to_string());
+    }
     s.echo(format!("Walkthrough published: {path} (open it in CADaddy, on the desktop or the web, to walk it)."));
     info["path"] = json!(path);
+    info["keptExisting"] = json!(moved);
     info["bytes"] = json!(bytes.len());
     Ok(info)
 }
