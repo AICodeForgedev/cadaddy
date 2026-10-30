@@ -205,7 +205,9 @@ pub fn grips(d: &Drawing, insert: Handle) -> Vec<DynGrip> {
                     Some(Value::Points { base, end }) => (*base, *end),
                     _ => (*base, *end),
                 };
-                let id = if p.grips.len() >= 2 { grip(1) } else { grip(0) };
+                // A polar and an XY parameter's grip is its end's; a file may list four slots.
+                let (first, second) = if matches!(p.kind, ParameterKind::Polar { .. } | ParameterKind::Xy { .. }) { (1, 0) } else { (0, 1) };
+                let id = if grip(first) != 0 { grip(first) } else { grip(second) };
                 if shown(p.node, id) {
                     let shape = match &p.kind {
                         ParameterKind::Polar { .. } => GripShape::Polar,

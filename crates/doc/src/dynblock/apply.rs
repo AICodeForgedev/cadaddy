@@ -677,6 +677,10 @@ fn apply(
             if !handled.insert(*h) {
                 continue;
             }
+            // The objects of a polar stretch that only turn do not move with the end point.
+            if matches!(&a.kind, ActionKind::PolarStretch { rotate, .. } if rotate.contains(h)) {
+                continue;
+            }
             if let Some(node) = param_of.get(h) {
                 // A parameter in the selection is carried along: its points in the frame. Which
                 // points are in it is decided where the dynamic block has them (AutoCAD evaluates

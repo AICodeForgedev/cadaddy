@@ -269,17 +269,23 @@ fn tag_objects(d: &mut Drawing, name: &str) {
     }
 }
 
-/// The graph's members (handle and graph id), in order.
+/// The graph's members (handle and graph id), in order. Each member is a group of `91` (its place
+/// in the graph), `93` (flags), `95` (its graph id), `360` (the object) and four `92` edge slots;
+/// an older layout of ours had the id in `91` and `-1` in `95`, which is still read.
 fn members(d: &Drawing, graph: Handle) -> Vec<(Handle, i32)> {
     let Some(g) = d.foreign.objects.iter().find(|o| o.handle == graph) else { return Vec::new() };
     let mut out = Vec::new();
-    let mut node = 0;
+    let (mut index, mut node) = (0, None);
     for t in &g.tags {
         match t.code {
-            91 => node = t.value.trim().parse().unwrap_or(0),
+            91 => {
+                index = t.value.trim().parse().unwrap_or(0);
+                node = None;
+            }
+            95 => node = t.value.trim().parse::<i32>().ok().filter(|n| *n >= 0),
             360 => {
                 if let Some(h) = Handle::parse_hex(&t.value) {
-                    out.push((h, node));
+                    out.push((h, node.unwrap_or(index)));
                 }
             }
             _ => {}
@@ -288,7 +294,9 @@ fn members(d: &Drawing, graph: Handle) -> Vec<(Handle, i32)> {
     out
 }
 
-/// Rewrite the graph object with `members`.
+/// Rewrite the graph object with `members`, in the layout AutoCAD writes: for each member its
+/// place in the graph (`91`, from 0), flags (`93`), graph id (`95`), the object (`360`) and the
+/// four edge slots (`92`, none).
 fn write_graph(d: &mut Drawing, graph: Handle, dict: Handle, members: &[(Handle, i32)]) {
     let mut tags = vec![
         tag(5, graph.hex()),
@@ -297,13 +305,14 @@ fn write_graph(d: &mut Drawing, graph: Handle, dict: Handle, members: &[(Handle,
         tag(96, members.len().to_string()),
         tag(97, members.len().to_string()),
     ];
-    for (h, node) in members {
-        tags.push(tag(91, node.to_string()));
+    for (i, (h, node)) in members.iter().enumerate() {
+        tags.push(tag(91, i.to_string()));
         tags.push(tag(93, "32"));
-        for _ in 0..4 {
-            tags.push(tag(95, "-1"));
-        }
+        tags.push(tag(95, node.to_string()));
         tags.push(tag(360, h.hex()));
+        for _ in 0..4 {
+            tags.push(tag(92, "-1"));
+        }
     }
     if let Some(o) = std::sync::Arc::make_mut(&mut d.foreign).objects.iter_mut().find(|o| o.handle == graph) {
         o.tags = tags;
@@ -440,30 +449,39 @@ pub fn add_parameter(d: &mut Drawing, name: &str, p: &NewParameter, label: Optio
             tags.push(tag(175, values.list.len().to_string()));
             tags.extend(values.list.iter().map(|v| tag(144, real(*v))));
         }
-        NewParameter::Polar { values, .. } | NewParameter::Xy { values, .. } | NewParameter::Rotation { values, .. } => {
-            let marker = match p {
-                NewParameter::Polar { .. } => "AcDbBlockPolarParameter",
-                NewParameter::Xy { .. } => "AcDbBlockXYParameter",
-                _ => "AcDbBlockRotationParameter",
-            };
-            tags.extend([tag(100, marker), tag(305, label.clone()), tag(306, description)]);
-            if !second.is_empty() {
-                tags.push(tag(309, second.clone()));
-                tags.push(tag(310, ""));
-            }
-            tags.extend([tag(307, ""), tag(96, values.flags.to_string())]);
-            tags.extend([tag(141, real(values.minimum)), tag(142, real(values.maximum)), tag(143, real(values.increment))]);
-            tags.push(tag(175, values.list.len().to_string()));
-            tags.extend(values.list.iter().map(|v| tag(144, real(*v))));
+        // The subclass data of the parameters, as AutoCAD writes it.
+        NewParameter::Polar { values, .. } => {
+            tags.extend([tag(100, "AcDbBlockPolarParameter"), tag(305, label.clone()), tag(306, description)]);
+            tags.extend([tag(307, second.clone()), tag(308, ""), tag(140, "0")]);
+            value_set(&mut tags, values, (309, 96, 141, 175));
+            value_set(&mut tags, &ValueSet::default(), (410, 97, 145, 176));
         }
-        NewParameter::Alignment { .. } => tags.extend([tag(100, "AcDbBlockAlignmentParameter"), tag(305, label.clone()), tag(306, description), tag(290, "0")]),
-        NewParameter::Flip { .. } => tags.extend([
-            tag(100, "AcDbBlockFlipParameter"),
-            tag(305, label.clone()),
-            tag(306, description),
-            tag(307, "Not flipped"),
-            tag(308, "Flipped"),
-        ]),
+        NewParameter::Xy { values, .. } => {
+            // The vertical label first (305), the horizontal one second (306); the vertical
+            // distance's value set, then the horizontal one's.
+            tags.extend([tag(100, "AcDbBlockXYParameter"), tag(305, second.clone()), tag(306, label.clone())]);
+            tags.extend([tag(307, ""), tag(308, description), tag(141, "0"), tag(140, "0")]);
+            value_set(&mut tags, &ValueSet::default(), (309, 97, 146, 176));
+            value_set(&mut tags, values, (410, 96, 142, 175));
+        }
+        NewParameter::Rotation { values, base, .. } => {
+            tags.extend([tag(100, "AcDbBlockRotationParameter"), tag(305, label.clone()), tag(306, description)]);
+            point(&mut tags, 1011, *base);
+            tags.push(tag(140, "0"));
+            value_set(&mut tags, values, (307, 96, 141, 175));
+        }
+        NewParameter::Alignment { .. } => tags.extend([tag(100, "AcDbBlockAlignmentParameter"), tag(280, "0")]),
+        NewParameter::Flip { base, end } => {
+            tags.extend([
+                tag(100, "AcDbBlockFlipParameter"),
+                tag(305, label.clone()),
+                tag(306, description),
+                tag(307, "Not flipped"),
+                tag(308, "Flipped"),
+            ]);
+            point(&mut tags, 1012, (*base + *end) * 0.5);
+            tags.extend([tag(309, ""), tag(96, "0")]);
+        }
         NewParameter::Point { .. } => tags.extend([tag(100, "AcDbBlockPointParameter"), tag(303, label.clone()), tag(304, description)]),
         NewParameter::Lookup { .. } => tags.extend([tag(100, "AcDbBlockLookupParameter"), tag(303, label.clone()), tag(304, description)]),
         NewParameter::Visibility { states, .. } => {
@@ -586,10 +604,31 @@ pub fn add_action(
             if rotate.len() > MAX_LIST || rotate.iter().any(|h| d.block(name).and_then(|b| b.entities.get(*h)).is_none()) {
                 return Err("The objects to rotate must be objects of the block.".into());
             }
+            if frame.len() < 3 || frame.len() > 1000 || frame.iter().any(|p| !(p.x.is_finite() && p.y.is_finite())) {
+                return Err("A stretch needs a frame of at least 3 points.".into());
+            }
             tags.push(tag(100, "AcDbBlockPolarStretchAction"));
-            stretch_body(&mut tags, conns, frame, vertices, selection)?;
-            tags.push(tag(76, rotate.len().to_string()));
-            tags.extend(rotate.iter().map(|h| tag(332, h.hex())));
+            let names = ["UpdatedEndX", "UpdatedEndY", "UpdatedBaseX", "UpdatedBaseY", "UpdatedAngle", "UpdatedDistance"];
+            tags.extend((0..6).map(|i| tag(92 + i, node.to_string())));
+            tags.extend(names.iter().enumerate().map(|(i, n)| tag(301 + i as i32, *n)));
+            tags.push(tag(73, frame.len().to_string()));
+            for f in frame {
+                tags.push(tag(1011, real(f.x)));
+                tags.push(tag(1021, real(f.y)));
+            }
+            // The objects that stretch (the selection but those that only turn), each with the
+            // vertices of it that move when it crosses the frame.
+            let stretched: Vec<&Handle> = selection.iter().filter(|h| !rotate.contains(h)).collect();
+            tags.push(tag(72, stretched.len().to_string()));
+            tags.extend(stretched.iter().map(|h| tag(331, h.hex())));
+            let listed: Vec<&(Handle, Vec<i32>)> = vertices.iter().filter(|(h, _)| stretched.contains(&h)).take(MAX_LIST).collect();
+            tags.push(tag(74, listed.len().to_string()));
+            for (h, idx) in listed {
+                tags.push(tag(332, h.hex()));
+                tags.push(tag(75, idx.len().min(MAX_LIST).to_string()));
+                tags.extend(idx.iter().take(MAX_LIST).map(|i| tag(76, i.to_string())));
+            }
+            tags.extend([tag(78, "0"), tag(141, "1"), tag(140, "0"), tag(77, "0")]);
         }
         NewActionKind::Array { column_offset, row_offset } => {
             if !(column_offset.is_finite() && *column_offset > 0.0 && row_offset.is_finite() && *row_offset >= 0.0) {
@@ -599,13 +638,10 @@ pub fn add_action(
                 return Err("An array along an XY parameter needs a row offset above 0.".into());
             }
             tags.push(tag(100, "AcDbBlockArrayAction"));
-            let (c0, c1) = if matches!(p.kind, ParameterKind::Xy { .. }) {
-                ((node, "UpdatedXDistance"), (node, "UpdatedYDistance"))
-            } else {
-                ((node, "UpdatedDistance"), (node, "UpdatedDistance"))
-            };
-            tags.extend([tag(92, c0.0.to_string()), tag(301, c0.1), tag(93, c1.0.to_string()), tag(302, c1.1)]);
-            tags.extend([tag(140, real(*column_offset)), tag(141, real(*row_offset))]);
+            let (c0, c1) = if matches!(p.kind, ParameterKind::Xy { .. }) { ("UpdatedXDistance", "UpdatedYDistance") } else { ("UpdatedDistance", "UpdatedDistance") };
+            tags.extend([tag(92, node.to_string()), tag(93, node.to_string()), tag(94, "0"), tag(95, "0")]);
+            tags.extend([tag(301, c0), tag(302, c1), tag(303, ""), tag(304, "")]);
+            tags.extend([tag(140, real(*row_offset)), tag(141, real(*column_offset))]);
         }
         NewActionKind::Move => {
             tags.push(tag(100, "AcDbBlockMoveAction"));
@@ -631,14 +667,26 @@ pub fn add_action(
                 ]);
             }
         }
-        simple => {
-            let (marker, name) = match simple {
-                NewActionKind::Scale => ("AcDbBlockScaleAction", "UpdatedDistance"),
-                NewActionKind::Rotate => ("AcDbBlockRotateAction", "UpdatedAngle"),
-                _ => ("AcDbBlockFlipAction", "UpdatedFlipState"),
-            };
-            tags.push(tag(100, marker));
-            tags.extend([tag(92, node.to_string()), tag(301, name), tag(93, node.to_string()), tag(302, name)]);
+        NewActionKind::Flip => {
+            tags.push(tag(100, "AcDbBlockFlipAction"));
+            tags.extend([tag(92, node.to_string()), tag(93, "0"), tag(94, "0"), tag(95, "0")]);
+            tags.extend([tag(301, "UpdatedFlipState"), tag(302, ""), tag(303, ""), tag(304, "")]);
+        }
+        scaling @ (NewActionKind::Scale | NewActionKind::Rotate) => {
+            // Both turn or scale about a base point (the parameter's own, dependent on it).
+            let base = p.kind.base_point();
+            tags.push(tag(100, "AcDbBlockActionWithBasePt"));
+            tags.extend([tag(92, node.to_string()), tag(93, node.to_string()), tag(301, "UpdatedBaseX"), tag(302, "UpdatedBaseY")]);
+            point(&mut tags, 1011, Vec3::default());
+            tags.push(tag(280, "1"));
+            point(&mut tags, 1012, base);
+            if matches!(scaling, NewActionKind::Rotate) {
+                // (AutoCAD's marker for the rotate action's own data is AcDbBlockRotationAction.)
+                tags.extend([tag(100, "AcDbBlockRotationAction"), tag(94, node.to_string()), tag(303, "UpdatedAngle")]);
+            } else {
+                tags.extend([tag(100, "AcDbBlockScaleAction"), tag(94, node.to_string()), tag(95, "0"), tag(96, "0")]);
+                tags.extend([tag(303, "UpdatedDistance"), tag(304, ""), tag(305, "")]);
+            }
         }
     }
     std::sync::Arc::make_mut(&mut d.foreign).objects.push(ForeignObject { handle: h, kind: kind.dxf_type().into(), tags });
@@ -754,6 +802,15 @@ fn refresh_states(d: &mut Drawing, name: &str) -> Result<(), String> {
     }
     o.tags = out;
     Ok(())
+}
+
+/// A value set's groups: its description, flags, minimum, maximum and increment (from `first`),
+/// and the count and values of its list (`first + 3` each).
+fn value_set(tags: &mut Vec<RawTag>, v: &ValueSet, (description, flags, first, count): (i32, i32, i32, i32)) {
+    tags.extend([tag(description, ""), tag(flags, v.flags.to_string())]);
+    tags.extend([tag(first, real(v.minimum)), tag(first + 1, real(v.maximum)), tag(first + 2, real(v.increment))]);
+    tags.push(tag(count, v.list.len().to_string()));
+    tags.extend(v.list.iter().map(|x| tag(first + 3, real(*x))));
 }
 
 /// Whether `p` lies in a stretch frame: an axis-aligned rectangle (or two corners) takes its
