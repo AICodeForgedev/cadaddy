@@ -38,7 +38,8 @@ const PLENUM_CLEAR_FT: f64 = 0.25;
 /// level's plenum: above its ceiling ([`PLENUM_CLEAR_FT`]) and under the slab of the floor above
 /// ([`SLAB_FT`]), as high as they fit. One too deep for the plenum sits just above the ceiling
 /// (model.clashes reports it into the structure); a run the drawings give a height, a riser and
-/// the roof's keep theirs. How many runs moved.
+/// the roof's keep theirs. An air terminal above its level's ceiling comes down into it (a
+/// diffuser is in the ceiling, not over it). How many runs and terminals moved.
 pub(crate) fn seat_in_plenum(sp: &mut BuildingSpec) -> usize {
     let plenum: Vec<Option<(f64, f64)>> = sp
         .mep
@@ -67,6 +68,24 @@ pub(crate) fn seat_in_plenum(sp: &mut BuildingSpec) -> usize {
             }
         }
         moved += usize::from(changed);
+    }
+    let ceilings: Vec<Option<f64>> = sp
+        .mep
+        .terminals
+        .iter()
+        .map(|t| {
+            let l = sp.level(&t.level).filter(|l| !super::wallgen::roof_level(&sp.levels, &l.name))?;
+            (l.ceiling_ft.is_finite() && l.ceiling_ft > 0.0).then_some(l.ceiling_ft)
+        })
+        .collect();
+    for (t, c) in sp.mep.terminals.iter_mut().zip(ceilings) {
+        if let Some(c) = c
+            && t.bottom_ft.is_finite()
+            && t.bottom_ft > c + 1e-9
+        {
+            t.bottom_ft = c;
+            moved += 1;
+        }
     }
     moved
 }
@@ -2414,9 +2433,19 @@ mod tests {
             run("Level 2", [12.0, 10.0], "tag"),
             run("Roof", [12.0, 10.0], "default"),
         ];
-        assert_eq!(seat_in_plenum(&mut sp), 3);
+        // A diffuser at the default 8.5' over level 2's 8' ceiling comes down into it; one in level
+        // 1's 8.5' ceiling and a sidewall grille below level 2's stay.
+        let terminal = |level: &str, bottom: f64| -> cadaddy_walk3d::MepTerminal {
+            serde_json::from_value(
+                json!({"system": "SA", "level": level, "at": [0, 0], "size_in": [12, 12], "bottom_ft": bottom, "terminal_kind": "supply_diffuser"}),
+            )
+            .unwrap()
+        };
+        sp.mep.terminals = vec![terminal("Level 2", 8.5), terminal("Level 1", 8.5), terminal("Level 2", 7.0)];
+        assert_eq!(seat_in_plenum(&mut sp), 4);
         let bottoms: Vec<f64> = sp.mep.runs.iter().map(|r| (r.bottoms_ft[0] * 1000.0).round() / 1000.0).collect();
         assert_eq!(bottoms, vec![9.167, 8.25, 8.433, 10.0, 10.0]);
+        assert_eq!(sp.mep.terminals.iter().map(|t| t.bottom_ft).collect::<Vec<_>>(), vec![8.0, 8.5, 7.0]);
     }
 
     #[test]
