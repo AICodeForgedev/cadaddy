@@ -1005,7 +1005,8 @@ fn computed_text_insert(d: &Drawing, t: &Text) -> Vec3 {
         vertical: ts.vertical,
     };
     let q = cadaddy_fonts::baseline_start(&cadaddy_fonts::TextFont::resolve(&ts.font), &t.value, &p);
-    if q.is_finite() { Vec3::new(q.x, q.y, a.z) } else { t.insert }
+    // Justification recalculates the baseline in XY; group 10 keeps its own elevation.
+    if q.is_finite() { Vec3::new(q.x, q.y, t.insert.z) } else { t.insert }
 }
 
 fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
