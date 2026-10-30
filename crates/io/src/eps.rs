@@ -76,7 +76,7 @@ pub fn export_list(list: &cadaddy_render::DisplayList, window: Option<Bounds2>) 
                     s.push_str("newpath\n");
                 }
             }
-            Kind::Tris | Kind::Mask => {
+            Kind::Tris | Kind::InkMask | Kind::Mask => {
                 for t in pts.chunks(3) {
                     if let [a, b2, cc] = t {
                         let _ = writeln!(s, "{:.3} {:.3} {:.3} {:.3} {:.3} {:.3} t", tx(cc.x), ty(cc.y), tx(b2.x), ty(b2.y), tx(a.x), ty(a.y));
