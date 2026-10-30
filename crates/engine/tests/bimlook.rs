@@ -330,6 +330,18 @@ fn the_model_tree_is_level_trade_category_type_element() {
     assert!(v.model.iter().any(|e| bimlook::classify(&v, e).is_some_and(|c| c.level == "Level 1" && c.group == "Mechanical")));
     s.execute("bim.tree", &json!({"path": ["level 2"], "visible": true})).unwrap();
     assert!(hidden(&bimlook::display(s.doc().unwrap()).unwrap()) > 0, "showing the level shows what is under it");
+    // One call hides a trade on every level, and one shows it again.
+    let r = s.execute("bim.tree", &json!({"group": "Mechanical", "visible": false})).unwrap();
+    for lv in r["levels"].as_array().unwrap() {
+        if let Some(t) = lv["trades"].as_array().unwrap().iter().find(|t| t["name"] == json!("Mechanical")) {
+            assert_eq!(t["visible"], json!(false), "{lv}");
+        }
+    }
+    let v = bimlook::display(s.doc().unwrap()).unwrap();
+    assert!(!v.model.iter().any(|e| bimlook::classify(&v, e).is_some_and(|c| c.group == "Mechanical")));
+    assert!(v.model.iter().any(|e| bimlook::classify(&v, e).is_some_and(|c| c.group == "Plumbing")));
+    s.execute("bim.tree", &json!({"group": "mechanical", "visible": true})).unwrap();
+    assert!(hidden(&bimlook::display(s.doc().unwrap()).unwrap()) > 0, "showing the trade shows it on every level");
     // Select and zoom: the branch's elements are selected.
     let r = s.execute("bim.tree", &json!({"path": ["Level 1", "Plumbing", "Pipe"], "select": true, "zoom": true})).unwrap();
     let n = r["selected"].as_u64().unwrap() as usize;

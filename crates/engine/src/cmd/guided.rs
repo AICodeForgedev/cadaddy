@@ -3216,6 +3216,7 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Ok((mut sp, true)) = super::bspec::current(s, "mep_read") {
         super::printmep::merge_mep(&mut sp, mep.clone(), &read_sheets);
         super::printcond::seat_heights(&mut sp);
+        super::mep::seat_in_plenum(&mut sp);
         super::printcond::store_circuits(&mut sp, &cond.circuits);
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
@@ -3427,8 +3428,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             {
                 let runs = mep.runs.len();
                 super::printmep::merge_mep(&mut sp, mep, &[]);
-                // The circuits' estimated routes just above each level's ceiling.
+                // The circuits' estimated routes just above each level's ceiling; the runs the
+                // drawings give no height in their level's plenum, under the floor above.
                 super::printcond::seat_heights(&mut sp);
+                let seated = super::mep::seat_in_plenum(&mut sp);
+                if seated > 0 {
+                    progress_line(&format!("  MEP runs with no height of their own seated in their level's plenum: {seated}"));
+                }
                 s.doc_mut()?.building_spec = Some(sp.to_json());
                 job.audit("mep_merged", "pipeline", None, Some(StageName::BimBuild), Some(json!({"runs": runs})));
             }
