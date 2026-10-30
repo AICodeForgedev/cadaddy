@@ -19,6 +19,7 @@ mod break_closed_polyline;
 mod break_join_locked_layers;
 mod break_keeps_z;
 mod burst;
+mod chprop_command;
 mod compare_export;
 mod constraint_geometry;
 mod constraint_infer;
