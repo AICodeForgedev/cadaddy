@@ -1029,9 +1029,11 @@ pub(super) fn run_close(s: &mut Session, p: &Value) -> Result<Value> {
 /// Let go of what process-wide caches hold for drawings no longer open: the selection indexes
 /// (they hold their drawing's objects; the open drawings' are rebuilt when next used) and the
 /// decoded pixels of images only closed drawings showed. Either kept a closed drawing's memory
-/// (gigabytes for a large one) until the program exited.
-fn release_closed(s: &Session) {
+/// (gigabytes for a large one) until the program exited. The closed drawings' LISP
+/// environments go too.
+fn release_closed(s: &mut Session) {
     crate::spatial::clear_cache();
+    s.lisp_forget_closed();
     let used: std::collections::HashSet<&str> = s
         .docs
         .iter()
