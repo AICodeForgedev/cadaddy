@@ -311,6 +311,9 @@ pub struct DocState {
     /// The .cdy file this drawing was last saved to or read from, and what it holds: the next
     /// save there appends only what changed ([`cmd::file::CdySaved`]).
     pub cdy_saved: Option<cmd::file::CdySaved>,
+    /// The DWG copy (DWGCOPY) this drawing last wrote: a file at that path is the drawing's own
+    /// to replace; any other `.dwg` there is kept as `.dwg.bak` first.
+    pub dwg_copy_written: Option<String>,
     /// The file at `path` as it was when the drawing was read from it or last saved there: a save
     /// refuses to overwrite a file something else changed since ([`cmd::file::DiskId`]).
     pub disk_id: Option<cmd::file::DiskId>,
@@ -402,6 +405,7 @@ impl DocState {
             exchange_notice: None,
             kept_job: None,
             cdy_saved: None,
+            dwg_copy_written: None,
             disk_id: None,
             wallgen: None,
             model_record: None,

@@ -536,7 +536,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("saveas", "Save As...", run_saveas_reporting)
             .menu(&["File", "Save As..."])
             .key("Cmd+Shift+S")
-            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), 12 (Release 12 DXF: newer objects converted, some left out), binary?: bool (DXF), force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved there; otherwise refused)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved}")
+            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), 12 (Release 12 DXF: newer objects converted, some left out), binary?: bool (DXF), force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved there; otherwise refused)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved, dwgCopyKept?: where an existing .dwg that wasn't this drawing's copy was kept first (<name>.dwg.bak), dwgCopyError?: why the copy wasn't saved}")
             .noundo()
             .interactive(|_| Ok(Box::new(SaveAsM::default()))),
         CommandSpec::new("checkexchange", "Check Exchange", run_checkexchange)
@@ -1062,6 +1062,8 @@ fn run_closeall(s: &mut Session, _p: &Value) -> Result<Value> {
 pub(crate) struct Saved {
     bytes: usize,
     copy: Option<std::result::Result<String, String>>,
+    /// The DWG copy replaced a `.dwg` the drawing hadn't written: where that file was kept.
+    copy_kept: Option<String>,
     /// Appended to the .cdy file (only what changed) rather than written in full.
     incremental: bool,
     /// Something worth telling: the file was deleted since it was opened, or was overwritten by force.
@@ -1157,8 +1159,9 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
     if is_drawing_file(path) {
         crate::activity::after_save(s, path);
     }
-    let copy = (is_cdy(path) && dwg_copy()).then(|| save_dwg_copy(s, cmd, path));
-    Ok(Saved { bytes: n, copy, incremental, note })
+    let mut copy_kept = None;
+    let copy = (is_cdy(path) && dwg_copy()).then(|| save_dwg_copy(s, cmd, path, &mut copy_kept));
+    Ok(Saved { bytes: n, copy, copy_kept, incremental, note })
 }
 
 /// Save to a .cdy file through the .cdy saver: appended to the file when it is the one the drawing
@@ -1192,11 +1195,25 @@ fn save_cdy(s: &mut Session, path: &str, opts: &SaveAs) -> Result<Option<(usize,
 
 /// DWGCOPY: write the DWG copy of a drawing just saved to the .cdy file `path`. A copy that fails
 /// is reported, never failing the save itself.
-fn save_dwg_copy(s: &mut Session, cmd: &str, path: &str) -> std::result::Result<String, String> {
+fn save_dwg_copy(s: &mut Session, cmd: &str, path: &str, kept: &mut Option<String>) -> std::result::Result<String, String> {
     let copy = std::path::Path::new(path).with_extension("dwg").to_string_lossy().into_owned();
-    let r = write_bytes(s, cmd, &copy, &SaveAs::default()).and_then(|b| store_keeping(&copy, &b, false));
+    let r = guard_dwg_copy(s, &copy).and_then(|keep| {
+        let bytes = write_bytes(s, cmd, &copy, &SaveAs::default()).map_err(|e| e.to_string())?;
+        if let Some(bak) = &keep {
+            std::fs::copy(&copy, bak).map_err(|e| format!("couldn't keep the existing {} as {}: {e}", file_name(&copy), file_name(bak)))?;
+        }
+        store_keeping(&copy, &bytes, false).map_err(|e| e.to_string())?;
+        *kept = keep;
+        Ok(())
+    });
     match r {
         Ok(()) => {
+            if let Some(bak) = kept.as_deref() {
+                s.echo(format!("{} already existed and wasn't a copy of this drawing: kept as {}", file_name(&copy), file_name(bak)));
+            }
+            if let Ok(st) = s.state_mut() {
+                st.dwg_copy_written = Some(copy.clone());
+            }
             s.echo(format!("Saved a DWG copy: {}", file_name(&copy)));
             Ok(copy)
         }
@@ -1206,6 +1223,33 @@ fn save_dwg_copy(s: &mut Session, cmd: &str, path: &str) -> std::result::Result<
             Err(msg)
         }
     }
+}
+
+/// Whether the DWG copy may be written to `copy`, and where an existing file there must be kept
+/// first. A `.dwg` that is not the copy this drawing last wrote (the file it was opened from, or
+/// anyone's) is kept as `<name>.dwg.bak`, distinct from the drawing's own `<name>.bak`; a copy
+/// open in another tab, or a `.dwg.bak` already in the way, stops the copy with how to go on.
+fn guard_dwg_copy(s: &Session, copy: &str) -> std::result::Result<Option<String>, String> {
+    let active = s.active;
+    if let Some((_, other)) = s.docs.iter().enumerate().find(|(i, d)| *i != active && d.path.as_deref().is_some_and(|p| same_file(p, copy))) {
+        return Err(format!("{} is open in another tab ({}). Close it first, or turn the DWG copy off (DWGCOPY 0).", file_name(copy), other.title));
+    }
+    if !std::fs::metadata(copy).is_ok_and(|m| m.is_file()) {
+        return Ok(None);
+    }
+    let ours = s.state().ok().and_then(|st| st.dwg_copy_written.as_deref()).is_some_and(|w| same_file(w, copy));
+    if ours {
+        return Ok(None);
+    }
+    let bak = format!("{copy}.bak");
+    if std::fs::symlink_metadata(&bak).is_ok() {
+        return Err(format!(
+            "{} already exists and isn't a copy this drawing wrote, and {} is already taken. Move or rename one of them, or turn the DWG copy off (DWGCOPY 0).",
+            file_name(copy),
+            file_name(&bak)
+        ));
+    }
+    Ok(Some(bak))
 }
 
 /// Put saved bytes where the user gets them: natively the file at `path` (written atomically); on
@@ -1328,6 +1372,9 @@ fn saved(path: &str, sv: &Saved) -> Value {
         Some(Ok(copy)) => r["dwgCopy"] = json!(copy),
         Some(Err(why)) => r["dwgCopyError"] = json!(why),
         None => {}
+    }
+    if let Some(bak) = &sv.copy_kept {
+        r["dwgCopyKept"] = json!(bak);
     }
     r
 }
@@ -1914,7 +1961,7 @@ mod pr193_tests {
         let st = s.state().unwrap();
         assert!(!st.is_dirty());
         assert_eq!((st.path.as_deref(), st.title.as_str()), (Some("a/Owned.dxf"), "Owned.dxf"));
-        assert_eq!(saved("a/Owned.dxf", &Saved { bytes: n, copy: None, incremental: false, note: None })["bytes"], 6);
+        assert_eq!(saved("a/Owned.dxf", &Saved { bytes: n, copy: None, copy_kept: None, incremental: false, note: None })["bytes"], 6);
     }
 }
 
