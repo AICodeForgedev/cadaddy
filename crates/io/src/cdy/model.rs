@@ -40,10 +40,89 @@ pub const ENTITY_CHUNK: usize = 1024;
 const V1: u16 = 1;
 /// Longest building spec or tours text kept (hostile files).
 const MAX_TEXT: usize = 64 << 20;
-pub(super) const KNOWN: [&[u8; 4]; 17] = [
-    b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"BSPC", b"TOUR", b"BCFI", b"SCH4", b"PRTS", b"OVRD", b"AGNT", b"IMCK", b"EMBD",
-    b"THMB",
+/// The chunk types that are not text: structure, the embedded files and the preview.
+const BINARY_PARTS: [&[u8; 4]; 9] = [b"MANI", b"HEAD", b"TABL", b"BLKS", b"ENTS", b"LAYO", b"FRGN", b"EMBD", b"THMB"];
+/// The text parts (JSON or plain text, one chunk each, rewritten when their bytes change) and what
+/// each holds. The writer, the incremental save's `seed` and the reader all go through this one
+/// table, so a new tag cannot be added to one and missed in another.
+pub(super) const TEXT_PARTS: [(&[u8; 4], &str); 10] = [
+    (b"BSPC", "building spec"),
+    (b"TOUR", "camera tours"),
+    (b"BCFI", "BCF issues"),
+    (b"SCH4", "4D schedule"),
+    (b"PRTS", "parametric parts"),
+    (b"OVRD", "overrides"),
+    (b"AGNT", "agent notes and review decisions"),
+    (b"IMCK", "import check results"),
+    (b"BIMT", "BIM types"),
+    (b"PRUL", "project rules"),
 ];
+
+/// A chunk type this version reads.
+pub(super) fn is_known(tag: &[u8; 4]) -> bool {
+    BINARY_PARTS.contains(&tag) || is_text(tag)
+}
+
+/// A text part's chunk type.
+pub(super) fn is_text(tag: &[u8; 4]) -> bool {
+    TEXT_PARTS.iter().any(|(t, _)| *t == tag)
+}
+
+/// The text a drawing keeps in the part `tag`; `None` when it has none (the part is left out).
+pub(super) fn text_of<'a>(d: &'a Drawing, tag: &[u8; 4]) -> Option<std::borrow::Cow<'a, str>> {
+    use std::borrow::Cow;
+    let own = |t: &'a Option<String>| t.as_deref().map(Cow::Borrowed);
+    match tag {
+        b"BSPC" => own(&d.building_spec),
+        b"TOUR" => own(&d.tours),
+        b"BCFI" => own(&d.bcf),
+        b"SCH4" => own(&d.schedule4d),
+        b"PRTS" => own(&d.parts),
+        b"OVRD" => own(&d.overrides),
+        b"AGNT" => own(&d.agent),
+        b"IMCK" => own(&d.import_check),
+        b"BIMT" => d.bim_types.to_json().ok().filter(|_| !d.bim_types.is_empty()).map(Cow::Owned),
+        b"PRUL" => d.project_rules.to_json().ok().filter(|_| !d.project_rules.is_empty()).map(Cow::Owned),
+        _ => None,
+    }
+}
+
+/// Put the text of the part `tag` into `d`, checked as the DXF reader checks it; what doesn't read
+/// is noted and left out.
+fn set_text(d: &mut Drawing, tag: &[u8; 4], data: Vec<u8>, notes: &mut Vec<String>) {
+    let what = TEXT_PARTS.iter().find(|(t, _)| *t == tag).map_or("a text part", |(_, w)| *w);
+    let Some(text) = String::from_utf8(data).ok().filter(|t| t.len() <= MAX_TEXT) else {
+        notes.push(format!("the {what} couldn't be read"));
+        return;
+    };
+    let is_object = |t: &str| serde_json::from_str::<Value>(t).is_ok_and(|v| v.is_object());
+    match tag {
+        b"BSPC" => d.building_spec = Some(text),
+        b"TOUR" => d.tours = Some(text),
+        b"BCFI" => d.bcf = Some(text),
+        b"PRTS" => d.parts = Some(text),
+        b"SCH4" => match cadaddy_walk3d::fourd::Schedule4d::from_json(Some(&text)) {
+            Ok(s) => d.schedule4d = s.to_json(),
+            Err(e) => notes.push(format!("the {what} couldn't be read: {e}")),
+        },
+        b"OVRD" => match cadaddy_doc::overrides::Overrides::from_json(&text) {
+            Ok(o) => d.overrides = o.to_json().ok(),
+            Err(e) => notes.push(format!("the {what} couldn't be read: {e}")),
+        },
+        // Any JSON object (the engine checks it when it reads it).
+        b"AGNT" if is_object(&text) => d.agent = Some(text),
+        b"IMCK" if is_object(&text) => d.import_check = Some(text),
+        b"BIMT" => match cadaddy_doc::bimspec::BimTypes::from_json(&text) {
+            Ok(t) => d.bim_types = t,
+            Err(e) => notes.push(format!("the {what} couldn't be read: {e}")),
+        },
+        b"PRUL" => match cadaddy_doc::projrules::ProjectRules::from_json(&text) {
+            Ok(r) => d.project_rules = r,
+            Err(e) => notes.push(format!("the {what} couldn't be read: {e}")),
+        },
+        _ => notes.push(format!("the {what} couldn't be read")),
+    }
+}
 /// Most files one drawing embeds.
 const MAX_EMBEDDED: usize = 100_000;
 
@@ -117,6 +196,9 @@ struct Tables {
     shape_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tours: Option<String>,
+    /// The layout a file marks active (found missing by the field guard test).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_layout: Option<String>,
 }
 
 /// The unmodelled file data, as a stable mirror of [`Foreign`] (its tuple-keyed maps as lists).
@@ -252,6 +334,8 @@ pub(super) fn manifest(d: &Drawing, thumbnail: bool) -> Vec<u8> {
         "bcf": d.bcf.is_some(),
         "schedule4d": d.schedule4d.is_some(),
         "parts": d.parts.is_some(),
+        "bimTypes": d.bim_types.len(),
+        "projectRules": !d.project_rules.is_empty(),
         "embedded": d.embedded.keys().collect::<Vec<_>>(),
         "importCheck": d.import_check.as_ref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
     });
@@ -263,8 +347,74 @@ pub(super) fn header(d: &Drawing) -> Result<Vec<u8>, String> {
     Ok(tokens::encode(&value(&d.header)?))
 }
 
+/// Where each field of [`Drawing`] is persisted. The destructure names every field (no `..`), so
+/// adding a field to `Drawing` stops compiling here until someone decides where .cdy keeps it, or
+/// lists it as session-only. The test `every_persisted_field_round_trips` then proves it.
+#[allow(dead_code)]
+fn field_guard(d: &Drawing) {
+    let Drawing {
+        // HEAD
+        header: _,
+        // FRGN
+        foreign: _,
+        // TABL
+        layers: _,
+        linetypes: _,
+        text_styles: _,
+        shape_files: _,
+        dim_styles: _,
+        mleader_styles: _,
+        table_styles: _,
+        mline_styles: _,
+        active_layout: _,
+        views: _,
+        vports: _,
+        ucss: _,
+        layer_states: _,
+        layer_filters: _,
+        groups: _,
+        plot_style_tables: _,
+        constraints: _,
+        parametric: _,
+        scales: _,
+        handseed: _,
+        hidden_objects: _,
+        hidden_saved: _,
+        materials: _,
+        sun: _,
+        geo: _,
+        plot_stamp: _,
+        properties: _,
+        kept_handles: _,
+        field_values: _,
+        // BLKS, ENTS, LAYO
+        blocks: _,
+        model: _,
+        layouts: _,
+        // The text parts (TEXT_PARTS)
+        bim_types: _,
+        project_rules: _,
+        building_spec: _,
+        tours: _,
+        bcf: _,
+        schedule4d: _,
+        parts: _,
+        overrides: _,
+        agent: _,
+        import_check: _,
+        // EMBD
+        embedded: _,
+        // Session only, never written: why the reader left things out, the REFEDIT in progress,
+        // the records the reader skipped.
+        read_notes: _,
+        refedit: _,
+        skipped_records: _,
+    } = d;
+}
+
 /// The tables chunk's payload.
 pub(super) fn tables(d: &Drawing) -> Result<Vec<u8>, String> {
+    field_guard(d);
     let tables = Tables {
         layers: value(&d.layers)?,
         linetypes: value(&d.linetypes)?,
@@ -298,6 +448,7 @@ pub(super) fn tables(d: &Drawing) -> Result<Vec<u8>, String> {
         building_spec: None,
         tours: None,
         shape_files: d.shape_files.clone(),
+        active_layout: d.active_layout.clone(),
     };
     Ok(tokens::encode(&value(&tables)?))
 }
@@ -425,7 +576,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 continue;
             }
         };
-        if !KNOWN.contains(&&c.tag) {
+        if !is_known(&c.tag) {
             // A part added by a newer CADaddy: skipped.
             continue;
         }
@@ -446,75 +597,19 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
             rep.manifest = serde_json::from_slice(&c.data).ok();
             continue;
         }
-        match &c.tag {
-            b"SCH4" => {
-                match String::from_utf8(c.data).ok().filter(|t| t.len() <= MAX_TEXT).map(|t| cadaddy_walk3d::fourd::Schedule4d::from_json(Some(&t))) {
-                    Some(Ok(s)) => d.schedule4d = s.to_json(),
-                    Some(Err(e)) => rep.notes.push(format!("the 4D schedule couldn't be read: {e}")),
-                    None => rep.notes.push("the 4D schedule couldn't be read".into()),
+        if is_text(&c.tag) {
+            set_text(&mut d, &c.tag, c.data, &mut rep.notes);
+            continue;
+        }
+        if &c.tag == b"EMBD" {
+            match embedded_from(&c.data) {
+                Some(_) if d.embedded.len() >= MAX_EMBEDDED => rep.notes.push("too many embedded files; the rest were left out".into()),
+                Some((name, bytes)) => {
+                    d.embedded.insert(name, Arc::new(bytes.to_vec()));
                 }
-                continue;
+                None => rep.notes.push("an embedded file was damaged and left out".into()),
             }
-            b"OVRD" => {
-                match String::from_utf8(c.data).ok().filter(|t| t.len() <= MAX_TEXT).map(|t| cadaddy_doc::overrides::Overrides::from_json(&t)) {
-                    Some(Ok(o)) => d.overrides = o.to_json().ok(),
-                    Some(Err(e)) => rep.notes.push(format!("the overrides couldn't be read: {e}")),
-                    None => rep.notes.push("the overrides couldn't be read".into()),
-                }
-                continue;
-            }
-            b"AGNT" => {
-                // Any JSON object (the engine checks it when it reads it).
-                match String::from_utf8(c.data)
-                    .ok()
-                    .filter(|t| t.len() <= MAX_TEXT && serde_json::from_str::<serde_json::Value>(t).is_ok_and(|v| v.is_object()))
-                {
-                    Some(t) => d.agent = Some(t),
-                    None => rep.notes.push("the agent notes and review decisions couldn't be read".into()),
-                }
-                continue;
-            }
-            b"IMCK" => {
-                // Import accuracy check results: a JSON object.
-                match String::from_utf8(c.data)
-                    .ok()
-                    .filter(|t| t.len() <= MAX_TEXT && serde_json::from_str::<serde_json::Value>(t).is_ok_and(|v| v.is_object()))
-                {
-                    Some(t) => d.import_check = Some(t),
-                    None => rep.notes.push("the import check results couldn't be read".into()),
-                }
-                continue;
-            }
-            b"BSPC" | b"TOUR" | b"BCFI" | b"PRTS" => {
-                let what = match &c.tag {
-                    b"BSPC" => "building spec",
-                    b"TOUR" => "camera tours",
-                    b"PRTS" => "parametric parts",
-                    _ => "BCF issues",
-                };
-                let Ok(text) = String::from_utf8(c.data) else {
-                    rep.notes.push(format!("the {what} couldn't be read"));
-                    continue;
-                };
-                match &c.tag {
-                    b"BSPC" => d.building_spec = Some(text),
-                    b"TOUR" => d.tours = Some(text),
-                    b"PRTS" => d.parts = Some(text),
-                    _ => d.bcf = Some(text),
-                }
-                continue;
-            }
-            b"EMBD" => {
-                match embedded_from(&c.data) {
-                    Some(_) if d.embedded.len() >= MAX_EMBEDDED => rep.notes.push("too many embedded files; the rest were left out".into()),
-                    Some((name, bytes)) => {
-                        d.embedded.insert(name, Arc::new(bytes.to_vec()));
-                    }
-                    None => rep.notes.push("an embedded file was damaged and left out".into()),
-                }
-                continue;
-            }
-            _ => {}
+            continue;
         }
         if let Some(pre) = pre {
             // One chunk of the store per chunk of the file, as it was saved (an incremental save
@@ -594,6 +689,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 if let Some(tours) = t.tours.filter(|s| s.len() <= MAX_TEXT) {
                     d.tours = Some(tours);
                 }
+                d.active_layout = t.active_layout;
                 d.handseed = t.handseed;
                 d.hidden_saved = t.hidden_saved;
                 d.hidden_objects = t.hidden.into_iter().map(Handle).collect();
