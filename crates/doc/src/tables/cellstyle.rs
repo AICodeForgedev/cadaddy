@@ -143,10 +143,10 @@ impl CellStyle {
         }
         let p = usize::from(self.precision.min(8));
         match self.format {
-            CellFormat::Decimal => format!("{:.*}", p, v),
-            CellFormat::Percent => format!("{:.*}%", p, v * 100.0),
+            CellFormat::Decimal => crate::numfmt::fixed(v, p),
+            CellFormat::Percent => format!("{}%", crate::numfmt::fixed(v * 100.0, p)),
             CellFormat::General | CellFormat::Text => {
-                let s = format!("{:.*}", p, v);
+                let s = crate::numfmt::fixed(v, p);
                 let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s };
                 if s == "-0" { "0".into() } else { s }
             }
@@ -285,6 +285,17 @@ impl Table {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cell_numbers_round_exact_halves_up() {
+        let dec = CellStyle { format: CellFormat::Decimal, precision: 0, ..CellStyle::default() };
+        assert_eq!(dec.format_number(2.5), "3");
+        assert_eq!(dec.format_number(-2.5), "-3");
+        let two = CellStyle { format: CellFormat::Decimal, precision: 2, ..CellStyle::default() };
+        assert_eq!(two.format_number(0.125), "0.13");
+        let pct = CellStyle { format: CellFormat::Percent, precision: 0, ..CellStyle::default() };
+        assert_eq!(pct.format_number(0.125), "13%");
+    }
 
     #[test]
     fn implied_styles_follow_the_table_style() {

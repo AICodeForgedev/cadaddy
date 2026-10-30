@@ -2272,6 +2272,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
         d.layers.insert(0, Layer::default());
     }
     crate::dxf_raw::read(&secs, &mut d);
+    crate::mark_dynamic_copies_anonymous(&mut d);
     fill_measurements(&mut d);
     d.skipped_records = skipped;
     if cut_off {

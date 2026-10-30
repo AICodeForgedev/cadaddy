@@ -146,9 +146,19 @@ pub(crate) fn make_assoc(s: &mut Session, objs: &[Handle], base: Vec2, mut p: Ar
     let src_name = d.anonymous_block_name("*U");
     let mut src = Block::new(&src_name);
     let to_local = Mat3::translate(-base);
+    let mut copies = HashMap::new();
+    let mut moved = Vec::new();
     for mut e in ents {
+        let old = e.handle;
         e.handle = d.new_handle();
+        copies.insert(old, e.handle);
         e.kind.transform(&to_local);
+        moved.push(e);
+    }
+    for mut e in moved {
+        if let EntityKind::Hatch(h) = &mut e.kind {
+            h.remap_sources(&copies);
+        }
         src.entities.push(e);
     }
     d.blocks.insert(src_name.clone(), Arc::new(src));

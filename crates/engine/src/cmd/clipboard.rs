@@ -96,6 +96,7 @@ pub(crate) fn paste(s: &mut Session, m: &Mat3) -> Result<Vec<Handle>> {
     let renames = defs.map(|x| merge(d, &x)).unwrap_or_default();
     let mut out = Vec::new();
     let mut copies = std::collections::HashMap::new();
+    let mut pasted = Vec::new();
     for e in &ents {
         let old = e.handle;
         let mut e = adopt(d, e, &renames);
@@ -103,6 +104,12 @@ pub(crate) fn paste(s: &mut Session, m: &Mat3) -> Result<Vec<Handle>> {
         d.ensure_layer(&e.common.layer);
         out.push(e.handle);
         copies.insert(old, e.handle);
+        pasted.push(e);
+    }
+    for mut e in pasted {
+        if let EntityKind::Hatch(h) = &mut e.kind {
+            h.remap_sources(&copies);
+        }
         if let Some(st) = d.space_mut(&space) {
             st.push(e);
         }
@@ -133,9 +140,18 @@ pub(crate) fn paste_block(s: &mut Session, at: Vec2) -> Result<Handle> {
         .ok_or_else(|| bad("pasteblock", "no free block name"))?;
     let mut b = Block::new(&name);
     b.base = base.to3(0.0);
+    let mut copies = std::collections::HashMap::new();
+    let mut made = Vec::new();
     for e in &ents {
-        let e = adopt(d, e, &renames);
-        d.ensure_layer(&e.common.layer);
+        let n = adopt(d, e, &renames);
+        d.ensure_layer(&n.common.layer);
+        copies.insert(e.handle, n.handle);
+        made.push(n);
+    }
+    for mut e in made {
+        if let EntityKind::Hatch(h) = &mut e.kind {
+            h.remap_sources(&copies);
+        }
         b.entities.push(e);
     }
     d.blocks.insert(name.clone(), Arc::new(b));

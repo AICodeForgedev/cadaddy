@@ -31,14 +31,17 @@ type PageKey = (String, u32);
 static PAGES: Mutex<Option<HashMap<PageKey, Option<Arc<Drawing>>>>> = Mutex::new(None);
 
 /// The underlay commands' own functions, for DGNCLIP, DGNADJUST and DGNLAYERS.
-pub(crate) fn clip(s: &mut Session, p: &Value) -> Result<Value> {
-    run_clip(s, p)
+/// The DGN command of the same name (`cmd`: its own, for its messages).
+pub(crate) fn clip(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    run_clip(s, p, cmd)
 }
-pub(crate) fn adjust(s: &mut Session, p: &Value) -> Result<Value> {
-    run_adjust(s, p)
+/// The DGN command of the same name (`cmd`: its own, for its messages).
+pub(crate) fn adjust(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    run_adjust(s, p, cmd)
 }
-pub(crate) fn layers(s: &mut Session, p: &Value) -> Result<Value> {
-    run_layers(s, p)
+/// The DGN command of the same name (`cmd`: its own, for its messages).
+pub(crate) fn layers(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    run_layers(s, p, cmd)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -49,11 +52,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Insert", "PDF Underlay..."])
             .params("{path, page?: 1, at?: [x,y] (default 0,0), scale?: 1 (drawing units per sheet inch), rotation?: degrees, name?} → {handle, size: [w,h] sheet inches, layers}")
             .interactive(|_| Ok(Box::new(AttachM::default()))),
-        CommandSpec::new("pdfclip", "Clip PDF Underlay", run_clip)
+        CommandSpec::new("pdfclip", "Clip PDF Underlay", |s, p| run_clip(s, p, "pdfclip"))
             .params("{handle?, rect?: [[x1,y1],[x2,y2]] | points?: [[x,y]…] (drawing coordinates), off?: bool, on?: bool, delete?: bool} (default: the selected underlay)"),
-        CommandSpec::new("pdfadjust", "Adjust PDF Underlay", run_adjust)
+        CommandSpec::new("pdfadjust", "Adjust PDF Underlay", |s, p| run_adjust(s, p, "pdfadjust"))
             .params("{handles?, fade?: 0-80, contrast?: 20-100, monochrome?: bool} → {fade, contrast, monochrome}"),
-        CommandSpec::new("pdflayers", "PDF Underlay Layers", run_layers)
+        CommandSpec::new("pdflayers", "PDF Underlay Layers", |s, p| run_layers(s, p, "pdflayers"))
             .params("{handle?, off?: [layer], on?: [layer]} → {layers: [{name, on}]}: the page's layers"),
         CommandSpec::new("dwfattach", "DWF Underlay...", run_dwf_attach)
             .menu(&["Insert", "DWF Underlay..."])
@@ -225,26 +228,23 @@ fn store(s: &mut Session, h: Handle, u: Underlay) -> Result<()> {
 
 /// PDFCLIP: a new boundary (rectangle or polygon in drawing coordinates), clipping on or off, or
 /// the boundary deleted.
-fn run_clip(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = underlays(s, p, "pdfclip")?;
-    let h = *hs.first().ok_or_else(|| bad("pdfclip", "select an underlay (PDF or DGN)"))?;
+fn run_clip(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    let hs = underlays(s, p, cmd)?;
+    let h = *hs.first().ok_or_else(|| bad(cmd, "select an underlay (PDF or DGN)"))?;
     let mut u = underlay_of(s, h)?;
-    let to_page = u.transform().inverse().ok_or_else(|| bad("pdfclip", "the underlay has no area"))?;
+    let to_page = u.transform().inverse().ok_or_else(|| bad(cmd, "the underlay has no area"))?;
     let pts: Option<Vec<Vec2>> = match (p.get("rect"), p.get("points")) {
         (Some(r), _) => {
-            let c = points_param(&json!({ "p": r }), "p")
-                .filter(|c| c.len() == 2)
-                .ok_or_else(|| bad("pdfclip", "`rect` is two corners [[x1,y1],[x2,y2]]"))?;
+            let c =
+                points_param(&json!({ "p": r }), "p").filter(|c| c.len() == 2).ok_or_else(|| bad(cmd, "`rect` is two corners [[x1,y1],[x2,y2]]"))?;
             Some(c)
         }
-        (None, Some(_)) => {
-            Some(points_param(p, "points").filter(|c| c.len() >= 3).ok_or_else(|| bad("pdfclip", "`points` needs three or more points"))?)
-        }
+        (None, Some(_)) => Some(points_param(p, "points").filter(|c| c.len() >= 3).ok_or_else(|| bad(cmd, "`points` needs three or more points"))?),
         _ => None,
     };
     if let Some(pts) = pts {
         if pts.iter().any(|q| !q.is_finite()) {
-            return Err(bad("pdfclip", "points must be finite"));
+            return Err(bad(cmd, "points must be finite"));
         }
         u.clip = pts.into_iter().take(MAX_POINTS).map(|q| to_page.apply(q)).collect();
         u.clipping = true;
@@ -262,16 +262,13 @@ fn run_clip(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// PDFADJUST: fade, contrast and monochrome of the underlays.
-fn run_adjust(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = underlays(s, p, "pdfadjust")?;
+fn run_adjust(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    let hs = underlays(s, p, cmd)?;
     let pct = |k: &str, lo: f64, hi: f64| -> Result<Option<u8>> {
         match p.get(k) {
             None => Ok(None),
             Some(v) => {
-                let x = v
-                    .as_f64()
-                    .filter(|x| x.is_finite() && (lo..=hi).contains(x))
-                    .ok_or_else(|| bad("pdfadjust", format!("`{k}` must be {lo}-{hi}")))?;
+                let x = v.as_f64().filter(|x| x.is_finite() && (lo..=hi).contains(x)).ok_or_else(|| bad(cmd, format!("`{k}` must be {lo}-{hi}")))?;
                 Ok(Some(x.round() as u8))
             }
         }
@@ -307,9 +304,9 @@ fn names(p: &Value, key: &str) -> Vec<String> {
 }
 
 /// PDFLAYERS: the page's layers, with those named turned off or on.
-fn run_layers(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = underlays(s, p, "pdflayers")?;
-    let h = *hs.first().ok_or_else(|| bad("pdflayers", "select an underlay (PDF or DGN)"))?;
+fn run_layers(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    let hs = underlays(s, p, cmd)?;
+    let h = *hs.first().ok_or_else(|| bad(cmd, "select an underlay (PDF or DGN)"))?;
     let mut u = underlay_of(s, h)?;
     let page = load_page(&u.path, u.page);
     let all: Vec<String> = page.as_ref().map(|d| d.layers.iter().map(|l| l.name.clone()).collect()).unwrap_or_default();

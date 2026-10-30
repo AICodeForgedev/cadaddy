@@ -944,6 +944,8 @@ pub(crate) fn size_param(cmd: &str, p: &Value, key: &str, zero_ok: bool) -> Resu
         None | Some(Value::Null) => Ok(None),
         Some(v) => match v.as_f64().filter(|x| x.is_finite()) {
             Some(x) if x > 0.0 || (zero_ok && x == 0.0) => Ok(Some(x)),
+            // Not a number at all (`"5"`, `{}`): that is the problem, not its sign.
+            None if !v.is_number() => Err(bad(cmd, format!("`{key}` must be a number"))),
             _ => Err(bad(cmd, format!("`{key}` must be {}", if zero_ok { "zero or positive" } else { "positive" }))),
         },
     }

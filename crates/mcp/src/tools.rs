@@ -92,7 +92,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         json!({"name": "new_drawing", "description": "Create a new drawing (imperial by default, or metric).",
             "inputSchema": {"type": "object", "properties": {"metric": {"type": "boolean"}}}}),
         json!({"name": "open", "description": "Open a drawing (CADaddy .cdy, DWG, DXF, DWT; an SVG or PDF is converted) as a new tab that becomes current. Returns its index and any warnings (what reading left out, styles reset). Opening a file that is already open switches to it.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}),
-        json!({"name": "save", "description": "Save the drawing, its format by extension: .cdy (CADaddy's own, keeps everything), .dwg or .dxf (the result's `notKept` and `notKeptDetail` — feature, dropped|changed, count, handles — list what those wouldn't keep, the first time for each format and version; the reply carries them, never a pending notice; the checkexchange command lists it without saving). A .svg, .png or .pdf path exports instead: the drawing keeps its name and unsaved changes.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}),
+        json!({"name": "save", "description": "Save the drawing, its format by extension: .cdy (CADaddy's own, keeps everything), .dwg or .dxf (the result's `notKept` and `notKeptDetail` — feature, dropped|changed, count, handles — list what those wouldn't keep, the first time for each format and version; the reply carries them, never a pending notice; the checkexchange command lists it without saving). A .svg, .png or .pdf path exports instead: the drawing keeps its name and unsaved changes. When the file changed on disk since it was opened or last saved the save is refused; `force: true` overwrites it anyway.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "force": {"type": "boolean", "description": "overwrite a file that changed on disk since the drawing was opened or last saved"}}}}),
         json!({"name": "cancel", "description": "Press Escape: cancel the running command (or clear the selection).", "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "get_prompt", "description": "What CADaddy is asking for right now: the running command, the prompt text and bare message, its keyword options (type the capital letters to choose one), the default Enter takes, which inputs it accepts (point, number, text, selection), whether a drawing is still opening (`busy`), whether a \"Save changes?\" question is open (`closePrompt`), and the last command-line lines. Use it to step through a command with command_line.",
             "inputSchema": {"type": "object", "properties": {}}}),
@@ -549,7 +549,12 @@ fn unknown_args(name: &str, args: &Value) -> Vec<String> {
 /// Add `warnings` to a tool result: into its JSON text when that is an object, else as a line of
 /// text after it.
 fn add_warnings(out: &mut Value, warnings: &[String]) {
-    let Some(item) = out["content"].as_array_mut().and_then(|c| c.first_mut()).filter(|c| c["type"] == "text") else { return };
+    let Some(content) = out["content"].as_array_mut() else { return };
+    // A result that starts with something else (render answers with an image) gets the warnings as a text line after it.
+    let Some(item) = content.first_mut().filter(|c| c["type"] == "text") else {
+        content.push(json!({"type": "text", "text": format!("warnings: {}", warnings.join("; "))}));
+        return;
+    };
     match item["text"].as_str().and_then(|t| serde_json::from_str::<Value>(t).ok()) {
         Some(Value::Object(mut o)) => {
             let w = o.entry("warnings").or_insert_with(|| json!([]));

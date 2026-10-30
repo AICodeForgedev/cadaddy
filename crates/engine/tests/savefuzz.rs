@@ -625,9 +625,10 @@ fn formats() -> Vec<Format> {
     v
 }
 
-/// Numbers equal to 1 part in 10⁹ (relative), as the notes compare them (`kept::kept`).
+/// Numbers equal to 1 part in 10⁹ (relative) or within 1e-12 (arithmetic noise), as the notes
+/// compare them (`kept::kept`).
 fn same_number(x: f64, y: f64) -> bool {
-    x == y || (x - y).abs() <= 1e-9 * x.abs().max(y.abs())
+    x == y || (x - y).abs() <= 1e-9 * x.abs().max(y.abs()) || (x - y).abs() <= 1e-12
 }
 
 /// The paths where `a` and `b` differ, array indices left out (`kind.vertices[]`).
@@ -701,6 +702,22 @@ fn covers_name(l: &Loss, name: &str) -> bool {
     l.names.iter().any(|n| n.eq_ignore_ascii_case(name)) || (l.names.len() >= MAX_LISTED && l.count > l.names.len())
 }
 
+/// `kept::drop_placeholders`: the fields that mean nothing for a kind (a dimension's unused points, a
+/// solid fill's pattern angle and scale) are not content, so the notes don't report them and the
+/// comparison skips them too.
+fn drop_placeholders(kind: &EntityKind, forms: &mut [&mut Value]) {
+    let unused: Vec<&str> = match kind {
+        EntityKind::Dimension(d) => d.unused_points().to_vec(),
+        EntityKind::Hatch(h) if h.solid => vec!["angle", "scale"],
+        _ => return,
+    };
+    for o in forms.iter_mut().filter_map(|f| f.as_object_mut()) {
+        for k in &unused {
+            o.remove(*k);
+        }
+    }
+}
+
 /// What the notes leave out: (what, path) → example.
 type Unreported = BTreeMap<(String, String), String>;
 
@@ -710,7 +727,7 @@ fn compare_entities(a: &[Arc<Entity>], b: &[Arc<Entity>], wher: &str, notes: &[L
     let ours: BTreeSet<_> = a.iter().map(|e| e.handle).collect();
     let fields = |e: &Entity| (serde_json::to_value(&e.common).unwrap_or_default(), serde_json::to_value(&e.kind).unwrap_or_default());
     for e in a {
-        let (ca, ka) = fields(e);
+        let (ca, mut ka) = fields(e);
         let kind = kind_name(&ka);
         let h = e.handle.hex();
         let Some(f) = back.get(&e.handle) else {
@@ -719,7 +736,8 @@ fn compare_entities(a: &[Arc<Entity>], b: &[Arc<Entity>], wher: &str, notes: &[L
             }
             continue;
         };
-        let (cb, kb) = fields(f);
+        let (cb, mut kb) = fields(f);
+        drop_placeholders(&e.kind, &mut [&mut ka, &mut kb]);
         if kind_name(&kb) != kind {
             if !notes.iter().any(|l| covers_handle(l, &h) && l.feature.starts_with(&format!("{kind} objects (written as"))) {
                 out.entry((format!("{wher} {kind}"), format!("became {}", kind_name(&kb)))).or_insert_with(|| h.clone());
@@ -1000,6 +1018,48 @@ fn the_comparison_finds_what_the_notes_leave_out() {
     assert!(notes.iter().any(|l| l.feature == "blocks: base"), "{notes:?}");
     assert!(!paths.iter().any(|p| p.starts_with("block|base")), "{paths:?}");
     assert!(notes.iter().any(|l| l.feature == "layers: description"), "{notes:?}");
+}
+
+/// The comparison skips what the notes call not content (a linear dimension's placeholder points,
+/// a solid fill's pattern angle) but still finds a real loss next to it.
+#[test]
+fn placeholders_are_skipped_but_real_losses_are_found() {
+    let mut d = Drawing::new_metric();
+    let dim = cadaddy_engine::doc::Dimension {
+        kind: cadaddy_engine::doc::DimKind::Linear { rotation: 0.0 },
+        defpt: Vec3::ZERO,
+        text_mid: Vec3::ZERO,
+        p13: Vec3::ZERO,
+        p14: Vec3::new(5.0, 0.0, 0.0),
+        p15: Vec3::ZERO,
+        p16: Vec3::ZERO,
+        text: String::new(),
+        style: "Standard".into(),
+        measurement: 5.0,
+        text_rotation: 0.0,
+        user_text_pos: false,
+        block: None,
+        overrides: Default::default(),
+        assoc: Vec::new(),
+        marks: Default::default(),
+    };
+    let h = d.add(&Space::Model, Common::default(), EntityKind::Dimension(Box::new(dim))).expect("a dimension");
+    let mut back = d.clone();
+    let edit = |back: &mut Drawing, f: &dyn Fn(&mut cadaddy_engine::doc::Dimension)| {
+        if let Some(e) = back.model.get(h) {
+            let mut e = (**e).clone();
+            if let EntityKind::Dimension(x) = &mut e.kind {
+                f(x);
+            }
+            back.model.replace(e);
+        }
+    };
+    edit(&mut back, &|x| x.p15 = Vec3::new(1.0, 2.0, 0.0));
+    let found = unreported(&d, &back, &losses_between(&d, &back));
+    assert!(found.keys().all(|(w, _)| !w.starts_with("model")), "a placeholder point is not content: {found:?}");
+    edit(&mut back, &|x| x.p14 = Vec3::new(6.0, 0.0, 0.0));
+    let paths: Vec<String> = unreported(&d, &back, &[]).keys().map(|(_, p)| p.clone()).collect();
+    assert!(paths.iter().any(|p| p == "kind.p14.x"), "a used point is still compared: {paths:?}");
 }
 
 /// What the notes now report (savefuzz): a thickness of 1e-10 a format drops (rays have none in
