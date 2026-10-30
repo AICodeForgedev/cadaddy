@@ -550,7 +550,11 @@ pub fn not_saved_as(d: &Drawing, version: Version) -> std::collections::BTreeMap
     let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
     for e in stores.flat_map(|s| s.iter()) {
         if let cadcraft_doc::EntityKind::Unknown(u) = &e.kind {
-            if MODELER_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t)) && stored.contains(&e.handle) {
+            // A DWG writer converts SAT text to its own form at any version, and from 2013 a data
+            // store record keeps the geometry too: neither loses the solid.
+            if MODELER_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t))
+                && (stored.contains(&e.handle) || cadcraft_doc::foreign::has_sat_text(&u.tags))
+            {
                 continue;
             }
             let n = out.entry(u.dxf_type.clone()).or_insert(0);

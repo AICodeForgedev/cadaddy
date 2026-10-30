@@ -144,3 +144,18 @@ fn the_note_counts_the_host_drawing_while_a_block_is_edited() {
     let _ = std::fs::remove_file(&path);
     assert_eq!(r["notSaved"], json!({ "REGION": 1 }));
 }
+
+/// A DWG writer converts a solid's SAT text itself (at any version), so a DWG save doesn't list
+/// solids that hold it as left out; ones with neither SAT text nor a data store record are (#2334).
+#[test]
+fn a_dwg_keeps_solids_that_hold_sat_text() {
+    use cadcraft_engine::cmd::file::{Version, not_saved_as};
+    let tag = |code: i32, value: &str| RawTag { code, value: value.into() };
+    let solid = |tags: Vec<RawTag>| EntityKind::Unknown(Unknown { dxf_type: "3DSOLID".into(), tags });
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), solid(vec![tag(100, "AcDbModelerGeometry"), tag(1, "400 1 1 0")])).unwrap();
+    d.add(&Space::Model, Common::default(), solid(vec![tag(100, "AcDbModelerGeometry"), tag(70, "1")])).unwrap();
+    for v in [Version::R2010, Version::R2018] {
+        assert_eq!(not_saved_as(&d, v), [("3DSOLID".to_string(), 1)].into_iter().collect(), "{v:?}");
+    }
+}

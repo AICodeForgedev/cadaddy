@@ -185,3 +185,14 @@ fn sat_text_is_told_by_its_subclass_and_a_geometry_record() {
     assert!(store(true).data_store_entities().contains(&h));
     assert!(store(false).data_store_entities().is_empty());
 }
+
+/// The writer keeps a data store record by its first 320 only, so only that entity counts as
+/// stored (#2334).
+#[test]
+fn a_data_store_record_stores_only_its_first_entity() {
+    use cadcraft_doc::foreign::Foreign;
+    use cadcraft_doc::{Handle, RawTag};
+    let tag = |code: i32, value: &str| RawTag { code, value: value.into() };
+    let store = Foreign { data_store: vec![tag(0, "ACDSRECORD"), tag(320, "2B"), tag(320, "2C"), tag(2, "ASM_Data")], ..Foreign::default() };
+    assert_eq!(store.data_store_entities(), [Handle(0x2B)].into());
+}
