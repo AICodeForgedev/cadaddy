@@ -31,6 +31,45 @@ const MAX_RUNS: usize = 20_000;
 const MAX_SEGS: usize = 200_000;
 /// The next floor's slab depth under its level, feet (as WALLGEN builds it).
 const SLAB_FT: f64 = 0.5;
+/// How far above its level's ceiling a run sits at least, feet.
+const PLENUM_CLEAR_FT: f64 = 0.25;
+
+/// Seat the runs whose height the drawings don't give (a default, an estimated route) in their
+/// level's plenum: above its ceiling ([`PLENUM_CLEAR_FT`]) and under the slab of the floor above
+/// ([`SLAB_FT`]), as high as they fit. One too deep for the plenum sits just above the ceiling
+/// (model.clashes reports it into the structure); a run the drawings give a height, a riser and
+/// the roof's keep theirs. How many runs moved.
+pub(crate) fn seat_in_plenum(sp: &mut BuildingSpec) -> usize {
+    let plenum: Vec<Option<(f64, f64)>> = sp
+        .mep
+        .runs
+        .iter()
+        .map(|r| {
+            let l = sp.level(&r.level).filter(|l| !super::wallgen::roof_level(&sp.levels, &l.name))?;
+            (l.ceiling_ft.is_finite() && l.height_ft.is_finite() && l.height_ft > l.ceiling_ft).then_some((l.ceiling_ft, l.height_ft))
+        })
+        .collect();
+    let mut moved = 0;
+    for (r, p) in sp.mep.runs.iter_mut().zip(plenum) {
+        let Some((ceiling, height)) = p else { continue };
+        if r.top_ft.is_some() || !matches!(r.height_source.trim().replace(' ', "-").as_str(), "" | "default" | "estimated-route") {
+            continue;
+        }
+        let depth = if r.size_in[1] > 0.0 { r.size_in[1] } else { r.size_in[0] }.max(0.0) / 12.0;
+        let low = ceiling + PLENUM_CLEAR_FT;
+        let high = (height - SLAB_FT - depth).max(low);
+        let mut changed = false;
+        for b in r.bottoms_ft.iter_mut().filter(|b| b.is_finite()) {
+            let seated = b.clamp(low, high);
+            if (seated - *b).abs() > 1e-9 {
+                *b = seated;
+                changed = true;
+            }
+        }
+        moved += usize::from(changed);
+    }
+    moved
+}
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -2349,6 +2388,36 @@ fn closest_mid(a: Vec2, b: Vec2, c: Vec2, e: Vec2) -> Vec2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runs_with_no_height_of_their_own_sit_in_their_levels_plenum() {
+        let run = |level: &str, size: [f64; 2], source: &str| -> MepRun {
+            serde_json::from_value(json!({"system": "SA", "level": level, "points": [[0, 0], [100, 0]], "size_in": size,
+                "bottoms_ft": [10.0], "height_source": source}))
+            .unwrap()
+        };
+        let mut sp = BuildingSpec::default();
+        sp.levels = serde_json::from_value(json!([
+            {"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.5, "ceiling_ft": 8.5},
+            {"name": "Level 2", "elevation_ft": 10.5, "height_ft": 9.1, "ceiling_ft": 8.0},
+            {"name": "Roof", "elevation_ft": 19.6, "height_ft": 4.0, "ceiling_ft": 3.0}
+        ]))
+        .unwrap();
+        sp.mep.runs = vec![
+            // A 12×10 duct at the default 10': under level 2's slab (10.5 − 0.5 − 10").
+            run("Level 1", [12.0, 10.0], "default"),
+            // On level 2 the plenum (8.25'–8.6') is too shallow for it: just above the ceiling.
+            run("Level 2", [12.0, 10.0], "estimated route"),
+            // A 2" pipe fits: its top under the slab.
+            run("Level 2", [2.0, 0.0], "default"),
+            // A height the drawings give, and the roof's, stay.
+            run("Level 2", [12.0, 10.0], "tag"),
+            run("Roof", [12.0, 10.0], "default"),
+        ];
+        assert_eq!(seat_in_plenum(&mut sp), 3);
+        let bottoms: Vec<f64> = sp.mep.runs.iter().map(|r| (r.bottoms_ft[0] * 1000.0).round() / 1000.0).collect();
+        assert_eq!(bottoms, vec![9.167, 8.25, 8.433, 10.0, 10.0]);
+    }
 
     #[test]
     fn tags() {
