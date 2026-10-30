@@ -264,7 +264,7 @@ pub fn parse_ascii(text: &str) -> Result<Vec<Tag>> {
 #[allow(clippy::while_let_loop)]
 fn parse_ascii_with_limit(text: &str, max_tags: usize) -> Result<Vec<Tag>> {
     let mut tags = Vec::new();
-    let mut lines = text.lines().enumerate();
+    let mut lines = text.strip_prefix('\u{feff}').unwrap_or(text).lines().enumerate();
     loop {
         let Some((ln, code_line)) = lines.next() else { break };
         let ct = code_line.trim();
