@@ -112,3 +112,30 @@ fn saving_sat_text_solids_as_dxf_2013_reports_them() {
     let _ = std::fs::remove_file(&path);
     assert!(r.get("notSaved").is_none() && s.log.len() == n);
 }
+
+/// In the Block Editor the file still holds the host drawing: its solids and version decide the
+/// note, not the edited block's (#2334).
+#[test]
+fn the_note_counts_the_host_drawing_while_a_block_is_edited() {
+    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None });
+    set_write_as(|_, _, _: &SaveAs| Ok(b"x".to_vec()));
+    let mut d = Drawing::new_imperial();
+    let sat = EntityKind::Unknown(Unknown {
+        dxf_type: "REGION".into(),
+        tags: vec![
+            RawTag { code: 8, value: "0".into() },
+            RawTag { code: 1, value: "400 1 1 0".into() },
+            RawTag { code: 3, value: "End-of-ACIS-data".into() },
+        ],
+    });
+    d.add(&Space::Model, Common::default(), sat).unwrap();
+    d.blocks.insert("Door".into(), std::sync::Arc::new(Block::new("Door")));
+    let mut s = Session::empty();
+    s.open_drawing(d, "region.dxf", None);
+    s.execute("bedit", &json!({ "name": "Door" })).unwrap();
+
+    let path = std::env::temp_dir().join(format!("cadcraft-sat-edit-{}.dxf", std::process::id()));
+    let r = s.execute("saveas", &json!({ "path": path.to_string_lossy(), "version": 2018 })).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(r["notSaved"], json!({ "REGION": 1 }));
+}

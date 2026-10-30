@@ -490,8 +490,11 @@ fn run_saveas(s: &mut Session, p: &Value) -> Result<Value> {
 /// The version a drawing is saved in at `path` when none is asked for: its `$ACADVER` (2018 by
 /// default), and for DWG at least 2004 (the io layer's rule: R2000 DWG has no true colours).
 fn drawing_version(s: &Session, path: &str) -> Version {
-    let v =
-        s.doc().ok().and_then(|d| d.header.get("ACADVER").and_then(cadcraft_doc::HVal::as_str).and_then(Version::for_acadver)).unwrap_or_default();
+    let v = s
+        .state()
+        .ok()
+        .and_then(|st| st.drawing().header.get("ACADVER").and_then(cadcraft_doc::HVal::as_str).and_then(Version::for_acadver))
+        .unwrap_or_default();
     if is_dxf(path) { v } else { v.max(Version::R2004) }
 }
 
@@ -585,7 +588,8 @@ fn is_dxf_file(path: impl AsRef<std::path::Path>) -> bool {
 /// Say on the command line which solid modeler entities a DXF of 2013 or later left out because
 /// they hold SAT-text ACIS data, which such files keep in a data store instead (#2334).
 fn report_sat_text_dropped(s: &mut Session, r: &mut Value) {
-    let lost = s.doc().map(cadcraft_doc::foreign::sat_text_dropped).unwrap_or_default();
+    // The drawing a file holds: the host while the Block Editor is open.
+    let lost = s.state().map(|st| cadcraft_doc::foreign::sat_text_dropped(st.drawing())).unwrap_or_default();
     if lost.is_empty() {
         return;
     }

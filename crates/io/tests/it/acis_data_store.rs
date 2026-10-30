@@ -129,3 +129,30 @@ fn sat_text_solids_are_left_out_of_dxf_2013_and_later() {
     let stored = cadcraft_io::read_dxf(dxf().as_bytes()).unwrap();
     assert!(cadcraft_doc::foreign::sat_text_dropped(&stored).is_empty());
 }
+
+/// A DWG keeps SAT-text solids at any version (its writer handles them), and a DXF's note leaves
+/// out the contents of xref blocks, which the DXF doesn't hold anyway (#2334).
+#[test]
+fn sat_text_solids_stay_in_dwg_2018_and_xref_contents_are_not_counted() {
+    let sat = "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n\
+        0\nREGION\n5\n2B\n100\nAcDbEntity\n8\n0\n100\nAcDbModelerGeometry\n70\n1\n1\n400 1 1 0\n3\nEnd-of-ACIS-data\n\
+        0\nLINE\n5\n2D\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDSEC\n0\nEOF\n";
+    let d = cadcraft_io::read_dxf(sat.as_bytes()).unwrap();
+    let opts = cadcraft_io::SaveOptions { version: Some(cadcraft_io::Version::R2018), binary: false };
+    let dwg = cadcraft_io::write_with(&d, "x.dwg", &opts).unwrap();
+    let back = cadcraft_io::read(&dwg, "x.dwg").unwrap();
+    let unknown = |d: &cadcraft_doc::Drawing| d.model.iter().filter(|e| matches!(&e.kind, EntityKind::Unknown(u) if u.dxf_type == "REGION")).count();
+    assert_eq!(unknown(&back), 1, "the DWG 2018 keeps the region");
+
+    // Xref blocks (and `xref|` ones) hold no entities in the file: not reported as left out.
+    let mut x = d.clone();
+    let region = d.model.iter().find(|e| matches!(&e.kind, EntityKind::Unknown(_))).cloned().unwrap();
+    let mut host = cadcraft_doc::Block::new("REF");
+    host.xref_path = Some("other.dwg".into());
+    host.entities.push((*region).clone());
+    x.blocks.insert("REF".into(), std::sync::Arc::new(host));
+    let mut dep = cadcraft_doc::Block::new("REF|PART");
+    dep.entities.push((*region).clone());
+    x.blocks.insert("REF|PART".into(), std::sync::Arc::new(dep));
+    assert_eq!(cadcraft_doc::foreign::sat_text_dropped(&x), [("REGION".to_string(), 1)].into(), "only the model-space region");
+}

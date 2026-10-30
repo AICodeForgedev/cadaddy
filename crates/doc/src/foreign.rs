@@ -109,7 +109,9 @@ pub fn sat_text_acis(u: &crate::Unknown, handle: Handle, stored: &std::collectio
 pub fn sat_text_dropped(d: &crate::Drawing) -> BTreeMap<String, usize> {
     let stored = d.foreign.data_store_entities();
     let mut out = BTreeMap::new();
-    let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
+    // The writer saves xrefs as references: their blocks (and `xref|` ones) hold nothing in the file.
+    let own_blocks = d.blocks.values().filter(|b| b.xref_path.is_none() && !xref_dependent(&b.name));
+    let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(own_blocks.map(|b| &b.entities));
     for e in stores.flat_map(|s| s.iter()) {
         if let crate::EntityKind::Unknown(u) = &e.kind
             && sat_text_acis(u, e.handle, &stored)
@@ -119,4 +121,10 @@ pub fn sat_text_dropped(d: &crate::Drawing) -> BTreeMap<String, usize> {
         }
     }
     out
+}
+
+/// Whether a symbol name belongs to an attached xref (`xref|name`): the DXF writer leaves such
+/// symbols out, and the contents of xref blocks too ([`Block::xref_path`](crate::Block::xref_path)).
+pub fn xref_dependent(name: &str) -> bool {
+    name.contains('|')
 }
