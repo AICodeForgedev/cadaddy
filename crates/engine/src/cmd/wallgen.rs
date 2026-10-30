@@ -1686,13 +1686,13 @@ const MAX_CLUSTERED: usize = 20_000;
 /// its end (within its thickness and 3"): the rest of that wall across a gap, not a thing beside it.
 fn fills_a_wall(a: Vec2, b: Vec2, t: f64, walls: &[super::perceive::geometry::Pair], k: f64) -> bool {
     let len = a.dist(b);
-    if !(len > 1e-9) {
+    if len.is_nan() || len <= 1e-9 {
         return false;
     }
     let u = (b - a) * (1.0 / len);
     walls.iter().any(|w| {
         let wl = w.c0.dist(w.c1);
-        if !(wl > 1e-9) || (w.c1 - w.c0).cross(u).abs() > 0.05 * wl {
+        if wl.is_nan() || wl <= 1e-9 || (w.c1 - w.c0).cross(u).abs() > 0.05 * wl {
             return false;
         }
         let off = (w.c0 - a).cross(u).abs();
