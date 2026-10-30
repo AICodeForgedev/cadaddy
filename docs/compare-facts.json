@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1167,
-    "count": 1167,
+    "callableAsJson": 1173,
+    "count": 1173,
     "ids": [
       "-attedit",
       "-block",
@@ -111,6 +111,7 @@
       "bclose",
       "bcount",
       "bedit",
+      "bextend",
       "bim.bom",
       "bim.build",
       "bim.clash",
@@ -178,6 +179,7 @@
       "bspec.get",
       "bspec.set",
       "bspec.validate",
+      "btrim",
       "burst",
       "bvhide",
       "bvshow",
@@ -412,6 +414,7 @@
       "export",
       "exportpdf",
       "extend",
+      "extrim",
       "extrude",
       "field",
       "fieldview.export",
@@ -993,6 +996,7 @@
       "stylesmanager",
       "subtract",
       "sunproperties",
+      "superhatch",
       "surfblend",
       "surfextend",
       "surffillet",
@@ -1061,6 +1065,7 @@
       "transparency",
       "transparencydisplay",
       "trays.read",
+      "trex",
       "trim",
       "txt2mtxt",
       "txtexp",
@@ -1135,6 +1140,7 @@
       "walk.publish",
       "wall.info",
       "wallgen",
+      "wallgen.plan",
       "walls.read",
       "wblock",
       "wedge",
@@ -1171,8 +1177,8 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 517,
-    "typed": 556
+    "inMenus": 522,
+    "typed": 561
   },
   "features": {
     "ifcExport": true,

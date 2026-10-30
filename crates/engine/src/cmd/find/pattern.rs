@@ -13,6 +13,8 @@
 const MAX_STEPS: usize = 2_000_000;
 /// Most repetitions spelled out for `{m,n}`.
 const MAX_REPEAT: usize = 100;
+/// Most instructions a compiled pattern may take (nested `{m,n}` repeats multiply).
+const MAX_PROGRAM: usize = 100_000;
 /// Longest pattern compiled.
 const MAX_PATTERN: usize = 1000;
 
@@ -252,6 +254,10 @@ impl Parser<'_> {
 }
 
 fn emit(n: &Node, p: &mut Vec<Inst>) {
+    // Over the cap: stop expanding; `Pattern::new` turns the oversize program into an error.
+    if p.len() > MAX_PROGRAM {
+        return;
+    }
     match n {
         Node::Char(c) => p.push(Inst::Char(*c)),
         Node::Any => p.push(Inst::Any),
@@ -386,6 +392,9 @@ impl Pattern {
         }
         let mut prog = vec![Inst::Save(0)];
         emit(&node, &mut prog);
+        if prog.len() > MAX_PROGRAM {
+            return Err(format!("that pattern expands to too many steps (over {MAX_PROGRAM}); use fewer or smaller nested repeats like {{m,n}}"));
+        }
         prog.push(Inst::Save(1));
         prog.push(Inst::Match);
         Ok(Pattern { prog, case, whole })
@@ -496,6 +505,27 @@ impl Pattern {
         out
     }
 
+    /// Append the replacement `rep` for match `h` of `text` to `out`.
+    pub fn expand(&self, text: &str, h: &Hit, rep: &str, groups: bool, out: &mut String) {
+        if groups {
+            let mut chars = rep.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '$'
+                    && let Some(d) = chars.peek().and_then(|d| d.to_digit(10))
+                {
+                    chars.next();
+                    if let Some(Some((s, e))) = h.groups.get(d as usize) {
+                        out.push_str(text.get(*s..*e).unwrap_or(""));
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+        } else {
+            out.push_str(rep);
+        }
+    }
+
     /// `text` with every match replaced by `rep` (`$0`–`$9` are the match and its groups when
     /// `groups`), and the number replaced.
     pub fn replace_all(&self, text: &str, rep: &str, groups: bool) -> (String, usize) {
@@ -504,23 +534,7 @@ impl Pattern {
         let mut last = 0;
         for h in &hits {
             out.push_str(text.get(last..h.start).unwrap_or(""));
-            if groups {
-                let mut chars = rep.chars().peekable();
-                while let Some(c) = chars.next() {
-                    if c == '$'
-                        && let Some(d) = chars.peek().and_then(|d| d.to_digit(10))
-                    {
-                        chars.next();
-                        if let Some(Some((s, e))) = h.groups.get(d as usize) {
-                            out.push_str(text.get(*s..*e).unwrap_or(""));
-                        }
-                    } else {
-                        out.push(c);
-                    }
-                }
-            } else {
-                out.push_str(rep);
-            }
+            self.expand(text, h, rep, groups, &mut out);
             last = h.end;
         }
         out.push_str(text.get(last..).unwrap_or(""));
@@ -555,6 +569,14 @@ mod tests {
         for bad in ["(", "[a", "*x", "a{200}", "a{3,1}"] {
             assert!(Pattern::new(bad, Mode::Regex, false, false).is_err(), "{bad}");
         }
+        // Nested repeats are refused before they expand into a huge program.
+        let started = std::time::Instant::now();
+        assert!(Pattern::new("((((a{100}){100}){100}){100})", Mode::Regex, false, false).is_err());
+        assert!(started.elapsed().as_secs() < 2, "refused quickly");
+        let ip = Pattern::new(r"(\d{1,3}\.){3}\d{1,3}", Mode::Regex, false, false).unwrap();
+        let hits = ip.find_all("host 10.0.0.1 up");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(&"host 10.0.0.1 up"[hits[0].start..hits[0].end], "10.0.0.1");
         // A pathological pattern gives up instead of hanging.
         let slow = Pattern::new("(a*)*b", Mode::Regex, false, false).unwrap();
         let _ = slow.find_all(&"a".repeat(40));

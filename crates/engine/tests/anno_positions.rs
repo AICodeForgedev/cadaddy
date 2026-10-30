@@ -205,3 +205,94 @@ fn positions_and_viewport_scales_survive_dxf() {
         .collect();
     assert!(vps.contains(&Some("1:2".into())), "{vps:?}");
 }
+
+/// The drawn bounds' lower-left corner of `hd` at scale factor `f`.
+fn drawn_min(s: &Session, hd: Handle, f: f64) -> Vec2 {
+    let d = s.doc().unwrap();
+    cadaddy_engine::doc::entity_bounds(d, &anno_scaled(&entity(s, hd), f), 0).min
+}
+
+/// Gives `hd` the scales 1:1 and 1:2.
+fn add_second_scale(s: &mut Session, hd: Handle) {
+    s.execute("objectscale", &json!({ "handles": [hd.hex()], "add": "1:2" })).unwrap();
+    assert_eq!(entity(s, hd).common.anno_scales.len(), 2);
+}
+
+#[test]
+fn a_two_scale_hatch_moves_by_exactly_the_delta() {
+    let mut s = Session::new();
+    setvar(&mut s, "HPANNOTATIVE", json!(1));
+    s.execute("rectang", &json!({ "p1": [20, 0], "p2": [30, 10] })).unwrap();
+    let r = s.execute("hatch", &json!({ "points": [[25, 5]], "pattern": "ANSI31" })).unwrap();
+    let hd = r["handle"].as_str().or_else(|| r["handles"][0].as_str()).and_then(Handle::parse_hex).unwrap();
+    add_second_scale(&mut s, hd);
+    let (a1, a2) = (drawn_min(&s, hd, 1.0), drawn_min(&s, hd, 2.0));
+    s.execute("move", &json!({ "handles": [hd.hex()], "from": [0, 0], "to": [7, -2] })).unwrap();
+    let delta = Vec2::new(7.0, -2.0);
+    let (b1, b2) = (drawn_min(&s, hd, 1.0), drawn_min(&s, hd, 2.0));
+    assert!((b1 - a1 - delta).len() < 1e-9, "{a1:?} → {b1:?}");
+    assert!((b2 - a2 - delta).len() < 1e-9, "{a2:?} → {b2:?}");
+}
+
+#[test]
+fn a_two_scale_radius_dimension_moves_by_exactly_the_delta() {
+    let mut s = Session::new();
+    s.execute("dimstyle", &json!({ "name": "Anno", "annotative": true, "current": true })).unwrap();
+    let dm = h(&s.execute("dimradius", &json!({ "center": [0, 0], "point": [3, 4] })).unwrap());
+    add_second_scale(&mut s, dm);
+    let (a1, a2) = (drawn_min(&s, dm, 1.0), drawn_min(&s, dm, 2.0));
+    s.execute("move", &json!({ "handles": [dm.hex()], "from": [0, 0], "to": [4, 6] })).unwrap();
+    let delta = Vec2::new(4.0, 6.0);
+    let (b1, b2) = (drawn_min(&s, dm, 1.0), drawn_min(&s, dm, 2.0));
+    assert!((b1 - a1 - delta).len() < 1e-9, "{a1:?} → {b1:?}");
+    assert!((b2 - a2 - delta).len() < 1e-9, "{a2:?} → {b2:?}");
+}
+
+#[test]
+fn a_two_landing_multileader_keeps_its_landings_attached() {
+    let mut s = Session::new();
+    let m = h(&s.execute("mleader", &json!({ "points": [[0, 0], [4, 4]], "text": "NOTE" })).unwrap());
+    s.execute("mleaderedit", &json!({ "handle": m.hex(), "mode": "add", "points": [[40, 4]] })).unwrap();
+    let mut e = entity(&s, m);
+    let mut sc = AnnoScale::new("1:2", 1.0, 2.0);
+    sc.offset = Vec2::new(1.0, 0.0);
+    e.common.anno_scales = vec![AnnoScale::new("1:1", 1.0, 1.0), sc].into();
+    let EntityKind::MLeader(orig) = e.kind.clone() else { panic!() };
+    assert!(!orig.roots.is_empty(), "the far-side leader is an extra landing");
+    let off = cadaddy_engine::doc::geom::Vec3::new(1.0, 0.0, 0.0);
+
+    let EntityKind::MLeader(at1) = anno_scaled(&e, 1.0).kind else { panic!() };
+    assert_eq!(at1.roots.len(), orig.roots.len());
+    for (a, o) in at1.roots.iter().zip(&orig.roots) {
+        assert!((a.landing - o.landing).len() < 1e-9, "1:1 is not offset");
+    }
+
+    let EntityKind::MLeader(at2) = anno_scaled(&e, 2.0).kind else { panic!() };
+    for (a, o) in at2.roots.iter().zip(&orig.roots) {
+        let want = orig.landing + off + (o.landing - orig.landing) * 2.0;
+        assert!((a.landing - want).len() < 1e-9, "{:?} vs {want:?}", a.landing);
+        assert_eq!(a.leaders, o.leaders, "arrowheads stay where they point");
+    }
+    assert_eq!(at2.leaders, orig.leaders);
+}
+
+#[test]
+fn moving_a_two_landing_multileader_at_one_to_one_moves_every_landing() {
+    let mut s = Session::new();
+    let m = h(&s.execute("mleader", &json!({ "points": [[0, 0], [4, 4]], "text": "NOTE" })).unwrap());
+    s.execute("mleaderedit", &json!({ "handle": m.hex(), "mode": "add", "points": [[40, 4]] })).unwrap();
+    s.doc_mut()
+        .unwrap()
+        .modify_entity(m, |e| e.common.anno_scales = vec![AnnoScale::new("1:1", 1.0, 1.0), AnnoScale::new("1:2", 1.0, 2.0)].into())
+        .unwrap();
+    let EntityKind::MLeader(before) = anno_scaled(&entity(&s, m), 1.0).kind else { panic!() };
+    s.execute("move", &json!({ "handles": [m.hex()], "from": [0, 0], "to": [1, 0] })).unwrap();
+    let EntityKind::MLeader(after) = anno_scaled(&entity(&s, m), 1.0).kind else { panic!() };
+    let d = cadaddy_engine::doc::geom::Vec3::new(1.0, 0.0, 0.0);
+    assert!((after.landing - before.landing - d).len() < 1e-9);
+    assert!(!before.roots.is_empty());
+    for (a, b) in after.roots.iter().zip(&before.roots) {
+        assert!((a.landing - b.landing - d).len() < 1e-9);
+        assert_eq!(a.leaders, b.leaders);
+    }
+}

@@ -313,7 +313,6 @@ fn the_commands_with_open_parameters_are_these() {
     let expected = [
         "document.bytes",
         "qselect",
-        "mleader",
         "dimoverride",
         "dimedit",
         "gradient",
@@ -378,4 +377,10 @@ fn the_commands_with_open_parameters_are_these() {
     let e = s.execute_agent("color", &json!({ "colour": "red" })).unwrap_err().to_string();
     assert!(e.contains("`colour` is not a parameter of color"), "{e}");
     assert_eq!(s.doc().unwrap().model.iter().count(), 0, "nothing drawn");
+    // MLEADER's doc is closed: a misspelt key is refused and draws nothing.
+    let e = s.execute_agent("mleader", &json!({ "points": [[0, 0], [5, 5]], "text": "Note", "leaderColour": 1 })).unwrap_err().to_string();
+    assert!(e.contains("`leaderColour` is not a parameter of mleader") && e.contains("`leaderColor`"), "{e}");
+    assert_eq!(s.doc().unwrap().model.iter().count(), 0, "nothing drawn");
+    s.execute_agent("mleader", &json!({ "points": [[0, 0], [5, 5]], "text": "Note", "leaderColor": 1 })).unwrap();
+    assert_eq!(s.doc().unwrap().model.iter().count(), 1, "the right call draws");
 }

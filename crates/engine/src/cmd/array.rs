@@ -124,6 +124,11 @@ pub(crate) fn assoc_default(s: &Session) -> bool {
 /// takes their place. Returns that reference.
 pub(crate) fn make_assoc(s: &mut Session, objs: &[Handle], base: Vec2, mut p: ArrayParams) -> Result<Handle> {
     let d = s.doc()?;
+    if super::clip_partners::has_viewport_or_boundary(d, objs) {
+        return Err(other(
+            "A viewport and its clip boundary can't be part of an associative array (they would be split); pass associative: false to array them as separate copies.",
+        ));
+    }
     let objs: Vec<Handle> = objs.iter().copied().filter(|h| !super::curves::is_locked(s, *h)).collect();
     let ents: Vec<Entity> = objs.iter().filter_map(|h| d.entity(*h).map(|e| (**e).clone())).collect();
     if ents.is_empty() {

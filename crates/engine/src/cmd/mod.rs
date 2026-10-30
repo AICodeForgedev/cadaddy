@@ -82,6 +82,7 @@ pub mod wholejob;
 mod xplode;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
+pub use layer::merge::{objects_per_layer, removal_refusal as layer_removal_refusal};
 pub use layer::notify::unreconciled as unreconciled_layers;
 pub use qselect::wildcard;
 pub use render::apply_environment;
@@ -120,7 +121,7 @@ mod measuregeom;
 pub mod mep;
 pub mod mepqty;
 mod mleader_content;
-mod mleader_edit;
+pub(crate) mod mleader_edit;
 mod models3d;
 mod modify;
 mod modify2;
@@ -805,6 +806,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(parts::specs());
         v.extend(express::specs());
         v.extend(express4::specs());
+        v.extend(express4::trim_specs());
         v.push(
             CommandSpec::new("spell", "Spelling", spell::run)
                 .menu(&["Tools", "Spelling"])

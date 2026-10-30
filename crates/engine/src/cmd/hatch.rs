@@ -15,6 +15,7 @@ use crate::{Accept, EngineError, Input, Interactive, Picker, Prompt, Result, Ses
 
 mod assoc;
 mod edit;
+mod exact;
 mod pick;
 pub(crate) use assoc::update as refill_associative;
 pub use pick::{HatchPicks, PickMode};
@@ -484,7 +485,7 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>) -> Result<Vec<H
         }
     };
     let found = found.ok_or_else(|| EngineError::Other("Valid hatch boundary not found.".into()))?;
-    let outer = found.outer;
+    let outer = found.outer.clone();
     let ob = Bounds2::from_points(outer.iter().copied());
     let sources = handles_of(&owners, &found.outer_sources);
     // The boundary is one closed curve object (inside an ellipse or a closed spline): its exact
@@ -495,7 +496,11 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>) -> Result<Vec<H
     };
     let first = match single {
         Some((vs, curves)) => HatchLoop { curves, vertices: vs, outer: true, sources },
-        None => HatchLoop { curves: Vec::new(), vertices: outer.iter().map(|q| PolyVertex::new(*q)).collect(), outer: true, sources },
+        None => match exact::outer_edges(d, &owners, &found, outline_tol(ext) * 50.0) {
+            // Along ellipses and splines the loop keeps their true pieces, not the chords.
+            Some(edges) => HatchLoop::from_curves(edges, true, sources),
+            None => HatchLoop { curves: Vec::new(), vertices: outer.iter().map(|q| PolyVertex::new(*q)).collect(), outer: true, sources },
+        },
     };
     let mut loops = vec![first];
     // Outlines of the islands taken so far: a closed object of the same shape as one of them (a

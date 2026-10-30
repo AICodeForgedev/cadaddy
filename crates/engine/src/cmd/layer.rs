@@ -304,6 +304,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 repoint(&mut std::sync::Arc::make_mut(block).entities, &old, &nn);
             }
         }
+        filters::rename_in_groups(d, &old, &nn);
         if cur.eq_ignore_ascii_case(&old) {
             d.header.set_str("CLAYER", &nn);
         }
@@ -535,7 +536,7 @@ fn run_state_rename(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 // LAYMRG and LAYDEL.
-mod merge;
+pub mod merge;
 
 #[cfg(test)]
 mod tests {

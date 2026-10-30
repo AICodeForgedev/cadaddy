@@ -122,10 +122,9 @@ fn the_style_holds_the_leader_type_and_block_content() {
     s.cmdline("10,0").unwrap();
     s.cmdline("14,2").unwrap();
     let last = s.doc().unwrap().model.iter().last().map(|e| e.handle).unwrap();
-    if let Some(EntityKind::MLeader(m)) = s.doc().unwrap().entity(last).map(|e| e.kind.clone()) {
-        assert!(m.spline);
-        assert_eq!(m.block.map(|b| b.block), Some("TAGB".to_string()));
-    }
+    let m = ml(&s, last);
+    assert!(m.spline);
+    assert_eq!(m.block.map(|b| b.block), Some("TAGB".to_string()));
     s.cancel();
     // Refusals change nothing.
     for bad in
@@ -142,7 +141,7 @@ fn the_style_holds_the_leader_type_and_block_content() {
 #[test]
 fn per_object_overrides() {
     let mut s = Session::new();
-    s.execute("linetype", &json!({ "load": "DASHED" })).ok();
+    s.execute("linetype", &json!({ "load": "DASHED" })).unwrap();
     let h = hd(&s
         .execute("mleader", &json!({ "points": [[0, 0], [5, 5]], "text": "A", "leaderColor": "1", "arrow": "_DOT", "textFrame": true }))
         .unwrap());
@@ -154,10 +153,9 @@ fn per_object_overrides() {
     s.execute("mleaderedit", &json!({ "handle": h.hex(), "mode": "set", "leaderColor": null, "arrow": "_OPEN", "textFrame": false })).unwrap();
     let m = ml(&s, h);
     assert_eq!((m.leader_color, m.arrow.as_deref(), m.text_frame), (None, Some("_OPEN"), false));
-    if s.doc().unwrap().linetypes.iter().any(|l| l.name.eq_ignore_ascii_case("DASHED")) {
-        s.execute("mleaderedit", &json!({ "handle": h.hex(), "mode": "set", "leaderLinetype": "dashed" })).unwrap();
-        assert_eq!(ml(&s, h).leader_linetype.as_deref(), Some("DASHED"));
-    }
+    assert!(s.doc().unwrap().linetypes.iter().any(|l| l.name.eq_ignore_ascii_case("DASHED")), "DASHED is loaded");
+    s.execute("mleaderedit", &json!({ "handle": h.hex(), "mode": "set", "leaderLinetype": "dashed" })).unwrap();
+    assert_eq!(ml(&s, h).leader_linetype.as_deref(), Some("DASHED"));
     for bad in [
         json!({ "handle": h.hex(), "mode": "set", "leaderColor": "plaid" }),
         json!({ "handle": h.hex(), "mode": "set", "arrow": "_BANANA" }),

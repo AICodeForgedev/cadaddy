@@ -190,6 +190,23 @@ pub(in crate::cmd) fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
             // Arrowheads and multileader content blocks the styles name.
             used.extend(d.dim_styles.iter().map(|s| s.arrow_block.to_ascii_uppercase()));
             used.extend(d.mleader_styles.iter().map(|s| s.block.to_ascii_uppercase()));
+            // A block a surviving definition still references stays too; `nested` frees it once
+            // the outer definition has gone (the next pass).
+            for b in d.blocks.values() {
+                for e in b.entities.iter() {
+                    let mut names: Vec<String> = Vec::new();
+                    match &e.kind {
+                        EntityKind::Insert(i) => names.push(i.block.clone()),
+                        EntityKind::Dimension(dm) => {
+                            names.extend(dm.block.clone());
+                            names.extend(override_arrows(dm));
+                        }
+                        EntityKind::MLeader(m) => names.extend(m.block.as_ref().map(|c| c.block.clone())),
+                        _ => {}
+                    }
+                    used.extend(names.into_iter().filter(|n| !n.eq_ignore_ascii_case(&b.name)).map(|n| n.to_ascii_uppercase()));
+                }
+            }
             d.blocks.values().filter(|b| !used.contains(&b.name.to_ascii_uppercase())).map(|b| b.name.clone()).collect()
         }
         Kind::Layers => {
@@ -202,7 +219,12 @@ pub(in crate::cmd) fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
                 .collect()
         }
         Kind::Linetypes => {
-            let used = lower(&mut entities(d).map(|e| e.common.linetype.to_string()).chain(d.layers.iter().map(|l| l.linetype.clone())));
+            let vp_types = entities(d).flat_map(|e| match &e.kind {
+                EntityKind::Viewport(v) => v.layer_linetypes.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>(),
+                _ => Vec::new(),
+            });
+            let used =
+                lower(&mut entities(d).map(|e| e.common.linetype.to_string()).chain(d.layers.iter().map(|l| l.linetype.clone())).chain(vp_types));
             let cur = d.header.str("CELTYPE", "ByLayer");
             d.linetypes
                 .iter()

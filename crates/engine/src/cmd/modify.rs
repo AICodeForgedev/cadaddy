@@ -944,6 +944,8 @@ pub(crate) struct Edges<'a> {
     /// Implied edges (EDGEMODE 1): lines and the end segments of open polylines count as running
     /// on without end, arcs as whole circles.
     pub implied: bool,
+    /// World-space segments that are edges too (objects nested in block references: BTRIM, BEXTEND).
+    pub extra: &'a [Segment],
 }
 
 /// All primitives of the cutting edges (excluding `exclude`).
@@ -951,7 +953,7 @@ fn edge_segments(s: &Session, edges: Edges, exclude: Handle) -> Result<Vec<Segme
     let d = s.doc()?;
     let space = s.space();
     let store = d.space(&space).ok_or(EngineError::NoDocument)?;
-    let mut out = Vec::new();
+    let mut out = edges.extra.to_vec();
     for e in store.iter() {
         if e.handle == exclude || !d.is_visible(e) {
             continue;
@@ -1018,7 +1020,7 @@ fn implied_edge(k: &EntityKind) -> Option<Vec<Segment>> {
     }
 }
 
-fn prim_to_segments(p: &Prim) -> Vec<Segment> {
+pub(crate) fn prim_to_segments(p: &Prim) -> Vec<Segment> {
     match p {
         Prim::Seg(s) => vec![*s],
         Prim::Circle(c) => vec![Segment::Arc { arc: Arc { center: c.center, radius: c.radius, start: 0.0, end: TAU - 1e-12 }, ccw: true }],

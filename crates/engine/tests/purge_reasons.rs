@@ -60,20 +60,72 @@ fn a_text_style_used_by_a_dimension_style_says_so() {
     assert!(list.get("nonPurgeable").is_none(), "only with reasons");
 }
 
-#[test]
-fn nested_purging_repeats_until_nothing_more_goes() {
+/// Inner sits in Outer; Outer is unused. Fresh drawing each time.
+fn outer_inner() -> Session {
     let mut s = Session::new();
-    // Inner sits in Outer; Outer is unused. Purging blocks by name pattern "Outer" first frees Inner.
     s.execute("line", &json!({ "points": [[0, 0], [1, 1]] })).unwrap();
     s.execute("selectall", &json!({})).unwrap();
     s.execute("block", &json!({ "name": "Inner", "base": [0, 0], "keep": "delete" })).unwrap();
     s.execute("insert", &json!({ "name": "Inner", "at": [0, 0] })).unwrap();
     s.execute("selectall", &json!({})).unwrap();
     s.execute("block", &json!({ "name": "Outer", "base": [0, 0], "keep": "delete" })).unwrap();
-    s.execute("layer.new", &json!({ "name": "Spare" })).unwrap();
+    s
+}
+
+#[test]
+fn nested_blocks_go_only_with_nested_and_never_while_a_definition_holds_them() {
+    // Without `nested`: Outer goes, Inner stays (Outer was still there when the pass began).
+    let mut s = outer_inner();
+    s.execute("purge", &json!({ "type": "blocks" })).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.block("Outer").is_none() && d.block("Inner").is_some());
+    // With `nested`: repeated passes free both.
+    let mut s = outer_inner();
     s.execute("purge", &json!({ "type": "blocks", "nested": true })).unwrap();
     let d = s.doc().unwrap();
-    assert!(d.block("Inner").is_none() && d.block("Outer").is_none());
+    assert!(d.block("Outer").is_none() && d.block("Inner").is_none());
+    // `exact` never deletes a block a remaining definition still references.
+    let mut s = outer_inner();
+    let r = s.execute("purge", &json!({ "type": "blocks", "exact": ["Inner"] })).unwrap();
+    assert_eq!(r["blocks"], json!(0));
+    let d = s.doc().unwrap();
+    assert!(d.block("Inner").is_some() && d.block("Outer").is_some());
+    assert!(
+        d.block("Outer")
+            .unwrap()
+            .entities
+            .iter()
+            .any(|e| matches!(&e.kind, cadaddy_doc::EntityKind::Insert(i) if i.block == "Inner" && d.block(&i.block).is_some()))
+    );
+    let list = s.execute("purge", &json!({ "list": true, "reasons": true })).unwrap();
+    assert_eq!(list["blocks"], json!(["Outer"]));
+    assert_eq!(texts(held(&list, "blocks", "Inner")), vec!["Used in the definition of block Outer"]);
+}
+
+#[test]
+fn an_arrow_block_of_an_unused_dimension_style_goes_only_with_nested() {
+    let build = || {
+        let mut s = Session::new();
+        s.execute("line", &json!({ "points": [[0, 0], [1, 1]] })).unwrap();
+        s.execute("selectall", &json!({})).unwrap();
+        s.execute("block", &json!({ "name": "ArrowB", "base": [0, 0], "keep": "delete" })).unwrap();
+        s.execute("dimstyle", &json!({ "name": "Arch", "current": false })).unwrap();
+        s.doc_mut().unwrap().dim_styles.iter_mut().find(|d| d.name == "Arch").unwrap().arrow_block = "ArrowB".into();
+        s
+    };
+    let mut s = build();
+    s.execute("purge", &json!({})).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.block("ArrowB").is_some());
+    let mut s = build();
+    s.execute("purge", &json!({ "nested": true })).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.block("ArrowB").is_none() && !d.dim_styles.iter().any(|x| x.name == "Arch"));
+}
+
+#[test]
+fn nested_purging_leaves_live_groups_and_says_why() {
+    let mut s = outer_inner();
     // A group with live members can't go, and says how many.
     s.execute("line", &json!({ "points": [[0, 0], [2, 2]] })).unwrap();
     s.execute("selectall", &json!({})).unwrap();

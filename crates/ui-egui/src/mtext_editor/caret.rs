@@ -21,8 +21,17 @@ fn same(e: char, l: char) -> bool {
 }
 
 impl CaretMap {
-    /// Place the caret positions of `text` on `lines`.
+    /// Place the caret positions of `text` on `lines` (text without atoms).
+    #[cfg(test)]
     pub(super) fn new(text: &str, lines: Vec<CaretLine>) -> Self {
+        Self::with_atoms(text, lines, |_| None)
+    }
+
+    /// Place the caret positions of `text` on `lines`. `atom(c)` is the plain text the layout
+    /// makes of the editor's atom placeholder `c` (a stack's `top/bottom`, a non-breaking space's
+    /// one space, nothing for a formatting-only code), or `None` when `c` is an ordinary
+    /// character.
+    pub(super) fn with_atoms(text: &str, lines: Vec<CaretLine>, atom: impl Fn(char) -> Option<String>) -> Self {
         let chars: Vec<char> = text.chars().collect();
         let lchars: Vec<Vec<char>> = lines.iter().map(|l| l.text.chars().collect()).collect();
         let x_at = |li: usize, ci: usize| -> f64 {
@@ -33,7 +42,8 @@ impl CaretMap {
         };
         let mut place = Vec::with_capacity(chars.len() + 1);
         let (mut li, mut ci) = (0usize, 0usize);
-        for &c in &chars {
+        for (idx, &c) in chars.iter().enumerate() {
+            let expansion: Option<Vec<char>> = atom(c).map(|s| s.chars().collect());
             loop {
                 let Some(lt) = lchars.get(li) else {
                     // Past the last line: everything at its end.
@@ -41,12 +51,31 @@ impl CaretMap {
                     place.push((last, x_at(last, usize::MAX)));
                     break;
                 };
+                let para = lines.get(li).map_or(0, |l| l.para);
+                let wrapped_on = ci >= lt.len() && lines.get(li + 1).is_some_and(|l| l.para == para);
+                if let Some(e) = &expansion {
+                    // An atom: it takes the characters its code laid out (none for a formatting
+                    // code), so the text after it keeps its own positions.
+                    if e.is_empty() {
+                        place.push((li, x_at(li, ci)));
+                        break;
+                    }
+                    if wrapped_on {
+                        (li, ci) = (li + 1, 0);
+                        continue;
+                    }
+                    // Where the expansion starts: here, or (resync) further along the line.
+                    let start = (ci..lt.len()).find(|&s| e.iter().enumerate().all(|(k, ec)| lt.get(s + k).is_some_and(|l| same(*ec, *l))));
+                    let start = start.unwrap_or(ci);
+                    place.push((li, x_at(li, start)));
+                    ci = (start + e.len()).min(lt.len());
+                    break;
+                }
                 if lt.get(ci).is_some_and(|l| same(c, *l)) {
                     place.push((li, x_at(li, ci)));
                     ci += 1;
                     break;
                 }
-                let para = lines.get(li).map_or(0, |l| l.para);
                 if c == '\n' {
                     // A paragraph break: the caret before it is at the end of this line; the next
                     // paragraph starts on its first line.
@@ -58,7 +87,6 @@ impl CaretMap {
                     (li, ci) = (next, 0);
                     break;
                 }
-                let wrapped_on = ci >= lt.len() && lines.get(li + 1).is_some_and(|l| l.para == para);
                 if wrapped_on {
                     if c == ' ' || c == '\t' {
                         // The space where the line wrapped: at the end of this line.
@@ -69,8 +97,25 @@ impl CaretMap {
                     (li, ci) = (li + 1, 0);
                     continue;
                 }
-                // Not laid out (a leading or repeated space): where the caret already is.
-                place.push((li.min(lines.len().saturating_sub(1)), x_at(li, ci)));
+                if c.is_whitespace() {
+                    // A leading or repeated space the layout leaves out: where the caret already
+                    // is; the laid-out line has nothing for it.
+                    place.push((li.min(lines.len().saturating_sub(1)), x_at(li, ci)));
+                    break;
+                }
+                // Anything else that doesn't match: resynced to the next laid-out copy of the
+                // character on the line. With none, it is either a character the layout left out
+                // (the next one matches here: nothing consumed) or one the layout drew as
+                // something else (one laid-out character consumed), so one mismatch never
+                // freezes the rest of the paragraph.
+                let skipped = chars.get(idx + 1).is_some_and(|n| lt.get(ci).is_some_and(|l| same(*n, *l)));
+                let at = (ci + 1..lt.len()).find(|&s| lt.get(s).is_some_and(|l| same(c, *l))).unwrap_or(ci);
+                if at == ci && skipped {
+                    place.push((li, x_at(li, ci)));
+                    break;
+                }
+                place.push((li, x_at(li, at)));
+                ci = (at + 1).min(lt.len());
                 break;
             }
         }
@@ -184,6 +229,7 @@ impl CaretMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cadaddy_engine::mtext_edit::Formatted;
 
     fn line(text: &str, para: usize, x0: f64, baseline: f64) -> CaretLine {
         // Every character one unit wide.
@@ -262,6 +308,75 @@ mod tests {
         let (a, b) = (m.pos(0).unwrap_or_default(), m.pos(6).unwrap_or_default());
         assert!(b.0.abs() < 1e-9 && b.1 < a.1, "{a:?} {b:?}");
         assert_eq!(m.vertical(1, 1, m.pos(1).map_or(0.0, |p| p.0)), 7);
+    }
+
+    /// The caret map of `contents` as the editor builds it: `Formatted` text, the real layout.
+    fn real_map(contents: &str) -> (CaretMap, cadaddy_fonts::MTextLayout, Formatted) {
+        let f = Formatted::from_contents(contents);
+        let lay = cadaddy_fonts::layout_mtext(&f.to_contents(), Vec2::ZERO, 1.0, 0.0, 1, 0.0, 1.0);
+        let m = CaretMap::with_atoms(f.text(), lay.carets.clone(), |c| f.atom_code(c).map(crate::mtext_editor::atom_plain));
+        (m, lay, f)
+    }
+
+    #[test]
+    fn caret_follows_a_stacked_fraction() {
+        let (m, lay, f) = real_map("3\\S1/2;\" EMT");
+        let line = &lay.carets[0];
+        assert_eq!(line.text, "31/2\" EMT");
+        assert_eq!(f.text().chars().count(), 7, "3, the stack atom, quote, space, E, M, T");
+        assert_eq!(m.len(), 8);
+        let x = |i| m.pos(i).map(|p| p.0).unwrap_or(f64::NAN);
+        // Before the 3, the stack, and after it: the layout's own positions.
+        assert!((x(0) - line.xs[0]).abs() < 1e-9);
+        assert!((x(1) - line.xs[1]).abs() < 1e-9);
+        let stack_end = line.xs[4];
+        assert!(x(2) >= stack_end - 1e-9, "after the stack {} vs its right edge {stack_end}", x(2));
+        // The characters after it keep their own places: the quote, the space, E, M, T, the end.
+        for (i, li) in [(2, 4), (3, 5), (4, 6), (5, 7), (6, 8)] {
+            assert!((x(i) - line.xs[li]).abs() < 1e-9, "caret {i}: {} vs {}", x(i), line.xs[li]);
+        }
+        assert!((x(7) - line.end).abs() < 1e-9);
+        // A click on E returns E's index.
+        let ex = line.xs[6] + 1e-3;
+        assert_eq!(m.hit(Vec2::new(ex, line.baseline + 0.3)), 4);
+        // The selection over the stack has width and ends past it.
+        let s = m.spans(1, 2);
+        assert_eq!(s.len(), 1);
+        assert!(s[0].1 - s[0].0 > 0.1 && s[0].1 >= stack_end - 1e-9, "{s:?}");
+    }
+
+    #[test]
+    fn caret_follows_a_non_breaking_space() {
+        let (m, lay, f) = real_map("A\\~B C");
+        let line = &lay.carets[0];
+        assert_eq!(line.text, "A B C");
+        assert_eq!(f.text().chars().count(), 5);
+        let xs: Vec<f64> = (0..5).map(|i| m.pos(i).map_or(f64::NAN, |p| p.0)).collect();
+        for (i, (a, b)) in xs.iter().zip(&line.xs).enumerate() {
+            assert!((a - b).abs() < 1e-9, "caret {i}: {a} vs {b}");
+        }
+        assert!(xs[2] < xs[3] && xs[3] < xs[4] && xs[1] < xs[2], "B, space, C strictly increase: {xs:?}");
+    }
+
+    #[test]
+    fn formatting_only_codes_take_no_characters() {
+        let (m, lay, f) = real_map("A\\W1.5;B\\Q15;C");
+        let line = &lay.carets[0];
+        assert_eq!(line.text, "ABC");
+        assert_eq!(f.text().chars().count(), 5);
+        // A, the width code, B, the slant code, C.
+        for (i, li) in [(0, 0), (2, 1), (4, 2)] {
+            assert!((m.pos(i).map_or(f64::NAN, |p| p.0) - line.xs[li]).abs() < 1e-9, "caret {i}");
+        }
+    }
+
+    #[test]
+    fn one_unexpected_mismatch_resyncs() {
+        // The editor has an 'X' the layout doesn't: the rest of the line keeps its places.
+        let m = CaretMap::new("abXcd", vec![line("abcd", 0, 0.0, -1.0)]);
+        assert_eq!(m.pos(3).map(|p| p.0), Some(2.0));
+        assert_eq!(m.pos(4).map(|p| p.0), Some(3.0));
+        assert_eq!(m.pos(5).map(|p| p.0), Some(4.0));
     }
 
     #[test]

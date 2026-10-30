@@ -164,7 +164,8 @@ pub(crate) fn apply_option(s: &mut Session, h: Handle, i: usize, action: GripAct
         let to = to.ok_or_else(|| EngineError::Other("Requires a point.".into()))?;
         return super::annotate::chain_from(s, h, to, action == GripAction::DimBaseline).map(Some);
     }
-    let mut k = grip_action(&e.kind, i, action, to, value).ok_or_else(|| EngineError::Other("That would make a degenerate object.".into()))?;
+    let mut k =
+        grip_action(s.doc()?, &e.kind, i, action, to, value).ok_or_else(|| EngineError::Other("That would make a degenerate object.".into()))?;
     let d = s.doc_mut()?;
     // Dimension text moved with its dimension line (DIMTMOVE 0): the line follows.
     if let cadaddy_doc::EntityKind::Dimension(dm) = &mut k {

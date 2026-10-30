@@ -299,9 +299,10 @@ pub struct DocState {
     /// The user was told that saving over the file would lose what reading left out: saving
     /// again overwrites it.
     pub loss_warned: bool,
-    /// Saving into DWG or DXF has checked what that file wouldn't keep of the drawing (and said
-    /// so, when anything): it is checked once per drawing.
-    pub kept_checked: bool,
+    /// The DWG/DXF targets (format, version, binary) whose save was checked for what that file
+    /// wouldn't keep of the drawing (and said so, when anything): each is checked once, and only
+    /// a check that succeeded is recorded.
+    pub kept_checked: Vec<cmd::file::KeptKey>,
     /// What the first DWG or DXF save of the drawing couldn't keep, feature by feature
     /// (`{path, format, losses}`), for the app to show once in a dialog; taken by the app.
     pub exchange_notice: Option<serde_json::Value>,
@@ -311,6 +312,9 @@ pub struct DocState {
     /// The .cdy file this drawing was last saved to or read from, and what it holds: the next
     /// save there appends only what changed ([`cmd::file::CdySaved`]).
     pub cdy_saved: Option<cmd::file::CdySaved>,
+    /// The DWG copy (DWGCOPY) this drawing last wrote: a file at that path is the drawing's own
+    /// to replace; any other `.dwg` there is kept as `.dwg.bak` first.
+    pub dwg_copy_written: Option<String>,
     /// The file at `path` as it was when the drawing was read from it or last saved there: a save
     /// refuses to overwrite a file something else changed since ([`cmd::file::DiskId`]).
     pub disk_id: Option<cmd::file::DiskId>,
@@ -398,10 +402,11 @@ impl DocState {
             binary_dxf: false,
             read_loss: None,
             loss_warned: false,
-            kept_checked: false,
+            kept_checked: Vec::new(),
             exchange_notice: None,
             kept_job: None,
             cdy_saved: None,
+            dwg_copy_written: None,
             disk_id: None,
             wallgen: None,
             model_record: None,
@@ -1428,7 +1433,10 @@ impl Session {
         for st in &mut self.docs {
             let Some(done) = st.kept_job.as_ref().and_then(cmd::file::KeptJob::take) else { continue };
             st.kept_job = None;
-            if let Some((notice, line)) = done {
+            if done.succeeded && !st.kept_checked.contains(&done.key) {
+                st.kept_checked.push(done.key);
+            }
+            if let Some((notice, line)) = done.notice {
                 st.exchange_notice = Some(notice);
                 lines.push(line);
             }

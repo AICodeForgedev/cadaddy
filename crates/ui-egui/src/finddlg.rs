@@ -70,6 +70,25 @@ fn params(st: &State) -> Value {
     })
 }
 
+/// FIND's parameters for the per-hit Replace on `m`: an object hit replaces in that object only
+/// (`names: []`, so no layer or block is renamed); a name hit renames only that name.
+fn replace_one_params(st: &State, m: &Value) -> Value {
+    let mut p = params(st);
+    p["replace"] = json!(st.with);
+    match (m["handle"].as_str(), m["name"].as_str()) {
+        (Some(h), _) => {
+            p["handles"] = json!([h]);
+            p["names"] = json!([]);
+        }
+        (_, Some(n)) => {
+            p["handles"] = json!([]);
+            p["names"] = json!([n]);
+        }
+        _ => {}
+    }
+    p
+}
+
 /// Show hit `m`: its layout made current, then zoomed to.
 pub fn zoom_to(app: &mut CadApp, m: &Value) {
     let Some(h) = m["handle"].as_str() else { return };
@@ -160,16 +179,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                                     zoom = Some(m.clone());
                                 }
                                 if ui.small_button(crate::tl!("Replace")).clicked() {
-                                    let mut p = params(&st);
-                                    p["replace"] = json!(st.with);
-                                    match (m["handle"].as_str(), m["name"].as_str()) {
-                                        (Some(h), _) => p["handles"] = json!([h]),
-                                        (_, Some(n)) => {
-                                            p["handles"] = json!([]);
-                                            p["names"] = json!([n]);
-                                        }
-                                        _ => {}
-                                    }
+                                    let p = replace_one_params(&st, &m);
                                     action = Some(p);
                                 }
                             });
@@ -239,6 +249,18 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replace_one_on_an_object_hit_renames_no_names() {
+        let st = State { what: "door".into(), with: "gate".into(), ..State::default() };
+        let p = replace_one_params(&st, &json!({ "handle": "2A", "type": "Text" }));
+        assert_eq!(p["handles"], json!(["2A"]));
+        assert_eq!(p["names"], json!([]));
+        assert_eq!(p["replace"], "gate");
+        let p = replace_one_params(&st, &json!({ "name": "DOORS", "type": "Layer name" }));
+        assert_eq!(p["handles"], json!([]));
+        assert_eq!(p["names"], json!(["DOORS"]));
+    }
 
     #[test]
     fn hits_are_listed_and_zoomed_to_across_layouts() {

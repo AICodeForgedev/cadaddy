@@ -101,6 +101,7 @@ pub mod i18n;
 pub mod icons;
 pub mod ifcpalette;
 pub mod jobpalette;
+pub mod layerremovedlg;
 pub mod layers;
 pub mod layerstates;
 pub mod layouttabs;
@@ -402,6 +403,10 @@ pub struct Services {
     pub pick_save_image: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// A folder (Publish's batch plot).
     pub pick_folder: Option<Box<dyn Fn() -> Option<String>>>,
+    /// A plot style table file to load (.ctb, .stb or our JSON) in the Plot Style Manager.
+    pub pick_plot_style: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Where to save a plot style table (the Manager's "Save as…"), given a suggested file name.
+    pub pick_save_plot_style: Option<Box<dyn Fn(&str) -> Option<String>>>,
 }
 
 pub struct CadApp {
@@ -718,7 +723,11 @@ impl CadApp {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             return r;
         }
+        // Programmatic saves are checked for what DWG/DXF keep as they run: the reply holds the
+        // list (`notKeptDetail`), not a background notice nobody could collect.
+        let background = std::mem::replace(&mut self.session.background_checks, false);
         let r = self.session.execute(id, &params);
+        self.session.background_checks = background;
         if let Ok(v) = &r
             && let Some(m) = v.get("message").and_then(Value::as_str)
         {
@@ -767,8 +776,11 @@ impl CadApp {
             let json_form = text.trim_start().get(first.len()..).is_some_and(|rest| rest.trim_start().starts_with('{'));
             let word = first.to_ascii_lowercase();
             let more = text.split_whitespace().nth(1).is_some();
+            // LAYMRG and LAYDEL typed keep their command-line prompts (scripts rely on them); the
+            // menu and the ribbon start them through `start` and get the dialogs.
             if !first.is_empty()
                 && !json_form
+                && !matches!(word.as_str(), "laymrg" | "laydel")
                 && (!more || !menus::DIALOG_WHEN_ALONE.contains(&word.as_str()))
                 && menus::run_ui_command(self, &word, &Value::Null).is_some()
             {

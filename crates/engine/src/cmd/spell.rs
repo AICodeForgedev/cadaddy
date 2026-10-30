@@ -362,7 +362,7 @@ pub fn suggestions(main: &HashSet<String>, word: &str) -> Vec<String> {
 }
 
 /// For each character of `chars`, whether it is shown text (not a format, `%%` or field code).
-fn literal_mask(chars: &[char], mtext: bool) -> Vec<bool> {
+pub(crate) fn literal_mask(chars: &[char], mtext: bool) -> Vec<bool> {
     let mut mask = vec![true; chars.len()];
     let mut i = 0;
     while i < chars.len() {

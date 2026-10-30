@@ -550,10 +550,12 @@ fn references(d: &mut Drawing, out: &mut Vec<Issue>) {
                     }
                 }
                 EntityKind::Viewport(vp) => {
-                    let before = vp.frozen_layers.len() + vp.layer_colors.len();
+                    let before = vp.frozen_layers.len() + vp.layer_colors.len() + vp.layer_linetypes.len() + vp.layer_lineweights.len();
                     vp.frozen_layers.retain(|n| d.layer(n).is_some());
                     vp.layer_colors.retain(|(n, _)| d.layer(n).is_some());
-                    if vp.frozen_layers.len() + vp.layer_colors.len() < before {
+                    vp.layer_linetypes.retain(|(n, _)| d.layer(n).is_some());
+                    vp.layer_lineweights.retain(|(n, _)| d.layer(n).is_some());
+                    if vp.frozen_layers.len() + vp.layer_colors.len() + vp.layer_linetypes.len() + vp.layer_lineweights.len() < before {
                         out.push(issue(
                             "danglingReference",
                             &label,
