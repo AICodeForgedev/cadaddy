@@ -25,15 +25,14 @@ pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {
         3 => {
             let neg = v < 0.0;
             // Round at the displayed precision before splitting, so 11.999 carries to 1'-0.00".
-            let scale = 10f64.powi(prec as i32);
-            let rounded = (v.abs() * scale).round() / scale;
+            let rounded = cadaddy_doc::numfmt::round_to(v.abs(), prec);
             let a = if rounded.is_finite() { rounded } else { v.abs() };
             let ft = (a / 12.0).floor();
             if ft >= I64_SAFE_MAX {
-                return format!("{:.*}", prec, v);
+                return cadaddy_doc::numfmt::fixed(v, prec);
             }
             let inch = a - ft * 12.0;
-            format!("{}{}'-{:.*}\"", if neg { "-" } else { "" }, ft as i64, prec, inch)
+            format!("{}{}'-{}\"", if neg { "-" } else { "" }, ft as i64, cadaddy_doc::numfmt::fixed(inch, prec))
         }
         4 => {
             let neg = v < 0.0;
@@ -41,7 +40,7 @@ pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {
             let denom = 1i64 << prec.min(8);
             let scaled = (a * denom as f64).round();
             if scaled >= I64_SAFE_MAX {
-                return format!("{:.*}", prec, v);
+                return cadaddy_doc::numfmt::fixed(v, prec);
             }
             let total = scaled as i64;
             let ft = total / (12 * denom);
@@ -62,7 +61,7 @@ pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {
             let denom = 1i64 << prec.min(8);
             let scaled = (a * denom as f64).round();
             if scaled >= I64_SAFE_MAX {
-                return format!("{:.*}", prec, v);
+                return cadaddy_doc::numfmt::fixed(v, prec);
             }
             let total = scaled as i64;
             let whole = total / denom;
@@ -75,23 +74,14 @@ pub fn format_distance(v: f64, lunits: i64, luprec: i64) -> String {
             };
             format!("{}{}{}", if neg { "-" } else { "" }, whole, fs)
         }
-        _ => format!("{:.*}", prec, v),
+        _ => cadaddy_doc::numfmt::fixed(v, prec),
     }
 }
 
 /// Scientific notation with a signed exponent of at least two digits (`1.7500E+01`, `1.00E-05`).
 fn scientific(v: f64, prec: usize) -> String {
-    let s = format!("{:.*E}", prec, v);
-    match s.split_once('E') {
-        Some((mantissa, exp)) => {
-            let (sign, digits) = match exp.strip_prefix('-') {
-                Some(d) => ('-', d),
-                None => ('+', exp),
-            };
-            format!("{mantissa}E{sign}{digits:0>2}")
-        }
-        None => s,
-    }
+    let (mantissa, exp) = cadaddy_doc::numfmt::sci_parts(v, prec);
+    format!("{mantissa}E{}{:02}", if exp < 0 { '-' } else { '+' }, exp.unsigned_abs())
 }
 
 fn gcd(a: i64, b: i64) -> i64 {
@@ -115,7 +105,7 @@ fn format_dms(deg: f64, prec: usize) -> String {
         1 | 2 => format!("{d}d{m}'"),
         _ => {
             let s = (total % (60 * scale)) as f64 / scale as f64;
-            format!("{d}d{m}'{:.*}\"", prec.saturating_sub(4), s)
+            format!("{d}d{m}'{}\"", cadaddy_doc::numfmt::fixed(s, prec.saturating_sub(4)))
         }
     }
 }
@@ -127,8 +117,8 @@ pub fn format_angle(a: f64, aunits: i64, auprec: i64) -> String {
     let deg = cadaddy_geom::norm_angle(a).to_degrees();
     match aunits {
         1 => format_dms(deg, prec),
-        2 => format!("{:.*}g", prec, wrap_full_turn(deg / 0.9, 400.0, prec)),
-        3 => format!("{:.*}r", prec, wrap_full_turn(cadaddy_geom::norm_angle(a), 2.0 * PI, prec)),
+        2 => format!("{}g", cadaddy_doc::numfmt::fixed(wrap_full_turn(deg / 0.9, 400.0, prec), prec)),
+        3 => format!("{}r", cadaddy_doc::numfmt::fixed(wrap_full_turn(cadaddy_geom::norm_angle(a), 2.0 * PI, prec), prec)),
         4 => {
             // N/S <angle from N/S toward E/W> E/W
             let (ns, ew, ang) = if deg <= 90.0 {
@@ -142,17 +132,17 @@ pub fn format_angle(a: f64, aunits: i64, auprec: i64) -> String {
             };
             format!("{ns} {} {ew}", format_dms(ang, prec))
         }
-        _ => format!("{:.*}", prec, wrap_full_turn(deg, 360.0, prec)),
+        _ => cadaddy_doc::numfmt::fixed(wrap_full_turn(deg, 360.0, prec), prec),
     }
 }
 
 /// `v` (in `[0, full)`), or 0 when it rounds at `prec` decimals to the printed full-turn value (only when that value is exact).
 fn wrap_full_turn(v: f64, full: f64, prec: usize) -> f64 {
-    let full_text = format!("{full:.prec$}");
+    let full_text = cadaddy_doc::numfmt::fixed(full, prec);
     // A full turn that cannot be printed exactly (2π) only wraps when `v` is numerically that value.
     let exact = full_text.parse::<f64>().is_ok_and(|f| f == full);
     let reached = exact || full - v < 1e-6;
-    if reached && format!("{v:.prec$}") == full_text { 0.0 } else { v }
+    if reached && cadaddy_doc::numfmt::fixed(v, prec) == full_text { 0.0 } else { v }
 }
 
 /// Parse a distance typed by the user: decimal, `1'6"`, `1'-6 1/2"`, `5'6-1/2"`, `6 1/2`, `6-1/2`,
@@ -463,10 +453,34 @@ mod tests {
     }
 
     #[test]
+    fn exact_halves_round_up_in_magnitude() {
+        for (v, want) in [(0.5, "1"), (1.5, "2"), (2.5, "3"), (3.5, "4"), (4.5, "5"), (-2.5, "-3")] {
+            assert_eq!(format_distance(v, 2, 0), want, "{v}");
+        }
+        assert_eq!(format_distance(0.125, 2, 2), "0.13");
+        assert_eq!(format_distance(0.375, 2, 2), "0.38");
+        assert_eq!(format_distance(2.675, 2, 2), "2.68");
+        assert_eq!(format_distance(-0.125, 2, 2), "-0.13");
+        assert_eq!(format_distance(1.25, 1, 1), "1.3E+00");
+        // Engineering: 1/2 inch at 0 places is 1", and 11.5 carries into the next foot.
+        assert_eq!(format_distance(0.5, 3, 0), "0'-1\"");
+        assert_eq!(format_distance(11.5, 3, 0), "1'-0\"");
+        assert_eq!(format_distance(2.675, 3, 2), "0'-2.68\"");
+        // Architectural and fractional: ties at the fraction step go up (1/32 at 1/16 is 1/16).
+        assert_eq!(format_distance(1.0 / 32.0, 4, 4), "0'-0 1/16\"");
+        assert_eq!(format_distance(1.0 / 32.0, 5, 4), "0 1/16");
+        assert_eq!(format_distance(-1.0 / 32.0, 5, 4), "-0 1/16");
+        // Angles: 22.5 degrees at 0 places.
+        assert_eq!(format_angle(22.5f64.to_radians(), 0, 0), "23");
+        assert_eq!(format_angle(0.125f64.to_radians(), 0, 2), "0.13");
+    }
+
+    #[test]
     fn scientific_exponent_is_signed_and_padded() {
         assert_eq!(format_distance(17.5, 1, 4), "1.7500E+01");
         assert_eq!(format_distance(0.00001, 1, 2), "1.00E-05");
-        assert_eq!(format_distance(1234.5, 1, 3), "1.234E+03");
+        // 1.2345 is a tie: it rounds up (it was 1.234E+03 under round-half-even).
+        assert_eq!(format_distance(1234.5, 1, 3), "1.235E+03");
         assert_eq!(format_distance(12345678.0, 1, 3), "1.235E+07");
         assert_eq!(format_distance(-17.5, 1, 4), "-1.7500E+01");
         assert_eq!(format_distance(0.0, 1, 2), "0.00E+00");
@@ -512,7 +526,8 @@ mod tests {
         assert_eq!(format_angle(359.99_f64.to_radians(), 0, 1), "0.0");
         assert_eq!(format_angle(359.9_f64.to_radians(), 0, 1), "359.9");
         assert_eq!(format_angle(1.0, 3, 2), "1.00r");
-        assert_eq!(format_angle(6.25, 3, 1), "6.2r");
+        // A tie rounds up in magnitude (it was 6.2r under round-half-even).
+        assert_eq!(format_angle(6.25, 3, 1), "6.3r");
     }
 
     #[test]

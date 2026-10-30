@@ -407,7 +407,7 @@ pub fn format_number(v: f64, code: &str) -> String {
     }
     let decimals = num_part.split_once('.').map_or(0, |(_, f)| f.chars().filter(|c| matches!(c, '0' | '#' | '?')).count());
     let thousands = num_part.split('.').next().unwrap_or("").contains(',');
-    let mut s = format!("{:.*}", decimals, v.abs());
+    let mut s = cadaddy_doc::numfmt::fixed(v.abs(), decimals);
     if thousands {
         let (int, frac) = s.split_once('.').map_or((s.clone(), None), |(a, b)| (a.to_string(), Some(b.to_string())));
         let mut grouped = String::new();

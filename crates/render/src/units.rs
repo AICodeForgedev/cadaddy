@@ -40,7 +40,7 @@ impl NumFormat {
 /// Decimal number with leading (`zin & 4`) / trailing (`zin & 8`) zero suppression.
 pub fn format_decimal(v: f64, decimals: u8, zin: u8, sep: &str) -> String {
     let v = if v.is_finite() { v } else { 0.0 };
-    let mut s = format!("{:.*}", usize::from(decimals.min(8)), v);
+    let mut s = cadaddy_doc::numfmt::fixed(v, usize::from(decimals.min(8)));
     if s.starts_with('-') && s.trim_start_matches(['-', '0', '.']).is_empty() {
         s.remove(0);
     }
@@ -86,14 +86,9 @@ fn scientific(v: f64, decimals: u8, zin: u8, sep: &str) -> String {
     if v == 0.0 || !v.is_finite() {
         return format!("{}E+00", format_decimal(0.0, decimals, zin & 8, sep));
     }
-    let mut exp = v.abs().log10().floor() as i32;
-    let mut mant = v / 10f64.powi(exp);
-    // Rounding can carry the mantissa to 10.
-    let p = 10f64.powi(i32::from(decimals.min(8)));
-    if (mant.abs() * p).round() / p >= 10.0 {
-        mant /= 10.0;
-        exp += 1;
-    }
+    // The mantissa rounds on the decimal text (a carry to 10 moves into the exponent).
+    let (mant, exp) = cadaddy_doc::numfmt::sci_parts(v, usize::from(decimals.min(8)));
+    let mant = mant.parse::<f64>().unwrap_or(0.0);
     format!("{}E{}{:02}", format_decimal(mant, decimals, zin & 8, sep), if exp < 0 { '-' } else { '+' }, exp.abs())
 }
 
@@ -159,7 +154,7 @@ pub fn format_linear(v: f64, f: &NumFormat) -> (String, String) {
             let neg = v < 0.0;
             let a = v.abs();
             let p = 10f64.powi(i32::from(f.decimals.min(8)));
-            let a = (a * p).round() / p;
+            let a = cadaddy_doc::numfmt::round_to(a, usize::from(f.decimals.min(8)));
             let ft = (a / 12.0 + 1e-12).floor();
             let inch = (a - ft * 12.0).max(0.0);
             let s = format_decimal(inch, f.decimals, f.zin & 12, sep);
@@ -232,6 +227,24 @@ mod tests {
 
     fn f(unit: u8, decimals: u8, zin: u8) -> NumFormat {
         NumFormat { unit, decimals, zin, ..NumFormat::decimal(decimals) }
+    }
+
+    #[test]
+    fn dimension_text_rounds_exact_halves_up() {
+        for (v, want) in [(0.5, "1"), (1.5, "2"), (2.5, "3"), (3.5, "4"), (4.5, "5"), (-2.5, "-3")] {
+            assert_eq!(format_linear(v, &f(2, 0, 0)).0, want, "{v}");
+        }
+        assert_eq!(format_linear(0.125, &f(2, 2, 0)).0, "0.13");
+        assert_eq!(format_linear(0.375, &f(2, 2, 0)).0, "0.38");
+        assert_eq!(format_linear(2.675, &f(2, 2, 0)).0, "2.68");
+        assert_eq!(format_linear(-0.125, &f(2, 2, 0)).0, "-0.13");
+        assert_eq!(format_linear(1.25, &f(1, 1, 0)).0, "1.3E+00");
+        // Engineering inches, and the carry from 11.5 into a foot.
+        assert_eq!(format_linear(2.5, &f(3, 0, 0)).0, "3\"");
+        assert_eq!(format_linear(11.5, &f(3, 0, 0)).0, "1'");
+        // DIMRND applies first: 2.4 to the nearest 0.5 is 2.5, which then rounds up.
+        let nf = NumFormat { round: 0.5, ..f(2, 0, 0) };
+        assert_eq!(format_linear(2.4, &nf).0, "3");
     }
 
     #[test]

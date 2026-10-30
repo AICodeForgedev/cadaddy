@@ -58,6 +58,7 @@ pub mod hyperlink;
 pub mod lighting;
 pub mod markup;
 pub mod material;
+pub mod numfmt;
 pub mod overrides;
 pub mod plotstamp;
 pub mod pointcloud;

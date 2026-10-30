@@ -301,6 +301,11 @@ fn printing() {
     assert_eq!(out, ["Hello world", "\"q\"", "", "3 "]);
     assert_eq!(ok(&mut s, "(vl-prin1-to-string '(1 \"a\"))"), "\"(1 \\\"a\\\")\"");
     assert_eq!(ok(&mut s, "(rtos 12.5 2 2)"), "\"12.50\"");
+    // Exact halves round up in magnitude, not to even.
+    assert_eq!(ok(&mut s, "(rtos 2.5 2 0)"), "\"3\"");
+    assert_eq!(ok(&mut s, "(rtos 0.125 2 2)"), "\"0.13\"");
+    assert_eq!(ok(&mut s, "(rtos -2.5 2 0)"), "\"-3\"");
+    assert_eq!(ok(&mut s, "(rtos 2.675 2 2)"), "\"2.68\"");
 }
 
 #[test]
