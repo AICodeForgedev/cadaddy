@@ -221,7 +221,7 @@ impl GripEdit {
     fn acted(&self, s: &Session, action: GripAction, to: Option<Vec2>, value: Option<f64>) -> Option<(Handle, EntityKind)> {
         let &(h, i) = self.hot.first()?;
         let e = s.doc().ok()?.entity(h)?;
-        grip_action(&e.kind, i, action, to, value).map(|k| (h, k))
+        grip_action(s.doc().ok()?, &e.kind, i, action, to, value).map(|k| (h, k))
     }
 
     /// Apply a multifunctional option; the grip edit ends.

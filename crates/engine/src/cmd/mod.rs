@@ -120,7 +120,7 @@ mod measuregeom;
 pub mod mep;
 pub mod mepqty;
 mod mleader_content;
-mod mleader_edit;
+pub(crate) mod mleader_edit;
 mod models3d;
 mod modify;
 mod modify2;

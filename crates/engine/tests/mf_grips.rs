@@ -239,3 +239,54 @@ fn ctrl_click_on_a_hot_dimension_text_grip_copies_in_stretch_mode() {
     assert_eq!(after.overrides.get("textMove"), before.overrides.get("textMove"));
     assert_eq!(s.doc().unwrap().model.len(), count + 1, "a second dimension was added");
 }
+
+/// A multileader with a second landing on the far side of its text.
+fn two_landings() -> (Session, Handle) {
+    let (mut s, h) = mleader();
+    s.execute("mleaderedit", &json!({ "handle": h.hex(), "points": [[40, 0]] })).unwrap();
+    assert_eq!(ml(&s, h).roots.len(), 1, "a landing on the far side");
+    (s, h)
+}
+
+#[test]
+fn the_landing_grip_moves_every_landing_and_the_text() {
+    let (mut s, h) = two_landings();
+    let before = ml(&s, h);
+    let landing = before.landing.xy();
+    // Grips: the arrowhead (0) and the first landing (1).
+    s.execute("grip.stretch", &json!({ "handle": h.hex(), "index": 1, "to": [landing.x + 3.0, landing.y + 4.0] })).unwrap();
+    let after = ml(&s, h);
+    let d = Vec2::new(3.0, 4.0);
+    assert_eq!(after.landing.xy(), before.landing.xy() + d, "the first landing");
+    assert_eq!(after.roots.len(), 1);
+    assert_eq!(after.roots[0].landing.xy(), before.roots[0].landing.xy() + d, "the further landing");
+    assert_eq!(after.text.as_ref().unwrap().insert.xy(), before.text.as_ref().unwrap().insert.xy() + d, "the text");
+    assert_eq!(after.leaders, before.leaders, "arrowheads stay");
+    assert_eq!(after.roots[0].leaders, before.roots[0].leaders, "the further arrowheads stay");
+}
+
+#[test]
+fn lengthen_landing_shifts_the_further_landing_with_the_text() {
+    let (mut s, h) = two_landings();
+    let before = ml(&s, h);
+    option(&mut s, h, 1, "lengthenLanding", json!({ "value": 2 })).unwrap();
+    let after = ml(&s, h);
+    let shift = Vec2::new(2.0, 0.0);
+    assert_eq!(after.text.as_ref().unwrap().insert.xy(), before.text.as_ref().unwrap().insert.xy() + shift);
+    assert_eq!(after.roots[0].landing.xy(), before.roots[0].landing.xy() + shift);
+    assert_eq!(after.roots[0].dogleg, before.roots[0].dogleg);
+}
+
+#[test]
+fn grip_add_leader_on_the_far_side_starts_a_landing_there() {
+    let (mut s, h) = mleader();
+    option(&mut s, h, 1, "addLeader", json!({ "to": [40, 2] })).unwrap();
+    let m = ml(&s, h);
+    assert_eq!(m.leaders.len(), 1, "the first landing is untouched");
+    assert_eq!(m.roots.len(), 1, "the far side got a landing");
+    assert_eq!(m.roots[0].leaders, vec![vec![cadaddy_engine::geom::Vec3::new(40.0, 2.0, 0.0)]]);
+    // A click on the first landing's side joins that landing, as MLEADEREDIT does.
+    option(&mut s, h, 0, "addLeader", json!({ "to": [-3, 2] })).unwrap();
+    let m = ml(&s, h);
+    assert_eq!((m.leaders.len(), m.roots.len()), (2, 1));
+}
