@@ -34,6 +34,19 @@ fn area_object_add_and_subtract_keep_a_running_total() {
 }
 
 #[test]
+fn area_too_large_to_hold_is_refused() {
+    // A 2e154 square has an area of 4e308, past f64's range; its perimeter fits.
+    let big = json!([[0, 0], [2e154, 0], [2e154, 2e154], [0, 2e154]]);
+    let mut s = Session::new();
+    let err = s.execute("area", &json!({ "points": big })).unwrap_err();
+    assert!(err.to_string().contains("the area is too large"), "{err}");
+    // Two sides of 1e308: the area fits, the perimeter does not.
+    let long = json!([[0, 0], [1e308, 0], [1e308, 1e-300]]);
+    let err = s.execute("area", &json!({ "points": long })).unwrap_err();
+    assert!(err.to_string().contains("the perimeter is too large"), "{err}");
+}
+
+#[test]
 fn area_object_on_an_open_polyline_closes_the_area_but_not_the_perimeter() {
     // Open, 160 long; the closing side back to 0,0 would add 116.619.
     let (_, log) = run(&["pline", "0,0", "100,0", "100,60", "", "area", "o", "50,0"]);

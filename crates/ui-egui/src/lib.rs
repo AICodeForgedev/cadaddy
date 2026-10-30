@@ -113,6 +113,7 @@ pub mod markuppalette;
 pub mod matchpropdlg;
 pub mod menus;
 pub mod meppalette;
+pub mod modal;
 pub mod multiprops;
 pub mod navwheel;
 pub mod opening;
@@ -254,6 +255,8 @@ pub struct UiState {
     pub control_token: bool,
     /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
     pub recent_files: Vec<String>,
+    /// The folder the last APPLOAD file came from: the next pick starts there.
+    pub last_lisp_dir: Option<String>,
     /// The touch bar shows once the screen is touched ([`touch`]).
     pub touch_bar: bool,
     /// Keyboard shortcuts the user changed ([`aliasdlg`]).
@@ -359,6 +362,7 @@ impl Default for UiState {
             agent_control: true,
             control_token: true,
             recent_files: Vec::new(),
+            last_lisp_dir: None,
             touch_bar: true,
             shortcuts: Vec::new(),
             ribbon_tabs: Vec::new(),
@@ -375,6 +379,13 @@ impl Default for UiState {
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Pick a `.lsp` file for APPLOAD, starting in the given folder (empty for the default one).
+    /// `None` where there is no native file dialog: the desktop without one asks for the name,
+    /// and the web (no file system) says to drop the file (`no_file_system`).
+    pub pick_lisp: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// The host has no file system to read a path from (the browser): a dropped file's contents
+    /// are what it loads, and APPLOAD says so instead of asking for a name it cannot read.
+    pub no_file_system: bool,
     /// A PDF to convert or import (PDFIMPORT, Convert PDF to DWG).
     pub pick_pdf: Option<Box<dyn Fn() -> Option<String>>>,
     /// A raster image to attach (IMAGEATTACH, ATTACH).
@@ -804,6 +815,9 @@ impl CadApp {
         if !self.ui.recent_files.is_empty() {
             prefs["recentFiles"] = json!(self.ui.recent_files);
         }
+        if let Some(dir) = &self.ui.last_lisp_dir {
+            prefs["lispDir"] = json!(dir);
+        }
         if self.donate.shown_ms > 0.0 {
             prefs["supportBannerShown"] = json!(self.donate.shown_ms);
         }
@@ -854,6 +868,9 @@ impl CadApp {
         }
         if let Some(files) = v.get("recentFiles").and_then(Value::as_array) {
             self.ui.recent_files = files.iter().filter_map(Value::as_str).filter(|p| !p.is_empty()).take(RECENT_FILES).map(str::to_string).collect();
+        }
+        if let Some(dir) = v.get("lispDir").and_then(Value::as_str).filter(|d| !d.is_empty()) {
+            self.ui.last_lisp_dir = Some(dir.to_string());
         }
         if let Some(ms) = v.get("supportBannerShown").and_then(Value::as_f64).filter(|ms| ms.is_finite()) {
             self.donate.shown_ms = ms;

@@ -97,6 +97,7 @@
 	Blend	دمج تدريجي
 	Block	كتلة
 	Block Attribute Manager...	مدير سمات الكتلة...
+	Block Description...	وصف الكتلة...
 	Block Editor	محرر الكتل
 	Block Reference	مرجع كتلة
 	Block...	كتلة...
@@ -151,6 +152,7 @@
 	Close All Other Drawings	إغلاق كل الرسومات الأخرى
 	Close Array Editing	إغلاق تحرير المصفوفة
 	Close Comparison	إغلاق المقارنة
+	Export Comparison	تصدير المقارنة
 	Closed	مغلق
 	Coincident	تطابق
 	Collapse Palettes	طي اللوحات
@@ -587,6 +589,7 @@
 	Name	الاسم
 	Name (A–Z)	الاسم (أ–ي)
 	Named	مسمى
+	Named Viewports...	أطر العرض المسماة...
 	Named Views...	طرق عرض مسماة...
 	Nearest	الأقرب
 	New	جديد

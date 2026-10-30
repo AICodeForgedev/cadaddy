@@ -58,6 +58,7 @@ pub const PROFILE_VARS: &[&str] = &[
     "WSCURRENT",
     "PICKDRAG",
     "MAXARRAY",
+    "MEASUREINIT",
     "DWGCOPY",
     "ACTIVITYLOG",
     "SECURELOAD",

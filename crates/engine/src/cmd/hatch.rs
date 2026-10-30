@@ -21,7 +21,7 @@ pub use pick::{HatchPicks, PickMode};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("hatch", "Hatch...", run_hatch).menu(&["Draw", "Hatch..."]).alias(&["h", "bh", "-hatch"]).params("{points?: [[x,y]] (internal points) and/or handles?: [hex] (closed objects), pattern?: \"ANSI31\", scale?, angle? (degrees), associative? (HPASSOC), separate? (HPSEPARATE: a hatch per point/object), origin?: [x,y] (HPORIGIN) | originMode?: \"current\"|\"bottomLeft\"|\"bottomRight\"|\"topLeft\"|\"topRight\"|\"center\" (HPORIGINMODE), style?: \"normal\"|\"outer\"|\"ignore\" (HPISLANDDETECTION), inherit?: hatch handle (Inherit Properties: its pattern or gradient, scale, angle, origin, island style, colour and transparency; explicit values win), patternFile?: .pat path | patternText?: its contents (a pattern not in the library)} — gaps up to HPGAPTOL close").interactive(|s| Ok(Box::new(HatchM::new(s, false)))),
+        CommandSpec::new("hatch", "Hatch...", run_hatch).menu(&["Draw", "Hatch..."]).alias(&["h", "bh", "-hatch"]).params("{points?: [[x,y]] (internal points) and/or handles?: [hex] (closed objects), pattern?: \"ANSI31\" (built in, or defined by patternFile | patternText), patternFile?: path to a .pat file | patternText?: its contents (loads the patterns it defines), scale?, angle? (degrees), associative? (HPASSOC), separate? (HPSEPARATE: a hatch per point/object), origin?: [x,y] (HPORIGIN) | originMode?: \"current\"|\"bottomLeft\"|\"bottomRight\"|\"topLeft\"|\"topRight\"|\"center\" (HPORIGINMODE), style?: \"normal\"|\"outer\"|\"ignore\" (HPISLANDDETECTION), inherit?: hatch handle (Inherit Properties: its pattern or gradient, scale, angle, origin, island style, colour and transparency; explicit values win), patternFile?: .pat path | patternText?: its contents (a pattern not in the library)} — gaps up to HPGAPTOL close").interactive(|s| Ok(Box::new(HatchM::new(s, false)))),
         CommandSpec::new("gradient", "Gradient...", run_gradient).menu(&["Draw", "Gradient..."]).alias(&["gd"]).params("{points? and/or handles?, name?: \"LINEAR\"|\"CYLINDER\"|\"CURVED\"|\"SPHERICAL\"|\"HEMISPHERICAL\" or INV… (colours swapped), color1?, color2?, angle? (degrees), centered? (default true), inherit?: hatch handle}").interactive(|s| Ok(Box::new(HatchM::new(s, true)))),
         CommandSpec::new("boundary", "Boundary...", run_boundary).menu(&["Draw", "Boundary..."]).alias(&["bo", "bpoly"]).params("{points: [[x,y]]}").interactive(|_| Ok(Box::new(BoundaryM { region: false }))),
         CommandSpec::new("region", "Region", run_region).menu(&["Draw", "Region"]).alias(&["reg"]).params("{handles?}"),
@@ -34,12 +34,17 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// The tolerance curves are flattened with for boundary tracing, in a space with extents `ext`.
+pub(super) fn outline_tol(ext: Bounds2) -> f64 {
+    (ext.width() + ext.height()).max(1e-9) / 20000.0
+}
+
 /// Tessellated outlines of every visible curve in the space (hatch boundary candidates), each
 /// with the handle of the object it came from.
 fn outlines(d: &Drawing, space: &Space, near: Option<Bounds2>) -> (Vec<Vec<Vec2>>, Vec<Handle>) {
     let Some(store) = d.space(space) else { return (Vec::new(), Vec::new()) };
     let ext = d.extents(space);
-    let tol = (ext.width() + ext.height()).max(1e-9) / 20000.0;
+    let tol = outline_tol(ext);
     let mut out = Vec::new();
     let mut owners = Vec::new();
     for e in store.iter() {
@@ -141,7 +146,8 @@ fn closed_vertices(d: &Drawing, e: &Entity) -> Option<Vec<PolyVertex>> {
 }
 
 /// Open curves that can make up an island together (a square drawn as four LINEs, two ARCs
-/// forming a circle). Closed objects are islands on their own (see `closed_loop`).
+/// forming a circle, the inner lines of multiline walls around a room). Closed objects are
+/// islands on their own (see `closed_loop`).
 fn island_curve(d: &Drawing, e: &Entity) -> bool {
     matches!(
         e.kind,
@@ -151,6 +157,7 @@ fn island_curve(d: &Drawing, e: &Entity) -> bool {
             | EntityKind::LwPolyline(_)
             | EntityKind::Polyline3d(_)
             | EntityKind::Spline(_)
+            | EntityKind::MLine(_)
     ) && closed_loop(d, e).is_none()
 }
 
@@ -457,6 +464,8 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>) -> Result<Vec<H
             Some(c) => c.window(window),
             None => outlines(d, &space, window),
         };
+        // A line that ends on a flattened curve (an ellipse) can stop short of its chords.
+        let polys = cadaddy_geom::region::snap_ends(&polys, outline_tol(ext), tol);
         let found = cadaddy_geom::region::search_at_gap(&polys, p, tol, gap);
         let inside = |w: &Bounds2, b: &cadaddy_geom::region::Boundary| {
             let bb = Bounds2::from_points(b.outer.iter().copied());
@@ -891,7 +900,7 @@ fn run_hatch(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(up) = str_param(p, "pattern").map(str::to_ascii_uppercase)
         && !patfile::adopt_from(s.doc()?, &up)
     {
-        return Err(bad("hatch", format!("unknown pattern {up}")));
+        return Err(bad("hatch", format!("unknown pattern {up}: not built in; load it with patternFile or patternText (a .pat file)")));
     }
     make(s, p, false)
 }
@@ -1433,6 +1442,16 @@ mod tests {
         s.cancel();
         s.start("gradient").unwrap();
         assert!(s.current_prompt().unwrap().picker.is_none());
+    }
+
+    #[test]
+    fn unknown_pattern_error_and_catalog_name_the_pat_file_route() {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        let e = s.execute("hatch", &json!({ "points": [[5, 5]], "pattern": "GRAVEL" })).unwrap_err();
+        assert!(e.to_string().contains("patternFile"), "{e}");
+        let spec = specs().into_iter().find(|c| c.id == "hatch").unwrap();
+        assert!(spec.params.contains("patternFile") && spec.params.contains("patternText"), "{}", spec.params);
     }
 
     #[test]

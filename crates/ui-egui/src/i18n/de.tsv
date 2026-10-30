@@ -68,6 +68,7 @@
 	Blend	Übergang
 	Block	Block
 	Block Attribute Manager...	Blockattribut-Manager...
+	Block Description...	Blockbeschreibung...
 	Block Editor	Blockeditor
 	Block Reference	Blockreferenz
 	Block...	Block...
@@ -459,6 +460,7 @@
 	N	N
 	Name	Name
 	Name (A–Z)	Name (A–Z)
+	Named Viewports...	Benannte Ansichtsfenster...
 	Nearest	Nächstgelegener
 	New	Neu
 	New (metric)	Neu (metrisch)

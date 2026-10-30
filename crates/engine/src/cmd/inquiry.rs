@@ -1,5 +1,7 @@
 //! Inquiry: DIST, ID, LIST, AREA, drawing inspection for agents.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use cadaddy_doc::{Entity, EntityKind, Handle};
 use cadaddy_geom::{Polyline, Vec2, Vec3};
 use serde_json::{Value, json};
@@ -9,9 +11,13 @@ use crate::units::format_angle;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 pub(super) mod live;
+mod loops;
 mod regions;
 mod shapes;
+mod usage;
 
+/// The inquiry commands: distances, points, listing, area, time and status, the drawing and
+/// entity queries an agent reads, SHAPES, USAGE, LOOPS, COUNT and the region commands.
 pub fn specs() -> Vec<CommandSpec> {
     let mut v = vec![
         CommandSpec::new("dist", "Distance", run_dist)
@@ -48,6 +54,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{type?, layer?, selected?: bool (default false; true = current selection in active space), window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
             .noundo(),
         CommandSpec::new("shapes", "Analyze Shapes", shapes::run).params(shapes::PARAMS).noundo(),
+        CommandSpec::new("usage", "Analyze Usage", usage::run).params(usage::PARAMS).noundo(),
+        CommandSpec::new("loops", "Implied Loops", loops::run).params(loops::PARAMS).noundo(),
         CommandSpec::new("texts", "Query Texts", run_texts)
             .params("{contains?: text (any case), layer?, window?: [[x,y],[x,y]] (by insertion point), limit? (default 200), offset?} → {count (all matches), returned, offset, texts: [{handle, type, layer, text, at, height, rotation (degrees), style, tag? (attributes)}]}: the readable text of TEXT, MTEXT (formatting removed), block attributes and multileaders")
             .noundo(),
@@ -94,6 +102,106 @@ pub(crate) fn fmt_area(s: &Session, v: f64) -> String {
 fn fmt_a(s: &Session, v: f64) -> String {
     let h = s.doc().map(|d| (d.header.i64("AUNITS", 0), d.header.i64("AUPREC", 0))).unwrap_or((0, 0));
     format_angle(v, h.0, h.1)
+}
+
+/// Schema of the analysis self-check block (#1440). Fields may be added within a version; a
+/// rename or a changed meaning bumps it.
+pub(super) const SELF_CHECK_SCHEMA: u64 = 1;
+
+/// How far past its bound a value may be before it is implausible: a relative slack for the
+/// rounding of two ways of measuring the same thing.
+const IMPLAUSIBLE_TOLERANCE: f64 = 1e-9;
+
+/// How many objects of one type an analysis skipped, and every distinct reason it gave.
+#[derive(Default)]
+struct SkipTally {
+    count: u64,
+    reasons: BTreeSet<String>,
+}
+
+/// The self-check every analysis result carries (#1440): how many objects it found, how many it
+/// analysed, what it skipped and why, the caps it hit with their values, and values so
+/// implausible that they point at a bug rather than at the drawing.
+#[derive(Default)]
+pub(super) struct SelfCheck {
+    found: u64,
+    analyzed: u64,
+    skipped: BTreeMap<String, SkipTally>,
+    caps: BTreeMap<String, u64>,
+    implausible: Vec<Value>,
+}
+
+impl SelfCheck {
+    /// An empty self-check: nothing found, analysed or skipped yet.
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Count objects the analysis found (matched its filters).
+    pub(super) fn found(&mut self, n: u64) {
+        self.found = self.found.saturating_add(n);
+    }
+
+    /// Count objects the analysis actually analysed.
+    pub(super) fn analyzed(&mut self, n: u64) {
+        self.analyzed = self.analyzed.saturating_add(n);
+    }
+
+    /// Count `n` objects of `ty` skipped, with the reason.
+    pub(super) fn skip(&mut self, ty: &str, reason: &str, n: u64) {
+        let skip = self.skipped.entry(ty.to_string()).or_default();
+        skip.count = skip.count.saturating_add(n);
+        skip.reasons.insert(reason.to_string());
+    }
+
+    /// Record a cap the analysis hit, with its value (e.g. `limit`, 200).
+    pub(super) fn cap(&mut self, name: &str, value: u64) {
+        self.caps.insert(name.to_string(), value);
+    }
+
+    /// Flag `value` as implausible when it is past `bound`, with the rule that makes it so. A
+    /// non-finite `bound` means no bound applies (an empty drawing has no extents). Values within
+    /// `IMPLAUSIBLE_TOLERANCE` of the bound are not flagged: they are the rounding of two ways
+    /// of measuring the same thing (a border rectangle's shoelace area against the extents'
+    /// `width * height`), not a bug.
+    pub(super) fn implausible(&mut self, handle: Handle, ty: &str, field: &str, value: f64, bound: f64, rule: &str) {
+        if value.is_finite() && bound.is_finite() && value > bound + bound.abs() * IMPLAUSIBLE_TOLERANCE {
+            self.implausible.push(json!({
+                "handle": handle.hex(),
+                "type": ty,
+                "field": field,
+                "value": value,
+                "bound": bound,
+                "reason": rule,
+            }));
+        }
+    }
+
+    /// The skip map in the shape analyses have always reported: type → {count, reason}.
+    pub(super) fn skipped_json(&self) -> Value {
+        Value::Object(
+            self.skipped
+                .iter()
+                .map(|(ty, skip)| {
+                    let reason = skip.reasons.iter().map(String::as_str).collect::<Vec<_>>().join("; ");
+                    (ty.clone(), json!({ "count": skip.count, "reason": reason }))
+                })
+                .collect(),
+        )
+    }
+
+    /// The self-check as the JSON object every analysis returns: schema, counts, skip map, caps
+    /// and implausible values.
+    pub(super) fn to_json(&self) -> Value {
+        json!({
+            "schema": SELF_CHECK_SCHEMA,
+            "found": self.found,
+            "analyzed": self.analyzed,
+            "skipped": self.skipped_json(),
+            "caps": self.caps,
+            "implausible": self.implausible,
+        })
+    }
 }
 
 /// The angle of `d` up from the XY plane.
@@ -394,8 +502,48 @@ fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
         let h = targets(s, p)?.first().copied().ok_or_else(|| bad("area", "`points` or `handle` is required"))?;
         object_area(s, h)?
     };
+    if let Some(what) = too_large(a, per) {
+        return Err(bad("area", format!("the {what} is too large")));
+    }
     (s.last_used.area, s.last_used.perimeter) = (a, per);
     Ok(json!({ "area": a, "perimeter": per, "message": area_text(s, a, per) }))
+}
+
+/// MEASUREGEOM's Volume option: the area of a polygon of three or more points, or of a closed 2D
+/// object (as AREA measures it), times the absolute value of a height.
+pub(super) fn run_volume(s: &mut Session, p: &Value) -> Result<Value> {
+    let a = if let Some(pts) = points_param(p, "points") {
+        if pts.len() < 3 {
+            return Err(bad("volume.measure", "`points` needs 3 or more [x,y] points"));
+        }
+        area_of(&pts).0
+    } else if p.get("points").is_some_and(|v| !v.is_null()) {
+        return Err(bad("volume.measure", "`points` must be a list of finite [x,y] points"));
+    } else {
+        let h = targets(s, p)?.first().copied().ok_or_else(|| bad("volume.measure", "`points` or `handle` is required"))?;
+        object_area(s, h)?.0
+    };
+    let height = f64_req("volume.measure", p, "height")?;
+    let v = a * height.abs();
+    if !v.is_finite() {
+        return Err(bad("volume.measure", "the volume is too large"));
+    }
+    Ok(json!({ "volume": v, "area": a, "height": height, "message": volume_text(s, v) }))
+}
+
+fn volume_text(s: &Session, v: f64) -> String {
+    format!("Volume = {}", fmt_n(s, v))
+}
+
+/// "area" or "perimeter" when that value is past f64's range, `None` when both can be reported.
+fn too_large(a: f64, per: f64) -> Option<&'static str> {
+    if !a.is_finite() {
+        Some("area")
+    } else if !per.is_finite() {
+        Some("perimeter")
+    } else {
+        None
+    }
 }
 
 pub(crate) fn area_text(s: &Session, a: f64, per: f64) -> String {
@@ -1009,14 +1157,23 @@ impl AreaM {
         }
     }
     /// Report an area (and the running total in add/subtract mode); ends the command in single mode.
+    /// An area, perimeter or total past f64's range is not reported or added to the total.
     fn measured(&mut self, s: &mut Session, a: f64, per: f64) -> Step {
+        let total = match self.mode {
+            AreaMode::Single => self.total,
+            AreaMode::Add => self.total + a,
+            AreaMode::Subtract => self.total - a,
+        };
+        if let Some(what) = too_large(a, per).or_else(|| (!total.is_finite()).then_some("total area")) {
+            s.echo(format!("The {what} is too large."));
+            return if self.mode == AreaMode::Single { Step::Done } else { Step::Continue };
+        }
         (s.last_used.area, s.last_used.perimeter) = (a, per);
         s.echo(area_text(s, a, per));
-        match self.mode {
-            AreaMode::Single => return Step::Done,
-            AreaMode::Add => self.total += a,
-            AreaMode::Subtract => self.total -= a,
+        if self.mode == AreaMode::Single {
+            return Step::Done;
         }
+        self.total = total;
         s.echo(format!("Total area = {}", fmt_area(s, self.total)));
         Step::Continue
     }
@@ -1143,5 +1300,30 @@ impl Interactive for AreaM {
         let (mut pts, mut bulges) = (self.pts.clone(), self.bulges.clone());
         push_point(&mut pts, &mut bulges, c, self.arc);
         live::area(s, &pts, &bulges, self.running_total())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1440 review: a value one ulp past its bound (a border rectangle's shoelace area against
+    /// the extents' `width * height`) is rounding, not a bug; a value clearly past it still is.
+    #[test]
+    fn implausible_allows_rounding_but_not_a_real_excess() {
+        let bound: f64 = 100.0;
+
+        let mut check = SelfCheck::new();
+        check.implausible(Handle::default(), "Polyline", "area", bound.next_up(), bound, "past the bound");
+        assert!(check.implausible.is_empty(), "one ulp past the bound is rounding: {}", check.to_json());
+
+        let mut check = SelfCheck::new();
+        check.implausible(Handle::default(), "Polyline", "area", bound * (1.0 + 1e-6), bound, "past the bound");
+        assert_eq!(check.implausible.len(), 1, "a real excess is still flagged: {}", check.to_json());
+
+        // A bound that is not finite means no bound applies: the value is not flagged.
+        let mut check = SelfCheck::new();
+        check.implausible(Handle::default(), "Region", "area", 1e9, f64::INFINITY, "past the bound");
+        assert!(check.implausible.is_empty(), "an infinite bound applies to nothing: {}", check.to_json());
     }
 }

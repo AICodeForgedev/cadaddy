@@ -17,7 +17,7 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
-        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, type?: object type (only the selected objects of that type change: line, circle, text…), layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, background?: true | false | {color?, scale?} (MTEXT mask), <geometry fields: radius, center, centerX, centerY, start, end, startX, startY, endX, endY, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides)}"),
+        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, type?: object type (only the selected objects of that type change: line, circle, text…), layer?, color?, linetype?, lineweight?, ltscale?, thickness?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, background?: true | false | {color?, scale?} (MTEXT mask), <geometry fields: radius, center, centerX, centerY, start, end, startX, startY, endX, endY, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides)}"),
         CommandSpec::new("chprop", "Change Properties", run_set)
             .params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?, ...properties.set fields} (typed: AutoCAD's property prompts)")
             .interactive(|_| Ok(Box::new(chprop::ChpropM::new(false)))),
@@ -66,6 +66,19 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(super::ask::machine("ltscale", "LTSCALE", [super::ask::ask_or("scale", "Enter new linetype scale factor", super::ask::Kind::Number, |s| var(s, "LTSCALE"))]))
         }),
         CommandSpec::new("units", "Units...", run_units).menu(&["Format", "Units..."]).alias(&["un"]).params("{lunits?: 1..5, luprec?: 0..8, aunits?: 0..4, auprec?: 0..8, insunits?}"),
+        CommandSpec::new("thickness", "Thickness", run_thickness)
+            .menu(&["Format", "Thickness"])
+            .params("{thickness} (THICKNESS: the 3D thickness given to new lines, arcs, circles, points and polylines; may be negative) → {thickness}")
+            .transparent()
+            .interactive(|_| {
+                Ok(super::ask::machine(
+                    "thickness",
+                    "THICKNESS",
+                    [super::ask::ask_or("thickness", "Enter new value for THICKNESS", super::ask::Kind::Bounded(MAX_THICKNESS), |s| {
+                        Some(format!("{:.4}", s.doc().ok()?.header.f64("THICKNESS", 0.0)))
+                    })],
+                ))
+            }),
         CommandSpec::new("limits", "Drawing Limits", run_limits).menu(&["Format", "Drawing Limits"]).params("{min: [x,y], max: [x,y]}").interactive(|_| {
             Ok(super::ask::machine(
                 "limits",
@@ -125,6 +138,7 @@ pub(super) fn entity_props(d: &cadaddy_doc::Drawing, e: &cadaddy_doc::Entity) ->
         "lineweight": e.common.lineweight.name(),
         "ltscale": e.common.ltscale,
         "transparency": transparency_value(e.common.transparency),
+        "thickness": e.common.thickness,
         "visible": e.common.visible,
     });
     if cadaddy_doc::can_be_annotative(&e.kind)
@@ -263,6 +277,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         .get("transparency")
         .map(|v| parse_transparency(v).ok_or_else(|| bad("properties.set", "transparency must be ByLayer, ByBlock or a percentage from 0 to 90")))
         .transpose()?;
+    let thickness = p
+        .get("thickness")
+        .map(|v| v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("properties.set", "thickness must be a finite number")))
+        .transpose()?;
     let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("properties.set", "bad lineweight"))).transpose()?;
     let d = s.doc_mut()?;
     // An explicit object linetype must be ByLayer, ByBlock or a loaded definition (as `linetype current` requires).
@@ -325,6 +343,9 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(t) = transparency {
             e.common.transparency = t;
+        }
+        if let Some(th) = thickness {
+            e.common.thickness = th;
         }
         if let Some(v) = p.get("visible").and_then(Value::as_bool) {
             e.common.visible = v;
@@ -560,7 +581,43 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
     let c = p.get("color").and_then(parse_color).ok_or_else(|| bad("color", "`color` is required"))?;
-    let d = s.doc_mut()?;
+    set_current_color(s.doc_mut()?, c);
+    ok()
+}
+
+/// `setvar CECOLOR`: the same input as the `color` command, stored the same way.
+pub(crate) fn set_current_color_value(s: &mut Session, v: &Value) -> Option<()> {
+    // An out-of-range index is refused here, where `color` folds it to ByLayer.
+    let c = match v {
+        // "RGB:r,g,b" is how `getvar` reads a true colour back, so a saved value can be restored.
+        Value::String(t) => match t.trim().get(..4).filter(|p| p.eq_ignore_ascii_case("rgb:")).and_then(|_| t.trim().get(4..)) {
+            Some(triple) => Color::parse(triple).filter(|c| matches!(c, Color::True(_))),
+            None => Color::parse(t),
+        },
+        Value::Number(n) => n.as_i64().and_then(|i| Color::parse(&i.to_string())),
+        _ => None,
+    }?;
+    set_current_color(s.doc_mut().ok()?, c);
+    Some(())
+}
+
+/// `getvar CECOLOR` as AutoCAD gives it, always text: "BYLAYER", "BYBLOCK", the index ("1" for
+/// red) or "RGB:r,g,b".
+pub(crate) fn current_color_value(d: &cadaddy_doc::Drawing) -> String {
+    if let Some(rgb) = d.header.get("CECOLOR_RGB").and_then(|v| v.as_i64()).and_then(|v| u32::try_from(v).ok()) {
+        let cadaddy_color::Rgb(r, g, b) = cadaddy_color::Rgb::from_u32(rgb);
+        return format!("RGB:{r},{g},{b}");
+    }
+    match Color::from_aci(d.header.i64("CECOLOR", 256) as i16) {
+        Color::ByLayer => "BYLAYER".into(),
+        Color::ByBlock => "BYBLOCK".into(),
+        other => other.to_aci().to_string(),
+    }
+}
+
+/// A true colour keeps its RGB in CECOLOR_RGB (which wins for new objects); any other colour must
+/// clear a stale one.
+fn set_current_color(d: &mut cadaddy_doc::Drawing, c: Color) {
     match c {
         Color::True(rgb) => {
             d.header.set_i64("CECOLOR", i64::from(cadaddy_color::nearest_aci(rgb)));
@@ -571,7 +628,6 @@ fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
             d.header.vars.remove("CECOLOR_RGB");
         }
     }
-    ok()
 }
 
 pub(crate) mod linfile;
@@ -630,6 +686,22 @@ fn run_ltscale(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.doc_mut()?.header.set_f64("LTSCALE", v);
     Ok(json!({ "message": "Regenerating model." }))
+}
+
+/// The largest THICKNESS, either way.
+const MAX_THICKNESS: f64 = 1e12;
+
+fn thickness_in_range(t: f64) -> bool {
+    t.is_finite() && t.abs() <= MAX_THICKNESS
+}
+
+fn run_thickness(s: &mut Session, p: &Value) -> Result<Value> {
+    let t = f64_req("thickness", p, "thickness")?;
+    if !thickness_in_range(t) {
+        return Err(bad("thickness", "thickness is out of range (-1e12 to 1e12)"));
+    }
+    s.doc_mut()?.header.set_f64("THICKNESS", t);
+    Ok(json!({ "thickness": t }))
 }
 
 fn run_units(s: &mut Session, p: &Value) -> Result<Value> {

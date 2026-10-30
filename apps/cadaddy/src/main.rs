@@ -270,6 +270,13 @@ fn services() -> Services {
                 .save_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        // APPLOAD: AutoLISP routines only, starting where the last one was loaded from.
+        pick_lisp: Some(Box::new(|dir: &str| {
+            let dialog = rfd::FileDialog::new().add_filter(i18n::t("AutoLISP (LSP)"), &["lsp"]).add_filter(i18n::t("All files"), &["*"]);
+            let dialog = if dir.is_empty() { dialog } else { dialog.set_directory(dir) };
+            dialog.pick_file().map(|p| p.to_string_lossy().to_string())
+        })),
+        no_file_system: false,
     }
 }
 
@@ -638,7 +645,9 @@ fn main() -> eframe::Result {
                     app.open_path(f);
                 }
                 if app.session.docs.is_empty() {
-                    app.session.new_drawing_with_viewports(false);
+                    // In the units the profile asks for (MEASUREINIT, restored above).
+                    let metric = app.session.settings.measureinit;
+                    app.session.new_drawing_with_viewports(metric);
                 }
                 cadaddy_ui_egui::startup::mark("drawings opened");
                 let ctx = cc.egui_ctx.clone();
