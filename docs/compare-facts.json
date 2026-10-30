@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1173,
-    "count": 1173,
+    "callableAsJson": 1175,
+    "count": 1175,
     "ids": [
       "-attedit",
       "-block",
@@ -100,6 +100,7 @@
       "bactiontool",
       "base",
       "battman",
+      "bauthorpalette",
       "bcf.create",
       "bcf.delete",
       "bcf.export",
@@ -179,6 +180,7 @@
       "bspec.get",
       "bspec.set",
       "bspec.validate",
+      "btestblock",
       "btrim",
       "burst",
       "bvhide",
@@ -1177,8 +1179,8 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 522,
-    "typed": 561
+    "inMenus": 523,
+    "typed": 563
   },
   "features": {
     "ifcExport": true,

@@ -105,7 +105,7 @@ fn array_label(g: &ArrayGrip) -> String {
 fn outline(xf: &Xf, g: &DynGrip, gs: f32) -> Vec<Pos2> {
     let c = xf.w2s(g.at);
     match g.shape {
-        GripShape::Linear => {
+        GripShape::Linear | GripShape::Polar => {
             // The arrow points the way the distance grows, on screen.
             let ahead = xf.w2s(g.at + g.dir) - c;
             let u = if ahead.length() > 1e-6 { ahead / ahead.length() } else { vec2(1.0, 0.0) };
@@ -113,8 +113,12 @@ fn outline(xf: &Xf, g: &DynGrip, gs: f32) -> Vec<Pos2> {
             let (len, half) = (gs * 1.6, gs * 1.1);
             vec![c - u * (len * 0.5) + n * half, c + u * (len * 0.8), c - u * (len * 0.5) - n * half]
         }
-        GripShape::Point => {
+        GripShape::Point | GripShape::Xy | GripShape::Alignment => {
             vec![c + vec2(-gs, -gs), c + vec2(gs, -gs), c + vec2(gs, gs), c + vec2(-gs, gs)]
+        }
+        GripShape::Rotation => {
+            let w = gs * 1.3;
+            vec![c + vec2(0.0, -w), c + vec2(w, 0.0), c + vec2(0.0, w), c + vec2(-w, 0.0)]
         }
         GripShape::List => {
             let w = gs * 1.3;

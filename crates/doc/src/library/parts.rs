@@ -316,43 +316,9 @@ pub fn define(d: &mut Drawing, part: &Part) -> Result<String, String> {
     Ok(part.name.clone())
 }
 
-fn inside(a: Vec2, b: Vec2, p: Vec2) -> bool {
-    p.x >= a.x.min(b.x) && p.x <= a.x.max(b.x) && p.y >= a.y.min(b.y) && p.y <= a.y.max(b.y)
-}
-
-/// What a stretch frame moves: lines and polylines with a vertex in the frame (with the vertices
-/// that move when not all do), and other objects whose reference point is in it. 3D faces move
-/// the corners in the frame as a whole object would not.
+/// What a stretch frame moves (see [`author::stretch_selection`]).
 fn stretch_selection(placed: &[(Handle, Option<u8>, Entity)], a: Vec2, b: Vec2) -> (Vec<Handle>, Vec<(Handle, Vec<i32>)>) {
-    let mut sel = Vec::new();
-    let mut verts = Vec::new();
-    for (h, _, e) in placed {
-        let pts: Vec<Vec2> = match &e.kind {
-            EntityKind::Line(l) => vec![l.a.xy(), l.b.xy()],
-            EntityKind::LwPolyline(p) => p.vertices.iter().map(|v| v.p).collect(),
-            EntityKind::Circle(c) => vec![c.center.xy()],
-            EntityKind::Arc(c) => vec![c.center.xy()],
-            EntityKind::Ellipse(c) => vec![c.center.xy()],
-            EntityKind::Text(t) => vec![t.align_pt.unwrap_or(t.insert).xy()],
-            EntityKind::Solid(s) => s.corners.iter().map(|c| c.xy()).collect(),
-            // Bodies, attribute definitions: left as they are.
-            _ => continue,
-        };
-        let idx: Vec<i32> = pts.iter().enumerate().filter(|(_, p)| inside(a, b, **p)).filter_map(|(i, _)| i32::try_from(i).ok()).collect();
-        if idx.is_empty() {
-            continue;
-        }
-        let partial = idx.len() < pts.len();
-        if partial && !matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
-            // A solid half in the frame would move whole: leave it.
-            continue;
-        }
-        sel.push(*h);
-        if partial {
-            verts.push((*h, idx));
-        }
-    }
-    (sel, verts)
+    author::stretch_selection(placed.iter().map(|(h, _, e)| (*h, e)), &[a, b])
 }
 
 /// Collects parts as the family modules add them.

@@ -293,6 +293,9 @@ pub struct DocState {
     /// The Block Editor (BEDIT), when it is open: `doc` is then the editor's drawing, and the
     /// drawing itself waits in it ([`DocState::drawing`]).
     pub block_edit: Option<blockedit::BlockEdit>,
+    /// The test window (BTESTBLOCK), when it is open: `doc` is then a temporary copy of the
+    /// block in a drawing of its own, and the Block Editor waits in the state kept here.
+    pub block_test: Option<Box<DocState>>,
     /// The file at `path` holds what reading it left out (a DWG's unreadable objects, a cut-off
     /// DXF): what the user was told. Saving over that file asks first; cleared once it's saved.
     pub read_loss: Option<String>,
@@ -413,6 +416,7 @@ impl DocState {
             last_revision: None,
             open_notes: Vec::new(),
             block_edit: None,
+            block_test: None,
             lightmap: None,
             lightmap_rev: 0,
             lightmap_tried: false,

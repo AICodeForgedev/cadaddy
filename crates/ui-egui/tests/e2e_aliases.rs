@@ -36,3 +36,30 @@ fn an_alias_is_added_typed_and_removed() {
     assert!(r["conflicts"].as_array().is_some_and(|c| c.iter().any(|x| x["alias"] == "c")), "{}", r["conflicts"]);
     e.exec("aliasedit", json!({ "clear": true }));
 }
+
+#[test]
+fn the_open_editor_adds_nothing_to_the_journal_or_the_event_queue() {
+    let mut e = E2e::new();
+    e.typed("aliasedit");
+    assert_eq!(e.dialog().as_deref(), Some("aliasedit"));
+    e.ok("events.subscribe", json!({ "on": true }));
+    let since = e.ok("events.poll", json!({}))["next"].as_u64().unwrap_or(0);
+    let said = |e: &mut E2e| e.app.session.log.iter().filter(|l| l.to_lowercase().contains("aliasedit")).count();
+    let journal = |e: &mut E2e| e.exec("commandhistory", json!({}))["lines"].to_string().to_lowercase().matches("aliasedit").count();
+    let (log_before, journal_before) = (said(&mut e), journal(&mut e));
+    for _ in 0..5 {
+        e.frame();
+    }
+    assert_eq!(e.dialog().as_deref(), Some("aliasedit"), "still open");
+    assert_eq!((said(&mut e), journal(&mut e)), (log_before, journal_before), "drawing the editor ran no command");
+    let polled = e.ok("events.poll", json!({ "since": since }));
+    let runs: Vec<&serde_json::Value> =
+        polled["events"].as_array().into_iter().flatten().filter(|ev| ev["type"] == "command.run" && ev["command"] == "aliasedit").collect();
+    assert!(runs.is_empty(), "no command.run for aliasedit while merely drawn: {runs:?}");
+
+    // Using it still runs the command: Add or Change goes through ALIASEDIT.
+    e.exec("aliasedit", json!({ "set": { "qqe": "circle" } }));
+    let polled = e.ok("events.poll", json!({ "since": since }));
+    assert!(polled["events"].as_array().is_some_and(|a| a.iter().any(|ev| ev["command"] == "aliasedit")), "{polled}");
+    e.exec("aliasedit", json!({ "clear": true }));
+}

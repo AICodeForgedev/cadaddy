@@ -17,6 +17,7 @@ use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 mod actionbar;
+pub mod authoring;
 pub use actionbar::action_bars;
 mod attedit;
 mod description;
@@ -93,6 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
     .chain(bedit::specs())
     .chain(dynauthor::specs())
     .chain(actionbar::specs())
+    .chain(authoring::specs())
     .collect()
 }
 

@@ -42,7 +42,7 @@ fn editing_a_block(s: &Session) -> std::result::Result<(), String> {
 }
 
 /// The block the Block Editor is editing, and its base point (the editor's origin).
-fn edited(s: &Session, cmd: &str) -> Result<(String, Vec2)> {
+pub(super) fn edited(s: &Session, cmd: &str) -> Result<(String, Vec2)> {
     match &s.state()?.block_edit {
         Some(be) if !be.current => Ok((be.name.clone(), be.base())),
         _ => Err(bad(cmd, "the Block Editor is not open on a block (BEDIT)")),
@@ -53,10 +53,10 @@ fn edited(s: &Session, cmd: &str) -> Result<(String, Vec2)> {
 fn parameter_at(k: &ParameterKind) -> Option<Vec2> {
     Some(match k {
         ParameterKind::Linear { base, end, .. }
-        | ParameterKind::Polar { base, end }
-        | ParameterKind::Xy { base, end }
-        | ParameterKind::Alignment { base, end }
-        | ParameterKind::Flip { base, end } => base.xy().mid(end.xy()),
+        | ParameterKind::Polar { base, end, .. }
+        | ParameterKind::Xy { base, end, .. }
+        | ParameterKind::Alignment { base, end, .. }
+        | ParameterKind::Flip { base, end, .. } => base.xy().mid(end.xy()),
         ParameterKind::Rotation { base, .. } => base.xy(),
         ParameterKind::Point { at, .. }
         | ParameterKind::Visibility { at, .. }

@@ -382,6 +382,8 @@ impl CadApp {
             "timeSensitiveRightClick": self.options.time_sensitive_right_click,
             // The user's command aliases (ALIASEDIT): kept with the profile as well as in their file.
             "aliases": cadaddy_engine::cmd::file::user_aliases(),
+            // The keyboard shortcuts the user changed (an empty command turns a built-in one off).
+            "shortcuts": self.ui.shortcuts,
             "interfaceScale": self.options.interface_scale,
         })
         .to_string()
@@ -399,6 +401,19 @@ impl CadApp {
         }
         if let Some(aliases) = v.get("aliases").filter(|a| a.as_object().is_some_and(|m| !m.is_empty())) {
             let _ = self.session.execute("aliasedit", &json!({ "set": aliases }));
+        }
+        if let Some(list) = v.get("shortcuts").and_then(Value::as_array) {
+            self.ui.shortcuts.clear();
+            for b in list.iter().take(crate::aliasdlg::MAX_BINDINGS) {
+                let key = b.get("key").and_then(Value::as_str).unwrap_or_default();
+                let command = b.get("command").and_then(Value::as_str).unwrap_or_default();
+                // A bad key or an unknown command is skipped; an empty command is a removed built-in key.
+                let _ = if command.trim().is_empty() {
+                    crate::aliasdlg::remove_shortcut(self, key)
+                } else {
+                    crate::aliasdlg::set_shortcut(self, key, command).map(drop)
+                };
+            }
         }
         let mut c = UiChanges::default();
         for key in
