@@ -1214,7 +1214,7 @@ pub fn trim_specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(BlockEdgesM::new(true)))),
         CommandSpec::new("superhatch", "Super Hatch", run_superhatch)
             .menu(&["Tools", "Express Tools", "Super Hatch"])
-            .params("{boundary (handle of a closed polyline, circle, ellipse or spline), block (name), spacing?: [dx, dy] (default the block's extents), mode?: "block" (the only mode available)} → {count, whole, clipped, group, handles}: the block tiled on a grid from the boundary's lower left corner; a tile is placed where its cell is inside or crosses the boundary, and tiles crossing it are clipped to it (XCLIP); grouped. Image, wipeout and xref modes are not available yet")
+            .params("{boundary (handle of a closed polyline, circle, ellipse or spline), block (name), spacing?: [dx, dy] (default the block's extents), mode?: block (the only mode available)} → {count, whole, clipped, group, handles}: the block tiled on a grid from the boundary's lower left corner; a tile is placed where its cell is inside or crosses the boundary, and tiles crossing it are clipped to it (XCLIP); grouped. Image, wipeout and xref modes are not available yet")
             .interactive(|_| Ok(Box::new(SuperhatchM::default()))),
     ]
 }
