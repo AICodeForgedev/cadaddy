@@ -3771,6 +3771,24 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         sp.circulation = std::mem::take(&mut circulation);
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
+    // The stairs in the circulation's stair spaces, found from their treads on any layer: the
+    // build makes their steps, landings and rails. Confirmed stairs stay.
+    if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+        && !sp.circulation.is_empty()
+    {
+        let found = super::stairs::detect_in_circulation(s, &sp).unwrap_or_default();
+        if !found.is_empty() {
+            let names: Vec<String> = found.iter().map(|st| format!("{} ({} flights)", st.name, st.runs.len())).collect();
+            progress_line(&format!("  stairs found in their stair spaces: {}", names.join(", ")));
+            sp.stairs.retain(|x| x.confirmed);
+            for st in found {
+                if !sp.stairs.iter().any(|x| x.name.eq_ignore_ascii_case(&st.name)) {
+                    sp.stairs.push(st);
+                }
+            }
+            s.doc_mut()?.building_spec = Some(sp.to_json());
+        }
+    }
     let budget_s = super::bspec::BUILD_BUDGET_S;
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s}))?;
     bim_step(s, job, "model built", t);
