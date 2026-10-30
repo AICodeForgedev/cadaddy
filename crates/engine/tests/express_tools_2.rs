@@ -305,6 +305,27 @@ fn mocoro_typed_with_modes_base_and_undo() {
 }
 
 #[test]
+fn mocoro_typed_rotation_ignores_angbase() {
+    // A typed rotation is relative: ANGBASE must not offset it, ANGDIR 1 turns it clockwise.
+    for (vars, want) in [(vec![("ANGBASE", 90), ("ANGDIR", 0)], Vec2::new(0.0, 10.0)), (vec![("ANGBASE", 90), ("ANGDIR", 1)], Vec2::new(0.0, -10.0))]
+    {
+        let mut s = session();
+        for (name, value) in &vars {
+            s.execute("setvar", &json!({"name": name, "value": value})).unwrap();
+        }
+        let l = h(&s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap()["handles"][0]);
+        s.set_selection(vec![l]);
+        s.cmdline("mocoro").unwrap();
+        s.cmdline("0,0").unwrap();
+        s.cmdline("r").unwrap();
+        s.cmdline("90").unwrap();
+        let (a, b) = line_ends(&s, l);
+        assert!(a.x.abs() < 1e-9 && a.y.abs() < 1e-9, "{vars:?} {a:?}");
+        assert!((b.x - want.x).abs() < 1e-9 && (b.y - want.y).abs() < 1e-9, "{vars:?} {b:?}");
+    }
+}
+
+#[test]
 fn mocoro_refuses_bad_steps() {
     let mut s = session();
     let l = s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap()["handles"][0].clone();
