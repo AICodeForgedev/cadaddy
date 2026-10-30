@@ -671,11 +671,9 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
             // Perpendicular offset per DIMTAD.
             let side_out = if (on - p1).dot(n) >= 0.0 { n } else { -n };
             let tr = Vec2::from_angle(text_angle);
-            let off_along = |m: Vec2| {
-                let glyph_extent = tw * tr.dot(m).abs() / 2.0 + tht * tr.perp().dot(m).abs() * if st.text_above == 1 { 0.6 } else { 0.5 };
-                // Empirical #2004 match: 0.595× height with SHX and 0.601× with TrueType.
-                gap + glyph_extent
-            };
+            let clearance = |m: Vec2, across: f64| gap + tw * tr.dot(m).abs() / 2.0 + tht * tr.perp().dot(m).abs() * across;
+            // Empirical #2004 match: 0.595× height with SHX and 0.601× with TrueType.
+            let off_along = |m: Vec2| clearance(m, if st.text_above == 1 { 0.6 } else { 0.5 });
             let above = if text_angle.abs() < 1e-12 && n.y.abs() > 1e-9 {
                 if n.y > 0.0 { n } else { -n }
             } else if text_angle.abs() < 1e-12 {
@@ -703,8 +701,10 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 // Over the middle of the line, clear of the arrowheads, on the side away from the
                 // measured points; with DIMTMOVE 1 it starts there and a leader joins it.
                 let mid = f1.mid(f2);
-                let lift = off_along(side_out) + 2.0 * asz.max(tsz);
-                text_mid = if st.text_move == 1 { mid + side_out * lift + u * half } else { mid + side_out * (lift + off_along(side_out)) };
+                // Half the text height either way, whatever DIMTAD says (#2222).
+                let clear = clearance(side_out, 0.5);
+                let lift = clear + 2.0 * asz.max(tsz);
+                text_mid = if st.text_move == 1 { mid + side_out * lift + u * half } else { mid + side_out * (lift + clear) };
             } else if !d.user_text_pos {
                 text_mid = along_c + offset;
             }
@@ -1349,6 +1349,29 @@ mod tests {
         let g = dimension_geometry(&d, &st_with(|s| s.text_move = 2), 1.0);
         assert!((g.text_pos.x - 0.25).abs() < 1e-9 && g.text_pos.y < 4.8, "{:?}", g.text_pos);
         assert!(g.lines_of(LineRole::Dim).flatten().all(|p| p.x <= 0.5 + 1e-9 && p.y >= 5.0 - 1e-9), "no leader, no line out to the text");
+    }
+
+    #[test]
+    fn dimtmove_2_text_clearance_matches_autocad() {
+        // #2222: the 0.10 dimension of #1998 in the #2004 1:50 style. AutoCAD 2026 recomputes the
+        // moved text at about 0.358 from the dimension line (0.658214, 0.05).
+        let st = st_with(|s| {
+            s.scale = 50.0;
+            s.text_height = 0.0025;
+            s.text_gap = 0.0008;
+            s.arrow_size = 0.0015;
+            s.text_above = 1;
+            s.text_inside_horizontal = false;
+            s.text_outside_horizontal = false;
+            s.decimals = 2;
+            s.text_move = 2;
+        });
+        let d = lin((0.0, 0.0), (0.0, 0.10), (0.30, 0.0), std::f64::consts::FRAC_PI_2);
+        let g = dimension_geometry(&d, &st, 50.0);
+        assert!(g.text_pos.dist(Vec2::new(0.658214, 0.05)) < 0.005, "vertical: {:?}", g.text_pos);
+        let d = lin((0.0, 0.0), (0.10, 0.0), (0.0, -0.30), 0.0);
+        let g = dimension_geometry(&d, &st, 50.0);
+        assert!(g.text_pos.dist(Vec2::new(0.05, -0.658214)) < 0.005, "horizontal: {:?}", g.text_pos);
     }
 
     #[test]
