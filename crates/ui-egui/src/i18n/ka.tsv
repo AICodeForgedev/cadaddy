@@ -1267,6 +1267,7 @@
 	Stretch Vertex	წვეროს გაწელვა
 	Edit Array	მასივის რედაქტირება
 	Save changes to {name}?	შევინახო ცვლილებები ნახაზში {name}?
+	Save changes to block "{name}"?	შევინახო ცვლილებები ბლოკში „{name}“?
 	Your changes will be lost if you don't save them.	თუ ცვლილებებს არ შეინახავთ, ისინი დაიკარგება.
 	Don't Save	არ შეინახო
 	Close Array Editing	მასივის რედაქტირების დახურვა
