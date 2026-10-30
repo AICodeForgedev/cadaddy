@@ -118,9 +118,17 @@ fn read_embedded_columns(tags: &[Tag]) -> Option<(MTextColumns, f64)> {
     // The column height: the entity's own 46 (defined height), else the object's 41 or first 46.
     let own_46 = own(tags).iter().find(|t| t.code == 46).map(|t| finite(t.f64()).max(0.0));
     let defined = [own_46, first(41).map(|t| finite(t.f64())), heights.first().copied()].into_iter().flatten().find(|h| *h > 0.0).unwrap_or(0.0);
+    // A dynamic auto-height object stores 0 columns in 72: the count follows from the total width
+    // (42 = n * 44 + (n - 1) * 45).
+    let [width, gutter, total] = [44, 45, 42].map(|g| first(g).map_or(0.0, |t| finite(t.f64())));
+    let count = match first(72).map(Tag::i64) {
+        Some(n) if n > 0 => n,
+        Some(_) if width + gutter > 0.0 && total > 0.0 => ((total + gutter) / (width + gutter)).round() as i64,
+        _ => 1,
+    };
     let c = MTextColumns {
         kind,
-        count: u16::try_from(first(72).map(Tag::i64).unwrap_or(1).clamp(1, MAX_COLUMNS as i64)).unwrap_or(1),
+        count: u16::try_from(count.clamp(1, MAX_COLUMNS as i64)).unwrap_or(1),
         gutter: first(45).map(|t| finite(t.f64()).max(0.0)).unwrap_or(0.0),
         height: if manual { heights.iter().copied().fold(0.0, f64::max) } else { defined },
         auto_height,

@@ -194,3 +194,41 @@ fn r2018_writes_the_embedded_object_and_older_versions_the_legacy_groups() {
     assert!(!r2000.contains("Embedded Object"), "R2000 has no embedded object");
     assert!(r2000.contains(" 75\r\n1\r\n"), "R2000 keeps the legacy column groups");
 }
+
+#[test]
+fn dynamic_auto_height_embedded_count_comes_from_the_total_width() {
+    // A dynamic auto-height object stores no column count (72 = 0): the count is what 42 (total
+    // width), 44 (column width) and 45 (gutter) hold, 3 * 50 + 2 * 12.5 = 175.
+    let mut tags = embedded_tags(1, 50.0, 12.5, &[]);
+    let at = tags.iter().position(|t| t.code == 101).unwrap();
+    for t in &mut tags[at..] {
+        *t = match t.code {
+            42 => cadcraft_dxf::Tag::f(42, 175.0),
+            71 => cadcraft_dxf::Tag::i(71, 2),
+            72 => cadcraft_dxf::Tag::i(72, 0),
+            73 => cadcraft_dxf::Tag::i(73, 1),
+            _ => t.clone(),
+        };
+    }
+    let (_, t) = mtext_from_groups(&tags);
+    let c = t.columns.expect("columns");
+    assert_eq!((c.kind, c.auto_height, c.count), (MTextColumnType::Dynamic, true, 3));
+    assert_eq!(c.gutter, 12.5);
+}
+
+#[test]
+fn dynamic_auto_height_count_comes_from_the_widths_when_72_is_zero() {
+    // A dynamic auto-height object stores 0 in 72; the count is implied by the total width
+    // (42 = n * 44 + (n - 1) * 45): (175 + 12.5) / (50 + 12.5) = 3.
+    let mut tags = embedded_tags(0, 50.0, 12.5, &[]);
+    let mut set = |code: i32, v: cadcraft_dxf::Tag| {
+        let at = tags.iter().rposition(|t| t.code == code).unwrap();
+        tags[at] = v;
+    };
+    set(71, cadcraft_dxf::Tag::i(71, 2));
+    set(73, cadcraft_dxf::Tag::i(73, 1));
+    set(42, cadcraft_dxf::Tag::f(42, 175.0));
+    let (_, t) = mtext_from_groups(&tags);
+    let c = t.columns.expect("columns");
+    assert_eq!((c.kind, c.auto_height, c.count), (MTextColumnType::Dynamic, true, 3));
+}
