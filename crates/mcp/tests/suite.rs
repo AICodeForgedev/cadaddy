@@ -262,7 +262,11 @@ fn huge_inputs_stay_within_caps_and_time() {
     assert_eq!(q["returned"], q["count"]);
     // An enormous render is refused (16 to 8192 px a side).
     let r = rpc(&mut s, "tools/call", json!({ "name": "render", "arguments": { "width": 1_000_000, "height": 20 } }));
-    assert!(r.get("error").is_some() || r["result"]["content"][0]["type"] == "image", "{}", r.to_string().chars().take(200).collect::<String>());
+    assert!(
+        r.get("error").is_some() || r["result"]["isError"] == true || r["result"]["content"][0]["type"] == "image",
+        "{}",
+        r.to_string().chars().take(200).collect::<String>()
+    );
     // A long script: 5000 commands.
     let script: String = (0..5000).map(|i| format!("LINE {i},0 {i},1\n\n")).collect();
     tool(&mut s, "script", json!({ "text": script })).unwrap();
