@@ -3840,7 +3840,36 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
 
     let resources =
         dict_get(&doc, page, b"Resources").and_then(|o| o.as_dict().ok()).or_else(|| inherited(b"Resources").and_then(|o| o.as_dict().ok()));
-    let content = doc.get_page_content(page_id);
+    // The page's content streams in order. One that is missing or whose data doesn't decode is
+    // counted: its drawing is not read (the raw bytes go through as the library's own
+    // page-content reader would pass them).
+    let content_ids = doc.get_page_contents(page_id);
+    let mut unreadable_streams = 0usize;
+    let mut content = Vec::new();
+    for id in &content_ids {
+        let Some(st) = doc.get_object(*id).ok().and_then(|o| o.as_stream().ok()) else {
+            unreadable_streams += 1;
+            continue;
+        };
+        // The library's decoder hands back what it got from damaged data as if it were whole; a
+        // plain Flate stream is decoded strictly here so damage shows.
+        let plain_flate = st.filters().is_ok_and(|f| f == [b"FlateDecode".as_slice()]) && st.dict.get(b"DecodeParms").is_err();
+        let strict = plain_flate.then(|| miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&st.content, MAX_STREAM_BYTES));
+        match strict {
+            Some(Ok(data)) => content.extend_from_slice(&data),
+            Some(Err(_)) | None => match st.decompressed_content_with_limit(MAX_STREAM_BYTES) {
+                Ok(data) => {
+                    unreadable_streams += usize::from(strict.is_some());
+                    content.extend_from_slice(&data);
+                }
+                Err(_) => {
+                    unreadable_streams += 1;
+                    content.extend_from_slice(&st.content);
+                }
+            },
+        }
+        content.push(b'\n');
+    }
     let mut it = Interp {
         doc: &doc,
         out: Out::default(),
@@ -3950,6 +3979,13 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
 
     let mut stats: BTreeMap<String, usize> = BTreeMap::new();
     let mut notes = Vec::new();
+    if unreadable_streams > 0 {
+        notes.push(format!(
+            "PDF: {unreadable_streams} of {} content streams on page {} could not be decoded (the file is damaged); the page may be empty or incomplete",
+            content_ids.len(),
+            opts.page.max(1)
+        ));
+    }
 
     // page-box clip: discard anything entirely outside the page (stray content that should not
     // contribute to the drawing extents, e.g. block defs with bad base points in the source PDF)

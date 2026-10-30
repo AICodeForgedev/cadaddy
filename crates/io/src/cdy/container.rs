@@ -402,6 +402,15 @@ pub(super) fn trailing_bytes(b: &[u8]) -> Option<u64> {
     None
 }
 
+/// Where a whole second file starts after the end of a first: a file header straight after a
+/// trailer (a copy appended to a copy, a file concatenated with itself).
+pub(super) fn appended_copy(b: &[u8]) -> Option<u64> {
+    let pair = TRAILER_MAGIC.len() + MAGIC.len();
+    let at =
+        b.windows(pair).position(|w| w.get(..TRAILER_MAGIC.len()) == Some(&TRAILER_MAGIC[..]) && w.get(TRAILER_MAGIC.len()..) == Some(&MAGIC[..]))?;
+    u64::try_from(at + TRAILER_MAGIC.len()).ok()
+}
+
 /// The index entries, when trailer and index are sound.
 pub(super) fn index(b: &[u8]) -> Option<Vec<IndexEntry>> {
     let t = b.len().checked_sub(TRAILER_LEN)?;

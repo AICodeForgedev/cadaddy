@@ -654,7 +654,22 @@ fn verify_failure(path: &str, check: &Value) -> Option<String> {
         return Some(format!("{path}: {n} bytes of trailing data after the end of the file (the drawing before them is sound)"));
     }
     let bad = chunks.map_or(0, |c| c.iter().filter(|c| damaged(c) && c["live"] == json!(true)).count());
-    Some(format!("{path}: damaged ({bad} damaged parts, index {}; see the report)", check["index"].as_str().unwrap_or("?")))
+    let index = check["index"].as_str().unwrap_or("?");
+    let notes = check["notes"].as_array().map_or(0, Vec::len);
+    // Nothing in the drawing itself is damaged: say what is wrong instead of "0 damaged parts".
+    if bad == 0 && index == "sound" && notes == 0 {
+        if let Some(at) = check["appendedCopy"].as_u64() {
+            return Some(format!("{path}: a second copy of the drawing is appended (from byte {at}); the first copy is sound"));
+        }
+        let lost = check["unreadable"].as_array().map_or(0, Vec::len);
+        if lost > 0 {
+            return Some(format!(
+                "{path}: the drawing is sound, but {lost} stretch{} of the file can't be read as parts (see the report)",
+                if lost == 1 { "" } else { "es" }
+            ));
+        }
+    }
+    Some(format!("{path}: damaged ({bad} damaged parts, index {index}; see the report)"))
 }
 
 /// `cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]`: one-call PDF → BIM pipeline.
@@ -1895,5 +1910,33 @@ mod b4polish_tests {
         }
         let why = verify_failure("f.cdy", &cadaddy_io::cdy::verify(&hurt).unwrap()).unwrap();
         assert!(why.contains("damaged"), "{why}");
+    }
+
+    /// B7-023: `verify` on a file with a whole second copy appended says that, and that the first copy is sound.
+    #[test]
+    fn verify_names_an_appended_copy() {
+        let good = cadaddy_io::write(&cadaddy_engine::sample::floor_plan(), "a.cdy").unwrap();
+        let mut twice = good.clone();
+        twice.extend_from_slice(&good);
+        let why = verify_failure("f.cdy", &cadaddy_io::cdy::verify(&twice).unwrap()).unwrap();
+        assert!(why.contains("a second copy of the drawing is appended") && why.contains("first copy is sound"), "{why}");
+        assert!(!why.contains("0 damaged parts"), "{why}");
+    }
+
+    /// B7-009: `import` of a damaged design file reports what opening it does.
+    #[test]
+    fn import_reports_what_reading_left_out() {
+        let (dgn, _) = cadaddy_io::dgn::write(&cadaddy_engine::sample::floor_plan()).unwrap();
+        install_io();
+        let path = temp_file("cut.dgn", &dgn[..dgn.len() / 2]);
+        let mut s = Session::for_app();
+        s.new_drawing_with_viewports(false);
+        let r = s.execute("import", &json!({ "path": path })).unwrap();
+        let said = r["warnings"].as_array().cloned().unwrap_or_default();
+        assert!(said.iter().any(|w| w.as_str().is_some_and(|w| w.contains("ended early"))), "{r}");
+        // A sound file has none.
+        let ok = temp_file("whole.dgn", &dgn);
+        let r = s.execute("import", &json!({ "path": ok })).unwrap();
+        assert!(r.get("warnings").is_none(), "{r}");
     }
 }

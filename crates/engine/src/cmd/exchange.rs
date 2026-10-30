@@ -440,7 +440,19 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let src = (hooks.read)(&bytes, &name).map_err(|e| bad("import", e))?;
     let file = std::path::Path::new(&name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    import_drawing(s, &src, at, scale, &file)
+    // What reading left out says so here as it does in OPEN (a damaged DGN, a cut-off DXF).
+    let mut notes = src.read_notes.clone();
+    if let Some(loss) = super::file::read_loss(&src).filter(|_| notes.is_empty()) {
+        notes.push(loss);
+    }
+    let mut r = import_drawing(s, &src, at, scale, &file)?;
+    if !notes.is_empty() {
+        for n in &notes {
+            s.echo(n.clone());
+        }
+        r["warnings"] = json!(notes);
+    }
+    Ok(r)
 }
 
 /// PDFIMPORT: a PDF page as CAD objects — into this drawing, or (`newDrawing`) as a new drawing
