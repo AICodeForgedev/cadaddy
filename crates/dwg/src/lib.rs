@@ -588,22 +588,28 @@ mod native {
     }
 
     /// The byte offset and the trimmed value of header variable `name` in an ASCII DXF: the value
-    /// line after the group code that follows the `9` group naming it. Only the HEADER section
-    /// (up to the first `ENDSEC`) is searched; lines may end in `\r\n`.
+    /// of the group that follows the `9` group naming it. The file is read as (group code,
+    /// value) line pairs, in one pass with no buffering, up to the first `0`/`ENDSEC`, the end
+    /// of the HEADER section: a large input without one costs time, not memory (a line index of
+    /// a 32 MiB file used 0.8 GB). Lines may end in `\r\n`.
     fn header_value<'a>(dxf: &'a [u8], name: &[u8]) -> Option<(usize, &'a [u8])> {
-        let mut lines: Vec<(usize, &[u8])> = Vec::new();
         let mut offset = 0usize;
-        for line in dxf.split(|b| *b == b'\n') {
-            let trimmed = line.trim_ascii();
-            let lead = line.len() - line.trim_ascii_start().len();
-            lines.push((offset.saturating_add(lead), trimmed));
+        let mut lines = dxf.split(|b| *b == b'\n').map(|line| {
+            let at = offset.saturating_add(line.len() - line.trim_ascii_start().len());
             offset = offset.saturating_add(line.len()).saturating_add(1);
-            if trimmed == b"ENDSEC" {
-                break;
+            (at, line.trim_ascii())
+        });
+        while let (Some((_, code)), Some((_, value))) = (lines.next(), lines.next()) {
+            if code == b"0" && value == b"ENDSEC" {
+                return None;
+            }
+            if code == b"9" && value == name {
+                let (_, code) = lines.next()?;
+                let (at, value) = lines.next()?;
+                return (code != b"0" && code != b"9").then_some((at, value));
             }
         }
-        let at = lines.windows(2).position(|w| w[0].1 == b"9" && w[1].1 == name)?;
-        lines.get(at.checked_add(3)?).copied()
+        None
     }
 
     /// The current dimension and text styles' names from their handles: a DWG stores the
@@ -642,11 +648,13 @@ mod native {
 
     /// The DXF names of an ASCII DXF's CLASS records, in CLASSES order: a proxy's class number
     /// (group 91) is 500 plus its class's place here (DXF Reference, ACAD_PROXY_OBJECT). Empty for
-    /// a binary DXF or one without a CLASSES section.
-    pub(super) fn dxf_class_names(dxf: &[u8]) -> Vec<String> {
+    /// one without a CLASSES section. `None` for a binary DXF, whose classes this doesn't read:
+    /// CADCraft's own bridge DXF is always ASCII, and only a binary DXF given to the public
+    /// conversion functions comes here.
+    pub(super) fn dxf_class_names(dxf: &[u8]) -> Option<Vec<String>> {
         let mut names = Vec::new();
         if dxf.starts_with(b"AutoCAD Binary DXF") {
-            return names;
+            return None;
         }
         let mut lines = dxf.split(|b| *b == b'\n').map(|l| l.trim_ascii());
         let (mut in_classes, mut in_class) = (false, false);
@@ -662,7 +670,7 @@ mod native {
                 _ => {}
             }
         }
-        names
+        Some(names)
     }
 
     /// Proxy objects' and entities' class numbers as the DWG numbers its classes. A DXF proxy
@@ -676,28 +684,33 @@ mod native {
     /// proxy's class is not one of them: the proxy would name a missing class (the ODA refuses
     /// the file: "No ClassId") or, by its old number, some other class. Such a DWG leaves the
     /// proxies out instead, as it does other programs' data it can't write (`not_saved` reports
-    /// the entities). Returns how many proxies were left out.
-    fn proxy_classes(doc: &mut acadrust::CadDocument, classes: &[String]) -> usize {
-        if doc.version < acadrust::DxfVersion::AC1027 {
-            let entities: Vec<acadrust::Handle> = doc
-                .entities()
-                .filter_map(|e| match e {
-                    acadrust::entities::EntityType::Extended(x) if matches!(x.data, acadrust::entities::ExtendedEntityData::Proxy(_)) => {
-                        Some(x.common.handle)
-                    }
-                    _ => None,
-                })
-                .collect();
-            let objects: Vec<acadrust::Handle> =
-                doc.objects.iter().filter_map(|(h, o)| matches!(o, acadrust::objects::ObjectType::ProxyObject(_)).then_some(*h)).collect();
-            for h in &entities {
-                doc.remove_entity(*h);
+    /// the entities). So does a DXF whose classes are unknown (`classes` is `None`, a binary
+    /// DXF): its proxies' numbers can't be mapped, and kept as they are they would name the
+    /// wrong classes and the ODA would refuse the file. Returns how many proxies were left out.
+    fn proxy_classes(doc: &mut acadrust::CadDocument, classes: Option<&[String]>) -> usize {
+        let classes = match classes {
+            Some(c) if doc.version >= acadrust::DxfVersion::AC1027 => c,
+            _ => {
+                let entities: Vec<acadrust::Handle> = doc
+                    .entities()
+                    .filter_map(|e| match e {
+                        acadrust::entities::EntityType::Extended(x) if matches!(x.data, acadrust::entities::ExtendedEntityData::Proxy(_)) => {
+                            Some(x.common.handle)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let objects: Vec<acadrust::Handle> =
+                    doc.objects.iter().filter_map(|(h, o)| matches!(o, acadrust::objects::ObjectType::ProxyObject(_)).then_some(*h)).collect();
+                for h in &entities {
+                    doc.remove_entity(*h);
+                }
+                for h in &objects {
+                    doc.objects.remove(h);
+                }
+                return entities.len() + objects.len();
             }
-            for h in &objects {
-                doc.objects.remove(h);
-            }
-            return entities.len() + objects.len();
-        }
+        };
         let number = |id: i32| -> Option<i32> {
             let name = classes.get(usize::try_from(id.checked_sub(500)?).ok()?)?;
             doc.classes.get_by_name(name).map(|c| i32::from(c.class_number))
@@ -736,7 +749,6 @@ mod native {
         }
         0
     }
-
 
     /// The current layer (`$CLAYER`) by its name, the same way as [`current_dimstyle`]: a DWG
     /// stores the handle of the layer, and the one read with the DXF needn't be the layer's in
@@ -789,7 +801,7 @@ mod native {
         // The fix-ups run on the third-party reader's document, so a panic in one is an error, not a crash.
         guarded(AssertUnwindSafe(|| {
             super::fail_in_test("convert");
-            proxy_classes(&mut doc, &classes);
+            proxy_classes(&mut doc, classes.as_deref());
             other_layout_owners(&mut doc);
             table_style_rows(&mut doc, true);
             dimension_flags(&mut doc);
@@ -1286,6 +1298,21 @@ mod tests {
     }
 
     /// A kept version not newer than the declared one, a binary DXF and a DXF without `$ACADVER`
+    /// The header is read as group code and value pairs up to the first `0`/`ENDSEC`: a `$ACADVER`
+    /// name whose value would come after it, or a file that never ends its HEADER, is no version
+    /// to replace, and `\r\n` lines keep the value's offset right.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn declare_version_reads_the_header_in_pairs_up_to_endsec() {
+        let cut = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  0\r\nENDSEC\r\n  1\r\nAC1015\r\n";
+        assert_eq!(native::declare_version(cut, acadrust::DxfVersion::AC1032), None);
+        let endless = vec![b'\n'; 1 << 20];
+        assert_eq!(native::declare_version(&endless, acadrust::DxfVersion::AC1032), None);
+        let crlf = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\n  AC1015\r\n  0\r\nENDSEC\r\n";
+        let out = native::declare_version(crlf, acadrust::DxfVersion::AC1032).unwrap();
+        assert_eq!(out, b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\n  AC1032\r\n  0\r\nENDSEC\r\n");
+    }
+
     /// are read as they are.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -1338,8 +1365,8 @@ mod tests {
     #[test]
     fn dxf_class_names_in_classes_order() {
         let dxf = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  0\r\nENDSEC\r\n  0\r\nSECTION\r\n  2\r\nCLASSES\r\n  0\r\nCLASS\r\n  1\r\nWIDGETA\r\n  2\r\nAcDbWidgetA\r\n  3\r\nApp\r\n  0\r\nCLASS\r\n  1\r\nWIDGETB\r\n  2\r\nAcDbWidgetB\r\n  0\r\nENDSEC\r\n  0\r\nSECTION\r\n  2\r\nENTITIES\r\n  0\r\nTEXT\r\n  1\r\nNOT_A_CLASS\r\n  0\r\nENDSEC\r\n  0\r\nEOF\r\n";
-        assert_eq!(native::dxf_class_names(dxf), ["WIDGETA", "WIDGETB"]);
-        assert!(native::dxf_class_names(b"  0\nSECTION\n  2\nHEADER\n  0\nENDSEC\n  0\nEOF\n").is_empty());
-        assert!(native::dxf_class_names(b"AutoCAD Binary DXF\r\n\x1a\0").is_empty());
+        assert_eq!(native::dxf_class_names(dxf).unwrap(), ["WIDGETA", "WIDGETB"]);
+        assert_eq!(native::dxf_class_names(b"  0\nSECTION\n  2\nHEADER\n  0\nENDSEC\n  0\nEOF\n"), Some(Vec::new()));
+        assert_eq!(native::dxf_class_names(b"AutoCAD Binary DXF\r\n\x1a\0"), None);
     }
 }

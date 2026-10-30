@@ -2858,6 +2858,26 @@ fn proxies_keep_their_class_in_dwg() {
     }
 }
 
+/// A binary DXF given to the DWG conversion directly: its CLASSES aren't read, so the proxies'
+/// numbers can't be mapped to the DWG's classes. Kept as they were, they named other classes
+/// (the ODA refuses such a file), so the DWG leaves them out, as a pre-2013 DWG does, and the
+/// rest of the drawing is written.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_binary_dxf_leaves_its_proxies_out_of_the_dwg() {
+    use acadrust::entities::{EntityType, ExtendedEntityData};
+    use acadrust::objects::ObjectType;
+    let d = read(&proxy_file(), "p.dxf").unwrap();
+    let binary = write_with(&d, "p.dxf", &SaveOptions { version: Some(Version::R2018), binary: true }).unwrap();
+    assert!(binary.starts_with(b"AutoCAD Binary DXF"));
+    let dwg = cadcraft_dwg::dxf_to_dwg_as(&binary, "AC1032").unwrap();
+    let doc = acadrust::DwgReader::from_stream(std::io::Cursor::new(dwg)).read().unwrap();
+    let proxies = doc.objects.values().filter(|o| matches!(o, ObjectType::ProxyObject(_))).count()
+        + doc.entities().filter(|e| matches!(e, EntityType::Extended(x) if matches!(x.data, ExtendedEntityData::Proxy(_)))).count();
+    assert_eq!(proxies, 0, "no proxy with an unmapped class number");
+    assert!(doc.layers.get("0").is_some(), "the drawing itself is written");
+}
+
 /// A name that isn't valid Unicode still picks its format by extension.
 #[cfg(unix)]
 #[test]
