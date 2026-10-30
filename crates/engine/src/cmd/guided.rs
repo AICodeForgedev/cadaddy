@@ -4533,7 +4533,13 @@ fn stacked_numbers(rooms: &[super::bspec::RoomElement], upf: f64) -> Vec<(cadadd
         let proposed: BTreeSet<String> = rooms
             .iter()
             .filter(|o| o.level != r.level && (norm(&o.name) == name || bare(o)) && (o.area_sf - r.area_sf).abs() <= 0.35 * r.area_sf.max(o.area_sf))
-            .filter(|o| mid(o).is_some_and(|c| c.dist(m) <= 2.0 * upf))
+            // Over it: the middles within 2', or each in the other (one floor's trace takes in its
+            // bathroom, another's doesn't).
+            .filter(|o| {
+                mid(o).is_some_and(|c| {
+                    c.dist(m) <= 2.0 * upf || (cadaddy_geom::point_in_polygon(&r.outline, c) && cadaddy_geom::point_in_polygon(&o.outline, m))
+                })
+            })
             .filter_map(|o| {
                 let (n, there) = (o.number.as_deref()?.trim(), floor(&o.level));
                 let rest = n.strip_prefix(there.as_str()).filter(|_| !there.is_empty() && n.len() >= 3)?;
@@ -7615,10 +7621,22 @@ mod tests {
             // Known by its number alone above; the same room traced a little bigger below.
             room(8, "Level 3", "Room 309", Some("309"), 2000.0),
             room(9, "Level 2", "SINGLE Q", None, 2004.0),
+            // Traced without its bathroom (60 shorter) below: the middles 2.5' apart, each in the other.
+            room(10, "Level 3", "SINGLE Q", Some("331"), 4000.0),
+            room(11, "Level 2", "SINGLE Q", None, 4000.0),
         ];
         let mut rooms = rooms.to_vec();
         rooms[8].area_sf = 250.0;
-        assert_eq!(stacked_numbers(&rooms, 12.0), vec![(cadaddy_doc::Handle(2), "205".to_string()), (cadaddy_doc::Handle(9), "209".to_string())]);
+        rooms[10].outline = vec![v(4000.0, 0.0), v(4120.0, 0.0), v(4120.0, 180.0), v(4000.0, 180.0)];
+        rooms[10].area_sf = 150.0;
+        assert_eq!(
+            stacked_numbers(&rooms, 12.0),
+            vec![
+                (cadaddy_doc::Handle(2), "205".to_string()),
+                (cadaddy_doc::Handle(9), "209".to_string()),
+                (cadaddy_doc::Handle(11), "231".to_string())
+            ]
+        );
     }
 
     #[test]
