@@ -1632,7 +1632,14 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let sheet_arr = sheets_val.get("sheets").and_then(Value::as_array).cloned().unwrap_or_default();
     let current = |sh: &&Value| sh.get("superseded_by").and_then(Value::as_str).is_none_or(str::is_empty);
     let kind = |sh: &Value| sh.get("type").or_else(|| sh.get("sheet_type")).and_then(Value::as_str).unwrap_or("").to_string();
-    let mut plan_sheets: Vec<&Value> = sheet_arr.iter().filter(current).filter(|sh| matches!(kind(sh).as_str(), "plan" | "enlarged_plan")).collect();
+    // The plans, and the reflected ceiling plans (a sheet of enlarged RCPs and details too): the
+    // ceilings are set per area from them before the MEP goes in.
+    let rcp_title = |sh: &Value| {
+        let t = sh.get("title").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
+        t.contains("REFLECTED CEILING") || t.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP")
+    };
+    let mut plan_sheets: Vec<&Value> =
+        sheet_arr.iter().filter(current).filter(|sh| matches!(kind(sh).as_str(), "plan" | "enlarged_plan" | "rcp") || rcp_title(sh)).collect();
     // The index's level (a plan whose title names none was given one) over the page's own.
     let level_of = |sh: &Value| -> String {
         let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
@@ -3635,6 +3642,25 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         false,
                     );
                 }
+                // The reflected ceiling plans set each area's ceiling (a lobby higher, back of
+                // house lower): read now the floor's spaces are known, then each run with no
+                // height of its own sits over the highest ceiling it passes under, and each
+                // diffuser is in its area's ceiling.
+                sp.circulation = circulation.clone();
+                let (areas, read) = rcp_ceiling_areas(s.doc()?, &sp);
+                for line in &read {
+                    progress_line(&format!("  RCP {line}"));
+                }
+                if !areas.is_empty() {
+                    let levels: BTreeSet<String> = areas.iter().map(|a| a.level.clone()).collect();
+                    sp.rcp.ceilings.retain(|c| !levels.contains(&c.level));
+                    sp.rcp.ceilings.extend(areas);
+                    let seated = super::mep::seat_in_plenum(&mut sp);
+                    progress_line(&format!(
+                        "  ceilings set per area from the RCPs: {} areas on {levels:?}; {seated} MEP runs and terminals reseated under them",
+                        sp.rcp.ceilings.len()
+                    ));
+                }
                 if dropped.0 + dropped.1 + dropped.2 > 0 {
                     job.add_finding(
                         StageName::BimBuild,
@@ -4963,6 +4989,111 @@ fn drop_rooms_outside_shell(s: &mut Session, shells: &[(String, Vec<[cadaddy_geo
     Ok(gone.len())
 }
 
+/// A ceiling height tag of a reflected ceiling plan, feet: `8' - 0"`, `7'-6" A.F.F.`, `8'-6" AFF`,
+/// between 6'-6" and 20' and nothing else in the text. Not a stair's `7'-6" ABOVE LANDING` (its
+/// height is from the landing) or a dimension's note.
+fn ceiling_height_tag(t: &str) -> Option<f64> {
+    let u = t.trim().to_ascii_uppercase();
+    if u.contains("ABOVE") {
+        return None;
+    }
+    let core = u.trim_end_matches("A.F.F.").trim_end_matches("AFF").trim();
+    if core.chars().any(|c| !(c.is_ascii_digit() || " '\"-/.".contains(c))) || !core.contains('\'') {
+        return None;
+    }
+    let ft = super::perceive::feet_inches(core)? / 12.0;
+    (6.5..=20.0).contains(&ft).then_some(ft)
+}
+
+/// The ceiling areas the reflected ceiling plans' views give (a view titled REFLECTED CEILING or
+/// RCP, its levels from its title: `SECOND-FOURTH FLOOR` is levels 2 to 4): each view registered
+/// onto its level's floor plan by the room numbers both print (a typical floor's view by its
+/// numbers with that floor's digit), each height tag's area the floor around it on the level's
+/// floor grid (or the corridor, stair or hoistway it is on), at that height. And what was read.
+fn rcp_ceiling_areas(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> (Vec<cadaddy_walk3d::CeilingArea>, Vec<String>) {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let texts = cadaddy_mepfix::sheet_facts::texts(d);
+    let views = cadaddy_mepfix::sheet_facts::view_titles(d, &texts);
+    let numbers = super::identity::number_texts(d);
+    let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0].min(r[2]) && p[0] <= r[0].max(r[2]) && p[1] >= r[1].min(r[3]) && p[1] <= r[1].max(r[3]);
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let mut out: Vec<cadaddy_walk3d::CeilingArea> = Vec::new();
+    let mut report = Vec::new();
+    let mut floors: BTreeMap<String, Option<super::wallgen::Floors>> = BTreeMap::new();
+    for v in views.iter().take(200) {
+        let t = v.title.to_ascii_uppercase();
+        let rcp = t.contains("REFLECTED CEILING") || t.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP");
+        let Some(region) = v.region.filter(|_| rcp) else { continue };
+        let levels = cadaddy_mepfix::sheet_reader::detect_levels(&v.title);
+        let tags: Vec<(String, [f64; 2])> = numbers.iter().filter(|(_, at)| inside(&region, *at)).cloned().collect();
+        let heights: Vec<([f64; 2], f64)> = texts
+            .iter()
+            .filter(|x| inside(&region, [x.at.x, x.at.y]))
+            .filter_map(|x| Some(([x.at.x, x.at.y], ceiling_height_tag(&x.value)?)))
+            .collect();
+        for code in &levels {
+            let Some(level) = sp.levels.iter().find(|l| digits(&l.name) == *code && l.sheet.is_none()) else { continue };
+            let Some(plan) = level.region else { continue };
+            // The view's room numbers as this floor prints them.
+            let mine: Vec<(String, [f64; 2])> = tags
+                .iter()
+                .map(|(k, at)| {
+                    let swapped = if k.len() >= 3 && k.chars().next().is_some_and(|c| c.is_ascii_digit()) && code.len() == 1 {
+                        format!("{code}{}", &k[1..])
+                    } else {
+                        k.clone()
+                    };
+                    (swapped, *at)
+                })
+                .collect();
+            let theirs: Vec<(String, [f64; 2])> = numbers.iter().filter(|(_, at)| inside(&plan, *at)).cloned().collect();
+            let Some(fit) = cadaddy_mepfix::tagid::fit_by_tags(&mine, &theirs, 2.0 * upf, (0.9, 1.1)).filter(|f| f.matched.len() >= 4) else {
+                report.push(format!("{} on {}: not registered (room numbers don't match the floor plan)", v.title, level.name));
+                continue;
+            };
+            let grid = floors.entry(level.name.clone()).or_insert_with(|| super::wallgen::room_floors(d, sp, &level.name));
+            let mut found = 0usize;
+            for (at, ft) in &heights {
+                let q = fit.sim.apply(*at);
+                let p = cadaddy_geom::Vec2::new(q[0], q[1]);
+                let rects: Option<Vec<[[f64; 2]; 2]>> = match grid.as_mut().map(|g| g.room_at(p)) {
+                    Some(Ok((_, rects))) => Some(rects.iter().map(|[a, b]| [[a.x, a.y], [b.x, b.y]]).collect()),
+                    _ => sp.circulation.iter().find(|c| c.level.eq_ignore_ascii_case(&level.name) && c.holds(q)).map(|c| c.rects.clone()),
+                };
+                let Some(rects) = rects else { continue };
+                let outline = cadaddy_walk3d::Circulation { rects, ..Default::default() }.outline();
+                // A second tag in an area already set: the first stands.
+                if outline.len() < 3
+                    || out.iter().any(|c| {
+                        c.level == level.name
+                            && cadaddy_geom::point_in_polygon(&c.outline.iter().map(|p| cadaddy_geom::Vec2::new(p[0], p[1])).collect::<Vec<_>>(), p)
+                    })
+                {
+                    continue;
+                }
+                out.push(cadaddy_walk3d::CeilingArea {
+                    level: level.name.clone(),
+                    room: None,
+                    outline,
+                    height_ft: *ft,
+                    grid: None,
+                    ceiling_type: None,
+                    guess: None,
+                });
+                found += 1;
+            }
+            report.push(format!(
+                "{} on {}: {found} ceiling areas from {} height tags ({} room numbers matched)",
+                v.title,
+                level.name,
+                heights.len(),
+                fit.matched.len()
+            ));
+        }
+    }
+    (out, report)
+}
+
 /// How far inside a hoistway's walls (feet) a run must pass to go through it: one along the
 /// face of its wall runs beside it.
 const HOISTWAY_CLEAR_FT: f64 = 0.25;
@@ -5024,7 +5155,10 @@ fn shell_holds_rooms(rects: &[[cadaddy_geom::Vec2; 2]], rooms: &[[f64; 2]]) -> (
 const SHELL_REACH_FT: f64 = 5.0;
 pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[SheetRegion]) {
     for r in regions.iter().take(MAX_SHEET_LINKS) {
-        if !r.rect.iter().all(|v| v.is_finite()) {
+        // A ceiling plan or a sheet of details is no level's plan: the sheets are registered onto
+        // the floor plans without it (it prints every room's number, and its level took it for
+        // its reference); the ceilings stage registers it itself.
+        if !r.rect.iter().all(|v| v.is_finite()) || matches!(r.kind.as_str(), "rcp" | "detail") {
             continue;
         }
         let level = Some(r.level.trim()).filter(|l| super::printmep::building_level(l)).map(level_name);

@@ -164,6 +164,7 @@ pub mod validate;
 pub mod verify;
 pub mod walkpub;
 pub mod wallgen;
+pub(crate) mod walltypes;
 pub use props::MatchProps;
 pub(crate) use props::{current_color_value, set_current_color_value};
 pub mod actions;
@@ -747,6 +748,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lightbake::specs());
         v.extend(materials::specs());
         v.extend(wallgen::specs());
+        v.extend(walltypes::specs());
         v.extend(revise3d::specs());
         v.extend(overrides::specs());
         v.extend(bspec::specs());
