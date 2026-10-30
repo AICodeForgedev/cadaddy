@@ -22,7 +22,7 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("walls.legend", "Read Partition Type Legend", run_legend)
-            .params("{region?: [x0, y0, x1, y1] (the legend sheet; default the whole drawing), sheet?: its number (for the source), apply?: bool (the wall types into the building spec, replacing those of the same names)} → {types: [{name, description, layers: [{side, material, thickness_in}], height, fire_rating, acoustic_rating, faces_in: [side 1, side 2] (board and channels each face, inches), notes}], report: [line per family], applied}")
+            .params("{region?: [x0, y0, x1, y1] (the legend sheet; default the whole drawing), sheet?: its number (for the source), apply?: bool (the wall types into the building spec, replacing those of the same names)} → {types: [{name, description, layers: [{side, material, thickness_in}], height, fire_rating, acoustic_rating, faces_in: [side 1, side 2] (board and channels each face, inches), mud_rings_in: [side 1, side 2] (the stocked plaster ring a box on the studs needs to reach that face), notes}], report: [line per family], applied}")
             .noundo(),
     ]
 }
@@ -48,6 +48,7 @@ fn run_legend(s: &mut Session, p: &Value) -> Result<Value> {
                 "fire_rating": a.fire_rating,
                 "acoustic_rating": a.acoustic_rating,
                 "faces_in": [face(LayerSide::Side1), face(LayerSide::Side2)],
+                "mud_rings_in": [face(LayerSide::Side1).and_then(ring_for), face(LayerSide::Side2).and_then(ring_for)],
                 "notes": a.notes,
             })
         })
@@ -213,7 +214,7 @@ fn says(text: &str) -> Option<Says> {
     let first_in = inches_in(&u).first().copied();
     let both = u.contains("EACH SIDE") || u.contains("BOTH SIDES");
     if u.contains("GYP") || u.contains("GWB") || u.contains("GYPSUM") {
-        let Some(th) = first_in else { return None };
+        let th = first_in?;
         let count = if u.contains("(2)") || u.contains("2 LAYERS") || u.contains("TWO LAYERS") {
             2
         } else if u.contains("(3)") || u.contains("3 LAYERS") || u.contains("THREE LAYERS") {

@@ -38,9 +38,9 @@ const PLENUM_CLEAR_FT: f64 = 0.25;
 const CEILING_STEP_FT: f64 = 2.0;
 
 /// The reflected ceiling plans' areas of each level (by its lowercased name): outline and height.
-fn ceiling_areas(sp: &BuildingSpec) -> BTreeMap<String, Vec<(Vec<Vec2>, f64)>> {
+fn ceiling_areas(sp: &BuildingSpec, more: &[cadaddy_walk3d::CeilingArea]) -> BTreeMap<String, Vec<(Vec<Vec2>, f64)>> {
     let mut out: BTreeMap<String, Vec<(Vec<Vec2>, f64)>> = BTreeMap::new();
-    for c in sp.rcp.ceilings.iter().filter(|c| c.outline.len() >= 3 && c.height_ft.is_finite() && c.height_ft > 0.0) {
+    for c in sp.rcp.ceilings.iter().chain(more).filter(|c| c.outline.len() >= 3 && c.height_ft.is_finite() && c.height_ft > 0.0) {
         out.entry(c.level.to_ascii_lowercase()).or_default().push((c.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect(), c.height_ft));
     }
     out
@@ -73,12 +73,19 @@ fn ceiling_along(points: &[[f64; 2]], areas: &[(Vec<Vec2>, f64)], level_ceiling:
 /// level's plenum: above the highest ceiling they pass under ([`PLENUM_CLEAR_FT`]; the reflected
 /// ceiling plans' areas, else the level's ceiling) and under the slab of the floor above
 /// ([`SLAB_FT`]), as high as they fit. One too deep for the plenum sits just above the ceiling
-/// (model.clashes reports it into the structure); a run the drawings give a height, a riser and
-/// the roof's keep theirs. An air terminal above the ceiling where it is comes down into it, and
+/// (model.clashes reports it into the structure); a run the drawings give a height keeps it
+/// unless it is up in the floor above (then it comes under that floor's slab, its height source
+/// saying so), and a riser and the roof's keep theirs. An air terminal above the ceiling where it is comes down into it, and
 /// a diffuser, register or grille in a ceiling area is at that area's height (it is in the
 /// ceiling, not over or under it). How many runs and terminals moved.
 pub(crate) fn seat_in_plenum(sp: &mut BuildingSpec) -> usize {
-    let areas = ceiling_areas(sp);
+    seat_in_plenum_under(sp, &[])
+}
+
+/// [`seat_in_plenum`] with more ceiling areas than the spec's RCP holds (the RCP's height tags
+/// read onto the rooms).
+pub(crate) fn seat_in_plenum_under(sp: &mut BuildingSpec, more: &[cadaddy_walk3d::CeilingArea]) -> usize {
+    let areas = ceiling_areas(sp, more);
     let none: Vec<(Vec<Vec2>, f64)> = Vec::new();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let plenum: Vec<Option<(f64, f64)>> = sp
@@ -95,12 +102,30 @@ pub(crate) fn seat_in_plenum(sp: &mut BuildingSpec) -> usize {
     let mut moved = 0;
     for (r, p) in sp.mep.runs.iter_mut().zip(plenum) {
         let Some((ceiling, height)) = p else { continue };
-        if r.top_ft.is_some() || !matches!(r.height_source.trim().replace(' ', "-").as_str(), "" | "default" | "estimated-route") {
+        if r.top_ft.is_some() {
             continue;
         }
         let depth = if r.size_in[1] > 0.0 { r.size_in[1] } else { r.size_in[0] }.max(0.0) / 12.0;
         let low = ceiling + PLENUM_CLEAR_FT;
         let high = (height - SLAB_FT - depth).max(low);
+        if !matches!(r.height_source.trim().replace(' ', "-").as_str(), "" | "default" | "estimated-route") {
+            // A height the drawings give stays (one too deep for the plenum is a clash
+            // model.clashes reports), unless its bottom is up in the floor above (a misread tag):
+            // then it comes down under that floor's slab, marked for review.
+            let mut capped = false;
+            for b in r.bottoms_ft.iter_mut().filter(|b| b.is_finite() && **b > height - SLAB_FT + 1e-9) {
+                *b = high;
+                capped = true;
+            }
+            if capped {
+                r.reviewed = false;
+                if !r.height_source.contains("capped") {
+                    r.height_source = format!("{} (capped under the floor above)", r.height_source.trim());
+                }
+                moved += 1;
+            }
+            continue;
+        }
         let mut changed = false;
         for b in r.bottoms_ft.iter_mut().filter(|b| b.is_finite()) {
             let seated = b.clamp(low, high);
@@ -2476,10 +2501,13 @@ mod tests {
             run("Level 2", [12.0, 10.0], "estimated route"),
             // A 2" pipe fits: its top under the slab.
             run("Level 2", [2.0, 0.0], "default"),
-            // A height the drawings give, and the roof's, stay.
+            // A height the drawings give, and the roof's, stay...
             run("Level 2", [12.0, 10.0], "tag"),
             run("Roof", [12.0, 10.0], "default"),
+            // ...but not one up in the floor above (level 2 is 9.1' floor to floor).
+            run("Level 2", [2.0, 0.0], "tag"),
         ];
+        sp.mep.runs[3].bottoms_ft = vec![8.4];
         // A diffuser at the default 8.5' over level 2's 8' ceiling comes down into it; one in level
         // 1's 8.5' ceiling and a sidewall grille below level 2's stay.
         let terminal = |level: &str, bottom: f64| -> cadaddy_walk3d::MepTerminal {
@@ -2489,9 +2517,10 @@ mod tests {
             .unwrap()
         };
         sp.mep.terminals = vec![terminal("Level 2", 8.5), terminal("Level 1", 8.5), terminal("Level 2", 7.0)];
-        assert_eq!(seat_in_plenum(&mut sp), 4);
+        assert_eq!(seat_in_plenum(&mut sp), 5);
         let bottoms: Vec<f64> = sp.mep.runs.iter().map(|r| (r.bottoms_ft[0] * 1000.0).round() / 1000.0).collect();
-        assert_eq!(bottoms, vec![9.167, 8.25, 8.433, 10.0, 10.0]);
+        assert_eq!(bottoms, vec![9.167, 8.25, 8.433, 8.4, 10.0, 8.433]);
+        assert_eq!(sp.mep.runs[5].height_source, "tag (capped under the floor above)");
         assert_eq!(sp.mep.terminals.iter().map(|t| t.bottom_ft).collect::<Vec<_>>(), vec![8.0, 8.5, 7.0]);
     }
 

@@ -686,8 +686,17 @@ fn bim(args: &[String]) -> Result<(), String> {
     }
     let r = s.execute("bim.from_pdf", &p).map_err(|e| e.to_string())?;
     outln!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+    // A run that failed (the job didn't finish, a hard import-check fail, an empty storey) exits
+    // non-zero even when --force saved its model.
+    let failed: Vec<&str> = r.get("failed").and_then(Value::as_array).map(|f| f.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
     let cdy_paths = r.get("cdy_paths").and_then(Value::as_array).map_or(0, Vec::len);
-    if cdy_paths == 0 { Err("no BIM models were built; see warnings in the output".into()) } else { Ok(()) }
+    if !failed.is_empty() {
+        Err(format!("bim: {}", failed.join("; ")))
+    } else if cdy_paths == 0 {
+        Err("no BIM models were built; see warnings in the output".into())
+    } else {
+        Ok(())
+    }
 }
 
 fn check_import(args: &[String]) -> Result<(), String> {
@@ -911,6 +920,16 @@ fn fill_last(p: &Value, h: Option<Handle>) -> Result<Value, String> {
     }
 }
 
+/// The error a guided job's result reports (`job.start`, `job.next`, `job.answer`…), if any.
+fn job_error(id: &str, r: &Value) -> Option<String> {
+    if !id.starts_with("job.") || r.get("status").and_then(Value::as_str) != Some("error") {
+        return None;
+    }
+    let stage = r.pointer("/error/stage").and_then(Value::as_str).unwrap_or("?");
+    let message = r.pointer("/error/message").and_then(Value::as_str).unwrap_or("");
+    Some(format!("the job stopped with an error in its {stage} stage: {message}"))
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     let mut s = Session::for_app();
     let mut it = args.iter();
@@ -987,6 +1006,11 @@ fn run(args: &[String]) -> Result<(), String> {
                 }
                 if !r.is_null() {
                     outln!("{r}");
+                }
+                // A guided job that stopped in an error (no readable prints, a stage that
+                // failed) is a failed run: a non-zero exit, not a quiet success.
+                if let Some(err) = job_error(id, &r) {
+                    return Err(format!("{at}{id}: {err}"));
                 }
             }
         }
@@ -1589,6 +1613,19 @@ fn cli() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B4-015: a job that stopped in an error is a failed run (non-zero exit); a done or paused
+    /// one, or another command's `status`, is not.
+    #[test]
+    fn a_job_that_ends_in_an_error_fails_the_run() {
+        let err =
+            json!({"job_id": "j", "status": "error", "error": {"stage": "classify", "message": "None of the print set's 3 file(s) could be read"}});
+        let e = job_error("job.start", &err).expect("an error");
+        assert!(e.contains("classify") && e.contains("could be read"), "{e}");
+        assert!(job_error("job.start", &json!({"status": "done"})).is_none());
+        assert!(job_error("job.next", &json!({"status": "in_progress"})).is_none());
+        assert!(job_error("layer.list", &json!({"status": "error"})).is_none());
+    }
 
     fn scratch_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("cadaddy-cli-{tag}-{}", std::process::id()));

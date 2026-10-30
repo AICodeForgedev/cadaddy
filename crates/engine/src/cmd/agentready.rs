@@ -344,7 +344,12 @@ fn items(s: &mut Session) -> Vec<Item> {
     }
     // Clashes between trades: a coordination decision, not a document's.
     if let Ok(v) = s.execute("model.clashes", &json!({})) {
-        for c in v["clashes"].as_array().into_iter().flatten().take(2_000) {
+        let listed = v["clashes"].as_array().map_or(0, Vec::len);
+        let total = v["total"].as_u64().map_or(listed, |t| usize::try_from(t).unwrap_or(usize::MAX));
+        if total > MAX_QUEUED_CLASHES {
+            out.push(more_item("clash", total - MAX_QUEUED_CLASHES, total, "model.clashes {max_clashes: 50000} lists them all"));
+        }
+        for c in v["clashes"].as_array().into_iter().flatten().take(MAX_QUEUED_CLASHES) {
             let at = c["at"].as_array().map(|a| a.iter().filter_map(Value::as_f64).map(r1).collect::<Vec<_>>()).unwrap_or_default();
             let systems: Vec<String> = c["systems"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
             let id = format!("RV-C{}", hash(&format!("{}|{systems:?}|{at:?}|{}|{}", c["kind"], c["message"], c["handles"])));
@@ -401,6 +406,29 @@ fn status_of(st: &State, id: &str) -> &'static str {
     }
 }
 
+/// Clashes and validation failures queued at most; past that, one item says how many more there
+/// are and where they are listed.
+const MAX_QUEUED_CLASHES: usize = 2_000;
+const MAX_QUEUED_FAILURES: usize = 2_000;
+
+/// The item saying `more` of `total` findings of a kind aren't queued, and the call that lists
+/// them (first in the queue: the agent knows before it works through the rest).
+fn more_item(kind: &'static str, more: usize, total: usize, call: &str) -> Item {
+    Item {
+        id: format!("RV-M{}", hash(&format!("more|{kind}|{total}"))),
+        kind,
+        level: String::new(),
+        title: format!("{more} more of {total} not queued: {call}"),
+        detail: json!({"not_queued": more, "total": total, "list_with": call}),
+        candidates: Vec::new(),
+        documents: Vec::new(),
+        documented: false,
+        rank: 0.0,
+        key: json!({"not_queued": kind}),
+        system: String::new(),
+    }
+}
+
 /// Validation failures as review items (MUST 3: Q319/Q320 wiring).
 fn validation_items(s: &mut Session) -> Vec<Item> {
     let report = match s.execute("bim.validate", &json!({})) {
@@ -408,7 +436,11 @@ fn validation_items(s: &mut Session) -> Vec<Item> {
         Err(_) => return Vec::new(),
     };
     let mut out = Vec::new();
-    for f in report["failures"].as_array().into_iter().flatten().take(200) {
+    let failures = report["failures"].as_array().map_or(0, Vec::len);
+    if failures > MAX_QUEUED_FAILURES {
+        out.push(more_item("validation", failures - MAX_QUEUED_FAILURES, failures, "bim.validate {} lists them all"));
+    }
+    for f in report["failures"].as_array().into_iter().flatten().take(MAX_QUEUED_FAILURES) {
         let fid = f["id"].as_str().unwrap_or_default();
         let rule = f["rule"].as_str().unwrap_or_default();
         let level = f["level"].as_str().unwrap_or_default().to_string();
@@ -565,7 +597,7 @@ fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
     } else if let Some(i) = open.first() {
         json!({"call": format!("review.next {{}} (top: {})", i.id), "why": format!("{} open review item(s)", open.len())})
     } else {
-        json!({"call": "takeoff {} or export {path: \"model.ifc\"}", "why": "built, nothing open to review"})
+        json!({"call": "bim.takeoff {} or export {path: \"model.ifc\"}", "why": "built, nothing open to review"})
     };
     let built_text: Vec<String> =
         built.iter().map(|(l, m)| format!("{l}: {}", m.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", "))).collect();
@@ -1084,7 +1116,12 @@ fn run_log(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(capped(v, "entries", ANSWER_MAX))
 }
 
+/// `bim.build`: one undo step, however many commands it runs.
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| build(s, p))
+}
+
+fn build(s: &mut Session, p: &Value) -> Result<Value> {
     // Gate: refuse to build if the import check failed, unless --force or discipline is mep
     // (the MEP geometry reader handles paper-scale and pen-layer drawings natively).
     let force = bool_or(p, "force", false);

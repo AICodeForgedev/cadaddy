@@ -55,6 +55,9 @@ use cadaddy_doc::EntityKind;
 
 /// Lines in one BOM, at most (hostile specs).
 const MAX_LINES: usize = 200_000;
+/// Elements a line lists at most: the model takeoff counts a line's elements from its list
+/// (a level's 700 walls were counted 500).
+const MAX_LINE_ELEMENTS: usize = 5_000;
 /// A conduit stick, feet (a coupling joins each two).
 const STICK_FT: f64 = 10.0;
 /// Conduit supports: within 3' of each end and every 10' between (NEC 358.30 for EMT).
@@ -479,7 +482,7 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         let level = super::bspec::made_level(e).unwrap_or_default();
         let entry = built.entry((part, level)).or_insert((0, Vec::new()));
         entry.0 += 1;
-        if entry.1.len() < 500 {
+        if entry.1.len() < MAX_LINE_ELEMENTS {
             entry.1.push(e.handle.hex());
         }
     }
@@ -904,7 +907,7 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
     for (level, rs) in &rooms_by_level {
         room_count += rs.len();
         let handles = |f: &dyn Fn(&super::bspec::RoomElement) -> bool| -> Vec<String> {
-            rs.iter().filter(|r| f(r)).take(500).map(|r| r.handle.hex()).collect()
+            rs.iter().filter(|r| f(r)).take(MAX_LINE_ELEMENTS).map(|r| r.handle.hex()).collect()
         };
         let line = |item: String, size: String, unit: &'static str, net: f64, elements: Vec<String>| Line {
             trade: "general",
@@ -1176,7 +1179,7 @@ fn devices_from_drawing(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                 status: "model",
                 rule: Some("detected from device symbols on drawing".into()),
                 level: level.clone(),
-                elements: handles.iter().take(500).cloned().collect(),
+                elements: handles.iter().take(MAX_LINE_ELEMENTS).cloned().collect(),
                 ..Line::default()
             },
         );

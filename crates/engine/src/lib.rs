@@ -104,7 +104,16 @@ pub use cadaddy_render as render;
 pub use cadaddy_walk3d as walk3d;
 pub use cmd::blocks::extract::EXTRACT_PROPERTIES;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
-pub use cmd::render::{cancel_pending, request_cancel};
+pub use cmd::render::cancel_pending;
+
+/// Ask what is running to stop: a guided job at its next sheet or stage, else a RENDER at its
+/// next sample pass. Safe to call from any thread; the MCP server calls it when a
+/// `notifications/cancelled` or the `cancel` tool arrives.
+pub fn request_cancel() {
+    if !cmd::guided::request_cancel() {
+        cmd::render::request_cancel();
+    }
+}
 /// A shaded or 3D view of model space as a PNG (exports; see the function).
 pub use cmd::view::view3d::shaded_png;
 pub use cmd::{CommandInfo, CommandSpec, HelpPage, command_specs, commands_without_help, find_by_id_or_alias, find_command};
@@ -1308,6 +1317,12 @@ pub struct Session {
     /// Plug-in commands running now, one inside another's host call ([`plugins::MAX_PLUGIN_DEPTH`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) plugin_depth: u32,
+    /// Inside [`Session::as_one_undo_step`]: the undoable commands run record no step of their
+    /// own (the calling command's one step holds them all).
+    pub(crate) one_undo_step: u32,
+    /// `model.issues`' findings for one revision of one drawing: its pages and kinds are read
+    /// from them, not found again (a print set's checks took two minutes a call).
+    pub(crate) issues_cache: Option<Box<cmd::verify::IssuesCache>>,
 }
 
 /// Give a new drawing its own FINGERPRINTGUID (as AutoCAD does): kept in DWG, DXF and .cdy, it
@@ -1428,6 +1443,8 @@ impl Session {
             plugins: plugins::PluginHost::new(),
             #[cfg(not(target_arch = "wasm32"))]
             plugin_depth: 0,
+            one_undo_step: 0,
+            issues_cache: None,
         }
     }
     /// Take the results of background checks that have finished: what a DWG or DXF save didn't
@@ -1650,6 +1667,10 @@ impl Session {
             return r;
         }
         let outer = self.journal.enter();
+        // A call from outside starts outside any one-step group (one a failed command left).
+        if outer {
+            self.one_undo_step = 0;
+        }
         // A call from outside while a command runs (an agent's `engine.execute` while the user
         // is in TEXT): the command's work so far, the call's and the command's rest are undo
         // steps of their own, so U never takes the call's work away with the command's.
@@ -1858,7 +1879,7 @@ impl Session {
         {
             st.doc = Arc::clone(doc);
         }
-        let grouped = self.lisp_groups_undo();
+        let grouped = self.lisp_groups_undo() || self.one_undo_step > 0;
         if spec.undoable
             && let Some((doc, sel, uid)) = before
             && let Some(st) = self.docs.iter_mut().find(|d| d.uid == uid)
@@ -1871,6 +1892,16 @@ impl Session {
             st.revision += 1;
         }
         result.map(|v| with_unknown_param_warnings(v, spec, params))
+    }
+
+    /// Run `f` as one undo step: the undoable commands it runs record none of their own, so the
+    /// command calling it (undoable itself) is a single step (BIM.BUILD drafting the spec,
+    /// reading the MEP and building the model is one U).
+    pub(crate) fn as_one_undo_step<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.one_undo_step = self.one_undo_step.saturating_add(1);
+        let r = f(self);
+        self.one_undo_step = self.one_undo_step.saturating_sub(1);
+        r
     }
 
     /// Bump the revision without an undo step (view-only or settings changes that redraw).
