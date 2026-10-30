@@ -130,10 +130,102 @@ fn typed_blockify_previews_then_replaces() {
     s.set_selection(hs);
     s.cmdline("blockify").unwrap();
     assert_eq!(s.selection().len(), 3, "the copy is selected to show it");
-    assert!(s.current_prompt().unwrap().message.starts_with("1 copies found"), "{}", s.current_prompt().unwrap().message);
+    assert!(s.current_prompt().unwrap().message.starts_with("1 copy found"), "{}", s.current_prompt().unwrap().message);
     s.cmdline("").unwrap();
     s.cmdline("MARK").unwrap();
     assert!(s.running.is_none());
     assert_eq!(inserts(&s).len(), 2);
     assert!(s.doc().unwrap().block("MARK").is_some());
+}
+
+fn circle_count(s: &Session) -> usize {
+    s.doc().unwrap().model.iter().filter(|e| matches!(e.kind, EntityKind::Circle(_))).count()
+}
+
+#[test]
+fn only_the_chosen_copies_are_replaced() {
+    let mut s = Session::new();
+    let t = symbol(&mut s, Similarity::IDENTITY, 0.0, false);
+    let c1 = symbol(&mut s, sim(1.0, 0.0, 20.0, 0.0), 0.0, false);
+    let c2 = symbol(&mut s, sim(1.0, 30.0, 40.0, 0.0), 0.0, false);
+    let c3 = symbol(&mut s, sim(2.0, 0.0, 60.0, 0.0), 0.0, false);
+    let before = s.doc().unwrap().model.len();
+    let r = s.execute("blockify", &json!({"handles": t, "name": "SYM", "only": [c1[0], c3[1]]})).unwrap();
+    assert_eq!(r["replaced"], 2, "{r}");
+    assert_eq!(r["matches"].as_array().unwrap().len(), 3, "the report still lists every copy");
+    // The template and two copies became 3 references; the third copy's 3 objects are untouched.
+    assert_eq!(inserts(&s).len(), 3);
+    assert_eq!(s.doc().unwrap().model.len(), before - 9 + 3);
+    let doc = s.doc().unwrap();
+    for h in &c2 {
+        assert!(doc.entity(Handle::parse_hex(h).unwrap()).is_some(), "the copy left out keeps its objects");
+    }
+    for h in c1.iter().chain(&c3) {
+        assert!(doc.entity(Handle::parse_hex(h).unwrap()).is_none());
+    }
+    // A handle that is not part of any copy is refused, and nothing changes.
+    let stray = handle(&s.execute("circle", &json!({"center": [500, 500], "radius": 9})).unwrap());
+    let n = s.doc().unwrap().model.len();
+    assert!(s.execute("blockify", &json!({"block": "SYM", "only": [stray]})).is_err());
+    assert_eq!(s.doc().unwrap().model.len(), n);
+    // An empty list replaces nothing.
+    let r = s.execute("blockify", &json!({"block": "SYM", "only": []})).unwrap();
+    assert_eq!(r["replaced"], 0);
+}
+
+#[test]
+fn typed_blockify_can_deselect_a_copy() {
+    let mut s = Session::new();
+    let t = symbol(&mut s, Similarity::IDENTITY, 0.0, false);
+    let c1 = symbol(&mut s, sim(1.0, 45.0, 20.0, 0.0), 0.0, false);
+    let c2 = symbol(&mut s, sim(1.0, 0.0, 40.0, 0.0), 0.0, false);
+    s.set_selection(t.iter().map(|h| Handle::parse_hex(h).unwrap()).collect());
+    s.cmdline("blockify").unwrap();
+    assert_eq!(s.selection().len(), 6);
+    assert!(s.current_prompt().unwrap().message.starts_with("2 copies found"));
+    s.cmdline("Deselect").unwrap();
+    s.input(cadaddy_engine::Input::Pick(vec![Handle::parse_hex(&c2[0]).unwrap()])).unwrap();
+    assert_eq!(s.selection().len(), 3, "the left-out copy is no longer selected");
+    s.input(cadaddy_engine::Input::Enter).unwrap();
+    assert!(s.current_prompt().unwrap().message.starts_with("1 copy found"), "{}", s.current_prompt().unwrap().message);
+    s.cmdline("").unwrap();
+    s.cmdline("PICK").unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(inserts(&s).len(), 2, "the group and the one kept copy");
+    let doc = s.doc().unwrap();
+    assert!(c2.iter().all(|h| doc.entity(Handle::parse_hex(h).unwrap()).is_some()));
+    assert!(c1.iter().all(|h| doc.entity(Handle::parse_hex(h).unwrap()).is_none()));
+}
+
+#[test]
+fn a_single_circle_does_not_match_itself() {
+    let mut s = Session::new();
+    let t = handle(&s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap());
+    s.execute("circle", &json!({"center": [10, 0], "radius": 1})).unwrap();
+    s.execute("circle", &json!({"center": [20, 5], "radius": 2})).unwrap();
+    let r = s.execute("blockify", &json!({"handles": [t], "replace": false})).unwrap();
+    let m = r["matches"].as_array().unwrap();
+    assert_eq!(m.len(), 2, "{r}");
+    assert!(m.iter().all(|x| !x["handles"].as_array().unwrap().iter().any(|h| h == &json!(t))), "the template is no match");
+    let r = s.execute("blockify", &json!({"handles": [t], "name": "DEV"})).unwrap();
+    assert_eq!(r["replaced"], 2, "{r}");
+    let mut at: Vec<(i64, i64)> = inserts(&s).iter().map(|i| (i.insert.x.round() as i64, i.insert.y.round() as i64)).collect();
+    at.sort();
+    assert_eq!(at.len(), 3, "one reference per circle, none stacked");
+    at.dedup();
+    assert_eq!(at.len(), 3, "at three distinct points: {at:?}");
+    assert_eq!(circle_count(&s), 0);
+}
+
+#[test]
+fn a_single_circle_template_can_stay() {
+    let mut s = Session::new();
+    let t = handle(&s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap());
+    s.execute("circle", &json!({"center": [10, 0], "radius": 1})).unwrap();
+    s.execute("circle", &json!({"center": [20, 5], "radius": 2})).unwrap();
+    let r = s.execute("blockify", &json!({"handles": [t], "name": "DEV", "keepTemplate": true})).unwrap();
+    assert_eq!(r["replaced"], 2, "{r}");
+    assert_eq!(inserts(&s).len(), 2, "exactly the two copies are added");
+    assert_eq!(circle_count(&s), 1);
+    assert!(s.doc().unwrap().entity(Handle::parse_hex(&t).unwrap()).is_some(), "the template circle still exists");
 }
