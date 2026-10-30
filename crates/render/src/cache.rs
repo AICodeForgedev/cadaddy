@@ -29,6 +29,11 @@ struct Context {
     field_values: std::collections::BTreeMap<cadaddy_doc::Handle, Vec<String>>,
     scales: Vec<cadaddy_doc::AnnoScale>,
     materials: Vec<cadaddy_doc::material::Material>,
+    /// Objects the renderer skips (HIDEOBJECTS, isolation), the in-place reference edit (fades
+    /// the rest of the drawing) and loaded shape files: none of them touch the objects.
+    hidden_objects: std::collections::BTreeSet<cadaddy_doc::Handle>,
+    refedit: Option<cadaddy_doc::RefEdit>,
+    shape_files: Vec<String>,
     images: u64,
     opts: String,
 }
@@ -48,6 +53,9 @@ impl Context {
             field_values: d.field_values.clone(),
             scales: d.scales.clone(),
             materials: d.materials.clone(),
+            hidden_objects: d.hidden_objects.clone(),
+            refedit: d.refedit.clone(),
+            shape_files: d.shape_files.clone(),
             images: images::generation(),
             opts: options_key(opts),
         }
@@ -409,7 +417,7 @@ mod tests {
             for step in 0..60 {
                 let handles: Vec<Handle> = d.model.iter().map(|e| e.handle).collect();
                 let pick = |r: &mut Rng| handles.get(r.below(handles.len() as u64) as usize).copied().unwrap_or(Handle(0x100));
-                match r.below(8) {
+                match r.below(10) {
                     // Moved in place (same shape: patched where it was).
                     6 | 7 => {
                         let h = pick(&mut r);
@@ -441,6 +449,14 @@ mod tests {
                     4 => {
                         d.model.send_to_back(pick(&mut r));
                     }
+                    8 => {
+                        // Hide or unhide a random object.
+                        let h = pick(&mut r);
+                        if !d.hidden_objects.remove(&h) {
+                            d.hidden_objects.insert(h);
+                        }
+                    }
+                    9 => d.hidden_objects.clear(),
                     _ => {
                         // Something every part depends on: a layer's colour.
                         if let Some(l) = d.layers.first_mut() {
@@ -470,6 +486,54 @@ mod tests {
             assert_eq!(cache.rebuilt, 1, "{cache:?}");
             assert!(cache.reused >= 2);
         }
+    }
+
+    #[test]
+    fn hidden_and_refedit_changes_invalidate_parts() {
+        let mut r = Rng(31);
+        let mut d = Drawing::new_imperial();
+        for h in 0..2500u64 {
+            d.model.push(object(&mut r, 0x100 + h));
+        }
+        let mut cache = ChunkCache::default();
+        let mut list = build_cached(&d, &Space::Model, &opts(), &mut cache);
+        same(&list, &build(&d, &Space::Model, &opts()));
+        let before = list.prims.len();
+        let victim = Handle(0x100 + 1500);
+        let step = |d: &Drawing, cache: &mut ChunkCache, list: DisplayList| {
+            let l = build_cached_into(d, &Space::Model, &opts(), cache, Some(list));
+            same(&l, &build(d, &Space::Model, &opts()));
+            l
+        };
+        d.hidden_objects.insert(victim);
+        list = step(&d, &mut cache, list);
+        assert!(list.prims.len() < before, "the hidden object's prims are gone");
+        assert!(list.prims.iter().all(|p| p.handle != victim));
+        d.hidden_objects.clear();
+        list = step(&d, &mut cache, list);
+        assert_eq!(list.prims.len(), before);
+        // An in-place reference edit fades what it doesn't own.
+        d.refedit = Some(cadaddy_doc::RefEdit {
+            block: "B".into(),
+            insert: Handle(0x100),
+            insert_was_visible: true,
+            space: Space::Model,
+            to_world: cadaddy_geom::Mat3::IDENTITY,
+            items: Vec::new(),
+            ghosts: Vec::new(),
+            released: Vec::new(),
+            context: Vec::new(),
+        });
+        list = step(&d, &mut cache, list);
+        assert!(list.prims.iter().any(|p| p.transparency > 0), "the rest is faded");
+        d.refedit = None;
+        list = step(&d, &mut cache, list);
+        assert!(list.prims.iter().all(|p| p.transparency == 0));
+        // A loaded shape file.
+        d.shape_files.push("ltypeshp.shx".into());
+        list = step(&d, &mut cache, list);
+        d.shape_files.clear();
+        step(&d, &mut cache, list);
     }
 
     #[test]
