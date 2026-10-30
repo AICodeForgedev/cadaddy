@@ -65,7 +65,8 @@ eframe = { version = "0.37", default-features = false }
 egui-wgpu = "0.37"
 # Monotonic time on native and web (performance.now on wasm).
 web-time = "1.1"
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["egui"] }
+# craft-update with storytold/craft-libs#434: the update prompt shows the app's icon, accent and developer.
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "1065653e75854e9c17e1ff563acdd344c1b185f0", features = ["egui"] }
 rfd = "0.17"
 arboard = { version = "3.6", default-features = false }
 
