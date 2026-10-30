@@ -625,9 +625,10 @@ fn formats() -> Vec<Format> {
     v
 }
 
-/// Numbers equal to 1 part in 10⁹ (relative), as the notes compare them (`kept::kept`).
+/// Numbers equal to 1 part in 10⁹ (relative) or within 1e-12 (arithmetic noise), as the notes
+/// compare them (`kept::kept`).
 fn same_number(x: f64, y: f64) -> bool {
-    x == y || (x - y).abs() <= 1e-9 * x.abs().max(y.abs())
+    x == y || (x - y).abs() <= 1e-9 * x.abs().max(y.abs()) || (x - y).abs() <= 1e-12
 }
 
 /// The paths where `a` and `b` differ, array indices left out (`kind.vertices[]`).

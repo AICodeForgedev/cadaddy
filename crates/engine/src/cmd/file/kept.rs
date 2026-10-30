@@ -183,7 +183,7 @@ fn block_head(b: &cadaddy_doc::Block) -> serde_json::Value {
 
 /// The size of the difference between two numbers that is rounding noise of a calculation (an
 /// extrusion of (-1e-16, 0, -1), a pattern line's offset of 1e-17), not a change.
-const FLOAT_NOISE: f64 = 1e-15;
+const FLOAT_NOISE: f64 = 1e-12;
 
 /// Fields that name a table record (a layer, linetype, style), compared without case.
 const SYMBOL_KEYS: [&str; 5] = ["linetype", "textStyle", "style", "dimStyle", "layer"];
@@ -699,6 +699,16 @@ mod tests {
             deep = json!([deep]);
         }
         assert!(kept(&deep, &deep.clone(), 0));
+    }
+
+    #[test]
+    fn pattern_line_float_residue_is_not_a_change_but_a_real_change_is() {
+        let line = |dx: f64, dy: f64| json!([{ "angle": 0.5, "base": [0.0, 0.0], "delta": [dx, dy], "dashes": [] }]);
+        // 1.19e-15 read back as 0, and a last-digit difference, are rounding.
+        assert!(kept(&line(1.19e-15, 12.699999999999998), &line(0.0, 12.699999999999996), 0));
+        // A pattern line that really moved is flagged.
+        assert!(!kept(&line(1.19e-15, 12.7), &line(0.001, 12.7), 0));
+        assert!(!kept(&line(0.0, 12.7), &line(0.0, 12.0), 0));
     }
 
     #[test]
