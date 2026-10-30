@@ -1064,6 +1064,11 @@ fn plot_sheets(cmd: &str, d: &cadaddy_doc::Drawing, v: &Value) -> Result<Vec<Str
 /// `layers?: bool` (drawing layers as PDF layers, default on), `offLayers?: bool` (layers that
 /// are off on hidden PDF layers), `links?: [{handle, url}]` (hyperlinks) and `title?`.
 fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    if let Some(r) = p.get("resolution").filter(|r| !r.is_null())
+        && !r.as_f64().is_some_and(|r| r.is_finite() && (50.0..=2400.0).contains(&r))
+    {
+        return Err(bad(cmd, "`resolution` must be 50-2400 dpi"));
+    }
     let hook = io().and_then(|h| h.plot).ok_or_else(|| bad(cmd, "plotting is not available in this build"))?;
     // Fields worked out on plotting (FIELDEVAL 4): PlotDate is now.
     crate::fields::on_event(s, crate::fields::Event::Plot);
