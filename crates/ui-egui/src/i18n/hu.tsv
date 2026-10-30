@@ -2271,3 +2271,8 @@
 	Enter layer name for new dimensions (. for the current layer)	Adja meg az új méretek fóliájának nevét (. az aktuális fóliához)
 	Colour by BIM Property	Színezés BIM-tulajdonság szerint
 	Named Viewports...	Elnevezett nézetablakok...
+	Extended Trim	Kiterjesztett vágás
+	Trim and Extend	Vágás és nyújtás
+	Trim to Block Objects	Vágás blokkobjektumokig
+	Extend to Block Objects	Nyújtás blokkobjektumokig
+	Super Hatch	Szuperkitöltés

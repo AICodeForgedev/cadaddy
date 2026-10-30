@@ -2271,3 +2271,8 @@
 	Regenerate Dimensions	Ölçüleri Yeniden Oluştur
 	Enter layer name for new dimensions (. for the current layer)	Yeni ölçüler için katman adını girin (geçerli katman için .)
 	Colour by BIM Property	BIM özelliğine göre renklendir
+	Extended Trim	Genişletilmiş kırp
+	Trim and Extend	Kırp ve uzat
+	Trim to Block Objects	Blok nesnelerine kırp
+	Extend to Block Objects	Blok nesnelerine uzat
+	Super Hatch	Süper tarama
