@@ -452,6 +452,32 @@ mod tests {
         assert_eq!(format_distance(11.6, 3, 0), "1'-0\"");
     }
 
+    /// RTOS in AutoCAD 2024 (accoreconsole, DIMZIN 0): a half rounds away from zero, at 15
+    /// significant digits.
+    #[test]
+    fn numbers_round_as_autocad_rounds_them() {
+        for (v, prec, want) in [
+            (1500.5, 0, "1501"),
+            (2.5, 0, "3"),
+            (-2.5, 0, "-3"),
+            (0.125, 2, "0.13"),
+            (0.5, 0, "1"),
+            (1.005, 2, "1.01"),
+            (3.5, 0, "4"),
+            (0.0625, 3, "0.063"),
+            (-0.125, 2, "-0.13"),
+            (1234.5678, 3, "1234.568"),
+        ] {
+            assert_eq!(format_distance(v, 2, prec), want, "{v} to {prec}");
+        }
+        assert_eq!(format_distance(2.5, 1, 0), "3E+00");
+        assert_eq!(format_distance(0.125, 1, 1), "1.3E-01");
+        assert_eq!(format_distance(9.96, 1, 1), "1.0E+01");
+        assert_eq!(cadaddy_doc::numfmt::fixed(-0.004, 2).trim_start_matches('-'), "0.00");
+        assert_eq!(cadaddy_doc::numfmt::fixed(1e-20, 3), "0.000");
+        assert_eq!(cadaddy_doc::numfmt::fixed(123456789012.0, 1), "123456789012.0");
+    }
+
     #[test]
     fn exact_halves_round_up_in_magnitude() {
         for (v, want) in [(0.5, "1"), (1.5, "2"), (2.5, "3"), (3.5, "4"), (4.5, "5"), (-2.5, "-3")] {
@@ -480,6 +506,7 @@ mod tests {
         assert_eq!(format_distance(17.5, 1, 4), "1.7500E+01");
         assert_eq!(format_distance(0.00001, 1, 2), "1.00E-05");
         // 1.2345 is a tie: it rounds up (it was 1.234E+03 under round-half-even).
+        // 1.2345 is halfway: away from zero, as AutoCAD rounds 2.5 to 3E+00.
         assert_eq!(format_distance(1234.5, 1, 3), "1.235E+03");
         assert_eq!(format_distance(12345678.0, 1, 3), "1.235E+07");
         assert_eq!(format_distance(-17.5, 1, 4), "-1.7500E+01");
