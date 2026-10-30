@@ -203,3 +203,59 @@ fn express_text_tools_are_on_the_express_tools_menu() {
         assert_eq!(spec.menu, ["Tools", "Express Tools", label]);
     }
 }
+
+#[test]
+fn arctext_rejects_hostile_arcs_promptly() {
+    let mut s = Session::new();
+    let arc = h(&s.execute("arc", &json!({"center": [0, 0], "radius": 10, "start": 0, "end": 180})).unwrap());
+    for (start, end) in [(1e300, 3.0), (f64::NAN, 3.0), (0.0, f64::INFINITY), (f64::NEG_INFINITY, 1.0)] {
+        s.doc_mut()
+            .unwrap()
+            .modify_entity(arc, |e| {
+                if let EntityKind::Arc(a) = &mut e.kind {
+                    a.start = start;
+                    a.end = end;
+                }
+            })
+            .unwrap();
+        match s.execute("arctext", &json!({"arc": arc.hex(), "text": "ABC", "height": 1})) {
+            Err(_) => {}
+            Ok(r) => {
+                for v in r["handles"].as_array().unwrap() {
+                    let t = Handle(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap());
+                    let EntityKind::Text(t) = &s.doc().unwrap().entity(t).unwrap().kind else { panic!() };
+                    assert!(t.insert.x.is_finite() && t.insert.y.is_finite() && t.rotation.is_finite(), "{start} {end}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn tcount_keeps_mtext_content_outside_the_number() {
+    let mut s = Session::new();
+    let m = h(&s.execute("mtext", &json!({"at": [0, 0], "text": "{\\C1;CKT}-# \\{x\\}", "height": 1, "width": 20})).unwrap());
+    let orig = value(&s, m);
+    s.execute("tcount", &json!({"handles": hexes(&[m]), "placement": "prefix", "start": 7})).unwrap();
+    assert_eq!(value(&s, m), format!("7 {orig}"));
+    s.execute("undo", &json!({})).unwrap();
+    s.execute("tcount", &json!({"handles": hexes(&[m]), "placement": "suffix", "start": 7})).unwrap();
+    assert_eq!(value(&s, m), format!("{orig} 7"));
+    s.execute("undo", &json!({})).unwrap();
+    s.execute("tcount", &json!({"handles": hexes(&[m]), "placement": "find", "find": "#", "start": 7})).unwrap();
+    assert_eq!(value(&s, m), "{\\C1;CKT}-7 \\{x\\}");
+}
+
+#[test]
+fn tcase_restarts_sentence_and_title_after_mtext_paragraph_breaks() {
+    let mut s = Session::new();
+    let a = h(&s.execute("mtext", &json!({"at": [0, 0], "text": "HELLO\\PWORLD", "height": 1, "width": 20})).unwrap());
+    s.execute("tcase", &json!({"handles": hexes(&[a]), "case": "title"})).unwrap();
+    assert_eq!(value(&s, a), "Hello\\PWorld");
+    let b = h(&s.execute("mtext", &json!({"at": [0, 5], "text": "one.\\Ptwo", "height": 1, "width": 20})).unwrap());
+    s.execute("tcase", &json!({"handles": hexes(&[b]), "case": "sentence"})).unwrap();
+    assert_eq!(value(&s, b), "One.\\PTwo");
+    let c = h(&s.execute("mtext", &json!({"at": [0, 9], "text": "AB\\~CD", "height": 1, "width": 20})).unwrap());
+    s.execute("tcase", &json!({"handles": hexes(&[c]), "case": "title"})).unwrap();
+    assert_eq!(value(&s, c), "Ab\\~Cd");
+}
