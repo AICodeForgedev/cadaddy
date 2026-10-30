@@ -855,9 +855,12 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         }
         if super::perceive::geometry::room_number(&text) {
             let here = level_at(&sp.levels, at.x, at.y).map(|l| l.name.clone());
+            // The smallest room traced round the number (a trace from another label that got out
+            // into the next room holds it too).
             if let Some(o) = out
                 .iter_mut()
-                .find(|o| o.number.is_none() && here.as_ref().is_none_or(|l| *l == o.level) && cadaddy_geom::point_in_polygon(&o.outline, at))
+                .filter(|o| o.number.is_none() && here.as_ref().is_none_or(|l| *l == o.level) && cadaddy_geom::point_in_polygon(&o.outline, at))
+                .min_by(|a, b| a.cached_area.total_cmp(&b.cached_area))
             {
                 // On a room tag layer any number is a room's; else only the spec's rooms' numbers.
                 if tagged || sp.rooms.iter().any(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(text.trim()))) {
@@ -1263,6 +1266,88 @@ fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f6
     }
 }
 
+/// How much of the smaller of two rooms' floors (0..1) lies inside the other's when they are one
+/// room traced twice; and how big the smaller is beside the bigger at least (a closet or a
+/// symbol's box drawn inside a room is a thing of its own).
+const SAME_ROOM_INSIDE: f64 = 0.7;
+const SAME_ROOM_SIZE: f64 = 0.4;
+
+/// The share (0..1) of polygon `a`'s area that is inside polygon `b`, sampled on a grid over `a`.
+fn share_inside(a: &[Vec2], b: &[Vec2]) -> f64 {
+    const N: usize = 24;
+    let (ba, bb) = (cadaddy_geom::Bounds2::from_points(a.iter().copied()), cadaddy_geom::Bounds2::from_points(b.iter().copied()));
+    if ba.is_empty() || bb.is_empty() || ba.max.x < bb.min.x || bb.max.x < ba.min.x || ba.max.y < bb.min.y || bb.max.y < ba.min.y {
+        return 0.0;
+    }
+    let (mut on_a, mut on_both) = (0usize, 0usize);
+    for i in 0..N {
+        for j in 0..N {
+            let p = Vec2::new(
+                ba.min.x + (i as f64 + 0.5) / N as f64 * (ba.max.x - ba.min.x),
+                ba.min.y + (j as f64 + 0.5) / N as f64 * (ba.max.y - ba.min.y),
+            );
+            if cadaddy_geom::point_in_polygon(a, p) {
+                on_a += 1;
+                on_both += usize::from(cadaddy_geom::point_in_polygon(b, p));
+            }
+        }
+    }
+    if on_a == 0 { 0.0 } else { on_both as f64 / on_a as f64 }
+}
+
+/// One room per floor area: of two rooms of a level where the smaller lies mostly inside the
+/// other ([`SAME_ROOM_INSIDE`]) and is no closet of it ([`SAME_ROOM_SIZE`]), one label's trace
+/// stayed in the room and another's got out into the next. The corridor's, stair's or hoistway's
+/// is the room, else the smaller; it takes the other's name, spec room and number when it has
+/// none and the other's tag is on it. How many were dropped.
+fn one_room_per_floor(rooms: &mut Vec<Traced>) -> usize {
+    let area = |t: &Traced| cadaddy_geom::shoelace(&t.outline).abs();
+    // Each pair once: (the bigger, the smaller), the biggest first.
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for i in 0..rooms.len() {
+        for j in 0..rooms.len() {
+            let (Some(big), Some(small)) = (rooms.get(i), rooms.get(j)) else { continue };
+            let (ab, as_) = (area(big), area(small));
+            if i == j || !big.level.trim().eq_ignore_ascii_case(small.level.trim()) || as_ > ab || (as_ == ab && j < i) {
+                continue;
+            }
+            if as_ >= SAME_ROOM_SIZE * ab && share_inside(&small.outline, &big.outline) >= SAME_ROOM_INSIDE {
+                pairs.push((i, j));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| rooms.get(b.0).map(area).unwrap_or(0.0).total_cmp(&rooms.get(a.0).map(area).unwrap_or(0.0)));
+    let mut gone = vec![false; rooms.len()];
+    for (big, small) in pairs {
+        if gone[big] || gone[small] {
+            continue;
+        }
+        let keep_big = rooms[big].circulation && !rooms[small].circulation;
+        let (keep, drop) = if keep_big { (big, small) } else { (small, big) };
+        let (on, name, room, number) = {
+            let d = &rooms[drop];
+            (cadaddy_geom::point_in_polygon(&rooms[keep].outline, d.at), d.name.clone(), d.room, d.number.clone())
+        };
+        let k = &mut rooms[keep];
+        if on {
+            if k.number.is_none() && k.room.is_none() {
+                k.number = number;
+                k.room = room;
+            }
+            if k.name.is_none() {
+                k.name = name;
+            }
+        }
+        gone[drop] = true;
+    }
+    let mut i = 0usize;
+    rooms.retain(|_| {
+        i += 1;
+        !gone[i - 1]
+    });
+    gone.iter().filter(|g| **g).count()
+}
+
 /// A floor face over a polygon at `z`, facing up.
 fn floor_face(poly: &[Vec2], z: f64) -> Option<Mesh> {
     let mut ring: Vec<Vec2> = poly.to_vec();
@@ -1494,6 +1579,10 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     s.event("build.progress", json!({"step": "validate_rooms", "rooms": rooms.len()}));
     walled_rooms(s.doc_mut()?, &sp, &mut rooms, upf, &mut notes);
+    let twice = one_room_per_floor(&mut rooms);
+    if twice > 0 {
+        notes.push(format!("{twice} room(s) traced twice over one floor (one label's trace got out into the next room): one room each."));
+    }
     build_step(s, "rooms validated", build_start);
     s.event("build.progress", json!({"step": "validate_rooms_done", "rooms": rooms.len()}));
     let mark = |step: &str| super::guided::progress_line(&format!("  model.build: {step} at {:.1} s", build_start.elapsed().as_secs_f64()));
@@ -1949,6 +2038,54 @@ pub(crate) fn prism(poly: &[Vec2], z0: f64, z1: f64) -> Option<Mesh> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn traced(level: &str, [x0, y0, x1, y1]: [f64; 4], at: [f64; 2], name: Option<&str>, number: Option<&str>, circulation: bool) -> Traced {
+        let outline = vec![Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)];
+        let bounds = cadaddy_geom::Bounds2::from_points(outline.iter().copied());
+        Traced {
+            room: None,
+            level: level.into(),
+            cached_area: cadaddy_geom::shoelace(&outline).abs(),
+            outline,
+            tag: Handle(0),
+            at: Vec2::new(at[0], at[1]),
+            name: name.map(String::from),
+            number: number.map(String::from),
+            cached_bounds: bounds,
+            circulation,
+        }
+    }
+
+    #[test]
+    fn a_room_traced_twice_over_one_floor_is_one_room_the_tighter_trace() {
+        let mut rooms = vec![
+            // A trace that got out into the next room, numbered from the tag both hold; the room
+            // itself traced from its name.
+            traced("Level 3", [0.0, 0.0, 300.0, 100.0], [50.0, 50.0], None, Some("316"), false),
+            traced("Level 3", [0.0, 0.0, 160.0, 100.0], [80.0, 50.0], Some("DOUBLE Q"), None, false),
+            // A closet drawn inside a room: a thing of its own.
+            traced("Level 3", [400.0, 0.0, 600.0, 200.0], [500.0, 150.0], Some("SUITE"), Some("330"), false),
+            traced("Level 3", [400.0, 0.0, 450.0, 50.0], [425.0, 25.0], Some("CLOSET"), None, false),
+            // A room traced over the corridor: the corridor's floor.
+            traced("Level 3", [0.0, 200.0, 400.0, 260.0], [100.0, 230.0], Some("CORRIDOR"), Some("300"), true),
+            traced("Level 3", [100.0, 200.0, 300.0, 260.0], [200.0, 230.0], Some("Room"), None, false),
+            // The same footprints on another level are that level's.
+            traced("Level 4", [0.0, 0.0, 160.0, 100.0], [80.0, 50.0], Some("DOUBLE Q"), Some("416"), false),
+        ];
+        assert_eq!(one_room_per_floor(&mut rooms), 2);
+        let names: Vec<(Option<&str>, Option<&str>, f64)> =
+            rooms.iter().map(|t| (t.name.as_deref(), t.number.as_deref(), cadaddy_geom::shoelace(&t.outline).abs())).collect();
+        assert_eq!(
+            names,
+            vec![
+                (Some("DOUBLE Q"), Some("316"), 16_000.0),
+                (Some("SUITE"), Some("330"), 40_000.0),
+                (Some("CLOSET"), None, 2_500.0),
+                (Some("CORRIDOR"), Some("300"), 24_000.0),
+                (Some("DOUBLE Q"), Some("416"), 16_000.0),
+            ]
+        );
+    }
 
     #[test]
     fn ear_clipping_an_l() {
