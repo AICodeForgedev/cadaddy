@@ -383,3 +383,57 @@ fn a_page_setup_override_changes_the_published_paper() {
     let r = s.execute("sheetset", &json!({ "set": set, "action": "pagesetup", "remove": "A1" })).unwrap();
     assert_eq!(r["pageSetup"], "");
 }
+
+fn layout_names(path: &Path) -> Vec<String> {
+    let d = cadaddy_io::read(&std::fs::read(path).unwrap(), "x.dxf").unwrap();
+    let mut n: Vec<String> = d.layouts.iter().map(|l| l.name.clone()).collect();
+    n.sort();
+    n
+}
+
+#[test]
+fn a_failed_sync_leaves_set_and_drawings_agreeing_and_a_rerun_recovers() {
+    hooks();
+    let dir = folder("syncfail");
+    drawing(&dir.join("arch.dxf"), &["Plan"]);
+    std::fs::create_dir_all(dir.join("struct")).unwrap();
+    drawing(&dir.join("struct/frame.dxf"), &["Framing"]);
+    let set = dir.join("job.sheetset.json").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    let mut ss = |p: Value| {
+        let mut p = p;
+        p["set"] = json!(set);
+        s.execute("sheetset", &p)
+    };
+    ss(json!({ "action": "new" })).unwrap();
+    ss(json!({ "action": "add", "drawing": dir.join("arch.dxf").to_string_lossy() })).unwrap();
+    ss(json!({ "action": "add", "drawing": dir.join("struct/frame.dxf").to_string_lossy() })).unwrap();
+    ss(json!({ "action": "renumber", "prefix": "A-", "digits": 3, "start": 101 })).unwrap();
+
+    // The second drawing goes missing: sync errors and writes nothing.
+    let moved = dir.join("frame.moved");
+    std::fs::rename(dir.join("struct/frame.dxf"), &moved).unwrap();
+    assert!(ss(json!({ "action": "sync" })).is_err());
+    assert_eq!(layout_names(&dir.join("arch.dxf")), ["Plan"], "no drawing is written before every one is checked");
+    assert!(!dir.join("arch.bak").exists());
+    let stored: Value = serde_json::from_str(&std::fs::read_to_string(&set).unwrap()).unwrap();
+    let layouts: Vec<&str> = stored["sheets"].as_array().unwrap().iter().map(|s| s["layout"].as_str().unwrap()).collect();
+    assert_eq!(layouts, ["Plan", "Framing"], "the set still names what is on disk");
+
+    // A drawing that already carries the wanted name (an earlier run got that far) is adopted.
+    drawing(&dir.join("struct/frame.dxf"), &["A-102 Framing"]);
+    std::fs::remove_file(&moved).unwrap();
+    ss(json!({ "action": "sync" })).unwrap();
+    assert_eq!(layout_names(&dir.join("arch.dxf")), ["A-101 Plan"]);
+    assert_eq!(layout_names(&dir.join("struct/frame.dxf")), ["A-102 Framing"]);
+    let stored: Value = serde_json::from_str(&std::fs::read_to_string(&set).unwrap()).unwrap();
+    let layouts: Vec<&str> = stored["sheets"].as_array().unwrap().iter().map(|s| s["layout"].as_str().unwrap()).collect();
+    assert_eq!(layouts, ["A-101 Plan", "A-102 Framing"]);
+
+    let out = dir.join("job.pdf");
+    let r = ss(json!({ "action": "publish", "path": out.to_string_lossy() })).unwrap();
+    assert_eq!(r["pages"], 2);
+    let marks = cadaddy_io::pdf_merge::bookmarks(&std::fs::read(&out).unwrap()).unwrap();
+    let titles: Vec<&str> = marks.iter().map(|m| m.0.as_str()).collect();
+    assert!(titles.contains(&"A-101 Plan") && titles.contains(&"A-102 Framing"), "{titles:?}");
+}
