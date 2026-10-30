@@ -311,3 +311,9 @@ fn settings_bars_checkbox_clears_exceptions() {
     assert!(s.doc().unwrap().parametric.settings.bar_exceptions.is_empty());
     assert!(bar(&s, &a) && bar(&s, &b));
 }
+
+#[test]
+fn rename_in_leaves_the_expression_alone_for_an_empty_old_name() {
+    assert_eq!(super::rename_in("w / 2", "", "x"), "w / 2");
+    assert_eq!(super::rename_in("w / 2", "w", "x"), "x / 2");
+}

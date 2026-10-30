@@ -869,14 +869,11 @@ fn failing(d: &Drawing) -> std::collections::BTreeSet<String> {
     cs::parameter_table(d).into_iter().filter(|r| r.error.is_some()).map(|r| r.name).collect()
 }
 
-/// Whether `n` can name a parameter: a letter or `_`, then letters, digits and `_`.
-fn valid_parameter_name(n: &str) -> bool {
-    let mut c = n.chars();
-    c.next().is_some_and(|f| f.is_ascii_alphabetic() || f == '_') && c.all(|x| x.is_ascii_alphanumeric() || x == '_') && n.len() <= 64
-}
-
 /// `expr` with every use of the name `old` replaced by `new` (whole names only).
 fn rename_in(expr: &str, old: &str, new: &str) -> String {
+    if old.is_empty() {
+        return expr.to_string();
+    }
     let mut out = String::with_capacity(expr.len());
     let mut word = String::new();
     let flush = |word: &mut String, out: &mut String| {
@@ -920,10 +917,17 @@ fn run_parameters(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad("parameters", "`rename` is [old, new]"));
         };
         let d = s.doc()?;
-        if !cs::name_in_use(d, old) {
-            return Err(EngineError::Other(format!("no parameter `{old}`")));
+        // Only a user parameter or a dimensional constraint can be renamed (geometric constraints have the name "").
+        let known = !old.trim().is_empty()
+            && (d.parametric.parameters.iter().any(|q| q.name == old) || d.constraints.iter().any(|c| c.kind.is_dimensional() && c.name == old));
+        if !known {
+            return Err(EngineError::Other(if old.trim().is_empty() {
+                "`rename` needs the name of a parameter or dimensional constraint as `old`".to_string()
+            } else {
+                format!("no parameter `{old}`")
+            }));
         }
-        if !valid_parameter_name(new) {
+        if !cs::expr::valid_name(new) {
             return Err(EngineError::Other(format!("`{new}` can't name a parameter: use letters, digits and _, starting with a letter")));
         }
         if new != old && cs::name_in_use(d, new) {
