@@ -228,8 +228,9 @@ fn read_dwg_bridge(bytes: &[u8]) -> Result<Drawing> {
 
 /// The bridge hands AutoCAD's anonymous copies of dynamic blocks (`*U7`) back under the dynamic
 /// block's name, without the anonymous flag: they stay anonymous here, as when read from a DXF,
-/// so block lists agree between the two formats.
-fn mark_dynamic_copies_anonymous(d: &mut Drawing) {
+/// so block lists agree between the two formats. A DXF written from such a drawing names the copy
+/// the same way, so the DXF reader marks them too.
+pub(crate) fn mark_dynamic_copies_anonymous(d: &mut Drawing) {
     let copies: Vec<String> =
         d.blocks.iter().filter(|(k, b)| !b.anonymous && cadaddy_doc::dynblock::is_named_anonymous_copy(d, k)).map(|(k, _)| k.clone()).collect();
     for k in copies {

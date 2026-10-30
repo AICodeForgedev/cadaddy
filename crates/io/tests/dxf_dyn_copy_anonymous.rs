@@ -37,3 +37,20 @@ fn block_lists_agree_between_dxf_and_dwg() {
         }
     }
 }
+
+/// A DWG read through the bridge hands the copy back under the dynamic block's name; saved as
+/// DXF and opened again it is still not listed.
+#[test]
+fn block_lists_survive_a_dwg_to_dxf_save() {
+    let d = cadaddy_io::read_dxf(DXF.as_bytes()).unwrap();
+    for engine in [DwgEngine::Bridge, DwgEngine::Native] {
+        let bytes = cadaddy_io::write_dwg(&d, Version::R2018, engine).unwrap();
+        for read in [DwgEngine::Bridge, DwgEngine::Native] {
+            let from_dwg = cadaddy_io::read_dwg(&bytes, read).unwrap();
+            let dxf = cadaddy_io::write_dxf(&from_dwg);
+            let from_dxf = cadaddy_io::read_dxf(dxf.as_bytes()).unwrap();
+            assert_eq!(listed(&from_dxf), ["PLAIN"], "written by {engine:?}, read by {read:?}");
+            assert_eq!(listed(&from_dxf), listed(&from_dwg), "written by {engine:?}, read by {read:?}");
+        }
+    }
+}
