@@ -181,8 +181,20 @@ pub fn parse_with_limit(bytes: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
     if let Some(body) = bytes.strip_prefix(BINARY_SENTINEL) {
         return parse_binary_with_limit(body, max_tags);
     }
-    // Every group code takes two lines (code, value).
-    let tags = bytes.iter().filter(|&&b| b == b'\n').count().div_ceil(2);
+    // Count nonblank group-code/value pairs, stopping at EOF just as the parser does.
+    let mut lines = bytes.split(|&b| b == b'\n');
+    let mut tags = 0;
+    while let Some(code) = lines.next() {
+        let code = code.trim_ascii();
+        if code.is_empty() {
+            continue;
+        }
+        let Some(value) = lines.next() else { break };
+        tags += 1;
+        if code == b"0" && value.trim_ascii() == b"EOF" {
+            break;
+        }
+    }
     if tags > max_tags {
         return Err(DxfError::TooLarge { tags, limit: max_tags });
     }
@@ -579,6 +591,12 @@ mod tests {
                 assert_eq!(back[1..], tags[..], "binary utf8={utf8} {text}");
             }
         }
+    }
+
+    #[test]
+    fn blank_lines_do_not_consume_group_code_limit() {
+        let tags = parse_with_limit(b"0\nEOF\n\n\n", 1).expect("one group code should fit a limit of one");
+        assert_eq!(tags, vec![Tag::s(0, "EOF")]);
     }
 
     #[test]
