@@ -235,6 +235,31 @@ fn kept_objects_survive(version: &str, target: Version) {
     assert!(wrong.is_empty(), "{version} → {target:?}:\n{}", wrong.join("\n"));
 }
 
+/// A drawing saved once as an older DWG has that version as its `$ACADVER` (SAVEAS sets it, so a
+/// later QSAVE writes it again), but its kept objects are still in the 2018 file's groups. The
+/// next save must still read them as 2018: read as the saved version, the mental ray settings
+/// came out a class version too high (the ODA refuses the DWG) and a 2004 field lost its cached
+/// value.
+#[test]
+fn kept_groups_keep_their_version_across_saves() {
+    let dxf = synthetic("AC1032");
+    for (first, second) in [(Version::R2004, Version::R2004), (Version::R2010, Version::R2018), (Version::R2018, Version::R2018)] {
+        let mut source = acadrust::DxfReader::from_reader(Cursor::new(dxf.clone().into_bytes())).unwrap().read().unwrap();
+        source.version = acad(second);
+        let reference = kept(&acadrust::DwgReader::from_stream(Cursor::new(acadrust::DwgWriter::write_to_vec(&source).unwrap())).read().unwrap());
+
+        let mut d = read(dxf.as_bytes(), "kept.dxf").unwrap();
+        write_with(&d, "kept.dwg", &SaveOptions { version: Some(first), binary: false }).unwrap();
+        // What SAVEAS does to the drawing after writing it.
+        d.header.set_str("ACADVER", first.code());
+        let dwg = write_with(&d, "kept.dwg", &SaveOptions { version: Some(second), binary: false }).unwrap();
+        let written = kept(&acadrust::DwgReader::from_stream(Cursor::new(dwg)).read().unwrap());
+        let field = |k: &Kept| k.field.as_ref().map(|f| (f.value.clone(), f.value_string.clone()));
+        assert_eq!(written.mental_ray, reference.mental_ray, "{first:?} then {second:?}: mental ray render settings");
+        assert_eq!(field(&written), field(&reference), "{first:?} then {second:?}: field");
+    }
+}
+
 #[test]
 fn a_2018_files_kept_objects_reach_a_2018_dwg() {
     kept_objects_survive("AC1032", Version::R2018);

@@ -1298,21 +1298,6 @@ mod tests {
     }
 
     /// A kept version not newer than the declared one, a binary DXF and a DXF without `$ACADVER`
-    /// The header is read as group code and value pairs up to the first `0`/`ENDSEC`: a `$ACADVER`
-    /// name whose value would come after it, or a file that never ends its HEADER, is no version
-    /// to replace, and `\r\n` lines keep the value's offset right.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn declare_version_reads_the_header_in_pairs_up_to_endsec() {
-        let cut = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  0\r\nENDSEC\r\n  1\r\nAC1015\r\n";
-        assert_eq!(native::declare_version(cut, acadrust::DxfVersion::AC1032), None);
-        let endless = vec![b'\n'; 1 << 20];
-        assert_eq!(native::declare_version(&endless, acadrust::DxfVersion::AC1032), None);
-        let crlf = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\n  AC1015\r\n  0\r\nENDSEC\r\n";
-        let out = native::declare_version(crlf, acadrust::DxfVersion::AC1032).unwrap();
-        assert_eq!(out, b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\n  AC1032\r\n  0\r\nENDSEC\r\n");
-    }
-
     /// are read as they are.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -1326,6 +1311,21 @@ mod tests {
         // A `$ACADVER` outside the HEADER section is not the file's version.
         let late = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  0\r\nENDSEC\r\n  9\r\n$ACADVER\r\n  1\r\nAC1015\r\n";
         assert_eq!(native::declare_version(late, acadrust::DxfVersion::AC1032), None);
+    }
+
+    /// The header is read as group code and value pairs up to the first `0`/`ENDSEC`: a `$ACADVER`
+    /// name whose value would come after it, or a file that never ends its HEADER, is no version
+    /// to replace, and `\r\n` lines keep the value's offset right.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn declare_version_reads_the_header_in_pairs_up_to_endsec() {
+        let cut = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  0\r\nENDSEC\r\n  1\r\nAC1015\r\n";
+        assert_eq!(native::declare_version(cut, acadrust::DxfVersion::AC1032), None);
+        let endless = vec![b'\n'; 1 << 20];
+        assert_eq!(native::declare_version(&endless, acadrust::DxfVersion::AC1032), None);
+        let crlf = b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\n  AC1015\r\n  0\r\nENDSEC\r\n";
+        let out = native::declare_version(crlf, acadrust::DxfVersion::AC1032).unwrap();
+        assert_eq!(out, b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\n  AC1032\r\n  0\r\nENDSEC\r\n");
     }
 
     /// Declared as 2007 or later, a DXF is UTF-8: code page text is decoded first. Declared as an

@@ -452,6 +452,7 @@ pub(crate) fn read(secs: &[Section], d: &mut Drawing) {
         f.data_store = ds.tags.iter().take(MAX_DATA_STORE_GROUPS).map(raw).collect();
     }
     if !f.is_empty() {
+        f.version = d.header.get("ACADVER").and_then(cadcraft_doc::HVal::as_str).map(str::to_string);
         d.foreign = Arc::new(f);
     }
 }

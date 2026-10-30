@@ -102,11 +102,12 @@ pub fn write_with(d: &Drawing, name: impl AsRef<Path>, opts: &SaveOptions) -> Re
         // one, at least 2004: R2000 DWG has no true colours, transparency, table styles or
         // gradients, so a drawing from an R2000 DXF doesn't lose them by default. The objects
         // CADCraft keeps without modelling them are still in the groups of the file they came
-        // from (`$ACADVER`), and the bridge reads them as that version.
+        // from (`Foreign::version`, not `$ACADVER`, which SAVEAS changes), and the bridge reads
+        // them as that version.
         Some(Format::Dwg) if !opts.binary => {
             let version = opts.version.unwrap_or_else(|| version.max(Version::R2004));
             let bridge = dxf_write::dwg_bridge(d, version);
-            match d.header.get("ACADVER").and_then(cadcraft_doc::HVal::as_str) {
+            match d.foreign.version.as_deref() {
                 Some(kept) => cadcraft_dwg::dxf_to_dwg_kept_as(bridge.as_bytes(), version.code(), kept),
                 None => cadcraft_dwg::dxf_to_dwg_as(bridge.as_bytes(), version.code()),
             }
