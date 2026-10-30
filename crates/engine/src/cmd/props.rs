@@ -1249,7 +1249,7 @@ pub(crate) fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
         "block" => rename::block(s, &from, &to)?,
         "plotstyle" => rename::plotstyle(s, &from, &to)?,
         "vport" | "viewport" => rename::vport(s, &from, &to)?,
-        "material" => return Err(bad("rename", rename::NO_MATERIALS)),
+        "material" => rename::material(s, &from, &to)?,
         "mleaderstyle" | "multileaderstyle" => rename::simple(s, "mleaderstyle", &from, &to)?,
         "tablestyle" | "view" | "ucs" => rename::simple(s, &table, &from, &to)?,
         "style" | "textstyle" => {
