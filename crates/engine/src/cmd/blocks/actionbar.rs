@@ -53,10 +53,10 @@ fn edited(s: &Session, cmd: &str) -> Result<(String, Vec2)> {
 fn parameter_at(k: &ParameterKind) -> Option<Vec2> {
     Some(match k {
         ParameterKind::Linear { base, end, .. }
-        | ParameterKind::Polar { base, end }
-        | ParameterKind::Xy { base, end }
-        | ParameterKind::Alignment { base, end }
-        | ParameterKind::Flip { base, end } => base.xy().mid(end.xy()),
+        | ParameterKind::Polar { base, end, .. }
+        | ParameterKind::Xy { base, end, .. }
+        | ParameterKind::Alignment { base, end, .. }
+        | ParameterKind::Flip { base, end, .. } => base.xy().mid(end.xy()),
         ParameterKind::Rotation { base, .. } => base.xy(),
         ParameterKind::Point { at, .. }
         | ParameterKind::Visibility { at, .. }

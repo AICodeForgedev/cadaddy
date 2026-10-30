@@ -17,7 +17,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             .params("{block, type: point|linear|polar|xy|rotation|alignment|flip|visibility|lookup|basepoint, base?: [x,y], end?: [x,y] (two-point types), at?: [x,y] (one-point types), label?, description?, values?: {list: [d…]} | {minimum?, maximum?, increment?} (linear), fromMidpoint?: bool, states?: [{name, handles}] (visibility)} → {node, label, dynamic}")
             .enabled(has_doc),
         CommandSpec::new("bactiontool", "Action", run_action)
-            .params("{block, type: move|stretch|scale|rotate|flip|array|polarstretch|lookup, parameter (its label or graph id), handles: [objects of the block], frame?: [[x,y]…] (stretch), at?: [x,y], name?, columns?: [{parameter, property?, lookup?: bool}], rows?: [[value…]] (lookup)} → {node, name, dynamic}")
+            .params("{block, type: move|stretch|scale|rotate|flip|array|polarstretch|lookup, parameter (its label or graph id), handles: [objects of the block], frame?: [[x,y]…] (stretch), at?: [x,y], name?, columns?: [{parameter, property?, lookup?: bool}], rows?: [[value…]] (lookup), columnOffset?, rowOffset? (array), rotate?: [objects to turn] (polarstretch)} → {node, name, dynamic}")
             .enabled(has_doc),
         CommandSpec::new("bvstate", "Visibility States", run_vstate)
             .params("{block (default the Block Editor's), action?: list (default) | new | set | rename | delete | current (the state the Block Editor shows), name?, newName?, handles?: [the state's visible objects]} → {states: [{name, visible}], current?}")
@@ -138,9 +138,18 @@ fn run_parameter(s: &mut Session, p: &Value) -> Result<Value> {
             let (base, end) = two()?;
             NewParameter::Linear { base, end, values: value_set(cmd, p.get("values"))?, from_midpoint: bool_or(p, "fromMidpoint", false) }
         }
-        "polar" => two().map(|(base, end)| NewParameter::Polar { base, end })?,
-        "xy" => two().map(|(base, end)| NewParameter::Xy { base, end })?,
-        "rotation" => two().map(|(base, end)| NewParameter::Rotation { base, end })?,
+        "polar" => {
+            let (base, end) = two()?;
+            NewParameter::Polar { base, end, values: value_set(cmd, p.get("values"))? }
+        }
+        "xy" => {
+            let (base, end) = two()?;
+            NewParameter::Xy { base, end, values: value_set(cmd, p.get("values"))? }
+        }
+        "rotation" => {
+            let (base, end) = two()?;
+            NewParameter::Rotation { base, end, values: value_set(cmd, p.get("values"))? }
+        }
         "alignment" => two().map(|(base, end)| NewParameter::Alignment { base, end })?,
         "flip" => two().map(|(base, end)| NewParameter::Flip { base, end })?,
         "point" => NewParameter::Point { at: at()? },
@@ -176,18 +185,48 @@ fn run_action(s: &mut Session, p: &Value) -> Result<Value> {
     let block = block_name(s, cmd, p)?;
     let kind = str_param(p, "type").ok_or_else(|| bad(cmd, "`type` is required"))?.to_ascii_lowercase().replace([' ', '-', '_'], "");
     let node = element(s, cmd, &block, p.get("parameter"))?;
-    let selection = handles(cmd, p.get("handles"))?;
+    let mut selection = handles(cmd, p.get("handles"))?;
     let ak = match kind.as_str() {
-        "stretch" => NewActionKind::Stretch {
-            frame: points_param(p, "frame").ok_or_else(|| bad(cmd, "`frame` [[x, y]…] is required"))?,
-            vertices: Vec::new(),
-        },
+        "stretch" => {
+            let frame = points_param(p, "frame").ok_or_else(|| bad(cmd, "`frame` [[x, y]…] is required"))?;
+            // Objects wholly in the frame move whole, crossing ones move their vertices in it,
+            // the others stay.
+            let (inside, vertices) = {
+                let b = s.doc()?.block(&block).ok_or_else(|| bad(cmd, "no such block"))?;
+                author::stretch_selection(selection.iter().filter_map(|h| b.entities.get(*h).map(|e| (*h, &**e))), &frame)
+            };
+            if inside.is_empty() && !selection.is_empty() {
+                return Err(bad(cmd, "none of the selected objects lies in the stretch frame"));
+            }
+            selection = inside;
+            NewActionKind::Stretch { frame, vertices }
+        }
         "move" => NewActionKind::Move,
         "scale" => NewActionKind::Scale,
         "rotate" => NewActionKind::Rotate,
         "flip" => NewActionKind::Flip,
-        "array" => NewActionKind::Array,
-        "polarstretch" => NewActionKind::PolarStretch,
+        "array" => {
+            let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|n| n.is_finite());
+            let column_offset = num("columnOffset").ok_or_else(|| bad(cmd, "`columnOffset` (the distance between copies) is required for an array"))?;
+            NewActionKind::Array { column_offset, row_offset: num("rowOffset").unwrap_or(0.0) }
+        }
+        "polarstretch" => {
+            let frame = points_param(p, "frame").ok_or_else(|| bad(cmd, "`frame` [[x, y]…] is required"))?;
+            let (inside, vertices) = {
+                let b = s.doc()?.block(&block).ok_or_else(|| bad(cmd, "no such block"))?;
+                author::stretch_selection(selection.iter().filter_map(|h| b.entities.get(*h).map(|e| (*h, &**e))), &frame)
+            };
+            let rotate = handles(cmd, p.get("rotate"))?;
+            if inside.is_empty() && rotate.is_empty() {
+                return Err(bad(cmd, "none of the selected objects lies in the stretch frame, and no objects to `rotate` are given"));
+            }
+            selection = inside;
+            if selection.is_empty() {
+                // Only objects to turn: they stand for the selection.
+                selection.clone_from(&rotate);
+            }
+            NewActionKind::PolarStretch { frame, vertices, rotate }
+        }
         "lookup" => {
             let cols = p.get("columns").and_then(Value::as_array).ok_or_else(|| bad(cmd, "`columns` is required"))?;
             let mut columns = Vec::new();
