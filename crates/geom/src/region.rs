@@ -33,6 +33,30 @@ pub struct Boundary {
     pub islands: Vec<Island>,
     /// Indices into the input polylines that make up `outer`, ascending.
     pub outer_sources: Vec<usize>,
+    /// How `outer` runs along the input polylines, in order: each stretch traced along one of
+    /// them (its parameter range is the stretch of points), so an exact curve can be rebuilt
+    /// between the stretch's ends instead of keeping the chords.
+    pub outer_runs: Vec<Run>,
+}
+
+/// A stretch of a traced loop that follows one input polyline.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Run {
+    /// The input polyline, `None` for a bridged gap.
+    pub source: Option<usize>,
+    /// First point of the stretch, an index into the loop.
+    pub from: usize,
+    /// Last point of the stretch: an index into the loop counted on past its length when the
+    /// stretch wraps round to the start (`to % len`); `to - from` is the stretch's edge count.
+    pub to: usize,
+}
+
+impl Run {
+    /// The loop's points along the stretch, first to last.
+    pub fn points<'a>(&self, outer: &'a [Vec2]) -> impl Iterator<Item = Vec2> + 'a {
+        let n = outer.len().max(1);
+        (self.from..=self.to).filter_map(move |i| outer.get(i % n).copied())
+    }
 }
 
 /// One island: the outside outline of a connected group of curves.
@@ -620,7 +644,28 @@ fn boundary_in(g: &Graph, p: Vec2) -> Option<Boundary> {
         ids.iter().zip(ids.iter().cycle().skip(1)).filter_map(|(&u, &v)| g.edge_src.get(&(u.min(v), u.max(v))).copied()).collect();
     outer_sources.sort_unstable();
     outer_sources.dedup();
-    Some(Boundary { outer, islands, outer_sources })
+    let outer_runs = runs(g, &ids);
+    Some(Boundary { outer, islands, outer_sources, outer_runs })
+}
+
+/// The stretches of the traced loop `ids` that follow one input polyline each.
+fn runs(g: &Graph, ids: &[usize]) -> Vec<Run> {
+    let n = ids.len();
+    let src: Vec<Option<usize>> = ids.iter().zip(ids.iter().cycle().skip(1)).map(|(&u, &v)| g.edge_src.get(&(u.min(v), u.max(v))).copied()).collect();
+    // Start where the source changes; a loop of one source is a single stretch all the way round.
+    let Some(start) = (0..n).find(|&i| src.get(i) != src.get((i + n - 1) % n.max(1))) else {
+        return src.first().map(|&source| Run { source, from: 0, to: n }).into_iter().collect();
+    };
+    let mut out: Vec<Run> = Vec::new();
+    for k in 0..n {
+        let i = (start + k) % n;
+        let Some(&source) = src.get(i) else { continue };
+        match out.last_mut() {
+            Some(r) if r.source == source => r.to += 1,
+            _ => out.push(Run { source, from: i, to: i + 1 }),
+        }
+    }
+    out
 }
 
 /// The outside outline of curves that together enclose an area (counter-clockwise, dangling
@@ -685,6 +730,38 @@ mod tests {
 
     fn square(x0: f64, y0: f64, s: f64) -> Vec<Vec2> {
         vec![Vec2::new(x0, y0), Vec2::new(x0 + s, y0), Vec2::new(x0 + s, y0 + s), Vec2::new(x0, y0 + s), Vec2::new(x0, y0)]
+    }
+
+    #[test]
+    fn the_traced_loop_records_which_curve_each_stretch_follows() {
+        // Four separate sides: four stretches of one edge each, every side once.
+        let sides = [
+            vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)],
+            vec![Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0)],
+            vec![Vec2::new(10.0, 10.0), Vec2::new(0.0, 10.0)],
+            vec![Vec2::new(0.0, 10.0), Vec2::new(0.0, 0.0)],
+        ];
+        let b = boundary_at(&sides, Vec2::new(5.0, 5.0), 1e-9).unwrap();
+        assert_eq!(b.outer_runs.len(), 4, "{:?}", b.outer_runs);
+        let mut seen: Vec<usize> = b.outer_runs.iter().filter_map(|r| r.source).collect();
+        seen.sort_unstable();
+        assert_eq!(seen, [0, 1, 2, 3]);
+        for r in &b.outer_runs {
+            let pts: Vec<Vec2> = r.points(&b.outer).collect();
+            let side = &sides[r.source.unwrap()];
+            assert_eq!(pts.len(), 2);
+            assert!(pts.iter().all(|p| side.iter().any(|q| q.near(*p, 1e-9))), "{pts:?} vs {side:?}");
+        }
+        // One closed polyline split in the middle by a second curve: the long side wraps round.
+        let outline = square(0.0, 0.0, 10.0);
+        let b = boundary_at(&[outline, vec![Vec2::new(5.0, 0.0), Vec2::new(5.0, 10.0)]], Vec2::new(2.0, 5.0), 1e-9).unwrap();
+        let total: usize = b.outer_runs.iter().map(|r| r.to - r.from).sum();
+        assert_eq!(total, b.outer.len(), "{:?}", b.outer_runs);
+        assert!(b.outer_runs.iter().any(|r| r.source == Some(1)));
+        assert!(b.outer_runs.iter().any(|r| r.source == Some(0) && r.to >= b.outer.len()), "wrapping stretch: {:?}", b.outer_runs);
+        // A single closed polyline: one stretch all the way round.
+        let b = boundary_at(&[square(0.0, 0.0, 10.0)], Vec2::new(5.0, 5.0), 1e-9).unwrap();
+        assert_eq!(b.outer_runs, [Run { source: Some(0), from: 0, to: b.outer.len() }]);
     }
 
     #[test]

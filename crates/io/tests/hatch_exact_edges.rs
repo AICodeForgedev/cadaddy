@@ -145,6 +145,86 @@ fn a_loop_with_a_broken_curve_keeps_its_points_only() {
     let d = read_dxf(text.as_bytes()).unwrap();
     let h = hatches(&d);
     assert_eq!(h.len(), 1);
-    assert!(h[0].loops[0].curves.iter().all(LoopEdge::is_valid));
+    assert!(h[0].loops[0].curves.is_empty());
+    assert!(!h[0].loops[0].vertices.is_empty());
     let _ = loop_area(&h[0].loops[0].curves);
+}
+
+/// A hatch stored mirrored (extrusion 0,0,-1, what MIRROR leaves behind) with a whole ellipse
+/// and an elliptical arc closed by a line: the exact edges mirror with the points, so the
+/// ellipse centre lands at the negated-x WCS position and the file round trip keeps the WCS
+/// geometry (it used to jump to the mirror image).
+const MIRRORED: &str = "0\nSECTION\n2\nENTITIES\n0\nHATCH\n8\n0\n10\n0\n20\n0\n30\n0\n210\n0\n220\n0\n230\n-1\n2\nSOLID\n70\n1\n71\n0\n\
+    91\n2\n\
+    92\n1\n93\n1\n72\n3\n10\n5\n20\n2\n11\n3\n21\n0\n40\n0.5\n50\n0\n51\n360\n73\n1\n97\n0\n\
+    92\n1\n93\n2\n72\n3\n10\n20\n20\n0\n11\n4\n21\n0\n40\n0.5\n50\n0\n51\n180\n73\n1\n97\n0\n\
+    72\n1\n10\n16\n20\n0\n11\n24\n21\n0\n97\n0\n75\n0\n76\n1\n98\n0\n0\nENDSEC\n0\nEOF\n";
+
+fn mirrored_hatch() -> Hatch {
+    hatches(&read_dxf(MIRRORED.as_bytes()).unwrap()).remove(0)
+}
+
+#[test]
+fn a_mirrored_ocs_hatch_mirrors_its_exact_edges() {
+    let h = mirrored_hatch();
+    assert_eq!(h.loops.len(), 2);
+    let pi = std::f64::consts::PI;
+    // Whole ellipse: centre (5,2) in the OCS is (-5,2) in the WCS; area π·3·1.5.
+    let full = &h.loops[0];
+    match full.curves.as_slice() {
+        [LoopEdge::Ellipse { center, major, ratio, .. }] => {
+            assert!(center.near(Vec2::new(-5.0, 2.0), 1e-9), "{center:?}");
+            assert!(major.near(Vec2::new(-3.0, 0.0), 1e-9), "{major:?}");
+            assert!((ratio - 0.5).abs() < 1e-12);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!((full.area().abs() - pi * 4.5).abs() < 1e-9, "{}", full.area());
+    // Half ellipse + diameter: the ellipse centre is at (-20,0), the arc runs from the mirrored
+    // OCS (24,0) to (16,0), i.e. WCS (-24,0) to (-16,0).
+    let half = &h.loops[1];
+    assert!(
+        half.curves.iter().any(|c| matches!(c, LoopEdge::Ellipse { center, .. } if center.near(Vec2::new(-20.0, 0.0), 1e-9))),
+        "{:?}",
+        half.curves
+    );
+    let ends: Vec<Vec2> = half.curves.iter().flat_map(|c| [c.start_point(), c.end_point()]).collect();
+    for want in [Vec2::new(-24.0, 0.0), Vec2::new(-16.0, 0.0)] {
+        assert!(ends.iter().any(|p| p.near(want, 1e-9)), "{want:?} not in {ends:?}");
+    }
+    assert!((half.area().abs() - pi * 4.0 * 2.0 / 2.0).abs() < 1e-9, "{}", half.area());
+    // The tessellated points follow the curves (same box).
+    for l in &h.loops {
+        assert!(l.vertices.iter().all(|v| v.p.x < 0.0), "{:?}", l.vertices);
+    }
+}
+
+fn same_wcs(a: &Hatch, b: &Hatch) {
+    assert_eq!(a.loops.len(), b.loops.len());
+    for (x, y) in a.loops.iter().zip(&b.loops) {
+        assert_eq!(x.curves.len(), y.curves.len());
+        for (cx, cy) in x.curves.iter().zip(&y.curves) {
+            assert!(cx.start_point().near(cy.start_point(), 1e-9) && cx.end_point().near(cy.end_point(), 1e-9), "{cx:?} vs {cy:?}");
+        }
+        assert!((x.area() - y.area()).abs() < 1e-9, "{} vs {}", x.area(), y.area());
+    }
+}
+
+#[test]
+fn a_mirrored_ocs_hatch_keeps_its_wcs_geometry_through_dxf() {
+    let h = mirrored_hatch();
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(h.clone()))).expect("add");
+    let back = hatches(&read_dxf(write_dxf(&d).as_bytes()).unwrap());
+    same_wcs(&back[0], &h);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_mirrored_ocs_hatch_keeps_its_wcs_geometry_through_dwg() {
+    let h = mirrored_hatch();
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), EntityKind::Hatch(Box::new(h.clone()))).expect("add");
+    let back = hatches(&read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap());
+    same_wcs(&back[0], &h);
 }

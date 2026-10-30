@@ -108,6 +108,41 @@ fn the_first_lossy_save_leaves_a_notice_for_the_app() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A drawing is checked once per target (format, version, binary), not once: a save into a
+/// lossier version after a clean one is checked too, and saving again into a checked one is not.
+#[test]
+fn each_new_target_is_checked_once() {
+    hooks();
+    let dir = std::env::temp_dir().join(format!("cadaddy-exchangeloss-targets-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut s, [line, _, solid, mline]) = drawing();
+    let at = |name: &str| dir.join(name).display().to_string();
+    // A current DWG keeps everything: nothing to tell.
+    let r = s.execute("saveas", &json!({"path": at("now.dwg")})).unwrap();
+    assert!(r.get("notKeptDetail").is_none(), "{r}");
+    assert!(s.state().unwrap().exchange_notice.is_none());
+    // The same drawing as a 2000 DWG loses the transparency.
+    let r = s.execute("saveas", &json!({"path": at("old.dwg"), "version": 2000})).unwrap();
+    let detail = r["notKeptDetail"].as_array().unwrap();
+    assert!(detail.iter().any(|l| l["feature"] == "object transparency" && l["handles"] == json!([line])), "{r}");
+    // Saving it again where it is (a 2000 DWG now) is a target already checked.
+    s.state_mut().unwrap().exchange_notice = None;
+    let r = s.execute("qsave", &json!({})).unwrap();
+    assert!(r.get("notKeptDetail").is_none(), "{r}");
+    assert!(s.state().unwrap().exchange_notice.is_none());
+    // A Release 12 DXF is another target: the solid, multiline and second layout are listed.
+    let r = s.execute("saveas", &json!({"path": at("r12.dxf"), "version": 12})).unwrap();
+    let detail = r["notKeptDetail"].as_array().unwrap();
+    let feature = |f: &str| detail.iter().find(|l| l["feature"] == f);
+    assert_eq!(feature("solid3d objects (written as face3d)").map(|l| &l["handles"]), Some(&json!([solid])), "{r}");
+    assert_eq!(feature("mline objects (written as line)").map(|l| &l["handles"]), Some(&json!([mline])), "{r}");
+    assert_eq!(feature("layouts").map(|l| &l["names"]), Some(&json!(["Layout2"])), "{r}");
+    // And the first target is still checked.
+    let r = s.execute("saveas", &json!({"path": at("again.dwg")})).unwrap();
+    assert!(r.get("notKeptDetail").is_none(), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A made-up drawing with another program's data: a custom class's object in the named object
 /// dictionary reacting to a line (which has an extension dictionary), and a custom entity.
 const ACME: &str = "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n9\n$HANDSEED\n5\n400\n0\nENDSEC\n\

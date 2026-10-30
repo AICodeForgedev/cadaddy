@@ -358,7 +358,7 @@ fn save_while_opening_keeps_both_drawings_whole() {
     // DWG save with a background check (the drawing's first save, so its check runs) while
     // the open is in flight.
     let dwg = dir.join("Saved Plan.dwg");
-    let r = app.run("saveas", json!({ "path": &dwg, "version": "2000" })).unwrap();
+    let r = app.session.execute("saveas", &json!({ "path": &dwg, "version": "2000" })).unwrap();
     assert_eq!(r.get("notKeptPending"), Some(&json!(true)), "background check started: {r}");
     assert!(app.opening.busy(), "the open is not taken in yet");
     assert_eq!(file_count(&dwg), 3, "the saved DWG holds the saved drawing");
@@ -426,7 +426,7 @@ fn agent_requests_during_dwg_save_and_open_reach_the_named_drawing() {
     }
     dirty(&mut app, 1);
     app.session.execute("document.switch", &json!({ "index": 0 })).unwrap();
-    let r = app.run("saveas", json!({ "path": dir.join("Agent A.dwg"), "version": "2000" })).unwrap();
+    let r = app.session.execute("saveas", &json!({ "path": dir.join("Agent A.dwg"), "version": "2000" })).unwrap();
     assert_eq!(r.get("notKeptPending"), Some(&json!(true)), "background check started: {r}");
     let a = "Agent A.dwg".to_string();
     let b = "Agent B".to_string();
