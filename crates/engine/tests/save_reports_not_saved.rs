@@ -3,7 +3,7 @@
 //! writes them back as read: nothing to report.
 
 use cadaddy_engine::Session;
-use cadaddy_engine::cmd::file::{IoHooks, set_io};
+use cadaddy_engine::cmd::file::{IoHooks, SaveAs, set_io, set_write_as};
 use cadaddy_engine::doc::{Block, Common, Drawing, EntityKind, RawTag, Space, Unknown};
 use serde_json::json;
 
@@ -102,4 +102,34 @@ fn ole_frames_are_not_reported_as_not_saved() {
     for v in [Version::R2000, Version::R2018] {
         assert!(!not_saved_as(&d, v).contains_key("OLE2FRAME"), "{v:?}");
     }
+}
+
+/// A DXF of 2013 or later can't hold a solid's SAT-text geometry (it lives in the data store
+/// there), so the save leaves it out and says so; 2010 and earlier keep it (#2334).
+#[test]
+fn saving_sat_text_solids_as_dxf_2013_reports_them() {
+    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
+    set_write_as(|_, _, _: &SaveAs| Ok(b"x".to_vec()));
+    let mut d = Drawing::new_imperial();
+    let sat = EntityKind::Unknown(Unknown {
+        dxf_type: "REGION".into(),
+        tags: vec![
+            RawTag { code: 8, value: "0".into() },
+            RawTag { code: 1, value: "400 1 1 0".into() },
+            RawTag { code: 3, value: "End-of-ACIS-data".into() },
+        ],
+    });
+    d.add(&Space::Model, Common::default(), sat).unwrap();
+    let mut s = Session::empty();
+    s.open_drawing(d, "region.dxf", None);
+
+    let path = std::env::temp_dir().join(format!("cadaddy-sat-note-{}.dxf", std::process::id()));
+    let r = s.execute("saveas", &json!({ "path": path.to_string_lossy(), "version": 2018 })).unwrap();
+    assert_eq!(r["notSaved"], json!({ "REGION": 1 }));
+    assert!(s.log.iter().any(|l| l.contains("Not saved in the DXF file") && l.contains("1 REGION")), "{:?}", s.log);
+
+    let n = s.log.len();
+    let r = s.execute("saveas", &json!({ "path": path.to_string_lossy(), "version": 2010 })).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(r.get("notSaved").is_none() && s.log.len() == n);
 }
