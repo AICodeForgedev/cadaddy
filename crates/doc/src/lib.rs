@@ -36,7 +36,7 @@ pub use cadaddy_color as color;
 pub use cadaddy_geom as geom;
 pub use constraint::*;
 pub use entity::*;
-pub use extents::{BlockBoundsCache, MAX_BLOCK_DEPTH, entity_bounds, entity_bounds_cached};
+pub use extents::{BlockBoundsCache, MAX_BLOCK_DEPTH, entity_bounds, entity_bounds_cached, extent_bounds, extent_bounds_cached};
 pub use gdt::*;
 pub use header::{HVal, Header};
 pub use plotstyle::*;
@@ -527,7 +527,13 @@ impl Drawing {
         !self.hidden_objects.is_empty() && self.hidden_objects.contains(&h)
     }
 
-    /// Bounds of all visible entities in a space.
+    /// Whether an entity counts in the extents: as AutoCAD 2024 counts it for ZOOM Extents and
+    /// EXTMIN/EXTMAX, on a layer that is off too, but not on a frozen one.
+    pub fn in_extents(&self, e: &Entity) -> bool {
+        e.common.visible && self.layer(&e.common.layer).is_none_or(|l| !l.frozen) && !self.is_hidden_object(e.handle)
+    }
+
+    /// Bounds of the entities in a space that count in its extents ([`Drawing::in_extents`]).
     pub fn extents(&self, space: &Space) -> cadaddy_geom::Bounds2 {
         let mut b = cadaddy_geom::Bounds2::EMPTY;
         // One block-bounds cache for the whole space: every reference to a block reuses its
@@ -535,8 +541,8 @@ impl Drawing {
         let mut cache = BlockBoundsCache::default();
         if let Some(store) = self.space(space) {
             for e in store.iter() {
-                if self.is_visible(e) {
-                    b = b.union(&entity_bounds_cached(self, e, 0, &mut cache));
+                if self.in_extents(e) {
+                    b = b.union(&extent_bounds_cached(self, e, &mut cache));
                 }
             }
         }
