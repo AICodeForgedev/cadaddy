@@ -191,10 +191,22 @@ fn to_json_bounded(v: &Value, depth: usize, budget: &mut u64) -> Option<serde_js
     })
 }
 
+/// Angle variables CADCraft reports and takes in degrees, as the SETVAR command shows them, which
+/// AutoLISP's `getvar` and `setvar` give and take in radians, as AutoCAD 2024's do: each of these
+/// set to 30 by the SETVAR command, or to `(/ pi 6)` by `setvar`, reads 0.5235987755982987.
+const RADIAN_VARS: [&str; 6] = ["ANGBASE", "CHAMFERD", "DIMJOGANG", "HPANG", "POLARANG", "SNAPANG"];
+
+fn in_radians(name: &str) -> bool {
+    RADIAN_VARS.iter().any(|v| v.eq_ignore_ascii_case(name.trim()))
+}
+
 pub fn getvar(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 1, 1)?;
     let name = string(&a[0])?;
-    Ok(Flow::Value(crate::sysvars::get(ctx.s, &name).map(|v| from_json(&v)).unwrap_or_default()))
+    Ok(Flow::Value(match crate::sysvars::get(ctx.s, &name) {
+        Some(serde_json::Value::Number(n)) if in_radians(&name) => Value::Real(n.as_f64().unwrap_or(0.0).to_radians()),
+        v => v.map(|v| from_json(&v)).unwrap_or_default(),
+    }))
 }
 
 /// Set a system variable after bounded JSON conversion, reporting invalid or oversized values as LISP errors.
@@ -204,6 +216,10 @@ pub fn setvar(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     let mut budget: u64 = TO_JSON_BUDGET;
     let Some(json) = to_json_bounded(&a[1], 0, &mut budget) else {
         return Err(LispError::new(format!("AutoCAD variable setting rejected: {} value too large", to_text(&a[0], true))));
+    };
+    let json = match json {
+        serde_json::Value::Number(n) if in_radians(&name) => serde_json::json!(n.as_f64().unwrap_or(0.0).to_degrees()),
+        other => other,
     };
     match crate::sysvars::set(ctx.s, &name, &json) {
         Ok(()) => Ok(Flow::Value(a[1].clone())),

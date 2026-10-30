@@ -82,6 +82,8 @@ reached", malformed source is a reader error, and every built-in checks its argu
 - **Input:** `initget getpoint getcorner getdist getangle getorient getreal getint getstring
   getkword entsel nentsel`
 - **Units:** `rtos angtos distof angtof`
+- **Angle variables:** `getvar` and `setvar` give and take ANGBASE, SNAPANG, POLARANG, HPANG,
+  CHAMFERD and DIMJOGANG in radians, as in AutoCAD; the SETVAR command shows them in degrees.
 - **No-ops:** `vl-load-com gc redraw`; `ver`
 
 Entity lists use the DXF group codes of CADCraft's DXF files: what `entget` returns is what a

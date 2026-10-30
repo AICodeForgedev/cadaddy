@@ -528,7 +528,8 @@ fn interactive_routine_waits_for_the_user() {
 #[test]
 fn getangle_is_relative_to_angbase() {
     let mut s = session();
-    s.cmdline("(setvar \"ANGBASE\" 90)").unwrap();
+    // AutoLISP sets angle variables in radians: ANGBASE 90 degrees.
+    s.cmdline("(setvar \"ANGBASE\" (/ pi 2))").unwrap();
     // A picked point at 180° in world terms is 90° from ANGBASE.
     s.cmdline("(setq a (getangle '(0 0)))").unwrap();
     s.input(crate::Input::Point(cadcraft_geom::Vec2::new(-1.0, 0.0))).unwrap();
@@ -541,6 +542,38 @@ fn getangle_is_relative_to_angbase() {
     s.cmdline("(setq t2 (getangle))").unwrap();
     s.cmdline("180").unwrap();
     assert_eq!(to_text(&s.lisp_var("T2"), true), "3.14159");
+}
+
+/// `getvar` and `setvar` take angle variables in radians, as AutoCAD 2024's do (each set to 30 by
+/// SETVAR, or to `(/ pi 6)` by `setvar`, reads 0.5235987755982987; DIMJOGANG's 45 degrees reads
+/// 0.785398), while the SETVAR command keeps degrees.
+#[test]
+fn getvar_and_setvar_take_angle_variables_in_radians() {
+    let mut s = session();
+    let degrees = |s: &Session, name: &str| crate::sysvars::get(s, name).and_then(|v| v.as_f64()).unwrap();
+    // The defaults: polar tracking every 90 degrees, a 45-degree jog.
+    assert_eq!(ok(&mut s, "(list (equal (getvar \"POLARANG\") (/ pi 2) 1e-12) (equal (getvar \"DIMJOGANG\") (/ pi 4) 1e-12))"), "(T T)");
+    // Set from LISP in radians, shown by SETVAR in degrees.
+    for (name, radians, deg) in
+        [("SNAPANG", "(/ pi 6)", 30.0), ("CHAMFERD", "0.95993108859688", 55.0), ("ANGBASE", "(/ pi 2)", 90.0), ("POLARANG", "(/ pi 4)", 45.0)]
+    {
+        ok(&mut s, &format!("(setvar \"{name}\" {radians})"));
+        assert!((degrees(&s, name) - deg).abs() < 1e-9, "{name}: {}", degrees(&s, name));
+        assert_eq!(ok(&mut s, &format!("(equal (getvar \"{name}\") {radians} 1e-12)")), "T", "{name}");
+    }
+    // Set by the SETVAR command in degrees, read by LISP in radians.
+    s.cmdline("SETVAR HPANG 45").unwrap();
+    assert!((degrees(&s, "HPANG") - 45.0).abs() < 1e-9);
+    assert_eq!(ok(&mut s, "(equal (getvar \"HPANG\") 0.7853981633974482 1e-12)"), "T");
+    // DIMJOGANG set to a whole number of degrees still takes a fraction of one from LISP.
+    s.cmdline("SETVAR DIMJOGANG 45").unwrap();
+    ok(&mut s, "(setvar \"DIMJOGANG\" 0.5)");
+    assert!((degrees(&s, "DIMJOGANG") - 0.5_f64.to_degrees()).abs() < 1e-9, "{}", degrees(&s, "DIMJOGANG"));
+    // It takes the value the dimension style takes: `true` is a DIMSCALE of 1.
+    crate::sysvars::set(&mut s, "DIMSCALE", &serde_json::json!(true)).unwrap();
+    assert_eq!(crate::sysvars::get(&s, "DIMSCALE").and_then(|v| v.as_f64()), Some(1.0));
+    // Other variables are as they were.
+    assert_eq!(ok(&mut s, "(getvar \"ANGDIR\")"), "0");
 }
 
 #[test]
