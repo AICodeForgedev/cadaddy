@@ -76,8 +76,10 @@ pub(super) fn mtext_from(tags: &[Tag], c: &Common) -> MText {
     MText {
         insert: t.p(10),
         height: t.fd(40, 0.2).max(1e-9),
+        // An MTEXT's width is one column's: with columns, the column width (48, or 44 of the
+        // embedded object) rather than 41, which ZWCAD and AutoCAD write as the total width.
         width: match &columns {
-            Some((_, w)) if t.fd(41, 0.0) <= 0.0 => *w,
+            Some((_, w)) if *w > 0.0 => *w,
             _ => t.fd(41, 0.0).max(0.0),
         },
         attach,

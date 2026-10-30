@@ -232,3 +232,22 @@ fn dynamic_auto_height_count_comes_from_the_widths_when_72_is_zero() {
     let c = t.columns.expect("columns");
     assert_eq!((c.kind, c.auto_height, c.count), (MTextColumnType::Dynamic, true, 3));
 }
+
+#[test]
+fn embedded_column_width_wins_over_the_entitys_width() {
+    // ZWCAD (and AutoCAD) write the total width of the columns in the entity's 41 and the column
+    // width in the object's 44: an MTEXT's `width` is one column's, so 44 is what is read, and
+    // what the R2018 object gets back (#2467 review).
+    let mut tags = embedded_tags(3, 50.0, 12.5, &[20.0, 20.0, 20.0]);
+    let own_41 = tags.iter().position(|t| t.code == 41).unwrap();
+    tags[own_41] = cadcraft_dxf::Tag::f(41, 175.0);
+    for code in [40, 42] {
+        let at = tags.iter().rposition(|t| t.code == code).unwrap();
+        tags[at] = cadcraft_dxf::Tag::f(code, 175.0);
+    }
+    let (_, t) = mtext_from_groups(&tags);
+    assert_eq!(t.width, 50.0, "the column width, not the total");
+    let (_, r2018) = dxf_as(&t, Version::R2018);
+    assert!(r2018.contains(" 42\r\n175.0\r\n"), "total width kept:\n{r2018}");
+    assert!(r2018.contains(" 44\r\n50.0\r\n 45\r\n12.5\r\n"), "column width and gutter kept:\n{r2018}");
+}
