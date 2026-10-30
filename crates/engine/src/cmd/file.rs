@@ -613,10 +613,11 @@ fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTr
 }
 
 /// Save, then report the entities the file couldn't keep (nothing is dropped silently).
-fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> Result<Value>) -> Result<Value> {
+fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> Result<Value>, asked: Option<Version>) -> Result<Value> {
     // What the file will hold depends on the version it is saved as (the data store from 2013).
+    // QSAVE takes no `version` and keeps the drawing's own; SAVEAS writes the one asked for.
     let path = str_param(p, "path").map(str::to_string).or_else(|| s.state().ok().and_then(|st| st.path.clone())).unwrap_or_default();
-    let version = save_options("save", p).ok().and_then(|o| o.version).unwrap_or_else(|| drawing_version(s, &path));
+    let version = asked.unwrap_or_else(|| drawing_version(s, &path));
     let lost = s.doc().map(|d| not_saved_as(d, version)).unwrap_or_default();
     let mut r = run(s, p)?;
     if r.get("path").and_then(Value::as_str).is_some_and(drops_unknown) {
@@ -628,11 +629,12 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
 }
 
 fn run_qsave_reporting(s: &mut Session, p: &Value) -> Result<Value> {
-    save_reporting(s, p, run_save)
+    save_reporting(s, p, run_save, None)
 }
 
 fn run_saveas_reporting(s: &mut Session, p: &Value) -> Result<Value> {
-    save_reporting(s, p, run_saveas)
+    let asked = save_options("saveas", p)?.version;
+    save_reporting(s, p, run_saveas, asked)
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

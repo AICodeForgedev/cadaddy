@@ -107,6 +107,11 @@ fn saving_sat_text_solids_as_dxf_2013_reports_them() {
     assert_eq!(r["notSaved"], json!({ "REGION": 1 }));
     assert!(s.log.iter().any(|l| l.contains("Not saved in the DXF file") && l.contains("1 REGION")), "{:?}", s.log);
 
+    // QSAVE takes no version: a `version` passed to it doesn't change what it writes (the
+    // drawing's own 2018), so the note still comes.
+    let r = s.execute("qsave", &json!({ "path": path.to_string_lossy(), "version": 2010 })).unwrap();
+    assert_eq!(r["notSaved"], json!({ "REGION": 1 }));
+
     let n = s.log.len();
     let r = s.execute("saveas", &json!({ "path": path.to_string_lossy(), "version": 2010 })).unwrap();
     let _ = std::fs::remove_file(&path);
