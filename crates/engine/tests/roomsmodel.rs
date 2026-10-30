@@ -274,3 +274,39 @@ fn a_room_only_another_trade_tags_is_traced_from_its_tag() {
     assert!(get("101")["at"][0].as_f64().unwrap() < 240.0, "{list}");
     assert_eq!(rooms.len(), 2, "{list}");
 }
+
+/// A corridor, stair or hoistway of the spec's circulation (traced before the rooms) is the room
+/// its traced floor is: lines across it don't cut it, it keeps its number even when its number
+/// tag sits on a piece of it past a wall line (no "Room 100" there), and a stair's DN is no room.
+#[test]
+fn a_corridor_of_the_circulation_is_its_floors_room_whatever_lines_cross_it() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    floor(&mut s, 0.0, 0.0, 1.0, &["STORAGE", "101"], &[]);
+    // Across the east room: lines on the wall layer; the corridor traced west of the one at 330.
+    s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+    line(&mut s, [330.0, 6.0], [330.0, 354.0]);
+    line(&mut s, [242.0, 120.0], [330.0, 120.0]);
+    s.execute("layer.current", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    text(&mut s, [280.0, 200.0], "CORRIDOR");
+    text(&mut s, [400.0, 150.0], "100");
+    text(&mut s, [420.0, 60.0], "DN");
+    let levels = json!([{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0, "region": L1}]);
+    s.execute("bspec.draft", &json!({"store": true, "levels": levels, "stack": true})).unwrap();
+    let mut spec = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
+    spec["rooms"] = json!([{"name": "STORAGE", "number": "101"}, {"name": "CORRIDOR", "number": "100"}]);
+    spec["circulation"] =
+        json!([{"kind": "corridor", "level": "Level 1", "name": "CORRIDOR", "at": [280.0, 200.0], "rects": [[[242.0, 6.0], [330.0, 354.0]]]}]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let list = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = list["rooms"].as_array().unwrap();
+    let corridor = rooms.iter().find(|x| x["number"] == json!("100")).unwrap_or_else(|| panic!("{list}"));
+    assert_eq!(corridor["name"], json!("CORRIDOR"), "{list}");
+    let want = 88.0 * 348.0 / 144.0;
+    assert!((corridor["areaSqFt"].as_f64().unwrap() - want).abs() < 0.01 * want, "{list}");
+    // The storage room, and nothing traced from DN or the corridor's number tag past the line.
+    assert!(rooms.iter().any(|x| x["number"] == json!("101")), "{list}");
+    assert_eq!(rooms.len(), 2, "{list}");
+}

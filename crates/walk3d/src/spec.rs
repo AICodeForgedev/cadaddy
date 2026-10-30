@@ -104,6 +104,10 @@ pub struct BuildingSpec {
     /// Elevator hoistways with their pits (`arch.read`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub elevators: Vec<Hoistway>,
+    /// Each storey's corridors, stairs and elevator hoistways, traced from their labels inside the
+    /// shell before the rooms: the rooms are traced in what they leave.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub circulation: Vec<Circulation>,
     /// Facades, roofs and what stands on them, from the elevations and the roof plan.
     #[serde(default, skip_serializing_if = "Exterior::is_empty")]
     pub exterior: Exterior,
@@ -1010,6 +1014,113 @@ pub struct OpeningTag {
     /// `drawing`, `schedule` or `guess`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+}
+
+/// What a circulation space is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CirculationKind {
+    #[default]
+    Corridor,
+    Stair,
+    /// An elevator's shaft: closed floor to roof, no duct, pipe or conduit runs through it.
+    Hoistway,
+}
+
+/// A corridor, stair or elevator hoistway on a level's plan: its floor as rectangles (sheet
+/// units), traced from its label.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Circulation {
+    pub kind: CirculationKind,
+    pub level: String,
+    /// Its label (`CORRIDOR`, `STAIR 01`, `ELEV.`).
+    pub name: String,
+    pub at: [f64; 2],
+    pub rects: Vec<[[f64; 2]; 2]>,
+}
+
+impl Circulation {
+    /// Whether `p` is on its floor.
+    pub fn holds(&self, p: [f64; 2]) -> bool {
+        self.rects.iter().any(|[a, b]| p[0] >= a[0] && p[0] <= b[0] && p[1] >= a[1] && p[1] <= b[1])
+    }
+
+    /// Its floor area, sheet units squared.
+    pub fn area(&self) -> f64 {
+        self.rects.iter().map(|[a, b]| (b[0] - a[0]).max(0.0) * (b[1] - a[1]).max(0.0)).sum()
+    }
+
+    /// The edges round its floor: the rectangles' sides less where one rectangle meets another.
+    pub fn edges(&self) -> Vec<([f64; 2], [f64; 2])> {
+        let mut out = Vec::new();
+        // Along x (the rectangles' bottoms and tops), then along y (their sides): at each line,
+        // the spans one side of it covers and the other doesn't.
+        for axis in [1usize, 0] {
+            let along = 1 - axis;
+            let mut lines: std::collections::BTreeMap<u64, (f64, Vec<(f64, f64)>, Vec<(f64, f64)>)> = std::collections::BTreeMap::new();
+            for [a, b] in self.rects.iter().filter(|[a, b]| b[0] > a[0] && b[1] > a[1]) {
+                let span = (a[along], b[along]);
+                lines.entry(a[axis].to_bits()).or_insert((a[axis], Vec::new(), Vec::new())).1.push(span);
+                lines.entry(b[axis].to_bits()).or_insert((b[axis], Vec::new(), Vec::new())).2.push(span);
+            }
+            for (at, starts, ends) in lines.values() {
+                let mut cuts: Vec<f64> = starts.iter().chain(ends).flat_map(|s| [s.0, s.1]).collect();
+                cuts.sort_by(f64::total_cmp);
+                cuts.dedup();
+                let covers = |spans: &[(f64, f64)], m: f64| spans.iter().any(|s| m > s.0 && m < s.1);
+                let mut runs: Vec<(f64, f64)> = Vec::new();
+                for w in cuts.windows(2) {
+                    let m = (w[0] + w[1]) / 2.0;
+                    if covers(starts, m) != covers(ends, m) {
+                        match runs.last_mut() {
+                            Some(r) if r.1 == w[0] => r.1 = w[1],
+                            _ => runs.push((w[0], w[1])),
+                        }
+                    }
+                }
+                out.extend(runs.into_iter().map(|r| Self::segment(axis, *at, r)));
+            }
+        }
+        out
+    }
+
+    /// Its floor's outline: its edges joined end to end, the loop round the most area (any other
+    /// is a hole in it).
+    pub fn outline(&self) -> Vec<[f64; 2]> {
+        let edges = self.edges();
+        let key = |p: [f64; 2]| (p[0].to_bits(), p[1].to_bits());
+        let mut ends: std::collections::HashMap<(u64, u64), Vec<usize>> = std::collections::HashMap::new();
+        for (i, (a, b)) in edges.iter().enumerate() {
+            ends.entry(key(*a)).or_default().push(i);
+            ends.entry(key(*b)).or_default().push(i);
+        }
+        let mut used = vec![false; edges.len()];
+        let mut best: (f64, Vec<[f64; 2]>) = (0.0, Vec::new());
+        for first in 0..edges.len() {
+            if used[first] {
+                continue;
+            }
+            used[first] = true;
+            let (start, mut p) = edges[first];
+            let mut ring = vec![start];
+            while key(p) != key(start) && ring.len() <= edges.len() {
+                ring.push(p);
+                let Some(&next) = ends.get(&key(p)).and_then(|ids| ids.iter().find(|i| !used[**i])) else { break };
+                used[next] = true;
+                let (a, b) = edges[next];
+                p = if key(a) == key(p) { b } else { a };
+            }
+            let area = ring.iter().zip(ring.iter().cycle().skip(1)).map(|(a, b)| a[0] * b[1] - b[0] * a[1]).sum::<f64>().abs() / 2.0;
+            if area > best.0 {
+                best = (area, ring);
+            }
+        }
+        best.1
+    }
+
+    fn segment(axis: usize, at: f64, (a, b): (f64, f64)) -> ([f64; 2], [f64; 2]) {
+        if axis == 1 { ([a, at], [b, at]) } else { ([at, a], [at, b]) }
+    }
 }
 
 /// An elevator hoistway read off the plans: its box (sheet units, on the plan of the lowest level
@@ -2488,6 +2599,7 @@ impl BuildingSpec {
             site: None,
             stairs: Vec::new(),
             elevators: Vec::new(),
+            circulation: Vec::new(),
             exterior: Exterior::default(),
             rcp: Rcp::default(),
             mep: Mep::default(),
@@ -3239,6 +3351,28 @@ pub fn level_at(levels: &[Level], x: f64, y: f64) -> Option<&Level> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_corridors_edges_run_round_its_floor_not_between_its_rectangles() {
+        // An L: a 100 × 10 run and a 10 × 40 leg on its east end, as two rectangles meeting at
+        // y = 10, and the run split again at x = 50.
+        let c = Circulation {
+            rects: vec![[[0.0, 0.0], [50.0, 10.0]], [[50.0, 0.0], [100.0, 10.0]], [[90.0, 10.0], [100.0, 50.0]]],
+            ..Circulation::default()
+        };
+        let edges = c.edges();
+        let perimeter: f64 = edges.iter().map(|(a, b)| (b[0] - a[0]).abs() + (b[1] - a[1]).abs()).sum();
+        assert!((perimeter - 2.0 * (100.0 + 50.0)).abs() < 1e-9, "{perimeter}: {edges:?}");
+        // The split and the leg's foot are inside: no edge on x = 50 or along y = 10 under the leg.
+        assert!(!edges.iter().any(|(a, b)| a[0] == 50.0 && b[0] == 50.0), "{edges:?}");
+        assert!(edges.contains(&([0.0, 10.0], [90.0, 10.0])), "{edges:?}");
+        assert!(c.holds([95.0, 45.0]) && !c.holds([50.0, 45.0]));
+        // Its outline: the L's six corners, round its area.
+        let o = c.outline();
+        let area = o.iter().zip(o.iter().cycle().skip(1)).map(|(a, b)| a[0] * b[1] - b[0] * a[1]).sum::<f64>().abs() / 2.0;
+        assert_eq!((o.len(), area), (6, c.area()), "{o:?}");
+        assert_eq!(c.area(), 100.0 * 10.0 + 10.0 * 40.0);
+    }
 
     #[test]
     fn rules_round_trip_through_a_spec() {

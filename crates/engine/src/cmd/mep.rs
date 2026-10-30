@@ -38,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{level?: name (default every level), apply?: bool (systems and runs into the spec, replacing those levels' runs)} → {systems: [{name, layer, kind, size_in, bottom_ft}], runs: [{system, level, points, size_in, bottoms_ft, objects}]}",
         ),
         CommandSpec::new("model.clashes", "Model Clashes", run_clashes)
-            .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2), same_trade?: bool (built walls overlapping each other; default true), max_clashes?: count of clashes listed (5000, at most 50000)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|reference|walls_overlap (category same_trade), message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total (all found, even past the cap), truncated (the list was cut at max_clashes), gone?: [earlier clashes no longer found]}")
+            .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2), same_trade?: bool (built walls overlapping each other; default true), max_clashes?: count of clashes listed (5000, at most 50000)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|hoistway (through an elevator shaft)|reference|walls_overlap (category same_trade), message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total (all found, even past the cap), truncated (the list was cut at max_clashes), gone?: [earlier clashes no longer found]}")
             .noundo(),
         CommandSpec::new("mep.list", "List MEP Items", run_list)
             .params("{level?: name, system?: name, guessed_only?: bool, cursor?: offset (0), limit?: count (50, max 200)} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed, edited_by}], systems: [...], total, next_cursor?}")
@@ -2156,6 +2156,17 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                 }));
             }
         }
+    }
+    // Through an elevator hoistway: the shaft is closed floor to roof, nothing runs through it.
+    for r in sp.mep.runs.iter().take(MAX_RUNS) {
+        let Some(shaft) = super::guided::hoistway_crossed(r, &sp.circulation, upf) else { continue };
+        let n = shaft.rects.len().max(1) as f64;
+        let mid = shaft.rects.iter().fold([0.0, 0.0], |m, [a, b]| [m[0] + (a[0] + b[0]) / 2.0 / n, m[1] + (a[1] + b[1]) / 2.0 / n]);
+        out.push(json!({
+            "kind": "hoistway", "systems": [r.system], "level": r.level,
+            "message": format!("{} runs through the elevator hoistway ({})", r.system, shaft.name),
+            "at": [r6(mid[0]), r6(mid[1])], "by_in": 0.0, "handles": handles(r),
+        }));
     }
     // Into the objects of attached IFC models (architecture, structure from other programs), in
     // building coordinates: each level's plan base taken off.
