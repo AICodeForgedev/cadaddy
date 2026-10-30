@@ -3,7 +3,7 @@
 //! its name; each input is a line (a point `*x,y` in world coordinates, typed text or a keyword
 //! as typed, Enter an empty line); a command cancelled leaves no lines; a call with parameters
 //! (from a dialog, an agent) is `command {json}`. Objects picked one by one can't be written as
-//! script input and are left out.
+//! script input and are left out (their positions are kept, so a recording can say so).
 
 use serde_json::Value;
 
@@ -27,6 +27,9 @@ pub struct Journal {
     depth: u32,
     /// Where the running command's lines start (a cancel removes them).
     command: Option<usize>,
+    /// Positions at which objects were picked one by one: they have no script form, so no line
+    /// was written, but a recording must know where they were left out.
+    picks: Vec<usize>,
 }
 
 impl Journal {
@@ -63,6 +66,11 @@ impl Journal {
         self.lines.get(position.saturating_sub(self.dropped)..).unwrap_or_default()
     }
 
+    /// Positions of the picks left out of the lines from `position` on (oldest first).
+    pub fn picks_from(&self, position: usize) -> impl Iterator<Item = usize> + '_ {
+        self.picks.iter().copied().filter(move |at| *at >= position)
+    }
+
     /// Bytes of text kept.
     pub fn bytes(&self) -> usize {
         self.bytes
@@ -73,6 +81,7 @@ impl Journal {
         self.lines.clear();
         self.bytes = 0;
         self.command = None;
+        self.picks.clear();
     }
 
     /// A call begins; whether it is the outermost.
@@ -105,6 +114,8 @@ impl Journal {
                 self.bytes = self.bytes.saturating_sub(freed);
                 self.dropped = self.dropped.saturating_add(n);
                 self.command = self.command.map(|c| c.saturating_sub(n));
+                let first = self.dropped;
+                self.picks.retain(|at| *at >= first);
             }
         }
     }
@@ -121,6 +132,8 @@ impl Journal {
             let freed: usize = self.lines.get(start..).map_or(0, |l| l.iter().map(String::len).sum());
             self.lines.truncate(start);
             self.bytes = self.bytes.saturating_sub(freed);
+            let from = self.dropped.saturating_add(start);
+            self.picks.retain(|at| *at < from);
         }
         self.command = None;
     }
@@ -133,8 +146,15 @@ impl Journal {
             Input::Deferred(d) => format!("*{},{}", d.at.x, d.at.y),
             Input::Keyword(t) | Input::Text(t) => t.clone(),
             Input::Enter => String::new(),
-            // Picked objects have no script form; a cancel removes the command (`ended`).
-            Input::Pick(_) | Input::Cancel => return,
+            // Picked objects have no script form: only where they were left out is kept (a
+            // cancel removes the command, `ended`).
+            Input::Pick(hs) => {
+                if !hs.is_empty() && self.picks.len() < MAX_LINES {
+                    self.picks.push(self.position());
+                }
+                return;
+            }
+            Input::Cancel => return,
         };
         self.push(line);
     }

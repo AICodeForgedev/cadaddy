@@ -158,9 +158,14 @@ fn steps_of(s: &Session, rec: &Recording) -> Vec<MacroStep> {
     let end = s.journal.position();
     let mut steps = Vec::new();
     let mut asks = rec.asks.clone();
+    let picks: Vec<usize> = s.journal.picks_from(rec.start).collect();
     for (i, line) in (first..).zip(lines) {
         for (_, st) in rec.inserted.iter().filter(|(at, _)| *at == i) {
             steps.push(st.clone());
+        }
+        // A selection made here has no script form: say so when the macro plays.
+        if picks.contains(&i) {
+            steps.push(dropped_pick_step());
         }
         if is_recorder_line(line) {
             continue;
@@ -184,12 +189,27 @@ fn steps_of(s: &Session, rec: &Recording) -> Vec<MacroStep> {
             steps.push(st.clone());
         }
     }
+    if picks.iter().any(|at| *at >= end) {
+        steps.push(dropped_pick_step());
+    }
     steps
+}
+
+/// The marker left where picked objects weren't recorded: a message step, shown when playing.
+fn dropped_pick_step() -> MacroStep {
+    MacroStep {
+        input: None,
+        ask: false,
+        prompt: String::new(),
+        message: Some("Objects picked here while recording were not recorded: select them yourself.".into()),
+        basepoint: None,
+    }
 }
 
 fn run_stop(s: &mut Session, p: &Value) -> Result<Value> {
     let rec = s.actions.recording.take().ok_or_else(|| EngineError::Other("ACTSTOP: nothing is being recorded (ACTRECORD starts)".into()))?;
     let steps = steps_of(s, &rec);
+    let dropped_picks = s.journal.picks_from(rec.start).count();
     if steps.iter().all(|st| st.input.is_none()) {
         return Err(EngineError::Other("ACTSTOP: nothing was recorded, so no macro was made".into()));
     }
@@ -210,6 +230,7 @@ fn run_stop(s: &mut Session, p: &Value) -> Result<Value> {
         steps,
     };
     let mut r = macro_json(&m);
+    r["droppedPicks"] = json!(dropped_picks);
     let path = match str_param(p, "path") {
         Some(path) => Some(PathBuf::from(path)),
         None => s.actions.dir.as_ref().map(|d| d.join(format!("{}.{EXTENSION}", name.to_ascii_lowercase()))),
@@ -221,6 +242,11 @@ fn run_stop(s: &mut Session, p: &Value) -> Result<Value> {
         }
         crate::writefile::write(&path, text).map_err(|e| EngineError::Other(format!("ACTSTOP: {}: {e}", path.display())))?;
         r["path"] = json!(path.display().to_string());
+    }
+    if dropped_picks > 0 {
+        s.echo(format!(
+            "Warning: {dropped_picks} selection(s) of picked objects were not recorded; the macro shows a message where they were left out."
+        ));
     }
     s.echo(format!("Action macro {name} saved ({} steps). Type {} to play it.", m.steps.len(), name.to_ascii_uppercase()));
     s.actions.macros.insert(name.to_ascii_lowercase(), m);
@@ -386,6 +412,7 @@ fn run_manage(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let name = str_param(p, "name").ok_or_else(|| bad("actions", "`name` is required"))?;
     let mut m = s.action_macro(name).ok_or_else(|| bad("actions", format!("there is no action macro called \"{name}\"")))?;
+    let mut old: Option<(String, Option<PathBuf>)> = None;
     let file = s.actions.dir.as_ref().map(|d| d.join(format!("{}.{EXTENSION}", m.name.to_ascii_lowercase())));
     match action {
         "delete" => {
@@ -413,18 +440,32 @@ fn run_manage(s: &mut Session, p: &Value) -> Result<Value> {
                 .map(str::trim)
                 .filter(|t| valid_name(t))
                 .ok_or_else(|| bad("actions", "`to`: a new name (letters, digits, - and _)"))?;
-            s.actions.macros.remove(&m.name.to_ascii_lowercase());
-            if let Some(f) = file.filter(|f| f.is_file()) {
-                let _ = std::fs::remove_file(f);
+            let taken = !to.eq_ignore_ascii_case(&m.name)
+                && (s.actions.macros.contains_key(&to.to_ascii_lowercase())
+                    || s.actions.dir.as_ref().is_some_and(|d| d.join(format!("{}.{EXTENSION}", to.to_ascii_lowercase())).exists())
+                    || s.action_macro(to).is_some());
+            if taken {
+                return Err(bad("actions", format!("there is already an action macro called \"{to}\"; delete it first or pick another name")));
             }
+            // The old name goes only after the new file is written (below).
+            old = Some((m.name.to_ascii_lowercase(), file));
             m.name = to.to_string();
         }
         other => return Err(bad("actions", format!("unknown action \"{other}\" (list, delete, ask or rename)"))),
     }
+    let mut written: Option<PathBuf> = None;
     if let Some(dir) = &s.actions.dir {
         let path = dir.join(format!("{}.{EXTENSION}", m.name.to_ascii_lowercase()));
         crate::writefile::write(&path, serde_json::to_string_pretty(&m).unwrap_or_default())
             .map_err(|e| EngineError::Other(format!("{}: {e}", path.display())))?;
+        written = Some(path);
+    }
+    if let Some((key, file)) = old {
+        // Renamed: the new file is safely written, so the old one can go.
+        s.actions.macros.remove(&key);
+        if let Some(f) = file.filter(|f| f.is_file() && Some(f) != written.as_ref()) {
+            std::fs::remove_file(&f).map_err(|e| EngineError::Other(format!("{}: {e}", f.display())))?;
+        }
     }
     let r = macro_json(&m);
     s.actions.macros.insert(m.name.to_ascii_lowercase(), m);
@@ -568,7 +609,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("actstop", "Stop", run_stop)
             .files()
             .menu(&["Tools", "Action Recorder", "Stop"])
-            .params("{name? (default ActMacroN), description?, path? (default the actions folder)} → {name, steps, asks, path?}")
+            .params("{name? (default ActMacroN), description?, path? (default the actions folder)} → {name, steps, asks, droppedPicks, path?}")
             .enabled(has_doc)
             .noundo(),
         CommandSpec::new("actuserinput", "Request User Input", run_user_input)
