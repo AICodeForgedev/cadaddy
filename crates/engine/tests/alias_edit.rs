@@ -10,8 +10,12 @@ fn aliases(r: &Value) -> Vec<(String, String)> {
     r["aliases"].as_object().unwrap().iter().map(|(a, c)| (a.clone(), c.as_str().unwrap().to_string())).collect()
 }
 
+/// The user aliases are process-wide: the tests here take turns.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn aliases_are_listed_flagged_saved_and_reset() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = std::env::temp_dir().join(format!("cadaddy-alias-edit-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -53,5 +57,43 @@ fn aliases_are_listed_flagged_saved_and_reset() {
     // Reset to defaults: only the built-in aliases.
     let r = s.execute("aliasedit", &json!({ "clear": true })).unwrap();
     assert!(aliases(&r).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn saving_over_a_loaded_file_keeps_its_other_lines() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = std::env::temp_dir().join(format!("cadaddy-alias-keep-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("brought.pgp");
+    std::fs::write(&path, "; my comment\nEXPLORER, START EXPLORER, 1,,\nZZ, *ZOOM ; keep this note\nOLD, *LINE\nQX, *NOSUCHCOMMAND\n").unwrap();
+    let mut s = Session::new();
+    s.set_lisp_support_dir(Some(dir.clone()));
+    s.execute("aliasedit", &json!({ "clear": true })).unwrap();
+    let r = s.execute("aliasedit", &json!({ "file": path.to_string_lossy() })).unwrap();
+    assert_eq!(aliases(&r), [("old".to_string(), "line".to_string()), ("zz".to_string(), "zoom".to_string())]);
+
+    // Add QQ, change ZZ, drop OLD; `save: true` writes back to the loaded file.
+    s.execute("aliasedit", &json!({ "set": { "qq": "circle", "zz": "pan" }, "remove": ["old"] })).unwrap();
+    let r = s.execute("aliasedit", &json!({ "save": true })).unwrap();
+    assert_eq!(r["saved"], json!(path.to_string_lossy()));
+    let text = std::fs::read_to_string(&path).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines, ["; my comment", "EXPLORER, START EXPLORER, 1,,", "ZZ, *PAN", "QX, *NOSUCHCOMMAND", "QQ, *CIRCLE"], "{text}");
+
+    // An untouched alias keeps its line, trailing note included.
+    s.execute("aliasedit", &json!({ "file": path.to_string_lossy(), "set": { "kk": "line" } })).unwrap();
+    s.execute("aliasedit", &json!({ "remove": ["kk"], "save": true })).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("; my comment") && text.contains("EXPLORER, START EXPLORER, 1,,") && !text.contains("KK"), "{text}");
+
+    // A file ALIASEDIT never loaded is written whole, not merged into.
+    let other = dir.join("other.pgp");
+    s.execute("aliasedit", &json!({ "save": other.to_string_lossy() })).unwrap();
+    let text = std::fs::read_to_string(&other).unwrap();
+    assert!(!text.contains("EXPLORER") && text.contains("ZZ, *PAN"), "{text}");
+
+    s.execute("aliasedit", &json!({ "clear": true })).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
