@@ -210,3 +210,56 @@ fn an_unclipped_copy_gets_its_own_id() {
     assert_eq!(ids.len(), 3, "ids {ids:?}");
     assert!(exists(&s, vh));
 }
+
+#[test]
+fn the_delete_key_takes_the_pair_and_undo_restores_it() {
+    let (mut s, vh, bh) = session();
+    s.set_selection(vec![bh]);
+    s.execute("erase.selection", &json!({})).unwrap();
+    assert!(!exists(&s, vh) && !exists(&s, bh));
+    s.undo().unwrap();
+    assert!(exists(&s, vh) && exists(&s, bh));
+    assert_eq!(viewport(&s, vh).clip, Some(bh));
+}
+
+#[test]
+fn cut_takes_the_pair_and_paste_links_the_new_boundary() {
+    let (mut s, vh, bh) = session();
+    let old_id = viewport(&s, vh).id;
+    s.execute("cutclip", &json!({"handles": [vh.hex()]})).unwrap();
+    assert!(!exists(&s, vh) && !exists(&s, bh));
+    s.execute("pasteclip", &json!({})).unwrap();
+    let vps = layout_viewports(&s);
+    assert_eq!(vps.len(), 1);
+    let (nvh, nv) = vps[0].clone();
+    let nbh = nv.clip.expect("the pasted viewport is clipped");
+    assert_ne!(nbh, bh, "the clip is the pasted boundary, not the old handle");
+    assert!(exists(&s, nbh) && fitted(&s, nvh, nbh));
+    assert_ne!(nv.id, old_id, "the pasted viewport has its own id");
+}
+
+#[test]
+fn an_associative_array_never_splits_the_pair() {
+    let (mut s, vh, bh) = session();
+    let before = layout_viewports(&s).len();
+    let p = json!({"type": "rectangular", "handles": [bh.hex()], "rows": 1, "cols": 3, "colSpacing": 150});
+    assert!(s.execute("array", &p).is_err(), "refused with default associativity");
+    assert_eq!(layout_viewports(&s).len(), before);
+    assert_eq!(viewport(&s, vh).clip, Some(bh));
+    assert!(s.doc().unwrap().blocks.values().all(|b| b.entities.iter().all(|e| !matches!(e.kind, EntityKind::Viewport(_)))));
+    // Non-associative: three pairs, each viewport clipped by its own boundary, distinct ids.
+    let mut p = p;
+    p["associative"] = json!(false);
+    s.execute("array", &p).unwrap();
+    let vps = layout_viewports(&s);
+    assert_eq!(vps.len(), 3);
+    let mut ids: Vec<u32> = vps.iter().map(|(_, v)| v.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 3);
+    let mut bs: Vec<Handle> = vps.iter().map(|(_, v)| v.clip.expect("clipped")).collect();
+    assert!(bs.iter().all(|b| exists(&s, *b)));
+    bs.sort_by_key(|h| h.hex());
+    bs.dedup();
+    assert_eq!(bs.len(), 3);
+}
