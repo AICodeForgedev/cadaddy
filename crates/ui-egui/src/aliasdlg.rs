@@ -61,7 +61,7 @@ pub fn parse_key(text: &str) -> Option<KeyboardShortcut> {
 }
 
 /// Whether `id` is a command (the engine's or the interface's).
-fn is_command(id: &str) -> bool {
+pub(crate) fn is_command(id: &str) -> bool {
     cadaddy_engine::cmd::find_command(id).is_some() || crate::menus::UI_COMMANDS.iter().any(|(c, ..)| *c == id)
 }
 
@@ -89,6 +89,32 @@ pub fn set_shortcut(app: &mut CadApp, key: &str, command: &str) -> Result<String
         None => app.ui.shortcuts.push(Binding { key: text.clone(), command }),
     }
     Ok(text)
+}
+
+/// Replace the user's shortcuts with the ones in `v` (an array of `{key, command}`), keeping only
+/// what [`set_shortcut`] would accept: unparseable keys and unknown commands are dropped, a later
+/// entry for the same key wins, an empty command (a built-in turned off) is kept, and at most
+/// [`MAX_BINDINGS`] stay. Returns how many entries were dropped.
+pub fn restore_shortcuts(app: &mut CadApp, v: &Value) -> Result<usize, String> {
+    let list = v.as_array().ok_or("`shortcuts` must be an array of {key, command}")?;
+    let mut kept: Vec<(KeyboardShortcut, Binding)> = Vec::new();
+    for e in list {
+        let (Some(key), Some(command)) = (e.get("key").and_then(Value::as_str), e.get("command").and_then(Value::as_str)) else { continue };
+        let Some(k) = parse_key(key) else { continue };
+        let command = command.trim().to_ascii_lowercase();
+        if !command.is_empty() && !is_command(&command) {
+            continue;
+        }
+        let b = Binding { key: key_text(&k), command };
+        if let Some(i) = kept.iter().position(|(o, _)| *o == k) {
+            kept[i].1 = b;
+        } else if kept.len() < MAX_BINDINGS {
+            kept.push((k, b));
+        }
+    }
+    let dropped = list.len() - kept.len();
+    app.ui.shortcuts = kept.into_iter().map(|(_, b)| b).collect();
+    Ok(dropped)
 }
 
 /// Take `key` away: a built-in shortcut is turned off, the user's removed.

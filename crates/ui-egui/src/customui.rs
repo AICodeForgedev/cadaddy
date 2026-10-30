@@ -349,22 +349,37 @@ pub fn contextual(app: &CadApp, ctx: &egui::Context) -> Option<&'static Tab> {
 
 // ---------------- the command and the dialog ----------------
 
-/// `ui.customize {action: get|set|reset|export|import, custom?, path?}`.
+/// The customisation as the command reports it: [`Custom::to_json`] plus the user's keyboard
+/// shortcuts (`ui.shortcuts` edits them; `reset` leaves them alone and says so).
+fn report(app: &CadApp) -> Value {
+    let mut v = app.custom_ui.to_json();
+    if let Some(o) = v.as_object_mut() {
+        o.insert("shortcuts".into(), json!(app.ui.shortcuts));
+    }
+    v
+}
+
+/// `ui.customize {action: get|set|reset|export|import, custom?, path?}`. Export and import carry
+/// the keyboard shortcuts too; `set` and `reset` change only the ribbon customisation.
 pub fn command(app: &mut CadApp, p: &Value) -> Result<Value, String> {
     match p.get("action").and_then(Value::as_str).unwrap_or("get") {
-        "get" => Ok(app.custom_ui.to_json()),
+        "get" => Ok(report(app)),
         "set" => {
             app.custom_ui = Custom::from_json(p.get("custom").ok_or("`custom` is required")?)?;
-            Ok(app.custom_ui.to_json())
+            Ok(report(app))
         }
         "reset" => {
             app.custom_ui = Custom::default();
-            Ok(app.custom_ui.to_json())
+            let mut v = report(app);
+            v["note"] = json!("keyboard shortcuts were kept; `ui.shortcuts` with action reset clears them");
+            Ok(v)
         }
         "export" => {
             let path = p.get("path").and_then(Value::as_str).ok_or("`path` is required")?;
-            let text = serde_json::to_string_pretty(&json!({ "format": "cadaddy-interface", "version": 1, "custom": app.custom_ui.to_json() }))
-                .unwrap_or_default();
+            let text = serde_json::to_string_pretty(
+                &json!({ "format": "cadaddy-interface", "version": 2, "custom": app.custom_ui.to_json(), "shortcuts": app.ui.shortcuts }),
+            )
+            .unwrap_or_default();
             cadaddy_engine::writefile::write(path, text).map_err(|e| format!("{path}: {e}"))?;
             Ok(json!({ "path": path }))
         }
@@ -375,8 +390,16 @@ pub fn command(app: &mut CadApp, p: &Value) -> Result<Value, String> {
             if v.get("format").and_then(Value::as_str) != Some("cadaddy-interface") {
                 return Err(format!("{path}: not a CADaddy interface customisation"));
             }
-            app.custom_ui = Custom::from_json(v.get("custom").unwrap_or(&Value::Null))?;
-            Ok(app.custom_ui.to_json())
+            let custom = Custom::from_json(v.get("custom").unwrap_or(&Value::Null))?;
+            // Version-1 files have no `shortcuts`: the current ones stay.
+            let dropped = match v.get("shortcuts") {
+                Some(s) => crate::aliasdlg::restore_shortcuts(app, s)?,
+                None => 0,
+            };
+            app.custom_ui = custom;
+            let mut r = report(app);
+            r["shortcuts_dropped"] = json!(dropped);
+            Ok(r)
         }
         other => Err(format!("unknown action \"{other}\" (get, set, reset, export or import)")),
     }
@@ -639,6 +662,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     io = Some("import");
                 }
                 if ui.button(crate::tl!("Reset to Defaults")).clicked() {
+                    // The ribbon only: keyboard shortcuts have their own editor and reset.
                     c = Custom::default();
                 }
             });
@@ -744,6 +768,39 @@ mod tests {
         assert_eq!(app.custom_ui, sample());
         std::fs::write(&path, "{\"format\": \"other\"}").unwrap();
         assert!(command(&mut app, &json!({ "action": "import", "path": path.to_string_lossy() })).is_err());
+        // Keyboard shortcuts travel with the file.
+        crate::aliasdlg::set_shortcut(&mut app, "Ctrl+Shift+K", "circle").unwrap();
+        app.custom_ui = sample();
+        command(&mut app, &json!({ "action": "export", "path": path.to_string_lossy() })).unwrap();
+        let file: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(file["shortcuts"], json!([{ "key": "Ctrl+Shift+K", "command": "circle" }]));
+        app.custom_ui = Custom::default();
+        app.ui.shortcuts.clear();
+        command(&mut app, &json!({ "action": "import", "path": path.to_string_lossy() })).unwrap();
+        assert_eq!(app.custom_ui, sample());
+        assert_eq!(app.ui.shortcuts, [crate::aliasdlg::Binding { key: "Ctrl+Shift+K".into(), command: "circle".into() }]);
+        // Hostile shortcut lists: bad keys and unknown commands are dropped, duplicates collapse.
+        let hostile = json!({ "format": "cadaddy-interface", "version": 2, "custom": {}, "shortcuts": [
+            { "key": "Ctrl+Shift+K", "command": "line" }, { "key": "ctrl+shift+k", "command": "circle" },
+            { "key": "Hyper+Q", "command": "line" }, { "key": "F6", "command": "nosuchcommand" }, { "key": "F7" }, 5] });
+        std::fs::write(&path, hostile.to_string()).unwrap();
+        let r = command(&mut app, &json!({ "action": "import", "path": path.to_string_lossy() })).unwrap();
+        assert_eq!(app.ui.shortcuts, [crate::aliasdlg::Binding { key: "Ctrl+Shift+K".into(), command: "circle".into() }]);
+        assert_eq!(r["shortcuts_dropped"], 5);
+        // A version-1 file (no `shortcuts`) still imports and leaves the shortcuts as they are.
+        let v1 = json!({ "format": "cadaddy-interface", "version": 1, "custom": sample().to_json() });
+        std::fs::write(&path, v1.to_string()).unwrap();
+        app.custom_ui = Custom::default();
+        command(&mut app, &json!({ "action": "import", "path": path.to_string_lossy() })).unwrap();
+        assert_eq!(app.custom_ui, sample());
+        assert_eq!(app.ui.shortcuts.len(), 1, "a file without shortcuts keeps the current ones");
+        assert!(command(&mut app, &json!({ "action": "import", "path": path.to_string_lossy() })).unwrap()["shortcuts"].is_array());
+        // `get` reports them; `reset` leaves them and says so.
+        assert_eq!(command(&mut app, &json!({ "action": "get" })).unwrap()["shortcuts"][0]["key"], "Ctrl+Shift+K");
+        let r = command(&mut app, &json!({ "action": "reset" })).unwrap();
+        assert!(app.custom_ui.is_default());
+        assert_eq!(app.ui.shortcuts.len(), 1, "reset keeps the shortcuts");
+        assert!(r["note"].as_str().unwrap().contains("shortcuts were kept"));
         let _ = std::fs::remove_file(&path);
         // Oversized and odd values are trimmed, not trusted.
         let huge =
