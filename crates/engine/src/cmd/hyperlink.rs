@@ -28,6 +28,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(PickM::default()))),
         CommandSpec::new("hyperlink.open", "Open Hyperlink", run_open)
             .params("{handle} → {url?: what to open (resolved against HYPERLINKBASE, else the drawing's folder), target?, label, confirm?: why a link to a program or script must be confirmed before opening} — a named location in this drawing (a layout or view) is gone to here; a URL is the host's to open (only http, https, mailto and file links; others are refused)")
+            .network()
             .noundo(),
     ]
 }

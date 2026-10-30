@@ -83,11 +83,12 @@ field. `engine.commands` returns a separate command catalog, not a list of addit
 | `ui.focus` | | Activate the native window. Does not assign focus to a widget. |
 | `ui.screenshot` | `{path?}` | PNG of the window (needs a presented frame). |
 | `ui.render` | `{path?, width?, height?, fit?}` | Headless render. `fit` (default true) frames the whole drawing; `false` uses the current view. Replies `{pngBase64, width, height, bytes, path?}`. |
-| `app.open` / `app.save` / `app.quit` | `{path}` (open, save) · `{save?, discard?}` (quit) | File operations. `app.quit {save: true}` saves every modified drawing first. |
+| `app.open` / `app.save` / `app.quit` | `{path}` (open) · `{path?, force?}` (save; `force: true` overwrites a file changed on disk) · `{save?, discard?}` (quit) | File operations. `app.quit {save: true}` saves every modified drawing first. |
 | `app.closePrompt` | | The drawing an open "Save changes to …?" question is about (`{title}` or `{title: null}`). |
 | `app.answerClose` | `{choice: save\|discard\|cancel}` | Answer that question as the user would. |
 | `control.methods` | | Every method this server answers: `{method, params, description}`. Headless (`cadaddy-cli mcp`) lists only the methods it serves. |
-| `ping` | | Replies `"pong"`. A cheap health check. |
+| `ping` | `{version?}` | Replies `"pong"`. A cheap health check. With `version: true` an object: `version`, `pid`, `title` (the window title) and `agentPortHeldElsewhere`. |
+| `control.cancel` | | Asks the running render to stop. Answered by the connection itself, ahead of the queue, so it works while a render holds the window. |
 
 To run a command listed by `engine.commands`, put its id in `params.command` and its arguments
 in the nested `params.params` object, using `engine.execute` as the top-level method. This

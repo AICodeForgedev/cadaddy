@@ -452,6 +452,8 @@ pub struct CadApp {
     pub integrated_titlebar: bool,
     /// The window title last sent to the OS ("CADaddy - name*"), so it is only sent on a change.
     os_title: String,
+    /// Another CADaddy window holds the agent port (47820), so this one is not what agents reach.
+    agent_port_held: bool,
     control_rx: Option<Receiver<ControlRequest>>,
     /// The window was started to be driven (`--control PORT`), not just serving the agent port
     /// that is on by default.
@@ -592,6 +594,7 @@ impl CadApp {
             opening: opening::Opening::default(),
             integrated_titlebar: false,
             os_title: String::new(),
+            agent_port_held: false,
             control_rx: None,
             control_scripted: false,
             pending_shots: Vec::new(),
@@ -926,6 +929,16 @@ impl CadApp {
     /// install would ever be offered an update.
     pub fn has_control_channel(&self) -> bool {
         self.control_scripted && self.control_rx.is_some()
+    }
+
+    /// Note that the agent port could not be bound because another window holds it: said in the
+    /// status line, and in the `ping` reply for the command-line bridge.
+    pub fn set_agent_port_held(&mut self) {
+        self.agent_port_held = true;
+        self.set_status(format!(
+            "Agent control is held by another CADaddy window (port {}); AI agents drive that window, not this one.",
+            cadaddy_engine::AGENT_PORT
+        ));
     }
 
     pub fn set_status(&mut self, s: impl Into<String>) {

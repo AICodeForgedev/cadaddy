@@ -591,10 +591,11 @@ fn atoi(a: &[Value]) -> R {
 fn atof(a: &[Value]) -> R {
     arity(a, 1, 1)?;
     let s = string(&a[0])?;
-    // The longest prefix (of the first 64 characters) that reads as a finite number.
+    // The longest prefix (of the first 64 characters) that reads as a number; a magnitude beyond
+    // the range is infinite, as C's `atof` gives (never a shorter finite number).
     let t: String = s.trim_start().chars().take(64).collect();
     let ends: Vec<usize> = t.char_indices().map(|(i, _)| i).skip(1).chain(std::iter::once(t.len())).collect();
-    let v = ends.iter().rev().find_map(|&e| t.get(..e).and_then(|p| p.parse::<f64>().ok()).filter(|v| v.is_finite() && !p_is_word(&t[..e])));
+    let v = ends.iter().rev().find_map(|&e| t.get(..e).and_then(|p| p.parse::<f64>().ok()).filter(|_| !p_is_word(&t[..e])));
     Ok(Value::Real(v.unwrap_or(0.0)))
 }
 /// Words Rust reads as numbers that C's `atof` doesn't ("inf", "nan", "infinity").
