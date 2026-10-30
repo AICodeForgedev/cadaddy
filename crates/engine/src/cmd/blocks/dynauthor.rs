@@ -220,11 +220,9 @@ fn run_action(s: &mut Session, p: &Value) -> Result<Value> {
             if inside.is_empty() && rotate.is_empty() {
                 return Err(bad(cmd, "none of the selected objects lies in the stretch frame, and no objects to `rotate` are given"));
             }
+            // The action acts on the objects that stretch and the ones that only turn.
             selection = inside;
-            if selection.is_empty() {
-                // Only objects to turn: they stand for the selection.
-                selection.clone_from(&rotate);
-            }
+            selection.extend(rotate.iter().filter(|h| !selection.contains(h)).copied().collect::<Vec<_>>());
             NewActionKind::PolarStretch { frame, vertices, rotate }
         }
         "lookup" => {

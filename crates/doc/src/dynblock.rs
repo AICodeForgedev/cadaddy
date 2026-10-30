@@ -121,6 +121,20 @@ pub enum ParameterKind {
 }
 
 impl ParameterKind {
+    /// The parameter's base point (its first point), when it has two.
+    pub fn base_point(&self) -> Vec3 {
+        match self {
+            ParameterKind::Linear { base, .. }
+            | ParameterKind::Polar { base, .. }
+            | ParameterKind::Xy { base, .. }
+            | ParameterKind::Rotation { base, .. }
+            | ParameterKind::Alignment { base, .. }
+            | ParameterKind::Flip { base, .. } => *base,
+            ParameterKind::Point { at, .. } | ParameterKind::Visibility { at, .. } | ParameterKind::Lookup { at, .. } | ParameterKind::BasePoint { at } => *at,
+            ParameterKind::Other { .. } => Vec3::default(),
+        }
+    }
+
     /// The property name a reference shows ("Distance1", "Visibility1"), when it has one.
     pub fn label(&self) -> Option<&str> {
         match self {
@@ -434,7 +448,12 @@ fn grip_ids(secs: &[(&str, &[RawTag])]) -> Vec<i32> {
         c.point(1010);
         c.point(1011);
         let n = c.count(170).min(2);
-        return (0..n).map(|_| c.int(91)).collect();
+        let mut ids: Vec<i32> = (0..n).map(|_| c.int(91)).collect();
+        // A file lists four slots; the ones past the last grip are 0, as is a missing grip.
+        while ids.last() == Some(&0) {
+            ids.pop();
+        }
+        return ids;
     }
     let mut c = Cursor::new(section(secs, "AcDbBlock1PtParameter"));
     c.point(1010);
@@ -466,28 +485,39 @@ fn parameter(kind: &str, secs: &[(&str, &[RawTag])]) -> ParameterKind {
             ParameterKind::Lookup { at: one(), label: c.string(303), description: c.string(304) }
         }
         "BLOCKBASEPOINTPARAMETER" => ParameterKind::BasePoint { at: one() },
+        // The subclass data of the two-point parameters, in the order and with the group codes
+        // AutoCAD writes them.
         "BLOCKPOLARPARAMETER" => {
             let (base, end) = two();
             let mut c = Cursor::new(section(secs, "AcDbBlockPolarParameter"));
-            let (label, description, angle_label) = (c.string(305), c.string(306), c.string(309));
-            ParameterKind::Polar { base, end, label, angle_label, description, values: value_set(&mut c) }
+            let (label, description, angle_label) = (c.string(305), c.string(306), c.string(307));
+            c.next(308);
+            c.next(140);
+            ParameterKind::Polar { base, end, label, angle_label, description, values: value_set_at(&mut c, 309, 96, 141, 175) }
         }
         "BLOCKXYPARAMETER" => {
             let (base, end) = two();
-            let mut c = Cursor::new(section(secs, "AcDbBlockXYParameter"));
-            let (label, description, y_label) = (c.string(305), c.string(306), c.string(309));
-            ParameterKind::Xy { base, end, label, y_label, description, values: value_set(&mut c) }
+            let tags = section(secs, "AcDbBlockXYParameter");
+            // The vertical label comes first (305), then the horizontal one (306); the
+            // horizontal distance's value set (410, 96…) follows the vertical one's.
+            let mut c = Cursor::new(tags);
+            let (y_label, label, _, description) = (c.string(305), c.string(306), c.string(307), c.string(308));
+            let values = value_set_at(&mut Cursor::new(tags), 410, 96, 142, 175);
+            ParameterKind::Xy { base, end, label, y_label, description, values }
         }
         "BLOCKROTATIONPARAMETER" => {
             let (base, end) = two();
             let mut c = Cursor::new(section(secs, "AcDbBlockRotationParameter"));
             let (label, description) = (c.string(305), c.string(306));
-            ParameterKind::Rotation { base, end, label, description, values: value_set(&mut c) }
+            c.point(1011);
+            c.next(140);
+            ParameterKind::Rotation { base, end, label, description, values: value_set_at(&mut c, 307, 96, 141, 175) }
         }
         "BLOCKALIGNMENTPARAMETER" => {
             let (base, end) = two();
-            let mut c = Cursor::new(section(secs, "AcDbBlockAlignmentParameter"));
-            ParameterKind::Alignment { base, end, label: c.string(305), description: c.string(306) }
+            // An alignment parameter has no name of its own: the element's.
+            let label = Cursor::new(section(secs, "AcDbBlockElement")).string(300);
+            ParameterKind::Alignment { base, end, label, description: String::new() }
         }
         "BLOCKFLIPPARAMETER" => {
             let (base, end) = two();
@@ -502,11 +532,17 @@ fn parameter(kind: &str, secs: &[(&str, &[RawTag])]) -> ParameterKind {
 /// A value set after a parameter's name and description: description (307), flags (96),
 /// minimum, maximum and increment (141–143), then the listed values (175 count, 144 each).
 fn value_set(c: &mut Cursor) -> ValueSet {
-    c.next(307);
-    let flags = c.int(96);
-    let (minimum, maximum, increment) = (c.real(141), c.real(142), c.real(143));
-    let n = c.count(175);
-    let list = (0..n).filter_map(|_| c.next(144).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite())).collect();
+    value_set_at(c, 307, 96, 141, 175)
+}
+
+/// A value set with its group codes: description, flags, minimum (then maximum, increment and
+/// the listed values at the next codes) and the count of listed values.
+fn value_set_at(c: &mut Cursor, description: i32, flags: i32, first: i32, count: i32) -> ValueSet {
+    c.next(description);
+    let flags = c.int(flags);
+    let (minimum, maximum, increment) = (c.real(first), c.real(first + 1), c.real(first + 2));
+    let n = c.count(count);
+    let list = (0..n).filter_map(|_| c.next(first + 3).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite())).collect();
     ValueSet { flags, minimum, maximum, increment, list }
 }
 
@@ -546,25 +582,53 @@ fn action(handle: Handle, node: i32, name: String, kind: &str, secs: &[(&str, &[
             let (multiplier, angle_offset) = (c.real(140), c.real(141));
             (two_connections(tags), ActionKind::Move { multiplier, angle_offset })
         }
-        "BLOCKSCALEACTION" => (two_connections(section(secs, "AcDbBlockScaleAction")), ActionKind::Scale),
-        "BLOCKROTATEACTION" => (two_connections(section(secs, "AcDbBlockRotateAction")), ActionKind::Rotate),
-        "BLOCKFLIPACTION" => (two_connections(section(secs, "AcDbBlockFlipAction")), ActionKind::Flip),
+        "BLOCKSCALEACTION" => (named_connections(section(secs, "AcDbBlockScaleAction"), 94, 303, 3), ActionKind::Scale),
+        // AutoCAD's marker for the rotate action's own data is AcDbBlockRotationAction.
+        "BLOCKROTATEACTION" => (named_connections(section(secs, "AcDbBlockRotationAction"), 94, 303, 1), ActionKind::Rotate),
+        "BLOCKFLIPACTION" => (named_connections(section(secs, "AcDbBlockFlipAction"), 92, 301, 4), ActionKind::Flip),
         "BLOCKARRAYACTION" => {
             let tags = section(secs, "AcDbBlockArrayAction");
-            let mut c = Cursor::new(tags);
-            let (column_offset, row_offset) = (c.real(140), c.real(141));
-            (two_connections(tags), ActionKind::Array { column_offset, row_offset })
+            let (row_offset, column_offset) = (Cursor::new(tags).real(140), Cursor::new(tags).real(141));
+            (named_connections(tags, 92, 301, 4), ActionKind::Array { column_offset, row_offset })
         }
         "BLOCKPOLARSTRETCHACTION" => {
             let tags = section(secs, "AcDbBlockPolarStretchAction");
-            let (connections, frame, vertices, mut c) = stretch_body(tags);
-            let n = c.count(76);
-            let rotate = c.handles(332, n);
+            let connections = named_connections(tags, 92, 301, 6);
+            let mut c = Cursor::new(tags);
+            let n = c.count(73);
+            let frame = (0..n)
+                .map(|_| {
+                    let x = c.real(1011);
+                    Vec2::new(x, c.real(1021))
+                })
+                .collect();
+            // The objects that stretch, then each one's vertices (332, a 75 count, 76 each).
+            let nh = c.count(72);
+            let stretched = c.handles(331, nh);
+            let nb = c.count(74);
+            let vertices = (0..nb)
+                .filter_map(|_| {
+                    let h = c.handle(332)?;
+                    let n = c.count(75);
+                    Some((h, (0..n).map(|_| c.int(76)).collect()))
+                })
+                .collect();
+            // Of the objects it acts on, the ones that do not stretch only turn.
+            let rotate = selection.iter().filter(|h| !stretched.contains(h)).copied().collect();
             (connections, ActionKind::PolarStretch { frame, vertices, rotate })
         }
         other => (Vec::new(), ActionKind::Other { dxf_type: other.to_string() }),
     };
     Action { node, handle, name, at, selection, connections, kind }
+}
+
+/// `count` connections written as parameter ids from `code` and names from `name_code`, the
+/// ones that name something.
+fn named_connections(tags: &[RawTag], code: i32, name_code: i32, count: i32) -> Vec<(i32, String)> {
+    (0..count)
+        .map(|i| (Cursor::new(tags).int(code + i), Cursor::new(tags).string(name_code + i)))
+        .filter(|(_, name)| !name.is_empty())
+        .collect()
 }
 
 /// Two connections: parameter ids (92, 93) and the values they read (301, 302). Writers order

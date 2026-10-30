@@ -272,3 +272,112 @@ fn the_new_parameters_and_actions_survive_saving_to_dxf() {
         ],
     );
 }
+
+/// `blocks.dynamic` of `name` without handles (a file renumbers them).
+fn shape(s: &mut Session, name: &str) -> (Value, Value) {
+    let strip = |v: &Value, keys: &[&str]| -> Value {
+        Value::Array(
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|e| {
+                    let mut e = e.clone();
+                    for k in keys {
+                        e.as_object_mut().unwrap().remove(*k);
+                    }
+                    e
+                })
+                .collect(),
+        )
+    };
+    let r = s.execute("blocks.dynamic", &json!({ "name": name })).unwrap();
+    (strip(&r["parameters"], &["handle"]), strip(&r["actions"], &["handle", "selection"]))
+}
+
+#[test]
+fn an_authored_block_survives_a_dwg_round_trip() {
+    use cadaddy_io::{DwgEngine, Version};
+    let mut s = Session::new();
+    let hs = block_of(&mut s, "Panel", &[[0.0, 0.0, 10.0, 0.0], [10.0, 0.0, 10.0, 5.0], [10.0, 5.0, 0.0, 5.0], [0.0, 5.0, 0.0, 0.0]]);
+    s.execute("bparameter", &json!({ "block": "Panel", "type": "linear", "base": [0, 0], "end": [10, 0], "label": "Width", "values": { "list": [10, 20, 30] } })).unwrap();
+    s.execute("bparameter", &json!({ "block": "Panel", "type": "rotation", "base": [0, 0], "end": [5, 0], "label": "Tilt" })).unwrap();
+    s.execute("bactiontool", &json!({ "block": "Panel", "type": "stretch", "parameter": "Width", "handles": hs, "frame": [[8, -1], [12, -1], [12, 6], [8, 6]] })).unwrap();
+    s.execute("bactiontool", &json!({ "block": "Panel", "type": "rotate", "parameter": "Tilt", "handles": [hs[0]] })).unwrap();
+    let before = shape(&mut s, "Panel");
+    assert_eq!((before.0.as_array().unwrap().len(), before.1.as_array().unwrap().len()), (2, 2));
+    for version in [Version::R2004, Version::R2018] {
+        for engine in [DwgEngine::Bridge, DwgEngine::Native] {
+            let bytes = cadaddy_io::write_dwg(s.doc().unwrap(), version, engine).unwrap();
+            for read in [DwgEngine::Bridge] {
+                let mut s2 = Session::new();
+                s2.open_drawing(cadaddy_io::read_dwg(&bytes, read).unwrap(), "panel", None);
+                let label = format!("{version:?} written by {engine:?}, read by {read:?}");
+                assert_eq!(shape(&mut s2, "Panel"), before, "{label}");
+                // A new reference stretches to the set width, with all four sides.
+                let h = insert(&mut s2, "Panel");
+                set(&mut s2, &h, "Width", "30");
+                assert_lines(
+                    &lines_of(s2.doc().unwrap(), &h),
+                    &[[0.0, 0.0, 30.0, 0.0], [30.0, 0.0, 30.0, 5.0], [30.0, 5.0, 0.0, 5.0], [0.0, 5.0, 0.0, 0.0]],
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn every_parameter_and_action_type_survives_a_dwg_round_trip() {
+    use cadaddy_io::{DwgEngine, Version};
+    let mut s = Session::new();
+    let hs = block_of(&mut s, "Wheel", &[[0.0, 0.0, 10.0, 0.0], [1.0, 1.0, 2.0, 1.0], [0.0, 3.0, 4.0, 3.0]]);
+    for p in [
+        json!({ "type": "polar", "base": [0, 0], "end": [10, 0], "label": "Reach", "values": { "minimum": 2, "maximum": 30, "increment": 2 } }),
+        json!({ "type": "xy", "base": [0, 0], "end": [6, 4], "label": "Across" }),
+        json!({ "type": "alignment", "base": [0, 0], "end": [0, 5], "label": "Align" }),
+        json!({ "type": "flip", "base": [0, 0], "end": [0, 9], "label": "Mirror" }),
+        json!({ "type": "linear", "base": [0, 0], "end": [2, 0], "label": "Run" }),
+        json!({ "type": "rotation", "base": [0, 0], "end": [5, 0], "label": "Tilt" }),
+    ] {
+        let mut p = p;
+        p["block"] = json!("Wheel");
+        s.execute("bparameter", &p).unwrap();
+    }
+    let frame = json!([[9, -1], [11, -1], [11, 1], [9, 1]]);
+    for a in [
+        json!({ "type": "polarstretch", "parameter": "Reach", "handles": [hs[0]], "rotate": [hs[1]], "frame": frame }),
+        json!({ "type": "move", "parameter": "Across", "handles": [hs[2]] }),
+        json!({ "type": "flip", "parameter": "Mirror", "handles": [hs[2]] }),
+        json!({ "type": "scale", "parameter": "Run", "handles": [hs[1]] }),
+        json!({ "type": "array", "parameter": "Run", "handles": [hs[2]], "columnOffset": 2 }),
+        json!({ "type": "rotate", "parameter": "Tilt", "handles": [hs[1]] }),
+    ] {
+        let mut a = a;
+        a["block"] = json!("Wheel");
+        s.execute("bactiontool", &a).unwrap();
+    }
+    let before = shape(&mut s, "Wheel");
+    assert_eq!((before.0.as_array().unwrap().len(), before.1.as_array().unwrap().len()), (6, 6));
+    for version in [Version::R2004, Version::R2018] {
+        for engine in [DwgEngine::Bridge, DwgEngine::Native] {
+            let bytes = cadaddy_io::write_dwg(s.doc().unwrap(), version, engine).unwrap();
+            let mut s2 = Session::new();
+            s2.open_drawing(cadaddy_io::read_dwg(&bytes, DwgEngine::Bridge).unwrap(), "wheel", None);
+            let (params, actions) = shape(&mut s2, "Wheel");
+            let label = format!("{version:?} written by {engine:?}");
+            // Parameter kinds (with their own data) and action kinds are what was authored; the
+            // action parts that name objects follow the file's handles.
+            assert_eq!(params, before.0, "{label}");
+            let kinds = |a: &Value| a.as_array().unwrap().iter().map(|x| (x["name"].clone(), x["kind"]["type"].clone(), x["connections"].clone())).collect::<Vec<_>>();
+            assert_eq!(kinds(&actions), kinds(&before.1), "{label}");
+            // The reloaded block behaves: the polar parameter sets 20 (snapped by its value set)
+            // and the rotate-only line follows a quarter turn.
+            let h = insert(&mut s2, "Wheel");
+            set(&mut s2, &h, "Reach", "21");
+            let got = lines_of(s2.doc().unwrap(), &h);
+            assert!((got[0][2] - 22.0).abs() < 1e-9, "{label}: the increment of 2 makes 21 into 22: {got:?}");
+            set(&mut s2, &h, "Angle1", "90");
+            let got = lines_of(s2.doc().unwrap(), &h);
+            assert!((got[1][0] + 1.0).abs() < 1e-9 && (got[1][1] - 1.0).abs() < 1e-9, "{label}: {got:?}");
+        }
+    }
+}
