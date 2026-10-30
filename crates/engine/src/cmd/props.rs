@@ -645,9 +645,12 @@ impl Interactive for ThicknessM {
     }
 }
 
+/// The unit variables (lower-case name, lowest, highest value) shared by UNITS and SETVAR.
+pub(crate) const UNIT_RANGES: [(&str, i64, i64); 5] = [("lunits", 1, 5), ("luprec", 0, 8), ("aunits", 0, 4), ("auprec", 0, 8), ("insunits", 0, 24)];
+
 fn run_units(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc_mut()?;
-    for (k, lo, hi) in [("lunits", 1, 5), ("luprec", 0, 8), ("aunits", 0, 4), ("auprec", 0, 8), ("insunits", 0, 24)] {
+    for (k, lo, hi) in UNIT_RANGES {
         if let Some(v) = p.get(k).and_then(Value::as_i64) {
             d.header.set_i64(&k.to_ascii_uppercase(), v.clamp(lo, hi));
         }
