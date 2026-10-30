@@ -2396,13 +2396,15 @@ mod tests {
                 "bottoms_ft": [10.0], "height_source": source}))
             .unwrap()
         };
-        let mut sp = BuildingSpec::default();
-        sp.levels = serde_json::from_value(json!([
-            {"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.5, "ceiling_ft": 8.5},
-            {"name": "Level 2", "elevation_ft": 10.5, "height_ft": 9.1, "ceiling_ft": 8.0},
-            {"name": "Roof", "elevation_ft": 19.6, "height_ft": 4.0, "ceiling_ft": 3.0}
-        ]))
-        .unwrap();
+        let mut sp = BuildingSpec {
+            levels: serde_json::from_value(json!([
+                {"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.5, "ceiling_ft": 8.5},
+                {"name": "Level 2", "elevation_ft": 10.5, "height_ft": 9.1, "ceiling_ft": 8.0},
+                {"name": "Roof", "elevation_ft": 19.6, "height_ft": 4.0, "ceiling_ft": 3.0}
+            ]))
+            .unwrap(),
+            ..Default::default()
+        };
         sp.mep.runs = vec![
             // A 12×10 duct at the default 10': under level 2's slab (10.5 − 0.5 − 10").
             run("Level 1", [12.0, 10.0], "default"),
