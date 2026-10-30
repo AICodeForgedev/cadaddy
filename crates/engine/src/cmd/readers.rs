@@ -167,7 +167,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{sheets?: [name], preview?: bool (default true: read only; false puts the devices in the model), save?: bool (default true: preview:false saves the drawing to its file), limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read, model: {inserted, replaced, by_type, by_level, elements, elements_replaced, filled?: {key: n}, saved?, not_saved?, save_error?, not_inserted: {reason: count}, why_not?}}: works on any open drawing (the current sheet is the print set); preview:false needs a building model (bspec.draft {store: true} or bim.build first), makes each device an element (kind device, on its sheet's level, moved onto the architectural plan) replacing the device elements an earlier read made (nothing else in the model changes), and never inserts legend samples, circuit numbers, sheet numbers or lettering"),
         // ── Envelope reader ────────────────────────────────────────────────
         CommandSpec::new("envelope.read", "Read Roof and Wall Envelope", run_envelope_read)
-            .params("{apply?: bool} → {takeoff: [{code, description, unit, net, waste_pct, order, source, status}], flags: [{kind, subject, message, source, status}], spec_read, notes, page?: 1}")
+            .params("{apply?: bool, page?} → {takeoff: [{code, description, unit, net, waste_pct, order, source, status}], flags: [{kind, subject, message, source, status}], spec_read, notes, page?: 1}")
             .noundo(),
     ]
 }

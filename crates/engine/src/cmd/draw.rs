@@ -81,7 +81,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("text", "Single Line Text", run_text)
             .menu(&["Draw", "Text", "Single Line Text"])
             .alias(&["dt", "dtext"])
-            .params("{at, text, height?, rotation? (degrees), justify?: L|C|R|M|TL|TC|TR|ML|MC|MR|BL|BC|BR}")
+            .params("{at, text: string, height?: number, rotation?: number (degrees), justify?: L|C|R|M|TL|TC|TR|ML|MC|MR|BL|BC|BR}")
             .interactive(|s| Ok(Box::new(TextM::new(s)))),
         CommandSpec::new("mtext", "Multiline Text", run_mtext)
             .menu(&["Draw", "Text", "Multiline Text..."])
