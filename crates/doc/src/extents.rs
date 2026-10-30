@@ -126,6 +126,11 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
         EntityKind::Table(t) if t.is_broken() => t.bounds(),
         EntityKind::Text(t) if blank(&t.value) => Bounds2::EMPTY,
         EntityKind::MText(t) if blank(&t.contents) => Bounds2::EMPTY,
+        // Text that matches the layout's orientation is drawn upright (#2498).
+        EntityKind::Text(t) if e.common.matches_layout_orientation() => {
+            text_box(&crate::Text { rotation: 0.0, ..t.clone() }, t.value.chars().count())
+        }
+        EntityKind::MText(t) if e.common.matches_layout_orientation() => mtext_box(&crate::MText { rotation: 0.0, ..t.clone() }),
         EntityKind::Text(t) => text_box(t, t.value.chars().count()),
         EntityKind::AttDef(a) => text_box(&a.text, a.tag.chars().count()),
         EntityKind::MText(t) => mtext_box(t),
