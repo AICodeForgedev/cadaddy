@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1159,
-    "count": 1159,
+    "callableAsJson": 1175,
+    "count": 1175,
     "ids": [
       "-attedit",
       "-block",
@@ -100,6 +100,7 @@
       "bactiontool",
       "base",
       "battman",
+      "bauthorpalette",
       "bcf.create",
       "bcf.delete",
       "bcf.export",
@@ -111,6 +112,7 @@
       "bclose",
       "bcount",
       "bedit",
+      "bextend",
       "bim.bom",
       "bim.build",
       "bim.clash",
@@ -155,6 +157,7 @@
       "block",
       "blockify",
       "blockreplace",
+      "blocks.description",
       "blocks.dynamic",
       "blocks.list",
       "blocks.reference",
@@ -177,6 +180,8 @@
       "bspec.get",
       "bspec.set",
       "bspec.validate",
+      "btestblock",
+      "btrim",
       "burst",
       "bvhide",
       "bvshow",
@@ -229,6 +234,7 @@
       "compare.next",
       "compare.previous",
       "compareclose",
+      "comparedrawing",
       "compareexport",
       "compile",
       "concrete.check",
@@ -410,6 +416,7 @@
       "export",
       "exportpdf",
       "extend",
+      "extrim",
       "extrude",
       "field",
       "fieldview.export",
@@ -610,6 +617,7 @@
       "livesection",
       "load",
       "loft",
+      "loops",
       "lsp",
       "lspsurf",
       "ltscale",
@@ -946,6 +954,7 @@
       "setbylayer",
       "setvar",
       "shape",
+      "shapes",
       "share",
       "sheet.facts",
       "sheetset",
@@ -989,6 +998,7 @@
       "stylesmanager",
       "subtract",
       "sunproperties",
+      "superhatch",
       "surfblend",
       "surfextend",
       "surffillet",
@@ -1041,6 +1051,7 @@
       "tframe",
       "tframes",
       "thicken",
+      "thickness",
       "tifout",
       "time",
       "tolerance",
@@ -1056,6 +1067,7 @@
       "transparency",
       "transparencydisplay",
       "trays.read",
+      "trex",
       "trim",
       "txt2mtxt",
       "txtexp",
@@ -1086,6 +1098,7 @@
       "unittypes.schedule",
       "unittypes.takeoff",
       "updatefield",
+      "usage",
       "view",
       "view.back",
       "view.bottom",
@@ -1105,6 +1118,7 @@
       "viewport.set",
       "viewsection",
       "visualstyles",
+      "volume.measure",
       "vpclip",
       "vplayer",
       "vpmax",
@@ -1116,6 +1130,7 @@
       "vports.3",
       "vports.4",
       "vports.activate",
+      "vports.named",
       "vpsync",
       "vs.2dwireframe",
       "vs.hidden",
@@ -1127,6 +1142,7 @@
       "walk.publish",
       "wall.info",
       "wallgen",
+      "wallgen.plan",
       "walls.read",
       "wblock",
       "wedge",
@@ -1163,8 +1179,8 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 513,
-    "typed": 551
+    "inMenus": 523,
+    "typed": 563
   },
   "features": {
     "ifcExport": true,
@@ -1231,6 +1247,7 @@
       "ar",
       "cs",
       "de",
+      "el",
       "es",
       "fr",
       "hu",
@@ -1246,7 +1263,7 @@
       "zh",
       "zh_tw"
     ],
-    "count": 18
+    "count": 19
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
@@ -1310,9 +1327,9 @@
     ]
   },
   "parity": {
-    "menuCovered": 364,
+    "menuCovered": 379,
     "menuItems": 491,
-    "registeredCommands": 744
+    "registeredCommands": 1175
   },
   "signedUpdates": true,
   "version": "0.7.10",

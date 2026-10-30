@@ -29,7 +29,8 @@ fn custom(d: &Drawing) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>, (
     let mut objects: Vec<String> =
         f.objects.iter().filter(|o| o.kind.starts_with("ACME_")).map(|o| format!("{} {}", o.kind, groups(&o.tags))).collect();
     objects.sort();
-    let mut keys: Vec<String> = f.dictionary.iter().map(|(k, _)| k.clone()).collect();
+    // The DWG writer adds AutoCAD's variable dictionary to an AC1018 file that has none: not a custom record.
+    let mut keys: Vec<String> = f.dictionary.iter().map(|(k, _)| k.clone()).filter(|k| k != "AcDbVariableDictionary").collect();
     keys.sort();
     let line = f.entities.get(&Handle(0x100)).map(|x| (x.xdict.is_some(), x.reactors.len())).unwrap_or_default();
     let gadget = |s: &EntityStore| -> Vec<String> {

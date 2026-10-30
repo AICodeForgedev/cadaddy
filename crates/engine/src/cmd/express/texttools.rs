@@ -17,7 +17,7 @@ use super::super::*;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 /// The xdata application tagging a mask with the text it masks.
-pub const MASK_APP: &str = "CADADDY_TEXTMASK";
+pub const MASK_APP: &str = "CADADDY_TEXTMASK"; // the render crate matches this name (TEXTMASK_APP)
 /// Most objects one of these commands changes at once.
 const MAX_TEXTS: usize = 100_000;
 

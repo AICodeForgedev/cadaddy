@@ -64,6 +64,9 @@ pub fn manifest(bytes: &[u8]) -> Option<serde_json::Value> {
     serde_json::from_slice(&container::find(bytes, b"MANI")?.data).ok()
 }
 
+/// Most chunk and unreadable-span entries `verify` lists.
+const MAX_LISTED_CHUNKS: usize = 2000;
+
 /// A check of a .cdy file: every chunk's checksum and compression (each save's, the superseded
 /// ones too), the index and trailer, and whether the drawing reads without leaving anything out.
 /// `ok` is true only when all of that is sound. Errors when it isn't a .cdy file at all.
@@ -71,7 +74,8 @@ pub fn manifest(bytes: &[u8]) -> Option<serde_json::Value> {
 /// ```json
 /// {"ok", "format", "bytes", "index": "sound"|"damaged", "chunks": [{tag, version, offset, stored,
 ///  raw, deflated, live, damage?}], "unreadable": [[from, to]], "sizes": {TAG: {count, stored, raw}},
-///  "waste": bytes of superseded chunks, "notes": [what reading left out]}
+///  "chunksTotal": all chunks (only the first 2000 are listed), "trailing": bytes after the last
+///  complete save (null when none), "waste": bytes of superseded chunks, "notes": [what reading left out]}
 /// ```
 pub fn verify(bytes: &[u8]) -> std::result::Result<serde_json::Value, String> {
     use serde_json::{Map, json};
@@ -105,10 +109,15 @@ pub fn verify(bytes: &[u8]) -> std::result::Result<serde_json::Value, String> {
             c
         })
         .collect();
+    // A hostile file can list a million chunks: the report names the first ones (`sizes` counts all).
+    let chunks_total = chunks.len();
+    let chunks: Vec<_> = chunks.into_iter().take(MAX_LISTED_CHUNKS).collect();
     let notes = match model::read(bytes) {
         Ok((_, rep)) => rep.notes,
         Err(e) => vec![e],
     };
+    // Bytes after the last complete save: a file with something appended, whose own parts are sound.
+    let trailing = if index.is_none() { container::trailing_bytes(bytes) } else { None };
     let ok = index.is_some() && damaged == 0 && lost.is_empty() && notes.is_empty();
     Ok(json!({
         "ok": ok,
@@ -116,7 +125,11 @@ pub fn verify(bytes: &[u8]) -> std::result::Result<serde_json::Value, String> {
         "bytes": bytes.len(),
         "index": if index.is_some() { "sound" } else { "damaged" },
         "chunks": chunks,
-        "unreadable": lost,
+        "chunksTotal": chunks_total,
+        "unreadable": lost.iter().take(MAX_LISTED_CHUNKS).collect::<Vec<_>>(),
+        "trailing": trailing,
+        // Where a whole second copy of a file begins after the first one's end, if one does.
+        "appendedCopy": container::appended_copy(bytes),
         "sizes": sizes,
         "waste": waste,
         "notes": notes,

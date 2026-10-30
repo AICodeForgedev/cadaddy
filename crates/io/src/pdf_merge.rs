@@ -174,6 +174,31 @@ pub fn merge(parts: &[(Vec<u8>, String, String)]) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// The MediaBox size (width, height in points) of each page of PDF `bytes`, in page order (for
+/// tests and checks). A box inherited from the page tree counts.
+pub fn page_sizes(bytes: &[u8]) -> Result<Vec<(f64, f64)>> {
+    let d = Document::load_mem(bytes).map_err(|e| IoError::Format(e.to_string()))?;
+    let num = |o: &Object| o.as_float().map(f64::from).or_else(|_| o.as_i64().map(|i| i as f64)).ok();
+    let mut out = Vec::new();
+    for id in d.get_pages().into_values().take(MAX_PAGES) {
+        let mut at = Some(id);
+        let mut found = None;
+        for _ in 0..16 {
+            let Some(dict) = at.and_then(|i| d.get_dictionary(i).ok()) else { break };
+            if let Some(b) = dict.get(b"MediaBox").ok().and_then(|o| o.as_array().ok()) {
+                let v: Vec<f64> = b.iter().filter_map(num).collect();
+                if let [x0, y0, x1, y1] = v[..] {
+                    found = Some(((x1 - x0).abs(), (y1 - y0).abs()));
+                }
+                break;
+            }
+            at = dict.get(b"Parent").ok().and_then(|o| o.as_reference().ok());
+        }
+        out.push(found.ok_or_else(|| IoError::Format("a page has no MediaBox".into()))?);
+    }
+    Ok(out)
+}
+
 /// The bookmarks of PDF `bytes` as (title, depth, page number from 1), in order (for tests and
 /// checks).
 pub fn bookmarks(bytes: &[u8]) -> Result<Vec<(String, usize, usize)>> {

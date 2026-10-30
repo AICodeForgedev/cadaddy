@@ -104,10 +104,25 @@ pub use cadaddy_render as render;
 pub use cadaddy_walk3d as walk3d;
 pub use cmd::blocks::extract::EXTRACT_PROPERTIES;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
+pub use cmd::render::{cancel_pending, request_cancel};
 /// A shaded or 3D view of model space as a PNG (exports; see the function).
 pub use cmd::view::view3d::shaded_png;
 pub use cmd::{CommandInfo, CommandSpec, HelpPage, command_specs, commands_without_help, find_by_id_or_alias, find_command};
 pub use prompt::{Accept, Drag, Input, Interactive, LiveLabel, Picker, Prompt, Step};
+
+/// Most characters of typed input an error or the history repeats.
+const ECHO_CHARS: usize = 80;
+
+/// `text` as an error or the history repeats it: the first 80 characters, then `… (N chars)` when
+/// there are more (a 30 MB line typed as a command comes back as a short message, not 90 MB).
+pub fn clip_input(text: &str) -> String {
+    let n = text.chars().count();
+    if n <= ECHO_CHARS {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(ECHO_CHARS).collect();
+    format!("{head}\u{2026} ({n} chars)")
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -278,15 +293,19 @@ pub struct DocState {
     /// The Block Editor (BEDIT), when it is open: `doc` is then the editor's drawing, and the
     /// drawing itself waits in it ([`DocState::drawing`]).
     pub block_edit: Option<blockedit::BlockEdit>,
+    /// The test window (BTESTBLOCK), when it is open: `doc` is then a temporary copy of the
+    /// block in a drawing of its own, and the Block Editor waits in the state kept here.
+    pub block_test: Option<Box<DocState>>,
     /// The file at `path` holds what reading it left out (a DWG's unreadable objects, a cut-off
     /// DXF): what the user was told. Saving over that file asks first; cleared once it's saved.
     pub read_loss: Option<String>,
     /// The user was told that saving over the file would lose what reading left out: saving
     /// again overwrites it.
     pub loss_warned: bool,
-    /// Saving into DWG or DXF has checked what that file wouldn't keep of the drawing (and said
-    /// so, when anything): it is checked once per drawing.
-    pub kept_checked: bool,
+    /// The DWG/DXF targets (format, version, binary) whose save was checked for what that file
+    /// wouldn't keep of the drawing (and said so, when anything): each is checked once, and only
+    /// a check that succeeded is recorded.
+    pub kept_checked: Vec<cmd::file::KeptKey>,
     /// What the first DWG or DXF save of the drawing couldn't keep, feature by feature
     /// (`{path, format, losses}`), for the app to show once in a dialog; taken by the app.
     pub exchange_notice: Option<serde_json::Value>,
@@ -296,6 +315,9 @@ pub struct DocState {
     /// The .cdy file this drawing was last saved to or read from, and what it holds: the next
     /// save there appends only what changed ([`cmd::file::CdySaved`]).
     pub cdy_saved: Option<cmd::file::CdySaved>,
+    /// The DWG copy (DWGCOPY) this drawing last wrote: a file at that path is the drawing's own
+    /// to replace; any other `.dwg` there is kept as `.dwg.bak` first.
+    pub dwg_copy_written: Option<String>,
     /// The file at `path` as it was when the drawing was read from it or last saved there: a save
     /// refuses to overwrite a file something else changed since ([`cmd::file::DiskId`]).
     pub disk_id: Option<cmd::file::DiskId>,
@@ -383,16 +405,18 @@ impl DocState {
             binary_dxf: false,
             read_loss: None,
             loss_warned: false,
-            kept_checked: false,
+            kept_checked: Vec::new(),
             exchange_notice: None,
             kept_job: None,
             cdy_saved: None,
+            dwg_copy_written: None,
             disk_id: None,
             wallgen: None,
             model_record: None,
             last_revision: None,
             open_notes: Vec::new(),
             block_edit: None,
+            block_test: None,
             lightmap: None,
             lightmap_rev: 0,
             lightmap_tried: false,
@@ -649,6 +673,9 @@ pub struct Settings {
     pub gridmajor: u32,
     /// ZOOMFACTOR: how far one mouse wheel step zooms (3..=100).
     pub zoomfactor: u32,
+    /// MEASUREINIT: the units of a new drawing made without a template (NEW, QNEW and the first
+    /// drawing at startup): `false` (0, the default) imperial, `true` (1) metric.
+    pub measureinit: bool,
     /// -VIEW sEttings > Layer snapshot: named views save the layer settings with them.
     pub view_layer_snapshot: bool,
     pub dynmode: bool,
@@ -726,6 +753,9 @@ pub struct Settings {
     pub expert: u8,
     /// ATTDIA: 1 asks for attribute values in a dialog when inserting, 0 on the command line.
     pub attdia: u8,
+    /// PICKDRAG: false = two-click windows (0), true = clicks or dragging (2).
+    /// Drag-only mode (1) is not supported yet.
+    pub pickdrag: bool,
     /// PICKSTYLE: bit 1 picks whole selectable groups ([`cmd::groups`]), bit 2 associative hatches
     /// with their boundaries (stored, not used yet).
     pub pickstyle: u8,
@@ -807,6 +837,7 @@ impl Default for Settings {
             gridunit: Vec2::new(0.5, 0.5),
             gridmajor: 5,
             zoomfactor: 60,
+            measureinit: false,
             view_layer_snapshot: true,
             dynmode: true,
             dyndigrip: 31,
@@ -839,6 +870,7 @@ impl Default for Settings {
             cmdecho: 1,
             expert: 0,
             attdia: 0,
+            pickdrag: true,
             pickstyle: 1,
             groupdisplaymode: 2,
             objectisolationmode: 0,
@@ -1199,6 +1231,10 @@ pub struct Session {
     /// The deferred tangent/perpendicular snap under the cursor, if any (from the UI; lets the
     /// rubber band show the line it resolves to).
     pub cursor_deferred: Option<snap::Deferred>,
+    /// Whether Ctrl is held right now (from the UI, overwritten every frame). Commands that
+    /// change behavior on Ctrl — currently only ARC's "hold Ctrl to switch direction" — read
+    /// this instead of receiving modifiers through `Input`, which stays free of UI state.
+    pub ctrl_down: bool,
     /// Origin of the point currently being fed by `input_snapped`; never reused by typed points.
     picked_viewport: Option<snap::ViewportPoint>,
     /// The last drawing comparison (COMPARE), drawn over the drawing it was made for.
@@ -1355,6 +1391,7 @@ impl Session {
             point_mods: Vec::new(),
             cursor: Vec2::ZERO,
             cursor_deferred: None,
+            ctrl_down: false,
             picked_viewport: None,
             compare: None,
             tracking: snap::tracking::Tracker::default(),
@@ -1400,7 +1437,10 @@ impl Session {
         for st in &mut self.docs {
             let Some(done) = st.kept_job.as_ref().and_then(cmd::file::KeptJob::take) else { continue };
             st.kept_job = None;
-            if let Some((notice, line)) = done {
+            if done.succeeded && !st.kept_checked.contains(&done.key) {
+                st.kept_checked.push(done.key);
+            }
+            if let Some((notice, line)) = done.notice {
                 st.exchange_notice = Some(notice);
                 lines.push(line);
             }
@@ -1561,6 +1601,19 @@ impl Session {
         if d.annotative_by_style(&kind) {
             common.anno_scales = vec![d.current_anno_scale()].into();
         }
+        // Lines, arcs, circles, points, polylines and 2D solids take the current 3D thickness
+        // (THICKNESS). RECTANG sets its own, and text never takes it.
+        if matches!(
+            kind,
+            EntityKind::Line(_)
+                | EntityKind::Arc(_)
+                | EntityKind::Circle(_)
+                | EntityKind::Point(_)
+                | EntityKind::LwPolyline(_)
+                | EntityKind::Solid(_)
+        ) {
+            common.thickness = Some(d.header.f64("THICKNESS", 0.0)).filter(|t| t.is_finite()).unwrap_or(0.0);
+        }
         // DIMLAYER: new dimensions on their own layer (".": the current one).
         let dim_layer =
             matches!(kind, EntityKind::Dimension(_)).then(|| d.header.str("DIMLAYER", ".")).filter(|l| !l.trim().is_empty() && l.trim() != ".");
@@ -1597,10 +1650,18 @@ impl Session {
             return r;
         }
         let outer = self.journal.enter();
+        if outer && find_command(&cmd::resolve_alias(id)).is_some_and(|c| c.undoable) {
+            self.note_selection_gap();
+        }
         // A call from outside while a command runs (an agent's `engine.execute` while the user
         // is in TEXT): the command's work so far, the call's and the command's rest are undo
         // steps of their own, so U never takes the call's work away with the command's.
-        let uid = if outer && self.running.is_some() { self.split_running_undo() } else { None };
+        // A call that records no undo step of its own (queries, `document.list`, the MCP server's
+        // read after every tool call) splits nothing unless it changes the drawing: a typed
+        // command stays one undo step however many calls come between its inputs.
+        let lazy = outer && self.running.is_some() && find_command(&cmd::resolve_alias(id)).is_none_or(|c| !c.undoable && !c.restores_history);
+        let lazy_pre = if lazy { self.state().ok().map(|st| (st.uid, Arc::clone(&st.doc), st.selection.clone())) } else { None };
+        let uid = if outer && !lazy && self.running.is_some() { self.split_running_undo() } else { None };
         // An agent's or script's call of a command that edits the drawing sets off reactors, as
         // the same command typed does (`start`).
         let react = outer && find_command(id).is_some_and(|c| c.undoable);
@@ -1619,7 +1680,13 @@ impl Session {
         if let Some(uid) = uid {
             self.rebase_running(uid);
         }
+        if let Some(pre) = lazy_pre {
+            self.split_running_undo_after(id, pre);
+        }
         self.journal.leave();
+        if outer {
+            self.journal_selection();
+        }
         if react {
             let event = if r.is_ok() { lisp::reactor::CommandEvent::Ended } else { lisp::reactor::CommandEvent::Failed };
             self.lisp_command_event(event, id);
@@ -1657,6 +1724,30 @@ impl Session {
         }
         owner.before = Arc::clone(&st.doc);
         Some(st.uid)
+    }
+
+    /// [`Self::split_running_undo`] for a call that records no step of its own, decided after it
+    /// ran: `pre` is the drawing's uid, document and selection from before the call. A call that
+    /// left the drawing as it was splits nothing; one that changed it (the command's work so far
+    /// and the call's are steps of their own, as when the split comes first) does.
+    fn split_running_undo_after(&mut self, id: &str, pre: (u64, Arc<Drawing>, Vec<Handle>)) {
+        let (uid, doc, selection) = pre;
+        let Some(idx) = self.docs.iter().position(|d| d.uid == uid) else { return };
+        if self.docs.get(idx).is_none_or(|st| Arc::ptr_eq(&st.doc, &doc)) {
+            return;
+        }
+        let Some(owner) = self.suspended.as_ref().or(self.running.as_ref()) else { return };
+        let owner_spec = find_command(&owner.id);
+        let (label, before, sel_before) = (owner_spec.map_or("Command", |c| c.label), Arc::clone(&owner.before), owner.selection_before.clone());
+        let undoable = owner_spec.is_some_and(|c| c.undoable);
+        let call_label = find_command(&cmd::resolve_alias(id)).map_or("Command", |c| c.label);
+        let Some(st) = self.docs.get_mut(idx) else { return };
+        if undoable && !Arc::ptr_eq(&before, &doc) {
+            st.push_undo(Snapshot { label: label.to_string(), doc: Arc::clone(&before), selection: sel_before, bytes: 0 });
+        }
+        st.push_undo(Snapshot { label: call_label.to_string(), doc, selection, bytes: 0 });
+        st.revision += 1;
+        self.rebase_running(uid);
     }
 
     /// After a call from outside: the running command's step starts from the drawing the call
@@ -1801,19 +1892,56 @@ impl Session {
     pub fn start(&mut self, name: &str) -> Result<()> {
         let outer = self.journal.enter();
         if outer {
+            self.note_selection_gap();
             self.journal.started(name);
         }
         let r = self.start_inner(name);
         self.journal.leave();
-        if outer && self.running.is_none() {
-            // Done at once (or refused): nothing more of it to cancel.
-            self.journal.ended(r.is_ok());
+        if outer {
+            // Written now the commands it cancelled have ended; kept when it is running, or done
+            // at once, and left out when refused.
+            self.journal.start_over(r.is_ok(), self.open_commands());
+            self.journal_selection();
         }
         if outer && r.is_ok() {
             let id = self.running.as_ref().map_or_else(|| name.trim().to_ascii_lowercase(), |run| run.id.clone());
             self.event("command.started", serde_json::json!({ "command": id, "running": self.running.is_some() }));
         }
         r
+    }
+
+    /// Commands running, as the journal counts them: the running one and the one it interrupted.
+    fn open_commands(&self) -> usize {
+        usize::from(self.running.is_some()) + usize::from(self.suspended.is_some())
+    }
+
+    /// The selection in a form the journal compares: how many objects and the sum of their handles.
+    fn selection_print(&self) -> (usize, u64) {
+        self.state().map(|st| (st.selection.len(), st.selection.iter().fold(0u64, |a, h| a.wrapping_add(h.0)))).unwrap_or_default()
+    }
+
+    /// Before a command that may take the selection: objects selected since the last journaled
+    /// call (a click, a window) are a gap in the script, as picks are.
+    fn note_selection_gap(&mut self) {
+        let now = self.selection_print();
+        if self.journal.selection_differs(now) {
+            self.journal.gap("objects were selected outside a command");
+        }
+    }
+
+    /// The selection a journaled call left: what the script, replayed, leaves too.
+    fn journal_selection(&mut self) {
+        let now = self.selection_print();
+        self.journal.selection_left(now);
+    }
+
+    /// A command running was cancelled: its lines stay, ended by a cancel, when it changed the
+    /// drawing (Esc keeps what the command drew), else they go.
+    fn journal_cancel(&mut self, before: &Arc<cadaddy_doc::Drawing>) {
+        if self.journal.at_top() {
+            let changed = self.state().is_ok_and(|st| !Arc::ptr_eq(before, &st.doc));
+            self.journal.cancelled(changed);
+        }
     }
 
     fn start_inner(&mut self, name: &str) -> Result<()> {
@@ -1847,7 +1975,7 @@ impl Session {
                 self.start(if transparent { "'setvar" } else { "setvar" })?;
                 return self.input(Input::Text(var));
             }
-            return Err(EngineError::UnknownCommand(name.to_string()));
+            return Err(EngineError::UnknownCommand(clip_input(name)));
         };
         if transparent && spec.transparent && self.running.is_some() {
             // Transparent commands (zoom, pan…) run without cancelling the active one.
@@ -1900,6 +2028,16 @@ impl Session {
                 Ok(())
             }
             None => {
+                // Typed with nothing after it, a command with no prompts of its own asks for what
+                // it needs (DELAY: "Enter delay time (in milliseconds):").
+                if let Some(machine) = cmd::typed_ask::machine_for(spec.id) {
+                    let st = self.state()?;
+                    let (before, selection_before) = (st.doc.clone(), st.selection.clone());
+                    self.running = Some(Running { id: spec.id.to_string(), machine: guard::Guarded::wrap(machine), before, selection_before });
+                    self.pending_window = None;
+                    self.feed(None)?;
+                    return Ok(());
+                }
                 let r = self.execute(spec.id, &Value::Null);
                 let event = if r.is_ok() { lisp::reactor::CommandEvent::Ended } else { lisp::reactor::CommandEvent::Failed };
                 self.lisp_command_event(event, spec.id);
@@ -1961,8 +2099,13 @@ impl Session {
         {
             // Enter at `Command:` repeated the last command.
             self.journal.started(&id);
-        } else if outer && running && self.running.is_none() {
-            self.journal.ended(!matches!(input, Input::Cancel));
+            self.journal.start_over(true, self.open_commands());
+        } else if outer && running {
+            // Commands that finished keep their lines (a cancel was written by `feed`).
+            self.journal.settle(self.open_commands());
+        }
+        if outer {
+            self.journal_selection();
         }
         r
     }
@@ -2029,6 +2172,11 @@ impl Session {
         if self.select_mode.is_some() {
             return self.select_mode_input(input);
         }
+        // `_L`, `_ALL`, `_W`: the English name of a selection keyword, as scripts write it.
+        let input = match input {
+            Input::Text(t) => Input::Text(t.trim().strip_prefix('_').map(str::to_string).unwrap_or(t)),
+            other => other,
+        };
         if let Input::Text(t) | Input::Keyword(t) = &input
             && let Some(m) = select::SelectMode::from_keyword(t)
         {
@@ -2208,6 +2356,7 @@ impl Session {
             Ok(Step::Cancel) => {
                 self.multiple = None;
                 self.echo("*Cancel*");
+                self.journal_cancel(&run.before);
                 self.finish(run, true);
                 self.resume_suspended();
                 Ok(())
@@ -2374,6 +2523,7 @@ impl Session {
         if self.running.is_some() {
             if self.suspended.is_some() {
                 if let Some(nested) = self.running.take() {
+                    self.journal_cancel(&nested.before);
                     self.finish(nested, true);
                 }
                 self.running = self.suspended.take();
@@ -2382,6 +2532,12 @@ impl Session {
         } else {
             self.pending_window = None;
             self.set_selection(Vec::new());
+        }
+        if self.journal.at_top() {
+            self.journal.settle(self.open_commands());
+            if self.journal.is_outer() {
+                self.journal_selection();
+            }
         }
     }
 
@@ -2441,15 +2597,21 @@ impl Session {
         }
     }
 
-    /// Rubber-band preview entities for the cursor.
+    /// Preview entities for the cursor: objects drawn with their own properties
+    /// ([`Interactive::preview_objects`]), then the rubber band with the current properties, in
+    /// the grip blue over such objects (so it shows over their fills, whatever their colour).
     pub fn preview(&self, cursor: Vec2) -> Vec<Entity> {
-        let common = self.current_common();
-        let kinds = match (self.lisp_preview(cursor), &self.running) {
-            (Some(k), _) => k,
-            (None, Some(r)) => r.machine.preview(self, cursor),
-            (None, None) => Vec::new(),
+        let mut common = self.current_common();
+        let (kinds, mut out) = match (self.lisp_preview(cursor), &self.running) {
+            (Some(k), _) => (k, Vec::new()),
+            (None, Some(r)) => (r.machine.preview(self, cursor), r.machine.preview_objects(self, cursor)),
+            (None, None) => (Vec::new(), Vec::new()),
         };
-        kinds.into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }).collect()
+        if !out.is_empty() {
+            common.color = cadaddy_doc::color::Color::True(cadaddy_doc::color::Rgb(0x2f, 0x6b, 0xff));
+        }
+        out.extend(kinds.into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }));
+        out
     }
 
     /// The active command's live measurement labels for the cursor (MEASURELABELS; see
@@ -2526,6 +2688,9 @@ impl Session {
             let (tok, more) = next_token(rest);
             if self.running.is_some() || self.lisp_prompt().is_some() {
                 self.typed(tok)?;
+            } else if tok.trim() == journal::CANCEL {
+                // Esc with no command running clears the selection.
+                self.cancel();
             } else if tok.trim().is_empty() {
                 self.input(Input::Enter)?;
             } else if lisp_expression(tok) {
@@ -2546,6 +2711,10 @@ impl Session {
 
     /// One token typed while a command runs.
     fn typed(&mut self, t: &str) -> Result<()> {
+        // The cancel a saved session script ends a command with ([`journal::CANCEL`]).
+        if t.trim() == journal::CANCEL && self.current_prompt().is_some() {
+            return self.input(Input::Cancel);
+        }
         let Some(prompt) = self.current_prompt() else { return Ok(()) };
         let tt = t.trim();
         if tt.is_empty() {
@@ -2588,8 +2757,9 @@ impl Session {
         // At "Select objects" prompts the selection modes (Previous, Last, ALL) win over a keyword
         // they only begin (HATCH's "picK internal point" against `P`); a keyword typed whole or
         // by its shortcut wins (COUNT's `L` is List, as in AutoCAD).
-        let selection_mode =
-            prompt.accept.select && matches!(tt.to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous") && !prompt.exact_keyword(tt);
+        let selection_mode = prompt.accept.select
+            && matches!(tt.strip_prefix('_').unwrap_or(tt).to_ascii_lowercase().as_str(), "all" | "l" | "last" | "p" | "previous")
+            && !prompt.exact_keyword(tt);
         // A leading underscore asks for a keyword by its English name, whatever the interface
         // language (`_M`, `_Yes`): scripts and LISP routines write them that way. (Snap
         // overrides such as `_cen` were taken above.)
@@ -2758,7 +2928,7 @@ impl Session {
     /// command running, or a command asking for objects. Returns whether a window was opened.
     pub fn begin_window(&mut self, corner: Vec2) -> bool {
         let during_command = self.running.is_some();
-        if !corner.is_finite() || (during_command && !self.current_prompt().is_some_and(|p| p.accept.select)) {
+        if !self.settings.pickdrag || !corner.is_finite() || (during_command && !self.current_prompt().is_some_and(|p| p.accept.select)) {
             return false;
         }
         self.pending_window = Some(PendingWindow { corner, during_command });

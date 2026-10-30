@@ -19,6 +19,10 @@ enum Mode {
     Radius,
     Angle,
     Area,
+    /// Volume: the Area points, then a height (a number, or two points whose distance is it).
+    Volume,
+    /// Volume's height prompt, the base polygon taken.
+    VolumeHeight,
     Quick,
 }
 
@@ -28,14 +32,21 @@ pub(super) struct MeasureM {
     points: Vec<Vec2>,
     /// One measurement and done (the Angle tool: MEASUREGEOM's Angle on its own).
     once: bool,
+    /// Volume: the polygon taken, and the first point of a height given by two points.
+    base: Vec<Vec2>,
+    height_from: Option<Vec2>,
 }
 
-const OPTIONS: &[&str] = &["Distance", "Radius", "Angle", "ARea", "Quick", "eXit"];
+const OPTIONS: &[&str] = &["Distance", "Radius", "Angle", "ARea", "Volume", "Quick", "eXit"];
 
 impl MeasureM {
     /// The Angle tool: the angle at a vertex between two points, then done.
     pub(super) fn angle() -> Self {
         Self { mode: Mode::Angle, once: true, ..Default::default() }
+    }
+    /// The Volume tool: the volume of a polygon times a height, then done.
+    pub(super) fn volume() -> Self {
+        Self { mode: Mode::Volume, once: true, ..Default::default() }
     }
     /// Run the measurement, echo its result and keep its labels (MEASURELABELS 2); back to the
     /// option prompt.
@@ -75,7 +86,13 @@ impl Interactive for MeasureM {
             ),
             Mode::Area if n == 0 => Prompt::new("Specify first corner point", Accept::POINT),
             Mode::Area => Prompt::new("Specify next point or press Enter to total", Accept::POINT).base_opt(last),
-            Mode::Quick => Prompt::new("Move cursor or", Accept::POINT).kw(&["Distance", "Radius", "Angle", "ARea", "eXit"]).default("eXit"),
+            Mode::Volume if n == 0 => Prompt::new("Specify first corner point", Accept::POINT),
+            Mode::Volume => Prompt::new("Specify next point or press Enter to total", Accept::POINT).base_opt(last),
+            Mode::VolumeHeight if self.height_from.is_none() => Prompt::new("Specify height", Accept::POINT_OR_NUMBER),
+            Mode::VolumeHeight => Prompt::new("Specify second point of the height", Accept::POINT).base_opt(self.height_from),
+            Mode::Quick => {
+                Prompt::new("Move cursor or", Accept::POINT).kw(&["Distance", "Radius", "Angle", "ARea", "Volume", "eXit"]).default("eXit")
+            }
         }
     }
 
@@ -94,6 +111,7 @@ impl Interactive for MeasureM {
                 "r" | "radius" => Mode::Radius,
                 "a" | "angle" => Mode::Angle,
                 "ar" | "area" => Mode::Area,
+                "v" | "volume" => Mode::Volume,
                 "q" | "quick" => Mode::Quick,
                 "x" | "exit" => return Ok(Step::Done),
                 _ => {
@@ -102,6 +120,38 @@ impl Interactive for MeasureM {
                 }
             };
             return Ok(Step::Continue);
+        }
+        if self.mode == Mode::VolumeHeight {
+            let height = match &i {
+                Input::Enter => {
+                    s.echo("A height is required.");
+                    return Ok(Step::Continue);
+                }
+                Input::Point(p) => match self.height_from.take() {
+                    None => {
+                        self.height_from = Some(*p);
+                        return Ok(Step::Continue);
+                    }
+                    Some(a) => a.dist(*p),
+                },
+                Input::Text(_) | Input::Keyword(_) if self.height_from.is_some() => {
+                    s.echo("The second point of the height needs a point.");
+                    return Ok(Step::Continue);
+                }
+                Input::Text(t) | Input::Keyword(t) => match super::machines::number(t).filter(|v| v.is_finite()) {
+                    Some(h) => h,
+                    None => {
+                        s.echo("Requires a number or a point.");
+                        return Ok(Step::Continue);
+                    }
+                },
+                _ => return Ok(Step::Continue),
+            };
+            let pts: Vec<[f64; 2]> = self.base.iter().map(|p| [p.x, p.y]).collect();
+            self.height_from = None;
+            let r = self.show(s, "volume.measure", json!({ "points": pts, "height": height }), &[]);
+            self.base.clear();
+            return r;
         }
         if self.mode == Mode::Quick {
             return Ok(match i {
@@ -138,6 +188,11 @@ impl Interactive for MeasureM {
                     _ => Ok(Step::Continue),
                 }
             }
+            (Mode::Volume, Input::Enter) if self.points.len() >= 3 => {
+                self.base = std::mem::take(&mut self.points);
+                self.mode = Mode::VolumeHeight;
+                Ok(Step::Continue)
+            }
             (Mode::Area, Input::Enter) if self.points.len() >= 3 => {
                 let labels = live::area(s, &self.points, &[], None);
                 let pts = self.pts();
@@ -166,7 +221,7 @@ impl Interactive for MeasureM {
             }
             (Mode::Distance | Mode::Angle, &[a]) => vec![line(a, cursor)],
             (Mode::Angle, &[v, a]) => vec![line(v, a), line(v, cursor)],
-            (Mode::Area, [_, ..]) => {
+            (Mode::Area | Mode::Volume, [_, ..]) => {
                 let vertices = self.points.iter().chain([&cursor]).map(|p| cadaddy_geom::PolyVertex::new(*p)).collect();
                 vec![super::helpers::lwpoly(vertices, true)]
             }
@@ -182,7 +237,7 @@ impl Interactive for MeasureM {
             }
             (Mode::Distance, &[a]) => vec![live::distance(s, a, cursor, 1.0)],
             (Mode::Angle, &[v, a]) => live::angle(s, v, a, cursor),
-            (Mode::Area, [_, ..]) => {
+            (Mode::Area | Mode::Volume, [_, ..]) => {
                 let pts: Vec<Vec2> = self.points.iter().copied().chain([cursor]).collect();
                 live::area(s, &pts, &[], None)
             }

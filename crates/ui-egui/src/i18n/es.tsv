@@ -1,6 +1,6 @@
-# CADCraft Spanish interface catalog — original translations.
+# CADaddy Spanish interface catalog — original translations.
 # License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
-# Written from CADCraft's English strings; no proprietary translations were copied.
+# Written from CADaddy's English strings; no proprietary translations were copied.
 # UTF-8: context<TAB>English source<TAB>Spanish translation.
 # Empty context = ordinary label; @plural = one|other forms with {n}.
 # Command IDs, typed keywords, technology/product names and user data stay unchanged.
@@ -87,6 +87,7 @@
 	Blend	Fusión de curvas
 	Block	Bloque
 	Block Attribute Manager...	Administrador de atributos de bloque...
+	Block Description...	Descripción de bloque...
 	Block Editor	Editor de bloques
 	Block Reference	Referencia de bloque
 	Block...	Bloque...
@@ -140,6 +141,7 @@
 	Close All Other Drawings	Cerrar todos los demás dibujos
 	Close Array Editing	Cerrar la edición de matriz
 	Close Comparison	Cerrar comparación
+	Export Comparison	Exportar comparación
 	Closed	Cerrada
 	Coincident	Coincidente
 	Collapse Palettes	Contraer paletas
@@ -565,6 +567,7 @@
 	N	N
 	Name	Nombre
 	Name (A–Z)	Nombre (A–Z)
+	Named Viewports...	Ventanas gráficas con nombre...
 	Named Views...	Vistas con nombre...
 	Nearest	Cercano
 	New	Nuevo
@@ -3274,3 +3277,12 @@
 	Clash Navigate	Navegar por conflictos
 	Colour By Status/Level	Color por estado/nivel
 	Inspect Element	Inspeccionar elemento
+	Analyze Shapes	Analizar formas
+	Planned Walls	Muros planificados
+	Extended Trim	Recorte ampliado
+	Trim and Extend	Recortar y alargar
+	Trim to Block Objects	Recortar a objetos de bloque
+	Extend to Block Objects	Alargar a objetos de bloque
+	Super Hatch	Supersombreado
+	Block Authoring Palettes	Paletas de creación de bloques
+	Test Block	Probar bloque

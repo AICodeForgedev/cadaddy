@@ -456,8 +456,17 @@ impl Backend for Headless {
             "drawing.inspect" | "document.inspect" => s.execute("drawing.inspect", &p).map_err(|e| e.to_string()),
             "drawing.summary" | "drawing.query" => s.execute(method, &p).map_err(|e| e.to_string()),
             "ui.render" => {
-                let w = p.get("width").and_then(Value::as_f64).unwrap_or(1600.0).clamp(16.0, 8192.0) as u32;
-                let h = p.get("height").and_then(Value::as_f64).unwrap_or(1000.0).clamp(16.0, 8192.0) as u32;
+                let side = |k: &str, d: f64| -> Result<u32, String> {
+                    match p.get(k) {
+                        None | Some(Value::Null) => Ok(d as u32),
+                        Some(v) => v
+                            .as_f64()
+                            .filter(|x| x.is_finite() && (16.0..=8192.0).contains(x))
+                            .map(|x| x as u32)
+                            .ok_or_else(|| format!("`{k}` is 16 to 8192 pixels")),
+                    }
+                };
+                let (w, h) = (side("width", 1600.0)?, side("height", 1000.0)?);
                 let st = s.state().map_err(|e| e.to_string())?;
                 let window = render_window(&p);
                 let opts = cadaddy_render::Options { view: window, transparency: s.settings.transparency_display, ..Default::default() };

@@ -3,7 +3,6 @@
 //! drawn from CADaddy's own geometry ([`cadaddy_engine::doc::symbol_prims`]). OK places a new frame
 //! (TOLERANCE asks for the location) or changes the frame being edited (TOLERANCE.EDIT).
 
-use cadaddy_engine::Input;
 use cadaddy_engine::doc::{GdtDatum, GdtFrame, GdtLine, GdtPrim, GdtSymbol, GdtTol, Handle};
 use egui::{Color32, Pos2, Rect, Sense, Stroke, vec2};
 use serde_json::json;
@@ -164,8 +163,14 @@ pub fn apply(app: &mut CadApp, d: &ToleranceDialog) -> Result<(), String> {
     match d.edit {
         Some(h) => app.run("tolerance.edit", json!({ "handle": h.hex(), "text": text })).map(|_| ()),
         None => {
-            app.session.start("tolerance").map_err(|e| e.to_string())?;
-            app.session.input(Input::Text(text)).map_err(|e| e.to_string())
+            cadaddy_engine::cmd::tolerance::start_with_frame(&mut app.session, &text).map_err(|e| e.to_string())?;
+            match app.session.current_prompt().map(|p| p.display()).as_deref() {
+                Some("Enter tolerance location:") => Ok(()),
+                _ => {
+                    app.session.cancel();
+                    Err("TOLERANCE did not reach the location prompt.".into())
+                }
+            }
         }
     }
 }
@@ -331,6 +336,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cadaddy_engine::Input;
 
     #[test]
     fn fields_and_frame_strings_go_both_ways() {
@@ -372,5 +378,44 @@ mod tests {
         assert!(t.text.contains("0.2") && (t.insert.x, t.insert.y) == (2.0, 3.0), "{t:?}");
         // An empty frame is refused.
         assert!(apply(&mut app, &ToleranceDialog::default()).is_err());
+    }
+
+    fn place_from_dialog(set: impl Fn(&mut ToleranceDialog)) -> (String, cadaddy_engine::doc::Tolerance, usize) {
+        let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+        open_new(&mut app);
+        let mut d = app.tol_dlg.clone().unwrap();
+        assert!(d.lines[0].symbol.is_none() || d.lines[0].symbol == Some(GdtSymbol::Position));
+        d.lines[0].symbol = None;
+        set(&mut d);
+        apply(&mut app, &d).unwrap();
+        let prompt = app.session.current_prompt().map(|p| p.display()).unwrap();
+        app.session.input(Input::Point(cadaddy_engine::doc::geom::Vec2::new(2.0, 3.0))).unwrap();
+        let doc = app.session.doc().unwrap();
+        let n = doc.model.iter().count();
+        let cadaddy_engine::doc::EntityKind::Tolerance(t) = &doc.model.iter().last().unwrap().kind else { panic!() };
+        (prompt, t.clone(), n)
+    }
+
+    #[test]
+    fn a_datum_identifier_only_frame_places_from_the_dialog() {
+        let (prompt, t, n) = place_from_dialog(|d| d.datum_id = "A".into());
+        assert_eq!(prompt, "Enter tolerance location:");
+        assert_eq!(n, 1);
+        let f = cadaddy_engine::cmd::tolerance::frame_from_text(&t.text);
+        assert_eq!(f.datum_id, "A");
+        assert!(f.lines.is_empty(), "{f:?}");
+    }
+
+    #[test]
+    fn a_projected_height_only_frame_places_from_the_dialog() {
+        let (prompt, t, n) = place_from_dialog(|d| {
+            d.height = "5".into();
+            d.projected = true;
+        });
+        assert_eq!(prompt, "Enter tolerance location:");
+        assert_eq!(n, 1);
+        let f = cadaddy_engine::cmd::tolerance::frame_from_text(&t.text);
+        assert!(f.projected && f.height == "5", "{f:?}");
+        assert!(f.lines.is_empty(), "{f:?}");
     }
 }

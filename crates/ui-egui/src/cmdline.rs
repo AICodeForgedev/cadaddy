@@ -430,6 +430,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
 }
 
 pub fn submit(app: &mut CadApp) {
+    app.cmd.preedit.clear();
     // Grip dimensional input: the typed lengths and angles place the grip.
     if crate::grip_dyn::submit(app) {
         return;
@@ -1203,6 +1204,28 @@ mod autocomplete_tests {
         app.cmd.buffer = "wal".into();
         assert!(current_suggestions(&app).is_empty());
         app.session.cancel();
+    }
+
+    #[test]
+    fn a_dimension_style_prompt_completes_dimension_styles_not_text_styles() {
+        let mut app = app();
+        app.run("style", serde_json::json!({ "name": "Arial" })).unwrap();
+        app.run("dimstyle", serde_json::json!({ "name": "Arch" })).unwrap();
+        app.cmdline("-dimstyle");
+        app.cmdline("Restore");
+        assert!(app.session.prompt_text().contains("dimension style name"), "{}", app.session.prompt_text());
+        app.cmd.buffer = "ar".into();
+        // Mid-string search also finds the default "Standard"; the text style "Arial" never shows.
+        let ids: Vec<String> = current_suggestions(&app).into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["Arch", "Standard"]);
+        app.run("ui.autocomplete", serde_json::json!({ "toggle": "midString" })).unwrap();
+        let ids: Vec<String> = current_suggestions(&app).into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["Arch"]);
+        tab(&mut app);
+        assert_eq!(app.cmd.buffer, "Arch");
+        submit(&mut app);
+        app.cmdline("");
+        assert_eq!(app.session.doc().unwrap().header.str("DIMSTYLE", ""), "Arch");
     }
 
     #[test]

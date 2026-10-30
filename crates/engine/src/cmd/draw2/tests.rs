@@ -121,6 +121,28 @@ fn arc_continue_from_last_line() {
     assert!(near(as_arc(&last(&s)).center, 0.0, 1.0));
 }
 
+#[test]
+fn arc_continue_from_last_picked_end_of_three_point_arc() {
+    // (picked points, end of the continuation, its center): both arcs leave their last
+    // picked point heading -Y, so the continuation is a quarter turn on that side.
+    let cases = [
+        // Clockwise: stored CCW, the last picked point (2,0) is the arc's start.
+        ("arc 0,0 1,1 2,0", "3,-1", (3.0, 0.0)),
+        // Counter-clockwise: the last picked point (0,0) is the arc's end.
+        ("arc 2,0 1,1 0,0", "-1,-1", (-1.0, 0.0)),
+    ];
+    for (draw, end, center) in cases {
+        let mut s = Session::new();
+        s.cmdline(draw).unwrap();
+        s.cmdline("arc").unwrap();
+        s.cmdline("").unwrap();
+        s.cmdline(end).unwrap();
+        let a = as_arc(&last(&s));
+        assert!(near(a.center, center.0, center.1), "{draw}: {a:?}");
+        assert!((a.sweep() - std::f64::consts::FRAC_PI_2).abs() < 1e-6, "{draw}: reversed tangent {a:?}");
+    }
+}
+
 // ---------------- CIRCLE ----------------
 
 #[test]
@@ -326,7 +348,9 @@ fn revcloud_json() {
     s.execute("revcloud", &json!({"handle": c, "arcLength": 0.5})).unwrap();
     assert_eq!(s.doc().unwrap().model.len(), n, "the circle is replaced");
     assert!(s.execute("revcloud", &json!({"points": [[0, 0], [1, 1], [2, 2]]})).is_err());
-    assert!(s.execute("revcloud", &json!({"p1": [0, 0], "p2": [1e300, 1e300], "arcLength": 1e-300})).is_ok());
+    // Hostile sizes end without a hang or a panic: refused, as the cloud would lie beyond the export limit.
+    let e = s.execute("revcloud", &json!({"p1": [0, 0], "p2": [1e300, 1e300], "arcLength": 1e-300}));
+    assert!(e.is_ok() || e.unwrap_err().to_string().contains("too large"));
 }
 
 #[test]

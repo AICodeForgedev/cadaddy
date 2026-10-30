@@ -124,6 +124,11 @@ pub(crate) fn assoc_default(s: &Session) -> bool {
 /// takes their place. Returns that reference.
 pub(crate) fn make_assoc(s: &mut Session, objs: &[Handle], base: Vec2, mut p: ArrayParams) -> Result<Handle> {
     let d = s.doc()?;
+    if super::clip_partners::has_viewport_or_boundary(d, objs) {
+        return Err(other(
+            "A viewport and its clip boundary can't be part of an associative array (they would be split); pass associative: false to array them as separate copies.",
+        ));
+    }
     let objs: Vec<Handle> = objs.iter().copied().filter(|h| !super::curves::is_locked(s, *h)).collect();
     let ents: Vec<Entity> = objs.iter().filter_map(|h| d.entity(*h).map(|e| (**e).clone())).collect();
     if ents.is_empty() {
@@ -332,16 +337,16 @@ fn run_array(s: &mut Session, p: &Value) -> Result<Value> {
     (spec.run)(s, p)
 }
 
-/// A count parameter (at least 1).
-fn count_or(p: &Value, key: &str, default: u64) -> u64 {
-    p.get(key).and_then(Value::as_u64).unwrap_or(default).max(1)
+/// A count parameter: a whole number of 1 or more (`default` when absent).
+fn count_or(cmd: &str, p: &Value, key: &str, default: u64) -> Result<u64> {
+    Ok(count_param(cmd, p, key, 1, u64::MAX)?.unwrap_or(default))
 }
 
 fn run_arrayrect(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
-    let rows = count_or(p, "rows", 3);
-    let cols = count_or(p, "cols", 4);
-    let levels = count_or(p, "levels", 1);
+    let rows = count_or("arrayrect", p, "rows", 3)?;
+    let cols = count_or("arrayrect", p, "cols", 4)?;
+    let levels = count_or("arrayrect", p, "levels", 1)?;
     check_size(s, rows.saturating_mul(cols).saturating_mul(levels), hs.len())?;
     let kind = ArrayKind::Rect(RectArray {
         cols: count32(cols),
@@ -364,9 +369,9 @@ fn run_arrayrect(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_arraypolar(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let c = point_req("arraypolar", p, "center")?;
-    let n = count_or(p, "count", 6);
-    let rows = count_or(p, "rows", 1);
-    let levels = count_or(p, "levels", 1);
+    let n = count_or("arraypolar", p, "count", 6)?;
+    let rows = count_or("arraypolar", p, "rows", 1)?;
+    let levels = count_or("arraypolar", p, "levels", 1)?;
     check_size(s, n.saturating_mul(rows).saturating_mul(levels), hs.len())?;
     let base = point_param(p, "base").or_else(|| s.doc().ok().and_then(|d| first_center(d, &hs))).unwrap_or(c);
     let row_spacing = f64_or(p, "rowSpacing", 1.0);

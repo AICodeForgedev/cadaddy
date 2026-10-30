@@ -98,11 +98,15 @@ object.
 |-----|-------|----------|
 | `MANI` | the manifest: `format`, `writer` (e.g. `CADaddy 0.7.7`), `insunits`, `measurement`, `extents` (`[minx, miny, maxx, maxy]` of model space or null), `objects`, `blocks`, `layouts` (names), `thumbnail` (the tag of the preview chunk or null) | JSON text, the first chunk |
 | `HEAD` | the header variables | value tree |
-| `TABL` | a record of `layers`, `linetypes`, `textStyles`, `dimStyles`, `mleaderStyles`, `tableStyles`, `mlineStyles`, `views`, `vports`, `ucss`, `layerStates`, `groups`, `plotStyleTables`, `constraints`, `parametric`, `scales`, `handseed`, `hiddenSaved`, `hidden` (handles) | value tree |
+| `TABL` | a record of `layers`, `linetypes`, `textStyles`, `dimStyles`, `mleaderStyles`, `tableStyles`, `mlineStyles`, `views`, `vports`, `ucss`, `layerStates`, `groups`, `plotStyleTables`, `constraints`, `parametric`, `scales`, `handseed`, `hiddenSaved`, `hidden` (handles), and the smaller records: `layerFilters`, `materials`, `sun`, `plotStamp`, `properties`, `geo`, `fieldValues`, `keptHandles`, `shapeFiles`, `activeLayout` | value tree |
 | `BLKS` | a list of block definitions, each `[name, block, objects]`; a writer puts one per chunk | value tree |
 | `ENTS` | model space objects in draw order, one chunk of the drawing's object store (up to 1024) each; as many chunks as needed | value tree |
 | `LAYO` | one layout: `[layout, objects]` (its paper space objects) | value tree |
 | `FRGN` | data from other programs kept without modelling it: `classes`, `objects` (`[handle, type, groups]`), `dictionary`, `entities` and `records` (extension dictionaries, reactors, xdata, colour books, properties), `targets`, `dataStore` | value tree |
+| `BSPC` `TOUR` `BCFI` `SCH4` `PRTS` `OVRD` `AGNT` `IMCK` | text parts, one chunk each, present only when the drawing has one: the building spec, camera tours, BCF issues, 4D schedule, parametric parts, overrides, agent notes, import check results | JSON text |
+| `BIMT` | the BIM element types (type marks with their spec records and sources); absent without types | JSON text, validated on read like the DXF reader |
+| `PRUL` | the project rules (values with source tier, precedence and provenance); absent without rules | JSON text, validated on read like the DXF reader |
+| `EMBD` | one embedded file: name length u32 · name · bytes | raw |
 | `THMB` | a PNG preview of model space (256 × 192) | raw PNG, stored uncompressed |
 
 Each record's fields are those of the model type it mirrors, named in camelCase. Objects carry their handle, common
@@ -141,3 +145,4 @@ present, i.e. the previous complete save.
 |------|--------|
 | 2026-10-18 | Version 1. |
 | 2026-10-18 | Incremental saves (append, last complete index wins); one block per `BLKS` chunk, one store chunk per `ENTS` chunk. Readers of version 1 read these files unchanged. |
+| 2026-10-30 | New text chunks `BIMT` and `PRUL` (BIM types, project rules) and an `activeLayout` key in `TABL`. Older readers skip the chunks and ignore the key. The text chunk types are one table in the code shared by the writer, the incremental save and the reader. |

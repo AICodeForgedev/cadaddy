@@ -1,6 +1,6 @@
-# CADCraft Russian interface catalog — original translations by @pechnikov2026-star.
+# CADaddy Russian interface catalog — original translations by @pechnikov2026-star.
 # License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
-# Written from CADCraft's English strings; no proprietary translations were copied.
+# Written from CADaddy's English strings; no proprietary translations were copied.
 # UTF-8: context<TAB>English source<TAB>Russian translation.
 # Empty context = ordinary label; @plural = one|few|many forms with {n}.
 # Command IDs, typed keywords, technology/product names and user data stay unchanged.
@@ -68,6 +68,7 @@
 	Blend	Сгладить
 	Block	Блок
 	Block Attribute Manager...	Диспетчер атрибутов блоков...
+	Block Description...	Описание блока...
 	Block Editor	Редактор блоков
 	Block Reference	Вхождение блока
 	Block...	Блок...
@@ -454,6 +455,7 @@
 	N	С
 	Name	Название
 	Name (A–Z)	Название (А–Я)
+	Named Viewports...	Именованные видовые экраны...
 	Nearest	Ближайшая точка
 	New	Создать
 	New (metric)	Создать (метрический)
@@ -3057,3 +3059,12 @@
 	Clash Navigate	Переход по коллизиям
 	Colour By Status/Level	Цвет по статусу/уровню
 	Inspect Element	Просмотреть элемент
+	Analyze Shapes	Анализ фигур
+	Planned Walls	Планируемые стены
+	Extended Trim	Расширенное обрезание
+	Trim and Extend	Обрезать и удлинить
+	Trim to Block Objects	Обрезать по объектам блока
+	Extend to Block Objects	Удлинить до объектов блока
+	Super Hatch	Суперштриховка
+	Block Authoring Palettes	Палитры создания блоков
+	Test Block	Проверить блок

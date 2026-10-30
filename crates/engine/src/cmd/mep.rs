@@ -31,6 +31,64 @@ const MAX_RUNS: usize = 20_000;
 const MAX_SEGS: usize = 200_000;
 /// The next floor's slab depth under its level, feet (as WALLGEN builds it).
 const SLAB_FT: f64 = 0.5;
+/// How far above its level's ceiling a run sits at least, feet.
+const PLENUM_CLEAR_FT: f64 = 0.25;
+
+/// Seat the runs whose height the drawings don't give (a default, an estimated route) in their
+/// level's plenum: above its ceiling ([`PLENUM_CLEAR_FT`]) and under the slab of the floor above
+/// ([`SLAB_FT`]), as high as they fit. One too deep for the plenum sits just above the ceiling
+/// (model.clashes reports it into the structure); a run the drawings give a height, a riser and
+/// the roof's keep theirs. An air terminal above its level's ceiling comes down into it (a
+/// diffuser is in the ceiling, not over it). How many runs and terminals moved.
+pub(crate) fn seat_in_plenum(sp: &mut BuildingSpec) -> usize {
+    let plenum: Vec<Option<(f64, f64)>> = sp
+        .mep
+        .runs
+        .iter()
+        .map(|r| {
+            let l = sp.level(&r.level).filter(|l| !super::wallgen::roof_level(&sp.levels, &l.name))?;
+            (l.ceiling_ft.is_finite() && l.height_ft.is_finite() && l.height_ft > l.ceiling_ft).then_some((l.ceiling_ft, l.height_ft))
+        })
+        .collect();
+    let mut moved = 0;
+    for (r, p) in sp.mep.runs.iter_mut().zip(plenum) {
+        let Some((ceiling, height)) = p else { continue };
+        if r.top_ft.is_some() || !matches!(r.height_source.trim().replace(' ', "-").as_str(), "" | "default" | "estimated-route") {
+            continue;
+        }
+        let depth = if r.size_in[1] > 0.0 { r.size_in[1] } else { r.size_in[0] }.max(0.0) / 12.0;
+        let low = ceiling + PLENUM_CLEAR_FT;
+        let high = (height - SLAB_FT - depth).max(low);
+        let mut changed = false;
+        for b in r.bottoms_ft.iter_mut().filter(|b| b.is_finite()) {
+            let seated = b.clamp(low, high);
+            if (seated - *b).abs() > 1e-9 {
+                *b = seated;
+                changed = true;
+            }
+        }
+        moved += usize::from(changed);
+    }
+    let ceilings: Vec<Option<f64>> = sp
+        .mep
+        .terminals
+        .iter()
+        .map(|t| {
+            let l = sp.level(&t.level).filter(|l| !super::wallgen::roof_level(&sp.levels, &l.name))?;
+            (l.ceiling_ft.is_finite() && l.ceiling_ft > 0.0).then_some(l.ceiling_ft)
+        })
+        .collect();
+    for (t, c) in sp.mep.terminals.iter_mut().zip(ceilings) {
+        if let Some(c) = c
+            && t.bottom_ft.is_finite()
+            && t.bottom_ft > c + 1e-9
+        {
+            t.bottom_ft = c;
+            moved += 1;
+        }
+    }
+    moved
+}
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -38,7 +96,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{level?: name (default every level), apply?: bool (systems and runs into the spec, replacing those levels' runs)} → {systems: [{name, layer, kind, size_in, bottom_ft}], runs: [{system, level, points, size_in, bottoms_ft, objects}]}",
         ),
         CommandSpec::new("model.clashes", "Model Clashes", run_clashes)
-            .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2), same_trade?: bool (built walls overlapping each other; default true), max_clashes?: count of clashes listed (5000, at most 50000)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|reference|walls_overlap (category same_trade), message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total (all found, even past the cap), truncated (the list was cut at max_clashes), gone?: [earlier clashes no longer found]}")
+            .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2), same_trade?: bool (built walls overlapping each other; default true), max_clashes?: count of clashes listed (5000, at most 50000)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|hoistway (through an elevator shaft)|reference|walls_overlap (category same_trade), message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total (all found, even past the cap), truncated (the list was cut at max_clashes), gone?: [earlier clashes no longer found]}")
             .noundo(),
         CommandSpec::new("mep.list", "List MEP Items", run_list)
             .params("{level?: name, system?: name, guessed_only?: bool, cursor?: offset (0), limit?: count (50, max 200)} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed, edited_by}], systems: [...], total, next_cursor?}")
@@ -2157,6 +2215,17 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
+    // Through an elevator hoistway: the shaft is closed floor to roof, nothing runs through it.
+    for r in sp.mep.runs.iter().take(MAX_RUNS) {
+        let Some(shaft) = super::guided::hoistway_crossed(r, &sp.circulation, upf) else { continue };
+        let n = shaft.rects.len().max(1) as f64;
+        let mid = shaft.rects.iter().fold([0.0, 0.0], |m, [a, b]| [m[0] + (a[0] + b[0]) / 2.0 / n, m[1] + (a[1] + b[1]) / 2.0 / n]);
+        out.push(json!({
+            "kind": "hoistway", "systems": [r.system], "level": r.level,
+            "message": format!("{} runs through the elevator hoistway ({})", r.system, shaft.name),
+            "at": [r6(mid[0]), r6(mid[1])], "by_in": 0.0, "handles": handles(r),
+        }));
+    }
     // Into the objects of attached IFC models (architecture, structure from other programs), in
     // building coordinates: each level's plan base taken off.
     if p.get("references").and_then(Value::as_bool).unwrap_or(true) && !super::ifcref::ref_names(d).is_empty() {
@@ -2338,6 +2407,48 @@ fn closest_mid(a: Vec2, b: Vec2, c: Vec2, e: Vec2) -> Vec2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runs_with_no_height_of_their_own_sit_in_their_levels_plenum() {
+        let run = |level: &str, size: [f64; 2], source: &str| -> MepRun {
+            serde_json::from_value(json!({"system": "SA", "level": level, "points": [[0, 0], [100, 0]], "size_in": size,
+                "bottoms_ft": [10.0], "height_source": source}))
+            .unwrap()
+        };
+        let mut sp = BuildingSpec {
+            levels: serde_json::from_value(json!([
+                {"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.5, "ceiling_ft": 8.5},
+                {"name": "Level 2", "elevation_ft": 10.5, "height_ft": 9.1, "ceiling_ft": 8.0},
+                {"name": "Roof", "elevation_ft": 19.6, "height_ft": 4.0, "ceiling_ft": 3.0}
+            ]))
+            .unwrap(),
+            ..Default::default()
+        };
+        sp.mep.runs = vec![
+            // A 12×10 duct at the default 10': under level 2's slab (10.5 − 0.5 − 10").
+            run("Level 1", [12.0, 10.0], "default"),
+            // On level 2 the plenum (8.25'–8.6') is too shallow for it: just above the ceiling.
+            run("Level 2", [12.0, 10.0], "estimated route"),
+            // A 2" pipe fits: its top under the slab.
+            run("Level 2", [2.0, 0.0], "default"),
+            // A height the drawings give, and the roof's, stay.
+            run("Level 2", [12.0, 10.0], "tag"),
+            run("Roof", [12.0, 10.0], "default"),
+        ];
+        // A diffuser at the default 8.5' over level 2's 8' ceiling comes down into it; one in level
+        // 1's 8.5' ceiling and a sidewall grille below level 2's stay.
+        let terminal = |level: &str, bottom: f64| -> cadaddy_walk3d::MepTerminal {
+            serde_json::from_value(
+                json!({"system": "SA", "level": level, "at": [0, 0], "size_in": [12, 12], "bottom_ft": bottom, "terminal_kind": "supply_diffuser"}),
+            )
+            .unwrap()
+        };
+        sp.mep.terminals = vec![terminal("Level 2", 8.5), terminal("Level 1", 8.5), terminal("Level 2", 7.0)];
+        assert_eq!(seat_in_plenum(&mut sp), 4);
+        let bottoms: Vec<f64> = sp.mep.runs.iter().map(|r| (r.bottoms_ft[0] * 1000.0).round() / 1000.0).collect();
+        assert_eq!(bottoms, vec![9.167, 8.25, 8.433, 10.0, 10.0]);
+        assert_eq!(sp.mep.terminals.iter().map(|t| t.bottom_ft).collect::<Vec<_>>(), vec![8.0, 8.5, 7.0]);
+    }
 
     #[test]
     fn tags() {

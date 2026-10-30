@@ -96,7 +96,11 @@ fn nearest_leader(m: &MLeader, p: Vec2) -> Option<usize> {
 
 /// The extents of a multileader's content (its text or block), when it has any.
 fn content_box(s: &Session, m: &MLeader) -> Option<cadaddy_geom::Bounds2> {
-    let d = s.doc().ok()?;
+    content_box_in(s.doc().ok()?, m)
+}
+
+/// The bounds of a multileader's text or block content in `d`.
+pub(crate) fn content_box_in(d: &cadaddy_doc::Drawing, m: &MLeader) -> Option<cadaddy_geom::Bounds2> {
     let kind = match (&m.block, &m.text) {
         (Some(b), _) => EntityKind::Insert(b.clone()),
         (None, Some(t)) => EntityKind::MText(t.clone()),
@@ -108,7 +112,7 @@ fn content_box(s: &Session, m: &MLeader) -> Option<cadaddy_geom::Bounds2> {
 
 /// Add an arrowhead at `p`: to the landing on `p`'s side of the content, starting a landing on
 /// that side (mirroring the first one's dogleg and gap) when there is none yet.
-fn add_leader(m: &mut MLeader, content: Option<cadaddy_geom::Bounds2>, p: Vec2) {
+pub(crate) fn add_leader(m: &mut MLeader, content: Option<cadaddy_geom::Bounds2>, p: Vec2) {
     let Some(b) = content else {
         m.leaders.push(vec![v3(p)]);
         return;
@@ -867,5 +871,4 @@ impl Interactive for CollectM {
 }
 
 #[cfg(test)]
-#[path = "mleader_edit_tests.rs"]
 mod tests;

@@ -159,3 +159,51 @@ fn layer_delete_clears_viewport_overrides_for_the_layer() {
     s.execute("layer.new", &json!({ "name": "C" })).unwrap();
     assert!(viewport_lists(&s).iter().all(|(f, _)| !f.contains(&"C".to_string())));
 }
+
+/// (linetype layers, lineweight layers) of every layout viewport, in order.
+fn vp_style_lists(s: &Session) -> Vec<(Vec<String>, Vec<String>)> {
+    let d = s.doc().unwrap();
+    d.layouts
+        .iter()
+        .flat_map(|l| l.entities.iter())
+        .filter_map(|e| match &e.kind {
+            EntityKind::Viewport(v) => {
+                Some((v.layer_linetypes.iter().map(|(n, _)| n.clone()).collect(), v.layer_lineweights.iter().map(|(n, _)| n.clone()).collect()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// `drawing()` plus VP linetype and lineweight overrides on layers A, B and C.
+fn drawing_with_vp_styles() -> Session {
+    let mut s = drawing();
+    s.execute("linetype", &json!({ "load": "DASHED" })).unwrap();
+    let h = s.doc().unwrap().layouts.iter().flat_map(|l| l.entities.iter()).find(|e| matches!(e.kind, EntityKind::Viewport(_))).unwrap().handle;
+    let h = h.hex();
+    s.execute(
+        "vplayer",
+        &json!({ "handle": h, "linetypes": { "A": "DASHED", "B": "DASHED", "C": "DASHED" }, "lineweights": { "A": 0.5, "B": 0.5, "C": 0.5 } }),
+    )
+    .unwrap();
+    s
+}
+
+#[test]
+fn layer_delete_clears_viewport_linetype_and_lineweight_overrides() {
+    let mut s = drawing_with_vp_styles();
+    let all = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+    assert_eq!(vp_style_lists(&s), vec![(all.clone(), all)]);
+    s.execute("layer.delete", &json!({ "name": "C" })).unwrap();
+    let left = vec!["A".to_string(), "B".to_string()];
+    assert_eq!(vp_style_lists(&s), vec![(left.clone(), left)]);
+}
+
+#[test]
+fn layer_merge_clears_viewport_linetype_and_lineweight_overrides() {
+    let mut s = drawing_with_vp_styles();
+    s.execute("laymrg", &json!({ "from": ["A"], "to": "B" })).unwrap();
+    assert!(s.doc().unwrap().layer("A").is_none());
+    let left = vec!["B".to_string(), "C".to_string()];
+    assert_eq!(vp_style_lists(&s), vec![(left.clone(), left)], "the target and the other layer keep theirs");
+}

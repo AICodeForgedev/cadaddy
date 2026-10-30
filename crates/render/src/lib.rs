@@ -14,6 +14,7 @@ pub use cache::{ChunkCache, build_cached, build_cached_into};
 pub mod clip;
 pub mod clouds;
 mod dim;
+pub mod emf;
 pub mod encode;
 mod fill;
 mod hatch;
@@ -67,6 +68,9 @@ pub const VIEWPORT_CONTENT: Handle = Handle(0);
 /// [`DisplayList::prim_layers`] of a primitive whose layer isn't in the layer table.
 pub const NO_LAYER: u32 = u32::MAX;
 
+/// The xdata application name TEXTMASK tags its mask entities with.
+const TEXTMASK_APP: &str = "CADADDY_TEXTMASK";
+
 /// What a display-list primitive draws.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
@@ -78,6 +82,10 @@ pub enum Kind {
     /// (paper white when plotting, the canvas colour on screen) so they hide what was drawn
     /// before them.
     Mask,
+    /// A wipeout-like fill in its own colour (a coloured text or dimension-text mask): drawn like
+    /// [`Kind::Tris`], but it starts a draw-order group like [`Kind::Mask`] so lines drawn before it
+    /// do not show on top.
+    InkMask,
     /// A single point marker at `verts[start]`.
     Point,
     /// An infinite line or ray: `verts[start]` = base, `verts[start+1]` = unit direction.
@@ -91,7 +99,7 @@ pub enum Kind {
 impl Kind {
     /// The primitive is triangles in [`DisplayList::tris`] (otherwise points in `verts`).
     pub fn is_fill(self) -> bool {
-        matches!(self, Kind::Tris | Kind::Mask | Kind::Image(_))
+        matches!(self, Kind::Tris | Kind::InkMask | Kind::Mask | Kind::Image(_))
     }
 }
 
@@ -463,6 +471,18 @@ impl Builder<'_> {
         }
         self.note_pen(color);
         let (color, lw) = self.styled(color, lw);
+        self.push_polyline(ctx, color, lw, pts);
+    }
+    /// A one-pixel line in `color` as the plot style prints it, without the style's lineweight
+    /// or pen: the centre line drawn on screen over a thin wide polyline.
+    fn hairline(&mut self, ctx: &Ctx, color: Ink, pts: &[Vec2]) {
+        if pts.len() < 2 {
+            return;
+        }
+        let (color, _) = self.styled(color, 0.0);
+        self.push_polyline(ctx, color, 0.0, pts);
+    }
+    fn push_polyline(&mut self, ctx: &Ctx, color: Ink, lw: f32, pts: &[Vec2]) {
         let start = self.list.verts.len() as u32;
         for p in pts {
             let q = ctx.xf.apply(*p);
@@ -1056,11 +1076,11 @@ fn append_clipped(dst: &mut DisplayList, src: &DisplayList, clip: &Clip) {
                     push_raw(dst, p, Kind::Polyline, &piece);
                 }
             }
-            (Kind::Tris | Kind::Mask, Clip::Rect(rect)) => {
+            (Kind::Tris | Kind::InkMask | Kind::Mask, Clip::Rect(rect)) => {
                 let t = clip::clip_triangles(pts, rect);
                 push_raw(dst, p, p.kind, &t);
             }
-            (Kind::Tris | Kind::Mask, Clip::Poly(c)) => {
+            (Kind::Tris | Kind::InkMask | Kind::Mask, Clip::Poly(c)) => {
                 let t = c.clip_triangles(pts);
                 push_raw(dst, p, p.kind, &t);
             }
@@ -1525,12 +1545,24 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         EntityKind::MLine(m) => mline::draw(b, ctx, e, m, rgb, lw, tol),
         EntityKind::LwPolyline(p) if p.const_width > 0.0 || p.vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) => {
             if b.opts.fill && ctx.d.header.i64("FILLMODE", 1) != 0 {
+                // The GPU canvas has no MSAA: a band narrower than a pixel lights only where it
+                // covers pixel centres, so whole sides vanish at some zooms (#1434). On screen the
+                // centre line is drawn too, as a hairline (wide bands are drawn without lineweight),
+                // so a thin band still shows as a one-pixel line. Always, not below a threshold:
+                // the list serves a whole band of zooms. Plots and exports draw the band alone, and
+                // a transparent band gets none (its alpha would add up along the centre).
+                let hairline = !b.plotting && b.opts.min_dash > 0.0 && b.transparency == 0;
                 match &lt {
                     // Dashed: each dash a filled piece of the band; dots a line across it.
                     Some(lt) => {
                         let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
-                        let (tris, ticks) = wide::dashed(p, tol, lt, ltscale, min);
+                        let (tris, ticks, centres) = wide::dashed(p, tol, lt, ltscale, min);
                         b.tris(ctx, rgb, &tris);
+                        if hairline {
+                            for c in &centres {
+                                b.hairline(ctx, rgb, c);
+                            }
+                        }
                         for t in &ticks {
                             match t.as_slice() {
                                 [q] => b.point(ctx, rgb, *q),
@@ -1538,7 +1570,13 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                             }
                         }
                     }
-                    None => b.tris(ctx, rgb, &fill::wide_polyline(p, tol)),
+                    None => {
+                        b.tris(ctx, rgb, &fill::wide_polyline(p, tol));
+                        if hairline {
+                            let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
+                            b.hairline(ctx, rgb, &pl.tessellate(tol));
+                        }
+                    }
                 }
             } else {
                 let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
@@ -1561,7 +1599,14 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             let c = &s.corners;
             let q = [c[0].xy(), c[1].xy(), c[3].xy(), c[2].xy()];
             if b.opts.fill && ctx.d.header.i64("FILLMODE", 1) != 0 {
+                let n = b.list.prims.len();
                 b.tris(ctx, rgb, &[q[0], q[1], q[2], q[0], q[2], q[3]]);
+                // A TEXTMASK solid hides what was drawn before it, in its own colour.
+                if e.common.xdata.iter().any(|t| t.code == 1001 && t.value == TEXTMASK_APP)
+                    && let Some(p) = b.list.prims.get_mut(n)
+                {
+                    p.kind = Kind::InkMask;
+                }
             } else {
                 b.polyline(ctx, rgb, lw, &[q[0], q[1], q[2], q[3], q[0]]);
             }
@@ -1896,7 +1941,13 @@ fn mtext_mask(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::MText, bg: &cadaddy_d
     let q = [world(bx.min), world(Vec2::new(bx.max.x, bx.min.y)), world(bx.max), world(Vec2::new(bx.min.x, bx.max.y))];
     let tris = [q[0], q[1], q[2], q[0], q[2], q[3]];
     match bg.color {
-        Some(c) => b.tris(ctx, ink(c, layer_color, ctx.block_color), &tris),
+        Some(c) => {
+            let n = b.list.prims.len();
+            b.tris(ctx, ink(c, layer_color, ctx.block_color), &tris);
+            if let Some(p) = b.list.prims.get_mut(n) {
+                p.kind = Kind::InkMask;
+            }
+        }
         None => {
             let n = b.list.prims.len();
             b.tris(ctx, rgb, &tris);
@@ -2058,7 +2109,11 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadaddy_doc::Dimension
             let q = [world(bx.min), world(Vec2::new(bx.max.x, bx.min.y)), world(bx.max), world(Vec2::new(bx.min.x, bx.max.y))];
             let tris = [q[0], q[1], q[2], q[0], q[2], q[3]];
             if style.text_fill == 2 {
+                let n = b.list.prims.len();
                 b.tris(ctx, ink(style.text_fill_color, layer_color, own), &tris);
+                if let Some(p) = b.list.prims.get_mut(n) {
+                    p.kind = Kind::InkMask;
+                }
             } else {
                 let n = b.list.prims.len();
                 b.tris(ctx, txt_rgb, &tris);
@@ -2084,6 +2139,11 @@ pub use table::{MAX_LAYOUT_CELLS, TableFill, TableGeom, TableLine, TableText, fi
 
 fn table(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::Table, rgb: Ink, lw: f32) {
     table::draw(b, ctx, t, rgb, lw);
+}
+
+/// A TEXT's justification as the fonts' alignment (used where text is placed outside a build).
+pub fn text_align(h: cadaddy_doc::HAlign, v: cadaddy_doc::VAlign) -> (cadaddy_fonts::Align, cadaddy_fonts::VAlign) {
+    align(h, v)
 }
 
 fn align(h: cadaddy_doc::HAlign, v: cadaddy_doc::VAlign) -> (cadaddy_fonts::Align, cadaddy_fonts::VAlign) {
@@ -2133,7 +2193,9 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         top: ctx.top,
         frozen: ctx.frozen,
         vp_colors: ctx.vp_colors,
-        lt_factor: ctx.lt_factor,
+        // The reference's own linetype scale (group 48) multiplies that of the objects inside,
+        // as LTSCALE does for the drawing (tests/block_ltscale.rs).
+        lt_factor: ctx.lt_factor * if e.common.ltscale.is_finite() && e.common.ltscale > 0.0 { e.common.ltscale } else { 1.0 },
         block_pstyle: ctx.block_pstyle,
         // The reference's own, set by the caller (`Builder::transparency` while it draws).
         block_transparency: ctx.block_transparency,

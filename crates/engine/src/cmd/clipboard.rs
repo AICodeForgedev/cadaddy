@@ -108,6 +108,9 @@ pub(crate) fn paste(s: &mut Session, m: &Mat3) -> Result<Vec<Handle>> {
         }
     }
     super::groups::copy_groups(d, &groups, &copies);
+    // Pasted viewports clip their pasted boundary and get their own ids.
+    let moved: Vec<(Handle, Handle)> = copies.into_iter().collect();
+    super::clip_partners::after_transform(d, &moved, m, true)?;
     s.set_selection(out.clone());
     Ok(out)
 }
@@ -236,6 +239,18 @@ pub fn system_image(s: &Session, side: u32) -> Option<cadaddy_render::images::Ra
     let ro = cadaddy_render::raster::RasterOptions { background: cadaddy_color::Rgb(255, 255, 255), hairline: 1.5, px_per_mm: 0.0, antialias: true };
     let png = cadaddy_render::raster::render_png(&list, &view, &ro)?;
     cadaddy_render::images::decode(&png)
+}
+
+/// The clipboard as a display list (vector), for the picture formats the platform layer writes
+/// itself (Windows' enhanced metafile). `None` when the clipboard is empty or very large.
+pub fn system_display_list(s: &Session) -> Option<cadaddy_render::DisplayList> {
+    if s.clipboard.is_empty() || s.clipboard.len() > MAX_SYSTEM_OBJECTS {
+        return None;
+    }
+    let d = clip_drawing(s);
+    let list = cadaddy_render::build(&d, &cadaddy_doc::Space::Model, &cadaddy_render::Options::default());
+    let b = list.bounds;
+    (!b.is_empty() && b.width().is_finite() && b.height().is_finite()).then_some(list)
 }
 
 /// Paste `image` as a raster IMAGE: saved as a PNG beside the (saved) drawing and attached with a

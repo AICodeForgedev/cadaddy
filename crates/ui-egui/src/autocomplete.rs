@@ -80,10 +80,10 @@ const NAMED: [(&str, &[&str]); 11] = [
     ("Layer state", &["layer state"]),
     ("Layer", &["layer name", "name of layer", "layer(s)", "layers to", "layer to"]),
     ("Block", &["block name", "name of block", "block to"]),
-    ("Text style", &["text style", "style name"]),
     ("Dimension style", &["dimension style", "dimstyle"]),
     ("Multileader style", &["multileader style", "mleader style"]),
     ("Table style", &["table style"]),
+    ("Text style", &["text style", "style name"]),
     ("Linetype", &["linetype"]),
     ("Layout", &["layout name", "name of layout", "layout to"]),
     ("View", &["view name", "named view", "view to"]),
@@ -93,6 +93,10 @@ const NAMED: [(&str, &[&str]); 11] = [
 /// The kind of named object prompt `message` asks for, if any.
 pub fn named_kind(message: &str) -> Option<&'static str> {
     let m = message.to_ascii_lowercase();
+    // Multiline styles are not offered, and must not fall through to the generic "style name".
+    if m.contains("mline style") || m.contains("multiline style") {
+        return None;
+    }
     NAMED.iter().find(|(_, words)| words.iter().any(|w| m.contains(w))).map(|(k, _)| *k)
 }
 
@@ -257,6 +261,11 @@ mod tests {
         assert_eq!(named_kind("Enter block name or [?]"), Some("Block"));
         assert_eq!(named_kind("Enter name of new layer state"), Some("Layer state"));
         assert_eq!(named_kind("Specify first point"), None);
+        assert_eq!(named_kind("Enter a dimension style name, [?] or <select dimension>"), Some("Dimension style"));
+        assert_eq!(named_kind("Enter mline style name or [?]"), None);
+        assert_eq!(named_kind("Enter name of text style or [?]"), Some("Text style"));
+        assert_eq!(named_kind("Enter new text style <no change>"), Some("Text style"));
+        assert_eq!(named_kind("Enter style name"), Some("Text style"));
         let layers: Vec<String> = ["0", "Walls", "Walkway", "Doors", "Fire walls"].iter().map(|s| s.to_string()).collect();
         let r = complete_names("wal", "Layer", &layers, true);
         let ids: Vec<&str> = r.iter().map(|s| s.id.as_str()).collect();

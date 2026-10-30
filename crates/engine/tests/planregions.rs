@@ -156,10 +156,14 @@ fn a_sheet_with_two_plans_gives_each_level_only_its_own_plan() {
     // Different duct lengths: each level gets its own.
     let duct = per_level(&read, "duct");
     assert!(duct[0].2 > 1.3 * duct[1].2, "level 1's plan has more duct than level 2's: {duct:?}");
-    // The model's totals are the plans' (not doubled).
+    // The model's totals are the plans' (not doubled), put onto the architecture: both levels'
+    // views are laid on their own plans; a run that can't be is left out with a finding.
     let q = s.execute("mep.qty", &json!({})).expect("mep.qty");
     let duct: f64 = duct.iter().map(|x| x.2).sum();
-    assert!((q["totals"]["duct_length_ft"].as_f64().expect("duct") - duct).abs() < 1.0, "{}", q["totals"]);
+    let model = q["totals"]["duct_length_ft"].as_f64().expect("duct");
+    assert!(model <= duct + 1.0 && model >= 0.95 * duct, "{} read {duct}", q["totals"]);
+    let state = s.doc().ok().and_then(|d| d.agent.clone()).unwrap_or_default();
+    assert!(model >= duct - 1.0 || state.contains("MEP items not placed"), "runs left out without a finding: {} read {duct}", q["totals"]);
     // levels.list: each level's entry for the sheet names its own view, and no sheet is on two
     // levels untyped.
     let list = s.execute("levels.list", &json!({})).expect("levels.list");

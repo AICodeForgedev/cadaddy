@@ -24,7 +24,7 @@ fn invalid_sizes_and_points_are_refused() {
         ("circle", json!({"center": [0, 0], "radius": 1e-300}), "radius must be positive"),
         ("circle", json!({"center": [0, 0], "diameter": -2}), "`diameter` must be positive"),
         ("arc", json!({"center": [0, 0], "radius": -5, "start": 0, "end": 90}), "`radius` must be positive"),
-        ("polygon", json!({"sides": -3, "center": [0, 0], "radius": 5}), "sides must be 3..1024"),
+        ("polygon", json!({"sides": -3, "center": [0, 0], "radius": 5}), "`sides` must be a whole number from 3 to 1024"),
         ("polygon", json!({"sides": 6, "center": [0, 0], "radius": -5}), "`radius` must be positive"),
         ("polygon", json!({"sides": 6, "center": [0, 0], "radius": 0}), "`radius` must be positive"),
         ("polygon", json!({"sides": 6, "edge": [[1, 1], [1, 1]]}), "edge endpoints must differ"),

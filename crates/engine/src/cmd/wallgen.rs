@@ -20,6 +20,7 @@ use super::*;
 use crate::{Result, Session};
 
 mod outline;
+pub(crate) use outline::Floors;
 
 /// The extended data application that marks what WALLGEN made (part, level, source object).
 pub const APP: &str = "CADADDY_WALLGEN";
@@ -53,7 +54,42 @@ pub fn specs() -> Vec<CommandSpec> {
         .menu(&["Draw", "Modeling", "3D Building from Plan"])
         .params(
             "{rules?: walk rules (as in <drawing>.walk.json), rulesFile?: path, layers?: wall layers (wildcards, comma-separated; default the rules' wall layers), slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true (remove what WALLGEN made)} → {walls, doors, windows, floors, ceilings, levels, removed, notes: [why walls were or weren't found]}",
-        )]
+        ),
+        CommandSpec::new("wallgen.plan", "Planned Walls", run_plan)
+            .params("{level: name (of the building spec), window?: [[x,y],[x,y]] (only walls with an end inside), limit?: walls listed (2000, at most 20000)} → {level, walls: [{a: [x,y], b: [x,y], thickness}], total, truncated, notes}: what the level's plan was read as — the walls model.build would build there (centrelines and thickness, sheet units, before openings are cut)")
+            .noundo(),
+    ]
+}
+
+/// Most walls `wallgen.plan` lists.
+const MAX_PLAN_LIST: usize = 20_000;
+
+fn run_plan(s: &mut Session, p: &Value) -> Result<Value> {
+    let (sp, _) = super::bspec::current(s, "wallgen.plan")?;
+    let name = p.get("level").and_then(Value::as_str).ok_or_else(|| bad("wallgen.plan", "`level` is required"))?;
+    let g = WallGen { rules: sp.to_rules(), auto: false, slab_ft: 0.0, layers: None, spec: Some(sp.clone()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let level =
+        g.rules.levels.iter().find(|l| l.name.eq_ignore_ascii_case(name.trim())).ok_or_else(|| bad("wallgen.plan", format!("no level {name:?}")))?;
+    let window = p.get("window").and_then(Value::as_array).and_then(|w| {
+        let pt = |v: &Value| Some(Vec2::new(v.get(0)?.as_f64()?, v.get(1)?.as_f64()?));
+        let (a, b) = (pt(w.first()?)?, pt(w.get(1)?)?);
+        Some((Vec2::new(a.x.min(b.x), a.y.min(b.y)), Vec2::new(a.x.max(b.x), a.y.max(b.y))))
+    });
+    let limit = p.get("limit").and_then(Value::as_u64).map_or(2000, |n| (n as usize).min(MAX_PLAN_LIST));
+    let mut notes = Vec::new();
+    let pl = plan_level(s.doc()?, &g, level, upf, &mut notes);
+    let inside = |q: Vec2| window.is_none_or(|(lo, hi)| q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y);
+    let walls: Vec<Value> = pl
+        .walls
+        .iter()
+        .filter(|w| inside(w.a) || inside(w.b))
+        .map(|w| json!({"a": [w.a.x, w.a.y], "b": [w.b.x, w.b.y], "thickness": w.thickness}))
+        .collect();
+    let total = walls.len();
+    Ok(
+        json!({"level": level.name, "walls": walls.into_iter().take(limit).collect::<Vec<_>>(), "total": total, "truncated": total > limit, "notes": notes}),
+    )
 }
 
 /// The layer each part goes on.
@@ -509,6 +545,195 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
         r["levels_built"] = json!(levels_done);
     }
     Ok(r)
+}
+
+/// A storey before anything is built in it: its shell (the outline of the building its walls
+/// stand round, rectangles in sheet units) and its corridors, stairs and elevator hoistways.
+pub(crate) struct Storey {
+    pub level: String,
+    pub shell: Vec<[Vec2; 2]>,
+    pub circulation: Vec<cadaddy_walk3d::Circulation>,
+    /// The circulation labels of its plan not traced, and why.
+    pub missed: Vec<String>,
+}
+
+/// Each storey's shell and circulation, before anything is built, its walls planned from the
+/// plan as `model.build` plans them; the circulation traced from its labels on the plan
+/// ([`circulation_label`]), and a hoistway or stair traced on one storey traced again where it
+/// stands on the others (it runs through them: a storey whose plan doesn't label it still has
+/// it). The roof, and a storey whose walls don't close round the building, have none.
+pub(crate) fn shells(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> Vec<Storey> {
+    use cadaddy_walk3d::CirculationKind;
+    let g = WallGen { rules: sp.to_rules(), auto: false, slab_ft: 0.0, layers: None, spec: Some(sp.clone()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let mut notes = Vec::new();
+    // Each storey: its walls, its shell and its circulation labels (kind, text, middle).
+    let mut plans: Vec<(String, Vec<(Vec2, Vec2, f64)>, Vec<[Vec2; 2]>, Vec<(CirculationKind, String, Vec2)>)> = Vec::new();
+    for level in g.rules.levels.iter().filter(|l| l.sheet.is_none() && !roof_level(&g.rules.levels, &l.name)) {
+        let pl = plan_level(d, &g, level, upf, &mut notes);
+        let Some((lo, hi)) = pl.footprint() else { continue };
+        let walls: Vec<(Vec2, Vec2, f64)> = pl.walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
+        let Some(o) = outline::building_whole(&walls, lo, hi, upf) else { continue };
+        plans.push((level.name.clone(), walls, o.rects, circulation_labels(d, level)));
+    }
+    let trace = |walls: &[(Vec2, Vec2, f64)], shell: &[[Vec2; 2]], labels: &[(CirculationKind, String, Vec2)]| {
+        let seeds: Vec<(CirculationKind, Vec2)> = labels.iter().map(|(k, _, at)| (*k, *at)).collect();
+        outline::spaces(walls, shell, upf, &seeds)
+    };
+    let first: Vec<Vec<std::result::Result<Vec<[Vec2; 2]>, String>>> =
+        plans.iter().map(|(_, walls, shell, labels)| trace(walls, shell, labels)).collect();
+    let shell_list: Vec<&[[Vec2; 2]]> = plans.iter().map(|p| p.2.as_slice()).collect();
+    let found: Vec<Vec<(CirculationKind, String, Option<Vec<[Vec2; 2]>>)>> = plans
+        .iter()
+        .zip(&first)
+        .map(|(p, traced)| p.3.iter().zip(traced).map(|((k, name, _), r)| (*k, name.clone(), r.clone().ok())).collect())
+        .collect();
+    let mut stacked = stacked_seeds(&shell_list, &found, upf);
+    let mut out = Vec::new();
+    for (b, (level, walls, shell, labels)) in plans.iter().enumerate() {
+        let mut labels = labels.clone();
+        let own = labels.len();
+        labels.extend(stacked.get_mut(b).map(std::mem::take).unwrap_or_default());
+        let traced = if labels.len() > own { trace(walls, shell, &labels) } else { first.get(b).cloned().unwrap_or_default() };
+        let mut missed = Vec::new();
+        let mut circulation = Vec::new();
+        for (n, ((kind, name, at), rects)) in labels.into_iter().zip(traced).enumerate() {
+            match rects {
+                Ok(rects) => circulation.push(cadaddy_walk3d::Circulation {
+                    kind,
+                    level: level.clone(),
+                    name,
+                    at: [at.x, at.y],
+                    rects: rects.iter().map(|[a, b]| [[a.x, a.y], [b.x, b.y]]).collect(),
+                }),
+                // Another storey's stair or hoistway this one already has (or can't hold): no news.
+                Err(_) if n >= own => {}
+                Err(why) => missed.push(format!("'{name}' at {:?}: {why}", [at.x.round(), at.y.round()])),
+            }
+        }
+        out.push(Storey { level: level.clone(), shell: shell.clone(), circulation, missed });
+    }
+    out
+}
+
+/// A storey's floor to trace its rooms on ([`Floors`]): its walls planned as `model.build` plans
+/// them, inside its shell, its circulation (`sp.circulation`) taken. None for the roof, a storey
+/// whose walls don't close round the building, or one whose circulation wasn't traced (its shell
+/// wasn't trusted).
+pub(crate) fn room_floors(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, level: &str) -> Option<Floors> {
+    if !sp.circulation.iter().any(|c| c.level.eq_ignore_ascii_case(level)) {
+        return None;
+    }
+    let g = WallGen { rules: sp.to_rules(), auto: false, slab_ft: 0.0, layers: None, spec: Some(sp.clone()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let lv = g.rules.levels.iter().find(|l| l.sheet.is_none() && l.name.eq_ignore_ascii_case(level) && !roof_level(&g.rules.levels, &l.name))?;
+    let pl = plan_level(d, &g, lv, upf, &mut Vec::new());
+    let (lo, hi) = pl.footprint()?;
+    let walls: Vec<(Vec2, Vec2, f64)> = pl.walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
+    let shell = outline::building_whole(&walls, lo, hi, upf)?;
+    let taken: Vec<[Vec2; 2]> = sp
+        .circulation
+        .iter()
+        .filter(|c| c.level.eq_ignore_ascii_case(level))
+        .flat_map(|c| c.rects.iter().map(|[a, b]| [Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1])]))
+        .collect();
+    Floors::new(&walls, &shell.rects, upf, &taken)
+}
+
+/// How much two storeys' shells may differ in size (feet) and still be the same building, their
+/// stairs and hoistways one above the other.
+const STACK_TOL_FT: f64 = 2.0;
+
+/// For each storey (its shell), where the hoistways and stairs traced on the others (`found`:
+/// kind, name, floor) stand on its plan: their largest rectangle's middle moved by the shells'
+/// corners. Only between storeys whose shells are the same size ([`STACK_TOL_FT`]).
+fn stacked_seeds(
+    shells: &[&[[Vec2; 2]]],
+    found: &[Vec<(cadaddy_walk3d::CirculationKind, String, Option<Vec<[Vec2; 2]>>)>],
+    upf: f64,
+) -> Vec<Vec<(cadaddy_walk3d::CirculationKind, String, Vec2)>> {
+    let corner = |shell: &[[Vec2; 2]]| {
+        let lo = Vec2::new(shell.iter().map(|r| r[0].x).fold(f64::INFINITY, f64::min), shell.iter().map(|r| r[0].y).fold(f64::INFINITY, f64::min));
+        let hi =
+            Vec2::new(shell.iter().map(|r| r[1].x).fold(f64::NEG_INFINITY, f64::max), shell.iter().map(|r| r[1].y).fold(f64::NEG_INFINITY, f64::max));
+        (lo, hi - lo)
+    };
+    let area = |r: &[Vec2; 2]| (r[1] - r[0]).x * (r[1] - r[0]).y;
+    shells
+        .iter()
+        .enumerate()
+        .map(|(b, shell_b)| {
+            let (at_b, size_b) = corner(shell_b);
+            let mut seeds = Vec::new();
+            for (a, shell_a) in shells.iter().enumerate().filter(|(a, s)| *a != b && !s.is_empty()) {
+                let (at_a, size_a) = corner(shell_a);
+                if shell_b.is_empty()
+                    || !matches!(
+                        (size_a - size_b).len().partial_cmp(&(STACK_TOL_FT * upf)),
+                        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                    )
+                {
+                    continue;
+                }
+                for (kind, name, rects) in found.get(a).into_iter().flatten() {
+                    if *kind == cadaddy_walk3d::CirculationKind::Corridor {
+                        continue;
+                    }
+                    // Its largest rectangle's middle: on its floor whatever its shape.
+                    let Some([lo, hi]) = rects.iter().flatten().max_by(|p, q| area(p).total_cmp(&area(q))) else { continue };
+                    seeds.push((*kind, name.clone(), (*lo + *hi) * 0.5 - at_a + at_b));
+                }
+            }
+            seeds
+        })
+        .collect()
+}
+
+/// Most circulation labels read on a level's plan.
+const MAX_CIRCULATION_LABELS: usize = 200;
+
+/// The circulation labels on a level's plan (inside its region): what each names, its text and
+/// where it is set (its insertion point: a print's text box can be far bigger than its letters,
+/// its middle in the next room).
+fn circulation_labels(d: &Drawing, level: &cadaddy_walk3d::Level) -> Vec<(cadaddy_walk3d::CirculationKind, String, Vec2)> {
+    let ents: Vec<&Arc<Entity>> =
+        d.model.iter().filter(|e| made_as(e).is_none() && matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_))).collect();
+    let mut out = Vec::new();
+    for (_, text, at, _) in super::perceive::texts(&ents) {
+        let Some(kind) = circulation_label(&text) else { continue };
+        let on = level.region.is_none_or(|[x0, y0, x1, y1]| at.x >= x0.min(x1) && at.x <= x0.max(x1) && at.y >= y0.min(y1) && at.y <= y0.max(y1));
+        if at.is_finite() && on {
+            out.push((kind, text, at));
+        }
+        if out.len() >= MAX_CIRCULATION_LABELS {
+            break;
+        }
+    }
+    out
+}
+
+/// What a plan label names when it is a corridor's, a stair's or an elevator's: `CORRIDOR`,
+/// `CORR.`, `HALL`, `HALLWAY`, `STAIR 01`, `STAIRS`, `STAIR #2`, `ELEV.`, `ELEVATOR 1` — the word
+/// and at most a short mark. Not an elevation's `ELEV. 100'-0"` or a note about a stair.
+pub(crate) fn circulation_label(text: &str) -> Option<cadaddy_walk3d::CirculationKind> {
+    use cadaddy_walk3d::CirculationKind::{Corridor, Hoistway, Stair};
+    let t = text.trim().to_ascii_uppercase();
+    let mut words = t.split_whitespace();
+    let head = words.next()?;
+    let rest: Vec<&str> = words.collect();
+    let mark = |m: &str| {
+        let m = m.trim_start_matches('#');
+        !m.is_empty() && m.len() <= 3 && m.chars().all(|c| c.is_ascii_alphanumeric())
+    };
+    if !(rest.is_empty() || (rest.len() == 1 && rest.iter().all(|m| mark(m)))) {
+        return None;
+    }
+    match head.trim_end_matches('.') {
+        "CORRIDOR" | "CORR" | "HALL" | "HALLWAY" => Some(Corridor),
+        "STAIR" | "STAIRS" | "STAIRWAY" | "STAIRWELL" => Some(Stair),
+        "ELEV" | "ELEVATOR" => Some(Hoistway),
+        _ => None,
+    }
 }
 
 /// Whether `name` is the roof of a building with storeys under it (`Roof`, `MAIN ROOF`, `LOW
@@ -993,6 +1218,14 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         None => matches!(g.rules.layer(layer), Some(cadaddy_walk3d::LayerKind::Wall { .. })),
     };
     let wall_ents: Vec<&Arc<Entity>> = ents.iter().copied().filter(|e| on_walls(&e.common.layer)).collect();
+    // A print screens what isn't built there in grey (furniture, fixtures, grids, other trades'
+    // work): on a plan with solid linework, a screened line is no wall's face.
+    let solid = wall_ents.iter().filter(|e| !screened(e.common.color)).count();
+    let (wall_ents, screened_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) = if solid > 0 && solid as f64 >= SOLID_SHARE * wall_ents.len() as f64 {
+        wall_ents.into_iter().partition(|e| !screened(e.common.color))
+    } else {
+        (wall_ents, Vec::new())
+    };
     let rule_names = || match &g.layers {
         Some(p) => p.clone(),
         None => g
@@ -1030,7 +1263,14 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     let (centre_ents, pair_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) =
         wall_ents.iter().copied().partition(|e| wall_type(g, &e.common.layer).is_some_and(|t| t.from == cadaddy_walk3d::WallFrom::Centerline));
     let segs = segments(&pair_ents);
-    let found = pairs(d, &segs, &lim);
+    let mut found = pairs(d, &segs, &lim);
+    // A screened pair in line with a solid wall and meeting its end fills a gap in the wall (a
+    // window's glazing drawn lighter): it is wall too.
+    if !screened_ents.is_empty() && !found.is_empty() {
+        let fills: Vec<_> =
+            pairs(d, &segments(&screened_ents), &lim).into_iter().filter(|p| fills_a_wall(p.c0, p.c1, p.thickness, &found, k)).collect();
+        found.extend(fills);
+    }
     if found.is_empty() && centre_ents.is_empty() {
         notes.push(format!(
             "{}: {} objects on the wall layers, but no parallel faces 2½\"–20\" apart (single-line walls are built one per line).",
@@ -1442,6 +1682,42 @@ fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
 /// Walls looked at for the building's outline, at most (a level; hostile drawings).
 const MAX_CLUSTERED: usize = 20_000;
 
+/// Whether a pair (centreline `a`–`b`, `t` thick) runs in line with one of the walls and meets
+/// its end (within its thickness and 3"): the rest of that wall across a gap, not a thing beside it.
+fn fills_a_wall(a: Vec2, b: Vec2, t: f64, walls: &[super::perceive::geometry::Pair], k: f64) -> bool {
+    let len = a.dist(b);
+    if len.is_nan() || len <= 1e-9 {
+        return false;
+    }
+    let u = (b - a) * (1.0 / len);
+    walls.iter().any(|w| {
+        let wl = w.c0.dist(w.c1);
+        if wl.is_nan() || wl <= 1e-9 || (w.c1 - w.c0).cross(u).abs() > 0.05 * wl {
+            return false;
+        }
+        let off = (w.c0 - a).cross(u).abs();
+        let reach = t.max(w.thickness) + 3.0 * k;
+        off <= 0.5 * t.max(w.thickness) && [a, b].iter().any(|p| p.dist(w.c0).min(p.dist(w.c1)) <= reach)
+    })
+}
+
+/// The share of a plan's lines (on its wall layers) drawn solid for its screened lines to be left
+/// out of its walls: less, the plan is drawn in grey throughout (an underlay, a faded set).
+const SOLID_SHARE: f64 = 0.2;
+
+/// Whether a colour is a light screen: a grey nearer white than black (true colour, or ACI 9,
+/// 253, 254), which a print draws what isn't built in. A mid grey (ACI 8) can be built work drawn
+/// lighter (the windows in a wall).
+fn screened(c: cadaddy_color::Color) -> bool {
+    match c {
+        cadaddy_color::Color::True(cadaddy_color::Rgb(r, g, b)) => {
+            r.abs_diff(g) <= 8 && g.abs_diff(b) <= 8 && r.abs_diff(b) <= 8 && (150..=240).contains(&r)
+        }
+        cadaddy_color::Color::Index(i) => matches!(i, 9 | 253 | 254),
+        _ => false,
+    }
+}
+
 /// The root of `i` in a union-find forest (halving the path on the way).
 fn root(parent: &mut [usize], mut i: usize) -> usize {
     for _ in 0..parent.len() {
@@ -1746,4 +2022,143 @@ fn one_door_per_opening(leaves: &mut Vec<Leaf>, tol: f64) -> usize {
         keep
     });
     folded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadaddy_walk3d::CirculationKind::{Corridor, Hoistway, Stair};
+
+    /// The walls planned on a 20' × 10' room of 6" walls (solid lines, or `all_grey`) with a bed's
+    /// headboard drawn in it as two screened lines 3" apart.
+    fn planned_with_a_grey_headboard(all_grey: bool) -> usize {
+        let mut d = Drawing::new_imperial();
+        let grey = cadaddy_color::Color::True(cadaddy_color::Rgb(170, 170, 170));
+        let mut add = |a: (f64, f64), b: (f64, f64), screened: bool| {
+            let h = Handle(d.handseed);
+            d.handseed = h.0 + 1;
+            let line = cadaddy_doc::Line { a: Vec3::new(a.0 * 12.0, a.1 * 12.0, 0.0), b: Vec3::new(b.0 * 12.0, b.1 * 12.0, 0.0) };
+            let mut e = Entity::new(h, EntityKind::Line(line));
+            e.common.layer = "A-WALL".into();
+            if screened || all_grey {
+                e.common.color = grey;
+            }
+            d.model.push(e);
+        };
+        for (a, b) in [((0.0, 0.0), (20.0, 0.0)), ((20.0, 0.0), (20.0, 10.0)), ((20.0, 10.0), (0.0, 10.0)), ((0.0, 10.0), (0.0, 0.0))] {
+            add(a, b, false);
+        }
+        for (a, b) in [((0.5, 0.5), (19.5, 0.5)), ((19.5, 0.5), (19.5, 9.5)), ((19.5, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))] {
+            add(a, b, false);
+        }
+        add((5.0, 9.0), (10.0, 9.0), true);
+        add((5.0, 8.75), (10.0, 8.75), true);
+        let rules: Rules = serde_json::from_value(json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 9.5, "ceiling_ft": 8, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        }))
+        .unwrap();
+        let level = rules.levels[0].clone();
+        let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
+        plan_level(&d, &g, &level, 12.0, &mut Vec::new()).walls.len()
+    }
+
+    #[test]
+    fn grey_glazing_in_line_with_a_wall_fills_its_gap_but_a_grey_headboard_is_no_wall() {
+        let mut d = Drawing::new_imperial();
+        let grey = cadaddy_color::Color::True(cadaddy_color::Rgb(170, 170, 170));
+        let mut add = |a: (f64, f64), b: (f64, f64), screened: bool| {
+            let h = Handle(d.handseed);
+            d.handseed = h.0 + 1;
+            let line = cadaddy_doc::Line { a: Vec3::new(a.0 * 12.0, a.1 * 12.0, 0.0), b: Vec3::new(b.0 * 12.0, b.1 * 12.0, 0.0) };
+            let mut e = Entity::new(h, EntityKind::Line(line));
+            e.common.layer = "A-WALL".into();
+            if screened {
+                e.common.color = grey;
+            }
+            d.model.push(e);
+        };
+        // The room's south wall broken for a 4' window (8'–12'), its glazing two grey lines in line.
+        for (a, b) in [
+            ((0.0, 0.0), (8.0, 0.0)),
+            ((12.0, 0.0), (20.0, 0.0)),
+            ((20.0, 0.0), (20.0, 10.0)),
+            ((20.0, 10.0), (0.0, 10.0)),
+            ((0.0, 10.0), (0.0, 0.0)),
+        ] {
+            add(a, b, false);
+        }
+        for (a, b) in
+            [((0.5, 0.5), (8.0, 0.5)), ((12.0, 0.5), (19.5, 0.5)), ((19.5, 0.5), (19.5, 9.5)), ((19.5, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))]
+        {
+            add(a, b, false);
+        }
+        add((8.0, 0.1), (12.0, 0.1), true);
+        add((8.0, 0.4), (12.0, 0.4), true);
+        add((5.0, 9.0), (10.0, 9.0), true);
+        add((5.0, 8.75), (10.0, 8.75), true);
+        let rules: Rules = serde_json::from_value(json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 9.5, "ceiling_ft": 8, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        }))
+        .unwrap();
+        let level = rules.levels[0].clone();
+        let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
+        let walls = plan_level(&d, &g, &level, 12.0, &mut Vec::new()).walls;
+        // The two pieces of the south wall, the glazing between them, and the other three walls.
+        assert_eq!(walls.len(), 6, "{:?}", walls.iter().map(|w| (w.a / 12.0, w.b / 12.0)).collect::<Vec<_>>());
+        assert!(walls.iter().all(|w| w.a.y.min(w.b.y) / 12.0 < 0.5 || w.a.y.max(w.b.y) / 12.0 > 9.0 || (w.a.x - w.b.x).abs() < 1.0));
+    }
+
+    #[test]
+    fn a_screened_grey_pair_is_furniture_not_a_wall_unless_the_plan_is_all_grey() {
+        assert_eq!(planned_with_a_grey_headboard(false), 4);
+        // An underlay drawn in grey throughout: every pair is read as before (the headboard too).
+        assert!(planned_with_a_grey_headboard(true) > 4);
+        assert!(screened(cadaddy_color::Color::True(cadaddy_color::Rgb(170, 170, 170))) && screened(cadaddy_color::Color::Index(9)));
+        // A mid grey (a window drawn lighter in its wall) is not.
+        assert!(!screened(cadaddy_color::Color::True(cadaddy_color::Rgb(128, 128, 128))) && !screened(cadaddy_color::Color::Index(8)));
+        assert!(!screened(cadaddy_color::Color::Index(7)) && !screened(cadaddy_color::Color::True(cadaddy_color::Rgb(0, 0, 0))));
+        assert!(!screened(cadaddy_color::Color::True(cadaddy_color::Rgb(255, 0, 0))) && !screened(cadaddy_color::Color::ByLayer));
+    }
+
+    #[test]
+    fn a_label_names_a_corridor_a_stair_or_an_elevator_and_a_note_does_not() {
+        for (text, kind) in [("CORRIDOR", Corridor), ("Corr.", Corridor), ("HALLWAY", Corridor), ("STAIR 01", Stair), ("STAIR #2", Stair)] {
+            assert_eq!(circulation_label(text), Some(kind), "{text}");
+        }
+        for (text, kind) in [("STAIRS", Stair), ("ELEV.", Hoistway), ("ELEVATOR 1", Hoistway), ("Elev. B", Hoistway)] {
+            assert_eq!(circulation_label(text), Some(kind), "{text}");
+        }
+        for text in ["ELEV. 100'-0\"", "STAIR RAIL", "ELEVATION", "SEE STAIR DETAILS", "HALL OF FAME", ""] {
+            assert_eq!(circulation_label(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_stair_or_hoistway_on_one_storey_stands_on_the_others_and_a_corridor_does_not() {
+        let r = |x0: f64, y0: f64, x1: f64, y1: f64| [Vec2::new(x0, y0), Vec2::new(x1, y1)];
+        // Three plans side by side: two of the same building 1000 apart, one smaller.
+        let (a, b, c) = (vec![r(0.0, 0.0, 600.0, 300.0)], vec![r(1000.0, 0.0, 1600.0, 300.0)], vec![r(2000.0, 0.0, 2300.0, 300.0)]);
+        let found = vec![
+            vec![
+                (Hoistway, "ELEV.".to_string(), Some(vec![r(100.0, 100.0, 200.0, 180.0)])),
+                // An L-shaped stair: its larger rectangle's middle.
+                (Stair, "STAIR 1".to_string(), Some(vec![r(400.0, 0.0, 420.0, 20.0), r(400.0, 20.0, 500.0, 200.0)])),
+                (Corridor, "CORRIDOR".to_string(), Some(vec![r(0.0, 140.0, 600.0, 160.0)])),
+                (Stair, "STAIR 2".to_string(), None),
+            ],
+            vec![],
+            vec![],
+        ];
+        let seeds = stacked_seeds(&[&a, &b, &c], &found, 12.0);
+        assert!(seeds[0].is_empty() && seeds[2].is_empty(), "{seeds:?}");
+        let want = [(Hoistway, "ELEV.", Vec2::new(1150.0, 140.0)), (Stair, "STAIR 1", Vec2::new(1450.0, 110.0))];
+        assert_eq!(seeds[1].len(), want.len(), "{seeds:?}");
+        for ((k, n, at), (wk, wn, wat)) in seeds[1].iter().zip(want) {
+            assert!(*k == wk && n == wn && at.dist(wat) < 1e-9, "{seeds:?}");
+        }
+    }
 }

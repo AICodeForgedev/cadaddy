@@ -34,7 +34,7 @@ macro_rules! outln {
 
 use std::process::ExitCode;
 
-use cadaddy_engine::doc::Space;
+use cadaddy_engine::doc::{Handle, Space};
 use cadaddy_engine::geom::{Bounds2, Vec2};
 use cadaddy_engine::{Session, View};
 use serde_json::{Value, json};
@@ -86,7 +86,15 @@ image framing (png 2400x1600, svg, pdf; always model space):
                            scaled to fit the image without distortion.
   --view extents           always fit the drawing extents.
   --view current           the current view (as last set by zoom/pan/view.set; a freshly
-                           opened drawing's view is its extents plus a 10% margin).";
+                           opened drawing's view is its extents plus a 10% margin).
+
+--cmd chaining (run):
+  A --cmd parameter value of exactly \"{last}\" is replaced with the last object handle an
+  earlier --cmd in the same run returned, so a command can act on what the previous one made:
+    --cmd 'mview {\"p1\":[20,20],\"p2\":[200,150]}'        prints {\"viewports\":[\"100\"]}
+    --cmd 'viewport.set {\"handle\":\"{last}\",\"scale\":1}' changes viewport 100
+  It works in any parameter, at any depth (e.g. \"handles\":[\"{last}\"]); every other string is
+  passed unchanged. With no earlier returned handle the run fails and says so.";
 
 /// One `cadaddy-cli` subcommand for `cadaddy-cli help`: its usage, what it does, an example.
 struct CliCommand {
@@ -392,8 +400,8 @@ fn install_io() {
     });
 }
 
-fn open(s: &mut Session, path: &str) -> Result<(), String> {
-    s.execute("open", &json!({ "path": path })).map(|_| ()).map_err(|e| e.to_string())
+fn open(s: &mut Session, path: &str) -> Result<Value, String> {
+    s.execute("open", &json!({ "path": path })).map_err(|e| e.to_string())
 }
 
 #[derive(Clone, Copy)]
@@ -427,41 +435,60 @@ const NO_OPTIONS: &[OptionSpec] = &[];
 /// what each kind of chunk takes, the bytes earlier saves left behind). `full` adds entity
 /// details and container internals; the default is a compact summary.
 fn info(path: &str, full: bool) -> Result<(), String> {
+    let v = info_value(path, full)?;
+    outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    Ok(())
+}
+
+/// The document [`info`] prints. What opening the file said about it (a damaged index, parts it
+/// lost) is in `warnings`, as `open` reports it.
+fn info_value(path: &str, full: bool) -> Result<Value, String> {
     let container = std::fs::read(path).ok().and_then(|bytes| {
         let m = cadaddy_io::cdy::manifest(&bytes)?;
         let check = cadaddy_io::cdy::verify(&bytes).unwrap_or_default();
         Some(json!({ "manifest": m, "chunks": check["sizes"], "waste": check["waste"], "bytes": bytes.len() }))
     });
     let mut s = Session::for_app();
-    open(&mut s, path)?;
+    let opened = open(&mut s, path)?;
     let mut v = s.execute("drawing.inspect", &json!({ "entities": false })).map_err(|e| e.to_string())?;
     if let (Some(obj), Some(serde_json::Value::Object(c))) = (v.as_object_mut(), container) {
         obj.extend(c);
     }
-    if full {
-        outln!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-    } else {
-        // Short summary: file, format, entities, extents, units, layer/block counts.
-        let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("?");
-        let entities = v.get("entityCount").and_then(Value::as_u64).unwrap_or(0);
-        let layers = v.get("layers").and_then(Value::as_array).map_or(0, Vec::len);
-        let blocks = v.get("blocks").and_then(Value::as_array).map_or(0, Vec::len);
-        let units = v.get("units").and_then(Value::as_str).unwrap_or("?");
-        let extents = v.get("extents").cloned().unwrap_or(Value::Null);
-        let short = json!({
-            "file": path,
-            "format": ext,
-            "entities": entities,
-            "layers": layers,
-            "blocks": blocks,
-            "units": units,
-            "extents": extents,
-            // Records a damaged file lost stay visible without --full.
-            "skipped": v.get("skipped").cloned().unwrap_or(Value::Null),
-        });
-        outln!("{}", serde_json::to_string_pretty(&short).unwrap_or_default());
+    let warnings = opened.get("warnings").cloned().filter(|w| w.as_array().is_some_and(|a| !a.is_empty()));
+    if let (Some(obj), Some(w)) = (v.as_object_mut(), &warnings) {
+        obj.insert("warnings".into(), w.clone());
     }
-    Ok(())
+    if full {
+        return Ok(v);
+    }
+    // Short summary: file, format, entities, extents, units, layer/block counts.
+    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("?");
+    let entities = v.get("entityCount").and_then(Value::as_u64).unwrap_or(0);
+    let layers = v.get("layers").and_then(Value::as_array).map_or(0, Vec::len);
+    let blocks = v.get("blocks").and_then(Value::as_array).map_or(0, Vec::len);
+    let units = v.get("units").and_then(Value::as_str).unwrap_or("?");
+    let extents = v.get("extents").cloned().unwrap_or(Value::Null);
+    let mut short = json!({
+        "file": path,
+        "format": ext,
+        "entities": entities,
+        "layers": layers,
+        "blocks": blocks,
+        "units": units,
+        "extents": extents,
+        // Records a damaged file lost stay visible without --full.
+        "skipped": v.get("skipped").cloned().unwrap_or(Value::Null),
+    });
+    if let (Some(obj), Some(w)) = (short.as_object_mut(), warnings) {
+        obj.insert("warnings".into(), w);
+    }
+    Ok(short)
+}
+
+/// Write `bytes` to `out` through the engine's atomic writer (an exclusively created sibling file
+/// renamed over `out`), so a failed or interrupted write leaves the previous file untouched.
+fn write_atomic(out: &str, bytes: &[u8]) -> std::io::Result<()> {
+    cadaddy_engine::atomic_write::write_atomic(std::path::Path::new(out), bytes)
 }
 
 fn export(s: &Session, out: &str) -> Result<(), String> {
@@ -471,7 +498,7 @@ fn export(s: &Session, out: &str) -> Result<(), String> {
 fn export_framed(s: &Session, out: &str, window: Option<Bounds2>) -> Result<(), String> {
     let d = s.doc().map_err(|e| e.to_string())?;
     let bytes = cadaddy_io::write_framed(d, out, window).map_err(|e| e.to_string())?;
-    std::fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+    write_atomic(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
     eprintln!("wrote {out} ({} bytes)", bytes.len());
     if cadaddy_engine::cmd::file::drops_unknown(out) {
         let lost = cadaddy_engine::cmd::file::not_saved(d);
@@ -490,7 +517,7 @@ fn sample(args: &[String]) -> Result<(), String> {
         other => return Err(format!("unknown sample `{other}` (bracket, floorplan)")),
     };
     let bytes = cadaddy_io::write(&d, out).map_err(|e| e.to_string())?;
-    std::fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+    write_atomic(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
     eprintln!("wrote {out} ({} bytes)", bytes.len());
     Ok(())
 }
@@ -544,6 +571,11 @@ fn convert_file(i: &str, o: &str, framing: Framing) -> Result<(), String> {
     let mut s = Session::for_app();
     open(&mut s, i)?;
     if let Some(m) = skipped_message(s.doc().map_err(|e| e.to_string())?, i) {
+        eprintln!("{m}");
+    }
+    if cadaddy_io::is_image(o)
+        && let Some(m) = undrawn_message(s.doc().map_err(|e| e.to_string())?, i)
+    {
         eprintln!("{m}");
     }
     let window = export_window(&s, framing, None)?;
@@ -602,16 +634,44 @@ fn verify(path: &str) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let check = cadaddy_io::cdy::verify(&bytes).map_err(|e| format!("{path}: {e}"))?;
     outln!("{}", serde_json::to_string_pretty(&check).unwrap_or_default());
-    if check["ok"] == json!(true) {
-        Ok(())
-    } else {
-        let bad = check["chunks"].as_array().map_or(0, |c| c.iter().filter(|c| c.get("damage").is_some() && c["live"] == json!(true)).count());
-        Err(format!("{path}: damaged ({bad} damaged parts, index {}; see the report)", check["index"].as_str().unwrap_or("?")))
+    match verify_failure(path, &check) {
+        Some(why) => Err(why),
+        None => Ok(()),
     }
 }
 
-/// `check-import FILE.cdy [--json]`: run import accuracy checks on a drawing file.
-/// Exit 1 on fail.
+/// Why `check` (from [`cadaddy_io::cdy::verify`]) is not a clean bill of health, in words; `None`
+/// when it is clean. Bytes after the end of a sound file are named as that, not as damage.
+fn verify_failure(path: &str, check: &Value) -> Option<String> {
+    if check["ok"] == json!(true) {
+        return None;
+    }
+    let damaged = |c: &Value| c.get("damage").is_some();
+    let chunks = check["chunks"].as_array();
+    if let Some(n) = check["trailing"].as_u64().filter(|n| *n > 0)
+        && chunks.is_some_and(|c| !c.iter().any(damaged))
+    {
+        return Some(format!("{path}: {n} bytes of trailing data after the end of the file (the drawing before them is sound)"));
+    }
+    let bad = chunks.map_or(0, |c| c.iter().filter(|c| damaged(c) && c["live"] == json!(true)).count());
+    let index = check["index"].as_str().unwrap_or("?");
+    let notes = check["notes"].as_array().map_or(0, Vec::len);
+    // Nothing in the drawing itself is damaged: say what is wrong instead of "0 damaged parts".
+    if bad == 0 && index == "sound" && notes == 0 {
+        if let Some(at) = check["appendedCopy"].as_u64() {
+            return Some(format!("{path}: a second copy of the drawing is appended (from byte {at}); the first copy is sound"));
+        }
+        let lost = check["unreadable"].as_array().map_or(0, Vec::len);
+        if lost > 0 {
+            return Some(format!(
+                "{path}: the drawing is sound, but {lost} stretch{} of the file can't be read as parts (see the report)",
+                if lost == 1 { "" } else { "es" }
+            ));
+        }
+    }
+    Some(format!("{path}: damaged ({bad} damaged parts, index {index}; see the report)"))
+}
+
 /// `cadaddy-cli bim FILE.pdf|FOLDER [--out X.cdy] [--force]`: one-call PDF → BIM pipeline.
 fn bim(args: &[String]) -> Result<(), String> {
     let mut path: Option<&str> = None;
@@ -709,6 +769,25 @@ fn plot(args: &[String]) -> Result<(), String> {
     if failed == 0 { Ok(()) } else { Err(format!("{failed} drawing(s) could not be plotted")) }
 }
 
+/// The warning for the model-space entities of `path` an image can't show, by type (those kept
+/// as unknown objects, `Proxy` in `info`), or `None` when there are none.
+fn undrawn_message(d: &cadaddy_engine::doc::Drawing, path: &str) -> Option<String> {
+    let mut types: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for e in d.model.iter() {
+        if let cadaddy_engine::doc::EntityKind::Unknown(u) = &e.kind {
+            let n = types.entry(u.dxf_type.as_str()).or_insert(0);
+            *n = n.saturating_add(1);
+        }
+    }
+    let n = types.values().fold(0usize, |a, n| a.saturating_add(*n));
+    if n == 0 {
+        return None;
+    }
+    let list: Vec<String> = types.iter().map(|(t, n)| format!("{t}: {n}")).collect();
+    let entities = if n == 1 { "entity" } else { "entities" };
+    Some(format!("{path}: {n} {entities} not drawn ({})", list.join(", ")))
+}
+
 /// The warning for the records of `path` the reader could not place, or `None` when there are none.
 fn skipped_message(d: &cadaddy_engine::doc::Drawing, path: &str) -> Option<String> {
     let n = d.skipped_records.values().fold(0usize, |a, n| a.saturating_add(*n));
@@ -718,6 +797,133 @@ fn skipped_message(d: &cadaddy_engine::doc::Drawing, path: &str) -> Option<Strin
     let list: Vec<String> = d.skipped_records.iter().map(|(section, n)| format!("{section}: {n}")).collect();
     let records = if n == 1 { "record" } else { "records" };
     Some(format!("{path}: {n} {records} could not be read and are left out ({})", list.join(", ")))
+}
+
+/// A `--cmd` parameter value of exactly `{last}` is filled in with the last object handle an
+/// earlier `--cmd` in the same run returned: `mview` answers `{"viewports":["100"]}`, so
+/// `viewport.set {"handle":"{last}","scale":1}` changes viewport 100. Any other string is passed
+/// through unchanged, and `--script` text is never rewritten.
+const LAST_HANDLE: &str = "{last}";
+
+/// How deep [`result_handles`] walks a command result (results are the engine's own JSON).
+const RESULT_DEPTH: usize = 16;
+
+/// Result keys whose values are object references: the engine's result convention for handles.
+/// A handle can be a string (`handle`, `viewport`, `insert`…) or a list of them (`handles`,
+/// `viewports`, `members`…). Every other field may hold a user-defined name, a message or a
+/// count, and is never read as a handle — a group named `100` is a name, not object `100`.
+fn handle_field(key: &str) -> bool {
+    matches!(
+        key,
+        "handle"
+            | "handles"
+            | "viewport"
+            | "viewports"
+            | "boundary"
+            | "clip"
+            | "insert"
+            | "members"
+            | "source"
+            | "objects"
+            | "entities"
+            | "selection"
+            | "parts"
+            | "refs"
+            | "matches"
+            | "line"
+            | "arc"
+            | "blocks"
+    )
+}
+
+/// Collect the handles of `v`, a value under a handle field: a handle string, an array of them,
+/// or objects that carry handle fields of their own (`entities`, `parts`).
+fn collect_result_handles(s: &Session, v: &Value, depth: usize, out: &mut Vec<Handle>) {
+    if depth > RESULT_DEPTH {
+        return;
+    }
+    match v {
+        Value::String(t) => {
+            if let Some(h) = Handle::parse_hex(t)
+                && s.doc().is_ok_and(|d| d.entity(h).is_some())
+            {
+                out.push(h);
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|x| collect_result_handles(s, x, depth + 1, out)),
+        Value::Object(m) => {
+            for (k, x) in m {
+                if handle_field(k) {
+                    collect_result_handles(s, x, depth + 1, out);
+                } else {
+                    find_result_handles(s, x, depth + 1, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Find handle fields nested in containers that are not handles themselves (`groups` in
+/// `groups.list`, whose members are handles): strings here are names, never references.
+fn find_result_handles(s: &Session, v: &Value, depth: usize, out: &mut Vec<Handle>) {
+    if depth > RESULT_DEPTH {
+        return;
+    }
+    match v {
+        Value::Array(a) => a.iter().for_each(|x| find_result_handles(s, x, depth + 1, out)),
+        Value::Object(m) => {
+            for (k, x) in m {
+                if handle_field(k) {
+                    collect_result_handles(s, x, depth + 1, out);
+                } else {
+                    find_result_handles(s, x, depth + 1, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The object handles a command result mentions, in the order it lists them. A handle-only result
+/// (a handle string or an array of them) counts as it is; otherwise only handle fields do.
+fn result_handles(s: &Session, v: &Value, depth: usize, out: &mut Vec<Handle>) {
+    match v {
+        Value::String(_) => collect_result_handles(s, v, depth, out),
+        Value::Array(a) if a.iter().all(Value::is_string) => collect_result_handles(s, v, depth, out),
+        Value::Array(_) | Value::Object(_) => find_result_handles(s, v, depth, out),
+        _ => {}
+    }
+}
+
+/// The last handle `r` returned: what a later `{last}` stands for.
+fn returned_handle(s: &Session, r: &Value) -> Option<Handle> {
+    let mut hs = Vec::new();
+    result_handles(s, r, 0, &mut hs);
+    hs.last().copied()
+}
+
+/// The active drawing's identity ([`cadaddy_engine::DocState::uid`]): a handle is only meaningful
+/// in the drawing it came from, and `new`, `open`, `document.switch` and `close` can make another
+/// drawing current.
+fn active_drawing(s: &Session) -> Option<u64> {
+    s.docs.get(s.active).map(|st| st.uid)
+}
+
+/// Every `{last}` in `p`, at any depth, replaced by `h`. With no handle to fill in it is an
+/// error, never a token reaching the command as a (bad) handle.
+fn fill_last(p: &Value, h: Option<Handle>) -> Result<Value, String> {
+    match p {
+        Value::String(t) if t.as_str() == LAST_HANDLE => match h {
+            Some(h) => Ok(Value::String(h.hex())),
+            None => Err(format!("`{LAST_HANDLE}` needs an earlier --cmd in this run to have returned a handle")),
+        },
+        Value::Array(a) => a.iter().map(|x| fill_last(x, h)).collect::<Result<Vec<_>, _>>().map(Value::Array),
+        Value::Object(m) => {
+            m.iter().map(|(k, x)| Ok((k.clone(), fill_last(x, h)?))).collect::<Result<serde_json::Map<String, Value>, _>>().map(Value::Object)
+        }
+        other => Ok(other.clone()),
+    }
 }
 
 fn run(args: &[String]) -> Result<(), String> {
@@ -758,7 +964,7 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             "--save" => save = Some(it.next().ok_or("--save needs a path")?.clone()),
             "--export" => exp = Some(it.next().ok_or("--export needs a path")?.clone()),
-            f if !f.starts_with("--") => open(&mut s, f)?,
+            f if !f.starts_with("--") => open(&mut s, f).map(|_| ())?,
             other => return Err(format!("unknown option {other}")),
         }
     }
@@ -767,15 +973,33 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     check_framed_output(framing, exp.as_deref())?;
     let before = model_views(&s);
+    let mut last_handle: Option<Handle> = None;
     for (kind, body) in steps {
+        // A handle belongs to the drawing that returned it: if this step makes another drawing
+        // current (`new`, `open`, `document.switch`, `close`, or a script running one of them),
+        // the remembered handle is stale. A handle the step itself returns is taken afterwards,
+        // so it is a handle of the drawing it made current.
+        let drawing = active_drawing(&s);
         match kind.as_str() {
-            "script" => s.script(&body).map_err(|e| e.to_string())?,
+            "script" => {
+                s.script(&body).map_err(|e| e.to_string())?;
+                if active_drawing(&s) != drawing {
+                    last_handle = None;
+                }
+            }
             _ => {
                 // `cmd FILE:LINE` for a --cmd-file line: errors say where it came from.
                 let at = kind.strip_prefix("cmd ").map(|w| format!("{w}: ")).unwrap_or_default();
                 let (id, json) = body.split_once(' ').unwrap_or((&body, "{}"));
                 let params: Value = serde_json::from_str(json).map_err(|e| format!("{at}--cmd {id}: {e}"))?;
+                let params = fill_last(&params, last_handle).map_err(|e| format!("{at}--cmd {id}: {e}"))?;
                 let r = s.execute(id, &params).map_err(|e| format!("{at}{e}"))?;
+                if active_drawing(&s) != drawing {
+                    last_handle = None;
+                }
+                if let Some(h) = returned_handle(&s, &r) {
+                    last_handle = Some(h);
+                }
                 if !r.is_null() {
                     outln!("{r}");
                 }
@@ -1060,7 +1284,7 @@ enum McpTarget {
 
 /// Parses the arguments after `mcp`. `--connect` must be followed by a `HOST:PORT`; a missing,
 /// empty or flag-like value is an error, never a silent fall back to a headless session (#103).
-/// When no `--connect` is given, `CADADDY_CONTROL_PORT` and the legacy `CADCRAFT_CONTROL_PORT` are
+/// When no `--connect` is given, `CADADDY_CONTROL_PORT` and the legacy `CADADDY_CONTROL_PORT` are
 /// checked: a port there becomes `--connect 127.0.0.1:PORT --launch`.
 fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
     let mut addr: Option<String> = None;
@@ -1088,10 +1312,9 @@ fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
             other => return Err(format!("mcp: unknown argument {other}\n{USAGE}")),
         }
     }
-    // When no --connect is given, check CADADDY_CONTROL_PORT / CADCRAFT_CONTROL_PORT.
+    // When no --connect is given, check CADADDY_CONTROL_PORT / CADADDY_CONTROL_PORT.
     if addr.is_none() && !headless {
-        let port_str =
-            std::env::var("CADADDY_CONTROL_PORT").or_else(|_| std::env::var("CADCRAFT_CONTROL_PORT")).ok().filter(|v| !v.trim().is_empty());
+        let port_str = std::env::var("CADADDY_CONTROL_PORT").or_else(|_| std::env::var("CADADDY_CONTROL_PORT")).ok().filter(|v| !v.trim().is_empty());
         if let Some(ps) = port_str {
             let p = ps.trim();
             if let Ok(port) = p.parse::<u16>() {
@@ -1194,7 +1417,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
         watch_events(addr, out.clone());
         server = server.with_event_watcher();
     }
-    server.serve(stdin.lock(), out).map_err(|e| e.to_string())
+    server.serve_cancellable(std::io::BufReader::new(stdin), out).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1382,6 +1605,37 @@ fn cli() -> ExitCode {
 mod tests {
     use super::*;
 
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("cadaddy-cli-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    #[test]
+    fn write_atomic_replaces_file_and_leaves_no_staging_files() {
+        let dir = scratch_dir("replace");
+        let out = dir.join("a.dxf");
+        let out = out.to_str().expect("utf-8 path");
+        write_atomic(out, b"old").expect("create");
+        write_atomic(out, b"new").expect("overwrite");
+        assert_eq!(std::fs::read(out).expect("read"), b"new");
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_atomic_failure_keeps_destination_and_cleans_up() {
+        let dir = scratch_dir("fail");
+        let out = dir.join("target");
+        std::fs::create_dir(&out).expect("dir as destination");
+        std::fs::write(out.join("keep"), b"x").expect("seed");
+        assert!(write_atomic(out.to_str().expect("utf-8 path"), b"new").is_err());
+        assert_eq!(std::fs::read(out.join("keep")).expect("kept"), b"x");
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn b(x0: f64, y0: f64, x1: f64, y1: f64) -> Bounds2 {
         Bounds2::new(Vec2::new(x0, y0), Vec2::new(x1, y1))
     }
@@ -1451,6 +1705,40 @@ mod tests {
         assert!(check_framed_output(Framing::Extents, None).is_err());
         assert!(check_framed_output(Framing::Extents, Some("a.png")).is_ok());
         assert!(check_framed_output(Framing::Auto, Some("a.dxf")).is_ok());
+    }
+
+    #[test]
+    fn last_placeholder_takes_the_previous_handle() {
+        let mut s = sample_session();
+        let r = s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+        let h = returned_handle(&s, &r).expect("LINE returns its handle");
+        assert_eq!(fill_last(&json!({"handle": "{last}"}), Some(h)), Ok(json!({"handle": h.hex()})));
+        // Nested, as in a selection list.
+        assert_eq!(fill_last(&json!({"handles": ["{last}", "1"]}), Some(h)), Ok(json!({"handles": [h.hex(), "1"]})));
+        // Only the exact token: a name or a sentence that merely contains it stays as written.
+        for p in [json!("last"), json!("{last} "), json!({"name": "last"})] {
+            assert_eq!(fill_last(&p, Some(h)), Ok(p.clone()));
+        }
+        // Nothing returned yet: an error, not a token passed to the command as a bad handle.
+        assert!(fill_last(&json!({"handle": "{last}"}), None).unwrap_err().contains("{last}"));
+    }
+
+    /// Handles are read from a result by looking the strings up in the drawing: counts and names
+    /// are not mistaken for handles, and `mview`'s `viewports` works like `handle`/`handles`.
+    #[test]
+    fn returned_handle_reads_only_real_handles() {
+        let mut s = Session::empty();
+        s.new_drawing(false);
+        s.execute("layout.set", &json!({"name": "Layout1"})).unwrap();
+        let r = s.execute("mview", &json!({"p1": [20, 20], "p2": [200, 150]})).unwrap();
+        let h = returned_handle(&s, &r).expect("mview returns its viewport handle");
+        assert!(r["viewports"].as_array().is_some_and(|a| a.iter().any(|v| v.as_str() == Some(h.hex().as_str()))), "{r}");
+        assert_eq!(returned_handle(&s, &json!({"changed": 3, "name": "A1"})), None);
+        // The most recent of several.
+        let a = s.execute("line", &json!({"points": [[0, 0], [1, 0]]})).unwrap();
+        let b = s.execute("line", &json!({"points": [[0, 0], [2, 0]]})).unwrap();
+        let (ha, hb) = (returned_handle(&s, &a).unwrap(), returned_handle(&s, &b).unwrap());
+        assert_eq!(returned_handle(&s, &json!({"handles": [ha.hex(), hb.hex()]})), Some(hb));
     }
 
     #[test]
@@ -1571,5 +1859,84 @@ mod tests {
         assert_eq!(validate_options("info", &args(&["missing.dxf", "--typo"]), NO_OPTIONS), Err("info: unknown option --typo".into()));
         assert_eq!(validate_options("perf", &args(&["1", "--typo"]), NO_OPTIONS), Err("perf: unknown option --typo".into()));
         assert_eq!(validate_options("sample", &args(&["bracket", "out.dxf", "--typo"]), NO_OPTIONS), Err("sample: unknown option --typo".into()));
+    }
+}
+
+#[cfg(test)]
+mod b4polish_tests {
+    use super::*;
+
+    fn temp_file(tag: &str, bytes: &[u8]) -> String {
+        let dir = std::env::temp_dir().join(format!("cadaddy-cli-b4-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sample.cdy");
+        std::fs::write(&path, bytes).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    /// B4-028: `info` reports what opening a damaged file said, in the short summary too.
+    #[test]
+    fn info_reports_the_warnings_open_does() {
+        let good = cadaddy_io::write(&cadaddy_engine::sample::floor_plan(), "a.cdy").unwrap();
+        install_io();
+        let path = temp_file("cut", &good[..good.len() / 2]);
+        let mut s = Session::for_app();
+        let opened = open(&mut s, &path).unwrap();
+        let said = opened["warnings"].as_array().cloned().unwrap_or_default();
+        assert!(!said.is_empty(), "open said nothing about a cut-short file: {opened}");
+        for full in [false, true] {
+            let v = info_value(&path, full).unwrap();
+            assert_eq!(v["warnings"].as_array(), Some(&said), "full={full}: {v}");
+        }
+        // A sound file has none.
+        let ok = temp_file("ok", &good);
+        assert!(info_value(&ok, false).unwrap().get("warnings").is_none());
+    }
+
+    /// B4-031: `verify` on a file with only bytes appended says exactly that.
+    #[test]
+    fn verify_names_trailing_data() {
+        let good = cadaddy_io::write(&cadaddy_engine::sample::floor_plan(), "a.cdy").unwrap();
+        let check = cadaddy_io::cdy::verify(&good).unwrap();
+        assert_eq!(verify_failure("f.cdy", &check), None);
+        let mut longer = good.clone();
+        longer.extend_from_slice(&[0u8; 1234]);
+        let why = verify_failure("f.cdy", &cadaddy_io::cdy::verify(&longer).unwrap()).unwrap();
+        assert!(why.contains("1234 bytes of trailing data after the end") && !why.contains("damaged"), "{why}");
+        // Real damage is still damage.
+        let mut hurt = good.clone();
+        if let Some(b) = hurt.get_mut(200) {
+            *b ^= 0xff;
+        }
+        let why = verify_failure("f.cdy", &cadaddy_io::cdy::verify(&hurt).unwrap()).unwrap();
+        assert!(why.contains("damaged"), "{why}");
+    }
+
+    /// B7-023: `verify` on a file with a whole second copy appended says that, and that the first copy is sound.
+    #[test]
+    fn verify_names_an_appended_copy() {
+        let good = cadaddy_io::write(&cadaddy_engine::sample::floor_plan(), "a.cdy").unwrap();
+        let mut twice = good.clone();
+        twice.extend_from_slice(&good);
+        let why = verify_failure("f.cdy", &cadaddy_io::cdy::verify(&twice).unwrap()).unwrap();
+        assert!(why.contains("a second copy of the drawing is appended") && why.contains("first copy is sound"), "{why}");
+        assert!(!why.contains("0 damaged parts"), "{why}");
+    }
+
+    /// B7-009: `import` of a damaged design file reports what opening it does.
+    #[test]
+    fn import_reports_what_reading_left_out() {
+        let (dgn, _) = cadaddy_io::dgn::write(&cadaddy_engine::sample::floor_plan()).unwrap();
+        install_io();
+        let path = temp_file("cut.dgn", &dgn[..dgn.len() / 2]);
+        let mut s = Session::for_app();
+        s.new_drawing_with_viewports(false);
+        let r = s.execute("import", &json!({ "path": path })).unwrap();
+        let said = r["warnings"].as_array().cloned().unwrap_or_default();
+        assert!(said.iter().any(|w| w.as_str().is_some_and(|w| w.contains("ended early"))), "{r}");
+        // A sound file has none.
+        let ok = temp_file("whole.dgn", &dgn);
+        let r = s.execute("import", &json!({ "path": ok })).unwrap();
+        assert!(r.get("warnings").is_none(), "{r}");
     }
 }

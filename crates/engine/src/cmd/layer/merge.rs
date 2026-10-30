@@ -50,6 +50,24 @@ fn source_refusal(d: &Drawing, name: &str, delete: bool) -> Option<String> {
     None
 }
 
+/// Why LAYMRG (`delete` false) or LAYDEL would refuse `name` as a source, for the dialogs that
+/// list the layers (`None`: it can be picked).
+pub fn removal_refusal(d: &Drawing, name: &str, delete: bool) -> Option<String> {
+    source_refusal(d, name, delete)
+}
+
+/// Objects per layer (lower-case name) in model space, the layouts and the block definitions
+/// LAYMRG and LAYDEL would change: what the dialogs show next to each layer.
+pub fn objects_per_layer(d: &Drawing) -> std::collections::HashMap<String, usize> {
+    let mut out: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let blocks = d.blocks.values().filter(|b| b.xref_path.is_none()).flat_map(|b| b.entities.iter());
+    let all = d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())).chain(blocks);
+    for e in all.take(5_000_000) {
+        *out.entry(e.common.layer.to_ascii_lowercase()).or_insert(0) += 1;
+    }
+    out
+}
+
 /// The drawing's spelling of each named layer, checked as sources. Duplicates collapse.
 fn resolve_sources(d: &Drawing, cmd: &str, names: &[String], delete: bool) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
@@ -89,7 +107,7 @@ fn on_layers<'a>(store: &'a EntityStore, set: &'a HashSet<String>) -> impl Itera
     store.iter().filter(|e| set.contains(&e.common.layer.to_ascii_lowercase())).map(|e| e.handle)
 }
 
-/// Drop the removed layers from every layout viewport's frozen list and colour overrides.
+/// Drop the removed layers from every layout viewport's frozen list and colour, linetype and lineweight overrides.
 pub(super) fn forget_in_viewports(d: &mut Drawing, set: &HashSet<String>) {
     for layout in &mut d.layouts {
         let hs: Vec<Handle> = layout
@@ -99,6 +117,8 @@ pub(super) fn forget_in_viewports(d: &mut Drawing, set: &HashSet<String>) {
                 EntityKind::Viewport(v) => {
                     v.frozen_layers.iter().any(|l| set.contains(&l.to_ascii_lowercase()))
                         || v.layer_colors.iter().any(|(l, _)| set.contains(&l.to_ascii_lowercase()))
+                        || v.layer_linetypes.iter().any(|(l, _)| set.contains(&l.to_ascii_lowercase()))
+                        || v.layer_lineweights.iter().any(|(l, _)| set.contains(&l.to_ascii_lowercase()))
                 }
                 _ => false,
             })
@@ -109,6 +129,8 @@ pub(super) fn forget_in_viewports(d: &mut Drawing, set: &HashSet<String>) {
                 if let EntityKind::Viewport(v) = &mut e.kind {
                     v.frozen_layers.retain(|l| !set.contains(&l.to_ascii_lowercase()));
                     v.layer_colors.retain(|(l, _)| !set.contains(&l.to_ascii_lowercase()));
+                    v.layer_linetypes.retain(|(l, _)| !set.contains(&l.to_ascii_lowercase()));
+                    v.layer_lineweights.retain(|(l, _)| !set.contains(&l.to_ascii_lowercase()));
                 }
             });
         }
@@ -142,6 +164,7 @@ pub(super) fn run_laymrg(s: &mut Session, p: &Value) -> Result<Value> {
         hs.len()
     });
     forget_in_viewports(d, &set);
+    super::filters::forget_in_groups(d, &set);
     d.layers.retain(|l| !set.contains(&l.name.to_ascii_lowercase()));
     let mut msg = format!("Merged {} into \"{target}\": {} moved.", quoted(&sources), plural(moved, "object"));
     if set.contains(&d.header.str("CLAYER", "0").to_ascii_lowercase()) {
@@ -169,6 +192,7 @@ pub(super) fn run_laydel(s: &mut Session, p: &Value) -> Result<Value> {
         hs.len()
     });
     forget_in_viewports(d, &set);
+    super::filters::forget_in_groups(d, &set);
     d.layers.retain(|l| !set.contains(&l.name.to_ascii_lowercase()));
     s.set_selection(Vec::new());
     let msg = format!("Deleted {} and {}.", quoted(&sources), plural(erased, "object"));

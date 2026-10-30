@@ -73,12 +73,14 @@ const SESSION_VARS: &[&str] = &[
     "SELECTIONCYCLING",
     "NAVBARDISPLAY",
     "WSCURRENT",
+    "PICKDRAG",
     "PICKSTYLE",
     "GROUPDISPLAYMODE",
     "GRIPSIZE",
     "CURSORSIZE",
     "MAXARRAY",
     "ZOOMFACTOR",
+    "MEASUREINIT",
     "LASTPOINT",
     "FONTALT",
     "FONTFALLBACK",
@@ -166,16 +168,20 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "SELECTIONCYCLING" => json!(st.selectioncycling),
         "NAVBARDISPLAY" => json!(i32::from(st.navbardisplay)),
         "WSCURRENT" => json!(st.wscurrent),
+        "PICKDRAG" => json!(i32::from(st.pickdrag) * 2),
         "PICKSTYLE" => json!(st.pickstyle),
         "GROUPDISPLAYMODE" => json!(st.groupdisplaymode),
         "GRIPSIZE" => json!(st.gripsize),
         "CURSORSIZE" => json!(st.cursorsize),
         "MAXARRAY" => json!(st.maxarray),
+        "MEASUREINIT" => json!(i32::from(st.measureinit)),
         "ZOOMFACTOR" => json!(st.zoomfactor),
         "LASTPOINT" => json!([s.last_point.x, s.last_point.y, 0.0]),
-        // Held in radians (as `$ANGBASE` in DXF); reported in degrees, like POLARANG.
+        // Held in radians (`$ANGBASE` in DXF is in degrees); reported in degrees, like POLARANG.
         "ANGBASE" => json!(s.doc().ok()?.header.f64("ANGBASE", 0.0).to_degrees()),
         "CONSTRAINTINFER" => json!(i32::from(s.doc().ok()?.parametric.settings.infer)),
+        // Text, as AutoCAD reads it back; the header keeps the index (and CECOLOR_RGB) for DXF.
+        "CECOLOR" => json!(crate::cmd::current_color_value(s.doc().ok()?)),
         "CONSTRAINTNAMEFORMAT" => json!(s.doc().ok()?.parametric.settings.name_format),
         // Process-wide font substitution (profile settings, not saved in the drawing).
         "FONTALT" => json!(cadaddy_fonts::ttf::font_alt()),
@@ -454,10 +460,138 @@ pub fn format_angle_list(angles: &[f64]) -> String {
     angles.iter().map(|a| format!("{}", (a.to_degrees() * 1e6).round() / 1e6)).collect::<Vec<_>>().join(";")
 }
 
+/// How a numeric variable's value is bounded.
+#[derive(Clone, Copy)]
+enum Bound {
+    /// A whole number from the first to the second.
+    Whole(i64, i64),
+    /// A number from the first to the second.
+    Between(f64, f64),
+    /// A number greater than 0 (and at most [`Bound::LARGEST`]).
+    Positive,
+}
+
+impl Bound {
+    /// The largest coordinate or size a value may be (the export limit).
+    const LARGEST: f64 = 1e12;
+    /// A number of 0 or more.
+    const NONNEGATIVE: Bound = Bound::Between(0.0, Bound::LARGEST);
+}
+
+/// AutoCAD's ranges for the numeric variables that have one (SETVAR refuses the rest with its
+/// own message: "Requires an integer value between 0 and 8.").
+const RANGES: &[(&str, Bound)] = &[
+    ("ANGDIR", Bound::Whole(0, 1)),
+    ("ANNOALLVISIBLE", Bound::Whole(0, 1)),
+    ("APERTURE", Bound::Between(1.0, 50.0)),
+    ("ATTMODE", Bound::Whole(0, 2)),
+    ("AUNITS", Bound::Whole(0, 4)),
+    ("AUPREC", Bound::Whole(0, 8)),
+    ("CELTSCALE", Bound::Positive),
+    ("CENTEREXE", Bound::NONNEGATIVE),
+    ("CHAMFERA", Bound::NONNEGATIVE),
+    ("CHAMFERB", Bound::NONNEGATIVE),
+    ("CHAMFERC", Bound::NONNEGATIVE),
+    ("CIRCLERAD", Bound::NONNEGATIVE),
+    ("CURSORSIZE", Bound::Between(1.0, 100.0)),
+    ("DIMADEC", Bound::Whole(-1, 8)),
+    ("DIMALTD", Bound::Whole(0, 8)),
+    ("DIMALTF", Bound::Positive),
+    ("DIMALTRND", Bound::NONNEGATIVE),
+    ("DIMALTTD", Bound::Whole(0, 8)),
+    ("DIMALTTZ", Bound::Whole(0, 15)),
+    ("DIMALTU", Bound::Whole(1, 8)),
+    ("DIMALTZ", Bound::Whole(0, 15)),
+    ("DIMARCSYM", Bound::Whole(0, 2)),
+    ("DIMASZ", Bound::NONNEGATIVE),
+    ("DIMATFIT", Bound::Whole(0, 3)),
+    ("DIMAUNIT", Bound::Whole(0, 4)),
+    ("DIMAZIN", Bound::Whole(0, 3)),
+    ("DIMDEC", Bound::Whole(0, 8)),
+    ("DIMDLI", Bound::NONNEGATIVE),
+    ("DIMEXE", Bound::NONNEGATIVE),
+    ("DIMFRAC", Bound::Whole(0, 2)),
+    ("DIMFXL", Bound::NONNEGATIVE),
+    ("DIMJOGANG", Bound::Between(5.0, 90.0)),
+    ("DIMJUST", Bound::Whole(0, 4)),
+    ("DIMLUNIT", Bound::Whole(1, 6)),
+    ("DIMRND", Bound::NONNEGATIVE),
+    ("DIMSCALE", Bound::NONNEGATIVE),
+    ("DIMTAD", Bound::Whole(0, 4)),
+    ("DIMTDEC", Bound::Whole(0, 8)),
+    ("DIMTFAC", Bound::Positive),
+    ("DIMTFILL", Bound::Whole(0, 2)),
+    ("DIMTMOVE", Bound::Whole(0, 2)),
+    ("DIMTOLJ", Bound::Whole(0, 2)),
+    ("DIMTSZ", Bound::NONNEGATIVE),
+    ("DIMTXT", Bound::Positive),
+    ("DIMTZIN", Bound::Whole(0, 3)),
+    ("DIMZIN", Bound::Whole(0, 15)),
+    ("DONUTID", Bound::NONNEGATIVE),
+    ("DONUTOD", Bound::Positive),
+    ("FILLETRAD", Bound::NONNEGATIVE),
+    ("FILLMODE", Bound::Whole(0, 1)),
+    ("GRIDMAJOR", Bound::Whole(1, 100)),
+    ("GRIPSIZE", Bound::Between(1.0, 255.0)),
+    ("HPSCALE", Bound::Positive),
+    ("HPSPACE", Bound::Positive),
+    ("INSUNITS", Bound::Whole(0, 24)),
+    ("LENSLENGTH", Bound::Positive),
+    ("LTSCALE", Bound::Positive),
+    ("LUNITS", Bound::Whole(1, 5)),
+    ("LUPREC", Bound::Whole(0, 8)),
+    ("MAXARRAY", Bound::Whole(100, 10_000_000)),
+    ("MEASUREMENT", Bound::Whole(0, 1)),
+    ("MIRRTEXT", Bound::Whole(0, 1)),
+    ("MLEADERSCALE", Bound::NONNEGATIVE),
+    ("PICKBOX", Bound::Between(0.0, 50.0)),
+    ("PLINEWID", Bound::NONNEGATIVE),
+    ("PSLTSCALE", Bound::Whole(0, 1)),
+    ("PSVPSCALE", Bound::NONNEGATIVE),
+    ("REVCLOUDARCLEN", Bound::Positive),
+    ("SKETCHINC", Bound::Positive),
+    ("TEXTSIZE", Bound::Positive),
+    ("TRACEWID", Bound::NONNEGATIVE),
+    ("USERI1", Bound::Whole(-32768, 32767)),
+    ("USERI2", Bound::Whole(-32768, 32767)),
+    ("USERI3", Bound::Whole(-32768, 32767)),
+    ("USERI4", Bound::Whole(-32768, 32767)),
+    ("USERI5", Bound::Whole(-32768, 32767)),
+];
+
+/// Why `v` is outside the range AutoCAD gives variable `n`; `None` when it is inside, has no
+/// range here, or isn't a number (the variable's own check says what it takes then).
+fn out_of_range(n: &str, v: &Value) -> Option<String> {
+    let x = v.as_f64().or_else(|| v.as_str().and_then(|t| t.trim().parse::<f64>().ok()))?;
+    // PDMODE: 0-4, plus 32, 64 or 96 for the shape around the point.
+    if n == "PDMODE" {
+        let ok = x.fract() == 0.0 && (0.0..=100.0).contains(&x) && (x as i64 & 31) <= 4;
+        return (!ok).then(|| "PDMODE must be 0 to 4, 32 to 36, 64 to 68 or 96 to 100.".to_string());
+    }
+    let (_, bound) = RANGES.iter().find(|(name, _)| *name == n)?;
+    let fits = match *bound {
+        Bound::Whole(lo, hi) => x.fract() == 0.0 && x >= lo as f64 && x <= hi as f64,
+        Bound::Between(lo, hi) => x.is_finite() && x >= lo && x <= hi,
+        Bound::Positive => x.is_finite() && x > 0.0 && x <= Bound::LARGEST,
+    };
+    if fits {
+        return None;
+    }
+    Some(match *bound {
+        Bound::Whole(lo, hi) => format!("{n} must be a whole number from {lo} to {hi}."),
+        Bound::Between(lo, hi) if hi >= Bound::LARGEST => format!("{n} must be {lo} or more."),
+        Bound::Between(lo, hi) => format!("{n} must be from {lo} to {hi}."),
+        Bound::Positive => format!("{n} must be greater than 0."),
+    })
+}
+
 pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     let n = name.trim().to_ascii_uppercase();
     if is_read_only(&n) {
         return Err(EngineError::BadParams { cmd: "setvar".into(), msg: format!("{n} is read-only") });
+    }
+    if let Some(why) = out_of_range(&n, v) {
+        return Err(EngineError::BadParams { cmd: "setvar".into(), msg: why });
     }
     // A routine or script can't loosen what loads routines and scripts.
     if matches!(n.as_str(), "SECURELOAD" | "TRUSTEDPATHS") && s.running_code() {
@@ -474,6 +608,8 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     }
     let st = &mut s.settings;
     match n.as_str() {
+        // The `color` command's input: ByLayer, ByBlock, a name, an index or a true colour.
+        "CECOLOR" => crate::cmd::set_current_color_value(s, v).ok_or_else(bad)?,
         "OSMODE" => st.osmode = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & 0x7fff,
         "3DOSMODE" => {
             st.osmode3 = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & crate::snap3::mode::MASK
@@ -580,12 +716,14 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
                 .to_string()
         }
         "SELECTIONCYCLING" => st.selectioncycling = as_i(v).filter(|n| (-2..=2).contains(n)).and_then(|n| i8::try_from(n).ok()).ok_or_else(bad)?,
+        "PICKDRAG" => st.pickdrag = as_i(v).filter(|b| matches!(b, 0 | 2)).map(|b| b == 2).ok_or_else(bad)?,
         "PICKSTYLE" => st.pickstyle = as_i(v).filter(|b| (0..=3).contains(b)).and_then(|b| u8::try_from(b).ok()).ok_or_else(bad)?,
         "GROUPDISPLAYMODE" => st.groupdisplaymode = small(v, 2).ok_or_else(bad)?,
         "GRIPSIZE" => st.gripsize = as_f64(v).ok_or_else(bad)?.clamp(1.0, 255.0),
         "CURSORSIZE" => st.cursorsize = as_f64(v).ok_or_else(bad)?.clamp(1.0, 100.0),
         "MAXARRAY" => st.maxarray = as_f64(v).ok_or_else(bad)?.clamp(100.0, 10_000_000.0) as u64,
         "ZOOMFACTOR" => st.zoomfactor = as_i(v).filter(|z| (3..=100).contains(z)).ok_or_else(bad)? as u32,
+        "MEASUREINIT" => st.measureinit = small(v, 1).ok_or_else(bad)? == 1,
         "FONTALT" => cadaddy_fonts::ttf::set_font_alt(v.as_str().ok_or_else(bad)?),
         "FONTFALLBACK" => cadaddy_fonts::ttf::set_fallback_fonts(v.as_str().ok_or_else(bad)?),
         "SAVETIME" => crate::autosave::set_savetime(
@@ -657,6 +795,13 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
                 return Err(EngineError::BadParams { cmd: "setvar".into(), msg: format!("Unknown variable name: {n}") });
             }
             let d = s.doc_mut()?;
+            // A dimension variable takes only the values its style field takes, as in DIMSTYLE and DIMOVERRIDE.
+            if let Some((_, field)) = cadaddy_doc::DIMVARS.iter().find(|(var, _)| *var == n) {
+                let mut st = d.dim_style(&d.header.str("DIMSTYLE", "Standard")).cloned().unwrap_or_default();
+                if !st.apply_fields(&serde_json::Map::from_iter([((*field).to_string(), v.clone())])).is_empty() {
+                    return Err(bad());
+                }
+            }
             let val = match v {
                 Value::Number(x) if x.is_i64() => cadaddy_doc::HVal::Int(x.as_i64().unwrap_or(0)),
                 Value::Number(x) => cadaddy_doc::HVal::Real(x.as_f64().filter(|f| f.is_finite()).ok_or_else(bad)?),
@@ -718,7 +863,7 @@ pub fn list(s: &Session) -> Value {
     }
     if let Ok(d) = s.doc() {
         for (k, v) in &d.header.vars {
-            if matches!(k.as_str(), "ANGBASE" | "SNAPUNIT" | "GRIDUNIT") {
+            if matches!(k.as_str(), "ANGBASE" | "SNAPUNIT" | "GRIDUNIT" | "CECOLOR") {
                 m.insert(k.clone(), get(s, k).unwrap_or(Value::Null));
             } else if !k.starts_with("CADADDY_") {
                 m.insert(k.clone(), serde_json::to_value(v).unwrap_or(Value::Null));

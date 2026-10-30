@@ -905,7 +905,7 @@ fn content_stream(
                 }
                 pending = true;
             }
-            Kind::Tris | Kind::Mask => {
+            Kind::Tris | Kind::InkMask | Kind::Mask => {
                 flush(&mut c, &mut pending);
                 // A wipeout's mask is paper white.
                 let rgb = if p.kind == Kind::Mask { white } else { rgb };

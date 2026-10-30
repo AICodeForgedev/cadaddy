@@ -61,7 +61,7 @@ pub fn parse_key(text: &str) -> Option<KeyboardShortcut> {
 }
 
 /// Whether `id` is a command (the engine's or the interface's).
-fn is_command(id: &str) -> bool {
+pub(crate) fn is_command(id: &str) -> bool {
     cadaddy_engine::cmd::find_command(id).is_some() || crate::menus::UI_COMMANDS.iter().any(|(c, ..)| *c == id)
 }
 
@@ -89,6 +89,32 @@ pub fn set_shortcut(app: &mut CadApp, key: &str, command: &str) -> Result<String
         None => app.ui.shortcuts.push(Binding { key: text.clone(), command }),
     }
     Ok(text)
+}
+
+/// Replace the user's shortcuts with the ones in `v` (an array of `{key, command}`), keeping only
+/// what [`set_shortcut`] would accept: unparseable keys and unknown commands are dropped, a later
+/// entry for the same key wins, an empty command (a built-in turned off) is kept, and at most
+/// [`MAX_BINDINGS`] stay. Returns how many entries were dropped.
+pub fn restore_shortcuts(app: &mut CadApp, v: &Value) -> Result<usize, String> {
+    let list = v.as_array().ok_or("`shortcuts` must be an array of {key, command}")?;
+    let mut kept: Vec<(KeyboardShortcut, Binding)> = Vec::new();
+    for e in list {
+        let (Some(key), Some(command)) = (e.get("key").and_then(Value::as_str), e.get("command").and_then(Value::as_str)) else { continue };
+        let Some(k) = parse_key(key) else { continue };
+        let command = command.trim().to_ascii_lowercase();
+        if !command.is_empty() && !is_command(&command) {
+            continue;
+        }
+        let b = Binding { key: key_text(&k), command };
+        if let Some(i) = kept.iter().position(|(o, _)| *o == k) {
+            kept[i].1 = b;
+        } else if kept.len() < MAX_BINDINGS {
+            kept.push((k, b));
+        }
+    }
+    let dropped = list.len() - kept.len();
+    app.ui.shortcuts = kept.into_iter().map(|(_, b)| b).collect();
+    Ok(dropped)
 }
 
 /// Take `key` away: a built-in shortcut is turned off, the user's removed.
@@ -150,7 +176,12 @@ fn id() -> egui::Id {
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = crate::theme::Tokens::get();
     let mut st: State = ctx.data(|d| d.get_temp(id())).unwrap_or_default();
-    let listing = app.session.execute("aliasedit", &json!({})).unwrap_or(Value::Null);
+    // Read straight from the engine's state: drawing the dialog must not run a command (that would
+    // fill the journal and the event queue on every repaint).
+    let user_aliases = cadaddy_engine::cmd::file::user_aliases();
+    let built_in = cadaddy_engine::cmd::file::built_in_aliases();
+    let conflicts = cadaddy_engine::cmd::file::alias_conflicts();
+    let alias_file = cadaddy_engine::cmd::file::alias_file();
     let mut alias_call: Option<Value> = None;
     let mut key_call: Option<Value> = None;
     let mut load = false;
@@ -178,11 +209,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             let q = st.search.trim().to_ascii_lowercase();
             let hit = |a: &str, b: &str| q.is_empty() || a.to_ascii_lowercase().contains(&q) || b.to_ascii_lowercase().contains(&q);
             if st.tab == 0 {
-                let user: Vec<(String, String)> = listing["aliases"]
-                    .as_object()
-                    .map(|m| m.iter().map(|(a, c)| (a.clone(), c.as_str().unwrap_or_default().to_string())).collect())
-                    .unwrap_or_default();
-                let conflicts = listing["conflicts"].as_array().cloned().unwrap_or_default();
+                let user: Vec<(String, String)> = user_aliases.iter().map(|(a, c)| (a.clone(), c.clone())).collect();
                 egui::ScrollArea::vertical().id_salt("alias-rows").max_height(260.0).show(ui, |ui| {
                     egui::Grid::new("alias-grid").striped(true).num_columns(4).show(ui, |ui| {
                         for (a, c) in user.iter().filter(|(a, c)| hit(a, c)) {
@@ -209,8 +236,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                             });
                             ui.end_row();
                         }
-                        for b in listing["builtIn"].as_array().into_iter().flatten() {
-                            let (a, c) = (b["alias"].as_str().unwrap_or_default(), b["command"].as_str().unwrap_or_default());
+                        for (a, c) in built_in.iter().map(|(a, c)| (a.as_str(), c.as_str())) {
                             if user.iter().any(|(u, _)| u == a) || !hit(a, c) {
                                 continue;
                             }
@@ -243,7 +269,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     }
                 });
                 ui.horizontal(|ui| {
-                    if ui.button(crate::tl!("Save")).on_hover_text(listing["file"].as_str().unwrap_or("cadaddy.pgp")).clicked() {
+                    if ui.button(crate::tl!("Save")).on_hover_text(alias_file.as_deref().unwrap_or("cadaddy.pgp")).clicked() {
                         alias_call = Some(json!({ "save": true }));
                     }
                     load = ui.button(crate::tl!("Load...")).clicked();
@@ -349,6 +375,38 @@ mod tests {
         for bad in ["", "ctrl+", "hyper+k", "ctrl+nokey", "+"] {
             assert!(parse_key(bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_profile_keeps_the_user_shortcuts_and_skips_bad_ones() {
+        let mut app = app();
+        set_shortcut(&mut app, "ctrl+shift+k", "line").unwrap();
+        set_shortcut(&mut app, "Ctrl+P", "pan").unwrap();
+        remove_shortcut(&mut app, "F7").unwrap();
+        let before = effective_shortcuts(&app);
+        assert!(!before.iter().any(|(k, _)| *k == parse_key("F7").unwrap()), "F7 is off");
+
+        let json = app.profile_json();
+        let mut fresh = self::app();
+        assert!(fresh.ui.shortcuts.is_empty());
+        fresh.load_profile(&json);
+        assert_eq!(effective_shortcuts(&fresh), before);
+        assert_eq!(fresh.ui.shortcuts, app.ui.shortcuts);
+
+        // A bad key and an unknown command are skipped; the others restore.
+        let mut v: Value = serde_json::from_str(&json).unwrap();
+        v["shortcuts"].as_array_mut().unwrap().extend([
+            json!({ "key": "hyper+q", "command": "line" }),
+            json!({ "key": "Ctrl+Shift+J", "command": "nosuchcommand" }),
+            json!({ "key": "F9", "command": "circle" }),
+        ]);
+        let mut again = self::app();
+        again.load_profile(&v.to_string());
+        let eff = effective_shortcuts(&again);
+        let has = |k: &str, c: &str| eff.iter().any(|(kk, cc)| *kk == parse_key(k).unwrap() && cc == c);
+        assert!(has("Ctrl+Shift+K", "line") && has("Ctrl+P", "pan") && has("F9", "circle"));
+        assert!(!eff.iter().any(|(_, c)| c == "nosuchcommand") && !eff.iter().any(|(k, _)| *k == parse_key("Ctrl+Shift+J").unwrap()));
+        assert_eq!(again.ui.shortcuts.len(), app.ui.shortcuts.len() + 1);
     }
 
     #[test]

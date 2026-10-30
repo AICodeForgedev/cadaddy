@@ -68,6 +68,7 @@
 	Blend	Übergang
 	Block	Block
 	Block Attribute Manager...	Blockattribut-Manager...
+	Block Description...	Blockbeschreibung...
 	Block Editor	Blockeditor
 	Block Reference	Blockreferenz
 	Block...	Block...
@@ -459,6 +460,7 @@
 	N	N
 	Name	Name
 	Name (A–Z)	Name (A–Z)
+	Named Viewports...	Benannte Ansichtsfenster...
 	Nearest	Nächstgelegener
 	New	Neu
 	New (metric)	Neu (metrisch)
@@ -1031,6 +1033,7 @@
 	Search for pattern	Muster suchen
 	Not a number or distance: {text}	Keine Zahl und keine Entfernung: {text}
 	Query Texts	Texte abfragen
+	Analyze Shapes	Formen analysieren
 	Italic	Kursiv
 	Underline	Unterstrichen
 	Overline	Überstrichen
@@ -3085,3 +3088,11 @@
 	Clash Navigate	Kollisionen durchgehen
 	Colour By Status/Level	Farbe nach Status/Ebene
 	Inspect Element	Element untersuchen
+	Planned Walls	Geplante Wände
+	Extended Trim	Erweitertes Stutzen
+	Trim and Extend	Stutzen und Dehnen
+	Trim to Block Objects	An Blockobjekten stutzen
+	Extend to Block Objects	An Blockobjekte dehnen
+	Super Hatch	Superschraffur
+	Block Authoring Palettes	Block-Erstellungspaletten
+	Test Block	Block testen

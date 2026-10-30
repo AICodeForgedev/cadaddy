@@ -164,11 +164,25 @@ pub fn anno_offset(e: &Entity, f: f64) -> Vec2 {
     e.common.anno_scales.iter().find(|s| s.has_factor(f)).map(|s| s.offset).filter(|o| o.is_finite()).unwrap_or(Vec2::ZERO)
 }
 
+/// Whether [`shift_representation`] can move `k`'s representation on its own: text, multiline
+/// text, block references, multileaders, linear and aligned dimensions, and other dimensions whose
+/// text the user placed. Anything else moves as a whole object.
+pub fn can_shift_representation(k: &EntityKind) -> bool {
+    match k {
+        EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::Insert(_) | EntityKind::MLeader(_) => true,
+        EntityKind::Dimension(dm) => dm.user_text_pos || matches!(dm.kind, crate::DimKind::Linear { .. } | crate::DimKind::Aligned),
+        _ => false,
+    }
+}
+
 /// Move `k`'s representation by `o`: text, multiline text and block references whole; a
 /// multileader's content (landing, text, block) with its arrowheads where they point; a linear
 /// or aligned dimension's line and text, other dimensions' text placed by the user.
 fn shift_representation(k: &mut EntityKind, o: Vec2) {
     let o3 = o.to3(0.0);
+    if !can_shift_representation(k) {
+        return;
+    }
     match k {
         EntityKind::Text(t) => {
             t.insert = t.insert + o3;
@@ -178,6 +192,9 @@ fn shift_representation(k: &mut EntityKind, o: Vec2) {
         EntityKind::Insert(_) => k.transform(&cadaddy_geom::Mat3::translate(o)),
         EntityKind::MLeader(m) => {
             m.landing = m.landing + o3;
+            for r in &mut m.roots {
+                r.landing = r.landing + o3;
+            }
             if let Some(t) = &mut m.text {
                 t.insert = t.insert + o3;
             }

@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Accept, Input, Prompt, Result, Session, Step};
 
-pub use pgp::{built_in as built_in_aliases, user_aliases};
+pub use pgp::{alias_conflicts, alias_file, built_in as built_in_aliases, user_aliases};
 pub(crate) use pgp::{specs as alias_specs, user_alias};
 pub use template::{qnew_template, set_qnew_template};
 
@@ -517,7 +517,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["File", "New Drawing..."])
             .key("Cmd+N")
             .alias(&["qnew"])
-            .params("{metric?: bool, template?: path to a .dwt/.dxf template (\".\" for none; default QNEWTEMPLATE)}")
+            .params("{metric?: bool (default MEASUREINIT), template?: path to a .dwt/.dxf template (\".\" for none; default QNEWTEMPLATE)}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("open", "Open...", run_open)
@@ -536,7 +536,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("saveas", "Save As...", run_saveas_reporting)
             .menu(&["File", "Save As..."])
             .key("Cmd+Shift+S")
-            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), 12 (Release 12 DXF: newer objects converted, some left out), binary?: bool (DXF), force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved there; otherwise refused)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved}")
+            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), 12 (Release 12 DXF: newer objects converted, some left out), binary?: bool (DXF), force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved there; otherwise refused)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved, dwgCopyKept?: where an existing .dwg that wasn't this drawing's copy was kept first (<name>.dwg.bak), dwgCopyError?: why the copy wasn't saved}")
             .noundo()
             .interactive(|_| Ok(Box::new(SaveAsM::default()))),
         CommandSpec::new("checkexchange", "Check Exchange", run_checkexchange)
@@ -636,7 +636,8 @@ fn run_new(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(r) = template::run_new(s, p)? {
         return Ok(r);
     }
-    let i = s.new_drawing_with_viewports(bool_or(p, "metric", false));
+    let metric = s.settings.measureinit;
+    let i = s.new_drawing_with_viewports(bool_or(p, "metric", metric));
     Ok(json!({ "index": i, "title": s.docs.get(i).map(|d| d.title.clone()) }))
 }
 
@@ -1029,9 +1030,11 @@ pub(super) fn run_close(s: &mut Session, p: &Value) -> Result<Value> {
 /// Let go of what process-wide caches hold for drawings no longer open: the selection indexes
 /// (they hold their drawing's objects; the open drawings' are rebuilt when next used) and the
 /// decoded pixels of images only closed drawings showed. Either kept a closed drawing's memory
-/// (gigabytes for a large one) until the program exited.
-fn release_closed(s: &Session) {
+/// (gigabytes for a large one) until the program exited. The closed drawings' LISP
+/// environments go too.
+fn release_closed(s: &mut Session) {
     crate::spatial::clear_cache();
+    s.lisp_forget_closed();
     let used: std::collections::HashSet<&str> = s
         .docs
         .iter()
@@ -1059,6 +1062,8 @@ fn run_closeall(s: &mut Session, _p: &Value) -> Result<Value> {
 pub(crate) struct Saved {
     bytes: usize,
     copy: Option<std::result::Result<String, String>>,
+    /// The DWG copy replaced a `.dwg` the drawing hadn't written: where that file was kept.
+    copy_kept: Option<String>,
     /// Appended to the .cdy file (only what changed) rather than written in full.
     incremental: bool,
     /// Something worth telling: the file was deleted since it was opened, or was overwritten by force.
@@ -1128,7 +1133,7 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
             let n = commit_save(s, path, &bytes, store)?;
             // The first DWG/DXF save checks what the file keeps: it reads these bytes back
             // instead of writing the drawing a second time.
-            if is_exchange_file(path) && KEEP_WRITTEN.get() && s.state().is_ok_and(|st| !st.kept_checked) {
+            if is_exchange_file(path) && KEEP_WRITTEN.get() && s.state().is_ok_and(|st| !st.kept_checked.contains(&kept_key(s, path, *opts))) {
                 JUST_WRITTEN.with(|w| *w.borrow_mut() = Some((path.to_string(), bytes)));
             }
             (n, false)
@@ -1154,8 +1159,9 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
     if is_drawing_file(path) {
         crate::activity::after_save(s, path);
     }
-    let copy = (is_cdy(path) && dwg_copy()).then(|| save_dwg_copy(s, cmd, path));
-    Ok(Saved { bytes: n, copy, incremental, note })
+    let mut copy_kept = None;
+    let copy = (is_cdy(path) && dwg_copy()).then(|| save_dwg_copy(s, cmd, path, &mut copy_kept));
+    Ok(Saved { bytes: n, copy, copy_kept, incremental, note })
 }
 
 /// Save to a .cdy file through the .cdy saver: appended to the file when it is the one the drawing
@@ -1189,11 +1195,25 @@ fn save_cdy(s: &mut Session, path: &str, opts: &SaveAs) -> Result<Option<(usize,
 
 /// DWGCOPY: write the DWG copy of a drawing just saved to the .cdy file `path`. A copy that fails
 /// is reported, never failing the save itself.
-fn save_dwg_copy(s: &mut Session, cmd: &str, path: &str) -> std::result::Result<String, String> {
+fn save_dwg_copy(s: &mut Session, cmd: &str, path: &str, kept: &mut Option<String>) -> std::result::Result<String, String> {
     let copy = std::path::Path::new(path).with_extension("dwg").to_string_lossy().into_owned();
-    let r = write_bytes(s, cmd, &copy, &SaveAs::default()).and_then(|b| store_keeping(&copy, &b, false));
+    let r = guard_dwg_copy(s, &copy).and_then(|keep| {
+        let bytes = write_bytes(s, cmd, &copy, &SaveAs::default()).map_err(|e| e.to_string())?;
+        if let Some(bak) = &keep {
+            std::fs::copy(&copy, bak).map_err(|e| format!("couldn't keep the existing {} as {}: {e}", file_name(&copy), file_name(bak)))?;
+        }
+        store_keeping(&copy, &bytes, false).map_err(|e| e.to_string())?;
+        *kept = keep;
+        Ok(())
+    });
     match r {
         Ok(()) => {
+            if let Some(bak) = kept.as_deref() {
+                s.echo(format!("{} already existed and wasn't a copy of this drawing: kept as {}", file_name(&copy), file_name(bak)));
+            }
+            if let Ok(st) = s.state_mut() {
+                st.dwg_copy_written = Some(copy.clone());
+            }
             s.echo(format!("Saved a DWG copy: {}", file_name(&copy)));
             Ok(copy)
         }
@@ -1205,12 +1225,57 @@ fn save_dwg_copy(s: &mut Session, cmd: &str, path: &str) -> std::result::Result<
     }
 }
 
+/// Whether the DWG copy may be written to `copy`, and where an existing file there must be kept
+/// first. A `.dwg` that is not the copy this drawing last wrote (the file it was opened from, or
+/// anyone's) is kept as `<name>.dwg.bak`, distinct from the drawing's own `<name>.bak`; a copy
+/// open in another tab, or a `.dwg.bak` already in the way, stops the copy with how to go on.
+fn guard_dwg_copy(s: &Session, copy: &str) -> std::result::Result<Option<String>, String> {
+    let active = s.active;
+    if let Some((_, other)) = s.docs.iter().enumerate().find(|(i, d)| *i != active && d.path.as_deref().is_some_and(|p| same_file(p, copy))) {
+        return Err(format!("{} is open in another tab ({}). Close it first, or turn the DWG copy off (DWGCOPY 0).", file_name(copy), other.title));
+    }
+    if !std::fs::metadata(copy).is_ok_and(|m| m.is_file()) {
+        return Ok(None);
+    }
+    let ours = s.state().ok().and_then(|st| st.dwg_copy_written.as_deref()).is_some_and(|w| same_file(w, copy));
+    if ours {
+        return Ok(None);
+    }
+    let bak = format!("{copy}.bak");
+    if std::fs::symlink_metadata(&bak).is_ok() {
+        return Err(format!(
+            "{} already exists and isn't a copy this drawing wrote, and {} is already taken. Move or rename one of them, or turn the DWG copy off (DWGCOPY 0).",
+            file_name(copy),
+            file_name(&bak)
+        ));
+    }
+    Ok(Some(bak))
+}
+
 /// Put saved bytes where the user gets them: natively the file at `path` (written atomically); on
 /// the web, which has no file system, a browser download named after `path` via [`deliver`].
 /// Where saving over a drawing keeps the previous file: the same name with `.bak` (AutoCAD's
 /// ISAVEBAK).
 fn bak_path(path: &str) -> String {
     std::path::Path::new(path).with_extension("bak").to_string_lossy().into_owned()
+}
+
+/// The longest file name (one path component, in bytes) the file systems CADaddy saves to accept.
+const MAX_NAME_BYTES: usize = 255;
+
+/// An error naming the limit when the file name (or the `.bak` kept beside it) is longer than a
+/// file system takes, instead of the operating system's "File name too long (os error 63)".
+fn name_fits(path: &str) -> Result<()> {
+    let p = std::path::Path::new(path);
+    let len = |p: &std::path::Path| p.file_name().map_or(0, |n| n.len());
+    let longest = len(p).max(len(std::path::Path::new(&bak_path(path))));
+    if longest > MAX_NAME_BYTES {
+        return Err(bad(
+            "save",
+            format!("the file name is too long ({longest} bytes; the limit is {MAX_NAME_BYTES}). Save it under a shorter name."),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn store(path: &str, bytes: &[u8]) -> Result<()> {
@@ -1221,6 +1286,7 @@ pub(crate) fn store(path: &str, bytes: &[u8]) -> Result<()> {
 /// (DWGCOPY) keeps none, as its `.bak` would replace the drawing's own.
 pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<()> {
     crate::writefile::protected(std::path::Path::new(path)).map_err(|e| bad("save", e.to_string()))?;
+    name_fits(path)?;
     // An agent's dry run changes nothing, files included.
     if !crate::agent::writes_allowed() {
         return Err(crate::EngineError::Other(format!("Dry run: {path} was not written.")));
@@ -1306,6 +1372,9 @@ fn saved(path: &str, sv: &Saved) -> Value {
         Some(Ok(copy)) => r["dwgCopy"] = json!(copy),
         Some(Err(why)) => r["dwgCopyError"] = json!(why),
         None => {}
+    }
+    if let Some(bak) = &sv.copy_kept {
+        r["dwgCopyKept"] = json!(bak);
     }
     r
 }
@@ -1585,14 +1654,22 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
     Ok(r)
 }
 
-/// The result of a "not kept" check running on a worker thread: `Some(None)` once it found
-/// nothing (or failed), `Some(Some((notice, line)))` once it found losses.
+/// A finished "not kept" check: the target it was for, whether it ran to the end (a failed check
+/// is retried by the next save), and the notice and command-line line when it found losses.
+#[derive(Debug)]
+pub struct KeptDone {
+    pub key: KeptKey,
+    pub succeeded: bool,
+    pub notice: Option<(Value, String)>,
+}
+
+/// The result of a "not kept" check running on a worker thread.
 #[derive(Clone, Debug, Default)]
-pub struct KeptJob(std::sync::Arc<std::sync::Mutex<Option<Option<(Value, String)>>>>);
+pub struct KeptJob(std::sync::Arc<std::sync::Mutex<Option<KeptDone>>>);
 
 impl KeptJob {
     /// The finished result, taken (`None` while it runs).
-    pub fn take(&self) -> Option<Option<(Value, String)>> {
+    pub fn take(&self) -> Option<KeptDone> {
         self.0.lock().ok().and_then(|mut r| r.take())
     }
 }
@@ -1607,18 +1684,29 @@ fn kept_notice(path: &str, lost: &[&str], detail: &[kept::Loss]) -> (Value, Stri
     )
 }
 
-/// The first save of a drawing into DWG or DXF: say what that file doesn't keep that a .cdy file
-/// would (once per drawing), and list it in the result's `notKept`. With background checks on
-/// (the app), the file is read back on a worker thread so the save returns at once: the result
-/// says `notKeptPending`, and the notice comes when the check finishes.
+/// What a DWG/DXF save is checked for: the format (`true` = DXF), the version (its $ACADVER code) and whether
+/// the DXF is binary. A drawing is checked once per target, not once.
+pub type KeptKey = (bool, &'static str, bool);
+
+/// The target a save of `path` with `opts` writes (the version it will carry once saved).
+fn kept_key(s: &Session, path: &str, opts: SaveAs) -> KeptKey {
+    (is_dxf(path), opts.version.unwrap_or_else(|| drawing_version(s, path)).code(), opts.binary)
+}
+
+/// A DWG or DXF save into a target not yet checked: say what that file doesn't keep that a .cdy
+/// file would, and list it in the result's `notKept`. A target counts as checked once a check of
+/// it has succeeded, so saving again in a lossier version is checked too. With background checks
+/// on (the app, for saves the user starts), the file is read back on a worker thread so the save
+/// returns at once: the result says `notKeptPending`, and the notice comes when the check
+/// finishes. Saves an agent makes through the app (`CadApp::run`) are checked as they run.
 fn report_not_kept(s: &mut Session, r: &mut Value, path: &str, opts: SaveAs) {
     let Some(hooks) = io() else { return };
     let background = s.background_checks;
+    let key = kept_key(s, path, opts);
     let Ok(st) = s.state_mut() else { return };
-    if st.kept_checked {
+    if st.kept_checked.contains(&key) {
         return;
     }
-    st.kept_checked = true;
     // No threads on the web: checked as the save runs.
     #[cfg(target_arch = "wasm32")]
     let _ = background;
@@ -1631,7 +1719,7 @@ fn report_not_kept(s: &mut Session, r: &mut Value, path: &str, opts: SaveAs) {
         let job = KeptJob::default();
         let (slot, path_owned) = (job.0.clone(), path.to_string());
         let spawned = std::thread::Builder::new().name("kept-check".into()).spawn(move || {
-            let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let bytes = match written {
                     Some(b) => Ok(b),
                     None => match write_as {
@@ -1640,12 +1728,12 @@ fn report_not_kept(s: &mut Session, r: &mut Value, path: &str, opts: SaveAs) {
                     },
                 };
                 let (lost, detail) = bytes.and_then(|b| kept::check_written(&d, &path_owned, &b, hooks.read)).ok()?;
-                (!lost.is_empty() || !detail.is_empty()).then(|| kept_notice(&path_owned, &lost, &detail))
+                Some((!lost.is_empty() || !detail.is_empty()).then(|| kept_notice(&path_owned, &lost, &detail)))
             }))
             .ok()
             .flatten();
             if let Ok(mut r) = slot.lock() {
-                *r = Some(found);
+                *r = Some(KeptDone { key, succeeded: checked.is_some(), notice: checked.flatten() });
             }
         });
         if spawned.is_ok() {
@@ -1666,6 +1754,7 @@ fn report_not_kept(s: &mut Session, r: &mut Value, path: &str, opts: SaveAs) {
         },
     };
     let Ok((lost, detail)) = bytes.and_then(|b| kept::check_written(d, path, &b, hooks.read)) else { return };
+    st.kept_checked.push(key);
     if lost.is_empty() && detail.is_empty() {
         return;
     }
@@ -1892,7 +1981,7 @@ mod pr193_tests {
         let st = s.state().unwrap();
         assert!(!st.is_dirty());
         assert_eq!((st.path.as_deref(), st.title.as_str()), (Some("a/Owned.dxf"), "Owned.dxf"));
-        assert_eq!(saved("a/Owned.dxf", &Saved { bytes: n, copy: None, incremental: false, note: None })["bytes"], 6);
+        assert_eq!(saved("a/Owned.dxf", &Saved { bytes: n, copy: None, copy_kept: None, incremental: false, note: None })["bytes"], 6);
     }
 }
 

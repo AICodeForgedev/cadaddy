@@ -535,9 +535,18 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 && let EntityKind::Hatch(h) = &mut k
             {
                 // Boundary in the mirrored OCS, like LWPOLYLINE; the pattern direction mirrors too.
-                for v in h.loops.iter_mut().flat_map(|l| l.vertices.iter_mut()) {
-                    v.p.x = -v.p.x;
-                    v.bulge = -v.bulge;
+                // A loop with exact edges mirrors them (and re-tessellates its points); the others
+                // flip their points and bulges.
+                let flip = cadaddy_geom::Mat3::scale(-1.0, 1.0);
+                for l in &mut h.loops {
+                    if l.curves.is_empty() {
+                        for v in &mut l.vertices {
+                            v.p.x = -v.p.x;
+                            v.bulge = -v.bulge;
+                        }
+                    } else {
+                        l.transform(&flip, true);
+                    }
                 }
                 h.angle = cadaddy_geom::norm_angle(std::f64::consts::PI - h.angle);
             }
@@ -845,7 +854,7 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
                         while let Some(x) = get(i).filter(|x| matches!(x.code, 94 | 73 | 74 | 95 | 96)) {
                             let n = x.i64().clamp(0, 100_000) as usize;
                             match x.code {
-                                94 => degree = n,
+                                94 => degree = n.clamp(1, 10), // same cap as the SPLINE reader
                                 95 => nk = n,
                                 96 => nc = n,
                                 _ => {}
@@ -933,13 +942,18 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
     // of some patterns (AR-CONC) only approximate AutoCAD's, and drawing them at the file's scale
     // could be hundreds of times denser than the hatch the author saw.
     let pattern_lines = if solid { Vec::new() } else { pattern_definition(tags, scale, angle, origin) };
+    // The writer's `NOSOURCE` xdata mark: an associative hatch with no source boundary objects,
+    // whose flag a DWG bridge drops.
+    let associative = t.i(71).unwrap_or(0) != 0
+        || (loops.iter().all(|l| l.sources.is_empty())
+            && crate::dxf_ext::xdata(tags, crate::dxf_ext::APP).iter().any(|x| x.code == 1000 && x.str() == crate::dxf_write::HATCH_NO_SOURCE));
     Some(EntityKind::Hatch(Box::new(Hatch {
         pattern: pattern.to_ascii_uppercase(),
         solid,
         loops,
         scale,
         angle,
-        associative: t.i(71).unwrap_or(0) != 0,
+        associative,
         style: t.i(75).unwrap_or(0) as u8,
         // The first 30 is the elevation point's z (boundary points are 2D).
         elevation: t.f(30).filter(|z| z.is_finite()).unwrap_or(0.0),
@@ -1485,6 +1499,9 @@ fn header(tags: &[Tag], d: &mut Drawing) {
                 },
                 // $DIMJOGANG is in radians; the variable (like the style) holds degrees.
                 HVal::Real(r) if name == "DIMJOGANG" => HVal::Real((r.to_degrees() * 1e9).round() / 1e9),
+                // $ANGBASE is in degrees (a drawing measured from north has 90.0); the variable
+                // holds radians.
+                HVal::Real(r) if name == "ANGBASE" => HVal::Real(r.to_radians()),
                 hv => hv,
             };
             d.header.set(&name, hv);
@@ -1575,7 +1592,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
         match kind.as_str() {
             "LAYER" => {
                 let name = t.s(2).unwrap_or_default();
-                if name.is_empty() {
+                if name.is_empty() || d.layers.len() >= MAX_OBJECTS {
                     continue;
                 }
                 let aci = t.i(62).unwrap_or(7);
@@ -1619,7 +1636,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             }
             "LTYPE" => {
                 let name = t.s(2).unwrap_or_default();
-                if name.is_empty() {
+                if name.is_empty() || d.linetypes.len() >= MAX_OBJECTS {
                     continue;
                 }
                 let pattern = ltype_pattern(&tg, &ltype_styles);
@@ -1648,6 +1665,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     {
                         d.shape_files.push(f);
                     }
+                    continue;
+                }
+                if d.text_styles.len() >= MAX_OBJECTS {
                     continue;
                 }
                 // 70 bit 4: vertical; 71 bits 2/4: backwards / upside down.
@@ -1758,7 +1778,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             }
             "DIMSTYLE" => {
                 let name = t.s(2).unwrap_or_default();
-                if name.is_empty() {
+                if name.is_empty() || d.dim_styles.len() >= MAX_OBJECTS {
                     continue;
                 }
                 // Every variable with a DIMSTYLE group code; values the style can't take are
@@ -1770,6 +1790,13 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     if let Some(v) = crate::dxf_ext::decode(kind, tag, &rx.styles, &rx.brs, &rx.ltypes) {
                         fields.insert(field.to_string(), v);
                     }
+                }
+                // A DWG's native DIMSTYLE colour comes as a second group 70 (after the flags);
+                // CADaddy's own xdata, read next, wins where both are present.
+                if let Some(c) = tg.iter().take_while(|x| x.code < 1000).filter(|x| x.code == 70).nth(1)
+                    && let Some(v) = crate::dxf_ext::decode(crate::dxf_ext::K::Color, c, &rx.styles, &rx.brs, &rx.ltypes)
+                {
+                    fields.insert("textFillColor".to_string(), v);
                 }
                 fields.extend(crate::dxf_ext::read_newer_dimvars(&tg, &rx.styles, &rx.brs, &rx.ltypes));
                 let mut st = DimStyle { name: name.clone(), annotative: annotative(&tg), ..DimStyle::default() };
@@ -2015,12 +2042,15 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     let cut_off = !tags.iter().rev().take(4).any(|t| t.code == 0 && t.str().trim().eq_ignore_ascii_case("EOF"));
     let outside = outside_sections(&tags);
     // The sections take the tags (no second copy of the file's text).
-    let secs = cadaddy_dxf::sections_owned(tags);
+    let mut secs = cadaddy_dxf::sections_owned(tags);
     if secs.is_empty() {
         return Err(IoError::Format("no sections found".into()));
     }
+    let undefined = drop_undefined(&mut secs);
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
+    // A file without $INSUNITS declares no units (#1209); only new drawings take the template's.
+    d.header.set_i64("INSUNITS", 0);
     let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
     if let Some(objects) = secs.iter().find(|s| s.name == "OBJECTS") {
         let (materials, names) = crate::dxf_material::read(&records(&objects.tags));
@@ -2156,7 +2186,12 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
         d.layouts.push(Layout::new("Layout1", 1));
         paper_block_for.insert("*PAPER_SPACE".into(), "Layout1".into());
     }
-    let first_layout = d.layouts.first().map(|l| l.name.clone()).unwrap_or_else(|| "Layout1".into());
+    // The layout in `*Paper_Space` is the active one, kept when it isn't the first tab (the first
+    // is active by default); paper-space entities without an owner go there.
+    let active = paper_block_for.get("*PAPER_SPACE").cloned();
+    let first_tab = d.layouts.iter().min_by_key(|l| l.tab_order).map(|l| l.name.clone());
+    d.active_layout = active.clone().filter(|a| Some(a) != first_tab.as_ref());
+    let first_layout = active.or_else(|| d.layouts.first().map(|l| l.name.clone())).unwrap_or_else(|| "Layout1".into());
     // Blocks: model/paper space blocks hold entities in newer files.
     for (name, base, description, ents, xref) in blocks {
         let up = name.to_ascii_uppercase();
@@ -2177,8 +2212,13 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
             continue;
         }
         // Generated geometry we rebuild on save: table blocks, and standard arrowhead blocks
-        // nothing inserts.
-        if rx.table_blocks.contains(&up) || (crate::dxf_ext::is_standard_arrow(&name) && !rx.inserted.contains(&up)) {
+        // nothing inserts whose content is the one CADaddy writes. An arrowhead block with other
+        // content (AutoCAD's `_Dot`, a user's redefinition) is kept, so dimensions keep it.
+        let generated_arrow = || {
+            let own: Vec<&Entity> = ents.iter().map(|(_, _, e)| &**e).collect();
+            crate::dxf_ext::is_standard_arrow(&name) && !rx.inserted.contains(&up) && crate::dxf_write::is_generated_arrow(&name, &own)
+        };
+        if rx.table_blocks.contains(&up) || generated_arrow() {
             continue;
         }
         let mut b = Block::new(&name);
@@ -2237,7 +2277,76 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     if cut_off {
         d.read_notes.push(CUT_OFF_NOTE.into());
     }
+    if undefined.0 > 0 {
+        let n = undefined.0;
+        d.read_notes.push(format!(
+            "DXF: {n} object{} had undefined (NaN/inf) coordinates and {} dropped",
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "was" } else { "were" }
+        ));
+    }
+    if undefined.1 > 0 {
+        let n = undefined.1;
+        d.read_notes.push(format!("DXF: {n} undefined (NaN/inf) number{} in the header, tables or objects read as 0", if n == 1 { "" } else { "s" }));
+    }
     Ok(d)
+}
+
+/// Objects with a NaN or infinite number (the parser keeps those as NaN) are dropped from the
+/// ENTITIES section and from blocks, with the vertices and attributes that follow a dropped
+/// POLYLINE or INSERT; returns how many objects were dropped and how many other records
+/// (tables, header, objects) hold such a number, which reads as 0 there.
+fn drop_undefined(secs: &mut [cadaddy_dxf::Section]) -> (usize, usize) {
+    // Coordinates (10-39) decide where an object is; other numbers (radii, pattern line offsets,
+    // extended data) have their own readers, which take a bad one for 0 or skip it.
+    let bad = |t: &Tag| (10..=39).contains(&t.code) && matches!(t.value, cadaddy_dxf::Value::Real(r) if !r.is_finite());
+    let (mut objects, mut others) = (0usize, 0usize);
+    for s in secs.iter_mut() {
+        if !s.tags.iter().any(bad) {
+            continue;
+        }
+        if !matches!(s.name.as_str(), "ENTITIES" | "BLOCKS") {
+            others = others.saturating_add(s.tags.iter().filter(|t| bad(t)).count());
+            continue;
+        }
+        let tags = std::mem::take(&mut s.tags);
+        let mut kept = Vec::with_capacity(tags.len());
+        let mut i = 0;
+        // Inside a dropped POLYLINE or INSERT with attributes, up to its SEQEND.
+        let mut in_dropped_group = false;
+        // Where the open POLYLINE or INSERT-with-attributes group began in `kept`.
+        let mut group_at: Option<usize> = None;
+        while i < tags.len() {
+            let end = tags.get(i + 1..).and_then(|r| r.iter().position(|t| t.code == 0)).map_or(tags.len(), |p| i + 1 + p);
+            let rec = tags.get(i..end).unwrap_or(&[]);
+            let kind = rec.first().map(|t| t.str().to_ascii_uppercase()).unwrap_or_default();
+            let structural = matches!(kind.as_str(), "BLOCK" | "ENDBLK" | "SEQEND");
+            if in_dropped_group {
+                if kind == "SEQEND" {
+                    in_dropped_group = false;
+                }
+            } else if !structural && rec.iter().any(bad) {
+                objects = objects.saturating_add(1);
+                if let Some(at) = group_at.take().filter(|_| matches!(kind.as_str(), "VERTEX" | "ATTRIB")) {
+                    // A vertex or attribute with an undefined number: its whole polyline or insert goes.
+                    kept.truncate(at);
+                    in_dropped_group = true;
+                } else {
+                    in_dropped_group = kind == "POLYLINE" || (kind == "INSERT" && rec.iter().any(|t| t.code == 66 && t.value.as_i64() == 1));
+                }
+            } else {
+                if kind == "POLYLINE" || (kind == "INSERT" && rec.iter().any(|t| t.code == 66 && t.value.as_i64() == 1)) {
+                    group_at = Some(kept.len());
+                } else if kind == "SEQEND" {
+                    group_at = None;
+                }
+                kept.extend(rec.iter().cloned());
+            }
+            i = end;
+        }
+        s.tags = kept;
+    }
+    (objects, others)
 }
 
 fn count_skipped(skipped: &mut std::collections::BTreeMap<String, usize>, section: &str, n: usize) {
@@ -2344,6 +2453,8 @@ struct Objects {
     layer_filters: Vec<(String, Vec<String>)>,
     /// The first GEODATA object (the drawing's geographic location).
     geodata: Option<Vec<Tag>>,
+    /// WIPEOUTVARIABLES: the drawing's WIPEOUTFRAME (0 = frames hidden, 1 = shown).
+    wipeout_frame: Option<i64>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -2397,6 +2508,7 @@ impl Objects {
             "FIELD" | "ACAD_FIELD" if self.fields.len() < MAX_OBJECTS => {
                 self.fields.insert(h, tags.to_vec());
             }
+            "WIPEOUTVARIABLES" => self.wipeout_frame = T(tags).i(70).filter(|v| (0..=2).contains(v)),
             "SORTENTSTABLE" if self.sortents.len() < MAX_OBJECTS => {
                 if let Some(t) = sortents_table(tags) {
                     self.sortents.push(t);
@@ -2430,6 +2542,9 @@ impl Objects {
         // Fields: codes back into their texts, cached values kept.
         crate::dxf_field::apply(d, &rx.text_fields, &self.fields, &self.field_dicts);
         d.geo = self.geodata.as_deref().and_then(crate::dxf_geo::read);
+        if let Some(v) = self.wipeout_frame {
+            d.header.set_i64("WIPEOUTFRAME", v);
+        }
         if let Some(style) = self.xrecord_text(crate::dxf_ext::MLEADER_STYLE_KEY).filter(|s| !s.trim().is_empty()) {
             d.header.set_str("CMLEADERSTYLE", &style);
         }
@@ -2659,10 +2774,25 @@ fn dimassoc(d: &mut Drawing, tags: &[Tag]) {
     if !dm.assoc.is_empty() {
         return;
     }
+    // A radial or diametric dimension names its circle once, by its centre.
+    if matches!(dm.kind, DimKind::Radius | DimKind::Diameter) {
+        let links = radial_links(d, dm, tail);
+        if !links.is_empty() {
+            let _ = d.modify_entity(dim_h, |e| {
+                if let EntityKind::Dimension(dm) = &mut e.kind {
+                    dm.assoc = links;
+                }
+            });
+        }
+        return;
+    }
     let slots: &[&str] = match dm.kind {
         DimKind::Linear { .. } | DimKind::Aligned => &["p13", "p14"],
+        DimKind::Angular => &["p13", "p14", "p15", "p16"],
+        DimKind::Angular3P => &["p13", "p14", "p15"],
+        DimKind::ArcLength => &["p13", "p14"],
         DimKind::Ordinate { .. } => &["p13"],
-        _ => return,
+        DimKind::Radius | DimKind::Diameter => return,
     };
     let flags = T(tail).i(90).unwrap_or(0);
     let used: Vec<&str> = slots.iter().enumerate().filter(|(i, _)| flags & (1 << i) != 0).map(|(_, s)| *s).collect();
@@ -2676,7 +2806,9 @@ fn dimassoc(d: &mut Drawing, tags: &[Tag]) {
         let Some(main) = r.s(331).and_then(|h| Handle::parse_hex(&h)) else { continue };
         let other = r.s(332).and_then(|h| Handle::parse_hex(&h));
         let at = r.p(10).xy();
-        if let Some(snap) = infer_snap(d, r.i(72).unwrap_or(0), main, other, at) {
+        // A polyline's segment (subentity type 73 = 2, edge; 91 its 1-based index).
+        let segment = r.i(91).filter(|k| *k >= 1 && r.i(73) == Some(2));
+        if let Some(snap) = infer_snap(d, r.i(72).unwrap_or(0), main, other, at, segment) {
             links.push(DimAssoc { point: (*point).to_string(), handle: main, snap });
         }
     }
@@ -2689,21 +2821,75 @@ fn dimassoc(d: &mut Drawing, tags: &[Tag]) {
     }
 }
 
-/// A CADaddy snap from a DIMASSOC object snap type and point.
-fn infer_snap(d: &Drawing, osnap: i64, main: Handle, other: Option<Handle>, at: Vec2) -> Option<AssocSnap> {
+/// Associations of a radial or diametric dimension from its one standard reference: the circle
+/// or arc it measures, by its centre (osnap 3). The definition points are then on that circle,
+/// so the dimension follows its radius or diameter.
+fn radial_links(d: &Drawing, dm: &Dimension, tail: &[Tag]) -> Vec<DimAssoc> {
+    let starts: Vec<usize> = tail.iter().enumerate().filter(|(_, x)| x.code == 1 && x.str() == "AcDbOsnapPointRef").map(|(i, _)| i).take(8).collect();
+    for (k, s) in starts.iter().enumerate() {
+        let end = starts.get(k + 1).copied().unwrap_or(tail.len());
+        let r = T(tail.get(s + 1..end).unwrap_or(&[]));
+        if !matches!(r.i(72), Some(3 | 4)) {
+            continue;
+        }
+        let Some(handle) = r.s(331).and_then(|h| Handle::parse_hex(&h)) else { continue };
+        let Some(centre) = circle_centre(d, handle) else { continue };
+        let on = |point: &str, p: Vec3| {
+            let angle = centre.angle_to(p.xy());
+            angle.is_finite().then(|| DimAssoc { point: point.into(), handle, snap: AssocSnap::OnCircle { angle } })
+        };
+        let links = match dm.kind {
+            DimKind::Radius => on("p15", dm.p15).map(|p15| vec![DimAssoc { point: "defpt".into(), handle, snap: AssocSnap::Center }, p15]),
+            DimKind::Diameter => [on("defpt", dm.defpt), on("p15", dm.p15)].into_iter().collect::<Option<Vec<_>>>(),
+            _ => None,
+        };
+        if let Some(links) = links {
+            return links;
+        }
+    }
+    Vec::new()
+}
+
+/// The planar centre of a circle or arc, or `None` for any other entity: the point a radial or
+/// diametric dimension's single DIMASSOC reference names.
+fn circle_centre(d: &Drawing, h: Handle) -> Option<Vec2> {
+    match &d.entity(h)?.kind {
+        EntityKind::Circle(c) => Some(c.center.xy()),
+        EntityKind::Arc(a) => Some(a.center.xy()),
+        _ => None,
+    }
+}
+
+/// A CADaddy snap from a DIMASSOC object snap type and point. For a line or arc the osnap alone
+/// says which end: 13 is the start and 1 the end, whatever the stored point (the point is
+/// 0,0,0 for curves, and choosing by distance gave the wrong end for arcs). A point entity has
+/// only one position, so both codes mean it.
+/// For a polyline the segment the point is an end of is given too: AutoCAD writes no usable
+/// point there (10/20 are 0, #1049), the segment and the osnap name the vertex.
+fn infer_snap(d: &Drawing, osnap: i64, main: Handle, other: Option<Handle>, at: Vec2, segment: Option<i64>) -> Option<AssocSnap> {
     let e = d.entity(main)?;
+    if let (EntityKind::LwPolyline(p), Some(k), 1 | 13) = (&e.kind, segment, osnap) {
+        let n = p.vertices.len();
+        let segments = if p.closed { n } else { n.saturating_sub(1) };
+        let k = usize::try_from(k).ok().filter(|k| *k <= segments)?;
+        let index = if osnap == 13 { k - 1 } else { k % n };
+        return Some(AssocSnap::Vertex { index });
+    }
     Some(match osnap {
         1 | 13 => match &e.kind {
             EntityKind::Line(l) => {
-                if osnap == 13 || l.a.xy().dist(at) <= l.b.xy().dist(at) {
+                if osnap == 13 || (at != Vec2::ZERO && l.a.xy().dist(at) <= l.b.xy().dist(at)) {
                     AssocSnap::Start
                 } else {
                     AssocSnap::End
                 }
             }
-            EntityKind::Arc(a) => {
-                let g = cadaddy_geom::Arc::new(a.center.xy(), a.radius, a.start, a.end);
-                if osnap == 13 || g.start_point().dist(at) <= g.end_point().dist(at) { AssocSnap::Start } else { AssocSnap::End }
+            EntityKind::Arc(_) => {
+                if osnap == 13 {
+                    AssocSnap::Start
+                } else {
+                    AssocSnap::End
+                }
             }
             EntityKind::LwPolyline(p) => {
                 let index = p.vertices.iter().enumerate().min_by(|x, y| x.1.p.dist(at).total_cmp(&y.1.p.dist(at))).map(|(i, _)| i)?;
@@ -2773,6 +2959,7 @@ fn page_setup(t: &T) -> PageSetup {
     if let Some(s) = pos(ratio).or_else(|| pos(t.f(147))) {
         p.scale = s;
     }
+    p.plot_window = [t.f(48), t.f(49), t.f(140), t.f(141)].map(|v| v.filter(|v| v.is_finite()).unwrap_or(0.0));
     p.plot_area = match t.i(74) {
         Some(0) => "display",
         Some(1) => "extents",

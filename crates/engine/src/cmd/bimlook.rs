@@ -144,7 +144,7 @@ impl Look {
 
     fn path_hidden(&self, c: &Class) -> bool {
         let parts = [c.level.as_str(), c.group, c.category.as_str(), c.ty.as_str()];
-        self.hidden_paths.iter().any(|p| !p.is_empty() && p.iter().zip(parts).all(|(a, b)| a.eq_ignore_ascii_case(b)))
+        self.hidden_paths.iter().any(|p| !p.is_empty() && p.iter().zip(parts).all(|(a, b)| part_is(a, b)))
     }
 
     /// Whether the view shows an element of class `c`.
@@ -518,7 +518,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{colors?: {trade: [r, g, b] | \"#rrggbb\"}, visible?: {trade: bool}, reset?: bool | [trade]} → {trades: [{trade, label, group, color, default, visible, ghosted, count}]}: the one colour table every trade is drawn in",
         ),
         CommandSpec::new("bim.tree", "Model Tree", run_tree).params(
-            "{level?, group?, category?, type? (filters: the tree trade is the group), path?: [level, trade?, category?, type?], visible?: bool (show or hide that branch in the view), select?: bool (select its elements), zoom?: bool (zoom to them), limit?: elements listed per type (50, max 1000)} → {levels: [{name, count, visible, trades: [{name, count, visible, categories: [{name, count, visible, types: [{name, count, visible, elements: [{handle, name}]}]}]}]}], total, selected?}",
+            "{level?, group?, category?, type? (filters: the tree trade is the group), path?: [level, trade?, category?, type?] (`*` for any), visible?: bool (show or hide that branch in the view; with filters and no path, what they name on every level they don't limit), select?: bool (select its elements), zoom?: bool (zoom to them), limit?: elements listed per type (50, max 1000)} → {levels: [{name, count, visible, trades: [{name, count, visible, categories: [{name, count, visible, types: [{name, count, visible, elements: [{handle, name}]}]}]}]}], total, selected?}",
         ),
         CommandSpec::new("bim.element", "Element Properties", run_element)
             .params(
@@ -737,7 +737,12 @@ fn path_param(cmd: &str, p: &Value) -> Result<Option<Vec<String>>> {
 
 fn under(path: &[String], c: &Class) -> bool {
     let parts = [c.level.as_str(), c.group, c.category.as_str(), c.ty.as_str()];
-    path.iter().zip(parts).all(|(a, b)| a.eq_ignore_ascii_case(b))
+    path.iter().zip(parts).all(|(a, b)| part_is(a, b))
+}
+
+/// Whether a tree path's part names `name` (case aside); `*` names any (a trade on every level).
+fn part_is(part: &str, name: &str) -> bool {
+    part == "*" || part.eq_ignore_ascii_case(name)
 }
 
 fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
@@ -747,10 +752,21 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
     let filt = |k: &str| str_param(p, k).map(str::trim).filter(|t| !t.is_empty());
     let (fl, fg, fc, ft) = (filt("level"), filt("group"), filt("category"), filt("type"));
     let mut selected: Option<usize> = None;
+    // Shown or hidden by the filters alone: the branch they name on every level (or theirs).
+    let path = match path {
+        None if p.get("visible").is_some() && [fl, fg, fc, ft].iter().any(Option::is_some) => {
+            let mut parts: Vec<String> = [fl, fg, fc, ft].iter().map(|f| f.unwrap_or("*").to_string()).collect();
+            while parts.last().is_some_and(|x| x == "*") {
+                parts.pop();
+            }
+            Some(parts)
+        }
+        p => p,
+    };
     if let Some(path) = &path {
         if let Some(vis) = p.get("visible").and_then(Value::as_bool) {
             let mut look = Look::of(s.doc()?);
-            look.hidden_paths.retain(|h| !(h.len() >= path.len() && h.iter().zip(path).all(|(a, b)| a.eq_ignore_ascii_case(b))));
+            look.hidden_paths.retain(|h| !(h.len() >= path.len() && path.iter().zip(h).all(|(a, b)| part_is(a, b) || a.eq_ignore_ascii_case(b))));
             if !vis && look.hidden_paths.len() < MAX_PATHS {
                 look.hidden_paths.push(path.clone());
             }
@@ -808,7 +824,7 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
     let count_g = |g: &Categories| g.values().flat_map(|t| t.values()).map(Vec::len).sum::<usize>();
     let shown = |parts: &[&str]| {
         let owned: Vec<String> = parts.iter().map(|t| t.to_string()).collect();
-        !look.hidden_paths.iter().any(|h| !h.is_empty() && h.len() <= owned.len() && h.iter().zip(&owned).all(|(a, b)| a.eq_ignore_ascii_case(b)))
+        !look.hidden_paths.iter().any(|h| !h.is_empty() && h.len() <= owned.len() && h.iter().zip(&owned).all(|(a, b)| part_is(a, b)))
     };
     let levels: Vec<Value> = tree
         .iter()

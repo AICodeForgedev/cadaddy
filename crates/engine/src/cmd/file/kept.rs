@@ -68,47 +68,106 @@ fn step(len: usize) -> usize {
     len.div_ceil(SAMPLE).max(1)
 }
 
-/// The parts of a drawing compared, each named as the notice names it.
-fn parts(d: &Drawing) -> Vec<(&'static str, serde_json::Value)> {
-    fn v<T: Serialize>(t: &T) -> serde_json::Value {
-        serde_json::to_value(t).unwrap_or_default()
+/// The parts of a drawing compared, named as the notice names them.
+const PARTS: [&str; 20] = [
+    "objects",
+    "object properties",
+    "layers",
+    "linetypes",
+    "text styles",
+    "dimension styles",
+    "multileader styles",
+    "table styles",
+    "multiline styles",
+    "blocks",
+    "layouts",
+    "named views",
+    "viewport configurations",
+    "UCSs",
+    "layer states",
+    "groups",
+    "plot style tables",
+    "geometric and dimensional constraints",
+    "parameters",
+    "the scale list",
+];
+
+fn v<T: Serialize>(t: &T) -> serde_json::Value {
+    serde_json::to_value(t).unwrap_or_default()
+}
+
+/// Whether `back` still holds the part of `d` named `part`, as [`kept`] compares them. Objects are
+/// made into JSON a pair at a time: the whole drawing and its copy read back as JSON at once were
+/// several times the drawing's size on every DWG/DXF save, and each saving thread's memory kept
+/// the largest of them (B5-005).
+fn part_kept(part: &str, d: &Drawing, back: &Drawing) -> bool {
+    fn same<T: Serialize>(a: &T, b: &T) -> bool {
+        kept(&v(a), &v(b), 0)
     }
-    let objects = |s: &cadaddy_doc::EntityStore| {
-        let n = s.len();
-        let list = s.iter().step_by(step(n)).map(|e| content(v(&e.kind))).collect::<Vec<_>>();
-        serde_json::json!({ "count": n, "objects": list })
-    };
-    // By name, not by place: a block a writer adds (a dynamic block's definition made again from
-    // its anonymous copy) or a layout it puts elsewhere in the list loses nothing.
-    let blocks: serde_json::Map<String, serde_json::Value> = d
-        .blocks
-        .iter()
-        .filter(|(_, b)| !b.anonymous)
-        .map(|(n, b)| (n.to_ascii_lowercase(), serde_json::json!({ "head": block_head(b), "objects": objects(&b.entities) })))
-        .collect();
-    let layouts: serde_json::Map<String, serde_json::Value> = d.layouts.iter().map(|l| (l.name.to_ascii_lowercase(), objects(&l.entities))).collect();
-    vec![
-        ("objects", v(&objects(&d.model))),
-        ("object properties", v(&d.model.iter().step_by(step(d.model.len())).map(|e| v(&e.common)).collect::<Vec<_>>())),
-        ("layers", v(&d.layers)),
-        ("linetypes", v(&d.linetypes)),
-        ("text styles", v(&d.text_styles)),
-        ("dimension styles", v(&d.dim_styles)),
-        ("multileader styles", v(&d.mleader_styles)),
-        ("table styles", v(&d.table_styles)),
-        ("multiline styles", v(&d.mline_styles)),
-        ("blocks", v(&blocks)),
-        ("layouts", v(&layouts)),
-        ("named views", v(&d.views)),
-        ("viewport configurations", v(&d.vports)),
-        ("UCSs", v(&d.ucss)),
-        ("layer states", v(&d.layer_states)),
-        ("groups", v(&d.groups)),
-        ("plot style tables", v(&d.plot_style_tables)),
-        ("geometric and dimensional constraints", v(&d.constraints)),
-        ("parameters", v(&d.parametric)),
-        ("the scale list", v(&d.scales)),
-    ]
+    match part {
+        "objects" => objects_kept(&d.model, &back.model, 0),
+        "object properties" => {
+            let (a, b) = (&d.model, &back.model);
+            // Two lists: an empty one is kept, else as many, each kept.
+            a.is_empty() || (sampled(a.len()) == sampled(b.len()) && sample(a).zip(sample(b)).all(|(e, f)| kept(&v(&e.common), &v(&f.common), 1)))
+        }
+        "layers" => same(&d.layers, &back.layers),
+        "linetypes" => same(&d.linetypes, &back.linetypes),
+        "text styles" => same(&d.text_styles, &back.text_styles),
+        "dimension styles" => same(&d.dim_styles, &back.dim_styles),
+        "multileader styles" => same(&d.mleader_styles, &back.mleader_styles),
+        "table styles" => same(&d.table_styles, &back.table_styles),
+        "multiline styles" => same(&d.mline_styles, &back.mline_styles),
+        // By name, not by place: a block a writer adds (a dynamic block's definition made again from
+        // its anonymous copy) or a layout it puts elsewhere in the list loses nothing.
+        "blocks" => {
+            fn named(d: &Drawing) -> std::collections::HashMap<String, &cadaddy_doc::Block> {
+                d.blocks.iter().filter(|(_, b)| !b.anonymous).map(|(n, b)| (n.to_ascii_lowercase(), &**b)).collect()
+            }
+            let theirs = named(back);
+            named(d)
+                .into_iter()
+                .all(|(n, a)| theirs.get(&n).is_some_and(|b| kept(&block_head(a), &block_head(b), 2) && objects_kept(&a.entities, &b.entities, 2)))
+        }
+        "layouts" => {
+            fn named(d: &Drawing) -> std::collections::HashMap<String, &cadaddy_doc::EntityStore> {
+                d.layouts.iter().map(|l| (l.name.to_ascii_lowercase(), &l.entities)).collect()
+            }
+            let theirs = named(back);
+            named(d).into_iter().all(|(n, a)| theirs.get(&n).is_some_and(|b| objects_kept(a, b, 1)))
+        }
+        "named views" => same(&d.views, &back.views),
+        "viewport configurations" => same(&d.vports, &back.vports),
+        "UCSs" => same(&d.ucss, &back.ucss),
+        "layer states" => same(&d.layer_states, &back.layer_states),
+        "groups" => same(&d.groups, &back.groups),
+        "plot style tables" => same(&d.plot_style_tables, &back.plot_style_tables),
+        "geometric and dimensional constraints" => same(&d.constraints, &back.constraints),
+        "parameters" => same(&d.parametric, &back.parametric),
+        "the scale list" => same(&d.scales, &back.scales),
+        _ => true,
+    }
+}
+
+/// [`kept`] of `{count, objects}` for two object lists (`depth`: where the pair sits), the objects
+/// spread evenly ([`SAMPLE`]) and compared one pair at a time.
+fn objects_kept(a: &cadaddy_doc::EntityStore, b: &cadaddy_doc::EntityStore, depth: usize) -> bool {
+    if !kept(&a.len().into(), &b.len().into(), depth + 1) {
+        return false;
+    }
+    a.is_empty()
+        || (sampled(a.len()) == sampled(b.len())
+            && sample(a).zip(sample(b)).all(|(e, f)| kept(&content(v(&e.kind)), &content(v(&f.kind)), depth + 2)))
+}
+
+/// The objects of a list compared: every [`step`]th.
+fn sample(s: &cadaddy_doc::EntityStore) -> impl Iterator<Item = &std::sync::Arc<cadaddy_doc::Entity>> {
+    s.iter().step_by(step(s.len()))
+}
+
+/// How many objects [`sample`] gives for a list of `len`.
+fn sampled(len: usize) -> usize {
+    len.div_ceil(step(len))
 }
 
 /// A block definition's own properties (base point, description, insert units, explodability…),
@@ -185,7 +244,7 @@ pub fn not_kept(
 
 /// The parts of `d` that `back` (`d` written and read back) no longer holds.
 fn lost_parts(d: &Drawing, back: &Drawing) -> Vec<&'static str> {
-    let lost: Vec<&'static str> = parts(d).into_iter().zip(parts(back)).filter(|((_, a), (_, b))| !kept(a, b, 0)).map(|((n, _), _)| n).collect();
+    let lost: Vec<&'static str> = PARTS.into_iter().filter(|part| !part_kept(part, d, back)).collect();
     // Properties are compared object by object: with objects missing they no longer line up.
     if d.model.len() != back.model.len() { lost.into_iter().filter(|n| *n != "object properties").collect() } else { lost }
 }
@@ -654,6 +713,54 @@ mod tests {
         // A file that can't be written or read back: nothing to say here (saving reports it).
         let fails: fn(&Drawing, &str) -> Result<Vec<u8>, String> = |_, _| Err("no".into());
         assert!(not_kept(&d, "x.dwg", fails, read).is_empty());
+    }
+
+    #[test]
+    fn objects_compared_a_pair_at_a_time_still_name_what_changed() {
+        let circle = |h: u64, r: f64| {
+            cadaddy_doc::Entity::new(
+                cadaddy_doc::Handle(h),
+                cadaddy_doc::EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::new(1.0, 2.0, 0.0), radius: r }),
+            )
+        };
+        let mut d = Drawing::new_imperial();
+        for h in 1..=3 {
+            d.model.push(circle(0x100 + h, 1.0));
+        }
+        let mut block = cadaddy_doc::Block::new("Door");
+        block.entities.push(circle(0x200, 1.0));
+        d.blocks.insert("Door".into(), std::sync::Arc::new(block));
+        assert!(!d.layouts.is_empty());
+        d.layouts[0].entities.push(circle(0x300, 1.0));
+        assert!(lost_parts(&d, &d.clone()).is_empty());
+        // One object changed, one object's layer, a block's object, a layout's objects gone.
+        let mut back = d.clone();
+        back.model = Default::default();
+        for h in 1..=3 {
+            back.model.push(circle(0x100 + h, if h == 2 { 1.5 } else { 1.0 }));
+        }
+        assert_eq!(lost_parts(&d, &back), vec!["objects"]);
+        let mut moved = d.clone();
+        moved.model = Default::default();
+        for h in 1..=3 {
+            let mut e = circle(0x100 + h, 1.0);
+            if h == 3 {
+                e.common.layer = "Walls".into();
+            }
+            moved.model.push(e);
+        }
+        assert_eq!(lost_parts(&d, &moved), vec!["object properties"]);
+        let mut back = d.clone();
+        let mut other = cadaddy_doc::Block::new("Door");
+        other.entities.push(circle(0x200, 2.0));
+        back.blocks.insert("Door".into(), std::sync::Arc::new(other));
+        back.layouts[0].entities = Default::default();
+        assert_eq!(lost_parts(&d, &back), vec!["blocks", "layouts"]);
+        // Fewer objects: counted, and their properties not compared out of line.
+        let mut back = d.clone();
+        back.model = Default::default();
+        back.model.push(circle(0x101, 1.0));
+        assert_eq!(lost_parts(&d, &back), vec!["objects"]);
     }
 
     #[test]

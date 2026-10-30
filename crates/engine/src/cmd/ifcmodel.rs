@@ -243,7 +243,8 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     if !path.rsplit('.').next().is_some_and(|e| e.eq_ignore_ascii_case("ifc")) {
         return Err(bad("ifc.open", format!("{path} isn't an IFC file (.ifc)")));
     }
-    s.execute("open", &json!({ "path": path }))?;
+    let opened = s.execute("open", &json!({ "path": path }))?;
+    let warnings = opened.get("warnings").cloned().unwrap_or_else(|| json!([]));
     let els = elements(s.doc()?);
     if els.is_empty() {
         return Err(bad("ifc.open", format!("{path} has no building elements with a body")));
@@ -269,6 +270,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "name": name, "elements": els.len(), "classes": classes,
         "storeys": storeys.into_iter().map(|(_, n)| n).collect::<Vec<_>>(), "sites": sites, "buildings": buildings,
+        "warnings": warnings,
     }))
 }
 

@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use cadaddy_geom::{Vec2, Vec3};
 use serde::Serialize;
 
-use super::{ParameterKind, Value, custom_properties, dynamic_block, reference};
+use super::{DynamicBlock, ParameterKind, Value, custom_properties, dynamic_block, reference};
 use crate::{Drawing, EntityKind, Handle};
 
 /// Most grips listed for one reference.
@@ -56,6 +56,14 @@ pub enum GripShape {
     Point,
     /// A down-pointing triangle: click it for the property's choices.
     List,
+    /// An arrow at the end of a polar parameter: drag it to change the distance and the angle.
+    Polar,
+    /// A square at the end of an XY parameter: drag it to change both distances.
+    Xy,
+    /// A round grip at the end of a rotation parameter: drag it to turn.
+    Rotation,
+    /// A grip that aligns the reference's direction.
+    Alignment,
 }
 
 /// One grip of a dynamic block reference.
@@ -77,6 +85,29 @@ pub struct DynGrip {
     /// A list grip's choices.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<String>,
+}
+
+/// Which ends of two-point parameter `node` the block's actions follow, as (base, end): a
+/// connection to one point's change (BaseXDelta, EndYDelta, UpdatedEnd…) follows that end, one to
+/// the value itself (a distance, an angle) follows both. None when no action is attached to the
+/// parameter: its grips are all kept, as the block has them.
+fn ends_used(m: &DynamicBlock, node: i32) -> Option<(bool, bool)> {
+    let mut used: Option<(bool, bool)> = None;
+    for (n, name) in m.actions.iter().flat_map(|a| a.connections.iter()) {
+        if *n != node {
+            continue;
+        }
+        let c = name.to_ascii_lowercase();
+        let (base, end) = used.unwrap_or((false, false));
+        used = Some(if c.starts_with("base") || c.starts_with("updatedbase") {
+            (true, end)
+        } else if c.starts_with("end") || c.starts_with("updatedend") {
+            (base, true)
+        } else {
+            (true, true)
+        });
+    }
+    used
 }
 
 fn point<S: serde::Serializer>(p: &Vec2, s: S) -> Result<S::Ok, S::Error> {
@@ -112,8 +143,15 @@ pub fn grips(d: &Drawing, insert: Handle) -> Vec<DynGrip> {
             break;
         }
     }
+    // A grip shows in the current visibility state when the state lists it, or lists its
+    // parameter (AutoCAD shows a listed parameter's grips though the grips aren't listed).
+    let param_handle: HashMap<i32, Handle> = m.parameters.iter().map(|p| (p.node, p.handle)).collect();
     let shown = |node: i32, id: i32| {
-        id != 0 && (Some(node) == visibility_node || shown_in_state.as_ref().is_none_or(|a| objects.get(&id).is_some_and(|h| a.contains(h))))
+        id != 0
+            && (Some(node) == visibility_node
+                || shown_in_state
+                    .as_ref()
+                    .is_none_or(|a| objects.get(&id).is_some_and(|h| a.contains(h)) || param_handle.get(&node).is_some_and(|h| a.contains(h))))
     };
     let choices: HashMap<String, Vec<String>> =
         custom_properties(d, insert).map(|(_, ps)| ps.into_iter().map(|p| (p.name.to_ascii_uppercase(), p.choices)).collect()).unwrap_or_default();
@@ -121,15 +159,21 @@ pub fn grips(d: &Drawing, insert: Handle) -> Vec<DynGrip> {
     for p in &m.parameters {
         let grip = |i: usize| p.grips.get(i).copied().unwrap_or(0);
         match &p.kind {
-            ParameterKind::Linear { base, end, label, .. } => {
+            ParameterKind::Linear { base, end, label, from_midpoint, .. } => {
                 let (b, e) = match r.values.get(&p.node) {
                     Some(Value::Points { base, end }) => (*base, *end),
                     _ => (*base, *end),
                 };
                 let u = e - b;
                 let u = if u.len() > 1e-12 { u * (1.0 / u.len()) } else { Vec3::new(1.0, 0.0, 0.0) };
+                // An end no action follows has no grip (dragging it would change nothing); a
+                // distance from its midpoint moves both ends.
+                let used = match ends_used(&m, p.node) {
+                    Some((base, end)) if !*from_midpoint => [base, end],
+                    _ => [true, true],
+                };
                 for (i, part, at, way) in [(0, GripPart::Base, b, u * -1.0), (1, GripPart::End, e, u)] {
-                    if shown(p.node, grip(i)) {
+                    if used[i] && shown(p.node, grip(i)) {
                         let (at, dir) = (world(at), toward(at, way));
                         out.push(DynGrip { node: p.node, part, shape: GripShape::Linear, at, dir, property: label.clone(), choices: Vec::new() });
                     }
@@ -153,6 +197,46 @@ pub fn grips(d: &Drawing, insert: Handle) -> Vec<DynGrip> {
                     });
                 }
             }
+            ParameterKind::Polar { base, end, label, .. }
+            | ParameterKind::Xy { base, end, label, .. }
+            | ParameterKind::Rotation { base, end, label, .. }
+            | ParameterKind::Alignment { base, end, label, .. } => {
+                let (b, e) = match r.values.get(&p.node) {
+                    Some(Value::Points { base, end }) => (*base, *end),
+                    _ => (*base, *end),
+                };
+                // A polar and an XY parameter's grip is its end's; a file may list four slots.
+                let (first, second) = if matches!(p.kind, ParameterKind::Polar { .. } | ParameterKind::Xy { .. }) { (1, 0) } else { (0, 1) };
+                let id = if grip(first) != 0 { grip(first) } else { grip(second) };
+                if shown(p.node, id) {
+                    let shape = match &p.kind {
+                        ParameterKind::Polar { .. } => GripShape::Polar,
+                        ParameterKind::Xy { .. } => GripShape::Xy,
+                        ParameterKind::Rotation { .. } => GripShape::Rotation,
+                        _ => GripShape::Alignment,
+                    };
+                    let dir = if shape == GripShape::Polar { toward(e, e - b) } else { Vec2::ZERO };
+                    out.push(DynGrip { node: p.node, part: GripPart::End, shape, at: world(e), dir, property: label.clone(), choices: Vec::new() });
+                }
+            }
+            ParameterKind::Flip { base, end, label, .. } => {
+                let (b, e) = match r.values.get(&p.node) {
+                    Some(Value::Points { base, end }) => (*base, *end),
+                    _ => (*base, *end),
+                };
+                let Some(list) = choices.get(&label.to_ascii_uppercase()).filter(|c| !c.is_empty()) else { continue };
+                if shown(p.node, grip(0)) {
+                    out.push(DynGrip {
+                        node: p.node,
+                        part: GripPart::At,
+                        shape: GripShape::List,
+                        at: world((b + e) * 0.5),
+                        dir: Vec2::ZERO,
+                        property: label.clone(),
+                        choices: list.clone(),
+                    });
+                }
+            }
             ParameterKind::Visibility { at, label, .. } | ParameterKind::Lookup { at, label, .. } => {
                 let Some(list) = choices.get(&label.to_ascii_uppercase()).filter(|c| !c.is_empty()) else { continue };
                 if shown(p.node, grip(0)) {
@@ -168,7 +252,7 @@ pub fn grips(d: &Drawing, insert: Handle) -> Vec<DynGrip> {
                     });
                 }
             }
-            _ => {}
+            ParameterKind::BasePoint { .. } | ParameterKind::Other { .. } => {}
         }
         if out.len() >= MAX_GRIPS {
             break;

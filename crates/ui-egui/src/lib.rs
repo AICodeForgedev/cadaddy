@@ -35,6 +35,12 @@ pub(crate) fn palette_pos(app: &CadApp) -> egui::Pos2 {
     app.canvas.rect.map_or(egui::pos2(16.0, 160.0), |r| r.min + egui::vec2(12.0, 12.0))
 }
 
+/// Whether an agent's control request is being handled: commands that would pick a file ask for
+/// its name on the command line instead.
+pub(crate) fn agent_call_active() -> bool {
+    AGENT_CALL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Whether a file dialog was refused during the agent request being handled
 /// ([`file_dialogs_allowed`]), so a picker's `None` isn't a cancel.
 pub(crate) fn dialog_refused() -> bool {
@@ -77,6 +83,7 @@ pub mod actionsdlg;
 pub mod activitypalette;
 pub mod agentdlg;
 pub mod agentpalette;
+pub mod authorpalette;
 pub mod bimpalette;
 pub mod clashpalette;
 pub mod convertdlg;
@@ -101,6 +108,7 @@ pub mod i18n;
 pub mod icons;
 pub mod ifcpalette;
 pub mod jobpalette;
+pub mod layerremovedlg;
 pub mod layers;
 pub mod layerstates;
 pub mod layouttabs;
@@ -113,6 +121,7 @@ pub mod markuppalette;
 pub mod matchpropdlg;
 pub mod menus;
 pub mod meppalette;
+pub mod modal;
 pub mod multiprops;
 pub mod navwheel;
 pub mod opening;
@@ -254,6 +263,8 @@ pub struct UiState {
     pub control_token: bool,
     /// Drawings opened from a path, newest first (File ▸ Open Recent and the Start page).
     pub recent_files: Vec<String>,
+    /// The folder the last APPLOAD file came from: the next pick starts there.
+    pub last_lisp_dir: Option<String>,
     /// The touch bar shows once the screen is touched ([`touch`]).
     pub touch_bar: bool,
     /// Keyboard shortcuts the user changed ([`aliasdlg`]).
@@ -359,6 +370,7 @@ impl Default for UiState {
             agent_control: true,
             control_token: true,
             recent_files: Vec::new(),
+            last_lisp_dir: None,
             touch_bar: true,
             shortcuts: Vec::new(),
             ribbon_tabs: Vec::new(),
@@ -375,6 +387,13 @@ impl Default for UiState {
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Pick a `.lsp` file for APPLOAD, starting in the given folder (empty for the default one).
+    /// `None` where there is no native file dialog: the desktop without one asks for the name,
+    /// and the web (no file system) says to drop the file (`no_file_system`).
+    pub pick_lisp: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// The host has no file system to read a path from (the browser): a dropped file's contents
+    /// are what it loads, and APPLOAD says so instead of asking for a name it cannot read.
+    pub no_file_system: bool,
     /// A PDF to convert or import (PDFIMPORT, Convert PDF to DWG).
     pub pick_pdf: Option<Box<dyn Fn() -> Option<String>>>,
     /// A raster image to attach (IMAGEATTACH, ATTACH).
@@ -391,6 +410,10 @@ pub struct Services {
     pub pick_save_image: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// A folder (Publish's batch plot).
     pub pick_folder: Option<Box<dyn Fn() -> Option<String>>>,
+    /// A plot style table file to load (.ctb, .stb or our JSON) in the Plot Style Manager.
+    pub pick_plot_style: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Where to save a plot style table (the Manager's "Save as…"), given a suggested file name.
+    pub pick_save_plot_style: Option<Box<dyn Fn(&str) -> Option<String>>>,
 }
 
 pub struct CadApp {
@@ -472,6 +495,8 @@ pub struct CadApp {
     shown_contrast: bool,
     /// Whether egui was last told to animate (`None` until the first frame).
     shown_animations: Option<bool>,
+    /// The interface scale last handed to egui (`None` until the first frame).
+    shown_interface_scale: Option<f32>,
     pub frame_ms: f64,
     pub quit_requested: bool,
     /// A web page to open in the browser on the next frame (Report a Bug, Donate).
@@ -589,6 +614,7 @@ impl CadApp {
             shown_follows_system: false,
             shown_contrast: false,
             shown_animations: None,
+            shown_interface_scale: None,
             frame_ms: 0.0,
             quit_requested: false,
             pending_url: None,
@@ -704,7 +730,14 @@ impl CadApp {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             return r;
         }
+        // Programmatic saves are checked for what DWG/DXF keep as they run: the reply holds the
+        // list (`notKeptDetail`), not a background notice nobody could collect.
+        // A check a person's save left running that finished since the last frame is theirs: it
+        // opens its dialog now, before this run's own `take(false)` could discard it.
+        exchangeloss::poll_background(self);
+        let background = std::mem::replace(&mut self.session.background_checks, false);
         let r = self.session.execute(id, &params);
+        self.session.background_checks = background;
         if let Ok(v) = &r
             && let Some(m) = v.get("message").and_then(Value::as_str)
         {
@@ -753,8 +786,11 @@ impl CadApp {
             let json_form = text.trim_start().get(first.len()..).is_some_and(|rest| rest.trim_start().starts_with('{'));
             let word = first.to_ascii_lowercase();
             let more = text.split_whitespace().nth(1).is_some();
+            // LAYMRG and LAYDEL typed keep their command-line prompts (scripts rely on them); the
+            // menu and the ribbon start them through `start` and get the dialogs.
             if !first.is_empty()
                 && !json_form
+                && !matches!(word.as_str(), "laymrg" | "laydel")
                 && (!more || !menus::DIALOG_WHEN_ALONE.contains(&word.as_str()))
                 && menus::run_ui_command(self, &word, &Value::Null).is_some()
             {
@@ -800,6 +836,9 @@ impl CadApp {
         }
         if !self.ui.recent_files.is_empty() {
             prefs["recentFiles"] = json!(self.ui.recent_files);
+        }
+        if let Some(dir) = &self.ui.last_lisp_dir {
+            prefs["lispDir"] = json!(dir);
         }
         if self.donate.shown_ms > 0.0 {
             prefs["supportBannerShown"] = json!(self.donate.shown_ms);
@@ -851,6 +890,9 @@ impl CadApp {
         }
         if let Some(files) = v.get("recentFiles").and_then(Value::as_array) {
             self.ui.recent_files = files.iter().filter_map(Value::as_str).filter(|p| !p.is_empty()).take(RECENT_FILES).map(str::to_string).collect();
+        }
+        if let Some(dir) = v.get("lispDir").and_then(Value::as_str).filter(|d| !d.is_empty()) {
+            self.ui.last_lisp_dir = Some(dir.to_string());
         }
         if let Some(ms) = v.get("supportBannerShown").and_then(Value::as_f64).filter(|ms| ms.is_finite()) {
             self.donate.shown_ms = ms;
@@ -1100,7 +1142,7 @@ impl CadApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         let _busy = diag::busy("logic");
         // Checks a save left running (what a DWG or DXF file didn't keep) report when done.
-        self.session.poll_background();
+        exchangeloss::poll_background(self);
         // A Script Editor script on its worker thread: its calls into the drawing run here.
         if self.session.rhai_pump(std::time::Duration::from_millis(8)) {
             ctx.request_repaint();
@@ -1212,6 +1254,13 @@ impl CadApp {
         }
         let t1 = now_ms();
         self.note_time("logicBeforeControl", t1 - t0);
+        // Applied only when the saved scale changes, so egui's own keyboard zoom keeps working
+        // within a session (and is never saved).
+        let scale = self.options.interface_scale;
+        if self.shown_interface_scale != Some(scale) {
+            ctx.set_zoom_factor(scale);
+            self.shown_interface_scale = Some(scale);
+        }
         self.drain_control(ctx);
         let t2 = now_ms();
         self.note_time("control", t2 - t1);
@@ -1299,6 +1348,9 @@ impl CadApp {
             chrome::file_tabs(self, ui);
         }
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
+        if has_doc && !self.ui.show_toolsets {
+            palettes::toolsets_strip(self, ui);
+        }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             // Walk mode shows in the drawing's own tab (docking), the palettes beside it.
             if has_doc {
@@ -1309,6 +1361,7 @@ impl CadApp {
         });
         tearoff::show_windows(self, ui.ctx());
         dialogs::show(self, ui.ctx());
+        authorpalette::show(self, ui.ctx());
         layers::off_prompt(self, ui.ctx());
         palettes::patterns::prompt_picker(self, ui.ctx());
         layouttabs::move_copy_dialog(self, ui.ctx());

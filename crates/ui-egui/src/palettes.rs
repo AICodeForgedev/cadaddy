@@ -9,6 +9,8 @@ use crate::CadApp;
 use crate::icons::{self, Icon};
 use crate::theme::Tokens;
 
+#[cfg(test)]
+mod layer_menu_tests;
 /// The hatch pattern picker.
 pub mod patterns;
 /// The QuickCalc palette.
@@ -108,7 +110,11 @@ pub const DRAFTING: &[(&str, &[Tool], &[Tool])] = &[
     ("Table", &[(Icon::Table, "table", "Table")], &[]),
     (
         "Parametric",
-        &[(Icon::Constraint, "autoconstrain", "Auto Constrain")],
+        &[
+            (Icon::Constraint, "autoconstrain", "Auto Constrain"),
+            (Icon::DelConstraint, "delconstraint", "Delete Constraints"),
+            (Icon::Parameters, "parameters", "Parameters Manager"),
+        ],
         &[
             (Icon::Coincident, "gccoincident", "Coincident"),
             (Icon::Parallel, "gcparallel", "Parallel"),
@@ -118,6 +124,15 @@ pub const DRAFTING: &[(&str, &[Tool], &[Tool])] = &[
             (Icon::Tangent, "gctangent", "Tangent"),
             (Icon::Concentric, "gcconcentric", "Concentric"),
             (Icon::Equal, "gcequal", "Equal"),
+            (Icon::Collinear, "gccollinear", "Collinear"),
+            (Icon::Smooth, "gcsmooth", "Smooth"),
+            (Icon::Symmetric, "gcsymmetric", "Symmetric"),
+            (Icon::Fix, "gcfix", "Fix"),
+            (Icon::DimLinear, "dclinear", "Linear"),
+            (Icon::DimAligned, "dcaligned", "Aligned"),
+            (Icon::DimAngular, "dcangular", "Angular"),
+            (Icon::DimRadius, "dcradius", "Radius"),
+            (Icon::DimDiameter, "dcdiameter", "Diameter"),
         ],
     ),
 ];
@@ -308,6 +323,21 @@ pub(crate) fn swatch(p: &egui::Painter, r: Rect, c: Color) {
     let rgb = c.resolve(Color::Index(7), Color::Index(7));
     p.rect_filled(r, 1.0, Color32::from_rgb(rgb.0, rgb.1, rgb.2));
     p.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(30)), egui::StrokeKind::Inside);
+}
+
+/// The strip collapsed Tool Sets leave on the left edge, like a collapsed palette title bar:
+/// without it the only way back was Window > Tool Sets (#1095). The whole strip expands them.
+pub fn toolsets_strip(app: &mut CadApp, ui: &mut egui::Ui) {
+    let t = Tokens::get();
+    egui::Panel::left("cc_toolsets_strip").exact_size(22.0).resizable(false).frame(egui::Frame::NONE.fill(t.chrome)).show(ui, |ui| {
+        let r = ui.max_rect();
+        let resp = ui.interact(r, ui.id().with("ts_expand"), Sense::click());
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.top() + 14.0), vec2(14.0, 14.0)), Icon::ChevronRight, false);
+        icons::describe_control(ui, &resp, "Expand Tool Sets", None, false);
+        if resp.on_hover_text(crate::tl!("Tool Sets")).clicked() {
+            let _ = app.run("ui.toggle.toolsets", json!({"on": true}));
+        }
+    });
 }
 
 pub fn right_palettes(app: &mut CadApp, ui: &mut egui::Ui) {
@@ -818,6 +848,22 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         let tb_styles: Vec<String> = d.table_styles.iter().map(|l| l.name.clone()).collect();
         let mut action: Option<(&str, Value)> = None;
         let mut act = |c: &'static str, p: Value| action = Some((c, p));
+        // In the Block Editor, the edited block's name and description come first.
+        let edited = app.session.state().ok().and_then(|st| {
+            let be = st.block_edit.as_ref().filter(|be| !be.current)?;
+            let b = d.block(&be.name).or_else(|| be.host.doc.block(&be.name));
+            Some((be.name.clone(), b.map(|b| b.description.clone()).unwrap_or_default()))
+        });
+        if let Some((name, description)) = edited {
+            prop_row(ui, "Name", |ui| {
+                value_box(ui, &name, false, false).on_hover_text(crate::tl!("Read-only"));
+            });
+            prop_row(ui, "Description", |ui| {
+                if let Some(text) = edit_field(ui, ui.id().with("block_description"), description) {
+                    act("blocks.description", json!({ "description": text }));
+                }
+            });
+        }
         prop_row(ui, "Color", |ui| {
             ui.menu_button(format!("■ {}", crate::i18n::t(&Color::from_aci(h.i64("CECOLOR", 256) as i16).name())), |ui| {
                 for (n, c) in [
@@ -1006,12 +1052,14 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     });
     prop_row(ui, "Layer", |ui| {
         ui.menu_button(layer.clone(), |ui| {
-            for l in &layers {
-                if ui.button(l).clicked() {
-                    set = Some(json!({ "handles": ids, "layer": l }));
-                    ui.close();
+            egui::ScrollArea::vertical().id_salt("properties_layer_menu").max_height(300.0).show(ui, |ui| {
+                for l in &layers {
+                    if ui.button(l).clicked() {
+                        set = Some(json!({ "handles": ids, "layer": l }));
+                        ui.close();
+                    }
                 }
-            }
+            });
         });
     });
     prop_row(ui, "Linetype", |ui| {
@@ -1108,6 +1156,8 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     if sel.len() == 1 {
         group(ui, "Geometry");
         let real = |v: f64| format!("{v:.4}");
+        // Rotations show as the drawing measures directions (ANGBASE, ANGDIR).
+        let angles = app.session.angle_settings();
         let num = |ui: &mut egui::Ui, label: &str, key: &str, shown: String, set: &mut Option<Value>, bad: &mut Option<String>, ids: &Vec<String>| {
             prop_row(ui, label, |ui| {
                 if let Some(f) = number(edit_field(ui, ui.id().with((key, ids)), shown), bad) {
@@ -1174,7 +1224,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                     }
                 });
                 num(ui, "Height", "height", len(tx.height), &mut set, &mut bad, &ids);
-                num(ui, "Rotation", "rotation", real(tx.rotation.to_degrees()), &mut set, &mut bad, &ids);
+                num(ui, "Rotation", "rotation", real(angles.shown(tx.rotation).to_degrees()), &mut set, &mut bad, &ids);
                 num(ui, "Width factor", "widthFactor", real(tx.width_factor), &mut set, &mut bad, &ids);
             }
             EntityKind::MText(tx) => {
@@ -1267,6 +1317,18 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                         set = Some(json!({ "handles": ids, "dimStyle": n }));
                     }
                 });
+                // The style's values with this dimension's own overrides; editing one overrides
+                // it for the selected dimensions, as AutoCAD's Properties palette does.
+                let st = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
+                num(ui, "Text height", "textHeight", len(st.text_height), &mut set, &mut bad, &ids);
+                num(ui, "Arrow size", "arrowSize", len(st.arrow_size), &mut set, &mut bad, &ids);
+                num(ui, "Dim scale overall", "dimScale", real(st.scale), &mut set, &mut bad, &ids);
+                prop_row(ui, "Precision", |ui| {
+                    let cur = st.decimals.to_string();
+                    if let Some(n) = pick_menu(ui, &cur, (0..=8).map(|n: u8| n.to_string())).and_then(|n| n.parse::<u8>().ok()) {
+                        set = Some(json!({ "handles": ids, "precision": n }));
+                    }
+                });
             }
             EntityKind::Insert(i) => {
                 // A dynamic block reference shows its dynamic block's name, not its anonymous
@@ -1277,7 +1339,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 prop_row(ui, "Position X", |ui| read_only(ui, &len(i.insert.x)));
                 prop_row(ui, "Position Y", |ui| read_only(ui, &len(i.insert.y)));
                 prop_row(ui, "Position Z", |ui| read_only(ui, &len(i.insert.z)));
-                num(ui, "Rotation", "rotation", real(i.rotation.to_degrees()), &mut set, &mut bad, &ids);
+                num(ui, "Rotation", "rotation", real(angles.shown(i.rotation).to_degrees()), &mut set, &mut bad, &ids);
                 num(ui, "Scale", "scale", real(i.scale.x), &mut set, &mut bad, &ids);
                 if let Some((_, props)) = custom.filter(|(_, p)| !p.is_empty()) {
                     group(ui, "Custom");
@@ -1350,7 +1412,14 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
     }
-    if let Some(p) = set {
+    if let Some(mut p) = set {
+        // A rotation is typed as shown (from ANGBASE, in the ANGDIR sense); properties.set takes it
+        // from +X counterclockwise.
+        if let Some(r) = p.get_mut("rotation")
+            && let Some(v) = r.as_f64()
+        {
+            *r = json!(app.session.angle_settings().unshown(v.to_radians()).to_degrees());
+        }
         let _ = app.run("properties.set", p);
     }
     report_bad(app, bad);

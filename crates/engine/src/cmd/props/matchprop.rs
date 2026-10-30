@@ -177,6 +177,9 @@ fn copy_props(src: &Entity, dst: &mut Entity, m: &MatchProps) {
     if m.plot_style {
         d.plot_style.clone_from(&c.plot_style);
     }
+    if m.material {
+        d.material = c.material.clone();
+    }
     match (&src.kind, &mut dst.kind) {
         (EntityKind::Dimension(a), EntityKind::Dimension(b)) if m.dimension => {
             b.style.clone_from(&a.style);

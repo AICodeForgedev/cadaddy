@@ -10,7 +10,7 @@
 //! |---|---|
 //! | `theme` | `"system"`, `"light"` or `"dark"` |
 //! | `animations` | `"system"`, `"on"` or `"off"`: dialog and menu fades and smoothed scrolling |
-//! | `interfaceLanguage` | `"auto"`, `"en"`, `"uk"`, `"pt-BR"`, `"de"`, `"es"`, `"cs"`, `"ru"`, `"fr"`, `"zh"`, `"it"`, `"ko"`, `"sv"`, `"ar"`, `"ja"`, `"zh-TW"`, `"pl"`, `"hu"` or `"tr"` |
+//! | `interfaceLanguage` | `"auto"`, `"en"`, `"uk"`, `"pt-BR"`, `"de"`, `"es"`, `"cs"`, `"ru"`, `"fr"`, `"zh"`, `"it"`, `"ko"`, `"sv"`, `"ar"`, `"ja"`, `"zh-TW"`, `"pl"`, `"hu"`, `"tr"` or `"el"` |
 //! | `saveFormat` | `"cdy"`, `"dxf"` or `"dwg"`: the format Save As suggests for new drawings |
 //! | `saveVersion` | `"2000"` … `"2018"`: the version drawings with no file yet are saved in |
 //! | `SAVETIME` | minutes between automatic saves, 0–600 (0: off) |
@@ -22,6 +22,7 @@
 //! | `modelBackground`, `paperBackground` | `"#rrggbb"`, or `null` for the default |
 //! | `selectionColor` | the colour selected objects are highlighted in: `"#rrggbb"`, or `null` for the theme's |
 //! | `snapMarkerSize` | object snap marker size in points, 5–31 |
+//! | `interfaceScale` | the interface's size, 0.5–3 (1: the system's own) |
 //!
 //! SAVETIME and SAVEFILEPATH are the engine's autosave settings, kept with the autosave state
 //! rather than in the profile.
@@ -53,6 +54,9 @@ const MAX_PATH_CHARS: usize = 1024;
 /// Object snap marker sizes the Options dialog offers, in points.
 pub const SNAP_MARKER_SIZES: std::ops::RangeInclusive<f32> = 5.0..=31.0;
 
+/// Interface scales the JSON form accepts (1: the system's own size).
+pub const INTERFACE_SCALES: std::ops::RangeInclusive<f32> = 0.5..=3.0;
+
 /// The interface's own preferences (the drafting ones are engine settings).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UiOptions {
@@ -67,6 +71,8 @@ pub struct UiOptions {
     /// While a command runs: a quick right-click is Enter and a held one opens the shortcut menu
     /// (AutoCAD's time-sensitive right-click). Off: a right-click always opens the menu.
     pub time_sensitive_right_click: bool,
+    /// The size of every menu, palette, dialog and the command line (1: the system's own).
+    pub interface_scale: f32,
 }
 
 impl Default for UiOptions {
@@ -77,6 +83,7 @@ impl Default for UiOptions {
             snap_marker_size: theme::SNAP_MARKER,
             selection_color: None,
             time_sensitive_right_click: true,
+            interface_scale: 1.0,
         }
     }
 }
@@ -101,7 +108,7 @@ pub fn hex(c: Color32) -> String {
 /// Parse `"#rrggbb"` (the `#` is optional).
 pub fn parse_hex(s: &str) -> Option<Color32> {
     let h = s.trim().trim_start_matches('#');
-    if h.len() != 6 || !h.is_ascii() {
+    if h.len() != 6 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let byte = |i: usize| h.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok());
@@ -146,6 +153,7 @@ struct UiChanges {
     check_for_updates: Option<bool>,
     agent_control: Option<bool>,
     control_token: Option<bool>,
+    interface_scale: Option<f32>,
 }
 
 fn color_param(key: &str, v: &Value) -> Result<Option<Color32>, String> {
@@ -182,6 +190,10 @@ fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
         "snapMarkerSize" => {
             let n = v.as_f64().filter(|n| SNAP_MARKER_SIZES.contains(&(*n as f32)) && n.is_finite()).ok_or("snapMarkerSize must be from 5 to 31")?;
             c.snap_marker_size = Some(n as f32);
+        }
+        "interfaceScale" => {
+            let n = v.as_f64().filter(|n| n.is_finite() && INTERFACE_SCALES.contains(&(*n as f32))).ok_or("interfaceScale must be from 0.5 to 3")?;
+            c.interface_scale = Some(n as f32);
         }
         "saveVersion" => {
             let name = v.as_str().map_or_else(|| v.to_string(), str::to_string);
@@ -223,6 +235,7 @@ fn ui_json(app: &CadApp) -> Map<String, Value> {
     m.insert("paperBackground".into(), color_json(o.paper_background));
     m.insert("selectionColor".into(), color_json(o.selection_color));
     m.insert("snapMarkerSize".into(), json!(o.snap_marker_size));
+    m.insert("interfaceScale".into(), json!(o.interface_scale));
     m.insert("saveVersion".into(), json!(app.ui.save_version));
     m.insert("SAVETIME".into(), json!(cadaddy_engine::autosave::savetime()));
     m.insert("SAVEFILEPATH".into(), json!(cadaddy_engine::autosave::savefilepath()));
@@ -312,6 +325,9 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
     if let Some(n) = ui.snap_marker_size {
         app.options.snap_marker_size = n;
     }
+    if let Some(n) = ui.interface_scale {
+        app.options.interface_scale = n;
+    }
     if let Some(v) = ui.save_version {
         app.ui.save_version = v.year().to_string();
     }
@@ -366,6 +382,9 @@ impl CadApp {
             "timeSensitiveRightClick": self.options.time_sensitive_right_click,
             // The user's command aliases (ALIASEDIT): kept with the profile as well as in their file.
             "aliases": cadaddy_engine::cmd::file::user_aliases(),
+            // The keyboard shortcuts the user changed (an empty command turns a built-in one off).
+            "shortcuts": self.ui.shortcuts,
+            "interfaceScale": self.options.interface_scale,
         })
         .to_string()
     }
@@ -383,8 +402,23 @@ impl CadApp {
         if let Some(aliases) = v.get("aliases").filter(|a| a.as_object().is_some_and(|m| !m.is_empty())) {
             let _ = self.session.execute("aliasedit", &json!({ "set": aliases }));
         }
+        if let Some(list) = v.get("shortcuts").and_then(Value::as_array) {
+            self.ui.shortcuts.clear();
+            for b in list.iter().take(crate::aliasdlg::MAX_BINDINGS) {
+                let key = b.get("key").and_then(Value::as_str).unwrap_or_default();
+                let command = b.get("command").and_then(Value::as_str).unwrap_or_default();
+                // A bad key or an unknown command is skipped; an empty command is a removed built-in key.
+                let _ = if command.trim().is_empty() {
+                    crate::aliasdlg::remove_shortcut(self, key)
+                } else {
+                    crate::aliasdlg::set_shortcut(self, key, command).map(drop)
+                };
+            }
+        }
         let mut c = UiChanges::default();
-        for key in ["systemCursor", "modelBackground", "paperBackground", "selectionColor", "snapMarkerSize", "timeSensitiveRightClick"] {
+        for key in
+            ["systemCursor", "modelBackground", "paperBackground", "selectionColor", "snapMarkerSize", "timeSensitiveRightClick", "interfaceScale"]
+        {
             if let Some(value) = v.get(key) {
                 let _ = parse_ui(key, value, &mut c);
             }
@@ -408,6 +442,9 @@ impl CadApp {
         if let Some(b) = c.time_sensitive_right_click {
             self.options.time_sensitive_right_click = b;
         }
+        if let Some(n) = c.interface_scale {
+            self.options.interface_scale = n;
+        }
     }
 }
 
@@ -420,7 +457,7 @@ mod tests {
         let c = Color32::from_rgb(0x12, 0xab, 0xff);
         assert_eq!(parse_hex(&hex(c)), Some(c));
         assert_eq!(parse_hex("FFFFFF"), Some(Color32::WHITE));
-        for bad in ["", "#fff", "#gggggg", "#12345678", "#ééé", "#1234567"] {
+        for bad in ["#+f+0+0", "", "#fff", "#gggggg", "#12345678", "#ééé", "#1234567"] {
             assert_eq!(parse_hex(bad), None, "{bad}");
         }
     }

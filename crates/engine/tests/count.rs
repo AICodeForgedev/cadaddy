@@ -235,3 +235,73 @@ fn similar_flags_scaled_references_and_exploded_copies() {
     assert_eq!(r["similar"]["PAIR"]["exploded"], json!([[a.hex(), b.hex()]]));
     assert!(s.execute("count", &json!({})).unwrap().get("similar").is_none(), "only when asked");
 }
+
+/// #1440: COUNT says which objects it scanned, which it counted, and why the rest were skipped.
+#[test]
+fn self_check_says_what_count_covered() {
+    let mut s = plates();
+    put(&mut s, &Space::Model, circle(300.0, 1.0));
+    let r = s.execute("count", &json!({})).unwrap();
+    let sc = &r["selfCheck"];
+    assert_eq!(sc["schema"], 1);
+    assert_eq!(sc["found"], 4, "three block references and one circle: {r}");
+    assert_eq!(sc["analyzed"], 3);
+    assert_eq!(sc["skipped"]["Circle"], json!({ "count": 1, "reason": "not a block reference" }));
+    assert_eq!(sc["caps"], json!({}));
+    assert_eq!(sc["implausible"], json!([]));
+
+    // Counting the circles compares only circles, and says so.
+    let h = put(&mut s, &Space::Model, circle(310.0, 1.0));
+    let r = s.execute("count", &json!({"object": h.hex()})).unwrap();
+    let sc = &r["selfCheck"];
+    assert_eq!((sc["found"].clone(), sc["analyzed"].clone()), (json!(5), json!(2)), "{r}");
+    assert_eq!(sc["skipped"]["Block Reference"]["reason"], "a different type");
+
+    // When nested expansion hits the work cap, the cap and its value are reported.
+    let mut s = Session::new();
+    define(&mut s, "LOOP", vec![insert("LOOP", 0.0, 1, 1)]);
+    put(&mut s, &Space::Model, insert("LOOP", 0.0, 1, 1));
+    let r: Value = s.execute("count", &json!({"space": "all"})).unwrap();
+    assert_eq!(r["selfCheck"]["caps"], json!({ "blockDepth": 16 }), "the infinite LOOP hits the depth cap: {r}");
+}
+
+/// 100,000 identical loose circles on a lattice that never matches a two-part block's offset.
+fn lattice(s: &mut Session) {
+    for i in 0..400 {
+        for j in 0..250 {
+            let k = EntityKind::Circle(Circle { center: Vec3::new(7.0 * f64::from(i), 7.0 * f64::from(j), 0.0), radius: 1.0 });
+            put(s, &Space::Model, k);
+        }
+    }
+}
+
+/// The similar-copies scan does bounded work: a hash lookup per part, not a scan of every
+/// same-shape object.
+#[test]
+fn similar_scan_is_fast_on_100k_loose_circles() {
+    let mut s = Session::new();
+    define(&mut s, "PAIR", vec![circle(0.0, 1.0), circle(3.0, 1.0)]);
+    put(&mut s, &Space::Model, insert("PAIR", 0.0, 1, 1));
+    lattice(&mut s);
+    let t = Instant::now();
+    let r = s.execute("count", &json!({"similar": true})).unwrap();
+    let took = t.elapsed();
+    assert!(took.as_secs_f64() < 2.0, "similar scan took {took:?}");
+    assert_eq!(r["similar"]["PAIR"], Value::Null, "no lattice circle has a partner 3 away: {r}");
+    assert_eq!(r["truncated"], false);
+}
+
+/// When the work budget runs out the answer says `truncated: true`, never a silent partial.
+#[test]
+fn similar_scan_reports_truncation_when_budget_runs_out() {
+    let mut s = Session::new();
+    for n in 0..40 {
+        define(&mut s, &format!("PAIR{n}"), vec![circle(0.0, 1.0), circle(3.0 + f64::from(n) * 1e-3, 1.0)]);
+    }
+    lattice(&mut s);
+    let t = Instant::now();
+    let r = s.execute("count", &json!({"similar": true})).unwrap();
+    assert!(t.elapsed().as_secs_f64() < 10.0, "took {:?}", t.elapsed());
+    assert_eq!(r["truncated"], true, "{r}");
+    assert!(r["selfCheck"]["caps"].get("work").is_some(), "{r}");
+}

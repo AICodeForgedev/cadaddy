@@ -13,18 +13,53 @@ pub const MAX_UNDO: usize = 2000;
 pub const UNDO_BUDGET: usize = 768 * 1024 * 1024;
 
 /// Free undo or redo steps off the command path: dropping a step that held a whole changed copy
-/// of a large drawing took half a second (they're freed on a short-lived thread instead; the web
-/// build has no threads and frees them here).
+/// of a large drawing took half a second (one long-lived thread frees them instead; the web
+/// build has no threads and frees them here). One thread, not one per drop: a fresh thread per
+/// step spread the frees over many malloc arenas, and on many-core hosts the process grew without
+/// bound. When the queue is full, or the thread can't start, the steps are freed inline.
 fn drop_later(steps: Vec<Snapshot>) {
     if steps.is_empty() {
         return;
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = std::thread::Builder::new().name("undo-free".into()).spawn(move || drop(steps));
+        use std::sync::mpsc::TrySendError;
+        match free_queue() {
+            Some(tx) => {
+                if let Err(TrySendError::Full(v) | TrySendError::Disconnected(v)) = tx.try_send(steps) {
+                    drop(v);
+                }
+            }
+            None => drop(steps),
+        }
     }
     #[cfg(target_arch = "wasm32")]
     drop(steps);
+}
+
+/// Most batches waiting for the free thread; past it a drop happens inline.
+#[cfg(not(target_arch = "wasm32"))]
+const FREE_QUEUE: usize = 64;
+
+/// The sender of the one free thread, started on first use (`None` if it couldn't start).
+#[cfg(not(target_arch = "wasm32"))]
+fn free_queue() -> Option<&'static std::sync::mpsc::SyncSender<Vec<Snapshot>>> {
+    use std::sync::{OnceLock, mpsc};
+    static QUEUE: OnceLock<Option<mpsc::SyncSender<Vec<Snapshot>>>> = OnceLock::new();
+    QUEUE
+        .get_or_init(|| {
+            let (tx, rx) = mpsc::sync_channel::<Vec<Snapshot>>(FREE_QUEUE);
+            std::thread::Builder::new()
+                .name("undo-free".into())
+                .spawn(move || {
+                    while let Ok(steps) = rx.recv() {
+                        drop(steps);
+                    }
+                })
+                .ok()
+                .map(|_| tx)
+        })
+        .as_ref()
 }
 /// The most marks a drawing keeps; the oldest are dropped first.
 const MAX_MARKS: usize = 1000;
@@ -208,5 +243,36 @@ impl DocState {
         let keep = if c == Control::One { 1 } else { 0 };
         let drop = self.undo.len().saturating_sub(keep);
         self.undo.drain(..drop);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn free_threads() -> usize {
+        let Ok(dir) = std::fs::read_dir("/proc/self/task") else { return 0 };
+        dir.flatten().filter(|t| std::fs::read_to_string(t.path().join("comm")).is_ok_and(|n| n.trim() == "undo-free")).count()
+    }
+
+    #[test]
+    fn many_undo_drops_use_one_free_thread_and_free_everything() {
+        let doc = Arc::new(cadaddy_doc::Drawing::default());
+        for i in 0..2000 {
+            let step = Snapshot { label: format!("step {i}"), doc: Arc::clone(&doc), selection: Vec::new(), bytes: 0 };
+            drop_later(vec![step]);
+        }
+        assert!(free_threads() <= 1, "{} undo-free threads", free_threads());
+        // Every dropped step is released: queued ones by the thread, overflow ones inline.
+        let mut left = Arc::strong_count(&doc);
+        for _ in 0..500 {
+            if left == 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            left = Arc::strong_count(&doc);
+        }
+        assert_eq!(left, 1, "dropped steps still held");
     }
 }

@@ -144,9 +144,15 @@ pub enum DwgEngine {
 /// `CADADDY_DWG_WRITE` names for that direction, else the one `CADADDY_DWG` names for both
 /// (`native`, or `acadrust`/`bridge`), else [`DEFAULT_DWG_READ`] / [`DEFAULT_DWG_WRITE`].
 pub fn dwg_engine(read: bool) -> DwgEngine {
-    let named = |var: &str| match std::env::var(var).map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-        Ok("native") => Some(DwgEngine::Native),
-        Ok("acadrust" | "bridge") => Some(DwgEngine::Bridge),
+    dwg_engine_from(read, |var| std::env::var(var).ok())
+}
+
+/// [`dwg_engine`] over an explicit variable lookup (so the precedence is testable without
+/// touching the process environment).
+pub fn dwg_engine_from(read: bool, lookup: impl Fn(&str) -> Option<String>) -> DwgEngine {
+    let named = |var: &str| match lookup(var).map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("native") => Some(DwgEngine::Native),
+        Some("acadrust" | "bridge") => Some(DwgEngine::Bridge),
         _ => None,
     };
     named(if read { "CADADDY_DWG_READ" } else { "CADADDY_DWG_WRITE" }).or_else(|| named("CADADDY_DWG")).unwrap_or(if read {
@@ -211,11 +217,26 @@ fn read_dwg_bridge(bytes: &[u8]) -> Result<Drawing> {
     let dxf = dwg_keep::unstash(&dxf).unwrap_or(dxf);
     let bad = |e: String| IoError::Format(format!("{e} (in the DXF converted from this DWG)"));
     // The text is let go once parsed: the drawing is built from the groups alone.
-    let tags = cadaddy_dxf::parse(&dxf).map_err(|e| bad(e.to_string()))?;
+    let mut tags = cadaddy_dxf::parse(&dxf).map_err(|e| bad(e.to_string()))?;
     drop(dxf);
+    dxf_read::mtext_dxf::bridge_carets_undone(&mut tags);
     let mut d = dxf_read::read_tags(tags).map_err(|e| bad(e.to_string()))?;
     d.read_notes = notes;
+    mark_dynamic_copies_anonymous(&mut d);
     Ok(d)
+}
+
+/// The bridge hands AutoCAD's anonymous copies of dynamic blocks (`*U7`) back under the dynamic
+/// block's name, without the anonymous flag: they stay anonymous here, as when read from a DXF,
+/// so block lists agree between the two formats.
+fn mark_dynamic_copies_anonymous(d: &mut Drawing) {
+    let copies: Vec<String> =
+        d.blocks.iter().filter(|(k, b)| !b.anonymous && cadaddy_doc::dynblock::is_named_anonymous_copy(d, k)).map(|(k, _)| k.clone()).collect();
+    for k in copies {
+        if let Some(b) = d.blocks.get_mut(&k).map(std::sync::Arc::make_mut) {
+            b.anonymous = true;
+        }
+    }
 }
 
 /// A DXF with the records CADaddy's DWG writers kept in their `CADADDY_KEEP` dictionary put
@@ -227,9 +248,22 @@ fn kept_back(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     }
 }
 
+/// `bytes` without a leading UTF-8 byte-order mark (some editors and exporters write one).
+fn without_bom(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
+}
+
 /// Read a drawing; the format comes from the content (DXF ASCII/binary, DWG) or the name
 /// (SVG and gzip-compressed SVGZ); a .cdy file is known by its content.
 pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
+    // Nothing to read is never an empty drawing, whatever the format.
+    if without_bom(bytes).iter().all(u8::is_ascii_whitespace) {
+        return Err(IoError::Format(if bytes.is_empty() {
+            "the file is empty (0 bytes)".into()
+        } else {
+            "the file has no content (only blank space)".into()
+        }));
+    }
     if cadaddy_walk3d::package::is_package(bytes) {
         return walkpkg::read(bytes);
     }
@@ -252,13 +286,20 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
             d.read_notes.extend(r.notes);
             Ok(d)
         }
-        "dxf" | "" => dxf_read::read(&kept_back(bytes)),
+        "dxf" | "" => dxf_read::read(&kept_back(without_bom(bytes))),
         "obj" => mesh3d_io::read_obj(bytes, name),
         "stl" => mesh3d_io::read_stl(bytes),
         "glb" | "gltf" => mesh3d_io::read_gltf(bytes, name),
         "ifc" => ifc::read_ifc(bytes),
-        e if bytes.len() > 4 => dxf_read::read(bytes).map_err(|_| IoError::Unsupported(e.to_string())),
-        e => Err(IoError::Unsupported(e.to_string())),
+        e => {
+            // A name that says one thing and content that is another: say so, not "unsupported".
+            let wrong = |e: &str| match e {
+                "dwg" => IoError::Format("not a DWG file (no AC10xx header)".into()),
+                "cdy" => IoError::Format("not a CADaddy .cdy file".into()),
+                e => IoError::Unsupported(e.to_string()),
+            };
+            if bytes.len() > 4 { dxf_read::read(without_bom(bytes)).map_err(|_| wrong(e)) } else { Err(wrong(e)) }
+        }
     }
 }
 

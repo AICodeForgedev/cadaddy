@@ -22,8 +22,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "inputSchema": {"type": "object", "properties": {"filter": {"type": "string"}}}}),
         json!({"name": "inspect_drawing", "description": "Summary of the active drawing: entity counts, extents, layers, styles, blocks, layouts, selection, undo history and (optionally) entities with handles and geometry.",
             "inputSchema": {"type": "object", "properties": {"entities": {"type": "boolean"}, "limit": {"type": "integer"}}}}),
-        json!({"name": "query_entities", "description": "Entities filtered by type (Line, Circle, Polyline…), layer and/or a window [[x0,y0],[x1,y1]] (objects whose geometry is inside or crosses it; crossing:false = entirely inside). Returns count (all matches), returned (this page) and entities; page with offset and limit (default 500).",
-            "inputSchema": {"type": "object", "properties": {"type": {"type": "string"}, "layer": {"type": "string"},
+        json!({"name": "query_entities", "description": "Entities filtered by type (Line, Circle, Polyline…), layer, current selection (selected:true; active space only) and/or a window [[x0,y0],[x1,y1]] (objects whose geometry is inside or crosses it; crossing:false = entirely inside). Returns count (all matches), returned (this page) and entities; page with offset and limit (default 500).",
+            "inputSchema": {"type": "object", "properties": {"type": {"type": "string"}, "layer": {"type": "string"}, "selected": {"type": "boolean"},
                 "window": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}, "minItems": 2, "maxItems": 2},
                 "crossing": {"type": "boolean"}, "limit": {"type": "integer", "minimum": 0}, "offset": {"type": "integer", "minimum": 0}}}}),
         json!({"name": "render", "description": "Render the active drawing to a PNG and return it as an image: fitted to the extents by default, or just the area `window` [[x0,y0],[x1,y1]] (drawing units), e.g. one sheet or one room of a large drawing. With a window and no size the image is 1600 px wide with the window's shape.",
@@ -92,7 +92,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         json!({"name": "new_drawing", "description": "Create a new drawing (imperial by default, or metric).",
             "inputSchema": {"type": "object", "properties": {"metric": {"type": "boolean"}}}}),
         json!({"name": "open", "description": "Open a drawing (CADaddy .cdy, DWG, DXF, DWT; an SVG or PDF is converted) as a new tab that becomes current. Returns its index and any warnings (what reading left out, styles reset). Opening a file that is already open switches to it.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}),
-        json!({"name": "save", "description": "Save the drawing, its format by extension: .cdy (CADaddy's own, keeps everything), .dwg or .dxf (the result's `notKept` and `notKeptDetail` — feature, dropped|changed, count, handles — list what those wouldn't keep, the first time; the checkexchange command lists it without saving). A .svg, .png or .pdf path exports instead: the drawing keeps its name and unsaved changes.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}),
+        json!({"name": "save", "description": "Save the drawing, its format by extension: .cdy (CADaddy's own, keeps everything), .dwg or .dxf (the result's `notKept` and `notKeptDetail` — feature, dropped|changed, count, handles — list what those wouldn't keep, the first time for each format and version; the reply carries them, never a pending notice; the checkexchange command lists it without saving). A .svg, .png or .pdf path exports instead: the drawing keeps its name and unsaved changes.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}),
         json!({"name": "cancel", "description": "Press Escape: cancel the running command (or clear the selection).", "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "get_prompt", "description": "What CADaddy is asking for right now: the running command, the prompt text and bare message, its keyword options (type the capital letters to choose one), the default Enter takes, which inputs it accepts (point, number, text, selection), whether a drawing is still opening (`busy`), whether a \"Save changes?\" question is open (`closePrompt`), and the last command-line lines. Use it to step through a command with command_line.",
             "inputSchema": {"type": "object", "properties": {}}}),
@@ -428,6 +428,59 @@ fn fits(v: &Value, schema: &Value) -> bool {
         && (schema["items"].is_null() || v.as_array().is_none_or(|a| a.iter().all(|i| fits(i, &schema["items"]))))
 }
 
+/// A number as a person writes it (`1`, not `1.0`).
+fn plain_number(f: f64) -> String {
+    if f.fract() == 0.0 && f.abs() < 1e15 { format!("{}", f as i64) } else { format!("{f}") }
+}
+
+/// What a property's schema asks for, in words ("a whole number ≥ 1", "a list of 2 numbers").
+fn describe(schema: &Value) -> String {
+    let one = match schema["type"].as_str() {
+        Some("string") => "text",
+        Some("integer") => "a whole number",
+        Some("number") => "a number",
+        Some("boolean") => "true or false",
+        Some("array") => "a list",
+        Some("object") => "an object",
+        _ => "a valid value",
+    };
+    if schema["type"] == "array" {
+        let items = &schema["items"];
+        let of = if items.is_null() {
+            "items".to_string()
+        } else if items["type"] == "array" && items["minItems"].is_u64() && items["minItems"] == items["maxItems"] {
+            format!("lists of {} {}", items["minItems"], describe_plural(&items["items"]))
+        } else {
+            describe_plural(items).to_string()
+        };
+        return match (schema["minItems"].as_u64(), schema["maxItems"].as_u64()) {
+            (Some(a), Some(b)) if a == b => format!("a list of {a} {of}"),
+            (Some(a), Some(b)) => format!("a list of {a} to {b} {of}"),
+            (Some(a), None) => format!("a list of at least {a} {of}"),
+            (None, Some(b)) => format!("a list of at most {b} {of}"),
+            (None, None) if schema["items"].is_null() => one.to_string(),
+            (None, None) => format!("a list of {of}"),
+        };
+    }
+    match schema["minimum"].as_f64() {
+        Some(m) => format!("{one} ≥ {}", plain_number(m)),
+        None => one.to_string(),
+    }
+}
+
+/// The plural of what a schema asks for ("numbers").
+fn describe_plural(schema: &Value) -> &'static str {
+    match schema["type"].as_str() {
+        Some("string") => "text values",
+        Some("integer") => "whole numbers",
+        Some("number") => "numbers",
+        Some("boolean") => "true/false values",
+        Some("array") => "lists",
+        Some("object") => "objects",
+        _ => "items",
+    }
+}
+
 /// Arguments checked against the tool's input schema: an object, required properties present and
 /// each given property fitting its schema (`null` counts as not given). `Err` is the
 /// invalid-params message.
@@ -449,7 +502,7 @@ fn check_args(name: &str, args: &Value) -> Result<Value, String> {
         if let Some(v) = a.get(key).filter(|v| !v.is_null())
             && !fits(v, prop)
         {
-            return Err(format!("`{key}` of `{name}` must match {prop}"));
+            return Err(format!("`{key}` of `{name}` must be {}", describe(prop)));
         }
     }
     Ok(a)
@@ -466,6 +519,53 @@ fn command_matches(c: &Value, f: &str) -> bool {
 /// schema), answered with JSON-RPC invalid params; a failing tool is an `isError` result.
 pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value, String> {
     let a = check_args(name, args)?;
+    let unknown = unknown_args(name, &a);
+    let mut out = run_tool(b, name, a)?;
+    if !unknown.is_empty() {
+        add_warnings(&mut out, &unknown);
+    }
+    Ok(out)
+}
+
+/// The names in `args` that tool `name`'s input schema doesn't list, as warnings.
+fn unknown_args(name: &str, args: &Value) -> Vec<String> {
+    let defs = tool_definitions(true);
+    let Some(schema) = defs["tools"].as_array().and_then(|t| t.iter().find(|t| t["name"] == name)).map(|t| &t["inputSchema"]) else {
+        return Vec::new();
+    };
+    if schema["additionalProperties"].as_bool() == Some(true) {
+        return Vec::new();
+    }
+    let known = schema["properties"].as_object();
+    args.as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(k, v)| !v.is_null() && !known.is_some_and(|p| p.contains_key(*k)))
+        .map(|(k, _)| format!("`{}` is not a parameter of {name} (it was ignored); see tools/list for its parameters", cadaddy_engine::clip_input(k)))
+        .collect()
+}
+
+/// Add `warnings` to a tool result: into its JSON text when that is an object, else as a line of
+/// text after it.
+fn add_warnings(out: &mut Value, warnings: &[String]) {
+    let Some(item) = out["content"].as_array_mut().and_then(|c| c.first_mut()).filter(|c| c["type"] == "text") else { return };
+    match item["text"].as_str().and_then(|t| serde_json::from_str::<Value>(t).ok()) {
+        Some(Value::Object(mut o)) => {
+            let w = o.entry("warnings").or_insert_with(|| json!([]));
+            if let Some(a) = w.as_array_mut() {
+                a.extend(warnings.iter().map(|m| json!(m)));
+            }
+            item["text"] = json!(serde_json::to_string_pretty(&Value::Object(o)).unwrap_or_default());
+        }
+        _ => {
+            if let Some(c) = out["content"].as_array_mut() {
+                c.push(json!({"type": "text", "text": format!("warnings: {}", warnings.join("; "))}));
+            }
+        }
+    }
+}
+
+fn run_tool(b: &mut dyn Backend, name: &str, a: Value) -> Result<Value, String> {
     let r = match name {
         "command_line" => b.call("cmdline.input", a),
         "script" => b.call("cmdline.script", a),

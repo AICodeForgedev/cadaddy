@@ -1,4 +1,5 @@
-//! Edits whose result has coordinates too large to represent (NaN or infinite) are refused.
+//! Edits whose result has coordinates too large to represent (NaN or infinite), or beyond the
+//! ±1e12 limit files are written within, are refused.
 //!
 //! Finite inputs can still overflow: moving by `[1e308, 1e308]` twice, scaling by a huge factor or
 //! offsetting by a huge distance. Infinite coordinates break extents, inspection and rendering, and
@@ -30,7 +31,10 @@ impl Session {
         st.selection = selection.to_vec();
         Err(EngineError::BadParams {
             cmd: cmd.into(),
-            msg: format!("the result is too large: object {} would get infinite or undefined coordinates. Nothing was changed", h.hex()),
+            msg: format!(
+                "the result is too large: object {} would get coordinates beyond ±1e12 (the export limit) or infinite or undefined ones. Nothing was changed",
+                h.hex()
+            ),
         })
     }
 }
@@ -53,12 +57,31 @@ fn changed_non_finite(d: &Drawing, before: Option<&EntityStore>, after: &EntityS
     }
     // Chunks shared with `before` hold only unchanged objects.
     let shared: HashSet<usize> = before.map(|b| b.chunk_slices().map(|(key, _)| key).collect()).unwrap_or_default();
-    let finite = |e: &Entity| {
+    // An object is refused when a number is infinite or undefined, or when it lies beyond the
+    // limit now and did not before (a file's far-out object can still be edited back).
+    let ok = |e: &Entity, old: Option<&Arc<Entity>>| {
+        if !is_finite(e) {
+            return false;
+        }
         let b = entity_bounds(d, e, 0);
-        is_finite(e) && (b.is_empty() || (b.min.is_finite() && b.max.is_finite()))
+        if b.is_empty() || cadaddy_doc::within_limit(&b, crate::VIEW_LIMIT) {
+            return true;
+        }
+        // Beyond the limit: only an object that already was, whose numbers are still finite.
+        let beyond_before = old.is_some_and(|o| {
+            let w = entity_bounds(d, o, 0);
+            !w.is_empty() && !cadaddy_doc::within_limit(&w, crate::VIEW_LIMIT)
+        });
+        beyond_before && b.min.is_finite() && b.max.is_finite()
     };
     let bad_in = |items: &[Arc<Entity>]| {
-        items.iter().filter(|e| before.and_then(|b| b.get(e.handle)).is_none_or(|old| !Arc::ptr_eq(old, e))).find(|e| !finite(e)).map(|e| e.handle)
+        items
+            .iter()
+            .filter_map(|e| {
+                let old = before.and_then(|b| b.get(e.handle));
+                (old.is_none_or(|o| !Arc::ptr_eq(o, e)) && !ok(e, old)).then_some(e.handle)
+            })
+            .next()
     };
     let changed: Vec<&[Arc<Entity>]> = after.chunk_slices().filter(|(key, _)| !shared.contains(key)).map(|(_, items)| items).collect();
     // The first such object in drawing order, the chunks looked at side by side.
