@@ -153,7 +153,9 @@ fn run_get(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn parse_color(v: &Value) -> Option<Color> {
-    v.as_str().and_then(Color::parse).or_else(|| v.as_i64().and_then(|i| i16::try_from(i).ok()).map(Color::from_aci))
+    v.as_str()
+        .and_then(Color::parse)
+        .or_else(|| v.as_i64().filter(|i| (0..=256).contains(i)).and_then(|i| i16::try_from(i).ok()).map(Color::from_aci))
 }
 
 /// A transparency as JSON, in the form `properties.set` takes: "ByLayer", "ByBlock" or a percentage.
@@ -1220,6 +1222,24 @@ fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn properties_set_rejects_out_of_range_colour() {
+        let mut s = Session::new();
+        s.execute("line", &json!({ "points": [[0, 0], [50, 0]] })).unwrap();
+        let h = s.doc().unwrap().model.last().unwrap().handle.hex();
+        s.execute("properties.set", &json!({ "handles": [h], "color": 1 })).unwrap();
+        let col = |s: &Session| s.doc().unwrap().model.last().unwrap().common.color;
+        for bad in [300, -5, 257] {
+            let e = s.execute("properties.set", &json!({ "handles": [h], "color": bad })).unwrap_err();
+            assert!(e.to_string().contains("bad colour"), "{e}");
+            assert_eq!(col(&s), Color::Index(1));
+        }
+        s.execute("properties.set", &json!({ "handles": [h], "color": 256 })).unwrap();
+        assert_eq!(col(&s), Color::ByLayer);
+        s.execute("properties.set", &json!({ "handles": [h], "color": 0 })).unwrap();
+        assert_eq!(col(&s), Color::ByBlock);
+    }
 
     #[test]
     fn properties_set_rejects_unloaded_linetype() {
