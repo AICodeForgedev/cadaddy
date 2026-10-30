@@ -2863,7 +2863,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
     if let Some(chunks) = dxf_ext::layer_state_chunks(&d.layer_states) {
         xrecords.push((dxf_ext::LAYER_STATES_KEY, w.h(), chunks));
     }
-    if let Some(chunks) = dxf_ext::layer_filter_chunks(&d.layer_filters) {
+    if let Some(chunks) = dxf_ext::layer_filter_chunks(d) {
         xrecords.push((dxf_ext::LAYER_FILTERS_KEY, w.h(), chunks));
     }
     if let Some(chunks) = dxf_ext::building_spec_chunks(d) {
