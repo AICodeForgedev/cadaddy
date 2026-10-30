@@ -119,3 +119,30 @@ fn constraint_name_format() {
     assert!(s.execute("setvar", &json!({ "name": "CONSTRAINTNAMEFORMAT", "value": 3 })).is_err());
     assert!(s.execute("constraintsettings", &json!({ "nameFormat": 9 })).is_err());
 }
+
+#[test]
+fn rename_refuses_empty_old_and_reserved_new_names() {
+    let mut s = Session::new();
+    let l = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    let m = line(&mut s, [0.0, 5.0], [10.0, 6.0]);
+    // A geometric constraint (its name is "") alongside a dimensional one and a user parameter.
+    run(&mut s, "gchorizontal", json!({ "h1": m.hex() }));
+    assert!(s.doc().unwrap().constraints.iter().any(|c| c.kind == K::Horizontal && c.name.is_empty()));
+    run(&mut s, "dclinear", json!({ "h1": l.hex(), "value": 10, "name": "d1" }));
+    run(&mut s, "parameters", json!({ "name": "w", "expr": "20" }));
+    run(&mut s, "parameters", json!({ "name": "d1", "expr": "w / 2" }));
+    let before = s.doc().unwrap().clone();
+    for bad in [
+        json!({ "rename": ["", "x"] }),
+        json!({ "rename": ["  ", "x"] }),
+        json!({ "rename": ["w", "pi"] }),
+        json!({ "rename": ["w", "PI"] }),
+        json!({ "rename": ["d1", "Pi"] }),
+    ] {
+        assert!(s.execute("parameters", &bad).is_err(), "{bad}");
+        assert!(*s.doc().unwrap() == before, "{bad} changed the drawing");
+    }
+    // A dimensional constraint's name is still renamable.
+    run(&mut s, "parameters", json!({ "rename": ["d1", "span"] }));
+    assert!(s.doc().unwrap().constraints.iter().any(|c| c.name == "span"));
+}
