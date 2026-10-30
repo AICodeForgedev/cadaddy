@@ -79,12 +79,9 @@ impl Face {
     /// the SIL Open Font License, which lets it be passed on with a drawing (eTransmit).
     pub fn is_ofl(&self) -> bool {
         let Some(f) = self.font() else { return false };
-        [skrifa::string::StringId::LICENSE_DESCRIPTION, skrifa::string::StringId::LICENSE_URL].into_iter().any(|id| {
-            f.localized_strings(id).any(|s| {
-                let t = s.to_string().to_ascii_lowercase();
-                t.contains("open font license") || t.contains("scripts.sil.org/ofl") || t.contains("openfontlicense.org")
-            })
-        })
+        [skrifa::string::StringId::LICENSE_DESCRIPTION, skrifa::string::StringId::LICENSE_URL]
+            .into_iter()
+            .any(|id| f.localized_strings(id).any(|s| licence_text_is_ofl(&s.to_string())))
     }
     /// The file name extension for the face's file: `ttc` for a collection, `otf` for CFF
     /// outlines, else `ttf`.
@@ -102,6 +99,24 @@ impl Face {
             .flat_map(|id| f.localized_strings(id).map(|s| norm(&s.to_string())).collect::<Vec<_>>())
             .collect()
     }
+}
+
+/// Whether a licence entry of a font says it is under the SIL Open Font License. A sentence that
+/// negates it ("not licensed under the SIL Open Font License") doesn't count.
+fn licence_text_is_ofl(text: &str) -> bool {
+    const MARKS: [&str; 3] = ["open font license", "scripts.sil.org/ofl", "openfontlicense.org"];
+    const NEGATIONS: [&str; 6] = ["not", "no", "never", "without", "neither", "nor"];
+    let t = text.to_lowercase();
+    MARKS.iter().any(|m| {
+        t.match_indices(m).any(|(at, _)| {
+            // The words of the sentence ('. ', ';' or a line break ends one) before the mark.
+            let before = t.get(..at).unwrap_or("");
+            let start = before.rmatch_indices(". ").next().map_or(0, |(i, _)| i + 2);
+            let start = before.rfind([';', '\n']).map_or(start, |i| start.max(i + 1));
+            let sentence = before.get(start..).unwrap_or("");
+            !sentence.split(|c: char| !(c.is_alphanumeric() || c == '\'')).any(|w| NEGATIONS.contains(&w) || w.ends_with("n't"))
+        })
+    })
 }
 
 /// Faces of a font file: every face of a collection (capped), or the single font.
@@ -1061,5 +1076,66 @@ mod geometry_budget_tests {
         assert!(!shaped.is_empty());
         assert_eq!(shaped.glyphs, vec![contours]);
         assert!(shaped.text.is_empty());
+    }
+
+    /// A font file holding only a `name` table with the given (name id, text) entries.
+    fn font_with_names(names: &[(u16, &str)]) -> Vec<u8> {
+        let strings: Vec<Vec<u8>> = names.iter().map(|(_, t)| t.encode_utf16().flat_map(u16::to_be_bytes).collect()).collect();
+        let mut table = Vec::new();
+        for v in [0u16, names.len() as u16, 6 + 12 * names.len() as u16] {
+            table.extend(v.to_be_bytes());
+        }
+        let mut offset = 0u16;
+        for ((id, _), s) in names.iter().zip(&strings) {
+            for v in [3u16, 1, 0x409, *id, s.len() as u16, offset] {
+                table.extend(v.to_be_bytes());
+            }
+            offset += s.len() as u16;
+        }
+        strings.iter().for_each(|s| table.extend(s));
+        let mut out = Vec::new();
+        out.extend(0x0001_0000u32.to_be_bytes());
+        for v in [1u16, 16, 0, 0] {
+            out.extend(v.to_be_bytes());
+        }
+        out.extend(*b"name");
+        out.extend(0u32.to_be_bytes());
+        out.extend(28u32.to_be_bytes());
+        out.extend((table.len() as u32).to_be_bytes());
+        out.extend(table);
+        out
+    }
+
+    fn is_ofl(names: &[(u16, &str)]) -> bool {
+        Face::new(Arc::new(font_with_names(names)), 0).is_some_and(|f| f.is_ofl())
+    }
+
+    #[test]
+    fn is_ofl_reads_the_fonts_own_licence_entries() {
+        let ofl = "This Font Software is licensed under the SIL Open Font License, Version 1.1.";
+        assert!(is_ofl(&[(13, ofl)]));
+        assert!(is_ofl(&[(14, "https://openfontlicense.org")]));
+        assert!(is_ofl(&[(14, "http://scripts.sil.org/OFL")]));
+        // Another licence, an unrelated entry, or none at all.
+        assert!(!is_ofl(&[(13, "Licensed under the Apache License, Version 2.0.")]));
+        assert!(!is_ofl(&[(14, "https://example.com/terms")]));
+        assert!(!is_ofl(&[(1, "SIL Open Font License Sans")]));
+        assert!(!is_ofl(&[]));
+        assert!(!is_ofl(&[(1, "Sample")]));
+    }
+
+    #[test]
+    fn is_ofl_is_false_for_a_negated_licence_sentence() {
+        for t in [
+            "This font is not licensed under the SIL Open Font License.",
+            "Not under the SIL Open Font License; all rights reserved.",
+            "Never released under the Open Font License",
+            "It isn't available under the SIL Open Font License.",
+            "Commercial use without the SIL Open Font License is forbidden.",
+        ] {
+            assert!(!is_ofl(&[(13, t)]), "{t}");
+        }
+        // A negation in an earlier sentence doesn't spoil a later grant.
+        assert!(is_ofl(&[(13, "Do not redistribute the logo. The fonts are under the SIL Open Font License 1.1.")]));
     }
 }
