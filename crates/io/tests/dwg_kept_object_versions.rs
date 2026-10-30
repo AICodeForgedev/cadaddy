@@ -260,6 +260,20 @@ fn kept_groups_keep_their_version_across_saves() {
     }
 }
 
+/// A DXF without `$ACADVER` has no version for its kept groups: the drawing's own `$ACADVER`
+/// is then the default a new drawing starts with (AC1032), which says nothing about the file, so
+/// the kept groups are read as the bridge's R2000, as before.
+#[test]
+fn a_file_without_acadver_records_no_version() {
+    let dxf = synthetic("AC1032").replacen("  9\r\n$ACADVER\r\n  1\r\nAC1032\r\n", "", 1);
+    assert!(!dxf.contains("$ACADVER"));
+    let d = read(dxf.as_bytes(), "kept.dxf").unwrap();
+    assert!(!d.foreign.objects.is_empty(), "the render settings and the field are kept");
+    assert_eq!(d.foreign.version, None);
+    let with = read(synthetic("AC1032").as_bytes(), "kept.dxf").unwrap();
+    assert_eq!(with.foreign.version.as_deref(), Some("AC1032"));
+}
+
 #[test]
 fn a_2018_files_kept_objects_reach_a_2018_dwg() {
     kept_objects_survive("AC1032", Version::R2018);
