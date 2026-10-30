@@ -534,12 +534,13 @@ fn native_reading_matches_the_bridge() {
         for v in VERSIONS {
             let mut d = d.clone();
             d.header.set_str("ACADVER", v);
-            let opts = cadaddy_io::SaveOptions { version: cadaddy_io::Version::for_acadver(v), ..Default::default() };
-            let theirs = cadaddy_io::write_with(&d, "made-up.dwg", &opts).unwrap();
+            // The bridge's file, whatever CADADDY_DWG says.
+            let theirs = cadaddy_io::write_dwg(&d, cadaddy_io::Version::for_acadver(v).unwrap(), cadaddy_io::DwgEngine::Bridge).unwrap();
             let (ours, _) = cadaddy_io::dwg_write::write(&d, v).unwrap();
             for (file, bytes) in [("bridge's", &theirs), ("ours", &ours)] {
                 let tag = format!("{what} {v} {file}");
-                let Ok(mut a) = cadaddy_io::read(bytes, "x.dwg") else { continue };
+                let mut a =
+                    cadaddy_io::read_dwg(bytes, cadaddy_io::DwgEngine::Bridge).unwrap_or_else(|e| panic!("{tag}: the bridge cannot read it: {e}"));
                 let (b, rep) = cadaddy_io::dwg_read::read(bytes).unwrap_or_else(|e| panic!("{tag}: {e}"));
                 // The bridge's readings of our files that aren't evidence (see the tests above):
                 // multiline style flags, a ByBlock leader linetype, R2000 viewports with links.
