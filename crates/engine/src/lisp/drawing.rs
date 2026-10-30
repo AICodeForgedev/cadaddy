@@ -64,8 +64,10 @@ fn items(p: &PickSet) -> Vec<Handle> {
 
 /// `(command arg…)`: arguments go to the command line as typed input: a string starts a command
 /// or answers a prompt ("" is Enter), a number or a point is entered, an entity name or a
-/// selection set picks objects, and `pause` waits for the user. A command not finished by the
-/// arguments stays active for the next `command` call. No arguments: cancel the active command.
+/// selection set picks objects (a name, alone or with a point as `entsel` gives it, also answers
+/// a prompt picking one object: [`Session::input_object`]), and `pause` waits for the user. A
+/// command not finished by the arguments stays active for the next `command` call. No
+/// arguments: cancel the active command.
 pub fn command(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     if a.is_empty() {
         if ctx.s.running.is_some() {
@@ -108,14 +110,14 @@ pub fn command(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
                     }
                 }
             }
-            Value::Ename(h) => feed(ctx.s, Input::Pick(vec![*h])),
+            Value::Ename(h) => named(ctx.s, *h, None),
             Value::PickSet(p) => feed(ctx.s, Input::Pick(items(p))),
             Value::Cons(_) => {
                 if let Some(p) = arg.as_point() {
                     feed(ctx.s, Input::Point(Vec2::new(p[0], p[1])));
                 } else if let Value::Ename(h) = arg.car() {
                     // An `entsel` result: (ename point).
-                    feed(ctx.s, Input::Pick(vec![h]));
+                    named(ctx.s, h, arg.cdr().car().as_point().map(|p| Vec2::new(p[0], p[1])));
                 } else {
                     return Err(LispError::bad_arg("command argument", arg));
                 }
@@ -129,6 +131,14 @@ pub fn command(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 fn feed(s: &mut Session, input: Input) {
     if s.running.is_some()
         && let Err(e) = s.input(input)
+    {
+        s.echo(e.to_string());
+    }
+}
+
+fn named(s: &mut Session, h: Handle, at: Option<Vec2>) {
+    if s.running.is_some()
+        && let Err(e) = s.input_object(h, at)
     {
         s.echo(e.to_string());
     }
