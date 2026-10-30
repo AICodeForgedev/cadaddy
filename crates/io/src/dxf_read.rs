@@ -1782,6 +1782,13 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                         fields.insert(field.to_string(), v);
                     }
                 }
+                // A DWG's native DIMSTYLE colour comes as a second group 70 (after the flags);
+                // CADaddy's own xdata, read next, wins where both are present.
+                if let Some(c) = tg.iter().take_while(|x| x.code < 1000).filter(|x| x.code == 70).nth(1)
+                    && let Some(v) = crate::dxf_ext::decode(crate::dxf_ext::K::Color, c, &rx.styles, &rx.brs, &rx.ltypes)
+                {
+                    fields.insert("textFillColor".to_string(), v);
+                }
                 fields.extend(crate::dxf_ext::read_newer_dimvars(&tg, &rx.styles, &rx.brs, &rx.ltypes));
                 let mut st = DimStyle { name: name.clone(), annotative: annotative(&tg), ..DimStyle::default() };
                 st.apply_fields(&fields);
