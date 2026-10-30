@@ -113,6 +113,9 @@ impl Server {
     /// runs stops that call within about a second instead of after it.
     pub fn serve_cancellable(&mut self, input: impl BufRead + Send + 'static, mut output: impl Write) -> std::io::Result<()> {
         let (tx, rx) = std::sync::mpsc::channel::<std::io::Result<Option<Line>>>();
+        // For a backend that is another process (the app behind `--connect`), the cancel is also
+        // sent on a connection of its own, since the main one is waiting for the call's reply.
+        let canceller = self.backend.canceller();
         std::thread::spawn(move || {
             let mut input = input;
             loop {
@@ -122,6 +125,9 @@ impl Server {
                     && is_cancel_request(l)
                 {
                     cadaddy_engine::request_cancel();
+                    if let Some(cancel) = &canceller {
+                        cancel();
+                    }
                 }
                 if tx.send(next).is_err() || end {
                     return;

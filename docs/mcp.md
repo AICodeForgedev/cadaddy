@@ -22,6 +22,15 @@ served as well, not instead. Without `--connect`, `cadaddy-cli mcp` decides the 
 (listing its tools or its first call): the window if one answers on 47820, else its own session — so
 open CADaddy before asking the agent if you want to watch it work.
 
+Only one window can hold port 47820: the first CADaddy window started gets it, and a later window
+says "Agent control is held by another CADaddy window" in its status line and does not serve agents
+(a window started with its own `--control PORT` still serves that port). The connector drives the
+window that holds the port; its instructions name it (window title and process id), and `ping` with
+`version: true` returns the same. Close the first window, or start the other with `--control PORT`
+and connect to that port, to drive a different one. If the app refuses the connection because no
+control token was found, `cadaddy-cli mcp` says so ("refused the connection: no control token
+(looked in …; set CADADDY_CONTROL_TOKEN)"); only a real network loss reports a lost reply.
+
 With `--connect`, an MCP client that starts before the app can add `--lazy` (reach the app at the
 first tool call; until it answers each call fails with a message saying how to open it) and
 `--launch` (open CADaddy with that control port when nothing answers, and wait for it — macOS, and on

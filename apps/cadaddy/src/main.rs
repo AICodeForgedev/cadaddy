@@ -660,8 +660,11 @@ fn main() -> eframe::Result {
                     if token == Some(None) {
                         log::error!("control server: no system randomness for a token; the control channel stays closed");
                     } else {
-                        let rx = control_server::start_ports(&ports, cc.egui_ctx.clone(), token.flatten(), config_dir().as_deref());
+                        let (rx, unbound) = control_server::start_ports(&ports, cc.egui_ctx.clone(), token.flatten(), config_dir().as_deref());
                         app = app.with_control(rx, control_port.is_some());
+                        if unbound.contains(&cadaddy_engine::AGENT_PORT) {
+                            app.set_agent_port_held();
+                        }
                     }
                 }
                 if sample {
