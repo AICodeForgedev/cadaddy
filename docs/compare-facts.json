@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1167,
-    "count": 1167,
+    "callableAsJson": 1168,
+    "count": 1168,
     "ids": [
       "-attedit",
       "-block",
@@ -1135,6 +1135,7 @@
       "walk.publish",
       "wall.info",
       "wallgen",
+      "wallgen.plan",
       "walls.read",
       "wblock",
       "wedge",
