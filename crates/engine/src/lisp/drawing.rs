@@ -303,6 +303,18 @@ fn list_to_groups(list: &Value) -> Result<(String, Vec<Tag>), LispError> {
         }
     }
     let kind = kind.ok_or_else(|| LispError::new("bad DXF group: no entity type (0)"))?;
+    // A HATCH's boundary points are 2D in DXF (10/20, 11/21 …), but a list point `(10 x y)` is
+    // padded to three coordinates: the reader walks the boundary groups in sequence, so the padding
+    // goes (only the elevation point before the first 91 keeps its 30).
+    if kind == "HATCH"
+        && let Some(first_loop) = tags.iter().position(|t| t.code == 91)
+    {
+        let mut at = 0;
+        tags.retain(|t| {
+            at += 1;
+            at <= first_loop || !(30..=33).contains(&t.code)
+        });
+    }
     // Angles come in radians, as entget lists them; DXF holds most in degrees.
     convert_angles(&kind, &mut tags, f64::to_degrees);
     Ok((kind, tags))
@@ -508,10 +520,18 @@ fn entity_from_list(ctx: &Ctx<'_>, list: &Value) -> Result<(String, cadaddy_doc:
         let layer = crate::sysvars::get(ctx.s, "CLAYER").and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "0".into());
         tags.insert(0, Tag::s(8, layer));
     }
+    // The reader takes a circle's or arc's radius as its magnitude; a list that holds none is refused.
+    if matches!(kind.as_str(), "CIRCLE" | "ARC") && tags.iter().any(|t| t.code == 40 && (t.f64().is_nan() || t.f64() <= 0.0)) {
+        return Err(LispError::new(format!("bad DXF group: {kind}: the radius must be positive")));
+    }
     match (codec()?.entity)(&kind, &tags) {
         // A type the reader only carries through (an unknown or invalid name) isn't made.
         Some((_, cadaddy_doc::EntityKind::Unknown(_))) | None => Err(LispError::new(format!("bad DXF group: {kind} can't be made from this list"))),
         Some((mut common, k)) => {
+            // The commands' limits: finite numbers, coordinates within ±1e12, a positive radius.
+            if let Some(why) = limit_violation(ctx, &common, &k) {
+                return Err(LispError::new(format!("bad DXF group: {kind}: {why}")));
+            }
             // Other applications' extended data from the list's (-3 …) groups; ACAD's and
             // CADaddy's own are read into the object already.
             let mut xdata = Vec::new();
@@ -536,6 +556,68 @@ fn entity_from_list(ctx: &Ctx<'_>, list: &Value) -> Result<(String, cadaddy_doc:
             Ok((kind, common, k))
         }
     }
+}
+
+/// The properties a list gives an entity the reader can't make from a list: its own kind kept.
+fn common_only(ctx: &Ctx<'_>, list: &Value, old: &Entity) -> Option<(String, cadaddy_doc::Common, cadaddy_doc::EntityKind)> {
+    let (kind, mut tags) = list_to_groups(list).ok()?;
+    if !kind.eq_ignore_ascii_case(old.kind.dxf_name()) {
+        return None;
+    }
+    if !tags.iter().any(|t| t.code == 8) {
+        let layer = crate::sysvars::get(ctx.s, "CLAYER").and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "0".into());
+        tags.insert(0, Tag::s(8, layer));
+    }
+    let (mut common, _) = (codec().ok()?.entity)("POINT", &tags)?;
+    common.xdata = old.common.xdata.clone();
+    Some((kind, common, old.kind.clone()))
+}
+
+/// Whether a text read from a list has the baseline point `entget` lists for `old`.
+fn same_baseline(ctx: &Ctx<'_>, old: &Entity, new: &cadaddy_doc::Text) -> bool {
+    let (Ok(c), Ok(d)) = (codec(), ctx.s.doc()) else { return false };
+    let (_, tags) = (c.groups)(d, old);
+    let at = |code: i32| tags.iter().find(|t| t.code == code).map(Tag::f64);
+    let (Some(x), Some(y)) = (at(10), at(20)) else { return false };
+    (new.insert.x - x).abs() <= 1e-9 * (1.0 + x.abs()) && (new.insert.y - y).abs() <= 1e-9 * (1.0 + y.abs())
+}
+
+/// Whether `lines` are the pattern lines `entget` lists for `old` (a library pattern, as numbers).
+fn same_lines(ctx: &Ctx<'_>, old: &Entity, lines: &[cadaddy_doc::library::PatternLine]) -> bool {
+    let (Ok(c), Ok(d)) = (codec(), ctx.s.doc()) else { return false };
+    let (kind, tags) = (c.groups)(d, old);
+    let Some((_, cadaddy_doc::EntityKind::Hatch(h))) = (c.entity)(&kind, &tags) else { return false };
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * (1.0 + a.abs().max(b.abs()));
+    h.pattern_lines.len() == lines.len()
+        && h.pattern_lines.iter().zip(lines).all(|(a, b)| {
+            close(a.angle, b.angle)
+                && close(a.origin.0, b.origin.0)
+                && close(a.origin.1, b.origin.1)
+                && close(a.delta.0, b.delta.0)
+                && close(a.delta.1, b.delta.1)
+                && a.dashes.len() == b.dashes.len()
+                && a.dashes.iter().zip(&b.dashes).all(|(x, y)| close(*x, *y))
+        })
+}
+
+/// Why an entity built from a list breaks the limits the commands keep, if it does.
+fn limit_violation(ctx: &Ctx<'_>, common: &cadaddy_doc::Common, kind: &cadaddy_doc::EntityKind) -> Option<&'static str> {
+    use cadaddy_doc::EntityKind;
+    let radius = match kind {
+        EntityKind::Circle(c) => Some(c.radius),
+        EntityKind::Arc(a) => Some(a.radius),
+        _ => None,
+    };
+    if radius.is_some_and(|r| r.is_nan() || r <= 0.0) {
+        return Some("the radius must be positive");
+    }
+    let d = ctx.s.doc().ok()?;
+    let e = Entity { handle: Handle(0), common: common.clone(), kind: kind.clone() };
+    if !crate::finite::is_finite(&e) {
+        return Some("a number is infinite or undefined");
+    }
+    let b = cadaddy_doc::entity_bounds(d, &e, 0);
+    (!b.is_empty() && !cadaddy_doc::within_limit(&b, crate::VIEW_LIMIT)).then_some("coordinates beyond ±1e12 (the export limit)")
 }
 
 pub fn entmake(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
@@ -644,7 +726,13 @@ fn end_block(ctx: &mut Ctx<'_>) -> Value {
 
 /// The object an entity list describes, added to the current space: its handle.
 fn make(ctx: &mut Ctx<'_>, list: &Value) -> Option<cadaddy_doc::Handle> {
-    let (_, common, kind) = entity_from_list(ctx, list).ok()?;
+    let (_, common, kind) = match entity_from_list(ctx, list) {
+        Ok(x) => x,
+        Err(e) => {
+            ctx.s.echo(e.msg);
+            return None;
+        }
+    };
     let space = ctx.s.space();
     let d = ctx.s.doc_mut().ok()?;
     // A layer entmake names that doesn't exist yet is created.
@@ -666,7 +754,16 @@ pub fn entmod(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     let Some(old) = ctx.s.doc().ok().and_then(|d| d.entity(h)).cloned() else { return Ok(Flow::Value(Value::Nil)) };
     let (kind_name, common, mut kind) = match entity_from_list(ctx, list) {
         Ok(x) => x,
-        Err(_) => return Ok(Flow::Value(Value::Nil)),
+        // A type the reader can't make from a list (a table, an OLE frame) takes the list's
+        // properties (layer, colour, linetype …) and keeps its own data.
+        Err(e) if e.msg.contains("can't be made") => match common_only(ctx, list, &old) {
+            Some(x) => x,
+            None => return Ok(Flow::Value(Value::Nil)),
+        },
+        Err(e) => {
+            ctx.s.echo(e.msg);
+            return Ok(Flow::Value(Value::Nil));
+        }
     };
     // A block reference's attributes are separate entities in AutoCAD (ATTRIB, after the INSERT):
     // the INSERT's list doesn't carry them, and changing it leaves them as they are.
@@ -674,9 +771,37 @@ pub fn entmod(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
         (cadaddy_doc::EntityKind::Insert(new), cadaddy_doc::EntityKind::Insert(was)) if new.attribs.is_empty() => {
             new.attribs = was.attribs.clone();
         }
-        // A dimension's links to the objects it measures aren't in its list either.
-        (cadaddy_doc::EntityKind::Dimension(new), cadaddy_doc::EntityKind::Dimension(was)) if new.assoc.is_empty() => {
-            new.assoc = was.assoc.clone();
+        // A dimension's links to the objects it measures and its own style overrides aren't in its
+        // list either.
+        (cadaddy_doc::EntityKind::Dimension(new), cadaddy_doc::EntityKind::Dimension(was)) => {
+            if new.assoc.is_empty() {
+                new.assoc = was.assoc.clone();
+            }
+            if new.overrides.is_empty() {
+                new.overrides = was.overrides.clone();
+            }
+        }
+        // A justified text's list holds its baseline point (10) and alignment point (11): a list
+        // that leaves 10 where `entget` put it keeps the text where it is.
+        (cadaddy_doc::EntityKind::Text(new), cadaddy_doc::EntityKind::Text(was)) if was.align_pt.is_some() && same_baseline(ctx, &old, new) => {
+            new.insert = was.insert;
+        }
+        // A hatch's links to its source boundary objects, and its pattern when it is the library's
+        // (entget lists a library pattern's lines too): left as they are when the list leaves them as
+        // it found them.
+        (cadaddy_doc::EntityKind::Hatch(new), cadaddy_doc::EntityKind::Hatch(was)) => {
+            for (n, w) in new.loops.iter_mut().zip(&was.loops) {
+                if n.sources.is_empty() && n.vertices == w.vertices {
+                    n.sources = w.sources.clone();
+                }
+            }
+            if was.pattern_lines.is_empty()
+                && !new.pattern_lines.is_empty()
+                && new.pattern == was.pattern
+                && same_lines(ctx, &old, &new.pattern_lines)
+            {
+                new.pattern_lines = Vec::new();
+            }
         }
         _ => {}
     }
