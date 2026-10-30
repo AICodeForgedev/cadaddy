@@ -805,6 +805,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(parts::specs());
         v.extend(express::specs());
         v.extend(express4::specs());
+        v.extend(express4::trim_specs());
         v.push(
             CommandSpec::new("spell", "Spelling", spell::run)
                 .menu(&["Tools", "Spelling"])
