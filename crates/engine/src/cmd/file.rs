@@ -1868,10 +1868,11 @@ thread_local! {
 }
 
 /// Save, then report the entities the file couldn't keep (nothing is dropped silently).
-fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> Result<Value>) -> Result<Value> {
+fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> Result<Value>, asked: Option<Version>) -> Result<Value> {
     // What the file will hold depends on the version it is saved as (the data store from 2013).
+    // QSAVE takes no `version` and keeps the drawing's own; SAVEAS writes the one asked for.
     let path = str_param(p, "path").map(str::to_string).or_else(|| s.state().ok().and_then(|st| st.path.clone())).unwrap_or_default();
-    let version = save_options("save", p).ok().and_then(|o| o.version).unwrap_or_else(|| drawing_version(s, &path));
+    let version = asked.unwrap_or_else(|| drawing_version(s, &path));
     let lost = s.doc().map(|d| not_saved_as(d, version)).unwrap_or_default();
     // Release 12 has no form for some objects (the rest are converted to R12 ones).
     let r12_lost = if version == Version::R12 { s.doc().map(|d| r12::downgrade(d).1).unwrap_or_default() } else { Default::default() };
@@ -2063,12 +2064,13 @@ fn run_checkexchange(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_qsave_reporting(s: &mut Session, p: &Value) -> Result<Value> {
-    save_reporting(s, p, run_save)
+    save_reporting(s, p, run_save, None)
 }
 
 fn run_saveas_reporting(s: &mut Session, p: &Value) -> Result<Value> {
     s.guard_run("saveas", p)?;
-    save_reporting(s, p, run_saveas)
+    let asked = save_options("saveas", p)?.version;
+    save_reporting(s, p, run_saveas, asked)
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
