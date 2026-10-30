@@ -11,6 +11,8 @@ use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, St
 pub(crate) enum Kind {
     Point,
     Number,
+    /// A number whose absolute value is at most this; a larger one is reported and asked again.
+    Bounded(f64),
     Text,
     /// Objects until Enter → `handles`.
     Select,
@@ -111,7 +113,7 @@ impl Interactive for Asker {
         let Some(a) = self.step() else { return Prompt::new("", Accept::TEXT) };
         let accept = match a.kind {
             Kind::Point => Accept::POINT,
-            Kind::Number => Accept::NUMBER,
+            Kind::Number | Kind::Bounded(_) => Accept::NUMBER,
             Kind::Text => Accept::TEXT,
             Kind::Select | Kind::One | Kind::Layer => Accept::SELECT,
             Kind::Keyword(_) => Accept::TEXT,
@@ -216,7 +218,20 @@ impl Interactive for Asker {
                     Ok(Step::Continue)
                 }
             },
-            (Kind::Number, Input::Enter) => match default.as_deref().and_then(|d| d.trim().parse::<f64>().ok()) {
+            (Kind::Bounded(max), Input::Text(t) | Input::Keyword(t)) => {
+                match t.trim().parse::<f64>().ok().or_else(|| units::parse_distance(t.trim())).filter(|v| v.is_finite()) {
+                    Some(v) if v.abs() <= max => self.take(s, json!(v)),
+                    Some(_) => {
+                        s.echo(format!("Requires a value between -{max:e} and {max:e}."));
+                        Ok(Step::Continue)
+                    }
+                    None => {
+                        s.echo("Requires a number.");
+                        Ok(Step::Continue)
+                    }
+                }
+            }
+            (Kind::Number | Kind::Bounded(_), Input::Enter) => match default.as_deref().and_then(|d| d.trim().parse::<f64>().ok()) {
                 Some(v) => self.take(s, json!(v)),
                 None => Ok(Step::Done),
             },

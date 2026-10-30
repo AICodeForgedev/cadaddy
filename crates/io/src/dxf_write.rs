@@ -2067,7 +2067,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
                 attach: 5,
                 rotation: g.text_angle,
                 style: style.text_style.clone(),
-                contents: g.value.clone(),
+                contents: g.mtext_contents(),
                 line_spacing: 1.0,
                 line_spacing_exact: false,
                 columns: None,
@@ -2351,6 +2351,15 @@ fn paper_views(d: &Drawing) -> HashMap<Handle, usize> {
         }
     }
     out
+}
+
+/// A layout's entities with its paper-space viewport (id 1) first. DWG stores no viewport ids and
+/// readers number a layout's viewports in order, so the sheet must lead even when the draw order
+/// (SORTENTS) put it behind a model viewport; otherwise that viewport becomes the sheet.
+fn sheet_first(l: &Layout) -> Vec<&Entity> {
+    let sheet = |e: &&Entity| matches!(&e.kind, EntityKind::Viewport(v) if v.id == 1);
+    let all = || l.entities.iter().map(|e| e.as_ref());
+    all().filter(sheet).chain(all().filter(|e| !sheet(e))).collect()
 }
 
 /// The paper-space viewport (id 1) of the layout whose first viewport is `e`, if it needs one
@@ -3291,6 +3300,11 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
             // Table groups where the file version has them, else xdata.
             let pre2007_dwg = cx.dwg && cx.target < Version::R2007;
             if !own && version >= dxf_ext::newer_since(*code) && !pre2007_dwg {
+                // DIMTFILL and DIMTFILLCLR are written only when set, as other writers do, so a
+                // style without a text background has a single 70 (its flags).
+                if matches!(*code, 69 | 70) && v.get(*field) == defaults.get(*field) {
+                    continue;
+                }
                 w.dimval(*code, enc, false);
             } else if v.get(*field) != defaults.get(*field) || (pre2007_dwg && !own) {
                 newer.i(1070, i64::from(*code));
@@ -3391,7 +3405,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
         if i == 0 {
             block(&mut w, n, "", h, Vec3::ZERO, 0, &mut std::iter::empty(), true);
         } else {
-            block(&mut w, n, "", h, Vec3::ZERO, 0, &mut l.entities.iter().map(|e| e.as_ref()), true);
+            block(&mut w, n, "", h, Vec3::ZERO, 0, &mut sheet_first(l).into_iter(), true);
         }
     }
     for (n, h, b) in &user_blocks {
@@ -3422,7 +3436,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
         entity(&mut w, d, e, &ms_br, false, &cx);
     }
     if let Some((_, h, l)) = ps_brs.first() {
-        for e in l.entities.iter() {
+        for e in sheet_first(l) {
             entity(&mut w, d, e, h, true, &cx);
         }
     }

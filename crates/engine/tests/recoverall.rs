@@ -11,7 +11,14 @@ use serde_json::json;
 
 fn hooks() {
     set_io(IoHooks {
-        read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
+        read: |b, name| {
+            let mut d = cadaddy_io::read(b, name).map_err(|e| e.to_string())?;
+            // A sound file whose read left a note that is not damage (as files from other programs do).
+            if name.contains("noted") {
+                d.read_notes.push("DWG: 3 objects of a type CADaddy does not keep were left out".to_string());
+            }
+            Ok(d)
+        },
         write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
         plot: None,
         read_pdf: None,
@@ -92,5 +99,66 @@ fn recoverall_recovers_the_drawing_and_its_xrefs() {
     std::fs::remove_file(&part).unwrap();
     let r = s.execute("recoverall", &json!({ "path": host.to_string_lossy() })).unwrap();
     assert_eq!(r["xrefs"][0]["error"], "file not found", "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A made-up sound drawing of `n` lines as a DXF file.
+fn sound_part(path: &Path, n: usize) {
+    let mut src = String::from("0\nSECTION\n2\nENTITIES\n");
+    for i in 0..n {
+        src += &format!("0\nLINE\n8\nPART\n10\n{i}\n20\n0\n30\n0\n11\n{i}\n21\n3\n31\n0\n");
+    }
+    src += "0\nENDSEC\n0\nEOF\n";
+    std::fs::write(path, src).unwrap();
+}
+
+/// A sound xref whose read left a note that is not damage is reported with its warning but not
+/// rewritten: no "saved", no backup, the file byte-identical.
+#[test]
+fn recoverall_leaves_a_sound_xref_with_a_read_note_alone() {
+    hooks();
+    let dir = folder("noted");
+    let part = dir.join("noted-part.dxf");
+    sound_part(&part, 20);
+    let original = std::fs::read(&part).unwrap();
+    let host = dir.join("host.dxf");
+    let mut s = Session::new();
+    s.execute("xattach", &json!({ "path": part.to_string_lossy(), "name": "PART" })).unwrap();
+    s.execute("saveas", &json!({ "path": host.to_string_lossy() })).unwrap();
+    drop(s);
+    let mut s = Session::new();
+    let r = s.execute("recoverall", &json!({ "path": host.to_string_lossy() })).unwrap();
+    let x = &r["xrefs"][0];
+    assert_eq!(x["name"], "PART", "{r}");
+    assert!(x["warnings"].to_string().contains("left out"), "the note is still reported: {r}");
+    assert!(x.get("saved").is_none() && x.get("backup").is_none(), "{r}");
+    assert_eq!(std::fs::read(&part).unwrap(), original);
+    assert!(!dir.join("noted-part.bak").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An earlier `.bak` is never replaced: the repair's backup takes a new name.
+#[test]
+fn recoverall_never_overwrites_an_existing_backup() {
+    hooks();
+    let dir = folder("bak");
+    let part = dir.join("part.dwg");
+    damaged_part(&part, 1500, 0.85);
+    let original = std::fs::read(&part).unwrap();
+    let earlier = b"an earlier backup the user made".to_vec();
+    std::fs::write(dir.join("part.bak"), &earlier).unwrap();
+    let host = dir.join("host.dxf");
+    let mut s = Session::new();
+    s.execute("xattach", &json!({ "path": part.to_string_lossy(), "name": "PART" })).unwrap();
+    s.execute("saveas", &json!({ "path": host.to_string_lossy() })).unwrap();
+    drop(s);
+    let mut s = Session::new();
+    let r = s.execute("recoverall", &json!({ "path": host.to_string_lossy() })).unwrap();
+    let x = &r["xrefs"][0];
+    assert_eq!(x["saved"], true, "{r}");
+    assert_eq!(std::fs::read(dir.join("part.bak")).unwrap(), earlier, "the earlier backup is untouched");
+    let kept = x["backup"].as_str().unwrap();
+    assert!(!kept.ends_with("part.bak"), "{r}");
+    assert_eq!(std::fs::read(kept).unwrap(), original, "the damaged original is kept under the new name");
     let _ = std::fs::remove_dir_all(&dir);
 }

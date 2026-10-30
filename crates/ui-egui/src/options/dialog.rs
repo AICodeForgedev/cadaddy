@@ -295,6 +295,19 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         crate::rtl::trail(ui, crate::tl!("Default save version"));
         ui.end_row();
 
+        crate::rtl::lead(ui, crate::tl!("Units of new drawings"));
+        ui.horizontal(|ui| {
+            let metric = app.session.settings.measureinit;
+            if ui.radio(!metric, crate::tl!("Imperial (inches)")).clicked() && metric {
+                changes.insert("MEASUREINIT".into(), json!(0));
+            }
+            if ui.radio(metric, crate::tl!("Metric (millimetres)")).clicked() && !metric {
+                changes.insert("MEASUREINIT".into(), json!(1));
+            }
+        });
+        crate::rtl::trail(ui, crate::tl!("Units of new drawings"));
+        ui.end_row();
+
         crate::rtl::lead(ui, crate::tl!("Automatic save every"));
         let mut minutes = cadaddy_engine::autosave::savetime();
         let max = cadaddy_engine::autosave::MAX_SAVETIME;
@@ -322,6 +335,7 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         crate::rtl::trail(ui, crate::tl!("Automatic save file location"));
         ui.end_row();
     });
+    hint(ui, crate::tl!("New and the first drawing at startup use these units unless a default template is set (QNEWTEMPLATE)."));
     hint(ui, crate::tl!("A drawing opened from a file keeps that file's format."));
     hint(ui, crate::tl!("A CADaddy drawing keeps everything; DWG and DXF files may not keep all of it (saving into them says what)."));
     hint(ui, crate::tl!("Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off."));
@@ -537,7 +551,7 @@ fn preferences(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>
         crate::rtl::lead(ui, crate::tl!("Interface language"));
         let mut lang = app.ui.interface_language;
         egui::ComboBox::from_id_salt("options_language").selected_text(lang.name()).show_ui(ui, |ui| {
-            for p in crate::i18n::Preference::ALL {
+            for p in crate::i18n::Preference::for_picker() {
                 ui.selectable_value(&mut lang, p, p.name());
             }
         });

@@ -94,6 +94,7 @@
 	Blend	Spojit křivky
 	Block	Blok
 	Block Attribute Manager...	Správce atributů bloků...
+	Block Description...	Popis bloku...
 	Block Editor	Editor bloků
 	Block Reference	Reference bloku
 	Block...	Blok...
@@ -143,6 +144,7 @@
 	Close All Other Drawings	Zavřít všechny ostatní výkresy
 	Closed	Uzavřeno
 	Close Comparison	Zavřít porovnání
+	Export Comparison	Exportovat porovnání
 	Coincident	Totožnost
 	Collapse Tool Sets	Sbalit sady nástrojů
 	Collinear	Kolinearita
@@ -537,6 +539,7 @@
 	N	S
 	Name	Název
 	Name (A–Z)	Název (A–Z)
+	Named Viewports...	Pojmenované výřezy...
 	Named Views...	Pojmenované pohledy...
 	Nearest	Nejbližší
 	New	Nový

@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1160,
-    "count": 1160,
+    "callableAsJson": 1167,
+    "count": 1167,
     "ids": [
       "-attedit",
       "-block",
@@ -155,6 +155,7 @@
       "block",
       "blockify",
       "blockreplace",
+      "blocks.description",
       "blocks.dynamic",
       "blocks.list",
       "blocks.reference",
@@ -229,6 +230,7 @@
       "compare.next",
       "compare.previous",
       "compareclose",
+      "comparedrawing",
       "compareexport",
       "compile",
       "concrete.check",
@@ -610,6 +612,7 @@
       "livesection",
       "load",
       "loft",
+      "loops",
       "lsp",
       "lspsurf",
       "ltscale",
@@ -1042,6 +1045,7 @@
       "tframe",
       "tframes",
       "thicken",
+      "thickness",
       "tifout",
       "time",
       "tolerance",
@@ -1087,6 +1091,7 @@
       "unittypes.schedule",
       "unittypes.takeoff",
       "updatefield",
+      "usage",
       "view",
       "view.back",
       "view.bottom",
@@ -1106,6 +1111,7 @@
       "viewport.set",
       "viewsection",
       "visualstyles",
+      "volume.measure",
       "vpclip",
       "vplayer",
       "vpmax",
@@ -1117,6 +1123,7 @@
       "vports.3",
       "vports.4",
       "vports.activate",
+      "vports.named",
       "vpsync",
       "vs.2dwireframe",
       "vs.hidden",
@@ -1164,8 +1171,8 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 513,
-    "typed": 552
+    "inMenus": 517,
+    "typed": 556
   },
   "features": {
     "ifcExport": true,

@@ -94,6 +94,7 @@
 	Blend	Harmanla
 	Block	Blok
 	Block Attribute Manager...	Blok Öznitelik Yöneticisi...
+	Block Description...	Blok Açıklaması...
 	Block Editor	Blok Düzenleyici
 	Block Reference	Blok Referansı
 	Block...	Blok...
@@ -143,6 +144,7 @@
 	Close All Other Drawings	Diğer Tüm Çizimleri Kapat
 	Closed	Kapalı
 	Close Comparison	Karşılaştırmayı Kapat
+	Export Comparison	Karşılaştırmayı Dışa Aktar
 	Coincident	Çakışık
 	Collapse Palettes	Paletleri Daralt
 	Collapse Tool Sets	Araç Takımlarını Daralt
@@ -663,6 +665,7 @@
 	Plot table type	Çizim tablosu türü
 	Color-dependent	Renge bağlı
 	Named	Adlandırılmış
+	Named Viewports...	Adlandırılmış Görünüm Pencereleri...
 	Plus/minus	Artı/eksi
 	Point	Nokta
 	Point Filters	Nokta Filtreleri

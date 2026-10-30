@@ -1454,6 +1454,14 @@ fn wheel_zoom_points(events: &[egui::Event], opts: &egui::InputOptions, page: f3
     if points.is_finite() { points } else { 0.0 }
 }
 
+/// Draw the drawing area and handle its input (zoom and pan, picking, the crosshair) for this
+/// frame.
+///
+/// It also owns the cursor-visibility contract: the OS cursor is hidden only while the pointer is
+/// over the drawing area *and* the canvas is the topmost layer under it, so the drawn crosshair
+/// replaces the pointer over the drawing alone. A menu bar, an open menu (including its frame, not
+/// just its items), a tooltip or a floating palette above the canvas keeps the normal OS cursor
+/// visible (#1701), and so do the menus painted on the canvas itself (see [`over_canvas_menu`]).
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     let full = ui.available_rect_before_wrap();
@@ -1512,7 +1520,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         None
     };
     let hover_pos = hover_pos.or(lifted_at);
-    let inside = hover_pos.is_some_and(|p| rect.contains(p)) && (resp.hovered() || lifted_at.is_some());
+    // The drawing area alone: a menu popup's frame (between its items and its border), a tooltip
+    // or a floating palette lives on a layer above the canvas, where `hovered()` alone still
+    // counts the canvas. Over those the OS cursor stays visible and the crosshair stays put, as
+    // over the menu bar (#1701).
+    let inside =
+        hover_pos.is_some_and(|p| rect.contains(p) && (lifted_at.is_some() || (ui.ctx().layer_id_at(p) == Some(ui.layer_id()) && resp.hovered())));
     // Whether Ctrl is held right now. Written every frame (not just while a command prompts), so
     // previews that read `Session::ctrl_down` always see the current state. The engine
     // deliberately does not carry modifiers through `Input`, which is UI-agnostic (see PR
@@ -1922,10 +1935,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         ensure_list(app, &xf_paper, &views, ui.ctx());
     }
     let sheet = app.canvas.list.as_ref().and_then(|l| l.sheet);
-    let bg = match sheet {
+    let surround = Color32::from_rgb(0x50, 0x57, 0x63);
+    let (bg, paper_rect) = match sheet {
         Some(sh) => {
             // Paper space: grey surround, the sheet with a shadow, the printable area dashed.
-            painter.rect_filled(rect, 0.0, Color32::from_rgb(0x50, 0x57, 0x63));
+            painter.rect_filled(rect, 0.0, surround);
             let sb = sh.bounds();
             let a = xf_paper.to_screen(Vec2::new(sb.min.x, sb.max.y));
             let b = xf_paper.to_screen(Vec2::new(sb.max.x, sb.min.y));
@@ -1938,7 +1952,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             );
             let pts = [pa.left_top(), pa.right_top(), pa.right_bottom(), pa.left_bottom(), pa.left_top()];
             painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, Color32::from_gray(150)), 4.0, 4.0));
-            Rgb(t.paper.r(), t.paper.g(), t.paper.b())
+            (Rgb(t.paper.r(), t.paper.g(), t.paper.b()), Some(paper))
         }
         None => {
             // A restored named view's background colour, else the drawing area's.
@@ -1948,7 +1962,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
             blockedit::wash(app, &painter, rect);
             draw_grid(app, &painter, &xf);
-            bg.unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b()))
+            (bg.unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())), None)
         }
     };
     let sel = app.session.selection();
@@ -2093,10 +2107,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let hidden = cadaddy_engine::cmd::groups::display::grips_hidden(&app.session);
         for h in sel.iter().take(200).filter(|h| !hidden.contains(h)) {
             if let Some(e) = st.doc.entity(*h) {
-                for (gi, g) in e.kind.grips().into_iter().enumerate() {
+                let grips = e.kind.grips();
+                let count = grips.len();
+                for (gi, g) in grips.into_iter().enumerate() {
                     let sp = xf.w2s(g);
                     if rect.contains(sp) {
-                        let r = Rect::from_center_size(sp, vec2(gs * 2.0, gs * 2.0));
+                        let r = grip_rect(&e.kind, count, gi, sp, gs);
                         let hot = app.canvas.hot_grips.contains(&(*h, gi));
                         let warm = !hot && hover_pos.is_some_and(|hp| r.expand(2.0).contains(hp));
                         painter.rect_filled(
@@ -2231,7 +2247,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         // Hide the OS cursor under the drawn crosshair, unless assistive tech needs it (#39).
         ui.ctx().set_cursor_icon(if app.ui.system_cursor { egui::CursorIcon::Crosshair } else { egui::CursorIcon::None });
         if let Some(hp) = hover_pos {
-            draw_crosshair(app, &painter, rect, hp, selecting);
+            // Use the painted sheet even in MSPACE, where the editing transform follows a
+            // model viewport. The whole cursor takes one colour from its centre.
+            let ink = paper_rect.map_or(t.crosshair, |paper| crate::theme::crosshair_color(if paper.contains(hp) { t.paper } else { surround }));
+            draw_crosshair(app, &painter, rect, hp, selecting, ink);
         }
         if app.session.settings.dynmode
             && let Some(hp) = hover_pos
@@ -2411,8 +2430,8 @@ fn pickbox_half(pickbox: f64) -> Option<f32> {
     (half.is_finite() && half >= 1.0).then_some(half)
 }
 
-fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox: bool) {
-    let st = Stroke::new(1.0, Tokens::get().crosshair);
+fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox: bool, ink: Color32) {
+    let st = Stroke::new(1.0, ink);
     let len = (rect.height() * app.session.settings.cursorsize as f32 / 100.0).max(12.0);
     let pb = if pickbox { pickbox_half(app.session.settings.pickbox) } else { None };
     let gap = pb.unwrap_or(0.0);
@@ -3082,11 +3101,18 @@ fn grip_menu(app: &mut CadApp, resp: &egui::Response) {
     run_grip_choice(app, g, choice);
 }
 
+/// Polyline segment midpoint grips are rectangular; vertex grips remain square.
+fn grip_rect(kind: &cadaddy_doc::EntityKind, count: usize, index: usize, center: Pos2, size: f32) -> Rect {
+    // The grip list interleaves vertices and available segment midpoints, then any remaining vertices.
+    let midpoint = matches!(kind, cadaddy_doc::EntityKind::LwPolyline(p) if index % 2 == 1 && index / 2 < count.saturating_sub(p.vertices.len()));
+    Rect::from_center_size(center, vec2(size * 2.0, if midpoint { size } else { size * 2.0 }))
+}
+
 /// The grip of a selected object under the cursor, if any: (object, grip index).
 fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)> {
     let hp = hover?;
     let st = app.session.state().ok()?;
-    let gs = app.session.settings.gripsize as f32 + 3.0;
+    let gs = app.session.settings.gripsize as f32;
     let sel = app.session.selection();
     if !app.session.shows_grips(sel.len()) {
         return None;
@@ -3097,9 +3123,11 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
         if st.doc.layer(&e.common.layer).is_some_and(|l| l.locked) {
             continue;
         }
-        for (i, g) in e.kind.grips().into_iter().enumerate() {
+        let grips = e.kind.grips();
+        let count = grips.len();
+        for (i, g) in grips.into_iter().enumerate() {
             let sp = xf.w2s(g);
-            if (sp.x - hp.x).abs() <= gs && (sp.y - hp.y).abs() <= gs {
+            if grip_rect(&e.kind, count, i, sp, gs).expand(3.0).contains(hp) {
                 return Some((*h, i));
             }
         }

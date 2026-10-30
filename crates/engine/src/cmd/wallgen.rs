@@ -667,7 +667,12 @@ fn stacked_seeds(
             let mut seeds = Vec::new();
             for (a, shell_a) in shells.iter().enumerate().filter(|(a, s)| *a != b && !s.is_empty()) {
                 let (at_a, size_a) = corner(shell_a);
-                if shell_b.is_empty() || !((size_a - size_b).len() <= STACK_TOL_FT * upf) {
+                if shell_b.is_empty()
+                    || !matches!(
+                        (size_a - size_b).len().partial_cmp(&(STACK_TOL_FT * upf)),
+                        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                    )
+                {
                     continue;
                 }
                 for (kind, name, rects) in found.get(a).into_iter().flatten() {

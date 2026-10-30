@@ -100,6 +100,7 @@
 	Blend	Ομαλή σύνδεση (Blend)
 	Block	Μπλοκ (Block)
 	Block Attribute Manager...	Διαχείριση ιδιοτήτων μπλοκ (Block Attributes)...
+	Block Description...	Περιγραφή μπλοκ...
 	Block Editor	Επεξεργαστής μπλοκ (Block Editor)
 	Block Reference	Αναφορά μπλοκ (Block Reference)
 	Block to create or edit	Μπλοκ προς δημιουργία ή επεξεργασία
@@ -165,6 +166,7 @@
 	Close Array Editing	Κλείσιμο επεξεργασίας διάταξης
 	Close Block Editor	Κλείσιμο επεξεργαστή μπλοκ
 	Close Comparison	Κλείσιμο σύγκρισης
+	Export Comparison	Εξαγωγή σύγκρισης
 	Closed	Κλειστό
 	Coincident	Σύμπτωση (Coincident)
 	Collapse Palettes	Σύμπτυξη παλετών
@@ -638,6 +640,7 @@
 	Name	Όνομα
 	Name (A–Z)	Όνομα (Α–Ω)
 	Named	Με όνομα
+	Named Viewports...	Αποθηκευμένα παράθυρα προβολής...
 	Named Views...	Αποθηκευμένες όψεις...
 	Nearest	Πλησιέστερο (Nearest)
 	New	Νέο

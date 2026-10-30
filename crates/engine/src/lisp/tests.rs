@@ -4,7 +4,7 @@ use super::value::{Value, to_text};
 use crate::Session;
 use crate::cmd::file::{EntityCodec, set_entity_codec};
 
-fn session() -> Session {
+pub(super) fn session() -> Session {
     set_entity_codec(EntityCodec {
         groups: cadaddy_io::entity_groups,
         entity: cadaddy_io::entity_from_groups,
@@ -472,6 +472,13 @@ fn interactive_routine_waits_for_the_user() {
     s.cmdline("(progn (initget 1 \"Yes No\") (setq ans (getkword \"\\nSure? [Yes/No]: \")))").unwrap();
     s.cmdline("n").unwrap();
     assert_eq!(to_text(&s.lisp_var("ANS"), true), "\"No\"");
+    // Bit 128 lets getkword return arbitrary text; a keyword still wins.
+    s.cmdline("(progn (initget 128 \"SElect CUrrent\") (setq ans (getkword \"\\nOption: \")))").unwrap();
+    s.cmdline("banana").unwrap();
+    assert_eq!(to_text(&s.lisp_var("ANS"), true), "\"banana\"");
+    s.cmdline("(progn (initget 128 \"SElect CUrrent\") (setq ans (getkword \"\\nOption: \")))").unwrap();
+    s.cmdline("cu").unwrap();
+    assert_eq!(to_text(&s.lisp_var("ANS"), true), "\"CUrrent\"");
     s.cmdline("(setq d (getdist '(0 0)))").unwrap();
     s.cmdline("3,4").unwrap();
     assert_eq!(to_text(&s.lisp_var("D"), true), "5.0");
@@ -485,6 +492,24 @@ fn interactive_routine_waits_for_the_user() {
     s.input(crate::Input::Point(cadaddy_geom::Vec2::new(50.0, 50.0))).unwrap();
     assert!(!s.lisp_running());
     assert!(s.doc().unwrap().model.iter().any(|e| matches!(&e.kind, cadaddy_doc::EntityKind::Circle(c) if c.center.x == 50.0 && c.radius == 2.0)));
+}
+
+#[test]
+fn getangle_is_relative_to_angbase() {
+    let mut s = session();
+    s.cmdline("(setvar \"ANGBASE\" 90)").unwrap();
+    // A picked point at 180° in world terms is 90° from ANGBASE.
+    s.cmdline("(setq a (getangle '(0 0)))").unwrap();
+    s.input(crate::Input::Point(cadaddy_geom::Vec2::new(-1.0, 0.0))).unwrap();
+    assert_eq!(to_text(&s.lisp_var("A"), true), "1.5708");
+    // getorient ignores ANGBASE.
+    s.cmdline("(setq o (getorient '(0 0)))").unwrap();
+    s.input(crate::Input::Point(cadaddy_geom::Vec2::new(-1.0, 0.0))).unwrap();
+    assert_eq!(to_text(&s.lisp_var("O"), true), "3.14159");
+    // A typed angle is already measured from ANGBASE.
+    s.cmdline("(setq t2 (getangle))").unwrap();
+    s.cmdline("180").unwrap();
+    assert_eq!(to_text(&s.lisp_var("T2"), true), "3.14159");
 }
 
 #[test]
@@ -505,6 +530,65 @@ fn appload_and_load() {
     assert_eq!(r["output"][0], "x");
     let r = s.execute("lisp", &serde_json::json!({"code": "(car 1)"})).unwrap();
     assert!(r["error"].as_str().is_some_and(|e| e.contains("bad argument type")));
+}
+
+#[test]
+fn appload_reads_a_lsp_path_and_reports_its_commands() {
+    let dir = std::env::temp_dir().join(format!("cadaddy-appload-lisp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Tools.LSP");
+    std::fs::write(&path, "(defun c:hi () (princ \"hi\") (princ)) (defun c:bye () (princ))").unwrap();
+    let mut s = session();
+    s.settings.secureload = 0; // a temporary folder; the trusted-folder check has its own tests
+    let r = s.execute("appload", &serde_json::json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(r.get("error").is_none(), "{r}");
+    assert_eq!(r["commands"], serde_json::json!(["BYE", "HI"]));
+    assert!(s.log.iter().any(|l| l == "Tools.LSP successfully loaded."));
+    s.cmdline("HI").unwrap();
+    assert_eq!(s.log.last().map(String::as_str), Some("hi"));
+    // Only `.lsp` files are APPLOADed, whatever the case of the extension.
+    let txt = dir.join("notes.txt");
+    std::fs::write(&txt, "(defun c:no () (princ))").unwrap();
+    let e = s.execute("appload", &serde_json::json!({"path": txt.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains(".lsp"), "{e}");
+    // A missing file and a file that fails to parse are ordinary errors.
+    let missing = dir.join("missing.lsp");
+    let e = s.execute("appload", &serde_json::json!({"path": missing.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains("can't read"), "{e}");
+    let broken = dir.join("broken.lsp");
+    std::fs::write(&broken, "(defun c:oops (").unwrap();
+    let e = s.execute("appload", &serde_json::json!({"path": broken.to_string_lossy()})).unwrap_err().to_string();
+    assert!(!e.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn appload_keeps_the_whitespace_of_a_relative_path() {
+    /// A folder in the test's current directory, removed even when an assertion fails.
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    // A JSON call's path is read as it is given: a relative path whose folder starts with a
+    // space names that folder, not the one its trimmed name would.
+    let dir = TempDir(std::path::PathBuf::from(format!(" cadaddy-appload-space-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&dir.0);
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let path = dir.0.join("tools.lsp");
+    std::fs::write(&path, "(setq space-loaded 1)").unwrap();
+    let mut s = session();
+    s.settings.secureload = 0; // a temporary folder; the trusted-folder check has its own tests
+    let r = s.execute("appload", &serde_json::json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(r.get("error").is_none(), "{r}");
+    assert_eq!(ok(&mut s, "space-loaded"), "1");
+    // A path of blanks only is still refused, not read as "".
+    for blank in ["", " ", "\t "] {
+        let e = s.execute("appload", &serde_json::json!({"path": blank})).unwrap_err().to_string();
+        assert!(e.contains("`path`"), "{blank:?}: {e}");
+    }
 }
 
 #[test]
@@ -946,4 +1030,48 @@ fn a_multiline_names_its_style_as_an_entity() {
     assert_ne!(ok(&mut s, "(entmake (entget m))"), "nil");
     assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget (entlast))))"), "\"MLINE\"");
     assert_eq!(ok(&mut s, "(cdr (assoc 2 (entget (entlast))))"), "\"STANDARD\"");
+}
+
+#[test]
+fn closing_drawings_lets_go_of_their_environments() {
+    let mut s = session();
+    ok(&mut s, "(setq kept 1)");
+    let first = s.state().unwrap().uid;
+    // A long session: drawings opened, given a variable by LISP and closed again.
+    for i in 0..200 {
+        s.execute("new", &serde_json::json!({"template": "."})).unwrap();
+        ok(&mut s, &format!("(setq n {i})"));
+        if i % 2 == 0 {
+            s.execute("close", &serde_json::json!({})).unwrap();
+        } else {
+            s.execute("document.close", &serde_json::json!({"discard": true})).unwrap();
+        }
+    }
+    // One environment per open drawing (plus the one used with none open), not one per drawing ever opened.
+    assert_eq!(s.docs.len(), 1);
+    assert!(s.lisp.envs.len() <= 2, "{} environments kept", s.lisp.envs.len());
+    assert!(s.lisp.autoloaded.len() <= 2, "{} autoload marks kept", s.lisp.autoloaded.len());
+    // The open drawing keeps its variables.
+    assert_eq!(s.state().unwrap().uid, first);
+    assert_eq!(ok(&mut s, "kept"), "1");
+    s.execute("closeall", &serde_json::json!({})).unwrap();
+    assert!(s.lisp.envs.keys().all(|&uid| uid == 0));
+}
+
+#[test]
+fn angtof_reads_the_string_in_the_given_units() {
+    let mut s = Session::new();
+    assert_eq!(ok(&mut s, "(angtof \"1.5\" 3)"), "1.5");
+    assert_eq!(ok(&mut s, "(angtof \"180\" 0)"), "3.14159");
+    assert_eq!(ok(&mut s, "(angtof \"180\" 7)"), "nil");
+    assert_eq!(ok(&mut s, "(angtof \"180\" \"x\")"), "nil");
+}
+
+/// CECOLOR is a string in AutoCAD, whatever it was set from (#1999).
+#[test]
+fn getvar_cecolor_is_a_string() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "(list (getvar \"CECOLOR\") (type (getvar \"CECOLOR\")))"), "(\"BYLAYER\" STR)");
+    assert_eq!(ok(&mut s, "(setvar \"CECOLOR\" \"red\") (getvar \"CECOLOR\")"), "\"1\"");
+    assert_eq!(ok(&mut s, "(setvar \"CECOLOR\" \"10,20,30\") (getvar \"CECOLOR\")"), "\"RGB:10,20,30\"");
 }

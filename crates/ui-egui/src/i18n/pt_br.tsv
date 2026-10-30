@@ -87,6 +87,7 @@
 	Blend	Curva de transição
 	Block	Bloco
 	Block Attribute Manager...	Gerenciador de atributos de bloco...
+	Block Description...	Descrição do bloco...
 	Block Editor	Editor de blocos
 	Block Reference	Referência de bloco
 	Block...	Bloco...
@@ -140,6 +141,7 @@
 	Close All Other Drawings	Fechar todos os outros desenhos
 	Close Array Editing	Fechar edição de matriz
 	Close Comparison	Fechar comparação
+	Export Comparison	Exportar comparação
 	Closed	Fechada
 	Coincident	Coincidente
 	Collapse Palettes	Recolher paletas
@@ -565,6 +567,7 @@
 	N	N
 	Name	Nome
 	Name (A–Z)	Nome (A–Z)
+	Named Viewports...	Viewports nomeados...
 	Named Views...	Vistas nomeadas...
 	Nearest	Mais próximo
 	New	Novo
