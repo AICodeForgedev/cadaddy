@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Accept, Input, Prompt, Result, Session, Step};
 
-pub use pgp::{built_in as built_in_aliases, user_aliases};
+pub use pgp::{alias_conflicts, alias_file, built_in as built_in_aliases, user_aliases};
 pub(crate) use pgp::{specs as alias_specs, user_alias};
 pub use template::{qnew_template, set_qnew_template};
 

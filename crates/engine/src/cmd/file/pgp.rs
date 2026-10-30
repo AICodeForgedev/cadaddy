@@ -34,6 +34,8 @@ struct Aliases {
     map: BTreeMap<String, String>,
     /// The file last loaded (REINIT reads it again).
     file: Option<String>,
+    /// That file's text as loaded: saving back to it keeps every line that isn't an alias.
+    source: Option<String>,
 }
 
 fn aliases() -> MutexGuard<'static, Aliases> {
@@ -44,6 +46,11 @@ fn aliases() -> MutexGuard<'static, Aliases> {
 /// The user's aliases: lower-case alias → command id (kept in the profile by the interface).
 pub fn user_aliases() -> BTreeMap<String, String> {
     aliases().map.clone()
+}
+
+/// The alias file loaded or saved last, if any.
+pub fn alias_file() -> Option<String> {
+    aliases().file.clone()
 }
 
 /// The command a user alias stands for (`name` in lower case).
@@ -139,20 +146,69 @@ fn conflicts(map: &BTreeMap<String, String>) -> Vec<Value> {
         .collect()
 }
 
+/// The conflicts of the current user aliases: those that take over a built-in alias of another
+/// command, as `{alias, command, overrides}`.
+pub fn alias_conflicts() -> Vec<Value> {
+    conflicts(&aliases().map)
+}
+
 fn listing(warnings: &[String], added: usize) -> Value {
     let st = aliases();
     let builtin: Vec<Value> = built_in().into_iter().map(|(a, id)| json!({ "alias": a, "command": id })).collect();
     json!({ "aliases": st.map, "file": st.file, "loaded": added, "warnings": warnings, "builtIn": builtin, "conflicts": conflicts(&st.map) })
 }
 
-/// The user aliases as a `.pgp` file.
-pub fn pgp_text() -> String {
+fn alias_line(a: &str, id: &str) -> String {
+    format!("{}, *{}\n", a.to_ascii_uppercase(), id.to_ascii_uppercase())
+}
+
+/// The user aliases as a `.pgp` file. Saving over the file they were loaded from (`path`) keeps
+/// its comments, external-command lines and lines of unknown commands verbatim: only the alias
+/// lines are replaced, dropped (the alias was removed) or added at the end.
+fn pgp_text(path: &str) -> String {
     let st = aliases();
-    let mut t = String::from("; Command aliases (ALIAS, *COMMAND), written by ALIASEDIT.\n");
-    for (a, id) in &st.map {
-        t.push_str(&format!("{}, *{}\n", a.to_ascii_uppercase(), id.to_ascii_uppercase()));
+    let Some(src) = st.source.as_deref().filter(|_| st.file.as_deref() == Some(path)) else {
+        let mut t = String::from("; Command aliases (ALIAS, *COMMAND), written by ALIASEDIT.\n");
+        for (a, id) in &st.map {
+            t.push_str(&alias_line(a, id));
+        }
+        return t;
+    };
+    let mut out = String::new();
+    let mut written: Vec<&str> = Vec::new();
+    for line in src.trim_start_matches('\u{feff}').split_inclusive('\n') {
+        let code = line.split(';').next().unwrap_or("").trim();
+        let managed = (code.chars().count() <= MAX_LINE_CHARS)
+            .then(|| code.split_once(','))
+            .flatten()
+            .filter(|(_, target)| target.trim_start().starts_with('*'))
+            .and_then(|(alias, target)| Some((alias_name(alias).ok()?, command_id(target)?)));
+        let Some((name, id)) = managed else {
+            out.push_str(line);
+            if !line.ends_with('\n') {
+                out.push('\n');
+            }
+            continue;
+        };
+        match st.map.get_key_value(&name) {
+            Some((key, now)) if !written.contains(&key.as_str()) => {
+                written.push(key);
+                if *now == id {
+                    out.push_str(line);
+                    if !line.ends_with('\n') {
+                        out.push('\n');
+                    }
+                } else {
+                    out.push_str(&alias_line(&name, now));
+                }
+            }
+            _ => {}
+        }
     }
-    t
+    for (a, id) in st.map.iter().filter(|(a, _)| !written.contains(&a.as_str())) {
+        out.push_str(&alias_line(a, id));
+    }
+    out
 }
 
 /// Where ALIASEDIT saves: `p.save` when it is a path, else the file loaded last, else
@@ -179,6 +235,7 @@ fn load(text: &str, path: Option<String>) -> (usize, Vec<String>) {
     let mut st = aliases();
     st.map = parsed.into_iter().collect();
     if path.is_some() {
+        st.source = Some(text.to_string());
         st.file = path;
     }
     (st.map.len(), warnings)
@@ -188,13 +245,14 @@ fn load(text: &str, path: Option<String>) -> (usize, Vec<String>) {
 /// | path}`: load an alias file (replacing the user aliases), clear them, add and remove single
 /// aliases, then save them.
 fn run_aliasedit(s: &mut Session, p: &Value) -> Result<Value> {
-    let save_to = save_path(s, p)?;
+    save_path(s, p)?; // a bad `save` fails before anything changes
     let mut warnings = Vec::new();
     let mut added = 0;
     if bool_or(p, "clear", false) {
         let mut st = aliases();
         st.map.clear();
         st.file = None;
+        st.source = None;
     }
     if let Some((text, source)) = support_text("aliasedit", p, "file", "text")? {
         let path = p.get("file").and_then(Value::as_str).map(|_| source);
@@ -230,8 +288,9 @@ fn run_aliasedit(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad("aliasedit", "`remove` is a list of aliases")),
     }
     let mut out = listing(&warnings, added);
-    if let Some(path) = save_to {
-        super::store(&path, pgp_text().as_bytes())?;
+    // Resolved after a `file` in the same call is loaded, so `save: true` writes back to it.
+    if let Some(path) = save_path(s, p)? {
+        super::store(&path, pgp_text(&path).as_bytes())?;
         aliases().file = Some(path.clone());
         out["saved"] = json!(path);
         out["file"] = json!(path);
