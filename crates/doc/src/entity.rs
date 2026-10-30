@@ -302,6 +302,8 @@ fn standard() -> String {
 
 mod helix;
 pub use helix::*;
+mod wipeout;
+pub use wipeout::Wipeout;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MText {
@@ -1486,10 +1488,6 @@ impl Default for Image {
         }
     }
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Wipeout {
-    pub boundary: Vec<Vec2>,
-}
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableCell {
@@ -1850,11 +1848,7 @@ impl EntityKind {
                 h.loops.iter().flat_map(|l| Polyline { vertices: l.vertices.clone(), closed: true }.segments()).map(Prim::Seg).collect()
             }
             EntityKind::Wipeout(w) => {
-                let mut pts = w.boundary.clone();
-                if let Some(f) = pts.first().copied() {
-                    pts.push(f);
-                }
-                pts.windows(2).filter_map(|w| Some(Prim::Seg(Segment::Line(GLine::new(*w.first()?, *w.get(1)?))))).collect()
+                w.closed_boundary().windows(2).filter_map(|w| Some(Prim::Seg(Segment::Line(GLine::new(*w.first()?, *w.get(1)?))))).collect()
             }
             EntityKind::Viewport(v) => {
                 let c = v.center.xy();
@@ -2241,7 +2235,7 @@ impl EntityKind {
             EntityKind::Image(i) => vec![i.insert.xy()],
             EntityKind::Underlay(u) => u.corners().to_vec(),
             EntityKind::PointCloud(pc) => vec![pc.insert.xy()],
-            EntityKind::Wipeout(w) => w.boundary.clone(),
+            EntityKind::Wipeout(w) => w.vertices().to_vec(),
             EntityKind::Table(t) => vec![t.insert.xy()],
             EntityKind::Tolerance(t) => vec![t.insert.xy()],
             EntityKind::Shape(sh) => vec![sh.insert.xy()],

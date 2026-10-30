@@ -640,11 +640,21 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             // Clip vertices are in pixel space: origin at the image's top-left corner, y pointing down.
             let mut pts: Vec<Vec2> = t.pts(14).into_iter().map(|q| o.xy() + u.xy() * (q.x + 0.5) + v.xy() * (0.5 - q.y)).collect();
             // A polygon's closing vertex (the first one repeated, as files write it) isn't a corner.
+            // When the corner before it lies on the first one too (a corner edited onto the
+            // first), it stays, as the exact closing marker, so the two corners stay separate
+            // (`Wipeout::vertices` leaves the marker out; #2256).
+            let near = |a: Vec2, b: Vec2| (a - b).len() <= 1e-9 * (1.0 + a.len());
             if pts.len() > 3
-                && let (Some(f), Some(l)) = (pts.first(), pts.last())
-                && (*f - *l).len() <= 1e-9 * (1.0 + f.len())
+                && let Some(f) = pts.first().copied()
+                && pts.last().is_some_and(|l| near(f, *l))
             {
-                pts.pop();
+                if pts.len() > 1 && pts.get(pts.len() - 2).is_some_and(|p| *p == f) {
+                    if let Some(l) = pts.last_mut() {
+                        *l = f;
+                    }
+                } else {
+                    pts.pop();
+                }
             }
             EntityKind::Wipeout(Wipeout { boundary: pts })
         }

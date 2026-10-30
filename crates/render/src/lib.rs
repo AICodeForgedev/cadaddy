@@ -1736,11 +1736,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 _ => true,
             };
             if frame {
-                let mut pts = w.boundary.clone();
-                if let Some(f) = pts.first().copied() {
-                    pts.push(f);
-                }
-                b.polyline(ctx, rgb, lw, &pts);
+                b.polyline(ctx, rgb, lw, &w.closed_boundary());
             }
         }
         EntityKind::Image(i) => image(b, ctx, i, rgb, lw),

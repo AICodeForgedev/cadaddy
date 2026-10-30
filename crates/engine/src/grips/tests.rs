@@ -222,3 +222,18 @@ fn grips_on_locked_layers_and_hostile_values() {
         }
     }
 }
+
+#[test]
+fn wipeout_grips_reject_the_closing_marker_and_hostile_input() {
+    let kind = EntityKind::Wipeout(cadaddy_doc::Wipeout { boundary: vec![v(0.0, 0.0), v(7.0, 1.0), v(3.0, 7.0), v(0.0, 0.0)] });
+    for (index, to) in [(3, v(2.0, 2.0)), (usize::MAX, v(2.0, 2.0)), (0, v(f64::NAN, 0.0)), (0, v(0.0, f64::INFINITY))] {
+        assert!(stretch_grip(&kind, index, to).is_none());
+    }
+    for boundary in [vec![], vec![v(0.0, 0.0)], vec![v(0.0, 0.0), v(0.0, 0.0)]] {
+        let kind = EntityKind::Wipeout(cadaddy_doc::Wipeout { boundary });
+        for index in [0, 1, usize::MAX] {
+            let result = stretch_grip(&kind, index, v(2.0, 2.0));
+            assert_eq!(result.is_some(), index < kind.grips().len());
+        }
+    }
+}
