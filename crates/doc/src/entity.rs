@@ -1066,6 +1066,20 @@ pub struct Hatch {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pattern_lines: Vec<crate::library::PatternLine>,
 }
+impl Hatch {
+    /// After the hatch was copied together with other objects: each boundary object that was
+    /// copied too (`copies`: old handle → new handle) is followed to its copy. A boundary that
+    /// was not copied stays behind, so the loop drops it, and a hatch with a loop left without
+    /// a boundary object is no longer associative (nothing for it to follow).
+    pub fn remap_sources(&mut self, copies: &std::collections::HashMap<Handle, Handle>) {
+        for l in &mut self.loops {
+            l.sources = l.sources.iter().filter_map(|s| copies.get(s).copied()).collect();
+        }
+        if self.loops.iter().any(|l| l.sources.is_empty()) {
+            self.associative = false;
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Gradient {
