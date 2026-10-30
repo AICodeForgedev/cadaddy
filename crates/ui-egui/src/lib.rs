@@ -403,6 +403,10 @@ pub struct Services {
     pub pick_save_image: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// A folder (Publish's batch plot).
     pub pick_folder: Option<Box<dyn Fn() -> Option<String>>>,
+    /// A plot style table file to load (.ctb, .stb or our JSON) in the Plot Style Manager.
+    pub pick_plot_style: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Where to save a plot style table (the Manager's "Save as…"), given a suggested file name.
+    pub pick_save_plot_style: Option<Box<dyn Fn(&str) -> Option<String>>>,
 }
 
 pub struct CadApp {
