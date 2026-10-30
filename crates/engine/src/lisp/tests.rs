@@ -1075,3 +1075,70 @@ fn getvar_cecolor_is_a_string() {
     assert_eq!(ok(&mut s, "(setvar \"CECOLOR\" \"red\") (getvar \"CECOLOR\")"), "\"1\"");
     assert_eq!(ok(&mut s, "(setvar \"CECOLOR\" \"10,20,30\") (getvar \"CECOLOR\")"), "\"RGB:10,20,30\"");
 }
+
+/// Battle test 5 (B7-012): `(entmod (entget e))` on a HATCH answered nil and a layer change did
+/// nothing; the list must round-trip and an edit apply.
+#[test]
+fn entmod_of_a_hatch_round_trips_and_applies_edits() {
+    let mut s = session();
+    s.execute("rectang", &serde_json::json!({"p1": [0, 0], "p2": [10, 10]})).unwrap();
+    s.execute("hatch", &serde_json::json!({"points": [[5, 5]], "pattern": "ANSI31"})).unwrap();
+    let hatch_layer = |s: &Session| {
+        s.doc().unwrap().model.iter().find_map(|e| matches!(e.kind, cadaddy_doc::EntityKind::Hatch(_)).then(|| e.common.layer.clone())).unwrap()
+    };
+    let before = format!("{:?}", s.doc().unwrap().model.iter().find(|e| matches!(e.kind, cadaddy_doc::EntityKind::Hatch(_))).map(|e| e.kind.clone()));
+    ok(&mut s, "(setq h (entlast)) (setq d (entget h))");
+    assert_eq!(ok(&mut s, "(= (cdr (assoc 0 d)) \"HATCH\")"), "T");
+    assert_eq!(ok(&mut s, "(if (entmod d) T nil)"), "T", "unmodified list is accepted");
+    let after = format!("{:?}", s.doc().unwrap().model.iter().find(|e| matches!(e.kind, cadaddy_doc::EntityKind::Hatch(_))).map(|e| e.kind.clone()));
+    if before != after {
+        let (b, a): (Vec<_>, Vec<_>) = (before.split(", ").collect(), after.split(", ").collect());
+        let diff: Vec<_> = b.iter().zip(&a).filter(|(x, y)| x != y).take(6).collect();
+        panic!("hatch changed by a round trip: {diff:?}");
+    }
+    assert_eq!(ok(&mut s, "(if (entmod (subst (cons 8 \"H-NEW\") (assoc 8 d) d)) T nil)"), "T");
+    assert_eq!(hatch_layer(&s), "H-NEW");
+    ok(&mut s, "(setq d (entget h))");
+    assert_eq!(ok(&mut s, "(if (entmod (subst (cons 62 3) (assoc 62 d) d)) T nil)"), "T");
+}
+
+/// Battle test 5 (B7-025): out-of-range ATOF is infinite as in C, never a shorter finite number.
+#[test]
+fn atof_out_of_range_is_infinite() {
+    let mut s = session();
+    for (src, neg) in [("1e400", false), ("1e309", false), ("1e999", false), ("-1e400", true)] {
+        let r = ok(&mut s, &format!("(atof \"{src}\")"));
+        assert!(r.contains("#INF"), "{src} -> {r}");
+        assert_eq!(r.starts_with('-'), neg, "{src} -> {r}");
+    }
+    assert_eq!(ok(&mut s, "(atof \"1e30\")"), "1.0e+030");
+}
+
+/// Battle test 5 (B7-025): ENTMAKE refuses what the commands refuse.
+#[test]
+fn entmake_applies_the_drawing_limits() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "(entmake '((0 . \"LINE\") (10 0.0 0.0 0.0) (11 1e300 0.0 0.0)))"), "nil");
+    assert_eq!(ok(&mut s, "(entmake '((0 . \"CIRCLE\") (10 0.0 0.0 0.0) (40 . -5.0)))"), "nil");
+    assert_eq!(ok(&mut s, "(entmake '((0 . \"CIRCLE\") (10 0.0 0.0 0.0) (40 . 0.0)))"), "nil");
+    assert_ne!(ok(&mut s, "(entmake '((0 . \"CIRCLE\") (10 0.0 0.0 0.0) (40 . 5.0)))"), "nil");
+    assert_ne!(ok(&mut s, "(entmake '((0 . \"LINE\") (10 0.0 0.0 0.0) (11 1.0 1.0 0.0)))"), "nil");
+}
+
+/// The same for a hatch over a circle (arc boundary) and a justified text: nothing moves or changes.
+#[test]
+fn entmod_of_an_unedited_list_changes_nothing() {
+    let mut s = session();
+    s.execute("circle", &serde_json::json!({"center": [0, 0], "radius": 5})).unwrap();
+    s.execute("hatch", &serde_json::json!({"points": [[1, 1]], "pattern": "SOLID"})).unwrap();
+    ok(&mut s, "(entmake '((0 . \"TEXT\") (10 0.0 0.0 0.0) (11 20.0 0.0 0.0) (40 . 2.0) (1 . \"hi\") (72 . 1)))");
+    let snap = |s: &Session| s.doc().unwrap().model.iter().map(|e| format!("{:?}", e.kind)).collect::<Vec<_>>();
+    let before = snap(&s);
+    for name in ["HATCH", "TEXT"] {
+        let code = format!("(setq e (entlast)) (while (and e (/= (cdr (assoc 0 (entget e))) \"{name}\")) (setq e (entnext e))) T");
+        ok(&mut s, "(setq e (entnext))");
+        ok(&mut s, &code.replace("(setq e (entlast))", ""));
+        assert_eq!(ok(&mut s, "(if (entmod (entget e)) T nil)"), "T", "{name}");
+    }
+    assert_eq!(before, snap(&s));
+}
