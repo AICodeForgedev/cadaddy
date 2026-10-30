@@ -101,6 +101,7 @@ pub mod i18n;
 pub mod icons;
 pub mod ifcpalette;
 pub mod jobpalette;
+pub mod layerremovedlg;
 pub mod layers;
 pub mod layerstates;
 pub mod layouttabs;
@@ -771,8 +772,11 @@ impl CadApp {
             let json_form = text.trim_start().get(first.len()..).is_some_and(|rest| rest.trim_start().starts_with('{'));
             let word = first.to_ascii_lowercase();
             let more = text.split_whitespace().nth(1).is_some();
+            // LAYMRG and LAYDEL typed keep their command-line prompts (scripts rely on them); the
+            // menu and the ribbon start them through `start` and get the dialogs.
             if !first.is_empty()
                 && !json_form
+                && !matches!(word.as_str(), "laymrg" | "laydel")
                 && (!more || !menus::DIALOG_WHEN_ALONE.contains(&word.as_str()))
                 && menus::run_ui_command(self, &word, &Value::Null).is_some()
             {

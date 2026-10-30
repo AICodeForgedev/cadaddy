@@ -34,6 +34,8 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "find" => crate::finddlg::dialog(app, ctx, &mut open),
         crate::filterdlg::DIALOG => crate::filterdlg::dialog(app, ctx, &mut open),
         crate::laywalkdlg::DIALOG => crate::laywalkdlg::dialog(app, ctx, &mut open),
+        crate::layerremovedlg::MERGE => crate::layerremovedlg::dialog(app, ctx, &mut open, false),
+        crate::layerremovedlg::DELETE => crate::layerremovedlg::dialog(app, ctx, &mut open, true),
         crate::plotstampdlg::DIALOG => crate::plotstampdlg::dialog(app, ctx, &mut open),
         crate::dwgpropsdlg::DIALOG => crate::dwgpropsdlg::dialog(app, ctx, &mut open),
         crate::dwgpropsdlg::MONITOR => crate::dwgpropsdlg::monitor(app, ctx, &mut open),

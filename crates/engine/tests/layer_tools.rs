@@ -4,10 +4,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cadaddy_engine::Session;
 use cadaddy_engine::cmd::file::{IoHooks, set_io};
 use cadaddy_engine::doc::geom::Vec3;
 use cadaddy_engine::doc::{Block, Drawing, Entity, EntityKind, Handle, Insert, Layer, Line, Space};
+use cadaddy_engine::{Input, Session};
 use serde_json::json;
 
 fn hooks() {
@@ -221,4 +221,92 @@ fn layvpi_freezes_the_layers_in_the_other_viewports() {
     // From objects, inside the viewport.
     assert!(matches!(s.space(), Space::Paper(_)));
     s.execute("undo", &json!({})).unwrap();
+}
+
+/// Lines on layers A, B and C (one each, in that order); C is current.
+fn abc() -> (Session, [Handle; 3]) {
+    let mut s = Session::new();
+    let mut hs = Vec::new();
+    for (i, n) in ["A", "B", "C"].into_iter().enumerate() {
+        s.execute("layer.new", &json!({ "name": n, "current": true })).unwrap();
+        let r = s.execute("line", &json!({ "points": [[0, i], [10, i]] })).unwrap();
+        hs.push(Handle(u64::from_str_radix(r["handles"][0].as_str().unwrap(), 16).unwrap()));
+    }
+    (s, [hs[0], hs[1], hs[2]])
+}
+
+fn layer_of(s: &Session, h: Handle) -> String {
+    s.doc().unwrap().entity(h).unwrap().common.layer.to_string()
+}
+
+fn locked(s: &Session) -> Vec<bool> {
+    ["A", "B", "C"].iter().map(|n| s.doc().unwrap().layer(n).unwrap().locked).collect()
+}
+
+#[test]
+fn laycur_moves_the_given_objects_to_the_current_layer_only() {
+    let (mut s, [a, b, c]) = abc();
+    let layers = s.doc().unwrap().layers.len();
+    let r = s.execute("laycur", &json!({ "handles": [a.hex()] })).unwrap();
+    assert_eq!(r["changed"], 1);
+    assert_eq!((layer_of(&s, a), layer_of(&s, b), layer_of(&s, c)), ("C".into(), "B".into(), "C".into()));
+    s.execute("layer.current", &json!({ "name": "B" })).unwrap();
+    s.execute("laycur", &json!({ "handles": [c.hex(), a.hex()] })).unwrap();
+    assert_eq!((layer_of(&s, a), layer_of(&s, b), layer_of(&s, c)), ("B".into(), "B".into(), "B".into()));
+    assert_eq!(s.doc().unwrap().layers.len(), layers, "no layer was added or removed");
+}
+
+#[test]
+fn laycur_by_pick_moves_the_selection_to_the_current_layer() {
+    let (mut s, [a, b, c]) = abc();
+    s.start("laycur").unwrap();
+    s.input(Input::Pick(vec![b])).unwrap();
+    s.input(Input::Enter).unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert_eq!((layer_of(&s, a), layer_of(&s, b), layer_of(&s, c)), ("A".into(), "C".into(), "C".into()));
+}
+
+#[test]
+fn laythw_thaws_every_frozen_layer_and_changes_nothing_else() {
+    let (mut s, _) = abc();
+    s.execute("layer.set", &json!({ "name": "A", "frozen": true })).unwrap();
+    s.execute("layer.set", &json!({ "name": "B", "frozen": true, "locked": true })).unwrap();
+    s.execute("layer.set", &json!({ "name": "A", "on": false })).unwrap();
+    let frozen = |s: &Session| -> Vec<bool> { ["A", "B", "C"].iter().map(|n| s.doc().unwrap().layer(n).unwrap().frozen).collect() };
+    assert_eq!(frozen(&s), vec![true, true, false]);
+    s.execute("laythw", &json!({})).unwrap();
+    assert_eq!(frozen(&s), vec![false, false, false]);
+    assert_eq!(locked(&s), vec![false, true, false], "locks are not touched");
+    assert!(!s.doc().unwrap().layer("A").unwrap().on, "thawing does not turn a layer back on");
+}
+
+#[test]
+fn laylck_and_layulk_by_handles_change_only_the_objects_layers() {
+    let (mut s, [a, b, _]) = abc();
+    s.execute("laylck", &json!({ "handles": [a.hex()] })).unwrap();
+    assert_eq!(locked(&s), vec![true, false, false]);
+    s.execute("laylck", &json!({ "handles": [b.hex()] })).unwrap();
+    assert_eq!(locked(&s), vec![true, true, false]);
+    s.execute("layulk", &json!({ "handles": [a.hex()] })).unwrap();
+    assert_eq!(locked(&s), vec![false, true, false]);
+    s.execute("layulk", &json!({ "handles": [b.hex()] })).unwrap();
+    assert_eq!(locked(&s), vec![false, false, false]);
+}
+
+#[test]
+fn laylck_and_layulk_by_single_pick_change_only_the_picked_layer() {
+    let (mut s, [a, b, _]) = abc();
+    s.start("laylck").unwrap();
+    assert!(s.prompt_text().contains("layer to be locked"), "{}", s.prompt_text());
+    s.input(Input::Pick(vec![b])).unwrap();
+    assert!(s.running.is_none(), "a single pick ends LAYLCK: {}", s.prompt_text());
+    assert_eq!(locked(&s), vec![false, true, false]);
+    s.start("laylck").unwrap();
+    s.input(Input::Pick(vec![a])).unwrap();
+    assert_eq!(locked(&s), vec![true, true, false]);
+    s.start("layulk").unwrap();
+    assert!(s.prompt_text().contains("layer to be unlocked"), "{}", s.prompt_text());
+    s.input(Input::Pick(vec![b])).unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(locked(&s), vec![true, false, false]);
 }
