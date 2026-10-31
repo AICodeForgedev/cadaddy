@@ -2296,13 +2296,15 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                 let building = job.level_at([at.x, at.y]).is_none_or(|r| super::printmep::building_level(&r.level));
                 let bubble = bubbles.iter().any(|(c, r)| r.is_finite() && (at.x - c[0]).hypot(at.y - c[1]) <= 1.5 * r.max(0.0));
                 if electrical(&sheet) && kind.is_empty() && building && !bubble && circuit_text(tag, &sheet_numbers) {
-                    let gfci = tag_at.is_some_and(|(p, h)| {
-                        texts.get(g).into_iter().flatten().any(|t| {
-                            let v = t.value.to_ascii_uppercase();
-                            (v.contains("GFCI") || v.contains("GFI")) && t.at.dist(p) <= RECEPTACLE_NOTE_H * h
+                    // Its designations printed by it (GFCI, WP, USB…), else a plain one.
+                    let near: Vec<&str> = tag_at
+                        .map(|(p, h)| {
+                            texts.get(g).into_iter().flatten().filter(|t| t.at.dist(p) <= RECEPTACLE_NOTE_H * h).map(|t| t.value.as_str()).collect()
                         })
-                    });
-                    let mark = if gfci { "GFCI" } else { "REC" };
+                        .unwrap_or_default();
+                    let marks = receptacle_designations(&near);
+                    let mark = if marks.is_empty() { "REC".to_string() } else { marks.join("/") };
+                    let mark = mark.as_str();
                     c.placed.push(super::readers::ReadDevice {
                         tag: mark.into(),
                         at: [at.x, at.y],
@@ -3107,6 +3109,15 @@ pub(crate) fn is_circuit_tag(tag: &str) -> bool {
 const SENSOR_LEG_H: f64 = 4.0;
 /// How far from a receptacle's circuit label a note on it (GFCI) is printed, in its heights.
 const RECEPTACLE_NOTE_H: f64 = 4.0;
+
+/// A receptacle's designations among the texts printed by it, in a fixed order: `GFCI` (or
+/// `GFI`), `WP` weatherproof, `WR` weather-resistant, `TR` tamper-resistant, `USB`.
+fn receptacle_designations(texts: &[&str]) -> Vec<&'static str> {
+    const DESIGNATIONS: &[(&str, &[&str])] = &[("GFCI", &["GFCI", "GFI"]), ("WP", &["WP"]), ("WR", &["WR"]), ("TR", &["TR"]), ("USB", &["USB"])];
+    let words: BTreeSet<String> =
+        texts.iter().flat_map(|t| t.split(|c: char| !c.is_ascii_alphanumeric())).filter(|w| !w.is_empty()).map(str::to_ascii_uppercase).collect();
+    DESIGNATIONS.iter().filter(|(_, said)| said.iter().any(|w| words.contains(*w))).map(|(d, _)| *d).collect()
+}
 
 /// Run the devices stage: detect devices, symbols and counts (MUST 1, 4, 9-11).
 /// MUST 9: count then "anything not counted?" with leftover clusters.
@@ -9243,6 +9254,14 @@ mod tests {
         assert_eq!(room_of_view("ELECTRICAL - 2ND FLOOR - STORAGE ROOM", &rooms), Some(3), "two of the name: the floor says which");
         assert_eq!(room_of_view("ELECTRICAL - 1ST FLOOR - CORE AREA", &rooms), None, "no room named");
         assert_eq!(room_of_view("ENLARGED QUEEN", &rooms), None);
+    }
+
+    #[test]
+    fn a_receptacles_designations_are_the_words_printed_by_it() {
+        assert_eq!(receptacle_designations(&["G-3", "GFCI"]), ["GFCI"]);
+        assert_eq!(receptacle_designations(&["WP/GFI"]), ["GFCI", "WP"], "in a fixed order");
+        assert_eq!(receptacle_designations(&["USB", "TR", "A-1"]), ["TR", "USB"]);
+        assert!(receptacle_designations(&["WPT", "TRUCK", "A-1"]).is_empty(), "whole words only");
     }
 
     #[test]

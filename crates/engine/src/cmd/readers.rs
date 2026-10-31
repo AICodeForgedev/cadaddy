@@ -915,6 +915,24 @@ fn run_equip_read(_s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── mep.read_devices ────────────────────────────────────────────────────────
 
+/// A receptacle's item by its designations (`REC`, `GFCI`, `GFCI/WP`, `USB`): `duplex
+/// receptacle`, `GFCI receptacle, weatherproof`, `duplex receptacle, USB`.
+pub(crate) fn receptacle_item(tag: &str) -> String {
+    let marks: Vec<String> = tag.split('/').map(|m| m.trim().to_ascii_uppercase()).collect();
+    let base = if marks.iter().any(|m| m == "GFCI") { "GFCI receptacle" } else { "duplex receptacle" };
+    let with: Vec<&str> = marks
+        .iter()
+        .filter_map(|m| match m.as_str() {
+            "WP" => Some("weatherproof"),
+            "WR" => Some("weather-resistant"),
+            "TR" => Some("tamper-resistant"),
+            "USB" => Some("USB"),
+            _ => None,
+        })
+        .collect();
+    if with.is_empty() { base.to_string() } else { format!("{base}, {}", with.join(", ")) }
+}
+
 /// What a device mark usually is on an electrical plan (else `device`).
 pub(crate) fn device_kind(tag: &str) -> &'static str {
     match tag.trim().to_ascii_uppercase().as_str() {
@@ -1309,8 +1327,7 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         let item = match read {
             "" => device_item(tag),
             "wall luminaire" => format!("luminaire {tag}"),
-            "receptacle" if tag.eq_ignore_ascii_case("GFCI") => "GFCI receptacle".to_string(),
-            "receptacle" => "duplex receptacle".to_string(),
+            "receptacle" => receptacle_item(tag),
             _ => format!("{read} {tag}"),
         };
         e.set("device_type", item, "plan");
@@ -1388,6 +1405,14 @@ fn run_envelope_read(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_receptacles_designations_name_its_item() {
+        assert_eq!(super::receptacle_item("REC"), "duplex receptacle");
+        assert_eq!(super::receptacle_item("GFCI"), "GFCI receptacle");
+        assert_eq!(super::receptacle_item("GFCI/WP"), "GFCI receptacle, weatherproof");
+        assert_eq!(super::receptacle_item("TR/USB"), "duplex receptacle, tamper-resistant, USB");
+    }
+
     #[test]
     fn switch_designations_name_the_switch_and_its_leg() {
         let d = |t: &str| super::switch_designation(t);

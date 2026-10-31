@@ -163,6 +163,11 @@ const NOT_ROOM_WORDS: &[&str] = &[
     "AFF",
     "UNO",
     "NTS",
+    // A dimension string's "equal" mark, a detail's "similar", a stair's arrow, a size callout.
+    "EQ",
+    "SIM",
+    "DN",
+    "SIZE",
 ];
 
 /// Whether a label could name a room: not an address, a date, a phone number, a web or mail
@@ -196,7 +201,8 @@ pub(crate) fn room_like_name(t: &str) -> bool {
     if first != numbered && !numbered.is_empty() && numbered.chars().all(|c| c.is_ascii_digit()) {
         return false;
     }
-    room_label(t) && !t.contains("'-")
+    // A stair's other arrow (as a word it can be a room's: SET UP).
+    room_label(t) && !t.contains("'-") && !t.eq_ignore_ascii_case("UP")
 }
 
 /// A ceiling height (feet) from a note (`CLG 9'-0"`, `CEILING AT 8'6"`).
@@ -580,7 +586,11 @@ mod tests {
     #[test]
     fn a_wall_types_note_is_no_room() {
         assert!(!super::room_like_name("1 HOUR FIRE RATED PARTITION"));
+        for junk in ["EQ", "SIM.", "DN", "UP", "SIZE"] {
+            assert!(!super::room_like_name(junk), "{junk}: a drawing's annotation");
+        }
         assert!(super::room_like_name("BOH"));
+        assert!(super::room_like_name("EQUIPMENT"));
     }
 
     use super::*;

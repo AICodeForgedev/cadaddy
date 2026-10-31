@@ -96,7 +96,8 @@ const NOT_PANELS: &[&str] =
     &["PANEL", "NOTE", "NOTES", "SHEET", "TYPE", "LEVEL", "ROOM", "DETAIL", "SEE", "KEY", "PLAN", "AREA", "ZONE", "UNIT", "DWG"];
 
 /// A circuit label's panel and circuit numbers: `D-7`, `LA-1,3,5`, `LP1-12`, `L1/1`. A sheet
-/// number (`E-101`: no panel has circuit 101) or a dimension is not one.
+/// number (`E-101`: no panel has circuit 101), a dimension, or a zero-padded number (`S-01`: a
+/// room's tag, circuits are never padded) is not one.
 pub(crate) fn parse_circuit(s: &str) -> Option<(String, String)> {
     let s = s.trim();
     let (panel, ckt) = s.split_once('/').or_else(|| s.split_once('-'))?;
@@ -108,9 +109,12 @@ pub(crate) fn parse_circuit(s: &str) -> Option<(String, String)> {
     let nums: Vec<&str> = ckt.split(',').map(str::trim).collect();
     let ok_ckt = !nums.is_empty()
         && nums.len() <= 3
-        && nums
-            .iter()
-            .all(|n| (1..=2).contains(&n.len()) && n.chars().all(|c| c.is_ascii_digit()) && n.parse::<u32>().is_ok_and(|v| (1..=84).contains(&v)));
+        && nums.iter().all(|n| {
+            (1..=2).contains(&n.len())
+                && !n.starts_with('0')
+                && n.chars().all(|c| c.is_ascii_digit())
+                && n.parse::<u32>().is_ok_and(|v| (1..=84).contains(&v))
+        });
     (ok_panel && ok_ckt).then(|| (panel, nums.join(",")))
 }
 
@@ -973,7 +977,7 @@ mod tests {
         assert_eq!(parse_circuit("LA-1,3,5"), Some(("LA".into(), "1,3,5".into())));
         assert_eq!(parse_circuit("L1/1"), Some(("L1".into(), "1".into())));
         assert_eq!(parse_circuit("LP1-12"), Some(("LP1".into(), "12".into())));
-        for junk in ["E-101", "A-1A", "12-6", "3/4", "D-", "PANEL-1", ""] {
+        for junk in ["E-101", "A-1A", "12-6", "3/4", "D-", "PANEL-1", "S-01", ""] {
             assert_eq!(parse_circuit(junk), None, "{junk}");
         }
         assert_eq!(conductor_note("2#12, 1#12G").as_deref(), Some("2#12 + 1#12G"));
