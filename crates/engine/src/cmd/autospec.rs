@@ -106,6 +106,8 @@ fn room_name(t: &str) -> bool {
 /// Words that put a label in a title block, a stamp or the notes, never on a room: the firm and
 /// its address, the review and issue stamps, the sheet's and views' titles.
 const NOT_ROOM_WORDS: &[&str] = &[
+    // A wall type's note ("1 HOUR FIRE RATED PARTITION").
+    "PARTITION",
     "SCALE",
     "SHEET",
     "DRAWN",
@@ -575,6 +577,12 @@ fn run_draft(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_wall_types_note_is_no_room() {
+        assert!(!super::room_like_name("1 HOUR FIRE RATED PARTITION"));
+        assert!(super::room_like_name("BOH"));
+    }
+
     use super::*;
 
     #[test]
