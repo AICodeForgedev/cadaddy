@@ -2,7 +2,9 @@
 //! `<style>` applies wherever it sits), simple CSS rules, and the property values the reader
 //! needs (paint, colours, font sizes, text anchors).
 
-use std::collections::HashMap;
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use cadaddy_color::Rgb;
 use quick_xml::Reader;
@@ -17,6 +19,10 @@ const MAX_NODES: usize = 2_000_000;
 const MAX_DEPTH: usize = 1024;
 /// CSS rules kept from all `<style>` elements together.
 const MAX_RULES: usize = 20_000;
+/// Declarations kept from all rule bodies together (a body shared by a comma list counts once).
+const MAX_DECLS: usize = 50_000;
+/// Rule tests made while matching elements, over the whole file.
+const MAX_MATCH_WORK: u64 = 20_000_000;
 /// Elements whose text content is kept (whitespace included).
 const TEXT_HOLDERS: &[&str] = &["text", "tspan", "style", "textPath"];
 
@@ -164,6 +170,15 @@ fn add_text(dom: &mut Dom, open: &[usize], s: &str) {
 #[derive(Default)]
 pub(crate) struct Css {
     rules: Vec<Rule>,
+    /// Rule indexes by the one part of the selector looked up first: the id, else the first
+    /// class, else the tag; rules with none of them are in `any`.
+    by_id: HashMap<String, Vec<usize>>,
+    by_class: HashMap<String, Vec<usize>>,
+    by_tag: HashMap<String, Vec<usize>>,
+    any: Vec<usize>,
+    decl_count: usize,
+    cut: bool,
+    work: Cell<u64>,
 }
 
 struct Rule {
@@ -173,7 +188,8 @@ struct Rule {
     /// (ids, classes, tags), compared as a number.
     spec: u32,
     order: usize,
-    decls: Vec<(String, String)>,
+    /// Shared by every selector of the rule's comma list.
+    decls: Arc<[(String, String)]>,
 }
 
 impl Css {
@@ -188,34 +204,87 @@ impl Css {
             if head.starts_with('@') {
                 continue;
             }
-            let decls = declarations(body);
+            let mut decls = declarations(body);
+            decls.retain(|(k, _)| PROPS.contains(&k.as_str()));
+            let room = MAX_DECLS.saturating_sub(self.decl_count);
+            if decls.len() > room {
+                decls.truncate(room);
+                self.cut = true;
+            }
+            let decls: Arc<[(String, String)]> = decls.into();
+            let mut used = false;
             for sel in head.split(',') {
                 if self.rules.len() >= MAX_RULES {
+                    self.cut = true;
                     return;
                 }
                 if let Some((tag, id, classes)) = selector(sel.trim()) {
                     let spec = (u32::from(id.is_some()) << 16) | ((classes.len().min(255) as u32) << 8) | u32::from(tag.is_some());
                     let order = self.rules.len();
-                    self.rules.push(Rule { tag, id, classes, spec, order, decls: decls.clone() });
+                    match (&id, classes.first(), &tag) {
+                        (Some(i), _, _) => self.by_id.entry(i.clone()).or_default().push(order),
+                        (None, Some(c), _) => self.by_class.entry(c.clone()).or_default().push(order),
+                        (None, None, Some(t)) => self.by_tag.entry(t.clone()).or_default().push(order),
+                        _ => self.any.push(order),
+                    }
+                    self.rules.push(Rule { tag, id, classes, spec, order, decls: Arc::clone(&decls) });
+                    used = true;
                 }
+            }
+            if used {
+                self.decl_count += decls.len();
             }
         }
     }
 
+    /// Whether rules or declarations were left out at the caps.
+    pub fn was_cut(&self) -> bool {
+        self.cut
+    }
+
+    /// Whether matching stopped because the work budget ran out (later elements get no rules).
+    pub fn work_exhausted(&self) -> bool {
+        self.work.get() > MAX_MATCH_WORK
+    }
+
+    /// Declarations kept (a body shared by several selectors counts once).
+    #[cfg(test)]
+    pub fn kept_declarations(&self) -> usize {
+        self.decl_count
+    }
+
     /// The declarations of the rules matching `n`, lowest precedence first.
     pub fn matching<'a>(&'a self, n: &Node) -> Vec<&'a (String, String)> {
-        if self.rules.is_empty() {
+        if self.rules.is_empty() || self.work_exhausted() {
             return Vec::new();
         }
         let id = n.attr("id");
-        let classes: Vec<&str> = n.attr("class").map(|c| c.split_whitespace().collect()).unwrap_or_default();
-        let mut hits: Vec<&Rule> = self
-            .rules
-            .iter()
+        let classes: HashSet<&str> = n.attr("class").map(|c| c.split_whitespace().collect()).unwrap_or_default();
+        let mut cand: Vec<&[usize]> = vec![&self.any];
+        if let Some(v) = self.by_tag.get(n.name.as_str()) {
+            cand.push(v);
+        }
+        if let Some(v) = id.and_then(|i| self.by_id.get(i)) {
+            cand.push(v);
+        }
+        for c in &classes {
+            if let Some(v) = self.by_class.get(*c) {
+                cand.push(v);
+            }
+        }
+        let tests: u64 = cand.iter().map(|v| v.len() as u64).sum();
+        self.work.set(self.work.get().saturating_add(tests));
+        if self.work_exhausted() {
+            return Vec::new();
+        }
+        let mut hits: Vec<&Rule> = cand
+            .into_iter()
+            .flatten()
+            .filter_map(|i| self.rules.get(*i))
             .filter(|r| {
                 r.tag.as_deref().is_none_or(|t| t == n.name)
                     && r.id.as_deref().is_none_or(|i| Some(i) == id)
-                    && r.classes.iter().all(|c| classes.contains(&c.as_str()))
+                    && r.classes.iter().all(|c| classes.contains(c.as_str()))
             })
             .collect();
         hits.sort_by_key(|r| (r.spec, r.order));
@@ -630,6 +699,25 @@ mod tests {
         assert_eq!(Style::of(&n, &Style::default(), &css).fill, Some(Paint::Color(Rgb(255, 255, 0))));
         let n = Node { name: "rect".into(), attrs: vec![("fill".into(), "blue".into())], kids: Vec::new() };
         assert_eq!(Style::of(&n, &Style::default(), &css).fill, Some(Paint::Color(Rgb(255, 0, 0))));
+    }
+
+    #[test]
+    fn hostile_rule_bodies_are_shared_and_capped() {
+        let body: String = format!("fill:red;{}", (0..60_000).map(|i| format!("junk{i}:1;")).collect::<String>());
+        let sels: Vec<String> = (0..20_000).map(|i| format!(".c{i}")).collect();
+        let mut css = Css::default();
+        css.add(&format!("{} {{ {body} }}", sels.join(",")));
+        assert_eq!(css.kept_declarations(), 1);
+        assert!(!css.was_cut());
+        assert_eq!(css.rules.len(), 20_000);
+        let first = css.rules.first().map(|r| Arc::as_ptr(&r.decls));
+        let last = css.rules.last().map(|r| Arc::as_ptr(&r.decls));
+        assert_eq!(first, last);
+        let body: String = (0..80_000).map(|i| format!("fill:#{i:06x};")).collect();
+        let mut css = Css::default();
+        css.add(&format!(".a {{ {body} }} .b {{ fill: red }}"));
+        assert_eq!(css.kept_declarations(), MAX_DECLS);
+        assert!(css.was_cut());
     }
 
     #[test]

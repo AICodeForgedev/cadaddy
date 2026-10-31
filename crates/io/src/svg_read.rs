@@ -105,6 +105,12 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
     if let Some(root) = dom.root {
         parser.walk(&dom, root, &Style::default())?;
     }
+    if parser.css.was_cut() {
+        parser.note("some CSS rules or declarations were left out (too many in the style sheet)".into());
+    }
+    if parser.css.work_exhausted() {
+        parser.note("CSS rules were not applied to the rest of the elements (the style sheet is too large for the drawing)".into());
+    }
     let mut d = parser.drawing;
     d.read_notes.extend(parser.notes);
     Ok(d)

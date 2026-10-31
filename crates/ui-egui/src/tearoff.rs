@@ -180,9 +180,16 @@ pub fn with_main_doc(app: &mut CadApp, ui: &mut egui::Ui, f: impl FnOnce(&mut Ca
     let before = app.session.active;
     app.session.active = main;
     f(app, ui);
-    if app.session.active == main && before != main {
+    // A press in the main window (or keys typed while it has focus) hands the command line back
+    // to its drawing, as it does for a drawing window in [`show_windows`].
+    if app.session.active == main && before != main && !engaged(ui.ctx()) {
         app.session.active = before;
     }
+}
+
+/// Whether the viewport being drawn was clicked, or has the keyboard with events, this frame.
+fn engaged(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.pointer.any_pressed() || (i.viewport().focused == Some(true) && !i.events.is_empty()))
 }
 
 /// Where the main window's tab bar is, in its own points (set as it draws), for docking by drag.
@@ -233,8 +240,7 @@ pub fn show_windows(app: &mut CadApp, ctx: &egui::Context) {
                     crate::gpu::with_canvas_slot(slot, || crate::canvas::show(app, ui));
                     std::mem::swap(&mut app.canvas, &mut canvas);
                 });
-                let engaged = ui.ctx().input(|i| i.pointer.any_pressed() || (i.viewport().focused == Some(true) && !i.events.is_empty()));
-                if engaged {
+                if engaged(ui.ctx()) {
                     app.ui.start_tab = false;
                 } else {
                     app.session.active = before;
@@ -452,6 +458,63 @@ mod tests {
         // The drawing is still in the main tab (pinned windows).
         assert!(!is_torn(&app, 1));
         assert_eq!(main_index(&app), Some(1));
+    }
+
+    fn press_at(pos: egui::Pos2) -> egui::RawInput {
+        let mut raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0))), ..Default::default() };
+        raw.events.push(egui::Event::PointerMoved(pos));
+        raw.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        raw
+    }
+
+    fn quiet() -> egui::RawInput {
+        egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0))), ..Default::default() }
+    }
+
+    /// B is torn off and current; a press in the main canvas makes A current, and the next
+    /// command goes to A only.
+    #[test]
+    fn a_press_in_the_main_canvas_hands_the_command_line_back() {
+        let mut app = app_with_two();
+        tear_off(&mut app, 1, None).unwrap();
+        app.session.active = 1;
+        let ctx = egui::Context::default();
+        // No input: B stays current (the existing rule).
+        ctx.run_ui(quiet(), |ui| with_main_doc(&mut app, ui, |_, _| {})).textures_delta.clear();
+        assert_eq!(app.session.active, 1);
+        // A press inside the canvas rect.
+        let mut inside = false;
+        ctx.run_ui(press_at(egui::pos2(300.0, 300.0)), |ui| {
+            inside = ui.max_rect().contains(egui::pos2(300.0, 300.0));
+            with_main_doc(&mut app, ui, |_, _| {})
+        })
+        .textures_delta
+        .clear();
+        assert!(inside, "the press is inside the canvas rect");
+        assert_eq!(app.session.active, 0, "the main window's drawing is current");
+        let (a, b) = (app.session.docs[0].doc.model.len(), app.session.docs[1].doc.model.len());
+        app.run("line", json!({"points": [[0, 5], [10, 5]]})).unwrap();
+        assert_eq!(app.session.docs[0].doc.model.len(), a + 1, "exactly one entity in A");
+        assert_eq!(app.session.docs[1].doc.model.len(), b, "none in B");
+    }
+
+    /// A press in a drawing window's viewport makes its drawing current; a frame without input
+    /// leaves the current drawing alone.
+    #[test]
+    fn a_press_in_a_torn_window_makes_its_drawing_current() {
+        let mut app = app_with_two();
+        tear_off(&mut app, 1, None).unwrap();
+        app.session.active = 0;
+        let ctx = egui::Context::default();
+        ctx.run_ui(quiet(), |ui| show_windows(&mut app, ui.ctx())).textures_delta.clear();
+        assert_eq!(app.session.active, 0, "no input: unchanged");
+        ctx.run_ui(press_at(egui::pos2(300.0, 300.0)), |ui| show_windows(&mut app, ui.ctx())).textures_delta.clear();
+        assert_eq!(app.session.active, 1, "a press in B's viewport makes B current");
+        ctx.run_ui(quiet(), |ui| show_windows(&mut app, ui.ctx())).textures_delta.clear();
+        assert_eq!(app.session.active, 1, "a frame without input leaves it");
+        app.session.active = 0;
+        ctx.run_ui(quiet(), |ui| show_windows(&mut app, ui.ctx())).textures_delta.clear();
+        assert_eq!(app.session.active, 0, "and A stays current without input");
     }
 
     #[test]

@@ -734,7 +734,7 @@ fn superhatch_refuses_open_boundaries_unknown_blocks_and_other_modes() {
         assert!(s.execute("superhatch", &p).is_err(), "{p}");
     }
     let e = s.execute("superhatch", &json!({"boundary": b.hex(), "block": "TILE", "mode": "xref"})).unwrap_err().to_string();
-    assert!(e.contains("not available yet"), "{e}");
+    assert!(e.contains("not supported"), "{e}");
     assert_eq!(s.doc().unwrap().model.iter().count(), before);
     assert!(s.doc().unwrap().groups.is_empty());
 }

@@ -691,11 +691,6 @@ fn pick_menu(ui: &mut egui::Ui, current: &str, items: impl IntoIterator<Item = S
     out
 }
 
-/// A greyed value with no command behind it yet: visibly inert, never a silent dead button.
-fn unavailable(ui: &mut egui::Ui, text: &str) {
-    value_box(ui, crate::i18n::t(text), false, false).on_hover_text(crate::tl!("Not available yet"));
-}
-
 type Custom = Option<(String, Vec<cadaddy_engine::doc::dynblock::CustomProperty>)>;
 
 /// The dynamic block name and custom properties of block reference `h`, worked out once per
@@ -843,6 +838,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         let layers: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
         let linetypes: Vec<String> = d.linetypes.iter().map(|l| l.name.clone()).collect();
         let text_styles: Vec<String> = d.text_styles.iter().map(|l| l.name.clone()).collect();
+        let anno_scales: Vec<String> = d.scales.iter().map(|s| s.name.clone()).collect();
         let dim_styles: Vec<String> = d.dim_styles.iter().map(|l| l.name.clone()).collect();
         let ml_styles: Vec<String> = d.mleader_styles.iter().map(|l| l.name.clone()).collect();
         let tb_styles: Vec<String> = d.table_styles.iter().map(|l| l.name.clone()).collect();
@@ -925,7 +921,12 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
             });
         });
-        prop_row(ui, "Transparency", |ui| unavailable(ui, "ByLayer"));
+        prop_row(ui, "Transparency", |ui| {
+            let items = ["ByLayer", "ByBlock"].map(String::from).into_iter().chain((0..=9).map(|i| (i * 10).to_string()));
+            if let Some(v) = pick_menu(ui, &h.str("CETRANSPARENCY", "ByLayer"), items) {
+                act("setvar", json!({ "name": "CETRANSPARENCY", "value": v }));
+            }
+        });
         prop_row(ui, "Thickness", |ui| {
             if let Some(f) = number(edit_field(ui, ui.id().with("cur_thickness"), len(h.f64("THICKNESS", 0.0))), &mut bad) {
                 act("setvar", json!({ "name": "THICKNESS", "value": f }));
@@ -951,7 +952,12 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 act("tablestyle", json!({ "name": n, "current": true }));
             }
         });
-        prop_row(ui, "Annotation scale", |ui| unavailable(ui, "1:1"));
+        prop_row(ui, "Annotation scale", |ui| {
+            let shown = h.str("CANNOSCALE", "1:1");
+            if let Some(n) = pick_menu(ui, &shown, anno_scales) {
+                act("setvar", json!({ "name": "CANNOSCALE", "value": n }));
+            }
+        });
         prop_row(ui, "Text height", |ui| {
             if let Some(f) = number(edit_field(ui, ui.id().with("cur_textsize"), len(h.f64("TEXTSIZE", 0.2))), &mut bad) {
                 act("setvar", json!({ "name": "TEXTSIZE", "value": f }));
@@ -978,7 +984,11 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                     act("pagesetup", json!({ "layout": name, "plotStyleTable": n }));
                 }
             }),
-            None => prop_row(ui, "Plot style table", |ui| unavailable(ui, "None")),
+            // Model space keeps no page setup of its own: the table belongs to a layout.
+            None => prop_row(ui, "Plot style table", |ui| {
+                value_box(ui, crate::i18n::t("None"), false, false)
+                    .on_hover_text(crate::tl!("Model space has no page setup; open a layout to set its plot style table"));
+            }),
         }
         let attached = layout.as_ref().map(|(n, _)| n.clone()).unwrap_or_else(|| "Model".into());
         prop_row(ui, "Plot style attached to", |ui| read_only(ui, &attached));
@@ -1476,6 +1486,34 @@ mod my_properties_tests {
             })
             .collect();
         assert!(ids.iter().any(|i| i.contains("ui.properties") && i.contains("remove")), "{ids:?}");
+    }
+}
+
+#[cfg(test)]
+mod no_selection_row_tests {
+    use super::*;
+
+    fn rendered(app: &mut CadApp) -> String {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| properties_section(app, ui));
+        out.textures_delta.clear();
+        out.shapes
+            .iter()
+            .filter_map(|c| if let egui::Shape::Text(t) = &c.shape { Some(t.galley.text().to_string()) } else { None })
+            .collect::<Vec<_>>()
+            .join("|")
+    }
+
+    #[test]
+    fn annotation_scale_and_transparency_rows_show_the_drawings_values() {
+        let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+        let before = rendered(&mut app);
+        assert!(before.contains("1:1"), "{before}");
+        app.run("setvar", json!({ "name": "CANNOSCALE", "value": "1:50" })).unwrap();
+        app.run("setvar", json!({ "name": "CETRANSPARENCY", "value": "30" })).unwrap();
+        let after = rendered(&mut app);
+        assert!(after.contains("1:50"), "{after}");
+        assert!(after.contains("30"), "{after}");
     }
 }
 

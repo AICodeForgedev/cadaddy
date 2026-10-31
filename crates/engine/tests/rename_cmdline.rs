@@ -76,13 +76,16 @@ fn rename_prompts_type_old_and_new_name() {
     assert!(d.block("Pump").is_some() && d.layer("New").is_some() && d.layer("Old").is_none(), "{:?}", s.log);
     assert_eq!(insert_targets(d), ["Assy", "Pump", "Pump", "Pump"]);
     assert_eq!(d.model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_))).count(), 1);
-    // An unknown old name re-prompts; a type CADaddy lacks reads both names and reports.
+    // An unknown old name re-prompts, for materials too.
     s.script("-RENAME LA Missing\nNew\nNewer\n").unwrap();
     assert!(s.running.is_none(), "{}", s.prompt_text());
     assert!(s.doc().unwrap().layer("Newer").is_some());
     let n = s.log.len();
-    s.script("-RENAME MAT\nLINE 0,0 2,0\n\n").unwrap();
+    s.script("-RENAME MAT\nNoSuch\n").unwrap();
+    assert!(s.running.is_some(), "{}", s.prompt_text());
+    assert!(s.log[n..].iter().any(|l| l.contains("No material named \"NoSuch\"")), "{:?}", &s.log[n..]);
+    s.cancel();
+    s.script("LINE 0,0 2,0\n\n").unwrap();
     assert!(s.running.is_none(), "{}", s.prompt_text());
-    assert!(s.log[n..].iter().any(|l| l.contains("material definitions")), "{:?}", &s.log[n..]);
     assert_eq!(s.doc().unwrap().model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_))).count(), 2);
 }
