@@ -1464,8 +1464,9 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
         }
         if let Some((mut c, mut k)) = kindent {
             // Circles, arcs, solids and traces keep their extrusion (the writer puts them in it
-            // again); every other kind is in the world coordinate system by now.
-            if !matches!(k, EntityKind::Circle(_) | EntityKind::Arc(_) | EntityKind::Solid(_) | EntityKind::Trace(_)) {
+            // again), and so do lines, whose world points it doesn't move (the writer writes it,
+            // #2241); every other kind is in the world coordinate system by now.
+            if !matches!(k, EntityKind::Circle(_) | EntityKind::Arc(_) | EntityKind::Solid(_) | EntityKind::Trace(_) | EntityKind::Line(_)) {
                 world_extrusion(&mut c);
             }
             let h = match handle {
