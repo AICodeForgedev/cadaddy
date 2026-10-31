@@ -1658,3 +1658,16 @@ fn array_takes_columns_and_column_spacing() {
     let e = s.execute_agent("array", &json!({ "rows": 2, "nosuchparam": 3 })).unwrap_err().to_string();
     assert!(e.contains("`nosuchparam` is not a parameter of array") && e.contains("`columns`") && e.contains("`cols`"), "{e}");
 }
+
+#[test]
+fn setvar_rejects_non_finite_text_for_real_variables() {
+    let mut s = Session::new();
+    for name in ["LTSCALE", "TEXTSIZE", "SNAPANG"] {
+        let before = s.execute("getvar", &json!({"name": name})).unwrap();
+        for text in ["nan", "inf", "-inf"] {
+            let r = s.execute("setvar", &json!({"name": name, "value": text}));
+            assert!(r.is_err(), "SETVAR {name} {text} was accepted");
+            assert_eq!(s.execute("getvar", &json!({"name": name})).unwrap(), before);
+        }
+    }
+}
