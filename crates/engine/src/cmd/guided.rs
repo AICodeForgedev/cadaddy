@@ -4102,6 +4102,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
         // (Not placed onto the architecture, stamped from typical-room plans.)
         let mut counts = (0usize, 0usize);
+        // The stamped rooms' panels (where a typical room's plan letters them), for their circuits.
+        let mut room_panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
         let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
             Ok((sp, true)) if has_arch => {
                 if placer.is_none() {
@@ -4154,7 +4156,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
                 let unplaced: Vec<&super::readers::ReadDevice> = job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
-                let (stamped, report, authority) = stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                let StampedRooms { devices: stamped, report, authority, panels } = stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                room_panels = panels;
                 // A room an enlarged plan of its own shows: that plan's devices, not the overall
                 // plan's copies of some of them.
                 let before = out.len();
@@ -4191,7 +4194,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // A stamped room's circuits are its own (a guest room's own panel): their routes in the
         // room, where the sheet's reading can't put them.
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-            let (runs, circuits) = super::printcond::room_circuits(&devices, sp.units_per_foot);
+            let (runs, circuits) = super::printcond::room_circuits(&devices, &room_panels, sp.units_per_foot);
             if !circuits.is_empty() {
                 progress_line(&format!("  stamped rooms' circuits: {} ({} runs)", circuits.len(), runs.len()));
                 super::printcond::store_room_circuits(&mut sp, runs, &circuits);
@@ -5050,13 +5053,15 @@ fn stamp_typical_rooms(
     job: &GuidedJob,
     placed: &[super::readers::ReadDevice],
     unplaced: &[&super::readers::ReadDevice],
-) -> (Vec<super::readers::ReadDevice>, BTreeMap<String, usize>, Vec<(String, Vec<cadaddy_geom::Vec2>)>) {
+) -> StampedRooms {
     let mut out = Vec::new();
     let mut report: BTreeMap<String, usize> = BTreeMap::new();
     // The rooms a one-room plan is the authority in (its level and outline).
     let mut authority: Vec<(String, Vec<cadaddy_geom::Vec2>)> = Vec::new();
+    // Each stamped room's panels, where its plan letters them ("PNLBD 'G'"), by the room.
+    let mut panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
     if unplaced.is_empty() {
-        return (out, report, authority);
+        return StampedRooms { devices: out, report, authority, panels };
     }
     // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
     let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>, String)> = job
@@ -5121,7 +5126,21 @@ fn stamp_typical_rooms(
         let sub = super::printmep::sheet_drawing(d, sh);
         // The typical-room views (a room type), and the views of one room (its number or its name
         // in the title: "ENLARGED BOH ROOM #237", "1ST FLOOR - MEP ROOM").
-        let titled = cadaddy_mepfix::sheet_facts::view_titles(&sub, &cadaddy_mepfix::sheet_facts::texts(&sub));
+        let sheet_texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let lettered: Vec<(String, [f64; 2])> =
+            sheet_texts.iter().filter_map(|t| Some((super::printcond::panel_lettering(&t.value)?, [t.at.x, t.at.y]))).take(MAX_STAMPED).collect();
+        let panels_in = |view: &[f64; 4]| -> Vec<(String, [f64; 2])> {
+            lettered.iter().filter(|(_, p)| p[0] >= view[0] && p[0] <= view[2] && p[1] >= view[1] && p[1] <= view[3]).cloned().collect()
+        };
+        let panel_into = |room: String, view: &[f64; 4], outline: &[cadaddy_geom::Vec2], panels: &mut BTreeMap<String, Vec<(String, [f64; 2])>>| {
+            if panels.contains_key(&room) {
+                return;
+            }
+            let at: Vec<(String, [f64; 2])> =
+                panels_in(view).into_iter().filter_map(|(n, p)| Some((n, into_room(p, *view, bbox(outline))?))).collect();
+            panels.insert(room, at);
+        };
+        let titled = cadaddy_mepfix::sheet_facts::view_titles(&sub, &sheet_texts);
         let mut views: Vec<(String, [f64; 4], BTreeSet<String>)> = Vec::new();
         let mut one_room: Vec<(String, [f64; 4], usize)> = Vec::new();
         for v in titled {
@@ -5156,6 +5175,7 @@ fn stamp_typical_rooms(
                     copy.at = at;
                     copy.level.clone_from(level);
                     copy.room = stamped_room(name, number, *i);
+                    panel_into(copy.room.clone(), view, outline, &mut panels);
                     out.push(copy);
                     *report.entry(format!("{sheet} {title}")).or_default() += 1;
                 }
@@ -5185,17 +5205,27 @@ fn stamp_typical_rooms(
                 copy.at = at;
                 copy.level.clone_from(level);
                 copy.room = stamped_room(name, number, ri);
+                panel_into(copy.room.clone(), view, outline, &mut panels);
                 out.push(copy);
                 *report.entry(format!("{sheet} {title}")).or_default() += 1;
             }
         }
     }
-    (out, report, authority)
+    StampedRooms { devices: out, report, authority, panels }
 }
 
 /// The one room a view's title (upper case) names: its number ("ROOM #237", "ROOM 237") when one
 /// room has it, else its name ("1ST FLOOR - MEP ROOM": the room called MEP), on the floor the
 /// title names when several are.
+/// What stamping the typical and one-room plans gave: the devices, how many by view, the rooms
+/// a one-room plan is the authority in (level, outline), and each stamped room's panels.
+struct StampedRooms {
+    devices: Vec<super::readers::ReadDevice>,
+    report: BTreeMap<String, usize>,
+    authority: Vec<(String, Vec<cadaddy_geom::Vec2>)>,
+    panels: BTreeMap<String, Vec<(String, [f64; 2])>>,
+}
+
 /// A stamped room's name for its own circuits: its number, else its name and place in the list.
 fn stamped_room(name: &str, number: &str, i: usize) -> String {
     if number.trim().is_empty() { format!("{} {i}", name.trim()) } else { number.trim().to_string() }

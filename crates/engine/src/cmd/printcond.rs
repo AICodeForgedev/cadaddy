@@ -115,9 +115,9 @@ fn conductor_note(s: &str) -> Option<String> {
 }
 
 /// A panel named by lettering: `PANEL LA`, `PNL 'D'`, `PANELBOARD LP1`.
-fn panel_lettering(s: &str) -> Option<String> {
+pub(crate) fn panel_lettering(s: &str) -> Option<String> {
     let u = s.trim().to_ascii_uppercase();
-    let rest = ["PANELBOARD", "PANEL", "PNL"].iter().find_map(|p| u.strip_prefix(p))?;
+    let rest = ["PANELBOARD", "PANEL", "PNLBD", "PNL"].iter().find_map(|p| u.strip_prefix(p))?;
     let name: String = rest.trim().trim_start_matches(':').trim().trim_matches(['\'', '"']).to_string();
     let ok = (1..=6).contains(&name.len())
         && name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
@@ -691,7 +691,7 @@ const ROOM_PART: &str = ":room-";
 /// room's own (a guest room has its own panel), per room and circuit an estimated route in the
 /// model's coordinates: the devices chained (no step over `MAX_LEG_FT`), a drop to each wall
 /// device. No home run: the room's panel is not placed.
-pub(crate) fn room_circuits(devices: &[ReadDevice], upf: f64) -> (Vec<MepRun>, Vec<ElementTag>) {
+pub(crate) fn room_circuits(devices: &[ReadDevice], panels: &BTreeMap<String, Vec<(String, [f64; 2])>>, upf: f64) -> (Vec<MepRun>, Vec<ElementTag>) {
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
     let bottom = DEFAULT_CEILING_FT + ABOVE_CEILING_FT;
     let eps = 0.05 * upf;
@@ -708,9 +708,19 @@ pub(crate) fn room_circuits(devices: &[ReadDevice], upf: f64) -> (Vec<MepRun>, V
         }
         let level = level_name(&level);
         let cid = format!("{CIRCUIT_TAG}{}{ROOM_PART}{}:{}", id_part(&level), id_part(&room), id_part(&label));
-        // Chained from the lowest-leftmost, then always the nearest one left.
+        // The room's own panel of the circuit, where its typical plan letters it.
+        let panel = parse_circuit(&label).map(|(p, _)| p).unwrap_or_default();
+        let panel_at = panels.get(&room).and_then(|ps| ps.iter().find(|(n, _)| n.eq_ignore_ascii_case(&panel))).map(|(_, at)| *at);
+        // Chained from the device nearest the panel (else the lowest-leftmost), then always the
+        // nearest one left.
         let mut left = devs.clone();
         left.sort_by(|a, b| (a.at[1], a.at[0]).partial_cmp(&(b.at[1], b.at[0])).unwrap_or(std::cmp::Ordering::Equal));
+        if let Some(p) = panel_at
+            && let Some((i, _)) = left.iter().enumerate().min_by(|a, b| dist(a.1.at, p).total_cmp(&dist(b.1.at, p)))
+        {
+            let first = left.remove(i);
+            left.insert(0, first);
+        }
         let mut chain = vec![left.remove(0)];
         while !left.is_empty() {
             let Some(last) = chain.last().map(|d| d.at) else { break };
@@ -718,6 +728,11 @@ pub(crate) fn room_circuits(devices: &[ReadDevice], upf: f64) -> (Vec<MepRun>, V
             chain.push(left.swap_remove(i));
         }
         let (mut legs, mut drops) = (0usize, 0usize);
+        if let Some(p) = panel_at {
+            let mut r = run(CIRCUIT_SYSTEM, &level, &format!("room {room}"), square(chain[0].at, p, eps), DEFAULT_SIZE_IN, bottom);
+            r.id = format!("{cid}#home");
+            runs.push(r);
+        }
         for w in chain.windows(2) {
             if let [a, b] = w
                 && dist(a.at, b.at) <= MAX_LEG_FT * upf
@@ -739,7 +754,6 @@ pub(crate) fn room_circuits(devices: &[ReadDevice], upf: f64) -> (Vec<MepRun>, V
                 runs.push(r);
             }
         }
-        let panel = parse_circuit(&label).map(|(p, _)| p).unwrap_or_default();
         let mut t = ElementTag {
             id: cid,
             kind: "circuit".into(),
@@ -748,14 +762,17 @@ pub(crate) fn room_circuits(devices: &[ReadDevice], upf: f64) -> (Vec<MepRun>, V
             ..ElementTag::default()
         };
         t.set("circuit", label.clone(), "plan");
-        t.set("panel", panel, "plan");
+        t.set("panel", panel.clone(), "plan");
         t.set("room", room.clone(), "computed");
         t.set("sheet", chain[0].sheet.clone(), "plan");
         t.set("devices", chain.len().to_string(), "computed");
         t.set("route", ESTIMATED, "rule");
         t.set("conductors", DEFAULT_CONDUCTORS, "default");
         t.set("conduit", "3/4\" EMT", "default");
-        t.set("homerun", "the room's own panel: not placed, no home run counted", "rule");
+        match panel_at {
+            Some(_) => t.set("homerun", format!("to the room's own panel {panel}, where its typical plan letters it"), "rule"),
+            None => t.set("homerun", "the room's own panel: not placed, no home run counted", "rule"),
+        }
         t.set("drops", drops.to_string(), "computed");
         circuits.push(t);
     }
@@ -826,6 +843,7 @@ mod tests {
         assert_eq!(conductor_note("NOTE 3"), None);
         assert_eq!(panel_lettering("PANEL LA").as_deref(), Some("LA"));
         assert_eq!(panel_lettering("PNL 'D'").as_deref(), Some("D"));
+        assert_eq!(panel_lettering("PNLBD 'G'").as_deref(), Some("G"));
         assert_eq!(panel_lettering("PANEL SCHEDULE"), None);
         assert_eq!(mount_height_ft("switch"), Some(4.0));
         assert_eq!(mount_height_ft("occupancy sensor"), None);
@@ -883,7 +901,12 @@ mod tests {
             in_room("REC", 200.0, "102"),
             in_room("REC", 320.0, "102"),
         ];
-        let (runs, circuits) = room_circuits(&devices, 12.0);
+        // Room 101's panel G lettered at its door; room 102's not.
+        let panels: BTreeMap<String, Vec<(String, [f64; 2])>> = [("101".to_string(), vec![("G".to_string(), [0.0, 160.0])])].into_iter().collect();
+        let (runs, circuits) = room_circuits(&devices, &panels, 12.0);
+        let homes: Vec<&MepRun> = runs.iter().filter(|r| r.id.ends_with("#home")).collect();
+        assert_eq!(homes.len(), 1, "room 101's circuit runs home to its panel");
+        assert_eq!(homes[0].points.last(), Some(&[0.0, 160.0]));
         assert_eq!(circuits.len(), 2, "{circuits:?}");
         assert!(circuits.iter().all(|c| c.fields["homerun"].source == "rule"));
         for c in &circuits {
