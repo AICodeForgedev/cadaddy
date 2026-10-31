@@ -1,7 +1,7 @@
 //! Drawing → DXF (AC1015 / R2000 structure, readable by every DXF consumer since 2000). Later
-//! versions keep that structure (the groups they add are optional, DXF Reference) and differ in
-//! `$ACADVER`, from 2004 in the newer DIMSTYLE groups, and from 2007 in UTF-8 text (the caller
-//! picks the text encoding) and MULTILEADER entities (older files get LEADER + MTEXT).
+//! versions keep that structure and differ in `$ACADVER`, from 2004 in CLASS instance counts and
+//! the newer DIMSTYLE groups, and from 2007 in UTF-8 text (the caller picks the text encoding) and
+//! MULTILEADER entities (older files get LEADER + MTEXT).
 
 use std::collections::HashMap;
 
