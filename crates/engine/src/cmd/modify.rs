@@ -353,7 +353,7 @@ fn run_mirror(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let a = point_req("mirror", p, "p1")?;
     let b = point_req("mirror", p, "p2")?;
-    if a.near(b, 1e-12) {
+    if a.near(b, cadaddy_geom::EPS) {
         return Err(bad("mirror", "mirror line points coincide"));
     }
     let erase_src = bool_or(p, "erase", false);
@@ -2619,7 +2619,7 @@ impl Interactive for SelectThen {
                 Ok(Step::Done)
             }
             (Op::Mirror, 1, Input::Point(p)) => {
-                if p.near(self.pts[0], 1e-12) {
+                if p.near(self.pts[0], cadaddy_geom::EPS) {
                     return Err(EngineError::Other("Mirror line points must differ.".into()));
                 }
                 self.pts.push(p);
