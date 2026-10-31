@@ -1125,6 +1125,48 @@ pub(crate) fn circuit_beside(circuits: &[&cadaddy_mepfix::sheet_facts::TextItem]
         .map_or_else(String::new, |t| t.value.trim().to_string())
 }
 
+/// The circuit printed with a device tagged `tag` whose symbol is at `at` (its tag printed at
+/// `tag_at`, when the import kept it). A tag and its circuit are printed as a pair, the circuit
+/// under the tag (`L4` over `A-2`), and the symbol may sit nearer another device's pair; so the
+/// circuit stacked under the device's own tag comes first (one that reads like a sheet number
+/// too), else the circuit text nearest the symbol.
+pub(crate) fn circuit_of(
+    texts: &[cadaddy_mepfix::sheet_facts::TextItem],
+    circuits: &[&cadaddy_mepfix::sheet_facts::TextItem],
+    tag: &str,
+    tag_at: Option<(cadaddy_geom::Vec2, f64)>,
+    at: cadaddy_geom::Vec2,
+) -> String {
+    let sized = |t: &&cadaddy_mepfix::sheet_facts::TextItem| t.height.is_finite() && t.height > 0.0;
+    // Where its tag is printed: given (the symbol's TAG attribute), else its text beside it.
+    let own = tag_at.or_else(|| {
+        texts
+            .iter()
+            .filter(sized)
+            .filter(|t| t.value.trim() == tag && t.at.dist(at) <= TAG_REACH_H * t.height)
+            .min_by(|a, b| a.at.dist(at).total_cmp(&b.at.dist(at)))
+            .map(|t| (t.at, t.height))
+    });
+    if let Some((t, h)) = own {
+        let under = texts
+            .iter()
+            .filter(sized)
+            .filter(|c| (c.at.x - t.x).abs() <= STACK_DX_H * h && t.y - c.at.y > 0.3 * h && t.y - c.at.y <= STACK_DY_H * h)
+            .filter(|c| cadaddy_mepfix::sheet_facts::is_circuit_label(&c.value))
+            .min_by(|a, b| (t.y - a.at.y).total_cmp(&(t.y - b.at.y)));
+        if let Some(c) = under {
+            return c.value.trim().to_string();
+        }
+    }
+    circuit_beside(circuits, at)
+}
+
+/// How far from its symbol a device's tag text is looked for, in text heights.
+const TAG_REACH_H: f64 = 10.0;
+/// A circuit stacked under a tag: this far to either side of it and this far down, in its heights.
+const STACK_DX_H: f64 = 1.5;
+const STACK_DY_H: f64 = 2.5;
+
 /// A device read off a sheet, to put in the model: its type mark, where its symbol is drawn
 /// (drawing units), the sheet and the sheet's level, and its circuit when one is printed
 /// beside it.

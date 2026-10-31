@@ -2157,14 +2157,21 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
     };
     let groups = spans.len() + 1;
     let mut texts: Vec<Vec<TextItem>> = vec![Vec::new(); groups];
-    let mut symbols: Vec<Vec<(String, cadaddy_geom::Vec2, cadaddy_doc::Handle)>> = vec![Vec::new(); groups];
+    // Each symbol: its tag, where it is, its handle, and where its tag is printed (and how tall).
+    type Symbol = (String, cadaddy_geom::Vec2, cadaddy_doc::Handle, Option<(cadaddy_geom::Vec2, f64)>);
+    let mut symbols: Vec<Vec<Symbol>> = vec![Vec::new(); groups];
     for e in store.iter() {
         let g = group_of(e.handle.0);
         match &e.kind {
             cadaddy_doc::EntityKind::Insert(ins) if ins.block.starts_with("PDF-SYM-") => {
-                let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
+                let attr = ins.attribs.iter().find(|a| a.tag == "TAG");
+                let tag = attr.map(|a| a.text.value.trim().to_string()).unwrap_or_default();
+                // A tag at the origin is an import that didn't keep where it was printed.
+                let tag_at = attr
+                    .map(|a| (a.text.insert.xy(), a.text.height))
+                    .filter(|(p, h)| p.x.is_finite() && p.y.is_finite() && (p.x != 0.0 || p.y != 0.0) && h.is_finite() && *h > 0.0);
                 if let Some(v) = symbols.get_mut(g) {
-                    v.push((tag, ins.insert.xy(), e.handle));
+                    v.push((tag, ins.insert.xy(), e.handle, tag_at));
                 }
             }
             cadaddy_doc::EntityKind::Text(t) => {
@@ -2178,6 +2185,18 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                 }
             }
             _ => {}
+        }
+    }
+    // A circuit the import took for a symbol's tag ("A-2" by a stair's lines) is still the circuit
+    // printed there: back among its sheet's texts, where it was printed, for the device it is under.
+    for (g, syms) in symbols.iter().enumerate() {
+        for (tag, _, _, tag_at) in syms {
+            if let (Some((at, h)), Some(v)) = (tag_at, texts.get_mut(g))
+                && v.len() < MAX_SHEET_TEXTS
+                && sheet_facts::is_circuit_label(tag)
+            {
+                v.push(TextItem { value: tag.clone(), at: *at, height: *h, rotation: 0.0 });
+            }
         }
     }
     // Sheet numbers: the set's, and each loaded sheet's own title block.
@@ -2217,7 +2236,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
         let circuits: Vec<&TextItem> = texts.get(g).into_iter().flatten().filter(|t| circuit_text(&t.value, &sheet_numbers)).collect();
         let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
         let span = spans.get(g).map_or((0, u64::MAX), |sp| (sp.lo, sp.hi));
-        for (tag, at, h) in syms {
+        for (tag, at, h, tag_at) in syms {
             if legend.covers(*at) {
                 c.legend_samples += 1;
             } else if tag.is_empty() {
@@ -2239,7 +2258,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                             at: [at.x, at.y],
                             sheet: sheet.clone(),
                             level: job.level_at([at.x, at.y]).map_or_else(String::new, |r| r.level.clone()),
-                            circuit: super::readers::circuit_beside(&circuits, *at),
+                            circuit: super::readers::circuit_of(texts.get(g).map_or(&[][..], Vec::as_slice), &circuits, tag, *tag_at, *at),
                             handle: h.hex(),
                             kind: String::new(),
                         });
@@ -8872,6 +8891,24 @@ mod tests {
         let bom = s.execute("bim.bom", &json!({})).unwrap_or_else(|e| panic!("{e}"));
         let units: f64 = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").filter_map(|l| l["net"].as_f64()).sum();
         assert_eq!(units, 5.0, "{:#}", bom["lines"]);
+    }
+
+    #[test]
+    fn a_device_takes_the_circuit_stacked_under_its_own_tag() {
+        use cadaddy_geom::Vec2;
+        use cadaddy_mepfix::sheet_facts::TextItem;
+        let text = |v: &str, x: f64, y: f64| TextItem { value: v.into(), at: Vec2::new(x, y), height: 1.0, rotation: 0.0 };
+        // Another device's pair above the symbol, this one's tag and circuit below it.
+        let texts = vec![text("A", 0.0, 4.0), text("A-3,e", 0.0, 2.6), text("L4", 1.0, -2.0), text("A-2", 1.0, -3.4)];
+        let circuits: Vec<&TextItem> = texts.iter().filter(|t| circuit_text(&t.value, &BTreeSet::new())).collect();
+        let symbol = Vec2::new(1.5, 0.8);
+        assert_eq!(super::super::readers::circuit_of(&texts, &circuits, "L4", None, symbol), "A-2");
+        // The import keeps the tag on the symbol, where it was printed.
+        let kept: Vec<TextItem> = texts.iter().filter(|t| t.value != "L4").cloned().collect();
+        let circuits: Vec<&TextItem> = kept.iter().filter(|t| circuit_text(&t.value, &BTreeSet::new())).collect();
+        assert_eq!(super::super::readers::circuit_of(&kept, &circuits, "L4", Some((Vec2::new(1.0, -2.0), 1.0)), symbol), "A-2");
+        // No tag text found: the circuit nearest the symbol.
+        assert_eq!(super::super::readers::circuit_of(&kept, &circuits, "L4", None, symbol), "A-3,e");
     }
 
     #[test]

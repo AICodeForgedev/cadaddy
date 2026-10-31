@@ -3645,6 +3645,9 @@ struct SymbolInstance {
     /// Nearby text (potential attribute tag).
     nearby_text: Option<String>,
     nearby_text_idx: Option<usize>,
+    /// Where the tag is printed (page coordinates) and its height (points): the TAG attribute
+    /// goes there, so the tag stays where it was read and the circuit printed under it pairs.
+    nearby_text_at: Option<((f64, f64), f64)>,
     /// The tag is lettering the OCR read from strokes: its index in the recovered texts.
     ocr_idx: Option<usize>,
     /// The device-type tag from nearby hidden text (e.g. "A", "G", "OS").
@@ -3888,6 +3891,7 @@ fn find_symbol_instances(
             fill_indices: cluster_fills,
             nearby_text: Some(v.to_string()),
             nearby_text_idx: t.text_idx,
+            nearby_text_at: (t.at.0.is_finite() && t.at.1.is_finite() && t.height.is_finite() && t.height > 0.0).then_some((t.at, t.height)),
             ocr_idx: t.ocr_idx,
             device_type: if dev_type.is_empty() { None } else { Some(dev_type) },
         });
@@ -5043,12 +5047,17 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 place(if mode == LayerMode::Content { "symbol" } else { "line" }, Pen { rgb: [0, 0, 0], lw: 0, transp: 0 }, &None);
             let mut attribs = Vec::new();
             if let Some(tag) = &inst.nearby_text {
+                // Where the tag was printed (an attribute's place is in the drawing's coordinates).
+                let (at, height) = match inst.nearby_text_at {
+                    Some(((x, y), h)) => (sp(x, y), h / 72.0 * k),
+                    None => (Vec2::new(0.0, 0.0), 2.5 / 72.0 * k),
+                };
                 attribs.push(Attrib {
                     tag: "TAG".into(),
                     text: Text {
-                        insert: Vec3::new(0.0, 0.0, 0.0),
+                        insert: Vec3::new(at.x, at.y, 0.0),
                         align_pt: None,
-                        height: 2.5 / 72.0 * k,
+                        height,
                         value: tag.clone(),
                         rotation: 0.0,
                         width_factor: 1.0,

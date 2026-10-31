@@ -47,7 +47,7 @@ const SET_MAX: usize = 100_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(GET, "Element Properties (BIM)", run_get)
-            .params("{handle? | handles?: [string] (default: the selection)} → {elements: [{handle, kind, props: {key: {value, unit?, source: {kind: print|legend|schedule|spec|note|rule|default|user|computed, doc?, at?}, confidence?, note?, stored}}, order: [key], standard: [key], missing: [key]}]}")
+            .params("{handle? | handles?: [string] (default: the selection)} → {elements: [{handle, kind, props: {key: {value, unit?, source: {kind: print|legend|schedule|spec|submittal|note|rule|default|user|computed, doc?, at?}, confidence?, note?, stored}}, order: [key], standard: [key], missing: [key]}]}")
             .noundo(),
         CommandSpec::new(SET, "Set Element Property (BIM)", run_set)
             .params("{handle? | handles? | filter?: {kind?, where?: {key: value | \"exists\" | \"missing\"}} (default: the selection), key?: string, value?: string | number | bool | null (null clears), unit?, note?, props?: {key: value} (several at once; with or instead of key)} → {set, elements: [{handle, kind, override?}], skipped}: source user; kept through rebuilds"),
