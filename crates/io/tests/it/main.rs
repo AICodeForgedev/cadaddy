@@ -54,6 +54,7 @@ mod plot_layout_scale;
 mod plot_model_png_scale;
 mod plot_styles;
 mod region_roundtrip;
+mod roundtrip;
 mod roundtrip_audit;
 mod skipped_records;
 mod sortents;
