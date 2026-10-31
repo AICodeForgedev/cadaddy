@@ -218,6 +218,8 @@ pub struct PlotWords {
     pub dir: Vec2,
     pub height: f64,
     pub prim: u32,
+    /// How far the drawn lettering runs along the baseline (a plot's hidden text spans it).
+    pub width: f64,
 }
 
 impl PlotText {
@@ -562,11 +564,17 @@ impl Builder<'_> {
     /// Shaped text: strokes as polylines; TrueType glyphs filled (TEXTFILL) or outlined.
     /// Plots: note a text drawn as strokes from primitive `at` on (see [`DisplayList::words`]).
     fn words(&mut self, ctx: &Ctx, at: usize, text: &str, rotation: f64, height: f64) {
-        if !self.plotting || text.trim().is_empty() || self.list.prims.len() <= at || self.list.words.len() >= 100_000 {
+        let end = self.list.prims.len();
+        self.words_of(ctx, at, end, text, rotation, height);
+    }
+
+    /// [`Self::words`] for the primitives `at..end`.
+    fn words_of(&mut self, ctx: &Ctx, at: usize, end: usize, text: &str, rotation: f64, height: f64) {
+        if !self.plotting || text.trim().is_empty() || end <= at || self.list.prims.len() < end || self.list.words.len() >= 100_000 {
             return;
         }
         let b =
-            self.list.prims.get(at..).map_or(Bounds2::EMPTY, |ps| {
+            self.list.prims.get(at..end).map_or(Bounds2::EMPTY, |ps| {
                 ps.iter().fold(Bounds2::EMPTY, |b, p| b.union(&Bounds2::from_points(self.list.points(p).iter().copied())))
             });
         let dir = ctx.xf.apply_vec(Vec2::from_angle(rotation));
@@ -575,8 +583,56 @@ impl Builder<'_> {
         let dir = dir * (1.0 / len);
         // Upright text starts at the lower left of what was drawn; turned text at its corner on
         // the baseline side.
-        let origin = if dir.y.abs() < 1e-9 && dir.x > 0.0 { b.min } else { b.center() - dir * (b.width().max(b.height()) / 2.0) };
-        self.list.words.push(PlotWords { text: text.chars().take(1000).collect(), origin, dir, height: height * len, prim });
+        let upright = dir.y.abs() < 1e-9 && dir.x > 0.0;
+        let origin = if upright { b.min } else { b.center() - dir * (b.width().max(b.height()) / 2.0) };
+        let width = if upright { b.width() } else { b.width().max(b.height()) };
+        self.list.words.push(PlotWords { text: text.chars().take(1000).collect(), origin, dir, height: height * len, prim, width });
+    }
+
+    /// Several lines of text drawn from primitive `at` on: a word per line when the strokes fall
+    /// in as many bands across the baseline as there are lines (a plot's hidden text then sits on
+    /// each line, not all of it on the last); else one word for all of it.
+    fn line_words(&mut self, ctx: &Ctx, at: usize, lines: &[String], rotation: f64, height: f64) {
+        let all = lines.join(" ");
+        let end = self.list.prims.len();
+        let dir = ctx.xf.apply_vec(Vec2::from_angle(rotation));
+        let len = dir.len();
+        if lines.len() < 2 || end <= at || len.is_nan() || len <= 1e-12 {
+            self.words(ctx, at, &all, rotation, height);
+            return;
+        }
+        let up = Vec2::new(-dir.y, dir.x) * (1.0 / len);
+        // Each primitive's span across the baseline, top first; a gap of a third of the text's
+        // height between spans starts a new band.
+        let mut spans: Vec<(usize, f64, f64)> = (at..end)
+            .filter_map(|i| {
+                let pts = self.list.prims.get(i).map(|p| self.list.points(p).to_vec())?;
+                let (lo, hi) = pts.iter().map(|q| up.dot(*q)).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+                (lo.is_finite() && hi.is_finite()).then_some((i, lo, hi))
+            })
+            .collect();
+        spans.sort_by(|a, b| b.2.total_cmp(&a.2));
+        let gap = height * len / 3.0;
+        let mut bands: Vec<(f64, Vec<usize>)> = Vec::new();
+        for (i, lo, hi) in spans {
+            match bands.last_mut() {
+                Some((band_lo, members)) if hi >= *band_lo - gap => {
+                    *band_lo = band_lo.min(lo);
+                    members.push(i);
+                }
+                _ => bands.push((lo, vec![i])),
+            }
+        }
+        // Each band's primitives run in one stretch (text is drawn line by line).
+        let ranges: Vec<(usize, usize)> = bands.iter().filter_map(|(_, m)| Some((*m.iter().min()?, *m.iter().max()? + 1))).collect();
+        let contiguous = ranges.iter().zip(&bands).all(|((a, b), (_, m))| b - a == m.len());
+        if bands.len() != lines.len() || !contiguous {
+            self.words(ctx, at, &all, rotation, height);
+            return;
+        }
+        for ((a, b), line) in ranges.into_iter().zip(lines) {
+            self.words_of(ctx, a, b, line, rotation, height);
+        }
     }
 
     fn shaped(&mut self, ctx: &Ctx, color: Ink, lw: f32, sh: &cadaddy_fonts::Shaped) {
@@ -1521,8 +1577,12 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             // Drawn in a stroke font: no glyph of it became text.
             if b.list.texts.len() == glyphs {
                 // As it reads: formatting codes (\P, {\f…;}, stacking) gone, then %% codes.
-                let plain = cadaddy_fonts::plain_text(&cadaddy_fonts::plain_mtext(&t.contents)).split_whitespace().collect::<Vec<_>>().join(" ");
-                b.words(ctx, at, &plain, t.rotation, t.height);
+                let lines: Vec<String> = cadaddy_fonts::plain_text(&cadaddy_fonts::plain_mtext(&t.contents))
+                    .lines()
+                    .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                b.line_words(ctx, at, &lines, t.rotation, t.height);
             }
         }
         EntityKind::Insert(ins) => insert(b, ctx, e, ins, rgb, lw),

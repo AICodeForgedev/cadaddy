@@ -4166,7 +4166,22 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     bim_step(s, job, "room volumes built", t);
     let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
-        Ok(v) => result["props"] = v,
+        Ok(v) => {
+            // Boxes the partition legend gives no ring for: their wall's type is unknown.
+            let untyped = v.get("wall_boxes_untyped").and_then(Value::as_u64).unwrap_or(0);
+            if untyped > 0 {
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!("{untyped} wall boxes on walls of unknown build-up: no mud ring"),
+                    "No tag on the plans types their walls, and no tagged wall of the same thickness says what they are",
+                    2,
+                    vec!["Tag the walls (or check the partition legend's marks) so their boxes get rings".into()],
+                    None,
+                    false,
+                );
+            }
+            result["props"] = v;
+        }
         Err(e) => job.add_finding(
             StageName::BimBuild,
             &format!("The elements' properties could not be filled: {e}"),

@@ -649,6 +649,8 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     let room_level = |label: &str| rooms3.iter().find(|r| room_label(r.number.as_deref(), &r.name).eq_ignore_ascii_case(label));
     let mut filled: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut changes: Vec<(Handle, Props)> = Vec::new();
+    // Wall boxes on walls of no known build-up (the spec has wall types with build-ups).
+    let mut untyped_boxes = 0usize;
     for (h, kind) in &work {
         let Some(e) = d.model.get(*h) else { continue };
         let mut store = props::read(&e.common.xdata);
@@ -679,6 +681,10 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                     let in_wall = (z0 - level_z) / upf < WALL_BOX_FT;
                     let wall_type =
                         d.model.get(*wh).and_then(|w| made(w, "type")).and_then(|t| sp.wall_types.iter().find(|x| x.name.eq_ignore_ascii_case(&t)));
+                    // A box in a wall whose build-up nothing says: no ring can be given.
+                    if in_wall && sp.wall_types.iter().any(|t| t.assembly.is_some()) && wall_type.and_then(|wt| wt.assembly.as_ref()).is_none() {
+                        untyped_boxes += 1;
+                    }
                     if in_wall && let Some(wt) = wall_type {
                         let room = room_at(&rooms, lvl, c).map_or("", |r| r.label.as_str());
                         if let Some((depth, words, note)) = super::walltypes::box_face(wt, room) {
@@ -919,7 +925,7 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     if changed > 0 {
         s.touch();
     }
-    Ok(json!({ "filled": filled, "elements": changed, "spec": stored }))
+    Ok(json!({ "filled": filled, "elements": changed, "spec": stored, "wall_boxes_untyped": untyped_boxes }))
 }
 
 /// The sheet a plan point lies on (the set's sheet rectangles), else the level's name.
