@@ -65,8 +65,7 @@ mainstream and essentials numbers use multiplicative discounts.
 ## Mainstream practitioner
 
 The typical AutoCAD professional is a 2D drafter or detailer: draw, modify, dimension, use
-blocks, manage layers, plot sheets, and exchange DWGs with colleagues, every week. Excluded per
-the standard: 3D, AutoLISP and plug-ins, cloud/AI (Autodesk Assistant, Smart Blocks, Traces,
+blocks, manage layers, plot sheets, and exchange DWGs with colleagues, every week. Excluded: 3D, AutoLISP and plug-ins, cloud/AI (Autodesk Assistant, Smart Blocks, Traces,
 Share), Sheet Set Manager administration, specialist hardware, languages other than English.
 
 | Area (weekly use) | Weight | Depth | Weighted |
