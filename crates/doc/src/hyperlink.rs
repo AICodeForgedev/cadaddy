@@ -238,7 +238,12 @@ pub fn follow_check(url: &str) -> Follow {
         (url.to_string(), false)
     };
     // No fragment; every `%xx` decoded (the system decodes them too: `setup%2Eexe` runs `setup.exe`).
-    let path = percent_decode(path.split('#').next().unwrap_or_default());
+    let Some(path) = percent_decode(path.split('#').next().unwrap_or_default()) else {
+        return Follow::Refuse("the link's name holds bytes that aren't valid text".into());
+    };
+    if path.chars().any(char::is_control) {
+        return Follow::Refuse("the link holds control characters".into());
+    }
     // A file on another computer (`\\server\share\x`, `//server/x`, `file://server/x`): opening it
     // connects to that computer, which on Windows sends it your sign-in.
     if let Some(host) = network_host(&path, url_form) {
@@ -255,9 +260,9 @@ pub fn follow_check(url: &str) -> Follow {
     Follow::Open
 }
 
-/// `text` with each `%xx` escape decoded (invalid escapes kept as they are; bytes that don't make
-/// UTF-8 become U+FFFD).
-fn percent_decode(text: &str) -> String {
+/// `text` with each `%xx` escape decoded (invalid escapes kept as they are); `None` when the
+/// decoded bytes aren't UTF-8.
+fn percent_decode(text: &str) -> Option<String> {
     let b = text.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -274,7 +279,7 @@ fn percent_decode(text: &str) -> String {
             }
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    String::from_utf8(out).ok()
 }
 
 /// The other computer a decoded file path or `file:` URL body (`url_form`: what followed
@@ -383,7 +388,13 @@ mod tests {
         for ok in [r"\\.\D:\b.pdf", r"\\?\c:"] {
             assert_eq!(follow_check(ok), Follow::Open, "{ok}");
         }
-        assert_eq!(percent_decode("a%2Eb%zz%4"), "a.b%zz%4");
+        assert_eq!(percent_decode("a%2Eb%zz%4").as_deref(), Some("a.b%zz%4"));
+        assert_eq!(percent_decode("a%FF"), None);
+        for ask in
+            ["file:///C:/T/setup%2Eexe", "file:///C:/T/setup%2eEXE", r"C:\T\setup.exe.", r"C:\T\setup.exe%20", r"C:\T\setup.exe::$DATA", "run.sh."]
+        {
+            assert!(matches!(follow_check(ask), Follow::Ask(_)), "{ask}");
+        }
         for no in [
             "javascript:alert(1)",
             "data:text/html,<b>x</b>",
@@ -392,6 +403,9 @@ mod tests {
             "ms-settings:privacy",
             "ftp://x/y",
             "https://x/\u{7}y",
+            "file:///C:/T/a%00.exe",
+            "file:///C:/T/a%0d%0a.pdf",
+            "file:///C:/T/a%FF.exe",
         ] {
             assert!(matches!(follow_check(no), Follow::Refuse(_)), "{no}");
         }

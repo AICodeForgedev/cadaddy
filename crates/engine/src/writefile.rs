@@ -44,6 +44,7 @@ mod tests {
         let e = super::write("/etc/cadaddy-test.dwg", b"x").unwrap_err();
         assert!(e.to_string().contains("system folder"), "{e}");
         assert!(super::check(std::path::Path::new("C:\\Windows\\System32\\evil.dll")).is_err());
+        assert!(super::check(std::path::Path::new("/Users/x/../../etc/a.dwg")).is_err());
         assert!(super::check(&std::env::temp_dir().join("ok.dwg")).is_ok());
     }
 }
