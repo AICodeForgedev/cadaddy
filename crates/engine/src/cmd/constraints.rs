@@ -826,11 +826,18 @@ fn run_autoconstrain(s: &mut Session, p: &Value) -> Result<Value> {
         o.types = t.iter().filter_map(Value::as_str).map(|n| kind_from_name(n).map_or_else(|| n.to_string(), |k| k.name().to_string())).collect();
     }
     let mut d = s.doc()?.clone();
-    let ids = cs::autoconstrain(&mut d, &hs, &o);
+    let (ids, stats) = cs::autoconstrain_counted(&mut d, &hs, &o);
     if !ids.is_empty() {
         *s.doc_mut()? = d;
     }
-    Ok(json!({ "added": ids.len(), "ids": ids, "message": format!("{} constraint(s) applied to {} object(s)", ids.len(), hs.len()) }))
+    Ok(json!({
+        "added": ids.len(),
+        "ids": ids,
+        "candidates": stats.candidates,
+        "skippedImplied": stats.implied,
+        "solved": stats.solved,
+        "message": format!("{} constraint(s) applied to {} object(s)", ids.len(), hs.len())
+    }))
 }
 
 fn run_delconstraint(s: &mut Session, p: &Value) -> Result<Value> {
