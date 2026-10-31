@@ -110,6 +110,19 @@ Subfolders are replicated in the output when `recursive` is true. Parameters:
 cadaddy-cli convert "Project Files" "CADaddy Files" --to cdy --recurse
 ```
 
+The CLI does not go into subfolders unless you add `--recurse` (the `recursive: true` default above
+belongs to the `convert` command inside the app, not to `cadaddy-cli`).
+
+To look inside a `.cdy` file or check it:
+
+```sh
+cadaddy-cli info plan.cdy
+cadaddy-cli verify plan.cdy
+```
+
+`info` shows the file's chunk sizes and wasted space. `verify` checks every checksum, prints a JSON
+report and exits with status 1 when the file is damaged.
+
 The CLI processes files without opening a window. Single file:
 
 ```sh
