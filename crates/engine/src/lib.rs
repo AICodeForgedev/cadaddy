@@ -1411,6 +1411,9 @@ pub struct Session {
     pub drywall_layer_lines: Vec<([f64; 3], [f64; 3])>,
     /// The active project (Q325): its manifest, which drawing is open.
     pub project: Option<cmd::project::ProjectState>,
+    /// The settings folder holding the project registry and the company standards library
+    /// (`projects.json`, `standards.json`). `None`: the user's settings folder.
+    pub project_config: Option<std::path::PathBuf>,
     /// The open print-set project (Q310): classification, stages, dashboard.
     pub printset_project: Option<Box<cadaddy_mepfix::printset::PrintSetProject>>,
     /// The job's framing (Q5103), built from its sheets with the field points and shop drawings applied.
@@ -1541,6 +1544,7 @@ impl Session {
             printset_project: None,
             framing: None,
             printset_pointer: None,
+            project_config: None,
             rhai: rhai_engine::RhaiState::new(),
             #[cfg(not(target_arch = "wasm32"))]
             plugins: plugins::PluginHost::new(),
@@ -1813,6 +1817,8 @@ impl Session {
         if outer && r.is_ok() {
             self.journal.call(id, params);
         }
+        // A project-scoped answer names its project (print set, briefing, BIM job, review).
+        let r = r.map(|v| cmd::project_hub::tag_project(self, id, v));
         if rhai_watch {
             self.rhai_command_ended(id, rhai_before, r.is_ok());
         }

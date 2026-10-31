@@ -69,6 +69,7 @@ pub mod pointcloud;
 pub mod procure;
 pub mod progress;
 pub mod project;
+pub mod project_hub;
 pub mod propfill;
 pub mod propuse;
 mod rasterout;
@@ -890,6 +891,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(coordination::specs());
         v.extend(guided::specs());
         v.extend(project::specs());
+        v.extend(project_hub::specs());
         v.extend(rhai_cmd::specs());
         v.extend(plugins_cmd::specs());
         v.extend(rulemodel::specs());
