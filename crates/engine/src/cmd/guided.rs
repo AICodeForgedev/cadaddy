@@ -1732,8 +1732,13 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         let t = sh.get("title").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
         t.contains("REFLECTED CEILING") || t.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP")
     };
-    let mut plan_sheets: Vec<&Value> =
-        sheet_arr.iter().filter(current).filter(|sh| matches!(kind(sh).as_str(), "plan" | "enlarged_plan" | "rcp") || rcp_title(sh)).collect();
+    let legend_title = |sh: &Value| wall_legend_title(sh.get("title").and_then(Value::as_str).unwrap_or(""));
+    // And the partition (wall type) legend: how each wall the plans tag is built.
+    let mut plan_sheets: Vec<&Value> = sheet_arr
+        .iter()
+        .filter(current)
+        .filter(|sh| matches!(kind(sh).as_str(), "plan" | "enlarged_plan" | "rcp") || rcp_title(sh) || legend_title(sh))
+        .collect();
     // The index's level (a plan whose title names none was given one) over the page's own.
     let level_of = |sh: &Value| -> String {
         let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
@@ -1869,7 +1874,13 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                         level,
                         discipline: discipline.to_ascii_uppercase(),
                         // A ceiling plan (by its kind or its title) is read for its ceiling heights only.
-                        kind: if rcp_title(sh) { "rcp".to_string() } else { kind(sh) },
+                        kind: if rcp_title(sh) {
+                            "rcp".to_string()
+                        } else if legend_title(sh) {
+                            "legend".to_string()
+                        } else {
+                            kind(sh)
+                        },
                         rect,
                         area: None,
                         title_block: None,
@@ -3832,7 +3843,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // height of its own sits over the highest ceiling it passes under, and each
                 // diffuser is in its area's ceiling.
                 sp.circulation = circulation.clone();
-                let (areas, read) = rcp_ceiling_areas(s.doc()?, &sp);
+                let rcp_sheets: Vec<[f64; 4]> = job.sheet_regions.iter().filter(|r| r.kind == "rcp").map(|r| r.rect).collect();
+                let (areas, read) = rcp_ceiling_areas(s.doc()?, &sp, &rcp_sheets);
                 for line in &read {
                     progress_line(&format!("  RCP {line}"));
                 }
@@ -4054,6 +4066,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             progress_line(&format!("  storeys stacked by their shells' corners: {}", set.join(", ")));
             s.doc_mut()?.building_spec = Some(sp.to_json());
         }
+    }
+    // How every wall is built: the partition legend's types, the walls the plans' tags type.
+    if job.sheet_regions.iter().any(|r| r.kind == "legend")
+        && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+    {
+        for line in apply_wall_legend(s, &mut sp, job)? {
+            progress_line(&format!("  wall types {line}"));
+        }
+        s.doc_mut()?.building_spec = Some(sp.to_json());
     }
     // The stairs in the circulation's stair spaces, found from their treads on any layer: the
     // build makes their steps, landings and rails. Confirmed stairs stay.
@@ -4787,6 +4808,83 @@ fn stamp_typical_rooms(
     (out, report)
 }
 
+/// The wall tags of the typical-room plans (unit plans): each legend mark a typical-room view
+/// prints, put at the same place in every room of the type the view's title names (as the
+/// devices are stamped). By level (its digits): (mark, where on the level's plan).
+fn typical_wall_tags(d: &cadaddy_doc::Drawing, job: &GuidedJob, marks: &BTreeSet<String>) -> BTreeMap<String, Vec<(String, cadaddy_geom::Vec2)>> {
+    let mut out: BTreeMap<String, Vec<(String, cadaddy_geom::Vec2)>> = BTreeMap::new();
+    let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| r.get("other_trade").and_then(Value::as_bool) != Some(true))
+        .filter_map(|r| {
+            let name = r.get("name").and_then(Value::as_str)?.trim().to_string();
+            let level = r.get("level").and_then(Value::as_str).unwrap_or("").to_string();
+            let outline: Vec<cadaddy_geom::Vec2> = r
+                .get("outline")?
+                .as_array()?
+                .iter()
+                .filter_map(|q| Some(cadaddy_geom::Vec2::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?)))
+                .collect();
+            (outline.len() >= 3 && !name.is_empty()).then_some((name, level, outline))
+        })
+        .collect();
+    let mut count: BTreeMap<BTreeSet<String>, usize> = BTreeMap::new();
+    for (name, _, _) in &rooms {
+        *count.entry(type_words(name, None)).or_default() += 1;
+    }
+    let types: BTreeSet<BTreeSet<String>> = count.into_iter().filter(|(k, n)| *n > 1 && !k.is_empty()).map(|(k, _)| k).collect();
+    let vocabulary: BTreeSet<String> = types.iter().flatten().cloned().collect();
+    if types.is_empty() || marks.is_empty() {
+        return out;
+    }
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let refs = job_sheet_refs(job);
+    for sh in refs.iter().filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("A") && r.kind == "enlarged_plan").take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let views: Vec<([f64; 4], BTreeSet<String>)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
+            .into_iter()
+            .filter_map(|v| {
+                let upper = v.title.to_ascii_uppercase();
+                let plan = !["ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
+                let words = type_words(&v.title, Some(&vocabulary));
+                (plan && types.contains(&words)).then_some((v.region?, words))
+            })
+            .collect();
+        if views.is_empty() {
+            continue;
+        }
+        for t in texts.iter() {
+            let mark = t.value.trim().to_ascii_uppercase();
+            if !marks.contains(&mark) {
+                continue;
+            }
+            let p = [t.at.x, t.at.y];
+            let inside = |r: &[f64; 4]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
+            let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+            let Some((view, words)) = views.iter().filter(|(r, _)| inside(r)).min_by(|a, b| area(&a.0).total_cmp(&area(&b.0))) else {
+                continue;
+            };
+            for (_, level, outline) in rooms.iter().filter(|(n, _, _)| type_words(n, None) == *words) {
+                if let Some(q) = into_room(p, *view, bbox(outline)) {
+                    out.entry(key(level)).or_default().push((mark.clone(), cadaddy_geom::Vec2::new(q[0], q[1])));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// At most this many sheets are looked over for typical-room plans, and this many devices stamped.
 const MAX_STAMP_SHEETS: usize = 40;
 const MAX_STAMPED: usize = 20_000;
@@ -5268,7 +5366,11 @@ fn ceiling_height_tag(t: &str) -> Option<f64> {
 /// onto its level's floor plan by the room numbers both print (a typical floor's view by its
 /// numbers with that floor's digit), each height tag's area the floor around it on the level's
 /// floor grid (or the corridor, stair or hoistway it is on), at that height. And what was read.
-fn rcp_ceiling_areas(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> (Vec<cadaddy_walk3d::CeilingArea>, Vec<String>) {
+fn rcp_ceiling_areas(
+    d: &cadaddy_doc::Drawing,
+    sp: &cadaddy_walk3d::BuildingSpec,
+    sheets: &[[f64; 4]],
+) -> (Vec<cadaddy_walk3d::CeilingArea>, Vec<String>) {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let texts = cadaddy_mepfix::sheet_facts::texts(d);
     let views = cadaddy_mepfix::sheet_facts::view_titles(d, &texts);
@@ -5296,7 +5398,9 @@ fn rcp_ceiling_areas(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec
     for (vi, v) in rcp_views.iter().enumerate() {
         let Some(region) = v.region else { continue };
         let levels = cadaddy_mepfix::sheet_reader::detect_levels(&v.title);
-        let mine_only = |p: [f64; 2]| inside(&region, p) && owner(p).is_none_or(|o| o == vi);
+        // On the ceiling plan's own sheet (a view's block can take in the sheets laid beside it).
+        let on_sheet = |p: [f64; 2]| sheets.is_empty() || sheets.iter().any(|r| inside(r, p));
+        let mine_only = |p: [f64; 2]| inside(&region, p) && on_sheet(p) && owner(p).is_none_or(|o| o == vi);
         let tags: Vec<(String, [f64; 2])> = numbers.iter().filter(|(_, at)| mine_only(*at)).cloned().collect();
         let heights: Vec<([f64; 2], f64)> =
             texts.iter().filter(|x| mine_only([x.at.x, x.at.y])).filter_map(|x| Some(([x.at.x, x.at.y], ceiling_height_tag(&x.value)?))).collect();
@@ -5427,6 +5531,101 @@ fn outside_shell(shells: &[(String, Vec<[cadaddy_geom::Vec2; 2]>)], level: &str,
         })
 }
 
+/// A sheet title naming a wall type (partition) legend: `WALL AND FLOOR TYPES`, `PARTITION TYPES`.
+fn wall_legend_title(title: &str) -> bool {
+    let t = title.to_ascii_uppercase();
+    t.contains("PARTITION") || (t.contains("WALL") && t.contains("TYPE"))
+}
+
+/// The partition legend sheets' wall types into the spec, and the walls each level's plan tags
+/// type with them (a tag that is a legend mark types the wall nearest it and the walls on its
+/// line): how every wall is built, so a box on it gets its mud ring. What was read.
+fn apply_wall_legend(s: &Session, sp: &mut cadaddy_walk3d::BuildingSpec, job: &GuidedJob) -> Result<Vec<String>> {
+    let d = s.doc()?;
+    let mut report = Vec::new();
+    let mut types: Vec<cadaddy_walk3d::WallType> = Vec::new();
+    for r in job.sheet_regions.iter().filter(|r| r.kind == "legend") {
+        let lg = super::walltypes::read_legend(d, Some(r.rect), &r.number);
+        report.push(format!(
+            "{}: {} wall types{}",
+            r.number,
+            lg.types.len(),
+            if lg.report.is_empty() { String::new() } else { format!(" ({})", lg.report.join("; ")) }
+        ));
+        for t in lg.types {
+            if !types.iter().any(|x| x.name.eq_ignore_ascii_case(&t.name)) {
+                types.push(t);
+            }
+        }
+    }
+    // A type the spec refuses (a layer it can't hold) is left out and said: one legend entry
+    // never stops the build.
+    let refused: Vec<String> = types
+        .iter()
+        .filter(|t| {
+            let alone = cadaddy_walk3d::BuildingSpec { wall_types: vec![(*t).clone()], ..Default::default() };
+            alone.check().iter().any(|i| i.error)
+        })
+        .map(|t| t.name.clone())
+        .collect();
+    if !refused.is_empty() {
+        report.push(format!("not used (the spec can't hold them): {}", refused.join(", ")));
+        types.retain(|t| !refused.contains(&t.name));
+    }
+    if types.is_empty() {
+        return Ok(report);
+    }
+    sp.wall_types.retain(|w| !types.iter().any(|t| t.name.eq_ignore_ascii_case(&w.name)));
+    sp.wall_types.extend(types.iter().cloned());
+    let marks: BTreeSet<String> = types.iter().map(|t| t.name.to_ascii_uppercase()).collect();
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let texts = cadaddy_mepfix::sheet_facts::texts(d);
+    let inside =
+        |r: &[f64; 4], p: cadaddy_geom::Vec2| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]);
+    let levels: Vec<(String, [f64; 4])> = sp
+        .levels
+        .iter()
+        .filter(|l| l.sheet.is_none() && !super::wallgen::roof_level(&sp.levels, &l.name))
+        .filter_map(|l| Some((l.name.clone(), l.region?)))
+        .collect();
+    // The unit plans' tags, put into every room of their type.
+    let stamped = typical_wall_tags(d, job, &marks);
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let mut typed = Vec::new();
+    for (level, region) in levels {
+        let mut tags: Vec<(String, cadaddy_geom::Vec2)> = texts
+            .iter()
+            .filter(|t| inside(&region, t.at))
+            .filter_map(|t| {
+                let v = t.value.trim().to_ascii_uppercase();
+                marks.contains(&v).then_some((v, t.at))
+            })
+            .collect();
+        let own = tags.len();
+        tags.extend(stamped.get(&digits(&level)).into_iter().flatten().cloned());
+        if tags.is_empty() {
+            continue;
+        }
+        let walls = super::wallgen::planned_walls(d, sp, &level);
+        let sheet = job
+            .sheet_regions
+            .iter()
+            .find(|r| r.kind == "plan" && r.rect.iter().zip(region).all(|(a, b)| (a - b).abs() < 1e-6 * upf.max(1.0)))
+            .map_or_else(|| format!("{level} plan"), |r| r.number.clone());
+        let (new, lost) = super::walltypes::plan_marks(&tags, &walls, &level, upf, &sheet);
+        typed.push(format!(
+            "{level} {} walls from {own} plan tags + {} unit-plan tags{}",
+            new.len(),
+            tags.len() - own,
+            if lost > 0 { format!(" ({lost} tags near no wall)") } else { String::new() }
+        ));
+        sp.walls.retain(|m| !(m.level.eq_ignore_ascii_case(&level) && m.status() == cadaddy_walk3d::MarkStatus::Drawing));
+        sp.walls.extend(new);
+    }
+    report.push(format!("walls typed by the plans' tags: {}", if typed.is_empty() { "none".to_string() } else { typed.join(", ") }));
+    Ok(report)
+}
+
 /// How far inside a hoistway's walls (feet) a run must pass to go through it: one along the
 /// face of its wall runs beside it.
 const HOISTWAY_CLEAR_FT: f64 = 0.25;
@@ -5491,7 +5690,7 @@ pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[
         // A ceiling plan or a sheet of details is no level's plan: the sheets are registered onto
         // the floor plans without it (it prints every room's number, and its level took it for
         // its reference); the ceilings stage registers it itself.
-        if !r.rect.iter().all(|v| v.is_finite()) || matches!(r.kind.as_str(), "rcp" | "detail") {
+        if !r.rect.iter().all(|v| v.is_finite()) || matches!(r.kind.as_str(), "rcp" | "detail" | "legend") {
             continue;
         }
         let level = Some(r.level.trim()).filter(|l| super::printmep::building_level(l)).map(level_name);

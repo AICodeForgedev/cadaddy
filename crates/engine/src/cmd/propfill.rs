@@ -45,6 +45,9 @@ const DOOR_TAG_FT: f64 = 3.0;
 const CFM_TAG_FT: f64 = 4.0;
 /// How far from a wall a device may stand and still be on it, feet.
 const HOST_WALL_FT: f64 = 1.5;
+/// A device whose box starts below this height (feet off its floor) is in the wall, not the
+/// ceiling: its box gets a plaster ring.
+const WALL_BOX_FT: f64 = 7.0;
 /// How far beyond a wall's face the rooms on its sides are looked for, feet.
 const SIDE_FT: f64 = 1.0;
 
@@ -671,6 +674,27 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                     .min_by(|a, b| a.1.total_cmp(&b.1));
                 if let Some((wh, _)) = host {
                     put(&mut store, "host_wall", Prop::new(wh.hex(), Source::computed()).with_note("the nearest wall of its level"), tally);
+                    // A box in the wall (below 7' off the floor): the finish on its face, from the
+                    // wall's type (the legend's layers), and the plaster ring that reaches it.
+                    let in_wall = (z0 - level_z) / upf < WALL_BOX_FT;
+                    let wall_type =
+                        d.model.get(*wh).and_then(|w| made(w, "type")).and_then(|t| sp.wall_types.iter().find(|x| x.name.eq_ignore_ascii_case(&t)));
+                    if in_wall && let Some(wt) = wall_type {
+                        let room = room_at(&rooms, lvl, c).map_or("", |r| r.label.as_str());
+                        if let Some((depth, words, note)) = super::walltypes::box_face(wt, room) {
+                            let src = Source::from_doc(SourceKind::Spec, &format!("wall type {}", wt.name));
+                            put(&mut store, "wall_type", Prop::new(wt.name.clone(), src.clone()), tally);
+                            put(&mut store, "wall_finish", Prop::new(words, src.clone()).with_note("board and channels on the box's face"), tally);
+                            if let Some(ring) = super::walltypes::ring_for(depth) {
+                                let mut p = Prop::new(round2(ring), src).with_unit("in");
+                                p = match note {
+                                    Some(n) => p.with_note(&n),
+                                    None => p.with_note(&format!("reaches {} of finish", super::walltypes::frac(depth))),
+                                };
+                                put(&mut store, "mud_ring", p, tally);
+                            }
+                        }
+                    }
                 }
                 // The panel it is fed from, as an element, and its breaker on the panel's schedule.
                 let panel = store.get("panel").filter(|p| p.has_value()).map(Prop::text);

@@ -64,6 +64,9 @@ fn run_legend(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"types": types, "report": lg.report, "applied": applied}))
 }
 
+/// A stud row's depth when neither the schedule nor its callout gives one, inches.
+const DEFAULT_STUD_IN: f64 = 3.5;
+
 /// Most texts and leader segments looked at (hostile drawings).
 const MAX_TEXTS: usize = 50_000;
 const MAX_SEGS: usize = 200_000;
@@ -646,8 +649,11 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str) ->
                     // The core between the faces, at the schedule's depth(s) (else the callout's
                     // lumber size).
                     for c in &core {
+                        // (Cavity insulation fills the deepest stud row: a layer is never 0"
+                        // thick. A stud row the schedule and callout give no depth: 3 1/2".)
+                        let stud = r.depths.iter().copied().filter(|d| *d > 0.0).fold(0.0, f64::max);
                         let depths: Vec<f64> = if c.category == "insulation" {
-                            vec![0.0]
+                            vec![if stud > 0.0 { stud } else { DEFAULT_STUD_IN }]
                         } else if !r.depths.is_empty() {
                             r.depths.clone()
                         } else {
@@ -655,9 +661,10 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str) ->
                         };
                         for dp in depths {
                             let mut l = c.clone();
-                            l.thickness_in = dp;
-                            if c.category != "insulation" && dp > 0.0 {
-                                l.material = format!("{} {}", frac(dp), c.material);
+                            let given = dp.is_finite() && dp > 0.0;
+                            l.thickness_in = if given { dp } else { DEFAULT_STUD_IN };
+                            if c.category != "insulation" {
+                                l.material = format!("{} {}{}", frac(l.thickness_in), c.material, if given { "" } else { " (depth not given)" });
                             }
                             layers.push(l);
                         }
@@ -715,6 +722,152 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str) ->
         }
     }
     out
+}
+
+/// How far from a wall (feet) its tag may stand: beside it, or at the end of a short leader.
+const TAG_REACH_FT: f64 = 4.0;
+/// A gap along a wall's line (feet) that a tagged wall carries on across: a door's width.
+const RUN_GAP_FT: f64 = 4.0;
+/// Most walls one tag types (a wall line round a corridor's doors).
+const MAX_RUN: usize = 400;
+
+/// Distance from `p` to the segment `a`–`b`.
+fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+    let d = b - a;
+    let l2 = d.dot(d);
+    let t = if l2 > 1e-18 { ((p - a).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    p.dist(a + d * t)
+}
+
+/// Whether wall `w` carries on the line of wall `v`: parallel, on its centreline (within half
+/// its thickness, 2" at least), as thick (within 1"), and starting within a door's width of it.
+fn in_line(v: &(Vec2, Vec2, f64), w: &(Vec2, Vec2, f64), upf: f64) -> bool {
+    let (va, vb, vt) = *v;
+    let (wa, wb, wt) = *w;
+    let (lv, lw) = (va.dist(vb), wa.dist(wb));
+    if lv <= 1e-9 || lw <= 1e-9 || (vt - wt).abs() > upf / 12.0 {
+        return false;
+    }
+    let (u, uw) = ((vb - va) * (1.0 / lv), (wb - wa) * (1.0 / lw));
+    if u.cross(uw).abs() > 0.035 {
+        return false;
+    }
+    let off = |p: Vec2| u.perp().dot(p - va).abs();
+    if off(wa).max(off(wb)) > (vt / 2.0).max(2.0 * upf / 12.0) {
+        return false;
+    }
+    let (s0, s1) = (u.dot(wa - va), u.dot(wb - va));
+    let gap = if s1.max(s0) < 0.0 {
+        -s1.max(s0)
+    } else if s0.min(s1) > lv {
+        s0.min(s1) - lv
+    } else {
+        0.0
+    };
+    gap <= RUN_GAP_FT * upf
+}
+
+/// The wall marks a level's plan tags give: each tag that is a legend mark types the planned wall
+/// nearest it (within [`TAG_REACH_FT`]) and the walls carrying on its line (across door
+/// openings); a wall two tags reach takes the nearer tag's. `tags`: (mark, where); `walls`: the
+/// level's planned walls (centreline ends, thickness). The marks, and the tags no wall was near.
+pub(crate) fn plan_marks(
+    tags: &[(String, Vec2)],
+    walls: &[(Vec2, Vec2, f64)],
+    level: &str,
+    upf: f64,
+    source: &str,
+) -> (Vec<cadaddy_walk3d::WallMark>, usize) {
+    // Each wall's mark and how far its tag was.
+    let mut typed: Vec<Option<(String, f64)>> = vec![None; walls.len()];
+    let mut lost = 0usize;
+    for (mark, p) in tags {
+        let Some((i, dist)) = walls
+            .iter()
+            .enumerate()
+            .map(|(i, (a, b, _))| (i, seg_dist(*p, *a, *b)))
+            .filter(|(_, d)| *d <= TAG_REACH_FT * upf)
+            .min_by(|x, y| x.1.total_cmp(&y.1))
+        else {
+            lost += 1;
+            continue;
+        };
+        let mut run = vec![i];
+        let mut k = 0;
+        while let Some(&j) = run.get(k) {
+            k += 1;
+            let Some(v) = walls.get(j) else { continue };
+            for (n, w) in walls.iter().enumerate() {
+                if run.len() >= MAX_RUN {
+                    break;
+                }
+                if !run.contains(&n) && in_line(v, w, upf) {
+                    run.push(n);
+                }
+            }
+        }
+        for j in run {
+            if let Some(slot) = typed.get_mut(j)
+                && slot.as_ref().is_none_or(|(_, d)| dist < *d)
+            {
+                *slot = Some((mark.clone(), dist));
+            }
+        }
+    }
+    let marks = walls
+        .iter()
+        .zip(typed)
+        .filter_map(|((a, b, _), t)| {
+            let (mark, _) = t?;
+            Some(cadaddy_walk3d::WallMark {
+                level: level.to_string(),
+                a: [a.x, a.y],
+                b: [b.x, b.y],
+                wall_type: mark,
+                height_ft: None,
+                guess: None,
+                source: source.to_string(),
+                status: Some(cadaddy_walk3d::MarkStatus::Drawing),
+                height_source: String::new(),
+            })
+        })
+        .collect();
+    (marks, lost)
+}
+
+/// The face of a wall type a box on it is on, and that face's finish: by the face the legend
+/// names (`side 1: CORRIDOR SIDE` — a box in a room the name holds is on that face, else on the
+/// other); faces alike need no side. None when the type has no face layers. The depth, the
+/// words for it, and a note when the faces differ and nothing says which.
+pub(crate) fn box_face(t: &WallType, room: &str) -> Option<(f64, String, Option<String>)> {
+    let f1 = face_depth(t, LayerSide::Side1);
+    let f2 = face_depth(t, LayerSide::Side2);
+    let same = match (&f1, &f2) {
+        (Some(a), Some(b)) => (a.0 - b.0).abs() < 1e-6,
+        _ => false,
+    };
+    if same || f2.is_none() {
+        return f1.map(|(d, w)| (d, w, None));
+    }
+    if f1.is_none() {
+        return f2.map(|(d, w)| (d, w, None));
+    }
+    let named = t
+        .assembly
+        .as_ref()
+        .and_then(|a| a.notes.iter().find_map(|n| n.strip_prefix("side 1: ").map(|x| x.trim_end_matches(" SIDE").trim().to_ascii_uppercase())));
+    let (a, b) = (f1?, f2?);
+    match named {
+        Some(face) if !face.is_empty() => {
+            let on_named = room.to_ascii_uppercase().contains(&face);
+            let (d, w) = if on_named { a } else { b };
+            Some((d, w, None))
+        }
+        _ => {
+            let deeper = if a.0 >= b.0 { a.clone() } else { b.clone() };
+            Some((deeper.0, deeper.1, Some(format!("the faces differ ({} | {}): check which face the box is on", frac(a.0), frac(b.0)))))
+        }
+    }
 }
 
 /// The finish on one face of a wall type, inches: its board and the channels or furring it is
@@ -831,6 +984,14 @@ mod tests {
         assert_eq!(side(q, LayerSide::Side1), vec!["5/8\" Type X gypsum board"]);
         assert_eq!(side(q, LayerSide::Side2), vec!["1/2\" resilient channel", "5/8\" Type X gypsum board"]);
         assert_eq!(side(q, LayerSide::Core), vec!["3 1/2\" wood studs", "sound batt insulation"]);
+        // Every layer has a thickness (the spec refuses a 0" layer: the build stopped on it), and
+        // a spec holding these types builds.
+        for t in &lg.types {
+            assert!(t.assembly.as_ref().is_some_and(|a| a.layers.iter().all(|l| l.thickness_in > 0.0)), "{}: {:?}", t.name, t.assembly);
+        }
+        let sp = cadaddy_walk3d::BuildingSpec { wall_types: lg.types.clone(), ..Default::default() };
+        let errors: Vec<String> = sp.check().into_iter().filter(|i| i.error).map(|i| format!("{}: {}", i.path, i.message)).collect();
+        assert!(errors.is_empty(), "{errors:?}");
         assert_eq!((a.fire_rating.as_deref(), a.acoustic_rating.as_deref()), (Some("1 HR"), Some("STC 52")));
         assert_eq!(a.height, Some(HeightRule::Ceiling), "B: up to the rated ceiling");
         assert!(a.notes.contains(&"side 1: HALL SIDE".to_string()) && a.notes.contains(&"tested assembly UL U999".to_string()), "{:?}", a.notes);
@@ -848,6 +1009,48 @@ mod tests {
         assert_eq!(side(w6, LayerSide::Core), vec!["5 1/2\" wood studs"], "2X6 is 5 1/2\"");
         assert_eq!(w4.assembly.as_ref().unwrap().height, Some(HeightRule::Deck));
         assert_eq!(face_depth(w4, LayerSide::Side2).map(|f| f.0), Some(1.25));
+    }
+
+    #[test]
+    fn a_plan_tag_types_its_wall_and_the_wall_carrying_on_past_a_door_but_not_a_crossing_wall() {
+        let v = |x: f64, y: f64| Vec2::new(x, y);
+        // Inches. A corridor wall in two pieces either side of a 3' door, a wall crossing it, and
+        // a far parallel wall.
+        let walls = vec![
+            (v(0.0, 0.0), v(240.0, 0.0), 6.0),
+            (v(276.0, 0.0), v(600.0, 0.0), 6.0),
+            (v(120.0, 3.0), v(120.0, 200.0), 6.0),
+            (v(0.0, 300.0), v(600.0, 300.0), 6.0),
+        ];
+        // The tag beside the first piece; a second tag of another mark beside the far wall.
+        let tags = vec![("Q4B".to_string(), v(60.0, -18.0)), ("W6A".to_string(), v(300.0, 318.0)), ("W6A".to_string(), v(900.0, 900.0))];
+        let (marks, lost) = plan_marks(&tags, &walls, "Level 2", 12.0, "A-102");
+        assert_eq!(lost, 1, "the tag near no wall");
+        let typed: Vec<(f64, f64, &str)> = marks.iter().map(|m| (m.a[0], m.a[1], m.wall_type.as_str())).collect();
+        assert_eq!(typed, vec![(0.0, 0.0, "Q4B"), (276.0, 0.0, "Q4B"), (0.0, 300.0, "W6A")]);
+        assert!(marks.iter().all(|m| m.level == "Level 2" && m.source == "A-102" && m.status() == cadaddy_walk3d::MarkStatus::Drawing));
+    }
+
+    #[test]
+    fn a_box_takes_the_finish_of_the_face_it_is_on() {
+        let lg = read_legend(&legend(), None, "X000");
+        let (q, w4) = (&lg.types[0], &lg.types[1]);
+        // Q's faces differ; side 1 is the HALL SIDE: a box in the hall is on the plain face, one
+        // in the suite on the channel face.
+        assert_eq!(box_face(q, "Hall 210").map(|f| f.0), Some(0.625));
+        let suite = box_face(q, "Suite 214").expect("face");
+        assert_eq!((suite.0, suite.2.is_none()), (1.125, true), "{}", suite.1);
+        assert_eq!(ring_for(suite.0), Some(1.25));
+        // Faces alike: no side needed.
+        assert_eq!(box_face(w4, "anything").map(|f| (f.0, f.2.is_none())), Some((1.25, true)));
+        // Faces differ and nothing names one: the deeper, and a note to check.
+        let mut unnamed = q.clone();
+        if let Some(a) = unnamed.assembly.as_mut() {
+            a.notes.retain(|n| !n.starts_with("side 1:"));
+        }
+        let f = box_face(&unnamed, "Suite 214").expect("face");
+        assert_eq!(f.0, 1.125);
+        assert!(f.2.is_some_and(|n| n.contains("check which face")));
     }
 
     #[test]

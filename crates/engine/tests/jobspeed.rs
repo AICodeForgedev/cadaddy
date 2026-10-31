@@ -292,6 +292,9 @@ fn a_cancelled_job_stops_at_the_next_sheet_and_goes_on_from_there() {
 
     for (at, stage) in [(" classify: Classify", "classify"), (": sheet 1/", "rooms")] {
         *CANCEL_AT.lock().unwrap_or_else(|e| e.into_inner()) = Some(at);
+        if let Ok(mut l) = LINES.lock() {
+            l.clear();
+        }
         cadaddy_engine::cmd::guided::set_progress_sink(Some(cancel_sink));
         let mut s = Session::new();
         let st = s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": false}));

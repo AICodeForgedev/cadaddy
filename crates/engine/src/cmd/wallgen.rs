@@ -640,6 +640,18 @@ pub(crate) fn room_floors(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, level:
     Floors::new(&walls, &shell.rects, upf, &taken)
 }
 
+/// A level's walls as its plan reads them: centreline ends and thickness (sheet units). What a
+/// wall tag on the plan types.
+pub(crate) fn planned_walls(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, level: &str) -> Vec<(Vec2, Vec2, f64)> {
+    let g = WallGen { rules: sp.to_rules(), auto: false, slab_ft: 0.0, layers: None, spec: Some(sp.clone()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let Some(lv) = g.rules.levels.iter().find(|l| l.sheet.is_none() && l.name.eq_ignore_ascii_case(level) && !roof_level(&g.rules.levels, &l.name))
+    else {
+        return Vec::new();
+    };
+    plan_level(d, &g, lv, upf, &mut Vec::new()).walls.iter().map(|w| (w.a, w.b, w.thickness)).collect()
+}
+
 /// How much two storeys' shells may differ in size (feet) and still be the same building, their
 /// stairs and hoistways one above the other.
 const STACK_TOL_FT: f64 = 2.0;
