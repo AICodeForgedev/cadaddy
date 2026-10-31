@@ -26,6 +26,7 @@ mod constraint_infer;
 mod copy_count;
 mod count;
 mod dash_block;
+mod dash_units;
 mod data_extraction;
 mod dim_baseline_spacing;
 mod dim_chain;
