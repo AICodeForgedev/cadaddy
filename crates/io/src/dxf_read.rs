@@ -3165,7 +3165,7 @@ pub fn attrib_from_groups(tags: &[Tag], ins_layer: &str) -> Attrib {
         tag: own.s(2).unwrap_or_default(),
         text,
         invisible: own.i(70).unwrap_or(0) & 1 != 0,
-        constant: false,
+        constant: own.i(70).unwrap_or(0) & 2 != 0,
         prompt: String::new(),
         props: attrib_props(&tt, ins_layer),
         multiline,
