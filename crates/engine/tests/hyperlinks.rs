@@ -146,7 +146,7 @@ fn links_that_could_be_used_against_the_user_are_refused_or_confirmed() {
         let r = follow(ok).unwrap();
         assert!(r["url"].is_string() && r.get("confirm").is_none(), "{ok}: {r}");
     }
-    for ask in ["C:\\Temp\\setup.exe", "/tmp/install.sh", "tools/run.bat"] {
+    for ask in ["C:\\Temp\\setup.exe", "/tmp/install.sh", "tools/run.bat", "file:///C:/T/setup%2Eexe", "C:\\T\\setup.exe::$DATA"] {
         let r = follow(ask).unwrap();
         assert!(r["confirm"].as_str().unwrap().contains("program or script"), "{ask}: {r}");
     }
