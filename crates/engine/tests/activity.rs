@@ -92,8 +92,28 @@ fn a_short_script_is_logged_saved_and_read_back() {
     let mut u = Session::new();
     u.execute("open", &json!({ "path": older })).unwrap();
     assert_eq!(entries(&mut u).len(), 4, "the older sidecar");
+    // Reading the log is not journaled; clearing it is.
+    let lines = |s: &mut Session| s.execute("commandhistory", &json!({})).unwrap()["lines"].as_array().map_or(0, Vec::len);
+    let before = lines(&mut t);
+    for _ in 0..50 {
+        t.execute("activity", &json!({})).unwrap();
+    }
+    assert_eq!(lines(&mut t), before, "ACTIVITY list adds no journal lines");
     t.execute("activity", &json!({ "action": "clear" })).unwrap();
+    assert!(lines(&mut t) > before, "clear is journaled");
     assert!(entries(&mut t).is_empty());
+    // Clear, save, reopen: still empty, also with an older sidecar beside the drawing.
+    t.execute("qsave", &json!({ "path": p })).unwrap();
+    let mut v = Session::new();
+    v.execute("open", &json!({ "path": p })).unwrap();
+    assert!(entries(&mut v).is_empty(), "a cleared log stays cleared");
+    let mut u2 = Session::new();
+    u2.execute("open", &json!({ "path": older })).unwrap();
+    u2.execute("activity", &json!({ "action": "clear" })).unwrap();
+    u2.execute("qsave", &json!({})).unwrap();
+    let mut u3 = Session::new();
+    u3.execute("open", &json!({ "path": older })).unwrap();
+    assert!(entries(&mut u3).is_empty(), "the older sidecar is not read back after a clear");
 
     // ACTIVITYLOG 0 (Options): nothing recorded or written.
     t.execute("options", &json!({ "ACTIVITYLOG": 0 })).unwrap();

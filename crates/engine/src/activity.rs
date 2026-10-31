@@ -224,11 +224,16 @@ pub fn after_save(s: &mut Session, path: &str) {
         return;
     }
     let Ok(st) = s.state() else { return };
-    if st.activity.entries.is_empty() {
-        return;
-    }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // A cleared log is written too (empty), so neither an earlier settings-folder log nor an
+        // older sidecar beside the drawing comes back; with nothing to hide, nothing is written.
+        if st.activity.entries.is_empty() {
+            let there = log_file(path).is_some_and(|f| f.is_file()) || std::path::Path::new(&sidecar(path)).is_file();
+            if !there {
+                return;
+            }
+        }
         let text = st.activity.to_json();
         let Some(file) = log_file(path) else { return };
         let written = file.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&file, text));
