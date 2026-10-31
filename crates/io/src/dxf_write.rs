@@ -33,6 +33,7 @@ pub(crate) use blocks::is_generated_arrow;
 pub(crate) use blocks::table_block_entities;
 use ctx::Ctx;
 use entity::entity;
+pub(crate) use header::code_page;
 use sections::tags_for;
 
 struct W {
