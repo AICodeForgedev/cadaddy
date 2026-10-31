@@ -654,6 +654,18 @@ fn setvar_rejects_out_of_range_units() {
 }
 
 #[test]
+fn setvar_rejects_out_of_range_osmode() {
+    let mut s = Session::new();
+    s.execute("setvar", &json!({"name": "OSMODE", "value": 4133})).unwrap();
+    for v in [4294967296u64, 65536, 32768] {
+        assert!(s.execute("setvar", &json!({"name": "OSMODE", "value": v})).is_err(), "{v}");
+        assert_eq!(sysvars::get(&s, "OSMODE"), Some(json!(4133)), "{v}");
+    }
+    s.execute("setvar", &json!({"name": "OSMODE", "value": 0x7fff})).unwrap();
+    assert_eq!(sysvars::get(&s, "OSMODE"), Some(json!(0x7fff)));
+}
+
+#[test]
 fn dynamic_input_pointer_settings() {
     let mut s = Session::new();
     assert_eq!(sysvars::get(&s, "DYNPIFORMAT"), Some(json!(0)));
