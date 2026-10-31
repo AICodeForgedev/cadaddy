@@ -8,6 +8,94 @@ use serde_json::json;
 use crate::CadApp;
 use crate::theme::Tokens;
 
+/// Every dialog id the dispatcher in [`show`] and [`crate::managers::dialog`] handles, with the `options:<tab>`
+/// and `commands:<id>` forms under their base ids. Dialog screenshots (tests/ui_shots.rs) take their scenes
+/// from this list; the test `ids_list_every_dialog` fails when an id is missing from it.
+pub const IDS: &[&str] = &[
+    "spacemouse",
+    "language",
+    "layers",
+    "qselect",
+    "parameters",
+    "dsettings",
+    "purge",
+    "find",
+    crate::filterdlg::DIALOG,
+    crate::laywalkdlg::DIALOG,
+    crate::layerremovedlg::MERGE,
+    crate::layerremovedlg::DELETE,
+    crate::plotstampdlg::DIALOG,
+    crate::dwgpropsdlg::DIALOG,
+    crate::dwgpropsdlg::MONITOR,
+    crate::clashpalette::DIALOG,
+    crate::ifcpalette::DIALOG,
+    crate::partpalette::DIALOG,
+    crate::lteditor::LINETYPE,
+    crate::lteditor::PATTERN,
+    crate::countpalette::DIALOG,
+    crate::projrulespalette::DIALOG,
+    crate::agentpalette::DIALOG,
+    crate::activitypalette::DIALOG,
+    crate::meppalette::DIALOG,
+    crate::drywallpalette::DIALOG,
+    "color",
+    "units",
+    crate::hyperlinks::DIALOG,
+    crate::materials::DIALOG,
+    "hatch",
+    "dataextraction",
+    "layerstates",
+    "spell",
+    "about",
+    "pdfimport",
+    "tolerance",
+    "preview",
+    "blocks",
+    "toolpalettes",
+    "bedit",
+    "authoring",
+    "stylesmanager",
+    "etransmit",
+    "diag",
+    "markups",
+    crate::rfipalette::DIALOG,
+    crate::levelspalette::DIALOG,
+    crate::fourdpalette::DIALOG,
+    crate::tagspalette::DIALOG,
+    "undohistory",
+    "commandhistory",
+    "aliasedit",
+    "workspace.save",
+    "workspace.settings",
+    "adcenter",
+    "standards",
+    "checkstandards",
+    "laytrans",
+    "publish",
+    crate::roomsdlg::DIALOG,
+    crate::exchangeloss::DIALOG,
+    crate::agentdlg::DIALOG,
+    crate::convertdlg::DIALOG,
+    crate::hyperlinks::CONFIRM,
+    crate::scripteditor::DIALOG,
+    crate::secureloaddlg::DIALOG,
+    crate::actionsdlg::DIALOG,
+    crate::customui::DIALOG,
+    "options",
+    "commands",
+    "battman",
+    "linetype",
+    "ptype",
+    "textstyle",
+    "tablestyle",
+    "dimstyle",
+    "mleaderstyle",
+    "pagesetup",
+    "csettings",
+    "namedvports",
+    "plot",
+];
+
 pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     crate::mtext_editor::show(app, ctx);
     crate::quick::quick_properties(app, ctx);
@@ -682,6 +770,7 @@ fn language(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 
 #[cfg(test)]
 mod tests {
+    use super::IDS;
     use cadaddy_engine::doc::EntityKind;
     use cadaddy_engine::geom::Vec2;
     use cadaddy_engine::{Input, Session};
@@ -745,5 +834,71 @@ mod tests {
         super::insert_block(&mut app, "Nope");
         assert!(app.session.running.as_ref().is_some_and(|r| r.id == "insert"));
         assert_eq!(app.session.current_prompt().map(|p| p.message), Some("Enter block name".to_string()));
+    }
+
+    /// The `.rs` files under `src/`, with their text.
+    fn sources(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                sources(&path, out);
+            } else if path.extension().is_some_and(|x| x == "rs")
+                && let Ok(text) = std::fs::read_to_string(&path)
+            {
+                out.push((path.display().to_string(), text));
+            }
+        }
+    }
+
+    /// The match arm heads (`"id"` or `crate::m::NAME`) of the `match` that starts at `from` in `text` and ends at `until`.
+    fn arm_heads<'a>(text: &'a str, from: &str, until: &str) -> Vec<&'a str> {
+        let start = text.find(from).expect("the dispatcher");
+        let end = start + text[start..].find(until).expect("its last arm");
+        text[start..end]
+            .lines()
+            .filter_map(|l| {
+                let (head, _) = l.trim().split_once(" =>")?;
+                (head.starts_with('"') || head.starts_with("crate::")).then_some(head)
+            })
+            .collect()
+    }
+
+    /// The source of [`IDS`] (the list itself), to see which constants it names.
+    fn ids_source(text: &str) -> &str {
+        let start = text.find("pub const IDS").expect("the list");
+        &text[start..start + text[start..].find("];").expect("its end")]
+    }
+
+    #[test]
+    fn ids_list_every_dialog() {
+        let text = include_str!("dialogs.rs");
+        let list = ids_source(text);
+        let mut heads = arm_heads(text, "match d.as_str() {", "other => crate::managers");
+        heads.extend(arm_heads(include_str!("managers.rs"), "let action = match name {", "_ => {"));
+        assert!(heads.len() > 60, "the dispatcher's arms were found: {}", heads.len());
+        for head in &heads {
+            let known = if let Some(id) = head.strip_prefix('"') { IDS.contains(&id.trim_end_matches('"')) } else { list.contains(head) };
+            assert!(known, "dialog arm {head} is missing from dialogs::IDS");
+        }
+        // Arms with a guard (`commands:<id>`, `options:<tab>`) and the dialogs opened by id from anywhere in src/.
+        for id in ["commands", "options"] {
+            assert!(IDS.contains(&id), "{id} is missing from dialogs::IDS");
+        }
+        let mut files = Vec::new();
+        sources(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        let mut seen = 0;
+        for (file, src) in &files {
+            for part in src.split("dialog = Some(\"").skip(1) {
+                let Some((lit, _)) = part.split_once('"') else { continue };
+                seen += 1;
+                let base = lit.split(':').next().unwrap_or(lit);
+                assert!(IDS.contains(&lit) || IDS.contains(&base), "{file}: ui.dialog = Some(\"{lit}\") is missing from dialogs::IDS");
+            }
+        }
+        assert!(seen > 30, "the literals were found: {seen}");
+        let mut sorted = IDS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), IDS.len(), "an id is listed twice");
     }
 }
