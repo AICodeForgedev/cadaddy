@@ -31,6 +31,9 @@ pub struct EventLog {
 /// The state the last read compared against.
 #[derive(Clone, Debug, Default)]
 struct Seen {
+    /// A read has happened (the baseline at subscribe counts): set once and never cleared, so a
+    /// state with no drawing open is not mistaken for "never looked".
+    looked: bool,
     docs: Vec<u64>,
     active: Option<u64>,
     selection: Vec<Handle>,
@@ -101,7 +104,7 @@ impl Session {
         let active = self.state().ok().map(|s| s.uid);
         let titles: HashMap<u64, String> = self.docs.iter().map(|d| (d.uid, d.title.clone())).collect();
         let seen = std::mem::take(&mut self.events.seen);
-        let first = seen.docs.is_empty() && seen.active.is_none() && seen.drawings.is_empty();
+        let first = !seen.looked;
         if !first {
             for uid in docs.iter().filter(|u| !seen.docs.contains(u)) {
                 self.event("document.opened", json!({ "title": titles.get(uid) }));
@@ -149,6 +152,6 @@ impl Session {
         if !first && prompt != seen.prompt {
             self.event("prompt.changed", json!({ "prompt": prompt }));
         }
-        self.events.seen = Seen { docs, active, selection, prompt, drawings };
+        self.events.seen = Seen { looked: true, docs, active, selection, prompt, drawings };
     }
 }
