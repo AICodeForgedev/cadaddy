@@ -263,9 +263,10 @@ pub fn differences(a: &Drawing, b: &Drawing) -> Vec<String> {
             };
             let (x, y) = (format!("{:#?}", e), format!("{:#?}", f));
             if x != y {
-                let (path, example) = first_difference(&x, &y);
-                let entry = ways.entry(format!("{} {path}", kind(e))).or_insert((0, example));
-                entry.0 += 1;
+                for (path, example) in field_differences(&x, &y) {
+                    let entry = ways.entry(format!("{} {path}", kind(e))).or_insert((0, example));
+                    entry.0 += 1;
+                }
             }
         }
         if let (Some(sb), sa) = (sb, a.space(space)) {
@@ -294,8 +295,13 @@ pub fn differences(a: &Drawing, b: &Drawing) -> Vec<String> {
             let Some(y) = b.iter().find(|y| name(y) == name(x)) else { continue };
             let (dx, dy) = (format!("{x:#?}"), format!("{y:#?}"));
             if dx != dy {
-                let (path, example) = first_difference(&dx, &dy);
-                out.push(format!("{what} {} {path}: {example}", name(x)));
+                for (path, example) in field_differences(&dx, &dy) {
+                    // A layout's objects are compared one by one with the spaces above.
+                    if what == "layout" && path.starts_with("Layout.entities") {
+                        continue;
+                    }
+                    out.push(format!("{what} {} {path}: {example}", name(x)));
+                }
             }
         }
     }
@@ -321,13 +327,17 @@ pub fn differences(a: &Drawing, b: &Drawing) -> Vec<String> {
             out.push(format!("block {name}: {} objects → {}", ex.len(), ey.len()));
             continue;
         }
+        let mut fields: BTreeMap<String, (usize, String)> = BTreeMap::new();
         for (p, q) in ex.iter().zip(&ey) {
             let (dx, dy) = (format!("{:#?}", p.kind), format!("{:#?}", q.kind));
             if dx != dy {
-                let (path, example) = first_difference(&dx, &dy);
-                out.push(format!("block {name} {path}: {example}"));
-                break;
+                for (path, example) in field_differences(&dx, &dy) {
+                    fields.entry(path).or_insert((0, example)).0 += 1;
+                }
             }
+        }
+        for (path, (n, example)) in fields {
+            out.push(format!("{n} × block {name} {path}: {example}"));
         }
     }
     // Header variables: changed, lost and added.
@@ -348,20 +358,65 @@ pub fn differences(a: &Drawing, b: &Drawing) -> Vec<String> {
     out
 }
 
-/// The field path and the old → new lines where two pretty `Debug` forms first differ.
-fn first_difference(a: &str, b: &str) -> (String, String) {
+/// Every leaf field where two pretty `Debug` forms differ: its path (the struct and field names
+/// down to it, a field's own name last) and the old → new lines, one entry per path. A value that
+/// is a list or struct on only one side, or of another length, counts as one difference at its
+/// field.
+fn field_differences(a: &str, b: &str) -> Vec<(String, String)> {
+    let (la, lb): (Vec<&str>, Vec<&str>) = (a.lines().collect(), b.lines().collect());
+    let depth = |l: &str| (l.len() - l.trim_start().len()) / 4;
+    let opens = |l: &str| l.trim_end().ends_with(['{', '[', '(']);
+    // Past the block `lines[i]` opens: the line after its closing one.
+    let skip = |lines: &[&str], i: usize| {
+        if !opens(lines[i]) {
+            return i + 1;
+        }
+        let d = depth(lines[i]);
+        (i + 1..lines.len()).find(|&k| depth(lines[k]) == d).map_or(lines.len(), |k| k + 1)
+    };
+    let name = |l: &str| l.trim().split_once(": ").map(|(k, _)| k.to_string());
+    let mut out: Vec<(String, String)> = Vec::new();
     let mut path: Vec<String> = Vec::new();
-    for (x, y) in a.lines().zip(b.lines()) {
-        if x != y {
-            return (path.join("."), format!("{} → {}", x.trim(), y.trim()));
+    let (mut i, mut j) = (0, 0);
+    while i < la.len() && j < lb.len() {
+        let (x, y) = (la[i], lb[j]);
+        path.truncate(depth(x));
+        if x == y {
+            if opens(x) {
+                path.push(x.trim().split([':', ' ', '(']).next().unwrap_or_default().to_string());
+            }
+            i += 1;
+            j += 1;
+            continue;
         }
-        let depth = (x.len() - x.trim_start().len()) / 4;
-        path.truncate(depth);
-        if x.trim_end().ends_with(['{', '[', '(']) {
-            path.push(x.trim().split([':', ' ', '(']).next().unwrap_or_default().to_string());
+        let mut full = path.clone();
+        // A point's coordinates are one field (`text_mid`), not three.
+        if let Some(n) = name(x).filter(|n| !matches!(n.as_str(), "x" | "y" | "z")) {
+            full.push(n);
         }
+        let full = full.join(".");
+        if !out.iter().any(|(p, _)| *p == full) {
+            out.push((full, format!("{} → {}", x.trim(), y.trim())));
+        }
+        // A different line is one difference; a block opened there is skipped whole.
+        i = skip(&la, i);
+        j = skip(&lb, j);
     }
-    (String::from("(length)"), format!("{} → {} lines", a.lines().count(), b.lines().count()))
+    if (i < la.len()) != (j < lb.len()) {
+        out.push((String::from("(length)"), format!("{} → {} lines", la.len(), lb.len())));
+    }
+    out
+}
+
+/// `d` written in `format` and read back, for tests that change what was read.
+pub fn read_back(d: &Drawing, format: &'static str) -> Result<Drawing, String> {
+    let native = format == "dwg-native";
+    let name = if native { "corpus.dwg".to_string() } else { format!("corpus.{format}") };
+    let bytes =
+        if native { cadaddy_io::write_dwg(d, cadaddy_io::Version::R2018, cadaddy_io::DwgEngine::Native) } else { cadaddy_io::write(d, &name) }
+            .map_err(|e| format!("save {format}: {e}"))?;
+    if native { cadaddy_io::read_dwg(&bytes, cadaddy_io::DwgEngine::Native) } else { cadaddy_io::read(&bytes, &name) }
+        .map_err(|e| format!("open {format}: {e}"))
 }
 
 /// One format's round trip: (write s, bytes, read s, regen s of what was read, differences).
