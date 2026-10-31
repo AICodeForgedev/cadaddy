@@ -150,6 +150,8 @@ pub(crate) struct Control {
     reader: BufReader<TcpStream>,
     writer: TcpStream,
     id: u64,
+    /// How long a request waits for its reply (the socket's read timeout).
+    deadline: Duration,
 }
 
 impl Control {
@@ -159,9 +161,9 @@ impl Control {
         let start = Instant::now();
         loop {
             if let Ok(s) = TcpStream::connect(("127.0.0.1", port)) {
-                s.set_read_timeout(Some(Duration::from_secs(120))).map_err(|e| e.to_string())?;
+                s.set_read_timeout(Some(REPLY_DEADLINE)).map_err(|e| e.to_string())?;
                 let writer = s.try_clone().map_err(|e| e.to_string())?;
-                let mut c = Control { reader: BufReader::new(s), writer, id: 0 };
+                let mut c = Control { reader: BufReader::new(s), writer, id: 0, deadline: REPLY_DEADLINE };
                 // The app writes the token just after it starts listening.
                 let file = cfg.join("control").join(format!("{port}.token"));
                 let token = (0..12).find_map(|_| {
@@ -184,6 +186,12 @@ impl Control {
             }
             std::thread::sleep(Duration::from_millis(250));
         }
+    }
+    /// Wait at most `deadline` for each reply from now on (a soak uses one near its stall limit).
+    pub(crate) fn set_deadline(&mut self, deadline: Duration) -> Result<(), String> {
+        self.reader.get_ref().set_read_timeout(Some(deadline)).map_err(|e| e.to_string())?;
+        self.deadline = deadline;
+        Ok(())
     }
     /// One request. A `rate limited` reply means the app didn't run it, so the request is sent
     /// again after a pause that doubles each time (a soak's tight loops outrun the allowance).
@@ -208,7 +216,10 @@ impl Control {
         let line = json!({ "id": self.id, "method": method, "params": params }).to_string();
         writeln!(self.writer, "{line}").map_err(|e| format!("{method}: {e}"))?;
         let mut reply = String::new();
-        self.reader.read_line(&mut reply).map_err(|e| format!("{method}: {e}"))?;
+        self.reader.read_line(&mut reply).map_err(|e| match e.kind() {
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => stalled(method, self.deadline),
+            _ => format!("{method}: {e}"),
+        })?;
         serde_json::from_str(&reply).map_err(|e| format!("{method}: bad reply {reply:?}: {e}"))
     }
     pub(crate) fn exec(&mut self, command: &str, params: Value) -> Result<Value, String> {
@@ -218,6 +229,14 @@ impl Control {
         let r = self.exec("drawing.inspect", json!({ "entities": false }))?;
         r["entityCount"].as_u64().ok_or_else(|| format!("drawing.inspect has no entityCount: {r}"))
     }
+}
+
+/// How long a request waits for its reply unless a caller sets a shorter deadline.
+const REPLY_DEADLINE: Duration = Duration::from_secs(120);
+
+/// The error for a request the app never answered.
+fn stalled(method: &str, deadline: Duration) -> String {
+    format!("stalled: no reply to {method} in {} s", deadline.as_secs())
 }
 
 /// How long a rate-limited request keeps being retried before the caller sees the error.
@@ -413,13 +432,16 @@ fn run_app(exe: &Path, bundle_ver: Option<String>, want: &str, out: &Path, r: &m
 
 pub(crate) struct Mcp {
     child: Child,
-    reader: BufReader<std::process::ChildStdout>,
+    /// Lines the server wrote, read on a thread so a silent server can't block the client.
+    lines: std::sync::mpsc::Receiver<String>,
     id: u64,
+    /// How long a call waits for its reply.
+    deadline: Duration,
 }
 
 impl Mcp {
     pub(crate) fn start(exe: &Path, cfg: &Path) -> Result<Mcp, String> {
-        let mut child = Command::new(exe)
+        let child = Command::new(exe)
             .arg("mcp")
             .env("CADADDY_CONFIG_DIR", cfg)
             .stdin(Stdio::piped())
@@ -427,8 +449,27 @@ impl Mcp {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("{}: {e}", exe.display()))?;
+        Mcp::over(child)
+    }
+    /// A client for a server already running as `child` (piped stdin and stdout).
+    fn over(mut child: Child) -> Result<Mcp, String> {
         let out = child.stdout.take().ok_or("no stdout")?;
-        Ok(Mcp { child, reader: BufReader::new(out), id: 0 })
+        let (tx, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(out);
+            loop {
+                let mut line = String::new();
+                // End of output or an error: dropping `tx` tells the client the server is gone.
+                if !matches!(reader.read_line(&mut line), Ok(n) if n > 0) || tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Mcp { child, lines, id: 0, deadline: REPLY_DEADLINE })
+    }
+    /// Wait at most `deadline` for each reply from now on.
+    pub(crate) fn set_deadline(&mut self, deadline: Duration) {
+        self.deadline = deadline;
     }
     pub(crate) fn send(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.id += 1;
@@ -436,11 +477,17 @@ impl Mcp {
         let stdin = self.child.stdin.as_mut().ok_or("no stdin")?;
         writeln!(stdin, "{line}").map_err(|e| format!("{method}: {e}"))?;
         stdin.flush().map_err(|e| e.to_string())?;
+        let end = Instant::now() + self.deadline;
         loop {
-            let mut reply = String::new();
-            if self.reader.read_line(&mut reply).map_err(|e| format!("{method}: {e}"))? == 0 {
-                return Err(format!("{method}: the server closed its output"));
-            }
+            let reply = match self.lines.recv_timeout(end.saturating_duration_since(Instant::now())) {
+                Ok(line) => line,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    // A frozen server is killed so the caller can report and move on.
+                    let _ = self.child.kill();
+                    return Err(stalled(method, self.deadline));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err(format!("{method}: the server closed its output")),
+            };
             let v: Value = match serde_json::from_str(&reply) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -657,6 +704,42 @@ mod tests {
         assert_eq!(kind_of(Path::new("/Applications/CADaddy.app")), Kind::App);
     }
 
+    /// A server that reads its input and never replies: the call fails with a stall inside the
+    /// deadline, and the silent server is killed.
+    #[cfg(unix)]
+    #[test]
+    fn mcp_call_on_a_silent_server_times_out() {
+        let child = Command::new("sleep").arg("30").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut m = Mcp::over(child).unwrap();
+        m.set_deadline(Duration::from_millis(500));
+        let t = Instant::now();
+        let e = m.send("tools/call", json!({})).unwrap_err();
+        assert!(e.contains("stalled: no reply to tools/call"), "{e}");
+        assert!(t.elapsed() < Duration::from_secs(10), "took {:?}", t.elapsed());
+        assert!(matches!(m.child.wait(), Ok(s) if !s.success()), "the silent server was not killed");
+    }
+
+    /// An app that accepts the connection and never answers: the control client gives up at its deadline.
+    #[test]
+    fn control_call_on_a_silent_app_times_out() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let silent = std::thread::spawn(move || {
+            let held = listener.accept();
+            std::thread::sleep(Duration::from_secs(3));
+            drop(held);
+        });
+        let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let writer = s.try_clone().unwrap();
+        let mut c = Control { reader: BufReader::new(s), writer, id: 0, deadline: REPLY_DEADLINE };
+        c.set_deadline(Duration::from_millis(500)).unwrap();
+        let t = Instant::now();
+        let e = c.call("ui.inspect", json!({})).unwrap_err();
+        assert!(e.contains("stalled: no reply to ui.inspect"), "{e}");
+        assert!(t.elapsed() < Duration::from_secs(10), "took {:?}", t.elapsed());
+        let _ = silent.join();
+    }
+
     #[test]
     fn plist_versions() {
         let p = "<dict>\n<key>CFBundleName</key>\n<string>CADaddy</string>\n<key>CFBundleShortVersionString</key>\n\t<string>0.7.7</string>\n</dict>";
@@ -742,7 +825,7 @@ mod tests {
             }
         });
         let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        let mut c = Control { writer: s.try_clone().unwrap(), reader: BufReader::new(s), id: 0 };
+        let mut c = Control { writer: s.try_clone().unwrap(), reader: BufReader::new(s), id: 0, deadline: REPLY_DEADLINE };
         assert_eq!(c.call("x", json!({})).unwrap(), json!({"n": 2}));
         assert_eq!(c.id, 3);
         assert!(c.call("y", json!({})).unwrap_err().contains("unknown command"));

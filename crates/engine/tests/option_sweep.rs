@@ -1,4 +1,5 @@
-//! Every command, every option: each command with prompts is typed at the command line on the
+//! Every command, every option: each registered command (those with prompts and those that run
+//! straight away) is typed at the command line on the
 //! sample drawing and walked through its prompts again and again, each time answering a keyword
 //! option it hasn't answered yet at that prompt (and otherwise a plausible point, number, text
 //! or selection), then Escape. After every walk: nothing panicked (the engine's guard reports an
@@ -15,9 +16,40 @@ use cadaddy_engine::{EngineError, Session, command_specs, sample};
 
 /// Commands that end the session or quit; started, they are not walked.
 const SKIP: &[&str] = &["quit", "exit", "close", "closeall", "qquit"];
-/// Commands that change the drawing on purpose without an undo step: SAVEAS and DXFOUT record the save
-/// (date, fields, version) and LIGHTBAKE keeps its baked light, as AutoCAD keeps a render.
-const NOT_UNDOABLE: &[&str] = &["saveas", "dxfout", "lightbake"];
+/// Commands that change the drawing on purpose without an undo step, each with its reason.
+const NOT_UNDOABLE: &[(&str, &str)] = &[
+    ("saveas", "records the save (date, fields, version)"),
+    ("dxfout", "records the save (date, fields, version)"),
+    ("lightbake", "keeps its baked light, as AutoCAD keeps a render"),
+    ("new", "replaces the drawing with a new one: there is nothing to go back to"),
+    ("document.close", "closes the drawing"),
+    ("document.closeall", "closes every drawing"),
+    ("ucsicon", "a display setting (UCSICON), not a drawing edit; deliberately no undo step"),
+    ("ucsicon.on", "toggles UCSICON through ucsicon"),
+    ("ucsicon.origin", "toggles UCSICON through ucsicon"),
+    ("tframe", "toggles the IMAGEFRAME/WIPEOUTFRAME display settings; deliberately no undo step"),
+    ("bim.takeoff", "keeps the last takeoff revision (BIM chain; not a builder lane)"),
+    ("bim.estimate", "keeps the estimate revision (BIM chain; not a builder lane)"),
+    ("import.check", "stores the last import check (BIM chain; not a builder lane)"),
+    ("coordination.viewpoints", "keeps saved 3D viewpoints (BIM chain; not a builder lane)"),
+];
+/// Commands whose output text names a parameter in braces on purpose (usage hints such as
+/// `use printset.open {path} first`), each with its reason. Prompts are always checked.
+const BRACES_IN_OUTPUT: &[(&str, &str)] = &[
+    ("gear.read", "hint names printset.open {path}"),
+    ("site.read", "hint names printset.open {path}"),
+    ("structure.read", "hint names printset.open {path}"),
+    ("ceilings.read", "hint names printset.open {path}"),
+    ("sprinklers.read", "hint names printset.open {path}"),
+    ("trays.read", "hint names printset.open {path}"),
+    ("walls.read", "hint names printset.open {path}"),
+    ("rfi.read", "hint names printset.open {path}"),
+    ("mep.equipment.read", "hint names printset.open {path}"),
+    ("envelope.read", "hint names printset.open {path}"),
+    ("finishes.takeoff", "hint names finishes.takeoff {dir}"),
+];
+/// Commands that run without prompts and are not swept, each with its reason (none needed yet).
+const NOT_SWEPT: &[(&str, &str)] = &[];
 /// Walks per command (each answers at least one new keyword, or stops).
 const MAX_WALKS: usize = 64;
 /// Inputs per walk before Escape.
@@ -51,6 +83,8 @@ struct Found {
     /// Where answering a keyword led: (prompt, keyword) → the next prompt's message.
     leads: BTreeMap<(String, String), String>,
     walks: usize,
+    /// Whether the command showed at least one prompt.
+    prompted: bool,
 }
 
 impl Found {
@@ -109,6 +143,7 @@ fn sweep(id: &str) -> Found {
         let mut same = 0;
         for step in 0..MAX_STEPS {
             let Some(p) = s.current_prompt() else { break };
+            f.prompted = true;
             let shown = p.display();
             if placeholder(&shown) {
                 f.problems.push(format!("{id}: placeholder in prompt \"{shown}\""));
@@ -153,7 +188,8 @@ fn sweep(id: &str) -> Found {
             f.problems.push(format!("{id}: still running after Escape: \"{}\"", s.prompt_text()));
             s.cancel();
         }
-        for line in s.log.iter().filter(|l| placeholder(l)) {
+        let braces_ok = BRACES_IN_OUTPUT.iter().any(|(n, _)| *n == id);
+        for line in s.log.iter().filter(|l| !braces_ok && placeholder(l)) {
             f.problems.push(format!("{id}: placeholder in output \"{line}\""));
         }
         s.log.clear();
@@ -166,7 +202,7 @@ fn sweep(id: &str) -> Found {
             guard += 1;
         }
         let back = s.state().map(|st| Arc::ptr_eq(&st.doc, &start_doc) || *st.doc == *start_doc).unwrap_or(false);
-        if !back && !NOT_UNDOABLE.contains(&id) {
+        if !back && !NOT_UNDOABLE.iter().any(|(n, _)| *n == id) {
             f.problems.push(format!("{id}: undo did not restore the drawing (walk {})", walk + 1));
             s = session();
         } else if !back {
@@ -187,20 +223,28 @@ fn every_command_every_option() {
     // Commands may write files beside the drawing or in the working folder.
     std::env::set_current_dir(&dir).expect("the temporary folder");
     let only = std::env::var("CADADDY_SWEEP_ONLY").ok();
+    let interactive: HashSet<&str> = command_specs().iter().filter(|c| c.interactive.is_some()).map(|c| c.id).collect();
     let ids: Vec<&str> = command_specs()
         .iter()
-        .filter(|c| c.interactive.is_some() && !SKIP.contains(&c.id))
+        .filter(|c| !SKIP.contains(&c.id) && !NOT_SWEPT.iter().any(|(n, _)| *n == c.id))
         .map(|c| c.id)
         .filter(|id| only.as_deref().is_none_or(|o| o.split(',').any(|x| x == *id)))
         .collect();
     let mut problems = Vec::new();
     let mut unanswered: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let (mut seen, mut answered, mut slow) = (0usize, 0usize, Vec::new());
+    let (mut swept_interactive, mut prompted_interactive, mut swept_plain) = (0usize, 0usize, 0usize);
     for id in &ids {
         let t = Instant::now();
         let f = sweep(id);
         if t.elapsed().as_secs_f64() > 5.0 {
             slow.push(format!("{id} {:.1}s", t.elapsed().as_secs_f64()));
+        }
+        if interactive.contains(id) {
+            swept_interactive += 1;
+            prompted_interactive += usize::from(f.prompted);
+        } else {
+            swept_plain += 1;
         }
         problems.extend(f.problems);
         seen += f.seen.len();
@@ -211,7 +255,7 @@ fn every_command_every_option() {
         }
     }
     let mut report = format!(
-        "Option sweep: {} commands, {seen} keyword options seen, {answered} answered, {} never answered (walk limit {MAX_WALKS}).\n",
+        "Option sweep: {} commands ({swept_interactive} with prompts, {prompted_interactive} of them showed one; {swept_plain} without), {seen} keyword options seen, {answered} answered, {} never answered (walk limit {MAX_WALKS}).\n",
         ids.len(),
         seen - answered
     );
@@ -227,7 +271,16 @@ fn every_command_every_option() {
         println!("{report}\n(report: {})", out.display());
     }
     let _ = std::fs::remove_dir_all(&dir);
-    assert!(only.is_some() || ids.len() > 200, "only {} commands with prompts: the catalog looks empty", ids.len());
+    println!("{}", report.lines().next().unwrap_or_default());
+    if only.is_none() {
+        assert!(ids.len() > 200, "only {} commands: the catalog looks empty", ids.len());
+        // Coverage floor: the sweep must actually reach prompts and answer options.
+        assert!(
+            prompted_interactive * 100 >= swept_interactive * 95,
+            "only {prompted_interactive} of {swept_interactive} interactive commands showed a prompt: the sweep is not reaching them"
+        );
+        assert!(answered >= 850 || answered * 10 >= seen * 9, "only {answered} of {seen} keyword options answered");
+    }
     assert!(problems.is_empty(), "{} problems:\n{}", problems.len(), problems.join("\n"));
 }
 

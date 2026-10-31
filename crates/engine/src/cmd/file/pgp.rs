@@ -307,7 +307,7 @@ fn run_reinit(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(listing(&warnings, n));
     }
     let Some(path) = aliases().file.clone() else {
-        s.echo("No command alias file is loaded; ALIASEDIT {file} loads one.");
+        s.echo("No command alias file is loaded; ALIASEDIT <file> loads one.");
         return Ok(listing(&[], 0));
     };
     let (text, _) = support_text("reinit", &json!({ "file": path }), "file", "text")?.ok_or_else(|| bad("reinit", "no alias file"))?;
