@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("scale", "Scale", run_scale)
             .menu(&["Modify", "Scale"])
             .alias(&["sc"])
-            .params("{handles?, base: [x,y], factor, copy?: bool}")
+            .params("{handles?, base: [x,y] or [x,y,z] (default Z: ELEVATION), factor, copy?: bool}")
             .interactive(|_| Ok(Box::new(SelectThen::new(Op::Scale)))),
         CommandSpec::new("mirror", "Mirror", run_mirror)
             .menu(&["Modify", "Mirror"])
@@ -144,6 +144,26 @@ fn transform_batch(
         special.extend(sp);
     }
     (done, special)
+}
+
+/// Scale `hs` by `f` about `base` in 3D, as AutoCAD 2024's SCALE does: about the base point's XY,
+/// and every height of the objects about its Z, their thickness too.
+pub(crate) fn scale_entities(s: &mut Session, hs: &[Handle], base: cadaddy_geom::Vec3, f: f64, copy: bool) -> Result<Vec<Handle>> {
+    let out = transform_entities(s, hs, &Mat3::scale_about(base.xy(), f), copy)?;
+    let d = s.doc_mut()?;
+    for h in &out {
+        d.modify_entity(*h, |e| {
+            e.kind.scale_heights(base.z, f);
+            e.common.thickness *= f;
+        })?;
+    }
+    Ok(out)
+}
+
+/// `p` at the current elevation (ELEVATION), the Z AutoCAD gives a point entered without one.
+pub(crate) fn at_elevation(s: &Session, p: Vec2) -> cadaddy_geom::Vec3 {
+    let z = s.doc().map(|d| d.header.f64("ELEVATION", 0.0)).ok().filter(|z| z.is_finite());
+    cadaddy_geom::Vec3::new(p.x, p.y, z.unwrap_or(0.0))
 }
 
 pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy: bool) -> Result<Vec<Handle>> {
@@ -345,7 +365,12 @@ fn run_scale(s: &mut Session, p: &Value) -> Result<Value> {
     if f <= 0.0 {
         return Err(bad("scale", "factor must be positive"));
     }
-    let r = transform_entities(s, &hs, &Mat3::scale_about(base, f), bool_or(p, "copy", false))?;
+    // A Z given with the base point, as AutoCAD takes one; without one, the current elevation.
+    let base = match p.get("base").and_then(|b| b.get(2)) {
+        Some(z) => z.as_f64().map(|z| cadaddy_geom::Vec3::new(base.x, base.y, z)).ok_or_else(|| bad("scale", "`base` Z must be a number"))?,
+        None => at_elevation(s, base),
+    };
+    let r = scale_entities(s, &hs, base, f, bool_or(p, "copy", false))?;
     Ok(json!({ "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
 }
 
@@ -916,10 +941,33 @@ fn add_offsets(s: &mut Session, src: &Entity, ks: Vec<EntityKind>, current_layer
 
 /// Add the offset copy `k` of `src` (on the current layer instead of the source's when
 /// `current_layer`), then erase the source when `erase` and its layer is not locked.
-fn add_offset(s: &mut Session, src: &Entity, k: EntityKind, current_layer: bool, erase: bool) -> Result<Handle> {
+/// The copy at the source's height, as AutoCAD 2024's OFFSET makes it: a line's end Zs, an arc's
+/// or circle's centre Z, a polyline's elevation (an ellipse's offset, a polyline, at its centre Z).
+fn keep_z(src: &EntityKind, k: &mut EntityKind) {
+    match (src, k) {
+        (EntityKind::Line(s), EntityKind::Line(l)) => {
+            l.a.z = s.a.z;
+            l.b.z = s.b.z;
+        }
+        (EntityKind::Circle(s), EntityKind::Circle(c)) => c.center.z = s.center.z,
+        (EntityKind::Arc(s), EntityKind::Arc(a)) => a.center.z = s.center.z,
+        (EntityKind::LwPolyline(s), EntityKind::LwPolyline(p)) => p.elevation = s.elevation,
+        (EntityKind::Ellipse(s), EntityKind::LwPolyline(p)) => p.elevation = s.center.z,
+        (EntityKind::Ray(s) | EntityKind::XLine(s), EntityKind::Ray(r) | EntityKind::XLine(r)) => r.base.z = s.base.z,
+        _ => {}
+    }
+}
+
+/// Add the offset copy `k` of `src`. The copy is at the source's height ([`keep_z`]); a circle's or
+/// arc's copy has no thickness, a polyline's keeps it, as AutoCAD 2024 makes them.
+fn add_offset(s: &mut Session, src: &Entity, mut k: EntityKind, current_layer: bool, erase: bool) -> Result<Handle> {
+    keep_z(&src.kind, &mut k);
     let space = s.space();
     let d = s.doc_mut()?;
     let mut common = src.common.clone();
+    if matches!(k, EntityKind::Circle(_) | EntityKind::Arc(_)) {
+        common.thickness = 0.0;
+    }
     if current_layer {
         common.layer = d.header.str("CLAYER", "0").into();
     }
@@ -2369,7 +2417,7 @@ impl SelectThen {
         let f = require_length(Some(f))?;
         // The next SCALE offers this factor.
         s.last_used.scale_factor = f;
-        transform_entities(s, &self.objs, &Mat3::scale_about(base, f), self.copy_mode)?;
+        scale_entities(s, &self.objs, at_elevation(s, base), f, self.copy_mode)?;
         s.set_selection(Vec::new());
         Ok(Step::Done)
     }
@@ -2613,7 +2661,7 @@ impl Interactive for SelectThen {
                 };
                 if f > 1e-12 && f.is_finite() {
                     s.last_used.scale_factor = f;
-                    transform_entities(s, &self.objs, &Mat3::scale_about(self.pts[0], f), self.copy_mode)?;
+                    scale_entities(s, &self.objs, at_elevation(s, self.pts[0]), f, self.copy_mode)?;
                 }
                 s.set_selection(Vec::new());
                 Ok(Step::Done)
