@@ -92,7 +92,7 @@ fn create_add_renumber_sync_and_publish() {
     let mut names: Vec<String> = arch.layouts.iter().map(|l| l.name.clone()).collect();
     names.sort();
     assert_eq!(names, ["A-101 Plan", "A-102 Elevations"]);
-    assert!(dir.join("arch.bak").exists(), "the previous version is kept");
+    assert!(dir.join("arch.dxf.bak").exists(), "the previous version is kept");
 
     // One PDF, a page per sheet, bookmarked under the subsets.
     let out = dir.join("job.pdf");
@@ -415,7 +415,7 @@ fn a_failed_sync_leaves_set_and_drawings_agreeing_and_a_rerun_recovers() {
     std::fs::rename(dir.join("struct/frame.dxf"), &moved).unwrap();
     assert!(ss(json!({ "action": "sync" })).is_err());
     assert_eq!(layout_names(&dir.join("arch.dxf")), ["Plan"], "no drawing is written before every one is checked");
-    assert!(!dir.join("arch.bak").exists());
+    assert!(!dir.join("arch.dxf.bak").exists());
     let stored: Value = serde_json::from_str(&std::fs::read_to_string(&set).unwrap()).unwrap();
     let layouts: Vec<&str> = stored["sheets"].as_array().unwrap().iter().map(|s| s["layout"].as_str().unwrap()).collect();
     assert_eq!(layouts, ["Plan", "Framing"], "the set still names what is on disk");

@@ -1270,10 +1270,9 @@ fn guard_dwg_copy(s: &Session, copy: &str) -> std::result::Result<Option<String>
 
 /// Put saved bytes where the user gets them: natively the file at `path` (written atomically); on
 /// the web, which has no file system, a browser download named after `path` via [`deliver`].
-/// Where saving over a drawing keeps the previous file: the same name with `.bak` (AutoCAD's
-/// ISAVEBAK).
+/// Where saving over a drawing keeps the previous file (ISAVEBAK): [`backup_path`].
 fn bak_path(path: &str) -> String {
-    std::path::Path::new(path).with_extension("bak").to_string_lossy().into_owned()
+    backup_path(std::path::Path::new(path)).to_string_lossy().into_owned()
 }
 
 /// The longest file name (one path component, in bytes) the file systems CADaddy saves to accept.
@@ -1349,9 +1348,20 @@ pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<
     }
 }
 
-/// The backup of the drawing file `path`: `<name>.bak` beside it, as AutoCAD names it.
+/// The backup of the drawing file `path`, beside it. A DWG's is `<name>.bak`, as AutoCAD names it,
+/// in the extension's letter case (`plan.DWG` to `plan.BAK`); any other drawing appends `.bak`
+/// (`plan.dxf.bak`), so `plan.dwg` and `plan.dxf` in one folder never overwrite each other's backup.
 pub fn backup_path(path: &std::path::Path) -> std::path::PathBuf {
-    path.with_extension("bak")
+    match path.extension().map(|e| e.to_string_lossy()) {
+        Some(e) if e.eq_ignore_ascii_case("dwg") => path.with_extension(
+            e.chars().zip("bak".chars()).map(|(d, b)| if d.is_ascii_uppercase() { b.to_ascii_uppercase() } else { b }).collect::<String>(),
+        ),
+        _ => {
+            let mut name = path.as_os_str().to_os_string();
+            name.push(".bak");
+            name.into()
+        }
+    }
 }
 
 /// Whether `bytes` read as a DWG or a DXF (ASCII or binary) by their start: what a save keeps as

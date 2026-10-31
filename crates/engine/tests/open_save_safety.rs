@@ -74,12 +74,12 @@ fn saving_over_a_file_read_with_parts_missing_asks_first_and_keeps_a_bak() {
     s.cmdline("circle 0,0 5").unwrap();
     // The first save over the original explains and stops; the file is untouched.
     let e = s.execute("qsave", &json!({})).unwrap_err().to_string();
-    assert!(e.contains("parts missing") && e.contains("mech.bak"), "{e}");
+    assert!(e.contains("parts missing") && e.contains("mech.dxf.bak"), "{e}");
     assert_eq!(std::fs::read(&path).unwrap(), b"LOSSY original");
     // Saving again overwrites, keeping the original as .bak.
     s.execute("qsave", &json!({})).unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), b"saved");
-    assert_eq!(std::fs::read(d.join("mech.bak")).unwrap(), b"LOSSY original");
+    assert_eq!(std::fs::read(d.join("mech.dxf.bak")).unwrap(), b"LOSSY original");
     // From then on the file holds all of the drawing: saves don't ask.
     s.execute("qsave", &json!({})).unwrap();
     std::fs::remove_dir_all(&d).ok();
@@ -103,7 +103,7 @@ fn saveas_elsewhere_doesnt_ask_and_a_complete_file_saves_at_once() {
     std::fs::write(&whole, b"whole").unwrap();
     s.execute("open", &json!({ "path": whole.to_string_lossy() })).unwrap();
     s.execute("qsave", &json!({})).unwrap();
-    assert_eq!(std::fs::read(d.join("c.bak")).unwrap(), b"whole");
+    assert_eq!(std::fs::read(d.join("c.dxf.bak")).unwrap(), b"whole");
     std::fs::remove_dir_all(&d).ok();
 }
 
@@ -151,7 +151,7 @@ fn a_read_only_file_is_not_saved_over_and_permissions_are_kept() {
     s.cmdline("circle 0,0 6").unwrap();
     s.execute("qsave", &json!({})).unwrap();
     assert_eq!(std::fs::metadata(&rw).unwrap().permissions().mode() & 0o777, 0o750);
-    assert_eq!(std::fs::read(d.join("rw.bak")).unwrap(), b"saved");
+    assert_eq!(std::fs::read(d.join("rw.dxf.bak")).unwrap(), b"saved");
     std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o644)).unwrap();
     std::fs::remove_dir_all(&d).ok();
 }
