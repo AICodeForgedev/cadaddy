@@ -547,7 +547,18 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             }))
         }
         "LEADER" => EntityKind::Leader(Leader {
-            vertices: t.pts(10).into_iter().map(|p| p.to3(0.0)).collect(),
+            // Each group 10 starts a vertex. Scope Y/Z to it so an omitted Z cannot
+            // shift a later vertex's elevation onto this one.
+            vertices: tags
+                .iter()
+                .filter(|tag| tag.code == 10)
+                .map(|tag| tag.f64())
+                .zip(tags.split(|tag| tag.code == 10).skip(1))
+                .map(|(x, vertex)| {
+                    let v = T(vertex);
+                    Vec3::new(x, v.fd(20, 0.0), v.fd(30, 0.0))
+                })
+                .collect(),
             arrow: t.i(71).unwrap_or(1) != 0,
             spline: t.i(72).unwrap_or(0) != 0,
             style: t.s(3).unwrap_or_else(|| "Standard".into()),
