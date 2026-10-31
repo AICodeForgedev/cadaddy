@@ -65,44 +65,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, format!("no PDF at {}", given.join(", "))));
     }
 
-    // The products by mark: the first submittal giving a mark a maker or catalog number.
-    let mut products: BTreeMap<String, Product> = BTreeMap::new();
-    let mut read = Vec::new();
-    let mut unread = Vec::new();
-    let mut questions: Vec<(String, String)> = Vec::new();
-    for f in &files {
-        let name = std::path::Path::new(f).file_stem().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string());
-        let r = match s.execute("bim.spec_import", &json!({"file": f, "format": "submittal"})) {
-            Ok(r) => r,
-            Err(e) => {
-                unread.push(json!({"file": name, "error": e.to_string()}));
-                continue;
-            }
-        };
-        let mut marks = Vec::new();
-        for prop in r.get("proposals").and_then(Value::as_array).into_iter().flatten() {
-            let mark = prop.get("mark").and_then(Value::as_str).unwrap_or("").trim();
-            let product = Product { doc: name.clone(), proposal: prop.clone() };
-            // A product is what its data sheet says it is: a mark with no maker or number is
-            // only a word on a page.
-            if mark.is_empty() || (product.value(keys::MANUFACTURER).is_none() && product.value(keys::CATALOG_NUMBER).is_none()) {
-                continue;
-            }
-            let page = [keys::CATALOG_NUMBER, keys::MANUFACTURER]
-                .iter()
-                .find_map(|k| product.field(k).and_then(|f| f.get("source")).and_then(Value::as_str).map(str::to_string))
-                .unwrap_or_default();
-            marks.push(mark.to_string());
-            let doc = if page.is_empty() { name.clone() } else { format!("{name} {page}") };
-            products.entry(mark.to_ascii_uppercase()).or_insert(Product { doc, ..product });
-        }
-        for q in r.get("rfis").and_then(Value::as_array).into_iter().flatten() {
-            let mark = q.get("mark").and_then(Value::as_str).unwrap_or("").to_string();
-            let text = q.get("description").and_then(Value::as_str).unwrap_or("").to_string();
-            questions.push((mark, format!("{name}: {text}")));
-        }
-        read.push(json!({"file": name, "products": marks.len(), "marks": marks}));
-    }
+    let Read { products, read, unread, questions } = read_products(s, &files);
 
     // The model's elements by type mark.
     let d = s.doc()?;
@@ -204,6 +167,63 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         "questions": questions,
         "unread": unread,
     }))
+}
+
+/// What the submittal files say.
+struct Read {
+    /// The products by mark (upper case): the first submittal giving a mark a maker or number.
+    products: BTreeMap<String, Product>,
+    /// Each file read: its products.
+    read: Vec<Value>,
+    /// Each file that couldn't be read, and why.
+    unread: Vec<Value>,
+    /// (mark, question) the submittals leave open.
+    questions: Vec<(String, String)>,
+}
+
+fn read_products(s: &mut Session, files: &[String]) -> Read {
+    let mut out = Read { products: BTreeMap::new(), read: Vec::new(), unread: Vec::new(), questions: Vec::new() };
+    for f in files {
+        let name = std::path::Path::new(f).file_stem().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string());
+        let r = match s.execute("bim.spec_import", &json!({"file": f, "format": "submittal"})) {
+            Ok(r) => r,
+            Err(e) => {
+                out.unread.push(json!({"file": name, "error": e.to_string()}));
+                continue;
+            }
+        };
+        let mut marks = Vec::new();
+        for prop in r.get("proposals").and_then(Value::as_array).into_iter().flatten() {
+            let mark = prop.get("mark").and_then(Value::as_str).unwrap_or("").trim();
+            let product = Product { doc: name.clone(), proposal: prop.clone() };
+            // A product is what its data sheet says it is: a mark with no maker or number is
+            // only a word on a page.
+            if mark.is_empty() || (product.value(keys::MANUFACTURER).is_none() && product.value(keys::CATALOG_NUMBER).is_none()) {
+                continue;
+            }
+            let page = [keys::CATALOG_NUMBER, keys::MANUFACTURER]
+                .iter()
+                .find_map(|k| product.field(k).and_then(|f| f.get("source")).and_then(Value::as_str).map(str::to_string))
+                .unwrap_or_default();
+            marks.push(mark.to_string());
+            let doc = if page.is_empty() { name.clone() } else { format!("{name} {page}") };
+            out.products.entry(mark.to_ascii_uppercase()).or_insert(Product { doc, ..product });
+        }
+        for q in r.get("rfis").and_then(Value::as_array).into_iter().flatten() {
+            let mark = q.get("mark").and_then(Value::as_str).unwrap_or("").to_string();
+            let text = q.get("description").and_then(Value::as_str).unwrap_or("").to_string();
+            out.questions.push((mark, format!("{name}: {text}")));
+        }
+        out.read.push(json!({"file": name, "products": marks.len(), "marks": marks}));
+    }
+    out
+}
+
+/// The type marks the submittals at `paths` give products for (upper case): the device types
+/// they list, for a print set whose fixture schedule is only in the submittals.
+pub(crate) fn product_marks(s: &mut Session, paths: &[String]) -> Vec<String> {
+    let files = pdf_files(paths);
+    read_products(s, &files).products.into_keys().collect()
 }
 
 /// The type mark of a device, fixture or equipment element.
@@ -310,6 +330,18 @@ Model Number : WRAP 48 840
         assert_eq!(prop(&s, b, "catalog_number").unwrap().text(), "MINE-1", "a person's value stays");
         assert!(prop(&s, other, "manufacturer").is_none());
         assert!(s.doc().unwrap().bim_types.get("Q7").is_some(), "the product is in the type catalog");
+    }
+
+    #[test]
+    fn the_product_types_are_the_marks_with_a_maker_or_number() {
+        let mut s = Session::new();
+        s.execute("new", &json!({})).unwrap();
+        let file = std::env::temp_dir().join(format!("cadaddy-submittal-types-{}.txt", std::process::id()));
+        let text = "--- page 1 of 2 ---\nType : Q7A\nManufacturer : ACME LIGHTING\nModel Number : HX6D010\n--- page 2 of 2 ---\nType : Q9\nA shop drawing with no header\n";
+        std::fs::write(&file, text).unwrap();
+        let marks = product_marks(&mut s, &[file.to_string_lossy().to_string()]);
+        std::fs::remove_file(&file).ok();
+        assert_eq!(marks, ["Q7A"]);
     }
 
     #[test]

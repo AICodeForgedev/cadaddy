@@ -426,6 +426,9 @@ pub struct GuidedJob {
     /// Submittal PDFs (or folders of them) whose products go onto the built elements.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submittals: Vec<String>,
+    /// The type marks the submittals give products for: device types as the legends' are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submittal_types: Vec<String>,
     /// What the print folder held when the job started ([`prints_stamp`]).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prints_stamp: String,
@@ -727,6 +730,7 @@ impl GuidedJob {
             checkpoint: None,
             checkpoint_given: false,
             submittals: Vec::new(),
+            submittal_types: Vec::new(),
             prints_stamp: String::new(),
             index: None,
             sheet_regions: Vec::new(),
@@ -2215,6 +2219,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
         c.legend_types.extend(l.types.iter().cloned());
         legends.push(l);
     }
+    // Tags an answer made device types.
     let learned: std::collections::BTreeSet<String> = job
         .rules
         .iter()
@@ -2222,6 +2227,17 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
         .filter_map(|r| r.key.strip_prefix("symbol:"))
         .map(|t| t.trim().to_string())
         .collect();
+    // On the electrical sheets, the types the submittals give products for too (a set whose
+    // fixture schedule is only in the lighting submittal lists its types there); another trade's
+    // `H` is its own mark.
+    let learned_electrical: std::collections::BTreeSet<String> = learned.iter().cloned().chain(job.submittal_types.iter().cloned()).collect();
+    let electrical = |sheet: &str| {
+        let number = sheet.split('/').next().unwrap_or(sheet);
+        job.sheet_regions
+            .iter()
+            .find(|r| r.number.eq_ignore_ascii_case(number))
+            .map_or_else(|| number.trim().to_ascii_uppercase().starts_with('E'), |r| r.discipline.eq_ignore_ascii_case("E"))
+    };
     // Tags an answer said are not devices.
     let refused: BTreeSet<&str> = job.rules.iter().filter(|r| r.value == "not_device").filter_map(|r| r.key.strip_prefix("tag:")).collect();
     let none = Legend::default();
@@ -2236,6 +2252,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
         let circuits: Vec<&TextItem> = texts.get(g).into_iter().flatten().filter(|t| circuit_text(&t.value, &sheet_numbers)).collect();
         let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
         let span = spans.get(g).map_or((0, u64::MAX), |sp| (sp.lo, sp.hi));
+        let learned = if electrical(&sheet) { &learned_electrical } else { &learned };
         for (tag, at, h, tag_at) in syms {
             if legend.covers(*at) {
                 c.legend_samples += 1;
@@ -2246,7 +2263,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
             } else if refused.contains(tag.as_str()) {
                 *c.not_device.entry("not a device (answered)").or_default() += 1;
             } else {
-                match device_types::tag_verdict(tag, &c.legend_types, &learned, &sheet_numbers) {
+                match device_types::tag_verdict(tag, &c.legend_types, learned, &sheet_numbers) {
                     // A sheet of no level (uncertain, not answered) or on the site datum is a
                     // reference sheet: nothing on it is a model element.
                     TagVerdict::Device(_) if job.level_at([at.x, at.y]).is_some_and(|r| !super::printmep::building_level(&r.level)) => {
@@ -2992,6 +3009,16 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // with a TAG attribute holding the nearby device-mark text.
     // Device types come from the sheets' legends and schedules (plus the marks every set
     // uses); notes, sheet numbers, keynotes, switch legs and dimensions never count.
+    // The submittals' product types, read once: device types too.
+    if !job.submittals.is_empty() && job.submittal_types.is_empty() {
+        let started = web_time::Instant::now();
+        job.submittal_types = super::submittals::product_marks(s, &job.submittals);
+        progress_line(&format!(
+            "  submittal product types (device types too): {} in {:.1} s",
+            job.submittal_types.join(", "),
+            started.elapsed().as_secs_f64()
+        ));
+    }
     let mut census = device_census(s, job);
     // The sheet map: what the sheets' callouts point at, where the enlarged plans sit. Inside a
     // registered enlarged plan's boundary its sheet is the authority: its devices move onto the
@@ -7255,6 +7282,9 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
         saved.checkpoint_given = job.checkpoint_given;
         saved.auto = job.auto;
         if !job.submittals.is_empty() {
+            if saved.submittals != job.submittals {
+                saved.submittal_types.clear();
+            }
             saved.submittals = job.submittals.clone();
         }
         let done: Vec<&str> = saved.stages.iter().filter(|st| st.status == StageStatus::Done).map(|st| st.name.label()).collect();
@@ -8209,7 +8239,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("job.start", "Start Guided Job", cmd_start)
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
