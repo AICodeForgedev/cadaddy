@@ -864,3 +864,22 @@ fn filter_by_room() {
     let rows2 = r2["rows"].as_array().unwrap();
     assert!(rows2.is_empty(), "non-existent room should give no rows");
 }
+
+/// Agent rails: a dry run writes no file (the CSV is not created), a real run does.
+#[test]
+fn a_dry_run_takeoff_writes_no_csv() {
+    let mut s = building();
+    let dir = std::env::temp_dir().join(format!("cadaddy-dry-takeoff-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let csv = dir.join("takeoff.csv");
+    let file = csv.display().to_string();
+    s.execute_agent("agent.dryrun", &json!({"on": true})).unwrap();
+    let r = s.execute_agent("drywall.takeoff", &json!({"file": file}));
+    assert!(r.is_err() || r.as_ref().is_ok_and(|v| v["dryRun"] == true), "{r:?}");
+    assert!(!csv.exists(), "a dry run creates no file");
+    s.execute_agent("agent.dryrun", &json!({"on": false})).unwrap();
+    s.execute("drywall.takeoff", &json!({"file": file})).unwrap();
+    assert!(csv.is_file(), "outside a dry run the CSV is written");
+    let _ = std::fs::remove_dir_all(&dir);
+}

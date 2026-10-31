@@ -1032,7 +1032,7 @@ fn mesh_wall_dims(mesh: &Mesh, units_per_ft: f64) -> (f64, f64) {
 /// Write takeoff data to a CSV file with properly escaped fields.
 fn write_takeoff_csv(path: &str, rows: &[Value], ceilings: &[Value], waste: f64) -> Result<()> {
     use std::io::Write;
-    let mut f = std::fs::File::create(path).map_err(|e| bad("drywall.takeoff", format!("cannot write {path}: {e}")))?;
+    let mut f = crate::writefile::create(path).map_err(|e| bad("drywall.takeoff", format!("cannot write {path}: {e}")))?;
     writeln!(f, "Group,Material,Thickness (in),Side,Area (sq ft),Sheets,Sheet Size,Stud Length (ft),Track Length (ft),Insulation Area (sq ft),Trim Length (ft),Waste %")
         .map_err(|e| bad("drywall.takeoff", e.to_string()))?;
     for row in rows {

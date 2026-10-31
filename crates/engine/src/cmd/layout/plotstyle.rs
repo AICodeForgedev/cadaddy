@@ -353,7 +353,7 @@ fn run_stylesmanager(s: &mut Session, p: &Value) -> Result<Value> {
                     {
                         let tmp = format!("{_path}.cadaddy-tmp");
                         crate::writefile::write(&tmp, &bytes).map_err(|e| bad(cmd, format!("{_path}: {e}")))?;
-                        std::fs::rename(&tmp, _path).map_err(|e| bad(cmd, format!("{_path}: {e}")))?;
+                        crate::writefile::rename(&tmp, _path).map_err(|e| bad(cmd, format!("{_path}: {e}")))?;
                         Ok(json!({ "name": name, "path": _path, "bytes": bytes.len(), "format": if binary { "binary" } else { "json" } }))
                     }
                     #[cfg(target_arch = "wasm32")]

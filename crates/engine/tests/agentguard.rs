@@ -103,3 +103,43 @@ fn saving_over_a_file_waits_for_the_user_and_only_the_user_turns_that_off() {
     s.execute_agent("qsave", &json!({})).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_dry_run_deletes_no_action_macro_and_the_list_is_unchanged() {
+    let dir = std::env::temp_dir().join(format!("cadaddy-agentguard-actions-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = Session::new();
+    s.set_action_dir(Some(dir.clone()));
+    s.execute("actrecord", &json!({})).unwrap();
+    s.cmdline("circle").unwrap();
+    s.cmdline("*0,0").unwrap();
+    s.cmdline("2").unwrap();
+    s.execute("actstop", &json!({"name": "Dot"})).unwrap();
+    let file = dir.join("dot.cdyact");
+    assert!(file.is_file());
+    let list = s.execute("actions", &json!({})).unwrap()["macros"].clone();
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    s.execute_agent("agent.dryrun", &json!({"on": true})).unwrap();
+    let r = s.execute_agent("actions", &json!({"action": "delete", "name": "Dot"}));
+    assert!(r.is_err() || r.as_ref().is_ok_and(|v| v["dryRun"] == true), "{r:?}");
+    assert!(file.is_file(), "the macro file is still on disk");
+    s.execute_agent("agent.dryrun", &json!({"on": false})).unwrap();
+    assert_eq!(s.execute("actions", &json!({})).unwrap()["macros"], list, "and `actions list` is unchanged");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn only_the_user_clears_the_agent_journal() {
+    let mut s = Session::new();
+    s.execute_agent("agent.begin", &json!({"label": "Draw"})).unwrap();
+    s.execute_agent("circle", &json!({"center": [0, 0], "radius": 3})).unwrap();
+    s.execute_agent("agent.end", &json!({})).unwrap();
+    let len = |s: &mut Session| s.execute("agent.journal", &json!({})).unwrap()["entries"].as_array().unwrap().len();
+    assert_eq!(len(&mut s), 1);
+    let e = s.execute_agent("agent.journal", &json!({"clear": true})).unwrap_err();
+    assert!(e.user_message().contains("Only the user can clear the agent journal"), "{}", e.user_message());
+    assert_eq!(len(&mut s), 1, "the journal is intact");
+    // The user's Clear (Agent Activity > Clear) still works.
+    s.execute("agent.journal", &json!({"clear": true})).unwrap();
+    assert_eq!(len(&mut s), 0);
+}

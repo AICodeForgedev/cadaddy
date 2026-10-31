@@ -618,7 +618,7 @@ pub fn add_word(word: &str) -> Result<()> {
             let _ = std::fs::create_dir_all(dir);
         }
         crate::writefile::check(std::path::Path::new(&path)).map_err(|e| EngineError::Other(e.to_string()))?;
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+        let mut f = crate::writefile::open_append(&path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
         writeln!(f, "{w}").map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     }
     #[cfg(target_arch = "wasm32")]

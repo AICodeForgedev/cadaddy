@@ -2068,8 +2068,8 @@ fn write_checkpoint(s: &mut Session, job: &GuidedJob) {
         }
         // Written aside, then moved over the last one: a crash mid-write keeps the last checkpoint.
         let part = p.with_extension("cdy.part");
-        std::fs::write(&part, bytes).map_err(|e| e.to_string())?;
-        std::fs::rename(&part, p).map_err(|e| e.to_string())
+        crate::writefile::write(&part, bytes).map_err(|e| e.to_string())?;
+        crate::writefile::rename(&part, p).map_err(|e| e.to_string())
     });
     if let Err(e) = written {
         s.echo(format!("guided: the job's checkpoint couldn't be written to {path}: {e}"));
@@ -6904,7 +6904,7 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         && !job.checkpoint_given
         && let Some(path) = &job.checkpoint
     {
-        let _ = std::fs::remove_file(path);
+        let _ = crate::writefile::remove(path);
     }
     r
 }
