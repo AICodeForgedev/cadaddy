@@ -201,6 +201,7 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 handle: f("symbol"),
                 kind: t.kind.clone(),
                 leg: f("switch_leg"),
+                room: String::new(),
             }
         })
         .collect();
@@ -1191,6 +1192,9 @@ pub struct ReadDevice {
     /// A switch's or sensor's leg: the lower-case letter of the fixtures it controls.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub leg: String,
+    /// The room a typical room's plan stamped it into (its circuits are that room's own).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub room: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg

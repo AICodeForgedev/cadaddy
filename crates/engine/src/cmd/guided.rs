@@ -2312,6 +2312,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                         handle: h.hex(),
                         kind: "receptacle".into(),
                         leg: String::new(),
+                        room: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -2334,6 +2335,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                             handle: h.hex(),
                             kind: kind_of_tag(&t),
                             leg: String::new(),
+                            room: String::new(),
                         });
                         *c.by_type.entry(t).or_default() += 1;
                     }
@@ -4186,6 +4188,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
             _ => job.devices.clone(),
         };
+        // A stamped room's circuits are its own (a guest room's own panel): their routes in the
+        // room, where the sheet's reading can't put them.
+        if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+            let (runs, circuits) = super::printcond::room_circuits(&devices, sp.units_per_foot);
+            if !circuits.is_empty() {
+                progress_line(&format!("  stamped rooms' circuits: {} ({} runs)", circuits.len(), runs.len()));
+                super::printcond::store_room_circuits(&mut sp, runs, &circuits);
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+            }
+        }
         match super::readers::place_devices(s, &devices, "guided job") {
             Ok(mut v) => {
                 // What the devices stage read and the model doesn't hold, and what typical-room
@@ -5133,7 +5145,7 @@ fn stamp_typical_rooms(
             if let Some((title, view, i)) =
                 one_room.iter().filter(|(_, r, _)| inside(r) && area(r) < typical).min_by(|a, b| area(&a.1).total_cmp(&area(&b.1)))
             {
-                if let Some((_, level, outline, _)) = rooms.get(*i)
+                if let Some((name, level, outline, number)) = rooms.get(*i)
                     && out.len() < MAX_STAMPED
                     && let Some(at) = into_room(dv.at, *view, bbox(outline))
                 {
@@ -5143,6 +5155,7 @@ fn stamp_typical_rooms(
                     let mut copy = (*dv).clone();
                     copy.at = at;
                     copy.level.clone_from(level);
+                    copy.room = stamped_room(name, number, *i);
                     out.push(copy);
                     *report.entry(format!("{sheet} {title}")).or_default() += 1;
                 }
@@ -5158,7 +5171,7 @@ fn stamp_typical_rooms(
                 }
                 continue;
             };
-            for (ri, (_, level, outline, _)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
+            for (ri, (name, level, outline, number)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
                 if out.len() >= MAX_STAMPED {
                     continue;
                 }
@@ -5171,6 +5184,7 @@ fn stamp_typical_rooms(
                 let mut copy = (*dv).clone();
                 copy.at = at;
                 copy.level.clone_from(level);
+                copy.room = stamped_room(name, number, ri);
                 out.push(copy);
                 *report.entry(format!("{sheet} {title}")).or_default() += 1;
             }
@@ -5182,6 +5196,11 @@ fn stamp_typical_rooms(
 /// The one room a view's title (upper case) names: its number ("ROOM #237", "ROOM 237") when one
 /// room has it, else its name ("1ST FLOOR - MEP ROOM": the room called MEP), on the floor the
 /// title names when several are.
+/// A stamped room's name for its own circuits: its number, else its name and place in the list.
+fn stamped_room(name: &str, number: &str, i: usize) -> String {
+    if number.trim().is_empty() { format!("{} {i}", name.trim()) } else { number.trim().to_string() }
+}
+
 fn room_of_view(title: &str, rooms: &[(String, String, Vec<cadaddy_geom::Vec2>, String)]) -> Option<usize> {
     if !title.contains("ROOM") {
         return None;

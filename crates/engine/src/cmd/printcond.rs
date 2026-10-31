@@ -678,10 +678,102 @@ pub(crate) fn seat_heights(sp: &mut BuildingSpec) {
     }
 }
 
-/// Put the circuits into the spec's tags (an earlier read's go).
+/// Put the circuits into the spec's tags (an earlier read's go; the stamped rooms' own stay).
 pub(crate) fn store_circuits(sp: &mut BuildingSpec, circuits: &[ElementTag]) {
-    sp.tags.retain(|t| !t.id.starts_with(CIRCUIT_TAG));
+    sp.tags.retain(|t| !t.id.starts_with(CIRCUIT_TAG) || t.id.contains(ROOM_PART));
     sp.tags.extend(circuits.iter().cloned());
+}
+
+/// What marks a circuit as a stamped room's own (its id).
+const ROOM_PART: &str = ":room-";
+
+/// The circuits of devices a typical room's plan stamped into rooms (`ReadDevice::room`): each
+/// room's own (a guest room has its own panel), per room and circuit an estimated route in the
+/// model's coordinates: the devices chained (no step over `MAX_LEG_FT`), a drop to each wall
+/// device. No home run: the room's panel is not placed.
+pub(crate) fn room_circuits(devices: &[ReadDevice], upf: f64) -> (Vec<MepRun>, Vec<ElementTag>) {
+    let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    let bottom = DEFAULT_CEILING_FT + ABOVE_CEILING_FT;
+    let eps = 0.05 * upf;
+    let mut groups: BTreeMap<(String, String, String), Vec<&ReadDevice>> = BTreeMap::new();
+    for dv in devices.iter().take(MAX_DEVICES).filter(|d| !d.room.is_empty() && d.at.iter().all(|v| v.is_finite())) {
+        if parse_circuit(&dv.circuit).is_some() {
+            groups.entry((dv.level.clone(), dv.room.clone(), dv.circuit.trim().to_string())).or_default().push(dv);
+        }
+    }
+    let (mut runs, mut circuits) = (Vec::new(), Vec::new());
+    for ((level, room, label), devs) in groups {
+        if runs.len() >= MAX_RUNS {
+            break;
+        }
+        let level = level_name(&level);
+        let cid = format!("{CIRCUIT_TAG}{}{ROOM_PART}{}:{}", id_part(&level), id_part(&room), id_part(&label));
+        // Chained from the lowest-leftmost, then always the nearest one left.
+        let mut left = devs.clone();
+        left.sort_by(|a, b| (a.at[1], a.at[0]).partial_cmp(&(b.at[1], b.at[0])).unwrap_or(std::cmp::Ordering::Equal));
+        let mut chain = vec![left.remove(0)];
+        while !left.is_empty() {
+            let Some(last) = chain.last().map(|d| d.at) else { break };
+            let Some((i, _)) = left.iter().enumerate().min_by(|a, b| dist(a.1.at, last).total_cmp(&dist(b.1.at, last))) else { break };
+            chain.push(left.swap_remove(i));
+        }
+        let (mut legs, mut drops) = (0usize, 0usize);
+        for w in chain.windows(2) {
+            if let [a, b] = w
+                && dist(a.at, b.at) <= MAX_LEG_FT * upf
+            {
+                legs += 1;
+                let mut r = run(CIRCUIT_SYSTEM, &level, &format!("room {room}"), square(a.at, b.at, eps), DEFAULT_SIZE_IN, bottom);
+                r.id = format!("{cid}#{legs}");
+                runs.push(r);
+            }
+        }
+        for (i, dv) in chain.iter().enumerate() {
+            let kind = if dv.kind.is_empty() { super::readers::device_kind(&dv.tag) } else { dv.kind.as_str() };
+            if let Some(m) = mount_height_ft(kind).filter(|m| *m < bottom) {
+                drops += 1;
+                let mut r = run(CIRCUIT_SYSTEM, &level, &format!("room {room}"), vec![dv.at], DEFAULT_SIZE_IN, bottom);
+                r.bottoms_ft = vec![m];
+                r.top_ft = Some(bottom);
+                r.id = format!("{cid}#d{i}");
+                runs.push(r);
+            }
+        }
+        let panel = parse_circuit(&label).map(|(p, _)| p).unwrap_or_default();
+        let mut t = ElementTag {
+            id: cid,
+            kind: "circuit".into(),
+            level: level.clone(),
+            at_ft: [chain[0].at[0] / upf, chain[0].at[1] / upf],
+            ..ElementTag::default()
+        };
+        t.set("circuit", label.clone(), "plan");
+        t.set("panel", panel, "plan");
+        t.set("room", room.clone(), "computed");
+        t.set("sheet", chain[0].sheet.clone(), "plan");
+        t.set("devices", chain.len().to_string(), "computed");
+        t.set("route", ESTIMATED, "rule");
+        t.set("conductors", DEFAULT_CONDUCTORS, "default");
+        t.set("conduit", "3/4\" EMT", "default");
+        t.set("homerun", "the room's own panel: not placed, no home run counted", "rule");
+        t.set("drops", drops.to_string(), "computed");
+        circuits.push(t);
+    }
+    (runs, circuits)
+}
+
+/// Put the stamped rooms' circuits and their runs into the spec (an earlier build's go), at the
+/// levels' ceilings.
+pub(crate) fn store_room_circuits(sp: &mut BuildingSpec, runs: Vec<MepRun>, circuits: &[ElementTag]) {
+    let room = |id: &str| id.starts_with(CIRCUIT_TAG) && id.contains(ROOM_PART);
+    sp.tags.retain(|t| !room(&t.id));
+    sp.mep.runs.retain(|r| !room(&r.id));
+    if !runs.is_empty() && !sp.mep.systems.iter().any(|s| s.name == CIRCUIT_SYSTEM) {
+        sp.mep.systems.push(system(CIRCUIT_SYSTEM, DEFAULT_CEILING_FT + ABOVE_CEILING_FT));
+    }
+    sp.mep.runs.extend(runs);
+    sp.tags.extend(circuits.iter().cloned());
+    seat_heights(sp);
 }
 
 /// The circuit a spec run belongs to: its tag id (`circuit:…`), from the run's id.
@@ -778,6 +870,48 @@ mod tests {
             dev("R", 1200.0, 100.0, "LA-5", "E-1"),
             dev("R", 1500.0, 100.0, "LA-5", "E-1"),
         ]
+    }
+
+    #[test]
+    fn each_stamped_rooms_circuits_are_its_own() {
+        let in_room = |tag: &str, x: f64, room: &str| ReadDevice { room: room.into(), ..dev(tag, x, 100.0, "G-2", "E-6") };
+        // Rooms 101 and 102 side by side, each with its own panel G: two G-2 circuits.
+        let devices = vec![
+            in_room("REC", 0.0, "101"),
+            in_room("REC", 120.0, "101"),
+            in_room("S", 60.0, "101"),
+            in_room("REC", 200.0, "102"),
+            in_room("REC", 320.0, "102"),
+        ];
+        let (runs, circuits) = room_circuits(&devices, 12.0);
+        assert_eq!(circuits.len(), 2, "{circuits:?}");
+        assert!(circuits.iter().all(|c| c.fields["homerun"].source == "rule"));
+        for c in &circuits {
+            let mine: Vec<&MepRun> = runs.iter().filter(|r| circuit_of_run(r) == Some(c.id.as_str())).collect();
+            // No run reaches into the other room.
+            let xs: Vec<f64> = mine.iter().flat_map(|r| r.points.iter().map(|p| p[0])).collect();
+            assert!(xs.iter().all(|x| *x <= 120.0) || xs.iter().all(|x| *x >= 200.0), "{mine:#?}");
+        }
+        assert_eq!(runs.iter().filter(|r| r.top_ft.is_some()).count(), 1, "the switch's drop");
+        // The takeoff wires them: the conductors over each room circuit's conduit.
+        let mut s = Session::new();
+        let mut spec = BuildingSpec::from_json(
+            r#"{"version": 1, "units_per_foot": 12, "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9}]}"#,
+        )
+        .expect("spec");
+        store_room_circuits(&mut spec, runs.clone(), &circuits);
+        s.execute("bspec.set", &json!({"replace": true, "spec": serde_json::from_str::<Value>(&spec.to_json()).expect("spec")})).expect("set");
+        let bom = s.execute("bim.bom", &json!({})).expect("bom");
+        let wire: f64 = bom["lines"].as_array().into_iter().flatten().filter(|l| l["item"] == "THHN copper").filter_map(|l| l["net"].as_f64()).sum();
+        assert!(wire > 0.0, "{bom:#}");
+        // The sheets' circuits stored again (the build does after the devices): the rooms' stay.
+        store_circuits(&mut spec, &[]);
+        assert_eq!(spec.tags.len(), 2);
+        // Stored twice: the second replaces the first.
+        let mut sp = BuildingSpec::default();
+        store_room_circuits(&mut sp, runs.clone(), &circuits);
+        store_room_circuits(&mut sp, runs.clone(), &circuits);
+        assert_eq!((sp.mep.runs.len(), sp.tags.len()), (runs.len(), 2));
     }
 
     #[test]
