@@ -1,12 +1,16 @@
 //! Drawing → DXF (AC1015 / R2000 structure, readable by every DXF consumer since 2000). Later
-//! versions keep that structure (the groups they add are optional, DXF Reference) and differ in
-//! `$ACADVER`, from 2004 in the newer DIMSTYLE groups, and from 2007 in UTF-8 text (the caller
-//! picks the text encoding) and MULTILEADER entities (older files get LEADER + MTEXT).
+//! versions keep that structure and differ in `$ACADVER`, from 2004 in CLASS instance counts and
+//! the newer DIMSTYLE groups, and from 2007 in UTF-8 text (the caller picks the text encoding) and
+//! MULTILEADER entities (older files get LEADER + MTEXT).
 
 use std::collections::HashMap;
 
 use cadcraft_color::Color;
-use cadcraft_doc::*;
+use cadcraft_doc::{
+    AssocSnap, Attrib, Block, Common, DimAssoc, DimKind, DimStyle, Dimension, Drawing, Entity, EntityKind, EntityStore, Gradient, Group, HAlign,
+    HVal, Handle, Hatch, Insert, Layout, Leader, Line, Lineweight, LwPolyline, MLeader, MLeaderStyle, MText, PageSetup, Point, Solid, Space, Table,
+    TableStyle, Text, Transparency, VAlign, VportConfig, VportTile,
+};
 use cadcraft_dxf::{Tag, Version};
 use cadcraft_geom::{Bounds2, Vec2, Vec3};
 

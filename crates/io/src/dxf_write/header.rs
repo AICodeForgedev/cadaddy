@@ -1,4 +1,4 @@
-use super::*;
+use super::{DimVal, Drawing, HVal, K, Version, W, dxf_ext};
 
 /// Header variables we write, with their group codes (DXF Reference, HEADER section).
 /// `P2`/`P3` = 2D/3D point.
@@ -41,6 +41,7 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("PLINEWID", 40),
     ("CELWEIGHT", 370),
     ("LWDISPLAY", 290),
+    ("PSTYLEMODE", 290),
     ("INSUNITS", 70),
     ("MEASUREMENT", 70),
     ("PSLTSCALE", 70),
