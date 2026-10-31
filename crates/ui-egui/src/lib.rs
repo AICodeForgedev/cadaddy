@@ -779,6 +779,13 @@ impl CadApp {
     /// Submit a line of command-line text. A refused line is echoed to the history; the error is
     /// also returned.
     pub fn cmdline(&mut self, text: &str) -> Option<String> {
+        // The stall trail names what a typed line started (or answered), however it ends.
+        if let Some(first) = text.split_whitespace().next() {
+            diag::note(&format!("command {}", first.to_ascii_lowercase()));
+        }
+        if let Some(r) = &self.session.running {
+            diag::note(&format!("running {}", r.id));
+        }
         if menus::help_line(self, text, true) {
             return None;
         }
@@ -803,6 +810,9 @@ impl CadApp {
             }
         }
         let r = self.session.cmdline(text);
+        if let Some(running) = &self.session.running {
+            diag::note(&format!("running {}", running.id));
+        }
         exchangeloss::take(self, true);
         secureloaddlg::take(self, true);
         let e = r.err()?.to_string();
