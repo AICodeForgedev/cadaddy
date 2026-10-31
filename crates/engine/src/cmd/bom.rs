@@ -1441,13 +1441,40 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
             st(&e, "kind").to_ascii_lowercase().as_str(),
             "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"
         );
+        // A room's own panel (each guest room's G, tagged G-<room>): counted together by its
+        // letter, each with its flush trim.
+        let own = match (e["properties"]["PANEL"].as_str(), e["properties"]["ROOM"].as_str()) {
+            (Some(p), Some(r)) if st(&e, "tag") == format!("{p}-{r}") => Some(p.to_string()),
+            _ => None,
+        };
+        if let Some(p) = &own {
+            add(
+                lines,
+                Line {
+                    trade: "electrical",
+                    category: "equipment".into(),
+                    item: format!("Panel cover/trim, flush: panel {p}"),
+                    unit: "each",
+                    net: 1.0,
+                    status: "rule",
+                    rule: Some("one per recessed panel".into()),
+                    level: st(&e, "level"),
+                    elements: vec![st(&e, "tag")],
+                    ..Line::default()
+                },
+            );
+        }
         add(
             lines,
             Line {
                 trade: if electrical { "electrical" } else { "mechanical" },
                 category: "equipment".into(),
-                item: format!("{} {}", st(&e, "kind"), st(&e, "tag")),
-                size: st(&e, "size"),
+                item: match &own {
+                    Some(p) => format!("{} {p}, one per room", st(&e, "kind")),
+                    None => format!("{} {}", st(&e, "kind"), st(&e, "tag")),
+                },
+                // One size for all of them (their boxes turn with their walls).
+                size: own.as_ref().and_then(|_| e["properties"]["SIZE"].as_str()).map_or_else(|| st(&e, "size"), str::to_string),
                 unit: "each",
                 net: 1.0,
                 status: "firm",
@@ -2033,8 +2060,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if devices > 0.0 && plates <= 0.0 {
         check.push(json!({ "issue": "accessory_missing", "item": "Device plate", "detail": "devices are on the BOM without their plates (sold separately)" }));
     }
-    for e in grouped.iter().filter(|l| l.category == "equipment" && l.item.to_ascii_lowercase().contains("panel")) {
-        for acc in ["Panel cover/trim", "Lug kit"] {
+    for e in grouped
+        .iter()
+        .filter(|l| l.category == "equipment" && l.item.to_ascii_lowercase().contains("panel") && !l.item.starts_with("Panel cover/trim"))
+    {
+        // A room's load center takes its feeder on its own main (no lug kit).
+        let accessories: &[&str] = if e.item.ends_with("one per room") { &["Panel cover/trim"] } else { &["Panel cover/trim", "Lug kit"] };
+        for acc in accessories.iter().copied() {
             if !grouped.iter().any(|l| l.item.starts_with(acc)) {
                 check.push(json!({ "issue": "accessory_missing", "item": acc, "detail": format!("{} has no {acc} line (sold separately)", e.item) }));
             }

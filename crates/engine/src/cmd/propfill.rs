@@ -832,7 +832,10 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                 let panel = store.get("panel").filter(|p| p.has_value()).map(Prop::text);
                 let circuit = store.get("circuit").filter(|p| p.has_value()).map(Prop::text);
                 if let Some(p) = &panel {
-                    if let Some(gh) = gear.get(&p.trim().to_ascii_uppercase()) {
+                    // The room's own panel of that letter (a guest room's G) before one elsewhere.
+                    let own = store.get("room").filter(|r| r.has_value()).map(|r| format!("{}-{}", p.trim(), r.text().trim()).to_ascii_uppercase());
+                    let key = own.filter(|k| gear.contains_key(k)).unwrap_or_else(|| p.trim().to_ascii_uppercase());
+                    if let Some(gh) = gear.get(&key) {
                         put(
                             &mut store,
                             "fed_from_handle",
@@ -841,9 +844,7 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                         );
                     }
                     let number = circuit.as_deref().and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.trim().to_string()));
-                    let row = equipment
-                        .get(&p.trim().to_ascii_uppercase())
-                        .and_then(|q| q.circuits.iter().find(|c| number.as_deref().is_some_and(|n| c.number.trim() == n)));
+                    let row = equipment.get(&key).and_then(|q| q.circuits.iter().find(|c| number.as_deref().is_some_and(|n| c.number.trim() == n)));
                     if let Some(c) = row {
                         let src = Source::from_doc(SourceKind::Schedule, if c.source.is_empty() { "panel schedule" } else { &c.source });
                         if !c.breaker.trim().is_empty() {

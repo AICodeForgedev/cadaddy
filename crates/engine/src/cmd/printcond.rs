@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 use cadaddy_doc::{Drawing, EntityKind};
 use cadaddy_mepfix::conduit_reader::{DEFAULT_SIZE_IN, parse_boc, parse_conduit_tag};
 use cadaddy_walk3d::tags::ElementTag;
-use cadaddy_walk3d::{BuildingSpec, Mep, MepKind, MepRun, MepSystem};
+use cadaddy_walk3d::{BuildingSpec, Mep, MepEquipment, MepKind, MepRun, MepSystem};
 use serde_json::{Value, json};
 
 use super::printmep::{SheetRef, level_name, r1, sheet_drawing};
@@ -69,6 +69,16 @@ const MAX_ITEMS: usize = 200_000;
 const MAX_SHEETS: usize = 500;
 const MAX_DEVICES: usize = 100_000;
 const MAX_RUNS: usize = 50_000;
+/// A guest room's own panel (a load center recessed in its wall): wide, deep and high, inches.
+const ROOM_PANEL_IN: [f64; 3] = [14.0, 4.0, 24.0];
+/// A building panel lettered in a plan of its room (an MEP room's): a panelboard, inches.
+const PANELBOARD_IN: [f64; 3] = [20.0, 6.0, 48.0];
+/// The top of trim off the floor, inches: the highest breaker handle within 6'-7" (NEC 240.24(A)).
+const PANEL_TOP_IN: f64 = 78.0;
+/// The farthest the room's wall may be from where its plan letters the panel, feet.
+const ROOM_PANEL_WALL_FT: f64 = 3.0;
+/// Where a room's own panel stands, as its `sources.position` says.
+pub(crate) const ROOM_PANEL_POSITION: &str = "typical-room plan lettering";
 
 /// Where a wall device's box usually is, feet above the floor (none: at the ceiling, no drop).
 pub(crate) fn mount_height_ft(kind: &str) -> Option<f64> {
@@ -412,7 +422,7 @@ impl CondRead {
     }
 }
 
-fn run(system: &str, level: &str, sheet: &str, points: Vec<[f64; 2]>, size_in: f64, bottom: f64) -> MepRun {
+pub(crate) fn run(system: &str, level: &str, sheet: &str, points: Vec<[f64; 2]>, size_in: f64, bottom: f64) -> MepRun {
     let segs = points.len().saturating_sub(1).max(1);
     MepRun {
         system: system.into(),
@@ -779,6 +789,134 @@ pub(crate) fn room_circuits(devices: &[ReadDevice], panels: &BTreeMap<String, Ve
     (runs, circuits)
 }
 
+/// The panels the plans of rooms letter (`panels`: by the room) as equipment on the room's wall
+/// (`rooms`: each room's level, outline, and whether a typical-room plan stamped it) at the
+/// outline edge nearest the lettering: in a room a typical plan stamped, the room's own load
+/// center (`G-<room>`, one per room) recessed in the wall, front flush; in a plan of one room (an
+/// electrical room's), the building's panel of that name, a panelboard on the wall's face. With
+/// the panels' places moved onto their fronts, for the circuits' home runs.
+#[allow(clippy::type_complexity)]
+pub(crate) fn room_panel_equipment(
+    panels: &BTreeMap<String, Vec<(String, [f64; 2])>>,
+    rooms: &BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>,
+    upf: f64,
+) -> (Vec<MepEquipment>, BTreeMap<String, Vec<(String, [f64; 2])>>) {
+    let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    let (mut out, mut moved) = (Vec::new(), BTreeMap::new());
+    for (room, ps) in panels.iter().take(MAX_DEVICES) {
+        let Some((level, outline, typical)) = rooms.get(room) else {
+            moved.insert(room.clone(), ps.clone());
+            continue;
+        };
+        let size = if *typical { ROOM_PANEL_IN } else { PANELBOARD_IN };
+        let [w, dp, _] = size.map(|v| v / 12.0 * upf);
+        let mut at_front = Vec::new();
+        for (name, at) in ps.iter().take(8) {
+            let Some((front, along, out_n)) = on_wall(*at, outline, w, ROOM_PANEL_WALL_FT * upf) else {
+                at_front.push((name.clone(), *at));
+                continue;
+            };
+            // Recessed: its back in the wall; on the face: its front in the room.
+            let (front, back) = if *typical {
+                (front, [front[0] + out_n[0] * dp, front[1] + out_n[1] * dp])
+            } else {
+                ([front[0] - out_n[0] * dp, front[1] - out_n[1] * dp], front)
+            };
+            at_front.push((name.clone(), front));
+            let half = [along[0] * w / 2.0, along[1] * w / 2.0];
+            let corners = [
+                [front[0] - half[0], front[1] - half[1]],
+                [front[0] + half[0], front[1] + half[1]],
+                [back[0] - half[0], back[1] - half[1]],
+                [back[0] + half[0], back[1] + half[1]],
+            ];
+            let min = corners.iter().fold([f64::INFINITY; 2], |m, c| [m[0].min(c[0]), m[1].min(c[1])]);
+            let max = corners.iter().fold([f64::NEG_INFINITY; 2], |m, c| [m[0].max(c[0]), m[1].max(c[1])]);
+            let rule = if *typical { "rule: a guest room load center" } else { "rule: a panelboard" }.to_string();
+            let sources: BTreeMap<String, String> = [
+                ("size", rule.clone()),
+                ("height", rule.clone()),
+                ("elevation", "rule: top of trim 6'-6\", the highest breaker handle within 6'-7\"".to_string()),
+                ("position", ROOM_PANEL_POSITION.to_string()),
+                ("footprint", "rule: on the room's wall nearest the lettering".to_string()),
+                ("status", "unconfirmed".to_string()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+            let properties: BTreeMap<String, String> = [
+                ("PANEL", name.clone()),
+                ("ROOM", room.clone()),
+                ("MOUNTING", if *typical { "recessed, front flush with the wall" } else { "surface, on the wall" }.to_string()),
+                ("SIZE", format!("{}\" W x {}\" D x {}\" H", size[0], size[1], size[2])),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+            out.push(MepEquipment {
+                tag: if *typical { format!("{name}-{room}") } else { name.clone() },
+                kind: "panel".into(),
+                level: level_name(level),
+                min,
+                max,
+                bottom_ft: (PANEL_TOP_IN - size[2]) / 12.0,
+                height_ft: size[2] / 12.0,
+                title: "typical-room plan".into(),
+                properties,
+                sources,
+                confidence: 0.5,
+                ..MepEquipment::default()
+            });
+        }
+        moved.insert(room.clone(), at_front);
+    }
+    (out, moved)
+}
+
+/// Where a box `width` wide stands on the edge of `outline` nearest `p` (within `reach`): the
+/// middle of its front on the edge, the edge's direction and the normal out of the room, each
+/// along the axis nearest it (the box is square to the plan).
+fn on_wall(p: [f64; 2], outline: &[cadaddy_geom::Vec2], width: f64, reach: f64) -> Option<([f64; 2], [f64; 2], [f64; 2])> {
+    let n = outline.len();
+    if n < 3 || !p.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let mut best: Option<(f64, [f64; 2], [f64; 2], f64, f64)> = None;
+    for i in 0..n.min(MAX_ITEMS) {
+        let (Some(a), Some(b)) = (outline.get(i), outline.get((i + 1) % n)) else { continue };
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let len = dx.hypot(dy);
+        if !(len.is_finite() && len > 1e-9) {
+            continue;
+        }
+        let u = [dx / len, dy / len];
+        let t = ((p[0] - a.x) * u[0] + (p[1] - a.y) * u[1]).clamp(0.0, len);
+        let d = dist(p, [a.x + u[0] * t, a.y + u[1] * t]);
+        if d <= reach && best.is_none_or(|b| d < b.0) {
+            best = Some((d, [a.x, a.y], u, len, t));
+        }
+    }
+    let (_, a, u, len, t) = best?;
+    // The whole box on the edge where it fits.
+    let t = if len > width { t.clamp(width / 2.0, len - width / 2.0) } else { len / 2.0 };
+    let front = [a[0] + u[0] * t, a[1] + u[1] * t];
+    let u = if u[0].abs() >= u[1].abs() { [u[0].signum(), 0.0] } else { [0.0, u[1].signum()] };
+    let mut out_n = [u[1], -u[0]];
+    let probe = cadaddy_geom::Vec2::new(front[0] + out_n[0] * 1e-3 * len.max(1.0), front[1] + out_n[1] * 1e-3 * len.max(1.0));
+    if cadaddy_geom::point_in_polygon(outline, probe) {
+        out_n = [-out_n[0], -out_n[1]];
+    }
+    Some((front, u, out_n))
+}
+
+/// Put the rooms' panels into the spec (an earlier build's go); a panel the spec has from
+/// elsewhere (a schedule) stays as it is.
+pub(crate) fn store_room_panels(sp: &mut BuildingSpec, panels: Vec<MepEquipment>) {
+    sp.mep.equipment.retain(|e| e.sources.get("position").map(String::as_str) != Some(ROOM_PANEL_POSITION));
+    let new: Vec<MepEquipment> = panels.into_iter().filter(|p| !sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&p.tag))).collect();
+    sp.mep.equipment.extend(new);
+}
+
 /// Put the stamped rooms' circuits and their runs into the spec (an earlier build's go), at the
 /// levels' ceilings.
 pub(crate) fn store_room_circuits(sp: &mut BuildingSpec, runs: Vec<MepRun>, circuits: &[ElementTag]) {
@@ -935,6 +1073,84 @@ mod tests {
         store_room_circuits(&mut sp, runs.clone(), &circuits);
         store_room_circuits(&mut sp, runs.clone(), &circuits);
         assert_eq!((sp.mep.runs.len(), sp.tags.len()), (runs.len(), 2));
+    }
+
+    #[test]
+    fn a_rooms_own_panel_is_recessed_in_the_wall_by_its_lettering() {
+        let square = |x0: f64| -> Vec<cadaddy_geom::Vec2> {
+            [[x0, 0.0], [x0 + 144.0, 0.0], [x0 + 144.0, 180.0], [x0, 180.0]].iter().map(|p| cadaddy_geom::Vec2::new(p[0], p[1])).collect()
+        };
+        // 101 and 102 stamped from a typical plan; 160 is an MEP room its own plan shows (a little
+        // askew, as traced).
+        let mut askew = square(400.0);
+        if let Some(p) = askew.get_mut(3) {
+            p.x += 3.0;
+        }
+        let rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = [
+            ("101".to_string(), ("Level 1".to_string(), square(0.0), true)),
+            ("102".to_string(), ("Level 1".to_string(), square(200.0), true)),
+            ("160".to_string(), ("Level 1".to_string(), askew, false)),
+        ]
+        .into_iter()
+        .collect();
+        // Room 101's G lettered 5" off its left wall; 102's right of its left wall; 103 has no
+        // outline; the MEP room letters the building's panel A.
+        let panels: BTreeMap<String, Vec<(String, [f64; 2])>> = [
+            ("101".to_string(), vec![("G".to_string(), [5.0, 100.0])]),
+            ("102".to_string(), vec![("G".to_string(), [206.0, 4.0])]),
+            ("103".to_string(), vec![("G".to_string(), [500.0, 50.0])]),
+            ("160".to_string(), vec![("A".to_string(), [406.0, 100.0])]),
+        ]
+        .into_iter()
+        .collect();
+        let (gear, moved) = room_panel_equipment(&panels, &rooms, 12.0);
+        assert_eq!(gear.len(), 3, "{gear:#?}");
+        // The MEP room's panel is the building's A, a panelboard square to the plan, on the face
+        // of the wall (in the room).
+        let a = gear.iter().find(|e| e.tag == "A").expect("A");
+        let r3 = |v: f64| (v * 1000.0).round() / 1000.0;
+        assert_eq!((r3(a.max[0] - a.min[0]), r3(a.max[1] - a.min[1]), a.height_ft), (6.0, 20.0, 4.0), "{a:#?}");
+        assert!(a.min[0] > 401.0 && a.max[0] < 408.0, "{a:#?}");
+        assert_eq!(a.properties["MOUNTING"], "surface, on the wall");
+        let g101 = gear.iter().find(|e| e.tag == "G-101").expect("G-101");
+        // In the wall behind the lettering: 4" deep out of the room, 14" wide, top of trim 6'-6".
+        assert_eq!((g101.min, g101.max), ([-4.0, 93.0], [0.0, 107.0]), "{g101:#?}");
+        assert_eq!((g101.kind.as_str(), g101.bottom_ft, g101.height_ft), ("panel", 4.5, 2.0));
+        assert_eq!(g101.sources["status"], "unconfirmed");
+        assert_eq!(g101.properties["ROOM"], "101");
+        // Lettered at a corner: the whole box on the nearest wall (the bottom one, 4" off it).
+        let g102 = gear.iter().find(|e| e.tag == "G-102").expect("G-102");
+        assert_eq!((g102.min, g102.max), ([200.0, -4.0], [214.0, 0.0]), "{g102:#?}");
+        // The circuits run home to the panel's front; a room with no outline keeps its lettering.
+        assert_eq!(moved["101"], vec![("G".to_string(), [0.0, 100.0])]);
+        assert_eq!(moved["103"], vec![("G".to_string(), [500.0, 50.0])]);
+        // Into the spec once however often stored; the takeoff counts one G per room with its trim.
+        let mut spec = BuildingSpec::from_json(
+            r#"{"version": 1, "units_per_foot": 12, "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9}]}"#,
+        )
+        .expect("spec");
+        // A scheduled panel A is the one the spec keeps.
+        spec.mep.equipment.push(MepEquipment {
+            tag: "A".into(),
+            title: "ELECTRICAL EQUIPMENT SCHEDULE".into(),
+            sources: BTreeMap::new(),
+            properties: BTreeMap::new(),
+            ..a.clone()
+        });
+        store_room_panels(&mut spec, gear.clone());
+        store_room_panels(&mut spec, gear);
+        assert_eq!(spec.mep.equipment.len(), 3);
+        assert_eq!(spec.mep.equipment.iter().filter(|e| e.tag == "A").count(), 1);
+        let mut s = Session::new();
+        s.execute("bspec.set", &json!({"replace": true, "spec": serde_json::from_str::<Value>(&spec.to_json()).expect("spec")})).expect("set");
+        let bom = s.execute("bim.bom", &json!({})).expect("bom");
+        let net = |item: &str| -> f64 {
+            bom["lines"].as_array().into_iter().flatten().filter(|l| l["item"] == item).filter_map(|l| l["net"].as_f64()).sum()
+        };
+        assert_eq!((net("panel G, one per room"), net("Panel cover/trim, flush: panel G")), (2.0, 2.0), "{bom:#}");
+        // A room's load center takes no lug kit (the building's panel A does).
+        let lug = |c: &&Value| c["item"] == "Lug kit" && c["detail"].as_str().is_some_and(|d| d.contains("panel G"));
+        assert!(!bom["spec_check"].as_array().into_iter().flatten().any(|c| lug(&c)), "{bom:#}");
     }
 
     #[test]

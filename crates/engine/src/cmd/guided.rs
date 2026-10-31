@@ -3756,6 +3756,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // rectangle), stacked; the other disciplines' plans add no walls.
     let levels = building_levels(job);
     let draft_params = if levels.is_empty() { json!({"store": true}) } else { json!({"store": true, "levels": levels, "stack": true}) };
+    // The circuits whose estimated routes were all in typical-room views (their tags not stored).
+    let mut room_view_circuits: BTreeSet<String> = BTreeSet::new();
     let draft_result = s.execute("bspec.draft", &draft_params);
     match &draft_result {
         Ok(spec) => {
@@ -3935,6 +3937,19 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // much of them: where a registration is missing.
                 let upf_runs = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
                 let mut unplaced: BTreeMap<String, (usize, f64)> = BTreeMap::new();
+                // A circuit's estimated route drawn in a view of rooms (a typical-room plan) that
+                // can't be placed: each room's own circuits go in instead (with the devices
+                // stamped into the rooms), so it isn't a missing registration.
+                let estimated = |r: &cadaddy_walk3d::MepRun| r.system == super::printcond::CIRCUIT_SYSTEM;
+                let lost: BTreeSet<String> = sp
+                    .mep
+                    .runs
+                    .iter()
+                    .filter(|r| estimated(r) && r.points.first().is_none_or(|p| sim(*p, &r.level).is_none()))
+                    .map(|r| sheet_key(&r.source_sheet))
+                    .collect();
+                let views = if lost.is_empty() { BTreeMap::new() } else { room_view_regions(s.doc()?, job, &lost) };
+                let mut in_views = 0usize;
                 sp.mep.runs.retain_mut(|r| {
                     let start = r.points.first().and_then(|p| sim(*p, &r.level));
                     let end = start.and_then(|_| r.points.last().and_then(|p| sim(*p, &r.level)));
@@ -3942,6 +3957,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         (Some(t), Some(_)) => {
                             r.points.iter_mut().for_each(|p| *p = t.apply(*p));
                             true
+                        }
+                        _ if in_room_view(r, &views) => {
+                            in_views += 1;
+                            if let Some(c) = super::printcond::circuit_of_run(r) {
+                                room_view_circuits.insert(c.to_string());
+                            }
+                            false
                         }
                         _ => {
                             let why = if start.is_some() { " one end" } else { "" };
@@ -3959,6 +3981,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     let list: Vec<String> = unplaced.iter().map(|(k, (n, ft))| format!("{k}: {n} ({ft:.0} ft)")).collect();
                     progress_line(&format!("  MEP runs not placeable by sheet: {}", list.join(", ")));
                 }
+                if in_views > 0 {
+                    progress_line(&format!("  estimated circuit routes in typical-room views (each room's own circuits instead): {in_views}"));
+                }
+                // A circuit some of whose route was placed keeps its tag.
+                for r in &sp.mep.runs {
+                    if let Some(c) = super::printcond::circuit_of_run(r) {
+                        room_view_circuits.remove(c);
+                    }
+                }
                 sp.mep.terminals.retain_mut(|t| match sim(t.at, &t.level) {
                     Some(m) => {
                         t.at = m.apply(t.at);
@@ -3975,7 +4006,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     }
                     None => false,
                 });
-                let dropped = (before.0 - sp.mep.runs.len(), before.1 - sp.mep.terminals.len(), before.2 - sp.mep.equipment.len());
+                let dropped = (before.0 - sp.mep.runs.len() - in_views, before.1 - sp.mep.terminals.len(), before.2 - sp.mep.equipment.len());
                 progress_line(&format!(
                     "  MEP onto the plans: {} runs, {} terminals, {} equipment placed; not placeable (no fit to the architecture): {} runs, {} terminals, {} equipment",
                     sp.mep.runs.len(),
@@ -4104,6 +4135,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         let mut counts = (0usize, 0usize);
         // The stamped rooms' panels (where a typical room's plan letters them), for their circuits.
         let mut room_panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
+        let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
         let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
             Ok((sp, true)) if has_arch => {
                 if placer.is_none() {
@@ -4156,8 +4188,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
                 let unplaced: Vec<&super::readers::ReadDevice> = job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
-                let StampedRooms { devices: stamped, report, authority, panels } = stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                let StampedRooms { devices: stamped, report, authority, panels, rooms } = stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
                 room_panels = panels;
+                panel_rooms = rooms;
                 // A room an enlarged plan of its own shows: that plan's devices, not the overall
                 // plan's copies of some of them.
                 let before = out.len();
@@ -4191,12 +4224,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
             _ => job.devices.clone(),
         };
-        // A stamped room's circuits are its own (a guest room's own panel): their routes in the
-        // room, where the sheet's reading can't put them.
+        // A stamped room's circuits are its own (a guest room's own panel, in the room's wall):
+        // their routes in the room, where the sheet's reading can't put them.
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+            let (gear, room_panels) = super::printcond::room_panel_equipment(&room_panels, &panel_rooms, sp.units_per_foot);
             let (runs, circuits) = super::printcond::room_circuits(&devices, &room_panels, sp.units_per_foot);
-            if !circuits.is_empty() {
-                progress_line(&format!("  stamped rooms' circuits: {} ({} runs)", circuits.len(), runs.len()));
+            if !gear.is_empty() || !circuits.is_empty() {
+                progress_line(&format!("  stamped rooms' panels: {}; circuits: {} ({} runs)", gear.len(), circuits.len(), runs.len()));
+                super::printcond::store_room_panels(&mut sp, gear);
                 super::printcond::store_room_circuits(&mut sp, runs, &circuits);
                 s.doc_mut()?.building_spec = Some(sp.to_json());
             }
@@ -4323,13 +4358,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(v) = placed {
         result["devices"] = v;
     }
-    // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff.
-    if !job.circuits.is_empty()
+    // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff;
+    // not the typical-room views' (each room's own circuits are those).
+    let circuits: Vec<_> = job.circuits.iter().filter(|c| !room_view_circuits.contains(&c.id)).cloned().collect();
+    if !circuits.is_empty()
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {
-        super::printcond::store_circuits(&mut sp, &job.circuits);
+        super::printcond::store_circuits(&mut sp, &circuits);
         s.doc_mut()?.building_spec = Some(sp.to_json());
-        result["circuits"] = json!(job.circuits.len());
+        result["circuits"] = json!(circuits.len());
     }
     // The model's rooms are the job's rooms on the levels it built.
     if let Some(by_level) = rooms_from_model(s, job)
@@ -5060,37 +5097,13 @@ fn stamp_typical_rooms(
     let mut authority: Vec<(String, Vec<cadaddy_geom::Vec2>)> = Vec::new();
     // Each stamped room's panels, where its plan letters them ("PNLBD 'G'"), by the room.
     let mut panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
+    let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
     if unplaced.is_empty() {
-        return StampedRooms { devices: out, report, authority, panels };
+        return StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms };
     }
     // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
-    let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>, String)> = job
-        .stage(StageName::Rooms)
-        .and_then(|st| st.result.as_ref())
-        .and_then(|r| r.get("rooms"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|r| r.get("other_trade").and_then(Value::as_bool) != Some(true))
-        .filter_map(|r| {
-            let name = r.get("name").and_then(Value::as_str)?.trim().to_string();
-            let level = r.get("level").and_then(Value::as_str).unwrap_or("").to_string();
-            let outline: Vec<cadaddy_geom::Vec2> = r
-                .get("outline")?
-                .as_array()?
-                .iter()
-                .filter_map(|q| Some(cadaddy_geom::Vec2::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?)))
-                .collect();
-            let number = r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            (outline.len() >= 3 && !name.is_empty()).then_some((name, level, outline, number))
-        })
-        .collect();
-    let mut count: BTreeMap<BTreeSet<String>, usize> = BTreeMap::new();
-    for (name, _, _, _) in &rooms {
-        *count.entry(type_words(name, None)).or_default() += 1;
-    }
-    let types: BTreeSet<BTreeSet<String>> = count.into_iter().filter(|(k, n)| *n > 1 && !k.is_empty()).map(|(k, _)| k).collect();
-    let vocabulary: BTreeSet<String> = types.iter().flatten().cloned().collect();
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
     let bbox = |o: &[cadaddy_geom::Vec2]| {
         o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
             [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
@@ -5116,7 +5129,6 @@ fn stamp_typical_rooms(
     };
     let mut matched: BTreeMap<(usize, String), usize> = BTreeMap::new();
     let refs = job_sheet_refs(job);
-    let sheet_key = |n: &str| n.split('/').next().unwrap_or(n).trim().to_ascii_uppercase();
     let mut by_sheet: BTreeMap<String, Vec<&super::readers::ReadDevice>> = BTreeMap::new();
     for dv in unplaced {
         by_sheet.entry(sheet_key(&dv.sheet)).or_default().push(dv);
@@ -5132,29 +5144,24 @@ fn stamp_typical_rooms(
         let panels_in = |view: &[f64; 4]| -> Vec<(String, [f64; 2])> {
             lettered.iter().filter(|(_, p)| p[0] >= view[0] && p[0] <= view[2] && p[1] >= view[1] && p[1] <= view[3]).cloned().collect()
         };
-        let panel_into = |room: String, view: &[f64; 4], outline: &[cadaddy_geom::Vec2], panels: &mut BTreeMap<String, Vec<(String, [f64; 2])>>| {
+        let panel_into = |room: String,
+                          typical: bool,
+                          level: &str,
+                          view: &[f64; 4],
+                          outline: &[cadaddy_geom::Vec2],
+                          panels: &mut BTreeMap<String, Vec<(String, [f64; 2])>>,
+                          panel_rooms: &mut BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>| {
             if panels.contains_key(&room) {
                 return;
             }
             let at: Vec<(String, [f64; 2])> =
                 panels_in(view).into_iter().filter_map(|(n, p)| Some((n, into_room(p, *view, bbox(outline))?))).collect();
+            if !at.is_empty() {
+                panel_rooms.insert(room.clone(), (level.to_string(), outline.to_vec(), typical));
+            }
             panels.insert(room, at);
         };
-        let titled = cadaddy_mepfix::sheet_facts::view_titles(&sub, &sheet_texts);
-        let mut views: Vec<(String, [f64; 4], BTreeSet<String>)> = Vec::new();
-        let mut one_room: Vec<(String, [f64; 4], usize)> = Vec::new();
-        for v in titled {
-            // A plan of the room, not an elevation of one of its walls or a section.
-            let upper = v.title.to_ascii_uppercase();
-            let plan = !["WALL", "ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
-            let Some(region) = v.region.filter(|_| plan) else { continue };
-            let words = type_words(&v.title, Some(&vocabulary));
-            if types.contains(&words) {
-                views.push((v.title, region, words));
-            } else if let Some(i) = room_of_view(&upper, &rooms) {
-                one_room.push((v.title, region, i));
-            }
-        }
+        let (views, one_room) = room_views(&sub, &sheet_texts, &types, &vocabulary, &rooms);
         let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
         for dv in devices {
             let inside = |r: &[f64; 4]| dv.at[0] >= r[0] && dv.at[0] <= r[2] && dv.at[1] >= r[1] && dv.at[1] <= r[3];
@@ -5175,7 +5182,7 @@ fn stamp_typical_rooms(
                     copy.at = at;
                     copy.level.clone_from(level);
                     copy.room = stamped_room(name, number, *i);
-                    panel_into(copy.room.clone(), view, outline, &mut panels);
+                    panel_into(copy.room.clone(), false, level, view, outline, &mut panels, &mut panel_rooms);
                     out.push(copy);
                     *report.entry(format!("{sheet} {title}")).or_default() += 1;
                 }
@@ -5205,25 +5212,123 @@ fn stamp_typical_rooms(
                 copy.at = at;
                 copy.level.clone_from(level);
                 copy.room = stamped_room(name, number, ri);
-                panel_into(copy.room.clone(), view, outline, &mut panels);
+                panel_into(copy.room.clone(), true, level, view, outline, &mut panels, &mut panel_rooms);
                 out.push(copy);
                 *report.entry(format!("{sheet} {title}")).or_default() += 1;
             }
         }
     }
-    StampedRooms { devices: out, report, authority, panels }
+    StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms }
 }
 
-/// The one room a view's title (upper case) names: its number ("ROOM #237", "ROOM 237") when one
-/// room has it, else its name ("1ST FLOOR - MEP ROOM": the room called MEP), on the floor the
-/// title names when several are.
+/// A room of the rooms stage with its outline: name, level, outline, number.
+type JobRoom = (String, String, Vec<cadaddy_geom::Vec2>, String);
+
+/// The rooms stage's rooms with outlines (not the ones traced from other trades' tags).
+fn job_rooms(job: &GuidedJob) -> Vec<JobRoom> {
+    job.stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| r.get("other_trade").and_then(Value::as_bool) != Some(true))
+        .filter_map(|r| {
+            let name = r.get("name").and_then(Value::as_str)?.trim().to_string();
+            let level = r.get("level").and_then(Value::as_str).unwrap_or("").to_string();
+            let outline: Vec<cadaddy_geom::Vec2> = r
+                .get("outline")?
+                .as_array()?
+                .iter()
+                .filter_map(|q| Some(cadaddy_geom::Vec2::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?)))
+                .collect();
+            let number = r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            (outline.len() >= 3 && !name.is_empty()).then_some((name, level, outline, number))
+        })
+        .collect()
+}
+
+/// The room types (the words of a name several rooms carry) and every word they use.
+fn room_types(rooms: &[JobRoom]) -> (BTreeSet<BTreeSet<String>>, BTreeSet<String>) {
+    let mut count: BTreeMap<BTreeSet<String>, usize> = BTreeMap::new();
+    for (name, _, _, _) in rooms {
+        *count.entry(type_words(name, None)).or_default() += 1;
+    }
+    let types: BTreeSet<BTreeSet<String>> = count.into_iter().filter(|(k, n)| *n > 1 && !k.is_empty()).map(|(k, _)| k).collect();
+    let vocabulary: BTreeSet<String> = types.iter().flatten().cloned().collect();
+    (types, vocabulary)
+}
+
+/// A sheet number without its view (`E-6/2` is on `E-6`), upper case.
+fn sheet_key(n: &str) -> String {
+    n.split('/').next().unwrap_or(n).trim().to_ascii_uppercase()
+}
+
+/// The plan views on a sheet that show rooms, not a floor: the typical-room views (title, region,
+/// the room type's words) and the views of one room (title, region, the room's index in `rooms`).
+#[allow(clippy::type_complexity)]
+fn room_views(
+    sub: &cadaddy_doc::Drawing,
+    texts: &[cadaddy_mepfix::sheet_facts::TextItem],
+    types: &BTreeSet<BTreeSet<String>>,
+    vocabulary: &BTreeSet<String>,
+    rooms: &[JobRoom],
+) -> (Vec<(String, [f64; 4], BTreeSet<String>)>, Vec<(String, [f64; 4], usize)>) {
+    let mut views = Vec::new();
+    let mut one_room = Vec::new();
+    for v in cadaddy_mepfix::sheet_facts::view_titles(sub, texts) {
+        // A plan of the room, not an elevation of one of its walls or a section.
+        let upper = v.title.to_ascii_uppercase();
+        let plan = !["WALL", "ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
+        let Some(region) = v.region.filter(|_| plan) else { continue };
+        let words = type_words(&v.title, Some(vocabulary));
+        if types.contains(&words) {
+            views.push((v.title, region, words));
+        } else if let Some(i) = room_of_view(&upper, rooms) {
+            one_room.push((v.title, region, i));
+        }
+    }
+    (views, one_room)
+}
+
+/// Whether a run is a circuit's estimated route that starts in one of its sheet's views of rooms
+/// (`views`: by [`sheet_key`]).
+fn in_room_view(r: &cadaddy_walk3d::MepRun, views: &BTreeMap<String, Vec<[f64; 4]>>) -> bool {
+    r.system == super::printcond::CIRCUIT_SYSTEM
+        && views
+            .get(&sheet_key(&r.source_sheet))
+            .is_some_and(|vs| r.points.first().is_some_and(|p| vs.iter().any(|v| p[0] >= v[0] && p[0] <= v[2] && p[1] >= v[1] && p[1] <= v[3])))
+}
+
+/// Where `sheets` (by [`sheet_key`]) show rooms rather than a floor (their typical-room and
+/// one-room plans), in the job's drawing.
+fn room_view_regions(d: &cadaddy_doc::Drawing, job: &GuidedJob, sheets: &BTreeSet<String>) -> BTreeMap<String, Vec<[f64; 4]>> {
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    let refs = job_sheet_refs(job);
+    let mut out = BTreeMap::new();
+    for sheet in sheets.iter().take(MAX_STAMP_SHEETS) {
+        let Some(sh) = refs.iter().find(|r| sheet_key(&r.number) == *sheet && r.view.is_none()) else { continue };
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let (views, one_room) = room_views(&sub, &texts, &types, &vocabulary, &rooms);
+        let regions: Vec<[f64; 4]> = views.iter().map(|v| v.1).chain(one_room.iter().map(|v| v.1)).collect();
+        if !regions.is_empty() {
+            out.insert(sheet.clone(), regions);
+        }
+    }
+    out
+}
+
 /// What stamping the typical and one-room plans gave: the devices, how many by view, the rooms
-/// a one-room plan is the authority in (level, outline), and each stamped room's panels.
+/// a one-room plan is the authority in (level, outline), each stamped room's panels, and the
+/// level and outline of each room with panels.
 struct StampedRooms {
     devices: Vec<super::readers::ReadDevice>,
     report: BTreeMap<String, usize>,
     authority: Vec<(String, Vec<cadaddy_geom::Vec2>)>,
     panels: BTreeMap<String, Vec<(String, [f64; 2])>>,
+    rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>,
 }
 
 /// A stamped room's name for its own circuits: its number, else its name and place in the list.
@@ -5231,7 +5336,10 @@ fn stamped_room(name: &str, number: &str, i: usize) -> String {
     if number.trim().is_empty() { format!("{} {i}", name.trim()) } else { number.trim().to_string() }
 }
 
-fn room_of_view(title: &str, rooms: &[(String, String, Vec<cadaddy_geom::Vec2>, String)]) -> Option<usize> {
+/// The one room a view's title (upper case) names: its number ("ROOM #237", "ROOM 237") when one
+/// room has it, else its name ("1ST FLOOR - MEP ROOM": the room called MEP), on the floor the
+/// title names when several are.
+fn room_of_view(title: &str, rooms: &[JobRoom]) -> Option<usize> {
     if !title.contains("ROOM") {
         return None;
     }
@@ -9135,6 +9243,54 @@ mod tests {
         assert_eq!(room_of_view("ELECTRICAL - 2ND FLOOR - STORAGE ROOM", &rooms), Some(3), "two of the name: the floor says which");
         assert_eq!(room_of_view("ELECTRICAL - 1ST FLOOR - CORE AREA", &rooms), None, "no room named");
         assert_eq!(room_of_view("ENLARGED QUEEN", &rooms), None);
+    }
+
+    #[test]
+    fn a_circuits_route_in_a_typical_rooms_view_is_left_to_the_rooms_own_circuits() {
+        use cadaddy_doc::{Drawing, Line};
+        use cadaddy_geom::Vec2;
+        let mut d = Drawing::default();
+        let line = |d: &mut Drawing, a: (f64, f64), b: (f64, f64)| {
+            d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) })).ok();
+        };
+        // A sheet's border, and two views side by side on it: a room's walls with a title and a
+        // scale under it.
+        line(&mut d, (0.0, 0.0), (2400.0, 0.0));
+        line(&mut d, (2400.0, 0.0), (2400.0, 1600.0));
+        line(&mut d, (2400.0, 1600.0), (0.0, 1600.0));
+        line(&mut d, (0.0, 1600.0), (0.0, 0.0));
+        for (x0, title) in [(100.0, "ENLARGED QUEEN"), (900.0, "ENLARGED BOH ROOM #237")] {
+            line(&mut d, (x0, 90.0), (x0 + 600.0, 90.0));
+            line(&mut d, (x0 + 600.0, 90.0), (x0 + 600.0, 510.0));
+            line(&mut d, (x0 + 600.0, 510.0), (x0, 510.0));
+            line(&mut d, (x0, 510.0), (x0, 90.0));
+            line(&mut d, (x0 + 300.0, 90.0), (x0 + 300.0, 510.0));
+            d.add(&Space::Model, Common::default(), EntityKind::Text(text(title, x0 + 13.0, 71.0, 7.4))).ok();
+            d.add(&Space::Model, Common::default(), EntityKind::Text(text("SCALE:  1/4\" = 1'-0\"", x0 + 13.0, 62.0, 4.6))).ok();
+        }
+        let sq = vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0)];
+        let rooms: Vec<JobRoom> = vec![
+            ("QUEEN".to_string(), "2".to_string(), sq.clone(), "201".to_string()),
+            ("QUEEN".to_string(), "3".to_string(), sq.clone(), "301".to_string()),
+            ("BOH".to_string(), "2".to_string(), sq.clone(), "237".to_string()),
+        ];
+        let (types, vocabulary) = room_types(&rooms);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&d);
+        let (views, one_room) = room_views(&d, &texts, &types, &vocabulary, &rooms);
+        assert_eq!(views.iter().map(|v| v.0.as_str()).collect::<Vec<_>>(), ["ENLARGED QUEEN"], "{views:?}");
+        assert_eq!(one_room.iter().map(|v| (v.0.as_str(), v.2)).collect::<Vec<_>>(), [("ENLARGED BOH ROOM #237", 2)]);
+        // An estimated route starting in either view is the rooms'; one elsewhere on the sheet, or
+        // drawn conduit, is the floor's.
+        let regions: BTreeMap<String, Vec<[f64; 4]>> =
+            [("E-6".to_string(), views.iter().map(|v| v.1).chain(one_room.iter().map(|v| v.1)).collect())].into_iter().collect();
+        let run =
+            |system: &str, sheet: &str, at: [f64; 2]| super::super::printcond::run(system, "2", sheet, vec![at, [at[0] + 10.0, at[1]]], 0.75, 9.0);
+        let est = super::super::printcond::CIRCUIT_SYSTEM;
+        assert!(in_room_view(&run(est, "E-6", [300.0, 300.0]), &regions));
+        assert!(in_room_view(&run(est, "E-6/1", [1000.0, 300.0]), &regions), "the sheet's view number aside");
+        assert!(!in_room_view(&run(est, "E-6", [800.0, 300.0]), &regions), "between the views");
+        assert!(!in_room_view(&run(est, "E-3", [300.0, 300.0]), &regions), "another sheet");
+        assert!(!in_room_view(&run(super::super::printcond::DRAWN_SYSTEM, "E-6", [300.0, 300.0]), &regions), "drawn conduit");
     }
 
     #[test]
