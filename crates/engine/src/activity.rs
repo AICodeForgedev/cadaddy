@@ -70,7 +70,7 @@ fn prune(dir: &std::path::Path) {
     }
     logs.sort();
     for (_, p) in logs.iter().take(logs.len() - MAX_LOGS) {
-        let _ = std::fs::remove_file(p);
+        let _ = crate::writefile::remove(p);
     }
 }
 
@@ -231,7 +231,7 @@ pub fn after_save(s: &mut Session, path: &str) {
     {
         let text = st.activity.to_json();
         let Some(file) = log_file(path) else { return };
-        let written = file.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&file, text));
+        let written = file.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| crate::writefile::write(&file, text));
         match written {
             Ok(()) => {
                 if let Some(dir) = file.parent() {

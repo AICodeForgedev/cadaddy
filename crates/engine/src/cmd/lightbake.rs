@@ -133,8 +133,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = s.state()?.path.clone() {
             let (png, idx) = sidecar(&path);
-            let _ = std::fs::remove_file(png);
-            let _ = std::fs::remove_file(idx);
+            let _ = crate::writefile::remove(png);
+            let _ = crate::writefile::remove(idx);
         }
         return Ok(json!({ "cleared": had }));
     }

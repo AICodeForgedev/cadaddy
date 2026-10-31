@@ -526,7 +526,7 @@ fn run_import_p405(s: &mut Session, p: &Value) -> Result<Value> {
             out.push_str(row);
             out.push('\n');
         }
-        std::fs::write(&priv_path, &out).map_err(|e| bad(C, format!("write {}: {e}", priv_path.display())))?;
+        crate::writefile::write(&priv_path, &out).map_err(|e| bad(C, format!("write {}: {e}", priv_path.display())))?;
         notes.push(format!("{} private rows written to {}", private_rows.len(), priv_path.display()));
     }
     let (sp, mut st) = state(s, C)?;

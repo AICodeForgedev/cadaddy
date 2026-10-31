@@ -330,7 +330,7 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
                 .and_then(|r| r.encode_png())
                 .ok_or_else(|| bad(CMD, "the frame could not be drawn"))?;
             let file = dir.join(cadaddy_walk3d::video::frame_name(i));
-            std::fs::write(&file, png).map_err(|e| bad(CMD, format!("{}: {e}", file.display())))?;
+            crate::writefile::write(&file, png).map_err(|e| bad(CMD, format!("{}: {e}", file.display())))?;
         }
         let mut out = json!({"frames": days.len(), "from": iso(from), "to": iso(to), "folder": folder, "fps": fps, "width": w, "height": h});
         if let Some(mp4) = str_param(p, "mp4") {

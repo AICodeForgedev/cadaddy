@@ -184,7 +184,7 @@ pub(crate) fn log_plot(s: &Session, space: &Space, opts: &Value, path: &str) -> 
         .map(|f| f.replace(['\r', '\n'], " "))
         .join(", ");
     use std::io::Write;
-    let wrote = std::fs::OpenOptions::new().create(true).append(true).open(&st.log_path).and_then(|mut f| writeln!(f, "{line}"));
+    let wrote = crate::writefile::open_append(&st.log_path).and_then(|mut f| writeln!(f, "{line}"));
     Some(wrote.map(|()| st.log_path.clone()).map_err(|e| format!("{}: {e}", st.log_path)))
 }
 

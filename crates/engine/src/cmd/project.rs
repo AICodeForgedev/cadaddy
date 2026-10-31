@@ -163,7 +163,7 @@ fn read_manifest(dir: &str) -> Result<ProjectManifest> {
 fn write_manifest(m: &ProjectManifest) -> Result<()> {
     let path = format!("{}/project.json", m.dir);
     let json = serde_json::to_vec_pretty(m).map_err(|e| crate::EngineError::Other(format!("cannot serialize manifest: {e}")))?;
-    std::fs::write(&path, &json).map_err(|e| crate::EngineError::Other(format!("cannot write {path}: {e}")))?;
+    crate::writefile::write(&path, &json).map_err(|e| crate::EngineError::Other(format!("cannot write {path}: {e}")))?;
     Ok(())
 }
 
