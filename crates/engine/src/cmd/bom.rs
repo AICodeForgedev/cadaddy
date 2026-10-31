@@ -188,6 +188,8 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
     let circuits: BTreeMap<&str, &cadaddy_walk3d::tags::ElementTag> =
         sp.tags.iter().filter(|t| t.kind == "circuit").map(|t| (t.id.as_str(), t)).collect();
     let label_of = |t: &cadaddy_walk3d::tags::ElementTag| t.fields.get("circuit").map_or_else(String::new, |f| f.value.clone());
+    // The plaster ring each built wall box takes (its wall type's finish on the box's face).
+    let rings = s.doc().map(super::propfill::ring_depths).unwrap_or_default();
     for t in sp.tags.iter().take(MAX_LINES) {
         let f = |k: &str| t.fields.get(k).map(|v| (v.value.clone(), v.source.clone()));
         let firm = |src: &str| if matches!(src, "plan" | "schedule" | "note" | "user") { "firm" } else { "rule" };
@@ -237,18 +239,29 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                 );
                 if matches!(kind, "receptacle" | "switch" | "data_outlet") {
                     let rule = "one box, plaster ring and plate per wall device (company default)".to_string();
-                    for (item, size) in [("Box, 4\" square", "2-1/8\" deep"), ("Plaster ring", "1 gang"), ("Device plate", "1 gang")] {
+                    // The ring its wall needs (the built box's mud_ring), else the default.
+                    let ring = rings.get(&t.id).map(|v| format!("1 gang, {} deep", super::walltypes::frac(*v)));
+                    for (item, size) in [
+                        ("Box, 4\" square", "2-1/8\" deep".to_string()),
+                        ("Plaster ring", ring.clone().unwrap_or_else(|| "1 gang".into())),
+                        ("Device plate", "1 gang".into()),
+                    ] {
+                        let by_wall = item == "Plaster ring" && ring.is_some();
                         add(
                             lines,
                             Line {
                                 trade: "electrical",
                                 category: "boxes".into(),
                                 item: item.into(),
-                                size: size.into(),
+                                size,
                                 unit: "each",
                                 net: 1.0,
-                                status: "rule",
-                                rule: Some(rule.clone()),
+                                status: if by_wall { "model" } else { "rule" },
+                                rule: Some(if by_wall {
+                                    "the box's wall type: the board and channels on its face (partition legend)".into()
+                                } else {
+                                    rule.clone()
+                                }),
                                 level: t.level.clone(),
                                 elements: vec![t.id.clone()],
                                 waste_qty: None,
@@ -2198,6 +2211,41 @@ mod tests {
             "{req:?}"
         );
         assert!(r["csv"].as_str().unwrap().lines().count() > 10);
+    }
+
+    #[test]
+    fn a_built_wall_box_takes_the_ring_its_wall_needs() {
+        let mut s = Session::new();
+        job(&mut s);
+        // R1's built box is on a wall whose face needs a 5/8" ring (its mud_ring).
+        let mut tags = super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "1", cadaddy_doc::Handle(0));
+        tags.push(cadaddy_doc::RawTag { code: 1000, value: "devid:R1".into() });
+        let mut store = cadaddy_doc::props::Props::default();
+        store.set(
+            "mud_ring",
+            cadaddy_doc::props::Prop::new(0.625, cadaddy_doc::props::Source::of(cadaddy_doc::props::SourceKind::Spec)).with_unit("in"),
+        );
+        let xdata = cadaddy_doc::props::write(&tags, &store);
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, cadaddy_geom::Vec2::new(36.0, 12.0), cadaddy_geom::Vec2::new(40.0, 12.0), 2.0, 16.0, 20.0);
+        s.doc_mut()
+            .unwrap()
+            .add(
+                &cadaddy_doc::Space::Model,
+                cadaddy_doc::Common { layer: "3D-Devices".into(), xdata: xdata.into(), ..Default::default() },
+                cadaddy_doc::EntityKind::Mesh(m),
+            )
+            .unwrap();
+        let r = s.execute("bim.bom", &json!({})).unwrap();
+        let rings: Vec<&Value> = r["lines"].as_array().unwrap().iter().filter(|l| l["item"] == json!("Plaster ring")).collect();
+        let by_wall = rings
+            .iter()
+            .find(|l| l["size"].as_str().is_some_and(|z| z.starts_with("1 gang, ") && z.ends_with("deep")))
+            .copied()
+            .unwrap_or(&Value::Null);
+        assert_eq!(by_wall["net"], json!(1.0), "{rings:?}");
+        assert_eq!(by_wall["status"], json!("model"));
+        assert_eq!(rings.iter().find(|l| l["size"] == json!("1 gang")).map(|l| l["net"].clone()), Some(json!(2.0)), "the rest at the default");
     }
 
     #[test]

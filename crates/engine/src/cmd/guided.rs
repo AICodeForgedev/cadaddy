@@ -2231,6 +2231,18 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
     // fixture schedule is only in the lighting submittal lists its types there); another trade's
     // `H` is its own mark.
     let learned_electrical: std::collections::BTreeSet<String> = learned.iter().cloned().chain(job.submittal_types.iter().cloned()).collect();
+    // A fire alarm plan's marks are its devices' (an `S` is a smoke detector there, not a switch).
+    let fire_alarm: BTreeSet<String> = job
+        .index
+        .as_ref()
+        .or(job.sheets.as_ref())
+        .and_then(|i| i.get("sheets"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|sh| sh.get("title").and_then(Value::as_str).is_some_and(|t| t.to_ascii_uppercase().contains("FIRE ALARM")))
+        .filter_map(|sh| sh.get("number").and_then(Value::as_str).map(|n| n.trim().to_ascii_uppercase()))
+        .collect();
     let electrical = |sheet: &str| {
         let number = sheet.split('/').next().unwrap_or(sheet);
         job.sheet_regions
@@ -2253,6 +2265,11 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
         let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
         let span = spans.get(g).map_or((0, u64::MAX), |sp| (sp.lo, sp.hi));
         let learned = if electrical(&sheet) { &learned_electrical } else { &learned };
+        let kind = if fire_alarm.contains(&sheet.split('/').next().unwrap_or(&sheet).trim().to_ascii_uppercase()) {
+            "fire alarm device".to_string()
+        } else {
+            String::new()
+        };
         for (tag, at, h, tag_at) in syms {
             if legend.covers(*at) {
                 c.legend_samples += 1;
@@ -2277,7 +2294,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                             level: job.level_at([at.x, at.y]).map_or_else(String::new, |r| r.level.clone()),
                             circuit: super::readers::circuit_of(texts.get(g).map_or(&[][..], Vec::as_slice), &circuits, tag, *tag_at, *at),
                             handle: h.hex(),
-                            kind: String::new(),
+                            kind: kind.clone(),
                             leg: String::new(),
                         });
                         *c.by_type.entry(t).or_default() += 1;
@@ -2301,7 +2318,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
         // Switches, by the designation printed by the switch symbol on an electrical sheet
         // (`D,b` a dimmer on leg b, `3,a` a 3-way on leg a, a lone `c`): the switch and the leg
         // of fixtures it controls. A lone leg letter by an occupancy sensor is the sensor's leg.
-        if electrical(&sheet) {
+        if electrical(&sheet) && kind.is_empty() {
             for t in texts.get(g).into_iter().flatten() {
                 let Some((tag, leg)) = super::readers::switch_designation(&t.value) else { continue };
                 let level = job.level_at([t.at.x, t.at.y]);
@@ -8830,6 +8847,43 @@ mod tests {
         assert_eq!(runs.len(), 5);
         assert_eq!(runs[3].size_in, [12.0, 10.0], "the median tagged size");
         assert_eq!(runs[4].size_in, [10.0, 8.0]);
+    }
+
+    #[test]
+    fn a_fire_alarm_plans_marks_are_fire_alarm_devices() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "Q-7", "sheet_type": "plan", "level": "1", "title": "FIRE ALARM - 1ST FLOOR"}]}));
+        job.sheets_loaded = true;
+        let texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("DEVICE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("S", 1000.0, 772.0, 5.0),
+            ("SMOKE DETECTOR", 1030.0, 772.0, 5.0),
+            // A lone letter on a fire alarm plan is no switch's leg.
+            ("c", 400.0, 100.0, 2.0),
+        ];
+        let syms: Vec<(&str, f64, f64)> = (0..3).map(|k| ("S", 100.0 + 40.0 * f64::from(k), 300.0)).collect();
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &syms);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "Q-7".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "Q-7".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(job.devices.len(), 3, "{:?}", job.devices);
+        assert!(job.devices.iter().all(|d| d.tag == "S" && d.kind == "fire alarm device" && d.leg.is_empty()), "{:?}", job.devices);
     }
 
     #[test]

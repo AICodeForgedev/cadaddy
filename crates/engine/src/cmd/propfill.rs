@@ -252,7 +252,11 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
     for t in devices {
         let Some(level) = sp.level(&t.level).filter(|l| l.sheet.is_none()) else { continue };
         let mark = field(t, "type").unwrap_or_default();
-        let kind = kind_of(&mark);
+        // What its sheet made it (a fire alarm plan's `S`), else what its mark says.
+        let kind = match t.kind.replace('_', " ").as_str() {
+            "fire alarm device" => "fire alarm device",
+            _ => kind_of(&mark),
+        };
         let height = heights.get(&mark.to_ascii_uppercase()).cloned().unwrap_or(Height {
             inches: default_height(kind),
             source: SourceKind::Default,
@@ -593,6 +597,20 @@ fn source_said(how: &str, sheet: &str) -> Source {
 }
 
 /// The value of a WALLGEN tag key on a built element (`size`, `system`, `tag`…).
+/// The plaster ring each built wall device's box takes (its `mud_ring`, inches), by the id of
+/// the spec device it was built from.
+pub(crate) fn ring_depths(d: &Drawing) -> HashMap<String, f64> {
+    d.model
+        .iter()
+        .filter_map(|e| {
+            let id = made(e, DEVID)?;
+            let depth = props::read(&e.common.xdata).get("mud_ring").map(Prop::text).and_then(|t| t.trim().parse::<f64>().ok());
+            Some((id, depth.filter(|v| v.is_finite() && *v > 0.0)?))
+        })
+        .take(MAX_ELEMENTS)
+        .collect()
+}
+
 fn made(e: &Entity, key: &str) -> Option<String> {
     super::bimlook::made_tag(e, key).map(str::to_string).filter(|v| !v.trim().is_empty())
 }

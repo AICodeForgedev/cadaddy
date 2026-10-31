@@ -1295,10 +1295,11 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         if !ids.insert(id.clone()) {
             continue;
         }
-        let mut e =
-            cadaddy_walk3d::tags::ElementTag { id, kind: device_kind(tag).replace(' ', "_"), level: level.clone(), at_ft, ..Default::default() };
+        // What its sheet says it is (a fire alarm plan's `S`), else what its mark says.
+        let kind = if dv.kind.trim().is_empty() { device_kind(tag) } else { dv.kind.trim() };
+        let mut e = cadaddy_walk3d::tags::ElementTag { id, kind: kind.replace(' ', "_"), level: level.clone(), at_ft, ..Default::default() };
         e.set("type", tag, "plan");
-        e.set("device_type", device_item(tag), "plan");
+        e.set("device_type", if dv.kind.trim().is_empty() { device_item(tag) } else { format!("{kind} {tag}") }, "plan");
         if !dv.circuit.is_empty() {
             e.set("circuit", dv.circuit.clone(), "plan");
         }
