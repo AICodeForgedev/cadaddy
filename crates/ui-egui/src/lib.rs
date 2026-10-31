@@ -798,6 +798,13 @@ impl CadApp {
     /// Submit a line of command-line text. A refused line is echoed to the history; the error is
     /// also returned.
     pub fn cmdline(&mut self, text: &str) -> Option<String> {
+        self.cmdline_or(text, None)
+    }
+
+    /// [`CadApp::cmdline`], but a command name nothing knows (no command, alias, UI command, LISP
+    /// command or system variable) runs `fallback` instead: Enter on a partly typed name accepts
+    /// the highlighted AutoComplete suggestion.
+    pub fn cmdline_or(&mut self, text: &str, fallback: Option<&str>) -> Option<String> {
         // The stall trail names what a typed line started (or answered), however it ends.
         if let Some(first) = text.split_whitespace().next() {
             diag::note(&format!("command {}", first.to_ascii_lowercase()));
@@ -834,7 +841,11 @@ impl CadApp {
         }
         exchangeloss::take(self, true);
         secureloaddlg::take(self, true);
-        let e = r.err()?.to_string();
+        let e = match (r, fallback) {
+            (Ok(()), _) => return None,
+            (Err(cadaddy_engine::EngineError::UnknownCommand(_)), Some(f)) => return self.cmdline(f),
+            (Err(e), _) => e.to_string(),
+        };
         self.session.echo(e.clone());
         Some(e)
     }
