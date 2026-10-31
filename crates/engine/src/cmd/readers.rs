@@ -1305,6 +1305,8 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         let item = match read {
             "" => device_item(tag),
             "wall luminaire" => format!("luminaire {tag}"),
+            "receptacle" if tag.eq_ignore_ascii_case("GFCI") => "GFCI receptacle".to_string(),
+            "receptacle" => "duplex receptacle".to_string(),
             _ => format!("{read} {tag}"),
         };
         e.set("device_type", item, "plan");

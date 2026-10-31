@@ -2151,7 +2151,7 @@ const MAX_TAG_HANDLES: usize = 20;
 
 /// Sort the drawing's device symbols sheet by sheet: each sheet's legends and schedules say
 /// which symbols are samples; all of them together say which tags are device types.
-fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
+fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> DeviceCensus {
     use cadaddy_mepfix::device_types::{self, Legend, TagVerdict};
     use cadaddy_mepfix::sheet_facts::{self, TextItem};
     let mut c = DeviceCensus::default();
@@ -2291,6 +2291,30 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                 c.untagged += 1;
             } else if is_circuit_tag(tag) {
                 c.circuit += 1;
+                // On an electrical plan a symbol only its circuit labels is a receptacle on that
+                // circuit (a GFCI one when GFCI is printed by it): receptacles carry no type mark.
+                let building = job.level_at([at.x, at.y]).is_none_or(|r| super::printmep::building_level(&r.level));
+                let bubble = bubbles.iter().any(|(c, r)| r.is_finite() && (at.x - c[0]).hypot(at.y - c[1]) <= 1.5 * r.max(0.0));
+                if electrical(&sheet) && kind.is_empty() && building && !bubble && circuit_text(tag, &sheet_numbers) {
+                    let gfci = tag_at.is_some_and(|(p, h)| {
+                        texts.get(g).into_iter().flatten().any(|t| {
+                            let v = t.value.to_ascii_uppercase();
+                            (v.contains("GFCI") || v.contains("GFI")) && t.at.dist(p) <= RECEPTACLE_NOTE_H * h
+                        })
+                    });
+                    let mark = if gfci { "GFCI" } else { "REC" };
+                    c.placed.push(super::readers::ReadDevice {
+                        tag: mark.into(),
+                        at: [at.x, at.y],
+                        sheet: sheet.clone(),
+                        level: job.level_at([at.x, at.y]).map_or_else(String::new, |r| r.level.clone()),
+                        circuit: tag.clone(),
+                        handle: h.hex(),
+                        kind: "receptacle".into(),
+                        leg: String::new(),
+                    });
+                    *c.by_type.entry(mark.to_string()).or_default() += 1;
+                }
             } else if refused.contains(tag.as_str()) {
                 *c.not_device.entry("not a device (answered)").or_default() += 1;
             } else {
@@ -3079,6 +3103,8 @@ pub(crate) fn is_circuit_tag(tag: &str) -> bool {
 
 /// How far from an occupancy sensor its leg letter is printed, in the letter's heights.
 const SENSOR_LEG_H: f64 = 4.0;
+/// How far from a receptacle's circuit label a note on it (GFCI) is printed, in its heights.
+const RECEPTACLE_NOTE_H: f64 = 4.0;
 
 /// Run the devices stage: detect devices, symbols and counts (MUST 1, 4, 9-11).
 /// MUST 9: count then "anything not counted?" with leftover clusters.
@@ -3107,11 +3133,14 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             started.elapsed().as_secs_f64()
         ));
     }
-    let mut census = device_census(s, job);
-    // The sheet map: what the sheets' callouts point at, where the enlarged plans sit. Inside a
-    // registered enlarged plan's boundary its sheet is the authority: its devices move onto the
-    // overall plan there, and the overall plan's own copies there are left out.
-    if let Some(links) = job_links(s, job) {
+    // The sheet map: what the sheets' callouts point at, where the enlarged plans sit. Its bubbles
+    // are no devices (a bubble's sheet reference reads like a circuit).
+    let links = job_links(s, job);
+    let bubbles: Vec<([f64; 2], f64)> = links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius)).collect();
+    let mut census = device_census(s, job, &bubbles);
+    // Inside a registered enlarged plan's boundary its sheet is the authority: its devices move
+    // onto the overall plan there, and the overall plan's own copies there are left out.
+    if let Some(links) = links {
         let summary = super::printset::links_summary(&links);
         results["links"] = summary.clone();
         job.links = Some(summary);
@@ -5055,6 +5084,20 @@ fn stamp_typical_rooms(
         placed.iter().filter(|dv| dv.level == level && cadaddy_geom::point_in_polygon(o, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))).take(2).count()
             >= 2
     };
+    // How many devices of a tag the floor's plans already put in a room: the typical plan's of
+    // that tag there are those first (one each), the rest it adds (a floor plan may show a room's
+    // receptacles and leave its fixtures to the typical plan).
+    let shown = |level: &str, o: &[cadaddy_geom::Vec2], tag: &str| {
+        placed
+            .iter()
+            .filter(|dv| {
+                dv.level == level
+                    && dv.tag.eq_ignore_ascii_case(tag)
+                    && cadaddy_geom::point_in_polygon(o, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))
+            })
+            .count()
+    };
+    let mut matched: BTreeMap<(usize, String), usize> = BTreeMap::new();
     let refs = job_sheet_refs(job);
     let sheet_key = |n: &str| n.split('/').next().unwrap_or(n).trim().to_ascii_uppercase();
     let mut by_sheet: BTreeMap<String, Vec<&super::readers::ReadDevice>> = BTreeMap::new();
@@ -5115,8 +5158,13 @@ fn stamp_typical_rooms(
                 }
                 continue;
             };
-            for (_, level, outline, _) in rooms.iter().filter(|(n, _, _, _)| type_words(n, None) == *words) {
-                if out.len() >= MAX_STAMPED || furnished(level, outline) {
+            for (ri, (_, level, outline, _)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
+                if out.len() >= MAX_STAMPED {
+                    continue;
+                }
+                let used = matched.entry((ri, dv.tag.to_ascii_uppercase())).or_insert(0);
+                if *used < shown(level, outline, &dv.tag) {
+                    *used += 1;
                     continue;
                 }
                 let Some(at) = into_room(dv.at, *view, bbox(outline)) else { continue };
@@ -9101,8 +9149,8 @@ mod tests {
             let mut syms: Vec<(&str, f64, f64)> = vec![("A", x0 + 990.0, 772.0)]; // the schedule's sample
             syms.extend((0..a).map(|k| ("A", x0 + 100.0 + 40.0 * f64::from(k), 300.0)));
             syms.extend((0..b).map(|k| ("B", x0 + 100.0 + 40.0 * f64::from(k), 200.0)));
-            // Junk: a circuit number, the sheet's own number, a keynote, an untagged symbol; and a
-            // switch, its leg letter printed by its symbol.
+            // Junk: the sheet's own number, a keynote, an untagged symbol; a receptacle, its
+            // circuit printed by its symbol; and a switch, its leg letter printed by its symbol.
             syms.extend([
                 ("D-1", x0 + 600.0, 100.0),
                 (name, x0 + 620.0, 100.0),
@@ -9126,19 +9174,24 @@ mod tests {
                 levels: Vec::new(),
                 view: None,
             });
-            want_by_level.insert(format!("Level {level}"), a + b + 1);
+            want_by_level.insert(format!("Level {level}"), a + b + 2);
         }
         let n: i32 = want_by_level.values().sum();
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r["devices"]["count"], json!(n), "{r:#}");
-        assert_eq!(r["devices"]["by_type"], json!({"A": 9, "B": 5, "S": 2}));
+        assert_eq!(r["devices"]["by_type"], json!({"A": 9, "B": 5, "REC": 2, "S": 2}));
+        assert_eq!(job.devices.iter().filter(|d| d.kind == "receptacle" && d.circuit == "D-1").count(), 2, "a receptacle on D-1 a sheet");
         assert_eq!(job.devices.iter().filter(|d| d.tag == "S" && d.leg == "s").count(), 2, "a switch on leg s a sheet");
         // No building model yet: the bim_build stage puts them in.
         assert_eq!(r["model"]["pending"], json!(n), "{:#}", r["model"]);
         assert_eq!(job.devices.len(), n as usize);
         let first = job.devices.iter().find(|d| d.sheet == "Q-1" && d.at == [100.0, 300.0]).unwrap_or_else(|| panic!("{:?}", job.devices));
         assert_eq!((first.level.as_str(), first.circuit.as_str()), ("1", "D-7"));
-        assert_eq!(job.devices.iter().filter(|d| !d.circuit.is_empty()).count(), 2, "one circuit is printed per sheet");
+        assert_eq!(
+            job.devices.iter().filter(|d| !d.circuit.is_empty() && d.kind != "receptacle").count(),
+            2,
+            "one circuit is printed by an A a sheet"
+        );
 
         let built = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(built["devices"]["inserted"], json!(n), "{:#}", built["devices"]);
@@ -9157,7 +9210,8 @@ mod tests {
         let lines: Vec<&Value> = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").collect();
         let units = |lv: &str| lines.iter().filter(|l| l["level"] == lv).filter_map(|l| l["net"].as_f64()).sum::<f64>();
         // The draft spec has one level, `Level 1`; sheet level 2 is named alike.
-        assert_eq!((units("Level 1"), units("Level 2")), (9.0, 7.0), "{lines:#?}");
+        assert_eq!((units("Level 1"), units("Level 2")), (10.0, 8.0), "{lines:#?}");
+        assert!(lines.iter().any(|l| l["item"] == "duplex receptacle"), "{lines:#?}");
         assert!(lines.iter().all(|l| l["trade"] == "electrical"));
         assert!(lines.iter().any(|l| l["item"] == "device type A" && l["level"] == "Level 2" && l["net"] == json!(4.0)), "{lines:#?}");
         // The takeoff stage uses the model takeoff (bim.takeoff) and reports a summary.
