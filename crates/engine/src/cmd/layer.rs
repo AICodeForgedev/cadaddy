@@ -343,6 +343,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         filters::rename_in_groups(d, &old, &nn);
+        merge::rename_in_viewports(d, &old, &nn);
         if cur.eq_ignore_ascii_case(&old) {
             d.header.set_str("CLAYER", &nn);
         }

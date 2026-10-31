@@ -207,3 +207,25 @@ fn layer_merge_clears_viewport_linetype_and_lineweight_overrides() {
     let left = vec!["B".to_string(), "C".to_string()];
     assert_eq!(vp_style_lists(&s), vec![(left.clone(), left)], "the target and the other layer keep theirs");
 }
+
+#[test]
+fn renaming_a_layer_repoints_viewport_lists() {
+    let mut s = drawing();
+    assert_eq!(viewport_lists(&s), vec![(vec!["A".to_string(), "C".to_string()], vec!["B".to_string()])]);
+    s.execute("rename", &json!({ "table": "layer", "from": "A", "to": "Murs" })).unwrap();
+    assert_eq!(viewport_lists(&s), vec![(vec!["Murs".to_string(), "C".to_string()], vec!["B".to_string()])]);
+    // layer.set's newName form (what the Properties palette sends) goes through the same path.
+    s.execute("layer.set", &json!({ "name": "B", "newName": "Cloisons" })).unwrap();
+    assert_eq!(viewport_lists(&s), vec![(vec!["Murs".to_string(), "C".to_string()], vec!["Cloisons".to_string()])]);
+    s.undo().unwrap();
+    assert_eq!(viewport_lists(&s), vec![(vec!["Murs".to_string(), "C".to_string()], vec!["B".to_string()])], "undo brings the old name back");
+}
+
+/// Renaming a layer also repoints the viewports' linetype and lineweight overrides (VPLAYER).
+#[test]
+fn renaming_a_layer_repoints_viewport_style_overrides() {
+    let mut s = drawing_with_vp_styles();
+    s.execute("rename", &json!({ "table": "layer", "from": "A", "to": "Murs" })).unwrap();
+    let names = vec!["Murs".to_string(), "B".to_string(), "C".to_string()];
+    assert_eq!(vp_style_lists(&s), vec![(names.clone(), names)]);
+}
