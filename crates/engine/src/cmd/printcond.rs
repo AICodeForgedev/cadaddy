@@ -54,6 +54,9 @@ const DEFAULT_CEILING_FT: f64 = 8.0;
 const ABOVE_CEILING_FT: f64 = 0.25;
 /// Lines at least this long (feet) can be drawn conduit.
 const MIN_RUN_FT: f64 = 4.0;
+/// Device to device on one branch circuit at most, feet: a longer step is two places printing the
+/// same label.
+const MAX_LEG_FT: f64 = 60.0;
 /// A conduit tag this close (feet) beside a line is its tag; a `BOC` note this close to the tag.
 const TAG_FT: f64 = 1.5;
 const BOC_FT: f64 = 2.0;
@@ -576,8 +579,16 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, devices: &
             if let (Some((p, _)), Some(dv)) = (&panel_at, chain.first()) {
                 push(&mut out, square(dv.at, *p, eps), format!("{cid}#home"), None);
             }
+            // A leg longer than a branch circuit's runs between its devices is two places that print
+            // the same label (each guest room's own panel, a typical room's plan shown twice): no
+            // conduit between them.
+            let mut leaps = 0usize;
             for w in chain.windows(2) {
                 if let [a, b] = w {
+                    if dist(a.at, b.at) > MAX_LEG_FT * upf {
+                        leaps += 1;
+                        continue;
+                    }
                     legs += 1;
                     push(&mut out, square(a.at, b.at, eps), format!("{cid}#{legs}"), None);
                 }
@@ -614,6 +625,9 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, devices: &
             t.set("conduit", "3/4\" EMT", "default");
             t.set("homerun", homerun.map_or("not drawn", |_| "read"), if homerun.is_some() { "plan" } else { "rule" });
             t.set("drops", drops.to_string(), "computed");
+            if leaps > 0 {
+                t.set("leaps", format!("{leaps} step(s) over {MAX_LEG_FT}' between its devices: not one run, no conduit counted there"), "rule");
+            }
             if no_height > 0 {
                 t.set("drops_unknown", format!("{no_height} device(s) of no known mounting height: no drop counted"), "rule");
             }
@@ -764,6 +778,26 @@ mod tests {
             dev("R", 1200.0, 100.0, "LA-5", "E-1"),
             dev("R", 1500.0, 100.0, "LA-5", "E-1"),
         ]
+    }
+
+    #[test]
+    fn two_places_printing_one_label_get_no_conduit_between_them() {
+        let mut s = Session::new();
+        let mut devices = plan(&mut s);
+        // LA-3 printed again 100' away (another room's own panel has a circuit 3 too).
+        devices.push(dev("R", 1200.0 + 1200.0, 600.0, "LA-3", "E-1"));
+        let d = s.doc().expect("doc").clone();
+        let r = read_sheets(&d, &[sheet("E-1", "1", 0.0)], 12.0, &devices);
+        let c3 = r.circuits.iter().find(|t| t.fields["circuit"].value == "LA-3").expect("LA-3");
+        assert!(c3.fields.contains_key("leaps"), "{c3:?}");
+        let longest = r
+            .mep
+            .runs
+            .iter()
+            .filter(|x| circuit_of_run(x) == Some(c3.id.as_str()) && x.top_ft.is_none() && !x.id.ends_with("#home"))
+            .map(|x| super::super::bom::run_length_ft(&x.points, 12.0))
+            .fold(0.0, f64::max);
+        assert!(longest <= MAX_LEG_FT, "no leg across the leap: {longest}");
     }
 
     #[test]
