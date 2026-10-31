@@ -113,9 +113,9 @@ impl PlotterStore {
                 std::fs::create_dir_all(dir()?).map_err(|e| e.to_string())?;
                 let tmp = p.with_extension("json.cadaddy-tmp");
                 crate::writefile::write(&tmp, t).map_err(|e| format!("{n}: {e}"))?;
-                std::fs::rename(&tmp, &p).map_err(|e| format!("{n}: {e}"))
+                crate::writefile::rename(&tmp, &p).map_err(|e| format!("{n}: {e}"))
             },
-            delete: |n| std::fs::remove_file(file(n)?).map_err(|e| format!("{n}: {e}")),
+            delete: |n| crate::writefile::remove(file(n)?).map_err(|e| format!("{n}: {e}")),
         }
     }
 }

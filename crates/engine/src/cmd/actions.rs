@@ -420,7 +420,7 @@ fn run_manage(s: &mut Session, p: &Value) -> Result<Value> {
         "delete" => {
             s.actions.macros.remove(&m.name.to_ascii_lowercase());
             if let Some(f) = file.filter(|f| f.is_file()) {
-                std::fs::remove_file(&f).map_err(|e| EngineError::Other(format!("{}: {e}", f.display())))?;
+                crate::writefile::remove(&f).map_err(|e| EngineError::Other(format!("{}: {e}", f.display())))?;
             }
             return Ok(json!({ "deleted": m.name }));
         }
@@ -466,7 +466,7 @@ fn run_manage(s: &mut Session, p: &Value) -> Result<Value> {
         // Renamed: the new file is safely written, so the old one can go.
         s.actions.macros.remove(&key);
         if let Some(f) = file.filter(|f| f.is_file() && Some(f) != written.as_ref()) {
-            std::fs::remove_file(&f).map_err(|e| EngineError::Other(format!("{}: {e}", f.display())))?;
+            crate::writefile::remove(&f).map_err(|e| EngineError::Other(format!("{}: {e}", f.display())))?;
         }
     }
     let r = macro_json(&m);

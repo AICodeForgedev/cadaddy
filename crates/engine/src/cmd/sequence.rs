@@ -1540,7 +1540,7 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
 fn write_file(cmd: &str, path: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::fs::write(path, bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))
+        crate::writefile::write(path, bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))
     }
     #[cfg(target_arch = "wasm32")]
     {

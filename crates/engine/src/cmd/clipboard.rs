@@ -287,7 +287,7 @@ pub(crate) fn paste_image(
         .find(|f| !f.exists())
         .ok_or_else(|| bad("pastespec", "too many pasted images beside this drawing"))?;
     let png = image.encode_png().ok_or_else(|| bad("pastespec", "the image couldn't be encoded"))?;
-    std::fs::write(&file, png).map_err(|e| bad("pastespec", format!("the pasted image couldn't be saved beside the drawing: {e}")))?;
+    crate::writefile::write(&file, png).map_err(|e| bad("pastespec", format!("the pasted image couldn't be saved beside the drawing: {e}")))?;
     let view = s.state()?.view();
     let aspect = f64::from(image.width) / f64::from(image.height.max(1));
     let width = width.filter(|w| w.is_finite() && *w > 0.0).unwrap_or(view.height * 0.5 * aspect);

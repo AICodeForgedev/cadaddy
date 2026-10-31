@@ -240,7 +240,7 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         serde_json::to_string_pretty(&d.project_rules).map_err(|e| bad(CMD_EXPORT, format!("JSON serialisation error: {e}")))?
     };
 
-    std::fs::write(path, &text).map_err(|e| bad(CMD_EXPORT, format!("cannot write `{path}`: {e}")))?;
+    crate::writefile::write(path, &text).map_err(|e| bad(CMD_EXPORT, format!("cannot write `{path}`: {e}")))?;
 
     Ok(json!({ "exported": d.project_rules.rules.len() }))
 }

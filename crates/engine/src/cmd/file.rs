@@ -1200,7 +1200,7 @@ fn save_dwg_copy(s: &mut Session, cmd: &str, path: &str, kept: &mut Option<Strin
     let r = guard_dwg_copy(s, &copy).and_then(|keep| {
         let bytes = write_bytes(s, cmd, &copy, &SaveAs::default()).map_err(|e| e.to_string())?;
         if let Some(bak) = &keep {
-            std::fs::copy(&copy, bak).map_err(|e| format!("couldn't keep the existing {} as {}: {e}", file_name(&copy), file_name(bak)))?;
+            crate::writefile::copy(&copy, bak).map_err(|e| format!("couldn't keep the existing {} as {}: {e}", file_name(&copy), file_name(bak)))?;
         }
         store_keeping(&copy, &bytes, false).map_err(|e| e.to_string())?;
         *kept = keep;
@@ -1313,9 +1313,9 @@ pub(crate) fn store_keeping(path: &str, bytes: &[u8], keep_bak: bool) -> Result<
                         p.set_readonly(false);
                         std::fs::set_permissions(&bak, p)?;
                     }
-                    std::fs::remove_file(&bak)?;
+                    crate::writefile::remove(&bak)?;
                 }
-                std::fs::copy(path, &bak).map(|_| ())
+                crate::writefile::copy(path, &bak).map(|_| ())
             };
             keep().map_err(|e| bad("save", format!("{path}: couldn't keep the previous version as {bak}: {e}")))?;
         }
