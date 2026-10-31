@@ -109,6 +109,7 @@ mod query_entities;
 mod quickcalc;
 mod recent_commands;
 mod rectang_ortho;
+mod rectang_polygon_order;
 mod refedit;
 mod region;
 mod rename_cmdline;
