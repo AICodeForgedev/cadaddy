@@ -3,7 +3,7 @@
 use std::sync::{Mutex, MutexGuard};
 
 use cadaddy_engine::Session;
-use cadaddy_engine::cmd::propfill::{cfm_in, door_number, mount_height_in, panel_of};
+use cadaddy_engine::cmd::propfill::{cfm_in, door_number, mount_height_in, panel_of, split_switch_leg};
 use cadaddy_engine::cmd::wallgen::made_as;
 use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Handle, Line, RawTag};
 use cadaddy_engine::geom::{Vec2, Vec3};
@@ -418,6 +418,9 @@ fn the_text_readers() {
     assert_eq!(panel_of("H1/7"), Some("H1".into()));
     assert_eq!(panel_of("12"), None);
     assert_eq!(panel_of("1-3"), None, "no letters: not a panel name");
+    assert_eq!(split_switch_leg("A-1,a"), ("A-1".into(), Some("a".into())));
+    assert_eq!(split_switch_leg("LP-3,5"), ("LP-3,5".into(), None), "two circuits, no leg");
+    assert_eq!(split_switch_leg("D-7"), ("D-7".into(), None));
     for t in ["101", "101A", "D-12", "1-104B"] {
         assert!(door_number(t), "{t}");
     }

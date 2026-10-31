@@ -71,7 +71,7 @@ pub struct Height {
 
 /// The kind of device a type mark names (`switch`, `fire alarm device`…; `device` when the mark
 /// says nothing).
-fn kind_of(mark: &str) -> &'static str {
+pub(crate) fn kind_of(mark: &str) -> &'static str {
     match mark.trim().to_ascii_uppercase().as_str() {
         "OS" | "OC" | "VS" | "PS" => "occupancy sensor",
         "DH" | "MH" => "door holder",
@@ -208,6 +208,18 @@ pub fn panel_of(circuit: &str) -> Option<String> {
     (panel.chars().any(|ch| ch.is_ascii_alphabetic()) && number.chars().any(|ch| ch.is_ascii_digit()) && panel.len() <= 12).then(|| panel.to_string())
 }
 
+/// A circuit tag and the switch leg printed with it: `A-1,a` is circuit `A-1` on switch leg `a`
+/// (a lower-case letter after a comma); `LP-3,5` is two circuits and no leg.
+pub fn split_switch_leg(tag: &str) -> (String, Option<String>) {
+    let tag = tag.trim();
+    match tag.rsplit_once(',') {
+        Some((circuit, leg)) if leg.trim().len() == 1 && leg.trim().chars().all(|c| c.is_ascii_lowercase()) => {
+            (circuit.trim().to_string(), Some(leg.trim().to_string()))
+        }
+        _ => (tag.to_string(), None),
+    }
+}
+
 /// Whether `e` is a device the readers put in the spec (and so one `model.build` builds).
 fn read_device(t: &cadaddy_walk3d::tags::ElementTag) -> bool {
     t.id.starts_with("device:") && t.fields.contains_key("symbol") && t.at_ft.iter().all(|v| v.is_finite())
@@ -270,6 +282,10 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
             store.set("type_mark", Prop::new(mark.clone(), printed()));
         }
         if let Some(c) = field(t, "circuit") {
+            let (c, leg) = split_switch_leg(&c);
+            if let Some(leg) = leg {
+                store.set("switch_leg", Prop::new(leg, printed()).with_note("the lower-case letter after its circuit: the switch that controls it"));
+            }
             store.set("circuit", Prop::new(c.clone(), printed()));
             match panel_of(&c) {
                 Some(p) => {
@@ -389,7 +405,7 @@ pub(crate) fn rebuild_devices(s: &mut Session, cmd: &str) -> Result<DeviceRebuil
     Ok(DeviceRebuild { removed: old.len(), built })
 }
 
-trait WithNote {
+pub(crate) trait WithNote {
     fn with_note(self, note: &str) -> Self;
 }
 

@@ -423,6 +423,9 @@ pub struct GuidedJob {
     /// own one in the temporary folder is removed).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub checkpoint_given: bool,
+    /// Submittal PDFs (or folders of them) whose products go onto the built elements.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submittals: Vec<String>,
     /// What the print folder held when the job started ([`prints_stamp`]).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prints_stamp: String,
@@ -723,6 +726,7 @@ impl GuidedJob {
             sheets_loaded: false,
             checkpoint: None,
             checkpoint_given: false,
+            submittals: Vec::new(),
             prints_stamp: String::new(),
             index: None,
             sheet_regions: Vec::new(),
@@ -4206,6 +4210,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     identity_step(s, job, &mut result);
     bim_step(s, job, "tag identity", t);
+    if !job.submittals.is_empty() {
+        let t = web_time::Instant::now();
+        submittals_step(s, job, &mut result);
+        bim_step(s, job, "submittals applied", t);
+    }
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -4411,6 +4420,126 @@ const MAX_SHEET_LINKS: usize = 2_000;
 /// and its level (a sheet listed already keeps its entry and gains its place).
 /// The build's identity pass (`bim.identity` then `rooms.graph`): merged copies leave the counts,
 /// findings go on the build stage, and the answer's summary goes in the result as `identity`.
+/// The submittals' products onto the built elements (BUILD ORDER: after the architecture and the
+/// MEP objects; `bim.submittals`). Never stops the job: what they leave open is a finding.
+fn submittals_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
+    let v = match s.execute("bim.submittals", &json!({"paths": job.submittals})) {
+        Ok(v) => v,
+        Err(e) => {
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("The submittals could not be read: {e}"),
+                "bim.submittals failed after the build",
+                3,
+                vec!["Check the submittal paths given to job.start".into()],
+                None,
+                false,
+            );
+            return;
+        }
+    };
+    let applied = v.get("applied").and_then(Value::as_object).cloned().unwrap_or_default();
+    let elements: u64 = applied.values().filter_map(Value::as_u64).sum();
+    let line = format!(
+        "  submittals: {} files read, products onto {elements} elements of {} types ({}); dimming {}",
+        v.get("files").and_then(Value::as_array).map_or(0, Vec::len),
+        applied.len(),
+        applied.keys().cloned().collect::<Vec<_>>().join(", "),
+        v.get("dimming").map(Value::to_string).unwrap_or_default()
+    );
+    report_progress(s, json!({"step": "submittals", "elements": elements, "types": applied.len()}), &line);
+    s.echo(line);
+    // The model's device types no submittal covers (switches, boxes and the like are by spec).
+    let missing: Vec<String> = v
+        .get("no_submittal")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(m, _)| super::propfill::kind_of(m) == "device")
+        .map(|(m, n)| format!("{m} ({n})"))
+        .collect();
+    if !missing.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} device types have no submittal product: {}", missing.len(), missing.join(", ")),
+            "No submittal given to the job has a data sheet for them, so their elements carry no maker or catalog number",
+            1,
+            vec!["Add their submittals, or confirm they are by others".into()],
+            None,
+            false,
+        );
+    }
+    // A type the model holds whose submittal leaves a question (its dimming, say).
+    for q in v.get("questions").and_then(Value::as_array).into_iter().flatten() {
+        let mark = q.get("mark").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
+        let text = q.get("text").and_then(Value::as_str).unwrap_or("");
+        if applied.contains_key(&mark) && !text.is_empty() {
+            job.add_finding(
+                StageName::BimBuild,
+                text,
+                "The submittal does not settle it for the product ordered",
+                2,
+                vec!["Ask the supplier which option was ordered".into()],
+                None,
+                false,
+            );
+        }
+    }
+    for u in v.get("unread").and_then(Value::as_array).into_iter().flatten() {
+        let file = u.get("file").and_then(Value::as_str).unwrap_or("");
+        let error = u.get("error").and_then(Value::as_str).unwrap_or("");
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Submittal {file} could not be read: {error}"),
+            "bim.spec_import failed on it",
+            2,
+            Vec::new(),
+            None,
+            false,
+        );
+    }
+    result["submittals"] = v;
+    if applied.is_empty() {
+        return;
+    }
+    // CHECKS on the submitted products: what each switch leg dims.
+    match s.execute("bim.dimming", &json!({})) {
+        Ok(dv) => {
+            let line = format!(
+                "  dimming: {} switch legs, {} with phase and 0-10V fixtures together; 0-10V pairs on {} legs to {} fixtures",
+                dv.get("legs").and_then(Value::as_array).map_or(0, Vec::len),
+                dv.get("mixed").and_then(Value::as_u64).unwrap_or(0),
+                dv.pointer("/pairs/legs").and_then(Value::as_u64).unwrap_or(0),
+                dv.pointer("/pairs/fixtures").and_then(Value::as_u64).unwrap_or(0)
+            );
+            report_progress(s, json!({"step": "dimming", "mixed": dv.get("mixed")}), &line);
+            s.echo(line);
+            for f in dv.get("findings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+                let mixed = f.contains("on one control");
+                job.add_finding(
+                    StageName::BimBuild,
+                    f,
+                    if mixed {
+                        "The fixtures' submittals give them different dimming on one switch leg"
+                    } else {
+                        "A 0-10V fixture dims over its own 2-wire control pair from the dimmer or sensor"
+                    },
+                    if mixed { 4 } else { 2 },
+                    vec![if mixed {
+                        "Split the leg, or change one product so both dim the same way".into()
+                    } else {
+                        "Add the 0-10V pair to the wire takeoff".into()
+                    }],
+                    None,
+                    false,
+                );
+            }
+            result["dimming"] = dv;
+        }
+        Err(e) => result["dimming_error"] = json!(e.to_string()),
+    }
+}
+
 fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     let numbers: Vec<String> = job
         .stage(StageName::Rooms)
@@ -7065,6 +7194,11 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
     let mut job = GuidedJob::new(pdfs, goal);
     // Interactive unless asked: the job stops at each checkpoint for an answer.
     job.auto = p.get("auto").and_then(Value::as_bool).unwrap_or(false);
+    job.submittals = match p.get("submittals") {
+        Some(Value::String(one)) if !one.trim().is_empty() => vec![one.trim().to_string()],
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(64).collect(),
+        _ => Vec::new(),
+    };
     // The checkpoint: a path, false (none), else the default in the temporary folder.
     job.checkpoint = match p.get("checkpoint") {
         Some(Value::Bool(false)) => None,
@@ -7101,6 +7235,9 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
         saved.checkpoint = Some(path.clone());
         saved.checkpoint_given = job.checkpoint_given;
         saved.auto = job.auto;
+        if !job.submittals.is_empty() {
+            saved.submittals = job.submittals.clone();
+        }
         let done: Vec<&str> = saved.stages.iter().filter(|st| st.status == StageStatus::Done).map(|st| st.name.label()).collect();
         let line = format!("job: resumed from {path} ({} stage(s) done: {})", done.len(), done.join(", "));
         let data = json!({"step": "resumed", "checkpoint": path, "stages_done": done});
@@ -8053,7 +8190,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("job.start", "Start Guided Job", cmd_start)
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
