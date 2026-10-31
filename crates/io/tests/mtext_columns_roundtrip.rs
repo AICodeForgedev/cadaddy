@@ -3,6 +3,7 @@
 
 use cadaddy_doc::{Common, Drawing, EntityKind, MText, MTextColumnType, MTextColumns, Space};
 use cadaddy_geom::Vec3;
+use cadaddy_dxf::Tag;
 use cadaddy_io::{SaveOptions, Version, entity_from_groups, read_dxf, write_dxf, write_with};
 
 fn mtext(contents: &str, rotation: f64, columns: Option<MTextColumns>) -> MText {
@@ -251,4 +252,115 @@ fn embedded_column_width_wins_over_the_entitys_width() {
     let (_, r2018) = dxf_as(&t, Version::R2018);
     assert!(r2018.contains(" 42\r\n175.0\r\n"), "total width kept:\n{r2018}");
     assert!(r2018.contains(" 44\r\n50.0\r\n 45\r\n12.5\r\n"), "column width and gutter kept:\n{r2018}");
+}
+
+// ---- #2247: legacy column groups ----
+
+#[test]
+fn legacy_column_groups_stay_in_the_mtext_subclass() {
+    // Columns as other programs write them (#2247): the column width (48) and the height count
+    // (the first 50) are groups of the AcDbMText subclass, not the entity's linetype scale and a
+    // column height.
+    let mut d = Drawing::new_metric();
+    d.add(&Space::Model, Common::default(), EntityKind::MText(mtext("x", 0.0, None))).unwrap();
+    let legacy =
+        " 75\r\n1\r\n 76\r\n3\r\n 78\r\n0\r\n 79\r\n0\r\n 48\r\n12.5\r\n 49\r\n2.5\r\n 50\r\n3\r\n 50\r\n20.0\r\n 50\r\n20.0\r\n 50\r\n20.0\r\n";
+    let dxf = write_dxf(&d).replacen(" 44\r\n1.0\r\n", &format!(" 44\r\n1.0\r\n{legacy}"), 1);
+    assert!(dxf.contains(" 75\r\n"), "legacy groups inserted");
+    let back = read_dxf(dxf.as_bytes()).unwrap();
+    let Some(e) = back.model.iter().find(|e| matches!(e.kind, EntityKind::MText(_))) else { panic!("no mtext") };
+    assert_eq!(e.common.ltscale, 1.0, "48 is the column width, not the linetype scale");
+    let EntityKind::MText(t) = &e.kind else { panic!("no mtext") };
+    let c = MTextColumns { kind: MTextColumnType::Static, count: 3, gutter: 2.5, height: 20.0, ..Default::default() };
+    assert_eq!(t.columns, Some(Box::new(c)));
+    // Written back as read: the height count before the heights.
+    let out = write_dxf(&back);
+    assert!(out.contains(" 50\r\n3\r\n 50\r\n20.0\r\n"), "height count before the heights");
+}
+
+#[test]
+fn heights_written_without_a_count_are_all_kept() {
+    // Files written before the height count (CADaddy before this change) have group 76 = n and n
+    // heights, no count: the first 50 is a height there (#2247 review).
+    let mut d = Drawing::new_metric();
+    d.add(&Space::Model, Common::default(), EntityKind::MText(mtext("x", 0.0, None))).unwrap();
+    let dxf = write_dxf(&d);
+    for (heights, old) in [
+        (vec![7.0], " 75\r\n2\r\n 76\r\n1\r\n 78\r\n0\r\n 79\r\n0\r\n 48\r\n12.5\r\n 49\r\n2.5\r\n 50\r\n7.0\r\n"),
+        (
+            vec![5.0, 3.0, 4.0],
+            " 75\r\n2\r\n 76\r\n3\r\n 78\r\n0\r\n 79\r\n0\r\n 48\r\n12.5\r\n 49\r\n2.5\r\n 50\r\n5.0\r\n 50\r\n3.0\r\n 50\r\n4.0\r\n",
+        ),
+    ] {
+        let back = read_dxf(dxf.replacen(" 44\r\n1.0\r\n", &format!(" 44\r\n1.0\r\n{old}"), 1).as_bytes()).unwrap();
+        let Some(EntityKind::MText(t)) = back.model.iter().map(|e| &e.kind).find(|k| matches!(k, EntityKind::MText(_))) else { panic!("no mtext") };
+        let n = heights.len();
+        let c = MTextColumns {
+            kind: MTextColumnType::Dynamic,
+            count: n as u16,
+            gutter: 2.5,
+            height: heights.iter().copied().fold(0.0, f64::max),
+            auto_height: false,
+            heights: heights.clone(),
+            flow_reversed: false,
+        };
+        assert_eq!(t.columns, Some(Box::new(c)), "{n} heights without a count");
+        // Written back with the count, and still n columns.
+        let out = write_dxf(&back);
+        assert!(out.contains(&format!(" 76\r\n{n}\r\n 78\r\n")), "76 stays {n}: {out}");
+        assert!(out.contains(&format!(" 50\r\n{n}\r\n 50\r\n{:.1}\r\n", heights[0])), "count then the first height: {out}");
+    }
+}
+
+#[test]
+fn heights_inside_an_application_group_are_not_column_heights() {
+    // An application-defined group (102 {...}) in the record may hold a 50 of its own: it is
+    // neither a height nor the count that tells a legacy record apart (#2247 review).
+    let tags = [
+        Tag::s(8, "0"),
+        Tag::f(40, 0.5),
+        Tag::f(41, 12.5),
+        Tag::s(1, "x"),
+        Tag::i(75, 2),
+        Tag::i(76, 3),
+        Tag::i(78, 0),
+        Tag::i(79, 0),
+        Tag::f(48, 12.5),
+        Tag::f(49, 2.5),
+        Tag::f(50, 5.0),
+        Tag::f(50, 3.0),
+        Tag::f(50, 4.0),
+        Tag::s(102, "{ACME_APP"),
+        Tag::f(50, 8.0),
+        Tag::s(102, "}"),
+    ];
+    let Some((_, EntityKind::MText(t))) = entity_from_groups("MTEXT", &tags) else { panic!("MTEXT was not read") };
+    let c = MTextColumns {
+        kind: MTextColumnType::Dynamic,
+        count: 3,
+        gutter: 2.5,
+        height: 5.0,
+        auto_height: false,
+        heights: vec![5.0, 3.0, 4.0],
+        flow_reversed: false,
+    };
+    assert_eq!(t.columns, Some(Box::new(c)));
+}
+
+#[test]
+fn empty_manual_heights_round_trip() {
+    // A dynamic manual column with no heights stays without heights: no count is written for an
+    // empty list (a lone 50 = 0 would read back as one height of 0) (#2247 review).
+    let c = MTextColumns {
+        kind: MTextColumnType::Dynamic,
+        count: 1,
+        gutter: 0.5,
+        height: 0.0,
+        auto_height: false,
+        heights: Vec::new(),
+        flow_reversed: false,
+    };
+    let (t, dxf) = round_trip(mtext("x", 0.0, Some(c.clone())));
+    assert_eq!(t.columns, Some(Box::new(c)));
+    assert!(!dxf.contains(" 50\r\n0\r\n"), "no height count for an empty list: {dxf}");
 }
