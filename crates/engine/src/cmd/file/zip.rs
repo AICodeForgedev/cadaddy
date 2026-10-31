@@ -126,6 +126,19 @@ fn get_u32(b: &[u8], at: usize) -> Option<u32> {
 /// The entries of ZIP archive `b` (stored and Deflate ones; others are an error), checked
 /// against their CRC.
 pub fn read(b: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    read_parts(b, |_| true, MAX_ENTRY_BYTES, MAX_READ_BYTES)
+}
+
+/// A byte count for a message: whole GB, else whole MB.
+fn size_text(n: usize) -> String {
+    if n >= 1 << 30 && n.is_multiple_of(1 << 30) { format!("{} GB", n >> 30) } else { format!("{} MB", n >> 20) }
+}
+
+/// Only the entries `wanted` picks (by name), inflated against a caller-given budget: every
+/// entry's declared unpacked size, from the central directory, is summed first and refused over
+/// `max_total` (all entries, wanted or not), and a wanted entry declaring more than `max_entry`
+/// is refused; nothing is inflated until those checks pass, and unwanted entries never are.
+pub fn read_parts(b: &[u8], wanted: impl Fn(&str) -> bool, max_entry: usize, max_total: usize) -> Result<Vec<(String, Vec<u8>)>, String> {
     let bad = || "not a ZIP archive this reader understands".to_string();
     // The end of central directory record: within the last 64 KiB + 22 bytes.
     let start = b.len().saturating_sub(0xFFFF + 22);
@@ -145,10 +158,23 @@ pub fn read(b: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         let comment = usize::from(get_u16(b, dir + 32).ok_or_else(bad)?);
         dir += 46 + name_len + extra + comment;
     }
-    if total > MAX_READ_BYTES {
-        return Err(format!("the archive unpacks to more than {} GB", MAX_READ_BYTES >> 30));
+    if total > max_total {
+        return Err(format!("the archive unpacks to more than {} (size limit)", size_text(max_total)));
     }
+    // The wanted entries' declared sizes against the per-entry limit, still before inflating.
     let mut out = Vec::with_capacity(n.min(4096));
+    let mut check = at;
+    for _ in 0..n {
+        let size = get_u32(b, check + 24).ok_or_else(bad)? as usize;
+        let name_len = usize::from(get_u16(b, check + 28).ok_or_else(bad)?);
+        let extra = usize::from(get_u16(b, check + 30).ok_or_else(bad)?);
+        let comment = usize::from(get_u16(b, check + 32).ok_or_else(bad)?);
+        let name = String::from_utf8_lossy(b.get(check + 46..check + 46 + name_len).ok_or_else(bad)?).into_owned();
+        if size > max_entry && wanted(&name) {
+            return Err(format!("{name}: unpacks to {}, over the {} size limit", size_text(size), size_text(max_entry)));
+        }
+        check += 46 + name_len + extra + comment;
+    }
     for _ in 0..n {
         if get_u32(b, at) != Some(0x0201_4b50) {
             return Err(bad());
@@ -163,6 +189,9 @@ pub fn read(b: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         let local = get_u32(b, at + 42).ok_or_else(bad)? as usize;
         let name = String::from_utf8_lossy(b.get(at + 46..at + 46 + name_len).ok_or_else(bad)?).into_owned();
         at += 46 + name_len + extra + comment;
+        if !wanted(&name) {
+            continue;
+        }
         if get_u32(b, local) != Some(0x0403_4b50) {
             return Err(bad());
         }
@@ -170,9 +199,6 @@ pub fn read(b: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         let lextra = usize::from(get_u16(b, local + 28).ok_or_else(bad)?);
         let data_at = local + 30 + lname + lextra;
         let body = b.get(data_at..data_at.checked_add(packed).ok_or_else(bad)?).ok_or_else(bad)?;
-        if size > MAX_ENTRY_BYTES {
-            return Err(format!("{name}: larger than {} MB", MAX_ENTRY_BYTES >> 20));
-        }
         let data = match method {
             0 => body.to_vec(),
             8 => miniz_oxide::inflate::decompress_to_vec_with_limit(body, size).map_err(|_| format!("{name}: damaged"))?,
@@ -293,5 +319,28 @@ mod tests {
             at = o + 4;
         }
         assert!(read(&z).unwrap_err().contains("GB"));
+    }
+
+    #[test]
+    fn only_the_wanted_entries_are_inflated_within_the_given_budget() {
+        let z = write(&[
+            ("keep.txt".to_string(), b"kept kept kept kept kept kept".to_vec()),
+            ("skip.bin".to_string(), vec![7; 5000]),
+            ("big.xml".to_string(), vec![b' '; 3 << 20]),
+        ])
+        .unwrap();
+        // Unwanted entries are never inflated: damage in one doesn't matter.
+        let mut damaged = z.clone();
+        let at = damaged.windows(8).position(|w| w == b"skip.bin").unwrap() + 8;
+        damaged[at + 2] ^= 0xFF;
+        let got = read_parts(&damaged, |n| n == "keep.txt", 1 << 20, 8 << 20).unwrap();
+        assert_eq!(got, vec![("keep.txt".to_string(), b"kept kept kept kept kept kept".to_vec())]);
+        // A wanted entry over the per-entry budget is refused, naming it and the limit, before inflating.
+        let e = read_parts(&z, |n| n == "big.xml", 1 << 20, 8 << 20).unwrap_err();
+        assert!(e.contains("big.xml") && e.contains("3 MB") && e.contains("1 MB size limit"), "{e}");
+        // The same entry unwanted is fine; the total budget counts every entry.
+        assert!(read_parts(&z, |n| n == "keep.txt", 1 << 20, 8 << 20).is_ok());
+        let e = read_parts(&z, |n| n == "keep.txt", 1 << 20, 2 << 20).unwrap_err();
+        assert!(e.contains("more than 2 MB (size limit)"), "{e}");
     }
 }

@@ -332,3 +332,40 @@ fn a_shapes_own_transform_applies_to_it() {
     assert!(near(ls[0].0, Vec2::new(3.0, 9.0)) && near(ls[0].1, Vec2::new(5.0, 9.0)), "{ls:?}");
     assert!(near(ls[1].0, Vec2::new(0.0, 10.0)), "and to nothing after it: {ls:?}");
 }
+
+#[test]
+fn a_huge_comma_list_with_a_huge_body_is_read_in_bounded_memory_and_time() {
+    // 20 000 selectors share one ~1 MB body; the body is stored once (unit test
+    // `hostile_rule_bodies_are_shared_and_capped` asserts the stored declaration count).
+    let sels: Vec<String> = (0..20_000).map(|i| format!(".c{i}")).collect();
+    let body: String = format!("fill:red;{}", (0..90_000).map(|i| format!("junk{i}:1;")).collect::<String>());
+    let style = format!("<style>{} {{ {body} }}</style>", sels.join(","));
+    assert!(style.len() > 1_000_000);
+    let t = std::time::Instant::now();
+    let d = svg(&format!(r#"{style}<rect class="c7" width="1" height="1"/>"#));
+    assert!(t.elapsed().as_secs() < 5, "took {:?}", t.elapsed());
+    assert_eq!(hatches(&d).len(), 1);
+}
+
+#[test]
+fn matching_20000_rules_against_100000_elements_stays_within_budget() {
+    let rules: String = (0..20_000).map(|i| format!(".c{i}{{fill:#0000ff}}")).collect();
+    let els = r#"<rect class="c5" width="1" height="1"/>"#.repeat(100_000);
+    let t = std::time::Instant::now();
+    let d = svg(&format!("<style>{rules}</style>{els}"));
+    assert!(t.elapsed().as_secs() < 30, "took {:?}", t.elapsed());
+    let h = hatches(&d);
+    assert_eq!(h.len(), 100_000);
+    assert!(h.iter().all(|(_, c)| *c == Color::True(Rgb(0, 0, 255))));
+}
+
+#[test]
+fn matching_that_would_cost_too_much_is_stopped_with_a_note() {
+    // Every rule hits the same class: 20 000 rule tests per element, over the work budget.
+    let rules: String = (0..20_000).map(|_| ".a{fill:red}").collect();
+    let els = r#"<rect class="a" width="1" height="1"/>"#.repeat(5_000);
+    let t = std::time::Instant::now();
+    let d = svg(&format!("<style>{rules}</style>{els}"));
+    assert!(t.elapsed().as_secs() < 30, "took {:?}", t.elapsed());
+    assert!(d.read_notes.iter().any(|n| n.contains("not applied")), "{:?}", d.read_notes);
+}

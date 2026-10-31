@@ -87,3 +87,79 @@ fn a_workbook_fills_a_table_and_follows_its_changes() {
     assert!(s.execute("datalink", &json!({ "handle": h, "path": dir.join("bad.xlsx").to_string_lossy() })).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A workbook whose one sheet part is `sheet` (the other parts are minimal).
+fn workbook_with_sheet(sheet: Vec<u8>) -> Vec<u8> {
+    let parts: Vec<(String, Vec<u8>)> = vec![
+        ("xl/workbook.xml".into(), format!(r#"<workbook {NS}><sheets><sheet name="Big" sheetId="1" r:id="rId1"/></sheets></workbook>"#).into_bytes()),
+        ("xl/_rels/workbook.xml.rels".into(), br#"<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>"#.to_vec()),
+        ("xl/worksheets/sheet1.xml".into(), sheet),
+    ];
+    zip::write(&parts).unwrap()
+}
+
+/// A table linked to `file` through a first, good workbook, so that the file can then be swapped
+/// for a hostile one.
+fn linked(dir: &std::path::Path, name: &str) -> (Session, String, std::path::PathBuf) {
+    std::fs::create_dir_all(dir).unwrap();
+    let file = dir.join(name);
+    std::fs::write(
+        &file,
+        workbook_with_sheet(format!(r#"<worksheet {NS}><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#).into_bytes()),
+    )
+    .unwrap();
+    let mut s = Session::new();
+    let h = s.execute("table", &json!({ "at": [0, 0], "rows": 1, "cols": 1 })).unwrap()["handle"].as_str().unwrap().to_string();
+    s.execute("datalink", &json!({ "handle": h, "path": file.to_string_lossy(), "startRow": 0 })).unwrap();
+    assert_eq!(cells(&s, &h), [vec!["1"]]);
+    (s, h, file)
+}
+
+fn touch_later(file: &std::path::Path) {
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    std::fs::File::options().write(true).open(file).unwrap().set_modified(later).unwrap();
+}
+
+#[test]
+fn a_sheet_that_unpacks_to_hundreds_of_megabytes_is_refused_before_inflating() {
+    let dir = std::env::temp_dir().join(format!("cadaddy-xlsx-bomb-{}", std::process::id()));
+    let (mut s, h, file) = linked(&dir, "bomb.xlsx");
+    // A few KB on disk: one run of spaces inside the sheet part, 300 MB (over the workbook's
+    // 256 MB) and 100 MB (over one part's 64 MB).
+    for (megabytes, limit) in [(300usize, "256 MB"), (100, "64 MB")] {
+        let mut sheet = format!(r#"<worksheet {NS}><sheetData><row r="1"><c r="A1"><v>2</v></c></row></sheetData></worksheet>"#).into_bytes();
+        sheet.extend(std::iter::repeat_n(b' ', megabytes << 20));
+        let bomb = workbook_with_sheet(sheet);
+        assert!(bomb.len() < 1 << 20, "the file itself is small: {} bytes", bomb.len());
+        std::fs::write(&file, &bomb).unwrap();
+        touch_later(&file);
+        // DATALINK refuses it, naming the limit, and leaves the table as it was.
+        let e = s.execute("datalink", &json!({ "handle": h, "path": file.to_string_lossy(), "startRow": 0 })).unwrap_err().to_string();
+        assert!(e.contains("size limit") && e.contains(limit), "{e}");
+        assert_eq!(cells(&s, &h), [vec!["1"]]);
+        // So does DATALINKUPDATE for that table, and nothing is updated.
+        let r = s.execute("datalinkupdate", &json!({ "changed": true })).unwrap();
+        let e = r["errors"][0].as_str().unwrap();
+        assert!(r["updated"] == 0 && e.contains("size limit") && e.contains(limit), "{r}");
+        assert_eq!(cells(&s, &h), [vec!["1"]]);
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_sheet_of_too_many_empty_cells_is_refused() {
+    let dir = std::env::temp_dir().join(format!("cadaddy-xlsx-cells-{}", std::process::id()));
+    let (mut s, h, file) = linked(&dir, "cells.xlsx");
+    // 1 000 001 self-closing <c/>: more than the 1 000 000 cells read from one sheet.
+    let mut sheet = format!(r#"<worksheet {NS}><sheetData><row r="1">"#);
+    sheet.push_str(&"<c/>".repeat(1_000_001));
+    sheet.push_str("</row></sheetData></worksheet>");
+    std::fs::write(&file, workbook_with_sheet(sheet.into_bytes())).unwrap();
+    touch_later(&file);
+    let e = s.execute("datalink", &json!({ "handle": h, "path": file.to_string_lossy(), "startRow": 0 })).unwrap_err().to_string();
+    assert!(e.contains("more than 1000000 cells") && e.contains("size limit"), "{e}");
+    let r = s.execute("datalinkupdate", &json!({ "changed": true })).unwrap();
+    assert!(r["updated"] == 0 && r["errors"][0].as_str().unwrap().contains("more than 1000000 cells"), "{r}");
+    assert_eq!(cells(&s, &h), [vec!["1"]]);
+    std::fs::remove_dir_all(&dir).ok();
+}
