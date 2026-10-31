@@ -1369,7 +1369,9 @@ fn controls_named(text: &str) -> Vec<&'static str> {
 /// controls with nothing saying which was ordered is a question.
 /// Words a lighting cut sheet uses of its product; a product whose pages use two of them is a
 /// luminaire.
-const LIGHTING_WORDS: &[&str] = &["LUMEN", "LUMINAIRE", "LED", "CCT", "CRI", "FOOTCANDLE", "PHOTOMETRIC"];
+const LIGHTING_WORDS: &[&str] = &["LUMEN", "LUMINAIRE", "LED", "CCT", "CRI", "FOOTCANDLE", "PHOTOMETRIC", "EXIT"];
+/// A luminaire whose cut sheet says it goes on a wall (not the wall-wash trims of a downlight).
+const WALL_MOUNT_WORDS: &[&str] = &["WALL MOUNT", "WALL-MOUNT", "WALL BRACKET", "SCONCE", "WALL PACK", "WALLPACK", "EXIT SIGN", "EXIT LIGHT"];
 
 fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &mut SpecImportResult, counter: &mut u32) {
     for (i, p) in types.iter_mut().enumerate() {
@@ -1378,6 +1380,15 @@ fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &m
             let words = LIGHTING_WORDS.iter().filter(|w| lines.iter().any(|l| l.to_ascii_uppercase().contains(**w))).count();
             if words >= 2 {
                 p.bim_type.category = "luminaire".into();
+            }
+        }
+        // Where a luminaire goes: on a wall when its cut sheet says so (an exit sign, a sconce, a
+        // wall pack); the ceiling otherwise.
+        if p.bim_type.category == "luminaire" && p.bim_type.get_field(bimspec::keys::MOUNTING).is_none() {
+            let wall = WALL_MOUNT_WORDS.iter().find(|w| lines.iter().any(|l| l.to_ascii_uppercase().contains(**w)));
+            if let Some(w) = wall {
+                let source = format!("{} (its cut sheet: {})", p.file_source, w.to_ascii_lowercase());
+                p.bim_type.set_field(bimspec::keys::MOUNTING, SpecField::new("wall").with_source(source).with_confidence(Confidence::Inferred));
             }
         }
         if p.bim_type.get_field(bimspec::keys::DIMMING).is_some() {
@@ -2089,6 +2100,7 @@ QX100E010   4in downlight, 120-277V 0-10V 5% Dim
 Job Name : SOME JOB   Type : Q7A
 Manufacturer : ACME LIGHTING
 Model Number : HX6D010IEM/TRIM
+LED wall mount luminaire, 1200 lumens
 --- page 4 of 4 ---
 Type : Q8
 Manufacturer : OTHER CO
@@ -2108,6 +2120,8 @@ Dimming   Non-Dimming   0-10V
         assert_eq!(field("Q7A", "dimming")["confidence"], "inferred");
         let category = |mark: &str| proposals.iter().find(|p| p["mark"] == mark).map(|p| p["category"].clone()).unwrap_or_default();
         assert_eq!(category("Q7"), "luminaire", "its pages speak of lumens and LED: {r}");
+        assert!(field("Q7", "mounting").is_null(), "a downlight: on the ceiling");
+        assert_eq!(field("Q7A", "mounting")["value"], "wall", "its cut sheet: wall mount: {r}");
         assert_ne!(category("Q8"), "luminaire");
         assert!(field("Q8", "dimming").is_null(), "two controls named, none ordered: {r}");
         let rfis = arr(&r["rfis"]);

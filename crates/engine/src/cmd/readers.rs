@@ -1298,14 +1298,21 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         // What its sheet or its submittal says it is (a fire alarm plan's `S`, a luminaire), else
         // what its mark says. A luminaire and a fire alarm detector are on the ceiling.
         let read = dv.kind.trim();
-        let kind = if read.is_empty() || read == "luminaire" { device_kind(tag) } else { read };
+        let luminaire = matches!(read, "luminaire" | "wall luminaire");
+        let kind = if read.is_empty() || luminaire { device_kind(tag) } else { read };
         let mut e = cadaddy_walk3d::tags::ElementTag { id, kind: kind.replace(' ', "_"), level: level.clone(), at_ft, ..Default::default() };
         e.set("type", tag, "plan");
-        let item = if read.is_empty() { device_item(tag) } else { format!("{read} {tag}") };
+        let item = match read {
+            "" => device_item(tag),
+            "wall luminaire" => format!("luminaire {tag}"),
+            _ => format!("{read} {tag}"),
+        };
         e.set("device_type", item, "plan");
         let detector = read == "fire alarm device" && matches!(tag.to_ascii_uppercase().as_str(), "S" | "SD" | "H" | "HD" | "D" | "DD");
-        if read == "luminaire" || detector {
-            e.set("mount", "ceiling", if read == "luminaire" { "submittal" } else { "plan" });
+        if read == "wall luminaire" {
+            e.set("mount", "wall", "submittal");
+        } else if luminaire || detector {
+            e.set("mount", "ceiling", if luminaire { "submittal" } else { "plan" });
         }
         if !dv.circuit.is_empty() {
             e.set("circuit", dv.circuit.clone(), "plan");

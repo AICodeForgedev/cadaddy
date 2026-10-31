@@ -263,6 +263,18 @@ fn a_luminaire_hangs_at_the_ceiling_over_it() {
     }
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
     s.execute("model.build", &json!({})).expect("build");
+    // An exit sign by its submittal: on the wall at 7'-6".
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(t) = spec["tags"].as_array_mut() {
+        let mut exit = device(15.0, 9.2, "XA", "", "1FC");
+        exit["fields"]["mount"] = json!({"value": "wall", "source": "submittal"});
+        t.push(exit);
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let xa = device_of(&mut s, "XA");
+    assert_eq!(xa["mount_height"]["value"], json!(90.0), "{xa:#}");
+    assert_eq!(xa["mount_height"]["source"]["kind"], "rule");
     let hs = find(&mut s, "device", json!({"type_mark": "A"}));
     let heights: Vec<Value> = hs.iter().map(|h| get(&mut s, h)["mount_height"]["value"].clone()).collect();
     assert!(heights.contains(&json!(20.0)) && heights.contains(&json!(108.0)), "the receptacle at +20\", the luminaire at the ceiling: {heights:?}");

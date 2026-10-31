@@ -197,8 +197,10 @@ fn read_products(s: &mut Session, files: &[String]) -> Read {
             let mark = prop.get("mark").and_then(Value::as_str).unwrap_or("").trim();
             let product = Product { doc: name.clone(), proposal: prop.clone() };
             // A product is what its data sheet says it is: a mark with no maker or number is
-            // only a word on a page.
-            if mark.is_empty() || (product.value(keys::MANUFACTURER).is_none() && product.value(keys::CATALOG_NUMBER).is_none()) {
+            // only a word on a page, unless its cut sheet shows a luminaire (a custom fixture's
+            // shop drawing names its type and no maker).
+            let luminaire = prop.get("category").and_then(Value::as_str) == Some("luminaire");
+            if mark.is_empty() || (!luminaire && product.value(keys::MANUFACTURER).is_none() && product.value(keys::CATALOG_NUMBER).is_none()) {
                 continue;
             }
             let page = [keys::CATALOG_NUMBER, keys::MANUFACTURER]
@@ -219,15 +221,33 @@ fn read_products(s: &mut Session, files: &[String]) -> Read {
     out
 }
 
-/// The type marks the submittals at `paths` give products for (upper case): the device types
-/// they list, for a print set whose fixture schedule is only in the submittals; and those of
-/// them that are luminaires (by their cut sheets).
-pub(crate) fn product_marks(s: &mut Session, paths: &[String]) -> (Vec<String>, Vec<String>) {
+/// The type marks the submittals at `paths` give products for (upper case).
+#[derive(Default)]
+pub(crate) struct ProductMarks {
+    /// Every one: the device types they list, for a print set whose fixture schedule is only in
+    /// the submittals.
+    pub types: Vec<String>,
+    /// The luminaires (by their cut sheets) that hang at the ceiling.
+    pub ceiling: Vec<String>,
+    /// The luminaires that go on a wall (an exit sign, a sconce, a wall pack).
+    pub wall: Vec<String>,
+}
+
+pub(crate) fn product_marks(s: &mut Session, paths: &[String]) -> ProductMarks {
     let files = pdf_files(paths);
     let products = read_products(s, &files).products;
-    let lights =
-        products.iter().filter(|(_, p)| p.proposal.get("category").and_then(Value::as_str) == Some("luminaire")).map(|(m, _)| m.clone()).collect();
-    (products.into_keys().collect(), lights)
+    let mut out = ProductMarks::default();
+    for (mark, p) in &products {
+        if p.proposal.get("category").and_then(Value::as_str) == Some("luminaire") {
+            if p.value(keys::MOUNTING).is_some_and(|m| m.eq_ignore_ascii_case("wall")) {
+                out.wall.push(mark.clone());
+            } else {
+                out.ceiling.push(mark.clone());
+            }
+        }
+    }
+    out.types = products.into_keys().collect();
+    out
 }
 
 /// The type mark of a device, fixture or equipment element.
@@ -343,10 +363,10 @@ Model Number : WRAP 48 840
         let file = std::env::temp_dir().join(format!("cadaddy-submittal-types-{}.txt", std::process::id()));
         let text = "--- page 1 of 2 ---\nType : Q7A\nManufacturer : ACME LIGHTING\nModel Number : HX6D010\n--- page 2 of 2 ---\nType : Q9\nA shop drawing with no header\n";
         std::fs::write(&file, text).unwrap();
-        let (marks, lights) = product_marks(&mut s, &[file.to_string_lossy().to_string()]);
+        let marks = product_marks(&mut s, &[file.to_string_lossy().to_string()]);
         std::fs::remove_file(&file).ok();
-        assert_eq!(marks, ["Q7A"]);
-        assert!(lights.is_empty(), "its page says nothing of light");
+        assert_eq!(marks.types, ["Q7A"]);
+        assert!(marks.ceiling.is_empty() && marks.wall.is_empty(), "its page says nothing of light");
     }
 
     #[test]

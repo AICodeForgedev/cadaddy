@@ -432,6 +432,9 @@ pub struct GuidedJob {
     /// Those of them that are luminaires (their cut sheets): they hang at the ceiling.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub luminaire_types: Vec<String>,
+    /// The luminaires that go on a wall (an exit sign, a sconce, a wall pack).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wall_luminaire_types: Vec<String>,
     /// What the print folder held when the job started ([`prints_stamp`]).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prints_stamp: String,
@@ -735,6 +738,7 @@ impl GuidedJob {
             submittals: Vec::new(),
             submittal_types: Vec::new(),
             luminaire_types: Vec::new(),
+            wall_luminaire_types: Vec::new(),
             prints_stamp: String::new(),
             index: None,
             sheet_regions: Vec::new(),
@@ -2273,10 +2277,11 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
         let kind = if fire_alarm_sheet { "fire alarm device".to_string() } else { String::new() };
         // A luminaire by its submittal (on an electrical plan): it hangs at the ceiling.
         let kind_of_tag = |t: &str| {
-            if kind.is_empty() && electrical(&sheet) && job.luminaire_types.iter().any(|l| l.eq_ignore_ascii_case(t)) {
-                "luminaire".to_string()
-            } else {
-                kind.clone()
+            let listed = |types: &[String]| types.iter().any(|l| l.eq_ignore_ascii_case(t));
+            match (kind.is_empty() && electrical(&sheet), listed(&job.luminaire_types), listed(&job.wall_luminaire_types)) {
+                (true, true, _) => "luminaire".to_string(),
+                (true, _, true) => "wall luminaire".to_string(),
+                _ => kind.clone(),
             }
         };
         for (tag, at, h, tag_at) in syms {
@@ -3078,7 +3083,8 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The submittals' product types, read once: device types too.
     if !job.submittals.is_empty() && job.submittal_types.is_empty() {
         let started = web_time::Instant::now();
-        (job.submittal_types, job.luminaire_types) = super::submittals::product_marks(s, &job.submittals);
+        let marks = super::submittals::product_marks(s, &job.submittals);
+        (job.submittal_types, job.luminaire_types, job.wall_luminaire_types) = (marks.types, marks.ceiling, marks.wall);
         progress_line(&format!(
             "  submittal product types (device types too): {} in {:.1} s",
             job.submittal_types.join(", "),
@@ -7357,6 +7363,7 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
             if saved.submittals != job.submittals {
                 saved.submittal_types.clear();
                 saved.luminaire_types.clear();
+                saved.wall_luminaire_types.clear();
             }
             saved.submittals = job.submittals.clone();
         }

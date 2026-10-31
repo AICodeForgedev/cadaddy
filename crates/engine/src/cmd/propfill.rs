@@ -45,6 +45,8 @@ const DOOR_TAG_FT: f64 = 3.0;
 const CFM_TAG_FT: f64 = 4.0;
 /// How far from a wall a device may stand and still be on it, feet.
 const HOST_WALL_FT: f64 = 1.5;
+/// A luminaire on a wall with no height printed (an exit sign over a door, a sconce), inches.
+const WALL_LUMINAIRE_IN: f64 = 90.0;
 /// A switch is always on a wall: read at its designation beside the symbol (or stamped from a
 /// typical room's plan), it is on the nearest wall this far, feet.
 const SWITCH_WALL_FT: f64 = 3.0;
@@ -318,12 +320,26 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
                 }),
             }
         });
+        // A luminaire on a wall (an exit sign, a sconce, a wall pack): 7'-6" unless printed.
+        let wall_light = (field(t, "mount").as_deref() == Some("wall")).then(|| Height {
+            inches: WALL_LUMINAIRE_IN,
+            source: SourceKind::Rule,
+            doc: "a wall luminaire (exit sign, sconce): 7'-6\" over the floor".into(),
+        });
         let known = heights.get(&mark.to_ascii_uppercase());
         // A printed height under 7' is no ceiling device's: another device of the legend under the
-        // same mark (a receptacle's +44"); 7' and up is a wall-mounted one's (a sconce, an exit).
+        // same mark (a receptacle's +44"); 7' and up is a wall-mounted one's (a sconce, an exit). A
+        // wall luminaire's is 6' and up.
         let ceiling_mount = ceiling.as_ref().is_some_and(Option::is_some);
-        let printed = known.filter(|h| h.source != SourceKind::Default && (!ceiling_mount || h.inches >= WALL_BOX_FT * 12.0)).cloned();
-        let height = printed.or(ceiling.flatten()).or_else(|| known.cloned()).unwrap_or(Height {
+        let lowest = if ceiling_mount {
+            WALL_BOX_FT * 12.0
+        } else if wall_light.is_some() {
+            72.0
+        } else {
+            0.0
+        };
+        let printed = known.filter(|h| h.source != SourceKind::Default && h.inches >= lowest).cloned();
+        let height = printed.or(ceiling.flatten()).or(wall_light).or_else(|| known.cloned()).unwrap_or(Height {
             inches: default_height(kind),
             source: SourceKind::Default,
             doc: format!("usual height for a {kind}"),
