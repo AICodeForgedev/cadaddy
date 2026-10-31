@@ -1,5 +1,5 @@
 //! Autosave and Drawing Recovery in the app. The engine decides what to write and writes it
-//! ([`cadaddy_engine::autosave`]); this runs it every frame, keeps SAVETIME and SAVEFILEPATH with
+//! ([`cadaddy_engine::autosave`]); this runs it every frame, keeps SAVETIME, SAVEFILEPATH and ISAVEBAK with
 //! the preferences, and shows the Drawing Recovery list after a crash: each autosaved drawing can
 //! be opened (as an unsaved copy) or discarded. On the web autosaves go to browser storage
 //! ([`autosave::store`]) and the ones a closed or crashed tab left are offered on the next visit.
@@ -14,14 +14,14 @@ use crate::theme::Tokens;
 /// The host storage key for [`prefs_json`].
 pub const PREFS_KEY: &str = "cadaddy.autosave";
 
-/// SAVETIME, SAVEFILEPATH and AUDITCTL as JSON for the host's storage.
+/// SAVETIME, SAVEFILEPATH, AUDITCTL and ISAVEBAK as JSON for the host's storage.
 pub fn prefs_json() -> String {
     // The default folder is kept as "" (the default), so it follows the settings folder: a
     // profile moved elsewhere (APPDATA redirected) went on writing autosaves to the old one
     // (battle test 0.7.7c).
     let path = autosave::savefilepath();
     let path = if DEFAULT_DIR.get().is_some_and(|d| *d == path) { String::new() } else { path };
-    json!({ "savetime": autosave::savetime(), "saveFilePath": path, "auditctl": cadaddy_engine::audit::auditctl() }).to_string()
+    json!({ "savetime": autosave::savetime(), "saveFilePath": path, "auditctl": cadaddy_engine::audit::auditctl(), "backup": autosave::isavebak() }).to_string()
 }
 
 /// Restore what [`prefs_json`] saved; malformed values are ignored.
@@ -35,6 +35,9 @@ pub fn load_prefs(json: &str) {
     }
     if let Some(p) = v.get("saveFilePath").and_then(Value::as_str) {
         autosave::set_savefilepath(p);
+    }
+    if let Some(b) = v.get("backup").and_then(Value::as_bool) {
+        autosave::set_isavebak(b);
     }
 }
 

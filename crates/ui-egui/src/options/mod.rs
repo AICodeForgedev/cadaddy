@@ -15,6 +15,7 @@
 //! | `saveVersion` | `"2000"` … `"2018"`: the version drawings with no file yet are saved in |
 //! | `SAVETIME` | minutes between automatic saves, 0–600 (0: off) |
 //! | `SAVEFILEPATH` | the folder automatic saves go to |
+//! | `ISAVEBAK` | 1: saving over a drawing keeps the previous file as `<name>.bak` (default); 0: no backup |
 //! | `agentControl` | let AI agents (the Claude connector, `cadaddy-cli mcp`) control this window through 127.0.0.1 port 47820 from the next start (default `true`) |
 //! | `timeSensitiveRightClick` | while a command runs, a quick right-click is Enter and holding the button opens the shortcut menu (default); `false`: a right-click always opens the menu |
 //! | `systemCursor` | keep the system cursor visible over the drawing area |
@@ -24,7 +25,7 @@
 //! | `snapMarkerSize` | object snap marker size in points, 5–31 |
 //! | `interfaceScale` | the interface's size, 0.5–3 (1: the system's own) |
 //!
-//! SAVETIME and SAVEFILEPATH are the engine's autosave settings, kept with the autosave state
+//! SAVETIME, SAVEFILEPATH and ISAVEBAK are the engine's save settings, kept with the autosave state
 //! rather than in the profile.
 //!
 //! The profile variables and the interface preferences survive restarts: the host saves

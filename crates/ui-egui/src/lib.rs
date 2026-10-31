@@ -139,6 +139,7 @@ pub mod quickview;
 pub mod renderwin;
 pub mod rfipalette;
 pub mod ribbon;
+pub mod save_loss;
 pub mod shortcut_menus;
 pub mod spelldlg;
 pub mod tagspalette;
@@ -524,6 +525,10 @@ pub struct CadApp {
     pub autosave: Option<cadaddy_engine::autosave::Autosaver>,
     /// Drawing Recovery: autosave files a crashed app left behind.
     pub recovery: autosave::Recovery,
+    /// A save waiting for an answer about the content the file can't keep ([`save_loss`]).
+    pub save_loss: Option<save_loss::Pending>,
+    /// The loss the user last agreed to, so saving again doesn't ask again ([`save_loss`]).
+    pub save_loss_accepted: Option<save_loss::Accepted>,
     /// GPU errors and device loss reported by wgpu ([`gpu::GpuFaults`]).
     pub gpu_faults: std::sync::Arc<gpu::GpuFaults>,
     /// The notice shown after one (see [`autosave::gpu_notice`]).
@@ -634,6 +639,8 @@ impl CadApp {
             closing: None,
             autosave: None,
             recovery: autosave::Recovery::default(),
+            save_loss: None,
+            save_loss_accepted: None,
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
             hatch_dlg: None,
@@ -1405,6 +1412,7 @@ impl CadApp {
         matchpropdlg::show(self, ui.ctx());
         renderwin::show(self, ui.ctx());
         closing::prompt(self, ui.ctx());
+        save_loss::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
         update::tick(self);
