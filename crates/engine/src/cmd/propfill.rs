@@ -165,11 +165,25 @@ fn note_kinds(up: &str) -> Vec<&'static str> {
 /// Each device type's mounting height: a legend row's (the type mark and a height on one line
 /// of the sheet), else a general note's for its kind of device, else the kind's usual height
 /// (marked default).
+/// Whether a legend row's words (upper case) can describe a device of `kind`: a switch's row
+/// says switch or dimmer, a sensor's sensor, a fire alarm device's what it is; a device of no
+/// known kind takes any row.
+fn row_fits(kind: &str, words: &str) -> bool {
+    let any = |ws: &[&str]| ws.iter().any(|w| words.contains(w));
+    match kind {
+        "switch" => any(&["SWITCH", "DIMMER"]),
+        "occupancy sensor" => any(&["SENSOR", "OCCUPANCY", "VACANCY"]),
+        "fire alarm device" => any(&["FIRE", "STROBE", "HORN", "SMOKE", "PULL", "DETECTOR", "SPEAKER", "ALARM"]),
+        _ => true,
+    }
+}
+
 pub fn mount_heights(d: &Drawing, marks: &[String]) -> BTreeMap<String, Height> {
     let ents = super::bspec::plan_objects(d);
     let texts = super::perceive::texts(&ents);
     let wanted: Vec<String> = marks.iter().map(|m| m.trim().to_ascii_uppercase()).filter(|m| !m.is_empty()).collect();
-    let mut legend: BTreeMap<String, Height> = BTreeMap::new();
+    // Each mark's legend height and the row's words.
+    let mut legend: BTreeMap<String, (Height, String)> = BTreeMap::new();
     let mut by_note: BTreeMap<&'static str, Height> = BTreeMap::new();
     for (_, text, at, h) in texts.iter().take(2_000_000) {
         let Some(inches) = mount_height_in(text) else { continue };
@@ -182,7 +196,9 @@ pub fn mount_heights(d: &Drawing, marks: &[String]) -> BTreeMap<String, Height> 
             .filter(|(_, t, _, _)| wanted.iter().any(|m| m.eq_ignore_ascii_case(t.trim())))
             .min_by(|a, b| (at.x - a.2.x).total_cmp(&(at.x - b.2.x)));
         if let Some((_, t, _, _)) = row {
-            legend.entry(t.trim().to_ascii_uppercase()).or_insert(Height { inches, source: SourceKind::Legend, doc: "device legend".into() });
+            legend
+                .entry(t.trim().to_ascii_uppercase())
+                .or_insert((Height { inches, source: SourceKind::Legend, doc: "device legend".into() }, up.clone()));
             continue;
         }
         for k in note_kinds(&up) {
@@ -193,7 +209,9 @@ pub fn mount_heights(d: &Drawing, marks: &[String]) -> BTreeMap<String, Height> 
         .iter()
         .map(|m| {
             let kind = kind_of(m);
-            let h = legend.get(m).cloned().or_else(|| by_note.get(kind).cloned()).unwrap_or_else(|| Height {
+            // A legend row of another kind of device under the same mark is not this one's.
+            let row = legend.get(m).filter(|(_, words)| row_fits(kind, words)).map(|(h, _)| h.clone());
+            let h = row.or_else(|| by_note.get(kind).cloned()).unwrap_or_else(|| Height {
                 inches: default_height(kind),
                 source: SourceKind::Default,
                 doc: format!("usual height for a {kind}"),
@@ -251,6 +269,20 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
     if d.layer(layer).is_none() {
         d.layers.push(cadaddy_doc::Layer { name: layer.into(), color: cadaddy_doc::color::Color::Index(30), ..cadaddy_doc::Layer::default() });
     }
+    // The built ceilings (rooms', the reflected ceiling plans'), for what hangs at the ceiling: a
+    // luminaire, a smoke detector. Their level, plan extent and underside.
+    let wants_ceiling = devices.iter().any(|t| field(t, "mount").as_deref() == Some("ceiling"));
+    let ceilings: Vec<(Option<String>, Bounds2, f64)> = if wants_ceiling {
+        d.model
+            .iter()
+            .filter(|e| super::elemprops::element_kind(e).as_deref() == Some("ceiling"))
+            .filter_map(|e| extent(d, e).map(|(b, z0, _)| (super::bspec::made_level(e), b, z0)))
+            .filter(|(_, b, z)| !b.is_empty() && z.is_finite())
+            .take(MAX_ELEMENTS)
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut built = 0;
     for t in devices {
         let Some(level) = sp.level(&t.level).filter(|l| l.sheet.is_none()) else { continue };
@@ -260,15 +292,42 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
             "fire alarm device" => "fire alarm device",
             _ => kind_of(&mark),
         };
-        let height = heights.get(&mark.to_ascii_uppercase()).cloned().unwrap_or(Height {
-            inches: default_height(kind),
-            source: SourceKind::Default,
-            doc: format!("usual height for a {kind}"),
-        });
         let read_at = Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf);
         let sheet_name = field(t, "sheet").unwrap_or_default();
         let (placed, registered) = register(sp, &sheet_name, level, read_at);
         let (x, y) = (placed.x, placed.y);
+        // A printed height (its legend's, a note's) first; else one that hangs at the ceiling is
+        // at the underside of the ceiling over it (the smallest: a soffit in a room), else its
+        // level's ceiling; else the usual height for its kind.
+        let ceiling = (field(t, "mount").as_deref() == Some("ceiling")).then(|| -> Option<Height> {
+            let p = Vec2::new(x, y);
+            let floor = level.elevation_ft * upf;
+            let over = ceilings
+                .iter()
+                .filter(|(l, b, _)| l.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&level.name)) && b.contains(p))
+                .min_by(|a, b| (a.1.width() * a.1.height()).total_cmp(&(b.1.width() * b.1.height())))
+                .map(|(_, _, z)| (z - floor) / upf * 12.0)
+                .filter(|inches| inches.is_finite() && *inches > 72.0);
+            let what = if kind == "fire alarm device" { "a detector" } else { "a luminaire" };
+            match over {
+                Some(inches) => Some(Height { inches, source: SourceKind::Rule, doc: format!("{what}: at the ceiling over it") }),
+                None => (level.ceiling_ft.is_finite() && level.ceiling_ft > 6.0).then(|| Height {
+                    inches: level.ceiling_ft * 12.0,
+                    source: SourceKind::Rule,
+                    doc: format!("{what}: at its level's ceiling"),
+                }),
+            }
+        });
+        let known = heights.get(&mark.to_ascii_uppercase());
+        // A printed height under 7' is no ceiling device's: another device of the legend under the
+        // same mark (a receptacle's +44"); 7' and up is a wall-mounted one's (a sconce, an exit).
+        let ceiling_mount = ceiling.as_ref().is_some_and(Option::is_some);
+        let printed = known.filter(|h| h.source != SourceKind::Default && (!ceiling_mount || h.inches >= WALL_BOX_FT * 12.0)).cloned();
+        let height = printed.or(ceiling.flatten()).or_else(|| known.cloned()).unwrap_or(Height {
+            inches: default_height(kind),
+            source: SourceKind::Default,
+            doc: format!("usual height for a {kind}"),
+        });
         let z = (level.elevation_ft + height.inches / 12.0) * upf;
         let (w, l, h) = (BOX_IN[0] * upf / 12.0, BOX_IN[1] * upf / 12.0, BOX_IN[2] * upf / 12.0);
         let mut m = super::wallgen::empty_mesh();

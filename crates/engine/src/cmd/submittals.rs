@@ -220,10 +220,14 @@ fn read_products(s: &mut Session, files: &[String]) -> Read {
 }
 
 /// The type marks the submittals at `paths` give products for (upper case): the device types
-/// they list, for a print set whose fixture schedule is only in the submittals.
-pub(crate) fn product_marks(s: &mut Session, paths: &[String]) -> Vec<String> {
+/// they list, for a print set whose fixture schedule is only in the submittals; and those of
+/// them that are luminaires (by their cut sheets).
+pub(crate) fn product_marks(s: &mut Session, paths: &[String]) -> (Vec<String>, Vec<String>) {
     let files = pdf_files(paths);
-    read_products(s, &files).products.into_keys().collect()
+    let products = read_products(s, &files).products;
+    let lights =
+        products.iter().filter(|(_, p)| p.proposal.get("category").and_then(Value::as_str) == Some("luminaire")).map(|(m, _)| m.clone()).collect();
+    (products.into_keys().collect(), lights)
 }
 
 /// The type mark of a device, fixture or equipment element.
@@ -339,9 +343,10 @@ Model Number : WRAP 48 840
         let file = std::env::temp_dir().join(format!("cadaddy-submittal-types-{}.txt", std::process::id()));
         let text = "--- page 1 of 2 ---\nType : Q7A\nManufacturer : ACME LIGHTING\nModel Number : HX6D010\n--- page 2 of 2 ---\nType : Q9\nA shop drawing with no header\n";
         std::fs::write(&file, text).unwrap();
-        let marks = product_marks(&mut s, &[file.to_string_lossy().to_string()]);
+        let (marks, lights) = product_marks(&mut s, &[file.to_string_lossy().to_string()]);
         std::fs::remove_file(&file).ok();
         assert_eq!(marks, ["Q7A"]);
+        assert!(lights.is_empty(), "its page says nothing of light");
     }
 
     #[test]

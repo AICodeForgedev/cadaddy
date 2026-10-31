@@ -1364,15 +1364,26 @@ fn controls_named(text: &str) -> Vec<&'static str> {
     out
 }
 
-/// Each product's dimming (`dimming_of`) from its catalog number and its pages. A product whose
-/// pages name several controls with nothing saying which was ordered is a question.
+/// Each product's dimming (`dimming_of`) from its catalog number and its pages, and whether it is
+/// a luminaire (its pages speak of lumens, LEDs, CCT…). A product whose pages name several
+/// controls with nothing saying which was ordered is a question.
+/// Words a lighting cut sheet uses of its product; a product whose pages use two of them is a
+/// luminaire.
+const LIGHTING_WORDS: &[&str] = &["LUMEN", "LUMINAIRE", "LED", "CCT", "CRI", "FOOTCANDLE", "PHOTOMETRIC"];
+
 fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &mut SpecImportResult, counter: &mut u32) {
     for (i, p) in types.iter_mut().enumerate() {
+        let lines = blocks.get(i).map(Vec::as_slice).unwrap_or(&[]);
+        if p.bim_type.category.is_empty() {
+            let words = LIGHTING_WORDS.iter().filter(|w| lines.iter().any(|l| l.to_ascii_uppercase().contains(**w))).count();
+            if words >= 2 {
+                p.bim_type.category = "luminaire".into();
+            }
+        }
         if p.bim_type.get_field(bimspec::keys::DIMMING).is_some() {
             continue;
         }
         let catalog = p.bim_type.get_field(bimspec::keys::CATALOG_NUMBER).map(|f| f.value.clone()).unwrap_or_default();
-        let lines = blocks.get(i).map(Vec::as_slice).unwrap_or(&[]);
         match dimming_of(&catalog, lines) {
             Dimming::Found { control, how, stated } => {
                 let field = SpecField::new(control).with_source(format!("{} ({how})", p.file_source));
@@ -2066,6 +2077,7 @@ Job Name : SOME JOB   Type : Q7
 Manufacturer : ACME LIGHTING
 Model Number : QX100E1/TRIM
 Lumens: 1056
+LED module, 3000K CCT
 --- page 2 of 4 ---
 Job Name : SOME JOB   Type : Q7
 Model Number : QX100E1/TRIM
@@ -2094,6 +2106,9 @@ Dimming   Non-Dimming   0-10V
         assert!(field("Q7", "dimming").get("confidence").is_none(), "an ordering row states it");
         assert_eq!(field("Q7A", "dimming")["value"], "0-10V", "a D010 driver code");
         assert_eq!(field("Q7A", "dimming")["confidence"], "inferred");
+        let category = |mark: &str| proposals.iter().find(|p| p["mark"] == mark).map(|p| p["category"].clone()).unwrap_or_default();
+        assert_eq!(category("Q7"), "luminaire", "its pages speak of lumens and LED: {r}");
+        assert_ne!(category("Q8"), "luminaire");
         assert!(field("Q8", "dimming").is_null(), "two controls named, none ordered: {r}");
         let rfis = arr(&r["rfis"]);
         assert!(rfis.iter().any(|q| q["mark"] == "Q8" && q["field"] == "dimming"), "Q8's dimming is a question: {r}");
