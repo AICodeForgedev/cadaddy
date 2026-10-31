@@ -649,6 +649,8 @@ enum InsStage {
     YScale,
     Rotation,
     Attribs,
+    /// A Verify attribute asked again.
+    Verify,
 }
 
 #[derive(Default)]
@@ -660,13 +662,15 @@ struct InsertM {
     x_scale: Option<f64>,
     scale: Option<Vec2>,
     rotation: Option<f64>,
-    /// The attributes to ask for: tag, prompt, default.
-    attdefs: Vec<(String, String, String)>,
+    /// The attributes to ask for: tag, prompt, default, and Verify (asked again).
+    attdefs: Vec<(String, String, String, bool)>,
     /// How many of `attdefs` have been answered.
     asked: usize,
     values: serde_json::Map<String, Value>,
     /// A library symbol: answers are remembered for its next placement.
     symbol: bool,
+    /// Verify attributes asked again so far.
+    verified: usize,
     /// `*name`: insert the block's objects (one uniform scale factor, no attribute values).
     explode: bool,
     /// The file waiting for the Redefine answer.
@@ -696,6 +700,17 @@ impl InsertM {
         } else {
             InsStage::Attribs
         };
+        if self.stage == InsStage::Attribs && self.asked == 0 && !self.attdefs.is_empty() {
+            s.echo("Enter attribute values");
+        }
+        // Then the Verify attributes are asked again, with the values typed.
+        if self.stage == InsStage::Attribs && self.asked >= self.attdefs.len() && self.verified < self.verifying().len() {
+            if self.verified == 0 {
+                s.echo("Verify attribute values");
+            }
+            self.stage = InsStage::Verify;
+            return Ok(Step::Continue);
+        }
         if self.stage == InsStage::Attribs
             && self.asked >= self.attdefs.len()
             && let (Some(n), Some(a), Some(sc), Some(r)) = (self.name.clone(), self.at, self.scale, self.rotation)
@@ -713,7 +728,13 @@ impl InsertM {
         Ok(Step::Continue)
     }
 
-    /// Block `name` chosen: collect its attribute prompts and ask for the insertion point.
+    /// The Verify attributes asked for.
+    fn verifying(&self) -> Vec<&(String, String, String, bool)> {
+        self.attdefs.iter().filter(|a| a.3).collect()
+    }
+
+    /// Block `name` chosen: collect its attribute prompts and ask for the insertion point. Constant
+    /// and Preset attributes take their values without asking, and so do all of them with ATTREQ 0.
     fn choose(&mut self, s: &mut Session, name: &str) -> Result<()> {
         // Not found: asked again for a typed name; Enter (INSNAME gone) ends the command.
         let Some(b) = s.doc()?.block(name).cloned() else {
@@ -725,19 +746,21 @@ impl InsertM {
         // values entered; its hidden fields (PANEL, MOUNT_HT) take the last values without asking.
         self.symbol = cadaddy_doc::library::symbols::symbol(&b.name).is_some();
         self.asked = 0;
+        self.verified = 0;
         self.values.clear();
         self.attdefs = Vec::new();
         if !self.explode {
             for e in b.entities.iter() {
                 let EntityKind::AttDef(a) = &e.kind else { continue };
-                if a.constant {
+                // Constant and Preset attributes take their values without asking.
+                if a.constant || a.modes.preset {
                     continue;
                 }
                 let remembered =
                     self.symbol.then(|| s.last_used.symbol_attribs.get(&format!("{}|{}", b.name.to_ascii_uppercase(), a.tag)).cloned()).flatten();
                 let default = remembered.clone().unwrap_or_else(|| a.text.value.clone());
                 if attreq && !(self.symbol && a.invisible) {
-                    self.attdefs.push((a.tag.clone(), a.prompt.clone(), default));
+                    self.attdefs.push((a.tag.clone(), a.prompt.clone(), default, a.modes.verify));
                 } else if remembered.is_some() {
                     self.values.insert(a.tag.clone(), Value::String(default));
                 }
@@ -804,8 +827,13 @@ impl Interactive for InsertM {
             InsStage::YScale => Prompt::new("Enter Y scale factor", Accept::NUMBER).default("use X scale factor"),
             InsStage::Rotation => Prompt::new("Specify rotation angle", Accept::POINT_OR_NUMBER).default("0").base(at),
             InsStage::Attribs => {
-                let (_, prompt, default) = self.attdefs.get(self.asked).cloned().unwrap_or_default();
+                let (_, prompt, default, _) = self.attdefs.get(self.asked).cloned().unwrap_or_default();
                 Prompt::new(if prompt.is_empty() { "Enter attribute value".into() } else { prompt }, Accept::TEXT).default(default)
+            }
+            InsStage::Verify => {
+                let (tag, prompt) = self.verifying().get(self.verified).map(|a| (a.0.clone(), a.1.clone())).unwrap_or_default();
+                let typed = self.values.get(&tag).and_then(Value::as_str).unwrap_or_default().to_string();
+                Prompt::new(if prompt.is_empty() { "Enter attribute value".into() } else { prompt }, Accept::TEXT).default(typed)
             }
         }
     }
@@ -927,7 +955,7 @@ impl Interactive for InsertM {
                 return self.advance(s);
             }
             InsStage::Attribs => {
-                let (tag, _, default) = self.attdefs.get(self.asked).cloned().unwrap_or_default();
+                let (tag, _, default, _) = self.attdefs.get(self.asked).cloned().unwrap_or_default();
                 let v = match i {
                     Input::Text(t) => t,
                     _ => default,
@@ -939,6 +967,20 @@ impl Interactive for InsertM {
                 }
                 self.values.insert(tag, Value::String(v));
                 self.asked += 1;
+                return self.advance(s);
+            }
+            // Enter keeps the value typed.
+            InsStage::Verify => {
+                let tag = self.verifying().get(self.verified).map(|a| a.0.clone()).unwrap_or_default();
+                match i {
+                    Input::Text(t) => {
+                        self.values.insert(tag, Value::String(t));
+                    }
+                    Input::Enter => {}
+                    // A click or anything else is no answer: the value is asked for again.
+                    _ => return Ok(Step::Continue),
+                }
+                self.verified += 1;
                 return self.advance(s);
             }
         }
