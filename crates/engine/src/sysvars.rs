@@ -8,6 +8,7 @@ mod table;
 
 const SESSION_VARS: &[&str] = &[
     "AUDITCTL",
+    "ATTREQ",
     "OSMODE",
     "OSNAPHATCH",
     "ANNOAUTOSCALE",

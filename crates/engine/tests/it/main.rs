@@ -58,6 +58,7 @@ mod hatch_options;
 mod helix;
 mod inquiry_keywords;
 mod inquiry_z;
+mod insert_attribute_prompts;
 mod insert_prompts;
 mod isometric;
 mod join_close;
