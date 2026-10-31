@@ -5625,6 +5625,7 @@ version = "0.7.10"
 dependencies = [
  "cadaddy-engine",
  "cadaddy-io",
+ "cadaddy-mcp",
  "ed25519-dalek",
  "getrandom 0.4.3",
  "serde_json",
