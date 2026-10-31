@@ -434,6 +434,33 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
     Ok(())
 }
 
+/// Each switch leg's 0-10V control pair (`dimcheck::zero_ten_pairs`): its 0-10V fixtures (by
+/// their submittals) chained, plus an allowance to the dimmer or sensor.
+fn zero_ten_pairs(s: &Session, lines: &mut Vec<Line>) {
+    for p in super::dimcheck::zero_ten_pairs(s) {
+        add(
+            lines,
+            Line {
+                trade: "electrical",
+                category: "wire".into(),
+                item: "0-10V dimming control pair, 2 conductor Class 2".into(),
+                size: "#18".into(),
+                unit: "ft",
+                net: p.feet,
+                status: "rule",
+                rule: Some(format!(
+                    "a 2-wire 0-10V pair from each switch leg's dimmer or sensor to its 0-10V fixtures (their submittals): each leg's fixtures chained plus {}' a run to the control",
+                    super::dimcheck::CONTROL_ALLOWANCE_FT
+                )),
+                level: p.level,
+                elements: p.handles.into_iter().take(MAX_LINE_ELEMENTS).collect(),
+                circuit: p.circuit,
+                waste_qty: None,
+            },
+        );
+    }
+}
+
 /// The plan (XY) area of the mesh entities named by `handles`, sq units: sum of each face's
 /// signed area projected onto XY (shoelace per face polygon).
 fn mesh_plan_area(d: &cadaddy_doc::Drawing, handles: &[String]) -> f64 {
@@ -1836,6 +1863,7 @@ fn required(lines: &[Line], levels: usize) -> Vec<(String, f64, &'static str, St
 pub(super) fn model_lines(s: &mut Session) -> Result<Vec<Value>> {
     let mut lines: Vec<Line> = Vec::new();
     electrical(s, &mut lines)?;
+    zero_ten_pairs(s, &mut lines);
     mechanical(s, &mut lines);
     Ok(lines
         .into_iter()
@@ -1859,6 +1887,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // Built model: walls, doors, ceilings, floors, rooms (Q5243).
     let (built_missing, built_suspects, model_has_elements) = built_model(s, &mut lines)?;
     electrical(s, &mut lines)?;
+    zero_ten_pairs(s, &mut lines);
     // Devices from symbol clusters on the drawing (Q5243), when the model has none of its own: a
     // guided job puts the devices its readers found into the model, and counting both doubled them.
     if !lines.iter().any(|l| l.category == "devices") {

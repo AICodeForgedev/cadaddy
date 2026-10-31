@@ -4570,11 +4570,11 @@ fn submittals_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
                     } else {
                         "A 0-10V fixture dims over its own 2-wire control pair from the dimmer or sensor"
                     },
-                    if mixed { 4 } else { 2 },
+                    if mixed { 4 } else { 1 },
                     vec![if mixed {
                         "Split the leg, or change one product so both dim the same way".into()
                     } else {
-                        "Add the 0-10V pair to the wire takeoff".into()
+                        "Check each leg's dimmer or sensor: the pair's run to it is an allowance".into()
                     }],
                     None,
                     false,
