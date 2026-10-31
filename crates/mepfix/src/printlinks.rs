@@ -222,6 +222,12 @@ pub struct Enlarged {
     /// Enlarged sheet to overall plan (scale, rotation, offset).
     #[serde(skip)]
     pub fit: Option<Sim>,
+    /// Where its devices are on the enlarged sheet (its view, a little beyond), less the smaller
+    /// views inside it (another view's devices).
+    #[serde(skip)]
+    pub reach: Option<[f64; 4]>,
+    #[serde(skip)]
+    pub inner: Vec<[f64; 4]>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -1479,6 +1485,8 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 .filter_map(|o| o.view.region)
                 .filter(|r| *r != rg && area(r) < area(&rg))
                 .collect();
+            entry.reach = Some(reach);
+            entry.inner.clone_from(&smaller);
             for dv in e.page.read.devices.iter().filter(|dv| inside(&reach, dv.at) && !smaller.iter().any(|r| inside(r, dv.at))) {
                 if let Some(t) = device_type(&e.page.read.legend_types, &dv.tag) {
                     *entry.devices_by_type.entry(t).or_default() += 1;

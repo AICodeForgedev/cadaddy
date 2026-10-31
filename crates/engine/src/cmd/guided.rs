@@ -2472,10 +2472,26 @@ fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::Sheet
         }
         ignored.extend(e.ignored_handles.iter().map(String::as_str));
     }
+    // A registered view's other devices, by where they are: the types its own sheet's legend
+    // doesn't list (a submittal's), the switches read at their designations. Not a typical room's
+    // or one room's view: those are stamped into their rooms.
+    let room_view = |t: &str| {
+        let up = t.to_ascii_uppercase();
+        ["QUEEN", "KING", "SUITE", "UNIT", "TYPICAL", "TYP.", "ROOM"].iter().any(|w| up.contains(w))
+    };
+    let views: Vec<&cadaddy_mepfix::printlinks::Enlarged> =
+        links.enlarged.iter().filter(|e| e.registered && e.fit.is_some() && e.devices > 0 && e.reach.is_some() && !room_view(&e.title)).collect();
+    let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
+    let sheet_of = |n: &str| cadaddy_mepfix::printlinks::norm_sheet(n.split('/').next().unwrap_or(n));
+    let by_place = |dv: &super::readers::ReadDevice| {
+        views.iter().copied().find(|e| {
+            sheet_of(&dv.sheet) == sheet_of(&e.sheet) && e.reach.is_some_and(|r| inside(&r, dv.at)) && !e.inner.iter().any(|r| inside(r, dv.at))
+        })
+    };
     let (mut moved, mut dropped) = (0usize, 0usize);
     let mut keep = Vec::with_capacity(census.placed.len());
     for mut dv in std::mem::take(&mut census.placed) {
-        if let Some(e) = moves.get(dv.handle.as_str()).copied()
+        if let Some(e) = moves.get(dv.handle.as_str()).copied().or_else(|| by_place(&dv))
             && let Some(at) = e.place(dv.at)
         {
             dv.at = at;
@@ -8942,6 +8958,54 @@ mod tests {
         assert_eq!(runs.len(), 5);
         assert_eq!(runs[3].size_in, [12.0, 10.0], "the median tagged size");
         assert_eq!(runs[4].size_in, [10.0, 8.0]);
+    }
+
+    #[test]
+    fn a_registered_views_devices_move_by_where_they_are() {
+        use cadaddy_mepfix::printlinks::{Enlarged, SheetLinks};
+        let view = |title: &str, reach: [f64; 4], handles: &[&str]| Enlarged {
+            sheet: "E-6".into(),
+            title: title.into(),
+            level: "1".into(),
+            registered: true,
+            devices: handles.len(),
+            device_handles: handles.iter().map(|h| h.to_string()).collect(),
+            fit: Some(cadaddy_mepfix::tagid::Sim::scale_offset(1.0, [1000.0, 0.0])),
+            reach: Some(reach),
+            ..Enlarged::default()
+        };
+        let links = SheetLinks {
+            enlarged: vec![
+                view("1ST FLOOR - CORE AREA", [0.0, 0.0, 100.0, 100.0], &["10"]),
+                view("ENLARGED QUEEN", [200.0, 0.0, 300.0, 100.0], &["20"]),
+            ],
+            ..SheetLinks::default()
+        };
+        let dv = |tag: &str, handle: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at,
+            sheet: "E-6".into(),
+            level: "1".into(),
+            handle: handle.into(),
+            ..Default::default()
+        };
+        let mut census = DeviceCensus {
+            placed: vec![
+                dv("A", "10", [10.0, 10.0]),
+                // A switch read at its designation (no symbol), in the core area: it moves too.
+                dv("SD", "", [20.0, 20.0]),
+                // Outside every view: stays.
+                dv("J", "", [150.0, 50.0]),
+                // In a typical room's view: left for the stamping.
+                dv("SD", "", [250.0, 50.0]),
+            ],
+            ..DeviceCensus::default()
+        };
+        let job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let (moved, _) = enlarged_authority(&job, &links, &mut census);
+        assert_eq!(moved, 2);
+        let at: Vec<[f64; 2]> = census.placed.iter().map(|d| d.at).collect();
+        assert_eq!(at, [[1010.0, 10.0], [1020.0, 20.0], [150.0, 50.0], [250.0, 50.0]]);
     }
 
     #[test]
