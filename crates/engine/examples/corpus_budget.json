@@ -3,6 +3,7 @@
   "macos-aarch64": {
     "dxf": { "save": 1.2, "open": 1.4, "regen": 0.3 },
     "dwg": { "save": 3.6, "open": 3.2, "regen": 0.3 },
+    "dwg-native": { "save": 3.6, "open": 2.4, "regen": 0.3 },
     "cdy": { "save": 2.6, "open": 0.3, "regen": 0.3 }
   }
 }

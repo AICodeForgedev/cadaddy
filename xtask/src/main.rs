@@ -42,9 +42,9 @@ commands:
                   headless), supplychain, advisories, corpus (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
-  corpus synthetic [--sizes 10000,100000] [--seed N] [--out DIR] [--keep]
+  corpus synthetic [--sizes 10000,100000] [--seed N] [--out DIR] [--keep] [--strict]
                   made-up floor plans of 10k-500k objects (seeded) round-tripped through DXF, DWG
-                  and .cdy: exact differences and save/open/regen times against budgets (warnings);
+                  and .cdy: exact differences and save/open/regen times against budgets (warnings; --strict exits 1 on a DWG scaling flag);
                   report in target/corpus/report.md
   pdfstats FILE.pdf [FILE2.pdf ...]
                   print PDF import statistics: entity counts, scale, layers, quality metrics
@@ -369,13 +369,13 @@ fn cmd_ci() -> Result<(), String> {
 
 /// The synthetic corpus (`crates/engine/examples/corpus.rs`), built and run in release.
 fn cmd_corpus_synthetic(args: &[&str]) -> Result<(), String> {
-    const FLAGS: &[&str] = &["--sizes", "--seed", "--out", "--keep"];
+    const FLAGS: &[&str] = &["--sizes", "--seed", "--out", "--keep", "--strict"];
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if !FLAGS.contains(a) {
             return Err(format!("corpus synthetic: unknown option {a}\n{USAGE}"));
         }
-        if *a != "--keep" && it.next().is_none() {
+        if *a != "--keep" && *a != "--strict" && it.next().is_none() {
             return Err(format!("corpus synthetic: {a} needs a value"));
         }
     }

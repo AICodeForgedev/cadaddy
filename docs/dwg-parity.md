@@ -81,6 +81,24 @@ Release build, 100k objects of the synthetic corpus (seed 1), DWG 2018:
 | bridge | 2.31 s | 2.37 s |
 | CADaddy's codec | 2.37 s | 1.45 s |
 
-The target (a 500k-object plan opens and saves in under 3 s) isn't met by either yet: both grow
-linearly, so 500k is about 12 s to save and 7 s to open with the codec. The codec's next steps there:
-encode and decode in parallel, and read DIMASSOC so the keep dictionary isn't needed.
+Measured at 500k (505,562 objects, seed 1, release, a Linux x86-64 build server that is about twice as
+slow as the Mac above at 100k; `cargo xtask corpus synthetic --sizes 100000,500000 --seed 1`):
+
+| | 100k save | 500k save | ratio | 100k open | 500k open | ratio |
+|---|---|---|---|---|---|---|
+| bridge (default) | 4.66 s | 50.90 s | 10.9x | 5.21 s | 61.74 s | 11.8x |
+| CADaddy's codec (`CADADDY_DWG=native`) | 8.07 s | 35.39 s | 4.4x | 5.22 s | 25.69 s | 4.9x |
+
+The codec grows about linearly. The bridge does not: 5x the objects costs about 11x the time. Both
+bridge directions go through acadrust's `extension_dictionary_handle`, which, for a block record with
+no extension dictionary, scans every object in the drawing; the corpus has about one block record per
+ten objects, so the work is block records x objects. Timed inside the bridge, the DWG to DXF step is
+0.7 s read + 2.6 s DXF write at 100k and 3.3 s read + 49 s DXF write at 500k, all of the difference in
+the `BLOCK_RECORD` table; CADaddy's own DXF read and write stay linear (1.8 s to 9.7 s, 1.7 s to 9.3 s).
+That scan is inside acadrust (used unmodified), and the index that would avoid it is not public, so it
+can't be removed from CADaddy's side. The Mac 500k numbers are measured by the Mac gate; the budget
+file now fails `--strict` runs on a 500k/100k ratio over 7 and, on macOS arm64, a 500k bridge open
+over 15 s.
+
+The target (a 500k-object plan opens and saves in under 3 s) isn't met by either yet. The codec's next
+steps there: encode and decode in parallel, and read DIMASSOC so the keep dictionary isn't needed.
