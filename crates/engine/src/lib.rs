@@ -2046,6 +2046,22 @@ pub struct LastUsed {
     pub distance: f64,
     /// The last height a solid command (BOX, EXTRUDE…) used: its next `<default>`.
     pub solid_height: Option<f64>,
+    /// RECTANG's chamfer, fillet, width, elevation, thickness and rotation.
+    pub rectang: RectangModes,
+}
+
+/// The modes RECTANG keeps from one rectangle to the next, as AutoCAD 2024 does. Chamfer and
+/// fillet exclude each other: setting one clears the other.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RectangModes {
+    /// First and second chamfer distances.
+    pub chamfer: (f64, f64),
+    pub fillet: f64,
+    pub width: f64,
+    pub elevation: f64,
+    pub thickness: f64,
+    /// Radians.
+    pub rotation: f64,
 }
 
 impl Default for LastUsed {
@@ -2063,6 +2079,7 @@ impl Default for LastUsed {
             perimeter: 0.0,
             distance: 0.0,
             solid_height: None,
+            rectang: RectangModes::default(),
         }
     }
 }
