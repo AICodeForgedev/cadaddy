@@ -200,6 +200,7 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 circuit: f("circuit"),
                 handle: f("symbol"),
                 kind: t.kind.clone(),
+                leg: f("switch_leg"),
             }
         })
         .collect();
@@ -916,10 +917,10 @@ fn run_equip_read(_s: &mut Session, p: &Value) -> Result<Value> {
 /// What a device mark usually is on an electrical plan (else `device`).
 pub(crate) fn device_kind(tag: &str) -> &'static str {
     match tag.trim().to_ascii_uppercase().as_str() {
-        "OS" | "OC" | "VS" | "PS" => "occupancy sensor",
+        "OS" | "OS1" | "OS2" | "OC" | "VS" | "PS" => "occupancy sensor",
         "DH" | "MH" => "door holder",
         "J" | "JB" => "junction box",
-        "S" | "S3" | "S4" | "SD" | "DS" | "LV" => "switch",
+        "S" | "S2" | "S3" | "S4" | "SD" | "DS" | "LV" | "SP" | "SM" | "SH" | "SK" | "SOR" | "SWT" => "switch",
         "FA" | "HS" | "SS" | "FS" | "ST" | "CM" => "fire alarm device",
         "TV" | "DA" | "TEL" | "WAP" | "CR" | "CAM" => "low voltage outlet",
         "EF" | "FCU" | "WH" | "PTAC" => "equipment connection",
@@ -1187,6 +1188,33 @@ pub struct ReadDevice {
     /// tag says ([`device_kind`]).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
+    /// A switch's or sensor's leg: the lower-case letter of the fixtures it controls.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub leg: String,
+}
+
+/// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
+/// `b`, `3,a` a 3-way (`S3`) on leg `a`, `OS2,n` a sensor switch (`OS2`) on leg `n`, a lone `c` a
+/// switch on leg `c` (tag empty: a sensor's leg when one is beside it, else a single-pole `S`).
+/// A circuit (`G-1,b`) is none.
+pub(crate) fn switch_designation(t: &str) -> Option<(String, String)> {
+    let t = t.trim();
+    let one_leg = |l: &str| l.len() == 1 && l.chars().all(|c| c.is_ascii_lowercase());
+    if one_leg(t) {
+        return Some((String::new(), t.to_string()));
+    }
+    let (code, leg) = t.rsplit_once(',')?;
+    let (code, leg) = (code.trim(), leg.trim());
+    if !one_leg(leg) || code.is_empty() || code.len() > 3 || !code.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) {
+        return None;
+    }
+    let tag = match code {
+        "OS" | "OS1" | "OS2" => code.to_string(),
+        "1" => "S".to_string(),
+        "T" => "SWT".to_string(),
+        _ => format!("S{code}"),
+    };
+    Some((tag, leg.to_string()))
 }
 
 /// The model level a device belongs on: the spec level whose plan region holds it, else the
@@ -1274,6 +1302,9 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         if !dv.circuit.is_empty() {
             e.set("circuit", dv.circuit.clone(), "plan");
         }
+        if !dv.leg.is_empty() {
+            e.set("switch_leg", dv.leg.clone(), "plan");
+        }
         e.set("sheet", if dv.sheet.is_empty() { "current drawing" } else { dv.sheet.as_str() }, "plan");
         e.set("symbol", dv.handle.clone(), "plan");
         sp.tags.push(e);
@@ -1332,4 +1363,20 @@ fn run_envelope_read(s: &mut Session, p: &Value) -> Result<Value> {
             "envelope reader wired; DXF sheet loading through the printset pipeline pending (Q5128)"
         },
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn switch_designations_name_the_switch_and_its_leg() {
+        let d = |t: &str| super::switch_designation(t);
+        assert_eq!(d("D,b"), Some(("SD".into(), "b".into())));
+        assert_eq!(d("3,a"), Some(("S3".into(), "a".into())));
+        assert_eq!(d("OS2,n"), Some(("OS2".into(), "n".into())));
+        assert_eq!(d("c"), Some((String::new(), "c".into())));
+        assert_eq!(d("G-1,b"), None, "a circuit and its leg");
+        assert_eq!(d("LP-3,5"), None);
+        assert_eq!(d("A"), None);
+        assert_eq!(d("ab"), None);
+    }
 }

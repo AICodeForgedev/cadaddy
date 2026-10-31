@@ -73,10 +73,10 @@ pub struct Height {
 /// says nothing).
 pub(crate) fn kind_of(mark: &str) -> &'static str {
     match mark.trim().to_ascii_uppercase().as_str() {
-        "OS" | "OC" | "VS" | "PS" => "occupancy sensor",
+        "OS" | "OS1" | "OS2" | "OC" | "VS" | "PS" => "occupancy sensor",
         "DH" | "MH" => "door holder",
         "J" | "JB" => "junction box",
-        "S" | "S3" | "S4" | "SD" | "DS" | "LV" => "switch",
+        "S" | "S2" | "S3" | "S4" | "SD" | "DS" | "LV" | "SP" | "SM" | "SH" | "SK" | "SOR" | "SWT" => "switch",
         "FA" | "HS" | "SS" | "FS" | "ST" | "CM" => "fire alarm device",
         "TV" | "DA" | "TEL" | "WAP" | "CR" | "CAM" => "low voltage outlet",
         "EF" | "FCU" | "WH" | "PTAC" => "equipment connection",
@@ -280,6 +280,10 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         if !mark.is_empty() {
             store.set("type", Prop::new(field(t, "device_type").unwrap_or_else(|| kind.to_string()), printed()));
             store.set("type_mark", Prop::new(mark.clone(), printed()));
+        }
+        // A switch's or sensor's own leg (its designation), else the fixture's after its circuit.
+        if let Some(leg) = field(t, "switch_leg") {
+            store.set("switch_leg", Prop::new(leg, printed()).with_note("the lower-case letter of the fixtures it controls"));
         }
         if let Some(c) = field(t, "circuit") {
             let (c, leg) = split_switch_leg(&c);

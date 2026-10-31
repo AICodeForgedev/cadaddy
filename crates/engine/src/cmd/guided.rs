@@ -2191,13 +2191,13 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
             _ => {}
         }
     }
-    // A circuit the import took for a symbol's tag ("A-2" by a stair's lines) is still the circuit
-    // printed there: back among its sheet's texts, where it was printed, for the device it is under.
+    // A circuit or a switch's leg the import took for a symbol's tag ("A-2" by a stair's lines, the
+    // "e" by a sensor) is still printed there: back among its sheet's texts, where it was printed.
     for (g, syms) in symbols.iter().enumerate() {
         for (tag, _, _, tag_at) in syms {
             if let (Some((at, h)), Some(v)) = (tag_at, texts.get_mut(g))
                 && v.len() < MAX_SHEET_TEXTS
-                && sheet_facts::is_circuit_label(tag)
+                && (sheet_facts::is_circuit_label(tag) || super::readers::switch_designation(tag).is_some())
             {
                 v.push(TextItem { value: tag.clone(), at: *at, height: *h, rotation: 0.0 });
             }
@@ -2278,6 +2278,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                             circuit: super::readers::circuit_of(texts.get(g).map_or(&[][..], Vec::as_slice), &circuits, tag, *tag_at, *at),
                             handle: h.hex(),
                             kind: String::new(),
+                            leg: String::new(),
                         });
                         *c.by_type.entry(t).or_default() += 1;
                     }
@@ -2295,6 +2296,42 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                         }
                     }
                 }
+            }
+        }
+        // Switches, by the designation printed by the switch symbol on an electrical sheet
+        // (`D,b` a dimmer on leg b, `3,a` a 3-way on leg a, a lone `c`): the switch and the leg
+        // of fixtures it controls. A lone leg letter by an occupancy sensor is the sensor's leg.
+        if electrical(&sheet) {
+            for t in texts.get(g).into_iter().flatten() {
+                let Some((tag, leg)) = super::readers::switch_designation(&t.value) else { continue };
+                let level = job.level_at([t.at.x, t.at.y]);
+                if legend.covers(t.at) || level.is_some_and(|r| !super::printmep::building_level(&r.level)) {
+                    continue;
+                }
+                let reach = SENSOR_LEG_H * t.height;
+                let gap = |dv: &super::readers::ReadDevice| cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]).dist(t.at);
+                if tag.is_empty() {
+                    let sensor = c
+                        .placed
+                        .iter_mut()
+                        .filter(|dv| dv.sheet == sheet && dv.leg.is_empty() && super::readers::device_kind(&dv.tag) == "occupancy sensor")
+                        .filter(|dv| gap(dv) <= reach)
+                        .min_by(|a, b| gap(a).total_cmp(&gap(b)));
+                    if let Some(dv) = sensor {
+                        dv.leg = leg;
+                        continue;
+                    }
+                }
+                let tag = if tag.is_empty() { "S".to_string() } else { tag };
+                c.placed.push(super::readers::ReadDevice {
+                    tag: tag.clone(),
+                    at: [t.at.x, t.at.y],
+                    sheet: sheet.clone(),
+                    level: level.map_or_else(String::new, |r| r.level.clone()),
+                    leg,
+                    ..super::readers::ReadDevice::default()
+                });
+                *c.by_type.entry(tag).or_default() += 1;
             }
         }
     }
@@ -2992,6 +3029,9 @@ pub fn circuit_text(t: &str, sheet_numbers: &BTreeSet<String>) -> bool {
 pub(crate) fn is_circuit_tag(tag: &str) -> bool {
     tag.rsplit_once('-').is_some_and(|(head, n)| !head.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
+
+/// How far from an occupancy sensor its leg letter is printed, in the letter's heights.
+const SENSOR_LEG_H: f64 = 4.0;
 
 /// Run the devices stage: detect devices, symbols and counts (MUST 1, 4, 9-11).
 /// MUST 9: count then "anything not counted?" with leftover clusters.
@@ -4561,24 +4601,30 @@ fn submittals_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
             report_progress(s, json!({"step": "dimming", "mixed": dv.get("mixed")}), &line);
             s.echo(line);
             for f in dv.get("findings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
-                let mixed = f.contains("on one control");
-                job.add_finding(
-                    StageName::BimBuild,
-                    f,
-                    if mixed {
-                        "The fixtures' submittals give them different dimming on one switch leg"
-                    } else {
-                        "A 0-10V fixture dims over its own 2-wire control pair from the dimmer or sensor"
-                    },
-                    if mixed { 4 } else { 1 },
-                    vec![if mixed {
-                        "Split the leg, or change one product so both dim the same way".into()
-                    } else {
-                        "Check each leg's dimmer or sensor: the pair's run to it is an allowance".into()
-                    }],
-                    None,
-                    false,
-                );
+                // What the check found: a leg mixing phase and 0-10V fixtures; a dimmer on a
+                // 0-10V leg whose kind the plans don't say; 0-10V fixtures only switched; the pair.
+                let (why, severity, todo) = if f.contains("on one control") {
+                    (
+                        "The fixtures' submittals give them different dimming on one switch leg",
+                        4,
+                        "Split the leg, or change one product so both dim the same way",
+                    )
+                } else if f.contains("has to be a 0-10V dimmer") {
+                    (
+                        "The plans name the dimmer by a designation only; the fixtures on its leg are 0-10V",
+                        3,
+                        "Ask which dimmer it is (the lighting controls schedule): a 0-10V dimmer with its pair",
+                    )
+                } else if f.contains("no dimmer") {
+                    ("A 0-10V fixture on a plain switch never dims", 1, "Confirm the fixtures are meant not to dim")
+                } else {
+                    (
+                        "A 0-10V fixture dims over its own 2-wire control pair from the dimmer or sensor",
+                        1,
+                        "Check each leg's dimmer or sensor: the pair's run to it is an allowance where the plans don't place it",
+                    )
+                };
+                job.add_finding(StageName::BimBuild, f, why, severity, vec![todo.into()], None, false);
             }
             result["dimming"] = dv;
         }
@@ -8810,7 +8856,8 @@ mod tests {
             let mut syms: Vec<(&str, f64, f64)> = vec![("A", x0 + 990.0, 772.0)]; // the schedule's sample
             syms.extend((0..a).map(|k| ("A", x0 + 100.0 + 40.0 * f64::from(k), 300.0)));
             syms.extend((0..b).map(|k| ("B", x0 + 100.0 + 40.0 * f64::from(k), 200.0)));
-            // Junk: a circuit number, the sheet's own number, a switch leg, a keynote, an untagged symbol.
+            // Junk: a circuit number, the sheet's own number, a keynote, an untagged symbol; and a
+            // switch, its leg letter printed by its symbol.
             syms.extend([
                 ("D-1", x0 + 600.0, 100.0),
                 (name, x0 + 620.0, 100.0),
@@ -8834,12 +8881,13 @@ mod tests {
                 levels: Vec::new(),
                 view: None,
             });
-            want_by_level.insert(format!("Level {level}"), a + b);
+            want_by_level.insert(format!("Level {level}"), a + b + 1);
         }
         let n: i32 = want_by_level.values().sum();
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r["devices"]["count"], json!(n), "{r:#}");
-        assert_eq!(r["devices"]["by_type"], json!({"A": 9, "B": 5}));
+        assert_eq!(r["devices"]["by_type"], json!({"A": 9, "B": 5, "S": 2}));
+        assert_eq!(job.devices.iter().filter(|d| d.tag == "S" && d.leg == "s").count(), 2, "a switch on leg s a sheet");
         // No building model yet: the bim_build stage puts them in.
         assert_eq!(r["model"]["pending"], json!(n), "{:#}", r["model"]);
         assert_eq!(job.devices.len(), n as usize);
@@ -8864,7 +8912,7 @@ mod tests {
         let lines: Vec<&Value> = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").collect();
         let units = |lv: &str| lines.iter().filter(|l| l["level"] == lv).filter_map(|l| l["net"].as_f64()).sum::<f64>();
         // The draft spec has one level, `Level 1`; sheet level 2 is named alike.
-        assert_eq!((units("Level 1"), units("Level 2")), (8.0, 6.0), "{lines:#?}");
+        assert_eq!((units("Level 1"), units("Level 2")), (9.0, 7.0), "{lines:#?}");
         assert!(lines.iter().all(|l| l["trade"] == "electrical"));
         assert!(lines.iter().any(|l| l["item"] == "device type A" && l["level"] == "Level 2" && l["net"] == json!(4.0)), "{lines:#?}");
         // The takeoff stage uses the model takeoff (bim.takeoff) and reports a summary.
