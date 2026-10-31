@@ -1465,3 +1465,16 @@ fn array_counts_reject_invalid_values() {
     }
     s.execute("arraypolar", &json!({"center": [0, 0], "count": 1, "associative": false})).unwrap();
 }
+
+#[test]
+fn setvar_rejects_non_finite_text_for_real_variables() {
+    let mut s = Session::new();
+    for name in ["LTSCALE", "TEXTSIZE", "SNAPANG"] {
+        let before = s.execute("getvar", &json!({"name": name})).unwrap();
+        for text in ["nan", "inf", "-inf"] {
+            let r = s.execute("setvar", &json!({"name": name, "value": text}));
+            assert!(r.is_err(), "SETVAR {name} {text} was accepted");
+            assert_eq!(s.execute("getvar", &json!({"name": name})).unwrap(), before);
+        }
+    }
+}
