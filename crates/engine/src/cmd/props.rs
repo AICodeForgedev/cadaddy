@@ -1,6 +1,7 @@
 //! Properties: per-object property edits, current properties, CHPROP, MATCHPROP, linetypes, units,
 //! RENAME.
 
+mod change;
 mod chprop;
 mod dash_units;
 mod matchprop;
@@ -24,6 +25,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("chprop", "Change Properties", chprop::run_chprop)
             .params("as properties.set, leaving out objects on locked layers → {changed, locked} (the command line asks Color, LAyer, LType, ltScale, LWeight, Thickness and TRansparency in turn)")
             .interactive(|_| Ok(Box::new(chprop::ChpropM::new()))),
+        CommandSpec::new("change", "Change", change::run_change)
+            .alias(&["-ch"])
+            .params("{handles?, point?: [x, y], elevation?} → {changed, ignored, differingZ, detachedHatches, locked}: the point moves the nearer end of each line to it (level or plumb with the other end under ORTHOMODE) and, when it is the one object, passes a circle through it or places a text, attribute definition or block reference at it (`ignored` otherwise); `elevation` sets the z of objects whose points share one (`differingZ` otherwise); objects on locked layers are left out (the command line asks Specify change point or [Properties], then about each circle, text, attribute definition and block reference in turn)")
+            .interactive(|_| Ok(Box::new(change::ChangeM::new()))),
         CommandSpec::new("matchprop", "Match Properties", matchprop::run_matchprop)
             .menu(&["Modify", "Match Properties"])
             .alias(&["ma", "painter"])
