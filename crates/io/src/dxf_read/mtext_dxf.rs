@@ -74,16 +74,21 @@ fn finite(v: f64) -> f64 {
 
 /// The columns of an MTEXT, and the column width (group 48) when there are columns.
 pub(crate) fn read_columns(tags: &[Tag]) -> Option<(MTextColumns, f64)> {
-    let tags = own(tags);
+    // An application-defined group in the record may hold any code, 50 included.
+    let tags: Vec<&Tag> = super::common::outside_app(own(tags)).map(|(_, t)| t).collect();
     let start = tags.iter().position(|t| t.code == 75)?;
-    let kind = match tags.get(start).map(Tag::i64) {
+    let kind = match tags.get(start).map(|t| t.i64()) {
         Some(1) => MTextColumnType::Static,
         Some(2) => MTextColumnType::Dynamic,
         _ => return None,
     };
     let cols = tags.get(start..).unwrap_or_default();
-    let first = |code: i32| cols.iter().find(|t| t.code == code);
-    let heights: Vec<f64> = cols.iter().filter(|t| t.code == 50).take(MAX_COLUMNS).map(|t| finite(t.f64()).max(0.0)).collect();
+    let first = |code: i32| cols.iter().find(|t| t.code == code).copied();
+    // The first 50 is the number of heights that follow, unless the file predates the count
+    // (CADCraft up to f536bf4 wrote the n heights of group 76 alone).
+    let fifties = cols.iter().filter(|t| t.code == 50);
+    let counted = first(76).is_some_and(|t| fifties.clone().count() as i64 - 1 == t.i64());
+    let heights: Vec<f64> = fifties.skip(usize::from(counted)).take(MAX_COLUMNS).map(|t| finite(t.f64()).max(0.0)).collect();
     let count = first(76).map(Tag::i64).unwrap_or(heights.len() as i64).clamp(1, MAX_COLUMNS as i64);
     let auto_height = first(79).map(Tag::i64).unwrap_or(0) != 0;
     let defined = tags.iter().find(|t| t.code == 46).map(|t| finite(t.f64()).max(0.0)).unwrap_or(0.0);
@@ -115,6 +120,10 @@ pub(crate) fn column_tags(t: &MText) -> Vec<Tag> {
         Tag::f(48, t.width),
         Tag::f(49, c.gutter),
     ];
+    // No count for an empty list: a lone 50 = 0 would read back as one height of 0.
+    if !heights.is_empty() {
+        v.push(Tag::i(50, heights.len() as i64));
+    }
     v.extend(heights.into_iter().map(|h| Tag::f(50, h)));
     v
 }
