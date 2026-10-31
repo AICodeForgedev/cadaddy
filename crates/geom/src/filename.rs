@@ -54,13 +54,32 @@ pub fn system_folder(path: &Path) -> Option<&'static str> {
     const UNIX: [&str; 13] =
         ["/system", "/library", "/usr", "/bin", "/sbin", "/etc", "/private/etc", "/private/var/db", "/boot", "/dev", "/proc", "/sys", "/var/lib"];
     const WINDOWS: [&str; 4] = ["windows", "program files", "program files (x86)", "programdata"];
-    let text = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    let folded = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    // `.` and `..` resolved first, so `/users/x/../../etc/a` is judged as `/etc/a`.
+    let drive_form = folded.trim_start_matches("//?/");
+    let (drive, body) = match drive_form.get(1..2) {
+        Some(":") => (true, drive_form.get(2..).unwrap_or_default()),
+        _ => (false, folded.as_str()),
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for part in body.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            p => parts.push(p),
+        }
+    }
     // A drive's root folder: `c:/windows/…` (or `//?/c:/…`).
-    let after_drive = text.trim_start_matches("//?/").get(2..).filter(|_| text.trim_start_matches("//?/").get(1..2) == Some(":"));
-    if let Some(rest) = after_drive {
-        let first = rest.trim_start_matches('/').split('/').next().unwrap_or_default();
+    if drive {
+        let first = parts.first().copied().unwrap_or_default();
         return WINDOWS.iter().find(|w| **w == first).copied();
     }
+    if !body.starts_with('/') {
+        return None;
+    }
+    let text = format!("/{}", parts.join("/"));
     UNIX.iter().find(|u| text == **u || text.starts_with(&format!("{u}/"))).copied()
 }
 
@@ -206,6 +225,14 @@ mod tests {
             ("/System/Library/x", Some("/system")),
             ("/usr/local/bin/x", Some("/usr")),
             ("/Library/LaunchDaemons/x.plist", Some("/library")),
+        ] {
+            assert_eq!(system_folder(Path::new(p)), want, "{p}");
+        }
+        for (p, want) in [
+            ("/Users/x/../../etc/a.dwg", Some("/etc")),
+            ("C:\\Users\\x\\..\\..\\Windows\\a.dxf", Some("windows")),
+            ("/home/x/./../../usr/a.dwg", Some("/usr")),
+            ("/Users/x/../x/a.dwg", None),
         ] {
             assert_eq!(system_folder(Path::new(p)), want, "{p}");
         }
