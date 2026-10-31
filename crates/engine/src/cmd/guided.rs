@@ -4123,7 +4123,19 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
                 let unplaced: Vec<&super::readers::ReadDevice> = job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
-                let (stamped, report) = stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                let (stamped, report, authority) = stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                // A room an enlarged plan of its own shows: that plan's devices, not the overall
+                // plan's copies of some of them.
+                let before = out.len();
+                let mut out = out;
+                out.retain(|dv| {
+                    !authority.iter().any(|(level, outline)| {
+                        dv.level == *level && cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))
+                    })
+                });
+                if out.len() < before {
+                    progress_line(&format!("  rooms an enlarged plan shows: {} of the overall plans' devices in them left out", before - out.len()));
+                }
                 if !report.is_empty() {
                     progress_line(&format!("  typical-room devices stamped into rooms of their type: {} ({report:?})", stamped.len()));
                 }
@@ -4140,7 +4152,6 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     );
                 }
                 counts = (not_placed, stamped.len());
-                let mut out = out;
                 out.extend(stamped);
                 out
             }
@@ -4998,11 +5009,13 @@ fn stamp_typical_rooms(
     job: &GuidedJob,
     placed: &[super::readers::ReadDevice],
     unplaced: &[&super::readers::ReadDevice],
-) -> (Vec<super::readers::ReadDevice>, BTreeMap<String, usize>) {
+) -> (Vec<super::readers::ReadDevice>, BTreeMap<String, usize>, Vec<(String, Vec<cadaddy_geom::Vec2>)>) {
     let mut out = Vec::new();
     let mut report: BTreeMap<String, usize> = BTreeMap::new();
+    // The rooms a one-room plan is the authority in (its level and outline).
+    let mut authority: Vec<(String, Vec<cadaddy_geom::Vec2>)> = Vec::new();
     if unplaced.is_empty() {
-        return (out, report);
+        return (out, report, authority);
     }
     // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
     let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>, String)> = job
@@ -5072,16 +5085,18 @@ fn stamp_typical_rooms(
         for dv in devices {
             let inside = |r: &[f64; 4]| dv.at[0] >= r[0] && dv.at[0] <= r[2] && dv.at[1] >= r[1] && dv.at[1] <= r[3];
             // A view of one room (the smallest holding it, unless a typical-room view is smaller):
-            // into that room, unless the floor's plans already furnish it.
+            // into that room, and the authority there (the overall plan's copies there go).
             let typical = views.iter().filter(|(_, r, _)| inside(r)).map(|(_, r, _)| area(r)).fold(f64::INFINITY, f64::min);
             if let Some((title, view, i)) =
                 one_room.iter().filter(|(_, r, _)| inside(r) && area(r) < typical).min_by(|a, b| area(&a.1).total_cmp(&area(&b.1)))
             {
                 if let Some((_, level, outline, _)) = rooms.get(*i)
                     && out.len() < MAX_STAMPED
-                    && !furnished(level, outline)
                     && let Some(at) = into_room(dv.at, *view, bbox(outline))
                 {
+                    if furnished(level, outline) && !authority.iter().any(|(l, o)| l == level && o == outline) {
+                        authority.push((level.clone(), outline.clone()));
+                    }
                     let mut copy = (*dv).clone();
                     copy.at = at;
                     copy.level.clone_from(level);
@@ -5113,7 +5128,7 @@ fn stamp_typical_rooms(
             }
         }
     }
-    (out, report)
+    (out, report, authority)
 }
 
 /// The one room a view's title (upper case) names: its number ("ROOM #237", "ROOM 237") when one
