@@ -85,19 +85,36 @@ fn texts_of(e: &Entity) -> Vec<(&'static str, String, Vec3, f64, Option<String>)
     .collect()
 }
 
-/// Whether the file a drawing names exists: as given when absolute, else beside the drawing.
-fn found(path: &str, host: Option<&str>) -> bool {
-    let norm = if cfg!(windows) { path.to_string() } else { path.replace('\\', "/") };
-    let p = Path::new(norm.trim());
-    if p.as_os_str().is_empty() {
-        return false;
+/// What a reference path stored in the drawing resolves to.
+struct Lookup {
+    found: bool,
+    /// The path names another computer or a device: it was not followed.
+    refused: bool,
+}
+
+/// An xref: the xref loader's own resolver (case-insensitive, refuses other computers).
+fn find_xref(path: &str, host: Option<&str>) -> Lookup {
+    use super::super::blocks::xref::load::{Missing, find};
+    match find(path, host.map(Path::new), false) {
+        Ok(_) => Lookup { found: true, refused: false },
+        Err(m) => Lookup { found: false, refused: matches!(m, Missing::Refused(_)) },
     }
-    if p.is_absolute() {
-        return p.is_file();
-    }
+}
+
+/// An image or underlay: as the image renderer finds it (a refused path is not looked up).
+fn find_image(path: &str, host: Option<&str>) -> Lookup {
+    use cadaddy_geom::filename::{find_file, native, stored_path_allowed};
     let dir = host.and_then(|h| Path::new(h).parent());
-    let name = p.file_name().map(Path::new);
-    dir.is_some_and(|d| d.join(p).is_file() || name.is_some_and(|n| d.join(n).is_file()))
+    if !stored_path_allowed(path, dir) {
+        return Lookup { found: false, refused: true };
+    }
+    let norm = native(path.trim());
+    let p = Path::new(&norm);
+    let name = path.trim().rsplit(['/', '\\']).next().unwrap_or(path);
+    let found = !norm.is_empty()
+        && ((p.is_absolute() && find_file(p).is_some())
+            || dir.is_some_and(|d| [d.join(&norm), d.join(name)].into_iter().any(|c| find_file(c).is_some())));
+    Lookup { found, refused: false }
 }
 
 fn want(p: &Value, section: &str) -> bool {
@@ -270,7 +287,8 @@ pub(super) fn run_summary(s: &mut Session, p: &Value) -> Result<Value> {
             .take(MAX_ROWS)
             .map(|b| {
                 let path = b.xref_path.clone().unwrap_or_default();
-                json!({ "name": b.name, "path": path, "status": b.xref_status.label(), "found": found(&path, host.as_deref()), "overlay": b.xref_overlay })
+                let l = find_xref(&path, host.as_deref());
+                json!({ "name": b.name, "path": path, "status": b.xref_status.label(), "found": l.found, "refused": l.refused, "overlay": b.xref_overlay })
             })
             .collect();
         let mut images: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -291,7 +309,12 @@ pub(super) fn run_summary(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         let list = |m: BTreeMap<String, Vec<String>>| -> Vec<Value> {
-            m.into_iter().map(|(path, hs)| json!({ "path": path, "found": found(&path, host.as_deref()), "handles": hs })).collect()
+            m.into_iter()
+                .map(|(path, hs)| {
+                    let l = find_image(&path, host.as_deref());
+                    json!({ "path": path, "found": l.found, "refused": l.refused, "handles": hs })
+                })
+                .collect()
         };
         out.insert("references".into(), json!({ "xrefs": xrefs, "images": list(images), "underlays": list(underlays) }));
     }
