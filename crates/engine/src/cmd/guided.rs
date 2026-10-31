@@ -4989,7 +4989,7 @@ fn stamp_typical_rooms(
         return (out, report);
     }
     // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
-    let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = job
+    let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>, String)> = job
         .stage(StageName::Rooms)
         .and_then(|st| st.result.as_ref())
         .and_then(|r| r.get("rooms"))
@@ -5006,18 +5006,16 @@ fn stamp_typical_rooms(
                 .iter()
                 .filter_map(|q| Some(cadaddy_geom::Vec2::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?)))
                 .collect();
-            (outline.len() >= 3 && !name.is_empty()).then_some((name, level, outline))
+            let number = r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            (outline.len() >= 3 && !name.is_empty()).then_some((name, level, outline, number))
         })
         .collect();
     let mut count: BTreeMap<BTreeSet<String>, usize> = BTreeMap::new();
-    for (name, _, _) in &rooms {
+    for (name, _, _, _) in &rooms {
         *count.entry(type_words(name, None)).or_default() += 1;
     }
     let types: BTreeSet<BTreeSet<String>> = count.into_iter().filter(|(k, n)| *n > 1 && !k.is_empty()).map(|(k, _)| k).collect();
     let vocabulary: BTreeSet<String> = types.iter().flatten().cloned().collect();
-    if types.is_empty() {
-        return (out, report);
-    }
     let bbox = |o: &[cadaddy_geom::Vec2]| {
         o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
             [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
@@ -5037,30 +5035,56 @@ fn stamp_typical_rooms(
     for (sheet, devices) in by_sheet.into_iter().filter(|(_, v)| v.len() >= 3).take(MAX_STAMP_SHEETS) {
         let Some(sh) = refs.iter().find(|r| sheet_key(&r.number) == sheet && r.view.is_none()) else { continue };
         let sub = super::printmep::sheet_drawing(d, sh);
-        let views: Vec<(String, [f64; 4], BTreeSet<String>)> =
-            cadaddy_mepfix::sheet_facts::view_titles(&sub, &cadaddy_mepfix::sheet_facts::texts(&sub))
-                .into_iter()
-                .filter_map(|v| {
-                    // A plan of the room, not an elevation of one of its walls or a section.
-                    let upper = v.title.to_ascii_uppercase();
-                    let plan = !["WALL", "ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
-                    let words = type_words(&v.title, Some(&vocabulary));
-                    (plan && types.contains(&words)).then_some((v.title, v.region?, words))
-                })
-                .collect();
+        // The typical-room views (a room type), and the views of one room (its number or its name
+        // in the title: "ENLARGED BOH ROOM #237", "1ST FLOOR - MEP ROOM").
+        let titled = cadaddy_mepfix::sheet_facts::view_titles(&sub, &cadaddy_mepfix::sheet_facts::texts(&sub));
+        let mut views: Vec<(String, [f64; 4], BTreeSet<String>)> = Vec::new();
+        let mut one_room: Vec<(String, [f64; 4], usize)> = Vec::new();
+        for v in titled {
+            // A plan of the room, not an elevation of one of its walls or a section.
+            let upper = v.title.to_ascii_uppercase();
+            let plan = !["WALL", "ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
+            let Some(region) = v.region.filter(|_| plan) else { continue };
+            let words = type_words(&v.title, Some(&vocabulary));
+            if types.contains(&words) {
+                views.push((v.title, region, words));
+            } else if let Some(i) = room_of_view(&upper, &rooms) {
+                one_room.push((v.title, region, i));
+            }
+        }
+        let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
         for dv in devices {
             let inside = |r: &[f64; 4]| dv.at[0] >= r[0] && dv.at[0] <= r[2] && dv.at[1] >= r[1] && dv.at[1] <= r[3];
+            // A view of one room (the smallest holding it, unless a typical-room view is smaller):
+            // into that room, unless the floor's plans already furnish it.
+            let typical = views.iter().filter(|(_, r, _)| inside(r)).map(|(_, r, _)| area(r)).fold(f64::INFINITY, f64::min);
+            if let Some((title, view, i)) =
+                one_room.iter().filter(|(_, r, _)| inside(r) && area(r) < typical).min_by(|a, b| area(&a.1).total_cmp(&area(&b.1)))
+            {
+                if let Some((_, level, outline, _)) = rooms.get(*i)
+                    && out.len() < MAX_STAMPED
+                    && !furnished(level, outline)
+                    && let Some(at) = into_room(dv.at, *view, bbox(outline))
+                {
+                    let mut copy = (*dv).clone();
+                    copy.at = at;
+                    copy.level.clone_from(level);
+                    out.push(copy);
+                    *report.entry(format!("{sheet} {title}")).or_default() += 1;
+                }
+                continue;
+            }
             let Some((title, view, words)) = views
                 .iter()
                 .filter(|(_, r, _)| inside(r))
                 .min_by(|a, b| ((a.1[2] - a.1[0]) * (a.1[3] - a.1[1])).total_cmp(&((b.1[2] - b.1[0]) * (b.1[3] - b.1[1]))))
             else {
-                if !views.is_empty() {
+                if !views.is_empty() || !one_room.is_empty() {
                     *report.entry(format!("{sheet}: in no typical-room view")).or_default() += 1;
                 }
                 continue;
             };
-            for (_, level, outline) in rooms.iter().filter(|(n, _, _)| type_words(n, None) == *words) {
+            for (_, level, outline, _) in rooms.iter().filter(|(n, _, _, _)| type_words(n, None) == *words) {
                 if out.len() >= MAX_STAMPED || furnished(level, outline) {
                     continue;
                 }
@@ -5074,6 +5098,60 @@ fn stamp_typical_rooms(
         }
     }
     (out, report)
+}
+
+/// The one room a view's title (upper case) names: its number ("ROOM #237", "ROOM 237") when one
+/// room has it, else its name ("1ST FLOOR - MEP ROOM": the room called MEP), on the floor the
+/// title names when several are.
+fn room_of_view(title: &str, rooms: &[(String, String, Vec<cadaddy_geom::Vec2>, String)]) -> Option<usize> {
+    if !title.contains("ROOM") {
+        return None;
+    }
+    let tokens: Vec<&str> = title.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let numbered: Vec<usize> = tokens
+        .iter()
+        .filter(|t| (2..=5).contains(&t.len()) && t.chars().any(|c| c.is_ascii_digit()) && t.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .flat_map(|t| rooms.iter().enumerate().filter(move |(_, r)| r.3.eq_ignore_ascii_case(t)).map(|(i, _)| i))
+        .collect();
+    if let [i] = numbered[..] {
+        return Some(i);
+    }
+    // The name: the title's words but the view's own (ENLARGED, PLAN, the trade, the floor).
+    const VIEW_WORDS: &[&str] =
+        &["ENLARGED", "PLAN", "PLANS", "ELECTRICAL", "MECHANICAL", "PLUMBING", "LIGHTING", "POWER", "FLOOR", "LEVEL", "ROOM", "SCALE"];
+    let ordinal =
+        |w: &str| w.len() >= 3 && w.chars().next().is_some_and(|c| c.is_ascii_digit()) && ["ST", "ND", "RD", "TH"].iter().any(|e| w.ends_with(e));
+    // An equipment room by any of its names (the trades' plans call it MEP, the architect MECH).
+    let same = |w: &str| -> String {
+        match w {
+            "MEP" | "MECH" | "MECHANICAL" | "ELEC" | "EQUIPMENT" => "MEP".to_string(),
+            w => w.to_string(),
+        }
+    };
+    let name: Vec<String> =
+        tokens.iter().copied().filter(|w| !VIEW_WORDS.contains(w) && !ordinal(w) && !w.chars().all(|c| c.is_ascii_digit())).map(same).collect();
+    if name.is_empty() {
+        return None;
+    }
+    let floor: Option<String> = tokens.iter().find(|w| ordinal(w)).map(|w| w.chars().take_while(char::is_ascii_digit).collect());
+    let named: Vec<usize> = rooms
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| {
+            let words: Vec<String> =
+                r.0.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty() && *w != "ROOM").map(same).collect();
+            !words.is_empty() && words.len() == name.len() && name.iter().all(|n| words.iter().any(|w| w == n))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    match named[..] {
+        [i] => Some(i),
+        _ => {
+            let on_floor: Vec<usize> =
+                named.into_iter().filter(|i| floor.as_deref().is_some_and(|f| rooms.get(*i).is_some_and(|r| r.1.trim() == f))).collect();
+            if let [i] = on_floor[..] { Some(i) } else { None }
+        }
+    }
 }
 
 /// The wall tags of the typical-room plans (unit plans): each legend mark a typical-room view
@@ -8864,6 +8942,23 @@ mod tests {
         assert_eq!(runs.len(), 5);
         assert_eq!(runs[3].size_in, [12.0, 10.0], "the median tagged size");
         assert_eq!(runs[4].size_in, [10.0, 8.0]);
+    }
+
+    #[test]
+    fn a_views_title_names_its_one_room() {
+        use cadaddy_geom::Vec2;
+        let sq = vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0)];
+        let rooms = vec![
+            ("MECH".to_string(), "1".to_string(), sq.clone(), "130".to_string()),
+            ("BOH".to_string(), "2".to_string(), sq.clone(), "237".to_string()),
+            ("STORAGE".to_string(), "1".to_string(), sq.clone(), "131".to_string()),
+            ("STORAGE".to_string(), "2".to_string(), sq.clone(), "231".to_string()),
+        ];
+        assert_eq!(room_of_view("ENLARGED BOH ROOM #237", &rooms), Some(1), "by its number");
+        assert_eq!(room_of_view("ELECTRICAL - 1ST FLOOR - MEP ROOM", &rooms), Some(0), "by its name");
+        assert_eq!(room_of_view("ELECTRICAL - 2ND FLOOR - STORAGE ROOM", &rooms), Some(3), "two of the name: the floor says which");
+        assert_eq!(room_of_view("ELECTRICAL - 1ST FLOOR - CORE AREA", &rooms), None, "no room named");
+        assert_eq!(room_of_view("ENLARGED QUEEN", &rooms), None);
     }
 
     #[test]

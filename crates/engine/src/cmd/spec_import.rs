@@ -658,8 +658,10 @@ fn extract_type_definition(line: &str) -> Option<(String, String)> {
 
 /// Words that look like a mark but are really detail-field prefixes (case-insensitive).
 fn is_detail_prefix(candidate: &str) -> bool {
-    const PREFIXES: &[&str] =
-        &["mfr", "mfg", "cct", "volts", "amps", "model", "mount", "finish", "color", "colour", "size", "weight", "nema", "rating"];
+    const PREFIXES: &[&str] = &[
+        "mfr", "mfg", "cct", "volts", "amps", "model", "mount", "finish", "color", "colour", "size", "weight", "nema", "rating", "note", "notes",
+        "feed", "ref", "see", "date", "page", "phone", "fax", "email", "job",
+    ];
     let lower = candidate.to_ascii_lowercase();
     PREFIXES.iter().any(|p| lower == *p)
         || lower.starts_with("manufact")
@@ -2149,6 +2151,13 @@ Dimming   Non-Dimming   0-10V
         assert_eq!(super::is_csi_section("26 05 19.13 CONDUCTORS"), Some("26 05 19"));
         assert_eq!(super::is_csi_section("10 53 40 32 39 32 27"), None);
         assert_eq!(super::is_csi_section("70   70   70"), None);
+    }
+
+    #[test]
+    fn a_label_is_no_type_mark() {
+        assert_eq!(super::extract_type_definition("Note: refer to IES files for more product data."), None);
+        assert_eq!(super::extract_type_definition("Feed: 120V from the panel"), None);
+        assert_eq!(super::extract_type_definition("H: recessed downlight").map(|(m, _)| m), Some("H".into()));
     }
 
     #[test]
