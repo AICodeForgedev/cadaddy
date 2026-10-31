@@ -5613,14 +5613,18 @@ fn apply_wall_legend(s: &Session, sp: &mut cadaddy_walk3d::BuildingSpec, job: &G
             .find(|r| r.kind == "plan" && r.rect.iter().zip(region).all(|(a, b)| (a - b).abs() < 1e-6 * upf.max(1.0)))
             .map_or_else(|| format!("{level} plan"), |r| r.number.clone());
         let (new, lost) = super::walltypes::plan_marks(&tags, &walls, &level, upf, &sheet);
+        // The walls no tag reached: the type the tagged walls of their thickness carry (a guess).
+        let guessed = super::walltypes::guess_marks(&walls, &new, &level, upf, &sheet);
         typed.push(format!(
-            "{level} {} walls from {own} plan tags + {} unit-plan tags{}",
+            "{level} {} walls from {own} plan tags + {} unit-plan tags, {} more guessed by thickness{}",
             new.len(),
             tags.len() - own,
+            guessed.len(),
             if lost > 0 { format!(" ({lost} tags near no wall)") } else { String::new() }
         ));
-        sp.walls.retain(|m| !(m.level.eq_ignore_ascii_case(&level) && m.status() == cadaddy_walk3d::MarkStatus::Drawing));
+        sp.walls.retain(|m| !m.level.eq_ignore_ascii_case(&level));
         sp.walls.extend(new);
+        sp.walls.extend(guessed);
     }
     report.push(format!("walls typed by the plans' tags: {}", if typed.is_empty() { "none".to_string() } else { typed.join(", ") }));
     Ok(report)

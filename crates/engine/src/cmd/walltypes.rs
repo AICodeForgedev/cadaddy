@@ -835,6 +835,57 @@ pub(crate) fn plan_marks(
     (marks, lost)
 }
 
+/// A drawn wall within this much (inches) of a tagged wall's thickness is of its thickness.
+const SAME_THICKNESS_IN: f64 = 0.5;
+
+/// The walls no tag typed, each given the type most tagged walls of its drawn thickness on its
+/// level carry: a guess that says why. `walls`: the level's planned walls; `tagged`: the level's
+/// marks from tags (on those walls).
+pub(crate) fn guess_marks(
+    walls: &[(Vec2, Vec2, f64)],
+    tagged: &[cadaddy_walk3d::WallMark],
+    level: &str,
+    upf: f64,
+    source: &str,
+) -> Vec<cadaddy_walk3d::WallMark> {
+    let same = |w: &(Vec2, Vec2, f64), m: &cadaddy_walk3d::WallMark| {
+        let tol = upf / 12.0;
+        (w.0.dist(Vec2::new(m.a[0], m.a[1])) <= tol && w.1.dist(Vec2::new(m.b[0], m.b[1])) <= tol)
+            || (w.0.dist(Vec2::new(m.b[0], m.b[1])) <= tol && w.1.dist(Vec2::new(m.a[0], m.a[1])) <= tol)
+    };
+    // The tagged walls' drawn thickness (inches) and type.
+    let known: Vec<(f64, &str)> =
+        walls.iter().filter_map(|w| tagged.iter().find(|m| same(w, m)).map(|m| (w.2 / upf * 12.0, m.wall_type.as_str()))).collect();
+    if known.is_empty() {
+        return Vec::new();
+    }
+    walls
+        .iter()
+        .filter(|w| !tagged.iter().any(|m| same(w, m)))
+        .filter_map(|w| {
+            let t = w.2 / upf * 12.0;
+            let mut count: BTreeMap<&str, usize> = BTreeMap::new();
+            for (k, name) in &known {
+                if (k - t).abs() <= SAME_THICKNESS_IN {
+                    *count.entry(name).or_default() += 1;
+                }
+            }
+            let (name, n) = count.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(a.0)))?;
+            Some(cadaddy_walk3d::WallMark {
+                level: level.to_string(),
+                a: [w.0.x, w.0.y],
+                b: [w.1.x, w.1.y],
+                wall_type: name.to_string(),
+                height_ft: None,
+                guess: Some(format!("no tag: {n} tagged walls {} thick on its level are {name}", frac(t))),
+                source: format!("{source} (no tag)"),
+                status: Some(cadaddy_walk3d::MarkStatus::Guess),
+                height_source: String::new(),
+            })
+        })
+        .collect()
+}
+
 /// The face of a wall type a box on it is on, and that face's finish: by the face the legend
 /// names (`side 1: CORRIDOR SIDE` — a box in a room the name holds is on that face, else on the
 /// other); faces alike need no side. None when the type has no face layers. The depth, the
@@ -1029,6 +1080,31 @@ mod tests {
         let typed: Vec<(f64, f64, &str)> = marks.iter().map(|m| (m.a[0], m.a[1], m.wall_type.as_str())).collect();
         assert_eq!(typed, vec![(0.0, 0.0, "Q4B"), (276.0, 0.0, "Q4B"), (0.0, 300.0, "W6A")]);
         assert!(marks.iter().all(|m| m.level == "Level 2" && m.source == "A-102" && m.status() == cadaddy_walk3d::MarkStatus::Drawing));
+    }
+
+    #[test]
+    fn an_untagged_wall_takes_the_type_of_the_tagged_walls_of_its_thickness_and_says_so() {
+        let v = |x: f64, y: f64| Vec2::new(x, y);
+        // Inches: two 7" walls tagged Q4B, one 5" wall tagged W6A; untagged: a 7" wall, a 5" one
+        // and a 12" one (no tagged wall that thick).
+        let walls = vec![
+            (v(0.0, 0.0), v(100.0, 0.0), 7.0),
+            (v(0.0, 50.0), v(100.0, 50.0), 7.0),
+            (v(0.0, 100.0), v(100.0, 100.0), 5.0),
+            (v(0.0, 150.0), v(100.0, 150.0), 7.2),
+            (v(0.0, 200.0), v(100.0, 200.0), 5.0),
+            (v(0.0, 250.0), v(100.0, 250.0), 12.0),
+        ];
+        let tags = vec![("Q4B".to_string(), v(50.0, -10.0)), ("Q4B".to_string(), v(50.0, 40.0)), ("W6A".to_string(), v(50.0, 90.0))];
+        // (Tags reach 4': only the nearest wall each, no runs: the walls are not in line.)
+        let (tagged, _) = plan_marks(&tags, &walls, "L1", 12.0, "A-101");
+        assert_eq!(tagged.len(), 3);
+        let guessed = guess_marks(&walls, &tagged, "L1", 12.0, "A-101");
+        let got: Vec<(f64, &str)> = guessed.iter().map(|m| (m.a[1], m.wall_type.as_str())).collect();
+        assert_eq!(got, vec![(150.0, "Q4B"), (200.0, "W6A")]);
+        assert!(
+            guessed.iter().all(|m| m.status() == cadaddy_walk3d::MarkStatus::Guess && m.guess.as_deref().is_some_and(|g| g.starts_with("no tag")))
+        );
     }
 
     #[test]

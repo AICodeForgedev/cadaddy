@@ -1186,7 +1186,44 @@ fn devices_from_drawing(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
         // Box, plaster ring and plate for wall-mounted devices.
         if matches!(kind.as_str(), "receptacle" | "switch" | "data_outlet") {
             let rule = "one box, plaster ring and plate per wall device (company default)".to_string();
+            // The rings by the depth each box's wall needs (its wall type's finish on the box's
+            // face: the element's mud_ring); the rest at the company default.
+            let mut by_depth: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for h in handles {
+                let depth = cadaddy_doc::Handle::parse_hex(h)
+                    .and_then(|x| d.entity(x))
+                    .and_then(|e| cadaddy_doc::props::read(&e.common.xdata).get("mud_ring").map(cadaddy_doc::props::Prop::text))
+                    .and_then(|t| t.trim().parse::<f64>().ok())
+                    .filter(|v| v.is_finite() && *v > 0.0);
+                if let Some(v) = depth {
+                    by_depth.entry(super::walltypes::frac(v)).or_default().push(h.clone());
+                }
+            }
+            let ringed: usize = by_depth.values().map(Vec::len).sum();
+            for (depth, hs) in &by_depth {
+                add(
+                    lines,
+                    Line {
+                        trade: "electrical",
+                        category: "boxes".into(),
+                        item: "Plaster ring".into(),
+                        size: format!("1 gang, {depth} deep"),
+                        unit: "each",
+                        net: hs.len() as f64,
+                        status: "model",
+                        rule: Some("the box's wall type: the board and channels on its face (partition legend)".into()),
+                        level: level.clone(),
+                        elements: hs.clone(),
+                        ..Line::default()
+                    },
+                );
+            }
+            let rest = count.saturating_sub(ringed);
             for (part, size) in [("Box, 4\" square", "2-1/8\" deep"), ("Plaster ring", "1 gang"), ("Device plate", "1 gang")] {
+                let net = if part == "Plaster ring" { rest } else { *count };
+                if net == 0 {
+                    continue;
+                }
                 add(
                     lines,
                     Line {
@@ -1195,7 +1232,7 @@ fn devices_from_drawing(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                         item: part.into(),
                         size: size.into(),
                         unit: "each",
-                        net: *count as f64,
+                        net: net as f64,
                         status: "rule",
                         rule: Some(rule.clone()),
                         level: level.clone(),

@@ -686,12 +686,20 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                             put(&mut store, "wall_type", Prop::new(wt.name.clone(), src.clone()), tally);
                             put(&mut store, "wall_finish", Prop::new(words, src.clone()).with_note("board and channels on the box's face"), tally);
                             if let Some(ring) = super::walltypes::ring_for(depth) {
-                                let mut p = Prop::new(round2(ring), src).with_unit("in");
-                                p = match note {
-                                    Some(n) => p.with_note(&n),
-                                    None => p.with_note(&format!("reaches {} of finish", super::walltypes::frac(depth))),
-                                };
-                                put(&mut store, "mud_ring", p, tally);
+                                // A wall no tag typed: its type is a guess, and the ring with it.
+                                let guessed = d.model.get(*wh).and_then(|w| extent(d, w)).and_then(|(wb, _, _)| {
+                                    sp.walls.iter().find(|m| {
+                                        m.status() == cadaddy_walk3d::MarkStatus::Guess
+                                            && m.wall_type.eq_ignore_ascii_case(&wt.name)
+                                            && lvl.is_some_and(|l| l.eq_ignore_ascii_case(&m.level))
+                                            && dist_to(&wb, Vec2::new((m.a[0] + m.b[0]) / 2.0, (m.a[1] + m.b[1]) / 2.0) + shift) <= upf
+                                    })
+                                });
+                                let mut text = note.unwrap_or_else(|| format!("reaches {} of finish", super::walltypes::frac(depth)));
+                                if let Some(m) = guessed {
+                                    text = format!("{text}; the wall's type is a guess ({})", m.guess.as_deref().unwrap_or("no tag"));
+                                }
+                                put(&mut store, "mud_ring", Prop::new(round2(ring), src).with_unit("in").with_note(&text), tally);
                             }
                         }
                     }
