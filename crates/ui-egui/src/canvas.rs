@@ -1589,8 +1589,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     let zoom_pinch = ui.input(|i| crate::animation::zoom_delta(i, &opts, app.shows_animations()));
     // A two-finger pinch was applied about the fingers' midpoint above.
+    // (Not while any touch is down either: egui counts a palm beside the pen as a second finger,
+    // and only the touch tracker's own gesture may move the view then.)
     if inside
         && !gesture.active
+        && !app.canvas.touch.touching()
         && (zoom_pinch - 1.0).abs() > 1e-4
         && let Some(hp) = hover_pos
     {
@@ -1930,7 +1933,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     hover_menu(app, ui, &xf, hover_pos.filter(|_| inside), idle && app.canvas.grip_menu.is_none());
     if idle && !app.canvas.snap_menu && app.canvas.grip_menu.is_some() {
         grip_menu(app, &resp);
-    } else if idle || app.canvas.snap_menu {
+    } else if (idle || app.canvas.snap_menu)
+        // egui opens the menu itself for any pointer held still on a touch screen, a pen too;
+        // a pen never long-presses (a menu already open stays up for the pen to tap).
+        && (!app.canvas.touch.pen_down() || egui::Popup::is_any_open(ui.ctx()))
+    {
         crate::context_menu::show(app, &resp);
     }
 

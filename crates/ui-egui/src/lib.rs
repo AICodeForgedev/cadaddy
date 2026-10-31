@@ -1316,6 +1316,7 @@ impl CadApp {
         if let Some(cap) = &mut self.frame_cap {
             cap.wait();
         }
+        self.canvas.touch.drop_palm_pointer(&mut raw.events);
         if self.synthetic.is_empty() {
             return;
         }
