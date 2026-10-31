@@ -5,6 +5,7 @@ mod angle_header;
 mod annotative_orientation;
 mod annotative_roundtrip;
 mod assoc_array_roundtrip;
+mod attdef_insert_dwg;
 mod attrib_modes;
 mod attrib_props;
 mod block_expansion;
