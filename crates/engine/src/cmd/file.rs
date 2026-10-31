@@ -550,10 +550,10 @@ pub fn not_saved_as(d: &Drawing, version: Version) -> std::collections::BTreeMap
     let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
     for e in stores.flat_map(|s| s.iter()) {
         if let cadcraft_doc::EntityKind::Unknown(u) = &e.kind {
-            // A DWG writer converts SAT text to its own form at any version, and from 2013 a data
-            // store record keeps the geometry too: neither loses the solid.
+            // A DWG before 2013 writes a solid's SAT text as it is; from 2013 the geometry has to be
+            // in the data store, and SAT text alone is lost (#2334).
             if MODELER_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t))
-                && (stored.contains(&e.handle) || cadcraft_doc::foreign::has_sat_text(&u.tags))
+                && (stored.contains(&e.handle) || (version < Version::R2013 && cadcraft_doc::foreign::has_sat_text(&u.tags)))
             {
                 continue;
             }
@@ -570,7 +570,10 @@ pub fn not_saved_message(lost: &std::collections::BTreeMap<String, usize>) -> Op
         return None;
     }
     let list: Vec<String> = lost.iter().map(|(t, n)| format!("{n} {t}")).collect();
-    Some(format!("Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them): {}", list.join(", ")))
+    Some(format!(
+        "Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them, solids only when saved as 2010 or earlier): {}",
+        list.join(", ")
+    ))
 }
 
 /// Whether saving to `path` leaves out the entities [`not_saved`] counts: DWG does (the DWG

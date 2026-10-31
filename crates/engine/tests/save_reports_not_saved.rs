@@ -29,7 +29,7 @@ fn save_lists_the_entities_the_file_does_not_keep() {
     let r = s.execute("saveas", &json!({ "path": path.to_string_lossy() })).unwrap();
     let _ = std::fs::remove_file(&path);
     assert_eq!(r["notSaved"], json!({ "3DSOLID": 1, "MLINE": 2, "REGION": 1 }));
-    let msg = "Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them): 1 3DSOLID, 2 MLINE, 1 REGION";
+    let msg = "Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them, solids only when saved as 2010 or earlier): 1 3DSOLID, 2 MLINE, 1 REGION";
     assert!(s.log.iter().any(|l| l == msg), "{:?}", s.log);
 
     // DXF keeps them.
@@ -145,17 +145,17 @@ fn the_note_counts_the_host_drawing_while_a_block_is_edited() {
     assert_eq!(r["notSaved"], json!({ "REGION": 1 }));
 }
 
-/// A DWG writer converts a solid's SAT text itself (at any version), so a DWG save doesn't list
-/// solids that hold it as left out; ones with neither SAT text nor a data store record are (#2334).
+/// A DWG before 2013 writes a solid's SAT text as it is, so a save there doesn't list a solid that
+/// holds it; from 2013 the geometry must be in the data store and SAT text alone is lost, so the
+/// save lists it. A solid with neither is always listed (#2334).
 #[test]
-fn a_dwg_keeps_solids_that_hold_sat_text() {
+fn a_dwg_keeps_sat_text_solids_only_before_2013() {
     use cadcraft_engine::cmd::file::{Version, not_saved_as};
     let tag = |code: i32, value: &str| RawTag { code, value: value.into() };
     let solid = |tags: Vec<RawTag>| EntityKind::Unknown(Unknown { dxf_type: "3DSOLID".into(), tags });
     let mut d = Drawing::new_imperial();
     d.add(&Space::Model, Common::default(), solid(vec![tag(100, "AcDbModelerGeometry"), tag(1, "400 1 1 0")])).unwrap();
     d.add(&Space::Model, Common::default(), solid(vec![tag(100, "AcDbModelerGeometry"), tag(70, "1")])).unwrap();
-    for v in [Version::R2010, Version::R2018] {
-        assert_eq!(not_saved_as(&d, v), [("3DSOLID".to_string(), 1)].into_iter().collect(), "{v:?}");
-    }
+    assert_eq!(not_saved_as(&d, Version::R2010), [("3DSOLID".to_string(), 1)].into_iter().collect(), "2010 keeps the SAT-text solid");
+    assert_eq!(not_saved_as(&d, Version::R2018), [("3DSOLID".to_string(), 2)].into_iter().collect(), "2018 loses it");
 }
