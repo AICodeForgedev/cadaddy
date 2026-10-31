@@ -1157,16 +1157,80 @@ impl Look {
     }
 }
 
+/// Points past the view's edge that a dashed outline is still drawn to: more than one dash
+/// period, so a dash cut at the clip edge never shows.
+const CLIP_MARGIN: f32 = 16.0;
+
+/// The parts of a world-space polyline within `xf`'s view, as screen points, each with how far
+/// along the whole polyline it starts (in points). Clipped in world coordinates, so an outline far
+/// larger than the screen costs only what can show, and its points stay precise when zoomed far
+/// in: dashing a whole line made billions of dashes (#2299).
+fn visible_runs(xf: &Xf, pts: &[Vec2]) -> Vec<(Vec<Pos2>, f64)> {
+    let vis = xf.world_bounds().expand(f64::from(CLIP_MARGIN) / xf.scale);
+    let mut runs: Vec<(Vec<Pos2>, f64)> = Vec::new();
+    // World length before the current segment; whether the last run reaches its start.
+    let (mut along, mut open) = (0.0, false);
+    for w in pts.windows(2) {
+        let (Some(&a), Some(&b)) = (w.first(), w.get(1)) else { continue };
+        match cadaddy_render::clip::clip_segment(a, b, &vis) {
+            Some((p, q)) => {
+                match runs.last_mut() {
+                    Some((run, _)) if open && p == a => run.push(xf.to_screen(q)),
+                    _ => runs.push((vec![xf.to_screen(p), xf.to_screen(q)], (along + a.dist(p)) * xf.scale)),
+                }
+                open = q == b;
+            }
+            None => open = false,
+        }
+        along += a.dist(b);
+    }
+    runs
+}
+
+/// Dashes along a screen polyline that starts `along` points into the outline it is part of, so
+/// they sit where they would on the whole outline.
+fn dashes(run: &[Pos2], along: f64, stroke: Stroke, dash: f32, gap: f32, out: &mut Vec<Shape>) {
+    let period = f64::from(dash + gap);
+    let offset = (period - along.rem_euclid(period)) % period;
+    out.extend(Shape::dashed_line_with_offset(run, stroke, &[dash], &[gap], offset as f32));
+}
+
+/// A dashed rectangle outline, each edge clipped to `clip` first: a rectangle zoomed far larger
+/// than the screen (a layout's printable area, a selection window) gets only the dashes that can
+/// show (#2299). Each edge keeps its direction and its dashes start where they would on the whole
+/// edge, so they don't crawl as the rectangle or the view moves.
+fn dashed_rect(clip: Rect, r: Rect, stroke: Stroke, dash: f32, gap: f32) -> Vec<Shape> {
+    let v = |p: Pos2| Vec2::new(f64::from(p.x), f64::from(p.y));
+    let c = clip.expand(CLIP_MARGIN);
+    let c = Bounds2::new(v(c.min), v(c.max));
+    let mut out = Vec::new();
+    let edges =
+        [(r.left_top(), r.right_top()), (r.right_top(), r.right_bottom()), (r.right_bottom(), r.left_bottom()), (r.left_bottom(), r.left_top())];
+    for (a, b) in edges {
+        if let Some((p, q)) = cadaddy_render::clip::clip_segment(v(a), v(b), &c) {
+            let pos = |w: Vec2| Pos2::new(w.x as f32, w.y as f32);
+            dashes(&[pos(p), pos(q)], v(a).dist(p), stroke, dash, gap, &mut out);
+        }
+    }
+    out
+}
+
 /// Draw selected/hovered entities as highlight overlays: `prims` are indices into `list` (from
 /// [`PrimIndex::prims`], [`prims_of`], or all of a [`VpHighlight`] list), redrawn in `color` as `look` says. A wipeout is always
 /// outlined, since filling it would hide the drawing under it.
 pub(crate) fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, prims: &[usize], color: Color32, look: Look) {
     let stroke = Stroke::new(look.width, color);
-    let line = |pts: Vec<Pos2>, out: &mut Vec<Shape>| {
+    let screen_line = |pts: Vec<Pos2>, along: f64, out: &mut Vec<Shape>| {
         if look.dashed {
-            out.extend(Shape::dashed_line(&pts, stroke, 6.0, 4.0));
+            dashes(&pts, along, stroke, 6.0, 4.0, out);
         } else {
             out.push(Shape::line(pts, stroke));
+        }
+    };
+    // Only the part of an outline in view (#2299).
+    let line = |pts: &[Vec2], out: &mut Vec<Shape>| {
+        for (run, along) in visible_runs(xf, pts) {
+            screen_line(run, along, out);
         }
     };
     let mut shapes = Vec::new();
@@ -1175,12 +1239,12 @@ pub(crate) fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, pri
     for prim in prims.iter().filter_map(|&i| list.prims.get(i)) {
         let pts = list.points(prim);
         match prim.kind {
-            Kind::Polyline => line(pts.iter().map(|q| xf.to_screen(*q)).collect(), &mut shapes),
+            Kind::Polyline => line(pts, &mut shapes),
             Kind::Infinite { ray } => {
                 if let (Some(b), Some(d)) = (pts.first(), pts.get(1))
                     && let Some(seg) = clip_infinite(xf, *b, *d, ray)
                 {
-                    line(seg.to_vec(), &mut shapes);
+                    screen_line(seg.to_vec(), 0.0, &mut shapes);
                 }
             }
             Kind::Point => {
@@ -1197,7 +1261,7 @@ pub(crate) fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, pri
             }
             Kind::Tris | Kind::InkMask | Kind::Mask | Kind::Image(_) => {
                 for outline in list.fill_outlines(prim) {
-                    line(outline.iter().map(|q| xf.to_screen(*q)).collect(), &mut shapes);
+                    line(&outline, &mut shapes);
                 }
             }
         }
@@ -1998,8 +2062,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                 xf_paper.to_screen(Vec2::new(sh.printable.min.x, sh.printable.max.y)),
                 xf_paper.to_screen(Vec2::new(sh.printable.max.x, sh.printable.min.y)),
             );
-            let pts = [pa.left_top(), pa.right_top(), pa.right_bottom(), pa.left_bottom(), pa.left_top()];
-            painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, Color32::from_gray(150)), 4.0, 4.0));
+            painter.extend(dashed_rect(painter.clip_rect(), pa, Stroke::new(1.0, Color32::from_gray(150)), 4.0, 4.0));
             (Rgb(t.paper.r(), t.paper.g(), t.paper.b()), Some(paper))
         }
         None => {
@@ -2224,8 +2287,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         let st = Stroke::new(1.0, if crossing { t.crossing_stroke } else { t.window_stroke });
         if crossing {
-            let pts = vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
-            painter.extend(Shape::dashed_line(&pts, st, 5.0, 3.0));
+            painter.extend(dashed_rect(painter.clip_rect(), r, st, 5.0, 3.0));
         } else {
             painter.rect_stroke(r, 0.0, st, egui::StrokeKind::Middle);
         }
@@ -3641,5 +3703,132 @@ mod ctrl_tap_tests {
         assert!(!t.update(true, false));
         assert!(!t.update(true, true), "Z after Ctrl");
         assert!(!t.update(false, false));
+    }
+}
+
+#[cfg(test)]
+mod zoomed_highlight_tests {
+    use super::*;
+    use egui::pos2;
+
+    /// A one-segment polyline from `a` to `b`.
+    fn line(a: Vec2, b: Vec2) -> DisplayList {
+        let mut list = DisplayList { verts: vec![a, b], ..Default::default() };
+        list.prims.push(cadaddy_render::DPrim {
+            handle: Handle(256),
+            color: Rgb(255, 255, 255),
+            aci7: true,
+            lw: 0.0,
+            transparency: 0,
+            kind: Kind::Polyline,
+            start: 0,
+            len: 2,
+        });
+        list
+    }
+
+    const SCREEN: Rect = Rect { min: Pos2::ZERO, max: Pos2 { x: 600.0, y: 400.0 } };
+
+    /// The dash segments `draw_highlight` makes for `list` in `xf`.
+    fn dashes_of(list: &DisplayList, xf: &Xf) -> Vec<[Pos2; 2]> {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(SCREEN), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| draw_highlight(ui.painter(), xf, list, &[0], Color32::LIGHT_BLUE, Look { width: 1.0, dashed: true }));
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::LineSegment { points, .. } => Some(*points),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Zoomed far in on a line, the highlight dashes only what shows. Dashing the whole line made
+    /// one shape per 10 points of it: billions at the zoom limit, so the app froze and then ran out
+    /// of memory (#2299).
+    #[test]
+    fn a_zoomed_in_highlight_dashes_only_what_shows() {
+        let list = line(Vec2::new(-1000.0, 0.0), Vec2::new(1000.0, 0.0));
+        // The smaller zoom first, so a regression fails here instead of filling memory at 1e9.
+        for scale in [1e3, 1e9] {
+            let n = dashes_of(&list, &Xf { rect: SCREEN, center: Vec2::new(0.3, 0.0), scale, proj: None }).len();
+            assert!((50..=70).contains(&n), "scale {scale}: {n} dashes for 600 points of line");
+        }
+    }
+
+    /// A line running off screen keeps its dashes where they are on the whole line, so they don't
+    /// crawl along it when the view pans.
+    #[test]
+    fn clipped_dashes_stay_where_the_whole_line_puts_them() {
+        let list = line(Vec2::new(0.0, 0.0), Vec2::new(1000.0, 0.0));
+        for x in [500.3, 512.9, 731.0] {
+            let xf = Xf { rect: SCREEN, center: Vec2::new(x, 0.0), scale: 1.0, proj: None };
+            let whole = Shape::dashed_line(
+                &[xf.to_screen(Vec2::ZERO), xf.to_screen(Vec2::new(1000.0, 0.0))],
+                Stroke::new(1.0, Color32::LIGHT_BLUE),
+                6.0,
+                4.0,
+            );
+            let on_screen = |p: &[Pos2; 2]| p.iter().all(|q| SCREEN.contains(*q));
+            let expected: Vec<[Pos2; 2]> = whole
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::LineSegment { points, .. } => Some(*points).filter(on_screen),
+                    _ => None,
+                })
+                .collect();
+            let got: Vec<[Pos2; 2]> = dashes_of(&list, &xf).into_iter().filter(on_screen).collect();
+            assert!(!expected.is_empty());
+            assert_eq!(got.len(), expected.len(), "centre {x}");
+            for (g, e) in got.iter().zip(&expected) {
+                assert!(g.iter().zip(e).all(|(a, b)| a.distance(*b) < 1e-3), "centre {x}: {g:?} vs {e:?}");
+            }
+        }
+    }
+
+    /// A rectangle edge running off screen keeps its dashes where they are on the whole edge.
+    #[test]
+    fn clipped_rectangle_edges_keep_their_dashes() {
+        let stroke = Stroke::new(1.0, Color32::GRAY);
+        let segments = |shapes: Vec<Shape>| -> Vec<[Pos2; 2]> {
+            shapes
+                .into_iter()
+                .filter_map(|s| match s {
+                    // The top edge's dashes that are wholly on screen.
+                    Shape::LineSegment { points, .. } if points.iter().all(|q| SCREEN.contains(*q) && q.y == 100.0) => Some(points),
+                    _ => None,
+                })
+                .collect()
+        };
+        for left in [-500.3, -517.9, -1200.0] {
+            let r = Rect::from_min_max(pos2(left, 100.0), pos2(400.0, 300.0));
+            let expected = segments(Shape::dashed_line(&[r.left_top(), r.right_top()], stroke, 4.0, 4.0));
+            let got = segments(dashed_rect(SCREEN, r, stroke, 4.0, 4.0));
+            assert!(!expected.is_empty());
+            assert_eq!(got.len(), expected.len(), "left edge at {left}");
+            for (g, e) in got.iter().zip(&expected) {
+                assert!(g.iter().zip(e).all(|(a, b)| a.distance(*b) < 1e-3), "left edge at {left}: {g:?} vs {e:?}");
+            }
+        }
+    }
+
+    /// A dashed rectangle far larger than the screen gets dashes only along the edges that show.
+    #[test]
+    fn a_huge_dashed_rectangle_dashes_only_what_shows() {
+        let stroke = Stroke::new(1.0, Color32::GRAY);
+        // Its left edge runs through the screen; the other three are far off it. The smaller one
+        // first, so a regression fails here instead of filling memory with the larger one.
+        for far in [1e6, 1e9] {
+            let huge = Rect::from_min_max(pos2(300.0, -far), pos2(far, far));
+            let n = dashed_rect(SCREEN, huge, stroke, 4.0, 4.0).len();
+            assert!((50..=60).contains(&n), "{far}: {n} dashes along 432 points of edge");
+        }
+        // A rectangle inside the screen keeps all four edges.
+        let small = Rect::from_min_max(pos2(100.0, 100.0), pos2(180.0, 140.0));
+        assert_eq!(dashed_rect(SCREEN, small, stroke, 4.0, 4.0).len(), 10 + 5 + 10 + 5);
+        // Off screen, nothing.
+        assert!(dashed_rect(SCREEN, small.translate(egui::vec2(5000.0, 0.0)), stroke, 4.0, 4.0).is_empty());
     }
 }
