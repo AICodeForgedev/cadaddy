@@ -227,6 +227,25 @@ fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location
 }
 
 #[test]
+fn a_switch_is_on_the_wall_it_stands_by() {
+    let mut s = plan();
+    // A dimmer read 2.5' off office 101's north wall (at its designation, beside the symbol), and
+    // a junction box as far off the south wall: the switch is on its wall, the box isn't.
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(t) = spec["tags"].as_array_mut() {
+        t.push(device(10.0, 7.0, "SD", "", "1F8"));
+        t.push(device(15.0, 3.0, "JB", "", "1F9"));
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    fill(&mut s);
+    let sd = device_of(&mut s, "SD");
+    assert!(sd["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()), "the dimmer is on its wall: {sd:#}");
+    let jb = device_of(&mut s, "JB");
+    assert!(jb["host_wall"].is_null(), "a box 2.5' off a wall is not on it: {jb:#}");
+}
+
+#[test]
 fn a_device_read_on_a_trade_sheet_lands_on_its_levels_architectural_plan() {
     let mut s = plan_with(true);
     let r = fill(&mut s);

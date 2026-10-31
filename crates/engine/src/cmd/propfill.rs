@@ -45,6 +45,9 @@ const DOOR_TAG_FT: f64 = 3.0;
 const CFM_TAG_FT: f64 = 4.0;
 /// How far from a wall a device may stand and still be on it, feet.
 const HOST_WALL_FT: f64 = 1.5;
+/// A switch is always on a wall: read at its designation beside the symbol (or stamped from a
+/// typical room's plan), it is on the nearest wall this far, feet.
+const SWITCH_WALL_FT: f64 = 3.0;
 /// A device whose box starts below this height (feet off its floor) is in the wall, not the
 /// ceiling: its box gets a plaster ring.
 const WALL_BOX_FT: f64 = 7.0;
@@ -706,11 +709,13 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                 if let Some(r) = room_at(&rooms, lvl, c) {
                     put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()).with_note("the room the device stands in"), tally);
                 }
+                let switch = store.get("type_mark").map(Prop::text).is_some_and(|m| kind_of(&m) == "switch");
+                let reach = if switch { SWITCH_WALL_FT } else { HOST_WALL_FT };
                 let host = walls
                     .iter()
                     .filter(|(_, l, _)| l.as_deref().zip(lvl).is_none_or(|(a, b)| a.eq_ignore_ascii_case(b)))
                     .map(|(wh, _, wb)| (wh, dist_to(wb, c)))
-                    .filter(|(_, dd)| *dd <= HOST_WALL_FT * upf)
+                    .filter(|(_, dd)| *dd <= reach * upf)
                     .min_by(|a, b| a.1.total_cmp(&b.1));
                 if let Some((wh, _)) = host {
                     put(&mut store, "host_wall", Prop::new(wh.hex(), Source::computed()).with_note("the nearest wall of its level"), tally);
