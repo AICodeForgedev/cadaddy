@@ -41,6 +41,7 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("PLINEWID", 40),
     ("CELWEIGHT", 370),
     ("LWDISPLAY", 290),
+    ("PSTYLEMODE", 290),
     ("INSUNITS", 70),
     ("MEASUREMENT", 70),
     ("PSLTSCALE", 70),
