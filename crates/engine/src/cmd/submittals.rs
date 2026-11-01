@@ -52,10 +52,30 @@ impl Product {
 }
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
-    let mut given: Vec<String> =
-        p.get("paths").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
-    if let Some(one) = p.get("path").and_then(Value::as_str) {
-        given.push(one.to_string());
+    // `paths` a list of paths, `path` one: anything else is refused, not taken for none.
+    let mut given: Vec<String> = Vec::new();
+    match p.get("paths") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(a)) => {
+            for v in a.iter().take(MAX_FILES) {
+                let Some(path) = v.as_str() else { return Err(bad(CMD, format!("`paths` holds paths (strings), not {v}"))) };
+                given.push(path.to_string());
+            }
+        }
+        Some(v) => return Err(bad(CMD, format!("`paths` is a list of paths ([\"a.pdf\", \"folder\"]), not {v}; `path` takes one"))),
+    }
+    match p.get("path") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(one)) => given.push(one.clone()),
+        Some(v) => return Err(bad(CMD, format!("`path` is a path (a string), not {v}"))),
+    }
+    // Each path given is there (a file or a folder): a missing one is named, not skipped.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let missing: Vec<&str> = given.iter().map(|g| g.trim()).filter(|g| !g.is_empty() && !std::path::Path::new(g).exists()).collect();
+        if !missing.is_empty() {
+            return Err(bad(CMD, format!("not found: {}", missing.join(", "))));
+        }
     }
     // From the menu, with nothing chosen: what it needs, not an error.
     if given.is_empty() {
@@ -221,7 +241,14 @@ fn read_products(s: &mut Session, files: &[String]) -> Read {
             let text = q.get("description").and_then(Value::as_str).unwrap_or("").to_string();
             out.questions.push((mark, format!("{name}: {text}")));
         }
+        // A file that gave no product (empty, or no data sheet in it) is said, not passed over.
+        if marks.is_empty() {
+            out.unread.push(json!({"file": name, "error": "no product data read (no maker, catalog number or luminaire cut sheet)"}));
+        }
         out.read.push(json!({"file": name, "products": marks.len(), "marks": marks}));
+    }
+    for u in &out.unread {
+        s.echo(&format!("Apply Submittals: {}: {}", u["file"].as_str().unwrap_or(""), u["error"].as_str().unwrap_or("")));
     }
     out
 }
@@ -383,6 +410,19 @@ Model Number : WRAP 48 840
         let r = s.execute(CMD, &json!({})).unwrap();
         assert_eq!(r["elements"], json!(0));
         assert!(r["next_step"].as_str().is_some_and(|n| n.contains("paths")), "{r}");
-        assert!(s.execute(CMD, &json!({"paths": ["/no/such/folder"]})).is_err());
+        assert!(s.execute(CMD, &json!({"paths": ["/no/such/folder"]})).is_err_and(|e| e.to_string().contains("/no/such/folder")));
+        // Wrong-typed paths are refused, not taken for none.
+        for bad in [json!({"paths": "a.pdf"}), json!({"paths": 12345}), json!({"paths": [12]}), json!({"path": 7})] {
+            assert!(s.execute(CMD, &bad).is_err(), "{bad}");
+        }
+        // A file that gives no product is named.
+        let dir = std::env::temp_dir().join(format!("cadaddy-submittals-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let empty = dir.join("empty.txt");
+        std::fs::write(&empty, "").unwrap();
+        if let Ok(r) = s.execute(CMD, &json!({"paths": [empty.to_string_lossy()]})) {
+            assert!(r["unread"].as_array().is_some_and(|u| u.iter().any(|x| x["file"] == json!("empty"))), "{r}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -4534,7 +4534,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
     let budget_s = super::bspec::BUILD_BUDGET_S;
-    let mut result = s.execute("model.build", &json!({"budget_s": budget_s}))?;
+    // The job merges walls read off several sheets after the build: its own line says the counts
+    // the model ends with (= bim.tree), the build's would be a second, earlier set.
+    let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     bim_step(s, job, "model built", t);
     if let Some(place) = placer.as_deref() {
         let (n, missed) = number_rooms_from_other_trades(s, job, place)?;

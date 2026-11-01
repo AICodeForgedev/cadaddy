@@ -3257,6 +3257,14 @@ impl BuildingSpec {
                                 &at,
                                 format!("{n} risers of {}: under the 4\" minimum (IBC 1011.5.2) — fewer treads", inches(riser)),
                             ));
+                        } else if riser < crate::stairs::RISER_SHALLOW_IN - 1e-9 {
+                            out.push(Issue::warning(
+                                &at,
+                                format!(
+                                    "{n} risers of {}: lawful, but shallower than stairs are drawn (5\") — check the tread count read off the plan, or whether it is a ladder",
+                                    inches(riser)
+                                ),
+                            ));
                         }
                         if tread.is_finite() && tread < tread_min - 1e-9 {
                             let limit = if irc {

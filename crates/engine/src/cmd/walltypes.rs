@@ -28,11 +28,27 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn run_legend(s: &mut Session, p: &Value) -> Result<Value> {
-    let region = p.get("region").and_then(Value::as_array).and_then(|r| {
-        let v: Vec<f64> = r.iter().filter_map(Value::as_f64).filter(|x| x.is_finite()).collect();
-        (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
-    });
-    let sheet = p.get("sheet").and_then(Value::as_str).unwrap_or("legend").to_string();
+    // A region is four finite numbers, its corners in order (x0 < x1, y0 < y1): anything else is
+    // refused, not read as the whole drawing.
+    let region = match p.get("region") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let r: Vec<f64> = v.as_array().map(|a| a.iter().filter_map(Value::as_f64).filter(|x| x.is_finite()).collect()).unwrap_or_default();
+            let arr = v.as_array().map_or(0, Vec::len);
+            match r.as_slice() {
+                [x0, y0, x1, y1] if arr == 4 && x0 < x1 && y0 < y1 => Some([*x0, *y0, *x1, *y1]),
+                _ => return Err(bad("walls.legend", format!("`region` is [x0, y0, x1, y1] with x0 < x1 and y0 < y1, not {v}"))),
+            }
+        }
+    };
+    let sheet = match p.get("sheet") {
+        None | Some(Value::Null) => "legend".to_string(),
+        Some(Value::String(t)) => t.clone(),
+        Some(v) => return Err(bad("walls.legend", format!("`sheet` is a sheet number (text), not {v}"))),
+    };
+    if p.get("apply").is_some_and(|a| !a.is_null() && !a.is_boolean()) {
+        return Err(bad("walls.legend", "`apply` is true or false"));
+    }
     let lg = read_legend(s.doc()?, region, &sheet);
     let types: Vec<Value> = lg
         .types
@@ -947,6 +963,23 @@ mod tests {
     use super::*;
     use cadaddy_doc::{Common, Line as DLine, Space, Text};
     use cadaddy_geom::Vec3;
+
+    #[test]
+    fn a_legend_region_that_is_no_rectangle_is_refused() {
+        let mut s = Session::new();
+        s.execute("new", &json!({})).expect("new");
+        for bad in [
+            json!({"region": "abc"}),
+            json!({"region": [10, 10, 0, 0]}),
+            json!({"region": [0, 0, 5]}),
+            json!({"region": [0, 0, "x", 5]}),
+            json!({"sheet": 7}),
+            json!({"apply": "yes"}),
+        ] {
+            assert!(s.execute("walls.legend", &bad).is_err(), "{bad}");
+        }
+        assert!(s.execute("walls.legend", &json!({"region": [0, 0, 100, 50]})).is_ok());
+    }
 
     fn text(d: &mut Drawing, v: &str, x: f64, y: f64, h: f64) {
         let t = Text {
