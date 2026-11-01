@@ -48,10 +48,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .interactive(|_| Ok(Box::new(super::machines::SelectRun::new("stlout.pick", "STLOUT")))),
         CommandSpec::new("stlout.pick", "STL Out", run_stlout_picked).noundo(),
-        CommandSpec::new("export", "Export...", run_export)
+        CommandSpec::new("export", "Export...", |s, p| super::file::with_force(p, || run_export(s, p)))
             .menu(&["File", "Export..."])
             .alias(&["exp"])
-            .params("{force?: bool (replace an existing file; otherwise refused for an agent), path? (else returns base64 `data`), format?: cdy|dxf|dwg|svg|png|pdf|eps|wmf|glb|gltf|obj|stl|ifc|3mf (default: the path's extension)} → {format, bytes, path? | data} (OBJ writes its .mtl and textures beside it; IFC4: the WALLGEN building with storeys and room spaces; 3MF: solids and meshes)")
+            .params("{force?: bool (replace an existing file; otherwise refused for an agent; also write a DXF/DWG too big for CADaddy to reopen), path? (else returns base64 `data`), format?: cdy|dxf|dwg|svg|png|pdf|eps|wmf|glb|gltf|obj|stl|ifc|3mf (default: the path's extension)} → {format, bytes, path? | data} (OBJ writes its .mtl and textures beside it; IFC4: the WALLGEN building with storeys and room spaces; 3MF: solids and meshes)")
             .noundo(),
         CommandSpec::new("preview", "Plot Preview", run_preview)
             .menu(&["File", "Plot Preview"])
