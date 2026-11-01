@@ -1999,6 +1999,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // Equipment on a housekeeping pad stands on it.
     let pads = super::concrete::elements(sp, &d.bim_types);
     let on_pad = |e: &cadaddy_walk3d::MepEquipment| super::concrete::pad_top(&pads, &e.tag).map_or(e.bottom_ft, |t| e.bottom_ft.max(t));
+    // A panel hangs in or on a wall: the built walls, for putting it on its wall's face.
+    let panel = |k: &str| matches!(k.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center");
+    let walls = if sp.mep.equipment.iter().any(|e| panel(&e.kind)) { super::propfill::wall_footprints(d) } else { Vec::new() };
     for e in sp.mep.equipment.iter().take(MAX_RUNS) {
         let Some(level) = sp.level(&e.level) else { continue };
         let ok = e.min.iter().chain(&e.max).chain([&e.bottom_ft, &e.height_ft]).all(|v| v.is_finite());
@@ -2011,7 +2014,21 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let z0 = (level.elevation_ft + on_pad(e)) * upf;
         let z1 = z0 + e.height_ft * upf;
         let mut m = super::wallgen::empty_mesh();
-        if e.round {
+        // A panel on the face of the wall nearest it: recessed (its front flush, its back in the
+        // wall) when its mounting says so, else on the face; turned with the wall.
+        let face = if panel(&e.kind) && !e.round {
+            super::propfill::wall_face(&walls, &level.name, (lo + hi) * 0.5, super::propfill::HOST_SNAP_FT * upf)
+        } else {
+            None
+        };
+        let recessed = e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess"));
+        if let Some(f) = &face {
+            let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
+            let along = f.along * (w / 2.0);
+            // The box's middle line, half its depth from the face (into the wall when recessed).
+            let mid = if recessed { f.at - f.out * (dp / 2.0) } else { f.at + f.out * (dp / 2.0) };
+            super::wallgen::add_box(&mut m, mid - along, mid + along, dp, z0, z1);
+        } else if e.round {
             add_upright_cylinder(&mut m, (lo + hi) * 0.5, (hi.x - lo.x).min(hi.y - lo.y) / 2.0, z0, z1);
         } else {
             let cy = (lo.y + hi.y) / 2.0;
@@ -2041,6 +2058,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
         for (k, v) in e.sources.iter().take(8) {
             xdata.push(t(1000, cap(format!("prop:SOURCE {k}={v}"))));
+        }
+        match &face {
+            Some(f) => {
+                xdata.push(t(1000, format!("prop:HOST_WALL={}", f.wall.hex())));
+                xdata.push(t(1000, format!("prop:HOST_FACE={:.3},{:.3}", f.out.x, f.out.y)));
+            }
+            None if panel(&e.kind) => xdata.push(t(1000, "prop:PLACEMENT=review: no wall within 3' of where it was read".into())),
+            None => {}
         }
         if d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             total_equipment += 1;
@@ -2480,7 +2505,7 @@ fn carry_previous(out: &mut [Value], prev: &[&Value], radius: f64) -> Vec<Value>
 }
 
 /// The convex hull of points (a ceiling's outline from its mesh), counterclockwise.
-fn hull(pts: &[Vec2]) -> Vec<Vec2> {
+pub(crate) fn hull(pts: &[Vec2]) -> Vec<Vec2> {
     let mut p: Vec<Vec2> = pts.iter().copied().filter(|q| q.is_finite()).collect();
     p.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
     p.dedup_by(|a, b| a.dist(*b) < 1e-9);

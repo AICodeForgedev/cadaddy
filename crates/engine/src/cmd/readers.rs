@@ -1516,6 +1516,11 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         }
         e.set("sheet", if dv.sheet.is_empty() { "current drawing" } else { dv.sheet.as_str() }, "plan");
         e.set("symbol", dv.handle.clone(), "plan");
+        // A typical room's device knows the room it was stamped into (its bath, its closet are
+        // that room's, traced as a room or not).
+        if !dv.room.is_empty() {
+            e.set("room", dv.room.clone(), "rule");
+        }
         sp.tags.push(e);
         *by_type.entry(tag.to_string()).or_default() += 1;
         *by_level.entry(level).or_default() += 1;

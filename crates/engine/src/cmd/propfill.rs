@@ -59,6 +59,13 @@ const ROOM_NEAR_FT: f64 = 1.0;
 /// A device whose box starts below this height (feet off its floor) is in the wall, not the
 /// ceiling: its box gets a plaster ring.
 const WALL_BOX_FT: f64 = 7.0;
+
+/// A wall device goes on the face of a wall this close to where it was read (feet); none that
+/// close: it stays, for review.
+pub(crate) const HOST_SNAP_FT: f64 = 3.0;
+
+/// A device box this low (inches over the floor) is in the floor, not on a wall.
+const FLOOR_BOX_IN: f64 = 2.0;
 /// How far beyond a wall's face the rooms on its sides are looked for, feet.
 const SIDE_FT: f64 = 1.0;
 
@@ -291,6 +298,8 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
     } else {
         Vec::new()
     };
+    // The built walls (their plan footprints), for putting a wall device on its wall's face.
+    let walls = wall_footprints(d);
     let mut built = 0;
     for t in devices {
         let Some(level) = sp.level(&t.level).filter(|l| l.sheet.is_none()) else { continue };
@@ -337,6 +346,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         // same mark (a receptacle's +44"); 7' and up is a wall-mounted one's (a sconce, an exit). A
         // wall luminaire's is 6' and up.
         let ceiling_mount = ceiling.as_ref().is_some_and(Option::is_some);
+        let on_a_wall = wall_light.is_some();
         let lowest = if ceiling_mount {
             WALL_BOX_FT * 12.0
         } else if wall_light.is_some() {
@@ -352,8 +362,19 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         });
         let z = (level.elevation_ft + height.inches / 12.0) * upf;
         let (w, l, h) = (BOX_IN[0] * upf / 12.0, BOX_IN[1] * upf / 12.0, BOX_IN[2] * upf / 12.0);
+        // A wall device (not one at the ceiling, nor on the floor) on the face of its wall that
+        // faces its room, where it is along the wall, turned with it; none within reach: it stays
+        // where it was read, for review.
+        let wall_kind = matches!(kind, "device" | "switch" | "low voltage outlet" | "fire alarm device") || on_a_wall;
+        let on_wall = wall_kind && !ceiling_mount && height.inches > FLOOR_BOX_IN && height.inches < WALL_BOX_FT * 12.0 + 12.0;
+        let face = on_wall.then(|| wall_face(&walls, &level.name, Vec2::new(x, y), HOST_SNAP_FT * upf)).flatten();
+        let (centre, along) = match &face {
+            Some(f) => (f.at + f.out * (w / 2.0), f.along),
+            None => (Vec2::new(x, y), Vec2::new(1.0, 0.0)),
+        };
+        let (x, y) = (centre.x, centre.y);
         let mut m = super::wallgen::empty_mesh();
-        super::wallgen::add_box(&mut m, Vec2::new(x - l / 2.0, y), Vec2::new(x + l / 2.0, y), w, z - h / 2.0, z + h / 2.0);
+        super::wallgen::add_box(&mut m, centre - along * (l / 2.0), centre + along * (l / 2.0), w, z - h / 2.0, z + h / 2.0);
         if m.faces.is_empty() {
             continue;
         }
@@ -403,12 +424,90 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
             loc.note = Some("model coordinates: read on its sheet, moved onto its level's architectural plan by the sheet frame (same sheet size), at the level's elevation plus the offset".into());
         }
         store.set("location", loc);
+        match &face {
+            Some(f) => {
+                store.set("host_wall", Prop::new(f.wall.hex(), Source::computed()).with_note("the wall whose face it is on"));
+                store.set(
+                    "host_face",
+                    Prop::new(format!("{:.3},{:.3}", f.out.x, f.out.y), Source::computed())
+                        .with_note("the face's outward direction (plan): toward its room"),
+                );
+                if f.moved > 0.0 {
+                    store.set(
+                        "placement",
+                        Prop::new(
+                            format!("on its wall's face, {} from where its symbol was read", super::walltypes::frac(f.moved / upf * 12.0)),
+                            Source::computed(),
+                        ),
+                    );
+                }
+            }
+            None if on_wall => {
+                store.set("placement", Prop::new("review: no wall within 3' of where it was read", Source::computed()));
+            }
+            None => {}
+        }
         let xdata = props::write(&xdata, &store);
         if d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             built += 1;
         }
     }
     built
+}
+
+/// The built walls' plan footprints (their meshes' outlines), with their levels and handles.
+pub(crate) fn wall_footprints(d: &Drawing) -> Vec<(Option<String>, Handle, Vec<Vec2>)> {
+    d.model
+        .iter()
+        .filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall"))
+        .filter_map(|e| {
+            let EntityKind::Mesh(m) = &e.kind else { return None };
+            let h = super::mep::hull(&m.vertices.iter().map(|v| v.xy()).collect::<Vec<_>>());
+            (h.len() >= 3).then(|| (super::bspec::made_level(e), e.handle, h))
+        })
+        .take(MAX_ELEMENTS)
+        .collect()
+}
+
+/// A wall face a device goes on: the wall, the point on its face, the face's direction and its
+/// outward normal (toward the room), and how far the device moved to it.
+pub(crate) struct WallFace {
+    pub(crate) wall: Handle,
+    pub(crate) at: Vec2,
+    pub(crate) along: Vec2,
+    pub(crate) out: Vec2,
+    pub(crate) moved: f64,
+}
+
+/// The face of `level`'s nearest wall within `reach` of `p`: one of each footprint's long sides
+/// (not a wall's end), the point on it nearest `p`. A point inside a wall goes to the face it is
+/// nearer.
+pub(crate) fn wall_face(walls: &[(Option<String>, Handle, Vec<Vec2>)], level: &str, p: Vec2, reach: f64) -> Option<WallFace> {
+    let mut best: Option<(f64, WallFace)> = None;
+    for (_, h, poly) in walls.iter().filter(|(l, _, _)| l.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level))) {
+        let n = poly.len();
+        let edges: Vec<(Vec2, Vec2)> = (0..n).filter_map(|i| Some((*poly.get(i)?, *poly.get((i + 1) % n)?))).collect();
+        let longest = edges.iter().map(|(a, b)| a.dist(*b)).fold(0.0, f64::max);
+        if longest <= 1e-9 || longest.is_nan() {
+            continue;
+        }
+        let ccw = cadaddy_geom::shoelace(poly) > 0.0;
+        for (a, b) in edges.iter().filter(|(a, b)| a.dist(*b) >= 0.5 * longest) {
+            let ab = *b - *a;
+            let len = ab.len();
+            let u = ab * (1.0 / len);
+            let t = ((p - *a).x * u.x + (p - *a).y * u.y).clamp(0.0, len);
+            let q = *a + u * t;
+            let dd = q.dist(p);
+            if dd > reach || best.as_ref().is_some_and(|(bd, _)| *bd <= dd) {
+                continue;
+            }
+            // Outward: right of the edge on a counter-clockwise outline.
+            let out = if ccw { Vec2::new(u.y, -u.x) } else { Vec2::new(-u.y, u.x) };
+            best = Some((dd, WallFace { wall: *h, at: q, along: u, out, moved: dd }));
+        }
+    }
+    best.map(|(_, f)| f)
 }
 
 /// Where a point read on sheet `sheet` lies on `level`'s architectural floor plan: moved by the
@@ -849,9 +948,18 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                         host_bounds.and_then(|wb| room_by_face(&rooms, lvl, &wb, c, upf)).map(|r| (r, "the room on the face of the wall it serves"))
                     })
                     .or_else(|| room_near(&rooms, lvl, c, ROOM_NEAR_FT * upf).map(|r| (r, "the room within a foot of it")));
-                match served {
-                    Some((r, note)) => put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()).with_note(note), tally),
-                    None => *no_room.entry(lvl.unwrap_or("").to_string()).or_default() += 1,
+                // A typical room's device the room it was stamped into (its bath is that room's).
+                let stamped = made(e, DEVID)
+                    .and_then(|id| sp.tags.iter().find(|t| t.id == id))
+                    .and_then(|t| t.fields.get("room"))
+                    .map(|f| f.value.trim().to_string())
+                    .filter(|r| !r.is_empty());
+                match (served, stamped) {
+                    (Some((r, note)), _) => put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()).with_note(note), tally),
+                    (None, Some(r)) => {
+                        put(&mut store, "room", Prop::new(r, Source::computed()).with_note("the typical room it was stamped into"), tally)
+                    }
+                    (None, None) => *no_room.entry(lvl.unwrap_or("").to_string()).or_default() += 1,
                 }
                 if let Some((wh, _)) = host {
                     put(&mut store, "host_wall", Prop::new(wh.hex(), Source::computed()).with_note("the nearest wall of its level"), tally);
