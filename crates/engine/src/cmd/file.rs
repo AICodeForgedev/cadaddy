@@ -313,9 +313,10 @@ thread_local! {
 }
 
 /// Run `f` with the `force` parameter of `p` in effect for the saves inside it.
-fn with_force<T>(p: &Value, f: impl FnOnce() -> T) -> T {
-    let before = FORCE_SAVE.replace(p.get("force").and_then(Value::as_bool).unwrap_or(false));
-    let r = f();
+pub(super) fn with_force<T>(p: &Value, f: impl FnOnce() -> T) -> T {
+    let force = p.get("force").and_then(Value::as_bool).unwrap_or(false);
+    let before = FORCE_SAVE.replace(force);
+    let r = cadaddy_dxf::with_oversize_allowed(force, f);
     FORCE_SAVE.set(before);
     r
 }
@@ -532,11 +533,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("closeall", "Close All", run_closeall)
             .files().menu(&["File", "Close All"]).enabled(always).params("{save?: bool, discard?: bool (agents, when no one can be asked)}").noundo(),
         CommandSpec::new("qsave", "Save", run_qsave_reporting)
-            .files().menu(&["File", "Save"]).key("Cmd+S").alias(&["save"]).params("{path?, force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved; otherwise that save is refused)} → {path, bytes, note?}").noundo(),
+            .files().menu(&["File", "Save"]).key("Cmd+S").alias(&["save"]).params("{path?, force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved, and write a DXF/DWG too big for CADaddy to reopen; otherwise that save is refused)} → {path, bytes, note?}").noundo(),
         CommandSpec::new("saveas", "Save As...", run_saveas_reporting)
             .menu(&["File", "Save As..."])
             .key("Cmd+Shift+S")
-            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), 12 (Release 12 DXF: newer objects converted, some left out), binary?: bool (DXF), force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved there; otherwise refused)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved, dwgCopyKept?: where an existing .dwg that wasn't this drawing's copy was kept first (<name>.dwg.bak), dwgCopyError?: why the copy wasn't saved}")
+            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), 12 (Release 12 DXF: newer objects converted, some left out), binary?: bool (DXF), force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved there, and write a DXF/DWG too big for CADaddy to reopen; otherwise refused)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved, dwgCopyKept?: where an existing .dwg that wasn't this drawing's copy was kept first (<name>.dwg.bak), dwgCopyError?: why the copy wasn't saved}")
             .noundo()
             .interactive(|_| Ok(Box::new(SaveAsM::default()))),
         CommandSpec::new("checkexchange", "Check Exchange", run_checkexchange)
@@ -2131,5 +2132,22 @@ impl crate::Interactive for FileM {
             }
             _ => Ok(Step::Continue),
         }
+    }
+}
+
+#[cfg(test)]
+mod oversize_force_tests {
+    use super::*;
+
+    /// `force: true` on a save or export lets it write a DXF/DWG too big to reopen; without it
+    /// (or after the save) the write is refused again.
+    #[test]
+    fn force_allows_a_file_too_big_to_reopen_only_while_it_runs() {
+        assert!(!cadaddy_dxf::oversize_allowed());
+        let seen = with_force(&json!({"force": true}), cadaddy_dxf::oversize_allowed);
+        assert!(seen);
+        assert!(!with_force(&json!({}), cadaddy_dxf::oversize_allowed));
+        assert!(!with_force(&json!({"force": false}), cadaddy_dxf::oversize_allowed));
+        assert!(!cadaddy_dxf::oversize_allowed());
     }
 }

@@ -173,6 +173,24 @@ const BINARY_SENTINEL: &[u8] = b"AutoCAD Binary DXF\r\n\x1a\0";
 /// tag list to a few GB; real drawings stay far below (a 10 MB DWG is typically a few million).
 pub const MAX_TAGS: usize = 50_000_000;
 
+thread_local! {
+    /// `force` on the save or export being run: write a DXF/DWG that CADaddy can't reopen.
+    static OVERSIZE_OK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with writing a file too big for CADaddy to reopen allowed (`allow`) or refused.
+pub fn with_oversize_allowed<T>(allow: bool, f: impl FnOnce() -> T) -> T {
+    let before = OVERSIZE_OK.replace(allow);
+    let r = f();
+    OVERSIZE_OK.set(before);
+    r
+}
+
+/// Whether a write now running may produce a file CADaddy can't reopen ([`with_oversize_allowed`]).
+pub fn oversize_allowed() -> bool {
+    OVERSIZE_OK.get()
+}
+
 mod codepage;
 pub use codepage::decode_code_page;
 

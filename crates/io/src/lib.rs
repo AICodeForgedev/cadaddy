@@ -195,7 +195,11 @@ pub fn write_dwg(d: &Drawing, version: Version, engine: DwgEngine) -> Result<Vec
         return Ok(bytes);
     }
     let (dxf, linetypes) = dxf_write::dwg_bridge(d, version);
+    let tags = dxf.iter().filter(|&&b| b == b'\n').count() / 2;
     let bytes = cadaddy_dwg::dxf_to_dwg_named(&dxf, version.code(), &linetypes).map_err(IoError::Format)?;
+    drop(dxf);
+    let (floor, ceil) = tag_caps();
+    check_reopens("DWG", tags, dwg_tag_limit(bytes.len(), floor, ceil))?;
     if version <= Version::R2004 && has_images(d) {
         return Ok(dwg_fixup::image_def_reactors(&bytes).unwrap_or(bytes));
     }
@@ -210,6 +214,51 @@ fn has_images(d: &Drawing) -> bool {
 
 /// A DWG read through the bridge (acadrust).
 fn read_dwg_bridge(bytes: &[u8]) -> Result<Drawing> {
+    let (floor, ceil) = tag_caps();
+    read_dwg_bridge_capped(bytes, floor, ceil)
+}
+
+/// The group-code limits in force: for DXF files (also the floor for a DWG's DXF) and the
+/// ceiling for a DWG's. Tests lower them ([`tests::with_tag_caps`]) to try big files small.
+fn tag_caps() -> (usize, usize) {
+    #[cfg(test)]
+    if let Some(c) = tests::TAG_CAPS.get() {
+        return c;
+    }
+    (MAX_DXF_TAGS, MAX_DWG_TAGS)
+}
+
+/// Most group codes the DXF reader takes from a file (`cadaddy_dxf::MAX_TAGS`).
+const MAX_DXF_TAGS: usize = cadaddy_dxf::MAX_TAGS;
+/// Most group codes of the DXF a DWG converts to that are read: the DWG is compressed, so its
+/// DXF rendition runs to about 0.6 group codes per byte of DWG (a 98 MB DWG of 1.13 M objects
+/// converts to 60 M), past the cap that guards DXF files. The converter's own byte limit
+/// (`cadaddy_dwg::Limits`) still bounds what a hostile file can expand to.
+const MAX_DWG_TAGS: usize = 120_000_000;
+/// Group codes allowed per byte of DWG.
+const DWG_TAGS_PER_BYTE: usize = 2;
+
+/// The group-code limit for the DXF converted from a DWG of `dwg_len` bytes: scaled to the file
+/// (a small file can't legitimately expand to millions), between `floor` and `ceil`.
+fn dwg_tag_limit(dwg_len: usize, floor: usize, ceil: usize) -> usize {
+    dwg_len.saturating_mul(DWG_TAGS_PER_BYTE).clamp(floor, ceil.max(floor))
+}
+
+/// Refuse a save whose file CADaddy itself would not reopen (`what` is the format), unless
+/// oversize saves are allowed (`force`): `tags` group codes against what opening reads.
+fn check_reopens(what: &str, tags: usize, limit: usize) -> Result<()> {
+    if tags <= limit || cadaddy_dxf::oversize_allowed() {
+        return Ok(());
+    }
+    Err(IoError::Format(format!(
+        "this drawing is too large to save as {what}: the file would hold {tags} group codes and CADaddy opens at most {limit}, so it could not be reopened. \
+         Save it as .cdy (no limit), or pass force:true to SAVE, SAVEAS or EXPORT to write the {what} anyway"
+    )))
+}
+
+/// [`read_dwg_bridge`] with the group-code limit for the converted DXF between `floor` and `ceil`.
+fn read_dwg_bridge_capped(bytes: &[u8], floor: usize, ceil: usize) -> Result<Drawing> {
+    let limit = dwg_tag_limit(bytes.len(), floor, ceil);
     let renamed = dwg_fixup::underlay_classes_renamed(bytes);
     let bytes = renamed.as_deref().unwrap_or(bytes);
     let (dxf, notes) = cadaddy_dwg::dwg_to_dxf_noted(bytes, cadaddy_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
@@ -217,7 +266,7 @@ fn read_dwg_bridge(bytes: &[u8]) -> Result<Drawing> {
     let dxf = dwg_keep::unstash(&dxf).unwrap_or(dxf);
     let bad = |e: String| IoError::Format(format!("{e} (in the DXF converted from this DWG)"));
     // The text is let go once parsed: the drawing is built from the groups alone.
-    let mut tags = cadaddy_dxf::parse(&dxf).map_err(|e| bad(e.to_string()))?;
+    let mut tags = cadaddy_dxf::parse_with_limit(&dxf, limit).map_err(|e| bad(e.to_string()))?;
     drop(dxf);
     dxf_read::mtext_dxf::bridge_carets_undone(&mut tags);
     let mut d = dxf_read::read_tags(tags).map_err(|e| bad(e.to_string()))?;
@@ -322,11 +371,13 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
         "ckpt" if !opts.binary => cdy::write_cdy_checkpoint(d),
         "dxf" | "" if version == Version::R12 => {
             let tags = dxf_r12::tags(d);
+            check_reopens("DXF", tags.len(), tag_caps().0)?;
             Ok(if opts.binary { cadaddy_dxf::write_binary(&tags, false) } else { cadaddy_dxf::write_ascii_as(&tags, false).into_bytes() })
         }
         _ if version == Version::R12 => Err(IoError::Format("Release 12 is a DXF version: save a .dxf file".into())),
         "dxf" | "" => {
             let tags = dxf_write::tags(d, version);
+            check_reopens("DXF", tags.len(), tag_caps().0)?;
             Ok(if opts.binary {
                 cadaddy_dxf::write_binary(&tags, version.utf8())
             } else {

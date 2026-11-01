@@ -3350,3 +3350,61 @@ fn dxf_objects_beyond_the_coordinate_limit_are_dropped_with_one_note() {
     assert_eq!(notes.len(), 1, "{:?}", d.read_notes);
     assert!(notes[0].starts_with("DXF: 2 objects had coordinates beyond \u{b1}1e12"), "{}", notes[0]);
 }
+
+thread_local! {
+    /// The group-code limits [`tag_caps`](super::tag_caps) gives in this test, when lowered.
+    pub(super) static TAG_CAPS: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with the DXF group-code limit at `dxf` and the DWG's ceiling at `dwg`.
+fn with_tag_caps<T>(dxf: usize, dwg: usize, f: impl FnOnce() -> T) -> T {
+    let before = TAG_CAPS.replace(Some((dxf, dwg)));
+    let r = f();
+    TAG_CAPS.set(before);
+    r
+}
+
+/// A DWG CADaddy writes reopens even when its DXF rendition is over the cap that guards DXF
+/// files (a 98 MB DWG of 1.13 M objects converts to 60 M group codes, over 50 M): the cap for
+/// the intermediate scales with the DWG, and a runaway expansion is still refused.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn dwg_over_the_dxf_cap_reopens_and_a_runaway_one_is_refused() {
+    let dwg = ac1024_dwg(3000);
+    let tags = cadaddy_dxf::parse(&cadaddy_dwg::dwg_to_dxf(&dwg).unwrap()).unwrap().len();
+    assert!(tags > 1000, "{tags}");
+    // The DXF reader's own cap would refuse it, as the unfixed DWG path did.
+    assert!(cadaddy_dxf::parse_with_limit(&cadaddy_dwg::dwg_to_dxf(&dwg).unwrap(), tags / 2).is_err());
+    // The cap for DXF files is half the file's groups; the DWG still opens, with every entity.
+    let d = with_tag_caps(tags / 2, 100 * tags, || read(&dwg, "big.dwg")).unwrap();
+    assert_eq!(d.entity_count(), 3000);
+    // A ceiling under what the file converts to refuses it cleanly (a hostile expansion).
+    let e = with_tag_caps(10, 10, || read(&dwg, "big.dwg")).unwrap_err().to_string();
+    assert!(e.contains("drawing too large") && e.contains("DXF converted from this DWG"), "{e}");
+    // The limit scales with the file and stays between floor and ceiling.
+    assert_eq!(dwg_tag_limit(1000, 50, 10_000_000), 2000);
+    assert_eq!(dwg_tag_limit(10, 50, 10_000_000), 50);
+    assert_eq!(dwg_tag_limit(1 << 30, 50, 1000), 1000);
+}
+
+/// Saving a drawing CADaddy would not reopen is refused, naming the limit and the way out; with
+/// `force` it is written; a drawing within the limit saves as before.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn saving_a_file_too_big_to_reopen_is_refused_without_force() {
+    let d = many_entities(500);
+    for name in ["big.dwg", "big.dxf"] {
+        let e = with_tag_caps(100, 100, || write(&d, name)).unwrap_err().to_string();
+        let what = if name.ends_with("dwg") { "DWG" } else { "DXF" };
+        assert!(e.contains(&format!("too large to save as {what}")) && e.contains("force:true") && e.contains(".cdy"), "{e}");
+        let forced = cadaddy_dxf::with_oversize_allowed(true, || with_tag_caps(100, 100, || write(&d, name))).unwrap();
+        assert!(forced.len() > 1000);
+        // Within the limit nothing changes.
+        assert!(write(&d, name).is_ok());
+    }
+    // Binary DXF is held to the same limit.
+    let opts = SaveOptions { binary: true, ..SaveOptions::default() };
+    assert!(with_tag_caps(100, 100, || write_with(&d, "big.dxf", &opts)).is_err());
+    // .cdy has no such limit.
+    assert!(with_tag_caps(100, 100, || write(&d, "big.cdy")).is_ok());
+}
