@@ -31,7 +31,7 @@ const MAX_TABLE_COLS: usize = 200;
 /// Attribute columns kept at most.
 const MAX_TAGS: usize = 190;
 
-const PARAMS: &str = "{blocks?: \"A*,B\" (block names, wildcards, default *), tags?: attribute tags to include (wildcards, default *), includeBlocks?: bool (default true), types?: [\"Line\", \"Circle\", …] (other object types, as the Properties palette names them; wildcards), properties?: [\"Layer\", \"Length\", \"Area\", …] (columns: Layer, Color, Linetype, Lineweight, Length, Area, Radius, Center X/Y, Start X/Y, End X/Y, Position X/Y, Rotation, Contents, Text height, Closed), handles? (default: everything in model space and every layout), drawings?: [paths] (other drawing files; adds a Drawing column), includeCurrent?: bool (default true), nested?: bool (default true: references inside blocks and arrays too), combine?: bool (default true: identical rows once, with a Count column; false: one row per object with handle, layer, position and rotation), file?: path (.csv for spreadsheets; .txt is tab-separated), at?: [x,y] (insert a table there; it keeps the settings), title?: table title, settings?: path (a .dxe settings file to start from), saveSettings?: path (.dxe), update?: bool (fill the extraction tables again; with handles, those)} → {columns, rows, file?, table?, settings} | {updated}";
+const PARAMS: &str = "{force?: bool (replace an existing file; otherwise it is refused), blocks?: \"A*,B\" (block names, wildcards, default *), tags?: attribute tags to include (wildcards, default *), includeBlocks?: bool (default true), types?: [\"Line\", \"Circle\", …] (other object types, as the Properties palette names them; wildcards), properties?: [\"Layer\", \"Length\", \"Area\", …] (columns: Layer, Color, Linetype, Lineweight, Length, Area, Radius, Center X/Y, Start X/Y, End X/Y, Position X/Y, Rotation, Contents, Text height, Closed), handles? (default: everything in model space and every layout), drawings?: [paths] (other drawing files; adds a Drawing column), includeCurrent?: bool (default true), nested?: bool (default true: references inside blocks and arrays too), combine?: bool (default true: identical rows once, with a Count column; false: one row per object with handle, layer, position and rotation), file?: path (.csv for spreadsheets; .txt is tab-separated), at?: [x,y] (insert a table there; it keeps the settings), title?: table title, settings?: path (a .dxe settings file to start from), saveSettings?: path (.dxe), update?: bool (fill the extraction tables again; with handles, those)} → {columns, rows, file?, table?, settings} | {updated}";
 
 pub(super) fn dataextraction_spec() -> CommandSpec {
     CommandSpec::new("dataextraction", "Data Extraction...", run)
@@ -590,6 +590,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let st = settings_of(s, p)?;
     if let Some(path) = str_param(p, "saveSettings").filter(|f| !f.trim().is_empty()) {
+        super::exchange::guard_output(s, "dataextraction", p, path)?;
         write_file(path, &st.to_text())?;
     }
     let at = match p.get("at") {
@@ -597,6 +598,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => Some(point_param(p, "at").ok_or_else(|| bad("dataextraction", "`at` must be a point [x, y]"))?),
     };
     let file = st.file.clone();
+    if let Some(f) = file.as_deref() {
+        super::exchange::guard_output(s, "dataextraction", p, f)?;
+    }
     let o = Options::new(st)?;
     let mut r = extract(s, &o, file.as_deref(), at)?;
     r["settings"] = serde_json::to_value(&o.st).unwrap_or(Value::Null);
@@ -639,6 +643,9 @@ impl ExtractM {
     }
 
     fn finish(&mut self, s: &mut Session, file: Option<&str>) -> Result<Step> {
+        if let Some(f) = file {
+            super::exchange::guard_output(s, "dataextraction", &json!({}), f)?;
+        }
         let r = extract(s, &self.options()?, file, self.at)?;
         let n = r["rows"].as_array().map_or(0, Vec::len);
         s.echo(format!("{n} row{} extracted.", if n == 1 { "" } else { "s" }));

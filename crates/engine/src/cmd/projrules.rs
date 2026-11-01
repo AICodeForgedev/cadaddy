@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new(CMD_IMPORT, "Import Project Rules", run_import)
             .params("{path: string (TOML or JSON file), merge?: bool (default true: merge with existing; false: replace)} → {imported, changed}"),
         CommandSpec::new(CMD_EXPORT, "Export Project Rules", run_export)
-            .params("{path: string (.toml or .json)} → {exported}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path: string (.toml or .json)} → {exported}")
             .noundo(),
     ]
 }
@@ -233,6 +233,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad(CMD_EXPORT, "`path` (string) is required"))?;
 
+    super::exchange::guard_output(s, CMD_EXPORT, p, path)?;
     let d = s.doc()?;
     let text = if path.ends_with(".toml") {
         rules_to_toml(&d.project_rules)
