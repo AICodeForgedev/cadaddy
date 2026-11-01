@@ -491,8 +491,14 @@ fn binary(tags: &[Tag], utf8: bool, keep_breaks: bool) -> Vec<u8> {
             }
             Kind::Int32 => {
                 out.extend_from_slice(&code_bytes);
-                let v = t.value.as_i64().clamp(i64::from(i32::MIN), i64::from(i32::MAX));
-                out.extend_from_slice(&i32::try_from(v).unwrap_or_default().to_le_bytes());
+                // An unsigned 32-bit value (a true colour, 0xC2RRGGBB) keeps its bits, as AutoCAD
+                // stores it; anything else out of range is clamped.
+                let v = t.value.as_i64();
+                let v = match u32::try_from(v) {
+                    Ok(u) => i32::from_le_bytes(u.to_le_bytes()),
+                    Err(_) => i32::try_from(v.clamp(i64::from(i32::MIN), i64::from(i32::MAX))).unwrap_or_default(),
+                };
+                out.extend_from_slice(&v.to_le_bytes());
             }
             Kind::Int64 => {
                 out.extend_from_slice(&code_bytes);
@@ -747,6 +753,17 @@ mod tests {
                 assert_eq!(back[1..], tags[..], "binary utf8={utf8} {text}");
             }
         }
+    }
+
+    #[test]
+    fn binary_keeps_the_bits_of_an_unsigned_32_bit_value() {
+        // A true colour (0xC2RRGGBB) is above i32::MAX: it is stored with the same 32 bits, not clamped.
+        let colour = 0xC2AA_4422_i64;
+        let back = parse_binary(&write_binary(&[Tag::i(91, colour)], false)).unwrap();
+        assert_eq!(back[1].value.as_i64() & 0xFFFF_FFFF, colour);
+        // Out of range either way is still clamped.
+        let back = parse_binary(&write_binary(&[Tag::i(91, i64::MAX), Tag::i(91, i64::MIN)], false)).unwrap();
+        assert_eq!((back[1].value.as_i64(), back[2].value.as_i64()), (i64::from(i32::MAX), i64::from(i32::MIN)));
     }
 
     #[test]

@@ -330,6 +330,8 @@ fn main() {
     let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     let sizes: Vec<usize> = arg("--sizes").unwrap_or_else(|| "1000,10000".into()).split(',').filter_map(|s| s.trim().parse().ok()).collect();
     let mut out: BTreeMap<String, f64> = BTreeMap::new();
+    // Steps that did not do their work (see [`check_bytes`]): the run fails with them named.
+    let mut errors: Vec<String> = Vec::new();
     if let Some(dir) = arg("--plans") {
         let _ = std::fs::create_dir_all(&dir);
         for &n in &sizes {
@@ -382,22 +384,51 @@ fn main() {
             out.insert(format!("{op}@{n}"), (ms * 10.0).round() / 10.0);
             peak = peak.max(now);
         };
+        if d.model.len() != n {
+            errors.push(format!("setup@{n}: the bench drawing has {} objects, not {n}", d.model.len()));
+        }
         for ext in ["dwg", "dxf", "cdy"] {
             let name = format!("bench.{ext}");
             let mut bytes = Vec::new();
-            rec(&format!("save_{ext}"), time(runs, || bytes = cadaddy_io::write(&d, &name).unwrap_or_default()));
-            rec(&format!("open_{ext}"), time(runs, || drop(cadaddy_io::read(&bytes, &name))));
+            let mut saved = Ok(0);
+            rec(
+                &format!("save_{ext}"),
+                time(runs, || {
+                    let r = cadaddy_io::write(&d, &name);
+                    saved = check_bytes(&format!("save_{ext}@{n}"), r.as_deref().map_err(|e| e.to_string()));
+                    bytes = r.unwrap_or_default();
+                }),
+            );
+            errors.extend(saved.err());
+            let mut opened = Ok(());
+            rec(
+                &format!("open_{ext}"),
+                time(runs, || {
+                    let r = cadaddy_io::read(&bytes, &name).map(|d| d.model.len()).map_err(|e| e.to_string());
+                    opened = check_count(&format!("open_{ext}@{n}"), r, n);
+                }),
+            );
+            errors.extend(opened.err());
         }
         rec("regen", time(runs, || drop(cadaddy_engine::render::build(&d, &Space::Model, &Default::default()))));
         let mut s = Session::new();
         s.open_drawing(d.clone(), "Bench", None);
-        rec("select_all", time(runs, || drop(s.execute("selectall", &json!({})))));
+        let mut step = Ok(());
+        rec(
+            "select_all",
+            time(runs, || {
+                step = check_answer(&format!("select_all@{n}"), s.execute("selectall", &json!({})).map_err(|e| e.to_string()), "selected", n)
+            }),
+        );
+        errors.extend(step.err());
+        let mut step = Ok(());
         rec(
             "move_all",
             time(runs, || {
-                let _ = s.execute("move", &json!({ "delta": [1, 1] }));
+                step = check_answer(&format!("move_all@{n}"), s.execute("move", &json!({ "delta": [1, 1] })).map_err(|e| e.to_string()), "moved", n)
             }),
         );
+        errors.extend(step.err());
         // The moves taken back, one undo each (the drawing as it was opened).
         rec(
             "undo",
@@ -407,7 +438,22 @@ fn main() {
                 }
             }) / runs as f64,
         );
-        rec("zoom_extents", time(runs, || drop(s.execute("zoom", &json!({ "mode": "extents" })))));
+        // Zoom extents remembers the extents of a drawing it has seen (`cached_extents`, keyed on
+        // the document's `Arc`): each run gets a fresh copy of the document first, outside the
+        // timing, so the time is the walk over the objects, at every size.
+        let mut zoom = f64::INFINITY;
+        for _ in 0..runs {
+            if let Ok(st) = s.state_mut() {
+                st.doc = std::sync::Arc::new((*st.doc).clone());
+            }
+            let t = Instant::now();
+            let r = s.execute("zoom", &json!({ "mode": "extents" }));
+            zoom = zoom.min(t.elapsed().as_secs_f64() * 1000.0);
+            if let Err(e) = r {
+                errors.push(format!("zoom_extents@{n}: {e}"));
+            }
+        }
+        rec("zoom_extents", zoom);
         rec(
             "build_3d",
             time(runs, || {
@@ -415,7 +461,15 @@ fn main() {
                 drop(cadaddy_engine::render::model3::build(&d, &Space::Model, 0.01, Rgb(255, 255, 255), &p, &t));
             }),
         );
-        rec("plot_pdf", time(runs, || drop(cadaddy_io::plotter::plot(&d, &Space::Model, &json!({})))));
+        let mut plotted = Ok(0);
+        rec(
+            "plot_pdf",
+            time(runs, || {
+                let r = cadaddy_io::plotter::plot(&d, &Space::Model, &json!({}));
+                plotted = check_bytes(&format!("plot_pdf@{n}"), r.as_ref().map(|b| b.as_slice()).map_err(|e| e.to_string()));
+            }),
+        );
+        errors.extend(plotted.err());
         // Closed with its changes discarded (saved under no name; the session drops it).
         rec(
             "close",
@@ -456,5 +510,71 @@ fn main() {
     }
     if let Some(path) = arg("--out") {
         let _ = std::fs::write(&path, serde_json::to_string_pretty(&out).unwrap_or_default());
+        // The failed steps beside the results, for `cargo xtask perf` to name.
+        let _ = std::fs::write(format!("{path}.errors"), errors.join("\n"));
+    }
+    if !errors.is_empty() {
+        for e in &errors {
+            eprintln!("FAILED: {e}");
+        }
+        std::process::exit(1);
+    }
+}
+
+/// A timed step's bytes: `Ok(len)` when it succeeded with output, else the error naming `step`.
+fn check_bytes(step: &str, r: Result<&[u8], String>) -> Result<usize, String> {
+    match r {
+        Ok(b) if !b.is_empty() => Ok(b.len()),
+        Ok(_) => Err(format!("{step}: wrote no bytes")),
+        Err(e) => Err(format!("{step}: {e}")),
+    }
+}
+
+/// A timed step's count of objects: `Ok` when it succeeded with exactly `want`.
+fn check_count(step: &str, r: Result<usize, String>, want: usize) -> Result<(), String> {
+    match r {
+        Ok(got) if got == want => Ok(()),
+        Ok(got) => Err(format!("{step}: {got} objects, expected {want}")),
+        Err(e) => Err(format!("{step}: {e}")),
+    }
+}
+
+/// A command's answer `key` (a count) must equal `want`.
+fn check_answer(step: &str, r: Result<serde_json::Value, String>, key: &str, want: usize) -> Result<(), String> {
+    check_count(step, r.map(|v| v.get(key).and_then(serde_json::Value::as_u64).map_or(usize::MAX, |n| n as usize)), want)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_step_that_did_not_do_its_work_is_an_error() {
+        assert_eq!(check_bytes("save_dwg@10", Ok(&[1, 2, 3])), Ok(3));
+        assert!(check_bytes("save_dwg@10", Ok(&[])).is_err_and(|e| e.contains("save_dwg@10") && e.contains("no bytes")));
+        assert!(check_bytes("plot_pdf@10", Err("boom".into())).is_err_and(|e| e.contains("plot_pdf@10") && e.contains("boom")));
+        assert_eq!(check_count("open_dxf@10", Ok(10), 10), Ok(()));
+        assert!(check_count("open_dxf@10", Ok(9), 10).is_err_and(|e| e.contains("open_dxf@10") && e.contains("9 objects")));
+        assert!(check_count("open_cdy@10", Err("bad".into()), 10).is_err_and(|e| e.contains("open_cdy@10")));
+        assert_eq!(check_answer("select_all@10", Ok(json!({ "selected": 10 })), "selected", 10), Ok(()));
+        assert!(check_answer("select_all@10", Ok(json!({ "selected": 3 })), "selected", 10).is_err());
+        assert!(check_answer("move_all@10", Ok(json!({ "moved": 0 })), "moved", 10).is_err_and(|e| e.contains("move_all@10")));
+        assert!(check_answer("move_all@10", Ok(json!({})), "moved", 10).is_err(), "no answer is a miss");
+        assert!(check_answer("move_all@10", Err("nope".into()), "moved", 10).is_err());
+    }
+
+    #[test]
+    fn the_bench_steps_do_their_work_on_a_small_drawing() {
+        hooks();
+        let d = drawing(60);
+        assert_eq!(d.model.len(), 60);
+        let bytes = cadaddy_io::write(&d, "t.dwg").unwrap_or_default();
+        assert_eq!(check_bytes("save", Ok(&bytes)).map(|_| ()), Ok(()));
+        let mut s = Session::new();
+        s.open_drawing(d, "Bench", None);
+        let sel = s.execute("selectall", &json!({})).map_err(|e| e.to_string());
+        assert_eq!(check_answer("select_all", sel, "selected", 60), Ok(()));
+        let mv = s.execute("move", &json!({ "delta": [1, 1] })).map_err(|e| e.to_string());
+        assert_eq!(check_answer("move_all", mv, "moved", 60), Ok(()));
     }
 }

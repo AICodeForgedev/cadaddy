@@ -404,7 +404,7 @@ pub fn write_log(sum: &Summary, dir: Option<&Path>) -> Option<PathBuf> {
     let secs = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default();
     let dir = dir.filter(|d| d.is_dir()).map_or_else(std::env::temp_dir, Path::to_path_buf);
     let path = dir.join(format!("CADaddy convert {secs}.log"));
-    std::fs::write(&path, sum.log_text()).ok().map(|()| path)
+    crate::writefile::write(&path, sum.log_text()).ok().map(|()| path)
 }
 
 fn run_convert(s: &mut Session, p: &Value) -> Result<Value> {

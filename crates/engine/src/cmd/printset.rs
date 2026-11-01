@@ -301,8 +301,8 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut part = path.as_os_str().to_owned();
     part.push(".part");
     let part = PathBuf::from(part);
-    std::fs::write(&part, bytes)?;
-    std::fs::rename(&part, path)
+    crate::writefile::write(&part, bytes)?;
+    crate::writefile::rename(&part, path)
 }
 
 fn run_keep(s: &mut Session, _p: &Value) -> Result<Value> {

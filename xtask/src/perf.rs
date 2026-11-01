@@ -98,6 +98,17 @@ pub fn superlinear(results: &BTreeMap<String, f64>) -> Vec<(String, f64)> {
 /// The double hotel's model has at least this many times the full hotel's elements.
 pub const BIM_DOUBLE_MIN_RATIO: f64 = 1.8;
 
+/// Whether the perfbench run passed: it exits non-zero when a timed step did not do its work (a
+/// save with no bytes, an open that errors or returns the wrong object count, a select or move
+/// that touched fewer than all, a failed plot); `errors` are its lines naming each step.
+pub fn bench_outcome(ran: Result<(), String>, errors: &str) -> Result<(), String> {
+    let steps: Vec<&str> = errors.lines().filter(|l| !l.trim().is_empty()).collect();
+    if !steps.is_empty() {
+        return Err(format!("perfbench: a timed step did not do its work: {}", steps.join("; ")));
+    }
+    ran
+}
+
 /// Whether the BIM pipeline run passed: bimbench exits non-zero when a stage's command errors or
 /// its key result is empty (its FAILED lines say which), it must have written results, and the
 /// double hotel's model must have nearly twice the full hotel's elements.
@@ -162,7 +173,9 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         let last = dir.join("last.json");
         let mut c = crate::cargo();
         c.args(["run", "-q", "-p", "cadaddy-engine", "--example", "perfbench", "--", "--sizes", sizes, "--out"]).arg(&last);
-        crate::run(c, &format!("perfbench --sizes {sizes}"))?;
+        let ran = crate::run(c, &format!("perfbench --sizes {sizes}"));
+        let errors = std::fs::read_to_string(format!("{}.errors", last.display())).unwrap_or_default();
+        bench_outcome(ran, &errors)?;
         results = read_json(&last);
         if results.is_empty() {
             return Err("perfbench wrote no results".into());
@@ -345,6 +358,19 @@ mod tests {
         assert!(bim_outcome(Ok(()), &small).is_err_and(|e| e.contains("1200")));
         small.remove("elems_total@bim_double");
         assert_eq!(bim_outcome(Ok(()), &small), Ok(()), "full only: nothing to compare");
+    }
+
+    #[test]
+    fn a_broken_bench_step_fails_perf() {
+        assert_eq!(bench_outcome(Ok(()), ""), Ok(()));
+        let e = bench_outcome(
+            Err("perfbench: exited with exit status: 1".into()),
+            "open_dwg@1000: 999 objects, expected 1000\nmove_all@1000: 0 objects, expected 1000\n",
+        );
+        assert!(e.as_ref().is_err_and(|e| e.contains("open_dwg@1000") && e.contains("move_all@1000")), "{e:?}");
+        // A clean exit that still left errors fails too; a bare failed run still fails.
+        assert!(bench_outcome(Ok(()), "save_dxf@10000: wrote no bytes").is_err_and(|e| e.contains("save_dxf@10000")));
+        assert!(bench_outcome(Err("x".into()), "").is_err());
     }
 
     #[test]

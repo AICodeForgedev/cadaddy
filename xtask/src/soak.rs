@@ -33,6 +33,9 @@ use crate::smoke::{Control, Mcp, free_port};
 
 /// A call or a frame slower than this is a stall.
 const STALL: Duration = Duration::from_secs(15);
+/// How long a client waits for a reply during a soak: the stall limit plus a margin, so a frozen
+/// app fails the run (with its report) instead of hanging it.
+const REPLY_WAIT: Duration = Duration::from_secs(STALL.as_secs() + 5);
 
 #[derive(Debug, PartialEq)]
 pub struct Opts {
@@ -689,6 +692,7 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         let cfg = out.join("config-headless");
         std::fs::create_dir_all(&cfg).map_err(|e| e.to_string())?;
         let mut m = Mcp::start(&exe, &cfg)?;
+        m.set_deadline(REPLY_WAIT);
         m.send("initialize", json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "xtask-soak", "version": "1" } }))?;
         let mut d = Headless(m);
         eprintln!("soak: headless ({})…", exe.display());
@@ -711,7 +715,11 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
             .stderr(log)
             .spawn()
             .map_err(|e| format!("{}: {e}", exe.display()))?;
-        let result = Control::connect(port, &cfg, &mut child, Duration::from_secs(90)).map(|c| {
+        let result = Control::connect(port, &cfg, &mut child, Duration::from_secs(90)).and_then(|mut c| {
+            c.set_deadline(REPLY_WAIT)?;
+            Ok(c)
+        });
+        let result = result.map(|c| {
             let mut d = Window { c, pid: child.id() };
             eprintln!("soak: window ({})…", exe.display());
             workload(&mut d, &o, &files, "Window (cadaddy --control)")

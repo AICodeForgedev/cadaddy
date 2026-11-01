@@ -169,13 +169,19 @@ impl Session {
             && !self.agent.dry_run
             && let Some(question) = self.needs_confirmation(&cmd, params)
         {
-            self.agent.pending = Some(Pending { command: cmd.clone(), params: params.clone(), question: question.clone() });
-            return Some(Err(EngineError::Other(format!("Waiting for the user: {question} (they answer in CADaddy; agent.confirm turns this off)"))));
+            return Some(Err(EngineError::Other(self.ask_user(&cmd, params, question))));
         }
         if !self.agent.dry_run {
             return None;
         }
         Some(self.dry_call(&cmd, params))
+    }
+
+    /// Park an agent's call for the user's Allow/Deny; the message to hand back to the agent.
+    pub fn ask_user(&mut self, command: &str, params: &Value, question: String) -> String {
+        let message = format!("Waiting for the user: {question} (they answer in CADaddy; agent.confirm turns this off)");
+        self.agent.pending = Some(Pending { command: command.to_string(), params: params.clone(), question });
+        message
     }
 
     /// What the user must allow, if anything: saving over an existing file, closing with changes.
@@ -210,6 +216,7 @@ impl Session {
         let docs = self.docs.clone();
         let active = self.active;
         let settings = self.settings.clone();
+        let actions = self.actions.clone();
         let log = self.log.len();
         let before = snapshot(self);
         let title = self.state().map(|s| s.title.clone()).unwrap_or_default();
@@ -224,6 +231,7 @@ impl Session {
         self.docs = docs;
         self.active = active;
         self.settings = settings;
+        self.actions = actions;
         self.log.truncate(log);
         let result = r?;
         Ok(json!({
@@ -317,6 +325,9 @@ fn run_confirm(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_journal(s: &mut Session, p: &Value) -> Result<Value> {
     if bool_or(p, "clear", false) {
+        if s.agent.from_agent {
+            return Err(EngineError::Other("Only the user can clear the agent journal (Agent Activity > Clear)".into()));
+        }
         s.agent.journal.clear();
     }
     let limit = p.get("limit").and_then(Value::as_u64).map_or(50, |l| l.min(MAX_ENTRIES as u64) as usize);

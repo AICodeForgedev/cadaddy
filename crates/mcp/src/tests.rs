@@ -642,6 +642,64 @@ fn agent_reads_a_drawing_summary_then_queries_handles() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// An image reference to `path` (the file need not exist), placed in model space.
+fn add_image_ref(h: &mut Headless, path: &str, x: f64) {
+    use cadaddy_engine::doc::{Common, EntityKind, Image, Space};
+    let img: Image = serde_json::from_value(json!({
+        "insert": {"x": x, "y": 0.0, "z": 0.0}, "u": {"x": 1.0, "y": 0.0, "z": 0.0}, "v": {"x": 0.0, "y": 1.0, "z": 0.0},
+        "size": {"x": 32.0, "y": 32.0}, "path": path,
+    }))
+    .unwrap();
+    h.session.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Image(Box::new(img))).unwrap();
+}
+
+/// A drawing that stores a path to another computer is told "refused", never looked up.
+#[test]
+fn drawing_summary_refuses_paths_to_other_computers() {
+    let mut h = Headless::default();
+    h.session.open_drawing(cadaddy_engine::sample::default_sample(), "Bracket", None);
+    {
+        let d = h.session.doc_mut().unwrap();
+        let mut b = cadaddy_engine::doc::Block::new("remote");
+        b.xref_path = Some("//192.0.2.1/s/x.dxf".into());
+        d.blocks.insert("remote".into(), std::sync::Arc::new(b));
+    }
+    add_image_ref(&mut h, "\\\\192.0.2.1\\s\\a.png", 0.0);
+    let mut s = Server::new(Box::new(h));
+    let sum = tool(&mut s, "drawing_summary", json!({"sections": ["references"]}));
+    let refs = &sum["references"];
+    assert_eq!((&refs["xrefs"][0]["found"], &refs["xrefs"][0]["refused"]), (&json!(false), &json!(true)), "{refs}");
+    assert_eq!((&refs["images"][0]["found"], &refs["images"][0]["refused"]), (&json!(false), &json!(true)), "{refs}");
+}
+
+/// Files beside the saved drawing are "found", whatever their letter case; a deleted one is not.
+#[test]
+fn drawing_summary_finds_files_beside_the_drawing_ignoring_case() {
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-found-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = Headless::default();
+    h.session.open_drawing(cadaddy_engine::sample::default_sample(), "Plan", Some(dir.join("Plan.cdy").to_string_lossy().into_owned()));
+    {
+        let d = h.session.doc_mut().unwrap();
+        let mut b = cadaddy_engine::doc::Block::new("site");
+        b.xref_path = Some("site.dxf".into());
+        d.blocks.insert("site".into(), std::sync::Arc::new(b));
+    }
+    add_image_ref(&mut h, "photo.png", 0.0);
+    add_image_ref(&mut h, "gone.png", 5.0);
+    let mut s = Server::new(Box::new(h));
+    // The drawing stores `photo.png`; the file beside it is `Photo.PNG`. `gone.png` was deleted.
+    tool(&mut s, "render", json!({"width": 32, "height": 32, "path": dir.join("Photo.PNG").to_string_lossy()}));
+    std::fs::write(dir.join("Site.DXF"), "0\nEOF\n").unwrap();
+    let sum = tool(&mut s, "drawing_summary", json!({"sections": ["references"]}));
+    let refs = &sum["references"];
+    assert_eq!(refs["xrefs"][0]["found"], true, "{refs}");
+    let image = |name: &str| refs["images"].as_array().unwrap().iter().find(|i| i["path"] == name).unwrap().clone();
+    assert_eq!((image("photo.png")["found"].clone(), image("photo.png")["refused"].clone()), (json!(true), json!(false)), "{refs}");
+    assert_eq!(image("gone.png")["found"], false, "{refs}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn execute_many_places_many_objects_in_one_call() {
     let mut s = Server::new(Box::new(Headless::default()));

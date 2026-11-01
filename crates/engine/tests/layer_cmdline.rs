@@ -36,8 +36,7 @@ fn options_reach_every_layer_property() {
         s.prompt_text()
     );
     // MATerial reads a material name and a layer list; Global on the current layer must not swallow the next option.
-    let script =
-        "N A,B\nMAT\nGlobal\n\nS A\nF A\nF B\nLO B\nOFF A\nY\nTR 50 B\nLW 0.3 B\nP N B\nL NOPE\nL DASHED B\nC T 10,20,30 B\nD\nnote here\nB\nR B C\n?\n\n\n";
+    let script = "N A,B\nMAT\nGlobal\n\nS A\nF A\nF B\nLO B\nOFF A\nY\nTR 50 B\nLW 0.3 B\nP N B\nL NOPE\nL DASHED B\nC T 10,20,30 B\nD\nnote here\nB\nR B C\n?\n\n\n";
     s.script(script).unwrap();
     assert!(s.running.is_none(), "{}", s.prompt_text());
     let d = s.doc().unwrap();

@@ -224,8 +224,10 @@ impl Journal {
 
     /// A call with parameters made from outside a command.
     pub(crate) fn call(&mut self, id: &str, params: &Value) {
-        // Reading the journal or the undo list isn't work to replay.
-        let query = id == "commandhistory" || (id == "undohistory" && params.get("action").and_then(Value::as_str) != Some("to"));
+        // Reading the journal, the undo list or the activity log isn't work to replay.
+        let action = params.get("action").and_then(Value::as_str);
+        let query =
+            id == "commandhistory" || (id == "undohistory" && action != Some("to")) || (id == "activity" && matches!(action, None | Some("list")));
         if query {
             return;
         }

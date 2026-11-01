@@ -51,12 +51,17 @@ impl Checks {
             println!("  FAIL  {name}: {detail}");
         }
     }
-    /// `CHECK|name|1 or 0|detail` lines a script printed.
+    /// `CHECK|name|1 or 0|detail` and `SKIP|what was not run` lines a script printed.
     fn take(&mut self, out: &str) {
         for l in out.lines() {
             let mut p = l.splitn(4, '|');
-            if p.next() != Some("CHECK") {
-                continue;
+            match p.next() {
+                Some("CHECK") => {}
+                Some("SKIP") => {
+                    println!("  SKIP  {}", p.next().unwrap_or_default());
+                    continue;
+                }
+                _ => continue,
             }
             let (name, ok, detail) = (p.next().unwrap_or_default(), p.next() == Some("1"), p.next().unwrap_or_default());
             self.check(name, ok, detail);
@@ -94,6 +99,8 @@ if [ -f /w/old/CADaddy-Windows.msi ]; then
   chk "msi: new ProductCode" $([ "$(prop $o ProductCode)" != "$pc" ] && echo 1 || echo 0) "$(prop $o ProductCode) -> $pc"
   newer=$(printf '%s\n%s\n' "$ov" "$v" | sort -V | tail -1)
   chk "msi: version goes up" $([ "$newer" = "$v" ] && [ "$ov" != "$v" ] && echo 1 || echo 0) "$ov -> $v"
+else
+  echo "SKIP|msi upgrade checks: no old CADaddy-Windows.msi"
 fi
 up_rows=$(msiinfo export $m Upgrade | tail -n +4)
 chk "msi: older versions are found and removed" $(echo "$up_rows" | grep -q WIX_UPGRADE_DETECTED && msiinfo export $m InstallExecuteSequence | grep -q RemoveExistingProducts && echo 1 || echo 0) "Upgrade table + RemoveExistingProducts"
@@ -123,6 +130,8 @@ if [ -f /w/old/CADaddy-Linux.deb ]; then
   ov=$(cadaddy --version 2>/dev/null)
   chk "deb: old version installs" $([ -n "$ov" ] && echo 1 || echo 0) "$ov"
   mkdir -p $cfg && echo kept > $cfg/marker
+else
+  echo "SKIP|deb upgrade and settings checks: no old CADaddy-Linux.deb"
 fi
 apt-get install -y -qq /w/new/CADaddy-Linux.deb >/dev/null 2>&1
 nv=$(cadaddy --version 2>/dev/null); cv=$(cadaddy-cli --version 2>/dev/null || cadaddy-cli commands line 2>/dev/null | head -c 40)
@@ -131,16 +140,19 @@ chk "deb: the command-line tool runs" $([ -n "$cv" ] && echo 1 || echo 0) "$(ech
 if [ -f $cfg/marker ]; then chk "deb: upgrade keeps settings" $(grep -q kept $cfg/marker && echo 1 || echo 0) "$cfg kept"; fi
 files=$(dpkg -L cadaddy | while read f; do [ -f "$f" ] && echo "$f"; done)
 chk "deb: files only in /usr" $(echo "$files" | grep -qv '^/usr/' && echo 0 || echo 1) "$(echo "$files" | wc -l) files"
+had_marker=; [ -f $cfg/marker ] && had_marker=1
 apt-get remove -y -qq cadaddy >/dev/null 2>&1
 left=$(echo "$files" | while read f; do [ -e "$f" ] && echo "$f"; done | grep -v '^/usr/share/doc/' | tr '\n' ' ')
 chk "deb: remove takes its files" $([ -z "$left" ] && echo 1 || echo 0) "${left:-all gone}"
-if [ -f $cfg/marker ]; then chk "deb: remove keeps the user's settings" 1 "$cfg left alone"; fi
+if [ -n "$had_marker" ]; then chk "deb: remove keeps the user's settings" $(grep -qx kept $cfg/marker 2>/dev/null && echo 1 || echo 0) "$cfg/marker still there and still says kept"; fi
 new=$(ls /w/new/cadaddy-*-linux-x86_64.AppImage 2>/dev/null | head -1)
 if [ -n "$new" ]; then
   cp "$new" /tmp/new.AppImage; chmod +x /tmp/new.AppImage
   av=$(APPIMAGE_EXTRACT_AND_RUN=1 /tmp/new.AppImage --version 2>/dev/null)
   chk "AppImage: runs" $([ -n "$av" ] && echo 1 || echo 0) "${av:-no output}"
   old=$(ls /w/old/cadaddy-*-linux-x86_64.AppImage 2>/dev/null | head -1)
+  [ -z "$old" ] && echo "SKIP|AppImage zsync update: no old AppImage"
+  [ ! -f "$new.zsync" ] && echo "SKIP|AppImage zsync update: no .zsync file"
   if [ -n "$old" ] && [ -f "$new.zsync" ]; then
     # As a release host serves them: over HTTP with ranges (nginx; zsync needs netbase for "http").
     cp /w/new/* /var/www/html/ && chmod a+r /var/www/html/* && nginx && sleep 1
@@ -149,6 +161,8 @@ if [ -n "$new" ]; then
     seeded=$(echo "$zout" | grep -oE 'Target [0-9.]+% complete' | tail -1 | grep -oE '[0-9.]+%')
     chk "AppImage: zsync update from the old one" $same "${seeded:-?} reused from the old AppImage; rebuilt file identical: $same"
   fi
+else
+  echo "SKIP|AppImage checks: no cadaddy-*-linux-x86_64.AppImage"
 fi
 "#;
 
@@ -181,9 +195,13 @@ pub fn run(_root: &Path, rest: &[&str]) -> Result<(), String> {
     } else {
         if work.join("new/CADaddy-Windows.msi").is_file() {
             c.take(&container(&work, MSI)?);
+        } else {
+            println!("  SKIP  MSI checks: no CADaddy-Windows.msi");
         }
         if work.join("new/CADaddy-Linux.deb").is_file() {
             c.take(&container(&work, LINUX)?);
+        } else {
+            println!("  SKIP  deb and AppImage checks: no CADaddy-Linux.deb");
         }
     }
     if cfg!(target_os = "macos") && work.join("new/CADaddy-Mac.dmg").is_file() {
@@ -193,7 +211,19 @@ pub fn run(_root: &Path, rest: &[&str]) -> Result<(), String> {
     }
     let _ = std::fs::remove_dir_all(&work);
     println!("installtest: {} passed, {} failed", c.pass, c.fail.len());
-    if c.fail.is_empty() { Ok(()) } else { Err(format!("failed: {}", c.fail.join(", "))) }
+    verdict(&c)
+}
+
+/// The run's result: failed checks fail it, and so does a run that checked nothing.
+fn verdict(c: &Checks) -> Result<(), String> {
+    if !c.fail.is_empty() {
+        Err(format!("failed: {}", c.fail.join(", ")))
+    } else if c.pass == 0 {
+        Err("installtest: nothing was tested — every part was skipped (see the SKIP lines: no Docker, no matching release files, or not on a Mac)"
+            .to_string())
+    } else {
+        Ok(())
+    }
 }
 
 /// The DMG: copied out as a user does, verified, Gatekeeper's verdict, a first launch.
@@ -248,5 +278,26 @@ mod tests {
         let mut c = Checks::default();
         c.take("noise\nCHECK|a|1|fine\nCHECK|b|0|broken\n");
         assert_eq!((c.pass, c.fail.clone()), (1, vec!["b".to_string()]));
+    }
+
+    #[test]
+    fn a_run_that_checked_nothing_fails() {
+        let e = verdict(&Checks::default()).unwrap_err();
+        assert!(e.starts_with("installtest: nothing was tested"), "{e}");
+        let mut c = Checks::default();
+        c.take("SKIP|something not run\n");
+        assert!(verdict(&c).is_err(), "SKIP lines are not checks");
+        c.take("CHECK|a|1|fine\n");
+        assert!(verdict(&c).is_ok());
+        c.take("CHECK|b|0|broken\n");
+        assert!(verdict(&c).is_err());
+    }
+
+    #[test]
+    fn no_script_check_has_a_literal_result() {
+        for l in MSI.lines().chain(LINUX.lines()).filter(|l| l.trim_start().starts_with("chk ") || l.contains("; chk ")) {
+            let after_name = l.split("\" ").nth(1).unwrap_or_default().trim_start();
+            assert!(!after_name.starts_with("1 ") && !after_name.starts_with("0 "), "literal result: {l}");
+        }
     }
 }

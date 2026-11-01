@@ -107,6 +107,7 @@ impl PendingReply {
     }
 }
 
+#[derive(Debug)]
 pub enum Outcome {
     Done(Value),
     Screenshot { path: Option<String> },
@@ -794,16 +795,29 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 _ => return err("choice must be \"save\", \"discard\" or \"cancel\""),
             };
             let Some(title) = app.close_prompt().map(str::to_string) else { return err("no \"Save changes?\" question is open") };
+            // Discarding the user's changes is the user's call, as for `close` (Allow answers it).
+            if choice == crate::closing::Choice::Discard && app.session.agent.confirm {
+                return err(app.session.ask_user("app.answerClose", p, format!("an agent wants to close {title} without saving its changes")));
+            }
             app.answer_close(choice);
             ok(json!({ "answered": title, "stillAsking": app.close_prompt() }))
         }
         "app.quit" => {
             // Programmatic calls never open dialogs: quit without the unsaved-changes prompt. With
             // `save`, modified drawings are saved first; nothing quits if one can't be.
-            if p.get("save").and_then(Value::as_bool) == Some(true)
-                && let Err(e) = app.session.execute("document.closeall", &json!({ "save": true }))
-            {
-                return err(e.to_string());
+            let save = p.get("save").and_then(Value::as_bool) == Some(true);
+            let dirty = app.session.docs.iter().any(|d| d.is_dirty());
+            if !save && dirty && app.session.agent.confirm {
+                return err(app.session.ask_user("app.quit", p, "an agent wants to quit CADaddy, discarding unsaved changes".into()));
+            }
+            if save {
+                // As the agent's own call, so saving over an existing file asks.
+                let was = std::mem::replace(&mut app.session.agent.from_agent, true);
+                let r = app.session.execute("document.closeall", &json!({ "save": true }));
+                app.session.agent.from_agent = was;
+                if let Err(e) = r {
+                    return err(e.to_string());
+                }
             }
             app.quit_confirmed = true;
             app.quit_requested = true;
