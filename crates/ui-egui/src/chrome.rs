@@ -341,6 +341,10 @@ fn validate_waiting(app: &CadApp) -> Option<&'static str> {
     thread_local! {
         static SEEN: std::cell::Cell<Seen> = const { std::cell::Cell::new(None) };
     }
+    // The Anthropic API judge (Options ▸ Automation) is working on it: nothing waits.
+    if app.validate_api.busy() {
+        return None;
+    }
     let st = app.session.state().ok()?;
     let key = (st.uid, st.revision, app.session.events.on);
     if let Some((k, text)) = SEEN.get()

@@ -167,6 +167,7 @@ pub mod ugsheets;
 pub(crate) mod underlay;
 mod unittypes;
 pub mod validate;
+pub mod validate_api;
 pub mod validate_packet;
 pub mod validate_rules;
 pub mod validate_run;

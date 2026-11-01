@@ -3470,3 +3470,28 @@
 	Validation Areas	Області перевірки
 	Validation Evidence Packet	Пакет доказів перевірки
 	Validation Rules	Правила перевірки
+# Validate's Anthropic API judge (Options ▸ Automation, the Validate panel).
+	Judge with Anthropic API	Оцінювати через Anthropic API
+	Validate will send the selected areas' print crops, model pictures and object lists to Anthropic	Перевірка надсилатиме до Anthropic фрагменти креслень, зображення моделі та списки об'єктів вибраних зон
+	Only when no agent is attached, and only after you confirm each run. Off: nothing is sent. Requests go to api.anthropic.com through the system's curl and are charged to your Anthropic account.	Лише коли агент не під'єднано, і лише після того, як ви підтвердите кожен запуск. Вимкнено: нічого не надсилається. Запити йдуть на api.anthropic.com через системний curl і оплачуються з вашого облікового запису Anthropic.
+	API key	Ключ API
+	Save Key	Зберегти ключ
+	Remove Key	Видалити ключ
+	That isn't a model name.	Це не назва моделі.
+	The key is in the system's credential store.	Ключ збережено в системному сховищі облікових даних.
+	The key was removed.	Ключ видалено.
+	A key is stored in the system's credential store. It is never saved in drawings, preferences or logs.	Ключ зберігається в системному сховищі облікових даних. Він ніколи не зберігається в кресленнях, налаштуваннях чи журналах.
+	No key is stored. It goes to the system's credential store only, never into drawings, preferences or logs.	Ключ не збережено. Він потрапляє лише до системного сховища облікових даних, ніколи — до креслень, налаштувань чи журналів.
+	An agent is attached: it judges, not the Anthropic API.	Агента під'єднано: оцінює він, а не Anthropic API.
+	Judge with the Anthropic API ({model}): {areas} areas × about {images} pictures, about {tokens} input tokens.	Оцінювання через Anthropic API ({model}): {areas} зон × близько {images} зображень, близько {tokens} вхідних токенів.
+	Estimated from the first area; the Anthropic account is charged for what is used.	Оцінено за першою зоною; з облікового запису Anthropic списується фактичне використання.
+	Send to Anthropic	Надіслати до Anthropic
+	Don't send	Не надсилати
+	Judging with the Anthropic API: {n} areas done	Оцінювання через Anthropic API: готово зон — {n}
+	Every area is judged.	Усі зони оцінено.
+	The request couldn't be started	Не вдалося розпочати запит
+	Judging with the Anthropic API isn't available in the web app.	Оцінювання через Anthropic API недоступне у вебзастосунку.
+	The request stopped without an answer	Запит припинився без відповіді
+	Stopped: every area would fail the same way.	Зупинено: усі зони завершилися б тією ж помилкою.
+	Cancelled: Resume goes on from here.	Скасовано: «Продовжити» почне звідси.
+	Done: {n} areas judged by the Anthropic API.	Готово: Anthropic API оцінив зон — {n}.

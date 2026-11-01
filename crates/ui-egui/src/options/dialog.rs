@@ -12,12 +12,13 @@ use crate::animation::AnimationPref;
 use crate::theme::{ThemePref, Tokens};
 
 /// The tabs: (id in the dialog name, label).
-pub(super) const TABS: [(&str, &str); 6] = [
+pub(super) const TABS: [(&str, &str); 7] = [
     ("display", "Display"),
     ("files", "Open and Save"),
     ("drafting", "Drafting"),
     ("selection", "Selection"),
     ("preferences", "User Preferences"),
+    ("automation", "Automation"),
     ("profiles", "Profiles"),
 ];
 
@@ -59,6 +60,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, name: &str, open: &mut bool
                 "drafting" => drafting(app, ui, &mut changes, &mut start),
                 "selection" => selection(app, ui, &mut changes),
                 "preferences" => preferences(app, ui, &mut changes),
+                "automation" => automation(app, ui, &mut changes),
                 "profiles" => profiles(app, ui, &mut changes),
                 _ => display(app, ui, &mut changes),
             }
@@ -604,6 +606,94 @@ fn preferences(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>
             "Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts."
         ),
     );
+}
+
+/// The API key field's state while the dialog is open: what is typed (never saved anywhere but
+/// the credential store), whether a key is stored (read once), and what the last action said.
+#[derive(Clone, Default)]
+struct KeyField {
+    text: String,
+    stored: Option<bool>,
+    said: String,
+}
+
+/// Options ▸ Automation: Validate's direct judge through the Anthropic API (Q6118), off by
+/// default. The key goes straight to the operating system's credential store, never through the
+/// OPTIONS form (which scripts, agents and logs see).
+fn automation(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
+    use cadaddy_engine::cmd::validate_api::{self as api, ApiKey, keystore};
+    let id = egui::Id::new("options api key");
+    let mut f: KeyField = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
+    let mut on = app.validate_api.on;
+    let r = ui.checkbox(&mut on, crate::tl!("Judge with Anthropic API"));
+    crate::control::record_widget(ui, &r, crate::tl!("Judge with Anthropic API"), "checkbox", Some(on));
+    if r.changed() {
+        changes.insert("apiJudge".into(), json!(on));
+    }
+    hint(ui, crate::i18n::t(api::CONSENT));
+    hint(
+        ui,
+        crate::tl!(
+            "Only when no agent is attached, and only after you confirm each run. Off: nothing is sent. Requests go to api.anthropic.com through the system's curl and are charged to your Anthropic account."
+        ),
+    );
+    ui.add_space(6.0);
+    grid(ui, "options_automation", |ui| {
+        crate::rtl::lead(ui, crate::tl!("Model"));
+        let mut model = app.validate_api.model.clone();
+        let edit = ui.add(egui::TextEdit::singleline(&mut model).desired_width(220.0));
+        crate::control::record_widget(ui, &edit, crate::tl!("Model"), "text", None);
+        if edit.lost_focus() && model.trim() != app.validate_api.model {
+            if api::valid_model(&model) {
+                changes.insert("apiJudgeModel".into(), json!(model.trim()));
+            } else {
+                f.said = crate::tl!("That isn't a model name.").to_string();
+            }
+        }
+        crate::rtl::trail(ui, crate::tl!("Model"));
+        ui.end_row();
+
+        crate::rtl::lead(ui, crate::tl!("API key"));
+        ui.horizontal(|ui| {
+            let edit = ui.add(egui::TextEdit::singleline(&mut f.text).password(true).desired_width(220.0).hint_text("sk-ant-…"));
+            crate::control::record_widget(ui, &edit, crate::tl!("API key"), "text", None);
+            if ui.add_enabled(!f.text.trim().is_empty(), egui::Button::new(crate::tl!("Save Key"))).clicked() {
+                f.said = match ApiKey::parse(&f.text).and_then(|k| keystore::save(&k)) {
+                    Ok(()) => {
+                        f.stored = Some(true);
+                        crate::tl!("The key is in the system's credential store.").to_string()
+                    }
+                    Err(e) => e,
+                };
+                f.text.clear();
+            }
+            if ui.add_enabled(f.stored == Some(true), egui::Button::new(crate::tl!("Remove Key"))).clicked() {
+                f.said = match keystore::clear() {
+                    Ok(()) => {
+                        f.stored = Some(false);
+                        crate::tl!("The key was removed.").to_string()
+                    }
+                    Err(e) => e,
+                };
+            }
+        });
+        crate::rtl::trail(ui, crate::tl!("API key"));
+        ui.end_row();
+    });
+    // Whether a key is stored: asked once while the tab is shown.
+    let stored = *f.stored.get_or_insert_with(|| (app.validate_api.key)().ok().flatten().is_some());
+    hint(
+        ui,
+        if stored {
+            crate::tl!("A key is stored in the system's credential store. It is never saved in drawings, preferences or logs.")
+        } else {
+            crate::tl!("No key is stored. It goes to the system's credential store only, never into drawings, preferences or logs.")
+        },
+    );
+    if !f.said.is_empty() {
+        ui.label(RichText::new(f.said.as_str()).small().color(Tokens::get().accent));
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, f));
 }
 
 fn profiles(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {

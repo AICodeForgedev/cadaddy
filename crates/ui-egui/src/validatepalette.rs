@@ -234,6 +234,8 @@ enum Act {
     Start,
     Resume,
     Cancel,
+    Send,
+    DontSend,
     Rule(String, bool),
     Select(String),
     Answer(String, &'static str),
@@ -270,7 +272,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                             }
                         }
                     });
-                    let p = progress(st, app.session.events.on);
+                    let p = progress(st, app.session.events.on || app.validate_api.busy());
                     said(ui, p.as_str(), &p);
                     if let Some(fa) = st["review"]["false_alarm_rate"].as_f64() {
                         ui.label(RichText::new(crate::tf!("False alarms: {rate}", rate = pct(&json!(fa)))).color(t.text_dim));
@@ -369,6 +371,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                     act = Some(Act::Cancel);
                 }
             });
+            // Judged by the Anthropic API (Options ▸ Automation), when no agent is attached.
+            match crate::validateapi::section(app, ui) {
+                Some(crate::validateapi::Choice::Send) => act = Some(Act::Send),
+                Some(crate::validateapi::Choice::Cancel) => act = Some(Act::DontSend),
+                None => {}
+            }
             ui.separator();
             // Findings.
             ui.horizontal(|ui| {
@@ -414,9 +422,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         Some(Act::Start) => start(app, &c, None),
         Some(Act::Resume) => start(app, &c, view.status.as_ref()),
         Some(Act::Cancel) => {
+            crate::validateapi::cancel(app);
             let r = app.run("validate.cancel", json!({ "run": view.status.as_ref().map(|s| s["run"].clone()) }));
             report(app, r);
         }
+        Some(Act::Send) => crate::validateapi::confirm(app),
+        Some(Act::DontSend) => crate::validateapi::cancel(app),
         Some(Act::Rule(id, on)) => {
             let r = app.run("validate.rules.set", json!({"id": id, "enabled": on, "reason": "Validate panel"}));
             report(app, r);
@@ -486,6 +497,16 @@ fn start(app: &mut CadApp, c: &Choices, resume: Option<&Value>) {
         o.retain(|_, v| !v.is_null());
     }
     let r = app.run("validate", p);
+    // With the Anthropic API judge on and no agent attached, the panel judges the run itself.
+    if let Ok(v) = &r
+        && crate::validateapi::wanted(app)
+        && v["pending"].as_u64().unwrap_or(0) > 0
+        && let Some(run) = v["run"].as_str()
+    {
+        let run = run.to_string();
+        crate::validateapi::begin(app, &run);
+        return;
+    }
     report(app, r);
 }
 

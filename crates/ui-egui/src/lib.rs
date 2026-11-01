@@ -167,6 +167,7 @@ pub mod secureloaddlg;
 pub mod sheetsets;
 pub mod standardsdlg;
 pub mod takeoffwin;
+pub mod validateapi;
 pub mod validatepalette;
 
 use std::sync::mpsc::Receiver;
@@ -532,6 +533,8 @@ pub struct CadApp {
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
     /// The last Automation ▸ Takeoff (`automation.takeoff`'s answer), shown in its window ([`takeoffwin`]).
     pub takeoff_table: Option<serde_json::Value>,
+    /// Validate's direct judge through the Anthropic API ([`validateapi`]): its settings and run.
+    pub validate_api: validateapi::ApiJudge,
     /// The Data Extraction wizard while open ([`extractdlg`]).
     pub extract_dlg: Option<extractdlg::State>,
     /// The Check Spelling dialog while open ([`spelldlg`]).
@@ -638,6 +641,7 @@ impl CadApp {
             gpu_notice: None,
             hatch_dlg: None,
             takeoff_table: None,
+            validate_api: validateapi::ApiJudge::default(),
             extract_dlg: None,
             spell_dlg: None,
             hyperlink_pick: false,
@@ -870,6 +874,12 @@ impl CadApp {
         if !self.ui.control_token {
             prefs["controlToken"] = json!(false);
         }
+        if self.validate_api.on {
+            prefs["apiJudge"] = json!(true);
+        }
+        if self.validate_api.model != cadaddy_engine::cmd::validate_api::DEFAULT_MODEL {
+            prefs["apiJudgeModel"] = json!(self.validate_api.model);
+        }
         if !self.custom_ui.is_default() {
             prefs["customUi"] = self.custom_ui.to_json();
         }
@@ -923,6 +933,12 @@ impl CadApp {
         }
         if let Some(b) = v.get("controlToken").and_then(Value::as_bool) {
             self.ui.control_token = b;
+        }
+        if let Some(b) = v.get("apiJudge").and_then(Value::as_bool) {
+            self.validate_api.on = b;
+        }
+        if let Some(m) = v.get("apiJudgeModel").and_then(Value::as_str).filter(|m| cadaddy_engine::cmd::validate_api::valid_model(m)) {
+            self.validate_api.model = m.trim().to_string();
         }
         if let Some(c) = v.get("customUi").and_then(|c| customui::Custom::from_json(c).ok()) {
             self.custom_ui = c;
@@ -1300,6 +1316,10 @@ impl CadApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(5));
         }
         self.finish_opening();
+        validateapi::poll(self);
+        if self.validate_api.running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
         cadaddy_engine::cmd::file::sync_image_folder(&self.session);
         self.opening.show(ctx);
         if !self.synthetic.is_empty() {

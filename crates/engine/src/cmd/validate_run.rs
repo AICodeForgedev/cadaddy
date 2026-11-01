@@ -294,6 +294,11 @@ fn severity_weight(s: &str) -> f64 {
     }
 }
 
+/// Every finding of the area says it wasn't judged ([`super::validate_api::NOT_JUDGED`]).
+fn not_judged(a: &RunArea) -> bool {
+    !a.findings.is_empty() && a.findings.iter().all(|f| f.verdict == "unsure" && f.issue.starts_with(super::validate_api::NOT_JUDGED))
+}
+
 fn is_problem(verdict: &str) -> bool {
     matches!(verdict, "fail" | "missing" | "extra")
 }
@@ -635,7 +640,9 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
             let fp = area_fp(&model, a, &rfp);
             let prev = old.as_ref().and_then(|r| r.areas.iter().find(|x| x.id == a.id));
             match prev {
-                Some(x) if !force && x.status == "done" && x.fp == fp => {
+                // An area the API judge couldn't answer (`unsure` findings that say "Not judged:") is
+                // judged again.
+                Some(x) if !force && x.status == "done" && x.fp == fp && !not_judged(x) => {
                     kept += 1;
                     RunArea { unchanged: true, ..x.clone() }
                 }

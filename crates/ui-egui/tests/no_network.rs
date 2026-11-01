@@ -1,6 +1,7 @@
 //! CADaddy talks to the network only where PRIVACY.md says: the update check (and the download it
-//! offers), the MCP server reaching the app it was given, the web build fetching from its own site,
-//! and the control channel listening on this computer only. Every other network call in the code is
+//! offers), Validate's optional Anthropic API judge (off by default), the MCP server reaching the
+//! app it was given, the web build fetching from its own site, and the control channel listening
+//! on this computer only. Every other network call in the code is
 //! a failure here, and so is an HTTP client crate in Cargo.lock: a new one must be added to
 //! PRIVACY.md and to [`ALLOWED`] on purpose.
 
@@ -27,6 +28,10 @@ const CALLS: &[&str] = &[
 const ALLOWED: &[(&str, &str)] = &[
     // The update check and the download it offers: api.github.com and github.com releases only.
     ("apps/cadaddy/src/updater.rs", "Command::new(\"curl\")"),
+    // Validate's optional judge (Q6118): only when the user turned on Options ▸ Automation ▸ Judge with
+    // Anthropic API, stored their own key and confirmed the run; api.anthropic.com/v1/messages only, with
+    // the area's packet (prompt, object list, print crops and model pictures).
+    ("crates/engine/src/cmd/validate_api.rs", "Command::new(\"curl\")"),
     // `cadaddy-cli mcp` reaching the running app at the address it was given (127.0.0.1 by default).
     ("crates/mcp/src/backend.rs", "TcpStream::connect"),
     // The control channel and agent port: listening on 127.0.0.1 only (checked below).

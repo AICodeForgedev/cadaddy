@@ -168,6 +168,8 @@ fn model_background_reaches_the_drawing_area_tokens() {
 #[test]
 fn every_tab_renders() {
     let mut a = app();
+    // No credential store in tests: the Automation tab asks this instead.
+    a.validate_api.key = std::sync::Arc::new(|| Ok(None));
     let ctx = egui::Context::default();
     for (tab, label) in [
         ("display", "Crosshair size"),
@@ -175,6 +177,7 @@ fn every_tab_renders() {
         ("drafting", "Object snap aperture"),
         ("selection", "Pickbox size"),
         ("preferences", "Interface language"),
+        ("automation", "Judge with Anthropic API"),
         ("profiles", "Reset to Defaults"),
     ] {
         a.ui.dialog = Some(format!("options:{tab}"));
@@ -182,6 +185,12 @@ fn every_tab_renders() {
         assert!(text.contains(label), "{tab}: {text}");
         assert!(text.contains("User Preferences"), "the tab row shows");
     }
+    // Options ▸ Automation: off by default, with the consent line and where the key goes.
+    a.ui.dialog = Some("options:automation".into());
+    let text = render(&mut a, &ctx);
+    assert!(text.contains(cadaddy_engine::cmd::validate_api::CONSENT), "{text}");
+    assert!(text.contains("No key is stored."), "{text}");
+    assert!(!a.validate_api.on);
     // Unknown tabs show the first one.
     a.ui.dialog = Some("options:nope".into());
     assert!(render(&mut a, &ctx).contains("Crosshair size"));

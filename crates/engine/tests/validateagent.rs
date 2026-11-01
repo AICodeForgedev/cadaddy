@@ -716,3 +716,112 @@ fn a_cancelled_run_stops_waiting_and_resumes() {
     assert!(j.s.execute("validate.next", &json!({"run": run})).unwrap()["area"]["id"].is_string());
     let _ = std::fs::remove_dir_all(&out);
 }
+
+/// The API judge's transport in tests: answers each request with what the test queued, and keeps
+/// the request bodies (no network).
+struct FakeApi {
+    replies: std::sync::Mutex<Vec<validate_api::Reply>>,
+    bodies: std::sync::Mutex<Vec<String>>,
+}
+
+impl validate_api::Transport for FakeApi {
+    fn post(&self, _key: &validate_api::ApiKey, body: &str) -> Result<validate_api::Reply, validate_api::SendError> {
+        self.bodies.lock().unwrap().push(body.to_string());
+        let mut r = self.replies.lock().unwrap();
+        if r.is_empty() { Err(validate_api::SendError::Failed("nothing queued".into())) } else { Ok(r.remove(0)) }
+    }
+}
+
+use cadaddy_engine::cmd::validate_api;
+
+fn tool_reply(findings: Vec<Value>) -> validate_api::Reply {
+    let body = json!({"type": "message", "stop_reason": "tool_use", "content": [{"type": "tool_use", "id": "t", "name": "report_findings", "input": {"findings": findings}}]});
+    validate_api::Reply { status: 200, body: body.to_string(), retry_after: None }
+}
+
+/// Validate judged by the API itself (Q6118), with a made-up transport: every area's packet goes
+/// out as one request (pictures as base64 PNG, the findings tool), the tool call's findings are
+/// kept as an agent's would be; a refusal is kept as `unsure` with its reason and judged again on
+/// resume; a refused key leaves the area for later; made-up findings are kept as `unsure`.
+#[test]
+fn the_api_judge_runs_a_validation_without_an_agent() {
+    let Job { mut s, truth, .. } = job();
+    let out = dir("api");
+    let started = start(&mut s, &out);
+    let run = started["run"].as_str().unwrap().to_string();
+    let areas = started["pending"].as_u64().unwrap() as usize;
+    assert!(areas >= 3, "{started}");
+    let key = validate_api::ApiKey::parse("sk-ant-api03-TESTKEY_abcdefghijklmnopqrstuvwxyz0123456789").unwrap();
+    let api = FakeApi { replies: Default::default(), bodies: Default::default() };
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let mut refused_area = String::new();
+    let mut judged = 0;
+    for k in 0..areas + 2 {
+        let Some(p) = validate_api::prepare(&mut s, Some(&run), validate_api::DEFAULT_MODEL).unwrap() else { break };
+        assert_eq!(p.run, run);
+        // The request: the packet's pictures as image blocks, the tool, the prompt.
+        let body: Value = serde_json::from_str(&p.request.body).unwrap();
+        let content = body["messages"][0]["content"].as_array().unwrap();
+        let images = content.iter().filter(|c| c["type"] == "image").count();
+        assert_eq!(images, p.packet.images.len(), "every picture of the packet is sent");
+        assert_eq!(p.request.images, images);
+        assert!(images > 0 && p.request.est_tokens > 0);
+        assert!(content.iter().all(|c| c["type"] != "image" || c["source"]["media_type"] == "image/png"));
+        assert_eq!(body["tools"][0]["name"], "report_findings");
+        assert_eq!(body["model"], "claude-opus-5-5");
+        assert!(content[0]["text"].as_str().unwrap().starts_with("# Check the model against the prints"));
+        if k + 1 == areas && !p.packet.rules.is_empty() {
+            // Anthropic declines this one.
+            refused_area = p.area.clone();
+            api.replies.lock().unwrap().push(validate_api::Reply {
+                status: 200,
+                body: json!({"type": "message", "stop_reason": "refusal", "content": []}).to_string(),
+                retry_after: None,
+            });
+        } else {
+            api.replies.lock().unwrap().push(tool_reply(judge(&p.packet.dir, &truth, Judge { sizes: true, noisy: false })));
+        }
+        let answer = validate_api::send(&api, &key, &p.request.body, &cancel, &|_| {});
+        let kept = validate_api::finish(&mut s, &p, answer).unwrap().expect("kept");
+        assert_eq!(kept["area"], json!(p.area));
+        judged += 1;
+    }
+    assert_eq!(judged, areas);
+    assert_eq!(api.bodies.lock().unwrap().len(), areas, "one request per area");
+    assert!(!refused_area.is_empty());
+    let st = s.execute("validate.status", &json!({"run": run})).unwrap();
+    assert_eq!(st["areas"]["done"], json!(areas), "{st}");
+    // The model's real error was found through the API like an agent would find it.
+    assert!(st["findings"]["by_verdict"]["fail"].as_u64().unwrap_or(0) >= 1, "{st}");
+    // The refused area: unsure findings that say why.
+    let items = s.execute("review.list", &json!({"kind": "validation", "limit": 200})).unwrap().to_string();
+    assert!(items.contains("Not judged: Anthropic declined to judge this area"), "{items}");
+    // Resume judges it again (and only it), even though the model is unchanged.
+    let again = start(&mut s, &out);
+    assert_eq!(again["pending"], json!(1), "{again}");
+    // A refused key: nothing kept, the area waits for a later try.
+    let p = validate_api::prepare(&mut s, Some(&run), validate_api::DEFAULT_MODEL).unwrap().unwrap();
+    assert_eq!(p.area, refused_area);
+    api.replies.lock().unwrap().push(validate_api::Reply {
+        status: 401,
+        body: json!({"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}).to_string(),
+        retry_after: None,
+    });
+    let answer = validate_api::send(&api, &key, &p.request.body, &cancel, &|_| {});
+    let e = answer.clone().unwrap_err();
+    assert!(e.fatal && !e.message.contains("TESTKEY"), "{e:?}");
+    assert_eq!(validate_api::finish(&mut s, &p, answer).unwrap(), None);
+    let st = s.execute("validate.status", &json!({"run": run})).unwrap();
+    assert_eq!(st["areas"]["issued"], json!(1), "{st}");
+    // Findings the report refuses (a made-up handle) are kept as unsure, saying so.
+    let mut bad = judge(&p.packet.dir, &truth, Judge { sizes: true, noisy: false });
+    bad.push(json!({"rule": p.packet.rules[0], "handle": "FFFFFF", "verdict": "fail", "issue": "made up", "evidence": [{"image": p.packet.images[0], "what": "x"}], "confidence": 0.5}));
+    api.replies.lock().unwrap().push(tool_reply(bad));
+    let answer = validate_api::send(&api, &key, &p.request.body, &cancel, &|_| {});
+    let kept = validate_api::finish(&mut s, &p, answer).unwrap().unwrap();
+    assert_eq!(kept["by_verdict"]["unsure"], json!(p.packet.rules.len()), "{kept}");
+    let items = s.execute("review.list", &json!({"kind": "validation", "limit": 200})).unwrap().to_string();
+    assert!(items.contains("Not judged: the judge's findings were refused"), "{items}");
+    assert!(validate_api::prepare(&mut s, Some(&run), validate_api::DEFAULT_MODEL).unwrap().is_none());
+    let _ = std::fs::remove_dir_all(&out);
+}

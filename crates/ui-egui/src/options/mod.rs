@@ -15,6 +15,8 @@
 //! | `saveVersion` | `"2000"` … `"2018"`: the version drawings with no file yet are saved in |
 //! | `SAVETIME` | minutes between automatic saves, 0–600 (0: off) |
 //! | `SAVEFILEPATH` | the folder automatic saves go to |
+//! | `apiJudge` | Validate judges each area itself through Anthropic's API with the user's own key when no agent is attached (default `false`; the user's to change, not an agent's; the key is set in the Options dialog only, never here) |
+//! | `apiJudgeModel` | the model it asks for (default `claude-opus-5-5`) |
 //! | `agentControl` | let AI agents (the Claude connector, `cadaddy-cli mcp`) control this window through 127.0.0.1 port 47820 from the next start (default `true`) |
 //! | `timeSensitiveRightClick` | while a command runs, a quick right-click is Enter and holding the button opens the shortcut menu (default); `false`: a right-click always opens the menu |
 //! | `systemCursor` | keep the system cursor visible over the drawing area |
@@ -154,6 +156,8 @@ struct UiChanges {
     agent_control: Option<bool>,
     control_token: Option<bool>,
     interface_scale: Option<f32>,
+    api_judge: Option<bool>,
+    api_model: Option<String>,
 }
 
 fn color_param(key: &str, v: &Value) -> Result<Option<Color32>, String> {
@@ -203,6 +207,14 @@ fn parse_ui(key: &str, v: &Value, c: &mut UiChanges) -> Result<bool, String> {
         "checkForUpdates" => c.check_for_updates = Some(v.as_bool().ok_or("checkForUpdates must be true or false")?),
         "agentControl" => c.agent_control = Some(v.as_bool().ok_or("agentControl must be true or false")?),
         "controlToken" => c.control_token = Some(v.as_bool().ok_or("controlToken must be true or false")?),
+        "apiJudge" => c.api_judge = Some(v.as_bool().ok_or("apiJudge must be true or false")?),
+        "apiJudgeModel" => {
+            let m = text()?.trim();
+            if !cadaddy_engine::cmd::validate_api::valid_model(m) {
+                return Err("apiJudgeModel must be a model name such as claude-opus-5-5".into());
+            }
+            c.api_model = Some(m.to_string());
+        }
         k if k.eq_ignore_ascii_case("SAVETIME") => {
             let max = cadaddy_engine::autosave::MAX_SAVETIME;
             let n = v
@@ -243,6 +255,8 @@ fn ui_json(app: &CadApp) -> Map<String, Value> {
     m.insert("checkForUpdates".into(), json!(app.update.auto));
     m.insert("agentControl".into(), json!(app.ui.agent_control));
     m.insert("controlToken".into(), json!(app.ui.control_token));
+    m.insert("apiJudge".into(), json!(app.validate_api.on));
+    m.insert("apiJudgeModel".into(), json!(app.validate_api.model));
     m
 }
 
@@ -286,6 +300,12 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
         }
     }
     user_only_fields(app, app.session.agent.from_agent, ui.control_token, ui.agent_control, ui.check_for_updates)?;
+    // Sending drawings to Anthropic is the user's choice alone.
+    if app.session.agent.from_agent
+        && (ui.api_judge.is_some_and(|b| b != app.validate_api.on) || ui.api_model.as_ref().is_some_and(|m| *m != app.validate_api.model))
+    {
+        return Err("Only the user can change apiJudge or apiJudgeModel (Options ▸ Automation), not an agent.".into());
+    }
     let reset = engine.get("reset").and_then(Value::as_bool) == Some(true);
     // The engine checks its part (and refuses unknown names) before anything here changes.
     app.session.execute("options", &Value::Object(engine)).map_err(|e| e.to_string())?;
@@ -349,6 +369,12 @@ fn run_json(app: &mut CadApp, params: &Value) -> Result<Value, String> {
     if let Some(b) = ui.control_token {
         app.ui.control_token = b;
     }
+    if let Some(b) = ui.api_judge {
+        app.validate_api.on = b;
+    }
+    if let Some(m) = ui.api_model {
+        app.validate_api.model = m;
+    }
     Ok(report(app))
 }
 
@@ -363,6 +389,8 @@ fn reset_ui(app: &mut CadApp) {
     app.ui.system_cursor = d.system_cursor;
     app.ui.history_lines = d.history_lines;
     app.options = UiOptions::default();
+    app.validate_api.on = false;
+    app.validate_api.model = cadaddy_engine::cmd::validate_api::DEFAULT_MODEL.into();
 }
 
 impl CadApp {
