@@ -36,7 +36,7 @@ use cadaddy_doc::{Constraint, ConstraintKind, Drawing, GeomRef, Handle};
 use cadaddy_geom::Vec2;
 use serde::Serialize;
 
-pub use auto::{INFER_TYPES, InferOptions, autoconstrain, infer, infer_placed};
+pub use auto::{AutoStats, INFER_TYPES, InferOptions, autoconstrain, autoconstrain_counted, infer, infer_placed};
 pub use dof::{DofReport, DofStatus, ObjectDof, dof};
 pub use expr::{Env, ExprError};
 pub use model::{ref_points, rigid_points, supported};
