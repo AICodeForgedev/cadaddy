@@ -527,9 +527,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo()
             .interactive(|_| Ok(Box::new(FileM { name: "OPEN", message: "Enter name of drawing to open", run: run_open }))),
-        CommandSpec::new("close", "Close", run_close)
+        CommandSpec::new("close", "Close", run_close_guarded)
             .files().menu(&["File", "Close"]).key("Cmd+W").params("{index?, save?: bool, discard?: bool (agents, when no one can be asked: a drawing with unsaved changes is closed only with one of them)}").noundo(),
-        CommandSpec::new("closeall", "Close All", run_closeall)
+        CommandSpec::new("closeall", "Close All", run_closeall_guarded)
             .files().menu(&["File", "Close All"]).enabled(always).params("{save?: bool, discard?: bool (agents, when no one can be asked)}").noundo(),
         CommandSpec::new("qsave", "Save", run_qsave_reporting)
             .files().menu(&["File", "Save"]).key("Cmd+S").alias(&["save"]).params("{path?, force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved; otherwise that save is refused)} → {path, bytes, note?}").noundo(),
@@ -1007,6 +1007,19 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     crate::activity::after_open(s, i);
     s.rhai_drawing_opened(i);
     Ok(opened(s, i, false))
+}
+
+/// CLOSE as a command (typed, LISP, script, JSON): an agent's close of a drawing with changes
+/// waits for the user ([`Session::guard_run`]). The close tools and the code that has already
+/// decided call [`run_close`].
+fn run_close_guarded(s: &mut Session, p: &Value) -> Result<Value> {
+    s.guard_run("close", p)?;
+    run_close(s, p)
+}
+
+fn run_closeall_guarded(s: &mut Session, p: &Value) -> Result<Value> {
+    s.guard_run("closeall", p)?;
+    run_closeall(s, p)
 }
 
 pub(super) fn run_close(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1819,6 +1832,7 @@ fn run_qsave_reporting(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_saveas_reporting(s: &mut Session, p: &Value) -> Result<Value> {
+    s.guard_run("saveas", p)?;
     save_reporting(s, p, run_saveas)
 }
 

@@ -337,6 +337,7 @@ pub(crate) fn write_file(cmd: &str, path: &str, bytes: &[u8]) -> Result<()> {
 // ---------- EXPORT ----------
 
 fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
+    s.guard_run("export", p)?;
     let hooks = io().ok_or_else(|| bad("export", "file formats are not available in this build"))?;
     let path = str_param(p, "path");
     let format = match str_param(p, "format") {
