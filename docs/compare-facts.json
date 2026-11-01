@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1175,
-    "count": 1175,
+    "callableAsJson": 1181,
+    "count": 1181,
     "ids": [
       "-attedit",
       "-block",
@@ -817,8 +817,14 @@
       "project.add",
       "project.briefing",
       "project.close",
+      "project.company.list",
+      "project.company.remove",
+      "project.company.set",
       "project.create",
+      "project.delete",
       "project.disk",
+      "project.drawings",
+      "project.duplicate",
       "project.import_manifest",
       "project.info",
       "project.list",
