@@ -4257,6 +4257,24 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 v["not_placed"] = json!(counts.0);
                 v["stamped"] = json!(counts.1);
                 placed = Some(v);
+                // What the legend says each switch and sensor is (its designations).
+                let mut designations = legend_designations(s.doc()?, job);
+                for (k, v) in unimported_designations(job) {
+                    designations.entry(k).or_insert(v);
+                }
+                if !designations.is_empty() {
+                    let keys: Vec<&str> = designations.keys().map(String::as_str).collect();
+                    progress_line(&format!("  the legends' designations: {}", keys.join(" ")));
+                }
+                if !designations.is_empty()
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let n = super::readers::legend_onto_devices(&mut sp, &designations);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        progress_line(&format!("  switches and sensors named by the legend's designations: {n}"));
+                    }
+                }
                 // The code's devices the plans don't mark: a guest room's receptacles are
                 // tamper-resistant.
                 if !sleeping.is_empty()
@@ -5371,6 +5389,94 @@ struct StampedRooms {
     rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>,
     /// The rooms stamped from a typical plan of a room to sleep in (a guest room): level, outline.
     sleeping: Vec<(String, Vec<cadaddy_geom::Vec2>)>,
+}
+
+/// The electrical legends' designations (`3=3-WAY`, `OS2=WALL MOUNTED OCCUPANCY SENSOR …`) on the
+/// job's electrical sheets (each imported sheet's objects: its legend and note sheets too).
+fn legend_designations(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> BTreeMap<String, String> {
+    let spans: Vec<(u64, u64)> = job
+        .sheet_spans
+        .iter()
+        .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(sp.sheet.split('/').next().unwrap_or(&sp.sheet)).eq_ignore_ascii_case("E"))
+        .map(|sp| (sp.lo, sp.hi))
+        .collect();
+    if spans.is_empty() {
+        return BTreeMap::new();
+    }
+    let texts: Vec<cadaddy_mepfix::sheet_facts::TextItem> = d
+        .model
+        .iter()
+        .filter(|e| spans.iter().any(|(lo, hi)| (*lo..*hi).contains(&e.handle.0)))
+        .filter_map(|e| match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) if t.value.contains('=') => Some(cadaddy_mepfix::sheet_facts::TextItem {
+                value: t.value.trim().to_string(),
+                at: t.insert.xy(),
+                height: t.height,
+                rotation: t.rotation,
+            }),
+            _ => None,
+        })
+        .take(MAX_LEGEND_TEXTS)
+        .collect();
+    cadaddy_mepfix::device_types::designations(&texts)
+}
+
+/// Most `KEY=MEANING` texts looked at for the legends' designations.
+const MAX_LEGEND_TEXTS: usize = 5_000;
+/// Most electrical sheets read again for a legend the job's drawing doesn't hold.
+const MAX_LEGEND_SHEETS: usize = 6;
+
+/// The designations on the set's electrical sheets that aren't plans (a legend on the one-line
+/// diagram's sheet, or the schedules'; the job's drawing keeps the plans): each such page read
+/// again for its text alone.
+fn unimported_designations(job: &GuidedJob) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else {
+        progress_line("  the legends' sheets: no PDF reader in this build");
+        return out;
+    };
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    // The numbered ones (a page known only by its file isn't a sheet of the set), in sheet order.
+    let mut electrical: Vec<(String, &Value)> = classified
+        .iter()
+        .filter_map(|c| {
+            let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+            let kind = if text("type").is_empty() { text("sheet_type") } else { text("type") };
+            let number = c.get("number").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            (text("discipline") == "e" && !kind.contains("plan") && cadaddy_mepfix::sheet_facts::is_sheet_number(&number)).then_some((number, c))
+        })
+        .collect();
+    electrical.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut missed: Vec<String> = Vec::new();
+    for (number, c) in electrical.into_iter().take(MAX_LEGEND_SHEETS) {
+        // Its current copy's file and page (`printset.sheets`).
+        let (Some(file), Some(page)) = (c.get("file").and_then(Value::as_str), c.get("page").and_then(Value::as_u64)) else { continue };
+        if !files.contains_key(file) {
+            match crate::readfile::read(std::path::Path::new(&job.pdfs_path).join(file)) {
+                Ok(bytes) => {
+                    files.insert(file.to_string(), bytes);
+                }
+                Err(e) => {
+                    missed.push(format!("{number} ({file}: {e})"));
+                    continue;
+                }
+            }
+        }
+        let Some(bytes) = files.get(file) else { continue };
+        match read_pdf(bytes, &json!({"page": page, "text": true, "images": false})) {
+            Ok((d, _)) => {
+                for (k, v) in cadaddy_mepfix::device_types::designations(&cadaddy_mepfix::sheet_facts::texts(&d)) {
+                    out.entry(k).or_insert(v);
+                }
+            }
+            Err(e) => missed.push(format!("{number} ({file} page {page}: {e})")),
+        }
+    }
+    if !missed.is_empty() {
+        progress_line(&format!("  the legends' sheets not read: {}", missed.join(", ")));
+    }
+    out
 }
 
 /// Whether a typical room's type (its words, [`type_words`]) is a room to sleep in: a hotel's

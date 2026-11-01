@@ -915,6 +915,79 @@ fn run_equip_read(_s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── mep.read_devices ────────────────────────────────────────────────────────
 
+/// A switch's or sensor's item from the legend's designations (`3=3-WAY`, `OS2=WALL MOUNTED
+/// OCCUPANCY SENSOR WSXA-PDT-D`): the whole mark's meaning (`OS2` → `wall mounted occupancy sensor
+/// WSXA-PDT-D`), else a switch's `S` and the designations after it (`S3` → `switch, 3-way`, `SD`
+/// → `switch, dimmer`). With the legend's words and the catalog number it names.
+pub(crate) fn legend_item(tag: &str, kind: &str, designations: &BTreeMap<String, String>) -> Option<(String, String, Option<String>)> {
+    let tag = tag.trim().to_ascii_uppercase();
+    // A meaning's words up to its cross-reference ("DIMMER- REFER TO …"), as an item says them.
+    let core = |m: &str| -> String {
+        let m = m.split("REFER").next().unwrap_or(m).trim().trim_end_matches(['-', ',', ';', ' ']);
+        m.split_whitespace()
+            .map(|w| {
+                let lower = w.chars().all(|c| c.is_ascii_alphabetic())
+                    || w.split_once('-').is_some_and(|(a, b)| a.chars().all(|c| c.is_ascii_digit()) && b.chars().all(|c| c.is_ascii_alphabetic()));
+                if lower { w.to_ascii_lowercase() } else { w.to_string() }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    // A catalog number: lettered first, dashed parts of five characters at most (WSXA-PDT-D).
+    let catalog = |m: &str| -> Option<String> {
+        m.split_whitespace()
+            .map(|w| w.trim_matches([',', ';', '.']))
+            .find(|w| {
+                w.len() >= 4
+                    && w.contains('-')
+                    && w.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                    && w.split('-').all(|p| !p.is_empty() && p.len() <= 5)
+            })
+            .map(str::to_string)
+    };
+    if let Some(m) = designations.get(&tag) {
+        return Some((core(m), m.clone(), catalog(m)));
+    }
+    let mut rest = tag.strip_prefix('S').filter(|r| kind == "switch" && !r.is_empty())?;
+    let mut parts: Vec<&String> = Vec::new();
+    while !rest.is_empty() && parts.len() < 4 {
+        let (k, m) = (1..=rest.len().min(3)).rev().find_map(|n| {
+            let k = rest.get(..n)?;
+            designations.get(k).map(|m| (k, m))
+        })?;
+        parts.push(m);
+        rest = rest.get(k.len()..).unwrap_or("");
+    }
+    if !rest.is_empty() {
+        return None;
+    }
+    let words: Vec<String> = parts.iter().map(|m| core(m)).collect();
+    let said: Vec<&str> = parts.iter().map(|m| m.as_str()).collect();
+    Some((format!("switch, {}", words.join(", ")), said.join("; "), parts.iter().find_map(|m| catalog(m))))
+}
+
+/// The legend's designations onto the model's switches and sensors: each one's item, the legend's
+/// words and the catalog number they name, from the legend (a submittal's product stays). The
+/// devices described.
+pub(crate) fn legend_onto_devices(sp: &mut cadaddy_walk3d::BuildingSpec, designations: &BTreeMap<String, String>) -> usize {
+    let mut n = 0usize;
+    for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && matches!(t.kind.as_str(), "switch" | "occupancy_sensor")).take(MAX_DEVICES)
+    {
+        if t.fields.get("device_type").is_some_and(|f| f.source == "submittal") {
+            continue;
+        }
+        let mark = t.fields.get("type").map_or_else(String::new, |f| f.value.clone());
+        let Some((item, said, catalog)) = legend_item(&mark, &t.kind, designations) else { continue };
+        t.set("device_type", item, "legend");
+        t.set("legend", said, "legend");
+        if let Some(c) = catalog {
+            t.set("catalog", c, "legend");
+        }
+        n += 1;
+    }
+    n
+}
+
 /// NEC 406.12: the receptacles of a hotel's guest rooms (and a dwelling's) are tamper-resistant.
 /// Each receptacle device in one of `rooms` (level, outline in model units) its plan doesn't mark
 /// TR is taken off as one, from the rule; the receptacles and the rooms changed.
@@ -1431,6 +1504,42 @@ fn run_envelope_read(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_switchs_legend_designations_name_it() {
+        let d: std::collections::BTreeMap<String, String> = [
+            ("2", "2 POLE"),
+            ("3", "3-WAY"),
+            ("D", "DIMMER- REFER TO LIGHTING CONTROLS SCHEDULE"),
+            ("OR", "LIGHTING OVERRIDE- REFER TO LIGHTING CONTROLS SCHEDULE"),
+            ("OS2", "WALL MOUNTED OCCUPANCY SENSOR WSXA-PDT-D"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let item = |tag: &str, kind: &str| super::legend_item(tag, kind, &d).map(|i| (i.0, i.2));
+        assert_eq!(item("S3", "switch"), Some(("switch, 3-way".into(), None)));
+        assert_eq!(item("SD", "switch"), Some(("switch, dimmer".into(), None)));
+        assert_eq!(item("S3D", "switch"), Some(("switch, 3-way, dimmer".into(), None)));
+        assert_eq!(item("SOR", "switch"), Some(("switch, lighting override".into(), None)));
+        assert_eq!(item("OS2", "occupancy_sensor"), Some(("wall mounted occupancy sensor WSXA-PDT-D".into(), Some("WSXA-PDT-D".into()))));
+        // A plain switch, a designation the legend doesn't give, a non-switch: nothing.
+        assert_eq!(item("S", "switch"), None);
+        assert_eq!(item("SX", "switch"), None);
+        assert_eq!(item("S3", "receptacle"), None);
+        // Onto the model's devices, from the legend.
+        let mut sp = cadaddy_walk3d::BuildingSpec::from_json(
+            r#"{"version": 1, "units_per_foot": 12, "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10}], "tags": [
+                {"id": "device:Level 1:1.0,1.0", "kind": "switch", "level": "Level 1", "at_ft": [1, 1], "fields": {"type": {"value": "S3", "source": "plan"}}},
+                {"id": "device:Level 1:2.0,1.0", "kind": "occupancy_sensor", "level": "Level 1", "at_ft": [2, 1], "fields": {"type": {"value": "OS2", "source": "plan"}}},
+                {"id": "device:Level 1:3.0,1.0", "kind": "switch", "level": "Level 1", "at_ft": [3, 1], "fields": {"type": {"value": "S", "source": "plan"}}}
+            ]}"#,
+        )
+        .expect("spec");
+        assert_eq!(super::legend_onto_devices(&mut sp, &d), 2);
+        let os = sp.tags.iter().find(|t| t.id == "device:Level 1:2.0,1.0").expect("os2");
+        assert_eq!((os.fields["catalog"].value.as_str(), os.fields["device_type"].source.as_str()), ("WSXA-PDT-D", "legend"));
+    }
+
     #[test]
     fn a_guest_rooms_receptacles_are_tamper_resistant() {
         use cadaddy_geom::Vec2;

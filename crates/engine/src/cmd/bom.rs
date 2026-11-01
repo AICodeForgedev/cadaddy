@@ -192,7 +192,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
     let rings = s.doc().map(super::propfill::ring_depths).unwrap_or_default();
     for t in sp.tags.iter().take(MAX_LINES) {
         let f = |k: &str| t.fields.get(k).map(|v| (v.value.clone(), v.source.clone()));
-        let firm = |src: &str| if matches!(src, "plan" | "schedule" | "note" | "user") { "firm" } else { "rule" };
+        let firm = |src: &str| if matches!(src, "plan" | "schedule" | "note" | "user" | "legend") { "firm" } else { "rule" };
         // Its circuit, when what was read beside it is one (`D-7`, not a sheet number).
         let on = f("circuit").map(|c| c.0).filter(|c| super::printcond::parse_circuit(c).is_some()).unwrap_or_default();
         match t.kind.as_str() {
