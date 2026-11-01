@@ -412,7 +412,7 @@
 	Group Edit	تحرير المجموعة
 	Group Options	خيارات المجموعة
 	Group Selection	تحديد المجموعة
-	Hatch	تظليل
+	Hatch	تهشير
 	Hatch Edit	تحرير التهشير
 	Hatch Pattern	نمط التهشير
 	Hatch Patterns	أنماط التهشير
@@ -505,7 +505,7 @@
 	Layout list	قائمة التخطيطات
 	Layout paper	ورقة التخطيط
 	Layout {name}: {table}	التخطيط {name}: {table}
-	Leader	قائد
+	Leader	خط الإشارة
 	Leaders Only	خطوط الإشارة فقط
 	Left	يسار
 	Left device button: zoom extents. Right device button: calibrate.	زر الجهاز الأيسر: تكبير الحدود. زر الجهاز الأيمن: معايرة.
@@ -574,7 +574,7 @@
 	More toolbar commands	المزيد من أوامر شريط الأدوات
 	Move	نقل
 	Move sideways to pan; push/pull or twist to zoom.	حرّك جانبياً للإزاحة؛ ادفع أو اسحب أو لُف للتكبير.
-	Multileader	قائد متعدد
+	Multileader	خط الإشارة المتعدد
 	Multileader Style...	نمط خط الإشارة المتعدد...
 	Multileader style	نمط خط الإشارة المتعدد
 	Multiline	متعدد الأسطر
@@ -1376,7 +1376,7 @@ menu	View	عرض
 	Linear jog height (× text height)	ارتفاع التعرج الخطي (× ارتفاع النص)
 	Break size	حجم الفاصل
 	Express Tools	أدوات Express
-	Break-line Symbol	رمز خط القطع
+	Break-line Symbol	رمز خط الكسر
 	Replace Block...	استبدال الكتلة...
 	Move/Copy/Rotate	نقل/نسخ/تدوير
 	Remove boundaries	إزالة الحدود
@@ -1953,7 +1953,7 @@ menu	View	عرض
 	Keyboard Shortcuts	اختصارات لوحة المفاتيح
 	replaces {command}	يحل محل {command}
 	Built-in	مضمّن
-	Alias	الاسم المستعار
+	Alias	اختصار
 	Command	الأمر
 	Add or Change	إضافة أو تغيير
 	Keys	المفاتيح
@@ -2224,16 +2224,16 @@ menu	View	عرض
 	Boundaries	الحدود
 	Click to set new origin	انقر لتعيين نقطة أصل جديدة
 	Create separate hatches	إنشاء تهشيرات منفصلة
-	Default to boundary extents	افتراضياً إلى امتداد الحدود
+	Default to boundary extents	الافتراضي: امتدادات الحدود
 	Edit Block Definition	تحرير تعريف الكتلة
-	Hatch and Gradient	التهشير والتدرج
-	Hatch origin	أصل التهشير
+	Hatch and Gradient	التهشير والتدرج اللوني
+	Hatch origin	نقطة أصل التهشير
 	Island detection	اكتشاف الجزر
 	Normal	عادي
 	Open in Block Editor	فتح في محرر الكتل
 	Outer	خارجي
-	Specified origin	أصل محدد
-	Use current origin	استخدام الأصل الحالي
+	Specified origin	نقطة أصل محددة
+	Use current origin	استخدام نقطة الأصل الحالية
 	Building models (IFC)	نماذج المباني (IFC)
 	Building model (IFC4)	نموذج مبنى (IFC4)
 	3D printing (3MF)	الطباعة ثلاثية الأبعاد (3MF)
@@ -3397,7 +3397,7 @@ menu	View	عرض
 	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	تعذّر على CADaddy كتابة نسخة استرداد، لذا ستضيع التغييرات الأخيرة إذا توقف التطبيق الآن.
 	CADaddy has to close	يجب إغلاق CADaddy
 	Close CADaddy	إغلاق CADaddy
-	Create backup copy with each save	إنشاء نسخة احتياطية مع كل حفظ
+	Create backup copy with each save	إنشاء نسخة احتياطية عند كل حفظ
 	DXF keeps them. Use Save As to keep them in the drawing.	يحتفظ بها DXF. استخدم حفظ باسم للاحتفاظ بها في الرسم.
 	Details	التفاصيل
 	Dismiss	تجاهل
@@ -3422,3 +3422,98 @@ menu	View	عرض
 	Review Audit Trail	سجل تدقيق المراجعة
 	Accuracy Trend	اتجاه الدقة
 	Measure Build Accuracy	قياس دقة البناء
+	Add to Working Set	إضافة إلى مجموعة العمل
+	Add…	إضافة…
+	Alias file: {file}	ملف الاختصارات: {file}
+	Align Multileaders	محاذاة خطوط الإشارة المتعددة
+	Analyze Shapes	تحليل الأشكال
+	Analyze Usage	تحليل الاستخدام
+	Animation Effects	تأثيرات الحركة
+	Animation effects	تأثيرات الحركة
+	Boundaries picked: {n}	الحدود المنتقاة: {n}
+	Centered	متمركز
+	Choose the command the alias starts.	اختر الأمر الذي يشغّله الاختصار.
+	Click the ruler to add a tab stop, right-click to remove one	انقر على المسطرة لإضافة علامة جدولة، وانقر بالزر الأيمن لإزالتها
+	Close Block Editor	إغلاق محرر الكتل
+	Collect	جمع
+	Collect Multileaders	جمع خطوط الإشارة المتعددة
+	Color 1	اللون 1
+	Color 2	اللون 2
+	Convert Text to Mtext	تحويل النص إلى نص متعدد الأسطر
+	Crossing selection color:	لون تحديد التقاطع:
+	Curved	منحنٍ
+	Define each corner of the selection window with a separate click.	حدد كل زاوية من نافذة التحديد بنقرة منفصلة.
+	Discard	تجاهل
+	Drag Dynamic Grip	سحب المقبض الديناميكي
+	Dynamic Block Data	بيانات الكتلة الديناميكية
+	Dynamic Block Grips	مقابض الكتلة الديناميكية
+	Dynamic Block Reference	مرجع كتلة ديناميكية
+	Edit Command Aliases (PGP)...	تحرير اختصارات الأوامر (PGP)...
+	Edit Multileader	تحرير خط الإشارة المتعدد
+	Edit Reference In-Place	تحرير المرجع في مكانه
+	Edit…	تحرير…
+	Evaluate LISP	تقييم LISP
+	Exclude:	استثناء:
+	Explode Attributes to Text	تفجير السمات إلى نص
+	Grips	المقابض
+	Groups	المجموعات
+	Hatch Pick	انتقاء التهشير
+	Hatches	تهشيرات
+	Hemispherical	نصف كروي
+	Imperial (inches)	إنجليزي (بوصة)
+	Implied Loops	حلقات ضمنية
+	Indicate selection area	إظهار منطقة التحديد
+	Interface scale	مقياس الواجهة
+	Inverted	معكوس
+	Island	جزيرة
+	Italic	مائل
+	Justify	ضبط المحاذاة
+	Load Application...	تحميل تطبيق...
+	Metric (millimetres)	متري (مليمتر)
+	More than {n} aliases.	أكثر من {n} اختصار.
+	Multiline text	نص متعدد الأسطر
+	New and the first drawing at startup use these units unless a default template is set (QNEWTEMPLATE).	تستخدم الرسومات الجديدة وأول رسم عند بدء التشغيل هذه الوحدات ما لم يُعيَّن قالب افتراضي (QNEWTEMPLATE).
+	New block	كتلة جديدة
+	No alias file loaded. REINIT replaces these aliases with a file's.	لم يُحمَّل ملف اختصارات. يستبدل REINIT هذه الاختصارات باختصارات ملف.
+	Not a number or distance: {text}	ليس رقماً أو مسافة: {text}
+	Object grouping	تجميع الكائنات
+	Object selection limit for display of grips	حد تحديد الكائنات لعرض المقابض
+	Objects on locked layers	الكائنات على الطبقات المقفلة
+	Origin: {x}, {y}	نقطة الأصل: {x}, {y}
+	Overline	خط علوي
+	Query Texts	الاستعلام عن النصوص
+	Save Block	حفظ الكتلة
+	Save Block As	حفظ الكتلة باسم
+	Save Layout as Template	حفظ التخطيط كقالب
+	Save Reference Edits	حفظ تعديلات المرجع
+	Save alias	حفظ الاختصار
+	Save changes to block "{name}"?	حفظ التغييرات على الكتلة "{name}"؟
+	Select boundaries to remove	حدد الحدود المراد إزالتها
+	Select using two clicks only	التحديد بنقرتين فقط
+	Selection Area Effect	تأثير منطقة التحديد
+	Selection Preview Filter	مرشح معاينة التحديد
+	Selection area opacity:	عتامة منطقة التحديد:
+	Selection effect color	لون تأثير التحديد
+	Selection modes	أوضاع التحديد
+	Selection preview	معاينة التحديد
+	Set Dynamic Property	تعيين خاصية ديناميكية
+	Shape	الشكل
+	Sheet Books to PDF...	دفاتر اللوحات إلى PDF...
+	Show grips	إظهار المقابض
+	Spherical	كروي
+	Text color	لون النص
+	Type an alias name.	اكتب اسم الاختصار.
+	Underline	تسطير
+	Units of new drawings	وحدات الرسومات الجديدة
+	Unsaved changes	تغييرات غير محفوظة
+	Visual Effect Settings	إعدادات التأثيرات المرئية
+	Visual Effect Settings...	إعدادات التأثيرات المرئية...
+	When a command is active	عندما يكون أمر ما نشطاً
+	When no command is active	عندما لا يكون أي أمر نشطاً
+	Window selection color:	لون تحديد النافذة:
+	Working Set	مجموعة العمل
+	Xref and Block In-place Editing	تحرير المراجع الخارجية والكتل في مكانها
+	built-in	مدمج
+	overrides built-in	يتجاوز المدمج
+	{alias} is already defined; select it and use Edit.	{alias} معرَّف مسبقاً؛ حدده واستخدم «تحرير».
+	{command} is an unknown command.	{command} أمر غير معروف.
