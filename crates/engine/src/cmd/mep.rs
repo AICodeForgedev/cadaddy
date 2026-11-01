@@ -976,6 +976,13 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(result)
 }
 
+/// How far under its floor an edited run may sit (under the slab), feet.
+const MAX_UNDER_FLOOR_FT: f64 = 10.0;
+/// How high over its floor an edited run may be at least (the building's top when it is higher), feet.
+const MAX_EDIT_STOREY_FT: f64 = 100.0;
+/// The largest duct or pipe an edit may give, inches.
+const MAX_EDIT_SIZE_IN: f64 = 240.0;
+
 fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let (mut sp, _) = current(s, "mep.edit")?;
     let id_str = str_param(p, "id")
@@ -991,6 +998,45 @@ fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
         && !sp.mep.systems.iter().any(|s| s.name.eq_ignore_ascii_case(sys))
     {
         return Err(bad("mep.edit", format!("unknown system {sys}")));
+    }
+
+    // A height in its storey and a real size, or refused (not stored as an override: a conduit
+    // 50' under its floor, or a billion feet up).
+    {
+        let run = sp.mep.runs.iter().find(|r| r.id == id_str).ok_or_else(|| bad("mep.edit", format!("no run with id {id_str}")))?;
+        // Up to the top of the building above this floor, and never under 100' (a double-height
+        // space, or storey heights set short, doesn't refuse a real height; a billion feet is).
+        let floor = sp.level(&run.level).map(|l| l.elevation_ft).filter(|e| e.is_finite());
+        let top = sp.levels.iter().map(|l| l.elevation_ft + l.height_ft).filter(|t| t.is_finite()).fold(f64::NEG_INFINITY, f64::max);
+        let storey = floor.filter(|_| top.is_finite()).map_or(MAX_EDIT_STOREY_FT, |f| (top - f).max(MAX_EDIT_STOREY_FT));
+        if let Some(v) = p.get("bottom_ft").filter(|v| !v.is_null()) {
+            let b = v.as_f64().filter(|b| b.is_finite()).ok_or_else(|| bad("mep.edit", "`bottom_ft` must be a number of feet"))?;
+            if !(-MAX_UNDER_FLOOR_FT..=storey).contains(&b) {
+                return Err(bad(
+                    "mep.edit",
+                    format!(
+                        "`bottom_ft` is feet above {}'s floor: from -{MAX_UNDER_FLOOR_FT} (under the slab) to {storey} (the building's top, or 100'), not {b}",
+                        run.level
+                    ),
+                ));
+            }
+        }
+        if let Some(v) = p.get("size_in").filter(|v| !v.is_null()) {
+            // [width, height], or a pipe's [diameter] / [diameter, 0].
+            let inches = |x: &Value| x.as_f64().filter(|x| x.is_finite() && (0.0..=MAX_EDIT_SIZE_IN).contains(x));
+            let ok = v.as_array().is_some_and(|a| {
+                (1..=2).contains(&a.len()) && a.iter().all(|x| inches(x).is_some()) && a.first().and_then(inches).is_some_and(|w| w > 0.0)
+            });
+            if !ok {
+                return Err(bad(
+                    "mep.edit",
+                    format!("`size_in` is [width, height] or [diameter] in inches: the first above 0, each at most {MAX_EDIT_SIZE_IN}"),
+                ));
+            }
+        }
+        for key in ["reviewed", "rebuild"] {
+            bool_param("mep.edit", p, key)?;
+        }
     }
 
     let edited_by = str_param(p, "edited_by").unwrap_or("agent").to_string();

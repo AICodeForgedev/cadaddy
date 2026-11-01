@@ -1395,23 +1395,67 @@ pub fn view_cells(d: &Drawing) -> Vec<(PlanView, [f64; 4])> {
 
 /// The level views of a sheet that prints several plans of different levels, each with the part
 /// of the sheet that is its own `[x0, y0, x1, y1]` (model units): the cells of [`view_cells`],
-/// else the blocks of linework the titled views occupy ([`crate::sheet_facts::view_titles`] over
-/// a `SCALE:` line) when their titles name at least two different levels. Empty for a sheet of
-/// one view (a typical-floor plan of several levels is one view), or of views of one level.
+/// else (or when a cell is no titled view: a riser diagram's `LEVEL 2` label) the blocks of
+/// linework the titled views occupy ([`titled_level_views`]) when their titles name at least two
+/// different levels. Empty for a sheet of one view (a typical-floor plan of several levels is one
+/// view), or of views of one level.
 pub fn level_views(d: &Drawing) -> Vec<(PlanView, [f64; 4])> {
     let cells = view_cells(d);
-    if !cells.is_empty() {
+    let titled = titled_level_views(d);
+    if !cells.is_empty() && (titled.is_empty() || cells.iter().all(|(c, _)| titled.iter().any(|(t, _)| t.title == c.title))) {
         return cells;
     }
+    titled
+}
+
+/// The views titled over a `SCALE:` line ([`crate::sheet_facts::view_titles`]) that name a level,
+/// each with its block of linework; several titles under one block (two floor plans whose
+/// linework touches) share it out: stacked, each its title's height up to the next title (a
+/// title sits under its view); side by side, each from its title across to the next. Empty unless
+/// they name at least two different levels (and are 8 or fewer).
+pub fn titled_level_views(d: &Drawing) -> Vec<(PlanView, [f64; 4])> {
     let texts = crate::sheet_facts::texts(d);
-    let mut views: Vec<(PlanView, [f64; 4])> = Vec::new();
-    for v in crate::sheet_facts::view_titles(d, &texts) {
-        let levels = detect_levels(&v.title);
-        let Some(region) = v.region else { continue };
-        if levels.is_empty() || is_typical_sentinel(&levels) || views.iter().any(|(_, r)| *r == region) {
-            continue;
+    let titled: Vec<(crate::sheet_facts::ViewTitle, Vec<String>, [f64; 4])> = crate::sheet_facts::view_titles(d, &texts)
+        .into_iter()
+        .filter_map(|v| {
+            let levels = detect_levels(&v.title);
+            let region = v.region?;
+            (!levels.is_empty() && !is_typical_sentinel(&levels)).then_some((v, levels, region))
+        })
+        .collect();
+    let mut regions: Vec<[f64; 4]> = Vec::new();
+    for (_, _, r) in &titled {
+        if !regions.contains(r) {
+            regions.push(*r);
         }
-        views.push((PlanView { title: v.title, levels, at: v.at, height: 0.0 }, region));
+    }
+    let mut views: Vec<(PlanView, [f64; 4])> = Vec::new();
+    for r in regions {
+        let mut group: Vec<&(crate::sheet_facts::ViewTitle, Vec<String>, [f64; 4])> = titled.iter().filter(|(_, _, x)| *x == r).collect();
+        let spread = |axis: usize| {
+            let (lo, hi) = group.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), g| (lo.min(g.0.at[axis]), hi.max(g.0.at[axis])));
+            hi - lo
+        };
+        let stacked = spread(1) >= spread(0);
+        let axis = usize::from(stacked);
+        group.sort_by(|a, b| a.0.at[axis].total_cmp(&b.0.at[axis]));
+        // The same title read twice (hidden text and its lettering): one view.
+        group.dedup_by(|a, b| a.0.title == b.0.title);
+        for (i, (v, levels, _)) in group.iter().map(|g| (&g.0, &g.1, g.2)).enumerate() {
+            let mut cell = r;
+            if group.len() > 1 {
+                let (lo, hi) = (axis, axis + 2);
+                if i > 0 {
+                    cell[lo] = v.at[axis].max(r[lo]);
+                }
+                if let Some(next) = group.get(i + 1) {
+                    cell[hi] = next.0.at[axis].min(r[hi]);
+                }
+            }
+            if cell[2] > cell[0] && cell[3] > cell[1] {
+                views.push((PlanView { title: v.title.clone(), levels: levels.clone(), at: v.at, height: 0.0 }, cell));
+            }
+        }
     }
     let mut distinct: Vec<&Vec<String>> = views.iter().map(|(v, _)| &v.levels).collect();
     distinct.sort();

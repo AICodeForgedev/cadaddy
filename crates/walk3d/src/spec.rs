@@ -108,6 +108,11 @@ pub struct BuildingSpec {
     /// shell before the rooms: the rooms are traced in what they leave.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub circulation: Vec<Circulation>,
+    /// Each storey's shell (its exterior walls' boxes `[x0, y0, x1, y1]`, sheet units) by level
+    /// name: a wall line reaching well past it (a site wall, a stray line) is no wall of the
+    /// storey, and doesn't stretch its slab or the roof.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub shells: BTreeMap<String, Vec<[f64; 4]>>,
     /// Facades, roofs and what stands on them, from the elevations and the roof plan.
     #[serde(default, skip_serializing_if = "Exterior::is_empty")]
     pub exterior: Exterior,
@@ -2152,6 +2157,11 @@ pub fn feet(ft: f64) -> String {
     format!("{sign}{whole}'-{}", inches_text(eighths - whole * 96.0))
 }
 
+/// A length in inches to the eighth, as [`inches`] prints it.
+fn eighths(inch: f64) -> f64 {
+    (inch * 8.0).round() / 8.0
+}
+
 /// Inches to the nearest eighth: `4 7/8"`, `6"`.
 pub fn inches(inch: f64) -> String {
     if !inch.is_finite() {
@@ -2600,6 +2610,7 @@ impl BuildingSpec {
             stairs: Vec::new(),
             elevators: Vec::new(),
             circulation: Vec::new(),
+            shells: BTreeMap::new(),
             exterior: Exterior::default(),
             rcp: Rcp::default(),
             mep: Mep::default(),
@@ -2694,6 +2705,28 @@ impl BuildingSpec {
         let tread_in = st.runs.iter().filter(|x| x.treads > 0).map(|x| len_ft(x) * 12.0 / f64::from(x.treads)).fold(f64::INFINITY, f64::min);
         let length: f64 = st.runs.iter().map(len_ft).sum();
         Some((risers, riser_in, tread_in, length))
+    }
+
+    /// Why a stair can't be built as measured, if it can't: no risers, or risers outside what
+    /// any code allows (4" to 7¾", to the eighth printed) — a misread flight, or the wrong
+    /// levels. A ramp is always buildable here (its slope is a warning).
+    pub fn stair_unbuildable(&self, st: &Stair) -> Option<String> {
+        if st.ramp {
+            return None;
+        }
+        let Some((n, riser, _, _)) = self.stair_measures(st) else {
+            return Some("its levels aren't known".into());
+        };
+        let shown = eighths(riser);
+        if n == 0 || !shown.is_finite() {
+            Some("no risers".into())
+        } else if shown > crate::stairs::RISER_MAX_IN {
+            Some(format!("{n} risers of {}: over 7¾\" (IRC R311.7.5.1), the most any stair rises", inches(riser)))
+        } else if shown < crate::stairs::RISER_MIN_IN {
+            Some(format!("{n} risers of {}: under the 4\" minimum (IBC 1011.5.2)", inches(riser)))
+        } else {
+            None
+        }
     }
 
     pub fn from_json(s: &str) -> Result<BuildingSpec, String> {
@@ -3204,6 +3237,8 @@ impl BuildingSpec {
                             out.push(Issue::warning(&at, format!("the ramp rises 1:{:.1}, steeper than 1:12 (IBC 1012.2)", 1.0 / slope)));
                         }
                     } else if n > 0 {
+                        // Checked as printed (to the eighth): a tread of 10.994" is the 11" it reads.
+                        let (riser, tread) = (eighths(riser), eighths(tread));
                         let irc = st.residential();
                         let (riser_max, tread_min) = if irc {
                             (crate::stairs::RISER_MAX_IN, crate::stairs::TREAD_MIN_IN)

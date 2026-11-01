@@ -121,6 +121,7 @@ pub mod lights;
 mod lisp;
 pub mod materials;
 mod measuregeom;
+pub(crate) mod memstat;
 pub mod mep;
 pub mod mepqty;
 mod mleader_content;
@@ -981,6 +982,15 @@ pub(crate) fn distinct_points(pts: &[Vec2]) -> Vec<Vec2> {
         }
     }
     out
+}
+/// An optional true/false parameter: absent or null gives `None`; anything but a boolean
+/// (`12345`, `"yes"`) is refused, naming it.
+pub(crate) fn bool_param(cmd: &str, p: &Value, key: &str) -> Result<Option<bool>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(bad(cmd, format!("`{key}` must be true or false"))),
+    }
 }
 pub(crate) fn bool_or(p: &Value, key: &str, default: bool) -> bool {
     p.get(key).and_then(Value::as_bool).unwrap_or(default)

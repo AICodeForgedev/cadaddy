@@ -148,6 +148,10 @@ enum Payload {
     Packed(u16, usize, container::Packed),
 }
 
+/// Threads encoding a save's object chunks at most.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_ENCODING_THREADS: usize = 4;
+
 fn write_parts(d: &Drawing, w: &mut Writer, earlier: &Earlier<'_>, thumbnail: bool) -> Result<Vec<Saved>, String> {
     let parts = parts(d);
     let reused_objects = |c: &ChunkRef| earlier.objects.get(&c.key()).filter(|(old, _)| old.same(c)).map(|(_, e)| *e);
@@ -155,8 +159,18 @@ fn write_parts(d: &Drawing, w: &mut Writer, earlier: &Earlier<'_>, thumbnail: bo
     // save. Only the compressed bytes are kept until they are written.
     let fresh: Vec<&ChunkRef> =
         parts.iter().filter_map(|p| if let Part::Objects(c) = p { Some(c) } else { None }).filter(|c| reused_objects(c).is_none()).collect();
-    let packed: Vec<Result<(usize, u16, usize, container::Packed), String>> =
-        crate::par_map(&fresh, |c| model::entities(c.items()).map(|(v, raw)| (c.key(), v, raw.len(), container::pack(&raw, true))));
+    let encode = || -> Vec<Result<(usize, u16, usize, container::Packed), String>> {
+        crate::par_map(&fresh, |c| model::entities(c.items()).map(|(v, raw)| (c.key(), v, raw.len(), container::pack(&raw, true))))
+    };
+    // On a few cores at most: each chunk is its objects as JSON values while it is encoded, and a
+    // 10-core machine held ten (a job's checkpoint was its peak memory).
+    #[cfg(not(target_arch = "wasm32"))]
+    let packed = match rayon::ThreadPoolBuilder::new().num_threads(rayon::current_num_threads().clamp(1, MAX_ENCODING_THREADS)).build() {
+        Ok(pool) => pool.install(encode),
+        Err(_) => encode(),
+    };
+    #[cfg(target_arch = "wasm32")]
+    let packed = encode();
     let mut packed: HashMap<usize, (u16, usize, container::Packed)> =
         packed.into_iter().map(|r| r.map(|(k, v, n, p)| (k, (v, n, p)))).collect::<Result<_, _>>()?;
     let mut saved = Vec::new();

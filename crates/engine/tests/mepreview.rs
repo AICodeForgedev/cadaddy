@@ -314,3 +314,41 @@ fn paging_large_spec() {
     assert_eq!(page2["items"].as_array().unwrap().len(), 50);
     assert_eq!(page2["next_cursor"].as_u64(), Some(100));
 }
+
+// ---- Q6100: an edit's values are checked, never stored silently ----
+
+#[test]
+fn an_edit_out_of_its_storey_or_of_the_wrong_kind_is_refused() {
+    let mut s = mep_session();
+    let list = s.execute("mep.list", &json!({})).unwrap();
+    let id = list["items"][0]["id"].as_str().unwrap().to_string();
+    let before = s.doc().unwrap().building_spec.clone();
+    for bad in [
+        json!({"id": &id, "bottom_ft": -50}),
+        json!({"id": &id, "bottom_ft": 1e9}),
+        json!({"id": &id, "bottom_ft": "ten"}),
+        json!({"id": &id, "size_in": [-4, 12]}),
+        json!({"id": &id, "size_in": [1e6, 12]}),
+        json!({"id": &id, "reviewed": 12345}),
+        json!({"id": &id, "bottom_ft": 9, "rebuild": "yes"}),
+    ] {
+        let e = s.execute("mep.edit", &bad).expect_err(&bad.to_string()).to_string();
+        assert!(e.contains('`'), "names the parameter: {e}");
+    }
+    assert_eq!(s.doc().unwrap().building_spec, before, "nothing stored");
+    let e = s.execute("mep.edit", &json!({"id": &id, "bottom_ft": 150})).unwrap_err().to_string();
+    assert!(e.contains("100") && e.contains("Level 1"), "up to the building's top or 100': {e}");
+    // In the storey (or just under its slab) it's an override.
+    s.execute("mep.edit", &json!({"id": &id, "bottom_ft": 11.5})).unwrap();
+    s.execute("mep.edit", &json!({"id": &id, "bottom_ft": -2})).unwrap();
+    // model.build's switches are true or false, its budget whole seconds.
+    for (key, bad) in [
+        ("replace", json!({"replace": 12345})),
+        ("budget_s", json!({"budget_s": 0.001})),
+        ("budget_s", json!({"budget_s": 0})),
+        ("stack", json!({"stack": "yes"})),
+    ] {
+        let e = s.execute("model.build", &bad).expect_err(&bad.to_string()).to_string();
+        assert!(e.contains(&format!("`{key}`")), "{e}");
+    }
+}

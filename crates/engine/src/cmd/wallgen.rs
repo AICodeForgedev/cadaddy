@@ -1183,6 +1183,59 @@ fn layer_matches(pattern: &str, layer: &str) -> bool {
 }
 
 /// The walls and openings of one level's plan, with notes on what was found.
+/// How far past its storey's shell a wall line may reach, feet (an exterior wall's outside face is
+/// the shell's edge).
+const PAST_SHELL_FT: f64 = 5.0;
+/// The share of a storey's wall lines the shell may leave out at most, past a few: more, and
+/// the shell is what is wrong (it missed part of the building), so none are.
+const MAX_PAST_SHELL_SHARE: f64 = 0.1;
+const FEW_PAST_SHELL: usize = 4;
+
+/// A storey's wall lines without those reaching more than [`PAST_SHELL_FT`] past its shell (the
+/// spec's `shells`; none: all of them): either end of a line's box out there is no wall of the
+/// storey (a site wall, a stray line), and it would stretch the slab and the roof.
+fn inside_shell<'a>(
+    d: &Drawing,
+    g: &WallGen,
+    level: &cadaddy_walk3d::Level,
+    ents: Vec<&'a Arc<Entity>>,
+    upf: f64,
+    notes: &mut Vec<String>,
+) -> Vec<&'a Arc<Entity>> {
+    let Some(rects) = g.spec.as_ref().and_then(|sp| sp.shells.get(&level.name)).filter(|r| !r.is_empty()) else { return ents };
+    let reach = PAST_SHELL_FT * upf;
+    let near = |p: Vec2| {
+        rects.iter().any(|r| {
+            let (x0, x1, y0, y1) = (r[0].min(r[2]), r[0].max(r[2]), r[1].min(r[3]), r[1].max(r[3]));
+            let dx = (x0 - p.x).max(p.x - x1).max(0.0);
+            let dy = (y0 - p.y).max(p.y - y1).max(0.0);
+            dx.hypot(dy) <= reach
+        })
+    };
+    let (keep, out): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) = ents.into_iter().partition(|e| {
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        b.is_empty() || (near(b.min) && near(b.max))
+    });
+    if out.is_empty() {
+        return keep;
+    }
+    if out.len() > FEW_PAST_SHELL && out.len() as f64 > MAX_PAST_SHELL_SHARE * (keep.len() + out.len()) as f64 {
+        notes.push(format!(
+            "{}: {} of {} wall lines reach past the storey's shell: the shell missed part of the building, so all are built.",
+            level.name,
+            out.len(),
+            keep.len() + out.len()
+        ));
+        return keep.into_iter().chain(out).collect();
+    }
+    notes.push(format!(
+        "{}: {} wall lines reaching more than {PAST_SHELL_FT}' past the storey's shell left out (no walls of it).",
+        level.name,
+        out.len()
+    ));
+    keep
+}
+
 fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64, notes: &mut Vec<String>) -> PlanLevel {
     use super::perceive::geometry::{Limits, openings, pairs, segments};
     let k = upf / 12.0;
@@ -1230,6 +1283,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         None => matches!(g.rules.layer(layer), Some(cadaddy_walk3d::LayerKind::Wall { .. })),
     };
     let wall_ents: Vec<&Arc<Entity>> = ents.iter().copied().filter(|e| on_walls(&e.common.layer)).collect();
+    let wall_ents = inside_shell(d, g, level, wall_ents, upf, notes);
     // A print screens what isn't built there in grey (furniture, fixtures, grids, other trades'
     // work): on a plan with solid linework, a screened line is no wall's face.
     let solid = wall_ents.iter().filter(|e| !screened(e.common.color)).count();

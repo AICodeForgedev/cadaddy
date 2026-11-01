@@ -2,7 +2,7 @@
 //! parapet and curbs as loose lines with the sheet's border round them. `model.build` reads the
 //! roof off it (never the border, never walls), stacks it over the storey under it however the
 //! plan sits on its sheet, and the takeoff carries roof area, parapet lf, drains and rooftop
-//! units. A roof plan with no outline gets a flat roof over the top floor's walls.
+//! units. A roof plan with no outline gets a flat roof over the top floor's plate.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -212,7 +212,7 @@ fn a_roof_plan_with_no_outline_gets_a_flat_roof_over_the_top_floor() {
     let mut s = building(|_| {});
     let r = s.execute("model.build", &json!({})).unwrap();
     assert_eq!(r["roofs"], json!(1), "{r}");
-    assert!(r["notes"].to_string().contains("Roof: no roof outline read on its plan; a flat roof over Level 2's walls."), "{r}");
+    assert!(r["notes"].to_string().contains("Roof: no roof outline read on its plan; a flat roof over Level 2's floor plate."), "{r}");
     let roof = made(&s, "roof", "Roof");
     let b = bounds(&s, &roof);
     assert!(near([b.min.x, b.min.y], [100.0, 100.0], 1e-6) && near([b.max.x, b.max.y], [580.0, 460.0], 1e-6), "{b:?}");

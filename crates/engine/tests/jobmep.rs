@@ -153,6 +153,12 @@ fn the_runs_are_built_on_their_sheets_levels() {
     let plain_build = stage(&job_state(&plain), "bim_build")["result"].clone();
     assert_eq!(build["walls"], plain_build["walls"], "MEP sheets never add walls");
     assert_eq!(build["levels"], plain_build["levels"], "{build}");
+    // B4-022: the stage's counts are what the model holds, as bim.tree counts them.
+    let mut plain = plain;
+    for (key, category) in [("walls", "Walls"), ("doors", "Doors"), ("windows", "Windows")] {
+        let tree = plain.execute("bim.tree", &json!({"category": category, "limit": 1})).expect("tree");
+        assert_eq!(plain_build[key], tree["total"], "{key}: {plain_build}");
+    }
 }
 
 #[test]

@@ -602,8 +602,12 @@ fn page_fingerprint(d: &Drawing) -> u64 {
     h.finish()
 }
 
+/// Sheets read or converted at once (each a page's whole drawing in memory): a 10-core machine
+/// held ten of a hotel set's sheets at the import's peak (Q6099: the job's peak memory).
+pub(crate) const MAX_PAGES_AT_ONCE: usize = 4;
+
 /// Several PDF pages into the current space, for print-set jobs: each file is read once, its
-/// pages converted on every core (a page per core at a time), then added one after another; the
+/// pages converted on every core (a page per core at a time, at most [`MAX_PAGES_AT_ONCE`]), then added one after another; the
 /// import check runs once at the end, not after every page. `full_scale`: a DO NOT SCALE sheet with a scale
 /// note (kept at sheet size by PDFIMPORT) is read again at that scale. `skip_same`: a page showing
 /// what an earlier one did is not imported twice. `on_page(session, i, result)` hears about each
@@ -643,9 +647,10 @@ pub(crate) fn import_pdf_pages(
         }
         Ok((d, report))
     };
-    // A page per core at a time: the converted pages wait in memory until they are added.
+    // A page per core at a time, at most [`MAX_PAGES_AT_ONCE`]: the converted pages wait in
+    // memory until they are added.
     #[cfg(not(target_arch = "wasm32"))]
-    let batch = rayon::current_num_threads().max(1);
+    let batch = rayon::current_num_threads().clamp(1, MAX_PAGES_AT_ONCE);
     #[cfg(target_arch = "wasm32")]
     let batch = 1usize;
     let mut out: Vec<PageImport> = Vec::with_capacity(pages.len());
