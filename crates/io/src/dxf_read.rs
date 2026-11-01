@@ -267,7 +267,7 @@ fn text_from(t: &T) -> Text {
         insert: t.p(10),
         align_pt: if h == HAlign::Left && v == VAlign::Baseline { None } else { align },
         height: t.fd(40, 0.2).max(1e-9),
-        value: t.s(1).unwrap_or_default(),
+        value: mtext_dxf::decode_line(&t.s(1).unwrap_or_default()),
         rotation: t.fd(50, 0.0).to_radians(),
         width_factor: t.fd(41, 1.0),
         oblique: t.fd(51, 0.0).to_radians(),
@@ -468,7 +468,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 text,
                 invisible: own.i(70).unwrap_or(0) & 1 != 0,
                 constant: own.i(70).unwrap_or(0) & 2 != 0,
-                prompt: own.s(3).unwrap_or_default(),
+                prompt: mtext_dxf::decode_line(&own.s(3).unwrap_or_default()),
                 props: Default::default(),
                 multiline,
                 modes: attrib_modes(own.0),
@@ -533,7 +533,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 p14: t.p(14),
                 p15: t.p(15),
                 p16: t.p(16),
-                text: t.s(1).unwrap_or_default(),
+                text: mtext_dxf::decode_line(&t.s(1).unwrap_or_default()),
                 style: t.s(3).unwrap_or_else(|| "Standard".into()),
                 // Missing or negative (a file that doesn't keep it): worked out once the drawing
                 // is read (`fill_measurements`).
@@ -3165,8 +3165,6 @@ fn helix(tags: &[Tag]) -> Helix {
     .sanitized()
 }
 
-/// An entity from the groups of a DXF record of type `kind` (without its `0` group), as the
-/// reader makes it. AutoLISP's `entmake` and `entmod` are built on it.
 /// An ATTRIB record's attribute, for a block reference on layer `ins_layer`.
 pub fn attrib_from_groups(tags: &[Tag], ins_layer: &str) -> Attrib {
     let tt = T(tags);
@@ -3190,6 +3188,12 @@ pub fn attrib_from_groups(tags: &[Tag], ins_layer: &str) -> Attrib {
     }
 }
 
+/// An entity from the groups of a DXF record of type `kind` (without its `0` group), as the
+/// reader makes it, with plain strings as [`crate::entity_groups`] gives them (not the file's
+/// `^ ` escapes). AutoLISP's `entmake` and `entmod` are built on it.
 pub fn entity_from_groups(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
-    entity(&kind.to_ascii_uppercase(), tags)
+    // AutoLISP's strings are plain: escape them as the file has them (see `entity_groups`).
+    let mut tags = tags.to_vec();
+    mtext_dxf::map_text_groups(kind, &mut tags, mtext_dxf::encode_line);
+    entity(&kind.to_ascii_uppercase(), &tags)
 }

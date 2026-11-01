@@ -29,6 +29,16 @@ struct W {
     kept: std::collections::BTreeMap<String, u64>,
     /// Handles taken (every object's, and kept ones already written).
     used: std::collections::HashSet<u64>,
+    /// TEXT, attribute and dimension strings as they are, not with the file's `^ ` and `^I`
+    /// escapes: the DWG bridge's DXF (its DXF reader takes carets and tabs as they are).
+    plain_text: bool,
+}
+
+impl W {
+    /// A single-line string (TEXT, ATTDEF/ATTRIB, DIMENSION) as this file writes it.
+    fn line(&self, s: &str) -> String {
+        if self.plain_text { s.to_string() } else { crate::dxf_read::mtext_dxf::encode_line(s) }
+    }
 }
 
 impl W {
@@ -356,6 +366,7 @@ fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
         materials: HashMap::new(),
         kept: std::collections::BTreeMap::new(),
         used: std::collections::HashSet::new(),
+        plain_text: false,
     };
     let mut sah = false;
     for (k, v) in &dm.overrides {
@@ -1026,7 +1037,8 @@ fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)
     };
     w.p(10, insert);
     w.f(40, t.height);
-    w.s(1, &t.value);
+    let value = w.line(&t.value);
+    w.s(1, value);
     if t.rotation != 0.0 {
         w.f(50, t.rotation.to_degrees());
     }
@@ -1064,6 +1076,7 @@ fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)
                 w.i(280, 0);
             }
             if let Some(prompt) = attdef_prompt {
+                let prompt = w.line(prompt);
                 w.s(3, prompt);
             }
             w.s(2, &a.tag);
@@ -1434,7 +1447,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.f(42, measured);
             if !dm.text.is_empty() {
                 // A line break is `\P` in a DXF string (a raw one would end the line).
-                w.s(1, dm.text.replace('\n', "\\P"));
+                let text = w.line(&dm.text.replace('\n', "\\P"));
+                w.s(1, text);
             }
             w.s(3, &dm.style);
             if dm.text_rotation != 0.0 {
@@ -2664,6 +2678,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
             .chain(d.blocks.values().map(|b| &b.entities))
             .flat_map(|st| st.iter().map(|e| e.handle.0))
             .collect(),
+        plain_text: bridge,
     };
     // Group handles first: each member lists its groups among its persistent reactors.
     let group_handles: Vec<String> =
@@ -3331,6 +3346,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
             materials: HashMap::new(),
             kept: std::collections::BTreeMap::new(),
             used: std::collections::HashSet::new(),
+            plain_text: false,
         };
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
@@ -4066,11 +4082,20 @@ pub fn entity_records(d: &Drawing, e: &Entity) -> Vec<(String, Vec<Tag>)> {
         materials: HashMap::new(),
         kept: std::collections::BTreeMap::new(),
         used: std::collections::HashSet::new(),
+        plain_text: false,
     };
     let cx = Ctx { target: Version::R2018, legacy_columns: true, ..Ctx::default() };
     let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadaddy_doc::Space::Model));
     entity(&mut w, d, e, "0", paper, &cx);
-    cadaddy_dxf::records(&w.t).into_iter().map(|(k, tags)| (k, tags.into_iter().filter(|t| t.code != 330).collect())).collect()
+    cadaddy_dxf::records(&w.t)
+        .into_iter()
+        .map(|(k, tags)| {
+            let mut tags: Vec<Tag> = tags.into_iter().filter(|t| t.code != 330).collect();
+            // Strings as AutoLISP sees them: `10^2`, not the file's `10^ 2`.
+            crate::dxf_read::mtext_dxf::map_text_groups(&k, &mut tags, crate::dxf_read::mtext_dxf::decode_line);
+            (k, tags)
+        })
+        .collect()
 }
 
 /// One exact hatch boundary edge (DXF Reference): 72 edge type, then the edge's data. A clockwise
