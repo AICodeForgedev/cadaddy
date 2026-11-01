@@ -1051,6 +1051,9 @@ pub(crate) fn gfci_by_sinks(sp: &mut cadaddy_walk3d::BuildingSpec) -> (usize, us
     (n, by.len())
 }
 
+/// A wall device this close to a room's outline (feet) is on the room's face of the wall.
+const ROOM_FACE_FT: f64 = 0.33;
+
 /// NEC 406.12: the receptacles of a hotel's guest rooms (and a dwelling's) are tamper-resistant.
 /// Each receptacle device in one of `rooms` (level, outline in model units) its plan doesn't mark
 /// TR is taken off as one, from the rule; the receptacles and the rooms changed.
@@ -1067,7 +1070,13 @@ pub(crate) fn tamper_resistant_in_rooms(sp: &mut cadaddy_walk3d::BuildingSpec, r
             continue;
         }
         let p = cadaddy_geom::Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf);
-        let Some(i) = rooms.iter().position(|(l, o)| same_level(l, &t.level) && cadaddy_geom::point_in_polygon(o, p)) else { continue };
+        // In the room, or drawn on its wall's face (a receptacle on the wall line, just off the
+        // room's outline: not as far as the wall's other face).
+        let Some(i) = rooms.iter().position(|(l, o)| {
+            same_level(l, &t.level) && (cadaddy_geom::point_in_polygon(o, p) || super::guided::edge_distance(o, p) <= ROOM_FACE_FT * upf)
+        }) else {
+            continue;
+        };
         let with = if mark.is_empty() || mark.eq_ignore_ascii_case("REC") { "TR".to_string() } else { format!("{mark}/TR") };
         t.set("device_type", receptacle_item(&with), "rule");
         t.set("tamper_resistant", "NEC 406.12: a guest room's receptacles", "rule");
@@ -1653,13 +1662,15 @@ mod tests {
                 {"id": "device:Level 2:6.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [6, 5], "fields": {"type": {"value": "GFCI", "source": "plan"}}},
                 {"id": "device:Level 2:7.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [7, 5], "fields": {"type": {"value": "TR", "source": "plan"}}},
                 {"id": "device:Level 2:8.0,5.0", "kind": "switch", "level": "Level 2", "at_ft": [8, 5], "fields": {"type": {"value": "S", "source": "plan"}}},
-                {"id": "device:Level 2:50.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [50, 5], "fields": {"type": {"value": "REC", "source": "plan"}}}
+                {"id": "device:Level 2:50.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [50, 5], "fields": {"type": {"value": "REC", "source": "plan"}}},
+                {"id": "device:Level 2:20.2,9.0", "kind": "receptacle", "level": "Level 2", "at_ft": [20.2, 9], "fields": {"type": {"value": "REC", "source": "plan"}}},
+                {"id": "device:Level 2:20.6,9.0", "kind": "receptacle", "level": "Level 2", "at_ft": [20.6, 9], "fields": {"type": {"value": "REC", "source": "plan"}}}
             ]}"#,
         )
         .expect("spec");
-        // Guest room 201 on level 2: 0..20' x 0..15'.
+        // Guest room 201 on level 2: 0..20' x 0..15' (its east wall 20'..20.75').
         let room = vec![Vec2::new(0.0, 0.0), Vec2::new(240.0, 0.0), Vec2::new(240.0, 180.0), Vec2::new(0.0, 180.0)];
-        assert_eq!(super::tamper_resistant_in_rooms(&mut sp, &[("2".to_string(), room)]), (2, 1));
+        assert_eq!(super::tamper_resistant_in_rooms(&mut sp, &[("2".to_string(), room)]), (3, 1));
         let item =
             |id: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get("device_type")).map(|f| (f.value.clone(), f.source.clone()));
         assert_eq!(item("device:Level 2:5.0,5.0"), Some(("duplex receptacle, tamper-resistant".to_string(), "rule".to_string())));
@@ -1668,6 +1679,9 @@ mod tests {
         assert_eq!(item("device:Level 2:7.0,5.0"), None);
         assert_eq!(item("device:Level 2:8.0,5.0"), None);
         assert_eq!(item("device:Level 2:50.0,5.0"), None);
+        // Drawn on the room's face of its wall: the room's; on the wall's far face: not.
+        assert_eq!(item("device:Level 2:20.2,9.0").map(|i| i.0), Some("duplex receptacle, tamper-resistant".to_string()));
+        assert_eq!(item("device:Level 2:20.6,9.0"), None);
     }
 
     #[test]

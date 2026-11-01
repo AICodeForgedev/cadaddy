@@ -541,3 +541,38 @@ fn the_guided_job_fills_the_elements_properties() {
     assert!(k["room"]["filled"]["number"].as_u64().unwrap_or(0) > 0, "{:#}", k["room"]);
     assert!(k["wall"]["filled"]["type"].as_u64().unwrap_or(0) > 0, "{:#}", k["wall"]);
 }
+
+/// Two rooms sharing a 6" partition (x 19.75'–20.25'), a receptacle drawn on each face of it
+/// and one on the outer wall: each takes the room on the face it serves, none is in no room.
+#[test]
+fn a_device_on_a_shared_wall_takes_the_room_on_its_face() {
+    let _g = serial();
+    let mut d = Drawing::new_imperial();
+    let outer = [((0., 0.), (40.5, 0.)), ((40.5, 0.), (40.5, 10.)), ((40.5, 10.), (0., 10.)), ((0., 10.), (0., 0.))];
+    let left = [((0.5, 0.5), (19.75, 0.5)), ((19.75, 0.5), (19.75, 9.5)), ((19.75, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))];
+    let right = [((20.25, 0.5), (40.0, 0.5)), ((40.0, 0.5), (40.0, 9.5)), ((40.0, 9.5), (20.25, 9.5)), ((20.25, 9.5), (20.25, 0.5))];
+    for (a, b) in outer.into_iter().chain(left).chain(right) {
+        line(&mut d, "A-WALL", a, b);
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Shared Wall", None);
+    text(&mut s, "A-ROOM-TAG", [110.0, 64.0], "OFFICE");
+    text(&mut s, "A-ROOM-TAG", [116.0, 52.0], "101");
+    text(&mut s, "A-ROOM-TAG", [350.0, 64.0], "STORAGE");
+    text(&mut s, "A-ROOM-TAG", [356.0, 52.0], "102");
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}, {"layer": "A-ROOM-TAG", "role": "room_tag"}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6}],
+        "tags": [device(19.9, 5.0, "A", "", "1F0"), device(20.1, 5.0, "B", "", "1F1"), device(30.0, 0.35, "C", "", "1F2")]
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    s.execute("rooms.build", &json!({})).expect("rooms");
+    let r = fill(&mut s);
+    assert_eq!(device_of(&mut s, "A")["room"]["value"], "101", "the partition's west face: {r:#}");
+    assert_eq!(device_of(&mut s, "B")["room"]["value"], "102", "its east face");
+    assert_eq!(device_of(&mut s, "C")["room"]["value"], "102", "the outer wall's inside face");
+    assert!(r["devices_in_no_room"].as_object().is_none_or(|m| m.is_empty()), "{r:#}");
+}

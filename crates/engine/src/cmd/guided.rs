@@ -4608,6 +4608,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
         Ok(v) => {
+            // Devices in no room (outside every room, not on a room's wall): per level.
+            if let Some(m) = v.get("devices_in_no_room").and_then(Value::as_object).filter(|m| !m.is_empty()) {
+                let per: Vec<String> = m.iter().map(|(l, n)| format!("{}: {n}", if l.is_empty() { "no level" } else { l })).collect();
+                progress_line(&format!("  devices in no room: {}", per.join(", ")));
+            }
             // Boxes the partition legend gives no ring for: their wall's type is unknown.
             let untyped = v.get("wall_boxes_untyped").and_then(Value::as_u64).unwrap_or(0);
             if untyped > 0 {
@@ -6044,7 +6049,7 @@ fn numbered_scraps(rooms: &[super::bspec::RoomElement]) -> Vec<cadaddy_doc::Hand
 }
 
 /// How far `p` is from the nearest edge of the closed `outline`.
-fn edge_distance(outline: &[cadaddy_geom::Vec2], p: cadaddy_geom::Vec2) -> f64 {
+pub(crate) fn edge_distance(outline: &[cadaddy_geom::Vec2], p: cadaddy_geom::Vec2) -> f64 {
     let n = outline.len();
     (0..n)
         .map(|i| {
