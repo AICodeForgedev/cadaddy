@@ -126,6 +126,10 @@ pub const OCR_TEXT_STYLE: &str = "PDF-SHX-OCR";
 /// The layer (off) that keeps the strokes recovered text was read from: the TEXT replaces them
 /// on the sheet, and the plotted lettering is still there to check a reading against.
 pub const SHX_SOURCE_LAYER: &str = "PDF-SHX-SOURCE";
+/// Layer (off) of the OCR readings on a page with hidden text that no hidden string confirms and
+/// that read like no word (a lone letter, mostly marks: a tick, a corner or a circle misread):
+/// kept for review, not drawn as the sheet's lettering.
+pub const OCR_REVIEW_LAYER: &str = "PDF-OCR-REVIEW";
 
 impl Default for PdfOptions {
     fn default() -> Self {
@@ -2119,6 +2123,7 @@ fn settle_ocr(
                             layer: rt.layer,
                             unconfirmed: false,
                             confidence: None,
+                            review: false,
                             rotation: h.rotation,
                         })
                     }
@@ -2128,11 +2133,23 @@ fn settle_ocr(
                 circles += 1
             }
             None if !hidden.is_empty() && rt.confidence.is_some_and(|c| c < OCR_MIN_CONFIDENCE) => weak += 1,
+            // On a page whose lettering has hidden copies, a reading where none is that reads like
+            // no word is kept for review, not as the sheet's text.
+            None if !hidden.is_empty() && !reads_as_word(&rt.value) => kept.push(RecoveredText { review: true, ..rt }),
             None => kept.push(rt),
         }
     }
     kept.extend(taken.into_iter().flatten());
     (kept, from_hidden, circles, weak)
+}
+
+/// Whether an OCR reading reads like a word, a number or a mark a drawing prints (`151`, `A-1`,
+/// `XA`, `#12`): two letters or digits at least, making up most of it (not `U`, not `M L#.'`).
+fn reads_as_word(reading: &str) -> bool {
+    let t = reading.trim();
+    let alnum = t.chars().filter(|c| c.is_alphanumeric()).count();
+    let other = t.chars().filter(|c| !c.is_alphanumeric() && !c.is_whitespace()).count();
+    alnum >= 2 && alnum >= 2 * other
 }
 
 /// Whether an OCR reading reads a string: its letters and digits run in the string's order and
@@ -2223,6 +2240,8 @@ struct RecoveredText {
     unconfirmed: bool,
     /// The OCR's confidence in the reading (0..1); `None` when the value came from real text.
     confidence: Option<f64>,
+    /// An OCR reading for review only ([`OCR_REVIEW_LAYER`]).
+    review: bool,
     /// The lettering's direction in degrees, counter-clockwise (90: reading up the sheet).
     rotation: f64,
 }
@@ -2320,6 +2339,7 @@ fn recover_shx_from_hidden(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f
             layer,
             unconfirmed: false,
             confidence: None,
+            review: false,
             rotation: 0.0,
         });
     }
@@ -2443,6 +2463,7 @@ fn recover_shx_fallback(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f64)
                 layer: t.layer.clone(),
                 unconfirmed: false,
                 confidence: None,
+                review: false,
                 rotation: 0.0,
             });
         }
@@ -3360,6 +3381,7 @@ fn recover_shx_ocr_upright(strokes: &[Stroke], sheet: (f64, f64), excluded: &Has
                 layer,
                 unconfirmed: false,
                 confidence: Some(confidence),
+                review: false,
                 rotation: 0.0,
             };
             if mark { marks.push(text) } else { result.push(text) }
@@ -4500,6 +4522,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             layer_set.entry(SHX_SOURCE_LAYER.into()).or_insert((Color::Index(8), Lineweight::Default));
             return (SHX_SOURCE_LAYER.into(), color, lw);
         }
+        if kind == "ocr_review" {
+            layer_set.entry(OCR_REVIEW_LAYER.into()).or_insert((Color::Index(8), Lineweight::Default));
+            return (OCR_REVIEW_LAYER.into(), color, lw);
+        }
         match mode {
             LayerMode::Pdf => {
                 let name = layer.clone().unwrap_or_else(|| "0".into());
@@ -4969,7 +4995,11 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         if rt.value.is_empty() || symbol_ocr_indices.contains(&i) {
             continue;
         }
-        let (layer, color, lw) = place(if mode == LayerMode::Content { "shx_text" } else { "text" }, rt.pen, &rt.layer);
+        let (layer, color, lw) = if rt.review {
+            place("ocr_review", rt.pen, &rt.layer)
+        } else {
+            place(if mode == LayerMode::Content { "shx_text" } else { "text" }, rt.pen, &rt.layer)
+        };
         let p = sp(rt.at.0, rt.at.1);
         let text = Text {
             insert: Vec3::new(p.x, p.y, 0.0),
@@ -5104,7 +5134,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             None => d.layers.push(Layer { name: name.clone(), color: *color, lineweight: *lw, ..Layer::default() }),
         }
     }
-    for l in d.layers.iter_mut().filter(|l| l.name == HIDDEN_TEXT_LAYER || l.name == SHX_SOURCE_LAYER) {
+    for l in d.layers.iter_mut().filter(|l| l.name == HIDDEN_TEXT_LAYER || l.name == SHX_SOURCE_LAYER || l.name == OCR_REVIEW_LAYER) {
         l.on = false;
     }
     if added >= MAX_OBJECTS {
@@ -5702,6 +5732,42 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readings_no_hidden_string_confirms_and_no_word_are_kept_for_review() {
+        let pen = Pen { rgb: [0, 0, 0], lw: 0, transp: 0 };
+        let hidden = TextOut {
+            at: (100.0, 100.0),
+            end: (130.0, 100.0),
+            height: 6.0,
+            rotation: 0.0,
+            width_factor: 1.0,
+            value: "Hello".into(),
+            pen,
+            layer: Some(HIDDEN_TEXT_LAYER.into()),
+            style: None,
+            order: 0,
+        };
+        let read = |v: &str, at: (f64, f64)| RecoveredText {
+            at,
+            height: 6.0,
+            value: v.into(),
+            stroke_indices: HashSet::new(),
+            pen,
+            layer: None,
+            unconfirmed: false,
+            confidence: Some(0.9),
+            review: false,
+            rotation: 0.0,
+        };
+        let ocr = vec![read("U", (300.0, 300.0)), read("M L#.'", (320.0, 300.0)), read("151", (400.0, 300.0)), read("A-1", (420.0, 300.0))];
+        let (kept, _, _, _) = settle_ocr(ocr, &[hidden], &[], &mut []);
+        let review: Vec<(&str, bool)> = kept.iter().map(|r| (r.value.as_str(), r.review)).collect();
+        assert_eq!(review, [("U", true), ("M L#.'", true), ("151", false), ("A-1", false)]);
+        // A page with no hidden text keeps its readings as lettering (its sheets register by them).
+        let (kept, _, _, _) = settle_ocr(vec![read("U", (300.0, 300.0))], &[], &[], &mut []);
+        assert!(kept.iter().all(|r| !r.review));
+    }
 
     #[test]
     fn scale_notes() {
