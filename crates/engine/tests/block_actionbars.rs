@@ -162,3 +162,23 @@ fn bvhide_refuses_bad_input() {
     let hs = block_handles(&s, "Sign");
     assert!(s.execute("bvhide", &json!({ "handles": [hs[0]], "state": "Nope" })).is_err());
 }
+
+fn short_reference() -> (Session, String) {
+    let (mut s, _a, _b) = sign();
+    let r = s.execute("insert", &json!({ "name": "Sign", "at": [0, 0] })).unwrap();
+    let h = r["handle"].as_str().unwrap().to_string();
+    let r = s.execute("blocks.reference", &json!({ "handle": h })).unwrap();
+    let name = r["properties"][0]["name"].as_str().unwrap().to_string();
+    s.execute("blocks.reference.set", &json!({ "handle": h, "name": name, "value": "Short" })).unwrap();
+    (s, h)
+}
+
+#[test]
+fn explode_of_a_dynamic_reference_leaves_out_what_its_state_hides() {
+    let (mut s, h) = short_reference();
+    let r = s.execute("explode", &json!({ "handles": [h] })).unwrap();
+    assert_eq!(r["handles"].as_array().unwrap().len(), 1, "only the short line: {r}");
+    let (mut s, h) = short_reference();
+    let r = s.execute("burst", &json!({ "handles": [h] })).unwrap();
+    assert_eq!(r["handles"].as_array().unwrap().len(), 1, "BURST agrees: {r}");
+}
