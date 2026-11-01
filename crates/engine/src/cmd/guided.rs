@@ -6218,6 +6218,10 @@ fn arch_placer(
     };
     lap("level views sampled");
     let view_fits: std::sync::Mutex<std::collections::HashMap<usize, Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
+    // Each level's base point (where the building's origin is on its plan), once the build has
+    // registered the storeys (shell corners alone are feet off: a fit moved by them lost devices).
+    let bases: Vec<(String, [f64; 2])> =
+        sp.levels.iter().filter_map(|l| Some((level_key(&l.name), l.base.filter(|b| b.iter().all(|v| v.is_finite()))?))).collect();
     let plan_lines_v = plan_lines.clone();
     let fits: std::sync::Mutex<std::collections::HashMap<(i64, i64, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
     let place = move |p: [f64; 2], level: &str, lands: &dyn Fn(&cadaddy_mepfix::tagid::Sim) -> bool| {
@@ -6229,6 +6233,18 @@ fn arch_placer(
                 let id = (bg.min.x.round() as i64, bg.min.y.round() as i64, key.clone());
                 if let Some(f) = fits.lock().ok()?.get(&id) {
                     return f.filter(|m| lands(m));
+                }
+                // The same view fitted for another level: the levels' plans lie apart by their
+                // base points (a view of the typical floor is asked for each of its levels).
+                let base = |k: &str| bases.iter().find(|(b, _)| b == k).map(|(_, v)| *v);
+                let fitted =
+                    fits.lock().ok()?.iter().find(|((x, y, k), _)| *x == id.0 && *y == id.1 && *k != key).map(|((_, _, k), f)| (k.clone(), *f));
+                if let Some((k, f)) = fitted
+                    && let (Some(from), Some(to)) = (base(&k), base(&key))
+                {
+                    let got = f.map(|m| cadaddy_mepfix::tagid::Sim { tx: m.tx + to[0] - from[0], ty: m.ty + to[1] - from[1], ..m });
+                    fits.lock().ok()?.insert(id, got);
+                    return got.filter(|m| lands(m));
                 }
                 let tgt = plan_lines.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
                 let started = web_time::Instant::now();

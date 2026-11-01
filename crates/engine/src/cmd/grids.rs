@@ -961,6 +961,9 @@ pub(crate) fn linework_fit_within(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, h
 /// copies are among them, so a placement as good one bay over shows in the margin.
 const PART_OFFSETS: usize = 6;
 
+/// Scales a linework fit tries at most (1% apart).
+const MAX_FIT_SCALES: usize = 1_000;
+
 /// [`linework_fit_within`] for a view of a part of the floor (an enlarged plan of a few rooms):
 /// it may be any size under the plan's, and each scale proposes its best few offsets, so the
 /// margin says when it fits as well elsewhere (a run of identical rooms).
@@ -977,17 +980,21 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
     // A few thousand source points are enough to score with.
     let stride = (src.len() / 2000).max(1);
     let few: Vec<Vec2> = src.iter().step_by(stride).copied().collect();
-    let mut cands: Vec<(f64, f64, (i64, i64))> = Vec::new();
     // A view with neither grids nor tags is the whole floor: placed, it spans half the plan's
     // linework or more (not a shrunk copy in a dense corner).
     let (sb, tb) = (cadaddy_geom::Bounds2::from_points(few.iter().copied()), cadaddy_geom::Bounds2::from_points(tgt.iter().copied()));
     let (sw, tw) = (sb.width().max(sb.height()), tb.width().max(tb.height()));
+    let mut scales = Vec::new();
     let mut s = lo;
-    while s <= hi {
-        if (whole && sw * s < 0.5 * tw) || sw * s > 1.2 * tw {
-            s *= 1.01;
-            continue;
+    while s <= hi && scales.len() < MAX_FIT_SCALES {
+        if !((whole && sw * s < 0.5 * tw) || sw * s > 1.2 * tw) {
+            scales.push(s);
         }
+        s *= 1.01;
+    }
+    // Each scale's proposals on their own (in parallel; kept in scale order).
+    let propose = |&s: &f64| -> Vec<(f64, f64, (i64, i64))> {
+        let mut cands = Vec::new();
         let scells: std::collections::HashSet<(i64, i64)> =
             few.iter().map(|p| ((p.x * s / coarse).floor() as i64, (p.y * s / coarse).floor() as i64)).collect();
         let mut votes: std::collections::HashMap<(i64, i64), u32> = std::collections::HashMap::new();
@@ -1011,12 +1018,18 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
                 cands.push((f64::from(n) / scells.len() as f64, s, o));
             }
         }
-        s *= 1.01;
-    }
+        cands
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let cands: Vec<(f64, f64, (i64, i64))> = {
+        use rayon::prelude::*;
+        scales.par_iter().flat_map_iter(propose).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let cands: Vec<(f64, f64, (i64, i64))> = scales.iter().flat_map(propose).collect();
     let fine = Occupancy::new(tgt, 12.0 * k, 1);
     // Refine every scale's proposal on the 1' grid: scale ±0.5%, offset within two coarse cells.
-    let mut refined: Vec<(f64, f64, Vec2)> = Vec::new();
-    for &(_, s0, o) in &cands {
+    let refine = |&(_, s0, o): &(f64, f64, (i64, i64))| -> (f64, f64, Vec2) {
         let t0 = Vec2::new(o.0 as f64 * coarse, o.1 as f64 * coarse);
         let mut best = (0.0, s0, t0);
         for si in -1..=1 {
@@ -1038,8 +1051,15 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
         let under: Vec<Vec2> = tgt.iter().copied().filter(|p| placed.contains(*p)).step_by((tgt.len() / 20_000).max(1)).collect();
         let precision = if under.is_empty() { 0.0 } else { under.iter().filter(|p| mine.hit(**p)).count() as f64 / under.len() as f64 };
         let f = if best.0 + precision > 0.0 { 2.0 * best.0 * precision / (best.0 + precision) } else { 0.0 };
-        refined.push((f, s, t));
-    }
+        (f, s, t)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut refined: Vec<(f64, f64, Vec2)> = {
+        use rayon::prelude::*;
+        cands.par_iter().map(refine).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let mut refined: Vec<(f64, f64, Vec2)> = cands.iter().map(refine).collect();
     refined.sort_by(|a, b| b.0.total_cmp(&a.0));
     // Polish the best few on 3" steps and 0.1% of scale: a right fit a few inches off loses
     // points to a wrong one that happens to sit on lines.

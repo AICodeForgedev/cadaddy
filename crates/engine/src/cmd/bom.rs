@@ -127,7 +127,19 @@ fn add(lines: &mut Vec<Line>, l: Line) {
     if l.net <= 0.0 || lines.len() >= MAX_LINES {
         return;
     }
-    match lines.iter_mut().find(|x| x.key(true, true) == l.key(true, true) && x.status == l.status && x.rule == l.rule) {
+    // The fields compared in place (a formatted key for each line of a long takeoff was most of
+    // its time).
+    let same = |x: &Line| {
+        x.item == l.item
+            && x.size == l.size
+            && x.level == l.level
+            && x.circuit == l.circuit
+            && x.category == l.category
+            && x.trade == l.trade
+            && x.status == l.status
+            && x.rule == l.rule
+    };
+    match lines.iter_mut().rev().find(|x| same(x)) {
         Some(x) => merge(x, l),
         None => lines.push(l),
     }
