@@ -14,7 +14,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .files()
             .menu(&["Tools", "Load Application..."])
             .alias(&["ap"])
-            .params("{path: .lsp file} | {name, data: base64 | text} → {value?, commands: [commands the file defined], error?}")
+            .params("{path: .lsp file} | {name, data?: base64, text?: the source instead of data} → {value?, commands: [commands the file defined], error?}")
             .noundo()
             .interactive(|_| Ok(Box::new(ApploadM))),
         CommandSpec::new("lisp", "Evaluate LISP", run_lisp)

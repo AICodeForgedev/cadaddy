@@ -344,7 +344,47 @@ pub(super) fn manifest(d: &Drawing, thumbnail: bool) -> Vec<u8> {
 
 /// The header chunk's payload.
 pub(super) fn header(d: &Drawing) -> Result<Vec<u8>, String> {
-    Ok(tokens::encode(&value(&d.header)?))
+    // A variable holding a NaN or infinite number would be written as null, which no variable
+    // reads back (and used to make the whole header unreadable): it is left out.
+    let finite = |v: &cadaddy_doc::HVal| match v {
+        cadaddy_doc::HVal::Real(r) => r.is_finite(),
+        cadaddy_doc::HVal::Point(p) => p.x.is_finite() && p.y.is_finite() && p.z.is_finite(),
+        _ => true,
+    };
+    let kept = cadaddy_doc::Header { vars: d.header.vars.iter().filter(|(_, v)| finite(v)).map(|(k, v)| (k.clone(), v.clone())).collect() };
+    Ok(tokens::encode(&value(&kept)?))
+}
+
+/// The header read variable by variable: one that doesn't read is named in a note and left at
+/// its default, the others are kept.
+fn header_from(v: Value, notes: &mut Vec<String>) -> Option<cadaddy_doc::Header> {
+    let Value::Object(mut top) = v else {
+        notes.push("the drawing settings (header) couldn't be read: not a list of settings".into());
+        return None;
+    };
+    let Some(Value::Object(vars)) = top.remove("vars") else {
+        notes.push("the drawing settings (header) couldn't be read: no list of settings in it".into());
+        return None;
+    };
+    let mut h = cadaddy_doc::Header::default();
+    let mut bad: Vec<String> = Vec::new();
+    for (name, val) in vars {
+        match serde_json::from_value::<cadaddy_doc::HVal>(val) {
+            Ok(x) => {
+                h.vars.insert(name, x);
+            }
+            Err(_) => bad.push(name),
+        }
+    }
+    if !bad.is_empty() {
+        let more = bad.len().saturating_sub(10);
+        let tail = if more > 0 { format!(" and {more} more") } else { String::new() };
+        notes.push(format!(
+            "the drawing settings (header) couldn't be read for {}{tail}: those stay at their defaults, the other settings were kept",
+            bad.iter().take(10).cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    Some(h)
 }
 
 /// Where each field of [`Drawing`] is persisted. The destructure names every field (no `..`), so
@@ -629,7 +669,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
         };
         match &c.tag {
             b"HEAD" => {
-                if let Some(h) = take(v, "the header", &mut rep.notes) {
+                if let Some(h) = header_from(v, &mut rep.notes) {
                     d.header = h;
                 }
             }

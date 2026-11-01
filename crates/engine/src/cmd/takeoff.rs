@@ -29,7 +29,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Inquiry", "Quantity Takeoff"])
             .alias(&["qto"])
             .params(
-                "{mode?: \"length\" (default) | \"area\", handles? | layers?: \"E-*,P-*\" (wildcards; default: every object in the current space), waste?: percent added (default 0; the waste column is left out at 0), nested?: bool (default true: shapes inside block references, arrays and xrefs count, on the layer they are drawn on), clipped?: bool (default true: an XCLIP boundary limits what counts, as drawn; false counts whole blocks), file?: path (.csv; .txt tab-separated), at?: [x,y] (insert a table), title?} → {mode, unit, rows: [{layer, objects, drawing, real, withWaste}], total: {objects, drawing, real, withWaste}, columns, file?, table?}",
+                "{force?: bool (replace an existing file; otherwise it is refused), mode?: \"length\" (default) | \"area\", handles? | layers?: \"E-*,P-*\" (wildcards; default: every object in the current space), waste?: percent added (default 0; the waste column is left out at 0), nested?: bool (default true: shapes inside block references, arrays and xrefs count, on the layer they are drawn on), clipped?: bool (default true: an XCLIP boundary limits what counts, as drawn; false counts whole blocks), file?: path (.csv; .txt tab-separated), at?: [x,y] (insert a table), title?} → {mode, unit, rows: [{layer, objects, drawing, real, withWaste}], total: {objects, drawing, real, withWaste}, columns, file?, table?}",
             )
             // Undoable: `at` inserts a table, and U must take it away (the waste percentage it
             // remembers in the header goes back with it).
@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("takeoff.layers", "Layer Quantity Takeoff", run)
             .alias(&["qtolayers"])
             .params(
-                "{mode?: \"length\" (default) | \"area\", handles? | layers?: \"E-*,P-*\" (wildcards; default: every object in the current space), waste?: percent added (default 0; the waste column is left out at 0), nested?: bool (default true), clipped?: bool (default true), file?: path (.csv; .txt tab-separated), at?: [x,y] (insert a table), title?} → {mode, unit, rows: [{layer, objects, drawing, real, withWaste}], total: {objects, drawing, real, withWaste}, columns, file?, table?}",
+                "{force?: bool (replace an existing file; otherwise it is refused), mode?: \"length\" (default) | \"area\", handles? | layers?: \"E-*,P-*\" (wildcards; default: every object in the current space), waste?: percent added (default 0; the waste column is left out at 0), nested?: bool (default true), clipped?: bool (default true), file?: path (.csv; .txt tab-separated), at?: [x,y] (insert a table), title?} → {mode, unit, rows: [{layer, objects, drawing, real, withWaste}], total: {objects, drawing, real, withWaste}, columns, file?, table?}",
             )
             .interactive(|_| Ok(Box::new(TakeoffM::default()))),
     ]
@@ -318,6 +318,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         out["limit"] = json!(MAX_SHAPES);
     }
     if let Some(path) = str_param(p, "file").filter(|f| !f.trim().is_empty()) {
+        super::exchange::guard_output(s, "takeoff", p, path)?;
         let tab = std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("txt"));
         write_file(path, &csv(&columns, &cells, if tab { '\t' } else { ',' }))?;
         out["file"] = json!(path);

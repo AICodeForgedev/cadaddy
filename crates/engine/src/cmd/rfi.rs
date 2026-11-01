@@ -35,7 +35,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{id, status?: open|sent|answered|closed, answer?: text, severity?: high|medium|low} → {item}: tracks an item in the spec (items from the spec's own gaps are copied into it)"),
         CommandSpec::new("rfi.export", "Export RFI List", run_export)
             .params(
-                "{path: .csv|.xlsx|.pdf, format?: csv|xlsx|pdf (default from the extension), pictures?: bool (default true; XLSX/PDF: a picture of the built model at each item, saved beside the file in <name>-pictures/), level?, kind?, severity?, status?} → {path, format, items, pictures}",
+                "{force?: bool (replace an existing file; otherwise it is refused), path: .csv|.xlsx|.pdf, format?: csv|xlsx|pdf (default from the extension), pictures?: bool (default true; XLSX/PDF: a picture of the built model at each item, saved beside the file in <name>-pictures/), level?, kind?, severity?, status?} → {path, format, items, pictures}",
             )
             .noundo(),
     ]
@@ -158,7 +158,7 @@ fn picture(s: &mut Session, sp: &BuildingSpec, r: &Rfi, path: &str) -> Option<()
     // Its place and 15' round it (or its extent and 6' round that), from the south-west above.
     let w = window(sp, r).map(|b| b.expand(4.0 * upf)).unwrap_or_else(|| Bounds2::from_points([Vec2::new(x, y)]).expand(15.0 * upf));
     let around = [w.min.x, w.min.y, w.max.x, w.max.y];
-    let req = json!({"level": level.name, "dir": [-0.6, -1.0, 0.9], "around": around, "mark": [x, y], "width": 640, "height": 480, "path": path});
+    let req = json!({"level": level.name, "dir": [-0.6, -1.0, 0.9], "around": around, "mark": [x, y], "width": 640, "height": 480, "path": path, "force": true});
     s.execute("model.render", &req).ok().map(|_| ())
 }
 
@@ -303,6 +303,7 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     if !["csv", "xlsx", "pdf"].contains(&format.as_str()) {
         return Err(bad("rfi.export", "`format` is csv, xlsx or pdf"));
     }
+    super::exchange::guard_output(s, "rfi.export", p, &path)?;
     let (sp, list) = items(s, "rfi.export", p)?;
     let want = bool_or(p, "pictures", true) && format != "csv";
     let pictures = if want { pictures_for(s, &sp, &list, &path) } else { vec![None; list.len()] };

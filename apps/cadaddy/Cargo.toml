@@ -60,6 +60,7 @@ hidapi = { version = "2.6.7", default-features = false, features = ["windows-nat
 # setting (system_animations.rs). Already in Cargo.lock through wgpu's DirectX 12 backend.
 # The enhanced metafile a copy puts on the clipboard (sysclip.rs) goes through SetEnhMetaFileBits and SetClipboardData.
 windows = { version = "0.62", features = ["UI_ViewManagement", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_DataExchange"] }
+cadaddy-winclip = { path = "../../crates/winclip" }
 # Copies go on the clipboard as CADaddy objects and as a picture together (sysclip.rs): safe
 # clipboard formats API. Already in Cargo.lock through arboard; pinned to that version (5.4.1 was yanked; 5.4.3 since 10-23).
 clipboard-win = "=5.4.3"

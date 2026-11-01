@@ -157,7 +157,13 @@ fn objects_kept(a: &cadaddy_doc::EntityStore, b: &cadaddy_doc::EntityStore, dept
     }
     a.is_empty()
         || (sampled(a.len()) == sampled(b.len())
-            && sample(a).zip(sample(b)).all(|(e, f)| kept(&content(v(&e.kind)), &content(v(&f.kind)), depth + 2)))
+            && sample(a).zip(sample(b)).all(|(e, f)| {
+                // The same placeholders the detail list skips ([`compare_pair`]), or a category is
+                // reported with nothing listed under it.
+                let (mut ka, mut kb) = (content(v(&e.kind)), content(v(&f.kind)));
+                drop_placeholders(&e.kind, &mut [&mut ka, &mut kb]);
+                kept(&ka, &kb, depth + 2)
+            }))
 }
 
 /// The objects of a list compared: every [`step`]th.
@@ -403,6 +409,13 @@ fn compare_pair(e: &cadaddy_doc::Entity, f: &cadaddy_doc::Entity, out: &mut Loss
         out.add(format!("{kind} objects (written as {})", kind_name(&kb)), "changed", h, name);
         return;
     }
+    // A typed object read back as the file's raw record (a HELIX or LIGHT the native DWG reader
+    // doesn't decode): kept as stored, but no longer editable as its kind.
+    let raw = |k: &serde_json::Value| k.get("type").and_then(serde_json::Value::as_str) == Some("unknown");
+    if raw(&kb) && !raw(&ka) {
+        out.add(format!("{kind} objects (written as a stored {kind} record, not editable)"), "changed", h, name);
+        return;
+    }
     for field in changed_fields(&ka, &kb) {
         // A subdivision mesh in a file older than meshes: its faces as a polyface mesh.
         if kind == "mesh" && field == "kind" {
@@ -524,7 +537,14 @@ pub fn check_written(
     read: fn(&[u8], &str) -> Result<Drawing, String>,
 ) -> Result<(Vec<&'static str>, Vec<Loss>), String> {
     let back = opened(read(bytes, name)?);
-    Ok((lost_parts(d, &back), losses_of(d, &back)))
+    let (mut lost, detail) = (lost_parts(d, &back), losses_of(d, &back));
+    // A category is derived from the same comparison as the detail: one with nothing listed under
+    // it is a disagreement between the two, and a notice that names nothing helps nobody.
+    debug_assert!(lost.is_empty() || !detail.is_empty(), "notKept {lost:?} with an empty notKeptDetail");
+    if detail.is_empty() {
+        lost.clear();
+    }
+    Ok((lost, detail))
 }
 
 /// A drawing read back as opening it gives it: table formulas whose values the file didn't keep
@@ -532,6 +552,12 @@ pub fn check_written(
 fn opened(mut back: Drawing) -> Drawing {
     crate::cmd::table::cells::fill_missing_values(&mut back);
     back
+}
+
+/// The categories the save notice names for `d` against `back` ([`check_written`]'s first half):
+/// for the differential fuzzing, which checks that none is named without a detail.
+pub fn parts_between(d: &Drawing, back: &Drawing) -> Vec<&'static str> {
+    lost_parts(d, &opened(back.clone()))
 }
 
 /// [`losses`] of `d` against `back`, a copy of it written and read back by the caller.
@@ -723,6 +749,31 @@ mod tests {
         // A file that can't be written or read back: nothing to say here (saving reports it).
         let fails: fn(&Drawing, &str) -> Result<Vec<u8>, String> = |_, _| Err("no".into());
         assert!(not_kept(&d, "x.dwg", fails, read).is_empty());
+    }
+
+    #[test]
+    fn a_typed_object_read_back_as_a_raw_record_is_reported() {
+        let typed = |h: u64| {
+            cadaddy_doc::Entity::new(
+                cadaddy_doc::Handle(h),
+                cadaddy_doc::EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::new(1.0, 2.0, 0.0), radius: 1.0 }),
+            )
+        };
+        let raw = |h: u64| {
+            cadaddy_doc::Entity::new(
+                cadaddy_doc::Handle(h),
+                cadaddy_doc::EntityKind::Unknown(cadaddy_doc::Unknown { dxf_type: "CIRCLE".into(), tags: Vec::new() }),
+            )
+        };
+        let (mut d, mut back) = (Drawing::new_imperial(), Drawing::new_imperial());
+        d.model.push(typed(0x100));
+        back.model.push(raw(0x100));
+        let notes = losses_between(&d, &back);
+        assert!(notes.iter().any(|l| l.feature.starts_with("circle objects (written as") && l.handles == vec!["100".to_string()]), "{notes:?}");
+        // A raw record read back raw loses nothing.
+        let mut same = Drawing::new_imperial();
+        same.model.push(raw(0x100));
+        assert!(losses_between(&same, &same.clone()).is_empty());
     }
 
     #[test]

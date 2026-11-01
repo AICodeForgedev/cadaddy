@@ -669,6 +669,16 @@ fn verify_failure(path: &str, check: &Value) -> Option<String> {
             ));
         }
     }
+    // The parts are sound but reading left something out (the header's settings, say): say what.
+    if bad == 0
+        && index == "sound"
+        && let Some(notes) = check["notes"].as_array().filter(|n| !n.is_empty())
+    {
+        let first = notes.first().and_then(Value::as_str).unwrap_or("something couldn't be read");
+        let more = notes.len().saturating_sub(1);
+        let tail = if more > 0 { format!(" (and {more} more in the report)") } else { String::new() };
+        return Some(format!("{path}: {first}{tail}"));
+    }
     Some(format!("{path}: damaged ({bad} damaged parts, index {index}; see the report)"))
 }
 
@@ -1947,6 +1957,14 @@ mod b4polish_tests {
         }
         let why = verify_failure("f.cdy", &cadaddy_io::cdy::verify(&hurt).unwrap()).unwrap();
         assert!(why.contains("damaged"), "{why}");
+    }
+
+    /// B9-016: `verify` on a file whose header can't be read says that, not "0 damaged parts".
+    #[test]
+    fn verify_names_an_unreadable_header() {
+        let check = json!({"ok": false, "index": "sound", "chunks": [{"tag": "HEAD", "live": true}], "notes": ["the drawing settings (header) couldn't be read for THICKNESS: those stay at their defaults, the other settings were kept"]});
+        let why = verify_failure("f.cdy", &check).unwrap();
+        assert!(why.contains("drawing settings (header) couldn't be read") && !why.contains("0 damaged parts"), "{why}");
     }
 
     /// B7-023: `verify` on a file with a whole second copy appended says that, and that the first copy is sound.

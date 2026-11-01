@@ -933,6 +933,7 @@ pub fn dimension_geometry_with(d: &Dimension, st: &DimStyle, dimscale: f64, font
                 (v, d.p14.xy(), d.p15.xy(), d.p16.xy())
             };
             let r = vertex.dist(arc_pt).max(1e-9);
+            let (a1, a2) = if matches!(d.kind, DimKind::Angular) { two_line_sector(vertex, a1, a2, arc_pt) } else { (a1, a2) };
             let s = vertex.angle_to(a1);
             let e = vertex.angle_to(a2);
             let arc = if cadaddy_geom::angle_in_sweep(vertex.angle_to(arc_pt), s, e) { Arc::new(vertex, r, s, e) } else { Arc::new(vertex, r, e, s) };
@@ -1557,4 +1558,24 @@ mod text_budget_tests {
         assert!(!text.contains("<>"));
         assert!(text.len() <= MAX_DIM_TEXT && text.len() >= MAX_DIM_TEXT - 1);
     }
+}
+
+/// Two-line angular dimension: the leg ends `a1`, `a2` on the rays (from `vertex`) that bound the
+/// sector holding `arc_pt`. The four sectors the two lines make are θ, 180°−θ and their opposites,
+/// so the measured angle never exceeds 180°.
+fn two_line_sector(vertex: Vec2, a1: Vec2, a2: Vec2, arc_pt: Vec2) -> (Vec2, Vec2) {
+    let (l1, l2) = (vertex.dist(a1), vertex.dist(a2));
+    let (u1, u2) = ((a1 - vertex).normalized(), (a2 - vertex).normalized());
+    if u1 == Vec2::ZERO || u2 == Vec2::ZERO || vertex.dist(arc_pt) < 1e-12 {
+        return (a1, a2);
+    }
+    let at = vertex.angle_to(arc_pt);
+    for (r1, r2) in [(u1, u2), (-u1, u2), (-u1, -u2), (u1, -u2)] {
+        let (s, e) = (r1.angle(), r2.angle());
+        let (lo, hi) = if ccw_sweep(s, e) <= std::f64::consts::PI { (s, e) } else { (e, s) };
+        if cadaddy_geom::angle_in_sweep(at, lo, hi) {
+            return (vertex + r1 * l1, vertex + r2 * l2);
+        }
+    }
+    (a1, a2)
 }

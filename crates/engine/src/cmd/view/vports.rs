@@ -219,7 +219,7 @@ fn joined(a: Rect, b: Rect) -> Option<Rect> {
 }
 
 fn valid_name(n: &str) -> bool {
-    !n.is_empty() && n.chars().count() <= 255 && !n.starts_with('*') && !n.chars().any(|c| "<>/\\\":;?*|,=`".contains(c))
+    !n.starts_with('*') && super::super::names::is_valid(n)
 }
 
 fn model_only(s: &Session) -> Result<()> {
@@ -326,6 +326,7 @@ fn run_vports(s: &mut Session, p: &Value) -> Result<Value> {
             model_only(s)?;
             let name = str_param(p, "name").map(str::trim).unwrap_or_default().to_string();
             if !valid_name(&name) {
+                super::super::names::check("vports", "viewport configuration", &name)?;
                 return Err(EngineError::Other(format!("\"{name}\" is not a valid viewport configuration name.")));
             }
             // The current tile first, as in the shown configuration.

@@ -191,6 +191,21 @@ fn find_text_reads_texts_and_render_shows_one_area() {
     assert_eq!(w["count"], 2);
     assert_eq!(tool(&mut s, "find_text", json!({"layer": "nope"}))["count"], 0);
 
+    // `pattern` is read as `contains`, and says nothing about being ignored.
+    let p = call(&mut s, 8, "tools/call", json!({"name": "find_text", "arguments": {"pattern": "cocina"}}));
+    let text = p["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("COCINA") && !text.contains("not a parameter"), "{text}");
+    // A bad value is one message: no warning about another name glued onto the error.
+    let bad = call(
+        &mut s,
+        8,
+        "tools/call",
+        json!({"name": "execute", "arguments": {"command": "circle", "params": {"center": [0, 0], "radius": "nan"}, "extra": 1}}),
+    );
+    let text = bad["result"]["content"][0]["text"].as_str().or(bad["error"]["message"].as_str()).unwrap_or("");
+    assert_eq!(bad["result"]["isError"], json!(true), "{text}");
+    assert!(!text.contains("it was ignored"), "{text}");
+
     // A render of one area takes the area's shape.
     let r = call(&mut s, 9, "tools/call", json!({"name": "render", "arguments": {"window": [[0, 0], [10, 5]]}}));
     let c = &r["result"]["content"][0];
@@ -787,8 +802,8 @@ fn unknown_tool_arguments_are_warned_about() {
     let r = call(&mut s, 2, "tools/call", json!({"name": "list_commands", "arguments": {"filter": "circle"}}));
     assert!(!r.to_string().contains("is not a parameter"), "{r}");
     // A tool with no arguments warns too.
-    let r = call(&mut s, 3, "tools/call", json!({"name": "cancel", "arguments": {"zzz": true}}));
-    assert!(r.to_string().contains("`zzz` is not a parameter of cancel"), "{r}");
+    let r = call(&mut s, 3, "tools/call", json!({"name": "get_prompt", "arguments": {"zzz": true}}));
+    assert!(r.to_string().contains("`zzz` is not a parameter of get_prompt"), "{r}");
 }
 
 /// B4-032: a schema error is worded for people, not as the JSON Schema it came from.
@@ -844,6 +859,35 @@ fn save_has_a_force_parameter() {
     let _ = std::fs::remove_file(&path);
     assert_ne!(r["result"]["isError"], json!(true), "{r}");
     assert!(!r.to_string().contains("is not a parameter"), "{r}");
+}
+
+/// Headless there is no user to ask: `save {path}` onto another existing file is refused, `force: true` replaces it.
+#[test]
+fn save_onto_another_existing_drawing_needs_force() {
+    use cadaddy_engine::cmd::file::{IoHooks, set_io};
+    set_io(IoHooks {
+        read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
+        write: |_, _| Ok(b"saved".to_vec()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-overwrite-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let other = dir.join("other.dxf");
+    std::fs::write(&other, b"another drawing").unwrap();
+    let path = other.to_string_lossy().into_owned();
+    let r = call(&mut s, 1, "tools/call", json!({"name": "save", "arguments": {"path": path}}));
+    assert_eq!(r["result"]["isError"], json!(true), "{r}");
+    assert!(r.to_string().contains("force:true"), "{r}");
+    assert_eq!(std::fs::read(&other).unwrap(), b"another drawing");
+    let r = call(&mut s, 2, "tools/call", json!({"name": "save", "arguments": {"path": path, "force": true}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert_ne!(std::fs::read(&other).unwrap(), b"another drawing");
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// B7-027: a tool whose result starts with an image (render) still carries the unknown-argument warning.
@@ -952,4 +996,103 @@ fn cancel_through_connect_reaches_the_app_while_a_render_runs() {
     s.serve_cancellable(std::io::Cursor::new(input.into_bytes()), &mut out).unwrap();
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "the render waited for the whole run: {:?}", start.elapsed());
     assert!(String::from_utf8(out).unwrap().contains("render cancelled"));
+}
+
+fn circles(s: &mut Server) -> u64 {
+    tool(s, "inspect_drawing", json!({}))["counts"]["Circle"].as_u64().unwrap_or(0)
+}
+
+#[test]
+fn typed_secureload_and_trustedpaths_changes_are_refused_headless() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let before = tool(&mut s, "get_variable", json!({"name": "SECURELOAD"}));
+    for line in ["secureload 0", "setvar secureload 0", "setvar trustedpaths /tmp/cadaddy-agentrails-x"] {
+        let r = tool(&mut s, "command_line", json!({"text": line}));
+        assert!(
+            r["error"].as_str().is_some_and(|e| e.contains("Only the user can loosen")) || r.to_string().contains("Only the user can loosen"),
+            "{line}: {r}"
+        );
+        tool(&mut s, "command_line", json!({"text": "*Cancel*"}));
+    }
+    assert_eq!(tool(&mut s, "get_variable", json!({"name": "SECURELOAD"})), before);
+}
+
+#[test]
+fn typed_commands_obey_the_dry_run_headless() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "execute", json!({"command": "agent.dryrun", "params": {"on": true}}));
+    let r = tool(&mut s, "command_line", json!({"text": "circle 0,0 3"}));
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("Dry run")), "{r}");
+    assert_eq!(circles(&mut s), 0);
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-dryrules-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("rules.json");
+    // Refused (the file would have been written): the point is that nothing is.
+    let e = call(
+        &mut s,
+        8,
+        "tools/call",
+        json!({"name": "execute", "arguments": {"command": "project.rules.export", "params": {"path": file.to_string_lossy()}}}),
+    );
+    assert!(e.to_string().contains("dry run"), "{e}");
+    assert!(!file.exists(), "the dry run wrote the rules file");
+    tool(&mut s, "execute", json!({"command": "agent.dryrun", "params": {"on": false}}));
+    tool(&mut s, "command_line", json!({"text": "circle 0,0 3"}));
+    assert_eq!(circles(&mut s), 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn headless_close_with_unsaved_changes_is_refused_on_every_route() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "circle 0,0 3"}));
+    for (name, args) in [
+        ("execute", json!({"command": "close", "params": {}})),
+        ("execute", json!({"command": "closeall", "params": {}})),
+        ("execute_many", json!({"commands": [{"command": "close", "params": {}}]})),
+    ] {
+        let r = call(&mut s, 7, "tools/call", json!({"name": name, "arguments": args}));
+        let text = r.to_string();
+        assert!(text.contains("unsaved changes"), "{name} {args}: {text}");
+    }
+    for line in ["close", "closeall"] {
+        let r = tool(&mut s, "command_line", json!({"text": line}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("unsaved changes")), "{line}: {r}");
+    }
+    assert_eq!(tool(&mut s, "list_drawings", json!({}))["drawings"].as_array().map(Vec::len), Some(1));
+    assert_eq!(circles(&mut s), 1);
+    // Said so, it closes.
+    tool(&mut s, "execute", json!({"command": "close", "params": {"discard": true}}));
+    assert_eq!(tool(&mut s, "list_drawings", json!({}))["drawings"].as_array().map(Vec::len), Some(0));
+}
+
+/// B9-022: undo/redo pass the engine's options through, and refuse what they don't have.
+#[test]
+fn undo_redo_take_engine_options_and_refuse_unknown_arguments() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
+    let count = |s: &mut Server| tool(s, "inspect_drawing", json!({"entities": false}))["counts"]["Line"].as_u64().unwrap_or(0);
+    let before = count(&mut s);
+    assert!(before > 0, "setup drew nothing");
+    // mode mark sets a mark and undoes nothing.
+    let r = call(&mut s, 1, "tools/call", json!({"name": "undo", "arguments": {"mode": "mark"}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert!(!r.to_string().contains("is not a parameter"), "{r}");
+    assert_eq!(count(&mut s), before);
+    tool(&mut s, "command_line", json!({"text": "line 0,0 20,20"}));
+    assert_eq!(count(&mut s), before + 1);
+    // mode back returns to the mark.
+    let r = call(&mut s, 2, "tools/call", json!({"name": "undo", "arguments": {"mode": "back"}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert_eq!(count(&mut s), before);
+    // redo all redoes everything undone.
+    let r = call(&mut s, 3, "tools/call", json!({"name": "redo", "arguments": {"all": true}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert_eq!(count(&mut s), before + 1);
+    // An unknown argument is refused and the history is unchanged.
+    for (name, args) in [("undo", json!({"bogus": 1})), ("redo", json!({"bogus": 1})), ("undo", json!({"count": 1, "bogus": 1}))] {
+        let r = call(&mut s, 4, "tools/call", json!({"name": name, "arguments": args}));
+        assert!(r["error"]["message"].as_str().is_some_and(|m| m.contains("is not a parameter")), "{r}");
+        assert_eq!(count(&mut s), before + 1, "{name} acted");
+    }
 }

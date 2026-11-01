@@ -707,7 +707,7 @@ fn constraints(d: &mut Drawing, all: &HashSet<Handle>, out: &mut Vec<Issue>) {
             None => kept.push(c),
         }
     }
-    d.constraints = kept;
+    d.constraints = kept.into();
 }
 
 #[cfg(test)]

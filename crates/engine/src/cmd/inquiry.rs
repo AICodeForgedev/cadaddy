@@ -209,6 +209,19 @@ fn angle_from_xy(d: Vec3) -> f64 {
     d.z.atan2(d.xy().len())
 }
 
+const DIST_TOO_LARGE: &str = "the distance is too large to compute";
+
+/// Whether the offset's length and parts are numbers that can be reported (not infinite or past
+/// the ±1e12 the commands work within).
+fn distance_ok(d: Vec3) -> bool {
+    [d.len(), d.x, d.y, d.z].iter().all(|v| v.is_finite() && v.abs() <= 1e13)
+}
+
+/// The "Distance = …" line DIST echoes for a path length.
+fn distance_line(s: &Session, d: f64) -> String {
+    if d.is_finite() && d.abs() <= 1e13 { format!("Distance = {}", fmt_d(s, d)) } else { format!("The {DIST_TOO_LARGE}.") }
+}
+
 fn dist_text(s: &Session, a: Vec3, b: Vec3) -> String {
     let d = b - a;
     format!(
@@ -234,6 +247,9 @@ fn run_dist(s: &mut Session, p: &Value) -> Result<Value> {
     let a = point3_req(s, "dist", p, "p1")?;
     let b = point3_req(s, "dist", p, "p2")?;
     let d = b - a;
+    if !distance_ok(d) {
+        return Err(bad("dist", DIST_TOO_LARGE));
+    }
     s.last_used.distance = d.len();
     Ok(json!({
         "distance": d.len(),
@@ -254,6 +270,9 @@ fn id_text(s: &Session, a: Vec3) -> String {
 
 fn run_id(s: &mut Session, p: &Value) -> Result<Value> {
     let a = point3_req(s, "id", p, "at")?;
+    if ![a.x, a.y, a.z].iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
+        return Err(bad("id", "the point is too large to report (limit \u{b1}1e12)"));
+    }
     s.last_point = a.xy();
     // `x`, `y` stay the world point.
     let u = s.ucs().to_ucs(a.xy());
@@ -336,6 +355,11 @@ fn list_text(s: &Session, h: Handle) -> String {
         space,
         h.hex()
     );
+    let eb = cadaddy_doc::entity_bounds(d, e, 0);
+    if !eb.is_empty() && !cadaddy_doc::within_limit(&eb, 1e12) {
+        t.push_str("\n                  The object lies beyond \u{b1}1e12: its values are too large to list.");
+        return t;
+    }
     match &e.kind {
         EntityKind::Line(l) => {
             t.push_str(&format!(
@@ -488,6 +512,9 @@ fn run_area(s: &mut Session, p: &Value) -> Result<Value> {
         for (sign, items, mode) in [(1.0, add, "(ADD mode)"), (-1.0, sub, "(SUBTRACT mode)")] {
             for it in items.into_iter().flatten() {
                 last = area_item(s, it)?;
+                if let Some(what) = too_large(last.0, last.1) {
+                    return Err(bad("area", format!("the {what} is too large")));
+                }
                 total += sign * last.0;
                 lines.push(format!("{mode} {}", area_text(s, last.0, last.1)));
                 lines.push(format!("Total area = {}", fmt_area(s, total)));
@@ -956,7 +983,7 @@ impl Interactive for DistM {
                     push_point(pts, &mut self.bulges, paper, false);
                     self.sources.push(source.map(|source| crate::snap::ViewportPoint { point: p, ..source }));
                     let model = model_points(&self.sources);
-                    s.echo(format!("Distance = {}", fmt_d(s, path_len(model.as_deref().unwrap_or(pts), &self.bulges))));
+                    s.echo(distance_line(s, path_len(model.as_deref().unwrap_or(pts), &self.bulges)));
                 }
                 self.length = false;
                 return Ok(Step::Continue);
@@ -966,7 +993,7 @@ impl Interactive for DistM {
                     push_point(pts, &mut self.bulges, p, self.arc);
                     self.sources.push(s.picked_viewport);
                     let model = model_points(&self.sources);
-                    s.echo(format!("Distance = {}", fmt_d(s, path_len(model.as_deref().unwrap_or(pts), &self.bulges))));
+                    s.echo(distance_line(s, path_len(model.as_deref().unwrap_or(pts), &self.bulges)));
                 }
                 Input::Keyword(k) if k == "Undo" => {
                     if pts.len() > 1 {
@@ -1052,7 +1079,7 @@ impl DistM {
     fn total(&self, s: &mut Session) -> Result<Step> {
         let model = model_points(&self.sources);
         let d = model.as_deref().or(self.multi.as_deref()).map_or(0.0, |p| path_len(p, &self.bulges));
-        s.echo(format!("Distance = {}", fmt_d(s, d)));
+        s.echo(distance_line(s, d));
         if let Some(pts) = &self.multi {
             let labels = live::running(s, pts, &self.bulges, model.as_deref());
             live::keep(s, &labels);

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use cadaddy_color::{Color, Rgb};
 use cadaddy_engine::Session;
-use cadaddy_engine::cmd::file::kept::{Loss, MAX_LISTED, losses_between};
+use cadaddy_engine::cmd::file::kept::{Loss, MAX_LISTED, losses_between, parts_between};
 use cadaddy_engine::doc::geom::{Vec2, Vec3};
 use cadaddy_engine::doc::{Block, Common, Drawing, Entity, EntityKind, Face3d, Insert, Line, Lineweight, Solid, Space, Transparency};
 use cadaddy_io::{DwgEngine, SaveOptions, Version};
@@ -958,6 +958,12 @@ fn save_reopen_differential_fuzz() {
                 continue;
             }
             let notes = losses_between(&d, &back);
+            // The notice's categories agree with its detail: none is named with nothing listed.
+            if notes.is_empty() && !parts_between(&d, &back).is_empty() {
+                found
+                    .entry((f.name.clone(), "notKept".into(), "category without detail".into()))
+                    .or_insert((seed, format!("{:?}", parts_between(&d, &back))));
+            }
             for ((what, path), ex) in unreported(&d, &back, &notes) {
                 found.entry((f.name.clone(), what, path)).or_insert((seed, ex));
             }

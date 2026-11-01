@@ -528,9 +528,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .interactive(|_| Ok(Box::new(FileM { name: "OPEN", message: "Enter name of drawing to open", run: run_open }))),
         CommandSpec::new("close", "Close", run_close)
-            .files().menu(&["File", "Close"]).key("Cmd+W").params("{index?}").noundo(),
+            .files().menu(&["File", "Close"]).key("Cmd+W").params("{index?, save?: bool, discard?: bool (agents, when no one can be asked: a drawing with unsaved changes is closed only with one of them)}").noundo(),
         CommandSpec::new("closeall", "Close All", run_closeall)
-            .files().menu(&["File", "Close All"]).enabled(always).noundo(),
+            .files().menu(&["File", "Close All"]).enabled(always).params("{save?: bool, discard?: bool (agents, when no one can be asked)}").noundo(),
         CommandSpec::new("qsave", "Save", run_qsave_reporting)
             .files().menu(&["File", "Save"]).key("Cmd+S").alias(&["save"]).params("{path?, force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved; otherwise that save is refused)} → {path, bytes, note?}").noundo(),
         CommandSpec::new("saveas", "Save As...", run_saveas_reporting)
@@ -1390,7 +1390,7 @@ fn run_save(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// A file name with no extension saves as a drawing in the default format ([`default_ext`]), as
 /// AutoCAD adds `.dwg`.
-fn with_drawing_ext(path: &str) -> String {
+pub(crate) fn with_drawing_ext(path: &str) -> String {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     if name.contains('.') || name.trim().is_empty() { path.to_string() } else { format!("{path}.{}", default_ext()) }
 }

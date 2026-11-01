@@ -121,6 +121,10 @@ fn run_attach(s: &mut Session, p: &Value) -> Result<Value> {
     if !at.is_finite() || !rot.is_finite() {
         return Err(bad("dgnattach", "`at` and `rotation` must be finite"));
     }
+    let warnings = d.read_notes.clone();
+    for w in &warnings {
+        s.echo(w.clone());
+    }
     let levels: Vec<String> = d.layers.iter().filter(|l| l.name.starts_with("Level ")).map(|l| l.name.clone()).collect();
     super::underlay::cache_page(&path, 1, d);
     let (sn, cs) = rot.sin_cos();
@@ -140,7 +144,7 @@ fn run_attach(s: &mut Session, p: &Value) -> Result<Value> {
         layers_off: Vec::new(),
     };
     let h = s.add_entity(EntityKind::Underlay(Box::new(u)))?;
-    Ok(json!({ "handle": h.hex(), "size": [size.x, size.y], "levels": levels }))
+    Ok(json!({ "handle": h.hex(), "size": [size.x, size.y], "levels": levels, "warnings": warnings }))
 }
 
 /// The DGN commands at the command line: the file's path, then the command runs as given.

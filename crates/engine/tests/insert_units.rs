@@ -147,3 +147,65 @@ fn typed_insert_of_a_file_scales_and_says_so() {
     close(scale, 1.0 / 25.4);
     assert!(s.log.iter().any(|l| l.contains("scaled by")), "{:?}", s.log);
 }
+
+fn insert_scales(s: &Session) -> Vec<f64> {
+    s.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::Insert(i) = &e.kind { Some(i.scale.x) } else { None }).collect()
+}
+
+#[test]
+fn a_file_block_inserted_again_by_name_keeps_its_source_units() {
+    hooks();
+    let dir = folder("byname");
+    let f = part(&dir, "mm.dxf", 254.0, 4);
+    let mut s = target(1);
+    s.execute("insert", &json!({ "name": "MMB", "file": f, "at": [0, 0] })).unwrap();
+    let r = s.execute("insert", &json!({ "name": "MMB", "at": [50, 0] })).unwrap();
+    close(r["unitFactor"].as_f64().unwrap(), 1.0 / 25.4);
+    let scales = insert_scales(&s);
+    assert_eq!(scales.len(), 2);
+    for sc in scales {
+        close(sc, 1.0 / 25.4);
+    }
+    // Exploded, both read 10 inches.
+    s.execute("insert", &json!({ "name": "*MMB", "at": [0, 20] })).unwrap();
+    let lens: Vec<f64> =
+        s.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::Line(l) = &e.kind { Some((l.b.x - l.a.x).abs()) } else { None }).collect();
+    assert_eq!(lens.len(), 1);
+    close(lens[0], 10.0);
+}
+
+#[test]
+fn a_block_defined_in_the_drawing_is_not_rescaled() {
+    let mut s = Session::new();
+    s.doc_mut().unwrap().header.set("INSUNITS", HVal::Int(1));
+    let l = s.execute("line", &json!({ "points": [[0, 0], [10, 0]] })).unwrap()["handles"][0].clone();
+    s.execute("block", &json!({ "name": "Own", "base": [0, 0], "handles": [l] })).unwrap();
+    s.execute("insert", &json!({ "name": "Own", "at": [0, 5] })).unwrap();
+    for sc in insert_scales(&s) {
+        close(sc, 1.0);
+    }
+}
+
+#[test]
+fn block_units_survive_a_dxf_round_trip_and_still_scale() {
+    hooks();
+    let dir = folder("roundtrip");
+    let f = part(&dir, "mm.dxf", 254.0, 4);
+    let mut s = target(1);
+    s.execute("insert", &json!({ "name": "MMB", "file": f, "at": [0, 0] })).unwrap();
+    assert_eq!(s.doc().unwrap().block("MMB").unwrap().units, 4);
+    let bytes = cadaddy_io::write(s.doc().unwrap(), "t.dxf").unwrap();
+    let back = cadaddy_io::read(&bytes, "t.dxf").unwrap();
+    assert_eq!(back.block("MMB").unwrap().units, 4);
+    // DWG and CDY keep them too.
+    for name in ["t.dwg", "t.cdy"] {
+        let bytes = cadaddy_io::write(s.doc().unwrap(), name).unwrap();
+        let again = cadaddy_io::read(&bytes, name).unwrap();
+        assert_eq!(again.block("MMB").unwrap().units, 4, "{name}");
+    }
+    let mut s2 = Session::new();
+    *s2.doc_mut().unwrap() = back;
+    s2.doc_mut().unwrap().header.set("INSUNITS", HVal::Int(1));
+    let r = s2.execute("insert", &json!({ "name": "MMB", "at": [50, 0] })).unwrap();
+    close(r["unitFactor"].as_f64().unwrap(), 1.0 / 25.4);
+}

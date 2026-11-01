@@ -221,7 +221,8 @@ fn read_dwg_bridge(bytes: &[u8]) -> Result<Drawing> {
     drop(dxf);
     dxf_read::mtext_dxf::bridge_carets_undone(&mut tags);
     let mut d = dxf_read::read_tags(tags).map_err(|e| bad(e.to_string()))?;
-    d.read_notes = notes;
+    // The bridge's notes first, then what reading the converted DXF dropped (undefined or out-of-range coordinates).
+    d.read_notes.splice(0..0, notes);
     mark_dynamic_copies_anonymous(&mut d);
     Ok(d)
 }

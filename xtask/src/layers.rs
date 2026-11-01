@@ -39,8 +39,12 @@ pub const TABLE: &[(&str, Class)] = &[
     ("dwgcodec", Class::Standalone),
     // macOS platform glue for the desktop app (Finder's open-documents event); no workspace crates.
     ("macos-open", Class::Standalone),
+    // Windows platform glue for the desktop app (the clipboard's enhanced metafile handle); no workspace crates.
+    ("winclip", Class::Standalone),
     // Lets Rhai closures call back into a mutable Session borrow (the engine's one controlled unsafe); no workspace crates.
     ("rhai-bridge", Class::Standalone),
+    // Test support: a counting global allocator (the one place a test needs `unsafe`); no workspace crates.
+    ("memcount", Class::Standalone),
     ("color", Class::Layer(0)),
     ("doc", Class::Layer(1)),
     ("constraints", Class::Layer(2)),

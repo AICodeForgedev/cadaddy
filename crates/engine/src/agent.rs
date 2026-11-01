@@ -73,6 +73,9 @@ pub struct AgentGuard {
     pub confirm: bool,
     /// The call being run came from an agent (set by the host around agent calls).
     pub from_agent: bool,
+    /// No window and no user to ask (the headless MCP server): what would wait for the user's
+    /// Allow is refused instead (closing a drawing with unsaved changes).
+    pub headless: bool,
     /// The agent call waiting for the user's answer, and the user's last answer (question,
     /// allowed) for the agent to read (`agent.journal`).
     pub pending: Option<Pending>,
@@ -84,7 +87,17 @@ pub struct AgentGuard {
 
 impl Default for AgentGuard {
     fn default() -> Self {
-        AgentGuard { dry_run: false, confirm: true, from_agent: false, pending: None, answered: None, journal: Vec::new(), request: None, next_id: 1 }
+        AgentGuard {
+            dry_run: false,
+            confirm: true,
+            from_agent: false,
+            headless: false,
+            pending: None,
+            answered: None,
+            journal: Vec::new(),
+            request: None,
+            next_id: 1,
+        }
     }
 }
 
@@ -101,6 +114,7 @@ impl Clone for AgentGuard {
             dry_run: self.dry_run,
             confirm: self.confirm,
             from_agent: self.from_agent,
+            headless: self.headless,
             pending: self.pending.clone(),
             answered: self.answered.clone(),
             journal: self.journal.clone(),
@@ -171,10 +185,65 @@ impl Session {
         {
             return Some(Err(EngineError::Other(self.ask_user(&cmd, params, question))));
         }
+        // No user to ask (`agent.confirm` off, as headless): never silently replace another file.
+        if self.agent.from_agent
+            && !self.agent.confirm
+            && !self.agent.dry_run
+            && let Some(path) = self.overwrite_target(&cmd, params)
+        {
+            return Some(Err(bad(
+                &cmd,
+                format!("{path} already exists and is not this drawing's own file: choose another name, or pass force:true to replace it"),
+            )));
+        }
         if !self.agent.dry_run {
+            // Nobody to ask: closing drawings with unsaved changes is refused the way the
+            // close tools refuse it (`save` / `discard` say what to do with them).
+            if self.agent.from_agent && self.agent.headless && matches!(cmd.as_str(), "close" | "closeall") {
+                let doc_cmd = if cmd == "close" { "document.close" } else { "document.closeall" };
+                return Some(self.execute(doc_cmd, params));
+            }
             return None;
         }
         Some(self.dry_call(&cmd, params))
+    }
+
+    /// The rails around a command an agent types at the command line (it starts without going
+    /// through [`Session::execute`]): a dry run previews it, or refuses one that needs prompts;
+    /// closing drawings waits for the user, or is refused when headless. `None`: run it normally.
+    pub(crate) fn guard_typed(&mut self, name: &str) -> Option<Result<()>> {
+        let name = name.trim();
+        let name = name.strip_prefix('\'').unwrap_or(name);
+        let lower = name.trim_start_matches(['_', '.', '-']).to_ascii_lowercase();
+        let dashed = crate::cmd::resolve_alias(&name.trim_start_matches(['_', '.']).to_ascii_lowercase());
+        let id = if crate::find_command(&dashed).is_some() { dashed } else { crate::cmd::resolve_alias(&lower) };
+        let spec = crate::find_command(&id)?;
+        if spec.id.starts_with("agent.") {
+            return None;
+        }
+        if let Some(r) = self.agent.request.as_mut() {
+            r.commands += 1;
+        }
+        if self.agent.dry_run {
+            if spec.interactive.is_some() || crate::cmd::typed_ask::machine_for(spec.id).is_some() {
+                return Some(Err(EngineError::Other(format!(
+                    "Dry run is on: typing {} would change the drawing. Run it with execute to see what it would change (wouldChange), or turn the dry run off.",
+                    spec.id.to_ascii_uppercase()
+                ))));
+            }
+            return Some(self.dry_call(spec.id, &Value::Null).map(|v| {
+                self.echo(v.to_string());
+            }));
+        }
+        let question = self.needs_confirmation(spec.id, &Value::Null)?;
+        if self.agent.confirm {
+            return Some(Err(EngineError::Other(self.ask_user(spec.id, &Value::Null, question))));
+        }
+        if self.agent.headless && matches!(spec.id, "close" | "closeall") {
+            let doc_cmd = if spec.id == "close" { "document.close" } else { "document.closeall" };
+            return Some(self.execute(doc_cmd, &Value::Null).map(|_| ()));
+        }
+        None
     }
 
     /// Park an agent's call for the user's Allow/Deny; the message to hand back to the agent.
@@ -182,6 +251,31 @@ impl Session {
         let message = format!("Waiting for the user: {question} (they answer in CADaddy; agent.confirm turns this off)");
         self.agent.pending = Some(Pending { command: command.to_string(), params: params.clone(), question });
         message
+    }
+
+    /// The existing file an output command asked for by an agent would replace, when it is not the
+    /// active drawing's own file and the call doesn't say `force: true`.
+    fn overwrite_target(&self, cmd: &str, params: &Value) -> Option<String> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (cmd, params);
+            None
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if !matches!(cmd, "saveas" | "qsave" | "wblock" | "export" | "plot" | "etransmit" | "render") || bool_or(params, "force", false) {
+                return None;
+            }
+            let given = str_param(params, "path").or_else(|| str_param(params, "output")).map(str::trim).filter(|p| !p.is_empty())?;
+            // Saving a drawing over its own file is the ordinary save; any other output there is not.
+            let own = self.state().ok().and_then(|st| st.path.clone()).filter(|_| matches!(cmd, "saveas" | "qsave"));
+            let mut candidates = vec![given.to_string()];
+            if matches!(cmd, "saveas" | "wblock") {
+                candidates.push(crate::cmd::file::with_drawing_ext(given));
+                candidates.push(format!("{given}.dwg"));
+            }
+            candidates.into_iter().find(|c| std::path::Path::new(c).is_file() && !own.as_deref().is_some_and(|o| crate::cmd::file::same_file(o, c)))
+        }
     }
 
     /// What the user must allow, if anything: saving over an existing file, closing with changes.

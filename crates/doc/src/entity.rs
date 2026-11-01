@@ -684,14 +684,15 @@ pub struct Dimension {
 impl Dimension {
     /// The definition points this kind of dimension keeps in its fields (JSON names), besides
     /// `defpt`. The others are placeholders (a linear dimension has no `p15`/`p16`, a radius or
-    /// diameter dimension no `p13`/`p14`/`p16`, and the text of a linear or aligned dimension
+    /// diameter dimension no `p13`/`p14`/`p16`, and the text of a linear, aligned, radius or diameter dimension
     /// that the user didn't move is placed by the style, not by `text_mid`): moving the
     /// dimension must not move them, and a file need not keep them.
     pub fn unused_points(&self) -> &'static [&'static str] {
         match (&self.kind, self.user_text_pos) {
             (DimKind::Linear { .. } | DimKind::Aligned, false) => &["p15", "p16", "textMid"],
             (DimKind::Linear { .. } | DimKind::Aligned, true) => &["p15", "p16"],
-            (DimKind::Radius | DimKind::Diameter, _) => &["p13", "p14", "p16"],
+            (DimKind::Radius | DimKind::Diameter, false) => &["p13", "p14", "p16", "textMid"],
+            (DimKind::Radius | DimKind::Diameter, true) => &["p13", "p14", "p16"],
             _ => &[],
         }
     }
