@@ -226,6 +226,9 @@ struct OsnapRef {
 /// Handles and names the entity writer needs from the rest of the file.
 #[derive(Default)]
 struct Ctx {
+    /// A VIEWPORT's frozen layers in group 341, as an R2000 DXF has them; otherwise 331 (DXF 2004
+    /// and later, and the DWG bridge, which reads only 331).
+    frozen_341: bool,
     /// MTEXT columns as the legacy groups 75..79 even from R2018 (the groups AutoLISP lists).
     legacy_columns: bool,
     /// Write texts' fields as FIELD objects (a whole drawing; entity records alone keep the codes).
@@ -1733,23 +1736,25 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             // 340 entity, 131072 = off.
             let clip = v.clip.filter(|h| *h != e.handle && d.entity(*h).is_some());
             let flags = 32768 | if v.locked { 16384 } else { 0 } | if clip.is_some() { 65536 } else { 0 } | if v.on { 0 } else { 131072 };
+            // AutoCAD's frozen-layer list, before group 90 as in the DXF Reference: one pointer per
+            // layer, to its LAYER record (331; 341 in an R2000 DXF). A name with no record goes in
+            // CADaddy's xdata below, so no stale copy of the list outlives an edit in AutoCAD.
+            let mut unrecorded: Vec<String> = Vec::new();
+            for name in &v.frozen_layers {
+                match w.layers.get(&name.to_ascii_uppercase()).cloned() {
+                    Some(h) => w.s(if cx.frozen_341 { 341 } else { 331 }, h),
+                    None => unrecorded.push(name.clone()),
+                }
+            }
             w.i(90, flags);
             if let Some(h) = clip {
                 w.s(340, h.hex());
             }
-            // AutoCAD's frozen-layer list: one soft pointer per layer, to its LAYER record. Other
-            // programs read only this; CADaddy prefers its own xdata below when present.
-            for name in &v.frozen_layers {
-                if let Some(h) = w.layers.get(&name.to_ascii_uppercase()).cloned() {
-                    // Group 331: a layer frozen in this viewport (DXF Reference).
-                    w.s(331, h);
-                }
-            }
-            // One CADaddy xdata group holds both lists: readers stop at the first group of an app.
-            if !v.frozen_layers.is_empty() || !v.layer_colors.is_empty() || !v.layer_linetypes.is_empty() || !v.layer_lineweights.is_empty() {
+            // One CADaddy xdata group holds the lists: readers stop at the first group of an app.
+            if !unrecorded.is_empty() || !v.layer_colors.is_empty() || !v.layer_linetypes.is_empty() || !v.layer_lineweights.is_empty() {
                 w.s(1001, dxf_ext::APP);
-                if !v.frozen_layers.is_empty() {
-                    w.xdata(dxf_ext::frozen_xdata(&v.frozen_layers));
+                if !unrecorded.is_empty() {
+                    w.xdata(dxf_ext::frozen_xdata(&unrecorded));
                 }
                 if !v.layer_colors.is_empty() {
                     w.xdata(dxf_ext::layer_colors_xdata(&v.layer_colors));
@@ -2706,7 +2711,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
             (n, h, b)
         })
         .collect();
-    let mut cx = Ctx { paper_views: paper_views(d), target, dwg, bridge, write_fields: true, ..Ctx::default() };
+    let frozen_341 = version < Version::R2004 && !bridge;
+    let mut cx = Ctx { paper_views: paper_views(d), target, dwg, bridge, write_fields: true, frozen_341, ..Ctx::default() };
     cx.block_records = user_blocks.iter().map(|(n, h, _)| (n.to_ascii_uppercase(), h.clone())).collect();
     // Dimension blocks.
     let mut dim_defs: Vec<(String, String, Vec<Entity>)> = Vec::new(); // filled below

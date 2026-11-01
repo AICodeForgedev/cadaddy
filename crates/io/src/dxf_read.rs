@@ -1191,7 +1191,7 @@ struct Rx {
     pstyles: HashMap<String, String>,
     /// Upper-case block name → associative array parameters from its BLOCK_RECORD.
     block_arrays: HashMap<String, cadaddy_doc::ArrayParams>,
-    /// LAYER record handle (upper case) → layer name (VIEWPORT group 341 frozen layers).
+    /// LAYER record handle (upper case) → layer name (VIEWPORT group 331/341 frozen layers).
     layers: HashMap<String, String>,
 }
 
@@ -1329,15 +1329,20 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
             }
             rx.mleader_fix.push((h, pending));
         }
-        // CADaddy's VPFROZEN xdata wins; otherwise the group 331 layer handles (DXF Reference).
-        ("VIEWPORT", EntityKind::Viewport(v)) if v.frozen_layers.is_empty() => {
-            v.frozen_layers = tags
-                .iter()
-                .take_while(|t| t.code < 1000)
-                // 331 per the DXF Reference; 341 is what CADaddy wrote before 0.7.4.
-                .filter(|t| t.code == 331 || t.code == 341)
-                .filter_map(|t| rx.layers.get(&t.str().trim().to_ascii_uppercase()).cloned())
-                .collect();
+        // The frozen layers: the LAYER handles of group 331 (341 in DXF 2000, and what CADaddy
+        // wrote before 0.7.4), outside `102 {…}` application groups, then the names in CADaddy's
+        // VPFROZEN xdata, which holds those without one; each layer once.
+        ("VIEWPORT", EntityKind::Viewport(v)) => {
+            let mut app_group = false;
+            let handles = tags.iter().take_while(|t| t.code < 1000).filter(|t| {
+                if t.code == 102 {
+                    app_group = t.str().starts_with('{');
+                }
+                !app_group && (t.code == 331 || t.code == 341)
+            });
+            let named = handles.filter_map(|t| rx.layers.get(&t.str().trim().to_ascii_uppercase()));
+            let mut seen = std::collections::HashSet::new();
+            v.frozen_layers = named.chain(&v.frozen_layers).filter(|n| seen.insert(n.to_ascii_uppercase())).cloned().collect();
         }
         _ => {}
     }
