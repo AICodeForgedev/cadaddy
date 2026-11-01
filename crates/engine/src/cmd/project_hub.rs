@@ -83,8 +83,8 @@ fn save_registry(s: &Session, r: &Registry) -> Result<()> {
     std::fs::create_dir_all(&root).map_err(|e| other(format!("cannot create {}: {e}", root.display())))?;
     let json = serde_json::to_vec_pretty(r).map_err(|e| other(format!("cannot serialize the project registry: {e}")))?;
     let tmp = root.join("projects.json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| other(format!("cannot write {}: {e}", tmp.display())))?;
-    std::fs::rename(&tmp, root.join("projects.json")).map_err(|e| other(format!("cannot write the project registry: {e}")))
+    crate::writefile::write(&tmp, json).map_err(|e| other(format!("cannot write {}: {e}", tmp.display())))?;
+    crate::writefile::rename(&tmp, root.join("projects.json")).map_err(|e| other(format!("cannot write the project registry: {e}")))
 }
 
 /// Note a project in the registry (best effort: a project works without a settings folder).
@@ -136,7 +136,7 @@ fn save_company(s: &Session, standards: Vec<Standard>) -> Result<()> {
         std::fs::create_dir_all(dir).map_err(|e| other(format!("cannot create {}: {e}", dir.display())))?;
     }
     let json = serde_json::to_vec_pretty(&Company { standards }).map_err(|e| other(format!("cannot serialize the company standards: {e}")))?;
-    std::fs::write(&path, json).map_err(|e| other(format!("cannot write {}: {e}", path.display())))
+    crate::writefile::write(&path, json).map_err(|e| other(format!("cannot write {}: {e}", path.display())))
 }
 
 fn same(a: &Standard, domain: &str, key: &str) -> bool {
@@ -293,7 +293,7 @@ fn write_archive(dir: &Path, files: &[(String, PathBuf)]) -> Result<u64> {
     use std::io::Write;
     let tmp = dir.join(ARCHIVE_TMP);
     let res = (|| -> Result<()> {
-        let file = std::fs::File::create(&tmp).map_err(|e| other(format!("cannot create {}: {e}", tmp.display())))?;
+        let file = crate::writefile::create(&tmp).map_err(|e| other(format!("cannot create {}: {e}", tmp.display())))?;
         let mut w = std::io::BufWriter::new(file);
         let io = |e: std::io::Error| other(format!("cannot write the project archive: {e}"));
         w.write_all(MAGIC).map_err(io)?;
@@ -317,10 +317,10 @@ fn write_archive(dir: &Path, files: &[(String, PathBuf)]) -> Result<u64> {
         Ok(())
     })();
     if let Err(e) = res {
-        let _ = std::fs::remove_file(&tmp);
+        let _ = crate::writefile::remove(&tmp);
         return Err(e);
     }
-    std::fs::rename(&tmp, dir.join(ARCHIVE)).map_err(|e| other(format!("cannot finish the project archive: {e}")))?;
+    crate::writefile::rename(&tmp, dir.join(ARCHIVE)).map_err(|e| other(format!("cannot finish the project archive: {e}")))?;
     std::fs::metadata(dir.join(ARCHIVE)).map(|m| m.len()).map_err(|e| other(format!("cannot read the project archive: {e}")))
 }
 
@@ -352,7 +352,7 @@ pub(super) fn shelve_folder(dir: &str) -> Result<(u64, u64, u64)> {
         if rel == "project.json" {
             continue;
         }
-        std::fs::remove_file(path).map_err(|e| {
+        crate::writefile::remove(path).map_err(|e| {
             other(format!("cannot remove {}: {e} (the archive {ARCHIVE} is complete; restore the project to get everything back)", path.display()))
         })?;
     }
@@ -386,9 +386,9 @@ pub(super) fn restore_folder(dir: &str) -> Result<u64> {
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| other(format!("cannot create {}: {e}", parent.display())))?;
         }
-        std::fs::write(&target, data).map_err(|e| other(format!("cannot write {}: {e}", target.display())))
+        crate::writefile::write(&target, data).map_err(|e| other(format!("cannot write {}: {e}", target.display())))
     })?;
-    std::fs::remove_file(&archive).map_err(|e| other(format!("cannot remove {}: {e}", archive.display())))?;
+    crate::writefile::remove(&archive).map_err(|e| other(format!("cannot remove {}: {e}", archive.display())))?;
     Ok(n)
 }
 
@@ -400,7 +400,7 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<u64> {
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| other(format!("cannot create {}: {e}", parent.display())))?;
         }
-        std::fs::copy(&path, &target).map_err(|e| other(format!("cannot copy {}: {e}", path.display())))?;
+        crate::writefile::copy(&path, &target).map_err(|e| other(format!("cannot copy {}: {e}", path.display())))?;
         n += 1;
     }
     Ok(n)
@@ -422,7 +422,7 @@ pub(super) fn apply_template(template: &str, dir: &str, drawings: &[String]) -> 
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| other(format!("cannot create {}: {e}", parent.display())))?;
         }
-        std::fs::copy(&path, &target).map_err(|e| other(format!("cannot copy {}: {e}", path.display())))?;
+        crate::writefile::copy(&path, &target).map_err(|e| other(format!("cannot copy {}: {e}", path.display())))?;
     }
     Ok(t.standards)
 }
