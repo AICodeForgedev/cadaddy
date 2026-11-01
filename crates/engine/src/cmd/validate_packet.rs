@@ -1461,13 +1461,14 @@ fn plan_crops(sp: &BuildingSpec, frame: &Frame, area: &Area, margin: f64, dpi: f
             continue;
         }
         let (w, h) = (sr[2] - sr[0], sr[3] - sr[1]);
-        let mut found = 0usize;
+        let mut found: Vec<[f64; 4]> = Vec::new();
         let mut add = |crops: &mut Vec<Crop>, kind: &'static str, r: [f64; 4], shows: String| {
-            if found >= MAX_TEXT_CROPS_PER_SHEET {
+            if found.len() >= MAX_TEXT_CROPS_PER_SHEET {
                 return;
             }
-            if let Some(r) = intersect(r, sr) {
-                found += 1;
+            // One text can name the room twice (its number and its name): one crop.
+            if let Some(r) = intersect(r, sr).filter(|r| !found.iter().any(|f| f.iter().zip(r).all(|(a, b)| (a - b).abs() < 1e-6))) {
+                found.push(r);
                 push(crops, l, kind, trade, r, "text", None, Some(shows));
             }
         };

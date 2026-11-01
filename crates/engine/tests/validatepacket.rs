@@ -23,8 +23,15 @@ const A101: f64 = 0.0;
 const E101: f64 = 4000.0;
 const M101: f64 = 8000.0;
 const A121: f64 = 12000.0;
-/// The schedule sheet sits above the A plan.
+/// The schedule sheet sits above the A plan; the elevations and the partition legend beside it.
 const E601_Y: f64 = 3000.0;
+const A501: f64 = 4000.0;
+const A601: f64 = 8000.0;
+/// The enlarged plan sheet: its view prints the plan at twice the scale.
+const A401: f64 = 16000.0;
+/// The enlarged view's fit onto the plan: project = 0.5 · sheet + T.
+const ENL_TX: f64 = OX - 0.5 * (A401 + 400.0);
+const ENL_TY: f64 = OY - 0.5 * 400.0;
 
 fn layer(s: &mut Session, name: &str) {
     if s.execute("layer.new", &json!({"name": name, "current": true})).is_err() {
@@ -150,7 +157,14 @@ fn spec() -> Value {
             sheet("E-101", "POWER PLAN - LEVEL 1", "E", Some("L1"), E101, 0.0, Some(-E101)),
             sheet("M-101", "MECHANICAL PLAN - LEVEL 1", "M", Some("L1"), M101, 0.0, Some(-M101)),
             sheet("A-121", "REFLECTED CEILING PLAN - LEVEL 1", "A", Some("L1"), A121, 0.0, Some(-A121)),
-            sheet("E-601", "ELECTRICAL SCHEDULES", "E", None, 0.0, E601_Y, None)
+            sheet("E-601", "ELECTRICAL SCHEDULES", "E", None, 0.0, E601_Y, None),
+            sheet("A-501", "INTERIOR ELEVATIONS", "A", None, A501, E601_Y, None),
+            sheet("A-601", "PARTITION TYPES", "A", None, A601, E601_Y, None),
+            sheet("A-401", "ENLARGED PLANS", "A", None, A401, 0.0, None),
+            {"number": "A-401", "title": "ENLARGED PLANS", "discipline": "A", "level": "L1", "source": "model",
+             "rect": [A401, 0.0, A401 + SW, SH],
+             "view": {"title": "ENLARGED PLAN - OFFICE", "rect": [A401 + 200.0, 200.0, A401 + 2400.0, 1400.0]},
+             "registration": {"reference": "A-101", "method": "view_fit", "a": 0.5, "b": 0.0, "tx": ENL_TX, "ty": ENL_TY, "matched": 0}}
         ]
     })
 }
@@ -161,6 +175,10 @@ fn recep_on_e() -> [f64; 2] {
 }
 fn fan_on_m() -> [f64; 2] {
     at(M101, [10.0, 8.0])
+}
+/// A building point (feet) on the enlarged view (twice the scale).
+fn on_enlarged(p: [f64; 2]) -> [f64; 2] {
+    [(OX + p[0] * 12.0 - ENL_TX) / 0.5, (OY + p[1] * 12.0 - ENL_TY) / 0.5]
 }
 
 struct Job {
@@ -190,7 +208,7 @@ fn job() -> Job {
     }
     // Sheet frames.
     layer(&mut s, "G-FRAME");
-    for (x, y) in [(A101, 0.0), (E101, 0.0), (M101, 0.0), (A121, 0.0), (0.0, E601_Y)] {
+    for (x, y) in [(A101, 0.0), (E101, 0.0), (M101, 0.0), (A121, 0.0), (A401, 0.0), (0.0, E601_Y), (A501, E601_Y), (A601, E601_Y)] {
         s.execute("pline", &json!({"vertices": [[x, y], [x + SW, y], [x + SW, y + SH], [x, y + SH]], "closed": true})).unwrap();
     }
     // What the trades' prints show.
@@ -204,6 +222,15 @@ fn job() -> Job {
     line(&mut s, M101, [10.0, 8.0], [10.0, 11.5]);
     layer(&mut s, "E-LITE-SYM");
     symbol(&mut s, at(A121, [7.0, 6.0]));
+    // The enlarged plan of the office (walls and the receptacle at twice the scale), the room's
+    // interior elevation title, the partition legend's exterior wall type.
+    layer(&mut s, "A-ENLG");
+    for (a, b) in [([0.5, 0.5], [15.0, 0.5]), ([15.0, 0.5], [15.0, 11.5]), ([15.0, 11.5], [0.5, 11.5]), ([0.5, 11.5], [0.5, 0.5])] {
+        s.execute("line", &json!({"points": [on_enlarged(a), on_enlarged(b)]})).unwrap();
+    }
+    symbol(&mut s, on_enlarged([6.0, 0.5]));
+    text(&mut s, [A501 + 1000.0, E601_Y + 600.0], "OFFICE 101 - NORTH");
+    text(&mut s, [A601 + 1500.0, E601_Y + 1200.0], "EXTERIOR");
     layer(&mut s, "E-SCHED");
     text(&mut s, [200.0, E601_Y + 1800.0], "PANEL SCHEDULE");
     text(&mut s, [200.0, E601_Y + 1700.0], "PNL-A");
@@ -364,6 +391,20 @@ fn a_packet_holds_the_crops_the_model_the_objects_and_the_rules() {
     assert_eq!(sched["shows"], "mark PNL-A", "{sched}");
     let notes = crop(&m, "E-101", "general_notes");
     assert_eq!(notes["placed_by"], "text");
+    let elev = crop(&m, "A-501", "interior_elevation");
+    assert_eq!(elev["shows"], "room 101", "{elev}");
+    assert_eq!(m["prints"].as_array().unwrap().iter().filter(|c| c["sheet"] == "A-501").count(), 1, "one crop for one title");
+    let legend = crop(&m, "A-601", "partition_legend");
+    assert_eq!(legend["shows"], "wall type Exterior", "{legend}");
+    // The enlarged plan: the view the job placed, at its own scale.
+    let enl = crop(&m, "A-401", "enlarged_plan");
+    assert_eq!(enl["placed_by"], "view_placement");
+    assert_eq!(enl["view"], "ENLARGED PLAN - OFFICE");
+    let img = image::open(out.join(enl["file"].as_str().unwrap())).unwrap().to_rgba8();
+    let (x, y) = pixel_of(enl, on_enlarged([6.0, 0.5]));
+    assert!(darkest(&img, x, y, 2) < 300, "the enlarged view's receptacle should be at ({x:.1}, {y:.1})");
+    let enl_ov = m["model"].as_array().unwrap().iter().find(|x| x["of"] == enl["file"]).unwrap();
+    assert_eq!(enl_ov["kind"], "overlay");
     // At least 150 dpi of the printed sheet (a 36" × 24" sheet).
     for c in m["prints"].as_array().unwrap() {
         assert!(c["dpi"].as_f64().unwrap() >= 150.0 - 1e-6, "{c}");
