@@ -21,34 +21,9 @@ impl HostClipboard {
             Format::Drawing => register_format(cadaddy_ui_egui::clipboard::DRAWING_FORMAT).map(std::num::NonZeroU32::get),
             Format::Png => register_format("PNG").map(std::num::NonZeroU32::get),
             Format::Dib => Some(formats::CF_DIB),
-            // Not bytes in memory: a metafile handle (see `put_emf`).
+            // Not bytes in memory: a metafile handle (see `cadaddy_winclip::put_emf`).
             Format::Emf => None,
             Format::Text => Some(formats::CF_UNICODETEXT),
-        }
-    }
-}
-
-/// Put an enhanced metafile on the open clipboard as `CF_ENHMETAFILE`: the system takes the
-/// metafile handle, so the bytes become one first.
-#[cfg(target_os = "windows")]
-fn put_emf(bytes: &[u8]) -> bool {
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::Graphics::Gdi::{DeleteEnhMetaFile, SetEnhMetaFileBits};
-    use windows::Win32::System::DataExchange::SetClipboardData;
-    /// `CF_ENHMETAFILE`.
-    const CF_ENHMETAFILE: u32 = 14;
-    // SAFETY: the clipboard is open and ours; the handle is either handed to the system (which
-    // then owns it) or deleted here.
-    unsafe {
-        let meta = SetEnhMetaFileBits(bytes);
-        if meta.is_invalid() {
-            return false;
-        }
-        if SetClipboardData(CF_ENHMETAFILE, Some(HANDLE(meta.0))).is_ok() {
-            true
-        } else {
-            let _ = DeleteEnhMetaFile(Some(meta));
-            false
         }
     }
 }
@@ -68,7 +43,7 @@ impl SystemClipboard for HostClipboard {
         for (format, bytes) in formats {
             let ok = match format {
                 Format::Text => std::str::from_utf8(bytes).is_ok_and(|t| raw::set_string_with(t, options::NoClear).is_ok()),
-                Format::Emf => put_emf(bytes),
+                Format::Emf => cadaddy_winclip::put_emf(bytes),
                 f => Self::id(*f).is_some_and(|id| raw::set_without_clear(id, bytes).is_ok()),
             };
             if !ok {
@@ -95,11 +70,15 @@ impl SystemClipboard for HostClipboard {
 #[cfg(target_os = "macos")]
 mod mac {
     use cadaddy_ui_egui::clipboard::Format;
-    use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeString};
+    use objc2_app_kit::NSPasteboard;
     use objc2_foundation::{NSData, NSString};
 
     /// The pasteboard type for [`Format::Drawing`] (a reverse-DNS name, as pasteboard types are).
     const DRAWING_TYPE: &str = "dev.aicodeforge.cadaddy.drawing";
+    /// The system's plain-text and PNG pasteboard types, by their documented names (the
+    /// `NSPasteboardType…` statics need `unsafe`, which the workspace forbids).
+    const TEXT_TYPE: &str = "public.utf8-plain-text";
+    const PNG_TYPE: &str = "public.png";
 
     /// Replace the general pasteboard's contents with the objects (their own type and as DXF text)
     /// and the PNG picture, all at once. `false` when nothing could be put there.
@@ -112,12 +91,10 @@ mod mac {
                 Format::Drawing => {
                     any |= pb.setData_forType(Some(&NSData::with_bytes(bytes)), &NSString::from_str(DRAWING_TYPE));
                     if let Ok(text) = std::str::from_utf8(bytes) {
-                        // SAFETY: the constant is a static NSString the system provides.
-                        any |= pb.setString_forType(&NSString::from_str(text), unsafe { NSPasteboardTypeString });
+                        any |= pb.setString_forType(&NSString::from_str(text), &NSString::from_str(TEXT_TYPE));
                     }
                 }
-                // SAFETY: as above.
-                Format::Png => any |= pb.setData_forType(Some(&NSData::with_bytes(bytes)), unsafe { NSPasteboardTypePNG }),
+                Format::Png => any |= pb.setData_forType(Some(&NSData::with_bytes(bytes)), &NSString::from_str(PNG_TYPE)),
                 // No metafile or device-independent bitmap on a Mac.
                 Format::Emf | Format::Dib | Format::Text => {}
             }
@@ -130,8 +107,7 @@ mod mac {
         let pb = NSPasteboard::generalPasteboard();
         let data = match format {
             Format::Drawing => pb.dataForType(&NSString::from_str(DRAWING_TYPE)),
-            // SAFETY: the constant is a static NSString the system provides.
-            Format::Png => pb.dataForType(unsafe { NSPasteboardTypePNG }),
+            Format::Png => pb.dataForType(&NSString::from_str(PNG_TYPE)),
             Format::Emf | Format::Dib | Format::Text => None,
         }?;
         Some(data.to_vec()).filter(|b| !b.is_empty())
@@ -147,7 +123,7 @@ impl SystemClipboard for HostClipboard {
         match format {
             Format::Drawing => mac::get(Format::Drawing),
             // Our own PNG first; screenshots and other programs' pictures come through arboard.
-            Format::Png => mac::get(Format::Png).or_else(|| arboard_png()),
+            Format::Png => mac::get(Format::Png).or_else(arboard_png),
             Format::Text => arboard::Clipboard::new().ok()?.get_text().ok().map(String::into_bytes),
             Format::Emf | Format::Dib => None,
         }
