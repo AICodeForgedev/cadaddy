@@ -840,11 +840,13 @@ fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
         for (layer, w) in m.iter().take(10_000) {
             let lw = match w {
                 Value::Null => None,
-                Value::Number(n) => Some(vp_lineweight(n.as_f64()).ok_or_else(|| bad(cmd, "lineweight is 0..2.11 mm"))?),
-                Value::String(t) if t.trim().eq_ignore_ascii_case("default") => Some(Lineweight::Default),
-                Value::String(t) => Some(
-                    vp_lineweight(t.trim().trim_end_matches("mm").trim().parse::<f64>().ok()).ok_or_else(|| bad(cmd, "lineweight is 0..2.11 mm"))?,
-                ),
+                // A viewport override is a weight or Default (ByLayer / ByBlock mean nothing here).
+                Value::Number(_) | Value::String(_) => match super::layer::parse_lw(w).map_err(|m| bad(cmd, m))? {
+                    Lineweight::ByLayer | Lineweight::ByBlock => {
+                        return Err(bad(cmd, "a viewport lineweight override is Default or a standard lineweight"));
+                    }
+                    lw => Some(lw),
+                },
                 _ => return Err(bad(cmd, "`lineweights` values are mm or null")),
             };
             lineweights.push((layer.clone(), lw));
@@ -904,13 +906,6 @@ fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
         s.doc_mut()?.modify_entity(h, |e| e.kind = EntityKind::Viewport(v)).map_err(|e| bad(cmd, e.to_string()))?;
     }
     Ok(Value::Array(out))
-}
-
-/// A lineweight in millimetres, snapped to the nearest standard value.
-fn vp_lineweight(mm: Option<f64>) -> Option<Lineweight> {
-    let mm = mm.filter(|x| x.is_finite() && (0.0..=2.115).contains(x))?;
-    let want = mm * 100.0;
-    Lineweight::STANDARD.iter().min_by(|a, b| (f64::from(**a) - want).abs().total_cmp(&(f64::from(**b) - want).abs())).map(|v| Lineweight::Mm100(*v))
 }
 
 // ---------- page setup ----------
@@ -1483,13 +1478,16 @@ mod tests {
         s.execute("vplayer", &json!({"handle": h, "colors": {"walls": null}})).unwrap();
         assert!(viewports(&s, "Layout1")[0].1.layer_colors.is_empty());
         // VP Linetype / VP Lineweight overrides.
-        s.execute("vplayer", &json!({"handle": h, "linetypes": {"Walls": "continuous"}, "lineweights": {"Walls": 0.31}})).unwrap();
+        s.execute("vplayer", &json!({"handle": h, "linetypes": {"Walls": "continuous"}, "lineweights": {"Walls": 0.3}})).unwrap();
         assert!(s.execute("vplayer", &json!({"handle": h, "linetypes": {"Walls": "NoSuchType"}})).is_err());
         assert!(s.execute("vplayer", &json!({"handle": h, "linetypes": {"Walls": "ByLayer"}})).is_err());
-        assert!(s.execute("vplayer", &json!({"handle": h, "lineweights": {"Walls": 9}})).is_err());
+        // Only AutoCAD's lineweights: 0.31 mm, 999 and ByLayer are refused, not snapped or clamped.
+        for w in [json!(0.31), json!(999), json!("nan"), json!("ByLayer")] {
+            assert!(s.execute("vplayer", &json!({"handle": h, "lineweights": {"Walls": w}})).is_err());
+        }
         let vv = viewports(&s, "Layout1");
         assert_eq!(vv[0].1.layer_linetypes, vec![("Walls".to_string(), "Continuous".to_string())]);
-        assert_eq!(vv[0].1.layer_lineweights, vec![("Walls".to_string(), Lineweight::Mm100(30))], "snapped to a standard weight");
+        assert_eq!(vv[0].1.layer_lineweights, vec![("Walls".to_string(), Lineweight::Mm100(30))]);
         let j = s.execute("vplayer", &json!({"handle": h, "lineweights": {"walls": "0.50 mm"}})).unwrap();
         assert_eq!(j[0]["layerLineweights"][0]["lineweight"], "0.50 mm");
         s.execute("vplayer", &json!({"handle": h, "linetypes": {"walls": null}, "lineweights": {"WALLS": null}})).unwrap();

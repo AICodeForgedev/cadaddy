@@ -324,10 +324,11 @@ fn dimstyle_and_dimoverride_refuse_negative_whole_numbers() {
     let def = DimStyle::default();
     assert_eq!((st.decimals, st.text_move, st.linear_unit, st.tol_decimals), (def.decimals, 2, def.linear_unit, def.tol_decimals));
     assert_eq!((st.angular_decimals, st.alt_decimals, st.ext_lineweight), (def.angular_decimals, def.alt_decimals, def.ext_lineweight));
-    // DIMADEC -1 is a documented value (stored as 0); ByLayer lineweights stay -1.
+    // DIMADEC -1 is a documented value ("use DIMDEC", kept as -1); ByLayer lineweights stay -1.
     let r = s.execute("dimstyle", &json!({ "name": "Standard", "DIMADEC": -1, "DIMLWD": "ByLayer" })).unwrap();
     assert!(r.get("ignored").is_none(), "{r}");
     assert_eq!(s.doc().unwrap().dim_style("Standard").unwrap().dim_lineweight, -1);
+    assert_eq!(s.doc().unwrap().dim_style("Standard").unwrap().angular_decimals, -1);
 
     // DIMOVERRIDE keeps the valid value and leaves the negative one out.
     linear(&mut s, 10.0);
