@@ -1,7 +1,11 @@
 use super::common::{T, common, ocs};
 use super::hatch::hatch;
 use super::text::{attdef, attrib_modes, attrib_props, mtext_from, multiline_attrib, split_embedded, text_from};
-use super::*;
+use super::{
+    Arc, Attrib, Circle, Common, DimKind, Dimension, Ellipse, EntityKind, Face3d, Handle, HashMap, Helix, HelixConstrain, Insert, Leader, Line,
+    LwPolyline, MAX_FRAME_CHARS, Point, PolyVertex, Polyline3d, RawTag, RayLine, Rx, Solid, Spline, Table, TableCell, Tag, Tolerance, Unknown, Vec2,
+    Vec3, Viewport, Wipeout, records,
+};
 
 /// Parse one entity record. POLYLINE/INSERT followers are handled by the caller.
 pub(super) fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
@@ -197,7 +201,17 @@ pub(super) fn entity_with_table_budget(kind: &str, tags: &[Tag], table_cells_lef
             })
         }
         "LEADER" => EntityKind::Leader(Leader {
-            vertices: t.pts(10).into_iter().map(|p| p.to3(0.0)).collect(),
+            // Each group 10 starts a vertex. Scope Y/Z to it so an omitted Z cannot
+            // shift a later vertex's elevation onto this one.
+            vertices: t
+                .all_f(10)
+                .into_iter()
+                .zip(tags.split(|tag| tag.code == 10).skip(1))
+                .map(|(x, vertex)| {
+                    let v = T(vertex);
+                    Vec3::new(x, v.fd(20, 0.0), v.fd(30, 0.0))
+                })
+                .collect(),
             arrow: t.i(71).unwrap_or(1) != 0,
             spline: t.i(72).unwrap_or(0) != 0,
             style: t.s(3).unwrap_or_else(|| "Standard".into()),
@@ -535,7 +549,7 @@ pub(super) fn insert_attribs(recs: &[(String, Vec<Tag>)], i: &mut usize, ins_lay
                 tag: own.s(2).unwrap_or_default(),
                 text,
                 invisible: own.i(70).unwrap_or(0) & 1 != 0,
-                constant: false,
+                constant: own.i(70).unwrap_or(0) & 2 != 0,
                 prompt: String::new(),
                 props: attrib_props(&tt, ins_layer),
                 multiline,
