@@ -52,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
         attedit::dash_attedit_spec(),
         CommandSpec::new("wblock", "Write Block", run_wblock)
             .alias(&["w", "-wblock"])
-            .params("{path (no extension: .dwg), name? | handles?, base?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path (no extension: .dwg), name? | handles?, base?}")
             .interactive(|_| Ok(Box::new(wblock::WblockM::default()))),
         CommandSpec::new("base", "Base", run_base).menu(&["Draw", "Block", "Base"]).params("{at: [x,y]}").interactive(|_| {
             Ok(super::ask::machine("base", "BASE", [super::ask::ask("at", "Enter base point", super::ask::Kind::Point)]))
@@ -380,6 +380,9 @@ fn run_attdef(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
     let path = wblock::with_extension(str_param(p, "path").ok_or_else(|| bad("wblock", "`path` is required"))?);
+    if let Some(d) = s.docs.iter().find(|d| d.path.as_deref().is_some_and(|x| super::file::same_file(x, &path))) {
+        return Err(bad("wblock", format!("{path} is the open drawing {}: choose another file name so it isn't replaced", d.title)));
+    }
     let src = s.doc()?;
     let mut d = cadaddy_doc::Drawing::new_imperial();
     d.layers = src.layers.clone();

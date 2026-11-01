@@ -45,10 +45,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}")
             .files(),
         CommandSpec::new("model.render", "Render Model View", run_render)
-            .params("{path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
             .noundo(),
         CommandSpec::new("model.overlay", "Model Overlay", run_overlay)
-            .params("{path?: PNG file (else base64), output?: same as path, width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else base64), output?: same as path, width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
             .noundo(),
         CommandSpec::new("model.counts", "Model Counts", run_counts)
             .params("{} → {levels: [{level, plan: {doors, windows, fixtures}, model: {doors, windows, fixtures}, match}], match}")
@@ -363,7 +363,8 @@ fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
 
 // ---------------- model.issues ----------------
 
-struct Finding {
+#[derive(Clone)]
+pub(crate) struct Finding {
     kind: &'static str,
     message: String,
     level: Option<String>,
@@ -388,7 +389,7 @@ impl Finding {
     }
 }
 
-fn issues(s: &Session) -> Result<Vec<Finding>> {
+fn issues(s: &Session) -> Result<(Vec<Finding>, usize)> {
     let (sp, _) = current(s, "model.issues")?;
     let upf = units(&sp);
     let plan = plan_session(s)?;
@@ -397,7 +398,9 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
     let ents = plan_objects(pd);
     let made = built(d);
     let mut out: Vec<Finding> = Vec::new();
+    let mut total = 0usize;
     let mut push = |f: Finding| {
+        total += 1;
         if out.len() < MAX_FINDINGS {
             out.push(f);
         }
@@ -615,7 +618,28 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
             handles: hs,
         });
     }
-    Ok(out)
+    Ok((out, total))
+}
+
+/// `model.issues`' findings for one revision of one drawing (the session keeps the last).
+pub(crate) struct IssuesCache {
+    uid: u64,
+    revision: u64,
+    found: Vec<Finding>,
+    /// Every finding, also those past [`MAX_FINDINGS`].
+    total: usize,
+}
+
+/// The findings of the drawing as it is now: from the session's cache when it was checked at
+/// this revision, else found and kept.
+fn issues_now(s: &mut Session) -> Result<(Vec<Finding>, usize)> {
+    let (uid, revision) = s.state().map(|st| (st.uid, st.revision))?;
+    if let Some(c) = s.issues_cache.as_ref().filter(|c| c.uid == uid && c.revision == revision) {
+        return Ok((c.found.clone(), c.total));
+    }
+    let (found, total) = issues(s)?;
+    s.issues_cache = Some(Box::new(IssuesCache { uid, revision, found: found.clone(), total }));
+    Ok((found, total))
 }
 
 /// How far a plan point is outside a box (0 inside).
@@ -645,7 +669,7 @@ fn fmt_pt(p: Vec2) -> String {
 
 fn run_issues(s: &mut Session, p: &Value) -> Result<Value> {
     let kind = str_param(p, "kind");
-    let all = issues(s)?;
+    let (all, found) = issues_now(s)?;
     let mut by: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for f in &all {
         *by.entry(f.kind).or_insert(0) += 1;
@@ -657,6 +681,10 @@ fn run_issues(s: &mut Session, p: &Value) -> Result<Value> {
     let matching: Vec<&Finding> = all.iter().filter(|f| kind.is_none_or(|k| k.eq_ignore_ascii_case(f.kind))).collect();
     let list: Vec<Value> = matching.iter().skip(from).take(limit).map(|f| f.json()).collect();
     let mut out = json!({ "total": matching.len(), "issues": list, "byKind": by });
+    // Past the cap: how many there are, and that the list stops.
+    if found > all.len() {
+        out["truncated"] = json!({"found": found, "listed": all.len(), "note": format!("only the first {MAX_FINDINGS} issues are kept; fix those, or filter by kind")});
+    }
     if from.saturating_add(limit) < matching.len() {
         out["next"] = json!(from + limit);
     }
@@ -747,6 +775,7 @@ fn vec3(p: &Value, key: &str) -> Result<Option<Vec3>> {
 }
 
 fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
+    super::exchange::guard_params(s, "model.render", p, &["path", "output"])?;
     use cadaddy_render::model3::{self, Aabb};
     use cadaddy_render::shade::{VisualStyle, fit, fit_bounds, rasterize};
     use std::sync::atomic::AtomicUsize;
@@ -769,7 +798,15 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         .transpose()?;
     // A room: its outline on the plan, and its level.
     let mut room: Option<(Vec<Vec2>, String)> = None;
-    if let Some(name) = str_param(p, "room") {
+    if let Some(name) = str_param(p, "room")
+        && let Some(r) = super::bspec::room_elements(d).into_iter().find(|r| {
+            r.outline.len() >= 3
+                && (r.name.eq_ignore_ascii_case(name.trim()) || r.number.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name.trim())))
+        })
+    {
+        // A built room has its outline: no plan trace of every room.
+        room = Some((r.outline.clone(), r.level.clone()));
+    } else if let Some(name) = str_param(p, "room") {
         let plan = plan_session(s)?;
         let rs = rooms(&plan, &sp)?;
         let spec_room = sp.rooms.iter().find(|r| names_room(r, name));
@@ -1042,6 +1079,7 @@ pub(crate) fn keep_seg(mut a: Vec3, mut b: Vec3, planes: &[(Vec3, f64)]) -> Opti
 
 fn run_overlay(s: &mut Session, p: &Value) -> Result<Value> {
     use cadaddy_doc::color::Color;
+    super::exchange::guard_params(s, "model.overlay", p, &["path", "output"])?;
     let (w, h) = size("model.overlay", p, 1200, 900)?;
     let (sp, _) = current(s, "model.overlay")?;
     let upf = units(&sp);

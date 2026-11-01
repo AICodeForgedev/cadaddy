@@ -64,6 +64,23 @@ fn sink(line: &str) {
     }
 }
 
+/// Where the cancel sink asks the job to stop: at a line holding this text.
+static CANCEL_AT: Mutex<Option<&'static str>> = Mutex::new(None);
+
+/// A progress sink that asks the running job to stop (as an MCP client's cancel would) once,
+/// at the line [`CANCEL_AT`] names.
+fn cancel_sink(line: &str) {
+    if let Ok(mut l) = LINES.lock() {
+        l.push(line.to_string());
+    }
+    if let Ok(mut at) = CANCEL_AT.lock()
+        && at.is_some_and(|t| line.contains(t))
+    {
+        *at = None;
+        cadaddy_engine::request_cancel();
+    }
+}
+
 fn serial() -> MutexGuard<'static, ()> {
     SERIAL.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -187,7 +204,9 @@ fn a_job_cut_off_goes_on_from_its_checkpoint() {
     *COPY_AT_ROOMS.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let st = r.expect("job.start");
     assert_eq!(st["done"], json!(true), "{st}");
-    assert!(!checkpoint.exists(), "a finished job's checkpoint is removed");
+    // A checkpoint the caller named stays, the finished model in it (B7-002).
+    assert!(checkpoint.exists(), "the caller's checkpoint is kept");
+    assert_eq!(st["checkpoint"], json!(checkpoint.display().to_string()), "{st}");
     assert!(copy.exists(), "the checkpoint as a crash in the rooms stage leaves it");
     let rooms_of =
         |s: &mut Session| s.execute("job.explain", &json!({"stage": "rooms"})).expect("explain")["result"]["rooms"].as_array().map_or(0, Vec::len);
@@ -210,7 +229,7 @@ fn a_job_cut_off_goes_on_from_its_checkpoint() {
         }
     }
     assert_eq!(rooms_of(&mut s), rooms, "the same rooms as the uncut run");
-    assert!(!checkpoint.exists());
+    assert!(checkpoint.exists());
 
     // Other prints, a damaged checkpoint, or resume off: a fresh job.
     std::fs::copy(&copy, &checkpoint).expect("restore");
@@ -219,19 +238,117 @@ fn a_job_cut_off_goes_on_from_its_checkpoint() {
         .execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string(), "resume": false}))
         .expect("fresh");
     assert!(st["resumed"].is_null(), "{st}");
+    // A file there that is not a job's checkpoint (the caller's drawing, or anything else) is
+    // refused and left as it was: never written over, never removed (B7-002).
     std::fs::write(&checkpoint, b"not a drawing").expect("damage");
     let mut s = Session::new();
-    let st =
-        s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string()})).expect("fresh");
-    assert!(st["resumed"].is_null(), "{st}");
+    let e = s
+        .execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string()}))
+        .expect_err("an existing non-checkpoint file is refused");
+    assert!(e.to_string().contains("not a job checkpoint"), "{e}");
+    assert_eq!(std::fs::read(&checkpoint).expect("still there"), b"not a drawing");
+    let drawing = dir.with_extension("mine.dxf");
+    std::fs::write(&drawing, b"0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n").expect("a drawing");
+    let mut s = Session::new();
+    assert!(s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": drawing.display().to_string()})).is_err());
+    assert!(drawing.exists(), "the caller's drawing is untouched");
+    let _ = std::fs::remove_file(&drawing);
     std::fs::copy(&copy, &checkpoint).expect("restore");
     std::fs::write(dir.join("Added Sheet.pdf"), std::fs::read(dir.join("Full Set.pdf")).expect("set")).expect("add");
     let mut s = Session::new();
     let st =
         s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string()})).expect("fresh");
     assert!(st["resumed"].is_null(), "the prints changed: {st}");
+    // The job's own checkpoint (none named: in the temporary folder) is removed when it is done.
+    let mut s = Session::new();
+    let st = s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "resume": false})).expect("default checkpoint");
+    assert_eq!(st["done"], json!(true), "{st}");
+    assert!(st["checkpoint"].is_null(), "{st}");
+    let own = std::env::temp_dir().join("cadaddy-jobs").join(format!("{}.cdy", st["job_id"].as_str().unwrap_or("?")));
+    assert!(!own.exists(), "{}", own.display());
     let _ = std::fs::remove_file(&copy);
     let _ = std::fs::remove_file(&checkpoint);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B7-015: a cancel (MCP `notifications/cancelled`, the `cancel` tool) stops a running job at
+/// its next sheet or stage, not when it ends; job.next goes on from there, and the sheets cut
+/// off mid-import are imported once.
+#[test]
+fn a_cancelled_job_stops_at_the_next_sheet_and_goes_on_from_there() {
+    let _g = serial();
+    real_pdf_reader();
+    let dir = job_folder("cancel", HotelSize::Small, FEW);
+    let pdfs = dir.display().to_string();
+    // The uncut run, for its counts.
+    let mut whole = Session::new();
+    let st = whole.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": false})).expect("job.start");
+    assert_eq!(st["done"], json!(true), "{st}");
+    let rooms_of =
+        |s: &mut Session| s.execute("job.explain", &json!({"stage": "rooms"})).expect("explain")["result"]["rooms"].as_array().map_or(0, Vec::len);
+    let rooms = rooms_of(&mut whole);
+    // No job running: a cancel is dropped, not kept for the next job.
+    cadaddy_engine::request_cancel();
+
+    for (at, stage) in [(" classify: Classify", "classify"), (": sheet 1/", "rooms")] {
+        *CANCEL_AT.lock().unwrap_or_else(|e| e.into_inner()) = Some(at);
+        if let Ok(mut l) = LINES.lock() {
+            l.clear();
+        }
+        cadaddy_engine::cmd::guided::set_progress_sink(Some(cancel_sink));
+        let mut s = Session::new();
+        let st = s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": false}));
+        cadaddy_engine::cmd::guided::set_progress_sink(None);
+        let st = st.expect("job.start");
+        assert_eq!(st["done"], json!(false), "{st}");
+        assert_eq!(st["status"], json!("cancelled"), "{st}");
+        assert_eq!(st["cancelled"]["stage"], json!(stage), "{st}");
+        assert_eq!(st["current_stage"], json!(stage), "{st}");
+        let lines = LINES.lock().map(|l| l.clone()).unwrap_or_default();
+        assert!(!lines.iter().any(|l| l.contains("bim_build: Build")), "stopped before the build: {lines:?}");
+        // Going on: the rest of the job, the same model as the uncut run.
+        let mut done = s.execute("job.next", &json!({})).expect("job.next");
+        for _ in 0..20 {
+            if done["done"] == json!(true) {
+                break;
+            }
+            done = s.execute("job.next", &json!({})).expect("job.next");
+        }
+        assert_eq!(done["done"], json!(true), "{done}");
+        assert_eq!(rooms_of(&mut s), rooms, "cancelled at {stage}");
+        let elements = |s: &mut Session| s.execute("job.status", &json!({})).expect("status")["elements"].clone();
+        assert_eq!(elements(&mut s), elements(&mut whole), "the same model as the uncut run (cancelled at {stage})");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B4-015: a print set none of whose files can be read is the job's error (which the CLI exits
+/// non-zero on), naming the files; never `done`.
+#[test]
+fn a_print_set_of_unreadable_files_is_an_error_naming_them() {
+    let _g = serial();
+    real_pdf_reader();
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("cadaddy_jobspeed_junk_{}_{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("folder");
+    for (name, bytes) in [("A-101.pdf", &b"%PDF-1.4\n garbage"[..]), ("E-101.pdf", &b"not a pdf at all"[..]), ("M-101.pdf", &b""[..])] {
+        std::fs::write(dir.join(name), bytes).expect("write");
+    }
+    let mut s = Session::new();
+    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false}));
+    match st {
+        // Refused outright is fine too: never a job that says it is done.
+        Err(e) => assert!(!e.to_string().is_empty()),
+        Ok(st) => {
+            assert_eq!(st["done"], json!(false), "{st}");
+            assert_eq!(st["status"], json!("error"), "{st}");
+            assert_eq!(st["error"]["stage"], json!("classify"), "{st}");
+            let msg = st["error"]["message"].as_str().unwrap_or("");
+            assert!(msg.contains("could be read"), "{st}");
+            let findings = s.execute("job.status", &json!({})).expect("status");
+            assert_eq!(findings["status"], json!("error"));
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

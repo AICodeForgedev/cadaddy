@@ -1083,3 +1083,20 @@ fn every_persisted_field_round_trips() {
     assert!(notes.is_empty(), "{notes:?}");
     assert_eq!(back, d);
 }
+
+/// B9-016: a header chunk written before the fix, with `null` where a variable was NaN. The
+/// variables that can be read are kept; the one that can't is named.
+#[test]
+fn a_header_with_one_unreadable_variable_keeps_the_others() {
+    let head = serde_json::json!({"vars": {"INSUNITS": 4, "DIMSCALE": 48.0, "LTSCALE": 24.0, "THICKNESS": null, "PDSIZE": null, "USERS1": "keep"}});
+    let mut w = Writer::new();
+    w.chunk(*b"HEAD", 1, &tokens::encode(&head), true);
+    let bytes = w.finish();
+    let (back, rep) = model::read(&bytes).unwrap();
+    assert_eq!((back.header.i64("INSUNITS", 1), back.header.f64("DIMSCALE", 1.0), back.header.f64("LTSCALE", 1.0)), (4, 48.0, 24.0));
+    assert_eq!(back.header.str("USERS1", ""), "keep");
+    assert!(back.header.get("THICKNESS").is_none());
+    let said: Vec<&String> = rep.notes.iter().filter(|n| n.contains("drawing settings (header)")).collect();
+    assert_eq!(said.len(), 1, "{:?}", rep.notes);
+    assert!(said[0].contains("THICKNESS") && said[0].contains("PDSIZE"), "{}", said[0]);
+}

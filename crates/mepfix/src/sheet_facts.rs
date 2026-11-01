@@ -389,13 +389,14 @@ pub fn view_regions(d: &Drawing) -> Vec<([f64; 4], usize)> {
 }
 
 /// A circuit label: panel letters, a dash, the circuit number(s), maybe a switch leg
-/// (`A-1`, `B-14`, `C-23,25`, `A-1,f`, `RP-3`).
+/// (`A-1`, `B-14`, `C-23,25`, `A-1,f`, `RP-3`). A zero-padded number (`S-01`) is a room's tag:
+/// circuits are never padded.
 pub fn is_circuit_label(t: &str) -> bool {
     let t = t.trim();
     let letters = t.chars().take_while(char::is_ascii_uppercase).count();
     let Some(rest) = t.get(letters..).and_then(|r| r.strip_prefix('-')) else { return false };
     let mut parts = rest.split(',');
-    let first_ok = parts.next().is_some_and(|p| !p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_digit()));
+    let first_ok = parts.next().is_some_and(|p| !p.is_empty() && p.len() <= 3 && !p.starts_with('0') && p.chars().all(|c| c.is_ascii_digit()));
     (1..=2).contains(&letters)
         && first_ok
         && parts.all(|p| {
@@ -799,7 +800,7 @@ mod tests {
         for s in ["A-1", "B-14", "C-23,25", "A-1,f", "RP-3", "A-37,39,41"] {
             assert!(is_circuit_label(s), "{s}");
         }
-        for s in ["A-", "A-1,F", "AB-", "-1", "A1-2x", "ABC-1"] {
+        for s in ["A-", "A-1,F", "AB-", "-1", "A1-2x", "ABC-1", "S-01"] {
             assert!(!is_circuit_label(s), "{s}");
         }
         for s in ["A", "A1", "XA", "OS", "EF", "L4", "FCU"] {

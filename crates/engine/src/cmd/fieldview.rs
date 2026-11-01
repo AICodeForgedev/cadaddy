@@ -39,7 +39,7 @@ pub const NOTES_FILE: &str = "fieldnotes.json";
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD_EXPORT, "Field Package", run_export)
-            .params("{path?: file to write, project?, inline?: bool (return the package)} → {path?, bytes, levels, rooms, elements, trades: {trade: count}, issues, notes, package?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: file to write, project?, inline?: bool (return the package)} → {path?, bytes, levels, rooms, elements, trades: {trade: count}, issues, notes, package?}")
             .noundo(),
         CommandSpec::new(CMD_SYNC, "Sync Field Notes", run_sync)
             .params("{path?: notes file | notes?: {schema, project, notes: [...]}} → {added, updated, unchanged, total}"),
@@ -125,6 +125,7 @@ fn mark_of(d: &Drawing, e: &Entity, source: Option<&str>) -> String {
 }
 
 fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
+    super::exchange::guard_params(s, "fieldview.export", p, &["path"])?;
     let (sp, _) = current(s, CMD_EXPORT)?;
     let issues = clash_issues(s);
     let d = s.doc()?;

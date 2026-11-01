@@ -107,7 +107,7 @@ fn sheet_at(sheets: &[SheetBox], p: [f64; 2]) -> Option<usize> {
 }
 
 /// Every door or room number lettered in model space and where (the lettering's middle).
-fn number_texts(d: &Drawing) -> Vec<(String, [f64; 2])> {
+pub(crate) fn number_texts(d: &Drawing) -> Vec<(String, [f64; 2])> {
     let mut out = Vec::new();
     for e in d.model.iter().take(MAX_TEXTS) {
         if super::wallgen::made_as(e).is_some() {

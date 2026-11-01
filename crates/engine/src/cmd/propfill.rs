@@ -45,6 +45,14 @@ const DOOR_TAG_FT: f64 = 3.0;
 const CFM_TAG_FT: f64 = 4.0;
 /// How far from a wall a device may stand and still be on it, feet.
 const HOST_WALL_FT: f64 = 1.5;
+/// A luminaire on a wall with no height printed (an exit sign over a door, a sconce), inches.
+const WALL_LUMINAIRE_IN: f64 = 90.0;
+/// A switch is always on a wall: read at its designation beside the symbol (or stamped from a
+/// typical room's plan), it is on the nearest wall this far, feet.
+const SWITCH_WALL_FT: f64 = 3.0;
+/// A device whose box starts below this height (feet off its floor) is in the wall, not the
+/// ceiling: its box gets a plaster ring.
+const WALL_BOX_FT: f64 = 7.0;
 /// How far beyond a wall's face the rooms on its sides are looked for, feet.
 const SIDE_FT: f64 = 1.0;
 
@@ -68,12 +76,12 @@ pub struct Height {
 
 /// The kind of device a type mark names (`switch`, `fire alarm device`…; `device` when the mark
 /// says nothing).
-fn kind_of(mark: &str) -> &'static str {
+pub(crate) fn kind_of(mark: &str) -> &'static str {
     match mark.trim().to_ascii_uppercase().as_str() {
-        "OS" | "OC" | "VS" | "PS" => "occupancy sensor",
+        "OS" | "OS1" | "OS2" | "OC" | "VS" | "PS" => "occupancy sensor",
         "DH" | "MH" => "door holder",
         "J" | "JB" => "junction box",
-        "S" | "S3" | "S4" | "SD" | "DS" | "LV" => "switch",
+        "S" | "S2" | "S3" | "S4" | "SD" | "DS" | "LV" | "SP" | "SM" | "SH" | "SK" | "SOR" | "SWT" => "switch",
         "FA" | "HS" | "SS" | "FS" | "ST" | "CM" => "fire alarm device",
         "TV" | "DA" | "TEL" | "WAP" | "CR" | "CAM" => "low voltage outlet",
         "EF" | "FCU" | "WH" | "PTAC" => "equipment connection",
@@ -159,11 +167,25 @@ fn note_kinds(up: &str) -> Vec<&'static str> {
 /// Each device type's mounting height: a legend row's (the type mark and a height on one line
 /// of the sheet), else a general note's for its kind of device, else the kind's usual height
 /// (marked default).
+/// Whether a legend row's words (upper case) can describe a device of `kind`: a switch's row
+/// says switch or dimmer, a sensor's sensor, a fire alarm device's what it is; a device of no
+/// known kind takes any row.
+fn row_fits(kind: &str, words: &str) -> bool {
+    let any = |ws: &[&str]| ws.iter().any(|w| words.contains(w));
+    match kind {
+        "switch" => any(&["SWITCH", "DIMMER"]),
+        "occupancy sensor" => any(&["SENSOR", "OCCUPANCY", "VACANCY"]),
+        "fire alarm device" => any(&["FIRE", "STROBE", "HORN", "SMOKE", "PULL", "DETECTOR", "SPEAKER", "ALARM"]),
+        _ => true,
+    }
+}
+
 pub fn mount_heights(d: &Drawing, marks: &[String]) -> BTreeMap<String, Height> {
     let ents = super::bspec::plan_objects(d);
     let texts = super::perceive::texts(&ents);
     let wanted: Vec<String> = marks.iter().map(|m| m.trim().to_ascii_uppercase()).filter(|m| !m.is_empty()).collect();
-    let mut legend: BTreeMap<String, Height> = BTreeMap::new();
+    // Each mark's legend height and the row's words.
+    let mut legend: BTreeMap<String, (Height, String)> = BTreeMap::new();
     let mut by_note: BTreeMap<&'static str, Height> = BTreeMap::new();
     for (_, text, at, h) in texts.iter().take(2_000_000) {
         let Some(inches) = mount_height_in(text) else { continue };
@@ -176,7 +198,9 @@ pub fn mount_heights(d: &Drawing, marks: &[String]) -> BTreeMap<String, Height> 
             .filter(|(_, t, _, _)| wanted.iter().any(|m| m.eq_ignore_ascii_case(t.trim())))
             .min_by(|a, b| (at.x - a.2.x).total_cmp(&(at.x - b.2.x)));
         if let Some((_, t, _, _)) = row {
-            legend.entry(t.trim().to_ascii_uppercase()).or_insert(Height { inches, source: SourceKind::Legend, doc: "device legend".into() });
+            legend
+                .entry(t.trim().to_ascii_uppercase())
+                .or_insert((Height { inches, source: SourceKind::Legend, doc: "device legend".into() }, up.clone()));
             continue;
         }
         for k in note_kinds(&up) {
@@ -187,7 +211,9 @@ pub fn mount_heights(d: &Drawing, marks: &[String]) -> BTreeMap<String, Height> 
         .iter()
         .map(|m| {
             let kind = kind_of(m);
-            let h = legend.get(m).cloned().or_else(|| by_note.get(kind).cloned()).unwrap_or_else(|| Height {
+            // A legend row of another kind of device under the same mark is not this one's.
+            let row = legend.get(m).filter(|(_, words)| row_fits(kind, words)).map(|(h, _)| h.clone());
+            let h = row.or_else(|| by_note.get(kind).cloned()).unwrap_or_else(|| Height {
                 inches: default_height(kind),
                 source: SourceKind::Default,
                 doc: format!("usual height for a {kind}"),
@@ -203,6 +229,18 @@ pub fn panel_of(circuit: &str) -> Option<String> {
     let (panel, number) = c.rsplit_once(['-', '/', '.'])?;
     let panel = panel.trim();
     (panel.chars().any(|ch| ch.is_ascii_alphabetic()) && number.chars().any(|ch| ch.is_ascii_digit()) && panel.len() <= 12).then(|| panel.to_string())
+}
+
+/// A circuit tag and the switch leg printed with it: `A-1,a` is circuit `A-1` on switch leg `a`
+/// (a lower-case letter after a comma); `LP-3,5` is two circuits and no leg.
+pub fn split_switch_leg(tag: &str) -> (String, Option<String>) {
+    let tag = tag.trim();
+    match tag.rsplit_once(',') {
+        Some((circuit, leg)) if leg.trim().len() == 1 && leg.trim().chars().all(|c| c.is_ascii_lowercase()) => {
+            (circuit.trim().to_string(), Some(leg.trim().to_string()))
+        }
+        _ => (tag.to_string(), None),
+    }
 }
 
 /// Whether `e` is a device the readers put in the spec (and so one `model.build` builds).
@@ -233,20 +271,79 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
     if d.layer(layer).is_none() {
         d.layers.push(cadaddy_doc::Layer { name: layer.into(), color: cadaddy_doc::color::Color::Index(30), ..cadaddy_doc::Layer::default() });
     }
+    // The built ceilings (rooms', the reflected ceiling plans'), for what hangs at the ceiling: a
+    // luminaire, a smoke detector. Their level, plan extent and underside.
+    let wants_ceiling = devices.iter().any(|t| field(t, "mount").as_deref() == Some("ceiling"));
+    let ceilings: Vec<(Option<String>, Bounds2, f64)> = if wants_ceiling {
+        d.model
+            .iter()
+            .filter(|e| super::elemprops::element_kind(e).as_deref() == Some("ceiling"))
+            .filter_map(|e| extent(d, e).map(|(b, z0, _)| (super::bspec::made_level(e), b, z0)))
+            .filter(|(_, b, z)| !b.is_empty() && z.is_finite())
+            .take(MAX_ELEMENTS)
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut built = 0;
     for t in devices {
         let Some(level) = sp.level(&t.level).filter(|l| l.sheet.is_none()) else { continue };
         let mark = field(t, "type").unwrap_or_default();
-        let kind = kind_of(&mark);
-        let height = heights.get(&mark.to_ascii_uppercase()).cloned().unwrap_or(Height {
-            inches: default_height(kind),
-            source: SourceKind::Default,
-            doc: format!("usual height for a {kind}"),
-        });
+        // What its sheet made it (a fire alarm plan's `S`), else what its mark says.
+        let kind = match t.kind.replace('_', " ").as_str() {
+            "fire alarm device" => "fire alarm device",
+            _ => kind_of(&mark),
+        };
         let read_at = Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf);
         let sheet_name = field(t, "sheet").unwrap_or_default();
         let (placed, registered) = register(sp, &sheet_name, level, read_at);
         let (x, y) = (placed.x, placed.y);
+        // A printed height (its legend's, a note's) first; else one that hangs at the ceiling is
+        // at the underside of the ceiling over it (the smallest: a soffit in a room), else its
+        // level's ceiling; else the usual height for its kind.
+        let ceiling = (field(t, "mount").as_deref() == Some("ceiling")).then(|| -> Option<Height> {
+            let p = Vec2::new(x, y);
+            let floor = level.elevation_ft * upf;
+            let over = ceilings
+                .iter()
+                .filter(|(l, b, _)| l.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&level.name)) && b.contains(p))
+                .min_by(|a, b| (a.1.width() * a.1.height()).total_cmp(&(b.1.width() * b.1.height())))
+                .map(|(_, _, z)| (z - floor) / upf * 12.0)
+                .filter(|inches| inches.is_finite() && *inches > 72.0);
+            let what = if kind == "fire alarm device" { "a detector" } else { "a luminaire" };
+            match over {
+                Some(inches) => Some(Height { inches, source: SourceKind::Rule, doc: format!("{what}: at the ceiling over it") }),
+                None => (level.ceiling_ft.is_finite() && level.ceiling_ft > 6.0).then(|| Height {
+                    inches: level.ceiling_ft * 12.0,
+                    source: SourceKind::Rule,
+                    doc: format!("{what}: at its level's ceiling"),
+                }),
+            }
+        });
+        // A luminaire on a wall (an exit sign, a sconce, a wall pack): 7'-6" unless printed.
+        let wall_light = (field(t, "mount").as_deref() == Some("wall")).then(|| Height {
+            inches: WALL_LUMINAIRE_IN,
+            source: SourceKind::Rule,
+            doc: "a wall luminaire (exit sign, sconce): 7'-6\" over the floor".into(),
+        });
+        let known = heights.get(&mark.to_ascii_uppercase());
+        // A printed height under 7' is no ceiling device's: another device of the legend under the
+        // same mark (a receptacle's +44"); 7' and up is a wall-mounted one's (a sconce, an exit). A
+        // wall luminaire's is 6' and up.
+        let ceiling_mount = ceiling.as_ref().is_some_and(Option::is_some);
+        let lowest = if ceiling_mount {
+            WALL_BOX_FT * 12.0
+        } else if wall_light.is_some() {
+            72.0
+        } else {
+            0.0
+        };
+        let printed = known.filter(|h| h.source != SourceKind::Default && h.inches >= lowest).cloned();
+        let height = printed.or(ceiling.flatten()).or(wall_light).or_else(|| known.cloned()).unwrap_or(Height {
+            inches: default_height(kind),
+            source: SourceKind::Default,
+            doc: format!("usual height for a {kind}"),
+        });
         let z = (level.elevation_ft + height.inches / 12.0) * upf;
         let (w, l, h) = (BOX_IN[0] * upf / 12.0, BOX_IN[1] * upf / 12.0, BOX_IN[2] * upf / 12.0);
         let mut m = super::wallgen::empty_mesh();
@@ -266,7 +363,15 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
             store.set("type", Prop::new(field(t, "device_type").unwrap_or_else(|| kind.to_string()), printed()));
             store.set("type_mark", Prop::new(mark.clone(), printed()));
         }
+        // A switch's or sensor's own leg (its designation), else the fixture's after its circuit.
+        if let Some(leg) = field(t, "switch_leg") {
+            store.set("switch_leg", Prop::new(leg, printed()).with_note("the lower-case letter of the fixtures it controls"));
+        }
         if let Some(c) = field(t, "circuit") {
+            let (c, leg) = split_switch_leg(&c);
+            if let Some(leg) = leg {
+                store.set("switch_leg", Prop::new(leg, printed()).with_note("the lower-case letter after its circuit: the switch that controls it"));
+            }
             store.set("circuit", Prop::new(c.clone(), printed()));
             match panel_of(&c) {
                 Some(p) => {
@@ -386,7 +491,7 @@ pub(crate) fn rebuild_devices(s: &mut Session, cmd: &str) -> Result<DeviceRebuil
     Ok(DeviceRebuild { removed: old.len(), built })
 }
 
-trait WithNote {
+pub(crate) trait WithNote {
     fn with_note(self, note: &str) -> Self;
 }
 
@@ -570,6 +675,20 @@ fn source_said(how: &str, sheet: &str) -> Source {
 }
 
 /// The value of a WALLGEN tag key on a built element (`size`, `system`, `tag`…).
+/// The plaster ring each built wall device's box takes (its `mud_ring`, inches), by the id of
+/// the spec device it was built from.
+pub(crate) fn ring_depths(d: &Drawing) -> HashMap<String, f64> {
+    d.model
+        .iter()
+        .filter_map(|e| {
+            let id = made(e, DEVID)?;
+            let depth = props::read(&e.common.xdata).get("mud_ring").map(Prop::text).and_then(|t| t.trim().parse::<f64>().ok());
+            Some((id, depth.filter(|v| v.is_finite() && *v > 0.0)?))
+        })
+        .take(MAX_ELEMENTS)
+        .collect()
+}
+
 fn made(e: &Entity, key: &str) -> Option<String> {
     super::bimlook::made_tag(e, key).map(str::to_string).filter(|v| !v.trim().is_empty())
 }
@@ -646,6 +765,8 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     let room_level = |label: &str| rooms3.iter().find(|r| room_label(r.number.as_deref(), &r.name).eq_ignore_ascii_case(label));
     let mut filled: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut changes: Vec<(Handle, Props)> = Vec::new();
+    // Wall boxes on walls of no known build-up (the spec has wall types with build-ups).
+    let mut untyped_boxes = 0usize;
     for (h, kind) in &work {
         let Some(e) = d.model.get(*h) else { continue };
         let mut store = props::read(&e.common.xdata);
@@ -663,20 +784,58 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                 if let Some(r) = room_at(&rooms, lvl, c) {
                     put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()).with_note("the room the device stands in"), tally);
                 }
+                let switch = store.get("type_mark").map(Prop::text).is_some_and(|m| kind_of(&m) == "switch");
+                let reach = if switch { SWITCH_WALL_FT } else { HOST_WALL_FT };
                 let host = walls
                     .iter()
                     .filter(|(_, l, _)| l.as_deref().zip(lvl).is_none_or(|(a, b)| a.eq_ignore_ascii_case(b)))
                     .map(|(wh, _, wb)| (wh, dist_to(wb, c)))
-                    .filter(|(_, dd)| *dd <= HOST_WALL_FT * upf)
+                    .filter(|(_, dd)| *dd <= reach * upf)
                     .min_by(|a, b| a.1.total_cmp(&b.1));
                 if let Some((wh, _)) = host {
                     put(&mut store, "host_wall", Prop::new(wh.hex(), Source::computed()).with_note("the nearest wall of its level"), tally);
+                    // A box in the wall (below 7' off the floor): the finish on its face, from the
+                    // wall's type (the legend's layers), and the plaster ring that reaches it.
+                    let in_wall = (z0 - level_z) / upf < WALL_BOX_FT;
+                    let wall_type =
+                        d.model.get(*wh).and_then(|w| made(w, "type")).and_then(|t| sp.wall_types.iter().find(|x| x.name.eq_ignore_ascii_case(&t)));
+                    // A box in a wall whose build-up nothing says: no ring can be given.
+                    if in_wall && sp.wall_types.iter().any(|t| t.assembly.is_some()) && wall_type.and_then(|wt| wt.assembly.as_ref()).is_none() {
+                        untyped_boxes += 1;
+                    }
+                    if in_wall && let Some(wt) = wall_type {
+                        let room = room_at(&rooms, lvl, c).map_or("", |r| r.label.as_str());
+                        if let Some((depth, words, note)) = super::walltypes::box_face(wt, room) {
+                            let src = Source::from_doc(SourceKind::Spec, &format!("wall type {}", wt.name));
+                            put(&mut store, "wall_type", Prop::new(wt.name.clone(), src.clone()), tally);
+                            put(&mut store, "wall_finish", Prop::new(words, src.clone()).with_note("board and channels on the box's face"), tally);
+                            if let Some(ring) = super::walltypes::ring_for(depth) {
+                                // A wall no tag typed: its type is a guess, and the ring with it.
+                                let guessed = d.model.get(*wh).and_then(|w| extent(d, w)).and_then(|(wb, _, _)| {
+                                    sp.walls.iter().find(|m| {
+                                        m.status() == cadaddy_walk3d::MarkStatus::Guess
+                                            && m.wall_type.eq_ignore_ascii_case(&wt.name)
+                                            && lvl.is_some_and(|l| l.eq_ignore_ascii_case(&m.level))
+                                            && dist_to(&wb, Vec2::new((m.a[0] + m.b[0]) / 2.0, (m.a[1] + m.b[1]) / 2.0) + shift) <= upf
+                                    })
+                                });
+                                let mut text = note.unwrap_or_else(|| format!("reaches {} of finish", super::walltypes::frac(depth)));
+                                if let Some(m) = guessed {
+                                    text = format!("{text}; the wall's type is a guess ({})", m.guess.as_deref().unwrap_or("no tag"));
+                                }
+                                put(&mut store, "mud_ring", Prop::new(round2(ring), src).with_unit("in").with_note(&text), tally);
+                            }
+                        }
+                    }
                 }
                 // The panel it is fed from, as an element, and its breaker on the panel's schedule.
                 let panel = store.get("panel").filter(|p| p.has_value()).map(Prop::text);
                 let circuit = store.get("circuit").filter(|p| p.has_value()).map(Prop::text);
                 if let Some(p) = &panel {
-                    if let Some(gh) = gear.get(&p.trim().to_ascii_uppercase()) {
+                    // The room's own panel of that letter (a guest room's G) before one elsewhere.
+                    let own = store.get("room").filter(|r| r.has_value()).map(|r| format!("{}-{}", p.trim(), r.text().trim()).to_ascii_uppercase());
+                    let key = own.filter(|k| gear.contains_key(k)).unwrap_or_else(|| p.trim().to_ascii_uppercase());
+                    if let Some(gh) = gear.get(&key) {
                         put(
                             &mut store,
                             "fed_from_handle",
@@ -685,9 +844,7 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                         );
                     }
                     let number = circuit.as_deref().and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.trim().to_string()));
-                    let row = equipment
-                        .get(&p.trim().to_ascii_uppercase())
-                        .and_then(|q| q.circuits.iter().find(|c| number.as_deref().is_some_and(|n| c.number.trim() == n)));
+                    let row = equipment.get(&key).and_then(|q| q.circuits.iter().find(|c| number.as_deref().is_some_and(|n| c.number.trim() == n)));
                     if let Some(c) = row {
                         let src = Source::from_doc(SourceKind::Schedule, if c.source.is_empty() { "panel schedule" } else { &c.source });
                         if !c.breaker.trim().is_empty() {
@@ -887,7 +1044,7 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     if changed > 0 {
         s.touch();
     }
-    Ok(json!({ "filled": filled, "elements": changed, "spec": stored }))
+    Ok(json!({ "filled": filled, "elements": changed, "spec": stored, "wall_boxes_untyped": untyped_boxes }))
 }
 
 /// The sheet a plan point lies on (the set's sheet rectangles), else the level's name.

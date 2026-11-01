@@ -846,6 +846,35 @@ fn save_has_a_force_parameter() {
     assert!(!r.to_string().contains("is not a parameter"), "{r}");
 }
 
+/// Headless there is no user to ask: `save {path}` onto another existing file is refused, `force: true` replaces it.
+#[test]
+fn save_onto_another_existing_drawing_needs_force() {
+    use cadaddy_engine::cmd::file::{IoHooks, set_io};
+    set_io(IoHooks {
+        read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
+        write: |_, _| Ok(b"saved".to_vec()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-overwrite-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let other = dir.join("other.dxf");
+    std::fs::write(&other, b"another drawing").unwrap();
+    let path = other.to_string_lossy().into_owned();
+    let r = call(&mut s, 1, "tools/call", json!({"name": "save", "arguments": {"path": path}}));
+    assert_eq!(r["result"]["isError"], json!(true), "{r}");
+    assert!(r.to_string().contains("force:true"), "{r}");
+    assert_eq!(std::fs::read(&other).unwrap(), b"another drawing");
+    let r = call(&mut s, 2, "tools/call", json!({"name": "save", "arguments": {"path": path, "force": true}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert_ne!(std::fs::read(&other).unwrap(), b"another drawing");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// B7-027: a tool whose result starts with an image (render) still carries the unknown-argument warning.
 #[test]
 fn render_warns_about_unknown_arguments() {

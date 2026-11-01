@@ -2758,7 +2758,8 @@ fn mtext_plots_with_a_hidden_copy_without_its_codes() {
         .filter(|e| e.common.layer == crate::pdf_read::HIDDEN_TEXT_LAYER)
         .filter_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None })
         .collect();
-    assert_eq!(words, vec!["GENERAL NOTES: 1. ALL RECEPTACLES 20° SEE 1/2".to_string()]);
+    // A hidden copy per line, each where its line is drawn (a reader finds the words there).
+    assert_eq!(words, vec!["GENERAL NOTES:".to_string(), "1. ALL RECEPTACLES 20°".to_string(), "SEE 1/2".to_string()]);
 }
 
 #[test]

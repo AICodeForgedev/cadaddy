@@ -55,6 +55,9 @@ use cadaddy_doc::EntityKind;
 
 /// Lines in one BOM, at most (hostile specs).
 const MAX_LINES: usize = 200_000;
+/// Elements a line lists at most: the model takeoff counts a line's elements from its list
+/// (a level's 700 walls were counted 500).
+const MAX_LINE_ELEMENTS: usize = 5_000;
 /// A conduit stick, feet (a coupling joins each two).
 const STICK_FT: f64 = 10.0;
 /// Conduit supports: within 3' of each end and every 10' between (NEC 358.30 for EMT).
@@ -78,7 +81,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.bom", "Bill of Materials", run)
             .alias(&["bom"])
             .params(
-                "{group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
+                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
             ),
     ]
 }
@@ -185,9 +188,11 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
     let circuits: BTreeMap<&str, &cadaddy_walk3d::tags::ElementTag> =
         sp.tags.iter().filter(|t| t.kind == "circuit").map(|t| (t.id.as_str(), t)).collect();
     let label_of = |t: &cadaddy_walk3d::tags::ElementTag| t.fields.get("circuit").map_or_else(String::new, |f| f.value.clone());
+    // The plaster ring each built wall box takes (its wall type's finish on the box's face).
+    let rings = s.doc().map(super::propfill::ring_depths).unwrap_or_default();
     for t in sp.tags.iter().take(MAX_LINES) {
         let f = |k: &str| t.fields.get(k).map(|v| (v.value.clone(), v.source.clone()));
-        let firm = |src: &str| if matches!(src, "plan" | "schedule" | "note" | "user") { "firm" } else { "rule" };
+        let firm = |src: &str| if matches!(src, "plan" | "schedule" | "note" | "user" | "legend") { "firm" } else { "rule" };
         // Its circuit, when what was read beside it is one (`D-7`, not a sheet number).
         let on = f("circuit").map(|c| c.0).filter(|c| super::printcond::parse_circuit(c).is_some()).unwrap_or_default();
         match t.kind.as_str() {
@@ -215,11 +220,12 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
             "homerun" | "conduit" | "circuit" => {}
             kind => {
                 let (ty, src) = f("device_type").unwrap_or_else(|| (kind.replace('_', " "), "plan".into()));
+                let plumbing = kind == "plumbing_fixture";
                 add(
                     lines,
                     Line {
-                        trade: "electrical",
-                        category: "devices".into(),
+                        trade: if plumbing { "plumbing" } else { "electrical" },
+                        category: if plumbing { "plumbing fixtures" } else { "devices" }.into(),
                         item: ty,
                         size: String::new(),
                         unit: "each",
@@ -234,18 +240,29 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                 );
                 if matches!(kind, "receptacle" | "switch" | "data_outlet") {
                     let rule = "one box, plaster ring and plate per wall device (company default)".to_string();
-                    for (item, size) in [("Box, 4\" square", "2-1/8\" deep"), ("Plaster ring", "1 gang"), ("Device plate", "1 gang")] {
+                    // The ring its wall needs (the built box's mud_ring), else the default.
+                    let ring = rings.get(&t.id).map(|v| format!("1 gang, {} deep", super::walltypes::frac(*v)));
+                    for (item, size) in [
+                        ("Box, 4\" square", "2-1/8\" deep".to_string()),
+                        ("Plaster ring", ring.clone().unwrap_or_else(|| "1 gang".into())),
+                        ("Device plate", "1 gang".into()),
+                    ] {
+                        let by_wall = item == "Plaster ring" && ring.is_some();
                         add(
                             lines,
                             Line {
                                 trade: "electrical",
                                 category: "boxes".into(),
                                 item: item.into(),
-                                size: size.into(),
+                                size,
                                 unit: "each",
                                 net: 1.0,
-                                status: "rule",
-                                rule: Some(rule.clone()),
+                                status: if by_wall { "model" } else { "rule" },
+                                rule: Some(if by_wall {
+                                    "the box's wall type: the board and channels on its face (partition legend)".into()
+                                } else {
+                                    rule.clone()
+                                }),
                                 level: t.level.clone(),
                                 elements: vec![t.id.clone()],
                                 waste_qty: None,
@@ -431,6 +448,33 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
     Ok(())
 }
 
+/// Each switch leg's 0-10V control pair (`dimcheck::zero_ten_pairs`): its 0-10V fixtures (by
+/// their submittals) chained, plus an allowance to the dimmer or sensor.
+fn zero_ten_pairs(s: &Session, lines: &mut Vec<Line>) {
+    for p in super::dimcheck::zero_ten_pairs(s) {
+        add(
+            lines,
+            Line {
+                trade: "electrical",
+                category: "wire".into(),
+                item: "0-10V dimming control pair, 2 conductor Class 2".into(),
+                size: "#18".into(),
+                unit: "ft",
+                net: p.feet,
+                status: "rule",
+                rule: Some(format!(
+                    "a 2-wire 0-10V pair from each switch leg's dimmer or sensor to its 0-10V fixtures (their submittals): each leg's fixtures chained plus {}' a run to the control",
+                    super::dimcheck::CONTROL_ALLOWANCE_FT
+                )),
+                level: p.level,
+                elements: p.handles.into_iter().take(MAX_LINE_ELEMENTS).collect(),
+                circuit: p.circuit,
+                waste_qty: None,
+            },
+        );
+    }
+}
+
 /// The plan (XY) area of the mesh entities named by `handles`, sq units: sum of each face's
 /// signed area projected onto XY (shoelace per face polygon).
 fn mesh_plan_area(d: &cadaddy_doc::Drawing, handles: &[String]) -> f64 {
@@ -479,7 +523,7 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
         let level = super::bspec::made_level(e).unwrap_or_default();
         let entry = built.entry((part, level)).or_insert((0, Vec::new()));
         entry.0 += 1;
-        if entry.1.len() < 500 {
+        if entry.1.len() < MAX_LINE_ELEMENTS {
             entry.1.push(e.handle.hex());
         }
     }
@@ -904,7 +948,7 @@ fn built_model(s: &Session, lines: &mut Vec<Line>) -> Result<(Vec<String>, Vec<V
     for (level, rs) in &rooms_by_level {
         room_count += rs.len();
         let handles = |f: &dyn Fn(&super::bspec::RoomElement) -> bool| -> Vec<String> {
-            rs.iter().filter(|r| f(r)).take(500).map(|r| r.handle.hex()).collect()
+            rs.iter().filter(|r| f(r)).take(MAX_LINE_ELEMENTS).map(|r| r.handle.hex()).collect()
         };
         let line = |item: String, size: String, unit: &'static str, net: f64, elements: Vec<String>| Line {
             trade: "general",
@@ -1176,14 +1220,51 @@ fn devices_from_drawing(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                 status: "model",
                 rule: Some("detected from device symbols on drawing".into()),
                 level: level.clone(),
-                elements: handles.iter().take(500).cloned().collect(),
+                elements: handles.iter().take(MAX_LINE_ELEMENTS).cloned().collect(),
                 ..Line::default()
             },
         );
         // Box, plaster ring and plate for wall-mounted devices.
         if matches!(kind.as_str(), "receptacle" | "switch" | "data_outlet") {
             let rule = "one box, plaster ring and plate per wall device (company default)".to_string();
+            // The rings by the depth each box's wall needs (its wall type's finish on the box's
+            // face: the element's mud_ring); the rest at the company default.
+            let mut by_depth: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for h in handles {
+                let depth = cadaddy_doc::Handle::parse_hex(h)
+                    .and_then(|x| d.entity(x))
+                    .and_then(|e| cadaddy_doc::props::read(&e.common.xdata).get("mud_ring").map(cadaddy_doc::props::Prop::text))
+                    .and_then(|t| t.trim().parse::<f64>().ok())
+                    .filter(|v| v.is_finite() && *v > 0.0);
+                if let Some(v) = depth {
+                    by_depth.entry(super::walltypes::frac(v)).or_default().push(h.clone());
+                }
+            }
+            let ringed: usize = by_depth.values().map(Vec::len).sum();
+            for (depth, hs) in &by_depth {
+                add(
+                    lines,
+                    Line {
+                        trade: "electrical",
+                        category: "boxes".into(),
+                        item: "Plaster ring".into(),
+                        size: format!("1 gang, {depth} deep"),
+                        unit: "each",
+                        net: hs.len() as f64,
+                        status: "model",
+                        rule: Some("the box's wall type: the board and channels on its face (partition legend)".into()),
+                        level: level.clone(),
+                        elements: hs.clone(),
+                        ..Line::default()
+                    },
+                );
+            }
+            let rest = count.saturating_sub(ringed);
             for (part, size) in [("Box, 4\" square", "2-1/8\" deep"), ("Plaster ring", "1 gang"), ("Device plate", "1 gang")] {
+                let net = if part == "Plaster ring" { rest } else { *count };
+                if net == 0 {
+                    continue;
+                }
                 add(
                     lines,
                     Line {
@@ -1192,7 +1273,7 @@ fn devices_from_drawing(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                         item: part.into(),
                         size: size.into(),
                         unit: "each",
-                        net: *count as f64,
+                        net: net as f64,
                         status: "rule",
                         rule: Some(rule.clone()),
                         level: level.clone(),
@@ -1361,13 +1442,40 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
             st(&e, "kind").to_ascii_lowercase().as_str(),
             "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"
         );
+        // A room's own panel (each guest room's G, tagged G-<room>): counted together by its
+        // letter, each with its flush trim.
+        let own = match (e["properties"]["PANEL"].as_str(), e["properties"]["ROOM"].as_str()) {
+            (Some(p), Some(r)) if st(&e, "tag") == format!("{p}-{r}") => Some(p.to_string()),
+            _ => None,
+        };
+        if let Some(p) = &own {
+            add(
+                lines,
+                Line {
+                    trade: "electrical",
+                    category: "equipment".into(),
+                    item: format!("Panel cover/trim, flush: panel {p}"),
+                    unit: "each",
+                    net: 1.0,
+                    status: "rule",
+                    rule: Some("one per recessed panel".into()),
+                    level: st(&e, "level"),
+                    elements: vec![st(&e, "tag")],
+                    ..Line::default()
+                },
+            );
+        }
         add(
             lines,
             Line {
                 trade: if electrical { "electrical" } else { "mechanical" },
                 category: "equipment".into(),
-                item: format!("{} {}", st(&e, "kind"), st(&e, "tag")),
-                size: st(&e, "size"),
+                item: match &own {
+                    Some(p) => format!("{} {p}, one per room", st(&e, "kind")),
+                    None => format!("{} {}", st(&e, "kind"), st(&e, "tag")),
+                },
+                // One size for all of them (their boxes turn with their walls).
+                size: own.as_ref().and_then(|_| e["properties"]["SIZE"].as_str()).map_or_else(|| st(&e, "size"), str::to_string),
                 unit: "each",
                 net: 1.0,
                 status: "firm",
@@ -1796,6 +1904,7 @@ fn required(lines: &[Line], levels: usize) -> Vec<(String, f64, &'static str, St
 pub(super) fn model_lines(s: &mut Session) -> Result<Vec<Value>> {
     let mut lines: Vec<Line> = Vec::new();
     electrical(s, &mut lines)?;
+    zero_ten_pairs(s, &mut lines);
     mechanical(s, &mut lines);
     Ok(lines
         .into_iter()
@@ -1806,6 +1915,7 @@ pub(super) fn model_lines(s: &mut Session) -> Result<Vec<Value>> {
 }
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
+    super::exchange::guard_params(s, "bim.bom", p, &["file"])?;
     // By the elements' properties (Q6003): any keys, a filter by kind or property.
     if super::propuse::by_properties(p, &["job", "level", "trade", "circuit"], &[]) {
         return super::propuse::grouped(s, "bim.bom", p);
@@ -1819,6 +1929,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // Built model: walls, doors, ceilings, floors, rooms (Q5243).
     let (built_missing, built_suspects, model_has_elements) = built_model(s, &mut lines)?;
     electrical(s, &mut lines)?;
+    zero_ten_pairs(s, &mut lines);
     // Devices from symbol clusters on the drawing (Q5243), when the model has none of its own: a
     // guided job puts the devices its readers found into the model, and counting both doubled them.
     if !lines.iter().any(|l| l.category == "devices") {
@@ -1951,8 +2062,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if devices > 0.0 && plates <= 0.0 {
         check.push(json!({ "issue": "accessory_missing", "item": "Device plate", "detail": "devices are on the BOM without their plates (sold separately)" }));
     }
-    for e in grouped.iter().filter(|l| l.category == "equipment" && l.item.to_ascii_lowercase().contains("panel")) {
-        for acc in ["Panel cover/trim", "Lug kit"] {
+    for e in grouped
+        .iter()
+        .filter(|l| l.category == "equipment" && l.item.to_ascii_lowercase().contains("panel") && !l.item.starts_with("Panel cover/trim"))
+    {
+        // A room's load center takes its feeder on its own main (no lug kit).
+        let accessories: &[&str] = if e.item.ends_with("one per room") { &["Panel cover/trim"] } else { &["Panel cover/trim", "Lug kit"] };
+        for acc in accessories.iter().copied() {
             if !grouped.iter().any(|l| l.item.starts_with(acc)) {
                 check.push(json!({ "issue": "accessory_missing", "item": acc, "detail": format!("{} has no {acc} line (sold separately)", e.item) }));
             }
@@ -2129,6 +2245,41 @@ mod tests {
             "{req:?}"
         );
         assert!(r["csv"].as_str().unwrap().lines().count() > 10);
+    }
+
+    #[test]
+    fn a_built_wall_box_takes_the_ring_its_wall_needs() {
+        let mut s = Session::new();
+        job(&mut s);
+        // R1's built box is on a wall whose face needs a 5/8" ring (its mud_ring).
+        let mut tags = super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "1", cadaddy_doc::Handle(0));
+        tags.push(cadaddy_doc::RawTag { code: 1000, value: "devid:R1".into() });
+        let mut store = cadaddy_doc::props::Props::default();
+        store.set(
+            "mud_ring",
+            cadaddy_doc::props::Prop::new(0.625, cadaddy_doc::props::Source::of(cadaddy_doc::props::SourceKind::Spec)).with_unit("in"),
+        );
+        let xdata = cadaddy_doc::props::write(&tags, &store);
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, cadaddy_geom::Vec2::new(36.0, 12.0), cadaddy_geom::Vec2::new(40.0, 12.0), 2.0, 16.0, 20.0);
+        s.doc_mut()
+            .unwrap()
+            .add(
+                &cadaddy_doc::Space::Model,
+                cadaddy_doc::Common { layer: "3D-Devices".into(), xdata: xdata.into(), ..Default::default() },
+                cadaddy_doc::EntityKind::Mesh(m),
+            )
+            .unwrap();
+        let r = s.execute("bim.bom", &json!({})).unwrap();
+        let rings: Vec<&Value> = r["lines"].as_array().unwrap().iter().filter(|l| l["item"] == json!("Plaster ring")).collect();
+        let by_wall = rings
+            .iter()
+            .find(|l| l["size"].as_str().is_some_and(|z| z.starts_with("1 gang, ") && z.ends_with("deep")))
+            .copied()
+            .unwrap_or(&Value::Null);
+        assert_eq!(by_wall["net"], json!(1.0), "{rings:?}");
+        assert_eq!(by_wall["status"], json!("model"));
+        assert_eq!(rings.iter().find(|l| l["size"] == json!("1 gang")).map(|l| l["net"].clone()), Some(json!(2.0)), "the rest at the default");
     }
 
     #[test]
