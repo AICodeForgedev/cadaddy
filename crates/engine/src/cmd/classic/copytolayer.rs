@@ -22,7 +22,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn valid_layer_name(n: &str) -> bool {
-    !n.is_empty() && n.chars().count() <= 255 && !n.chars().any(|c| "<>/\\\":;?*|,=`".contains(c) || c.is_control())
+    super::super::names::is_valid(n)
 }
 
 fn run_copytolayer(s: &mut Session, p: &Value) -> Result<Value> {

@@ -69,6 +69,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     match option.as_str() {
         "create" => {
             let hs = targets(s, p)?;
+            super::refuse_blank_name("group", p)?;
             let name = create(s, str_param(p, "name"), str_param(p, "description").unwrap_or_default(), &hs, bool_or(p, "selectable", true))?;
             Ok(json!({ "name": name }))
         }

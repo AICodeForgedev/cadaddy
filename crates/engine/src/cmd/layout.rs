@@ -175,15 +175,7 @@ pub(crate) const BAD_CHARS: &[char] = &['<', '>', '/', '\\', '"', ':', ';', '?',
 
 fn check_name(cmd: &str, d: &Drawing, name: &str, except: Option<&str>) -> Result<String> {
     let n = name.trim();
-    if n.is_empty() {
-        return Err(bad(cmd, "layout name is empty"));
-    }
-    if n.chars().count() > 255 {
-        return Err(bad(cmd, "layout name is longer than 255 characters"));
-    }
-    if n.contains(BAD_CHARS) || n.chars().any(char::is_control) {
-        return Err(bad(cmd, format!("invalid layout name `{n}`")));
-    }
+    super::names::check(cmd, "layout", n)?;
     if n.eq_ignore_ascii_case("model") {
         return Err(bad(cmd, "`Model` is reserved"));
     }

@@ -130,6 +130,7 @@ mod models3d;
 mod modify;
 mod modify2;
 mod mtext_opts;
+mod names;
 mod overkill;
 pub mod overrides;
 pub mod p2meval;
