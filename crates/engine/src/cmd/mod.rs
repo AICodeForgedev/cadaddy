@@ -166,6 +166,7 @@ pub mod ugsheets;
 pub(crate) mod underlay;
 mod unittypes;
 pub mod validate;
+pub mod validate_packet;
 pub mod validate_rules;
 pub mod verify;
 pub mod walkpub;
@@ -794,6 +795,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(sheetfacts::specs());
         v.extend(validate::specs());
         v.extend(validate_rules::specs());
+        v.extend(validate_packet::specs());
         v.extend(printrev::specs());
         v.extend(ceilings::specs());
         v.extend(rfi::specs());
