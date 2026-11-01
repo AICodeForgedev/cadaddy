@@ -248,7 +248,7 @@ fn read_products(s: &mut Session, files: &[String]) -> Read {
         out.read.push(json!({"file": name, "products": marks.len(), "marks": marks}));
     }
     for u in &out.unread {
-        s.echo(&format!("Apply Submittals: {}: {}", u["file"].as_str().unwrap_or(""), u["error"].as_str().unwrap_or("")));
+        s.echo(format!("Apply Submittals: {}: {}", u["file"].as_str().unwrap_or(""), u["error"].as_str().unwrap_or("")));
     }
     out
 }
