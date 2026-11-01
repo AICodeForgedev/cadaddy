@@ -95,6 +95,22 @@ impl Sim {
         [self.a, self.b, self.tx, self.ty].iter().all(|v| v.is_finite())
     }
 
+    /// The fit back: `self.inverse().apply(self.apply(p)) == p`; none for a fit to a point.
+    pub fn inverse(&self) -> Option<Sim> {
+        let n = self.a * self.a + self.b * self.b;
+        if !(n.is_finite() && n > 1e-18) {
+            return None;
+        }
+        let (a, b) = (self.a / n, -self.b / n);
+        Some(Sim { a, b, tx: -(a * self.tx - b * self.ty), ty: -(b * self.tx + a * self.ty) })
+    }
+
+    /// `self` then `next`: `p ↦ next(self(p))`.
+    pub fn then(&self, next: &Sim) -> Sim {
+        let t = next.apply([self.tx, self.ty]);
+        Sim { a: next.a * self.a - next.b * self.b, b: next.b * self.a + next.a * self.b, tx: t[0], ty: t[1] }
+    }
+
     /// The transform taking `p0`, `p1` onto `q0`, `q1`.
     fn from_two(p0: [f64; 2], p1: [f64; 2], q0: [f64; 2], q1: [f64; 2]) -> Option<Sim> {
         let (dx, dy) = (p1[0] - p0[0], p1[1] - p0[1]);
@@ -463,6 +479,18 @@ pub fn merge_identities(items: &[IdItem], tol: &dyn Fn(&str) -> f64) -> (Vec<IdG
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_fit_then_another_is_both_in_turn() {
+        let f = Sim { a: 0.0, b: 2.0, tx: 1.0, ty: -3.0 };
+        let g = Sim::scale_offset(0.5, [10.0, 20.0]);
+        let p = [3.0, 4.0];
+        let (both, step) = (f.then(&g).apply(p), g.apply(f.apply(p)));
+        assert!((both[0] - step[0]).abs() < 1e-12 && (both[1] - step[1]).abs() < 1e-12, "{both:?} vs {step:?}");
+        let back = f.inverse().map(|i| i.apply(f.apply(p))).unwrap_or([f64::NAN; 2]);
+        assert!((back[0] - p[0]).abs() < 1e-12 && (back[1] - p[1]).abs() < 1e-12, "{back:?}");
+        assert!(Sim { a: 0.0, b: 0.0, tx: 1.0, ty: 1.0 }.inverse().is_none());
+    }
 
     #[test]
     fn door_and_room_numbers_read_as_tags_and_other_marks_do_not() {

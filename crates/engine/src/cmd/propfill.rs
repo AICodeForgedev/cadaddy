@@ -50,6 +50,12 @@ const WALL_LUMINAIRE_IN: f64 = 90.0;
 /// A switch is always on a wall: read at its designation beside the symbol (or stamped from a
 /// typical room's plan), it is on the nearest wall this far, feet.
 const SWITCH_WALL_FT: f64 = 3.0;
+
+/// A wall device's room is looked for this far past the wall's face (feet).
+const FACE_PROBE_FT: f64 = 0.5;
+
+/// A device in no room's outline takes a room this close (feet).
+const ROOM_NEAR_FT: f64 = 1.0;
 /// A device whose box starts below this height (feet off its floor) is in the wall, not the
 /// ceiling: its box gets a plaster ring.
 const WALL_BOX_FT: f64 = 7.0;
@@ -532,6 +538,48 @@ fn room_at<'a>(rooms: &'a [RoomShape], level: Option<&str>, p: Vec2) -> Option<&
     })
 }
 
+/// The room on the side of the wall `wall` (its box) a device at `p` is drawn on: a point just
+/// past the wall's face on that side, else on the other (a device right on the wall's line).
+fn room_by_face<'a>(rooms: &'a [RoomShape], level: Option<&str>, wall: &Bounds2, p: Vec2, upf: f64) -> Option<&'a RoomShape> {
+    let (w, h) = (wall.width(), wall.height());
+    if !(w.is_finite() && h.is_finite()) {
+        return None;
+    }
+    // Across the wall: its short side.
+    let (n, half, off) =
+        if w >= h { (Vec2::new(0.0, 1.0), h / 2.0, p.y - wall.center().y) } else { (Vec2::new(1.0, 0.0), w / 2.0, p.x - wall.center().x) };
+    let past = half + FACE_PROBE_FT * upf;
+    let side = if off < 0.0 { -1.0 } else { 1.0 };
+    let probe = |k: f64| room_at(rooms, level, p - n * off + n * (k * past));
+    probe(side).or_else(|| probe(-side))
+}
+
+/// The room of `level` whose outline comes within `within` of `p`, the nearest.
+fn room_near<'a>(rooms: &'a [RoomShape], level: Option<&str>, p: Vec2, within: f64) -> Option<&'a RoomShape> {
+    rooms
+        .iter()
+        .filter(|r| r.level.is_none() || level.is_none() || r.level.as_deref().zip(level).is_some_and(|(a, b)| a.eq_ignore_ascii_case(b)))
+        .filter(|r| dist_to(&r.bounds, p) <= within)
+        .map(|r| (r, edge_dist(&r.outline, p)))
+        .filter(|(_, dd)| *dd <= within)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(r, _)| r)
+}
+
+/// How far `p` is from the nearest edge of the closed `outline`.
+fn edge_dist(outline: &[Vec2], p: Vec2) -> f64 {
+    let n = outline.len();
+    (0..n)
+        .filter_map(|i| Some((*outline.get(i)?, *outline.get((i + 1) % n)?)))
+        .map(|(a, b)| {
+            let ab = b - a;
+            let len2 = ab.x * ab.x + ab.y * ab.y;
+            let t = if len2 > 0.0 { ((p - a).x * ab.x + (p - a).y * ab.y) / len2 } else { 0.0 };
+            p.dist(a + ab * t.clamp(0.0, 1.0))
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 /// Set `key` unless a person set it (their value stays) or the store already has a value read
 /// from the prints that the fill would only replace with an assumption.
 fn put(store: &mut Props, key: &str, prop: Prop, filled: &mut BTreeMap<String, usize>) {
@@ -767,6 +815,8 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     let mut changes: Vec<(Handle, Props)> = Vec::new();
     // Wall boxes on walls of no known build-up (the spec has wall types with build-ups).
     let mut untyped_boxes = 0usize;
+    // Devices in no room, per level.
+    let mut no_room: BTreeMap<String, usize> = BTreeMap::new();
     for (h, kind) in &work {
         let Some(e) = d.model.get(*h) else { continue };
         let mut store = props::read(&e.common.xdata);
@@ -781,9 +831,6 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
             "device" | "light_fixture" | "fixture" if made(e, DEVID).is_some() || kind == "device" => {
                 let Some((b, z0, z1)) = ext else { continue };
                 let c = b.center();
-                if let Some(r) = room_at(&rooms, lvl, c) {
-                    put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()).with_note("the room the device stands in"), tally);
-                }
                 let switch = store.get("type_mark").map(Prop::text).is_some_and(|m| kind_of(&m) == "switch");
                 let reach = if switch { SWITCH_WALL_FT } else { HOST_WALL_FT };
                 let host = walls
@@ -792,6 +839,20 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                     .map(|(wh, _, wb)| (wh, dist_to(wb, c)))
                     .filter(|(_, dd)| *dd <= reach * upf)
                     .min_by(|a, b| a.1.total_cmp(&b.1));
+                // The room it stands in; a device on a wall line (a receptacle drawn on the wall)
+                // the room on the face it serves, the side of the wall it is drawn on; else a room
+                // within a foot of it.
+                let host_bounds = host.and_then(|(wh, _)| walls.iter().find(|(w, _, _)| w == wh)).map(|(_, _, wb)| *wb);
+                let served = room_at(&rooms, lvl, c)
+                    .map(|r| (r, "the room the device stands in"))
+                    .or_else(|| {
+                        host_bounds.and_then(|wb| room_by_face(&rooms, lvl, &wb, c, upf)).map(|r| (r, "the room on the face of the wall it serves"))
+                    })
+                    .or_else(|| room_near(&rooms, lvl, c, ROOM_NEAR_FT * upf).map(|r| (r, "the room within a foot of it")));
+                match served {
+                    Some((r, note)) => put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()).with_note(note), tally),
+                    None => *no_room.entry(lvl.unwrap_or("").to_string()).or_default() += 1,
+                }
                 if let Some((wh, _)) = host {
                     put(&mut store, "host_wall", Prop::new(wh.hex(), Source::computed()).with_note("the nearest wall of its level"), tally);
                     // A box in the wall (below 7' off the floor): the finish on its face, from the
@@ -1044,7 +1105,7 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     if changed > 0 {
         s.touch();
     }
-    Ok(json!({ "filled": filled, "elements": changed, "spec": stored, "wall_boxes_untyped": untyped_boxes }))
+    Ok(json!({ "filled": filled, "elements": changed, "spec": stored, "wall_boxes_untyped": untyped_boxes, "devices_in_no_room": no_room }))
 }
 
 /// The sheet a plan point lies on (the set's sheet rectangles), else the level's name.

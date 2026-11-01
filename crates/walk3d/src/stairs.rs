@@ -24,6 +24,9 @@ pub const RISER_MAX_IN: f64 = 7.75;
 pub const RISER_MAX_COMMERCIAL_IN: f64 = 7.0;
 pub const TREAD_MIN_IN: f64 = 10.0;
 pub const TREAD_MIN_COMMERCIAL_IN: f64 = 11.0;
+/// Risers this shallow are lawful but no stair is drawn so (a tread count misread, a ladder
+/// drawn as a stair): built with a warning to check it.
+pub const RISER_SHALLOW_IN: f64 = 5.0;
 /// Steepest ramp: 1 in 12.
 pub const RAMP_MAX_SLOPE: f64 = 1.0 / 12.0;
 

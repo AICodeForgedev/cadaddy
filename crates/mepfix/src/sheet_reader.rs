@@ -624,7 +624,7 @@ const MAX_ROUNDS: usize = 20_000;
 
 /// A circle, or a closed polyline that is one (a PDF's print draws circles as many short
 /// segments or as two arcs): its centre and radius.
-fn round_shape(kind: &EntityKind) -> Option<([f64; 2], f64)> {
+pub(crate) fn round_shape(kind: &EntityKind) -> Option<([f64; 2], f64)> {
     match kind {
         EntityKind::Circle(c) => Some(([c.center.x, c.center.y], c.radius)),
         EntityKind::LwPolyline(pl) => {

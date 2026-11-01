@@ -32,6 +32,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Most callouts kept per page (hostile files).
 const MAX_PAGE_CALLOUTS: usize = 2_000;
+
+/// A view fitted into its boundary box by the box's middle takes its walls' fit on the plan
+/// instead when that covers this share of its lines ...
+const BOX_LINE_COVERAGE: f64 = 0.5;
+/// ... and lands inside the box (give or take this share of its diagonal).
+const BOX_LINE_SLACK: f64 = 0.1;
 /// Most devices kept per page.
 const MAX_PAGE_DEVICES: usize = 20_000;
 /// Most door and room numbers kept per page.
@@ -638,11 +644,58 @@ pub fn mounting_height(text: &str) -> Option<f64> {
     (v > 0.0 && v <= 30.0).then_some(v)
 }
 
+/// The attribute lettering of symbols that are callout bubbles: a round shape split by a line
+/// through its middle (the detail number over the sheet number). A device symbol's tag is its
+/// own, read with the symbol.
+fn bubble_symbol_texts(d: &Drawing) -> Vec<TextItem> {
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        let EntityKind::Insert(ins) = &e.kind else { continue };
+        if ins.attribs.is_empty() || !ins.block.starts_with("PDF-SYM-") {
+            continue;
+        }
+        let Some(blk) = d.block(&ins.block) else { continue };
+        let ents = || blk.entities.iter().take(64);
+        let split = ents().filter_map(|be| sheet_reader::round_shape(&be.kind)).any(|(c, r)| {
+            ents().any(|be| match &be.kind {
+                EntityKind::Line(l) => {
+                    let (a, b) = ([l.a.x, l.a.y], [l.b.x, l.b.y]);
+                    (a[1] - b[1]).abs() < 0.1 * r
+                        && ((a[1] + b[1]) / 2.0 - c[1]).abs() < 0.3 * r
+                        && (a[0] - b[0]).abs() > 1.6 * r
+                        && ((a[0] + b[0]) / 2.0 - c[0]).abs() < 0.3 * r
+                }
+                _ => false,
+            })
+        });
+        if !split {
+            continue;
+        }
+        for a in ins.attribs.iter().filter(|a| !a.invisible) {
+            let t = &a.text;
+            let value = t.value.trim().to_string();
+            let at = t.insert.xy();
+            if value.is_empty() || !at.is_finite() || !(t.height.is_finite() && t.height > 0.0) {
+                continue;
+            }
+            out.push(TextItem { value, at, height: t.height, rotation: if t.rotation.is_finite() { t.rotation } else { 0.0 } });
+        }
+        if out.len() >= MAX_PAGE_CALLOUTS * 4 {
+            break;
+        }
+    }
+    out
+}
+
 /// Read one page: its bubbles and marks, written references, boxes, views, devices and match
 /// lines. `own` is the page's sheet number (bubbles naming it beside a view title are that
 /// view's number).
 pub fn read_page(d: &Drawing, own: &str) -> PageRead {
-    let texts = one_copy(sheet_facts::texts(d));
+    // The lettering of the callout bubbles the import made symbols of (a split circle drawn
+    // again and again: its sheet number became the symbol's attribute).
+    let mut raw = sheet_facts::texts(d);
+    raw.extend(bubble_symbol_texts(d));
+    let texts = one_copy(raw);
     let mut heights: Vec<f64> = texts.iter().map(|t| t.height).collect();
     heights.sort_by(f64::total_cmp);
     let median_h = heights.get(heights.len() / 2).copied().unwrap_or(1.0).max(1e-9);
@@ -1650,8 +1703,20 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                 Some((Sim::scale_offset(s, [cb[0] - s * cr[0], cb[1] - s * cr[1]]), "boundary"))
             };
             let fit = fit.or_else(boundary_fit);
-            let line_fit = if fit.is_none() { by_lines(h) } else { None };
-            let fit = fit.or_else(|| line_fit.map(|l| (l.sim, "lines")));
+            // Fitted into its box only by the box's middle: its walls laid on the plan's there say
+            // exactly where, when they land about where the box puts it.
+            // (The box's middle is the view's only when the region found is the whole view: a plan
+            // broken by a corridor may be found as its half by the title.)
+            let refined = fit.filter(|(_, how)| *how == "boundary").and_then(|(bf, _)| {
+                let (rg, lf, bx) = (e.view.region?, by_lines(h)?, boxed?);
+                let placed = map_box(&lf.sim, &rg);
+                let slack = BOX_LINE_SLACK * (bx[2] - bx[0]).hypot(bx[3] - bx[1]);
+                let within = placed[0] >= bx[0] - slack && placed[1] >= bx[1] - slack && placed[2] <= bx[2] + slack && placed[3] <= bx[3] + slack;
+                let alike = (lf.sim.scale() / bf.scale() - 1.0).abs() < 0.05;
+                (lf.coverage >= BOX_LINE_COVERAGE && within && alike).then_some(lf)
+            });
+            let line_fit = if fit.is_none() { by_lines(h) } else { refined };
+            let fit = if refined.is_some() { refined.map(|l| (l.sim, "lines")) } else { fit.or_else(|| line_fit.map(|l| (l.sim, "lines"))) };
             chosen = Some((h, fit, boxed, tag_fit, line_fit));
         }
         // Nothing places it on that plan (or none was found): the plans of its level (any level
@@ -1710,6 +1775,14 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
                     _ => boxed.or(placed),
                 };
                 entry.boundary = b;
+                // Placed into a box drawn round its part of the floor: all of the box is the
+                // view's, though its region found by the title may be only a part of it.
+                if let (Some(bx), Some(inv)) = (boxed.filter(|_| matches!(how, "boundary" | "lines")), f.inverse())
+                    && let Some(r) = entry.reach
+                {
+                    let back = map_box(&inv, &bx);
+                    entry.reach = Some([r[0].min(back[0]), r[1].min(back[1]), r[2].max(back[2]), r[3].max(back[3])]);
+                }
                 if let Some(b) = b {
                     entry.ignored_handles = h
                         .read

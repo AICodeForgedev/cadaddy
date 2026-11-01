@@ -33,7 +33,7 @@ use crate::{Result, Session};
 
 /// Findings kept at most (of each kind: a filter by kind sees all of its own up to this), and
 /// handles per finding.
-const MAX_FINDINGS: usize = 2_000;
+const MAX_FINDINGS: usize = 20_000;
 const MAX_HANDLES: usize = 50;
 /// Walls compared for overlaps, at most (hostile drawings).
 const MAX_WALLS: usize = 20_000;
@@ -86,8 +86,12 @@ fn built(d: &Drawing) -> Vec<Built> {
 /// other built objects should stand in.
 const SHELL: &[&str] = &["wall", "floor", "curtainwall", "column", "roof"];
 
-/// How far past its level's shell a built object may stand (a condenser on its pad, a canopy):
-/// 10 feet, or 5% of the shell's size when that is more.
+/// How far past its level's shell a built object stands before it is a finding (a wall pack, a
+/// condenser on its pad right by the wall are within it), feet.
+const OUTSIDE_FT: f64 = 5.0;
+
+/// How far past its level's shell a whole-building view frames (a condenser on its pad, a
+/// canopy): 10 feet, or 5% of the shell's size when that is more.
 fn shell_margin(b: &Bounds2, upf: f64) -> f64 {
     (10.0 * upf).max(0.05 * b.width().max(b.height()))
 }
@@ -391,6 +395,9 @@ impl Finding {
 }
 
 fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> {
+    // Each check's end on the progress sink (a big model's first check takes minutes).
+    let clock = web_time::Instant::now();
+    let step = |what: &str| super::guided::progress_line(&format!("  model.issues: {what} checked at {:.1} s", clock.elapsed().as_secs_f64()));
     let (sp, _) = current(s, "model.issues")?;
     let upf = units(&sp);
     let plan = plan_session(s)?;
@@ -422,7 +429,7 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
         let Some((_, shell)) = shells.iter().find(|(n, _)| n.eq_ignore_ascii_case(&level)) else { continue };
         let Some(c) = centre(d, e) else { continue };
         let by = shell_dist(shell, c);
-        if !by.is_finite() || by <= shell_margin(shell, upf) {
+        if !by.is_finite() || by <= OUTSIDE_FT * upf {
             continue;
         }
         // MEP by what it is (duct, pipe, equipment).
@@ -446,6 +453,7 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
             handles: hs,
         });
     }
+    step("objects outside the building");
     // Rooms that leak.
     let rs = rooms(&plan, &sp)?;
     let mut reported: Vec<(Handle, Handle)> = Vec::new();
@@ -500,6 +508,7 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
             }
         }
     }
+    step("rooms that leak");
     // Walls without height, and walls overlapping each other.
     let walls: Vec<(&Built, Footprint)> = made.iter().filter(|b| b.part == "wall").take(MAX_WALLS).map(|b| (b, footprint(&b.mesh))).collect();
     for (b, f) in &walls {
@@ -522,6 +531,7 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
             handles: o.handles.to_vec(),
         });
     }
+    step("walls");
     // Fixtures above their room's ceiling or below the floor.
     let scene = cadaddy_walk3d::derive(pd, &sp.to_rules());
     let suf = if scene.units_per_foot.is_finite() && scene.units_per_foot > 0.0 { scene.units_per_foot } else { upf };
@@ -554,6 +564,7 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
             });
         }
     }
+    step("fixtures");
     // Levels that don't match.
     let mut levels: Vec<&cadaddy_walk3d::Level> = sp.levels.iter().collect();
     levels.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
@@ -695,7 +706,7 @@ fn run_issues(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = json!({ "total": found, "issues": list, "byKind": by });
     // Past the cap: how many there are, and that the list stops.
     if found > matching.len() {
-        out["truncated"] = json!({"found": found, "listed": matching.len(), "note": format!("only the first {MAX_FINDINGS} issues of each kind are kept; fix those, then check again")});
+        out["truncated"] = json!({"found": found, "listed": matching.len(), "note": format!("only the first {MAX_FINDINGS} issues of each kind are kept (all of them are counted); fix those, then check again")});
     }
     if from.saturating_add(limit) < matching.len() {
         out["next"] = json!(from + limit);

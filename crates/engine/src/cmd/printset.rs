@@ -573,6 +573,17 @@ fn enlarged_value(e: &printlinks::Enlarged) -> Value {
     if let Some(o) = v.as_object_mut() {
         o.insert("sheet".into(), json!(e.sheet));
         o.insert("overall_sheet".into(), json!(e.overall_sheet));
+        // Its placing on the overall plan (`[a, b, tx, ty]`: p -> [[a, -b], [b, a]] p + t) and
+        // where its devices are on its sheet, for the build to place the view's other items.
+        if let Some(f) = e.fit.filter(|f| e.registered && f.is_finite()) {
+            o.insert("fit".into(), json!([f.a, f.b, f.tx, f.ty]));
+        }
+        if let Some(r) = e.reach {
+            o.insert("reach".into(), json!(r));
+        }
+        if !e.inner.is_empty() {
+            o.insert("inner".into(), json!(e.inner));
+        }
     }
     v
 }
