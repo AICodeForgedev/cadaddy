@@ -409,6 +409,13 @@ fn compare_pair(e: &cadaddy_doc::Entity, f: &cadaddy_doc::Entity, out: &mut Loss
         out.add(format!("{kind} objects (written as {})", kind_name(&kb)), "changed", h, name);
         return;
     }
+    // A typed object read back as the file's raw record (a HELIX or LIGHT the native DWG reader
+    // doesn't decode): kept as stored, but no longer editable as its kind.
+    let raw = |k: &serde_json::Value| k.get("type").and_then(serde_json::Value::as_str) == Some("unknown");
+    if raw(&kb) && !raw(&ka) {
+        out.add(format!("{kind} objects (written as a stored {kind} record, not editable)"), "changed", h, name);
+        return;
+    }
     for field in changed_fields(&ka, &kb) {
         // A subdivision mesh in a file older than meshes: its faces as a polyface mesh.
         if kind == "mesh" && field == "kind" {
@@ -742,6 +749,31 @@ mod tests {
         // A file that can't be written or read back: nothing to say here (saving reports it).
         let fails: fn(&Drawing, &str) -> Result<Vec<u8>, String> = |_, _| Err("no".into());
         assert!(not_kept(&d, "x.dwg", fails, read).is_empty());
+    }
+
+    #[test]
+    fn a_typed_object_read_back_as_a_raw_record_is_reported() {
+        let typed = |h: u64| {
+            cadaddy_doc::Entity::new(
+                cadaddy_doc::Handle(h),
+                cadaddy_doc::EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::new(1.0, 2.0, 0.0), radius: 1.0 }),
+            )
+        };
+        let raw = |h: u64| {
+            cadaddy_doc::Entity::new(
+                cadaddy_doc::Handle(h),
+                cadaddy_doc::EntityKind::Unknown(cadaddy_doc::Unknown { dxf_type: "CIRCLE".into(), tags: Vec::new() }),
+            )
+        };
+        let (mut d, mut back) = (Drawing::new_imperial(), Drawing::new_imperial());
+        d.model.push(typed(0x100));
+        back.model.push(raw(0x100));
+        let notes = losses_between(&d, &back);
+        assert!(notes.iter().any(|l| l.feature.starts_with("circle objects (written as") && l.handles == vec!["100".to_string()]), "{notes:?}");
+        // A raw record read back raw loses nothing.
+        let mut same = Drawing::new_imperial();
+        same.model.push(raw(0x100));
+        assert!(losses_between(&same, &same.clone()).is_empty());
     }
 
     #[test]
