@@ -982,3 +982,71 @@ fn cancel_through_connect_reaches_the_app_while_a_render_runs() {
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "the render waited for the whole run: {:?}", start.elapsed());
     assert!(String::from_utf8(out).unwrap().contains("render cancelled"));
 }
+
+fn circles(s: &mut Server) -> u64 {
+    tool(s, "inspect_drawing", json!({}))["counts"]["Circle"].as_u64().unwrap_or(0)
+}
+
+#[test]
+fn typed_secureload_and_trustedpaths_changes_are_refused_headless() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let before = tool(&mut s, "get_variable", json!({"name": "SECURELOAD"}));
+    for line in ["secureload 0", "setvar secureload 0", "setvar trustedpaths /tmp/cadaddy-agentrails-x"] {
+        let r = tool(&mut s, "command_line", json!({"text": line}));
+        assert!(
+            r["error"].as_str().is_some_and(|e| e.contains("Only the user can loosen")) || r.to_string().contains("Only the user can loosen"),
+            "{line}: {r}"
+        );
+        tool(&mut s, "command_line", json!({"text": "*Cancel*"}));
+    }
+    assert_eq!(tool(&mut s, "get_variable", json!({"name": "SECURELOAD"})), before);
+}
+
+#[test]
+fn typed_commands_obey_the_dry_run_headless() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "execute", json!({"command": "agent.dryrun", "params": {"on": true}}));
+    let r = tool(&mut s, "command_line", json!({"text": "circle 0,0 3"}));
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("Dry run")), "{r}");
+    assert_eq!(circles(&mut s), 0);
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-dryrules-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("rules.json");
+    // Refused (the file would have been written): the point is that nothing is.
+    let e = call(
+        &mut s,
+        8,
+        "tools/call",
+        json!({"name": "execute", "arguments": {"command": "project.rules.export", "params": {"path": file.to_string_lossy()}}}),
+    );
+    assert!(e.to_string().contains("dry run"), "{e}");
+    assert!(!file.exists(), "the dry run wrote the rules file");
+    tool(&mut s, "execute", json!({"command": "agent.dryrun", "params": {"on": false}}));
+    tool(&mut s, "command_line", json!({"text": "circle 0,0 3"}));
+    assert_eq!(circles(&mut s), 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn headless_close_with_unsaved_changes_is_refused_on_every_route() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "circle 0,0 3"}));
+    for (name, args) in [
+        ("execute", json!({"command": "close", "params": {}})),
+        ("execute", json!({"command": "closeall", "params": {}})),
+        ("execute_many", json!({"commands": [{"command": "close", "params": {}}]})),
+    ] {
+        let r = call(&mut s, 7, "tools/call", json!({"name": name, "arguments": args}));
+        let text = r.to_string();
+        assert!(text.contains("unsaved changes"), "{name} {args}: {text}");
+    }
+    for line in ["close", "closeall"] {
+        let r = tool(&mut s, "command_line", json!({"text": line}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("unsaved changes")), "{line}: {r}");
+    }
+    assert_eq!(tool(&mut s, "list_drawings", json!({}))["drawings"].as_array().map(Vec::len), Some(1));
+    assert_eq!(circles(&mut s), 1);
+    // Said so, it closes.
+    tool(&mut s, "execute", json!({"command": "close", "params": {"discard": true}}));
+    assert_eq!(tool(&mut s, "list_drawings", json!({}))["drawings"].as_array().map(Vec::len), Some(0));
+}

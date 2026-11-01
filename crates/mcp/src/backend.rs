@@ -425,6 +425,7 @@ impl Default for Headless {
         session.new_drawing_with_viewports(false);
         // No one to ask here: the agent runs the session (dry run and the journal still apply).
         session.agent.confirm = false;
+        session.agent.headless = true;
         Headless { session }
     }
 }
@@ -467,8 +468,12 @@ impl Backend for Headless {
             "events.poll" => Ok(s.events_poll(p.get("since").and_then(Value::as_u64).unwrap_or(0))),
             "cmdline.input" => {
                 let before = s.log.len();
+                // Typed by an agent: the same rails as its `engine.execute` calls (dry run,
+                // what only the user may loosen), as in the app.
+                let was = std::mem::replace(&mut s.agent.from_agent, true);
                 let r = s.cmdline(&str_p("text").unwrap_or_default());
                 s.lisp_finish(HEADLESS_LISP_LIMIT);
+                s.agent.from_agent = was;
                 // Like the app: a refused line is echoed to the history (and `output`), and also
                 // reported in `error`.
                 if let Err(e) = &r {
@@ -486,13 +491,17 @@ impl Backend for Headless {
             }
             "cmdline.script" => {
                 let before = s.log.len();
-                s.script(&str_p("text").unwrap_or_default()).map_err(|e| e.to_string())?;
+                let was = std::mem::replace(&mut s.agent.from_agent, true);
+                let r = s.script(&str_p("text").unwrap_or_default());
                 s.lisp_finish(HEADLESS_LISP_LIMIT);
+                s.agent.from_agent = was;
+                r.map_err(|e| e.to_string())?;
                 let out: Vec<String> = s.log.iter().skip(before).cloned().collect();
                 Ok(json!({"output": out, "state": state(s)}))
             }
             "cmdline.key" => {
                 let before = s.log.len();
+                let was = std::mem::replace(&mut s.agent.from_agent, true);
                 let r = if str_p("key").is_some_and(|k| k.eq_ignore_ascii_case("escape") || k.eq_ignore_ascii_case("esc")) {
                     s.cancel();
                     Ok(())
@@ -500,6 +509,7 @@ impl Backend for Headless {
                     s.input(cadaddy_engine::Input::Enter)
                 };
                 s.lisp_finish(HEADLESS_LISP_LIMIT);
+                s.agent.from_agent = was;
                 // Like the app: a refused Enter is echoed to the history (and `output`), and also
                 // reported in `error`; the call itself succeeds.
                 if let Err(e) = &r {
