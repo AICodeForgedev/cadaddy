@@ -375,10 +375,14 @@ Model Number : WRAP 48 840
     }
 
     #[test]
-    fn no_paths_or_no_files_is_an_error() {
+    fn no_paths_says_what_it_needs_and_no_files_is_an_error() {
         let mut s = Session::new();
         s.execute("new", &json!({})).unwrap();
-        assert!(s.execute(CMD, &json!({})).is_err());
+        // From the menu, nothing chosen: what it needs, not an error (menu commands never demand
+        // parameters).
+        let r = s.execute(CMD, &json!({})).unwrap();
+        assert_eq!(r["elements"], json!(0));
+        assert!(r["next_step"].as_str().is_some_and(|n| n.contains("paths")), "{r}");
         assert!(s.execute(CMD, &json!({"paths": ["/no/such/folder"]})).is_err());
     }
 }
