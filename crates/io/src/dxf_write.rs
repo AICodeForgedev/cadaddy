@@ -2614,7 +2614,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
         layers: HashMap::new(),
         reactors: hatch_reactors(d),
         materials: HashMap::new(),
-        kept: d.kept_handles.clone(),
+        kept: (*d.kept_handles).clone(),
         used: std::iter::once(&d.model)
             .chain(d.layouts.iter().map(|l| &l.entities))
             .chain(d.blocks.values().map(|b| &b.entities))
