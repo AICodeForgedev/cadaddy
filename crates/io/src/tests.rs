@@ -1071,9 +1071,10 @@ fn damaged_dwg_opens_partially_and_says_what_it_left_out() {
         b[at..at + 6].iter_mut().for_each(|x| *x ^= 0xA5);
         let Ok(d) = read(&b, "damaged.dwg") else { continue };
         if d.entity_count() < 200 {
-            assert_eq!(d.read_notes.len(), 1, "{} lines read, no note", d.entity_count());
+            assert!(!d.read_notes.is_empty(), "{} lines read, no note", d.entity_count());
         }
-        if let [note] = d.read_notes.as_slice() {
+        // A line the damage threw beyond ±1e12 is dropped by the DXF reader, with its own note.
+        if let [note] = d.read_notes.iter().filter(|n| !n.contains("beyond \u{b1}1e12")).collect::<Vec<_>>().as_slice() {
             assert!(note.starts_with("DWG: ") && note.contains(" couldn't be read and "), "{note}");
             assert!(note.ends_with("saving over the original file would lose it") || note.ends_with("would lose them"), "{note}");
             partial += 1;
@@ -3290,8 +3291,8 @@ mod damaged_files {
             Some(EntityKind::Line(l)) => assert_eq!((l.a.x, l.a.y), (2.0, 3.0)),
             other => panic!("{other:?}"),
         }
-        // A good file has no such note, and a large finite number is not undefined.
-        let ok = format!("0\nSECTION\n2\nENTITIES\n{}0\nENDSEC\n0\nEOF\n", line("1e300", "5"));
+        // A good file has no such note, and a large finite number within the limit is not undefined.
+        let ok = format!("0\nSECTION\n2\nENTITIES\n{}0\nENDSEC\n0\nEOF\n", line("1e11", "5"));
         let d = read_dxf(ok.as_bytes()).unwrap();
         assert_eq!(d.entity_count(), 1);
         assert!(!notes(&d).contains("undefined"), "{}", notes(&d));
@@ -3337,4 +3338,15 @@ mod damaged_files {
         let check = cdy::verify(&twice).unwrap();
         assert_eq!(check["appendedCopy"].as_u64(), Some(good.len() as u64), "{check}");
     }
+}
+
+#[test]
+fn dxf_objects_beyond_the_coordinate_limit_are_dropped_with_one_note() {
+    let line = |x: &str| format!("0\nLINE\n8\n0\n10\n0\n20\n0\n11\n{x}\n21\n5\n");
+    let dxf = format!("0\nSECTION\n2\nENTITIES\n{}{}{}{}0\nENDSEC\n0\nEOF\n", line("10"), line("1e308"), line("-2e12"), line("1e12"));
+    let d = read(dxf.as_bytes(), "far.dxf").unwrap();
+    assert_eq!(d.entity_count(), 2, "the two lines within ±1e12 stay");
+    let notes: Vec<&String> = d.read_notes.iter().filter(|n| n.contains("beyond")).collect();
+    assert_eq!(notes.len(), 1, "{:?}", d.read_notes);
+    assert!(notes[0].starts_with("DXF: 2 objects had coordinates beyond \u{b1}1e12"), "{}", notes[0]);
 }

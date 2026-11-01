@@ -2070,7 +2070,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
         return Err(IoError::Format("no sections found".into()));
     }
     let bad_heights = fix_text_heights(&mut secs);
-    let undefined = drop_undefined(&mut secs);
+    let (undefined, beyond_limit) = drop_undefined(&mut secs);
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
     // A file without $INSUNITS declares no units (#1209); only new drawings take the template's.
@@ -2317,6 +2317,14 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
             if n == 1 { "was" } else { "were" }
         ));
     }
+    if beyond_limit > 0 {
+        let n = beyond_limit;
+        d.read_notes.push(format!(
+            "DXF: {n} object{} had coordinates beyond \u{b1}1e12 (the limit CADaddy works within) and {} dropped",
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "was" } else { "were" }
+        ));
+    }
     if undefined.1 > 0 {
         let n = undefined.1;
         d.read_notes.push(format!("DXF: {n} undefined (NaN/inf) number{} in the header, tables or objects read as 0", if n == 1 { "" } else { "s" }));
@@ -2345,14 +2353,17 @@ fn fix_text_heights(secs: &mut [cadaddy_dxf::Section]) -> usize {
 /// Objects with a NaN or infinite number (the parser keeps those as NaN) are dropped from the
 /// ENTITIES section and from blocks, with the vertices and attributes that follow a dropped
 /// POLYLINE or INSERT; returns how many objects were dropped and how many other records
-/// (tables, header, objects) hold such a number, which reads as 0 there.
-fn drop_undefined(secs: &mut [cadaddy_dxf::Section]) -> (usize, usize) {
+/// (tables, header, objects) hold such a number, which reads as 0 there. An object with a
+/// coordinate beyond ±1e12 (the limit every command applies) goes the same way, counted apart.
+fn drop_undefined(secs: &mut [cadaddy_dxf::Section]) -> ((usize, usize), usize) {
     // Coordinates (10-39) decide where an object is; other numbers (radii, pattern line offsets,
     // extended data) have their own readers, which take a bad one for 0 or skip it.
     let bad = |t: &Tag| (10..=39).contains(&t.code) && matches!(t.value, cadaddy_dxf::Value::Real(r) if !r.is_finite());
-    let (mut objects, mut others) = (0usize, 0usize);
+    let huge = |t: &Tag| (10..=39).contains(&t.code) && matches!(t.value, cadaddy_dxf::Value::Real(r) if r.is_finite() && r.abs() > 1e12);
+    let (mut objects, mut others, mut oversize) = (0usize, 0usize, 0usize);
     for s in secs.iter_mut() {
-        if !s.tags.iter().any(bad) {
+        let drops_objects = matches!(s.name.as_str(), "ENTITIES" | "BLOCKS");
+        if !s.tags.iter().any(|t| bad(t) || (drops_objects && huge(t))) {
             continue;
         }
         if !matches!(s.name.as_str(), "ENTITIES" | "BLOCKS") {
@@ -2378,8 +2389,12 @@ fn drop_undefined(secs: &mut [cadaddy_dxf::Section]) -> (usize, usize) {
                 if kind == "SEQEND" {
                     in_dropped_group = false;
                 }
-            } else if !structural && rec.iter().any(bad) {
-                objects = objects.saturating_add(1);
+            } else if !structural && rec.iter().any(|t| bad(t) || huge(t)) {
+                if rec.iter().any(bad) {
+                    objects = objects.saturating_add(1);
+                } else {
+                    oversize = oversize.saturating_add(1);
+                }
                 if let Some(at) = group_at.take().filter(|_| matches!(kind.as_str(), "VERTEX" | "ATTRIB")) {
                     // A vertex or attribute with an undefined number: its whole polyline or insert goes.
                     kept.truncate(at);
@@ -2399,7 +2414,7 @@ fn drop_undefined(secs: &mut [cadaddy_dxf::Section]) -> (usize, usize) {
         }
         s.tags = kept;
     }
-    (objects, others)
+    ((objects, others), oversize)
 }
 
 fn count_skipped(skipped: &mut std::collections::BTreeMap<String, usize>, section: &str, n: usize) {

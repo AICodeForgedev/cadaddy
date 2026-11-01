@@ -131,6 +131,9 @@ pub(crate) fn read_dgn(path: &str) -> Result<(Drawing, Vec2, Vec2)> {
     if ext.is_empty() {
         return Err(bad("dgnattach", format!("{path}: the design file has nothing in it")));
     }
+    if !(cadaddy_doc::within_limit(&ext, 1e12) && ext.width() <= 1e12 && ext.height() <= 1e12) {
+        return Err(bad("dgnattach", format!("{path}: the design file's extents lie beyond \u{b1}1e12 (it is damaged)")));
+    }
     let to_origin = Mat3::translate(-ext.min);
     let hs: Vec<Handle> = d.model.iter().map(|e| e.handle).collect();
     for h in hs {
