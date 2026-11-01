@@ -21,6 +21,7 @@ mod mtext;
 mod stroke;
 pub mod subset;
 pub mod ttf;
+pub mod windows;
 
 use cadcraft_geom::{Bounds2, Vec2};
 
