@@ -342,7 +342,8 @@ fn items(s: &mut Session) -> Vec<Item> {
             });
         }
     }
-    // Clashes between trades: a coordination decision, not a document's.
+    // Clashes between trades: a coordination decision, not a document's (each with its objects
+    // and a view of the spot, CLASH_ZOOM_HEIGHT drawing units high).
     if let Ok(v) = s.execute("model.clashes", &json!({})) {
         let listed = v["clashes"].as_array().map_or(0, Vec::len);
         let total = v["total"].as_u64().map_or(listed, |t| usize::try_from(t).unwrap_or(usize::MAX));
@@ -358,7 +359,12 @@ fn items(s: &mut Session) -> Vec<Item> {
                 kind: "clash",
                 level: c["level"].as_str().unwrap_or_default().to_string(),
                 title: cut(c["message"].as_str().unwrap_or("a clash"), 120),
-                detail: json!({"kind": c["kind"], "systems": systems, "at": at, "by_in": c["by_in"]}),
+                // What to look at: its objects, and the spot to zoom to (a run not built as
+                // objects has none to select).
+                detail: json!({
+                    "kind": c["kind"], "systems": systems, "at": at, "by_in": c["by_in"], "handles": c["handles"],
+                    "zoom": {"call": "zoom", "params": {"mode": "center", "center": at, "height": CLASH_ZOOM_HEIGHT}},
+                }),
                 candidates: vec![
                     json!({"answer": "reroute", "from": "move one run"}),
                     json!({"answer": "coordinated", "from": "accepted as drawn (say why)"}),
@@ -410,6 +416,9 @@ fn status_of(st: &State, id: &str) -> &'static str {
 /// are and where they are listed.
 const MAX_QUEUED_CLASHES: usize = 2_000;
 const MAX_QUEUED_FAILURES: usize = 2_000;
+
+/// The height of the view a clash's review item zooms to: 20' in an inch drawing.
+const CLASH_ZOOM_HEIGHT: f64 = 240.0;
 
 /// The item saying `more` of `total` findings of a kind aren't queued, and the call that lists
 /// them (first in the queue: the agent knows before it works through the rest).
