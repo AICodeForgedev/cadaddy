@@ -171,6 +171,17 @@ impl Session {
         {
             return Some(Err(EngineError::Other(self.ask_user(&cmd, params, question))));
         }
+        // No user to ask (`agent.confirm` off, as headless): never silently replace another file.
+        if self.agent.from_agent
+            && !self.agent.confirm
+            && !self.agent.dry_run
+            && let Some(path) = self.overwrite_target(&cmd, params)
+        {
+            return Some(Err(bad(
+                &cmd,
+                format!("{path} already exists and is not this drawing's own file: choose another name, or pass force:true to replace it"),
+            )));
+        }
         if !self.agent.dry_run {
             return None;
         }
@@ -182,6 +193,31 @@ impl Session {
         let message = format!("Waiting for the user: {question} (they answer in CADaddy; agent.confirm turns this off)");
         self.agent.pending = Some(Pending { command: command.to_string(), params: params.clone(), question });
         message
+    }
+
+    /// The existing file an output command asked for by an agent would replace, when it is not the
+    /// active drawing's own file and the call doesn't say `force: true`.
+    fn overwrite_target(&self, cmd: &str, params: &Value) -> Option<String> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (cmd, params);
+            None
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if !matches!(cmd, "saveas" | "qsave" | "wblock" | "export" | "plot" | "etransmit" | "render") || bool_or(params, "force", false) {
+                return None;
+            }
+            let given = str_param(params, "path").or_else(|| str_param(params, "output")).map(str::trim).filter(|p| !p.is_empty())?;
+            // Saving a drawing over its own file is the ordinary save; any other output there is not.
+            let own = self.state().ok().and_then(|st| st.path.clone()).filter(|_| matches!(cmd, "saveas" | "qsave"));
+            let mut candidates = vec![given.to_string()];
+            if matches!(cmd, "saveas" | "wblock") {
+                candidates.push(crate::cmd::file::with_drawing_ext(given));
+                candidates.push(format!("{given}.dwg"));
+            }
+            candidates.into_iter().find(|c| std::path::Path::new(c).is_file() && !own.as_deref().is_some_and(|o| crate::cmd::file::same_file(o, c)))
+        }
     }
 
     /// What the user must allow, if anything: saving over an existing file, closing with changes.

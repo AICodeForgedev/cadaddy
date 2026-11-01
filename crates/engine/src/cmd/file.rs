@@ -1390,7 +1390,7 @@ fn run_save(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// A file name with no extension saves as a drawing in the default format ([`default_ext`]), as
 /// AutoCAD adds `.dwg`.
-fn with_drawing_ext(path: &str) -> String {
+pub(crate) fn with_drawing_ext(path: &str) -> String {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     if name.contains('.') || name.trim().is_empty() { path.to_string() } else { format!("{path}.{}", default_ext()) }
 }

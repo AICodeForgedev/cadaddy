@@ -51,7 +51,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("export", "Export...", run_export)
             .menu(&["File", "Export..."])
             .alias(&["exp"])
-            .params("{path? (else returns base64 `data`), format?: cdy|dxf|dwg|svg|png|pdf|eps|wmf|glb|gltf|obj|stl|ifc|3mf (default: the path's extension)} → {format, bytes, path? | data} (OBJ writes its .mtl and textures beside it; IFC4: the WALLGEN building with storeys and room spaces; 3MF: solids and meshes)")
+            .params("{force?: bool (replace an existing file; otherwise refused for an agent), path? (else returns base64 `data`), format?: cdy|dxf|dwg|svg|png|pdf|eps|wmf|glb|gltf|obj|stl|ifc|3mf (default: the path's extension)} → {format, bytes, path? | data} (OBJ writes its .mtl and textures beside it; IFC4: the WALLGEN building with storeys and room spaces; 3MF: solids and meshes)")
             .noundo(),
         CommandSpec::new("preview", "Plot Preview", run_preview)
             .menu(&["File", "Plot Preview"])
@@ -283,6 +283,40 @@ pub(crate) fn unused_path(path: &str, tag: &str) -> (String, bool) {
 pub(crate) fn refuse_existing(cmd: &str, p: &Value, path: &str) -> Result<()> {
     if std::path::Path::new(path).exists() && p.get("force").and_then(Value::as_bool) != Some(true) {
         return Err(bad(cmd, format!("{path} already exists: choose another name, or pass force:true to replace it")));
+    }
+    Ok(())
+}
+
+/// The extensions of drawing files: a command that writes data (a table, a report, a picture)
+/// never writes one.
+const DRAWING_EXTS: [&str; 5] = ["dxf", "dwg", "cdy", "dwt", "dws"];
+
+/// Vets the `path` of a command that writes data from a parameter (TAKEOFF, DATAEXTRACTION,
+/// ESTIMATE.EXPORT, BIM.BOM, MODEL.OVERLAY, PROJECT.RULES.EXPORT, FIELDVIEW.EXPORT, RFI.EXPORT…):
+/// not a drawing file name, not the file of any open drawing, and an existing file is replaced
+/// only when the call says `force: true`. Call it before anything is changed or written.
+pub(crate) fn guard_output(s: &Session, cmd: &str, p: &Value, path: &str) -> Result<()> {
+    let got = extension(path);
+    if DRAWING_EXTS.contains(&got.as_str()) {
+        return Err(bad(
+            cmd,
+            format!(
+                "{path} has a drawing file name (.{got}) but this writes data, not a drawing: use another extension, such as .csv, .json or .pdf"
+            ),
+        ));
+    }
+    if let Some(d) = s.docs.iter().find(|d| d.path.as_deref().is_some_and(|x| super::file::same_file(x, path))) {
+        return Err(bad(cmd, format!("{path} is the open drawing {}: choose another file name so it isn't replaced", d.title)));
+    }
+    refuse_existing(cmd, p, path)
+}
+
+/// [`guard_output`] for each of the non-empty string parameters `keys` of `p` that name an output file.
+pub(crate) fn guard_params(s: &Session, cmd: &str, p: &Value, keys: &[&str]) -> Result<()> {
+    for k in keys {
+        if let Some(path) = str_param(p, k).map(str::trim).filter(|x| !x.is_empty()) {
+            guard_output(s, cmd, p, path)?;
+        }
     }
     Ok(())
 }
