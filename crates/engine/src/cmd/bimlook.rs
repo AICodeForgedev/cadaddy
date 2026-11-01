@@ -8,8 +8,9 @@
 //!   tree, Level ▸ Trade ▸ Category ▸ Type ▸ element; a branch shown or hidden, selected and
 //!   zoomed to.
 //! - `bim.element {handle?, open_source?}`: one element's properties (type, size, level,
-//!   system, circuit, quantity, source sheet and spot, linked issues); `open_source` goes to it
-//!   on the sheet.
+//!   system, circuit, quantity, source sheet and spot, linked issues) and where it is (plan
+//!   point, bottom and top, height above its floor, host wall and face); `open_source` goes to
+//!   it on the sheet.
 //!
 //! The settings live in the building spec (`bim_view`). [`display`] is what the 3D view and
 //! `model.render` draw: a drawing holding only the built model (the objects shared, not
@@ -522,7 +523,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         CommandSpec::new("bim.element", "Element Properties", run_element)
             .params(
-                "{handle? (default the one selected), open_source?: bool (plan view, zoomed to its source on the sheet, the source selected)} → {handle, trade, group, category, type, size, level, system, circuit, quantity: {count, length_ft?, area_sf?, height_ft?}, source: {handle, kind, layer, at, sheet?, sheet_file?}, attributes, issues: [{kind: bcf|rfi, guid|id, title, status}]}",
+                "{handle? (default the one selected), open_source?: bool (plan view, zoomed to its source on the sheet, the source selected)} → {handle, trade, group, category, type, size, level, system, circuit, quantity: {count, length_ft?, area_sf?, height_ft?}, source: {handle, kind, layer, at, sheet?, sheet_file?}, attributes, issues: [{kind: bcf|rfi, guid|id, title, status}], at: [x,y] (building feet on its level's plan), bottom_ft, top_ft (above the datum), aff_in, center_aff_in, top_aff_in (above its level's floor), at_ceiling, host: {wall, type, face, off_face_in, off_centreline_in, thickness_in, along_ft} | null (when hosted: the wall face within the G-HOST tolerance), nearest_wall (within 10 ft)}",
             )
             .noundo(),
     ]
@@ -909,6 +910,73 @@ fn quantity(c: &Class, e: &Entity, upf: f64) -> Value {
     }
 }
 
+/// Categories that are not hosted by a wall (the walls themselves, slabs, runs, structure).
+const UNHOSTED: [&str; 19] = [
+    "Wall", "Floor", "Ceiling", "Soffit", "Roof", "Room", "Site", "Grid", "Parapet", "Railing", "Stair", "Column", "Beam", "Footing", "Brace",
+    "Duct", "Pipe", "Conduit", "Cable",
+];
+
+/// Where a built element is, so an agent can check its position without reading meshes: its
+/// plan point (`at`, building feet on its level's plan), its bottom and top (`bottom_ft`,
+/// `top_ft`: feet above the building's datum), its bottom, centre and top above its level's
+/// floor (`aff_in`, `center_aff_in`, `top_aff_in`), whether it reaches the ceiling, and its host
+/// wall: the wall face nearest it within the G-HOST tolerance (`host`; none for runs, slabs,
+/// structure and what hangs at the ceiling), and the nearest wall within 10 ft whatever it is
+/// (`nearest_wall`, the face's side and the distance off it, inches, negative inside the wall).
+fn placement(s: &Session, e: &Entity, c: &Class) -> serde_json::Map<String, Value> {
+    const CMD: &str = "bim.element";
+    let mut out = serde_json::Map::new();
+    let (Ok(d), Ok((sp, _))) = (s.doc(), super::bspec::current(s, CMD)) else { return out };
+    let frame = super::validate::Frame::of_spec(d, &sp);
+    let upf = frame.upf();
+    let b = cadaddy_doc::entity_bounds(d, e, 0);
+    if b.is_empty() {
+        return out;
+    }
+    let r2 = |v: f64| if v.is_finite() { (v * 100.0).round() / 100.0 } else { 0.0 };
+    let at = frame.to_ft_on(&c.level, b.center());
+    out.insert("at".into(), json!([r2(at[0]), r2(at[1])]));
+    let z = match &e.kind {
+        EntityKind::Mesh(m) => {
+            let (z0, z1) = m
+                .vertices
+                .iter()
+                .take(1_000_000)
+                .filter(|p| p.z.is_finite())
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.z), b.max(p.z)));
+            (z0 <= z1).then_some((z0, z1))
+        }
+        EntityKind::Insert(i) if i.insert.z.is_finite() => Some((i.insert.z, i.insert.z)),
+        _ => None,
+    };
+    let level = sp.level(&c.level);
+    let floor = level.map_or(0.0, |l| l.elevation_ft);
+    let ceiling = level.map(|l| if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft }).filter(|c| c.is_finite() && *c > 0.0);
+    let mut at_ceiling = false;
+    if let Some((z0, z1)) = z {
+        let (bot, top) = (z0 / upf, z1 / upf);
+        let (aff, top_aff) = ((bot - floor) * 12.0, (top - floor) * 12.0);
+        out.insert("bottom_ft".into(), json!(r2(bot)));
+        out.insert("top_ft".into(), json!(r2(top)));
+        out.insert("aff_in".into(), json!(r2(aff)));
+        out.insert("center_aff_in".into(), json!(r2((aff + top_aff) / 2.0)));
+        out.insert("top_aff_in".into(), json!(r2(top_aff)));
+        at_ceiling = ceiling.is_some_and(|c| top_aff >= c * 12.0 - 12.0 && aff > 12.0);
+        out.insert("at_ceiling".into(), json!(at_ceiling));
+    }
+    let hostable = !UNHOSTED.iter().any(|k| c.category.contains(k)) && !at_ceiling;
+    let walls = super::validate::walls_near(d, &sp, &frame, &c.level, [at[0], at[1], at[0], at[1]], super::validate_prescreen::HOST_SEARCH_FT);
+    let near = super::validate_prescreen::nearest_wall(at, &walls, super::validate_prescreen::HOST_SEARCH_FT);
+    let tol = super::validate_rules::effective(&d.project_rules)
+        .ok()
+        .and_then(|(rs, _)| rs.into_iter().find(|r| r.rule.id == "G-HOST").and_then(|r| r.rule.tolerance.get("plan_in").copied()))
+        .unwrap_or(6.0);
+    let host = near.as_ref().filter(|f| hostable && f.off_face_in.abs() <= tol).map(|f| f.to_json());
+    out.insert("host".into(), host.unwrap_or(Value::Null));
+    out.insert("nearest_wall".into(), near.map_or(Value::Null, |f| f.to_json()));
+    out
+}
+
 fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "bim.element";
     let hs = targets(s, p)?;
@@ -985,7 +1053,8 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    let out = json!({
+    let place = placement(s, &e, &c);
+    let mut out = json!({
         "handle": hex,
         "trade": c.key,
         "trade_label": trade(c.key).map_or("", |t| t.label),
@@ -1001,6 +1070,9 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
         "attributes": attributes,
         "issues": issues,
     });
+    if let Some(o) = out.as_object_mut() {
+        o.extend(place);
+    }
     if bool_or(p, "open_source", false) {
         let Some(se) = src else { return Err(bad(CMD, format!("{hex} has no source object on the sheet"))) };
         let b = cadaddy_doc::entity_bounds(s.doc()?, &se, 0);

@@ -116,6 +116,25 @@
       }
     },
     {
+      "id": "G-HEIGHT",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "A wall-mounted item is at the height above its floor that the documents give it (an AFF note, the interior elevation, the legend, the schedule or the general notes).",
+      "how": [
+        "The object list gives each element's height above the floor and the prescreen's G-HEIGHT reading (the height the documents' rules expect and where that came from).",
+        "Look for an AFF note beside or leadered to the symbol on the enlarged plan, then the interior elevation of that wall, then the legend, schedule or general notes.",
+        "A height off by more than the tolerance is a 'fail' citing the note or view; say 'unsure' when no document gives a height."
+      ],
+      "documents": ["enlarged_plan", "interior_elevation", "legend", "schedule", "general_notes"],
+      "tolerance": {"height_in": 2},
+      "severity": "medium",
+      "prescreen": "tags",
+      "examples": {
+        "pass": "The elevation notes the desk receptacle at 18 in AFF; the model has it at 18 in.",
+        "fail": "The enlarged plan notes the counter receptacle at 44 in AFF; the model has it at 18 in."
+      }
+    },
+    {
       "id": "E-RECEPT-POS",
       "trade": "electrical",
       "applies_to": {"kinds": ["receptacle", "outlet", "floor_box"], "categories": ["IfcOutlet"], "marks": []},
@@ -410,7 +429,7 @@
         "Check each line exists in the model and reaches the fixture or its riser.",
         "Compare sizes with the size tags."
       ],
-      "documents": ["plan", "enlarged_plan", "section", "schedule"],
+      "documents": ["plan", "enlarged_plan", "section", "schedule", "riser_diagram"],
       "tolerance": {"route_ft": 1, "size_in": 0},
       "severity": "medium",
       "prescreen": "connectivity",

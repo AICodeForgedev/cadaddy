@@ -172,6 +172,12 @@ pub(crate) struct Frame {
 }
 
 impl Frame {
+    /// The frame of the spec's levels without deriving the scene (the levels' base points
+    /// only): what one element's place needs.
+    pub(crate) fn of_spec(d: &Drawing, sp: &BuildingSpec) -> Frame {
+        let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        Frame { upf, levels: cadaddy_walk3d::level_bases(d, &sp.to_rules()), spec_levels: sp.levels.clone() }
+    }
     /// Drawing units per foot.
     pub(crate) fn upf(&self) -> f64 {
         self.upf
@@ -286,15 +292,7 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
     }
     let devices: BTreeSet<Handle> = scene.devices.iter().map(|d| d.handle).collect();
     // Walls, doors and windows the build made.
-    let wall_types: HashMap<String, f64> = sp
-        .wall_types
-        .iter()
-        .filter_map(|w| {
-            let stud =
-                w.assembly.as_ref()?.layers.iter().filter(|l| l.category.eq_ignore_ascii_case("framing")).map(|l| l.thickness_in).fold(0.0, f64::max);
-            (stud > 0.0).then(|| (w.name.to_ascii_lowercase(), stud))
-        })
-        .collect();
+    let wall_types = stud_depths(sp);
     for e in d.model.iter().take(MAX_ENTITIES) {
         let Some(part) = super::wallgen::made_as(e) else { continue };
         let EntityKind::Mesh(mesh) = &e.kind else { continue };
@@ -306,17 +304,7 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
             let (level, _) = frame.to_ft(c);
             let ft: Vec<[f64; 2]> = quad.iter().map(|p| frame.to_ft(*p).1).collect();
             if part == "wall" {
-                let Some((a, b, thick)) = centreline(&ft) else { continue };
-                let ty = xdata_after(&e.common.xdata, super::wallgen::APP).find_map(|s| s.strip_prefix("type:")).map(str::to_string);
-                m.walls.push(ModelWall {
-                    id: e.handle.hex(),
-                    level,
-                    a,
-                    b,
-                    thickness_in: thick * 12.0,
-                    stud_in: ty.as_ref().and_then(|t| wall_types.get(&t.to_ascii_lowercase()).copied()),
-                    wall_type: ty,
-                });
+                m.walls.extend(wall_piece(e, level, &ft, &wall_types));
             } else {
                 let (lo, hi) = ft
                     .iter()
@@ -422,8 +410,68 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
     (m.capped(), frame)
 }
 
+/// The framing depth of each wall type (lower-case name → inches).
+fn stud_depths(sp: &BuildingSpec) -> HashMap<String, f64> {
+    sp.wall_types
+        .iter()
+        .filter_map(|w| {
+            let stud =
+                w.assembly.as_ref()?.layers.iter().filter(|l| l.category.eq_ignore_ascii_case("framing")).map(|l| l.thickness_in).fold(0.0, f64::max);
+            (stud > 0.0).then(|| (w.name.to_ascii_lowercase(), stud))
+        })
+        .collect()
+}
+
+/// One plan rectangle (feet) of a built wall as a model wall.
+fn wall_piece(e: &Entity, level: String, ft: &[[f64; 2]], studs: &HashMap<String, f64>) -> Option<ModelWall> {
+    let (a, b, thick) = centreline(ft)?;
+    let ty = xdata_after(&e.common.xdata, super::wallgen::APP).find_map(|s| s.strip_prefix("type:")).map(str::to_string);
+    Some(ModelWall {
+        id: e.handle.hex(),
+        level,
+        a,
+        b,
+        thickness_in: thick * 12.0,
+        stud_in: ty.as_ref().and_then(|t| studs.get(&t.to_ascii_lowercase()).copied()),
+        wall_type: ty,
+    })
+}
+
+/// The built walls of `level` whose plan box comes within `reach` feet of `rect` (building
+/// feet): what one element's host is looked for among, without reading the whole model.
+pub(crate) fn walls_near(d: &Drawing, sp: &BuildingSpec, frame: &Frame, level: &str, rect: [f64; 4], reach: f64) -> Vec<ModelWall> {
+    let studs = stud_depths(sp);
+    let lo = frame.to_sheet(level, [rect[0] - reach, rect[1] - reach]);
+    let hi = frame.to_sheet(level, [rect[2] + reach, rect[3] + reach]);
+    let near = Bounds2::new(Vec2::new(lo.x.min(hi.x), lo.y.min(hi.y)), Vec2::new(lo.x.max(hi.x), lo.y.max(hi.y)));
+    let mut out = Vec::new();
+    for e in d.model.iter().take(MAX_ENTITIES) {
+        if super::wallgen::made_as(e).is_none_or(|p| p != "wall") {
+            continue;
+        }
+        let EntityKind::Mesh(mesh) = &e.kind else { continue };
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        if b.is_empty() || !b.intersects(&near) {
+            continue;
+        }
+        for quad in plan_quads(mesh) {
+            let c = quad.iter().fold(Vec2::new(0.0, 0.0), |a, p| a + *p) * (1.0 / quad.len().max(1) as f64);
+            let (on, _) = frame.to_ft(c);
+            if !on.eq_ignore_ascii_case(level) {
+                continue;
+            }
+            let ft: Vec<[f64; 2]> = quad.iter().map(|p| frame.to_ft(*p).1).collect();
+            out.extend(wall_piece(e, on, &ft, &studs));
+        }
+        if out.len() >= v::MAX_ITEMS {
+            break;
+        }
+    }
+    out
+}
+
 /// A mesh's bottom faces as plan polygons (sheet units).
-fn plan_quads(mesh: &cadaddy_doc::Mesh) -> Vec<Vec<Vec2>> {
+pub(crate) fn plan_quads(mesh: &cadaddy_doc::Mesh) -> Vec<Vec<Vec2>> {
     let z0 = mesh.vertices.iter().fold(f64::INFINITY, |lo, v| lo.min(v.z));
     let z1 = mesh.vertices.iter().fold(f64::NEG_INFINITY, |hi, v| hi.max(v.z));
     let tol = ((z1 - z0).abs() * 1e-6).max(1e-9);
@@ -438,7 +486,7 @@ fn plan_quads(mesh: &cadaddy_doc::Mesh) -> Vec<Vec<Vec2>> {
 }
 
 /// A wall piece's centreline and thickness from its plan rectangle (feet).
-fn centreline(q: &[[f64; 2]]) -> Option<([f64; 2], [f64; 2], f64)> {
+pub(crate) fn centreline(q: &[[f64; 2]]) -> Option<([f64; 2], [f64; 2], f64)> {
     if q.len() != 4 {
         return None;
     }

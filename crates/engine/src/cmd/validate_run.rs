@@ -7,8 +7,8 @@
 //!
 //! - `validate {scope: selection|area|room|level|building, area?, room?, level?, trades?, rules?,
 //!   out_dir?, force?}` starts a run, or resumes the run of the same scope, trades and rules:
-//!   lists its areas, runs `bim.validate` on the scope first (the deterministic pre-screen) and
-//!   returns `{run, areas, next: "validate.next"}`. An area whose model and rules are unchanged
+//!   lists its areas, runs `bim.validate` and the measured checks of `validate.prescreen` on the
+//!   scope first (the deterministic pre-screen) and returns `{run, areas, next: "validate.next"}`. An area whose model and rules are unchanged
 //!   since it was judged keeps its findings (`force` judges it again).
 //! - `validate.next {run}`: the next area's packet (manifest, folder, prompt) for the judge.
 //! - `validate.report {run, area, findings}`: checks the findings' shape against the packet (rule
@@ -237,7 +237,7 @@ fn hash64(s: &str) -> u64 {
     h
 }
 
-fn hash8(s: &str) -> String {
+pub(crate) fn hash8(s: &str) -> String {
     format!("{:08x}", hash64(s) & 0xffff_ffff)
 }
 
@@ -423,7 +423,7 @@ fn run_index(st: &Store, id: &str) -> Option<usize> {
 }
 
 /// The areas of a scope, and the scope as kept in the run.
-fn scope_areas(
+pub(crate) fn scope_areas(
     s: &Session,
     cmd: &str,
     p: &Value,
@@ -530,7 +530,8 @@ fn default_out_dir(s: &Session) -> Option<String> {
     Some(dir.to_string_lossy().into_owned())
 }
 
-/// The deterministic pre-screen: `bim.validate` round the scope's areas, level by level.
+/// The deterministic pre-screen: `bim.validate` round the scope's areas, level by level (the
+/// measured checks of `validate.prescreen` are added by the caller).
 fn prescreen(s: &mut Session, frame: &Frame, scope: &str, areas: &[Area]) -> Value {
     let mut by_level: BTreeMap<String, [f64; 4]> = BTreeMap::new();
     for a in areas {
@@ -655,7 +656,28 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .collect();
     let scope_name = scope["scope"].as_str().unwrap_or("building").to_string();
-    let pre = prescreen(s, &frame, &scope_name, &areas);
+    let mut pre = prescreen(s, &frame, &scope_name, &areas);
+    // The measured checks too (G-HOST, G-HEIGHT, G-PRESENT), with the run's rules.
+    let prints: Option<v::Prints> = super::validate::prints_of(&sp).cloned().or_else(|| super::validate::prints_from_job(s, &frame));
+    let only: Vec<String> = if asked.is_empty() {
+        Vec::new()
+    } else {
+        asked.iter().filter(|r| super::validate_prescreen::RULES.contains(&r.as_str())).cloned().collect()
+    };
+    if asked.is_empty() || !only.is_empty() {
+        let measured = super::validate_prescreen::screen(&super::validate_prescreen::Scope {
+            d,
+            sp: &sp,
+            model: &model,
+            frame: &frame,
+            prints: prints.as_ref(),
+            rules: &all,
+            areas: &areas,
+            whole_levels: matches!(scope_name.as_str(), "building" | "level"),
+            only: &only,
+        });
+        pre["measured"] = measured.summary();
+    }
     let by = if s.agent.from_agent { "agent" } else { "user" };
     st.seq += 1;
     let run = Run {
