@@ -687,7 +687,7 @@ fn words(key: &str) -> String {
 
 fn kind_name(kind: &Value) -> String {
     match kind.get("type").and_then(Value::as_str) {
-        Some("unknown") => kind.get("dxfType").and_then(Value::as_str).unwrap_or("unknown").to_ascii_lowercase(),
+        Some("unknown") => kind.get("dxf_type").or_else(|| kind.get("dxfType")).and_then(Value::as_str).unwrap_or("unknown").to_ascii_lowercase(),
         Some(t) => t.to_ascii_lowercase(),
         None => "object".into(),
     }
@@ -742,6 +742,15 @@ fn compare_entities(a: &[Arc<Entity>], b: &[Arc<Entity>], wher: &str, notes: &[L
             if !notes.iter().any(|l| covers_handle(l, &h) && l.feature.starts_with(&format!("{kind} objects (written as"))) {
                 out.entry((format!("{wher} {kind}"), format!("became {}", kind_name(&kb)))).or_insert_with(|| h.clone());
             }
+            continue;
+        }
+        // `kept::compare_pair`: an object the other reader keeps as stored data (a helix, a light)
+        // is reported as a whole (not editable); without that note its type change is a loss.
+        let variant = |k: &Value| k.get("type").and_then(Value::as_str).map(str::to_string);
+        if variant(&ka) != variant(&kb)
+            && !notes.iter().any(|l| covers_handle(l, &h) && l.feature.starts_with(&format!("{kind} objects (kept as stored")))
+        {
+            out.entry((format!("{wher} {kind}"), "became another type".into())).or_insert_with(|| h.clone());
             continue;
         }
         let whole = notes.iter().any(|l| covers_handle(l, &h) && l.feature.starts_with(&format!("{kind} objects")));
@@ -869,7 +878,9 @@ fn unreported(d: &Drawing, back: &Drawing, notes: &[Loss]) -> Unreported {
         ("materials", v(&d.materials), v(&back.materials)),
     ];
     for (part, a, b) in &whole {
-        if notes.iter().any(|l| l.feature == *part) {
+        // `kept::kept`: a part the drawing didn't have (an empty list) matches anything, so a
+        // material a reader adds is nothing lost.
+        if notes.iter().any(|l| l.feature == *part) || a.as_array().is_some_and(Vec::is_empty) {
             continue;
         }
         let mut paths = BTreeMap::new();
@@ -1100,4 +1111,34 @@ fn notes_report_tiny_numbers_and_block_properties() {
         let notes = losses_between(&d, &new);
         assert!(!notes.iter().any(|l| l.feature.starts_with("blocks")), "{engine:?} 2018 keeps them: {notes:?}");
     }
+}
+
+/// An object a reader keeps as stored data instead of its kind (a helix, a light) is a loss the
+/// notes must report ("not editable"); the comparison finds it when they don't, and takes it when
+/// they do. A material a reader adds to a drawing without any is not a loss.
+#[test]
+fn an_object_kept_as_stored_data_is_found_unless_the_notes_say_so() {
+    let mut d = Drawing::new_metric();
+    d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(5.0, 5.0, 0.0) })).expect("a line");
+    let mut back = d.clone();
+    let stored: Vec<Entity> = back
+        .model
+        .iter()
+        .map(|e| {
+            let mut e = (**e).clone();
+            e.kind = EntityKind::Unknown(cadaddy_engine::doc::Unknown { dxf_type: "LINE".into(), tags: Vec::new() });
+            e
+        })
+        .collect();
+    for e in stored {
+        back.model.replace(e);
+    }
+    let notes = losses_between(&d, &back);
+    assert!(notes.iter().any(|l| l.feature == "line objects (kept as stored, not editable)"), "{notes:?}");
+    assert!(unreported(&d, &back, &notes).is_empty(), "{:?}", unreported(&d, &back, &notes));
+    let found = unreported(&d, &back, &[]);
+    assert!(found.keys().any(|(w, p)| w == "model line" && p == "became another type"), "{found:?}");
+    let mut with_material = d.clone();
+    with_material.materials.push(Default::default());
+    assert!(unreported(&d, &with_material, &[]).is_empty());
 }

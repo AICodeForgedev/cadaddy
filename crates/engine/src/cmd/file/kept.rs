@@ -409,6 +409,13 @@ fn compare_pair(e: &cadaddy_doc::Entity, f: &cadaddy_doc::Entity, out: &mut Loss
         out.add(format!("{kind} objects (written as {})", kind_name(&kb)), "changed", h, name);
         return;
     }
+    // An object a reader decoded as its own kind (a helix, a light) that the other reader keeps
+    // as the file's stored data: nothing is lost, but it can no longer be edited as that kind.
+    let variant = |k: &serde_json::Value| k.get("type").and_then(serde_json::Value::as_str).map(str::to_string);
+    if variant(&ka) != variant(&kb) {
+        out.add(format!("{kind} objects (kept as stored, not editable)"), "changed", h, name);
+        return;
+    }
     for field in changed_fields(&ka, &kb) {
         // A subdivision mesh in a file older than meshes: its faces as a polyface mesh.
         if kind == "mesh" && field == "kind" {
@@ -742,6 +749,29 @@ mod tests {
         // A file that can't be written or read back: nothing to say here (saving reports it).
         let fails: fn(&Drawing, &str) -> Result<Vec<u8>, String> = |_, _| Err("no".into());
         assert!(not_kept(&d, "x.dwg", fails, read).is_empty());
+    }
+
+    #[test]
+    fn an_object_kept_as_stored_data_instead_of_its_kind_is_reported_not_editable() {
+        let circle = cadaddy_doc::Entity::new(
+            cadaddy_doc::Handle(0x100),
+            cadaddy_doc::EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::new(1.0, 2.0, 0.0), radius: 3.0 }),
+        );
+        // The same object as a reader that doesn't decode its kind keeps it.
+        let stored = cadaddy_doc::Entity::new(
+            cadaddy_doc::Handle(0x100),
+            cadaddy_doc::EntityKind::Unknown(cadaddy_doc::Unknown { dxf_type: "CIRCLE".into(), tags: Vec::new() }),
+        );
+        let mut out = Losses::default();
+        compare_pair(&circle, &stored, &mut out, None);
+        let list: Vec<_> = out.0.into_values().collect();
+        assert_eq!(list.len(), 1, "{list:?}");
+        assert_eq!(list[0].feature, "circle objects (kept as stored, not editable)");
+        assert_eq!(list[0].handles, vec!["100".to_string()]);
+        // The same kind on both sides says nothing.
+        let mut out = Losses::default();
+        compare_pair(&circle, &circle, &mut out, None);
+        assert!(out.0.is_empty());
     }
 
     #[test]
