@@ -323,8 +323,9 @@ fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let rot = f64_or(p, "rotation", 0.0).to_radians();
     let vals = p.get("attribs").and_then(Value::as_object).cloned().unwrap_or_default();
-    // A drawing file is scaled by its INSUNITS over this drawing's (1.0 when either has none).
-    let factor = if from_file { insert_file::block_factor(s, &name) } else { 1.0 };
+    // A block that came from a drawing file keeps that file's units, so every insert of it (by
+    // file or by name) is scaled by its INSUNITS over this drawing's (1.0 when either has none).
+    let factor = insert_file::block_factor(s, &name);
     let h = insert_with(s, &name, at, scale * factor, rot, point_param(p, "basePoint"), &vals)?;
     let mut reply = if bool_or(p, "explode", false) {
         // The EXPLODE command body, not `execute`: INSERT records the one undo step.
@@ -333,7 +334,9 @@ fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         attedit::with_unknown_tags(s, h, &vals, json!({ "handle": h.hex() }))
     };
-    if from_file && let Some(o) = reply.as_object_mut() {
+    if (from_file || factor != 1.0)
+        && let Some(o) = reply.as_object_mut()
+    {
         o.insert("unitFactor".into(), json!(factor));
         if factor != 1.0 {
             o.insert("note".into(), json!(insert_file::factor_note(factor)));

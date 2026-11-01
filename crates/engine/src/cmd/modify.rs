@@ -1577,9 +1577,14 @@ pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<E
             }
             let blk = d.block(&ins.block)?;
             let m = ins.transform(blk.base.xy());
+            // A dynamic reference's evaluated copy (`*U…`) keeps the objects its visibility state
+            // hides as invisible: they are not part of what the reference shows, so they don't
+            // come out (BURST does the same).
+            let evaluated = blk.anonymous && blk.name.starts_with("*U");
             Some(
                 blk.entities
                     .iter()
+                    .filter(|be| !evaluated || be.common.visible)
                     .map(|be| {
                         let mut ne = (**be).clone();
                         // AutoCAD's EXPLODE keeps layer 0 and ByBlock properties as defined.
