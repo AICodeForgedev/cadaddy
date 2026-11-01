@@ -71,6 +71,8 @@ const UNCHECKED: &[&str] = &[
     "cmd/procure.rs",
     "cmd/progress.rs",
     "cmd/project.rs",
+    // writes only inside the project folders it manages (registry, shelved archive, template copy)
+    "cmd/project_hub.rs",
     "cmd/props/linfile.rs",
     "cmd/propuse.rs",
     "cmd/rasterout.rs",
