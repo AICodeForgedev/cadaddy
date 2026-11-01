@@ -3295,3 +3295,57 @@
 	Remove Company Standard	Remover padrão da empresa
 	Set Company Standard	Definir padrão da empresa
 	Standards	Padrões
+	 ({n} shown; Export writes them all)	 ({n} mostrados; Exportar grava todos)
+	(no picture)	(sem imagem)
+	A false alarm	Um alarme falso
+	Confidence:	Confiança:
+	Current room	Ambiente atual
+	Defer	Adiar
+	Expected:	Esperado:
+	False alarms: {rate}	Alarmes falsos: {rate}
+	Findings ({n})	Constatações ({n})
+	Found:	Encontrado:
+	From the 2D drawing	Do desenho 2D
+	From the BIM model	Do modelo BIM
+	Issue:	Problema:
+	It is a real error	É um erro real
+	Leave it for a field decision	Deixar para decisão em campo
+	No file chosen. Type: automation.takeoff {params}	Nenhum arquivo escolhido. Digite: automation.takeoff {params}
+	No findings to review.	Nenhuma constatação para revisar.
+	No run yet: choose a scope and trades, then Start.	Nenhuma execução ainda: escolha o escopo e as disciplinas e clique em Iniciar.
+	No takeoff yet: Refresh runs it.	Nenhum levantamento ainda: Atualizar o executa.
+	Overall	Geral
+	Refresh	Atualizar
+	Reject	Rejeitar
+	Resume	Retomar
+	Rules ({on} of {all} on)	Regras ({on} de {all} ativas)
+	Scope:	Escopo:
+	Scores	Pontuações
+	Show answered	Mostrar respondidas
+	Takeoff	Levantamento
+	Takeoff written to {path}	Levantamento gravado em {path}
+	Trades:	Disciplinas:
+	done	concluído
+	judging	em avaliação
+	project	projeto
+	waiting for an agent	aguardando um agente
+	{done} of {total} areas, {state}	{done} de {total} áreas, {state}
+	{source}: {n} lines	{source}: {n} linhas
+	Automation Takeoff	Levantamento da automação
+	Cancel Validation Run	Cancelar validação
+	Change a Validation Rule	Alterar regra de validação
+	Validation Areas	Áreas de validação
+	Validation Evidence Packet	Pacote de evidências da validação
+	Validation Rules	Regras de validação
+	Validate	Validar
+	Automation	Automação
+	Model Checks	Verificações do modelo
+	Qty	Qtd.
+	Elements	Elementos
+	Fire	Incêndio
+	Validate: waiting for an agent	Validar: aguardando um agente
+	Validate Model Against Prints (Agent)	Validar o modelo com as pranchas (agente)
+	Next Validation Packet	Próximo pacote de validação
+	Report Validation Findings	Relatar as constatações da validação
+	Validation Run Status	Status da execução de validação
+	Plant Validation Errors	Inserir erros de validação

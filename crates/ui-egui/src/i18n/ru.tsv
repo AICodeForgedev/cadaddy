@@ -3075,3 +3075,57 @@
 	Remove Company Standard	Удалить стандарт компании
 	Set Company Standard	Задать стандарт компании
 	Standards	Стандарты
+	 ({n} shown; Export writes them all)	 (показано {n}; экспорт запишет все)
+	(no picture)	(нет изображения)
+	A false alarm	Ложная тревога
+	Confidence:	Уверенность:
+	Current room	Текущее помещение
+	Defer	Отложить
+	Expected:	Ожидалось:
+	False alarms: {rate}	Ложные тревоги: {rate}
+	Findings ({n})	Находки ({n})
+	Found:	Найдено:
+	From the 2D drawing	Из 2D-чертежа
+	From the BIM model	Из BIM-модели
+	Issue:	Проблема:
+	It is a real error	Это настоящая ошибка
+	Leave it for a field decision	Оставить для решения на объекте
+	No file chosen. Type: automation.takeoff {params}	Файл не выбран. Введите: automation.takeoff {params}
+	No findings to review.	Нет находок для проверки.
+	No run yet: choose a scope and trades, then Start.	Проверок ещё нет: выберите область и разделы, затем «Начать».
+	No takeoff yet: Refresh runs it.	Подсчёта ещё нет: «Обновить» запускает его.
+	Overall	Итого
+	Refresh	Обновить
+	Reject	Отклонить
+	Resume	Продолжить
+	Rules ({on} of {all} on)	Правила (включено {on} из {all})
+	Scope:	Область:
+	Scores	Оценки
+	Show answered	Показать с ответом
+	Takeoff	Подсчёт
+	Takeoff written to {path}	Подсчёт записан в {path}
+	Trades:	Разделы:
+	done	готово
+	judging	оценивается
+	project	проект
+	waiting for an agent	ожидание агента
+	{done} of {total} areas, {state}	{done} из {total} зон, {state}
+	{source}: {n} lines	{source}: строк {n}
+	Automation Takeoff	Подсчёт автоматизации
+	Cancel Validation Run	Отменить проверку
+	Change a Validation Rule	Изменить правило проверки
+	Validation Areas	Зоны проверки
+	Validation Evidence Packet	Пакет доказательств проверки
+	Validation Rules	Правила проверки
+	Validate	Проверить
+	Automation	Автоматизация
+	Model Checks	Проверки модели
+	Qty	Кол-во
+	Elements	Элементы
+	Fire	Пожарная безопасность
+	Validate: waiting for an agent	Проверка: ожидание агента
+	Validate Model Against Prints (Agent)	Проверка модели по чертежам (агент)
+	Next Validation Packet	Следующий пакет проверки
+	Report Validation Findings	Сообщить результаты проверки
+	Validation Run Status	Состояние прогона проверки
+	Plant Validation Errors	Внедрить ошибки для проверки

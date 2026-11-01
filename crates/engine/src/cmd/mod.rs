@@ -9,6 +9,7 @@ pub mod asbuilt;
 pub(crate) mod ask;
 mod attipedit;
 mod audit;
+pub mod automation;
 pub mod autospec;
 pub mod bimlook;
 pub mod bimprops;
@@ -798,6 +799,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(validate_rules::specs());
         v.extend(validate_packet::specs());
         v.extend(validate_run::specs());
+        v.extend(automation::specs());
         v.extend(printrev::specs());
         v.extend(ceilings::specs());
         v.extend(rfi::specs());

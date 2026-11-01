@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1188,
-    "count": 1188,
+    "callableAsJson": 1195,
+    "count": 1195,
     "ids": [
       "-attedit",
       "-block",
@@ -96,6 +96,7 @@
       "attsync",
       "audit",
       "autoconstrain",
+      "automation.takeoff",
       "bactionbar",
       "bactiontool",
       "base",
@@ -1107,10 +1108,16 @@
       "unittypes.takeoff",
       "updatefield",
       "usage",
+      "validate",
       "validate.areas",
+      "validate.cancel",
+      "validate.next",
       "validate.packet",
+      "validate.plant",
+      "validate.report",
       "validate.rules",
       "validate.rules.set",
+      "validate.status",
       "view",
       "view.back",
       "view.bottom",
@@ -1193,7 +1200,7 @@
       "zoom.window"
     ],
     "inMenus": 525,
-    "typed": 563
+    "typed": 564
   },
   "features": {
     "ifcExport": true,
@@ -1280,7 +1287,7 @@
   },
   "license": "FSL-1.1-ALv2",
   "mcp": {
-    "count": 55,
+    "count": 56,
     "tools": [
       "arch_read",
       "asbuilt",
@@ -1334,6 +1341,7 @@
       "stairs",
       "switch_drawing",
       "undo",
+      "validate",
       "wait_until_idle",
       "watch_events",
       "workflows"

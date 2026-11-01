@@ -192,7 +192,7 @@ fn sticky_dialog(id: &str) -> bool {
 
 /// Ribbon tabs.
 const RIBBON_TABS: &[&str] =
-    &["Home", "Insert", "Annotate", "Parametric", "View", "Manage", "Output", "Express Tools", "Collaborate", "Featured Apps"];
+    &["Home", "Insert", "Annotate", "Parametric", "View", "Manage", "Output", "Automation", "Express Tools", "Collaborate", "Featured Apps"];
 
 /// Keys to press randomly.
 const KEYS: &[&str] = &[

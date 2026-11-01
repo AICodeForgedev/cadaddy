@@ -2379,3 +2379,66 @@
 	Remove Company Standard	会社標準を削除
 	Set Company Standard	会社標準を設定
 	Standards	標準
+	 ({n} shown; Export writes them all)	（{n} 行を表示、書き出しはすべて書き込みます）
+	(no picture)	（画像なし）
+	A false alarm	誤検知
+	Confidence:	確信度:
+	Current room	現在の部屋
+	Defer	保留
+	Expected:	期待値:
+	False alarms: {rate}	誤検知: {rate}
+	Findings ({n})	指摘 ({n})
+	Found:	実際:
+	From the 2D drawing	2D 図面から
+	From the BIM model	BIM モデルから
+	Issue:	問題:
+	It is a real error	実際の誤りです
+	Leave it for a field decision	現場の判断に任せる
+	No file chosen. Type: automation.takeoff {params}	ファイルが選択されていません。入力: automation.takeoff {params}
+	No findings to review.	確認する指摘はありません。
+	No run yet: choose a scope and trades, then Start.	まだ実行がありません。範囲と工種を選んで開始してください。
+	No takeoff yet: Refresh runs it.	まだ数量拾いがありません。更新で実行します。
+	Overall	全体
+	Refresh	更新
+	Reject	却下
+	Resume	再開
+	Rules ({on} of {all} on)	ルール（{all} 件中 {on} 件オン）
+	Scope:	範囲:
+	Scores	スコア
+	Show answered	回答済みを表示
+	Takeoff	数量拾い
+	Takeoff written to {path}	数量拾いを {path} に書き込みました
+	Trades:	工種:
+	done	完了
+	judging	判定中
+	project	プロジェクト
+	waiting for an agent	エージェント待ち
+	{done} of {total} areas, {state}	{total} 区域中 {done}、{state}
+	{source}: {n} lines	{source}: {n} 行
+	Automation Takeoff	自動化の数量拾い
+	Cancel Validation Run	検証の実行を取り消す
+	Change a Validation Rule	検証ルールを変更
+	Validation Areas	検証エリア
+	Validation Evidence Packet	検証の根拠パケット
+	Validation Rules	検証ルール
+	Validate	検証
+	Automation	自動化
+	Model Checks	モデルチェック
+	Qty	数量
+	Elements	要素
+	Fire	消防
+	Level	レベル
+	Trade	工種
+	Category	カテゴリ
+	Unit	単位
+	Architecture	建築
+	Mechanical	機械設備
+	Plumbing	給排水衛生
+	Accept	承認
+	Model Takeoff	モデルの数量拾い
+	Next Validation Packet	次の検証パケット
+	Plant Validation Errors	検証用の誤りを仕込む
+	Report Validation Findings	検証の指摘を報告
+	Validate Model Against Prints (Agent)	図面に対してモデルを検証（エージェント）
+	Validate: waiting for an agent	検証: エージェント待ち
+	Validation Run Status	検証の実行状況

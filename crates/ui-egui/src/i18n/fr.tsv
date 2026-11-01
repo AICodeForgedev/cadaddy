@@ -3074,3 +3074,57 @@
 	Remove Company Standard	Retirer la norme de l'entreprise
 	Set Company Standard	Définir la norme de l'entreprise
 	Standards	Normes
+	 ({n} shown; Export writes them all)	 ({n} affichées ; Exporter les écrit toutes)
+	(no picture)	(pas d’image)
+	A false alarm	Une fausse alerte
+	Confidence:	Confiance :
+	Current room	Pièce actuelle
+	Defer	Différer
+	Expected:	Attendu :
+	False alarms: {rate}	Fausses alertes : {rate}
+	Findings ({n})	Constats ({n})
+	Found:	Trouvé :
+	From the 2D drawing	Du dessin 2D
+	From the BIM model	Du modèle BIM
+	Issue:	Problème :
+	It is a real error	C’est une vraie erreur
+	Leave it for a field decision	Laisser pour une décision sur chantier
+	No file chosen. Type: automation.takeoff {params}	Aucun fichier choisi. Tapez : automation.takeoff {params}
+	No findings to review.	Aucun constat à examiner.
+	No run yet: choose a scope and trades, then Start.	Pas encore d’exécution : choisissez la portée et les corps d’état, puis Démarrer.
+	No takeoff yet: Refresh runs it.	Pas encore de métré : Actualiser le lance.
+	Overall	Global
+	Refresh	Actualiser
+	Reject	Rejeter
+	Resume	Reprendre
+	Rules ({on} of {all} on)	Règles ({on} sur {all} actives)
+	Scope:	Portée :
+	Scores	Scores
+	Show answered	Afficher les réponses
+	Takeoff	Métré
+	Takeoff written to {path}	Métré écrit dans {path}
+	Trades:	Corps d’état :
+	done	terminé
+	judging	en évaluation
+	project	projet
+	waiting for an agent	en attente d’un agent
+	{done} of {total} areas, {state}	{done} sur {total} zones, {state}
+	{source}: {n} lines	{source} : {n} lignes
+	Automation Takeoff	Métré d’automatisation
+	Cancel Validation Run	Annuler la validation
+	Change a Validation Rule	Modifier une règle de validation
+	Validation Areas	Zones de validation
+	Validation Evidence Packet	Dossier de preuves de validation
+	Validation Rules	Règles de validation
+	Validate	Valider
+	Automation	Automatisation
+	Model Checks	Contrôles du modèle
+	Qty	Qté
+	Elements	Éléments
+	Fire	Incendie
+	Validate: waiting for an agent	Valider : en attente d’un agent
+	Validate Model Against Prints (Agent)	Valider le modèle par rapport aux plans (agent)
+	Next Validation Packet	Paquet de validation suivant
+	Report Validation Findings	Signaler les constats de validation
+	Validation Run Status	État de l’exécution de validation
+	Plant Validation Errors	Insérer des erreurs de validation

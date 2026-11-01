@@ -546,6 +546,19 @@ pub const TABS: &[Tab] = &[
             },
         ],
     },
+    // Our own tab (not AutoCAD's): checks of the BIM model against its prints, done with an
+    // agent, and the model's quantities (Q6117).
+    Tab {
+        name: "Automation",
+        panels: &[Panel {
+            name: "Model Checks",
+            items: &[
+                Item::Large(b(Icon::Validate, crate::validatepalette::COMMAND, "Validate")),
+                Item::Large(b(Icon::Takeoff, crate::takeoffwin::COMMAND, "Takeoff")),
+            ],
+            more: &[],
+        }],
+    },
 ];
 
 /// Quick Access Toolbar, as AutoCAD's default.
@@ -1286,12 +1299,32 @@ mod tests {
         assert!(missing.is_empty(), "ribbon commands that don't exist: {missing:?}");
     }
 
-    /// AutoCAD's tab order, so the tabs are where an AutoCAD user looks.
+    /// AutoCAD's tab order, so the tabs are where an AutoCAD user looks; our own Automation tab
+    /// comes after Output.
     #[test]
     fn tabs_follow_autocad_order() {
         let names: Vec<_> = TABS.iter().map(|t| t.name).collect();
-        assert_eq!(names, ["Home", "Insert", "Annotate", "Parametric", "View", "Manage", "Output"]);
+        assert_eq!(names, ["Home", "Insert", "Annotate", "Parametric", "View", "Manage", "Output", "Automation"]);
         let home: Vec<_> = TABS[0].panels.iter().map(|p| p.name).collect();
         assert_eq!(home, ["Draw", "Modify", "Annotation", "Layers", "Block", "Properties", "Groups", "Utilities", "Clipboard"]);
+    }
+
+    /// Automation: Validate first, then Takeoff, both large buttons of one panel (Q6117).
+    #[test]
+    fn automation_tab_has_validate_then_takeoff() {
+        let tab = TABS.iter().find(|t| t.name == "Automation").expect("the Automation tab");
+        let panels: Vec<_> = tab.panels.iter().map(|p| p.name).collect();
+        assert_eq!(panels, ["Model Checks"]);
+        let buttons: Vec<(&str, &str)> = tab.panels[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Large(b) => Some((b.label, b.cmd)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(buttons, [("Validate", "ui.panel.validate"), ("Takeoff", "automation.takeoff")]);
+        assert!(matches!(tab.panels[0].items[0], Item::Large(Btn { icon: Icon::Validate, .. })));
+        assert!(matches!(tab.panels[0].items[1], Item::Large(Btn { icon: Icon::Takeoff, .. })));
     }
 }

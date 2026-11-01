@@ -166,6 +166,8 @@ pub mod scripteditor;
 pub mod secureloaddlg;
 pub mod sheetsets;
 pub mod standardsdlg;
+pub mod takeoffwin;
+pub mod validatepalette;
 
 use std::sync::mpsc::Receiver;
 
@@ -528,6 +530,8 @@ pub struct CadApp {
     pub gpu_notice: Option<autosave::GpuNotice>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
+    /// The last Automation ▸ Takeoff (`automation.takeoff`'s answer), shown in its window ([`takeoffwin`]).
+    pub takeoff_table: Option<serde_json::Value>,
     /// The Data Extraction wizard while open ([`extractdlg`]).
     pub extract_dlg: Option<extractdlg::State>,
     /// The Check Spelling dialog while open ([`spelldlg`]).
@@ -633,6 +637,7 @@ impl CadApp {
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
             hatch_dlg: None,
+            takeoff_table: None,
             extract_dlg: None,
             spell_dlg: None,
             hyperlink_pick: false,
