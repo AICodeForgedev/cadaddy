@@ -988,6 +988,69 @@ pub(crate) fn legend_onto_devices(sp: &mut cadaddy_walk3d::BuildingSpec, designa
     n
 }
 
+/// The plumbing fixture schedule onto the model's plumbing fixtures: each one's item (its
+/// fixture and tag, `lavatory P-2`), fixture, maker and model, from the schedule. The fixtures
+/// named.
+pub(crate) fn plumbing_onto_fixtures(sp: &mut cadaddy_walk3d::BuildingSpec, rows: &[cadaddy_mepfix::fixture_schedule::ScheduledFixture]) -> usize {
+    let mut n = 0usize;
+    for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && t.kind == "plumbing_fixture").take(MAX_DEVICES) {
+        let mark = t.fields.get("type").map_or_else(String::new, |f| f.value.trim().to_string());
+        let Some(row) = rows.iter().find(|r| r.tag == mark) else { continue };
+        t.set("device_type", format!("{} {mark}", row.fixture.to_ascii_lowercase()), "schedule");
+        t.set("fixture", row.fixture.clone(), "schedule");
+        for (k, v) in [("manufacturer", &row.manufacturer), ("model", &row.model)] {
+            if !v.is_empty() {
+                t.set(k, v.clone(), "schedule");
+            }
+        }
+        n += 1;
+    }
+    n
+}
+
+/// How near a sink a receptacle is GFCI protected (NEC 210.8), feet.
+const SINK_GFCI_FT: f64 = 6.0;
+
+/// NEC 210.8: a receptacle within 6' of a sink is GFCI protected, and a wiring devices section's
+/// non-feed-through GFCI receptacles make each one a GFCI device. Each receptacle on a sink's
+/// level that near one (a plumbing fixture its schedule calls a sink or lavatory; where the plan
+/// tags it) and its plan doesn't mark GFCI is taken off as one, from the rule; the receptacles
+/// changed and the sinks they're by.
+pub(crate) fn gfci_by_sinks(sp: &mut cadaddy_walk3d::BuildingSpec) -> (usize, usize) {
+    let sinks: Vec<(String, [f64; 2])> = sp
+        .tags
+        .iter()
+        .filter(|t| t.kind == "plumbing_fixture")
+        .filter(|t| {
+            t.fields
+                .get("fixture")
+                .is_some_and(|f| f.value.to_ascii_uppercase().contains("SINK") || f.value.to_ascii_uppercase().contains("LAVATORY"))
+        })
+        .map(|t| (t.level.clone(), t.at_ft))
+        .take(MAX_DEVICES)
+        .collect();
+    let (mut n, mut by) = (0usize, std::collections::BTreeSet::new());
+    for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && t.kind == "receptacle").take(MAX_DEVICES) {
+        let mark = t.fields.get("type").map_or_else(String::new, |f| f.value.trim().to_ascii_uppercase());
+        let marks: Vec<&str> = mark.split('/').map(str::trim).filter(|m| !m.is_empty() && *m != "REC").collect();
+        if marks.contains(&"GFCI") {
+            continue;
+        }
+        let near = sinks.iter().position(|(l, at)| *l == t.level && (at[0] - t.at_ft[0]).hypot(at[1] - t.at_ft[1]) <= SINK_GFCI_FT);
+        let Some(i) = near else { continue };
+        let mut with = vec!["GFCI"];
+        with.extend(marks.iter().copied());
+        if t.fields.contains_key("tamper_resistant") && !with.contains(&"TR") {
+            with.push("TR");
+        }
+        t.set("device_type", receptacle_item(&with.join("/")), "rule");
+        t.set("gfci", "NEC 210.8: within 6' of a sink; the GFCI receptacles are non-feed-through", "rule");
+        n += 1;
+        by.insert(i);
+    }
+    (n, by.len())
+}
+
 /// NEC 406.12: the receptacles of a hotel's guest rooms (and a dwelling's) are tamper-resistant.
 /// Each receptacle device in one of `rooms` (level, outline in model units) its plan doesn't mark
 /// TR is taken off as one, from the rule; the receptacles and the rooms changed.
@@ -1538,6 +1601,47 @@ mod tests {
         assert_eq!(super::legend_onto_devices(&mut sp, &d), 2);
         let os = sp.tags.iter().find(|t| t.id == "device:Level 1:2.0,1.0").expect("os2");
         assert_eq!((os.fields["catalog"].value.as_str(), os.fields["device_type"].source.as_str()), ("WSXA-PDT-D", "legend"));
+    }
+
+    #[test]
+    fn a_receptacle_by_a_sink_is_a_gfci() {
+        let mut sp = cadaddy_walk3d::BuildingSpec::from_json(
+            r#"{"version": 1, "units_per_foot": 12, "levels": [{"name": "Level 2", "elevation_ft": 10, "height_ft": 10}], "tags": [
+                {"id": "device:Level 2:10.0,10.0", "kind": "plumbing_fixture", "level": "Level 2", "at_ft": [10, 10], "fields": {"type": {"value": "P-2", "source": "plan"}}},
+                {"id": "device:Level 2:40.0,10.0", "kind": "plumbing_fixture", "level": "Level 2", "at_ft": [40, 10], "fields": {"type": {"value": "P-1", "source": "plan"}}},
+                {"id": "device:Level 2:13.0,10.0", "kind": "receptacle", "level": "Level 2", "at_ft": [13, 10], "fields": {"type": {"value": "REC", "source": "plan"}, "tamper_resistant": {"value": "NEC 406.12", "source": "rule"}}},
+                {"id": "device:Level 2:12.0,12.0", "kind": "receptacle", "level": "Level 2", "at_ft": [12, 12], "fields": {"type": {"value": "GFCI", "source": "plan"}}},
+                {"id": "device:Level 2:20.0,10.0", "kind": "receptacle", "level": "Level 2", "at_ft": [20, 10], "fields": {"type": {"value": "REC", "source": "plan"}}},
+                {"id": "device:Level 2:41.0,10.0", "kind": "receptacle", "level": "Level 2", "at_ft": [41, 10], "fields": {"type": {"value": "REC", "source": "plan"}}}
+            ]}"#,
+        )
+        .expect("spec");
+        let rows = vec![
+            cadaddy_mepfix::fixture_schedule::ScheduledFixture {
+                tag: "P-1".into(),
+                fixture: "WATER CLOSET".into(),
+                manufacturer: "PROFLO".into(),
+                ..Default::default()
+            },
+            cadaddy_mepfix::fixture_schedule::ScheduledFixture {
+                tag: "P-2".into(),
+                fixture: "LAVATORY".into(),
+                model: "447961".into(),
+                ..Default::default()
+            },
+        ];
+        assert_eq!(super::plumbing_onto_fixtures(&mut sp, &rows), 2);
+        let field = |id: &str, k: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get(k)).map(|f| f.value.clone());
+        assert_eq!(field("device:Level 2:10.0,10.0", "device_type").as_deref(), Some("lavatory P-2"));
+        assert_eq!(field("device:Level 2:10.0,10.0", "model").as_deref(), Some("447961"));
+        // 3' from the lavatory: a GFCI (and still tamper-resistant); marked GFCI already, 10' away,
+        // or by a water closet: left alone.
+        assert_eq!(super::gfci_by_sinks(&mut sp), (1, 1));
+        let field = |id: &str, k: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get(k)).map(|f| f.value.clone());
+        assert_eq!(field("device:Level 2:13.0,10.0", "device_type").as_deref(), Some("GFCI receptacle, tamper-resistant"));
+        assert_eq!(field("device:Level 2:12.0,12.0", "device_type"), None);
+        assert_eq!(field("device:Level 2:20.0,10.0", "device_type"), None);
+        assert_eq!(field("device:Level 2:41.0,10.0", "device_type"), None);
     }
 
     #[test]

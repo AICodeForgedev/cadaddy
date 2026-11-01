@@ -4139,7 +4139,20 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut placed: Option<Value> = None;
     // The devices stage's devices, on their levels (bspec.draft started a new spec), before the
     // build: it makes each one an element carrying what was read about it (Q6002).
-    if !job.devices.is_empty() {
+    // The plumbing fixtures the plumbing plans tag (named by the set's fixture schedule) go in
+    // with the devices: placed by their sheets the same way.
+    let schedule = if job.sheet_spans.iter().any(|sp| cadaddy_mepfix::sheet_facts::discipline_of(&sp.sheet).eq_ignore_ascii_case("P")) {
+        plumbing_schedule(s.doc()?, job)
+    } else {
+        None
+    };
+    let mut all_devices = job.devices.clone();
+    if let Some(sch) = &schedule {
+        let fixtures = plumbing_fixtures(s.doc()?, job, sch);
+        progress_line(&format!("  plumbing fixture schedule: {} tags; fixtures the plumbing plans tag: {}", sch.rows.len(), fixtures.len()));
+        all_devices.extend(fixtures);
+    }
+    if !all_devices.is_empty() {
         // Onto the architecture like the MEP: a device that can't be placed is left out.
         let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
         // (Not placed onto the architecture, stamped from typical-room plans.)
@@ -4161,8 +4174,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     placer = Some(Box::new(arch_placer(s.doc()?, &sp, &shell)));
                 }
                 let Some(sim) = placer.as_deref() else { return Err(bad("bim_build", "device placer missing".to_string())) };
-                let out: Vec<_> = job
-                    .devices
+                let out: Vec<_> = all_devices
                     .iter()
                     .filter_map(|dv| {
                         let m = sim(dv.at, &dv.level)?;
@@ -4171,7 +4183,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         Some(dv)
                     })
                     .collect();
-                progress_line(&format!("  devices onto the plans: {} placed, {} not placeable", out.len(), job.devices.len() - out.len()));
+                progress_line(&format!("  devices onto the plans: {} placed, {} not placeable", out.len(), all_devices.len() - out.len()));
                 // Nothing more than 5' outside its storey's shell (as for the MEP).
                 let upf_dev = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
                 let placed_n = out.len();
@@ -4190,7 +4202,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     );
                 }
                 let mut why: BTreeMap<String, usize> = BTreeMap::new();
-                for dv in job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()) {
+                for dv in all_devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()) {
                     *why.entry(format!(
                         "{} on {}",
                         if dv.sheet.is_empty() { "?" } else { &dv.sheet },
@@ -4199,7 +4211,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     .or_default() += 1;
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
-                let unplaced: Vec<&super::readers::ReadDevice> = job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
+                let unplaced: Vec<&super::readers::ReadDevice> = all_devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
                 let StampedRooms { devices: stamped, report, authority, panels, rooms, sleeping: guest } =
                     stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
                 room_panels = panels;
@@ -4220,7 +4232,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if !report.is_empty() {
                     progress_line(&format!("  typical-room devices stamped into rooms of their type: {} ({report:?})", stamped.len()));
                 }
-                let not_placed = job.devices.len() - out.len();
+                let not_placed = all_devices.len() - out.len();
                 if not_placed > 0 {
                     job.add_finding(
                         StageName::BimBuild,
@@ -4236,7 +4248,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 out.extend(stamped);
                 out
             }
-            _ => job.devices.clone(),
+            _ => all_devices.clone(),
         };
         // A stamped room's circuits are its own (a guest room's own panel, in the room's wall):
         // their routes in the room, where the sheet's reading can't put them.
@@ -4275,6 +4287,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         progress_line(&format!("  switches and sensors named by the legend's designations: {n}"));
                     }
                 }
+                // The plumbing fixtures named by their schedule.
+                if let Some(sch) = &schedule
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let n = super::readers::plumbing_onto_fixtures(&mut sp, &sch.rows);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        progress_line(&format!("  plumbing fixtures named by the schedule: {n}"));
+                    }
+                }
                 // The code's devices the plans don't mark: a guest room's receptacles are
                 // tamper-resistant.
                 if !sleeping.is_empty()
@@ -4292,6 +4314,27 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             ),
                             2,
                             vec!["Confirm the TR devices with the engineer (the wiring devices section lists them)".into()],
+                            None,
+                            false,
+                        );
+                    }
+                }
+                // A receptacle by a sink is a GFCI device (non-feed-through GFCIs).
+                if schedule.is_some()
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let (n, sinks) = super::readers::gfci_by_sinks(&mut sp);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        progress_line(&format!("  receptacles within 6' of a sink taken off as GFCI (NEC 210.8): {n} by {sinks} sinks"));
+                        job.add_finding(
+                            StageName::BimBuild,
+                            "Receptacles by sinks taken off as GFCI",
+                            &format!(
+                                "{n} receptacles within 6' of {sinks} sinks and lavatories aren't marked GFCI on the plans: NEC 210.8 protects them, and GFCI receptacles that don't feed through make each one a GFCI device; measured from where the plumbing plans tag each sink"
+                            ),
+                            3,
+                            vec!["Check them on the plans: a GFCI breaker on the circuit would protect them instead".into()],
                             None,
                             false,
                         );
@@ -5427,29 +5470,41 @@ const MAX_LEGEND_TEXTS: usize = 5_000;
 const MAX_LEGEND_SHEETS: usize = 6;
 
 /// The designations on the set's electrical sheets that aren't plans (a legend on the one-line
-/// diagram's sheet, or the schedules'; the job's drawing keeps the plans): each such page read
-/// again for its text alone.
+/// diagram's sheet, or the schedules'; the job's drawing keeps the plans).
 fn unimported_designations(job: &GuidedJob) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
+    for (_, d) in non_plan_pages(job, "E") {
+        for (k, v) in cadaddy_mepfix::device_types::designations(&cadaddy_mepfix::sheet_facts::texts(&d)) {
+            out.entry(k).or_insert(v);
+        }
+    }
+    out
+}
+
+/// The pages of a discipline's sheets that aren't plans (legends, schedules, diagrams: the job's
+/// drawing keeps the plans), each read again from its file, numbered sheets in sheet order.
+fn non_plan_pages(job: &GuidedJob, discipline: &str) -> Vec<(String, cadaddy_doc::Drawing)> {
+    let mut out = Vec::new();
     let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else {
-        progress_line("  the legends' sheets: no PDF reader in this build");
+        progress_line("  the sheets' legends and schedules: no PDF reader in this build");
         return out;
     };
     let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     // The numbered ones (a page known only by its file isn't a sheet of the set), in sheet order.
-    let mut electrical: Vec<(String, &Value)> = classified
+    let mut sheets: Vec<(String, &Value)> = classified
         .iter()
         .filter_map(|c| {
             let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
             let kind = if text("type").is_empty() { text("sheet_type") } else { text("type") };
             let number = c.get("number").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            (text("discipline") == "e" && !kind.contains("plan") && cadaddy_mepfix::sheet_facts::is_sheet_number(&number)).then_some((number, c))
+            (text("discipline").eq_ignore_ascii_case(discipline) && !kind.contains("plan") && cadaddy_mepfix::sheet_facts::is_sheet_number(&number))
+                .then_some((number, c))
         })
         .collect();
-    electrical.sort_by(|a, b| a.0.cmp(&b.0));
+    sheets.sort_by(|a, b| a.0.cmp(&b.0));
     let mut missed: Vec<String> = Vec::new();
-    for (number, c) in electrical.into_iter().take(MAX_LEGEND_SHEETS) {
+    for (number, c) in sheets.into_iter().take(MAX_LEGEND_SHEETS) {
         // Its current copy's file and page (`printset.sheets`).
         let (Some(file), Some(page)) = (c.get("file").and_then(Value::as_str), c.get("page").and_then(Value::as_u64)) else { continue };
         if !files.contains_key(file) {
@@ -5465,18 +5520,77 @@ fn unimported_designations(job: &GuidedJob) -> BTreeMap<String, String> {
         }
         let Some(bytes) = files.get(file) else { continue };
         match read_pdf(bytes, &json!({"page": page, "text": true, "images": false})) {
-            Ok((d, _)) => {
-                for (k, v) in cadaddy_mepfix::device_types::designations(&cadaddy_mepfix::sheet_facts::texts(&d)) {
-                    out.entry(k).or_insert(v);
-                }
-            }
+            Ok((d, _)) => out.push((number, d)),
             Err(e) => missed.push(format!("{number} ({file} page {page}: {e})")),
         }
     }
     if !missed.is_empty() {
-        progress_line(&format!("  the legends' sheets not read: {}", missed.join(", ")));
+        progress_line(&format!("  the sheets' legends and schedules not read: {}", missed.join(", ")));
     }
     out
+}
+
+/// The set's plumbing fixture schedule: on a plumbing sheet that isn't a plan, else on a plan.
+fn plumbing_schedule(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Option<cadaddy_mepfix::fixture_schedule::FixtureSchedule> {
+    if let Some(s) = non_plan_pages(job, "P").iter().find_map(|(_, page)| cadaddy_mepfix::fixture_schedule::read(page)) {
+        return Some(s);
+    }
+    job_sheet_refs(job)
+        .iter()
+        .filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("P"))
+        .take(MAX_LEGEND_SHEETS)
+        .find_map(|r| cadaddy_mepfix::fixture_schedule::read(&super::printmep::sheet_drawing(d, r)))
+}
+
+/// Most plumbing fixtures read from a set's plans.
+const MAX_FIXTURES: usize = 20_000;
+
+/// The plumbing fixtures the plumbing plans tag: each tag the schedule lists, lettered on a
+/// plumbing sheet, as a device of kind `plumbing fixture` where it is printed. Not the sheet's own
+/// number in its title block (P-2 is a sheet and a lavatory), nor lettering larger than a tag's.
+fn plumbing_fixtures(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    schedule: &cadaddy_mepfix::fixture_schedule::FixtureSchedule,
+) -> Vec<super::readers::ReadDevice> {
+    let tags: BTreeSet<&str> = schedule.rows.iter().map(|r| r.tag.as_str()).collect();
+    let spans: Vec<(&str, u64, u64)> = job
+        .sheet_spans
+        .iter()
+        .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(sp.sheet.split('/').next().unwrap_or(&sp.sheet)).eq_ignore_ascii_case("P"))
+        .map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi))
+        .collect();
+    let mut found: Vec<(String, [f64; 2], f64, String)> = Vec::new();
+    for e in d.model.iter() {
+        let cadaddy_doc::EntityKind::Text(t) = &e.kind else { continue };
+        let value = t.value.trim();
+        if !(tags.contains(value) && t.height.is_finite() && t.height > 0.0) {
+            continue;
+        }
+        let Some((sheet, _, _)) = spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&e.handle.0)) else { continue };
+        if sheet_key(sheet) == value {
+            continue;
+        }
+        found.push((value.to_string(), [t.insert.x, t.insert.y], t.height, sheet.to_string()));
+        if found.len() >= MAX_FIXTURES {
+            break;
+        }
+    }
+    let mut heights: Vec<f64> = found.iter().map(|f| f.2).collect();
+    heights.sort_by(f64::total_cmp);
+    let usual = heights.get(heights.len() / 2).copied().unwrap_or(0.0);
+    found
+        .into_iter()
+        .filter(|(_, _, h, _)| *h <= 2.0 * usual)
+        .map(|(tag, at, _, sheet)| super::readers::ReadDevice {
+            level: job.level_at(at).map_or_else(String::new, |r| r.level.clone()),
+            tag,
+            at,
+            sheet,
+            kind: "plumbing fixture".into(),
+            ..Default::default()
+        })
+        .collect()
 }
 
 /// Whether a typical room's type (its words, [`type_words`]) is a room to sleep in: a hotel's

@@ -220,11 +220,12 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
             "homerun" | "conduit" | "circuit" => {}
             kind => {
                 let (ty, src) = f("device_type").unwrap_or_else(|| (kind.replace('_', " "), "plan".into()));
+                let plumbing = kind == "plumbing_fixture";
                 add(
                     lines,
                     Line {
-                        trade: "electrical",
-                        category: "devices".into(),
+                        trade: if plumbing { "plumbing" } else { "electrical" },
+                        category: if plumbing { "plumbing fixtures" } else { "devices" }.into(),
                         item: ty,
                         size: String::new(),
                         unit: "each",
