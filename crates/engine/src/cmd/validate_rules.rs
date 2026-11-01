@@ -39,8 +39,20 @@ const RULES_JSON: &str = include_str!("validate_rules.json");
 /// The trades a rule belongs to.
 pub const TRADES: [&str; 6] = ["architecture", "electrical", "mechanical", "plumbing", "fire", "general"];
 /// The kinds of print document a rule looks at.
-pub const DOCUMENTS: [&str; 11] =
-    ["plan", "enlarged_plan", "rcp", "interior_elevation", "section", "schedule", "legend", "general_notes", "spec", "submittal", "partition_legend"];
+pub const DOCUMENTS: [&str; 12] = [
+    "plan",
+    "enlarged_plan",
+    "rcp",
+    "interior_elevation",
+    "section",
+    "schedule",
+    "legend",
+    "general_notes",
+    "spec",
+    "submittal",
+    "partition_legend",
+    "riser_diagram",
+];
 /// The tolerances a rule may have (inches unless the name says feet).
 pub const TOLERANCES: [&str; 7] = ["plan_in", "height_in", "route_ft", "size_in", "depth_in", "clear_width_in", "clear_depth_in"];
 pub const SEVERITIES: [&str; 3] = ["high", "medium", "low"];

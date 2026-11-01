@@ -168,6 +168,7 @@ pub(crate) mod underlay;
 mod unittypes;
 pub mod validate;
 pub mod validate_packet;
+pub mod validate_prescreen;
 pub mod validate_rules;
 pub mod validate_run;
 pub mod verify;
@@ -798,6 +799,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(validate::specs());
         v.extend(validate_rules::specs());
         v.extend(validate_packet::specs());
+        v.extend(validate_prescreen::specs());
         v.extend(validate_run::specs());
         v.extend(automation::specs());
         v.extend(printrev::specs());

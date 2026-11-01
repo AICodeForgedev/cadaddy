@@ -51,6 +51,7 @@ use serde_json::{Value, json};
 
 use super::bspec::current;
 use super::validate::{Frame, PROV_APP, model_of, prints_from_job, prints_of};
+use super::validate_prescreen::{self as ps, UnitOf};
 use super::validate_rules::{self as vr, Effective};
 use super::*;
 use crate::{Result, Session};
@@ -81,6 +82,9 @@ const MAX_AREA_LIMIT: usize = 500;
 /// Row and note crops of one sheet, at most.
 const MAX_TEXT_CROPS_PER_SHEET: usize = 6;
 const MAX_ELEVATIONS: usize = 6;
+/// Enlarged views of a room's unit type, and riser diagram crops, in one packet at most.
+const MAX_UNIT_VIEWS: usize = 6;
+const MAX_RISERS: usize = 4;
 /// Elements, runs, walls listed in objects.json, at most (each).
 const MAX_OBJECTS: usize = 5_000;
 /// Outline points listed for an area.
@@ -107,7 +111,7 @@ pub fn specs() -> Vec<CommandSpec> {
 // ---------------------------------------------------------------- small helpers
 
 /// Rounded for stable output: hundredths, and no negative zero.
-fn r2(x: f64) -> f64 {
+pub(crate) fn r2(x: f64) -> f64 {
     let y = (x * 100.0).round() / 100.0;
     if y == 0.0 || !y.is_finite() { 0.0 } else { y }
 }
@@ -117,7 +121,7 @@ fn r4(x: f64) -> f64 {
     if y == 0.0 || !y.is_finite() { 0.0 } else { y }
 }
 
-fn pt(p: [f64; 2]) -> Value {
+pub(crate) fn pt(p: [f64; 2]) -> Value {
     json!([r2(p[0]), r2(p[1])])
 }
 
@@ -125,7 +129,7 @@ fn rect_json(r: [f64; 4]) -> Value {
     json!([r2(r[0]), r2(r[1]), r2(r[2]), r2(r[3])])
 }
 
-fn bbox(pts: &[[f64; 2]]) -> Option<[f64; 4]> {
+pub(crate) fn bbox(pts: &[[f64; 2]]) -> Option<[f64; 4]> {
     let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
     for p in pts.iter().filter(|p| p[0].is_finite() && p[1].is_finite()) {
         b = [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])];
@@ -133,7 +137,7 @@ fn bbox(pts: &[[f64; 2]]) -> Option<[f64; 4]> {
     (b[0] <= b[2] && b[1] <= b[3]).then_some(b)
 }
 
-fn grow(r: [f64; 4], by: f64) -> [f64; 4] {
+pub(crate) fn grow(r: [f64; 4], by: f64) -> [f64; 4] {
     [r[0] - by, r[1] - by, r[2] + by, r[3] + by]
 }
 
@@ -142,7 +146,7 @@ fn intersect(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
     (r[0] < r[2] && r[1] < r[3]).then_some(r)
 }
 
-fn inside(r: [f64; 4], p: [f64; 2]) -> bool {
+pub(crate) fn inside(r: [f64; 4], p: [f64; 2]) -> bool {
     p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3]
 }
 
@@ -160,7 +164,7 @@ fn safe(s: &str) -> String {
     if t.is_empty() { "x".into() } else { t }
 }
 
-fn upper_words(s: &str) -> String {
+pub(crate) fn upper_words(s: &str) -> String {
     s.to_ascii_uppercase().split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -243,7 +247,7 @@ fn room_kind(name: &str) -> &'static str {
     }
 }
 
-fn point_in(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
+pub(crate) fn point_in(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
     let pts: Vec<Vec2> = poly.iter().map(|q| Vec2::new(q[0], q[1])).collect();
     pts.len() >= 3 && cadaddy_geom::point_in_polygon(&pts, Vec2::new(p[0], p[1]))
 }
@@ -443,7 +447,7 @@ pub(crate) fn area_param(cmd: &str, sp: &BuildingSpec, p: &Value, d: &Drawing, f
 // ---------------------------------------------------------------- sheets
 
 /// The trade of a sheet discipline.
-fn trade_of_discipline(d: &str) -> &'static str {
+pub(crate) fn trade_of_discipline(d: &str) -> &'static str {
     match d.trim().to_ascii_uppercase().as_str() {
         "A" | "ID" | "I" | "AD" => "architecture",
         "E" | "EL" | "FA" | "T" | "TC" | "LV" => "electrical",
@@ -455,7 +459,7 @@ fn trade_of_discipline(d: &str) -> &'static str {
 }
 
 /// What a sheet (or one view of it) is, by its title.
-fn sheet_kind(title: &str, has_level: bool) -> &'static str {
+pub(crate) fn sheet_kind(title: &str, has_level: bool) -> &'static str {
     let t = format!(" {} ", upper_words(&title.replace(['.', '-', '/', '_', ','], " ")));
     let has = |k: &str| t.contains(k);
     if has(" REFLECTED ") || has(" RCP ") || has(" CEILING PLAN ") {
@@ -464,6 +468,8 @@ fn sheet_kind(title: &str, has_level: bool) -> &'static str {
         "interior_elevation"
     } else if has(" PARTITION ") || has(" WALL TYPE") {
         "partition_legend"
+    } else if has(" RISER DIAGRAM") || has(" RISERS ") || has(" ISOMETRIC") {
+        "riser_diagram"
     } else if has(" SCHEDULE") {
         "schedule"
     } else if has(" LEGEND") || has(" SYMBOL") || has(" ABBREVIATION") {
@@ -551,6 +557,8 @@ struct Crop {
     place: Option<Place>,
     /// Why it is there (a mark, the room's number, "GENERAL NOTES").
     shows: Option<String>,
+    /// How the view is turned and mirrored against the room on the plan.
+    orientation: Option<Value>,
 }
 
 impl Crop {
@@ -578,9 +586,102 @@ impl Crop {
             if let Some(sh) = &self.shows {
                 m.insert("shows".into(), json!(sh));
             }
+            if let Some(or) = &self.orientation {
+                m.insert("orientation".into(), or.clone());
+            }
         }
         o
     }
+}
+
+/// A turn, degrees counter-clockwise in [0, 360), to a tenth.
+fn turn_deg(rad: f64) -> f64 {
+    let d = (rad.to_degrees().rem_euclid(360.0) * 10.0).round() / 10.0;
+    if d >= 360.0 || !d.is_finite() { 0.0 } else { r2(d) }
+}
+
+/// How a crop reads against the plan, in words, when it is turned or mirrored.
+fn turn_words(o: &Value) -> Option<String> {
+    let deg = o.get("rotation_deg").and_then(Value::as_f64);
+    let mirrored = o.get("mirrored").and_then(Value::as_bool).unwrap_or(false);
+    let turned = deg.filter(|d| d.abs() > 0.05 && (d - 360.0).abs() > 0.05);
+    match (turned, mirrored) {
+        (None, false) if deg.is_some() => None,
+        (None, false) => Some("its turn against the room is not known: match it by the walls and doors".into()),
+        (Some(d), false) => Some(format!("drawn turned {d}° from the room as the plan shows it")),
+        (None, true) => Some("drawn mirrored (the room is the opposite hand)".into()),
+        (Some(d), true) => Some(format!("drawn mirrored and turned {d}° from the room as the plan shows it")),
+    }
+}
+
+/// A view's turn against the plan from its registration (a fit has no mirror).
+fn orientation_of(r: &SheetRegistration, by: &str) -> Value {
+    let mut o = json!({"rotation_deg": turn_deg(r.b.atan2(r.a)), "mirrored": false, "scale": r4(r.scale()), "by": by});
+    if let Some(w) = turn_words(&o) {
+        o["read"] = json!(w);
+    }
+    o
+}
+
+/// How a unit type's layout (its items at (u, v), 0–1 across and up its enlarged plan) lies in
+/// this room: the quarter turn and mirror that bring the items nearest the room's elements of
+/// the same kind (ties keep the plain layout).
+pub(crate) fn layout_fit(ty: &Value, area: &Area, elements: &[(String, [f64; 2])]) -> Option<Value> {
+    let items: Vec<(String, [f64; 2])> = ty
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(500)
+        .filter_map(|i| {
+            let (u, v) = (i.get("u")?.as_f64()?, i.get("v")?.as_f64()?);
+            let k = i.get("kind")?.as_str()?.trim().to_ascii_lowercase();
+            (u.is_finite() && v.is_finite() && (-0.5..=1.5).contains(&u) && (-0.5..=1.5).contains(&v) && !k.is_empty()).then_some((k, [u, v]))
+        })
+        .collect();
+    if items.len() < 2 || elements.is_empty() {
+        return None;
+    }
+    let b = area.bbox;
+    let (w, h) = (b[2] - b[0], b[3] - b[1]);
+    let same = |a: &str, b: &str| {
+        let (a, b) = (format!("_{}_", a.replace([' ', '-', '.'], "_")), format!("_{}_", b.replace([' ', '-', '.'], "_")));
+        a.contains(&b) || b.contains(&a)
+    };
+    let mut best: Option<(usize, f64, u32, bool)> = None;
+    for mirrored in [false, true] {
+        for k in 0..4u32 {
+            let (mut sum, mut n) = (0.0, 0usize);
+            for (kind, [u, v]) in &items {
+                let u = if mirrored { 1.0 - u } else { *u };
+                let (x, y) = (u - 0.5, v - 0.5);
+                let (x, y) = match k {
+                    1 => (-y, x),
+                    2 => (-x, -y),
+                    3 => (y, -x),
+                    _ => (x, y),
+                };
+                let p = [b[0] + (x + 0.5) * w, b[1] + (y + 0.5) * h];
+                let near = elements
+                    .iter()
+                    .filter(|(ek, _)| same(&ek.to_ascii_lowercase(), kind))
+                    .map(|(_, q)| (q[0] - p[0]).hypot(q[1] - p[1]))
+                    .fold(f64::INFINITY, f64::min);
+                if near.is_finite() {
+                    sum += near;
+                    n += 1;
+                }
+            }
+            if n < 2 {
+                continue;
+            }
+            let mean = sum / n as f64;
+            if best.is_none_or(|(bn, bm, _, _)| n > bn || (n == bn && mean < bm - 1e-6)) {
+                best = Some((n, mean, k, mirrored));
+            }
+        }
+    }
+    best.map(|(n, mean, k, mirrored)| json!({"rotation_deg": f64::from(k * 90), "mirrored": mirrored, "fit_ft": r2(mean), "matched": n, "of": items.len()}))
 }
 
 /// A sheet rectangle cut into pictures at `ppu` pixels per unit: whole pixels, tiles of at most
@@ -710,7 +811,7 @@ fn is_model_object(e: &Entity) -> bool {
         })
 }
 
-fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, [f64; 2]) {
+pub(crate) fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, [f64; 2]) {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let l2 = dx * dx + dy * dy;
     let t = if l2 > 1e-12 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
@@ -718,7 +819,7 @@ fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, [f64; 2]) {
     ((p[0] - q[0]).hypot(p[1] - q[1]), q)
 }
 
-fn compass(dx: f64, dy: f64) -> &'static str {
+pub(crate) fn compass(dx: f64, dy: f64) -> &'static str {
     if dx.abs() >= dy.abs() {
         if dx >= 0.0 { "east" } else { "west" }
     } else if dy >= 0.0 {
@@ -1085,17 +1186,19 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         counts.get("walls").and_then(Value::as_u64).unwrap_or(0),
         counts.get("openings").and_then(Value::as_u64).unwrap_or(0),
     ));
+    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents; G-PRESENT: the room type's expected set against what the room holds). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
     s.push_str("- `rules.json`: the rules below, in full.\n");
     s.push_str("- `manifest.json`: every picture with its sheet, view, and the sheet rectangle it shows.\n");
     s.push_str("- Print crops (what the documents say):\n");
     for c in crops {
         s.push_str(&format!(
-            "  - `{}`: sheet {} {}, {}{}\n",
+            "  - `{}`: sheet {} {}, {}{}{}\n",
             c.file,
             c.sheet,
             c.title,
             c.kind.replace('_', " "),
-            c.shows.as_ref().map(|x| format!(" ({x})")).unwrap_or_default()
+            c.shows.as_ref().map(|x| format!(" ({x})")).unwrap_or_default(),
+            c.orientation.as_ref().and_then(turn_words).map(|w| format!("; {w}")).unwrap_or_default()
         ));
     }
     s.push_str("- Model pictures (what was built):\n");
@@ -1345,7 +1448,7 @@ fn render_drawing(od: &Drawing, rect: [f64; 4], px: [u32; 2]) -> Option<Vec<u8>>
 // ---------------------------------------------------------------- planning the crops
 
 /// Whether a link shows `level`.
-fn shows_level(l: &SheetLink, level: &str) -> bool {
+pub(crate) fn shows_level(l: &SheetLink, level: &str) -> bool {
     l.level.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(level)) || l.levels.iter().any(|x| x.eq_ignore_ascii_case(level))
 }
 
@@ -1355,7 +1458,18 @@ struct Planned {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn plan_crops(sp: &BuildingSpec, frame: &Frame, area: &Area, margin: f64, dpi: f64, trades: &[String], texts: &Texts, keys: &InArea) -> Planned {
+fn plan_crops(
+    sp: &BuildingSpec,
+    frame: &Frame,
+    area: &Area,
+    margin: f64,
+    dpi: f64,
+    trades: &[String],
+    texts: &Texts,
+    keys: &InArea,
+    unit: Option<&UnitOf>,
+    fit: Option<&Value>,
+) -> Planned {
     let mut crops: Vec<Crop> = Vec::new();
     let mut left_out: Vec<(String, String)> = Vec::new();
     let want = |t: &str| trades.is_empty() || t == "architecture" || t == "general" || trades.iter().any(|x| x == t);
@@ -1381,7 +1495,8 @@ fn plan_crops(sp: &BuildingSpec, frame: &Frame, area: &Area, margin: f64, dpi: f
                     rect: [f64; 4],
                     placed_by: &'static str,
                     place: Option<Place>,
-                    shows: Option<String>| {
+                    shows: Option<String>,
+                    orientation: Option<Value>| {
         let sheet_rect = l.rect.map(norm_rect).unwrap_or(rect);
         let (paper_in, paper) = paper_of(sheet_rect);
         let long = (sheet_rect[2] - sheet_rect[0]).max(sheet_rect[3] - sheet_rect[1]);
@@ -1415,6 +1530,7 @@ fn plan_crops(sp: &BuildingSpec, frame: &Frame, area: &Area, margin: f64, dpi: f
                 placed_by,
                 place: place.clone(),
                 shows: shows.clone(),
+                orientation: orientation.clone(),
             });
         }
     };
@@ -1447,11 +1563,83 @@ fn plan_crops(sp: &BuildingSpec, frame: &Frame, area: &Area, margin: f64, dpi: f
         let on_sheet: Vec<[f64; 2]> = corners(proj_box).iter().filter_map(|q| place.to_sheet(*q)).collect();
         let Some(b) = bbox(&on_sheet).filter(|_| on_sheet.len() == 4) else { continue };
         let Some(r) = intersect(b, clip) else { continue };
-        push(&mut crops, l, kind, trade, r, by, Some(place), None);
+        let orientation = match &place {
+            Place::Fit(reg) if kind == "enlarged_plan" || turn_deg(reg.b.atan2(reg.a)).abs() > 0.05 => Some(orientation_of(reg, by)),
+            _ => None,
+        };
+        push(&mut crops, l, kind, trade, r, by, Some(place), None, orientation);
+    }
+    // 1b. The enlarged views of the room's unit type (every trade's: the typical room's
+    //     mechanical, plumbing and power plans), turned and mirrored as the room is.
+    if let Some(u) = unit {
+        let source = u.ty.get("source").and_then(|x| x.get("sheet")).and_then(Value::as_str).unwrap_or_default().to_string();
+        let names: Vec<&str> = [u.id.as_str(), u.name.as_str()].into_iter().filter(|n| n.trim().len() >= 2).collect();
+        let names_it = |t: &str| {
+            let t = format!(" {} ", upper_words(&t.replace(['.', '-', '/', '_', ','], " ")));
+            names.iter().any(|n| t.contains(&format!(" {} ", upper_words(&n.replace(['.', '-', '/', '_', ','], " ")))))
+        };
+        let mut n_unit = 0usize;
+        for l in &links {
+            if n_unit >= MAX_UNIT_VIEWS {
+                break;
+            }
+            let title = format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str()));
+            if sheet_kind(&title, true) != "enlarged_plan" || !(names_it(&title) || (!source.is_empty() && l.number.eq_ignore_ascii_case(&source))) {
+                continue;
+            }
+            let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
+            if !want(trade) {
+                continue;
+            }
+            let view_title = l.view.as_ref().map(|v| v.title.clone());
+            if crops.iter().any(|c| c.sheet == l.number && c.view == view_title) {
+                continue;
+            }
+            let Some(sr) = l.rect.map(norm_rect) else { continue };
+            let rect = match &l.view {
+                Some(vw) => intersect(norm_rect(vw.rect), sr),
+                None => names
+                    .iter()
+                    .find_map(|n| texts.find(sr, n, true).into_iter().next())
+                    .map(|(at, _)| {
+                        let (w, h) = (sr[2] - sr[0], sr[3] - sr[1]);
+                        [at[0] - 0.15 * w, at[1] - 0.04 * h, at[0] + 0.15 * w, at[1] + 0.25 * h]
+                    })
+                    .and_then(|r| intersect(r, sr)),
+            };
+            let Some(rect) = rect else { continue };
+            let mut o = match (fit, &l.registration) {
+                (Some(f), _) => {
+                    json!({"rotation_deg": f["rotation_deg"], "mirrored": f["mirrored"], "by": "layout_fit", "fit_ft": f["fit_ft"], "matched": f["matched"]})
+                }
+                (None, Some(reg)) => {
+                    let mut o = orientation_of(reg, "view_placement");
+                    o["mirrored"] = json!(u.hand == "mirrored");
+                    o["by"] = json!(if u.hand == "mirrored" { "view_placement + unit hand" } else { "view_placement" });
+                    o
+                }
+                (None, None) => json!({"rotation_deg": null, "mirrored": u.hand == "mirrored", "by": "unit hand"}),
+            };
+            o["hand"] = json!(u.hand);
+            o["unit_type"] = json!(u.id);
+            if let Some(w) = turn_words(&o) {
+                o["read"] = json!(w);
+            }
+            n_unit += 1;
+            push(&mut crops, l, "enlarged_plan", trade, rect, "unit_type", None, Some(format!("unit type {}", u.name)), Some(o));
+        }
     }
     // 2. Interior elevations naming the room, the partition legend, the schedule and legend rows
     //    of the marks present, general notes.
-    let room_keys: Vec<String> = [area.number.clone(), area.name.clone().filter(|n| n.trim().len() >= 3)].into_iter().flatten().collect();
+    let mut room_keys: Vec<String> = [area.number.clone(), area.name.clone().filter(|n| n.trim().len() >= 3)].into_iter().flatten().collect();
+    // A typical room's interior elevations are titled by its unit type.
+    if let Some(u) = unit {
+        for k in [u.name.clone(), u.id.clone()] {
+            if k.trim().len() >= 3 && !room_keys.contains(&k) {
+                room_keys.push(k);
+            }
+        }
+    }
     let plan_sheets: BTreeSet<String> = crops.iter().map(|c| c.sheet.clone()).collect();
     for l in links.iter().filter(|l| l.view.is_none()) {
         let Some(sr) = l.rect.map(norm_rect) else { continue };
@@ -1469,7 +1657,7 @@ fn plan_crops(sp: &BuildingSpec, frame: &Frame, area: &Area, margin: f64, dpi: f
             // One text can name the room twice (its number and its name): one crop.
             if let Some(r) = intersect(r, sr).filter(|r| !found.iter().any(|f| f.iter().zip(r).all(|(a, b)| (a - b).abs() < 1e-6))) {
                 found.push(r);
-                push(crops, l, kind, trade, r, "text", None, Some(shows));
+                push(crops, l, kind, trade, r, "text", None, Some(shows), None);
             }
         };
         match kind {
@@ -1504,6 +1692,49 @@ fn plan_crops(sp: &BuildingSpec, frame: &Frame, area: &Area, margin: f64, dpi: f
                 add(&mut crops, "general_notes", [at[0] - 0.02 * w, at[1] - 0.4 * h, at[0] + 0.33 * w, at[1] + 0.03 * h], "GENERAL NOTES".into());
             }
         }
+    }
+    // 3. Riser diagrams: a riser view, else round the text naming the room's unit type or number,
+    //    else round the diagram's title (a reading aid, a few at most).
+    let mut risers = 0usize;
+    let mut riser_keys: Vec<String> = unit.map(|u| vec![u.name.clone(), u.id.clone()]).unwrap_or_default();
+    riser_keys.extend(area.number.clone());
+    riser_keys.retain(|k| k.trim().len() >= 2);
+    for l in &links {
+        if risers >= MAX_RISERS {
+            break;
+        }
+        let title = format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str()));
+        if sheet_kind(&title, false) != "riser_diagram" {
+            continue;
+        }
+        let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
+        if !want(trade) {
+            continue;
+        }
+        let Some(sr) = l.rect.map(norm_rect) else { continue };
+        let (w, h) = (sr[2] - sr[0], sr[3] - sr[1]);
+        let (rect, shows) = match &l.view {
+            Some(vw) => (intersect(norm_rect(vw.rect), sr), "riser diagram".to_string()),
+            None => match riser_keys.iter().find_map(|k| texts.find(sr, k, true).into_iter().next().map(|hit| (hit, k.clone()))) {
+                Some(((at, _), k)) => {
+                    (intersect([at[0] - 0.2 * w, at[1] - 0.2 * h, at[0] + 0.2 * w, at[1] + 0.2 * h], sr), format!("riser diagram ({k})"))
+                }
+                None => (
+                    texts
+                        .find(sr, "RISER", true)
+                        .into_iter()
+                        .next()
+                        .and_then(|(at, _)| intersect([at[0] - 0.2 * w, at[1] - 0.02 * h, at[0] + 0.2 * w, at[1] + 0.4 * h], sr)),
+                    "riser diagram".to_string(),
+                ),
+            },
+        };
+        let Some(rect) = rect else { continue };
+        if crops.iter().any(|c| c.sheet == l.number && c.rect.iter().zip(rect).all(|(a, b)| (a - b).abs() < 1e-6)) {
+            continue;
+        }
+        risers += 1;
+        push(&mut crops, l, "riser_diagram", trade, rect, "text", None, Some(shows), None);
     }
     Planned { crops, left_out }
 }
@@ -1625,7 +1856,43 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
 
     // What the model holds here, and the rules that apply.
     let built = built_parts(d, &sp, &frame, &area, 30.0);
-    let here = in_area(d, &model, prints.as_ref(), &area, &all_rules, &built);
+    let mut here = in_area(d, &model, prints.as_ref(), &area, &all_rules, &built);
+    // The deterministic prescreen of the area: what was measured, for the judge to start from.
+    let pre = ps::screen(&ps::Scope {
+        d,
+        sp: &sp,
+        model: &model,
+        frame: &frame,
+        prints: prints.as_ref(),
+        rules: &all_rules,
+        areas: std::slice::from_ref(&area),
+        whole_levels: false,
+        only: &[],
+    });
+    here.objects["prescreen"] = json!({
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the documents, G-PRESENT the room type's expected set (project rules)",
+        "checked": pre.checked,
+        "findings": pre.findings.iter().take(MAX_OBJECTS).collect::<Vec<_>>(),
+    });
+    // The room's unit type, and how its typical layout lies in the room.
+    let unit = ps::unit_of(d, &area.level, area.number.as_deref());
+    let placed: Vec<(String, [f64; 2])> = here.objects["elements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            let at = e.get("at_ft")?.as_array()?;
+            Some((e.get("kind")?.as_str()?.to_string(), [at.first()?.as_f64()?, at.get(1)?.as_f64()?]))
+        })
+        .collect();
+    let fit = unit.as_ref().and_then(|u| layout_fit(&u.ty, &area, &placed));
+    if let Some(u) = &unit {
+        let mut j = json!({"type": u.id, "name": u.name, "hand": u.hand});
+        if let Some(f) = &fit {
+            j["layout_fit"] = f.clone();
+        }
+        here.objects["unit"] = j;
+    }
     let (mut rules_on, mut rules_off) = rules_for(&here.kinds, &all_rules);
     // Only the rules a validate run asked for (`rules`): the others are listed as left out.
     if let Some(only) = &only_rules {
@@ -1643,7 +1910,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     // The print crops.
     let within: Vec<[f64; 4]> = sp.sheets.iter().filter_map(|l| l.rect.map(norm_rect)).collect();
     let texts = Texts::of(d, &within);
-    let Planned { crops, mut left_out } = plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here);
+    let Planned { crops, mut left_out } = plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref());
     if sp.sheets.is_empty() {
         left_out.push(("print crops".into(), "the building spec lists no sheets (levels.sheets finds them)".into()));
     }

@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1195,
-    "count": 1195,
+    "callableAsJson": 1196,
+    "count": 1196,
     "ids": [
       "-attedit",
       "-block",
@@ -1114,6 +1114,7 @@
       "validate.next",
       "validate.packet",
       "validate.plant",
+      "validate.prescreen",
       "validate.report",
       "validate.rules",
       "validate.rules.set",
