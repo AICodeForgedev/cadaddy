@@ -1162,7 +1162,7 @@
 	Support CADaddy...	支持 CADaddy...
 	Array (classic)	阵列（经典）
 	Change	更改
-	Change Properties	更改特性
+	Change Properties	修改特性
 	Quick Leader	快速引线
 	Symbol...	符号...
 	List Symbols	列出符号
@@ -1256,7 +1256,7 @@
 	Alternate tolerance zero suppression	换算公差消零
 	Linear jog height (× text height)	线性折弯高度（× 文字高度）
 	Break size	打断大小
-	Express Tools	Express 工具
+	Express Tools	扩展工具
 	Break-line Symbol	折断线符号
 	Replace Block...	替换块...
 	Move/Copy/Rotate	移动/复制/旋转
@@ -3502,3 +3502,26 @@
 	Review Audit Trail	审查审计记录
 	Accuracy Trend	精度趋势
 	Measure Build Accuracy	测量构建精度
+	Align Multileaders	对齐多重引线
+	Analyze Usage	分析使用情况
+	Clear Recent Files	清除最近的文件
+	Close Block Editor	关闭块编辑器
+	Collect	合并
+	Collect Multileaders	合并多重引线
+	Convert Text to Mtext	将文字转换为多行文字
+	Drag Dynamic Grip	拖动动态夹点
+	Dynamic Block Data	动态块数据
+	Dynamic Block Grips	动态块夹点
+	Dynamic Block Reference	动态块参照
+	Edit Command Aliases (PGP)...	编辑命令别名 (PGP)...
+	Edit Multileader	编辑多重引线
+	Evaluate LISP	求值 LISP
+	Explode Attributes to Text	将属性分解为文字
+	Groups	编组
+	Hatch Pick	拾取图案填充
+	Implied Loops	隐含环
+	Justify	对正
+	Save Block	保存块
+	Save Block As	块另存为
+	Save Layout as Template	将布局另存为样板
+	Set Dynamic Property	设置动态特性

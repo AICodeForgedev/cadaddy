@@ -543,6 +543,9 @@ fn main() -> eframe::Result {
                 .with_app_id(APP_ID),
             persist_window: false,
             persistence_path: persistence_dir_from(|k| std::env::var_os(k)),
+            // The window opens centred on its screen, not cascaded from the top-left corner.
+            // Wayland compositors place windows themselves.
+            centered: true,
             // A stencil buffer clips the contents of clipped layout viewports on the GPU.
             stencil_buffer: STENCIL_BITS,
             ..Default::default()
