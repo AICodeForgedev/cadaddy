@@ -6042,9 +6042,6 @@ fn arch_placer(
         .filter_map(|l| Some((level_key0(&l.name), l.region.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8))?)))
         .collect();
     let others: Vec<[f64; 4]> = sheets.iter().filter(|b| !b.discipline.eq_ignore_ascii_case("A")).map(|b| b.rect).collect();
-    let grid = super::grids::GridPlacer::new(d, upf, &plans, &others);
-    lap("grid intersections read");
-    progress_line(&format!("  grid intersections: {}", grid.summary()));
     let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
     let level_key = |l: &str| {
         format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), {
@@ -6074,8 +6071,17 @@ fn arch_placer(
     let plan_views: Vec<[f64; 4]> = views.iter().filter(|v| plan_word(&v.title) || !not_plan_word(&v.title)).filter_map(|v| v.region).collect();
     let not_plan: Vec<[f64; 4]> = views.iter().filter(|v| !plan_word(&v.title) && not_plan_word(&v.title)).filter_map(|v| v.region).collect();
     lap(&format!("views read ({} plans, {} not plans)", plan_views.len(), not_plan.len()));
+    // Each view's own grids (a sheet of enlarged views shows the same grids in each), its views
+    // read off its sheet alone: over the whole job's drawing a cell of the view finder's grid is a
+    // good part of a sheet, and a sheet's views run together.
+    // And the views the job gave a level (a sheet's view of one floor), which the titles may miss.
     let view_rects: Vec<(String, [f64; 4])> =
         sp.sheets.iter().filter_map(|l| Some((level_key(l.level.as_deref()?), l.view.as_ref()?.rect))).collect();
+    let mut grid_views = sheet_plan_views(d, &others);
+    grid_views.extend(view_rects.iter().map(|(_, r)| *r));
+    let grid = super::grids::GridPlacer::new(d, upf, &plans, &others, &grid_views);
+    lap("grid intersections read");
+    progress_line(&format!("  grid intersections: {}", grid.summary()));
     let place = move |p: [f64; 2], level: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
         if not_plan.iter().any(|r| inside(r, p)) && !plan_views.iter().any(|r| inside(r, p)) {
             return None;
@@ -6283,6 +6289,37 @@ fn arch_placer(
         }
         m
     }
+}
+
+/// The regions of the plan views (not elevations, sections, details, risers, diagrams,
+/// schedules) on each of the sheets `rects`, each sheet read on its own.
+fn sheet_plan_views(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<[f64; 4]> {
+    let inside = |r: &[f64; 4], x: f64, y: f64| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
+    let mut on: Vec<Vec<cadaddy_doc::Entity>> = vec![Vec::new(); rects.len()];
+    for e in d.model.iter() {
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        if b.is_empty() {
+            continue;
+        }
+        let c = b.center();
+        if let Some(i) = rects.iter().position(|r| inside(r, c.x, c.y)) {
+            on[i].push((**e).clone());
+        }
+    }
+    let not_plan = |t: &str| {
+        let u = t.to_ascii_uppercase();
+        !u.contains("PLAN") && ["ELEVATION", "SECTION", "DETAIL", "RISER", "DIAGRAM", "SCHEDULE", "ISOMETRIC"].iter().any(|w| u.contains(w))
+    };
+    let mut out = Vec::new();
+    for mine in on.into_iter().filter(|m| !m.is_empty()) {
+        let mut sub = d.clone();
+        let mut store = cadaddy_doc::EntityStore::new();
+        store.push_many(mine);
+        sub.model = store;
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        out.extend(cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts).into_iter().filter(|v| !not_plan(&v.title)).filter_map(|v| v.region));
+    }
+    out
 }
 
 /// Whether linework `view` is a part of a floor next to `plan` (an enlarged view of a few
