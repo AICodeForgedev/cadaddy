@@ -1,0 +1,442 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "G-PRESENT",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "Every symbol the trade's plans show in the area exists in the model; nothing is missing.",
+      "how": [
+        "Look at each trade plan crop of the area (and the enlarged plan when there is one) and list every symbol inside the area with its tag.",
+        "Find each listed symbol in the model picture and the object list (same kind, near the same place).",
+        "A symbol with no model element is a 'missing' finding; cite the print crop and where on it the symbol is."
+      ],
+      "documents": ["plan", "enlarged_plan", "rcp", "legend"],
+      "tolerance": {"plan_in": 6},
+      "severity": "high",
+      "prescreen": "counts",
+      "examples": {
+        "pass": "The power plan shows four receptacles in the room; the model has four receptacles there.",
+        "fail": "The power plan shows a receptacle by the desk; the model has nothing within reach of that spot."
+      }
+    },
+    {
+      "id": "G-SOURCED",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "Every model element in the area traces to a print symbol or note; nothing is extra.",
+      "how": [
+        "Go through the object list for the area; each element names its source sheet and point.",
+        "Look at that place on the cited print crop: the symbol or note must be there.",
+        "An element with no source, or whose source shows nothing, is an 'extra' finding."
+      ],
+      "documents": ["plan", "enlarged_plan", "rcp", "general_notes"],
+      "tolerance": {"plan_in": 6},
+      "severity": "medium",
+      "prescreen": "provenance",
+      "examples": {
+        "pass": "A duplex receptacle's source is the power plan at the wall by the bed, and the symbol is there.",
+        "fail": "A second light fixture sits in the corridor stretch; no RCP or note shows a fixture there."
+      }
+    },
+    {
+      "id": "G-PLACE",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "Each element is within tolerance of its print location once the sheet is laid on the plan.",
+      "how": [
+        "Compare the model-over-print overlay crop: each model element should sit on its symbol.",
+        "Measure from walls or grid lines both on the print and in the model when the offset is not obvious.",
+        "An element farther than the tolerance from its symbol is a 'fail' with the distance and direction."
+      ],
+      "documents": ["plan", "enlarged_plan", "rcp"],
+      "tolerance": {"plan_in": 6},
+      "severity": "medium",
+      "prescreen": "overlay",
+      "examples": {
+        "pass": "The switch sits 3 in from where the symbol is drawn.",
+        "fail": "The panel is drawn on the corridor wall but the model has it 4 ft along on the next wall."
+      }
+    },
+    {
+      "id": "G-TYPE",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "The element's type mark matches the symbol's tag and the legend or schedule row it points to.",
+      "how": [
+        "Read the tag beside the symbol on the plan crop.",
+        "Find that tag's row in the legend or schedule crop and note its description.",
+        "The element's type mark and properties in the object list must be that row; a different mark or description is a 'fail'."
+      ],
+      "documents": ["plan", "legend", "schedule"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": "tags",
+      "examples": {
+        "pass": "The fixture tagged A on the RCP is type A in the model, and schedule row A is a 2x4 troffer.",
+        "fail": "The fixture tagged B on the RCP is type A in the model."
+      }
+    },
+    {
+      "id": "G-ROOM",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "The element is in the room it serves on the print.",
+      "how": [
+        "Note the room the symbol is drawn in on the plan crop (the room tag and its walls).",
+        "The object list gives the element's room; they must be the same room.",
+        "An element on the wrong side of a wall is a 'fail' even when it is within the placement tolerance."
+      ],
+      "documents": ["plan", "enlarged_plan"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": "physical",
+      "examples": {
+        "pass": "A bath exhaust fan drawn in the bathroom is in the bathroom in the model.",
+        "fail": "A receptacle drawn on the bedroom side of a wall is placed on the corridor side."
+      }
+    },
+    {
+      "id": "G-HOST",
+      "trade": "general",
+      "applies_to": {"kinds": ["receptacle", "outlet", "data_outlet", "switch", "panel", "panelboard", "thermostat", "pull_station", "horn_strobe", "strobe_wall"], "categories": ["IfcOutlet", "IfcSwitchingDevice", "IfcElectricDistributionBoard"], "marks": []},
+      "check": "A wall-hosted item is in the wall the print shows, on the face toward the room it serves.",
+      "how": [
+        "On the plan crop, see which wall line the symbol touches and which side of it the symbol is drawn.",
+        "The object list gives the host wall and face; in the model picture the item must be on that wall, facing that room.",
+        "A floating item, the wrong wall, or the wrong face is a 'fail'."
+      ],
+      "documents": ["plan", "enlarged_plan", "interior_elevation"],
+      "tolerance": {"plan_in": 6},
+      "severity": "high",
+      "prescreen": "physical",
+      "examples": {
+        "pass": "A switch drawn inside the room by the door is in that wall, on the room face.",
+        "fail": "The switch is in the wall but on the corridor face."
+      }
+    },
+    {
+      "id": "E-RECEPT-POS",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["receptacle", "outlet", "floor_box"], "categories": ["IfcOutlet"], "marks": []},
+      "check": "Receptacles are along the wall and at the height where the enlarged plan, interior elevations, furniture plan, legend or general notes put them.",
+      "how": [
+        "Find what each receptacle serves on the enlarged or furniture plan (headboard, desk, counter, TV) and check it is on that wall beside that item.",
+        "Read the height from the interior elevation where one shows it, else the legend or general notes, else the standard height note.",
+        "Compare the model's height above floor in the object list; outside the tolerance is a 'fail' with both heights."
+      ],
+      "documents": ["enlarged_plan", "interior_elevation", "plan", "legend", "general_notes"],
+      "tolerance": {"plan_in": 6, "height_in": 2},
+      "severity": "medium",
+      "prescreen": "overlay",
+      "examples": {
+        "pass": "The elevation shows the counter receptacle 4 in above the backsplash; the model has it at that height over the counter.",
+        "fail": "The elevation shows the TV receptacle high on the wall; the model has it at the standard low height."
+      }
+    },
+    {
+      "id": "E-RECEPT-TYPE",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["receptacle", "outlet", "floor_box"], "categories": ["IfcOutlet"], "marks": []},
+      "check": "Each receptacle is the type the legend, notes and code call for: GFCI near sinks and in wet locations, tamper-resistant in dwelling and guest rooms, weather-resistant with a cover outdoors, and USB, quad or floor box as tagged.",
+      "how": [
+        "Read the symbol and its subscript tag (GFI, WP, USB, quad) on the plan crop and the matching legend row.",
+        "Check the general notes for blanket requirements (all receptacles tamper-resistant; GFCI within a distance of a sink).",
+        "The element's type and properties in the object list must carry every required rating; a missing rating is a 'fail'."
+      ],
+      "documents": ["plan", "legend", "general_notes", "spec"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": "spec",
+      "examples": {
+        "pass": "The receptacle beside the vanity is tagged GFI on the plan and is a GFCI type in the model.",
+        "fail": "The exterior receptacle is a plain duplex in the model; the plan tags it WP."
+      }
+    },
+    {
+      "id": "E-SWITCH",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["switch"], "categories": ["IfcSwitchingDevice"], "marks": []},
+      "check": "Switches are on the latch side of the door as drawn, at the legend height.",
+      "how": [
+        "On the plan crop, find the door the switch is by and which side its latch is (opposite the hinge, by the swing arc).",
+        "The model switch must be on that side of the opening, within the placement tolerance of the symbol.",
+        "Compare the height with the legend or general notes."
+      ],
+      "documents": ["plan", "enlarged_plan", "legend", "general_notes"],
+      "tolerance": {"plan_in": 6, "height_in": 2},
+      "severity": "medium",
+      "prescreen": "overlay",
+      "examples": {
+        "pass": "The switch is on the latch side of the entry door at the legend height.",
+        "fail": "The switch is on the hinge side, behind the open door."
+      }
+    },
+    {
+      "id": "E-PANEL-POS",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["panel", "panelboard", "transformer", "disconnect"], "categories": ["IfcElectricDistributionBoard"], "marks": []},
+      "check": "Panelboards, load centers, transformers and disconnects are where the electrical plan shows them.",
+      "how": [
+        "Find the panel symbol and its tag on the power plan or enlarged electrical room plan.",
+        "The model panel with that tag must be on the same wall, within tolerance of the symbol.",
+        "The tag must match the panel schedule's name."
+      ],
+      "documents": ["plan", "enlarged_plan", "schedule"],
+      "tolerance": {"plan_in": 12},
+      "severity": "high",
+      "prescreen": "overlay",
+      "examples": {
+        "pass": "The panel tagged on the plan is on the closet's back wall in the model.",
+        "fail": "The panel is on the side wall of the closet; the plan draws it on the back wall."
+      }
+    },
+    {
+      "id": "E-PANEL-MOUNT",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["panel", "panelboard"], "categories": ["IfcElectricDistributionBoard"], "marks": []},
+      "check": "Panels are recessed or surface mounted as the submittal or panel schedule says; a recessed cabinet fits the depth of its host wall type; the working space in front is kept clear.",
+      "how": [
+        "Read the mounting from the panel schedule header or the submittal page (recessed or surface, cabinet depth).",
+        "For a recessed panel, find the host wall's type in the partition legend; its stud depth must hold the cabinet depth.",
+        "Check the model: mounting matches, and nothing (wall, equipment, door swing) sits in the clear working space in front of it."
+      ],
+      "documents": ["schedule", "submittal", "partition_legend", "plan", "enlarged_plan"],
+      "tolerance": {"depth_in": 0.5, "clear_width_in": 30, "clear_depth_in": 36},
+      "severity": "high",
+      "prescreen": "physical",
+      "examples": {
+        "pass": "The schedule says recessed, the model panel is recessed in a wall whose studs are deeper than the cabinet, and the space in front is clear.",
+        "fail": "The submittal shows a surface cabinet but the model recesses it in a wall too thin to hold it."
+      }
+    },
+    {
+      "id": "E-LUM",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["light_fixture", "luminaire", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},
+      "check": "Luminaires are at their RCP positions, in the ceiling at that area's ceiling height (wall-mounted ones at the elevation or legend height), of the fixture schedule's type and mounted as the submittal says.",
+      "how": [
+        "Compare each fixture on the RCP crop with the model picture: same place, same count.",
+        "Read the ceiling height for the area from the RCP tag; ceiling fixtures sit in that ceiling, wall fixtures at the elevation or legend height.",
+        "The type mark must be the fixture schedule row; the mounting (recessed, surface, pendant, wall) must match the schedule or submittal."
+      ],
+      "documents": ["rcp", "schedule", "interior_elevation", "legend", "submittal"],
+      "tolerance": {"plan_in": 6, "height_in": 2},
+      "severity": "medium",
+      "prescreen": "overlay",
+      "examples": {
+        "pass": "Four recessed fixtures in the RCP's grid are recessed in the 9 ft ceiling in the model.",
+        "fail": "A sconce shown on the elevation at mirror height is placed in the ceiling."
+      }
+    },
+    {
+      "id": "E-FA",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["smoke_detector", "heat_detector", "horn_strobe", "strobe_wall", "speaker", "pull_station"], "categories": [], "marks": []},
+      "check": "Detectors are at their RCP positions on the ceiling; notification appliances and pull stations are at the legend wall height.",
+      "how": [
+        "Compare detectors on the RCP or fire alarm plan with the model: on the ceiling, same place.",
+        "Read the mounting height of wall appliances from the fire alarm legend.",
+        "Compare positions and heights in the object list."
+      ],
+      "documents": ["rcp", "plan", "legend", "general_notes"],
+      "tolerance": {"plan_in": 6, "height_in": 2},
+      "severity": "high",
+      "prescreen": "overlay",
+      "examples": {
+        "pass": "The smoke detector is on the ceiling where the RCP shows it.",
+        "fail": "The horn strobe is placed at receptacle height; the legend says high on the wall."
+      }
+    },
+    {
+      "id": "E-CIRCUIT",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["receptacle", "outlet", "floor_box", "switch", "light_fixture", "luminaire", "disconnect", "junction_box", "conduit", "cable"], "categories": ["IfcOutlet", "IfcSwitchingDevice", "IfcLightFixture", "IfcJunctionBox", "IfcCableCarrierSegment"], "marks": []},
+      "check": "The element's circuit and switch-leg tags are the print's.",
+      "how": [
+        "Read the circuit number (panel and circuit) and switch leg letter beside each device or on its homerun on the plan crop.",
+        "Compare with the circuit and switch leg in the object list.",
+        "A different panel, circuit or leg is a 'fail'; no tag on the print and none in the model is a pass."
+      ],
+      "documents": ["plan", "enlarged_plan", "schedule"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": "connectivity",
+      "examples": {
+        "pass": "The plan tags the receptacle's homerun with circuit 12; the model's circuit is 12.",
+        "fail": "The plan tags switch leg a for the vanity light; the model has the vanity light on leg b."
+      }
+    },
+    {
+      "id": "M-EF",
+      "trade": "mechanical",
+      "applies_to": {"kinds": ["exhaust_fan", "fan"], "categories": ["IfcFan"], "marks": []},
+      "check": "Exhaust fans are at the mechanical plan location in the room shown, in or at the ceiling, with the fan schedule's tag and airflow, and ducted to the discharge the print shows (shaft, exterior wall or roof).",
+      "how": [
+        "Find the fan symbol and tag on the mechanical plan or enlarged plan; confirm the room.",
+        "Look up the tag in the fan schedule (airflow, type) and compare with the object list.",
+        "Follow its duct on the plan to the discharge (shaft, wall cap, roof cap) and check the model's duct reaches the same discharge."
+      ],
+      "documents": ["plan", "enlarged_plan", "rcp", "schedule", "submittal"],
+      "tolerance": {"plan_in": 6, "height_in": 2},
+      "severity": "high",
+      "prescreen": "overlay",
+      "examples": {
+        "pass": "The bathroom fan is in the bathroom ceiling, schedule tag and airflow match, and its duct runs to the shaft as drawn.",
+        "fail": "The fan is in the closet next to the bathroom, or its duct ends in the ceiling space instead of the shaft."
+      }
+    },
+    {
+      "id": "M-DUCT-ROUTE",
+      "trade": "mechanical",
+      "applies_to": {"kinds": ["duct"], "categories": ["IfcDuctSegment", "IfcDuctFitting"], "marks": []},
+      "check": "Duct follows the drawn route, connects the drawn terminals and equipment, and has no missing or extra segments.",
+      "how": [
+        "Trace each duct on the mechanical plan crop from equipment to terminals.",
+        "Compare with the model overlay: the centerline stays within the route tolerance of the drawn duct.",
+        "Every drawn branch exists and ends at its terminal; a model segment with no drawn duct is 'extra'."
+      ],
+      "documents": ["plan", "enlarged_plan", "section"],
+      "tolerance": {"route_ft": 1},
+      "severity": "high",
+      "prescreen": "connectivity",
+      "examples": {
+        "pass": "The supply main and its three branches follow the drawn route to the three diffusers.",
+        "fail": "One drawn branch is missing, leaving a diffuser unconnected."
+      }
+    },
+    {
+      "id": "M-DUCT-SIZE",
+      "trade": "mechanical",
+      "applies_to": {"kinds": ["duct"], "categories": ["IfcDuctSegment", "IfcDuctFitting"], "marks": []},
+      "check": "Each duct's size is the plan's size tag (width x height or diameter) and changes where the plan changes it.",
+      "how": [
+        "Read the size tags along each duct on the plan crop and note where a size changes (transition symbol).",
+        "Compare with the sizes in the object list segment by segment.",
+        "A wrong size, or a size change in the wrong place, is a 'fail'."
+      ],
+      "documents": ["plan", "enlarged_plan"],
+      "tolerance": {"size_in": 0, "route_ft": 1},
+      "severity": "medium",
+      "prescreen": "tags",
+      "examples": {
+        "pass": "The plan tags 12x8 then 10x6 after the first branch; the model changes at the same branch.",
+        "fail": "The model runs the whole main at 12x8."
+      }
+    },
+    {
+      "id": "M-DUCT-HEIGHT",
+      "trade": "mechanical",
+      "applies_to": {"kinds": ["duct"], "categories": ["IfcDuctSegment", "IfcDuctFitting"], "marks": []},
+      "check": "Duct runs in the ceiling space (above the ceiling, below the structure) or at the height a section or note gives.",
+      "how": [
+        "Read the ceiling height of the area from the RCP and any duct elevation from sections or notes.",
+        "In the model's elevation or 3D view, the duct must be above the ceiling and below the structure.",
+        "A duct through the ceiling, under it, or through the structure is a 'fail'."
+      ],
+      "documents": ["rcp", "section", "general_notes"],
+      "tolerance": {"height_in": 2},
+      "severity": "medium",
+      "prescreen": "physical",
+      "examples": {
+        "pass": "The duct bottom is above the ceiling and its top below the joists.",
+        "fail": "The duct hangs below the corridor's lowered ceiling."
+      }
+    },
+    {
+      "id": "M-TERMINAL",
+      "trade": "mechanical",
+      "applies_to": {"kinds": ["diffuser", "grille"], "categories": ["IfcAirTerminal"], "marks": []},
+      "check": "Diffusers and grilles are at their RCP or mechanical plan positions, of the schedule's type and airflow.",
+      "how": [
+        "Compare each terminal on the RCP or mechanical plan with the model: same place, same count.",
+        "Read the tag and airflow beside the symbol and the matching schedule row.",
+        "Compare type and airflow in the object list."
+      ],
+      "documents": ["rcp", "plan", "schedule"],
+      "tolerance": {"plan_in": 6},
+      "severity": "medium",
+      "prescreen": "overlay",
+      "examples": {
+        "pass": "Two supply diffusers at the RCP positions, schedule type and airflow match.",
+        "fail": "A return grille is modelled as a supply diffuser."
+      }
+    },
+    {
+      "id": "M-EQUIP",
+      "trade": "mechanical",
+      "applies_to": {"kinds": ["ahu", "rtu", "vav", "condensing_unit", "pump", "water_heater"], "categories": ["IfcUnitaryEquipment", "IfcAirTerminalBox", "IfcCondenser", "IfcPump", "IfcBoiler"], "marks": []},
+      "check": "Equipment is at the drawn location, of the schedule or submittal size, with its service clearance kept clear.",
+      "how": [
+        "Find the equipment symbol and tag on the plan crop; compare its place with the model.",
+        "Read the size from the schedule or submittal page and compare the model's size.",
+        "Check that nothing in the model stands in the service clearance the submittal shows."
+      ],
+      "documents": ["plan", "enlarged_plan", "schedule", "submittal"],
+      "tolerance": {"plan_in": 12, "size_in": 2},
+      "severity": "medium",
+      "prescreen": "physical",
+      "examples": {
+        "pass": "The unit is in the closet where drawn, the size matches the submittal, and the access side is clear.",
+        "fail": "A wall in the model blocks the unit's filter access side."
+      }
+    },
+    {
+      "id": "P-FIXTURE",
+      "trade": "plumbing",
+      "applies_to": {"kinds": ["fixture"], "categories": [], "marks": []},
+      "check": "Plumbing fixtures are where the architectural and plumbing plans show them, of the fixture schedule's type.",
+      "how": [
+        "Compare each fixture on the enlarged architectural plan and the plumbing plan with the model.",
+        "Read each fixture's tag and its fixture schedule row.",
+        "Compare type and place in the object list."
+      ],
+      "documents": ["enlarged_plan", "plan", "schedule"],
+      "tolerance": {"plan_in": 6},
+      "severity": "medium",
+      "prescreen": "overlay",
+      "examples": {
+        "pass": "The lavatory and water closet are where the enlarged plan draws them, schedule types match.",
+        "fail": "The tub is modelled where the plan shows a shower."
+      }
+    },
+    {
+      "id": "P-PIPE",
+      "trade": "plumbing",
+      "applies_to": {"kinds": ["pipe"], "categories": ["IfcPipeSegment", "IfcPipeFitting"], "marks": []},
+      "check": "Water, waste and vent piping is present for every fixture's room as the plumbing plans and risers show, at the tagged sizes.",
+      "how": [
+        "For each fixture in the area, find its water, waste and vent lines on the plumbing plan and riser diagram.",
+        "Check each line exists in the model and reaches the fixture or its riser.",
+        "Compare sizes with the size tags."
+      ],
+      "documents": ["plan", "enlarged_plan", "section", "schedule"],
+      "tolerance": {"route_ft": 1, "size_in": 0},
+      "severity": "medium",
+      "prescreen": "connectivity",
+      "examples": {
+        "pass": "The lavatory has hot, cold, waste and vent lines to the riser at the tagged sizes.",
+        "fail": "The vent line drawn on the riser is missing from the model."
+      }
+    },
+    {
+      "id": "F-HEAD",
+      "trade": "fire",
+      "applies_to": {"kinds": ["sprinkler"], "categories": ["IfcFireSuppressionTerminal"], "marks": []},
+      "check": "Sprinkler heads are at their RCP or fire protection plan positions when the prints draw them.",
+      "how": [
+        "If the RCP or fire protection plan draws heads in the area, compare each with the model.",
+        "If heads are not drawn (design by others), say so and mark the rule 'unsure' rather than guess.",
+        "Compare count and place."
+      ],
+      "documents": ["rcp", "plan"],
+      "tolerance": {"plan_in": 6},
+      "severity": "low",
+      "prescreen": "overlay",
+      "examples": {
+        "pass": "Two heads on the RCP, two heads in the model at the same places.",
+        "fail": "The RCP draws a head over the closet; the model has none there."
+      }
+    }
+  ]
+}

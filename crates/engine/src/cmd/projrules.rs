@@ -109,6 +109,12 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         ));
     }
 
+    // A validation rule override (validate.<RULE>.…) must name a rule, a field a project may
+    // change and a value that fits it.
+    if matches!(domain, RuleDomain::Tolerance | RuleDomain::Custom) && super::validate_rules::is_override_key(key) {
+        super::validate_rules::check_override(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;
+    }
+
     let rule_value = RuleValue::new(value_str).with_source(source).with_tier(tier).with_set_by(set_by);
 
     // Preview element impact BEFORE modifying.
