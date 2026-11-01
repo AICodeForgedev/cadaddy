@@ -1320,27 +1320,147 @@ fn floor_plate(d: &Drawing, level: &str) -> Vec<Vec2> {
             }
         }
     }
-    let mut rects: Vec<[[f64; 2]; 2]> = Vec::new();
-    for j in 0..ny {
-        let mut i = 0;
-        while i < nx {
-            if !on.get(j * nx + i).copied().unwrap_or(false) {
-                i += 1;
-                continue;
+    // Cells touching only at a corner, a one-cell slot: one plate (closed by a cell).
+    let mut on = close_cells(&on, nx, ny, PLATE_CLOSE_CELLS);
+    // Cells meeting only at a corner: one more cell joins them along a side.
+    for j in 0..ny.saturating_sub(1) {
+        for i in 0..nx.saturating_sub(1) {
+            let at = |on: &[bool], a: usize, b: usize| on.get(b * nx + a).copied().unwrap_or(false);
+            let (a, b, c, e) = (at(&on, i, j), at(&on, i + 1, j), at(&on, i, j + 1), at(&on, i + 1, j + 1));
+            if (a && e && !b && !c) || (b && c && !a && !e) {
+                if let Some(k) = on.get_mut(j * nx + i + 1) {
+                    *k = true;
+                }
+                if let Some(k) = on.get_mut(j * nx + i) {
+                    *k = true;
+                }
             }
-            let start = i;
-            while i < nx && on.get(j * nx + i).copied().unwrap_or(false) {
-                i += 1;
-            }
-            let (x0, y0) = (all.min.x + start as f64 * cell, all.min.y + j as f64 * cell);
-            rects.push([[x0, y0], [all.min.x + i as f64 * cell, y0 + cell]]);
         }
     }
-    cadaddy_walk3d::Circulation { rects, ..Default::default() }.outline().into_iter().map(|p| Vec2::new(p[0], p[1])).collect()
+    let ring = outer_ring(&on, nx, ny);
+    ring.into_iter().map(|(i, j)| Vec2::new(all.min.x + i as f64 * cell, all.min.y + j as f64 * cell)).collect()
+}
+
+/// `on` (an `nx` × `ny` grid, rows of x) closed by `r` cells: grown `r` cells every way, then
+/// shrunk back as much (a slab's pieces with a wall's thickness left between them are one plate;
+/// cells past the grid's edge count as in for the shrinking, so the plate's own border stays).
+fn close_cells(on: &[bool], nx: usize, ny: usize, r: usize) -> Vec<bool> {
+    // One pass along rows then columns: any (grow) or all (shrink) within `r` of the cell.
+    let pass = |g: &[bool], grow: bool| -> Vec<bool> {
+        let along = |g: &[bool], rows: bool| -> Vec<bool> {
+            let (n, m) = if rows { (nx, ny) } else { (ny, nx) };
+            let idx = |a: usize, b: usize| if rows { b * nx + a } else { a * nx + b };
+            let mut out = vec![false; nx * ny];
+            for b in 0..m {
+                for a in 0..n {
+                    let lo = a.saturating_sub(r);
+                    let hi = (a + r).min(n.saturating_sub(1));
+                    let mut hit = !grow;
+                    for c in lo..=hi {
+                        let v = g.get(idx(c, b)).copied().unwrap_or(false);
+                        if grow && v {
+                            hit = true;
+                            break;
+                        }
+                        if !grow && !v {
+                            hit = false;
+                            break;
+                        }
+                    }
+                    if let Some(o) = out.get_mut(idx(a, b)) {
+                        *o = hit;
+                    }
+                }
+            }
+            out
+        };
+        along(&along(g, true), false)
+    };
+    pass(&pass(on, true), false)
+}
+
+/// The outer boundary of the grid's biggest piece, as grid corners counter-clockwise: each in
+/// cell's sides with an out neighbour as edges with the cell on their left, walked turning left
+/// first (two pieces meeting at a corner stay two rings), the ring of the largest area, its
+/// straight runs' middle corners left out.
+fn outer_ring(on: &[bool], nx: usize, ny: usize) -> Vec<(usize, usize)> {
+    let is = |i: isize, j: isize| {
+        i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny && on.get(j as usize * nx + i as usize).copied().unwrap_or(false)
+    };
+    let mut from: std::collections::HashMap<(usize, usize), Vec<(usize, usize)>> = std::collections::HashMap::new();
+    for j in 0..ny {
+        for i in 0..nx {
+            if !is(i as isize, j as isize) {
+                continue;
+            }
+            let (x, y) = (i as isize, j as isize);
+            let mut edge = |a: (usize, usize), b: (usize, usize)| from.entry(a).or_default().push(b);
+            if !is(x, y - 1) {
+                edge((i, j), (i + 1, j));
+            }
+            if !is(x + 1, y) {
+                edge((i + 1, j), (i + 1, j + 1));
+            }
+            if !is(x, y + 1) {
+                edge((i + 1, j + 1), (i, j + 1));
+            }
+            if !is(x - 1, y) {
+                edge((i, j + 1), (i, j));
+            }
+        }
+    }
+    let dir = |a: (usize, usize), b: (usize, usize)| (b.0 as i64 - a.0 as i64, b.1 as i64 - a.1 as i64);
+    let mut starts: Vec<(usize, usize)> = from.keys().copied().collect();
+    starts.sort_unstable();
+    let mut best: (f64, Vec<(usize, usize)>) = (0.0, Vec::new());
+    for s0 in starts {
+        while let Some(first) = from.get_mut(&s0).and_then(Vec::pop) {
+            let mut ring = vec![s0];
+            let (mut prev, mut cur) = (s0, first);
+            let mut steps = 0usize;
+            while cur != s0 && steps <= 4 * nx * ny + 4 {
+                steps += 1;
+                ring.push(cur);
+                let d = dir(prev, cur);
+                let Some(outs) = from.get_mut(&cur).filter(|o| !o.is_empty()) else { break };
+                // Left of the way in first, then straight on, then right.
+                let rank = |n: &(usize, usize)| {
+                    let e = dir(cur, *n);
+                    match d.0 * e.1 - d.1 * e.0 {
+                        c if c > 0 => 0,
+                        0 => 1,
+                        _ => 2,
+                    }
+                };
+                let Some(k) = (0..outs.len()).min_by_key(|&k| outs.get(k).map_or(3, rank)) else { break };
+                let next = outs.swap_remove(k);
+                (prev, cur) = (cur, next);
+            }
+            let area =
+                ring.iter().zip(ring.iter().cycle().skip(1)).map(|(a, b)| a.0 as f64 * b.1 as f64 - b.0 as f64 * a.1 as f64).sum::<f64>() / 2.0;
+            if cur == s0 && area > best.0 {
+                best = (area, ring);
+            }
+        }
+    }
+    // The corners only (no point in the middle of a straight run).
+    let r = best.1;
+    let n = r.len();
+    (0..n)
+        .filter(|&k| {
+            let (a, b, c) = (r[(k + n - 1) % n], r[k], r[(k + 1) % n]);
+            let (d1, d2) = (dir(a, b), dir(b, c));
+            d1.0 * d2.1 - d1.1 * d2.0 != 0
+        })
+        .map(|k| r[k])
+        .collect()
 }
 
 /// A floor plate's grid, feet.
 const PLATE_CELL_FT: f64 = 0.5;
+/// The gap between a slab's pieces a floor plate closes, cells each way (1.5'; a 3' gap: a
+/// wall's thickness left between two pieces of a slab).
+const PLATE_CLOSE_CELLS: usize = 3;
 /// Cells a floor plate's grid holds at most (a bigger plate takes coarser cells).
 const MAX_PLATE_CELLS: usize = 2_000_000;
 
@@ -1378,6 +1498,17 @@ mod tests {
         let plate = floor_plate(&d, "Level 4");
         let area = cadaddy_geom::shoelace(&plate).abs();
         assert!((area - 3.0 * 120.0 * 120.0).abs() < 1.0, "plate area {area} of {plate:?}");
+        // Two squares meeting only at a corner (cells touching diagonally): one plate over both,
+        // not the bigger of two rings.
+        let mut d = Drawing::new_imperial();
+        for (x, y, w) in [(0.0, 0.0, 240.0), (240.0, 240.0, 120.0)] {
+            let sq = [(x, y), (x + w, y), (x + w, y + w), (x, y + w)].map(|(a, b)| Vec3::new(a, b, 100.0));
+            let m = Mesh { vertices: sq.to_vec(), faces: vec![cadaddy_doc::MeshFace { v: vec![0, 1, 2, 3], hidden: 0 }], kind: MeshKind::Polyface };
+            let xdata = vec![raw(1001, super::super::wallgen::APP), raw(1000, "floor"), raw(1000, "Level 4"), raw(1000, &Handle(0).hex())];
+            d.add(&Space::Model, Common { xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).expect("add");
+        }
+        let area = cadaddy_geom::shoelace(&floor_plate(&d, "Level 4")).abs();
+        assert!(area >= 240.0 * 240.0 + 120.0 * 120.0 - 1.0 && area < 240.0 * 240.0 + 120.0 * 120.0 + 200.0, "both squares: {area}");
     }
 
     #[test]
