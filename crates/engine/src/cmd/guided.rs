@@ -6212,6 +6212,9 @@ fn ceiling_height_tag(t: &str) -> Option<f64> {
     (6.5..=20.0).contains(&ft).then_some(ft)
 }
 
+/// How far under the next floor a ceiling is at most (the slab and a plenum's least), feet.
+const CEILING_UNDER_FLOOR_FT: f64 = 0.5;
+
 /// The ceiling areas the reflected ceiling plans' views give (a view titled REFLECTED CEILING or
 /// RCP, its levels from its title: `SECOND-FOURTH FLOOR` is levels 2 to 4): each view registered
 /// onto its level's floor plan by the room numbers both print (a typical floor's view by its
@@ -6278,13 +6281,19 @@ fn rcp_ceiling_areas(
             let grid = floors.entry(level.name.clone()).or_insert_with(|| super::wallgen::room_floors(d, sp, &level.name));
             let mut found = 0usize;
             // Where the other tags went: off the plan, in no room or corridor, in an area set.
-            let (mut off, mut neither, mut again) = (0usize, 0usize, 0usize);
+            let (mut off, mut neither, mut again, mut above) = (0usize, 0usize, 0usize, 0usize);
             let mut landed = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
             for (at, ft) in &heights {
                 let q = fit.sim.apply(*at);
                 landed = [landed[0].min(q[0]), landed[1].min(q[1]), landed[2].max(q[0]), landed[3].max(q[1])];
                 if !inside(&plan, q) {
                     off += 1;
+                    continue;
+                }
+                // A ceiling at or over the next floor (less its slab) is none this storey can
+                // have: a misread tag, or another level's.
+                if level.height_ft.is_finite() && level.height_ft > 0.0 && *ft > level.height_ft - CEILING_UNDER_FLOOR_FT {
+                    above += 1;
                     continue;
                 }
                 let p = cadaddy_geom::Vec2::new(q[0], q[1]);
@@ -6354,7 +6363,7 @@ fn rcp_ceiling_areas(
                 String::new()
             };
             report.push(format!(
-                "{} on {}: {found} ceiling areas from {} height tags ({} room numbers matched; {again} more in an area already set, {neither} in no room or corridor, {off} off the plan){why}",
+                "{} on {}: {found} ceiling areas from {} height tags ({} room numbers matched; {again} more in an area already set, {neither} in no room or corridor, {off} off the plan, {above} at or over the next floor){why}",
                 v.title,
                 level.name,
                 heights.len(),

@@ -47,13 +47,17 @@ fn bim_reads_every_page_and_writes_only_to_out() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&run.stdout);
-    assert!(run.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&run.stderr));
     let r: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(r["pages"].as_array().map(Vec::len), Some(2), "both pages, not page 1 only: {r}");
-    assert_eq!(r["cdy_paths"], json!([out.to_string_lossy()]));
-    assert!(out.is_file());
-    // A hard-failed check (loose lines: no symbols) is reported as a fail even when forced.
+    // A hard-failed check (loose lines: no symbols) is reported as a fail even when forced, and a
+    // failed run exits non-zero even with --force (Q6077); what it built, --force saves at --out.
     assert_eq!(r["check_results"][0]["pass"], json!(false), "{r}");
+    assert!(r["failed"].as_array().is_some_and(|f| !f.is_empty()), "{r}");
+    assert!(!run.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&run.stderr));
+    if r["built"].as_object().is_some_and(|b| !b.is_empty()) {
+        assert_eq!(r["cdy_paths"], json!([out.to_string_lossy()]));
+        assert!(out.is_file());
+    }
     assert_eq!(names(&prints), ["Sample Set.pdf"], "nothing next to the PDF");
     let _ = std::fs::remove_dir_all(&root);
 }

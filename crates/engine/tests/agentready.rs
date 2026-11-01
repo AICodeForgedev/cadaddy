@@ -381,7 +381,7 @@ fn what_the_weak_agent_tripped_on() {
     assert!(b["next"]["why"].as_str().unwrap().contains("changed since the last build"));
     s.execute("bim.build", &json!({})).unwrap();
     let b = s.execute("project.briefing", &json!({})).unwrap();
-    assert!(b["next"]["call"].as_str().unwrap().starts_with("takeoff"), "{b}");
+    assert!(b["next"]["call"].as_str().unwrap().starts_with("bim.takeoff"), "{b}");
 }
 
 // ---- MUST 3: Validation failures in the review queue and briefing ----

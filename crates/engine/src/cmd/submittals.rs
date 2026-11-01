@@ -57,8 +57,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(one) = p.get("path").and_then(Value::as_str) {
         given.push(one.to_string());
     }
+    // From the menu, with nothing chosen: what it needs, not an error.
     if given.is_empty() {
-        return Err(bad(CMD, "`paths` (submittal PDFs, or folders of them) is required"));
+        s.echo("Apply Submittals: give the submittal PDFs, or a folder of them (`paths`).");
+        return Ok(json!({
+            "files": [], "applied": {}, "elements": 0,
+            "next_step": "bim.submittals {paths: [\"submittals folder or PDF\"]}: each device, fixture and equipment element of a type mark gets its submittal product",
+        }));
     }
     let files = pdf_files(&given);
     if files.is_empty() {

@@ -282,7 +282,7 @@ fn run_scripted(budget: usize, every: usize) -> (Score, Vec<String>) {
             }
             continue;
         }
-        if next.starts_with("takeoff") {
+        if next.starts_with("bim.takeoff") || next.starts_with("takeoff") {
             let t = a.job("takeoff", json!({}));
             let r = a.job("rfis", json!({}));
             a.score.finished = t.is_ok() && r.is_ok();

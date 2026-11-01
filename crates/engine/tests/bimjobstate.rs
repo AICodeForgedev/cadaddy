@@ -96,7 +96,7 @@ fn every_next_hint_of_the_briefing_runs_as_given() {
         let first = call.split(" or ").next().unwrap_or(&call).split(" (").next().unwrap_or(&call).to_string();
         run_next(&mut s, &dir, &first);
         seen.push(first.split(' ').next().unwrap_or_default().to_string());
-        if first.starts_with("takeoff") {
+        if first.starts_with("bim.takeoff") || first.starts_with("takeoff") {
             break;
         }
         if first.starts_with("review.next") {
