@@ -263,7 +263,9 @@ impl Session {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if !matches!(cmd, "saveas" | "qsave" | "wblock" | "export" | "plot" | "etransmit" | "render") || bool_or(params, "force", false) {
+            if !matches!(cmd, "saveas" | "qsave" | "wblock" | "export" | "plot" | "exportpdf" | "etransmit" | "render")
+                || bool_or(params, "force", false)
+            {
                 return None;
             }
             let given = str_param(params, "path").or_else(|| str_param(params, "output")).map(str::trim).filter(|p| !p.is_empty())?;

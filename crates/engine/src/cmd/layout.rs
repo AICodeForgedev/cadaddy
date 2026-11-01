@@ -91,7 +91,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["File", "Print..."])
             .key("Cmd+P")
             .alias(&["print"])
-            .params("{path? (else returns base64 `data`), printer?: a system printer (PRINTERS; prints the PDF there), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?: bool, plotTransparency?: bool (default: the page setup's; PLOTTRANSPARENCYOVERRIDE 0/2 overrides it), plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]], output?: pdf|png|svg, resolution?: dpi (PNG), colorDepth?: 24|8|1 (raster devices), device?: plotter configuration, compress?: bool (PDF streams), shade?: {…} (a shaded model-space plot), shadePlot?: asDisplayed|wireframe|hidden|shaded|shadedWithEdges|realistic|rendered (Model: plot in that visual style whatever the view shows; Realistic lights it as VISUALSTYLES sets)} (typed or from the menu: the Plot dialog)")
+            .params("{force?: bool (replace an existing file; otherwise it is refused for an agent), path? (else returns base64 `data`), printer?: a system printer (PRINTERS; prints the PDF there), layout?: current|\"Model\", paper?, landscape?, fit?: bool, scale?: number | \"1:50\", center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?: bool, plotTransparency?: bool (default: the page setup's; PLOTTRANSPARENCYOVERRIDE 0/2 overrides it), plotArea?: extents|display|limits|window (Model) | layout, window?: [[x1,y1],[x2,y2]], output?: pdf|png|svg, resolution?: dpi (PNG), colorDepth?: 24|8|1 (raster devices), device?: plotter configuration, compress?: bool (PDF streams), shade?: {…} (a shaded model-space plot), shadePlot?: asDisplayed|wireframe|hidden|shaded|shadedWithEdges|realistic|rendered (Model: plot in that visual style whatever the view shows; Realistic lights it as VISUALSTYLES sets)} (typed or from the menu: the Plot dialog)")
             .noundo(),
         CommandSpec::new("-plot", "Plot", plotcli::run_dash_plot)
             .files()
@@ -100,7 +100,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(plotcli::DashPlotM::default()))),
         CommandSpec::new("exportpdf", "Export to PDF...", |s, p| run_plot(s, &super::plotters::plot_options(s, p, "exportpdf")?, "exportpdf"))
             .menu(&["File", "Export to PDF..."])
-            .params("{path? (else returns base64 `data`), layout?, paper?, landscape?, fit?, scale?, center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?, plotTransparency?, plotArea?, window?, device?, layouts?: [names] (one PDF of these sheets)} (as PLOT)")
+            .params("{force?: bool (replace an existing file; otherwise it is refused for an agent), path? (else returns base64 `data`), layout?, paper?, landscape?, fit?, scale?, center?: bool (Model, default true), offset?: [x,y] mm (Model, when center is false; each within ±100000), lineweights?, plotTransparency?, plotArea?, window?, device?, layouts?: [names] (one PDF of these sheets)} (as PLOT)")
             .noundo(),
         CommandSpec::new("mspace", "Model Space (in viewport)", run_mspace)
             .alias(&["ms"])

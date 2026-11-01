@@ -60,7 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("publish", "Batch Publish...", run_publish)
             .menu(&["File", "Batch Publish..."])
-            .params("{path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf per sheet, or with `single` that one PDF; else returns base64 `data`), format?: \"pdf\" | \"dwfx\" | \"dwf\" (default from the path's extension, else pdf; DWFx/DWF: one file, one page per sheet named after its layout → {format, pages, sheets, path | data}), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order), sheets?: [{drawing?: path (default this drawing), layout, title?, page?: {paper?, landscape?, plotStyleTable?, fit?, scale?, lineweights?, plotTransparency?}}] | list?: a publish list file (PUBLISHLIST), single?: bool (one PDF, a bookmark per sheet)} → {sheets: [{layout, bytes, path? | data}]} | {path | data, pages}; or batch plot {folder: DIR (every .dwg/.dxf/.cdy in it), out?: DIR (default the folder), layouts?: [names], stamp?: bool} → {drawings: [{drawing, path, pages}], failed: [{drawing, error}]}: one PDF per drawing")
+            .params("{force?: bool (replace existing files; otherwise they are refused), path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf per sheet, or with `single` that one PDF; else returns base64 `data`), format?: \"pdf\" | \"dwfx\" | \"dwf\" (default from the path's extension, else pdf; DWFx/DWF: one file, one page per sheet named after its layout → {format, pages, sheets, path | data}), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order), sheets?: [{drawing?: path (default this drawing), layout, title?, page?: {paper?, landscape?, plotStyleTable?, fit?, scale?, lineweights?, plotTransparency?}}] | list?: a publish list file (PUBLISHLIST), single?: bool (one PDF, a bookmark per sheet)} → {sheets: [{layout, bytes, path? | data}]} | {path | data, pages}; or batch plot {folder: DIR (every .dwg/.dxf/.cdy in it), out?: DIR (default the folder), layouts?: [names], stamp?: bool} → {drawings: [{drawing, path, pages}], failed: [{drawing, error}]}: one PDF per drawing")
             .noundo(),
         publish::spec(),
         CommandSpec::new("pdfbook", "Sheet Books to PDF...", run_pdfbook)
@@ -319,6 +319,19 @@ pub(crate) fn guard_params(s: &Session, cmd: &str, p: &Value, keys: &[&str]) -> 
         }
     }
     Ok(())
+}
+
+/// [`guard_output`] for a picture an output tool writes (RENDER, and the MCP and control `render`,
+/// which have no command of their own): the extension must be one of `exts`, not a drawing file name,
+/// not an open drawing, and not an existing file unless the call says `force: true`.
+pub fn guard_image_output(s: &Session, cmd: &str, p: &Value, path: &str, exts: &[&str]) -> Result<()> {
+    let path = path.trim();
+    let got = extension(path);
+    if !exts.contains(&got.as_str()) && !DRAWING_EXTS.contains(&got.as_str()) {
+        let want = exts.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(" or ");
+        return Err(bad(cmd, format!("`path` ends in .{got} but this writes a picture: use a {want} name")));
+    }
+    guard_output(s, cmd, p, path)
 }
 
 /// Write `bytes` to `path` through a temporary file, so a failed write keeps the old file.
@@ -1008,7 +1021,13 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
                         .collect::<Result<_>>()?,
                 ),
             };
-            return publish::folder(dir, str_param(p, "out"), layouts.as_deref(), p.get("stamp").and_then(Value::as_bool));
+            return publish::folder(
+                dir,
+                str_param(p, "out"),
+                layouts.as_deref(),
+                p.get("stamp").and_then(Value::as_bool),
+                p.get("force").and_then(Value::as_bool) == Some(true),
+            );
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -1049,6 +1068,10 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
             sheets.iter().map(|l| publish::Sheet { drawing: None, layout: l.clone(), title: None, page: serde_json::Map::new() }).collect()
         });
         let path = str_param(p, "path").map(str::to_string);
+        if let Some(path) = path.as_deref() {
+            output_path(s, "publish", path, &["pdf"])?;
+            guard_output(s, "publish", p, path)?;
+        }
         return publish::publish(s, &list, path.as_deref(), single);
     }
     if sheets.is_empty() {
@@ -1075,6 +1098,7 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
             Some(path) => {
                 let checked = output_path(s, "publish", path, &[format.as_str()])?;
                 let path = checked.as_str();
+                guard_output(s, "publish", p, path)?;
                 write_file("publish", path, &bytes)?;
                 r["path"] = json!(path);
                 r["message"] = json!(format!("Published {} sheet(s) to {path}", spaces.len()));
@@ -1091,6 +1115,12 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
         let stem = pb.file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "Drawing".into());
         (pb.parent().map(std::path::Path::to_path_buf).unwrap_or_default(), stem)
     });
+    // Every sheet's file is vetted before the first is written: none is an open drawing or an existing file.
+    if let Some((dir, stem)) = &base {
+        for name in &sheets {
+            guard_output(s, "publish", p, &dir.join(format!("{stem}-{}.pdf", file_part(name))).to_string_lossy())?;
+        }
+    }
     let mut out = Vec::new();
     for name in &sheets {
         let mut q = json!({ "layout": name });
