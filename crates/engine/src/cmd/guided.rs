@@ -2493,6 +2493,56 @@ fn job_links(s: &Session, job: &GuidedJob) -> Option<cadaddy_mepfix::printlinks:
     Some(printlinks::link_set(&sheets, &pages))
 }
 
+/// A view of a typical room or of one room (stamped into its rooms, not placed as a part of the
+/// floor).
+fn room_view(title: &str) -> bool {
+    let up = title.to_ascii_uppercase();
+    ["QUEEN", "KING", "SUITE", "UNIT", "TYPICAL", "TYP.", "ROOM"].iter().any(|w| up.contains(w))
+}
+
+/// An enlarged view the sheet map registered on its overall plan (by its grids, tags, boundary
+/// box or walls): its sheet, where its items are on that sheet, and the fit onto the overall
+/// plan's sheet.
+struct EnlargedFit {
+    sheet: String,
+    reach: [f64; 4],
+    inner: Vec<[f64; 4]>,
+    fit: cadaddy_mepfix::tagid::Sim,
+}
+
+/// The job's registered enlarged views of a part of a floor (not a typical room's), from its sheet
+/// map.
+fn enlarged_fits(job: &GuidedJob) -> Vec<EnlargedFit> {
+    let rect = |v: &Value| -> Option<[f64; 4]> {
+        let a: Vec<f64> = v.as_array()?.iter().filter_map(Value::as_f64).collect();
+        <[f64; 4]>::try_from(a).ok().filter(|r| r.iter().all(|x| x.is_finite()))
+    };
+    job.links
+        .as_ref()
+        .and_then(|l| l.get("enlarged"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|e| e.get("registered").and_then(Value::as_bool) == Some(true))
+        .filter(|e| !room_view(e.get("title").and_then(Value::as_str).unwrap_or("")))
+        .filter_map(|e| {
+            let f = rect(e.get("fit")?)?;
+            let fit = cadaddy_mepfix::tagid::Sim { a: f[0], b: f[1], tx: f[2], ty: f[3] };
+            Some(EnlargedFit {
+                sheet: e.get("on_sheet").and_then(Value::as_str)?.to_string(),
+                reach: rect(e.get("reach")?)?,
+                inner: e.get("inner").and_then(Value::as_array).map(|v| v.iter().filter_map(rect).collect()).unwrap_or_default(),
+                fit,
+            })
+        })
+        .filter(|e| e.fit.scale() > 0.0)
+        .take(MAX_ENLARGED_FITS)
+        .collect()
+}
+
+/// Registered enlarged views the placer takes at most.
+const MAX_ENLARGED_FITS: usize = 500;
+
 /// The enlarged sheets are the authority inside their boundaries (one count per device): each
 /// registered enlarged plan's devices are moved to where they sit on its overall plan (and take
 /// that plan's level), and the overall plan's devices inside the boundary are left out. An
@@ -2509,10 +2559,6 @@ fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::Sheet
     // A registered view's other devices, by where they are: the types its own sheet's legend
     // doesn't list (a submittal's), the switches read at their designations. Not a typical room's
     // or one room's view: those are stamped into their rooms.
-    let room_view = |t: &str| {
-        let up = t.to_ascii_uppercase();
-        ["QUEEN", "KING", "SUITE", "UNIT", "TYPICAL", "TYP.", "ROOM"].iter().any(|w| up.contains(w))
-    };
     let views: Vec<&cadaddy_mepfix::printlinks::Enlarged> =
         links.enlarged.iter().filter(|e| e.registered && e.fit.is_some() && e.devices > 0 && e.reach.is_some() && !room_view(&e.title)).collect();
     let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
@@ -3947,7 +3993,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         shells
                     })
                     .clone();
-                let sim = placer.insert(Box::new(arch_placer(s.doc()?, &sp, &shell)));
+                let sim = placer.insert(Box::new(arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job))));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
                 let before = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
                 // Which sheets' runs can't be placed (both ends, or one end off the plan), and how
@@ -4203,7 +4249,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             shells
                         })
                         .clone();
-                    placer = Some(Box::new(arch_placer(s.doc()?, &sp, &shell)));
+                    placer = Some(Box::new(arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job))));
                 }
                 let Some(sim) = placer.as_deref() else { return Err(bad("bim_build", "device placer missing".to_string())) };
                 let out: Vec<_> = all_devices
@@ -6021,8 +6067,10 @@ fn arch_placer(
     d: &cadaddy_doc::Drawing,
     sp: &cadaddy_walk3d::BuildingSpec,
     shells: &[(String, Vec<[cadaddy_geom::Vec2; 2]>)],
+    enlarged: Vec<EnlargedFit>,
 ) -> impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<> {
     let sheets = super::identity::sheets_of(Some(sp));
+    let sheet_rects: Vec<(String, [f64; 4])> = sheets.iter().map(|b| (cadaddy_mepfix::printlinks::norm_sheet(&b.number), b.rect)).collect();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let clock = web_time::Instant::now();
     let lap = |what: &str| progress_line(&format!("  placer: {what} at {:.1} s", clock.elapsed().as_secs_f64()));
@@ -6272,7 +6320,17 @@ fn arch_placer(
             }
             regions.iter().filter(|(k, _)| *k == key).any(|(_, r)| inside(r, q)) || regions.iter().all(|(k, _)| *k != key)
         };
-        place(p, level, &lands)
+        place(p, level, &lands).or_else(|| {
+            // An enlarged view the sheet map registered on its overall plan (by the box drawn
+            // round its part of the floor): onto that plan, then from there as its points go.
+            let sheet = sheet_rects.iter().find(|(_, r)| inside(r, p)).map(|(n, _)| n.as_str())?;
+            let e = enlarged.iter().find(|e| {
+                cadaddy_mepfix::printlinks::norm_sheet(&e.sheet) == sheet && inside(&e.reach, p) && !e.inner.iter().any(|r| inside(r, p))
+            })?;
+            let q = e.fit.apply(p);
+            let lands_q = |m: &cadaddy_mepfix::tagid::Sim| lands(&e.fit.then(m));
+            place(q, level, &lands_q).map(|m| e.fit.then(&m))
+        })
     };
     // A point is placed once: the build asks again (to place it, to say why not, to stamp).
     let memo: std::sync::Mutex<std::collections::HashMap<(u64, u64, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();

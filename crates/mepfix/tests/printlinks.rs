@@ -564,3 +564,27 @@ fn an_enlarged_plan_whose_walls_lie_nowhere_on_its_plan_stays_unregistered() {
     assert!(!e.registered, "{e:#?}");
     assert_eq!(l.enlarged_registered, 0);
 }
+
+/// A callout bubble the import made a symbol of (its sheet number the symbol's attribute) is
+/// still the link to its enlarged plan, and says where it goes: the box it sits on (a numbered
+/// note naming the enlarged plans in words doesn't).
+#[test]
+fn a_bubble_made_a_symbol_still_links_its_enlarged_plan() {
+    let (sheets, mut pages) = the_set();
+    for p in pages.iter_mut().filter(|p| p.sheet.number == "E-1") {
+        p.read = printlinks::read_page(&linkset::e1_symbol_bubble(), "E-1");
+    }
+    let l = printlinks::link_set(&sheets, &pages);
+    let to_e3: Vec<(&str, &str, &str)> = l
+        .callouts
+        .iter()
+        .filter(|c| c.on_sheet == "E-1" && c.target_sheet == "E-3")
+        .map(|c| (c.kind.as_str(), c.detail.as_str(), c.target_sheet.as_str()))
+        .collect();
+    assert!(to_e3.iter().any(|(k, d, _)| *d == "1" && *k != "enlarged_ref"), "{:#?}", l.callouts);
+    let e = l.enlarged.iter().find(|e| e.sheet == "E-3").expect("the enlarged plan");
+    assert!(e.registered && e.overall_sheet == "E-1", "{e:#?}");
+    let b = e.boundary.expect("a boundary");
+    let want = [7.5, 3.5, 16.5, 12.5];
+    assert!(b.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.25), "boundary {b:?}, the drawn box {want:?}");
+}
