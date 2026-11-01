@@ -268,6 +268,9 @@ struct Ctx {
     /// The tags become a DWG: a pre-2007 DWG has no fields for the newer style variables (DIMFXL
     /// and the like), so they go in the style's xdata, even at their default (read back as 0).
     dwg: bool,
+    /// The tags go to the DWG bridge (acadrust), which writes a spline with fit points in the
+    /// fit-point form before R2013, closed or not.
+    bridge: bool,
 }
 
 impl Ctx {
@@ -1180,11 +1183,14 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(71, s.degree as i64);
             w.i(72, s.knots.len() as i64);
             w.i(73, s.control.len() as i64);
-            w.i(74, s.fit.len() as i64);
+            // Before R2013 the bridge writes any spline with fit points in the fit-point form, which
+            // reopens a closed or periodic one open: the control points and knots carry its shape.
+            let fit: &[_] = if cx.bridge && cx.target < Version::R2013 && (s.closed || s.is_periodic()) { &[] } else { &s.fit };
+            w.i(74, fit.len() as i64);
             w.f(42, 1e-10);
             w.f(43, 1e-10);
             // Fit data: tolerance and end tangents (the knot parametrisation is implied by the knots).
-            if !s.fit.is_empty() {
+            if !fit.is_empty() {
                 w.f(44, s.fit_opts.tolerance);
                 if let Some(t) = s.fit_opts.start_tangent {
                     w.p(12, t.to3(0.0));
@@ -1202,7 +1208,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     w.f(41, *wt);
                 }
             }
-            for f in &s.fit {
+            for f in fit {
                 w.p(11, f.to3(0.0));
             }
         }
@@ -2459,19 +2465,19 @@ pub fn write(d: &Drawing) -> String {
 
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`.
 pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
-    tags_for(d, version, version, false)
+    tags_for(d, version, version, false, false)
 }
 
 /// The tags CADaddy's own DWG codec encodes into a `version` DWG.
 pub(crate) fn dwg_tags(d: &Drawing, version: Version) -> Vec<Tag> {
-    tags_for(d, version, version, true)
+    tags_for(d, version, version, true, false)
 }
 
 /// The R2000 DXF the DWG bridge converts to a `dwg` version DWG: its entity types are the DWG
 /// version's (MULTILEADER from 2007). Binary DXF (the converter reads it in about two thirds of
 /// the time of ASCII, and it is smaller and quicker to write), with the LTYPE table's names.
 pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>) {
-    let mut tags = tags_for(d, Version::R2000, dwg, true);
+    let mut tags = tags_for(d, Version::R2000, dwg, true, true);
     bridge_markers(&mut tags);
     let mut names = Vec::new();
     let mut in_ltype = false;
@@ -2596,7 +2602,7 @@ fn bridge_markers(tags: &mut [Tag]) {
 
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`, with what `target` (the version the
 /// file ends up in: `version`, or the DWG version the bridge writes) has.
-fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Tag> {
+fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: bool) -> Vec<Tag> {
     // An in-place block edit in progress is not written: the drawing as before it.
     let committed = d.committed();
     let d: &Drawing = &committed;
@@ -2661,7 +2667,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool) -> Vec<Ta
             (n, h, b)
         })
         .collect();
-    let mut cx = Ctx { paper_views: paper_views(d), target, dwg, write_fields: true, ..Ctx::default() };
+    let mut cx = Ctx { paper_views: paper_views(d), target, dwg, bridge, write_fields: true, ..Ctx::default() };
     cx.block_records = user_blocks.iter().map(|(n, h, _)| (n.to_ascii_uppercase(), h.clone())).collect();
     // Dimension blocks.
     let mut dim_defs: Vec<(String, String, Vec<Entity>)> = Vec::new(); // filled below
