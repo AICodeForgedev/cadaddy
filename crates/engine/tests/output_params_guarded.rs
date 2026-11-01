@@ -18,8 +18,11 @@ const GUARDED: &[&str] = &[
     "cmd/fieldview.rs",
     "cmd/ifcmodel.rs",
     "cmd/projrules.rs",
+    "cmd/render.rs",
     "cmd/rfi.rs",
+    "cmd/table/cells.rs",
     "cmd/takeoff.rs",
+    "cmd/underlay.rs",
     "cmd/validate.rs",
     "cmd/verify.rs",
 ];
@@ -76,10 +79,7 @@ const UNCHECKED: &[&str] = &[
     "cmd/props/linfile.rs",
     "cmd/propuse.rs",
     "cmd/rasterout.rs",
-    "cmd/render.rs",
     "cmd/sequence.rs",
-    "cmd/table/cells.rs",
-    "cmd/underlay.rs",
     "cmd/wholejob.rs",
 ];
 
@@ -110,13 +110,40 @@ fn every_output_writer_is_guarded_or_listed() {
     for f in files {
         let rel = format!("cmd/{}", f.strip_prefix(src.join("cmd")).unwrap().to_string_lossy().replace('\\', "/"));
         let text = std::fs::read_to_string(&f).unwrap();
-        let guarded = text.contains("guard_output(") || text.contains("guard_params(");
+        let guarded = text.contains("guard_output(") || text.contains("guard_params(") || text.contains("guard_image_output(");
         if GUARDED.contains(&rel.as_str()) {
             if !guarded {
                 bad.push(format!("{rel} is listed as guarded but doesn't call guard_output / guard_params"));
             }
         } else if writes_a_file(&text) && !guarded && !UNCHECKED.contains(&rel.as_str()) {
             bad.push(format!("{rel} writes a file: route its output path through exchange::guard_output"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// The tools outside the engine (the MCP server, the GUI's control bridge) that write a file from
+/// an agent's `path` argument have no command to carry the guard: each calls the engine's
+/// `guard_image_output` before it writes, and a new writer there fails this test until it does.
+#[test]
+fn mcp_and_control_writers_are_guarded() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut files = Vec::new();
+    sources(&root.join("mcp/src"), &mut files);
+    sources(&root.join("ui-egui/src"), &mut files);
+    files.retain(|f| {
+        let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let in_mcp = f.components().any(|c| c.as_os_str() == "mcp");
+        (in_mcp && name != "tests.rs") || name == "control.rs"
+    });
+    assert!(files.len() >= 3, "found the sources");
+    let mut bad = Vec::new();
+    for f in files {
+        let text = std::fs::read_to_string(&f).unwrap();
+        let prod = text.split("#[cfg(test)]").next().unwrap_or(&text);
+        let writes = ["fs::write(", "File::create(", "writefile::write", "write_file("].iter().any(|n| prod.contains(n));
+        if writes && !prod.contains("guard_image_output(") && !prod.contains("guard_output(") {
+            bad.push(format!("{} writes a file from an agent's argument: call guard_image_output first", f.display()));
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));

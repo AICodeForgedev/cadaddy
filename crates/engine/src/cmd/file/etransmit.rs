@@ -32,7 +32,7 @@ pub(super) fn spec() -> CommandSpec {
     CommandSpec::new(CMD, "eTransmit...", run)
         .menu(&["File", "eTransmit..."])
         .params(
-            "{path?: \"OUT.zip\" (a ZIP archive) | a folder (created; must be empty), layout?: \"folders\" (default) | \"flat\", report?: bool (default true: transmittal.txt and .html)} → {path?, files: [{target, kind, source, bytes, note}], left: [{kind, name, note}], report}; without `path` it only lists what would be packed",
+            "{force?: bool (replace an existing file; otherwise it is refused for an agent), path?: \"OUT.zip\" (a ZIP archive) | a folder (created; must be empty), layout?: \"folders\" (default) | \"flat\", report?: bool (default true: transmittal.txt and .html)} → {path?, files: [{target, kind, source, bytes, note}], left: [{kind, name, note}], report}; without `path` it only lists what would be packed",
         )
         .enabled(has_doc)
         .noundo()

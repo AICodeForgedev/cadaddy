@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|s| Ok(Box::new(TableEditM { cell: s.tabledit_walk.flatten(), walk: s.tabledit_walk.is_some() }))),
         CommandSpec::new("tableexport", "Export Table", run_export)
             .files()
-            .params("{handle, path? (.csv, or .xlsx for an Excel workbook), separator?: \",\" | \"\\t\"} → {csv, rows, cols, path?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), handle, path? (.csv, or .xlsx for an Excel workbook), separator?: \",\" | \"\\t\"} → {csv, rows, cols, path?}")
             .interactive(|_| Ok(Box::new(ExportM::default()))),
     ]
 }
@@ -578,6 +578,9 @@ fn write_text(path: &str, text: &str) -> Result<()> {
 
 fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     let id = "tableexport";
+    if let Some(path) = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()) {
+        super::super::exchange::guard_output(s, id, p, path)?;
+    }
     let h = table_handle(s, p, id)?;
     let t = match s.doc()?.entity(h).map(|e| &e.kind) {
         Some(EntityKind::Table(t)) => t.clone(),

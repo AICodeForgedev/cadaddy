@@ -15,6 +15,8 @@ pub use cadaddy_dxf::Version;
 use serde_json::{Value, json};
 
 use super::*;
+
+pub use super::exchange::guard_image_output;
 use crate::{Accept, Input, Prompt, Result, Session, Step};
 
 pub use pgp::{alias_conflicts, alias_file, built_in as built_in_aliases, user_aliases};

@@ -16,11 +16,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("render", "Render", run_render)
             .menu(&["View", "Render", "Render"])
             .alias(&["rr"])
-            .params("{preset?: draft|medium|high, samples? (1 to 4096), bounces?, width?, height? (pixels; the view's size), denoise? (true), output?: path (.png or .jpg), path?: same as output, crop?: [[x0,y0],[x1,y1]] (pixels)} → {width, height, samples, seconds, secondsPerSample, output?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), preset?: draft|medium|high, samples? (1 to 4096), bounces?, width?, height? (pixels; the view's size), denoise? (true), output?: path (.png or .jpg), path?: same as output, crop?: [[x0,y0],[x1,y1]] (pixels)} → {width, height, samples, seconds, secondsPerSample, output?}")
             .noundo(),
         CommandSpec::new("rendercrop", "Render Region", run_rendercrop)
             .menu(&["View", "Render", "Render Region"])
-            .params("{corner1: [x,y], corner2: [x,y] (on the view), preset?, samples?, output?, path?: same as output}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), corner1: [x,y], corner2: [x,y] (on the view), preset?, samples?, output?, path?: same as output}")
             .noundo()
             .interactive(|_| Ok(Box::new(CropM::default()))),
         // Saved from the Render window (its Save button); scripts and agents give the path.
@@ -107,6 +107,9 @@ fn size(p: &Value, key: &str) -> Result<Option<u32>> {
 /// Render the current view, keep the image (and write it to `output`).
 fn render(s: &mut Session, p: &Value, crop: Option<(u32, u32, u32, u32)>) -> Result<Value> {
     take_cancel();
+    if let Some(path) = str_param(p, "output").or_else(|| str_param(p, "path")) {
+        super::exchange::guard_image_output(s, "render", p, path, &["png", "jpg", "jpeg"])?;
+    }
     let (samples, mut opts) = options(p)?;
     opts.crop = crop;
     let (view, w, h) = view_of(s, size(p, "width")?, size(p, "height")?)?;
@@ -180,6 +183,7 @@ fn run_rendercrop(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn save(s: &Session, path: &str) -> Result<()> {
+    super::exchange::output_path(s, "saveimg", path, &["png", "jpg", "jpeg"])?;
     let r = s.last_render.as_ref().ok_or_else(|| other("Nothing has been rendered yet."))?;
     let lower = path.to_ascii_lowercase();
     let jpeg = lower.ends_with(".jpg") || lower.ends_with(".jpeg");
