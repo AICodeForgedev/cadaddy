@@ -392,6 +392,11 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
             continue;
         }
         let prov = provenance(e);
+        // A run's own values (`field.size=…`) win over its type's, as a device's do.
+        let mut fields = fields;
+        for (k, val) in prov.iter().filter(|(k, _)| k.starts_with("field.")) {
+            fields.insert(k.trim_start_matches("field.").to_string(), val.clone());
+        }
         let (level, _) = frame.to_ft(pts.first().copied().unwrap_or(Vec2::new(0.0, 0.0)));
         let conductors = match (fields.get("conductorSize"), prov.get("conductorsize")) {
             (_, Some(sz)) | (Some(sz), None) => Some(v::Conductors {

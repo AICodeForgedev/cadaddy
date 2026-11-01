@@ -52,10 +52,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("project.note", "Project Note", run_note).params("{text, author?: agent|user (agent)} → {revision, notes}: a handoff note kept in the drawing"),
         CommandSpec::new("review.list", "Review Queue", run_list)
-            .params("{kind?: rfi|mep_guess|clash|concern, status?: open|deferred|resolved|all (open), level?, cursor?, limit?: 1-50 (10)} → {total, byKind, items: [{id, kind, level, title}], next_cursor?}")
+            .params("{kind?: rfi|mep_guess|clash|concern|validation, status?: open|deferred|resolved|all (open), level?, cursor?, limit?: 1-50 (10)} → {total, byKind, items: [{id, kind, level, title}], next_cursor?}")
             .noundo(),
         CommandSpec::new("review.next", "Next Review Item", run_next)
-            .params("{kind?, level?} → {item: {id, kind, level, title, detail, candidates, documents, how}, remaining}: the most important open item and how to answer it")
+            .params("{kind?, level?, id?: an item id (that item, open or not)} → {item: {id, kind, level, title, detail, candidates, documents, how}, remaining}: the most important open item and how to answer it")
             .noundo(),
         CommandSpec::new("review.resolve", "Resolve Review Item", run_resolve).params(
             "{id, answer, citation?: {kind: drawing|schedule|spec|submittal|rfi, document, ref?}, author?: agent|user (agent), concern?: text} → {resolved, changed}: items the documents speak to need a citation; a concern from code knowledge alone becomes a review item",
@@ -482,10 +482,41 @@ fn validation_items(s: &mut Session) -> Vec<Item> {
     out
 }
 
+/// The Validate run's judged findings (Q6116): a person accepts (a real error) or rejects (a
+/// false alarm) each; the answer is kept and `validate.status` reports the false-alarm rate.
+fn judged_items(s: &Session) -> Vec<Item> {
+    let Ok(d) = s.doc() else { return Vec::new() };
+    super::validate_run::judge_items(d)
+        .into_iter()
+        .map(|j| Item {
+            id: j.id,
+            kind: "validation",
+            level: j.level,
+            title: j.title,
+            detail: j.detail,
+            candidates: vec![
+                json!({"answer": "accept", "from": "it is a real error: the model differs from the prints"}),
+                json!({"answer": "reject", "from": "a false alarm: the model matches the prints"}),
+            ],
+            documents: j.documents,
+            documented: false,
+            rank: j.rank,
+            key: j.key,
+            system: String::new(),
+        })
+        .collect()
+}
+
+/// Every decision kept in the drawing: item id → (status, answer).
+pub(crate) fn decisions(d: &Drawing) -> BTreeMap<String, (String, Value)> {
+    load(d).decisions.into_iter().map(|(id, x)| (id, (x.status, x.answer))).collect()
+}
+
 fn all_items(s: &mut Session, st: &State) -> Vec<Item> {
     let mut v = items(s);
     v.extend(concern_items(st));
     v.extend(validation_items(s));
+    v.extend(judged_items(s));
     v.sort_by(|a, b| a.rank.total_cmp(&b.rank).then(a.id.cmp(&b.id)));
     v
 }
@@ -495,6 +526,9 @@ fn compact(i: &Item, st: &State) -> Value {
 }
 
 fn how(i: &Item) -> Value {
+    if i.key.get("judge").is_some() {
+        return json!({"call": "review.resolve", "example": {"id": i.id, "answer": "accept", "author": "user"}, "or": "answer \"reject\" when it is a false alarm (a person answers: author user)"});
+    }
     match i.kind {
         "mep_guess" => {
             json!({"call": "review.resolve", "example": {"id": i.id, "answer": {"size_in": [14, 10], "bottom_ft": 10.5}, "citation": {"kind": "drawing", "document": "M-101", "ref": "tag at grid C-4"}}})
@@ -735,8 +769,8 @@ fn run_note(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     let st = load(s.doc()?);
     let kind = str_param(p, "kind");
-    if kind.is_some_and(|k| !["rfi", "mep_guess", "clash", "concern"].contains(&k)) {
-        return Err(bad("review.list", "`kind` is rfi, mep_guess, clash or concern"));
+    if kind.is_some_and(|k| !["rfi", "mep_guess", "clash", "concern", "validation"].contains(&k)) {
+        return Err(bad("review.list", "`kind` is rfi, mep_guess, clash, concern or validation"));
     }
     let status = str_param(p, "status").unwrap_or("open");
     if !["open", "deferred", "resolved", "orphaned", "all"].contains(&status) {
@@ -778,9 +812,10 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
     let st = load(s.doc()?);
     let kind = str_param(p, "kind");
     let level = str_param(p, "level");
+    let want = str_param(p, "id");
     let open: Vec<Item> = all_items(s, &st)
         .into_iter()
-        .filter(|i| status_of(&st, &i.id) == "open")
+        .filter(|i| want.is_some_and(|w| w == i.id) || (want.is_none() && status_of(&st, &i.id) == "open"))
         .filter(|i| kind.is_none_or(|k| i.kind == k))
         .filter(|i| level.is_none_or(|l| i.level.eq_ignore_ascii_case(l)))
         .collect();
@@ -910,6 +945,16 @@ fn apply(s: &mut Session, item: &Item, answer: &Value, cite: Option<&Citation>, 
                 None => format!("{text} [{who}]"),
             };
             s.execute("rfi.set", &json!({"id": item.key, "status": "answered", "answer": full})).map(|_| ())
+        }
+        // A judged finding: a person says whether it is a real error; the decision is the record.
+        "validation" if item.key.get("judge").is_some() => {
+            if who != "user" {
+                return Err(bad(
+                    "review.resolve",
+                    "a judged finding is accepted (a real error) or rejected (a false alarm) by a person: author \"user\" (the judge doesn't grade itself)",
+                ));
+            }
+            super::validate_run::judge_answer(answer).map(|_| ()).map_err(|e| bad("review.resolve", e))
         }
         // Clashes and concerns: the decision is the record.
         _ => Ok(()),

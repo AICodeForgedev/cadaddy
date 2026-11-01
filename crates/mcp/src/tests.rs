@@ -1096,3 +1096,24 @@ fn undo_redo_take_engine_options_and_refuse_unknown_arguments() {
         assert_eq!(count(&mut s), before + 1, "{name} acted");
     }
 }
+
+/// The validate tool tells an agent the judging loop and reaches the engine's validate commands.
+#[test]
+fn the_validate_tool_tells_the_loop() {
+    let defs = crate::tools::tool_definitions(false);
+    let t = defs["tools"].as_array().unwrap().iter().find(|t| t["name"] == "validate").expect("the validate tool");
+    let d = t["description"].as_str().unwrap();
+    for word in ["start", "next", "report", "status", "plant", "unsure", "prints/", "evidence", "confidence"] {
+        assert!(d.contains(word), "{word} in {d}");
+    }
+    let order = ["1. start", "2. next", "4. report", "5. Repeat"];
+    let at: Vec<usize> = order.iter().map(|w| d.find(w).unwrap_or_else(|| panic!("{w}"))).collect();
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{at:?}");
+    let mut s = Server::new(Box::new(Headless::default()));
+    let st = tool(&mut s, "validate", json!({"action": "status"}));
+    assert!(st.to_string().contains("no validate run yet"), "{st}");
+    let r = call(&mut s, 98, "tools/call", json!({"name": "validate", "arguments": {"action": "fly"}}));
+    assert!(r.to_string().contains("start, next, report, status or plant"), "{r}");
+    let e = tool_err(&mut s, "validate", json!({"action": "next"}));
+    assert!(e.contains("no validate run yet"), "{e}");
+}
