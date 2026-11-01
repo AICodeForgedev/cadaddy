@@ -317,6 +317,8 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
     let version = opts.version.unwrap_or_else(|| save_version(d));
     match ext(name).as_str() {
         "cdy" if !opts.binary => cdy::write_cdy(d),
+        // A .cdy file without its preview (a job's checkpoint): internal, not offered to save as.
+        "ckpt" if !opts.binary => cdy::write_cdy_checkpoint(d),
         "dxf" | "" if version == Version::R12 => {
             let tags = dxf_r12::tags(d);
             Ok(if opts.binary { cadaddy_dxf::write_binary(&tags, false) } else { cadaddy_dxf::write_ascii_as(&tags, false).into_bytes() })
@@ -374,7 +376,7 @@ pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<
         check_window(w)?;
     }
     match ext(name).as_str() {
-        "dxf" | "" | "dwg" | "cdy" | "glb" | "gltf" | "stl" | "obj" | "bundle" | "cdywalk" | "ifc" | "3mf" | "dgn" => {
+        "dxf" | "" | "dwg" | "cdy" | "ckpt" | "glb" | "gltf" | "stl" | "obj" | "bundle" | "cdywalk" | "ifc" | "3mf" | "dgn" => {
             write_with(d, name, &SaveOptions::default())
         }
         "svg" => Ok(svg::export_window(d, &Space::Model, window).into_bytes()),

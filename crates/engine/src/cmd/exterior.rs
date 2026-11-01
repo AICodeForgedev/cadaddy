@@ -1221,17 +1221,30 @@ fn with_plan_roofs(d: &Drawing, sp: &BuildingSpec) -> (Exterior, Vec<String>) {
             _ => Vec2::ZERO,
         };
         let (lo, hi) = (bb.min + shift, bb.max + shift);
+        // Over the storey's floor plate as its slab has it (a stepped building's roof steps with
+        // it: B7-007), else the walls' bounding rectangle.
+        let plate = floor_plate(d, &under.name);
+        let outline: Vec<[f64; 2]> = if plate.len() >= 3 {
+            plate.iter().map(|p| [p.x + shift.x, p.y + shift.y]).collect()
+        } else {
+            vec![[lo.x, lo.y], [hi.x, lo.y], [hi.x, hi.y], [lo.x, hi.y]]
+        };
         ext.roofs.push(Roof {
             name: "Roof 1".into(),
             level: level.name.clone(),
-            outline: vec![[lo.x, lo.y], [hi.x, lo.y], [hi.x, hi.y], [lo.x, hi.y]],
+            outline,
             slope: None,
             parapet_ft: sp.exterior.level_parapet(&level.name),
             parapet_status: sp.exterior.level_parapet(&level.name).map(|_| ValueStatus::Read),
             parapet_from: sp.exterior.level_parapet(&level.name).map(|_| FROM_ELEVATION.to_string()),
             assembly: None,
         });
-        notes.push(format!("{}: no roof outline read on its plan; a flat roof over {}'s walls.", level.name, under.name));
+        notes.push(format!(
+            "{}: no roof outline read on its plan; a flat roof over {}'s {}.",
+            level.name,
+            under.name,
+            if plate.len() >= 3 { "floor plate" } else { "walls" }
+        ));
     }
     (ext, notes)
 }

@@ -547,12 +547,14 @@ fn wedge(m: &mut Mesh, w: &cadaddy_walk3d::stairs::Wedge, upf: f64) {
 }
 
 /// What `build` made: meshes of each part.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Built {
     pub stairs: usize,
     pub ramps: usize,
     pub railings: usize,
     pub guards: usize,
+    /// The stairs not built, each with why: unconfirmed ones that can't be built as measured.
+    pub left_out: Vec<String>,
 }
 
 /// Build the spec's stairs into model space (sheet units): one mesh per stair or ramp, one
@@ -560,6 +562,7 @@ pub(crate) struct Built {
 pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Built {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let (mut stairs, mut ramps, mut rails, mut guards) = (0, 0, 0, 0);
+    let mut left_out = Vec::new();
     for layer in ["3D-Stairs", "3D-Railings"] {
         if d.layer(layer).is_none() {
             let color = if layer == "3D-Stairs" { 9 } else { 8 };
@@ -567,6 +570,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Built {
         }
     }
     for st in sp.stairs.iter().take(MAX_STAIRS) {
+        // Never built silently as no stair can be: left out and said (a confirmed one is the
+        // user's to keep; its warning stands).
+        if !st.confirmed
+            && let Some(why) = sp.stair_unbuildable(st)
+        {
+            left_out.push(format!("{}: {why}", st.name));
+            continue;
+        }
         let Some(rule) = sp.stair_rule(st) else { continue };
         let g = rule.geometry(Vec2::new(0.0, 0.0), upf);
         let mut m = super::wallgen::empty_mesh();
@@ -620,7 +631,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Built {
             guards += 1;
         }
     }
-    Built { stairs, ramps, railings: rails, guards }
+    Built { stairs, ramps, railings: rails, guards, left_out }
 }
 
 #[cfg(test)]

@@ -43,6 +43,11 @@ cadaddy-mepfix = { path = "../mepfix" }
 [target.'cfg(windows)'.dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
+# The job's peak memory per stage (getrusage's maximum resident size, without unsafe code; MIT;
+# already in the workspace's lock file).
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.30", default-features = false, features = ["resource"] }
+
 [dev-dependencies]
 # Real DXF files for the external reference tests (io is a lower layer).
 cadaddy-io = { workspace = true }

@@ -396,6 +396,12 @@ fn run_validate(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
+    // Its switches are true or false and its budget whole seconds: a wrong one is refused, not
+    // read as the default.
+    for key in ["replace", "auto", "stack", "clear"] {
+        bool_param("model.build", p, key)?;
+    }
+    let budget = count_param("model.build", p, "budget_s", 1, MAX_BUILD_BUDGET_S)?;
     if bool_or(p, "clear", false) {
         let n = wallgen::remove_made(s.doc_mut()?);
         s.state_mut()?.wallgen = None;
@@ -417,21 +423,13 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
             .filter(|t| t.is_finite() && (0.0..=10.0).contains(t))
             .ok_or_else(|| bad("model.build", "`slabThickness` must be from 0 to 10 feet"))?,
     };
-    let budget_s = p.get("budget_s").and_then(Value::as_u64).unwrap_or(BUILD_BUDGET_S);
+    let budget_s = budget.unwrap_or(BUILD_BUDGET_S);
     let g = WallGen { rules: sp.to_rules(), auto: bool_or(p, "auto", true), slab_ft, layers: None, spec: Some(sp) };
     let mut r = build_spec_with_budget(s, &g, budget_s)?;
     r["warnings"] = json!(issues.iter().filter(|i| !i.error).map(issue_json).collect::<Vec<_>>());
     // The counts are of what the model holds when the build is done (steps after the walls
     // took some away again: the summary said 2,977 walls of 2,794 built).
-    let mut held: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
-    for e in s.doc()?.model.iter() {
-        if let Some(part) = wallgen::made_as(e) {
-            *held.entry(part).or_default() += 1;
-        }
-    }
-    for (key, part) in [("walls", "wall"), ("doors", "door"), ("windows", "window")] {
-        r[key] = json!(held.get(part).copied().unwrap_or(0));
-    }
+    recount_built(s.doc()?, &mut r);
     let recording = web_time::Instant::now();
     super::revise3d::record(s, &g);
     super::guided::progress_line(&format!("  model.build: plan recorded in {:.1} s", recording.elapsed().as_secs_f64()));
@@ -1431,8 +1429,24 @@ fn add_room_elements(
     by_level
 }
 
+/// A build summary's walls, doors and windows counted from what the model holds now (as
+/// bim.tree counts them): steps after a build, and a rebuild after them, change it.
+pub(crate) fn recount_built(d: &Drawing, r: &mut Value) {
+    let mut held: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    for e in d.model.iter() {
+        if let Some(part) = wallgen::made_as(e) {
+            *held.entry(part).or_default() += 1;
+        }
+    }
+    for (key, part) in [("walls", "wall"), ("doors", "door"), ("windows", "window")] {
+        r[key] = json!(held.get(part).copied().unwrap_or(0));
+    }
+}
+
 /// Default time budget for model.build (Q6029 MUST 3): 20 minutes.
 pub(crate) const BUILD_BUDGET_S: u64 = 1200;
+/// The longest build budget a caller may give, seconds (a day).
+pub(crate) const MAX_BUILD_BUDGET_S: u64 = 86_400;
 
 /// Build from a spec: WALLGEN's walls, openings, floors and ceilings, then the spec's own parts
 /// and materials. Reports progress per level (Q6029 MUST 2).
@@ -1697,6 +1711,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     r["ramps"] = json!(built_stairs.ramps);
     r["railings"] = json!(built_stairs.railings);
     r["guards"] = json!(built_stairs.guards);
+    if !built_stairs.left_out.is_empty() {
+        r["stairs_left_out"] = json!(built_stairs.left_out);
+    }
     if let (Some(o), Some(x)) = (r.as_object_mut(), outside.as_object()) {
         o.extend(x.iter().filter(|(k, _)| *k != "roofNotes").map(|(k, v)| (k.clone(), v.clone())));
     }

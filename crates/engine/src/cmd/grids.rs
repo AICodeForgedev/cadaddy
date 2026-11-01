@@ -919,6 +919,21 @@ pub(crate) fn linework_fit(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<(f64, V
 
 /// [`linework_fit`] over scales `lo..=hi` only (a view known to be drawn at the plan's scale).
 pub(crate) fn linework_fit_within(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64) -> Option<(f64, Vec2, f64, f64)> {
+    fit_linework(src, tgt, k, lo, hi, true)
+}
+
+/// Offsets each scale proposes for a part of a floor (an enlarged view): a repeated room's other
+/// copies are among them, so a placement as good one bay over shows in the margin.
+const PART_OFFSETS: usize = 6;
+
+/// [`linework_fit_within`] for a view of a part of the floor (an enlarged plan of a few rooms):
+/// it may be any size under the plan's, and each scale proposes its best few offsets, so the
+/// margin says when it fits as well elsewhere (a run of identical rooms).
+pub(crate) fn linework_fit_part(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64) -> Option<(f64, Vec2, f64, f64)> {
+    fit_linework(src, tgt, k, lo, hi, false)
+}
+
+fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: bool) -> Option<(f64, Vec2, f64, f64)> {
     if src.len() < 50 || tgt.len() < 50 || !(lo.is_finite() && hi.is_finite() && lo > 0.0 && hi >= lo) {
         return None;
     }
@@ -934,7 +949,7 @@ pub(crate) fn linework_fit_within(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, h
     let (sw, tw) = (sb.width().max(sb.height()), tb.width().max(tb.height()));
     let mut s = lo;
     while s <= hi {
-        if sw * s < 0.5 * tw || sw * s > 1.2 * tw {
+        if (whole && sw * s < 0.5 * tw) || sw * s > 1.2 * tw {
             s *= 1.01;
             continue;
         }
@@ -950,8 +965,16 @@ pub(crate) fn linework_fit_within(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, h
         // every coarse cell, so placements are told apart on the fine grid.
         // Ties go to the smallest offset: a hash map's order differs run to run, and with it the
         // fit a tie picked (the same job placed 71 fewer devices one run than the next).
-        if let Some((o, n)) = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))) {
-            cands.push((f64::from(n) / scells.len() as f64, s, o));
+        if whole {
+            if let Some((o, n)) = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))) {
+                cands.push((f64::from(n) / scells.len() as f64, s, o));
+            }
+        } else {
+            let mut ranked: Vec<((i64, i64), u32)> = votes.into_iter().collect();
+            ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            for (o, n) in ranked.into_iter().take(PART_OFFSETS) {
+                cands.push((f64::from(n) / scells.len() as f64, s, o));
+            }
         }
         s *= 1.01;
     }
@@ -1154,6 +1177,58 @@ mod tests {
         for _ in 0..12 {
             assert_eq!(linework_fit(&src, &tgt, k).map(|f| (f.0.to_bits(), f.1.x.to_bits(), f.1.y.to_bits())), first);
         }
+    }
+
+    /// Line samples every foot along each segment (sheet inches).
+    fn sampled(segs: &[(Vec2, Vec2)]) -> Vec<Vec2> {
+        let mut out = Vec::new();
+        for (a, b) in segs {
+            let m = ((a.dist(*b) / 12.0).ceil() as usize).max(1);
+            out.extend((0..=m).map(|i| *a + (*b - *a) * (i as f64 / m as f64)));
+        }
+        out
+    }
+
+    /// A room `w` x `h` at `at` with a door gap in its bottom wall at `door` from its corner.
+    fn room(at: Vec2, w: f64, h: f64, door: f64) -> Vec<(Vec2, Vec2)> {
+        vec![
+            (at, at + Vec2::new(door, 0.0)),
+            (at + Vec2::new(door + 36.0, 0.0), at + Vec2::new(w, 0.0)),
+            (at + Vec2::new(w, 0.0), at + Vec2::new(w, h)),
+            (at + Vec2::new(w, h), at + Vec2::new(0.0, h)),
+            (at + Vec2::new(0.0, h), at),
+        ]
+    }
+
+    #[test]
+    fn an_enlarged_view_of_a_few_rooms_lands_on_its_part_of_the_floor() {
+        // A 200' x 60' floor of rooms of different sizes and door places along a corridor wall.
+        let mut segs = vec![(Vec2::new(0.0, 0.0), Vec2::new(2400.0, 0.0)), (Vec2::new(0.0, 720.0), Vec2::new(2400.0, 720.0))];
+        let mut x = 0.0;
+        for (i, w) in [180.0, 240.0, 156.0, 300.0, 204.0, 168.0, 276.0, 192.0, 228.0, 216.0].iter().enumerate() {
+            segs.extend(room(Vec2::new(x, 360.0), *w, 360.0, 24.0 + 12.0 * i as f64));
+            x += w;
+        }
+        let plan = sampled(&segs);
+        // The enlarged view: the 4th and 5th rooms (x 576..1080) drawn on their own sheet far away.
+        let view_segs: Vec<(Vec2, Vec2)> =
+            room(Vec2::new(576.0, 360.0), 300.0, 360.0, 60.0).into_iter().chain(room(Vec2::new(876.0, 360.0), 204.0, 360.0, 72.0)).collect();
+        let off = Vec2::new(60_000.0, -300.0);
+        let view: Vec<Vec2> = sampled(&view_segs).into_iter().map(|p| p + off).collect();
+        assert!(linework_fit_within(&view, &plan, 1.0, 0.97, 1.03).is_none(), "too small for a whole floor's fit");
+        let (s, t, score, margin) = linework_fit_part(&view, &plan, 1.0, 0.97, 1.03).expect("a fit");
+        // A small view's scale is read to a few percent (the placer takes it one to one); its
+        // place to within a foot or two.
+        let corner = (Vec2::new(576.0, 360.0) + off) * s + t;
+        assert!((s - 1.0).abs() < 0.035 && corner.dist(Vec2::new(576.0, 360.0)) < 24.0, "scale {s}, corner at {corner:?}");
+        assert!(score >= 0.5 && margin >= 0.03, "score {score}, margin {margin}");
+        // A room repeated along the corridor: as good one bay over, so no margin to place it by.
+        let mut rep = vec![(Vec2::new(0.0, 0.0), Vec2::new(2400.0, 0.0))];
+        for i in 0..10 {
+            rep.extend(room(Vec2::new(f64::from(i) * 240.0, 360.0), 240.0, 360.0, 48.0));
+        }
+        let typical: Vec<Vec2> = sampled(&room(Vec2::new(0.0, 360.0), 240.0, 360.0, 48.0)).into_iter().map(|p| p + off).collect();
+        assert!(linework_fit_part(&typical, &sampled(&rep), 1.0, 0.97, 1.03).is_none_or(|f| f.3 < 0.03), "a typical room has no one place");
     }
 
     #[test]

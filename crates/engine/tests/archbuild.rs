@@ -301,3 +301,27 @@ fn a_double_door_is_one_door_and_connecting_doors_are_two() {
     let r = build(&mut s, 1, false);
     assert_eq!(r["doors"], json!(2), "{r}");
 }
+
+/// B7-007 / B4-007: a wall line reaching well past the storey's shell (a stray wall 7' out of a
+/// 40' x 30' floor) is no wall of it: not built, and the slab ends at the building.
+#[test]
+fn a_wall_line_past_the_shell_is_not_built_and_doesnt_stretch_the_slab() {
+    let stray = |s: &mut Session| {
+        s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+        // A 4" wall pair from inside the building out to 7' past its north face.
+        line(s, [100.0, 300.0], [100.0, 444.0]);
+        line(s, [104.0, 300.0], [104.0, 444.0]);
+    };
+    let mut plain = sheet(1, false, false, false);
+    stray(&mut plain);
+    let walls_with = build(&mut plain, 1, false)["walls"].as_u64().unwrap_or(0);
+    let mut s = sheet(1, false, false, false);
+    stray(&mut s);
+    s.execute("bspec.draft", &json!({"store": true, "levels": levels(1), "stack": false})).unwrap();
+    s.execute("bspec.set", &json!({"spec": {"shells": {"Level 1": [[0, 0, 480, 360]]}}})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    assert!(r["walls"].as_u64().unwrap_or(0) < walls_with, "{r} vs {walls_with}");
+    let (_, slab, _) = built(&s, "floor", "Level 1");
+    assert!(slab.max.y <= 361.0, "the slab ends at the building: {slab:?}");
+    assert!(r["notes"].to_string().contains("past the storey's shell"), "{}", r["notes"]);
+}

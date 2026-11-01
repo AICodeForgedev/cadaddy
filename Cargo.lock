@@ -723,6 +723,7 @@ dependencies = [
  "image",
  "log",
  "miniz_oxide 0.8.9",
+ "nix",
  "rayon",
  "rhai",
  "rstar",

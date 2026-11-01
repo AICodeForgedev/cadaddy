@@ -17,7 +17,7 @@
 //! Wall overlap is the area common to two convex footprints, clipped after I. E. Sutherland and
 //! G. W. Hodgman, "Reentrant Polygon Clipping", Communications of the ACM 17(1), 1974.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Mesh, Space};
@@ -31,7 +31,8 @@ use super::wallgen::made_as;
 use super::*;
 use crate::{Result, Session};
 
-/// Findings listed at most, and handles per finding.
+/// Findings kept at most (of each kind: a filter by kind sees all of its own up to this), and
+/// handles per finding.
 const MAX_FINDINGS: usize = 2_000;
 const MAX_HANDLES: usize = 50;
 /// Walls compared for overlaps, at most (hostile drawings).
@@ -389,7 +390,7 @@ impl Finding {
     }
 }
 
-fn issues(s: &Session) -> Result<(Vec<Finding>, usize)> {
+fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> {
     let (sp, _) = current(s, "model.issues")?;
     let upf = units(&sp);
     let plan = plan_session(s)?;
@@ -397,14 +398,8 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, usize)> {
     let d = s.doc()?;
     let ents = plan_objects(pd);
     let made = built(d);
-    let mut out: Vec<Finding> = Vec::new();
-    let mut total = 0usize;
-    let mut push = |f: Finding| {
-        total += 1;
-        if out.len() < MAX_FINDINGS {
-            out.push(f);
-        }
-    };
+    let mut kept = Kept::default();
+    let mut push = |f: Finding| kept.push(f);
     if made.is_empty() {
         push(Finding {
             kind: "not_built",
@@ -618,7 +613,25 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, usize)> {
             handles: hs,
         });
     }
-    Ok((out, total))
+    Ok((kept.out, kept.total))
+}
+
+/// Findings kept: every one counted by its kind, each kind kept up to [`MAX_FINDINGS`] (a kind
+/// found past the cap doesn't crowd out the others).
+#[derive(Default)]
+struct Kept {
+    out: Vec<Finding>,
+    total: BTreeMap<&'static str, usize>,
+}
+
+impl Kept {
+    fn push(&mut self, f: Finding) {
+        let n = self.total.entry(f.kind).or_insert(0);
+        *n += 1;
+        if *n <= MAX_FINDINGS {
+            self.out.push(f);
+        }
+    }
 }
 
 /// `model.issues`' findings for one revision of one drawing (the session keeps the last).
@@ -626,19 +639,19 @@ pub(crate) struct IssuesCache {
     uid: u64,
     revision: u64,
     found: Vec<Finding>,
-    /// Every finding, also those past [`MAX_FINDINGS`].
-    total: usize,
+    /// Every finding by its kind, also those past [`MAX_FINDINGS`].
+    total: BTreeMap<&'static str, usize>,
 }
 
 /// The findings of the drawing as it is now: from the session's cache when it was checked at
 /// this revision, else found and kept.
-fn issues_now(s: &mut Session) -> Result<(Vec<Finding>, usize)> {
+fn issues_now(s: &mut Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> {
     let (uid, revision) = s.state().map(|st| (st.uid, st.revision))?;
     if let Some(c) = s.issues_cache.as_ref().filter(|c| c.uid == uid && c.revision == revision) {
-        return Ok((c.found.clone(), c.total));
+        return Ok((c.found.clone(), c.total.clone()));
     }
     let (found, total) = issues(s)?;
-    s.issues_cache = Some(Box::new(IssuesCache { uid, revision, found: found.clone(), total }));
+    s.issues_cache = Some(Box::new(IssuesCache { uid, revision, found: found.clone(), total: total.clone() }));
     Ok((found, total))
 }
 
@@ -669,21 +682,20 @@ fn fmt_pt(p: Vec2) -> String {
 
 fn run_issues(s: &mut Session, p: &Value) -> Result<Value> {
     let kind = str_param(p, "kind");
-    let (all, found) = issues_now(s)?;
-    let mut by: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    for f in &all {
-        *by.entry(f.kind).or_insert(0) += 1;
-    }
+    // Counted over every finding (kept or past the cap), filtered by kind before any cap.
+    let (all, by) = issues_now(s)?;
     // A page at a time: a big model's issues would flood an agent's context.
     let limit =
         p.get("limit").and_then(Value::as_u64).map_or(ISSUES_PAGE, |n| usize::try_from(n).unwrap_or(MAX_ISSUES_PAGE).clamp(1, MAX_ISSUES_PAGE));
     let from = p.get("cursor").and_then(Value::as_u64).map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
-    let matching: Vec<&Finding> = all.iter().filter(|f| kind.is_none_or(|k| k.eq_ignore_ascii_case(f.kind))).collect();
+    let of_kind = |k: &str| kind.is_none_or(|want| want.eq_ignore_ascii_case(k));
+    let matching: Vec<&Finding> = all.iter().filter(|f| of_kind(f.kind)).collect();
+    let found: usize = by.iter().filter(|(k, _)| of_kind(k)).map(|(_, n)| *n).sum();
     let list: Vec<Value> = matching.iter().skip(from).take(limit).map(|f| f.json()).collect();
-    let mut out = json!({ "total": matching.len(), "issues": list, "byKind": by });
+    let mut out = json!({ "total": found, "issues": list, "byKind": by });
     // Past the cap: how many there are, and that the list stops.
-    if found > all.len() {
-        out["truncated"] = json!({"found": found, "listed": all.len(), "note": format!("only the first {MAX_FINDINGS} issues are kept; fix those, or filter by kind")});
+    if found > matching.len() {
+        out["truncated"] = json!({"found": found, "listed": matching.len(), "note": format!("only the first {MAX_FINDINGS} issues of each kind are kept; fix those, then check again")});
     }
     if from.saturating_add(limit) < matching.len() {
         out["next"] = json!(from + limit);
@@ -1237,6 +1249,19 @@ fn run_counts(s: &mut Session, _p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_kind_past_the_cap_leaves_room_for_the_others_and_every_one_is_counted() {
+        let f = |kind: &'static str| Finding { kind, message: String::new(), level: None, at: None, handles: Vec::new() };
+        let mut k = Kept::default();
+        for _ in 0..MAX_FINDINGS + 5 {
+            k.push(f("overlap"));
+        }
+        k.push(f("not_closed"));
+        assert_eq!((k.total["overlap"], k.total["not_closed"]), (MAX_FINDINGS + 5, 1));
+        assert_eq!(k.out.iter().filter(|x| x.kind == "not_closed").count(), 1, "kept past the other kind's cap");
+        assert_eq!(k.out.len(), MAX_FINDINGS + 1);
+    }
 
     #[test]
     fn clipping_squares() {

@@ -657,3 +657,26 @@ fn a_typical_title_says_so() {
         assert!(!sheet_reader::says_typical(t), "{t}");
     }
 }
+
+/// Two floor plans one above the other whose linework touches (one block), each titled over a
+/// SCALE line: each title has its part of the block (P-4's FIRST AND THIRD FLOORS); and labels a
+/// riser diagram letters (`LEVEL 2`) are no views when the sheet's titled views say otherwise.
+#[test]
+fn titled_plans_sharing_one_block_of_linework_each_get_their_part() {
+    let mut d = Drawing::new_imperial();
+    // The first floor's plan (y 20..110) and the third's (y 140..230), joined by a riser chase
+    // drawn between them: one block of linework.
+    plan_block(&mut d, [0.0, 20.0], 10, 9);
+    plan_block(&mut d, [40.0, 110.0], 1, 3);
+    plan_block(&mut d, [0.0, 140.0], 10, 9);
+    for (y, title) in [(12.0, "PLUMBING 1ST FLOOR - WATER"), (122.0, "PLUMBING 3RD FLOOR - WATER")] {
+        text(&mut d, [10.0, y], 2.0, title);
+        text(&mut d, [10.0, y - 3.0], 1.5, "SCALE: 1/8\" = 1'-0\"");
+    }
+    let views = sheet_reader::level_views(&d);
+    let levels: Vec<Vec<String>> = views.iter().map(|(v, _)| v.levels.clone()).collect();
+    assert_eq!(levels, [vec!["1".to_string()], vec!["3".to_string()]], "{views:?}");
+    let (first, third) = (views[0].1, views[1].1);
+    assert!(first[1] < 60.0 && first[3] <= 122.0, "the first floor's part ends at the third's title: {first:?}");
+    assert!(third[1] >= 122.0 && third[3] > 180.0, "{third:?}");
+}

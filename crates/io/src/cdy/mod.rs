@@ -45,6 +45,13 @@ pub fn write_cdy(d: &Drawing) -> Result<Vec<u8>> {
     model::write(d, preview(d).as_deref()).map_err(IoError::Format)
 }
 
+/// The drawing as a .cdy file without its preview: a checkpoint written again and again (the
+/// preview renders all of model space, a print set's 1.5 M objects: most of a save's memory
+/// after the encoding).
+pub fn write_cdy_checkpoint(d: &Drawing) -> Result<Vec<u8>> {
+    model::write(d, None).map_err(IoError::Format)
+}
+
 /// The drawing in a .cdy file. Damaged parts that were left out are listed in the drawing's
 /// `read_notes`; an error means the file isn't a .cdy file this version can read.
 pub fn read_cdy(bytes: &[u8]) -> Result<Drawing> {

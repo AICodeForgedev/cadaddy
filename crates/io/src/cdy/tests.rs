@@ -156,6 +156,11 @@ fn the_public_api_and_io_dispatch_read_what_they_write() {
     // Whatever the name, the content says it is a .cdy file.
     assert_eq!(crate::read(&bytes, "renamed.dxf").unwrap(), d);
     assert!(crate::write_with(&d, "a.cdy", &crate::SaveOptions { binary: true, ..Default::default() }).is_err());
+    // A job's checkpoint (`.ckpt`): the same drawing, without the preview.
+    let ckpt = crate::write(&d, "job.ckpt").unwrap();
+    assert!(is_cdy(&ckpt));
+    assert_eq!(read_cdy(&ckpt).unwrap(), d);
+    assert_eq!(thumbnail(&ckpt), None);
 }
 
 #[test]

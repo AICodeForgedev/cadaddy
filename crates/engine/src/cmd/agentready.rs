@@ -431,14 +431,16 @@ fn more_item(kind: &'static str, more: usize, total: usize, call: &str) -> Item 
 
 /// Validation failures as review items (MUST 3: Q319/Q320 wiring).
 fn validation_items(s: &mut Session) -> Vec<Item> {
-    let report = match s.execute("bim.validate", &json!({})) {
+    // As many as the queue takes (bim.validate lists 500 by default), and the count of all.
+    let report = match s.execute("bim.validate", &json!({"limit": MAX_QUEUED_FAILURES})) {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
     let mut out = Vec::new();
-    let failures = report["failures"].as_array().map_or(0, Vec::len);
-    if failures > MAX_QUEUED_FAILURES {
-        out.push(more_item("validation", failures - MAX_QUEUED_FAILURES, failures, "bim.validate {} lists them all"));
+    let listed = report["failures"].as_array().map_or(0, Vec::len).min(MAX_QUEUED_FAILURES);
+    let failures = report["total"].as_u64().map_or(listed, |n| usize::try_from(n).unwrap_or(usize::MAX)).max(listed);
+    if failures > listed {
+        out.push(more_item("validation", failures - listed, failures, "bim.validate {\"limit\": 5000} lists them all"));
     }
     for f in report["failures"].as_array().into_iter().flatten().take(MAX_QUEUED_FAILURES) {
         let fid = f["id"].as_str().unwrap_or_default();
