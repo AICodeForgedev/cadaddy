@@ -118,14 +118,15 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "inputSchema": {"type": "object", "properties": {"code": {"type": "string"}, "inputs": {"type": "array"}}, "required": ["code"]}}),
         json!({"name": "plot", "description": "Plot a layout (or Model) to a PDF file with its page setup, as PLOT does, without the dialog.",
             "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "layout": {"type": "string"}}, "required": ["path"]}}),
-        json!({"name": "project", "description": "Manage projects (groups of related drawings sharing rules, types and standards). Actions: \"create\" {path, name?, metric?}, \"open\" {path}, \"close\", \"info\", \"list\" {discipline?, status?, kind?}, \"activate\" {name}, \"shelve\" {save?}, \"add\" {path, discipline?, kind?, title?}, \"remove\" {name}, \"disk\", \"shelve_project\", \"restore_project\" {path}, \"import_manifest\" {path}, \"validate_manifest\" {path}, \"standards.list\" {domain?}, \"standards.set\" {domain, key, value, source?}, \"standards.remove\" {domain, key}, \"standards.import\" {from, domain?, keys?}.",
+        json!({"name": "project", "description": "Manage projects (groups of related drawings sharing rules, types and standards). Actions: \"create\" {path, name?, metric?, template?}, \"open\" {path}, \"close\", \"info\", \"list\" {status?} (the PROJECTS on this machine: name, path, active/shelved, last opened, disk size, open review items, validation score), \"drawings\" {discipline?, status?, kind?} (the open project's drawings), \"activate\" {name} (opens the drawing into the session), \"shelve\" {save?} (saves and closes the drawing), \"add\" {path, discipline?, kind?, title?}, \"remove\" {name}, \"disk\", \"shelve_project\" {path?} (packs the project into one archive), \"restore_project\" {path} (unpacks it exactly), \"duplicate\" {to, path?, name?}, \"delete\" {path?, confirm: true}, \"company.list\" {domain?}, \"company.set\" {domain, key, value}, \"company.remove\" {domain, key}, \"import_manifest\" {path}, \"validate_manifest\" {path}, \"standards.list\" {domain?}, \"standards.set\" {domain, key, value, source?}, \"standards.remove\" {domain, key}, \"standards.import\" {from, domain?, keys?}.",
             "inputSchema": {"type": "object", "properties": {
                 "action": {"type": "string"}, "path": {"type": "string"}, "name": {"type": "string"},
                 "metric": {"type": "boolean"}, "discipline": {"type": "string"}, "kind": {"type": "string"},
                 "status": {"type": "string"}, "title": {"type": "string"}, "save": {"type": "boolean"},
                 "domain": {"type": "string"}, "key": {"type": "string"}, "value": {},
                 "source": {"type": "string"}, "from": {"type": "string"},
-                "keys": {"type": "array", "items": {"type": "string"}}
+                "keys": {"type": "array", "items": {"type": "string"}},
+                "to": {"type": "string"}, "template": {"type": "string"}, "confirm": {"type": "boolean"}
             }, "required": ["action"]}}),
         json!({"name": "bim_job", "description": "Start here for BIM work on a project (you need no memory of earlier sessions: the project keeps it). One call per step; answers are short, paged (cursor) and capped; repeating a call is safe. Actions, each with an example of params:\n- briefing {} — one page: revision, what is built per level, open review items, recent changes, handoff notes, the next call.\n- note {text: \"Level 2 ducts reviewed to grid D; mech room next\"} — leave a handoff note in the project.\n- import {path: \"/jobs/hotel/prints\"} — open a folder of prints as the project and classify its sheets.\n- links {pdfs: \"/jobs/hotel/prints\"} — the sheet map: callouts and references (SEE SHEET, 3/E-501) resolved, enlarged plans placed on their overall plans and counted once, match lines, unresolved references.\n- build {level: \"LEVEL 2\"} — build the model from the building spec (the same spec gives the same model; the first build drafts the spec from the prints).\n- resume {path: \"/jobs/hotel/prints\"} — open the job kept for those prints (each step is kept in the folder's .cadaddy folder; a new session resumes the last job by itself).\n- review_next {kind: \"mep_guess\"} — the most important open item with candidates and the documents to check.\n- review_list {status: \"open\", cursor: \"c10\"} — the queue, 10 at a time.\n- resolve {id: \"RV-M1a2b3c4d\", answer: {size_in: [14, 10], bottom_ft: 10.5}, citation: {kind: \"drawing\", document: \"M-101\", ref: \"tag at C-4\"}} — answer an item; anything the documents speak to needs a citation (drawing, schedule, spec, submittal, rfi). A concern from code knowledge alone: {id, concern: \"...\"} raises it for review instead of changing the model.\n- defer {id, reason: \"field to verify the beam depth\"} — leave it for a field decision.\n- rfi {id, question: \"Confirm duct size at C-4\"} — put it on the RFI list.\n- batch {kind: \"mep_guess\", system: \"M-DUCT-SUPP\", answer: {...}, citation: {...}} — one answer for many identical items: returns a preview and a token; call again with confirm: token.\n- log {author: \"agent\", approved: false} — what agents decided, for a person to approve.\n- takeoff {} — quantities. rfis {} — the RFI list (20 most severe; rfis {path: \"/jobs/hotel/rfis.csv\"} exports all). export {path: \"/jobs/hotel/model.ifc\"} — the model as IFC.\nLow-level commands (execute) stay available but aren't needed for these.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["briefing", "note", "import", "links", "resume", "build", "review_next", "review_list", "resolve", "defer", "rfi", "batch", "log", "takeoff", "rfis", "export"]}, "params": {"type": "object"}}, "required": ["action"]}}),
@@ -888,6 +889,12 @@ fn run_tool(b: &mut dyn Backend, name: &str, a: Value) -> Result<Value, String> 
                 Some("close") => "project.close",
                 Some("info") => "project.info",
                 Some("list") => "project.list",
+                Some("drawings") => "project.drawings",
+                Some("duplicate") => "project.duplicate",
+                Some("delete") => "project.delete",
+                Some("company.list") => "project.company.list",
+                Some("company.set") => "project.company.set",
+                Some("company.remove") => "project.company.remove",
                 Some("activate") => "project.activate",
                 Some("shelve") => "project.shelve",
                 Some("add") => "project.add",
@@ -901,7 +908,12 @@ fn run_tool(b: &mut dyn Backend, name: &str, a: Value) -> Result<Value, String> 
                 Some("standards.set") => "project.standards.set",
                 Some("standards.remove") => "project.standards.remove",
                 Some("standards.import") => "project.standards.import",
-                _ => "project.info",
+                other => {
+                    return Err(format!(
+                        "project: unknown action {}; use create, open, close, info, list, drawings, activate, shelve, add, remove, disk, shelve_project, restore_project, duplicate, delete, company.list, company.set, company.remove, import_manifest, validate_manifest, standards.list, standards.set, standards.remove or standards.import",
+                        other.map_or_else(|| "(none)".to_string(), |a| format!("`{a}`"))
+                    ));
+                }
             };
             let mut params = a.clone();
             if let Some(o) = params.as_object_mut() {

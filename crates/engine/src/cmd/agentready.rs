@@ -531,6 +531,13 @@ fn citation(p: &Value, cmd: &str) -> Result<Option<Citation>> {
 
 // ---- Commands ------------------------------------------------------------------------------------
 
+/// How many review items of the active drawing are open (the project hub's list shows it).
+pub(crate) fn open_review_count(s: &mut Session) -> Option<usize> {
+    let st = load(s.doc().ok()?);
+    let all = all_items(s, &st);
+    Some(all.iter().filter(|i| status_of(&st, &i.id) == "open").count())
+}
+
 fn run_briefing(s: &mut Session, _p: &Value) -> Result<Value> {
     let st = load(s.doc()?);
     let has_spec = s.doc()?.building_spec.is_some();
