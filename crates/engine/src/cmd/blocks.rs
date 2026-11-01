@@ -3,6 +3,7 @@
 
 pub(crate) mod bedit;
 pub(in crate::cmd) mod purge;
+mod dash_wblock;
 mod wblock;
 
 use std::sync::Arc;
@@ -54,6 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["w", "-wblock"])
             .params("{force?: bool (replace an existing file; otherwise it is refused), path (no extension: .dwg), name? | handles?, base?}")
             .interactive(|_| Ok(Box::new(wblock::WblockM::default()))),
+        dash_wblock::dash_wblock_spec(),
         CommandSpec::new("base", "Base", run_base).menu(&["Draw", "Block", "Base"]).params("{at: [x,y]}").interactive(|_| {
             Ok(super::ask::machine("base", "BASE", [super::ask::ask("at", "Enter base point", super::ask::Kind::Point)]))
         }),

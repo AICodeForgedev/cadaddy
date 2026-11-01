@@ -22,7 +22,7 @@ pub(super) fn with_extension(path: &str) -> String {
     if p.extension().is_none() && p.file_name().is_some() { format!("{path}.dwg") } else { path.to_string() }
 }
 
-fn stem(path: &str) -> String {
+pub(super) fn stem(path: &str) -> String {
     std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
