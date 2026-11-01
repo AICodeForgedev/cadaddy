@@ -2015,6 +2015,13 @@ impl Session {
 
     /// Start a command by name or alias as if typed at the command line.
     pub fn start(&mut self, name: &str) -> Result<()> {
+        // A command an agent types has the rails of its `execute` calls (dry run, confirmations).
+        if self.journal.is_outer()
+            && self.agent.from_agent
+            && let Some(r) = self.guard_typed(name)
+        {
+            return r;
+        }
         let outer = self.journal.enter();
         if outer {
             self.note_selection_gap();

@@ -73,6 +73,9 @@ pub struct AgentGuard {
     pub confirm: bool,
     /// The call being run came from an agent (set by the host around agent calls).
     pub from_agent: bool,
+    /// No window and no user to ask (the headless MCP server): what would wait for the user's
+    /// Allow is refused instead (closing a drawing with unsaved changes).
+    pub headless: bool,
     /// The agent call waiting for the user's answer, and the user's last answer (question,
     /// allowed) for the agent to read (`agent.journal`).
     pub pending: Option<Pending>,
@@ -84,7 +87,17 @@ pub struct AgentGuard {
 
 impl Default for AgentGuard {
     fn default() -> Self {
-        AgentGuard { dry_run: false, confirm: true, from_agent: false, pending: None, answered: None, journal: Vec::new(), request: None, next_id: 1 }
+        AgentGuard {
+            dry_run: false,
+            confirm: true,
+            from_agent: false,
+            headless: false,
+            pending: None,
+            answered: None,
+            journal: Vec::new(),
+            request: None,
+            next_id: 1,
+        }
     }
 }
 
@@ -101,6 +114,7 @@ impl Clone for AgentGuard {
             dry_run: self.dry_run,
             confirm: self.confirm,
             from_agent: self.from_agent,
+            headless: self.headless,
             pending: self.pending.clone(),
             answered: self.answered.clone(),
             journal: self.journal.clone(),
@@ -172,9 +186,53 @@ impl Session {
             return Some(Err(EngineError::Other(self.ask_user(&cmd, params, question))));
         }
         if !self.agent.dry_run {
+            // Nobody to ask: closing drawings with unsaved changes is refused the way the
+            // close tools refuse it (`save` / `discard` say what to do with them).
+            if self.agent.from_agent && self.agent.headless && matches!(cmd.as_str(), "close" | "closeall") {
+                let doc_cmd = if cmd == "close" { "document.close" } else { "document.closeall" };
+                return Some(self.execute(doc_cmd, params));
+            }
             return None;
         }
         Some(self.dry_call(&cmd, params))
+    }
+
+    /// The rails around a command an agent types at the command line (it starts without going
+    /// through [`Session::execute`]): a dry run previews it, or refuses one that needs prompts;
+    /// closing drawings waits for the user, or is refused when headless. `None`: run it normally.
+    pub(crate) fn guard_typed(&mut self, name: &str) -> Option<Result<()>> {
+        let name = name.trim();
+        let name = name.strip_prefix('\'').unwrap_or(name);
+        let lower = name.trim_start_matches(['_', '.', '-']).to_ascii_lowercase();
+        let dashed = crate::cmd::resolve_alias(&name.trim_start_matches(['_', '.']).to_ascii_lowercase());
+        let id = if crate::find_command(&dashed).is_some() { dashed } else { crate::cmd::resolve_alias(&lower) };
+        let spec = crate::find_command(&id)?;
+        if spec.id.starts_with("agent.") {
+            return None;
+        }
+        if let Some(r) = self.agent.request.as_mut() {
+            r.commands += 1;
+        }
+        if self.agent.dry_run {
+            if spec.interactive.is_some() || crate::cmd::typed_ask::machine_for(spec.id).is_some() {
+                return Some(Err(EngineError::Other(format!(
+                    "Dry run is on: typing {} would change the drawing. Run it with execute to see what it would change (wouldChange), or turn the dry run off.",
+                    spec.id.to_ascii_uppercase()
+                ))));
+            }
+            return Some(self.dry_call(spec.id, &Value::Null).map(|v| {
+                self.echo(v.to_string());
+            }));
+        }
+        let question = self.needs_confirmation(spec.id, &Value::Null)?;
+        if self.agent.confirm {
+            return Some(Err(EngineError::Other(self.ask_user(spec.id, &Value::Null, question))));
+        }
+        if self.agent.headless && matches!(spec.id, "close" | "closeall") {
+            let doc_cmd = if spec.id == "close" { "document.close" } else { "document.closeall" };
+            return Some(self.execute(doc_cmd, &Value::Null).map(|_| ()));
+        }
+        None
     }
 
     /// Park an agent's call for the user's Allow/Deny; the message to hand back to the agent.
