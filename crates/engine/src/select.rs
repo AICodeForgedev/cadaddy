@@ -45,7 +45,7 @@ fn hit_polylines_with(d: &Drawing, e: &Entity, tol: f64, area: Option<Bounds2>, 
                 let list = cadaddy_render::build_entities(
                     d,
                     std::iter::once(e),
-                    &cadaddy_render::Options { tolerance: tol, text: false, skip_hatches, ..Default::default() },
+                    &cadaddy_render::Options { tolerance: tol, text: false, linetypes: false, skip_hatches, ..Default::default() },
                 );
                 v = list.prims.iter().map(|p| list.points(p).to_vec()).collect();
                 v.push(vec![c[0], c[1], c[2], c[3], c[0]]);
@@ -948,5 +948,62 @@ mod hatch_pattern_pick_tests {
         // Ignore style fills over the island.
         let d = solid_hatch(loops(), 2);
         assert!(pick(&d, &Space::Model, Vec2::new(5.0, 5.0), 0.05).is_some());
+    }
+}
+
+#[cfg(test)]
+mod dashed_block_pick_tests {
+    use super::*;
+    use cadaddy_doc::Common;
+    use cadaddy_geom::Vec3;
+
+    /// A block holding a diagonal dashed line, inserted at `scale`.
+    fn dashed_block(length: f64, scale: f64) -> (Drawing, Handle) {
+        let mut d = Drawing::new_imperial();
+        d.linetypes.extend(cadaddy_doc::library::standard_linetypes().into_iter().filter(|l| l.name == "DASHED"));
+        let mut line = Entity::new(Handle(1), EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(length, length, 0.0) }));
+        line.common.linetype = "DASHED".into();
+        let mut blk = cadaddy_doc::Block::new("B");
+        blk.entities.push(line);
+        d.blocks.insert("B".into(), std::sync::Arc::new(blk));
+        let insert = cadaddy_doc::Insert {
+            block: "B".into(),
+            insert: Vec3::new(0.0, 0.0, 0.0),
+            scale: Vec3::new(scale, scale, 1.0),
+            rotation: 0.0,
+            attribs: Vec::new(),
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+            clip: None,
+        };
+        let h = d.add(&Space::Model, Common::default(), EntityKind::Insert(insert)).unwrap();
+        (d, h)
+    }
+
+    /// Every mouse move over a block hit-tests what it draws. Two blocks with a fine pattern on
+    /// long lines (inserted at 0.001) made 5.8 million dashes, and half a second, per move.
+    #[test]
+    fn hit_testing_a_block_does_not_lay_out_its_dashes() {
+        let (d, h) = dashed_block(20_000.0, 0.001);
+        let e = d.entity(h).unwrap();
+        let drawn = cadaddy_render::build_entities(&d, std::iter::once(e.as_ref()), &cadaddy_render::Options { text: false, ..Default::default() });
+        assert!(drawn.prims.len() > 10_000, "the pattern draws {} dashes", drawn.prims.len());
+        // The line, and the block's bounding rectangle.
+        assert_eq!(hit_polylines(&d, e, 0.01).len(), 2);
+    }
+
+    /// A dashed line in a block is hit across its gaps, as one outside a block is.
+    #[test]
+    fn a_dashed_line_in_a_block_is_picked_in_a_gap() {
+        let (d, h) = dashed_block(100.0, 1.0);
+        let e = d.entity(h).unwrap();
+        let drawn = cadaddy_render::build_entities(&d, std::iter::once(e.as_ref()), &cadaddy_render::Options { text: false, ..Default::default() });
+        let (a, b) = (drawn.prims.first().unwrap(), drawn.prims.get(1).unwrap());
+        let (end, start) = (*drawn.points(a).last().unwrap(), *drawn.points(b).first().unwrap());
+        assert!(end.dist(start) > 0.01, "a gap between the first two dashes");
+        let gap = end + (start - end) * 0.5;
+        assert_eq!(pick(&d, &Space::Model, gap, end.dist(start) / 8.0), Some(h));
     }
 }

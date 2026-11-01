@@ -389,6 +389,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         // level of detail must hold at the finest one.
         min_dash: 2f64.powi(lod_band) * 2.0,
         text: true,
+        linetypes: true,
         fill: true,
         lineweights: lwdisplay,
         view_height: st.paper_view().height,
@@ -559,6 +560,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             tolerance: 2f64.powi(band) * 0.5,
             min_dash: 2f64.powi(band) * 2.0,
             text: true,
+            linetypes: true,
             fill: true,
             lineweights: lwdisplay,
             view_height: st.paper_view().height,
