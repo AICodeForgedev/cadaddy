@@ -98,8 +98,16 @@ pub fn specs() -> Vec<CommandSpec> {
     .collect()
 }
 
+/// The refusal for a block name `valid_block_name` rejects, naming the bad character.
+pub(crate) fn block_name_error(cmd: &str, n: &str) -> crate::EngineError {
+    match super::names::check(cmd, "block", n) {
+        Err(e) => e,
+        Ok(()) => bad(cmd, format!("invalid block name `{n}`: names starting with `*` are reserved")),
+    }
+}
+
 pub(crate) fn valid_block_name(n: &str) -> bool {
-    !n.trim().is_empty() && n.len() <= 255 && !n.starts_with('*') && !n.chars().any(|c| "<>/\\\":;?*|,=`".contains(c))
+    !n.starts_with('*') && super::names::is_valid(n)
 }
 
 /// The block an entity references, when it is a block reference.
@@ -160,7 +168,7 @@ fn keep_param(cmd: &str, p: &Value, default: Keep) -> Result<Keep> {
 /// Create a block from entities. Returns the insert handle when converting.
 pub(crate) fn make_block(s: &mut Session, name: &str, base: Vec2, hs: &[Handle], keep: Keep, description: &str) -> Result<Option<Handle>> {
     if !valid_block_name(name) {
-        return Err(bad("block", "invalid block name"));
+        return Err(block_name_error("block", name));
     }
     let d = s.doc()?;
     let ents: Vec<Entity> = hs.iter().filter_map(|h| d.entity(*h).map(|e| (**e).clone())).collect();

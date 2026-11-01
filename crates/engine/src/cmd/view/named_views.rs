@@ -35,7 +35,14 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// A valid view name (the characters symbol table names can't hold are refused).
 fn valid_name(n: &str) -> bool {
-    !n.is_empty() && n.chars().count() <= 255 && !n.starts_with('*') && !n.chars().any(|c| "<>/\\\":;?*|,=`".contains(c))
+    !n.starts_with('*') && super::super::names::is_valid(n)
+}
+
+fn view_name_error(name: &str) -> EngineError {
+    match super::super::names::check("view", "view", name) {
+        Err(e) => e,
+        Ok(()) => EngineError::Other(format!("\"{name}\" is not a valid view name.")),
+    }
 }
 
 /// The layer state holding view `name`'s layer snapshot.
@@ -225,7 +232,7 @@ fn ucs_label(v: &NamedView) -> Value {
 /// Save the current view (or `window`) as `name`, replacing a view of that name.
 fn save(s: &mut Session, name: &str, window: Option<Bounds2>, snapshot: bool, extra: &Extra) -> Result<Value> {
     if !valid_name(name) {
-        return Err(EngineError::Other(format!("\"{name}\" is not a valid view name.")));
+        return Err(view_name_error(name));
     }
     let (w, h) = s.viewport_px;
     let st = s.state()?;
@@ -533,7 +540,7 @@ impl Interactive for ViewM {
             Stage::Save | Stage::WindowName => {
                 let Some(name) = text.filter(|t| !t.is_empty()) else { return Ok(Step::Done) };
                 if !valid_name(&name) {
-                    return Err(EngineError::Other(format!("\"{name}\" is not a valid view name.")));
+                    return Err(view_name_error(&name));
                 }
                 if matches!(self.stage, Stage::WindowName) {
                     self.name = name;
