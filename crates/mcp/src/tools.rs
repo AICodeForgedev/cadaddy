@@ -520,10 +520,20 @@ fn command_matches(c: &Value, f: &str) -> bool {
 /// Run a tool. `Err` is a protocol error (unknown tool, or arguments that don't fit its input
 /// schema), answered with JSON-RPC invalid params; a failing tool is an `isError` result.
 pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value, String> {
-    let a = check_args(name, args)?;
+    let mut a = check_args(name, args)?;
+    // `find_text {pattern}`: what an agent tries first; the texts command filters by `contains`.
+    if name == "find_text"
+        && let Some(o) = a.as_object_mut()
+        && !o.contains_key("contains")
+        && let Some(p) = o.remove("pattern").filter(|p| !p.is_null())
+    {
+        o.insert("contains".into(), p);
+    }
     let unknown = unknown_args(name, &a);
     let mut out = run_tool(b, name, a)?;
-    if !unknown.is_empty() {
+    // A failed call says what was wrong in its own message; a warning glued onto it names the
+    // same parameter a second time.
+    if !unknown.is_empty() && out["isError"] != true {
         add_warnings(&mut out, &unknown);
     }
     Ok(out)

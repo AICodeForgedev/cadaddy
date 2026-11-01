@@ -1172,6 +1172,16 @@ fn run_mleaderstyle(s: &mut Session, p: &Value) -> Result<Value> {
         Some("insertion") => Some(false),
         Some(_) => return Err(bad("mleaderstyle", "`blockAttach` must be \"center\" or \"insertion\"")),
     };
+    // A number that can't be used is refused by name, not dropped (battle test 6: arrowSize -5
+    // made the style with the default 0.18).
+    for (key, zero_ok) in [("arrowSize", true), ("textHeight", false), ("landingGap", true), ("dogleg", true)] {
+        let Some(v) = p.get(key).filter(|v| !v.is_null()) else { continue };
+        match v.as_f64() {
+            Some(n) if n.is_finite() && (n > 0.0 || zero_ok && n == 0.0) => {}
+            Some(_) => return Err(bad("mleaderstyle", format!("`{key}` must be {} (got {v})", if zero_ok { "0 or more" } else { "more than 0" }))),
+            None => return Err(bad("mleaderstyle", format!("`{key}` must be a number"))),
+        }
+    }
     let d = s.doc_mut()?;
     if let Some(name) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         let idx = match d.mleader_styles.iter().position(|t| t.name.eq_ignore_ascii_case(name)) {

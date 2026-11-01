@@ -945,7 +945,9 @@ pub fn documented_params(doc: &str) -> Vec<&str> {
             let value = prev == Some(':') && !matches!(next, Some('?' | ':')) && VALUE_WORDS.contains(&word);
             // `{name (e.g. …), at: …}`: a name with a note in brackets counts too (models3d.place
             // warned that its own `name` was ignored; tester 0.7.7f).
+            let is_choice = !matches!(next, Some('?' | ':')) && choice_value(doc, start, prev);
             if !value
+                && !is_choice
                 && matches!(prev, Some('{' | ',' | '|' | '(' | ':' | ';' | '/' | '+'))
                 && matches!(next, Some(':' | '?' | ',' | '}' | ')' | '(' | '|' | '+' | '/' | '→'))
             {
@@ -960,6 +962,16 @@ pub fn documented_params(doc: &str) -> Vec<&str> {
                 _ if nest == 0 && doc.get(i..).is_some_and(|r| r.starts_with('→')) => {
                     i += '→'.len_utf8();
                     i = skip_group(doc, skip_group(doc, i, b'{', b'}', true), b'(', b')', false);
+                    // `…: the readable text of TEXT, MTEXT` is prose about the result, up to the
+                    // next form (`|`) or the end.
+                    if doc.get(i..).is_some_and(|r| r.starts_with(':')) {
+                        i = doc.get(i..).and_then(|r| r.find('|')).map_or(doc.len(), |at| i + at);
+                    }
+                    continue;
+                }
+                // `(default Space, Zone, Grid)`: the default's values, not parameters.
+                b'(' if doc.get(i..).is_some_and(|r| r.starts_with("(default ")) => {
+                    i = skip_group(doc, i, b'(', b')', false).max(i + 1);
                     continue;
                 }
                 _ => {}
@@ -968,6 +980,39 @@ pub fn documented_params(doc: &str) -> Vec<&str> {
         }
     }
     out
+}
+
+/// A word after `|` in `type?: all | layers | blocks`: one of the values the parameter before the
+/// colon takes, not a parameter (`purge {layers: 12345}` was accepted as if `layers` existed).
+fn choice_value(doc: &str, at: usize, prev: Option<char>) -> bool {
+    if prev != Some('|') {
+        return false;
+    }
+    let before = doc.get(..at).unwrap_or("");
+    let mut depth = 0i32;
+    let mut segment = before.len();
+    for (i, c) in before.char_indices().rev() {
+        match c {
+            ')' | ']' | '}' => depth += 1,
+            '(' | '[' | '{' if depth == 0 => {
+                segment = i + 1;
+                break;
+            }
+            '(' | '[' | '{' => depth -= 1,
+            ',' if depth == 0 => {
+                segment = i + 1;
+                break;
+            }
+            _ => {}
+        }
+        segment = i;
+    }
+    // Only a plain list of words after the colon (`type?: all | blocks | layers`); anything with
+    // a structure or a note in it may name real parameters (`vertices?: [...] | points`).
+    before
+        .get(segment..)
+        .and_then(|t| t.split_once(':'))
+        .is_some_and(|(_, list)| list.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '|' | ' ' | '-')))
 }
 
 /// `at` moved past the balanced `open … close` group that starts there (after spaces); `at` itself
@@ -1124,6 +1169,54 @@ pub fn param_kind(doc: &str, key: &str) -> Option<ParamKind> {
     }
 }
 
+/// Text that reads as NaN or infinity (`"nan"`, `" -Inf"`, `"infinity"`).
+fn spells_non_finite(t: &str) -> bool {
+    let t = t.trim().trim_start_matches(['+', '-']).to_ascii_lowercase();
+    matches!(t.as_str(), "nan" | "inf" | "infinity")
+}
+
+/// Parameter names that hold a number by their name (`textHeight`, `offset_in`, `radius`).
+fn is_numeric_name(k: &str) -> bool {
+    let k = k.to_ascii_lowercase();
+    [
+        "radius",
+        "dist",
+        "count",
+        "scale",
+        "angle",
+        "height",
+        "width",
+        "length",
+        "size",
+        "offset",
+        "rows",
+        "columns",
+        "spacing",
+        "factor",
+        "tolerance",
+        "thickness",
+        "gap",
+        "depth",
+        "diameter",
+        "elevation",
+        "limit",
+        "segments",
+        "step",
+        "dogleg",
+        "_in",
+        "_ft",
+        "_mm",
+    ]
+    .iter()
+    .any(|w| k.contains(w))
+}
+
+/// Parameter names that can't be negative: a radius, a size, a count, a gap, a tolerance.
+fn is_non_negative_name(k: &str) -> bool {
+    let k = k.to_ascii_lowercase();
+    ["radius", "diameter", "height", "width", "size", "count", "segments", "gap", "dogleg", "tolerance", "limit"].iter().any(|w| k.contains(w))
+}
+
 /// An agent's call with a parameter of the wrong JSON type is refused before it runs, naming the
 /// parameter and the type it takes (battle test 5 B7-019: `mleaderstyle {arrowSize: {}}` and
 /// `purge {layers: 12345}` ran and used the default). Only where the documentation says plainly
@@ -1135,7 +1228,17 @@ fn refuse_wrong_typed_params(spec: &CommandSpec, params: &Value) -> Result<()> {
         if v.is_null() {
             continue;
         }
-        let Some(kind) = param_kind(doc, k) else { continue };
+        let kind = param_kind(doc, k);
+        // A number spelt as text that isn't finite ('nan', '-inf') was silently dropped (battle
+        // test 6 B7-019): refused for every parameter that takes a number.
+        if kind != Some(ParamKind::Text) && (kind.is_some() || is_numeric_name(k)) && v.as_str().is_some_and(spells_non_finite) {
+            return Err(EngineError::BadParams { cmd: spec.id.into(), msg: format!("`{k}` must be a finite number, not {v}") });
+        }
+        // A size, count or tolerance below zero was dropped or replaced by the default.
+        if is_non_negative_name(k) && v.as_f64().is_some_and(|n| n < 0.0) {
+            return Err(EngineError::BadParams { cmd: spec.id.into(), msg: format!("`{k}` must be 0 or more (got {v})") });
+        }
+        let Some(kind) = kind else { continue };
         let ok = match kind {
             ParamKind::Number => v.is_number(),
             ParamKind::Bool => v.is_boolean() || v.is_number() || v.is_string(),

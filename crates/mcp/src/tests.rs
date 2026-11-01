@@ -191,6 +191,21 @@ fn find_text_reads_texts_and_render_shows_one_area() {
     assert_eq!(w["count"], 2);
     assert_eq!(tool(&mut s, "find_text", json!({"layer": "nope"}))["count"], 0);
 
+    // `pattern` is read as `contains`, and says nothing about being ignored.
+    let p = call(&mut s, 8, "tools/call", json!({"name": "find_text", "arguments": {"pattern": "cocina"}}));
+    let text = p["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("COCINA") && !text.contains("not a parameter"), "{text}");
+    // A bad value is one message: no warning about another name glued onto the error.
+    let bad = call(
+        &mut s,
+        8,
+        "tools/call",
+        json!({"name": "execute", "arguments": {"command": "circle", "params": {"center": [0, 0], "radius": "nan"}, "extra": 1}}),
+    );
+    let text = bad["result"]["content"][0]["text"].as_str().or(bad["error"]["message"].as_str()).unwrap_or("");
+    assert_eq!(bad["result"]["isError"], json!(true), "{text}");
+    assert!(!text.contains("it was ignored"), "{text}");
+
     // A render of one area takes the area's shape.
     let r = call(&mut s, 9, "tools/call", json!({"name": "render", "arguments": {"window": [[0, 0], [10, 5]]}}));
     let c = &r["result"]["content"][0];
