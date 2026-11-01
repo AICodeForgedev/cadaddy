@@ -24,6 +24,8 @@ pub enum Panel {
     SheetSets,
     /// The BIM coordination palette (COORDINATION).
     Coordination,
+    /// The Validate panel (Automation ▸ Validate): the model checked against its prints.
+    Validate,
 }
 
 impl Panel {
@@ -40,6 +42,7 @@ impl Panel {
             Self::PlansToModel => "plansToModel",
             Self::SheetSets => "sheetSets",
             Self::Coordination => "coordination",
+            Self::Validate => "validate",
         }
     }
     fn label(self) -> &'static str {
@@ -54,6 +57,7 @@ impl Panel {
             Self::PlansToModel => "Plans to Model",
             Self::SheetSets => "Sheet Set Manager",
             Self::Coordination => "Coordination",
+            Self::Validate => "Validate",
         }
     }
     fn default_side(self) -> Zone {
@@ -68,10 +72,11 @@ impl Panel {
             Self::PlansToModel => Zone::Right,
             Self::SheetSets => Zone::Right,
             Self::Coordination => Zone::Right,
+            Self::Validate => Zone::Right,
         }
     }
     /// Palettes outside the default arrangement, opened on request (QUICKCALC).
-    pub const ON_DEMAND: &[Self] = &[Self::QuickCalc, Self::PlansToModel, Self::SheetSets, Self::Coordination];
+    pub const ON_DEMAND: &[Self] = &[Self::QuickCalc, Self::PlansToModel, Self::SheetSets, Self::Coordination, Self::Validate];
     pub fn parse(id: &str) -> Result<Self, String> {
         Self::ALL.iter().chain(Self::ON_DEMAND).copied().find(|panel| panel.id() == id).ok_or_else(|| format!("Unknown panel: {id}"))
     }
@@ -571,6 +576,7 @@ fn panel_body(app: &mut crate::CadApp, ui: &mut egui::Ui, panel: Panel) {
         Panel::Coordination => {
             egui::ScrollArea::vertical().id_salt("dock-coordination").auto_shrink([false, false]).show(ui, |ui| crate::bimpalette::show(app, ui));
         }
+        Panel::Validate => crate::validatepalette::show(app, ui),
     }
 }
 
@@ -761,6 +767,7 @@ fn panel_limits(panel: &Panel) -> PanelLimits {
         Panel::Layers => (egui::vec2(220.0, 120.0), 720.0),
         Panel::ExternalRefs | Panel::Symbols => (egui::vec2(220.0, 80.0), 720.0),
         Panel::Coordination => (egui::vec2(280.0, 240.0), 900.0),
+        Panel::Validate => (egui::vec2(320.0, 260.0), 1200.0),
     };
     PanelLimits { min, max: egui::vec2(max_width, 1_000_000.0) }
 }

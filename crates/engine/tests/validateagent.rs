@@ -681,3 +681,38 @@ fn planted_errors_are_deterministic_and_scored() {
     assert_eq!(duct["to"], "14x10");
     let _ = std::fs::remove_dir_all(&out);
 }
+
+/// The Validate panel's Cancel (Q6117): the run stops handing out areas and stops waiting for an
+/// agent; what was judged stays; `validate` with the same scope resumes it.
+#[test]
+fn a_cancelled_run_stops_waiting_and_resumes() {
+    let mut j = job();
+    let out = dir("cancel");
+    let r = start(&mut j.s, &out);
+    let run = r["run"].as_str().unwrap().to_string();
+    assert_eq!(r["waiting"], "Validate: waiting for an agent", "started by a person, nobody watching: {r}");
+    let judged = drive(&mut j.s, &run, &j.truth, Judge { sizes: true, noisy: false }, 1);
+    assert_eq!(judged.len(), 1);
+    assert!(cadaddy_engine::cmd::validate_run::status_text(&j.s).is_some());
+    let c = j.s.execute("validate.cancel", &json!({"run": run})).unwrap();
+    assert_eq!(c["cancelled"], true, "{c}");
+    assert_eq!(c["changed"], true, "{c}");
+    assert_eq!(cadaddy_engine::cmd::validate_run::status_text(&j.s), None, "a cancelled run doesn't wait for an agent");
+    let e = j.s.execute("validate.next", &json!({"run": run})).unwrap_err().to_string();
+    assert!(e.contains("cancelled") && e.contains("resumes"), "{e}");
+    let st = j.s.execute("validate.status", &json!({"run": run})).unwrap();
+    assert_eq!(st["cancelled"], true, "{st}");
+    assert_eq!(st["areas"]["done"], 1, "the judged area stays: {st}");
+    assert!(st.get("waiting").is_none(), "{st}");
+    // Again: nothing changes.
+    assert_eq!(j.s.execute("validate.cancel", &json!({})).unwrap()["changed"], false);
+    // Resumed by the same scope: the judged area is kept, the rest are handed out again.
+    let again = start(&mut j.s, &out);
+    assert_eq!(again["run"], json!(run));
+    assert_eq!(again["unchanged"], 1, "{again}");
+    assert_eq!(again["pending"], 3, "{again}");
+    let st = j.s.execute("validate.status", &json!({"run": run})).unwrap();
+    assert!(st.get("cancelled").is_none(), "{st}");
+    assert!(j.s.execute("validate.next", &json!({"run": run})).unwrap()["area"]["id"].is_string());
+    let _ = std::fs::remove_dir_all(&out);
+}

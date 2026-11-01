@@ -3286,3 +3286,57 @@ menu	Modify	수정
 	Remove Company Standard	회사 표준 제거
 	Set Company Standard	회사 표준 설정
 	Standards	표준
+	 ({n} shown; Export writes them all)	 ({n}개 표시됨, 내보내기는 모두 기록)
+	(no picture)	(그림 없음)
+	A false alarm	잘못된 경보
+	Confidence:	신뢰도:
+	Current room	현재 실
+	Defer	보류
+	Expected:	예상:
+	False alarms: {rate}	잘못된 경보: {rate}
+	Findings ({n})	결과 ({n})
+	Found:	발견:
+	From the 2D drawing	2D 도면에서
+	From the BIM model	BIM 모델에서
+	Issue:	문제:
+	It is a real error	실제 오류임
+	Leave it for a field decision	현장 결정으로 남김
+	No file chosen. Type: automation.takeoff {params}	파일을 선택하지 않았습니다. 입력: automation.takeoff {params}
+	No findings to review.	검토할 결과가 없습니다.
+	No run yet: choose a scope and trades, then Start.	아직 실행이 없습니다. 범위와 공종을 고른 뒤 시작하세요.
+	No takeoff yet: Refresh runs it.	아직 물량 산출이 없습니다. 새로 고침으로 실행합니다.
+	Overall	전체
+	Refresh	새로 고침
+	Reject	거부
+	Resume	재개
+	Rules ({on} of {all} on)	규칙 ({all}개 중 {on}개 켜짐)
+	Scope:	범위:
+	Scores	점수
+	Show answered	답변한 항목 표시
+	Takeoff	물량 산출
+	Takeoff written to {path}	물량 산출을 {path}에 기록함
+	Trades:	공종:
+	done	완료
+	judging	판정 중
+	project	프로젝트
+	waiting for an agent	에이전트 대기 중
+	{done} of {total} areas, {state}	{total}개 영역 중 {done}개, {state}
+	{source}: {n} lines	{source}: {n}줄
+	Automation Takeoff	자동화 물량 산출
+	Cancel Validation Run	검증 실행 취소
+	Change a Validation Rule	검증 규칙 변경
+	Validation Areas	검증 영역
+	Validation Evidence Packet	검증 증거 패킷
+	Validation Rules	검증 규칙
+	Validate	검증
+	Automation	자동화
+	Model Checks	모델 검사
+	Qty	수량
+	Elements	요소
+	Fire	소방
+	Validate: waiting for an agent	검증: 에이전트를 기다리는 중
+	Validate Model Against Prints (Agent)	도면 대비 모델 검증(에이전트)
+	Next Validation Packet	다음 검증 패킷
+	Report Validation Findings	검증 결과 보고
+	Validation Run Status	검증 실행 상태
+	Plant Validation Errors	검증용 오류 심기

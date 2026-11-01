@@ -151,6 +151,10 @@ pub enum Icon {
     PickAdd,
     SelectObjects,
     QuickSelect,
+    /// The Automation tab's Validate: a sheet with a check mark.
+    Validate,
+    /// The Automation tab's Takeoff: a list of quantities with a tally.
+    Takeoff,
 }
 
 struct Pen<'a> {
@@ -956,6 +960,24 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, dim: bool) {
             // A filter funnel with a spark.
             pen.poly(&[(3.0, 4.0), (19.0, 4.0), (13.0, 11.0), (13.0, 19.0), (9.0, 17.0), (9.0, 11.0)], true, b);
             pen.poly(&[(20.0, 10.0), (16.5, 15.5), (20.0, 15.5), (17.0, 21.0)], false, a);
+        }
+        Validate => {
+            // A sheet with a bold check mark across it.
+            pen.poly(&[(4.0, 3.0), (14.0, 3.0), (18.0, 7.0), (18.0, 21.0), (4.0, 21.0)], true, b);
+            pen.poly(&[(14.0, 3.0), (14.0, 7.0), (18.0, 7.0)], false, b);
+            for d in [0.0, 0.8] {
+                pen.poly(&[(8.0, 13.0 + d), (12.0, 17.0 + d), (22.0, 6.0 + d)], false, a);
+            }
+        }
+        Takeoff => {
+            // A list of rows with quantities, and a tally total under it.
+            pen.rect(3.0, 3.0, 18.0, 18.0, b);
+            for y in [7.5, 11.5, 15.5] {
+                pen.fill_c(6.0, y, 1.0, b);
+                pen.l(8.5, y, 14.0, y);
+                pen.la(16.0, y, 19.0, y);
+            }
+            pen.la(15.0, 18.5, 20.0, 18.5);
         }
     }
 }

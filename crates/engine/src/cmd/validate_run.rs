@@ -19,6 +19,8 @@
 //!   from the items a person rejected, and on a planted copy the planted errors caught and missed.
 //! - `validate.plant {count, kinds?, seed}`: a copy of the drawing (opened beside it) with known
 //!   errors planted, recorded in the copy only; the same seed plants the same errors.
+//! - `validate.cancel {run?}`: stops handing out a run's areas (the Validate panel's Cancel); what
+//!   was judged stays, and `validate` with the same scope resumes it.
 //!
 //! Runs live in the drawing ([`cadaddy_doc::Drawing::agent`], key `validate`) beside the review
 //! queue's state, so they survive save and reopen and are undone like any edit.
@@ -43,6 +45,7 @@ pub const CMD_NEXT: &str = "validate.next";
 pub const CMD_REPORT: &str = "validate.report";
 pub const CMD_STATUS: &str = "validate.status";
 pub const CMD_PLANT: &str = "validate.plant";
+pub const CMD_CANCEL: &str = "validate.cancel";
 
 /// What the status bar says while a run started in the app has areas left and no agent watches.
 pub const WAITING: &str = "Validate: waiting for an agent";
@@ -80,7 +83,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         CommandSpec::new(CMD_STATUS, "Validation Run Status", run_status)
             .params(
-                "{run?: id (the latest)} → {run, scope, areas: {total, done, issued, pending, unchanged}, findings: {total, by_verdict, by_trade, by_rule}, accuracy: {overall, by_trade, by_rule} (pass / (pass+fail+missing+extra)), review: {accepted, rejected, open, deferred, false_alarm_rate}, prescreen, planted?: {total, caught, missed, recall, errors}, runs, next}: how far the run is and how the model scores",
+                "{run?: id (the latest)} → {run, scope, trades, rules, cancelled?, areas: {total, done, issued, pending, unchanged}, findings: {total, by_verdict, by_trade, by_rule}, accuracy: {overall, by_trade, by_rule} (pass / (pass+fail+missing+extra)), review: {accepted, rejected, open, deferred, false_alarm_rate}, prescreen, planted?: {total, caught, missed, recall, errors}, runs, next}: how far the run is and how the model scores",
             )
             .noundo(),
         CommandSpec::new(CMD_PLANT, "Plant Validation Errors", run_plant)
@@ -88,6 +91,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 "{count?: 1-50 (6), kinds?: [move|delete|duct_size|panel_mount|fan_room|drop_gfci], seed?: n (1)} → {copy, planted, by_kind, not_planted, seed}: opens a copy of the drawing with known errors planted (a device moved 3 ft, one deleted, a duct size changed, a panel's mounting flipped, a fan moved to the next room, a GFCI type dropped); they are recorded in the copy only; run validate on the copy and validate.status says which were caught",
             )
             .noundo(),
+        CommandSpec::new(CMD_CANCEL, "Cancel Validation Run", run_cancel).params(
+            "{run?: id (the latest)} → {run, cancelled: true, areas, changed}: stops handing out the run's areas (validate.next refuses it and the status bar stops waiting for an agent); the findings already reported stay, and validate with the same scope, trades and rules resumes it",
+        ),
     ]
 }
 
@@ -117,6 +123,8 @@ struct Run {
     areas: Vec<RunArea>,
     /// Areas the scope had past the cap.
     left_out: usize,
+    /// Cancelled (`validate.cancel`): no areas are handed out until `validate` resumes it.
+    cancelled: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -577,7 +585,7 @@ fn remaining(run: &Run) -> usize {
 /// Whether the active drawing has a run with areas left that the app started.
 fn waiting_run(d: &Drawing) -> Option<String> {
     let st = load(d);
-    st.runs.iter().filter(|r| r.by == "user" && remaining(r) > 0).max_by_key(|r| r.started).map(|r| r.id.clone())
+    st.runs.iter().filter(|r| r.by == "user" && !r.cancelled && remaining(r) > 0).max_by_key(|r| r.started).map(|r| r.id.clone())
 }
 
 /// What the status bar says about Validate: [`WAITING`] while a run started in the app has areas
@@ -661,6 +669,7 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
         prescreen: pre.clone(),
         areas: run_areas,
         left_out,
+        cancelled: false,
     };
     let pending = remaining(&run);
     let listed: Vec<Value> = run.areas.iter().map(|a| json!({"id": a.id, "status": a.status})).collect();
@@ -716,6 +725,24 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+// ---------------------------------------------------------------- validate.cancel
+
+fn run_cancel(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = CMD_CANCEL;
+    let mut st = load(s.doc()?);
+    let id = run_param(CMD, &st, p)?.id.clone();
+    let i = run_index(&st, &id).ok_or_else(|| bad(CMD, format!("there is no validate run {id}")))?;
+    let Some(run) = st.runs.get_mut(i) else { return Err(bad(CMD, format!("there is no validate run {id}"))) };
+    let changed = !run.cancelled;
+    run.cancelled = true;
+    let areas = area_counts(run);
+    if changed {
+        save(s, &st)?;
+        s.event("validate.cancelled", json!({"run": id}));
+    }
+    Ok(json!({"run": id, "cancelled": true, "areas": areas, "changed": changed, "next": "validate (the same scope resumes it)"}))
+}
+
 // ---------------------------------------------------------------- validate.next
 
 fn read_json(path: &std::path::Path) -> Option<Value> {
@@ -726,6 +753,9 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = CMD_NEXT;
     let mut st = load(s.doc()?);
     let run = run_param(CMD, &st, p)?.clone();
+    if run.cancelled {
+        return Err(bad(CMD, format!("run {} was cancelled: validate with the same scope resumes it", run.id)));
+    }
     let want = str_param(p, "area").map(str::trim).filter(|a| !a.is_empty());
     let pick = match want {
         Some(a) => Some(
@@ -1259,6 +1289,8 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = json!({
         "run": run.id,
         "scope": run.scope,
+        "trades": run.trades,
+        "rules": run.rules,
         "by": run.by,
         "out_dir": run.out_dir,
         "areas": area_counts(run),
@@ -1287,7 +1319,12 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(plant) = plant_of(d) {
         out["planted"] = planted_report(&plant, run, &all, reveal);
     }
-    if run.by == "user" && left > 0 && !s.events.on {
+    if run.cancelled {
+        out["cancelled"] = json!(true);
+        if left > 0 {
+            out["next"] = json!("validate (the same scope resumes it)");
+        }
+    } else if run.by == "user" && left > 0 && !s.events.on {
         out["waiting"] = json!(WAITING);
     }
     if run.left_out > 0 {
