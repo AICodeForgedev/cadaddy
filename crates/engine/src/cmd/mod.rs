@@ -168,6 +168,7 @@ mod unittypes;
 pub mod validate;
 pub mod validate_packet;
 pub mod validate_rules;
+pub mod validate_run;
 pub mod verify;
 pub mod walkpub;
 pub mod wallgen;
@@ -796,6 +797,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(validate::specs());
         v.extend(validate_rules::specs());
         v.extend(validate_packet::specs());
+        v.extend(validate_run::specs());
         v.extend(printrev::specs());
         v.extend(ceilings::specs());
         v.extend(rfi::specs());
