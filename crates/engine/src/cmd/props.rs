@@ -281,7 +281,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         .get("thickness")
         .map(|v| v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("properties.set", "thickness must be a finite number")))
         .transpose()?;
-    let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("properties.set", "bad lineweight"))).transpose()?;
+    let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).map_err(|m| bad("properties.set", m))).transpose()?;
     let d = s.doc_mut()?;
     // An explicit object linetype must be ByLayer, ByBlock or a loaded definition (as `linetype current` requires).
     let linetype = str_param(p, "linetype")
@@ -663,19 +663,8 @@ fn run_linetype(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_lweight(s: &mut Session, p: &Value) -> Result<Value> {
     let v = p.get("lineweight").ok_or_else(|| bad("lweight", "`lineweight` is required"))?;
-    let code = match v.as_str().map(str::to_ascii_lowercase).as_deref() {
-        Some("bylayer") => -1,
-        Some("byblock") => -2,
-        Some("default") => -3,
-        _ => {
-            let mm = v.as_f64().or_else(|| v.as_str().and_then(|t| t.trim().trim_end_matches("mm").trim().parse().ok()));
-            (mm.filter(|m: &f64| m.is_finite()).ok_or_else(|| bad("lweight", "Enter a lineweight in millimetres, ByLayer, ByBlock or Default."))?
-                * 100.0)
-                .round()
-                .clamp(0.0, 211.0) as i64
-        }
-    };
-    s.doc_mut()?.header.set_i64("CELWEIGHT", code);
+    let code = super::layer::parse_lw(v).map_err(|m| bad("lweight", m))?.to_dxf();
+    s.doc_mut()?.header.set_i64("CELWEIGHT", i64::from(code));
     ok()
 }
 

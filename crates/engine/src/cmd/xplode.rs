@@ -44,7 +44,7 @@ impl Options {
             Some(l) => Some(d.linetype(l).map(|x| x.name.clone()).ok_or_else(|| EngineError::Other(format!("Linetype {l} not found.")))?),
             None => None,
         };
-        let lineweight = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("xplode", "bad lineweight"))).transpose()?;
+        let lineweight = p.get("lineweight").map(|v| super::layer::parse_lw(v).map_err(|m| bad("xplode", m))).transpose()?;
         let inherit = p.get("inherit").and_then(Value::as_bool).unwrap_or(false);
         Ok(Options { color, layer, linetype, lineweight, inherit })
     }

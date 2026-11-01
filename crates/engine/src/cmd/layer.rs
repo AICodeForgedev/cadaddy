@@ -163,16 +163,54 @@ pub fn used_layers(d: &cadaddy_doc::Drawing) -> std::collections::HashSet<String
     set
 }
 
-pub(super) fn parse_lw(v: &Value) -> Option<Lineweight> {
-    if let Some(f) = v.as_f64() {
-        return Some(Lineweight::Mm100((f * 100.0).round().clamp(0.0, 211.0) as u16));
+/// A lineweight parameter, as AutoCAD takes one: ByLayer, ByBlock, Default (or their codes -1,
+/// -2, -3), a standard weight in millimetres (0.25, "0.25 mm") or the same weight as a whole
+/// number of hundredths of a millimetre (25). Anything else (non-standard, out of range, nan,
+/// inf) is refused with the allowed list. Whole numbers up to 2 read as millimetres (1 = 1.00 mm).
+pub(super) fn parse_lw(v: &Value) -> std::result::Result<Lineweight, String> {
+    let refused = || format!("{v} is not a lineweight; {}", lineweight_choices());
+    let (x, mm_only) = match v {
+        Value::Number(n) => (n.as_f64(), false),
+        Value::String(t) => {
+            let t = t.trim();
+            match t.to_ascii_lowercase().as_str() {
+                "bylayer" => return Ok(Lineweight::ByLayer),
+                "byblock" => return Ok(Lineweight::ByBlock),
+                "default" => return Ok(Lineweight::Default),
+                l => match l.strip_suffix("mm") {
+                    Some(mm) => (mm.trim().parse::<f64>().ok(), true),
+                    None => (l.parse::<f64>().ok(), false),
+                },
+            }
+        }
+        _ => (None, false),
+    };
+    let x = x.filter(|x| x.is_finite()).ok_or_else(refused)?;
+    let standard = |w: f64| Lineweight::STANDARD.iter().copied().find(|s| (f64::from(*s) - w).abs() < 1e-6);
+    if x <= 2.11 + 1e-9
+        && let Some(w) = standard(x * 100.0)
+    {
+        return Ok(Lineweight::Mm100(w));
     }
-    match v.as_str()?.to_ascii_lowercase().as_str() {
-        "bylayer" => Some(Lineweight::ByLayer),
-        "byblock" => Some(Lineweight::ByBlock),
-        "default" => Some(Lineweight::Default),
-        s => s.trim_end_matches("mm").trim().parse::<f64>().ok().map(|f| Lineweight::Mm100((f * 100.0).round().clamp(0.0, 211.0) as u16)),
+    if !mm_only && x.fract() == 0.0 {
+        match x as i64 {
+            -1 => return Ok(Lineweight::ByLayer),
+            -2 => return Ok(Lineweight::ByBlock),
+            -3 => return Ok(Lineweight::Default),
+            _ => {
+                if let Some(w) = standard(x) {
+                    return Ok(Lineweight::Mm100(w));
+                }
+            }
+        }
     }
+    Err(refused())
+}
+
+/// The allowed lineweights, for refusal messages.
+pub(super) fn lineweight_choices() -> String {
+    let mm: Vec<String> = Lineweight::STANDARD.iter().map(|w| format!("{:.2}", f64::from(*w) / 100.0)).collect();
+    format!("use ByLayer, ByBlock, Default or a standard lineweight in mm ({}) or in 1/100 mm (0-211)", mm.join(", "))
 }
 
 fn apply(l: &mut Layer, p: &Value) -> Result<()> {
@@ -209,7 +247,7 @@ fn apply(l: &mut Layer, p: &Value) -> Result<()> {
         l.linetype = lt.to_string();
     }
     if let Some(lw) = p.get("lineweight") {
-        l.lineweight = parse_lw(lw).ok_or_else(|| bad("layer", "bad lineweight"))?;
+        l.lineweight = parse_lw(lw).map_err(|m| bad("layer", m))?;
     }
     if let Some(t) = p.get("transparency").and_then(Value::as_u64) {
         l.transparency = t.min(90) as u8;
