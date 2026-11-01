@@ -363,7 +363,8 @@ fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
 
 // ---------------- model.issues ----------------
 
-struct Finding {
+#[derive(Clone)]
+pub(crate) struct Finding {
     kind: &'static str,
     message: String,
     level: Option<String>,
@@ -388,7 +389,7 @@ impl Finding {
     }
 }
 
-fn issues(s: &Session) -> Result<Vec<Finding>> {
+fn issues(s: &Session) -> Result<(Vec<Finding>, usize)> {
     let (sp, _) = current(s, "model.issues")?;
     let upf = units(&sp);
     let plan = plan_session(s)?;
@@ -397,7 +398,9 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
     let ents = plan_objects(pd);
     let made = built(d);
     let mut out: Vec<Finding> = Vec::new();
+    let mut total = 0usize;
     let mut push = |f: Finding| {
+        total += 1;
         if out.len() < MAX_FINDINGS {
             out.push(f);
         }
@@ -615,7 +618,28 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
             handles: hs,
         });
     }
-    Ok(out)
+    Ok((out, total))
+}
+
+/// `model.issues`' findings for one revision of one drawing (the session keeps the last).
+pub(crate) struct IssuesCache {
+    uid: u64,
+    revision: u64,
+    found: Vec<Finding>,
+    /// Every finding, also those past [`MAX_FINDINGS`].
+    total: usize,
+}
+
+/// The findings of the drawing as it is now: from the session's cache when it was checked at
+/// this revision, else found and kept.
+fn issues_now(s: &mut Session) -> Result<(Vec<Finding>, usize)> {
+    let (uid, revision) = s.state().map(|st| (st.uid, st.revision))?;
+    if let Some(c) = s.issues_cache.as_ref().filter(|c| c.uid == uid && c.revision == revision) {
+        return Ok((c.found.clone(), c.total));
+    }
+    let (found, total) = issues(s)?;
+    s.issues_cache = Some(Box::new(IssuesCache { uid, revision, found: found.clone(), total }));
+    Ok((found, total))
 }
 
 /// How far a plan point is outside a box (0 inside).
@@ -645,7 +669,7 @@ fn fmt_pt(p: Vec2) -> String {
 
 fn run_issues(s: &mut Session, p: &Value) -> Result<Value> {
     let kind = str_param(p, "kind");
-    let all = issues(s)?;
+    let (all, found) = issues_now(s)?;
     let mut by: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for f in &all {
         *by.entry(f.kind).or_insert(0) += 1;
@@ -657,6 +681,10 @@ fn run_issues(s: &mut Session, p: &Value) -> Result<Value> {
     let matching: Vec<&Finding> = all.iter().filter(|f| kind.is_none_or(|k| k.eq_ignore_ascii_case(f.kind))).collect();
     let list: Vec<Value> = matching.iter().skip(from).take(limit).map(|f| f.json()).collect();
     let mut out = json!({ "total": matching.len(), "issues": list, "byKind": by });
+    // Past the cap: how many there are, and that the list stops.
+    if found > all.len() {
+        out["truncated"] = json!({"found": found, "listed": all.len(), "note": format!("only the first {MAX_FINDINGS} issues are kept; fix those, or filter by kind")});
+    }
     if from.saturating_add(limit) < matching.len() {
         out["next"] = json!(from + limit);
     }
@@ -769,7 +797,15 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         .transpose()?;
     // A room: its outline on the plan, and its level.
     let mut room: Option<(Vec<Vec2>, String)> = None;
-    if let Some(name) = str_param(p, "room") {
+    if let Some(name) = str_param(p, "room")
+        && let Some(r) = super::bspec::room_elements(d).into_iter().find(|r| {
+            r.outline.len() >= 3
+                && (r.name.eq_ignore_ascii_case(name.trim()) || r.number.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name.trim())))
+        })
+    {
+        // A built room has its outline: no plan trace of every room.
+        room = Some((r.outline.clone(), r.level.clone()));
+    } else if let Some(name) = str_param(p, "room") {
         let plan = plan_session(s)?;
         let rs = rooms(&plan, &sp)?;
         let spec_room = sp.rooms.iter().find(|r| names_room(r, name));

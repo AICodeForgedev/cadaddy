@@ -137,6 +137,8 @@ pub mod keys {
     pub const DIMENSIONS: &str = "dimensions";
     pub const REVIEW_STATUS: &str = "reviewStatus";
     pub const SUBMITTAL_SOURCE: &str = "submittalSource";
+    /// How the product dims: "0-10V", "phase", "DALI", "non-dim" (from its submittal).
+    pub const DIMMING: &str = "dimming";
 }
 
 // ── BIM type ────────────────────────────────────────────────────────────────

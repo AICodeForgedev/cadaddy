@@ -535,6 +535,9 @@ const ROOM_WORDS: &[&str] = &[
     "DESK",
     "LIBRARY",
     "CLASSROOM",
+    // Back of house; the trades' name for an equipment room.
+    "BOH",
+    "MEP",
 ];
 
 /// Words of equipment and device tags, never a room's name (`PNLBD 'D'`, `XFMR T1`, `DISC`).
@@ -929,6 +932,17 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_short_room_name_is_no_device_mark() {
+        // Back of house and the trades' equipment room: rooms, though shaped like a device mark.
+        for t in ["BOH", "MEP", "RR", "IDF"] {
+            assert!(!equipment_tag(t) && room_name_score(t) > 0, "{t}");
+        }
+        for t in ["XA", "EF", "J"] {
+            assert!(equipment_tag(t), "{t}");
+        }
+    }
 
     #[test]
     fn a_parenthesised_line_is_the_name_above_it_qualified() {

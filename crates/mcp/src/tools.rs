@@ -235,7 +235,7 @@ fn bim_job_next(call: &str) -> Value {
         action("build", json!({}))
     } else if call.starts_with("review.next") {
         action("review_next", json!({}))
-    } else if call.starts_with("takeoff") {
+    } else if call.starts_with("bim.takeoff") || call.starts_with("takeoff") {
         action("takeoff", json!({}))
     } else if call.starts_with("printset.open") {
         action("import", json!({"path": "<the folder of prints>"}))
@@ -280,7 +280,8 @@ fn bim_job_action(b: &mut dyn Backend, action: Option<&str>, params: Value) -> R
         Some("rfi") => "review.rfi_draft",
         Some("batch") => "review.batch",
         Some("log") => "review.log",
-        Some("takeoff") => "takeoff",
+        // The model's quantities (by level and trade), not the 2D linework lengths.
+        Some("takeoff") => "bim.takeoff",
         Some("export") => "export",
         Some("rfis") => {
             // The RFI list: exported in full with a path, else a compact page.

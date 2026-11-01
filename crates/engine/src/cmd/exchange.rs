@@ -618,6 +618,10 @@ pub(crate) fn import_pdf_pages(
     let mut seen: BTreeMap<u64, usize> = BTreeMap::new();
     let mut x = 0.0f64;
     for (c, chunk) in pages.chunks(batch).enumerate() {
+        // A job's cancel stops the import at a page boundary.
+        if super::guided::cancel_requested() {
+            return Err(bad("pdfimport", "cancelled"));
+        }
         #[cfg(not(target_arch = "wasm32"))]
         let converted: Vec<std::result::Result<(Drawing, Value), String>> = {
             use rayon::prelude::*;
@@ -626,6 +630,10 @@ pub(crate) fn import_pdf_pages(
         #[cfg(target_arch = "wasm32")]
         let converted: Vec<std::result::Result<(Drawing, Value), String>> = chunk.iter().map(convert).collect();
         for (j, (pg, r)) in chunk.iter().zip(converted).enumerate() {
+            // ...and at each page of a batch (a set's few sheets are one batch).
+            if super::guided::cancel_requested() {
+                return Err(bad("pdfimport", "cancelled"));
+            }
             let i = c * batch + j;
             let result = match r {
                 Err(e) => PageImport::Failed(e),

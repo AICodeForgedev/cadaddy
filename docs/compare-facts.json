@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1181,
-    "count": 1181,
+    "callableAsJson": 1178,
+    "count": 1178,
     "ids": [
       "-attedit",
       "-block",
@@ -119,6 +119,7 @@
       "bim.clash.fix",
       "bim.clash.status",
       "bim.colour",
+      "bim.dimming",
       "bim.element",
       "bim.estimate",
       "bim.field.link",
@@ -145,6 +146,7 @@
       "bim.source",
       "bim.spec_accept",
       "bim.spec_import",
+      "bim.submittals",
       "bim.takeoff",
       "bim.takeoff.show",
       "bim.trades",
@@ -817,14 +819,8 @@
       "project.add",
       "project.briefing",
       "project.close",
-      "project.company.list",
-      "project.company.remove",
-      "project.company.set",
       "project.create",
-      "project.delete",
       "project.disk",
-      "project.drawings",
-      "project.duplicate",
       "project.import_manifest",
       "project.info",
       "project.list",
@@ -1149,6 +1145,7 @@
       "wall.info",
       "wallgen",
       "wallgen.plan",
+      "walls.legend",
       "walls.read",
       "wblock",
       "wedge",
@@ -1185,7 +1182,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 523,
+    "inMenus": 525,
     "typed": 563
   },
   "features": {

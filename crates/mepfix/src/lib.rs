@@ -41,6 +41,7 @@ pub mod envelope;
 pub mod envelope_reader;
 pub mod equip_reader;
 pub mod finishes;
+pub mod fixture_schedule;
 pub mod framing;
 pub mod gaps;
 pub mod gear_reader;
