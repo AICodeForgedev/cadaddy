@@ -2,8 +2,8 @@
 //! (by name or ACTPLAY) reproduces the drawing; asked inputs, base points and messages; macro
 //! files in the actions folder; the manager's list, ask, rename and delete.
 
-use cadaddy_engine::Session;
 use cadaddy_engine::doc::EntityKind;
+use cadaddy_engine::{Input, Session};
 use serde_json::{Value, json};
 
 /// The model's objects as comparable text (kind and geometry).
@@ -171,4 +171,76 @@ fn a_recording_survives_the_journal_letting_its_oldest_lines_go() {
     s.execute("new", &json!({})).unwrap();
     s.execute("actplay", &json!({ "name": "survivor" })).unwrap();
     assert_eq!(shapes(&s), before);
+}
+
+#[test]
+fn objects_picked_while_recording_are_reported_not_silently_lost() {
+    let mut s = Session::new();
+    s.execute("line", &json!({ "points": [[0, 0], [10, 0]] })).unwrap();
+    let h = s.doc().unwrap().model.iter().next().unwrap().handle;
+    s.execute("actrecord", &json!({})).unwrap();
+    s.cmdline("erase").unwrap();
+    s.input(Input::Pick(vec![h])).unwrap();
+    s.input(Input::Enter).unwrap();
+    let from = s.log.len();
+    let r = s.execute("actstop", &json!({ "name": "Picky" })).unwrap();
+    assert_eq!(r["droppedPicks"], 1, "{r}");
+    assert!(s.log[from..].iter().any(|l| l.contains("Warning") && l.contains("not recorded")), "{:?}", &s.log[from..]);
+    // The macro carries a marker at the place, between the command and its Enter.
+    let steps = r["steps"].as_array().unwrap();
+    let marker = steps.iter().position(|st| st["message"].as_str().is_some_and(|m| m.contains("not recorded"))).expect("a marker step");
+    assert_eq!(steps[marker - 1]["input"], "erase", "{r}");
+    assert_eq!(steps[marker + 1]["input"], "", "{r}");
+    // Playing it tells the user.
+    s.execute("new", &json!({})).unwrap();
+    let from = s.log.len();
+    s.execute("actplay", &json!({ "name": "Picky" })).unwrap();
+    assert!(s.log[from..].iter().any(|l| l.contains("not recorded")), "{:?}", &s.log[from..]);
+    // A recording with no picks reports 0, and a cancelled pick isn't counted.
+    s.execute("line", &json!({ "points": [[0, 0], [10, 0]] })).unwrap();
+    let h = s.doc().unwrap().model.iter().next().unwrap().handle;
+    record(&mut s, &["circle", "*0,0", "1"]);
+    s.cmdline("move").unwrap();
+    s.input(Input::Pick(vec![h])).unwrap();
+    s.input(Input::Cancel).unwrap();
+    let r = s.execute("actstop", &json!({ "name": "Plain" })).unwrap();
+    assert_eq!(r["droppedPicks"], 0, "{r}");
+    assert!(r["steps"].as_array().unwrap().iter().all(|st| st["message"].is_null()), "{r}");
+}
+
+#[test]
+fn renaming_onto_an_existing_macro_is_refused_and_changes_nothing() {
+    let dir = std::env::temp_dir().join(format!("cadaddy-actions-rename-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = Session::new();
+    s.set_action_dir(Some(dir.clone()));
+    record(&mut s, &["circle", "*0,0", "1"]);
+    s.execute("actstop", &json!({ "name": "Alpha" })).unwrap();
+    record(&mut s, &["circle", "*5,5", "2"]);
+    s.execute("actstop", &json!({ "name": "Beta" })).unwrap();
+    let (fa, fb) = (dir.join("alpha.cdyact"), dir.join("beta.cdyact"));
+    let (ta, tb) = (std::fs::read(&fa).unwrap(), std::fs::read(&fb).unwrap());
+    let (ma, mb) = (s.action_macro("alpha").unwrap(), s.action_macro("beta").unwrap());
+    let e = s.execute("actions", &json!({ "action": "rename", "name": "Alpha", "to": "beta" })).unwrap_err();
+    assert!(e.user_message().contains("already") && e.user_message().contains("beta"), "{}", e.user_message());
+    assert_eq!(std::fs::read(&fa).unwrap(), ta, "Alpha's file is unchanged");
+    assert_eq!(std::fs::read(&fb).unwrap(), tb, "Beta's file is unchanged");
+    assert_eq!(s.action_macro("alpha").unwrap(), ma);
+    assert_eq!(s.action_macro("beta").unwrap(), mb);
+    // A macro only in the folder (another session's) is protected too.
+    let mut t = Session::new();
+    t.set_action_dir(Some(dir.clone()));
+    assert!(t.execute("actions", &json!({ "action": "rename", "name": "Alpha", "to": "Beta" })).is_err());
+    assert_eq!(std::fs::read(&fb).unwrap(), tb);
+    // A write error keeps the old name and file: the new name's file is a folder.
+    std::fs::create_dir(dir.join("gamma.cdyact")).unwrap();
+    assert!(s.execute("actions", &json!({ "action": "rename", "name": "Alpha", "to": "Gamma" })).is_err());
+    assert_eq!(std::fs::read(&fa).unwrap(), ta, "Alpha keeps its file when the write fails");
+    assert_eq!(s.action_macro("alpha").unwrap(), ma);
+    std::fs::remove_dir(dir.join("gamma.cdyact")).unwrap();
+    // A free name still works: the new file exists, the old one is gone.
+    s.execute("actions", &json!({ "action": "rename", "name": "Alpha", "to": "Delta" })).unwrap();
+    assert!(dir.join("delta.cdyact").is_file() && !fa.exists());
+    assert!(s.action_macro("alpha").is_none());
+    std::fs::remove_dir_all(&dir).ok();
 }

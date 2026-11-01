@@ -26,10 +26,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Insert", "DGN Underlay..."])
             .params("{path, at?: [x,y] (default: where the design's own coordinates put it), scale?: 1, rotation?: degrees, name?} → {handle, size, levels}")
             .interactive(|_| Ok(Box::new(PathM { name: "DGNATTACH", ask: "Enter path of DGN file to attach", run: run_attach }))),
-        CommandSpec::new("dgnclip", "Clip DGN Underlay", super::underlay::clip)
+        CommandSpec::new("dgnclip", "Clip DGN Underlay", |s, p| super::underlay::clip(s, p, "dgnclip"))
             .params("{handle?, rect?: [[x1,y1],[x2,y2]] | points?: [[x,y]…], off?, on?, delete?} (default: the selected underlay)"),
-        CommandSpec::new("dgnadjust", "Adjust DGN Underlay", super::underlay::adjust).params("{handles?, fade?: 0-80, contrast?: 20-100, monochrome?: bool}"),
-        CommandSpec::new("dgnlayers", "DGN Underlay Levels", super::underlay::layers).params("{handle?, off?: [level], on?: [level]} → {layers: [{name, on}]}: the design's levels"),
+        CommandSpec::new("dgnadjust", "Adjust DGN Underlay", |s, p| super::underlay::adjust(s, p, "dgnadjust")).params("{handles?, fade?: 0-80, contrast?: 20-100, monochrome?: bool}"),
+        CommandSpec::new("dgnlayers", "DGN Underlay Levels", |s, p| super::underlay::layers(s, p, "dgnlayers")).params("{handle?, off?: [level], on?: [level]} → {layers: [{name, on}]}: the design's levels"),
     ]
 }
 

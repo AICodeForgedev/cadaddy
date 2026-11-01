@@ -483,6 +483,12 @@ fn layout(d: Option<&cadaddy_engine::doc::Drawing>, mt: &cadaddy_engine::doc::MT
     }
 }
 
+/// The text the layout makes of one atom's code: a stack's `top/bottom`, a non-breaking space's
+/// space, nothing for a formatting-only code.
+fn atom_plain(code: &str) -> String {
+    cadaddy_fonts::layout_mtext(code, Vec2::ZERO, 1.0, 0.0, 1, 0.0, 1.0).carets.iter().map(|l| l.text.as_str()).collect()
+}
+
 /// Margin round the text in the box, in points.
 const BOX_MARGIN: f32 = 6.0;
 
@@ -492,7 +498,7 @@ const BOX_MARGIN: f32 = 6.0;
 fn text_box(ui: &mut egui::Ui, st: &mut State, lay: &MTextLayout, k: f64, width: f32, t: &Tokens) {
     let id = edit_id();
     let mut buf = st.fmt.text().to_string();
-    let map = caret::CaretMap::new(&buf, lay.carets.clone());
+    let map = caret::CaretMap::with_atoms(&buf, lay.carets.clone(), |c| st.fmt.atom_code(c).map(atom_plain));
     // The text frame on screen: the layout's top-left corner at the box's, plus a margin.
     let (bx0, top) = if lay.bounds.is_empty() { (0.0, 0.0) } else { (lay.bounds.min.x, lay.bounds.max.y) };
     let line_px = (lay.carets.first().map_or(1.0, |l| l.height) * k * 5.0 / 3.0) as f32;

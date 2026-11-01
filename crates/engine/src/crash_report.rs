@@ -156,8 +156,8 @@ fn journal_command_names(lines: &[String]) -> Vec<String> {
             if line.is_empty() {
                 return None;
             }
-            // Point inputs start with *.
-            if line.starts_with('*') {
+            // Point inputs start with *; a cancel and a comment marking a gap are not commands.
+            if line.starts_with('*') || line.starts_with(';') || line == crate::journal::CANCEL {
                 return None;
             }
             let first = line.split_whitespace().next()?;
@@ -349,9 +349,9 @@ mod tests {
         session.echo("SECRETKEYWORD: not found");
         // The journal holds command names.
         session.journal.started("line");
-        session.journal.ended(true);
+        session.journal.start_over(true, 0);
         session.journal.started("circle");
-        session.journal.ended(true);
+        session.journal.start_over(true, 0);
 
         record(&session, "hatch", "test panic");
 

@@ -152,6 +152,27 @@ fn filter_json(d: &Drawing, f: &LayerFilter) -> Value {
     v
 }
 
+/// A layer was renamed: group filters list it under its new name (AutoCAD's group filters follow
+/// the layer, not its name).
+pub(super) fn rename_in_groups(d: &mut Drawing, old: &str, new: &str) {
+    for f in &mut d.layer_filters {
+        if let LayerFilterKind::Group { layers } = &mut f.kind {
+            for l in layers.iter_mut().filter(|l| l.eq_ignore_ascii_case(old)) {
+                *l = new.to_string();
+            }
+        }
+    }
+}
+
+/// Layers (lower-case names) were deleted or merged away: group filters stop listing them.
+pub(super) fn forget_in_groups(d: &mut Drawing, gone: &std::collections::HashSet<String>) {
+    for f in &mut d.layer_filters {
+        if let LayerFilterKind::Group { layers } = &mut f.kind {
+            layers.retain(|l| !gone.contains(&l.to_ascii_lowercase()));
+        }
+    }
+}
+
 pub(super) fn run_new(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").map(str::trim).ok_or_else(|| bad("layer.filter.new", "`name` is required"))?.to_string();
     if !valid_filter_name(&name) {

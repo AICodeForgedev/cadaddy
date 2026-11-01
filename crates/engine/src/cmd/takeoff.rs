@@ -29,7 +29,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Inquiry", "Quantity Takeoff"])
             .alias(&["qto"])
             .params(
-                "{mode?: \"length\" (default) | \"area\", handles? | layers?: \"E-*,P-*\" (wildcards; default: every object in the current space), waste?: percent added (default 0; the waste column is left out at 0), nested?: bool (default true: shapes inside block references, arrays and xrefs count, on the layer they are drawn on), clipped?: bool (default true: an XCLIP boundary limits what counts, as drawn; false counts whole blocks), file?: path (.csv; .txt tab-separated), at?: [x,y] (insert a table), title?} → {mode, unit, rows: [{layer, objects, drawing, real, withWaste}], total: {objects, drawing, real, withWaste}, columns, file?, table?}",
+                "{force?: bool (replace an existing file; otherwise it is refused), mode?: \"length\" (default) | \"area\", handles? | layers?: \"E-*,P-*\" (wildcards; default: every object in the current space), waste?: percent added (default 0; the waste column is left out at 0), nested?: bool (default true: shapes inside block references, arrays and xrefs count, on the layer they are drawn on), clipped?: bool (default true: an XCLIP boundary limits what counts, as drawn; false counts whole blocks), file?: path (.csv; .txt tab-separated), at?: [x,y] (insert a table), title?} → {mode, unit, rows: [{layer, objects, drawing, real, withWaste}], total: {objects, drawing, real, withWaste}, columns, file?, table?}",
             )
             // Undoable: `at` inserts a table, and U must take it away (the waste percentage it
             // remembers in the header goes back with it).
@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("takeoff.layers", "Layer Quantity Takeoff", run)
             .alias(&["qtolayers"])
             .params(
-                "{mode?: \"length\" (default) | \"area\", handles? | layers?: \"E-*,P-*\" (wildcards; default: every object in the current space), waste?: percent added (default 0; the waste column is left out at 0), nested?: bool (default true), clipped?: bool (default true), file?: path (.csv; .txt tab-separated), at?: [x,y] (insert a table), title?} → {mode, unit, rows: [{layer, objects, drawing, real, withWaste}], total: {objects, drawing, real, withWaste}, columns, file?, table?}",
+                "{force?: bool (replace an existing file; otherwise it is refused), mode?: \"length\" (default) | \"area\", handles? | layers?: \"E-*,P-*\" (wildcards; default: every object in the current space), waste?: percent added (default 0; the waste column is left out at 0), nested?: bool (default true), clipped?: bool (default true), file?: path (.csv; .txt tab-separated), at?: [x,y] (insert a table), title?} → {mode, unit, rows: [{layer, objects, drawing, real, withWaste}], total: {objects, drawing, real, withWaste}, columns, file?, table?}",
             )
             .interactive(|_| Ok(Box::new(TakeoffM::default()))),
     ]
@@ -253,7 +253,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Per layer (any case, first spelling kept): objects and total.
     let mut by_layer: BTreeMap<String, (String, u64, f64)> = BTreeMap::new();
-    for (layer, v) in shapes(s, p, mode)? {
+    let measured = shapes(s, p, mode)?;
+    // Stopped at the cap: the totals are of the shapes measured, and it says so.
+    let truncated = measured.len() >= MAX_SHAPES;
+    for (layer, v) in measured {
         let row = by_layer.entry(layer.to_ascii_uppercase()).or_insert_with(|| (layer.clone(), 0, 0.0));
         row.1 = row.1.saturating_add(1);
         row.2 += v;
@@ -292,6 +295,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     cells.push(row);
     let mut message = format!("{what} takeoff, {n} object(s) on {} layer(s):", rows.len());
+    if truncated {
+        message =
+            format!("{what} takeoff stopped at {MAX_SHAPES} shapes (the totals are of those; pick layers or handles to measure the rest)\n{message}");
+    }
     for r in &cells {
         let t = |i: usize| r.get(i).map(Cell::text).unwrap_or_default();
         let extra = if with_waste { format!("  ({} with waste)", t(4)) } else { String::new() };
@@ -305,8 +312,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         "total": { "objects": n, "drawing": round(total), "real": round(real), "withWaste": round(real * grow) },
         "columns": columns,
         "message": message,
+        "truncated": truncated,
     });
+    if truncated {
+        out["limit"] = json!(MAX_SHAPES);
+    }
     if let Some(path) = str_param(p, "file").filter(|f| !f.trim().is_empty()) {
+        super::exchange::guard_output(s, "takeoff", p, path)?;
         let tab = std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("txt"));
         write_file(path, &csv(&columns, &cells, if tab { '\t' } else { ',' }))?;
         out["file"] = json!(path);

@@ -54,3 +54,24 @@ fn one_coordinate_on_several_objects_keeps_each_ones_others() {
     assert!(matches!(get(&s, &l1), EntityKind::Line(l) if (l.a.x, l.a.y, l.b.x, l.b.y) == (0.0, -2.0, 20.0, 0.0)));
     assert!(matches!(get(&s, &l2), EntityKind::Line(l) if (l.a.x, l.a.y, l.b.x, l.b.y) == (1.0, -2.0, 20.0, 8.0)));
 }
+
+#[test]
+fn block_references_take_rotation_by_their_type_name() {
+    let mut s = Session::new();
+    let seed = h(&s.execute("line", &json!({"points": [[0, 0], [1, 0]]})).unwrap());
+    s.execute("block", &json!({"name": "Bolt", "base": [0, 0], "handles": [seed], "keep": "delete"})).unwrap();
+    let i1 = h(&s.execute("insert", &json!({"name": "Bolt", "at": [0, 0], "rotation": 10})).unwrap());
+    let i2 = h(&s.execute("insert", &json!({"name": "Bolt", "at": [5, 5], "rotation": 30})).unwrap());
+    let p1 = h(&s.execute("pline", &json!({"vertices": [[0, 0], [4, 0], [4, 4]]})).unwrap());
+    let p2 = h(&s.execute("pline", &json!({"vertices": [[1, 1], [3, 1]]})).unwrap());
+    let c = h(&s.execute("circle", &json!({"center": [2, 2], "radius": 1})).unwrap());
+    let get = |s: &Session, x: &str| s.doc().unwrap().entity(cadaddy_doc::Handle::parse_hex(x).unwrap()).unwrap().clone();
+    assert_eq!(get(&s, &i1).kind.type_name(), "Block Reference");
+    assert_eq!(get(&s, &p1).kind.type_name(), "Polyline");
+    let others: Vec<_> = [&p1, &p2, &c].iter().map(|x| get(&s, x)).collect();
+    s.execute("properties.set", &json!({"handles": [i1, i2, p1, p2, c], "type": "Block Reference", "rotation": 90})).unwrap();
+    for i in [&i1, &i2] {
+        assert!(matches!(&get(&s, i).kind, EntityKind::Insert(k) if (k.rotation.to_degrees() - 90.0).abs() < 1e-9));
+    }
+    assert_eq!(others, [&p1, &p2, &c].iter().map(|x| get(&s, x)).collect::<Vec<_>>());
+}

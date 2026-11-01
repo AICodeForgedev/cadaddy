@@ -735,7 +735,7 @@ fn run_bcf(s: &mut Session, p: &Value) -> Result<Value> {
         zip.finish().map_err(io)?;
     }
 
-    std::fs::write(path, &buf).map_err(|e| EngineError::Other(format!("BCF write: {e}")))?;
+    crate::writefile::write(path, &buf).map_err(|e| EngineError::Other(format!("BCF write: {e}")))?;
     Ok(json!({ "topics": clashes.len().min(1000), "path": path }))
 }
 

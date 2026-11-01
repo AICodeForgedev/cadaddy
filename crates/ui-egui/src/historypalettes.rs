@@ -69,6 +69,9 @@ pub fn save_script(app: &mut CadApp) {
         Some(Some(path)) => {
             if let Ok(r) = app.run("commandhistory", json!({ "action": "save", "path": path })) {
                 app.session.echo(format!("{} lines saved to {}.", r["lines"], r["path"].as_str().unwrap_or_default()));
+                if let Some(w) = gap_warning(&r) {
+                    app.session.echo(w);
+                }
             }
         }
         Some(None) => {}
@@ -76,16 +79,20 @@ pub fn save_script(app: &mut CadApp) {
     }
 }
 
+/// The warning for a session that holds inputs a script can't redo (picked objects, selections made
+/// outside a command): the message of a COMMANDHISTORY result, as the engine words it.
+fn gap_warning(r: &Value) -> Option<String> {
+    r["unscriptable"].as_u64().filter(|n| *n > 0)?;
+    r["message"].as_str().map(|m| format!("Warning: {m}"))
+}
+
 /// The Command History window.
 pub fn commands_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = crate::theme::Tokens::get();
     let mut st: State = ctx.data(|d| d.get_temp(id())).unwrap_or_default();
-    let lines: Vec<String> = app
-        .session
-        .execute("commandhistory", &json!({ "filter": st.filter }))
-        .ok()
-        .and_then(|v| serde_json::from_value(v["lines"].clone()).ok())
-        .unwrap_or_default();
+    let listing = app.session.execute("commandhistory", &json!({ "filter": st.filter })).unwrap_or(Value::Null);
+    let lines: Vec<String> = serde_json::from_value(listing["lines"].clone()).unwrap_or_default();
+    let warning = gap_warning(&listing);
     let mut rerun: Option<String> = None;
     let (mut copy, mut save, mut clear) = (false, false, false);
     egui::Window::new(crate::tl!("Command History"))
@@ -113,6 +120,9 @@ pub fn commands_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     r.on_hover_text(crate::tl!("Double-click to run it again"));
                 }
             });
+            if let Some(w) = &warning {
+                ui.label(RichText::new(w).small().color(t.text_dim));
+            }
             ui.horizontal(|ui| {
                 copy = ui.button(crate::tl!("Copy as Script")).clicked();
                 save = ui.button(crate::tl!("Save Session as Script...")).clicked();
@@ -126,6 +136,9 @@ pub fn commands_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         let mut text = lines.join("\n");
         text.push('\n');
         ctx.copy_text(text);
+        if let Some(w) = warning {
+            app.session.echo(w);
+        }
     }
     if save {
         save_script(app);
@@ -160,5 +173,19 @@ mod tests {
         assert_eq!(app.ui.dialog.as_deref(), Some("commandhistory"));
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| crate::dialogs::show(&mut app, ui.ctx()));
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_session_with_inputs_a_script_cannot_redo_warns_on_save_and_copy() {
+        let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+        app.cmdline("line 0,0 10,0 ");
+        let h = app.session.doc().unwrap().model.iter().next().unwrap().handle;
+        let listing = app.session.execute("commandhistory", &json!({})).unwrap();
+        assert!(gap_warning(&listing).is_none(), "a whole session needs no warning");
+        app.session.set_selection(vec![h]);
+        app.cmdline("erase ");
+        let listing = app.session.execute("commandhistory", &json!({})).unwrap();
+        let w = gap_warning(&listing).expect("the selection made outside a command is reported");
+        assert!(w.starts_with("Warning:") && w.contains("cannot be replayed"), "{w}");
     }
 }

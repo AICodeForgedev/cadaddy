@@ -44,18 +44,14 @@ fn number(n: f64) -> String {
     if n.fract() == 0.0 && n.abs() < 1e15 { format!("{}", n as i64) } else { format!("{n}") }
 }
 
-fn numbered(old: &str, n: &str, place: &Place, mtext: bool) -> String {
+fn numbered(old: &str, n: &str, place: &Place) -> String {
     match place {
         Place::Overwrite => n.to_string(),
         Place::Prefix => format!("{n} {old}"),
         Place::Suffix => format!("{old} {n}"),
         Place::Find(f) if f.is_empty() => old.to_string(),
-        // In MTEXT the number goes in as plain text: braces and backslashes can't appear in it.
         Place::Find(f) => old.replace(f.as_str(), n),
     }
-    .chars()
-    .filter(|c| !mtext || !matches!(c, '{' | '}'))
-    .collect()
 }
 
 fn order(s: &Session, hs: &[Handle], sort: Sort) -> Result<Vec<(Handle, Vec2)>> {
@@ -88,8 +84,8 @@ fn count(s: &mut Session, hs: &[Handle], sort: Sort, start: f64, step: f64, plac
         n += step;
         let d = s.doc_mut()?;
         d.modify_entity(h, |e| match &mut e.kind {
-            EntityKind::Text(t) => t.value = numbered(&t.value, &label, place, false),
-            EntityKind::MText(t) => t.contents = numbered(&t.contents, &label, place, true),
+            EntityKind::Text(t) => t.value = numbered(&t.value, &label, place),
+            EntityKind::MText(t) => t.contents = numbered(&t.contents, &label, place),
             _ => {}
         })?;
         out.push(h.hex());

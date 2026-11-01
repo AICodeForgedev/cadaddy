@@ -3,7 +3,7 @@
 use std::sync::{Mutex, MutexGuard};
 
 use cadaddy_engine::Session;
-use cadaddy_engine::cmd::propfill::{cfm_in, door_number, mount_height_in, panel_of};
+use cadaddy_engine::cmd::propfill::{cfm_in, door_number, mount_height_in, panel_of, split_switch_leg};
 use cadaddy_engine::cmd::wallgen::made_as;
 use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Handle, Line, RawTag};
 use cadaddy_engine::geom::{Vec2, Vec3};
@@ -227,6 +227,79 @@ fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location
 }
 
 #[test]
+fn a_legend_row_of_another_kind_of_device_is_not_a_switchs_height() {
+    let mut s = plan();
+    // The legend's S row is a speaker/strobe's (a fire alarm sheet's mark), not the switch's.
+    text(&mut s, "E-ANNO", [900.0, 250.0], "S");
+    text(&mut s, "E-ANNO", [940.0, 250.0], "SPEAKER/STROBE +80\" AFF");
+    s.execute("model.build", &json!({})).expect("build");
+    let sw = device_of(&mut s, "S");
+    assert_eq!(sw["mount_height"]["value"], json!(48.0), "{sw:#}");
+    assert_eq!(sw["mount_height"]["source"]["kind"], "default");
+}
+
+#[test]
+fn a_luminaire_hangs_at_the_ceiling_over_it() {
+    let mut s = plan();
+    // A luminaire by its submittal, in office 101 under its 9' ceiling; no height printed.
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(t) = spec["tags"].as_array_mut() {
+        let mut lum = device(8.0, 5.0, "Q7", "", "1FA");
+        lum["fields"]["mount"] = json!({"value": "ceiling", "source": "submittal"});
+        t.push(lum);
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let q7 = device_of(&mut s, "Q7");
+    assert_eq!(q7["mount_height"]["value"], json!(108.0), "at the 9' ceiling: {q7:#}");
+    assert_eq!(q7["mount_height"]["source"]["kind"], "rule");
+    // The legend's A (a receptacle at +20") is no luminaire's height: an A by its submittal hangs
+    // at the ceiling all the same.
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(t) = spec["tags"].as_array_mut() {
+        let mut lum = device(12.0, 5.0, "A", "", "1FB");
+        lum["fields"]["mount"] = json!({"value": "ceiling", "source": "submittal"});
+        t.push(lum);
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    // An exit sign by its submittal: on the wall at 7'-6".
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(t) = spec["tags"].as_array_mut() {
+        let mut exit = device(15.0, 9.2, "XA", "", "1FC");
+        exit["fields"]["mount"] = json!({"value": "wall", "source": "submittal"});
+        t.push(exit);
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let xa = device_of(&mut s, "XA");
+    assert_eq!(xa["mount_height"]["value"], json!(90.0), "{xa:#}");
+    assert_eq!(xa["mount_height"]["source"]["kind"], "rule");
+    let hs = find(&mut s, "device", json!({"type_mark": "A"}));
+    let heights: Vec<Value> = hs.iter().map(|h| get(&mut s, h)["mount_height"]["value"].clone()).collect();
+    assert!(heights.contains(&json!(20.0)) && heights.contains(&json!(108.0)), "the receptacle at +20\", the luminaire at the ceiling: {heights:?}");
+}
+
+#[test]
+fn a_switch_is_on_the_wall_it_stands_by() {
+    let mut s = plan();
+    // A dimmer read 2.5' off office 101's north wall (at its designation, beside the symbol), and
+    // a junction box as far off the south wall: the switch is on its wall, the box isn't.
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(t) = spec["tags"].as_array_mut() {
+        t.push(device(10.0, 7.0, "SD", "", "1F8"));
+        t.push(device(15.0, 3.0, "JB", "", "1F9"));
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    fill(&mut s);
+    let sd = device_of(&mut s, "SD");
+    assert!(sd["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()), "the dimmer is on its wall: {sd:#}");
+    let jb = device_of(&mut s, "JB");
+    assert!(jb["host_wall"].is_null(), "a box 2.5' off a wall is not on it: {jb:#}");
+}
+
+#[test]
 fn a_device_read_on_a_trade_sheet_lands_on_its_levels_architectural_plan() {
     let mut s = plan_with(true);
     let r = fill(&mut s);
@@ -418,6 +491,9 @@ fn the_text_readers() {
     assert_eq!(panel_of("H1/7"), Some("H1".into()));
     assert_eq!(panel_of("12"), None);
     assert_eq!(panel_of("1-3"), None, "no letters: not a panel name");
+    assert_eq!(split_switch_leg("A-1,a"), ("A-1".into(), Some("a".into())));
+    assert_eq!(split_switch_leg("LP-3,5"), ("LP-3,5".into(), None), "two circuits, no leg");
+    assert_eq!(split_switch_leg("D-7"), ("D-7".into(), None));
     for t in ["101", "101A", "D-12", "1-104B"] {
         assert!(door_number(t), "{t}");
     }

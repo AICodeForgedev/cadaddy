@@ -8,6 +8,15 @@ fn circle(s: &mut Session) -> String {
     s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap()["handle"].as_str().unwrap().to_string()
 }
 
+/// A unit circle at `at`, put straight into the drawing; its handle.
+fn far_circle(s: &mut Session, at: [f64; 2]) -> String {
+    use cadaddy_engine::doc::{Circle, Common, EntityKind, Space};
+    let circle = Circle { center: cadaddy_engine::geom::Vec3::new(at[0], at[1], 0.0), radius: 1.0 };
+    let st = s.state_mut().unwrap();
+    let h = std::sync::Arc::make_mut(&mut st.doc).add(&Space::Model, Common::default(), EntityKind::Circle(circle)).unwrap();
+    h.hex()
+}
+
 fn snapshot(s: &mut Session) -> (Value, usize) {
     let i = s.execute("drawing.inspect", &json!({})).unwrap();
     let undo = i["undo"].as_array().map_or(0, Vec::len);
@@ -29,9 +38,9 @@ fn json_transforms_that_overflow_are_refused() {
     ];
     for (cmd, p) in cases {
         let mut s = Session::new();
-        let h = circle(&mut s);
-        // Put it where the edit overflows: far out, then once more.
-        s.execute("move", &json!({"handles": [h], "delta": huge})).unwrap();
+        // Put a circle where the edit overflows: far out, as a file can hold it (the commands
+        // refuse to move anything beyond the export limit).
+        let h = far_circle(&mut s, huge);
         let before = snapshot(&mut s);
         let mut p = p;
         p["handles"] = json!([h]);
@@ -43,14 +52,13 @@ fn json_transforms_that_overflow_are_refused() {
     }
 }
 
+/// A typed point beyond the entry limit (±1e12) is refused where it is typed, so a typed move can
+/// no longer overflow; the drawing and its undo history stay as they were.
 #[test]
 fn typed_move_that_overflows_is_refused() {
     let mut s = Session::new();
     circle(&mut s);
-    s.script("MOVE ALL\n\n0,0 1e308,1e308\n").unwrap();
     let before = snapshot(&mut s);
-    s.script("MOVE ALL\n\n0,0 1e308,1e308\n").unwrap();
+    let _ = s.script("MOVE ALL\n\n0,0 1e308,1e308\n");
     assert_eq!(snapshot(&mut s), before);
-    assert!(s.log.iter().any(|l| l.contains("too large")), "{:?}", s.log);
-    assert!(s.running.is_none());
 }

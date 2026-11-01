@@ -2,6 +2,7 @@
 //! has it, see `gpucaps`; depth), which
 //! the walk view shows as an egui image and the headless `cadaddy-walk --shot` copies to a PNG.
 
+use crate::gpu::{Tracked, TrackedView};
 use cadaddy_walk3d::{Scene, Vertex};
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt;
@@ -26,23 +27,23 @@ pub struct Frame {
 struct Target {
     size: (u32, u32),
     /// The multisampled colour (none without MSAA: the frame is drawn into directly).
-    msaa: Option<wgpu::TextureView>,
-    depth: wgpu::TextureView,
+    msaa: Option<TrackedView>,
+    depth: TrackedView,
     // Read back by headless screenshots, which the web build has none of.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    resolve: wgpu::Texture,
+    resolve: Tracked<wgpu::Texture>,
     view: wgpu::TextureView,
 }
 
 struct Mesh {
-    buffer: wgpu::Buffer,
+    buffer: Tracked,
     count: u32,
 }
 
 pub struct Gpu {
     tri_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
-    uniform: wgpu::Buffer,
+    uniform: Tracked,
     bind_group: wgpu::BindGroup,
     tris: Option<Mesh>,
     edges: Option<Mesh>,
@@ -75,12 +76,12 @@ impl Gpu {
             bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+        let uniform = Tracked::new(device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("walk_frame"),
             size: UNIFORM_SIZE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
-        });
+        }));
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("walk"),
             layout: &bgl,
@@ -159,7 +160,7 @@ impl Gpu {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("walk"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: t.msaa.as_ref().unwrap_or(&t.view),
+                    view: t.msaa.as_ref().map_or(&t.view, |m| &**m),
                     depth_slice: None,
                     resolve_target: t.msaa.as_ref().map(|_| &t.view),
                     ops: wgpu::Operations {
@@ -198,6 +199,7 @@ impl Gpu {
         let t = self.target.as_ref().ok_or("nothing rendered yet")?;
         let (w, h) = t.size;
         let row = (w * 4).div_ceil(256) * 256;
+        // Not counted in perf.gpuBytes: a readback buffer lives for this one call.
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("walk_read"),
             size: u64::from(row) * u64::from(h),
@@ -241,15 +243,18 @@ fn mesh(device: &wgpu::Device, label: &str, verts: &[Vertex]) -> Option<Mesh> {
         }
         bytes.extend_from_slice(&v.c);
     }
-    let buffer =
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: &bytes, usage: wgpu::BufferUsages::VERTEX });
+    let buffer = Tracked::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: &bytes,
+        usage: wgpu::BufferUsages::VERTEX,
+    }));
     Some(Mesh { buffer, count: u32::try_from(verts.len()).unwrap_or(u32::MAX) })
 }
 
 fn target(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Target {
     let extent = wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 };
     let tex = |label: &str, format, samples, usage| {
-        device.create_texture(&wgpu::TextureDescriptor {
+        Tracked::new(device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: extent,
             mip_level_count: 1,
@@ -258,7 +263,7 @@ fn target(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Target {
             format,
             usage,
             view_formats: &[],
-        })
+        }))
     };
     let msaa = (samples > 1).then(|| tex("walk_msaa", FORMAT, samples, wgpu::TextureUsages::RENDER_ATTACHMENT));
     let depth = tex("walk_depth", DEPTH, samples, wgpu::TextureUsages::RENDER_ATTACHMENT);
@@ -267,8 +272,8 @@ fn target(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Target {
     let view = resolve.create_view(&wgpu::TextureViewDescriptor::default());
     Target {
         size,
-        msaa: msaa.map(|m| m.create_view(&wgpu::TextureViewDescriptor::default())),
-        depth: depth.create_view(&wgpu::TextureViewDescriptor::default()),
+        msaa: msaa.map(|m| m.into_view(&wgpu::TextureViewDescriptor::default())),
+        depth: depth.into_view(&wgpu::TextureViewDescriptor::default()),
         resolve,
         view,
     }

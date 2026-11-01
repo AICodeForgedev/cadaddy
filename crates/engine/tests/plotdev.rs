@@ -83,3 +83,30 @@ fn binary_tables_load_and_save() {
     assert!(s.execute("stylesmanager", &json!({"action": "save", "name": "office.stb", "format": "xml"})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_table_loaded_from_a_ctb_path_reaches_the_plot_dialog_and_pagesetup() {
+    let mut s = session();
+    let dir = std::env::temp_dir().join(format!("cadaddy-plotdev-load-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // A user's colour-dependent table on disk (as the Manager's Load… would pick it).
+    s.execute("stylesmanager", &json!({"action": "new", "name": "site.ctb"})).unwrap();
+    s.execute("stylesmanager", &json!({"action": "set", "name": "site.ctb", "style": {"name": "Color_1", "color": "#102030", "lineweight": 0.5}}))
+        .unwrap();
+    let path = dir.join("Site Plans.ctb").display().to_string();
+    s.execute("stylesmanager", &json!({"action": "save", "name": "site.ctb", "path": path})).unwrap();
+    assert!(std::fs::read(&path).unwrap().starts_with(b"PIAFILEVERSION_2.0,CTBVER1"));
+
+    // A fresh drawing has never heard of it: the Plot dialog's list lacks it.
+    let mut t = Session::new();
+    assert!(!cadaddy_doc::plot_style_table_names(t.doc().unwrap()).iter().any(|n| n == "Site Plans.ctb"));
+
+    // Load… emits exactly this action.
+    let r = t.execute("stylesmanager", &json!({"action": "load", "path": path})).unwrap();
+    assert_eq!(r["name"], "Site Plans.ctb", "{r}");
+    let names = cadaddy_doc::plot_style_table_names(t.doc().unwrap());
+    assert!(names.iter().any(|n| n == "Site Plans.ctb"), "{names:?}");
+    let r = t.execute("pagesetup", &json!({"layout": "Layout1", "plotStyleTable": "Site Plans.ctb"})).unwrap();
+    assert_eq!(r["page"]["plotStyleTable"], "Site Plans.ctb", "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

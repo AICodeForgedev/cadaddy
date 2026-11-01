@@ -273,9 +273,13 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
                 }
             }
             if !done {
-                // The landing grip moves the landing and its content.
+                // The landing grip moves every landing and the content.
                 let ld = m.landing.xy() + delta;
                 set_xy(&mut m.landing, ld);
+                for r in &mut m.roots {
+                    let q = r.landing.xy() + delta;
+                    set_xy(&mut r.landing, q);
+                }
                 if let Some(t) = &mut m.text {
                     let q = t.insert.xy() + delta;
                     set_xy(&mut t.insert, q);
@@ -597,7 +601,14 @@ pub fn grip_actions(kind: &EntityKind, index: usize) -> Vec<GripAction> {
 /// projected onto the object; Radius: a point on the new circle) or the typed `value` (Lengthen:
 /// the change in length; Radius: the new radius). `None` when the option doesn't apply or the
 /// result would be degenerate.
-pub fn grip_action(kind: &EntityKind, index: usize, action: GripAction, to: Option<Vec2>, value: Option<f64>) -> Option<EntityKind> {
+pub fn grip_action(
+    doc: &cadaddy_doc::Drawing,
+    kind: &EntityKind,
+    index: usize,
+    action: GripAction,
+    to: Option<Vec2>,
+    value: Option<f64>,
+) -> Option<EntityKind> {
     if !grip_actions(kind, index).contains(&action) || to.is_some_and(|p| !p.is_finite()) || value.is_some_and(|v| !v.is_finite()) {
         return None;
     }
@@ -704,10 +715,12 @@ pub fn grip_action(kind: &EntityKind, index: usize, action: GripAction, to: Opti
         }
         (EntityKind::MLeader(m), GripAction::AddLeader) => {
             let to = to?;
-            if m.leaders.len() >= MAX_LEADERS {
+            if m.leader_count() >= MAX_LEADERS {
                 return None;
             }
-            m.leaders.push(vec![Vec3::new(to.x, to.y, m.landing.z)]);
+            // The landing on the clicked side of the content, as MLEADEREDIT's add puts it.
+            let content = crate::cmd::mleader_edit::content_box_in(doc, m);
+            crate::cmd::mleader_edit::add_leader(m, content, to);
         }
         (EntityKind::MLeader(m), GripAction::RemoveLeader) => {
             let (li, _) = mleader_grip(m, index)?;
@@ -728,6 +741,11 @@ pub fn grip_action(kind: &EntityKind, index: usize, action: GripAction, to: Opti
             }
             let shift = Vec2::new((new - m.dogleg) * dir, 0.0);
             m.dogleg = new;
+            // Every further landing keeps its place against the content.
+            for r in &mut m.roots {
+                let q = r.landing.xy() + shift;
+                set_xy(&mut r.landing, q);
+            }
             if let Some(t) = &mut m.text {
                 let q = t.insert.xy() + shift;
                 set_xy(&mut t.insert, q);
@@ -827,5 +845,4 @@ pub fn polyline_grip_count(p: &LwPolyline) -> usize {
 }
 
 #[cfg(test)]
-#[path = "grips_tests.rs"]
 mod tests;

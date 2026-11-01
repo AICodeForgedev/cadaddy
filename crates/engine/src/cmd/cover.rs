@@ -65,7 +65,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new(READY, "Ready to Cover", run_ready)
             .params("{area, by?, date?} → {area, ready, open_items?: [\"id: category\"], unsigned_phases?: [\"name (level)\"], reason?}: marked ready only when every checklist item is done and every phase that applies is signed; otherwise nothing changes and the answer lists what is open"),
         CommandSpec::new(WALL, "Cover Check Wall", run_wall)
-            .params("{wall?: id | at?: [x, y] (building feet) with level, max_distance_ft? (default 3)} → {wall, level, tapped?: area, photos?: [the tapped face's photos], faces: [{area, face, rooms, fire_rating?, ready, checklist: [{id, category, done, by?}], photos: [{id, uri, caption, author, date, elevation_ft, along_ft}]}]}")
+            .params("{wall?: id | at?: [x, y] (building feet), level?: name (with at), max_distance_ft? (default 3)} → {wall, level, tapped?: area, photos?: [the tapped face's photos], faces: [{area, face, rooms, fire_rating?, ready, checklist: [{id, category, done, by?}], photos: [{id, uri, caption, author, date, elevation_ft, along_ft}]}]}")
             .noundo(),
         CommandSpec::new(PHOTO, "Add In-Wall Photo", run_photo)
             .params("{action?: add, at: [x, y] (building feet, where it was taken), level, uri: the photo file, id?, face?: A|B (refused if the position says the other side), elevation_ft?, author?, date?, caption?, max_distance_ft? (default 3)} → {id, area, face, along_ft}: filed on the face of the nearest wall on that side; no wall near: refused with the reason"),

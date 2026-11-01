@@ -1,5 +1,5 @@
 //! Options that used to report "not available yet": DIST/AREA Arc, -RENAME of plot styles and
-//! viewport configurations (materials refused with the reason), colour books in colour prompts,
+//! viewport configurations (materials follow the material rename), colour books in colour prompts,
 //! and HATCHEDIT recreating boundaries as regions.
 
 use cadaddy_engine::Session;
@@ -33,9 +33,15 @@ fn dist_multiple_points_measures_arcs() {
 fn area_arc_after_undo_is_straight_again() {
     let s = run(&["area", "0,0", "10,0", "a", "10,10", "u", "l", "10,10", "0,10", ""]);
     assert!(said(&s, "Area = 100.0000"), "{:?}", s.log);
-    // Two points joined by a line and a half circle enclose an area too.
-    let s = run(&["area", "0,0", "10,0", "a", "0,0", ""]);
-    assert!(said(&s, "Area = "), "{:?}", s.log);
+}
+
+#[test]
+fn area_with_a_live_arc_adds_the_half_circle() {
+    // Line to (10,0), tangent arc to (10,10) (a quarter-turn half circle of radius 5), line to
+    // (0,10): the 10x10 square plus the half disc, 100 + 12.5*pi; perimeter 30 + 5*pi.
+    let s = run(&["area", "0,0", "10,0", "a", "10,10", "l", "0,10", ""]);
+    assert!(said(&s, "Area = 139.2699"), "{:?}", s.log);
+    assert!(said(&s, "Perimeter = 45.7080"), "{:?}", s.log);
 }
 
 fn styled_session() -> (Session, String) {
@@ -79,9 +85,60 @@ fn rename_plot_styles_and_viewport_configurations() {
     assert!(s.doc().unwrap().vports.iter().any(|v| v.name == "Pair"), "{:?}", s.log);
     assert!(s.execute("rename", &json!({ "table": "vport", "from": "*Active", "to": "X" })).is_err());
     assert!(s.execute("rename", &json!({ "table": "vport", "from": "Nope", "to": "X" })).is_err());
-    // Materials: the reason, not a stub.
-    let e = s.execute("rename", &json!({ "table": "material", "from": "a", "to": "b" })).unwrap_err();
-    assert!(e.to_string().contains("material definitions"), "{e}");
+}
+
+fn material_session() -> (Session, String) {
+    let mut s = Session::new();
+    for n in ["Oak", "Steel"] {
+        s.execute("material.new", &json!({ "name": n })).unwrap();
+    }
+    let h = s.execute("line", &json!({ "points": [[0, 0], [1, 0]] })).unwrap()["handles"][0].as_str().unwrap().to_string();
+    s.execute("materialattach", &json!({ "layer": "0", "material": "Oak" })).unwrap();
+    let hh = Handle::parse_hex(&h).unwrap();
+    s.doc_mut().unwrap().modify_entity(hh, |e| e.common.material = Some("Oak".to_string()).into()).unwrap();
+    (s, h)
+}
+
+#[test]
+fn rename_material_follows_layers_and_objects() {
+    let (mut s, h) = material_session();
+    s.execute("rename", &json!({ "table": "material", "from": "oak", "to": "Walnut" })).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.material("Walnut").is_some() && d.material("Oak").is_none());
+    assert_eq!(d.layer("0").unwrap().material.as_deref(), Some("Walnut"));
+    assert_eq!(d.entity(Handle::parse_hex(&h).unwrap()).unwrap().common.material.as_deref(), Some("Walnut"));
+    // Typed, as -RENAME asks.
+    s.script("-RENAME M Walnut Birch\n").unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    let d = s.doc().unwrap();
+    assert!(d.material("Birch").is_some(), "{:?}", s.log);
+    assert_eq!(d.layer("0").unwrap().material.as_deref(), Some("Birch"));
+    // Refusals guide: unknown, clash, bad name, built-in name.
+    for (p, want) in [
+        (json!({ "table": "material", "from": "Nope", "to": "X" }), "no material named"),
+        (json!({ "table": "material", "from": "Birch", "to": "steel" }), "already has a material"),
+        (json!({ "table": "material", "from": "Birch", "to": "bad|name" }), "invalid material name"),
+        (json!({ "table": "material", "from": "Birch", "to": "Global" }), "built-in"),
+    ] {
+        let e = s.execute("rename", &p).unwrap_err().to_string();
+        assert!(e.contains(want), "{p}: {e}");
+    }
+    assert!(s.doc().unwrap().material("Birch").is_some());
+}
+
+#[test]
+fn layer_material_option_sets_the_layers_material() {
+    let (mut s, _) = material_session();
+    s.execute("layer.new", &json!({ "name": "Floor" })).unwrap();
+    s.script("-LAYER\nMAT\nSteel\nFloor\n\n").unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert_eq!(s.doc().unwrap().layer("Floor").unwrap().material.as_deref(), Some("Steel"), "{:?}", s.log);
+    // An unknown material is refused with the available ones listed.
+    s.script("-LAYER\nMAT\nGranite\n").unwrap();
+    assert!(s.running.is_some());
+    assert!(said(&s, "Available: Global, Oak, Steel"), "{:?}", s.log);
+    s.script("Global\nFloor\n\n").unwrap();
+    assert_eq!(s.doc().unwrap().layer("Floor").unwrap().material, None, "{:?}", s.log);
 }
 
 #[test]

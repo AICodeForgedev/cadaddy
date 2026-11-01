@@ -24,6 +24,29 @@ The main dictionary belongs to the drawing: DCTMAIN (SETVAR, or the Check Spelli
 The choice is saved with the drawing (.cdy, and in DXF and DWG as CADaddy's `CADADDY_DCTMAIN`
 record). A drawing that names none uses American English.
 
+## Where to get them
+
+The lists are in the optional download repo **spell-dicts** (https://github.com/AICodeForgedev/spell-dicts),
+kept outside CADaddy like craft-fonts; its README has a licence row per list. Get the `.txt` files into
+the dictionary folder below.
+
+| file | language | source | licence |
+|---|---|---|---|
+| `ens.txt`, `enz.txt` | British English (-ise / -ize) | SCOWL / English Speller Database (app.aspell.net) | SCOWL permissive notice (Kevin Atkinson) |
+| `es.txt` | Spanish | LibreOffice es_ES dictionary | MPL-1.1 (of GPL-3.0+/LGPL-3.0+/MPL-1.1+) |
+| `fr.txt` | French | Grammalecte French dictionaries | MPL-2.0 |
+| `de.txt` | German | igerman98 | GPL-2.0 or GPL-3.0 |
+| `pt.txt` | Portuguese (Portugal) | pt_PT, Universidade do Minho | MPL-1.1 (of GPL-2.0/LGPL-2.1/MPL-1.1) |
+| `ptb.txt` | Portuguese (Brazil) | pt_BR VERO | MPL-2.0 (of LGPL-3.0/MPL-2.0) |
+
+## Using your own Hunspell dictionary
+
+A Hunspell `.dic` + `.aff` pair is not read directly; turn it into a plain list first:
+`python3 tools/unmunch.py my_lang my_lang.words` (from spell-dicts; it reads `my_lang.dic` and
+`my_lang.aff` and applies the prefix and suffix rules; with Hunspell installed, `unmunch my_lang.dic
+my_lang.aff > my_lang.words` does the same). Put a short notice (source, licence), a line holding only
+`---` and the words into `<code>.txt`.
+
 ## Installing one
 
 Put `<code>.txt` (for example `fr.txt`) in the dictionary folder:
@@ -43,3 +66,10 @@ marks languages not installed.
 
 The SPELL command's `{"action": "dictionaries"}` lists them (code, language, installed), with the
 drawing's choice and the folder.
+
+## Testing the lists
+
+`cargo test -p cadaddy-engine --test spell` also runs `the_downloadable_lists_check_their_languages`
+when `CADADDY_SPELL_LISTS` names the folder holding the seven lists; without it the test says it is
+skipped. For each language it checks that known words (one with accents) are not flagged and that a
+misspelling's first suggestion is the right word.

@@ -1,6 +1,6 @@
-# CADCraft French interface catalog — original translations by @pechnikov2026-star.
+# CADaddy French interface catalog — original translations by @pechnikov2026-star.
 # License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
-# Written from CADCraft's English strings; no proprietary translations were copied.
+# Written from CADaddy's English strings; no proprietary translations were copied.
 # UTF-8: context<TAB>English source<TAB>French translation.
 # Empty context = ordinary label; @plural = one|other forms with {n}.
 # Command IDs, typed keywords, technology/product names and user data stay unchanged.
@@ -68,6 +68,7 @@
 	Blend	Raccord lissé
 	Block	Bloc
 	Block Attribute Manager...	Gestionnaire des attributs de bloc...
+	Block Description...	Description de bloc...
 	Block Editor	Éditeur de blocs
 	Block Reference	Référence de bloc
 	Block...	Bloc...
@@ -454,6 +455,7 @@
 	N	N
 	Name	Nom
 	Name (A–Z)	Nom (A–Z)
+	Named Viewports...	Fenêtres nommées...
 	Nearest	Plus proche
 	New	Nouveau
 	New (metric)	Nouveau (métrique)
@@ -3056,3 +3058,19 @@
 	Clash Navigate	Parcourir les conflits
 	Colour By Status/Level	Couleur par état/niveau
 	Inspect Element	Inspecter l'élément
+	Analyze Shapes	Analyser les formes
+	Planned Walls	Murs prévus
+	Extended Trim	Ajustement étendu
+	Trim and Extend	Ajuster et prolonger
+	Trim to Block Objects	Ajuster aux objets du bloc
+	Extend to Block Objects	Prolonger aux objets du bloc
+	Super Hatch	Super-hachures
+	Block Authoring Palettes	Palettes de création de blocs
+	Test Block	Tester le bloc
+	Company Standards	Normes de l'entreprise
+	Delete Project	Supprimer le projet
+	Duplicate Project	Dupliquer le projet
+	Projects	Projets
+	Remove Company Standard	Retirer la norme de l'entreprise
+	Set Company Standard	Définir la norme de l'entreprise
+	Standards	Normes

@@ -174,7 +174,6 @@ const STORED: &[(&str, Kind, Def)] = &[
     ("PELLIPSE", Kind::Choice(&[0, 1]), Def::Int(0)),
     ("PICKAUTO", Kind::Int(0, 5), Def::Int(5)),
     // CADaddy's selection windows behave as PICKDRAG 2.
-    ("PICKDRAG", Kind::Choice(&[0, 1, 2]), Def::Int(2)),
     ("PLINEGEN", Kind::Choice(&[0, 1]), Def::Int(0)),
     ("PLINETYPE", Kind::Choice(&[0, 1, 2]), Def::Int(2)),
     ("PLINEWID", Kind::Real { min: 0.0, strict: false }, Def::Real(0.0)),

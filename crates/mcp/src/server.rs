@@ -103,27 +103,65 @@ impl Server {
         // Lines are read as bytes: one that isn't UTF-8 is a parse error, not the end of the
         // session.
         while let Some(line) = read_line_capped(&mut input, MAX_REQUEST_BYTES)? {
-            let reply = match line {
-                Line::TooLong(n) => Some(
-                    error(Value::Null, INVALID_REQUEST, format!("request too large ({n} bytes or more; the limit is {MAX_REQUEST_BYTES})"))
-                        .to_string(),
-                ),
-                Line::Full(line) => match std::str::from_utf8(&line) {
-                    Ok(text) => self.handle_line(text),
-                    Err(e) => Some(error(Value::Null, PARSE_ERROR, format!("parse error: invalid UTF-8 ({e})")).to_string()),
-                },
-            };
-            if let Some(reply) = reply {
-                output.write_all(reply.as_bytes())?;
-                output.write_all(b"\n")?;
-            }
-            for n in self.take_notifications() {
-                output.write_all(n.as_bytes())?;
-                output.write_all(b"\n")?;
-            }
-            output.flush()?;
+            self.serve_line(line, &mut output)?;
         }
         Ok(())
+    }
+
+    /// Like [`Server::serve`], but the input is read on a thread of its own, so a
+    /// `notifications/cancelled` or the `cancel` tool that arrives while a long call (RENDER)
+    /// runs stops that call within about a second instead of after it.
+    pub fn serve_cancellable(&mut self, input: impl BufRead + Send + 'static, mut output: impl Write) -> std::io::Result<()> {
+        let (tx, rx) = std::sync::mpsc::channel::<std::io::Result<Option<Line>>>();
+        // For a backend that is another process (the app behind `--connect`), the cancel is also
+        // sent on a connection of its own, since the main one is waiting for the call's reply.
+        let canceller = self.backend.canceller();
+        std::thread::spawn(move || {
+            let mut input = input;
+            loop {
+                let next = read_line_capped(&mut input, MAX_REQUEST_BYTES);
+                let end = !matches!(next, Ok(Some(_)));
+                if let Ok(Some(Line::Full(l))) = &next
+                    && is_cancel_request(l)
+                {
+                    cadaddy_engine::request_cancel();
+                    if let Some(cancel) = &canceller {
+                        cancel();
+                    }
+                }
+                if tx.send(next).is_err() || end {
+                    return;
+                }
+            }
+        });
+        while let Ok(next) = rx.recv() {
+            match next? {
+                Some(line) => self.serve_line(line, &mut output)?,
+                None => break,
+            }
+        }
+        Ok(())
+    }
+
+    fn serve_line(&mut self, line: Line, output: &mut impl Write) -> std::io::Result<()> {
+        let reply = match line {
+            Line::TooLong(n) => Some(
+                error(Value::Null, INVALID_REQUEST, format!("request too large ({n} bytes or more; the limit is {MAX_REQUEST_BYTES})")).to_string(),
+            ),
+            Line::Full(line) => match std::str::from_utf8(&line) {
+                Ok(text) => self.handle_line(text),
+                Err(e) => Some(error(Value::Null, PARSE_ERROR, format!("parse error: invalid UTF-8 ({e})")).to_string()),
+            },
+        };
+        if let Some(reply) = reply {
+            output.write_all(reply.as_bytes())?;
+            output.write_all(b"\n")?;
+        }
+        for n in self.take_notifications() {
+            output.write_all(n.as_bytes())?;
+            output.write_all(b"\n")?;
+        }
+        output.flush()
     }
 
     pub fn handle_line(&mut self, line: &str) -> Option<String> {
@@ -220,6 +258,20 @@ impl Server {
     }
 }
 
+/// Whether a request line is MCP's `notifications/cancelled` or a call of the `cancel` tool.
+fn is_cancel_request(line: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(line) else { return false };
+    if !text.contains("cancel") {
+        return false;
+    }
+    let Ok(Value::Object(o)) = serde_json::from_str::<Value>(text) else { return false };
+    match o.get("method").and_then(Value::as_str) {
+        Some("notifications/cancelled") => true,
+        Some("tools/call") => o.get("params").and_then(|p| p.get("name")).and_then(Value::as_str) == Some("cancel"),
+        _ => false,
+    }
+}
+
 /// A request line from [`read_line_capped`].
 enum Line {
     Full(Vec<u8>),
@@ -287,5 +339,22 @@ mod capped_tests {
         assert!(matches!(read_line_capped(&mut r, 50).unwrap(), Some(Line::TooLong(100))));
         assert!(matches!(read_line_capped(&mut r, 50).unwrap(), Some(Line::Full(b)) if b == b"{}"));
         assert!(read_line_capped(&mut r, 50).unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use super::is_cancel_request;
+
+    #[test]
+    fn only_cancels_are_recognised() {
+        assert!(is_cancel_request(br#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}}"#));
+        assert!(is_cancel_request(br#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"cancel","arguments":{}}}"#));
+        assert!(!is_cancel_request(
+            br#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"command_line","arguments":{"text":"cancel"}}}"#
+        ));
+        assert!(!is_cancel_request(br#"{"jsonrpc":"2.0","id":5,"method":"ping"}"#));
+        assert!(!is_cancel_request(b"not json cancel"));
+        assert!(!is_cancel_request(b"\xff\xfecancel"));
     }
 }

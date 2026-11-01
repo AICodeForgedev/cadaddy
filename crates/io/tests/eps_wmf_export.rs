@@ -1,7 +1,7 @@
 //! EPS and WMF export: structural checks of what is written.
 
-use cadaddy_doc::{Common, Drawing, EntityKind, Line, Space};
-use cadaddy_geom::Vec3;
+use cadaddy_doc::{Common, Drawing, EntityKind, Line, RayLine, Space};
+use cadaddy_geom::{Bounds2, Vec2, Vec3};
 
 fn drawing() -> Drawing {
     let mut d = Drawing::new_metric();
@@ -94,4 +94,104 @@ fn wmf_is_a_placeable_metafile_with_pens_lines_and_fills() {
     // An empty drawing still writes a valid file.
     let empty = cadaddy_io::write(&Drawing::new_metric(), "e.wmf").unwrap();
     assert_eq!(records(&empty).last().unwrap().0, META_EOF);
+}
+
+/// The POLYLINE records' points as (x, y) logical units.
+fn polylines(b: &[u8]) -> Vec<Vec<(i16, i16)>> {
+    records(b)
+        .into_iter()
+        .filter(|(f, _)| *f == cadaddy_io::wmf::META_POLYLINE)
+        .map(|(_, p)| p[1..].chunks(2).map(|c| (c[0] as i16, c[1] as i16)).collect())
+        .collect()
+}
+
+/// Angle (degrees, 0…180, y up) of the WMF segment `a`→`b` (logical y runs down), and the
+/// distance of `through` from the line.
+fn angle_and_miss(a: (i16, i16), b: (i16, i16), through: (f64, f64)) -> (f64, f64) {
+    let (dx, dy) = (f64::from(b.0) - f64::from(a.0), -(f64::from(b.1) - f64::from(a.1)));
+    let ang = dy.atan2(dx).to_degrees().rem_euclid(180.0);
+    let miss = ((through.0 - f64::from(a.0)) * dy - (-(through.1 - f64::from(a.1))) * dx).abs() / dx.hypot(dy);
+    (ang, miss)
+}
+
+fn line_drawing(a: Vec3, b: Vec3) -> Drawing {
+    let mut d = Drawing::new_metric();
+    d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a, b })).unwrap();
+    d
+}
+
+#[test]
+fn wmf_xline_keeps_its_angle_and_place() {
+    // A 30° construction line through (40, 30), framed to (0,0)–(100,100): 300 units per drawing unit.
+    let mut d = Drawing::new_metric();
+    let dir = Vec3::new(30f64.to_radians().cos(), 30f64.to_radians().sin(), 0.0);
+    d.add(&Space::Model, Common::default(), EntityKind::XLine(RayLine { base: Vec3::new(40.0, 30.0, 0.0), dir })).unwrap();
+    let w = Bounds2::new(Vec2::new(0.0, 0.0), Vec2::new(100.0, 100.0));
+    let b = cadaddy_io::write_framed(&d, "x.wmf", Some(w)).unwrap();
+    let lines = polylines(&b);
+    assert_eq!(lines.len(), 1);
+    let pts = &lines[0];
+    assert_eq!(pts.len(), 2);
+    let (ang, miss) = angle_and_miss(pts[0], pts[1], (40.0 * 300.0, (100.0 - 30.0) * 300.0));
+    assert!((ang - 30.0).abs() < 0.5, "angle {ang}");
+    assert!(miss < 2.0, "off the point by {miss}");
+}
+
+#[test]
+fn wmf_framed_diagonal_keeps_its_slope() {
+    // A line from (-300,-100) to (700,400) (slope 0.5, through (40, 70)) shown in a 100 × 100 window.
+    let d = line_drawing(Vec3::new(-300.0, -100.0, 0.0), Vec3::new(700.0, 400.0, 0.0));
+    let w = Bounds2::new(Vec2::new(0.0, 0.0), Vec2::new(100.0, 100.0));
+    let b = cadaddy_io::write_framed(&d, "x.wmf", Some(w)).unwrap();
+    let lines = polylines(&b);
+    assert_eq!(lines.len(), 1);
+    let pts = &lines[0];
+    let (ang, miss) = angle_and_miss(pts[0], *pts.last().unwrap(), (40.0 * 300.0, (100.0 - 70.0) * 300.0));
+    assert!((ang - 0.5f64.atan().to_degrees()).abs() < 0.5, "angle {ang}");
+    assert!(miss < 2.0, "off the point by {miss}");
+}
+
+#[test]
+fn eps_and_wmf_put_the_red_line_where_the_transform_says() {
+    // The red line (0,0)–(200,100); extents 200 × 100 plus 4 units all round: 208 × 108.
+    let d = drawing();
+    let eps = String::from_utf8(cadaddy_io::write(&d, "plan.eps").unwrap()).unwrap();
+    // 720 pt over 208 units: (0,0) → (13.846, 13.846), (200,100) → (706.154, 360.000), y up.
+    assert!(eps.contains("13.846 13.846 m 706.154 360.000 l"), "{eps}");
+    // WMF: 30000 over 208 units, y down from the top edge (104).
+    let lines = polylines(&cadaddy_io::write(&d, "plan.wmf").unwrap());
+    let near = |p: (i16, i16), x: f64, y: f64| (f64::from(p.0) - x).abs() <= 2.0 && (f64::from(p.1) - y).abs() <= 2.0;
+    let k = 30000.0 / 208.0;
+    assert!(
+        lines.iter().any(|l| l.len() == 2 && near(l[0], 4.0 * k, 104.0 * k) && near(l[1], 204.0 * k, 4.0 * k)),
+        "red line in logical units: {lines:?}"
+    );
+}
+
+#[test]
+fn eps_writes_text_as_text() {
+    let mut d = Drawing::new_metric();
+    let text = cadaddy_doc::Text {
+        insert: Vec3::new(10.0, 20.0, 0.0),
+        align_pt: None,
+        height: 5.0,
+        value: "PANEL A".into(),
+        rotation: 0.0,
+        width_factor: 1.0,
+        oblique: 0.0,
+        style: "Standard".into(),
+        halign: cadaddy_doc::HAlign::Left,
+        valign: cadaddy_doc::VAlign::Baseline,
+    };
+    d.add(&Space::Model, Common::default(), EntityKind::Text(text)).unwrap();
+    // Framed to (0,0)–(100,100): 7.2 pt per unit, so the insert is at (72, 144) and the size 36.
+    let w = Bounds2::new(Vec2::new(0.0, 0.0), Vec2::new(100.0, 100.0));
+    let s = String::from_utf8(cadaddy_io::write_framed(&d, "x.eps", Some(w)).unwrap()).unwrap();
+    let line = s.lines().find(|l| l.contains("(PANEL A) show")).expect("the word as text");
+    let size: f64 = line.split(" scalefont").next().unwrap().rsplit(' ').next().unwrap().parse().unwrap();
+    assert!((size - 36.0).abs() <= 1.8, "size {size}");
+    let m: Vec<f64> = line.split('[').nth(1).unwrap().split(']').next().unwrap().split_whitespace().map(|x| x.parse().unwrap()).collect();
+    assert_eq!(m.len(), 6);
+    assert!((m[0] - 1.0).abs() < 1e-3 && m[1].abs() < 1e-3, "along the baseline");
+    assert!((m[4] - 72.0).abs() <= 1.0 && (m[5] - 144.0).abs() <= 1.0, "origin {:?}", &m[4..]);
 }

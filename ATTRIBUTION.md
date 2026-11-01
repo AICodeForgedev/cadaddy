@@ -9,7 +9,8 @@ artwork, fonts, hatch patterns, linetypes, templates or presets.** Every asset i
 CADCraft contributors or third-party material under an open licence (OSI open source, public domain
 / CC0, or Creative Commons that allows redistribution). Screenshots of Autodesk software are never
 committed. Font files are not added here: shared fonts live in
-[storytold/craft-fonts](https://github.com/storytold/craft-fonts), an optional build input.
+[storytold/craft-fonts](https://github.com/storytold/craft-fonts), an optional build input. Spelling dictionaries beyond American English live in the optional
+[spell-dicts](https://github.com/AICodeForgedev/spell-dicts) download, listed in the table below.
 
 Generated-in-code assets are original and have no file to list:
 - the UI icon set (`crates/ui-egui/src/icons.rs`);
@@ -23,6 +24,7 @@ Generated-in-code assets are original and have no file to list:
 
 | Asset | Author | Source | Licence | Notes |
 |---|---|---|---|---|
+| `spell-dicts` (optional download, nothing in this repository) | the dictionaries' authors (SCOWL: Kevin Atkinson; Spanish: Santiago Bosio et al.; French: Olivier R. / Grammalecte; German: Björn Jacke; Portuguese: Univ. do Minho and R. S. Moura) | the spell-dicts download repo (https://github.com/AICodeForgedev/spell-dicts), one row per list in its README | SCOWL notice (ens, enz); MPL-1.1 (es, pt); MPL-2.0 (fr, ptb); GPL-2.0 or GPL-3.0 (de) | Word lists for `docs/spelling.md`; a separate download, like craft-fonts, never committed here |
 | `assets/public-cost-data/` | CADaddy contributors (2026-10) | seed placeholders written for CADaddy to give the public MEP cost pack its shape (every row's source says "seed placeholder — not from …"; status `seed`), and `baseline/` generated from them by `cargo xtask fetch-pubcost` | FSL-1.1-ALv2 | Public cost pack; rows are replaced by fetched public data, each then citing its own source, licence and fetch date. No electrical labor. |
 | `assets/app-icon/cadaddy-icon.svg` | CADaddy contributors (2026-10-17) | original vector drawing (hexagon mark from a concept sketch made with Grok Imagine, redrawn by hand) | MIT OR Apache-2.0 | Icon source |
 | `assets/app-icon/cadaddy-icon-small.svg` | CADaddy contributors (2026-10-17) | original vector drawing (hexagon mark from a concept sketch made with Grok Imagine, redrawn by hand) | MIT OR Apache-2.0 | Icon source, 32 px and below |
@@ -74,6 +76,7 @@ Generated-in-code assets are original and have no file to list:
 | `crates/ui-egui/src/i18n/ko.tsv` | @huk082 (AI-assisted) | Original Korean translations of CADCraft English strings | MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`) | No proprietary localization resources copied; no font assets added |
 | `crates/ui-egui/src/i18n/ja.tsv` | AICodeForge (AI-assisted) | Original Japanese translations of the English interface strings | MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`) | No proprietary localization resources copied; no font assets added |
 | `crates/ui-egui/src/i18n/ar.tsv` | @hasan-sdaif | Original Arabic translations of CADCraft English strings | MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`) | No proprietary localization resources copied |
+| `crates/ui-egui/src/i18n/el.tsv` | @Camthalion77 with ChatGPT (AI-assisted) | Original Greek translations of CADCraft English strings | MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`) | No proprietary localization resources copied; independent native proofreading pending |
 | `crates/ui-egui/tests/designcenter/` | CADaddy contributors | hand-written two-line DXF files (`0`/`EOF`) with made-up names, the folder DesignCenter shows in `ui_shots.rs` | MIT OR Apache-2.0 | Original; test fixture |
 | `crates/ui-egui/tests/golden/` | CADaddy contributors (generated) | renders of CADaddy's own interface by `crates/ui-egui/tests/ui_shots.rs` (half size, grey) | MIT OR Apache-2.0 | UI screenshot regression goldens; our own renders only, never screenshots of other software |
 | `crates/engine/tests/golden/bimlook/` | CADaddy contributors (generated) | renders of a made-up building by CADaddy's own BIM view, `crates/engine/tests/bimlook.rs` | MIT OR Apache-2.0 | BIM view regression goldens; our own renders only, never images of other software |

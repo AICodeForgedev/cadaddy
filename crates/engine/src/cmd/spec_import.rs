@@ -178,30 +178,123 @@ fn extract_pdf_text(bytes: &[u8], path: &str) -> Result<String> {
     Ok(all_text)
 }
 
-/// Collect all text from a drawing's entities, sorted roughly top-to-bottom.
+/// Collect a page's text as the lines a person reads (`page_lines`).
 fn collect_texts(drawing: &cadaddy_doc::Drawing, out: &mut String) {
-    let mut texts: Vec<(f64, String)> = Vec::new();
+    let mut texts: Vec<Placed> = Vec::new();
     for ent in drawing.model.iter() {
         match &ent.kind {
             cadaddy_doc::EntityKind::Text(t) => {
                 if !t.value.trim().is_empty() {
-                    texts.push((t.insert.y, t.value.clone()));
+                    texts.push(Placed { x: t.insert.x, y: t.insert.y, h: t.height, text: t.value.clone() });
                 }
             }
             cadaddy_doc::EntityKind::MText(t) => {
                 let plain = strip_mtext_formatting(&t.contents);
                 if !plain.trim().is_empty() {
-                    texts.push((t.insert.y, plain));
+                    texts.push(Placed { x: t.insert.x, y: t.insert.y, h: t.height, text: plain });
                 }
             }
             _ => {}
         }
     }
-    // Sort top-to-bottom (highest Y first).
-    texts.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    for (_, text) in texts {
-        out.push_str(&text);
+    for line in page_lines(texts) {
+        out.push_str(&line);
         out.push('\n');
+    }
+}
+
+/// A text on a page: where it starts, how tall, what it says.
+struct Placed {
+    x: f64,
+    y: f64,
+    h: f64,
+    text: String,
+}
+
+/// Texts whose baselines are within this many text heights are on one line.
+const ROW_TOL: f64 = 0.4;
+/// A character's width as a share of the text height, to find where a text ends.
+const CHAR_EM: f64 = 0.55;
+/// A gap wider than this many text heights between texts on one line is a column break.
+const COLUMN_GAP_H: f64 = 2.5;
+/// What a column break is written as: the gap the schedule and submittal readers split on.
+const COLUMN_BREAK: &str = "   ";
+
+/// The page's texts as the lines a person reads, top to bottom: the texts on one baseline joined
+/// left to right, a column gap kept as `COLUMN_BREAK` (a label ending in a colon keeps its value
+/// on its side of the break). A cut sheet's header label with nothing after it on its line
+/// ("Type :") first takes the short value printed under it, as product data title blocks print it.
+fn page_lines(mut texts: Vec<Placed>) -> Vec<String> {
+    texts.retain(|t| t.x.is_finite() && t.y.is_finite() && t.h.is_finite() && !t.text.trim().is_empty());
+    pull_up_header_values(&mut texts);
+    texts.sort_by(|a, b| b.y.total_cmp(&a.y));
+    let mut rows: Vec<Vec<Placed>> = Vec::new();
+    for t in texts {
+        match rows.last_mut() {
+            Some(row) if (row[0].y - t.y).abs() <= ROW_TOL * row[0].h.max(t.h) => row.push(t),
+            _ => rows.push(vec![t]),
+        }
+    }
+    rows.into_iter()
+        .map(|mut row| {
+            row.sort_by(|a, b| a.x.total_cmp(&b.x));
+            let mut line = String::new();
+            let mut end = f64::NEG_INFINITY;
+            for t in row {
+                let text = t.text.trim();
+                if !line.is_empty() {
+                    let wide = t.x - end > COLUMN_GAP_H * t.h && !line.ends_with(':');
+                    line.push_str(if wide { COLUMN_BREAK } else { " " });
+                }
+                end = t.x + text.chars().count() as f64 * t.h * CHAR_EM;
+                line.push_str(text);
+            }
+            line
+        })
+        .collect()
+}
+
+/// A mark label ending in a colon with nothing printed after it on its line ("Type :") takes
+/// the short value printed just under it and to its right ("A1"), which would otherwise join
+/// the next header line.
+fn pull_up_header_values(texts: &mut Vec<Placed>) {
+    let mut i = 0;
+    while i < texts.len() {
+        let (x, y, h) = (texts[i].x, texts[i].y, texts[i].h);
+        let alone = !texts.iter().any(|o| o.x > x && (o.y - y).abs() <= ROW_TOL * h.max(o.h));
+        if is_mark_label(&texts[i].text) && alone {
+            let below = texts
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| o.y < y - 0.5 * h && o.y >= y - 5.0 * h && o.x >= x - 2.0 * h && o.x <= x + 10.0 * h)
+                .filter(|(_, o)| mark_token(o.text.trim()).is_some())
+                .min_by(|a, b| b.1.y.total_cmp(&a.1.y))
+                .map(|(j, _)| j);
+            if let Some(j) = below {
+                let value = texts.remove(j);
+                if j < i {
+                    i -= 1;
+                }
+                let mut mark = value.text.trim().to_string();
+                // A value wrapped in its narrow box ("CONTR" over "OLS") goes on under itself.
+                let wrapped = texts.iter().position(|o| {
+                    o.y < value.y - 0.5 * value.h
+                        && o.y >= value.y - 1.6 * value.h
+                        && (o.x - value.x).abs() <= value.h
+                        && mark_token(&format!("{mark}{}", o.text.trim())).is_some()
+                });
+                if let Some(k) = wrapped {
+                    let rest = texts.remove(k);
+                    if k < i {
+                        i -= 1;
+                    }
+                    mark.push_str(rest.text.trim());
+                }
+                let label = texts[i].text.trim_end().to_string();
+                texts[i].text = format!("{label} {mark}");
+            }
+        }
+        i += 1;
     }
 }
 
@@ -409,27 +502,28 @@ fn strip_mtext_formatting(s: &str) -> String {
 
 // ── spec text parsing ──────────────────────────────────────────────────────
 
-/// CSI section number pattern (e.g. "26 51 13", "26 05 33").
+/// CSI section number pattern (e.g. "26 51 13", "26 05 33"), at the start of a line. A row of
+/// numbers ("10 53 40 32 39", a photometric table) or numbers a column apart is not one.
 fn is_csi_section(line: &str) -> Option<&str> {
     let trimmed = line.trim();
-    // Match "SECTION 26 51 13" or "26 51 13" at the start of a line.
-    if trimmed.len() >= 8 {
-        let start = if trimmed.to_ascii_uppercase().starts_with("SECTION ") { &trimmed[8..] } else { trimmed };
-        let parts: Vec<&str> = start.split_whitespace().collect();
-        if parts.len() >= 3
-            && parts[0].len() == 2
-            && parts[0].chars().all(|c| c.is_ascii_digit())
-            && parts[1].len() == 2
-            && parts[1].chars().all(|c| c.is_ascii_digit())
-            && parts[2].len() == 2
-            && parts[2].chars().all(|c| c.is_ascii_digit())
-        {
-            // Return the section number portion.
-            let end = start.find(|c: char| !c.is_ascii_digit() && c != ' ').unwrap_or(8.min(start.len()));
-            return Some(start[..end.max(8)].trim());
-        }
+    let start = if trimmed.to_ascii_uppercase().starts_with("SECTION ") { trimmed[8..].trim_start() } else { trimmed };
+    let parts: Vec<&str> = start.split_whitespace().take(4).collect();
+    let pair = |t: &str| t.len() == 2 && t.chars().all(|c| c.is_ascii_digit());
+    // The last pair may carry a subsection ("19.13").
+    let last = |t: &str| pair(t.get(..2).unwrap_or("")) && (t.len() == 2 || t[2..].starts_with('.'));
+    if parts.len() < 3 || !pair(parts[0]) || !pair(parts[1]) || !last(parts[2]) {
+        return None;
     }
-    None
+    let numeric = |t: &str| t.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',' || c == '%');
+    if parts.get(3).is_some_and(|t| numeric(t)) {
+        return None;
+    }
+    let mut end = 0;
+    for t in &parts[..3] {
+        end += start[end..].find(t)? + t.len();
+    }
+    let number = &start[..end - (parts[2].len() - 2)];
+    (!number.contains(COLUMN_BREAK)).then_some(number)
 }
 
 fn parse_spec_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportResult {
@@ -564,8 +658,10 @@ fn extract_type_definition(line: &str) -> Option<(String, String)> {
 
 /// Words that look like a mark but are really detail-field prefixes (case-insensitive).
 fn is_detail_prefix(candidate: &str) -> bool {
-    const PREFIXES: &[&str] =
-        &["mfr", "mfg", "cct", "volts", "amps", "model", "mount", "finish", "color", "colour", "size", "weight", "nema", "rating"];
+    const PREFIXES: &[&str] = &[
+        "mfr", "mfg", "cct", "volts", "amps", "model", "mount", "finish", "color", "colour", "size", "weight", "nema", "rating", "note", "notes",
+        "feed", "ref", "see", "date", "page", "phone", "fax", "email", "job",
+    ];
     let lower = candidate.to_ascii_lowercase();
     PREFIXES.iter().any(|p| lower == *p)
         || lower.starts_with("manufact")
@@ -945,23 +1041,26 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
     let mut result = SpecImportResult::default();
     let mut rfi_counter = 0u32;
 
-    let lines: Vec<&str> = text.lines().collect();
+    let lines: Vec<String> = text.lines().map(squash_colon).collect();
+    // Product data cut sheets name their type in a header on every page ("Type : A1"); then
+    // only that header starts a product (a cut sheet's "Lumens: 1056" is not a type).
+    let cut_sheets = lines.iter().any(|l| l.split(COLUMN_BREAK).any(|seg| type_header(seg.trim()).is_some()));
     let mut current_page = String::new();
     let mut current_submittal: Option<SubmittalRecord> = None;
     let mut current_types: Vec<SpecProposal> = Vec::new();
     // Per-type review stamps, parallel to current_types.
     let mut type_stamps: Vec<String> = Vec::new();
+    // Each cut-sheet product's lines, parallel to current_types: where its dimming is read.
+    let mut blocks: Vec<Vec<String>> = Vec::new();
 
-    let mut i = 0;
-    while i < lines.len() {
-        let line = lines[i].trim();
+    for raw in &lines {
+        let line = raw.trim();
 
         // Track page markers.
         if let Some(rest) = line.strip_prefix("--- page ") {
             if let Some(end) = rest.find(" of ") {
                 current_page = format!("p.{}", &rest[..end]);
             }
-            i += 1;
             continue;
         }
 
@@ -971,7 +1070,6 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
             if let Some(stamp) = type_stamps.last_mut() {
                 *stamp = "approved_as_noted".into();
             }
-            i += 1;
             continue;
         }
         if (upper == "APPROVED" || upper.starts_with("APPROVED ") || upper.contains("STAMP: APPROVED")) && current_submittal.is_some() {
@@ -980,36 +1078,53 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
             {
                 *stamp = "approved".into();
             }
-            i += 1;
             continue;
         }
         if (upper.contains("REVISE AND RESUBMIT") || upper == "REVISE") && current_submittal.is_some() {
             if let Some(stamp) = type_stamps.last_mut() {
                 *stamp = "revise".into();
             }
-            i += 1;
             continue;
         }
         if (upper == "REJECTED" || upper.contains("STAMP: REJECTED")) && current_submittal.is_some() {
             if let Some(stamp) = type_stamps.last_mut() {
                 *stamp = "rejected".into();
             }
-            i += 1;
             continue;
         }
 
-        // Detect submittal section headers.
-        if upper.starts_with("SECTION ") || is_csi_section(line).is_some() {
+        // Detect submittal section headers (in cut sheets, only a CSI number: their text says
+        // "Section" for its own parts).
+        if (!cut_sheets && upper.starts_with("SECTION ")) || is_csi_section(line).is_some() {
             // Save any pending submittal.
             if let Some(sub) = current_submittal.take() {
+                settle_dimming(&mut current_types, &blocks, &mut result, &mut rfi_counter);
                 finalize_submittal(sub, &current_types, &type_stamps, existing, &mut result, &mut rfi_counter);
                 current_types.clear();
                 type_stamps.clear();
+                blocks.clear();
             }
 
             let section = is_csi_section(line).unwrap_or("").to_string();
             current_submittal = Some(SubmittalRecord { spec_section: section, file_source: current_page.clone(), ..Default::default() });
-            i += 1;
+            continue;
+        }
+
+        if cut_sheets {
+            // A line read off a page keeps its columns apart: each column is a field.
+            for seg in line.split(COLUMN_BREAK).map(str::trim).filter(|seg| !seg.is_empty()) {
+                if let Some(mark) = type_header(seg) {
+                    let sub = current_submittal.get_or_insert_with(|| SubmittalRecord { file_source: current_page.clone(), ..Default::default() });
+                    select_product(&mark, sub, &mut current_types, &mut type_stamps, &mut blocks, &current_page);
+                } else if let Some(sub) = current_submittal.as_mut() {
+                    cut_sheet_detail(seg, sub, &mut current_types, &current_page);
+                }
+            }
+            if let Some(block) = blocks.last_mut()
+                && block.len() < MAX_BLOCK_LINES
+            {
+                block.push(line.to_string());
+            }
             continue;
         }
 
@@ -1034,16 +1149,276 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
                 }
             }
         }
-
-        i += 1;
     }
 
     // Finalize last submittal.
     if let Some(sub) = current_submittal.take() {
+        settle_dimming(&mut current_types, &blocks, &mut result, &mut rfi_counter);
         finalize_submittal(sub, &current_types, &type_stamps, existing, &mut result, &mut rfi_counter);
+    }
+    if cut_sheets {
+        merge_repeated_marks(&mut result.proposals);
     }
 
     result
+}
+
+/// One proposal per mark: a product whose pages run on into another section of the package
+/// keeps its first reading, and gains what the later pages add.
+fn merge_repeated_marks(proposals: &mut Vec<SpecProposal>) {
+    let mut kept: Vec<SpecProposal> = Vec::with_capacity(proposals.len());
+    for p in proposals.drain(..) {
+        match kept.iter_mut().find(|k| k.bim_type.mark == p.bim_type.mark) {
+            Some(k) => {
+                for (key, field) in p.bim_type.fields {
+                    k.bim_type.fields.entry(key).or_insert(field);
+                }
+            }
+            None => kept.push(p),
+        }
+    }
+    *proposals = kept;
+}
+
+/// Lines kept per cut-sheet product to read its dimming from.
+const MAX_BLOCK_LINES: usize = 20_000;
+
+/// "Model Number : X" → "Model Number: X" (cut-sheet headers space their colons).
+fn squash_colon(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut gap = String::new();
+    for c in line.chars() {
+        if c.is_whitespace() {
+            gap.push(c);
+            continue;
+        }
+        if c != ':' {
+            out.push_str(&gap);
+        }
+        gap.clear();
+        out.push(c);
+    }
+    out
+}
+
+/// Header labels that name a cut sheet's type, longest first.
+const MARK_LABELS: &[&str] = &["fixture type", "luminaire type", "type mark", "type"];
+
+/// Whether `text` is a type label on its own, colon and all ("Type :").
+fn is_mark_label(text: &str) -> bool {
+    let t = squash_colon(text.trim()).to_ascii_lowercase();
+    t.strip_suffix(':').is_some_and(|label| MARK_LABELS.contains(&label))
+}
+
+/// The mark a cut sheet's header names ("Type: A1", colon squashed).
+fn type_header(seg: &str) -> Option<String> {
+    let lower = seg.to_ascii_lowercase();
+    let rest = MARK_LABELS.iter().find_map(|l| lower.strip_prefix(l).and_then(|r| r.strip_prefix(':')))?;
+    let value = seg[seg.len() - rest.len()..].split_whitespace().next()?;
+    mark_token(value).map(str::to_string)
+}
+
+/// `s` if it reads as a type mark: short, capitals and digits ("A1", "XB", "L4", "EM-2").
+fn mark_token(s: &str) -> Option<&str> {
+    let ok = (1..=8).contains(&s.chars().count())
+        && s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-' || c == '.');
+    ok.then_some(s)
+}
+
+/// Make the product of type `mark` the current one (the last): a cut sheet repeats its header on
+/// every page, so a mark seen before goes on with the product it started.
+fn select_product(
+    mark: &str,
+    sub: &mut SubmittalRecord,
+    types: &mut Vec<SpecProposal>,
+    stamps: &mut Vec<String>,
+    blocks: &mut Vec<Vec<String>>,
+    page: &str,
+) {
+    if types.last().is_some_and(|t| t.bim_type.mark == mark) {
+        return;
+    }
+    if let Some(i) = types.iter().position(|t| t.bim_type.mark == mark) {
+        let ty = types.remove(i);
+        types.push(ty);
+        let stamp = stamps.remove(i);
+        stamps.push(stamp);
+        if i < blocks.len() {
+            let block = blocks.remove(i);
+            blocks.push(block);
+        }
+        return;
+    }
+    sub.type_marks.push(mark.to_string());
+    types.push(SpecProposal { bim_type: BimType::new(mark), origin: "submittal".into(), file_source: page.to_string(), ..Default::default() });
+    stamps.push(String::new());
+    blocks.push(Vec::new());
+}
+
+/// The fields a cut sheet's header gives its product, by label.
+const CUT_SHEET_FIELDS: &[(&[&str], &str)] = &[
+    (&["manufacturer:", "manufactured by:", "mfr:", "mfg:"], bimspec::keys::MANUFACTURER),
+    (&["model number:", "model no:", "model:", "catalog number:", "catalog no:", "catalog #:", "cat no:", "cat. no:"], bimspec::keys::CATALOG_NUMBER),
+];
+
+/// A cut-sheet field for the current product. The header comes first on every page, so the
+/// first value a product gets stays (the sheet's own text mentions makers and models too).
+fn cut_sheet_detail(seg: &str, sub: &mut SubmittalRecord, types: &mut [SpecProposal], page: &str) {
+    let Some(ty) = types.last_mut() else { return };
+    let lower = seg.to_ascii_lowercase();
+    for (labels, key) in CUT_SHEET_FIELDS {
+        let Some(n) = labels.iter().find(|l| lower.starts_with(**l)).map(|l| l.len()) else { continue };
+        let val = seg[n..].trim();
+        if !val.is_empty() && ty.bim_type.get_field(key).is_none() {
+            ty.bim_type.set_field(*key, SpecField::new(val).with_source(page));
+            let whole = if *key == bimspec::keys::MANUFACTURER { &mut sub.manufacturer } else { &mut sub.catalog_number };
+            if whole.is_empty() {
+                *whole = val.to_string();
+            }
+        }
+        return;
+    }
+}
+
+/// How a product dims, as `dimming_of` found it.
+#[derive(Debug, PartialEq)]
+enum Dimming {
+    /// The control, how it was found, and whether that was stated for the ordered product.
+    Found { control: &'static str, how: String, stated: bool },
+    /// Its pages name these controls and nothing says which was ordered.
+    Unsettled(Vec<&'static str>),
+    /// Its pages name no control.
+    Silent,
+}
+
+/// How the ordered product dims: the ordering-table row that starts with its catalog number
+/// (the part before the first '/', the rest being trims and accessories); else a 0-10V driver
+/// code in that number ("D010", "E010"); else the one control its pages name.
+fn dimming_of(catalog: &str, lines: &[String]) -> Dimming {
+    let ordered = catalog.split('/').next().unwrap_or("").trim().to_ascii_uppercase();
+    if ordered.chars().count() >= 4 {
+        for line in lines {
+            let upper = line.trim().to_ascii_uppercase();
+            let Some(rest) = upper.strip_prefix(&ordered) else { continue };
+            if !rest.starts_with(char::is_whitespace) {
+                continue;
+            }
+            if let [control] = controls_named(rest)[..] {
+                return Dimming::Found { control, how: format!("ordering row for {ordered}"), stated: true };
+            }
+        }
+        let b = ordered.as_bytes();
+        let driver = ordered.match_indices("010").any(|(i, _)| i > 0 && b[i - 1].is_ascii_alphabetic());
+        if driver {
+            return Dimming::Found { control: "0-10V", how: format!("010 driver code in {ordered}"), stated: false };
+        }
+    }
+    let mut named: Vec<&'static str> = lines.iter().flat_map(|l| controls_named(l)).collect();
+    named.sort_unstable();
+    named.dedup();
+    match named[..] {
+        [] => Dimming::Silent,
+        [control] => Dimming::Found { control, how: "the only control its cut sheet names".into(), stated: false },
+        _ => Dimming::Unsettled(named),
+    }
+}
+
+/// Words that name a dimming control (upper case), with whether the word must end there.
+const CONTROL_WORDS: &[(&str, &str, bool)] = &[
+    ("0-10V", "0-10V", true),
+    ("0-10VDC", "0-10V", true),
+    ("0-10 V", "0-10V", true),
+    ("0 - 10V", "0-10V", true),
+    ("0 - 10 V", "0-10V", true),
+    ("0–10V", "0-10V", true),
+    ("LE/TE", "phase", true),
+    ("TRIAC", "phase", true),
+    ("ELV", "phase", true),
+    ("MLV", "phase", true),
+    ("FORWARD PHASE", "phase", true),
+    ("REVERSE PHASE", "phase", true),
+    ("PHASE DIM", "phase", false),
+    ("PHASE-CUT", "phase", true),
+    ("LEADING EDGE", "phase", true),
+    ("TRAILING EDGE", "phase", true),
+    ("DALI", "DALI", true),
+    ("NON-DIM", "non-dim", false),
+    ("NON DIM", "non-dim", false),
+    ("NONDIM", "non-dim", false),
+];
+
+/// The dimming controls a text names: "0-10V", "phase" (LE/TE, TRIAC, ELV, forward or reverse
+/// phase), "DALI", "non-dim".
+fn controls_named(text: &str) -> Vec<&'static str> {
+    let upper = text.to_ascii_uppercase();
+    let b = upper.as_bytes();
+    let mut out = Vec::new();
+    for (word, control, ends) in CONTROL_WORDS {
+        let hit = upper.match_indices(word).any(|(i, _)| {
+            let end = i + word.len();
+            (i == 0 || !b[i - 1].is_ascii_alphanumeric()) && (!ends || end >= b.len() || !b[end].is_ascii_alphanumeric())
+        });
+        if hit && !out.contains(control) {
+            out.push(*control);
+        }
+    }
+    out
+}
+
+/// Each product's dimming (`dimming_of`) from its catalog number and its pages, and whether it is
+/// a luminaire (its pages speak of lumens, LEDs, CCT…). A product whose pages name several
+/// controls with nothing saying which was ordered is a question.
+/// Words a lighting cut sheet uses of its product; a product whose pages use two of them is a
+/// luminaire.
+const LIGHTING_WORDS: &[&str] = &["LUMEN", "LUMINAIRE", "LED", "CCT", "CRI", "FOOTCANDLE", "PHOTOMETRIC", "EXIT"];
+/// A luminaire whose cut sheet says it goes on a wall (not the wall-wash trims of a downlight).
+const WALL_MOUNT_WORDS: &[&str] = &["WALL MOUNT", "WALL-MOUNT", "WALL BRACKET", "SCONCE", "WALL PACK", "WALLPACK", "EXIT SIGN", "EXIT LIGHT"];
+
+fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &mut SpecImportResult, counter: &mut u32) {
+    for (i, p) in types.iter_mut().enumerate() {
+        let lines = blocks.get(i).map(Vec::as_slice).unwrap_or(&[]);
+        if p.bim_type.category.is_empty() {
+            let words = LIGHTING_WORDS.iter().filter(|w| lines.iter().any(|l| l.to_ascii_uppercase().contains(**w))).count();
+            if words >= 2 {
+                p.bim_type.category = "luminaire".into();
+            }
+        }
+        // Where a luminaire goes: on a wall when its cut sheet says so (an exit sign, a sconce, a
+        // wall pack); the ceiling otherwise.
+        if p.bim_type.category == "luminaire" && p.bim_type.get_field(bimspec::keys::MOUNTING).is_none() {
+            let wall = WALL_MOUNT_WORDS.iter().find(|w| lines.iter().any(|l| l.to_ascii_uppercase().contains(**w)));
+            if let Some(w) = wall {
+                let source = format!("{} (its cut sheet: {})", p.file_source, w.to_ascii_lowercase());
+                p.bim_type.set_field(bimspec::keys::MOUNTING, SpecField::new("wall").with_source(source).with_confidence(Confidence::Inferred));
+            }
+        }
+        if p.bim_type.get_field(bimspec::keys::DIMMING).is_some() {
+            continue;
+        }
+        let catalog = p.bim_type.get_field(bimspec::keys::CATALOG_NUMBER).map(|f| f.value.clone()).unwrap_or_default();
+        match dimming_of(&catalog, lines) {
+            Dimming::Found { control, how, stated } => {
+                let field = SpecField::new(control).with_source(format!("{} ({how})", p.file_source));
+                p.bim_type.set_field(bimspec::keys::DIMMING, if stated { field } else { field.with_confidence(Confidence::Inferred) });
+            }
+            Dimming::Unsettled(named) if result.rfis.len() < MAX_RFI_ITEMS => {
+                *counter = counter.saturating_add(1);
+                let mark = p.bim_type.mark.clone();
+                let ordered = if catalog.is_empty() { "no catalog number".to_string() } else { format!("the ordered {catalog}") };
+                result.rfis.push(RfiItem {
+                    id: format!("RFI-{counter:03}"),
+                    description: format!("dimming for type {mark}: its cut sheet names {} and {ordered} doesn't say which", named.join(" and ")),
+                    mark,
+                    field: bimspec::keys::DIMMING.into(),
+                    severity: "medium".into(),
+                    sources: vec![p.file_source.clone()],
+                    ..Default::default()
+                });
+            }
+            _ => {}
+        }
+    }
 }
 
 fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec<SpecProposal>, stamps: &mut Vec<String>, page: &str) {
@@ -1677,6 +2052,119 @@ APPROVED AS NOTED
 
         let submittals = arr(&r["submittals"]);
         assert!(!submittals.is_empty(), "should have submittal records");
+    }
+
+    #[test]
+    fn a_cut_sheet_page_reads_as_its_header_lines_and_table_rows() {
+        let at = |x: f64, y: f64, h: f64, t: &str| super::Placed { x, y, h, text: t.to_string() };
+        let lines = super::page_lines(vec![
+            at(1.3, 10.65, 0.08, "Job Name :"),
+            at(2.0, 10.62, 0.1, "SOME JOB"),
+            at(7.4, 10.65, 0.08, "Type :"),
+            at(1.1, 10.44, 0.08, "Manufacturer :"),
+            at(2.0, 10.42, 0.1, "ACME LIGHTING"),
+            // The type's value sits under its label, on the manufacturer's baseline.
+            at(7.7, 10.41, 0.14, "Q7"),
+            at(1.1, 10.24, 0.08, "Model Number :"),
+            at(2.0, 10.21, 0.1, "QX100E1/TRIM"),
+            at(0.85, 8.1, 0.05, "QX100E1"),
+            at(1.94, 8.1, 0.05, "4in downlight, 120V, LE/TE 5% Dim"),
+        ]);
+        assert_eq!(
+            lines,
+            [
+                "Job Name : SOME JOB   Type : Q7",
+                "Manufacturer : ACME LIGHTING",
+                "Model Number : QX100E1/TRIM",
+                "QX100E1   4in downlight, 120V, LE/TE 5% Dim",
+            ]
+        );
+    }
+
+    #[test]
+    fn cut_sheets_give_each_type_its_maker_catalog_number_and_dimming() {
+        let mut s = session();
+        let text = "\
+--- page 1 of 4 ---
+Job Name : SOME JOB   Type : Q7
+Manufacturer : ACME LIGHTING
+Model Number : QX100E1/TRIM
+Lumens: 1056
+LED module, 3000K CCT
+--- page 2 of 4 ---
+Job Name : SOME JOB   Type : Q7
+Model Number : QX100E1/TRIM
+Manufacturer: SOMEONE ELSE
+Catalog Number
+QX100E1   4in downlight, 120V, LE/TE 5% Dim
+QX100E010   4in downlight, 120-277V 0-10V 5% Dim
+--- page 3 of 4 ---
+Job Name : SOME JOB   Type : Q7A
+Manufacturer : ACME LIGHTING
+Model Number : HX6D010IEM/TRIM
+LED wall mount luminaire, 1200 lumens
+--- page 4 of 4 ---
+Type : Q8
+Manufacturer : OTHER CO
+Model Number : WRAP 48 840
+Dimming   Non-Dimming   0-10V
+";
+        let r = s.execute("bim.spec_import", &json!({"text": text, "format": "submittal"})).unwrap_or_default();
+        let proposals = arr(&r["proposals"]);
+        let marks: Vec<&str> = proposals.iter().filter_map(|p| p["mark"].as_str()).collect();
+        assert_eq!(marks, ["Q7", "Q7A", "Q8"], "only the header starts a product: {r}");
+        let field = |mark: &str, key: &str| proposals.iter().find(|p| p["mark"] == mark).map(|p| p["fields"][key].clone()).unwrap_or_default();
+        assert_eq!(field("Q7", "manufacturer")["value"], "ACME LIGHTING", "the header's maker stays");
+        assert_eq!(field("Q7", "catalogNumber")["value"], "QX100E1/TRIM");
+        assert_eq!(field("Q7", "dimming")["value"], "phase", "its ordering row says LE/TE: {r}");
+        assert!(field("Q7", "dimming").get("confidence").is_none(), "an ordering row states it");
+        assert_eq!(field("Q7A", "dimming")["value"], "0-10V", "a D010 driver code");
+        assert_eq!(field("Q7A", "dimming")["confidence"], "inferred");
+        let category = |mark: &str| proposals.iter().find(|p| p["mark"] == mark).map(|p| p["category"].clone()).unwrap_or_default();
+        assert_eq!(category("Q7"), "luminaire", "its pages speak of lumens and LED: {r}");
+        assert!(field("Q7", "mounting").is_null(), "a downlight: on the ceiling");
+        assert_eq!(field("Q7A", "mounting")["value"], "wall", "its cut sheet: wall mount: {r}");
+        assert_ne!(category("Q8"), "luminaire");
+        assert!(field("Q8", "dimming").is_null(), "two controls named, none ordered: {r}");
+        let rfis = arr(&r["rfis"]);
+        assert!(rfis.iter().any(|q| q["mark"] == "Q8" && q["field"] == "dimming"), "Q8's dimming is a question: {r}");
+    }
+
+    #[test]
+    fn a_header_value_wrapped_in_its_box_reads_whole() {
+        let at = |x: f64, y: f64, h: f64, t: &str| super::Placed { x, y, h, text: t.to_string() };
+        let lines = super::page_lines(vec![
+            at(7.4, 10.65, 0.08, "Type :"),
+            at(1.1, 10.44, 0.08, "Manufacturer :"),
+            at(2.0, 10.42, 0.1, "SOME MAKER"),
+            at(7.6, 10.41, 0.14, "WIDGE"),
+            at(1.1, 10.24, 0.08, "Model Number :"),
+            at(2.0, 10.21, 0.1, "W-100"),
+            at(7.6, 10.22, 0.14, "TS"),
+        ]);
+        assert_eq!(lines, ["Type : WIDGETS", "Manufacturer : SOME MAKER", "Model Number : W-100"]);
+    }
+
+    #[test]
+    fn a_row_of_table_numbers_is_not_a_section() {
+        assert_eq!(super::is_csi_section("SECTION 26 51 13 - INTERIOR LIGHTING"), Some("26 51 13"));
+        assert_eq!(super::is_csi_section("26 05 19.13 CONDUCTORS"), Some("26 05 19"));
+        assert_eq!(super::is_csi_section("10 53 40 32 39 32 27"), None);
+        assert_eq!(super::is_csi_section("70   70   70"), None);
+    }
+
+    #[test]
+    fn a_label_is_no_type_mark() {
+        assert_eq!(super::extract_type_definition("Note: refer to IES files for more product data."), None);
+        assert_eq!(super::extract_type_definition("Feed: 120V from the panel"), None);
+        assert_eq!(super::extract_type_definition("H: recessed downlight").map(|(m, _)| m), Some("H".into()));
+    }
+
+    #[test]
+    fn dimming_words_are_whole_words() {
+        assert_eq!(super::controls_named("SHELVES, 0-10VDC, Non-Dimming"), ["0-10V", "non-dim"]);
+        assert_eq!(super::controls_named("120V LE/TE 5% Dim, see TRIAC list"), ["phase"]);
+        assert!(super::controls_named("Dimming Guide").is_empty());
     }
 
     #[test]

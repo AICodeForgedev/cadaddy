@@ -192,6 +192,41 @@ fn blockreplace_without_purge_and_refusals() {
 }
 
 #[test]
+fn blockreplace_refuses_a_dynamic_block_and_a_container_as_soon_as_named() {
+    use cadaddy_engine::doc::RawTag;
+    use cadaddy_engine::doc::foreign::{Foreign, ForeignExtra, ForeignObject};
+    let (mut s, _) = blocks();
+    // HOLDER contains OLD: refused at the replacement prompt, which asks again.
+    s.cmdline("blockreplace").unwrap();
+    s.cmdline("OLD").unwrap();
+    s.cmdline("HOLDER").unwrap();
+    assert!(s.log.iter().any(|l| l.contains("Block \"HOLDER\" contains \"OLD\"")), "{:?}", s.log);
+    assert!(s.prompting());
+    s.input(cadaddy_engine::Input::Cancel).unwrap();
+
+    // OLD made dynamic: refused as the block to replace, by JSON and typed.
+    let mut d = s.doc().unwrap().clone();
+    let mut f = Foreign::default();
+    f.records.insert(("BLOCK_RECORD".into(), "OLD".into()), ForeignExtra { xdict: Some(Handle(0xF00)), ..Default::default() });
+    let tags = |t: &[(i32, &str)]| t.iter().map(|(c, v)| RawTag { code: *c, value: (*v).into() }).collect();
+    f.objects.push(ForeignObject {
+        handle: Handle(0xF00),
+        kind: "DICTIONARY".into(),
+        tags: tags(&[(100, "AcDbDictionary"), (3, "ACAD_ENHANCEDBLOCK"), (360, "F01")]),
+    });
+    f.objects.push(ForeignObject { handle: Handle(0xF01), kind: "ACAD_EVALUATION_GRAPH".into(), tags: tags(&[(100, "AcDbEvalGraph")]) });
+    d.foreign = std::sync::Arc::new(f);
+    s.open_drawing(d, "dynamic", None);
+    let e = s.execute("blockreplace", &json!({"from": "OLD", "to": "NEW"})).unwrap_err().to_string();
+    assert!(e.contains("dynamic block"), "{e}");
+    s.cmdline("blockreplace").unwrap();
+    s.cmdline("OLD").unwrap();
+    assert!(s.log.iter().any(|l| l.contains("Block \"OLD\" is a dynamic block")), "{:?}", s.log);
+    assert!(s.prompting());
+    s.input(cadaddy_engine::Input::Cancel).unwrap();
+}
+
+#[test]
 fn blockreplace_typed_by_name_and_by_pick() {
     let (mut s, refs) = blocks();
     s.cmdline("blockreplace").unwrap();
@@ -267,6 +302,27 @@ fn mocoro_typed_with_modes_base_and_undo() {
     s.undo().unwrap();
     assert_eq!(line_ends(&s, l), (Vec2::ZERO, Vec2::new(10.0, 0.0)));
     assert_eq!(s.doc().unwrap().model.len(), n);
+}
+
+#[test]
+fn mocoro_typed_rotation_ignores_angbase() {
+    // A typed rotation is relative: ANGBASE must not offset it, ANGDIR 1 turns it clockwise.
+    for (vars, want) in [(vec![("ANGBASE", 90), ("ANGDIR", 0)], Vec2::new(0.0, 10.0)), (vec![("ANGBASE", 90), ("ANGDIR", 1)], Vec2::new(0.0, -10.0))]
+    {
+        let mut s = session();
+        for (name, value) in &vars {
+            s.execute("setvar", &json!({"name": name, "value": value})).unwrap();
+        }
+        let l = h(&s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap()["handles"][0]);
+        s.set_selection(vec![l]);
+        s.cmdline("mocoro").unwrap();
+        s.cmdline("0,0").unwrap();
+        s.cmdline("r").unwrap();
+        s.cmdline("90").unwrap();
+        let (a, b) = line_ends(&s, l);
+        assert!(a.x.abs() < 1e-9 && a.y.abs() < 1e-9, "{vars:?} {a:?}");
+        assert!((b.x - want.x).abs() < 1e-9 && (b.y - want.y).abs() < 1e-9, "{vars:?} {b:?}");
+    }
 }
 
 #[test]

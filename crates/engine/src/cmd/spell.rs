@@ -362,7 +362,7 @@ pub fn suggestions(main: &HashSet<String>, word: &str) -> Vec<String> {
 }
 
 /// For each character of `chars`, whether it is shown text (not a format, `%%` or field code).
-fn literal_mask(chars: &[char], mtext: bool) -> Vec<bool> {
+pub(crate) fn literal_mask(chars: &[char], mtext: bool) -> Vec<bool> {
     let mut mask = vec![true; chars.len()];
     let mut i = 0;
     while i < chars.len() {
@@ -618,7 +618,7 @@ pub fn add_word(word: &str) -> Result<()> {
             let _ = std::fs::create_dir_all(dir);
         }
         crate::writefile::check(std::path::Path::new(&path)).map_err(|e| EngineError::Other(e.to_string()))?;
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+        let mut f = crate::writefile::open_append(&path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
         writeln!(f, "{w}").map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     }
     #[cfg(target_arch = "wasm32")]

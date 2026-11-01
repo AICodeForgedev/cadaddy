@@ -183,6 +183,81 @@ fn ramp_note(t: &str) -> bool {
 
 /// The stairs of the plan, as spec entries with their measures and confidence.
 fn detect(s: &Session, sp: &BuildingSpec) -> Result<Vec<(Stair, Value)>> {
+    detect_with(s, sp, None)
+}
+
+/// How far around a stair's traced floor (feet) its flights are looked for: the trace stops at
+/// the first tread, the flights run on beyond it.
+const STAIR_REACH_FT: f64 = 16.0;
+/// How near a flight's foot or head comes to the stair's traced floor (feet) to be its.
+const FLIGHT_TOUCH_FT: f64 = 3.0;
+
+/// The stairs in the spec's circulation (`STAIR …` spaces traced from their labels), found from
+/// their tread lines whatever layer they are on: each named for its space and level (`STAIR 01
+/// Level 2`). A print set on one layer has no stair layer to look on; the space says where the
+/// stair is.
+pub(crate) fn detect_in_circulation(s: &Session, sp: &BuildingSpec) -> Result<Vec<Stair>> {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let spaces: Vec<&cadaddy_walk3d::Circulation> = sp.circulation.iter().filter(|c| c.kind == cadaddy_walk3d::CirculationKind::Stair).collect();
+    if spaces.is_empty() {
+        return Ok(Vec::new());
+    }
+    let reach = STAIR_REACH_FT * upf;
+    let near = |c: &cadaddy_walk3d::Circulation, p: Vec2, by: f64| {
+        c.rects.iter().any(|[a, b]| p.x >= a[0] - by && p.x <= b[0] + by && p.y >= a[1] - by && p.y <= b[1] + by)
+    };
+    let pick = |p: Vec2| spaces.iter().any(|c| near(c, p, reach));
+    let found = detect_with(s, sp, Some(&pick))?;
+    let touch = FLIGHT_TOUCH_FT * upf;
+    // The flights found at each stair space (its index), as one stair: chained end to nearest end.
+    let mut at_space: Vec<(usize, Stair)> = Vec::new();
+    for (st, _) in found.into_iter().filter(|(st, _)| !st.ramp) {
+        let ends: Vec<Vec2> = st.runs.iter().flat_map(|r| [Vec2::new(r.from[0], r.from[1]), Vec2::new(r.to[0], r.to[1])]).collect();
+        let Some(i) = spaces.iter().position(|c| c.level.eq_ignore_ascii_case(&st.level) && ends.iter().any(|p| near(c, *p, touch))) else {
+            continue;
+        };
+        match at_space.iter_mut().find(|(j, _)| *j == i) {
+            Some((_, whole)) => join_flights(whole, st),
+            None => at_space.push((i, st)),
+        }
+    }
+    Ok(at_space
+        .into_iter()
+        .map(|(i, mut st)| {
+            st.name = format!("{} {}", spaces[i].name.trim(), st.level);
+            st
+        })
+        .collect())
+}
+
+/// Add `other`'s flights to `stair`: at its head or its foot, whichever end of `other` is
+/// nearer, `other` turned round when its far end is the near one. Its width is the narrower.
+fn join_flights(stair: &mut Stair, other: Stair) {
+    let p = |a: [f64; 2]| Vec2::new(a[0], a[1]);
+    let (Some(head), Some(foot)) = (stair.runs.last().map(|r| p(r.to)), stair.runs.first().map(|r| p(r.from))) else {
+        *stair = other;
+        return;
+    };
+    let (Some(o_foot), Some(o_head)) = (other.runs.first().map(|r| p(r.from)), other.runs.last().map(|r| p(r.to))) else { return };
+    let turned =
+        |runs: Vec<StairRun>| -> Vec<StairRun> { runs.into_iter().rev().map(|r| StairRun { from: r.to, to: r.from, treads: r.treads }).collect() };
+    // The four ways the two can meet; the shortest gap joins them.
+    let options = [(head.dist(o_foot), 0), (head.dist(o_head), 1), (foot.dist(o_head), 2), (foot.dist(o_foot), 3)];
+    let best = options.iter().min_by(|a, b| a.0.total_cmp(&b.0)).map_or(0, |o| o.1);
+    let runs = other.runs;
+    match best {
+        0 => stair.runs.extend(runs),
+        1 => stair.runs.extend(turned(runs)),
+        2 => drop(stair.runs.splice(0..0, runs)),
+        _ => drop(stair.runs.splice(0..0, turned(runs))),
+    }
+    stair.width_in = stair.width_in.min(other.width_in);
+    stair.objects.extend(other.objects);
+}
+
+/// [`detect`] on the stair layers, or, with `pick`, on the plan's lines (any layer) whose middle
+/// it takes.
+fn detect_with(s: &Session, sp: &BuildingSpec, pick: Option<&dyn Fn(Vec2) -> bool>) -> Result<Vec<(Stair, Value)>> {
     let plan = super::verify::plan_session(s)?;
     let d: &Drawing = plan.doc()?;
     let k = units_per_inch(d);
@@ -195,7 +270,11 @@ fn detect(s: &Session, sp: &BuildingSpec) -> Result<Vec<(Stair, Value)>> {
     let ents: Vec<&Arc<Entity>> = all
         .iter()
         .copied()
-        .filter(|e| if has_roles { sp.role(&e.common.layer).is_some_and(|r| r.role == Role::Stair) } else { stair_layer(&e.common.layer) })
+        .filter(|e| match pick {
+            Some(pick) => matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) && super::bspec::centre(d, e).is_some_and(pick),
+            None if has_roles => sp.role(&e.common.layer).is_some_and(|r| r.role == Role::Stair),
+            None => stair_layer(&e.common.layer),
+        })
         .collect();
     // Ramp outlines: with layer roles, only those on stair layers (or layers named for them).
     let ramp_layer = |l: &str| !has_roles || stair_layer(l) || sp.role(l).is_some_and(|r| r.role == Role::Stair);
@@ -468,12 +547,14 @@ fn wedge(m: &mut Mesh, w: &cadaddy_walk3d::stairs::Wedge, upf: f64) {
 }
 
 /// What `build` made: meshes of each part.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Built {
     pub stairs: usize,
     pub ramps: usize,
     pub railings: usize,
     pub guards: usize,
+    /// The stairs not built, each with why: unconfirmed ones that can't be built as measured.
+    pub left_out: Vec<String>,
 }
 
 /// Build the spec's stairs into model space (sheet units): one mesh per stair or ramp, one
@@ -481,6 +562,7 @@ pub(crate) struct Built {
 pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Built {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let (mut stairs, mut ramps, mut rails, mut guards) = (0, 0, 0, 0);
+    let mut left_out = Vec::new();
     for layer in ["3D-Stairs", "3D-Railings"] {
         if d.layer(layer).is_none() {
             let color = if layer == "3D-Stairs" { 9 } else { 8 };
@@ -488,6 +570,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Built {
         }
     }
     for st in sp.stairs.iter().take(MAX_STAIRS) {
+        // Never built silently as no stair can be: left out and said (a confirmed one is the
+        // user's to keep; its warning stands).
+        if !st.confirmed
+            && let Some(why) = sp.stair_unbuildable(st)
+        {
+            left_out.push(format!("{}: {why}", st.name));
+            continue;
+        }
         let Some(rule) = sp.stair_rule(st) else { continue };
         let g = rule.geometry(Vec2::new(0.0, 0.0), upf);
         let mut m = super::wallgen::empty_mesh();
@@ -541,12 +631,50 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Built {
             guards += 1;
         }
     }
-    Built { stairs, ramps, railings: rails, guards }
+    Built { stairs, ramps, railings: rails, guards, left_out }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stair_on_one_layer_is_found_in_its_stair_space_as_one_stair() {
+        let mut s = Session::new();
+        let line = |s: &mut Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        // Everything on layer 0: a switchback, two flights of 9 treads (11" × 44") turning on a
+        // landing, its stringers; and the same pattern far off in another room (no stair space).
+        let flight = |s: &mut Session, x0: f64, y0: f64, dir: f64| {
+            for i in 0..=9 {
+                let x = x0 + dir * 11.0 * f64::from(i);
+                line(s, [x, y0], [x, y0 + 44.0]);
+            }
+            let x1 = x0 + dir * 99.0;
+            line(s, [x0, y0], [x1, y0]);
+            line(s, [x0, y0 + 44.0], [x1, y0 + 44.0]);
+        };
+        flight(&mut s, 100.0, 200.0, 1.0);
+        flight(&mut s, 199.0, 250.0, -1.0);
+        flight(&mut s, 1500.0, 200.0, 1.0);
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {
+                "levels": [
+                    {"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-500, -500, 2000, 2000], "base": [0, 0]},
+                    {"name": "L2", "elevation_ft": 12, "height_ft": 12, "ceiling_ft": 9, "region": [4000, -500, 6000, 2000], "base": [4000, 0]}
+                ],
+                "circulation": [{"kind": "stair", "level": "L1", "name": "STAIR 1", "at": [230, 250], "rects": [[[199, 200], [260, 294]]]}]
+            }}),
+        )
+        .unwrap();
+        let (sp, _) = current(&s, "test").unwrap();
+        let found = detect_in_circulation(&s, &sp).unwrap();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!((found[0].name.as_str(), found[0].level.as_str(), found[0].runs.len()), ("STAIR 1 L1", "L1", 2), "{found:?}");
+        assert_eq!(found[0].runs.iter().map(|r| r.treads).sum::<u32>(), 18, "{found:?}");
+    }
 
     #[test]
     fn notes() {

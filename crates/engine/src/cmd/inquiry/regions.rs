@@ -11,8 +11,10 @@ use serde_json::{Value, json};
 
 use super::super::machines::{SelOutcome, SelectPhase, SelectRun};
 use super::super::*;
+use super::SelfCheck;
 use crate::{EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
+/// The region commands: UNION, SUBTRACT and INTERSECT combine regions, MASSPROP measures them.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("union", "Union", run_union)
@@ -32,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(SelectRun::new("intersect", "INTERSECT")))),
         CommandSpec::new("massprop", "Region/Mass Properties", run_massprop)
             .menu(&["Tools", "Inquiry", "Region/Mass Properties"])
-            .params("{handles?} (regions, 3D solids) → properties of each: regions {area, perimeter, centroid, moments…}, solids {volume, surfaceArea, boundingBox, centroid}")
+            .params("{handles?} (regions, 3D solids) → properties of each: regions {area, perimeter, centroid, moments…}, solids {volume, surfaceArea, boundingBox, centroid}, plus `selfCheck` (found/analyzed/skipped with reasons, caps, implausible values)")
             .noundo()
             .interactive(|_| Ok(Box::new(SelectRun::new("massprop", "MASSPROP")))),
     ]
@@ -216,6 +218,20 @@ fn run_massprop(s: &mut Session, p: &Value) -> Result<Value> {
     if rs.is_empty() && solids.is_empty() {
         return Err(other("Select one or more regions or 3D solids."));
     }
+    let mut check = SelfCheck::new();
+    let d = s.doc()?;
+    let extents = d.extents(&s.space());
+    // No visible extents means no bound to compare an area against (`implausible` skips an
+    // infinite bound).
+    let extents_area = if extents.is_empty() { f64::INFINITY } else { extents.width() * extents.height() };
+    for h in &hs {
+        check.found(1);
+        match d.entity(*h).map(|e| &e.kind) {
+            Some(EntityKind::Region(_) | EntityKind::Solid3d(_)) => check.analyzed(1),
+            Some(kind) => check.skip(kind.type_name(), "not a region or 3D solid", 1),
+            None => check.skip("Missing", "no such object", 1),
+        }
+    }
     // Lengths per the units settings; areas and moments as plain numbers.
     let f = |v: f64| super::fmt_d(s, v);
     let n = |v: f64| super::fmt_n(s, v);
@@ -224,6 +240,9 @@ fn run_massprop(s: &mut Session, p: &Value) -> Result<Value> {
     for (h, r) in &rs {
         let m = r.props();
         let c = m.centroid;
+        let diagonal = if m.bounds.is_empty() { 0.0 } else { m.bounds.min.dist(m.bounds.max) };
+        check.implausible(*h, "Region", "perimeter", m.perimeter, diagonal * 10.0, "perimeter is more than 10 x the bounding-box diagonal");
+        check.implausible(*h, "Region", "area", m.area, extents_area, "area is larger than the drawing extents");
         // Moments about the centroid, and the principal moments and directions.
         let [ixc, iyc, ixyc] = m.centroid_moments;
         let mid = (ixc + iyc) / 2.0;
@@ -262,5 +281,5 @@ fn run_massprop(s: &mut Session, p: &Value) -> Result<Value> {
         ));
     }
     lines.extend(solid_lines);
-    Ok(json!({ "regions": out, "solids": solids, "message": lines.join("\n") }))
+    Ok(json!({ "regions": out, "solids": solids, "selfCheck": check.to_json(), "message": lines.join("\n") }))
 }

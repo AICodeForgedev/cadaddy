@@ -40,7 +40,7 @@ impl NumFormat {
 /// Decimal number with leading (`zin & 4`) / trailing (`zin & 8`) zero suppression.
 pub fn format_decimal(v: f64, decimals: u8, zin: u8, sep: &str) -> String {
     let v = if v.is_finite() { v } else { 0.0 };
-    let mut s = format!("{:.*}", usize::from(decimals.min(8)), v);
+    let mut s = cadaddy_doc::numfmt::fixed(v, usize::from(decimals.min(8)));
     if s.starts_with('-') && s.trim_start_matches(['-', '0', '.']).is_empty() {
         s.remove(0);
     }
@@ -86,14 +86,9 @@ fn scientific(v: f64, decimals: u8, zin: u8, sep: &str) -> String {
     if v == 0.0 || !v.is_finite() {
         return format!("{}E+00", format_decimal(0.0, decimals, zin & 8, sep));
     }
-    let mut exp = v.abs().log10().floor() as i32;
-    let mut mant = v / 10f64.powi(exp);
-    // Rounding can carry the mantissa to 10.
-    let p = 10f64.powi(i32::from(decimals.min(8)));
-    if (mant.abs() * p).round() / p >= 10.0 {
-        mant /= 10.0;
-        exp += 1;
-    }
+    // The mantissa rounds on the decimal text (a carry to 10 moves into the exponent).
+    let (mant, exp) = cadaddy_doc::numfmt::sci_parts(v, usize::from(decimals.min(8)));
+    let mant = mant.parse::<f64>().unwrap_or(0.0);
     format!("{}E{}{:02}", format_decimal(mant, decimals, zin & 8, sep), if exp < 0 { '-' } else { '+' }, exp.abs())
 }
 
@@ -102,7 +97,8 @@ fn feet_inches(neg: bool, ft: i64, inch_plain: &str, inch_m: &str, inch_zero: bo
     let mode = zin & 3;
     let show_ft = ft != 0 || mode == 1 || mode == 2;
     let show_in = !inch_zero || mode == 1 || mode == 3 || (ft == 0 && !show_ft);
-    let sign = if neg { "-" } else { "" };
+    // A negative value that rounds to zero prints without a sign.
+    let sign = if neg && (ft != 0 || !inch_zero) { "-" } else { "" };
     let mut p = String::from(sign);
     let mut m = String::from(sign);
     if show_ft {
@@ -158,7 +154,7 @@ pub fn format_linear(v: f64, f: &NumFormat) -> (String, String) {
             let neg = v < 0.0;
             let a = v.abs();
             let p = 10f64.powi(i32::from(f.decimals.min(8)));
-            let a = (a * p).round() / p;
+            let a = cadaddy_doc::numfmt::round_to(a, usize::from(f.decimals.min(8)));
             let ft = (a / 12.0 + 1e-12).floor();
             let inch = (a - ft * 12.0).max(0.0);
             let s = format_decimal(inch, f.decimals, f.zin & 12, sep);
@@ -193,10 +189,18 @@ pub fn format_linear(v: f64, f: &NumFormat) -> (String, String) {
     }
 }
 
-/// Format an angle (radians, non-negative sweep) per DIMAUNIT / DIMADEC.
+/// Format an angle (radians, non-negative sweep) per DIMAUNIT / DIMADEC, with a decimal point.
 pub fn format_angle(rad: f64, unit: u8, decimals: u8, zin: u8) -> String {
+    format_angle_with_separator(rad, unit, decimals, zin, ".")
+}
+
+/// Format an angle with the dimension style's DIMDSEP separator.
+pub(crate) fn format_angle_with_separator(rad: f64, unit: u8, decimals: u8, zin: u8, separator: &str) -> String {
     let rad = if rad.is_finite() { rad } else { 0.0 };
-    let deg = rad.to_degrees();
+    // Float noise from the geometry (22.249999999999996 for a true 22.25) must not turn a half
+    // down: settle the value at 9 places first, as lengths settle through the shortest text.
+    let deg = cadaddy_doc::numfmt::round_to(rad.to_degrees(), 9);
+    let rad = cadaddy_doc::numfmt::round_to(rad, 12);
     match unit {
         1 => {
             // Round at the displayed precision before splitting into degrees/minutes/seconds.
@@ -214,9 +218,9 @@ pub fn format_angle(rad: f64, unit: u8, decimals: u8, zin: u8) -> String {
                 _ => format!("{d}°{m}'{s}\""),
             }
         }
-        2 => format!("{}g", format_decimal(deg / 0.9, decimals, zin, ".")),
-        3 => format!("{}r", format_decimal(rad, decimals, zin, ".")),
-        _ => format!("{}°", format_decimal(deg, decimals, zin, ".")),
+        2 => format!("{}g", format_decimal(cadaddy_doc::numfmt::round_to(deg / 0.9, 9), decimals, zin, separator)),
+        3 => format!("{}r", format_decimal(rad, decimals, zin, separator)),
+        _ => format!("{}°", format_decimal(deg, decimals, zin, separator)),
     }
 }
 
@@ -226,6 +230,24 @@ mod tests {
 
     fn f(unit: u8, decimals: u8, zin: u8) -> NumFormat {
         NumFormat { unit, decimals, zin, ..NumFormat::decimal(decimals) }
+    }
+
+    #[test]
+    fn dimension_text_rounds_exact_halves_up() {
+        for (v, want) in [(0.5, "1"), (1.5, "2"), (2.5, "3"), (3.5, "4"), (4.5, "5"), (-2.5, "-3")] {
+            assert_eq!(format_linear(v, &f(2, 0, 0)).0, want, "{v}");
+        }
+        assert_eq!(format_linear(0.125, &f(2, 2, 0)).0, "0.13");
+        assert_eq!(format_linear(0.375, &f(2, 2, 0)).0, "0.38");
+        assert_eq!(format_linear(2.675, &f(2, 2, 0)).0, "2.68");
+        assert_eq!(format_linear(-0.125, &f(2, 2, 0)).0, "-0.13");
+        assert_eq!(format_linear(1.25, &f(1, 1, 0)).0, "1.3E+00");
+        // Engineering inches, and the carry from 11.5 into a foot.
+        assert_eq!(format_linear(2.5, &f(3, 0, 0)).0, "3\"");
+        assert_eq!(format_linear(11.5, &f(3, 0, 0)).0, "1'");
+        // DIMRND applies first: 2.4 to the nearest 0.5 is 2.5, which then rounds up.
+        let nf = NumFormat { round: 0.5, ..f(2, 0, 0) };
+        assert_eq!(format_linear(2.4, &nf).0, "3");
     }
 
     #[test]
@@ -291,6 +313,48 @@ mod tests {
         assert_eq!(format_linear(6.0, &f(5, 4, 0)).0, "6");
         assert_eq!(format_linear(0.375, &f(5, 3, 0)).0, "3/8");
         assert_eq!(format_linear(0.4, &f(5, 2, 0)).0, "1/2");
+    }
+
+    #[test]
+    fn negative_values_rounding_to_zero_have_no_sign() {
+        for unit in 1..=5 {
+            for decimals in [0, 2, 4] {
+                for zin in [0, 1] {
+                    for v in [-1e-9, -0.0] {
+                        let (p, m) = format_linear(v, &f(unit, decimals, zin));
+                        assert!(!p.starts_with('-') || unit == 1 && v != 0.0, "unit {unit} decimals {decimals} zin {zin}: {p}");
+                        assert!(!m.starts_with('-') || unit == 1 && v != 0.0, "unit {unit} decimals {decimals} zin {zin}: {m}");
+                    }
+                }
+            }
+        }
+        // DIMRND rounding a small negative value to zero, in every unit.
+        for unit in 1..=5 {
+            let mut c = f(unit, 4, 0);
+            c.round = 0.25;
+            let (p, m) = format_linear(-0.1, &c);
+            assert!(!p.starts_with('-') && !m.starts_with('-'), "unit {unit} with DIMRND: {p} / {m}");
+        }
+        assert_eq!(format_linear(-1e-9, &f(4, 4, 0)).0, "0\"");
+        assert_eq!(format_linear(-1e-9, &f(3, 4, 0)).0, "0.0000\"");
+        // Scientific keeps the sign: the mantissa of a tiny negative value is not zero.
+        assert_eq!(format_linear(-1e-9, &f(1, 2, 0)).0, "-1.00E-09");
+        // The shared feet/inch joiner never signs an all-zero result.
+        assert_eq!(feet_inches(true, 0, "0", "0", true, 0).0, "0\"");
+        assert_eq!(feet_inches(true, 0, "0", "0", true, 1).0, "0'-0\"");
+        // Genuinely negative values keep the sign.
+        assert_eq!(format_linear(-18.5, &f(4, 4, 0)).0, "-1'-6 1/2\"");
+        assert_eq!(format_linear(-18.5, &f(3, 2, 0)).0, "-1'-6.50\"");
+        assert_eq!(format_linear(-24.0, &f(4, 4, 0)).0, "-2'");
+    }
+
+    #[test]
+    fn angle_text_settles_float_noise_like_lengths() {
+        let noisy = 22.249999999999996f64.to_radians();
+        assert_eq!(format_angle(noisy, 0, 1, 0), "22.3°");
+        assert_eq!(format_angle(noisy, 2, 1, 0), "24.7g");
+        assert_eq!(format_angle(noisy, 1, 4, 0), "22°15'0\"");
+        assert_eq!(format_angle(0.5, 3, 2, 0), "0.50r");
     }
 
     #[test]

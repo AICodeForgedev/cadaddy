@@ -186,21 +186,31 @@ pub fn directory_files(a: &[Value]) -> R {
         None | Some(Value::Nil) => 0,
         Some(v) => int(v)?,
     };
-    let pats = split_patterns(if pattern == "*.*" { "*" } else { &pattern });
+    let mut budget: u64 = 200_000_000;
+    let pats = split_patterns(if pattern == "*.*" { "*" } else { &pattern }, &mut budget)
+        .map_err(|()| LispError::new("vl-directory-files: pattern too complex"))?;
     let Some(entries) = list_dir(&dir) else { return Ok(Value::Nil) };
-    let mut names: Vec<String> = entries
-        .into_iter()
-        .filter(|(_, is_dir)| match which {
-            -1 => *is_dir,
-            1 => !*is_dir,
+    let mut names: Vec<String> = Vec::new();
+    for (n, is_dir) in entries {
+        if !match which {
+            -1 => is_dir,
+            1 => !is_dir,
             _ => true,
-        })
-        .map(|(n, _)| n)
-        .filter(|n| {
-            let text: Vec<char> = n.chars().collect();
-            pats.iter().any(|p| match_pattern(&text, p))
-        })
-        .collect();
+        } {
+            continue;
+        }
+        let text: Vec<char> = n.chars().collect();
+        let mut hit = false;
+        for p in &pats {
+            if match_pattern(&text, p, &mut budget).map_err(|()| LispError::new("vl-directory-files: pattern too complex"))? {
+                hit = true;
+                break;
+            }
+        }
+        if hit {
+            names.push(n);
+        }
+    }
     names.sort();
     Ok(Value::list(names.iter().map(|n| Value::str(n))))
 }

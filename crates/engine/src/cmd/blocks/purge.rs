@@ -15,8 +15,9 @@ use super::super::qselect::wildcard;
 use super::super::{bad, find_command, str_param};
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
+/// The named objects PURGE can remove. `USAGE` runs the same scan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
+pub(in crate::cmd) enum Kind {
     Blocks,
     Dimstyles,
     Groups,
@@ -119,14 +120,35 @@ fn entities(d: &Drawing) -> impl Iterator<Item = &std::sync::Arc<cadaddy_doc::En
     d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())).chain(d.blocks.values().flat_map(|b| b.entities.iter())).take(5_000_000)
 }
 
-/// Upper-case names of blocks reachable from model space, the layouts and dimensions.
-fn used_blocks(d: &Drawing) -> HashSet<String> {
+/// The arrowhead block names a dimension's overrides set.
+fn override_arrows(dm: &cadaddy_doc::Dimension) -> impl Iterator<Item = String> + '_ {
+    dm.overrides
+        .iter()
+        .filter(|(k, _)| cadaddy_doc::DimStyle::field_name(k).is_some_and(|f| f.starts_with("arrowBlock") || f == "leaderArrowBlock"))
+        .filter_map(|(_, v)| v.as_str().map(|n| n.trim().to_string()))
+        .filter(|n| !n.is_empty())
+}
+
+/// Upper-case names of blocks reachable from model space, the layouts and dimensions, and the
+/// arrowhead blocks dimension styles and dimension overrides name.
+pub(in crate::cmd) fn used_blocks(d: &Drawing) -> HashSet<String> {
     let mut used = HashSet::new();
     let mut frontier: Vec<String> = Vec::new();
+    for st in &d.dim_styles {
+        frontier.extend(
+            [&st.arrow_block, &st.arrow_block1, &st.arrow_block2, &st.leader_arrow_block]
+                .into_iter()
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty()),
+        );
+    }
     for e in d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())) {
         match &e.kind {
             EntityKind::Insert(i) => frontier.push(i.block.clone()),
-            EntityKind::Dimension(dm) => frontier.extend(dm.block.clone()),
+            EntityKind::Dimension(dm) => {
+                frontier.extend(dm.block.clone());
+                frontier.extend(override_arrows(dm));
+            }
             EntityKind::MLeader(m) => frontier.extend(m.block.as_ref().map(|b| b.block.clone())),
             _ => {}
         }
@@ -141,7 +163,10 @@ fn used_blocks(d: &Drawing) -> HashSet<String> {
             for e in b.entities.iter() {
                 match &e.kind {
                     EntityKind::Insert(i) => frontier.push(i.block.clone()),
-                    EntityKind::Dimension(dm) => frontier.extend(dm.block.clone()),
+                    EntityKind::Dimension(dm) => {
+                        frontier.extend(dm.block.clone());
+                        frontier.extend(override_arrows(dm));
+                    }
                     EntityKind::MLeader(m) => frontier.extend(m.block.as_ref().map(|b| b.block.clone())),
                     _ => {}
                 }
@@ -155,8 +180,9 @@ fn is(name: &str, list: &[&str]) -> bool {
     list.iter().any(|n| n.eq_ignore_ascii_case(name))
 }
 
-/// Names of the unused objects of a named kind, in table order.
-fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
+/// Names of the unused objects of a named kind, in table order. This is PURGE's scan; `USAGE`
+/// reads it too, without purging anything.
+pub(in crate::cmd) fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
     let lower = |it: &mut dyn Iterator<Item = String>| it.map(|n| n.to_ascii_lowercase()).collect::<HashSet<String>>();
     match kind {
         Kind::Blocks => {
@@ -164,6 +190,23 @@ fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
             // Arrowheads and multileader content blocks the styles name.
             used.extend(d.dim_styles.iter().map(|s| s.arrow_block.to_ascii_uppercase()));
             used.extend(d.mleader_styles.iter().map(|s| s.block.to_ascii_uppercase()));
+            // A block a surviving definition still references stays too; `nested` frees it once
+            // the outer definition has gone (the next pass).
+            for b in d.blocks.values() {
+                for e in b.entities.iter() {
+                    let mut names: Vec<String> = Vec::new();
+                    match &e.kind {
+                        EntityKind::Insert(i) => names.push(i.block.clone()),
+                        EntityKind::Dimension(dm) => {
+                            names.extend(dm.block.clone());
+                            names.extend(override_arrows(dm));
+                        }
+                        EntityKind::MLeader(m) => names.extend(m.block.as_ref().map(|c| c.block.clone())),
+                        _ => {}
+                    }
+                    used.extend(names.into_iter().filter(|n| !n.eq_ignore_ascii_case(&b.name)).map(|n| n.to_ascii_uppercase()));
+                }
+            }
             d.blocks.values().filter(|b| !used.contains(&b.name.to_ascii_uppercase())).map(|b| b.name.clone()).collect()
         }
         Kind::Layers => {
@@ -176,7 +219,12 @@ fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
                 .collect()
         }
         Kind::Linetypes => {
-            let used = lower(&mut entities(d).map(|e| e.common.linetype.to_string()).chain(d.layers.iter().map(|l| l.linetype.clone())));
+            let vp_types = entities(d).flat_map(|e| match &e.kind {
+                EntityKind::Viewport(v) => v.layer_linetypes.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>(),
+                _ => Vec::new(),
+            });
+            let used =
+                lower(&mut entities(d).map(|e| e.common.linetype.to_string()).chain(d.layers.iter().map(|l| l.linetype.clone())).chain(vp_types));
             let cur = d.header.str("CELTYPE", "ByLayer");
             d.linetypes
                 .iter()

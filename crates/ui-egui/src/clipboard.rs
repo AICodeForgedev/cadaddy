@@ -54,7 +54,10 @@ pub fn mirror(app: &mut CadApp, ctx: &egui::Context) {
     if let Some(sys) = app.services.system_clipboard.as_mut() {
         let picture =
             (app.session.clipboard.len() <= MAX_PICTURE_OBJECTS).then(|| clipboard::system_image(&app.session, clipboard::IMAGE_SIDE)).flatten();
-        let formats = encode(text.as_deref(), picture.as_ref());
+        let emf = (sys.takes_emf() && app.session.clipboard.len() <= MAX_PICTURE_OBJECTS)
+            .then(|| clipboard::system_display_list(&app.session).map(|l| cadaddy_render::emf::export_list(&l)))
+            .flatten();
+        let formats = encode_with(text.as_deref(), emf, picture.as_ref());
         if !formats.is_empty() && sys.set(&formats) {
             return;
         }
@@ -147,6 +150,8 @@ pub fn shortcut_commands(app: &mut CadApp, ctx: &egui::Context) -> Vec<&'static 
 pub enum Format {
     /// The copied objects as DXF text, under [`DRAWING_FORMAT`]: other CADaddy windows paste them.
     Drawing,
+    /// A picture as an enhanced metafile (vector; Windows' `CF_ENHMETAFILE`: documents, email).
+    Emf,
     /// A picture as a PNG file (documents, email, image editors).
     Png,
     /// A picture as a device-independent bitmap (Windows' `CF_DIB`: older programs).
@@ -165,6 +170,11 @@ pub trait SystemClipboard {
     fn set(&mut self, formats: &[(Format, Vec<u8>)]) -> bool;
     /// The bytes of `format` on the clipboard, if it holds that format.
     fn get(&mut self, format: Format) -> Option<Vec<u8>>;
+    /// Whether the host can put [`Format::Emf`] on the clipboard (Windows): a copy then also
+    /// builds its vector picture.
+    fn takes_emf(&self) -> bool {
+        false
+    }
 }
 
 /// A clipboard in memory: the test double for the platform's, and its stand-in where there is none.
@@ -186,9 +196,18 @@ impl SystemClipboard for MemoryClipboard {
 /// What one copy puts on the system clipboard, best first: the objects as DXF (CADaddy windows
 /// paste them), then their picture as PNG and as a bitmap (documents, email, image editors).
 pub fn encode(drawing: Option<&str>, image: Option<&Raster>) -> Vec<(Format, Vec<u8>)> {
+    encode_with(drawing, None, image)
+}
+
+/// [`encode`] with the picture also as an enhanced metafile (`emf`, Windows only: a host without
+/// the format ignores it): the objects, then the vector picture, then PNG and bitmap.
+pub fn encode_with(drawing: Option<&str>, emf: Option<Vec<u8>>, image: Option<&Raster>) -> Vec<(Format, Vec<u8>)> {
     let mut out = Vec::new();
     if let Some(d) = drawing {
         out.push((Format::Drawing, d.as_bytes().to_vec()));
+    }
+    if let Some(e) = emf {
+        out.push((Format::Emf, e));
     }
     if let Some(img) = image {
         if let Some(png) = img.encode_png() {
@@ -320,6 +339,31 @@ mod tests {
     fn picture() -> Raster {
         let rgba = (0..6u8).flat_map(|i| [i * 40, 255 - i * 40, i * 7, 255]).collect();
         Raster::new(3, 2, rgba).unwrap()
+    }
+
+    #[test]
+    fn a_copy_with_a_metafile_is_written_objects_emf_png_bitmap_in_that_order() {
+        let mut d = cadaddy_doc::Drawing::new_metric();
+        d.add(
+            &cadaddy_doc::Space::Model,
+            cadaddy_doc::Common::default(),
+            cadaddy_doc::EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::ZERO, b: cadaddy_geom::Vec3::new(10.0, 5.0, 0.0) }),
+        )
+        .unwrap();
+        let emf = cadaddy_render::emf::export(&d, &cadaddy_doc::Space::Model);
+        let formats = encode_with(Some("0\nSECTION\n0\nEOF\n"), Some(emf.clone()), Some(&picture()));
+        let order: Vec<Format> = formats.iter().map(|(f, _)| *f).collect();
+        assert_eq!(order, [Format::Drawing, Format::Emf, Format::Png, Format::Dib]);
+        let bytes = &formats[1].1;
+        assert_eq!(bytes, &emf);
+        // EMR_HEADER with its " EMF" signature; the last record is EMR_EOF.
+        assert_eq!(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), cadaddy_render::emf::EMR_HEADER);
+        assert_eq!(&bytes[40..44], b" EMF");
+        let n = bytes.len();
+        assert_eq!(u32::from_le_bytes([bytes[n - 20], bytes[n - 19], bytes[n - 18], bytes[n - 17]]), cadaddy_render::emf::EMR_EOF);
+        // Without a metafile the order is the old one.
+        let order: Vec<Format> = encode_with(Some("x"), None, Some(&picture())).iter().map(|(f, _)| *f).collect();
+        assert_eq!(order, [Format::Drawing, Format::Png, Format::Dib]);
     }
 
     #[test]

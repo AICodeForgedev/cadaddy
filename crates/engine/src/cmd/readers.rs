@@ -167,7 +167,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{sheets?: [name], preview?: bool (default true: read only; false puts the devices in the model), save?: bool (default true: preview:false saves the drawing to its file), limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read, model: {inserted, replaced, by_type, by_level, elements, elements_replaced, filled?: {key: n}, saved?, not_saved?, save_error?, not_inserted: {reason: count}, why_not?}}: works on any open drawing (the current sheet is the print set); preview:false needs a building model (bspec.draft {store: true} or bim.build first), makes each device an element (kind device, on its sheet's level, moved onto the architectural plan) replacing the device elements an earlier read made (nothing else in the model changes), and never inserts legend samples, circuit numbers, sheet numbers or lettering"),
         // ── Envelope reader ────────────────────────────────────────────────
         CommandSpec::new("envelope.read", "Read Roof and Wall Envelope", run_envelope_read)
-            .params("{apply?: bool} → {takeoff: [{code, description, unit, net, waste_pct, order, source, status}], flags: [{kind, subject, message, source, status}], spec_read, notes, page?: 1}")
+            .params("{apply?: bool, page?} → {takeoff: [{code, description, unit, net, waste_pct, order, source, status}], flags: [{kind, subject, message, source, status}], spec_read, notes, page?: 1}")
             .noundo(),
     ]
 }
@@ -200,6 +200,8 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 circuit: f("circuit"),
                 handle: f("symbol"),
                 kind: t.kind.clone(),
+                leg: f("switch_leg"),
+                room: String::new(),
             }
         })
         .collect();
@@ -913,13 +915,193 @@ fn run_equip_read(_s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── mep.read_devices ────────────────────────────────────────────────────────
 
+/// A switch's or sensor's item from the legend's designations (`3=3-WAY`, `OS2=WALL MOUNTED
+/// OCCUPANCY SENSOR WSXA-PDT-D`): the whole mark's meaning (`OS2` → `wall mounted occupancy sensor
+/// WSXA-PDT-D`), else a switch's `S` and the designations after it (`S3` → `switch, 3-way`, `SD`
+/// → `switch, dimmer`). With the legend's words and the catalog number it names.
+pub(crate) fn legend_item(tag: &str, kind: &str, designations: &BTreeMap<String, String>) -> Option<(String, String, Option<String>)> {
+    let tag = tag.trim().to_ascii_uppercase();
+    // A meaning's words up to its cross-reference ("DIMMER- REFER TO …"), as an item says them.
+    let core = |m: &str| -> String {
+        let m = m.split("REFER").next().unwrap_or(m).trim().trim_end_matches(['-', ',', ';', ' ']);
+        m.split_whitespace()
+            .map(|w| {
+                let lower = w.chars().all(|c| c.is_ascii_alphabetic())
+                    || w.split_once('-').is_some_and(|(a, b)| a.chars().all(|c| c.is_ascii_digit()) && b.chars().all(|c| c.is_ascii_alphabetic()));
+                if lower { w.to_ascii_lowercase() } else { w.to_string() }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    // A catalog number: lettered first, dashed parts of five characters at most (WSXA-PDT-D).
+    let catalog = |m: &str| -> Option<String> {
+        m.split_whitespace()
+            .map(|w| w.trim_matches([',', ';', '.']))
+            .find(|w| {
+                w.len() >= 4
+                    && w.contains('-')
+                    && w.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                    && w.split('-').all(|p| !p.is_empty() && p.len() <= 5)
+            })
+            .map(str::to_string)
+    };
+    if let Some(m) = designations.get(&tag) {
+        return Some((core(m), m.clone(), catalog(m)));
+    }
+    let mut rest = tag.strip_prefix('S').filter(|r| kind == "switch" && !r.is_empty())?;
+    let mut parts: Vec<&String> = Vec::new();
+    while !rest.is_empty() && parts.len() < 4 {
+        let (k, m) = (1..=rest.len().min(3)).rev().find_map(|n| {
+            let k = rest.get(..n)?;
+            designations.get(k).map(|m| (k, m))
+        })?;
+        parts.push(m);
+        rest = rest.get(k.len()..).unwrap_or("");
+    }
+    if !rest.is_empty() {
+        return None;
+    }
+    let words: Vec<String> = parts.iter().map(|m| core(m)).collect();
+    let said: Vec<&str> = parts.iter().map(|m| m.as_str()).collect();
+    Some((format!("switch, {}", words.join(", ")), said.join("; "), parts.iter().find_map(|m| catalog(m))))
+}
+
+/// The legend's designations onto the model's switches and sensors: each one's item, the legend's
+/// words and the catalog number they name, from the legend (a submittal's product stays). The
+/// devices described.
+pub(crate) fn legend_onto_devices(sp: &mut cadaddy_walk3d::BuildingSpec, designations: &BTreeMap<String, String>) -> usize {
+    let mut n = 0usize;
+    for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && matches!(t.kind.as_str(), "switch" | "occupancy_sensor")).take(MAX_DEVICES)
+    {
+        if t.fields.get("device_type").is_some_and(|f| f.source == "submittal") {
+            continue;
+        }
+        let mark = t.fields.get("type").map_or_else(String::new, |f| f.value.clone());
+        let Some((item, said, catalog)) = legend_item(&mark, &t.kind, designations) else { continue };
+        t.set("device_type", item, "legend");
+        t.set("legend", said, "legend");
+        if let Some(c) = catalog {
+            t.set("catalog", c, "legend");
+        }
+        n += 1;
+    }
+    n
+}
+
+/// The plumbing fixture schedule onto the model's plumbing fixtures: each one's item (its
+/// fixture and tag, `lavatory P-2`), fixture, maker and model, from the schedule. The fixtures
+/// named.
+pub(crate) fn plumbing_onto_fixtures(sp: &mut cadaddy_walk3d::BuildingSpec, rows: &[cadaddy_mepfix::fixture_schedule::ScheduledFixture]) -> usize {
+    let mut n = 0usize;
+    for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && t.kind == "plumbing_fixture").take(MAX_DEVICES) {
+        let mark = t.fields.get("type").map_or_else(String::new, |f| f.value.trim().to_string());
+        let Some(row) = rows.iter().find(|r| r.tag == mark) else { continue };
+        t.set("device_type", format!("{} {mark}", row.fixture.to_ascii_lowercase()), "schedule");
+        t.set("fixture", row.fixture.clone(), "schedule");
+        for (k, v) in [("manufacturer", &row.manufacturer), ("model", &row.model)] {
+            if !v.is_empty() {
+                t.set(k, v.clone(), "schedule");
+            }
+        }
+        n += 1;
+    }
+    n
+}
+
+/// How near a sink a receptacle is GFCI protected (NEC 210.8), feet.
+const SINK_GFCI_FT: f64 = 6.0;
+
+/// NEC 210.8: a receptacle within 6' of a sink is GFCI protected, and a wiring devices section's
+/// non-feed-through GFCI receptacles make each one a GFCI device. Each receptacle on a sink's
+/// level that near one (a plumbing fixture its schedule calls a sink or lavatory; where the plan
+/// tags it) and its plan doesn't mark GFCI is taken off as one, from the rule; the receptacles
+/// changed and the sinks they're by.
+pub(crate) fn gfci_by_sinks(sp: &mut cadaddy_walk3d::BuildingSpec) -> (usize, usize) {
+    let sinks: Vec<(String, [f64; 2])> = sp
+        .tags
+        .iter()
+        .filter(|t| t.kind == "plumbing_fixture")
+        .filter(|t| {
+            t.fields
+                .get("fixture")
+                .is_some_and(|f| f.value.to_ascii_uppercase().contains("SINK") || f.value.to_ascii_uppercase().contains("LAVATORY"))
+        })
+        .map(|t| (t.level.clone(), t.at_ft))
+        .take(MAX_DEVICES)
+        .collect();
+    let (mut n, mut by) = (0usize, std::collections::BTreeSet::new());
+    for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && t.kind == "receptacle").take(MAX_DEVICES) {
+        let mark = t.fields.get("type").map_or_else(String::new, |f| f.value.trim().to_ascii_uppercase());
+        let marks: Vec<&str> = mark.split('/').map(str::trim).filter(|m| !m.is_empty() && *m != "REC").collect();
+        if marks.contains(&"GFCI") {
+            continue;
+        }
+        let near = sinks.iter().position(|(l, at)| *l == t.level && (at[0] - t.at_ft[0]).hypot(at[1] - t.at_ft[1]) <= SINK_GFCI_FT);
+        let Some(i) = near else { continue };
+        let mut with = vec!["GFCI"];
+        with.extend(marks.iter().copied());
+        if t.fields.contains_key("tamper_resistant") && !with.contains(&"TR") {
+            with.push("TR");
+        }
+        t.set("device_type", receptacle_item(&with.join("/")), "rule");
+        t.set("gfci", "NEC 210.8: within 6' of a sink; the GFCI receptacles are non-feed-through", "rule");
+        n += 1;
+        by.insert(i);
+    }
+    (n, by.len())
+}
+
+/// NEC 406.12: the receptacles of a hotel's guest rooms (and a dwelling's) are tamper-resistant.
+/// Each receptacle device in one of `rooms` (level, outline in model units) its plan doesn't mark
+/// TR is taken off as one, from the rule; the receptacles and the rooms changed.
+pub(crate) fn tamper_resistant_in_rooms(sp: &mut cadaddy_walk3d::BuildingSpec, rooms: &[(String, Vec<cadaddy_geom::Vec2>)]) -> (usize, usize) {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let same_level = |a: &str, b: &str| {
+        let (a, b) = (a.trim().to_ascii_uppercase(), b.trim().to_ascii_uppercase());
+        a == b || a.ends_with(&format!(" {b}")) || b.ends_with(&format!(" {a}"))
+    };
+    let (mut n, mut hit) = (0usize, std::collections::BTreeSet::new());
+    for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && t.kind == "receptacle").take(MAX_DEVICES) {
+        let mark = t.fields.get("type").map_or_else(String::new, |f| f.value.trim().to_string());
+        if mark.split('/').any(|m| m.trim().eq_ignore_ascii_case("TR")) {
+            continue;
+        }
+        let p = cadaddy_geom::Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf);
+        let Some(i) = rooms.iter().position(|(l, o)| same_level(l, &t.level) && cadaddy_geom::point_in_polygon(o, p)) else { continue };
+        let with = if mark.is_empty() || mark.eq_ignore_ascii_case("REC") { "TR".to_string() } else { format!("{mark}/TR") };
+        t.set("device_type", receptacle_item(&with), "rule");
+        t.set("tamper_resistant", "NEC 406.12: a guest room's receptacles", "rule");
+        n += 1;
+        hit.insert(i);
+    }
+    (n, hit.len())
+}
+
+/// A receptacle's item by its designations (`REC`, `GFCI`, `GFCI/WP`, `USB`): `duplex
+/// receptacle`, `GFCI receptacle, weatherproof`, `duplex receptacle, USB`.
+pub(crate) fn receptacle_item(tag: &str) -> String {
+    let marks: Vec<String> = tag.split('/').map(|m| m.trim().to_ascii_uppercase()).collect();
+    let base = if marks.iter().any(|m| m == "GFCI") { "GFCI receptacle" } else { "duplex receptacle" };
+    let with: Vec<&str> = marks
+        .iter()
+        .filter_map(|m| match m.as_str() {
+            "WP" => Some("weatherproof"),
+            "WR" => Some("weather-resistant"),
+            "TR" => Some("tamper-resistant"),
+            "USB" => Some("USB"),
+            _ => None,
+        })
+        .collect();
+    if with.is_empty() { base.to_string() } else { format!("{base}, {}", with.join(", ")) }
+}
+
 /// What a device mark usually is on an electrical plan (else `device`).
 pub(crate) fn device_kind(tag: &str) -> &'static str {
     match tag.trim().to_ascii_uppercase().as_str() {
-        "OS" | "OC" | "VS" | "PS" => "occupancy sensor",
+        "OS" | "OS1" | "OS2" | "OC" | "VS" | "PS" => "occupancy sensor",
         "DH" | "MH" => "door holder",
         "J" | "JB" => "junction box",
-        "S" | "S3" | "S4" | "SD" | "DS" | "LV" => "switch",
+        "S" | "S2" | "S3" | "S4" | "SD" | "DS" | "LV" | "SP" | "SM" | "SH" | "SK" | "SOR" | "SWT" => "switch",
         "FA" | "HS" | "SS" | "FS" | "ST" | "CM" => "fire alarm device",
         "TV" | "DA" | "TEL" | "WAP" | "CR" | "CAM" => "low voltage outlet",
         "EF" | "FCU" | "WH" | "PTAC" => "equipment connection",
@@ -1125,6 +1307,48 @@ pub(crate) fn circuit_beside(circuits: &[&cadaddy_mepfix::sheet_facts::TextItem]
         .map_or_else(String::new, |t| t.value.trim().to_string())
 }
 
+/// The circuit printed with a device tagged `tag` whose symbol is at `at` (its tag printed at
+/// `tag_at`, when the import kept it). A tag and its circuit are printed as a pair, the circuit
+/// under the tag (`L4` over `A-2`), and the symbol may sit nearer another device's pair; so the
+/// circuit stacked under the device's own tag comes first (one that reads like a sheet number
+/// too), else the circuit text nearest the symbol.
+pub(crate) fn circuit_of(
+    texts: &[cadaddy_mepfix::sheet_facts::TextItem],
+    circuits: &[&cadaddy_mepfix::sheet_facts::TextItem],
+    tag: &str,
+    tag_at: Option<(cadaddy_geom::Vec2, f64)>,
+    at: cadaddy_geom::Vec2,
+) -> String {
+    let sized = |t: &&cadaddy_mepfix::sheet_facts::TextItem| t.height.is_finite() && t.height > 0.0;
+    // Where its tag is printed: given (the symbol's TAG attribute), else its text beside it.
+    let own = tag_at.or_else(|| {
+        texts
+            .iter()
+            .filter(sized)
+            .filter(|t| t.value.trim() == tag && t.at.dist(at) <= TAG_REACH_H * t.height)
+            .min_by(|a, b| a.at.dist(at).total_cmp(&b.at.dist(at)))
+            .map(|t| (t.at, t.height))
+    });
+    if let Some((t, h)) = own {
+        let under = texts
+            .iter()
+            .filter(sized)
+            .filter(|c| (c.at.x - t.x).abs() <= STACK_DX_H * h && t.y - c.at.y > 0.3 * h && t.y - c.at.y <= STACK_DY_H * h)
+            .filter(|c| cadaddy_mepfix::sheet_facts::is_circuit_label(&c.value))
+            .min_by(|a, b| (t.y - a.at.y).total_cmp(&(t.y - b.at.y)));
+        if let Some(c) = under {
+            return c.value.trim().to_string();
+        }
+    }
+    circuit_beside(circuits, at)
+}
+
+/// How far from its symbol a device's tag text is looked for, in text heights.
+const TAG_REACH_H: f64 = 10.0;
+/// A circuit stacked under a tag: this far to either side of it and this far down, in its heights.
+const STACK_DX_H: f64 = 1.5;
+const STACK_DY_H: f64 = 2.5;
+
 /// A device read off a sheet, to put in the model: its type mark, where its symbol is drawn
 /// (drawing units), the sheet and the sheet's level, and its circuit when one is printed
 /// beside it.
@@ -1145,6 +1369,36 @@ pub struct ReadDevice {
     /// tag says ([`device_kind`]).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
+    /// A switch's or sensor's leg: the lower-case letter of the fixtures it controls.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub leg: String,
+    /// The room a typical room's plan stamped it into (its circuits are that room's own).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub room: String,
+}
+
+/// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
+/// `b`, `3,a` a 3-way (`S3`) on leg `a`, `OS2,n` a sensor switch (`OS2`) on leg `n`, a lone `c` a
+/// switch on leg `c` (tag empty: a sensor's leg when one is beside it, else a single-pole `S`).
+/// A circuit (`G-1,b`) is none.
+pub(crate) fn switch_designation(t: &str) -> Option<(String, String)> {
+    let t = t.trim();
+    let one_leg = |l: &str| l.len() == 1 && l.chars().all(|c| c.is_ascii_lowercase());
+    if one_leg(t) {
+        return Some((String::new(), t.to_string()));
+    }
+    let (code, leg) = t.rsplit_once(',')?;
+    let (code, leg) = (code.trim(), leg.trim());
+    if !one_leg(leg) || code.is_empty() || code.len() > 3 || !code.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) {
+        return None;
+    }
+    let tag = match code {
+        "OS" | "OS1" | "OS2" => code.to_string(),
+        "1" => "S".to_string(),
+        "T" => "SWT".to_string(),
+        _ => format!("S{code}"),
+    };
+    Some((tag, leg.to_string()))
 }
 
 /// The model level a device belongs on: the spec level whose plan region holds it, else the
@@ -1225,12 +1479,31 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         if !ids.insert(id.clone()) {
             continue;
         }
-        let mut e =
-            cadaddy_walk3d::tags::ElementTag { id, kind: device_kind(tag).replace(' ', "_"), level: level.clone(), at_ft, ..Default::default() };
+        // What its sheet or its submittal says it is (a fire alarm plan's `S`, a luminaire), else
+        // what its mark says. A luminaire and a fire alarm detector are on the ceiling.
+        let read = dv.kind.trim();
+        let luminaire = matches!(read, "luminaire" | "wall luminaire");
+        let kind = if read.is_empty() || luminaire { device_kind(tag) } else { read };
+        let mut e = cadaddy_walk3d::tags::ElementTag { id, kind: kind.replace(' ', "_"), level: level.clone(), at_ft, ..Default::default() };
         e.set("type", tag, "plan");
-        e.set("device_type", device_item(tag), "plan");
+        let item = match read {
+            "" => device_item(tag),
+            "wall luminaire" => format!("luminaire {tag}"),
+            "receptacle" => receptacle_item(tag),
+            _ => format!("{read} {tag}"),
+        };
+        e.set("device_type", item, "plan");
+        let detector = read == "fire alarm device" && matches!(tag.to_ascii_uppercase().as_str(), "S" | "SD" | "H" | "HD" | "D" | "DD");
+        if read == "wall luminaire" {
+            e.set("mount", "wall", "submittal");
+        } else if luminaire || detector {
+            e.set("mount", "ceiling", if luminaire { "submittal" } else { "plan" });
+        }
         if !dv.circuit.is_empty() {
             e.set("circuit", dv.circuit.clone(), "plan");
+        }
+        if !dv.leg.is_empty() {
+            e.set("switch_leg", dv.leg.clone(), "plan");
         }
         e.set("sheet", if dv.sheet.is_empty() { "current drawing" } else { dv.sheet.as_str() }, "plan");
         e.set("symbol", dv.handle.clone(), "plan");
@@ -1290,4 +1563,131 @@ fn run_envelope_read(s: &mut Session, p: &Value) -> Result<Value> {
             "envelope reader wired; DXF sheet loading through the printset pipeline pending (Q5128)"
         },
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_switchs_legend_designations_name_it() {
+        let d: std::collections::BTreeMap<String, String> = [
+            ("2", "2 POLE"),
+            ("3", "3-WAY"),
+            ("D", "DIMMER- REFER TO LIGHTING CONTROLS SCHEDULE"),
+            ("OR", "LIGHTING OVERRIDE- REFER TO LIGHTING CONTROLS SCHEDULE"),
+            ("OS2", "WALL MOUNTED OCCUPANCY SENSOR WSXA-PDT-D"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let item = |tag: &str, kind: &str| super::legend_item(tag, kind, &d).map(|i| (i.0, i.2));
+        assert_eq!(item("S3", "switch"), Some(("switch, 3-way".into(), None)));
+        assert_eq!(item("SD", "switch"), Some(("switch, dimmer".into(), None)));
+        assert_eq!(item("S3D", "switch"), Some(("switch, 3-way, dimmer".into(), None)));
+        assert_eq!(item("SOR", "switch"), Some(("switch, lighting override".into(), None)));
+        assert_eq!(item("OS2", "occupancy_sensor"), Some(("wall mounted occupancy sensor WSXA-PDT-D".into(), Some("WSXA-PDT-D".into()))));
+        // A plain switch, a designation the legend doesn't give, a non-switch: nothing.
+        assert_eq!(item("S", "switch"), None);
+        assert_eq!(item("SX", "switch"), None);
+        assert_eq!(item("S3", "receptacle"), None);
+        // Onto the model's devices, from the legend.
+        let mut sp = cadaddy_walk3d::BuildingSpec::from_json(
+            r#"{"version": 1, "units_per_foot": 12, "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10}], "tags": [
+                {"id": "device:Level 1:1.0,1.0", "kind": "switch", "level": "Level 1", "at_ft": [1, 1], "fields": {"type": {"value": "S3", "source": "plan"}}},
+                {"id": "device:Level 1:2.0,1.0", "kind": "occupancy_sensor", "level": "Level 1", "at_ft": [2, 1], "fields": {"type": {"value": "OS2", "source": "plan"}}},
+                {"id": "device:Level 1:3.0,1.0", "kind": "switch", "level": "Level 1", "at_ft": [3, 1], "fields": {"type": {"value": "S", "source": "plan"}}}
+            ]}"#,
+        )
+        .expect("spec");
+        assert_eq!(super::legend_onto_devices(&mut sp, &d), 2);
+        let os = sp.tags.iter().find(|t| t.id == "device:Level 1:2.0,1.0").expect("os2");
+        assert_eq!((os.fields["catalog"].value.as_str(), os.fields["device_type"].source.as_str()), ("WSXA-PDT-D", "legend"));
+    }
+
+    #[test]
+    fn a_receptacle_by_a_sink_is_a_gfci() {
+        let mut sp = cadaddy_walk3d::BuildingSpec::from_json(
+            r#"{"version": 1, "units_per_foot": 12, "levels": [{"name": "Level 2", "elevation_ft": 10, "height_ft": 10}], "tags": [
+                {"id": "device:Level 2:10.0,10.0", "kind": "plumbing_fixture", "level": "Level 2", "at_ft": [10, 10], "fields": {"type": {"value": "P-2", "source": "plan"}}},
+                {"id": "device:Level 2:40.0,10.0", "kind": "plumbing_fixture", "level": "Level 2", "at_ft": [40, 10], "fields": {"type": {"value": "P-1", "source": "plan"}}},
+                {"id": "device:Level 2:13.0,10.0", "kind": "receptacle", "level": "Level 2", "at_ft": [13, 10], "fields": {"type": {"value": "REC", "source": "plan"}, "tamper_resistant": {"value": "NEC 406.12", "source": "rule"}}},
+                {"id": "device:Level 2:12.0,12.0", "kind": "receptacle", "level": "Level 2", "at_ft": [12, 12], "fields": {"type": {"value": "GFCI", "source": "plan"}}},
+                {"id": "device:Level 2:20.0,10.0", "kind": "receptacle", "level": "Level 2", "at_ft": [20, 10], "fields": {"type": {"value": "REC", "source": "plan"}}},
+                {"id": "device:Level 2:41.0,10.0", "kind": "receptacle", "level": "Level 2", "at_ft": [41, 10], "fields": {"type": {"value": "REC", "source": "plan"}}}
+            ]}"#,
+        )
+        .expect("spec");
+        let rows = vec![
+            cadaddy_mepfix::fixture_schedule::ScheduledFixture {
+                tag: "P-1".into(),
+                fixture: "WATER CLOSET".into(),
+                manufacturer: "PROFLO".into(),
+                ..Default::default()
+            },
+            cadaddy_mepfix::fixture_schedule::ScheduledFixture {
+                tag: "P-2".into(),
+                fixture: "LAVATORY".into(),
+                model: "447961".into(),
+                ..Default::default()
+            },
+        ];
+        assert_eq!(super::plumbing_onto_fixtures(&mut sp, &rows), 2);
+        let field = |id: &str, k: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get(k)).map(|f| f.value.clone());
+        assert_eq!(field("device:Level 2:10.0,10.0", "device_type").as_deref(), Some("lavatory P-2"));
+        assert_eq!(field("device:Level 2:10.0,10.0", "model").as_deref(), Some("447961"));
+        // 3' from the lavatory: a GFCI (and still tamper-resistant); marked GFCI already, 10' away,
+        // or by a water closet: left alone.
+        assert_eq!(super::gfci_by_sinks(&mut sp), (1, 1));
+        let field = |id: &str, k: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get(k)).map(|f| f.value.clone());
+        assert_eq!(field("device:Level 2:13.0,10.0", "device_type").as_deref(), Some("GFCI receptacle, tamper-resistant"));
+        assert_eq!(field("device:Level 2:12.0,12.0", "device_type"), None);
+        assert_eq!(field("device:Level 2:20.0,10.0", "device_type"), None);
+        assert_eq!(field("device:Level 2:41.0,10.0", "device_type"), None);
+    }
+
+    #[test]
+    fn a_guest_rooms_receptacles_are_tamper_resistant() {
+        use cadaddy_geom::Vec2;
+        let mut sp = cadaddy_walk3d::BuildingSpec::from_json(
+            r#"{"version": 1, "units_per_foot": 12, "levels": [{"name": "Level 2", "elevation_ft": 10, "height_ft": 10}], "tags": [
+                {"id": "device:Level 2:5.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [5, 5], "fields": {"type": {"value": "REC", "source": "plan"}}},
+                {"id": "device:Level 2:6.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [6, 5], "fields": {"type": {"value": "GFCI", "source": "plan"}}},
+                {"id": "device:Level 2:7.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [7, 5], "fields": {"type": {"value": "TR", "source": "plan"}}},
+                {"id": "device:Level 2:8.0,5.0", "kind": "switch", "level": "Level 2", "at_ft": [8, 5], "fields": {"type": {"value": "S", "source": "plan"}}},
+                {"id": "device:Level 2:50.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [50, 5], "fields": {"type": {"value": "REC", "source": "plan"}}}
+            ]}"#,
+        )
+        .expect("spec");
+        // Guest room 201 on level 2: 0..20' x 0..15'.
+        let room = vec![Vec2::new(0.0, 0.0), Vec2::new(240.0, 0.0), Vec2::new(240.0, 180.0), Vec2::new(0.0, 180.0)];
+        assert_eq!(super::tamper_resistant_in_rooms(&mut sp, &[("2".to_string(), room)]), (2, 1));
+        let item =
+            |id: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get("device_type")).map(|f| (f.value.clone(), f.source.clone()));
+        assert_eq!(item("device:Level 2:5.0,5.0"), Some(("duplex receptacle, tamper-resistant".to_string(), "rule".to_string())));
+        assert_eq!(item("device:Level 2:6.0,5.0").map(|i| i.0), Some("GFCI receptacle, tamper-resistant".to_string()));
+        // Marked TR already, a switch, and a receptacle outside the room: left alone.
+        assert_eq!(item("device:Level 2:7.0,5.0"), None);
+        assert_eq!(item("device:Level 2:8.0,5.0"), None);
+        assert_eq!(item("device:Level 2:50.0,5.0"), None);
+    }
+
+    #[test]
+    fn a_receptacles_designations_name_its_item() {
+        assert_eq!(super::receptacle_item("REC"), "duplex receptacle");
+        assert_eq!(super::receptacle_item("GFCI"), "GFCI receptacle");
+        assert_eq!(super::receptacle_item("GFCI/WP"), "GFCI receptacle, weatherproof");
+        assert_eq!(super::receptacle_item("TR/USB"), "duplex receptacle, tamper-resistant, USB");
+    }
+
+    #[test]
+    fn switch_designations_name_the_switch_and_its_leg() {
+        let d = |t: &str| super::switch_designation(t);
+        assert_eq!(d("D,b"), Some(("SD".into(), "b".into())));
+        assert_eq!(d("3,a"), Some(("S3".into(), "a".into())));
+        assert_eq!(d("OS2,n"), Some(("OS2".into(), "n".into())));
+        assert_eq!(d("c"), Some((String::new(), "c".into())));
+        assert_eq!(d("G-1,b"), None, "a circuit and its leg");
+        assert_eq!(d("LP-3,5"), None);
+        assert_eq!(d("A"), None);
+        assert_eq!(d("ab"), None);
+    }
 }

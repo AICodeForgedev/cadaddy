@@ -12,7 +12,7 @@ use cadaddy_geom::{Vec2, Vec3};
 
 use super::{ParameterKind, ValueSet, dynamic_block};
 use crate::foreign::ForeignObject;
-use crate::{Drawing, Handle, RawTag};
+use crate::{Drawing, Entity, EntityKind, Handle, RawTag};
 
 fn tag(code: i32, value: impl Into<String>) -> RawTag {
     RawTag { code, value: value.into() }
@@ -43,14 +43,17 @@ pub enum NewParameter {
     Polar {
         base: Vec3,
         end: Vec3,
+        values: ValueSet,
     },
     Xy {
         base: Vec3,
         end: Vec3,
+        values: ValueSet,
     },
     Rotation {
         base: Vec3,
         end: Vec3,
+        values: ValueSet,
     },
     Alignment {
         base: Vec3,
@@ -107,9 +110,9 @@ impl NewParameter {
     fn two_points(&self) -> Option<(Vec3, Vec3)> {
         match *self {
             NewParameter::Linear { base, end, .. }
-            | NewParameter::Polar { base, end }
-            | NewParameter::Xy { base, end }
-            | NewParameter::Rotation { base, end }
+            | NewParameter::Polar { base, end, .. }
+            | NewParameter::Xy { base, end, .. }
+            | NewParameter::Rotation { base, end, .. }
             | NewParameter::Alignment { base, end }
             | NewParameter::Flip { base, end } => Some((base, end)),
             _ => None,
@@ -141,11 +144,24 @@ pub enum NewActionKind {
         vertices: Vec<(Handle, Vec<i32>)>,
     },
     Move,
+    /// Scales by the change of a distance, about the parameter's base point.
     Scale,
+    /// Rotates by the change of an angle, about the parameter's base point.
     Rotate,
+    /// Mirrors about a flip parameter's reflection line while it is flipped.
     Flip,
-    Array,
-    PolarStretch,
+    /// Copies along the parameter every `column_offset` (and, for an XY parameter, `row_offset`
+    /// along its vertical distance).
+    Array {
+        column_offset: f64,
+        row_offset: f64,
+    },
+    /// A stretch by a polar parameter's end point; the `rotate` objects turn about its base.
+    PolarStretch {
+        frame: Vec<Vec2>,
+        vertices: Vec<(Handle, Vec<i32>)>,
+        rotate: Vec<Handle>,
+    },
     /// Each row sets the columns' parameter values together.
     Lookup {
         columns: Vec<(i32, String, bool)>,
@@ -161,8 +177,8 @@ impl NewActionKind {
             NewActionKind::Scale => "BLOCKSCALEACTION",
             NewActionKind::Rotate => "BLOCKROTATEACTION",
             NewActionKind::Flip => "BLOCKFLIPACTION",
-            NewActionKind::Array => "BLOCKARRAYACTION",
-            NewActionKind::PolarStretch => "BLOCKPOLARSTRETCHACTION",
+            NewActionKind::Array { .. } => "BLOCKARRAYACTION",
+            NewActionKind::PolarStretch { .. } => "BLOCKPOLARSTRETCHACTION",
             NewActionKind::Lookup { .. } => "BLOCKLOOKUPACTION",
         }
     }
@@ -260,17 +276,23 @@ fn tag_objects(d: &mut Drawing, name: &str) {
     }
 }
 
-/// The graph's members (handle and graph id), in order.
+/// The graph's members (handle and graph id), in order. Each member is a group of `91` (its place
+/// in the graph), `93` (flags), `95` (its graph id), `360` (the object) and four `92` edge slots;
+/// an older layout of ours had the id in `91` and `-1` in `95`, which is still read.
 fn members(d: &Drawing, graph: Handle) -> Vec<(Handle, i32)> {
     let Some(g) = d.foreign.objects.iter().find(|o| o.handle == graph) else { return Vec::new() };
     let mut out = Vec::new();
-    let mut node = 0;
+    let (mut index, mut node) = (0, None);
     for t in &g.tags {
         match t.code {
-            91 => node = t.value.trim().parse().unwrap_or(0),
+            91 => {
+                index = t.value.trim().parse().unwrap_or(0);
+                node = None;
+            }
+            95 => node = t.value.trim().parse::<i32>().ok().filter(|n| *n >= 0),
             360 => {
                 if let Some(h) = Handle::parse_hex(&t.value) {
-                    out.push((h, node));
+                    out.push((h, node.unwrap_or(index)));
                 }
             }
             _ => {}
@@ -279,7 +301,9 @@ fn members(d: &Drawing, graph: Handle) -> Vec<(Handle, i32)> {
     out
 }
 
-/// Rewrite the graph object with `members`.
+/// Rewrite the graph object with `members`, in the layout AutoCAD writes: for each member its
+/// place in the graph (`91`, from 0), flags (`93`), graph id (`95`), the object (`360`) and the
+/// four edge slots (`92`, none).
 fn write_graph(d: &mut Drawing, graph: Handle, dict: Handle, members: &[(Handle, i32)]) {
     let mut tags = vec![
         tag(5, graph.hex()),
@@ -288,13 +312,14 @@ fn write_graph(d: &mut Drawing, graph: Handle, dict: Handle, members: &[(Handle,
         tag(96, members.len().to_string()),
         tag(97, members.len().to_string()),
     ];
-    for (h, node) in members {
-        tags.push(tag(91, node.to_string()));
+    for (i, (h, node)) in members.iter().enumerate() {
+        tags.push(tag(91, i.to_string()));
         tags.push(tag(93, "32"));
-        for _ in 0..4 {
-            tags.push(tag(95, "-1"));
-        }
+        tags.push(tag(95, node.to_string()));
         tags.push(tag(360, h.hex()));
+        for _ in 0..4 {
+            tags.push(tag(92, "-1"));
+        }
     }
     if let Some(o) = std::sync::Arc::make_mut(&mut d.foreign).objects.iter_mut().find(|o| o.handle == graph) {
         o.tags = tags;
@@ -326,7 +351,7 @@ fn next_node(d: &Drawing, graph: Handle) -> i32 {
 fn unique_name(d: &Drawing, name: &str, prefix: &str) -> String {
     let taken = |n: &str| {
         dynamic_block(d, name).is_some_and(|m| {
-            m.parameters.iter().any(|p| p.element.eq_ignore_ascii_case(n) || p.kind.label().is_some_and(|l| l.eq_ignore_ascii_case(n)))
+            m.parameters.iter().any(|p| p.element.eq_ignore_ascii_case(n) || p.kind.labels().iter().any(|l| l.eq_ignore_ascii_case(n)))
                 || m.actions.iter().any(|a| a.name.eq_ignore_ascii_case(n))
         })
     };
@@ -339,16 +364,24 @@ pub fn add_parameter(d: &mut Drawing, name: &str, p: &NewParameter, label: Optio
     if !p.is_finite() {
         return Err("The parameter's points must be numbers.".into());
     }
-    if let NewParameter::Linear { base, end, values, .. } = p {
-        if (*end - *base).len() < 1e-9 {
-            return Err("A linear parameter needs two different points.".into());
-        }
-        if values.list.len() > MAX_LIST
+    if let Some((base, end)) = p.two_points()
+        && (end - base).len() < 1e-9
+    {
+        return Err(if matches!(p, NewParameter::Linear { .. }) {
+            "A linear parameter needs two different points.".into()
+        } else {
+            "A parameter with two points needs two different ones.".into()
+        });
+    }
+    if let NewParameter::Linear { values, .. }
+    | NewParameter::Polar { values, .. }
+    | NewParameter::Xy { values, .. }
+    | NewParameter::Rotation { values, .. } = p
+        && (values.list.len() > MAX_LIST
             || values.list.iter().any(|v| !v.is_finite() || *v <= 0.0)
-            || ![values.minimum, values.maximum, values.increment].iter().all(|v| v.is_finite())
-        {
-            return Err("The value set must be positive numbers.".into());
-        }
+            || ![values.minimum, values.maximum, values.increment].iter().all(|v| v.is_finite()))
+    {
+        return Err("The value set must be positive numbers.".into());
     }
     let (record, dict, graph) = ensure_graph(d, name)?;
     let _ = (record, dict);
@@ -365,7 +398,7 @@ pub fn add_parameter(d: &mut Drawing, name: &str, p: &NewParameter, label: Optio
         NewParameter::Linear { .. } => "Distance",
         NewParameter::Point { .. } => "Position",
         NewParameter::Polar { .. } => "Distance",
-        NewParameter::Xy { .. } => "Distance",
+        NewParameter::Xy { .. } => "Horizontal",
         NewParameter::Rotation { .. } => "Angle",
         NewParameter::Alignment { .. } => "Alignment",
         NewParameter::Flip { .. } => "Flip state",
@@ -376,6 +409,18 @@ pub fn add_parameter(d: &mut Drawing, name: &str, p: &NewParameter, label: Optio
     let label = match label.map(str::trim).filter(|l| !l.is_empty()) {
         Some(l) => l.chars().take(255).collect(),
         None => unique_name(d, name, prefix),
+    };
+    // A polar parameter's angle and an XY parameter's vertical distance have names of their own.
+    let second = match p {
+        NewParameter::Polar { .. } => {
+            let n = unique_name(d, name, "Angle");
+            if n.eq_ignore_ascii_case(&label) { format!("{n}b") } else { n }
+        }
+        NewParameter::Xy { .. } => {
+            let n = unique_name(d, name, "Vertical");
+            if n.eq_ignore_ascii_case(&label) { format!("{n}b") } else { n }
+        }
+        _ => String::new(),
     };
     let node = next_node(d, graph);
     let (grip_type, grips) = p.grip();
@@ -412,6 +457,39 @@ pub fn add_parameter(d: &mut Drawing, name: &str, p: &NewParameter, label: Optio
             ]);
             tags.push(tag(175, values.list.len().to_string()));
             tags.extend(values.list.iter().map(|v| tag(144, real(*v))));
+        }
+        // The subclass data of the parameters, as AutoCAD writes it.
+        NewParameter::Polar { values, .. } => {
+            tags.extend([tag(100, "AcDbBlockPolarParameter"), tag(305, label.clone()), tag(306, description)]);
+            tags.extend([tag(307, second.clone()), tag(308, ""), tag(140, "0")]);
+            value_set(&mut tags, values, (309, 96, 141, 175));
+            value_set(&mut tags, &ValueSet::default(), (410, 97, 145, 176));
+        }
+        NewParameter::Xy { values, .. } => {
+            // The vertical label first (305), the horizontal one second (306); the vertical
+            // distance's value set, then the horizontal one's.
+            tags.extend([tag(100, "AcDbBlockXYParameter"), tag(305, second.clone()), tag(306, label.clone())]);
+            tags.extend([tag(307, ""), tag(308, description), tag(141, "0"), tag(140, "0")]);
+            value_set(&mut tags, &ValueSet::default(), (309, 97, 146, 176));
+            value_set(&mut tags, values, (410, 96, 142, 175));
+        }
+        NewParameter::Rotation { values, base, .. } => {
+            tags.extend([tag(100, "AcDbBlockRotationParameter"), tag(305, label.clone()), tag(306, description)]);
+            point(&mut tags, 1011, *base);
+            tags.push(tag(140, "0"));
+            value_set(&mut tags, values, (307, 96, 141, 175));
+        }
+        NewParameter::Alignment { .. } => tags.extend([tag(100, "AcDbBlockAlignmentParameter"), tag(280, "0")]),
+        NewParameter::Flip { base, end } => {
+            tags.extend([
+                tag(100, "AcDbBlockFlipParameter"),
+                tag(305, label.clone()),
+                tag(306, description),
+                tag(307, "Not flipped"),
+                tag(308, "Flipped"),
+            ]);
+            point(&mut tags, 1012, (*base + *end) * 0.5);
+            tags.extend([tag(309, ""), tag(96, "0")]);
         }
         NewParameter::Point { .. } => tags.extend([tag(100, "AcDbBlockPointParameter"), tag(303, label.clone()), tag(304, description)]),
         NewParameter::Lookup { .. } => tags.extend([tag(100, "AcDbBlockLookupParameter"), tag(303, label.clone()), tag(304, description)]),
@@ -479,6 +557,28 @@ pub fn add_action(
     if selection.is_empty() && !matches!(kind, NewActionKind::Lookup { .. }) {
         return Err("Select the objects the action works on.".into());
     }
+    let follows = match (kind, &p.kind) {
+        (NewActionKind::Scale, ParameterKind::Linear { .. } | ParameterKind::Polar { .. }) => true,
+        (NewActionKind::Rotate, ParameterKind::Rotation { .. } | ParameterKind::Polar { .. } | ParameterKind::Alignment { .. }) => true,
+        (NewActionKind::Flip, ParameterKind::Flip { .. }) => true,
+        (NewActionKind::Array { .. }, ParameterKind::Linear { .. } | ParameterKind::Polar { .. } | ParameterKind::Xy { .. }) => true,
+        (NewActionKind::PolarStretch { .. }, ParameterKind::Polar { .. }) => true,
+        (
+            NewActionKind::Scale | NewActionKind::Rotate | NewActionKind::Flip | NewActionKind::Array { .. } | NewActionKind::PolarStretch { .. },
+            _,
+        ) => false,
+        _ => true,
+    };
+    if !follows {
+        return Err(match kind {
+            NewActionKind::Scale => "A scale action follows a distance (a linear or polar parameter).",
+            NewActionKind::Rotate => "A rotate action follows an angle (a rotation, polar or alignment parameter).",
+            NewActionKind::Flip => "A flip action follows a flip parameter.",
+            NewActionKind::Array { .. } => "An array action follows a distance (a linear, polar or XY parameter).",
+            _ => "A polar stretch action follows a polar parameter.",
+        }
+        .into());
+    }
     let (_, dict, graph) = ensure_graph(d, name)?;
     let mut list = members(d, graph);
     if list.len() >= MAX_ELEMENTS {
@@ -490,8 +590,8 @@ pub fn add_action(
         NewActionKind::Scale => "Scale",
         NewActionKind::Rotate => "Rotate",
         NewActionKind::Flip => "Flip",
-        NewActionKind::Array => "Array",
-        NewActionKind::PolarStretch => "Polar Stretch",
+        NewActionKind::Array { .. } => "Array",
+        NewActionKind::PolarStretch { .. } => "Polar Stretch",
         NewActionKind::Lookup { .. } => "Lookup",
     };
     let label = match label.map(str::trim).filter(|l| !l.is_empty()) {
@@ -508,25 +608,56 @@ pub fn add_action(
     let conns = [(node, "UpdatedEndX"), (node, "UpdatedEndY")];
     match kind {
         NewActionKind::Stretch { frame, vertices } => {
+            tags.push(tag(100, "AcDbBlockStretchAction"));
+            stretch_body(&mut tags, conns, frame, vertices, selection)?;
+            tags.extend([tag(75, "0"), tag(140, "1"), tag(141, "0")]);
+        }
+        NewActionKind::PolarStretch { frame, vertices, rotate } => {
+            if rotate.len() > MAX_LIST || rotate.iter().any(|h| d.block(name).and_then(|b| b.entities.get(*h)).is_none()) {
+                return Err("The objects to rotate must be objects of the block.".into());
+            }
             if frame.len() < 3 || frame.len() > 1000 || frame.iter().any(|p| !(p.x.is_finite() && p.y.is_finite())) {
                 return Err("A stretch needs a frame of at least 3 points.".into());
             }
-            tags.push(tag(100, "AcDbBlockStretchAction"));
-            tags.extend([tag(92, conns[0].0.to_string()), tag(301, conns[0].1), tag(93, conns[1].0.to_string()), tag(302, conns[1].1)]);
-            tags.push(tag(72, frame.len().to_string()));
+            tags.push(tag(100, "AcDbBlockPolarStretchAction"));
+            let names = ["UpdatedEndX", "UpdatedEndY", "UpdatedBaseX", "UpdatedBaseY", "UpdatedAngle", "UpdatedDistance"];
+            tags.extend((0..6).map(|i| tag(92 + i, node.to_string())));
+            tags.extend(names.iter().enumerate().map(|(i, n)| tag(301 + i as i32, *n)));
+            tags.push(tag(73, frame.len().to_string()));
             for f in frame {
                 tags.push(tag(1011, real(f.x)));
                 tags.push(tag(1021, real(f.y)));
             }
-            // The listed objects move the vertices named; the other selected objects move whole.
-            let listed: Vec<&(Handle, Vec<i32>)> = vertices.iter().filter(|(h, _)| selection.contains(h)).take(MAX_LIST).collect();
-            tags.push(tag(73, listed.len().to_string()));
+            // The objects that stretch (the selection but those that only turn), each with the
+            // vertices of it that move when it crosses the frame.
+            let stretched: Vec<&Handle> = selection.iter().filter(|h| !rotate.contains(h)).collect();
+            tags.push(tag(72, stretched.len().to_string()));
+            tags.extend(stretched.iter().map(|h| tag(331, h.hex())));
+            let listed: Vec<&(Handle, Vec<i32>)> = vertices.iter().filter(|(h, _)| stretched.contains(&h)).take(MAX_LIST).collect();
+            tags.push(tag(74, listed.len().to_string()));
             for (h, idx) in listed {
-                tags.push(tag(331, h.hex()));
-                tags.push(tag(74, idx.len().min(MAX_LIST).to_string()));
-                tags.extend(idx.iter().take(MAX_LIST).map(|i| tag(94, i.to_string())));
+                tags.push(tag(332, h.hex()));
+                tags.push(tag(75, idx.len().min(MAX_LIST).to_string()));
+                tags.extend(idx.iter().take(MAX_LIST).map(|i| tag(76, i.to_string())));
             }
-            tags.extend([tag(75, "0"), tag(140, "1"), tag(141, "0")]);
+            tags.extend([tag(78, "0"), tag(141, "1"), tag(140, "0"), tag(77, "0")]);
+        }
+        NewActionKind::Array { column_offset, row_offset } => {
+            if !(column_offset.is_finite() && *column_offset > 0.0 && row_offset.is_finite() && *row_offset >= 0.0) {
+                return Err("An array needs a column offset above 0 (and a row offset of 0 or more).".into());
+            }
+            if matches!(p.kind, ParameterKind::Xy { .. }) && *row_offset <= 0.0 {
+                return Err("An array along an XY parameter needs a row offset above 0.".into());
+            }
+            tags.push(tag(100, "AcDbBlockArrayAction"));
+            let (c0, c1) = if matches!(p.kind, ParameterKind::Xy { .. }) {
+                ("UpdatedXDistance", "UpdatedYDistance")
+            } else {
+                ("UpdatedDistance", "UpdatedDistance")
+            };
+            tags.extend([tag(92, node.to_string()), tag(93, node.to_string()), tag(94, "0"), tag(95, "0")]);
+            tags.extend([tag(301, c0), tag(302, c1), tag(303, ""), tag(304, "")]);
+            tags.extend([tag(140, real(*row_offset)), tag(141, real(*column_offset))]);
         }
         NewActionKind::Move => {
             tags.push(tag(100, "AcDbBlockMoveAction"));
@@ -552,19 +683,28 @@ pub fn add_action(
                 ]);
             }
         }
-        other => {
-            let marker = match other {
-                NewActionKind::Scale => "AcDbBlockScaleAction",
-                NewActionKind::Rotate => "AcDbBlockRotateAction",
-                NewActionKind::Flip => "AcDbBlockFlipAction",
-                NewActionKind::Array => "AcDbBlockArrayAction",
-                _ => "AcDbBlockPolarStretchAction",
-            };
-            tags.push(tag(100, marker));
-            tags.extend([tag(92, node.to_string()), tag(301, "UpdatedBase"), tag(93, node.to_string()), tag(302, "UpdatedEnd")]);
+        NewActionKind::Flip => {
+            tags.push(tag(100, "AcDbBlockFlipAction"));
+            tags.extend([tag(92, node.to_string()), tag(93, "0"), tag(94, "0"), tag(95, "0")]);
+            tags.extend([tag(301, "UpdatedFlipState"), tag(302, ""), tag(303, ""), tag(304, "")]);
+        }
+        scaling @ (NewActionKind::Scale | NewActionKind::Rotate) => {
+            // Both turn or scale about a base point (the parameter's own, dependent on it).
+            let base = p.kind.base_point();
+            tags.push(tag(100, "AcDbBlockActionWithBasePt"));
+            tags.extend([tag(92, node.to_string()), tag(93, node.to_string()), tag(301, "UpdatedBaseX"), tag(302, "UpdatedBaseY")]);
+            point(&mut tags, 1011, Vec3::default());
+            tags.push(tag(280, "1"));
+            point(&mut tags, 1012, base);
+            if matches!(scaling, NewActionKind::Rotate) {
+                // (AutoCAD's marker for the rotate action's own data is AcDbBlockRotationAction.)
+                tags.extend([tag(100, "AcDbBlockRotationAction"), tag(94, node.to_string()), tag(303, "UpdatedAngle")]);
+            } else {
+                tags.extend([tag(100, "AcDbBlockScaleAction"), tag(94, node.to_string()), tag(95, "0"), tag(96, "0")]);
+                tags.extend([tag(303, "UpdatedDistance"), tag(304, ""), tag(305, "")]);
+            }
         }
     }
-    let _ = p;
     std::sync::Arc::make_mut(&mut d.foreign).objects.push(ForeignObject { handle: h, kind: kind.dxf_type().into(), tags });
     list.push((h, me));
     write_graph(d, graph, dict, &list);
@@ -677,5 +817,94 @@ fn refresh_states(d: &mut Drawing, name: &str) -> Result<(), String> {
         out.push(t);
     }
     o.tags = out;
+    Ok(())
+}
+
+/// A value set's groups: its description, flags, minimum, maximum and increment (from `first`),
+/// and the count and values of its list (`first + 3` each).
+fn value_set(tags: &mut Vec<RawTag>, v: &ValueSet, (description, flags, first, count): (i32, i32, i32, i32)) {
+    tags.extend([tag(description, ""), tag(flags, v.flags.to_string())]);
+    tags.extend([tag(first, real(v.minimum)), tag(first + 1, real(v.maximum)), tag(first + 2, real(v.increment))]);
+    tags.push(tag(count, v.list.len().to_string()));
+    tags.extend(v.list.iter().map(|x| tag(first + 3, real(*x))));
+}
+
+/// Whether `p` lies in a stretch frame: an axis-aligned rectangle (or two corners) takes its
+/// edges, any other polygon the usual inside test.
+fn in_stretch_frame(frame: &[Vec2], p: Vec2) -> bool {
+    let rect = match frame {
+        [a, b] => Some((*a, *b)),
+        [a, b, c, d] if (a.x == b.x && b.y == c.y && c.x == d.x && d.y == a.y) || (a.y == b.y && b.x == c.x && c.y == d.y && d.x == a.x) => {
+            Some((*a, *c))
+        }
+        _ => None,
+    };
+    match rect {
+        Some((a, b)) => p.x >= a.x.min(b.x) && p.x <= a.x.max(b.x) && p.y >= a.y.min(b.y) && p.y <= a.y.max(b.y),
+        None => super::apply::in_frame(frame, p),
+    }
+}
+
+/// What a stretch frame moves of `items` (handle, object): lines and polylines with a vertex in
+/// the frame (with the vertices that move when not all do), and other objects whose reference
+/// points are all in it, which move whole. Objects outside the frame, and solids and the like
+/// that are half in it (they would move whole), are left out: they stay where they are.
+pub fn stretch_selection<'a>(items: impl IntoIterator<Item = (Handle, &'a Entity)>, frame: &[Vec2]) -> (Vec<Handle>, Vec<(Handle, Vec<i32>)>) {
+    let mut sel = Vec::new();
+    let mut verts = Vec::new();
+    for (h, e) in items {
+        let pts: Vec<Vec2> = match &e.kind {
+            EntityKind::Line(l) => vec![l.a.xy(), l.b.xy()],
+            EntityKind::LwPolyline(p) => p.vertices.iter().map(|v| v.p).collect(),
+            EntityKind::Circle(c) => vec![c.center.xy()],
+            EntityKind::Arc(c) => vec![c.center.xy()],
+            EntityKind::Ellipse(c) => vec![c.center.xy()],
+            EntityKind::Text(t) => vec![t.align_pt.unwrap_or(t.insert).xy()],
+            EntityKind::Solid(s) => s.corners.iter().map(|c| c.xy()).collect(),
+            // Bodies, attribute definitions: left as they are.
+            _ => continue,
+        };
+        let idx: Vec<i32> = pts.iter().enumerate().filter(|(_, p)| in_stretch_frame(frame, **p)).filter_map(|(i, _)| i32::try_from(i).ok()).collect();
+        if idx.is_empty() {
+            continue;
+        }
+        let partial = idx.len() < pts.len();
+        if partial && !matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
+            continue;
+        }
+        sel.push(h);
+        if partial {
+            verts.push((h, idx));
+        }
+    }
+    (sel, verts)
+}
+
+/// The groups a stretch and a polar stretch action share: the connections, the frame and the
+/// vertices of the objects crossing it.
+fn stretch_body(
+    tags: &mut Vec<RawTag>,
+    conns: [(i32, &str); 2],
+    frame: &[Vec2],
+    vertices: &[(Handle, Vec<i32>)],
+    selection: &[Handle],
+) -> Result<(), String> {
+    if frame.len() < 3 || frame.len() > 1000 || frame.iter().any(|p| !(p.x.is_finite() && p.y.is_finite())) {
+        return Err("A stretch needs a frame of at least 3 points.".into());
+    }
+    tags.extend([tag(92, conns[0].0.to_string()), tag(301, conns[0].1), tag(93, conns[1].0.to_string()), tag(302, conns[1].1)]);
+    tags.push(tag(72, frame.len().to_string()));
+    for f in frame {
+        tags.push(tag(1011, real(f.x)));
+        tags.push(tag(1021, real(f.y)));
+    }
+    // The listed objects move the vertices named; the other selected objects move whole.
+    let listed: Vec<&(Handle, Vec<i32>)> = vertices.iter().filter(|(h, _)| selection.contains(h)).take(MAX_LIST).collect();
+    tags.push(tag(73, listed.len().to_string()));
+    for (h, idx) in listed {
+        tags.push(tag(331, h.hex()));
+        tags.push(tag(74, idx.len().min(MAX_LIST).to_string()));
+        tags.extend(idx.iter().take(MAX_LIST).map(|i| tag(94, i.to_string())));
+    }
     Ok(())
 }

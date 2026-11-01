@@ -98,7 +98,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{eye: [x,y,z], target: [x,y,z]} | {fit: selection|all, dir?: [x,y,z]} → {eye, target} — looks from `eye` at `target` (the view direction and the zoom)")
             .noundo(),
         CommandSpec::new("ifc.render", "Render IFC Model", run_render)
-            .params("{path?: PNG file (else base64), width?, height? (800×600), style?: shaded|shadedwithedges|hidden|wireframe|realistic, eye?, target?, dir? (default the camera last set, else the view), highlight?: bool (the selection in orange, default true)} → {path?|png, width, height, triangles}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else base64), width?, height? (800×600), style?: shaded|shadedwithedges|hidden|wireframe|realistic, eye?, target?, dir? (default the camera last set, else the view), highlight?: bool (the selection in orange, default true)} → {path?|png, width, height, triangles}")
             .noundo(),
     ]
 }
@@ -243,7 +243,8 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     if !path.rsplit('.').next().is_some_and(|e| e.eq_ignore_ascii_case("ifc")) {
         return Err(bad("ifc.open", format!("{path} isn't an IFC file (.ifc)")));
     }
-    s.execute("open", &json!({ "path": path }))?;
+    let opened = s.execute("open", &json!({ "path": path }))?;
+    let warnings = opened.get("warnings").cloned().unwrap_or_else(|| json!([]));
     let els = elements(s.doc()?);
     if els.is_empty() {
         return Err(bad("ifc.open", format!("{path} has no building elements with a body")));
@@ -269,6 +270,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "name": name, "elements": els.len(), "classes": classes,
         "storeys": storeys.into_iter().map(|(_, n)| n).collect::<Vec<_>>(), "sites": sites, "buildings": buildings,
+        "warnings": warnings,
     }))
 }
 
@@ -823,6 +825,7 @@ pub(crate) fn render_png(
 fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     use cadaddy_render::shade::VisualStyle;
     need_index("ifc.render", s)?;
+    super::exchange::guard_params(s, "ifc.render", p, &["path", "output"])?;
     let dim = |k: &str, def: u32| p.get(k).and_then(Value::as_u64).map_or(def, |v| u32::try_from(v).unwrap_or(4096).clamp(16, 4096));
     let style = match str_param(p, "style") {
         Some(n) => VisualStyle::parse(n).ok_or_else(|| bad("ifc.render", format!("unknown style {}", n.chars().take(20).collect::<String>())))?,

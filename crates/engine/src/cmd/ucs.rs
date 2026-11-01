@@ -35,7 +35,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn valid_name(n: &str) -> bool {
-    !n.is_empty() && n.chars().count() <= 255 && !n.eq_ignore_ascii_case("world") && !n.chars().any(|c| "<>/\\\":;?*|,=`".contains(c))
+    !n.eq_ignore_ascii_case("world") && super::names::is_valid(n)
 }
 
 /// Make `f` the current UCS, remembering the one it replaces for Previous; with UCSFOLLOW 1 the
@@ -235,7 +235,10 @@ fn object_frame(s: &Session, h: cadaddy_doc::Handle, pick: Option<Vec2>) -> Resu
 
 fn save(s: &mut Session, name: &str) -> Result<Value> {
     if !valid_name(name) {
-        return Err(EngineError::Other(format!("\"{name}\" is not a valid UCS name.")));
+        return match super::names::check("ucs", "UCS", name) {
+            Err(e) => Err(e),
+            Ok(()) => Err(EngineError::Other(format!("\"{name}\" is not a valid UCS name."))),
+        };
     }
     let mut f = s.ucs();
     let d = s.doc_mut()?;

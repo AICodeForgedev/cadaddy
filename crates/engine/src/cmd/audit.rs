@@ -268,16 +268,32 @@ fn recover_file(path: &str, save: bool) -> std::result::Result<(Value, cadaddy_d
     let mut r = report.to_json();
     r["path"] = json!(path);
     r["warnings"] = json!(warnings);
-    if save && (!report.issues.is_empty() || !warnings.is_empty()) {
+    // Only a file AUDIT fixed or the salvage rebuilt is rewritten: a note about what the reader
+    // left out (common on sound files from other programs) is not damage, and saving would drop it.
+    let rebuilt = warnings.iter().any(|w| w.contains(SALVAGE_NOTE));
+    if save && (!report.issues.is_empty() || rebuilt) {
         d.read_notes.clear();
         let out = (hooks.write)(&d, path)?;
-        let bak = std::path::Path::new(path).with_extension("bak");
+        let bak = free_backup_name(path);
         write_bytes(&bak.to_string_lossy(), &bytes)?;
         write_bytes(path, &out)?;
         r["saved"] = json!(true);
         r["backup"] = json!(bak.to_string_lossy());
     }
     Ok((r, d))
+}
+
+/// The start of the read note a salvaged DWG carries (see the DWG reader).
+const SALVAGE_NOTE: &str = "the file is damaged; CADaddy opened what could be read";
+
+/// `<name>.bak`, or `<name>.bak2`, `.bak3` ... when one exists: an earlier backup is never replaced.
+fn free_backup_name(path: &str) -> std::path::PathBuf {
+    let p = std::path::Path::new(path);
+    let first = p.with_extension("bak");
+    if !first.exists() {
+        return first;
+    }
+    (2..10_000u32).map(|n| p.with_extension(format!("bak{n}"))).find(|c| !c.exists()).unwrap_or(first)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

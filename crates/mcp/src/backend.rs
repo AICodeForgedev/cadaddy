@@ -14,6 +14,12 @@ pub trait Backend {
     /// True when a real UI is attached (`ui.screenshot` works).
     fn has_ui(&self) -> bool;
     fn describe(&self) -> String;
+    /// A function that stops what this backend is running, callable from another thread while a
+    /// call is blocked (the `cancel` tool and `notifications/cancelled` use it). `None` when the
+    /// in-process cancel flag already reaches it.
+    fn canceller(&self) -> Option<Box<dyn Fn() + Send>> {
+        None
+    }
 }
 
 /// A running CADaddy app reached through its loopback control port.
@@ -23,6 +29,8 @@ pub struct Remote {
     next_id: u64,
     /// Open the app when nothing answers (see [`Remote::lazy`]).
     launch: bool,
+    /// Which window answered the last hello (title and process id), when the app says.
+    window: Option<String>,
 }
 
 /// How long a launched app has to open its control port.
@@ -33,7 +41,7 @@ const HEADLESS_LISP_LIMIT: Duration = Duration::from_secs(30);
 
 impl Remote {
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, launch: false };
+        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, launch: false, window: None };
         r.reconnect()?;
         Ok(r)
     }
@@ -41,7 +49,7 @@ impl Remote {
     /// the server before the app is open. With `launch`, a call that finds nothing at `addr`
     /// opens the app with that control port first (macOS) and waits for it.
     pub fn lazy(addr: &str, launch: bool) -> Self {
-        Self { addr: addr.to_string(), conn: None, next_id: 1, launch }
+        Self { addr: addr.to_string(), conn: None, next_id: 1, launch, window: None }
     }
     /// Connect, opening the app first when asked to and nothing answers.
     fn reach(&mut self) -> std::io::Result<()> {
@@ -49,6 +57,9 @@ impl Remote {
             Ok(()) => return Ok(()),
             Err(e) => e,
         };
+        if first.kind() == std::io::ErrorKind::PermissionDenied {
+            return Err(first);
+        }
         if !self.launch || !matches!(first.kind(), std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::TimedOut) {
             return Err(not_open(&self.addr, first));
         }
@@ -79,8 +90,9 @@ impl Remote {
                     let read = s.try_clone()?;
                     let mut reader = BufReader::new(read);
                     let mut s = s;
-                    authenticate(&mut reader, &mut s, sa.port())?;
-                    version_handshake(&mut reader, &mut s);
+                    self.window = authenticate(&mut reader, &mut s, sa.port())
+                        .and_then(|()| version_handshake(&mut reader, &mut s, sa.port()))
+                        .map_err(|e| refused(&self.addr, e))?;
                     self.conn = Some((reader, s));
                     return Ok(());
                 }
@@ -138,7 +150,7 @@ pub(crate) fn authenticate_with(reader: &mut BufReader<TcpStream>, writer: &mut 
     if v.get("error").and_then(Value::as_str).is_some_and(|e| e.starts_with("unauthorized")) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            "CADaddy refused the control token (it changes each start: is the token file from another CADaddy?)",
+            "the control token was not accepted (it changes each start: is the token file from another CADaddy?)",
         ));
     }
     Ok(())
@@ -147,21 +159,26 @@ pub(crate) fn authenticate_with(reader: &mut BufReader<TcpStream>, writer: &mut 
 /// After authenticating, ask the app for its version and tool list; warn on stderr when the
 /// bridge (this cadaddy-cli) and the app are different versions so the user knows why a tool
 /// might be missing. Non-fatal: a version mismatch doesn't prevent use.
-fn version_handshake(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream) {
+fn version_handshake(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, port: u16) -> std::io::Result<Option<String>> {
     let bridge_version = env!("CARGO_PKG_VERSION");
     let bridge_exe = std::env::current_exe().unwrap_or_default();
     let req = format!("{}\n", json!({"id": -1, "method": "ping", "params": {"version": true}}));
     if writer.write_all(req.as_bytes()).is_err() || writer.flush().is_err() {
-        return;
+        return Ok(None);
     }
     let mut reply = String::new();
     if reader.read_line(&mut reply).is_err() {
-        return;
+        return Ok(None);
     }
     let v: Value = match serde_json::from_str(reply.trim()) {
         Ok(v) => v,
-        Err(_) => return,
+        Err(_) => return Ok(None),
     };
+    // An app that wants a token and was given none answers the first request with "unauthorized"
+    // and closes the connection; say so now instead of letting the next call look like a lost reply.
+    if v.get("error").and_then(Value::as_str).is_some_and(|e| e.starts_with("unauthorized")) {
+        return Err(no_token(port));
+    }
     // The app's ping reply may include "version" when the app supports it (older apps just
     // reply "pong"). Extract the version string if present.
     let app_version = v.get("result").and_then(|r| r.as_object()).and_then(|o| o.get("version")).and_then(Value::as_str).or_else(|| {
@@ -183,6 +200,53 @@ fn version_handshake(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream) 
              if tools are missing, update the app.",
             bridge_exe.display()
         );
+    }
+    Ok(window_description(&v["result"]))
+}
+
+/// Which window answered a `ping {version: true}`: its process id and title, and whether it
+/// reaches the agent port at all. `None` from an app that doesn't say.
+pub(crate) fn window_description(r: &Value) -> Option<String> {
+    let pid = r.get("pid").and_then(Value::as_u64)?;
+    let title = r.get("title").and_then(Value::as_str).unwrap_or("");
+    let held = if r.get("agentPortHeldElsewhere").and_then(Value::as_bool) == Some(true) { "; another window holds the agent port" } else { "" };
+    Some(format!("window \"{}\", pid {pid}{held}", cadaddy_engine::clip_input(title)))
+}
+
+/// Tell the app at `addr` to stop its render, on a connection of its own (the main one is waiting for
+/// the render's reply). Best effort: an app that can't be reached or doesn't know the method has
+/// nothing to stop.
+fn cancel_remote(addr: &str) {
+    let Some(sa) = addr.to_socket_addrs().ok().and_then(|mut a| a.next()) else { return };
+    let Ok(s) = TcpStream::connect_timeout(&sa, Duration::from_millis(800)) else { return };
+    s.set_nodelay(true).ok();
+    s.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    let (Ok(read), mut s) = (s.try_clone(), s) else { return };
+    let mut reader = BufReader::new(read);
+    if authenticate(&mut reader, &mut s, sa.port()).is_err() {
+        return;
+    }
+    let line = format!("{}\n", json!({"id": 1, "method": "control.cancel", "params": {}}));
+    if s.write_all(line.as_bytes()).is_ok() && s.flush().is_ok() {
+        let mut reply = String::new();
+        let _ = reader.read_line(&mut reply);
+    }
+}
+
+/// Why the app refused for want of a token: no token was found for `port`.
+fn no_token(port: u16) -> std::io::Error {
+    let looked = cadaddy_engine::control_auth::config_dir()
+        .map_or_else(|| "the CADaddy settings folder".to_string(), |d| cadaddy_engine::control_auth::token_path(&d, port).display().to_string());
+    std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("no control token (looked in {looked}; set CADADDY_CONTROL_TOKEN)"))
+}
+
+/// The error for an app that answered but would not talk to us: a refused or missing token, worded with its address.
+/// [`Remote::call`] tells it apart from a lost connection by its kind (`PermissionDenied`).
+fn refused(addr: &str, e: std::io::Error) -> std::io::Error {
+    if e.kind() == std::io::ErrorKind::PermissionDenied {
+        std::io::Error::new(e.kind(), format!("CADaddy at {addr} refused the connection: {e}"))
+    } else {
+        e
     }
 }
 
@@ -263,6 +327,8 @@ impl Backend for Remote {
             Ok(r) => r,
             // Resend only when the request cannot have been applied. After a sent mutation with no reply the outcome is unknown, and
             // resending could apply it twice (for example two circles from one call), so report that instead.
+            // An app that refused us (no or wrong control token) said why; that is the answer, not a lost reply.
+            Err((e, _)) if e.kind() == std::io::ErrorKind::PermissionDenied => return Err(e.to_string()),
             Err((_, sent)) if !sent || is_read_only(method) => self.roundtrip(&line).map_err(|(e, _)| format!("CADaddy at {}: {e}", self.addr))?,
             Err((e, _)) => {
                 return Err(format!(
@@ -287,8 +353,15 @@ impl Backend for Remote {
     fn has_ui(&self) -> bool {
         true
     }
+    fn canceller(&self) -> Option<Box<dyn Fn() + Send>> {
+        let addr = self.addr.clone();
+        Some(Box::new(move || cancel_remote(&addr)))
+    }
     fn describe(&self) -> String {
-        format!("connected to CADaddy at {}", self.addr)
+        match &self.window {
+            Some(w) => format!("connected to CADaddy at {} ({w})", self.addr),
+            None => format!("connected to CADaddy at {}", self.addr),
+        }
     }
 }
 
@@ -333,7 +406,7 @@ const HEADLESS_METHODS: &[(&str, &str, &str)] = &[
     ),
     ("ui.render", "{path?, width?, height?, fit?}", "Render the drawing; replies pngBase64."),
     ("app.open", "{path}", "Open a drawing."),
-    ("app.save", "{path?}", "Save the drawing (Save As with a path)."),
+    ("app.save", "{path?, force?}", "Save the drawing (Save As with a path); force: true overwrites a file that changed on disk."),
     ("control.methods", "", "This list."),
     ("ping", "", "Replies \"pong\"."),
 ];
@@ -352,6 +425,7 @@ impl Default for Headless {
         session.new_drawing_with_viewports(false);
         // No one to ask here: the agent runs the session (dry run and the journal still apply).
         session.agent.confirm = false;
+        session.agent.headless = true;
         Headless { session }
     }
 }
@@ -394,8 +468,12 @@ impl Backend for Headless {
             "events.poll" => Ok(s.events_poll(p.get("since").and_then(Value::as_u64).unwrap_or(0))),
             "cmdline.input" => {
                 let before = s.log.len();
+                // Typed by an agent: the same rails as its `engine.execute` calls (dry run,
+                // what only the user may loosen), as in the app.
+                let was = std::mem::replace(&mut s.agent.from_agent, true);
                 let r = s.cmdline(&str_p("text").unwrap_or_default());
                 s.lisp_finish(HEADLESS_LISP_LIMIT);
+                s.agent.from_agent = was;
                 // Like the app: a refused line is echoed to the history (and `output`), and also
                 // reported in `error`.
                 if let Err(e) = &r {
@@ -413,13 +491,17 @@ impl Backend for Headless {
             }
             "cmdline.script" => {
                 let before = s.log.len();
-                s.script(&str_p("text").unwrap_or_default()).map_err(|e| e.to_string())?;
+                let was = std::mem::replace(&mut s.agent.from_agent, true);
+                let r = s.script(&str_p("text").unwrap_or_default());
                 s.lisp_finish(HEADLESS_LISP_LIMIT);
+                s.agent.from_agent = was;
+                r.map_err(|e| e.to_string())?;
                 let out: Vec<String> = s.log.iter().skip(before).cloned().collect();
                 Ok(json!({"output": out, "state": state(s)}))
             }
             "cmdline.key" => {
                 let before = s.log.len();
+                let was = std::mem::replace(&mut s.agent.from_agent, true);
                 let r = if str_p("key").is_some_and(|k| k.eq_ignore_ascii_case("escape") || k.eq_ignore_ascii_case("esc")) {
                     s.cancel();
                     Ok(())
@@ -427,6 +509,7 @@ impl Backend for Headless {
                     s.input(cadaddy_engine::Input::Enter)
                 };
                 s.lisp_finish(HEADLESS_LISP_LIMIT);
+                s.agent.from_agent = was;
                 // Like the app: a refused Enter is echoed to the history (and `output`), and also
                 // reported in `error`; the call itself succeeds.
                 if let Err(e) = &r {
@@ -456,8 +539,17 @@ impl Backend for Headless {
             "drawing.inspect" | "document.inspect" => s.execute("drawing.inspect", &p).map_err(|e| e.to_string()),
             "drawing.summary" | "drawing.query" => s.execute(method, &p).map_err(|e| e.to_string()),
             "ui.render" => {
-                let w = p.get("width").and_then(Value::as_f64).unwrap_or(1600.0).clamp(16.0, 8192.0) as u32;
-                let h = p.get("height").and_then(Value::as_f64).unwrap_or(1000.0).clamp(16.0, 8192.0) as u32;
+                let side = |k: &str, d: f64| -> Result<u32, String> {
+                    match p.get(k) {
+                        None | Some(Value::Null) => Ok(d as u32),
+                        Some(v) => v
+                            .as_f64()
+                            .filter(|x| x.is_finite() && (16.0..=8192.0).contains(x))
+                            .map(|x| x as u32)
+                            .ok_or_else(|| format!("`{k}` is 16 to 8192 pixels")),
+                    }
+                };
+                let (w, h) = (side("width", 1600.0)?, side("height", 1000.0)?);
                 let st = s.state().map_err(|e| e.to_string())?;
                 let window = render_window(&p);
                 let opts = cadaddy_render::Options { view: window, transparency: s.settings.transparency_display, ..Default::default() };
@@ -592,5 +684,12 @@ impl Backend for Auto {
     }
     fn describe(&self) -> String {
         self.chosen.borrow_mut().get_or_insert_with(Self::choose).describe()
+    }
+    fn canceller(&self) -> Option<Box<dyn Fn() + Send>> {
+        match self.chosen.borrow().as_ref() {
+            Some(b) => b.canceller(),
+            // Not decided yet: a window on the agent port, if one turns out to be driven, is told too.
+            None => Some(Box::new(|| cancel_remote(&format!("127.0.0.1:{}", cadaddy_engine::AGENT_PORT)))),
+        }
     }
 }

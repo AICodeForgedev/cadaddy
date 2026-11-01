@@ -1,0 +1,16 @@
+[package]
+name = "cadaddy-winclip"
+description = "Windows: put an enhanced metafile on the open clipboard (the one raw handle call)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The one crate that may use `unsafe` for the Windows clipboard: SetEnhMetaFileBits and
+# SetClipboardData take and hand over raw handles. Every other lint is the workspace's.
+[lints.rust]
+unsafe_code = "allow"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Already in Cargo.lock through the app; same features as the app's entry.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_DataExchange"] }

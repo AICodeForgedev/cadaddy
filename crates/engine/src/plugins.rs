@@ -313,9 +313,9 @@ impl PluginHost {
                 c.plugin_idx = i;
             }
         }
-        let _ = std::fs::remove_file(&plugin.path);
+        let _ = crate::writefile::remove(&plugin.path);
         if let Some(dir) = self.dir() {
-            let _ = std::fs::remove_file(dir.join(format!("{}.permissions.json", plugin.name)));
+            let _ = crate::writefile::remove(dir.join(format!("{}.permissions.json", plugin.name)));
         }
         Ok(())
     }
@@ -720,6 +720,6 @@ impl PluginHost {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(format!("{name}.permissions.json"));
         let json = json!({ "allowed": perms.allowed, "files": perms.files, "network": perms.network });
-        let _ = std::fs::write(path, serde_json::to_string_pretty(&json).unwrap_or_default());
+        let _ = crate::writefile::write(path, serde_json::to_string_pretty(&json).unwrap_or_default());
     }
 }

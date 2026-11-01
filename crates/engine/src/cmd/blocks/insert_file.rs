@@ -116,6 +116,7 @@ fn define_from(s: &mut Session, src: &Drawing, name: &str) -> Result<String> {
     }
     let mut b = Block::new(&name);
     b.base = src.header.point("INSBASE").filter(|p| p.x.is_finite() && p.y.is_finite() && p.z.is_finite()).unwrap_or_default();
+    b.units = u8::try_from(src.header.i64("INSUNITS", 0)).unwrap_or(0);
     let mut ents = Vec::new();
     for e in src.model.iter() {
         let e = adopt(&mut d, e, &renames);
@@ -149,6 +150,7 @@ fn merge_tables(d: &mut Drawing, src: &Drawing) {
     merge(&mut d.dim_styles, &src.dim_styles, |t| &t.name);
     merge(&mut d.mleader_styles, &src.mleader_styles, |t| &t.name);
     merge(&mut d.table_styles, &src.table_styles, |t| &t.name);
+    merge(&mut d.mline_styles, &src.mline_styles, |t| &t.name);
 }
 
 /// Which source blocks to copy, and under which name: new names keep theirs, generated
@@ -220,6 +222,30 @@ pub(super) fn explode_insert(s: &mut Session, h: Handle) -> Result<Vec<Handle>> 
     Ok(out)
 }
 
+/// The scale factor for inserting or attaching a drawing whose units are `source` into one in
+/// `target` (INSUNITS codes): source size in metres over target size in metres, so a 254 mm line
+/// inserted into an inch drawing is scaled by 1/25.4 and reads 10. Either side unitless (0), or
+/// equal units: 1.0 (nothing to convert; the INSUNITSDEFSOURCE/TARGET fallbacks are not kept).
+pub(crate) fn unit_factor(source: i64, target: i64) -> f64 {
+    if source == 0 || target == 0 || source == target {
+        return 1.0;
+    }
+    let f = cadaddy_doc::geo::metres_per_unit(source) / cadaddy_doc::geo::metres_per_unit(target);
+    if f.is_finite() && f > 0.0 { f } else { 1.0 }
+}
+
+/// [`unit_factor`] from the units of block `name` (those of the drawing it came from) to this
+/// drawing's INSUNITS.
+pub(crate) fn block_factor(s: &Session, name: &str) -> f64 {
+    let Ok(d) = s.doc() else { return 1.0 };
+    d.block(name).map_or(1.0, |b| unit_factor(i64::from(b.units), d.header.i64("INSUNITS", 0)))
+}
+
+/// How a unit factor reads in a reply or on the command line.
+pub(crate) fn factor_note(f: f64) -> String {
+    format!("Drawing units differ: scaled by {f}.")
+}
+
 /// The JSON INSERT parameters with `file` defined as a block and `*name` as `explode: true`.
 pub(super) fn json_params(s: &mut Session, p: &Value) -> Result<Value> {
     let mut p = p.clone();
@@ -271,5 +297,18 @@ mod tests {
         assert_eq!((f.name.as_str(), f.path.as_str()), ("bolt", "bolt"));
         assert_eq!(file_ref(&s, "C:\\parts\\bolt.dxf").map(|f| f.name), Some("bolt".into()));
         assert!(file_ref(&s, "BOLT").is_none());
+    }
+
+    #[test]
+    fn inserted_file_brings_its_mline_styles() {
+        let mut src = Drawing::default();
+        src.mline_styles.push(cadaddy_doc::MLineStyle { name: "WALL".into(), ..Default::default() });
+        let mut d = Drawing::default();
+        merge_tables(&mut d, &src);
+        assert!(d.mline_styles.iter().any(|m| m.name == "WALL"));
+        // A style this drawing already has keeps its own definition.
+        let before = d.mline_styles.len();
+        merge_tables(&mut d, &src);
+        assert_eq!(d.mline_styles.len(), before);
     }
 }

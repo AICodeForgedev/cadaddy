@@ -369,8 +369,8 @@ pub(crate) fn existing_text(path: &str, cmd: &str) -> Result<Option<String>> {
 /// a linetype from dashes, gaps, dots, texts and shapes; with `save`, also into a user `.lin`
 /// file. Shapes come from CADaddy's `cadaddy.shx` unless an element names another file.
 pub(super) fn run_define(s: &mut Session, p: &Value) -> Result<Value> {
-    let name =
-        str_param(p, "name").map(str::trim).filter(|n| !n.is_empty() && n.len() <= 255).ok_or_else(|| bad("linetype.define", "name required"))?;
+    let name = str_param(p, "name").map(str::trim).ok_or_else(|| bad("linetype.define", "name required"))?;
+    super::super::names::check("linetype.define", "linetype", name)?;
     if RESERVED.contains(&name.to_ascii_lowercase().as_str()) || name.contains([',', '*', ';', '\n']) {
         return Err(bad("linetype.define", format!("`{name}` can't be a linetype name")));
     }

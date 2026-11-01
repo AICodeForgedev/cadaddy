@@ -206,6 +206,13 @@ impl Formatted {
         self.push_char(ch, fmt);
     }
 
+    /// The MTEXT code an atom placeholder character stands for (`\S1/2;`, `\~` …), or `None`
+    /// when `c` is not an atom of this text.
+    pub fn atom_code(&self, c: char) -> Option<&str> {
+        let n = (c as u32).checked_sub(ATOM_BASE)?;
+        self.atoms.get(n as usize).map(String::as_str)
+    }
+
     /// The text as the editor shows it.
     pub fn text(&self) -> &str {
         &self.text

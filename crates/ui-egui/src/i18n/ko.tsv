@@ -94,6 +94,7 @@
 	Blend	곡선 연결
 	Block	블록
 	Block Attribute Manager...	블록 속성 관리자...
+	Block Description...	블록 설명...
 	Block Editor	블록 편집기
 	Block Reference	블록 참조
 	Block...	블록...
@@ -143,6 +144,7 @@
 	Close All Other Drawings	다른 도면 모두 닫기
 	Closed	닫힘
 	Close Comparison	비교 닫기
+	Export Comparison	비교 내보내기
 	Coincident	일치
 	Collapse Palettes	팔레트 접기
 	Collapse Tool Sets	도구 세트 접기
@@ -539,6 +541,7 @@
 	N	북
 	Name	이름
 	Name (A–Z)	이름(A–Z)
+	Named Viewports...	명명된 뷰포트...
 	Named Views...	명명된 뷰...
 	Nearest	근처점
 	New	새로 만들기
@@ -3268,3 +3271,18 @@ menu	Modify	수정
 	Clash Navigate	충돌 탐색
 	Colour By Status/Level	상태/레벨별 색상
 	Inspect Element	요소 검사
+	Planned Walls	계획된 벽체
+	Extended Trim	확장 자르기
+	Trim and Extend	자르기 및 연장
+	Trim to Block Objects	블록 객체까지 자르기
+	Extend to Block Objects	블록 객체까지 연장
+	Super Hatch	슈퍼 해치
+	Block Authoring Palettes	블록 작성 팔레트
+	Test Block	블록 테스트
+	Company Standards	회사 표준
+	Delete Project	프로젝트 삭제
+	Duplicate Project	프로젝트 복제
+	Projects	프로젝트
+	Remove Company Standard	회사 표준 제거
+	Set Company Standard	회사 표준 설정
+	Standards	표준

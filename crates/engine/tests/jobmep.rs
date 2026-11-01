@@ -90,7 +90,9 @@ fn the_job_reads_ducts_on_mechanical_plans_and_pipes_on_plumbing_plans() {
     // be placed isn't drawn, and says so.
     let q = s.execute("mep.qty", &json!({})).expect("mep.qty");
     let not_placed = job["guided_job"]["findings"].to_string().contains("MEP items not placed");
-    for (model, read) in [(q["totals"]["duct_length_ft"].as_f64().expect("duct"), duct_ft), (q["totals"]["pipe_length_ft"].as_f64().expect("pipe"), pipe_ft)] {
+    for (model, read) in
+        [(q["totals"]["duct_length_ft"].as_f64().expect("duct"), duct_ft), (q["totals"]["pipe_length_ft"].as_f64().expect("pipe"), pipe_ft)]
+    {
         assert!(model <= read + 1.0 && model >= 0.95 * read, "{} read {duct_ft} {pipe_ft}", q["totals"]);
         assert!(model >= read - 1.0 || not_placed, "runs left out without a finding: {} read {read}", q["totals"]);
     }
@@ -151,6 +153,12 @@ fn the_runs_are_built_on_their_sheets_levels() {
     let plain_build = stage(&job_state(&plain), "bim_build")["result"].clone();
     assert_eq!(build["walls"], plain_build["walls"], "MEP sheets never add walls");
     assert_eq!(build["levels"], plain_build["levels"], "{build}");
+    // B4-022: the stage's counts are what the model holds, as bim.tree counts them.
+    let mut plain = plain;
+    for (key, category) in [("walls", "Walls"), ("doors", "Doors"), ("windows", "Windows")] {
+        let tree = plain.execute("bim.tree", &json!({"category": category, "limit": 1})).expect("tree");
+        assert_eq!(plain_build[key], tree["total"], "{key}: {plain_build}");
+    }
 }
 
 #[test]

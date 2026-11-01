@@ -216,3 +216,54 @@ fn clipboard_travels_as_text() {
     assert!(t.doc().unwrap().block("DOOR").is_some() && t.doc().unwrap().layer("HINGE").is_some());
     let _ = a;
 }
+
+#[test]
+fn cutbase_and_copybase_need_a_base_point_and_take_each_object_once() {
+    let mut s = Session::empty();
+    s.open_drawing(drawing_a(), "A", None);
+    let hs = handles(&s);
+    for cmd in ["cutbase", "copybase"] {
+        for p in [json!({ "handles": hs }), json!({ "handles": hs, "base": [5] })] {
+            assert!(s.execute(cmd, &p).is_err(), "{cmd}: {p}");
+        }
+    }
+    assert_eq!(model(&s).len(), 2, "nothing was cut");
+    assert!(s.clipboard.is_empty(), "nothing was copied");
+
+    // A handle listed twice is copied and cut once.
+    let twice = json!({ "handles": [hs[1], hs[1]], "base": [0, 0] });
+    assert_eq!(s.execute("copybase", &twice).unwrap(), json!({ "copied": 1 }));
+    assert_eq!(s.clipboard.len(), 1);
+    assert_eq!(s.execute("cutbase", &twice).unwrap(), json!({ "cut": 1 }));
+    assert_eq!(s.clipboard.len(), 1);
+    assert_eq!(model(&s).len(), 1);
+}
+
+#[test]
+fn cutting_only_locked_objects_keeps_the_clipboard() {
+    let mut s = Session::empty();
+    let mut da = drawing_a();
+    for l in &mut da.layers {
+        l.locked = true;
+    }
+    s.open_drawing(da, "A", None);
+    let hs = handles(&s);
+    s.execute("copyclip", &json!({ "handles": [hs[0]] })).unwrap();
+    let held = s.clipboard.clone();
+    let r = s.execute("cutclip", &json!({ "handles": hs })).unwrap();
+    assert_eq!(r, json!({ "cut": 0, "message": "2 objects were on a locked layer. Nothing was cut." }));
+    assert_eq!(model(&s).len(), 2, "nothing was erased");
+    assert_eq!(s.clipboard.len(), 1, "the clipboard keeps what it held");
+    assert_eq!(s.clipboard[0].handle, held[0].handle);
+
+    // CUTBASE at the command line says so too.
+    s.start("cutbase").unwrap();
+    s.input(cadaddy_engine::Input::Point(Vec2::new(3.0, 4.0))).unwrap();
+    let wall = s.doc().unwrap().model.iter().next().unwrap().handle;
+    s.input(cadaddy_engine::Input::Pick(vec![wall])).unwrap();
+    s.input(cadaddy_engine::Input::Enter).unwrap();
+    assert!(s.running.is_none());
+    assert!(s.log.iter().any(|l| l.contains("1 object was on a locked layer. Nothing was cut.")), "{:?}", s.log);
+    assert_eq!(s.clipboard.len(), 1);
+    assert_eq!(model(&s).len(), 2);
+}

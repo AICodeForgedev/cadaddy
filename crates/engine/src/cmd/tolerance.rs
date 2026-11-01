@@ -179,6 +179,20 @@ fn is_frame_string(t: &str) -> bool {
     t.contains("%%v") || t.contains("\\Fgdt") || t.contains("^J")
 }
 
+/// Start TOLERANCE with the frame already set (the Geometric Tolerance dialog's OK): the next prompt
+/// is the location. Refuses a frame with nothing in it, leaving nothing running.
+pub fn start_with_frame(s: &mut Session, text: &str) -> Result<()> {
+    let text: String = text.chars().take(MAX_FRAME_CHARS).collect();
+    if cadaddy_doc::parse_frame(&text).iter().flatten().all(cadaddy_doc::compartment_is_empty) {
+        return Err(bad("tolerance", "the feature control frame is empty"));
+    }
+    s.start("tolerance")?;
+    let style = current_dimstyle(s);
+    let run = s.running.as_mut().ok_or_else(|| bad("tolerance", "TOLERANCE did not start"))?;
+    run.machine = crate::guard::Guarded::wrap(Box::new(ToleranceM { ask: FrameAsk::default(), frame: Some(text), style }));
+    Ok(())
+}
+
 /// TOLERANCE.EDIT: new contents for a frame, which keeps its place, direction and style.
 fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let h = super::curves::handle_param(p, "handle").ok_or_else(|| bad("tolerance.edit", "`handle` (a tolerance) is required"))?;

@@ -16,6 +16,7 @@
 //! canvas falls back to the CPU path when no wgpu render state was handed to the app.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cadaddy_color::Rgb;
@@ -244,7 +245,10 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
                     }
                 }
             },
-            Kind::Tris => {
+            Kind::Tris | Kind::InkMask => {
+                if prim.kind == Kind::InkMask {
+                    m.breaks.push([m.tri_vertices(), m.line_vertices(), m.quad_instances()]);
+                }
                 for t in pts.as_chunks::<3>().0 {
                     for q in t {
                         push_vertex(&mut m.tris, rel(*q, origin), col);
@@ -319,7 +323,7 @@ pub fn build_highlight_mesh(list: &DisplayList, prims: &[usize], origin: Vec2, c
                     }
                 }
             }
-            Kind::Tris | Kind::Mask | Kind::Image(_) => {
+            Kind::Tris | Kind::InkMask | Kind::Mask | Kind::Image(_) => {
                 for line in list.fill_outlines(prim) {
                     let mut run = 0.0;
                     for s in line.windows(2) {
@@ -436,34 +440,85 @@ fn translucent(c: [u8; 4], alpha: f32) -> [u8; 4] {
 }
 pub const IDENTITY_XFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
-/// Bytes of the canvas's GPU buffers alive now (vertex batches and view uniforms): what
-/// `ui.inspect` reports as `perf.gpuBytes`, and what the soak test watches for a leak.
-static GPU_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Bytes of GPU memory alive now (the canvas's, the shaded view's and Walk's buffers and
+/// textures, and the canvas's image textures): what `ui.inspect` reports as `perf.gpuBytes`, and
+/// what the soak test watches for a leak. Transient readback buffers (screenshots, frame export)
+/// are exempt: they are mapped, read and dropped inside one call.
+static GPU_BYTES: AtomicU64 = AtomicU64::new(0);
 
 pub fn gpu_bytes() -> u64 {
-    GPU_BYTES.load(std::sync::atomic::Ordering::Relaxed)
+    GPU_BYTES.load(Ordering::Relaxed)
 }
 
-/// A GPU buffer counted in [`GPU_BYTES`] while it lives.
-struct Tracked(wgpu::Buffer);
+/// A GPU resource with a size to count.
+pub(crate) trait Counted {
+    fn counted_bytes(&self) -> u64;
+}
 
-impl Tracked {
-    fn new(buffer: wgpu::Buffer) -> Tracked {
-        GPU_BYTES.fetch_add(buffer.size(), std::sync::atomic::Ordering::Relaxed);
-        Tracked(buffer)
+impl Counted for wgpu::Buffer {
+    fn counted_bytes(&self) -> u64 {
+        self.size()
     }
 }
 
-impl Drop for Tracked {
+impl Counted for wgpu::Texture {
+    /// Width × height × layers × bytes per pixel × samples (mip levels are not added: every
+    /// texture the app keeps has one).
+    fn counted_bytes(&self) -> u64 {
+        let per_pixel = u64::from(self.format().block_copy_size(None).unwrap_or(4));
+        u64::from(self.width()) * u64::from(self.height()) * u64::from(self.depth_or_array_layers()) * per_pixel * u64::from(self.sample_count())
+    }
+}
+
+/// A GPU buffer or texture counted in [`GPU_BYTES`] while it lives.
+pub(crate) struct Tracked<T: Counted = wgpu::Buffer> {
+    inner: T,
+    bytes: u64,
+    counter: &'static AtomicU64,
+}
+
+impl<T: Counted> Tracked<T> {
+    pub(crate) fn new(inner: T) -> Tracked<T> {
+        Tracked::counting(&GPU_BYTES, inner)
+    }
+    /// Counted in `counter` instead of the app-wide total (tests, which run side by side).
+    pub(crate) fn counting(counter: &'static AtomicU64, inner: T) -> Tracked<T> {
+        let bytes = inner.counted_bytes();
+        counter.fetch_add(bytes, Ordering::Relaxed);
+        Tracked { inner, bytes, counter }
+    }
+}
+
+impl<T: Counted> Drop for Tracked<T> {
     fn drop(&mut self) {
-        GPU_BYTES.fetch_sub(self.0.size(), std::sync::atomic::Ordering::Relaxed);
+        self.counter.fetch_sub(self.bytes, Ordering::Relaxed);
     }
 }
 
-impl std::ops::Deref for Tracked {
-    type Target = wgpu::Buffer;
-    fn deref(&self) -> &wgpu::Buffer {
-        &self.0
+impl<T: Counted> std::ops::Deref for Tracked<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.inner
+    }
+}
+
+impl Tracked<wgpu::Texture> {
+    /// A view that keeps the texture (and its count) alive as long as it lives.
+    pub(crate) fn into_view(self, desc: &wgpu::TextureViewDescriptor) -> TrackedView {
+        TrackedView { view: self.inner.create_view(desc), _texture: self }
+    }
+}
+
+/// A texture view that owns its counted texture.
+pub(crate) struct TrackedView {
+    view: wgpu::TextureView,
+    _texture: Tracked<wgpu::Texture>,
+}
+
+impl std::ops::Deref for TrackedView {
+    type Target = wgpu::TextureView;
+    fn deref(&self) -> &wgpu::TextureView {
+        &self.view
     }
 }
 
@@ -495,7 +550,7 @@ struct Resources {
     sampler: wgpu::Sampler,
     /// Image textures by their pixels (each keeps its pixels alive, so a key isn't reused while
     /// it is here); dropped when no layer draws them.
-    textures: std::collections::HashMap<usize, (Arc<cadaddy_render::images::Raster>, wgpu::BindGroup)>,
+    textures: std::collections::HashMap<usize, (Arc<cadaddy_render::images::Raster>, wgpu::BindGroup, Tracked<wgpu::Texture>)>,
     /// With a stencil buffer: the pipelines of [`Stencil::Mask`] and [`Stencil::Inside`].
     clipped: Option<ClipPipelines>,
     linear_out: bool,
@@ -799,7 +854,7 @@ impl Resources {
             }
             let fitted = raster.fit(max);
             let size = wgpu::Extent3d { width: fitted.width, height: fitted.height, depth_or_array_layers: 1 };
-            let texture = wgpu::util::DeviceExt::create_texture_with_data(
+            let texture = Tracked::new(wgpu::util::DeviceExt::create_texture_with_data(
                 device,
                 queue,
                 &wgpu::TextureDescriptor {
@@ -815,7 +870,7 @@ impl Resources {
                 },
                 wgpu::util::TextureDataOrder::LayerMajor,
                 &fitted.rgba,
-            );
+            ));
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("cad_image"),
@@ -825,7 +880,7 @@ impl Resources {
                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 ],
             });
-            self.textures.insert(key, (raster, group));
+            self.textures.insert(key, (raster, group, texture));
         }
     }
 }
@@ -1078,7 +1133,7 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
             }
             // the images between this group and the next (never into the stencil)
             for im in res.images.iter().filter(|im| im.group == group && !mask) {
-                let (Some(b), Some((_, tex))) = (&im.vertices, shared.textures.get(&(Arc::as_ptr(&im.raster) as usize))) else { continue };
+                let (Some(b), Some((_, tex, _))) = (&im.vertices, shared.textures.get(&(Arc::as_ptr(&im.raster) as usize))) else { continue };
                 pass.set_pipeline(image);
                 pass.set_bind_group(1, tex, &[]);
                 pass.set_vertex_buffer(0, b.buffer.slice(..));
@@ -1107,6 +1162,42 @@ fn batch_ranges(counts: impl IntoIterator<Item = u32>, range: std::ops::Range<us
 
 #[cfg(test)]
 mod tests {
+    /// A counted buffer and a counted texture raise the total by exactly their sizes and give
+    /// it back on drop (the textures by width × height × layers × bytes a pixel × samples).
+    #[test]
+    fn counted_buffers_and_textures_add_and_return_their_bytes() {
+        static COUNT: AtomicU64 = AtomicU64::new(0);
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let device = &rs.device;
+        assert_eq!(COUNT.load(Ordering::Relaxed), 0);
+        let buffer = Tracked::counting(
+            &COUNT,
+            device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 4096, usage: wgpu::BufferUsages::VERTEX, mapped_at_creation: false }),
+        );
+        assert_eq!(COUNT.load(Ordering::Relaxed), 4096);
+        let texture = Tracked::counting(
+            &COUNT,
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d { width: 64, height: 32, depth_or_array_layers: 3 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            }),
+        );
+        assert_eq!(COUNT.load(Ordering::Relaxed), 4096 + 64 * 32 * 3 * 4);
+        // A view owns its texture: the count stays while the view lives.
+        let view = texture.into_view(&wgpu::TextureViewDescriptor::default());
+        assert_eq!(COUNT.load(Ordering::Relaxed), 4096 + 64 * 32 * 3 * 4);
+        drop(buffer);
+        assert_eq!(COUNT.load(Ordering::Relaxed), 64 * 32 * 3 * 4);
+        drop(view);
+        assert_eq!(COUNT.load(Ordering::Relaxed), 0);
+    }
+
     use super::*;
     use cadaddy_doc::Handle;
     use cadaddy_render::DPrim;
@@ -1156,6 +1247,36 @@ mod tests {
         l
     }
 
+    /// Hatch lines, then a filled box in the entity colour (green) of the given kind.
+    fn hatch_then_fill(kind: Kind) -> DisplayList {
+        let mut l = DisplayList {
+            verts: vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0), Vec2::new(1.0, 2.0)],
+            tris: vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)],
+            ..Default::default()
+        };
+        let p = |kind, color, start, len| DPrim { handle: Handle(1), color, aci7: false, lw: 0.0, transparency: 0, kind, start, len };
+        l.prims = vec![p(Kind::Polyline, Rgb(255, 0, 0), 0, 2), p(Kind::Polyline, Rgb(255, 0, 0), 2, 2), p(kind, Rgb(0, 255, 0), 0, 3)];
+        l
+    }
+
+    #[test]
+    fn coloured_masks_start_a_draw_order_group_and_keep_their_colour() {
+        // MTEXT background with a colour, DIMTFILL 2 and a TEXTMASK solid are all `InkMask`: the
+        // hatch's four line vertices are drawn before the group break, the fill after it.
+        let m = build_mesh(&hatch_then_fill(Kind::InkMask), Vec2::ZERO, Rgb(0, 0, 0), false);
+        assert_eq!(m.breaks, vec![[0, 4, 0]], "one break, after the hatch's line vertices");
+        assert_eq!(m.line_vertices(), 4);
+        assert_eq!(m.tri_vertices(), 3);
+        assert_eq!(&m.tris[8..12], &[0, 255, 0, 255], "filled in the entity colour, not the background (black)");
+        // A plain fill starts no group (lines of an earlier object would show over it).
+        let m = build_mesh(&hatch_then_fill(Kind::Tris), Vec2::ZERO, Rgb(0, 0, 0), false);
+        assert!(m.breaks.is_empty());
+        // A background mask breaks too, but in the background colour.
+        let m = build_mesh(&hatch_then_fill(Kind::Mask), Vec2::ZERO, Rgb(9, 8, 7), false);
+        assert_eq!(m.breaks, vec![[0, 4, 0]]);
+        assert_eq!(&m.tris[8..12], &[9, 8, 7, 255]);
+    }
+
     #[test]
     fn highlight_dashes_run_on_along_each_polyline() {
         let l = list();
@@ -1193,6 +1314,17 @@ mod tests {
         }
         let m = build_highlight_mesh(&l, &[1], Vec2::ZERO, [1, 2, 3, 255], 1.5, false);
         assert_eq!((m.tri_vertices(), m.quad_instances()), (0, 3));
+    }
+
+    #[test]
+    fn rebuilding_dashed_fill_highlights_keeps_the_same_gpu_dash_positions() {
+        let l = list();
+        let expected = build_highlight_mesh(&l, &[1], Vec2::ZERO, [1, 2, 3, 255], 1.5, true);
+        assert_eq!(expected.quad_instances(), 3);
+        for _ in 0..64 {
+            let rebuilt = build_highlight_mesh(&l, &[1], Vec2::ZERO, [1, 2, 3, 255], 1.5, true);
+            assert_eq!(rebuilt.quads, expected.quads, "the same filled triangle must keep its segment positions, directions and dash offsets");
+        }
     }
 
     #[test]

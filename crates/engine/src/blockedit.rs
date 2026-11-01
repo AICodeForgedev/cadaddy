@@ -24,6 +24,9 @@ use crate::{DocState, EngineError, Result, Snapshot};
 /// The Block Editor's action bars (BACTIONBAR), for the UI to draw.
 pub use crate::cmd::blocks::action_bars;
 
+/// The Block Authoring Palettes' tabs and tools (BAUTHORPALETTE), for the UI to draw.
+pub use crate::cmd::blocks::authoring::palette_tabs;
+
 /// The undo step a save into the block records in the drawing.
 const UNDO_LABEL: &str = "Block Editor";
 
@@ -67,6 +70,8 @@ pub struct BlockEdit {
     pub hidden_bars: Vec<i32>,
     /// The visibility state the editor shows (BVSTATE current), when one is set.
     pub vis_state: Option<String>,
+    /// The Block Authoring Palettes (BAUTHORPALETTE) are shown.
+    pub palette: bool,
 }
 
 impl BlockEdit {
@@ -158,6 +163,11 @@ impl BlockEdit {
         }
         let host = &self.host.doc;
         let mut d = editor.clone();
+        // When the block is saved under another name, the edited block keeps the drawing's
+        // description and block `name` gets the description changed in the editor.
+        if !name.eq_ignore_ascii_case(&self.name) {
+            keep_description(&mut d, host, &self.name);
+        }
         d.model = host.model.clone();
         d.layouts = host.layouts.clone();
         d.groups = host.groups.clone();
@@ -185,9 +195,28 @@ impl BlockEdit {
     }
 }
 
+/// Give block `name` of `d` the description `host` has for it, or, when `host` has no such block,
+/// drop the empty definition a description gives a block the editor started and never saved.
+fn keep_description(d: &mut Drawing, host: &Drawing, name: &str) {
+    match host.block(name) {
+        Some(h) => {
+            if let Some((_, b)) = d.blocks.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(name))
+                && b.description != h.description
+            {
+                Arc::make_mut(b).description = h.description.clone();
+            }
+        }
+        None => d.blocks.retain(|k, b| !(k.eq_ignore_ascii_case(name) && b.entities.is_empty())),
+    }
+}
+
 impl DocState {
     /// The drawing as a file saves it: outside the Block Editor's changes while it is open.
     pub fn drawing(&self) -> &Arc<Drawing> {
+        // A test window (BTESTBLOCK) shows a copy: the drawing is what is behind it.
+        if let Some(host) = &self.block_test {
+            return host.drawing();
+        }
         match &self.block_edit {
             Some(be) => &be.host.doc,
             None => &self.doc,
@@ -195,6 +224,9 @@ impl DocState {
     }
     /// [`DocState::drawing`], to change it (a save's file version).
     pub fn drawing_arc_mut(&mut self) -> &mut Arc<Drawing> {
+        if let Some(host) = &mut self.block_test {
+            return host.drawing_arc_mut();
+        }
         match &mut self.block_edit {
             Some(be) => &mut be.host.doc,
             None => &mut self.doc,
@@ -204,17 +236,25 @@ impl DocState {
     pub fn block_editor(&self) -> Option<&str> {
         self.block_edit.as_ref().map(|b| b.name.as_str())
     }
+    /// The test window (BTESTBLOCK) is open: the drawing shown is a temporary copy.
+    pub fn block_testing(&self) -> bool {
+        self.block_test.is_some()
+    }
     /// The Block Editor has changes not yet saved into the block.
     pub fn block_unsaved(&self) -> bool {
         self.block_edit.as_ref().is_some_and(|b| !Arc::ptr_eq(&b.saved, &self.doc))
     }
     /// The drawing to keep for recovery (autosave): with the Block Editor's unsaved changes in the
-    /// block, so a crash doesn't lose them.
-    pub fn recovery_drawing(&self) -> Arc<Drawing> {
+    /// block, so a crash doesn't lose them. An error when the editor's changes can't be put in the
+    /// block (it would contain itself): the host drawing alone would lose them.
+    pub fn recovery_drawing(&self) -> Result<Arc<Drawing>> {
+        if let Some(host) = &self.block_test {
+            return host.recovery_drawing();
+        }
         match &self.block_edit {
-            Some(be) if self.block_unsaved() => be.compose(&self.doc, &be.name).map(Arc::new).unwrap_or_else(|_| be.host.doc.clone()),
-            Some(be) => be.host.doc.clone(),
-            None => self.doc.clone(),
+            Some(be) if self.block_unsaved() => be.compose(&self.doc, &be.name).map(Arc::new),
+            Some(be) => Ok(be.host.doc.clone()),
+            None => Ok(self.doc.clone()),
         }
     }
 
@@ -236,6 +276,7 @@ impl DocState {
                 current: true,
                 hidden_bars: Vec::new(),
                 vis_state: None,
+                palette: true,
             });
             return Ok(());
         }
@@ -267,6 +308,7 @@ impl DocState {
             current: false,
             hidden_bars: Vec::new(),
             vis_state: None,
+            palette: true,
         });
         Ok(())
     }
@@ -296,6 +338,24 @@ impl DocState {
         let d = be.compose(&self.doc, &name)?;
         let original = d.block(&name).map(|b| b.entities.clone()).unwrap_or_default();
         let name = d.block(&name).map(|b| b.name.clone()).unwrap_or(name);
+        // When BSAVEAS saves the block under another name, the editor's drawing and each undo and
+        // redo step get the block as saved and the edited block as the drawing has it, so a later
+        // save and the description shown start from them after an undo too.
+        if !name.eq_ignore_ascii_case(&be.name)
+            && let Some(b) = d.block(&name).cloned()
+        {
+            let was = be.name.clone();
+            let reconcile = |doc: &mut Arc<Drawing>| {
+                let editor = Arc::make_mut(doc);
+                keep_description(editor, &d, &was);
+                editor.blocks.retain(|k, _| !k.eq_ignore_ascii_case(&name));
+                editor.blocks.insert(name.clone(), b.clone());
+            };
+            reconcile(&mut self.doc);
+            for step in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+                reconcile(&mut step.doc);
+            }
+        }
         let editor = self.doc.clone();
         let Some(be) = &mut self.block_edit else { return Ok(()) };
         let before = be.host.doc.clone();
@@ -327,6 +387,55 @@ impl DocState {
         // The drawing comes back with nothing selected; Previous is what was selected before.
         self.selection.clear();
         self.previous_selection = if host.selection.is_empty() { host.previous_selection } else { host.selection };
+        self.space = host.space;
+        self.mspace = host.mspace;
+        self.tiles = host.tiles;
+        self.views = host.views;
+        self.view_history = host.view_history;
+        self.revision += 1;
+        Ok(())
+    }
+}
+
+impl DocState {
+    /// Open the test window (BTESTBLOCK) on the Block Editor's block: the drawing becomes `copy`,
+    /// the block as the editor has it (saved or not) in a temporary drawing, and everything
+    /// done there is thrown away by [`DocState::close_block_test`]. The editor, with its undo
+    /// history, waits behind it.
+    pub fn open_block_test(&mut self) -> Result<()> {
+        if self.block_test.is_some() {
+            return Err(EngineError::Other("The test window is already open; close it first (BTESTBLOCK close).".into()));
+        }
+        let Some(be) = &self.block_edit else { return Err(EngineError::Other("The Block Editor is not open (BEDIT).".into())) };
+        if be.current {
+            return Err(EngineError::Other("The Block Editor is open on the current drawing; there is no block to test.".into()));
+        }
+        let mut copy = be.compose(&self.doc, &be.name)?;
+        copy.model = EntityStore::new();
+        let host = Box::new(self.clone());
+        self.doc = Arc::new(copy);
+        self.undo.clear();
+        self.redo.clear();
+        self.undo_ctl = Default::default();
+        self.selection.clear();
+        self.previous_selection.clear();
+        self.block_edit = None;
+        self.block_test = Some(host);
+        self.revision += 1;
+        Ok(())
+    }
+
+    /// Close the test window: the Block Editor comes back as it was, the block untouched.
+    pub fn close_block_test(&mut self) -> Result<()> {
+        let Some(host) = self.block_test.take() else { return Err(EngineError::Other("The test window is not open (BTESTBLOCK).".into())) };
+        let host = *host;
+        self.doc = host.doc;
+        self.undo = host.undo;
+        self.redo = host.redo;
+        self.undo_ctl = host.undo_ctl;
+        self.selection = host.selection;
+        self.previous_selection = host.previous_selection;
+        self.block_edit = host.block_edit;
         self.space = host.space;
         self.mspace = host.mspace;
         self.tiles = host.tiles;

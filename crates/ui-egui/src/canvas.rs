@@ -13,6 +13,28 @@ use crate::CadApp;
 use crate::theme::Tokens;
 
 /// World ↔ screen transform for the canvas rect.
+/// Tells a lone Ctrl tap from Ctrl used with something else. Fed once per frame with whether Ctrl
+/// is down and whether a click or key came in that frame; a tap is reported on release.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CtrlTap {
+    down: bool,
+    clean: bool,
+}
+
+impl CtrlTap {
+    pub(crate) fn update(&mut self, ctrl: bool, interrupted: bool) -> bool {
+        if ctrl && !self.down {
+            self.clean = true;
+        }
+        if interrupted {
+            self.clean = false;
+        }
+        let tap = !ctrl && self.down && self.clean;
+        self.down = ctrl;
+        tap
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Xf {
     pub rect: Rect,
@@ -149,8 +171,8 @@ pub struct CanvasState {
     /// multifunctional grip shows its options when the cursor stays on it.
     grip_hover: Option<((Handle, usize), f64)>,
     hover_menu: Option<(Handle, usize)>,
-    /// Ctrl was down last frame (a Ctrl tap during a grip edit cycles the grip's options).
-    ctrl_down: bool,
+    /// A Ctrl tap during a grip edit cycles the grip's options (see `CtrlTap`).
+    ctrl_tap: CtrlTap,
     /// Dynamic block grips of the selection (cached), the one being dragged, and the list grip
     /// whose choices are open (and whether it opened this frame).
     pub(crate) dyn_grips: crate::dyngrips::Cache,
@@ -747,6 +769,17 @@ fn adaptive(unit: f64, scale: f64, min_px: f64) -> f64 {
     u
 }
 
+/// The grid line indices covering `lo..=hi` at spacing `minor`, or `None` when the range is
+/// not finite, the spacing is unusable, or it would take 2000 lines or more.
+fn grid_span(lo: f64, hi: f64, minor: f64) -> Option<(i64, i64)> {
+    if !(lo.is_finite() && hi.is_finite() && minor.is_finite() && minor > 0.0) {
+        return None;
+    }
+    let (a, b) = ((lo / minor).floor(), (hi / minor).ceil());
+    // 2000 lines at most; this also keeps both ends far from the i64 limits.
+    (a.is_finite() && b.is_finite() && b - a < 2000.0 && a.abs() < 1e15 && b.abs() < 1e15).then_some((a as i64, b as i64))
+}
+
 fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     // The grid lies on the XY plane; 3D views don't draw it yet.
     if xf.proj.is_some() {
@@ -763,11 +796,7 @@ fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
         let minor = adaptive(unit, xf.scale, 8.0);
         let major = minor * major_n;
         let mut lines = Vec::new();
-        let x0 = (wb.min.x / minor).floor() as i64;
-        let x1 = (wb.max.x / minor).ceil() as i64;
-        let y0 = (wb.min.y / minor).floor() as i64;
-        let y1 = (wb.max.y / minor).ceil() as i64;
-        if (x1 - x0) < 2000 && (y1 - y0) < 2000 {
+        if let (Some((x0, x1)), Some((y0, y1))) = (grid_span(wb.min.x, wb.max.x, minor), grid_span(wb.min.y, wb.max.y, minor)) {
             for i in x0..=x1 {
                 let x = i as f64 * minor;
                 let is_major = (x / major).round() * major - x == 0.0 || ((x / major) - (x / major).round()).abs() < 1e-6;
@@ -858,7 +887,7 @@ pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb,
                     shapes.push(Shape::line(screen, Stroke::new(w, col)));
                 }
             }
-            Kind::Tris | Kind::Mask => {
+            Kind::Tris | Kind::InkMask | Kind::Mask => {
                 // A wipeout's mask hides what was drawn before it with the background colour.
                 let col = if prim.kind == Kind::Mask { color32(bg) } else { col };
                 let mut mesh = egui::Mesh::default();
@@ -1162,7 +1191,7 @@ pub(crate) fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, pri
                     fill.indices.push(i);
                 }
             }
-            Kind::Tris | Kind::Mask | Kind::Image(_) => {
+            Kind::Tris | Kind::InkMask | Kind::Mask | Kind::Image(_) => {
                 for outline in list.fill_outlines(prim) {
                     line(outline.iter().map(|q| xf.to_screen(*q)).collect(), &mut shapes);
                 }
@@ -1173,6 +1202,95 @@ pub(crate) fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, pri
         shapes.push(Shape::mesh(fill));
     }
     p.extend(shapes);
+}
+
+#[cfg(test)]
+mod highlight_stability_tests {
+    use super::*;
+
+    fn frame(list: &DisplayList, look: Look, pointer: Pos2) -> Vec<egui::epaint::ClippedShape> {
+        let ctx = egui::Context::default();
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 400.0));
+        let input = egui::RawInput { screen_rect: Some(rect), events: vec![egui::Event::PointerMoved(pointer)], ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            draw_highlight(ui.painter(), &Xf { rect, center: Vec2::ZERO, scale: 11.0, proj: None }, list, &[0], Color32::LIGHT_BLUE, look);
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        output.textures_delta.clear();
+        shapes
+    }
+
+    // Compare visible dash segments, not their submission order or endpoint direction.
+    fn dash_positions(shapes: &[egui::epaint::ClippedShape]) -> Vec<((u32, u32), (u32, u32))> {
+        let mut segments: Vec<_> = shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::LineSegment { points: [a, b], stroke } if stroke.color == Color32::LIGHT_BLUE => {
+                    let (a, b) = ((a.x.to_bits(), a.y.to_bits()), (b.x.to_bits(), b.y.to_bits()));
+                    Some(if a < b { (a, b) } else { (b, a) })
+                }
+                _ => None,
+            })
+            .collect();
+        segments.sort_unstable();
+        segments
+    }
+
+    #[test]
+    fn moving_the_pointer_does_not_move_cpu_fill_highlight_dashes() {
+        let p = |x, y| Vec2::new(x, y);
+        let mut list = DisplayList { tris: vec![p(0.0, 0.0), p(7.0, 0.0), p(7.0, 3.0), p(0.0, 0.0), p(7.0, 3.0), p(0.0, 3.0)], ..Default::default() };
+        list.prims.push(cadaddy_render::DPrim {
+            handle: Handle(256),
+            color: Rgb(255, 255, 255),
+            aci7: true,
+            lw: 0.0,
+            transparency: 0,
+            kind: Kind::Tris,
+            start: 0,
+            len: 6,
+        });
+        // Filled glyphs, hatches, solids and arrowheads share the Tris path; wipeouts use Mask.
+        for kind in [Kind::Tris, Kind::Mask] {
+            list.prims.first_mut().unwrap().kind = kind;
+            for width in [1.0, 1.5, 2.0] {
+                let look = Look { width, dashed: true };
+                let expected = dash_positions(&frame(&list, look, pos2(320.0, 190.0)));
+                assert!(!expected.is_empty());
+                for i in 0..32 {
+                    assert_eq!(
+                        dash_positions(&frame(&list, look, pos2(320.0 + i as f32, 190.0))),
+                        expected,
+                        "pointer movement changes only the cursor, not the dashed contour"
+                    );
+                }
+            }
+        }
+        if let Some(dir) = std::env::var_os("CADADDY_HIGHLIGHT_SHOTS") {
+            let dir = std::path::PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 400.0)).build_ui(|ui| {
+                let xf = Xf { rect: ui.max_rect(), center: Vec2::new(3.5, 1.5), scale: 31.0, proj: None };
+                draw_highlight(ui.painter(), &xf, &list, &[0], Color32::LIGHT_BLUE, Look { width: 2.0, dashed: true });
+            });
+            h.run_steps(3);
+            h.event(egui::Event::PointerMoved(pos2(250.0, 190.0)));
+            h.run_steps(2);
+            // Harness::render adds a synthetic cursor; omit it from the pixel comparison.
+            h.remove_cursor();
+            h.run_steps(1);
+            let first = h.render().unwrap();
+            first.save(dir.join("highlight-pointer-a.png")).unwrap();
+            h.event(egui::Event::PointerMoved(pos2(320.0, 190.0)));
+            h.run_steps(2);
+            h.remove_cursor();
+            h.run_steps(1);
+            let second = h.render().unwrap();
+            second.save(dir.join("highlight-pointer-b.png")).unwrap();
+            let changed = first.pixels().zip(second.pixels()).filter(|(a, b)| a != b).count();
+            assert_eq!(changed, 0, "moving the pointer cannot change any highlight pixels");
+        }
+    }
 }
 
 /// The fill of a selection window or crossing area (SELECTIONAREA, WINDOWAREACOLOR,
@@ -1358,6 +1476,14 @@ fn wheel_zoom_points(events: &[egui::Event], opts: &egui::InputOptions, page: f3
     if points.is_finite() { points } else { 0.0 }
 }
 
+/// Draw the drawing area and handle its input (zoom and pan, picking, the crosshair) for this
+/// frame.
+///
+/// It also owns the cursor-visibility contract: the OS cursor is hidden only while the pointer is
+/// over the drawing area *and* the canvas is the topmost layer under it, so the drawn crosshair
+/// replaces the pointer over the drawing alone. A menu bar, an open menu (including its frame, not
+/// just its items), a tooltip or a floating palette above the canvas keeps the normal OS cursor
+/// visible (#1701), and so do the menus painted on the canvas itself (see [`over_canvas_menu`]).
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     let full = ui.available_rect_before_wrap();
@@ -1416,7 +1542,17 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         None
     };
     let hover_pos = hover_pos.or(lifted_at);
-    let inside = hover_pos.is_some_and(|p| rect.contains(p)) && (resp.hovered() || lifted_at.is_some());
+    // The drawing area alone: a menu popup's frame (between its items and its border), a tooltip
+    // or a floating palette lives on a layer above the canvas, where `hovered()` alone still
+    // counts the canvas. Over those the OS cursor stays visible and the crosshair stays put, as
+    // over the menu bar (#1701).
+    let inside =
+        hover_pos.is_some_and(|p| rect.contains(p) && (lifted_at.is_some() || (ui.ctx().layer_id_at(p) == Some(ui.layer_id()) && resp.hovered())));
+    // Whether Ctrl is held right now. Written every frame (not just while a command prompts), so
+    // previews that read `Session::ctrl_down` always see the current state. The engine
+    // deliberately does not carry modifiers through `Input`, which is UI-agnostic (see PR
+    // #407's Limits note: modifiers used to be dropped on the floor at this point).
+    app.session.ctrl_down = mods.ctrl;
     // Which device is scrolling? On macOS, trackpads (and Magic Mouse) report precise point
     // deltas; notched mouse wheels report lines. The answer is sticky because egui spreads a wheel
     // notch over several frames. Elsewhere (browsers, Wayland smooth-scroll mice) ordinary wheels
@@ -1453,8 +1589,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     let zoom_pinch = ui.input(|i| crate::animation::zoom_delta(i, &opts, app.shows_animations()));
     // A two-finger pinch was applied about the fingers' midpoint above.
+    // (Not while any touch is down either: egui counts a palm beside the pen as a second finger,
+    // and only the touch tracker's own gesture may move the view then.)
     if inside
         && !gesture.active
+        && !app.canvas.touch.touching()
         && (zoom_pinch - 1.0).abs() > 1e-4
         && let Some(hp) = hover_pos
     {
@@ -1715,10 +1854,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             app.session.echo(e.to_string());
         }
     }
-    // Press-and-drag selection window (AutoCAD's PICKDRAG = 2; click-click still works): a drag
+    // Press-and-drag selection window (PICKDRAG = 2; click-click still works): a drag
     // that starts while objects are being selected opens a window where the button went down,
     // and letting go closes it. Drags on grips and drags while drawing are left alone.
-    if resp.drag_started_by(egui::PointerButton::Primary)
+    if !app.session.settings.pickdrag {
+        app.canvas.drag_window = false;
+    }
+    if app.session.settings.pickdrag
+        && resp.drag_started_by(egui::PointerButton::Primary)
         && !middle_down
         && app.session.pending_window.is_none()
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
@@ -1766,8 +1909,23 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     crate::dyngrips::menu(app, ui.ctx(), &xf);
     // Ctrl tapped while a grip is edited: the grip's next option (Stretch, then its options).
-    let ctrl_tap = mods.ctrl && !app.canvas.ctrl_down;
-    app.canvas.ctrl_down = mods.ctrl;
+    // Only a real tap counts: Ctrl pressed and released with no click and no other key between
+    // (Ctrl+click makes a copy, Ctrl+Z / C / V are shortcuts; neither cycles).
+    let interrupted = pressed_primary
+        || ui.input(|i| {
+            i.raw.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::PointerButton { pressed: true, .. }
+                        | egui::Event::Key { pressed: true, .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Paste(_)
+                )
+            })
+        });
+    let ctrl_tap = app.canvas.ctrl_tap.update(mods.ctrl, interrupted);
     if ctrl_tap && app.session.running.as_ref().is_some_and(|r| r.id == "grip") {
         let _ = app.session.input(Input::Keyword(cadaddy_engine::grips::CYCLE_OPTIONS.into()));
         ui.ctx().request_repaint();
@@ -1775,7 +1933,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     hover_menu(app, ui, &xf, hover_pos.filter(|_| inside), idle && app.canvas.grip_menu.is_none());
     if idle && !app.canvas.snap_menu && app.canvas.grip_menu.is_some() {
         grip_menu(app, &resp);
-    } else if idle || app.canvas.snap_menu {
+    } else if (idle || app.canvas.snap_menu)
+        // egui opens the menu itself for any pointer held still on a touch screen, a pen too;
+        // a pen never long-presses (a menu already open stays up for the pen to tap).
+        && (!app.canvas.touch.pen_down() || egui::Popup::is_any_open(ui.ctx()))
+    {
         crate::context_menu::show(app, &resp);
     }
 
@@ -1817,10 +1979,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         ensure_list(app, &xf_paper, &views, ui.ctx());
     }
     let sheet = app.canvas.list.as_ref().and_then(|l| l.sheet);
-    let bg = match sheet {
+    let surround = Color32::from_rgb(0x50, 0x57, 0x63);
+    let (bg, paper_rect) = match sheet {
         Some(sh) => {
             // Paper space: grey surround, the sheet with a shadow, the printable area dashed.
-            painter.rect_filled(rect, 0.0, Color32::from_rgb(0x50, 0x57, 0x63));
+            painter.rect_filled(rect, 0.0, surround);
             let sb = sh.bounds();
             let a = xf_paper.to_screen(Vec2::new(sb.min.x, sb.max.y));
             let b = xf_paper.to_screen(Vec2::new(sb.max.x, sb.min.y));
@@ -1833,7 +1996,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             );
             let pts = [pa.left_top(), pa.right_top(), pa.right_bottom(), pa.left_bottom(), pa.left_top()];
             painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, Color32::from_gray(150)), 4.0, 4.0));
-            Rgb(t.paper.r(), t.paper.g(), t.paper.b())
+            (Rgb(t.paper.r(), t.paper.g(), t.paper.b()), Some(paper))
         }
         None => {
             // A restored named view's background colour, else the drawing area's.
@@ -1843,7 +2006,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
             blockedit::wash(app, &painter, rect);
             draw_grid(app, &painter, &xf);
-            bg.unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b()))
+            (bg.unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())), None)
         }
     };
     let sel = app.session.selection();
@@ -1988,10 +2151,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let hidden = cadaddy_engine::cmd::groups::display::grips_hidden(&app.session);
         for h in sel.iter().take(200).filter(|h| !hidden.contains(h)) {
             if let Some(e) = st.doc.entity(*h) {
-                for (gi, g) in e.kind.grips().into_iter().enumerate() {
+                let grips = e.kind.grips();
+                let count = grips.len();
+                for (gi, g) in grips.into_iter().enumerate() {
                     let sp = xf.w2s(g);
                     if rect.contains(sp) {
-                        let r = Rect::from_center_size(sp, vec2(gs * 2.0, gs * 2.0));
+                        let r = grip_rect(&e.kind, count, gi, sp, gs);
                         let hot = app.canvas.hot_grips.contains(&(*h, gi));
                         let warm = !hot && hover_pos.is_some_and(|hp| r.expand(2.0).contains(hp));
                         painter.rect_filled(
@@ -2126,14 +2291,19 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         // Hide the OS cursor under the drawn crosshair, unless assistive tech needs it (#39).
         ui.ctx().set_cursor_icon(if app.ui.system_cursor { egui::CursorIcon::Crosshair } else { egui::CursorIcon::None });
         if let Some(hp) = hover_pos {
-            draw_crosshair(app, &painter, rect, hp, selecting);
+            // Use the painted sheet even in MSPACE, where the editing transform follows a
+            // model viewport. The whole cursor takes one colour from its centre.
+            let ink = paper_rect.map_or(t.crosshair, |paper| crate::theme::crosshair_color(if paper.contains(hp) { t.paper } else { surround }));
+            draw_crosshair(app, &painter, rect, hp, selecting, ink);
         }
         if app.session.settings.dynmode
             && let Some(hp) = hover_pos
         {
-            // A stretched grip shows its dimensions instead of the pointer boxes.
-            if !crate::grip_dyn::draw(app, &painter) {
-                dynamic_input(app, &painter, hp);
+            // A stretched grip shows its dimensions instead of the pointer boxes; a prompt asking
+            // for a distance shows its one field and keeps the prompt and its options.
+            let fields = crate::grip_dyn::draw(app, &painter);
+            if !fields || app.session.current_prompt().is_some_and(|p| p.distance) {
+                dynamic_input(app, &painter, hp, fields);
             }
         }
     }
@@ -2304,8 +2474,8 @@ fn pickbox_half(pickbox: f64) -> Option<f32> {
     (half.is_finite() && half >= 1.0).then_some(half)
 }
 
-fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox: bool) {
-    let st = Stroke::new(1.0, Tokens::get().crosshair);
+fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox: bool, ink: Color32) {
+    let st = Stroke::new(1.0, ink);
     let len = (rect.height() * app.session.settings.cursorsize as f32 / 100.0).max(12.0);
     let pb = if pickbox { pickbox_half(app.session.settings.pickbox) } else { None };
     let gap = pb.unwrap_or(0.0);
@@ -2329,8 +2499,9 @@ fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox
 
 /// The Dynamic Input tooltip beside the cursor, styled like the command line. At a point prompt
 /// it shows the pair of value boxes, a view of the command-line text (see [`crate::dyninput`]);
-/// otherwise the prompt with what is being typed, or the live distance and angle.
-fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
+/// otherwise the prompt with what is being typed, or the live distance and angle. With `fields`
+/// (a distance prompt's field is on show, [`crate::grip_dyn`]) only the prompt and its options.
+fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2, fields: bool) {
     app.cmd.option_rows.clear();
     // While the options menu is open the tooltip stays where it opened, so the menu can be reached.
     let at = match app.cmd.options {
@@ -2344,7 +2515,8 @@ fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
     // DYNPROMPT = 0: no prompt beside the cursor (the value boxes stay).
     let show_prompt = app.session.settings.dynprompt;
     let options = show_prompt && !prompt.keywords.is_empty();
-    if let Some(f) = crate::cmdline::dyn_frame(app)
+    if !fields
+        && let Some(f) = crate::cmdline::dyn_frame(app)
         && let Some(e) = crate::dyninput::parse(&app.cmd.buffer, &f)
         && let Some(c) = app.canvas.cursor
     {
@@ -2357,7 +2529,9 @@ fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
         return;
     }
     let mut text = crate::i18n::t(&prompt.message).to_string();
-    if !app.cmd.buffer.is_empty() {
+    if fields {
+        // The field shows the distance and what is typed.
+    } else if !app.cmd.buffer.is_empty() {
         text = format!("{}: {}", crate::i18n::t(&prompt.message), app.cmd.buffer);
     } else if let (Some(base), Some(c)) = (prompt.base, app.canvas.cursor) {
         text = format!(
@@ -2813,22 +2987,30 @@ fn draw_viewcube_parts(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect, l: &crat
     // WCS pill.
     let pill = l.pill;
     p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
-    // The current UCS: WCS, its name, or Unnamed.
+    // The current UCS: WCS, its name, or Unnamed, with a down chevron drawn as lines rather than a
+    // "⌄" glyph that a UI font may lack (it showed as a box, #1541).
     let ucs = app.session.ucs();
     let label = if ucs.is_world() && ucs.name.is_empty() {
-        format!("{} ⌄", crate::tl!("WCS"))
+        crate::tl!("WCS").to_string()
     } else if ucs.name.is_empty() {
-        format!("{} ⌄", crate::tl!("Unnamed"))
+        crate::tl!("Unnamed").to_string()
     } else {
-        format!("{} ⌄", ucs.name)
+        ucs.name.clone()
     };
-    let pill = if label.chars().count() > 6 {
-        Rect::from_center_size(pill.center(), vec2(56f32.max(label.chars().count() as f32 * 7.0 + 8.0), 16.0))
+    let pill = if label.chars().count() > 4 {
+        Rect::from_center_size(pill.center(), vec2(56f32.max(label.chars().count() as f32 * 7.0 + 16.0), 16.0))
     } else {
         pill
     };
     p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
-    p.text(pill.center(), egui::Align2::CENTER_CENTER, label, crate::theme::small(), Tokens::DARK.canvas_ink);
+    let ink = Tokens::DARK.canvas_ink;
+    let label = p.layout_no_wrap(label, crate::theme::small(), ink);
+    let (gap, chevron) = (4.0, 6.0);
+    let left = pill.center().x - (label.size().x + gap + chevron) / 2.0;
+    let mid = pill.center().y;
+    p.galley(pos2(left, mid - label.size().y / 2.0), label.clone(), ink);
+    let x = left + label.size().x + gap;
+    p.line(vec![pos2(x, mid - 1.5), pos2(x + chevron / 2.0, mid + 1.5), pos2(x + chevron, mid - 1.5)], Stroke::new(1.2, ink));
 }
 
 /// A click on grip `g` (idle): Shift+click makes it hot or cold again; a plain click starts
@@ -2963,11 +3145,18 @@ fn grip_menu(app: &mut CadApp, resp: &egui::Response) {
     run_grip_choice(app, g, choice);
 }
 
+/// Polyline segment midpoint grips are rectangular; vertex grips remain square.
+fn grip_rect(kind: &cadaddy_doc::EntityKind, count: usize, index: usize, center: Pos2, size: f32) -> Rect {
+    // The grip list interleaves vertices and available segment midpoints, then any remaining vertices.
+    let midpoint = matches!(kind, cadaddy_doc::EntityKind::LwPolyline(p) if index % 2 == 1 && index / 2 < count.saturating_sub(p.vertices.len()));
+    Rect::from_center_size(center, vec2(size * 2.0, if midpoint { size } else { size * 2.0 }))
+}
+
 /// The grip of a selected object under the cursor, if any: (object, grip index).
 fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)> {
     let hp = hover?;
     let st = app.session.state().ok()?;
-    let gs = app.session.settings.gripsize as f32 + 3.0;
+    let gs = app.session.settings.gripsize as f32;
     let sel = app.session.selection();
     if !app.session.shows_grips(sel.len()) {
         return None;
@@ -2978,9 +3167,11 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
         if st.doc.layer(&e.common.layer).is_some_and(|l| l.locked) {
             continue;
         }
-        for (i, g) in e.kind.grips().into_iter().enumerate() {
+        let grips = e.kind.grips();
+        let count = grips.len();
+        for (i, g) in grips.into_iter().enumerate() {
             let sp = xf.w2s(g);
-            if (sp.x - hp.x).abs() <= gs && (sp.y - hp.y).abs() <= gs {
+            if grip_rect(&e.kind, count, i, sp, gs).expand(3.0).contains(hp) {
                 return Some((*h, i));
             }
         }
@@ -2993,6 +3184,26 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
 pub(crate) mod tests {
     use super::*;
     use cadaddy_render::DPrim;
+
+    #[test]
+    fn grid_span_refuses_unbounded_ranges() {
+        assert_eq!(grid_span(-10.0, 10.0, 1.0), Some((-10, 10)));
+        assert_eq!(grid_span(0.0, 1999.0, 1.0), Some((0, 1999)));
+        for (lo, hi) in [
+            (f64::NAN, 1.0),
+            (0.0, f64::NAN),
+            (f64::NEG_INFINITY, f64::INFINITY),
+            (-1e60, 1e60),
+            (-1e300, 1e300),
+            (0.0, 2000.0),
+            (-1e20, -1e20 + 1.0),
+        ] {
+            assert_eq!(grid_span(lo, hi, 1.0), None, "{lo}..{hi}");
+        }
+        assert_eq!(grid_span(0.0, 1.0, 0.0), None);
+        assert_eq!(grid_span(0.0, 1.0, f64::NAN), None);
+        assert_eq!(grid_span(0.0, 1.0, f64::INFINITY), None);
+    }
 
     fn list(handles: &[u64]) -> DisplayList {
         let prim =
@@ -3390,5 +3601,41 @@ fn view_background(app: &CadApp) -> Option<Rgb> {
         cadaddy_color::Color::Index(i) => Some(cadaddy_color::aci_rgb(i)),
         cadaddy_color::Color::True(c) => Some(c),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod ctrl_tap_tests {
+    use super::CtrlTap;
+
+    #[test]
+    fn press_and_release_is_a_tap() {
+        let mut t = CtrlTap::default();
+        assert!(!t.update(true, false), "pressing alone does not cycle yet");
+        assert!(!t.update(true, false));
+        assert!(t.update(false, false), "release without anything between cycles");
+        assert!(!t.update(false, false), "reported once");
+    }
+
+    #[test]
+    fn ctrl_click_is_not_a_tap() {
+        let mut t = CtrlTap::default();
+        assert!(!t.update(true, false));
+        assert!(!t.update(true, true), "the click frame");
+        assert!(!t.update(true, false));
+        assert!(!t.update(false, false), "release after a click does not cycle");
+        // The next lone tap works again.
+        assert!(!t.update(true, false));
+        assert!(t.update(false, false));
+    }
+
+    #[test]
+    fn ctrl_with_a_key_is_not_a_tap() {
+        let mut t = CtrlTap::default();
+        assert!(!t.update(true, true), "Ctrl and Z in the same frame");
+        assert!(!t.update(false, false));
+        assert!(!t.update(true, false));
+        assert!(!t.update(true, true), "Z after Ctrl");
+        assert!(!t.update(false, false));
     }
 }

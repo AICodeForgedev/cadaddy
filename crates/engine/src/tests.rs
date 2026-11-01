@@ -4,6 +4,15 @@ use serde_json::json;
 
 use crate::*;
 
+/// A circle of any radius put straight into the drawing (as a file can hold one); the commands
+/// refuse sizes beyond the export limit.
+fn push_circle(s: &mut Session, radius: f64) {
+    use cadaddy_doc::{Circle, Common, Space};
+    let circle = Circle { center: cadaddy_geom::Vec3::new(0.0, 0.0, 0.0), radius };
+    let st = s.state_mut().unwrap();
+    std::sync::Arc::make_mut(&mut st.doc).add(&Space::Model, Common::default(), EntityKind::Circle(circle)).unwrap();
+}
+
 fn kinds(s: &Session) -> Vec<&'static str> {
     s.doc().unwrap().model.iter().map(|e| e.kind.type_name()).collect()
 }
@@ -259,8 +268,9 @@ fn properties_set_circle_size_and_dim_style() {
         s.execute("properties.set", &json!({"handles": [c.hex()], "circumference": v, "area": v})).unwrap();
         assert!((radius(&s) - 3.0).abs() < 1e-12, "{v}");
     }
-    s.execute("properties.set", &json!({"handles": [c.hex()], "area": 1e308})).unwrap();
-    assert!(radius(&s).is_finite());
+    // A size beyond the export limit is refused, and the circle stays as it was.
+    assert!(s.execute("properties.set", &json!({"handles": [c.hex()], "area": 1e308})).is_err());
+    assert!(radius(&s).is_finite() && (radius(&s) - 3.0).abs() < 1e-12);
 
     s.execute("dimstyle", &json!({"name": "Big", "current": false})).unwrap();
     s.execute("dimlinear", &json!({"p1": [0, 0], "p2": [3, 8], "at": [6, 4]})).unwrap();
@@ -511,6 +521,22 @@ fn properties_set_transparency() {
 }
 
 #[test]
+fn properties_set_thickness() {
+    // Issue #1722: `properties.set` used to ignore `thickness` while still reporting a change.
+    let mut s = Session::new();
+    let r = s.execute("circle", &json!({"center": [0, 0], "radius": 5})).unwrap();
+    let h = r["handle"].as_str().unwrap().to_string();
+    let hh = cadaddy_doc::Handle::parse_hex(&h).unwrap();
+    let th = |s: &Session| s.doc().unwrap().entity(hh).unwrap().common.thickness;
+    s.execute("properties.set", &json!({"handles": [h], "thickness": 8})).unwrap();
+    assert_eq!(th(&s), 8.0);
+    let p = s.execute("properties", &json!({"handles": [h]})).unwrap();
+    assert_eq!(p["objects"][0]["thickness"], json!(8.0));
+    assert!(s.execute("properties.set", &json!({"handles": [h], "thickness": "thick"})).is_err());
+    assert_eq!(th(&s), 8.0);
+}
+
+#[test]
 fn zoom_extents_fits_drawing() {
     let mut s = Session::new();
     s.viewport_px = (1000.0, 500.0);
@@ -519,6 +545,55 @@ fn zoom_extents_fits_drawing() {
     let v = s.state().unwrap().view();
     assert!((v.center.x - 50.0).abs() < 1e-9);
     assert!(v.height >= 50.0);
+}
+
+#[test]
+fn zoom_extents_fits_the_finite_part_when_geometry_is_huge() {
+    for r in [1e60, 1e100, 1e300] {
+        let mut s = Session::new();
+        s.viewport_px = (1000.0, 500.0);
+        s.execute("line", &json!({"points": [[0, 0], [100, 10]]})).unwrap();
+        push_circle(&mut s, r);
+        s.execute("zoom.extents", &json!({})).unwrap();
+        let v = s.state().unwrap().view();
+        assert!(v.center.is_finite() && v.height.is_finite() && v.height <= VIEW_LIMIT, "radius {r}: {v:?}");
+        assert!((v.center.x - 50.0).abs() < 1e-6 && v.height < 1000.0, "radius {r}: fit to the line, got {v:?}");
+    }
+}
+
+#[test]
+fn zoom_extents_with_only_huge_geometry_is_finite() {
+    let mut s = Session::new();
+    s.viewport_px = (1000.0, 500.0);
+    push_circle(&mut s, 1e200);
+    s.execute("zoom.extents", &json!({})).unwrap();
+    let v = s.state().unwrap().view();
+    assert!(v.center.is_finite() && v.height.is_finite() && v.height > 0.0 && v.height <= VIEW_LIMIT, "{v:?}");
+}
+
+#[test]
+fn damaged_limits_header_still_zooms_to_a_finite_view() {
+    let mut s = Session::new();
+    s.viewport_px = (1000.0, 500.0);
+    let st = s.state_mut().unwrap();
+    let mut d = (*st.doc).clone();
+    d.header.set("LIMMIN", cadaddy_doc::HVal::Point(cadaddy_geom::Vec3::new(f64::NAN, f64::NEG_INFINITY, 0.0)));
+    d.header.set("LIMMAX", cadaddy_doc::HVal::Point(cadaddy_geom::Vec3::new(1e300, f64::INFINITY, 0.0)));
+    st.doc = std::sync::Arc::new(d);
+    s.zoom_extents().unwrap();
+    let v = s.state().unwrap().view();
+    assert!(v.center.is_finite() && v.height.is_finite() && v.height > 0.0 && v.height <= VIEW_LIMIT, "{v:?}");
+}
+
+#[test]
+fn typed_coordinates_beyond_the_export_limit_are_refused() {
+    use crate::prompt::parse_point;
+    assert!(parse_point("1e11,5", Vec2::ZERO).is_some());
+    for t in ["1e13,0", "0,-1e60", "1e300,1e300", "@1e13,0", "1e13<45"] {
+        assert!(parse_point(t, Vec2::ZERO).is_none(), "{t}");
+    }
+    assert!(crate::units::parse_distance("1e60").is_none());
+    assert_eq!(crate::units::parse_distance("1e12"), Some(1e12));
 }
 
 #[test]
@@ -1300,6 +1375,64 @@ fn bare_variable_name_runs_setvar() {
     assert!(s.cmdline("-pickadd").is_err());
 }
 
+#[test]
+fn format_thickness_asks_for_the_thickness() {
+    let mut s = Session::new();
+    s.start("thickness").unwrap();
+    assert!(s.prompt_text().contains("Enter new value for THICKNESS <0.0000>"), "{}", s.prompt_text());
+    // After text that is not a number, the prompt asks again.
+    s.cmdline("thick").unwrap();
+    assert!(s.current_prompt().is_some(), "asked again");
+    assert_eq!(s.log.last().map(String::as_str), Some("Requires a number."));
+    // A value out of range says so, and the prompt asks again.
+    s.cmdline("2e12").unwrap();
+    assert!(s.current_prompt().is_some(), "asked again");
+    assert_eq!(s.log.last().map(String::as_str), Some("Requires a value between -1e12 and 1e12."));
+    assert_eq!(s.doc().unwrap().header.f64("THICKNESS", 0.0), 0.0);
+    // A negative thickness is accepted.
+    s.cmdline("-1.5").unwrap();
+    assert!(s.current_prompt().is_none());
+    assert_eq!(s.doc().unwrap().header.f64("THICKNESS", 0.0), -1.5);
+    // Typed, Enter keeps the current thickness.
+    s.cmdline("thickness").unwrap();
+    assert!(s.prompt_text().contains("<-1.5000>"), "{}", s.prompt_text());
+    s.cmdline("").unwrap();
+    assert!(s.current_prompt().is_none());
+    assert_eq!(s.doc().unwrap().header.f64("THICKNESS", 0.0), -1.5);
+    assert!(s.execute("thickness", &json!({"thickness": "thick"})).is_err());
+    assert!(s.execute("thickness", &json!({"thickness": 1e13})).is_err());
+}
+
+#[test]
+fn new_objects_take_the_current_thickness() {
+    let mut s = Session::new();
+    s.execute("thickness", &json!({"thickness": 2.5})).unwrap();
+    s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+    s.execute("arc", &json!({"center": [0, 0], "radius": 3, "start": 0, "end": 90})).unwrap();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 5})).unwrap();
+    s.execute("point", &json!({"at": [1, 1]})).unwrap();
+    s.execute("pline", &json!({"vertices": [[0, 0], [5, 0], [5, 5]]})).unwrap();
+    s.execute("polygon", &json!({"sides": 6, "center": [20, 20], "radius": 2})).unwrap();
+    s.execute("donut", &json!({"center": [30, 30], "inside": 1, "outside": 2})).unwrap();
+    let thick: Vec<(&str, f64)> = s.doc().unwrap().model.iter().map(|e| (e.kind.type_name(), e.common.thickness)).collect();
+    assert_eq!(thick.len(), 7, "{thick:?}");
+    assert!(thick.iter().all(|(_, t)| *t == 2.5), "{thick:?}");
+    // RECTANG keeps its own thickness option, and text does not take THICKNESS.
+    s.execute("rectang", &json!({"p1": [0, 0], "p2": [4, 4]})).unwrap();
+    assert_eq!(s.doc().unwrap().model.last().unwrap().common.thickness, 0.0);
+    s.execute("rectang", &json!({"p1": [0, 0], "p2": [4, 4], "thickness": 1})).unwrap();
+    assert_eq!(s.doc().unwrap().model.last().unwrap().common.thickness, 1.0);
+    let before = s.doc().unwrap().model.len();
+    s.cmdline("rectang 0,0 4,4").unwrap();
+    assert_eq!(s.doc().unwrap().model.len(), before + 1);
+    assert_eq!(s.doc().unwrap().model.last().unwrap().common.thickness, 0.0);
+    s.execute("text", &json!({"at": [0, 0], "text": "A"})).unwrap();
+    assert_eq!(s.doc().unwrap().model.last().unwrap().common.thickness, 0.0);
+    // An ellipse has no thickness.
+    s.execute("ellipse", &json!({"center": [0, 0], "major": [4, 0], "ratio": 0.5})).unwrap();
+    assert_eq!(s.doc().unwrap().model.last().unwrap().common.thickness, 0.0);
+}
+
 fn setvar_prompt_open(s: &Session) -> bool {
     s.running.as_ref().is_some_and(|r| r.id == "setvar")
 }
@@ -1365,4 +1498,73 @@ fn hostile_variable_like_input_never_panics() {
     // The session is still usable afterwards.
     s.cmdline("pickadd").unwrap();
     assert!(setvar_prompt_open(&s));
+}
+
+/// JSON count and distance parameters follow the typed rules: each bad value class (zero,
+/// negative, fraction, text) is refused, the error names the parameter, and nothing is drawn.
+#[test]
+fn json_counts_and_distances_match_typed_rules() {
+    let bad_counts = [json!(0), json!(-1), json!(2.5), json!("3"), json!(-0.5)];
+    // (command, extra params, the parameter under test, extra bad values for that command)
+    let cases: Vec<(&str, serde_json::Value, &str)> = vec![
+        ("copy", json!({"delta": [0, 5]}), "count"),
+        ("arrayrect", json!({"rowSpacing": 1, "colSpacing": 1}), "rows"),
+        ("arrayrect", json!({"rowSpacing": 1, "colSpacing": 1}), "cols"),
+        ("arrayrect", json!({"rowSpacing": 1, "colSpacing": 1}), "levels"),
+        ("arraypolar", json!({"center": [20, 20]}), "count"),
+        ("arraypolar", json!({"center": [20, 20]}), "rows"),
+        ("arraypolar", json!({"center": [20, 20]}), "levels"),
+        ("array", json!({"type": "rectangular", "rowSpacing": 1, "colSpacing": 1}), "rows"),
+        ("undo", json!({}), "count"),
+        ("redo", json!({}), "count"),
+    ];
+    for (cmd, extra, key) in &cases {
+        for v in &bad_counts {
+            let mut s = Session::new();
+            s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+            let l = json!({"handle": s.doc().unwrap().model.handles()[0].hex()});
+            let before = s.doc().unwrap().model.handles().len();
+            let mut p = extra.clone();
+            p["handles"] = json!([l["handle"]]);
+            p[*key] = v.clone();
+            let e = s.execute(cmd, &p).expect_err(&format!("{cmd} {key}={v} must be refused"));
+            assert!(e.to_string().contains(key), "{cmd} {key}={v}: the error names the parameter: {e}");
+            assert_eq!(s.doc().unwrap().model.handles().len(), before, "{cmd} {key}={v} drew something");
+        }
+    }
+    // Path array, divide and polygon counts.
+    for v in &bad_counts {
+        let mut s = Session::new();
+        s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+        let l = json!({"handle": s.doc().unwrap().model.handles()[0].hex()});
+        let c = s.execute("circle", &json!({"center": [0, 5], "radius": 1})).unwrap();
+        let e = s.execute("arraypath", &json!({"handles": [c["handle"]], "path": l["handle"], "count": v})).unwrap_err();
+        assert!(e.to_string().contains("count"), "arraypath count={v}: {e}");
+        let e = s.execute("divide", &json!({"handle": l["handle"], "segments": v})).unwrap_err();
+        assert!(e.to_string().contains("segments"), "divide segments={v}: {e}");
+        let e = s.execute("polygon", &json!({"center": [0, 0], "radius": 1, "sides": v})).unwrap_err();
+        assert!(e.to_string().contains("sides"), "polygon sides={v}: {e}");
+    }
+    for n in [1, 2, 1025, 100_000] {
+        let mut s = Session::new();
+        assert!(s.execute("polygon", &json!({"center": [0, 0], "radius": 1, "sides": n})).is_err(), "sides {n}");
+    }
+    // Offset distance and measure length must be positive numbers.
+    let mut s = Session::new();
+    s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+    let l = json!({"handle": s.doc().unwrap().model.handles()[0].hex()});
+    let before = s.doc().unwrap().model.handles().len();
+    for d in [json!(0), json!(-1), json!(-0.0), json!("2"), json!(null)] {
+        let e = s.execute("offset", &json!({"handle": l["handle"], "distance": d, "side": [5, 5]})).unwrap_err();
+        assert!(e.to_string().contains("distance"), "offset distance={d}: {e}");
+    }
+    for d in [json!(0), json!(-1), json!("2")] {
+        let e = s.execute("measure", &json!({"handle": l["handle"], "length": d})).unwrap_err();
+        assert!(e.to_string().contains("length"), "measure length={d}: {e}");
+    }
+    assert_eq!(s.doc().unwrap().model.handles().len(), before);
+    // The valid forms still work, including a whole number written as 3.0.
+    s.execute("offset", &json!({"handle": l["handle"], "distance": 2, "side": [5, 5]})).unwrap();
+    let r = s.execute("copy", &json!({"handles": [l["handle"]], "delta": [0, 5], "count": 3.0})).unwrap();
+    assert_eq!(r["handles"].as_array().unwrap().len(), 3);
 }

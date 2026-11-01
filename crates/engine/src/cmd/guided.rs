@@ -419,6 +419,22 @@ pub struct GuidedJob {
     /// Where the job's drawing is saved after each stage (none: no checkpoints).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkpoint: Option<String>,
+    /// The checkpoint is a path the caller gave: it stays when the job is done (only the job's
+    /// own one in the temporary folder is removed).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub checkpoint_given: bool,
+    /// Submittal PDFs (or folders of them) whose products go onto the built elements.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submittals: Vec<String>,
+    /// The type marks the submittals give products for: device types as the legends' are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submittal_types: Vec<String>,
+    /// Those of them that are luminaires (their cut sheets): they hang at the ceiling.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub luminaire_types: Vec<String>,
+    /// The luminaires that go on a wall (an exit sign, a sconce, a wall pack).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wall_luminaire_types: Vec<String>,
     /// What the print folder held when the job started ([`prints_stamp`]).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prints_stamp: String,
@@ -455,6 +471,10 @@ pub struct GuidedJob {
     /// Floor to floor (feet) given as an answer, over the sections' and the 10' guess.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storey_ft: Option<f64>,
+    /// The levels an answer named when the drawings gave none (`1, 2, 3, R`), bottom up: the
+    /// levels stage makes them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels_given: Vec<String>,
     /// What answers said about each level (its elevation, its name, or that it is right), by
     /// the level as the questions name it, upper case.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -467,6 +487,10 @@ pub struct GuidedJob {
     /// readers use it): a stage that runs again starts from the one it had.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     spec_at_start: BTreeMap<StageName, Option<String>>,
+    /// Stopped by a cancel (MCP `notifications/cancelled`, the `cancel` tool) at the stage it
+    /// names; job.next goes on from there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancelled: Option<StageName>,
     /// Answered questions of stages being run again, to carry their answers over.
     #[serde(skip)]
     carry: Vec<Question>,
@@ -710,6 +734,11 @@ impl GuidedJob {
             finding_seq: 0,
             sheets_loaded: false,
             checkpoint: None,
+            checkpoint_given: false,
+            submittals: Vec::new(),
+            submittal_types: Vec::new(),
+            luminaire_types: Vec::new(),
+            wall_luminaire_types: Vec::new(),
             prints_stamp: String::new(),
             index: None,
             sheet_regions: Vec::new(),
@@ -720,9 +749,11 @@ impl GuidedJob {
             auto: false,
             always_ask: BTreeSet::new(),
             storey_ft: None,
+            levels_given: Vec::new(),
             level_answers: BTreeMap::new(),
             rerun_held: None,
             spec_at_start: BTreeMap::new(),
+            cancelled: None,
             carry: Vec::new(),
             links: None,
         }
@@ -935,7 +966,36 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         .cloned()
         .or_else(|| job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned());
     let sheet_count = sheets_vec.as_ref().map_or(0, Vec::len);
-    if sheet_count == 0 {
+    // Files (or pages) that couldn't be read: named; none read at all is the job's error.
+    let unreadable = classified.get("unreadable").and_then(Value::as_array).cloned().unwrap_or_default();
+    if !unreadable.is_empty() {
+        let pages = classified.get("pages").and_then(Value::as_u64).map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
+        let none_read = unreadable.len() >= pages.max(1);
+        let named: Vec<String> = unreadable
+            .iter()
+            .take(20)
+            .map(|u| {
+                let file = u.get("file").and_then(Value::as_str).unwrap_or("?");
+                let error = u.get("error").and_then(Value::as_str).unwrap_or("not readable");
+                format!("{file}: {}", error.chars().take(120).collect::<String>())
+            })
+            .collect();
+        let more = unreadable.len().saturating_sub(named.len());
+        job.add_finding(
+            StageName::Classify,
+            &if none_read {
+                format!("None of the print set's {} file(s) could be read", unreadable.len())
+            } else {
+                format!("{} of the print set's files could not be read", unreadable.len())
+            },
+            &format!("{}{}", named.join("; "), if more > 0 { format!("; and {more} more") } else { String::new() }),
+            if none_read { 5 } else { 4 },
+            vec!["Check that each file is a PDF that opens".into(), "Replace the damaged files and start the job again".into()],
+            None,
+            none_read,
+        );
+    }
+    if sheet_count == 0 && unreadable.is_empty() {
         job.add_finding(
             StageName::Classify,
             "Classify found 0 sheets in the print set",
@@ -1262,10 +1322,14 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     let title_level_count = title_levels.len();
     let from_index = !title_levels.is_empty();
-    let effective_levels = match levels.filter(|l| !l.is_empty()) {
+    let mut effective_levels = match levels.filter(|l| !l.is_empty()) {
         Some(lvls) if title_levels.is_empty() => lvls.clone(),
         _ => title_levels,
     };
+    // None read: the levels an answer named, a storey apart, into the spec.
+    if effective_levels.is_empty() && !job.levels_given.is_empty() {
+        effective_levels = levels_from_answer(s, job)?;
+    }
     let effective_count = effective_levels.len();
 
     // Readings levels.read refused (they break the levels' order) or set aside (site sheets).
@@ -1558,6 +1622,52 @@ fn run_levels(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     Ok(out)
 }
 
+/// The levels an answer names (`1, 2, 3, R`, `Level 1; Level 2; Roof`), bottom up: a number is
+/// `Level n`, `R` the roof. None when the answer names none.
+fn parse_level_list(text: &str) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for t in text.split([',', ';', '\n']).map(str::trim).filter(|t| !t.is_empty()).take(MAX_GIVEN_LEVELS + 1) {
+        let name = if t.chars().all(|c| c.is_ascii_digit()) {
+            format!("Level {t}")
+        } else if t.eq_ignore_ascii_case("R") || t.eq_ignore_ascii_case("roof") {
+            "Roof".to_string()
+        } else if t.chars().count() <= 32 && t.chars().all(|c| c.is_alphanumeric() || " -_.".contains(c)) {
+            t.to_string()
+        } else {
+            return None;
+        };
+        if !out.iter().any(|o| o.eq_ignore_ascii_case(&name)) {
+            out.push(name);
+        }
+    }
+    (!out.is_empty() && out.len() <= MAX_GIVEN_LEVELS).then_some(out)
+}
+
+/// Most levels one answer may name.
+const MAX_GIVEN_LEVELS: usize = 60;
+
+/// Make the levels an answer named in the building spec (none there yet), a storey apart (the
+/// floor to floor answered, else 10'), and the levels stage's list of them.
+fn levels_from_answer(s: &mut Session, job: &GuidedJob) -> Result<Vec<Value>> {
+    let (mut sp, _) = super::bspec::current(s, "job levels")?;
+    let storey = job.storey_ft.filter(|f| f.is_finite() && *f > 0.0).unwrap_or(10.0);
+    let mut out = Vec::new();
+    for (i, name) in job.levels_given.iter().enumerate() {
+        let elevation = i as f64 * storey;
+        if sp.level(name).is_none() {
+            let level: cadaddy_walk3d::Level = serde_json::from_value(
+                json!({"name": name, "elevation_ft": elevation, "height_ft": storey, "ceiling_ft": (storey - 2.0).max(storey * 0.75)}),
+            )
+            .map_err(|e| bad("job levels", e.to_string()))?;
+            sp.levels.push(level);
+        }
+        out.push(json!({"name": name, "elevation_ft": elevation, "source": "answer"}));
+    }
+    sp.levels.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    Ok(out)
+}
+
 /// Extract level names from a sheet title (MUST 3).
 /// Recognises patterns: "ELECTRICAL - 3RD FLOOR", "4TH FLOOR PLAN", "LEVEL 2", etc.
 pub fn extract_levels_from_title(title: &str) -> Vec<String> {
@@ -1632,7 +1742,19 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let sheet_arr = sheets_val.get("sheets").and_then(Value::as_array).cloned().unwrap_or_default();
     let current = |sh: &&Value| sh.get("superseded_by").and_then(Value::as_str).is_none_or(str::is_empty);
     let kind = |sh: &Value| sh.get("type").or_else(|| sh.get("sheet_type")).and_then(Value::as_str).unwrap_or("").to_string();
-    let mut plan_sheets: Vec<&Value> = sheet_arr.iter().filter(current).filter(|sh| matches!(kind(sh).as_str(), "plan" | "enlarged_plan")).collect();
+    // The plans, and the reflected ceiling plans (a sheet of enlarged RCPs and details too): the
+    // ceilings are set per area from them before the MEP goes in.
+    let rcp_title = |sh: &Value| {
+        let t = sh.get("title").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
+        t.contains("REFLECTED CEILING") || t.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP")
+    };
+    let legend_title = |sh: &Value| wall_legend_title(sh.get("title").and_then(Value::as_str).unwrap_or(""));
+    // And the partition (wall type) legend: how each wall the plans tag is built.
+    let mut plan_sheets: Vec<&Value> = sheet_arr
+        .iter()
+        .filter(current)
+        .filter(|sh| matches!(kind(sh).as_str(), "plan" | "enlarged_plan" | "rcp") || rcp_title(sh) || legend_title(sh))
+        .collect();
     // The index's level (a plan whose title names none was given one) over the page's own.
     let level_of = |sh: &Value| -> String {
         let number = sh.get("number").and_then(Value::as_str).unwrap_or("");
@@ -1675,7 +1797,11 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         .iter()
         .map(|sh| {
             let file = sh.get("file").and_then(Value::as_str).unwrap_or_default();
-            let path = if std::path::Path::new(file).is_absolute() { file.to_string() } else { format!("{}/{}", job.pdfs_path, file) };
+            // The set's files are named from its folder (a one-PDF set: the PDF's folder).
+            let dir = std::path::Path::new(&job.pdfs_path);
+            let dir =
+                if dir.is_file() { dir.parent().map_or_else(|| ".".to_string(), |p| p.to_string_lossy().to_string()) } else { job.pdfs_path.clone() };
+            let path = if std::path::Path::new(file).is_absolute() { file.to_string() } else { format!("{dir}/{file}") };
             // Images (logos, scans) aren't used by the job, and must not land in the user's print
             // folder; pattern-sized fills are merged (they are most of a print set's objects).
             let mut params = json!({"page": page_of(sh), "images": false, "fills": "merge"});
@@ -1717,7 +1843,17 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             &format!("{tag}: sheet {}/{total} {name} {what}", i + 1),
         );
     };
-    let results = super::exchange::import_pdf_pages(s, &pages, true, true, &mut on_page)?;
+    // A cancel stops the import at its next page: the drawing goes back to before it, so the
+    // pages are imported once when the job goes on.
+    let before = s.doc()?.clone();
+    let results = match super::exchange::import_pdf_pages(s, &pages, true, true, &mut on_page) {
+        Err(e) if cancel_requested() => {
+            *s.doc_mut()? = before;
+            return Err(e);
+        }
+        r => r?,
+    };
+    drop(before);
     let mut imported = 0usize;
     let mut same = 0usize;
     let mut placed = Vec::new();
@@ -1753,7 +1889,14 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                         number: base.to_string(),
                         level,
                         discipline: discipline.to_ascii_uppercase(),
-                        kind: kind(sh),
+                        // A ceiling plan (by its kind or its title) is read for its ceiling heights only.
+                        kind: if rcp_title(sh) {
+                            "rcp".to_string()
+                        } else if legend_title(sh) {
+                            "legend".to_string()
+                        } else {
+                            kind(sh)
+                        },
                         rect,
                         area: None,
                         title_block: None,
@@ -1804,6 +1947,53 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
 /// Where a running job's progress lines go besides the `job.progress` events (the CLI prints
 /// them on stderr while the job runs).
 static PROGRESS_SINK: std::sync::RwLock<Option<fn(&str)>> = std::sync::RwLock::new(None);
+
+/// A job is running (job.start, job.next, job.answer…): a cancel asked for now stops it.
+static JOB_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// A cancel the running job takes at its next sheet or stage.
+static JOB_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Ask the running job (if any) to stop at its next sheet or stage. Safe to call from any
+/// thread (the MCP server's input thread calls it). Whether a job was running to take it.
+pub fn request_cancel() -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    let running = JOB_RUNNING.load(Relaxed);
+    if running {
+        JOB_CANCEL.store(true, Relaxed);
+    }
+    running
+}
+
+/// Whether the running job has been asked to stop.
+pub(crate) fn cancel_requested() -> bool {
+    JOB_CANCEL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The flag a job's long steps (classify's sheets) stop on.
+pub(crate) fn cancel_flag() -> &'static std::sync::atomic::AtomicBool {
+    &JOB_CANCEL
+}
+
+/// While it lives, the job counts as running (a cancel goes to it); a cancel left from before
+/// is dropped.
+struct Running;
+
+impl Running {
+    fn start() -> Self {
+        use std::sync::atomic::Ordering::Relaxed;
+        JOB_CANCEL.store(false, Relaxed);
+        JOB_RUNNING.store(true, Relaxed);
+        Running
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        JOB_RUNNING.store(false, Relaxed);
+        JOB_CANCEL.store(false, Relaxed);
+    }
+}
 
 /// Send a running job's progress lines (one per stage and per sheet imported) to `sink`.
 pub fn set_progress_sink(sink: Option<fn(&str)>) {
@@ -1879,23 +2069,38 @@ fn prints_stamp(pdfs: &str) -> String {
 fn write_checkpoint(s: &mut Session, job: &GuidedJob) {
     let Some(path) = job.checkpoint.clone() else { return };
     let Some(hooks) = super::file::io() else { return };
+    let started = web_time::Instant::now();
     if save_job(s, job).is_err() {
         return;
     }
     let Ok(d) = s.doc() else { return };
-    let written = (hooks.write)(d, &path).and_then(|bytes| {
+    // A .cdy file without its preview (`ckpt`), else as the path says.
+    let written = (hooks.write)(d, "checkpoint.ckpt").or_else(|_| (hooks.write)(d, &path)).and_then(|bytes| {
         let p = std::path::Path::new(&path);
         if let Some(dir) = p.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         // Written aside, then moved over the last one: a crash mid-write keeps the last checkpoint.
         let part = p.with_extension("cdy.part");
-        std::fs::write(&part, bytes).map_err(|e| e.to_string())?;
-        std::fs::rename(&part, p).map_err(|e| e.to_string())
+        crate::writefile::write(&part, bytes).map_err(|e| e.to_string())?;
+        crate::writefile::rename(&part, p).map_err(|e| e.to_string())
     });
+    // How long it took, and the peak memory after it (a checkpoint per stage must not be the
+    // job's peak: compare with the stage's line).
+    let peak = super::memstat::process_mb().map_or_else(String::new, |(_, p)| format!(" (peak memory {p} MB)"));
+    progress_line(&format!("  checkpoint written in {:.1} s{peak}", started.elapsed().as_secs_f64()));
     if let Err(e) = written {
         s.echo(format!("guided: the job's checkpoint couldn't be written to {path}: {e}"));
     }
+}
+
+/// Whether the file at `path` is a job's checkpoint (a drawing holding a job's state): one the
+/// caller names may be written over; any other file there is the caller's and is never touched.
+fn is_job_checkpoint(path: &str) -> bool {
+    let Some(hooks) = super::file::io() else { return false };
+    let Ok(bytes) = std::fs::read(path) else { return false };
+    let Ok(d) = (hooks.read)(&bytes, path) else { return false };
+    d.agent.as_deref().and_then(|a| serde_json::from_str::<Value>(a).ok()).is_some_and(|a| a.get("guided_job").is_some())
 }
 
 /// The unfinished job a checkpoint holds for these prints and this goal, with its drawing.
@@ -1952,7 +2157,7 @@ const MAX_TAG_HANDLES: usize = 20;
 
 /// Sort the drawing's device symbols sheet by sheet: each sheet's legends and schedules say
 /// which symbols are samples; all of them together say which tags are device types.
-fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
+fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> DeviceCensus {
     use cadaddy_mepfix::device_types::{self, Legend, TagVerdict};
     use cadaddy_mepfix::sheet_facts::{self, TextItem};
     let mut c = DeviceCensus::default();
@@ -1970,14 +2175,21 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
     };
     let groups = spans.len() + 1;
     let mut texts: Vec<Vec<TextItem>> = vec![Vec::new(); groups];
-    let mut symbols: Vec<Vec<(String, cadaddy_geom::Vec2, cadaddy_doc::Handle)>> = vec![Vec::new(); groups];
+    // Each symbol: its tag, where it is, its handle, and where its tag is printed (and how tall).
+    type Symbol = (String, cadaddy_geom::Vec2, cadaddy_doc::Handle, Option<(cadaddy_geom::Vec2, f64)>);
+    let mut symbols: Vec<Vec<Symbol>> = vec![Vec::new(); groups];
     for e in store.iter() {
         let g = group_of(e.handle.0);
         match &e.kind {
             cadaddy_doc::EntityKind::Insert(ins) if ins.block.starts_with("PDF-SYM-") => {
-                let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
+                let attr = ins.attribs.iter().find(|a| a.tag == "TAG");
+                let tag = attr.map(|a| a.text.value.trim().to_string()).unwrap_or_default();
+                // A tag at the origin is an import that didn't keep where it was printed.
+                let tag_at = attr
+                    .map(|a| (a.text.insert.xy(), a.text.height))
+                    .filter(|(p, h)| p.x.is_finite() && p.y.is_finite() && (p.x != 0.0 || p.y != 0.0) && h.is_finite() && *h > 0.0);
                 if let Some(v) = symbols.get_mut(g) {
-                    v.push((tag, ins.insert.xy(), e.handle));
+                    v.push((tag, ins.insert.xy(), e.handle, tag_at));
                 }
             }
             cadaddy_doc::EntityKind::Text(t) => {
@@ -1991,6 +2203,18 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                 }
             }
             _ => {}
+        }
+    }
+    // A circuit or a switch's leg the import took for a symbol's tag ("A-2" by a stair's lines, the
+    // "e" by a sensor) is still printed there: back among its sheet's texts, where it was printed.
+    for (g, syms) in symbols.iter().enumerate() {
+        for (tag, _, _, tag_at) in syms {
+            if let (Some((at, h)), Some(v)) = (tag_at, texts.get_mut(g))
+                && v.len() < MAX_SHEET_TEXTS
+                && (sheet_facts::is_circuit_label(tag) || super::readers::switch_designation(tag).is_some())
+            {
+                v.push(TextItem { value: tag.clone(), at: *at, height: *h, rotation: 0.0 });
+            }
         }
     }
     // Sheet numbers: the set's, and each loaded sheet's own title block.
@@ -2009,6 +2233,7 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
         c.legend_types.extend(l.types.iter().cloned());
         legends.push(l);
     }
+    // Tags an answer made device types.
     let learned: std::collections::BTreeSet<String> = job
         .rules
         .iter()
@@ -2016,25 +2241,93 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
         .filter_map(|r| r.key.strip_prefix("symbol:"))
         .map(|t| t.trim().to_string())
         .collect();
+    // On the electrical sheets, the types the submittals give products for too (a set whose
+    // fixture schedule is only in the lighting submittal lists its types there); another trade's
+    // `H` is its own mark.
+    let learned_electrical: std::collections::BTreeSet<String> = learned.iter().cloned().chain(job.submittal_types.iter().cloned()).collect();
+    // A fire alarm plan's marks are its devices' (an `S` is a smoke detector there, not a switch).
+    let fire_alarm: BTreeSet<String> = job
+        .index
+        .as_ref()
+        .or(job.sheets.as_ref())
+        .and_then(|i| i.get("sheets"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|sh| sh.get("title").and_then(Value::as_str).is_some_and(|t| t.to_ascii_uppercase().contains("FIRE ALARM")))
+        .filter_map(|sh| sh.get("number").and_then(Value::as_str).map(|n| n.trim().to_ascii_uppercase()))
+        .collect();
+    let electrical = |sheet: &str| {
+        let number = sheet.split('/').next().unwrap_or(sheet);
+        job.sheet_regions
+            .iter()
+            .find(|r| r.number.eq_ignore_ascii_case(number))
+            .map_or_else(|| number.trim().to_ascii_uppercase().starts_with('E'), |r| r.discipline.eq_ignore_ascii_case("E"))
+    };
     // Tags an answer said are not devices.
     let refused: BTreeSet<&str> = job.rules.iter().filter(|r| r.value == "not_device").filter_map(|r| r.key.strip_prefix("tag:")).collect();
     let none = Legend::default();
+    // A reflected ceiling plan is loaded for its ceiling heights: its fixtures are the electrical
+    // plans' (counted there), and it isn't registered onto the plans.
+    let ceiling_plans: BTreeSet<&str> = job.sheet_regions.iter().filter(|r| r.kind == "rcp").map(|r| r.number.as_str()).collect();
     for (g, syms) in symbols.iter().enumerate() {
+        if spans.get(g).is_some_and(|sp| ceiling_plans.contains(sp.sheet.split('/').next().unwrap_or(&sp.sheet))) {
+            continue;
+        }
         let legend = legends.get(g).unwrap_or(&none);
         let circuits: Vec<&TextItem> = texts.get(g).into_iter().flatten().filter(|t| circuit_text(&t.value, &sheet_numbers)).collect();
         let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
         let span = spans.get(g).map_or((0, u64::MAX), |sp| (sp.lo, sp.hi));
-        for (tag, at, h) in syms {
+        let learned = if electrical(&sheet) { &learned_electrical } else { &learned };
+        let fire_alarm_sheet = fire_alarm.contains(&sheet.split('/').next().unwrap_or(&sheet).trim().to_ascii_uppercase());
+        let kind = if fire_alarm_sheet { "fire alarm device".to_string() } else { String::new() };
+        // A luminaire by its submittal (on an electrical plan): it hangs at the ceiling.
+        let kind_of_tag = |t: &str| {
+            let listed = |types: &[String]| types.iter().any(|l| l.eq_ignore_ascii_case(t));
+            match (kind.is_empty() && electrical(&sheet), listed(&job.luminaire_types), listed(&job.wall_luminaire_types)) {
+                (true, true, _) => "luminaire".to_string(),
+                (true, _, true) => "wall luminaire".to_string(),
+                _ => kind.clone(),
+            }
+        };
+        for (tag, at, h, tag_at) in syms {
             if legend.covers(*at) {
                 c.legend_samples += 1;
             } else if tag.is_empty() {
                 c.untagged += 1;
             } else if is_circuit_tag(tag) {
                 c.circuit += 1;
+                // On an electrical plan a symbol only its circuit labels is a receptacle on that
+                // circuit (a GFCI one when GFCI is printed by it): receptacles carry no type mark.
+                let building = job.level_at([at.x, at.y]).is_none_or(|r| super::printmep::building_level(&r.level));
+                let bubble = bubbles.iter().any(|(c, r)| r.is_finite() && (at.x - c[0]).hypot(at.y - c[1]) <= 1.5 * r.max(0.0));
+                if electrical(&sheet) && kind.is_empty() && building && !bubble && circuit_text(tag, &sheet_numbers) {
+                    // Its designations printed by it (GFCI, WP, USB…), else a plain one.
+                    let near: Vec<&str> = tag_at
+                        .map(|(p, h)| {
+                            texts.get(g).into_iter().flatten().filter(|t| t.at.dist(p) <= RECEPTACLE_NOTE_H * h).map(|t| t.value.as_str()).collect()
+                        })
+                        .unwrap_or_default();
+                    let marks = receptacle_designations(&near);
+                    let mark = if marks.is_empty() { "REC".to_string() } else { marks.join("/") };
+                    let mark = mark.as_str();
+                    c.placed.push(super::readers::ReadDevice {
+                        tag: mark.into(),
+                        at: [at.x, at.y],
+                        sheet: sheet.clone(),
+                        level: job.level_at([at.x, at.y]).map_or_else(String::new, |r| r.level.clone()),
+                        circuit: tag.clone(),
+                        handle: h.hex(),
+                        kind: "receptacle".into(),
+                        leg: String::new(),
+                        room: String::new(),
+                    });
+                    *c.by_type.entry(mark.to_string()).or_default() += 1;
+                }
             } else if refused.contains(tag.as_str()) {
                 *c.not_device.entry("not a device (answered)").or_default() += 1;
             } else {
-                match device_types::tag_verdict(tag, &c.legend_types, &learned, &sheet_numbers) {
+                match device_types::tag_verdict(tag, &c.legend_types, learned, &sheet_numbers) {
                     // A sheet of no level (uncertain, not answered) or on the site datum is a
                     // reference sheet: nothing on it is a model element.
                     TagVerdict::Device(_) if job.level_at([at.x, at.y]).is_some_and(|r| !super::printmep::building_level(&r.level)) => {
@@ -2046,9 +2339,11 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                             at: [at.x, at.y],
                             sheet: sheet.clone(),
                             level: job.level_at([at.x, at.y]).map_or_else(String::new, |r| r.level.clone()),
-                            circuit: super::readers::circuit_beside(&circuits, *at),
+                            circuit: super::readers::circuit_of(texts.get(g).map_or(&[][..], Vec::as_slice), &circuits, tag, *tag_at, *at),
                             handle: h.hex(),
-                            kind: String::new(),
+                            kind: kind_of_tag(&t),
+                            leg: String::new(),
+                            room: String::new(),
                         });
                         *c.by_type.entry(t).or_default() += 1;
                     }
@@ -2066,6 +2361,42 @@ fn device_census(s: &Session, job: &GuidedJob) -> DeviceCensus {
                         }
                     }
                 }
+            }
+        }
+        // Switches, by the designation printed by the switch symbol on an electrical sheet
+        // (`D,b` a dimmer on leg b, `3,a` a 3-way on leg a, a lone `c`): the switch and the leg
+        // of fixtures it controls. A lone leg letter by an occupancy sensor is the sensor's leg.
+        if electrical(&sheet) && kind.is_empty() {
+            for t in texts.get(g).into_iter().flatten() {
+                let Some((tag, leg)) = super::readers::switch_designation(&t.value) else { continue };
+                let level = job.level_at([t.at.x, t.at.y]);
+                if legend.covers(t.at) || level.is_some_and(|r| !super::printmep::building_level(&r.level)) {
+                    continue;
+                }
+                let reach = SENSOR_LEG_H * t.height;
+                let gap = |dv: &super::readers::ReadDevice| cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]).dist(t.at);
+                if tag.is_empty() {
+                    let sensor = c
+                        .placed
+                        .iter_mut()
+                        .filter(|dv| dv.sheet == sheet && dv.leg.is_empty() && super::readers::device_kind(&dv.tag) == "occupancy sensor")
+                        .filter(|dv| gap(dv) <= reach)
+                        .min_by(|a, b| gap(a).total_cmp(&gap(b)));
+                    if let Some(dv) = sensor {
+                        dv.leg = leg;
+                        continue;
+                    }
+                }
+                let tag = if tag.is_empty() { "S".to_string() } else { tag };
+                c.placed.push(super::readers::ReadDevice {
+                    tag: tag.clone(),
+                    at: [t.at.x, t.at.y],
+                    sheet: sheet.clone(),
+                    level: level.map_or_else(String::new, |r| r.level.clone()),
+                    leg,
+                    ..super::readers::ReadDevice::default()
+                });
+                *c.by_type.entry(tag).or_default() += 1;
             }
         }
     }
@@ -2126,7 +2457,7 @@ fn job_links(s: &Session, job: &GuidedJob) -> Option<cadaddy_mepfix::printlinks:
         return None;
     }
     #[cfg(not(target_arch = "wasm32"))]
-    let batch = rayon::current_num_threads().max(1);
+    let batch = rayon::current_num_threads().clamp(1, super::exchange::MAX_PAGES_AT_ONCE);
     #[cfg(target_arch = "wasm32")]
     let batch = 1usize;
     let mut pages: Vec<LinkPage> = Vec::with_capacity(spans.len());
@@ -2175,10 +2506,26 @@ fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::Sheet
         }
         ignored.extend(e.ignored_handles.iter().map(String::as_str));
     }
+    // A registered view's other devices, by where they are: the types its own sheet's legend
+    // doesn't list (a submittal's), the switches read at their designations. Not a typical room's
+    // or one room's view: those are stamped into their rooms.
+    let room_view = |t: &str| {
+        let up = t.to_ascii_uppercase();
+        ["QUEEN", "KING", "SUITE", "UNIT", "TYPICAL", "TYP.", "ROOM"].iter().any(|w| up.contains(w))
+    };
+    let views: Vec<&cadaddy_mepfix::printlinks::Enlarged> =
+        links.enlarged.iter().filter(|e| e.registered && e.fit.is_some() && e.devices > 0 && e.reach.is_some() && !room_view(&e.title)).collect();
+    let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
+    let sheet_of = |n: &str| cadaddy_mepfix::printlinks::norm_sheet(n.split('/').next().unwrap_or(n));
+    let by_place = |dv: &super::readers::ReadDevice| {
+        views.iter().copied().find(|e| {
+            sheet_of(&dv.sheet) == sheet_of(&e.sheet) && e.reach.is_some_and(|r| inside(&r, dv.at)) && !e.inner.iter().any(|r| inside(r, dv.at))
+        })
+    };
     let (mut moved, mut dropped) = (0usize, 0usize);
     let mut keep = Vec::with_capacity(census.placed.len());
     for mut dv in std::mem::take(&mut census.placed) {
-        if let Some(e) = moves.get(dv.handle.as_str()).copied()
+        if let Some(e) = moves.get(dv.handle.as_str()).copied().or_else(|| by_place(&dv))
             && let Some(at) = e.place(dv.at)
         {
             dv.at = at;
@@ -2342,7 +2689,8 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Rooms come from the architectural floor plans: other trades' plans show the same rooms
     // again (and phantom ones). Any plan when the set has no architectural ones.
     let regions = Some(plans(true)).filter(|r| !r.is_empty()).unwrap_or_else(|| plans(false));
-    let mut params = json!({"outline": false});
+    // With outlines: the typical-room plans' devices are stamped into each room of the type.
+    let mut params = json!({"outline": true});
     if !regions.is_empty() {
         params["regions"] = json!(regions);
     }
@@ -2360,49 +2708,50 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         .filter(|r| r.kind == "plan" && r.not_built.is_empty() && !r.discipline.eq_ignore_ascii_case("A"))
         .map(SheetRegion::plan_rect)
         .collect();
-    if !others.is_empty() && plans(true).len() == regions.len() {
-        if let Ok(more) = s.execute("rooms.list", &json!({"outline": false, "regions": others})) {
-            let extra: Vec<Value> = more
-                .get("rooms")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter(|r| r.get("number").and_then(Value::as_str).is_some_and(|n| !n.trim().is_empty()))
-                // On its floor by the floor's numbering: a guest floor's rooms start with its
-                // number (205 on level 2); a note's or a schedule's number doesn't.
-                .filter_map(|r| {
-                    let at = r.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
-                    // The floor of the sheet it was read on (the whole sheet: a room by its edge is
-                    // outside the plan area).
-                    let sheet = at.and_then(|at| job.sheet_regions.iter().filter(|r| r.kind == "plan").find(|r| in_rect(&r.rect, at)))?;
-                    let floor = sheet.level.chars().find(char::is_ascii_digit)?;
-                    let number = r.get("number").and_then(Value::as_str).unwrap_or("").trim();
-                    if number.len() < 3 || !number.starts_with(floor) {
-                        return None;
-                    }
-                    // On that sheet's level, not the one the read guessed (a third-floor number
-                    // numbered a first-floor room).
-                    let mut r = r.clone();
-                    if let Some(o) = r.as_object_mut() {
-                        o.insert("level".into(), json!(sheet.level));
-                        o.insert("sheet".into(), json!(sheet.number));
-                    }
-                    Some(r)
-                })
-                .collect();
-            // Each number once (every discipline's plan of the floor gives it).
-            let mut seen = BTreeSet::new();
-            extra_rooms = extra
-                .into_iter()
-                .filter(|r| seen.insert(r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase()))
-                .map(|mut r| {
-                    if let Some(o) = r.as_object_mut() {
-                        o.insert("other_trade".into(), json!(true));
-                    }
-                    r
-                })
-                .collect();
-        }
+    if !others.is_empty()
+        && plans(true).len() == regions.len()
+        && let Ok(more) = s.execute("rooms.list", &json!({"outline": false, "regions": others}))
+    {
+        let extra: Vec<Value> = more
+            .get("rooms")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|r| r.get("number").and_then(Value::as_str).is_some_and(|n| !n.trim().is_empty()))
+            // On its floor by the floor's numbering: a guest floor's rooms start with its
+            // number (205 on level 2); a note's or a schedule's number doesn't.
+            .filter_map(|r| {
+                let at = r.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
+                // The floor of the sheet it was read on (the whole sheet: a room by its edge is
+                // outside the plan area).
+                let sheet = at.and_then(|at| job.sheet_regions.iter().filter(|r| r.kind == "plan").find(|r| in_rect(&r.rect, at)))?;
+                let floor = sheet.level.chars().find(char::is_ascii_digit)?;
+                let number = r.get("number").and_then(Value::as_str).unwrap_or("").trim();
+                if number.len() < 3 || !number.starts_with(floor) {
+                    return None;
+                }
+                // On that sheet's level, not the one the read guessed (a third-floor number
+                // numbered a first-floor room).
+                let mut r = r.clone();
+                if let Some(o) = r.as_object_mut() {
+                    o.insert("level".into(), json!(sheet.level));
+                    o.insert("sheet".into(), json!(sheet.number));
+                }
+                Some(r)
+            })
+            .collect();
+        // Each number once (every discipline's plan of the floor gives it).
+        let mut seen = BTreeSet::new();
+        extra_rooms = extra
+            .into_iter()
+            .filter(|r| seen.insert(r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase()))
+            .map(|mut r| {
+                if let Some(o) = r.as_object_mut() {
+                    o.insert("other_trade".into(), json!(true));
+                }
+                r
+            })
+            .collect();
     }
     // A room carries the level of the sheet it was read on (Q5291 MUST 2): the sheet's level
     // wins over a spec's guess.
@@ -2669,8 +3018,22 @@ fn apply_room_answers(job: &GuidedJob, rooms_result: &mut Value) -> (usize, usiz
     }
     let Some(list) = rooms_result.get_mut("rooms").and_then(Value::as_array_mut) else { return (0, 0) };
     let key = |r: &Value| room_key(r.get("number").and_then(Value::as_str).unwrap_or(""), r.get("name").and_then(Value::as_str).unwrap_or(""));
+    // A room said not to be one (`room:<number>|<name>`) goes under any name its number reads,
+    // and as the same name with no number (the model's copy of it: a corridor built from the
+    // circulation came back after "Not a room").
+    let gone: Vec<(String, String)> = rules
+        .iter()
+        .filter(|(_, v)| **v == "remove")
+        .filter_map(|(k, _)| k.strip_prefix("room:")?.split_once('|').map(|(n, m)| (n.to_string(), m.to_string())))
+        .collect();
+    let removed_room = |r: &Value| {
+        let up = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+        let (number, name) = (up("number"), up("name"));
+        rules.get(key(r).as_str()) == Some(&"remove")
+            || gone.iter().any(|(n, m)| (!n.is_empty() && *n == number) || (number.is_empty() && !m.is_empty() && *m == name))
+    };
     let before = list.len();
-    list.retain(|r| rules.get(key(r).as_str()) != Some(&"remove"));
+    list.retain(|r| !removed_room(r));
     let removed = before - list.len();
     let mut renamed = 0;
     for r in list.iter_mut() {
@@ -2748,6 +3111,20 @@ pub(crate) fn is_circuit_tag(tag: &str) -> bool {
     tag.rsplit_once('-').is_some_and(|(head, n)| !head.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// How far from an occupancy sensor its leg letter is printed, in the letter's heights.
+const SENSOR_LEG_H: f64 = 4.0;
+/// How far from a receptacle's circuit label a note on it (GFCI) is printed, in its heights.
+const RECEPTACLE_NOTE_H: f64 = 4.0;
+
+/// A receptacle's designations among the texts printed by it, in a fixed order: `GFCI` (or
+/// `GFI`), `WP` weatherproof, `WR` weather-resistant, `TR` tamper-resistant, `USB`.
+fn receptacle_designations(texts: &[&str]) -> Vec<&'static str> {
+    const DESIGNATIONS: &[(&str, &[&str])] = &[("GFCI", &["GFCI", "GFI"]), ("WP", &["WP"]), ("WR", &["WR"]), ("TR", &["TR"]), ("USB", &["USB"])];
+    let words: BTreeSet<String> =
+        texts.iter().flat_map(|t| t.split(|c: char| !c.is_ascii_alphanumeric())).filter(|w| !w.is_empty()).map(str::to_ascii_uppercase).collect();
+    DESIGNATIONS.iter().filter(|(_, said)| said.iter().any(|w| words.contains(*w))).map(|(d, _)| *d).collect()
+}
+
 /// Run the devices stage: detect devices, symbols and counts (MUST 1, 4, 9-11).
 /// MUST 9: count then "anything not counted?" with leftover clusters.
 /// MUST 10: learn foreign symbols. MUST 11: recount after learning.
@@ -2764,11 +3141,25 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // with a TAG attribute holding the nearby device-mark text.
     // Device types come from the sheets' legends and schedules (plus the marks every set
     // uses); notes, sheet numbers, keynotes, switch legs and dimensions never count.
-    let mut census = device_census(s, job);
-    // The sheet map: what the sheets' callouts point at, where the enlarged plans sit. Inside a
-    // registered enlarged plan's boundary its sheet is the authority: its devices move onto the
-    // overall plan there, and the overall plan's own copies there are left out.
-    if let Some(links) = job_links(s, job) {
+    // The submittals' product types, read once: device types too.
+    if !job.submittals.is_empty() && job.submittal_types.is_empty() {
+        let started = web_time::Instant::now();
+        let marks = super::submittals::product_marks(s, &job.submittals);
+        (job.submittal_types, job.luminaire_types, job.wall_luminaire_types) = (marks.types, marks.ceiling, marks.wall);
+        progress_line(&format!(
+            "  submittal product types (device types too): {} in {:.1} s",
+            job.submittal_types.join(", "),
+            started.elapsed().as_secs_f64()
+        ));
+    }
+    // The sheet map: what the sheets' callouts point at, where the enlarged plans sit. Its bubbles
+    // are no devices (a bubble's sheet reference reads like a circuit).
+    let links = job_links(s, job);
+    let bubbles: Vec<([f64; 2], f64)> = links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius)).collect();
+    let mut census = device_census(s, job, &bubbles);
+    // Inside a registered enlarged plan's boundary its sheet is the authority: its devices move
+    // onto the overall plan there, and the overall plan's own copies there are left out.
+    if let Some(links) = links {
         let summary = super::printset::links_summary(&links);
         results["links"] = summary.clone();
         job.links = Some(summary);
@@ -3214,6 +3605,7 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Ok((mut sp, true)) = super::bspec::current(s, "mep_read") {
         super::printmep::merge_mep(&mut sp, mep.clone(), &read_sheets);
         super::printcond::seat_heights(&mut sp);
+        super::mep::seat_in_plenum(&mut sp);
         super::printcond::store_circuits(&mut sp, &cond.circuits);
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
@@ -3366,6 +3758,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Where a sheet point goes on its level's plan: made once (its view fits are the slow part)
     // for the MEP and the devices both.
     let mut placer: Option<Box<dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>> = None;
+    // The building's shell first: each storey's outline from its exterior walls, before anything
+    // is placed in it (rooms, MEP and devices go inside it).
+    let mut shells: Option<Vec<(String, Vec<[cadaddy_geom::Vec2; 2]>)>> = None;
+    // Then the corridors, stairs and elevator hoistways inside it, before the rooms.
+    let mut circulation: Vec<cadaddy_walk3d::Circulation> = Vec::new();
     // Ensure sheet content is in the drawing so bspec.draft can read geometry.
     let t = web_time::Instant::now();
     ensure_sheets_loaded(s, job)?;
@@ -3376,6 +3773,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // rectangle), stacked; the other disciplines' plans add no walls.
     let levels = building_levels(job);
     let draft_params = if levels.is_empty() { json!({"store": true}) } else { json!({"store": true, "levels": levels, "stack": true}) };
+    // The circuits whose estimated routes were all in typical-room views (their tags not stored).
+    let mut room_view_circuits: BTreeSet<String> = BTreeSet::new();
     let draft_result = s.execute("bspec.draft", &draft_params);
     match &draft_result {
         Ok(spec) => {
@@ -3420,15 +3819,25 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             {
                 let runs = mep.runs.len();
                 super::printmep::merge_mep(&mut sp, mep, &[]);
-                // The circuits' estimated routes just above each level's ceiling.
+                // The circuits' estimated routes just above each level's ceiling; the runs the
+                // drawings give no height in their level's plenum, under the floor above.
                 super::printcond::seat_heights(&mut sp);
+                let seated = super::mep::seat_in_plenum(&mut sp);
+                if seated > 0 {
+                    progress_line(&format!("  MEP runs with no height of their own seated in their level's plenum: {seated}"));
+                }
                 s.doc_mut()?.building_spec = Some(sp.to_json());
                 job.audit("mep_merged", "pipeline", None, Some(StageName::BimBuild), Some(json!({"runs": runs})));
             }
             // The rooms stage's rooms go in too: the drafted spec had none, so the build made no
             // room elements (and every later room read traced the whole print set again).
-            let read: Vec<Value> =
-                job.stage(StageName::Rooms).and_then(|st| st.result.as_ref()).and_then(|r| r.get("rooms")).and_then(Value::as_array).cloned().unwrap_or_default();
+            let read: Vec<Value> = job
+                .stage(StageName::Rooms)
+                .and_then(|st| st.result.as_ref())
+                .and_then(|r| r.get("rooms"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             // How many rooms of a level carry each name: a name several carry is a unit type
             // (every DOUBLE Q of the floor), one a single room carries is that room's (LOBBY).
             let mut named: BTreeMap<(String, String), usize> = BTreeMap::new();
@@ -3481,7 +3890,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     let want = key(&level.name);
                     let rects: Vec<[f64; 4]> = arch_plans.iter().filter(|(l, _)| !l.is_empty() && key(l) == want).map(|(_, r)| *r).collect();
                     // The largest view of the level (a several-view sheet's floor plan, not its enlarged plans).
-                    if let Some(r) = rects.into_iter().max_by(|a, b| ((a[2] - a[0]).abs() * (a[3] - a[1]).abs()).total_cmp(&((b[2] - b[0]).abs() * (b[3] - b[1]).abs()))) {
+                    if let Some(r) = rects
+                        .into_iter()
+                        .max_by(|a, b| ((a[2] - a[0]).abs() * (a[3] - a[1]).abs()).total_cmp(&((b[2] - b[0]).abs() * (b[3] - b[1]).abs())))
+                    {
                         progress_line(&format!("  level {}: region from its architectural plan {:?}", level.name, r.map(|v| v.round())));
                         level.region = Some(r);
                     }
@@ -3513,7 +3925,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             // run drawn over the same segment again (traced back and forth) is one run.
             if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
                 let upf = sp.units_per_foot;
-                let ducts: BTreeSet<String> = sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Duct).map(|y| y.name.clone()).collect();
+                let ducts: BTreeSet<String> =
+                    sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Duct).map(|y| y.name.clone()).collect();
                 let (sized, dropped) = tidy_runs(&mut sp.mep.runs, upf, &ducts);
                 if sized + dropped > 0 {
                     progress_line(&format!("  MEP runs tidied: {sized} unread sizes set from the tags, {dropped} repeated runs dropped"));
@@ -3527,16 +3940,99 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             // where their sheets draw them.
             let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
             if has_arch && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-                let sim = placer.insert(Box::new(arch_placer(s.doc()?, &sp)));
+                let shell = shells
+                    .get_or_insert_with(|| {
+                        let (shells, found) = building_shells(s, &sp, job);
+                        circulation = found;
+                        shells
+                    })
+                    .clone();
+                let sim = placer.insert(Box::new(arch_placer(s.doc()?, &sp, &shell)));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
                 let before = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
-                sp.mep.runs.retain_mut(|r| match r.points.first().and_then(|p| sim(*p, &r.level)).filter(|_| r.points.last().is_some_and(|p| sim(*p, &r.level).is_some())) {
-                    Some(t) => {
-                        r.points.iter_mut().for_each(|p| *p = t.apply(*p));
-                        true
+                // Which sheets' runs can't be placed (both ends, or one end off the plan), and how
+                // much of them: where a registration is missing.
+                let upf_runs = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+                let mut unplaced: BTreeMap<String, (usize, f64)> = BTreeMap::new();
+                // A circuit's estimated route drawn in a view of rooms (a typical-room plan) that
+                // can't be placed: each room's own circuits go in instead (with the devices
+                // stamped into the rooms), so it isn't a missing registration.
+                let estimated = |r: &cadaddy_walk3d::MepRun| r.system == super::printcond::CIRCUIT_SYSTEM;
+                let lost: BTreeSet<String> = sp
+                    .mep
+                    .runs
+                    .iter()
+                    .filter(|r| estimated(r) && r.points.first().is_none_or(|p| sim(*p, &r.level).is_none()))
+                    .map(|r| sheet_key(&r.source_sheet))
+                    .collect();
+                let views = if lost.is_empty() { BTreeMap::new() } else { room_view_regions(s.doc()?, job, &lost) };
+                let mut in_views = 0usize;
+                // The runs no registration places, with what the report says of them: a typical
+                // room's plan's go into its rooms below.
+                let mut lost_runs: Vec<(String, f64, cadaddy_walk3d::MepRun)> = Vec::new();
+                sp.mep.runs.retain_mut(|r| {
+                    let start = r.points.first().and_then(|p| sim(*p, &r.level));
+                    let end = start.and_then(|_| r.points.last().and_then(|p| sim(*p, &r.level)));
+                    match (start, end) {
+                        (Some(t), Some(_)) => {
+                            r.points.iter_mut().for_each(|p| *p = t.apply(*p));
+                            true
+                        }
+                        _ if in_room_view(r, &views) => {
+                            in_views += 1;
+                            if let Some(c) = super::printcond::circuit_of_run(r) {
+                                room_view_circuits.insert(c.to_string());
+                            }
+                            false
+                        }
+                        _ => {
+                            let why = if start.is_some() { " one end" } else { "" };
+                            let ft = r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf_runs;
+                            let key = format!("{} on {}{why}", if r.source_sheet.is_empty() { "?" } else { &r.source_sheet }, r.level);
+                            if lost_runs.len() < MAX_STAMPED {
+                                lost_runs.push((key, ft, r.clone()));
+                            } else {
+                                let e = unplaced.entry(key).or_default();
+                                e.0 += 1;
+                                e.1 += ft;
+                            }
+                            false
+                        }
                     }
-                    None => false,
                 });
+                // A typical room's plan's pipes and ducts (ENLARGED GUESTROOM - SANITARY): into each
+                // room of its type, as its devices are.
+                let lost: Vec<cadaddy_walk3d::MepRun> = lost_runs.iter().map(|(_, _, r)| r.clone()).collect();
+                let typical = if lost.is_empty() { StampedRuns::default() } else { stamp_typical_runs(s.doc()?, job, &sp.mep.runs, &lost) };
+                for ((key, ft, _), taken) in lost_runs.iter().zip(typical.taken.iter().copied().chain(std::iter::repeat(false))) {
+                    if !taken {
+                        let e = unplaced.entry(key.clone()).or_default();
+                        e.0 += 1;
+                        e.1 += ft;
+                    }
+                }
+                if !typical.runs.is_empty() {
+                    progress_line(&format!(
+                        "  MEP runs of typical-room plans stamped into the rooms of their type: {} from {} runs ({:?})",
+                        typical.runs.len(),
+                        typical.taken.iter().filter(|t| **t).count(),
+                        typical.report
+                    ));
+                    sp.mep.runs.extend(typical.runs);
+                }
+                if !unplaced.is_empty() {
+                    let list: Vec<String> = unplaced.iter().map(|(k, (n, ft))| format!("{k}: {n} ({ft:.0} ft)")).collect();
+                    progress_line(&format!("  MEP runs not placeable by sheet: {}", list.join(", ")));
+                }
+                if in_views > 0 {
+                    progress_line(&format!("  estimated circuit routes in typical-room views (each room's own circuits instead): {in_views}"));
+                }
+                // A circuit some of whose route was placed keeps its tag.
+                for r in &sp.mep.runs {
+                    if let Some(c) = super::printcond::circuit_of_run(r) {
+                        room_view_circuits.remove(c);
+                    }
+                }
                 sp.mep.terminals.retain_mut(|t| match sim(t.at, &t.level) {
                     Some(m) => {
                         t.at = m.apply(t.at);
@@ -3553,11 +4049,94 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     }
                     None => false,
                 });
-                let dropped = (before.0 - sp.mep.runs.len(), before.1 - sp.mep.terminals.len(), before.2 - sp.mep.equipment.len());
+                let dropped = (before.0 - sp.mep.runs.len() - in_views, before.1 - sp.mep.terminals.len(), before.2 - sp.mep.equipment.len());
                 progress_line(&format!(
                     "  MEP onto the plans: {} runs, {} terminals, {} equipment placed; not placeable (no fit to the architecture): {} runs, {} terminals, {} equipment",
-                    sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len(), dropped.0, dropped.1, dropped.2
+                    sp.mep.runs.len(),
+                    sp.mep.terminals.len(),
+                    sp.mep.equipment.len(),
+                    dropped.0,
+                    dropped.1,
+                    dropped.2
                 ));
+                // An elevator hoistway is closed floor to roof: a duct, pipe or conduit through
+                // one is a clash.
+                let through = runs_through_hoistways(&sp.mep.runs, &circulation, upf_runs);
+                if !through.is_empty() {
+                    let mut by: BTreeMap<String, usize> = BTreeMap::new();
+                    for r in through.iter().filter_map(|i| sp.mep.runs.get(*i)) {
+                        *by.entry(format!("{} on {}", r.system, r.level)).or_default() += 1;
+                    }
+                    progress_line(&format!("  MEP runs through an elevator hoistway: {} {by:?}", through.len()));
+                    job.add_finding(
+                        StageName::BimBuild,
+                        "MEP through an elevator hoistway",
+                        &format!(
+                            "{} duct, pipe or conduit runs pass through an elevator shaft, which nothing may run through: {by:?}",
+                            through.len()
+                        ),
+                        3,
+                        vec!["Route them round the shaft".into()],
+                        None,
+                        false,
+                    );
+                }
+                // The reflected ceiling plans set each area's ceiling (a lobby higher, back of
+                // house lower): read now the floor's spaces are known, then each run with no
+                // height of its own sits over the highest ceiling it passes under, and each
+                // diffuser is in its area's ceiling.
+                sp.circulation = circulation.clone();
+                let rcp_sheets: Vec<[f64; 4]> = job.sheet_regions.iter().filter(|r| r.kind == "rcp").map(|r| r.rect).collect();
+                let (areas, read) = rcp_ceiling_areas(s.doc()?, &sp, &rcp_sheets);
+                for line in &read {
+                    progress_line(&format!("  RCP {line}"));
+                }
+                if !areas.is_empty() {
+                    // Each area's room takes its height (its ceiling is built there; the RCP's areas
+                    // are not the level's whole ceiling, so the rooms' ceilings stay): the spec
+                    // room of its number, or of its circulation space's name.
+                    let mut rooms_set = 0usize;
+                    for a in &areas {
+                        let Some(label) = a.room.as_deref().map(str::trim).filter(|l| !l.is_empty()) else { continue };
+                        for r in sp.rooms.iter_mut().filter(|r| {
+                            r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(label)) || r.name.trim().eq_ignore_ascii_case(label)
+                        }) {
+                            r.ceiling_ft = Some(a.height_ft);
+                            rooms_set += 1;
+                        }
+                    }
+                    let seated = super::mep::seat_in_plenum_under(&mut sp, &areas);
+                    let levels: BTreeSet<&str> = areas.iter().map(|a| a.level.as_str()).collect();
+                    progress_line(&format!(
+                        "  ceilings set per area from the RCPs: {} areas on {levels:?}, {rooms_set} rooms at their height; {seated} MEP runs and terminals reseated under them",
+                        areas.len()
+                    ));
+                }
+                // Nothing more than 5' outside its storey's shell: past it, it isn't in the
+                // building (site work, or a reading put in the wrong place). Out, and said.
+                let before_out = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
+                sp.mep.runs.retain(|r| !r.points.iter().any(|p| outside_shell(&shell, &r.level, *p, upf_runs)));
+                sp.mep.terminals.retain(|t| !outside_shell(&shell, &t.level, t.at, upf_runs));
+                sp.mep.equipment.retain(|e| !outside_shell(&shell, &e.level, e.min, upf_runs) && !outside_shell(&shell, &e.level, e.max, upf_runs));
+                let out = (before_out.0 - sp.mep.runs.len(), before_out.1 - sp.mep.terminals.len(), before_out.2 - sp.mep.equipment.len());
+                if out.0 + out.1 + out.2 > 0 {
+                    progress_line(&format!(
+                        "  MEP outside the building (more than {OUTSIDE_SHELL_FT}' past its storey's shell), left out: {} runs, {} terminals, {} equipment",
+                        out.0, out.1, out.2
+                    ));
+                    job.add_finding(
+                        StageName::BimBuild,
+                        "MEP outside the building",
+                        &format!(
+                            "{} runs, {} terminals and {} pieces of equipment land more than {OUTSIDE_SHELL_FT} ft outside their storey's walls (site work, or a sheet placed wrong); they are not in the model",
+                            out.0, out.1, out.2
+                        ),
+                        2,
+                        vec!["Check those sheets' registration onto the plans".into()],
+                        None,
+                        false,
+                    );
+                }
                 if dropped.0 + dropped.1 + dropped.2 > 0 {
                     job.add_finding(
                         StageName::BimBuild,
@@ -3592,17 +4171,42 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut placed: Option<Value> = None;
     // The devices stage's devices, on their levels (bspec.draft started a new spec), before the
     // build: it makes each one an element carrying what was read about it (Q6002).
-    if !job.devices.is_empty() {
+    // The plumbing fixtures the plumbing plans tag (named by the set's fixture schedule) go in
+    // with the devices: placed by their sheets the same way.
+    let schedule = if job.sheet_spans.iter().any(|sp| cadaddy_mepfix::sheet_facts::discipline_of(&sp.sheet).eq_ignore_ascii_case("P")) {
+        plumbing_schedule(s.doc()?, job)
+    } else {
+        None
+    };
+    let mut all_devices = job.devices.clone();
+    if let Some(sch) = &schedule {
+        let fixtures = plumbing_fixtures(s.doc()?, job, sch);
+        progress_line(&format!("  plumbing fixture schedule: {} tags; fixtures the plumbing plans tag: {}", sch.rows.len(), fixtures.len()));
+        all_devices.extend(fixtures);
+    }
+    if !all_devices.is_empty() {
         // Onto the architecture like the MEP: a device that can't be placed is left out.
         let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
+        // (Not placed onto the architecture, stamped from typical-room plans.)
+        let mut counts = (0usize, 0usize);
+        // The stamped rooms' panels (where a typical room's plan letters them), for their circuits.
+        let mut room_panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
+        let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
+        let mut sleeping: Vec<(String, Vec<cadaddy_geom::Vec2>)> = Vec::new();
         let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
             Ok((sp, true)) if has_arch => {
                 if placer.is_none() {
-                    placer = Some(Box::new(arch_placer(s.doc()?, &sp)));
+                    let shell = shells
+                        .get_or_insert_with(|| {
+                            let (shells, found) = building_shells(s, &sp, job);
+                            circulation = found;
+                            shells
+                        })
+                        .clone();
+                    placer = Some(Box::new(arch_placer(s.doc()?, &sp, &shell)));
                 }
-                let Some(sim) = placer.as_deref() else { unreachable!() };
-                let out: Vec<_> = job
-                    .devices
+                let Some(sim) = placer.as_deref() else { return Err(bad("bim_build", "device placer missing".to_string())) };
+                let out: Vec<_> = all_devices
                     .iter()
                     .filter_map(|dv| {
                         let m = sim(dv.at, &dv.level)?;
@@ -3611,18 +4215,164 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         Some(dv)
                     })
                     .collect();
-                progress_line(&format!("  devices onto the plans: {} placed, {} not placeable", out.len(), job.devices.len() - out.len()));
+                progress_line(&format!("  devices onto the plans: {} placed, {} not placeable", out.len(), all_devices.len() - out.len()));
+                // Nothing more than 5' outside its storey's shell (as for the MEP).
+                let upf_dev = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+                let placed_n = out.len();
+                let out: Vec<_> = out.into_iter().filter(|dv| !outside_shell(shells.as_deref().unwrap_or(&[]), &dv.level, dv.at, upf_dev)).collect();
+                if out.len() < placed_n {
+                    let n = placed_n - out.len();
+                    progress_line(&format!("  devices outside the building (more than {OUTSIDE_SHELL_FT}' past its storey's shell), left out: {n}"));
+                    job.add_finding(
+                        StageName::BimBuild,
+                        "Devices outside the building",
+                        &format!("{n} devices land more than {OUTSIDE_SHELL_FT} ft outside their storey's walls (site lighting, or a sheet placed wrong); they are not in the model"),
+                        2,
+                        vec!["Check those sheets' registration onto the plans".into()],
+                        None,
+                        false,
+                    );
+                }
                 let mut why: BTreeMap<String, usize> = BTreeMap::new();
-                for dv in job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()) {
-                    *why.entry(format!("{} on {}", if dv.sheet.is_empty() { "?" } else { &dv.sheet }, if dv.level.is_empty() { "?" } else { &dv.level })).or_default() += 1;
+                for dv in all_devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()) {
+                    *why.entry(format!(
+                        "{} on {}",
+                        if dv.sheet.is_empty() { "?" } else { &dv.sheet },
+                        if dv.level.is_empty() { "?" } else { &dv.level }
+                    ))
+                    .or_default() += 1;
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
+                let unplaced: Vec<&super::readers::ReadDevice> = all_devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
+                let StampedRooms { devices: stamped, report, authority, panels, rooms, sleeping: guest } =
+                    stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                room_panels = panels;
+                panel_rooms = rooms;
+                sleeping = guest;
+                // A room an enlarged plan of its own shows: that plan's devices, not the overall
+                // plan's copies of some of them.
+                let before = out.len();
+                let mut out = out;
+                out.retain(|dv| {
+                    !authority.iter().any(|(level, outline)| {
+                        dv.level == *level && cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))
+                    })
+                });
+                if out.len() < before {
+                    progress_line(&format!("  rooms an enlarged plan shows: {} of the overall plans' devices in them left out", before - out.len()));
+                }
+                if !report.is_empty() {
+                    progress_line(&format!("  typical-room devices stamped into rooms of their type: {} ({report:?})", stamped.len()));
+                }
+                let not_placed = all_devices.len() - out.len();
+                if not_placed > 0 {
+                    job.add_finding(
+                        StageName::BimBuild,
+                        "Devices not placed",
+                        &format!("{not_placed} devices are on sheets or views that don't line up with an architectural plan (and no typical-room plan); they are not drawn"),
+                        2,
+                        vec!["Register those sheets onto their level's plan".into()],
+                        None,
+                        false,
+                    );
+                }
+                counts = (not_placed, stamped.len());
+                out.extend(stamped);
                 out
             }
-            _ => job.devices.clone(),
+            _ => all_devices.clone(),
         };
+        // A stamped room's circuits are its own (a guest room's own panel, in the room's wall):
+        // their routes in the room, where the sheet's reading can't put them.
+        if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+            let (gear, room_panels) = super::printcond::room_panel_equipment(&room_panels, &panel_rooms, sp.units_per_foot);
+            let (runs, circuits) = super::printcond::room_circuits(&devices, &room_panels, sp.units_per_foot);
+            if !gear.is_empty() || !circuits.is_empty() {
+                progress_line(&format!("  stamped rooms' panels: {}; circuits: {} ({} runs)", gear.len(), circuits.len(), runs.len()));
+                super::printcond::store_room_panels(&mut sp, gear);
+                super::printcond::store_room_circuits(&mut sp, runs, &circuits);
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+            }
+        }
         match super::readers::place_devices(s, &devices, "guided job") {
-            Ok(v) => placed = Some(v),
+            Ok(mut v) => {
+                // What the devices stage read and the model doesn't hold, and what typical-room
+                // plans added: read = inserted + not placed - stamped.
+                v["not_placed"] = json!(counts.0);
+                v["stamped"] = json!(counts.1);
+                placed = Some(v);
+                // What the legend says each switch and sensor is (its designations).
+                let mut designations = legend_designations(s.doc()?, job);
+                for (k, v) in unimported_designations(job) {
+                    designations.entry(k).or_insert(v);
+                }
+                if !designations.is_empty() {
+                    let keys: Vec<&str> = designations.keys().map(String::as_str).collect();
+                    progress_line(&format!("  the legends' designations: {}", keys.join(" ")));
+                }
+                if !designations.is_empty()
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let n = super::readers::legend_onto_devices(&mut sp, &designations);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        progress_line(&format!("  switches and sensors named by the legend's designations: {n}"));
+                    }
+                }
+                // The plumbing fixtures named by their schedule.
+                if let Some(sch) = &schedule
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let n = super::readers::plumbing_onto_fixtures(&mut sp, &sch.rows);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        progress_line(&format!("  plumbing fixtures named by the schedule: {n}"));
+                    }
+                }
+                // The code's devices the plans don't mark: a guest room's receptacles are
+                // tamper-resistant.
+                if !sleeping.is_empty()
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let (n, rooms) = super::readers::tamper_resistant_in_rooms(&mut sp, &sleeping);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        progress_line(&format!("  tamper-resistant receptacles (NEC 406.12): {n} in {rooms} guest rooms"));
+                        job.add_finding(
+                            StageName::BimBuild,
+                            "Tamper-resistant receptacles in the guest rooms",
+                            &format!(
+                                "{n} receptacles in {rooms} guest rooms are taken off as tamper-resistant: NEC 406.12 requires them in hotel guest rooms and dwelling units; the plans don't mark them TR"
+                            ),
+                            2,
+                            vec!["Confirm the TR devices with the engineer (the wiring devices section lists them)".into()],
+                            None,
+                            false,
+                        );
+                    }
+                }
+                // A receptacle by a sink is a GFCI device (non-feed-through GFCIs).
+                if schedule.is_some()
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let (n, sinks) = super::readers::gfci_by_sinks(&mut sp);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        progress_line(&format!("  receptacles within 6' of a sink taken off as GFCI (NEC 210.8): {n} by {sinks} sinks"));
+                        job.add_finding(
+                            StageName::BimBuild,
+                            "Receptacles by sinks taken off as GFCI",
+                            &format!(
+                                "{n} receptacles within 6' of {sinks} sinks and lavatories aren't marked GFCI on the plans: NEC 210.8 protects them, and GFCI receptacles that don't feed through make each one a GFCI device; measured from where the plumbing plans tag each sink"
+                            ),
+                            3,
+                            vec!["Check them on the plans: a GFCI breaker on the circuit would protect them instead".into()],
+                            None,
+                            false,
+                        );
+                    }
+                }
+            }
             Err(e) => job.add_finding(
                 StageName::BimBuild,
                 &format!("The devices could not be put in the model: {e}"),
@@ -3640,6 +4390,103 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Q6029 MUST 3: pass a configurable time budget (default 20 min).
     bim_step(s, job, "devices placed", t);
     let t = web_time::Instant::now();
+    if let Some(place) = placer.as_deref() {
+        let n = anchor_other_trade_rooms(s, job, place)?;
+        if n > 0 {
+            progress_line(&format!("  rooms traced from other trades' tags: {n}"));
+        }
+    }
+    // The circulation goes in the spec before the rooms are traced: they are traced in what it
+    // leaves.
+    if !circulation.is_empty()
+        && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+    {
+        sp.circulation = std::mem::take(&mut circulation);
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    // Each storey stacks by its shell's lower-left corner (the building's outline), not by the
+    // lower-left of all its wall linework: a stray line or a site note there moved a storey
+    // off the ones above and below it (B4-016). A level given a base keeps it.
+    if let Some(sh) = shells.as_ref()
+        && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+    {
+        let mut set = Vec::new();
+        for (name, rects) in sh {
+            let Some(l) = sp.levels.iter_mut().find(|l| l.name.eq_ignore_ascii_case(name) && l.base.is_none()) else { continue };
+            let corner = rects.iter().fold([f64::INFINITY; 2], |c, [a, b]| [c[0].min(a.x).min(b.x), c[1].min(a.y).min(b.y)]);
+            if corner.iter().all(|v| v.is_finite()) {
+                l.base = Some(corner);
+                set.push(l.name.clone());
+            }
+        }
+        if !set.is_empty() {
+            progress_line(&format!("  storeys stacked by their shells' corners: {}", set.join(", ")));
+        }
+        // Then each storey onto the one under it by the rooms they share (a typical floor's
+        // 3NN over 2NN): a shell drawn a foot off on one sheet no longer moves that storey.
+        let (moved, not) = register_storeys_by_rooms(s.doc()?, &mut sp);
+        if !moved.is_empty() {
+            progress_line(&format!("  storeys lined up on the rooms of the one under them: {}", moved.join("; ")));
+        }
+        if !not.is_empty() {
+            progress_line(&format!("  storeys not lined up by their rooms: {}", not.join("; ")));
+        }
+        // The shells go to the build: a wall line well past its storey's is none of its walls.
+        // Without their slivers (a strip a wall thick: a stray wall line traced into the shell,
+        // L4's ran 7' past the building), so the stray line is measured from the floor.
+        let sliver = SHELL_SLIVER_FT * if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        sp.shells = sh
+            .iter()
+            .map(|(n, rects)| (n.clone(), rects.iter().filter(|[a, b]| (b.x - a.x).abs() >= sliver).map(|[a, b]| [a.x, a.y, b.x, b.y]).collect()))
+            .collect();
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    // How every wall is built: the partition legend's types, the walls the plans' tags type.
+    if job.sheet_regions.iter().any(|r| r.kind == "legend")
+        && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+    {
+        for line in apply_wall_legend(s, &mut sp, job)? {
+            progress_line(&format!("  wall types {line}"));
+        }
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    // The stairs in the circulation's stair spaces, found from their treads on any layer: the
+    // build makes their steps, landings and rails. Confirmed stairs stay.
+    if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+        && !sp.circulation.is_empty()
+    {
+        let found = super::stairs::detect_in_circulation(s, &sp).unwrap_or_default();
+        if !found.is_empty() {
+            let names: Vec<String> = found.iter().map(|st| format!("{} ({} flights)", st.name, st.runs.len())).collect();
+            progress_line(&format!("  stairs found in their stair spaces: {}", names.join(", ")));
+            sp.stairs.retain(|x| x.confirmed);
+            // A stair no code lets be built as read (a misread flight: risers of 31", or 30 of
+            // 3½") is left out and asked about, never built.
+            let mut unbuildable = Vec::new();
+            for st in found {
+                if sp.stairs.iter().any(|x| x.name.eq_ignore_ascii_case(&st.name)) {
+                    continue;
+                }
+                match sp.stair_unbuildable(&st) {
+                    Some(why) => unbuildable.push(format!("{} on {}: {why}", st.name, st.level)),
+                    None => sp.stairs.push(st),
+                }
+            }
+            if !unbuildable.is_empty() {
+                progress_line(&format!("  stairs left out (can't be built as read): {}", unbuildable.join("; ")));
+                job.add_finding(
+                    StageName::BimBuild,
+                    "Stairs left out: they can't be built as read",
+                    &format!("{} stairs found in their stair spaces measure risers no code allows: {}", unbuildable.len(), unbuildable.join("; ")),
+                    2,
+                    vec!["Check the stair's treads and the levels it joins on the plans, then add it with stairs.detect or the building spec".into()],
+                    None,
+                    false,
+                );
+            }
+            s.doc_mut()?.building_spec = Some(sp.to_json());
+        }
+    }
     let budget_s = super::bspec::BUILD_BUDGET_S;
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s}))?;
     bim_step(s, job, "model built", t);
@@ -3653,17 +4500,38 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if scraps > 0 {
         progress_line(&format!("  room scraps dropped (under {SCRAP_SF} sf, a bigger room of the level has their number): {scraps}"));
     }
+    if let Some(shell) = shells.as_ref() {
+        let outside = drop_rooms_outside_shell(s, shell)?;
+        if outside > 0 {
+            progress_line(&format!("  rooms outside the building's shell dropped: {outside}"));
+            job.add_finding(
+                StageName::BimBuild,
+                "Rooms outside the building",
+                &format!("{outside} rooms traced outside their level's exterior walls were left out"),
+                1,
+                vec!["Check the plan's labels outside the building".into()],
+                None,
+                false,
+            );
+        }
+    }
+    let stacked = number_stacked_rooms(s)?;
+    if stacked > 0 {
+        progress_line(&format!("  rooms numbered from the same room on another floor: {stacked}"));
+    }
     let t = web_time::Instant::now();
     if let Some(v) = placed {
         result["devices"] = v;
     }
-    // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff.
-    if !job.circuits.is_empty()
+    // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff;
+    // not the typical-room views' (each room's own circuits are those).
+    let circuits: Vec<_> = job.circuits.iter().filter(|c| !room_view_circuits.contains(&c.id)).cloned().collect();
+    if !circuits.is_empty()
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {
-        super::printcond::store_circuits(&mut sp, &job.circuits);
+        super::printcond::store_circuits(&mut sp, &circuits);
         s.doc_mut()?.building_spec = Some(sp.to_json());
-        result["circuits"] = json!(job.circuits.len());
+        result["circuits"] = json!(circuits.len());
     }
     // The model's rooms are the job's rooms on the levels it built.
     if let Some(by_level) = rooms_from_model(s, job)
@@ -3693,7 +4561,22 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     bim_step(s, job, "room volumes built", t);
     let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
-        Ok(v) => result["props"] = v,
+        Ok(v) => {
+            // Boxes the partition legend gives no ring for: their wall's type is unknown.
+            let untyped = v.get("wall_boxes_untyped").and_then(Value::as_u64).unwrap_or(0);
+            if untyped > 0 {
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!("{untyped} wall boxes on walls of unknown build-up: no mud ring"),
+                    "No tag on the plans types their walls, and no tagged wall of the same thickness says what they are",
+                    2,
+                    vec!["Tag the walls (or check the partition legend's marks) so their boxes get rings".into()],
+                    None,
+                    false,
+                );
+            }
+            result["props"] = v;
+        }
         Err(e) => job.add_finding(
             StageName::BimBuild,
             &format!("The elements' properties could not be filled: {e}"),
@@ -3718,6 +4601,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     identity_step(s, job, &mut result);
     bim_step(s, job, "tag identity", t);
+    if !job.submittals.is_empty() {
+        let t = web_time::Instant::now();
+        submittals_step(s, job, &mut result);
+        bim_step(s, job, "submittals applied", t);
+    }
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -3851,6 +4739,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
 
     job.audit("stage_run", "pipeline", None, Some(StageName::BimBuild), Some(json!({"built_count": built_count})));
+    // The counts are the model's as the stage ends (B4-022: tag identity merges a wall or door
+    // read off several sheets into one after the build; the summary kept the build's 2,977
+    // walls of 2,848).
+    super::bspec::recount_built(s.doc()?, &mut result);
+    progress_line(&format!("  the model as built: {} walls, {} doors, {} windows", result["walls"], result["doors"], result["windows"]));
     Ok(result)
 }
 
@@ -3923,6 +4816,132 @@ const MAX_SHEET_LINKS: usize = 2_000;
 /// and its level (a sheet listed already keeps its entry and gains its place).
 /// The build's identity pass (`bim.identity` then `rooms.graph`): merged copies leave the counts,
 /// findings go on the build stage, and the answer's summary goes in the result as `identity`.
+/// The submittals' products onto the built elements (BUILD ORDER: after the architecture and the
+/// MEP objects; `bim.submittals`). Never stops the job: what they leave open is a finding.
+fn submittals_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
+    let v = match s.execute("bim.submittals", &json!({"paths": job.submittals})) {
+        Ok(v) => v,
+        Err(e) => {
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("The submittals could not be read: {e}"),
+                "bim.submittals failed after the build",
+                3,
+                vec!["Check the submittal paths given to job.start".into()],
+                None,
+                false,
+            );
+            return;
+        }
+    };
+    let applied = v.get("applied").and_then(Value::as_object).cloned().unwrap_or_default();
+    let elements: u64 = applied.values().filter_map(Value::as_u64).sum();
+    let line = format!(
+        "  submittals: {} files read, products onto {elements} elements of {} types ({}); dimming {}",
+        v.get("files").and_then(Value::as_array).map_or(0, Vec::len),
+        applied.len(),
+        applied.keys().cloned().collect::<Vec<_>>().join(", "),
+        v.get("dimming").map(Value::to_string).unwrap_or_default()
+    );
+    report_progress(s, json!({"step": "submittals", "elements": elements, "types": applied.len()}), &line);
+    s.echo(line);
+    // The model's device types no submittal covers (switches, boxes and the like are by spec).
+    let missing: Vec<String> = v
+        .get("no_submittal")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(m, _)| super::propfill::kind_of(m) == "device")
+        .map(|(m, n)| format!("{m} ({n})"))
+        .collect();
+    if !missing.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} device types have no submittal product: {}", missing.len(), missing.join(", ")),
+            "No submittal given to the job has a data sheet for them, so their elements carry no maker or catalog number",
+            1,
+            vec!["Add their submittals, or confirm they are by others".into()],
+            None,
+            false,
+        );
+    }
+    // A type the model holds whose submittal leaves a question (its dimming, say).
+    for q in v.get("questions").and_then(Value::as_array).into_iter().flatten() {
+        let mark = q.get("mark").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
+        let text = q.get("text").and_then(Value::as_str).unwrap_or("");
+        if applied.contains_key(&mark) && !text.is_empty() {
+            job.add_finding(
+                StageName::BimBuild,
+                text,
+                "The submittal does not settle it for the product ordered",
+                2,
+                vec!["Ask the supplier which option was ordered".into()],
+                None,
+                false,
+            );
+        }
+    }
+    for u in v.get("unread").and_then(Value::as_array).into_iter().flatten() {
+        let file = u.get("file").and_then(Value::as_str).unwrap_or("");
+        let error = u.get("error").and_then(Value::as_str).unwrap_or("");
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Submittal {file} could not be read: {error}"),
+            "bim.spec_import failed on it",
+            2,
+            Vec::new(),
+            None,
+            false,
+        );
+    }
+    result["submittals"] = v;
+    if applied.is_empty() {
+        return;
+    }
+    // CHECKS on the submitted products: what each switch leg dims.
+    match s.execute("bim.dimming", &json!({})) {
+        Ok(dv) => {
+            let line = format!(
+                "  dimming: {} switch legs, {} with phase and 0-10V fixtures together; 0-10V pairs on {} legs to {} fixtures",
+                dv.get("legs").and_then(Value::as_array).map_or(0, Vec::len),
+                dv.get("mixed").and_then(Value::as_u64).unwrap_or(0),
+                dv.pointer("/pairs/legs").and_then(Value::as_u64).unwrap_or(0),
+                dv.pointer("/pairs/fixtures").and_then(Value::as_u64).unwrap_or(0)
+            );
+            report_progress(s, json!({"step": "dimming", "mixed": dv.get("mixed")}), &line);
+            s.echo(line);
+            for f in dv.get("findings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+                // What the check found: a leg mixing phase and 0-10V fixtures; a dimmer on a
+                // 0-10V leg whose kind the plans don't say; 0-10V fixtures only switched; the pair.
+                let (why, severity, todo) = if f.contains("on one control") {
+                    (
+                        "The fixtures' submittals give them different dimming on one switch leg",
+                        4,
+                        "Split the leg, or change one product so both dim the same way",
+                    )
+                } else if f.contains("has to be a 0-10V dimmer") {
+                    (
+                        "The plans name the dimmer by a designation only; the fixtures on its leg are 0-10V",
+                        3,
+                        "Ask which dimmer it is (the lighting controls schedule): a 0-10V dimmer with its pair",
+                    )
+                } else if f.contains("no dimmer") {
+                    ("A 0-10V fixture on a plain switch never dims", 1, "Confirm the fixtures are meant not to dim")
+                } else {
+                    (
+                        "A 0-10V fixture dims over its own 2-wire control pair from the dimmer or sensor",
+                        1,
+                        "Check each leg's dimmer or sensor: the pair's run to it is an allowance where the plans don't place it",
+                    )
+                };
+                job.add_finding(StageName::BimBuild, f, why, severity, vec![todo.into()], None, false);
+            }
+            result["dimming"] = dv;
+        }
+        Err(e) => result["dimming_error"] = json!(e.to_string()),
+    }
+}
+
 fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     let numbers: Vec<String> = job
         .stage(StageName::Rooms)
@@ -3994,8 +5013,6 @@ fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     job.audit("identity", "pipeline", None, Some(StageName::BimBuild), Some(json!({"merged": run.answer.get("merged"), "findings": findings.len()})));
 }
 
-
-
 /// [`run_bim_build`]'s tidy of the runs read: a duct run whose size wasn't read (`size_source`
 /// not a tag) and is larger than any tagged run of its system on its level takes the median
 /// tagged size; a run over the same two points as one before it (either way, within a foot) is
@@ -4020,6 +5037,49 @@ fn tidy_runs(runs: &mut Vec<cadaddy_walk3d::MepRun>, upf: f64, ducts: &BTreeSet<
     let before = runs.len();
     super::runtidy::drop_repeats(runs, upf, &|r| ducts.contains(&r.system));
     (sized, before - runs.len())
+}
+
+/// The rooms only the other disciplines' plans tag (rooms stage `other_trade`): each spec room
+/// of such a number gets its tag's place on its level's architectural plan (`at`), so the build
+/// traces the room there, and the tag's name when it reads as one (a unit type). A door's tag
+/// is no room's. How many were anchored.
+fn anchor_other_trade_rooms(s: &mut Session, job: &GuidedJob, place: &dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>) -> Result<usize> {
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(0) };
+    let extras: Vec<(String, String, [f64; 2], String)> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| r.get("other_trade").and_then(Value::as_bool) == Some(true))
+        .filter_map(|r| {
+            let n = r.get("number").and_then(Value::as_str)?.trim().to_string();
+            let name = r.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let at = [r.get("at")?.get(0)?.as_f64()?, r.get("at")?.get(1)?.as_f64()?];
+            Some((n, name, at, r.get("level").and_then(Value::as_str).unwrap_or("").to_string()))
+        })
+        .collect();
+    let mut anchored = 0;
+    for (number, name, at, level) in extras {
+        if name.to_ascii_uppercase().contains("DOOR") {
+            continue;
+        }
+        let Some(m) = place(at, &level) else { continue };
+        let Some(r) = sp.rooms.iter_mut().find(|r| r.at.is_none() && r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(&number)))
+        else {
+            continue;
+        };
+        r.at = Some(m.apply(at));
+        if r.name.trim().is_empty() && legible_room_name(&name) && super::perceive::geometry::room_name_score(&name) > 0 {
+            r.name = name;
+        }
+        anchored += 1;
+    }
+    if anchored > 0 {
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    Ok(anchored)
 }
 
 /// The numbers the other disciplines' plans gave rooms the architectural plans left unnumbered
@@ -4090,13 +5150,29 @@ fn number_rooms_from_other_trades(
             Some(_) => None,
             None => near(),
         };
-        let Some(room) = pick.and_then(|i| rooms.get_mut(i))
-        else {
+        if number_taken(&rooms, &level, &number) {
+            *missed.entry(format!("{level}: number already on the level")).or_default() += 1;
+            continue;
+        }
+        let Some(room) = pick.and_then(|i| rooms.get_mut(i)) else {
             // Already numbered there (its own label), or between rooms.
-            let numbered_here = rooms.iter().any(|r| r.number.is_some() && key(&r.level) == key(&level) && r.outline.len() >= 3 && cadaddy_geom::point_in_polygon(&r.outline, q));
+            let numbered_here = rooms
+                .iter()
+                .any(|r| r.number.is_some() && key(&r.level) == key(&level) && r.outline.len() >= 3 && cadaddy_geom::point_in_polygon(&r.outline, q));
             // How far the nearest unnumbered room of the level was (whole feet).
-            let nearest = rooms.iter().filter(|r| r.number.is_none() && key(&r.level) == key(&level) && r.outline.len() >= 3).map(|r| edge_distance(&r.outline, q)).fold(f64::INFINITY, f64::min) / upf;
-            let why = if numbered_here { "room already numbered".to_string() } else if nearest.is_finite() { format!("in no room (an unnumbered one {nearest:.0} ft away)") } else { "in no room (none unnumbered)".to_string() };
+            let nearest = rooms
+                .iter()
+                .filter(|r| r.number.is_none() && key(&r.level) == key(&level) && r.outline.len() >= 3)
+                .map(|r| edge_distance(&r.outline, q))
+                .fold(f64::INFINITY, f64::min)
+                / upf;
+            let why = if numbered_here {
+                "room already numbered".to_string()
+            } else if nearest.is_finite() {
+                format!("in no room (an unnumbered one {nearest:.0} ft away)")
+            } else {
+                "in no room (none unnumbered)".to_string()
+            };
             *missed.entry(format!("{level}: {why}")).or_default() += 1;
             continue;
         };
@@ -4126,9 +5202,773 @@ fn number_rooms_from_other_trades(
     Ok((numbered, missed))
 }
 
+/// Whether a room of the level (digits of its name) already has the number: one number per level
+/// (the other piece of a corridor walls cut in two doesn't take it again). A "Room NNN" traced
+/// from the same label doesn't count: it is the room the number goes to, again.
+fn number_taken(rooms: &[super::bspec::RoomElement], level: &str, number: &str) -> bool {
+    let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let number = number.trim();
+    rooms.iter().any(|r| {
+        key(&r.level) == key(level)
+            && r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(number))
+            && !(r.name.trim().eq_ignore_ascii_case("Room") || r.name.trim().eq_ignore_ascii_case(&format!("Room {number}")))
+    })
+}
+
+/// How much of a level view's linework (its plan's background and its trade's own lines) must lie on
+/// the level's architectural plan, both ways (F1), for the view to be laid there.
+const LEVEL_VIEW_F1: f64 = 0.5;
+
+/// A typical-room plan's room type, as the words its title and a room's type name share: QUEEN
+/// is Q, ACC./ACCESSIBLE is ADA, SINGLE is dropped (a QUEEN room is the single one), the rest
+/// kept for a room name and, for a title, only the words some room type uses.
+fn type_words(text: &str, vocabulary: Option<&BTreeSet<String>>) -> BTreeSet<String> {
+    let upper = text.to_ascii_uppercase().replace("ACC.", "ADA ");
+    upper
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| match w {
+            "QUEEN" => "Q".to_string(),
+            "ACC" | "ACCESSIBLE" => "ADA".to_string(),
+            w => w.to_string(),
+        })
+        .filter(|w| w != "SINGLE")
+        .filter(|w| vocabulary.is_none_or(|v| v.contains(w)))
+        .collect()
+}
+
+/// Where `p` of a typical-room view (its block of linework `view`) falls in a room whose outline
+/// spans `room` (both `[x0, y0, x1, y1]`): the same share across and up, the view turned a quarter
+/// when the room runs the other way.
+fn into_room(p: [f64; 2], view: [f64; 4], room: [f64; 4]) -> Option<[f64; 2]> {
+    let (vw, vh) = (view[2] - view[0], view[3] - view[1]);
+    let (rw, rh) = (room[2] - room[0], room[3] - room[1]);
+    if !(vw > 0.0 && vh > 0.0 && rw > 0.0 && rh > 0.0) {
+        return None;
+    }
+    let (u, v) = (((p[0] - view[0]) / vw).clamp(0.0, 1.0), ((p[1] - view[1]) / vh).clamp(0.0, 1.0));
+    let (u, v) = if (vw > vh) != (rw > rh) { (v, 1.0 - u) } else { (u, v) };
+    Some([room[0] + u * rw, room[1] + v * rh])
+}
+
+/// The devices of the typical-room plans (UNIT ELECTRICAL PLAN - DOUBLE QUEEN, ENLARGED ACC.
+/// QUEEN) that no plan registration placed: each put into every room of the type its view's
+/// title names, at the same place in the room. A room the floor's own plans already put devices
+/// in is left alone (they show its devices: no second count). With the stamped count per view.
+fn stamp_typical_rooms(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    placed: &[super::readers::ReadDevice],
+    unplaced: &[&super::readers::ReadDevice],
+) -> StampedRooms {
+    let mut out = Vec::new();
+    let mut report: BTreeMap<String, usize> = BTreeMap::new();
+    // The rooms a one-room plan is the authority in (its level and outline).
+    let mut authority: Vec<(String, Vec<cadaddy_geom::Vec2>)> = Vec::new();
+    // Each stamped room's panels, where its plan letters them ("PNLBD 'G'"), by the room.
+    let mut panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
+    let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
+    let mut sleeping: BTreeMap<usize, (String, Vec<cadaddy_geom::Vec2>)> = BTreeMap::new();
+    if unplaced.is_empty() {
+        return StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect() };
+    }
+    // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    // A room the floor's plans already put devices in: two or more.
+    let furnished = |level: &str, o: &[cadaddy_geom::Vec2]| {
+        placed.iter().filter(|dv| dv.level == level && cadaddy_geom::point_in_polygon(o, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))).take(2).count()
+            >= 2
+    };
+    // How many devices of a tag the floor's plans already put in a room: the typical plan's of
+    // that tag there are those first (one each), the rest it adds (a floor plan may show a room's
+    // receptacles and leave its fixtures to the typical plan).
+    let shown = |level: &str, o: &[cadaddy_geom::Vec2], tag: &str| {
+        placed
+            .iter()
+            .filter(|dv| {
+                dv.level == level
+                    && dv.tag.eq_ignore_ascii_case(tag)
+                    && cadaddy_geom::point_in_polygon(o, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))
+            })
+            .count()
+    };
+    let mut matched: BTreeMap<(usize, String), usize> = BTreeMap::new();
+    let refs = job_sheet_refs(job);
+    let mut by_sheet: BTreeMap<String, Vec<&super::readers::ReadDevice>> = BTreeMap::new();
+    for dv in unplaced {
+        by_sheet.entry(sheet_key(&dv.sheet)).or_default().push(dv);
+    }
+    for (sheet, devices) in by_sheet.into_iter().filter(|(_, v)| v.len() >= 3).take(MAX_STAMP_SHEETS) {
+        let Some(sh) = refs.iter().find(|r| sheet_key(&r.number) == sheet && r.view.is_none()) else { continue };
+        let sub = super::printmep::sheet_drawing(d, sh);
+        // The typical-room views (a room type), and the views of one room (its number or its name
+        // in the title: "ENLARGED BOH ROOM #237", "1ST FLOOR - MEP ROOM").
+        let sheet_texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let lettered: Vec<(String, [f64; 2])> =
+            sheet_texts.iter().filter_map(|t| Some((super::printcond::panel_lettering(&t.value)?, [t.at.x, t.at.y]))).take(MAX_STAMPED).collect();
+        let panels_in = |view: &[f64; 4]| -> Vec<(String, [f64; 2])> {
+            lettered.iter().filter(|(_, p)| p[0] >= view[0] && p[0] <= view[2] && p[1] >= view[1] && p[1] <= view[3]).cloned().collect()
+        };
+        let panel_into = |room: String,
+                          typical: bool,
+                          level: &str,
+                          view: &[f64; 4],
+                          outline: &[cadaddy_geom::Vec2],
+                          panels: &mut BTreeMap<String, Vec<(String, [f64; 2])>>,
+                          panel_rooms: &mut BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>| {
+            if panels.contains_key(&room) {
+                return;
+            }
+            let at: Vec<(String, [f64; 2])> =
+                panels_in(view).into_iter().filter_map(|(n, p)| Some((n, into_room(p, *view, bbox(outline))?))).collect();
+            if !at.is_empty() {
+                panel_rooms.insert(room.clone(), (level.to_string(), outline.to_vec(), typical));
+            }
+            panels.insert(room, at);
+        };
+        let (views, one_room) = room_views(&sub, &sheet_texts, &types, &vocabulary, &rooms);
+        let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+        for dv in devices {
+            let inside = |r: &[f64; 4]| dv.at[0] >= r[0] && dv.at[0] <= r[2] && dv.at[1] >= r[1] && dv.at[1] <= r[3];
+            // A view of one room (the smallest holding it, unless a typical-room view is smaller):
+            // into that room, and the authority there (the overall plan's copies there go).
+            let typical = views.iter().filter(|(_, r, _)| inside(r)).map(|(_, r, _)| area(r)).fold(f64::INFINITY, f64::min);
+            if let Some((title, view, i)) =
+                one_room.iter().filter(|(_, r, _)| inside(r) && area(r) < typical).min_by(|a, b| area(&a.1).total_cmp(&area(&b.1)))
+            {
+                if let Some((name, level, outline, number)) = rooms.get(*i)
+                    && out.len() < MAX_STAMPED
+                    && let Some(at) = into_room(dv.at, *view, bbox(outline))
+                {
+                    if furnished(level, outline) && !authority.iter().any(|(l, o)| l == level && o == outline) {
+                        authority.push((level.clone(), outline.clone()));
+                    }
+                    let mut copy = (*dv).clone();
+                    copy.at = at;
+                    copy.level.clone_from(level);
+                    copy.room = stamped_room(name, number, *i);
+                    panel_into(copy.room.clone(), false, level, view, outline, &mut panels, &mut panel_rooms);
+                    out.push(copy);
+                    *report.entry(format!("{sheet} {title}")).or_default() += 1;
+                }
+                continue;
+            }
+            let Some((title, view, words)) = views
+                .iter()
+                .filter(|(_, r, _)| inside(r))
+                .min_by(|a, b| ((a.1[2] - a.1[0]) * (a.1[3] - a.1[1])).total_cmp(&((b.1[2] - b.1[0]) * (b.1[3] - b.1[1]))))
+            else {
+                if !views.is_empty() || !one_room.is_empty() {
+                    *report.entry(format!("{sheet}: in no typical-room view")).or_default() += 1;
+                }
+                continue;
+            };
+            for (ri, (name, level, outline, number)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
+                if out.len() >= MAX_STAMPED {
+                    continue;
+                }
+                let used = matched.entry((ri, dv.tag.to_ascii_uppercase())).or_insert(0);
+                if *used < shown(level, outline, &dv.tag) {
+                    *used += 1;
+                    continue;
+                }
+                let Some(at) = into_room(dv.at, *view, bbox(outline)) else { continue };
+                let mut copy = (*dv).clone();
+                copy.at = at;
+                copy.level.clone_from(level);
+                copy.room = stamped_room(name, number, ri);
+                panel_into(copy.room.clone(), true, level, view, outline, &mut panels, &mut panel_rooms);
+                if sleeping_room(words) {
+                    sleeping.entry(ri).or_insert_with(|| (level.clone(), outline.clone()));
+                }
+                out.push(copy);
+                *report.entry(format!("{sheet} {title}")).or_default() += 1;
+            }
+        }
+    }
+    StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect() }
+}
+
+/// What [`stamp_typical_runs`] made: the stamped runs, which of the runs it was given lie in a
+/// typical room's plan (each `true` went into the rooms), and the count per sheet and view.
+#[derive(Default)]
+struct StampedRuns {
+    runs: Vec<cadaddy_walk3d::MepRun>,
+    taken: Vec<bool>,
+    report: BTreeMap<String, usize>,
+}
+
+/// The pipes and ducts of the typical-room plans (ENLARGED GUESTROOM - SANITARY's DOUBLE QUEEN
+/// view) that no registration placed (`lost`): each, when all of it lies in a view whose title
+/// names a room type, into every room of that type at the same place in the room, as their devices
+/// are ([`stamp_typical_rooms`]). A room the floor's own plans already run that system through
+/// (`placed`, in the model's coordinates) is left alone: no second count.
+fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadaddy_walk3d::MepRun], lost: &[cadaddy_walk3d::MepRun]) -> StampedRuns {
+    let mut out = StampedRuns { taken: vec![false; lost.len()], ..StampedRuns::default() };
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    if types.is_empty() {
+        return out;
+    }
+    let refs = job_sheet_refs(job);
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let inside = |v: &[f64; 4], p: &[f64; 2]| p[0] >= v[0] && p[0] <= v[2] && p[1] >= v[1] && p[1] <= v[3];
+    let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+    // The systems the floor's plans run through each room already.
+    let run_through = |level: &str, outline: &[cadaddy_geom::Vec2], system: &str| {
+        placed.iter().any(|q| {
+            q.level == level
+                && q.system == system
+                && q.points.iter().any(|p| cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(p[0], p[1])))
+        })
+    };
+    let sheets: BTreeSet<String> = lost.iter().map(|r| sheet_key(&r.source_sheet)).collect();
+    for sheet in sheets.iter().take(MAX_STAMP_SHEETS) {
+        let Some(sh) = refs.iter().find(|r| sheet_key(&r.number) == *sheet && r.view.is_none()) else { continue };
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let (views, _) = room_views(&sub, &texts, &types, &vocabulary, &rooms);
+        if views.is_empty() {
+            continue;
+        }
+        for (i, r) in lost.iter().enumerate().filter(|(_, r)| sheet_key(&r.source_sheet) == *sheet) {
+            if r.points.is_empty() {
+                continue;
+            }
+            // The smallest typical view holding all of it.
+            let Some((title, view, words)) =
+                views.iter().filter(|(_, v, _)| r.points.iter().all(|p| inside(v, p))).min_by(|a, b| area(&a.1).total_cmp(&area(&b.1)))
+            else {
+                continue;
+            };
+            if let Some(t) = out.taken.get_mut(i) {
+                *t = true;
+            }
+            for (_, level, outline, _) in rooms.iter().filter(|(n, _, _, _)| type_words(n, None) == *words) {
+                if out.runs.len() >= MAX_STAMPED {
+                    break;
+                }
+                if run_through(level, outline, &r.system) {
+                    continue;
+                }
+                let b = bbox(outline);
+                let Some(points) = r.points.iter().map(|p| into_room(*p, *view, b)).collect::<Option<Vec<[f64; 2]>>>() else { continue };
+                let mut copy = r.clone();
+                copy.points = points;
+                copy.level.clone_from(level);
+                copy.id = String::new();
+                copy.objects = Vec::new();
+                out.runs.push(copy);
+                *out.report.entry(format!("{sheet} {title}")).or_default() += 1;
+            }
+        }
+    }
+    out
+}
+
+/// A room of the rooms stage with its outline: name, level, outline, number.
+type JobRoom = (String, String, Vec<cadaddy_geom::Vec2>, String);
+
+/// The rooms stage's rooms with outlines (not the ones traced from other trades' tags).
+fn job_rooms(job: &GuidedJob) -> Vec<JobRoom> {
+    job.stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| r.get("other_trade").and_then(Value::as_bool) != Some(true))
+        .filter_map(|r| {
+            let name = r.get("name").and_then(Value::as_str)?.trim().to_string();
+            let level = r.get("level").and_then(Value::as_str).unwrap_or("").to_string();
+            let outline: Vec<cadaddy_geom::Vec2> = r
+                .get("outline")?
+                .as_array()?
+                .iter()
+                .filter_map(|q| Some(cadaddy_geom::Vec2::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?)))
+                .collect();
+            let number = r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            (outline.len() >= 3 && !name.is_empty()).then_some((name, level, outline, number))
+        })
+        .collect()
+}
+
+/// The room types (the words of a name several rooms carry) and every word they use.
+fn room_types(rooms: &[JobRoom]) -> (BTreeSet<BTreeSet<String>>, BTreeSet<String>) {
+    let mut count: BTreeMap<BTreeSet<String>, usize> = BTreeMap::new();
+    for (name, _, _, _) in rooms {
+        *count.entry(type_words(name, None)).or_default() += 1;
+    }
+    let types: BTreeSet<BTreeSet<String>> = count.into_iter().filter(|(k, n)| *n > 1 && !k.is_empty()).map(|(k, _)| k).collect();
+    let vocabulary: BTreeSet<String> = types.iter().flatten().cloned().collect();
+    (types, vocabulary)
+}
+
+/// A sheet number without its view (`E-6/2` is on `E-6`), upper case.
+fn sheet_key(n: &str) -> String {
+    n.split('/').next().unwrap_or(n).trim().to_ascii_uppercase()
+}
+
+/// The plan views on a sheet that show rooms, not a floor: the typical-room views (title, region,
+/// the room type's words) and the views of one room (title, region, the room's index in `rooms`).
+#[allow(clippy::type_complexity)]
+fn room_views(
+    sub: &cadaddy_doc::Drawing,
+    texts: &[cadaddy_mepfix::sheet_facts::TextItem],
+    types: &BTreeSet<BTreeSet<String>>,
+    vocabulary: &BTreeSet<String>,
+    rooms: &[JobRoom],
+) -> (Vec<(String, [f64; 4], BTreeSet<String>)>, Vec<(String, [f64; 4], usize)>) {
+    let mut views = Vec::new();
+    let mut one_room = Vec::new();
+    for v in cadaddy_mepfix::sheet_facts::view_titles(sub, texts) {
+        // A plan of the room, not an elevation of one of its walls or a section.
+        let upper = v.title.to_ascii_uppercase();
+        let plan = !["WALL", "ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
+        let Some(region) = v.region.filter(|_| plan) else { continue };
+        let words = type_words(&v.title, Some(vocabulary));
+        if types.contains(&words) {
+            views.push((v.title, region, words));
+        } else if let Some(i) = room_of_view(&upper, rooms) {
+            one_room.push((v.title, region, i));
+        }
+    }
+    (views, one_room)
+}
+
+/// Whether a run is a circuit's estimated route that starts in one of its sheet's views of rooms
+/// (`views`: by [`sheet_key`]).
+fn in_room_view(r: &cadaddy_walk3d::MepRun, views: &BTreeMap<String, Vec<[f64; 4]>>) -> bool {
+    r.system == super::printcond::CIRCUIT_SYSTEM
+        && views
+            .get(&sheet_key(&r.source_sheet))
+            .is_some_and(|vs| r.points.first().is_some_and(|p| vs.iter().any(|v| p[0] >= v[0] && p[0] <= v[2] && p[1] >= v[1] && p[1] <= v[3])))
+}
+
+/// Where `sheets` (by [`sheet_key`]) show rooms rather than a floor (their typical-room and
+/// one-room plans), in the job's drawing.
+fn room_view_regions(d: &cadaddy_doc::Drawing, job: &GuidedJob, sheets: &BTreeSet<String>) -> BTreeMap<String, Vec<[f64; 4]>> {
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    let refs = job_sheet_refs(job);
+    let mut out = BTreeMap::new();
+    for sheet in sheets.iter().take(MAX_STAMP_SHEETS) {
+        let Some(sh) = refs.iter().find(|r| sheet_key(&r.number) == *sheet && r.view.is_none()) else { continue };
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let (views, one_room) = room_views(&sub, &texts, &types, &vocabulary, &rooms);
+        let regions: Vec<[f64; 4]> = views.iter().map(|v| v.1).chain(one_room.iter().map(|v| v.1)).collect();
+        if !regions.is_empty() {
+            out.insert(sheet.clone(), regions);
+        }
+    }
+    out
+}
+
+/// What stamping the typical and one-room plans gave: the devices, how many by view, the rooms
+/// a one-room plan is the authority in (level, outline), each stamped room's panels, the level
+/// and outline of each room with panels, and the guest rooms stamped.
+struct StampedRooms {
+    devices: Vec<super::readers::ReadDevice>,
+    report: BTreeMap<String, usize>,
+    authority: Vec<(String, Vec<cadaddy_geom::Vec2>)>,
+    panels: BTreeMap<String, Vec<(String, [f64; 2])>>,
+    rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>,
+    /// The rooms stamped from a typical plan of a room to sleep in (a guest room): level, outline.
+    sleeping: Vec<(String, Vec<cadaddy_geom::Vec2>)>,
+}
+
+/// The electrical legends' designations (`3=3-WAY`, `OS2=WALL MOUNTED OCCUPANCY SENSOR …`) on the
+/// job's electrical sheets (each imported sheet's objects: its legend and note sheets too).
+fn legend_designations(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> BTreeMap<String, String> {
+    let spans: Vec<(u64, u64)> = job
+        .sheet_spans
+        .iter()
+        .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(sp.sheet.split('/').next().unwrap_or(&sp.sheet)).eq_ignore_ascii_case("E"))
+        .map(|sp| (sp.lo, sp.hi))
+        .collect();
+    if spans.is_empty() {
+        return BTreeMap::new();
+    }
+    let texts: Vec<cadaddy_mepfix::sheet_facts::TextItem> = d
+        .model
+        .iter()
+        .filter(|e| spans.iter().any(|(lo, hi)| (*lo..*hi).contains(&e.handle.0)))
+        .filter_map(|e| match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) if t.value.contains('=') => Some(cadaddy_mepfix::sheet_facts::TextItem {
+                value: t.value.trim().to_string(),
+                at: t.insert.xy(),
+                height: t.height,
+                rotation: t.rotation,
+            }),
+            _ => None,
+        })
+        .take(MAX_LEGEND_TEXTS)
+        .collect();
+    cadaddy_mepfix::device_types::designations(&texts)
+}
+
+/// Most `KEY=MEANING` texts looked at for the legends' designations.
+const MAX_LEGEND_TEXTS: usize = 5_000;
+/// Most electrical sheets read again for a legend the job's drawing doesn't hold.
+const MAX_LEGEND_SHEETS: usize = 6;
+
+/// The designations on the set's electrical sheets that aren't plans (a legend on the one-line
+/// diagram's sheet, or the schedules'; the job's drawing keeps the plans).
+fn unimported_designations(job: &GuidedJob) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (_, d) in non_plan_pages(job, "E") {
+        for (k, v) in cadaddy_mepfix::device_types::designations(&cadaddy_mepfix::sheet_facts::texts(&d)) {
+            out.entry(k).or_insert(v);
+        }
+    }
+    out
+}
+
+/// The pages of a discipline's sheets that aren't plans (legends, schedules, diagrams: the job's
+/// drawing keeps the plans), each read again from its file, numbered sheets in sheet order.
+fn non_plan_pages(job: &GuidedJob, discipline: &str) -> Vec<(String, cadaddy_doc::Drawing)> {
+    let mut out = Vec::new();
+    let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else {
+        progress_line("  the sheets' legends and schedules: no PDF reader in this build");
+        return out;
+    };
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    // The numbered ones (a page known only by its file isn't a sheet of the set), in sheet order.
+    let mut sheets: Vec<(String, &Value)> = classified
+        .iter()
+        .filter_map(|c| {
+            let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+            let kind = if text("type").is_empty() { text("sheet_type") } else { text("type") };
+            let number = c.get("number").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            (text("discipline").eq_ignore_ascii_case(discipline) && !kind.contains("plan") && cadaddy_mepfix::sheet_facts::is_sheet_number(&number))
+                .then_some((number, c))
+        })
+        .collect();
+    sheets.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut missed: Vec<String> = Vec::new();
+    for (number, c) in sheets.into_iter().take(MAX_LEGEND_SHEETS) {
+        // Its current copy's file and page (`printset.sheets`).
+        let (Some(file), Some(page)) = (c.get("file").and_then(Value::as_str), c.get("page").and_then(Value::as_u64)) else { continue };
+        if !files.contains_key(file) {
+            match crate::readfile::read(std::path::Path::new(&job.pdfs_path).join(file)) {
+                Ok(bytes) => {
+                    files.insert(file.to_string(), bytes);
+                }
+                Err(e) => {
+                    missed.push(format!("{number} ({file}: {e})"));
+                    continue;
+                }
+            }
+        }
+        let Some(bytes) = files.get(file) else { continue };
+        match read_pdf(bytes, &json!({"page": page, "text": true, "images": false})) {
+            Ok((d, _)) => out.push((number, d)),
+            Err(e) => missed.push(format!("{number} ({file} page {page}: {e})")),
+        }
+    }
+    if !missed.is_empty() {
+        progress_line(&format!("  the sheets' legends and schedules not read: {}", missed.join(", ")));
+    }
+    out
+}
+
+/// The set's plumbing fixture schedule: on a plumbing sheet that isn't a plan, else on a plan.
+fn plumbing_schedule(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Option<cadaddy_mepfix::fixture_schedule::FixtureSchedule> {
+    if let Some(s) = non_plan_pages(job, "P").iter().find_map(|(_, page)| cadaddy_mepfix::fixture_schedule::read(page)) {
+        return Some(s);
+    }
+    job_sheet_refs(job)
+        .iter()
+        .filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("P"))
+        .take(MAX_LEGEND_SHEETS)
+        .find_map(|r| cadaddy_mepfix::fixture_schedule::read(&super::printmep::sheet_drawing(d, r)))
+}
+
+/// Most plumbing fixtures read from a set's plans.
+const MAX_FIXTURES: usize = 20_000;
+
+/// The plumbing fixtures the plumbing plans tag: each tag the schedule lists, lettered on a
+/// plumbing sheet, as a device of kind `plumbing fixture` where it is printed. Not the sheet's own
+/// number in its title block (P-2 is a sheet and a lavatory), nor lettering larger than a tag's.
+fn plumbing_fixtures(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    schedule: &cadaddy_mepfix::fixture_schedule::FixtureSchedule,
+) -> Vec<super::readers::ReadDevice> {
+    let tags: BTreeSet<&str> = schedule.rows.iter().map(|r| r.tag.as_str()).collect();
+    let spans: Vec<(&str, u64, u64)> = job
+        .sheet_spans
+        .iter()
+        .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(sp.sheet.split('/').next().unwrap_or(&sp.sheet)).eq_ignore_ascii_case("P"))
+        .map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi))
+        .collect();
+    let mut found: Vec<(String, [f64; 2], f64, String)> = Vec::new();
+    for e in d.model.iter() {
+        let cadaddy_doc::EntityKind::Text(t) = &e.kind else { continue };
+        let value = t.value.trim();
+        if !(tags.contains(value) && t.height.is_finite() && t.height > 0.0) {
+            continue;
+        }
+        let Some((sheet, _, _)) = spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&e.handle.0)) else { continue };
+        if sheet_key(sheet) == value {
+            continue;
+        }
+        found.push((value.to_string(), [t.insert.x, t.insert.y], t.height, sheet.to_string()));
+        if found.len() >= MAX_FIXTURES {
+            break;
+        }
+    }
+    let mut heights: Vec<f64> = found.iter().map(|f| f.2).collect();
+    heights.sort_by(f64::total_cmp);
+    let usual = heights.get(heights.len() / 2).copied().unwrap_or(0.0);
+    found
+        .into_iter()
+        .filter(|(_, _, h, _)| *h <= 2.0 * usual)
+        .map(|(tag, at, _, sheet)| super::readers::ReadDevice {
+            level: job.level_at(at).map_or_else(String::new, |r| r.level.clone()),
+            tag,
+            at,
+            sheet,
+            kind: "plumbing fixture".into(),
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// Whether a typical room's type (its words, [`type_words`]) is a room to sleep in: a hotel's
+/// guest room (QUEEN, KING, SUITE…) or a dwelling unit.
+fn sleeping_room(words: &BTreeSet<String>) -> bool {
+    const SLEEPING: &[&str] = &["Q", "KING", "K", "SUITE", "STUDIO", "GUEST", "BEDROOM", "BED", "UNIT", "APT", "APARTMENT", "DWELLING"];
+    words.iter().any(|w| SLEEPING.contains(&w.as_str()))
+}
+
+/// A stamped room's name for its own circuits: its number, else its name and place in the list.
+fn stamped_room(name: &str, number: &str, i: usize) -> String {
+    if number.trim().is_empty() { format!("{} {i}", name.trim()) } else { number.trim().to_string() }
+}
+
+/// The one room a view's title (upper case) names: its number ("ROOM #237", "ROOM 237") when one
+/// room has it, else its name ("1ST FLOOR - MEP ROOM": the room called MEP), on the floor the
+/// title names when several are.
+fn room_of_view(title: &str, rooms: &[JobRoom]) -> Option<usize> {
+    if !title.contains("ROOM") {
+        return None;
+    }
+    let tokens: Vec<&str> = title.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let numbered: Vec<usize> = tokens
+        .iter()
+        .filter(|t| (2..=5).contains(&t.len()) && t.chars().any(|c| c.is_ascii_digit()) && t.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .flat_map(|t| rooms.iter().enumerate().filter(move |(_, r)| r.3.eq_ignore_ascii_case(t)).map(|(i, _)| i))
+        .collect();
+    if let [i] = numbered[..] {
+        return Some(i);
+    }
+    // The name: the title's words but the view's own (ENLARGED, PLAN, the trade, the floor).
+    const VIEW_WORDS: &[&str] =
+        &["ENLARGED", "PLAN", "PLANS", "ELECTRICAL", "MECHANICAL", "PLUMBING", "LIGHTING", "POWER", "FLOOR", "LEVEL", "ROOM", "SCALE"];
+    let ordinal =
+        |w: &str| w.len() >= 3 && w.chars().next().is_some_and(|c| c.is_ascii_digit()) && ["ST", "ND", "RD", "TH"].iter().any(|e| w.ends_with(e));
+    // An equipment room by any of its names (the trades' plans call it MEP, the architect MECH).
+    let same = |w: &str| -> String {
+        match w {
+            "MEP" | "MECH" | "MECHANICAL" | "ELEC" | "EQUIPMENT" => "MEP".to_string(),
+            w => w.to_string(),
+        }
+    };
+    let name: Vec<String> =
+        tokens.iter().copied().filter(|w| !VIEW_WORDS.contains(w) && !ordinal(w) && !w.chars().all(|c| c.is_ascii_digit())).map(same).collect();
+    if name.is_empty() {
+        return None;
+    }
+    let floor: Option<String> = tokens.iter().find(|w| ordinal(w)).map(|w| w.chars().take_while(char::is_ascii_digit).collect());
+    let named: Vec<usize> = rooms
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| {
+            let words: Vec<String> =
+                r.0.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty() && *w != "ROOM").map(same).collect();
+            !words.is_empty() && words.len() == name.len() && name.iter().all(|n| words.iter().any(|w| w == n))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    match named[..] {
+        [i] => Some(i),
+        _ => {
+            let on_floor: Vec<usize> =
+                named.into_iter().filter(|i| floor.as_deref().is_some_and(|f| rooms.get(*i).is_some_and(|r| r.1.trim() == f))).collect();
+            if let [i] = on_floor[..] { Some(i) } else { None }
+        }
+    }
+}
+
+/// The wall tags of the typical-room plans (unit plans): each legend mark a typical-room view
+/// prints, put at the same place in every room of the type the view's title names (as the
+/// devices are stamped). By level (its digits): (mark, where on the level's plan).
+fn typical_wall_tags(d: &cadaddy_doc::Drawing, job: &GuidedJob, marks: &BTreeSet<String>) -> BTreeMap<String, Vec<(String, cadaddy_geom::Vec2)>> {
+    let mut out: BTreeMap<String, Vec<(String, cadaddy_geom::Vec2)>> = BTreeMap::new();
+    let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| r.get("other_trade").and_then(Value::as_bool) != Some(true))
+        .filter_map(|r| {
+            let name = r.get("name").and_then(Value::as_str)?.trim().to_string();
+            let level = r.get("level").and_then(Value::as_str).unwrap_or("").to_string();
+            let outline: Vec<cadaddy_geom::Vec2> = r
+                .get("outline")?
+                .as_array()?
+                .iter()
+                .filter_map(|q| Some(cadaddy_geom::Vec2::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?)))
+                .collect();
+            (outline.len() >= 3 && !name.is_empty()).then_some((name, level, outline))
+        })
+        .collect();
+    let mut count: BTreeMap<BTreeSet<String>, usize> = BTreeMap::new();
+    for (name, _, _) in &rooms {
+        *count.entry(type_words(name, None)).or_default() += 1;
+    }
+    let types: BTreeSet<BTreeSet<String>> = count.into_iter().filter(|(k, n)| *n > 1 && !k.is_empty()).map(|(k, _)| k).collect();
+    let vocabulary: BTreeSet<String> = types.iter().flatten().cloned().collect();
+    if types.is_empty() || marks.is_empty() {
+        return out;
+    }
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let refs = job_sheet_refs(job);
+    for sh in refs.iter().filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("A") && r.kind == "enlarged_plan").take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let views: Vec<([f64; 4], BTreeSet<String>)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
+            .into_iter()
+            .filter_map(|v| {
+                let upper = v.title.to_ascii_uppercase();
+                let plan = !["ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
+                let words = type_words(&v.title, Some(&vocabulary));
+                (plan && types.contains(&words)).then_some((v.region?, words))
+            })
+            .collect();
+        if views.is_empty() {
+            continue;
+        }
+        for t in texts.iter() {
+            let mark = t.value.trim().to_ascii_uppercase();
+            if !marks.contains(&mark) {
+                continue;
+            }
+            let p = [t.at.x, t.at.y];
+            let inside = |r: &[f64; 4]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
+            let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+            let Some((view, words)) = views.iter().filter(|(r, _)| inside(r)).min_by(|a, b| area(&a.0).total_cmp(&area(&b.0))) else {
+                continue;
+            };
+            for (_, level, outline) in rooms.iter().filter(|(n, _, _)| type_words(n, None) == *words) {
+                if let Some(q) = into_room(p, *view, bbox(outline)) {
+                    out.entry(key(level)).or_default().push((mark.clone(), cadaddy_geom::Vec2::new(q[0], q[1])));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// At most this many sheets are looked over for typical-room plans, and this many devices stamped.
+const MAX_STAMP_SHEETS: usize = 40;
+const MAX_STAMPED: usize = 20_000;
+
 /// A room smaller than this (square feet) is no room of its own when a bigger room of its level
-/// carries its number: a sliver of that room traced from its label (a tub, a closet's corner).
-const SCRAP_SF: f64 = 10.0;
+/// carries its number (or, unnumbered, its name): a sliver of that room traced from its label (a
+/// tub, a closet's corner).
+const SCRAP_SF: f64 = 15.0;
+
+/// Numbers each unnumbered room from the same room on another floor (typical floors: room 305
+/// over 205 and under 405); how many.
+fn number_stacked_rooms(s: &mut Session) -> Result<usize> {
+    let upf = match super::bspec::current(s, "bim_build") {
+        Ok((sp, true)) if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 => sp.units_per_foot,
+        _ => 12.0,
+    };
+    let numbers = stacked_numbers(&super::bspec::room_elements(s.doc()?), upf);
+    for (h, n) in &numbers {
+        s.doc_mut()?.modify_entity(*h, |e| {
+            let mut x = e.common.xdata.to_vec();
+            x.push(cadaddy_doc::RawTag { code: 1000, value: format!("number:{n}") });
+            e.common.xdata = x.into();
+        })?;
+    }
+    Ok(numbers.len())
+}
+
+/// The numbers [`number_stacked_rooms`] gives: an unnumbered room of a level takes the number of a
+/// room stacked on it on another level (the same name, or that room known by its number alone; its
+/// middle within 2 feet; its area within a third: the floors' outlines of one room differ), that
+/// level's floor (the digits of its name, the number's first characters) swapped for its own.
+/// Only when every such room agrees and the number is new on its level.
+fn stacked_numbers(rooms: &[super::bspec::RoomElement], upf: f64) -> Vec<(cadaddy_doc::Handle, String)> {
+    let floor = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let norm = |n: &str| n.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_uppercase();
+    // Known by its number alone ("Room 305"): no name to tell it from another.
+    let bare = |o: &super::bspec::RoomElement| {
+        let n = norm(&o.name);
+        n == "ROOM" || o.number.as_deref().is_some_and(|num| n == format!("ROOM {}", num.trim().to_ascii_uppercase()))
+    };
+    let mid = |r: &super::bspec::RoomElement| {
+        let b = cadaddy_geom::Bounds2::from_points(r.outline.iter().copied());
+        (!b.is_empty()).then(|| b.center())
+    };
+    let mut out: Vec<(cadaddy_doc::Handle, String, String)> = Vec::new();
+    for r in rooms.iter().filter(|r| r.number.is_none()) {
+        let (name, here) = (norm(&r.name), floor(&r.level));
+        let Some(m) = mid(r) else { continue };
+        if name.is_empty() || name == "ROOM" || here.is_empty() || r.area_sf.is_nan() || r.area_sf <= 0.0 {
+            continue;
+        }
+        let proposed: BTreeSet<String> = rooms
+            .iter()
+            .filter(|o| o.level != r.level && (norm(&o.name) == name || bare(o)) && (o.area_sf - r.area_sf).abs() <= 0.35 * r.area_sf.max(o.area_sf))
+            // Over it: the middles within 2', or each in the other (one floor's trace takes in its
+            // bathroom, another's doesn't).
+            .filter(|o| {
+                mid(o).is_some_and(|c| {
+                    c.dist(m) <= 2.0 * upf || (cadaddy_geom::point_in_polygon(&r.outline, c) && cadaddy_geom::point_in_polygon(&o.outline, m))
+                })
+            })
+            .filter_map(|o| {
+                let (n, there) = (o.number.as_deref()?.trim(), floor(&o.level));
+                let rest = n.strip_prefix(there.as_str()).filter(|_| !there.is_empty() && n.len() >= 3)?;
+                (!rest.is_empty()).then(|| format!("{here}{rest}"))
+            })
+            .collect();
+        if proposed.len() == 1
+            && let Some(n) = proposed.into_iter().next()
+        {
+            out.push((r.handle, r.level.clone(), n));
+        }
+    }
+    // New on its level: neither a room of the level has it nor two rooms are given it.
+    let taken =
+        |level: &str, n: &str| rooms.iter().any(|o| o.level == level && o.number.as_deref().is_some_and(|m| m.trim().eq_ignore_ascii_case(n)));
+    let twice = |level: &str, n: &str| out.iter().filter(|(_, l, m)| l == level && m == n).count() > 1;
+    out.iter().filter(|(_, l, n)| !taken(l, n) && !twice(l, n)).map(|(h, _, n)| (*h, n.clone())).collect()
+}
 
 /// Removes the scraps ([`SCRAP_SF`]); how many.
 fn drop_numbered_scraps(s: &mut Session) -> Result<usize> {
@@ -4146,9 +5986,12 @@ fn numbered_scraps(rooms: &[super::bspec::RoomElement]) -> Vec<cadaddy_doc::Hand
         .iter()
         .filter(|r| r.area_sf < SCRAP_SF)
         .filter(|r| {
-            r.number.as_deref().is_some_and(|n| {
-                rooms.iter().any(|o| o.handle != r.handle && o.level == r.level && o.area_sf >= SCRAP_SF && o.number.as_deref().is_some_and(|m| norm(m) == norm(n)))
-            })
+            let bigger = |o: &&super::bspec::RoomElement| o.handle != r.handle && o.level == r.level && o.area_sf >= SCRAP_SF;
+            match r.number.as_deref() {
+                Some(n) => rooms.iter().filter(bigger).any(|o| o.number.as_deref().is_some_and(|m| norm(m) == norm(n))),
+                // Unnumbered: by its name, a real one (not the bare "Room").
+                None => !norm(&r.name).is_empty() && norm(&r.name) != "ROOM" && rooms.iter().filter(bigger).any(|o| norm(&o.name) == norm(&r.name)),
+            }
         })
         .map(|r| r.handle)
         .collect()
@@ -4174,8 +6017,12 @@ fn edge_distance(outline: &[cadaddy_geom::Vec2], p: cadaddy_geom::Vec2) -> f64 {
 /// room numbers; the frame of a same-size architectural sheet; its view's
 /// screened background laid over the floor plan (a fire alarm or low-voltage plan). `None` when
 /// none holds, or the point would land off the level's plan.
-fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<> {
-    let sheets = super::identity::sheets_of(Some(&sp));
+fn arch_placer(
+    d: &cadaddy_doc::Drawing,
+    sp: &cadaddy_walk3d::BuildingSpec,
+    shells: &[(String, Vec<[cadaddy_geom::Vec2; 2]>)],
+) -> impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<> {
+    let sheets = super::identity::sheets_of(Some(sp));
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let clock = web_time::Instant::now();
     let lap = |what: &str| progress_line(&format!("  placer: {what} at {:.1} s", clock.elapsed().as_secs_f64()));
@@ -4183,7 +6030,12 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
     lap("sheets registered by tags");
     // Each level's architectural plan (the sheet the registration takes as its reference) and
     // the other sheets: their grid intersections, for views no tag fit reaches.
-    let level_key0 = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), { let u = l.trim().to_ascii_uppercase(); u.contains("ROOF") || u == "R" });
+    let level_key0 = |l: &str| {
+        format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), {
+            let u = l.trim().to_ascii_uppercase();
+            u.contains("ROOF") || u == "R"
+        })
+    };
     let plans: Vec<(String, [f64; 4])> = sp
         .levels
         .iter()
@@ -4194,7 +6046,12 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
     lap("grid intersections read");
     progress_line(&format!("  grid intersections: {}", grid.summary()));
     let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
-    let level_key = |l: &str| format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), { let u = l.trim().to_ascii_uppercase(); u.contains("ROOF") || u == "R" });
+    let level_key = |l: &str| {
+        format!("{}{}", l.chars().filter(char::is_ascii_digit).collect::<String>(), {
+            let u = l.trim().to_ascii_uppercase();
+            u.contains("ROOF") || u == "R"
+        })
+    };
     // Architecture is the rule: a placed point must land on its level's plan (5% margin).
     let regions: Vec<(String, [f64; 4])> = sp
         .levels
@@ -4217,6 +6074,8 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
     let plan_views: Vec<[f64; 4]> = views.iter().filter(|v| plan_word(&v.title) || !not_plan_word(&v.title)).filter_map(|v| v.region).collect();
     let not_plan: Vec<[f64; 4]> = views.iter().filter(|v| !plan_word(&v.title) && not_plan_word(&v.title)).filter_map(|v| v.region).collect();
     lap(&format!("views read ({} plans, {} not plans)", plan_views.len(), not_plan.len()));
+    let view_rects: Vec<(String, [f64; 4])> =
+        sp.sheets.iter().filter_map(|l| Some((level_key(l.level.as_deref()?), l.view.as_ref()?.rect))).collect();
     let place = move |p: [f64; 2], level: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
         if not_plan.iter().any(|r| inside(r, p)) && !plan_views.iter().any(|r| inside(r, p)) {
             return None;
@@ -4224,7 +6083,10 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
         let sheet = sheets.iter().find(|b| inside(&b.rect, p))?;
         let on = |t: &&cadaddy_mepfix::tagid::SheetTransform| t.registered && t.sheet.eq_ignore_ascii_case(&sheet.number);
         let ts: Vec<_> = reg.transforms.iter().filter(on).collect();
-        let fit = ts.iter().find(|t| level_key(&t.level) == level_key(level)).or(ts.first());
+        // Another level's fit, but never for a point in this level's own view of a sheet of
+        // several levels' plans: that fit is the other view's.
+        let own_view = view_rects.iter().any(|(k, r)| *k == level_key(level) && inside(r, p));
+        let fit = ts.iter().find(|t| level_key(&t.level) == level_key(level)).or(ts.first().filter(|_| !own_view));
         // The grid lines its own view shows first: a sheet of enlarged plans has views at their
         // own scales, and one fit of the whole sheet by its tags puts at most one of them right.
         if let Some((k, t)) = grid.place(p, &level_key(level)) {
@@ -4240,8 +6102,7 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
                     && level_key(&b.level) == level_key(level)
                     && reg.transforms.iter().any(|x| x.sheet.eq_ignore_ascii_case(&b.number) && x.method == "reference")
             };
-            if let (Some(from), Some(to)) =
-                (sheets.iter().find(|b| b.number.eq_ignore_ascii_case(&t.reference)), sheets.iter().find(own))
+            if let (Some(from), Some(to)) = (sheets.iter().find(|b| b.number.eq_ignore_ascii_case(&t.reference)), sheets.iter().find(own))
                 && !from.number.eq_ignore_ascii_case(&to.number)
             {
                 m.tx += to.rect[0] - from.rect[0];
@@ -4254,7 +6115,9 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
         let size = |b: &super::identity::SheetBox| [b.rect[2] - b.rect[0], b.rect[3] - b.rect[1]];
         let alike = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() <= 0.01 * b[0] && (a[1] - b[1]).abs() <= 0.01 * b[1];
         let arch = sheets.iter().find(|b| {
-            b.discipline.eq_ignore_ascii_case("A") && level_key(&b.level) == level_key(level) && alike(size(b), size(sheet))
+            b.discipline.eq_ignore_ascii_case("A")
+                && level_key(&b.level) == level_key(level)
+                && alike(size(b), size(sheet))
                 && reg.transforms.iter().any(|t| t.sheet.eq_ignore_ascii_case(&b.number) && t.method == "reference")
         })?;
         Some(cadaddy_mepfix::tagid::Sim::scale_offset(1.0, [arch.rect[0] - sheet.rect[0], arch.rect[1] - sheet.rect[1]]))
@@ -4269,46 +6132,720 @@ fn arch_placer(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> i
         .map(|(key, r)| {
             let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = super::bspec::plan_objects(d)
                 .into_iter()
-                .filter(|e| super::bspec::centre(d, e).is_some_and(|c| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3])))
+                .filter(|e| {
+                    super::bspec::centre(d, e)
+                        .is_some_and(|c| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]))
+                })
                 .collect();
             (key.clone(), super::grids::line_samples(&mine, 12.0 * k_in))
         })
         .collect();
     lap("floor plan linework sampled");
-    let fits: std::sync::Mutex<std::collections::HashMap<(i64, i64, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
-    let place = move |p: [f64; 2], level: &str| {
-        place(p, level).or_else(|| {
-            let bg = backgrounds.around(p)?;
-            let key = level_key(level);
-            let id = (bg.min.x.round() as i64, bg.min.y.round() as i64, key.clone());
-            if let Some(f) = fits.lock().ok()?.get(&id) {
-                return *f;
+    // The level views of sheets that print several levels' plans (each its own level's part of
+    // the sheet): their linework, for laying a view onto its level's plan when nothing else does.
+    let level_views: Vec<(String, [f64; 4], Vec<cadaddy_geom::Vec2>)> = {
+        let views: Vec<(String, [f64; 4])> = sp.sheets.iter().filter_map(|l| Some((level_key(l.level.as_deref()?), l.view.as_ref()?.rect))).collect();
+        let mut mine: Vec<Vec<&std::sync::Arc<cadaddy_doc::Entity>>> = vec![Vec::new(); views.len()];
+        if !views.is_empty() {
+            for e in super::bspec::plan_objects(d) {
+                if let Some(c) = super::bspec::centre(d, e)
+                    && let Some(i) = views.iter().position(|(_, r)| inside(r, [c.x, c.y]))
+                {
+                    mine[i].push(e);
+                }
             }
-            let tgt = plan_lines.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
-            let started = web_time::Instant::now();
-            let fit = super::grids::linework_fit(&backgrounds.points_in(&bg), tgt, k_in);
-            progress_line(&format!("  placer: a view's background fitted in {:.1} s", started.elapsed().as_secs_f64()));
-            if let Some((s, _, score, margin)) = fit {
-                progress_line(&format!("  background view at {:?} onto level {level}: scale {s:.3}, {:.0}% on the plan, {:.0} points over the next best", [bg.min.x.round(), bg.min.y.round()], score * 100.0, margin * 100.0));
-            }
-            // 90% of both ways, and 3 points over the best placement 10' or more away: a floor of
-            // repeating bays one bay over scores close behind (only its ends differ).
-            let got = fit.filter(|f| f.2 >= 0.9 && f.3 >= 0.03).map(|(s, t, _, _)| cadaddy_mepfix::tagid::Sim::scale_offset(s, [t.x, t.y]));
-            fits.lock().ok()?.insert(id, got);
-            got
-        })
+        }
+        // Its plan: the biggest block of its lines (a legend, notes and the title stand apart).
+        views
+            .into_iter()
+            .zip(mine)
+            .map(|((k, r), es)| (k, r, super::grids::largest_block(&super::grids::line_samples(&es, 12.0 * k_in), 48.0 * k_in)))
+            .collect()
     };
-    move |p: [f64; 2], level: &str| {
-        let m = place(p, level)?;
-        let q = m.apply(p);
+    lap("level views sampled");
+    let view_fits: std::sync::Mutex<std::collections::HashMap<usize, Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
+    let plan_lines_v = plan_lines.clone();
+    let fits: std::sync::Mutex<std::collections::HashMap<(i64, i64, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
+    let place = move |p: [f64; 2], level: &str, lands: &dyn Fn(&cadaddy_mepfix::tagid::Sim) -> bool| {
+        place(p, level)
+            .filter(|m| lands(m))
+            .or_else(|| {
+                let bg = backgrounds.around(p)?;
+                let key = level_key(level);
+                let id = (bg.min.x.round() as i64, bg.min.y.round() as i64, key.clone());
+                if let Some(f) = fits.lock().ok()?.get(&id) {
+                    return f.filter(|m| lands(m));
+                }
+                let tgt = plan_lines.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
+                let started = web_time::Instant::now();
+                let pts = backgrounds.points_in(&bg);
+                // A whole floor's background at any scale; else a part of one (an enlarged view of
+                // a few rooms) at its sheet's scale.
+                let fit = super::grids::linework_fit(&pts, tgt, k_in)
+                    .filter(|f| f.2 >= 0.9 && f.3 >= 0.03)
+                    .or_else(|| part_of_plan(&pts, tgt).then(|| super::grids::linework_fit_part(&pts, tgt, k_in, 0.95, 1.05)).flatten());
+                progress_line(&format!("  placer: a view's background fitted in {:.1} s", started.elapsed().as_secs_f64()));
+                if let Some((s, _, score, margin)) = fit {
+                    progress_line(&format!(
+                        "  background view at {:?} onto level {level}: scale {s:.3}, {:.0}% on the plan, {:.0} points over the next best",
+                        [bg.min.x.round(), bg.min.y.round()],
+                        score * 100.0,
+                        margin * 100.0
+                    ));
+                }
+                // 90% of both ways, and 3 points over the best placement 10' or more away: a floor of
+                // repeating bays one bay over scores close behind (only its ends differ).
+                let part = part_of_plan(&pts, tgt);
+                // A part of the floor fitted a few percent off one to one: its sampling's error (a
+                // few rooms can't tell 3% apart), so one to one about the view's middle.
+                let mid = pts.iter().fold(cadaddy_geom::Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / pts.len().max(1) as f64);
+                let got = fit.filter(|f| (f.2 >= 0.9 || (f.2 >= LEVEL_VIEW_F1 && part)) && f.3 >= 0.03).map(|(s, t, _, _)| {
+                    let (s, t) = if part && (s - 1.0).abs() < 0.05 { (1.0, t + mid * (s - 1.0)) } else { (s, t) };
+                    cadaddy_mepfix::tagid::Sim::scale_offset(s, [t.x, t.y])
+                });
+                fits.lock().ok()?.insert(id, got);
+                got.filter(|m| lands(m))
+            })
+            .or_else(|| {
+                // A level's view on a sheet of several levels' plans: its whole linework laid on the
+                // level's plan.
+                let key = level_key(level);
+                let i = level_views.iter().position(|(k, r, _)| *k == key && inside(r, p))?;
+                if let Some(f) = view_fits.lock().ok()?.get(&i) {
+                    return f.filter(|m| lands(m));
+                }
+                let tgt = plan_lines_v.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
+                // Sheets are imported at their printed scales: a level's view lies on its plan one to
+                // one (another scale is another drawing that happens to share lines with it).
+                let fit = super::grids::linework_fit_within(&level_views[i].2, tgt, k_in, 0.97, 1.03).or_else(|| {
+                    // An enlarged view of a part of the floor (a few guest rooms) lies on its part.
+                    part_of_plan(&level_views[i].2, tgt).then(|| super::grids::linework_fit_part(&level_views[i].2, tgt, k_in, 0.97, 1.03)).flatten()
+                });
+                if fit.is_none() {
+                    progress_line(&format!(
+                        "  level view {:?} onto level {level}: no fit ({} view points, {} plan points)",
+                        level_views[i].1.map(f64::round),
+                        level_views[i].2.len(),
+                        tgt.len()
+                    ));
+                }
+                if let Some((sc, t, score, margin)) = fit {
+                    progress_line(&format!(
+                        "  level view {:?} onto level {level}: scale {sc:.3}, offset {:?}, {:.0}% on the plan, {:.0} points over the next best",
+                        level_views[i].1.map(f64::round),
+                        [t.x.round(), t.y.round()],
+                        score * 100.0,
+                        margin * 100.0
+                    ));
+                }
+                // A fit a few percent off one to one is its sampling's error (lengths would shrink with
+                // it): one to one, about the view's middle.
+                let pts = &level_views[i].2;
+                let mid = pts.iter().fold(cadaddy_geom::Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / pts.len().max(1) as f64);
+                let got = fit.filter(|f| f.2 >= LEVEL_VIEW_F1 && f.3 >= 0.03).map(|(s, t, _, _)| {
+                    let (s, t) = if (s - 1.0).abs() < 0.03 { (1.0, t + mid * (s - 1.0)) } else { (s, t) };
+                    cadaddy_mepfix::tagid::Sim::scale_offset(s, [t.x, t.y])
+                });
+                view_fits.lock().ok()?.insert(i, got);
+                got.filter(|m| lands(m))
+            })
+    };
+    // Architecture is the rule, the building's shell first: a placed point lands inside its
+    // level's shell (within reach of its walls: a wall pack, a condenser by the wall), else
+    // (a level with no shell: the roof) on its level's plan.
+    let shells: Vec<(String, Vec<[cadaddy_geom::Vec2; 2]>)> = shells.iter().map(|(l, r)| (level_key(l), r.clone())).collect();
+    let reach = SHELL_REACH_FT * upf;
+    // Each way of placing it is tried in turn until one lands there (a tag fit that puts a
+    // second level's view of the sheet off the building leaves it to the view's own fit).
+    let placed = move |p: [f64; 2], level: &str| {
         let key = level_key(level);
-        let on = regions.iter().filter(|(k, _)| *k == key).any(|(_, r)| inside(r, q));
-        (on || regions.iter().all(|(k, _)| *k != key)).then_some(m)
+        let lands = |m: &cadaddy_mepfix::tagid::Sim| {
+            let q = m.apply(p);
+            if let Some((_, rects)) = shells.iter().find(|(k, _)| *k == key) {
+                return rects.iter().any(|[a, b]| q[0] >= a.x - reach && q[0] <= b.x + reach && q[1] >= a.y - reach && q[1] <= b.y + reach);
+            }
+            regions.iter().filter(|(k, _)| *k == key).any(|(_, r)| inside(r, q)) || regions.iter().all(|(k, _)| *k != key)
+        };
+        place(p, level, &lands)
+    };
+    // A point is placed once: the build asks again (to place it, to say why not, to stamp).
+    let memo: std::sync::Mutex<std::collections::HashMap<(u64, u64, String), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
+    move |p: [f64; 2], level: &str| {
+        let id = (p[0].to_bits(), p[1].to_bits(), level.to_string());
+        if let Some(m) = memo.lock().ok().and_then(|c| c.get(&id).copied()) {
+            return m;
+        }
+        let m = placed(p, level);
+        if let Ok(mut c) = memo.lock()
+            && c.len() < MAX_PLACER_MEMO
+        {
+            c.insert(id, m);
+        }
+        m
     }
 }
+
+/// Whether linework `view` is a part of a floor next to `plan` (an enlarged view of a few
+/// rooms): its longer side under half the plan's.
+fn part_of_plan(view: &[cadaddy_geom::Vec2], plan: &[cadaddy_geom::Vec2]) -> bool {
+    let (v, p) = (cadaddy_geom::Bounds2::from_points(view.iter().copied()), cadaddy_geom::Bounds2::from_points(plan.iter().copied()));
+    !v.is_empty() && !p.is_empty() && v.width().max(v.height()) < 0.5 * p.width().max(p.height())
+}
+
+/// Points a job's placer remembers at most.
+const MAX_PLACER_MEMO: usize = 500_000;
+
+/// Each storey's shell ([`super::wallgen::shells`]) the rooms stage's rooms confirm: one holding
+/// fewer than [`SHELL_ROOMS`] of its level's rooms is walls the plan didn't close round the
+/// building (a part of it), no shell. And the corridors, stairs and hoistways traced inside the
+/// shells. With a progress line per level.
+fn building_shells(
+    s: &Session,
+    sp: &cadaddy_walk3d::BuildingSpec,
+    job: &GuidedJob,
+) -> (Vec<(String, Vec<[cadaddy_geom::Vec2; 2]>)>, Vec<cadaddy_walk3d::Circulation>) {
+    let Ok(d) = s.doc() else { return (Vec::new(), Vec::new()) };
+    let started = web_time::Instant::now();
+    let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let rooms: Vec<(String, [f64; 2])> = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("rooms"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| r.get("other_trade").and_then(Value::as_bool) != Some(true))
+        .filter_map(|r| Some((key(r.get("level")?.as_str()?), [r.get("at")?.get(0)?.as_f64()?, r.get("at")?.get(1)?.as_f64()?])))
+        .collect();
+    let storeys = super::wallgen::shells(d, sp);
+    let mut untrusted = Vec::new();
+    let mut circulation = Vec::new();
+    let mut missed = Vec::new();
+    let mut shells = Vec::new();
+    for storey in storeys {
+        let (l, rects) = (&storey.level, &storey.shell);
+        // The level's rooms on its own plan (the rooms stage also reads its other sheets: a
+        // schedule's cells, an elevation's notes).
+        let region = sp.levels.iter().find(|x| x.name.eq_ignore_ascii_case(l)).and_then(|x| x.region);
+        let on_plan = |at: &[f64; 2]| {
+            region.is_some_and(|r| at[0] >= r[0].min(r[2]) && at[0] <= r[0].max(r[2]) && at[1] >= r[1].min(r[3]) && at[1] <= r[1].max(r[3]))
+        };
+        let mine: Vec<[f64; 2]> = rooms.iter().filter(|(k, at)| !k.is_empty() && *k == key(l) && on_plan(at)).map(|(_, at)| *at).collect();
+        let (ok, held) = shell_holds_rooms(rects, &mine);
+        if !ok {
+            untrusted.push(format!("{l} (holds {held} of {} rooms)", mine.len()));
+            continue;
+        }
+        circulation.extend(storey.circulation);
+        if !storey.missed.is_empty() {
+            missed.push(format!("{} {}", storey.level, storey.missed.join(", ")));
+        }
+        shells.push((storey.level, storey.shell));
+    }
+    if !untrusted.is_empty() {
+        progress_line(&format!("  building shell not used (the walls don't close round the building): {}", untrusted.join(", ")));
+    }
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let each: Vec<String> =
+        shells.iter().map(|(l, r)| format!("{l} {:.0} sf", r.iter().map(|[a, b]| (b.x - a.x) * (b.y - a.y)).sum::<f64>() / (upf * upf))).collect();
+    progress_line(&format!("  building shell (exterior walls) in {:.1} s: {}", started.elapsed().as_secs_f64(), each.join(", ")));
+    let each: Vec<String> = circulation
+        .iter()
+        .map(|c| {
+            let b = c.rects.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |m, [a, z]| {
+                [m[0].min(a[0]), m[1].min(a[1]), m[2].max(z[0]), m[3].max(z[1])]
+            });
+            format!("{} {:?} '{}' {:.0} sf {:?}", c.level, c.kind, c.name, c.area() / (upf * upf), b.map(|v| v.round()))
+        })
+        .collect();
+    progress_line(&format!("  circulation (corridors, stairs, hoistways) traced: {}: {}", circulation.len(), each.join("; ")));
+    if !missed.is_empty() {
+        progress_line(&format!("  circulation labels not traced: {}", missed.join("; ")));
+    }
+    (shells, circulation)
+}
+
+/// Removes the room elements whose middle is outside their level's shell (the levels stacked:
+/// back to the level's own plan first); how many.
+fn drop_rooms_outside_shell(s: &mut Session, shells: &[(String, Vec<[cadaddy_geom::Vec2; 2]>)]) -> Result<usize> {
+    if shells.is_empty() {
+        return Ok(0);
+    }
+    let d = s.doc()?;
+    let offsets = super::bimlook::stack_offsets(d);
+    let gone: Vec<cadaddy_doc::Handle> = super::bspec::room_elements(d)
+        .iter()
+        .filter(|r| {
+            let Some((_, rects)) = shells.iter().find(|(l, _)| l.eq_ignore_ascii_case(&r.level)) else { return false };
+            let b = cadaddy_geom::Bounds2::from_points(r.outline.iter().copied());
+            if b.is_empty() {
+                return false;
+            }
+            let off = offsets.iter().find(|(l, _)| l.eq_ignore_ascii_case(&r.level)).map_or(cadaddy_geom::Vec2::new(0.0, 0.0), |o| o.1);
+            let c = b.center() - off;
+            !rects.iter().any(|[a, z]| c.x >= a.x && c.x <= z.x && c.y >= a.y && c.y <= z.y)
+        })
+        .map(|r| r.handle)
+        .collect();
+    for h in &gone {
+        s.doc_mut()?.remove_entity(*h);
+    }
+    Ok(gone.len())
+}
+
+/// A ceiling height tag of a reflected ceiling plan, feet: `8' - 0"`, `7'-6" A.F.F.`, `8'-6" AFF`,
+/// between 6'-6" and 20' and nothing else in the text. Not a stair's `7'-6" ABOVE LANDING` (its
+/// height is from the landing) or a dimension's note.
+fn ceiling_height_tag(t: &str) -> Option<f64> {
+    let u = t.trim().to_ascii_uppercase();
+    if u.contains("ABOVE") {
+        return None;
+    }
+    let core = u.trim_end_matches("A.F.F.").trim_end_matches("AFF").trim();
+    if core.chars().any(|c| !(c.is_ascii_digit() || " '\"-/.".contains(c))) || !core.contains('\'') {
+        return None;
+    }
+    let ft = super::perceive::feet_inches(core)? / 12.0;
+    (6.5..=20.0).contains(&ft).then_some(ft)
+}
+
+/// A shell strip narrower than this is a sliver (a wall's thickness), feet.
+const SHELL_SLIVER_FT: f64 = 2.0;
+
+/// Rooms two storeys must share for one to be lined up on the other.
+const MIN_REGISTER_ROOMS: usize = 10;
+/// The most a storey is moved onto the one under it, feet (more is a different floor, not a
+/// sheet drawn off).
+const MAX_REGISTER_FT: f64 = 3.0;
+
+/// B4-016: each storey with a base, from the second up, lined up on the storey under it by the
+/// room numbers both print (`312` over `212`: the same room the floor below has, same number
+/// after the level's digit): the middle of the paired rooms' shifts, where at least
+/// [`MIN_REGISTER_ROOMS`] pair up and most of them agree within a foot, of at most
+/// [`MAX_REGISTER_FT`]. The levels moved (and by how much), and why the others weren't.
+fn register_storeys_by_rooms(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::BuildingSpec) -> (Vec<String>, Vec<String>) {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let numbers = super::identity::number_texts(d);
+    let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0].min(r[2]) && p[0] <= r[0].max(r[2]) && p[1] >= r[1].min(r[3]) && p[1] <= r[1].max(r[3]);
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    // A level's rooms by their number after its digit (`12` for `312` on Level 3).
+    let rooms = |region: &[f64; 4], code: &str| -> Vec<(String, [f64; 2])> {
+        numbers
+            .iter()
+            .filter(|(k, at)| k.len() >= 3 && k.starts_with(code) && inside(region, *at))
+            .map(|(k, at)| (k[code.len()..].to_string(), *at))
+            .collect()
+    };
+    let median = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v.get(v.len() / 2).copied().unwrap_or(0.0)
+    };
+    let mut floors: Vec<usize> = (0..sp.levels.len())
+        .filter(|i| {
+            let l = &sp.levels[*i];
+            l.sheet.is_none()
+                && l.region.is_some()
+                && l.base.is_some()
+                && digits(&l.name).len() == 1
+                && !super::wallgen::roof_level(&sp.levels, &l.name)
+        })
+        .collect();
+    floors.sort_by(|a, b| sp.levels[*a].elevation_ft.total_cmp(&sp.levels[*b].elevation_ft));
+    let (mut out, mut not) = (Vec::new(), Vec::new());
+    for w in floors.windows(2) {
+        let (lo, hi) = (&sp.levels[w[0]], &sp.levels[w[1]]);
+        let (Some(rlo), Some(rhi), Some(blo), Some(bhi)) = (lo.region, hi.region, lo.base, hi.base) else { continue };
+        let (mine, theirs) = (rooms(&rhi, &digits(&hi.name)), rooms(&rlo, &digits(&lo.name)));
+        let (name, below) = (hi.name.clone(), lo.name.clone());
+        // The rooms both print, paired by the fit (its scale near 1; a pair is the places nearest
+        // each other after it).
+        let Some(fit) = cadaddy_mepfix::tagid::fit_by_tags(&mine, &theirs, 2.0 * upf, (0.98, 1.02)) else {
+            not.push(format!("{name} onto {below}: no fit ({} and {} room numbers)", mine.len(), theirs.len()));
+            continue;
+        };
+        let mut pairs: Vec<[f64; 2]> = Vec::new();
+        for k in &fit.matched {
+            let best =
+                mine.iter().filter(|(m, _)| m == k).flat_map(|(_, a)| theirs.iter().filter(|(t, _)| t == k).map(move |(_, b)| (*a, *b))).min_by(
+                    |x, y| {
+                        let dist = |(a, b): &([f64; 2], [f64; 2])| {
+                            let q = fit.sim.apply(*a);
+                            (q[0] - b[0]).hypot(q[1] - b[1])
+                        };
+                        dist(x).total_cmp(&dist(y))
+                    },
+                );
+            if let Some((a, b)) = best {
+                pairs.push([b[0] - a[0], b[1] - a[1]]);
+            }
+        }
+        // A plain shift: the middle of the pairs' shifts, most of them within a foot of it.
+        let t = [median(pairs.iter().map(|p| p[0]).collect()), median(pairs.iter().map(|p| p[1]).collect())];
+        let agree = pairs.iter().filter(|p| (p[0] - t[0]).hypot(p[1] - t[1]) <= upf).count();
+        if pairs.len() < MIN_REGISTER_ROOMS || (agree as f64) < 0.7 * pairs.len() as f64 {
+            not.push(format!("{name} onto {below}: {} rooms paired, {agree} agree on a shift", pairs.len()));
+            continue;
+        }
+        // Same room, same place in the building: p_hi - base_hi = p_lo - base_lo.
+        let base = [blo[0] - t[0], blo[1] - t[1]];
+        let moved = (base[0] - bhi[0]).hypot(base[1] - bhi[1]) / upf;
+        if moved > MAX_REGISTER_FT {
+            not.push(format!("{name} onto {below}: {moved:.1}' off, more than {MAX_REGISTER_FT}' (another floor plan)"));
+            continue;
+        }
+        if moved <= 0.05 {
+            continue;
+        }
+        let (dx, dy) = ((base[0] - bhi[0]) / upf, (base[1] - bhi[1]) / upf);
+        sp.levels[w[1]].base = Some(base);
+        out.push(format!("{name} by ({dx:.2}', {dy:.2}') onto {below} ({agree} of {} rooms)", pairs.len()));
+    }
+    (out, not)
+}
+
+/// How far under the next floor a ceiling is at most (the slab and a plenum's least), feet.
+const CEILING_UNDER_FLOOR_FT: f64 = 0.5;
+
+/// The ceiling areas the reflected ceiling plans' views give (a view titled REFLECTED CEILING or
+/// RCP, its levels from its title: `SECOND-FOURTH FLOOR` is levels 2 to 4): each view registered
+/// onto its level's floor plan by the room numbers both print (a typical floor's view by its
+/// numbers with that floor's digit), each height tag's area the floor around it on the level's
+/// floor grid (or the corridor, stair or hoistway it is on), at that height. And what was read.
+fn rcp_ceiling_areas(
+    d: &cadaddy_doc::Drawing,
+    sp: &cadaddy_walk3d::BuildingSpec,
+    sheets: &[[f64; 4]],
+) -> (Vec<cadaddy_walk3d::CeilingArea>, Vec<String>) {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let texts = cadaddy_mepfix::sheet_facts::texts(d);
+    let views = cadaddy_mepfix::sheet_facts::view_titles(d, &texts);
+    let numbers = super::identity::number_texts(d);
+    let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0].min(r[2]) && p[0] <= r[0].max(r[2]) && p[1] >= r[1].min(r[3]) && p[1] <= r[1].max(r[3]);
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let mut out: Vec<cadaddy_walk3d::CeilingArea> = Vec::new();
+    let mut report = Vec::new();
+    let mut floors: BTreeMap<String, Option<super::wallgen::Floors>> = BTreeMap::new();
+    let is_rcp = |title: &str| {
+        let t = title.to_ascii_uppercase();
+        t.contains("REFLECTED CEILING") || t.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP")
+    };
+    let rcp_views: Vec<&cadaddy_mepfix::sheet_facts::ViewTitle> = views.iter().take(200).filter(|v| v.region.is_some() && is_rcp(&v.title)).collect();
+    // A point's view: of the views whose block holds it, the one whose title is nearest under it
+    // (a sheet of two stacked RCPs gives both the whole sheet as their block).
+    let owner = |p: [f64; 2]| -> Option<usize> {
+        rcp_views
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.region.is_some_and(|r| inside(&r, p)) && v.at[1] < p[1])
+            .min_by(|a, b| (p[1] - a.1.at[1]).total_cmp(&(p[1] - b.1.at[1])))
+            .map(|(i, _)| i)
+    };
+    for (vi, v) in rcp_views.iter().enumerate() {
+        let Some(region) = v.region else { continue };
+        let levels = cadaddy_mepfix::sheet_reader::detect_levels(&v.title);
+        // On the ceiling plan's own sheet (a view's block can take in the sheets laid beside it).
+        let on_sheet = |p: [f64; 2]| sheets.is_empty() || sheets.iter().any(|r| inside(r, p));
+        let mine_only = |p: [f64; 2]| inside(&region, p) && on_sheet(p) && owner(p).is_none_or(|o| o == vi);
+        let tags: Vec<(String, [f64; 2])> = numbers.iter().filter(|(_, at)| mine_only(*at)).cloned().collect();
+        let heights: Vec<([f64; 2], f64)> =
+            texts.iter().filter(|x| mine_only([x.at.x, x.at.y])).filter_map(|x| Some(([x.at.x, x.at.y], ceiling_height_tag(&x.value)?))).collect();
+        for code in &levels {
+            let Some(level) = sp.levels.iter().find(|l| digits(&l.name) == *code && l.sheet.is_none()) else { continue };
+            let Some(plan) = level.region else { continue };
+            // The view's room numbers as this floor prints them.
+            let mine: Vec<(String, [f64; 2])> = tags
+                .iter()
+                .map(|(k, at)| {
+                    let swapped = if k.len() >= 3 && k.chars().next().is_some_and(|c| c.is_ascii_digit()) && code.len() == 1 {
+                        format!("{code}{}", &k[1..])
+                    } else {
+                        k.clone()
+                    };
+                    (swapped, *at)
+                })
+                .collect();
+            let theirs: Vec<(String, [f64; 2])> = numbers.iter().filter(|(_, at)| inside(&plan, *at)).cloned().collect();
+            let Some(fit) = cadaddy_mepfix::tagid::fit_by_tags(&mine, &theirs, 2.0 * upf, (0.9, 1.1)).filter(|f| f.matched.len() >= 4) else {
+                report.push(format!("{} on {}: not registered (room numbers don't match the floor plan)", v.title, level.name));
+                continue;
+            };
+            let grid = floors.entry(level.name.clone()).or_insert_with(|| super::wallgen::room_floors(d, sp, &level.name));
+            let mut found = 0usize;
+            // Where the other tags went: off the plan, in no room or corridor, in an area set.
+            let (mut off, mut neither, mut again, mut above) = (0usize, 0usize, 0usize, 0usize);
+            let mut landed = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+            for (at, ft) in &heights {
+                let q = fit.sim.apply(*at);
+                landed = [landed[0].min(q[0]), landed[1].min(q[1]), landed[2].max(q[0]), landed[3].max(q[1])];
+                if !inside(&plan, q) {
+                    off += 1;
+                    continue;
+                }
+                // A ceiling at or over the next floor (less its slab) is none this storey can
+                // have: a misread tag, or another level's.
+                if level.height_ft.is_finite() && level.height_ft > 0.0 && *ft > level.height_ft - CEILING_UNDER_FLOOR_FT {
+                    above += 1;
+                    continue;
+                }
+                let p = cadaddy_geom::Vec2::new(q[0], q[1]);
+                // The floor area round the tag, and its room: the circulation space's name, else the
+                // room number printed inside it.
+                let (rects, mut room): (Option<Vec<[[f64; 2]; 2]>>, Option<String>) = match grid.as_mut().map(|g| g.room_at(p)) {
+                    Some(Ok((_, rects))) => (Some(rects.iter().map(|[a, b]| [[a.x, a.y], [b.x, b.y]]).collect()), None),
+                    _ => sp
+                        .circulation
+                        .iter()
+                        .find(|c| c.level.eq_ignore_ascii_case(&level.name) && c.holds(q))
+                        .map_or((None, None), |c| (Some(c.rects.clone()), Some(c.name.clone()))),
+                };
+                let Some(rects) = rects else {
+                    neither += 1;
+                    continue;
+                };
+                let outline = cadaddy_walk3d::Circulation { rects, ..Default::default() }.outline();
+                if outline.len() < 3 {
+                    neither += 1;
+                    continue;
+                }
+                // A second tag in an area already set: the first stands.
+                if out.iter().any(|c| {
+                    c.level == level.name
+                        && cadaddy_geom::point_in_polygon(&c.outline.iter().map(|p| cadaddy_geom::Vec2::new(p[0], p[1])).collect::<Vec<_>>(), p)
+                }) {
+                    again += 1;
+                    continue;
+                }
+                if room.is_none() {
+                    let poly: Vec<cadaddy_geom::Vec2> = outline.iter().map(|p| cadaddy_geom::Vec2::new(p[0], p[1])).collect();
+                    room = numbers
+                        .iter()
+                        .find(|(_, at)| inside(&plan, *at) && cadaddy_geom::point_in_polygon(&poly, cadaddy_geom::Vec2::new(at[0], at[1])))
+                        .map(|(n, _)| n.clone());
+                }
+                out.push(cadaddy_walk3d::CeilingArea {
+                    level: level.name.clone(),
+                    room,
+                    outline,
+                    height_ft: *ft,
+                    grid: None,
+                    ceiling_type: None,
+                    guess: None,
+                });
+                found += 1;
+            }
+            // Tags off the plan: where the fit put them, against the plan, to see why.
+            let why = if off > 0 {
+                let r = |v: f64| v.round();
+                format!(
+                    " [fit scale {:.3}, shift ({}, {}); plan [{}, {}, {}, {}]; tags landed [{}, {}, {}, {}]]",
+                    fit.sim.a.hypot(fit.sim.b),
+                    r(fit.sim.tx),
+                    r(fit.sim.ty),
+                    r(plan[0]),
+                    r(plan[1]),
+                    r(plan[2]),
+                    r(plan[3]),
+                    r(landed[0]),
+                    r(landed[1]),
+                    r(landed[2]),
+                    r(landed[3])
+                )
+            } else {
+                String::new()
+            };
+            report.push(format!(
+                "{} on {}: {found} ceiling areas from {} height tags ({} room numbers matched; {again} more in an area already set, {neither} in no room or corridor, {off} off the plan, {above} at or over the next floor){why}",
+                v.title,
+                level.name,
+                heights.len(),
+                fit.matched.len()
+            ));
+        }
+    }
+    (out, report)
+}
+
+/// How far outside its storey's shell (feet) a run, terminal, piece of equipment or device may
+/// land and still be in the building.
+const OUTSIDE_SHELL_FT: f64 = 5.0;
+
+/// Whether `p` lands more than [`OUTSIDE_SHELL_FT`] outside its level's shell (by the level's
+/// digits). A level with no shell: never.
+fn outside_shell(shells: &[(String, Vec<[cadaddy_geom::Vec2; 2]>)], level: &str, p: [f64; 2], upf: f64) -> bool {
+    let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let k = key(level);
+    let m = OUTSIDE_SHELL_FT * upf;
+    let mut mine = shells.iter().filter(|(l, r)| !k.is_empty() && key(l) == k && !r.is_empty()).peekable();
+    mine.peek().is_some()
+        && !mine.any(|(_, rects)| {
+            rects.iter().any(|[a, b]| p[0] >= a.x.min(b.x) - m && p[0] <= a.x.max(b.x) + m && p[1] >= a.y.min(b.y) - m && p[1] <= a.y.max(b.y) + m)
+        })
+}
+
+/// A sheet title naming a wall type (partition) legend: `WALL AND FLOOR TYPES`, `PARTITION TYPES`.
+fn wall_legend_title(title: &str) -> bool {
+    let t = title.to_ascii_uppercase();
+    t.contains("PARTITION") || (t.contains("WALL") && t.contains("TYPE"))
+}
+
+/// The partition legend sheets' wall types into the spec, and the walls each level's plan tags
+/// type with them (a tag that is a legend mark types the wall nearest it and the walls on its
+/// line): how every wall is built, so a box on it gets its mud ring. What was read.
+fn apply_wall_legend(s: &Session, sp: &mut cadaddy_walk3d::BuildingSpec, job: &GuidedJob) -> Result<Vec<String>> {
+    let d = s.doc()?;
+    let mut report = Vec::new();
+    let mut types: Vec<cadaddy_walk3d::WallType> = Vec::new();
+    for r in job.sheet_regions.iter().filter(|r| r.kind == "legend") {
+        let lg = super::walltypes::read_legend(d, Some(r.rect), &r.number);
+        report.push(format!(
+            "{}: {} wall types{}",
+            r.number,
+            lg.types.len(),
+            if lg.report.is_empty() { String::new() } else { format!(" ({})", lg.report.join("; ")) }
+        ));
+        for t in lg.types {
+            if !types.iter().any(|x| x.name.eq_ignore_ascii_case(&t.name)) {
+                types.push(t);
+            }
+        }
+    }
+    // A type the spec refuses (a layer it can't hold) is left out and said: one legend entry
+    // never stops the build.
+    let refused: Vec<String> = types
+        .iter()
+        .filter(|t| {
+            let alone = cadaddy_walk3d::BuildingSpec { wall_types: vec![(*t).clone()], ..Default::default() };
+            alone.check().iter().any(|i| i.error)
+        })
+        .map(|t| t.name.clone())
+        .collect();
+    if !refused.is_empty() {
+        report.push(format!("not used (the spec can't hold them): {}", refused.join(", ")));
+        types.retain(|t| !refused.contains(&t.name));
+    }
+    if types.is_empty() {
+        return Ok(report);
+    }
+    sp.wall_types.retain(|w| !types.iter().any(|t| t.name.eq_ignore_ascii_case(&w.name)));
+    sp.wall_types.extend(types.iter().cloned());
+    let marks: BTreeSet<String> = types.iter().map(|t| t.name.to_ascii_uppercase()).collect();
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let texts = cadaddy_mepfix::sheet_facts::texts(d);
+    let inside =
+        |r: &[f64; 4], p: cadaddy_geom::Vec2| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]);
+    let levels: Vec<(String, [f64; 4])> = sp
+        .levels
+        .iter()
+        .filter(|l| l.sheet.is_none() && !super::wallgen::roof_level(&sp.levels, &l.name))
+        .filter_map(|l| Some((l.name.clone(), l.region?)))
+        .collect();
+    // The unit plans' tags, put into every room of their type.
+    let stamped = typical_wall_tags(d, job, &marks);
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let mut typed = Vec::new();
+    for (level, region) in levels {
+        let mut tags: Vec<(String, cadaddy_geom::Vec2)> = texts
+            .iter()
+            .filter(|t| inside(&region, t.at))
+            .filter_map(|t| {
+                let v = t.value.trim().to_ascii_uppercase();
+                marks.contains(&v).then_some((v, t.at))
+            })
+            .collect();
+        let own = tags.len();
+        tags.extend(stamped.get(&digits(&level)).into_iter().flatten().cloned());
+        if tags.is_empty() {
+            continue;
+        }
+        let walls = super::wallgen::planned_walls(d, sp, &level);
+        let sheet = job
+            .sheet_regions
+            .iter()
+            .find(|r| r.kind == "plan" && r.rect.iter().zip(region).all(|(a, b)| (a - b).abs() < 1e-6 * upf.max(1.0)))
+            .map_or_else(|| format!("{level} plan"), |r| r.number.clone());
+        let (new, lost) = super::walltypes::plan_marks(&tags, &walls, &level, upf, &sheet);
+        // The walls no tag reached: the type the tagged walls of their thickness carry (a guess).
+        let guessed = super::walltypes::guess_marks(&walls, &new, &level, upf, &sheet);
+        typed.push(format!(
+            "{level} {} walls from {own} plan tags + {} unit-plan tags, {} more guessed by thickness{}",
+            new.len(),
+            tags.len() - own,
+            guessed.len(),
+            if lost > 0 { format!(" ({lost} tags near no wall)") } else { String::new() }
+        ));
+        sp.walls.retain(|m| !m.level.eq_ignore_ascii_case(&level));
+        sp.walls.extend(new);
+        sp.walls.extend(guessed);
+    }
+    report.push(format!("walls typed by the plans' tags: {}", if typed.is_empty() { "none".to_string() } else { typed.join(", ") }));
+    Ok(report)
+}
+
+/// How far inside a hoistway's walls (feet) a run must pass to go through it: one along the
+/// face of its wall runs beside it.
+const HOISTWAY_CLEAR_FT: f64 = 0.25;
+
+/// The MEP runs (indices) that pass through an elevator hoistway on their level.
+fn runs_through_hoistways(runs: &[cadaddy_walk3d::MepRun], circulation: &[cadaddy_walk3d::Circulation], upf: f64) -> Vec<usize> {
+    runs.iter().enumerate().filter(|(_, r)| hoistway_crossed(r, circulation, upf).is_some()).map(|(i, _)| i).collect()
+}
+
+/// The elevator hoistway of its level (by the level's digits) a run passes through, if any.
+pub(crate) fn hoistway_crossed<'a>(
+    run: &cadaddy_walk3d::MepRun,
+    circulation: &'a [cadaddy_walk3d::Circulation],
+    upf: f64,
+) -> Option<&'a cadaddy_walk3d::Circulation> {
+    let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let inset = HOISTWAY_CLEAR_FT * upf;
+    let level = key(&run.level);
+    circulation.iter().filter(|c| c.kind == cadaddy_walk3d::CirculationKind::Hoistway && !level.is_empty() && key(&c.level) == level).find(|c| {
+        c.rects
+            .iter()
+            .map(|[a, b]| [a[0] + inset, a[1] + inset, b[0] - inset, b[1] - inset])
+            .filter(|r| r[2] > r[0] && r[3] > r[1])
+            .any(|rect| run.points.windows(2).any(|w| crosses_rect(w[0], w[1], &rect)))
+    })
+}
+
+/// Whether the segment a–b runs through the rectangle `[x0, y0, x1, y1]` (Liang–Barsky): some
+/// length of it inside.
+fn crosses_rect(a: [f64; 2], b: [f64; 2], r: &[f64; 4]) -> bool {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for (p, q) in [(-d[0], a[0] - r[0]), (d[0], r[2] - a[0]), (-d[1], a[1] - r[1]), (d[1], r[3] - a[1])] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return false;
+            }
+        } else if p < 0.0 {
+            t0 = t0.max(q / p);
+        } else {
+            t1 = t1.min(q / p);
+        }
+    }
+    t0 < t1
+}
+
+/// The share of its level's rooms a shell must hold to be the building's.
+const SHELL_ROOMS: f64 = 0.8;
+
+/// Whether a shell (rectangles) holds [`SHELL_ROOMS`] of its level's rooms (their label points),
+/// and how many it holds. A level with no rooms read takes its shell as it is.
+fn shell_holds_rooms(rects: &[[cadaddy_geom::Vec2; 2]], rooms: &[[f64; 2]]) -> (bool, usize) {
+    let held = rooms.iter().filter(|at| rects.iter().any(|[a, b]| at[0] >= a.x && at[0] <= b.x && at[1] >= a.y && at[1] <= b.y)).count();
+    (rooms.is_empty() || held as f64 >= SHELL_ROOMS * rooms.len() as f64, held)
+}
+
+/// How far outside its level's shell (feet) a placed point may still be: what is mounted on the
+/// building's outside walls or stands by them.
+const SHELL_REACH_FT: f64 = 5.0;
 pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[SheetRegion]) {
     for r in regions.iter().take(MAX_SHEET_LINKS) {
-        if !r.rect.iter().all(|v| v.is_finite()) {
+        // A ceiling plan or a sheet of details is no level's plan: the sheets are registered onto
+        // the floor plans without it (it prints every room's number, and its level took it for
+        // its reference); the ceilings stage registers it itself.
+        if !r.rect.iter().all(|v| v.is_finite()) || matches!(r.kind.as_str(), "rcp" | "detail" | "legend") {
             continue;
         }
         let level = Some(r.level.trim()).filter(|l| super::printmep::building_level(l)).map(level_name);
@@ -4527,38 +7064,11 @@ pub(crate) fn draft_from_prints(s: &mut Session) -> Result<Value> {
     s.execute("bspec.draft", &params)
 }
 
-/// What [`load_plan_pages`] put in the drawing.
-pub(crate) struct PlanPages {
-    /// The sheets in the set's index (0 when classify read none).
-    pub indexed: usize,
-    /// One per imported page: `{sheet, level, discipline, type}`.
-    pub pages: Vec<Value>,
-    /// The building's levels for `bspec.draft` ([`building_levels`]; empty without
-    /// architectural floor plans).
-    pub levels: Vec<Value>,
-    /// The sheet map of the imported pages, in short ([`super::printset::links_summary`]).
-    pub links: Option<Value>,
-    /// Where each imported sheet sits ([`add_sheet_links`]).
-    pub regions: Vec<SheetRegion>,
-}
-
-/// The guided job's classify → plan pages path, for one-call PDF to BIM (`bim.from_pdf`): the
-/// print set `pdfs` (a folder, or one PDF of any number of pages) is opened and classified, and
-/// its current plan sheets (every page when the set has none) are imported into the current
-/// drawing side by side, exactly as the job's build stage does.
-pub(crate) fn load_plan_pages(s: &mut Session, pdfs: &std::path::Path) -> Result<PlanPages> {
-    s.execute("printset.open", &json!({"path": pdfs.to_string_lossy()}))?;
-    // The sheets' files are named from the set's folder (the PDF's own folder for one file).
-    let dir = if pdfs.is_dir() { pdfs.to_path_buf() } else { pdfs.parent().map(std::path::Path::to_path_buf).unwrap_or_default() };
-    let dir = if dir.as_os_str().is_empty() { std::path::PathBuf::from(".") } else { dir };
-    let mut job = GuidedJob::new(&dir.to_string_lossy(), JobGoal::Bim);
-    run_classify(s, &mut job)?;
-    let indexed = job.index.as_ref().and_then(|i| i.get("sheets")).and_then(Value::as_array).map_or(0, Vec::len);
-    ensure_sheets_loaded(s, &mut job)?;
-    let pages = job.sheet_regions.iter().map(|r| json!({"sheet": r.number, "level": r.level, "discipline": r.discipline, "type": r.kind})).collect();
-    let links = job_links(s, &job).map(|l| super::printset::links_summary(&l));
-    let levels = building_levels(&job);
-    Ok(PlanPages { indexed, pages, levels, links, regions: job.sheet_regions })
+/// The plan sheets the job built from, `{sheet, level, discipline, type}` each (`bim.from_pdf`).
+pub(crate) fn job_plan_pages(s: &Session) -> Vec<Value> {
+    load_job(s).ok().flatten().map_or_else(Vec::new, |job| {
+        job.sheet_regions.iter().map(|r| json!({"sheet": r.number, "level": r.level, "discipline": r.discipline, "type": r.kind})).collect()
+    })
 }
 
 /// Run takeoff stage — calls the model takeoff (by level and trade), not the 2D layer count.
@@ -5154,6 +7664,17 @@ fn level_answer(answer: &Value) -> Option<LevelAnswer> {
 fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, String) {
     let Some(answer) = &q.answer else { return (None, String::new()) };
     let text = answer.as_str().map(str::trim).unwrap_or("");
+    // The levels the drawings didn't give: the levels stage makes them.
+    if q.stage == StageName::Levels && q.question.starts_with("No levels detected") {
+        return match parse_level_list(text) {
+            Some(names) => {
+                let said = names.join(", ");
+                job.levels_given = names;
+                (Some(StageName::Levels), format!("levels {said}"))
+            }
+            None => (None, "recorded; name the levels bottom up, like \"1, 2, 3, R\"".into()),
+        };
+    }
     // A level's elevation or name (or "Correct"), over what the job read.
     if q.stage == StageName::Levels
         && let Some(level) = question_level(q)
@@ -5379,16 +7900,34 @@ fn set_sheet_fact(job: &mut GuidedJob, number: &str, key: &str, value: &str) {
     }
 }
 
-/// Advance the pipeline: run the current stage and generate questions. A finished job's
-/// checkpoint is removed.
+/// Advance the pipeline: run the current stage and generate questions. A finished job's own
+/// checkpoint (in the temporary folder) is removed; one the caller named stays, the finished
+/// model in it.
 fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
+    let _running = Running::start();
+    job.cancelled = None;
     let r = advance_stages(s, job);
     if job.is_done()
+        && !job.checkpoint_given
         && let Some(path) = &job.checkpoint
     {
-        let _ = std::fs::remove_file(path);
+        let _ = crate::writefile::remove(path);
     }
     r
+}
+
+/// Stop the job at `stage` for a cancel: the stage waits (pending) and job.next runs it.
+fn stop_cancelled(s: &mut Session, job: &mut GuidedJob, stage: StageName) {
+    JOB_CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
+    if let Some(st) = job.stage_mut(stage) {
+        st.status = StageStatus::Pending;
+        st.result = None;
+    }
+    job.cancelled = Some(stage);
+    job.audit("job_cancelled", "agent", None, Some(stage), None);
+    let line = format!("job: cancelled at {}; job.next goes on from there", stage.label());
+    report_progress(s, json!({"stage": stage.label(), "step": "cancelled"}), &line);
+    s.echo(line);
 }
 
 fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
@@ -5416,6 +7955,12 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             _ => return Ok(()), // All done or error.
         };
 
+        // A cancel stops the job here, before the stage.
+        if cancel_requested() {
+            stop_cancelled(s, job, stage_name);
+            return Ok(());
+        }
+
         // Apply any learned rules before running the stage.
         apply_rules_for_stage(s, job, stage_name)?;
 
@@ -5435,6 +7980,9 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         if let Ok(d) = s.doc() {
             job.spec_at_start.insert(stage_name, d.building_spec.clone());
         }
+        // What the job held before the stage (a stage a cancel cuts short leaves none of its
+        // findings and questions behind).
+        let held = (job.findings.len(), job.worklist.len());
         let result = match stage_name {
             StageName::Import => run_import(s, job),
             StageName::Classify => run_classify(s, job),
@@ -5451,15 +7999,38 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         if let Some(st) = job.stage_mut(stage_name) {
             st.elapsed_ms = Some(ms);
         }
+        // Cut short by a cancel (classify stops at its next sheet, the sheet import at its next
+        // page): the stage runs again in full when the job goes on. A stage the cancel didn't
+        // cut keeps what it did, and the job stops before the next one.
+        if cancel_requested() && (result.is_err() || stage_name == StageName::Classify) {
+            if let Some(spec) = job.spec_at_start.get(&stage_name).cloned()
+                && let Ok(d) = s.doc_mut()
+            {
+                d.building_spec = spec;
+            }
+            job.findings.truncate(held.0);
+            job.worklist.truncate(held.1);
+            if let Some(st) = job.stage_mut(stage_name) {
+                st.questions.clear();
+                st.verify.clear();
+                st.completeness.clear();
+            }
+            stop_cancelled(s, job, stage_name);
+            return Ok(());
+        }
         let outcome = match &result {
             Ok(_) => "done".to_string(),
             Err(e) => format!("error: {e}"),
         };
-        report_progress(
-            s,
-            json!({"stage": stage_name.label(), "step": "end", "elapsed_ms": ms, "ok": result.is_ok()}),
-            &format!("{tag}: {outcome} in {:.1} s", ms as f64 / 1000.0),
-        );
+        // With the memory the stage left and the peak so far (the stage where the peak jumps).
+        let memory = super::memstat::process_mb();
+        let mut end = json!({"stage": stage_name.label(), "step": "end", "elapsed_ms": ms, "ok": result.is_ok()});
+        if let Some((now, peak)) = memory {
+            end["memory_mb"] = json!(now);
+            end["peak_mb"] = json!(peak);
+        }
+        let memory_text = memory.map_or_else(String::new, |(now, peak)| format!(" (memory {now} MB, peak {peak} MB)"));
+        report_progress(s, end, &format!("{tag}: {outcome} in {:.1} s{memory_text}", ms as f64 / 1000.0));
 
         // Stop (the job pauses or ends in an error) or go on with the next stage.
         let stop = match result {
@@ -5634,10 +8205,29 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
     let mut job = GuidedJob::new(pdfs, goal);
     // Interactive unless asked: the job stops at each checkpoint for an answer.
     job.auto = p.get("auto").and_then(Value::as_bool).unwrap_or(false);
+    job.submittals = match p.get("submittals") {
+        Some(Value::String(one)) if !one.trim().is_empty() => vec![one.trim().to_string()],
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(64).collect(),
+        _ => Vec::new(),
+    };
     // The checkpoint: a path, false (none), else the default in the temporary folder.
     job.checkpoint = match p.get("checkpoint") {
         Some(Value::Bool(false)) => None,
-        Some(Value::String(path)) if !path.trim().is_empty() => Some(path.trim().to_string()),
+        Some(Value::String(path)) if !path.trim().is_empty() => {
+            let path = path.trim().to_string();
+            // The caller's own drawing (or any file that isn't a job's checkpoint) is never
+            // written over or removed.
+            if std::path::Path::new(&path).exists() && !is_job_checkpoint(&path) {
+                return Err(bad(
+                    "job.start",
+                    format!(
+                        "checkpoint {path} is an existing file that is not a job checkpoint: the job would write over it. Give a new path (or a job's checkpoint to resume)"
+                    ),
+                ));
+            }
+            job.checkpoint_given = true;
+            Some(path)
+        }
         _ => default_checkpoint(&job.id),
     };
     job.prints_stamp = prints_stamp(pdfs);
@@ -5654,7 +8244,16 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
             st.status = StageStatus::Pending;
         }
         saved.checkpoint = Some(path.clone());
+        saved.checkpoint_given = job.checkpoint_given;
         saved.auto = job.auto;
+        if !job.submittals.is_empty() {
+            if saved.submittals != job.submittals {
+                saved.submittal_types.clear();
+                saved.luminaire_types.clear();
+                saved.wall_luminaire_types.clear();
+            }
+            saved.submittals = job.submittals.clone();
+        }
         let done: Vec<&str> = saved.stages.iter().filter(|st| st.status == StageStatus::Done).map(|st| st.name.label()).collect();
         let line = format!("job: resumed from {path} ({} stage(s) done: {})", done.len(), done.join(", "));
         let data = json!({"step": "resumed", "checkpoint": path, "stages_done": done});
@@ -5786,6 +8385,7 @@ fn apply_answer(job: &mut GuidedJob, qid: &str, answer: Value) -> std::result::R
     let loc = find_question(job, qid).ok_or_else(|| unknown_question(job, qid))?;
     let question = {
         let Some(q) = question_mut(job, loc) else { return Err(unknown_question(job, qid)) };
+        check_answer(q, &answer)?;
         q.answer = Some(answer.clone());
         q.answered_by = Some("agent".into());
         q.answered_at = Some(now_iso());
@@ -5801,6 +8401,51 @@ fn apply_answer(job: &mut GuidedJob, qid: &str, answer: Value) -> std::result::R
         wi.resolution = Some(answer);
     }
     Ok(Applied { qid: qid.to_string(), stage, rerun_from, effect, question })
+}
+
+/// Whether an answer fits its question: what its `answer_schema` asks for (text, an object with
+/// its fields), never empty; the levels question a list of levels.
+fn check_answer(q: &Question, answer: &Value) -> std::result::Result<(), String> {
+    let id = q.id.as_str();
+    let empty = match answer {
+        Value::String(t) => t.trim().is_empty(),
+        Value::Object(o) => o.is_empty(),
+        Value::Array(a) => a.is_empty(),
+        Value::Null => true,
+        _ => false,
+    };
+    if empty {
+        return Err(format!("question {id}: the answer is empty"));
+    }
+    // One of its choices, or its default, always fits.
+    if answer.as_str().is_some_and(|t| q.default.as_deref() == Some(t.trim()) || q.choices.iter().any(|c| c == t.trim())) {
+        return Ok(());
+    }
+    let want = q.answer_schema.as_ref().and_then(|s| s.get("type")).and_then(Value::as_str);
+    match want {
+        Some("string") if !answer.is_string() => return Err(format!("question {id}: the answer must be text ({answer} given)")),
+        // An object with its fields, or text naming it.
+        Some("object") if !answer.is_string() => {
+            let Some(o) = answer.as_object() else { return Err(format!("question {id}: the answer must be an object or text ({answer} given)")) };
+            let props = q.answer_schema.as_ref().and_then(|s| s.get("properties")).and_then(Value::as_object);
+            if let Some(props) = props {
+                if !o.keys().any(|k| props.contains_key(k)) {
+                    let names: Vec<&String> = props.keys().collect();
+                    return Err(format!("question {id}: the answer names none of {names:?}"));
+                }
+                for (k, v) in o {
+                    if props.get(k).and_then(|p| p.get("type")).and_then(Value::as_str) == Some("string") && !v.is_string() {
+                        return Err(format!("question {id}: `{k}` must be text"));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    if q.stage == StageName::Levels && q.question.starts_with("No levels detected") && answer.as_str().and_then(parse_level_list).is_none() {
+        return Err(format!("question {id}: name the levels bottom up, like \"1, 2, 3, R\""));
+    }
+    Ok(())
 }
 
 /// Run `from` and the stages after it that already ran again (the answers changed what they
@@ -5881,6 +8526,13 @@ fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(a) => applied.push(a),
             Err(w) => warnings.push(json!({"id": qid, "warning": w})),
         }
+    }
+    // Not one answer taken because of an unknown question or an answer that doesn't fit: an
+    // error, the job as it was. (A question no longer open — an earlier answer's re-run dropped
+    // it — stays a warning: a script's later lines still run.)
+    let fatal: Vec<&str> = warnings.iter().filter_map(|w| w["warning"].as_str()).filter(|t| !t.contains("is no longer open")).collect();
+    if applied.is_empty() && !fatal.is_empty() {
+        return Err(bad("job.answer", fatal.join("; ")));
     }
 
     // The answers' re-runs (and one held by an earlier `rerun: false`), as one.
@@ -6168,7 +8820,11 @@ fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
 
 /// Q6021 MUST 3: "done" vs "done_with_warnings".
 fn done_status(job: &GuidedJob, warnings: &[Value]) -> &'static str {
-    if !job.is_done() {
+    if job.stages.iter().any(|st| st.status == StageStatus::Error) {
+        "error"
+    } else if job.cancelled.is_some() {
+        "cancelled"
+    } else if !job.is_done() {
         "in_progress"
     } else if warnings.is_empty() {
         "done"
@@ -6294,7 +8950,7 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
         "worklist_pending": pending_worklist,
         "rules_learned": job.rules.len(),
         "elapsed_ms": job.stages.iter().filter_map(|st| st.elapsed_ms).sum::<u64>(),
-        "checkpoint": job.checkpoint.as_ref().filter(|_| !job.is_done()),
+        "checkpoint": job.checkpoint.as_ref().filter(|_| job.checkpoint_given || !job.is_done()),
         "sheets": index_count(job, "sheets"),
         "levels": levels,
         "elements": elements,
@@ -6317,6 +8973,13 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
     }
     if let Some(from) = job.rerun_held {
         v["rerun_held"] = json!(from.label());
+    }
+    // The stage that failed and why: the CLI exits non-zero on it.
+    if let Some(st) = job.stages.iter().find(|st| st.status == StageStatus::Error) {
+        v["error"] = json!({"stage": st.name.label(), "message": st.error.clone().unwrap_or_default()});
+    }
+    if let Some(at) = job.cancelled {
+        v["cancelled"] = json!({"stage": at.label(), "note": "job.next goes on from there"});
     }
     // A paused job says what it is asking.
     if let Some(q) = job.next_question() {
@@ -6543,7 +9206,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("job.start", "Start Guided Job", cmd_start)
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
@@ -6880,6 +9543,141 @@ mod tests {
     /// schedule (types A, B) and junk tags. Every device the devices stage counts becomes one
     /// model element on its sheet's level and one BOM unit (Q5271 MUSTS 1, 2, 4, 5).
     #[test]
+    fn a_typical_room_plans_title_names_its_room_type() {
+        let words = |t: &str| type_words(t, None);
+        let vocabulary: BTreeSet<String> = ["DOUBLE Q", "SINGLE Q", "SINGLE Q ADA"].iter().flat_map(|n| words(n)).collect();
+        let title = |t: &str| type_words(t, Some(&vocabulary));
+        assert_eq!(title("ENLARGED DOUBLE QUEEN"), words("DOUBLE Q"));
+        assert_eq!(title("UNIT ELECTRICAL PLAN - SINGLE QUEEN"), words("SINGLE Q"));
+        assert_eq!(title("ENLARGED QUEEN"), words("SINGLE Q"), "a QUEEN room is the single one");
+        assert_eq!(title("ENLARGED ACC. QUEEN"), words("SINGLE Q ADA"));
+        assert_ne!(title("ENLARGED ACC. DOUBLE QUEEN"), words("DOUBLE Q"));
+        assert!(title("ELECTRICAL - 1ST FLOOR - MEP ROOM").is_empty());
+    }
+
+    #[test]
+    fn a_typical_rooms_device_lands_at_the_same_place_in_each_room() {
+        // A 12' x 24' view (inches) and a room the same way round, then one turned a quarter.
+        let view = [0.0, 0.0, 144.0, 288.0];
+        assert_eq!(into_room([36.0, 72.0], view, [1000.0, 0.0, 1144.0, 288.0]), Some([1036.0, 72.0]));
+        assert_eq!(into_room([36.0, 72.0], view, [0.0, 0.0, 288.0, 144.0]), Some([72.0, 108.0]));
+        assert_eq!(into_room([36.0, 72.0], [0.0, 0.0, 0.0, 288.0], view), None);
+    }
+
+    #[test]
+    fn a_typical_floors_room_takes_the_number_of_the_same_room_above_it() {
+        let v = cadaddy_geom::Vec2::new;
+        let room = |h: u64, level: &str, name: &str, number: Option<&str>, x: f64| super::super::bspec::RoomElement {
+            handle: cadaddy_doc::Handle(h),
+            level: level.into(),
+            name: name.into(),
+            number: number.map(String::from),
+            area_sf: 200.0,
+            ceiling_ft: 9.0,
+            finish: None,
+            source: cadaddy_doc::Handle(0),
+            outline: vec![v(x, 0.0), v(x + 120.0, 0.0), v(x + 120.0, 240.0), v(x, 240.0)],
+            z: 0.0,
+        };
+        let rooms = [
+            room(1, "Level 3", "SINGLE Q", Some("305"), 0.0),
+            room(2, "Level 2", "SINGLE Q", None, 6.0),
+            // Another kind of room over it, and one a bay over: no number from them.
+            room(3, "Level 4", "DOUBLE Q", None, 0.0),
+            room(4, "Level 4", "SINGLE Q", None, 400.0),
+            // 205 is already a room of level 2's: never twice.
+            room(5, "Level 3", "SINGLE Q", Some("306"), 1000.0),
+            room(6, "Level 2", "SINGLE Q", None, 1000.0),
+            room(7, "Level 2", "STORAGE", Some("206"), 3000.0),
+            // Known by its number alone above; the same room traced a little bigger below.
+            room(8, "Level 3", "Room 309", Some("309"), 2000.0),
+            room(9, "Level 2", "SINGLE Q", None, 2004.0),
+            // Traced without its bathroom (60 shorter) below: the middles 2.5' apart, each in the other.
+            room(10, "Level 3", "SINGLE Q", Some("331"), 4000.0),
+            room(11, "Level 2", "SINGLE Q", None, 4000.0),
+        ];
+        let mut rooms = rooms.to_vec();
+        rooms[8].area_sf = 250.0;
+        rooms[10].outline = vec![v(4000.0, 0.0), v(4120.0, 0.0), v(4120.0, 180.0), v(4000.0, 180.0)];
+        rooms[10].area_sf = 150.0;
+        assert_eq!(
+            stacked_numbers(&rooms, 12.0),
+            vec![
+                (cadaddy_doc::Handle(2), "205".to_string()),
+                (cadaddy_doc::Handle(9), "209".to_string()),
+                (cadaddy_doc::Handle(11), "231".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_number_a_room_of_the_level_has_is_not_given_again() {
+        let room = |level: &str, name: &str, number: Option<&str>| super::super::bspec::RoomElement {
+            handle: cadaddy_doc::Handle(1),
+            level: level.into(),
+            name: name.into(),
+            number: number.map(String::from),
+            area_sf: 100.0,
+            ceiling_ft: 9.0,
+            finish: None,
+            source: cadaddy_doc::Handle(0),
+            outline: Vec::new(),
+            z: 0.0,
+        };
+        let rooms = [room("Level 1", "CORRIDOR", Some("100")), room("Level 1", "Room 102", Some("102")), room("Level 2", "CORRIDOR", None)];
+        // The corridor's other piece doesn't take 100 again; level 2's corridor may.
+        assert!(number_taken(&rooms, "1", "100") && number_taken(&rooms, "Level 1", " 100 "));
+        assert!(!number_taken(&rooms, "Level 2", "100") && !number_taken(&rooms, "Level 1", "101"));
+        // A "Room 102" traced from the label is the room 102 goes to.
+        assert!(!number_taken(&rooms, "Level 1", "102"));
+    }
+
+    #[test]
+    fn a_run_through_the_elevator_shaft_is_a_clash_and_one_beside_it_is_not() {
+        let shaft = cadaddy_walk3d::Circulation {
+            kind: cadaddy_walk3d::CirculationKind::Hoistway,
+            level: "Level 2".into(),
+            name: "ELEV.".into(),
+            at: [100.0, 100.0],
+            rects: vec![[[60.0, 60.0], [156.0, 156.0]]],
+        };
+        let corridor = cadaddy_walk3d::Circulation {
+            kind: cadaddy_walk3d::CirculationKind::Corridor,
+            rects: vec![[[0.0, 0.0], [600.0, 60.0]]],
+            ..shaft.clone()
+        };
+        let run = |level: &str, points: Vec<[f64; 2]>| -> cadaddy_walk3d::MepRun {
+            serde_json::from_value(json!({"system": "SA", "level": level, "points": points, "size_in": [12, 8], "bottoms_ft": [9]})).unwrap()
+        };
+        let runs = [
+            // Straight through the shaft.
+            run("2", vec![[0.0, 100.0], [300.0, 100.0]]),
+            // Along the face of its wall (inside the clearance), and past it.
+            run("Level 2", vec![[0.0, 59.0], [300.0, 59.0], [300.0, 300.0]]),
+            run("Level 2", vec![[0.0, 160.0], [300.0, 160.0]]),
+            // Through it, but on another floor.
+            run("Level 3", vec![[100.0, 0.0], [100.0, 300.0]]),
+            // A corner of it cut by the last leg.
+            run("Level 2", vec![[0.0, 0.0], [40.0, 40.0], [140.0, 200.0]]),
+            // Down the corridor: allowed.
+            run("Level 2", vec![[0.0, 30.0], [600.0, 30.0]]),
+        ];
+        assert_eq!(runs_through_hoistways(&runs, &[shaft, corridor], 12.0), vec![0, 4]);
+    }
+
+    #[test]
+    fn a_shell_holding_half_its_floors_rooms_is_not_the_building() {
+        let v = cadaddy_geom::Vec2::new;
+        // The west half of a 100' x 50' floor enclosed; rooms along its whole length.
+        let half = [[v(0.0, 0.0), v(600.0, 600.0)]];
+        let whole = [[v(0.0, 0.0), v(1200.0, 600.0)]];
+        let rooms: Vec<[f64; 2]> = (0..10).map(|i| [60.0 + f64::from(i) * 120.0, 300.0]).collect();
+        assert_eq!(shell_holds_rooms(&half, &rooms), (false, 5));
+        assert_eq!(shell_holds_rooms(&whole, &rooms), (true, 10));
+        assert_eq!(shell_holds_rooms(&half, &[]), (true, 0));
+    }
+
+    #[test]
     fn a_tiny_room_with_a_bigger_rooms_number_is_a_scrap() {
         let room = |h: u64, level: &str, number: Option<&str>, area_sf: f64| super::super::bspec::RoomElement {
             handle: cadaddy_doc::Handle(h),
@@ -6900,8 +9698,14 @@ mod tests {
             room(3, "Level 1", Some("120A"), 6.0),
             room(4, "Level 2", Some("119"), 4.0),
             room(5, "Level 1", None, 3.0),
+            // A 13 sf sliver of 119; an unnumbered sliver named as a bigger room of its level.
+            room(6, "Level 1", Some("119"), 13.0),
         ];
-        assert_eq!(numbered_scraps(&rooms), vec![cadaddy_doc::Handle(2)]);
+        assert_eq!(numbered_scraps(&rooms), vec![cadaddy_doc::Handle(2), cadaddy_doc::Handle(6)]);
+        let mut named = rooms.to_vec();
+        named[4].name = "SINGLE Q ADA".into();
+        named[0].name = "SINGLE Q ADA".into();
+        assert!(numbered_scraps(&named).contains(&cadaddy_doc::Handle(5)), "an unnumbered sliver named as room 119");
     }
 
     #[test]
@@ -6950,6 +9754,367 @@ mod tests {
     }
 
     #[test]
+    fn a_registered_views_devices_move_by_where_they_are() {
+        use cadaddy_mepfix::printlinks::{Enlarged, SheetLinks};
+        let view = |title: &str, reach: [f64; 4], handles: &[&str]| Enlarged {
+            sheet: "E-6".into(),
+            title: title.into(),
+            level: "1".into(),
+            registered: true,
+            devices: handles.len(),
+            device_handles: handles.iter().map(|h| h.to_string()).collect(),
+            fit: Some(cadaddy_mepfix::tagid::Sim::scale_offset(1.0, [1000.0, 0.0])),
+            reach: Some(reach),
+            ..Enlarged::default()
+        };
+        let links = SheetLinks {
+            enlarged: vec![
+                view("1ST FLOOR - CORE AREA", [0.0, 0.0, 100.0, 100.0], &["10"]),
+                view("ENLARGED QUEEN", [200.0, 0.0, 300.0, 100.0], &["20"]),
+            ],
+            ..SheetLinks::default()
+        };
+        let dv = |tag: &str, handle: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at,
+            sheet: "E-6".into(),
+            level: "1".into(),
+            handle: handle.into(),
+            ..Default::default()
+        };
+        let mut census = DeviceCensus {
+            placed: vec![
+                dv("A", "10", [10.0, 10.0]),
+                // A switch read at its designation (no symbol), in the core area: it moves too.
+                dv("SD", "", [20.0, 20.0]),
+                // Outside every view: stays.
+                dv("J", "", [150.0, 50.0]),
+                // In a typical room's view: left for the stamping.
+                dv("SD", "", [250.0, 50.0]),
+            ],
+            ..DeviceCensus::default()
+        };
+        let job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let (moved, _) = enlarged_authority(&job, &links, &mut census);
+        assert_eq!(moved, 2);
+        let at: Vec<[f64; 2]> = census.placed.iter().map(|d| d.at).collect();
+        assert_eq!(at, [[1010.0, 10.0], [1020.0, 20.0], [150.0, 50.0], [250.0, 50.0]]);
+    }
+
+    #[test]
+    fn a_views_title_names_its_one_room() {
+        use cadaddy_geom::Vec2;
+        let sq = vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0)];
+        let rooms = vec![
+            ("MECH".to_string(), "1".to_string(), sq.clone(), "130".to_string()),
+            ("BOH".to_string(), "2".to_string(), sq.clone(), "237".to_string()),
+            ("STORAGE".to_string(), "1".to_string(), sq.clone(), "131".to_string()),
+            ("STORAGE".to_string(), "2".to_string(), sq.clone(), "231".to_string()),
+        ];
+        assert_eq!(room_of_view("ENLARGED BOH ROOM #237", &rooms), Some(1), "by its number");
+        assert_eq!(room_of_view("ELECTRICAL - 1ST FLOOR - MEP ROOM", &rooms), Some(0), "by its name");
+        assert_eq!(room_of_view("ELECTRICAL - 2ND FLOOR - STORAGE ROOM", &rooms), Some(3), "two of the name: the floor says which");
+        assert_eq!(room_of_view("ELECTRICAL - 1ST FLOOR - CORE AREA", &rooms), None, "no room named");
+        assert_eq!(room_of_view("ENLARGED QUEEN", &rooms), None);
+    }
+
+    #[test]
+    fn a_typical_queen_or_suite_is_a_room_to_sleep_in() {
+        for (title, sleeping) in
+            [("ENLARGED QUEEN", true), ("ENLARGED ACC. DOUBLE QUEEN", true), ("TYPICAL SUITE", true), ("TYPICAL RESTROOM", false)]
+        {
+            assert_eq!(sleeping_room(&type_words(title, None)), sleeping, "{title}");
+        }
+    }
+
+    #[test]
+    fn a_receptacles_designations_are_the_words_printed_by_it() {
+        assert_eq!(receptacle_designations(&["G-3", "GFCI"]), ["GFCI"]);
+        assert_eq!(receptacle_designations(&["WP/GFI"]), ["GFCI", "WP"], "in a fixed order");
+        assert_eq!(receptacle_designations(&["USB", "TR", "A-1"]), ["TR", "USB"]);
+        assert!(receptacle_designations(&["WPT", "TRUCK", "A-1"]).is_empty(), "whole words only");
+    }
+
+    /// Q6099: an enlarged RCP sheet imported before an enlarged plan (its view titled with the
+    /// same room type, every later sheet a sheet's width further right) takes none of the plan's
+    /// devices and moves none: each room of the type gets them, the floor plan's own of a tag in a
+    /// room standing for that many.
+    #[test]
+    fn an_enlarged_plan_after_an_enlarged_rcp_stamps_every_room_of_its_type() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        // One view per sheet: a 144 x 288 plan, its title over a SCALE line under it.
+        let sheet = |s: &mut crate::Session, x0: f64, title: &str| -> (u64, u64) {
+            let lo = s.doc().unwrap().handseed;
+            let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+                s.execute("line", &json!({"points": [a, b]})).unwrap();
+            };
+            for (a, b) in
+                [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+            {
+                line(s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+            }
+            let (vx, vy) = (x0 + 300.0, 200.0);
+            for (a, b) in [([0.0, 0.0], [144.0, 0.0]), ([144.0, 0.0], [144.0, 288.0]), ([144.0, 288.0], [0.0, 288.0]), ([0.0, 288.0], [0.0, 0.0])] {
+                line(s, [vx + a[0], vy + a[1]], [vx + b[0], vy + b[1]]);
+            }
+            for k in 1..6 {
+                line(s, [vx, vy + 48.0 * f64::from(k)], [vx + 144.0, vy + 48.0 * f64::from(k)]);
+            }
+            s.execute("text", &json!({"at": [vx, vy - 19.0], "text": title, "height": 7.4})).unwrap();
+            s.execute("text", &json!({"at": [vx, vy - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+            (lo, s.doc().unwrap().handseed)
+        };
+        let rcp = sheet(&mut s, 0.0, "ENLARGED DOUBLE QUEEN RCP");
+        let plan = sheet(&mut s, 4234.0, "ENLARGED DOUBLE QUEEN");
+        let region = |number: &str, x0: f64| SheetRegion {
+            number: number.into(),
+            level: "T".into(),
+            discipline: number.chars().take(1).collect(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        job.sheet_regions = vec![SheetRegion { kind: "rcp".into(), ..region("A621", 0.0) }, region("E-6", 4234.0)];
+        job.sheet_spans = vec![SheetSpan { sheet: "A621".into(), lo: rcp.0, hi: rcp.1 }, SheetSpan { sheet: "E-6".into(), lo: plan.0, hi: plan.1 }];
+        // Two DOUBLE QUEEN rooms on Level 2, the floor plan's own receptacle in the first.
+        let room = |n: &str, x: f64| json!({"name": "DOUBLE QUEEN", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_200.0)]}));
+        }
+        let device = |tag: &str, at: [f64; 2], sheet: &str, level: &str| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at,
+            sheet: sheet.into(),
+            level: level.into(),
+            ..Default::default()
+        };
+        let placed = vec![device("A", [10_072.0, 100.0], "E-2", "Level 2")];
+        // The enlarged plan's three receptacles and a switch, in its view.
+        let read: Vec<_> =
+            [("A", [4534.0 + 20.0, 220.0]), ("A", [4534.0 + 120.0, 220.0]), ("A", [4534.0 + 20.0, 460.0]), ("S", [4534.0 + 130.0, 300.0])]
+                .iter()
+                .map(|(t, at)| device(t, *at, "E-6", "T"))
+                .collect();
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &placed, &unplaced);
+        let in_room = |n: &str, tag: &str| stamped.devices.iter().filter(|d| d.room.contains(n) && d.tag == tag).count();
+        assert_eq!((in_room("201", "A"), in_room("202", "A")), (2, 3), "{:?}", stamped.report);
+        assert_eq!((in_room("201", "S"), in_room("202", "S")), (1, 1));
+        assert_eq!(stamped.report.get("E-6 ENLARGED DOUBLE QUEEN"), Some(&7), "{:?}", stamped.report);
+        assert!(!stamped.report.keys().any(|k| k.contains("A621") || k.contains("no typical-room view")), "{:?}", stamped.report);
+        // Each one inside its room.
+        for d in &stamped.devices {
+            let x0 = if d.room.contains("201") { 10_000.0 } else { 10_200.0 };
+            assert!(d.at[0] >= x0 && d.at[0] <= x0 + 144.0 && d.at[1] >= 0.0 && d.at[1] <= 288.0, "{d:?}");
+        }
+    }
+
+    /// A typical room's plan's pipe no registration placed goes into each room of its type, at
+    /// its place in the room; a room the floor's own plans already run that system through gets
+    /// none (no second count); a run outside every typical view stays unplaced.
+    #[test]
+    fn a_typical_rooms_pipe_goes_into_each_room_of_its_type() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        // One view per sheet: a 144 x 288 plan, its title over a SCALE line under it.
+        let sheet = |s: &mut crate::Session, x0: f64, title: &str| -> (u64, u64) {
+            let lo = s.doc().unwrap().handseed;
+            let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+                s.execute("line", &json!({"points": [a, b]})).unwrap();
+            };
+            for (a, b) in
+                [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+            {
+                line(s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+            }
+            let (vx, vy) = (x0 + 300.0, 200.0);
+            for (a, b) in [([0.0, 0.0], [144.0, 0.0]), ([144.0, 0.0], [144.0, 288.0]), ([144.0, 288.0], [0.0, 288.0]), ([0.0, 288.0], [0.0, 0.0])] {
+                line(s, [vx + a[0], vy + a[1]], [vx + b[0], vy + b[1]]);
+            }
+            for k in 1..6 {
+                line(s, [vx, vy + 48.0 * f64::from(k)], [vx + 144.0, vy + 48.0 * f64::from(k)]);
+            }
+            s.execute("text", &json!({"at": [vx, vy - 19.0], "text": title, "height": 7.4})).unwrap();
+            s.execute("text", &json!({"at": [vx, vy - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+            (lo, s.doc().unwrap().handseed)
+        };
+        let rcp = sheet(&mut s, 0.0, "ENLARGED DOUBLE QUEEN RCP");
+        let plan = sheet(&mut s, 4234.0, "ENLARGED DOUBLE QUEEN");
+        let region = |number: &str, x0: f64| SheetRegion {
+            number: number.into(),
+            level: "T".into(),
+            discipline: number.chars().take(1).collect(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        job.sheet_regions = vec![SheetRegion { kind: "rcp".into(), ..region("A621", 0.0) }, region("E-6", 4234.0)];
+        job.sheet_spans = vec![SheetSpan { sheet: "A621".into(), lo: rcp.0, hi: rcp.1 }, SheetSpan { sheet: "E-6".into(), lo: plan.0, hi: plan.1 }];
+        // Two DOUBLE QUEEN rooms on Level 2, the floor plan's own receptacle in the first.
+        let room = |n: &str, x: f64| json!({"name": "DOUBLE QUEEN", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_200.0)]}));
+        }
+        let run = |system: &str, level: &str, sheet: &str, points: Vec<[f64; 2]>| cadaddy_walk3d::MepRun {
+            system: system.into(),
+            level: level.into(),
+            points,
+            size_in: [2.0, 0.0],
+            bottoms_ft: vec![0.0],
+            objects: vec!["1A".into()],
+            id: "R7".into(),
+            encased: false,
+            size_source: "tag".into(),
+            height_source: "default".into(),
+            reviewed: false,
+            edited_by: String::new(),
+            top_ft: None,
+            source_sheet: sheet.into(),
+        };
+        // The sanitary line along the plan's long side; a vent line outside every view.
+        let lost = vec![
+            run("SAN", "T", "E-6", vec![[4534.0 + 20.0, 220.0], [4534.0 + 20.0, 460.0]]),
+            run("V", "T", "E-6", vec![[4234.0 + 1500.0, 900.0], [4234.0 + 1600.0, 900.0]]),
+        ];
+        // The floor's plan already runs SAN through room 202.
+        let placed = vec![run("SAN", "Level 2", "P-2", vec![[10_250.0, 50.0], [10_250.0, 150.0]])];
+        let st = stamp_typical_runs(s.doc().unwrap(), &job, &placed, &lost);
+        assert_eq!(st.taken, vec![true, false]);
+        assert_eq!(st.runs.len(), 1, "room 201 only: {:?}", st.report);
+        let r = &st.runs[0];
+        assert_eq!((r.level.as_str(), r.system.as_str(), r.id.as_str()), ("Level 2", "SAN", ""));
+        assert!(r.points.iter().all(|p| p[0] >= 10_000.0 && p[0] <= 10_144.0 && p[1] >= 0.0 && p[1] <= 288.0), "{:?}", r.points);
+        assert!((r.points[1][1] - r.points[0][1]).abs() > 100.0, "it runs along the room: {:?}", r.points);
+    }
+
+    #[test]
+    fn a_storey_drawn_a_foot_off_lines_up_on_the_rooms_of_the_one_under_it() {
+        // Level 2's twelve rooms at their places; Level 3's sheet the same rooms 12 units (1')
+        // right and 6 up of where its shell corner (its base) puts them.
+        let mut s = crate::Session::new();
+        for k in 0..12 {
+            let (x, y) = (100.0 + 150.0 * f64::from(k % 6), 100.0 + 300.0 * f64::from(k / 6));
+            s.execute("text", &json!({"at": [x, y], "text": format!("2{:02}", k + 1), "height": 8})).unwrap();
+            s.execute("text", &json!({"at": [x + 5000.0 + 12.0, y + 6.0], "text": format!("3{:02}", k + 1), "height": 8})).unwrap();
+        }
+        // A stray number on Level 3 (a key note) doesn't move it.
+        s.execute("text", &json!({"at": [5400.0, 900.0], "text": "399", "height": 8})).unwrap();
+        let mut sp = cadaddy_walk3d::BuildingSpec::from_json(
+            r#"{"version": 1, "units_per_foot": 12, "levels": [
+                {"name": "Level 2", "elevation_ft": 10, "height_ft": 10, "region": [0, 0, 1200, 1000], "base": [0, 0]},
+                {"name": "Level 3", "elevation_ft": 20, "height_ft": 10, "region": [5000, 0, 6200, 1000], "base": [5000, 0]}
+            ]}"#,
+        )
+        .expect("spec");
+        let (moved, _) = register_storeys_by_rooms(s.doc().unwrap(), &mut sp);
+        assert_eq!(moved.len(), 1, "{moved:?}");
+        let b = sp.level("Level 3").and_then(|l| l.base).expect("base");
+        assert!((b[0] - 5012.0).abs() < 1e-6 && (b[1] - 6.0).abs() < 1e-6, "{b:?}");
+        assert_eq!(sp.level("Level 2").and_then(|l| l.base), Some([0.0, 0.0]), "the one under it stays");
+        // Lined up already: nothing moves; and a shift past 3' is a different floor, left alone.
+        assert!(register_storeys_by_rooms(s.doc().unwrap(), &mut sp).0.is_empty());
+        if let Some(l) = sp.levels.iter_mut().find(|l| l.name == "Level 3") {
+            l.base = Some([5000.0 - 60.0, 0.0]);
+        }
+        let (moved, not) = register_storeys_by_rooms(s.doc().unwrap(), &mut sp);
+        assert!(moved.is_empty() && not.iter().any(|n| n.contains("more than")), "{moved:?} {not:?}");
+    }
+
+    #[test]
+    fn a_circuits_route_in_a_typical_rooms_view_is_left_to_the_rooms_own_circuits() {
+        use cadaddy_doc::{Drawing, Line};
+        use cadaddy_geom::Vec2;
+        let mut d = Drawing::default();
+        let line = |d: &mut Drawing, a: (f64, f64), b: (f64, f64)| {
+            d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) })).ok();
+        };
+        // A sheet's border, and two views side by side on it: a room's walls with a title and a
+        // scale under it.
+        line(&mut d, (0.0, 0.0), (2400.0, 0.0));
+        line(&mut d, (2400.0, 0.0), (2400.0, 1600.0));
+        line(&mut d, (2400.0, 1600.0), (0.0, 1600.0));
+        line(&mut d, (0.0, 1600.0), (0.0, 0.0));
+        for (x0, title) in [(100.0, "ENLARGED QUEEN"), (900.0, "ENLARGED BOH ROOM #237")] {
+            line(&mut d, (x0, 90.0), (x0 + 600.0, 90.0));
+            line(&mut d, (x0 + 600.0, 90.0), (x0 + 600.0, 510.0));
+            line(&mut d, (x0 + 600.0, 510.0), (x0, 510.0));
+            line(&mut d, (x0, 510.0), (x0, 90.0));
+            line(&mut d, (x0 + 300.0, 90.0), (x0 + 300.0, 510.0));
+            d.add(&Space::Model, Common::default(), EntityKind::Text(text(title, x0 + 13.0, 71.0, 7.4))).ok();
+            d.add(&Space::Model, Common::default(), EntityKind::Text(text("SCALE:  1/4\" = 1'-0\"", x0 + 13.0, 62.0, 4.6))).ok();
+        }
+        let sq = vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0)];
+        let rooms: Vec<JobRoom> = vec![
+            ("QUEEN".to_string(), "2".to_string(), sq.clone(), "201".to_string()),
+            ("QUEEN".to_string(), "3".to_string(), sq.clone(), "301".to_string()),
+            ("BOH".to_string(), "2".to_string(), sq.clone(), "237".to_string()),
+        ];
+        let (types, vocabulary) = room_types(&rooms);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&d);
+        let (views, one_room) = room_views(&d, &texts, &types, &vocabulary, &rooms);
+        assert_eq!(views.iter().map(|v| v.0.as_str()).collect::<Vec<_>>(), ["ENLARGED QUEEN"], "{views:?}");
+        assert_eq!(one_room.iter().map(|v| (v.0.as_str(), v.2)).collect::<Vec<_>>(), [("ENLARGED BOH ROOM #237", 2)]);
+        // An estimated route starting in either view is the rooms'; one elsewhere on the sheet, or
+        // drawn conduit, is the floor's.
+        let regions: BTreeMap<String, Vec<[f64; 4]>> =
+            [("E-6".to_string(), views.iter().map(|v| v.1).chain(one_room.iter().map(|v| v.1)).collect())].into_iter().collect();
+        let run =
+            |system: &str, sheet: &str, at: [f64; 2]| super::super::printcond::run(system, "2", sheet, vec![at, [at[0] + 10.0, at[1]]], 0.75, 9.0);
+        let est = super::super::printcond::CIRCUIT_SYSTEM;
+        assert!(in_room_view(&run(est, "E-6", [300.0, 300.0]), &regions));
+        assert!(in_room_view(&run(est, "E-6/1", [1000.0, 300.0]), &regions), "the sheet's view number aside");
+        assert!(!in_room_view(&run(est, "E-6", [800.0, 300.0]), &regions), "between the views");
+        assert!(!in_room_view(&run(est, "E-3", [300.0, 300.0]), &regions), "another sheet");
+        assert!(!in_room_view(&run(super::super::printcond::DRAWN_SYSTEM, "E-6", [300.0, 300.0]), &regions), "drawn conduit");
+    }
+
+    #[test]
+    fn a_fire_alarm_plans_marks_are_fire_alarm_devices() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "Q-7", "sheet_type": "plan", "level": "1", "title": "FIRE ALARM - 1ST FLOOR"}]}));
+        job.sheets_loaded = true;
+        let texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("DEVICE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("S", 1000.0, 772.0, 5.0),
+            ("SMOKE DETECTOR", 1030.0, 772.0, 5.0),
+            // A lone letter on a fire alarm plan is no switch's leg.
+            ("c", 400.0, 100.0, 2.0),
+        ];
+        let syms: Vec<(&str, f64, f64)> = (0..3).map(|k| ("S", 100.0 + 40.0 * f64::from(k), 300.0)).collect();
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &syms);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "Q-7".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "Q-7".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(job.devices.len(), 3, "{:?}", job.devices);
+        assert!(job.devices.iter().all(|d| d.tag == "S" && d.kind == "fire alarm device" && d.leg.is_empty()), "{:?}", job.devices);
+    }
+
+    #[test]
     fn devices_read_reach_the_model_and_the_bom() {
         let mut s = crate::Session::new();
         let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
@@ -6973,7 +10138,8 @@ mod tests {
             let mut syms: Vec<(&str, f64, f64)> = vec![("A", x0 + 990.0, 772.0)]; // the schedule's sample
             syms.extend((0..a).map(|k| ("A", x0 + 100.0 + 40.0 * f64::from(k), 300.0)));
             syms.extend((0..b).map(|k| ("B", x0 + 100.0 + 40.0 * f64::from(k), 200.0)));
-            // Junk: a circuit number, the sheet's own number, a switch leg, a keynote, an untagged symbol.
+            // Junk: the sheet's own number, a keynote, an untagged symbol; a receptacle, its
+            // circuit printed by its symbol; and a switch, its leg letter printed by its symbol.
             syms.extend([
                 ("D-1", x0 + 600.0, 100.0),
                 (name, x0 + 620.0, 100.0),
@@ -6997,18 +10163,24 @@ mod tests {
                 levels: Vec::new(),
                 view: None,
             });
-            want_by_level.insert(format!("Level {level}"), a + b);
+            want_by_level.insert(format!("Level {level}"), a + b + 2);
         }
         let n: i32 = want_by_level.values().sum();
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r["devices"]["count"], json!(n), "{r:#}");
-        assert_eq!(r["devices"]["by_type"], json!({"A": 9, "B": 5}));
+        assert_eq!(r["devices"]["by_type"], json!({"A": 9, "B": 5, "REC": 2, "S": 2}));
+        assert_eq!(job.devices.iter().filter(|d| d.kind == "receptacle" && d.circuit == "D-1").count(), 2, "a receptacle on D-1 a sheet");
+        assert_eq!(job.devices.iter().filter(|d| d.tag == "S" && d.leg == "s").count(), 2, "a switch on leg s a sheet");
         // No building model yet: the bim_build stage puts them in.
         assert_eq!(r["model"]["pending"], json!(n), "{:#}", r["model"]);
         assert_eq!(job.devices.len(), n as usize);
         let first = job.devices.iter().find(|d| d.sheet == "Q-1" && d.at == [100.0, 300.0]).unwrap_or_else(|| panic!("{:?}", job.devices));
         assert_eq!((first.level.as_str(), first.circuit.as_str()), ("1", "D-7"));
-        assert_eq!(job.devices.iter().filter(|d| !d.circuit.is_empty()).count(), 2, "one circuit is printed per sheet");
+        assert_eq!(
+            job.devices.iter().filter(|d| !d.circuit.is_empty() && d.kind != "receptacle").count(),
+            2,
+            "one circuit is printed by an A a sheet"
+        );
 
         let built = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(built["devices"]["inserted"], json!(n), "{:#}", built["devices"]);
@@ -7027,7 +10199,8 @@ mod tests {
         let lines: Vec<&Value> = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").collect();
         let units = |lv: &str| lines.iter().filter(|l| l["level"] == lv).filter_map(|l| l["net"].as_f64()).sum::<f64>();
         // The draft spec has one level, `Level 1`; sheet level 2 is named alike.
-        assert_eq!((units("Level 1"), units("Level 2")), (8.0, 6.0), "{lines:#?}");
+        assert_eq!((units("Level 1"), units("Level 2")), (10.0, 8.0), "{lines:#?}");
+        assert!(lines.iter().any(|l| l["item"] == "duplex receptacle"), "{lines:#?}");
         assert!(lines.iter().all(|l| l["trade"] == "electrical"));
         assert!(lines.iter().any(|l| l["item"] == "device type A" && l["level"] == "Level 2" && l["net"] == json!(4.0)), "{lines:#?}");
         // The takeoff stage uses the model takeoff (bim.takeoff) and reports a summary.
@@ -7084,6 +10257,24 @@ mod tests {
         let bom = s.execute("bim.bom", &json!({})).unwrap_or_else(|e| panic!("{e}"));
         let units: f64 = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").filter_map(|l| l["net"].as_f64()).sum();
         assert_eq!(units, 5.0, "{:#}", bom["lines"]);
+    }
+
+    #[test]
+    fn a_device_takes_the_circuit_stacked_under_its_own_tag() {
+        use cadaddy_geom::Vec2;
+        use cadaddy_mepfix::sheet_facts::TextItem;
+        let text = |v: &str, x: f64, y: f64| TextItem { value: v.into(), at: Vec2::new(x, y), height: 1.0, rotation: 0.0 };
+        // Another device's pair above the symbol, this one's tag and circuit below it.
+        let texts = vec![text("A", 0.0, 4.0), text("A-3,e", 0.0, 2.6), text("L4", 1.0, -2.0), text("A-2", 1.0, -3.4)];
+        let circuits: Vec<&TextItem> = texts.iter().filter(|t| circuit_text(&t.value, &BTreeSet::new())).collect();
+        let symbol = Vec2::new(1.5, 0.8);
+        assert_eq!(super::super::readers::circuit_of(&texts, &circuits, "L4", None, symbol), "A-2");
+        // The import keeps the tag on the symbol, where it was printed.
+        let kept: Vec<TextItem> = texts.iter().filter(|t| t.value != "L4").cloned().collect();
+        let circuits: Vec<&TextItem> = kept.iter().filter(|t| circuit_text(&t.value, &BTreeSet::new())).collect();
+        assert_eq!(super::super::readers::circuit_of(&kept, &circuits, "L4", Some((Vec2::new(1.0, -2.0), 1.0)), symbol), "A-2");
+        // No tag text found: the circuit nearest the symbol.
+        assert_eq!(super::super::readers::circuit_of(&kept, &circuits, "L4", None, symbol), "A-3,e");
     }
 
     #[test]
@@ -8558,5 +11749,56 @@ mod tests {
 
         let warnings = job_warnings(&job, None);
         assert!(warnings.iter().any(|w| w["warning"] == "auto-guard rejections"), "expected auto-guard warning: {warnings:?}");
+    }
+
+    /// B7-005: the levels question's answer makes the levels; an answer that doesn't fit its
+    /// question (a number for text, an empty one, an unknown id) is refused and the job is as
+    /// it was.
+    #[test]
+    fn a_levels_answer_makes_the_levels_and_answers_must_fit_their_question() {
+        let mut s = Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        let q = Question {
+            id: job.next_qid(StageName::Levels),
+            stage: StageName::Levels,
+            question: "No levels detected. What are the building levels? (e.g. \"1, 2, 3, R\")".into(),
+            why: String::new(),
+            choices: Vec::new(),
+            evidence: None,
+            default: Some("1".into()),
+            answer_schema: Some(json!({"type": "string"})),
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Doubt,
+        };
+        let qid = q.id.clone();
+        if let Some(st) = job.stage_mut(StageName::Levels) {
+            st.status = StageStatus::Paused;
+            st.questions.push(q);
+        }
+        save_job(&mut s, &job).unwrap();
+        for bad_answer in [json!(12345), json!({}), json!(""), json!("   "), json!("<>!")] {
+            let e = s.execute("job.answer", &json!({"id": qid, "answer": bad_answer})).expect_err("refused");
+            assert!(e.to_string().contains(&qid), "{bad_answer}: {e}");
+        }
+        let e = s.execute("job.answer", &json!({"id": "Q-levels-999", "answer": "1, 2"})).expect_err("unknown id");
+        assert!(e.to_string().contains("not found"), "{e}");
+        let job = load_job(&s).unwrap().unwrap();
+        assert!(job.stage(StageName::Levels).is_some_and(|st| st.questions.iter().all(|q| q.answer.is_none())), "nothing taken");
+
+        assert_eq!(parse_level_list("1, 2, 3, R"), Some(vec!["Level 1".into(), "Level 2".into(), "Level 3".into(), "Roof".into()]));
+        assert_eq!(parse_level_list("Basement; Level 1;Level 1"), Some(vec!["Basement".into(), "Level 1".into()]));
+        assert_eq!(parse_level_list(" , "), None);
+        let mut job = load_job(&s).unwrap().unwrap();
+        let a = apply_answer(&mut job, &qid, json!("1, 2, R")).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(a.rerun_from, Some(StageName::Levels), "{}", a.effect);
+        assert_eq!(job.levels_given, vec!["Level 1", "Level 2", "Roof"]);
+        job.storey_ft = Some(12.0);
+        let made = levels_from_answer(&mut s, &job).unwrap();
+        assert_eq!(made.len(), 3);
+        let (sp, _) = super::super::bspec::current(&s, "test").unwrap();
+        let levels: Vec<(String, f64)> = sp.levels.iter().map(|l| (l.name.clone(), l.elevation_ft)).collect();
+        assert_eq!(levels, vec![("Level 1".into(), 0.0), ("Level 2".into(), 12.0), ("Roof".into(), 24.0)]);
     }
 }

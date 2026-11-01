@@ -10,6 +10,7 @@ use cadaddy_geom::{Mat3, Vec2};
 use serde_json::{Value, json};
 
 use super::super::*;
+use super::SelfCheck;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 /// Merges done while expanding nested references; a hostile file stops here (and says so).
@@ -21,7 +22,8 @@ const MAX_HANDLES: usize = 100_000;
 pub(super) const PARAMS: &str = "{block?, object?: handle (count objects like this one), space?: current|model|all|<layout> (default current), \
      handles?: [...] (count in these objects), area?: [[x,y],[x,y]] | polygon (references inserted inside it), nested?: bool (default true), \
      highlight?: bool, similar?: bool (list: also similar: {name: {scaled: [handles], exploded: [[handles]]}})} → \
-     {blocks: {name: n}, nested: {name: n}, spaces: {space: {name: n}}, total} | {block, count, nested, handles}, plus `message`";
+     {blocks: {name: n}, nested: {name: n}, spaces: {space: {name: n}}, total} | {block, count, nested, handles}, plus `message` and \
+     `selfCheck` (found/analyzed/skipped counts with reasons, and the caps hit: work, handles, blockDepth)";
 
 pub(super) fn machine() -> Box<dyn Interactive> {
     Box::new(CountM::default())
@@ -161,11 +163,14 @@ struct Expander<'a> {
     memo: HashMap<(String, usize), Rc<BTreeMap<String, u64>>>,
     work: u64,
     truncated: bool,
+    /// A block at the end of the depth cap still held references.
+    depth_capped: bool,
 }
 
 impl<'a> Expander<'a> {
+    /// An expander that has not traversed any block yet.
     fn new(d: &'a Drawing) -> Self {
-        Expander { d, memo: HashMap::new(), work: 0, truncated: false }
+        Expander { d, memo: HashMap::new(), work: 0, truncated: false, depth_capped: false }
     }
     /// The definition's own name for a referenced block (names are case-insensitive).
     fn canonical(&self, name: &str) -> String {
@@ -177,10 +182,17 @@ impl<'a> Expander<'a> {
         if let Some(m) = self.memo.get(&key) {
             return m.clone();
         }
+        if levels == 0 {
+            // More references than MAX_BLOCK_DEPTH covers: say so rather than silently stop.
+            if self.d.block(name).is_some_and(|b| b.entities.iter().any(|e| matches!(&e.kind, EntityKind::Insert(_)))) {
+                self.depth_capped = true;
+            }
+            let out = Rc::new(BTreeMap::new());
+            self.memo.insert(key, out.clone());
+            return out;
+        }
         let mut out: BTreeMap<String, u64> = BTreeMap::new();
-        if levels > 0
-            && let Some(b) = self.d.block(name)
-        {
+        if let Some(b) = self.d.block(name) {
             let b = b.clone();
             for e in b.entities.iter() {
                 let EntityKind::Insert(i) = &e.kind else { continue };
@@ -225,6 +237,14 @@ struct Tally {
     /// Top-level objects holding `want` (when one block is asked for).
     handles: Vec<Handle>,
     truncated: bool,
+    /// Top-level objects scanned, and the block references among them.
+    found: u64,
+    analyzed: u64,
+    /// Top-level objects that are not block references, by type.
+    skipped: BTreeMap<&'static str, u64>,
+    /// More top-level objects held the block than `MAX_HANDLES`.
+    handles_capped: bool,
+    depth_capped: bool,
 }
 
 /// Count block references in `scope`; with `want`, also collect the top-level objects holding it.
@@ -232,7 +252,13 @@ fn tally(d: &Drawing, scope: &Scope, nested: bool, want: Option<&str>) -> Tally 
     let mut x = Expander::new(d);
     let mut t = Tally::default();
     for (space, e) in scope.objects(d) {
-        let EntityKind::Insert(i) = &e.kind else { continue };
+        t.found = t.found.saturating_add(1);
+        let EntityKind::Insert(i) = &e.kind else {
+            let n = t.skipped.entry(e.kind.type_name()).or_default();
+            *n = n.saturating_add(1);
+            continue;
+        };
+        t.analyzed = t.analyzed.saturating_add(1);
         let name = x.canonical(&i.block);
         let m = copies(i);
         let mut holds = want.is_some_and(|w| w.eq_ignore_ascii_case(&name));
@@ -251,13 +277,39 @@ fn tally(d: &Drawing, scope: &Scope, nested: bool, want: Option<&str>) -> Tally 
                 holds |= want.is_some_and(|w| w.eq_ignore_ascii_case(k));
             }
         }
-        if holds && t.handles.len() < MAX_HANDLES {
-            t.handles.push(e.handle);
+        if holds {
+            if t.handles.len() < MAX_HANDLES {
+                t.handles.push(e.handle);
+            } else {
+                t.handles_capped = true;
+            }
         }
     }
     t.spaces.retain(|_, m| !m.is_empty());
     t.truncated = x.truncated;
+    t.depth_capped = x.depth_capped;
     t
+}
+
+/// The self-check for a COUNT-style result: what was scanned, counted and skipped, and the caps
+/// that stopped it.
+fn self_check(t: &Tally) -> Value {
+    let mut check = SelfCheck::new();
+    check.found(t.found);
+    check.analyzed(t.analyzed);
+    for (ty, n) in &t.skipped {
+        check.skip(ty, "not a block reference", *n);
+    }
+    if t.truncated {
+        check.cap("work", MAX_WORK);
+    }
+    if t.handles_capped {
+        check.cap("handles", u64::try_from(MAX_HANDLES).unwrap_or(u64::MAX));
+    }
+    if t.depth_capped {
+        check.cap("blockDepth", u64::try_from(MAX_BLOCK_DEPTH).unwrap_or(u64::MAX));
+    }
+    check.to_json()
 }
 
 /// A translation-free signature of an object's geometry: objects with equal keys are copies of
@@ -288,24 +340,72 @@ fn round(v: &mut Value, depth: usize) {
     }
 }
 
+/// Loose objects of one (type, shape): in scan order, and by anchor cell so a part lookup is a
+/// hash lookup. Cells are 2e-6 wide; the 3x3 neighbourhood of a wanted anchor covers the 1e-6
+/// match radius.
+#[derive(Default)]
+struct Bucket {
+    list: Vec<(Vec2, Handle)>,
+    grid: HashMap<(i64, i64), Vec<usize>>,
+}
+
+fn cell(p: Vec2) -> (i64, i64) {
+    // Saturating float-to-int casts keep hostile coordinates harmless.
+    ((p.x / 2e-6).floor() as i64, (p.y / 2e-6).floor() as i64)
+}
+
+impl Bucket {
+    fn push(&mut self, at: Vec2, h: Handle) {
+        self.grid.entry(cell(at)).or_default().push(self.list.len());
+        self.list.push((at, h));
+    }
+
+    /// The first object (in scan order) anchored within 1e-6 of `want` that `skip` does not refuse.
+    fn find(&self, want: Vec2, skip: impl Fn(Handle) -> bool) -> Option<Handle> {
+        let (cx, cy) = cell(want);
+        let mut best: Option<(usize, Handle)> = None;
+        for dx in -1..=1i64 {
+            for dy in -1..=1i64 {
+                let key = (cx.saturating_add(dx), cy.saturating_add(dy));
+                for &i in self.grid.get(&key).into_iter().flatten() {
+                    let Some(&(p, h)) = self.list.get(i) else { continue };
+                    if (p - want).len() < 1e-6 && !skip(h) && best.is_none_or(|(j, _)| i < j) {
+                        best = Some((i, h));
+                    }
+                }
+            }
+        }
+        best.map(|(_, h)| h)
+    }
+}
+
 /// Loose (non-reference) objects in scope by (type, shape): their anchor and handle.
-type ShapeIndex = HashMap<(&'static str, String), Vec<(Vec2, Handle)>>;
+struct ShapeIndex {
+    shapes: HashMap<(&'static str, String), Bucket>,
+    /// The scan stopped at the object cap.
+    capped: bool,
+}
+
+const MAX_INDEXED: usize = 200_000;
 
 fn shape_index(d: &Drawing, scope: &Scope) -> ShapeIndex {
-    let mut idx: ShapeIndex = HashMap::new();
-    for (_, e) in scope.objects(d).into_iter().take(200_000) {
+    let mut idx = ShapeIndex { shapes: HashMap::new(), capped: false };
+    let objects = scope.objects(d);
+    idx.capped = objects.len() > MAX_INDEXED;
+    for (_, e) in objects.into_iter().take(MAX_INDEXED) {
         if matches!(e.kind, EntityKind::Insert(_)) {
             continue;
         }
         let (Some(key), Some(at)) = (shape_key(&e.kind), e.kind.grips().first().copied().filter(|p| p.is_finite())) else { continue };
-        idx.entry((e.kind.type_name(), key)).or_default().push((at, e.handle));
+        idx.shapes.entry((e.kind.type_name(), key)).or_default().push(at, e.handle);
     }
     idx
 }
 
 /// Groups of loose objects that repeat block `name`'s definition moved (an exploded copy, at
-/// its own scale and unrotated).
-fn exploded(d: &Drawing, idx: &ShapeIndex, name: &str, work: &mut u64) -> Vec<Vec<Handle>> {
+/// its own scale and unrotated). Every candidate and part lookup is charged to `work`; when it
+/// runs out the groups found so far come back and `truncated` is set.
+fn exploded(d: &Drawing, idx: &ShapeIndex, name: &str, work: &mut u64, truncated: &mut bool) -> Vec<Vec<Handle>> {
     let Some(b) = d.block(name) else { return Vec::new() };
     let parts: Vec<(&'static str, String, Vec2)> = b
         .entities
@@ -320,22 +420,28 @@ fn exploded(d: &Drawing, idx: &ShapeIndex, name: &str, work: &mut u64) -> Vec<Ve
     let Some((t0, k0, a0)) = parts.first().cloned() else { return Vec::new() };
     let mut used: std::collections::HashSet<Handle> = std::collections::HashSet::new();
     let mut out = Vec::new();
-    for (at, h) in idx.get(&(t0, k0)).into_iter().flatten() {
+    let Some(first) = idx.shapes.get(&(t0, k0)) else { return out };
+    // Look the later parts' buckets up once, not once per candidate.
+    let rest: Vec<(Option<&Bucket>, Vec2)> = parts.iter().skip(1).map(|(t, k, a)| (idx.shapes.get(&(*t, k.clone())), *a)).collect();
+    for (at, h) in &first.list {
+        *work = work.saturating_add(1);
+        if *work > MAX_WORK {
+            *truncated = true;
+            return out;
+        }
         if used.contains(h) {
             continue;
         }
         let off = *at - a0;
         let mut group = vec![*h];
         let mut ok = true;
-        for (t, k, a) in parts.iter().skip(1) {
+        for (bucket, a) in &rest {
             *work = work.saturating_add(1);
             if *work > MAX_WORK {
+                *truncated = true;
                 return out;
             }
-            let want = *a + off;
-            let hit = idx
-                .get(&(*t, k.clone()))
-                .and_then(|v| v.iter().find(|(p, hh)| (*p - want).len() < 1e-6 && !used.contains(hh) && !group.contains(hh)).map(|(_, hh)| *hh));
+            let hit = bucket.and_then(|bk| bk.find(*a + off, |hh| used.contains(&hh) || group.contains(&hh)));
             match hit {
                 Some(hh) => group.push(hh),
                 None => {
@@ -354,10 +460,11 @@ fn exploded(d: &Drawing, idx: &ShapeIndex, name: &str, work: &mut u64) -> Vec<Ve
 
 /// Similar but not identical: per block, its references at another scale and its exploded
 /// copies.
-fn similar(d: &Drawing, scope: &Scope) -> serde_json::Map<String, Value> {
+fn similar(d: &Drawing, scope: &Scope) -> (serde_json::Map<String, Value>, bool) {
     let mut out = serde_json::Map::new();
     let idx = shape_index(d, scope);
     let mut work = 0u64;
+    let mut truncated = idx.capped;
     let mut scaled: BTreeMap<String, Vec<Handle>> = BTreeMap::new();
     for (_, e) in scope.objects(d) {
         if let EntityKind::Insert(i) = &e.kind
@@ -371,14 +478,14 @@ fn similar(d: &Drawing, scope: &Scope) -> serde_json::Map<String, Value> {
         d.blocks.values().filter(|b| reported(&b.name) && b.xref_path.is_none() && !b.name.contains('|')).map(|b| b.name.clone()).collect();
     names.sort();
     for n in names {
-        let ex = exploded(d, &idx, &n, &mut work);
+        let ex = exploded(d, &idx, &n, &mut work, &mut truncated);
         let sc = scaled.remove(&n).unwrap_or_default();
         if ex.is_empty() && sc.is_empty() {
             continue;
         }
         out.insert(n, json!({ "scaled": hex(&sc), "exploded": ex.iter().map(|g| hex(g)).collect::<Vec<_>>() }));
     }
-    out
+    (out, truncated)
 }
 
 fn hex(hs: &[Handle]) -> Vec<String> {
@@ -407,7 +514,15 @@ fn list(t: &Tally, scope: &Scope) -> Value {
         m
     };
     let total = t.blocks.values().fold(0u64, |a, b| a.saturating_add(*b));
-    json!({ "blocks": t.blocks, "nested": t.nested, "spaces": t.spaces, "total": total, "truncated": t.truncated, "message": message })
+    json!({
+        "blocks": t.blocks,
+        "nested": t.nested,
+        "spaces": t.spaces,
+        "total": total,
+        "truncated": t.truncated,
+        "selfCheck": self_check(t),
+        "message": message,
+    })
 }
 
 /// Every block's references in every space (nested ones included), and the nested part.
@@ -424,7 +539,15 @@ fn count_block(d: &Drawing, scope: &Scope, nested: bool, b: &str) -> Value {
     let k = t.nested.get(&name).copied().unwrap_or(0);
     let wh = scope.label();
     let message = if k > 0 { format!("Block {name}: {n} in {wh} ({k} nested).") } else { format!("Block {name}: {n} in {wh}.") };
-    json!({ "block": name, "count": n, "nested": k, "handles": hex(&t.handles), "truncated": t.truncated, "message": message })
+    json!({
+        "block": name,
+        "count": n,
+        "nested": k,
+        "handles": hex(&t.handles),
+        "truncated": t.truncated,
+        "selfCheck": self_check(&t),
+        "message": message,
+    })
 }
 
 /// Count the objects in `scope` shaped like `h` (a block reference: references of its block).
@@ -435,18 +558,35 @@ fn count_like(d: &Drawing, scope: &Scope, nested: bool, h: Handle) -> Result<Val
     }
     let ty = e.kind.type_name();
     let key = shape_key(&e.kind).ok_or_else(|| bad("count", format!("a {ty} can't be counted by shape")))?;
-    let hs: Vec<Handle> = scope
-        .objects(d)
-        .into_iter()
-        .filter(|(_, o)| o.kind.type_name() == ty && shape_key(&o.kind).as_deref() == Some(key.as_str()))
-        .map(|(_, o)| o.handle)
-        .take(MAX_HANDLES)
-        .collect();
+    let mut check = SelfCheck::new();
+    let mut hs: Vec<Handle> = Vec::new();
+    let mut capped = false;
+    for (_, o) in scope.objects(d) {
+        check.found(1);
+        if o.kind.type_name() != ty {
+            check.skip(o.kind.type_name(), "a different type", 1);
+            continue;
+        }
+        check.analyzed(1);
+        if shape_key(&o.kind).as_deref() == Some(key.as_str()) {
+            if hs.len() < MAX_HANDLES {
+                hs.push(o.handle);
+            } else {
+                capped = true;
+            }
+        }
+    }
+    if capped {
+        check.cap("handles", u64::try_from(MAX_HANDLES).unwrap_or(u64::MAX));
+    }
     let n = hs.len();
     let message = format!("{ty}: {n} like the selected one in {}.", scope.label());
-    Ok(json!({ "object": ty, "count": n, "handles": hex(&hs), "message": message }))
+    Ok(json!({ "object": ty, "count": n, "handles": hex(&hs), "selfCheck": check.to_json(), "message": message }))
 }
 
+/// The body of COUNT and COUNTLIST: list the blocks in scope, count one block, or count the
+/// objects shaped like a picked one. `default_all` makes an omitted `space` mean every space
+/// (COUNTLIST) instead of the current one (COUNT).
 fn run(s: &mut Session, cmd: &str, p: &Value, default_all: bool) -> Result<Value> {
     let scope = Scope::parse(s, cmd, p, default_all)?;
     let nested = bool_or(p, "nested", true);
@@ -465,7 +605,18 @@ fn run(s: &mut Session, cmd: &str, p: &Value, default_all: bool) -> Result<Value
         if bool_or(p, "similar", false)
             && let Some(o) = r.as_object_mut()
         {
-            o.insert("similar".into(), Value::Object(similar(d, &scope)));
+            let (sim, cut) = similar(d, &scope);
+            o.insert("similar".into(), Value::Object(sim));
+            if cut {
+                // The similar-copies scan ran out of work: say so, never a silent partial.
+                o.insert("truncated".into(), json!(true));
+                if let Some(caps) = o.get_mut("selfCheck").and_then(|c| c.get_mut("caps")).and_then(Value::as_object_mut) {
+                    caps.insert("work".into(), json!(MAX_WORK));
+                }
+                if let Some(m) = o.get("message").and_then(Value::as_str).map(|m| format!("{m}\n  (similar-copies scan too large: partial)")) {
+                    o.insert("message".into(), json!(m));
+                }
+            }
         }
         r
     };
@@ -523,9 +674,13 @@ pub(super) fn run_counttable(s: &mut Session, p: &Value) -> Result<Value> {
     };
     scale_table(&mut table, scale);
     let h = s.add_entity(EntityKind::Table(Box::new(table)))?;
-    Ok(
-        json!({ "handle": h.hex(), "rows": cells.len(), "linked": scope.link(nested).is_some(), "message": format!("Table of {} block(s) inserted.", cells.len()) }),
-    )
+    Ok(json!({
+        "handle": h.hex(),
+        "rows": cells.len(),
+        "linked": scope.link(nested).is_some(),
+        "selfCheck": self_check(&t),
+        "message": format!("Table of {} block(s) inserted.", cells.len()),
+    }))
 }
 
 /// A new count table's scale: the annotation scale (drawing units per paper unit) in model

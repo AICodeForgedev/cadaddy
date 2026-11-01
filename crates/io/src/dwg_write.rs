@@ -149,7 +149,7 @@ pub struct WriteReport {
 /// The drawing as a DWG file of `version_code` (AC1015, AC1018, AC1021, AC1024, AC1027 or AC1032).
 pub fn write(d: &Drawing, version_code: &str) -> Result<(Vec<u8>, WriteReport)> {
     let (v, dv) = version(version_code).ok_or_else(|| IoError::Format(format!("DWG: writing {version_code} files is not supported")))?;
-    let mut tags = crate::dxf_write::tags(d, dv);
+    let mut tags = crate::dxf_write::dwg_tags(d, dv);
     // Records not encoded are kept in XRECORDs of a CADADDY_KEEP dictionary (`dwg_keep`, as the
     // DWG bridge keeps what it can't write), which reading puts back.
     let (_, written) = assemble(v, &sections(&tags), false)?;

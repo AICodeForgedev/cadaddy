@@ -29,7 +29,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("blockify", "Convert Matches to Block", run)
             .menu(&["Draw", "Block", "Convert Matches to Block"])
             .alias(&["bconvert"])
-            .params("{handles? (the group to find; default the selection) | block?: an existing block to find (its contents), name? (the new block; default BLOCKIFY<n>), within?: [hex] (search only these; default the current space), tolerance? (drawing units; default a millionth of the group's size), replace?: bool (default true; false only reports the matches), keepTemplate?: bool (default false: the group becomes a reference too)} → {block, matches: [{handles, at, rotation, scale}], replaced}")
+            .params("{handles? (the group to find; default the selection) | block?: an existing block to find (its contents), name? (the new block; default BLOCKIFY<n>), within?: [hex] (search only these; default the current space), tolerance? (drawing units; default a millionth of the group's size), only?: [hex] (replace only the copies that own one of these object handles, as listed in `matches`; default all copies; the others stay as they are), replace?: bool (default true; false only reports the matches), keepTemplate?: bool (default false: the group becomes a reference too)} → {block, matches: [{handles, at, rotation, scale}], replaced}")
             .interactive(|_| Ok(Box::new(BlockifyM::default()))),
     ]
 }
@@ -262,9 +262,10 @@ pub fn find(template: &[Entity], pool: &[std::sync::Arc<Entity>], tol: Option<f6
             EntityKind::Circle(c) => c.radius,
             _ => 1.0,
         };
+        let own: HashSet<Handle> = template.iter().map(|e| e.handle).collect();
         return pool
             .iter()
-            .filter(|e| kind_id(&e.kind) == kind_id(&t.kind))
+            .filter(|e| kind_id(&e.kind) == kind_id(&t.kind) && !own.contains(&e.handle))
             .filter_map(|e| {
                 let p = locus(&e.kind)?;
                 let s = match &e.kind {
@@ -418,6 +419,17 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("replace").and_then(Value::as_bool) == Some(false) {
         return Ok(json!({ "matches": report, "replaced": 0 }));
     }
+    // Only the chosen copies: those owning one of the `only` handles.
+    let chosen: Vec<&Match> = match p.get("only") {
+        None | Some(Value::Null) => matches.iter().collect(),
+        Some(_) => {
+            let only: HashSet<Handle> = targets(s, &json!({ "handles": p.get("only") }))?.into_iter().collect();
+            if let Some(h) = only.iter().find(|h| !matches.iter().any(|m| m.handles.contains(h))) {
+                return Err(bad(cmd, format!("`only` names {}, which is not part of a copy found (see `matches`)", h.hex())));
+            }
+            matches.iter().filter(|m| m.handles.iter().any(|h| only.contains(h))).collect()
+        }
+    };
     let keep_template = p.get("keepTemplate").and_then(Value::as_bool) == Some(true);
     // The block: the existing one, or the group made into one (it becomes a reference).
     let name = match &existing {
@@ -438,7 +450,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let insert = find_command("insert").ok_or_else(|| EngineError::UnknownCommand("insert".into()))?;
     let mut replaced = 0;
-    for m in &matches {
+    for m in chosen {
         // On the layer of the copy's first object.
         let layer = m.handles.first().and_then(|h| s.doc().ok()?.entity(*h).map(|e| e.common.layer.clone()));
         let at = m.sim.apply(base);
@@ -463,6 +475,9 @@ struct BlockifyM {
     sel: SelectPhase,
     group: Vec<Handle>,
     found: usize,
+    /// The copies found (their objects) and which of them are left out.
+    copies: Vec<Vec<Handle>>,
+    left_out: Vec<bool>,
     stage: u8,
 }
 
@@ -481,7 +496,18 @@ impl Interactive for BlockifyM {
     fn prompt(&self, s: &Session) -> Prompt {
         match self.stage {
             0 => self.sel.prompt(),
-            1 => Prompt::new(format!("{} copies found. Replace them with a block?", self.found), Accept::TEXT).kw(&["Yes", "No"]).default("Yes"),
+            1 => Prompt::new(
+                format!(
+                    "{} cop{} found. Replace {} with a block?",
+                    self.found,
+                    if self.found == 1 { "y" } else { "ies" },
+                    if self.found == 1 { "it" } else { "them" }
+                ),
+                Accept::TEXT,
+            )
+            .kw(&["Yes", "No", "Deselect"])
+            .default("Yes"),
+            2 => Prompt::new("Pick copies to leave out (Enter when done)", Accept::SELECT),
             _ => Prompt::new("Enter block name", Accept::TEXT).default(s.doc().map(next_name).unwrap_or_default()),
         }
     }
@@ -501,15 +527,40 @@ impl Interactive for BlockifyM {
                 SelOutcome::Done(hs) => self.preview(s, hs),
             },
             1 => {
-                if t.to_ascii_lowercase().starts_with('n') {
+                let t = t.to_ascii_lowercase();
+                if t.starts_with('n') {
                     s.set_selection(Vec::new());
                     return Ok(Step::Done);
                 }
-                self.stage = 2;
+                if t.starts_with('d') {
+                    self.stage = 2;
+                    return Ok(Step::Continue);
+                }
+                self.stage = 3;
+                Ok(Step::Continue)
+            }
+            2 => {
+                if let Input::Pick(hs) = &i {
+                    for (c, out) in self.copies.iter().zip(self.left_out.iter_mut()) {
+                        if c.iter().any(|h| hs.contains(h)) {
+                            *out = true;
+                        }
+                    }
+                    self.show(s);
+                    return Ok(Step::Continue);
+                }
+                if self.found == 0 {
+                    s.echo("No copies left to replace.");
+                    s.set_selection(Vec::new());
+                    return Ok(Step::Done);
+                }
+                self.stage = 1;
                 Ok(Step::Continue)
             }
             _ => {
-                let mut p = json!({ "handles": self.group.iter().map(|h| h.hex()).collect::<Vec<_>>() });
+                let only: Vec<String> =
+                    self.copies.iter().zip(&self.left_out).filter(|(_, out)| !**out).flat_map(|(c, _)| c.iter().map(|h| h.hex())).collect();
+                let mut p = json!({ "handles": self.group.iter().map(|h| h.hex()).collect::<Vec<_>>(), "only": only });
                 if !t.is_empty()
                     && let Some(o) = p.as_object_mut()
                 {
@@ -537,19 +588,26 @@ impl BlockifyM {
                 return Ok(Step::Done);
             }
         };
-        let found: Vec<Handle> = r["matches"]
+        self.copies = r["matches"]
             .as_array()
             .into_iter()
             .flatten()
-            .flat_map(|m| m["handles"].as_array().into_iter().flatten().filter_map(|h| h.as_str().and_then(Handle::parse_hex)))
+            .map(|m| m["handles"].as_array().into_iter().flatten().filter_map(|h| h.as_str().and_then(Handle::parse_hex)).collect())
             .collect();
-        self.found = r["matches"].as_array().map_or(0, Vec::len);
-        if self.found == 0 {
+        self.left_out = vec![false; self.copies.len()];
+        if self.copies.is_empty() {
             s.echo("No copies of the group found.");
             return Ok(Step::Done);
         }
-        s.set_selection(found);
+        self.show(s);
         self.stage = 1;
         Ok(Step::Continue)
+    }
+
+    /// Select the copies still to be replaced, so they show.
+    fn show(&mut self, s: &mut Session) {
+        let kept: Vec<Handle> = self.copies.iter().zip(&self.left_out).filter(|(_, out)| !**out).flat_map(|(c, _)| c.iter().copied()).collect();
+        self.found = self.left_out.iter().filter(|o| !**o).count();
+        s.set_selection(kept);
     }
 }

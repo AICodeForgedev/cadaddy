@@ -19,12 +19,42 @@ fn content(mut v: serde_json::Value) -> serde_json::Value {
     {
         o.remove("id");
     }
+    // An anonymous block (a dimension's *D1, a hatch or group's *U2…) is numbered again by the
+    // writer: the name is not content, the block's own geometry is what the object draws.
+    if matches!(v.get("type").and_then(serde_json::Value::as_str), Some("dimension" | "insert"))
+        && let Some(o) = v.as_object_mut()
+        && o.get("block").and_then(serde_json::Value::as_str).is_some_and(is_anonymous_block_name)
+    {
+        o.remove("block");
+    }
     if v.get("type").and_then(serde_json::Value::as_str) == Some("unknown")
         && let Some(serde_json::Value::Array(tags)) = v.get_mut("tags")
     {
         tags.retain(|t| !t.get("code").and_then(serde_json::Value::as_i64).is_some_and(|c| BOOKKEEPING.contains(&c)));
     }
     v
+}
+
+/// Removes from the compared forms of `kind` the fields that mean nothing for it: a linear
+/// dimension's `p15` and `p16` placeholders, the pattern angle and scale of a solid fill. They are
+/// not content, so a file that doesn't hold them, or an edit that carried them along, loses nothing.
+fn drop_placeholders(kind: &cadaddy_doc::EntityKind, forms: &mut [&mut serde_json::Value]) {
+    let unused: Vec<&str> = match kind {
+        cadaddy_doc::EntityKind::Dimension(d) => d.unused_points().to_vec(),
+        cadaddy_doc::EntityKind::Hatch(h) if h.solid => vec!["angle", "scale"],
+        _ => return,
+    };
+    for o in forms.iter_mut().filter_map(|f| f.as_object_mut()) {
+        for k in &unused {
+            o.remove(*k);
+        }
+    }
+}
+
+/// Whether `n` is an anonymous block's name: `*`, a letter and a number (`*D12`, `*U3`, `*X1`).
+fn is_anonymous_block_name(n: &str) -> bool {
+    let b = n.as_bytes();
+    b.len() > 2 && b.first() == Some(&b'*') && b.get(1).is_some_and(u8::is_ascii_alphabetic) && b.iter().skip(2).all(u8::is_ascii_digit)
 }
 
 /// Most objects of one space or block compared one by one: past it, objects spread evenly
@@ -38,40 +68,112 @@ fn step(len: usize) -> usize {
     len.div_ceil(SAMPLE).max(1)
 }
 
-/// The parts of a drawing compared, each named as the notice names it.
-fn parts(d: &Drawing) -> Vec<(&'static str, serde_json::Value)> {
-    fn v<T: Serialize>(t: &T) -> serde_json::Value {
-        serde_json::to_value(t).unwrap_or_default()
+/// The parts of a drawing compared, named as the notice names them.
+const PARTS: [&str; 20] = [
+    "objects",
+    "object properties",
+    "layers",
+    "linetypes",
+    "text styles",
+    "dimension styles",
+    "multileader styles",
+    "table styles",
+    "multiline styles",
+    "blocks",
+    "layouts",
+    "named views",
+    "viewport configurations",
+    "UCSs",
+    "layer states",
+    "groups",
+    "plot style tables",
+    "geometric and dimensional constraints",
+    "parameters",
+    "the scale list",
+];
+
+fn v<T: Serialize>(t: &T) -> serde_json::Value {
+    serde_json::to_value(t).unwrap_or_default()
+}
+
+/// Whether `back` still holds the part of `d` named `part`, as [`kept`] compares them. Objects are
+/// made into JSON a pair at a time: the whole drawing and its copy read back as JSON at once were
+/// several times the drawing's size on every DWG/DXF save, and each saving thread's memory kept
+/// the largest of them (B5-005).
+fn part_kept(part: &str, d: &Drawing, back: &Drawing) -> bool {
+    fn same<T: Serialize>(a: &T, b: &T) -> bool {
+        kept(&v(a), &v(b), 0)
     }
-    let objects = |s: &cadaddy_doc::EntityStore| {
-        let n = s.len();
-        let list = s.iter().step_by(step(n)).map(|e| content(v(&e.kind))).collect::<Vec<_>>();
-        serde_json::json!({ "count": n, "objects": list })
-    };
-    let blocks: Vec<_> = d.blocks.iter().filter(|(_, b)| !b.anonymous).map(|(n, b)| (n.clone(), block_head(b), objects(&b.entities))).collect();
-    let layouts: Vec<_> = d.layouts.iter().map(|l| (l.name.clone(), objects(&l.entities))).collect();
-    vec![
-        ("objects", v(&objects(&d.model))),
-        ("object properties", v(&d.model.iter().step_by(step(d.model.len())).map(|e| v(&e.common)).collect::<Vec<_>>())),
-        ("layers", v(&d.layers)),
-        ("linetypes", v(&d.linetypes)),
-        ("text styles", v(&d.text_styles)),
-        ("dimension styles", v(&d.dim_styles)),
-        ("multileader styles", v(&d.mleader_styles)),
-        ("table styles", v(&d.table_styles)),
-        ("multiline styles", v(&d.mline_styles)),
-        ("blocks", v(&blocks)),
-        ("layouts", v(&layouts)),
-        ("named views", v(&d.views)),
-        ("viewport configurations", v(&d.vports)),
-        ("UCSs", v(&d.ucss)),
-        ("layer states", v(&d.layer_states)),
-        ("groups", v(&d.groups)),
-        ("plot style tables", v(&d.plot_style_tables)),
-        ("geometric and dimensional constraints", v(&d.constraints)),
-        ("parameters", v(&d.parametric)),
-        ("the scale list", v(&d.scales)),
-    ]
+    match part {
+        "objects" => objects_kept(&d.model, &back.model, 0),
+        "object properties" => {
+            let (a, b) = (&d.model, &back.model);
+            // Two lists: an empty one is kept, else as many, each kept.
+            a.is_empty() || (sampled(a.len()) == sampled(b.len()) && sample(a).zip(sample(b)).all(|(e, f)| kept(&v(&e.common), &v(&f.common), 1)))
+        }
+        "layers" => same(&d.layers, &back.layers),
+        "linetypes" => same(&d.linetypes, &back.linetypes),
+        "text styles" => same(&d.text_styles, &back.text_styles),
+        "dimension styles" => same(&d.dim_styles, &back.dim_styles),
+        "multileader styles" => same(&d.mleader_styles, &back.mleader_styles),
+        "table styles" => same(&d.table_styles, &back.table_styles),
+        "multiline styles" => same(&d.mline_styles, &back.mline_styles),
+        // By name, not by place: a block a writer adds (a dynamic block's definition made again from
+        // its anonymous copy) or a layout it puts elsewhere in the list loses nothing.
+        "blocks" => {
+            fn named(d: &Drawing) -> std::collections::HashMap<String, &cadaddy_doc::Block> {
+                d.blocks.iter().filter(|(_, b)| !b.anonymous).map(|(n, b)| (n.to_ascii_lowercase(), &**b)).collect()
+            }
+            let theirs = named(back);
+            named(d)
+                .into_iter()
+                .all(|(n, a)| theirs.get(&n).is_some_and(|b| kept(&block_head(a), &block_head(b), 2) && objects_kept(&a.entities, &b.entities, 2)))
+        }
+        "layouts" => {
+            fn named(d: &Drawing) -> std::collections::HashMap<String, &cadaddy_doc::EntityStore> {
+                d.layouts.iter().map(|l| (l.name.to_ascii_lowercase(), &l.entities)).collect()
+            }
+            let theirs = named(back);
+            named(d).into_iter().all(|(n, a)| theirs.get(&n).is_some_and(|b| objects_kept(a, b, 1)))
+        }
+        "named views" => same(&d.views, &back.views),
+        "viewport configurations" => same(&d.vports, &back.vports),
+        "UCSs" => same(&d.ucss, &back.ucss),
+        "layer states" => same(&d.layer_states, &back.layer_states),
+        "groups" => same(&d.groups, &back.groups),
+        "plot style tables" => same(&d.plot_style_tables, &back.plot_style_tables),
+        "geometric and dimensional constraints" => same(&d.constraints, &back.constraints),
+        "parameters" => same(&d.parametric, &back.parametric),
+        "the scale list" => same(&d.scales, &back.scales),
+        _ => true,
+    }
+}
+
+/// [`kept`] of `{count, objects}` for two object lists (`depth`: where the pair sits), the objects
+/// spread evenly ([`SAMPLE`]) and compared one pair at a time.
+fn objects_kept(a: &cadaddy_doc::EntityStore, b: &cadaddy_doc::EntityStore, depth: usize) -> bool {
+    if !kept(&a.len().into(), &b.len().into(), depth + 1) {
+        return false;
+    }
+    a.is_empty()
+        || (sampled(a.len()) == sampled(b.len())
+            && sample(a).zip(sample(b)).all(|(e, f)| {
+                // The same placeholders the detail list skips ([`compare_pair`]), or a category is
+                // reported with nothing listed under it.
+                let (mut ka, mut kb) = (content(v(&e.kind)), content(v(&f.kind)));
+                drop_placeholders(&e.kind, &mut [&mut ka, &mut kb]);
+                kept(&ka, &kb, depth + 2)
+            }))
+}
+
+/// The objects of a list compared: every [`step`]th.
+fn sample(s: &cadaddy_doc::EntityStore) -> impl Iterator<Item = &std::sync::Arc<cadaddy_doc::Entity>> {
+    s.iter().step_by(step(s.len()))
+}
+
+/// How many objects [`sample`] gives for a list of `len`.
+fn sampled(len: usize) -> usize {
+    len.div_ceil(step(len))
 }
 
 /// A block definition's own properties (base point, description, insert units, explodability…),
@@ -84,6 +186,13 @@ fn block_head(b: &cadaddy_doc::Block) -> serde_json::Value {
     }
     v
 }
+
+/// The size of the difference between two numbers that is rounding noise of a calculation (an
+/// extrusion of (-1e-16, 0, -1), a pattern line's offset of 1e-17), not a change.
+const FLOAT_NOISE: f64 = 1e-12;
+
+/// Fields that name a table record (a layer, linetype, style), compared without case.
+const SYMBOL_KEYS: [&str; 5] = ["linetype", "textStyle", "style", "dimStyle", "layer"];
 
 /// Deepest nesting compared (model data nests a dozen levels).
 const MAX_DEPTH: usize = 64;
@@ -109,13 +218,18 @@ fn kept(a: &serde_json::Value, b: &serde_json::Value, depth: usize) -> bool {
         (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
             // Relative only: a drawing in tiny units (or a thickness of 1e-10 a format drops) is
             // compared as closely as any other (savefuzz found 1e-10 thicknesses dropped unreported).
-            (Some(x), Some(y)) => (x - y).abs() <= 1e-9 * x.abs().max(y.abs()),
+            // Below FLOAT_NOISE, a number is arithmetic noise (a cosine of 1e-17): equal to zero.
+            (Some(x), Some(y)) => (x - y).abs() <= 1e-9 * x.abs().max(y.abs()) || (x - y).abs() <= FLOAT_NOISE,
             _ => false,
         },
         (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(a, b)| kept(a, b, depth + 1)),
-        (Value::Object(x), Value::Object(y)) => {
-            x.iter().all(|(k, a)| y.get(k).map_or_else(|| kept(a, &Value::Null, depth + 1), |b| kept(a, b, depth + 1)))
-        }
+        (Value::Object(x), Value::Object(y)) => x.iter().all(|(k, a)| match (y.get(k), a) {
+            // Symbol names are not case sensitive: a writer may give a table record's name in
+            // capitals (CONTINUOUS for Continuous), which every reference to it follows.
+            (Some(Value::String(b)), Value::String(a)) if SYMBOL_KEYS.contains(&k.as_str()) => a.eq_ignore_ascii_case(b),
+            (Some(b), a) => kept(a, b, depth + 1),
+            (None, a) => kept(a, &Value::Null, depth + 1),
+        }),
         _ => a == b,
     }
 }
@@ -136,7 +250,7 @@ pub fn not_kept(
 
 /// The parts of `d` that `back` (`d` written and read back) no longer holds.
 fn lost_parts(d: &Drawing, back: &Drawing) -> Vec<&'static str> {
-    let lost: Vec<&'static str> = parts(d).into_iter().zip(parts(back)).filter(|((_, a), (_, b))| !kept(a, b, 0)).map(|((n, _), _)| n).collect();
+    let lost: Vec<&'static str> = PARTS.into_iter().filter(|part| !part_kept(part, d, back)).collect();
     // Properties are compared object by object: with objects missing they no longer line up.
     if d.model.len() != back.model.len() { lost.into_iter().filter(|n| *n != "object properties").collect() } else { lost }
 }
@@ -213,7 +327,16 @@ fn changed_fields(a: &serde_json::Value, b: &serde_json::Value) -> Vec<String> {
     match (a.as_object(), b.as_object()) {
         (Some(x), Some(y)) => x
             .iter()
-            .filter(|(k, v)| k.as_str() != "type" && !y.get(k.as_str()).map_or_else(|| kept(v, &serde_json::Value::Null, 1), |w| kept(v, w, 1)))
+            .filter(|(k, v)| {
+                k.as_str() != "type"
+                    && !match (y.get(k.as_str()), v) {
+                        (Some(serde_json::Value::String(w)), serde_json::Value::String(v)) if SYMBOL_KEYS.contains(&k.as_str()) => {
+                            v.eq_ignore_ascii_case(w)
+                        }
+                        (Some(w), v) => kept(v, w, 1),
+                        (None, v) => kept(v, &serde_json::Value::Null, 1),
+                    }
+            })
             .map(|(k, _)| k.clone())
             .collect(),
         _ => vec![String::new()],
@@ -279,7 +402,8 @@ fn compare_pair(e: &cadaddy_doc::Entity, f: &cadaddy_doc::Entity, out: &mut Loss
     fn v<T: Serialize>(t: &T) -> serde_json::Value {
         serde_json::to_value(t).unwrap_or_default()
     }
-    let (ka, kb) = (content(v(&e.kind)), content(v(&f.kind)));
+    let (mut ka, mut kb) = (content(v(&e.kind)), content(v(&f.kind)));
+    drop_placeholders(&e.kind, &mut [&mut ka, &mut kb]);
     let (kind, h) = (kind_name(&ka), Some(e.handle.hex()));
     if kind_name(&kb) != kind {
         out.add(format!("{kind} objects (written as {})", kind_name(&kb)), "changed", h, name);
@@ -406,7 +530,14 @@ pub fn check_written(
     read: fn(&[u8], &str) -> Result<Drawing, String>,
 ) -> Result<(Vec<&'static str>, Vec<Loss>), String> {
     let back = opened(read(bytes, name)?);
-    Ok((lost_parts(d, &back), losses_of(d, &back)))
+    let (mut lost, detail) = (lost_parts(d, &back), losses_of(d, &back));
+    // A category is derived from the same comparison as the detail: one with nothing listed under
+    // it is a disagreement between the two, and a notice that names nothing helps nobody.
+    debug_assert!(lost.is_empty() || !detail.is_empty(), "notKept {lost:?} with an empty notKeptDetail");
+    if detail.is_empty() {
+        lost.clear();
+    }
+    Ok((lost, detail))
 }
 
 /// A drawing read back as opening it gives it: table formulas whose values the file didn't keep
@@ -414,6 +545,12 @@ pub fn check_written(
 fn opened(mut back: Drawing) -> Drawing {
     crate::cmd::table::cells::fill_missing_values(&mut back);
     back
+}
+
+/// The categories the save notice names for `d` against `back` ([`check_written`]'s first half):
+/// for the differential fuzzing, which checks that none is named without a detail.
+pub fn parts_between(d: &Drawing, back: &Drawing) -> Vec<&'static str> {
+    lost_parts(d, &opened(back.clone()))
 }
 
 /// [`losses`] of `d` against `back`, a copy of it written and read back by the caller.
@@ -584,6 +721,16 @@ mod tests {
     }
 
     #[test]
+    fn pattern_line_float_residue_is_not_a_change_but_a_real_change_is() {
+        let line = |dx: f64, dy: f64| json!([{ "angle": 0.5, "base": [0.0, 0.0], "delta": [dx, dy], "dashes": [] }]);
+        // 1.19e-15 read back as 0, and a last-digit difference, are rounding.
+        assert!(kept(&line(1.19e-15, 12.699999999999998), &line(0.0, 12.699999999999996), 0));
+        // A pattern line that really moved is flagged.
+        assert!(!kept(&line(1.19e-15, 12.7), &line(0.001, 12.7), 0));
+        assert!(!kept(&line(0.0, 12.7), &line(0.0, 12.0), 0));
+    }
+
+    #[test]
     fn a_file_that_drops_parts_names_them() {
         let mut d = Drawing::new_imperial();
         d.layers.push(cadaddy_doc::Layer { name: "Walls".into(), ..Default::default() });
@@ -595,6 +742,68 @@ mod tests {
         // A file that can't be written or read back: nothing to say here (saving reports it).
         let fails: fn(&Drawing, &str) -> Result<Vec<u8>, String> = |_, _| Err("no".into());
         assert!(not_kept(&d, "x.dwg", fails, read).is_empty());
+    }
+
+    #[test]
+    fn objects_compared_a_pair_at_a_time_still_name_what_changed() {
+        let circle = |h: u64, r: f64| {
+            cadaddy_doc::Entity::new(
+                cadaddy_doc::Handle(h),
+                cadaddy_doc::EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::new(1.0, 2.0, 0.0), radius: r }),
+            )
+        };
+        let mut d = Drawing::new_imperial();
+        for h in 1..=3 {
+            d.model.push(circle(0x100 + h, 1.0));
+        }
+        let mut block = cadaddy_doc::Block::new("Door");
+        block.entities.push(circle(0x200, 1.0));
+        d.blocks.insert("Door".into(), std::sync::Arc::new(block));
+        assert!(!d.layouts.is_empty());
+        d.layouts[0].entities.push(circle(0x300, 1.0));
+        assert!(lost_parts(&d, &d.clone()).is_empty());
+        // One object changed, one object's layer, a block's object, a layout's objects gone.
+        let mut back = d.clone();
+        back.model = Default::default();
+        for h in 1..=3 {
+            back.model.push(circle(0x100 + h, if h == 2 { 1.5 } else { 1.0 }));
+        }
+        assert_eq!(lost_parts(&d, &back), vec!["objects"]);
+        let mut moved = d.clone();
+        moved.model = Default::default();
+        for h in 1..=3 {
+            let mut e = circle(0x100 + h, 1.0);
+            if h == 3 {
+                e.common.layer = "Walls".into();
+            }
+            moved.model.push(e);
+        }
+        assert_eq!(lost_parts(&d, &moved), vec!["object properties"]);
+        let mut back = d.clone();
+        let mut other = cadaddy_doc::Block::new("Door");
+        other.entities.push(circle(0x200, 2.0));
+        back.blocks.insert("Door".into(), std::sync::Arc::new(other));
+        back.layouts[0].entities = Default::default();
+        assert_eq!(lost_parts(&d, &back), vec!["blocks", "layouts"]);
+        // Fewer objects: counted, and their properties not compared out of line.
+        let mut back = d.clone();
+        back.model = Default::default();
+        back.model.push(circle(0x101, 1.0));
+        assert_eq!(lost_parts(&d, &back), vec!["objects"]);
+    }
+
+    #[test]
+    fn blocks_are_matched_by_name_not_by_place() {
+        let block = |n: &str| std::sync::Arc::new(cadaddy_doc::Block::new(n));
+        let mut d = Drawing::new_imperial();
+        d.blocks.insert("Door".into(), block("Door"));
+        let mut back = d.clone();
+        // A block the file has more, or earlier in its list, loses nothing.
+        back.blocks.insert("Alpha".into(), block("Alpha"));
+        assert!(lost_parts(&d, &back).is_empty());
+        // One it lacks is a loss.
+        back.blocks.remove("Door");
+        assert_eq!(lost_parts(&d, &back), vec!["blocks"]);
     }
 
     #[test]
@@ -610,5 +819,127 @@ mod tests {
         let a = json!({"type": "unknown", "tags": [{"code": 8, "value": "0"}, {"code": 5, "value": "3A0"}, {"code": 10, "value": "1.0"}]});
         let b = json!({"type": "unknown", "tags": [{"code": 5, "value": "3A1"}, {"code": 330, "value": "1F"}, {"code": 8, "value": "0"}, {"code": 10, "value": "1.0"}]});
         assert!(kept(&content(a), &content(b), 0));
+    }
+
+    #[test]
+    fn rounding_noise_is_not_a_change() {
+        // An extrusion of (-1e-16, 0, -1) written and read back as (0, 0, -1); a pattern line's
+        // offset of 1e-17 as 2e-17.
+        assert!(kept(&json!({"x": -9.8e-17, "z": -1.0}), &json!({"x": 0.0, "z": -1.0}), 0));
+        assert!(kept(&json!([1.1e-17]), &json!([2.2e-17]), 0));
+        // A real difference, a tiny one included, still is one.
+        assert!(!kept(&json!([1e-10]), &json!([0.0]), 0));
+        assert!(!kept(&json!({"z": -1.0}), &json!({"z": 1.0}), 0));
+    }
+
+    #[test]
+    fn table_references_are_matched_without_case() {
+        assert!(kept(&json!({"linetype": "Continuous"}), &json!({"linetype": "CONTINUOUS"}), 0));
+        assert!(changed_fields(&json!({"textStyle": "Standard"}), &json!({"textStyle": "STANDARD"})).is_empty());
+        // Text is compared as it is.
+        assert!(!kept(&json!({"contents": "Abc"}), &json!({"contents": "ABC"}), 0));
+    }
+
+    #[test]
+    fn anonymous_block_numbers_are_not_content() {
+        let dim = |b: &str| content(json!({"type": "dimension", "block": b, "text": "<>"}));
+        assert_eq!(dim("*D20"), dim("*D7"));
+        let ins = |b: &str| content(json!({"type": "insert", "block": b}));
+        assert_eq!(ins("*U2"), ins("*U3"));
+        // A named block is content.
+        assert_ne!(ins("Door"), ins("Window"));
+        assert_ne!(ins("*Model_Space"), ins("*Paper_Space"));
+    }
+
+    fn linear() -> cadaddy_doc::Dimension {
+        let z = cadaddy_geom::Vec3::ZERO;
+        cadaddy_doc::Dimension {
+            kind: cadaddy_doc::DimKind::Linear { rotation: 0.0 },
+            defpt: z,
+            text_mid: z,
+            p13: z,
+            p14: cadaddy_geom::Vec3::new(5.0, 0.0, 0.0),
+            p15: z,
+            p16: z,
+            text: String::new(),
+            style: "Standard".into(),
+            measurement: 5.0,
+            text_rotation: 0.0,
+            user_text_pos: false,
+            block: None,
+            overrides: Default::default(),
+            assoc: Vec::new(),
+            marks: Default::default(),
+        }
+    }
+
+    /// The compared forms of two dimensions, as `compare_pair` makes them.
+    fn dim_changes(a: &cadaddy_doc::Dimension, b: &cadaddy_doc::Dimension) -> Vec<String> {
+        let kind = cadaddy_doc::EntityKind::Dimension(Box::new(a.clone()));
+        let (mut x, mut y) = (content(serde_json::to_value(a).unwrap_or_default()), content(serde_json::to_value(b).unwrap_or_default()));
+        for v in [&mut x, &mut y] {
+            if let Some(o) = v.as_object_mut() {
+                o.insert("type".into(), json!("dimension"));
+            }
+        }
+        drop_placeholders(&kind, &mut [&mut x, &mut y]);
+        changed_fields(&x, &y)
+    }
+
+    #[test]
+    fn a_linear_dimensions_placeholder_points_are_not_content() {
+        let a = linear();
+        let mut b = a.clone();
+        // The file holds other values for the points a linear dimension doesn't use.
+        let q = cadaddy_geom::Vec3::new(3.3, -1.7, 0.0);
+        (b.p15, b.p16, b.text_mid) = (q, q, q);
+        assert!(dim_changes(&a, &b).is_empty());
+        // A moved dimension carries only the points it uses.
+        let mut m = a.clone();
+        for p in m.used_points_mut() {
+            *p = *p + q;
+        }
+        assert_eq!((m.p15, m.p16, m.text_mid), (a.p15, a.p16, a.text_mid));
+        assert_ne!(m.p14, a.p14);
+        // A real loss still shows: the measurement, or a used point.
+        let mut c = a.clone();
+        c.measurement = 6.0;
+        assert_eq!(dim_changes(&a, &c), vec!["measurement"]);
+        let mut d = a.clone();
+        d.p14 = q;
+        assert_eq!(dim_changes(&a, &d), vec!["p14"]);
+        // Text the user placed is content.
+        let (mut e, mut f) = (a.clone(), a.clone());
+        (e.user_text_pos, f.user_text_pos) = (true, true);
+        e.text_mid = q;
+        assert_eq!(dim_changes(&e, &f), vec!["textMid"]);
+    }
+
+    #[test]
+    fn a_solid_fills_pattern_angle_and_scale_are_not_content_but_a_patterns_are() {
+        let hatch = |solid: bool, scale: f64| {
+            cadaddy_doc::EntityKind::Hatch(Box::new(cadaddy_doc::Hatch {
+                pattern: if solid { "SOLID" } else { "ANSI31" }.into(),
+                solid,
+                loops: Vec::new(),
+                scale,
+                angle: 0.0,
+                associative: false,
+                style: 0,
+                elevation: 0.0,
+                gradient: None,
+                origin: cadaddy_geom::Vec2::ZERO,
+                background: None,
+                pattern_lines: Vec::new(),
+            }))
+        };
+        let form = |k: &cadaddy_doc::EntityKind| content(serde_json::to_value(k).unwrap_or_default());
+        let changes = |a: cadaddy_doc::EntityKind, b: cadaddy_doc::EntityKind| {
+            let (mut x, mut y) = (form(&a), form(&b));
+            drop_placeholders(&a, &mut [&mut x, &mut y]);
+            changed_fields(&x, &y)
+        };
+        assert!(changes(hatch(true, 1.0), hatch(true, 0.526)).is_empty());
+        assert_eq!(changes(hatch(false, 1.0), hatch(false, 0.526)), vec!["scale"]);
     }
 }

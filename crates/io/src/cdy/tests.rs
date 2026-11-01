@@ -156,6 +156,11 @@ fn the_public_api_and_io_dispatch_read_what_they_write() {
     // Whatever the name, the content says it is a .cdy file.
     assert_eq!(crate::read(&bytes, "renamed.dxf").unwrap(), d);
     assert!(crate::write_with(&d, "a.cdy", &crate::SaveOptions { binary: true, ..Default::default() }).is_err());
+    // A job's checkpoint (`.ckpt`): the same drawing, without the preview.
+    let ckpt = crate::write(&d, "job.ckpt").unwrap();
+    assert!(is_cdy(&ckpt));
+    assert_eq!(read_cdy(&ckpt).unwrap(), d);
+    assert_eq!(thumbnail(&ckpt), None);
 }
 
 #[test]
@@ -858,4 +863,245 @@ fn verify_tells_live_parts_from_superseded_ones() {
     for n in (0..file.len()).step_by(211) {
         let _ = verify(&file[..n]);
     }
+}
+
+/// B4-021: a hostile file listing thousands of chunks is reported in part, not in full.
+#[test]
+fn verify_lists_a_bounded_number_of_chunks() {
+    let mut w = super::container::Writer::new();
+    for _ in 0..5000 {
+        w.chunk(*b"JUNK", 1, b"x", false);
+    }
+    let check = verify(&w.finish()).unwrap();
+    assert!(check["chunksTotal"].as_u64().unwrap() >= 5000);
+    assert!(check["chunks"].as_array().unwrap().len() <= 2000);
+}
+
+// ---- BIM types, project rules, BCF issues and parts (Q5187) ----
+
+fn bim_and_rules(d: &mut Drawing) {
+    use cadaddy_doc::bimspec::{BimType, SpecField};
+    use cadaddy_doc::projrules::{RuleDomain, RuleValue};
+    for (mark, category, value, source) in
+        [("A1", "luminaire", "2x4 LED troffer", "E-501 note 3"), ("J2", "receptacle", "20A duplex", "Spec 26 27 26 p.4")]
+    {
+        let mut ty = BimType::new(mark);
+        ty.category = category.into();
+        ty.set_field("description", SpecField { value: value.into(), source: source.into(), ..SpecField::default() });
+        d.bim_types.set(ty);
+    }
+    d.project_rules.set(RuleDomain::MountingHeight, "receptacle", RuleValue::new("18\"").with_source("Spec 26 05 33"), "set up");
+    d.project_rules.set(RuleDomain::WiringMethod, "branch", RuleValue::new("EMT").with_source("RFI 23"), "set up");
+}
+
+#[test]
+fn bim_types_and_project_rules_round_trip_and_save_incrementally() {
+    let mut d = every_kind();
+    bim_and_rules(&mut d);
+    assert!(d.bim_types.len() >= 2 && d.project_rules.rules.len() >= 2);
+    let (back, notes) = cycle(&d);
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!(back, d);
+    // The manifest lists them.
+    let bytes = model::write(&d, None).unwrap();
+    let man = manifest(&bytes).unwrap();
+    assert_eq!((man["bimTypes"].clone(), man["projectRules"].clone()), (serde_json::json!(2), serde_json::json!(true)));
+    // Read, seeded, one type and one rule edited, saved by appending, read.
+    let (out, _) = save(&d, None, &no_thumb).unwrap();
+    let file = stored(&[], &out);
+    let (mut opened, _) = model::read(&file).unwrap();
+    let state = seed(&opened, &file).expect("seeded");
+    opened.bim_types.get_mut("A1").unwrap().category = "fixture".into();
+    opened.project_rules.set(
+        cadaddy_doc::projrules::RuleDomain::MountingHeight,
+        "receptacle",
+        cadaddy_doc::projrules::RuleValue::new("22\"").with_source("RFI 31"),
+        "edit",
+    );
+    assert_ne!(opened, d);
+    let (out, _) = save(&opened, Some(&state), &no_thumb).unwrap();
+    let Output::Append { bytes, .. } = &out else { panic!("expected an append") };
+    assert!(bytes.len() < file.len() / 2, "{} of {}", bytes.len(), file.len());
+    let file2 = stored(&file, &out);
+    let (back, rep) = model::read(&file2).unwrap();
+    assert!(rep.notes.is_empty(), "{:?}", rep.notes);
+    assert_eq!(back, opened);
+    // Cleared again: both read back empty.
+    let (mut cleared, _) = model::read(&file2).unwrap();
+    let state = seed(&cleared, &file2).expect("seeded again");
+    cleared.bim_types = Default::default();
+    cleared.project_rules = Default::default();
+    let (out, _) = save(&cleared, Some(&state), &no_thumb).unwrap();
+    let back = model::read(&stored(&file2, &out)).unwrap().0;
+    assert!(back.bim_types.is_empty() && back.project_rules.is_empty());
+}
+
+#[test]
+fn damaged_bim_types_and_rules_are_noted_and_left_out() {
+    let mut d = Drawing::new_imperial();
+    bim_and_rules(&mut d);
+    let mut w = Writer::new();
+    w.chunk(*b"BIMT", 1, b"{\"types\": 7}", false);
+    w.chunk(*b"PRUL", 1, b"not json", false);
+    let (back, rep) = model::read(&w.finish()).unwrap();
+    assert!(back.bim_types.is_empty() && back.project_rules.is_empty());
+    assert!(rep.notes.iter().any(|n| n.contains("BIM types")) && rep.notes.iter().any(|n| n.contains("project rules")), "{:?}", rep.notes);
+}
+
+#[test]
+fn bcf_issues_and_parts_save_incrementally_after_open() {
+    let mut d = walkthrough();
+    d.bcf = Some(r#"{"topics":[{"title":"Clash","status":"Open"}]}"#.into());
+    d.parts = Some(r#"{"parts":[{"name":"Bracket"}]}"#.into());
+    let (out, _) = save(&d, None, &no_thumb).unwrap();
+    let mut file = stored(&[], &out);
+    let count = |file: &[u8], tag: &[u8; 4]| container::index(file).unwrap().iter().filter(|e| &e.tag == tag).count();
+    let (mut opened, _) = model::read(&file).unwrap();
+    assert_eq!(opened, d);
+    let mut state = seed(&opened, &file).expect("seeded");
+    // A save with no change appends only an index.
+    let (out, _) = save(&opened, Some(&state), &no_thumb).unwrap();
+    let Output::Append { bytes, .. } = &out else { panic!("expected an append") };
+    assert!(bytes.len() < 600, "{} bytes appended for no change", bytes.len());
+    // Edited: the new text wins on the next open, and the index holds exactly one of each.
+    opened.bcf = Some(r#"{"topics":[{"title":"Clash","status":"Resolved"}]}"#.into());
+    opened.parts = Some(r#"{"parts":[{"name":"Bracket","parameters":{"width":3}}]}"#.into());
+    let (out, next) = save(&opened, Some(&state), &no_thumb).unwrap();
+    assert!(matches!(out, Output::Append { .. }));
+    file = stored(&file, &out);
+    let (back, rep) = model::read(&file).unwrap();
+    assert!(rep.notes.is_empty(), "{:?}", rep.notes);
+    assert_eq!((&back.bcf, &back.parts), (&opened.bcf, &opened.parts));
+    assert_eq!((count(&file, b"BCFI"), count(&file, b"PRTS")), (1, 1));
+    // Seeded from the appended file, then both cleared.
+    let (mut again, _) = model::read(&file).unwrap();
+    state = seed(&again, &file).expect("seeded from the appended file");
+    assert_eq!(state.len, next.len);
+    again.bcf = None;
+    again.parts = None;
+    let (out, _) = save(&again, Some(&state), &no_thumb).unwrap();
+    assert!(matches!(out, Output::Append { .. }));
+    file = stored(&file, &out);
+    let (back, _) = model::read(&file).unwrap();
+    assert_eq!((back.bcf, back.parts), (None, None));
+    assert_eq!((count(&file, b"BCFI"), count(&file, b"PRTS")), (0, 0));
+}
+
+/// Every persisted field of a drawing set to something other than a new drawing's value.
+fn every_field_set() -> Drawing {
+    let mut d = every_kind();
+    bim_and_rules(&mut d);
+    d.building_spec = Some(r#"{"levels":[]}"#.into());
+    d.tours = Some("[]".into());
+    d.bcf = Some(r#"{"topics":[]}"#.into());
+    d.schedule4d = cadaddy_walk3d::fourd::Schedule4d {
+        tasks: vec![cadaddy_walk3d::fourd::Task {
+            id: "T1".into(),
+            name: "Rough-in".into(),
+            start: "2027-01-04".into(),
+            finish: "2027-01-29".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+    .to_json();
+    d.parts = Some(r#"{"parts":[]}"#.into());
+    d.overrides = cadaddy_doc::overrides::Overrides::default().to_json().ok();
+    d.agent = Some(r#"{"notes":["handoff"]}"#.into());
+    d.import_check = Some(r#"{"checks":[]}"#.into());
+    d.embedded.insert("lightmap.json".into(), std::sync::Arc::new(b"{}".to_vec()));
+    d.active_layout = d.layouts.last().map(|l| l.name.clone());
+    d.shape_files = vec!["complex.shx".into()];
+    d.handseed += 1000;
+    d.hidden_saved = true;
+    d.hidden_objects = d.model.iter().take(2).map(|e| e.handle).collect();
+    d.field_values = d.model.iter().take(1).map(|e| (e.handle, vec!["7".into()])).collect();
+    d.kept_handles.insert("LAYER/WALLS".into(), 0xABC);
+    d.geo = Some(cadaddy_doc::geo::GeoLocation { latitude: 32.75, longitude: -97.33, elevation: 190.0, ..Default::default() });
+    d.properties.title = "Sample Floor Plan".into();
+    d.properties.set_custom("Phase", Some("2"));
+    d.plot_stamp = Some(cadaddy_doc::plotstamp::PlotStamp { drawing_name: true, ..Default::default() });
+    d.sun.on = !d.sun.on;
+    d.sun.year += 1;
+    d.materials.push(cadaddy_doc::material::recipe("oak").unwrap().material(0.0254));
+    d.scales.push(cadaddy_doc::AnnoScale { name: "1:7".into(), paper_units: 1.0, drawing_units: 7.0, offset: Vec2::ZERO });
+    d.linetypes.push(Linetype::simple("MADEUP", "dashes", &[0.5, -0.25]));
+    macro_rules! renamed_copy {
+        ($($table:ident),*) => { $( let mut c = d.$table.first().cloned().unwrap(); c.name = "Made Up".into(); c.name.push('2'); d.$table.push(c); )* };
+    }
+    renamed_copy!(text_styles, dim_styles, mleader_styles, table_styles, mline_styles);
+    d.views.push(NamedView { name: "Lobby".into(), center: Vec2::new(5.0, 5.0), height: 20.0, width: 30.0, twist: 0.5, ..NamedView::default() });
+    let tile = VportTile { min: Vec2::ZERO, max: Vec2::new(0.5, 1.0), center: Vec2::new(3.0, 3.0), height: 9.0, aspect: 1.5 };
+    d.vports.push(VportConfig { name: "Two".into(), tiles: vec![tile] });
+    let layer = d.layers.first().cloned().unwrap();
+    d.layer_states.push(LayerState {
+        name: "Plan".into(),
+        layers: vec![layer],
+        description: "made up".into(),
+        restore: Default::default(),
+        off_others: true,
+    });
+    d.layer_filters.push(LayerFilter { name: "Walls".into(), parent: None, kind: LayerFilterKind::Group { layers: vec!["WALLS".into()] } });
+    d.plot_style_tables.push(PlotStyleTable { name: "made-up".into(), description: "d".into(), kind: PlotStyleKind::Named, styles: Vec::new() });
+    let handle = d.model.iter().next().map(|e| e.handle).unwrap();
+    d.constraints.push(Constraint {
+        id: 1,
+        kind: ConstraintKind::Fix,
+        refs: vec![GeomRef { handle, sub: Default::default() }],
+        name: String::new(),
+        expr: String::new(),
+    });
+    d.parametric.parameters.push(Parameter { name: "width".into(), expr: "12".into(), description: "made up".into() });
+    d.groups.push(cadaddy_doc::Group { name: "G1".into(), description: "made up".into(), selectable: true, members: Vec::new() });
+    d.ucss.push(cadaddy_doc::Ucs {
+        name: "U1".into(),
+        origin: Vec3::new(1.0, 2.0, 0.0),
+        x_axis: Vec3::new(1.0, 0.0, 0.0),
+        y_axis: Vec3::new(0.0, 1.0, 0.0),
+    });
+    d
+}
+
+/// A field that is still a new drawing's value after `every_field_set`.
+macro_rules! assert_set {
+    ($d:expr, $base:expr; $($f:ident),* $(,)?) => {
+        let mut unset: Vec<&str> = Vec::new();
+        $( if $d.$f == $base.$f { unset.push(stringify!($f)); } )*
+        assert!(unset.is_empty(), "still a new drawing's value, set them in every_field_set: {unset:?}");
+    };
+}
+
+#[test]
+fn every_persisted_field_round_trips() {
+    let d = every_field_set();
+    let base = Drawing::new_imperial();
+    // Session-only fields (`read_notes`, `refedit`, `skipped_records`) are excluded by name; every
+    // other field of `Drawing` is listed here (and in `model::field_guard`, which stops compiling
+    // when a field is added) and must be set to something else.
+    assert_set!(d, base;
+        header, foreign, layers, linetypes, text_styles, shape_files, dim_styles, mleader_styles, table_styles, mline_styles, blocks,
+        model, layouts, active_layout, views, vports, ucss, layer_states, layer_filters, groups, plot_style_tables, constraints,
+        parametric, scales, handseed, hidden_objects, hidden_saved, materials, sun, geo, bim_types, project_rules, building_spec,
+        tours, bcf, schedule4d, parts, overrides, agent, import_check, embedded, plot_stamp, properties, kept_handles, field_values,
+    );
+    let (back, notes) = cycle(&d);
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!(back, d);
+}
+
+/// B9-016: a header chunk written before the fix, with `null` where a variable was NaN. The
+/// variables that can be read are kept; the one that can't is named.
+#[test]
+fn a_header_with_one_unreadable_variable_keeps_the_others() {
+    let head = serde_json::json!({"vars": {"INSUNITS": 4, "DIMSCALE": 48.0, "LTSCALE": 24.0, "THICKNESS": null, "PDSIZE": null, "USERS1": "keep"}});
+    let mut w = Writer::new();
+    w.chunk(*b"HEAD", 1, &tokens::encode(&head), true);
+    let bytes = w.finish();
+    let (back, rep) = model::read(&bytes).unwrap();
+    assert_eq!((back.header.i64("INSUNITS", 1), back.header.f64("DIMSCALE", 1.0), back.header.f64("LTSCALE", 1.0)), (4, 48.0, 24.0));
+    assert_eq!(back.header.str("USERS1", ""), "keep");
+    assert!(back.header.get("THICKNESS").is_none());
+    let said: Vec<&String> = rep.notes.iter().filter(|n| n.contains("drawing settings (header)")).collect();
+    assert_eq!(said.len(), 1, "{:?}", rep.notes);
+    assert!(said[0].contains("THICKNESS") && said[0].contains("PDSIZE"), "{}", said[0]);
 }

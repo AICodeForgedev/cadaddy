@@ -54,11 +54,11 @@ pub fn fields(ty: &str) -> Vec<Field> {
             f("Text height", "height", true, |k| if let EntityKind::MText(t) = k { Some(t.height) } else { None }),
             f("Rotation", "rotation", false, |k| if let EntityKind::MText(t) = k { Some(t.rotation.to_degrees()) } else { None }),
         ],
-        "Insert" => vec![
+        "Block Reference" => vec![
             f("Rotation", "rotation", false, |k| if let EntityKind::Insert(i) = k { Some(i.rotation.to_degrees()) } else { None }),
             f("Scale", "scale", false, |k| if let EntityKind::Insert(i) = k { Some(i.scale.x) } else { None }),
         ],
-        "LwPolyline" => vec![f("Global width", "width", true, |k| if let EntityKind::LwPolyline(p) = k { Some(p.const_width) } else { None })],
+        "Polyline" => vec![f("Global width", "width", true, |k| if let EntityKind::LwPolyline(p) = k { Some(p.const_width) } else { None })],
         _ => Vec::new(),
     }
     .into_iter()
@@ -146,6 +146,37 @@ mod tests {
     }
 
     #[test]
+    fn block_reference_and_polyline_rows_follow_the_type_names() {
+        use crate::CadApp;
+        use serde_json::json;
+        let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+        let seed = app.run("line", json!({"points": [[0, 0], [1, 0]]})).unwrap()["handles"][0].as_str().unwrap().to_string();
+        app.run("block", json!({"name": "Bolt", "base": [0, 0], "handles": [seed], "keep": "delete"})).unwrap();
+        let mut hs = Vec::new();
+        for (rot, at) in [(10, [0, 0]), (30, [5, 5])] {
+            let r = app.run("insert", json!({"name": "Bolt", "at": at, "rotation": rot})).unwrap();
+            hs.push(r.get("handle").or_else(|| r["handles"].get(0)).and_then(|v| v.as_str()).unwrap().to_string());
+        }
+        for v in [[[0, 0], [4, 0], [4, 4]], [[1, 1], [3, 1], [3, 3]]] {
+            let r = app.run("pline", json!({"vertices": v})).unwrap();
+            hs.push(r.get("handle").or_else(|| r["handles"].get(0)).and_then(|v| v.as_str()).unwrap().to_string());
+        }
+        hs.push(app.run("circle", json!({"center": [2, 2], "radius": 1})).unwrap()["handle"].as_str().unwrap().to_string());
+        let d = app.session.doc().unwrap();
+        let ents: Vec<&Entity> = hs.iter().map(|x| &**d.entity(Handle::parse_hex(x).unwrap()).unwrap()).collect();
+        for e in &ents {
+            assert!(!fields(e.kind.type_name()).is_empty(), "{}", e.kind.type_name());
+        }
+        let inserts = &ents[..2];
+        let rot = fields("Block Reference").into_iter().find(|f| f.key == "rotation").unwrap();
+        let scale = fields("Block Reference").into_iter().find(|f| f.key == "scale").unwrap();
+        assert_eq!(shared(&rot, inserts), None, "*VARIES*");
+        assert_eq!(shared(&scale, inserts), Some(1.0));
+        let width = fields("Polyline").into_iter().find(|f| f.key == "width").unwrap();
+        assert_eq!(shared(&width, &ents[2..4]), Some(0.0));
+    }
+
+    #[test]
     fn panels_narrow_a_mixed_selection_and_quick_lists_are_kept_per_type() {
         use crate::CadApp;
         use serde_json::json;
@@ -186,5 +217,11 @@ mod tests {
         // Through the UI command too (agents, scripts).
         assert!(app.run("ui.quickprops", json!({"type": "Line", "fields": ["length"]})).is_ok());
         assert_eq!(app.ui.quick_properties.get("Line"), Some(&vec!["length".to_string()]));
+        // Block references and polylines keep lists under the names `type_name()` returns.
+        let r = app.run("ui.quickprops", json!({"type": "Block Reference", "fields": ["rotation"]})).unwrap();
+        let avail = r["available"].as_array().unwrap();
+        assert!(avail.iter().any(|k| k == "rotation") && avail.iter().any(|k| k == "scale"));
+        assert_eq!(app.ui.quick_properties.get("Block Reference"), Some(&vec!["rotation".to_string()]));
+        assert!(app.run("ui.quickprops", json!({"type": "Polyline", "fields": ["width"]})).is_ok());
     }
 }

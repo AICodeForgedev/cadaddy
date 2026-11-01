@@ -19,6 +19,22 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
     Some(Ok(Value::Null))
 }
 
+/// The Manager's Load…: the picked file goes to STYLESMANAGER `load` (a binary .ctb/.stb or our
+/// JSON; a binary table is named after its file).
+fn load_action(path: &str) -> Action {
+    Some(("stylesmanager", json!({ "action": "load", "path": path })))
+}
+
+/// The Manager's Save as…: table `name` to the picked file (binary for .ctb/.stb, JSON otherwise).
+fn save_action(name: &str, path: &str) -> Action {
+    Some(("stylesmanager", json!({ "action": "save", "name": name, "path": path })))
+}
+
+/// A file name to suggest for a table: its own name, with `.ctb` added when it has no extension.
+fn suggested_file(table: &str) -> String {
+    if table.contains('.') { table.to_string() } else { format!("{table}.ctb") }
+}
+
 fn temp<T: Clone + Send + Sync + 'static>(ctx: &egui::Context, id: &str) -> Option<T> {
     ctx.data_mut(|d| d.get_temp::<T>(egui::Id::new(id)))
 }
@@ -101,6 +117,21 @@ fn window(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                 }
                 if ui.add_enabled(in_drawing, egui::Button::new(crate::tl!("Delete"))).clicked() {
                     action = Some(("stylesmanager", json!({ "action": "delete", "name": sel })));
+                }
+                if let Some(pick) = app.services.pick_plot_style.as_ref()
+                    && ui.button(crate::tl!("Load…")).on_hover_text(crate::tl!("Load a plot style table file (.ctb, .stb)")).clicked()
+                    && let Some(path) = pick()
+                {
+                    action = load_action(&path);
+                }
+                if let Some(pick) = app.services.pick_save_plot_style.as_ref()
+                    && ui
+                        .add_enabled(table.is_some(), egui::Button::new(crate::tl!("Save as…")))
+                        .on_hover_text(crate::tl!("Save this table to a file"))
+                        .clicked()
+                    && let Some(path) = pick(&suggested_file(&sel))
+                {
+                    action = save_action(&sel, &path);
                 }
             });
             if let Some((name, current, show)) = &layout {
@@ -226,4 +257,20 @@ fn window(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
     set_temp(ctx, "pstyle_sel", sel);
     set_temp(ctx, "pstyle_new", new_style);
     action
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_and_save_buttons_emit_stylesmanager_actions() {
+        assert_eq!(load_action("/tmp/Sample Table.ctb"), Some(("stylesmanager", json!({ "action": "load", "path": "/tmp/Sample Table.ctb" }))));
+        assert_eq!(
+            save_action("acad.ctb", "/tmp/out.ctb"),
+            Some(("stylesmanager", json!({ "action": "save", "name": "acad.ctb", "path": "/tmp/out.ctb" })))
+        );
+        assert_eq!(suggested_file("monochrome.ctb"), "monochrome.ctb");
+        assert_eq!(suggested_file("Mine"), "Mine.ctb");
+    }
 }

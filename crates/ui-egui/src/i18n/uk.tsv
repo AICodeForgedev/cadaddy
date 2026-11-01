@@ -1,6 +1,6 @@
-# CADCraft Ukrainian interface catalog — original translations by @dmatviichuk.
+# CADaddy Ukrainian interface catalog — original translations by @dmatviichuk.
 # License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
-# Written from CADCraft's English strings; no proprietary translations were copied.
+# Written from CADaddy's English strings; no proprietary translations were copied.
 # UTF-8: context<TAB>English source<TAB>Ukrainian translation.
 # Empty context = ordinary label; @plural = one|few|many forms with {n}.
 # Keep command IDs, keywords, technology/product names and user data unchanged.
@@ -96,6 +96,7 @@
 	Blend	Плавне з'єднання
 	Block	Блок
 	Block Attribute Manager...	Диспетчер атрибутів блоків...
+	Block Description...	Опис блока...
 	Block Editor	Редактор блоків
 	Block Reference	Посилання на блок
 	Block...	Блок...
@@ -145,6 +146,7 @@
 	Close All Other Drawings	Закрити всі інші креслення
 	Closed	Замкнений
 	Close Comparison	Закрити порівняння
+	Export Comparison	Експортувати порівняння
 	Coincident	Збіг
 	Collapse Palettes	Згорнути палітри
 	Collapse Tool Sets	Згорнути набори інструментів
@@ -255,6 +257,7 @@
 	Drawing Template (DWT)	Шаблон креслення (DWT)
 	Drawing Utilities	Утиліти креслення
 	Drawings (DWG, DXF)	Креслення (DWG, DXF)
+	AutoLISP (LSP)	AutoLISP (LSP)
 	SVG drawings (SVG, SVGZ)	Креслення SVG (SVG, SVGZ)
 	Dynamic	Динамічно
 	Dynamic Dimensions	Динамічні розміри
@@ -547,6 +550,7 @@
 	N	Пн
 	Name	Назва
 	Name (A–Z)	Назва (А–Я)
+	Named Viewports...	Іменовані видові екрани...
 	Named Views...	Іменовані види...
 	Nearest	Найближча точка
 	New	Створити
@@ -977,6 +981,10 @@
 	Reset keeps the interface language.	Скидання не змінює мову інтерфейсу.
 	Reset to Defaults	Скинути до типових
 	Save new drawings as	Зберігати нові креслення як
+	Units of new drawings	Одиниці нових креслень
+	Imperial (inches)	Імперські (дюйми)
+	Metric (millimetres)	Метричні (міліметри)
+	New and the first drawing at startup use these units unless a default template is set (QNEWTEMPLATE).	Команда «Створити» і перше креслення під час запуску використовують ці одиниці, якщо не задано типовий шаблон (QNEWTEMPLATE).
 	Screen magnifiers, screen readers and recorders follow the system cursor.	Екранні лупи, програми читання з екрана та запису стежать за системним курсором.
 	Select objects first, then choose a command	Спочатку вибирати об'єкти, потім команду
 	Selection	Вибір
@@ -1221,6 +1229,7 @@
 	Show System Cursor	Показувати системний курсор
 	Animation Effects	Ефекти анімації
 	Animation effects	Ефекти анімації
+	Interface scale	Масштаб інтерфейсу
 	Import...	Імпорт...
 	Export...	Експорт...
 	Batch Publish...	Пакетна публікація...
@@ -1276,6 +1285,9 @@
 	Search for pattern	Пошук зразка
 	Run Script...	Виконати сценарій...
 	Query Texts	Запит текстів
+	Analyze Shapes	Аналіз фігур
+	Analyze Usage	Аналіз використання
+	Implied Loops	Неявні контури
 	Hatch Pick	Вибір для штрихування
 # Hatch and Gradient dialog
 	Hatch and Gradient	Штрихування та градієнт
@@ -3364,3 +3376,42 @@
 	Clash Navigate	Перехід між колізіями
 	Colour By Status/Level	Колір за статусом/рівнем
 	Inspect Element	Переглянути елемент
+	Select using two clicks only	Вибирати лише двома клацаннями
+	Define each corner of the selection window with a separate click.	Задайте кожен кут рамки вибору окремим клацанням.
+	Center the plot	Центрувати друк
+	Fit to paper	Вписати в аркуш
+	Plot area	Область друку
+	Plot object lineweights	Друкувати товщини ліній об’єктів
+	Plot offset	Зсув друку
+	Plot transparency	Друкувати прозорість
+	Printer/plotter	Принтер/плотер
+	X offset (mm)	Зсув по X (мм)
+	Y offset (mm)	Зсув по Y (мм)
+	Arrow size	Розмір стрілки
+	Dim scale overall	Загальний масштаб розмірів
+	Precision	Точність
+	Decimal	Десяткові
+	Decimal Degrees	Десяткові градуси
+	Drawing Units	Одиниці креслення
+	Insertion scale	Масштаб вставлення
+	Sample output	Приклад виведення
+	Units to scale inserted content	Одиниці для масштабування вставленого вмісту
+	Planned Walls	Заплановані стіни
+	Extended Trim	Розширене обрізання
+	Trim and Extend	Обрізати й подовжити
+	Trim to Block Objects	Обрізати за об’єктами блока
+	Extend to Block Objects	Подовжити до об’єктів блока
+	Super Hatch	Суперштрихування
+	Block Authoring Palettes	Палітри створення блоків
+	Test Block	Перевірити блок
+	Model space has no page setup; open a layout to set its plot style table	Модельний простір не має параметрів сторінки; відкрийте аркуш, щоб задати його таблицю стилів друку
+	Company Standards	Стандарти компанії
+	Delete Project	Видалити проєкт
+	Duplicate Project	Дублювати проєкт
+	Projects	Проєкти
+	Remove Company Standard	Вилучити стандарт компанії
+	Set Company Standard	Задати стандарт компанії
+	Standards	Стандарти
+	Apply Submittals	Застосувати погоджену документацію
+	Dimming Check	Перевірка регулювання яскравості
+	Read Partition Type Legend	Прочитати легенду типів перегородок

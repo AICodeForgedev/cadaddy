@@ -107,6 +107,7 @@ impl PendingReply {
     }
 }
 
+#[derive(Debug)]
 pub enum Outcome {
     Done(Value),
     Screenshot { path: Option<String> },
@@ -340,7 +341,7 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("ui.screenshot", "{path?}", "PNG of the window (needs a presented frame)."),
     ("ui.render", "{path?, width?, height?, fit?}", "Headless render of the drawing; replies pngBase64."),
     ("app.open", "{path}", "Open a drawing."),
-    ("app.save", "{path?}", "Save the drawing (Save As with a path)."),
+    ("app.save", "{path?, force?}", "Save the drawing (Save As with a path); force: true overwrites a file that changed on disk."),
     (
         "app.quit",
         "{save?: bool, discard?: bool}",
@@ -353,7 +354,8 @@ const METHODS: &[(&str, &str, &str)] = &[
         "Answer the open \"Save changes to …?\" question as the user would (Save saves first; Save on an unnamed drawing opens Save As).",
     ),
     ("control.methods", "", "This list."),
-    ("ping", "", "Replies \"pong\"."),
+    ("control.cancel", "", "Ask the running render to stop at once (answered ahead of the queue, even while a render holds the window)."),
+    ("ping", "{version?}", "Replies \"pong\"; with version: true an object: version, pid, the window title and agentPortHeldElsewhere."),
     ("auth", "{token}", "Present the control token (checked by the server before anything reaches the app; see docs/control-protocol.md)."),
 ];
 
@@ -793,16 +795,29 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 _ => return err("choice must be \"save\", \"discard\" or \"cancel\""),
             };
             let Some(title) = app.close_prompt().map(str::to_string) else { return err("no \"Save changes?\" question is open") };
+            // Discarding the user's changes is the user's call, as for `close` (Allow answers it).
+            if choice == crate::closing::Choice::Discard && app.session.agent.confirm {
+                return err(app.session.ask_user("app.answerClose", p, format!("an agent wants to close {title} without saving its changes")));
+            }
             app.answer_close(choice);
             ok(json!({ "answered": title, "stillAsking": app.close_prompt() }))
         }
         "app.quit" => {
             // Programmatic calls never open dialogs: quit without the unsaved-changes prompt. With
             // `save`, modified drawings are saved first; nothing quits if one can't be.
-            if p.get("save").and_then(Value::as_bool) == Some(true)
-                && let Err(e) = app.session.execute("document.closeall", &json!({ "save": true }))
-            {
-                return err(e.to_string());
+            let save = p.get("save").and_then(Value::as_bool) == Some(true);
+            let dirty = app.session.docs.iter().any(|d| d.is_dirty());
+            if !save && dirty && app.session.agent.confirm {
+                return err(app.session.ask_user("app.quit", p, "an agent wants to quit CADaddy, discarding unsaved changes".into()));
+            }
+            if save {
+                // As the agent's own call, so saving over an existing file asks.
+                let was = std::mem::replace(&mut app.session.agent.from_agent, true);
+                let r = app.session.execute("document.closeall", &json!({ "save": true }));
+                app.session.agent.from_agent = was;
+                if let Err(e) = r {
+                    return err(e.to_string());
+                }
             }
             app.quit_confirmed = true;
             app.quit_requested = true;
@@ -810,6 +825,20 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             ok(Value::Null)
         }
         "control.methods" => ok(methods_json()),
+        // `version: true` (the command-line bridge's hello) also says which window answered, so a
+        // connector can tell windows apart when several are open (only one holds the agent port).
+        // The control server answers this itself, ahead of the queue; here for a host that doesn't.
+        "control.cancel" => {
+            cadaddy_engine::request_cancel();
+            ok(json!({ "cancelRequested": true }))
+        }
+        "ping" if p.get("version").and_then(Value::as_bool) == Some(true) => ok(json!({
+            "pong": true,
+            "version": env!("CARGO_PKG_VERSION"),
+            "pid": std::process::id(),
+            "title": app.os_title,
+            "agentPortHeldElsewhere": app.agent_port_held,
+        })),
         "ping" => ok(json!("pong")),
         // The server checks the token before a request gets here.
         "auth" => ok(json!({ "authenticated": true })),

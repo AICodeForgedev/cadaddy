@@ -4,7 +4,7 @@ use super::value::{Value, to_text};
 use crate::Session;
 use crate::cmd::file::{EntityCodec, set_entity_codec};
 
-fn session() -> Session {
+pub(super) fn session() -> Session {
     set_entity_codec(EntityCodec {
         groups: cadaddy_io::entity_groups,
         entity: cadaddy_io::entity_from_groups,
@@ -36,6 +36,19 @@ fn ok(s: &mut Session, code: &str) -> String {
 }
 
 #[test]
+fn real_print_subnormal_and_rounding() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "1e-310"), "1.0e-310");
+    assert_eq!(ok(&mut s, "5e-324"), "4.94066e-324");
+    assert_eq!(ok(&mut s, "9.9999996e10"), "1.0e+011");
+    assert_eq!(ok(&mut s, "9.9999996e-7"), "1.0e-006");
+    assert_eq!(super::value::real_text(-1e-310), "-1.0e-310");
+    assert_eq!(super::value::real_text(1e308), "1.0e+308");
+    assert_eq!(super::value::real_text(999999.5), "1.0e+006");
+    assert_eq!(super::value::real_text(0.000009999996), "0.00001");
+}
+
+#[test]
 fn arithmetic_follows_autolisp() {
     let mut s = session();
     assert_eq!(ok(&mut s, "(+ 1 2 3)"), "6");
@@ -60,6 +73,39 @@ fn arithmetic_follows_autolisp() {
     assert_eq!(ok(&mut s, "(= \"a\" \"a\")"), "T");
     assert_eq!(eval(&mut s, "(/ 1 0)"), Err("divide by zero".into()));
     assert_eq!(eval(&mut s, "(+ 1 nil)"), Err("bad argument type: numberp: nil".into()));
+}
+
+/// `=` answers for the symbols `type` returns, which is how AutoLISP routines test a type:
+/// `(= (type x) 'INT)`. Coercing the symbol to a number failed the whole routine with "bad
+/// argument type" instead, so a routine written for AutoLISP stopped at its first type test
+/// (#1597). The ordering comparisons are still numbers and strings, as AutoLISP has them.
+#[test]
+fn equality_compares_symbols_as_autolisp_does() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "(= (type 1) 'INT)"), "T");
+    assert_eq!(ok(&mut s, "(= (type 1.0) 'INT)"), "nil");
+    assert_eq!(ok(&mut s, "(= (type '(1 2)) 'LIST)"), "T");
+    assert_eq!(ok(&mut s, "(= (type \"a\") 'STR)"), "T");
+    assert_eq!(ok(&mut s, "(/= (type 1) 'REAL)"), "T");
+    assert_eq!(ok(&mut s, "(= 'a 'a 'a)"), "T");
+    assert_eq!(ok(&mut s, "(= 'a 'b)"), "nil");
+
+    // The routine from the report runs.
+    ok(&mut s, "(defun isint (a) (if (= (type a) 'INT) T nil))");
+    assert_eq!(ok(&mut s, "(isint 3)"), "T");
+    assert_eq!(ok(&mut s, "(isint 3.0)"), "nil");
+    assert_eq!(ok(&mut s, "(isint \"3\")"), "nil");
+
+    // A mismatch of kinds is nil, not an error; numbers and strings are unchanged.
+    assert_eq!(ok(&mut s, "(= 1 \"1\")"), "nil");
+    assert_eq!(ok(&mut s, "(= '(1) '(1))"), "nil", "`=` is not `equal`");
+    assert_eq!(ok(&mut s, "(= nil nil)"), "T");
+    assert_eq!(ok(&mut s, "(= 1 1.0)"), "T");
+    assert_eq!(ok(&mut s, "(= \"a\" \"a\" \"a\")"), "T");
+    assert_eq!(ok(&mut s, "(= 1 1 2)"), "nil");
+
+    // Ordering still refuses what AutoLISP refuses.
+    assert_eq!(eval(&mut s, "(< 'a 'b)"), Err("bad argument type: numberp: A".into()));
 }
 
 #[test]
@@ -189,6 +235,64 @@ fn runaway_routines_are_errors_not_crashes() {
 }
 
 #[test]
+fn synchronous_callback_loop_is_an_error_not_a_hang() {
+    // A comparator with an infinite loop used to run with u64::MAX fuel and hang the thread; it
+    // now terminates at the synchronous-callback step cap (CWE-400, finding row 2).
+    let mut s = session();
+    s.lisp.limits.callback_steps = 1_000;
+    assert!(eval(&mut s, "(vl-sort '(1 2) (function (lambda (a b) (while t))))").is_err());
+    // A well-behaved comparator still works afterwards.
+    assert_eq!(ok(&mut s, "(vl-sort '(3 1 2) '<)"), "(1 2 3)");
+}
+
+#[test]
+fn a_zero_callback_budget_does_not_run_the_callback() {
+    let mut s = session();
+    s.lisp.limits.callback_steps = 0;
+    ok(&mut s, "(setq callback-ran nil)");
+    let result = eval(&mut s, "(vl-remove-if '(lambda (x) (setq callback-ran t)) '(1))");
+    assert_eq!(result, Err("callback stopped after 0 steps".into()));
+    assert_eq!(ok(&mut s, "callback-ran"), "nil");
+}
+
+#[test]
+fn a_callback_must_fit_within_a_partial_slice() {
+    let mut s = session();
+    s.lisp.limits.callback_steps = 1_000;
+    ok(&mut s, "(setq callback-count 0)");
+    let result = eval(&mut s, "(vl-remove-if '(lambda (x) (repeat 1000 (setq callback-count (1+ callback-count)))) '(1))");
+    assert_eq!(result, Err("callback stopped after 1000 steps".into()));
+    assert_eq!(ok(&mut s, "(and (> callback-count 0) (< callback-count 1000))"), "T");
+}
+
+#[test]
+fn reaching_a_callback_slice_boundary_does_not_grant_another_slice() {
+    let counts: Vec<u64> = [399_999, 400_000]
+        .into_iter()
+        .map(|cap| {
+            let mut s = session();
+            s.lisp.limits.callback_steps = cap;
+            ok(&mut s, "(setq callback-count 0)");
+            let result = eval(&mut s, "(vl-remove-if '(lambda (x) (while t (setq callback-count (1+ callback-count)))) '(1))");
+            assert_eq!(result, Err(format!("callback stopped after {cap} steps")));
+            ok(&mut s, "callback-count").parse().unwrap()
+        })
+        .collect();
+    // One additional VM step can perform at most one assignment, even at SYNC_SLICE's boundary.
+    assert!(counts[0] > 0);
+    assert!(counts[1] >= counts[0] && counts[1] - counts[0] <= 1, "{counts:?}");
+}
+
+#[test]
+fn setvar_rejects_an_oversized_shared_structure() {
+    // A list repeatedly sharing its own contents expands exponentially; setvar's bounded JSON
+    // conversion rejects it instead of allocating gigabytes (CWE-400, finding row 39).
+    let mut s = session();
+    let build = "(setq x '(1)) (repeat 40 (setq x (list x x))) (setvar \"GRIDUNIT\" x)";
+    assert!(eval(&mut s, build).is_err());
+}
+
+#[test]
 fn printing() {
     let mut s = session();
     let before = s.log.len();
@@ -197,6 +301,11 @@ fn printing() {
     assert_eq!(out, ["Hello world", "\"q\"", "", "3 "]);
     assert_eq!(ok(&mut s, "(vl-prin1-to-string '(1 \"a\"))"), "\"(1 \\\"a\\\")\"");
     assert_eq!(ok(&mut s, "(rtos 12.5 2 2)"), "\"12.50\"");
+    // Exact halves round up in magnitude, not to even.
+    assert_eq!(ok(&mut s, "(rtos 2.5 2 0)"), "\"3\"");
+    assert_eq!(ok(&mut s, "(rtos 0.125 2 2)"), "\"0.13\"");
+    assert_eq!(ok(&mut s, "(rtos -2.5 2 0)"), "\"-3\"");
+    assert_eq!(ok(&mut s, "(rtos 2.675 2 2)"), "\"2.68\"");
 }
 
 #[test]
@@ -258,6 +367,61 @@ fn entity_lists_round_trip() {
 }
 
 #[test]
+fn entity_lists_hold_angles_in_radians() {
+    let mut s = session();
+    let near = |s: &mut Session, expr: &str, want: &str| {
+        let code = format!("(equal {expr} {want} 1e-9)");
+        assert_eq!(ok(s, &code), "T", "{expr} is {}, not {want}", ok(s, expr));
+    };
+    // A DXF file holds an ARC's 50 and 51 in degrees; entget gives radians (#1165).
+    s.script("ARC\nC\n0,0\n10,0\n0,10\n").unwrap();
+    near(&mut s, "(cdr (assoc 50 (entget (entlast))))", "0.0");
+    near(&mut s, "(cdr (assoc 51 (entget (entlast))))", "(/ pi 2)");
+    // ssget filters compare against the values entget shows.
+    assert_eq!(ok(&mut s, "(sslength (ssget \"X\" '((0 . \"ARC\") (-4 . \"<\") (51 . 2.0))))"), "1");
+    // entmod takes radians.
+    ok(&mut s, "(setq d (entget (entlast))) (entmod (subst (cons 51 pi) (assoc 51 d) d))");
+    let end = s.doc().unwrap().model.iter().find_map(|e| match &e.kind {
+        cadaddy_doc::EntityKind::Arc(a) => Some(a.end),
+        _ => None,
+    });
+    assert!(end.is_some_and(|a| (a - std::f64::consts::PI).abs() < 1e-9), "{end:?}");
+
+    // TEXT rotation (50) and oblique angle (51), through entmake.
+    ok(&mut s, "(entmake (list '(0 . \"TEXT\") '(10 0.0 0.0 0.0) '(40 . 2.5) '(1 . \"abc\") (cons 50 (/ pi 6)) '(51 . 0.25)))");
+    let text = s.doc().unwrap().model.iter().find_map(|e| match &e.kind {
+        cadaddy_doc::EntityKind::Text(t) => Some((t.rotation, t.oblique)),
+        _ => None,
+    });
+    assert!(text.is_some_and(|(r, o)| (r - std::f64::consts::FRAC_PI_6).abs() < 1e-9 && (o - 0.25).abs() < 1e-9), "{text:?}");
+    near(&mut s, "(cdr (assoc 50 (entget (entlast))))", "(/ pi 6)");
+    near(&mut s, "(cdr (assoc 51 (entget (entlast))))", "0.25");
+
+    // HATCH pattern angle (52) and pattern line angle (53): ANSI31 at 0 has its lines at 45°.
+    s.script("CIRCLE\n0,0\n10\n-HATCH\nP\nANSI31\n1\n0\n0,0\n\n").unwrap();
+    assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget (entlast))))"), "\"HATCH\"");
+    near(&mut s, "(cdr (assoc 52 (entget (entlast))))", "0.0");
+    near(&mut s, "(cdr (assoc 53 (entget (entlast))))", "(/ pi 4)");
+
+    // MTEXT: 50 before the column type (75) is the rotation, after it a column height.
+    ok(
+        &mut s,
+        "(entmake (list '(0 . \"MTEXT\") '(10 0.0 0.0 0.0) '(40 . 2.5) '(41 . 10.0) '(1 . \"abc\") (cons 50 (/ pi 3)) '(75 . 2) '(76 . 2) '(79 . 0) '(48 . 10.0) '(49 . 1.0) '(50 . 30.0) '(50 . 20.0)))",
+    );
+    let mtext = s.doc().unwrap().model.iter().find_map(|e| match &e.kind {
+        cadaddy_doc::EntityKind::MText(t) => Some((t.rotation, t.columns.as_ref().map(|c| c.heights.clone()))),
+        _ => None,
+    });
+    assert!(
+        mtext.as_ref().is_some_and(|(r, h)| (r - std::f64::consts::FRAC_PI_3).abs() < 1e-9 && h.as_deref() == Some(&[30.0, 20.0][..])),
+        "{mtext:?}"
+    );
+    near(&mut s, "(cdr (assoc 50 (entget (entlast))))", "(/ pi 3)");
+    let d = ok(&mut s, "(entget (entlast))");
+    assert!(d.contains("(50 . 30.0) (50 . 20.0)"), "{d}");
+}
+
+#[test]
 fn selection_sets_and_filters() {
     let mut s = session();
     ok(&mut s, "(command \"_.CIRCLE\" '(0 0) 1) (command \"_.CIRCLE\" '(10 0) 2) (command \"_.LINE\" '(0 5) '(20 5) \"\")");
@@ -313,6 +477,13 @@ fn interactive_routine_waits_for_the_user() {
     s.cmdline("(progn (initget 1 \"Yes No\") (setq ans (getkword \"\\nSure? [Yes/No]: \")))").unwrap();
     s.cmdline("n").unwrap();
     assert_eq!(to_text(&s.lisp_var("ANS"), true), "\"No\"");
+    // Bit 128 lets getkword return arbitrary text; a keyword still wins.
+    s.cmdline("(progn (initget 128 \"SElect CUrrent\") (setq ans (getkword \"\\nOption: \")))").unwrap();
+    s.cmdline("banana").unwrap();
+    assert_eq!(to_text(&s.lisp_var("ANS"), true), "\"banana\"");
+    s.cmdline("(progn (initget 128 \"SElect CUrrent\") (setq ans (getkword \"\\nOption: \")))").unwrap();
+    s.cmdline("cu").unwrap();
+    assert_eq!(to_text(&s.lisp_var("ANS"), true), "\"CUrrent\"");
     s.cmdline("(setq d (getdist '(0 0)))").unwrap();
     s.cmdline("3,4").unwrap();
     assert_eq!(to_text(&s.lisp_var("D"), true), "5.0");
@@ -326,6 +497,24 @@ fn interactive_routine_waits_for_the_user() {
     s.input(crate::Input::Point(cadaddy_geom::Vec2::new(50.0, 50.0))).unwrap();
     assert!(!s.lisp_running());
     assert!(s.doc().unwrap().model.iter().any(|e| matches!(&e.kind, cadaddy_doc::EntityKind::Circle(c) if c.center.x == 50.0 && c.radius == 2.0)));
+}
+
+#[test]
+fn getangle_is_relative_to_angbase() {
+    let mut s = session();
+    s.cmdline("(setvar \"ANGBASE\" 90)").unwrap();
+    // A picked point at 180° in world terms is 90° from ANGBASE.
+    s.cmdline("(setq a (getangle '(0 0)))").unwrap();
+    s.input(crate::Input::Point(cadaddy_geom::Vec2::new(-1.0, 0.0))).unwrap();
+    assert_eq!(to_text(&s.lisp_var("A"), true), "1.5708");
+    // getorient ignores ANGBASE.
+    s.cmdline("(setq o (getorient '(0 0)))").unwrap();
+    s.input(crate::Input::Point(cadaddy_geom::Vec2::new(-1.0, 0.0))).unwrap();
+    assert_eq!(to_text(&s.lisp_var("O"), true), "3.14159");
+    // A typed angle is already measured from ANGBASE.
+    s.cmdline("(setq t2 (getangle))").unwrap();
+    s.cmdline("180").unwrap();
+    assert_eq!(to_text(&s.lisp_var("T2"), true), "3.14159");
 }
 
 #[test]
@@ -346,6 +535,65 @@ fn appload_and_load() {
     assert_eq!(r["output"][0], "x");
     let r = s.execute("lisp", &serde_json::json!({"code": "(car 1)"})).unwrap();
     assert!(r["error"].as_str().is_some_and(|e| e.contains("bad argument type")));
+}
+
+#[test]
+fn appload_reads_a_lsp_path_and_reports_its_commands() {
+    let dir = std::env::temp_dir().join(format!("cadaddy-appload-lisp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Tools.LSP");
+    std::fs::write(&path, "(defun c:hi () (princ \"hi\") (princ)) (defun c:bye () (princ))").unwrap();
+    let mut s = session();
+    s.settings.secureload = 0; // a temporary folder; the trusted-folder check has its own tests
+    let r = s.execute("appload", &serde_json::json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(r.get("error").is_none(), "{r}");
+    assert_eq!(r["commands"], serde_json::json!(["BYE", "HI"]));
+    assert!(s.log.iter().any(|l| l == "Tools.LSP successfully loaded."));
+    s.cmdline("HI").unwrap();
+    assert_eq!(s.log.last().map(String::as_str), Some("hi"));
+    // Only `.lsp` files are APPLOADed, whatever the case of the extension.
+    let txt = dir.join("notes.txt");
+    std::fs::write(&txt, "(defun c:no () (princ))").unwrap();
+    let e = s.execute("appload", &serde_json::json!({"path": txt.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains(".lsp"), "{e}");
+    // A missing file and a file that fails to parse are ordinary errors.
+    let missing = dir.join("missing.lsp");
+    let e = s.execute("appload", &serde_json::json!({"path": missing.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains("can't read"), "{e}");
+    let broken = dir.join("broken.lsp");
+    std::fs::write(&broken, "(defun c:oops (").unwrap();
+    let e = s.execute("appload", &serde_json::json!({"path": broken.to_string_lossy()})).unwrap_err().to_string();
+    assert!(!e.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn appload_keeps_the_whitespace_of_a_relative_path() {
+    /// A folder in the test's current directory, removed even when an assertion fails.
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    // A JSON call's path is read as it is given: a relative path whose folder starts with a
+    // space names that folder, not the one its trimmed name would.
+    let dir = TempDir(std::path::PathBuf::from(format!(" cadaddy-appload-space-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&dir.0);
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let path = dir.0.join("tools.lsp");
+    std::fs::write(&path, "(setq space-loaded 1)").unwrap();
+    let mut s = session();
+    s.settings.secureload = 0; // a temporary folder; the trusted-folder check has its own tests
+    let r = s.execute("appload", &serde_json::json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(r.get("error").is_none(), "{r}");
+    assert_eq!(ok(&mut s, "space-loaded"), "1");
+    // A path of blanks only is still refused, not read as "".
+    for blank in ["", " ", "\t "] {
+        let e = s.execute("appload", &serde_json::json!({"path": blank})).unwrap_err().to_string();
+        assert!(e.contains("`path`"), "{blank:?}: {e}");
+    }
 }
 
 #[test]
@@ -395,6 +643,37 @@ fn hostile_lisp_never_panics() {
         let _ = eval(&mut s, code);
     }
     assert!(!s.lisp_running());
+}
+
+/// `entsel` and `nentsel` pick one object, so the cursor shows the pick box at their prompt. It
+/// was read off the message's first word, and a routine's own message begins with a newline -- so
+/// the same call showed the pick box without a message and lost it with one (#1598).
+#[test]
+fn an_entsel_prompt_picks_objects_whatever_its_message_says() {
+    let mut s = session();
+    // No message: the default "Select object: ".
+    s.cmdline("(nentsel)").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // The reported case: the routine's own message, starting with a newline.
+    s.cmdline("(nentsel \"\nSelect second line or polyline: \")").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // Wording that never says "select" picks an object just the same.
+    s.cmdline("(entsel \"\nPick a line: \")").unwrap();
+    assert!(s.current_prompt().unwrap().picks_objects(), "{}", s.prompt_text());
+    s.cancel();
+
+    // A point prompt is not a pick, and keeps its point modifiers -- including one whose own
+    // message happens to begin with the word the built-in commands are read by. `picks_one` says
+    // which calls pick, so the wording is only ever read where the engine wrote it (#1635 review).
+    for point in ["(getpoint \"\nSpecify a point: \")", "(getpoint \"\nSelect a point: \")", "(getpoint \"Select a point: \")"] {
+        s.cmdline(point).unwrap();
+        assert!(!s.current_prompt().unwrap().picks_objects(), "{point}: {}", s.prompt_text());
+        s.cancel();
+    }
 }
 
 #[test]
@@ -756,4 +1035,115 @@ fn a_multiline_names_its_style_as_an_entity() {
     assert_ne!(ok(&mut s, "(entmake (entget m))"), "nil");
     assert_eq!(ok(&mut s, "(cdr (assoc 0 (entget (entlast))))"), "\"MLINE\"");
     assert_eq!(ok(&mut s, "(cdr (assoc 2 (entget (entlast))))"), "\"STANDARD\"");
+}
+
+#[test]
+fn closing_drawings_lets_go_of_their_environments() {
+    let mut s = session();
+    ok(&mut s, "(setq kept 1)");
+    let first = s.state().unwrap().uid;
+    // A long session: drawings opened, given a variable by LISP and closed again.
+    for i in 0..200 {
+        s.execute("new", &serde_json::json!({"template": "."})).unwrap();
+        ok(&mut s, &format!("(setq n {i})"));
+        if i % 2 == 0 {
+            s.execute("close", &serde_json::json!({})).unwrap();
+        } else {
+            s.execute("document.close", &serde_json::json!({"discard": true})).unwrap();
+        }
+    }
+    // One environment per open drawing (plus the one used with none open), not one per drawing ever opened.
+    assert_eq!(s.docs.len(), 1);
+    assert!(s.lisp.envs.len() <= 2, "{} environments kept", s.lisp.envs.len());
+    assert!(s.lisp.autoloaded.len() <= 2, "{} autoload marks kept", s.lisp.autoloaded.len());
+    // The open drawing keeps its variables.
+    assert_eq!(s.state().unwrap().uid, first);
+    assert_eq!(ok(&mut s, "kept"), "1");
+    s.execute("closeall", &serde_json::json!({})).unwrap();
+    assert!(s.lisp.envs.keys().all(|&uid| uid == 0));
+}
+
+#[test]
+fn angtof_reads_the_string_in_the_given_units() {
+    let mut s = Session::new();
+    assert_eq!(ok(&mut s, "(angtof \"1.5\" 3)"), "1.5");
+    assert_eq!(ok(&mut s, "(angtof \"180\" 0)"), "3.14159");
+    assert_eq!(ok(&mut s, "(angtof \"180\" 7)"), "nil");
+    assert_eq!(ok(&mut s, "(angtof \"180\" \"x\")"), "nil");
+}
+
+/// CECOLOR is a string in AutoCAD, whatever it was set from (#1999).
+#[test]
+fn getvar_cecolor_is_a_string() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "(list (getvar \"CECOLOR\") (type (getvar \"CECOLOR\")))"), "(\"BYLAYER\" STR)");
+    assert_eq!(ok(&mut s, "(setvar \"CECOLOR\" \"red\") (getvar \"CECOLOR\")"), "\"1\"");
+    assert_eq!(ok(&mut s, "(setvar \"CECOLOR\" \"10,20,30\") (getvar \"CECOLOR\")"), "\"RGB:10,20,30\"");
+}
+
+/// Battle test 5 (B7-012): `(entmod (entget e))` on a HATCH answered nil and a layer change did
+/// nothing; the list must round-trip and an edit apply.
+#[test]
+fn entmod_of_a_hatch_round_trips_and_applies_edits() {
+    let mut s = session();
+    s.execute("rectang", &serde_json::json!({"p1": [0, 0], "p2": [10, 10]})).unwrap();
+    s.execute("hatch", &serde_json::json!({"points": [[5, 5]], "pattern": "ANSI31"})).unwrap();
+    let hatch_layer = |s: &Session| {
+        s.doc().unwrap().model.iter().find_map(|e| matches!(e.kind, cadaddy_doc::EntityKind::Hatch(_)).then(|| e.common.layer.clone())).unwrap()
+    };
+    let before = format!("{:?}", s.doc().unwrap().model.iter().find(|e| matches!(e.kind, cadaddy_doc::EntityKind::Hatch(_))).map(|e| e.kind.clone()));
+    ok(&mut s, "(setq h (entlast)) (setq d (entget h))");
+    assert_eq!(ok(&mut s, "(= (cdr (assoc 0 d)) \"HATCH\")"), "T");
+    assert_eq!(ok(&mut s, "(if (entmod d) T nil)"), "T", "unmodified list is accepted");
+    let after = format!("{:?}", s.doc().unwrap().model.iter().find(|e| matches!(e.kind, cadaddy_doc::EntityKind::Hatch(_))).map(|e| e.kind.clone()));
+    if before != after {
+        let (b, a): (Vec<_>, Vec<_>) = (before.split(", ").collect(), after.split(", ").collect());
+        let diff: Vec<_> = b.iter().zip(&a).filter(|(x, y)| x != y).take(6).collect();
+        panic!("hatch changed by a round trip: {diff:?}");
+    }
+    assert_eq!(ok(&mut s, "(if (entmod (subst (cons 8 \"H-NEW\") (assoc 8 d) d)) T nil)"), "T");
+    assert_eq!(hatch_layer(&s), "H-NEW");
+    ok(&mut s, "(setq d (entget h))");
+    assert_eq!(ok(&mut s, "(if (entmod (subst (cons 62 3) (assoc 62 d) d)) T nil)"), "T");
+}
+
+/// Battle test 5 (B7-025): out-of-range ATOF is infinite as in C, never a shorter finite number.
+#[test]
+fn atof_out_of_range_is_infinite() {
+    let mut s = session();
+    for (src, neg) in [("1e400", false), ("1e309", false), ("1e999", false), ("-1e400", true)] {
+        let r = ok(&mut s, &format!("(atof \"{src}\")"));
+        assert!(r.contains("#INF"), "{src} -> {r}");
+        assert_eq!(r.starts_with('-'), neg, "{src} -> {r}");
+    }
+    assert_eq!(ok(&mut s, "(atof \"1e30\")"), "1.0e+030");
+}
+
+/// Battle test 5 (B7-025): ENTMAKE refuses what the commands refuse.
+#[test]
+fn entmake_applies_the_drawing_limits() {
+    let mut s = session();
+    assert_eq!(ok(&mut s, "(entmake '((0 . \"LINE\") (10 0.0 0.0 0.0) (11 1e300 0.0 0.0)))"), "nil");
+    assert_eq!(ok(&mut s, "(entmake '((0 . \"CIRCLE\") (10 0.0 0.0 0.0) (40 . -5.0)))"), "nil");
+    assert_eq!(ok(&mut s, "(entmake '((0 . \"CIRCLE\") (10 0.0 0.0 0.0) (40 . 0.0)))"), "nil");
+    assert_ne!(ok(&mut s, "(entmake '((0 . \"CIRCLE\") (10 0.0 0.0 0.0) (40 . 5.0)))"), "nil");
+    assert_ne!(ok(&mut s, "(entmake '((0 . \"LINE\") (10 0.0 0.0 0.0) (11 1.0 1.0 0.0)))"), "nil");
+}
+
+/// The same for a hatch over a circle (arc boundary) and a justified text: nothing moves or changes.
+#[test]
+fn entmod_of_an_unedited_list_changes_nothing() {
+    let mut s = session();
+    s.execute("circle", &serde_json::json!({"center": [0, 0], "radius": 5})).unwrap();
+    s.execute("hatch", &serde_json::json!({"points": [[1, 1]], "pattern": "SOLID"})).unwrap();
+    ok(&mut s, "(entmake '((0 . \"TEXT\") (10 0.0 0.0 0.0) (11 20.0 0.0 0.0) (40 . 2.0) (1 . \"hi\") (72 . 1)))");
+    let snap = |s: &Session| s.doc().unwrap().model.iter().map(|e| format!("{:?}", e.kind)).collect::<Vec<_>>();
+    let before = snap(&s);
+    for name in ["HATCH", "TEXT"] {
+        let code = format!("(setq e (entlast)) (while (and e (/= (cdr (assoc 0 (entget e))) \"{name}\")) (setq e (entnext e))) T");
+        ok(&mut s, "(setq e (entnext))");
+        ok(&mut s, &code.replace("(setq e (entlast))", ""));
+        assert_eq!(ok(&mut s, "(if (entmod (entget e)) T nil)"), "T", "{name}");
+    }
+    assert_eq!(before, snap(&s));
 }

@@ -2,7 +2,7 @@
 //! Block Editor.
 
 pub(crate) mod bedit;
-mod purge;
+pub(in crate::cmd) mod purge;
 mod wblock;
 
 use std::sync::Arc;
@@ -17,8 +17,10 @@ use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 mod actionbar;
+pub mod authoring;
 pub use actionbar::action_bars;
 mod attedit;
+mod description;
 mod dynauthor;
 mod dyngrip;
 pub(crate) mod extract;
@@ -29,12 +31,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("block", "Make...", run_block)
             .menu(&["Draw", "Block", "Make..."])
             .alias(&["b", "bmake"])
-            .params("{name, base: [x,y], handles?, keep?: \"convert\"|\"retain\"|\"delete\" (default \"convert\"), description?, annotative?}")
+            .params("{name, base: [x,y], handles?, keep?: \"convert\"|\"retain\"|\"delete\" (default \"convert\"), description? (up to 255 characters, one line), annotative?}")
             .interactive(|_| Ok(Box::new(BlockM::default()))),
         // -BLOCK erases the selected objects once the block is defined.
         CommandSpec::new("-block", "Create Block", run_dash_block)
             .alias(&["-b"])
-            .params("{name, base: [x,y], handles?, keep?: \"delete\"|\"retain\"|\"convert\" (default \"delete\"), description?}")
+            .params("{name, base: [x,y], handles?, keep?: \"delete\"|\"retain\"|\"convert\" (default \"delete\"), description? (up to 255 characters, one line)}")
             .interactive(|_| Ok(Box::new(BlockM { dash: true, ..BlockM::default() }))),
         CommandSpec::new("insert", "Block...", run_insert)
             .menu(&["Insert", "Block..."])
@@ -50,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
         attedit::dash_attedit_spec(),
         CommandSpec::new("wblock", "Write Block", run_wblock)
             .alias(&["w", "-wblock"])
-            .params("{path (no extension: .dwg), name? | handles?, base?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path (no extension: .dwg), name? | handles?, base?}")
             .interactive(|_| Ok(Box::new(wblock::WblockM::default()))),
         CommandSpec::new("base", "Base", run_base).menu(&["Draw", "Block", "Base"]).params("{at: [x,y]}").interactive(|_| {
             Ok(super::ask::machine("base", "BASE", [super::ask::ask("at", "Enter base point", super::ask::Kind::Point)]))
@@ -83,6 +85,7 @@ pub fn specs() -> Vec<CommandSpec> {
         attribs::attsync_spec(),
         extract::dataextraction_spec(),
         extract::eattext_spec(),
+        description::description_spec(),
     ]
     .into_iter()
     .chain(xref::specs())
@@ -91,11 +94,20 @@ pub fn specs() -> Vec<CommandSpec> {
     .chain(bedit::specs())
     .chain(dynauthor::specs())
     .chain(actionbar::specs())
+    .chain(authoring::specs())
     .collect()
 }
 
-fn valid_block_name(n: &str) -> bool {
-    !n.trim().is_empty() && n.len() <= 255 && !n.starts_with('*') && !n.chars().any(|c| "<>/\\\":;?*|,=`".contains(c))
+/// The refusal for a block name `valid_block_name` rejects, naming the bad character.
+pub(crate) fn block_name_error(cmd: &str, n: &str) -> crate::EngineError {
+    match super::names::check(cmd, "block", n) {
+        Err(e) => e,
+        Ok(()) => bad(cmd, format!("invalid block name `{n}`: names starting with `*` are reserved")),
+    }
+}
+
+pub(crate) fn valid_block_name(n: &str) -> bool {
+    !n.starts_with('*') && super::names::is_valid(n)
 }
 
 /// The block an entity references, when it is a block reference.
@@ -104,7 +116,7 @@ fn referenced_block(e: &Entity) -> Option<String> {
 }
 
 /// Whether any of `ents` refers to block `name`, directly or through nested block references.
-fn references_block(d: &cadaddy_doc::Drawing, ents: &[Entity], name: &str) -> bool {
+pub(crate) fn references_block(d: &cadaddy_doc::Drawing, ents: &[Entity], name: &str) -> bool {
     let mut todo: Vec<String> = ents.iter().filter_map(referenced_block).collect();
     let mut seen = std::collections::HashSet::new();
     while let Some(b) = todo.pop() {
@@ -120,10 +132,43 @@ fn references_block(d: &cadaddy_doc::Drawing, ents: &[Entity], name: &str) -> bo
     false
 }
 
+/// What BLOCK does with the selected objects once the block is defined (the dialog's Convert to
+/// block, Retain and Delete).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Keep {
+    /// Replace the objects by a reference to the new block.
+    Convert,
+    /// Leave the objects in the drawing.
+    Retain,
+    /// Erase the objects.
+    Delete,
+}
+
+impl Keep {
+    /// The `keep` parameter's documented values, in any case; `None` for anything else.
+    pub(crate) fn parse(value: &str) -> Option<Keep> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "convert" => Some(Keep::Convert),
+            "retain" => Some(Keep::Retain),
+            "delete" => Some(Keep::Delete),
+            _ => None,
+        }
+    }
+}
+
+/// The `keep` parameter of `cmd`, `default` when absent. A value that is not documented is an
+/// error (issue #935: a misspelt value used to erase the objects without converting them).
+fn keep_param(cmd: &str, p: &Value, default: Keep) -> Result<Keep> {
+    match str_param(p, "keep") {
+        None => Ok(default),
+        Some(v) => Keep::parse(v).ok_or_else(|| bad(cmd, format!("`keep` must be \"convert\", \"retain\" or \"delete\", not {v:?}"))),
+    }
+}
+
 /// Create a block from entities. Returns the insert handle when converting.
-pub(crate) fn make_block(s: &mut Session, name: &str, base: Vec2, hs: &[Handle], keep: &str, description: &str) -> Result<Option<Handle>> {
+pub(crate) fn make_block(s: &mut Session, name: &str, base: Vec2, hs: &[Handle], keep: Keep, description: &str) -> Result<Option<Handle>> {
     if !valid_block_name(name) {
-        return Err(bad("block", "invalid block name"));
+        return Err(block_name_error("block", name));
     }
     let d = s.doc()?;
     let ents: Vec<Entity> = hs.iter().filter_map(|h| d.entity(*h).map(|e| (**e).clone())).collect();
@@ -143,18 +188,28 @@ pub(crate) fn make_block(s: &mut Session, name: &str, base: Vec2, hs: &[Handle],
     b.base = v3(base);
     b.description = description.to_string();
     let doc = s.doc_mut()?;
+    let mut copies = std::collections::HashMap::new();
+    let mut made = Vec::new();
     for mut e in ents {
+        let old = e.handle;
         e.handle = doc.new_handle();
+        copies.insert(old, e.handle);
+        made.push(e);
+    }
+    for mut e in made {
+        if let EntityKind::Hatch(h) = &mut e.kind {
+            h.remap_sources(&copies);
+        }
         b.entities.push(e);
     }
     doc.blocks.insert(name.to_string(), Arc::new(b));
-    if keep != "retain" {
+    if keep != Keep::Retain {
         for h in hs {
             doc.remove_entity(*h);
         }
     }
     s.set_selection(Vec::new());
-    if keep == "convert" {
+    if keep == Keep::Convert {
         let h = insert(s, name, base, 1.0, 0.0, &serde_json::Map::new())?;
         return Ok(Some(h));
     }
@@ -240,8 +295,10 @@ fn run_block(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad("block", "`name` is required"))?.to_string();
     let base = point_param(p, "base").unwrap_or(Vec2::ZERO);
     let hs = targets(s, p)?;
-    let keep = str_param(p, "keep").unwrap_or("convert").to_string();
-    let r = make_block(s, &name, base, &hs, &keep, str_param(p, "description").unwrap_or(""))?;
+    let keep = keep_param("block", p, Keep::Convert)?;
+    let description = str_param(p, "description").unwrap_or("");
+    description::check_text("block", description)?;
+    let r = make_block(s, &name, base, &hs, keep, description)?;
     // An annotative block: its references (the converted selection too) are annotative.
     if bool_or(p, "annotative", false) {
         let d = s.doc_mut()?;
@@ -257,6 +314,7 @@ fn run_block(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
+    let from_file = str_param(p, "file").is_some();
     let p = &insert_file::json_params(s, p)?;
     let name = str_param(p, "name").ok_or_else(|| bad("insert", "`name` is required"))?.to_string();
     let at = point_req("insert", p, "at")?;
@@ -273,13 +331,26 @@ fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let rot = f64_or(p, "rotation", 0.0).to_radians();
     let vals = p.get("attribs").and_then(Value::as_object).cloned().unwrap_or_default();
-    let h = insert_with(s, &name, at, scale, rot, point_param(p, "basePoint"), &vals)?;
-    if bool_or(p, "explode", false) {
+    // A block that came from a drawing file keeps that file's units, so every insert of it (by
+    // file or by name) is scaled by its INSUNITS over this drawing's (1.0 when either has none).
+    let factor = insert_file::block_factor(s, &name);
+    let h = insert_with(s, &name, at, scale * factor, rot, point_param(p, "basePoint"), &vals)?;
+    let mut reply = if bool_or(p, "explode", false) {
         // The EXPLODE command body, not `execute`: INSERT records the one undo step.
         let explode = find_command("explode").ok_or_else(|| EngineError::UnknownCommand("explode".into()))?;
-        return (explode.run)(s, &json!({ "handles": [h.hex()] }));
+        (explode.run)(s, &json!({ "handles": [h.hex()] }))?
+    } else {
+        attedit::with_unknown_tags(s, h, &vals, json!({ "handle": h.hex() }))
+    };
+    if (from_file || factor != 1.0)
+        && let Some(o) = reply.as_object_mut()
+    {
+        o.insert("unitFactor".into(), json!(factor));
+        if factor != 1.0 {
+            o.insert("note".into(), json!(insert_file::factor_note(factor)));
+        }
     }
-    Ok(attedit::with_unknown_tags(s, h, &vals, json!({ "handle": h.hex() })))
+    Ok(reply)
 }
 
 fn attdef_kind(s: &Session, tag: &str, prompt: &str, default: &str, at: Vec2, height: f64, invisible: bool) -> EntityKind {
@@ -320,6 +391,9 @@ fn run_attdef(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
     let path = wblock::with_extension(str_param(p, "path").ok_or_else(|| bad("wblock", "`path` is required"))?);
+    if let Some(d) = s.docs.iter().find(|d| d.path.as_deref().is_some_and(|x| super::file::same_file(x, &path))) {
+        return Err(bad("wblock", format!("{path} is the open drawing {}: choose another file name so it isn't replaced", d.title)));
+    }
     let src = s.doc()?;
     let mut d = cadaddy_doc::Drawing::new_imperial();
     d.layers = src.layers.clone();
@@ -354,8 +428,18 @@ fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
             })
             .collect()
     };
+    let mut copies = std::collections::HashMap::new();
+    let mut made = Vec::new();
     for mut e in ents {
+        let old = e.handle;
         e.handle = d.new_handle();
+        copies.insert(old, e.handle);
+        made.push(e);
+    }
+    for mut e in made {
+        if let EntityKind::Hatch(h) = &mut e.kind {
+            h.remap_sources(&copies);
+        }
         d.model.push(e);
     }
     let hooks = super::file::io().ok_or_else(|| bad("wblock", "file formats are not available in this build"))?;
@@ -516,7 +600,7 @@ impl BlockM {
     fn finish(&mut self, s: &mut Session, hs: &[Handle]) -> Result<Step> {
         let (Some(name), Some(base)) = (self.name.clone(), self.base) else { return Ok(Step::Cancel) };
         // A definition that can't be made (e.g. one that would reference itself) ends the command.
-        let keep = if self.dash { "delete" } else { "convert" };
+        let keep = if self.dash { Keep::Delete } else { Keep::Convert };
         if let Err(e) = make_block(s, &name, base, hs, keep, "") {
             s.echo(e.to_string());
             return Ok(Step::Done);
@@ -572,6 +656,8 @@ struct InsertM {
     explode: bool,
     /// The file waiting for the Redefine answer.
     file: Option<insert_file::FileRef>,
+    /// The INSUNITS factor of a drawing file or xref being placed (None: a plain block).
+    unit_factor: Option<f64>,
 }
 
 /// INSERT's prompts for block `name`, already chosen, from the insertion point on; with `scale`
@@ -599,7 +685,11 @@ impl InsertM {
             && self.asked >= self.attdefs.len()
             && let (Some(n), Some(a), Some(sc), Some(r)) = (self.name.clone(), self.at, self.scale, self.rotation)
         {
-            let h = insert_with(s, &n, a, sc, r, self.base, &self.values)?;
+            let factor = self.unit_factor.unwrap_or(1.0);
+            if factor != 1.0 {
+                s.echo(insert_file::factor_note(factor));
+            }
+            let h = insert_with(s, &n, a, sc * factor, r, self.base, &self.values)?;
             if self.explode {
                 insert_file::explode_insert(s, h)?;
             }
@@ -647,7 +737,10 @@ impl InsertM {
     /// Define the block from a file, then choose it; a file that can't be read is reported.
     fn choose_file(&mut self, s: &mut Session, f: &insert_file::FileRef) -> Result<()> {
         match f.define(s) {
-            Ok(name) => self.choose(s, &name),
+            Ok(name) => {
+                self.unit_factor = Some(insert_file::block_factor(s, &name));
+                self.choose(s, &name)
+            }
             Err(e) => {
                 s.echo(e.to_string());
                 Ok(())

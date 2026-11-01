@@ -1021,19 +1021,30 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
     }
-    // No explicit roof in the spec: if there is a ROOF datum, build a flat roof from the top
-    // level's building outline (the bounding rectangle of its walls).
+    // No explicit roof in the spec: if there is a ROOF datum, build a flat roof over the top
+    // storey's floor plate (its shell, as its floor slab has it: a stepped building's roof steps
+    // with it, and a stray wall outside doesn't stretch it), else the bounding rectangle of its
+    // walls.
     if roofs == 0
         && let Some(roof_datum) = sp.datums.iter().find(|dt| dt.kind == DatumKind::Roof)
-        && let Some((_, bb)) = top_walls(d, sp, f64::INFINITY)
+        && let Some((top_level, bb)) = top_walls(d, sp, f64::INFINITY)
     {
         let z0 = roof_datum.elevation_ft * upf;
         if !bb.is_empty() {
-            let poly =
-                vec![Vec2::new(bb.min.x, bb.min.y), Vec2::new(bb.max.x, bb.min.y), Vec2::new(bb.max.x, bb.max.y), Vec2::new(bb.min.x, bb.max.y)];
+            let plate = floor_plate(d, &top_level.name);
+            let mut poly = if plate.len() >= 3 {
+                plate
+            } else {
+                vec![Vec2::new(bb.min.x, bb.min.y), Vec2::new(bb.max.x, bb.min.y), Vec2::new(bb.max.x, bb.max.y), Vec2::new(bb.min.x, bb.max.y)]
+            };
+            // Counter-clockwise, as the parapets below take it.
+            if cadaddy_geom::shoelace(&poly) < 0.0 {
+                poly.reverse();
+            }
             let top_fn = |_: Vec2| z0;
+            let area = cadaddy_geom::shoelace(&poly).abs() / (upf * upf);
             if let Some(m) = slab(&poly, &top_fn, upf)
-                && add(d, "3D-Roofs", measured(tag("roof", &roof_datum.name, "auto"), "area", bb.width() * bb.height() / (upf * upf)), m)
+                && add(d, "3D-Roofs", measured(tag("roof", &roof_datum.name, "auto"), "area", area), m)
             {
                 roofs += 1;
             }
@@ -1210,17 +1221,30 @@ fn with_plan_roofs(d: &Drawing, sp: &BuildingSpec) -> (Exterior, Vec<String>) {
             _ => Vec2::ZERO,
         };
         let (lo, hi) = (bb.min + shift, bb.max + shift);
+        // Over the storey's floor plate as its slab has it (a stepped building's roof steps with
+        // it: B7-007), else the walls' bounding rectangle.
+        let plate = floor_plate(d, &under.name);
+        let outline: Vec<[f64; 2]> = if plate.len() >= 3 {
+            plate.iter().map(|p| [p.x + shift.x, p.y + shift.y]).collect()
+        } else {
+            vec![[lo.x, lo.y], [hi.x, lo.y], [hi.x, hi.y], [lo.x, hi.y]]
+        };
         ext.roofs.push(Roof {
             name: "Roof 1".into(),
             level: level.name.clone(),
-            outline: vec![[lo.x, lo.y], [hi.x, lo.y], [hi.x, hi.y], [lo.x, hi.y]],
+            outline,
             slope: None,
             parapet_ft: sp.exterior.level_parapet(&level.name),
             parapet_status: sp.exterior.level_parapet(&level.name).map(|_| ValueStatus::Read),
             parapet_from: sp.exterior.level_parapet(&level.name).map(|_| FROM_ELEVATION.to_string()),
             assembly: None,
         });
-        notes.push(format!("{}: no roof outline read on its plan; a flat roof over {}'s walls.", level.name, under.name));
+        notes.push(format!(
+            "{}: no roof outline read on its plan; a flat roof over {}'s {}.",
+            level.name,
+            under.name,
+            if plate.len() >= 3 { "floor plate" } else { "walls" }
+        ));
     }
     (ext, notes)
 }
@@ -1231,6 +1255,42 @@ fn top_walls<'a>(d: &Drawing, sp: &'a BuildingSpec, below_ft: f64) -> Option<(&'
         sp.levels.iter().filter(|l| l.elevation_ft < below_ft && !super::wallgen::roof_level(&sp.levels, &l.name)).collect();
     storeys.sort_by(|a, b| b.elevation_ft.total_cmp(&a.elevation_ft));
     storeys.into_iter().find_map(|l| Some(built_bounds(d, &l.name, &["wall"])).filter(|b| !b.is_empty()).map(|b| (l, b)))
+}
+
+/// Most floor slab faces looked at for a level's plate (hostile drawings).
+const MAX_PLATE_RECTS: usize = 20_000;
+
+/// The plan outline of `level`'s floor plate as its slab was built from the plan: the
+/// rectangles the slab's top faces cover, joined into their outline (an L building's is its L).
+/// Empty when the level's floor wasn't built from its plan (Walk mode's floors are triangles).
+fn floor_plate(d: &Drawing, level: &str) -> Vec<Vec2> {
+    let mut rects: Vec<[[f64; 2]; 2]> = Vec::new();
+    for e in d.model.iter() {
+        if super::wallgen::made_as(e).as_deref() != Some("floor") || !super::bspec::made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(level)) {
+            continue;
+        }
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let top = m.vertices.iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max);
+        for f in &m.faces {
+            let vs: Vec<&Vec3> = f.v.iter().filter_map(|i| m.vertices.get(usize::try_from(*i).ok()?)).collect();
+            if vs.len() != 4 || vs.iter().any(|v| (v.z - top).abs() > 1e-6) {
+                continue;
+            }
+            let (x0, x1) = vs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v.x), b.max(v.x)));
+            let (y0, y1) = vs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v.y), b.max(v.y)));
+            let corner = |v: &&Vec3| ((v.x - x0).abs() < 1e-6 || (v.x - x1).abs() < 1e-6) && ((v.y - y0).abs() < 1e-6 || (v.y - y1).abs() < 1e-6);
+            if x1 > x0 && y1 > y0 && vs.iter().all(corner) {
+                rects.push([[x0, y0], [x1, y1]]);
+            }
+        }
+        if rects.len() >= MAX_PLATE_RECTS {
+            break;
+        }
+    }
+    if rects.is_empty() {
+        return Vec::new();
+    }
+    cadaddy_walk3d::Circulation { rects, ..Default::default() }.outline().into_iter().map(|p| Vec2::new(p[0], p[1])).collect()
 }
 
 /// The plan extents of the objects built on `level` as one of `parts` (sheet coordinates).

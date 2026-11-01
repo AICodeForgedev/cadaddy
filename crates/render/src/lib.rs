@@ -14,6 +14,7 @@ pub use cache::{ChunkCache, build_cached, build_cached_into};
 pub mod clip;
 pub mod clouds;
 mod dim;
+pub mod emf;
 pub mod encode;
 mod fill;
 mod hatch;
@@ -67,6 +68,9 @@ pub const VIEWPORT_CONTENT: Handle = Handle(0);
 /// [`DisplayList::prim_layers`] of a primitive whose layer isn't in the layer table.
 pub const NO_LAYER: u32 = u32::MAX;
 
+/// The xdata application name TEXTMASK tags its mask entities with.
+const TEXTMASK_APP: &str = "CADADDY_TEXTMASK";
+
 /// What a display-list primitive draws.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
@@ -78,6 +82,10 @@ pub enum Kind {
     /// (paper white when plotting, the canvas colour on screen) so they hide what was drawn
     /// before them.
     Mask,
+    /// A wipeout-like fill in its own colour (a coloured text or dimension-text mask): drawn like
+    /// [`Kind::Tris`], but it starts a draw-order group like [`Kind::Mask`] so lines drawn before it
+    /// do not show on top.
+    InkMask,
     /// A single point marker at `verts[start]`.
     Point,
     /// An infinite line or ray: `verts[start]` = base, `verts[start+1]` = unit direction.
@@ -91,7 +99,7 @@ pub enum Kind {
 impl Kind {
     /// The primitive is triangles in [`DisplayList::tris`] (otherwise points in `verts`).
     pub fn is_fill(self) -> bool {
-        matches!(self, Kind::Tris | Kind::Mask | Kind::Image(_))
+        matches!(self, Kind::Tris | Kind::InkMask | Kind::Mask | Kind::Image(_))
     }
 }
 
@@ -210,6 +218,8 @@ pub struct PlotWords {
     pub dir: Vec2,
     pub height: f64,
     pub prim: u32,
+    /// How far the drawn lettering runs along the baseline (a plot's hidden text spans it).
+    pub width: f64,
 }
 
 impl PlotText {
@@ -463,6 +473,18 @@ impl Builder<'_> {
         }
         self.note_pen(color);
         let (color, lw) = self.styled(color, lw);
+        self.push_polyline(ctx, color, lw, pts);
+    }
+    /// A one-pixel line in `color` as the plot style prints it, without the style's lineweight
+    /// or pen: the centre line drawn on screen over a thin wide polyline.
+    fn hairline(&mut self, ctx: &Ctx, color: Ink, pts: &[Vec2]) {
+        if pts.len() < 2 {
+            return;
+        }
+        let (color, _) = self.styled(color, 0.0);
+        self.push_polyline(ctx, color, 0.0, pts);
+    }
+    fn push_polyline(&mut self, ctx: &Ctx, color: Ink, lw: f32, pts: &[Vec2]) {
         let start = self.list.verts.len() as u32;
         for p in pts {
             let q = ctx.xf.apply(*p);
@@ -542,11 +564,17 @@ impl Builder<'_> {
     /// Shaped text: strokes as polylines; TrueType glyphs filled (TEXTFILL) or outlined.
     /// Plots: note a text drawn as strokes from primitive `at` on (see [`DisplayList::words`]).
     fn words(&mut self, ctx: &Ctx, at: usize, text: &str, rotation: f64, height: f64) {
-        if !self.plotting || text.trim().is_empty() || self.list.prims.len() <= at || self.list.words.len() >= 100_000 {
+        let end = self.list.prims.len();
+        self.words_of(ctx, at, end, text, rotation, height);
+    }
+
+    /// [`Self::words`] for the primitives `at..end`.
+    fn words_of(&mut self, ctx: &Ctx, at: usize, end: usize, text: &str, rotation: f64, height: f64) {
+        if !self.plotting || text.trim().is_empty() || end <= at || self.list.prims.len() < end || self.list.words.len() >= 100_000 {
             return;
         }
         let b =
-            self.list.prims.get(at..).map_or(Bounds2::EMPTY, |ps| {
+            self.list.prims.get(at..end).map_or(Bounds2::EMPTY, |ps| {
                 ps.iter().fold(Bounds2::EMPTY, |b, p| b.union(&Bounds2::from_points(self.list.points(p).iter().copied())))
             });
         let dir = ctx.xf.apply_vec(Vec2::from_angle(rotation));
@@ -555,8 +583,56 @@ impl Builder<'_> {
         let dir = dir * (1.0 / len);
         // Upright text starts at the lower left of what was drawn; turned text at its corner on
         // the baseline side.
-        let origin = if dir.y.abs() < 1e-9 && dir.x > 0.0 { b.min } else { b.center() - dir * (b.width().max(b.height()) / 2.0) };
-        self.list.words.push(PlotWords { text: text.chars().take(1000).collect(), origin, dir, height: height * len, prim });
+        let upright = dir.y.abs() < 1e-9 && dir.x > 0.0;
+        let origin = if upright { b.min } else { b.center() - dir * (b.width().max(b.height()) / 2.0) };
+        let width = if upright { b.width() } else { b.width().max(b.height()) };
+        self.list.words.push(PlotWords { text: text.chars().take(1000).collect(), origin, dir, height: height * len, prim, width });
+    }
+
+    /// Several lines of text drawn from primitive `at` on: a word per line when the strokes fall
+    /// in as many bands across the baseline as there are lines (a plot's hidden text then sits on
+    /// each line, not all of it on the last); else one word for all of it.
+    fn line_words(&mut self, ctx: &Ctx, at: usize, lines: &[String], rotation: f64, height: f64) {
+        let all = lines.join(" ");
+        let end = self.list.prims.len();
+        let dir = ctx.xf.apply_vec(Vec2::from_angle(rotation));
+        let len = dir.len();
+        if lines.len() < 2 || end <= at || len.is_nan() || len <= 1e-12 {
+            self.words(ctx, at, &all, rotation, height);
+            return;
+        }
+        let up = Vec2::new(-dir.y, dir.x) * (1.0 / len);
+        // Each primitive's span across the baseline, top first; a gap of a third of the text's
+        // height between spans starts a new band.
+        let mut spans: Vec<(usize, f64, f64)> = (at..end)
+            .filter_map(|i| {
+                let pts = self.list.prims.get(i).map(|p| self.list.points(p).to_vec())?;
+                let (lo, hi) = pts.iter().map(|q| up.dot(*q)).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+                (lo.is_finite() && hi.is_finite()).then_some((i, lo, hi))
+            })
+            .collect();
+        spans.sort_by(|a, b| b.2.total_cmp(&a.2));
+        let gap = height * len / 3.0;
+        let mut bands: Vec<(f64, Vec<usize>)> = Vec::new();
+        for (i, lo, hi) in spans {
+            match bands.last_mut() {
+                Some((band_lo, members)) if hi >= *band_lo - gap => {
+                    *band_lo = band_lo.min(lo);
+                    members.push(i);
+                }
+                _ => bands.push((lo, vec![i])),
+            }
+        }
+        // Each band's primitives run in one stretch (text is drawn line by line).
+        let ranges: Vec<(usize, usize)> = bands.iter().filter_map(|(_, m)| Some((*m.iter().min()?, *m.iter().max()? + 1))).collect();
+        let contiguous = ranges.iter().zip(&bands).all(|((a, b), (_, m))| b - a == m.len());
+        if bands.len() != lines.len() || !contiguous {
+            self.words(ctx, at, &all, rotation, height);
+            return;
+        }
+        for ((a, b), line) in ranges.into_iter().zip(lines) {
+            self.words_of(ctx, a, b, line, rotation, height);
+        }
     }
 
     fn shaped(&mut self, ctx: &Ctx, color: Ink, lw: f32, sh: &cadaddy_fonts::Shaped) {
@@ -952,13 +1028,17 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
         let eb = cadaddy_doc::entity_bounds(d, me, 0);
         eb.is_empty() || eb.intersects(&win)
     };
+    // One expansion budget for the whole build: seed it with what the enclosing list has already
+    // spent so a viewport's contents cannot start over with a fresh allowance and exceed the
+    // documented limit (CWE-400). Both the serial sub-builder and the parallel chunks share it.
+    let budget = std::sync::atomic::AtomicUsize::new(b.list.expanded);
     let mut sub = Builder {
         list: DisplayList::default(),
         opts: b.opts,
         plotting: b.plotting,
         styles: b.styles,
         named: None,
-        shared_budget: None,
+        shared_budget: Some(&budget),
         transparency: 0,
         paper: false,
     };
@@ -972,7 +1052,6 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
             // As `build_parallel`: chunks built side by side, joined in drawing order.
             use rayon::prelude::*;
             let ents: Vec<&std::sync::Arc<Entity>> = d.model.iter().collect();
-            let budget = std::sync::atomic::AtomicUsize::new(0);
             let opts = b.opts;
             let parts: Vec<DisplayList> = ents
                 .par_chunks(PARALLEL_CHUNK)
@@ -1053,11 +1132,11 @@ fn append_clipped(dst: &mut DisplayList, src: &DisplayList, clip: &Clip) {
                     push_raw(dst, p, Kind::Polyline, &piece);
                 }
             }
-            (Kind::Tris | Kind::Mask, Clip::Rect(rect)) => {
+            (Kind::Tris | Kind::InkMask | Kind::Mask, Clip::Rect(rect)) => {
                 let t = clip::clip_triangles(pts, rect);
                 push_raw(dst, p, p.kind, &t);
             }
-            (Kind::Tris | Kind::Mask, Clip::Poly(c)) => {
+            (Kind::Tris | Kind::InkMask | Kind::Mask, Clip::Poly(c)) => {
                 let t = c.clip_triangles(pts);
                 push_raw(dst, p, p.kind, &t);
             }
@@ -1498,8 +1577,12 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             // Drawn in a stroke font: no glyph of it became text.
             if b.list.texts.len() == glyphs {
                 // As it reads: formatting codes (\P, {\f…;}, stacking) gone, then %% codes.
-                let plain = cadaddy_fonts::plain_text(&cadaddy_fonts::plain_mtext(&t.contents)).split_whitespace().collect::<Vec<_>>().join(" ");
-                b.words(ctx, at, &plain, t.rotation, t.height);
+                let lines: Vec<String> = cadaddy_fonts::plain_text(&cadaddy_fonts::plain_mtext(&t.contents))
+                    .lines()
+                    .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                b.line_words(ctx, at, &lines, t.rotation, t.height);
             }
         }
         EntityKind::Insert(ins) => insert(b, ctx, e, ins, rgb, lw),
@@ -1522,12 +1605,24 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         EntityKind::MLine(m) => mline::draw(b, ctx, e, m, rgb, lw, tol),
         EntityKind::LwPolyline(p) if p.const_width > 0.0 || p.vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) => {
             if b.opts.fill && ctx.d.header.i64("FILLMODE", 1) != 0 {
+                // The GPU canvas has no MSAA: a band narrower than a pixel lights only where it
+                // covers pixel centres, so whole sides vanish at some zooms (#1434). On screen the
+                // centre line is drawn too, as a hairline (wide bands are drawn without lineweight),
+                // so a thin band still shows as a one-pixel line. Always, not below a threshold:
+                // the list serves a whole band of zooms. Plots and exports draw the band alone, and
+                // a transparent band gets none (its alpha would add up along the centre).
+                let hairline = !b.plotting && b.opts.min_dash > 0.0 && b.transparency == 0;
                 match &lt {
                     // Dashed: each dash a filled piece of the band; dots a line across it.
                     Some(lt) => {
                         let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
-                        let (tris, ticks) = wide::dashed(p, tol, lt, ltscale, min);
+                        let (tris, ticks, centres) = wide::dashed(p, tol, lt, ltscale, min);
                         b.tris(ctx, rgb, &tris);
+                        if hairline {
+                            for c in &centres {
+                                b.hairline(ctx, rgb, c);
+                            }
+                        }
                         for t in &ticks {
                             match t.as_slice() {
                                 [q] => b.point(ctx, rgb, *q),
@@ -1535,7 +1630,13 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                             }
                         }
                     }
-                    None => b.tris(ctx, rgb, &fill::wide_polyline(p, tol)),
+                    None => {
+                        b.tris(ctx, rgb, &fill::wide_polyline(p, tol));
+                        if hairline {
+                            let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
+                            b.hairline(ctx, rgb, &pl.tessellate(tol));
+                        }
+                    }
                 }
             } else {
                 let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
@@ -1558,7 +1659,14 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             let c = &s.corners;
             let q = [c[0].xy(), c[1].xy(), c[3].xy(), c[2].xy()];
             if b.opts.fill && ctx.d.header.i64("FILLMODE", 1) != 0 {
+                let n = b.list.prims.len();
                 b.tris(ctx, rgb, &[q[0], q[1], q[2], q[0], q[2], q[3]]);
+                // A TEXTMASK solid hides what was drawn before it, in its own colour.
+                if e.common.xdata.iter().any(|t| t.code == 1001 && t.value == TEXTMASK_APP)
+                    && let Some(p) = b.list.prims.get_mut(n)
+                {
+                    p.kind = Kind::InkMask;
+                }
             } else {
                 b.polyline(ctx, rgb, lw, &[q[0], q[1], q[2], q[3], q[0]]);
             }
@@ -1727,7 +1835,12 @@ fn text_style(d: &Drawing, name: &str) -> cadaddy_doc::TextStyle {
     d.text_style(name).cloned().unwrap_or_default()
 }
 
-/// Shape a TEXT / ATTRIB / ATTDEF with its style's font and generation flags.
+/// The most characters of one TEXT / ATTRIB / ATTDEF that are shaped; a hostile 5 MB string would
+/// otherwise build gigabytes of strokes (AutoCAD's own limit is 255 characters).
+pub const MAX_SHAPED_TEXT_CHARS: usize = 100_000;
+
+/// Shape a TEXT / ATTRIB / ATTDEF with its style's font and generation flags (the first
+/// [`MAX_SHAPED_TEXT_CHARS`] characters of a longer value).
 pub fn place_text_entity(d: &Drawing, t: &cadaddy_doc::Text, value: &str) -> (cadaddy_fonts::Shaped, Bounds2) {
     let ts = text_style(d, &t.style);
     let font = cadaddy_fonts::TextFont::resolve_style(&ts.font, &ts.big_font);
@@ -1745,6 +1858,7 @@ pub fn place_text_entity(d: &Drawing, t: &cadaddy_doc::Text, value: &str) -> (ca
         upside_down: ts.upside_down,
         vertical: ts.vertical,
     };
+    let value = value.char_indices().nth(MAX_SHAPED_TEXT_CHARS).map_or(value, |(i, _)| value.get(..i).unwrap_or(value));
     cadaddy_fonts::place(&font, value, &p)
 }
 
@@ -1887,7 +2001,13 @@ fn mtext_mask(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::MText, bg: &cadaddy_d
     let q = [world(bx.min), world(Vec2::new(bx.max.x, bx.min.y)), world(bx.max), world(Vec2::new(bx.min.x, bx.max.y))];
     let tris = [q[0], q[1], q[2], q[0], q[2], q[3]];
     match bg.color {
-        Some(c) => b.tris(ctx, ink(c, layer_color, ctx.block_color), &tris),
+        Some(c) => {
+            let n = b.list.prims.len();
+            b.tris(ctx, ink(c, layer_color, ctx.block_color), &tris);
+            if let Some(p) = b.list.prims.get_mut(n) {
+                p.kind = Kind::InkMask;
+            }
+        }
         None => {
             let n = b.list.prims.len();
             b.tris(ctx, rgb, &tris);
@@ -2049,7 +2169,11 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadaddy_doc::Dimension
             let q = [world(bx.min), world(Vec2::new(bx.max.x, bx.min.y)), world(bx.max), world(Vec2::new(bx.min.x, bx.max.y))];
             let tris = [q[0], q[1], q[2], q[0], q[2], q[3]];
             if style.text_fill == 2 {
+                let n = b.list.prims.len();
                 b.tris(ctx, ink(style.text_fill_color, layer_color, own), &tris);
+                if let Some(p) = b.list.prims.get_mut(n) {
+                    p.kind = Kind::InkMask;
+                }
             } else {
                 let n = b.list.prims.len();
                 b.tris(ctx, txt_rgb, &tris);
@@ -2075,6 +2199,11 @@ pub use table::{MAX_LAYOUT_CELLS, TableFill, TableGeom, TableLine, TableText, fi
 
 fn table(b: &mut Builder, ctx: &Ctx, t: &cadaddy_doc::Table, rgb: Ink, lw: f32) {
     table::draw(b, ctx, t, rgb, lw);
+}
+
+/// A TEXT's justification as the fonts' alignment (used where text is placed outside a build).
+pub fn text_align(h: cadaddy_doc::HAlign, v: cadaddy_doc::VAlign) -> (cadaddy_fonts::Align, cadaddy_fonts::VAlign) {
+    align(h, v)
 }
 
 fn align(h: cadaddy_doc::HAlign, v: cadaddy_doc::VAlign) -> (cadaddy_fonts::Align, cadaddy_fonts::VAlign) {
@@ -2124,7 +2253,9 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         top: ctx.top,
         frozen: ctx.frozen,
         vp_colors: ctx.vp_colors,
-        lt_factor: ctx.lt_factor,
+        // The reference's own linetype scale (group 48) multiplies that of the objects inside,
+        // as LTSCALE does for the drawing (tests/block_ltscale.rs).
+        lt_factor: ctx.lt_factor * if e.common.ltscale.is_finite() && e.common.ltscale > 0.0 { e.common.ltscale } else { 1.0 },
         block_pstyle: ctx.block_pstyle,
         // The reference's own, set by the caller (`Builder::transparency` while it draws).
         block_transparency: ctx.block_transparency,

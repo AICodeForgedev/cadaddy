@@ -602,3 +602,26 @@ fn deleting_one_of_two_sourceless_terminals_keeps_the_other_on_revise() {
     // The duct (also read from no plan object) is still there too.
     assert_eq!(tagged(&s, &["part:segment"]).len(), 1);
 }
+
+/// An elevator hoistway of the spec's circulation is closed to MEP: a run through it is a
+/// `hoistway` clash; one beside it is not.
+#[test]
+fn a_run_through_an_elevator_hoistway_is_a_clash() {
+    let mut s = Session::new();
+    let spec = json!({
+        "levels": [{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 9.0}],
+        "mep": {
+            "systems": [{"name": "SA", "layer": "M-SUPP", "kind": "duct", "size_in": [12, 8], "bottom_ft": 9.5}],
+            "runs": [
+                {"system": "SA", "level": "Level 1", "points": [[0, 100], [300, 100]], "size_in": [12, 8], "bottoms_ft": [9.5]},
+                {"system": "SA", "level": "Level 1", "points": [[0, 200], [300, 200]], "size_in": [12, 8], "bottoms_ft": [9.5]}
+            ]
+        },
+        "circulation": [{"kind": "hoistway", "level": "Level 1", "name": "ELEV.", "at": [120, 100], "rects": [[[60, 60], [156, 156]]]}]
+    });
+    s.execute("bspec.set", &json!({"spec": spec})).unwrap();
+    let r = s.execute("model.clashes", &json!({})).unwrap();
+    let shaft: Vec<&Value> = r["clashes"].as_array().unwrap().iter().filter(|c| c["kind"] == json!("hoistway")).collect();
+    assert_eq!(shaft.len(), 1, "{r}");
+    assert_eq!(shaft[0]["at"], json!([108.0, 108.0]), "{r}");
+}

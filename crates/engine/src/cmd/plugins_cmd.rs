@@ -138,7 +138,7 @@ fn run_load(s: &mut Session, p: &Value) -> Result<Value> {
         // Non-agent loads also check name collision (existing behaviour in
         // load_plugin_as), but they may overwrite the file (a user re-loading).
         if dest != path {
-            std::fs::copy(path, &dest).map_err(|e| crate::EngineError::Other(format!("cannot copy plugin: {e}")))?;
+            crate::writefile::copy(path, &dest).map_err(|e| crate::EngineError::Other(format!("cannot copy plugin: {e}")))?;
         }
 
         s.plugins.load_plugin_as(&dest, by_agent)?;

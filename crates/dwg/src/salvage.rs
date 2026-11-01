@@ -35,8 +35,25 @@ const MAX_PAGE: usize = 0x2_0000;
 const MAX_RECORD: usize = 1 << 20;
 /// Bytes of checksumming spent looking for object records in damaged data, at most.
 const SCAN_BUDGET: usize = 256 << 20;
+/// Pages' worth of zero padding a section may be given beyond the pages found for it.
+const MAX_PAD_PAGES: usize = 4;
+/// Checksumming a section may cost, as a multiple of its length (plus `SCAN_SLACK`), so the work
+/// stays linear in the input however much of it is damage.
+const SCAN_FACTOR: usize = 4;
+const SCAN_SLACK: usize = 64 << 10;
+
+/// The checksum budget for scanning `len` bytes of records.
+fn scan_budget(len: usize) -> usize {
+    len.saturating_mul(SCAN_FACTOR).saturating_add(SCAN_SLACK).min(SCAN_BUDGET)
+}
 /// Sections a file may name, at most.
 const MAX_SECTIONS: usize = 64;
+/// The salvaged sections together hold at most this many times the damaged file's size ...
+const MAX_EXPANSION: usize = 32;
+/// ... and never more than this many bytes.
+const MAX_SALVAGE: usize = 256 << 20;
+/// A compressed section's page size below this is a damaged map, not a real page size.
+const MIN_PAGE_DATA: usize = 64;
 
 /// The sentinels that open some sections (public specification).
 const HEADER_SENTINEL: [u8; 16] = [0xcf, 0x7b, 0x1f, 0x23, 0xfd, 0xde, 0x38, 0xa9, 0x5f, 0x7c, 0x68, 0xb8, 0x4e, 0x6d, 0x33, 0x5f];
@@ -421,6 +438,10 @@ fn record_at(objs: &[u8], p: usize, r2010: bool, budget: &mut usize) -> Option<(
         q
     };
     let end = data.checked_add(size)?;
+    // A record that runs past the section is damage: refuse it before it costs any budget.
+    if end.checked_add(2)? > objs.len() {
+        return None;
+    }
     let stored = u16_le(objs, end)?;
     *budget = budget.checked_sub(end - p)?;
     if crc16(objs.get(p..end)?) != stored {
@@ -439,8 +460,14 @@ fn record_at(objs: &[u8], p: usize, r2010: bool, budget: &mut usize) -> Option<(
 /// Walk the objects section's records (from offset 4, after its 0x0DCA word), stepping over
 /// damage byte by byte until the next sound record: (handle, offset) of each.
 fn walk_records(objs: &[u8], r2010: bool) -> Vec<(u64, usize)> {
+    walk_records_counted(objs, r2010).0
+}
+
+/// `walk_records`, and the bytes of checksumming it spent.
+fn walk_records_counted(objs: &[u8], r2010: bool) -> (Vec<(u64, usize)>, usize) {
     let mut out = Vec::new();
-    let mut budget = SCAN_BUDGET;
+    let start = scan_budget(objs.len());
+    let mut budget = start;
     let mut p = 4;
     while p + 4 < objs.len() && budget > 0 {
         match record_at(objs, p, r2010, &mut budget) {
@@ -453,7 +480,7 @@ fn walk_records(objs: &[u8], r2010: bool) -> Vec<(u64, usize)> {
             None => p += 1,
         }
     }
-    out
+    (out, start - budget)
 }
 
 /// The entries of an object map (the Handles section): (handle, offset) pairs, as far as its
@@ -596,7 +623,7 @@ fn read_section_map(map: &[u8]) -> Option<BTreeMap<u32, Section>> {
         let name = data.get(o + 32..o + 96)?;
         let name = String::from_utf8_lossy(name.split(|&c| c == 0).next().unwrap_or_default()).into_owned();
         o = o.checked_add(96)?.checked_add(pages.checked_mul(16)?)?;
-        if page_data == 0 || page_data > MAX_PAGE {
+        if page_data == 0 || page_data > MAX_PAGE || (compressed && page_data < MIN_PAGE_DATA) {
             return None;
         }
         out.insert(id, Section { name, size, compressed, page_data, encrypted });
@@ -659,16 +686,24 @@ pub fn salvage(b: &[u8]) -> Option<Salvaged> {
         }
     }
     // Each section's bytes: its pages decompressed in place (as far as each is sound); what
-    // can't be read stays zero.
+    // can't be read stays zero. Nothing is allocated, written or decompressed beyond what the
+    // damaged file can justify: the total is capped at a multiple of its size, and a page whose
+    // (unchecksummed) start would reach past that is dropped.
+    let cap = b.len().saturating_mul(MAX_EXPANSION).min(MAX_SALVAGE);
+    let (mut spent, mut work) = (0usize, 0usize);
     let mut content: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
     for (id, s) in sections.iter_mut() {
         let mut buf: Vec<u8> = Vec::new();
         let mut known = s.size;
         for p in pages.iter().filter(|p| p.section == *id) {
+            if work > cap {
+                break;
+            }
             let d = if s.compressed { decompress(p.data, s.page_data).0 } else { p.data.to_vec() };
+            work = work.saturating_add(d.len());
             let Ok(start) = usize::try_from(p.start) else { continue };
             let end = start.saturating_add(d.len());
-            if end > 1 << 31 {
+            if end > cap.saturating_sub(spent) {
                 continue;
             }
             if buf.len() < end {
@@ -681,8 +716,12 @@ pub fn salvage(b: &[u8]) -> Option<Salvaged> {
         if known == 0 || known > buf.len() as u64 {
             known = known.max(buf.len() as u64);
         }
-        buf.resize(usize::try_from(known).unwrap_or(buf.len()).min(1 << 31), 0);
+        // A claimed size beyond the pages found pads with zeros, which hold no records; a lying
+        // header must not grow the section (and the scan of it) past a few pages' worth.
+        let room = buf.len().saturating_add(s.page_data.saturating_mul(MAX_PAD_PAGES)).min(cap.saturating_sub(spent).max(buf.len()));
+        buf.resize(usize::try_from(known).unwrap_or(buf.len()).min(room), 0);
         s.size = buf.len() as u64;
+        spent = spent.saturating_add(buf.len());
         content.insert(*id, buf);
     }
     let id_of = |name: &str, sections: &BTreeMap<u32, Section>| sections.iter().find(|(_, s)| s.name == name).map(|(id, _)| *id);
@@ -694,7 +733,7 @@ pub fn salvage(b: &[u8]) -> Option<Salvaged> {
     let mut entries: BTreeMap<u64, usize> = walked.iter().copied().collect();
     let mut kept_old = 0usize;
     if let Some(map) = id_of("AcDb:Handles", &sections).and_then(|id| content.get(&id)) {
-        let mut budget = SCAN_BUDGET;
+        let mut budget = scan_budget(objs.len());
         for (h, o) in read_object_map(map) {
             if !entries.contains_key(&h) && record_at(objs, o, r2010, &mut budget).is_some() {
                 entries.insert(h, o);
@@ -765,6 +804,9 @@ fn write_file(orig: &[u8], sections: &BTreeMap<u32, Section>, content: &BTreeMap
             let mut end = (start + step).min(data.len());
             if s.compressed && data.len() - end > 0 && data.len() - end < 4 {
                 end = data.len() - 4;
+            }
+            if end <= start {
+                return None;
             }
             let chunk = data.get(start..end)?;
             let comp = if s.compressed {
@@ -886,6 +928,122 @@ mod tests {
     fn object_maps_round_trip() {
         let entries: Vec<(u64, usize)> = (0..2000u64).map(|i| (0x100 + i * 3, 4 + i as usize * 41)).collect();
         assert_eq!(read_object_map(&write_object_map(&entries)), entries);
+    }
+
+    /// Valid-looking record headers (a small size, then garbage) at every offset: the checksum
+    /// work must grow with the input, not with its square.
+    #[test]
+    fn damage_scan_work_is_linear_in_the_input() {
+        let work = |n: usize| {
+            // Every other offset reads as "a record of 2048 bytes follows"; none checksums.
+            let b: Vec<u8> = (0..n).map(|i| if i % 2 == 1 { 8 } else { 0 }).collect();
+            let (found, spent) = walk_records_counted(&b, false);
+            assert!(found.is_empty());
+            spent
+        };
+        let (small, big) = (work(20_000), work(80_000));
+        assert!(small <= scan_budget(20_000), "{small}");
+        assert!(big <= scan_budget(80_000), "{big}");
+        assert!(small > 0 && big <= small * 5, "work grew faster than the input: {small} -> {big}");
+        // A record claiming more than is left costs nothing.
+        let mut b = vec![0u8; 64];
+        b[4] = 0xff;
+        b[5] = 0xff;
+        assert_eq!(walk_records_counted(&b, false).1, 0);
+    }
+
+    /// A header claiming a huge section size must not pad the section (and the scan of it) to that
+    /// size: the same 129 objects (23 of them drawing entities) come back from a small repaired file.
+    #[test]
+    fn a_lying_section_size_does_not_inflate_the_salvage() {
+        let bytes = include_bytes!("../tests/regress/ac18-section-size.dwg");
+        let s = salvage(bytes).expect("salvaged");
+        assert_eq!(s.objects, 129);
+        assert!(s.bytes.len() < 1 << 20, "{}", s.bytes.len());
+    }
+
+    /// A sound made-up file (the repaired regression file), for patching its maps.
+    fn sound() -> Vec<u8> {
+        salvage(include_bytes!("../tests/regress/ac18-section-size.dwg")).expect("salvaged").bytes
+    }
+
+    /// `file` with its section map's decompressed bytes changed by `f` (same length, so the page
+    /// keeps its place and size).
+    fn patch_section_map(file: &[u8], f: impl Fn(&mut Vec<u8>)) -> Vec<u8> {
+        let (_, maps) = find_pages(file);
+        let map = maps.first().expect("a section map");
+        let at = map.as_ptr() as usize - file.as_ptr() as usize - 20;
+        let (mut data, ok) = decompress(map, 1 << 20);
+        assert!(ok);
+        let len = data.len();
+        f(&mut data);
+        assert_eq!(data.len(), len);
+        let page = system_page(SECTION_MAP, &data);
+        let old = system_page(SECTION_MAP, &decompress(map, 1 << 20).0);
+        assert_eq!(page.len(), old.len(), "the patched map keeps its page size");
+        let mut out = file.to_vec();
+        out[at..at + page.len()].copy_from_slice(&page);
+        out
+    }
+
+    /// A salvage of hostile input stays small and returns.
+    fn assert_bounded(patched: &[u8], what: &str) {
+        let started = std::time::Instant::now();
+        let got = salvage(patched);
+        assert!(started.elapsed().as_secs() < 20, "{what}: took {:?}", started.elapsed());
+        if let Some(s) = got {
+            assert!(s.bytes.len() < 64 * patched.len(), "{what}: {} bytes from {}", s.bytes.len(), patched.len());
+        }
+    }
+
+    #[test]
+    fn a_section_size_of_four_billion_stays_bounded() {
+        let patched = patch_section_map(&sound(), |d| {
+            // Every section claims 0xFFFF_FFFF bytes (the first field of each entry).
+            let mut o = 20;
+            while let (Some(pages), true) = (u32_at(d, o + 8), o + 96 <= d.len()) {
+                d[o..o + 8].copy_from_slice(&0xFFFF_FFFFu64.to_le_bytes());
+                o += 96 + pages as usize * 16;
+            }
+        });
+        assert_bounded(&patched, "section size 0xFFFFFFFF");
+    }
+
+    #[test]
+    fn a_page_size_of_three_stays_bounded() {
+        let patched = patch_section_map(&sound(), |d| {
+            let mut o = 20;
+            while let (Some(pages), true) = (u32_at(d, o + 8), o + 96 <= d.len()) {
+                d[o + 12..o + 16].copy_from_slice(&3u32.to_le_bytes());
+                o += 96 + pages as usize * 16;
+            }
+        });
+        assert_bounded(&patched, "page_data 3");
+        // The map is rejected, not trusted: the sections are named from their pages instead.
+        let (_, maps) = find_pages(&patched);
+        assert!(read_section_map(maps[0]).is_none());
+    }
+
+    #[test]
+    fn a_data_page_starting_near_two_to_the_31_stays_bounded() {
+        let mut b = sound();
+        let mut pos = FIRST_PAGE;
+        let mut patched_pages = 0;
+        while pos + 32 <= b.len() {
+            let mask = PAGE_MASK ^ (pos as u32);
+            if u32_at(&b, pos).map(|v| v ^ mask) == Some(DATA_PAGE) {
+                let csz = u32_at(&b, pos + 8).map_or(usize::MAX, |v| (v ^ mask) as usize);
+                if csz <= MAX_PAGE {
+                    b[pos + 16..pos + 20].copy_from_slice(&(0x7fff_0000u32 ^ mask).to_le_bytes());
+                    patched_pages += 1;
+                    pos = (pos + 32 + csz + 0x1f) & !0x1f;
+                    continue;
+                }
+            }
+            pos += 4;
+        }
+        assert!(patched_pages > 0);
+        assert_bounded(&b, "data pages near 2^31");
     }
 
     #[test]

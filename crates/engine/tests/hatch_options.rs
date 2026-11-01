@@ -217,3 +217,13 @@ fn a_boundary_follows_a_door_swing_and_leaves_text_as_an_island() {
     // The text is an island.
     assert!(hh.loops.iter().any(|l| !l.outer && l.vertices.iter().any(|v| (v.p.y - 5.0).abs() < 1.0)), "{:?}", hh.loops);
 }
+
+#[test]
+fn multiline_wall_hatch_keeps_the_room_as_an_island() {
+    // A closed multiline wall: picking inside the wall hatches the band between its outer and
+    // inner lines; the room the inner lines enclose is an island, not filled.
+    let mut s = Session::new();
+    s.execute("mline", &json!({ "points": [[0, 0], [10, 0], [10, 10], [0, 10]], "closed": true, "scale": 1, "justification": "zero" })).unwrap();
+    let h = handle(&s.execute("hatch", &json!({ "points": [[0, 5]], "pattern": "SOLID" })).unwrap());
+    assert_eq!(hatch(&s, &h).loops.len(), 2, "outer face + the room as an island");
+}

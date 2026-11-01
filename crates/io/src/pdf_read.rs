@@ -2053,6 +2053,118 @@ fn ocr_candidate(s: &Stroke, max_seg: f64) -> Option<[f64; 4]> {
     ((b[2] - b[0]) <= max_seg * 2.0 && (b[3] - b[1]) <= max_seg * 2.0).then_some(b)
 }
 
+/// The confidence (0..1, its weakest character's) under which an OCR reading isn't inserted: at
+/// the template threshold it is as likely a tick, a corner or a symbol's bars as a letter.
+const OCR_MIN_CONFIDENCE: f64 = 0.2;
+
+/// The OCR's readings settled against the page's hidden text. A reading inside a hidden
+/// string's box (where the PDF says that string is written: its start to its end, a letter
+/// high) is that string's lettering: when the string was recovered already its strokes join
+/// that text; else the reading becomes the string, one per string (the PDF says what is written
+/// there; the OCR read `H`, `6`, `O` for `Hello`). Of the rest, a lone `O` drawn as one round
+/// closed loop is a circle, and on a page with hidden text (the OCR fills in round real text
+/// there) a reading under [`OCR_MIN_CONFIDENCE`] is too weak: neither is inserted (their
+/// strokes stay linework). A page lettered in strokes alone keeps its weak readings (in the
+/// unconfirmed OCR style): its room numbers are read there, and the sheet's registration needs
+/// them. The readings kept, and how many took a hidden text, were circles, were too weak.
+fn settle_ocr(
+    ocr: Vec<RecoveredText>,
+    texts: &[TextOut],
+    strokes: &[Stroke],
+    recovered: &mut [RecoveredText],
+) -> (Vec<RecoveredText>, usize, usize, usize) {
+    // Each hidden string's box, a third of a letter round.
+    let hidden: Vec<(&TextOut, [f64; 4])> = texts
+        .iter()
+        .filter(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER) && !t.value.trim().is_empty())
+        .map(|t| {
+            let b = text_box(t);
+            let m = t.height.max(0.5) / 3.0;
+            (t, [b[0] - m, b[1] - m, b[2] + m, b[3] + m])
+        })
+        .collect();
+    let mut taken: Vec<Option<RecoveredText>> = (0..hidden.len()).map(|_| None).collect();
+    let mut kept = Vec::new();
+    let (mut from_hidden, mut circles, mut weak) = (0usize, 0usize, 0usize);
+    for rt in ocr {
+        let on = hidden.iter().position(|(_, b)| rt.at.0 >= b[0] && rt.at.0 <= b[2] && rt.at.1 >= b[1] && rt.at.1 <= b[3]);
+        match on.and_then(|i| Some((i, hidden.get(i)?.0))) {
+            Some((i, h)) => {
+                // Recovered already: the reading's strokes are more of that text's lettering.
+                let near = h.height.max(0.5);
+                if let Some(done) =
+                    recovered.iter_mut().find(|r| r.value.trim() == h.value.trim() && (r.at.0 - h.at.0).hypot(r.at.1 - h.at.1) <= near)
+                {
+                    from_hidden += 1;
+                    done.stroke_indices.extend(rt.stroke_indices);
+                    continue;
+                }
+                // Not recovered: a reading of the string's own words stays as it was read; one
+                // that isn't (a misread: `6` for `e`) takes the string.
+                if reads_like(&rt.value, &h.value) {
+                    kept.push(rt);
+                    continue;
+                }
+                from_hidden += 1;
+                let Some(slot) = taken.get_mut(i) else { continue };
+                match slot {
+                    Some(t) => t.stroke_indices.extend(rt.stroke_indices),
+                    None => {
+                        *slot = Some(RecoveredText {
+                            at: h.at,
+                            height: h.height,
+                            value: h.value.trim().to_string(),
+                            stroke_indices: rt.stroke_indices,
+                            pen: rt.pen,
+                            layer: rt.layer,
+                            unconfirmed: false,
+                            confidence: None,
+                            rotation: h.rotation,
+                        })
+                    }
+                }
+            }
+            None if matches!(rt.value.trim(), "O" | "o" | "0") && rt.stroke_indices.iter().any(|i| strokes.get(*i).is_some_and(round_loop)) => {
+                circles += 1
+            }
+            None if !hidden.is_empty() && rt.confidence.is_some_and(|c| c < OCR_MIN_CONFIDENCE) => weak += 1,
+            None => kept.push(rt),
+        }
+    }
+    kept.extend(taken.into_iter().flatten());
+    (kept, from_hidden, circles, weak)
+}
+
+/// Whether an OCR reading reads a string: its letters and digits run in the string's order and
+/// make up at least 60% of the string's (a whole word misread a little; not a fragment like
+/// `H L` read off `Hello`), any case.
+fn reads_like(reading: &str, string: &str) -> bool {
+    let h: Vec<char> = string.chars().filter(|c| c.is_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect();
+    let r: Vec<char> = reading.chars().filter(|c| c.is_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect();
+    if r.is_empty() || h.is_empty() {
+        return false;
+    }
+    let mut it = h.iter();
+    let in_order = r.iter().all(|c| it.any(|x| x == c));
+    in_order && 5 * r.len() >= 3 * h.len()
+}
+
+/// A stroke that is a circle: closed (or ending where it starts), every point the same distance
+/// from its middle to within 12%. A plot font's `O` is taller than wide; a circle is round.
+fn round_loop(s: &Stroke) -> bool {
+    let (Some(first), Some(last)) = (s.pts.first(), s.pts.last()) else { return false };
+    let n = s.pts.len();
+    if n < 8 {
+        return false;
+    }
+    let c = s.pts.iter().fold((0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1));
+    let c = (c.0 / n as f64, c.1 / n as f64);
+    let radii: Vec<f64> = s.pts.iter().map(|p| (p.0 - c.0).hypot(p.1 - c.1)).collect();
+    let (lo, hi) = radii.iter().fold((f64::INFINITY, 0.0f64), |a, r| (a.0.min(*r), a.1.max(*r)));
+    let closes = s.closed || (first.0 - last.0).hypot(first.1 - last.1) <= 0.1 * hi;
+    closes && hi > 0.0 && lo / hi >= 0.88
+}
+
 /// The strokes that lie on a visible real text item: a plotted copy of the text, which the
 /// text already is.  The OCR leaves them alone.  (Strokes under hidden text are the lettering
 /// the hidden text stands for; what its own recovery didn't claim, the OCR may read.)
@@ -3533,6 +3645,9 @@ struct SymbolInstance {
     /// Nearby text (potential attribute tag).
     nearby_text: Option<String>,
     nearby_text_idx: Option<usize>,
+    /// Where the tag is printed (page coordinates) and its height (points): the TAG attribute
+    /// goes there, so the tag stays where it was read and the circuit printed under it pairs.
+    nearby_text_at: Option<((f64, f64), f64)>,
     /// The tag is lettering the OCR read from strokes: its index in the recovered texts.
     ocr_idx: Option<usize>,
     /// The device-type tag from nearby hidden text (e.g. "A", "G", "OS").
@@ -3776,6 +3891,7 @@ fn find_symbol_instances(
             fill_indices: cluster_fills,
             nearby_text: Some(v.to_string()),
             nearby_text_idx: t.text_idx,
+            nearby_text_at: (t.at.0.is_finite() && t.at.1.is_finite() && t.height.is_finite() && t.height > 0.0).then_some((t.at, t.height)),
             ocr_idx: t.ocr_idx,
             device_type: if dev_type.is_empty() { None } else { Some(dev_type) },
         });
@@ -3840,7 +3956,36 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
 
     let resources =
         dict_get(&doc, page, b"Resources").and_then(|o| o.as_dict().ok()).or_else(|| inherited(b"Resources").and_then(|o| o.as_dict().ok()));
-    let content = doc.get_page_content(page_id);
+    // The page's content streams in order. One that is missing or whose data doesn't decode is
+    // counted: its drawing is not read (the raw bytes go through as the library's own
+    // page-content reader would pass them).
+    let content_ids = doc.get_page_contents(page_id);
+    let mut unreadable_streams = 0usize;
+    let mut content = Vec::new();
+    for id in &content_ids {
+        let Some(st) = doc.get_object(*id).ok().and_then(|o| o.as_stream().ok()) else {
+            unreadable_streams += 1;
+            continue;
+        };
+        // The library's decoder hands back what it got from damaged data as if it were whole; a
+        // plain Flate stream is decoded strictly here so damage shows.
+        let plain_flate = st.filters().is_ok_and(|f| f == [b"FlateDecode".as_slice()]) && st.dict.get(b"DecodeParms").is_err();
+        let strict = plain_flate.then(|| miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&st.content, MAX_STREAM_BYTES));
+        match strict {
+            Some(Ok(data)) => content.extend_from_slice(&data),
+            Some(Err(_)) | None => match st.decompressed_content_with_limit(MAX_STREAM_BYTES) {
+                Ok(data) => {
+                    unreadable_streams += usize::from(strict.is_some());
+                    content.extend_from_slice(&data);
+                }
+                Err(_) => {
+                    unreadable_streams += 1;
+                    content.extend_from_slice(&st.content);
+                }
+            },
+        }
+        content.push(b'\n');
+    }
     let mut it = Interp {
         doc: &doc,
         out: Out::default(),
@@ -3950,6 +4095,13 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
 
     let mut stats: BTreeMap<String, usize> = BTreeMap::new();
     let mut notes = Vec::new();
+    if unreadable_streams > 0 {
+        notes.push(format!(
+            "PDF: {unreadable_streams} of {} content streams on page {} could not be decoded (the file is damaged); the page may be empty or incomplete",
+            content_ids.len(),
+            opts.page.max(1)
+        ));
+    }
 
     // page-box clip: discard anything entirely outside the page (stray content that should not
     // contribute to the drawing extents, e.g. block defs with bad base points in the source PDF)
@@ -4141,7 +4293,20 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         let loose = strokes.iter().enumerate().filter(|(i, s)| !excluded.contains(i) && ocr_candidate(s, max_seg).is_some()).count();
         let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT || loose >= real_chars.saturating_mul(OCR_STROKES_PER_CHAR);
         if has_shx_evidence || lettering_is_strokes {
-            let (mut ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded);
+            let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded);
+            // What the PDF's hidden text says is written where the OCR read takes that string;
+            // a circle and a reading under the confidence floor aren't inserted (their strokes
+            // stay linework).
+            let (mut ocr_texts, from_hidden, circles, weak) = settle_ocr(ocr_texts, &texts, &strokes, &mut recovered_texts);
+            if from_hidden > 0 {
+                stats.insert("SHX OCR readings replaced by the hidden text there".into(), from_hidden);
+            }
+            if circles > 0 {
+                stats.insert("SHX OCR circles not read as O".into(), circles);
+            }
+            if weak > 0 {
+                stats.insert("SHX OCR readings under the confidence floor dropped".into(), weak);
+            }
             if report.clusters > 0 {
                 stats.insert("SHX OCR glyph clusters".into(), report.clusters);
                 stats.insert("SHX OCR glyphs matched".into(), report.glyphs);
@@ -4882,12 +5047,17 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 place(if mode == LayerMode::Content { "symbol" } else { "line" }, Pen { rgb: [0, 0, 0], lw: 0, transp: 0 }, &None);
             let mut attribs = Vec::new();
             if let Some(tag) = &inst.nearby_text {
+                // Where the tag was printed (an attribute's place is in the drawing's coordinates).
+                let (at, height) = match inst.nearby_text_at {
+                    Some(((x, y), h)) => (sp(x, y), h / 72.0 * k),
+                    None => (Vec2::new(0.0, 0.0), 2.5 / 72.0 * k),
+                };
                 attribs.push(Attrib {
                     tag: "TAG".into(),
                     text: Text {
-                        insert: Vec3::new(0.0, 0.0, 0.0),
+                        insert: Vec3::new(at.x, at.y, 0.0),
                         align_pt: None,
-                        height: 2.5 / 72.0 * k,
+                        height,
                         value: tag.clone(),
                         rotation: 0.0,
                         width_factor: 1.0,

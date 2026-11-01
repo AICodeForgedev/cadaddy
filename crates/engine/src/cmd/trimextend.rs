@@ -37,7 +37,7 @@ fn misses_edges(e: &EngineError) -> bool {
 
 /// Trim or extend `h` at `at`. A Quick-mode (`quick`) trim of an object no cutting edge crosses
 /// erases it. Returns the handles that replace `h` (none when it was erased).
-fn apply(s: &mut Session, h: Handle, at: Vec2, extending: bool, edges: Edges, quick: bool) -> Result<Vec<Handle>> {
+pub(crate) fn apply(s: &mut Session, h: Handle, at: Vec2, extending: bool, edges: Edges, quick: bool) -> Result<Vec<Handle>> {
     if extending {
         extend(s, h, at, edges)?;
         return Ok(vec![h]);
@@ -122,7 +122,7 @@ fn crossing(s: &mut Session, a: Vec2, b: Vec2, extending: bool, edges: Edges, qu
 
 /// Trim (or extend) each object at its pick points. A trim replaces the object with pieces, so
 /// later picks go to the piece within `tol` of the point (none: that part is already gone).
-fn run_picks(s: &mut Session, work: Vec<(Handle, Vec<Vec2>)>, extending: bool, edges: Edges, quick: bool, tol: f64) -> Result<usize> {
+pub(crate) fn run_picks(s: &mut Session, work: Vec<(Handle, Vec<Vec2>)>, extending: bool, edges: Edges, quick: bool, tol: f64) -> Result<usize> {
     let mut n = 0;
     let mut last_err = None;
     for (h, picks) in work {
@@ -175,7 +175,7 @@ fn run(s: &mut Session, p: &Value, extending: bool) -> Result<Value> {
     let cmd = if extending { "extend" } else { "trim" };
     let only: Option<Vec<Handle>> =
         p.get("edges").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().and_then(Handle::parse_hex)).collect());
-    let edges = Edges { only: only.as_deref(), implied: edge_mode_param(cmd, p)? };
+    let edges = Edges { only: only.as_deref(), implied: edge_mode_param(cmd, p)?, ..Edges::default() };
     let quick = match p.get("mode") {
         None | Some(Value::Null) => false,
         Some(v) => match v.as_str().map(|m| m.trim().to_ascii_lowercase()).as_deref() {
@@ -248,7 +248,7 @@ impl TrimM {
         TrimM { extend, edges: None, stage: Stage::Pick, undo: Vec::new(), edges_chosen: false }
     }
     fn edges(&self, quick: bool, implied: bool) -> Edges<'_> {
-        Edges { only: self.edges.as_deref(), implied: !quick && implied }
+        Edges { only: self.edges.as_deref(), implied: !quick && implied, ..Edges::default() }
     }
     fn select_edges(&mut self, s: &mut Session) {
         s.echo(if self.extend { "Select boundary edges ..." } else { "Select cutting edges ..." });

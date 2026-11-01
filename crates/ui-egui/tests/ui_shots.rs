@@ -35,22 +35,61 @@ const SHARE: f64 = 0.005;
 /// A rectangle may move or change size by this much (window pixels).
 const SLACK: u32 = 2;
 
-/// The dialogs the app opens by id (`ui.dialog`): dialogs.rs and the dialogs with their own id.
+/// The Sheet Set Manager is a docked palette, not a `ui.dialog`: its scene is named like a dialog and
+/// shows a made-up sheet set ([`open_sheet_set`]).
+const SHEETSET: &str = "sheetset";
+
+/// Dialogs that show nothing without state their own command sets up (a running Data Extraction,
+/// a pending PDF import, ...), with why. Every other listed dialog must draw something.
+const EXEMPT: &[(&str, &str)] = &[
+    ("dataextraction", "opens only inside a running DATAEXTRACTION wizard (its state is set by the command)"),
+    ("exchangeloss", "opens only after a DWG/DXF save or open that dropped data (needs the loss notice)"),
+    ("layerstates", "opens only from LAYERSTATE with the manager's state (set by the command)"),
+    ("pdfimport", "opens only for a chosen PDF file (its page list is read from the file)"),
+    ("spell", "opens only inside a running SPELL check (needs the checker's word list state)"),
+    ("tolerance", "opens only from TOLERANCE with the symbol being edited"),
+    ("hyperlink.confirm", "opens only for a clicked link that starts a program (needs the pending address)"),
+    ("secureload", "opens only for a file that asks to load code (needs the pending load request)"),
+];
+
+/// Every scene id the suite renders: all dialog ids the app handles ([`cadaddy_ui_egui::dialogs::IDS`]) and the Sheet Set Manager.
 fn dialog_ids() -> Vec<&'static str> {
-    let src = include_str!("../src/dialogs.rs");
-    let mut ids: Vec<&'static str> = src
-        .lines()
-        .filter_map(|l| {
-            let rest = l.trim().strip_prefix('"')?;
-            let (id, tail) = rest.split_once('"')?;
-            tail.trim_start().starts_with("=>").then_some(id)
-        })
-        .collect();
-    ids.extend(["linetype", "ptype", "textstyle", "tablestyle", "dimstyle", "mleaderstyle", "pagesetup", "csettings", "plot", "battman"]);
-    ids.extend(["materials", "laywalk", "exchangeloss", "hyperlink", "rooms"]);
+    let mut ids: Vec<&'static str> = cadaddy_ui_egui::dialogs::IDS.to_vec();
+    ids.push(SHEETSET);
     ids.sort_unstable();
     ids.dedup();
     ids
+}
+
+/// The listed dialogs that drew nothing and are not exempt: each is a failure naming the dialog.
+fn blank_failures(config: &str, blank: &[String]) -> Vec<String> {
+    blank
+        .iter()
+        .filter(|id| !EXEMPT.iter().any(|(e, _)| e == id))
+        .map(|id| format!("{config} dialog-{id}: dialog \"{id}\" shows nothing (not drawn, or needs state the suite does not give it: fix it or add it to EXEMPT with a reason)"))
+        .collect()
+}
+
+/// Opens the Sheet Set Manager on a made-up set ("Project A", two sheets from the sample drawings).
+fn open_sheet_set(app: &mut CadApp) {
+    let dir = report_dir().join("fixture");
+    let _ = std::fs::create_dir_all(&dir);
+    let set = dir.join("Project A.sheetset.json").to_string_lossy().into_owned();
+    let _ = app.run("sheetset", json!({ "set": set, "action": "new", "name": "Project A", "overwrite": true }));
+    // The sheets go straight into the file: the ADD action reads the drawings, which needs the file formats
+    // this suite does not install (they would change what the other scenes say on the command line).
+    if let Some(mut data) = std::fs::read_to_string(&set).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
+        let sheets: Vec<_> = [("A-101", "Floor Plan", "Sample Floor Plan.dxf"), ("A-102", "Site Plan", "Site Plan.dxf")]
+            .iter()
+            .zip(1u64..)
+            .map(|((number, title, drawing), id)| json!({ "id": id, "number": number, "title": title, "drawing": drawing, "layout": "Layout1" }))
+            .collect();
+        data["sheets"] = json!(sheets);
+        data["nextId"] = json!(3);
+        let _ = std::fs::write(&set, data.to_string());
+    }
+    app.ui.sheet_set = Some(set);
+    let _ = menus::run_ui_command(app, SHEETSET, &serde_json::Value::Null);
 }
 
 /// The goldens' folder for this platform and font set.
@@ -108,7 +147,11 @@ fn render(lang: &str, theme: &str, (w, h): (u32, u32), tab: &str, dialog: Option
     app.ui.ribbon_tab = tab.to_string();
     let _ = menus::run_ui_command(&mut app, &format!("ui.theme.{theme}"), &json!({}));
     let _ = menus::run_ui_command(&mut app, "ui.language", &json!({ "lang": lang }));
-    app.ui.dialog = dialog.map(str::to_string);
+    if dialog == Some(SHEETSET) {
+        open_sheet_set(&mut app);
+    } else {
+        app.ui.dialog = dialog.map(str::to_string);
+    }
     #[allow(clippy::cast_precision_loss)]
     let size = egui::vec2(w as f32, h as f32);
     let mut harness = egui_kittest::Harness::builder().with_size(size).wgpu().build_ui_state(
@@ -266,8 +309,10 @@ fn check_language(lang: &str) {
         for &theme in THEMES {
             let config = format!("{lang}-{theme}-{}x{}", size.0, size.1);
             let (shots, blank) = shots(lang, theme, size);
-            if !blank.is_empty() && lang == "en" && theme == "light" {
-                notes.push(format!("{config}: show nothing without a drawing state or an argument: {}", blank.join(", ")));
+            failures.extend(blank_failures(&config, &blank));
+            if lang == "en" && theme == "light" {
+                let exempt: Vec<&str> = blank.iter().map(String::as_str).filter(|b| EXEMPT.iter().any(|(e, _)| e == b)).collect();
+                notes.push(format!("{config}: exempt, show nothing without their command's state: {}", exempt.join(", ")));
             }
             for (scene, shot) in &shots {
                 let (x, y, w, h) = shot.rect;
@@ -352,6 +397,27 @@ fn german() {
 #[test]
 fn french() {
     check_language("fr");
+}
+
+#[test]
+fn a_listed_dialog_that_draws_nothing_fails_naming_it() {
+    let blank = vec!["spell".to_string(), "options".to_string(), "units".to_string()];
+    let failed = blank_failures("en-light-1600x1000", &blank);
+    assert_eq!(failed.len(), 2, "the exempt one passes: {failed:?}");
+    assert!(failed.iter().any(|f| f.contains("\"options\"")) && failed.iter().any(|f| f.contains("\"units\"")));
+    assert!(blank_failures("c", &["spell".into()]).is_empty());
+}
+
+#[test]
+fn the_exempt_list_names_real_dialogs_with_reasons() {
+    let ids = dialog_ids();
+    for (id, why) in EXEMPT {
+        assert!(ids.contains(id), "{id} is exempt but is not a listed dialog");
+        assert!(why.len() > 10, "{id} needs a reason");
+    }
+    for id in ["options", "commands", SHEETSET] {
+        assert!(ids.contains(&id), "{id} is a scene");
+    }
 }
 
 #[test]

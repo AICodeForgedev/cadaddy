@@ -296,12 +296,14 @@ fn run_mlstyle(s: &mut Session, p: &Value) -> Result<Value> {
         d.mline_styles.retain(|x| !x.name.eq_ignore_ascii_case(&st));
         return Ok(styles_value(d));
     }
-    let Some(name) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) else { return Ok(styles_value(s.doc()?)) };
-    if name.chars().count() > 31 || name.chars().any(|c| "<>/\\\":;?*|,=`".contains(c)) {
-        return Err(bad("mlstyle", "style names have up to 31 characters and none of <>/\\\":;?*|,=`"));
+    let Some(name) = str_param(p, "name").map(str::trim) else { return Ok(styles_value(s.doc()?)) };
+    super::names::check("mlstyle", "multiline style", name)?;
+    if name.chars().count() > 31 {
+        return Err(bad("mlstyle", "style names have up to 31 characters"));
     }
     if let Some(to) = str_param(p, "rename").map(str::trim) {
-        if to.is_empty() || to.chars().count() > 31 {
+        super::names::check("mlstyle", "multiline style", to)?;
+        if to.chars().count() > 31 {
             return Err(bad("mlstyle", "`rename` needs a name of up to 31 characters"));
         }
         let d = s.doc_mut()?;
