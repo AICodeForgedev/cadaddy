@@ -157,7 +157,13 @@ fn objects_kept(a: &cadaddy_doc::EntityStore, b: &cadaddy_doc::EntityStore, dept
     }
     a.is_empty()
         || (sampled(a.len()) == sampled(b.len())
-            && sample(a).zip(sample(b)).all(|(e, f)| kept(&content(v(&e.kind)), &content(v(&f.kind)), depth + 2)))
+            && sample(a).zip(sample(b)).all(|(e, f)| {
+                // The same placeholders the detail list skips ([`compare_pair`]), or a category is
+                // reported with nothing listed under it.
+                let (mut ka, mut kb) = (content(v(&e.kind)), content(v(&f.kind)));
+                drop_placeholders(&e.kind, &mut [&mut ka, &mut kb]);
+                kept(&ka, &kb, depth + 2)
+            }))
 }
 
 /// The objects of a list compared: every [`step`]th.
@@ -524,7 +530,14 @@ pub fn check_written(
     read: fn(&[u8], &str) -> Result<Drawing, String>,
 ) -> Result<(Vec<&'static str>, Vec<Loss>), String> {
     let back = opened(read(bytes, name)?);
-    Ok((lost_parts(d, &back), losses_of(d, &back)))
+    let (mut lost, detail) = (lost_parts(d, &back), losses_of(d, &back));
+    // A category is derived from the same comparison as the detail: one with nothing listed under
+    // it is a disagreement between the two, and a notice that names nothing helps nobody.
+    debug_assert!(lost.is_empty() || !detail.is_empty(), "notKept {lost:?} with an empty notKeptDetail");
+    if detail.is_empty() {
+        lost.clear();
+    }
+    Ok((lost, detail))
 }
 
 /// A drawing read back as opening it gives it: table formulas whose values the file didn't keep
@@ -532,6 +545,12 @@ pub fn check_written(
 fn opened(mut back: Drawing) -> Drawing {
     crate::cmd::table::cells::fill_missing_values(&mut back);
     back
+}
+
+/// The categories the save notice names for `d` against `back` ([`check_written`]'s first half):
+/// for the differential fuzzing, which checks that none is named without a detail.
+pub fn parts_between(d: &Drawing, back: &Drawing) -> Vec<&'static str> {
+    lost_parts(d, &opened(back.clone()))
 }
 
 /// [`losses`] of `d` against `back`, a copy of it written and read back by the caller.
