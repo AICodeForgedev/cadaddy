@@ -19,8 +19,8 @@ struct W {
     pstyles: HashMap<String, String>,
     /// Upper-case layer name → its LAYER table record handle (group 331 of viewports).
     layers: HashMap<String, String>,
-    /// Persistent reactors of boundary objects: each source object of an associative hatch →
-    /// the hatches (groups `{ACAD_REACTORS 330 …}`), from [`hatch_reactors`].
+    /// Persistent reactors of source geometry: the associative hatches and DIMASSOC objects
+    /// that follow it (groups `{ACAD_REACTORS 330 …}`).
     reactors: HashMap<Handle, Vec<String>>,
     /// Upper-case material name → its MATERIAL object handle (group 347 of layers and objects).
     materials: HashMap<String, String>,
@@ -2875,7 +2875,20 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
             if let EntityKind::Dimension(dm) = &e.kind {
                 let (flags, refs) = std_assoc_refs(d, dm);
                 if !refs.is_empty() {
-                    cx.assoc.insert(e.handle, AssocObj { xdict: w.h(), handle: w.h(), flags, refs });
+                    let assoc = AssocObj { xdict: w.h(), handle: w.h(), flags, refs };
+                    // Source geometry must name the DIMASSOC as well, or other readers do not
+                    // follow later edits. Both objects of an intersection need the reactor.
+                    for source in assoc.refs.iter().flat_map(|r| std::iter::once(r.main).chain(r.other)) {
+                        // common_x already gives the dimension its own DIMASSOC reactor.
+                        if source == e.handle {
+                            continue;
+                        }
+                        let reactors = w.reactors.entry(source).or_default();
+                        if !reactors.contains(&assoc.handle) {
+                            reactors.push(assoc.handle.clone());
+                        }
+                    }
+                    cx.assoc.insert(e.handle, assoc);
                 }
             }
         }
@@ -3832,7 +3845,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
     // A DXF of 2013 or later has no SAT text: solids holding it are left out (#2334). Only a DXF
     // declares the version it is written for: the DWG bridge's DXF is for the DWG writer, which
     // keeps SAT-text solids.
-    crate::dxf_raw::finish(&mut w.t, d, version >= Version::R2013 && !bridge);
+    crate::dxf_raw::finish(&mut w.t, d, version >= Version::R2013 && !bridge, &w.reactors);
     crate::dxf_raw::data_store(&mut w.t, d, target >= Version::R2013);
     add_class_instance_counts(&mut w.t, target);
     mark_xrefs(&mut w.t, d);
