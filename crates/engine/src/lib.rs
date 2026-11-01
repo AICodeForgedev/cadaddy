@@ -325,6 +325,9 @@ pub struct DocState {
     /// The Block Editor (BEDIT), when it is open: `doc` is then the editor's drawing, and the
     /// drawing itself waits in it ([`DocState::drawing`]).
     pub block_edit: Option<blockedit::BlockEdit>,
+    /// The fonts missing on Windows that a save last named: the next save names them again only
+    /// when they change.
+    pub(crate) fonts_noted: String,
     /// The test window (BTESTBLOCK), when it is open: `doc` is then a temporary copy of the
     /// block in a drawing of its own, and the Block Editor waits in the state kept here.
     pub block_test: Option<Box<DocState>>,
@@ -456,6 +459,7 @@ impl DocState {
             last_revision: None,
             open_notes: Vec::new(),
             block_edit: None,
+            fonts_noted: String::new(),
             block_test: None,
             lightmap: None,
             lightmap_rev: 0,

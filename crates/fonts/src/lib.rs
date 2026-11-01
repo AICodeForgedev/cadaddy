@@ -22,6 +22,7 @@ pub mod shx;
 pub mod stroke;
 pub mod subset;
 pub mod ttf;
+pub mod windows;
 
 use cadaddy_geom::{Bounds2, Vec2};
 

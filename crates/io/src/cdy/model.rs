@@ -449,6 +449,8 @@ fn field_guard(d: &Drawing) {
         read_notes: _,
         refedit: _,
         skipped_records: _,
+        // A save option on the copy SAVEAS `portableFonts` writes (DWG/DXF only).
+        portable_fonts: _,
     } = d;
 }
 

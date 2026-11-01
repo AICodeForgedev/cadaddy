@@ -1635,8 +1635,10 @@ fn style_font(tags: &[Tag], file: String) -> String {
         _ => None,
     });
     let stem = file.trim().to_ascii_lowercase();
+    let base = stem.rsplit(['/', '\\']).next().unwrap_or_default();
     match own {
-        Some(name) if !name.trim().is_empty() && (stem == "txt" || stem == "txt.shx") => name,
+        // The font file is the `txt` or the Windows font written for other readers.
+        Some(name) if !name.trim().is_empty() && (stem == "txt" || stem == "txt.shx" || cadaddy_fonts::windows::windows_font(&name) == Some(base)) => name,
         _ => file,
     }
 }

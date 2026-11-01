@@ -231,6 +231,10 @@ pub struct Drawing {
     /// saving writes them again, so links into the file from outside stay valid.
     pub kept_handles: shared::Shared<BTreeMap<String, u64>>,
     pub field_values: BTreeMap<Handle, Vec<String>>,
+    /// A save option, set on the copy SAVEAS `portableFonts` writes: the file gets Windows fonts
+    /// for the Linux fonts of text styles, and each style keeps its own in CADaddy xdata, so the
+    /// drawing reopens with it. Never set on an open drawing.
+    pub portable_fonts: bool,
 }
 
 impl Default for Drawing {
@@ -343,6 +347,7 @@ impl Drawing {
             skipped_records: BTreeMap::new(),
             field_values: BTreeMap::new(),
             kept_handles: Default::default(),
+            portable_fonts: false,
         }
     }
 
