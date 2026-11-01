@@ -2103,7 +2103,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
             d.bump_handseed(h);
         }
     }
-    d.kept_handles = kept_handles(&secs);
+    d.kept_handles = kept_handles(&secs).into();
     let mut skipped = std::collections::BTreeMap::new();
     count_skipped(&mut skipped, "(no section)", outside);
     for s in &secs {
@@ -2672,7 +2672,7 @@ impl Objects {
         }
         // Parametric constraints and parameters.
         if let Some((c, p)) = self.xrecord_text(crate::dxf_ext::CONSTRAINTS_KEY).and_then(|t| crate::dxf_ext::parse_constraints(&t)) {
-            d.constraints = c;
+            d.constraints = c.into();
             d.parametric = p;
         }
         // The annotation scale list (a metric drawing without one gets the metric defaults),

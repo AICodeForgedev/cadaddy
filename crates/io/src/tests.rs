@@ -1325,7 +1325,7 @@ fn parametric_sample(d: &mut Drawing) -> (Vec<Constraint>, Parametric) {
             name_format: 1,
         },
     };
-    d.constraints = constraints.clone();
+    d.constraints = constraints.clone().into();
     d.parametric = parametric.clone();
     (constraints, parametric)
 }

@@ -133,20 +133,31 @@ impl EntityStore {
     pub fn unique_bytes(&self, newer: &EntityStore) -> usize {
         let theirs: HashMap<u32, &Arc<Chunk>> = newer.chunks.iter().map(|c| (c.id, c)).collect();
         let mut bytes = 0usize;
+        // What a chunk costs besides its objects: its list of pointers (a step that only adds or
+        // moves one object still keeps the whole old list).
+        let list = |c: &Chunk| c.items.len().saturating_mul(std::mem::size_of::<Arc<Entity>>()).saturating_add(64);
         for c in &self.chunks {
             match theirs.get(&c.id) {
                 Some(t) if Arc::ptr_eq(c, t) => {}
                 Some(t) => {
+                    bytes = bytes.saturating_add(list(c));
                     let shared: std::collections::HashSet<*const Entity> = t.items.iter().map(Arc::as_ptr).collect();
                     for e in c.items.iter().filter(|e| !shared.contains(&Arc::as_ptr(e))) {
                         bytes = bytes.saturating_add(e.approx_bytes());
                     }
                 }
                 None => {
+                    bytes = bytes.saturating_add(list(c));
                     for e in &c.items {
                         bytes = bytes.saturating_add(e.approx_bytes());
                     }
                 }
+            }
+        }
+        // The handle index: a shard an edit copied is kept whole (about 48 bytes an entry).
+        for (mine, theirs) in self.shards.iter().zip(&newer.shards) {
+            if !Arc::ptr_eq(mine, theirs) {
+                bytes = bytes.saturating_add(mine.len().saturating_mul(48).saturating_add(64));
             }
         }
         bytes

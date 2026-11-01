@@ -22,6 +22,7 @@ pub mod props;
 mod rare;
 mod refedit;
 mod section;
+pub mod shared;
 mod solid;
 mod store;
 mod surface;
@@ -106,6 +107,9 @@ impl Space {
     }
 }
 
+/// What a drawing's header and small tables hold, as far as undo counts it per step.
+const DRAWING_FIXED_BYTES: usize = 16 * 1024;
+
 /// The name an embedded texture image is kept under in [`Drawing::embedded`]: this, then its path.
 pub const TEXTURE_PREFIX: &str = "texture:";
 
@@ -125,7 +129,7 @@ pub struct Drawing {
     pub table_styles: Vec<TableStyle>,
     /// Multiline styles (MLSTYLE); STANDARD is always there.
     pub mline_styles: Vec<MLineStyle>,
-    pub blocks: BTreeMap<String, std::sync::Arc<Block>>,
+    pub blocks: shared::Shared<BTreeMap<String, std::sync::Arc<Block>>>,
     pub model: EntityStore,
     pub layouts: Vec<Layout>,
     /// The layout a file marks active (its block is `*Paper_Space`, the others `*Paper_SpaceN`),
@@ -143,7 +147,7 @@ pub struct Drawing {
     /// the same name.
     pub plot_style_tables: Vec<PlotStyleTable>,
     /// Parametric constraints (GEOMCONSTRAINT / DIMCONSTRAINT).
-    pub constraints: Vec<Constraint>,
+    pub constraints: shared::Shared<Vec<Constraint>>,
     /// User parameters and parametric settings.
     pub parametric: Parametric,
     /// The annotation scale list (SCALELISTEDIT).
@@ -225,7 +229,7 @@ pub struct Drawing {
     /// Handles another program's file gave its table records and objects, by `KIND/NAME`
     /// (`LAYER/WALLS`, `TABLE/LAYER`, `BLOCK_RECORD/DOOR`, `DICT/ACAD_GROUP`, `LAYOUT/LAYOUT1`…):
     /// saving writes them again, so links into the file from outside stay valid.
-    pub kept_handles: BTreeMap<String, u64>,
+    pub kept_handles: shared::Shared<BTreeMap<String, u64>>,
     pub field_values: BTreeMap<Handle, Vec<String>>,
 }
 
@@ -245,7 +249,19 @@ impl Drawing {
     /// Roughly how many bytes this drawing holds that `newer` doesn't share with it (objects of
     /// model space, the layouts and the blocks): what keeping it as an undo step costs.
     pub fn unique_bytes(&self, newer: &Drawing) -> usize {
-        let mut bytes = self.model.unique_bytes(&newer.model);
+        // Every step keeps its own copy of the header and the small tables (measured: about 12 KB
+        // for the header, the rest is a few hundred bytes a table); the big tables are shared
+        // until an edit changes them.
+        let mut bytes = DRAWING_FIXED_BYTES.saturating_add(self.model.unique_bytes(&newer.model));
+        if !self.blocks.same(&newer.blocks) {
+            bytes = bytes.saturating_add(self.blocks.keys().map(|k| k.len().saturating_add(96)).fold(0, usize::saturating_add));
+        }
+        if !self.constraints.same(&newer.constraints) {
+            bytes = bytes.saturating_add(self.constraints.len().saturating_mul(256));
+        }
+        if !self.kept_handles.same(&newer.kept_handles) {
+            bytes = bytes.saturating_add(self.kept_handles.keys().map(|k| k.len().saturating_add(56)).fold(0, usize::saturating_add));
+        }
         for l in &self.layouts {
             bytes = bytes.saturating_add(match newer.layouts.iter().find(|n| n.name == l.name) {
                 Some(n) => l.entities.unique_bytes(&n.entities),
@@ -289,7 +305,7 @@ impl Drawing {
             mleader_styles: vec![MLeaderStyle::default()],
             table_styles: vec![TableStyle::default()],
             mline_styles: vec![MLineStyle::default()],
-            blocks: BTreeMap::new(),
+            blocks: Default::default(),
             model: EntityStore::new(),
             layouts: vec![Layout::new("Layout1", 1), Layout::new("Layout2", 2)],
             active_layout: None,
@@ -300,7 +316,7 @@ impl Drawing {
             layer_filters: Vec::new(),
             groups: Vec::new(),
             plot_style_tables: Vec::new(),
-            constraints: Vec::new(),
+            constraints: Default::default(),
             parametric: Parametric::default(),
             scales: imperial_scales(),
             handseed: 0x100,
@@ -326,7 +342,7 @@ impl Drawing {
             refedit: None,
             skipped_records: BTreeMap::new(),
             field_values: BTreeMap::new(),
-            kept_handles: BTreeMap::new(),
+            kept_handles: Default::default(),
         }
     }
 

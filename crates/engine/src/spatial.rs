@@ -68,7 +68,7 @@ impl ChunkIx {
 /// store chunks that changed are re-measured and patched into the tree.
 pub struct SpatialIndex {
     store: EntityStore,
-    blocks: BTreeMap<String, Arc<Block>>,
+    blocks: cadaddy_doc::shared::Shared<BTreeMap<String, Arc<Block>>>,
     dim_styles: Vec<DimStyle>,
     dimscale: f64,
     /// Annotation scale factor and ANNOALLVISIBLE: annotative objects measure at that scale.
