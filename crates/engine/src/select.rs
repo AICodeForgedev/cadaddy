@@ -14,6 +14,16 @@ pub fn hit_polylines(d: &Drawing, e: &Entity, tol: f64) -> Vec<Vec<Vec2>> {
 /// [`hit_polylines`] where only what lies in `area` matters: a pattern hatch's strokes are made
 /// only there. A hatch around thousands of islands took seconds to stroke in full on every pick.
 fn hit_polylines_in(d: &Drawing, e: &Entity, tol: f64, area: Option<Bounds2>) -> Vec<Vec<Vec2>> {
+    hit_polylines_with(d, e, tol, area, false)
+}
+
+/// [`hit_polylines`] for a boundary search: hatches inside block references and arrays are left
+/// out (their pattern lines are never boundary candidates, and drawing them dominates the time).
+pub fn linework_polylines(d: &Drawing, e: &Entity, tol: f64) -> Vec<Vec<Vec2>> {
+    hit_polylines_with(d, e, tol, None, true)
+}
+
+fn hit_polylines_with(d: &Drawing, e: &Entity, tol: f64, area: Option<Bounds2>, skip_hatches: bool) -> Vec<Vec<Vec2>> {
     match &e.kind {
         EntityKind::Text(_)
         | EntityKind::MText(_)
@@ -35,7 +45,7 @@ fn hit_polylines_in(d: &Drawing, e: &Entity, tol: f64, area: Option<Bounds2>) ->
                 let list = cadaddy_render::build_entities(
                     d,
                     std::iter::once(e),
-                    &cadaddy_render::Options { tolerance: tol, text: false, ..Default::default() },
+                    &cadaddy_render::Options { tolerance: tol, text: false, skip_hatches, ..Default::default() },
                 );
                 v = list.prims.iter().map(|p| list.points(p).to_vec()).collect();
                 v.push(vec![c[0], c[1], c[2], c[3], c[0]]);
