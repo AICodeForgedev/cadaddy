@@ -327,7 +327,7 @@ pub(crate) fn add_constraint(s: &mut Session, c: Constraint) -> Result<u32> {
     let keep: Vec<Handle> = c.refs.first().map(|r| r.handle).into_iter().collect();
     let prefer_move: Vec<Handle> = c.refs.iter().skip(1).map(|r| r.handle).filter(|h| !keep.contains(h)).collect();
     let mut d = s.doc()?.clone();
-    let id = cs::add(&mut d, c, &cs::SolveOptions { keep, prefer_move }).map_err(err)?;
+    let id = cs::add(&mut d, c, &cs::SolveOptions { keep, prefer_move, ..Default::default() }).map_err(err)?;
     *s.doc_mut()? = d;
     Ok(id)
 }
@@ -826,11 +826,18 @@ fn run_autoconstrain(s: &mut Session, p: &Value) -> Result<Value> {
         o.types = t.iter().filter_map(Value::as_str).map(|n| kind_from_name(n).map_or_else(|| n.to_string(), |k| k.name().to_string())).collect();
     }
     let mut d = s.doc()?.clone();
-    let ids = cs::autoconstrain(&mut d, &hs, &o);
+    let (ids, stats) = cs::autoconstrain_counted(&mut d, &hs, &o);
     if !ids.is_empty() {
         *s.doc_mut()? = d;
     }
-    Ok(json!({ "added": ids.len(), "ids": ids, "message": format!("{} constraint(s) applied to {} object(s)", ids.len(), hs.len()) }))
+    Ok(json!({
+        "added": ids.len(),
+        "ids": ids,
+        "candidates": stats.candidates,
+        "skippedImplied": stats.implied,
+        "solved": stats.solved,
+        "message": format!("{} constraint(s) applied to {} object(s)", ids.len(), hs.len())
+    }))
 }
 
 fn run_delconstraint(s: &mut Session, p: &Value) -> Result<Value> {
@@ -869,14 +876,11 @@ fn failing(d: &Drawing) -> std::collections::BTreeSet<String> {
     cs::parameter_table(d).into_iter().filter(|r| r.error.is_some()).map(|r| r.name).collect()
 }
 
-/// Whether `n` can name a parameter: a letter or `_`, then letters, digits and `_`.
-fn valid_parameter_name(n: &str) -> bool {
-    let mut c = n.chars();
-    c.next().is_some_and(|f| f.is_ascii_alphabetic() || f == '_') && c.all(|x| x.is_ascii_alphanumeric() || x == '_') && n.len() <= 64
-}
-
 /// `expr` with every use of the name `old` replaced by `new` (whole names only).
 fn rename_in(expr: &str, old: &str, new: &str) -> String {
+    if old.is_empty() {
+        return expr.to_string();
+    }
     let mut out = String::with_capacity(expr.len());
     let mut word = String::new();
     let flush = |word: &mut String, out: &mut String| {
@@ -920,10 +924,17 @@ fn run_parameters(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad("parameters", "`rename` is [old, new]"));
         };
         let d = s.doc()?;
-        if !cs::name_in_use(d, old) {
-            return Err(EngineError::Other(format!("no parameter `{old}`")));
+        // Only a user parameter or a dimensional constraint can be renamed (geometric constraints have the name "").
+        let known = !old.trim().is_empty()
+            && (d.parametric.parameters.iter().any(|q| q.name == old) || d.constraints.iter().any(|c| c.kind.is_dimensional() && c.name == old));
+        if !known {
+            return Err(EngineError::Other(if old.trim().is_empty() {
+                "`rename` needs the name of a parameter or dimensional constraint as `old`".to_string()
+            } else {
+                format!("no parameter `{old}`")
+            }));
         }
-        if !valid_parameter_name(new) {
+        if !cs::expr::valid_name(new) {
             return Err(EngineError::Other(format!("`{new}` can't name a parameter: use letters, digits and _, starting with a letter")));
         }
         if new != old && cs::name_in_use(d, new) {
@@ -1031,6 +1042,13 @@ fn run_constraintsettings(s: &mut Session, p: &Value) -> Result<Value> {
     set.dims_visible = bool_or(p, "dimsVisible", set.dims_visible);
     set.tangent_intersect = bool_or(p, "tangentIntersect", set.tangent_intersect);
     set.perpendicular_intersect = bool_or(p, "perpendicularIntersect", set.perpendicular_intersect);
+    // The checkboxes act like Show All / Hide All: exceptions are relative to the old value and would flip.
+    if set.bars_visible != cur.bars_visible {
+        set.bar_exceptions.clear();
+    }
+    if set.dims_visible != cur.dims_visible {
+        set.dim_exceptions.clear();
+    }
     if let Some(f) = p.get("nameFormat").filter(|v| !v.is_null()) {
         set.name_format =
             f.as_u64()
@@ -1193,7 +1211,7 @@ fn infer_after(s: &mut Session, before: &Drawing) {
         return;
     }
     let mut nd = d.clone();
-    let opts = cs::SolveOptions { keep: others, prefer_move: placed };
+    let opts = cs::SolveOptions { keep: others, prefer_move: placed, ..Default::default() };
     let added = cands.into_iter().take(200).filter(|c| cs::add(&mut nd, c.clone(), &opts).is_ok()).count();
     if added > 0
         && let Ok(st) = s.state_mut()
@@ -1221,8 +1239,10 @@ pub fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, ok: bool) {
     }
     let mut d = (*st.doc).clone();
     let purged = cs::purge_invalid(&mut d);
-    let satisfied = cs::all_satisfied(&d);
-    if purged.is_empty() && satisfied {
+    let restored = cs::restore_fixed(&mut d, before);
+    let anchors = cs::moved_anchors(&d, before);
+    let satisfied = anchors.is_empty() && cs::all_satisfied(&d);
+    if purged.is_empty() && !restored && satisfied {
         return;
     }
     let mut msg = Vec::new();
@@ -1240,9 +1260,25 @@ pub fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, ok: bool) {
                 keep.push(h);
             }
         }
-        let mut trial = d.clone();
-        match cs::solve(&mut trial, &cs::SolveOptions { keep, prefer_move: Vec::new() }) {
-            Ok(_) => d = trial,
+        // A grip drag moved some of an object's points: they stay where they were put, and the
+        // edited objects still move least. When that cannot be solved, the edited objects are
+        // only kept as a whole, as for any other edit.
+        let hold: Vec<GeomRef> = keep.iter().flat_map(|&h| cs::edited_points(&d, before, h)).collect();
+        let mut solved = None;
+        if !hold.is_empty() {
+            let mut trial = d.clone();
+            let opts = cs::SolveOptions { keep: keep.clone(), prefer_move: Vec::new(), hold, anchors: anchors.clone() };
+            solved = cs::solve(&mut trial, &opts).ok().map(|_| trial);
+        }
+        let solved = match solved {
+            Some(t) => Ok(t),
+            None => {
+                let mut trial = d.clone();
+                cs::solve(&mut trial, &cs::SolveOptions { keep, anchors, ..Default::default() }).map(|_| trial)
+            }
+        };
+        match solved {
+            Ok(t) => d = t,
             Err(e) => msg.push(format!("Constraints could not be satisfied: {e}")),
         }
     }
@@ -1255,5 +1291,4 @@ pub fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, ok: bool) {
 }
 
 #[cfg(test)]
-#[path = "constraints_tests.rs"]
 mod tests;

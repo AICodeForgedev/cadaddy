@@ -135,16 +135,41 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
 /// title and discipline, never the file name. The result is the set's sheet index.
 fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
     let project = get_project_mut(s)?;
-    let cancel = AtomicBool::new(false);
-    let mut noop = |_: &mep_printset::Progress| {};
+    // A running job's cancel stops it at the next sheet (the rest stay to classify).
+    let cancel = super::guided::cancel_flag();
+    // A line at least every ~10 s while it reads the sheets (a job's progress lines).
+    let started = web_time::Instant::now();
+    let mut said = started;
+    let mut tell = |p: &mep_printset::Progress| {
+        if said.elapsed().as_secs_f64() >= CLASSIFY_PROGRESS_S {
+            said = web_time::Instant::now();
+            super::guided::progress_line(&format!(
+                "  classify: sheet {}/{} {} ({:.0} s)",
+                p.sheet_index + 1,
+                p.sheets_total,
+                p.sheet_number,
+                started.elapsed().as_secs_f64()
+            ));
+        }
+    };
     let dir = PathBuf::from(&project.source_dir);
     let rec = if !project.source_dir.is_empty() && dir.is_dir() {
         let loader = mep_printset::PrintLoader::new(&dir);
-        mep_printset::run_classify_prints(project, &|e| loader.load(e), &cancel, &mut noop)
+        mep_printset::run_classify_prints(project, &|e| loader.load(e), cancel, &mut tell)
     } else {
         // A project made without files (from a saved truth): classify what it already holds.
-        mep_printset::run_classify(project, None, &cancel, &mut noop)
+        mep_printset::run_classify(project, None, cancel, &mut tell)
     };
+    // The files (or pages) that couldn't be read at all.
+    let unreadable: Vec<Value> = project
+        .sheets
+        .iter()
+        .filter_map(|e| {
+            let r = e.stage_results.get("classify")?;
+            (r.status == mep_printset::StageStatus::Failed).then(|| json!({"file": e.file, "page": e.page, "error": r.error}))
+        })
+        .take(500)
+        .collect();
     let index = mep_printset::sheet_index(project);
     Ok(json!({
         "classified": rec.sheets_processed,
@@ -156,8 +181,12 @@ fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
         "unidentified": index.unidentified,
         "plans_without_level": index.plans_without_level,
         "level_warnings": index.level_warnings,
+        "unreadable": unreadable,
     }))
 }
+
+/// Seconds between classify's progress lines.
+const CLASSIFY_PROGRESS_S: f64 = 10.0;
 
 // ─── printset.run ────────────────────────────────────────────────────────────
 
@@ -301,8 +330,8 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut part = path.as_os_str().to_owned();
     part.push(".part");
     let part = PathBuf::from(part);
-    std::fs::write(&part, bytes)?;
-    std::fs::rename(&part, path)
+    crate::writefile::write(&part, bytes)?;
+    crate::writefile::rename(&part, path)
 }
 
 fn run_keep(s: &mut Session, _p: &Value) -> Result<Value> {

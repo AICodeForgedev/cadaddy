@@ -219,6 +219,40 @@ fn z_max(m: &Mesh) -> f64 {
 }
 
 #[test]
+fn a_stair_no_code_lets_be_built_is_left_out_not_built() {
+    let mut s = plan();
+    s.execute("stairs.detect", &json!({"store": true})).unwrap();
+    // S1 read as 10 treads over a short run: 11 risers of 13 1/8" — no stair rises that much.
+    s.execute("bspec.set", &json!({"spec": {"stairs": [{"name": "S1", "runs": [{"from": [100, 22], "to": [210, 22], "treads": 10}]}]}})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    let out: Vec<&str> = r["stairs_left_out"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    assert_eq!(out.len(), 1, "{r}");
+    assert!(out[0].starts_with("S1:") && out[0].contains("11 risers of 13 1/8\"") && out[0].contains("7¾"), "{out:?}");
+    assert_eq!((r["stairs"].clone(), r["ramps"].clone()), (json!(1), json!(1)), "S2 and the ramp still built: {r}");
+    // The same stair confirmed is the user's: built, its warning standing.
+    s.execute("stairs.confirm", &json!({"names": ["S1"]})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    assert!(r.get("stairs_left_out").is_none(), "{r}");
+    assert_eq!(r["stairs"], json!(2), "{r}");
+    // Too shallow is no stair either: 145 treads over 12' — 146 risers of under an inch.
+    s.execute("bspec.set", &json!({"spec": {"stairs": [{"name": "S2", "runs": [{"from": [100, 222], "to": [3000, 222], "treads": 145}]}]}})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    let w = r["stairs_left_out"][0].as_str().unwrap_or_default();
+    assert!(w.starts_with("S2:") && w.contains("146 risers") && w.contains("under the 4\" minimum"), "{r}");
+}
+
+/// A tread checked as it's printed: 10.994" reads 11" and meets the 11" minimum.
+#[test]
+fn a_tread_is_checked_as_printed() {
+    let mut s = plan();
+    s.execute("stairs.detect", &json!({"store": true})).unwrap();
+    // 20 treads over 219.88": 10.994" each; 21 risers of 6.86".
+    s.execute("bspec.set", &json!({"spec": {"stairs": [{"name": "S1", "runs": [{"from": [100, 22], "to": [319.88, 22], "treads": 20}]}]}})).unwrap();
+    let s1 = by_name(&s.execute("stairs.list", &json!({})).unwrap(), "S1").clone();
+    assert_eq!(s1["warnings"], json!([]), "{s1}");
+}
+
+#[test]
 fn model_build_makes_them_and_walk_climbs_them() {
     let mut s = plan();
     s.execute("stairs.detect", &json!({"store": true})).unwrap();

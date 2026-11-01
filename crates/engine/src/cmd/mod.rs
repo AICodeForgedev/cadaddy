@@ -30,6 +30,7 @@ pub mod coordination;
 pub mod copricing;
 pub mod cover;
 mod dash_styles;
+pub mod dimcheck;
 mod draw;
 mod draw2;
 mod draworder;
@@ -69,6 +70,7 @@ pub mod pointcloud;
 pub mod procure;
 pub mod progress;
 pub mod project;
+pub mod project_hub;
 pub mod propfill;
 pub mod propuse;
 mod rasterout;
@@ -76,12 +78,14 @@ pub mod rfi;
 pub mod schedules;
 mod setbylayer;
 pub mod spec_import;
+pub mod submittals;
 pub mod tags;
 mod vpsync;
 pub mod wholejob;
 mod xplode;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;
+pub use layer::merge::{objects_per_layer, removal_refusal as layer_removal_refusal};
 pub use layer::notify::unreconciled as unreconciled_layers;
 pub use qselect::wildcard;
 pub use render::apply_environment;
@@ -117,14 +121,16 @@ pub mod lights;
 mod lisp;
 pub mod materials;
 mod measuregeom;
+pub(crate) mod memstat;
 pub mod mep;
 pub mod mepqty;
 mod mleader_content;
-mod mleader_edit;
+pub(crate) mod mleader_edit;
 mod models3d;
 mod modify;
 mod modify2;
 mod mtext_opts;
+mod names;
 mod overkill;
 pub mod overrides;
 pub mod p2meval;
@@ -163,10 +169,12 @@ pub mod validate;
 pub mod verify;
 pub mod walkpub;
 pub mod wallgen;
+pub(crate) mod walltypes;
 pub use props::MatchProps;
+pub(crate) use props::{current_color_value, set_current_color_value};
 pub mod actions;
 pub(crate) mod qselect;
-mod render;
+pub(crate) mod render;
 pub mod rulemodel;
 mod sections;
 mod selecttools;
@@ -192,6 +200,7 @@ pub mod curves;
 pub mod helpers;
 pub mod machines;
 pub mod options;
+pub mod typed_ask;
 
 use cadaddy_doc::Handle;
 use cadaddy_geom::Vec2;
@@ -744,6 +753,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lightbake::specs());
         v.extend(materials::specs());
         v.extend(wallgen::specs());
+        v.extend(walltypes::specs());
         v.extend(revise3d::specs());
         v.extend(overrides::specs());
         v.extend(bspec::specs());
@@ -803,6 +813,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(parts::specs());
         v.extend(express::specs());
         v.extend(express4::specs());
+        v.extend(express4::trim_specs());
         v.push(
             CommandSpec::new("spell", "Spelling", spell::run)
                 .menu(&["Tools", "Spelling"])
@@ -825,6 +836,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(projrules::specs());
         v.extend(codebook::specs());
         v.extend(spec_import::specs());
+        v.extend(submittals::specs());
+        v.extend(dimcheck::specs());
         v.extend(agentready::specs());
         v.extend(underlay::specs());
         v.extend(dgn::specs());
@@ -886,6 +899,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(coordination::specs());
         v.extend(guided::specs());
         v.extend(project::specs());
+        v.extend(project_hub::specs());
         v.extend(rhai_cmd::specs());
         v.extend(plugins_cmd::specs());
         v.extend(rulemodel::specs());
@@ -938,8 +952,25 @@ pub(crate) fn size_param(cmd: &str, p: &Value, key: &str, zero_ok: bool) -> Resu
         None | Some(Value::Null) => Ok(None),
         Some(v) => match v.as_f64().filter(|x| x.is_finite()) {
             Some(x) if x > 0.0 || (zero_ok && x == 0.0) => Ok(Some(x)),
+            // Not a number at all (`"5"`, `{}`): that is the problem, not its sign.
+            None if !v.is_number() => Err(bad(cmd, format!("`{key}` must be a number"))),
             _ => Err(bad(cmd, format!("`{key}` must be {}", if zero_ok { "zero or positive" } else { "positive" }))),
         },
+    }
+}
+/// An optional whole-number count parameter in `min..=max`. Absent or null gives `None`; a
+/// fraction, a negative number, a non-number or a value out of range is refused, naming the
+/// parameter and the rule (as the typed prompts do).
+pub(crate) fn count_param(cmd: &str, p: &Value, key: &str, min: u64, max: u64) -> Result<Option<u64>> {
+    let v = match p.get(key) {
+        None | Some(Value::Null) => return Ok(None),
+        Some(v) => v,
+    };
+    let n = v.as_u64().or_else(|| v.as_f64().filter(|x| x.is_finite() && x.fract() == 0.0 && *x >= 0.0 && *x <= 1e15).map(|x| x as u64));
+    match n {
+        Some(n) if (min..=max).contains(&n) => Ok(Some(n)),
+        _ if max == u64::MAX => Err(bad(cmd, format!("`{key}` must be a whole number of {min} or more"))),
+        _ => Err(bad(cmd, format!("`{key}` must be a whole number from {min} to {max}"))),
     }
 }
 /// `pts` without consecutive repeats (closer than `1e-12`), as the interactive LINE ignores a
@@ -952,6 +983,15 @@ pub(crate) fn distinct_points(pts: &[Vec2]) -> Vec<Vec2> {
         }
     }
     out
+}
+/// An optional true/false parameter: absent or null gives `None`; anything but a boolean
+/// (`12345`, `"yes"`) is refused, naming it.
+pub(crate) fn bool_param(cmd: &str, p: &Value, key: &str) -> Result<Option<bool>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(bad(cmd, format!("`{key}` must be true or false"))),
+    }
 }
 pub(crate) fn bool_or(p: &Value, key: &str, default: bool) -> bool {
     p.get(key).and_then(Value::as_bool).unwrap_or(default)

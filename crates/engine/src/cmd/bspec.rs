@@ -42,7 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true, budget_s?: seconds (1200: stop with an error naming the step when the build runs longer)} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, stacked?: levels moved, removed, notes, warnings}",
         ),
         CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).params(
-            "{path: string (PDF file of any number of pages, or a folder: one print set), out?: string (.cdy to save; default a temp folder — nothing is written next to the PDFs), force?: bool (build even if import check fails)} → {cdy_paths: [string], pages: [{sheet, level, discipline, type}] (the pages the model was built from: the set's plan sheets, or every page without an index), pages_note, spec_guesses: [{key, why}] (what the spec assumed), check_results: [{file, pass (false on any hard fail), score, hard_fails, checks}], built_counts: {walls, doors, windows, ...}, warnings: [string], next_steps: [string (exact calls to make next)]}",
+            "{path: string (PDF file of any number of pages, or a folder: one print set), out?: string (.cdy to save; default a temp folder — nothing is written next to the PDFs), force?: bool (save the model even when the run failed)} → {cdy_paths: [string], pages: [{sheet, level, discipline, type}] (the plan sheets the job built from), pages_note, spec_guesses, check_results: [{file, pass (false on any hard fail), score, hard_fails, checks}], built_counts: {wall, door, window, ...} (elements built), built: {level: {part: n}}, levels, job: {job_id, status, done, findings} (the guided job that ran: job.status / job.report say more), ok, failed: [why the run failed: the job didn't finish, a hard import-check fail, a storey that came out empty], warnings: [string], next_steps: [string (exact calls to make next)]}",
         ),
     ]
 }
@@ -211,8 +211,10 @@ pub(crate) fn room_texts(sp: &BuildingSpec, ents: &[&Arc<Entity>]) -> Vec<(Handl
     let tagged = sp.layers.iter().any(|r| r.role == Role::RoomTag);
     let on: Vec<&Arc<Entity>> =
         ents.iter().copied().filter(|e| !tagged || sp.role(&e.common.layer).is_some_and(|r| r.role == Role::RoomTag)).collect();
+    let mut read = super::perceive::texts(&on);
+    super::perceive::geometry::lift_qualifiers(&mut read);
     let mut out: Vec<(Handle, String, Vec2)> =
-        super::perceive::texts(&on).into_iter().filter(|(_, t, at, _)| !t.is_empty() && at.is_finite()).map(|(h, t, at, _)| (h, t, at)).collect();
+        read.into_iter().filter(|(_, t, at, _)| !t.is_empty() && at.is_finite()).map(|(h, t, at, _)| (h, t, at)).collect();
     // Room tag blocks: their name and number attributes, as the rooms stage reads them.
     for e in &on {
         let EntityKind::Insert(i) = &e.kind else { continue };
@@ -253,9 +255,9 @@ pub(crate) fn room_plan_for(s: &Session, sp: Option<BuildingSpec>) -> Result<Opt
     let generated = |e: &Entity| wallgen::made_as(e).is_some() || super::rooms3d::room_of(&e.common).is_some();
     // Wall layers the drawing doesn't use (a default spec's `*WALL*` on a PDF import, everything
     // on layer 0) decide nothing: kept, they would leave no object to bound a room.
-    let sp = sp
-        .filter(|sp| sp.layers.iter().any(|r| matches!(r.role, Role::Wall | Role::CurtainWall)))
-        .filter(|sp| d.model.iter().any(|e| !generated(e) && sp.role(&e.common.layer).is_some_and(|r| matches!(r.role, Role::Wall | Role::CurtainWall))));
+    let sp = sp.filter(|sp| sp.layers.iter().any(|r| matches!(r.role, Role::Wall | Role::CurtainWall))).filter(|sp| {
+        d.model.iter().any(|e| !generated(e) && sp.role(&e.common.layer).is_some_and(|r| matches!(r.role, Role::Wall | Role::CurtainWall)))
+    });
     let keep = |e: &Entity| !generated(e) && sp.as_ref().is_none_or(|sp| bounds_rooms(sp, &e.common.layer));
     if d.model.iter().all(|e| keep(e)) && sp.as_ref().is_none_or(|sp| !sp.wall_types.iter().any(|t| t.from == cadaddy_walk3d::WallFrom::Centerline)) {
         return Ok(None);
@@ -394,6 +396,12 @@ fn run_validate(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
+    // Its switches are true or false and its budget whole seconds: a wrong one is refused, not
+    // read as the default.
+    for key in ["replace", "auto", "stack", "clear"] {
+        bool_param("model.build", p, key)?;
+    }
+    let budget = count_param("model.build", p, "budget_s", 1, MAX_BUILD_BUDGET_S)?;
     if bool_or(p, "clear", false) {
         let n = wallgen::remove_made(s.doc_mut()?);
         s.state_mut()?.wallgen = None;
@@ -415,10 +423,13 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
             .filter(|t| t.is_finite() && (0.0..=10.0).contains(t))
             .ok_or_else(|| bad("model.build", "`slabThickness` must be from 0 to 10 feet"))?,
     };
-    let budget_s = p.get("budget_s").and_then(Value::as_u64).unwrap_or(BUILD_BUDGET_S);
+    let budget_s = budget.unwrap_or(BUILD_BUDGET_S);
     let g = WallGen { rules: sp.to_rules(), auto: bool_or(p, "auto", true), slab_ft, layers: None, spec: Some(sp) };
     let mut r = build_spec_with_budget(s, &g, budget_s)?;
     r["warnings"] = json!(issues.iter().filter(|i| !i.error).map(issue_json).collect::<Vec<_>>());
+    // The counts are of what the model holds when the build is done (steps after the walls
+    // took some away again: the summary said 2,977 walls of 2,794 built).
+    recount_built(s.doc()?, &mut r);
     let recording = web_time::Instant::now();
     super::revise3d::record(s, &g);
     super::guided::progress_line(&format!("  model.build: plan recorded in {:.1} s", recording.elapsed().as_secs_f64()));
@@ -433,86 +444,6 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let _ = s.execute("vscurrent", &json!({ "style": "realistic" }));
     super::guided::progress_line(&format!("  model.build: 3D view set in {:.1} s", viewing.elapsed().as_secs_f64()));
     Ok(r)
-}
-
-// ─── Multi-plan detection ───────────────────────────────────────────────────
-
-struct FloorLevel {
-    name: String,
-    region: [f64; 4],
-}
-
-/// Scan text entities for floor-level titles (e.g. "3RD FLOOR", "LEVEL 3") and return detected
-/// levels with spatial regions. The texts are parsed for ordinal floor patterns ("3RD FLOOR")
-/// and "LEVEL N" patterns, then split into horizontal bands.
-fn detect_floor_levels(s: &Session) -> std::result::Result<Vec<FloorLevel>, ()> {
-    let d = s.doc().map_err(|_| ())?;
-    let ext = d.extents(&Space::Model);
-    if ext.is_empty() {
-        return Err(());
-    }
-    let (x_min, y_min, x_max, y_max) = (ext.min.x, ext.min.y, ext.max.x, ext.max.y);
-
-    let mut hits: Vec<(u32, f64)> = Vec::new(); // (floor_number, y_position)
-    for e in d.model.iter() {
-        let (text, h, y) = match &e.kind {
-            EntityKind::Text(t) => (t.value.as_str(), t.height, t.insert.y),
-            EntityKind::MText(t) => (t.contents.as_str(), t.height, t.insert.y),
-            _ => continue,
-        };
-        if h < 8.0 {
-            continue;
-        } // skip small text — titles are larger
-        if let Some(num) = parse_floor_number(text)
-            && !hits.iter().any(|(n, _)| *n == num)
-        {
-            hits.push((num, y));
-        }
-    }
-    if hits.len() < 2 {
-        return Err(());
-    }
-
-    // Sort by Y to assign horizontal bands (lower Y = lower on the sheet).
-    hits.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    let mut levels: Vec<FloorLevel> = Vec::new();
-    for (i, (num, _y)) in hits.iter().enumerate() {
-        let band_lo = if i == 0 { y_min } else { (hits[i - 1].1 + hits[i].1) / 2.0 };
-        let band_hi = if i + 1 == hits.len() { y_max } else { (hits[i].1 + hits[i + 1].1) / 2.0 };
-        levels.push(FloorLevel { name: format!("Level {num}"), region: [x_min, band_lo, x_max, band_hi] });
-    }
-    // Sort by floor number for spec ordering.
-    levels.sort_by_key(|l| l.name.split_whitespace().last().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0));
-    Ok(levels)
-}
-
-/// Parse a floor number from text like "ELECTRICAL - 3RD FLOOR", "4TH FLOOR PLAN", "LEVEL 3".
-fn parse_floor_number(text: &str) -> Option<u32> {
-    let up = text.to_ascii_uppercase();
-    let words: Vec<&str> = up.split_whitespace().collect();
-    // Pattern: "<N>ST/ND/RD/TH FLOOR"
-    for (i, w) in words.iter().enumerate() {
-        if i + 1 < words.len() && words[i + 1].starts_with("FLOOR") {
-            let num_part = w.trim_end_matches(|c: char| c.is_ascii_alphabetic());
-            let suffix = &w[num_part.len()..];
-            if matches!(suffix, "ST" | "ND" | "RD" | "TH")
-                && let Ok(n) = num_part.parse::<u32>()
-            {
-                return Some(n);
-            }
-        }
-    }
-    // Pattern: "LEVEL <N>"
-    for (i, w) in words.iter().enumerate() {
-        if *w == "LEVEL"
-            && i + 1 < words.len()
-            && let Ok(n) = words[i + 1].parse::<u32>()
-        {
-            return Some(n);
-        }
-    }
-    None
 }
 
 /// Where `bim.from_pdf` saves a model when no `out` is given: a folder of its own in the
@@ -545,25 +476,11 @@ fn build_check(file: &str, check: &super::import_check::ImportCheckResult) -> Va
     })
 }
 
-/// Whether a hard-failed import check stops the build: every hard fail does, except SCALE when a
-/// scale note was read (correctable: the plan says its scale).
-fn check_blocks_build(check: &super::import_check::ImportCheckResult) -> bool {
-    check.checks.iter().any(|c| {
-        if c.pass || !c.hard_fail {
-            return false;
-        }
-        if c.id == "SCALE" {
-            return c.evidence.as_ref().and_then(|e| e.get("scale_note")).is_none_or(Value::is_null);
-        }
-        true
-    })
-}
-
-/// `bim.from_pdf`: one-call PDF → BIM through the guided job's path: the print set (one PDF of
-/// any number of pages, or a folder) is classified, its plan pages imported (every page when it
-/// has no plans), the import checked, the spec drafted with one stacked level per architectural
-/// floor plan, the model built and saved as .cdy at `out` (default: a temp folder). Nothing is
-/// written next to the PDFs. A one-sheet plan with several floor titles is stacked as levels.
+/// `bim.from_pdf`: one-call PDF → BIM: the guided job (`job.start {goal: bim, auto: true}`) on
+/// the print set (one PDF of any number of pages, or a folder), the import checked, and the model
+/// saved as .cdy at `out` (default: a temp folder). Nothing is written next to the PDFs. A job
+/// that didn't finish, a hard import-check fail or a storey that came out empty is a failure
+/// (`ok: false`, named in `failed`; the CLI exits non-zero), not saved unless `force`.
 fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("bim.from_pdf", "`path` is required (a PDF file or folder)"))?;
     let force = bool_or(p, "force", false);
@@ -586,17 +503,42 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         None => bim_temp_out(&stem).ok_or_else(|| bad("bim.from_pdf", "`out` is required here (the .cdy file to save)"))?,
     };
 
-    let mut cdy_paths: Vec<String> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
-    let mut built_counts = json!({});
-    let mut guesses: Vec<Value> = Vec::new();
-
-    // Step 1: classify the set and import its plan pages, as the guided job does.
-    s.echo(format!("bim.from_pdf: reading the sheet index of {stem}..."));
+    // The guided job's pipeline, unattended: the same sheet index, plan regions, rooms,
+    // circulation, devices, MEP and build as job.start (B7-004: the old level-region reader
+    // built a broken model of a real set and called it a success).
+    s.echo(format!("bim.from_pdf: running the job on {stem}..."));
     s.new_drawing_with_viewports(false);
-    let plan = super::guided::load_plan_pages(s, path_obj)?;
-    let names: Vec<String> = plan
-        .pages
+    let status = s.execute("job.start", &json!({"pdfs": path, "goal": "bim", "auto": true, "checkpoint": false, "resume": false}))?;
+    let mut warnings: Vec<String> = Vec::new();
+    // What makes the run a failure (the CLI exits non-zero on any).
+    let mut failed: Vec<String> = Vec::new();
+    if status.get("done").and_then(Value::as_bool) != Some(true) {
+        let why = status.get("error").and_then(|e| e.get("message")).and_then(Value::as_str).unwrap_or("it stopped before the build");
+        failed.push(format!("{stem}: the job didn't finish: {why}"));
+    }
+    // The import check of everything imported: a hard fail is never a pass.
+    let check = super::import_check::check_drawing(s.doc()?);
+    let check_results = vec![build_check(path, &check)];
+    if !check.hard_fails.is_empty() {
+        failed.push(format!("{stem}: import check failed ({}; score {}/100)", check.hard_fails.join(", "), check.score));
+    }
+    // What was built, per level: a storey with no walls came out empty.
+    let mut built: std::collections::BTreeMap<String, std::collections::BTreeMap<String, u64>> = std::collections::BTreeMap::new();
+    let mut totals: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    for e in s.doc()?.model.iter() {
+        let (Some(part), Some(level)) = (wallgen::made_as(e), made_level(e)) else { continue };
+        *built.entry(level).or_default().entry(part.clone()).or_default() += 1;
+        *totals.entry(part).or_default() += 1;
+    }
+    if let Ok((sp, true)) = current(s, "bim.from_pdf") {
+        for l in sp.levels.iter().filter(|l| l.sheet.is_none() && !wallgen::roof_level(&sp.levels, &l.name)) {
+            if built.get(&l.name).and_then(|b| b.get("wall")).copied().unwrap_or(0) == 0 {
+                failed.push(format!("{stem}: {} came out empty (no walls built)", l.name));
+            }
+        }
+    }
+    let pages = super::guided::job_plan_pages(s);
+    let names: Vec<String> = pages
         .iter()
         .map(|pg| {
             let sheet = pg.get("sheet").and_then(Value::as_str).filter(|n| !n.is_empty()).unwrap_or("(no number)");
@@ -606,132 +548,52 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
             }
         })
         .collect();
-    let pages_note = if plan.indexed == 0 {
-        format!("no sheet index read; imported every page ({})", names.len())
+    let pages_note = format!("built from {} sheet(s): {}", names.len(), names.join(", "));
+
+    // Saved at `out` (its images go next to it) when anything was built; `force` saves a run
+    // that failed too.
+    let mut cdy_paths: Vec<String> = Vec::new();
+    if !totals.is_empty() && (failed.is_empty() || force) {
+        let cdy_str = out.to_string_lossy().to_string();
+        let made = out.parent().filter(|d| !d.as_os_str().is_empty()).map_or(Ok(()), std::fs::create_dir_all);
+        match made.map_err(|e| e.to_string()).and_then(|()| s.execute("saveas", &json!({ "path": cdy_str })).map_err(|e| e.to_string())) {
+            Ok(_) => {
+                s.echo(format!("bim.from_pdf: saved {cdy_str}"));
+                cdy_paths.push(cdy_str);
+            }
+            Err(e) => failed.push(format!("{stem}: could not save .cdy: {e}")),
+        }
+    } else if !failed.is_empty() {
+        warnings.push(format!("{stem}: not saved (force: true saves it anyway)"));
+    }
+    warnings.splice(0..0, failed.iter().cloned());
+
+    let next_steps: Vec<String> = if cdy_paths.is_empty() {
+        vec![
+            "job.status {} — the job's stages, findings and the questions it took defaults for".into(),
+            "import_check {} — review import quality".into(),
+            "bim.from_pdf {path: \"...\", force: true} — save the model even though the run failed".into(),
+        ]
     } else {
-        format!("imported {} of {} sheets: {}", names.len(), plan.indexed, names.join(", "))
+        vec![
+            "render {} — render the 3D view to see the building".into(),
+            "job.report {} — what the job read and assumed".into(),
+            "bspec.set {spec: {...}} then model.build {} — refine the spec and rebuild".into(),
+        ]
     };
-    s.echo(format!("bim.from_pdf: {pages_note}"));
-
-    // Step 2: the import check of everything imported. A hard fail is never a pass.
-    let check = super::import_check::check_drawing(s.doc()?);
-    let check_results = vec![build_check(path, &check)];
-    let hard = check.hard_fails.join(", ");
-    let blocked = !check.hard_fails.is_empty() && check_blocks_build(&check) && !force;
-    if names.is_empty() {
-        warnings.push(format!("{stem}: no page could be imported"));
-    } else if blocked {
-        warnings.push(format!(
-            "{stem}: import check failed ({hard}; score {}/100); skipping build. Use force:true to build anyway, or fix the import first with: import_check {{}}",
-            check.score
-        ));
-    } else if !check.hard_fails.is_empty() {
-        let why = if force { "force=true, building anyway" } else { "SCALE mismatch with a detected scale note — proceeding" };
-        warnings.push(format!("{stem}: import check failed ({hard}; score {}/100); {why}", check.score));
-    }
-
-    if !names.is_empty() && !blocked {
-        // Step 3: the spec — one stacked level per architectural floor plan.
-        s.echo(format!("bim.from_pdf: drafting spec for {stem}..."));
-        // One plan level at most, but one sheet showing several floor titles: those are the levels.
-        let floors = if plan.levels.len() <= 1 { detect_floor_levels(s).ok().filter(|f| f.len() >= 2) } else { None };
-        if let Some(levels_found) = floors {
-            s.execute("bspec.draft", &json!({"store": true}))?;
-            let levels_json: Vec<Value> = levels_found
-                .iter()
-                .enumerate()
-                .map(|(i, fl)| {
-                    let elevation = i as f64 * 10.0; // 10' floor-to-floor default
-                    json!({"name": fl.name, "elevation_ft": elevation, "height_ft": 10.0, "ceiling_ft": 8.0, "region": fl.region})
-                })
-                .collect();
-            let _ = s.execute("bspec.set", &json!({"spec": {"levels": levels_json}}));
-            s.echo(format!(
-                "bim.from_pdf: detected {} levels: {}",
-                levels_found.len(),
-                levels_found.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", ")
-            ));
-        } else {
-            let draft = if plan.levels.is_empty() { json!({"store": true}) } else { json!({"store": true, "levels": plan.levels, "stack": true}) };
-            let spec = s.execute("bspec.draft", &draft)?;
-            guesses = spec.get("guesses").and_then(Value::as_array).map(|g| g.iter().take(200).cloned().collect()).unwrap_or_default();
-        }
-
-        // Where each imported sheet sits: what lies on the other sheets is theirs.
-        if let Ok((mut sp, true)) = current(s, "bim.from_pdf") {
-            super::guided::add_sheet_links(&mut sp, &plan.regions);
-            s.doc_mut()?.building_spec = Some(sp.to_json());
-        }
-
-        // Step 4: build the 3D model.
-        s.echo(format!("bim.from_pdf: building 3D model for {stem}..."));
-        match s.execute("model.build", &json!({})) {
-            Ok(r) => built_counts = r,
-            Err(e) => warnings.push(format!("{stem}: model.build failed: {e}")),
-        }
-
-        // Step 5: save at `out` (its images go next to it).
-        if built_counts.as_object().is_some_and(|o| !o.is_empty()) {
-            let cdy_str = out.to_string_lossy().to_string();
-            let made = out.parent().filter(|d| !d.as_os_str().is_empty()).map_or(Ok(()), std::fs::create_dir_all);
-            match made.map_err(|e| e.to_string()).and_then(|()| s.execute("saveas", &json!({ "path": cdy_str })).map_err(|e| e.to_string())) {
-                Ok(_) => {
-                    s.echo(format!("bim.from_pdf: saved {cdy_str}"));
-                    cdy_paths.push(cdy_str);
-                }
-                Err(e) => warnings.push(format!("{stem}: could not save .cdy: {e}")),
-            }
-        }
-    }
-
-    let mut next_steps: Vec<String> = Vec::new();
-    if cdy_paths.is_empty() {
-        next_steps.push("import_check {} — review import quality and fix issues before building".into());
-        next_steps.push("bim.from_pdf {path: \"...\", force: true} — force build even with import check failures".into());
-    } else {
-        next_steps.push("render {} — render the 3D view to see the building".into());
-        next_steps.push("bspec.set {spec: {...}} — refine the building spec (room heights, materials, etc.)".into());
-        next_steps.push("model.build {} — rebuild after spec changes".into());
-    }
-
-    // Build a per-level breakdown from the notes (e.g. "Level 3: 1303 walls ...").
-    let mut built: serde_json::Map<String, Value> = serde_json::Map::new();
-    let levels_count = built_counts.get("levels").and_then(Value::as_u64).unwrap_or(0);
-    if let Some(notes) = built_counts.get("notes").and_then(Value::as_array) {
-        for note in notes {
-            if let Some(text) = note.as_str() {
-                // Parse "Level N: NNNN walls ..."
-                if let Some(rest) = text.strip_prefix("Level ") {
-                    let parts: Vec<&str> = rest.splitn(2, ':').collect();
-                    if parts.len() == 2 {
-                        let level_name = format!("Level {}", parts[0].trim());
-                        let desc = parts[1];
-                        let mut walls = 0u64;
-                        // Extract wall count from "NNNN walls"
-                        for w in desc.split_whitespace().collect::<Vec<&str>>().windows(2) {
-                            if w[1].starts_with("wall")
-                                && let Ok(n) = w[0].parse::<u64>()
-                            {
-                                walls = n;
-                            }
-                        }
-                        built.insert(level_name, json!({"walls": walls}));
-                    }
-                }
-            }
-        }
-    }
-
     Ok(json!({
         "cdy_paths": cdy_paths,
-        "pages": plan.pages,
-        "links": plan.links,
+        "pages": pages,
         "pages_note": pages_note,
-        "spec_guesses": guesses,
+        "links": status.get("links"),
+        "spec_guesses": [],
         "check_results": check_results,
-        "built_counts": built_counts,
-        "levels": if levels_count > 1 { json!(built.keys().collect::<Vec<_>>()) } else { json!(levels_count) },
+        "built_counts": totals,
+        "levels": built.keys().collect::<Vec<_>>(),
         "built": built,
+        "job": {"job_id": status.get("job_id"), "status": status.get("status"), "done": status.get("done"), "findings": status.get("findings")},
+        "ok": failed.is_empty(),
+        "failed": failed,
         "warnings": warnings,
         "next_steps": next_steps,
     }))
@@ -751,6 +613,10 @@ struct Traced {
     /// Cached area and bounds for fast duplicate detection (Q6029).
     cached_area: f64,
     cached_bounds: cadaddy_geom::Bounds2,
+    /// A corridor, stair or hoistway of the spec's circulation: its outline is its traced floor.
+    circulation: bool,
+    /// Traced on its storey's floor grid (inside the walls themselves), as circulation is.
+    on_floor: bool,
 }
 
 /// Grid cell size for the spatial index of traced rooms (Q6029): two rooms are the same only when
@@ -777,10 +643,25 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     let plan = if regions.is_empty() {
         room_plan(s)?
     } else {
-        let inside = |c: Vec2| regions.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
-        let keep: std::collections::HashSet<Handle> = plan_objects(d).into_iter().filter(|e| centre(d, e).is_some_and(inside)).map(|e| e.handle).collect();
-        room_plan_of(s, &keep)?
+        let inside =
+            |c: Vec2| regions.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
+        let keep: std::collections::HashSet<Handle> =
+            plan_objects(d).into_iter().filter(|e| centre(d, e).is_some_and(inside)).map(|e| e.handle).collect();
+        // Those objects as `room_plan` makes a plan of them: room-bounding layers only, each
+        // centreline wall as its two faces.
+        match room_plan_of(s, &keep)? {
+            Some(t) => match room_plan_for(&t, Some(sp.clone()))? {
+                Some(faced) => Some(faced),
+                None => Some(t),
+            },
+            None => None,
+        }
     };
+    // The corridors, stairs and hoistways traced before the rooms: their edges bound the rooms.
+    let mut plan = plan;
+    if let Some(p) = plan.as_mut() {
+        add_circulation_edges(p.doc_mut()?, sp);
+    }
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<Traced> = Vec::new();
     // Q6029: spatial index for O(1) amortised duplicate detection instead of O(n) linear scan.
@@ -791,36 +672,103 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         ((c.x / ROOM_GRID_CELL).floor() as i64, (c.y / ROOM_GRID_CELL).floor() as i64)
     };
     let mut outline_cache = None;
+    // Each storey's floor grid, made the first time one of its rooms is traced.
+    let mut floors: std::collections::HashMap<String, Option<wallgen::Floors>> = std::collections::HashMap::new();
+    let mut floor_misses: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     // Names first, then numbers: a number inside a room already traced from its name numbers that
     // room (a guest room's number and its unit type sit in different parts of it, and traced from
     // each the room came out twice).
     let mut claimed: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut texts = room_texts(sp, &ents);
+    // A room another trade's plan tags (none of the plans' labels does): traced from its tag.
+    for r in &sp.rooms {
+        if let (Some(at), Some(n)) = (r.at, r.number.as_deref().filter(|n| !n.trim().is_empty())) {
+            texts.push((Handle(0), n.trim().to_string(), Vec2::new(at[0], at[1])));
+        }
+    }
     texts.sort_by_key(|(_, t, _)| super::perceive::geometry::room_number(t));
+    // The corridors, stairs and hoistways first: each is the room its traced floor is, the spec's
+    // room of its name on its level its own.
+    for c in &sp.circulation {
+        let outline: Vec<Vec2> = c.outline().into_iter().map(|p| Vec2::new(p[0], p[1])).collect();
+        let area = cadaddy_geom::shoelace(&outline).abs();
+        if outline.len() < 3 || area < 1e-9 || out.len() >= MAX_ROOMS {
+            continue;
+        }
+        // As a label names a spec room: the first of its name on its level, once (a corridor
+        // walls cut in two is one room's).
+        let room = sp.rooms.iter().position(|r| names_room(r, &c.name) && r.level.as_ref().is_none_or(|l| l.eq_ignore_ascii_case(&c.level)));
+        let room = room.filter(|i| claimed.insert(*i));
+        let bounds = cadaddy_geom::Bounds2::from_points(outline.iter().copied());
+        out.push(Traced {
+            room,
+            level: c.level.clone(),
+            outline,
+            tag: Handle(0),
+            at: Vec2::new(c.at[0], c.at[1]),
+            name: Some(c.name.clone()),
+            number: None,
+            cached_area: area,
+            cached_bounds: bounds,
+            circulation: true,
+            on_floor: true,
+        });
+    }
+    let n_circulation = out.len();
     for (h, text, at) in texts {
         if out.len() >= MAX_ROOMS {
             break;
         }
         if super::perceive::geometry::room_number(&text) {
             let here = level_at(&sp.levels, at.x, at.y).map(|l| l.name.clone());
-            if let Some(o) = out.iter_mut().find(|o| o.number.is_none() && here.as_ref().is_none_or(|l| *l == o.level) && cadaddy_geom::point_in_polygon(&o.outline, at)) {
-                if sp.rooms.iter().any(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(text.trim()))) {
+            // One number per level: a room of it numbered already (by its own label on the plan,
+            // read first) keeps it; another trade's tag for it that lands elsewhere numbers nothing.
+            if out
+                .iter()
+                .any(|o| here.as_ref().is_none_or(|l| *l == o.level) && o.number.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(text.trim())))
+            {
+                continue;
+            }
+            // The smallest room traced round the number (a trace from another label that got out
+            // into the next room holds it too).
+            if let Some(o) = out
+                .iter_mut()
+                .filter(|o| o.number.is_none() && here.as_ref().is_none_or(|l| *l == o.level) && cadaddy_geom::point_in_polygon(&o.outline, at))
+                .min_by(|a, b| a.cached_area.total_cmp(&b.cached_area))
+            {
+                // On a room tag layer any number is a room's; else only the spec's rooms' numbers.
+                if tagged || sp.rooms.iter().any(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(text.trim()))) {
                     o.number = Some(text.trim().to_string());
                 }
                 continue;
             }
         }
+        // A stair's direction note names no room.
+        if matches!(text.trim().trim_end_matches('.').to_ascii_uppercase().as_str(), "DN" | "UP" | "DOWN") {
+            continue;
+        }
+        // A label on a corridor's, stair's or hoistway's floor names no other room (its own
+        // label, a stair's DN, its number once it has one).
+        let on_circulation = out.iter().take(n_circulation).any(|o| {
+            level_at(&sp.levels, at.x, at.y).is_some_and(|l| l.name.eq_ignore_ascii_case(&o.level)) && cadaddy_geom::point_in_polygon(&o.outline, at)
+        });
+        if on_circulation {
+            continue;
+        }
         // A spec room on a level is looked for on that level's plan only (every floor has its
         // OFFICE).
         let here = level_at(&sp.levels, at.x, at.y);
-        let room = sp
-            .rooms
-            .iter()
-            .position(|r| names_room(r, &text) && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l))));
+        // A room traced from its own tag (`at`) is found by its number only: the plans' unit-type
+        // label elsewhere names other rooms.
+        let is_number = super::perceive::geometry::room_number(&text);
+        let room = sp.rooms.iter().position(|r| {
+            names_room(r, &text)
+                && (is_number || r.at.is_none())
+                && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l)))
+        });
         // Without room tag layers only the spec's rooms are looked for. On them, a room's name
         // or number only (not a grid bubble's letter, a note's word): a note, a sentence, a stamp
         // or a title block's line is never a room.
-        let is_number = super::perceive::geometry::room_number(&text);
         let score = super::perceive::geometry::room_name_score(&text);
         if room.is_none() && (!tagged || !(room_tag_text(&text) && (is_number || (score > 0 && super::autospec::room_like_name(&text))))) {
             continue;
@@ -830,9 +778,36 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         else {
             continue;
         };
-        let Ok(loops) = super::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
-        let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
-        let outline = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
+        // On a storey whose circulation was traced: the room on its floor (inside its walls, door
+        // gaps closed, in what the circulation leaves); else the drawn outline round the tag.
+        let on_floor = floors
+            .entry(level.name.to_ascii_uppercase())
+            .or_insert_with(|| wallgen::room_floors(d, sp, &level.name))
+            .as_mut()
+            .and_then(|f| match f.room_at(at) {
+                Ok(found) => Some(found),
+                Err(why) => {
+                    *floor_misses.entry(why).or_default() += 1;
+                    None
+                }
+            })
+            .map(|(_, rects)| {
+                cadaddy_walk3d::Circulation { rects: rects.iter().map(|[a, b]| [[a.x, a.y], [b.x, b.y]]).collect(), ..Default::default() }
+                    .outline()
+                    .into_iter()
+                    .map(|p| Vec2::new(p[0], p[1]))
+                    .collect::<Vec<Vec2>>()
+            })
+            .filter(|o| o.len() >= 3);
+        let traced_on_floor = on_floor.is_some();
+        let outline = match on_floor {
+            Some(o) => o,
+            None => {
+                let Ok(loops) = super::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
+                let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
+                Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3)
+            }
+        };
         if outline.len() < 3 || cadaddy_geom::shoelace(&outline).abs() < 1e-9 {
             continue;
         }
@@ -885,9 +860,28 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
                 let room = room.filter(|i| claimed.insert(*i));
                 let idx = out.len();
                 grid.entry((gx, gy)).or_default().push(idx);
-                out.push(Traced { room, level: level.name.clone(), outline, tag: h, at, name, number, cached_area: area, cached_bounds: bounds });
+                out.push(Traced {
+                    room,
+                    level: level.name.clone(),
+                    outline,
+                    tag: h,
+                    at,
+                    name,
+                    number,
+                    cached_area: area,
+                    cached_bounds: bounds,
+                    circulation: false,
+                    on_floor: traced_on_floor,
+                });
             }
         }
+    }
+    if floors.values().any(Option::is_some) {
+        let on = out.iter().filter(|t| t.on_floor && !t.circulation).count();
+        super::guided::progress_line(&format!(
+            "  rooms traced on the storeys' floors: {on}; by the drawing: {}; labels the floors refused: {floor_misses:?}",
+            out.iter().filter(|t| !t.on_floor).count()
+        ));
     }
     for (i, r) in sp.rooms.iter().enumerate() {
         if !out.iter().any(|t| t.room == Some(i)) {
@@ -981,9 +975,21 @@ const MAX_ROOM_SF: f64 = 50_000.0;
 /// Most tags traced again on the built walls per build.
 const MAX_RETRACE: usize = 5_000;
 
-/// A drawing of the built footprints' edges (each once), every level's where it was built: the
-/// boundaries a room is traced on when its drawn outline isn't one.
-fn walls_session(bounds: &std::collections::BTreeMap<String, Vec<Vec<Vec2>>>) -> Option<Session> {
+/// Lines along the edges of the spec's circulation spaces (`sp.circulation`), so a room traced
+/// on the drawing stops at a corridor, a stair or a hoistway.
+fn add_circulation_edges(d: &mut Drawing, sp: &BuildingSpec) {
+    for (a, b) in sp.circulation.iter().flat_map(|c| c.edges()) {
+        let line = cadaddy_doc::Line { a: Vec3::new(a[0], a[1], 0.0), b: Vec3::new(b[0], b[1], 0.0) };
+        if d.add(&Space::Model, Common::default(), EntityKind::Line(line)).is_err() {
+            break;
+        }
+    }
+}
+
+/// A drawing of the built footprints' edges (each once), every level's where it was built, and
+/// the circulation spaces' edges: the boundaries a room is traced on when its drawn outline isn't
+/// one.
+fn walls_session(bounds: &std::collections::BTreeMap<String, Vec<Vec<Vec2>>>, sp: &BuildingSpec) -> Option<Session> {
     let mut d = Drawing::default();
     let mut seen: std::collections::HashSet<[i64; 4]> = std::collections::HashSet::new();
     let key = |p: Vec2| ((p.x * 1e4).round() as i64, (p.y * 1e4).round() as i64);
@@ -1002,6 +1008,7 @@ fn walls_session(bounds: &std::collections::BTreeMap<String, Vec<Vec<Vec2>>>) ->
     if d.model.is_empty() {
         return None;
     }
+    add_circulation_edges(&mut d, sp);
     let mut t = Session::empty();
     t.open_drawing(d, "Built walls", None);
     Some(t)
@@ -1039,7 +1046,7 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
 /// frame, an enlarged view (its walls are not built) or a schedule's cell closes no room. A
 /// numbered room traced twice on its level (a floor plan and an enlarged plan of it) is one
 /// room: the smaller outline, the plan's own scale.
-fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<String>) {
+fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<String>) {
     if rooms.is_empty() {
         return;
     }
@@ -1079,6 +1086,12 @@ fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<
         bounds.iter().map(|(l, polys)| (l, cadaddy_geom::Bounds2::from_points(polys.iter().flatten().copied()))).collect();
     let mut kept: Vec<Traced> = Vec::new();
     for mut t in std::mem::take(rooms) {
+        // A corridor, stair or hoistway, or a room on its storey's floor, was traced on the walls
+        // themselves.
+        if t.on_floor {
+            keep_room(&mut kept, t);
+            continue;
+        }
         let key = t.level.trim().to_ascii_uppercase();
         let a = cadaddy_geom::shoelace(&t.outline).abs();
         let big = a >= min_area || t.room.is_some();
@@ -1094,7 +1107,7 @@ fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<
         }
         // Only a tag among the level's built walls (a schedule's or a note's text isn't).
         let inside = extents.get(&key).is_some_and(|b| b.contains(t.at)) && retraced_or_tried < MAX_RETRACE;
-        let plan = walls_plan.get_or_insert_with(|| walls_session(&bounds));
+        let plan = walls_plan.get_or_insert_with(|| walls_session(&bounds, sp));
         let outline = plan.as_ref().filter(|_| inside).and_then(|plan| {
             retraced_or_tried += 1;
             let loops = super::hatch::loops_at_lazy(plan, t.at, &mut cache).ok()?;
@@ -1122,14 +1135,27 @@ fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<
     for (level, n) in &unwalled {
         notes.push(format!("{level}: {n} room tag(s) not inside built walls (an enlarged view, a note's or the title block's box) — no room built."));
     }
-    // One room per number and level: the smaller outline.
+    if !unwalled.is_empty() {
+        super::guided::progress_line(&format!("  room tags not inside built walls (no room): {unwalled:?}"));
+    }
+    // One room per number and level (its tag's, else its spec room's): a corridor's, stair's or
+    // hoistway's (its number tag on a piece of it the trace left out is no room of its own), else
+    // the smaller outline.
     let area = |t: &Traced| cadaddy_geom::shoelace(&t.outline).abs();
+    let number = |t: &Traced| {
+        t.number
+            .clone()
+            .or_else(|| t.room.and_then(|i| sp.rooms.get(i)).and_then(|r| r.number.clone()))
+            .map(|n| n.trim().to_ascii_uppercase())
+            .filter(|n| !n.is_empty())
+    };
+    let better = |t: &Traced, o: &Traced| (t.circulation && !o.circulation) || (t.circulation == o.circulation && area(t) < area(o));
     let mut best: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
     for (i, t) in rooms.iter().enumerate() {
-        let Some(n) = t.number.as_deref().map(|n| n.trim().to_ascii_uppercase()).filter(|n| !n.is_empty()) else { continue };
+        let Some(n) = number(t) else { continue };
         let key = (t.level.trim().to_ascii_uppercase(), n);
         match best.get(&key).and_then(|j| rooms.get(*j)) {
-            Some(o) if area(o) <= area(t) => {}
+            Some(o) if !better(t, o) => {}
             _ => {
                 best.insert(key, i);
             }
@@ -1138,7 +1164,7 @@ fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<
     let before = rooms.len();
     let mut i = 0usize;
     rooms.retain(|t| {
-        let keep = match t.number.as_deref().map(|n| n.trim().to_ascii_uppercase()).filter(|n| !n.is_empty()) {
+        let keep = match number(t) {
             Some(n) => best.get(&(t.level.trim().to_ascii_uppercase(), n)) == Some(&i),
             None => true,
         };
@@ -1151,6 +1177,88 @@ fn walled_rooms(d: &Drawing, rooms: &mut Vec<Traced>, upf: f64, notes: &mut Vec<
             before - rooms.len()
         ));
     }
+}
+
+/// How much of the smaller of two rooms' floors (0..1) lies inside the other's when they are one
+/// room traced twice; and how big the smaller is beside the bigger at least (a closet or a
+/// symbol's box drawn inside a room is a thing of its own).
+const SAME_ROOM_INSIDE: f64 = 0.7;
+const SAME_ROOM_SIZE: f64 = 0.4;
+
+/// The share (0..1) of polygon `a`'s area that is inside polygon `b`, sampled on a grid over `a`.
+fn share_inside(a: &[Vec2], b: &[Vec2]) -> f64 {
+    const N: usize = 24;
+    let (ba, bb) = (cadaddy_geom::Bounds2::from_points(a.iter().copied()), cadaddy_geom::Bounds2::from_points(b.iter().copied()));
+    if ba.is_empty() || bb.is_empty() || ba.max.x < bb.min.x || bb.max.x < ba.min.x || ba.max.y < bb.min.y || bb.max.y < ba.min.y {
+        return 0.0;
+    }
+    let (mut on_a, mut on_both) = (0usize, 0usize);
+    for i in 0..N {
+        for j in 0..N {
+            let p = Vec2::new(
+                ba.min.x + (i as f64 + 0.5) / N as f64 * (ba.max.x - ba.min.x),
+                ba.min.y + (j as f64 + 0.5) / N as f64 * (ba.max.y - ba.min.y),
+            );
+            if cadaddy_geom::point_in_polygon(a, p) {
+                on_a += 1;
+                on_both += usize::from(cadaddy_geom::point_in_polygon(b, p));
+            }
+        }
+    }
+    if on_a == 0 { 0.0 } else { on_both as f64 / on_a as f64 }
+}
+
+/// One room per floor area: of two rooms of a level where the smaller lies mostly inside the
+/// other ([`SAME_ROOM_INSIDE`]) and is no closet of it ([`SAME_ROOM_SIZE`]), one label's trace
+/// stayed in the room and another's got out into the next. The corridor's, stair's or hoistway's
+/// is the room, else the smaller; it takes the other's name, spec room and number when it has
+/// none and the other's tag is on it. How many were dropped.
+fn one_room_per_floor(rooms: &mut Vec<Traced>) -> usize {
+    let area = |t: &Traced| cadaddy_geom::shoelace(&t.outline).abs();
+    // Each pair once: (the bigger, the smaller), the biggest first.
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for i in 0..rooms.len() {
+        for j in 0..rooms.len() {
+            let (Some(big), Some(small)) = (rooms.get(i), rooms.get(j)) else { continue };
+            let (ab, as_) = (area(big), area(small));
+            if i == j || !big.level.trim().eq_ignore_ascii_case(small.level.trim()) || as_ > ab || (as_ == ab && j < i) {
+                continue;
+            }
+            if as_ >= SAME_ROOM_SIZE * ab && share_inside(&small.outline, &big.outline) >= SAME_ROOM_INSIDE {
+                pairs.push((i, j));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| rooms.get(b.0).map(area).unwrap_or(0.0).total_cmp(&rooms.get(a.0).map(area).unwrap_or(0.0)));
+    let mut gone = vec![false; rooms.len()];
+    for (big, small) in pairs {
+        if gone[big] || gone[small] {
+            continue;
+        }
+        let keep_big = rooms[big].circulation && !rooms[small].circulation;
+        let (keep, drop) = if keep_big { (big, small) } else { (small, big) };
+        let (on, name, room, number) = {
+            let d = &rooms[drop];
+            (cadaddy_geom::point_in_polygon(&rooms[keep].outline, d.at), d.name.clone(), d.room, d.number.clone())
+        };
+        let k = &mut rooms[keep];
+        if on {
+            if k.number.is_none() && k.room.is_none() {
+                k.number = number;
+                k.room = room;
+            }
+            if k.name.is_none() {
+                k.name = name;
+            }
+        }
+        gone[drop] = true;
+    }
+    let mut i = 0usize;
+    rooms.retain(|_| {
+        i += 1;
+        !gone[i - 1]
+    });
+    gone.iter().filter(|g| **g).count()
 }
 
 /// A floor face over a polygon at `z`, facing up.
@@ -1321,8 +1429,24 @@ fn add_room_elements(
     by_level
 }
 
+/// A build summary's walls, doors and windows counted from what the model holds now (as
+/// bim.tree counts them): steps after a build, and a rebuild after them, change it.
+pub(crate) fn recount_built(d: &Drawing, r: &mut Value) {
+    let mut held: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    for e in d.model.iter() {
+        if let Some(part) = wallgen::made_as(e) {
+            *held.entry(part).or_default() += 1;
+        }
+    }
+    for (key, part) in [("walls", "wall"), ("doors", "door"), ("windows", "window")] {
+        r[key] = json!(held.get(part).copied().unwrap_or(0));
+    }
+}
+
 /// Default time budget for model.build (Q6029 MUST 3): 20 minutes.
 pub(crate) const BUILD_BUDGET_S: u64 = 1200;
+/// The longest build budget a caller may give, seconds (a day).
+pub(crate) const MAX_BUILD_BUDGET_S: u64 = 86_400;
 
 /// Build from a spec: WALLGEN's walls, openings, floors and ceilings, then the spec's own parts
 /// and materials. Reports progress per level (Q6029 MUST 2).
@@ -1383,7 +1507,11 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     }
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     s.event("build.progress", json!({"step": "validate_rooms", "rooms": rooms.len()}));
-    walled_rooms(s.doc_mut()?, &mut rooms, upf, &mut notes);
+    walled_rooms(s.doc_mut()?, &sp, &mut rooms, upf, &mut notes);
+    let twice = one_room_per_floor(&mut rooms);
+    if twice > 0 {
+        notes.push(format!("{twice} room(s) traced twice over one floor (one label's trace got out into the next room): one room each."));
+    }
     build_step(s, "rooms validated", build_start);
     s.event("build.progress", json!({"step": "validate_rooms_done", "rooms": rooms.len()}));
     let mark = |step: &str| super::guided::progress_line(&format!("  model.build: {step} at {:.1} s", build_start.elapsed().as_secs_f64()));
@@ -1583,6 +1711,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     r["ramps"] = json!(built_stairs.ramps);
     r["railings"] = json!(built_stairs.railings);
     r["guards"] = json!(built_stairs.guards);
+    if !built_stairs.left_out.is_empty() {
+        r["stairs_left_out"] = json!(built_stairs.left_out);
+    }
     if let (Some(o), Some(x)) = (r.as_object_mut(), outside.as_object()) {
         o.extend(x.iter().filter(|(k, _)| *k != "roofNotes").map(|(k, v)| (k.clone(), v.clone())));
     }
@@ -1839,6 +1970,55 @@ pub(crate) fn prism(poly: &[Vec2], z0: f64, z1: f64) -> Option<Mesh> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn traced(level: &str, [x0, y0, x1, y1]: [f64; 4], at: [f64; 2], name: Option<&str>, number: Option<&str>, circulation: bool) -> Traced {
+        let outline = vec![Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)];
+        let bounds = cadaddy_geom::Bounds2::from_points(outline.iter().copied());
+        Traced {
+            room: None,
+            level: level.into(),
+            cached_area: cadaddy_geom::shoelace(&outline).abs(),
+            outline,
+            tag: Handle(0),
+            at: Vec2::new(at[0], at[1]),
+            name: name.map(String::from),
+            number: number.map(String::from),
+            cached_bounds: bounds,
+            circulation,
+            on_floor: circulation,
+        }
+    }
+
+    #[test]
+    fn a_room_traced_twice_over_one_floor_is_one_room_the_tighter_trace() {
+        let mut rooms = vec![
+            // A trace that got out into the next room, numbered from the tag both hold; the room
+            // itself traced from its name.
+            traced("Level 3", [0.0, 0.0, 300.0, 100.0], [50.0, 50.0], None, Some("316"), false),
+            traced("Level 3", [0.0, 0.0, 160.0, 100.0], [80.0, 50.0], Some("DOUBLE Q"), None, false),
+            // A closet drawn inside a room: a thing of its own.
+            traced("Level 3", [400.0, 0.0, 600.0, 200.0], [500.0, 150.0], Some("SUITE"), Some("330"), false),
+            traced("Level 3", [400.0, 0.0, 450.0, 50.0], [425.0, 25.0], Some("CLOSET"), None, false),
+            // A room traced over the corridor: the corridor's floor.
+            traced("Level 3", [0.0, 200.0, 400.0, 260.0], [100.0, 230.0], Some("CORRIDOR"), Some("300"), true),
+            traced("Level 3", [100.0, 200.0, 300.0, 260.0], [200.0, 230.0], Some("Room"), None, false),
+            // The same footprints on another level are that level's.
+            traced("Level 4", [0.0, 0.0, 160.0, 100.0], [80.0, 50.0], Some("DOUBLE Q"), Some("416"), false),
+        ];
+        assert_eq!(one_room_per_floor(&mut rooms), 2);
+        let names: Vec<(Option<&str>, Option<&str>, f64)> =
+            rooms.iter().map(|t| (t.name.as_deref(), t.number.as_deref(), cadaddy_geom::shoelace(&t.outline).abs())).collect();
+        assert_eq!(
+            names,
+            vec![
+                (Some("DOUBLE Q"), Some("316"), 16_000.0),
+                (Some("SUITE"), Some("330"), 40_000.0),
+                (Some("CLOSET"), None, 2_500.0),
+                (Some("CORRIDOR"), Some("300"), 24_000.0),
+                (Some("DOUBLE Q"), Some("416"), 16_000.0),
+            ]
+        );
+    }
 
     #[test]
     fn ear_clipping_an_l() {

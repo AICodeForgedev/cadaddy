@@ -1,4 +1,4 @@
-use cadaddy_doc::{AssocSnap, DimKind, Dimension, EntityKind, Handle};
+use cadaddy_doc::{DimKind, Dimension, EntityKind, Handle};
 use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 
@@ -136,11 +136,31 @@ fn angular_between_lines_follows_rotation() {
     let b = line(&mut s, [0.0, 0.0], [0.0, 10.0]);
     let d = h(&s.execute("dimangular", &json!({ "lines": [a.hex(), b.hex()], "at": [3, 3] })).unwrap());
     let dm = dim(&s, d);
-    assert!(dm.assoc.iter().any(|x| matches!(x.snap, AssocSnap::Intersection { .. })));
+    // Two picked lines make a two-line angular dimension (type 2), tied to both lines at all four points.
+    assert_eq!(dm.kind, DimKind::Angular);
+    assert_eq!(dm.assoc.len(), 4);
     assert_eq!(cadaddy_render::dimension_in(s.doc().unwrap(), &dm).value, "90°");
     // Swing the second line to 45°.
     s.execute("properties.set", &json!({ "handles": [b.hex()], "end": [10, 10] })).unwrap();
     assert_eq!(cadaddy_render::dimension_in(s.doc().unwrap(), &dim(&s, d)).value, "45°");
+}
+
+#[test]
+fn angular_between_lines_measures_the_sector_holding_the_arc_point() {
+    let mut s = Session::new();
+    let a = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    let b = line(&mut s, [0.0, 0.0], [8.660254, 5.0]);
+    for (at, want) in [([0, 8], 150.0), ([-8, 1], 150.0), ([-5, -5], 150.0), ([5, -3], 150.0), ([8, 2], 30.0), ([-8, -1], 30.0), ([2, 8], 150.0)] {
+        let d = h(&s.execute("dimangular", &json!({ "lines": [a.hex(), b.hex()], "at": at })).unwrap());
+        let g = cadaddy_render::dimension_in(s.doc().unwrap(), &dim(&s, d));
+        assert!((g.measurement.to_degrees() - want).abs() < 1e-3, "{at:?}: {}", g.measurement.to_degrees());
+    }
+    // Lines 10.5 degrees apart, arc point just outside the wedge (11.3 degrees): the 169.5 degree sector, never 350.
+    let c = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    let e = line(&mut s, [0.0, 0.0], [10.0 * 10.5f64.to_radians().cos(), 10.0 * 10.5f64.to_radians().sin()]);
+    let d = h(&s.execute("dimangular", &json!({ "lines": [c.hex(), e.hex()], "at": [5, 1] })).unwrap());
+    let g = cadaddy_render::dimension_in(s.doc().unwrap(), &dim(&s, d));
+    assert!(g.measurement.to_degrees() <= 180.0 && (g.measurement.to_degrees() - 169.5).abs() < 1e-3);
 }
 
 #[test]

@@ -100,7 +100,7 @@ fn name_param<'a>(cmd: &str, p: &'a Value) -> Result<&'a str> {
 }
 
 fn valid_name(n: &str) -> bool {
-    !n.is_empty() && n.chars().count() <= 255 && !n.chars().any(|c| c.is_control() || "<>/\\\":;?*|=`".contains(c))
+    super::super::names::is_valid(n)
 }
 
 /// Place a camera: its view is added, and camera glyphs are shown.

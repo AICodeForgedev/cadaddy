@@ -200,3 +200,50 @@ fn other_languages_come_from_the_dictionary_folder() {
     cadaddy_engine::cmd::spell::set_dictionary_dir("");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Each downloadable language (Q146): the real lists (`<code>.txt`, see docs/spelling.md) are
+/// kept outside the repository, so this runs when `CADADDY_SPELL_LISTS` names the folder holding
+/// them and says so and passes when it doesn't (like the craft-fonts tests).
+#[test]
+fn the_downloadable_lists_check_their_languages() {
+    let Some(dir) = std::env::var("CADADDY_SPELL_LISTS").ok().filter(|d| !d.is_empty() && std::path::Path::new(d).is_dir()) else {
+        eprintln!(
+            "skipped: set CADADDY_SPELL_LISTS to the folder holding the downloaded lists (ens.txt, enz.txt, es.txt, fr.txt, de.txt, pt.txt, ptb.txt)"
+        );
+        return;
+    };
+    // (code, known words (one accented where the language has accents), a misspelling, its fix)
+    let cases: [(&str, &str, &str, &str); 7] = [
+        ("ens", "colour metre centre organise", "colur", "colour"),
+        ("enz", "colour metre centre organize", "centrre", "centre"),
+        ("es", "casa niño corazón ciudad", "corazon", "corazón"),
+        ("fr", "maison été français fenêtre", "maisson", "maison"),
+        ("de", "Haus Straße schön Fenster", "Fensterr", "Fenster"),
+        ("pt", "casa coração não janela", "janelaa", "janela"),
+        ("ptb", "casa coração não janela", "janelaa", "janela"),
+    ];
+    let mut s = Session::new();
+    let (_dict, _turn) = own_dictionary(&mut s, "lists");
+    cadaddy_engine::cmd::spell::set_dictionary_dir(&dir);
+    let mut failures = Vec::new();
+    for (code, known, wrong, fix) in cases {
+        s.execute("new", &json!({})).unwrap();
+        if !cadaddy_engine::cmd::spell::installed(code) {
+            failures.push(format!("{code}: {code}.txt isn't in {dir}"));
+            continue;
+        }
+        s.execute("setvar", &json!({"name": "DCTMAIN", "value": code})).unwrap();
+        text(&mut s, 0.0, known);
+        let r = s.execute("spell", &json!({})).unwrap();
+        if !words(&r).is_empty() || r["dictionary"] != code {
+            failures.push(format!("{code}: known words flagged: {r}"));
+        }
+        text(&mut s, 2.0, wrong);
+        let r = s.execute("spell", &json!({})).unwrap();
+        if words(&r) != vec![wrong.to_string()] || r["misspelled"][0]["suggestions"][0] != fix {
+            failures.push(format!("{code}: {wrong} should be flagged with {fix} first: {r}"));
+        }
+    }
+    cadaddy_engine::cmd::spell::set_dictionary_dir("");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

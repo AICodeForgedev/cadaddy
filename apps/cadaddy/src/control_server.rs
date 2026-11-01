@@ -75,12 +75,18 @@ pub fn new_token() -> Option<String> {
 
 /// Listen on every port of `ports` (127.0.0.1 only), all feeding one stream of requests: an
 /// explicit `--control` port and the agent port together. A port that can't be bound (another
-/// window has it) is logged and skipped. With `token`, clients must present it; it is written
+/// window has it) is logged and skipped, and returned so the window can say so. With `token`, clients must present it; it is written
 /// for each port bound to its file under the settings folder `config`.
-pub fn start_ports(ports: &[u16], ctx: egui::Context, token: Option<String>, config: Option<&std::path::Path>) -> Receiver<ControlRequest> {
+pub fn start_ports(
+    ports: &[u16],
+    ctx: egui::Context,
+    token: Option<String>,
+    config: Option<&std::path::Path>,
+) -> (Receiver<ControlRequest>, Vec<u16>) {
     let token: Option<Arc<str>> = token.map(Arc::from);
     let (tx, rx) = sync_channel::<ControlRequest>(Limits::default().queue.max(1));
     let mut seen = Vec::new();
+    let mut unbound = Vec::new();
     for &port in ports {
         if seen.contains(&port) {
             continue;
@@ -99,10 +105,23 @@ pub fn start_ports(ports: &[u16], ctx: egui::Context, token: Option<String>, con
                 let (tx, ctx) = (tx.clone(), ctx.clone());
                 std::thread::spawn(move || accept_loop(l, tx, ctx, limits));
             }
-            Err(e) => log::error!("control server failed to bind 127.0.0.1:{port}: {e}"),
+            Err(e) => {
+                log::error!("control server failed to bind 127.0.0.1:{port}: {e}");
+                unbound.push(port);
+            }
         }
     }
-    rx
+    (rx, unbound)
+}
+
+/// How long the accepting thread waits after a failed accept. Accepting can keep failing, for
+/// example while the process has no file descriptors left, and retrying at once would keep a
+/// core busy until it recovers.
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+
+/// The connections `incoming` accepts, calling `wait` after each failed accept.
+fn accepted<T>(incoming: impl Iterator<Item = std::io::Result<T>>, mut wait: impl FnMut()) -> impl Iterator<Item = T> {
+    incoming.filter_map(move |stream| stream.map_err(|_| wait()).ok())
 }
 
 /// Accept connections on `listener` under `limits`; requests arrive on the returned receiver.
@@ -125,7 +144,7 @@ impl Drop for Slot {
 
 fn accept_loop(listener: TcpListener, tx: SyncSender<ControlRequest>, ctx: egui::Context, limits: Limits) {
     let open = Arc::new(AtomicUsize::new(0));
-    for mut stream in listener.incoming().flatten() {
+    for mut stream in accepted(listener.incoming(), || std::thread::sleep(ACCEPT_RETRY)) {
         let _ = stream.set_write_timeout(Some(limits.write_timeout));
         if open.fetch_add(1, Ordering::SeqCst) >= limits.max_clients {
             open.fetch_sub(1, Ordering::SeqCst);
@@ -307,6 +326,15 @@ fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context
                         }
                         continue;
                     }
+                    // A cancel must not queue behind the call it cancels (a render holds the window's
+                    // thread): it is answered here, on the connection's own thread.
+                    if method == "control.cancel" {
+                        cadaddy_engine::request_cancel();
+                        if send_line(&mut out, &json!({"id": id, "ok": true, "result": {"cancelRequested": true}}).to_string()).is_err() {
+                            break;
+                        }
+                        continue;
+                    }
                     if !bucket.take(limits) {
                         let r = json!({"id": id, "ok": false, "error": "rate limited: too many requests; slow down", "state": "not-run"});
                         if send_line(&mut out, &r.to_string()).is_err() {
@@ -345,6 +373,18 @@ fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A failed accept is followed by a wait before the next one, so a listener that keeps
+    /// failing does not spin, and the connections around the failures still come through.
+    #[test]
+    fn a_failed_accept_waits_before_the_next() {
+        let failed = || Err(std::io::Error::other("no file descriptors left"));
+        let incoming = vec![failed(), Ok(1), failed(), failed(), Ok(2)];
+        let mut waits = 0;
+        let connections: Vec<i32> = super::accepted(incoming.into_iter(), || waits += 1).collect();
+        assert_eq!(connections, [1, 2]);
+        assert_eq!(waits, 3, "one wait per failed accept");
+    }
 
     #[test]
     fn lines_are_read_up_to_the_limit() {
@@ -418,6 +458,28 @@ mod tests {
             Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => None,
             r => Some(r.unwrap()),
         }
+    }
+
+    /// `control.cancel` is answered by the connection itself: while the window's thread is busy
+    /// (nothing reads the queue here) the cancel still gets its reply and sets the cancel request.
+    #[test]
+    fn cancel_is_answered_without_the_window() {
+        let (addr, _rx_nobody_reads) = serve_with(Limits::default());
+        let r = exchange_one(addr, br#"{"id":5,"method":"control.cancel"}"#);
+        assert_eq!(r["ok"], json!(true), "{r}");
+        assert_eq!(r["id"], json!(5));
+        assert!(cadaddy_engine::cancel_pending());
+    }
+
+    /// One request line, its one reply.
+    fn exchange_one(addr: std::net::SocketAddr, line: &[u8]) -> Value {
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        c.write_all(line).unwrap();
+        c.write_all(b"\n").unwrap();
+        let mut reply = String::new();
+        BufReader::new(c).read_line(&mut reply).unwrap();
+        serde_json::from_str(&reply).unwrap()
     }
 
     /// The echo server under `limits`.
@@ -531,8 +593,8 @@ mod tests {
         // folder): the first start's token doesn't open the second's port.
         let dir = std::env::temp_dir().join(format!("cadaddy-oldtoken-{}", std::process::id()));
         let (p1, p2) = (free_port(), free_port());
-        let _rx1 = start_ports(&[p1], egui::Context::default(), new_token(), Some(&dir));
-        let _rx2 = start_ports(&[p2], egui::Context::default(), new_token(), Some(&dir));
+        let (_rx1, _) = start_ports(&[p1], egui::Context::default(), new_token(), Some(&dir));
+        let (_rx2, _) = start_ports(&[p2], egui::Context::default(), new_token(), Some(&dir));
         let read = |p: u16| std::fs::read_to_string(cadaddy_engine::control_auth::token_path(&dir, p)).unwrap().trim().to_string();
         let (old, new) = (read(p1), read(p2));
         assert_ne!(old, new);
@@ -548,7 +610,7 @@ mod tests {
         // Listening on 127.0.0.1 only: this computer's own network address (what another computer
         // would connect to) gets no answer.
         let port = free_port();
-        let _rx = start_ports(&[port], egui::Context::default(), new_token(), None);
+        let (_rx, _) = start_ports(&[port], egui::Context::default(), new_token(), None);
         assert!(TcpStream::connect(("127.0.0.1", port)).is_ok());
         // The address this computer would send from; no packet is sent.
         let lan = std::net::UdpSocket::bind(("0.0.0.0", 0)).and_then(|u| u.connect(("192.0.2.1", 9)).and_then(|()| u.local_addr()));

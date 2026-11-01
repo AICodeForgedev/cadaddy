@@ -98,6 +98,8 @@ fn bad_tool_calls_are_invalid_params() {
         json!({"name": "query_entities", "arguments": {"type": 7}}),
         json!({"name": "query_entities", "arguments": {"layer": ["0"]}}),
         json!({"name": "query_entities", "arguments": {"offset": -1}}),
+        json!({"name": "query_entities", "arguments": {"selected": "true"}}),
+        json!({"name": "query_entities", "arguments": {"selected": 1}}),
     ];
     for (i, params) in bad.into_iter().enumerate() {
         let r = call(&mut s, i as u64, "tools/call", params.clone());
@@ -108,6 +110,24 @@ fn bad_tool_calls_are_invalid_params() {
     // (Model space: the layouts' viewports count in `entityCount` too.)
     assert_eq!(d["counts"], json!({"Circle": 1}), "{d}");
     assert_eq!(s.handle_line("[]").map(|r| serde_json::from_str::<Value>(&r).unwrap()["error"]["code"].clone()), Some(json!(-32600)));
+}
+
+#[test]
+fn query_entities_selection_filter_is_discoverable_and_forwarded() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let tools = call(&mut s, 1, "tools/list", json!({}));
+    let query = tools["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "query_entities").unwrap();
+    assert_eq!(query["inputSchema"]["properties"]["selected"]["type"], "boolean");
+    tool(&mut s, "execute", json!({"command": "circle", "params": {"center": [0, 0], "radius": 2}}));
+    tool(&mut s, "execute", json!({"command": "circle", "params": {"center": [10, 0], "radius": 2}}));
+    assert_eq!(tool(&mut s, "query_entities", json!({"selected": true}))["count"], 0);
+    tool(&mut s, "execute", json!({"command": "select", "params": {"window": [[-3, -3], [3, 3]]}}));
+    let before = tool(&mut s, "inspect_drawing", json!({}));
+    let selected = tool(&mut s, "query_entities", json!({"selected": true, "type": "Circle"}));
+    assert_eq!(selected["count"], 1);
+    assert_eq!(selected["entities"][0]["geometry"]["center"]["x"], 0.0);
+    assert_eq!(tool(&mut s, "query_entities", json!({"selected": false}))["count"], 2);
+    assert_eq!(tool(&mut s, "inspect_drawing", json!({})), before);
 }
 
 /// `count` is every match while `returned` is the page; a window matches geometry, not bounding boxes.
@@ -622,6 +642,64 @@ fn agent_reads_a_drawing_summary_then_queries_handles() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// An image reference to `path` (the file need not exist), placed in model space.
+fn add_image_ref(h: &mut Headless, path: &str, x: f64) {
+    use cadaddy_engine::doc::{Common, EntityKind, Image, Space};
+    let img: Image = serde_json::from_value(json!({
+        "insert": {"x": x, "y": 0.0, "z": 0.0}, "u": {"x": 1.0, "y": 0.0, "z": 0.0}, "v": {"x": 0.0, "y": 1.0, "z": 0.0},
+        "size": {"x": 32.0, "y": 32.0}, "path": path,
+    }))
+    .unwrap();
+    h.session.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Image(Box::new(img))).unwrap();
+}
+
+/// A drawing that stores a path to another computer is told "refused", never looked up.
+#[test]
+fn drawing_summary_refuses_paths_to_other_computers() {
+    let mut h = Headless::default();
+    h.session.open_drawing(cadaddy_engine::sample::default_sample(), "Bracket", None);
+    {
+        let d = h.session.doc_mut().unwrap();
+        let mut b = cadaddy_engine::doc::Block::new("remote");
+        b.xref_path = Some("//192.0.2.1/s/x.dxf".into());
+        d.blocks.insert("remote".into(), std::sync::Arc::new(b));
+    }
+    add_image_ref(&mut h, "\\\\192.0.2.1\\s\\a.png", 0.0);
+    let mut s = Server::new(Box::new(h));
+    let sum = tool(&mut s, "drawing_summary", json!({"sections": ["references"]}));
+    let refs = &sum["references"];
+    assert_eq!((&refs["xrefs"][0]["found"], &refs["xrefs"][0]["refused"]), (&json!(false), &json!(true)), "{refs}");
+    assert_eq!((&refs["images"][0]["found"], &refs["images"][0]["refused"]), (&json!(false), &json!(true)), "{refs}");
+}
+
+/// Files beside the saved drawing are "found", whatever their letter case; a deleted one is not.
+#[test]
+fn drawing_summary_finds_files_beside_the_drawing_ignoring_case() {
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-found-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = Headless::default();
+    h.session.open_drawing(cadaddy_engine::sample::default_sample(), "Plan", Some(dir.join("Plan.cdy").to_string_lossy().into_owned()));
+    {
+        let d = h.session.doc_mut().unwrap();
+        let mut b = cadaddy_engine::doc::Block::new("site");
+        b.xref_path = Some("site.dxf".into());
+        d.blocks.insert("site".into(), std::sync::Arc::new(b));
+    }
+    add_image_ref(&mut h, "photo.png", 0.0);
+    add_image_ref(&mut h, "gone.png", 5.0);
+    let mut s = Server::new(Box::new(h));
+    // The drawing stores `photo.png`; the file beside it is `Photo.PNG`. `gone.png` was deleted.
+    tool(&mut s, "render", json!({"width": 32, "height": 32, "path": dir.join("Photo.PNG").to_string_lossy()}));
+    std::fs::write(dir.join("Site.DXF"), "0\nEOF\n").unwrap();
+    let sum = tool(&mut s, "drawing_summary", json!({"sections": ["references"]}));
+    let refs = &sum["references"];
+    assert_eq!(refs["xrefs"][0]["found"], true, "{refs}");
+    let image = |name: &str| refs["images"].as_array().unwrap().iter().find(|i| i["path"] == name).unwrap().clone();
+    assert_eq!((image("photo.png")["found"].clone(), image("photo.png")["refused"].clone()), (json!(true), json!(false)), "{refs}");
+    assert_eq!(image("gone.png")["found"], false, "{refs}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn execute_many_places_many_objects_in_one_call() {
     let mut s = Server::new(Box::new(Headless::default()));
@@ -694,5 +772,312 @@ fn remote_presents_the_control_token_first() {
         let first: serde_json::Value = serde_json::from_str(server.join().unwrap().trim()).unwrap();
         assert_eq!(first["method"], "auth");
         assert_eq!(first["params"]["token"], token);
+    }
+}
+
+/// B4-032: a tool call with an argument the tool doesn't have still runs, and says so.
+#[test]
+fn unknown_tool_arguments_are_warned_about() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let r = call(&mut s, 1, "tools/call", json!({"name": "list_commands", "arguments": {"filter": "circle", "zzz": 1}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    let text = r["result"]["content"].as_array().unwrap().iter().map(|c| c["text"].as_str().unwrap_or("")).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("`zzz` is not a parameter of list_commands"), "{text}");
+    // Known arguments alone: no warning.
+    let r = call(&mut s, 2, "tools/call", json!({"name": "list_commands", "arguments": {"filter": "circle"}}));
+    assert!(!r.to_string().contains("is not a parameter"), "{r}");
+    // A tool with no arguments warns too.
+    let r = call(&mut s, 3, "tools/call", json!({"name": "get_prompt", "arguments": {"zzz": true}}));
+    assert!(r.to_string().contains("`zzz` is not a parameter of get_prompt"), "{r}");
+}
+
+/// B4-032: a schema error is worded for people, not as the JSON Schema it came from.
+#[test]
+fn argument_errors_are_plain_words() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let msg = |s: &mut Server, name: &str, args: Value| {
+        call(s, 1, "tools/call", json!({"name": name, "arguments": args}))["error"]["message"].as_str().unwrap_or("").to_string()
+    };
+    assert_eq!(msg(&mut s, "undo", json!({"count": "x"})), "`count` of `undo` must be a whole number \u{2265} 1");
+    assert_eq!(msg(&mut s, "undo", json!({"count": 0})), "`count` of `undo` must be a whole number \u{2265} 1");
+    assert_eq!(msg(&mut s, "get_variable", json!({"name": 5})), "`name` of `get_variable` must be text");
+    assert_eq!(msg(&mut s, "select", json!({"all": "yes"})), "`all` of `select` must be true or false");
+    assert_eq!(msg(&mut s, "render", json!({"window": [1]})), "`window` of `render` must be a list of 2 lists of 2 numbers");
+    for bad in ["{", "}", "\"type\"", "minimum"] {
+        for args in [json!({"count": "x"}), json!({"count": 0})] {
+            assert!(!msg(&mut s, "undo", args).contains(bad), "raw schema in the message");
+        }
+    }
+}
+
+/// B4-019: a cancel that arrives while a call runs reaches it: the reader thread sets the cancel
+/// request as soon as the line is read, before the calls ahead of it are answered.
+#[test]
+fn serve_cancellable_passes_cancels_on_while_serving() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let lines = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+        json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}}),
+    ];
+    let input = lines.iter().map(|l| format!("{l}\n")).collect::<String>();
+    let mut out = Vec::new();
+    s.serve_cancellable(std::io::Cursor::new(input.into_bytes()), &mut out).unwrap();
+    let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(replies[0]["id"], 1);
+    assert!(cadaddy_engine::cancel_pending());
+}
+
+/// B7-017: `save` lists `force` (its refusal says to pass it), and a forced save does not warn that it was ignored.
+#[test]
+fn save_has_a_force_parameter() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let tools = call(&mut s, 1, "tools/list", json!({}));
+    for name in ["save", "bim_from_pdf"] {
+        let t = tools["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == name).unwrap();
+        assert_eq!(t["inputSchema"]["properties"]["force"]["type"], "boolean", "{name}");
+    }
+    let save = tools["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "save").unwrap();
+    assert!(save["description"].as_str().unwrap().contains("force"));
+    let path = std::env::temp_dir().join(format!("cadaddy-mcp-force-{}.cdy", std::process::id()));
+    let r = call(&mut s, 2, "tools/call", json!({"name": "save", "arguments": {"path": path.to_string_lossy(), "force": true}}));
+    let _ = std::fs::remove_file(&path);
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert!(!r.to_string().contains("is not a parameter"), "{r}");
+}
+
+/// Headless there is no user to ask: `save {path}` onto another existing file is refused, `force: true` replaces it.
+#[test]
+fn save_onto_another_existing_drawing_needs_force() {
+    use cadaddy_engine::cmd::file::{IoHooks, set_io};
+    set_io(IoHooks {
+        read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
+        write: |_, _| Ok(b"saved".to_vec()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-overwrite-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let other = dir.join("other.dxf");
+    std::fs::write(&other, b"another drawing").unwrap();
+    let path = other.to_string_lossy().into_owned();
+    let r = call(&mut s, 1, "tools/call", json!({"name": "save", "arguments": {"path": path}}));
+    assert_eq!(r["result"]["isError"], json!(true), "{r}");
+    assert!(r.to_string().contains("force:true"), "{r}");
+    assert_eq!(std::fs::read(&other).unwrap(), b"another drawing");
+    let r = call(&mut s, 2, "tools/call", json!({"name": "save", "arguments": {"path": path, "force": true}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert_ne!(std::fs::read(&other).unwrap(), b"another drawing");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// B7-027: a tool whose result starts with an image (render) still carries the unknown-argument warning.
+#[test]
+fn render_warns_about_unknown_arguments() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
+    let r = call(&mut s, 1, "tools/call", json!({"name": "render", "arguments": {"width": 64, "height": 64, "zzz_unknown": 1}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    let content = r["result"]["content"].as_array().unwrap();
+    assert_eq!(content[0]["type"], "image", "{r}");
+    assert!(r.to_string().contains("`zzz_unknown` is not a parameter of render"), "{r}");
+    let r = call(&mut s, 2, "tools/call", json!({"name": "render", "arguments": {"width": 64, "height": 64}}));
+    assert!(!r.to_string().contains("is not a parameter"), "{r}");
+}
+
+/// A control port that talks JSON lines: `handler` gets each (connection number, request) and returns the reply line
+/// (`None`: close the connection without a reply).
+fn fake_app(handler: impl Fn(usize, &Value) -> Option<Value> + Send + Sync + 'static) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handler = std::sync::Arc::new(handler);
+    std::thread::spawn(move || {
+        for (n, conn) in listener.incoming().flatten().enumerate() {
+            let handler = std::sync::Arc::clone(&handler);
+            std::thread::spawn(move || {
+                let mut out = conn.try_clone().unwrap();
+                for line in BufReader::new(conn).lines().map_while(Result::ok) {
+                    let req: Value = serde_json::from_str(&line).unwrap();
+                    let Some(mut reply) = handler(n, &req) else { return };
+                    reply["id"] = req["id"].clone();
+                    if writeln!(out, "{reply}").is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    addr
+}
+
+/// B7-026: an app that wants a token and got none says so; only a real transport loss says the reply was lost.
+#[test]
+fn connect_without_a_token_says_unauthorized_not_lost() {
+    if std::env::var_os(cadaddy_engine::control_auth::TOKEN_ENV).is_some() {
+        return;
+    }
+    // Like the app: answer the first request with `unauthorized` and close the connection.
+    let addr = fake_app(|_, _| Some(json!({"ok": false, "error": "unauthorized: send auth first"})));
+    let mut remote = crate::backend::Remote::lazy(&addr, false);
+    let err = crate::Backend::call(&mut remote, "app.open", json!({"path": "x.dwg"})).unwrap_err();
+    assert!(err.contains(&format!("CADaddy at {addr} refused the connection: no control token (looked in ")), "{err}");
+    assert!(err.contains("set CADADDY_CONTROL_TOKEN"), "{err}");
+    assert!(!err.contains("reply was lost"), "{err}");
+    // A genuine loss still says so.
+    let addr = fake_app(|_, req| (req["method"] == "ping").then(|| json!({"ok": true, "result": "pong"})));
+    let mut remote = crate::backend::Remote::lazy(&addr, false);
+    let err = crate::Backend::call(&mut remote, "app.open", json!({"path": "x.dwg"})).unwrap_err();
+    assert!(err.contains("the reply was lost"), "{err}");
+}
+
+/// The hello names the window that answered (title, process id) and whether it holds the agent port.
+#[test]
+fn connect_reports_which_window_it_drives() {
+    let addr = fake_app(|_, req| {
+        (req["method"] == "ping").then(|| {
+            json!({"ok": true, "result": {"pong": true, "version": env!("CARGO_PKG_VERSION"), "pid": 4242, "title": "CADaddy - Plan A.dwg", "agentPortHeldElsewhere": false}})
+        })
+    });
+    let remote = crate::backend::Remote::connect(&addr).unwrap();
+    let d = crate::Backend::describe(&remote);
+    assert!(d.contains("window \"CADaddy - Plan A.dwg\", pid 4242"), "{d}");
+    assert!(!d.contains("holds the agent port"), "{d}");
+    let r = json!({"pid": 7, "title": "T", "agentPortHeldElsewhere": true});
+    assert_eq!(crate::backend::window_description(&r).unwrap(), "window \"T\", pid 7; another window holds the agent port");
+    assert!(crate::backend::window_description(&json!("pong")).is_none());
+}
+
+/// B4-019: through `--connect` the cancel reaches the app on a connection of its own at once, while the render holds the first.
+#[test]
+fn cancel_through_connect_reaches_the_app_while_a_render_runs() {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let (tx, rx) = (std::sync::Mutex::new(tx), std::sync::Mutex::new(rx));
+    let addr = fake_app(move |_, req| match req["method"].as_str() {
+        Some("ping") => Some(json!({"ok": true, "result": "pong"})),
+        Some("control.cancel") => {
+            tx.lock().unwrap().send(()).unwrap();
+            Some(json!({"ok": true, "result": {"cancelRequested": true}}))
+        }
+        // The render: runs until the cancel arrives (the real one takes 30 s).
+        Some("ui.render") => {
+            let got = rx.lock().unwrap().recv_timeout(std::time::Duration::from_secs(20)).is_ok();
+            Some(json!({"ok": false, "error": if got { "render cancelled" } else { "render ran to the end" }}))
+        }
+        _ => Some(json!({"ok": true, "result": {}})),
+    });
+    let mut s = Server::new(Box::new(crate::backend::Remote::lazy(&addr, false)));
+    let input = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "render", "arguments": {}}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "cancel", "arguments": {}}}),
+    ];
+    let input = input.iter().map(|l| format!("{l}\n")).collect::<String>();
+    let start = std::time::Instant::now();
+    let mut out = Vec::new();
+    s.serve_cancellable(std::io::Cursor::new(input.into_bytes()), &mut out).unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "the render waited for the whole run: {:?}", start.elapsed());
+    assert!(String::from_utf8(out).unwrap().contains("render cancelled"));
+}
+
+fn circles(s: &mut Server) -> u64 {
+    tool(s, "inspect_drawing", json!({}))["counts"]["Circle"].as_u64().unwrap_or(0)
+}
+
+#[test]
+fn typed_secureload_and_trustedpaths_changes_are_refused_headless() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let before = tool(&mut s, "get_variable", json!({"name": "SECURELOAD"}));
+    for line in ["secureload 0", "setvar secureload 0", "setvar trustedpaths /tmp/cadaddy-agentrails-x"] {
+        let r = tool(&mut s, "command_line", json!({"text": line}));
+        assert!(
+            r["error"].as_str().is_some_and(|e| e.contains("Only the user can loosen")) || r.to_string().contains("Only the user can loosen"),
+            "{line}: {r}"
+        );
+        tool(&mut s, "command_line", json!({"text": "*Cancel*"}));
+    }
+    assert_eq!(tool(&mut s, "get_variable", json!({"name": "SECURELOAD"})), before);
+}
+
+#[test]
+fn typed_commands_obey_the_dry_run_headless() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "execute", json!({"command": "agent.dryrun", "params": {"on": true}}));
+    let r = tool(&mut s, "command_line", json!({"text": "circle 0,0 3"}));
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("Dry run")), "{r}");
+    assert_eq!(circles(&mut s), 0);
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-dryrules-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("rules.json");
+    // Refused (the file would have been written): the point is that nothing is.
+    let e = call(
+        &mut s,
+        8,
+        "tools/call",
+        json!({"name": "execute", "arguments": {"command": "project.rules.export", "params": {"path": file.to_string_lossy()}}}),
+    );
+    assert!(e.to_string().contains("dry run"), "{e}");
+    assert!(!file.exists(), "the dry run wrote the rules file");
+    tool(&mut s, "execute", json!({"command": "agent.dryrun", "params": {"on": false}}));
+    tool(&mut s, "command_line", json!({"text": "circle 0,0 3"}));
+    assert_eq!(circles(&mut s), 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn headless_close_with_unsaved_changes_is_refused_on_every_route() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "circle 0,0 3"}));
+    for (name, args) in [
+        ("execute", json!({"command": "close", "params": {}})),
+        ("execute", json!({"command": "closeall", "params": {}})),
+        ("execute_many", json!({"commands": [{"command": "close", "params": {}}]})),
+    ] {
+        let r = call(&mut s, 7, "tools/call", json!({"name": name, "arguments": args}));
+        let text = r.to_string();
+        assert!(text.contains("unsaved changes"), "{name} {args}: {text}");
+    }
+    for line in ["close", "closeall"] {
+        let r = tool(&mut s, "command_line", json!({"text": line}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("unsaved changes")), "{line}: {r}");
+    }
+    assert_eq!(tool(&mut s, "list_drawings", json!({}))["drawings"].as_array().map(Vec::len), Some(1));
+    assert_eq!(circles(&mut s), 1);
+    // Said so, it closes.
+    tool(&mut s, "execute", json!({"command": "close", "params": {"discard": true}}));
+    assert_eq!(tool(&mut s, "list_drawings", json!({}))["drawings"].as_array().map(Vec::len), Some(0));
+}
+
+/// B9-022: undo/redo pass the engine's options through, and refuse what they don't have.
+#[test]
+fn undo_redo_take_engine_options_and_refuse_unknown_arguments() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
+    let count = |s: &mut Server| tool(s, "inspect_drawing", json!({"entities": false}))["counts"]["Line"].as_u64().unwrap_or(0);
+    let before = count(&mut s);
+    assert!(before > 0, "setup drew nothing");
+    // mode mark sets a mark and undoes nothing.
+    let r = call(&mut s, 1, "tools/call", json!({"name": "undo", "arguments": {"mode": "mark"}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert!(!r.to_string().contains("is not a parameter"), "{r}");
+    assert_eq!(count(&mut s), before);
+    tool(&mut s, "command_line", json!({"text": "line 0,0 20,20"}));
+    assert_eq!(count(&mut s), before + 1);
+    // mode back returns to the mark.
+    let r = call(&mut s, 2, "tools/call", json!({"name": "undo", "arguments": {"mode": "back"}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert_eq!(count(&mut s), before);
+    // redo all redoes everything undone.
+    let r = call(&mut s, 3, "tools/call", json!({"name": "redo", "arguments": {"all": true}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert_eq!(count(&mut s), before + 1);
+    // An unknown argument is refused and the history is unchanged.
+    for (name, args) in [("undo", json!({"bogus": 1})), ("redo", json!({"bogus": 1})), ("undo", json!({"count": 1, "bogus": 1}))] {
+        let r = call(&mut s, 4, "tools/call", json!({"name": name, "arguments": args}));
+        assert!(r["error"]["message"].as_str().is_some_and(|m| m.contains("is not a parameter")), "{r}");
+        assert_eq!(count(&mut s), before + 1, "{name} acted");
     }
 }

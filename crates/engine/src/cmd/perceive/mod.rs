@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{offset?, limit?} → {items: [{kind: door|window, at, width, layer, handle, swing?, confidence}], total, next?}")
             .noundo(),
         CommandSpec::new("plan.rooms", "Plan Rooms", geometry::run_rooms)
-            .params("{offset?, limit?} → {items: [{name, number?, at, area, perimeter, outline: [[x,y]…], confidence}], total, next?}: the closed outline around each room name")
+            .params("{offset?, limit?, outline?: bool} → {items: [{name, number?, at, area, perimeter, outline: [[x,y]…], confidence}], total, next?}: the closed outline around each room name")
             .noundo(),
         CommandSpec::new("plan.notes", "Plan Notes", run_notes)
             .params("{kind?: ceiling|level|scale|finish, offset?, limit?} → {items: [{kind, text, value, at, handle, confidence}], total, next?}")

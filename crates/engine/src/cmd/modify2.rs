@@ -16,7 +16,7 @@ use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, St
 
 mod curve_edits;
 mod fillet_pline;
-pub(crate) use curve_edits::join_curves;
+pub(crate) use curve_edits::{closed_kind, join_close, join_curves};
 pub(crate) use fillet_pline::{ChamferDistances, fillet_pline};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -1016,7 +1016,13 @@ pub(crate) fn lengthen_kind(k: &EntityKind, pick: Option<Vec2>, mode: LenMode) -
                 return Err(too_short());
             }
             let ne = fixed + dir * nl;
-            Ok(if at_b { line(a, ne) } else { line(ne, b) })
+            let mut out = l.clone();
+            if at_b {
+                out.b = ne.to3(l.b.z);
+            } else {
+                out.a = ne.to3(l.a.z);
+            }
+            Ok(EntityKind::Line(out))
         }
         EntityKind::Arc(ar) => {
             let g = Arc::new(ar.center.xy(), ar.radius, ar.start, ar.end);
@@ -1037,7 +1043,8 @@ pub(crate) fn lengthen_kind(k: &EntityKind, pick: Option<Vec2>, mode: LenMode) -
             if !(ns > 1e-12 && ns < TAU - 1e-9) {
                 return Err(other("The new arc would be zero length or a full circle."));
             }
-            Ok(if at_end { arc(&Arc::new(g.center, g.radius, g.start, g.start + ns)) } else { arc(&Arc::new(g.center, g.radius, g.end - ns, g.end)) })
+            let na = if at_end { Arc::new(g.center, g.radius, g.start, g.start + ns) } else { Arc::new(g.center, g.radius, g.end - ns, g.end) };
+            Ok(EntityKind::Arc(cadaddy_doc::Arc { radius: na.radius, start: na.start, end: na.end, ..ar.clone() }))
         }
         EntityKind::LwPolyline(p) if !p.closed && p.vertices.len() >= 2 => {
             let total = Polyline { vertices: p.vertices.clone(), closed: false }.len();
@@ -1586,7 +1593,7 @@ pub(crate) fn flatten_kind(k: &mut EntityKind) {
             }
         }
         EntityKind::Dimension(d) => {
-            for p in [&mut d.defpt, &mut d.text_mid, &mut d.p13, &mut d.p14, &mut d.p15, &mut d.p16] {
+            for p in d.used_points_mut() {
                 z(p);
             }
             d.block = None;
@@ -2345,7 +2352,7 @@ pub(crate) fn arraypath(
 fn run_arraypath(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let path = curves::handle_param(p, "path").ok_or_else(|| bad("arraypath", "`path` (handle) is required"))?;
-    let count = p.get("count").and_then(Value::as_u64).map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+    let count = count_param("arraypath", p, "count", 1, u64::MAX)?.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
     let spacing = p.get("spacing").and_then(Value::as_f64);
     let align = bool_or(p, "align", true);
     if p.get("associative").and_then(Value::as_bool).unwrap_or_else(|| super::array::assoc_default(s)) {
@@ -2552,5 +2559,4 @@ impl Interactive for TextEditM {
 }
 
 #[cfg(test)]
-#[path = "modify2_tests.rs"]
 mod tests;

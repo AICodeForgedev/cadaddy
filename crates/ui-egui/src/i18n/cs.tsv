@@ -1,6 +1,6 @@
-# CADCraft Czech interface catalog — original translations by @Losminek (AI-assisted).
+# CADaddy Czech interface catalog — original translations by @Losminek (AI-assisted).
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# Written from the meaning of CADCraft English strings; no proprietary translations copied.
+# Written from the meaning of CADaddy English strings; no proprietary translations copied.
 # UTF-8: context<TAB>English source<TAB>Czech translation.
 # @plural = one|few|other forms for integer counts.
 	Adjust...	Upravit...
@@ -94,6 +94,7 @@
 	Blend	Spojit křivky
 	Block	Blok
 	Block Attribute Manager...	Správce atributů bloků...
+	Block Description...	Popis bloku...
 	Block Editor	Editor bloků
 	Block Reference	Reference bloku
 	Block...	Blok...
@@ -143,6 +144,7 @@
 	Close All Other Drawings	Zavřít všechny ostatní výkresy
 	Closed	Uzavřeno
 	Close Comparison	Zavřít porovnání
+	Export Comparison	Exportovat porovnání
 	Coincident	Totožnost
 	Collapse Tool Sets	Sbalit sady nástrojů
 	Collinear	Kolinearita
@@ -537,6 +539,7 @@
 	N	S
 	Name	Název
 	Name (A–Z)	Název (A–Z)
+	Named Viewports...	Pojmenované výřezy...
 	Named Views...	Pojmenované pohledy...
 	Nearest	Nejbližší
 	New	Nový
@@ -3248,3 +3251,19 @@ menu	Modify	Modifikace
 	Clash Navigate	Procházet kolize
 	Colour By Status/Level	Barva podle stavu/podlaží
 	Inspect Element	Prohlédnout prvek
+	Analyze Shapes	Analyzovat tvary
+	Planned Walls	Plánované stěny
+	Extended Trim	Rozšířené ořezání
+	Trim and Extend	Oříznout a prodloužit
+	Trim to Block Objects	Oříznout k objektům bloku
+	Extend to Block Objects	Prodloužit k objektům bloku
+	Super Hatch	Superšrafování
+	Block Authoring Palettes	Palety tvorby bloků
+	Test Block	Vyzkoušet blok
+	Company Standards	Firemní standardy
+	Delete Project	Smazat projekt
+	Duplicate Project	Duplikovat projekt
+	Projects	Projekty
+	Remove Company Standard	Odebrat firemní standard
+	Set Company Standard	Nastavit firemní standard
+	Standards	Standardy

@@ -43,6 +43,8 @@ pub enum SourceKind {
     Schedule,
     /// Read from the specifications.
     Spec,
+    /// Read from an approved submittal (the product data sheet for the type).
+    Submittal,
     /// Read from a general or keyed note.
     Note,
     /// Assumed from a rule of a standard or the project rules — an assumption, always marked.
@@ -57,11 +59,12 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
-    pub const ALL: [SourceKind; 9] = [
+    pub const ALL: [SourceKind; 10] = [
         SourceKind::Print,
         SourceKind::Legend,
         SourceKind::Schedule,
         SourceKind::Spec,
+        SourceKind::Submittal,
         SourceKind::Note,
         SourceKind::Rule,
         SourceKind::Default,
@@ -75,6 +78,7 @@ impl SourceKind {
             SourceKind::Legend => "legend",
             SourceKind::Schedule => "schedule",
             SourceKind::Spec => "spec",
+            SourceKind::Submittal => "submittal",
             SourceKind::Note => "note",
             SourceKind::Rule => "rule",
             SourceKind::Default => "default",

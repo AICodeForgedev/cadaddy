@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("attext", "Attribute Extraction", run_attext)
             .alias(&["-attext"])
             .params(
-                "{format?: cdf (default) | sdf | dxf, template?: path of the template file | templateText: its contents \
+                "{force?: bool (replace an existing file; otherwise it is refused), format?: cdf (default) | sdf | dxf, template?: path of the template file | templateText: its contents \
                  (required for cdf and sdf), file?: output path (default: the records are returned only), handles? (default: \
                  every block reference in model space and the layouts)} → {records, text, file?}",
             )
@@ -313,6 +313,7 @@ fn run_attext(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let file = str_param(p, "file").map(str::trim).filter(|f| !f.is_empty());
     if let Some(f) = file {
+        super::super::exchange::guard_output(s, "attext", p, f)?;
         crate::writefile::write(f, text.as_bytes()).map_err(|e| bad("attext", format!("{f}: {e}")))?;
     }
     let mut message = format!("{n} record(s) in extract file.");

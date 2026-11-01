@@ -10,8 +10,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cadaddy_engine::doc::geom::Vec3;
-use cadaddy_engine::doc::{Common, Drawing, EntityKind, Face3d, Mesh, MeshFace, Solid, Space};
+use cadaddy_engine::doc::geom::{Vec2, Vec3};
+use cadaddy_engine::doc::{Common, Drawing, EntityKind, Face3d, Mesh, MeshFace, MeshKind, RawTag, Solid, Space, Underlay, Unknown};
 use cadaddy_engine::{
     Session,
     cmd::file::{IoHooks, set_io},
@@ -21,25 +21,89 @@ use serde_json::{Value, json};
 
 /// Known differences: `format|type|field`. Each is a loss to fix, or a version limit.
 const KNOWN: &[&str] = &[
+    // A justified TEXT is written as AutoCAD writes it: group 10 is where its baseline starts, the
+    // alignment point is group 11 (it drew centred and right-aligned text from the wrong end
+    // otherwise). Read back, `insert` holds the baseline start and `align_pt` the point it was
+    // made at: the same text, stored the way AutoCAD stores it.
+    "DWG 2000|Text|kind.insert.x",
+    "DWG 2000|Text|kind.insert.y",
+    "DWG 2004|Text|kind.insert.x",
+    "DWG 2004|Text|kind.insert.y",
+    "DWG 2007|Text|kind.insert.x",
+    "DWG 2007|Text|kind.insert.y",
+    "DWG 2010|Text|kind.insert.x",
+    "DWG 2010|Text|kind.insert.y",
+    "DWG 2013|Text|kind.insert.x",
+    "DWG 2013|Text|kind.insert.y",
+    "DWG 2018|Text|kind.insert.x",
+    "DWG 2018|Text|kind.insert.y",
+    "DWG native 2000|Text|kind.insert.x",
+    "DWG native 2000|Text|kind.insert.y",
+    "DWG native 2004|Text|kind.insert.x",
+    "DWG native 2004|Text|kind.insert.y",
+    "DWG native 2007|Text|kind.insert.x",
+    "DWG native 2007|Text|kind.insert.y",
+    "DWG native 2010|Text|kind.insert.x",
+    "DWG native 2010|Text|kind.insert.y",
+    "DWG native 2013|Text|kind.insert.x",
+    "DWG native 2013|Text|kind.insert.y",
+    "DWG native 2018|Text|kind.insert.x",
+    "DWG native 2018|Text|kind.insert.y",
+    "DXF|Text|kind.insert.x",
+    "DXF|Text|kind.insert.y",
+    "DXF binary|Text|kind.insert.x",
+    "DXF binary|Text|kind.insert.y",
     // Versions older than the feature: AutoCAD 2000/2004 have no multileaders (written as a
-    // leader with its text), multileader or table styles (2000), or DIMFXL (before 2007); MESH
+    // leader with its text), multileader or table styles (2000); MESH
     // came with 2010 (older versions get a polyface mesh).
-    "DWG 2000|DimStyle|fixedExtLength",
     "DWG 2000|Leader|count 1→2",
     "DWG 2000|MLeaderStyle|CALLOUT missing",
     "DWG 2000|MText|count 2→3",
     "DWG 2000|Mesh|count 1→0",
     "DWG 2000|Multileader|count 1→0",
-    "DWG 2000|Polyface Mesh|appeared",
     "DWG 2000|TableStyle|SCHEDULE missing",
-    "DWG 2004|DimStyle|fixedExtLength",
     "DWG 2004|Leader|count 1→2",
     "DWG 2004|MText|count 2→3",
     "DWG 2004|Mesh|count 1→0",
     "DWG 2004|Multileader|count 1→0",
-    "DWG 2004|Polyface Mesh|appeared",
     "DWG 2007|Mesh|count 1→0",
-    "DWG 2007|Polyface Mesh|appeared",
+    // The DWG bridge (not the native codec) keeps an object of a type CADaddy doesn't model as a
+    // kept record and reads it back with its groups re-encoded: a real group (40) is lost. A fix
+    // to make in the bridge's keep/stash path; the native codec reads it back as written.
+    "DWG 2000|Proxy|kind.tags[].code",
+    "DWG 2000|Proxy|kind.tags[].value",
+    "DWG 2000|Proxy|kind.tags[len]",
+    "DWG 2004|Proxy|kind.tags[].code",
+    "DWG 2004|Proxy|kind.tags[].value",
+    "DWG 2004|Proxy|kind.tags[len]",
+    "DWG 2007|Proxy|kind.tags[].code",
+    "DWG 2007|Proxy|kind.tags[].value",
+    "DWG 2007|Proxy|kind.tags[len]",
+    "DWG 2010|Proxy|kind.tags[].code",
+    "DWG 2010|Proxy|kind.tags[].value",
+    "DWG 2010|Proxy|kind.tags[len]",
+    "DWG 2013|Proxy|kind.tags[].code",
+    "DWG 2013|Proxy|kind.tags[].value",
+    "DWG 2013|Proxy|kind.tags[len]",
+    "DWG 2018|Proxy|kind.tags[].code",
+    "DWG 2018|Proxy|kind.tags[].value",
+    "DWG 2018|Proxy|kind.tags[len]",
+    // The DWG bridge stores a SHAPE by its number in the shape file and gives it back without a
+    // name (a fix to make; the native codec keeps the name).
+    "DWG 2000|Shape|kind.name",
+    "DWG 2004|Shape|kind.name",
+    "DWG 2007|Shape|kind.name",
+    "DWG 2010|Shape|kind.name",
+    "DWG 2013|Shape|kind.name",
+    "DWG 2018|Shape|kind.name",
+    // Versions before 2010 have no MESH: it is written as a polyface mesh, so a second polyface
+    // mesh appears next to the one made as a polyface (the same limit as "Mesh count 1→0").
+    "DWG 2000|Polyface Mesh|count 1→2",
+    "DWG 2004|Polyface Mesh|count 1→2",
+    "DWG 2007|Polyface Mesh|count 1→2",
+    "DWG native 2000|Polyface Mesh|count 1→2",
+    "DWG native 2004|Polyface Mesh|count 1→2",
+    "DWG native 2007|Polyface Mesh|count 1→2",
     // The DWG bridge numbers paper-space viewports again (by order in the layout).
     "DWG 2000|Viewport|kind.id",
     "DWG 2004|Viewport|kind.id",
@@ -54,20 +118,65 @@ const KNOWN: &[&str] = &[
     "DWG native 2000|MText|count 2→3",
     "DWG native 2000|Mesh|count 1→0",
     "DWG native 2000|Multileader|count 1→0",
-    "DWG native 2000|Polyface Mesh|appeared",
     "DWG native 2004|Leader|count 1→2",
     "DWG native 2004|MText|count 2→3",
     "DWG native 2004|Mesh|count 1→0",
     "DWG native 2004|Multileader|count 1→0",
-    "DWG native 2004|Polyface Mesh|appeared",
     "DWG native 2007|Mesh|count 1→0",
-    "DWG native 2007|Polyface Mesh|appeared",
     "DWG native 2000|Viewport|kind.id",
     "DWG native 2004|Viewport|kind.id",
     "DWG native 2007|Viewport|kind.id",
     "DWG native 2010|Viewport|kind.id",
     "DWG native 2013|Viewport|kind.id",
     "DWG native 2018|Viewport|kind.id",
+];
+
+/// Every `EntityKind` variant by its `type_name` (a MESH, polyface mesh and polygon mesh are one
+/// variant with three names; PDF and DWF underlays likewise). The kitchen sink must make exactly
+/// these. **A new `EntityKind` variant (or `type_name`) must be added here, and made in
+/// `kitchen_sink`** — the test fails until both are done.
+const ALL_TYPES: &[&str] = &[
+    "2D Solid",
+    "3D Face",
+    "3D Polyline",
+    "3D Solid",
+    "Arc",
+    "Attribute Definition",
+    "Block Reference",
+    "Circle",
+    "DWF Underlay",
+    "Dimension",
+    "Ellipse",
+    "Hatch",
+    "Helix",
+    "Leader",
+    "Light",
+    "Line",
+    "MLine",
+    "MText",
+    "Mesh",
+    "Multileader",
+    "NURBS Surface",
+    "PDF Underlay",
+    "Point",
+    "Point Cloud",
+    "Polygon Mesh",
+    "Polyface Mesh",
+    "Polyline",
+    "Proxy",
+    "Raster Image",
+    "Ray",
+    "Region",
+    "Section Plane",
+    "Shape",
+    "Spline",
+    "Table",
+    "Text",
+    "Tolerance",
+    "Trace",
+    "Viewport",
+    "Wipeout",
+    "Xline",
 ];
 
 fn hooks() {
@@ -180,6 +289,31 @@ fn kitchen_sink(dir: &std::path::Path) -> (Drawing, Vec<String>) {
     run(&mut s, "view", json!({ "option": "save", "name": "Front", "center": [10, 10], "height": 40 }));
     let first = s.doc().map(|d| d.model.iter().take(2).map(|e| e.handle.hex()).collect::<Vec<_>>()).unwrap_or_default();
     run(&mut s, "group", json!({ "name": "Pair", "handles": first }));
+    // A layout's page setup (paper, scale, plot area and plot style), not the defaults.
+    run(
+        &mut s,
+        "pagesetup",
+        json!({ "layout": "Sheet A", "paper": "A3", "landscape": true, "scale": 0.02, "scaleToFit": false,
+                "plotStyleTable": "monochrome.ctb", "center": false, "lineweights": false, "margins": [5, 6, 7, 8] }),
+    );
+    // Model-space viewport configurations, a layer state, a material, an annotation scale, a plot
+    // style table: each non-default, made by its command.
+    run(&mut s, "-vports", json!({ "option": "3", "arrangement": "right" }));
+    run(&mut s, "-vports", json!({ "option": "save", "name": "Three" }));
+    run(&mut s, "-vports", json!({ "option": "single" }));
+    run(&mut s, "layerstate.save", json!({ "name": "Walls only", "description": "made-up state" }));
+    run(&mut s, "material.new", json!({ "name": "Brick", "color": "#aa4422", "roughness": 0.7, "metallic": 0.1, "opacity": 0.9 }));
+    run(&mut s, "scalelistedit", json!({ "add": { "name": "1:37", "ratio": "1:37" } }));
+    run(&mut s, "stylesmanager", json!({ "action": "new", "name": "site.ctb", "description": "made-up table" }));
+    run(&mut s, "stylesmanager", json!({ "action": "new", "name": "named.stb", "kind": "named" }));
+    run(&mut s, "stylesmanager", json!({ "action": "set", "name": "named.stb", "style": { "name": "Heavy", "lineweight": 0.7 } }));
+    // Surfaces and shapes (a shape file made on the spot from made-up source).
+    run(&mut s, "planesurf", json!({ "corners": [[0, 180, 0], [6, 186, 0]] }));
+    let shp = dir.join("madeup.shp");
+    let _ = std::fs::write(&shp, "*1,5,BOX\n014,010,01C,018,0\n");
+    run(&mut s, "compile", json!({ "file": shp }));
+    run(&mut s, "load", json!({ "file": dir.join("madeup") }));
+    run(&mut s, "shape", json!({ "name": "BOX", "at": [10, 180], "size": 2, "rotation": 30, "widthFactor": 1.5, "oblique": 10 }));
     // Entity types no command makes.
     let mut d = s.doc().map_or_else(|_| Drawing::new_imperial(), |d| d.clone());
     let q = |x: f64, y: f64| [Vec3::new(x, y, 0.0), Vec3::new(x + 4.0, y, 0.0), Vec3::new(x, y + 3.0, 0.0), Vec3::new(x + 4.0, y + 3.0, 0.0)];
@@ -197,7 +331,60 @@ fn kitchen_sink(dir: &std::path::Path) -> (Drawing, Vec<String>) {
         ],
         ..Mesh::default()
     };
-    let _ = d.add(&Space::Model, wall(), EntityKind::Mesh(m));
+    let _ = d.add(&Space::Model, wall(), EntityKind::Mesh(m.clone()));
+    // A polyface mesh and a 2×2 polygon mesh as source objects, and an object of a type CADaddy
+    // doesn't model, kept as read (type name "Proxy"; a real ACAD_PROXY_ENTITY is dropped on
+    // writing when no class in the file names it, so this is an ARC ALIGNED TEXT).
+    let polyface = Mesh { kind: MeshKind::Polyface, ..m.clone() };
+    let _ = d.add(&Space::Model, wall(), EntityKind::Mesh(polyface.clone()));
+    let grid = Mesh {
+        vertices: vec![Vec3::new(40.0, 200.0, 0.0), Vec3::new(44.0, 200.0, 1.0), Vec3::new(40.0, 204.0, 2.0), Vec3::new(44.0, 204.0, 3.0)],
+        // The quad between the four vertices: a file's reader makes the same face.
+        faces: vec![MeshFace { v: vec![0, 1, 3, 2], hidden: 0 }],
+        kind: MeshKind::Polygon { m: 2, n: 2, closed_m: false, closed_n: false },
+    };
+    let _ = d.add(&Space::Model, wall(), EntityKind::Mesh(grid));
+    let proxy = Unknown {
+        dxf_type: "ARCALIGNEDTEXT".into(),
+        tags: vec![
+            RawTag { code: 100, value: "AcDbEntity".into() },
+            RawTag { code: 8, value: "A-WALL".into() },
+            RawTag { code: 100, value: "AcDbArcAlignedText".into() },
+            RawTag { code: 1, value: "MADE UP".into() },
+            RawTag { code: 40, value: "2.5".into() },
+        ],
+    };
+    let _ = d.add(&Space::Model, wall(), EntityKind::Unknown(proxy));
+    // A DWF underlay (placed directly: attaching one needs a DWF reader and a DWF file).
+    let dwf = Underlay {
+        insert: Vec3::new(50.0, 200.0, 0.0),
+        u: Vec3::new(1.0, 0.0, 0.0),
+        v: Vec3::new(0.0, 1.0, 0.0),
+        size: Vec2::new(8.5, 11.0),
+        path: "made-up-plan.dwf".into(),
+        page: 2,
+        name: "Sheet 2".into(),
+        clip: Vec::new(),
+        clipping: false,
+        fade: 30,
+        contrast: 40,
+        monochrome: false,
+        layers_off: Vec::new(),
+    };
+    let _ = d.add(&Space::Model, wall(), EntityKind::Underlay(Box::new(dwf)));
+    // PAGESETUP can't set a layout's plot window; set one here.
+    if let Some(l) = d.layouts.iter_mut().find(|l| l.name == "Sheet A") {
+        l.page.plot_area = "window".into();
+        l.page.plot_window = [1.0, 2.0, 30.0, 40.0];
+    }
+    // Extended data of two applications (their names are the drawing's APPID table).
+    let tag = |code: i32, v: &str| RawTag { code, value: v.into() };
+    let first_line = d.model.iter().find(|e| matches!(e.kind, EntityKind::Line(_))).map(|e| e.handle);
+    if let Some(h) = first_line {
+        let _ = d.modify_entity(h, |e| {
+            e.common.xdata = vec![tag(1001, "MADEUP_APP_A"), tag(1000, "note"), tag(1001, "MADEUP_APP_B"), tag(1070, "7")].into();
+        });
+    }
     (d, skipped)
 }
 
@@ -292,7 +479,13 @@ fn fields(e: &cadaddy_engine::doc::Entity) -> Value {
         o.remove("handle");
         o.remove("owner");
     }
-    json!({ "common": c, "kind": serde_json::to_value(&e.kind).unwrap_or(Value::Null) })
+    let mut kind = serde_json::to_value(&e.kind).unwrap_or(Value::Null);
+    // A kept foreign object holds its own handle (5) and owner (330) groups once read: like the
+    // handle and owner of every object, not compared.
+    if let Some(tags) = kind.get_mut("tags").and_then(Value::as_array_mut) {
+        tags.retain(|t| !matches!(t["code"].as_i64(), Some(5 | 330)));
+    }
+    json!({ "common": c, "kind": kind })
 }
 
 /// Entities by type, in drawing order, across model space and the layouts.
@@ -302,6 +495,27 @@ fn by_type(d: &Drawing) -> BTreeMap<String, Vec<Value>> {
         m.entry(e.kind.type_name().to_string()).or_default().push(fields(e));
     }
     m
+}
+
+/// The contents of each block (not the `*` ones), by block and type, in order: rows such as
+/// "Block TAG · Attribute Definition", compared with the same field differ as the drawing's objects.
+fn block_contents(d: &Drawing) -> BTreeMap<String, Vec<Value>> {
+    let mut m: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for b in d.blocks.values().filter(|b| !b.name.starts_with('*')) {
+        for e in b.entities.iter() {
+            m.entry(format!("Block {} · {}", b.name.to_ascii_uppercase(), e.kind.type_name())).or_default().push(fields(e));
+        }
+    }
+    m
+}
+
+/// Every entity type name made: in the drawing's spaces and inside its blocks.
+fn made_types(d: &Drawing) -> BTreeSet<String> {
+    let mut t: BTreeSet<String> = by_type(d).into_keys().collect();
+    for b in d.blocks.values().filter(|b| !b.name.starts_with('*')) {
+        t.extend(b.entities.iter().map(|e| e.kind.type_name().to_string()));
+    }
+    t
 }
 
 /// The table types by entry name.
@@ -321,7 +535,11 @@ fn tables(d: &Drawing) -> BTreeMap<String, BTreeMap<String, Value>> {
         "Group".into(),
         d.groups
             .iter()
-            .map(|g| (g.name.to_ascii_uppercase(), json!({ "members": g.members.len(), "selectable": g.selectable, "description": g.description })))
+            .map(|g| {
+                // Who is in it, by type and in order (handles are not kept by every format).
+                let members: Vec<&str> = g.members.iter().map(|h| d.entity(*h).map_or("(missing)", |e| e.kind.type_name())).collect();
+                (g.name.to_ascii_uppercase(), json!({ "members": members, "selectable": g.selectable, "description": g.description }))
+            })
             .collect(),
     );
     t.insert("View".into(), named(serde_json::to_value(&d.views).unwrap_or(Value::Null)));
@@ -331,20 +549,49 @@ fn tables(d: &Drawing) -> BTreeMap<String, BTreeMap<String, Value>> {
         d.blocks
             .values()
             .filter(|b| !b.name.starts_with('*'))
-            .map(|b| (b.name.to_ascii_uppercase(), json!({ "objects": b.entities.len(), "base": [b.base.x, b.base.y] })))
+            .map(|b| {
+                (
+                    b.name.to_ascii_uppercase(),
+                    json!({ "objects": b.entities.len(), "base": [b.base.x, b.base.y, b.base.z], "description": b.description }),
+                )
+            })
             .collect(),
     );
     t.insert(
         "Layout".into(),
-        d.layouts.iter().map(|l| (l.name.to_ascii_uppercase(), json!({ "objects": l.entities.len(), "tab": l.tab_order }))).collect(),
+        d.layouts
+            .iter()
+            .map(|l| {
+                let page = serde_json::to_value(&l.page).unwrap_or(Value::Null);
+                (l.name.to_ascii_uppercase(), json!({ "objects": l.entities.len(), "tab": l.tab_order, "page": page }))
+            })
+            .collect(),
     );
+    t.insert("VPORT".into(), named(serde_json::to_value(&d.vports).unwrap_or(Value::Null)));
+    // Registered applications: ACAD and every application the objects' extended data names (what
+    // the APPID table is made from).
+    let ents = d.model.iter().chain(d.layouts.iter().flat_map(|l| l.entities.iter())).chain(d.blocks.values().flat_map(|b| b.entities.iter()));
+    let mut apps: BTreeMap<String, Value> = BTreeMap::new();
+    apps.insert("ACAD".into(), json!({ "name": "ACAD" }));
+    for e in ents {
+        for x in e.common.xdata.iter().filter(|x| x.code == 1001) {
+            apps.insert(x.value.to_ascii_uppercase(), json!({ "name": x.value }));
+        }
+    }
+    t.insert("APPID".into(), apps);
+    t.insert("LayerState".into(), named(serde_json::to_value(&d.layer_states).unwrap_or(Value::Null)));
+    t.insert("Material".into(), named(serde_json::to_value(&d.materials).unwrap_or(Value::Null)));
+    t.insert("AnnoScale".into(), named(serde_json::to_value(&d.scales).unwrap_or(Value::Null)));
+    t.insert("PlotStyleTable".into(), named(serde_json::to_value(&d.plot_style_tables).unwrap_or(Value::Null)));
     t
 }
 
 /// What `after` lost or changed from `before`: (type, field) pairs.
 fn compare(before: &Drawing, after: &Drawing) -> BTreeSet<(String, String)> {
     let mut out = BTreeSet::new();
-    let (a, b) = (by_type(before), by_type(after));
+    let (mut a, mut b) = (by_type(before), by_type(after));
+    a.extend(block_contents(before));
+    b.extend(block_contents(after));
     for (ty, xs) in &a {
         let ys = b.get(ty).cloned().unwrap_or_default();
         if xs.len() != ys.len() {
@@ -385,7 +632,8 @@ fn fidelity_matrix() {
     let dir = std::env::temp_dir().join(format!("cadaddy-fidelity-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a folder");
     let (d, skipped) = kitchen_sink(&dir);
-    let types: BTreeSet<String> = by_type(&d).keys().cloned().collect();
+    let types = made_types(&d);
+    let rows_made: BTreeSet<String> = by_type(&d).into_keys().chain(block_contents(&d).into_keys()).collect();
     let mut found: BTreeSet<String> = BTreeSet::new();
     let mut cells: BTreeMap<(String, String), usize> = BTreeMap::new();
     let mut details = String::new();
@@ -430,12 +678,13 @@ fn fidelity_matrix() {
         }
     }
     // The matrix.
-    let mut rows: BTreeSet<String> = types.clone();
+    let mut rows: BTreeSet<String> = rows_made.clone();
     rows.extend(tables(&d).keys().cloned());
     let mut md = format!(
-        "# File fidelity matrix\n\n{} entity types, {} table types; ✓ = read back the same, N = fields that changed.\n\n| type |",
+        "# File fidelity matrix\n\n{} entity types, {} block contents rows, {} table types; ✓ = read back the same, N = fields that changed.\n\n| type |",
         types.len(),
-        rows.len() - types.len()
+        rows_made.len() - by_type(&d).len(),
+        rows.len() - rows_made.len()
     );
     for (col, ..) in &cols {
         md.push_str(&format!(" {col} |"));
@@ -465,7 +714,34 @@ fn fidelity_matrix() {
         println!("{md}\n(report: {})", out.display());
     }
     let _ = std::fs::remove_dir_all(&dir);
-    assert!(types.len() >= 30, "only {} entity types made: {skipped:?}", types.len());
+    assert!(skipped.is_empty(), "commands that made the drawing refused: {skipped:?}");
+    let all: BTreeSet<String> = ALL_TYPES.iter().map(|t| (*t).to_string()).collect();
+    assert_eq!(types, all, "entity types made (left) vs every EntityKind type name (right)");
+    // The tables and containers are really in the drawing (a vacuous comparison proves nothing).
+    let t = tables(&d);
+    for (kind, name) in [
+        ("VPORT", "THREE"),
+        ("APPID", "MADEUP_APP_A"),
+        ("APPID", "MADEUP_APP_B"),
+        ("LayerState", "WALLS ONLY"),
+        ("Material", "BRICK"),
+        ("AnnoScale", "1:37"),
+        ("PlotStyleTable", "SITE.CTB"),
+        ("PlotStyleTable", "NAMED.STB"),
+        ("Layout", "SHEET A"),
+        ("Group", "PAIR"),
+        ("Block", "TAG"),
+    ] {
+        assert!(
+            t.get(kind).is_some_and(|m| m.contains_key(name)),
+            "{kind} {name} is not in the drawing: {:?}",
+            t.get(kind).map(|m| m.keys().collect::<Vec<_>>())
+        );
+    }
+    assert_eq!(t["Group"]["PAIR"]["members"].as_array().map(Vec::len), Some(2));
+    assert!(t["Layout"]["SHEET A"]["page"]["paper"].as_str().is_some_and(|p| p.contains("A3")));
+    assert_eq!(t["Layout"]["SHEET A"]["page"]["plotArea"], "window");
+    assert!(rows_made.contains("Block TAG · Attribute Definition") && rows_made.contains("Block TAG · Circle"), "{rows_made:?}");
     let known: BTreeSet<String> = KNOWN.iter().map(|s| (*s).to_string()).collect();
     let new: Vec<&String> = found.difference(&known).collect();
     let fixed: Vec<&String> = known.difference(&found).collect();
@@ -477,4 +753,81 @@ fn fidelity_matrix() {
         new.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
     );
     assert!(fixed.is_empty(), "fixed (remove from KNOWN): {fixed:?}");
+}
+
+/// The comparison itself sees what it is for: a change inside a block, a group's members, a
+/// layout's page setup, a viewport configuration or an application name is a difference.
+#[test]
+fn matrix_sees_changes_in_blocks_groups_layouts_and_tables() {
+    hooks();
+    let dir = std::env::temp_dir().join(format!("cadaddy-fidelity-mut-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a folder");
+    let (d, _) = kitchen_sink(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(compare(&d, &d).is_empty(), "a drawing differs from itself");
+    let changed = |f: &dyn Fn(&mut Drawing)| {
+        let mut e = d.clone();
+        f(&mut e);
+        compare(&d, &e)
+    };
+    let has = |set: &BTreeSet<(String, String)>, ty: &str, field: &str| set.iter().any(|(t, f)| t == ty && f.contains(field));
+    // Inside a block: an attribute definition's tag and the nested circle's radius.
+    let diff = changed(&|e| {
+        if let Some(b) = e.blocks.get_mut("TAG").map(std::sync::Arc::make_mut) {
+            let hs: Vec<_> = b.entities.iter().map(|x| x.handle).collect();
+            for h in hs {
+                b.entities.modify(h, |x| match &mut x.kind {
+                    EntityKind::AttDef(a) => a.tag = "OTHER".into(),
+                    EntityKind::Circle(c) => c.radius += 1.0,
+                    _ => {}
+                });
+            }
+        }
+    });
+    assert!(has(&diff, "Block TAG · Attribute Definition", "tag"), "{diff:?}");
+    assert!(has(&diff, "Block TAG · Circle", "radius"), "{diff:?}");
+    // A group: the members' order.
+    let diff = changed(&|e| {
+        if let Some(g) = e.groups.iter_mut().find(|g| g.name == "Pair") {
+            g.members.reverse();
+        }
+    });
+    assert!(has(&diff, "Group", "members"), "{diff:?}");
+    // A layout's page setup: paper, scale, plot area and plot style table.
+    for (field, f) in [
+        ("paper", (|p: &mut cadaddy_engine::doc::PageSetup| p.paper = "A4".into()) as fn(&mut cadaddy_engine::doc::PageSetup)),
+        ("scale", |p| p.scale = 0.5),
+        ("plotArea", |p| p.plot_area = "layout".into()),
+        ("plotStyleTable", |p| p.plot_style_table = "grayscale.ctb".into()),
+    ] {
+        let diff = changed(&|e| {
+            if let Some(l) = e.layouts.iter_mut().find(|l| l.name == "Sheet A") {
+                f(&mut l.page);
+            }
+        });
+        assert!(has(&diff, "Layout", field), "{field}: {diff:?}");
+    }
+    // The tables that had no row: a viewport configuration, a layer state, a material, a scale, a
+    // plot style table, and an application name (the object carrying it loses its extended data).
+    let diff = changed(&|e| {
+        if let Some(v) = e.vports.iter_mut().find(|v| v.name == "Three") {
+            v.tiles.truncate(1);
+        }
+    });
+    assert!(has(&diff, "VPORT", "tiles"), "{diff:?}");
+    let diff = changed(&|e| e.layer_states.iter_mut().for_each(|s| s.description = "x".into()));
+    assert!(has(&diff, "LayerState", "description"), "{diff:?}");
+    let diff = changed(&|e| e.materials.iter_mut().for_each(|m| m.roughness += 0.1));
+    assert!(has(&diff, "Material", "roughness"), "{diff:?}");
+    let diff = changed(&|e| e.scales.retain(|s| s.name != "1:37"));
+    assert!(has(&diff, "AnnoScale", "1:37 missing"), "{diff:?}");
+    let diff = changed(&|e| e.plot_style_tables.iter_mut().for_each(|t| t.description = "x".into()));
+    assert!(has(&diff, "PlotStyleTable", "description"), "{diff:?}");
+    let diff = changed(&|e| {
+        let hs: Vec<_> = e.model.iter().filter(|x| !x.common.xdata.is_empty()).map(|x| x.handle).collect();
+        for h in hs {
+            let _ = e.modify_entity(h, |x| x.common.xdata = Vec::new().into());
+        }
+    });
+    assert!(has(&diff, "APPID", "MADEUP_APP_A missing"), "{diff:?}");
 }

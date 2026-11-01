@@ -36,11 +36,10 @@ fn radial_text_goes_inside_when_the_location_is_inside() {
     assert!(covers(&g, 9.0) && !covers(&g, 4.0) && !covers(&g, 1.0));
     assert!(g.lines_of(LineRole::Dim).flatten().all(|p| p.len() <= 10.0 + 1e-9));
 
-    // Outside: the default placement beyond the arrowhead.
+    // Outside: the text goes to the point too (dim_radial_outside.rs), beyond the arrowhead.
     s.script("dimradius 0,10 0,15\n").unwrap();
     assert!(s.running.is_none());
-    let (dm, g) = last_dim(&s);
-    assert!(!dm.user_text_pos);
+    let (_, g) = last_dim(&s);
     assert!(g.text_pos.y > 10.0, "{:?}", g.text_pos);
 
     // JSON form, diameter: the line spans the circle, broken around the text.

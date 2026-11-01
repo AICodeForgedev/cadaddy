@@ -15,6 +15,8 @@ pub enum Preference {
     Auto,
     #[serde(rename = "en")]
     English,
+    #[serde(rename = "el")]
+    Greek,
     #[serde(rename = "uk")]
     Ukrainian,
     #[serde(rename = "pt-BR")]
@@ -52,9 +54,10 @@ pub enum Preference {
 }
 
 impl Preference {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::Auto,
         Self::English,
+        Self::Greek,
         Self::Ukrainian,
         Self::BrazilianPortuguese,
         Self::German,
@@ -74,6 +77,23 @@ impl Preference {
         Self::Turkish,
     ];
 
+    /// Every preference in the order the Interface Language dialog lists them: Auto, then English
+    /// (the source language), then the rest by the language's own name with accents folded, so
+    /// Čeština sits under C and Magyar under M. Names in other scripts follow the Latin ones in
+    /// code point order: Greek, Cyrillic, Arabic, then the CJK languages. The order follows the
+    /// registry's native name even where the dialog shows an English label instead (Korean
+    /// without a Hangul face), so the list does not reorder when a font appears.
+    pub fn for_picker() -> Vec<Self> {
+        let mut rest: Vec<Self> = Self::ALL.into_iter().filter(|p| !matches!(p, Self::Auto | Self::English)).collect();
+        rest.sort_by_cached_key(|p| name_sort_key(p.native_name()));
+        [Self::Auto, Self::English].into_iter().chain(rest).collect()
+    }
+
+    /// The language's own name from the registry, whatever the dialog currently shows for it.
+    fn native_name(self) -> &'static str {
+        LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(self.code())).map_or_else(|| self.name(), |l| l.name)
+    }
+
     /// The codes a preference can be given as, for messages ("auto, en or uk").
     pub fn codes() -> String {
         let codes: Vec<&str> = Self::ALL.iter().map(|p| p.code()).collect();
@@ -87,6 +107,7 @@ impl Preference {
         match self {
             Self::Auto => "auto",
             Self::English => "en",
+            Self::Greek => "el",
             Self::Ukrainian => "uk",
             Self::BrazilianPortuguese => "pt-BR",
             Self::German => "de",
@@ -111,6 +132,7 @@ impl Preference {
         match self {
             Self::Auto => t("Auto (system language)"),
             Self::English => "English",
+            Self::Greek => "Ελληνικά",
             Self::Ukrainian => "Українська",
             Self::BrazilianPortuguese => "Português (Brasil)",
             Self::German => "Deutsch",
@@ -155,6 +177,7 @@ impl Preference {
     pub fn resolve(self, locales: &[String]) -> &'static str {
         match self {
             Self::English => "en",
+            Self::Greek => "el",
             Self::Ukrainian => "uk",
             Self::BrazilianPortuguese => "pt-BR",
             Self::German => "de",
@@ -188,8 +211,10 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 18] = [
+pub static LANGUAGES: [Language; 19] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    // Greek: one for exactly 1; other for zero and all other integer counts.
+    Language { code: "el", name: "Ελληνικά", source: include_str!("el.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
     },
@@ -491,3 +516,43 @@ macro_rules! tf {
 
 #[cfg(test)]
 mod tests;
+
+/// `name` lowercased with the Latin accents that occur in language names folded away, so a
+/// byte-wise sort reads alphabetically. Other scripts are left as they are.
+fn name_sort_key(name: &str) -> String {
+    name.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'à'..='å' | 'ā' | 'ă' | 'ą' => 'a',
+            'ç' | 'ć' | 'č' => 'c',
+            'è'..='ë' | 'ē' | 'ě' | 'ę' | 'ế' | 'ệ' => 'e',
+            'ì'..='ï' | 'ī' => 'i',
+            'ñ' | 'ń' | 'ň' => 'n',
+            'ò'..='ö' | 'ø' | 'ő' => 'o',
+            'ś' | 'š' => 's',
+            'ù'..='ü' | 'ū' | 'ů' | 'ű' => 'u',
+            'ý' | 'ÿ' => 'y',
+            'ź' | 'ż' | 'ž' => 'z',
+            c => c,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod picker_order_tests {
+    use super::*;
+
+    #[test]
+    fn picker_lists_auto_and_english_first_then_names_alphabetically() {
+        let order = Preference::for_picker();
+        assert_eq!(&order[..2], &[Preference::Auto, Preference::English]);
+        assert_eq!(order.len(), Preference::ALL.len());
+        let keys: Vec<String> = order[2..].iter().map(|p| name_sort_key(p.native_name())).collect();
+        assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
+        let pos = |p: Preference| order.iter().position(|q| *q == p).unwrap_or(usize::MAX);
+        assert!(pos(Preference::Czech) < pos(Preference::German), "Čeština sorts under C");
+        assert!(pos(Preference::Italian) < pos(Preference::Hungarian), "Magyar sorts under M");
+        assert!(pos(Preference::Turkish) < pos(Preference::Greek), "Latin names come before Greek");
+        assert_eq!(name_sort_key("Türkçe"), "turkce");
+    }
+}

@@ -204,23 +204,23 @@ pub fn prompt(app: &mut CadApp, ctx: &egui::Context) {
     };
     let t = Tokens::get();
     let mut choice = None;
-    egui::Modal::new(egui::Id::new("cc_close_prompt")).show(ctx, |ui| {
+    crate::modal::instant(ctx, egui::Id::new("cc_close_prompt")).show(ctx, |ui| {
         ui.set_width(360.0);
         ui.label(RichText::new("CADaddy").strong());
         ui.add_space(4.0);
-        ui.label(format!("Save changes to {title}?"));
-        ui.label(RichText::new("Your changes will be lost if you don't save them.").color(t.text_dim));
+        ui.label(crate::tf!("Save changes to {name}?", name = title));
+        ui.label(RichText::new(crate::tl!("Your changes will be lost if you don't save them.")).color(t.text_dim));
         ui.add_space(10.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let size = vec2(84.0, 22.0);
-            let save = ui.add(egui::Button::new(RichText::new("Save").color(t.text)).fill(t.accent).min_size(size));
+            let save = ui.add(egui::Button::new(RichText::new(crate::tl!("Save")).color(t.text)).fill(t.accent).min_size(size));
             if save.clicked() {
                 choice = Some(Choice::Save);
             }
-            if ui.add(egui::Button::new("Cancel").min_size(size)).clicked() {
+            if ui.add(egui::Button::new(crate::tl!("Cancel")).min_size(size)).clicked() {
                 choice = Some(Choice::Cancel);
             }
-            if ui.add(egui::Button::new("Don't Save").min_size(size)).clicked() {
+            if ui.add(egui::Button::new(crate::tl!("Don't Save")).min_size(size)).clicked() {
                 choice = Some(Choice::Discard);
             }
         });
@@ -428,16 +428,78 @@ mod tests {
         assert_eq!(app.close_prompt(), Some("A"));
     }
 
-    /// Programmatic quit (control channel `app.quit`) never asks.
+    /// Programmatic quit (control channel `app.quit`) never opens the "Save changes?" prompt; with
+    /// the agent confirmation off it quits at once.
     #[test]
     fn programmatic_quit_skips_the_prompt() {
         let ctx = egui::Context::default();
         let mut app = app_with(&["A"]);
         dirty(&mut app, 0);
+        app.session.agent.confirm = false;
         let (req, _rx) = crate::control::ControlRequest::new("app.quit", json!({}));
         let _ = crate::control::handle(&mut app, &ctx, &req);
         assert!(!close_frame(&mut app, &ctx));
         assert!(app.closing.is_none());
+    }
+
+    fn control(app: &mut CadApp, ctx: &egui::Context, method: &str, params: serde_json::Value) -> String {
+        let (req, _rx) = crate::control::ControlRequest::new(method, params);
+        format!("{:?}", crate::control::handle(app, ctx, &req))
+    }
+
+    /// An agent's `app.quit` with unsaved changes waits for the user (Allow quits, Deny keeps).
+    #[test]
+    fn an_agents_quit_with_unsaved_changes_waits_for_the_user() {
+        let ctx = egui::Context::default();
+        let mut app = app_with(&["A"]);
+        dirty(&mut app, 0);
+        let r = control(&mut app, &ctx, "app.quit", json!({}));
+        assert!(r.contains("Waiting for the user"), "{r}");
+        assert!(!app.quit_requested && !app.quit_confirmed, "not quitting");
+        assert!(app.session.agent.pending.is_some(), "the question is pending");
+        assert!(app.session.docs[0].is_dirty());
+        // Deny keeps everything.
+        crate::agentdlg::answer_pending(&mut app, false);
+        assert!(!app.quit_requested && app.session.docs[0].is_dirty());
+        // Asked again, Allow quits.
+        control(&mut app, &ctx, "app.quit", json!({}));
+        assert!(app.session.agent.pending.is_some());
+        crate::agentdlg::answer_pending(&mut app, true);
+        assert!(app.quit_requested && app.quit_confirmed);
+    }
+
+    /// With nothing unsaved an agent's quit goes through (nothing to lose).
+    #[test]
+    fn an_agents_quit_with_nothing_unsaved_goes_through() {
+        let ctx = egui::Context::default();
+        let mut app = app_with(&["A"]);
+        control(&mut app, &ctx, "app.quit", json!({}));
+        assert!(app.quit_requested && app.session.agent.pending.is_none());
+    }
+
+    /// An agent can't answer the user's "Save changes?" with Discard; Allow does it, Deny keeps it.
+    #[test]
+    fn an_agent_cannot_discard_through_the_save_changes_prompt() {
+        let ctx = egui::Context::default();
+        let mut app = app_with(&["A"]);
+        dirty(&mut app, 0);
+        assert!(app.request_quit());
+        let r = control(&mut app, &ctx, "app.answerClose", json!({"choice": "discard"}));
+        assert!(r.contains("Waiting for the user"), "{r}");
+        assert_eq!(titles(&app), ["A"], "nothing discarded");
+        assert_eq!(app.close_prompt(), Some("A"), "the user's question is still open");
+        assert!(app.session.agent.pending.is_some());
+        crate::agentdlg::answer_pending(&mut app, false);
+        assert_eq!(titles(&app), ["A"]);
+        control(&mut app, &ctx, "app.answerClose", json!({"choice": "discard"}));
+        crate::agentdlg::answer_pending(&mut app, true);
+        assert!(app.quit_requested, "discarding the last unsaved drawing finished the quit");
+        // Cancel and Save are not discards: they need no question.
+        let mut app = app_with(&["A"]);
+        dirty(&mut app, 0);
+        assert!(app.request_quit());
+        let r = control(&mut app, &ctx, "app.answerClose", json!({"choice": "cancel"}));
+        assert!(!r.contains("Waiting"), "{r}");
     }
 
     #[test]

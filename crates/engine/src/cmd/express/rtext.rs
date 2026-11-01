@@ -181,7 +181,7 @@ fn function(s: &Session, name: &str, a: &[String], depth: usize) -> Option<Strin
             let prec = arg(2).and_then(int).unwrap_or(4).clamp(0, 16) as usize;
             match mode {
                 1 => format!("{v:.prec$E}"),
-                _ => format!("{v:.prec$}"),
+                _ => cadaddy_doc::numfmt::fixed(v, prec),
             }
         }
         "getvar" => getvar(s, arg(0)?.trim())?,

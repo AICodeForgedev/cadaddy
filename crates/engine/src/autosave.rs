@@ -262,13 +262,19 @@ impl Autosaver {
             // The journal (files on disk with the .cdy saver): written at once, appended to after
             // that, in full again every SAVETIME minutes.
             let journal = minutes > 0 && !dir.trim().is_empty() && !dir.contains("://") && crate::cmd::file::cdy_hooks().is_some();
+            // In the Block Editor: the drawing with the editor's unsaved changes in the block. When
+            // they can't be put there, nothing is written and nothing is marked as covered, so the
+            // next pass tries again instead of keeping the host without them.
+            let Ok(doc) = st.recovery_drawing() else {
+                continue;
+            };
             if journal && let Some(path) = t.file.clone() {
                 let due_full = t.full_at.is_none_or(|f| now - f >= f64::from(minutes) * 60.0);
                 if let (Some((held, from)), false) = (&t.held, due_full) {
                     t.written = Some(Arc::downgrade(&st.doc));
                     t.host = Some(Arc::downgrade(st.drawing()));
                     t.since = None;
-                    jobs.push(Job::Append { uid: st.uid, path, doc: st.recovery_drawing(), held: held.clone(), from: *from });
+                    jobs.push(Job::Append { uid: st.uid, path, doc: doc.clone(), held: held.clone(), from: *from });
                     continue;
                 }
             }
@@ -285,8 +291,7 @@ impl Autosaver {
             t.written = Some(Arc::downgrade(&st.doc));
             t.host = Some(Arc::downgrade(st.drawing()));
             t.since = None;
-            // In the Block Editor: the drawing with the editor's unsaved changes in the block.
-            jobs.push(Job::Write { uid: st.uid, path, doc: st.recovery_drawing() });
+            jobs.push(Job::Write { uid: st.uid, path, doc });
         }
         jobs
     }
@@ -447,6 +452,18 @@ mod native {
     /// What a write leaves: for the journal, what the .cdy file holds and its length.
     pub(super) type Held = Option<(crate::cmd::file::CdyState, u64)>;
 
+    /// Create the autosave folder `dir` and any missing parents. On Unix the folders made here are
+    /// owner-only (`0o700`): autosave files are unsaved drawings, and with the default mode other
+    /// accounts on the machine could read them. A folder that already exists keeps its mode, since
+    /// SAVEFILEPATH can be any folder the user picked.
+    fn create_folder(dir: &Path) -> std::io::Result<()> {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(dir)
+    }
+
     fn write_file(write: WriteHook, doc: &Drawing, path: &str) -> std::result::Result<Held, String> {
         // Through the .cdy saver when there is one: its state is the journal's start.
         let (bytes, held) = match crate::cmd::file::cdy_hooks().map(|h| (h.save)(doc, None)) {
@@ -457,11 +474,9 @@ mod native {
             _ => (encode(write, doc)?.0, None),
         };
         if let Some(dir) = Path::new(path).parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            create_folder(dir).map_err(|e| e.to_string())?;
         }
-        let tmp = format!("{path}.tmp");
-        crate::writefile::write(&tmp, bytes).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+        crate::writefile::write_atomic(path, bytes).map_err(|e| e.to_string())?;
         Ok(held)
     }
 
@@ -597,8 +612,7 @@ mod native {
             }
             self.last_beat = Some(now);
             let dir = Path::new(dir);
-            let r =
-                std::fs::create_dir_all(dir).and_then(|()| crate::writefile::write(lock_path(dir, &self.instance), std::process::id().to_string()));
+            let r = create_folder(dir).and_then(|()| crate::writefile::write(lock_path(dir, &self.instance), std::process::id().to_string()));
             if let Err(e) = r {
                 log::warn!("autosave: lock file in {}: {e}", dir.display());
             }

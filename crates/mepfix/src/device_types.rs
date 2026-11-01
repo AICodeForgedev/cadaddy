@@ -5,7 +5,7 @@
 
 use crate::sheet_facts::{TextItem, is_type_tag};
 use cadaddy_geom::Vec2;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Most legend/schedule headings read on one sheet.
 const MAX_TABLES: usize = 40;
@@ -71,6 +71,28 @@ pub fn is_device_table_heading(t: &str) -> bool {
         return true;
     }
     u.contains("SCHEDULE") && ["FIXTURE", "LUMINAIRE", "LIGHTING", "LIGHT", "DEVICE", "EQUIPMENT", "FAN"].iter().any(|w| u.contains(w))
+}
+
+/// Most designations kept from one set.
+const MAX_DESIGNATIONS: usize = 200;
+
+/// A legend's designations: its `KEY=MEANING` lines (`3=3-WAY`, `D=DIMMER- REFER TO LIGHTING
+/// CONTROLS SCHEDULE`, `OS2=WALL MOUNTED OCCUPANCY SENSOR WSXA-PDT-D`), the meaning by its key
+/// (one to three capitals or digits). A key's first line wins.
+pub fn designations(texts: &[TextItem]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for t in texts {
+        if out.len() >= MAX_DESIGNATIONS {
+            break;
+        }
+        let Some((k, v)) = t.value.split_once('=') else { continue };
+        let (k, v) = (k.trim(), v.trim());
+        let key = (1..=3).contains(&k.len()) && k.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+        if key && v.len() <= 80 && v.chars().filter(char::is_ascii_alphabetic).count() >= 3 {
+            out.entry(k.to_string()).or_insert_with(|| v.to_string());
+        }
+    }
+    out
 }
 
 /// The legends and device schedules among a sheet's texts: each table's type tags (the first
@@ -169,6 +191,23 @@ mod tests {
 
     fn t(value: &str, x: f64, y: f64, h: f64) -> TextItem {
         TextItem { value: value.into(), at: Vec2::new(x, y), height: h, rotation: 0.0 }
+    }
+
+    #[test]
+    fn a_legends_designations_are_its_key_equals_meaning_lines() {
+        let texts = [
+            t("2=2 POLE", 0.0, 10.0, 1.0),
+            t("3=3-WAY", 0.0, 9.0, 1.0),
+            t("OS2=WALL MOUNTED OCCUPANCY SENSOR WSXA-PDT-D", 0.0, 8.0, 1.0),
+            t("3=SOMETHING ELSE", 0.0, 7.0, 1.0),
+            t("1/4\" = 1'-0\"", 0.0, 6.0, 1.0),
+            t("+60\" = MOUNT AT 60\"AFF", 0.0, 5.0, 1.0),
+            t("X=1", 0.0, 4.0, 1.0),
+        ];
+        let d = designations(&texts);
+        assert_eq!(d.len(), 3, "{d:?}");
+        assert_eq!(d["3"], "3-WAY", "a key's first line wins");
+        assert_eq!(d["OS2"], "WALL MOUNTED OCCUPANCY SENSOR WSXA-PDT-D");
     }
 
     /// A made-up lighting fixture schedule and symbol legend in a sheet's right margin, a note

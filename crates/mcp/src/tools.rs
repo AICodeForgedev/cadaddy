@@ -22,8 +22,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "inputSchema": {"type": "object", "properties": {"filter": {"type": "string"}}}}),
         json!({"name": "inspect_drawing", "description": "Summary of the active drawing: entity counts, extents, layers, styles, blocks, layouts, selection, undo history and (optionally) entities with handles and geometry.",
             "inputSchema": {"type": "object", "properties": {"entities": {"type": "boolean"}, "limit": {"type": "integer"}}}}),
-        json!({"name": "query_entities", "description": "Entities filtered by type (Line, Circle, Polyline…), layer and/or a window [[x0,y0],[x1,y1]] (objects whose geometry is inside or crosses it; crossing:false = entirely inside). Returns count (all matches), returned (this page) and entities; page with offset and limit (default 500).",
-            "inputSchema": {"type": "object", "properties": {"type": {"type": "string"}, "layer": {"type": "string"},
+        json!({"name": "query_entities", "description": "Entities filtered by type (Line, Circle, Polyline…), layer, current selection (selected:true; active space only) and/or a window [[x0,y0],[x1,y1]] (objects whose geometry is inside or crosses it; crossing:false = entirely inside). Returns count (all matches), returned (this page) and entities; page with offset and limit (default 500).",
+            "inputSchema": {"type": "object", "properties": {"type": {"type": "string"}, "layer": {"type": "string"}, "selected": {"type": "boolean"},
                 "window": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}, "minItems": 2, "maxItems": 2},
                 "crossing": {"type": "boolean"}, "limit": {"type": "integer", "minimum": 0}, "offset": {"type": "integer", "minimum": 0}}}}),
         json!({"name": "render", "description": "Render the active drawing to a PNG and return it as an image: fitted to the extents by default, or just the area `window` [[x0,y0],[x1,y1]] (drawing units), e.g. one sheet or one room of a large drawing. With a window and no size the image is 1600 px wide with the window's shape.",
@@ -92,7 +92,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         json!({"name": "new_drawing", "description": "Create a new drawing (imperial by default, or metric).",
             "inputSchema": {"type": "object", "properties": {"metric": {"type": "boolean"}}}}),
         json!({"name": "open", "description": "Open a drawing (CADaddy .cdy, DWG, DXF, DWT; an SVG or PDF is converted) as a new tab that becomes current. Returns its index and any warnings (what reading left out, styles reset). Opening a file that is already open switches to it.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}),
-        json!({"name": "save", "description": "Save the drawing, its format by extension: .cdy (CADaddy's own, keeps everything), .dwg or .dxf (the result's `notKept` and `notKeptDetail` — feature, dropped|changed, count, handles — list what those wouldn't keep, the first time; the checkexchange command lists it without saving). A .svg, .png or .pdf path exports instead: the drawing keeps its name and unsaved changes.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}),
+        json!({"name": "save", "description": "Save the drawing, its format by extension: .cdy (CADaddy's own, keeps everything), .dwg or .dxf (the result's `notKept` and `notKeptDetail` — feature, dropped|changed, count, handles — list what those wouldn't keep, the first time for each format and version; the reply carries them, never a pending notice; the checkexchange command lists it without saving). A .svg, .png or .pdf path exports instead: the drawing keeps its name and unsaved changes. When the file changed on disk since it was opened or last saved the save is refused; `force: true` overwrites it anyway.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "force": {"type": "boolean", "description": "overwrite a file that changed on disk since the drawing was opened or last saved, or replace another existing file (a path that is not this drawing's own file is refused without it)"}}}}),
         json!({"name": "cancel", "description": "Press Escape: cancel the running command (or clear the selection).", "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "get_prompt", "description": "What CADaddy is asking for right now: the running command, the prompt text and bare message, its keyword options (type the capital letters to choose one), the default Enter takes, which inputs it accepts (point, number, text, selection), whether a drawing is still opening (`busy`), whether a \"Save changes?\" question is open (`closePrompt`), and the last command-line lines. Use it to step through a command with command_line.",
             "inputSchema": {"type": "object", "properties": {}}}),
@@ -105,8 +105,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "inputSchema": {"type": "object", "properties": {"index": {"type": "integer", "minimum": 0}, "path": {"type": "string"}, "title": {"type": "string"}, "save": {"type": "boolean"}, "saveAs": {"type": "string"}, "discard": {"type": "boolean"}}}}),
         json!({"name": "close_all", "description": "Close every drawing. Refused (closing nothing) while one has unsaved changes, unless save: true (each saved to its own file; refused if one has none yet) or discard: true.",
             "inputSchema": {"type": "object", "properties": {"save": {"type": "boolean"}, "discard": {"type": "boolean"}}}}),
-        json!({"name": "undo", "description": "Undo the last `count` commands (default 1).", "inputSchema": {"type": "object", "properties": {"count": {"type": "integer", "minimum": 1}}}}),
-        json!({"name": "redo", "description": "Redo `count` undone commands (default 1).", "inputSchema": {"type": "object", "properties": {"count": {"type": "integer", "minimum": 1}}}}),
+        json!({"name": "undo", "description": "Undo the last `count` commands (default 1), or with `mode` set a mark (mark), open/close a group (begin/end), go back to the mark (back), turn auto on/off (auto) or set UNDO Control (control). An unknown argument is refused, not ignored.", "inputSchema": {"type": "object", "properties": {"count": {"type": "integer", "minimum": 1, "maximum": 1000}, "mode": {"type": "string", "enum": ["mark", "begin", "end", "back", "auto", "control"]}, "confirm": {"type": "boolean", "description": "mode back with no mark: undo everything (default true)"}, "on": {"type": "boolean", "description": "mode auto, or control combine/layer"}, "control": {"type": "string", "enum": ["all", "none", "one", "combine", "layer"]}}}}),
+        json!({"name": "redo", "description": "Redo `count` undone commands (default 1), or every undone command with all: true. An unknown argument is refused, not ignored.", "inputSchema": {"type": "object", "properties": {"count": {"type": "integer", "minimum": 1, "maximum": 1000}, "all": {"type": "boolean"}}}}),
         json!({"name": "select", "description": "Set the selection (commands like MOVE, ERASE and PROPERTIES then act on it): by handles, a window [[x0,y0],[x1,y1]] (crossing: true selects what it touches), all: true, or clear: true; add: true adds to the current selection. Returns the selected handles.",
             "inputSchema": {"type": "object", "properties": {"handles": {"type": "array", "items": {"type": "string"}},
                 "window": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}, "minItems": 2, "maxItems": 2},
@@ -118,14 +118,15 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "inputSchema": {"type": "object", "properties": {"code": {"type": "string"}, "inputs": {"type": "array"}}, "required": ["code"]}}),
         json!({"name": "plot", "description": "Plot a layout (or Model) to a PDF file with its page setup, as PLOT does, without the dialog.",
             "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "layout": {"type": "string"}}, "required": ["path"]}}),
-        json!({"name": "project", "description": "Manage projects (groups of related drawings sharing rules, types and standards). Actions: \"create\" {path, name?, metric?}, \"open\" {path}, \"close\", \"info\", \"list\" {discipline?, status?, kind?}, \"activate\" {name}, \"shelve\" {save?}, \"add\" {path, discipline?, kind?, title?}, \"remove\" {name}, \"disk\", \"shelve_project\", \"restore_project\" {path}, \"import_manifest\" {path}, \"validate_manifest\" {path}, \"standards.list\" {domain?}, \"standards.set\" {domain, key, value, source?}, \"standards.remove\" {domain, key}, \"standards.import\" {from, domain?, keys?}.",
+        json!({"name": "project", "description": "Manage projects (groups of related drawings sharing rules, types and standards). Actions: \"create\" {path, name?, metric?, template?}, \"open\" {path}, \"close\", \"info\", \"list\" {status?} (the PROJECTS on this machine: name, path, active/shelved, last opened, disk size, open review items, validation score), \"drawings\" {discipline?, status?, kind?} (the open project's drawings), \"activate\" {name} (opens the drawing into the session), \"shelve\" {save?} (saves and closes the drawing), \"add\" {path, discipline?, kind?, title?}, \"remove\" {name}, \"disk\", \"shelve_project\" {path?} (packs the project into one archive), \"restore_project\" {path} (unpacks it exactly), \"duplicate\" {to, path?, name?}, \"delete\" {path?, confirm: true}, \"company.list\" {domain?}, \"company.set\" {domain, key, value}, \"company.remove\" {domain, key}, \"import_manifest\" {path}, \"validate_manifest\" {path}, \"standards.list\" {domain?}, \"standards.set\" {domain, key, value, source?}, \"standards.remove\" {domain, key}, \"standards.import\" {from, domain?, keys?}.",
             "inputSchema": {"type": "object", "properties": {
                 "action": {"type": "string"}, "path": {"type": "string"}, "name": {"type": "string"},
                 "metric": {"type": "boolean"}, "discipline": {"type": "string"}, "kind": {"type": "string"},
                 "status": {"type": "string"}, "title": {"type": "string"}, "save": {"type": "boolean"},
                 "domain": {"type": "string"}, "key": {"type": "string"}, "value": {},
                 "source": {"type": "string"}, "from": {"type": "string"},
-                "keys": {"type": "array", "items": {"type": "string"}}
+                "keys": {"type": "array", "items": {"type": "string"}},
+                "to": {"type": "string"}, "template": {"type": "string"}, "confirm": {"type": "boolean"}
             }, "required": ["action"]}}),
         json!({"name": "bim_job", "description": "Start here for BIM work on a project (you need no memory of earlier sessions: the project keeps it). One call per step; answers are short, paged (cursor) and capped; repeating a call is safe. Actions, each with an example of params:\n- briefing {} — one page: revision, what is built per level, open review items, recent changes, handoff notes, the next call.\n- note {text: \"Level 2 ducts reviewed to grid D; mech room next\"} — leave a handoff note in the project.\n- import {path: \"/jobs/hotel/prints\"} — open a folder of prints as the project and classify its sheets.\n- links {pdfs: \"/jobs/hotel/prints\"} — the sheet map: callouts and references (SEE SHEET, 3/E-501) resolved, enlarged plans placed on their overall plans and counted once, match lines, unresolved references.\n- build {level: \"LEVEL 2\"} — build the model from the building spec (the same spec gives the same model; the first build drafts the spec from the prints).\n- resume {path: \"/jobs/hotel/prints\"} — open the job kept for those prints (each step is kept in the folder's .cadaddy folder; a new session resumes the last job by itself).\n- review_next {kind: \"mep_guess\"} — the most important open item with candidates and the documents to check.\n- review_list {status: \"open\", cursor: \"c10\"} — the queue, 10 at a time.\n- resolve {id: \"RV-M1a2b3c4d\", answer: {size_in: [14, 10], bottom_ft: 10.5}, citation: {kind: \"drawing\", document: \"M-101\", ref: \"tag at C-4\"}} — answer an item; anything the documents speak to needs a citation (drawing, schedule, spec, submittal, rfi). A concern from code knowledge alone: {id, concern: \"...\"} raises it for review instead of changing the model.\n- defer {id, reason: \"field to verify the beam depth\"} — leave it for a field decision.\n- rfi {id, question: \"Confirm duct size at C-4\"} — put it on the RFI list.\n- batch {kind: \"mep_guess\", system: \"M-DUCT-SUPP\", answer: {...}, citation: {...}} — one answer for many identical items: returns a preview and a token; call again with confirm: token.\n- log {author: \"agent\", approved: false} — what agents decided, for a person to approve.\n- takeoff {} — quantities. rfis {} — the RFI list (20 most severe; rfis {path: \"/jobs/hotel/rfis.csv\"} exports all). export {path: \"/jobs/hotel/model.ifc\"} — the model as IFC.\nLow-level commands (execute) stay available but aren't needed for these.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["briefing", "note", "import", "links", "resume", "build", "review_next", "review_list", "resolve", "defer", "rfi", "batch", "log", "takeoff", "rfis", "export"]}, "params": {"type": "object"}}, "required": ["action"]}}),
@@ -234,7 +235,7 @@ fn bim_job_next(call: &str) -> Value {
         action("build", json!({}))
     } else if call.starts_with("review.next") {
         action("review_next", json!({}))
-    } else if call.starts_with("takeoff") {
+    } else if call.starts_with("bim.takeoff") || call.starts_with("takeoff") {
         action("takeoff", json!({}))
     } else if call.starts_with("printset.open") {
         action("import", json!({"path": "<the folder of prints>"}))
@@ -279,7 +280,8 @@ fn bim_job_action(b: &mut dyn Backend, action: Option<&str>, params: Value) -> R
         Some("rfi") => "review.rfi_draft",
         Some("batch") => "review.batch",
         Some("log") => "review.log",
-        Some("takeoff") => "takeoff",
+        // The model's quantities (by level and trade), not the 2D linework lengths.
+        Some("takeoff") => "bim.takeoff",
         Some("export") => "export",
         Some("rfis") => {
             // The RFI list: exported in full with a path, else a compact page.
@@ -428,6 +430,59 @@ fn fits(v: &Value, schema: &Value) -> bool {
         && (schema["items"].is_null() || v.as_array().is_none_or(|a| a.iter().all(|i| fits(i, &schema["items"]))))
 }
 
+/// A number as a person writes it (`1`, not `1.0`).
+fn plain_number(f: f64) -> String {
+    if f.fract() == 0.0 && f.abs() < 1e15 { format!("{}", f as i64) } else { format!("{f}") }
+}
+
+/// What a property's schema asks for, in words ("a whole number ≥ 1", "a list of 2 numbers").
+fn describe(schema: &Value) -> String {
+    let one = match schema["type"].as_str() {
+        Some("string") => "text",
+        Some("integer") => "a whole number",
+        Some("number") => "a number",
+        Some("boolean") => "true or false",
+        Some("array") => "a list",
+        Some("object") => "an object",
+        _ => "a valid value",
+    };
+    if schema["type"] == "array" {
+        let items = &schema["items"];
+        let of = if items.is_null() {
+            "items".to_string()
+        } else if items["type"] == "array" && items["minItems"].is_u64() && items["minItems"] == items["maxItems"] {
+            format!("lists of {} {}", items["minItems"], describe_plural(&items["items"]))
+        } else {
+            describe_plural(items).to_string()
+        };
+        return match (schema["minItems"].as_u64(), schema["maxItems"].as_u64()) {
+            (Some(a), Some(b)) if a == b => format!("a list of {a} {of}"),
+            (Some(a), Some(b)) => format!("a list of {a} to {b} {of}"),
+            (Some(a), None) => format!("a list of at least {a} {of}"),
+            (None, Some(b)) => format!("a list of at most {b} {of}"),
+            (None, None) if schema["items"].is_null() => one.to_string(),
+            (None, None) => format!("a list of {of}"),
+        };
+    }
+    match schema["minimum"].as_f64() {
+        Some(m) => format!("{one} ≥ {}", plain_number(m)),
+        None => one.to_string(),
+    }
+}
+
+/// The plural of what a schema asks for ("numbers").
+fn describe_plural(schema: &Value) -> &'static str {
+    match schema["type"].as_str() {
+        Some("string") => "text values",
+        Some("integer") => "whole numbers",
+        Some("number") => "numbers",
+        Some("boolean") => "true/false values",
+        Some("array") => "lists",
+        Some("object") => "objects",
+        _ => "items",
+    }
+}
+
 /// Arguments checked against the tool's input schema: an object, required properties present and
 /// each given property fitting its schema (`null` counts as not given). `Err` is the
 /// invalid-params message.
@@ -449,7 +504,7 @@ fn check_args(name: &str, args: &Value) -> Result<Value, String> {
         if let Some(v) = a.get(key).filter(|v| !v.is_null())
             && !fits(v, prop)
         {
-            return Err(format!("`{key}` of `{name}` must match {prop}"));
+            return Err(format!("`{key}` of `{name}` must be {}", describe(prop)));
         }
     }
     Ok(a)
@@ -466,6 +521,67 @@ fn command_matches(c: &Value, f: &str) -> bool {
 /// schema), answered with JSON-RPC invalid params; a failing tool is an `isError` result.
 pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value, String> {
     let a = check_args(name, args)?;
+    let unknown = unknown_args(name, &a);
+    // A tool whose default action changes the drawing never runs with an argument it doesn't have.
+    if STRICT_ARGS.contains(&name)
+        && let Some(first) = unknown.first()
+    {
+        return Err(first.replace("(it was ignored)", "(nothing was done)"));
+    }
+    let mut out = run_tool(b, name, a)?;
+    if !unknown.is_empty() {
+        add_warnings(&mut out, &unknown);
+    }
+    Ok(out)
+}
+
+/// Tools whose default action changes the drawing or the session: an unknown argument is an error.
+const STRICT_ARGS: &[&str] = &["undo", "redo", "close_drawing", "close_all", "switch_drawing", "cancel", "quit_app"];
+
+/// The names in `args` that tool `name`'s input schema doesn't list, as warnings.
+fn unknown_args(name: &str, args: &Value) -> Vec<String> {
+    let defs = tool_definitions(true);
+    let Some(schema) = defs["tools"].as_array().and_then(|t| t.iter().find(|t| t["name"] == name)).map(|t| &t["inputSchema"]) else {
+        return Vec::new();
+    };
+    if schema["additionalProperties"].as_bool() == Some(true) {
+        return Vec::new();
+    }
+    let known = schema["properties"].as_object();
+    args.as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(k, v)| !v.is_null() && !known.is_some_and(|p| p.contains_key(*k)))
+        .map(|(k, _)| format!("`{}` is not a parameter of {name} (it was ignored); see tools/list for its parameters", cadaddy_engine::clip_input(k)))
+        .collect()
+}
+
+/// Add `warnings` to a tool result: into its JSON text when that is an object, else as a line of
+/// text after it.
+fn add_warnings(out: &mut Value, warnings: &[String]) {
+    let Some(content) = out["content"].as_array_mut() else { return };
+    // A result that starts with something else (render answers with an image) gets the warnings as a text line after it.
+    let Some(item) = content.first_mut().filter(|c| c["type"] == "text") else {
+        content.push(json!({"type": "text", "text": format!("warnings: {}", warnings.join("; "))}));
+        return;
+    };
+    match item["text"].as_str().and_then(|t| serde_json::from_str::<Value>(t).ok()) {
+        Some(Value::Object(mut o)) => {
+            let w = o.entry("warnings").or_insert_with(|| json!([]));
+            if let Some(a) = w.as_array_mut() {
+                a.extend(warnings.iter().map(|m| json!(m)));
+            }
+            item["text"] = json!(serde_json::to_string_pretty(&Value::Object(o)).unwrap_or_default());
+        }
+        _ => {
+            if let Some(c) = out["content"].as_array_mut() {
+                c.push(json!({"type": "text", "text": format!("warnings: {}", warnings.join("; "))}));
+            }
+        }
+    }
+}
+
+fn run_tool(b: &mut dyn Backend, name: &str, a: Value) -> Result<Value, String> {
     let r = match name {
         "command_line" => b.call("cmdline.input", a),
         "script" => b.call("cmdline.script", a),
@@ -633,7 +749,17 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
         "switch_drawing" => exec(b, "document.switch", a),
         "close_drawing" => exec(b, "document.close", a),
         "close_all" => exec(b, "document.closeall", a),
-        "undo" => exec(b, "undo", json!({"count": a.get("count").cloned().unwrap_or(json!(1))})),
+        "undo" => {
+            // The engine's own options pass through; a bare call undoes `count` (default 1).
+            let mut params = a.clone();
+            if a.get("mode").is_none_or(Value::is_null)
+                && let Some(o) = params.as_object_mut()
+            {
+                o.entry("count").or_insert(json!(1));
+            }
+            exec(b, "undo", params)
+        }
+        "redo" if a.get("all") == Some(&json!(true)) => exec(b, "mredo", json!({"all": true})),
         "redo" => exec(b, "redo", json!({"count": a.get("count").cloned().unwrap_or(json!(1))})),
         "select" => exec(b, "select", a).and_then(|mut r| {
             // The reply names what is selected, not only how many.
@@ -783,6 +909,12 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Some("close") => "project.close",
                 Some("info") => "project.info",
                 Some("list") => "project.list",
+                Some("drawings") => "project.drawings",
+                Some("duplicate") => "project.duplicate",
+                Some("delete") => "project.delete",
+                Some("company.list") => "project.company.list",
+                Some("company.set") => "project.company.set",
+                Some("company.remove") => "project.company.remove",
                 Some("activate") => "project.activate",
                 Some("shelve") => "project.shelve",
                 Some("add") => "project.add",
@@ -796,7 +928,12 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
                 Some("standards.set") => "project.standards.set",
                 Some("standards.remove") => "project.standards.remove",
                 Some("standards.import") => "project.standards.import",
-                _ => "project.info",
+                other => {
+                    return Err(format!(
+                        "project: unknown action {}; use create, open, close, info, list, drawings, activate, shelve, add, remove, disk, shelve_project, restore_project, duplicate, delete, company.list, company.set, company.remove, import_manifest, validate_manifest, standards.list, standards.set, standards.remove or standards.import",
+                        other.map_or_else(|| "(none)".to_string(), |a| format!("`{a}`"))
+                    ));
+                }
             };
             let mut params = a.clone();
             if let Some(o) = params.as_object_mut() {

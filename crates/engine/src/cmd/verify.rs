@@ -17,7 +17,7 @@
 //! Wall overlap is the area common to two convex footprints, clipped after I. E. Sutherland and
 //! G. W. Hodgman, "Reentrant Polygon Clipping", Communications of the ACM 17(1), 1974.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Mesh, Space};
@@ -31,7 +31,8 @@ use super::wallgen::made_as;
 use super::*;
 use crate::{Result, Session};
 
-/// Findings listed at most, and handles per finding.
+/// Findings kept at most (of each kind: a filter by kind sees all of its own up to this), and
+/// handles per finding.
 const MAX_FINDINGS: usize = 2_000;
 const MAX_HANDLES: usize = 50;
 /// Walls compared for overlaps, at most (hostile drawings).
@@ -42,12 +43,13 @@ const MAX_PX: u32 = 4096;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("model.issues", "Model Issues", run_issues)
-            .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}"),
+            .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}")
+            .files(),
         CommandSpec::new("model.render", "Render Model View", run_render)
-            .params("{path?: PNG file (else the PNG comes back as base64), width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
             .noundo(),
         CommandSpec::new("model.overlay", "Model Overlay", run_overlay)
-            .params("{path?: PNG file (else base64), width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else base64), output?: same as path, width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
             .noundo(),
         CommandSpec::new("model.counts", "Model Counts", run_counts)
             .params("{} → {levels: [{level, plan: {doors, windows, fixtures}, model: {doors, windows, fixtures}, match}], match}")
@@ -362,7 +364,8 @@ fn rooms(plan: &Session, sp: &BuildingSpec) -> Result<Vec<Room>> {
 
 // ---------------- model.issues ----------------
 
-struct Finding {
+#[derive(Clone)]
+pub(crate) struct Finding {
     kind: &'static str,
     message: String,
     level: Option<String>,
@@ -387,7 +390,7 @@ impl Finding {
     }
 }
 
-fn issues(s: &Session) -> Result<Vec<Finding>> {
+fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> {
     let (sp, _) = current(s, "model.issues")?;
     let upf = units(&sp);
     let plan = plan_session(s)?;
@@ -395,12 +398,8 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
     let d = s.doc()?;
     let ents = plan_objects(pd);
     let made = built(d);
-    let mut out: Vec<Finding> = Vec::new();
-    let mut push = |f: Finding| {
-        if out.len() < MAX_FINDINGS {
-            out.push(f);
-        }
-    };
+    let mut kept = Kept::default();
+    let mut push = |f: Finding| kept.push(f);
     if made.is_empty() {
         push(Finding {
             kind: "not_built",
@@ -614,7 +613,46 @@ fn issues(s: &Session) -> Result<Vec<Finding>> {
             handles: hs,
         });
     }
-    Ok(out)
+    Ok((kept.out, kept.total))
+}
+
+/// Findings kept: every one counted by its kind, each kind kept up to [`MAX_FINDINGS`] (a kind
+/// found past the cap doesn't crowd out the others).
+#[derive(Default)]
+struct Kept {
+    out: Vec<Finding>,
+    total: BTreeMap<&'static str, usize>,
+}
+
+impl Kept {
+    fn push(&mut self, f: Finding) {
+        let n = self.total.entry(f.kind).or_insert(0);
+        *n += 1;
+        if *n <= MAX_FINDINGS {
+            self.out.push(f);
+        }
+    }
+}
+
+/// `model.issues`' findings for one revision of one drawing (the session keeps the last).
+pub(crate) struct IssuesCache {
+    uid: u64,
+    revision: u64,
+    found: Vec<Finding>,
+    /// Every finding by its kind, also those past [`MAX_FINDINGS`].
+    total: BTreeMap<&'static str, usize>,
+}
+
+/// The findings of the drawing as it is now: from the session's cache when it was checked at
+/// this revision, else found and kept.
+fn issues_now(s: &mut Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> {
+    let (uid, revision) = s.state().map(|st| (st.uid, st.revision))?;
+    if let Some(c) = s.issues_cache.as_ref().filter(|c| c.uid == uid && c.revision == revision) {
+        return Ok((c.found.clone(), c.total.clone()));
+    }
+    let (found, total) = issues(s)?;
+    s.issues_cache = Some(Box::new(IssuesCache { uid, revision, found: found.clone(), total: total.clone() }));
+    Ok((found, total))
 }
 
 /// How far a plan point is outside a box (0 inside).
@@ -644,18 +682,21 @@ fn fmt_pt(p: Vec2) -> String {
 
 fn run_issues(s: &mut Session, p: &Value) -> Result<Value> {
     let kind = str_param(p, "kind");
-    let all = issues(s)?;
-    let mut by: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    for f in &all {
-        *by.entry(f.kind).or_insert(0) += 1;
-    }
+    // Counted over every finding (kept or past the cap), filtered by kind before any cap.
+    let (all, by) = issues_now(s)?;
     // A page at a time: a big model's issues would flood an agent's context.
     let limit =
         p.get("limit").and_then(Value::as_u64).map_or(ISSUES_PAGE, |n| usize::try_from(n).unwrap_or(MAX_ISSUES_PAGE).clamp(1, MAX_ISSUES_PAGE));
     let from = p.get("cursor").and_then(Value::as_u64).map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
-    let matching: Vec<&Finding> = all.iter().filter(|f| kind.is_none_or(|k| k.eq_ignore_ascii_case(f.kind))).collect();
+    let of_kind = |k: &str| kind.is_none_or(|want| want.eq_ignore_ascii_case(k));
+    let matching: Vec<&Finding> = all.iter().filter(|f| of_kind(f.kind)).collect();
+    let found: usize = by.iter().filter(|(k, _)| of_kind(k)).map(|(_, n)| *n).sum();
     let list: Vec<Value> = matching.iter().skip(from).take(limit).map(|f| f.json()).collect();
-    let mut out = json!({ "total": matching.len(), "issues": list, "byKind": by });
+    let mut out = json!({ "total": found, "issues": list, "byKind": by });
+    // Past the cap: how many there are, and that the list stops.
+    if found > matching.len() {
+        out["truncated"] = json!({"found": found, "listed": matching.len(), "note": format!("only the first {MAX_FINDINGS} issues of each kind are kept; fix those, then check again")});
+    }
     if from.saturating_add(limit) < matching.len() {
         out["next"] = json!(from + limit);
     }
@@ -701,14 +742,23 @@ const MAX_ISSUES_PAGE: usize = 1_000;
 
 // ---------------- images ----------------
 
-fn size(p: &Value, w: u32, h: u32) -> (u32, u32) {
-    let get = |k: &str, d: u32| p.get(k).and_then(Value::as_u64).map_or(d, |v| u32::try_from(v).unwrap_or(MAX_PX)).clamp(16, MAX_PX);
-    (get("width", w), get("height", h))
+fn size(cmd: &str, p: &Value, w: u32, h: u32) -> Result<(u32, u32)> {
+    let get = |k: &str, d: u32| -> Result<u32> {
+        match p.get(k) {
+            None | Some(Value::Null) => Ok(d),
+            Some(v) => v
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .filter(|v| (16..=MAX_PX).contains(v))
+                .ok_or_else(|| bad(cmd, format!("`{k}` is 16 to {MAX_PX} pixels"))),
+        }
+    };
+    Ok((get("width", w)?, get("height", h)?))
 }
 
 /// The PNG written to `path`, or returned as base64.
 pub(crate) fn deliver(png: Vec<u8>, p: &Value, out: &mut Value) -> Result<()> {
-    match str_param(p, "path") {
+    match str_param(p, "path").or_else(|| str_param(p, "output")) {
         Some(path) => {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -737,10 +787,11 @@ fn vec3(p: &Value, key: &str) -> Result<Option<Vec3>> {
 }
 
 fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
+    super::exchange::guard_params(s, "model.render", p, &["path", "output"])?;
     use cadaddy_render::model3::{self, Aabb};
     use cadaddy_render::shade::{VisualStyle, fit, fit_bounds, rasterize};
     use std::sync::atomic::AtomicUsize;
-    let (w, h) = size(p, 800, 600);
+    let (w, h) = size("model.render", p, 800, 600)?;
     // The BIM view's look unless another style is asked for.
     let bim = str_param(p, "style").is_none_or(|n| n.trim().eq_ignore_ascii_case("bim"));
     let style = match str_param(p, "style") {
@@ -759,7 +810,15 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         .transpose()?;
     // A room: its outline on the plan, and its level.
     let mut room: Option<(Vec<Vec2>, String)> = None;
-    if let Some(name) = str_param(p, "room") {
+    if let Some(name) = str_param(p, "room")
+        && let Some(r) = super::bspec::room_elements(d).into_iter().find(|r| {
+            r.outline.len() >= 3
+                && (r.name.eq_ignore_ascii_case(name.trim()) || r.number.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name.trim())))
+        })
+    {
+        // A built room has its outline: no plan trace of every room.
+        room = Some((r.outline.clone(), r.level.clone()));
+    } else if let Some(name) = str_param(p, "room") {
         let plan = plan_session(s)?;
         let rs = rooms(&plan, &sp)?;
         let spec_room = sp.rooms.iter().find(|r| names_room(r, name));
@@ -1032,7 +1091,8 @@ pub(crate) fn keep_seg(mut a: Vec3, mut b: Vec3, planes: &[(Vec3, f64)]) -> Opti
 
 fn run_overlay(s: &mut Session, p: &Value) -> Result<Value> {
     use cadaddy_doc::color::Color;
-    let (w, h) = size(p, 1200, 900);
+    super::exchange::guard_params(s, "model.overlay", p, &["path", "output"])?;
+    let (w, h) = size("model.overlay", p, 1200, 900)?;
     let (sp, _) = current(s, "model.overlay")?;
     let upf = units(&sp);
     let only = str_param(p, "level")
@@ -1191,6 +1251,19 @@ fn run_counts(s: &mut Session, _p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_kind_past_the_cap_leaves_room_for_the_others_and_every_one_is_counted() {
+        let f = |kind: &'static str| Finding { kind, message: String::new(), level: None, at: None, handles: Vec::new() };
+        let mut k = Kept::default();
+        for _ in 0..MAX_FINDINGS + 5 {
+            k.push(f("overlap"));
+        }
+        k.push(f("not_closed"));
+        assert_eq!((k.total["overlap"], k.total["not_closed"]), (MAX_FINDINGS + 5, 1));
+        assert_eq!(k.out.iter().filter(|x| x.kind == "not_closed").count(), 1, "kept past the other kind's cap");
+        assert_eq!(k.out.len(), MAX_FINDINGS + 1);
+    }
 
     #[test]
     fn clipping_squares() {

@@ -1,12 +1,19 @@
 //! `cargo xtask mcptest [--port 47820] [--cli PATH] [--mcpb PATH]`: the MCP suite against the
 //! running app (outside CI; start it with `cargo run --release -p cadaddy -- --control 47820`).
 //!
-//! `cadaddy-cli mcp --connect 127.0.0.1:PORT` (built here, or `--cli`) is driven over stdio:
-//! every tool the server lists is called normally and with bad parameters (invalid params or a
-//! tool error, never a crash); the app's own tools (screenshot, ui_inspect, ui_elements…) work;
-//! and while a person is typing a command in the app (keys sent on its control port) the agent's
-//! typing is refused and its `execute` still works (the agent guard). With `--mcpb`, the bundle is
-//! unpacked and the server its manifest names is started and listed. Prints PASS/FAIL per check.
+//! `cadaddy-cli mcp --connect 127.0.0.1:PORT` (built here, or `--cli`) is driven over stdio, and
+//! the live run covers exactly this:
+//! - every tool the app's `tools/list` returns is called once normally (must succeed) and once
+//!   with bad parameters (invalid params or a tool error, never accepted), from the one table
+//!   shared with `crates/mcp/tests/suite.rs` (`crates/mcp/tests/support/table.rs`); a listed tool
+//!   with no table entry prints a FAIL line. `quit_app` runs last, as it ends the app;
+//! - every resource `resources/list` returns is read (`resources/read`, valid JSON) and every
+//!   prompt `prompts/list` returns is fetched (`prompts/get`, with its required arguments);
+//! - the agent guard: while a person is typing a command in the app (keys sent on its control
+//!   port) the agent's typing is refused and its `execute` still works.
+//!
+//! With `--mcpb`, the bundle is unpacked and the server its manifest names is started and listed
+//! (only `tools/list`). Prints PASS/FAIL per check.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -15,6 +22,9 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
 use serde_json::{Value, json};
+
+#[path = "../../crates/mcp/tests/support/table.rs"]
+mod table;
 
 struct Opts {
     port: u16,
@@ -122,21 +132,59 @@ impl Checks {
     }
 }
 
-/// Normal and bad calls for the tools the app adds (the headless ones are in crates/mcp/tests/suite.rs).
-fn app_calls(dir: &Path) -> Vec<(&'static str, Value, Value)> {
-    vec![
-        ("get_prompt", json!({}), json!([1])),
-        ("command_line", json!({ "text": "circle 0,0 5" }), json!({ "text": 5 })),
-        ("execute", json!({ "command": "line", "params": { "points": [[0, 0], [10, 10]] } }), json!({ "command": ["line"] })),
-        ("inspect_drawing", json!({ "entities": false }), json!({ "limit": "ten" })),
-        ("query_entities", json!({ "type": "Circle" }), json!({ "window": [[0, 0]] })),
-        ("render", json!({ "width": 64, "height": 64 }), json!({ "width": 3 })),
-        ("save", json!({ "path": dir.join("mcptest.dxf") }), json!({ "path": 7 })),
-        ("screenshot", json!({ "path": dir.join("mcptest.png") }), json!({ "path": 1 })),
-        ("ui_inspect", json!({}), json!("x")),
-        ("ui_elements", json!({ "role": "button" }), json!({ "label": 1 })),
-        ("undo", json!({ "count": 1 }), json!({ "count": 0 })),
-    ]
+/// Which listed tools have no entry in the shared table.
+fn without_entry<'a>(listed: &'a [String], t: &[(&'static str, Value, Value)]) -> Vec<&'a str> {
+    listed.iter().filter(|n| !t.iter().any(|(m, ..)| m == n)).map(String::as_str).collect()
+}
+
+/// The table's calls in the order to run them live: `quit_app` last (it ends the app).
+fn live_order(t: Vec<(&'static str, Value, Value)>, listed: &[String]) -> Vec<(&'static str, Value, Value)> {
+    let (last, mut first): (Vec<_>, Vec<_>) = t.into_iter().filter(|(n, ..)| listed.iter().any(|l| l == n)).partition(|(n, ..)| *n == "quit_app");
+    first.extend(last);
+    first
+}
+
+/// Every resource the app lists is read and parses as JSON; every prompt is fetched with its
+/// required arguments.
+fn live_resources_and_prompts(c: &mut Checks, m: &mut Mcp) {
+    let list = |m: &mut Mcp, method: &str, key: &str| -> Result<Vec<Value>, String> {
+        let r = m.rpc(method, json!({}))?;
+        r["result"][key].as_array().cloned().ok_or(format!("{method}: no `{key}` in {r}"))
+    };
+    match list(m, "resources/list", "resources") {
+        Err(e) => c.check("resources/list", Err(e)),
+        Ok(rs) => {
+            c.check("resources/list", if rs.is_empty() { Err("no resources".into()) } else { Ok(format!("{} resources", rs.len())) });
+            for uri in rs.iter().filter_map(|r| r["uri"].as_str()) {
+                let read = m.rpc("resources/read", json!({ "uri": uri })).and_then(|r| {
+                    let text = r["result"]["contents"][0]["text"].as_str().unwrap_or_default();
+                    serde_json::from_str::<Value>(text).map(|_| format!("{} bytes of JSON", text.len())).map_err(|_| format!("not JSON: {r}"))
+                });
+                c.check(&format!("resources/read {uri}"), read);
+            }
+        }
+    }
+    match list(m, "prompts/list", "prompts") {
+        Err(e) => c.check("prompts/list", Err(e)),
+        Ok(ps) => {
+            c.check("prompts/list", if ps.is_empty() { Err("no prompts".into()) } else { Ok(format!("{} prompts", ps.len())) });
+            for p in &ps {
+                let name = p["name"].as_str().unwrap_or_default();
+                let args: serde_json::Map<String, Value> = p["arguments"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|a| a["required"] == true)
+                    .filter_map(|a| a["name"].as_str().map(|n| (n.to_string(), json!("Sample"))))
+                    .collect();
+                let got = m.rpc("prompts/get", json!({ "name": name, "arguments": args })).and_then(|r| {
+                    let n = r["result"]["messages"].as_array().map_or(0, Vec::len);
+                    if n > 0 { Ok(format!("{n} messages")) } else { Err(format!("no messages: {r}")) }
+                });
+                c.check(&format!("prompts/get {name}"), got);
+            }
+        }
+    }
 }
 
 /// The server a .mcpb's `manifest` starts, unpacked in `dir`: `server.mcp_config.command` (the win32
@@ -186,19 +234,13 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
             Err(format!("no app tools in {listed:?}"))
         },
     );
-    for (name, good, bad) in app_calls(&dir) {
-        c.check(&format!("{name} normal"), m.tool(name, good).map(|t| t.chars().take(60).collect()).map_err(|e| format!("{e:?}")));
-        c.check(
-            &format!("{name} bad"),
-            match m.tool(name, bad) {
-                Err((code, msg)) if code == -32602 || code == 0 => Ok(format!("refused ({code}): {}", msg.chars().take(60).collect::<String>())),
-                Ok(t) => Err(format!("accepted: {}", t.chars().take(60).collect::<String>())),
-                Err(e) => Err(format!("{e:?}")),
-            },
-        );
+    let t = table::table(&dir.to_string_lossy());
+    for n in without_entry(&listed, &t) {
+        c.check(&format!("{n} has a table entry"), Err("listed by the app but missing from crates/mcp/tests/support/table.rs".into()));
     }
-    // The agent guard: the person types LINE in the app; the agent's typing is refused, its
-    // execute goes through, and after Escape its typing works again.
+    let calls = live_order(t, &listed);
+    // The agent guard first, on the drawing as it starts: the person types LINE in the app; the
+    // agent's typing is refused, its execute goes through, and after Escape its typing works again.
     let typed = control(o.port, "ui.text", json!({ "text": "line" })).and_then(|_| control(o.port, "ui.key", json!({ "key": "enter" })));
     std::thread::sleep(Duration::from_millis(500));
     c.check("user types LINE", typed.map(|_| "keys sent".into()));
@@ -221,6 +263,18 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         "agent typing after Escape",
         m.tool("command_line", json!({ "text": "circle 5,5 1" })).map(|_| "ok".into()).map_err(|e| format!("{e:?}")),
     );
+    for (name, good, bad) in calls {
+        c.check(&format!("{name} normal"), m.tool(name, good).map(|t| t.chars().take(60).collect()).map_err(|e| format!("{e:?}")));
+        c.check(
+            &format!("{name} bad"),
+            match m.tool(name, bad) {
+                Err((code, msg)) if code == -32602 || code == 0 => Ok(format!("refused ({code}): {}", msg.chars().take(60).collect::<String>())),
+                Ok(t) => Err(format!("accepted: {}", t.chars().take(60).collect::<String>())),
+                Err(e) => Err(format!("{e:?}")),
+            },
+        );
+    }
+    live_resources_and_prompts(&mut c, &mut m);
     drop(m);
     if let Some(mcpb) = &o.mcpb {
         let un = dir.join("mcpb");
@@ -256,4 +310,37 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(&dir);
     println!("{} passed, {} failed", c.0, c.1);
     if c.1 > 0 { Err(format!("{} check(s) failed", c.1)) } else { Ok(()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn a_listed_tool_without_an_entry_is_found() {
+        let t = table::tests::sample();
+        assert!(without_entry(&names(&["screenshot", "execute"]), &t).is_empty());
+        assert_eq!(without_entry(&names(&["execute", "brand_new_tool"]), &t), vec!["brand_new_tool"]);
+    }
+
+    #[test]
+    fn live_order_runs_only_listed_tools_and_quits_last() {
+        let order: Vec<&str> =
+            live_order(table::tests::sample(), &names(&["quit_app", "screenshot", "execute", "not_in_table"])).iter().map(|(n, ..)| *n).collect();
+        assert_eq!(order.last(), Some(&"quit_app"));
+        assert_eq!(order.len(), 3);
+        assert!(!order.contains(&"not_in_table"));
+    }
+
+    #[test]
+    fn the_whole_table_is_in_the_live_loop_when_all_are_listed() {
+        let t = table::tests::sample();
+        let all: Vec<String> = t.iter().map(|(n, ..)| (*n).to_string()).collect();
+        let n = t.len();
+        assert_eq!(live_order(t, &all).len(), n);
+    }
 }

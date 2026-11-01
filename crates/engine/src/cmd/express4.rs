@@ -16,10 +16,11 @@
 use std::collections::BTreeMap;
 
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, Insert};
-use cadaddy_geom::{Mat3, Vec2, Vec3};
+use cadaddy_geom::{Line, Mat3, Vec2, Vec3};
 use serde_json::{Value, json};
 
 use super::machines::{SelOutcome, SelectPhase, SelectRun};
+use super::modify::Edges;
 use super::*;
 use crate::lisp::value::Value as LispValue;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
@@ -1182,4 +1183,602 @@ fn run_dimreassoc(s: &mut Session, p: &Value) -> Result<Value> {
         });
     }
     Ok(json!({ "handles": hexes(&hits), "message": format!("{} dimension(s) restored.", hits.len()) }))
+}
+
+// ---------- EXTRIM, TREX, BTRIM, BEXTEND, SUPERHATCH ----------
+
+/// Most picks one TREX call takes.
+const MAX_PICKS: usize = 100_000;
+/// Most tiles one SUPERHATCH makes.
+const MAX_TILES: usize = 100_000;
+/// Most nested edge segments one BTRIM or BEXTEND works with.
+const MAX_NESTED_SEGMENTS: usize = 1_000_000;
+
+pub fn trim_specs() -> Vec<CommandSpec> {
+    vec![
+        CommandSpec::new("extrim", "Extended Trim", run_extrim)
+            .menu(&["Tools", "Express Tools", "Extended Trim"])
+            .params("{boundary (handle of a closed polyline, circle, ellipse or spline), side: [x, y] (a point on the side to trim away)} → {trimmed}: every curve crossing the boundary loses its parts on that side")
+            .interactive(|_| Ok(Box::new(ExtrimM::default()))),
+        CommandSpec::new("trex", "Trim and Extend", run_trex)
+            .menu(&["Tools", "Express Tools", "Trim and Extend"])
+            .params("{edges? (handles; default every object), picks: [{handle, at: [x, y], extend?: bool}]} → {trimmed, extended}: trims each pick, or extends it to the edges when `extend` is true")
+            .interactive(|_| Ok(Box::new(TrexM::default()))),
+        CommandSpec::new("btrim", "Trim to Block Objects", |s, p| run_block_edges(s, p, false))
+            .menu(&["Tools", "Express Tools", "Trim to Block Objects"])
+            .params("{edges: [handles of block references (their nested objects cut) or plain objects], handle (the object to trim), pick: [x, y]} → {handles}: the objects replacing it")
+            .interactive(|_| Ok(Box::new(BlockEdgesM::new(false)))),
+        CommandSpec::new("bextend", "Extend to Block Objects", |s, p| run_block_edges(s, p, true))
+            .menu(&["Tools", "Express Tools", "Extend to Block Objects"])
+            .params("{edges: [handles of block references (their nested objects bound) or plain objects], handle (the object to extend), pick: [x, y] (nearest the end to extend)} → {extended}")
+            .interactive(|_| Ok(Box::new(BlockEdgesM::new(true)))),
+        CommandSpec::new("superhatch", "Super Hatch", run_superhatch)
+            .menu(&["Tools", "Express Tools", "Super Hatch"])
+            .params("{boundary (handle of a closed polyline, circle, ellipse or spline), block (name), spacing?: [dx, dy] (default the block's extents), mode?: block (the only mode available)} → {count, whole, clipped, group, handles}: the block tiled on a grid from the boundary's lower left corner; a tile is placed where its cell is inside or crosses the boundary, and tiles crossing it are clipped to it (XCLIP); grouped. Image, wipeout and xref modes are not supported")
+            .interactive(|_| Ok(Box::new(SuperhatchM::default()))),
+    ]
+}
+
+/// The objects a pick or a point at a prompt names (`None` for other input).
+fn picked(s: &Session, i: &Input) -> Option<Result<Vec<Handle>>> {
+    match i {
+        Input::Pick(hs) => Some(Ok(hs.clone())),
+        Input::Point(p) => Some(super::curves::pick_at(s, *p).map(|h| vec![h]).ok_or_else(|| other("*Invalid selection*"))),
+        _ => None,
+    }
+}
+
+fn handle_param(cmd: &str, p: &Value, key: &str) -> Result<Handle> {
+    p.get(key).and_then(Value::as_str).and_then(Handle::parse_hex).ok_or_else(|| bad(cmd, format!("`{key}` (an object handle) is required")))
+}
+
+fn handle_list(cmd: &str, p: &Value, key: &str) -> Result<Option<Vec<Handle>>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(a)) if a.len() <= MAX_PICKS => a
+            .iter()
+            .map(|v| v.as_str().and_then(Handle::parse_hex).ok_or_else(|| bad(cmd, format!("`{key}` must be a list of object handles"))))
+            .collect::<Result<Vec<_>>>()
+            .map(Some),
+        Some(_) => Err(bad(cmd, format!("`{key}` must be a list of object handles"))),
+    }
+}
+
+/// The outline of a closed polyline, circle, ellipse or spline as a polygon, and its bounds.
+fn closed_outline(s: &Session, cmd: &str, h: Handle) -> Result<(Vec<Vec2>, cadaddy_geom::Bounds2)> {
+    let d = s.doc()?;
+    let e = d.entity(h).ok_or_else(|| other("No such object."))?;
+    let closed = match &e.kind {
+        EntityKind::LwPolyline(p) => p.closed,
+        EntityKind::Circle(_) => true,
+        EntityKind::Ellipse(el) => cadaddy_geom::ccw_sweep(el.start, el.end) > std::f64::consts::TAU - 1e-9,
+        EntityKind::Spline(sp) => sp.closed,
+        _ => false,
+    };
+    if !closed {
+        return Err(bad(cmd, "the boundary must be a closed polyline, circle, ellipse or spline"));
+    }
+    let b = cadaddy_doc::entity_bounds(d, e, 0);
+    let tol = crate::select::window_tol(&b) / 10.0;
+    // One polyline per segment of the outline: chain them into the polygon.
+    let mut poly: Vec<Vec2> = Vec::new();
+    for pl in crate::select::hit_polylines(d, e, tol) {
+        for q in pl {
+            if poly.last().is_none_or(|l| !l.near(q, 1e-12)) {
+                poly.push(q);
+            }
+        }
+    }
+    if poly.len() > 1 && poly.first().zip(poly.last()).is_some_and(|(a, z)| a.near(*z, 1e-12)) {
+        poly.pop();
+    }
+    if poly.len() < 3 || b.is_empty() {
+        return Err(bad(cmd, "the boundary has no area"));
+    }
+    Ok((poly, b))
+}
+
+// ----- EXTRIM -----
+
+/// The curves of the current space EXTRIM looks at: the kinds TRIM cuts, visible and unlocked.
+fn extrim_candidates(s: &Session, boundary: Handle) -> Result<Vec<Handle>> {
+    let d = s.doc()?;
+    let store = d.space(&s.space()).ok_or(EngineError::NoDocument)?;
+    Ok(store
+        .iter()
+        .take(MAX_SCAN)
+        .filter(|e| e.handle != boundary && d.is_visible(e))
+        .filter(|e| {
+            matches!(
+                e.kind,
+                EntityKind::Line(_)
+                    | EntityKind::Arc(_)
+                    | EntityKind::Circle(_)
+                    | EntityKind::LwPolyline(_)
+                    | EntityKind::Ellipse(_)
+                    | EntityKind::Spline(_)
+            )
+        })
+        .map(|e| e.handle)
+        .filter(|h| !super::curves::is_locked(s, *h))
+        .collect())
+}
+
+/// One point on every stretch of `h` between boundary crossings that lies on the trim side.
+fn extrim_picks(s: &Session, h: Handle, poly: &[Vec2], inside_wanted: bool, tol: f64) -> Result<Vec<Vec2>> {
+    let d = s.doc()?;
+    let e = d.entity(h).ok_or_else(|| other("No such object."))?;
+    let edges: Vec<Line> = (0..poly.len()).filter_map(|i| Some(Line::new(*poly.get(i)?, *poly.get((i + 1) % poly.len())?))).collect();
+    let mut picks = Vec::new();
+    let mut crossings = 0usize;
+    for pl in crate::select::hit_polylines(d, e, tol) {
+        for w in pl.windows(2) {
+            let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
+            let seg = Line::new(*a, *b);
+            let mut ts = vec![0.0, 1.0];
+            for be in &edges {
+                if let Some(x) = cadaddy_geom::line_line(&seg, be) {
+                    let t = seg.param_of(x).clamp(0.0, 1.0);
+                    if t > 1e-9 && t < 1.0 - 1e-9 {
+                        crossings += 1;
+                    }
+                    ts.push(t);
+                }
+            }
+            ts.sort_by(f64::total_cmp);
+            for pair in ts.windows(2) {
+                let (Some(t0), Some(t1)) = (pair.first(), pair.get(1)) else { continue };
+                if t1 - t0 < 1e-9 {
+                    continue;
+                }
+                let mid = seg.at((t0 + t1) / 2.0);
+                if cadaddy_geom::point_in_polygon(poly, mid) == inside_wanted {
+                    picks.push(mid);
+                }
+            }
+        }
+    }
+    // A curve that never crosses the boundary (inside, outside or only touching it) stays.
+    if crossings == 0 { Ok(Vec::new()) } else { Ok(picks) }
+}
+
+fn extrim(s: &mut Session, boundary: Handle, side: Vec2) -> Result<usize> {
+    let (poly, b) = closed_outline(s, "extrim", boundary)?;
+    let inside_wanted = cadaddy_geom::point_in_polygon(&poly, side);
+    let tol = crate::select::window_tol(&b);
+    let only = [boundary];
+    let edges = Edges { only: Some(&only), ..Edges::default() };
+    let mut work: Vec<(Handle, Vec<Vec2>)> = Vec::new();
+    for h in extrim_candidates(s, boundary)? {
+        let picks = extrim_picks(s, h, &poly, inside_wanted, tol / 10.0)?;
+        if !picks.is_empty() {
+            work.push((h, picks));
+        }
+    }
+    if work.is_empty() {
+        return Ok(0);
+    }
+    super::trimextend::run_picks(s, work, false, edges, false, tol)
+}
+
+fn run_extrim(s: &mut Session, p: &Value) -> Result<Value> {
+    let boundary = handle_param("extrim", p, "boundary")?;
+    let side = point_param(p, "side").ok_or_else(|| bad("extrim", "`side` ([x, y], a point on the side to trim) is required"))?;
+    let n = extrim(s, boundary, side)?;
+    Ok(json!({ "trimmed": n, "message": format!("{n} object(s) trimmed.") }))
+}
+
+#[derive(Default)]
+struct ExtrimM {
+    boundary: Option<Handle>,
+}
+
+impl Interactive for ExtrimM {
+    fn name(&self) -> &'static str {
+        "EXTRIM"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        match self.boundary {
+            None => Prompt::new("Select a closed polyline, circle, ellipse or spline as the cutting edge", Accept::SELECT),
+            Some(_) => Prompt::new("Specify a point on the side to trim", Accept::POINT),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        match (self.boundary, &i) {
+            (_, Input::Enter) => Ok(Step::Cancel),
+            (None, _) => {
+                if let Some(r) = picked(s, &i) {
+                    let h = r?.first().copied().ok_or_else(|| other("*Invalid selection*"))?;
+                    closed_outline(s, "extrim", h)?;
+                    self.boundary = Some(h);
+                }
+                Ok(Step::Continue)
+            }
+            (Some(b), Input::Point(p)) => {
+                let n = extrim(s, b, *p)?;
+                s.echo(format!("{n} object(s) trimmed."));
+                Ok(Step::Done)
+            }
+            _ => Ok(Step::Continue),
+        }
+    }
+}
+
+// ----- TREX -----
+
+fn run_trex(s: &mut Session, p: &Value) -> Result<Value> {
+    let only = handle_list("trex", p, "edges")?;
+    let picks = p.get("picks").and_then(Value::as_array).filter(|a| !a.is_empty() && a.len() <= MAX_PICKS);
+    let picks = picks.ok_or_else(|| bad("trex", "`picks` needs a list of {handle, at: [x, y], extend?: bool}"))?;
+    // Check every pick before changing anything.
+    let mut work = Vec::new();
+    for pk in picks {
+        let h = handle_param("trex", pk, "handle")?;
+        let at = point_param(pk, "at").ok_or_else(|| bad("trex", "each pick needs `at` ([x, y])"))?;
+        if s.doc()?.entity(h).is_none() {
+            return Err(bad("trex", format!("no object {}", h.hex())));
+        }
+        work.push((h, at, pk.get("extend").and_then(Value::as_bool).unwrap_or(false)));
+    }
+    let edges = Edges { only: only.as_deref(), ..Edges::default() };
+    let (mut trimmed, mut extended) = (0, 0);
+    for (h, at, extend) in work {
+        super::trimextend::apply(s, h, at, extend, edges, false)?;
+        if extend {
+            extended += 1;
+        } else {
+            trimmed += 1;
+        }
+    }
+    Ok(json!({ "trimmed": trimmed, "extended": extended, "message": format!("{trimmed} trimmed, {extended} extended.") }))
+}
+
+#[derive(Default)]
+struct TrexM {
+    edges: Vec<Handle>,
+    picking: bool,
+    extend: bool,
+}
+
+impl Interactive for TrexM {
+    fn name(&self) -> &'static str {
+        "TREX"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        if !self.picking {
+            return Prompt::new("Select cutting and boundary edges or <select all>", Accept::SELECT);
+        }
+        let msg = if self.extend { "Select object to extend or [Trim]" } else { "Select object to trim or [Extend]" };
+        Prompt::new(msg, Accept::POINT).kw(&["Trim", "Extend"])
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if !self.picking {
+            return match picked(s, &i) {
+                Some(r) => {
+                    for h in r? {
+                        if !self.edges.contains(&h) {
+                            self.edges.push(h);
+                        }
+                    }
+                    Ok(Step::Continue)
+                }
+                None if matches!(i, Input::Enter) => {
+                    self.picking = true;
+                    Ok(Step::Continue)
+                }
+                None => Ok(Step::Continue),
+            };
+        }
+        match i {
+            Input::Keyword(k) | Input::Text(k) => {
+                match k.trim().to_ascii_lowercase().as_str() {
+                    "e" | "extend" => self.extend = true,
+                    "t" | "trim" => self.extend = false,
+                    _ => {}
+                }
+                Ok(Step::Continue)
+            }
+            Input::Point(p) => {
+                let h = super::curves::pick_at(s, p).ok_or_else(|| other("*Invalid selection*"))?;
+                let only = (!self.edges.is_empty()).then_some(self.edges.as_slice());
+                super::trimextend::apply(s, h, p, self.extend, Edges { only, ..Edges::default() }, false)?;
+                Ok(Step::Continue)
+            }
+            Input::Enter => Ok(Step::Done),
+            _ => Ok(Step::Continue),
+        }
+    }
+}
+
+// ----- BTRIM, BEXTEND -----
+
+/// The cutting or boundary edges of BTRIM and BEXTEND: a block reference gives the objects nested
+/// in it (in world coordinates), any other object itself.
+fn block_edges(s: &Session, hs: &[Handle]) -> Result<(Vec<Handle>, Vec<cadaddy_geom::Segment>)> {
+    let d = s.doc()?;
+    let mut plain = Vec::new();
+    let mut segs = Vec::new();
+    for h in hs {
+        let e = d.entity(*h).ok_or_else(|| other("No such object."))?;
+        match &e.kind {
+            EntityKind::Insert(ins) => {
+                let mut all = Vec::new();
+                nested_objects(d, ins, &Mat3::IDENTITY, 0, &mut all);
+                for (_, _, k) in &all {
+                    for pr in k.prims() {
+                        segs.extend(super::modify::prim_to_segments(&pr));
+                    }
+                }
+                if segs.len() > MAX_NESTED_SEGMENTS {
+                    return Err(other("The block references hold too much geometry."));
+                }
+            }
+            _ => plain.push(*h),
+        }
+    }
+    Ok((plain, segs))
+}
+
+fn run_block_edges(s: &mut Session, p: &Value, extending: bool) -> Result<Value> {
+    let cmd = if extending { "bextend" } else { "btrim" };
+    let hs =
+        handle_list(cmd, p, "edges")?.filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, "`edges` (block reference or object handles) is required"))?;
+    let h = targets(s, p)?.first().copied().ok_or_else(|| bad(cmd, "`handle` is required"))?;
+    let pick = point_param(p, "pick").ok_or_else(|| bad(cmd, "`pick` ([x, y]) is required"))?;
+    let (plain, segs) = block_edges(s, &hs)?;
+    if segs.is_empty() && plain.is_empty() {
+        return Err(bad(cmd, "the block references hold no objects"));
+    }
+    let edges = Edges { only: Some(&plain), implied: false, extra: &segs };
+    if extending {
+        super::modify::extend(s, h, pick, edges)?;
+        Ok(json!({ "extended": h.hex() }))
+    } else {
+        let r = super::modify::trim(s, h, pick, edges)?;
+        Ok(json!({ "handles": hexes(&r) }))
+    }
+}
+
+struct BlockEdgesM {
+    extend: bool,
+    edges: Vec<Handle>,
+    picking: bool,
+}
+
+impl BlockEdgesM {
+    fn new(extend: bool) -> Self {
+        BlockEdgesM { extend, edges: Vec::new(), picking: false }
+    }
+}
+
+impl Interactive for BlockEdgesM {
+    fn name(&self) -> &'static str {
+        if self.extend { "BEXTEND" } else { "BTRIM" }
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        match (self.picking, self.extend) {
+            (false, false) => Prompt::new("Select block references or objects as cutting edges", Accept::SELECT),
+            (false, true) => Prompt::new("Select block references or objects as boundary edges", Accept::SELECT),
+            (true, false) => Prompt::new("Select object to trim", Accept::POINT),
+            (true, true) => Prompt::new("Select object to extend", Accept::POINT),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if !self.picking {
+            return match picked(s, &i) {
+                Some(r) => {
+                    for h in r? {
+                        if !self.edges.contains(&h) {
+                            self.edges.push(h);
+                        }
+                    }
+                    Ok(Step::Continue)
+                }
+                None if matches!(i, Input::Enter) => {
+                    if self.edges.is_empty() {
+                        return Ok(Step::Cancel);
+                    }
+                    self.picking = true;
+                    Ok(Step::Continue)
+                }
+                None => Ok(Step::Continue),
+            };
+        }
+        match i {
+            Input::Point(p) => {
+                let h = super::curves::pick_at(s, p).ok_or_else(|| other("*Invalid selection*"))?;
+                let params = json!({ "edges": hexes(&self.edges), "handle": h.hex(), "pick": [p.x, p.y] });
+                run_block_edges(s, &params, self.extend)?;
+                Ok(Step::Continue)
+            }
+            Input::Enter => Ok(Step::Done),
+            _ => Ok(Step::Continue),
+        }
+    }
+}
+
+// ----- SUPERHATCH -----
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Cover {
+    Outside,
+    Partial,
+    Whole,
+}
+
+/// Whether the cell `[lo, hi]` lies outside, across or inside the polygon `poly`.
+fn cell_cover(poly: &[Vec2], lo: Vec2, hi: Vec2) -> Cover {
+    // Shrunk a hair, so a cell whose sides run along the outline counts as inside it.
+    let eps = (hi.x - lo.x).min(hi.y - lo.y).abs() * 1e-6;
+    let (a, c) = (Vec2::new(lo.x + eps, lo.y + eps), Vec2::new(hi.x - eps, hi.y - eps));
+    let (b, d) = (Vec2::new(c.x, a.y), Vec2::new(a.x, c.y));
+    let corners = [a, b, c, d];
+    let sides: Vec<Line> = (0..4).filter_map(|i| Some(Line::new(*corners.get(i)?, *corners.get((i + 1) % 4)?))).collect();
+    let n = poly.len();
+    let crossed = (0..n).any(|i| {
+        let (Some(p), Some(q)) = (poly.get(i), poly.get((i + 1) % n)) else { return false };
+        let within = |v: &Vec2| v.x > a.x && v.x < c.x && v.y > a.y && v.y < c.y;
+        within(p) || sides.iter().any(|sd| cadaddy_geom::line_line(sd, &Line::new(*p, *q)).is_some())
+    });
+    let inside = corners.iter().filter(|c| cadaddy_geom::point_in_polygon(poly, **c)).count();
+    match (crossed, inside) {
+        (true, _) => Cover::Partial,
+        (false, 4) => Cover::Whole,
+        (false, 0) => Cover::Outside,
+        _ => Cover::Partial,
+    }
+}
+
+fn spacing_param(p: &Value) -> Result<Option<Vec2>> {
+    match p.get("spacing") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => {
+            let sp = cadaddy_engine_point(v).filter(|sp| sp.x.is_finite() && sp.y.is_finite() && sp.x > 0.0 && sp.y > 0.0);
+            sp.map(Some).ok_or_else(|| bad("superhatch", "`spacing` must be [dx, dy], both greater than 0"))
+        }
+    }
+}
+
+fn cadaddy_engine_point(v: &Value) -> Option<Vec2> {
+    super::point_value(v)
+}
+
+fn run_superhatch(s: &mut Session, p: &Value) -> Result<Value> {
+    for key in ["image", "wipeout", "xref"] {
+        if p.get(key).is_some_and(|v| !v.is_null()) {
+            return Err(bad("superhatch", format!("the {key} mode is not supported; SUPERHATCH tiles a block (`block`)")));
+        }
+    }
+    if let Some(m) = p.get("mode").and_then(Value::as_str)
+        && !m.trim().eq_ignore_ascii_case("block")
+    {
+        return Err(bad("superhatch", format!("the {} mode is not supported; SUPERHATCH tiles a block (`block`)", m.trim().to_ascii_lowercase())));
+    }
+    let boundary = handle_param("superhatch", p, "boundary")?;
+    let name = str_param(p, "block").ok_or_else(|| bad("superhatch", "`block` (a block name) is required"))?.to_string();
+    let spacing = spacing_param(p)?;
+    let (poly, bb) = closed_outline(s, "superhatch", boundary)?;
+    let blk = s.doc()?.block(&name).cloned().ok_or_else(|| bad("superhatch", format!("no block named \"{name}\"")))?;
+    let d = s.doc()?;
+    let ext = blk.entities.iter().fold(cadaddy_geom::Bounds2::EMPTY, |acc, e| acc.union(&cadaddy_doc::entity_bounds(d, e, 1)));
+    if ext.is_empty() || !(ext.width() > 0.0 || ext.height() > 0.0) {
+        return Err(bad("superhatch", format!("block \"{name}\" has no extents to tile")));
+    }
+    let size = Vec2::new(ext.width(), ext.height());
+    let step = spacing.unwrap_or(size);
+    if !(step.x > 0.0 && step.y > 0.0) {
+        return Err(bad("superhatch", "give `spacing` for a block with no width or height"));
+    }
+    let nx = ((bb.width() / step.x).ceil() as usize).max(1);
+    let ny = ((bb.height() / step.y).ceil() as usize).max(1);
+    if nx.saturating_mul(ny) > MAX_TILES {
+        return Err(bad("superhatch", format!("that is more than {MAX_TILES} tiles; use a larger `spacing`")));
+    }
+    let eps = 1e-9 * (bb.width() + bb.height());
+    let mut cells = Vec::new();
+    for iy in 0..ny {
+        for ix in 0..nx {
+            let lo = Vec2::new(bb.min.x + ix as f64 * step.x, bb.min.y + iy as f64 * step.y);
+            if lo.x >= bb.max.x - eps || lo.y >= bb.max.y - eps {
+                continue;
+            }
+            match cell_cover(&poly, lo, lo + size) {
+                Cover::Outside => {}
+                c => cells.push((lo, c)),
+            }
+        }
+    }
+    if cells.is_empty() {
+        return Err(bad("superhatch", "no tile of the block falls inside the boundary"));
+    }
+    let (mut hs, mut clipped) = (Vec::new(), 0);
+    let none = serde_json::Map::new();
+    for (lo, cover) in cells {
+        let h = super::blocks::insert_with(s, &name, lo, Vec2::new(1.0, 1.0), 0.0, Some(ext.min), &none)?;
+        if cover == Cover::Partial {
+            let boundary_in_block = {
+                let d = s.doc()?;
+                let Some(EntityKind::Insert(ins)) = d.entity(h).map(|e| &e.kind) else { continue };
+                let inv = ins.transform(blk.base.xy()).inverse().ok_or_else(|| other("The tile cannot be clipped."))?;
+                poly.iter().map(|q| inv.apply(*q)).collect::<Vec<_>>()
+            };
+            s.doc_mut()?.modify_entity(h, |e| {
+                if let EntityKind::Insert(i) = &mut e.kind {
+                    i.clip =
+                        Some(Box::new(cadaddy_doc::XClip { boundary: boundary_in_block, enabled: true, inverted: false, front: None, back: None }));
+                }
+            })?;
+            clipped += 1;
+        }
+        hs.push(h);
+    }
+    let group = super::groups::create(s, None, "SUPERHATCH", &hs, true)?;
+    Ok(json!({
+        "count": hs.len(), "whole": hs.len() - clipped, "clipped": clipped, "group": group, "handles": hexes(&hs),
+        "message": format!("{} tile(s) of \"{name}\" ({clipped} clipped to the boundary).", hs.len()),
+    }))
+}
+
+#[derive(Default)]
+struct SuperhatchM {
+    boundary: Option<Handle>,
+    block: Option<String>,
+}
+
+impl Interactive for SuperhatchM {
+    fn name(&self) -> &'static str {
+        "SUPERHATCH"
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        match (&self.boundary, &self.block) {
+            (None, _) => Prompt::new("Select a closed polyline, circle, ellipse or spline as the boundary", Accept::SELECT),
+            (Some(_), None) => Prompt::new("Enter block name", Accept::TEXT),
+            (Some(_), Some(_)) => Prompt::new("Specify spacing as dx,dy or <block size>", Accept::TEXT),
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        match (&self.boundary, &self.block, i) {
+            (_, _, Input::Enter) if self.block.is_none() => Ok(Step::Cancel),
+            (None, _, i) => {
+                if let Some(r) = picked(s, &i) {
+                    let h = r?.first().copied().ok_or_else(|| other("*Invalid selection*"))?;
+                    closed_outline(s, "superhatch", h)?;
+                    self.boundary = Some(h);
+                }
+                Ok(Step::Continue)
+            }
+            (Some(_), None, Input::Text(t)) => {
+                let t = t.trim().to_string();
+                if s.doc()?.block(&t).is_none() {
+                    return Err(other(format!("No block named \"{t}\".")));
+                }
+                self.block = Some(t);
+                Ok(Step::Continue)
+            }
+            (Some(b), Some(name), Input::Enter) => {
+                let r = run_superhatch(s, &json!({ "boundary": b.hex(), "block": name }))?;
+                self.finish(s, &r)
+            }
+            (Some(b), Some(name), Input::Text(t)) => {
+                let nums: Vec<f64> = t.split([',', ' ']).filter(|v| !v.is_empty()).filter_map(|v| v.parse().ok()).collect();
+                let sp = match nums.as_slice() {
+                    [d] => json!([d, d]),
+                    [dx, dy] => json!([dx, dy]),
+                    _ => return Err(other("Enter the spacing as dx,dy.")),
+                };
+                let r = run_superhatch(s, &json!({ "boundary": b.hex(), "block": name, "spacing": sp }))?;
+                self.finish(s, &r)
+            }
+            _ => Ok(Step::Continue),
+        }
+    }
+}
+
+impl SuperhatchM {
+    fn finish(&self, s: &mut Session, r: &Value) -> Result<Step> {
+        if let Some(m) = r.get("message").and_then(Value::as_str) {
+            s.echo(m.to_string());
+        }
+        Ok(Step::Done)
+    }
 }

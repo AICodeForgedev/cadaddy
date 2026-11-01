@@ -88,10 +88,15 @@ pub(crate) fn change_case(s: &str, case: Case, mtext: bool) -> String {
     let mut out = String::with_capacity(s.len());
     // Sentence: the next letter starts a sentence. Title: the next letter starts a word.
     let mut start = true;
-    for (c, lit) in chars.iter().zip(&mask) {
+    for (i, (c, lit)) in chars.iter().zip(&mask).enumerate() {
         if !lit {
             out.push(*c);
-            // A paragraph break starts a new sentence too.
+            // A paragraph break (`\P`) starts a new sentence; `\P` and the non-breaking space
+            // `\~` start a new word.
+            let after_slash = i > 0 && chars.get(i - 1) == Some(&'\\') && mask.get(i - 1) == Some(&false);
+            if mtext && after_slash && (*c == 'P' || (*c == '~' && case == Case::Title)) {
+                start = true;
+            }
             continue;
         }
         let c = *c;

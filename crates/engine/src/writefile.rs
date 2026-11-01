@@ -9,6 +9,44 @@ pub fn write(path: impl AsRef<std::path::Path>, bytes: impl AsRef<[u8]>) -> std:
     std::fs::write(path, bytes)
 }
 
+/// [`write`], replacing `path` atomically through an exclusively created temporary file (so a
+/// planted symlink at a predictable temporary name can't redirect the write, CWE-59).
+pub fn write_atomic(path: impl AsRef<std::path::Path>, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    check(path.as_ref())?;
+    crate::atomic_write::write_atomic(path.as_ref(), bytes.as_ref())
+}
+
+/// Create (or truncate) `path` for writing (refused during a dry run).
+pub fn create(path: impl AsRef<std::path::Path>) -> std::io::Result<std::fs::File> {
+    check(path.as_ref())?;
+    std::fs::File::create(path)
+}
+
+/// Open `path` for appending, creating it (refused during a dry run).
+pub fn open_append(path: impl AsRef<std::path::Path>) -> std::io::Result<std::fs::File> {
+    check(path.as_ref())?;
+    std::fs::OpenOptions::new().create(true).append(true).open(path)
+}
+
+/// Delete the file `path` (refused during a dry run).
+pub fn remove(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+    check(path.as_ref())?;
+    std::fs::remove_file(path)
+}
+
+/// Move `from` to `to` (refused during a dry run).
+pub fn rename(from: impl AsRef<std::path::Path>, to: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+    check(from.as_ref())?;
+    check(to.as_ref())?;
+    std::fs::rename(from, to)
+}
+
+/// Copy the file `from` to `to` (refused during a dry run).
+pub fn copy(from: impl AsRef<std::path::Path>, to: impl AsRef<std::path::Path>) -> std::io::Result<u64> {
+    check(to.as_ref())?;
+    std::fs::copy(from, to)
+}
+
 /// An error when files may not be written now (an agent's dry run) or not there (a system folder).
 pub fn check(path: &std::path::Path) -> std::io::Result<()> {
     protected(path)?;
@@ -37,6 +75,7 @@ mod tests {
         let e = super::write("/etc/cadaddy-test.dwg", b"x").unwrap_err();
         assert!(e.to_string().contains("system folder"), "{e}");
         assert!(super::check(std::path::Path::new("C:\\Windows\\System32\\evil.dll")).is_err());
+        assert!(super::check(std::path::Path::new("/Users/x/../../etc/a.dwg")).is_err());
         assert!(super::check(&std::env::temp_dir().join("ok.dwg")).is_ok());
     }
 }

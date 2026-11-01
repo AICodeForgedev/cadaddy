@@ -182,11 +182,16 @@ pub struct CaretLine {
     pub height: f64,
 }
 
+/// Runs longer than this many characters get their caret positions in linear time.
+const LONG_SEG: usize = 2_000;
+/// How many places along a long run get an exact prefix width.
+const LONG_SEG_CHECKPOINTS: usize = 64;
+
 /// Where each character of segment `seg` (format `f`, starting at `x`) starts: prefix widths, a
 /// stack's characters spread over its width.
 fn char_starts(seg: &Seg, f: &Fmt, x: f64) -> Vec<f64> {
     match seg {
-        Seg::Text(t) => {
+        Seg::Text(t) if t.chars().nth(LONG_SEG).is_none() => {
             let mut prefix = String::new();
             t.chars()
                 .map(|c| {
@@ -195,6 +200,42 @@ fn char_starts(seg: &Seg, f: &Fmt, x: f64) -> Vec<f64> {
                     at
                 })
                 .collect()
+        }
+        // A very long run: measuring every prefix is quadratic. The exact prefix width is taken at
+        // LONG_SEG_CHECKPOINTS places; between them each character is measured alone and the
+        // starts are scaled to span the gap to the next checkpoint.
+        Seg::Text(t) => {
+            let at: Vec<usize> = t.char_indices().map(|(i, _)| i).collect();
+            let n = at.len();
+            let prefix = |j: usize| match at.get(j) {
+                Some(&b) => t.get(..b).map_or(0.0, |p| text_width(&f.font, p, f.height, f.wf)),
+                None => text_width(&f.font, t, f.height, f.wf),
+            };
+            let step = n.div_ceil(LONG_SEG_CHECKPOINTS).max(1);
+            let mut out = Vec::with_capacity(n);
+            let mut buf = [0u8; 4];
+            let mut a = 0;
+            let mut left = prefix(0);
+            while a < n {
+                let b = (a + step).min(n);
+                let right = prefix(b);
+                let singles: Vec<f64> = t
+                    .get(at.get(a).copied().unwrap_or(0)..at.get(b).copied().unwrap_or(t.len()))
+                    .unwrap_or("")
+                    .chars()
+                    .map(|c| text_width(&f.font, c.encode_utf8(&mut buf), f.height, f.wf))
+                    .collect();
+                let sum: f64 = singles.iter().sum();
+                let k = if sum > 1e-12 && (right - left).is_finite() { (right - left) / sum } else { 1.0 };
+                let mut run = 0.0;
+                for w in singles {
+                    out.push(x + left + run * k);
+                    run += w;
+                }
+                a = b;
+                left = right;
+            }
+            out
         }
         Seg::Stack(..) => {
             let n = seg_plain(seg).chars().count().max(1);
@@ -587,6 +628,9 @@ struct Line {
     text: String,
     /// Where each character of `text` starts (before the line's alignment shift).
     xs: Vec<f64>,
+    /// Running character count of `text`, kept incrementally so appending a segment need not
+    /// rescan the whole accumulated line (which is multiplicative on a long line) (CWE-407).
+    chars: usize,
     /// Index of the paragraph the line belongs to.
     para: usize,
 }
@@ -666,10 +710,11 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
                     finish(&mut lines, &mut line, fmt(last_fmt), para);
                 } else if !line.items.is_empty() || pending_space.is_some() {
                     if let Some(f) = pending_space {
-                        let at = line.text.chars().count();
+                        let at = line.chars;
                         line.items.push(Item { seg: None, fmt: f, x: line.width, w: sw, at });
                         line.text.push(' ');
                         line.xs.push(line.width);
+                        line.chars += 1;
                     }
                     line.width += sw;
                 }
@@ -677,8 +722,10 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
                 for (sg, f) in segs {
                     let fw = seg_width(sg, fmt(*f));
                     line.max_h = line.max_h.max(fmt(*f).height);
-                    let at = line.text.chars().count();
-                    line.text.push_str(&seg_plain(sg));
+                    let at = line.chars;
+                    let plain = seg_plain(sg);
+                    line.chars += plain.chars().count();
+                    line.text.push_str(&plain);
                     line.xs.extend(char_starts(sg, fmt(*f), line.width));
                     line.items.push(Item { seg: Some(sg.clone()), fmt: *f, x: line.width, w: fw, at });
                     line.width += fw;
@@ -777,6 +824,15 @@ pub fn layout_mtext_with(contents: &str, p: &MTextParams) -> MTextLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_char_offsets_track_incrementally() {
+        // A multi-word line lays out correctly even though the per-line character count is now
+        // maintained incrementally rather than rescanned per segment (CWE-407, row 20).
+        let l = layout_mtext("alpha beta gamma", Vec2::ZERO, 1.0, 0.0, 1, 0.0, 1.0);
+        assert_eq!(l.lines.len(), 1, "no wrap width: one line");
+        assert_eq!(l.lines[0], "alpha beta gamma");
+    }
 
     #[test]
     fn strips_formatting() {

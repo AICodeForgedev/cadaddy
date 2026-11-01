@@ -701,9 +701,12 @@ fn links(list: &cadaddy_render::DisplayList, map: &Map, clip_pt: &Bounds2, links
     if links.is_empty() {
         return Vec::new();
     }
+    // Membership by handle, built once, so scanning primitives is O(primitives) rather than
+    // O(primitives × links): otherwise the two counts multiply into excessive work (CWE-407).
+    let linked: std::collections::HashSet<Handle> = links.iter().map(|(h, _)| *h).collect();
     let mut areas: std::collections::HashMap<Handle, Bounds2> = std::collections::HashMap::new();
     for p in &list.prims {
-        if matches!(p.kind, Kind::Infinite { .. }) || !links.iter().any(|(h, _)| *h == p.handle) {
+        if matches!(p.kind, Kind::Infinite { .. }) || !linked.contains(&p.handle) {
             continue;
         }
         let b = areas.entry(p.handle).or_insert(Bounds2::EMPTY);
@@ -902,7 +905,7 @@ fn content_stream(
                 }
                 pending = true;
             }
-            Kind::Tris | Kind::Mask => {
+            Kind::Tris | Kind::InkMask | Kind::Mask => {
                 flush(&mut c, &mut pending);
                 // A wipeout's mask is paper white.
                 let rgb = if p.kind == Kind::Mask { white } else { rgb };
@@ -1029,6 +1032,10 @@ fn ext_gstates(alphas: &[u8]) -> String {
     out
 }
 
+/// The hidden lettering font's advance per character, ems: declared (every character alike)
+/// so that every reader measures the hidden words the same; [`hidden_words`] stretches them.
+const HIDDEN_EM: f64 = 0.5;
+
 /// Texts drawn in a stroke font, as invisible text (rendering mode 3) in the standard Helvetica
 /// over the strokes: the page reads and searches as its lettering, as PDF plotters do for SHX
 /// text. Characters outside Latin-1 are written as `?`.
@@ -1043,6 +1050,14 @@ fn hidden_words(list: &cadaddy_render::DisplayList, map: &Map) -> String {
         c.push_str("BT 3 Tr /FW ");
         num(&mut c, size);
         c.push_str(" Tf ");
+        // Stretched to the drawn lettering's length (the font is declared a half em a character):
+        // a reader finds the words where they are drawn, the whole of them.
+        let chars = w.text.chars().take(1000).count() as f64;
+        let scale = 100.0 * w.width / (HIDDEN_EM * chars * w.height);
+        if chars > 0.0 && scale.is_finite() && scale > 0.0 {
+            num(&mut c, scale.clamp(10.0, 1000.0));
+            c.push_str(" Tz ");
+        }
         for v in [w.dir.x, w.dir.y, -w.dir.y, w.dir.x] {
             num(&mut c, v);
             c.push(' ');
@@ -1334,10 +1349,12 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
     }
     let font_ids = if fonts.is_empty() { Vec::new() } else { fonts.write(&mut objs, o.compress) };
     // The standard font the hidden lettering is written in (one object for every page).
-    let words_font = page_dicts
-        .iter()
-        .any(|p| p.5)
-        .then(|| objs.add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string()));
+    let words_font = page_dicts.iter().any(|p| p.5).then(|| {
+        let widths = vec![format!("{}", (HIDDEN_EM * 1000.0).round()); 224].join(" ");
+        objs.add(format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 255 /Widths [{widths}] >>"
+        ))
+    });
     // The plot stamps' standard fonts, one object each.
     let mut stamp_fonts: Vec<(&'static str, usize)> = Vec::new();
     for (page, used, props, gstates, rest, words, stamp_font) in page_dicts {

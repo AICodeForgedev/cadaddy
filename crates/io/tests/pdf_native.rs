@@ -605,6 +605,62 @@ fn device_tags_near_strokes_become_blocks() {
     assert!(!r.drawing.model.is_empty(), "drawing should not be empty");
 }
 
+#[test]
+fn a_symbols_tag_stays_where_it_was_printed() {
+    // Six diamonds, each tagged "L4" 10 pt to its right in 6 pt text: the TAG attribute keeps
+    // that place and size (not the drawing's origin), so the circuit printed under it pairs.
+    let mut content = Vec::new();
+    content.extend_from_slice(b"q 0 0 0 RG 0.5 w ");
+    for (cx, cy) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)] {
+        let sz = 6;
+        content.extend_from_slice(
+            format!(
+                "{} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S ",
+                cx,
+                cy - sz,
+                cx + sz,
+                cy,
+                cx + sz,
+                cy,
+                cx,
+                cy + sz,
+                cx,
+                cy + sz,
+                cx - sz,
+                cy,
+                cx - sz,
+                cy,
+                cx,
+                cy - sz,
+            )
+            .as_bytes(),
+        );
+        content.extend_from_slice(
+            format!("{} {} m {} {} l S {} {} m {} {} l S ", cx - 3, cy - 3, cx + 3, cy + 3, cx - 3, cy + 3, cx + 3, cy - 3).as_bytes(),
+        );
+        content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td (L4) Tj ET ", cx + 10, cy).as_bytes());
+    }
+    content.extend_from_slice(b"Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let tagged: Vec<(f64, f64, f64)> = r
+        .drawing
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Insert(i) if i.block.starts_with("PDF-SYM-") => {
+                i.attribs.iter().find(|a| a.tag == "TAG").map(|a| (a.text.insert.x - i.insert.x, a.text.insert.y - i.insert.y, a.text.height))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(tagged.len() >= 4, "symbols with their tag: {tagged:?}");
+    for (dx, dy, h) in tagged {
+        // 10 pt right of the symbol's centre, on its line, as tall as its letters (the reader's
+        // text height for 6 pt type), in any drawing unit.
+        assert!(dx > 0.0 && dy.abs() < 0.5 * dx && (0.3..=0.7).contains(&(h / dx)), "tag at {dx},{dy} height {h}");
+    }
+}
+
 // -----------------------------------------------------------------------------------------
 // SHX OCR: stroke-template character recognition on sheets without hidden text
 // -----------------------------------------------------------------------------------------

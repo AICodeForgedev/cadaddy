@@ -11,6 +11,8 @@ use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, St
 pub(crate) enum Kind {
     Point,
     Number,
+    /// A number whose absolute value is at most this; a larger one is reported and asked again.
+    Bounded(f64),
     Text,
     /// Objects until Enter → `handles`.
     Select,
@@ -18,6 +20,10 @@ pub(crate) enum Kind {
     One,
     /// A layer: an object picked on it, or the name of one that exists.
     Layer,
+    /// One of these words (any case) → the lower-case word.
+    Keyword(&'static [&'static str]),
+    /// A point in space typed `x,y,z` → `[x, y, z]`.
+    Point3,
 }
 
 /// One prompt: the parameter it fills, its message and kind, and the current value Enter keeps.
@@ -39,7 +45,12 @@ pub(crate) const fn ask_or(key: &'static str, message: &'static str, kind: Kind,
 
 /// The interactive form of `cmd`: `steps` in order, then the command.
 pub(crate) fn machine<const N: usize>(cmd: &'static str, name: &'static str, steps: [Ask; N]) -> Box<dyn Interactive> {
-    Box::new(Asker { cmd, name, steps: steps.to_vec(), at: 0, params: Map::new(), picked: Vec::new() })
+    machine_of(cmd, name, steps.to_vec())
+}
+
+/// [`machine`] for a list of steps known only at run time.
+pub(crate) fn machine_of(cmd: &'static str, name: &'static str, steps: Vec<Ask>) -> Box<dyn Interactive> {
+    Box::new(Asker { cmd, name, steps, at: 0, params: Map::new(), picked: Vec::new() })
 }
 
 struct Asker {
@@ -102,11 +113,18 @@ impl Interactive for Asker {
         let Some(a) = self.step() else { return Prompt::new("", Accept::TEXT) };
         let accept = match a.kind {
             Kind::Point => Accept::POINT,
-            Kind::Number => Accept::NUMBER,
+            Kind::Number | Kind::Bounded(_) => Accept::NUMBER,
             Kind::Text => Accept::TEXT,
             Kind::Select | Kind::One | Kind::Layer => Accept::SELECT,
+            Kind::Keyword(_) => Accept::TEXT,
+            Kind::Point3 => Accept { point: true, ..Accept::TEXT },
         };
-        let p = Prompt::new(a.message, accept);
+        // A keyword question lists its answers in the message: "Enter an option [ON/OFF] <ON>:".
+        let p = match a.kind {
+            Kind::Keyword(k) => Prompt::new(format!("{} [{}]", a.message, k.join("/")), accept).kw(k),
+            Kind::Point3 => Prompt::new(a.message, accept).point3(),
+            _ => Prompt::new(a.message, accept),
+        };
         match a.default.and_then(|d| d(s)) {
             Some(d) => p.default(d),
             None => p,
@@ -160,6 +178,27 @@ impl Interactive for Asker {
                 }
             }
             (Kind::Layer, Input::Enter) => Ok(Step::Done),
+            (Kind::Keyword(words), Input::Text(t) | Input::Keyword(t)) => match words.iter().find(|w| w.eq_ignore_ascii_case(t.trim())) {
+                Some(w) => self.take(s, json!(w.to_ascii_lowercase())),
+                None => {
+                    s.echo(format!("Invalid option keyword. Enter one of: {}.", words.join(", ")));
+                    Ok(Step::Continue)
+                }
+            },
+            (Kind::Keyword(words), Input::Enter) => match default.as_deref().and_then(|d| words.iter().find(|w| w.eq_ignore_ascii_case(d))) {
+                Some(w) => self.take(s, json!(w.to_ascii_lowercase())),
+                None => Ok(Step::Done),
+            },
+            (Kind::Point3, Input::Point3(p)) => self.take(s, json!([p.x, p.y, p.z])),
+            (Kind::Point3, Input::Point(p)) => self.take(s, json!([p.x, p.y, 0.0])),
+            (Kind::Point3, Input::Text(t) | Input::Keyword(t)) => match crate::prompt::parse_point3(&t, cadaddy_geom::Vec3::new(0.0, 0.0, 0.0)) {
+                Some(p) => self.take(s, json!([p.x, p.y, p.z])),
+                None => {
+                    s.echo("Requires a point: x,y,z.");
+                    Ok(Step::Continue)
+                }
+            },
+            (Kind::Point3, Input::Enter) => Ok(Step::Done),
             (Kind::Point, Input::Point(p)) => self.take(s, json!([p.x, p.y])),
             (Kind::Point, Input::Text(t) | Input::Keyword(t)) => match point_text(&t) {
                 Some(v) => self.take(s, v),
@@ -179,7 +218,20 @@ impl Interactive for Asker {
                     Ok(Step::Continue)
                 }
             },
-            (Kind::Number, Input::Enter) => match default.as_deref().and_then(|d| d.trim().parse::<f64>().ok()) {
+            (Kind::Bounded(max), Input::Text(t) | Input::Keyword(t)) => {
+                match t.trim().parse::<f64>().ok().or_else(|| units::parse_distance(t.trim())).filter(|v| v.is_finite()) {
+                    Some(v) if v.abs() <= max => self.take(s, json!(v)),
+                    Some(_) => {
+                        s.echo(format!("Requires a value between -{max:e} and {max:e}."));
+                        Ok(Step::Continue)
+                    }
+                    None => {
+                        s.echo("Requires a number.");
+                        Ok(Step::Continue)
+                    }
+                }
+            }
+            (Kind::Number | Kind::Bounded(_), Input::Enter) => match default.as_deref().and_then(|d| d.trim().parse::<f64>().ok()) {
                 Some(v) => self.take(s, json!(v)),
                 None => Ok(Step::Done),
             },

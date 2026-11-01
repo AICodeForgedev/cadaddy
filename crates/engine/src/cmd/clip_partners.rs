@@ -61,6 +61,12 @@ pub(crate) fn with_partners(d: &Drawing, hs: &[Handle]) -> Vec<Handle> {
     out
 }
 
+/// Whether `hs` holds a viewport or the boundary of a clipped viewport (what cannot go into a block).
+pub(crate) fn has_viewport_or_boundary(d: &Drawing, hs: &[Handle]) -> bool {
+    let pairs = clip_pairs(d);
+    hs.iter().any(|h| pairs.iter().any(|&(v, b)| *h == v || *h == b) || d.entity(*h).is_some_and(|e| matches!(e.kind, EntityKind::Viewport(_))))
+}
+
 /// After `transform_entities` applied `m` (`moved` holds each source and its result: itself, or
 /// its copy): copied viewports get their own id and clip their copied boundary, and a clipped
 /// viewport turned with its boundary turns its view with it (AutoCAD's VPROTATEASSOC default),

@@ -58,6 +58,7 @@ pub mod hyperlink;
 pub mod lighting;
 pub mod markup;
 pub mod material;
+pub mod numfmt;
 pub mod overrides;
 pub mod plotstamp;
 pub mod pointcloud;
@@ -127,6 +128,9 @@ pub struct Drawing {
     pub blocks: BTreeMap<String, std::sync::Arc<Block>>,
     pub model: EntityStore,
     pub layouts: Vec<Layout>,
+    /// The layout a file marks active (its block is `*Paper_Space`, the others `*Paper_SpaceN`),
+    /// written active again. `None`, or a layout that no longer exists: the first by tab order.
+    pub active_layout: Option<String>,
     pub views: Vec<NamedView>,
     /// Model space viewport configurations (VPORTS): the tiles shown and named ones.
     pub vports: Vec<VportConfig>,
@@ -238,7 +242,6 @@ impl Drawing {
         d.header = Header::imperial();
         d
     }
-    /// An empty metric drawing (millimetres, ISO-25 dimensions).
     /// Roughly how many bytes this drawing holds that `newer` doesn't share with it (objects of
     /// model space, the layouts and the blocks): what keeping it as an undo step costs.
     pub fn unique_bytes(&self, newer: &Drawing) -> usize {
@@ -259,11 +262,14 @@ impl Drawing {
         bytes
     }
 
+    /// An empty metric drawing (millimetres, ISO-25 dimensions, multileaders and tables to match).
     pub fn new_metric() -> Self {
         let mut d = Drawing::bare();
         d.header = Header::metric();
         d.scales = metric_scales();
         d.dim_styles.push(DimStyle::iso25());
+        d.mleader_styles = vec![MLeaderStyle::metric()];
+        d.table_styles = vec![TableStyle::metric()];
         d.header.set_str("DIMSTYLE", "ISO-25");
         d
     }
@@ -286,6 +292,7 @@ impl Drawing {
             blocks: BTreeMap::new(),
             model: EntityStore::new(),
             layouts: vec![Layout::new("Layout1", 1), Layout::new("Layout2", 2)],
+            active_layout: None,
             views: Vec::new(),
             vports: Vec::new(),
             ucss: Vec::new(),
@@ -439,6 +446,18 @@ impl Drawing {
         true
     }
 
+    /// The layouts in the order their paper space blocks are named in a file: the active one
+    /// (`*Paper_Space`) first, then the others by tab order (`*Paper_Space0`, `*Paper_Space1`, …).
+    pub fn paper_space_layouts(&self) -> Vec<&Layout> {
+        let mut ls: Vec<&Layout> = self.layouts.iter().collect();
+        ls.sort_by_key(|l| l.tab_order);
+        if let Some(i) = self.active_layout.as_ref().and_then(|a| ls.iter().position(|l| l.name.eq_ignore_ascii_case(a))) {
+            let active = ls.remove(i);
+            ls.insert(0, active);
+        }
+        ls
+    }
+
     pub fn space(&self, space: &Space) -> Option<&EntityStore> {
         match space {
             Space::Model => Some(&self.model),
@@ -505,6 +524,27 @@ impl Drawing {
         b
     }
 
+    /// The extents of the entities whose own bounds are finite and within `limit` of the origin,
+    /// and how many visible entities were left out for being beyond it.
+    pub fn extents_within(&self, space: &Space, limit: f64) -> (cadaddy_geom::Bounds2, usize) {
+        let mut b = cadaddy_geom::Bounds2::EMPTY;
+        let mut skipped = 0;
+        if let Some(store) = self.space(space) {
+            for e in store.iter().filter(|e| self.is_visible(e)) {
+                let eb = entity_bounds(self, e, 0);
+                if eb.is_empty() {
+                    continue;
+                }
+                if within_limit(&eb, limit) {
+                    b = b.union(&eb);
+                } else {
+                    skipped += 1;
+                }
+            }
+        }
+        (b, skipped)
+    }
+
     /// Total entity count across model and paper space.
     pub fn entity_count(&self) -> usize {
         self.model.len() + self.layouts.iter().map(|l| l.entities.len()).sum::<usize>()
@@ -528,3 +568,8 @@ pub use anno::*;
 
 #[cfg(test)]
 mod tests;
+
+/// Whether both corners of `b` are finite and no further than `limit` from the origin on each axis.
+pub fn within_limit(b: &cadaddy_geom::Bounds2, limit: f64) -> bool {
+    [b.min.x, b.min.y, b.max.x, b.max.y].iter().all(|v| v.is_finite() && v.abs() <= limit)
+}

@@ -23,7 +23,9 @@ fn drawing() -> (Drawing, MLeader) {
         block_center: false,
         ..MLeaderStyle::default()
     });
-    let lt = d.linetypes.iter().find(|l| !l.pattern.is_empty()).map(|l| l.name.clone());
+    // A patterned linetype of the drawing for the leader linetype override.
+    d.linetypes.push(Linetype::simple("DASHED", "Dashed __ __ __ __", &[0.5, -0.25]));
+    let lt = Some("DASHED".to_string());
     let m = MLeader {
         leaders: vec![vec![Vec3::new(0.0, 0.0, 0.0)]],
         landing: Vec3::new(5.0, 5.0, 0.0),
@@ -61,6 +63,7 @@ fn drawing() -> (Drawing, MLeader) {
 }
 
 fn same(a: &MLeader, b: &MLeader) {
+    assert_eq!(a.leader_linetype.as_deref().map(str::to_ascii_uppercase).as_deref(), Some("DASHED"), "the linetype override survives");
     assert_eq!(a.leaders, b.leaders);
     assert_eq!(a.landing, b.landing);
     assert_eq!(a.roots, b.roots);

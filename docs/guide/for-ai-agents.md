@@ -257,4 +257,10 @@ cadaddy-cli run --script 'RECTANG 0,0 100,60\nCIRCLE 50,30 10\n' --export out.pn
 cadaddy-cli run --sample --export sample.pdf
 cadaddy-cli info drawing.dxf
 cadaddy-cli convert folder/ out/ --to cdy --recurse
+cadaddy-cli info drawing.cdy
+cadaddy-cli verify drawing.cdy
 ```
+
+`convert IN_FOLDER OUT_FOLDER --to cdy` does not go into subfolders unless you add `--recurse`.
+`info` on a `.cdy` file also prints its chunk sizes and wasted space. `verify FILE.cdy` checks every
+checksum, prints a JSON report and exits with status 1 when the file is damaged.

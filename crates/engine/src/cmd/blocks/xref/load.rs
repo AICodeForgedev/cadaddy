@@ -309,11 +309,17 @@ fn load_in(d: &mut Drawing, name: &str, host: Option<&Path>, chosen: bool, cx: &
     let key = b.name.clone();
     let Some(path) = b.xref_path.clone() else { return (XrefStatus::Unresolved, "not an xref".into()) };
     clear(d, &key);
+    // What reading the file left out is kept with the loaded xref (`xref_reason`), so the
+    // attach reply and OPEN's warnings can say so.
+    let mut read_loss = String::new();
     let (status, detail) = match fetch(&path, host, chosen, cx, depth) {
-        Ok((x, file)) => match import(d, &key, &x, cx) {
-            Ok(()) => (XrefStatus::Loaded, file.to_string_lossy().into_owned()),
-            Err(e) => (XrefStatus::Unresolved, e),
-        },
+        Ok((x, file)) => {
+            read_loss = x.read_notes.join("; ");
+            match import(d, &key, &x, cx) {
+                Ok(()) => (XrefStatus::Loaded, file.to_string_lossy().into_owned()),
+                Err(e) => (XrefStatus::Unresolved, e),
+            }
+        }
         Err(e) => e,
     };
     if status != XrefStatus::Loaded {
@@ -322,7 +328,7 @@ fn load_in(d: &mut Drawing, name: &str, host: Option<&Path>, chosen: bool, cx: &
     }
     set_status(d, &key, status);
     if let Some(b) = d.blocks.get_mut(&key) {
-        Arc::make_mut(b).xref_reason = if status == XrefStatus::Loaded { String::new() } else { detail.clone() };
+        Arc::make_mut(b).xref_reason = if status == XrefStatus::Loaded { read_loss } else { detail.clone() };
     }
     (status, detail)
 }
@@ -433,6 +439,17 @@ fn import(d: &mut Drawing, key: &str, x: &Drawing, cx: &mut Ctx) -> Result<(), S
         nb.anonymous = b.anonymous;
         nb.explodable = b.explodable;
         nb.units = b.units;
+        // Array parameters keep their kind and spacing; block names follow the block renaming, and
+        // a source edit in progress in the referenced file is not carried over.
+        nb.array = b.array.as_ref().map(|a| {
+            let mut a = a.clone();
+            a.source = dep(Sym::Block, &a.source).unwrap_or(a.source);
+            for r in &mut a.replaced {
+                r.block = dep(Sym::Block, &r.block).unwrap_or_else(|| r.block.clone());
+            }
+            a.editing = None;
+            a
+        });
         for e in b.entities.iter() {
             let e = adopt(d, e);
             nb.entities.push(e);
@@ -544,5 +561,37 @@ mod tests {
         assert!(has_prefix("SITE|Walls", "site|"));
         assert!(!has_prefix("SITE", "site|"));
         assert!(!has_prefix("é", "ab"));
+    }
+
+    #[test]
+    fn imported_array_blocks_keep_their_parameters() {
+        use cadaddy_doc::{ArrayKind, ArrayParams, Block, RectArray, ReplacedItem};
+        let rect = RectArray { cols: 3, rows: 2, col_spacing: 5.0, row_spacing: 4.0, axis_angle: 0.0, row_elevation: 0.0 };
+        let params = ArrayParams {
+            source: "*U1".into(),
+            kind: ArrayKind::Rect(rect),
+            levels: 1,
+            level_spacing: 0.0,
+            replaced: vec![ReplacedItem { i: 1, j: 0, level: 0, block: "ALT".into() }],
+            removed: vec![],
+            editing: Some(Default::default()),
+        };
+        let mut arr = Block::new("*U2");
+        arr.array = Some(params);
+        let mut x = Drawing::default();
+        x.blocks.insert("*U2".into(), Arc::new(arr));
+
+        let mut d = Drawing::default();
+        d.blocks.insert("SITE".into(), Arc::new(Block::new("SITE")));
+        let mut cx = Ctx { chain: Vec::new(), objects: 0, files: 0, bytes: 0, notes: Vec::new() };
+        assert!(import(&mut d, "SITE", &x, &mut cx).is_ok());
+
+        let got = d.blocks.get("SITE|*U2").and_then(|b| b.array.clone());
+        let Some(got) = got else { panic!("array parameters were dropped") };
+        assert_eq!(got.source, "SITE|*U1");
+        assert_eq!(got.replaced[0].block, "SITE|ALT");
+        assert!(got.editing.is_none());
+        let ArrayKind::Rect(r) = got.kind else { panic!("not a rectangular array") };
+        assert_eq!((r.cols, r.rows), (3, 2));
     }
 }

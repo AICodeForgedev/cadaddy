@@ -175,15 +175,7 @@ pub(crate) const BAD_CHARS: &[char] = &['<', '>', '/', '\\', '"', ':', ';', '?',
 
 fn check_name(cmd: &str, d: &Drawing, name: &str, except: Option<&str>) -> Result<String> {
     let n = name.trim();
-    if n.is_empty() {
-        return Err(bad(cmd, "layout name is empty"));
-    }
-    if n.chars().count() > 255 {
-        return Err(bad(cmd, "layout name is longer than 255 characters"));
-    }
-    if n.contains(BAD_CHARS) || n.chars().any(char::is_control) {
-        return Err(bad(cmd, format!("invalid layout name `{n}`")));
-    }
+    super::names::check(cmd, "layout", n)?;
     if n.eq_ignore_ascii_case("model") {
         return Err(bad(cmd, "`Model` is reserved"));
     }
@@ -286,8 +278,12 @@ fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let from = layout_name("layout.rename", s.doc()?, &from)?;
     let to = str_param(p, "to").ok_or_else(|| bad("layout.rename", "`to` is required"))?;
     let to = check_name("layout.rename", s.doc()?, to, Some(&from))?;
-    if let Some(l) = s.doc_mut()?.layouts.iter_mut().find(|l| l.name == from) {
+    let d = s.doc_mut()?;
+    if let Some(l) = d.layouts.iter_mut().find(|l| l.name == from) {
         l.name = to.clone();
+    }
+    if d.active_layout.as_ref().is_some_and(|a| a.eq_ignore_ascii_case(&from)) {
+        d.active_layout = Some(to.clone());
     }
     let (old, new) = (Space::Paper(from.clone()), Space::Paper(to.clone()));
     let st = s.state_mut()?;
@@ -706,6 +702,24 @@ fn layer_list(p: &Value, key: &str) -> Vec<String> {
     }
 }
 
+/// The layers a VPLAYER list names, spelled as the drawing spells them; a wildcard stands for the
+/// layers it matches. A name that matches no layer is refused, as AutoCAD does.
+fn existing_layers(d: &Drawing, cmd: &str, names: Vec<String>) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for n in names {
+        let found: Vec<String> = if n.contains(['*', '?']) {
+            d.layers.iter().filter(|l| super::qselect::wildcard(&n, &l.name)).map(|l| l.name.clone()).collect()
+        } else {
+            d.layer(&n).map(|l| vec![l.name.clone()]).unwrap_or_default()
+        };
+        if found.is_empty() {
+            return Err(bad(cmd, format!("No matching layer names found: \"{n}\"")));
+        }
+        out.extend(found);
+    }
+    Ok(out)
+}
+
 fn viewport_json(h: Handle, v: &Viewport) -> Value {
     json!({
         "handle": h.hex(),
@@ -772,8 +786,8 @@ fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
         )),
         Some(_) => return Err(bad(cmd, "`annoScale` is a scale name or null")),
     };
-    let freeze = layer_list(p, "freeze");
-    let thaw = layer_list(p, "thaw");
+    let freeze = existing_layers(s.doc()?, cmd, layer_list(p, "freeze"))?;
+    let thaw = existing_layers(s.doc()?, cmd, layer_list(p, "thaw"))?;
     // Per-viewport layer colours: {layer: colour} (null clears the override).
     let mut colors: Vec<(String, Option<cadaddy_color::Color>)> = Vec::new();
     if let Some(m) = p.get("colors").and_then(Value::as_object) {
@@ -1060,6 +1074,11 @@ fn plot_sheets(cmd: &str, d: &cadaddy_doc::Drawing, v: &Value) -> Result<Vec<Str
 /// `layers?: bool` (drawing layers as PDF layers, default on), `offLayers?: bool` (layers that
 /// are off on hidden PDF layers), `links?: [{handle, url}]` (hyperlinks) and `title?`.
 fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    if let Some(r) = p.get("resolution").filter(|r| !r.is_null())
+        && !r.as_f64().is_some_and(|r| r.is_finite() && (50.0..=2400.0).contains(&r))
+    {
+        return Err(bad(cmd, "`resolution` must be 50-2400 dpi"));
+    }
     let hook = io().and_then(|h| h.plot).ok_or_else(|| bad(cmd, "plotting is not available in this build"))?;
     // Fields worked out on plotting (FIELDEVAL 4): PlotDate is now.
     crate::fields::on_event(s, crate::fields::Event::Plot);
@@ -1162,27 +1181,32 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             Space::Model => vec![],
         },
     };
+    // The set-up is on a temporary copy that only the plotter sees: plotting never changes the
+    // drawing, its modified flag or its undo history.
+    let mut temp_doc: Option<Drawing> = None;
     if !paper_layouts.is_empty() {
-        let st = s.state_mut()?;
+        let st = s.state()?;
         let has_work = paper_layouts.iter().any(|n| st.bare_layouts.contains(n) || st.doc.layout(n).is_some_and(|l| l.pending_setup));
         if has_work {
             let mut doc = (*st.doc).clone();
             for name in &paper_layouts {
-                if let Some(i) = st.bare_layouts.iter().position(|b| b == name) {
-                    st.bare_layouts.remove(i);
-                    if let Some(l) = doc.layouts.iter_mut().find(|l| l.name == *name) {
-                        l.pending_setup = true;
-                    }
+                if st.bare_layouts.contains(name)
+                    && let Some(l) = doc.layouts.iter_mut().find(|l| l.name == *name)
+                {
+                    l.pending_setup = true;
                 }
                 set_up_layout(&mut doc, name);
             }
-            st.doc = std::sync::Arc::new(doc);
+            temp_doc = Some(doc);
         }
     }
     // Warn about sheets that would plot blank.
     let mut warnings: Vec<String> = Vec::new();
     {
-        let d = s.doc()?;
+        let d = match &temp_doc {
+            Some(d) => d,
+            None => s.doc()?,
+        };
         for name in &paper_layouts {
             if sheet_is_blank(d, name) {
                 warnings.push(format!("{name} has nothing on it: its page is blank."));
@@ -1192,7 +1216,28 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     for w in &warnings {
         s.echo(format!("Warning: {w}"));
     }
-    let bytes = hook(s.doc()?, &space, &opts).map_err(|e| bad(cmd, e))?;
+    // The file name is vetted before the plot is drawn: right kind, never an open drawing.
+    let out_path = match (str_param(p, "path"), &printer) {
+        (Some(x), None) => {
+            let kind = str_param(&opts, "output").and_then(cadaddy_doc::PlotOutput::parse).unwrap_or_default();
+            let exts: &[&str] = match kind {
+                cadaddy_doc::PlotOutput::Jpg => &["jpg", "jpeg"],
+                cadaddy_doc::PlotOutput::Tif => &["tif", "tiff"],
+                k => &[k.as_str()],
+            };
+            Some(super::exchange::output_path(s, cmd, x, exts)?)
+        }
+        _ => None,
+    };
+    let bytes = hook(
+        match &temp_doc {
+            Some(d) => d,
+            None => s.doc()?,
+        },
+        &space,
+        &opts,
+    )
+    .map_err(|e| bad(cmd, e))?;
     if let (Some(name), Some(h)) = (&printer, print) {
         let title = s.state().map(|st| st.title.clone()).unwrap_or_default();
         (h.print)(name, &bytes, &title).map_err(|e| bad(cmd, format!("printer `{name}`: {e}")))?;
@@ -1205,14 +1250,12 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         None => space.tab_name().to_string(),
     };
     let pages = sheets.as_ref().map_or(1, Vec::len);
-    match str_param(p, "path") {
+    match out_path.as_deref().or_else(|| str_param(p, "path")) {
         Some(_path) => {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let path = _path;
-                let tmp = format!("{path}.cadaddy-tmp");
-                crate::writefile::write(&tmp, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-                std::fs::rename(&tmp, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+                crate::writefile::write_atomic(path, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
                 let mut r = json!({ "path": path, "bytes": bytes.len(), "layout": layout, "pages": pages, "warnings": warnings });
                 match super::plotstamp::log_plot(s, &space, &opts, path) {
                     Some(Ok(log)) => r["stampLog"] = json!(log),
@@ -1331,6 +1374,14 @@ mod tests {
     }
 
     #[test]
+    fn rename_keeps_the_active_layout_whatever_its_case() {
+        let mut s = session_with_model();
+        s.doc_mut().unwrap().active_layout = Some("layout1".into());
+        s.execute("layout.rename", &json!({"from": "Layout1", "to": "Sheet A"})).unwrap();
+        assert_eq!(s.doc().unwrap().active_layout.as_deref(), Some("Sheet A"));
+    }
+
+    #[test]
     fn rename_copy_delete() {
         let mut s = session_with_model();
         s.execute("layout.set", &json!({"name": "Layout1"})).unwrap();
@@ -1419,6 +1470,7 @@ mod tests {
         s.execute("viewport.set", &json!({"handle": h, "locked": true})).unwrap();
         assert!(s.execute("viewport.set", &json!({"handle": h, "scale": 0.1})).is_err(), "locked");
         s.execute("viewport.set", &json!({"handle": h, "scale": 0.1, "locked": false})).unwrap();
+        s.execute("layer.new", &json!({"name": "Walls"})).unwrap();
         s.execute("vplayer", &json!({"handle": h, "freeze": ["0", "Walls"]})).unwrap();
         s.execute("vplayer", &json!({"handle": h, "thaw": "walls"})).unwrap();
         let v = viewports(&s, "Layout1");
@@ -1587,5 +1639,28 @@ mod tests {
         s.execute("mspace", &json!({})).unwrap();
         s.execute("layout.set", &json!({"name": "Model"})).unwrap();
         assert!(s.state().unwrap().mspace.is_none());
+    }
+}
+
+#[cfg(test)]
+mod vplayer_missing_layer_tests {
+    use super::*;
+
+    #[test]
+    fn vplayer_refuses_layers_that_do_not_exist() {
+        let mut s = Session::new();
+        s.execute("layer.new", &json!({"name": "Walls"})).unwrap();
+        s.execute("layout.set", &json!({"name": "Layout1"})).unwrap();
+        let r = s.execute("mview", &json!({"p1": [1, 1], "p2": [5, 4]})).unwrap();
+        let h = r["viewports"][0].as_str().unwrap().to_string();
+        for key in ["freeze", "thaw"] {
+            let e = s.execute("vplayer", &json!({"handle": h, key: ["nolayer"]})).unwrap_err().to_string();
+            assert!(e.contains("No matching layer names found"), "{e}");
+        }
+        assert!(s.execute("vplayer", &json!({"handle": h, "freeze": ["Walls", "nolayer"]})).is_err());
+        s.execute("vplayer", &json!({"handle": h, "freeze": ["wal*"]})).unwrap();
+        let frozen = s.doc().unwrap().entity(Handle::parse_hex(&h).unwrap()).map(|e| e.kind.clone());
+        let Some(EntityKind::Viewport(v)) = frozen else { panic!("viewport") };
+        assert_eq!(v.frozen_layers, vec!["Walls".to_string()]);
     }
 }

@@ -272,3 +272,43 @@ fn a_drawing_of_our_own_numbers_as_before() {
     let again = String::from_utf8(cadaddy_io::write(&back, "x.dxf").unwrap()).unwrap();
     assert_eq!(record_handles(&text), record_handles(&again), "stable across saves");
 }
+
+/// The handles the DXF above gives, by `Drawing::kept_handles` key: all of them must be in a DWG.
+const DWG_KEPT: [(&str, u64); 8] = [
+    ("TABLE/LAYER", 0xB1),
+    ("LAYER/WALLS", 0xB3),
+    ("LTYPE/DASHED", 0xA3),
+    ("STYLE/NOTES", 0xC2),
+    ("BLOCK_RECORD/DOOR", 0xE4),
+    ("BLOCK_RECORD/*MODEL_SPACE", 0xE2),
+    ("BLOCK/DOOR", 0xE9),
+    ("LAYOUT/LAYOUT1", 0xF3),
+];
+
+/// Read → write as DWG with each engine → read back: the kept handles and the entity handles are
+/// the DXF's. No engine renumbers any listed key (no library limit to list). The native reader does
+/// not report the `TABLE/*` heads, so every file is read back with the bridge reader (which does),
+/// and the native reader is checked on the records it does report.
+#[test]
+fn table_record_and_object_handles_survive_a_dwg_save() {
+    use cadaddy_io::DwgEngine::{Bridge, Native};
+    let first = cadaddy_io::read(foreign().as_bytes(), "plan.dxf").unwrap();
+    for (key, h) in DWG_KEPT {
+        assert_eq!(first.kept_handles.get(key).copied(), Some(h), "{key} in the DXF");
+    }
+    for writer in [Bridge, Native] {
+        let bytes = cadaddy_io::write_dwg(&first, cadaddy_io::Version::R2018, writer).unwrap();
+        for reader in [Bridge, Native] {
+            let back = cadaddy_io::read_dwg(&bytes, reader).unwrap();
+            for (key, h) in DWG_KEPT {
+                if reader == Native && key.starts_with("TABLE/") {
+                    continue; // the native reader reports no table heads
+                }
+                assert_eq!(back.kept_handles.get(key).copied(), Some(h), "{key}: written by {writer:?}, read by {reader:?}");
+            }
+            let mut ents: Vec<u64> = back.model.iter().map(|e| e.handle.0).collect();
+            ents.sort_unstable();
+            assert_eq!(ents, [0x100, 0x101], "entity handles: written by {writer:?}, read by {reader:?}");
+        }
+    }
+}

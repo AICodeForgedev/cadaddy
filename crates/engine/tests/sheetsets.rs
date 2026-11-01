@@ -383,3 +383,123 @@ fn a_page_setup_override_changes_the_published_paper() {
     let r = s.execute("sheetset", &json!({ "set": set, "action": "pagesetup", "remove": "A1" })).unwrap();
     assert_eq!(r["pageSetup"], "");
 }
+
+fn layout_names(path: &Path) -> Vec<String> {
+    let d = cadaddy_io::read(&std::fs::read(path).unwrap(), "x.dxf").unwrap();
+    let mut n: Vec<String> = d.layouts.iter().map(|l| l.name.clone()).collect();
+    n.sort();
+    n
+}
+
+#[test]
+fn a_failed_sync_leaves_set_and_drawings_agreeing_and_a_rerun_recovers() {
+    hooks();
+    let dir = folder("syncfail");
+    drawing(&dir.join("arch.dxf"), &["Plan"]);
+    std::fs::create_dir_all(dir.join("struct")).unwrap();
+    drawing(&dir.join("struct/frame.dxf"), &["Framing"]);
+    let set = dir.join("job.sheetset.json").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    let mut ss = |p: Value| {
+        let mut p = p;
+        p["set"] = json!(set);
+        s.execute("sheetset", &p)
+    };
+    ss(json!({ "action": "new" })).unwrap();
+    ss(json!({ "action": "add", "drawing": dir.join("arch.dxf").to_string_lossy() })).unwrap();
+    ss(json!({ "action": "add", "drawing": dir.join("struct/frame.dxf").to_string_lossy() })).unwrap();
+    ss(json!({ "action": "renumber", "prefix": "A-", "digits": 3, "start": 101 })).unwrap();
+
+    // The second drawing goes missing: sync errors and writes nothing.
+    let moved = dir.join("frame.moved");
+    std::fs::rename(dir.join("struct/frame.dxf"), &moved).unwrap();
+    assert!(ss(json!({ "action": "sync" })).is_err());
+    assert_eq!(layout_names(&dir.join("arch.dxf")), ["Plan"], "no drawing is written before every one is checked");
+    assert!(!dir.join("arch.bak").exists());
+    let stored: Value = serde_json::from_str(&std::fs::read_to_string(&set).unwrap()).unwrap();
+    let layouts: Vec<&str> = stored["sheets"].as_array().unwrap().iter().map(|s| s["layout"].as_str().unwrap()).collect();
+    assert_eq!(layouts, ["Plan", "Framing"], "the set still names what is on disk");
+
+    // A drawing that already carries the wanted name (an earlier run got that far) is adopted.
+    drawing(&dir.join("struct/frame.dxf"), &["A-102 Framing"]);
+    std::fs::remove_file(&moved).unwrap();
+    ss(json!({ "action": "sync" })).unwrap();
+    assert_eq!(layout_names(&dir.join("arch.dxf")), ["A-101 Plan"]);
+    assert_eq!(layout_names(&dir.join("struct/frame.dxf")), ["A-102 Framing"]);
+    let stored: Value = serde_json::from_str(&std::fs::read_to_string(&set).unwrap()).unwrap();
+    let layouts: Vec<&str> = stored["sheets"].as_array().unwrap().iter().map(|s| s["layout"].as_str().unwrap()).collect();
+    assert_eq!(layouts, ["A-101 Plan", "A-102 Framing"]);
+
+    let out = dir.join("job.pdf");
+    let r = ss(json!({ "action": "publish", "path": out.to_string_lossy() })).unwrap();
+    assert_eq!(r["pages"], 2);
+    let marks = cadaddy_io::pdf_merge::bookmarks(&std::fs::read(&out).unwrap()).unwrap();
+    let titles: Vec<&str> = marks.iter().map(|m| m.0.as_str()).collect();
+    assert!(titles.contains(&"A-101 Plan") && titles.contains(&"A-102 Framing"), "{titles:?}");
+}
+
+#[test]
+fn a_drawing_open_in_the_session_is_not_overwritten_by_the_set() {
+    hooks();
+    let dir = folder("open");
+    let file = dir.join("a.dxf");
+    drawing_with_view(&file, &["Plan", "Details"]);
+    let set = dir.join("o.sheetset.json").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    let ss = |s: &mut Session, p: Value| {
+        let mut p = p;
+        p["set"] = json!(set);
+        s.execute("sheetset", &p)
+    };
+    ss(&mut s, json!({ "action": "new" })).unwrap();
+    ss(&mut s, json!({ "action": "add", "drawing": file.to_string_lossy() })).unwrap();
+    ss(&mut s, json!({ "action": "renumber", "prefix": "A-", "start": 1 })).unwrap();
+    ss(&mut s, json!({ "action": "view", "sheet": "A-2", "view": "Detail", "at": [100, 100] })).unwrap();
+    let before = std::fs::read(&file).unwrap();
+
+    let d = cadaddy_io::read(&before, &file.to_string_lossy()).unwrap();
+    let idx = s.open_drawing(d, "a", Some(file.to_string_lossy().into_owned()));
+    for p in [
+        json!({ "action": "view", "sheet": "A-2", "view": "Detail", "at": [100, 100] }),
+        json!({ "action": "callout", "sheet": "A-1", "view": "1", "at": [10, 10] }),
+        json!({ "action": "insertField", "sheet": "A-1", "field": "Sheet.Number", "at": [10, 10] }),
+        json!({ "action": "sync" }),
+    ] {
+        let e = ss(&mut s, p.clone()).expect_err(&format!("{p} must be refused"));
+        let msg = e.to_string();
+        assert!(msg.contains("a.dxf") && msg.contains("open in CADaddy"), "{p}: {msg}");
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), before, "the file is untouched");
+
+    // Closed again (a document with no path), the same call goes through.
+    s.docs[idx].path = None;
+    ss(&mut s, json!({ "action": "view", "sheet": "A-2", "view": "Detail", "at": [100, 100] })).unwrap();
+    assert_ne!(std::fs::read(&file).unwrap(), before);
+}
+
+#[test]
+fn a_bare_view_number_on_several_sheets_is_refused_and_number_slash_sheet_picks() {
+    hooks();
+    let dir = folder("ambig");
+    drawing_with_view(&dir.join("a.dxf"), &["Plan", "Details", "Notes"]);
+    let set = dir.join("m.sheetset.json").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    let mut ss = |p: Value| {
+        let mut p = p;
+        p["set"] = json!(set);
+        s.execute("sheetset", &p)
+    };
+    ss(json!({ "action": "new" })).unwrap();
+    ss(json!({ "action": "add", "drawing": dir.join("a.dxf").to_string_lossy() })).unwrap();
+    ss(json!({ "action": "renumber", "prefix": "A-", "start": 1 })).unwrap();
+    ss(json!({ "action": "view", "sheet": "A-2", "view": "Detail", "at": [100, 100] })).unwrap();
+    let r = ss(json!({ "action": "view", "sheet": "A-3", "view": "Detail", "at": [100, 100] })).unwrap();
+    assert_eq!(r["views"][0]["number"], "1");
+    assert_eq!(r["views"][1]["number"], "1");
+
+    let e = ss(json!({ "action": "callout", "sheet": "A-1", "view": "1", "at": [10, 10] })).unwrap_err().to_string();
+    assert!(e.contains("A-2") && e.contains("A-3") && e.contains("number/sheet"), "{e}");
+    let r = ss(json!({ "action": "callout", "sheet": "A-1", "view": "1/A-3", "at": [10, 10] })).unwrap();
+    assert_eq!(r["callouts"].as_array().unwrap().len(), 1, "the refused call added nothing");
+    assert_eq!(r["callouts"][0]["target"], "A-3");
+}

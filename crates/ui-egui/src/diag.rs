@@ -181,6 +181,168 @@ impl Redact {
     }
 }
 
+/// File extensions of drawings and what is made from them.
+const DRAWING_EXTS: &[&str] = &["dwg", "dxf", "cdy", "dwf", "dwfx", "pdf", "ifc", "sv$", "bak"];
+
+/// Words that stand before a file name in a log line and aren't part of it.
+const LEAD_WORDS: &[&str] = &[
+    "opened",
+    "open",
+    "opening",
+    "saved",
+    "save",
+    "saving",
+    "loading",
+    "loaded",
+    "load",
+    "file",
+    "drawing",
+    "from",
+    "to",
+    "in",
+    "at",
+    "of",
+    "as",
+    "the",
+    "for",
+    "recent",
+    "autosave",
+    "wrote",
+    "write",
+    "read",
+    "reading",
+    "writing",
+    "plotted",
+    "plot",
+    "import",
+    "importing",
+    "export",
+    "exporting",
+    "with",
+    "by",
+    "on",
+    "is",
+    "not",
+    "found",
+    "failed",
+    "cannot",
+    "recovered",
+    "recover",
+    "info",
+    "warn",
+    "error",
+    "debug",
+    "trace",
+];
+
+const NAME_STOPS: &str = "\"'<>|*?,;:=()[]\t\r\n";
+
+/// The end of a known drawing extension ('.dwg' …) that starts at `chars[i]`, if one does.
+fn ext_end(chars: &[char], i: usize) -> Option<usize> {
+    if chars.get(i) != Some(&'.') {
+        return None;
+    }
+    let part = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    DRAWING_EXTS.iter().find_map(|e| {
+        let end = i + 1 + e.chars().count();
+        let same = chars.get(i + 1..end)?.iter().zip(e.chars()).all(|(a, b)| a.to_ascii_lowercase() == b);
+        (same && !chars.get(end).is_some_and(|c| part(*c))).then_some(end)
+    })
+}
+
+/// `end` moved past any further known extensions (`.dwg.bak`).
+fn more_exts(chars: &[char], mut end: usize) -> usize {
+    while let Some(e) = ext_end(chars, end) {
+        end = e;
+    }
+    end
+}
+
+/// Absolute paths (Unix, `X:\`, `X:/`, UNC) -> `<path>`, and bare drawing file names -> `<file>`,
+/// for text that may hold names of drawings that are not open now (old logs, crash reports).
+fn scrub_unknown(text: &str) -> String {
+    text.split_inclusive('\n').map(|line| scrub_files(&scrub_paths(line))).collect()
+}
+
+fn scrub_paths(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let prev = i.checked_sub(1).map(|p| chars[p]);
+        let next = chars.get(i + 1).copied();
+        let after = chars.get(i + 2).copied();
+        let unix = c == '/'
+            && prev.is_none_or(|p| p.is_whitespace() || "\"'(=[,;".contains(p))
+            && next.is_some_and(|n| n.is_alphanumeric() || "._~-$@".contains(n));
+        let win = c.is_ascii_alphabetic()
+            && next == Some(':')
+            && matches!(after, Some('\\' | '/'))
+            && prev.is_none_or(|p| !(p.is_alphanumeric() || p == '_'));
+        let unc = c == '\\' && next == Some('\\') && after.is_some_and(char::is_alphanumeric) && prev.is_none_or(|p| !p.is_alphanumeric());
+        if !(unix || win || unc) {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let limit = (i..chars.len()).find(|j| "\"'<>|*?\t\r\n".contains(chars[*j])).unwrap_or(chars.len());
+        // To the end of the drawing file name when there is one (names have spaces), else the word.
+        let mut end = (i + 1..limit).find_map(|j| ext_end(&chars, j).filter(|e| *e <= limit)).map(|e| more_exts(&chars, e));
+        if end.is_none() {
+            let mut e = (i..limit).find(|j| chars[*j].is_whitespace()).unwrap_or(limit);
+            while e > i + 1 && ".,;:)]".contains(chars[e - 1]) {
+                e -= 1;
+            }
+            end = Some(e);
+        }
+        out.push_str("<path>");
+        i = end.unwrap_or(i + 1).max(i + 1);
+    }
+    out
+}
+
+fn scrub_files(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len());
+    let stop = |c: char| c.is_whitespace() || NAME_STOPS.contains(c);
+    let mut i = 0;
+    while i < chars.len() {
+        let hit = (chars[i] == '.' && i > 0 && !stop(chars[i - 1])).then(|| ext_end(&chars, i)).flatten();
+        let Some(end) = hit else {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        };
+        let end = more_exts(&chars, end);
+        // Back over the name, then over capitalised words before it ("Zorb Tower.dwg").
+        let mut start = i;
+        while start > 0 && !stop(chars[start - 1]) {
+            start -= 1;
+        }
+        for _ in 0..6 {
+            if start < 2 || chars[start - 1] != ' ' {
+                break;
+            }
+            let mut w = start - 1;
+            while w > 0 && !stop(chars[w - 1]) {
+                w -= 1;
+            }
+            let word: String = chars[w..start - 1].iter().collect();
+            if word.is_empty() || LEAD_WORDS.contains(&word.to_ascii_lowercase().as_str()) {
+                break;
+            }
+            start = w;
+        }
+        // Whatever of the name is already in `out` goes.
+        let keep = out.chars().count().saturating_sub(i - start);
+        out = out.chars().take(keep).collect();
+        out.push_str("<file>");
+        i = end;
+    }
+    out
+}
+
 /// A home folder as it may be written: as given, with the other slash, and (Windows paths are
 /// case-blind) in lower and upper case.
 fn path_forms(home: &str) -> Vec<String> {
@@ -402,7 +564,14 @@ pub fn entries_for(app: &CadApp, choices: Choices, who: &Identity) -> Vec<(Strin
     let mut files: Vec<(String, Vec<u8>)> = out
         .into_iter()
         .map(|(n, t)| {
-            let t = if own(&n) { Redact { pairs: Vec::new(), words: redact.words.clone() }.apply(&t) } else { redact.apply(&t) };
+            let t = if own(&n) {
+                Redact { pairs: Vec::new(), words: redact.words.clone() }.apply(&t)
+            } else if choices.names {
+                redact.apply(&t)
+            } else {
+                // Paths and drawing names that aren't in the open drawings (older logs, crash reports).
+                scrub_unknown(&redact.apply(&t))
+            };
             (n, t.into_bytes())
         })
         .collect();
@@ -649,6 +818,9 @@ mod tests {
     }
     use serde_json::json;
 
+    /// The host info and the crash-report folder are process-wide: tests that set them take turns.
+    static PROCESS_WIDE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn text(entries: &[(String, Vec<u8>)]) -> String {
         entries.iter().map(|(n, b)| format!("== {n}\n{}\n", String::from_utf8_lossy(b))).collect()
     }
@@ -680,6 +852,7 @@ mod tests {
     // One test, since the host info is process-wide.
     #[test]
     fn the_bundle_holds_no_names_unless_asked() {
+        let _turn = PROCESS_WIDE.lock().unwrap_or_else(PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("cadaddy-diag-{}", std::process::id()));
         let app = app_with_secrets(&dir.join("logs"));
 
@@ -763,6 +936,67 @@ mod tests {
         assert!(path_forms("/home/sam").contains(&"\\home\\sam".to_string()));
     }
 
+    /// MUST 1: paths and drawing names from earlier sessions (not open, not recent) are scrubbed from
+    /// every log and from crash reports unless names are ticked.
+    #[test]
+    fn unknown_paths_and_names_leave_old_logs_and_crash_reports() {
+        let _turn = PROCESS_WIDE.lock().unwrap_or_else(PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("cadaddy-diag-old-{}", std::process::id()));
+        let logs = dir.join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        cadaddy_engine::crash_report::set_store_dir(Some(dir.join("crashes")));
+        let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+        app.run("line", json!({ "points": [[0, 0], [1, 1]] })).unwrap();
+        app.session.docs[0].path = Some("/jobs/OPEN/Other.dxf".into());
+        app.session.docs[0].title = "Other.dxf".into();
+        app.ui.recent_files = Vec::new();
+        let old = "INFO opened /Volumes/Jobs/ZORBJOB/Zorb Tower.dwg\nWARN autosave C:\\Jobs\\ZORBJOB\\Zorb Tower_1_2_3.sv$ kept\nINFO share \\\\srv\\ZORBJOB\\plan.pdf ok\nINFO also d:/ZORBJOB/x.dxf and Zorb Tower.dwg.bak done\n";
+        for n in ["cadaddy.log", "cadaddy.1.log", "cadaddy.2.log"] {
+            std::fs::write(logs.join(n), old).unwrap();
+        }
+        set_host(HostInfo { version: "cadaddy test".into(), gpu: "Test GPU".into(), log_dir: Some(logs) });
+        cadaddy_engine::crash_report::write(&cadaddy_engine::crash_report::CrashInfo {
+            command: "testcmd",
+            message: "test panic",
+            prompt: None,
+            backtrace: "at /home/zorbuser/src/x.rs:1:1",
+            history: &[],
+            drawing_title: Some("Zorb Tower.dwg"),
+        });
+        let who = Identity { homes: Vec::new(), user: None, host: None };
+        let plain = entries_for(&app, Choices { drawing: true, names: false, file: false }, &who);
+        let all = text(&plain);
+        assert!(!all.contains("Zorb") && !all.contains("ZORB"), "{all}");
+        assert!(all.contains("<path>") && all.contains("<file>"), "{all}");
+        assert!(all.contains("INFO opened <path>") && all.contains("kept"), "{all}");
+        assert!(all.contains("Line: 1") && all.contains("operating system"), "counts and system stay: {all}");
+        assert_eq!(plain.iter().filter(|(n, _)| n.starts_with("logs/")).count(), 3);
+        assert!(plain.iter().any(|(n, _)| n.starts_with("diagnostics/")), "the crash report is in the bundle");
+
+        let named = text(&entries_for(&app, Choices { drawing: true, names: true, file: false }, &who));
+        assert!(named.contains("Zorb Tower.dwg") && named.contains("/Volumes/Jobs/ZORBJOB"), "{named}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scrubbing_leaves_other_text_alone() {
+        assert_eq!(scrub_unknown("a and/or b 1/2 https://x.org/a.html ~/y Line: 1"), "a and/or b 1/2 https://x.org/a.html ~/y Line: 1");
+        assert_eq!(scrub_unknown("drawing: Zorb Tower.dwg"), "drawing: <file>");
+        assert_eq!(scrub_unknown("INFO opened Plan.DXF today"), "INFO opened <file> today");
+        assert_eq!(scrub_unknown("see (/tmp/c.log) now"), "see (<path>) now");
+    }
+
+    /// MUST 2: a typed line names its command in the stall trail.
+    #[test]
+    fn a_stall_names_the_typed_command() {
+        let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
+        let frame = busy("logic");
+        let _ = app.cmdline("hatch");
+        let msg = watchdog().check(now_ms() + 3_600_000, STALL).expect("an old frame is reported");
+        drop(frame);
+        assert!(msg.contains("command hatch"), "{msg}");
+    }
+
     #[test]
     fn help_opens_the_dialog() {
         let mut app = CadApp::new(cadaddy_engine::Session::new(), crate::Services::default());
@@ -783,6 +1017,7 @@ mod tests {
     /// MUST 4b: diag::entries includes `diagnostics/crash-…txt` when a crash report exists.
     #[test]
     fn crash_reports_appear_in_the_bundle() {
+        let _turn = PROCESS_WIDE.lock().unwrap_or_else(PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("cadaddy-diag-crash-{}", std::process::id()));
         cadaddy_engine::crash_report::set_store_dir(Some(dir.clone()));
 

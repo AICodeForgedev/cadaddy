@@ -120,7 +120,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{assembly?: {from, to}, scope?: {key: scope}, settings?: {…}} → {now, what_if, delta}")
             .noundo(),
         CommandSpec::new("estimate.export", "Export Estimate", run_export)
-            .params("{path: .xlsx or .csv file, format?: xlsx|csv (from the extension), columns?: [key|trade|category|item|size|unit|qty|net|level|material|labor_hours|labor_cost|cost|total|scope|status|via]} → {path, lines, total, columns}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path: .xlsx or .csv file, format?: xlsx|csv (from the extension), columns?: [key|trade|category|item|size|unit|qty|net|level|material|labor_hours|labor_cost|cost|total|scope|status|via]} → {path, lines, total, columns}")
             .noundo(),
         CommandSpec::new("estimate.bid_summary", "Estimate Bid Summary", run_bid_summary)
             .params("{} → {total, base_bid: {by_trade}, alternates, assumptions, clarifications, exclusions, open_findings, text}")
@@ -526,7 +526,7 @@ fn run_import_p405(s: &mut Session, p: &Value) -> Result<Value> {
             out.push_str(row);
             out.push('\n');
         }
-        std::fs::write(&priv_path, &out).map_err(|e| bad(C, format!("write {}: {e}", priv_path.display())))?;
+        crate::writefile::write(&priv_path, &out).map_err(|e| bad(C, format!("write {}: {e}", priv_path.display())))?;
         notes.push(format!("{} private rows written to {}", private_rows.len(), priv_path.display()));
     }
     let (sp, mut st) = state(s, C)?;
@@ -1525,6 +1525,7 @@ fn run_observe(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
+    super::exchange::guard_params(s, "estimate.export", p, &["path"])?;
     let (_, st) = state(s, "estimate.export")?;
     let job = price_job(s, &st, "estimate.export", true)?;
     outputs::export(&st, &job, p)

@@ -156,7 +156,9 @@ pub fn kind_of(code: i32) -> Kind {
 fn typed(code: i32, text: &str) -> Value {
     let t = text.trim();
     match kind_of(code) {
-        Kind::Real => t.parse::<f64>().ok().filter(|v| v.is_finite()).map(Value::Real).unwrap_or(Value::Real(0.0)),
+        // NaN and infinite values are kept as NaN (they read as 0 through `as_f64`): the DXF reader
+        // finds them and says so instead of reading them as 0 unseen.
+        Kind::Real => t.parse::<f64>().ok().map(|v| Value::Real(if v.is_finite() { v } else { f64::NAN })).unwrap_or(Value::Real(0.0)),
         Kind::Int16 | Kind::Int32 | Kind::Int64 => {
             t.parse::<i64>().map(Value::Int).unwrap_or_else(|_| Value::Int(t.parse::<f64>().map(|f| f as i64).unwrap_or(0)))
         }
@@ -432,8 +434,7 @@ pub fn write_ascii_as(tags: &[Tag], utf8: bool) -> String {
     for t in tags {
         let _ = write!(out, "{:>3}\r\n", t.code);
         match &t.value {
-            Value::Str(s) if utf8 => out.extend(s.chars().map(|c| if matches!(c, '\r' | '\n') { ' ' } else { c })),
-            Value::Str(s) => escape_unicode(s, &mut out),
+            Value::Str(s) => escape_unicode(s, utf8, &mut out, false),
             Value::Real(r) => out.push_str(&format_real(*r)),
             Value::Int(i) => out.push_str(&i.to_string()),
             Value::Bool(b) => out.push_str(&i64::from(*b).to_string()),
@@ -452,6 +453,16 @@ pub fn write_ascii_as(tags: &[Tag], utf8: bool) -> String {
 /// in [`write_ascii`]. A tag's value is converted to its code's kind, so a number written as text
 /// is stored as a number; a code outside the 16-bit range is skipped.
 pub fn write_binary(tags: &[Tag], utf8: bool) -> Vec<u8> {
+    binary(tags, utf8, false)
+}
+
+/// [`write_binary`] with the line breaks of text kept as they are (strings end at their zero
+/// byte, so a break cannot split a record), for a reader that wants the text as it was.
+pub fn write_binary_keeping_breaks(tags: &[Tag], utf8: bool) -> Vec<u8> {
+    binary(tags, utf8, true)
+}
+
+fn binary(tags: &[Tag], utf8: bool, keep_breaks: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(BINARY_SENTINEL.len() + tags.len() * 12);
     out.extend_from_slice(BINARY_SENTINEL);
     for t in tags {
@@ -465,11 +476,7 @@ pub fn write_binary(tags: &[Tag], utf8: bool) -> Vec<u8> {
                     v => v.as_str().into(),
                 };
                 let mut text = String::with_capacity(s.len());
-                if utf8 {
-                    text.extend(s.chars().map(|c| if matches!(c, '\r' | '\n') { ' ' } else { c }));
-                } else {
-                    escape_unicode(&s, &mut text);
-                }
+                escape_unicode(&s, utf8, &mut text, keep_breaks);
                 out.extend(text.bytes().filter(|&b| b != 0));
                 out.push(0);
             }
@@ -484,8 +491,14 @@ pub fn write_binary(tags: &[Tag], utf8: bool) -> Vec<u8> {
             }
             Kind::Int32 => {
                 out.extend_from_slice(&code_bytes);
-                let v = t.value.as_i64().clamp(i64::from(i32::MIN), i64::from(i32::MAX));
-                out.extend_from_slice(&i32::try_from(v).unwrap_or_default().to_le_bytes());
+                // An unsigned 32-bit value (a true colour, 0xC2RRGGBB) keeps its bits, as AutoCAD
+                // stores it; anything else out of range is clamped.
+                let v = t.value.as_i64();
+                let v = match u32::try_from(v) {
+                    Ok(u) => i32::from_le_bytes(u.to_le_bytes()),
+                    Err(_) => i32::try_from(v.clamp(i64::from(i32::MIN), i64::from(i32::MAX))).unwrap_or_default(),
+                };
+                out.extend_from_slice(&v.to_le_bytes());
             }
             Kind::Int64 => {
                 out.extend_from_slice(&code_bytes);
@@ -526,12 +539,16 @@ pub fn is_binary(bytes: &[u8]) -> bool {
 
 /// Escape a string for a pre-R2007 DXF, whose text is in the `$DWGCODEPAGE` code page: ASCII
 /// stays as it is and every other character becomes `\U+XXXX` (a surrogate pair of escapes
-/// above U+FFFF), so the bytes are valid in any code page. Line breaks become spaces.
-fn escape_unicode(s: &str, out: &mut String) {
-    for c in s.chars() {
+/// above U+FFFF), so the bytes are valid in any code page; with `utf8` they stay as they are.
+/// A backslash that would start a `\U+` or `\M+` sequence is written as `\U+005C` so the reader
+/// gives back the literal text. Line breaks become spaces.
+fn escape_unicode(s: &str, utf8: bool, out: &mut String, keep_breaks: bool) {
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
         match c {
-            '\r' | '\n' => out.push(' '),
-            c if c.is_ascii() => out.push(c),
+            '\r' | '\n' if !keep_breaks => out.push(' '),
+            '\\' if matches!(chars.get(i + 1), Some('U' | 'M')) && chars.get(i + 2) == Some(&'+') => out.push_str("\\U+005C"),
+            c if utf8 || c.is_ascii() => out.push(c),
             c => {
                 let mut units = [0u16; 2];
                 for u in c.encode_utf16(&mut units) {
@@ -724,6 +741,30 @@ pub fn is_entity_type(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_escape_text_roundtrips() {
+        for utf8 in [false, true] {
+            for text in ["\\U+00E9", "\\M+183A4F", "a\\nb \\P", "\\\\U+00E9", "\\U+005C"] {
+                let tags = vec![Tag::s(8, text)];
+                let back = parse_ascii(&write_ascii_as(&tags, utf8)).unwrap();
+                assert_eq!(back, tags, "utf8={utf8} {text}");
+                let back = parse_binary(&write_binary(&tags, utf8)).unwrap();
+                assert_eq!(back[1..], tags[..], "binary utf8={utf8} {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn binary_keeps_the_bits_of_an_unsigned_32_bit_value() {
+        // A true colour (0xC2RRGGBB) is above i32::MAX: it is stored with the same 32 bits, not clamped.
+        let colour = 0xC2AA_4422_i64;
+        let back = parse_binary(&write_binary(&[Tag::i(91, colour)], false)).unwrap();
+        assert_eq!(back[1].value.as_i64() & 0xFFFF_FFFF, colour);
+        // Out of range either way is still clamped.
+        let back = parse_binary(&write_binary(&[Tag::i(91, i64::MAX), Tag::i(91, i64::MIN)], false)).unwrap();
+        assert_eq!((back[1].value.as_i64(), back[2].value.as_i64()), (i64::from(i32::MAX), i64::from(i32::MIN)));
+    }
 
     #[test]
     fn owned_sections_and_record_slices_match_the_copying_ones() {

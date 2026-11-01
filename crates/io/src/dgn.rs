@@ -190,8 +190,11 @@ impl Raw<'_> {
     }
 }
 
-fn elements(bytes: &[u8]) -> Vec<Raw<'_>> {
+/// The elements of a file, and where it was cut short (an element whose size runs past the end of
+/// the data), if it was.
+fn elements(bytes: &[u8]) -> (Vec<Raw<'_>>, Option<usize>) {
     let mut out = Vec::new();
+    let mut cut = None;
     let mut at = 0usize;
     while at + 4 <= bytes.len() && out.len() < MAX_ELEMENTS {
         if bytes.get(at..at + 2) == Some(&[0xff, 0xff]) {
@@ -199,11 +202,14 @@ fn elements(bytes: &[u8]) -> Vec<Raw<'_>> {
         }
         let words = usize::from(u16_at(bytes, at + 2).unwrap_or(0));
         let end = at + 4 + words * 2;
-        let Some(data) = bytes.get(at..end) else { break };
+        let Some(data) = bytes.get(at..end) else {
+            cut = Some(at);
+            break;
+        };
         out.push(Raw { at, data });
         at = end;
     }
-    out
+    (out, cut)
 }
 
 /// What the TCB says and what reading collects.
@@ -708,7 +714,10 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     if bytes.len() > MAX_FILE {
         return Err(IoError::Format(format!("DGN files over {} MB aren't read", MAX_FILE >> 20)));
     }
-    let raws = elements(bytes);
+    let (raws, cut) = elements(bytes);
+    if raws.is_empty() && cut.is_some() {
+        return Err(IoError::Format("DGN: the design file ended early and no elements could be read (the file is damaged or cut short)".into()));
+    }
     let mut ctx = Ctx {
         scale: 1.0,
         origin: Vec3::ZERO,
@@ -793,6 +802,15 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     }
     for (what, n) in &ctx.skipped {
         d.read_notes.push(format!("DGN: {n} {what} not read"));
+    }
+    if let Some(at) = cut {
+        d.read_notes.insert(
+            0,
+            format!(
+                "DGN: the design file ended early (the element at byte {at} runs past the end); {} elements were read, the rest are lost",
+                raws.len()
+            ),
+        );
     }
     Ok(d)
 }

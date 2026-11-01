@@ -22,6 +22,15 @@ served as well, not instead. Without `--connect`, `cadaddy-cli mcp` decides the 
 (listing its tools or its first call): the window if one answers on 47820, else its own session — so
 open CADaddy before asking the agent if you want to watch it work.
 
+Only one window can hold port 47820: the first CADaddy window started gets it, and a later window
+says "Agent control is held by another CADaddy window" in its status line and does not serve agents
+(a window started with its own `--control PORT` still serves that port). The connector drives the
+window that holds the port; its instructions name it (window title and process id), and `ping` with
+`version: true` returns the same. Close the first window, or start the other with `--control PORT`
+and connect to that port, to drive a different one. If the app refuses the connection because no
+control token was found, `cadaddy-cli mcp` says so ("refused the connection: no control token
+(looked in …; set CADADDY_CONTROL_TOKEN)"); only a real network loss reports a lost reply.
+
 With `--connect`, an MCP client that starts before the app can add `--lazy` (reach the app at the
 first tool call; until it answers each call fails with a message saying how to open it) and
 `--launch` (open CADaddy with that control port when nothing answers, and wait for it — macOS, and on
@@ -44,6 +53,8 @@ Example client configuration (Claude Code / Claude Desktop):
 | `list_commands {filter?}` | The command catalog; `filter` matches part of a command's id, label or an alias. |
 | `inspect_drawing {entities?, limit?}` | Counts, extents, layers, styles, blocks, layouts, selection, undo history and entities. |
 | `query_entities {type?, layer?, window?, crossing?, limit?, offset?}` | Filtered entities with handles and geometry. `window` `[[x0,y0],[x1,y1]]` finds objects whose geometry is inside it or crosses it (`crossing: false`: entirely inside). `count` is every match, `returned` the page (`offset`, `limit`, default 500). |
+| `execute {"command": "shapes", "params": {type?, layer?, window?, crossing?, limit?, offset?, tolerance?}}` | Facts about the closed shapes — closed polylines, circles, full ellipses, closed splines: perimeter, area, centroid, winding, the first self-intersection and coincident vertices, exact with arcs and bulges. Other matches are counted under `skipped` with the reason. |
+| `query_entities {type?, layer?, selected?, window?, crossing?, limit?, offset?}` | Filtered entities with handles and geometry. `selected: true` restricts results to the current selection in the active space; an empty selection returns no entities. Omitted/false queries all entities in that space. Filters combine before paging. `window` `[[x0,y0],[x1,y1]]` finds objects whose geometry is inside it or crosses it (`crossing: false`: entirely inside). `count` is every match, `returned` the page (`offset`, `limit`, default 500). |
 | `render {width?, height?, fit?, window?}` | A PNG image of the drawing, or of just the area `window` `[[x0,y0],[x1,y1]]` (one sheet or room of a large drawing; 1600 px wide with the window's shape unless sized). |
 | `find_text {contains?, layer?, window?, limit?, offset?}` | The readable texts — TEXT, MTEXT without formatting codes, block attributes, multileaders — with text, insertion point, height, rotation, style, layer and handle; filtered by content (any case), layer and a window around the insertion points. Read-only (the `texts` command). |
 | `new_drawing {metric?}`, `open {path}`, `save {path?}`, `cancel` | Files and Escape. `save` to a `.svg`, `.png` or `.pdf` path exports: the drawing keeps its name and unsaved changes. |

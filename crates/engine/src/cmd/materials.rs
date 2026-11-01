@@ -254,6 +254,24 @@ fn rename_refs(d: &mut cadaddy_doc::Drawing, from: &str, to: Option<&str>) -> (u
     (layers, objects)
 }
 
+/// Rename the drawing's material `from` to `to`: the definition and every layer, object and
+/// CMATERIAL reference follow. Used by RENAME and -RENAME.
+pub(crate) fn rename_material(s: &mut Session, from: &str, to: &str) -> Result<()> {
+    let name = s
+        .doc()?
+        .material(from)
+        .map(|m| m.name.clone())
+        .ok_or_else(|| bad("rename", format!("no material named \"{}\"; MATERIALS lists the drawing's materials", from.trim())))?;
+    let to = to.trim().to_string();
+    check_name(s, &to, Some(&name))?;
+    let d = s.doc_mut()?;
+    if let Some(m) = d.materials.iter_mut().find(|m| m.name.eq_ignore_ascii_case(&name)) {
+        m.name.clone_from(&to);
+    }
+    rename_refs(d, &name, Some(&to));
+    Ok(())
+}
+
 fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let name = material_name(s, p, "material.edit")?;
     let rename = text(p, "rename")?.map(|r| r.trim().to_string()).filter(|r| !r.eq_ignore_ascii_case(&name));

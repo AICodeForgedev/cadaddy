@@ -535,6 +535,9 @@ const ROOM_WORDS: &[&str] = &[
     "DESK",
     "LIBRARY",
     "CLASSROOM",
+    // Back of house; the trades' name for an equipment room.
+    "BOH",
+    "MEP",
 ];
 
 /// Words of equipment and device tags, never a room's name (`PNLBD 'D'`, `XFMR T1`, `DISC`).
@@ -615,6 +618,47 @@ pub(crate) fn note_like(t: &str) -> bool {
             && (w.contains('-') || w.contains('.') || (i > 0 && (has("SEE") || has("REFER") || has("REF") || has("SHEET") || has("DWG"))))
     });
     !super::finish_codes(&up).is_empty() || ceiling || level || scale || sheet_ref
+}
+
+/// A room label's line wholly in parentheses (`(TUB)` under `DOUBLE Q ADA`) is the name above it
+/// qualified, never a name of its own: it takes the text of the line right above it (about its
+/// height, over it, within three lines). Its place stays: a room traced from it is that room.
+pub(crate) fn lift_qualifiers(items: &mut [(cadaddy_doc::Handle, String, Vec2, f64)]) {
+    let qualifier = |t: &str| t.trim().starts_with('(') && t.trim().ends_with(')');
+    // By height on the page: only the band right above a qualifier is looked through (a print
+    // set's sheets side by side hold hundreds of thousands of texts).
+    let mut by_y: Vec<usize> = (0..items.len()).filter(|&i| items[i].2.y.is_finite()).collect();
+    by_y.sort_by(|&a, &b| items[a].2.y.total_cmp(&items[b].2.y));
+    let lifts: Vec<(usize, String)> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, t, q, h))| qualifier(t) && h.is_finite() && *h > 0.0 && q.is_finite())
+        .filter_map(|(i, (_, _, q, h))| {
+            let from = by_y.partition_point(|&j| items[j].2.y <= q.y + 0.5 * h);
+            let to = by_y.partition_point(|&j| items[j].2.y <= q.y + 3.0 * h);
+            by_y.get(from..to)?
+                .iter()
+                .map(|&j| &items[j])
+                .filter(|(_, t, a, ah)| {
+                    let width = t.trim().chars().count() as f64 * ah;
+                    !qualifier(t)
+                        && !room_number(t)
+                        && *ah > 0.7 * h
+                        && *ah < 1.4 * h
+                        && a.y > q.y + 0.5 * h
+                        && a.y <= q.y + 3.0 * h
+                        && q.x >= a.x - 2.0 * h
+                        && q.x <= a.x + width
+                })
+                .min_by(|a, b| (a.2.y - q.y).total_cmp(&(b.2.y - q.y)))
+                .map(|(_, t, _, _)| (i, t.clone()))
+        })
+        .collect();
+    for (i, t) in lifts {
+        if let Some(item) = items.get_mut(i) {
+            item.1 = t;
+        }
+    }
 }
 
 /// How well a text names a room: 3 with a room or unit-type word (`DOUBLE Q`, `CORRIDOR`), 1 for
@@ -720,7 +764,9 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
         .copied()
         .filter(|e| !tagged || spec.as_ref().and_then(|sp| sp.role(&e.common.layer)).is_some_and(|r| r.role == cadaddy_walk3d::Role::RoomTag))
         .collect();
-    let mut all: Vec<Label> = texts(&on_tags).into_iter().map(|(h, t, at, ht)| (h, t, at, ht, false)).collect();
+    let mut read = texts(&on_tags);
+    lift_qualifiers(&mut read);
+    let mut all: Vec<Label> = read.into_iter().map(|(h, t, at, ht)| (h, t, at, ht, false)).collect();
     // Room tag blocks: their name and number attributes. The blocks themselves (a box or a bubble
     // around the tag) bound no room.
     let mut tag_blocks = std::collections::HashSet::new();
@@ -784,9 +830,13 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     // is so large its trace tolerance - a fraction of the extents - opens every room).
     let plan = match regions.filter(|r| !r.is_empty()) {
         Some(rs) => {
-            let inside = |c: Vec2| rs.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
-            let keep: std::collections::HashSet<cadaddy_doc::Handle> =
-                crate::cmd::bspec::plan_objects(d).into_iter().filter(|e| crate::cmd::bspec::centre(d, e).is_some_and(inside)).map(|e| e.handle).collect();
+            let inside =
+                |c: Vec2| rs.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
+            let keep: std::collections::HashSet<cadaddy_doc::Handle> = crate::cmd::bspec::plan_objects(d)
+                .into_iter()
+                .filter(|e| crate::cmd::bspec::centre(d, e).is_some_and(inside))
+                .map(|e| e.handle)
+                .collect();
             crate::cmd::bspec::room_plan_of(s, &keep)?
         }
         None => crate::cmd::bspec::room_plan(s)?,
@@ -882,6 +932,32 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_short_room_name_is_no_device_mark() {
+        // Back of house and the trades' equipment room: rooms, though shaped like a device mark.
+        for t in ["BOH", "MEP", "RR", "IDF"] {
+            assert!(!equipment_tag(t) && room_name_score(t) > 0, "{t}");
+        }
+        for t in ["XA", "EF", "J"] {
+            assert!(equipment_tag(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn a_parenthesised_line_is_the_name_above_it_qualified() {
+        let h = cadaddy_doc::Handle(1);
+        let mut labels = vec![
+            (h, "SINGLE Q ADA".to_string(), Vec2::new(1722.0, 1112.0), 11.9),
+            (h, "(RIS)".to_string(), Vec2::new(1756.0, 1092.0), 11.9),
+            (h, "118".to_string(), Vec2::new(1761.0, 1071.0), 11.9),
+            // A note's bracket far from any name stays as it is.
+            (h, "(N.I.C.)".to_string(), Vec2::new(5000.0, 0.0), 11.9),
+        ];
+        lift_qualifiers(&mut labels);
+        let names: Vec<&str> = labels.iter().map(|l| l.1.as_str()).collect();
+        assert_eq!(names, ["SINGLE Q ADA", "SINGLE Q ADA", "118", "(N.I.C.)"]);
+    }
 
     #[test]
     fn a_print_sets_last_sheets_are_read_as_fully_as_its_first() {

@@ -17,7 +17,7 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
-        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, type?: object type (only the selected objects of that type change: line, circle, text…), layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, background?: true | false | {color?, scale?} (MTEXT mask), <geometry fields: radius, center, centerX, centerY, start, end, startX, startY, endX, endY, text, height, rotation…>}"),
+        CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, type?: object type (only the selected objects of that type change: line, circle, text…), layer?, color?, linetype?, lineweight?, ltscale?, thickness?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, background?: true | false | {color?, scale?} (MTEXT mask), <geometry fields: radius, center, centerX, centerY, start, end, startX, startY, endX, endY, text, height, rotation…>; dimensions: textOverride, dimStyle, textHeight, arrowSize, dimScale, precision (per-dimension overrides)}"),
         CommandSpec::new("chprop", "Change Properties", run_set)
             .params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?, ...properties.set fields} (typed: AutoCAD's property prompts)")
             .interactive(|_| Ok(Box::new(chprop::ChpropM::new(false)))),
@@ -66,6 +66,19 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(super::ask::machine("ltscale", "LTSCALE", [super::ask::ask_or("scale", "Enter new linetype scale factor", super::ask::Kind::Number, |s| var(s, "LTSCALE"))]))
         }),
         CommandSpec::new("units", "Units...", run_units).menu(&["Format", "Units..."]).alias(&["un"]).params("{lunits?: 1..5, luprec?: 0..8, aunits?: 0..4, auprec?: 0..8, insunits?}"),
+        CommandSpec::new("thickness", "Thickness", run_thickness)
+            .menu(&["Format", "Thickness"])
+            .params("{thickness} (THICKNESS: the 3D thickness given to new lines, arcs, circles, points and polylines; may be negative) → {thickness}")
+            .transparent()
+            .interactive(|_| {
+                Ok(super::ask::machine(
+                    "thickness",
+                    "THICKNESS",
+                    [super::ask::ask_or("thickness", "Enter new value for THICKNESS", super::ask::Kind::Bounded(MAX_THICKNESS), |s| {
+                        Some(format!("{:.4}", s.doc().ok()?.header.f64("THICKNESS", 0.0)))
+                    })],
+                ))
+            }),
         CommandSpec::new("limits", "Drawing Limits", run_limits).menu(&["Format", "Drawing Limits"]).params("{min: [x,y], max: [x,y]}").interactive(|_| {
             Ok(super::ask::machine(
                 "limits",
@@ -102,7 +115,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mleaderstyle", "Multileader Style...", run_mleaderstyle)
             .menu(&["Format", "Multileader Style..."])
             .alias(&["mls"])
-            .params("{name, arrowSize?, textHeight?, landingGap?, dogleg?, textStyle?, annotative?, leaderType?: straight|spline|none, block?: block name (\"\" for text content), blockAttach?: center|insertion, current?} → styles"),
+            .params("{name: string, arrowSize?: number, textHeight?: number, landingGap?: number, dogleg?: number, textStyle?: string, annotative?: bool, leaderType?: straight|spline|none, block?: block name (\"\" for text content), blockAttach?: center|insertion, current?} → styles"),
         CommandSpec::new("ddptype", "Point Style...", run_ptype)
             .menu(&["Format", "Point Style..."])
             .alias(&["ptype"])
@@ -125,6 +138,7 @@ pub(super) fn entity_props(d: &cadaddy_doc::Drawing, e: &cadaddy_doc::Entity) ->
         "lineweight": e.common.lineweight.name(),
         "ltscale": e.common.ltscale,
         "transparency": transparency_value(e.common.transparency),
+        "thickness": e.common.thickness,
         "visible": e.common.visible,
     });
     if cadaddy_doc::can_be_annotative(&e.kind)
@@ -263,6 +277,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         .get("transparency")
         .map(|v| parse_transparency(v).ok_or_else(|| bad("properties.set", "transparency must be ByLayer, ByBlock or a percentage from 0 to 90")))
         .transpose()?;
+    let thickness = p
+        .get("thickness")
+        .map(|v| v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("properties.set", "thickness must be a finite number")))
+        .transpose()?;
     let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("properties.set", "bad lineweight"))).transpose()?;
     let d = s.doc_mut()?;
     // An explicit object linetype must be ByLayer, ByBlock or a loaded definition (as `linetype current` requires).
@@ -281,6 +299,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let dim_style = str_param(p, "dimStyle")
         .map(|n| d.dim_style(n).map(|st| st.name.clone()).ok_or_else(|| bad("properties.set", format!("dimension style `{n}` not found"))))
         .transpose()?;
+    let dim_over = dim_overrides(p)?;
     // MTEXT background mask: true (the drawing's background colour), {color?, scale?}, or
     // false / null to remove it.
     let background: Option<Option<cadaddy_doc::MTextBackground>> = match p.get("background") {
@@ -324,6 +343,9 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(t) = transparency {
             e.common.transparency = t;
+        }
+        if let Some(th) = thickness {
+            e.common.thickness = th;
         }
         if let Some(v) = p.get("visible").and_then(Value::as_bool) {
             e.common.visible = v;
@@ -493,6 +515,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                     dm.style.clone_from(st);
                     dm.block = None;
                 }
+                if !dim_over.is_empty() {
+                    dm.overrides.extend(dim_over.clone());
+                    dm.block = None;
+                }
             }
             EntityKind::Hatch(h) => {
                 if let Some(v) = str_param(p, "pattern") {
@@ -555,7 +581,43 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
     let c = p.get("color").and_then(parse_color).ok_or_else(|| bad("color", "`color` is required"))?;
-    let d = s.doc_mut()?;
+    set_current_color(s.doc_mut()?, c);
+    ok()
+}
+
+/// `setvar CECOLOR`: the same input as the `color` command, stored the same way.
+pub(crate) fn set_current_color_value(s: &mut Session, v: &Value) -> Option<()> {
+    // An out-of-range index is refused here, where `color` folds it to ByLayer.
+    let c = match v {
+        // "RGB:r,g,b" is how `getvar` reads a true colour back, so a saved value can be restored.
+        Value::String(t) => match t.trim().get(..4).filter(|p| p.eq_ignore_ascii_case("rgb:")).and_then(|_| t.trim().get(4..)) {
+            Some(triple) => Color::parse(triple).filter(|c| matches!(c, Color::True(_))),
+            None => Color::parse(t),
+        },
+        Value::Number(n) => n.as_i64().and_then(|i| Color::parse(&i.to_string())),
+        _ => None,
+    }?;
+    set_current_color(s.doc_mut().ok()?, c);
+    Some(())
+}
+
+/// `getvar CECOLOR` as AutoCAD gives it, always text: "BYLAYER", "BYBLOCK", the index ("1" for
+/// red) or "RGB:r,g,b".
+pub(crate) fn current_color_value(d: &cadaddy_doc::Drawing) -> String {
+    if let Some(rgb) = d.header.get("CECOLOR_RGB").and_then(|v| v.as_i64()).and_then(|v| u32::try_from(v).ok()) {
+        let cadaddy_color::Rgb(r, g, b) = cadaddy_color::Rgb::from_u32(rgb);
+        return format!("RGB:{r},{g},{b}");
+    }
+    match Color::from_aci(d.header.i64("CECOLOR", 256) as i16) {
+        Color::ByLayer => "BYLAYER".into(),
+        Color::ByBlock => "BYBLOCK".into(),
+        other => other.to_aci().to_string(),
+    }
+}
+
+/// A true colour keeps its RGB in CECOLOR_RGB (which wins for new objects); any other colour must
+/// clear a stale one.
+fn set_current_color(d: &mut cadaddy_doc::Drawing, c: Color) {
     match c {
         Color::True(rgb) => {
             d.header.set_i64("CECOLOR", i64::from(cadaddy_color::nearest_aci(rgb)));
@@ -566,7 +628,6 @@ fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
             d.header.vars.remove("CECOLOR_RGB");
         }
     }
-    ok()
 }
 
 pub(crate) mod linfile;
@@ -627,6 +688,22 @@ fn run_ltscale(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "message": "Regenerating model." }))
 }
 
+/// The largest THICKNESS, either way.
+const MAX_THICKNESS: f64 = 1e12;
+
+fn thickness_in_range(t: f64) -> bool {
+    t.is_finite() && t.abs() <= MAX_THICKNESS
+}
+
+fn run_thickness(s: &mut Session, p: &Value) -> Result<Value> {
+    let t = f64_req("thickness", p, "thickness")?;
+    if !thickness_in_range(t) {
+        return Err(bad("thickness", "thickness is out of range (-1e12 to 1e12)"));
+    }
+    s.doc_mut()?.header.set_f64("THICKNESS", t);
+    Ok(json!({ "thickness": t }))
+}
+
 fn run_units(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc_mut()?;
     for (k, lo, hi) in [("lunits", 1, 5), ("luprec", 0, 8), ("aunits", 0, 4), ("auprec", 0, 8), ("insunits", 0, 24)] {
@@ -673,9 +750,7 @@ fn styles_json(d: &cadaddy_doc::Drawing) -> Value {
 
 fn run_style(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad("style", "`name` is required"))?.trim().to_string();
-    if name.is_empty() || name.len() > 255 {
-        return Err(bad("style", "bad style name"));
-    }
+    names::check("style", "text style", &name)?;
     let d = s.doc_mut()?;
     let idx = match d.text_styles.iter().position(|t| t.name.eq_ignore_ascii_case(&name)) {
         Some(i) => i,
@@ -752,7 +827,8 @@ pub(super) fn text_styles_in_use(d: &cadaddy_doc::Drawing) -> Vec<String> {
 
 fn run_style_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let from = str_param(p, "from").ok_or_else(|| bad("style.rename", "`from` is required"))?.to_string();
-    let to = str_param(p, "to").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("style.rename", "`to` is required"))?.to_string();
+    let to = str_param(p, "to").map(str::trim).ok_or_else(|| bad("style.rename", "`to` is required"))?.to_string();
+    names::check("style.rename", "text style", &to)?;
     let d = s.doc_mut()?;
     if from.eq_ignore_ascii_case("Standard") {
         return Err(bad("style.rename", "the Standard style cannot be renamed"));
@@ -833,9 +909,7 @@ fn dimstyles_json(d: &cadaddy_doc::Drawing) -> Value {
 
 fn run_dimstyle(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad("dimstyle", "`name` is required"))?.trim().to_string();
-    if name.is_empty() || name.len() > 255 {
-        return Err(bad("dimstyle", "bad style name"));
-    }
+    names::check("dimstyle", "dimension style", &name)?;
     let d = s.doc_mut()?;
     let base = d.dim_style(&d.header.str("DIMSTYLE", "Standard")).cloned().unwrap_or_default();
     let idx = match d.dim_styles.iter().position(|t| t.name.eq_ignore_ascii_case(&name)) {
@@ -934,7 +1008,8 @@ fn block_dims_using(d: &cadaddy_doc::Drawing, name: &str) -> Vec<(String, cadadd
 
 fn run_dimstyle_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let from = str_param(p, "from").ok_or_else(|| bad("dimstyle.rename", "`from` is required"))?.to_string();
-    let to = str_param(p, "to").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("dimstyle.rename", "`to` is required"))?.to_string();
+    let to = str_param(p, "to").map(str::trim).ok_or_else(|| bad("dimstyle.rename", "`to` is required"))?.to_string();
+    names::check("dimstyle.rename", "dimension style", &to)?;
     let d = s.doc_mut()?;
     if from.eq_ignore_ascii_case("Standard") {
         return Err(bad("dimstyle.rename", "the Standard style cannot be renamed"));
@@ -987,6 +1062,26 @@ fn run_dimstyle_delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(dimstyles_json(d))
 }
 
+/// A dimension's text height, arrow size, overall scale (DIMSCALE) and precision as Properties
+/// sets them: per-dimension overrides, as in AutoCAD's Properties palette.
+fn dim_overrides(p: &Value) -> Result<serde_json::Map<String, Value>> {
+    let mut o = serde_json::Map::new();
+    for (key, field, zero_ok) in [("textHeight", "textHeight", false), ("arrowSize", "arrowSize", true), ("dimScale", "scale", false)] {
+        if let Some(v) = p.get(key).filter(|v| !v.is_null()) {
+            let x = v
+                .as_f64()
+                .filter(|x| x.is_finite() && (*x > 0.0 || (zero_ok && *x == 0.0)))
+                .ok_or_else(|| bad("properties.set", format!("`{key}` must be a positive number")))?;
+            o.insert(field.into(), json!(x));
+        }
+    }
+    if let Some(v) = p.get("precision").filter(|v| !v.is_null()) {
+        let n = v.as_u64().filter(|n| *n <= 8).ok_or_else(|| bad("properties.set", "`precision` must be 0 to 8 decimal places"))?;
+        o.insert("decimals".into(), json!(n));
+    }
+    Ok(o)
+}
+
 /// Per-dimension style overrides (DIMOVERRIDE): merge fields, or `clear` them.
 pub(super) fn dim_override(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
@@ -1026,6 +1121,9 @@ pub(super) fn dim_override(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_tablestyle(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(n) = str_param(p, "name") {
+        names::check("tablestyle", "table style", n.trim())?;
+    }
     let d = s.doc_mut()?;
     if let Some(name) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         let idx = match d.table_styles.iter().position(|t| t.name.eq_ignore_ascii_case(name)) {
@@ -1075,6 +1173,9 @@ fn run_mleaderstyle(s: &mut Session, p: &Value) -> Result<Value> {
         Some("insertion") => Some(false),
         Some(_) => return Err(bad("mleaderstyle", "`blockAttach` must be \"center\" or \"insertion\"")),
     };
+    if let Some(n) = str_param(p, "name") {
+        names::check("mleaderstyle", "multileader style", n.trim())?;
+    }
     let d = s.doc_mut()?;
     if let Some(name) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         let idx = match d.mleader_styles.iter().position(|t| t.name.eq_ignore_ascii_case(name)) {
@@ -1152,7 +1253,7 @@ pub(crate) fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
         "block" => rename::block(s, &from, &to)?,
         "plotstyle" => rename::plotstyle(s, &from, &to)?,
         "vport" | "viewport" => rename::vport(s, &from, &to)?,
-        "material" => return Err(bad("rename", rename::NO_MATERIALS)),
+        "material" => rename::material(s, &from, &to)?,
         "mleaderstyle" | "multileaderstyle" => rename::simple(s, "mleaderstyle", &from, &to)?,
         "tablestyle" | "view" | "ucs" => rename::simple(s, &table, &from, &to)?,
         "style" | "textstyle" => {
@@ -1162,6 +1263,7 @@ pub(crate) fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
             run_dimstyle_rename(s, &json!({ "from": from, "to": to }))?;
         }
         "linetype" | "ltype" => {
+            names::check("rename", "linetype", &to)?;
             let d = s.doc_mut()?;
             if ["ByBlock", "ByLayer", "Continuous"].iter().any(|n| from.eq_ignore_ascii_case(n)) {
                 return Err(bad("rename", format!("the {from} linetype cannot be renamed")));

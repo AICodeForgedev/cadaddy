@@ -381,10 +381,31 @@ fn what_the_weak_agent_tripped_on() {
     assert!(b["next"]["why"].as_str().unwrap().contains("changed since the last build"));
     s.execute("bim.build", &json!({})).unwrap();
     let b = s.execute("project.briefing", &json!({})).unwrap();
-    assert!(b["next"]["call"].as_str().unwrap().starts_with("takeoff"), "{b}");
+    assert!(b["next"]["call"].as_str().unwrap().starts_with("bim.takeoff"), "{b}");
 }
 
 // ---- MUST 3: Validation failures in the review queue and briefing ----
+
+/// The queue takes every validation failure up to its cap, not bim.validate's first page (500).
+#[test]
+fn the_queue_counts_every_validation_failure() {
+    let mut s = building(0);
+    let symbols: Vec<Value> = (0..600)
+        .map(|k| json!({"sheet": "E-101", "level": "L1", "kind": "receptacle", "mark": "REC-A", "at": [5.0 + 3.0 * f64::from(k), 5.0]}))
+        .collect();
+    s.execute(
+        "bim.prints",
+        &json!({"prints": {
+            "symbols": symbols,
+            "rooms": [{"level": "L1", "number": "101", "name": "OFFICE", "outline": [[-1, -1], [2401, -1], [2401, 31], [-1, 31]], "sheet": "A-101"}]
+        }, "gate": "warn"}),
+    )
+    .unwrap();
+    let total = s.execute("bim.validate", &json!({})).unwrap()["total"].as_u64().unwrap_or(0);
+    assert!(total > 500, "more failures than bim.validate's first page: {total}");
+    let queue = s.execute("review.list", &json!({"limit": 50})).unwrap();
+    assert_eq!(queue["byKind"]["validation"].as_u64(), Some(total), "{}", queue["byKind"]);
+}
 
 #[test]
 fn validation_failures_appear_in_the_queue_and_briefing() {

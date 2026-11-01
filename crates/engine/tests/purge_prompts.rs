@@ -103,3 +103,22 @@ fn json_type_and_names_and_kept_linetypes() {
     assert!(d.linetype("HIDDEN").is_some() && d.linetype("CENTER").is_some());
     assert!(d.linetype("DASHED").is_none());
 }
+
+#[test]
+fn a_linetype_used_only_by_a_viewport_override_survives_purge() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({ "name": "Walls" })).unwrap();
+    s.execute("linetype", &json!({ "load": "DASHED" })).unwrap();
+    s.execute("linetype", &json!({ "load": "HIDDEN" })).unwrap();
+    s.execute("layout.set", &json!({ "name": "Layout1" })).unwrap();
+    let vp = s.execute("mview", &json!({ "layout": "Layout1" })).unwrap()["viewports"][0].as_str().unwrap().to_string();
+    s.execute("vplayer", &json!({ "handle": vp, "linetypes": { "Walls": "DASHED" } })).unwrap();
+    s.execute("purge", &json!({ "type": "linetypes" })).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.linetype("DASHED").is_some(), "held by the viewport's Walls override");
+    assert!(d.linetype("HIDDEN").is_none(), "unused, purged");
+    // Clearing the override releases it.
+    s.execute("vplayer", &json!({ "handle": vp, "linetypes": { "Walls": null } })).unwrap();
+    s.execute("purge", &json!({ "type": "linetypes" })).unwrap();
+    assert!(s.doc().unwrap().linetype("DASHED").is_none());
+}

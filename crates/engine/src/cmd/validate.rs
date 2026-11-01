@@ -62,7 +62,7 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .noundo(),
         CommandSpec::new("bim.validate.overlay", "Validation Failure Overlay", run_overlay)
-            .params("{id: failure id, path?: PNG file (else base64), width?, height? (900×700), around?: feet (default 12)} → {id, path?|png, width, height}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), id: failure id, path?: PNG file (else base64), width?, height? (900×700), around?: feet (default 12)} → {id, path?|png, width, height}")
             .noundo(),
         CommandSpec::new("bim.source", "Element Provenance", run_source).params(
             "{handles: [hex], status: fixed|rule|zone|field_verified|override|agent, source?: text (sheet and place, note, rule), homerun?: panel tag (a run), tag?: text, kind?: text, boxDepth?: inches (a wall device's box)} → {changed}: where an element's place and type come from (XDATA CADADDY_PROVENANCE)",
@@ -614,6 +614,7 @@ fn run_validate(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------------------------------------------------------------- overlay
 
 fn run_overlay(s: &mut Session, p: &Value) -> Result<Value> {
+    super::exchange::guard_params(s, CMD, p, &["path", "output"])?;
     use cadaddy_doc::color::Color;
     const CMD: &str = "bim.validate.overlay";
     let id = str_param(p, "id").ok_or_else(|| bad(CMD, "`id` (a failure id from bim.validate) is required"))?;

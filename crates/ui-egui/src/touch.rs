@@ -10,7 +10,7 @@
 //!   buttons, the current prompt's options as buttons, and an input field that brings up the
 //!   on-screen keyboard (focused by itself when a prompt asks for text or a number).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use egui::{Pos2, Rect, Vec2, pos2, vec2};
 
@@ -55,6 +55,10 @@ pub struct Tracker {
     pressed: bool,
     /// A touch has been seen: the touch bar shows.
     pub used: bool,
+    /// Pens down and palm touches that landed while one was, as the raw events show them
+    /// ([`Tracker::drop_palm_pointer`]).
+    pens: BTreeSet<u64>,
+    palms: BTreeSet<u64>,
 }
 
 impl Tracker {
@@ -116,6 +120,43 @@ impl Tracker {
             g.long_press = Some(f.pos);
         }
         g
+    }
+
+    /// Palm rejection at the source. Touch backends (eframe web, winit) send every touch as a
+    /// pointer too, at the touch's own position (on the web: the pen's). While a pen is down a
+    /// palm's press, move, release and `PointerGone` would click, pick or lift the pen's own
+    /// press, so the pointer events of any frame that carries a palm touch are dropped. Call it
+    /// on the raw events, before anything else adds to them.
+    pub fn drop_palm_pointer(&mut self, events: &mut Vec<egui::Event>) {
+        let mut palm_frame = false;
+        for e in events.iter() {
+            let egui::Event::Touch { id, phase, force, .. } = e else { continue };
+            let key = id.0;
+            let over = matches!(phase, egui::TouchPhase::End | egui::TouchPhase::Cancel);
+            if *phase == egui::TouchPhase::Start {
+                if force.is_some_and(|f| f > 0.0) {
+                    self.pens.insert(key);
+                } else if !self.pens.is_empty() {
+                    self.palms.insert(key);
+                }
+            }
+            if self.palms.contains(&key) {
+                palm_frame = true;
+                if over {
+                    self.palms.remove(&key);
+                }
+            } else if over {
+                self.pens.remove(&key);
+            }
+        }
+        if palm_frame {
+            events.retain(|e| !matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::PointerGone));
+        }
+    }
+
+    /// A pen is down.
+    pub fn pen_down(&self) -> bool {
+        self.fingers.values().any(|f| f.pen)
     }
 
     /// A finger is down (the clock has to keep running for a long press).

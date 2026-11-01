@@ -330,6 +330,18 @@ fn the_model_tree_is_level_trade_category_type_element() {
     assert!(v.model.iter().any(|e| bimlook::classify(&v, e).is_some_and(|c| c.level == "Level 1" && c.group == "Mechanical")));
     s.execute("bim.tree", &json!({"path": ["level 2"], "visible": true})).unwrap();
     assert!(hidden(&bimlook::display(s.doc().unwrap()).unwrap()) > 0, "showing the level shows what is under it");
+    // One call hides a trade on every level, and one shows it again.
+    let r = s.execute("bim.tree", &json!({"group": "Mechanical", "visible": false})).unwrap();
+    for lv in r["levels"].as_array().unwrap() {
+        if let Some(t) = lv["trades"].as_array().unwrap().iter().find(|t| t["name"] == json!("Mechanical")) {
+            assert_eq!(t["visible"], json!(false), "{lv}");
+        }
+    }
+    let v = bimlook::display(s.doc().unwrap()).unwrap();
+    assert!(!v.model.iter().any(|e| bimlook::classify(&v, e).is_some_and(|c| c.group == "Mechanical")));
+    assert!(v.model.iter().any(|e| bimlook::classify(&v, e).is_some_and(|c| c.group == "Plumbing")));
+    s.execute("bim.tree", &json!({"group": "mechanical", "visible": true})).unwrap();
+    assert!(hidden(&bimlook::display(s.doc().unwrap()).unwrap()) > 0, "showing the trade shows it on every level");
     // Select and zoom: the branch's elements are selected.
     let r = s.execute("bim.tree", &json!({"path": ["Level 1", "Plumbing", "Pipe"], "select": true, "zoom": true})).unwrap();
     let n = r["selected"].as_u64().unwrap() as usize;
@@ -673,4 +685,19 @@ fn every_parameter_the_view_takes_is_documented() {
         assert!(!cadaddy_engine::takes_open_params(spec(id)), "{id} is strict");
         assert_eq!(cadaddy_engine::unknown_params(spec(id), &p), Vec::<String>::new(), "{id}");
     }
+}
+
+/// Zoom extents in 3D frames what 3D draws: the built model, not a print set's sheets spread
+/// far off (their lines aren't drawn in the BIM view, so the building was a speck in a corner).
+#[test]
+fn zoom_extents_in_3d_frames_the_built_model_not_the_sheets() {
+    let mut s = building();
+    s.execute("line", &json!({"points": [[200_000.0, 200_000.0], [201_000.0, 200_000.0]]})).unwrap();
+    s.execute("view.swiso", &json!({})).unwrap();
+    let bim = s.view_extents().unwrap();
+    assert!(bim.max.x - bim.min.x < 50_000.0 && bim.max.y - bim.min.y < 50_000.0, "the building only: {bim:?}");
+    // The BIM view off: 3D draws the drawing as it is, the far line too.
+    s.execute("bim.look", &json!({"on": false})).unwrap();
+    let all = s.view_extents().unwrap();
+    assert!(all.max.x - all.min.x > 100_000.0 || all.max.y - all.min.y > 100_000.0, "everything: {all:?}");
 }

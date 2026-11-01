@@ -109,7 +109,11 @@ fn ang_between(d1: Vec2, d2: Vec2) -> f64 {
 pub fn infer(d: &Drawing, handles: &[Handle], o: &InferOptions) -> Vec<Constraint> {
     let tol = if o.distance_tolerance.is_finite() { o.distance_tolerance.clamp(0.0, 1e9) } else { 0.05 };
     let atol = if o.angle_tolerance.is_finite() { o.angle_tolerance.clamp(0.0, 45.0).to_radians() } else { 1f64.to_radians() };
-    let allow = |k: ConstraintKind| o.types.is_empty() || o.types.iter().any(|t| t.eq_ignore_ascii_case(k.name()));
+    // Resolve the allowed type names into a set once, so membership is O(1) per candidate instead
+    // of re-scanning the whole (attacker-controllable) `o.types` list for every geometric match
+    // (CWE-407). Empty `o.types` means "all types".
+    let allowed: std::collections::HashSet<String> = o.types.iter().map(|t| t.to_ascii_lowercase()).collect();
+    let allow = |k: ConstraintKind| allowed.is_empty() || allowed.contains(&k.name().to_ascii_lowercase());
     let g = collect(d, handles);
     let mut out: Vec<Constraint> = Vec::new();
     let mut push = |kind: ConstraintKind, refs: Vec<GeomRef>| {
@@ -308,11 +312,28 @@ fn on_arc(d: &Drawing, h: Handle, c: Vec2, p: Vec2) -> bool {
     }
 }
 
+/// What an [`autoconstrain`] run did with the candidates it inferred.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AutoStats {
+    /// Candidates inferred.
+    pub candidates: usize,
+    /// Skipped without a solve because what holds already implies them.
+    pub implied: usize,
+    /// Sent to the solver (kept or refused).
+    pub solved: usize,
+}
+
 /// Infer and apply constraints over `handles`; returns the ids added. Redundant or conflicting
 /// candidates are skipped.
 pub fn autoconstrain(d: &mut Drawing, handles: &[Handle], o: &InferOptions) -> Vec<u32> {
+    autoconstrain_counted(d, handles, o).0
+}
+
+/// [`autoconstrain`], also counting the candidates skipped as implied and the ones solved.
+pub fn autoconstrain_counted(d: &mut Drawing, handles: &[Handle], o: &InferOptions) -> (Vec<u32>, AutoStats) {
     let mut added = Vec::new();
     let mut cands = infer(d, handles, o);
+    let mut stats = AutoStats { candidates: cands.len(), ..AutoStats::default() };
     // The settings' order is the priority (a stable sort keeps the built-in order within a type).
     if !o.types.is_empty() {
         let rank = |k: ConstraintKind| o.types.iter().position(|t| t.eq_ignore_ascii_case(k.name())).unwrap_or(usize::MAX);
@@ -327,15 +348,17 @@ pub fn autoconstrain(d: &mut Drawing, handles: &[Handle], o: &InferOptions) -> V
     }
     for c in cands {
         if implied.holds(&c) {
+            stats.implied += 1;
             continue;
         }
+        stats.solved += 1;
         let noted = c.clone();
         if let Ok(id) = crate::add(d, c, &crate::SolveOptions::default()) {
             implied.note(&noted);
             added.push(id);
         }
     }
-    added
+    (added, stats)
 }
 
 /// Equivalence classes of the transitive constraints (coincident points, parallel lines with

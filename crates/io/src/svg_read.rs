@@ -47,6 +47,9 @@ const MAX_LAYERS: usize = 256;
 const MAX_TRANSFORM_DEPTH: usize = 64;
 /// Nested `use` references.
 const MAX_USE_DEPTH: usize = 16;
+/// Generated vertices retained across the whole document (all paths and shapes), so repeated
+/// arc/curve flattening cannot amplify a compact input into unbounded geometry (CWE-400).
+const MAX_TOTAL_VERTS: usize = 8_000_000;
 /// Flattened chords per elliptical arc under a non-uniform transform.
 const MAX_ARC_CHORDS: usize = 10_000;
 /// Raster images per file, and the bytes of one.
@@ -101,6 +104,12 @@ pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
     }
     if let Some(root) = dom.root {
         parser.walk(&dom, root, &Style::default())?;
+    }
+    if parser.css.was_cut() {
+        parser.note("some CSS rules or declarations were left out (too many in the style sheet)".into());
+    }
+    if parser.css.work_exhausted() {
+        parser.note("CSS rules were not applied to the rest of the elements (the style sheet is too large for the drawing)".into());
     }
     let mut d = parser.drawing;
     d.read_notes.extend(parser.notes);
@@ -173,6 +182,8 @@ struct Parser {
     layers: HashSet<String>,
     layer_color: u8,
     elements: usize,
+    /// Generated vertices still allowed across the whole document ([`MAX_TOTAL_VERTS`]).
+    verts_left: usize,
     visits: usize,
     css: Css,
     /// The `use` targets being read, innermost last (a reference cycle stops there).
@@ -203,6 +214,7 @@ impl Parser {
             layers: HashSet::from(["0".to_string()]),
             layer_color: 1,
             elements: 0,
+            verts_left: MAX_TOTAL_VERTS,
             visits: 0,
             css: Css::default(),
             uses: Vec::new(),
@@ -486,10 +498,17 @@ impl Parser {
         self.add(EntityKind::Ellipse(Ellipse { center: v3(center), major: v3(major), ratio, start: 0.0, end: std::f64::consts::TAU }))
     }
 
+    /// Charge `n` generated vertices to the document's budget.
+    fn spend_vertices(&mut self, n: usize) -> Result<()> {
+        self.verts_left = self.verts_left.checked_sub(n).ok_or_else(|| IoError::Format("SVG: too much generated geometry".into()))?;
+        Ok(())
+    }
+
     fn add_polyline(&mut self, pts: &[Vec2], closed: bool) -> Result<()> {
         if pts.len() < 2 {
             return Ok(());
         }
+        self.spend_vertices(pts.len())?;
         let vertices = pts.iter().map(|p| PolyVertex::new(*p)).collect();
         self.add(EntityKind::LwPolyline(LwPolyline { vertices, closed, const_width: 0.0, elevation: 0.0, plinegen: false }))
     }
@@ -1006,6 +1025,7 @@ impl Parser {
             run.pop();
         }
         if run.len() >= 2 {
+            self.spend_vertices(run.len())?;
             let vertices = std::mem::take(run);
             self.add(EntityKind::LwPolyline(LwPolyline { vertices, closed, const_width: 0.0, elevation: 0.0, plinegen: false }))?;
         } else {
@@ -1188,8 +1208,15 @@ fn viewport(e: &Node) -> Result<Mat3> {
             _ => None,
         }
     });
-    let w_mm = e.attr("width").and_then(parse_length_mm);
-    let h_mm = e.attr("height").and_then(parse_length_mm);
+    // A bare or `px` root size is in CSS pixels, not millimetres.
+    let root_mm = |name: &str| {
+        let raw = e.attr(name)?;
+        let mm = parse_length_mm(raw)?;
+        let unit = raw.trim().trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E')).trim();
+        Some(if matches!(unit, "" | "px") { mm * 25.4 / 96.0 } else { mm })
+    };
+    let w_mm = root_mm("width");
+    let h_mm = root_mm("height");
     let unit = match (vb, w_mm, h_mm) {
         (Some((_, _, vw, _)), Some(w), _) if w > 0.0 => w / vw,
         (Some((_, _, _, vh)), _, Some(h)) if h > 0.0 => h / vh,
@@ -1360,17 +1387,33 @@ enum Tok {
 struct Tokenizer<'a> {
     s: &'a [u8],
     i: usize,
+    /// Start of the most recently returned token.
+    tok_start: usize,
 }
 
 impl<'a> Tokenizer<'a> {
     fn new(s: &'a str) -> Self {
-        Tokenizer { s: s.as_bytes(), i: 0 }
+        Tokenizer { s: s.as_bytes(), i: 0, tok_start: 0 }
+    }
+
+    /// Read an arc flag: a single `0` or `1` character, which needs no separator after it.
+    fn next_flag(&mut self) -> Option<f64> {
+        let mut nums = Numbers { s: self.s, i: self.i };
+        nums.skip_seps();
+        let v = match self.s.get(nums.i)? {
+            b'0' => 0.0,
+            b'1' => 1.0,
+            _ => return None,
+        };
+        self.i = nums.i + 1;
+        Some(v)
     }
 
     fn next_tok(&mut self) -> Option<Tok> {
         let mut nums = Numbers { s: self.s, i: self.i };
         nums.skip_seps();
         self.i = nums.i;
+        self.tok_start = self.i;
         let c = self.s.get(self.i).copied()?;
         if c.is_ascii_alphabetic() {
             self.i += 1;
@@ -1447,7 +1490,18 @@ fn parse_path(d: &str) -> Result<Vec<Subpath>> {
             _ => return Err(IoError::Format(format!("SVG: unknown path command `{}`", cmd as char))),
         };
         let mut args = [0.0f64; 7];
-        for slot in args.iter_mut().take(count) {
+        for (idx, slot) in args.iter_mut().enumerate().take(count) {
+            if abs == b'A' && (idx == 3 || idx == 4) {
+                // Flags are single characters; re-scan a pending number token from its start.
+                if matches!(lookahead, Some(Tok::Num(_))) {
+                    lookahead = None;
+                    tk.i = tk.tok_start;
+                }
+                if lookahead.is_none() {
+                    *slot = tk.next_flag().ok_or_else(|| IoError::Format("SVG: path command is missing coordinates".into()))?;
+                    continue;
+                }
+            }
             *slot = next_num(&mut tk, &mut lookahead)?;
         }
         let point = |x: f64, y: f64| if rel { cur + Vec2::new(x, y) } else { Vec2::new(x, y) };
@@ -1633,4 +1687,26 @@ fn elliptical_params(p0: Vec2, p1: Vec2, rx: f64, ry: f64, phi: f64, large: bool
     let theta = angle(1.0, 0.0, ux, uy);
     let ccw = angle(ux, uy, vx, vy).rem_euclid(std::f64::consts::TAU);
     Some((center, theta, pick_sweep(ccw, large, sweep)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arc_of(d: &str) -> (bool, bool, Vec2) {
+        let subs = parse_path(d).unwrap_or_else(|e| panic!("{d}: {e:?}"));
+        match &subs[0].segs[0] {
+            Seg::Arc { large, sweep, end, .. } => (*large, *sweep, *end),
+            _ => panic!("not an arc"),
+        }
+    }
+
+    #[test]
+    fn compact_arc_flags_read_as_single_characters() {
+        let spaced = arc_of("M10 10 a20 20 0 0 1 20 20");
+        assert_eq!(arc_of("M10 10 a20 20 0 01 20 20"), spaced);
+        assert_eq!(arc_of("M10 10 a20 20 0 0120 20"), spaced);
+        assert_eq!(arc_of("M10 10 a20 20 0 1 0 20 20"), (true, false, spaced.2));
+        assert!(arc_of("M10 10 a20 20 0 10-20 20").0);
+    }
 }

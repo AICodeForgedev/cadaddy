@@ -68,6 +68,7 @@ fn shape_chars(primary: Option<&Face>, chars: &[(char, bool, bool)], height: f64
     let cs: Vec<char> = chars.iter().map(|c| c.0).collect();
     let flags = |i: usize| chars.get(i).map(|c| (c.1, c.2)).unwrap_or((false, false));
     let mut out = Shaped::default();
+    let mut points_left = ttf::MAX_SHAPED_POINTS;
     let mut spans: Vec<(f64, f64, bool, bool)> = Vec::new();
     let mut x = 0.0;
     // Whether the rightmost glyph so far is a stroke-font glyph.
@@ -102,12 +103,11 @@ fn shape_chars(primary: Option<&Face>, chars: &[(char, bool, bool)], height: f64
                         let outline = ttf::glyph_by_id(face, g.gid);
                         let k = h / outline.cap * wf;
                         let dy = g.dy * h / outline.cap;
-                        let mut contours = ttf::place_glyph(&outline, x + g.dx * k, h, wf, shear);
-                        for p in contours.iter_mut().flatten() {
-                            *p += Vec2::new(dy * shear, dy);
-                        }
-                        if !contours.is_empty() {
-                            out.glyphs.push(contours);
+                        if let Some(mut contours) = ttf::place_glyph_budgeted(&outline, x + g.dx * k, h, wf, shear, &mut points_left) {
+                            for p in contours.iter_mut().flatten() {
+                                *p += Vec2::new(dy * shear, dy);
+                            }
+                            out.push_glyph(contours, None);
                         }
                         let adv = g.advance * k;
                         let (u, o) = flags(g.cluster);
@@ -216,6 +216,59 @@ fn shape_run(face: &Face, cs: &[char], r: Range<usize>, rtl: bool) -> Vec<Glyph>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A single empty glyph with a positive advance, without relying on installed fonts.
+    fn empty_glyph_face() -> Face {
+        let mut head = vec![0_u8; 54];
+        head[..4].copy_from_slice(&0x0001_0000_u32.to_be_bytes());
+        head[18..20].copy_from_slice(&1000_u16.to_be_bytes());
+        let mut hhea = vec![0_u8; 36];
+        hhea[..4].copy_from_slice(&0x0001_0000_u32.to_be_bytes());
+        hhea[4..6].copy_from_slice(&800_i16.to_be_bytes());
+        hhea[6..8].copy_from_slice(&(-200_i16).to_be_bytes());
+        hhea[34..36].copy_from_slice(&1_u16.to_be_bytes());
+        let tables = [
+            (*b"head", head),
+            (*b"hhea", hhea),
+            (*b"hmtx", vec![1, 244, 0, 0]),      // Advance 500, left side bearing 0.
+            (*b"maxp", vec![0, 0, 80, 0, 0, 1]), // Version 0.5, one glyph.
+        ];
+        let mut bytes = vec![0_u8; 12 + tables.len() * 16];
+        bytes[..4].copy_from_slice(&0x0001_0000_u32.to_be_bytes());
+        bytes[4..6].copy_from_slice(&4_u16.to_be_bytes());
+        bytes[6..8].copy_from_slice(&64_u16.to_be_bytes());
+        bytes[8..10].copy_from_slice(&2_u16.to_be_bytes());
+        for (i, (tag, data)) in tables.into_iter().enumerate() {
+            while !bytes.len().is_multiple_of(4) {
+                bytes.push(0);
+            }
+            let record = 12 + i * 16;
+            let offset = u32::try_from(bytes.len()).unwrap();
+            let len = u32::try_from(data.len()).unwrap();
+            bytes[record..record + 4].copy_from_slice(&tag);
+            bytes[record + 8..record + 12].copy_from_slice(&offset.to_be_bytes());
+            bytes[record + 12..record + 16].copy_from_slice(&len.to_be_bytes());
+            bytes.extend(data);
+        }
+        Face::new(std::sync::Arc::new(bytes), 0).expect("synthetic font parses")
+    }
+
+    /// Empty complex glyphs retain spacing and underlines without adding geometry or text slots.
+    #[test]
+    fn empty_complex_glyph_keeps_advance_without_geometry() {
+        let face = empty_glyph_face();
+        let shaped = shape(Some(&face), " ", 1.0, 1.0, 0.0).expect("shapes empty glyph");
+        assert!(shaped.width > 0.0, "the font's advance is retained");
+        assert!(shaped.is_empty());
+        assert!(shaped.glyphs.is_empty());
+        assert!(shaped.text.is_empty());
+
+        let underlined = shape(Some(&face), "%%u ", 1.0, 1.0, 0.0).expect("shapes decorated empty glyph");
+        assert_eq!(underlined.width, shaped.width);
+        assert!(underlined.glyphs.is_empty());
+        assert!(underlined.text.is_empty());
+        assert!(!underlined.strokes.is_empty(), "decoration spans survive an empty outline");
+    }
 
     #[test]
     fn stroke_font_rtl_lines_keep_latin_and_digits_in_the_stroke_font() {

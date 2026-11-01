@@ -86,9 +86,9 @@ fn an_authored_stretch_follows_the_distance_and_its_value_list() {
     s.execute("blocks.reference.set", &json!({ "handle": h, "name": "Width", "value": "27" })).unwrap();
     assert!((right_edge(s.doc().unwrap(), &h) - 30.0).abs() < 1e-9);
     assert_eq!(property(&mut s, &h, "Width"), json!("30.0000"));
-    // Its grips: the distance's two arrows.
+    // Its grips: the distance's arrow at the end the stretch follows (not the start, no action there).
     let g = s.execute("blocks.reference.grips", &json!({ "handle": h })).unwrap();
-    assert_eq!(g.as_array().unwrap().len(), 2, "{g}");
+    assert_eq!(g.as_array().unwrap().len(), 1, "{g}");
     // Authoring is one undo step per command.
     s.execute("undo", &json!({})).unwrap();
     s.execute("undo", &json!({})).unwrap();
@@ -224,4 +224,65 @@ fn bad_authoring_input_is_refused() {
         assert!(s.execute("bactiontool", &p).is_err(), "{p}");
     }
     assert!(s.execute("bvstate", &json!({ "block": "Box" })).is_err(), "no visibility parameter");
+}
+
+/// Every line of the block reference `h` shows, as `[ax, ay, bx, by]` (block coordinates).
+fn lines_of(d: &Drawing, h: &str) -> Vec<[f64; 4]> {
+    let Some(EntityKind::Insert(i)) = d.entity(Handle::parse_hex(h).unwrap()).map(|e| &e.kind) else { panic!("not a reference") };
+    d.block(&i.block)
+        .unwrap()
+        .entities
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Line(l) => Some([l.a.x, l.a.y, l.b.x, l.b.y]),
+            _ => None,
+        })
+        .collect()
+}
+
+fn assert_lines(got: &[[f64; 4]], want: &[[f64; 4]]) {
+    assert_eq!(got.len(), want.len(), "{got:?}");
+    for (g, w) in got.iter().zip(want) {
+        assert!(g.iter().zip(w).all(|(a, b)| (a - b).abs() < 1e-9), "{got:?} != {want:?}");
+    }
+}
+
+#[test]
+fn a_stretch_moves_only_the_vertices_in_its_frame() {
+    let mut s = stretchable();
+    let h = insert(&mut s, "Box", [100.0, 0.0]);
+    let ids = block_handles(&s, "Box");
+    assert_eq!(ids.len(), 4);
+    s.execute("blocks.reference.set", &json!({ "handle": h, "name": "Width", "value": "20" })).unwrap();
+    // Widened from 10 to 20: the left edge stays at x = 0, the right edge is at x = 20, and the
+    // top and bottom run the whole width. (A whole-object move would shift all four sides.)
+    assert_lines(&lines_of(s.doc().unwrap(), &h), &[[0.0, 0.0, 20.0, 0.0], [20.0, 0.0, 20.0, 5.0], [20.0, 5.0, 0.0, 5.0], [0.0, 5.0, 0.0, 0.0]]);
+    // And back down, from the stretched copy.
+    s.execute("blocks.reference.set", &json!({ "handle": h, "name": "Width", "value": "10" })).unwrap();
+    assert_lines(&lines_of(s.doc().unwrap(), &h), &[[0.0, 0.0, 10.0, 0.0], [10.0, 0.0, 10.0, 5.0], [10.0, 5.0, 0.0, 5.0], [0.0, 5.0, 0.0, 0.0]]);
+}
+
+#[test]
+fn selected_objects_outside_the_stretch_frame_stay() {
+    let mut s = boxed();
+    // A tick mark well left of the frame, and a line wholly inside it.
+    let tick = line(&mut s, [1.0, 1.0], [1.0, 2.0]);
+    let inner = line(&mut s, [9.0, 1.0], [11.0, 1.0]);
+    s.execute("block", &json!({ "name": "Gauge", "base": [0, 0], "handles": [tick, inner] })).unwrap();
+    let hs = block_handles(&s, "Gauge");
+    s.execute("bparameter", &json!({ "block": "Gauge", "type": "linear", "base": [0, 0], "end": [10, 0], "label": "Width" })).unwrap();
+    let r = s
+        .execute(
+            "bactiontool",
+            &json!({ "block": "Gauge", "type": "stretch", "parameter": "Width", "handles": hs, "frame": [[8, -1], [12, -1], [12, 6], [8, 6]] }),
+        )
+        .unwrap();
+    assert_eq!(r["dynamic"]["actions"][0]["selection"].as_array().unwrap().len(), 1, "the tick is not in the action: {r}");
+    let h = insert(&mut s, "Gauge", [0.0, 0.0]);
+    s.execute("blocks.reference.set", &json!({ "handle": h, "name": "Width", "value": "14" })).unwrap();
+    // The tick stays; the line wholly in the frame moves whole by 4.
+    assert_lines(&lines_of(s.doc().unwrap(), &h), &[[1.0, 1.0, 1.0, 2.0], [13.0, 1.0, 15.0, 1.0]]);
+    // Nothing in the frame: refused.
+    let r = s.execute("bactiontool", &json!({ "block": "Gauge", "type": "stretch", "parameter": "Width", "handles": [hs[0].clone()], "frame": [[8, -1], [12, -1], [12, 6], [8, 6]] }));
+    assert!(r.is_err());
 }

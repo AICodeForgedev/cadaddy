@@ -33,6 +33,25 @@ fn finger(phase: TouchPhase, x: f32, y: f32) -> Vec<Event> {
     v
 }
 
+/// A touch of any id, with the pointer events a backend sends beside it, at `(px, py)` (eframe web
+/// sends a palm's mouse emulation at the pen's position, so the pointer need not sit at the touch).
+fn touch_with_pointer(id: u64, phase: TouchPhase, (x, y): (f32, f32), (px, py): (f32, f32), force: Option<f32>) -> Vec<Event> {
+    let pos = pos2(px, py);
+    let mut v = vec![touch(id, phase, x, y, force)];
+    match phase {
+        TouchPhase::Start => {
+            v.push(Event::PointerMoved(pos));
+            v.push(Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        }
+        TouchPhase::Move => v.push(Event::PointerMoved(pos)),
+        _ => {
+            v.push(Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+            v.push(Event::PointerGone);
+        }
+    }
+    v
+}
+
 fn frame_at(e: &mut E2e, t: f64, events: Vec<Event>) {
     let t = t.max(e.ctx.input(|i| i.time) + 0.001);
     let mut raw = egui::RawInput {
@@ -79,15 +98,19 @@ fn the_pen_rejects_the_palm_and_never_long_presses() {
     e.exec("zoom", json!({ "mode": "extents" }));
     let (mx, my) = canvas_mid(&mut e);
     let before = view(&mut e);
-    // The pen goes down, then a palm lands and spreads away from it.
+    // The pen goes down, then a palm lands and spreads away from it. Every touch comes with its
+    // pointer events, as the backends send them (the pen first: Moved + press).
+    let pen = (mx, my);
     let mut t = 10.0;
-    frame_at(&mut e, t, vec![touch(1, TouchPhase::Start, mx, my, Some(0.6))]);
+    frame_at(&mut e, t, touch_with_pointer(1, TouchPhase::Start, pen, pen, Some(0.6)));
     t += 0.05;
-    frame_at(&mut e, t, vec![touch(2, TouchPhase::Start, mx + 80.0, my + 40.0, None)]);
+    frame_at(&mut e, t, touch_with_pointer(2, TouchPhase::Start, (mx + 80.0, my + 40.0), (mx + 80.0, my + 40.0), None));
     for k in 1..8 {
         t += 0.05;
         let d = 20.0 * k as f32;
-        frame_at(&mut e, t, vec![touch(1, TouchPhase::Move, mx, my, Some(0.6)), touch(2, TouchPhase::Move, mx + 80.0 + d, my + 40.0 + d, None)]);
+        let mut ev = touch_with_pointer(1, TouchPhase::Move, pen, pen, Some(0.6));
+        ev.extend(touch_with_pointer(2, TouchPhase::Move, (mx + 80.0 + d, my + 40.0 + d), (mx + 80.0 + d, my + 40.0 + d), None));
+        frame_at(&mut e, t, ev);
     }
     let during = view(&mut e);
     assert!((during.2 - before.2).abs() < 1e-9 * before.2.max(1.0), "the palm didn't zoom: {before:?} → {during:?}");
@@ -98,6 +121,38 @@ fn the_pen_rejects_the_palm_and_never_long_presses() {
     }
     assert!(!menu_open(&e), "no shortcut menu from the pen");
     frame_at(&mut e, t + 0.05, vec![touch(1, TouchPhase::End, mx, my, Some(0.6)), touch(2, TouchPhase::End, mx + 240.0, my + 180.0, None)]);
+    e.pump();
+}
+
+#[test]
+fn a_palm_beside_the_pen_neither_clicks_nor_picks() {
+    let mut e = E2e::new();
+    let (mx, my) = canvas_mid(&mut e);
+    // LINE with its first point picked by a finger tap.
+    e.ok("cmdline.input", json!({ "text": "line", "enter": true }));
+    let mut t = 5.0;
+    frame_at(&mut e, t, finger(TouchPhase::Start, mx - 100.0, my));
+    t += 0.05;
+    frame_at(&mut e, t, finger(TouchPhase::End, mx - 100.0, my));
+    e.pump();
+    assert!(command_running(&mut e), "LINE asks for the next point");
+    let n = e.entity_count();
+    // The pen is held down without its pick being the point of this test: count after it lands.
+    let pen = (mx + 100.0, my);
+    t += 1.0;
+    frame_at(&mut e, t, vec![touch(1, TouchPhase::Start, pen.0, pen.1, Some(0.6)), Event::PointerMoved(pos2(pen.0, pen.1))]);
+    e.pump();
+    assert_eq!(e.entity_count(), n, "the pen only hovers");
+    // A palm lands and lifts; eframe web sends its mouse emulation at the pen's position.
+    t += 0.05;
+    frame_at(&mut e, t, touch_with_pointer(2, TouchPhase::Start, (mx + 60.0, my + 90.0), pen, None));
+    e.pump();
+    t += 0.05;
+    frame_at(&mut e, t, touch_with_pointer(2, TouchPhase::End, (mx + 60.0, my + 90.0), pen, None));
+    e.pump();
+    assert_eq!(e.entity_count(), n, "the palm picked nothing");
+    assert!(command_running(&mut e), "LINE still asks for its next point");
+    frame_at(&mut e, t + 0.05, vec![touch(1, TouchPhase::End, pen.0, pen.1, Some(0.6))]);
     e.pump();
 }
 

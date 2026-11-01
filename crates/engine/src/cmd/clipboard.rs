@@ -96,6 +96,7 @@ pub(crate) fn paste(s: &mut Session, m: &Mat3) -> Result<Vec<Handle>> {
     let renames = defs.map(|x| merge(d, &x)).unwrap_or_default();
     let mut out = Vec::new();
     let mut copies = std::collections::HashMap::new();
+    let mut pasted = Vec::new();
     for e in &ents {
         let old = e.handle;
         let mut e = adopt(d, e, &renames);
@@ -103,11 +104,20 @@ pub(crate) fn paste(s: &mut Session, m: &Mat3) -> Result<Vec<Handle>> {
         d.ensure_layer(&e.common.layer);
         out.push(e.handle);
         copies.insert(old, e.handle);
+        pasted.push(e);
+    }
+    for mut e in pasted {
+        if let EntityKind::Hatch(h) = &mut e.kind {
+            h.remap_sources(&copies);
+        }
         if let Some(st) = d.space_mut(&space) {
             st.push(e);
         }
     }
     super::groups::copy_groups(d, &groups, &copies);
+    // Pasted viewports clip their pasted boundary and get their own ids.
+    let moved: Vec<(Handle, Handle)> = copies.into_iter().collect();
+    super::clip_partners::after_transform(d, &moved, m, true)?;
     s.set_selection(out.clone());
     Ok(out)
 }
@@ -130,9 +140,18 @@ pub(crate) fn paste_block(s: &mut Session, at: Vec2) -> Result<Handle> {
         .ok_or_else(|| bad("pasteblock", "no free block name"))?;
     let mut b = Block::new(&name);
     b.base = base.to3(0.0);
+    let mut copies = std::collections::HashMap::new();
+    let mut made = Vec::new();
     for e in &ents {
-        let e = adopt(d, e, &renames);
-        d.ensure_layer(&e.common.layer);
+        let n = adopt(d, e, &renames);
+        d.ensure_layer(&n.common.layer);
+        copies.insert(e.handle, n.handle);
+        made.push(n);
+    }
+    for mut e in made {
+        if let EntityKind::Hatch(h) = &mut e.kind {
+            h.remap_sources(&copies);
+        }
         b.entities.push(e);
     }
     d.blocks.insert(name.clone(), Arc::new(b));
@@ -238,6 +257,18 @@ pub fn system_image(s: &Session, side: u32) -> Option<cadaddy_render::images::Ra
     cadaddy_render::images::decode(&png)
 }
 
+/// The clipboard as a display list (vector), for the picture formats the platform layer writes
+/// itself (Windows' enhanced metafile). `None` when the clipboard is empty or very large.
+pub fn system_display_list(s: &Session) -> Option<cadaddy_render::DisplayList> {
+    if s.clipboard.is_empty() || s.clipboard.len() > MAX_SYSTEM_OBJECTS {
+        return None;
+    }
+    let d = clip_drawing(s);
+    let list = cadaddy_render::build(&d, &cadaddy_doc::Space::Model, &cadaddy_render::Options::default());
+    let b = list.bounds;
+    (!b.is_empty() && b.width().is_finite() && b.height().is_finite()).then_some(list)
+}
+
 /// Paste `image` as a raster IMAGE: saved as a PNG beside the (saved) drawing and attached with a
 /// relative path, its lower-left corner at `at` and `width` drawing units wide; by default half
 /// the view tall and centred in it.
@@ -256,7 +287,7 @@ pub(crate) fn paste_image(
         .find(|f| !f.exists())
         .ok_or_else(|| bad("pastespec", "too many pasted images beside this drawing"))?;
     let png = image.encode_png().ok_or_else(|| bad("pastespec", "the image couldn't be encoded"))?;
-    std::fs::write(&file, png).map_err(|e| bad("pastespec", format!("the pasted image couldn't be saved beside the drawing: {e}")))?;
+    crate::writefile::write(&file, png).map_err(|e| bad("pastespec", format!("the pasted image couldn't be saved beside the drawing: {e}")))?;
     let view = s.state()?.view();
     let aspect = f64::from(image.width) / f64::from(image.height.max(1));
     let width = width.filter(|w| w.is_finite() && *w > 0.0).unwrap_or(view.height * 0.5 * aspect);

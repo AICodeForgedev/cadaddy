@@ -478,3 +478,291 @@ fn hostile_params_are_refused_not_panicking() {
     }
     assert!(s.running.is_none(), "JSON calls never prompt");
 }
+
+// ---------- EXTRIM, TREX, BTRIM, BEXTEND, SUPERHATCH ----------
+
+fn line_ends(s: &Session, x: Handle) -> [[f64; 2]; 2] {
+    match &s.doc().unwrap().entity(x).unwrap().kind {
+        EntityKind::Line(l) => [[l.a.x, l.a.y], [l.b.x, l.b.y]],
+        k => panic!("not a line: {k:?}"),
+    }
+}
+
+/// Every line of model space as sorted endpoint pairs.
+fn all_lines(s: &Session) -> Vec<[[f64; 2]; 2]> {
+    let mut v: Vec<[[f64; 2]; 2]> = s
+        .doc()
+        .unwrap()
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Line(l) => {
+                let (a, b) = ([l.a.x, l.a.y], [l.b.x, l.b.y]);
+                Some(if a <= b { [a, b] } else { [b, a] })
+            }
+            _ => None,
+        })
+        .collect();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    v
+}
+
+fn near(a: &[[[f64; 2]; 2]], b: &[[[f64; 2]; 2]]) {
+    assert_eq!(a.len(), b.len(), "{a:?} vs {b:?}");
+    for (x, y) in a.iter().zip(b) {
+        for i in 0..2 {
+            for j in 0..2 {
+                assert!((x[i][j] - y[i][j]).abs() < 1e-9, "{a:?} vs {b:?}");
+            }
+        }
+    }
+}
+
+fn line(s: &mut Session, a: [f64; 2], b: [f64; 2]) -> Handle {
+    s.execute("line", &json!({"points": [a, b]})).unwrap();
+    last(s)
+}
+
+fn square(s: &mut Session) -> Handle {
+    s.execute("pline", &json!({"points": [[0, 0], [10, 0], [10, 10], [0, 10]], "closed": true})).unwrap();
+    last(s)
+}
+
+#[test]
+fn extrim_trims_every_curve_crossing_the_boundary_on_one_side() {
+    let mut s = Session::new();
+    let sq = square(&mut s);
+    line(&mut s, [-5.0, 5.0], [15.0, 5.0]); // crosses twice
+    line(&mut s, [3.0, 5.0], [3.0, 20.0]); // starts inside, crosses once
+    line(&mut s, [20.0, 0.0], [30.0, 0.0]); // wholly outside
+    line(&mut s, [2.0, 2.0], [4.0, 2.0]); // wholly inside
+    let before = all_lines(&s);
+    let r = s.execute("extrim", &json!({"boundary": sq.hex(), "side": [5, 5]})).unwrap();
+    assert_eq!(r["trimmed"], 2);
+    near(
+        &all_lines(&s),
+        &[[[-5.0, 5.0], [0.0, 5.0]], [[2.0, 2.0], [4.0, 2.0]], [[3.0, 10.0], [3.0, 20.0]], [[10.0, 5.0], [15.0, 5.0]], [[20.0, 0.0], [30.0, 0.0]]],
+    );
+    // One undo restores everything.
+    s.execute("undo", &json!({})).unwrap();
+    near(&all_lines(&s), &before);
+    assert!(s.doc().unwrap().entity(sq).is_some());
+    // Trimming the outside instead keeps the inside parts.
+    s.execute("extrim", &json!({"boundary": sq.hex(), "side": [50, 50]})).unwrap();
+    near(&all_lines(&s), &[[[0.0, 5.0], [10.0, 5.0]], [[2.0, 2.0], [4.0, 2.0]], [[3.0, 5.0], [3.0, 10.0]], [[20.0, 0.0], [30.0, 0.0]]]);
+}
+
+#[test]
+fn extrim_takes_a_circle_as_the_boundary_and_refuses_open_ones() {
+    let mut s = Session::new();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 5})).unwrap();
+    let c = last(&s);
+    line(&mut s, [-10.0, 0.0], [10.0, 0.0]);
+    s.execute("extrim", &json!({"boundary": c.hex(), "side": [0, 1]})).unwrap();
+    near(&all_lines(&s), &[[[-10.0, 0.0], [-5.0, 0.0]], [[5.0, 0.0], [10.0, 0.0]]]);
+    // An open polyline, a line and a missing handle are refused, and nothing changes.
+    s.execute("pline", &json!({"points": [[0, 0], [10, 0], [10, 10]]})).unwrap();
+    let open = last(&s);
+    let n = s.doc().unwrap().model.iter().count();
+    for b in [open.hex(), c.hex().replace(|ch: char| ch.is_ascii_hexdigit(), "F")] {
+        assert!(s.execute("extrim", &json!({"boundary": b, "side": [0, 0]})).is_err());
+    }
+    assert!(s.execute("extrim", &json!({"boundary": open.hex()})).is_err());
+    assert!(s.execute("extrim", &json!({"side": [0, 0]})).is_err());
+    assert_eq!(s.doc().unwrap().model.iter().count(), n);
+}
+
+#[test]
+fn extrim_typed_form_picks_the_boundary_then_the_side() {
+    let mut s = Session::new();
+    let sq = square(&mut s);
+    line(&mut s, [-5.0, 5.0], [15.0, 5.0]);
+    s.cmdline("extrim").unwrap();
+    s.input(cadaddy_engine::Input::Pick(vec![sq])).unwrap();
+    s.input(cadaddy_engine::Input::Point(cadaddy_engine::geom::Vec2::new(5.0, 6.0))).unwrap();
+    assert!(s.running.is_none());
+    near(&all_lines(&s), &[[[-5.0, 5.0], [0.0, 5.0]], [[10.0, 5.0], [15.0, 5.0]]]);
+}
+
+#[test]
+fn trex_trims_and_extends_in_one_command() {
+    let mut s = Session::new();
+    let edge = line(&mut s, [10.0, -10.0], [10.0, 10.0]);
+    let a = line(&mut s, [0.0, 2.0], [14.0, 2.0]); // crosses the edge: trim its right part
+    let b = line(&mut s, [0.0, -3.0], [6.0, -3.0]); // stops short: extend
+    let r = s
+        .execute(
+            "trex",
+            &json!({"edges": [edge.hex()], "picks": [{"handle": a.hex(), "at": [12, 2]}, {"handle": b.hex(), "at": [6, -3], "extend": true}]}),
+        )
+        .unwrap();
+    assert_eq!((r["trimmed"].clone(), r["extended"].clone()), (json!(1), json!(1)));
+    near(&[line_ends(&s, a)], &[[[0.0, 2.0], [10.0, 2.0]]]);
+    near(&[line_ends(&s, b)], &[[[0.0, -3.0], [10.0, -3.0]]]);
+    s.execute("undo", &json!({})).unwrap();
+    near(&[line_ends(&s, a)], &[[[0.0, 2.0], [14.0, 2.0]]]);
+    near(&[line_ends(&s, b)], &[[[0.0, -3.0], [6.0, -3.0]]]);
+    // Bad picks are refused before anything changes.
+    for p in [
+        json!({"picks": []}),
+        json!({"picks": [{"handle": a.hex()}]}),
+        json!({"picks": [{"handle": a.hex(), "at": [12, 2]}, {"handle": "FFFFFF", "at": [0, 0]}]}),
+    ] {
+        assert!(s.execute("trex", &p).is_err());
+        near(&[line_ends(&s, a)], &[[[0.0, 2.0], [14.0, 2.0]]]);
+    }
+}
+
+/// Block EDGE holds a vertical line (0,0)-(0,4). Inserted at (20,0) scaled 2 and turned 90
+/// degrees it is the horizontal line (20,0)-(12,0).
+fn nested_edge_block() -> (Session, Handle) {
+    let mut s = Session::new();
+    let l = line(&mut s, [0.0, 0.0], [0.0, 4.0]);
+    s.execute("block", &json!({"name": "EDGE", "base": [0, 0], "handles": [l.hex()], "keep": "delete"})).unwrap();
+    let r = h(&s.execute("insert", &json!({"name": "EDGE", "at": [20, 0], "scale": 2, "rotation": 90})).unwrap());
+    (s, r)
+}
+
+#[test]
+fn btrim_and_bextend_use_objects_nested_in_a_block_reference() {
+    let (mut s, r) = nested_edge_block();
+    let cross = line(&mut s, [16.0, -5.0], [16.0, 6.0]);
+    let short = line(&mut s, [14.0, 3.0], [14.0, 6.0]);
+    let res = s.execute("btrim", &json!({"edges": [r.hex()], "handle": cross.hex(), "pick": [16, -4]})).unwrap();
+    assert_eq!(res["handles"].as_array().unwrap().len(), 1);
+    s.execute("bextend", &json!({"edges": [r.hex()], "handle": short.hex(), "pick": [14, 3]})).unwrap();
+    near(&all_lines(&s), &[[[14.0, 0.0], [14.0, 6.0]], [[16.0, 0.0], [16.0, 6.0]]]);
+    // One undo each.
+    s.execute("undo", &json!({})).unwrap();
+    near(&[line_ends(&s, short)], &[[[14.0, 3.0], [14.0, 6.0]]]);
+    s.execute("undo", &json!({})).unwrap();
+    near(&all_lines(&s), &[[[14.0, 3.0], [14.0, 6.0]], [[16.0, -5.0], [16.0, 6.0]]]);
+    // Without `edges`, a missing handle, or a block with nothing the line meets: refused.
+    assert!(s.execute("btrim", &json!({"handle": cross.hex(), "pick": [16, -4]})).is_err());
+    assert!(s.execute("btrim", &json!({"edges": ["FFFFFF"], "handle": cross.hex(), "pick": [16, -4]})).is_err());
+    let far = line(&mut s, [100.0, 5.0], [100.0, 9.0]);
+    assert!(s.execute("bextend", &json!({"edges": [r.hex()], "handle": far.hex(), "pick": [100, 5]})).is_err());
+    near(&[line_ends(&s, far)], &[[[100.0, 5.0], [100.0, 9.0]]]);
+}
+
+#[test]
+fn btrim_typed_form_picks_the_block_then_the_object() {
+    let (mut s, r) = nested_edge_block();
+    line(&mut s, [16.0, -5.0], [16.0, 6.0]);
+    s.cmdline("btrim").unwrap();
+    s.input(cadaddy_engine::Input::Pick(vec![r])).unwrap();
+    s.input(cadaddy_engine::Input::Enter).unwrap();
+    s.input(cadaddy_engine::Input::Point(cadaddy_engine::geom::Vec2::new(16.0, -4.0))).unwrap();
+    s.input(cadaddy_engine::Input::Enter).unwrap();
+    assert!(s.running.is_none());
+    near(&all_lines(&s), &[[[16.0, 0.0], [16.0, 6.0]]]);
+}
+
+/// Block TILE: a 2 x 2 square. Boundary: a 10 x 6 rectangle.
+fn tile_block() -> (Session, Handle) {
+    let mut s = Session::new();
+    s.execute("pline", &json!({"points": [[0, 0], [2, 0], [2, 2], [0, 2]], "closed": true})).unwrap();
+    let t = last(&s);
+    s.execute("block", &json!({"name": "TILE", "base": [0, 0], "handles": [t.hex()], "keep": "delete"})).unwrap();
+    s.execute("pline", &json!({"points": [[0, 0], [10, 0], [10, 6], [0, 6]], "closed": true})).unwrap();
+    let b = last(&s);
+    (s, b)
+}
+
+fn refs(s: &Session) -> Vec<cadaddy_engine::doc::Insert> {
+    s.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::Insert(i) = &e.kind { Some(i.clone()) } else { None }).collect()
+}
+
+#[test]
+fn superhatch_tiles_a_block_inside_a_closed_boundary() {
+    let (mut s, b) = tile_block();
+    let r = s.execute("superhatch", &json!({"boundary": b.hex(), "block": "TILE"})).unwrap();
+    // 5 columns x 3 rows of 2 x 2 tiles fill 10 x 6 exactly.
+    assert_eq!((r["count"].clone(), r["whole"].clone(), r["clipped"].clone()), (json!(15), json!(15), json!(0)));
+    let v = refs(&s);
+    assert_eq!(v.len(), 15);
+    assert!(v.iter().all(|i| i.clip.is_none() && i.block == "TILE"));
+    let mut xs: Vec<(i64, i64)> = v.iter().map(|i| (i.insert.x.round() as i64, i.insert.y.round() as i64)).collect();
+    xs.sort();
+    assert_eq!(xs.first(), Some(&(0, 0)));
+    assert_eq!(xs.last(), Some(&(8, 4)));
+    // Grouped: one group of the 15 references.
+    let g = &s.doc().unwrap().groups;
+    assert_eq!(g.len(), 1);
+    assert_eq!(g[0].members.len(), 15);
+    // One undo removes the tiles and the group.
+    s.execute("undo", &json!({})).unwrap();
+    assert!(refs(&s).is_empty());
+    assert!(s.doc().unwrap().groups.is_empty());
+}
+
+#[test]
+fn superhatch_clips_the_tiles_the_boundary_cuts_and_takes_spacing() {
+    let (mut s, b) = tile_block();
+    // Spacing 3 x 3 from (0,0): cells at x 0,3,6,9 and y 0,3. Those at x = 9 poke out of the
+    // boundary (9..11 past 10), and those at y = 3 reach 5 (inside 6): 8 tiles, 2 clipped.
+    let r = s.execute("superhatch", &json!({"boundary": b.hex(), "block": "TILE", "spacing": [3, 3]})).unwrap();
+    assert_eq!((r["count"].clone(), r["whole"].clone(), r["clipped"].clone()), (json!(8), json!(6), json!(2)));
+    let clipped: Vec<_> = refs(&s).into_iter().filter(|i| i.clip.is_some()).collect();
+    assert_eq!(clipped.len(), 2);
+    assert!(clipped.iter().all(|i| (i.insert.x - 9.0).abs() < 1e-9));
+    // A circle boundary: only the tiles it covers or cuts.
+    let (mut s, _) = tile_block();
+    s.execute("circle", &json!({"center": [50, 50], "radius": 2})).unwrap();
+    let c = last(&s);
+    let r = s.execute("superhatch", &json!({"boundary": c.hex(), "block": "TILE"})).unwrap();
+    // The circle's box is 4 x 4: a 2 x 2 grid, each cell cut by the circle's rim.
+    assert_eq!((r["count"].clone(), r["clipped"].clone()), (json!(4), json!(4)));
+}
+
+#[test]
+fn superhatch_refuses_open_boundaries_unknown_blocks_and_other_modes() {
+    let (mut s, b) = tile_block();
+    s.execute("pline", &json!({"points": [[0, 0], [10, 0], [10, 6]]})).unwrap();
+    let open = last(&s);
+    let before = s.doc().unwrap().model.iter().count();
+    for p in [
+        json!({"boundary": open.hex(), "block": "TILE"}),
+        json!({"boundary": b.hex(), "block": "NOPE"}),
+        json!({"boundary": b.hex()}),
+        json!({"block": "TILE"}),
+        json!({"boundary": b.hex(), "block": "TILE", "spacing": [0, 3]}),
+        json!({"boundary": b.hex(), "block": "TILE", "spacing": [1e-9, 1e-9]}),
+        json!({"boundary": b.hex(), "block": "TILE", "mode": "image"}),
+        json!({"boundary": b.hex(), "block": "TILE", "wipeout": true}),
+    ] {
+        assert!(s.execute("superhatch", &p).is_err(), "{p}");
+    }
+    let e = s.execute("superhatch", &json!({"boundary": b.hex(), "block": "TILE", "mode": "xref"})).unwrap_err().to_string();
+    assert!(e.contains("not supported"), "{e}");
+    assert_eq!(s.doc().unwrap().model.iter().count(), before);
+    assert!(s.doc().unwrap().groups.is_empty());
+}
+
+#[test]
+fn superhatch_typed_form_asks_boundary_block_and_spacing() {
+    let (mut s, b) = tile_block();
+    s.cmdline("superhatch").unwrap();
+    s.input(cadaddy_engine::Input::Pick(vec![b])).unwrap();
+    s.input(cadaddy_engine::Input::Text("TILE".into())).unwrap();
+    s.input(cadaddy_engine::Input::Text("5,3".into())).unwrap();
+    assert!(s.running.is_none());
+    // Spacing 5 x 3 over 10 x 6: 2 x 2 cells of 2 x 2 tiles, all inside.
+    assert_eq!(refs(&s).len(), 4);
+}
+
+#[test]
+fn trim_extend_tools_refuse_hostile_params_without_panicking() {
+    let mut s = Session::new();
+    for (cmd, p) in [
+        ("extrim", json!({"boundary": 5, "side": "x"})),
+        ("trex", json!({"edges": 3, "picks": 4})),
+        ("trex", json!({"picks": [null, 5, {"handle": []}]})),
+        ("btrim", json!({"edges": [1, 2], "handle": null})),
+        ("bextend", json!({"edges": "x"})),
+        ("superhatch", json!({"boundary": [], "block": 7, "spacing": "x"})),
+    ] {
+        assert!(s.execute(cmd, &p).is_err(), "{cmd} {p}");
+    }
+    assert!(s.running.is_none());
+}

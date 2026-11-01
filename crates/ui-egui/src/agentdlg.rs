@@ -47,7 +47,13 @@ fn capitalised(s: &str) -> String {
 pub fn answer_pending(app: &mut CadApp, allowed: bool) {
     let Some(p) = app.session.agent.pending.take() else { return };
     app.session.agent.answered = Some((p.question.clone(), allowed));
-    if allowed {
+    // The control channel's own commands (not session commands): what the user allows is theirs.
+    if allowed && p.command == "app.quit" {
+        app.quit_confirmed = true;
+        app.quit_requested = true;
+    } else if allowed && p.command == "app.answerClose" {
+        app.answer_close(crate::closing::Choice::Discard);
+    } else if allowed {
         let mut params = p.params.clone();
         if let Some(o) = params.as_object_mut() {
             o.insert("confirmed".into(), json!(true));

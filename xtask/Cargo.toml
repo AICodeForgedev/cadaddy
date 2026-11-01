@@ -16,3 +16,7 @@ ed25519-dalek = { version = "3.0.0", default-features = false, features = ["zero
 sha2 = "0.11"
 # The release key's random seed (already in Cargo.lock).
 getrandom = "0.4"
+
+[dev-dependencies]
+# The shared MCP tool table's test names the server's tools (xtask/src/mcptest.rs).
+cadaddy-mcp = { path = "../crates/mcp" }

@@ -1,7 +1,8 @@
 # CADaddy's own DWG codec (`crates/dwgcodec`)
 
-Status: containers done (Q198); entities decoded (Q199), table records and the common objects decoded (Q200). Objects (Q200), the
-writer from the drawing model (Q201) and R2007 (Q202) are next.
+Status: containers (Q198), entities (Q199), table records and objects (Q200), the writer from the drawing model (Q201), R2007
+(Q202) and the reader/writer switch (Q203) are done. The bridge (acadrust) is still the default; the gaps are listed in
+[dwg-parity.md](dwg-parity.md).
 
 ## Why
 
@@ -17,6 +18,24 @@ not acadrust's DWG code, not LibreDWG, not any ODA SDK. acadrust is used only as
 tests. It writes sample DWG files from a made-up DXF, and its DXF output lists the handles it read.
 Where the spec is silent or wrong, the behaviour was worked out from those black-box files and is
 listed under "Spec gaps found by observation".
+
+## Reading with `io::dwg_read` and the engine switch
+
+`cadaddy_io::dwg_read::read(bytes)` decodes a DWG straight into a `Drawing` with this codec (no DXF text in between) and a
+report of the records it could not decode. `cadaddy_io::read_dwg(bytes, engine)` and `write_dwg(drawing, version, engine)` take
+a `DwgEngine` (`Native` or `Bridge`). The app picks the engine from environment variables:
+
+| Variable | Values | Effect |
+|---|---|---|
+| `CADADDY_DWG` | `native`, `acadrust` / `bridge` | engine for reading and writing |
+| `CADADDY_DWG_READ` | same | reading only; beats `CADADDY_DWG` |
+| `CADADDY_DWG_WRITE` | same | writing only; beats `CADADDY_DWG` |
+
+Values ignore case and surrounding spaces; an unknown value is ignored (the next variable, then the default, applies).
+**Defaults: reading and writing both use the bridge** until the parity gaps are closed. With `native`, a file the codec
+cannot read (encrypted or damaged) falls back to the bridge and the drawing's first read note says
+`DWG: read through the DWG bridge (CADaddy's reader: …)`; the native writer hands a version it does not write to the bridge.
+See [dwg-parity.md](dwg-parity.md) for what the native reader still loses.
 
 ## Design
 

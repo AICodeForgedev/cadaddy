@@ -347,3 +347,41 @@ fn bad_attachments_are_refused_without_panicking() {
     assert!(s.execute("ifc.reload", &json!({"names": 5})).is_ok());
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// Two triangulated walls; the second wall's face set (#201) is not in the file, as in a damaged copy.
+const DAMAGED: &str = "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n\
+    #100=IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(1.,0.,0.),(0.,1.,0.)));\n#101=IFCTRIANGULATEDFACESET(#100,$,.T.,((1,2,3)),$);\n\
+    #102=IFCSHAPEREPRESENTATION($,'Body','Tessellation',(#101));\n#103=IFCPRODUCTDEFINITIONSHAPE($,$,(#102));\n\
+    #104=IFCWALL('w0',$,'Wall 0',$,$,$,#103,$,$);\n\
+    #202=IFCSHAPEREPRESENTATION($,'Body','Tessellation',(#201));\n#203=IFCPRODUCTDEFINITIONSHAPE($,$,(#202));\n\
+    #204=IFCWALL('w1',$,'Wall 1',$,$,$,#203,$,$);\nENDSEC;\nEND-ISO-10303-21;\n";
+
+#[test]
+fn a_damaged_ifc_says_what_it_lost_on_open_ifc_open_and_attach() {
+    hooks();
+    let tmp = dir("damaged");
+    let file = tmp.join("Damaged.ifc");
+    std::fs::write(&file, DAMAGED).unwrap();
+    let path = file.to_string_lossy().into_owned();
+    let has = |v: &Value| {
+        v["warnings"]
+            .as_array()
+            .is_some_and(|w| w.iter().any(|x| x.as_str().is_some_and(|t| t.contains("#201") && t.contains("1 element was left out"))))
+    };
+
+    let mut s = Session::empty();
+    let r = s.execute("open", &json!({ "path": path })).unwrap();
+    assert!(has(&r), "{r}");
+    let mut s = Session::empty();
+    let r = s.execute("ifc.open", &json!({ "path": path })).unwrap();
+    assert!(has(&r), "{r}");
+    let mut s = Session::new();
+    let r = s.execute("ifc.attach", &json!({ "path": path })).unwrap();
+    assert!(has(&r), "{r}");
+    // An undamaged file stays quiet.
+    let clean = tmp.join("Clean.ifc");
+    std::fs::write(&clean, DAMAGED.replace("#201", "#101")).unwrap();
+    let mut s = Session::new();
+    let r = s.execute("ifc.attach", &json!({ "path": clean.to_string_lossy() })).unwrap();
+    assert_eq!(r["warnings"], json!([]), "{r}");
+}

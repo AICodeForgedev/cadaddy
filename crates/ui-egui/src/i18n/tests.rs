@@ -39,7 +39,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
 const REQUIRED: &[&str] = &["uk"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "ja"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs", "ru", "fr", "zh", "it", "ko", "sv", "ar", "ja", "el"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {
@@ -643,19 +643,20 @@ fn italian_locales_plurals_and_accents() {
     });
 }
 
-/// Chinese shows only with an installed CJK font (none is bundled); without one the interface
-/// stays English instead of drawing boxes, and choosing it says why.
+/// Chinese shows only with a font for it: an installed CJK font, or one this build embedded from
+/// craft-fonts (the web build has no system fonts). Without either the interface stays English
+/// instead of drawing boxes, and choosing it says why.
 #[test]
-fn chinese_needs_an_installed_cjk_font() {
+fn chinese_needs_a_cjk_font() {
     assert_eq!(locale_language("zh-CN"), Some("zh"));
     let mut app = CadApp::new(Session::new(), Services::default());
     let r = app.run("ui.language", json!({"lang": "zh"})).unwrap();
     assert_eq!(r["interfaceLanguage"], "zh");
-    let font = crate::theme::cjk_font();
-    assert_eq!(app.language(), if font.is_some() { "zh" } else { "en" });
+    let shown = crate::theme::can_show("zh");
+    assert_eq!(app.language(), if shown { "zh" } else { "en" });
     assert_eq!(r["shown"], app.language());
     assert!(crate::theme::can_show("uk") && crate::theme::can_show("en"));
-    if font.is_none() {
+    if !shown {
         assert!(app.status.as_ref().is_some_and(|(s, _)| s.contains("No Chinese font")));
     }
 }
@@ -1035,4 +1036,47 @@ fn engine_prompts_and_messages_show_in_the_interface_language_and_replies_stay_e
     s.cmdline("line").unwrap();
     s.cancel();
     assert!(s.log.iter().all(|l| !l.contains("Команда")), "{:?}", s.log);
+}
+
+#[test]
+fn greek_catalog_locale_preferences_and_contexts() {
+    assert_eq!(Preference::parse("el"), Some(Preference::Greek));
+    assert_eq!(Preference::Greek.code(), "el");
+    assert_eq!(Preference::Greek.name(), "Ελληνικά");
+    for locale in ["el", "el-GR", "el_GR.UTF-8", "EL-cy"] {
+        assert_eq!(locale_language(locale), Some("el"));
+    }
+    assert_eq!(locale_language("elvish"), None);
+    assert_eq!(Preference::Greek.resolve(&["en-US".into()]), "el");
+    let saved = serde_json::to_string(&Preference::Greek).unwrap();
+    assert_eq!(saved, "\"el\"");
+    assert_eq!(serde_json::from_str::<Preference>(&saved).unwrap(), Preference::Greek);
+    assert_eq!(tr("el", "Layer"), "Επίπεδο (Layer)");
+    assert_eq!(tr_menu("el", "Dimension"), "Διαστασιολόγηση");
+    assert_eq!(tr("el", "Dimension"), "Διαστασιολόγηση (Dimension)");
+    with_language("el", || {
+        assert_eq!(t("Open"), "Άνοιγμα");
+        assert_eq!(count(1, "{n} contributor", "{n} contributors"), "1 συνεισφέρων");
+        assert_eq!(count(0, "{n} contributor", "{n} contributors"), "0 συνεισφέροντες");
+        assert_eq!(count(2, "{n} contributor", "{n} contributors"), "2 συνεισφέροντες");
+        assert_eq!(count(21, "{n} contributor", "{n} contributors"), "21 συνεισφέροντες");
+    });
+    assert_eq!(t("Open"), "Open", "language must not leak outside a render scope");
+}
+
+#[test]
+fn default_fonts_cover_all_greek_letters_in_the_catalog() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    let letters: BTreeSet<_> =
+        include_str!("el.tsv").chars().filter(|c| ('\u{0370}'..='\u{03ff}').contains(c) || ('\u{1f00}'..='\u{1fff}').contains(c)).collect();
+    ctx.fonts_mut(|view| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let mut font = view.fonts.font(&family);
+            for c in &letters {
+                assert!(font.characters().contains_key(c), "missing Greek glyph {c} in {family:?}");
+            }
+        }
+    });
 }

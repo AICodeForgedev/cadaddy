@@ -15,6 +15,7 @@ use egui_wgpu::wgpu::util::DeviceExt;
 
 use crate::CadApp;
 use crate::canvas::Xf;
+use crate::gpu::{Tracked, TrackedView};
 
 /// What a model was built from: the drawing (its allocation and revision) and the detail band.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -445,17 +446,17 @@ struct Target {
     size: (u32, u32),
     /// The resolved frame (what `view` shows; copied out by the tests).
     #[cfg_attr(not(test), allow(dead_code))]
-    frame: wgpu::Texture,
+    frame: Tracked<wgpu::Texture>,
     /// The multisampled colour (none without MSAA: the frame is drawn into directly).
-    msaa: Option<wgpu::TextureView>,
-    depth: wgpu::TextureView,
+    msaa: Option<TrackedView>,
+    depth: TrackedView,
     view: wgpu::TextureView,
     /// The opaque surfaces' depth, one sample a pixel (the ambient occlusion's pre-pass).
-    prepass: wgpu::TextureView,
+    prepass: TrackedView,
 }
 
 struct Buffer {
-    buffer: wgpu::Buffer,
+    buffer: Tracked,
 }
 
 /// The shaded view's GPU renderer.
@@ -470,12 +471,12 @@ struct Gpu {
     layout: wgpu::BindGroupLayout,
     /// The shadow pass's own group (the uniform only: it writes the shadow map the others read).
     shadow_group: wgpu::BindGroup,
-    uniform: wgpu::Buffer,
+    uniform: Tracked,
     sampler: wgpu::Sampler,
     shadow_sampler: wgpu::Sampler,
     /// The lightmap's: linear, clamped (cells have borders).
     lm_sampler: wgpu::Sampler,
-    shadow_view: wgpu::TextureView,
+    shadow_view: TrackedView,
     /// Made for the current target and model.
     bind_group: Option<wgpu::BindGroup>,
     tris: Option<Buffer>,
@@ -487,7 +488,7 @@ struct Gpu {
     chunk_ranges: Vec<[std::ops::Range<u32>; 3]>,
     proto_ranges: Vec<[[std::ops::Range<u32>; 3]; 3]>,
     /// The frame's instance placements (slot 0: the identity, for the base geometry).
-    instances: Option<wgpu::Buffer>,
+    instances: Option<Tracked>,
     instance_cap: u64,
     model: Option<Arc<Model3>>,
     /// Bytes in the GPU buffers.
@@ -500,9 +501,9 @@ struct Gpu {
     /// The bind group's textures (bound with the target's pre-pass depth): the materials', the
     /// baked light's and the background image's (one white texel without one; `bg_image` the
     /// image it holds, by address).
-    tex_view: Option<wgpu::TextureView>,
-    lm_view: Option<wgpu::TextureView>,
-    bg_view: wgpu::TextureView,
+    tex_view: Option<TrackedView>,
+    lm_view: Option<TrackedView>,
+    bg_view: TrackedView,
     bg_sampler: wgpu::Sampler,
     bg_image: usize,
     target: Option<Target>,
@@ -577,12 +578,12 @@ impl Gpu {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+        let uniform = Tracked::new(device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("shaded_frame"),
             size: UNIFORM_SIZE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
-        });
+        }));
         const ATTRS: [wgpu::VertexAttribute; 6] =
             wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Float32x2, 4 => Float32x4, 8 => Float32x4];
         const INST: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![5 => Float32x4, 6 => Float32x4, 7 => Float32x4];
@@ -702,7 +703,7 @@ impl Gpu {
             compare: Some(wgpu::CompareFunction::LessEqual),
             ..Default::default()
         });
-        let shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
+        let shadow_tex = Tracked::new(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("shaded_shadow_map"),
             size: wgpu::Extent3d { width: SHADOW_PX, height: SHADOW_PX, depth_or_array_layers: 1 },
             mip_level_count: 1,
@@ -711,7 +712,7 @@ impl Gpu {
             format: DEPTH,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
-        });
+        }));
         let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
         Gpu {
             tri_pipeline: pipeline("shaded_tris", "vs_tri", "fs_tri", wgpu::PrimitiveTopology::TriangleList, true, None),
@@ -731,7 +732,7 @@ impl Gpu {
                 min_filter: wgpu::FilterMode::Linear,
                 ..Default::default()
             }),
-            shadow_view: shadow_tex.create_view(&wgpu::TextureViewDescriptor::default()),
+            shadow_view: shadow_tex.into_view(&wgpu::TextureViewDescriptor::default()),
             bind_group: None,
             tris: None,
             clear_tris: None,
@@ -747,7 +748,7 @@ impl Gpu {
             lighting: None,
             tex_view: None,
             lm_view: None,
-            bg_view: image_texture(device, None, 1, 1, &[255, 255, 255, 255]).create_view(&wgpu::TextureViewDescriptor::default()),
+            bg_view: image_texture(device, None, 1, 1, &[255, 255, 255, 255]).into_view(&wgpu::TextureViewDescriptor::default()),
             bg_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("shaded_background"),
                 mag_filter: wgpu::FilterMode::Nearest,
@@ -849,7 +850,7 @@ impl Gpu {
         self.model = Some(Arc::clone(model));
         // The textures, one layer each, resized to the layer size (at least one layer).
         let count = layers.len().max(1) as u32;
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
+        let tex = Tracked::new(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("shaded_textures"),
             size: wgpu::Extent3d { width: TEX_PX, height: TEX_PX, depth_or_array_layers: count },
             mip_level_count: 1,
@@ -858,7 +859,7 @@ impl Gpu {
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
-        });
+        }));
         for (i, r) in layers.iter().enumerate() {
             let Some(img) = image::RgbaImage::from_raw(r.width, r.height, r.rgba.clone()) else { continue };
             let px = image::imageops::resize(&img, TEX_PX, TEX_PX, image::imageops::FilterType::Triangle).into_raw();
@@ -874,13 +875,13 @@ impl Gpu {
                 wgpu::Extent3d { width: TEX_PX, height: TEX_PX, depth_or_array_layers: 1 },
             );
         }
-        let tex_view = tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+        let tex_view = tex.into_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
         // The baked lighting atlas (RGBM), or one black texel.
         let (lw, lh, lbytes) = match model.base.baked.as_ref().filter(|_| physical) {
             Some(b) => (b.map.width, b.map.height, cadaddy_render::lightmap::rgbm(&b.map)),
             None => (1, 1, vec![0, 0, 0, 255]),
         };
-        let lm_tex = device.create_texture(&wgpu::TextureDescriptor {
+        let lm_tex = Tracked::new(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("shaded_lightmap"),
             size: wgpu::Extent3d { width: lw.max(1), height: lh.max(1), depth_or_array_layers: 1 },
             mip_level_count: 1,
@@ -889,7 +890,7 @@ impl Gpu {
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
-        });
+        }));
         if lbytes.len() as u64 == u64::from(lw) * u64::from(lh) * 4 {
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo { texture: &lm_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
@@ -899,7 +900,7 @@ impl Gpu {
             );
         }
         self.bytes += lbytes.len();
-        self.lm_view = Some(lm_tex.create_view(&wgpu::TextureViewDescriptor::default()));
+        self.lm_view = Some(lm_tex.into_view(&wgpu::TextureViewDescriptor::default()));
         self.tex_view = Some(tex_view);
         self.bind_group = None;
     }
@@ -953,7 +954,7 @@ impl Gpu {
                 }
                 None => image_texture(device, None, 1, 1, &[255, 255, 255, 255]),
             };
-            self.bg_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.bg_view = texture.into_view(&wgpu::TextureViewDescriptor::default());
             self.bg_image = key;
             self.bind_group = None;
         }
@@ -1196,12 +1197,12 @@ impl Gpu {
         let need = inst.len() as u64;
         if self.instances.is_none() || self.instance_cap < need {
             let cap = need.next_power_of_two().max(INSTANCE_SIZE * 64);
-            self.instances = Some(device.create_buffer(&wgpu::BufferDescriptor {
+            self.instances = Some(Tracked::new(device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("shaded_instances"),
                 size: cap,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
-            }));
+            })));
             self.instance_cap = cap;
         }
         let (Some(t), Some(group), Some(ib)) = (&self.target, &self.bind_group, &self.instances) else { return vis };
@@ -1280,7 +1281,7 @@ impl Gpu {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shaded"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: t.msaa.as_ref().unwrap_or(&t.view),
+                    view: t.msaa.as_ref().map_or(&t.view, |m| &**m),
                     depth_slice: None,
                     resolve_target: t.msaa.as_ref().map(|_| &t.view),
                     ops: wgpu::Operations {
@@ -1343,16 +1344,19 @@ fn buffer(device: &wgpu::Device, label: &str, bytes: &[u8]) -> Option<Buffer> {
     if bytes.is_empty() {
         return None;
     }
-    let buffer =
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: bytes, usage: wgpu::BufferUsages::VERTEX });
+    let buffer = Tracked::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytes,
+        usage: wgpu::BufferUsages::VERTEX,
+    }));
     Some(Buffer { buffer })
 }
 
 /// An RGBA texture of `w` × `h` (as stored, not sRGB-decoded), written with `px` when a queue
 /// is given (else left white: one texel).
-fn image_texture(device: &wgpu::Device, queue: Option<&wgpu::Queue>, w: u32, h: u32, px: &[u8]) -> wgpu::Texture {
+fn image_texture(device: &wgpu::Device, queue: Option<&wgpu::Queue>, w: u32, h: u32, px: &[u8]) -> Tracked<wgpu::Texture> {
     let size = wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 };
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
+    let tex = Tracked::new(device.create_texture(&wgpu::TextureDescriptor {
         label: Some("shaded_background"),
         size,
         mip_level_count: 1,
@@ -1361,7 +1365,7 @@ fn image_texture(device: &wgpu::Device, queue: Option<&wgpu::Queue>, w: u32, h: 
         format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
-    });
+    }));
     if let Some(q) = queue.filter(|_| px.len() as u64 == u64::from(size.width) * u64::from(size.height) * 4) {
         q.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
@@ -1376,7 +1380,7 @@ fn image_texture(device: &wgpu::Device, queue: Option<&wgpu::Queue>, w: u32, h: 
 fn target(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Target {
     let extent = wgpu::Extent3d { width: size.0.clamp(1, shade::MAX_SIDE), height: size.1.clamp(1, shade::MAX_SIDE), depth_or_array_layers: 1 };
     let tex = |label: &str, format, samples, usage| {
-        device.create_texture(&wgpu::TextureDescriptor {
+        Tracked::new(device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: extent,
             mip_level_count: 1,
@@ -1385,7 +1389,7 @@ fn target(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Target {
             format,
             usage,
             view_formats: &[],
-        })
+        }))
     };
     let msaa = (samples > 1).then(|| tex("shaded_msaa", FORMAT, samples, wgpu::TextureUsages::RENDER_ATTACHMENT));
     let depth = tex("shaded_depth", DEPTH, samples, wgpu::TextureUsages::RENDER_ATTACHMENT);
@@ -1394,10 +1398,10 @@ fn target(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Target {
         tex("shaded_frame", FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC);
     Target {
         size,
-        msaa: msaa.map(|m| m.create_view(&wgpu::TextureViewDescriptor::default())),
-        depth: depth.create_view(&wgpu::TextureViewDescriptor::default()),
+        msaa: msaa.map(|m| m.into_view(&wgpu::TextureViewDescriptor::default())),
+        depth: depth.into_view(&wgpu::TextureViewDescriptor::default()),
         view: resolve.create_view(&wgpu::TextureViewDescriptor::default()),
-        prepass: prepass.create_view(&wgpu::TextureViewDescriptor::default()),
+        prepass: prepass.into_view(&wgpu::TextureViewDescriptor::default()),
         frame: resolve,
     }
 }

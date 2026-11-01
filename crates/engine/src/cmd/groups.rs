@@ -52,7 +52,15 @@ pub fn specs() -> Vec<CommandSpec> {
 /// A name a new or renamed group may take: not empty, not unnamed-style (`*…`), no characters
 /// that are special in names or wildcards.
 pub(crate) fn valid_name(n: &str) -> bool {
-    !n.trim().is_empty() && n.len() <= 255 && !n.starts_with('*') && !n.chars().any(|c| c.is_control() || "<>/\\\":;?*|,=`".contains(c))
+    !n.starts_with('*') && super::names::is_valid(n)
+}
+
+/// The refusal for a group name `valid_name` rejects, naming the bad character.
+fn group_name_error(cmd: &str, n: &str) -> crate::EngineError {
+    match super::names::check(cmd, "group", n) {
+        Err(e) => e,
+        Ok(()) => bad(cmd, format!("invalid group name `{n}`: unnamed-style names (`*…`) are reserved")),
+    }
 }
 
 /// Index of the group called `name` (case-insensitive).
@@ -78,6 +86,14 @@ fn existing(d: &Drawing, hs: &[Handle]) -> Vec<Handle> {
     hs.iter().copied().filter(|h| d.entity(*h).is_some() && seen.insert(*h)).collect()
 }
 
+/// A `name` that is given but blank is an error, not a request for an unnamed group.
+pub(crate) fn refuse_blank_name(cmd: &str, p: &Value) -> Result<()> {
+    match str_param(p, "name") {
+        Some(n) if n.trim().is_empty() => super::names::check(cmd, "group", n),
+        _ => Ok(()),
+    }
+}
+
 /// Make a group of `hs`. `name` None (or empty) makes an unnamed group. Returns its name.
 pub(crate) fn create(s: &mut Session, name: Option<&str>, description: &str, hs: &[Handle], selectable: bool) -> Result<String> {
     let d = s.doc()?;
@@ -89,7 +105,7 @@ pub(crate) fn create(s: &mut Session, name: Option<&str>, description: &str, hs:
         return Err(bad("group", "the drawing has too many groups"));
     }
     let name = match name.map(str::trim).filter(|n| !n.is_empty()) {
-        Some(n) if !valid_name(n) => return Err(bad("group", format!("\"{n}\" is not a valid group name"))),
+        Some(n) if !valid_name(n) => return Err(group_name_error("group", n)),
         Some(n) if find(d, n).is_some() => return Err(bad("group", format!("a group named \"{n}\" already exists"))),
         Some(n) => n.to_string(),
         None => next_unnamed(d),
@@ -177,7 +193,7 @@ pub(crate) fn remove_members(s: &mut Session, i: usize, hs: &[Handle]) -> Result
 pub(crate) fn rename(s: &mut Session, i: usize, new: &str) -> Result<()> {
     let new = new.trim();
     if !valid_name(new) {
-        return Err(bad("groupedit", format!("\"{new}\" is not a valid group name")));
+        return Err(group_name_error("groupedit", new));
     }
     let d = s.doc()?;
     if find(d, new).is_some_and(|j| j != i) {
@@ -260,6 +276,7 @@ fn handles_at(cmd: &str, p: &Value, key: &str) -> Result<Vec<Handle>> {
 
 fn run_group(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
+    refuse_blank_name("group", p)?;
     let name = create(s, str_param(p, "name"), str_param(p, "description").unwrap_or_default(), &hs, bool_or(p, "selectable", true))?;
     let n = s.doc()?.groups.iter().find(|g| g.name == name).map_or(0, |g| g.members.len());
     Ok(json!({ "name": name, "members": n }))

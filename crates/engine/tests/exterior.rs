@@ -243,6 +243,47 @@ fn auto_roof_from_datum_without_explicit_roof_plan() {
     assert!(has_roof, "roof should appear in takeoff: {t}");
 }
 
+/// B7-007: the automatic roof covers the top storey's floor plate, not its walls' bounding
+/// rectangle: an L building's roof is its L, and a stray wall outside the building doesn't
+/// stretch it.
+#[test]
+fn auto_roof_covers_the_top_floor_plate_not_its_bounding_box() {
+    let mut s = Session::new();
+    layer(&mut s, "A-WALL");
+    // An L of 6" walls: 40' × 15' along the bottom, 20' × 15' up the left (900 sq ft; its
+    // bounding rectangle is 1,200).
+    poly(&mut s, &[[0.0, 0.0], [480.0, 0.0], [480.0, 180.0], [240.0, 180.0], [240.0, 360.0], [0.0, 360.0]]);
+    poly(&mut s, &[[6.0, 6.0], [474.0, 6.0], [474.0, 174.0], [234.0, 174.0], [234.0, 354.0], [6.0, 354.0]]);
+    // A stray 5' wall 6'-8" east of the building.
+    rect(&mut s, [560.0, 100.0], [620.0, 106.0]);
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "version": 1,
+            "units_per_foot": 12,
+            "levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 700, 500], "base": [0, 0]}
+            ],
+            "datums": [{"name": "ROOF", "elevation_ft": 12, "kind": "roof", "source": "estimated"}],
+            "layers": [{"layer": "A-WALL", "role": "wall"}]
+        }}),
+    )
+    .unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    assert_eq!(r["roofs"].as_u64().unwrap_or(0), 1, "expected auto-roof: {r}");
+    let d = s.doc().unwrap();
+    let roof = d.model.iter().find(|e| made_as(e).as_deref() == Some("roof")).expect("roof");
+    let area: f64 = roof.common.xdata.iter().find_map(|t| t.value.strip_prefix("area:")?.parse().ok()).expect("area");
+    assert!((area - 900.0).abs() < 15.0, "the L's area, not its bounding rectangle's: {area}");
+    let EntityKind::Mesh(m) = &roof.kind else { panic!("mesh") };
+    let (x0, x1) = extent(m, |v| v.x);
+    assert!(x0 > -1.0 && x1 < 481.0, "the stray wall doesn't stretch the roof: {x0}..{x1}");
+    // Nothing over the L's notch (x 240-480, y 180-360).
+    let (_, y1) = extent(m, |v| v.y);
+    assert!(y1 < 361.0);
+    assert!(!m.vertices.iter().any(|v| v.x > 250.0 && v.y > 190.0), "no roof over the notch");
+}
+
 /// When there is also a PARAPET datum, the auto-roof includes a parapet.
 #[test]
 fn auto_roof_includes_parapet_from_datum() {

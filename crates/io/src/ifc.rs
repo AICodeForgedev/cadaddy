@@ -1319,6 +1319,8 @@ type Model = HashMap<u64, (String, Vec<P>)>;
 struct Lexer<'a> {
     b: &'a [u8],
     at: usize,
+    /// Numbers that were not numbers (read as 0): counted so the instance can be named.
+    odd: usize,
 }
 
 impl Lexer<'_> {
@@ -1420,7 +1422,10 @@ impl Lexer<'_> {
                 }
                 let t = std::str::from_utf8(&self.b[start..self.at]).ok()?;
                 // STEP allows `1.E-05`; Rust parses it as written.
-                t.parse::<f64>().ok().filter(|v| v.is_finite()).map(P::Num).or(Some(P::Num(0.0)))
+                t.parse::<f64>().ok().filter(|v| v.is_finite()).map(P::Num).or_else(|| {
+                    self.odd += 1;
+                    Some(P::Num(0.0))
+                })
             }
             c if c.is_ascii_alphabetic() => {
                 let w = self.word();
@@ -1502,19 +1507,93 @@ fn decode_step_string(raw: &[u8]) -> String {
     out
 }
 
-/// The DATA section's instances.
-fn parse(bytes: &[u8]) -> Result<Model> {
+/// What was wrong in the DATA section: instances that could not be read, values that were not
+/// values, references to instances that are not there, a file that stops early.
+#[derive(Default)]
+struct Damage {
+    /// Instances that did not parse: their number (when readable) and class.
+    unreadable: Vec<(Option<u64>, String)>,
+    /// Instances with a value that was not a number.
+    odd_values: Vec<u64>,
+    /// Instances that refer to a number no instance has: (instance, missing).
+    dangling: Vec<(u64, u64)>,
+    /// The ids a damaged element's body might have lost (unreadable instances, missing targets).
+    lost: std::collections::HashSet<u64>,
+    /// The file ended before `ENDSEC;` / `END-ISO-10303-21;`.
+    ends_early: bool,
+}
+
+impl Damage {
+    fn any(&self) -> bool {
+        !(self.unreadable.is_empty() && self.odd_values.is_empty() && self.dangling.is_empty())
+    }
+}
+
+/// Up to five ids as `#1, #2`, then how many more.
+fn id_list(ids: impl Iterator<Item = String>, n: usize) -> String {
+    let mut v: Vec<String> = ids.take(5).collect();
+    if n > 5 {
+        v.push(format!("{} more", n - 5));
+    }
+    v.join(", ")
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// Every id a parameter refers to.
+fn refs_of(p: &P, out: &mut Vec<u64>) {
+    match p {
+        P::Ref(r) => out.push(*r),
+        P::List(l) | P::Typed(_, l) => l.iter().for_each(|x| refs_of(x, out)),
+        _ => {}
+    }
+}
+
+/// The DATA section's instances, and what could not be read of them.
+fn parse(bytes: &[u8]) -> Result<(Model, Damage)> {
     let start = find(bytes, b"DATA;").ok_or_else(|| IoError::Format("not an IFC (STEP) file: no DATA section".into()))? + 5;
     if !bytes.starts_with(b"ISO-10303-21") && find(bytes.get(..bytes.len().min(256)).unwrap_or_default(), b"ISO-10303-21").is_none() {
         return Err(IoError::Format("not an IFC (STEP) file".into()));
     }
-    let mut lx = Lexer { b: bytes, at: start };
+    let mut lx = Lexer { b: bytes, at: start, odd: 0 };
     let mut m: Model = HashMap::new();
+    let mut dm = Damage::default();
+    let mut ended = false;
     loop {
         lx.skip();
         match lx.b.get(lx.at) {
             Some(b'#') => {}
-            _ => break,
+            Some(_) if lx.b.get(lx.at..).is_some_and(|r| r.starts_with(b"ENDSEC")) => {
+                ended = true;
+                break;
+            }
+            // A line whose `#` was damaged: skipped to its `;`, counted, and the read goes on.
+            Some(_) => {
+                let rest = lx.b.get(lx.at..).unwrap_or_default();
+                let end = rest.iter().position(|c| *c == b';');
+                // The class is still readable after the `=` when only the number was damaged.
+                let line = rest.get(..end.unwrap_or(rest.len())).unwrap_or_default();
+                let class = line.iter().position(|c| *c == b'=').map(|e| {
+                    let w: Vec<u8> = line[e + 1..]
+                        .iter()
+                        .copied()
+                        .skip_while(u8::is_ascii_whitespace)
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == b'_')
+                        .collect();
+                    String::from_utf8_lossy(&w).to_ascii_uppercase()
+                });
+                dm.unreadable.push((None, class.unwrap_or_default()));
+                match end {
+                    Some(e) => {
+                        lx.at += e + 1;
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+            None => break,
         }
         lx.at += 1;
         let s = lx.at;
@@ -1528,18 +1607,29 @@ fn parse(bytes: &[u8]) -> Result<Model> {
         lx.skip();
         let name = lx.word();
         lx.skip();
+        lx.odd = 0;
         let params = if ok && lx.b.get(lx.at) == Some(&b'(') {
             lx.at += 1;
             lx.list(0)
         } else {
             None
         };
+        // The instance ends at its `;`; anything else before it is damage.
+        lx.skip();
+        let clean_end = params.is_some() && lx.b.get(lx.at) == Some(&b';');
         // A damaged instance is skipped to the next `;`.
         match (id, params) {
-            (Some(id), Some(p)) if !name.is_empty() => {
+            (Some(id), Some(p)) if !name.is_empty() && clean_end => {
+                if lx.odd > 0 {
+                    dm.odd_values.push(id);
+                    dm.lost.insert(id);
+                }
                 m.insert(id, (name, p));
             }
-            _ => {}
+            (id, _) => {
+                dm.unreadable.push((id, name));
+                dm.lost.extend(id);
+            }
         }
         match lx.b.get(lx.at..).and_then(|r| r.iter().position(|c| *c == b';')) {
             Some(e) => lx.at += e + 1,
@@ -1552,7 +1642,25 @@ fn parse(bytes: &[u8]) -> Result<Model> {
     if m.is_empty() {
         return Err(IoError::Format("the IFC file has no instances".into()));
     }
-    Ok(m)
+    dm.ends_early = !ended || find(bytes, b"END-ISO-10303-21").is_none();
+    let mut ids: Vec<u64> = m.keys().copied().collect();
+    ids.sort_unstable();
+    let mut seen = std::collections::HashSet::new();
+    for id in ids {
+        let mut rs = Vec::new();
+        if let Some((_, a)) = m.get(&id) {
+            a.iter().for_each(|p| refs_of(p, &mut rs));
+        }
+        for r in rs {
+            if !m.contains_key(&r) && !dm.lost.contains(&r) && seen.insert((id, r)) {
+                dm.dangling.push((id, r));
+            }
+        }
+    }
+    // A reference to an instance that was unreadable is dangling too, but the unreadable
+    // instance is the cause and is already counted: only the missing ones are listed.
+    dm.lost.extend(dm.dangling.iter().map(|(_, r)| *r));
+    Ok((m, dm))
 }
 
 fn find(h: &[u8], n: &[u8]) -> Option<usize> {
@@ -1588,6 +1696,25 @@ struct Reader<'a> {
 impl Reader<'_> {
     fn get(&self, p: &P) -> Option<&(String, Vec<P>)> {
         self.m.get(&p.reference()?)
+    }
+
+    /// Whether the instance `p` names, or anything below it, is one of `lost`.
+    fn reaches(&self, p: &P, lost: &std::collections::HashSet<u64>) -> bool {
+        let mut stack = Vec::new();
+        refs_of(p, &mut stack);
+        let mut seen = std::collections::HashSet::new();
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) || seen.len() > 10_000 {
+                continue;
+            }
+            if lost.contains(&id) {
+                return true;
+            }
+            if let Some((_, a)) = self.m.get(&id) {
+                a.iter().for_each(|x| refs_of(x, &mut stack));
+            }
+        }
+        false
     }
 
     fn coords(&self, p: &P) -> Vec<f64> {
@@ -2346,7 +2473,7 @@ fn mesh_of(faces: &[Vec<Vec3>]) -> Option<Mesh> {
 
 /// An IFC file as a drawing: a mesh per product with a body, on a layer per class, in metres.
 pub fn read_ifc(bytes: &[u8]) -> Result<Drawing> {
-    let model = parse(bytes)?;
+    let (model, damage) = parse(bytes)?;
     let r = Reader { m: &model };
     let unit = r.unit();
     let scale: M = [[unit, 0.0, 0.0, 0.0], [0.0, unit, 0.0, 0.0], [0.0, 0.0, unit, 0.0]];
@@ -2357,11 +2484,16 @@ pub fn read_ifc(bytes: &[u8]) -> Result<Drawing> {
     ids.sort_unstable();
     let mut total_faces = 0usize;
     let mut n = 0usize;
+    // Elements the damage cost: gone, or read with part of their body missing.
+    let (mut gone, mut partial): (Vec<u64>, Vec<u64>) = (Vec::new(), Vec::new());
+    gone.extend(damage.unreadable.iter().filter(|(_, c)| is_element_class(c)).filter_map(|(i, _)| *i));
+    let gone_unnumbered = damage.unreadable.iter().filter(|(i, c)| i.is_none() && is_element_class(c)).count();
     for id in ids {
         let Some((name, a)) = model.get(id) else { continue };
         if NOT_OBJECTS.contains(&name.as_str()) || a.len() < 7 {
             continue;
         }
+        let touched = damage.any() && a.get(6).is_some_and(|x| r.reaches(x, &damage.lost));
         // An IfcProduct: GlobalId, OwnerHistory, Name, Description, ObjectType, ObjectPlacement, Representation…
         let Some((pds_name, pds)) = a.get(6).and_then(|x| r.get(x)) else { continue };
         if pds_name != "IFCPRODUCTDEFINITIONSHAPE" {
@@ -2384,9 +2516,17 @@ pub fn read_ifc(bytes: &[u8]) -> Result<Drawing> {
         if total_faces > MAX_FACES {
             return Err(IoError::Format(format!("more than {MAX_FACES} faces")));
         }
-        let Some(mesh) = mesh_of(&faces) else { continue };
+        let Some(mesh) = mesh_of(&faces) else {
+            if touched {
+                gone.push(*id);
+            }
+            continue;
+        };
         if mesh.vertices.len() > MAX_POINTS {
             continue;
+        }
+        if touched {
+            partial.push(*id);
         }
         let class = class_name(name);
         let layer = format!("IFC-{class}");
@@ -2413,10 +2553,73 @@ pub fn read_ifc(bytes: &[u8]) -> Result<Drawing> {
         d.add(&Space::Model, c, EntityKind::Mesh(mesh)).map_err(|e| IoError::Format(e.to_string()))?;
         n += 1;
     }
+    let notes = damage_notes(&damage, &gone, gone_unnumbered, &partial);
     if n == 0 {
-        return Err(IoError::Format("no building elements with a body in the IFC file".into()));
+        let why = notes.first().map(|n| format!(" ({n})")).unwrap_or_default();
+        return Err(IoError::Format(format!("no building elements with a body in the IFC file{why}")));
     }
+    d.read_notes.extend(notes);
     Ok(d)
+}
+
+/// An IFC class that is a building element (a product that can have a body).
+fn is_element_class(name: &str) -> bool {
+    name.starts_with("IFC")
+        && !NOT_OBJECTS.contains(&name)
+        && !name.starts_with("IFCREL")
+        && !name.starts_with("IFCPROPERTY")
+        && !name.contains("PLACEMENT")
+        && !name.contains("REPRESENTATION")
+        && !name.contains("POINT")
+        && !name.contains("DIRECTION")
+        && !name.contains("PROFILE")
+}
+
+/// The notes on what a damaged file lost, worded like the DWG and DXF ones.
+fn damage_notes(dm: &Damage, gone: &[u64], gone_unnumbered: usize, partial: &[u64]) -> Vec<String> {
+    let mut notes = Vec::new();
+    if dm.any() {
+        let mut parts = Vec::new();
+        let n = dm.unreadable.len();
+        if n > 0 {
+            let ids = id_list(dm.unreadable.iter().map(|(i, _)| i.map_or_else(|| "a line with no number".to_string(), |i| format!("#{i}"))), n);
+            parts.push(format!("{} couldn't be read ({ids})", plural(n, "instance", "instances")));
+        }
+        let n = dm.dangling.len();
+        if n > 0 {
+            let ids = id_list(dm.dangling.iter().map(|(i, r)| format!("#{i} -> #{r}")), n);
+            parts.push(format!(
+                "{} to missing instances ({ids})",
+                if n == 1 { "1 instance refers".to_string() } else { format!("{n} instances refer") }
+            ));
+        }
+        let n = dm.odd_values.len();
+        if n > 0 {
+            let ids = id_list(dm.odd_values.iter().map(|i| format!("#{i}")), n);
+            parts.push(format!("{} with a value that is not a number ({ids})", plural(n, "instance", "instances")));
+        }
+        let gone_n = gone.len() + gone_unnumbered;
+        let elements = if gone_n > 0 || !partial.is_empty() {
+            let mut e = Vec::new();
+            if gone_n > 0 {
+                let ids = id_list(gone.iter().map(|i| format!("#{i}")), gone.len());
+                let ids = if ids.is_empty() { String::new() } else { format!(" ({ids})") };
+                e.push(format!("{} left out{ids}", plural(gone_n, "element was", "elements were")));
+            }
+            if !partial.is_empty() {
+                let ids = id_list(partial.iter().map(|i| format!("#{i}")), partial.len());
+                e.push(format!("{} read with part of its body missing ({ids})", plural(partial.len(), "element", "elements")));
+            }
+            format!("; {}", e.join(", "))
+        } else {
+            String::new()
+        };
+        notes.push(format!("IFC: {}{elements}", parts.join("; ")));
+    }
+    if dm.ends_early {
+        notes.push("IFC: the file ends early (no ENDSEC; / END-ISO-10303-21;): the model may be incomplete".into());
+    }
+    notes
 }
 
 /// What an object is as a building element: the IFC class it is written as (`IfcDuctSegment`,
@@ -2585,6 +2788,85 @@ mod tests {
         let ifc = b"ISO-10303-21;\nDATA;\n#1=IFCREPRESENTATIONMAP($,#2);\n#2=IFCSHAPEREPRESENTATION($,'Body','M',(#3));\n\
             #3=IFCMAPPEDITEM(#1,$);\n#5=IFCPRODUCTDEFINITIONSHAPE($,$,(#2));\n#6=IFCWALL('w',$,$,$,$,$,#5,$,$);\nENDSEC;\n";
         assert!(read_ifc(ifc).is_err(), "no faces");
+    }
+
+    /// Three walls (each a triangulated body) in STEP text; `lines` replaces or adds instances.
+    fn three_walls(edit: impl Fn(u32, String) -> Option<String>, tail: &str) -> Vec<u8> {
+        let mut s = String::from("ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n");
+        for k in 0..3u32 {
+            let b = 100 * (k + 1);
+            for (off, line) in [
+                (0, "IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(1.,0.,0.),(0.,1.,0.)))".to_string()),
+                (1, format!("IFCTRIANGULATEDFACESET(#{},$,.T.,((1,2,3)),$)", b)),
+                (2, format!("IFCSHAPEREPRESENTATION($,'Body','Tessellation',(#{}))", b + 1)),
+                (3, format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{}))", b + 2)),
+                (4, format!("IFCWALL('w{k}',$,'Wall {k}',$,$,$,#{},$,$)", b + 3)),
+            ] {
+                if let Some(l) = edit(b + off, line) {
+                    s.push_str(&format!("#{}={};\n", b + off, l));
+                }
+            }
+        }
+        s.push_str(tail);
+        s.into_bytes()
+    }
+
+    const END: &str = "ENDSEC;\nEND-ISO-10303-21;\n";
+
+    fn walls_of(d: &Drawing) -> usize {
+        d.model.iter().filter(|e| e.common.layer == "IFC-Wall").count()
+    }
+
+    #[test]
+    fn an_undamaged_file_reads_without_notes() {
+        let d = read_ifc(&three_walls(|_, l| Some(l), END)).unwrap();
+        assert_eq!((walls_of(&d), d.read_notes.len()), (3, 0), "{:?}", d.read_notes);
+    }
+
+    #[test]
+    fn a_line_that_does_not_parse_is_counted_and_its_element_named() {
+        // The second wall's instance line is garbled: the wall is gone, and the file says so.
+        let d =
+            read_ifc(&three_walls(|id, l| Some(if id == 204 { "IFCWALL('w1',$,'Wall 1',$,$,$,#203,$,$".replace(')', "") } else { l }), END)).unwrap();
+        assert_eq!(walls_of(&d), 2);
+        let note = d.read_notes.join("\n");
+        assert!(note.contains("1 instance couldn't be read") && note.contains("#204"), "{note}");
+        assert!(note.contains("1 element was left out"), "{note}");
+        // A flipped `#` at the start of a line must not end the read there.
+        let mut bytes = three_walls(|_, l| Some(l), END);
+        let at = bytes.windows(5).position(|w| w == b"#204=").unwrap();
+        bytes[at] = b'%';
+        let d = read_ifc(&bytes).unwrap();
+        assert_eq!(walls_of(&d), 2, "reading went on past the damaged line");
+        assert!(d.read_notes.iter().any(|n| n.contains("couldn't be read")), "{:?}", d.read_notes);
+    }
+
+    #[test]
+    fn a_dangling_reference_is_counted_with_the_elements_it_cost() {
+        // The first wall's face set is gone (its line removed): the wall has no body.
+        let d = read_ifc(&three_walls(|id, l| (id != 101).then_some(l), END)).unwrap();
+        assert_eq!(walls_of(&d), 2);
+        let note = d.read_notes.join("\n");
+        assert!(note.contains("refer to missing") || note.contains("refers to missing"), "{note}");
+        assert!(note.contains("#101") && note.contains("1 element was left out"), "{note}");
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_number_is_counted() {
+        let d = read_ifc(&three_walls(|id, l| Some(if id == 100 { l.replace("(1.,0.,0.)", "(1.2.3,0.,0.)") } else { l }), END)).unwrap();
+        let note = d.read_notes.join("\n");
+        assert!(note.contains("#100") && note.contains("value"), "{note}");
+    }
+
+    #[test]
+    fn a_truncated_file_is_warned_and_an_empty_one_refused() {
+        let full = three_walls(|_, l| Some(l), END);
+        let cut = &full[..full.len() * 3 / 4];
+        let d = read_ifc(cut).unwrap();
+        let note = d.read_notes.join("\n");
+        assert!(note.contains("END-ISO-10303-21") && note.contains("ends early"), "{note}");
+        assert!(walls_of(&d) < 3);
+        assert!(read_ifc(b"").is_err());
     }
 
     #[test]

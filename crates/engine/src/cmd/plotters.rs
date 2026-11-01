@@ -113,9 +113,9 @@ impl PlotterStore {
                 std::fs::create_dir_all(dir()?).map_err(|e| e.to_string())?;
                 let tmp = p.with_extension("json.cadaddy-tmp");
                 crate::writefile::write(&tmp, t).map_err(|e| format!("{n}: {e}"))?;
-                std::fs::rename(&tmp, &p).map_err(|e| format!("{n}: {e}"))
+                crate::writefile::rename(&tmp, &p).map_err(|e| format!("{n}: {e}"))
             },
-            delete: |n| std::fs::remove_file(file(n)?).map_err(|e| format!("{n}: {e}")),
+            delete: |n| crate::writefile::remove(file(n)?).map_err(|e| format!("{n}: {e}")),
         }
     }
 }
@@ -375,10 +375,12 @@ impl Interactive for PlotWindowM {
     fn name(&self) -> &'static str {
         "PLOTWINDOW"
     }
+    /// Ask for the first corner, then for the opposite one marked as a rectangle corner
+    /// (`Prompt::corner`), so ORTHO does not bend the pick and the window keeps its area.
     fn prompt(&self, _s: &Session) -> Prompt {
         match self.first {
             None => Prompt::new("Specify first corner", Accept::POINT),
-            Some(a) => Prompt::new("Specify opposite corner", Accept::POINT).base(a),
+            Some(a) => Prompt::new("Specify opposite corner", Accept::POINT).corner(a),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
