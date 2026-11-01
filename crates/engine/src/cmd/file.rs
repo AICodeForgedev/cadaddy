@@ -1365,7 +1365,7 @@ fn commit_save(s: &mut Session, path: &str, bytes: &[u8], store: impl FnOnce(&st
     st.title = file_name(path);
     // The file as this save left it: the next save there is checked against it. (A .cdy save may
     // have appended, so its bytes are not the file.)
-    st.disk_id = DiskId::of(path, Some(bytes).filter(|_| !is_cdy(path)));
+    st.disk_id = DiskId::of(path, (!is_cdy(path)).then_some(bytes));
     // A BEgin group still open when the drawing is saved ends there.
     st.end_undo_group();
     Ok(bytes.len())
