@@ -235,14 +235,12 @@ fn loaded_linetype(d: &cadaddy_doc::Drawing, cmd: &str, p: &Value) -> Result<Opt
 }
 
 fn valid_name(n: &str) -> bool {
-    !n.trim().is_empty() && n.len() <= 255 && !n.chars().any(|c| "<>/\\\":;?*|,=`".contains(c))
+    super::names::is_valid(n)
 }
 
 fn run_new(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad("layer.new", "`name` is required"))?.to_string();
-    if !valid_name(&name) {
-        return Err(bad("layer.new", "invalid layer name"));
-    }
+    super::names::check("layer.new", "layer", &name)?;
     let d = s.doc_mut()?;
     if d.layer(&name).is_some() {
         return Err(bad("layer.new", format!("layer `{name}` already exists")));
@@ -282,9 +280,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         if old == "0" || old.eq_ignore_ascii_case("Defpoints") {
             return Err(bad("layer.set", "cannot rename layer 0 or Defpoints"));
         }
-        if !valid_name(nn) {
-            return Err(bad("layer.set", "invalid layer name"));
-        }
+        super::names::check("layer.set", "layer", nn)?;
         if !nn.eq_ignore_ascii_case(&old) && d.layer(nn).is_some() {
             return Err(bad("layer.set", format!("layer `{nn}` already exists")));
         }
@@ -453,9 +449,7 @@ fn all_layers(s: &mut Session, f: fn(&mut Layer)) -> Result<Value> {
 
 fn run_state_save(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").map(str::trim).ok_or_else(|| bad("layerstate.save", "`name` is required"))?.to_string();
-    if !valid_name(&name) {
-        return Err(bad("layerstate.save", "invalid name"));
-    }
+    super::names::check("layerstate.save", "layer state", &name)?;
     let restore = states::mask_param(p)?;
     let d = s.doc_mut()?;
     let layers = d.layers.clone();
@@ -523,9 +517,7 @@ fn run_state_delete(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_state_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let from = str_param(p, "from").ok_or_else(|| bad("layerstate.rename", "`from` is required"))?;
     let to = str_param(p, "to").map(str::trim).ok_or_else(|| bad("layerstate.rename", "`to` is required"))?.to_string();
-    if !valid_name(&to) {
-        return Err(bad("layerstate.rename", "invalid name"));
-    }
+    super::names::check("layerstate.rename", "layer state", &to)?;
     let d = s.doc_mut()?;
     if d.layer_states.iter().any(|st| st.name == to) {
         return Err(bad("layerstate.rename", format!("layer state `{to}` already exists")));

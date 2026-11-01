@@ -197,7 +197,10 @@ pub fn format_angle(rad: f64, unit: u8, decimals: u8, zin: u8) -> String {
 /// Format an angle with the dimension style's DIMDSEP separator.
 pub(crate) fn format_angle_with_separator(rad: f64, unit: u8, decimals: u8, zin: u8, separator: &str) -> String {
     let rad = if rad.is_finite() { rad } else { 0.0 };
-    let deg = rad.to_degrees();
+    // Float noise from the geometry (22.249999999999996 for a true 22.25) must not turn a half
+    // down: settle the value at 9 places first, as lengths settle through the shortest text.
+    let deg = cadaddy_doc::numfmt::round_to(rad.to_degrees(), 9);
+    let rad = cadaddy_doc::numfmt::round_to(rad, 12);
     match unit {
         1 => {
             // Round at the displayed precision before splitting into degrees/minutes/seconds.
@@ -215,7 +218,7 @@ pub(crate) fn format_angle_with_separator(rad: f64, unit: u8, decimals: u8, zin:
                 _ => format!("{d}°{m}'{s}\""),
             }
         }
-        2 => format!("{}g", format_decimal(deg / 0.9, decimals, zin, separator)),
+        2 => format!("{}g", format_decimal(cadaddy_doc::numfmt::round_to(deg / 0.9, 9), decimals, zin, separator)),
         3 => format!("{}r", format_decimal(rad, decimals, zin, separator)),
         _ => format!("{}°", format_decimal(deg, decimals, zin, separator)),
     }
@@ -343,6 +346,15 @@ mod tests {
         assert_eq!(format_linear(-18.5, &f(4, 4, 0)).0, "-1'-6 1/2\"");
         assert_eq!(format_linear(-18.5, &f(3, 2, 0)).0, "-1'-6.50\"");
         assert_eq!(format_linear(-24.0, &f(4, 4, 0)).0, "-2'");
+    }
+
+    #[test]
+    fn angle_text_settles_float_noise_like_lengths() {
+        let noisy = 22.249999999999996f64.to_radians();
+        assert_eq!(format_angle(noisy, 0, 1, 0), "22.3°");
+        assert_eq!(format_angle(noisy, 2, 1, 0), "24.7g");
+        assert_eq!(format_angle(noisy, 1, 4, 0), "22°15'0\"");
+        assert_eq!(format_angle(0.5, 3, 2, 0), "0.50r");
     }
 
     #[test]

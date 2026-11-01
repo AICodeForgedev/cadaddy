@@ -802,8 +802,8 @@ fn unknown_tool_arguments_are_warned_about() {
     let r = call(&mut s, 2, "tools/call", json!({"name": "list_commands", "arguments": {"filter": "circle"}}));
     assert!(!r.to_string().contains("is not a parameter"), "{r}");
     // A tool with no arguments warns too.
-    let r = call(&mut s, 3, "tools/call", json!({"name": "cancel", "arguments": {"zzz": true}}));
-    assert!(r.to_string().contains("`zzz` is not a parameter of cancel"), "{r}");
+    let r = call(&mut s, 3, "tools/call", json!({"name": "get_prompt", "arguments": {"zzz": true}}));
+    assert!(r.to_string().contains("`zzz` is not a parameter of get_prompt"), "{r}");
 }
 
 /// B4-032: a schema error is worded for people, not as the JSON Schema it came from.
@@ -1064,4 +1064,35 @@ fn headless_close_with_unsaved_changes_is_refused_on_every_route() {
     // Said so, it closes.
     tool(&mut s, "execute", json!({"command": "close", "params": {"discard": true}}));
     assert_eq!(tool(&mut s, "list_drawings", json!({}))["drawings"].as_array().map(Vec::len), Some(0));
+}
+
+/// B9-022: undo/redo pass the engine's options through, and refuse what they don't have.
+#[test]
+fn undo_redo_take_engine_options_and_refuse_unknown_arguments() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
+    let count = |s: &mut Server| tool(s, "inspect_drawing", json!({"entities": false}))["counts"]["Line"].as_u64().unwrap_or(0);
+    let before = count(&mut s);
+    assert!(before > 0, "setup drew nothing");
+    // mode mark sets a mark and undoes nothing.
+    let r = call(&mut s, 1, "tools/call", json!({"name": "undo", "arguments": {"mode": "mark"}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert!(!r.to_string().contains("is not a parameter"), "{r}");
+    assert_eq!(count(&mut s), before);
+    tool(&mut s, "command_line", json!({"text": "line 0,0 20,20"}));
+    assert_eq!(count(&mut s), before + 1);
+    // mode back returns to the mark.
+    let r = call(&mut s, 2, "tools/call", json!({"name": "undo", "arguments": {"mode": "back"}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert_eq!(count(&mut s), before);
+    // redo all redoes everything undone.
+    let r = call(&mut s, 3, "tools/call", json!({"name": "redo", "arguments": {"all": true}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert_eq!(count(&mut s), before + 1);
+    // An unknown argument is refused and the history is unchanged.
+    for (name, args) in [("undo", json!({"bogus": 1})), ("redo", json!({"bogus": 1})), ("undo", json!({"count": 1, "bogus": 1}))] {
+        let r = call(&mut s, 4, "tools/call", json!({"name": name, "arguments": args}));
+        assert!(r["error"]["message"].as_str().is_some_and(|m| m.contains("is not a parameter")), "{r}");
+        assert_eq!(count(&mut s), before + 1, "{name} acted");
+    }
 }

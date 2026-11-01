@@ -9,7 +9,7 @@ use super::super::bad;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 fn valid_name(n: &str) -> bool {
-    !n.trim().is_empty() && n.len() <= 255 && !n.starts_with('*') && !n.chars().any(|c| "<>/\\\":;?*|,=`".contains(c))
+    !n.starts_with('*') && super::super::names::is_valid(n)
 }
 
 /// Handles in `store` whose entity `uses` the old name.
@@ -41,7 +41,7 @@ fn repoint(d: &mut Drawing, uses: &dyn Fn(&EntityKind) -> bool, fix: &dyn Fn(&mu
 pub(super) fn block(s: &mut Session, from: &str, to: &str) -> Result<()> {
     let to = to.trim().to_string();
     if !valid_name(&to) {
-        return Err(bad("rename", "invalid block name"));
+        return Err(super::super::blocks::block_name_error("rename", &to));
     }
     let d = s.doc_mut()?;
     let key = d.blocks.keys().find(|k| k.eq_ignore_ascii_case(from)).cloned().ok_or_else(|| bad("rename", "no such block"))?;
@@ -81,8 +81,9 @@ pub(super) fn block(s: &mut Session, from: &str, to: &str) -> Result<()> {
 /// Rename a multileader style, a table style, a named view or a named UCS.
 pub(super) fn simple(s: &mut Session, table: &str, from: &str, to: &str) -> Result<()> {
     let to = to.trim().to_string();
+    super::super::names::check("rename", table, &to)?;
     if !valid_name(&to) {
-        return Err(bad("rename", "invalid name"));
+        return Err(bad("rename", format!("invalid {table} name `{to}`: names starting with `*` are reserved")));
     }
     if matches!(table, "mleaderstyle" | "tablestyle") && from.eq_ignore_ascii_case("Standard") {
         return Err(bad("rename", "the Standard style cannot be renamed"));
@@ -123,9 +124,7 @@ pub(super) fn simple(s: &mut Session, table: &str, from: &str, to: &str) -> Resu
 
 /// Rename a material of the drawing (definition, layers, objects, CMATERIAL).
 pub(super) fn material(s: &mut Session, from: &str, to: &str) -> Result<()> {
-    if !valid_name(to) {
-        return Err(bad("rename", "invalid material name"));
-    }
+    super::super::names::check("rename", "material", to)?;
     super::super::materials::rename_material(s, from, to)
 }
 
@@ -133,9 +132,7 @@ pub(super) fn material(s: &mut Session, from: &str, to: &str) -> Result<()> {
 /// object, layer and CPLOTSTYLE that uses it.
 pub(super) fn plotstyle(s: &mut Session, from: &str, to: &str) -> Result<()> {
     let to = to.trim().to_string();
-    if !valid_name(&to) {
-        return Err(bad("rename", "invalid plot style name"));
-    }
+    super::super::names::check("rename", "plot style", &to)?;
     if ["ByLayer", "ByBlock", "Normal"].iter().any(|n| from.eq_ignore_ascii_case(n) || to.eq_ignore_ascii_case(n)) {
         return Err(bad("rename", "ByLayer, ByBlock and Normal are not renamed"));
     }
@@ -192,9 +189,7 @@ pub(super) fn plotstyle(s: &mut Session, from: &str, to: &str) -> Result<()> {
 /// Rename a named viewport configuration (VPORTS); the one shown, *Active, keeps its name.
 pub(super) fn vport(s: &mut Session, from: &str, to: &str) -> Result<()> {
     let to = to.trim().to_string();
-    if !valid_name(&to) {
-        return Err(bad("rename", "invalid viewport configuration name"));
-    }
+    super::super::names::check("rename", "viewport configuration", &to)?;
     if from.eq_ignore_ascii_case(cadaddy_doc::VportConfig::ACTIVE) {
         return Err(bad("rename", "the active viewport configuration (*Active) cannot be renamed"));
     }

@@ -175,15 +175,7 @@ pub(crate) const BAD_CHARS: &[char] = &['<', '>', '/', '\\', '"', ':', ';', '?',
 
 fn check_name(cmd: &str, d: &Drawing, name: &str, except: Option<&str>) -> Result<String> {
     let n = name.trim();
-    if n.is_empty() {
-        return Err(bad(cmd, "layout name is empty"));
-    }
-    if n.chars().count() > 255 {
-        return Err(bad(cmd, "layout name is longer than 255 characters"));
-    }
-    if n.contains(BAD_CHARS) || n.chars().any(char::is_control) {
-        return Err(bad(cmd, format!("invalid layout name `{n}`")));
-    }
+    super::names::check(cmd, "layout", n)?;
     if n.eq_ignore_ascii_case("model") {
         return Err(bad(cmd, "`Model` is reserved"));
     }
@@ -710,6 +702,24 @@ fn layer_list(p: &Value, key: &str) -> Vec<String> {
     }
 }
 
+/// The layers a VPLAYER list names, spelled as the drawing spells them; a wildcard stands for the
+/// layers it matches. A name that matches no layer is refused, as AutoCAD does.
+fn existing_layers(d: &Drawing, cmd: &str, names: Vec<String>) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for n in names {
+        let found: Vec<String> = if n.contains(['*', '?']) {
+            d.layers.iter().filter(|l| super::qselect::wildcard(&n, &l.name)).map(|l| l.name.clone()).collect()
+        } else {
+            d.layer(&n).map(|l| vec![l.name.clone()]).unwrap_or_default()
+        };
+        if found.is_empty() {
+            return Err(bad(cmd, format!("No matching layer names found: \"{n}\"")));
+        }
+        out.extend(found);
+    }
+    Ok(out)
+}
+
 fn viewport_json(h: Handle, v: &Viewport) -> Value {
     json!({
         "handle": h.hex(),
@@ -776,8 +786,8 @@ fn run_viewport_set(s: &mut Session, p: &Value) -> Result<Value> {
         )),
         Some(_) => return Err(bad(cmd, "`annoScale` is a scale name or null")),
     };
-    let freeze = layer_list(p, "freeze");
-    let thaw = layer_list(p, "thaw");
+    let freeze = existing_layers(s.doc()?, cmd, layer_list(p, "freeze"))?;
+    let thaw = existing_layers(s.doc()?, cmd, layer_list(p, "thaw"))?;
     // Per-viewport layer colours: {layer: colour} (null clears the override).
     let mut colors: Vec<(String, Option<cadaddy_color::Color>)> = Vec::new();
     if let Some(m) = p.get("colors").and_then(Value::as_object) {
@@ -1460,6 +1470,7 @@ mod tests {
         s.execute("viewport.set", &json!({"handle": h, "locked": true})).unwrap();
         assert!(s.execute("viewport.set", &json!({"handle": h, "scale": 0.1})).is_err(), "locked");
         s.execute("viewport.set", &json!({"handle": h, "scale": 0.1, "locked": false})).unwrap();
+        s.execute("layer.new", &json!({"name": "Walls"})).unwrap();
         s.execute("vplayer", &json!({"handle": h, "freeze": ["0", "Walls"]})).unwrap();
         s.execute("vplayer", &json!({"handle": h, "thaw": "walls"})).unwrap();
         let v = viewports(&s, "Layout1");
@@ -1628,5 +1639,28 @@ mod tests {
         s.execute("mspace", &json!({})).unwrap();
         s.execute("layout.set", &json!({"name": "Model"})).unwrap();
         assert!(s.state().unwrap().mspace.is_none());
+    }
+}
+
+#[cfg(test)]
+mod vplayer_missing_layer_tests {
+    use super::*;
+
+    #[test]
+    fn vplayer_refuses_layers_that_do_not_exist() {
+        let mut s = Session::new();
+        s.execute("layer.new", &json!({"name": "Walls"})).unwrap();
+        s.execute("layout.set", &json!({"name": "Layout1"})).unwrap();
+        let r = s.execute("mview", &json!({"p1": [1, 1], "p2": [5, 4]})).unwrap();
+        let h = r["viewports"][0].as_str().unwrap().to_string();
+        for key in ["freeze", "thaw"] {
+            let e = s.execute("vplayer", &json!({"handle": h, key: ["nolayer"]})).unwrap_err().to_string();
+            assert!(e.contains("No matching layer names found"), "{e}");
+        }
+        assert!(s.execute("vplayer", &json!({"handle": h, "freeze": ["Walls", "nolayer"]})).is_err());
+        s.execute("vplayer", &json!({"handle": h, "freeze": ["wal*"]})).unwrap();
+        let frozen = s.doc().unwrap().entity(Handle::parse_hex(&h).unwrap()).map(|e| e.kind.clone());
+        let Some(EntityKind::Viewport(v)) = frozen else { panic!("viewport") };
+        assert_eq!(v.frozen_layers, vec!["Walls".to_string()]);
     }
 }

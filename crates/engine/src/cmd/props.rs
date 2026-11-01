@@ -750,9 +750,7 @@ fn styles_json(d: &cadaddy_doc::Drawing) -> Value {
 
 fn run_style(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad("style", "`name` is required"))?.trim().to_string();
-    if name.is_empty() || name.len() > 255 {
-        return Err(bad("style", "bad style name"));
-    }
+    names::check("style", "text style", &name)?;
     let d = s.doc_mut()?;
     let idx = match d.text_styles.iter().position(|t| t.name.eq_ignore_ascii_case(&name)) {
         Some(i) => i,
@@ -829,7 +827,8 @@ pub(super) fn text_styles_in_use(d: &cadaddy_doc::Drawing) -> Vec<String> {
 
 fn run_style_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let from = str_param(p, "from").ok_or_else(|| bad("style.rename", "`from` is required"))?.to_string();
-    let to = str_param(p, "to").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("style.rename", "`to` is required"))?.to_string();
+    let to = str_param(p, "to").map(str::trim).ok_or_else(|| bad("style.rename", "`to` is required"))?.to_string();
+    names::check("style.rename", "text style", &to)?;
     let d = s.doc_mut()?;
     if from.eq_ignore_ascii_case("Standard") {
         return Err(bad("style.rename", "the Standard style cannot be renamed"));
@@ -910,9 +909,7 @@ fn dimstyles_json(d: &cadaddy_doc::Drawing) -> Value {
 
 fn run_dimstyle(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad("dimstyle", "`name` is required"))?.trim().to_string();
-    if name.is_empty() || name.len() > 255 {
-        return Err(bad("dimstyle", "bad style name"));
-    }
+    names::check("dimstyle", "dimension style", &name)?;
     let d = s.doc_mut()?;
     let base = d.dim_style(&d.header.str("DIMSTYLE", "Standard")).cloned().unwrap_or_default();
     let idx = match d.dim_styles.iter().position(|t| t.name.eq_ignore_ascii_case(&name)) {
@@ -1011,7 +1008,8 @@ fn block_dims_using(d: &cadaddy_doc::Drawing, name: &str) -> Vec<(String, cadadd
 
 fn run_dimstyle_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let from = str_param(p, "from").ok_or_else(|| bad("dimstyle.rename", "`from` is required"))?.to_string();
-    let to = str_param(p, "to").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("dimstyle.rename", "`to` is required"))?.to_string();
+    let to = str_param(p, "to").map(str::trim).ok_or_else(|| bad("dimstyle.rename", "`to` is required"))?.to_string();
+    names::check("dimstyle.rename", "dimension style", &to)?;
     let d = s.doc_mut()?;
     if from.eq_ignore_ascii_case("Standard") {
         return Err(bad("dimstyle.rename", "the Standard style cannot be renamed"));
@@ -1123,6 +1121,9 @@ pub(super) fn dim_override(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_tablestyle(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(n) = str_param(p, "name") {
+        names::check("tablestyle", "table style", n.trim())?;
+    }
     let d = s.doc_mut()?;
     if let Some(name) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         let idx = match d.table_styles.iter().position(|t| t.name.eq_ignore_ascii_case(name)) {
@@ -1181,6 +1182,9 @@ fn run_mleaderstyle(s: &mut Session, p: &Value) -> Result<Value> {
             Some(_) => return Err(bad("mleaderstyle", format!("`{key}` must be {} (got {v})", if zero_ok { "0 or more" } else { "more than 0" }))),
             None => return Err(bad("mleaderstyle", format!("`{key}` must be a number"))),
         }
+    }
+    if let Some(n) = str_param(p, "name") {
+        names::check("mleaderstyle", "multileader style", n.trim())?;
     }
     let d = s.doc_mut()?;
     if let Some(name) = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
@@ -1269,6 +1273,7 @@ pub(crate) fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
             run_dimstyle_rename(s, &json!({ "from": from, "to": to }))?;
         }
         "linetype" | "ltype" => {
+            names::check("rename", "linetype", &to)?;
             let d = s.doc_mut()?;
             if ["ByBlock", "ByLayer", "Continuous"].iter().any(|n| from.eq_ignore_ascii_case(n)) {
                 return Err(bad("rename", format!("the {from} linetype cannot be renamed")));

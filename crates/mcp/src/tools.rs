@@ -105,8 +105,8 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "inputSchema": {"type": "object", "properties": {"index": {"type": "integer", "minimum": 0}, "path": {"type": "string"}, "title": {"type": "string"}, "save": {"type": "boolean"}, "saveAs": {"type": "string"}, "discard": {"type": "boolean"}}}}),
         json!({"name": "close_all", "description": "Close every drawing. Refused (closing nothing) while one has unsaved changes, unless save: true (each saved to its own file; refused if one has none yet) or discard: true.",
             "inputSchema": {"type": "object", "properties": {"save": {"type": "boolean"}, "discard": {"type": "boolean"}}}}),
-        json!({"name": "undo", "description": "Undo the last `count` commands (default 1).", "inputSchema": {"type": "object", "properties": {"count": {"type": "integer", "minimum": 1}}}}),
-        json!({"name": "redo", "description": "Redo `count` undone commands (default 1).", "inputSchema": {"type": "object", "properties": {"count": {"type": "integer", "minimum": 1}}}}),
+        json!({"name": "undo", "description": "Undo the last `count` commands (default 1), or with `mode` set a mark (mark), open/close a group (begin/end), go back to the mark (back), turn auto on/off (auto) or set UNDO Control (control). An unknown argument is refused, not ignored.", "inputSchema": {"type": "object", "properties": {"count": {"type": "integer", "minimum": 1, "maximum": 1000}, "mode": {"type": "string", "enum": ["mark", "begin", "end", "back", "auto", "control"]}, "confirm": {"type": "boolean", "description": "mode back with no mark: undo everything (default true)"}, "on": {"type": "boolean", "description": "mode auto, or control combine/layer"}, "control": {"type": "string", "enum": ["all", "none", "one", "combine", "layer"]}}}}),
+        json!({"name": "redo", "description": "Redo `count` undone commands (default 1), or every undone command with all: true. An unknown argument is refused, not ignored.", "inputSchema": {"type": "object", "properties": {"count": {"type": "integer", "minimum": 1, "maximum": 1000}, "all": {"type": "boolean"}}}}),
         json!({"name": "select", "description": "Set the selection (commands like MOVE, ERASE and PROPERTIES then act on it): by handles, a window [[x0,y0],[x1,y1]] (crossing: true selects what it touches), all: true, or clear: true; add: true adds to the current selection. Returns the selected handles.",
             "inputSchema": {"type": "object", "properties": {"handles": {"type": "array", "items": {"type": "string"}},
                 "window": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}, "minItems": 2, "maxItems": 2},
@@ -530,6 +530,12 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
         o.insert("contains".into(), p);
     }
     let unknown = unknown_args(name, &a);
+    // A tool whose default action changes the drawing never runs with an argument it doesn't have.
+    if STRICT_ARGS.contains(&name)
+        && let Some(first) = unknown.first()
+    {
+        return Err(first.replace("(it was ignored)", "(nothing was done)"));
+    }
     let mut out = run_tool(b, name, a)?;
     // A failed call says what was wrong in its own message; a warning glued onto it names the
     // same parameter a second time.
@@ -538,6 +544,9 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Result<Value,
     }
     Ok(out)
 }
+
+/// Tools whose default action changes the drawing or the session: an unknown argument is an error.
+const STRICT_ARGS: &[&str] = &["undo", "redo", "close_drawing", "close_all", "switch_drawing", "cancel", "quit_app"];
 
 /// The names in `args` that tool `name`'s input schema doesn't list, as warnings.
 fn unknown_args(name: &str, args: &Value) -> Vec<String> {
@@ -750,7 +759,17 @@ fn run_tool(b: &mut dyn Backend, name: &str, a: Value) -> Result<Value, String> 
         "switch_drawing" => exec(b, "document.switch", a),
         "close_drawing" => exec(b, "document.close", a),
         "close_all" => exec(b, "document.closeall", a),
-        "undo" => exec(b, "undo", json!({"count": a.get("count").cloned().unwrap_or(json!(1))})),
+        "undo" => {
+            // The engine's own options pass through; a bare call undoes `count` (default 1).
+            let mut params = a.clone();
+            if a.get("mode").is_none_or(Value::is_null)
+                && let Some(o) = params.as_object_mut()
+            {
+                o.entry("count").or_insert(json!(1));
+            }
+            exec(b, "undo", params)
+        }
+        "redo" if a.get("all") == Some(&json!(true)) => exec(b, "mredo", json!({"all": true})),
         "redo" => exec(b, "redo", json!({"count": a.get("count").cloned().unwrap_or(json!(1))})),
         "select" => exec(b, "select", a).and_then(|mut r| {
             // The reply names what is selected, not only how many.

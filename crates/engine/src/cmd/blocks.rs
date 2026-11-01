@@ -98,8 +98,16 @@ pub fn specs() -> Vec<CommandSpec> {
     .collect()
 }
 
+/// The refusal for a block name `valid_block_name` rejects, naming the bad character.
+pub(crate) fn block_name_error(cmd: &str, n: &str) -> crate::EngineError {
+    match super::names::check(cmd, "block", n) {
+        Err(e) => e,
+        Ok(()) => bad(cmd, format!("invalid block name `{n}`: names starting with `*` are reserved")),
+    }
+}
+
 pub(crate) fn valid_block_name(n: &str) -> bool {
-    !n.trim().is_empty() && n.len() <= 255 && !n.starts_with('*') && !n.chars().any(|c| "<>/\\\":;?*|,=`".contains(c))
+    !n.starts_with('*') && super::names::is_valid(n)
 }
 
 /// The block an entity references, when it is a block reference.
@@ -160,7 +168,7 @@ fn keep_param(cmd: &str, p: &Value, default: Keep) -> Result<Keep> {
 /// Create a block from entities. Returns the insert handle when converting.
 pub(crate) fn make_block(s: &mut Session, name: &str, base: Vec2, hs: &[Handle], keep: Keep, description: &str) -> Result<Option<Handle>> {
     if !valid_block_name(name) {
-        return Err(bad("block", "invalid block name"));
+        return Err(block_name_error("block", name));
     }
     let d = s.doc()?;
     let ents: Vec<Entity> = hs.iter().filter_map(|h| d.entity(*h).map(|e| (**e).clone())).collect();
@@ -323,8 +331,9 @@ fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let rot = f64_or(p, "rotation", 0.0).to_radians();
     let vals = p.get("attribs").and_then(Value::as_object).cloned().unwrap_or_default();
-    // A drawing file is scaled by its INSUNITS over this drawing's (1.0 when either has none).
-    let factor = if from_file { insert_file::block_factor(s, &name) } else { 1.0 };
+    // A block that came from a drawing file keeps that file's units, so every insert of it (by
+    // file or by name) is scaled by its INSUNITS over this drawing's (1.0 when either has none).
+    let factor = insert_file::block_factor(s, &name);
     let h = insert_with(s, &name, at, scale * factor, rot, point_param(p, "basePoint"), &vals)?;
     let mut reply = if bool_or(p, "explode", false) {
         // The EXPLODE command body, not `execute`: INSERT records the one undo step.
@@ -333,7 +342,9 @@ fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         attedit::with_unknown_tags(s, h, &vals, json!({ "handle": h.hex() }))
     };
-    if from_file && let Some(o) = reply.as_object_mut() {
+    if (from_file || factor != 1.0)
+        && let Some(o) = reply.as_object_mut()
+    {
         o.insert("unitFactor".into(), json!(factor));
         if factor != 1.0 {
             o.insert("note".into(), json!(insert_file::factor_note(factor)));

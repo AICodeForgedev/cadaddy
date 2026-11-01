@@ -384,8 +384,9 @@ fn header_default(n: &str) -> Option<Value> {
     }
 }
 
+/// An on-off switch: 0 or 1 (or a boolean); 2, -1 and the like are refused.
 fn as_bool(v: &Value) -> Option<bool> {
-    v.as_bool().or_else(|| v.as_i64().map(|i| i != 0)).or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()).map(|i| i != 0))
+    v.as_bool().or_else(|| as_i(v).filter(|i| (0..=1).contains(i)).map(|i| i == 1))
 }
 /// QPMODE is -1/0 (off), 1 or 2 (on) in AutoCAD; booleans work too.
 /// A whole number from `lo` to `hi`, as a small setting.
@@ -441,6 +442,9 @@ const READ_ONLY: &[&str] = &[
     "EXTMAX",
     "UNDOCTL",
     "UNDOMARKS",
+    "ACADVER",
+    "FINGERPRINTGUID",
+    "VERSIONGUID",
 ];
 
 pub fn is_read_only(name: &str) -> bool {
@@ -459,6 +463,9 @@ pub fn parse_angle_list(text: &str) -> Option<Vec<f64>> {
 pub fn format_angle_list(angles: &[f64]) -> String {
     angles.iter().map(|a| format!("{}", (a.to_degrees() * 1e6).round() / 1e6)).collect::<Vec<_>>().join(";")
 }
+
+/// The lineweights AutoCAD has, in hundredths of a millimetre.
+const LINEWEIGHT_CODES: [i64; 24] = [0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211];
 
 /// How a numeric variable's value is bounded.
 #[derive(Clone, Copy)]
@@ -535,6 +542,8 @@ const RANGES: &[(&str, Bound)] = &[
     ("GRIPSIZE", Bound::Between(1.0, 255.0)),
     ("HPSCALE", Bound::Positive),
     ("HPSPACE", Bound::Positive),
+    ("ELEVATION", Bound::Between(-Bound::LARGEST, Bound::LARGEST)),
+    ("THICKNESS", Bound::Between(-Bound::LARGEST, Bound::LARGEST)),
     ("INSUNITS", Bound::Whole(0, 24)),
     ("LENSLENGTH", Bound::Positive),
     ("LTSCALE", Bound::Positive),
@@ -585,13 +594,69 @@ fn out_of_range(n: &str, v: &Value) -> Option<String> {
     })
 }
 
+/// The table a name-valued variable points into.
+#[derive(Clone, Copy)]
+enum Table {
+    Layer,
+    Linetype,
+    Text,
+    Dim,
+    MLeader,
+    Grid,
+}
+
+/// Which table variable `n` names an entry of; `None` for the other variables.
+fn name_table(n: &str) -> Option<Table> {
+    Some(match n {
+        "CLAYER" => Table::Layer,
+        "CELTYPE" | "DIMLTYPE" | "DIMLTEX1" | "DIMLTEX2" => Table::Linetype,
+        "TEXTSTYLE" | "DIMTXSTY" => Table::Text,
+        "DIMSTYLE" => Table::Dim,
+        "CMLEADERSTYLE" => Table::MLeader,
+        "CTABLESTYLE" => Table::Grid,
+        _ => return None,
+    })
+}
+
+/// The table entry `v` names, spelled as the drawing spells it. A name that isn't in the table is
+/// refused with AutoCAD's wording; setting a variable never creates the entry.
+fn existing_name(s: &Session, n: &str, table: Table, v: &Value) -> Result<String> {
+    let t = v.as_str().map(str::trim).ok_or_else(|| EngineError::BadParams { cmd: "setvar".into(), msg: format!("invalid value for {n}") })?;
+    let d = s.doc()?;
+    let (what, found) = match table {
+        Table::Layer => ("layer", d.layer(t).map(|l| l.name.clone())),
+        Table::Linetype => {
+            let builtin = ["ByLayer", "ByBlock", "Continuous"].into_iter().find(|b| b.eq_ignore_ascii_case(t)).map(str::to_string);
+            ("linetype", d.linetype(t).map(|l| l.name.clone()).or(builtin))
+        }
+        Table::Text => ("text style", d.text_style(t).map(|x| x.name.clone())),
+        Table::Dim => ("dimension style", d.dim_style(t).map(|x| x.name.clone())),
+        Table::MLeader => ("multileader style", d.mleader_styles.iter().find(|x| x.name.eq_ignore_ascii_case(t)).map(|x| x.name.clone())),
+        Table::Grid => ("table style", d.table_styles.iter().find(|x| x.name.eq_ignore_ascii_case(t)).map(|x| x.name.clone())),
+    };
+    found.ok_or_else(|| EngineError::BadParams { cmd: "setvar".into(), msg: format!("Cannot find {what} \"{t}\".") })
+}
+
 pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     let n = name.trim().to_ascii_uppercase();
     if is_read_only(&n) {
-        return Err(EngineError::BadParams { cmd: "setvar".into(), msg: format!("{n} is read-only") });
+        return Err(EngineError::BadParams { cmd: "setvar".into(), msg: format!("{n}: read only") });
     }
     if let Some(why) = out_of_range(&n, v) {
         return Err(EngineError::BadParams { cmd: "setvar".into(), msg: why });
+    }
+    // The current layer, linetype and styles must exist; the stored spelling is the table's.
+    let named;
+    let v = match name_table(&n) {
+        Some(t) => {
+            named = Value::String(existing_name(s, &n, t, v)?);
+            &named
+        }
+        None => v,
+    };
+    // CELWEIGHT: a standard lineweight in hundredths of a millimetre, or -1 ByLayer, -2 ByBlock, -3 default.
+    if n == "CELWEIGHT" && !as_i(v).is_some_and(|i| (-3..0).contains(&i) || LINEWEIGHT_CODES.contains(&i)) {
+        return Err(EngineError::BadParams { cmd: "setvar".into(), msg: "CELWEIGHT must be a standard lineweight, -1, -2 or -3.".into() });
     }
     // A routine or script can't loosen what loads routines and scripts.
     if matches!(n.as_str(), "SECURELOAD" | "TRUSTEDPATHS") && s.running_code() {
@@ -813,11 +878,12 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             }
             let val = match v {
                 Value::Number(x) if x.is_i64() => cadaddy_doc::HVal::Int(x.as_i64().unwrap_or(0)),
-                Value::Number(x) => cadaddy_doc::HVal::Real(x.as_f64().filter(|f| f.is_finite()).ok_or_else(bad)?),
+                Value::Number(x) => cadaddy_doc::HVal::Real(x.as_f64().filter(|f| f.abs() <= Bound::LARGEST).ok_or_else(bad)?),
                 Value::String(t) => match t.trim().parse::<i64>() {
                     Ok(i) => cadaddy_doc::HVal::Int(i),
                     Err(_) => match t.trim().parse::<f64>() {
-                        Ok(f) if f.is_finite() => cadaddy_doc::HVal::Real(f),
+                        Ok(f) if f.is_finite() && f.abs() <= Bound::LARGEST => cadaddy_doc::HVal::Real(f),
+                        Ok(f) if f.is_finite() => return Err(bad()),
                         _ => cadaddy_doc::HVal::Str(t.clone()),
                     },
                 },
@@ -881,4 +947,89 @@ pub fn list(s: &Session) -> Value {
     }
     table::list(s, &mut m);
     Value::Object(m)
+}
+
+#[cfg(test)]
+mod junk_value_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn set_var(s: &mut Session, name: &str, v: Value) -> Result<Value> {
+        s.execute("setvar", &json!({"name": name, "value": v}))
+    }
+
+    /// The junk the variable sweep tries on every variable, by kind of variable.
+    #[test]
+    fn junk_values_are_refused_and_valid_ones_kept() {
+        let mut s = Session::new();
+        s.execute("layer.new", &json!({"name": "Walls"})).unwrap();
+        let layers_before = s.doc().unwrap().layers.len();
+        let junk_names = ["", "   ", "a<b>c|*?", "nonexistent_xyz", "nolayer", "x|y", "line\nbreak"];
+        for var in
+            ["CLAYER", "CELTYPE", "TEXTSTYLE", "DIMSTYLE", "CMLEADERSTYLE", "CTABLESTYLE", "DIMTXSTY", "DIMLTYPE", "DIMLTEX1", "DIMLTEX2", "CMLSTYLE"]
+        {
+            let before = get(&s, var);
+            for junk in junk_names {
+                assert!(set_var(&mut s, var, json!(junk)).is_err(), "{var} accepted {junk:?}");
+            }
+            assert!(set_var(&mut s, var, json!(12345)).is_err(), "{var} accepted a number");
+            assert_eq!(get(&s, var), before, "{var} changed");
+        }
+        // No junk layer, style or linetype was made on the way.
+        let d = s.doc().unwrap();
+        assert!(d.layer("nolayer").is_none() && d.layer("").is_none() && d.layer("a<b>c|*?").is_none());
+        assert!(d.text_style("nonexistent_xyz").is_none() && d.linetype("nonexistent_xyz").is_none());
+        assert_eq!(d.layers.len(), layers_before);
+        // Valid names go through, in the table's spelling.
+        set_var(&mut s, "CLAYER", json!("walls")).unwrap();
+        assert_eq!(get(&s, "CLAYER"), Some(json!("Walls")));
+        for lt in ["ByBlock", "bylayer", "Continuous"] {
+            set_var(&mut s, "CELTYPE", json!(lt)).unwrap();
+        }
+        set_var(&mut s, "TEXTSTYLE", json!("standard")).unwrap();
+        set_var(&mut s, "DIMSTYLE", json!("Standard")).unwrap();
+    }
+
+    #[test]
+    fn read_only_enum_and_range_junk_is_refused() {
+        let mut s = Session::new();
+        for var in ["ACADVER", "FINGERPRINTGUID", "VERSIONGUID"] {
+            let e = set_var(&mut s, var, json!("junk")).unwrap_err().to_string();
+            assert!(e.contains("read only"), "{var}: {e}");
+        }
+        for (var, junk) in [
+            ("CELWEIGHT", json!(999_999)),
+            ("CELWEIGHT", json!(7)),
+            ("CELWEIGHT", json!(-4)),
+            ("ELEVATION", json!(1e300)),
+            ("THICKNESS", json!(-1e300)),
+            ("TEXTSIZE", json!(1e300)),
+            ("PICKFIRST", json!(2)),
+            ("PICKFIRST", json!(-1)),
+            ("GRIDMODE", json!(2)),
+            ("ORTHOMODE", json!("yes")),
+            ("DYNMODE", json!(-1)),
+        ] {
+            assert!(set_var(&mut s, var, junk.clone()).is_err(), "{var} accepted {junk}");
+        }
+        for (var, ok) in
+            [("CELWEIGHT", json!(50)), ("CELWEIGHT", json!(-2)), ("ELEVATION", json!(12.5)), ("PICKFIRST", json!(1)), ("GRIDMODE", json!(true))]
+        {
+            set_var(&mut s, var, ok.clone()).unwrap_or_else(|e| panic!("{var} refused {ok}: {e}"));
+        }
+        assert_eq!(get(&s, "CELWEIGHT"), Some(json!(-2)));
+    }
+
+    #[test]
+    fn typed_setvar_and_lisp_follow_the_same_rules() {
+        let mut s = Session::new();
+        let _ = s.cmdline("setvar");
+        let _ = s.cmdline("CLAYER");
+        let _ = s.cmdline("nolayer");
+        let _ = s.cmdline("");
+        assert!(s.doc().unwrap().layer("nolayer").is_none(), "typed SETVAR created a layer");
+        let _ = s.cmdline("(setvar \"CLAYER\" \"nolayer\")");
+        assert!(s.doc().unwrap().layer("nolayer").is_none(), "LISP setvar created a layer");
+        assert_eq!(get(&s, "CLAYER"), Some(json!("0")));
+    }
 }
