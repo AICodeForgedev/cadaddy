@@ -915,6 +915,32 @@ fn run_equip_read(_s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── mep.read_devices ────────────────────────────────────────────────────────
 
+/// NEC 406.12: the receptacles of a hotel's guest rooms (and a dwelling's) are tamper-resistant.
+/// Each receptacle device in one of `rooms` (level, outline in model units) its plan doesn't mark
+/// TR is taken off as one, from the rule; the receptacles and the rooms changed.
+pub(crate) fn tamper_resistant_in_rooms(sp: &mut cadaddy_walk3d::BuildingSpec, rooms: &[(String, Vec<cadaddy_geom::Vec2>)]) -> (usize, usize) {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let same_level = |a: &str, b: &str| {
+        let (a, b) = (a.trim().to_ascii_uppercase(), b.trim().to_ascii_uppercase());
+        a == b || a.ends_with(&format!(" {b}")) || b.ends_with(&format!(" {a}"))
+    };
+    let (mut n, mut hit) = (0usize, std::collections::BTreeSet::new());
+    for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && t.kind == "receptacle").take(MAX_DEVICES) {
+        let mark = t.fields.get("type").map_or_else(String::new, |f| f.value.trim().to_string());
+        if mark.split('/').any(|m| m.trim().eq_ignore_ascii_case("TR")) {
+            continue;
+        }
+        let p = cadaddy_geom::Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf);
+        let Some(i) = rooms.iter().position(|(l, o)| same_level(l, &t.level) && cadaddy_geom::point_in_polygon(o, p)) else { continue };
+        let with = if mark.is_empty() || mark.eq_ignore_ascii_case("REC") { "TR".to_string() } else { format!("{mark}/TR") };
+        t.set("device_type", receptacle_item(&with), "rule");
+        t.set("tamper_resistant", "NEC 406.12: a guest room's receptacles", "rule");
+        n += 1;
+        hit.insert(i);
+    }
+    (n, hit.len())
+}
+
 /// A receptacle's item by its designations (`REC`, `GFCI`, `GFCI/WP`, `USB`): `duplex
 /// receptacle`, `GFCI receptacle, weatherproof`, `duplex receptacle, USB`.
 pub(crate) fn receptacle_item(tag: &str) -> String {
@@ -1405,6 +1431,32 @@ fn run_envelope_read(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_guest_rooms_receptacles_are_tamper_resistant() {
+        use cadaddy_geom::Vec2;
+        let mut sp = cadaddy_walk3d::BuildingSpec::from_json(
+            r#"{"version": 1, "units_per_foot": 12, "levels": [{"name": "Level 2", "elevation_ft": 10, "height_ft": 10}], "tags": [
+                {"id": "device:Level 2:5.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [5, 5], "fields": {"type": {"value": "REC", "source": "plan"}}},
+                {"id": "device:Level 2:6.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [6, 5], "fields": {"type": {"value": "GFCI", "source": "plan"}}},
+                {"id": "device:Level 2:7.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [7, 5], "fields": {"type": {"value": "TR", "source": "plan"}}},
+                {"id": "device:Level 2:8.0,5.0", "kind": "switch", "level": "Level 2", "at_ft": [8, 5], "fields": {"type": {"value": "S", "source": "plan"}}},
+                {"id": "device:Level 2:50.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [50, 5], "fields": {"type": {"value": "REC", "source": "plan"}}}
+            ]}"#,
+        )
+        .expect("spec");
+        // Guest room 201 on level 2: 0..20' x 0..15'.
+        let room = vec![Vec2::new(0.0, 0.0), Vec2::new(240.0, 0.0), Vec2::new(240.0, 180.0), Vec2::new(0.0, 180.0)];
+        assert_eq!(super::tamper_resistant_in_rooms(&mut sp, &[("2".to_string(), room)]), (2, 1));
+        let item =
+            |id: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get("device_type")).map(|f| (f.value.clone(), f.source.clone()));
+        assert_eq!(item("device:Level 2:5.0,5.0"), Some(("duplex receptacle, tamper-resistant".to_string(), "rule".to_string())));
+        assert_eq!(item("device:Level 2:6.0,5.0").map(|i| i.0), Some("GFCI receptacle, tamper-resistant".to_string()));
+        // Marked TR already, a switch, and a receptacle outside the room: left alone.
+        assert_eq!(item("device:Level 2:7.0,5.0"), None);
+        assert_eq!(item("device:Level 2:8.0,5.0"), None);
+        assert_eq!(item("device:Level 2:50.0,5.0"), None);
+    }
+
     #[test]
     fn a_receptacles_designations_name_its_item() {
         assert_eq!(super::receptacle_item("REC"), "duplex receptacle");

@@ -4147,6 +4147,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // The stamped rooms' panels (where a typical room's plan letters them), for their circuits.
         let mut room_panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
         let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
+        let mut sleeping: Vec<(String, Vec<cadaddy_geom::Vec2>)> = Vec::new();
         let devices: Vec<super::readers::ReadDevice> = match super::bspec::current(s, "bim_build") {
             Ok((sp, true)) if has_arch => {
                 if placer.is_none() {
@@ -4199,9 +4200,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
                 let unplaced: Vec<&super::readers::ReadDevice> = job.devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
-                let StampedRooms { devices: stamped, report, authority, panels, rooms } = stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                let StampedRooms { devices: stamped, report, authority, panels, rooms, sleeping: guest } =
+                    stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
                 room_panels = panels;
                 panel_rooms = rooms;
+                sleeping = guest;
                 // A room an enlarged plan of its own shows: that plan's devices, not the overall
                 // plan's copies of some of them.
                 let before = out.len();
@@ -4254,6 +4257,28 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 v["not_placed"] = json!(counts.0);
                 v["stamped"] = json!(counts.1);
                 placed = Some(v);
+                // The code's devices the plans don't mark: a guest room's receptacles are
+                // tamper-resistant.
+                if !sleeping.is_empty()
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let (n, rooms) = super::readers::tamper_resistant_in_rooms(&mut sp, &sleeping);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        progress_line(&format!("  tamper-resistant receptacles (NEC 406.12): {n} in {rooms} guest rooms"));
+                        job.add_finding(
+                            StageName::BimBuild,
+                            "Tamper-resistant receptacles in the guest rooms",
+                            &format!(
+                                "{n} receptacles in {rooms} guest rooms are taken off as tamper-resistant: NEC 406.12 requires them in hotel guest rooms and dwelling units; the plans don't mark them TR"
+                            ),
+                            2,
+                            vec!["Confirm the TR devices with the engineer (the wiring devices section lists them)".into()],
+                            None,
+                            false,
+                        );
+                    }
+                }
             }
             Err(e) => job.add_finding(
                 StageName::BimBuild,
@@ -5109,8 +5134,9 @@ fn stamp_typical_rooms(
     // Each stamped room's panels, where its plan letters them ("PNLBD 'G'"), by the room.
     let mut panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
     let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
+    let mut sleeping: BTreeMap<usize, (String, Vec<cadaddy_geom::Vec2>)> = BTreeMap::new();
     if unplaced.is_empty() {
-        return StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms };
+        return StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect() };
     }
     // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
     let rooms = job_rooms(job);
@@ -5224,12 +5250,15 @@ fn stamp_typical_rooms(
                 copy.level.clone_from(level);
                 copy.room = stamped_room(name, number, ri);
                 panel_into(copy.room.clone(), true, level, view, outline, &mut panels, &mut panel_rooms);
+                if sleeping_room(words) {
+                    sleeping.entry(ri).or_insert_with(|| (level.clone(), outline.clone()));
+                }
                 out.push(copy);
                 *report.entry(format!("{sheet} {title}")).or_default() += 1;
             }
         }
     }
-    StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms }
+    StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect() }
 }
 
 /// A room of the rooms stage with its outline: name, level, outline, number.
@@ -5332,14 +5361,23 @@ fn room_view_regions(d: &cadaddy_doc::Drawing, job: &GuidedJob, sheets: &BTreeSe
 }
 
 /// What stamping the typical and one-room plans gave: the devices, how many by view, the rooms
-/// a one-room plan is the authority in (level, outline), each stamped room's panels, and the
-/// level and outline of each room with panels.
+/// a one-room plan is the authority in (level, outline), each stamped room's panels, the level
+/// and outline of each room with panels, and the guest rooms stamped.
 struct StampedRooms {
     devices: Vec<super::readers::ReadDevice>,
     report: BTreeMap<String, usize>,
     authority: Vec<(String, Vec<cadaddy_geom::Vec2>)>,
     panels: BTreeMap<String, Vec<(String, [f64; 2])>>,
     rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>,
+    /// The rooms stamped from a typical plan of a room to sleep in (a guest room): level, outline.
+    sleeping: Vec<(String, Vec<cadaddy_geom::Vec2>)>,
+}
+
+/// Whether a typical room's type (its words, [`type_words`]) is a room to sleep in: a hotel's
+/// guest room (QUEEN, KING, SUITE…) or a dwelling unit.
+fn sleeping_room(words: &BTreeSet<String>) -> bool {
+    const SLEEPING: &[&str] = &["Q", "KING", "K", "SUITE", "STUDIO", "GUEST", "BEDROOM", "BED", "UNIT", "APT", "APARTMENT", "DWELLING"];
+    words.iter().any(|w| SLEEPING.contains(&w.as_str()))
 }
 
 /// A stamped room's name for its own circuits: its number, else its name and place in the list.
@@ -9254,6 +9292,15 @@ mod tests {
         assert_eq!(room_of_view("ELECTRICAL - 2ND FLOOR - STORAGE ROOM", &rooms), Some(3), "two of the name: the floor says which");
         assert_eq!(room_of_view("ELECTRICAL - 1ST FLOOR - CORE AREA", &rooms), None, "no room named");
         assert_eq!(room_of_view("ENLARGED QUEEN", &rooms), None);
+    }
+
+    #[test]
+    fn a_typical_queen_or_suite_is_a_room_to_sleep_in() {
+        for (title, sleeping) in
+            [("ENLARGED QUEEN", true), ("ENLARGED ACC. DOUBLE QUEEN", true), ("TYPICAL SUITE", true), ("TYPICAL RESTROOM", false)]
+        {
+            assert_eq!(sleeping_room(&type_words(title, None)), sleeping, "{title}");
+        }
     }
 
     #[test]
