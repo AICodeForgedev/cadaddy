@@ -802,6 +802,15 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
                     return Err(bad());
                 }
             }
+            // 'nan' / 'inf' typed for a number is refused, not kept as text that reads back as NaN.
+            let nonfinite_text = matches!(v, Value::String(t) if t.trim().parse::<f64>().is_ok_and(|f| !f.is_finite()));
+            let numeric = matches!(d.header.get(&n), Some(cadaddy_doc::HVal::Real(_) | cadaddy_doc::HVal::Int(_)))
+                || matches!(header_default(&n), Some(Value::Number(_)))
+                || cadaddy_doc::DIMVARS.iter().any(|(var, _)| *var == n)
+                || RANGES.iter().any(|(r, _)| *r == n);
+            if nonfinite_text && numeric {
+                return Err(EngineError::Other("Requires a number.".into()));
+            }
             let val = match v {
                 Value::Number(x) if x.is_i64() => cadaddy_doc::HVal::Int(x.as_i64().unwrap_or(0)),
                 Value::Number(x) => cadaddy_doc::HVal::Real(x.as_f64().filter(|f| f.is_finite()).ok_or_else(bad)?),
@@ -819,7 +828,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             // Keep the header type stable for known numeric vars.
             match d.header.get(&n) {
                 Some(cadaddy_doc::HVal::Real(_)) => {
-                    d.header.set_f64(&n, val.as_f64().ok_or_else(bad)?);
+                    d.header.set_f64(&n, val.as_f64().filter(|f| f.is_finite()).ok_or_else(bad)?);
                     return Ok(());
                 }
                 Some(cadaddy_doc::HVal::Int(_)) => {
