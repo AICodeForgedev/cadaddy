@@ -3453,10 +3453,6 @@
 	{source}: {n} lines	{source}: рядків {n}
 	Automation Takeoff	Підрахунок автоматизації
 	Cancel Validation Run	Скасувати перевірку
-	Change a Validation Rule	Змінити правило перевірки
-	Validation Areas	Зони перевірки
-	Validation Evidence Packet	Пакет доказів перевірки
-	Validation Rules	Правила перевірки
 	Validate	Перевірити
 	Automation	Автоматизація
 	Model Checks	Перевірки моделі
@@ -3470,3 +3466,7 @@
 	Report Validation Findings	Повідомити результати перевірки
 	Validation Run Status	Стан прогону перевірки
 	Plant Validation Errors	Додати помилки для перевірки
+	Change a Validation Rule	Змінити правило перевірки
+	Validation Areas	Області перевірки
+	Validation Evidence Packet	Пакет доказів перевірки
+	Validation Rules	Правила перевірки

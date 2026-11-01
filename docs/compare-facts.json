@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1184,
-    "count": 1184,
+    "callableAsJson": 1188,
+    "count": 1188,
     "ids": [
       "-attedit",
       "-block",
@@ -1107,6 +1107,10 @@
       "unittypes.takeoff",
       "updatefield",
       "usage",
+      "validate.areas",
+      "validate.packet",
+      "validate.rules",
+      "validate.rules.set",
       "view",
       "view.back",
       "view.bottom",

@@ -368,7 +368,7 @@ fn canon(path: &str) -> String {
     std::fs::canonicalize(path).ok().and_then(|p| p.to_str().map(str::to_string)).unwrap_or_else(|| path.to_string())
 }
 
-fn in_project(dir: &str, doc_path: &str) -> bool {
+pub(super) fn in_project(dir: &str, doc_path: &str) -> bool {
     let (d, p) = (canon(dir), canon(doc_path));
     p.starts_with(&format!("{}/", d.trim_end_matches('/')))
 }

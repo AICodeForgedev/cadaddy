@@ -890,6 +890,51 @@ fn save_onto_another_existing_drawing_needs_force() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// The `render` and `plot` tools never write over the open drawing; an existing unrelated file is
+/// replaced only with `force: true`, which both tools take.
+#[test]
+fn render_and_plot_tools_guard_their_output_path() {
+    use cadaddy_engine::cmd::file::{IoHooks, set_io};
+    set_io(IoHooks {
+        read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
+        write: |_, _| Ok(b"saved".to_vec()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-outguard3-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mine = dir.join("mine.dxf");
+    let mine_path = mine.to_string_lossy().into_owned();
+    tool(&mut s, "save", json!({"path": mine_path}));
+    let before = std::fs::read(&mine).unwrap();
+    let r = call(&mut s, 1, "tools/call", json!({"name": "render", "arguments": {"width": 32, "height": 32, "path": mine_path, "force": true}}));
+    assert_eq!(r["result"]["isError"], json!(true), "{r}");
+    assert_eq!(std::fs::read(&mine).unwrap(), before, "render replaced the open drawing");
+
+    let png = dir.join("view.png");
+    std::fs::write(&png, b"precious").unwrap();
+    let png_path = png.to_string_lossy().into_owned();
+    let r = call(&mut s, 2, "tools/call", json!({"name": "render", "arguments": {"width": 32, "height": 32, "path": png_path}}));
+    assert_eq!(r["result"]["isError"], json!(true), "{r}");
+    assert!(r.to_string().contains("force:true"), "{r}");
+    assert_eq!(std::fs::read(&png).unwrap(), b"precious");
+    let r = call(&mut s, 3, "tools/call", json!({"name": "render", "arguments": {"width": 32, "height": 32, "path": png_path, "force": true}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert_ne!(std::fs::read(&png).unwrap(), b"precious");
+
+    let pdf = dir.join("sheet.pdf");
+    std::fs::write(&pdf, b"precious").unwrap();
+    let r = call(&mut s, 4, "tools/call", json!({"name": "plot", "arguments": {"path": pdf.to_string_lossy()}}));
+    assert_eq!(r["result"]["isError"], json!(true), "{r}");
+    assert!(r.to_string().contains("force:true") && !r.to_string().contains("is not a parameter"), "{r}");
+    assert_eq!(std::fs::read(&pdf).unwrap(), b"precious");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// B7-027: a tool whose result starts with an image (render) still carries the unknown-argument warning.
 #[test]
 fn render_warns_about_unknown_arguments() {
