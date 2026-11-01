@@ -1508,7 +1508,8 @@ mod tests {
             d.add(&Space::Model, Common { xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).expect("add");
         }
         let area = cadaddy_geom::shoelace(&floor_plate(&d, "Level 4")).abs();
-        assert!(area >= 240.0 * 240.0 + 120.0 * 120.0 - 1.0 && area < 240.0 * 240.0 + 120.0 * 120.0 + 200.0, "both squares: {area}");
+        let both = 240.0 * 240.0 + 120.0 * 120.0;
+        assert!((both - 1.0..both + 200.0).contains(&area), "both squares: {area}");
     }
 
     #[test]
