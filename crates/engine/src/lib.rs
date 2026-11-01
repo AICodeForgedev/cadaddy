@@ -413,6 +413,21 @@ fn framed(ext: cadaddy_geom::Bounds2, px: (f64, f64), inset: (f64, f64), aspect:
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl DocState {
+    /// Show the drawing an undo or redo step holds, with nothing selected; returns the drawing as
+    /// it was, as the step back.
+    pub(crate) fn swap_in(&mut self, snap: Snapshot) -> Snapshot {
+        let look = snap.look.map(|_| self.model_look());
+        if let Some(l) = snap.look {
+            self.set_model_look(l);
+        }
+        let cur = Snapshot { label: snap.label, doc: std::mem::replace(&mut self.doc, snap.doc), selection: std::mem::take(&mut self.selection), bytes: snap.bytes, look };
+        self.follow_layout(&cur.doc);
+        // Views aren't all part of the drawing's undo: the untiled twist record follows the
+        // live model view again.
+        self.keep_model_twist();
+        self.revision += 1;
+        cur
+    }
     pub fn new(doc: Drawing, title: &str, path: Option<String>) -> Self {
         let doc = Arc::new(doc);
         DocState {
@@ -2932,18 +2947,27 @@ impl Session {
         {
             st.doc = Arc::clone(doc);
         }
+        let in_lisp = self.lisp_groups_undo() && self.one_undo_step == 0;
         let grouped = self.lisp_groups_undo() || self.one_undo_step > 0;
+        let mut in_routine = None;
         if spec.undoable
             && let Some((doc, sel, uid)) = before
             && let Some(st) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&doc, &st.doc)
         {
-            // Inside a LISP routine the routine's single undo step records it.
+            let look = look_before.filter(|l| !l.same_3d(&st.model_look()));
+            let snap = Snapshot { label: spec.label.to_string(), doc, selection: sel, bytes: 0, look };
+            // Inside a LISP routine the routine's single undo step records it, and the routine
+            // keeps it for U inside it.
             if !grouped {
-                let look = look_before.filter(|l| !l.same_3d(&st.model_look()));
-                st.push_undo(Snapshot { label: spec.label.to_string(), doc, selection: sel, bytes: 0, look });
+                st.push_undo(snap);
+            } else if in_lisp {
+                in_routine = Some(snap);
             }
             st.revision += 1;
+        }
+        if let Some(snap) = in_routine {
+            self.lisp_record_step(snap);
         }
         result.map(|v| with_unknown_param_warnings(v, spec, params))
     }
@@ -3564,10 +3588,17 @@ impl Session {
         // A transparent command's changes belong to the command it ran inside, and a command a
         // LISP routine ran belongs to the routine's single undo step.
         if self.suspended.is_some() || self.lisp_groups_undo() {
-            if let Ok(st) = self.state_mut()
+            let changed = if let Ok(st) = self.state_mut()
                 && !Arc::ptr_eq(&run.before, &st.doc)
             {
                 st.revision += 1;
+                true
+            } else {
+                false
+            };
+            // A command a LISP routine ran: the routine keeps it for U inside it.
+            if changed && self.suspended.is_none() {
+                self.lisp_record_step(Snapshot { label: label.to_string(), doc: run.before, selection: run.selection_before, bytes: 0, look: None });
             }
             return;
         }
@@ -4017,41 +4048,32 @@ impl Session {
 
     // ---------------- undo ----------------
 
+    /// Take the last step back. Inside a LISP routine, the routine's last command first; past
+    /// those, the drawing's step before the routine, which then starts from there.
     pub fn undo(&mut self) -> Result<Option<String>> {
+        if let Some(label) = self.lisp_take_back(false) {
+            return Ok(Some(label));
+        }
         let st = self.state_mut()?;
         let Some(snap) = st.undo.pop() else { return Ok(None) };
-        let look = snap.look.map(|_| st.model_look());
-        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone(), bytes: snap.bytes, look };
-        if let Some(l) = snap.look {
-            st.set_model_look(l);
-        }
-        st.doc = snap.doc;
-        st.follow_layout(&cur.doc);
-        // Views aren't all part of the drawing's undo: the untiled twist record follows the
-        // live model view again.
-        st.keep_model_twist();
-        st.selection = Vec::new();
+        let cur = st.swap_in(snap);
+        let label = cur.label.clone();
         st.redo.push(cur);
-        st.revision += 1;
-        Ok(Some(snap.label))
+        self.lisp_rebase();
+        Ok(Some(label))
     }
+    /// Bring back what the last undo took back; inside a LISP routine, what U inside it took first.
     pub fn redo(&mut self) -> Result<Option<String>> {
+        if let Some(label) = self.lisp_take_back(true) {
+            return Ok(Some(label));
+        }
         let st = self.state_mut()?;
         let Some(snap) = st.redo.pop() else { return Ok(None) };
-        let look = snap.look.map(|_| st.model_look());
-        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone(), bytes: snap.bytes, look };
-        if let Some(l) = snap.look {
-            st.set_model_look(l);
-        }
-        st.doc = snap.doc;
-        st.follow_layout(&cur.doc);
-        // Views aren't all part of the drawing's undo: the untiled twist record follows the
-        // live model view again.
-        st.keep_model_twist();
-        st.selection = Vec::new();
+        let cur = st.swap_in(snap);
+        let label = cur.label.clone();
         st.undo.push(cur);
-        st.revision += 1;
-        Ok(Some(snap.label))
+        self.lisp_rebase();
+        Ok(Some(label))
     }
 
     // ---------------- picking without a command ----------------
