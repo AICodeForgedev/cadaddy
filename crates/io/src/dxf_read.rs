@@ -1457,7 +1457,26 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
     out
 }
 
+/// Reads the HEADER section; a variable holding a NaN or infinite number is dropped (the default
+/// stays) and named in one note.
 fn header(tags: &[Tag], d: &mut Drawing) {
+    let mut dropped: Vec<String> = Vec::new();
+    header_vars(tags, d, &mut dropped);
+    if !dropped.is_empty() {
+        dropped.dedup();
+        let shown: Vec<String> = dropped.iter().take(12).map(|n| format!("${n}")).collect();
+        let more = dropped.len().saturating_sub(shown.len());
+        let tail = if more > 0 { format!(" and {more} more") } else { String::new() };
+        d.read_notes.push(format!(
+            "DXF: the header variable{} {}{tail} held an undefined (NaN/inf) number and {} left at the default",
+            if dropped.len() == 1 { "" } else { "s" },
+            shown.join(", "),
+            if dropped.len() == 1 { "was" } else { "were" }
+        ));
+    }
+}
+
+fn header_vars(tags: &[Tag], d: &mut Drawing, dropped: &mut Vec<String>) {
     let mut i = 0;
     while let Some(t) = tags.get(i) {
         if t.code == 9 {
@@ -1470,6 +1489,10 @@ fn header(tags: &[Tag], d: &mut Drawing) {
                 }
                 vals.push(v);
                 i += 1;
+            }
+            if vals.iter().any(|v| matches!(v.value, cadaddy_dxf::Value::Real(r) if !r.is_finite())) {
+                dropped.push(name);
+                continue;
             }
             // Legacy files keep spacing in HEADER; modern *ACTIVE VPORT entries override it.
             if matches!(name.as_str(), "SNAPUNIT" | "GRIDUNIT") {
@@ -2046,6 +2069,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     if secs.is_empty() {
         return Err(IoError::Format("no sections found".into()));
     }
+    let bad_heights = fix_text_heights(&mut secs);
     let undefined = drop_undefined(&mut secs);
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
@@ -2278,6 +2302,13 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     if cut_off {
         d.read_notes.push(CUT_OFF_NOTE.into());
     }
+    if bad_heights > 0 {
+        d.read_notes.push(format!(
+            "DXF: {bad_heights} text height{} held an undefined (NaN/inf) number and {} read as the default 0.2",
+            if bad_heights == 1 { "" } else { "s" },
+            if bad_heights == 1 { "was" } else { "were" }
+        ));
+    }
     if undefined.0 > 0 {
         let n = undefined.0;
         d.read_notes.push(format!(
@@ -2291,6 +2322,24 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
         d.read_notes.push(format!("DXF: {n} undefined (NaN/inf) number{} in the header, tables or objects read as 0", if n == 1 { "" } else { "s" }));
     }
     Ok(d)
+}
+
+/// A TEXT, MTEXT, ATTRIB or ATTDEF whose height (group 40) is NaN or infinite gets the default
+/// height (it used to read as 1e-9, invisibly); returns how many were changed.
+fn fix_text_heights(secs: &mut [cadaddy_dxf::Section]) -> usize {
+    let mut n = 0usize;
+    for s in secs.iter_mut().filter(|s| matches!(s.name.as_str(), "ENTITIES" | "BLOCKS")) {
+        let mut texty = false;
+        for t in s.tags.iter_mut() {
+            if t.code == 0 {
+                texty = matches!(t.str().to_ascii_uppercase().as_str(), "TEXT" | "MTEXT" | "ATTRIB" | "ATTDEF");
+            } else if texty && t.code == 40 && matches!(t.value, cadaddy_dxf::Value::Real(r) if !r.is_finite()) {
+                t.value = cadaddy_dxf::Value::Real(0.2);
+                n = n.saturating_add(1);
+            }
+        }
+    }
+    n
 }
 
 /// Objects with a NaN or infinite number (the parser keeps those as NaN) are dropped from the
@@ -2307,7 +2356,10 @@ fn drop_undefined(secs: &mut [cadaddy_dxf::Section]) -> (usize, usize) {
             continue;
         }
         if !matches!(s.name.as_str(), "ENTITIES" | "BLOCKS") {
-            others = others.saturating_add(s.tags.iter().filter(|t| bad(t)).count());
+            // The header names its own variables (see `header`).
+            if s.name != "HEADER" {
+                others = others.saturating_add(s.tags.iter().filter(|t| bad(t)).count());
+            }
             continue;
         }
         let tags = std::mem::take(&mut s.tags);
