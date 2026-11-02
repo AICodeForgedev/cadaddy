@@ -1601,6 +1601,9 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     // The runs and terminals by the ids their built objects carry.
     let runs: HashMap<String, &cadaddy_walk3d::MepRun> = sp.mep.runs.iter().map(|r| (super::mep::run_base(r), r)).collect();
     let equipment: HashMap<String, &cadaddy_walk3d::MepEquipment> = sp.mep.equipment.iter().map(|e| (e.tag.trim().to_ascii_uppercase(), e)).collect();
+    // The panel schedules as printed (a typical guest-room panel's, panels the plans don't place).
+    let schedules: HashMap<String, &cadaddy_walk3d::PanelSchedule> =
+        sp.mep.panel_schedules.iter().map(|p| (p.panel.trim().to_ascii_uppercase(), p)).collect();
     // The walls, for the devices' host walls.
     let mut walls: Vec<(Handle, Option<String>, Bounds2)> = Vec::new();
     let mut work: Vec<(Handle, String)> = Vec::new();
@@ -1746,9 +1749,30 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                         );
                     }
                     let number = circuit.as_deref().and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.trim().to_string()));
-                    let row = equipment.get(&key).and_then(|q| q.circuits.iter().find(|c| number.as_deref().is_some_and(|n| c.number.trim() == n)));
+                    let on = |c: &&cadaddy_walk3d::PanelCircuit| number.as_deref().is_some_and(|n| c.number.trim() == n);
+                    let printed = schedules.get(&p.trim().to_ascii_uppercase()).copied();
+                    let row =
+                        equipment.get(&key).and_then(|q| q.circuits.iter().find(on)).or_else(|| printed.and_then(|q| q.circuits.iter().find(on)));
                     if let Some(c) = row {
                         let src = Source::from_doc(SourceKind::Schedule, if c.source.is_empty() { "panel schedule" } else { &c.source });
+                        // Its breaker's type, the schedule's row the source: a schedule that marks
+                        // types and none on this row says a standard breaker; one that marks none
+                        // says nothing.
+                        if let Some(ps) = printed.filter(|ps| ps.circuits.iter().any(|x| !x.protection.is_empty()))
+                            && let Some(pc) = ps.circuits.iter().find(on)
+                        {
+                            let (gf, af) = super::panelsched::protection(pc, &ps.legend);
+                            let kind = match (gf, af) {
+                                (true, true) => "GFCI + AFCI (dual function)",
+                                (true, false) => "GFCI",
+                                (false, true) => "AFCI",
+                                (false, false) => "standard",
+                            };
+                            let row_src = Source::from_doc(SourceKind::Schedule, &format!("{} panel {} circuit {}", ps.source, ps.panel, pc.number));
+                            let codes = if pc.protection.is_empty() { "none".to_string() } else { pc.protection.join("/") };
+                            put(&mut store, "breaker_type", Prop::new(kind.to_string(), row_src.clone()).with_note(&format!("codes {codes}")), tally);
+                            put(&mut store, "gfci_breaker", Prop::new(if gf { "yes" } else { "no" }.to_string(), row_src), tally);
+                        }
                         if !c.breaker.trim().is_empty() {
                             put(&mut store, "breaker", Prop::new(c.breaker.trim().to_string(), src.clone()), tally);
                         }

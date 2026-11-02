@@ -1198,6 +1198,10 @@ pub struct Mep {
     /// gear's lugs and what comes in through its entry plates.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub feeders: Vec<Feeder>,
+    /// The panel schedules as printed (their circuits and breaker types), panels the plans place
+    /// or not.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub panel_schedules: Vec<PanelSchedule>,
     /// The tables gear is checked with (conduit sizes, conductor areas, wire-bending space),
     /// when a project's differ from the defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1746,9 +1750,31 @@ pub struct PanelCircuit {
     /// Breaker amps and poles, as the schedule prints them.
     pub breaker: String,
     pub poles: u32,
+    /// Its breaker's type codes as the schedule marks it (`AF`, `GF`; `AF/GF` both), the
+    /// schedule's legend saying what each is ([`PanelSchedule::legend`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub protection: Vec<String>,
     /// The sheet it was read from (`E-601`), empty when entered by hand.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
+}
+
+/// A panel's schedule as printed (a panel the plans may not place, or a typical one every guest
+/// room has): its circuits, and the legend its breaker codes are read with.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelSchedule {
+    /// The panel's tag (`G`, `DP1`).
+    pub panel: String,
+    /// "TYPICAL OF 124 REQUIRED": the number of panels it is the schedule of.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub typical_of: Option<u32>,
+    /// The sheet it is on.
+    pub source: String,
+    pub circuits: Vec<PanelCircuit>,
+    /// The schedule legend's codes: `GF` → `GROUND FAULT INTERRUPTER`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub legend: BTreeMap<String, String>,
 }
 
 /// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.
