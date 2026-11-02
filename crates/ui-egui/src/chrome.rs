@@ -334,6 +334,25 @@ fn visible_tabs(widths: &[f32], active: Option<usize>, room: f32) -> std::ops::R
 
 /// Status bar: layout tabs follow the left-hand layout actions, independent of palette docking.
 /// Coordinates and drafting toggles remain on the right.
+/// "Validate: waiting for an agent" while a Validate run started in the app has areas left and no
+/// agent watches; looked up again only when the drawing or the watching changes.
+fn validate_waiting(app: &CadApp) -> Option<&'static str> {
+    type Seen = Option<((u64, u64, bool), Option<&'static str>)>;
+    thread_local! {
+        static SEEN: std::cell::Cell<Seen> = const { std::cell::Cell::new(None) };
+    }
+    let st = app.session.state().ok()?;
+    let key = (st.uid, st.revision, app.session.events.on);
+    if let Some((k, text)) = SEEN.get()
+        && k == key
+    {
+        return text;
+    }
+    let text = cadaddy_engine::cmd::validate_run::status_text(&app.session);
+    SEEN.set(Some((key, text)));
+    text
+}
+
 pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     egui::Panel::bottom("cc_status").exact_size(26.0).frame(egui::Frame::NONE.fill(t.chrome)).show(ui, |ui| {
@@ -551,7 +570,14 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         // A transient message occupies the same bounded readout slot as coordinates.
         // Ellipsis and a tooltip keep either value readable without covering layout tabs.
-        let message = app.status.as_ref().filter(|(_, at)| crate::now_ms() - at < 5000.0).map(|(message, _)| message);
+        // A Validate run started here with areas left and no agent watching says so (Q6116).
+        let message = app
+            .status
+            .as_ref()
+            .filter(|(_, at)| crate::now_ms() - at < 5000.0)
+            .map(|(message, _)| message.clone())
+            .or_else(|| validate_waiting(app).map(|w| crate::i18n::t(w).to_string()));
+        let message = message.as_ref();
         let readout = message.cloned().or(coord);
         if let Some(text) = readout {
             let left = x + 8.0;

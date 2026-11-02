@@ -3450,3 +3450,57 @@ menu	Modify	Ändra
 	Remove Company Standard	Ta bort företagsstandard
 	Set Company Standard	Ange företagsstandard
 	Standards	Standarder
+	 ({n} shown; Export writes them all)	 ({n} visas; Exportera skriver alla)
+	(no picture)	(ingen bild)
+	A false alarm	Falskt larm
+	Confidence:	Säkerhet:
+	Current room	Aktuellt rum
+	Defer	Skjut upp
+	Expected:	Förväntat:
+	False alarms: {rate}	Falsklarm: {rate}
+	Findings ({n})	Fynd ({n})
+	Found:	Hittat:
+	From the 2D drawing	Från 2D-ritningen
+	From the BIM model	Från BIM-modellen
+	Issue:	Problem:
+	It is a real error	Det är ett verkligt fel
+	Leave it for a field decision	Lämna till ett beslut på plats
+	No file chosen. Type: automation.takeoff {params}	Ingen fil vald. Skriv: automation.takeoff {params}
+	No findings to review.	Inga fynd att granska.
+	No run yet: choose a scope and trades, then Start.	Ingen körning ännu: välj omfattning och discipliner och sedan Starta.
+	No takeoff yet: Refresh runs it.	Ingen mängdning ännu: Uppdatera kör den.
+	Overall	Totalt
+	Refresh	Uppdatera
+	Reject	Avvisa
+	Resume	Återuppta
+	Rules ({on} of {all} on)	Regler ({on} av {all} på)
+	Scope:	Omfattning:
+	Scores	Resultat
+	Show answered	Visa besvarade
+	Takeoff	Mängdning
+	Takeoff written to {path}	Mängdning skriven till {path}
+	Trades:	Discipliner:
+	done	klar
+	judging	bedöms
+	project	projekt
+	waiting for an agent	väntar på en agent
+	{done} of {total} areas, {state}	{done} av {total} områden, {state}
+	{source}: {n} lines	{source}: {n} rader
+	Automation Takeoff	Automatiserad mängdning
+	Cancel Validation Run	Avbryt valideringen
+	Change a Validation Rule	Ändra en valideringsregel
+	Validation Areas	Valideringsområden
+	Validation Evidence Packet	Valideringens underlagspaket
+	Validation Rules	Valideringsregler
+	Validate	Validera
+	Automation	Automatisering
+	Model Checks	Modellkontroller
+	Qty	Antal
+	Elements	Element
+	Fire	Brand
+	Validate: waiting for an agent	Validera: väntar på en agent
+	Validate Model Against Prints (Agent)	Validera modellen mot ritningarna (agent)
+	Next Validation Packet	Nästa valideringspaket
+	Report Validation Findings	Rapportera valideringsfynd
+	Validation Run Status	Status för valideringskörning
+	Plant Validation Errors	Plantera valideringsfel

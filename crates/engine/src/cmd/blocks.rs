@@ -390,6 +390,7 @@ fn run_attdef(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
+    s.guard_run("wblock", p)?;
     let path = wblock::with_extension(str_param(p, "path").ok_or_else(|| bad("wblock", "`path` is required"))?);
     if let Some(d) = s.docs.iter().find(|d| d.path.as_deref().is_some_and(|x| super::file::same_file(x, &path))) {
         return Err(bad("wblock", format!("{path} is the open drawing {}: choose another file name so it isn't replaced", d.title)));

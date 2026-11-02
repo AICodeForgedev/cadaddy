@@ -32,6 +32,7 @@ pub mod tags;
 mod takeoff;
 mod tour;
 pub mod validate;
+pub mod validate_kinds;
 pub mod video;
 mod walker;
 

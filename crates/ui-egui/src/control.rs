@@ -742,8 +742,20 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w as f32, h as f32)));
             ok(Value::Null)
         }
-        "ui.screenshot" => Outcome::Screenshot { path: s("path").map(str::to_string) },
+        "ui.screenshot" => {
+            if let Some(path) = s("path")
+                && let Err(e) = cadaddy_engine::cmd::file::guard_image_output(&app.session, "screenshot", p, path, &["png"])
+            {
+                return err(e);
+            }
+            Outcome::Screenshot { path: s("path").map(str::to_string) }
+        }
         "ui.render" => {
+            if let Some(path) = s("path")
+                && let Err(e) = cadaddy_engine::cmd::file::guard_image_output(&app.session, "render", p, path, &["png"])
+            {
+                return err(e);
+            }
             let w = f("width").unwrap_or(1600.0).clamp(16.0, 8192.0) as u32;
             let h = f("height").unwrap_or(1000.0).clamp(16.0, 8192.0) as u32;
             let Ok(st) = app.session.state() else { return err("no drawing") };

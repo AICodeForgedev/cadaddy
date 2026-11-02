@@ -3267,3 +3267,57 @@ menu	Modify	Modifikace
 	Remove Company Standard	Odebrat firemní standard
 	Set Company Standard	Nastavit firemní standard
 	Standards	Standardy
+	 ({n} shown; Export writes them all)	 (zobrazeno {n}; export zapíše všechny)
+	(no picture)	(bez obrázku)
+	A false alarm	Planý poplach
+	Confidence:	Jistota:
+	Current room	Aktuální místnost
+	Defer	Odložit
+	Expected:	Očekáváno:
+	False alarms: {rate}	Plané poplachy: {rate}
+	Findings ({n})	Nálezy ({n})
+	Found:	Nalezeno:
+	From the 2D drawing	Z 2D výkresu
+	From the BIM model	Z modelu BIM
+	Issue:	Problém:
+	It is a real error	Je to skutečná chyba
+	Leave it for a field decision	Nechat na rozhodnutí na stavbě
+	No file chosen. Type: automation.takeoff {params}	Nebyl vybrán soubor. Zadejte: automation.takeoff {params}
+	No findings to review.	Žádné nálezy ke kontrole.
+	No run yet: choose a scope and trades, then Start.	Zatím žádný běh: zvolte rozsah a profese, pak Spustit.
+	No takeoff yet: Refresh runs it.	Zatím žádný výkaz: Obnovit jej spustí.
+	Overall	Celkem
+	Refresh	Obnovit
+	Reject	Odmítnout
+	Resume	Pokračovat
+	Rules ({on} of {all} on)	Pravidla (zapnuto {on} z {all})
+	Scope:	Rozsah:
+	Scores	Skóre
+	Show answered	Zobrazit zodpovězené
+	Takeoff	Výkaz výměr
+	Takeoff written to {path}	Výkaz zapsán do {path}
+	Trades:	Profese:
+	done	hotovo
+	judging	posuzuje se
+	project	projekt
+	waiting for an agent	čeká se na agenta
+	{done} of {total} areas, {state}	{done} z {total} oblastí, {state}
+	{source}: {n} lines	{source}: {n} řádků
+	Automation Takeoff	Výkaz automatizace
+	Cancel Validation Run	Zrušit ověřování
+	Change a Validation Rule	Změnit pravidlo ověření
+	Validation Areas	Oblasti ověření
+	Validation Evidence Packet	Balíček podkladů ověření
+	Validation Rules	Pravidla ověření
+	Validate	Ověřit
+	Automation	Automatizace
+	Model Checks	Kontroly modelu
+	Qty	Množ.
+	Elements	Prvky
+	Fire	Požární ochrana
+	Validate: waiting for an agent	Ověření: čeká se na agenta
+	Validate Model Against Prints (Agent)	Ověřit model podle výkresů (agent)
+	Next Validation Packet	Další balíček ověření
+	Report Validation Findings	Nahlásit zjištění ověření
+	Validation Run Status	Stav běhu ověření
+	Plant Validation Errors	Vložit chyby pro ověření

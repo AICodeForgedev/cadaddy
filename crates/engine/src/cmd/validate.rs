@@ -172,15 +172,24 @@ pub(crate) struct Frame {
 }
 
 impl Frame {
+    /// Drawing units per foot.
+    pub(crate) fn upf(&self) -> f64 {
+        self.upf
+    }
     /// The level a sheet point is on and the point in building feet.
-    fn to_ft(&self, p: Vec2) -> (String, [f64; 2]) {
+    pub(crate) fn to_ft(&self, p: Vec2) -> (String, [f64; 2]) {
         let name =
             level_at(&self.spec_levels, p.x, p.y).map(|l| l.name.clone()).or_else(|| self.levels.first().map(|l| l.0.clone())).unwrap_or_default();
         let base = self.levels.iter().find(|l| l.0.eq_ignore_ascii_case(&name)).map_or(Vec2::new(0.0, 0.0), |l| l.1);
         (name, [(p.x - base.x) / self.upf, (p.y - base.y) / self.upf])
     }
+    /// A sheet point in building feet on the plan of `level`.
+    pub(crate) fn to_ft_on(&self, level: &str, p: Vec2) -> [f64; 2] {
+        let base = self.levels.iter().find(|l| l.0.eq_ignore_ascii_case(level)).map_or(Vec2::new(0.0, 0.0), |l| l.1);
+        [(p.x - base.x) / self.upf, (p.y - base.y) / self.upf]
+    }
     /// A building point on a level, on the sheet.
-    fn to_sheet(&self, level: &str, p: [f64; 2]) -> Vec2 {
+    pub(crate) fn to_sheet(&self, level: &str, p: [f64; 2]) -> Vec2 {
         let base = self.levels.iter().find(|l| l.0.eq_ignore_ascii_case(level)).map_or(Vec2::new(0.0, 0.0), |l| l.1);
         Vec2::new(base.x + p[0] * self.upf, base.y + p[1] * self.upf)
     }
@@ -383,6 +392,11 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
             continue;
         }
         let prov = provenance(e);
+        // A run's own values (`field.size=…`) win over its type's, as a device's do.
+        let mut fields = fields;
+        for (k, val) in prov.iter().filter(|(k, _)| k.starts_with("field.")) {
+            fields.insert(k.trim_start_matches("field.").to_string(), val.clone());
+        }
         let (level, _) = frame.to_ft(pts.first().copied().unwrap_or(Vec2::new(0.0, 0.0)));
         let conductors = match (fields.get("conductorSize"), prov.get("conductorsize")) {
             (_, Some(sz)) | (Some(sz), None) => Some(v::Conductors {
@@ -517,7 +531,7 @@ pub(crate) fn report(s: &Session, cmd: &str, p: &Value) -> Result<(Report, Frame
 /// The guided job's Devices stage reads device symbols from the plan sheets and stores them in
 /// `job.devices`. Its Rooms stage stores rooms in the stage result. Neither writes `sp.prints`,
 /// so `bim.validate` needs to find them here.
-fn prints_from_job(s: &Session, frame: &Frame) -> Option<Prints> {
+pub(crate) fn prints_from_job(s: &Session, frame: &Frame) -> Option<Prints> {
     let job = super::guided::load_job(s).ok()??;
     let mut prints = Prints::default();
     // Sheets from the job's classified sheet regions.

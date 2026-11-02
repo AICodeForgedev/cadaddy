@@ -46,7 +46,7 @@ fn a_linked_table_follows_its_workbook() {
 
     // The workbook changes; updating the link brings the new value in.
     e.exec("table.set", json!({ "handle": src, "row": 1, "col": 1, "text": "9" }));
-    e.exec("tableexport", json!({ "handle": src, "path": book }));
+    e.exec("tableexport", json!({ "handle": src, "path": book, "force": true }));
     let u = e.exec("datalinkupdate", json!({ "handles": [linked] }));
     assert!(u["updated"].as_u64().unwrap_or(0) >= 1 || u["updated"].as_array().is_some_and(|a| !a.is_empty()), "{u}");
     let shown = cells(&mut e, &linked);

@@ -15,6 +15,8 @@ pub use cadaddy_dxf::Version;
 use serde_json::{Value, json};
 
 use super::*;
+
+pub use super::exchange::guard_image_output;
 use crate::{Accept, Input, Prompt, Result, Session, Step};
 
 pub use pgp::{alias_conflicts, alias_file, built_in as built_in_aliases, user_aliases};
@@ -313,9 +315,10 @@ thread_local! {
 }
 
 /// Run `f` with the `force` parameter of `p` in effect for the saves inside it.
-fn with_force<T>(p: &Value, f: impl FnOnce() -> T) -> T {
-    let before = FORCE_SAVE.replace(p.get("force").and_then(Value::as_bool).unwrap_or(false));
-    let r = f();
+pub(super) fn with_force<T>(p: &Value, f: impl FnOnce() -> T) -> T {
+    let force = p.get("force").and_then(Value::as_bool).unwrap_or(false);
+    let before = FORCE_SAVE.replace(force);
+    let r = cadaddy_dxf::with_oversize_allowed(force, f);
     FORCE_SAVE.set(before);
     r
 }
@@ -527,16 +530,16 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo()
             .interactive(|_| Ok(Box::new(FileM { name: "OPEN", message: "Enter name of drawing to open", run: run_open }))),
-        CommandSpec::new("close", "Close", run_close)
+        CommandSpec::new("close", "Close", run_close_guarded)
             .files().menu(&["File", "Close"]).key("Cmd+W").params("{index?, save?: bool, discard?: bool (agents, when no one can be asked: a drawing with unsaved changes is closed only with one of them)}").noundo(),
-        CommandSpec::new("closeall", "Close All", run_closeall)
+        CommandSpec::new("closeall", "Close All", run_closeall_guarded)
             .files().menu(&["File", "Close All"]).enabled(always).params("{save?: bool, discard?: bool (agents, when no one can be asked)}").noundo(),
         CommandSpec::new("qsave", "Save", run_qsave_reporting)
-            .files().menu(&["File", "Save"]).key("Cmd+S").alias(&["save"]).params("{path?, force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved; otherwise that save is refused)} → {path, bytes, note?}").noundo(),
+            .files().menu(&["File", "Save"]).key("Cmd+S").alias(&["save"]).params("{path?, force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved, and write a DXF/DWG too big for CADaddy to reopen; otherwise that save is refused)} → {path, bytes, note?}").noundo(),
         CommandSpec::new("saveas", "Save As...", run_saveas_reporting)
             .menu(&["File", "Save As..."])
             .key("Cmd+Shift+S")
-            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), 12 (Release 12 DXF: newer objects converted, some left out), binary?: bool (DXF), force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved there; otherwise refused)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved, dwgCopyKept?: where an existing .dwg that wasn't this drawing's copy was kept first (<name>.dwg.bak), dwgCopyError?: why the copy wasn't saved}")
+            .params("{path (.cdy: CADaddy's own format, keeps everything; .dwg, .dxf, .dwt), version?: 2000|2004|2007|2010|2013|2018 (DWG/DXF), 12 (Release 12 DXF: newer objects converted, some left out), binary?: bool (DXF), force?: bool (overwrite the file even when it changed on disk since the drawing was opened or last saved there, and write a DXF/DWG too big for CADaddy to reopen; otherwise refused)} → {path, bytes, version?, notKept?: what DWG/DXF wouldn't keep (said once per drawing), dwgCopy?: the DWG copy DWGCOPY saved, dwgCopyKept?: where an existing .dwg that wasn't this drawing's copy was kept first (<name>.dwg.bak), dwgCopyError?: why the copy wasn't saved}")
             .noundo()
             .interactive(|_| Ok(Box::new(SaveAsM::default()))),
         CommandSpec::new("checkexchange", "Check Exchange", run_checkexchange)
@@ -1009,6 +1012,19 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(opened(s, i, false))
 }
 
+/// CLOSE as a command (typed, LISP, script, JSON): an agent's close of a drawing with changes
+/// waits for the user ([`Session::guard_run`]). The close tools and the code that has already
+/// decided call [`run_close`].
+fn run_close_guarded(s: &mut Session, p: &Value) -> Result<Value> {
+    s.guard_run("close", p)?;
+    run_close(s, p)
+}
+
+fn run_closeall_guarded(s: &mut Session, p: &Value) -> Result<Value> {
+    s.guard_run("closeall", p)?;
+    run_closeall(s, p)
+}
+
 pub(super) fn run_close(s: &mut Session, p: &Value) -> Result<Value> {
     let i = p.get("index").and_then(Value::as_u64).map(|i| i as usize).unwrap_or(s.active);
     if i >= s.docs.len() {
@@ -1350,7 +1366,7 @@ fn commit_save(s: &mut Session, path: &str, bytes: &[u8], store: impl FnOnce(&st
     st.title = file_name(path);
     // The file as this save left it: the next save there is checked against it. (A .cdy save may
     // have appended, so its bytes are not the file.)
-    st.disk_id = DiskId::of(path, Some(bytes).filter(|_| !is_cdy(path)));
+    st.disk_id = DiskId::of(path, (!is_cdy(path)).then_some(bytes));
     // A BEgin group still open when the drawing is saved ends there.
     st.end_undo_group();
     Ok(bytes.len())
@@ -1819,6 +1835,7 @@ fn run_qsave_reporting(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_saveas_reporting(s: &mut Session, p: &Value) -> Result<Value> {
+    s.guard_run("saveas", p)?;
     save_reporting(s, p, run_saveas)
 }
 
@@ -2131,5 +2148,22 @@ impl crate::Interactive for FileM {
             }
             _ => Ok(Step::Continue),
         }
+    }
+}
+
+#[cfg(test)]
+mod oversize_force_tests {
+    use super::*;
+
+    /// `force: true` on a save or export lets it write a DXF/DWG too big to reopen; without it
+    /// (or after the save) the write is refused again.
+    #[test]
+    fn force_allows_a_file_too_big_to_reopen_only_while_it_runs() {
+        assert!(!cadaddy_dxf::oversize_allowed());
+        let seen = with_force(&json!({"force": true}), cadaddy_dxf::oversize_allowed);
+        assert!(seen);
+        assert!(!with_force(&json!({}), cadaddy_dxf::oversize_allowed));
+        assert!(!with_force(&json!({"force": false}), cadaddy_dxf::oversize_allowed));
+        assert!(!cadaddy_dxf::oversize_allowed());
     }
 }

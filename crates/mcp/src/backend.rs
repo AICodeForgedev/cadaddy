@@ -539,6 +539,9 @@ impl Backend for Headless {
             "drawing.inspect" | "document.inspect" => s.execute("drawing.inspect", &p).map_err(|e| e.to_string()),
             "drawing.summary" | "drawing.query" => s.execute(method, &p).map_err(|e| e.to_string()),
             "ui.render" => {
+                if let Some(path) = str_p("path") {
+                    cadaddy_engine::cmd::file::guard_image_output(s, "render", &p, &path, &["png"]).map_err(|e| e.to_string())?;
+                }
                 let side = |k: &str, d: f64| -> Result<u32, String> {
                     match p.get(k) {
                         None | Some(Value::Null) => Ok(d as u32),

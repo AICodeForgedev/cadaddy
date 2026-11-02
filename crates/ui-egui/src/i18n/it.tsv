@@ -3359,3 +3359,57 @@ menu	Modify	Edita
 	Remove Company Standard	Rimuovi standard aziendale
 	Set Company Standard	Imposta standard aziendale
 	Standards	Standard
+	 ({n} shown; Export writes them all)	 ({n} mostrate; Esporta le scrive tutte)
+	(no picture)	(nessuna immagine)
+	A false alarm	Un falso allarme
+	Confidence:	Affidabilità:
+	Current room	Locale corrente
+	Defer	Rimanda
+	Expected:	Previsto:
+	False alarms: {rate}	Falsi allarmi: {rate}
+	Findings ({n})	Rilievi ({n})
+	Found:	Trovato:
+	From the 2D drawing	Dal disegno 2D
+	From the BIM model	Dal modello BIM
+	Issue:	Problema:
+	It is a real error	È un errore reale
+	Leave it for a field decision	Lasciare a una decisione in cantiere
+	No file chosen. Type: automation.takeoff {params}	Nessun file scelto. Digitare: automation.takeoff {params}
+	No findings to review.	Nessun rilievo da esaminare.
+	No run yet: choose a scope and trades, then Start.	Nessuna esecuzione: scegliere ambito e discipline, poi Avvia.
+	No takeoff yet: Refresh runs it.	Nessun computo: Aggiorna lo esegue.
+	Overall	Complessivo
+	Refresh	Aggiorna
+	Reject	Rifiuta
+	Resume	Riprendi
+	Rules ({on} of {all} on)	Regole ({on} di {all} attive)
+	Scope:	Ambito:
+	Scores	Punteggi
+	Show answered	Mostra con risposta
+	Takeoff	Computo
+	Takeoff written to {path}	Computo scritto in {path}
+	Trades:	Discipline:
+	done	completato
+	judging	in valutazione
+	project	progetto
+	waiting for an agent	in attesa di un agente
+	{done} of {total} areas, {state}	{done} di {total} aree, {state}
+	{source}: {n} lines	{source}: {n} righe
+	Automation Takeoff	Computo automazione
+	Cancel Validation Run	Annulla convalida
+	Change a Validation Rule	Modifica regola di convalida
+	Validation Areas	Aree di convalida
+	Validation Evidence Packet	Pacchetto prove di convalida
+	Validation Rules	Regole di convalida
+	Validate	Convalida
+	Automation	Automazione
+	Model Checks	Controlli del modello
+	Qty	Q.tà
+	Elements	Elementi
+	Fire	Antincendio
+	Validate: waiting for an agent	Convalida: in attesa di un agente
+	Validate Model Against Prints (Agent)	Convalida il modello rispetto alle tavole (agente)
+	Next Validation Packet	Pacchetto di convalida successivo
+	Report Validation Findings	Segnala i risultati della convalida
+	Validation Run Status	Stato dell’esecuzione di convalida
+	Plant Validation Errors	Inserisci errori di convalida
