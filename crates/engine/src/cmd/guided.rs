@@ -4198,6 +4198,45 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         .collect();
                     progress_line(&format!("  ceilings measured on the typical rooms' elevations: {said:?}; {set} rooms take theirs"));
                 }
+                // The typical rooms' mechanical views: each room's PTAC and exhaust fan (with its
+                // duct), in their rooms' ceilings now those are known. A PTAC's face grille read as
+                // a return grille isn't one.
+                let mech = stamp_typical_mech(s.doc()?, &sp, job);
+                if !mech.equipment.is_empty() {
+                    let ptacs: Vec<([f64; 2], [f64; 2], String)> = sp
+                        .mep
+                        .equipment
+                        .iter()
+                        .chain(mech.equipment.iter())
+                        .filter(|e| e.kind == "ptac")
+                        .map(|e| (e.min, e.max, e.level.clone()))
+                        .collect();
+                    let reach = PTAC_GRILLE_FT * upf_runs;
+                    let before = sp.mep.terminals.len();
+                    sp.mep.terminals.retain(|t| {
+                        !(t.terminal_kind == "return_grille"
+                            && ptacs.iter().any(|(lo, hi, lv)| {
+                                *lv == t.level
+                                    && t.at[0] >= lo[0] - reach
+                                    && t.at[0] <= hi[0] + reach
+                                    && t.at[1] >= lo[1] - reach
+                                    && t.at[1] <= hi[1] + reach
+                            }))
+                    });
+                    let mut by: BTreeMap<(String, String), usize> = BTreeMap::new();
+                    for e in &mech.equipment {
+                        *by.entry((e.level.clone(), e.kind.clone())).or_default() += 1;
+                    }
+                    progress_line(&format!(
+                        "  typical rooms' mechanical: {} equipment, {} exhaust ducts stamped {by:?}; {} PTAC faces read as return grilles left out ({:?})",
+                        mech.equipment.len(),
+                        mech.runs.len(),
+                        before - sp.mep.terminals.len(),
+                        mech.report
+                    ));
+                    sp.mep.equipment.extend(mech.equipment);
+                    sp.mep.runs.extend(mech.runs);
+                }
                 // Nothing more than 5' outside its storey's shell: past it, it isn't in the
                 // building (site work, or a reading put in the wrong place). Out, and said.
                 let before_out = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
@@ -4337,6 +4376,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if notes > 0 {
                     progress_line(&format!("  typical rooms' height notes: {notes} read, {heights} stamped devices took theirs"));
                 }
+                // An electrical tag naming mechanical equipment (EF, PTAC) is its connection: at
+                // the equipment the room's mechanical plan puts there, not a device of its own.
+                let reach = CONNECT_REACH_FT * upf_dev;
+                let mut connected = connect_to_equipment(&sp.mep.equipment, &mut stamped, reach);
                 room_panels = panels;
                 panel_rooms = rooms;
                 sleeping = guest;
@@ -4344,6 +4387,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // plan's copies of some of them.
                 let before = out.len();
                 let mut out = out;
+                connected += connect_to_equipment(&sp.mep.equipment, &mut out, reach);
+                if connected > 0 {
+                    progress_line(&format!("  equipment connections (EF, PTAC tags) put at their equipment: {connected}"));
+                }
                 out.retain(|dv| {
                     !authority.iter().any(|(level, outline)| {
                         dv.level == *level && cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))
@@ -6191,6 +6238,366 @@ fn ft_in_label(ft: f64) -> String {
     let total = (ft.abs() * 12.0).round() as i64;
     format!("{}'-{}\"", total / 12, total % 12)
 }
+
+/// A typical room's mechanical equipment as its view draws it (view coordinates).
+#[derive(Clone, Debug, PartialEq)]
+struct MechItem {
+    /// `ptac` or `exhaust_fan`.
+    kind: &'static str,
+    tag: String,
+    lo: [f64; 2],
+    hi: [f64; 2],
+    /// Where the exhaust fan's duct ends (its wall cap), view coordinates.
+    cap: Option<[f64; 2]>,
+    /// How it was found (`tag PTAC`, `symbol: no tag`).
+    how: String,
+}
+
+/// What [`stamp_typical_mech`] made.
+#[derive(Default)]
+struct StampedMech {
+    equipment: Vec<cadaddy_walk3d::MepEquipment>,
+    runs: Vec<cadaddy_walk3d::MepRun>,
+    /// Per view: what it showed and how many rooms took it.
+    report: BTreeMap<String, String>,
+}
+
+/// A PTAC's plan size (inches): long side, short side, from…to.
+const PTAC_LONG_IN: (f64, f64) = (30.0, 48.0);
+const PTAC_SHORT_IN: (f64, f64) = (8.0, 20.0);
+/// An exhaust fan's square, inches a side.
+const EF_SIDE_IN: (f64, f64) = (8.0, 24.0);
+/// How far from its tag (feet) an item's symbol may be.
+const MECH_TAG_REACH_FT: f64 = 10.0;
+/// A wall cap: at least this many small circles (radius up to 3") within 2' of each other.
+const WALL_CAP_CIRCLES: usize = 3;
+/// A PTAC's height and an exhaust fan's housing (feet) when no schedule gives them.
+const PTAC_HEIGHT_FT: f64 = 16.0 / 12.0;
+const EF_HEIGHT_FT: f64 = 10.0 / 12.0;
+/// A PTAC's face grille read as a return grille: a return grille this close (feet) to a PTAC.
+const PTAC_GRILLE_FT: f64 = 3.0;
+
+/// The PTAC and the exhaust fan (with its wall cap) a typical room's mechanical view draws.
+/// `labels`: the view's words (text and block attributes) and where; `shapes`: its polylines'
+/// boxes (and whether closed); `circles`: centre and radius. Sizes in inches at `k_in` units.
+fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool)], circles: &[([f64; 2], f64)], k_in: f64) -> Vec<MechItem> {
+    let mid = |lo: [f64; 2], hi: [f64; 2]| [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    let dist = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let sides = |lo: [f64; 2], hi: [f64; 2]| {
+        let (w, h) = ((hi[0] - lo[0]) / k_in, (hi[1] - lo[1]) / k_in);
+        (w.max(h), w.min(h))
+    };
+    let reach = MECH_TAG_REACH_FT * 12.0 * k_in;
+    let mut out: Vec<MechItem> = Vec::new();
+    // Its type number: digits printed by the tag (in the hexagon under the PTAC).
+    let type_of = |at: [f64; 2]| {
+        labels
+            .iter()
+            .filter(|(v, p)| (1..=2).contains(&v.len()) && v.chars().all(|c| c.is_ascii_digit()) && dist(*p, at) <= 24.0 * k_in)
+            .min_by(|a, b| dist(a.1, at).total_cmp(&dist(b.1, at)))
+            .map(|(v, _)| v.clone())
+    };
+    for (v, at) in labels.iter().filter(|(v, _)| v.trim().eq_ignore_ascii_case("PTAC")) {
+        let body = shapes
+            .iter()
+            .filter(|(lo, hi, _)| {
+                let (l, s) = sides(*lo, *hi);
+                (PTAC_LONG_IN.0..=PTAC_LONG_IN.1).contains(&l)
+                    && (PTAC_SHORT_IN.0..=PTAC_SHORT_IN.1).contains(&s)
+                    && dist(mid(*lo, *hi), *at) <= reach
+            })
+            .min_by(|a, b| dist(mid(a.0, a.1), *at).total_cmp(&dist(mid(b.0, b.1), *at)));
+        let Some((lo, hi, _)) = body else { continue };
+        let tag = type_of(*at).map_or_else(|| v.trim().to_ascii_uppercase(), |n| format!("PTAC-{n}"));
+        if !out.iter().any(|m| m.kind == "ptac" && m.lo == *lo) {
+            out.push(MechItem { kind: "ptac", tag, lo: *lo, hi: *hi, cap: None, how: "tag PTAC".into() });
+        }
+    }
+    let squarish = |lo: [f64; 2], hi: [f64; 2]| {
+        let (l, s) = sides(lo, hi);
+        (EF_SIDE_IN.0..=EF_SIDE_IN.1).contains(&l) && s >= EF_SIDE_IN.0 && l <= 1.4 * s
+    };
+    let is_ef = |v: &str| {
+        let u = v.trim().to_ascii_uppercase();
+        u == "EF"
+            || u.strip_prefix("EF-")
+                .or_else(|| u.strip_prefix("EF"))
+                .is_some_and(|r| !r.is_empty() && r.len() <= 3 && r.chars().all(|c| c.is_ascii_alphanumeric()))
+    };
+    let mut fans: Vec<(MechItem, [f64; 2])> = Vec::new();
+    for (v, at) in labels.iter().filter(|(v, _)| is_ef(v)) {
+        if let Some((lo, hi, _)) = shapes
+            .iter()
+            .filter(|(lo, hi, _)| squarish(*lo, *hi) && dist(mid(*lo, *hi), *at) <= reach)
+            .min_by(|a, b| dist(mid(a.0, a.1), *at).total_cmp(&dist(mid(b.0, b.1), *at)))
+        {
+            // One fan tagged twice (a tag and a keynote) is one fan.
+            if !fans.iter().any(|(f, _)| dist(mid(f.lo, f.hi), mid(*lo, *hi)) <= 3.0 * k_in) {
+                fans.push((
+                    MechItem {
+                        kind: "exhaust_fan",
+                        tag: v.trim().to_ascii_uppercase(),
+                        lo: *lo,
+                        hi: *hi,
+                        cap: None,
+                        how: format!("tag {}", v.trim()),
+                    },
+                    mid(*lo, *hi),
+                ));
+            }
+        }
+    }
+    if fans.is_empty() {
+        // No tag: the fan drawn as a box in a box (its housing and grille), the closed square
+        // most others nest in.
+        let closed: Vec<([f64; 2], [f64; 2])> = shapes.iter().filter(|(lo, hi, c)| *c && squarish(*lo, *hi)).map(|(lo, hi, _)| (*lo, *hi)).collect();
+        let nested = |c: [f64; 2]| closed.iter().filter(|(lo, hi)| dist(mid(*lo, *hi), c) <= 3.0 * k_in).count();
+        if let Some((lo, hi)) =
+            closed.iter().filter(|(lo, hi)| nested(mid(*lo, *hi)) >= 2).max_by(|a, b| nested(mid(a.0, a.1)).cmp(&nested(mid(b.0, b.1))))
+        {
+            fans.push((
+                MechItem { kind: "exhaust_fan", tag: "EF".into(), lo: *lo, hi: *hi, cap: None, how: "symbol (box in a box), no tag".into() },
+                mid(*lo, *hi),
+            ));
+        }
+    }
+    // Its wall cap: the nearest cluster of small circles (the louvre drawn at the wall).
+    let small: Vec<[f64; 2]> = circles.iter().filter(|(_, r)| *r > 0.0 && *r <= 3.0 * k_in).map(|(c, _)| *c).take(2_000).collect();
+    let clusters: Vec<[f64; 2]> = small
+        .iter()
+        .filter_map(|c| {
+            let near: Vec<&[f64; 2]> = small.iter().filter(|o| dist(**o, *c) <= 24.0 * k_in).collect();
+            (near.len() >= WALL_CAP_CIRCLES).then(|| {
+                let n = near.len() as f64;
+                [near.iter().map(|p| p[0]).sum::<f64>() / n, near.iter().map(|p| p[1]).sum::<f64>() / n]
+            })
+        })
+        .collect();
+    for (mut f, c) in fans {
+        f.cap = clusters.iter().copied().filter(|q| dist(*q, c) <= 2.0 * reach).min_by(|a, b| dist(*a, c).total_cmp(&dist(*b, c)));
+        out.push(f);
+    }
+    out
+}
+
+/// The typical rooms' mechanical views (MECH ENLARGED DOUBLE QUEEN): each one's PTAC and
+/// exhaust fan (with its duct to the wall cap) laid into every room of its type by its linework,
+/// as the rooms' devices are. A room that already has that kind of equipment gets no second.
+/// The fan sits in its room's ceiling (`ceiling_ft` of the room, else the level's).
+fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec, job: &GuidedJob) -> StampedMech {
+    let mut out = StampedMech::default();
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    if types.is_empty() {
+        return out;
+    }
+    let k_in = super::perceive::units_per_inch(d);
+    let upf = 12.0 * k_in;
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * upf, upf);
+    let inside = |r: &[f64; 4], p: [f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
+    for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none()).take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let mech_sheet = sh.discipline.eq_ignore_ascii_case("M");
+        let views: Vec<([f64; 4], BTreeSet<String>, String)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
+            .into_iter()
+            .filter_map(|v| {
+                let up = v.title.to_ascii_uppercase();
+                let mech = mech_sheet || up.contains("MECH") || up.contains("HVAC");
+                let words = type_words(&v.title, Some(&vocabulary));
+                (mech && types.contains(&words)).then_some((v.region?, words, v.title.clone()))
+            })
+            .collect();
+        if views.is_empty() {
+            continue;
+        }
+        // The sheet's words (text and block attributes), shapes and circles.
+        let mut labels: Vec<(String, [f64; 2])> = texts.iter().map(|t| (t.value.trim().to_string(), [t.at.x, t.at.y])).collect();
+        let mut shapes: Vec<([f64; 2], [f64; 2], bool)> = Vec::new();
+        let mut circles: Vec<([f64; 2], f64)> = Vec::new();
+        for e in sub.model.iter().take(MAX_LEADER_PIECES) {
+            match &e.kind {
+                cadaddy_doc::EntityKind::Insert(ins) => {
+                    for a in ins.attribs.iter().take(8) {
+                        let v = a.text.value.trim();
+                        if !v.is_empty() {
+                            labels.push((v.to_string(), [a.text.insert.x, a.text.insert.y]));
+                        }
+                    }
+                }
+                cadaddy_doc::EntityKind::LwPolyline(pl) if pl.vertices.len() >= 2 => {
+                    let b = pl.vertices.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, v| {
+                        [b[0].min(v.p.x), b[1].min(v.p.y), b[2].max(v.p.x), b[3].max(v.p.y)]
+                    });
+                    if b.iter().all(|x| x.is_finite()) {
+                        shapes.push(([b[0], b[1]], [b[2], b[3]], pl.closed));
+                    }
+                }
+                cadaddy_doc::EntityKind::Circle(c) if c.center.is_finite() && c.radius.is_finite() => {
+                    circles.push(([c.center.x, c.center.y], c.radius))
+                }
+                _ => {}
+            }
+        }
+        let objects = super::bspec::plan_objects(&sub);
+        for (view, words, title) in &views {
+            let mine = |p: [f64; 2]| inside(view, p);
+            let l: Vec<(String, [f64; 2])> = labels.iter().filter(|(_, p)| mine(*p)).cloned().collect();
+            let sh_v: Vec<([f64; 2], [f64; 2], bool)> = shapes.iter().filter(|(lo, hi, _)| mine(*lo) && mine(*hi)).copied().collect();
+            let c_v: Vec<([f64; 2], f64)> = circles.iter().filter(|(c, _)| mine(*c)).copied().collect();
+            let items = mech_items(&l, &sh_v, &c_v, k_in);
+            if items.is_empty() {
+                continue;
+            }
+            let ents: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+                objects.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(view, [c.x, c.y]))).copied().collect();
+            let lines = super::grids::line_samples(&ents, upf);
+            let mut took = 0usize;
+            for (ri, (name, level, outline, number)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
+                let Some(lv) = sp.level(level) else { continue };
+                let b = bbox(outline);
+                let Some((fit, _)) = rigid_room_fit(&lines, *view, b, &floor_lines, ROOM_FIT_MARGIN_FT * upf, 6.0 * k_in) else { continue };
+                let room = stamped_room(name, number, ri);
+                let ceiling = sp
+                    .rooms
+                    .iter()
+                    .find(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(number.trim())) && !number.trim().is_empty())
+                    .and_then(|r| r.ceiling_ft)
+                    .unwrap_or(lv.ceiling_ft);
+                let has = |kind: &str| {
+                    sp.mep.equipment.iter().chain(out.equipment.iter()).any(|e| {
+                        e.kind == kind
+                            && e.level == lv.name
+                            && cadaddy_geom::point_in_polygon(
+                                outline,
+                                cadaddy_geom::Vec2::new((e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0),
+                            )
+                    })
+                };
+                let had: Vec<bool> = items.iter().map(|it| has(it.kind)).collect();
+                let mut any = false;
+                for (it, _) in items.iter().zip(&had).filter(|(_, h)| !**h) {
+                    let corners = [it.lo, [it.hi[0], it.lo[1]], it.hi, [it.lo[0], it.hi[1]]];
+                    let placed: Vec<[f64; 2]> = corners.iter().filter_map(|c| place_in_room(*c, *view, b, fit)).collect();
+                    if placed.len() != 4 {
+                        continue;
+                    }
+                    let lo = [placed.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min), placed.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min)];
+                    let hi = [
+                        placed.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max),
+                        placed.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max),
+                    ];
+                    let fan = it.kind == "exhaust_fan";
+                    let mut sources = BTreeMap::new();
+                    sources.insert("sheet".to_string(), sh.number.clone());
+                    sources.insert("position".to_string(), format!("typical room view {title} laid into room {room}"));
+                    sources.insert("outline".to_string(), it.how.clone());
+                    sources.insert(
+                        "height".to_string(),
+                        if fan { format!("in the room's ceiling ({ceiling:.2} ft)") } else { "rule: on the floor, 16\" high".into() },
+                    );
+                    let mut properties = BTreeMap::new();
+                    properties.insert("room".to_string(), room.clone());
+                    out.equipment.push(cadaddy_walk3d::MepEquipment {
+                        tag: it.tag.clone(),
+                        kind: it.kind.to_string(),
+                        level: lv.name.clone(),
+                        min: lo,
+                        max: hi,
+                        bottom_ft: if fan { ceiling } else { 0.0 },
+                        height_ft: if fan { EF_HEIGHT_FT } else { PTAC_HEIGHT_FT },
+                        systems: vec![if fan { "EA".into() } else { "M-DUCT".into() }],
+                        title: title.clone(),
+                        properties,
+                        sources,
+                        confidence: 0.7,
+                        ..Default::default()
+                    });
+                    any = true;
+                    // The fan's duct, over the ceiling, to its wall cap.
+                    if let (true, Some(cap)) = (fan, it.cap.and_then(|c| place_in_room(c, *view, b, fit))) {
+                        let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+                        let mut points = vec![c];
+                        let (dx, dy) = ((cap[0] - c[0]).abs(), (cap[1] - c[1]).abs());
+                        if dx > k_in && dy > k_in {
+                            points.push(if dx >= dy { [c[0], cap[1]] } else { [cap[0], c[1]] });
+                        }
+                        points.push(cap);
+                        let bottoms = vec![ceiling + 0.25; points.len().saturating_sub(1)];
+                        if let Ok(run) = serde_json::from_value::<cadaddy_walk3d::MepRun>(json!({
+                            "system": "EA", "level": lv.name, "points": points, "size_in": [4.0, 0.0], "bottoms_ft": bottoms,
+                            "height_source": "typical room view: over the ceiling", "size_source": "rule", "source_sheet": sh.number,
+                        })) {
+                            out.runs.push(run);
+                        }
+                    }
+                }
+                took += usize::from(any);
+                if out.equipment.len() >= MAX_STAMPED {
+                    return out;
+                }
+            }
+            let what: Vec<String> = items.iter().map(|i| format!("{} ({})", i.tag, i.how)).collect();
+            out.report.insert(format!("{} {title}", sh.number), format!("{} into {took} rooms", what.join(", ")));
+        }
+    }
+    out
+}
+
+/// Each stamped device whose tag names mechanical equipment (`EF`, `PTAC`) moved to that
+/// equipment in its room: an exhaust fan's connection in the ceiling at the fan, a PTAC's at the
+/// unit (its printed height kept, else a foot up). How many moved.
+fn connect_to_equipment(equipment: &[cadaddy_walk3d::MepEquipment], devices: &mut [super::readers::ReadDevice], reach: f64) -> usize {
+    let mut moved = 0usize;
+    let centre = |e: &cadaddy_walk3d::MepEquipment| [(e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0];
+    for dv in devices.iter_mut() {
+        let tag = dv.tag.trim().to_ascii_uppercase();
+        let kind = if tag == "EF" || tag.starts_with("EF-") {
+            "exhaust_fan"
+        } else if tag == "PTAC" || tag.starts_with("PTAC-") {
+            "ptac"
+        } else {
+            continue;
+        };
+        // Its room's, else (a tag on the overall plan, in no room yet) the nearest within reach.
+        // (A device read off its sheet may still carry the sheet's level code: `3` is Level 3.)
+        let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+        let same_level = |l: &str| l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
+        let same = |e: &&cadaddy_walk3d::MepEquipment| e.kind == kind && same_level(&e.level);
+        let d2 = |e: &cadaddy_walk3d::MepEquipment| {
+            let c = centre(e);
+            (c[0] - dv.at[0]).hypot(c[1] - dv.at[1])
+        };
+        let found = if dv.room.is_empty() {
+            equipment.iter().filter(same).filter(|e| d2(e) <= reach).min_by(|a, b| d2(a).total_cmp(&d2(b)))
+        } else {
+            equipment.iter().filter(same).find(|e| e.properties.get("room").is_some_and(|r| *r == dv.room))
+        };
+        let Some(e) = found else { continue };
+        dv.at = centre(e);
+        let sheet = e.sources.get("sheet").cloned().unwrap_or_default();
+        if kind == "exhaust_fan" {
+            dv.aff_in = Some(e.bottom_ft * 12.0);
+            dv.aff_note = format!("connection to {} in the room's ceiling ({sheet})", e.tag);
+        } else if dv.aff_in.is_none() {
+            dv.aff_in = Some(PTAC_CONNECTION_IN);
+            dv.aff_note = format!("connection at {} ({sheet})", e.tag);
+        }
+        moved += 1;
+    }
+    moved
+}
+
+/// How far (feet) a connection tag in no room may be from the equipment it is for.
+const CONNECT_REACH_FT: f64 = 15.0;
+/// A PTAC's connection height when the plans print none (inches).
+const PTAC_CONNECTION_IN: f64 = 12.0;
 
 /// What [`stamp_typical_runs`] made: the stamped runs, which of the runs it was given lie in a
 /// typical room's plan (each `true` went into the rooms), and the count per sheet and view.
@@ -10916,6 +11323,79 @@ mod tests {
         assert_eq!(*words, type_words("DOUBLE QUEEN", None));
         assert!((ft - 94.0 / 12.0).abs() < 1e-9, "{m:?}");
         assert_eq!(source, "7'-10\" measured on A-8 DOUBLE QUEEN - BED WALL (F.F. to B.O. CEILING)");
+    }
+
+    #[test]
+    fn a_typical_rooms_mechanical_view_gives_its_ptac_and_exhaust_fan() {
+        // As M-5's MECH ENLARGED DOUBLE QUEEN draws them (inches): the PTAC tag and its type, the
+        // PTAC (42" x 12") at the window, a nightstand-sized box, the exhaust fan with no tag (a
+        // box in a box) and its wall cap's four louvre circles; a toilet's two circles.
+        let labels = vec![
+            ("PTAC".to_string(), [52316.0, 1323.0]),
+            ("1".to_string(), [52326.0, 1318.0]),
+            ("T".to_string(), [52427.0, 1111.0]),
+            ("10".to_string(), [52333.0, 1013.0]),
+        ];
+        let shape = |c: [f64; 2], w: f64, h: f64, closed: bool| ([c[0] - w / 2.0, c[1] - h / 2.0], [c[0] + w / 2.0, c[1] + h / 2.0], closed);
+        let shapes = vec![
+            shape([52362.0, 1333.0], 41.9, 12.3, false),
+            shape([52302.0, 1273.0], 16.0, 26.0, true),
+            shape([52308.0, 1067.0], 13.8, 11.5, true),
+            shape([52308.0, 1067.0], 13.8, 11.5, true),
+            shape([52308.0, 1067.0], 14.9, 13.3, true),
+            shape([52308.0, 1112.0], 23.7, 26.8, true),
+        ];
+        let circles = vec![
+            ([52288.0, 1023.0], 2.0),
+            ([52288.0, 1028.0], 2.0),
+            ([52287.0, 1034.0], 2.0),
+            ([52287.0, 1040.0], 2.0),
+            ([52329.0, 1111.0], 3.5),
+            ([52329.0, 1103.0], 3.5),
+        ];
+        let items = mech_items(&labels, &shapes, &circles, 1.0);
+        assert_eq!(items.len(), 2, "{items:?}");
+        let ptac = items.iter().find(|i| i.kind == "ptac").unwrap();
+        assert_eq!(ptac.tag, "PTAC-1");
+        assert!((ptac.hi[0] - ptac.lo[0] - 41.9).abs() < 1e-6, "{ptac:?}");
+        let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap();
+        assert!(((ef.lo[0] + ef.hi[0]) / 2.0 - 52308.0).abs() < 1e-6 && ((ef.lo[1] + ef.hi[1]) / 2.0 - 1067.0).abs() < 1e-6, "{ef:?}");
+        let cap = ef.cap.unwrap();
+        assert!((cap[0] - 52287.5).abs() < 0.6 && (cap[1] - 1031.25).abs() < 0.6, "{cap:?}");
+        // With an EF tag the fan is the square by it.
+        let mut tagged = labels.clone();
+        tagged.push(("EF-3".to_string(), [52320.0, 1080.0]));
+        tagged.push(("EF".to_string(), [52296.0, 1050.0]));
+        let items = mech_items(&tagged, &shapes, &circles, 1.0);
+        assert!(items.iter().any(|i| i.kind == "exhaust_fan" && i.tag == "EF-3"), "{items:?}");
+        assert_eq!(items.iter().filter(|i| i.kind == "exhaust_fan").count(), 1, "one fan tagged twice: {items:?}");
+        // A typical room's connection tags go to its equipment.
+        let eq = cadaddy_walk3d::MepEquipment {
+            tag: "EF".into(),
+            kind: "exhaust_fan".into(),
+            level: "Level 3".into(),
+            min: [10.0, 10.0],
+            max: [24.0, 22.0],
+            bottom_ft: 7.0 + 10.0 / 12.0,
+            properties: [("room".to_string(), "315".to_string())].into_iter().collect(),
+            ..Default::default()
+        };
+        let mut devs = vec![super::super::readers::ReadDevice {
+            tag: "EF".into(),
+            at: [100.0, 100.0],
+            level: "Level 3".into(),
+            room: "315".into(),
+            ..Default::default()
+        }];
+        assert_eq!(connect_to_equipment(std::slice::from_ref(&eq), &mut devs, 180.0), 1);
+        assert_eq!(devs[0].at, [17.0, 16.0]);
+        assert_eq!(devs[0].aff_in, Some(94.0));
+        // A tag on the overall plan (no room yet): the nearest fan within reach, none past it.
+        let mut far = vec![super::super::readers::ReadDevice { tag: "EF".into(), at: [17.0, 300.0], level: "Level 3".into(), ..Default::default() }];
+        assert_eq!(connect_to_equipment(std::slice::from_ref(&eq), &mut far, 180.0), 0);
+        let mut near = vec![super::super::readers::ReadDevice { tag: "EF".into(), at: [17.0, 120.0], level: "Level 3".into(), ..Default::default() }];
+        assert_eq!(connect_to_equipment(&[eq], &mut near, 180.0), 1);
+        assert_eq!(near[0].at, [17.0, 16.0]);
     }
 
     #[test]

@@ -98,6 +98,7 @@ pub(crate) fn kind_of(mark: &str) -> &'static str {
         "FA" | "HS" | "SS" | "FS" | "ST" | "CM" => "fire alarm device",
         "TV" | "DA" | "TEL" | "WAP" | "CR" | "CAM" => "low voltage outlet",
         "EF" | "FCU" | "WH" | "PTAC" => "equipment connection",
+        "T" | "TSTAT" | "TH" => "thermostat",
         _ => "device",
     }
 }
@@ -106,7 +107,7 @@ pub(crate) fn kind_of(mark: &str) -> &'static str {
 /// floor.
 fn default_height(kind: &str) -> f64 {
     match kind {
-        "switch" | "equipment connection" => 48.0,
+        "switch" | "equipment connection" | "thermostat" => 48.0,
         "fire alarm device" | "door holder" => 80.0,
         "occupancy sensor" => 108.0,
         _ => 18.0,
@@ -371,7 +372,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         // A wall device (not one at the ceiling, nor on the floor) on the face of its wall that
         // faces its room, where it is along the wall, turned with it; none within reach: it stays
         // where it was read, for review.
-        let wall_kind = matches!(kind, "device" | "switch" | "low voltage outlet" | "fire alarm device") || on_a_wall;
+        let wall_kind = matches!(kind, "device" | "switch" | "low voltage outlet" | "fire alarm device" | "thermostat") || on_a_wall;
         let on_wall = wall_kind && !ceiling_mount && height.inches > FLOOR_BOX_IN && height.inches < WALL_BOX_FT * 12.0 + 12.0;
         let face = on_wall.then(|| wall_face(&walls, &level.name, Vec2::new(x, y), HOST_SNAP_FT * upf)).flatten();
         let (centre, along) = match &face {
