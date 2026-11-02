@@ -212,6 +212,11 @@ fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location
     assert_eq!(a["room"]["value"], "101");
     assert_eq!(a["room"]["source"]["kind"], "computed");
     assert!(a["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()), "on the south wall: {a:#}");
+    // bim.element says the stored host (not only the nearest wall it measures).
+    let ha = find(&mut s, "device", json!({"type_mark": "A"}));
+    let el = s.execute("bim.element", &json!({"handle": ha[0]})).unwrap();
+    assert_eq!(el["host"]["wall"], a["host_wall"]["value"], "{el:#}");
+    assert!(el["host"]["by"].as_str().is_some_and(|b| b.starts_with("stored")), "{el:#}");
     // Read at 5', 0.8' on the plan: on the south wall's inside face (0.5'; its box's middle 1" off
     // it), 20" up.
     assert_eq!(a["location"]["value"], "5.00, 0.58, 1.67", "{a:#}");
