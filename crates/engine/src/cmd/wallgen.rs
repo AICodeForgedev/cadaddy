@@ -1676,21 +1676,55 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 doors += 1;
             }
         } else if is_outside {
-            extra.push((g0, g1, z0, z0 + pl.sill));
-            extra.push((g0, g1, z0 + pl.head, top));
-            pl.leaves.push(Leaf {
-                a: g0,
-                b: g1,
-                window: true,
-                thickness: t,
-                source,
-                head: None,
-                sill: None,
-                along: None,
-                pair: None,
-                frame: Some((g0, g1)),
-            });
-            windows += 1;
+            // A wall meeting the gap end-on (a demising wall between two rooms' windows) parts
+            // it: a pier the wall's width, full height, and a window each side of it.
+            let mut piers: Vec<(f64, f64)> = pl
+                .walls
+                .iter()
+                .enumerate()
+                .filter(|(ci, c)| *ci != wi && u.cross(c.b - c.a).abs() > 0.5 * c.a.dist(c.b))
+                .filter_map(|(_, c)| {
+                    [c.a, c.b].into_iter().find_map(|e| {
+                        let s = u.dot(e - g0);
+                        (seg_dist(e, g0, g1) <= c.thickness / 2.0 + t && s > 0.1 * width && s < 0.9 * width)
+                            .then(|| ((s - c.thickness / 2.0).max(0.0), (s + c.thickness / 2.0).min(width)))
+                    })
+                })
+                .take(16)
+                .collect();
+            piers.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut spans: Vec<(f64, f64)> = Vec::new();
+            let mut from = 0.0;
+            for (p0, p1) in &piers {
+                if *p0 > from {
+                    spans.push((from, *p0));
+                }
+                extra.push((g0 + u * *p0, g0 + u * *p1, z0, top));
+                from = from.max(*p1);
+            }
+            spans.push((from, width));
+            for (s0, s1) in spans {
+                let (a, b) = (g0 + u * s0, g0 + u * s1);
+                if s1 - s0 < MIN_WINDOW_IN * k {
+                    extra.push((a, b, z0, top));
+                    continue;
+                }
+                extra.push((a, b, z0, z0 + pl.sill));
+                extra.push((a, b, z0 + pl.head, top));
+                pl.leaves.push(Leaf {
+                    a,
+                    b,
+                    window: true,
+                    thickness: t,
+                    source,
+                    head: None,
+                    sill: None,
+                    along: None,
+                    pair: None,
+                    frame: Some((a, b)),
+                });
+                windows += 1;
+            }
         } else if width <= 8.0 * upf {
             extra.push((g0, g1, z0 + pl.door_head, top));
         }
@@ -1706,6 +1740,9 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     }
     pl
 }
+
+/// A window narrower than this (inches) beside a pier is no window: the pier's slot, filled.
+const MIN_WINDOW_IN: f64 = 12.0;
 
 /// A door swing drawn on a plan: its hinge (the centre), radius, two ends and source.
 struct Swing {

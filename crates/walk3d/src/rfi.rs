@@ -582,6 +582,7 @@ mod tests {
             grid: None,
             ceiling_type: ceiling_type.map(String::from),
             guess: guess.map(String::from),
+            source: None,
         }
     }
 

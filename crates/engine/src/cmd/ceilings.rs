@@ -403,7 +403,10 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
                 })
             })
             .map(|r| r.name.clone());
-        ceilings.push((CeilingArea { level: level.name.clone(), room, outline: moved(&q), height_ft: h, grid, ceiling_type: None, guess: None }, q));
+        ceilings.push((
+            CeilingArea { level: level.name.clone(), room, outline: moved(&q), height_ft: h, grid, ceiling_type: None, guess: None, source: None },
+            q,
+        ));
     }
     // Soffits: hatched areas, at the note inside them (else a foot under the ceiling around).
     let mut soffits = Vec::new();
