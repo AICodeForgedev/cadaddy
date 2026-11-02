@@ -445,6 +445,11 @@ fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
             })
             .collect()
     };
+    // The copied blocks keep their objects' handles, so the new ones start above them.
+    let kept: Vec<Handle> = d.blocks.values().flat_map(|b| b.entities.iter().map(|e| e.handle)).collect();
+    for h in kept {
+        d.bump_handseed(h);
+    }
     let mut copies = std::collections::HashMap::new();
     let mut made = Vec::new();
     for mut e in ents {
