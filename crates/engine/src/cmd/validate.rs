@@ -44,8 +44,10 @@ use crate::{Result, Session};
 pub const PROV_APP: &str = "CADADDY_PROVENANCE";
 /// Failures listed by default.
 const DEFAULT_LIMIT: usize = 500;
-/// Entities read for the model, at most.
-const MAX_ENTITIES: usize = 500_000;
+/// Entities read for the model, at most: every one a drawing holds. A print set imported as
+/// linework runs to millions of objects and the build is added after it, so a lower cap read
+/// none of the built walls.
+pub(crate) const MAX_ENTITIES: usize = 50_000_000;
 /// Longest provenance value kept.
 const MAX_VALUE: usize = 500;
 /// Largest picture side.
@@ -372,30 +374,35 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
     let devices: BTreeSet<Handle> = scene.devices.iter().map(|d| d.handle).collect();
     // Walls, doors and windows the build made.
     let wall_types = stud_depths(sp);
+    let mut built_walls = false;
     for e in d.model.iter().take(MAX_ENTITIES) {
         let Some(part) = super::wallgen::made_as(e) else { continue };
         let EntityKind::Mesh(mesh) = &e.kind else { continue };
-        if !matches!(part.as_str(), "wall" | "door" | "window") {
+        if part == "wall" {
+            built_walls = true;
+            if m.walls.len() < v::MAX_ITEMS {
+                m.walls.extend(mesh_walls(e, mesh, &frame, None, &wall_types));
+            }
+            continue;
+        }
+        if !matches!(part.as_str(), "door" | "window") {
             continue;
         }
         for quad in plan_quads(mesh) {
             let c = quad.iter().fold(Vec2::new(0.0, 0.0), |a, p| a + *p) * (1.0 / quad.len().max(1) as f64);
             let (level, _) = frame.built_ft(e, c);
             let ft: Vec<[f64; 2]> = quad.iter().map(|p| frame.built_on(&level, e, *p)).collect();
-            if part == "wall" {
-                m.walls.extend(wall_piece(e, level, &ft, &wall_types));
-            } else {
-                let (lo, hi) = ft
-                    .iter()
-                    .fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
-                if lo[0] <= hi[0] && lo[1] <= hi[1] {
-                    m.openings.push(ModelOpening { id: e.handle.hex(), level, kind: part.clone(), min: lo, max: hi, swing: None });
-                }
+            let (lo, hi) = ft
+                .iter()
+                .fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
+            if lo[0] <= hi[0] && lo[1] <= hi[1] {
+                m.openings.push(ModelOpening { id: e.handle.hex(), level, kind: part.clone(), min: lo, max: hi, swing: None });
             }
         }
     }
-    // No build yet: the plan's wall faces, as walls with no thickness.
-    if m.walls.is_empty() {
+    // No build yet: the plan's wall faces, as walls with no thickness. Once walls are built
+    // they are the walls, never the faces of the plan under them.
+    if !built_walls {
         for (i, sg) in scene.walls.iter().enumerate().take(v::MAX_ITEMS) {
             let Some(l) = scene.levels.get(sg.level) else { continue };
             m.walls.push(ModelWall {
@@ -486,6 +493,7 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
             fields,
         });
     }
+    m.walls = distinct_walls(std::mem::take(&mut m.walls));
     (m.capped(), frame)
 }
 
@@ -536,18 +544,93 @@ pub(crate) fn walls_near(d: &Drawing, sp: &BuildingSpec, frame: &Frame, level: &
         if b.is_empty() || !frame.built_box(e, b).intersects(&near) {
             continue;
         }
-        for quad in plan_quads(mesh) {
-            let c = quad.iter().fold(Vec2::new(0.0, 0.0), |a, p| a + *p) * (1.0 / quad.len().max(1) as f64);
-            let (on, _) = frame.built_ft(e, c);
-            if !on.eq_ignore_ascii_case(level) {
-                continue;
-            }
-            let ft: Vec<[f64; 2]> = quad.iter().map(|p| frame.built_on(&on, e, *p)).collect();
-            out.extend(wall_piece(e, on, &ft, &studs));
-        }
+        out.extend(mesh_walls(e, mesh, frame, Some(level), &studs));
         if out.len() >= v::MAX_ITEMS {
             break;
         }
+    }
+    distinct_walls(out)
+}
+
+/// A built wall mesh's walls (building feet on its level's plan, on `only` when given): one per
+/// plan rectangle of its pieces ([`wall_rects`]), with the wall's type and thickness.
+fn mesh_walls(e: &Entity, mesh: &cadaddy_doc::Mesh, frame: &Frame, only: Option<&str>, studs: &HashMap<String, f64>) -> Vec<ModelWall> {
+    let mut out = Vec::new();
+    for rect in wall_rects(mesh) {
+        let c = rect.iter().fold(Vec2::new(0.0, 0.0), |a, p| a + *p) * (1.0 / rect.len().max(1) as f64);
+        let (on, _) = frame.built_ft(e, c);
+        if only.is_some_and(|l| !on.eq_ignore_ascii_case(l)) {
+            continue;
+        }
+        let ft: Vec<[f64; 2]> = rect.iter().map(|p| frame.built_on(&on, e, *p)).collect();
+        out.extend(wall_piece(e, on, &ft, studs));
+    }
+    out
+}
+
+/// A wall mesh's plan rectangles (sheet units). A wall built from a face pair is boxes: their
+/// bottoms on the floor are its pieces (the boxes over an opening start higher and are left
+/// out, so an opening is a gap). A wall Walk mode built has no bottoms: its faces stand on the
+/// floor and the cap over each pair of faces is the wall; the caps are its pieces then.
+pub(crate) fn wall_rects(mesh: &cadaddy_doc::Mesh) -> Vec<Vec<Vec2>> {
+    let z0 = mesh.vertices.iter().fold(f64::INFINITY, |lo, v| lo.min(v.z));
+    let z1 = mesh.vertices.iter().fold(f64::NEG_INFINITY, |hi, v| hi.max(v.z));
+    let tol = ((z1 - z0).abs() * 1e-6).max(1e-9);
+    // Its flat faces, and the height each lies at.
+    let flat: Vec<(f64, Vec<Vec2>)> = mesh
+        .faces
+        .iter()
+        .take(100_000)
+        .filter_map(|f| {
+            let vs: Vec<Vec3> = f.v.iter().take(64).filter_map(|i| mesh.vertices.get(*i as usize).copied()).collect();
+            let z = vs.first()?.z;
+            (vs.len() >= 3 && vs.iter().all(|v| (v.z - z).abs() <= tol)).then(|| (z, vs.iter().map(|v| v.xy()).collect()))
+        })
+        .collect();
+    let on_floor = flat.iter().any(|(z, _)| (z - z0).abs() <= tol);
+    let mut seen: BTreeSet<Vec<(i64, i64)>> = BTreeSet::new();
+    let mut out: Vec<Vec<Vec2>> = Vec::new();
+    for (z, f) in flat {
+        if on_floor && (z - z0).abs() > tol {
+            continue;
+        }
+        // A box's top over its bottom, or a cap drawn twice, is one piece.
+        let mut key: Vec<(i64, i64)> = f.iter().map(|p| ((p.x * 1e4).round() as i64, (p.y * 1e4).round() as i64)).collect();
+        key.sort_unstable();
+        key.dedup();
+        if seen.insert(key) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// `walls` without the ones listed twice: a piece on the same centreline (either way round), as
+/// thick, on the same level as one before it (within an inch) is dropped.
+pub(crate) fn distinct_walls(walls: Vec<ModelWall>) -> Vec<ModelWall> {
+    const SAME_FT: f64 = 1.0 / 12.0;
+    let cell = |p: [f64; 2]| ((p[0] / SAME_FT).floor() as i64, (p[1] / SAME_FT).floor() as i64);
+    let mid = |w: &ModelWall| [(w.a[0] + w.b[0]) / 2.0, (w.a[1] + w.b[1]) / 2.0];
+    let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= SAME_FT;
+    let mut seen: HashMap<(String, i64, i64), Vec<usize>> = HashMap::new();
+    let mut out: Vec<ModelWall> = Vec::with_capacity(walls.len());
+    for w in walls {
+        let level = w.level.to_ascii_lowercase();
+        let (cx, cy) = cell(mid(&w));
+        let twice = (-1..=1).any(|dx| {
+            (-1..=1).any(|dy| {
+                seen.get(&(level.clone(), cx + dx, cy + dy)).is_some_and(|ix| {
+                    ix.iter().filter_map(|i| out.get(*i)).any(|o| {
+                        (o.thickness_in - w.thickness_in).abs() <= 1.0 && ((near(o.a, w.a) && near(o.b, w.b)) || (near(o.a, w.b) && near(o.b, w.a)))
+                    })
+                })
+            })
+        });
+        if twice {
+            continue;
+        }
+        seen.entry((level, cx, cy)).or_default().push(out.len());
+        out.push(w);
     }
     out
 }
@@ -567,10 +650,12 @@ pub(crate) fn plan_quads(mesh: &cadaddy_doc::Mesh) -> Vec<Vec<Vec2>> {
         .collect()
 }
 
-/// A wall piece's centreline and thickness from its plan rectangle (feet).
+/// A wall piece's centreline and thickness from its plan rectangle (feet). Any other outline
+/// (a cap drawn as triangles, a piece with a corner split) is read as the smallest rectangle
+/// round it that lies along one of its sides.
 pub(crate) fn centreline(q: &[[f64; 2]]) -> Option<([f64; 2], [f64; 2], f64)> {
     if q.len() != 4 {
-        return None;
+        return fitted_centreline(q);
     }
     let p = |i: usize| q.get(i % 4).copied().unwrap_or([0.0, 0.0]);
     let len = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
@@ -580,6 +665,39 @@ pub(crate) fn centreline(q: &[[f64; 2]]) -> Option<([f64; 2], [f64; 2], f64)> {
     let thick = len(p(e0.0), p(e0.1));
     let (a, b) = (mid(p(e0.0), p(e0.1)), mid(p(e1.0), p(e1.1)));
     (thick.is_finite() && len(a, b) > 1e-9).then_some((a, b, thick))
+}
+
+/// [`centreline`] of an outline that isn't four corners: the least rectangle round it along
+/// one of its sides, its long sides the wall's faces.
+fn fitted_centreline(q: &[[f64; 2]]) -> Option<([f64; 2], [f64; 2], f64)> {
+    if q.len() < 3 || q.len() > 64 {
+        return None;
+    }
+    let mut best: Option<(f64, [f64; 2], [f64; 2], f64, f64)> = None;
+    for (i, a) in q.iter().enumerate() {
+        let b = q.get((i + 1) % q.len()).copied().unwrap_or(*a);
+        let l = (b[0] - a[0]).hypot(b[1] - a[1]);
+        if l.is_nan() || l <= 1e-9 {
+            continue;
+        }
+        let u = [(b[0] - a[0]) / l, (b[1] - a[1]) / l];
+        let n = [-u[1], u[0]];
+        let (mut s0, mut s1, mut t0, mut t1) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+        for p in q {
+            let (s, t) = (p[0] * u[0] + p[1] * u[1], p[0] * n[0] + p[1] * n[1]);
+            (s0, s1, t0, t1) = (s0.min(s), s1.max(s), t0.min(t), t1.max(t));
+        }
+        let area = (s1 - s0) * (t1 - t0);
+        // Along its long side.
+        let (u, n, s0, s1, t0, t1) = if s1 - s0 >= t1 - t0 { (u, n, s0, s1, t0, t1) } else { (n, [-u[0], -u[1]], t0, t1, -s1, -s0) };
+        if area.is_finite() && best.as_ref().is_none_or(|b| area < b.0 - 1e-12) {
+            let t = (t0 + t1) / 2.0;
+            let at = |s: f64| [u[0] * s + n[0] * t, u[1] * s + n[1] * t];
+            best = Some((area, at(s0), at(s1), t1 - t0, s1 - s0));
+        }
+    }
+    let (_, a, b, thick, len) = best?;
+    (thick.is_finite() && len > 1e-9).then_some((a, b, thick))
 }
 
 // ---------------------------------------------------------------- validate
@@ -1069,7 +1187,84 @@ mod tests {
         assert!((t - 0.5).abs() < 1e-9);
         assert!((a[1] - 0.25).abs() < 1e-9 && (b[1] - 0.25).abs() < 1e-9);
         assert!(((a[0] - b[0]).abs() - 10.0).abs() < 1e-9);
-        assert!(centreline(&q[..3]).is_none());
+        // Half of it (a cap drawn as two triangles): the same wall.
+        let (a, b, t) = centreline(&q[..3]).unwrap_or(([9.0; 2], [9.0; 2], 9.0));
+        assert!((t - 0.5).abs() < 1e-9 && (a[1] - 0.25).abs() < 1e-9 && (b[1] - 0.25).abs() < 1e-9, "{a:?} {b:?} {t}");
+        assert!(((a[0] - b[0]).abs() - 10.0).abs() < 1e-9);
+        assert!(centreline(&q[..2]).is_none());
+    }
+
+    #[test]
+    fn a_fitted_centreline_runs_along_the_long_side() {
+        // A wall running north drawn as five corners (one side split).
+        let q = [[0.0, 0.0], [0.5, 0.0], [0.5, 4.0], [0.5, 12.0], [0.0, 12.0]];
+        let (a, b, t) = centreline(&q).unwrap_or(([9.0; 2], [9.0; 2], 9.0));
+        assert!((t - 0.5).abs() < 1e-9, "{t}");
+        assert!((a[0] - 0.25).abs() < 1e-9 && (b[0] - 0.25).abs() < 1e-9, "{a:?} {b:?}");
+        assert!(((a[1] - b[1]).abs() - 12.0).abs() < 1e-9, "{a:?} {b:?}");
+    }
+
+    fn quad_mesh(quads: &[[[f64; 3]; 4]]) -> cadaddy_doc::Mesh {
+        let mut m = super::super::wallgen::empty_mesh();
+        for q in quads {
+            let base = m.vertices.len() as u32;
+            m.vertices.extend(q.iter().map(|p| Vec3::new(p[0], p[1], p[2])));
+            m.faces.push(cadaddy_doc::MeshFace { v: vec![base, base + 1, base + 2, base + 3], hidden: 0 });
+        }
+        m
+    }
+
+    #[test]
+    fn a_built_box_walls_pieces_are_its_bottoms_an_opening_a_gap() {
+        // A 10' wall, 6" thick, 9' high, a 3' door from 4' to 7' (the header from 7' up).
+        let mut m = super::super::wallgen::empty_mesh();
+        for (s0, s1, z0, z1) in [(0.0, 4.0, 0.0, 9.0), (4.0, 7.0, 7.0, 9.0), (7.0, 10.0, 0.0, 9.0)] {
+            super::super::wallgen::add_box(&mut m, Vec2::new(s0, 0.0), Vec2::new(s1, 0.0), 0.5, z0, z1);
+        }
+        let rs = wall_rects(&m);
+        assert_eq!(rs.len(), 2, "the two pieces on the floor, not their tops nor the header: {rs:?}");
+        for r in &rs {
+            let ft: Vec<[f64; 2]> = r.iter().map(|p| [p.x, p.y]).collect();
+            let (_, _, t) = centreline(&ft).unwrap_or(([0.0; 2], [0.0; 2], 0.0));
+            assert!((t - 0.5).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_walk_mode_walls_pieces_are_its_caps() {
+        // Walk mode: the two faces of a 10' wall standing on the floor, the cap between them on
+        // top (drawn twice), no bottom.
+        let m = quad_mesh(&[
+            [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 0.0, 9.0], [0.0, 0.0, 9.0]],
+            [[0.0, 0.5, 0.0], [10.0, 0.5, 0.0], [10.0, 0.5, 9.0], [0.0, 0.5, 9.0]],
+            [[0.0, 0.0, 9.0], [10.0, 0.0, 9.0], [10.0, 0.5, 9.0], [0.0, 0.5, 9.0]],
+            [[10.0, 0.5, 9.0], [0.0, 0.5, 9.0], [0.0, 0.0, 9.0], [10.0, 0.0, 9.0]],
+        ]);
+        let rs = wall_rects(&m);
+        assert_eq!(rs.len(), 1, "one cap, one piece: {rs:?}");
+        // The old reading (flat faces at the mesh's lowest point only) found nothing here.
+        assert!(plan_quads(&m).is_empty());
+        // A face alone (its partner's mesh holds the cap) is no wall.
+        let face = quad_mesh(&[[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 0.0, 9.0], [0.0, 0.0, 9.0]]]);
+        assert!(wall_rects(&face).is_empty());
+    }
+
+    fn wall(id: &str, a: [f64; 2], b: [f64; 2], t: f64) -> ModelWall {
+        ModelWall { id: id.into(), level: "L1".into(), a, b, thickness_in: t, stud_in: None, wall_type: None }
+    }
+
+    #[test]
+    fn a_wall_listed_twice_is_listed_once() {
+        let ws = vec![
+            wall("A", [0.0, 0.0], [10.0, 0.0], 6.0),
+            wall("B", [10.0, 0.02], [0.0, 0.0], 6.2),
+            wall("C", [0.0, 0.0], [10.0, 0.0], 4.0),
+            wall("D", [0.0, 0.0], [10.0, 0.5], 6.0),
+            ModelWall { level: "L2".into(), ..wall("E", [0.0, 0.0], [10.0, 0.0], 6.0) },
+            wall("F", [20.0, 0.0], [30.0, 0.0], 6.0),
+        ];
+        let ids: Vec<String> = distinct_walls(ws).into_iter().map(|w| w.id).collect();
+        assert_eq!(ids, ["A", "C", "D", "E", "F"]);
     }
 
     #[test]
