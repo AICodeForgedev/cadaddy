@@ -1459,21 +1459,6 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             }
         }
     }
-    if let Some(lit) = lighting {
-        for (rule, verdicts) in lit.checked {
-            let into = checked.entry(rule).or_default();
-            for (v, n) in verdicts {
-                *into.entry(v).or_default() += n;
-            }
-        }
-        for (rule, whys) in lit.unmeasured {
-            let into = unmeasured.entry(rule).or_default();
-            for (w, n) in whys {
-                *into.entry(w).or_default() += n;
-            }
-        }
-        findings.extend(lit.findings);
-    }
     // G-KEYNOTE: what each keynote marker's note calls for, at the marker.
     if let Some(r) = on(super::validate_keynote::RULE) {
         use super::validate_keynote as vk;
@@ -1508,6 +1493,21 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         if notes.is_empty() {
             unmeasured.remove(vk::RULE);
         }
+    }
+    if let Some(lit) = lighting {
+        for (rule, verdicts) in lit.checked {
+            let into = checked.entry(rule).or_default();
+            for (v, n) in verdicts {
+                *into.entry(v).or_default() += n;
+            }
+        }
+        for (rule, whys) in lit.unmeasured {
+            let into = unmeasured.entry(rule).or_default();
+            for (w, n) in whys {
+                *into.entry(w).or_default() += n;
+            }
+        }
+        findings.extend(lit.findings);
     }
     findings.sort_by(|a, b| {
         let k = |f: &Value| {
