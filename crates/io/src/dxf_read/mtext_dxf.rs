@@ -48,13 +48,10 @@ fn decode(s: &str, line_feeds: bool) -> String {
 }
 
 /// The caret codes of the DXF the DWG bridge writes from a DWG, put right before the groups are
-/// read. The bridge escapes a caret as `^ ` and then also the caret of the code it made from a
-/// control character: an MTEXT tab comes out as `^ I` and a line feed as `^ J` (a tab in TEXT,
-/// attribute, dimension and multileader text comes out as itself, a typed `^I` as `^ I`). Observed on files
-/// from AutoCAD and from CADaddy. MTEXT groups get the single-escaped codes [`decode_contents`]
-/// reads; TEXT, attribute and dimension text keep `^ ` for [`decode_line`]; a dimension's style
-/// name and multileader text lose the escape of their carets. A typed `^I` in MTEXT cannot be
-/// told from a tab in the bridge's output and reads as a tab.
+/// read. MTEXT contents come escaped once (the bridge writes them from their values, so a typed
+/// `^I` stays text and a tab a tab), and TEXT, attribute and dimension text keep the bridge's
+/// `^ ` escapes for [`decode_line`]; a dimension's style name and multileader text lose the
+/// escape of their carets.
 pub(crate) fn bridge_carets_undone(tags: &mut [Tag]) {
     let mut kind = String::new();
     for t in tags.iter_mut() {
@@ -62,40 +59,20 @@ pub(crate) fn bridge_carets_undone(tags: &mut [Tag]) {
             kind = t.str();
             continue;
         }
-        let mtext = kind == "MTEXT" && matches!(t.code, 1 | 3);
-        // The strings `decode_line` reads (TEXT, ATTRIB, ATTDEF and DIMENSION text, an ATTDEF's
+        // MTEXT contents come from the bridge as written (its `mtext_contents`), escaped once, and
+        // the strings `decode_line` reads (TEXT, ATTRIB, ATTDEF and DIMENSION text, an ATTDEF's
         // prompt) keep the bridge's `^ ` escapes, as a DXF file has them; a DIMENSION's style
         // name (3) and a multileader's text lose theirs.
         let plain = (kind == "DIMENSION" && t.code == 3) || (kind == "MULTILEADER" && t.code == 304);
-        if !(mtext || plain) {
+        if !plain {
             continue;
         }
         let s = t.str();
         if !s.contains('^') {
             continue;
         }
-        let fixed = if mtext { single_escaped(&s) } else { s.replace("^ ", "^") };
-        *t = Tag::s(t.code, fixed);
+        *t = Tag::s(t.code, s.replace("^ ", "^"));
     }
-}
-
-/// `^ I` and `^ J` as `^I` and `^J`, scanning from the left so `^ ^ I` keeps its first caret.
-fn single_escaped(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(c) = rest.chars().next() {
-        if let Some(tail) = rest.strip_prefix("^ I") {
-            out.push_str("^I");
-            rest = tail;
-        } else if let Some(tail) = rest.strip_prefix("^ J") {
-            out.push_str("^J");
-            rest = tail;
-        } else {
-            out.push(c);
-            rest = rest.get(c.len_utf8()..).unwrap_or_default();
-        }
-    }
-    out
 }
 
 /// Encoded contents split into the 250-character strings of MTEXT's 3 and 1 groups, never
