@@ -3159,7 +3159,8 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         here.objects["counts"]["keynote_markers"] = json!(marker_count);
         here.counts["keynote_markers"] = json!(marker_count);
     }
-    let Planned { mut crops, mut left_out } = plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops);
+    let Planned { mut crops, mut left_out } =
+        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops);
     // Each picture is labelled by the view it shows on its own sheet (a tile by the view it
     // lies in), not by the link that brought it in.
     let views = sheet_views(d, &sp);
