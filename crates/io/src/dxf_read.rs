@@ -118,6 +118,15 @@ fn viewport_twist(t: &T) -> f64 {
     t.f(51).map_or(0.0, |a| cadaddy_geom::norm_angle(a.to_radians()))
 }
 
+/// A view's centre in the drawing. The DXF stores it in display coordinates (`center`), whose
+/// origin is the view target (`target`), so the point in the middle of a view is their sum: a
+/// file whose view centre is 0,0 keeps the location in the target (as ArchiCAD's exports do). A
+/// sum that isn't finite or passes the coordinate limit leaves the stored centre.
+fn view_center(center: Vec2, target: Vec2) -> Vec2 {
+    let sum = center + target;
+    if sum.is_finite() && sum.x.abs() <= LIMIT && sum.y.abs() <= LIMIT { sum } else { center }
+}
+
 /// An object whose points were turned into the world system on reading: its extrusion is plain
 /// up again (a thickness along (0, 0, -1) is a negative one), so what is written (without it)
 /// reads back as it was. A tilted extrusion is left alone.
@@ -608,12 +617,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             // The view centre (12/22) is in display coordinates, measured from the view target
             // (17/27): AutoCAD moves the target when it pans (tablet_overlay.dwg). In a plan view
             // that is an offset along the display axes, which the view twist (51) turns.
-            view_center: {
-                let c = Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0)).rotate(-viewport_twist(&t));
-                let dir = t.p(16);
-                let target = Vec2::new(t.fd(17, 0.0), t.fd(27, 0.0));
-                if dir.x.abs() < 1e-9 && dir.y.abs() < 1e-9 && target.is_finite() { c + target } else { c }
-            },
+            view_center: view_center(Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0)).rotate(-viewport_twist(&t)), Vec2::new(t.fd(17, 0.0), t.fd(27, 0.0))),
             view_height: t.fd(45, 1.0),
             id: t.i(69).unwrap_or(0) as u32,
             locked: t.i(90).unwrap_or(0) & 16384 != 0,
@@ -1821,6 +1825,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 let camera = field("CAMERA")
                     .map(|_| cadaddy_doc::ViewCamera { position: t.p(12) + t.p(11), target: t.p(12), lens: t.fd(42, 50.0) })
                     .filter(|c| c.position.is_finite() && c.target.is_finite() && c.distance() > 1e-9 && c.lens.is_finite() && c.lens > 0.0);
+                // The view centre 10/20 is in display coordinates, whose origin is the target
+                // 12/22/32; CADaddy's camera views keep their target there and the centre as is.
+                let center = if camera.is_some() { center } else { view_center(center, t.p(12).xy()) };
                 let v = NamedView {
                     name: name.clone(),
                     center,
@@ -1918,7 +1925,8 @@ const MAX_VPORT_TILES: usize = 64;
 /// are fractions of the drawing area; unusable tiles are skipped.
 fn vport_record(d: &mut Drawing, t: &T) {
     let name = t.s(2).map(|n| n.trim().to_string()).unwrap_or_default();
-    let (min, max, center) = (t.p(10).xy(), t.p(11).xy(), t.p(12).xy());
+    // The view centre 12/22 is in display coordinates, whose origin is the view target 17/27/37.
+    let (min, max, center) = (t.p(10).xy(), t.p(11).xy(), view_center(t.p(12).xy(), t.p(17).xy()));
     let height = t.fd(40, 0.0);
     let unit = |v: f64| v.is_finite() && (-1e-9..=1.0 + 1e-9).contains(&v);
     let ok = [min.x, min.y, max.x, max.y].into_iter().all(unit)
