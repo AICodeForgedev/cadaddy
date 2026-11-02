@@ -2052,6 +2052,23 @@ fn plan_crops(
             push(&mut crops, l, "enlarged_plan", trade, rect, "unit_type", None, Some(format!("unit type {}", u.name)), Some(o));
         }
     }
+    // 1c. The print round each keynote marker in or by the area, and the keynote lists of the
+    //     sheets that mark it.
+    for k in keynotes {
+        let Some(l) = links
+            .iter()
+            .find(|l| l.number.eq_ignore_ascii_case(&k.sheet) && l.view.is_none())
+            .or_else(|| links.iter().find(|l| l.number.eq_ignore_ascii_case(&k.sheet)))
+        else {
+            continue;
+        };
+        let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
+        if !want(trade) {
+            continue;
+        }
+        let Some(rect) = l.rect.map(norm_rect).and_then(|sr| intersect(norm_rect(k.rect), sr)) else { continue };
+        push(&mut crops, l, k.kind, trade, rect, "keynote", None, Some(k.shows.clone()), None);
+    }
     // 2. Interior elevations naming the room, the partition legend, the schedule and legend rows
     //    of the marks present, general notes.
     let mut room_keys: Vec<String> = [area.number.clone(), area.name.clone().filter(|n| n.trim().len() >= 3)].into_iter().flatten().collect();
@@ -2063,7 +2080,7 @@ fn plan_crops(
             }
         }
     }
-    let plan_sheets: BTreeSet<String> = crops.iter().map(|c| c.sheet.clone()).collect();
+    let plan_sheets: BTreeSet<String> = crops.iter().filter(|c| !c.kind.starts_with("keynote")).map(|c| c.sheet.clone()).collect();
     for l in links.iter().filter(|l| l.view.is_none()) {
         let Some(sr) = l.rect.map(norm_rect) else { continue };
         let kind = sheet_kind(&l.title, l.level.is_some() || !l.levels.is_empty());
@@ -2158,22 +2175,6 @@ fn plan_crops(
         }
         risers += 1;
         push(&mut crops, l, "riser_diagram", trade, rect, "text", None, Some(shows), None);
-    }
-    // 4. The keynote lists of the sheets that mark the area, and the print round each marker.
-    for k in keynotes {
-        let Some(l) = links
-            .iter()
-            .find(|l| l.number.eq_ignore_ascii_case(&k.sheet) && l.view.is_none())
-            .or_else(|| links.iter().find(|l| l.number.eq_ignore_ascii_case(&k.sheet)))
-        else {
-            continue;
-        };
-        let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
-        if !want(trade) {
-            continue;
-        }
-        let Some(rect) = l.rect.map(norm_rect).and_then(|sr| intersect(norm_rect(k.rect), sr)) else { continue };
-        push(&mut crops, l, k.kind, trade, rect, "keynote", None, Some(k.shows.clone()), None);
     }
     Planned { crops, left_out }
 }
