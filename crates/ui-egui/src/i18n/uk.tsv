@@ -3417,7 +3417,9 @@
 	Apply Code Rules	Застосувати норми
 	Estimate	Кошторис
 	Price Book	Довідник цін
-	Set Material Price	Задати ціну матеріалу
+	Add Material Quote	Додати пропозицію ціни
+	Remove Material Quote	Вилучити пропозицію ціни
+	Price Book Settings	Параметри довідника цін
 	Map Item to Price	Зіставити позицію з ціною
 	Import Price Book	Імпортувати довідник цін
 	Dimming Check	Перевірка регулювання яскравості

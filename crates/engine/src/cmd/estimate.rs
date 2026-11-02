@@ -2098,46 +2098,54 @@ mod tests {
         let line = q["lines"].as_array().unwrap().iter().find(|l| l["unit"].as_str() == Some("each")).cloned().expect("a counted line");
         let item = line["item"].as_str().unwrap().to_string();
         let size = line["size"].as_str().unwrap_or_default().to_string();
-        s.execute(
-            "pricebook.set",
-            &json!({"key": "testkey", "unit_price": 12.5, "unit": "each", "vendor": "Test Supply", "date": "2026-10-01", "folder": folder}),
-        )
-        .unwrap();
+        s.execute("pricebook.set", &json!({"key": "testkey", "unit_price": 12.5, "unit": "each", "vendor": "Test Supply", "location": "North", "date": "2026-10-01", "folder": folder})).unwrap();
         s.execute("pricebook.map", &json!({"item": item, "size": size, "keys": ["testkey"], "folder": folder})).unwrap();
         let via = |s: &mut Session| {
             let q = s.execute("estimate.query", &json!({ "limit": 200 })).unwrap();
-            q["lines"]
+            let l = q["lines"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .find(|l| l["item"].as_str() == Some(item.as_str()) && l["size"].as_str().unwrap_or_default() == size)
                 .cloned()
-                .unwrap()
+                .unwrap();
+            l["via"].as_str().unwrap_or_default().to_string()
         };
-        let l = via(&mut s);
-        assert_eq!(l["via"], "price book: testkey Test Supply 2026-10-01 (QUOTE)", "{l}");
-        // A newer quote replaces it; the old one is kept in the history.
+        assert!(via(&mut s).starts_with("price book: testkey $12.5000 Test Supply (North) 2026-10-01 QUOTE"), "{}", via(&mut s));
+        // The same vendor and location's newer quote replaces it; the old one is kept in the history.
         let r = s
             .execute(
                 "pricebook.set",
-                &json!({"key": "testkey", "unit_price": 14.0, "vendor": "Other Supply", "date": "2026-11-01", "folder": folder}),
+                &json!({"key": "testkey", "unit_price": 14.0, "vendor": "Test Supply", "location": "North", "date": "2026-11-01", "folder": folder}),
             )
             .unwrap();
         assert_eq!(r["replaced"]["unit_price"], json!(12.5), "{r}");
-        assert!(std::fs::read_to_string(dir.join("history.csv")).unwrap().contains("Test Supply"));
-        let l = via(&mut s);
-        assert!(l["via"].as_str().unwrap().contains("Other Supply 2026-11-01"), "{l}");
-        // An import older than what is held is kept out.
+        assert_eq!(r["quotes"], json!(1));
+        assert!(std::fs::read_to_string(dir.join("history.csv")).unwrap().contains("12.5"));
+        // Another vendor's quote sits beside it; the lowest is the price, the spread said.
+        let r = s
+            .execute(
+                "pricebook.set",
+                &json!({"key": "testkey", "unit_price": 13.0, "vendor": "Other Supply", "date": "2026-11-02", "folder": folder}),
+            )
+            .unwrap();
+        assert_eq!(r["quotes"], json!(2), "{r}");
+        let v = via(&mut s);
+        assert!(v.contains("Other Supply") && v.contains("of 2 ($13.0000-$14.0000)"), "{v}");
+        // An import older than what a vendor's quote holds is kept out; a new key is added.
         let csv = dir.join("old.csv");
-        std::fs::write(&csv, "key,description,unit,unit price $,source type,vendor / book,price date\ntestkey,old,each,9.99,WEB,Old Store,2026-01-01\nnewkey,new item,each,3.00,WEB,Some Store,2026-11-02\n").unwrap();
+        std::fs::write(&csv, "key,description,unit,unit price $,source type,vendor / book,location,price date\ntestkey,old,each,9.99,QUOTE,Test Supply,North,2026-01-01\nnewkey,new item,each,3.00,WEB,Some Store,,2026-11-02\n").unwrap();
         let r = s.execute("pricebook.import", &json!({"path": csv.to_string_lossy(), "folder": folder})).unwrap();
-        assert_eq!(r["prices"], json!({"added": 1, "updated": 0, "kept_newer": 1}), "{r}");
+        assert_eq!(r["quotes"], json!({"added": 1, "updated": 0, "kept_newer": 1}), "{r}");
         let list = s.execute("pricebook.list", &json!({"search": "testkey", "folder": folder})).unwrap();
-        assert_eq!(list["prices"][0]["unit_price"], json!(14.0), "{list}");
-        assert_eq!(list["prices"][0]["origin"], "machine");
+        assert_eq!(list["keys"][0]["price"]["unit_price"], json!(13.0), "{list}");
+        assert_eq!(list["keys"][0]["quotes"].as_array().map(Vec::len), Some(2));
+        // The rule: a vendor's quote.
+        s.execute("pricebook.settings", &json!({"pick": "vendor", "vendor": "Test Supply", "folder": folder})).unwrap();
+        assert!(via(&mut s).contains("Test Supply's quote"), "{}", via(&mut s));
         // Off, the line goes back to the other books.
         s.execute("estimate.settings", &json!({ "pricebook": false })).unwrap();
-        assert!(!via(&mut s)["via"].as_str().unwrap_or_default().starts_with("price book"));
+        assert!(!via(&mut s).starts_with("price book"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
