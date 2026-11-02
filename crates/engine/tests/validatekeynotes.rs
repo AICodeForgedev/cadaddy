@@ -3,9 +3,10 @@
 //! keynote list (1: an 8"x8"x6" box with 1" conduit and pull tape above the corridor's hard lid;
 //! 2: a 12"x12"x6" riser box with 2" conduit between the floors; 3: an 8"x8"x6" box; 4: an exit
 //! sign) and markers in hexagons: 1 and 4 in the corridor, 3 twice (one by a box of the wrong
-//! size, one with nothing there), 2 in room 101; a bare circuit number "1" with no hexagon is no
-//! marker. The exit sign is a luminaire whose schedule row says EXIT SIGN. Level 2's plan E-201
-//! has the same list and a 2 over the riser, drawn as a number over a mask.
+//! size, one with nothing there), 2 in room 101; a bare circuit number "1" with no hexagon and an
+//! equipment tag's "3" under its name are no markers. The exit sign is a luminaire whose
+//! schedule row says EXIT SIGN. Level 2's plan E-201 has the same list and a 2 over the riser,
+//! drawn as a number over a mask.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -60,6 +61,17 @@ fn marker(s: &mut Session, level: u8, p: [f64; 2], n: &str) {
     text(s, q, n, 6.0);
     let c = [q[0] + 2.0, q[1] + 3.0];
     let v: Vec<[f64; 2]> = (0..6).map(|i| f64::from(i) * std::f64::consts::PI / 3.0).map(|t| [c[0] + 9.0 * t.cos(), c[1] + 9.0 * t.sin()]).collect();
+    s.execute("pline", &json!({"vertices": v, "closed": true})).unwrap();
+}
+
+/// An equipment tag: its name over its number in a hexagon (not a keynote).
+fn equipment_tag(s: &mut Session, p: [f64; 2], name: &str, n: &str) {
+    let q = at(p);
+    layer(s, "E-ANNO-KEYN");
+    text(s, [q[0] - 6.0, q[1] + 1.0], name, 6.0);
+    text(s, [q[0] - 2.0, q[1] - 7.0], n, 6.0);
+    let v: Vec<[f64; 2]> =
+        (0..6).map(|i| f64::from(i) * std::f64::consts::PI / 3.0).map(|t| [q[0] + 14.0 * t.cos(), q[1] + 14.0 * t.sin()]).collect();
     s.execute("pline", &json!({"vertices": v, "closed": true})).unwrap();
 }
 
@@ -254,7 +266,8 @@ fn job_with(mep_spec: Value, riser_box: (&str, &str)) -> Job {
     marker(&mut s, 1, [5.0, 20.0], "2");
     // Level 2's: a number over a mask, no hexagon.
     let mut s = masked_marker(s, 2, [5.0, 20.0], "2");
-    // A circuit number, no hexagon round it: not a marker.
+    // An equipment tag (EF over 3) and a circuit number with no hexagon: not markers.
+    equipment_tag(&mut s, [3.0, 3.0], "EF", "3");
     layer(&mut s, "E-ANNO-TEXT");
     text(&mut s, at([18.0, 3.0]), "1", 6.0);
     let (s, hs) =
@@ -359,8 +372,9 @@ fn a_box_present_of_the_wrong_size_and_missing_and_the_conduit_with_its_wall() {
     assert_eq!(pen[0]["needs_hr"], 2.0);
     assert_eq!(pen[0]["from"], "wall type and keynote");
     assert!((pen[0]["at_ft"][1].as_f64().unwrap() - 12.0).abs() < 0.2, "{c}");
-    // The bare circuit number is no marker; nothing else is checked.
+    // The bare circuit number and the equipment tag's number are no markers.
     assert!(fs.iter().all(|f| (f["at"][0].as_f64().unwrap() - 18.0).abs() > 1.0), "{r}");
+    assert!(fs.iter().all(|f| (f["at"][0].as_f64().unwrap() - 3.0).abs() > 1.5), "{r}");
     // Keynote 4's exit sign: the luminaire whose schedule row says EXIT SIGN.
     let x = finding(&fs, "4", [31.0, 9.0], "exit_sign");
     assert_eq!(x["verdict"], "pass", "{x}");
