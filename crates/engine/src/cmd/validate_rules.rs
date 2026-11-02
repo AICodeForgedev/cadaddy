@@ -110,6 +110,19 @@ impl Rule {
         self.applies_to.kinds.iter().any(|r| r == "*" || k.contains(&format!("_{}_", words(r))))
     }
 
+    /// Does an element get this rule: by its kind, its BIM category (the IFC class it is
+    /// written as) or its mark (`EF-*`)?
+    pub fn applies_to_element(&self, kind: &str, category: Option<&str>, mark: Option<&str>) -> bool {
+        self.applies_to_kind(kind)
+            || category.is_some_and(|c| self.applies_to.categories.iter().any(|x| x.eq_ignore_ascii_case(c.trim())))
+            || mark.is_some_and(|m| self.applies_to.marks.iter().any(|p| mark_matches(p, m)))
+    }
+
+    /// Does this rule name kinds of element (not every element, `*`)?
+    pub fn names_kinds(&self) -> bool {
+        !self.applies_to.kinds.iter().any(|k| k == "*")
+    }
+
     /// What is wrong with the rule, if anything.
     pub fn problems(&self) -> Vec<String> {
         let mut out = Vec::new();
@@ -172,6 +185,30 @@ impl Rule {
         }
         out
     }
+}
+
+/// Does mark `m` fit pattern `p` (any case; `*` stands for any characters)?
+pub fn mark_matches(p: &str, m: &str) -> bool {
+    let (p, m) = (p.trim().to_ascii_uppercase(), m.trim().to_ascii_uppercase());
+    if m.is_empty() || p.is_empty() {
+        return false;
+    }
+    let parts: Vec<&str> = p.split('*').collect();
+    let (Some(first), Some(last)) = (parts.first(), parts.last()) else { return false };
+    if parts.len() == 1 {
+        return p == m;
+    }
+    if !m.starts_with(first) || !m.get(first.len()..).is_some_and(|rest| rest.ends_with(last)) || m.len() < first.len() + last.len() {
+        return false;
+    }
+    let mut rest = m.get(first.len()..m.len().saturating_sub(last.len())).unwrap_or_default();
+    for mid in parts.iter().skip(1).take(parts.len().saturating_sub(2)) {
+        match rest.find(mid) {
+            Some(i) => rest = rest.get(i + mid.len()..).unwrap_or_default(),
+            None => return false,
+        }
+    }
+    true
 }
 
 /// Lower case, words joined by `_`.
@@ -245,7 +282,7 @@ pub struct Override {
 
 /// Is `key` (a project rule key) a validation rule override?
 pub fn is_override_key(key: &str) -> bool {
-    key.trim().to_ascii_lowercase().starts_with(KEY_PREFIX)
+    key.trim().to_ascii_lowercase().starts_with(KEY_PREFIX) && !super::validate_kind::is_kind_key(key)
 }
 
 /// Read a project rule as a validation rule override: the rule must exist, the field be one a
@@ -634,6 +671,40 @@ mod tests {
         assert!(gfci.contains("E-RECEPT-TYPE") && gfci.contains("G-HOST"), "{gfci:?}");
         assert!(!got("pipe").contains("M-DUCT-SIZE"));
         assert!(got("duct").contains("M-DUCT-SIZE"));
+    }
+
+    #[test]
+    fn an_element_gets_a_rule_by_kind_category_or_mark() {
+        let rules = builtin().unwrap();
+        let rule = |id: &str| rules.iter().find(|r| r.id == id).unwrap();
+        let host = rule("G-HOST");
+        assert!(!host.applies_to_element("device", None, Some("REC")), "a generic device with a mark names nothing");
+        assert!(host.applies_to_element("device", Some("IfcOutlet"), None));
+        assert!(host.applies_to_element("gfci_receptacle", None, None));
+        assert!(rule("M-TERMINAL").applies_to_element("fixture", Some("ifcairterminal"), None));
+        let mut ef = rule("M-EF").clone();
+        ef.applies_to.marks = vec!["EF-*".into()];
+        assert!(ef.applies_to_element("device", None, Some("ef-2")) && !ef.applies_to_element("device", None, Some("REF-2")));
+        assert!(host.names_kinds() && !rule("G-HEIGHT").names_kinds());
+    }
+
+    #[test]
+    fn mark_patterns_match_any_case_with_stars() {
+        for (p, m) in [("EF-*", "EF-12"), ("ef-*", "EF-"), ("*-A", "LP-A"), ("L*-*2", "LP-1A2"), ("REC", "rec"), ("*", "X")] {
+            assert!(mark_matches(p, m), "{p} {m}");
+        }
+        for (p, m) in [("EF-*", "REF-1"), ("*-A", "LP-B"), ("REC", "REC2"), ("L*-*2", "LP-1A"), ("", "A"), ("A*", ""), ("AB*B", "AB"), ("É*", "E")] {
+            assert!(!mark_matches(p, m), "{p} {m}");
+        }
+    }
+
+    #[test]
+    fn a_marks_kind_is_no_rule_override() {
+        assert!(!is_override_key("validate.kind.REC") && is_override_key("validate.G-HOST.enabled"));
+        let mut pr = ProjectRules::default();
+        pr.set(RuleDomain::Custom, "validate.kind.REC", RuleValue::new("receptacle"), "the legend");
+        let (_, rejected) = effective(&pr).unwrap();
+        assert!(rejected.is_empty(), "{rejected:?}");
     }
 
     #[test]

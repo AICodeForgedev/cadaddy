@@ -21,6 +21,13 @@
 //! The room type is matched against the room's name (`guest room` matches `GUEST ROOM 214`)
 //! and its unit type (`unittypes`: the type's id or name); the longest key that matches wins.
 //!
+//! A rule applies to an element by its kind, its BIM category or its mark. A generic element
+//! (the job's devices are kind `device` with the plan tag as their mark) is read as what its
+//! records, the job's legend and tables or the project's `validate.kind.<mark>` rules say it is
+//! ([`super::validate_kind`]). `checked` lists every rule run (0 when it found nothing to
+//! check); `unmatched` counts, by kind and mark, the elements no rule naming kinds applies to,
+//! and `unmeasured` the ones a rule applies to but could not measure, by why.
+//!
 //! The same numbers go into each packet's `objects.json` (`prescreen`) and the Validate run's
 //! pre-screen counts. The tolerances, severities and on/off of G-HOST, G-HEIGHT and G-PRESENT
 //! are the project's (`validate.rules.set`).
@@ -36,6 +43,7 @@ use serde_json::{Value, json};
 use super::agentready::ANSWER_MAX;
 use super::bspec::current;
 use super::validate::{Frame, model_of, prints_of};
+use super::validate_kind::Kinds;
 use super::validate_packet::{Area, compass, grow, inside, point_in, pt, r2, seg_dist};
 use super::validate_rules::{self as vr, Effective};
 use super::*;
@@ -65,7 +73,7 @@ const MAX_WRITTEN: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Validation Prescreen", run_prescreen)
-            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra}}, total, problems, findings: [{id, rule, handle?, kind?, verdict, issue, expected, found, measured, confidence, severity, area?, level, at?, source: \"prescreen\"}], next?, rooms_without_set, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST), each element's height above its floor against the documents (G-HEIGHT), and each room type's expected set (project rules `prescreen.expect.<room type>`) against what the room holds (G-PRESENT)")
+            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}}, total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict, issue, expected, found, measured, confidence, severity, area?, level, at?, source: \"prescreen\"}], next?, rooms_without_set, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST), each element's height above its floor against the documents (G-HEIGHT), and each room type's expected set (project rules `prescreen.expect.<room type>`) against what the room holds (G-PRESENT)")
             .noundo()
             .files(),
     ]
@@ -339,7 +347,14 @@ fn set_for<'a>(sets: &'a [(String, Vec<Expect>)], name: Option<&str>, unit: Opti
 #[derive(Clone, Debug)]
 struct Item {
     handle: String,
+    /// What it is: its own kind, else what its records, the job's tables or the project say
+    /// ([`super::validate_kind`]).
     kind: String,
+    /// Where `kind` came from (`element`, `stored`, `bim_type`, `legend`, `symbol_table`,
+    /// `project_rule`, `unresolved`).
+    kind_from: &'static str,
+    /// Its BIM category (IFC class).
+    category: Option<String>,
     mark: Option<String>,
     name: Option<String>,
     level: String,
@@ -362,22 +377,29 @@ impl Item {
     }
 }
 
-/// The plan elements of the model and the parts the build made that no plan element stands for.
-fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame) -> Vec<Item> {
+/// The plan elements of the model and the parts the build made that no plan element stands for,
+/// each with its kind resolved.
+fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &Kinds) -> Vec<Item> {
     let mut out: Vec<Item> = model
         .elements
         .iter()
         .take(MAX_ELEMENTS)
-        .map(|e| Item {
-            handle: e.id.clone(),
-            kind: e.kind.clone(),
-            mark: e.mark.clone(),
-            name: e.fields.get("description").or_else(|| e.fields.get("name")).cloned(),
-            level: e.level.clone(),
-            at: e.at,
-            z_in: e.z_in,
-            mounting: if e.mounting == Mounting::Unknown { v::mounting_of(&e.kind) } else { e.mounting },
-            built: false,
+        .map(|e| {
+            let ent = cadaddy_doc::Handle::parse_hex(&e.id).and_then(|h| d.model.get(h)).map(|a| a.as_ref());
+            let r = kinds.resolve(&e.kind, e.mark.as_deref().or(e.tag.as_deref()), ent);
+            Item {
+                handle: e.id.clone(),
+                mounting: if e.mounting == Mounting::Unknown { v::mounting_of(&r.kind) } else { e.mounting },
+                kind: r.kind,
+                kind_from: r.from,
+                category: r.category,
+                mark: e.mark.clone(),
+                name: e.fields.get("description").or_else(|| e.fields.get("name")).cloned(),
+                level: e.level.clone(),
+                at: e.at,
+                z_in: e.z_in,
+                built: false,
+            }
         })
         .collect();
     let plan: BTreeSet<String> = model.elements.iter().map(|e| e.id.to_ascii_uppercase()).collect();
@@ -415,10 +437,14 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame) -> Vec<It
             _ => (None, Mounting::Other),
         };
         let c = super::bimlook::classify(d, e);
+        let mark = super::validate_kind::mark_of(e);
+        let r = kinds.resolve(&kind, mark.as_deref(), Some(e));
         out.push(Item {
             handle: e.handle.hex(),
-            kind,
-            mark: super::bimlook::made_tag(e, "tag").map(str::to_string).filter(|t| !t.is_empty()),
+            kind: r.kind,
+            kind_from: r.from,
+            category: r.category,
+            mark,
             name: c.map(|c| c.ty),
             level,
             at,
@@ -494,6 +520,52 @@ pub(crate) struct Screened {
     pub without_set: BTreeSet<String>,
     pub disabled: Vec<String>,
     pub bad_sets: Vec<(String, String)>,
+    /// The elements no rule naming kinds applies to (only the rules for every element do):
+    /// how many, by kind and by mark, and the first few.
+    pub unmatched: Unmatched,
+    /// Per rule: elements it applies to but could not measure, by why.
+    pub unmeasured: BTreeMap<String, BTreeMap<String, u64>>,
+}
+
+/// Elements no rule naming kinds applies to.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Unmatched {
+    pub elements: u64,
+    pub kinds: BTreeMap<String, u64>,
+    pub marks: BTreeMap<String, u64>,
+    pub handles: Vec<String>,
+}
+
+impl Unmatched {
+    /// Handles listed, at most.
+    const MAX_HANDLES: usize = 20;
+
+    fn add(&mut self, kind: &str, mark: Option<&str>, handle: &str) {
+        self.elements += 1;
+        *self.kinds.entry(kind.to_string()).or_default() += 1;
+        *self.marks.entry(mark.map_or_else(|| "(none)".to_string(), str::to_string)).or_default() += 1;
+        if self.handles.len() < Self::MAX_HANDLES {
+            self.handles.push(handle.to_string());
+        }
+    }
+
+    /// Kinds and marks listed, at most (the most common).
+    const MAX_LISTED: usize = 30;
+
+    pub(crate) fn to_json(&self) -> Value {
+        let top = |m: &BTreeMap<String, u64>| -> serde_json::Map<String, Value> {
+            let mut v: Vec<(&String, &u64)> = m.iter().collect();
+            v.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+            v.into_iter().take(Self::MAX_LISTED).map(|(k, n)| (k.clone(), json!(n))).collect()
+        };
+        json!({
+            "elements": self.elements,
+            "kinds": top(&self.kinds),
+            "marks": top(&self.marks),
+            "handles": self.handles,
+            "why": if self.elements == 0 { Value::Null } else { json!(format!("no rule but the ones for every element applies to these kinds; name what each mark is with the project rule `{}<mark>` (domain custom), e.g. `{}REC = receptacle`", super::validate_kind::KIND_PREFIX, super::validate_kind::KIND_PREFIX)) },
+        })
+    }
 }
 
 impl Screened {
@@ -501,7 +573,7 @@ impl Screened {
         self.findings.iter().filter(|f| f["verdict"] != "pass").count()
     }
     pub(crate) fn summary(&self) -> Value {
-        json!({"call": CMD, "problems": self.problems(), "checked": self.checked, "rooms_without_set": self.without_set.len()})
+        json!({"call": CMD, "problems": self.problems(), "checked": self.checked, "unmatched": self.unmatched.elements, "rooms_without_set": self.without_set.len()})
     }
 }
 
@@ -534,7 +606,8 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         let list = by_level.get(&it.level.to_ascii_lowercase())?;
         list.iter().find(|a| inside(a.bbox, it.at) && (a.outline.len() < 3 || point_in(&a.outline, it.at))).copied()
     };
-    let all = items(sc.d, sc.sp, sc.model, sc.frame);
+    let kinds = Kinds::of(sc.d, sc.sp, sc.prints);
+    let all = items(sc.d, sc.sp, sc.model, sc.frame, &kinds);
     let mine: Vec<(&Item, Option<&Area>)> = all
         .iter()
         .filter(|it| levels.contains(&it.level.to_ascii_lowercase()))
@@ -551,6 +624,21 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     }
     let mut findings: Vec<(u8, Value)> = Vec::new();
     let mut checked: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
+    // Every rule run is listed, with its counts (0 when it found nothing to check).
+    for (id, verdicts) in [("G-HOST", &["pass", "fail"][..]), ("G-HEIGHT", &["pass", "fail"][..]), ("G-PRESENT", &["pass", "missing", "extra"][..])] {
+        if on(id).is_some() {
+            checked.insert(id.to_string(), verdicts.iter().map(|v| (v.to_string(), 0)).collect());
+        }
+    }
+    let mut unmeasured: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
+    let mut unmatched = Unmatched::default();
+    let specific: Vec<&Effective> = sc.rules.iter().filter(|r| r.enabled && r.rule.names_kinds()).collect();
+    for (it, _) in &mine {
+        if !specific.iter().any(|r| r.rule.applies_to_element(&it.kind, it.category.as_deref(), it.mark.as_deref())) {
+            unmatched.add(&it.kind, it.mark.as_deref(), &it.handle);
+        }
+    }
+    let applies = |r: &Effective, it: &Item| r.rule.applies_to_element(&it.kind, it.category.as_deref(), it.mark.as_deref());
     let mut tally = |rule: &str, verdict: &str| *checked.entry(rule.to_string()).or_default().entry(verdict.to_string()).or_default() += 1;
     let sev_rank = |s: &str| match s {
         "high" => 0u8,
@@ -564,6 +652,8 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             "rule": r.rule.id,
             "handle": it.handle,
             "kind": it.kind,
+            "kind_from": it.kind_from,
+            "mark": it.mark,
             "built": it.built,
             "verdict": verdict,
             "issue": issue,
@@ -582,7 +672,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     // G-HOST: the wall face.
     if let Some(r) = on("G-HOST") {
         let t = tol(r, "plan_in", 6.0);
-        for (it, a) in mine.iter().filter(|(it, _)| it.mounting != Mounting::Ceiling && r.rule.applies_to_kind(&it.kind)) {
+        for (it, a) in mine.iter().filter(|(it, _)| it.mounting != Mounting::Ceiling && applies(r, it)) {
             let near = walls.get(&it.level.to_ascii_lowercase()).map(|ws| nearest_wall(it.at, ws.iter().copied(), HOST_SEARCH_FT)).unwrap_or(None);
             let (verdict, issue, found, measured) = match &near {
                 Some(f) if f.off_face_in.abs() <= t => {
@@ -614,9 +704,16 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     // G-HEIGHT: the height above the floor against the documents.
     if let Some(r) = on("G-HEIGHT") {
         let t = tol(r, "height_in", 2.0);
-        for (it, a) in mine.iter().filter(|(it, _)| it.mounting == Mounting::Wall && r.rule.applies_to_kind(&it.kind)) {
-            let Some(z) = it.z_in else { continue };
-            let Some((want, src)) = expected_height(it, *a, sc.prints, &sc.d.project_rules) else { continue };
+        for (it, a) in mine.iter().filter(|(it, _)| it.mounting == Mounting::Wall && applies(r, it)) {
+            let mut skip = |why: &str| *unmeasured.entry(r.rule.id.clone()).or_default().entry(why.to_string()).or_default() += 1;
+            let Some(z) = it.z_in else {
+                skip("no height in the model");
+                continue;
+            };
+            let Some((want, src)) = expected_height(it, *a, sc.prints, &sc.d.project_rules) else {
+                skip("no height in the documents or project rules for its kind or mark");
+                continue;
+            };
             let off = z - want;
             let verdict = if off.abs() <= t { "pass" } else { "fail" };
             tally(&r.rule.id, verdict);
@@ -713,7 +810,17 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         };
         a.0.cmp(&b.0).then_with(|| k(&a.1).cmp(&k(&b.1)))
     });
-    Screened { findings: findings.into_iter().map(|(_, f)| f).collect(), checked, elements: mine.len(), rooms, without_set, disabled, bad_sets }
+    Screened {
+        findings: findings.into_iter().map(|(_, f)| f).collect(),
+        checked,
+        elements: mine.len(),
+        rooms,
+        without_set,
+        disabled,
+        bad_sets,
+        unmatched,
+        unmeasured,
+    }
 }
 
 // ---------------------------------------------------------------- the command
@@ -763,7 +870,7 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
     let total = listed.len();
     let mut written = Value::Null;
     if let Some(f) = &path {
-        let body = json!({"scope": key, "checked": out.checked, "findings": listed.iter().take(MAX_WRITTEN).collect::<Vec<_>>()});
+        let body = json!({"scope": key, "checked": out.checked, "unmatched": out.unmatched.to_json(), "unmeasured": out.unmeasured, "findings": listed.iter().take(MAX_WRITTEN).collect::<Vec<_>>()});
         let text = serde_json::to_string_pretty(&body).map_err(|e| bad(CMD, e.to_string()))?;
         super::exchange::write_file(CMD, f, text.as_bytes())?;
         written = json!(f);
@@ -775,6 +882,8 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
         "rooms": out.rooms,
         "elements": out.elements,
         "checked": out.checked,
+        "unmatched": out.unmatched.to_json(),
+        "unmeasured": out.unmeasured,
         "total": total,
         "problems": out.problems(),
         "cursor": cursor,
@@ -961,6 +1070,8 @@ mod tests {
         let it = Item {
             handle: "1A".into(),
             kind: "gfci_receptacle".into(),
+            kind_from: "element",
+            category: None,
             mark: Some("EF-2".into()),
             name: Some("Duplex Receptacle".into()),
             level: "L1".into(),
