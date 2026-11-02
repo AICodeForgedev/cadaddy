@@ -18,7 +18,10 @@
       "kinds": ["receptacle", "quad_receptacle", "gfci_receptacle", "ceiling_receptacle"],
       "sets": "gfci",
       "rule": "GFCI protection is judged per circuit: a receptacle on a GFCI (or dual-function) breaker is already protected and is a standard device; where the print tags GFCI and the breaker isn't, the first device on the circuit is a GFCI receptacle and the ones after it on its load side are standard. A GFCI receptacle on a GFCI breaker is double protection. When the breaker's type isn't known the decision is left undecided.",
-      "tags": ["GFCI", "GFI", "GF"]
+      "tags": ["GFCI", "GFI", "GF"],
+      "sink_reach_ft": 6,
+      "sink_words": ["SINK", "LAV", "LAVATORY", "KITCHENETTE"],
+      "location_rule": "A receptacle the print doesn't tag GFCI needs it within 6 ft of the outside edge of a sink (NEC 210.8(A)(7), (B)(5)); it is decided by its circuit like a tagged one."
     }
   ]
 }

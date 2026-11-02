@@ -317,6 +317,27 @@ fn a_devices_breaker_type_is_its_printed_schedule_rows() {
     assert!(a["tr_documented"]["value"].as_str().is_some_and(|d| d.starts_with("26 27 26") && d.to_ascii_uppercase().contains("TAMPER")), "{a:#}");
     assert_eq!(a["tr_documented"]["source"]["kind"], "spec");
     let _ = std::fs::remove_dir_all(&dir);
+    // Beside a sink on an AFCI-only breaker, the untagged receptacle needs GFCI: the circuit's
+    // first (here its only one) is the GFCI device.
+    let sched = json!({"mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF"], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).unwrap();
+    fill(&mut s);
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["gfci_breaker"]["value"], "no", "{a:#}");
+    let at: Vec<f64> = a["location"]["value"].as_str().unwrap().split(',').map(|v| v.trim().parse().unwrap()).collect();
+    let sink = find(&mut s, "fixture", json!({}));
+    assert!(!sink.is_empty(), "the plan's diffuser");
+    let level = a["level"]["value"].clone();
+    for (k, v) in [("type", json!("SINK")), ("location", json!(format!("{:.2}, {:.2}, 3.00", at[0] + 4.0, at[1]))), ("level", level)] {
+        s.execute("bim.props.set", &json!({"handle": sink[0], "key": k, "value": v})).unwrap();
+    }
+    let r = s.execute("bim.coderules", &json!({})).unwrap();
+    let a = device_of(&mut s, "A");
+    let sk = get(&mut s, &sink[0]);
+    assert_eq!(a["gfci"]["value"], "device", "{r:#} {a:#} SINK {sk:#}");
+    assert_eq!(a["receptacle_type"]["value"], "GFCI");
+    assert!(a["receptacle_type"]["source"]["doc"].as_str().is_some_and(|d| d.contains("needs GFCI") && d.contains("sink")), "{a:#}");
 }
 
 #[test]
