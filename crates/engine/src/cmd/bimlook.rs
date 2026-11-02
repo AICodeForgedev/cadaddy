@@ -888,14 +888,22 @@ fn quantity(c: &Class, e: &Entity, upf: f64) -> Value {
     let height = if z1 >= z0 { z1 - z0 } else { 0.0 };
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
     let r2 = |v: f64| (v * 100.0).round() / 100.0;
+    // Its plan area: its faces facing up, or (a ceiling drawn as one face seen from below) down,
+    // whichever there is more of. Never -0 (an empty sum of floats).
     let up_area = || {
-        m.triangles()
-            .into_iter()
-            .take(400_000)
-            .map(|t| (t[1] - t[0]).cross(t[2] - t[0]))
-            .filter(|n| n.is_finite() && n.len() > 0.0 && (n.z / n.len()) > 0.7)
-            .map(|n| n.len() * 0.5)
-            .sum::<f64>()
+        let (mut up, mut down) = (0.0_f64, 0.0_f64);
+        for n in m.triangles().into_iter().take(400_000).map(|t| (t[1] - t[0]).cross(t[2] - t[0])) {
+            if !n.is_finite() || n.len() <= 0.0 {
+                continue;
+            }
+            let k = n.z / n.len();
+            if k > 0.7 {
+                up += n.len() * 0.5;
+            } else if k < -0.7 {
+                down += n.len() * 0.5;
+            }
+        }
+        up.max(down).max(0.0)
     };
     match c.category.as_str() {
         "Walls" | "Parapets" | "Railings" | "Curtain Walls" => {
@@ -934,7 +942,7 @@ fn placement(s: &Session, e: &Entity, c: &Class) -> serde_json::Map<String, Valu
         return out;
     }
     let r2 = |v: f64| if v.is_finite() { (v * 100.0).round() / 100.0 } else { 0.0 };
-    let at = frame.to_ft_on(&c.level, b.center());
+    let at = frame.built_on(&c.level, e, b.center());
     out.insert("at".into(), json!([r2(at[0]), r2(at[1])]));
     let z = match &e.kind {
         EntityKind::Mesh(m) => {
@@ -1089,4 +1097,26 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(out);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod quantity_tests {
+    use super::*;
+
+    #[test]
+    fn a_ceiling_drawn_as_one_face_from_below_has_its_area() {
+        // A 10' x 12' ceiling (inches) facing down, and an empty mesh: 120 sf, and 0 (not -0).
+        let sq = [(0.0, 0.0), (0.0, 144.0), (120.0, 144.0), (120.0, 0.0)].map(|(x, y)| Vec3::new(x, y, 108.0));
+        let m = cadaddy_doc::Mesh {
+            vertices: sq.to_vec(),
+            faces: vec![cadaddy_doc::MeshFace { v: vec![0, 1, 2, 3], hidden: 0 }],
+            kind: cadaddy_doc::MeshKind::Polyface,
+        };
+        let class = Class { key: "ceiling", group: "architecture", category: "Ceilings".into(), ty: String::new(), level: String::new() };
+        let q = quantity(&class, &Entity::new(Handle(1), EntityKind::Mesh(m)), 12.0);
+        assert_eq!(q["area_sf"], json!(120.0), "{q}");
+        let empty = cadaddy_doc::Mesh { vertices: Vec::new(), faces: Vec::new(), kind: cadaddy_doc::MeshKind::Polyface };
+        let q = quantity(&class, &Entity::new(Handle(2), EntityKind::Mesh(empty)), 12.0);
+        assert!(q["area_sf"].as_f64().is_some_and(|a| a == 0.0 && a.is_sign_positive()), "{q}");
+    }
 }

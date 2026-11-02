@@ -73,7 +73,7 @@ const LOOP: &str =
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD_START, "Validate Model Against Prints (Agent)", run_start).params(
-            "{scope?: selection|area|room|level|building (building), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level} (scope area), room?: number or name (scope room), level?: name (scope level), trades?: [architecture|electrical|mechanical|plumbing|fire|general], rules?: [rule id], out_dir?: folder for the packets, each run in a folder of its own named by its id (default: a folder named after the drawing plus \" validate\", beside it), force?: bool (judge unchanged areas again)} → {run, areas: [{id, status}], areas_total, pending, unchanged, prescreen, out_dir, next: \"validate.next\", loop, waiting?}: starts (or resumes) a Validate run. The judge is the connected agent: it loops validate.next → judges the packet by its rules → validate.report, until done; then validate.status",
+            "{scope?: selection|area|room|level|building (default from what is given: area, else room, else level, else building), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level} (scope area), room?: number or name (scope room; with level: on that level), level?: name (scope level), trades?: [architecture|electrical|mechanical|plumbing|fire|general], rules?: [rule id], out_dir?: folder for the packets, each run in a folder of its own named by its id (default: a folder named after the drawing plus \" validate\", beside it), force?: bool (judge unchanged areas again)} → {run, areas: [{id, status}], areas_total, pending, unchanged, prescreen, out_dir, next: \"validate.next\", loop, waiting?}: starts (or resumes) a Validate run. The judge is the connected agent: it loops validate.next → judges the packet by its rules → validate.report, until done; then validate.status",
         ),
         CommandSpec::new(CMD_NEXT, "Next Validation Packet", run_next).files().params(
             "{run?: id (the latest), area?: id (this one again)} → {run, area, packet: {dir, manifest, prompt, objects, rules}, rules, images, prompt?, remaining, report: {call: \"validate.report\", params}} | {run, done: true, next: \"validate.status\"}: writes the next area's evidence packet and hands it to the judge; read prompt.md and the pictures, judge every rule for every element, then validate.report",
@@ -422,7 +422,14 @@ fn run_index(st: &Store, id: &str) -> Option<usize> {
     st.runs.iter().position(|r| r.id == id)
 }
 
-/// The areas of a scope, and the scope as kept in the run.
+/// The scope a call without `scope` asks for, from what it gives: `area`, else `room`, else
+/// `level`; the whole building when it gives none of them.
+pub(crate) fn inferred_scope(p: &Value) -> &'static str {
+    ["area", "room", "level"].into_iter().find(|k| p.get(*k).is_some_and(|v| !v.is_null())).unwrap_or("building")
+}
+
+/// The areas of a scope (`scope`, else inferred from what is given: [`inferred_scope`]), and
+/// the scope as kept in the run.
 pub(crate) fn scope_areas(
     s: &Session,
     cmd: &str,
@@ -432,7 +439,7 @@ pub(crate) fn scope_areas(
     model: &Model,
     frame: &Frame,
 ) -> Result<(Value, Vec<Area>)> {
-    let scope = str_param(p, "scope").map(|x| x.trim().to_ascii_lowercase()).unwrap_or_else(|| "building".into());
+    let scope = str_param(p, "scope").map(|x| x.trim().to_ascii_lowercase()).unwrap_or_else(|| inferred_scope(p).into());
     if !SCOPES.contains(&scope.as_str()) {
         return Err(bad(cmd, format!("unknown scope {} ({})", cut(&scope, 30), SCOPES.join(", "))));
     }
@@ -464,20 +471,20 @@ pub(crate) fn scope_areas(
                 .map(str::trim)
                 .filter(|r| !r.is_empty())
                 .ok_or_else(|| bad(cmd, "scope room needs `room` (its number or name)"))?;
-            let base = |id: &str| id.split('#').next().unwrap_or(id).to_string();
-            let a: Vec<Area> = all
-                .into_iter()
-                .filter(|a| {
-                    a.number.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(r))
-                        || a.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(r))
-                        || a.id.eq_ignore_ascii_case(r)
-                        || base(&a.id).eq_ignore_ascii_case(r)
-                })
-                .collect();
+            // On one level when the call names it (a number may repeat on another floor).
+            let level = match str_param(p, "level").map(str::trim).filter(|l| !l.is_empty()) {
+                Some(l) => Some(sp.level(l).map(|x| x.name.clone()).ok_or_else(|| bad(cmd, format!("there is no level named {}", cut(l, 40))))?),
+                None => None,
+            };
+            let a: Vec<Area> =
+                all.into_iter().filter(|a| vp::names_room(a, r) && level.as_ref().is_none_or(|l| a.level.eq_ignore_ascii_case(l))).collect();
             if a.is_empty() {
                 return Err(bad(cmd, format!("no model room is numbered or named {} (validate.areas lists them)", cut(r, 40))));
             }
-            (json!({"scope": "room", "room": r}), a)
+            match level {
+                Some(l) => (json!({"scope": "room", "room": r, "level": l}), a),
+                None => (json!({"scope": "room", "room": r}), a),
+            }
         }
         "area" => {
             if p.get("area").is_none_or(Value::is_null) {

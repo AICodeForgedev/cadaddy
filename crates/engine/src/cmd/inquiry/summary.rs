@@ -29,7 +29,7 @@ pub(super) const QUERY_PARAMS: &str = "{type?: Line|Circle|… (or DXF name), la
      limit? (default 1000, at most 100000), offset?} → {count (all matches), returned, offset, handles, objects: [{handle, type, layer, space}]}";
 
 /// INSUNITS names, as the Drawing Units dialog shows them.
-fn units_name(code: i64) -> &'static str {
+pub(super) fn units_name(code: i64) -> &'static str {
     match code {
         1 => "Inches",
         2 => "Feet",

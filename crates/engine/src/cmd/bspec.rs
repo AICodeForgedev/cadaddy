@@ -1417,6 +1417,11 @@ fn add_room_elements(
         }
         xdata.push(tg(1000, format!("area_sf:{:.2}", area_sf)));
         xdata.push(tg(1000, format!("ceiling_ft:{:.2}", ceiling_ft)));
+        let source = match room.filter(|r| r.ceiling_ft.is_some()) {
+            Some(r) => r.ceiling_source.clone().unwrap_or_else(|| "the room's own spec".into()),
+            None => format!("{}'s ceiling height (no room height printed)", level.name),
+        };
+        xdata.push(tg(1000, format!("ceiling_source:{}", clip(&source))));
         if let Some(f) = &finish {
             xdata.push(tg(1000, format!("finish:{}", clip(f))));
         }

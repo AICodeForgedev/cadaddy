@@ -249,6 +249,66 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
     }
 }
 
+/// Whether an object refers to a block definition (an insert, a dimension's picture, a multileader
+/// with a block): its bounds take that block's contents.
+fn refers_to_block(k: &EntityKind) -> bool {
+    matches!(k, EntityKind::Insert(_) | EntityKind::Dimension(_) | EntityKind::MLeader(_))
+}
+
+/// Whether an object's own bounds (with its block's contents, for an insert) reach beyond `limit`
+/// of the origin or aren't finite.
+fn beyond<'a>(d: &'a Drawing, e: &Entity, depth: usize, limit: f64, blocks: &mut HashMap<(&'a str, usize), Bounds2>) -> bool {
+    let b = bounds_in(d, e, depth, blocks);
+    !b.is_empty() && !crate::within_limit(&b, limit)
+}
+
+impl Drawing {
+    /// Drop every object whose bounds reach beyond `limit` of the origin or aren't finite: a
+    /// radius, text height, insert scale, width or bulge puts an object there as surely as a
+    /// coordinate does (hostile or damaged files). Block definitions go first, in block
+    /// coordinates, their references to other blocks after the plain objects so that they measure
+    /// what is left; then model space and the layouts. Returns how many objects were dropped.
+    pub fn drop_beyond_limit(&mut self, limit: f64) -> usize {
+        let mut dropped = 0usize;
+        for refs in [false, true] {
+            let doomed: Vec<(String, crate::Handle)> = {
+                let mut cache = HashMap::new();
+                let d: &Drawing = self;
+                d.blocks
+                    .iter()
+                    .flat_map(|(k, b)| b.entities.iter().map(move |e| (k, e)))
+                    .filter(|(_, e)| refers_to_block(&e.kind) == refs)
+                    .filter(|(_, e)| beyond(d, e, 1, limit, &mut cache))
+                    .map(|(k, e)| (k.clone(), e.handle))
+                    .collect()
+            };
+            for (k, h) in doomed {
+                if let Some(b) = self.blocks.get_mut(&k).map(std::sync::Arc::make_mut)
+                    && b.entities.remove(h).is_some()
+                {
+                    dropped = dropped.saturating_add(1);
+                }
+            }
+        }
+        let doomed: Vec<crate::Handle> = {
+            let mut cache = HashMap::new();
+            let d: &Drawing = self;
+            d.model
+                .iter()
+                .chain(d.layouts.iter().flat_map(|l| l.entities.iter()))
+                .filter(|e| beyond(d, e, 0, limit, &mut cache))
+                .map(|e| e.handle)
+                .collect()
+        };
+        for h in doomed {
+            if self.remove_entity(h).is_some() {
+                dropped = dropped.saturating_add(1);
+            }
+        }
+        dropped
+    }
+}
+
 /// The polyline's drawn extent: its centre line, widened by the filled band of every segment,
 /// with the constant width or each segment's own start/end widths tapering along it, as drawn.
 fn lwpolyline_bounds(p: &LwPolyline) -> Bounds2 {
