@@ -56,7 +56,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("preview", "Plot Preview", run_preview)
             .menu(&["File", "Plot Preview"])
             .alias(&["pre"])
-            .params("{layout?: current|\"Model\", paper?, landscape?, fit?, scale?, lineweights?, plotTransparency?, width?: pixels (default 1200)} → {data: base64 PNG, width, height, layout, paper, resolution?}: the plot itself as an image (PLOT output png at `resolution` dpi), plot styles applied")
+            .params("{layout?: current|\"Model\", paper?, landscape?, fit?, scale?, lineweights?: bool, plotTransparency?, width?: pixels (default 1200)} → {data: base64 PNG, width, height, layout, paper, resolution?}: the plot itself as an image (PLOT output png at `resolution` dpi), plot styles applied")
             .noundo(),
         CommandSpec::new("publish", "Batch Publish...", run_publish)
             .menu(&["File", "Batch Publish..."])

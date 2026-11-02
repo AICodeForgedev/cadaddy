@@ -93,7 +93,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("parameters", "Parameters Manager", run_parameters)
             .menu(&["Tools", "Parametric", "Parameters Manager"])
             .alias(&["par", "parametersclose"])
-            .params("{} lists; {name, expr | value, description?} sets (new name = user parameter) and re-solves; {name, description} sets only the description; {rename: [old, new]} (expressions using it follow); {delete: name} (a dimensional constraint's parameter deletes the constraint; refused while another parameter uses it)"),
+            .params("{} lists; {name, expr | value: number, description?} sets (new name = user parameter) and re-solves; {name, description} sets only the description; {rename: [old, new]} (expressions using it follow); {delete: name} (a dimensional constraint's parameter deletes the constraint; refused while another parameter uses it)"),
         CommandSpec::new("constraintsettings", "Constraint Settings", run_constraintsettings)
             .menu(&["Tools", "Parametric", "Constraint Settings"])
             .alias(&["csettings"])

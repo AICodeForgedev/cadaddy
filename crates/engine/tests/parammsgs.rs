@@ -67,8 +67,10 @@ fn every_plainly_typed_parameter_refuses_a_wrong_value() {
             let mut p = serde_json::Map::new();
             p.insert(k.to_string(), json!({ "a": [1] }));
             let params = Value::Object(p);
+            // A field of a value given at the top (`view {angle}`, `ucs`'s) is refused as no
+            // parameter of the command (battle test 7 B7-019).
             if let Err(e) = s.execute_agent(spec.id, &params)
-                && e.to_string().contains(&format!("`{k}` must be"))
+                && (e.to_string().contains(&format!("`{k}` must be")) || e.to_string().contains(&format!("`{k}` is not a parameter")))
             {
                 refused += 1;
                 continue;

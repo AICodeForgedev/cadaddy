@@ -281,6 +281,10 @@ fn run_qselect(s: &mut Session, p: &Value) -> Result<Value> {
     if prop.is_some() && value.is_none() && !matches!(op, Some(Op::Wild)) {
         return Err(bad(cmd, "`value` is required with `property`"));
     }
+    // A value with nothing to compare it to selected everything (battle test 7 B7-019).
+    if prop.is_none() && value.as_ref().is_some_and(|v| !v.is_null()) {
+        return Err(bad(cmd, "`value` needs `property` (the property to compare it with)"));
+    }
     let mode = str_param(p, "mode").unwrap_or("new").to_ascii_lowercase();
     if !["new", "append", "exclude", "include"].contains(&mode.as_str()) {
         return Err(bad(cmd, format!("unknown mode `{mode}` (use new, append or exclude)")));
