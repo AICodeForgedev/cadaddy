@@ -45,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("arrayrect", "Rectangular Array", run_arrayrect)
             .menu(&["Modify", "Array", "Rectangular Array"])
             .params(
-                "{handles?, rows, cols, rowSpacing, colSpacing, levels? (1), levelSpacing?, rowElevation?, axisAngle? (degrees), base? ([x, y], default the objects' centre), associative?: bool (default ARRAYASSOCIATIVITY, on)} → {handle (the array, when associative), created (copies)}",
+                "{handles?, rows, cols, rowSpacing, colSpacing, columns? (same as cols), columnSpacing? (same as colSpacing), levels? (1), levelSpacing?, rowElevation?, axisAngle? (degrees), base? ([x, y], default the objects' centre), associative?: bool (default ARRAYASSOCIATIVITY, on)} → {handle (the array, when associative), created (copies)}",
             )
             .interactive(|_| Ok(Box::new(RectM::default()))),
         CommandSpec::new("arraypolar", "Polar Array", run_arraypolar)
@@ -347,6 +347,17 @@ fn run_array(s: &mut Session, p: &Value) -> Result<Value> {
     (spec.run)(s, p)
 }
 
+/// Which of `short` (`cols`, `colSpacing`) and AutoCAD's own word for it (`columns`,
+/// `columnSpacing`, the grips' name) a call gives: either works, both only when they agree.
+fn column_key<'a>(cmd: &str, p: &Value, short: &'a str, long: &'a str) -> Result<&'a str> {
+    let given = |k: &str| p.get(k).filter(|v| !v.is_null());
+    match (given(short), given(long)) {
+        (Some(a), Some(b)) if a != b => Err(bad(cmd, format!("`{short}` and `{long}` are the same parameter; give one"))),
+        (None, Some(_)) => Ok(long),
+        _ => Ok(short),
+    }
+}
+
 /// A count parameter: a whole number of 1 or more (`default` when absent).
 fn count_or(cmd: &str, p: &Value, key: &str, default: u64) -> Result<u64> {
     Ok(count_param(cmd, p, key, 1, u64::MAX)?.unwrap_or(default))
@@ -355,13 +366,13 @@ fn count_or(cmd: &str, p: &Value, key: &str, default: u64) -> Result<u64> {
 fn run_arrayrect(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let rows = count_or("arrayrect", p, "rows", 3)?;
-    let cols = count_or("arrayrect", p, "cols", 4)?;
+    let cols = count_or("arrayrect", p, column_key("arrayrect", p, "cols", "columns")?, 4)?;
     let levels = count_or("arrayrect", p, "levels", 1)?;
     check_size(s, rows.saturating_mul(cols).saturating_mul(levels), hs.len())?;
     let kind = ArrayKind::Rect(RectArray {
         cols: count32(cols),
         rows: count32(rows),
-        col_spacing: f64_or(p, "colSpacing", 1.0),
+        col_spacing: f64_or(p, column_key("arrayrect", p, "colSpacing", "columnSpacing")?, 1.0),
         row_spacing: f64_or(p, "rowSpacing", 1.0),
         axis_angle: f64_or(p, "axisAngle", 0.0).to_radians(),
         row_elevation: f64_or(p, "rowElevation", 0.0),
