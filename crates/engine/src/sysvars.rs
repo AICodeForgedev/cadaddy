@@ -404,6 +404,70 @@ fn small(v: &Value, max: u8) -> Option<u8> {
 fn as_f64(v: &Value) -> Option<f64> {
     v.as_f64().or_else(|| v.as_str().and_then(crate::units::parse_distance)).filter(|f| f.is_finite())
 }
+/// A refusal that says what variable `n` takes: "OSMODE must be a whole number from 0 to 32767.".
+fn refuse(n: &str, allowed: &str) -> EngineError {
+    EngineError::BadParams { cmd: "setvar".into(), msg: format!("{n} must be {allowed}.") }
+}
+
+/// A bitcode from 0 to `max`, whole (a number or typed digits).
+fn bitcode(v: &Value, max: u32) -> Option<u32> {
+    as_i(v).filter(|m| (0..=i64::from(max)).contains(m)).and_then(|m| u32::try_from(m).ok())
+}
+
+/// Angles are kept to the size of the largest coordinate (in degrees); 1e300 would wrap to noise.
+const ANGLE_ALLOWED: &str = "an angle from -1e12 to 1e12 degrees";
+
+/// Whether angle `a` (radians) is finite and within [`ANGLE_ALLOWED`].
+pub(crate) fn finite_angle(a: f64) -> bool {
+    a.is_finite() && a.to_degrees().abs() <= Bound::LARGEST
+}
+
+/// The characters a file name or folder can't hold (Windows' rule, which drawings travel to).
+const BAD_PATH_CHARS: &[char] = &['<', '>', '|', '*', '?', '"'];
+
+/// A file, folder or program name (FONTALT, SAVEFILEPATH, DCTCUST, MTEXTED…): text of up to 4096
+/// characters with no `< > | * ? "` or control character; "" clears it.
+pub(crate) fn file_text<'a>(n: &str, v: &'a Value) -> Result<&'a str> {
+    let allowed = "a file or folder name (no < > | * ? \" or control characters), or \"\" for none";
+    let t = v.as_str().ok_or_else(|| refuse(n, allowed))?;
+    let bad = t.chars().count() > 4096 || t.chars().any(|c| c.is_control() || BAD_PATH_CHARS.contains(&c));
+    if bad { Err(refuse(n, allowed)) } else { Ok(t) }
+}
+
+/// What a dimension variable takes beyond its style field's type, and the value to keep: on-off
+/// switches 0 or 1 (2 and -1 refused, as AutoCAD), colours an index 0-256,
+/// arrowheads a built-in arrowhead or a block of the drawing ("" or "." closed filled), DIMDSEP
+/// one character.
+fn dimvar_value(d: &cadaddy_doc::Drawing, n: &str, field: &str, v: &Value) -> Result<Value> {
+    match field {
+        "arrowBlock" | "arrowBlock1" | "arrowBlock2" | "leaderArrowBlock" => {
+            let allowed = "a built-in arrowhead (_DOT, _ARCHTICK, _OPEN, _NONE…), a block of the drawing, or \"\" or . for closed filled";
+            let t = v.as_str().map(str::trim).ok_or_else(|| refuse(n, allowed))?;
+            if t.is_empty() || t == "." {
+                return Ok(json!(""));
+            }
+            if crate::cmd::names::is_valid(t) && cadaddy_render::Arrowhead::is_known(t) {
+                return Ok(json!(t));
+            }
+            let block = d.block(t).filter(|b| !b.name.starts_with('*')).map(|b| b.name.clone());
+            block.map(Value::String).ok_or_else(|| refuse(n, allowed))
+        }
+        "decimalSeparator" => {
+            let one = v.as_str().filter(|t| t.chars().count() == 1 && !t.chars().any(|c| c.is_control() || c.is_whitespace()));
+            one.map(|t| json!(t)).ok_or_else(|| refuse(n, "one character, such as . or ,"))
+        }
+        _ => match serde_json::to_value(cadaddy_doc::DimStyle::default()).ok().and_then(|st| st.get(field).cloned()) {
+            Some(Value::Bool(_)) => as_bool(v).map(|b| json!(i32::from(b))).ok_or_else(|| refuse(n, "0 (off) or 1 (on)")),
+            // A colour variable holds an index, as AutoCAD's (DIMSTYLE takes names and true colours).
+            Some(Value::Object(_)) if !v.is_object() => match as_i(v).filter(|i| (0..=256).contains(i)) {
+                Some(i) => Ok(json!(i)),
+                None => Err(refuse(n, "a colour number: 0 ByBlock, 1 to 255 or 256 ByLayer")),
+            },
+            _ => Ok(v.clone()),
+        },
+    }
+}
+
 /// DWGPREFIX: everything up to the last path separator of `path`, or the current folder.
 pub(crate) fn dwg_prefix(path: Option<&str>) -> String {
     if let Some(p) = path
@@ -675,9 +739,12 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     match n.as_str() {
         // The `color` command's input: ByLayer, ByBlock, a name, an index or a true colour.
         "CECOLOR" => crate::cmd::set_current_color_value(s, v).ok_or_else(bad)?,
-        "OSMODE" => st.osmode = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & 0x7fff,
+        // Bitcodes: a value with a bit AutoCAD doesn't have is refused, not masked into another mode.
+        "OSMODE" => st.osmode = bitcode(v, 0x7fff).ok_or_else(|| refuse(&n, "a whole number from 0 to 32767 (the sum of the object snap bits)"))?,
+        // AutoCAD's bits go to 16384 (point clouds); the ones CADaddy doesn't snap to are dropped.
         "3DOSMODE" => {
-            st.osmode3 = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & crate::snap3::mode::MASK
+            let bits = bitcode(v, 0x7fff).ok_or_else(|| refuse(&n, "a whole number from 0 to 32767 (the sum of the 3D object snap bits)"))?;
+            st.osmode3 = bits & crate::snap3::mode::MASK
         }
         "UCSDETECT" => st.ducs = as_bool(v).ok_or_else(bad)?,
         "OSNAPHATCH" => st.osnaphatch = as_bool(v).ok_or_else(bad)?,
@@ -703,8 +770,10 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             st.otrack = bits & 16 != 0;
             st.orthomode &= !st.polarmode;
         }
-        "QNEWTEMPLATE" => crate::cmd::file::set_qnew_template(v.as_str().ok_or_else(bad)?),
-        "POLARANG" => st.polarang = as_f64(v).filter(|a| *a > 0.0).ok_or_else(bad)?.to_radians(),
+        "QNEWTEMPLATE" => crate::cmd::file::set_qnew_template(file_text(&n, v)?),
+        "POLARANG" => {
+            st.polarang = as_f64(v).filter(|a| *a > 0.0 && *a <= 360.0).ok_or_else(|| refuse(&n, "an angle above 0 and up to 360"))?.to_radians()
+        }
         "GRIDMODE" => st.gridmode = as_bool(v).ok_or_else(bad)?,
         "SNAPMODE" => st.snapmode = as_bool(v).ok_or_else(bad)?,
         "SNAPSTYL" => st.isodraft = as_i(v).filter(|b| (0..=1).contains(b)).ok_or_else(bad)? == 1,
@@ -744,7 +813,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
                 }
             }
         }
-        "QPMODE" => st.qpmode = as_i(v).ok_or_else(bad)? > 0,
+        "QPMODE" => st.qpmode = as_i(v).filter(|m| (-1..=2).contains(m)).ok_or_else(|| refuse(&n, "-1 or 0 (off), 1 or 2 (on)"))? > 0,
         "HIGHLIGHT" => st.highlight = as_bool(v).ok_or_else(bad)?,
         "SELECTIONEFFECT" => st.selectioneffect = small(v, 1).ok_or_else(bad)?,
         "SELECTIONPREVIEW" => st.selectionpreview = small(v, 3).ok_or_else(bad)?,
@@ -789,30 +858,26 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "MAXARRAY" => st.maxarray = as_f64(v).ok_or_else(bad)?.clamp(100.0, 10_000_000.0) as u64,
         "ZOOMFACTOR" => st.zoomfactor = as_i(v).filter(|z| (3..=100).contains(z)).ok_or_else(bad)? as u32,
         "MEASUREINIT" => st.measureinit = small(v, 1).ok_or_else(bad)? == 1,
-        "FONTALT" => cadaddy_fonts::ttf::set_font_alt(v.as_str().ok_or_else(bad)?),
-        "FONTFALLBACK" => cadaddy_fonts::ttf::set_fallback_fonts(v.as_str().ok_or_else(bad)?),
-        "SAVETIME" => crate::autosave::set_savetime(
-            as_f64(v).filter(|m| *m >= 0.0 && *m <= f64::from(crate::autosave::MAX_SAVETIME)).ok_or_else(bad)?.round() as u32,
-        ),
-        "SAVEFILEPATH" => crate::autosave::set_savefilepath(v.as_str().ok_or_else(bad)?),
+        "FONTALT" => cadaddy_fonts::ttf::set_font_alt(file_text(&n, v)?),
+        "FONTFALLBACK" => cadaddy_fonts::ttf::set_fallback_fonts(file_text(&n, v)?),
+        "SAVETIME" => {
+            let max = crate::autosave::MAX_SAVETIME;
+            let minutes = as_f64(v).filter(|m| m.fract() == 0.0 && *m >= 0.0 && *m <= f64::from(max));
+            crate::autosave::set_savetime(minutes.ok_or_else(|| refuse(&n, &format!("a whole number of minutes from 0 to {max}")))? as u32)
+        }
+        "SAVEFILEPATH" => crate::autosave::set_savefilepath(file_text(&n, v)?),
         "AUDITCTL" => crate::audit::set_auditctl(as_i(v).filter(|b| (0..=1).contains(b)).ok_or_else(bad)? == 1),
         "DWGCOPY" => crate::cmd::file::set_dwg_copy(as_bool(v).ok_or_else(bad)?),
         "ACTIVITYLOG" => crate::activity::set_enabled(as_bool(v).ok_or_else(bad)?),
         "DCTMAIN" => crate::cmd::spell::set_main_code(s.doc_mut()?, v.as_str().ok_or_else(bad)?)?,
-        "DCTCUST" => {
-            let path = v.as_str().ok_or_else(bad)?;
-            if path.len() > 4096 {
-                return Err(bad());
-            }
-            crate::cmd::spell::set_dctcust(path);
-        }
+        "DCTCUST" => crate::cmd::spell::set_dctcust(file_text(&n, v)?),
         // A number is in degrees; text is an angle typed in AUNITS (SETVAR at the command line).
         "ANGBASE" => {
             let a = match v {
                 Value::String(t) => s.angle_settings().amount(t),
                 _ => as_f64(v).map(f64::to_radians),
             };
-            let a = a.filter(|a| a.is_finite()).ok_or_else(bad)?;
+            let a = a.filter(|a| finite_angle(*a)).ok_or_else(|| refuse(&n, ANGLE_ALLOWED))?;
             s.doc_mut()?.header.set_f64("ANGBASE", cadaddy_geom::norm_angle(a));
         }
         // AutoCAD's range: gaps up to 5000 drawing units close a hatch boundary.
@@ -861,12 +926,18 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             }
             let d = s.doc_mut()?;
             // A dimension variable takes only the values its style field takes, as in DIMSTYLE and DIMOVERRIDE.
-            if let Some((_, field)) = cadaddy_doc::DIMVARS.iter().find(|(var, _)| *var == n) {
-                let mut st = d.dim_style(&d.header.str("DIMSTYLE", "Standard")).cloned().unwrap_or_default();
-                if !st.apply_fields(&serde_json::Map::from_iter([((*field).to_string(), v.clone())])).is_empty() {
-                    return Err(bad());
+            let dimvar;
+            let v = match cadaddy_doc::DIMVARS.iter().find(|(var, _)| *var == n) {
+                Some((_, field)) => {
+                    dimvar = dimvar_value(d, &n, field, v)?;
+                    let mut st = d.dim_style(&d.header.str("DIMSTYLE", "Standard")).cloned().unwrap_or_default();
+                    if !st.apply_fields(&serde_json::Map::from_iter([((*field).to_string(), dimvar.clone())])).is_empty() {
+                        return Err(bad());
+                    }
+                    &dimvar
                 }
-            }
+                None => v,
+            };
             // 'nan' / 'inf' typed for a number is refused, not kept as text that reads back as NaN.
             let nonfinite_text = matches!(v, Value::String(t) if t.trim().parse::<f64>().is_ok_and(|f| !f.is_finite()));
             let numeric = matches!(d.header.get(&n), Some(cadaddy_doc::HVal::Real(_) | cadaddy_doc::HVal::Int(_)))
