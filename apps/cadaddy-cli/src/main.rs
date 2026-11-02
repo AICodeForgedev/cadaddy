@@ -255,8 +255,10 @@ fn help_for(name: &str) -> Result<String, String> {
     }
     if out.is_empty() {
         let l = name.to_ascii_lowercase();
-        let near: Vec<String> =
-            cadaddy_engine::command_specs().iter().filter(|c| c.id.contains(l.as_str())).take(10).map(|c| c.id.to_string()).collect();
+        // The closest first (the shortest names holding what was typed), not the registry's order.
+        let mut near: Vec<String> = cadaddy_engine::command_specs().iter().filter(|c| c.id.contains(l.as_str())).map(|c| c.id.to_string()).collect();
+        near.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+        near.truncate(10);
         let hint = if near.is_empty() { String::new() } else { format!(" Did you mean: {}?", near.join(", ")) };
         return Err(format!(
             "help: no subcommand or drawing command `{name}`.{hint} `cadaddy-cli help` lists the subcommands; `cadaddy-cli commands FILTER` finds drawing commands."

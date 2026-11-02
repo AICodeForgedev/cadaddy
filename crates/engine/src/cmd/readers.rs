@@ -202,6 +202,8 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 kind: t.kind.clone(),
                 leg: f("switch_leg"),
                 room: String::new(),
+                aff_in: None,
+                aff_note: String::new(),
             }
         })
         .collect();
@@ -1384,6 +1386,12 @@ pub struct ReadDevice {
     /// The room a typical room's plan stamped it into (its circuits are that room's own).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub room: String,
+    /// Its mounting height printed by it on a typical room's plan (`44" AFF`), inches to its
+    /// middle, and the note and sheet it was read from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aff_in: Option<f64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub aff_note: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1516,6 +1524,18 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         }
         e.set("sheet", if dv.sheet.is_empty() { "current drawing" } else { dv.sheet.as_str() }, "plan");
         e.set("symbol", dv.handle.clone(), "plan");
+        // A typical room's device knows the room it was stamped into (its bath, its closet are
+        // that room's, traced as a room or not).
+        if !dv.room.is_empty() {
+            e.set("room", dv.room.clone(), "rule");
+        }
+        // Its height as printed by it on its typical room's plan.
+        if let Some(h) = dv.aff_in.filter(|h| h.is_finite() && *h > 0.0 && *h < 240.0) {
+            e.set("mount_height_in", format!("{h}"), "note");
+            if !dv.aff_note.is_empty() {
+                e.set("mount_height_note", dv.aff_note.clone(), "note");
+            }
+        }
         sp.tags.push(e);
         *by_type.entry(tag.to_string()).or_default() += 1;
         *by_level.entry(level).or_default() += 1;

@@ -1745,6 +1745,11 @@ fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
     out
 }
 
+/// The hinge points of the door swings among `ents` (`k` units per inch).
+pub(crate) fn swing_hinges(ents: &[&Arc<Entity>], k: f64) -> Vec<Vec2> {
+    drawn_swings(ents, k).into_iter().map(|s| s.c).collect()
+}
+
 /// Walls looked at for the building's outline, at most (a level; hostile drawings).
 const MAX_CLUSTERED: usize = 20_000;
 

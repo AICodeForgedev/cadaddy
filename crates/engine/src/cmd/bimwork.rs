@@ -151,8 +151,17 @@ pub(crate) fn classify(e: &Entity) -> Option<(&'static str, String, String, Stri
                 } else {
                     kind
                 };
+                // Electrical gear scheduled as equipment (a room's load center, a panelboard) is
+                // the electrician's.
+                let gear = p.strip_prefix("equipment:").is_some_and(|k| {
+                    matches!(
+                        k.to_ascii_lowercase().as_str(),
+                        "panel" | "panelboard" | "load_center" | "switchboard" | "switchgear" | "transformer" | "disconnect"
+                    )
+                });
                 let t = match kind {
                     "tray" | "cable" | "grounding" => "electrical",
+                    "equipment" if gear => "electrical",
                     _ => long_trade(cadaddy_walk3d::field::trade_of(kind, &system)),
                 };
                 (t, cat.to_string(), system, level)

@@ -2321,6 +2321,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                         kind: "receptacle".into(),
                         leg: String::new(),
                         room: String::new(),
+                        aff_in: None,
+                        aff_note: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -2344,6 +2346,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                             kind: kind_of_tag(&t),
                             leg: String::new(),
                             room: String::new(),
+                            aff_in: None,
+                            aff_note: String::new(),
                         });
                         *c.by_type.entry(t).or_default() += 1;
                     }
@@ -4290,8 +4294,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
                 let unplaced: Vec<&super::readers::ReadDevice> = all_devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
-                let StampedRooms { devices: stamped, report, authority, panels, rooms, sleeping: guest } =
+                let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest } =
                     stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                // The heights the typical rooms' plans print by their devices.
+                let (notes, heights) = typical_heights(s.doc()?, job, &mut stamped);
+                if notes > 0 {
+                    progress_line(&format!("  typical rooms' height notes: {notes} read, {heights} stamped devices took theirs"));
+                }
                 room_panels = panels;
                 panel_rooms = rooms;
                 sleeping = guest;
@@ -5296,12 +5305,255 @@ fn type_words(text: &str, vocabulary: Option<&BTreeSet<String>>) -> BTreeSet<Str
 fn into_room(p: [f64; 2], view: [f64; 4], room: [f64; 4]) -> Option<[f64; 2]> {
     let (vw, vh) = (view[2] - view[0], view[3] - view[1]);
     let (rw, rh) = (room[2] - room[0], room[3] - room[1]);
+    let k = if (vw > vh) != (rw > rh) { 1 } else { 0 };
+    into_room_turned(p, view, room, k)
+}
+
+/// [`into_room`] with the view turned `k % 4` quarters and, for `k >= 4`, mirrored first: a
+/// typical room's plan drawn as one unit and the rooms of its type facing every way along the
+/// corridors (turned half round across the corridor, mirrored either side of a shared wall).
+fn into_room_turned(p: [f64; 2], view: [f64; 4], room: [f64; 4], k: u8) -> Option<[f64; 2]> {
+    let (vw, vh) = (view[2] - view[0], view[3] - view[1]);
+    let (rw, rh) = (room[2] - room[0], room[3] - room[1]);
     if !(vw > 0.0 && vh > 0.0 && rw > 0.0 && rh > 0.0) {
         return None;
     }
     let (u, v) = (((p[0] - view[0]) / vw).clamp(0.0, 1.0), ((p[1] - view[1]) / vh).clamp(0.0, 1.0));
-    let (u, v) = if (vw > vh) != (rw > rh) { (v, 1.0 - u) } else { (u, v) };
+    let u = if k >= 4 { 1.0 - u } else { u };
+    let (u, v) = match k % 4 {
+        1 => (v, 1.0 - u),
+        2 => (1.0 - u, 1.0 - v),
+        3 => (1.0 - v, u),
+        _ => (u, v),
+    };
     Some([room[0] + u * rw, room[1] + v * rh])
+}
+
+/// How a typical-room view goes into one room: the turn (and mirror) of [`into_room_turned`] that
+/// lays the view's door swings (their hinges, `view_hinges`) nearest the swings the floor plan
+/// draws in and round the room (`room_hinges`); the plain quarter-turn rule of [`into_room`]
+/// with fewer than two swings to go by.
+fn room_turn(view: [f64; 4], room: [f64; 4], view_hinges: &[cadaddy_geom::Vec2], room_hinges: &[cadaddy_geom::Vec2]) -> u8 {
+    room_turn_by(view, room, view_hinges, room_hinges, &[], &[], 0.0)
+}
+
+/// [`room_turn`], first by the view's own wall devices (`on_walls`: where it draws them): the turn
+/// that puts the most of them within `reach` of the room's outline (`outline`, on its walls), then
+/// the door swings, then the plain way.
+fn room_turn_by(
+    view: [f64; 4],
+    room: [f64; 4],
+    view_hinges: &[cadaddy_geom::Vec2],
+    room_hinges: &[cadaddy_geom::Vec2],
+    on_walls: &[[f64; 2]],
+    outline: &[cadaddy_geom::Vec2],
+    reach: f64,
+) -> u8 {
+    let (vw, vh) = (view[2] - view[0], view[3] - view[1]);
+    let (rw, rh) = (room[2] - room[0], room[3] - room[1]);
+    let plain = if (vw > vh) != (rw > rh) { 1 } else { 0 };
+    let use_devices = on_walls.len() >= 2 && outline.len() >= 3;
+    let use_swings = view_hinges.len() >= 2 && room_hinges.len() >= 2;
+    if !use_devices && !use_swings {
+        return plain;
+    }
+    let cap = 0.5 * rw.max(rh);
+    // Devices off the walls (fewer is better), then the swings' distances.
+    let score = |k: u8| -> (usize, f64) {
+        let off = if use_devices {
+            on_walls
+                .iter()
+                .filter_map(|p| into_room_turned(*p, view, room, k))
+                .filter(|q| edge_distance(outline, cadaddy_geom::Vec2::new(q[0], q[1])) > reach)
+                .count()
+        } else {
+            0
+        };
+        let swings = if use_swings {
+            view_hinges
+                .iter()
+                .filter_map(|h| into_room_turned([h.x, h.y], view, room, k))
+                .map(|q| room_hinges.iter().map(|r| r.dist(cadaddy_geom::Vec2::new(q[0], q[1]))).fold(cap, f64::min))
+                .sum()
+        } else {
+            0.0
+        };
+        (off, swings)
+    };
+    // The plain way wins a tie (the same score: a symmetric room).
+    let mut best = (score(plain), plain);
+    for k in 0..8u8 {
+        let sc = score(k);
+        if sc.0 < best.0.0 || (sc.0 == best.0.0 && sc.1 < best.0.1 - 1e-6) {
+            best = (sc, k);
+        }
+    }
+    best.1
+}
+
+/// How a typical-room view goes into one room: laid at its printed scale (`rigid`: turned `k`,
+/// its middle `from` onto `to`, both sheets read at their scale notes), else by shares of its box
+/// ([`into_room_turned`] with `k`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RoomFit {
+    k: u8,
+    from: cadaddy_geom::Vec2,
+    to: cadaddy_geom::Vec2,
+    rigid: bool,
+}
+
+/// `v` turned `k % 4` quarters counter-clockwise, mirrored across first for `k >= 4`.
+fn turn_vec(v: cadaddy_geom::Vec2, k: u8) -> cadaddy_geom::Vec2 {
+    let v = if k >= 4 { cadaddy_geom::Vec2::new(-v.x, v.y) } else { v };
+    match k % 4 {
+        1 => cadaddy_geom::Vec2::new(-v.y, v.x),
+        2 => cadaddy_geom::Vec2::new(-v.x, -v.y),
+        3 => cadaddy_geom::Vec2::new(v.y, -v.x),
+        _ => v,
+    }
+}
+
+/// Where `p` of the view `view` goes in a room spanning `room` by `fit`.
+fn place_in_room(p: [f64; 2], view: [f64; 4], room: [f64; 4], fit: RoomFit) -> Option<[f64; 2]> {
+    if fit.rigid {
+        let q = fit.to + turn_vec(cadaddy_geom::Vec2::new(p[0], p[1]) - fit.from, fit.k);
+        q.is_finite().then_some([q.x, q.y])
+    } else {
+        into_room_turned(p, view, room, fit.k)
+    }
+}
+
+/// A floor plan's linework samples by 20' cells, for laying the typical-room views on the rooms.
+struct FloorLines {
+    cell: f64,
+    cells: std::collections::HashMap<(i64, i64), Vec<cadaddy_geom::Vec2>>,
+}
+
+impl FloorLines {
+    /// The samples (every `step`) of the plan objects of `d` whose middles lie in one of `rooms`
+    /// (boxes) grown by `margin`.
+    fn new(d: &cadaddy_doc::Drawing, rooms: &[[f64; 4]], margin: f64, step: f64) -> Self {
+        let cell = 240.0 * super::perceive::units_per_inch(d);
+        let key = |p: cadaddy_geom::Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+        let mut wanted: BTreeSet<(i64, i64)> = BTreeSet::new();
+        for r in rooms.iter().take(MAX_STAMPED) {
+            let (a, b) = (key(cadaddy_geom::Vec2::new(r[0] - margin, r[1] - margin)), key(cadaddy_geom::Vec2::new(r[2] + margin, r[3] + margin)));
+            if (b.0 - a.0 + 1) * (b.1 - a.1 + 1) > 400 {
+                continue;
+            }
+            for x in a.0..=b.0 {
+                for y in a.1..=b.1 {
+                    wanted.insert((x, y));
+                }
+            }
+        }
+        let mut cells: std::collections::HashMap<(i64, i64), Vec<cadaddy_geom::Vec2>> = std::collections::HashMap::new();
+        if !wanted.is_empty() {
+            let ents: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+                super::bspec::plan_objects(d).into_iter().filter(|e| super::bspec::centre(d, e).is_some_and(|c| wanted.contains(&key(c)))).collect();
+            for p in super::grids::line_samples(&ents, step) {
+                cells.entry(key(p)).or_default().push(p);
+            }
+        }
+        FloorLines { cell, cells }
+    }
+
+    fn in_box(&self, r: [f64; 4]) -> Vec<cadaddy_geom::Vec2> {
+        let (x0, y0, x1, y1) = (
+            (r[0] / self.cell).floor() as i64,
+            (r[1] / self.cell).floor() as i64,
+            (r[2] / self.cell).floor() as i64,
+            (r[3] / self.cell).floor() as i64,
+        );
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > 400 {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                if let Some(v) = self.cells.get(&(x, y)) {
+                    out.extend(v.iter().filter(|p| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3]));
+                }
+            }
+        }
+        out
+    }
+}
+
+/// The view's linework (`view_pts`, samples of its block `view`) laid on the floor's around a room
+/// (`room`, its outline's box) at the printed scale: each of the eight turns, the offset most
+/// samples agree on (to `tol`), the view's middle kept over the room. `None` when too few agree
+/// (another scale, or no linework to go by).
+fn rigid_room_fit(
+    view_pts: &[cadaddy_geom::Vec2],
+    view: [f64; 4],
+    room: [f64; 4],
+    floor: &FloorLines,
+    margin: f64,
+    tol: f64,
+) -> Option<(RoomFit, usize)> {
+    if view_pts.len() < MIN_FIT_SAMPLES || tol.is_nan() || tol <= 0.0 {
+        return None;
+    }
+    let from = cadaddy_geom::Vec2::new((view[0] + view[2]) / 2.0, (view[1] + view[3]) / 2.0);
+    let near = floor.in_box([room[0] - margin, room[1] - margin, room[2] + margin, room[3] + margin]);
+    if near.len() < MIN_FIT_SAMPLES {
+        return None;
+    }
+    let stride = (view_pts.len() / MAX_FIT_SAMPLES).max(1);
+    let few: Vec<cadaddy_geom::Vec2> = view_pts.iter().step_by(stride).copied().collect();
+    let mut best: Option<(RoomFit, usize)> = None;
+    for k in 0..8u8 {
+        let turned: Vec<cadaddy_geom::Vec2> = few.iter().map(|p| turn_vec(*p - from, k)).collect();
+        let mut votes: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
+        for t in &turned {
+            for f in &near {
+                let to = *f - *t;
+                if to.x < room[0] || to.x > room[2] || to.y < room[1] || to.y > room[3] {
+                    continue;
+                }
+                *votes.entry(((to.x / tol).round() as i64, (to.y / tol).round() as i64)).or_default() += 1;
+            }
+        }
+        // Ties go to the smaller offset key (a hash map's order differs run to run).
+        if let Some((o, n)) = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+            && best.as_ref().is_none_or(|b| n > b.1)
+        {
+            let to = cadaddy_geom::Vec2::new(o.0 as f64 * tol, o.1 as f64 * tol);
+            best = Some((RoomFit { k, from, to, rigid: true }, n));
+        }
+    }
+    best.filter(|(_, n)| *n * 100 >= few.len() * MIN_FIT_SHARE_PCT)
+}
+
+/// How far round a room its floor's linework is looked at to lay a typical view in it, feet.
+const ROOM_FIT_MARGIN_FT: f64 = 3.0;
+
+/// A typical view's samples looked at for its fit into a room, at most; at least this many on each
+/// side; and the share of them (%) that must land on the floor's lines.
+const MAX_FIT_SAMPLES: usize = 600;
+const MIN_FIT_SAMPLES: usize = 20;
+const MIN_FIT_SHARE_PCT: usize = 35;
+
+/// How far round a room its floor plan's door swings are looked for, feet (a door's hinge is on
+/// its wall; a neighbour's entry beside it is no further than that wall).
+const ROOM_SWING_FT: f64 = 1.0;
+
+/// A typical room's device this close to the room's outline (feet) is on its wall.
+const ROOM_WALL_FT: f64 = 1.5;
+
+/// The door swings' hinges of a drawing's model space (`k` units per inch), for turning the
+/// typical-room views into their rooms.
+fn plan_hinges(d: &cadaddy_doc::Drawing) -> Vec<cadaddy_geom::Vec2> {
+    let k = super::perceive::units_per_inch(d);
+    let ents: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+        d.model.iter().filter(|e| matches!(e.kind, cadaddy_doc::EntityKind::Arc(_) | cadaddy_doc::EntityKind::LwPolyline(_))).collect();
+    super::wallgen::swing_hinges(&ents, k)
+}
+
+/// The hinges among `all` inside `r` (`[x0, y0, x1, y1]`) grown by `m`.
+fn hinges_in(all: &[cadaddy_geom::Vec2], r: [f64; 4], m: f64) -> Vec<cadaddy_geom::Vec2> {
+    all.iter().filter(|h| h.x >= r[0] - m && h.x <= r[2] + m && h.y >= r[1] - m && h.y <= r[3] + m).copied().collect()
 }
 
 /// The devices of the typical-room plans (UNIT ELECTRICAL PLAN - DOUBLE QUEEN, ENLARGED ACC.
@@ -5353,6 +5605,13 @@ fn stamp_typical_rooms(
     };
     let mut matched: BTreeMap<(usize, String), usize> = BTreeMap::new();
     let refs = job_sheet_refs(job);
+    // The floor plans' door swings and linework round the rooms, to lay each typical view into
+    // each room the way it faces.
+    let floor_hinges = plan_hinges(d);
+    let k_in = super::perceive::units_per_inch(d);
+    let near = ROOM_SWING_FT * 12.0 * k_in;
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 12.0 * k_in);
     let mut by_sheet: BTreeMap<String, Vec<&super::readers::ReadDevice>> = BTreeMap::new();
     for dv in unplaced {
         by_sheet.entry(sheet_key(&dv.sheet)).or_default().push(dv);
@@ -5360,6 +5619,42 @@ fn stamp_typical_rooms(
     for (sheet, devices) in by_sheet.into_iter().filter(|(_, v)| v.len() >= 3).take(MAX_STAMP_SHEETS) {
         let Some(sh) = refs.iter().find(|r| sheet_key(&r.number) == sheet && r.view.is_none()) else { continue };
         let sub = super::printmep::sheet_drawing(d, sh);
+        let sheet_hinges = plan_hinges(&sub);
+        let mut turns: BTreeMap<([u64; 4], usize), RoomFit> = BTreeMap::new();
+        // The sheet's devices (where each view draws its own), and each view's linework.
+        let drawn: Vec<[f64; 2]> = devices.iter().map(|dv| dv.at).collect();
+        let reach = ROOM_WALL_FT * 12.0 * k_in;
+        let sheet_objects = super::bspec::plan_objects(&sub);
+        let mut view_lines: BTreeMap<[u64; 4], Vec<cadaddy_geom::Vec2>> = BTreeMap::new();
+        let mut turn_of = |view: &[f64; 4], ri: usize, outline: &[cadaddy_geom::Vec2]| -> RoomFit {
+            *turns.entry((view.map(f64::to_bits), ri)).or_insert_with(|| {
+                let lines = view_lines.entry(view.map(f64::to_bits)).or_insert_with(|| {
+                    let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = sheet_objects
+                        .iter()
+                        .filter(|e| {
+                            super::bspec::centre(&sub, e).is_some_and(|c| c.x >= view[0] && c.x <= view[2] && c.y >= view[1] && c.y <= view[3])
+                        })
+                        .copied()
+                        .collect();
+                    super::grids::line_samples(&mine, 12.0 * k_in)
+                });
+                if let Some((fit, _)) = rigid_room_fit(lines, *view, bbox(outline), &floor_lines, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 6.0 * k_in) {
+                    return fit;
+                }
+                let mine: Vec<[f64; 2]> =
+                    drawn.iter().filter(|p| p[0] >= view[0] && p[0] <= view[2] && p[1] >= view[1] && p[1] <= view[3]).copied().collect();
+                let k = room_turn_by(
+                    *view,
+                    bbox(outline),
+                    &hinges_in(&sheet_hinges, *view, 0.0),
+                    &hinges_in(&floor_hinges, bbox(outline), near),
+                    &mine,
+                    outline,
+                    reach,
+                );
+                RoomFit { k, from: cadaddy_geom::Vec2::new(0.0, 0.0), to: cadaddy_geom::Vec2::new(0.0, 0.0), rigid: false }
+            })
+        };
         // The typical-room views (a room type), and the views of one room (its number or its name
         // in the title: "ENLARGED BOH ROOM #237", "1ST FLOOR - MEP ROOM").
         let sheet_texts = cadaddy_mepfix::sheet_facts::texts(&sub);
@@ -5373,13 +5668,14 @@ fn stamp_typical_rooms(
                           level: &str,
                           view: &[f64; 4],
                           outline: &[cadaddy_geom::Vec2],
+                          turn: RoomFit,
                           panels: &mut BTreeMap<String, Vec<(String, [f64; 2])>>,
                           panel_rooms: &mut BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>| {
             if panels.contains_key(&room) {
                 return;
             }
             let at: Vec<(String, [f64; 2])> =
-                panels_in(view).into_iter().filter_map(|(n, p)| Some((n, into_room(p, *view, bbox(outline))?))).collect();
+                panels_in(view).into_iter().filter_map(|(n, p)| Some((n, place_in_room(p, *view, bbox(outline), turn)?))).collect();
             if !at.is_empty() {
                 panel_rooms.insert(room.clone(), (level.to_string(), outline.to_vec(), typical));
             }
@@ -5397,7 +5693,8 @@ fn stamp_typical_rooms(
             {
                 if let Some((name, level, outline, number)) = rooms.get(*i)
                     && out.len() < MAX_STAMPED
-                    && let Some(at) = into_room(dv.at, *view, bbox(outline))
+                    && let turn = turn_of(view, *i, outline)
+                    && let Some(at) = place_in_room(dv.at, *view, bbox(outline), turn)
                 {
                     if furnished(level, outline) && !authority.iter().any(|(l, o)| l == level && o == outline) {
                         authority.push((level.clone(), outline.clone()));
@@ -5406,7 +5703,7 @@ fn stamp_typical_rooms(
                     copy.at = at;
                     copy.level.clone_from(level);
                     copy.room = stamped_room(name, number, *i);
-                    panel_into(copy.room.clone(), false, level, view, outline, &mut panels, &mut panel_rooms);
+                    panel_into(copy.room.clone(), false, level, view, outline, turn, &mut panels, &mut panel_rooms);
                     out.push(copy);
                     *report.entry(format!("{sheet} {title}")).or_default() += 1;
                 }
@@ -5431,12 +5728,13 @@ fn stamp_typical_rooms(
                     *used += 1;
                     continue;
                 }
-                let Some(at) = into_room(dv.at, *view, bbox(outline)) else { continue };
+                let turn = turn_of(view, ri, outline);
+                let Some(at) = place_in_room(dv.at, *view, bbox(outline), turn) else { continue };
                 let mut copy = (*dv).clone();
                 copy.at = at;
                 copy.level.clone_from(level);
                 copy.room = stamped_room(name, number, ri);
-                panel_into(copy.room.clone(), true, level, view, outline, &mut panels, &mut panel_rooms);
+                panel_into(copy.room.clone(), true, level, view, outline, turn, &mut panels, &mut panel_rooms);
                 if sleeping_room(words) {
                     sleeping.entry(ri).or_insert_with(|| (level.clone(), outline.clone()));
                 }
@@ -5447,6 +5745,156 @@ fn stamp_typical_rooms(
     }
     StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect() }
 }
+
+/// The mounting heights the typical rooms' plans print by their devices ("44\" AFF",
+/// "MICROWAVE 65\" AFF" on a leader, "10\" AFF HORIZ") onto the devices stamped into the rooms
+/// of each type: each note's device (where its leader ends, else the round symbol beside it, else
+/// the note's own place) laid into every room of the view's type as the view goes into it, the
+/// device stamped into that room nearest it (within [`AFF_DEVICE_FT`]) takes the height. The notes
+/// read and the devices that took one.
+fn typical_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob, devices: &mut [super::readers::ReadDevice]) -> (usize, usize) {
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    if types.is_empty() || devices.is_empty() {
+        return (0, 0);
+    }
+    let k_in = super::perceive::units_per_inch(d);
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 12.0 * k_in);
+    let (mut notes_read, mut set) = (0usize, 0usize);
+    for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none()).take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let notes: Vec<(&cadaddy_mepfix::sheet_facts::TextItem, f64)> = texts
+            .iter()
+            .filter_map(|t| Some((t, super::propfill::mount_height_in(&t.value)?)))
+            .filter(|(_, h)| *h > 0.0 && *h < 240.0)
+            .take(MAX_STAMPED)
+            .collect();
+        if notes.is_empty() {
+            continue;
+        }
+        let (views, _) = room_views(&sub, &texts, &types, &vocabulary, &rooms);
+        if views.is_empty() {
+            continue;
+        }
+        // Every straight piece (a leader ends on its symbol: no reader of linework keeps those).
+        let mut segs: Vec<[[f64; 2]; 2]> = Vec::new();
+        for e in sub.model.iter() {
+            if segs.len() >= MAX_LEADER_PIECES {
+                break;
+            }
+            match &e.kind {
+                cadaddy_doc::EntityKind::Line(l) => segs.push([[l.a.x, l.a.y], [l.b.x, l.b.y]]),
+                cadaddy_doc::EntityKind::LwPolyline(pl) if !pl.closed && pl.vertices.len() <= 8 => {
+                    segs.extend(pl.vertices.windows(2).filter_map(|w| Some([[w.first()?.p.x, w.first()?.p.y], [w.get(1)?.p.x, w.get(1)?.p.y]])));
+                }
+                _ => {}
+            }
+        }
+        let rounds = cadaddy_mepfix::sheet_reader::round_shapes(&sub);
+        let objects = super::bspec::plan_objects(&sub);
+        let mut view_lines: BTreeMap<[u64; 4], Vec<cadaddy_geom::Vec2>> = BTreeMap::new();
+        let mut fits: BTreeMap<([u64; 4], usize), Option<RoomFit>> = BTreeMap::new();
+        let inside = |r: &[f64; 4], p: cadaddy_geom::Vec2| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
+        for (t, h) in &notes {
+            let Some((_, view, words)) = views
+                .iter()
+                .filter(|(_, r, _)| inside(r, t.at))
+                .min_by(|a, b| ((a.1[2] - a.1[0]) * (a.1[3] - a.1[1])).total_cmp(&((b.1[2] - b.1[0]) * (b.1[3] - b.1[1]))))
+            else {
+                continue;
+            };
+            notes_read += 1;
+            // The note's box (its lettering along its direction).
+            let th = t.height.max(1e-9);
+            let dir = cadaddy_geom::Vec2::from_angle(t.rotation);
+            let end = t.at + dir * (NOTE_CHAR_W * th * t.value.chars().count() as f64);
+            let near_note = |p: cadaddy_geom::Vec2| {
+                let ab = end - t.at;
+                let len2 = ab.x * ab.x + ab.y * ab.y;
+                let u = if len2 > 0.0 { (((p - t.at).x * ab.x + (p - t.at).y * ab.y) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                p.dist(t.at + ab * u) <= 1.5 * th
+            };
+            // A leader from the note: its far end. Else the round symbol nearest the note.
+            let leader = segs
+                .iter()
+                .filter_map(|sg| {
+                    let (a, b) = (cadaddy_geom::Vec2::new(sg[0][0], sg[0][1]), cadaddy_geom::Vec2::new(sg[1][0], sg[1][1]));
+                    if a.dist(b) < 2.0 * th {
+                        return None;
+                    }
+                    if near_note(a) && !near_note(b) {
+                        Some(b)
+                    } else if near_note(b) && !near_note(a) {
+                        Some(a)
+                    } else {
+                        None
+                    }
+                })
+                .max_by(|x, y| x.dist(t.at).total_cmp(&y.dist(t.at)));
+            let reach = AFF_SYMBOL_FT * 12.0 * k_in;
+            let symbol = |p: cadaddy_geom::Vec2, r: f64| {
+                rounds
+                    .iter()
+                    .map(|(c, _)| cadaddy_geom::Vec2::new(c[0], c[1]))
+                    .filter(|c| c.dist(p) <= r)
+                    .min_by(|a, b| a.dist(p).total_cmp(&b.dist(p)))
+            };
+            let at = match leader {
+                Some(tip) => symbol(tip, 0.5 * reach).unwrap_or(tip),
+                None => symbol(t.at, reach).unwrap_or(t.at),
+            };
+            let note = format!("{} on {}", t.value.trim(), sh.number);
+            for (ri, (name, level, outline, number)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
+                let b = bbox(outline);
+                let fit = *fits.entry((view.map(f64::to_bits), ri)).or_insert_with(|| {
+                    let lines = view_lines.entry(view.map(f64::to_bits)).or_insert_with(|| {
+                        let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+                            objects.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(view, c))).copied().collect();
+                        super::grids::line_samples(&mine, 12.0 * k_in)
+                    });
+                    rigid_room_fit(lines, *view, b, &floor_lines, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 6.0 * k_in).map(|f| f.0)
+                });
+                // Only where the view lies on the room by its lines: a share of its box is no place to
+                // tell one device from the next.
+                let Some(fit) = fit else { continue };
+                let Some(q) = place_in_room([at.x, at.y], *view, b, fit) else { continue };
+                let q = cadaddy_geom::Vec2::new(q[0], q[1]);
+                let label = stamped_room(name, number, ri);
+                let best = devices
+                    .iter_mut()
+                    .filter(|dv| dv.room == label && dv.level == *level && dv.aff_in.is_none())
+                    .map(|dv| {
+                        let dd = q.dist(cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]));
+                        (dd, dv)
+                    })
+                    .filter(|(dd, _)| *dd <= AFF_DEVICE_FT * 12.0 * k_in)
+                    .min_by(|a, b| a.0.total_cmp(&b.0));
+                if let Some((_, dv)) = best {
+                    dv.aff_in = Some(*h);
+                    dv.aff_note.clone_from(&note);
+                    set += 1;
+                }
+            }
+        }
+    }
+    (notes_read, set)
+}
+
+/// A height note's device is the round symbol within this of the note (feet; half of it from a
+/// leader's end); a stamped device within [`AFF_DEVICE_FT`] of where that lands in a room takes it.
+const AFF_SYMBOL_FT: f64 = 2.5;
+const AFF_DEVICE_FT: f64 = 2.5;
+/// A capital's width, in text heights (a note's box along its line).
+const NOTE_CHAR_W: f64 = 0.8;
+/// Straight pieces of a sheet looked at for height notes' leaders, at most.
+const MAX_LEADER_PIECES: usize = 400_000;
 
 /// What [`stamp_typical_runs`] made: the stamped runs, which of the runs it was given lie in a
 /// typical room's plan (each `true` went into the rooms), and the count per sheet and view.
@@ -5470,11 +5918,16 @@ fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadad
         return out;
     }
     let refs = job_sheet_refs(job);
+    let floor_hinges = plan_hinges(d);
+    let k_in = super::perceive::units_per_inch(d);
+    let near = ROOM_SWING_FT * 12.0 * k_in;
     let bbox = |o: &[cadaddy_geom::Vec2]| {
         o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
             [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
         })
     };
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 12.0 * k_in);
     let inside = |v: &[f64; 4], p: &[f64; 2]| p[0] >= v[0] && p[0] <= v[2] && p[1] >= v[1] && p[1] <= v[3];
     let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
     // The systems the floor's plans run through each room already.
@@ -5494,6 +5947,10 @@ fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadad
         if views.is_empty() {
             continue;
         }
+        let sheet_hinges = plan_hinges(&sub);
+        let sheet_objects = super::bspec::plan_objects(&sub);
+        let mut view_lines: BTreeMap<[u64; 4], Vec<cadaddy_geom::Vec2>> = BTreeMap::new();
+        let mut turns: BTreeMap<([u64; 4], usize), RoomFit> = BTreeMap::new();
         for (i, r) in lost.iter().enumerate().filter(|(_, r)| sheet_key(&r.source_sheet) == *sheet) {
             if r.points.is_empty() {
                 continue;
@@ -5507,7 +5964,7 @@ fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadad
             if let Some(t) = out.taken.get_mut(i) {
                 *t = true;
             }
-            for (_, level, outline, _) in rooms.iter().filter(|(n, _, _, _)| type_words(n, None) == *words) {
+            for (ri, (_, level, outline, _)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
                 if out.runs.len() >= MAX_STAMPED {
                     break;
                 }
@@ -5515,7 +5972,25 @@ fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadad
                     continue;
                 }
                 let b = bbox(outline);
-                let Some(points) = r.points.iter().map(|p| into_room(*p, *view, b)).collect::<Option<Vec<[f64; 2]>>>() else { continue };
+                let turn = *turns.entry((view.map(f64::to_bits), ri)).or_insert_with(|| {
+                    let lines = view_lines.entry(view.map(f64::to_bits)).or_insert_with(|| {
+                        let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = sheet_objects
+                            .iter()
+                            .filter(|e| {
+                                super::bspec::centre(&sub, e).is_some_and(|c| c.x >= view[0] && c.x <= view[2] && c.y >= view[1] && c.y <= view[3])
+                            })
+                            .copied()
+                            .collect();
+                        super::grids::line_samples(&mine, 12.0 * k_in)
+                    });
+                    rigid_room_fit(lines, *view, b, &floor_lines, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 6.0 * k_in).map(|f| f.0).unwrap_or(RoomFit {
+                        k: room_turn(*view, b, &hinges_in(&sheet_hinges, *view, 0.0), &hinges_in(&floor_hinges, b, near)),
+                        from: cadaddy_geom::Vec2::new(0.0, 0.0),
+                        to: cadaddy_geom::Vec2::new(0.0, 0.0),
+                        rigid: false,
+                    })
+                });
+                let Some(points) = r.points.iter().map(|p| place_in_room(*p, *view, b, turn)).collect::<Option<Vec<[f64; 2]>>>() else { continue };
                 let mut copy = r.clone();
                 copy.points = points;
                 copy.level.clone_from(level);
@@ -9683,6 +10158,27 @@ mod tests {
     }
 
     #[test]
+    fn a_typical_view_goes_into_each_room_the_way_its_doors_face() {
+        use cadaddy_geom::Vec2;
+        // A 12' x 24' unit drawn entry-down: its entry door's hinge at (24, 6), the bath door's at
+        // (110, 60), a receptacle at (6, 200) on the west wall by the window end.
+        let view = [0.0, 0.0, 144.0, 288.0];
+        let swings = [Vec2::new(24.0, 6.0), Vec2::new(110.0, 60.0)];
+        // Across the corridor the same unit faces the other way: turned half round.
+        let room = [1000.0, 0.0, 1144.0, 288.0];
+        let turned: Vec<Vec2> = swings.iter().map(|h| Vec2::new(room[0] + room[2] - room[0] - h.x, room[1] + 288.0 - h.y)).collect();
+        let k = room_turn(view, room, &swings, &turned);
+        assert_eq!(k, 2);
+        assert_eq!(into_room_turned([6.0, 200.0], view, room, k), Some([1138.0, 88.0]), "on the east wall, by the window end");
+        // Its mirror twin beside it (the entry hinge on the other side): mirrored.
+        let mirrored: Vec<Vec2> = swings.iter().map(|h| Vec2::new(room[0] + 144.0 - h.x, h.y)).collect();
+        let k = room_turn(view, room, &swings, &mirrored);
+        assert_eq!(into_room_turned([24.0, 6.0], view, room, k), Some([1120.0, 6.0]), "turn {k}");
+        // No swings to go by: the plain way.
+        assert_eq!(room_turn(view, room, &[], &turned), 0);
+    }
+
+    #[test]
     fn a_typical_floors_room_takes_the_number_of_the_same_room_above_it() {
         let v = cadaddy_geom::Vec2::new;
         let room = |h: u64, level: &str, name: &str, number: Option<&str>, x: f64| super::super::bspec::RoomElement {
@@ -9957,6 +10453,88 @@ mod tests {
     /// same room type, every later sheet a sheet's width further right) takes none of the plan's
     /// devices and moves none: each room of the type gets them, the floor plan's own of a tag in a
     /// room standing for that many.
+    #[test]
+    fn a_typical_rooms_height_notes_go_to_its_devices_in_every_room() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        // The unit's linework (12' x 24', a cross wall every 4', a stub that tells its ends apart),
+        // at `o`, turned half round with `turned`.
+        let unit = |s: &mut crate::Session, o: [f64; 2], turned: bool| {
+            let p = |x: f64, y: f64| if turned { [o[0] + 144.0 - x, o[1] + 288.0 - y] } else { [o[0] + x, o[1] + y] };
+            let mut segs =
+                vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((100.0, 210.0), (144.0, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, p(ax, ay), p(bx, by));
+            }
+        };
+        // The E-6 sheet: its border, the view, a receptacle's circle with "44\" AFF" beside it, a
+        // switch's circle with a leader from "MICROWAVE 65\" AFF".
+        let x0 = 4234.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let v = [x0 + 300.0, 200.0];
+        unit(&mut s, v, false);
+        s.execute("circle", &json!({"center": [v[0] + 20.0, v[1] + 20.0], "radius": 4.0})).unwrap();
+        s.execute("text", &json!({"at": [v[0] + 27.0, v[1] + 18.0], "text": "44\" AFF", "height": 4.0})).unwrap();
+        s.execute("circle", &json!({"center": [v[0] + 130.0, v[1] + 120.0], "radius": 4.0})).unwrap();
+        s.execute("text", &json!({"at": [v[0] + 40.0, v[1] + 150.0], "text": "MICROWAVE 65\" AFF", "height": 4.0})).unwrap();
+        line(&mut s, [v[0] + 86.0, v[1] + 152.0], [v[0] + 130.0, v[1] + 124.0]);
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": "ENLARGED DOUBLE QUEEN", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        // The floor: room 201 as drawn, room 202 across the corridor (turned half round).
+        unit(&mut s, [10_000.0, 0.0], false);
+        unit(&mut s, [10_400.0, 0.0], true);
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-6".into(),
+            level: "T".into(),
+            discipline: "E".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "E-6".into(), lo, hi }];
+        let room = |n: &str, x: f64| json!({"name": "DOUBLE QUEEN", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_400.0)]}));
+        }
+        let device = |tag: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at,
+            sheet: "E-6".into(),
+            level: "T".into(),
+            ..Default::default()
+        };
+        let read = [device("A", [v[0] + 20.0, v[1] + 20.0]), device("S", [v[0] + 130.0, v[1] + 120.0]), device("A", [v[0] + 120.0, v[1] + 270.0])];
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let mut stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced).devices;
+        assert_eq!(stamped.len(), 6, "{stamped:?}");
+        let (notes, set) = typical_heights(s.doc().unwrap(), &job, &mut stamped);
+        assert_eq!((notes, set), (2, 4), "{stamped:?}");
+        for room in ["201", "202"] {
+            let h = |tag: &str| -> Vec<Option<f64>> { stamped.iter().filter(|d| d.room == room && d.tag == tag).map(|d| d.aff_in).collect() };
+            assert_eq!(h("S"), [Some(65.0)], "room {room}: {stamped:?}");
+            let mut a = h("A");
+            a.sort_by(|x, y| x.unwrap_or(0.0).total_cmp(&y.unwrap_or(0.0)));
+            assert_eq!(a, [None, Some(44.0)], "room {room}: the other receptacle has no note");
+        }
+    }
+
     #[test]
     fn an_enlarged_plan_after_an_enlarged_rcp_stamps_every_room_of_its_type() {
         let mut s = crate::Session::new();
