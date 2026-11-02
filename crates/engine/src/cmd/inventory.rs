@@ -885,7 +885,7 @@ fn round1(v: f64) -> f64 {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Print Inventory", run)
-            .params("{sheet?: \"E-4\", level?: \"2\", kind?: \"receptacle\", status?: \"built\"|\"not_placeable\"|\"duplicate\"|\"out_of_scope\"|\"not_built\"|\"not_object\"|\"unexplained\", what?: \"symbol\"|\"tag\"|\"text\"|\"dimension\"|\"hatch\"|\"callout\"|\"legend_row\"|\"line_type\"|…, object?: bool, reason?: text in the reason, cursor?: n, limit?: 1-200 (25), by_sheet?: bool (coverage per sheet too), rebuild?: bool (take it again from the job's sheets now)} → {coverage: {marks, classified, classified_pct, object_marks, objects, objects_built, built_pct, unexplained}, by_trade, by_sheet?, not_object_by_reason, objects_by_kind: {kind: {status: n}}, top_unexplained, sheets_not_read, total (marks matching), marks: [{id, sheet, trade, what, text, at, view, level, handle, object, kind, status, reason, elements, same_as?, also_on?, count?}], next?}: every mark on every sheet the job read — each an object of a kind (and the model elements it became, or why none) or not an object (and why)")
+            .params("{sheet?: \"E-101\", level?: \"2\", kind?: \"receptacle\", status?: \"built\"|\"not_placeable\"|\"duplicate\"|\"out_of_scope\"|\"not_built\"|\"not_object\"|\"unexplained\", what?: \"symbol\"|\"tag\"|\"text\"|\"dimension\"|\"hatch\"|\"callout\"|\"legend_row\"|\"line_type\"|…, object?: bool, reason?: text in the reason, cursor?: n, limit?: 1-200 (25), by_sheet?: bool (coverage per sheet too), rebuild?: bool (take it again from the job's sheets now)} → {coverage: {marks, classified, classified_pct, object_marks, objects, objects_built, built_pct, unexplained}, by_trade, by_sheet?, not_object_by_reason, objects_by_kind: {kind: {status: n}}, top_unexplained, sheets_not_read, total (marks matching), marks: [{id, sheet, trade, what, text, at, view, level, handle, object, kind, status, reason, elements, same_as?, also_on?, count?}], next?}: every mark on every sheet the job read — each an object of a kind (and the model elements it became, or why none) or not an object (and why)")
             .noundo(),
     ]
 }
@@ -948,7 +948,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         && let Some(o) = v.as_object_mut()
     {
         o.remove("by_sheet");
-        o.insert("by_sheet_note".into(), json!("by_sheet left out to fit: ask for one sheet at a time (sheet: \"E-4\")"));
+        o.insert("by_sheet_note".into(), json!("by_sheet left out to fit: ask for one sheet at a time (sheet: \"E-101\")"));
     }
     Ok(v)
 }
@@ -962,7 +962,7 @@ mod tests {
         for t in ["12'-6\"", "3'", "1/2\"", "4 1/2\"", "10'-0\""] {
             assert!(dimension_text(t), "{t}");
         }
-        for t in ["P-7", "E-4", "12", "NOTE 3", "A'B"] {
+        for t in ["Q-9", "X-12", "12", "NOTE 3", "A'B"] {
             assert!(!dimension_text(t), "{t}");
         }
     }

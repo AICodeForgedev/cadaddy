@@ -2519,7 +2519,12 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                     }
                     TagVerdict::NotDevice(why) => {
                         *c.not_device.entry(why).or_default() += 1;
-                        c.fates.push((h.0, MarkFate::not_object(&format!("its tag is a {why}, not a type mark"))));
+                        let said = if why == "lettering" {
+                            "its tag is lettering, not a type mark".to_string()
+                        } else {
+                            format!("its tag is a {why}, not a type mark")
+                        };
+                        c.fates.push((h.0, MarkFate::not_object(&said)));
                     }
                     TagVerdict::Unlisted(t) => {
                         unlisted.push((h.0, t.clone()));
