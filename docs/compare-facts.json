@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1196,
-    "count": 1196,
+    "callableAsJson": 1197,
+    "count": 1197,
     "ids": [
       "-attedit",
       "-block",
@@ -127,6 +127,7 @@
       "bim.from_pdf",
       "bim.get_spec",
       "bim.identity",
+      "bim.inventory",
       "bim.issue.create",
       "bim.issue.list",
       "bim.issue.marks",
