@@ -562,6 +562,36 @@ fn parse_pipe_size_str(s: &str) -> Option<f64> {
     }
 }
 
+/// Whether a chain of linework is an outline, not a pipe: it comes back to (within 6") a point it
+/// passed, having gone round an area at least 3' across both ways (a callout's box, a shape's
+/// edges). A pipe's run, branches and all, never closes round an area.
+pub(crate) fn is_outline(pts: &[Vec2], upf: f64) -> bool {
+    let near = 0.5 * upf;
+    let across = OUTLINE_ACROSS_FT * upf;
+    let n = pts.len().min(MAX_OUTLINE_POINTS);
+    for i in 0..n {
+        let Some(a) = pts.get(i) else { continue };
+        let (mut lo, mut hi) = (*a, *a);
+        for j in i + 1..n {
+            let Some(b) = pts.get(j) else { continue };
+            lo = Vec2::new(lo.x.min(b.x), lo.y.min(b.y));
+            hi = Vec2::new(hi.x.max(b.x), hi.y.max(b.y));
+            if j > i + 2 && b.dist(*a) <= near && hi.x - lo.x >= across && hi.y - lo.y >= across {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// How near (feet) a callout's bubble its box's linework (its leader) comes.
+const CALLOUT_REACH_FT: f64 = 3.0;
+/// How far across both ways (feet) a loop of linework must go to be an outline, not a pipe's
+/// offset or a fitting drawn round.
+const OUTLINE_ACROSS_FT: f64 = 3.0;
+/// The points of a chain looked at for a loop, at most (the check is quadratic).
+const MAX_OUTLINE_POINTS: usize = 2_000;
+
 /// Read pipe runs from text tags when no MEP-standard layers exist (PDF imports).
 /// Finds pipe system tags in the drawing text, then associates nearby line chains as runs.
 fn read_pipes_from_tags(
@@ -607,6 +637,39 @@ fn read_pipes_from_tags(
             .collect::<Vec<_>>(),
     );
 
+    // The numbered tag bubbles: a sheet-number-shaped tag (`P-7`, `P-2`: a callout's, a fixture's;
+    // lettered or a symbol's attribute) with a number (one or two digits) just over it.
+    let digits: Vec<(Vec2, f64)> = notes
+        .iter()
+        .filter(|(_, t, _, _)| (1..=2).contains(&t.trim().len()) && t.trim().chars().all(|c| c.is_ascii_digit()))
+        .map(|(_, _, at, h)| (*at, *h))
+        .take(MAX_OUTLINE_POINTS)
+        .collect();
+    let mut sheet_refs: Vec<(Vec2, f64)> =
+        notes.iter().filter(|(_, t, _, _)| cadaddy_mepfix::sheet_facts::is_sheet_number(t.trim())).map(|(_, _, at, h)| (*at, *h)).collect();
+    for e in ents.iter() {
+        if let EntityKind::Insert(ins) = &e.kind {
+            sheet_refs.extend(
+                ins.attribs
+                    .iter()
+                    .take(4)
+                    .filter(|a| cadaddy_mepfix::sheet_facts::is_sheet_number(a.text.value.trim()))
+                    .map(|a| (a.text.insert.xy(), a.text.height)),
+            );
+        }
+        if sheet_refs.len() >= MAX_OUTLINE_POINTS {
+            break;
+        }
+    }
+    let bubbles: Vec<Vec2> = sheet_refs
+        .iter()
+        .filter(|(at, h)| {
+            let h = h.max(1e-6);
+            digits.iter().any(|(d, dh)| (d.x - at.x).abs() <= 3.0 * h.max(*dh) && d.y > at.y && d.y - at.y <= 4.0 * h.max(*dh))
+        })
+        .map(|(at, _)| *at)
+        .collect();
+
     // Step 3: for each chain, find the nearest pipe tag. If within reach, assign it as a pipe run.
     // Content-mode imports (no PDF-BLACK layers) mix pipe geometry with walls and annotation on
     // generic layers; use a tighter reach to avoid associating walls near pipe tags.
@@ -631,6 +694,11 @@ fn read_pipes_from_tags(
         let Some(first) = pts.first() else { continue };
         let Some(level) = level_at(&sp.levels, first.x, first.y) else { continue };
         if only.is_some_and(|o| !o.eq_ignore_ascii_case(&level.name)) {
+            continue;
+        }
+        // Linework that comes back round on itself through a tagged area (a detail callout's box
+        // and leader, the fixtures of a bath pair round their tag bubbles): an outline, not a pipe.
+        if !bubbles.is_empty() && pts.iter().any(|p| bubbles.iter().any(|b| b.dist(*p) <= CALLOUT_REACH_FT * upf)) && is_outline(pts, upf) {
             continue;
         }
 
@@ -2554,6 +2622,28 @@ fn closest_mid(a: Vec2, b: Vec2, c: Vec2, e: Vec2) -> Vec2 {
         return a + r * t;
     }
     (a + b + c + e) * 0.25
+}
+
+#[cfg(test)]
+mod outline_tests {
+    use super::*;
+
+    #[test]
+    fn a_callout_box_is_an_outline_and_a_pipe_is_not() {
+        let p = |v: &[(f64, f64)]| v.iter().map(|(x, y)| Vec2::new(*x, *y)).collect::<Vec<_>>();
+        // Inches. A callout's box round two baths (15' x 9'), then its leader down to the bubble.
+        let boxed = p(&[(0.0, 0.0), (180.0, 0.0), (180.0, 108.0), (0.0, 108.0), (0.0, 3.0), (90.0, -2.0), (90.0, -60.0)]);
+        assert!(is_outline(&boxed, 12.0));
+        // A main with branches off it (an L and a T), traced out and back along a branch.
+        let main = p(&[(0.0, 0.0), (300.0, 0.0), (300.0, -48.0), (300.0, 0.0), (420.0, 0.0), (420.0, 60.0)]);
+        assert!(!is_outline(&main, 12.0));
+        // A pipe drawn as its two edges (2" apart) out and back: thin, no area: not an outline.
+        let edges = p(&[(0.0, 0.0), (240.0, 0.0), (240.0, 2.0), (0.0, 2.0), (0.0, 0.5)]);
+        assert!(!is_outline(&edges, 12.0));
+        // A fitting drawn round (a 1' square): too small to be an outline.
+        let fitting = p(&[(0.0, 0.0), (12.0, 0.0), (12.0, 12.0), (0.0, 12.0), (0.0, 0.0)]);
+        assert!(!is_outline(&fitting, 12.0));
+    }
 }
 
 #[cfg(test)]

@@ -367,6 +367,31 @@ struct Item {
     z_in: Option<f64>,
     mounting: Mounting,
     built: bool,
+    /// The height its own record says the documents give it (`mount_height` read off a print, a
+    /// note, a legend or a schedule: a typical room's `44" AFF`), inches, and where.
+    documented: Option<(f64, String)>,
+}
+
+/// An element's mounting height as its record has it from the documents (not a rule's or a
+/// default): inches, and the record's source.
+fn documented_height(e: &cadaddy_doc::Entity) -> Option<(f64, String)> {
+    use cadaddy_doc::props::SourceKind as K;
+    let props = cadaddy_doc::props::read(&e.common.xdata);
+    let p = props.get("mount_height")?;
+    if !matches!(p.source.kind, K::Print | K::Legend | K::Schedule | K::Spec | K::Submittal | K::Note) {
+        return None;
+    }
+    let z = p
+        .text()
+        .trim()
+        .trim_end_matches('"')
+        .trim_end_matches("in")
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|z| z.is_finite() && *z > 0.0 && *z < 240.0)?;
+    let kind = format!("{:?}", p.source.kind).to_ascii_lowercase();
+    Some((z, format!("its record: {kind} {}", p.source.doc.as_deref().unwrap_or_default()).trim().to_string()))
 }
 
 impl Item {
@@ -403,6 +428,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 at: e.at,
                 z_in: e.z_in,
                 built: false,
+                documented: ent.and_then(documented_height),
             }
         })
         .collect();
@@ -456,6 +482,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             z_in,
             mounting,
             built: true,
+            documented: documented_height(e),
         });
     }
     out
@@ -463,6 +490,10 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
 
 /// The height the documents give an element, inches, and where it comes from.
 fn expected_height(it: &Item, room: Option<&Area>, prints: Option<&Prints>, pr: &ProjectRules) -> Option<(f64, String)> {
+    // Its own printed height (a typical room's note by it) first: the most particular document.
+    if let Some(d) = &it.documented {
+        return Some(d.clone());
+    }
     if let Some(p) = prints {
         let mark_is = |m: &Option<String>| m.as_deref().zip(it.mark.as_deref()).is_some_and(|(a, b)| a.eq_ignore_ascii_case(b));
         let rule = p
@@ -1153,6 +1184,28 @@ mod tests {
     }
 
     #[test]
+    fn an_elements_printed_height_is_its_documented_height_a_default_is_not() {
+        use cadaddy_doc::props::{Prop, Props, Source, SourceKind};
+        let with = |kind: SourceKind, doc: &str| {
+            let mut store = Props::default();
+            store.set("mount_height", Prop::new(44.0, Source::from_doc(kind, doc)).with_unit("in"));
+            let mut e = cadaddy_doc::Entity::new(
+                cadaddy_doc::Handle(1),
+                cadaddy_doc::EntityKind::Line(cadaddy_doc::Line {
+                    a: cadaddy_geom::Vec3::new(0.0, 0.0, 0.0),
+                    b: cadaddy_geom::Vec3::new(1.0, 0.0, 0.0),
+                }),
+            );
+            e.common.xdata = cadaddy_doc::props::write(&[], &store).into();
+            e
+        };
+        let noted = documented_height(&with(SourceKind::Note, "44\" AFF on E-6")).unwrap();
+        assert!((noted.0 - 44.0).abs() < 1e-9 && noted.1.contains("E-6"), "{noted:?}");
+        assert_eq!(documented_height(&with(SourceKind::Default, "the usual height")), None);
+        assert_eq!(documented_height(&with(SourceKind::Rule, "project rule")), None);
+    }
+
+    #[test]
     fn items_match_by_kind_words_marks_and_patterns() {
         let it = Item {
             handle: "1A".into(),
@@ -1166,6 +1219,7 @@ mod tests {
             z_in: None,
             mounting: Mounting::Wall,
             built: false,
+            documented: None,
         };
         assert!(it.is("receptacle") && it.is("ef-2") && it.is("ef-*") && it.is("duplex"));
         assert!(!it.is("ptac") && !it.is("e*x") && !it.is("panel"));
