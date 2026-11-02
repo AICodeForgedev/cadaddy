@@ -115,7 +115,7 @@ fn default_height(kind: &str) -> f64 {
 }
 
 /// A mounting height written in `text` (`18" AFF`, `+48"`, `MOUNT AT 48" A.F.F.`, `4'-0" AFF`,
-/// `4'-0" TO TOP`, `1'-6" CENTERLINE`), inches; only with a word that says it is a mounting
+/// `4'-0" TO TOP`, `1'-4" CENTERLINE`), inches; only with a word that says it is a mounting
 /// height.
 pub fn mount_height_in(text: &str) -> Option<f64> {
     let up = super::mountlist::norm(text).to_ascii_uppercase();
@@ -280,8 +280,8 @@ fn round2(v: f64) -> f64 {
 pub(crate) struct DeviceBuild {
     pub built: usize,
     /// How many took their height from each source (`own_note`, `elevation`,
-    /// `enlarged_plan_note`, `legend`, `general_notes`, `schedule`, `project_rule`, `ceiling`,
-    /// `floor`, `equipment`, `default`).
+    /// `enlarged_plan_note`, `legend`, `general_notes`, `project_rule`, `ceiling`, `floor`,
+    /// `equipment`, `wall_luminaire_rule`, `default`).
     pub heights: BTreeMap<&'static str, usize>,
     /// The devices whose height no document gives, by kind.
     pub defaults: BTreeMap<String, usize>,
@@ -993,7 +993,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 // A luminaire on a wall (an exit sign, a sconce, a wall pack): 7'-6" unless printed.
                 let wall_light = (field(t, "mount").as_deref() == Some("wall")).then(|| Chosen {
                     inches: WALL_LUMINAIRE_IN,
-                    from: "default",
+                    from: "wall_luminaire_rule",
                     source: SourceKind::Rule,
                     doc: "a wall luminaire (exit sign, sconce): 7'-6\" over the floor".into(),
                     datum: Datum::Centre,
@@ -1082,7 +1082,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         store.set(
             "mount_height_from",
             Prop::new(height.from, Source::computed()).with_note(
-                "own_note, elevation, enlarged_plan_note, legend, general_notes, project_rule (the documents, in order), ceiling, floor, equipment or default",
+                "own_note, elevation, enlarged_plan_note, legend, general_notes, project_rule (the documents, in order), ceiling, floor, equipment, wall_luminaire_rule or default",
             ),
         );
         store.set(

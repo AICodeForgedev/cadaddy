@@ -7814,8 +7814,8 @@ const MAX_LEGEND_SHEETS: usize = 6;
 /// general (accessibility) sheets, the architecture's, the trades'.
 const MOUNT_NOTE_DISCIPLINES: [&str; 6] = ["G", "A", "E", "FA", "P", "M"];
 
-/// The mounting heights the notes of the set's sheets that aren't plans list (`17. ELECTRICAL
-/// DEVICE MOUNTED HEIGHTS: … RECEPTACLES 1'-6" CENTERLINE`, an accessibility sheet's `WATER
+/// The mounting heights the notes of the set's sheets that aren't plans list (`9. WIRING
+/// DEVICE MOUNTED HEIGHTS: … RECEPTACLES 1'-4" CENTERLINE`, an accessibility sheet's `WATER
 /// CLOSETS (TO TOP OF SEAT): STANDARD = …`), each with its sheet.
 fn mount_notes(job: &GuidedJob) -> Vec<cadaddy_walk3d::MountNote> {
     let mut out: Vec<cadaddy_walk3d::MountNote> = Vec::new();

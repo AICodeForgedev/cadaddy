@@ -2151,15 +2151,15 @@ impl Issue {
     }
 }
 
-/// A mounting height a sheet's notes give a kind of item: `RECEPTACLES 1'-6" CENTERLINE` under a
-/// general note's `DEVICE MOUNTED HEIGHTS`, `WATER CLOSETS (TO TOP OF SEAT): STANDARD = 14" TO 15".
+/// A mounting height a sheet's notes give a kind of item: `RECEPTACLES 1'-4" CENTERLINE` under a
+/// general note's `DEVICE MOUNTED HEIGHTS`, `WATER CLOSETS (TO TOP OF SEAT): STANDARD = 15" TO 16".
 /// ADA = 17" TO 19"` on an accessibility sheet.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MountNote {
     /// The sheet it is on.
     pub sheet: String,
-    /// What it is for, as written (`TOGGLE SWITCH`, `WATER CLOSETS`).
+    /// What it is for, as written (`LIGHT SWITCH`, `WATER CLOSETS`).
     pub subject: String,
     /// Its height above the floor, inches: the one it gives (`STANDARD =`), else none.
     pub inches: Option<f64>,

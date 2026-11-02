@@ -1,21 +1,21 @@
 //! The mounting heights a set's notes list (Q6158): a general note's list of device heights
 //!
 //! ```text
-//! 17. ELECTRICAL DEVICE MOUNTED HEIGHTS (UNO):
-//!     • TOGGLE SWITCH        4'-0" AFF TO TOP
-//!     • RECEPTACLES          1'-6" CENTERLINE
+//! 9. WIRING DEVICE MOUNTED HEIGHTS (UNLESS NOTED):
+//!     • LIGHT SWITCH        3'-10" AFF TO TOP
+//!     • RECEPTACLES          1'-4" CENTERLINE
 //! ```
 //!
 //! and an accessibility sheet's numbered list of what goes how high
 //!
 //! ```text
-//! 7. WATER CLOSETS (TO TOP OF SEAT): STANDARD = 14" TO 15". ADA (TO TOP OF
-//!    SEAT) = 17" TO 19". ADA FLUSH CONTROLS = 44" MAX.
+//! 3. WATER CLOSETS (TO TOP OF SEAT): STANDARD = 15" TO 16". ADA (TO TOP OF
+//!    SEAT) = 17" TO 19". ADA TRIP LEVER = 44" MAX.
 //! ```
 //!
 //! Each entry keeps what it is for (its subject), the height for a standard room and for an
 //! accessible one, what the height is measured to on the item (its middle, top or bottom), and
-//! the words read. A keyed note (`10. RECEPTACLE FOR PTAC … MOUNT 18" AFF`) is no list: only a
+//! the words read. A keyed note (`4. RECEPTACLE FOR THE UNIT HEATER … MOUNT 24" AFF`) is no list: only a
 //! numbered note whose heading says it lists heights, or one written `STANDARD =` / `ADA =`, is
 //! read. Every scan is capped; nothing here panics.
 
@@ -32,7 +32,7 @@ const MAX_LINES: usize = 16;
 /// A note's next line starts within this many text heights below the one before.
 const LINE_GAP: f64 = 2.5;
 /// A note's lines start this far right of its number at most (text heights): its values'
-/// column too (`1'-6" CENTERLINE` beside `RECEPTACLES`).
+/// column too (`1'-4" CENTERLINE` beside `RECEPTACLES`).
 const NOTE_WIDTH: f64 = 30.0;
 /// Entries read off one set, at most.
 pub const MAX_ENTRIES: usize = 2_000;
@@ -107,7 +107,7 @@ pub struct Dim {
     pub inches: f64,
     pub min: bool,
     pub max: bool,
-    /// `14" TO 15"`: this one is the range's start.
+    /// `20" TO 22"`: this one is the range's start.
     pub to_next: bool,
 }
 
@@ -154,7 +154,7 @@ fn skip_spaces(b: &[u8], mut i: usize) -> usize {
     i
 }
 
-/// The heights written in `text` (`18"`, `1'-6"`, `4' - 0"`, `43 3/4"`, `46 INCHES`), in order.
+/// The heights written in `text` (`18"`, `1'-8"`, `4' - 2"`, `41 1/2"`, `52 INCHES`), in order.
 pub fn dims(text: &str) -> Vec<Dim> {
     let u = norm(text).to_ascii_uppercase();
     let b = u.as_bytes();
@@ -222,7 +222,7 @@ pub fn dims(text: &str) -> Vec<Dim> {
 }
 
 /// The height a run of written heights gives: a maximum's (`36" MAX`: what the item is built
-/// to), else a range's middle (`14" TO 15"`), else the first.
+/// to), else a range's middle (`20" TO 22"`), else the first.
 pub fn pick(ds: &[Dim]) -> Option<f64> {
     if let Some(d) = ds.iter().find(|d| d.max) {
         return Some(d.inches);
@@ -235,8 +235,8 @@ pub fn pick(ds: &[Dim]) -> Option<f64> {
 }
 
 /// The `STANDARD =` and `ADA =` heights of a note's text, and whether it puts the item at the
-/// ceiling (`STANDARD = CEILING HEIGHT`). An `ADA` with other words before its `=` (`ADA FLUSH
-/// CONTROLS =`) is another item's; `(TO TOP OF SEAT)` or a reach (`ADA SIDE REACH =`) is its own.
+/// ceiling (`STANDARD = CEILING HEIGHT`). An `ADA` with other words before its `=` (`ADA TRIP
+/// LEVER =`) is another item's; `(TO TOP OF SEAT)` or a reach (`ADA SIDE REACH =`) is its own.
 fn standard_and_ada(text: &str) -> (Option<f64>, Option<f64>, bool) {
     let u = norm(text).to_ascii_uppercase();
     let mut at: Vec<(usize, bool)> = Vec::new();
@@ -280,7 +280,7 @@ fn standard_and_ada(text: &str) -> (Option<f64>, Option<f64>, bool) {
     (standard, accessible, ceiling)
 }
 
-/// A numbered note's start: `17.ELECTRICAL …`, `7. WATER CLOSETS …` (not `1.28 GPF`).
+/// A numbered note's start: `9.WIRING …`, `3. WATER CLOSETS …` (not `1.6 GPF`).
 fn numbered(t: &str) -> bool {
     let t = t.trim_start();
     let digits = t.chars().take_while(char::is_ascii_digit).count();
@@ -288,15 +288,18 @@ fn numbered(t: &str) -> bool {
         && t.get(digits..).is_some_and(|r| r.starts_with('.') && !r.get(1..).is_some_and(|x| x.starts_with(|c: char| c.is_ascii_digit())))
 }
 
-/// The text after a note's number.
+/// The text after a note's number (all of it when it has none).
 fn after_number(t: &str) -> &str {
     let t = t.trim_start();
+    if !numbered(t) {
+        return t.trim();
+    }
     let digits = t.chars().take_while(char::is_ascii_digit).count();
     t.get(digits + 1..).unwrap_or("").trim()
 }
 
 /// A heading over a list of heights with no number of its own (`DEVICE MOUNTING HEIGHTS`,
-/// `MOUNTING HEIGHTS (UNO):`).
+/// `MOUNTING HEIGHTS:`).
 fn heights_heading(t: &str) -> bool {
     let u = t.trim().to_ascii_uppercase();
     u.len() <= 60 && (u.contains("MOUNTING HEIGHT") || u.contains("MOUNTED HEIGHT")) && dims(&u).is_empty()
@@ -441,8 +444,9 @@ pub fn read_lists_marking(texts: &[TextItem], used: &mut [bool]) -> Vec<Listed> 
                     continue;
                 }
                 let at = row.first().map_or(s.at, |t| t.at);
+                let said = row.iter().filter(|t| !bullet(&t.value)).map(|t| norm(&t.value)).collect::<Vec<_>>().join(" ");
                 out.push(Listed {
-                    text: format!("{}: {subject} {value}", subject_of(after_number(&head))),
+                    text: format!("{}: {said}", subject_of(after_number(&head))),
                     subject,
                     inches: Some(inches),
                     ada_inches: None,
@@ -574,21 +578,21 @@ mod tests {
 
     #[test]
     fn heights_as_lists_write_them() {
-        let d = dims("STANDARD = 14\u{201D} TO 15\". ADA (TO TOP OF SEAT) = 17\" TO 19\u{201D}.");
-        assert_eq!(d.iter().map(|d| d.inches).collect::<Vec<_>>(), vec![14.0, 15.0, 17.0, 19.0]);
+        let d = dims("STANDARD = 15\u{201D} TO 16\". ADA (TO TOP OF SEAT) = 17\" TO 19\u{201D}.");
+        assert_eq!(d.iter().map(|d| d.inches).collect::<Vec<_>>(), vec![15.0, 16.0, 17.0, 19.0]);
         assert!(d.first().is_some_and(|d| d.to_next));
-        assert_eq!(pick(&dims("14\" TO 15\"")), Some(14.5));
-        assert_eq!(pick(&dims("38\u{201D} MIN., 43\" MAX.")), Some(43.0));
-        assert_eq!(pick(&dims("1'-6\" CENTERLINE")), Some(18.0));
-        assert_eq!(pick(&dims("4' - 0\" AFF TO TOP")), Some(48.0));
-        assert_eq!(pick(&dims("43 3/4\" AFF")), Some(43.75));
-        assert_eq!(pick(&dims("MOUNT AT 46 INCHES")), Some(46.0));
-        assert_eq!(pick(&dims("1.28 GPF TOILET")), None, "a flow is no height");
+        assert_eq!(pick(&dims("20\" TO 22\"")), Some(21.0));
+        assert_eq!(pick(&dims("36\u{201D} MIN., 42\" MAX.")), Some(42.0));
+        assert_eq!(pick(&dims("1'-4\" CENTERLINE")), Some(16.0));
+        assert_eq!(pick(&dims("4' - 2\" AFF TO TOP")), Some(50.0));
+        assert_eq!(pick(&dims("41 1/2\" AFF")), Some(41.5));
+        assert_eq!(pick(&dims("SET AT 52 INCHES")), Some(52.0));
+        assert_eq!(pick(&dims("1.6 GPF TOILET")), None, "a flow is no height");
         assert_eq!(pick(&dims("4\" SQUARE BOX")), Some(4.0), "a size reads as one; the lists' subjects keep sizes out");
-        assert_eq!(Datum::of("4'-0\" AFF TO TOP"), Datum::Top);
-        assert_eq!(Datum::of("7'-6\" AFF TO BOTTOM"), Datum::Bottom);
-        assert_eq!(Datum::of("1'-6\" CENTERLINE"), Datum::Centre);
-        assert_eq!(Datum::of("LAVATORIES (TO SINK RIM/ COUNTERTOP)"), Datum::Top);
+        assert_eq!(Datum::of("3'-10\" AFF TO TOP"), Datum::Top);
+        assert_eq!(Datum::of("8'-0\" AFF TO BOTTOM"), Datum::Bottom);
+        assert_eq!(Datum::of("1'-4\" CENTERLINE"), Datum::Centre);
+        assert_eq!(Datum::of("LAVATORIES (TO RIM)"), Datum::Top);
         assert_eq!(Datum::of("(TO C.L. OF OUTLET)"), Datum::Centre);
     }
 
@@ -596,21 +600,18 @@ mod tests {
     fn standard_and_accessible_heights() {
         assert_eq!(
             standard_and_ada(
-                "WATER CLOSETS (TO TOP OF SEAT): STANDARD = 14\" TO 15\". ADA (TO TOP OF SEAT) = 17\" TO 19\". ADA FLUSH CONTROLS = 44\" MAX."
+                "WATER CLOSETS (TO TOP OF SEAT): STANDARD = 15\" TO 16\". ADA (TO TOP OF SEAT) = 17\" TO 19\". ADA TRIP LEVER = 44\" MAX."
             ),
-            (Some(14.5), Some(18.0), false)
+            (Some(15.5), Some(18.0), false)
         );
         assert_eq!(
-            standard_and_ada("LAVATORIES (TO SINK RIM/ COUNTERTOP): STANDARD = 36\" MAX. ADA = 34\" MAX. (29\" MIN. CLEAR KNEE SPACE)"),
-            (Some(36.0), Some(34.0), false)
+            standard_and_ada("LAVATORIES (TO RIM): STANDARD = 35\" MAX. ADA = 34\" MAX. (27\" MIN. KNEE CLEARANCE)"),
+            (Some(35.0), Some(34.0), false)
         );
-        assert_eq!(standard_and_ada("COUNTERTOPS (TO SINK RIM/ COUNTERTOP): ADA = 28\" MIN. TO 34\" MAX."), (None, Some(34.0), false));
-        assert_eq!(standard_and_ada("SMOKE AND/OR HEAT DETECTORS: STANDARD = CEILING HEIGHT"), (None, None, true));
-        assert_eq!(
-            standard_and_ada("LIGHT SWITCHES & CARD READERS (TO C.L.): LOCATE 6\" FROM DOOR JAMB. ADA = 48\" MAX."),
-            (None, Some(48.0), false)
-        );
-        assert_eq!(standard_and_ada("MIRRORS (TO B.O. REFLECTIVE SURFACE): STANDARD = VARIES. ADA = 40\" MAX."), (None, Some(40.0), false));
+        assert_eq!(standard_and_ada("COUNTERS (TO TOP): ADA = 28\" MIN. TO 34\" MAX."), (None, Some(34.0), false));
+        assert_eq!(standard_and_ada("DETECTORS: STANDARD = CEILING HEIGHT"), (None, None, true));
+        assert_eq!(standard_and_ada("SWITCHES AND CARD READERS (TO C.L.): KEEP 4\" FROM THE DOOR FRAME. ADA = 48\" MAX."), (None, Some(48.0), false));
+        assert_eq!(standard_and_ada("MIRRORS (TO B.O. GLASS): STANDARD = VARIES. ADA = 40\" MAX."), (None, Some(40.0), false));
     }
 
     #[test]
@@ -618,38 +619,38 @@ mod tests {
         // A general note listing heights, its values in a column right of the items.
         let h = 1.0;
         let mut texts = vec![
-            t("16. SWITCHES AND RECEPTACLES SHALL NOT BE MOUNTED BACK TO BACK.", 0.0, 10.0, h),
-            t("17.ELECTRICAL DEVICE MOUNTED HEIGHTS (UNO):", 0.0, 8.0, h),
+            t("8. OUTLETS SHALL NOT SHARE A STUD CAVITY.", 0.0, 10.0, h),
+            t("9.WIRING DEVICE MOUNTED HEIGHTS (UNLESS NOTED):", 0.0, 8.0, h),
             t("\u{2022}", 2.0, 6.5, h),
-            t("TOGGLE SWITCH", 4.0, 6.5, h),
-            t("4'-0\" AFF TO TOP", 23.0, 6.5, h),
+            t("LIGHT SWITCH", 4.0, 6.5, h),
+            t("3'-10\" AFF TO TOP", 23.0, 6.5, h),
             t("\u{2022}", 2.0, 5.0, h),
             t("RECEPTACLES", 4.0, 5.0, h),
-            t("1'-6\" CENTERLINE", 23.0, 5.0, h),
-            t("18.PROVIDE TYPE-WRITTEN PANELBOARD SCHEDULES.", 0.0, 2.0, h),
+            t("1'-4\" CENTERLINE", 23.0, 5.0, h),
+            t("10.LABEL EVERY PANEL DIRECTORY.", 0.0, 2.0, h),
             // A keyed note with a height: not a list.
-            t("10. 20A/2P RECEPTACLE FOR PTAC IN WALL. MOUNT 18\" AFF.", 100.0, 10.0, h),
+            t("4. 30A RECEPTACLE FOR THE UNIT HEATER. MOUNT 24\" AFF.", 100.0, 10.0, h),
             // An accessibility sheet's list, wrapped.
-            t("7. WATER CLOSETS (TO TOP OF SEAT):", 200.0, 10.0, h),
-            t("STANDARD = 14\u{201D} TO 15\". ADA (TO TOP OF", 202.6, 8.4, h),
-            t("SEAT) = 17\" TO 19\u{201D}. ADA FLUSH CONTROLS =", 202.6, 6.8, h),
+            t("3. WATER CLOSETS (TO TOP OF SEAT):", 200.0, 10.0, h),
+            t("STANDARD = 15\u{201D} TO 16\". ADA (TO TOP OF", 202.6, 8.4, h),
+            t("SEAT) = 17\" TO 19\u{201D}. ADA TRIP LEVER =", 202.6, 6.8, h),
             t("44\" MAX.", 202.6, 5.2, h),
-            t("8. LAVATORIES (TO SINK RIM/ COUNTERTOP):", 200.0, 3.6, h),
-            t("STANDARD = 36\" MAX. ADA = 34\" MAX.", 202.6, 2.0, h),
+            t("4. LAVATORIES (TO RIM):", 200.0, 3.6, h),
+            t("STANDARD = 35\" MAX. ADA = 34\" MAX.", 202.6, 2.0, h),
         ];
         // Text far right (a title block) is no part of a note.
         texts.push(t("11500 SOME DRIVE, STE 330", 60.0, 6.5, h));
         let l = read_lists(&texts);
         let by = |s: &str| l.iter().find(|x| x.subject == s).cloned();
-        let sw = by("TOGGLE SWITCH").expect("switch row");
-        assert_eq!((sw.inches, sw.datum), (Some(48.0), Datum::Top));
+        let sw = by("LIGHT SWITCH").expect("switch row");
+        assert_eq!((sw.inches, sw.datum), (Some(46.0), Datum::Top));
         let rec = by("RECEPTACLES").expect("receptacle row");
-        assert_eq!((rec.inches, rec.datum), (Some(18.0), Datum::Centre));
+        assert_eq!((rec.inches, rec.datum), (Some(16.0), Datum::Centre));
         let wc = by("WATER CLOSETS").expect("water closets");
-        assert_eq!((wc.inches, wc.ada_inches, wc.datum), (Some(14.5), Some(18.0), Datum::Top));
+        assert_eq!((wc.inches, wc.ada_inches, wc.datum), (Some(15.5), Some(18.0), Datum::Top));
         let lav = by("LAVATORIES").expect("lavatories");
-        assert_eq!((lav.inches, lav.ada_inches, lav.datum), (Some(36.0), Some(34.0), Datum::Top));
-        assert!(!l.iter().any(|x| x.text.contains("20A/2P")), "a keyed note is no list: {l:?}");
+        assert_eq!((lav.inches, lav.ada_inches, lav.datum), (Some(35.0), Some(34.0), Datum::Top));
+        assert!(!l.iter().any(|x| x.text.contains("30A")), "a keyed note is no list: {l:?}");
         assert_eq!(l.len(), 4, "{l:?}");
     }
 
@@ -659,30 +660,30 @@ mod tests {
         let texts = vec![
             // An unnumbered heading, each row one text with leaders.
             t("DEVICE MOUNTING HEIGHTS:", 0.0, 20.0, h),
-            t("THERMOSTATS ........ 4'-0\" AFF TO TOP", 0.0, 17.0, h),
+            t("THERMOSTATS ........ 3'-10\" AFF TO TOP", 0.0, 17.0, h),
             t("RECEPTACLES ........ 18\" AFF", 0.0, 14.0, h),
             // The value left of the item.
-            t("+46\"", 0.0, 11.0, h),
-            t("DOORBELL", 8.0, 11.0, h),
+            t("+52\"", 0.0, 11.0, h),
+            t("CHIME", 8.0, 11.0, h),
         ];
         let l = read_lists(&texts);
         let by = |s: &str| l.iter().find(|x| x.subject == s).cloned();
-        assert_eq!(by("THERMOSTATS").map(|x| (x.inches, x.datum)), Some((Some(48.0), Datum::Top)), "{l:?}");
+        assert_eq!(by("THERMOSTATS").map(|x| (x.inches, x.datum)), Some((Some(46.0), Datum::Top)), "{l:?}");
         assert_eq!(by("RECEPTACLES").map(|x| x.inches), Some(Some(18.0)), "{l:?}");
-        assert_eq!(by("DOORBELL").map(|x| x.inches), Some(Some(46.0)), "{l:?}");
+        assert_eq!(by("CHIME").map(|x| x.inches), Some(Some(52.0)), "{l:?}");
         assert!(names_item("THERMOSTATS", "thermostat", None, Some("T")));
     }
 
     #[test]
     fn entries_name_items_by_their_words() {
         assert!(names_item("RECEPTACLES", "receptacle", None, Some("REC")));
-        assert!(names_item("TOGGLE SWITCH", "switch", Some("switch SD"), Some("SD")));
+        assert!(names_item("LIGHT SWITCH", "switch", Some("switch SD"), Some("SD")));
         assert!(names_item("WATER CLOSETS", "plumbing_fixture", Some("water closet P-1"), Some("P-1")));
         assert!(names_item("LAVATORIES", "plumbing_fixture", Some("lavatory P-2"), Some("P-2")));
-        assert!(names_item("COUNTERTOPS", "plumbing_fixture", Some("kitchen sink P-5"), Some("P-5")));
+        assert!(names_item("COUNTERS", "plumbing_fixture", Some("kitchen sink P-5"), Some("P-5")));
         assert!(!names_item("WATER CLOSETS", "plumbing_fixture", Some("lavatory P-2"), Some("P-2")));
         assert!(!names_item("RECEPTACLES", "low_voltage_outlet", Some("data outlet"), Some("DA")), "a data outlet is no receptacle");
-        assert!(names_item("LIGHT SWITCHES & CARD READERS", "low_voltage_outlet", None, Some("CR")));
+        assert!(names_item("SWITCHES AND CARD READERS", "low_voltage_outlet", None, Some("CR")));
         assert!(names_item("FIRE ALARM PULL STATIONS", "pull_station", None, Some("P")));
         assert!(!names_item("PANELBOARDS", "receptacle", None, Some("REC")));
     }

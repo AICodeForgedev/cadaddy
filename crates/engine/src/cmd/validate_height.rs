@@ -87,7 +87,7 @@ pub struct Found {
     /// The words read.
     pub text: Option<String>,
     /// What the height is measured to on the item (its middle unless the words say its top or
-    /// bottom: `4'-0" AFF TO TOP`).
+    /// bottom: `3'-10" AFF TO TOP`).
     pub datum: Datum,
 }
 
@@ -115,7 +115,7 @@ pub struct Record {
     /// 16" high` written as a print's).
     pub assumed: bool,
     /// What the height is measured to on the element (`mount_datum`: its top for a switch
-    /// `4'-0" AFF TO TOP`, a water closet's seat); its middle when not said.
+    /// `3'-10" AFF TO TOP`, a water closet's seat); its middle when not said.
     pub datum: Datum,
 }
 
@@ -341,7 +341,7 @@ fn is_notes_heading(t: &str) -> bool {
 }
 
 /// Is `t` a legend's heading: a device legend or schedule's (`ELECTRICAL LEGEND`), or a symbol
-/// list's (`FIRE ALARM SYMBOL LIST`)?
+/// list's (`FIRE ALARM DEVICE SYMBOL LIST`)?
 fn is_legend_heading(t: &str) -> bool {
     let u = t.trim().to_ascii_uppercase();
     cadaddy_mepfix::device_types::is_device_table_heading(&u) || (u.len() <= 60 && u.contains("SYMBOL") && u.contains("LIST"))
@@ -366,7 +366,7 @@ struct Entry {
     rooms: Vec<String>,
     trade: &'static str,
     found: Found,
-    /// A list's item (`WATER CLOSETS`, `TOGGLE SWITCH`): what it names, matched by its words
+    /// A list's item (`WATER CLOSETS`, `LIGHT SWITCH`): what it names, matched by its words
     /// ([`mountlist::names_item`]); a legend row's words after its mark.
     subject: Option<String>,
     /// The height a list gives an accessible room's item (`ADA = 34" MAX.`).
@@ -695,7 +695,7 @@ impl DocHeights {
                 *u = true;
             }
         }
-        // A notes list of heights (`17. DEVICE MOUNTED HEIGHTS: … RECEPTACLES 1'-6" CENTERLINE`, an
+        // A notes list of heights (`9. WIRING DEVICE MOUNTED HEIGHTS: … RECEPTACLES 1'-4" CENTERLINE`, an
         // accessibility sheet's `WATER CLOSETS (TO TOP OF SEAT): STANDARD = …`): its items.
         for l in mountlist::read_lists_marking(&all, &mut used) {
             if out.notes.len() >= MAX_ENTRIES {
@@ -1003,8 +1003,8 @@ impl DocHeights {
         mounting_rule(a, pr)
     }
 
-    /// The words of the legend rows of `mark` (what the legend says it is: `RESIDENT ROOM SMOKE
-    /// DETECTOR …  CEIL./WALL`).
+    /// The words of the legend rows of `mark` (what the legend says it is: `SLEEPING ROOM SMOKE
+    /// DETECTOR …  CEILING OR WALL`).
     pub fn legend_words(&self, mark: &str) -> Vec<&str> {
         self.legend_rows.iter().filter(|(m, _)| m.eq_ignore_ascii_case(mark.trim())).map(|(_, w)| w.as_str()).collect()
     }

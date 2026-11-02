@@ -212,29 +212,29 @@ fn documented() -> Session {
     room_tags(&mut s);
     // A symbol with its own AFF note beside it.
     let sym = s.execute("circle", &json!({"center": [60, 30], "radius": 3})).expect("circle")["handle"].as_str().expect("handle").to_string();
-    text(&mut s, [60.0, 38.0], "44\" AFF");
+    text(&mut s, [60.0, 38.0], "42\" AFF");
     // The legend: a thermostat row with its height.
     text(&mut s, [900.0, 900.0], "ELECTRICAL LEGEND");
     text(&mut s, [880.0, 880.0], "T");
     text(&mut s, [920.0, 880.0], "THERMOSTAT, +46\" AFF");
     // A fire alarm symbol list: a pull station to its top, a sleeping room's detector.
-    text(&mut s, [3000.0, 900.0], "FIRE ALARM SYMBOL LIST");
+    text(&mut s, [3000.0, 900.0], "FIRE ALARM DEVICE SYMBOL LIST");
     text(&mut s, [2950.0, 870.0], "P");
-    text(&mut s, [2980.0, 870.0], "FIRE ALARM MANUAL PULL STATION");
+    text(&mut s, [2980.0, 870.0], "MANUAL FIRE ALARM PULL STATION");
     text(&mut s, [3200.0, 870.0], "4'-0\" TO TOP");
     text(&mut s, [2950.0, 850.0], "S");
     text(&mut s, [2957.0, 848.0], "R");
-    text(&mut s, [2980.0, 850.0], "RESIDENT ROOM SMOKE DETECTOR AND SOUNDER BASE");
-    text(&mut s, [3200.0, 850.0], "CEIL./WALL");
+    text(&mut s, [2980.0, 850.0], "SLEEPING ROOM SMOKE DETECTOR WITH BASE SOUNDER");
+    text(&mut s, [3200.0, 850.0], "CEILING OR WALL");
     // A general note listing heights.
-    text(&mut s, [2000.0, 400.0], "17.ELECTRICAL DEVICE MOUNTED HEIGHTS (UNO):");
-    for (i, (what, h)) in [("TOGGLE SWITCH", "4'-0\" AFF TO TOP"), ("RECEPTACLES", "1'-6\" CENTERLINE")].iter().enumerate() {
+    text(&mut s, [2000.0, 400.0], "9.WIRING DEVICE MOUNTED HEIGHTS (UNLESS NOTED):");
+    for (i, (what, h)) in [("LIGHT SWITCH", "3'-10\" AFF TO TOP"), ("RECEPTACLES", "1'-4\" CENTERLINE")].iter().enumerate() {
         let y = 391.0 - 9.0 * i as f64;
         text(&mut s, [2012.0, y], "\u{2022}");
         text(&mut s, [2024.0, y], what);
         text(&mut s, [2138.0, y], h);
     }
-    text(&mut s, [2000.0, 370.0], "18.PROVIDE TYPE-WRITTEN PANELBOARD SCHEDULES.");
+    text(&mut s, [2000.0, 370.0], "10.LABEL EVERY PANEL DIRECTORY.");
     let tags = vec![
         device(5.0, 0.8, "REC", "receptacle", &sym, json!({})),
         device(8.0, 0.8, "REC2", "receptacle", "1F1", json!({"mount_height_in": "38", "mount_height_note": "38\" AFF on A-501"})),
@@ -250,10 +250,10 @@ fn documented() -> Session {
         device(38.0, 9.0, "FD", "plumbing_fixture", "1FB", json!({"fixture": "FLOOR DRAIN"})),
     ];
     let notes = json!({"mount_notes": [
-        {"sheet": "G002", "subject": "WATER CLOSETS", "inches": 14.5, "ada_inches": 18.0, "datum": "top",
-         "text": "WATER CLOSETS (TO TOP OF SEAT): STANDARD = 14\" TO 15\". ADA (TO TOP OF SEAT) = 17\" TO 19\"."},
-        {"sheet": "G002", "subject": "LAVATORIES", "inches": 36.0, "ada_inches": 34.0, "datum": "top",
-         "text": "LAVATORIES (TO SINK RIM/ COUNTERTOP): STANDARD = 36\" MAX. ADA = 34\" MAX."}
+        {"sheet": "G-001", "subject": "WATER CLOSETS", "inches": 15.5, "ada_inches": 18.0, "datum": "top",
+         "text": "WATER CLOSETS (TO TOP OF SEAT): STANDARD = 15\" TO 16\". ADA (TO TOP OF SEAT) = 17\" TO 19\"."},
+        {"sheet": "G-001", "subject": "LAVATORIES", "inches": 35.0, "ada_inches": 34.0, "datum": "top",
+         "text": "LAVATORIES (TO RIM): STANDARD = 35\" MAX. ADA = 34\" MAX."}
     ]});
     build(&mut s, spec(tags, notes));
     s
@@ -267,18 +267,18 @@ fn heights_come_from_the_documents_in_order_with_their_source() {
         let p = props(s, mark);
         (p["mount_height"]["value"].clone(), p["mount_height"]["source"]["kind"].clone(), p["mount_height_from"]["value"].clone())
     };
-    // Its own AFF note by its symbol, before the general note's 18".
-    assert_eq!(h(&mut s, "REC"), (json!(44.0), json!("note"), json!("own_note")));
+    // Its own AFF note by its symbol, before the general note's 16".
+    assert_eq!(h(&mut s, "REC"), (json!(42.0), json!("note"), json!("own_note")));
     // Its typical room's enlarged plan note.
     assert_eq!(h(&mut s, "REC2"), (json!(38.0), json!("note"), json!("enlarged_plan_note")));
     // The general notes' list: a receptacle to its middle, a switch to its top.
-    assert_eq!(h(&mut s, "REC3"), (json!(18.0), json!("note"), json!("general_notes")));
-    assert_eq!(h(&mut s, "S"), (json!(48.0), json!("note"), json!("general_notes")));
+    assert_eq!(h(&mut s, "REC3"), (json!(16.0), json!("note"), json!("general_notes")));
+    assert_eq!(h(&mut s, "S"), (json!(46.0), json!("note"), json!("general_notes")));
     let (_, z0, z1) = extent(&mut s, "S");
-    assert!((z1 - 48.0).abs() < 1e-6 && (z0 - 44.0).abs() < 1e-6, "the switch's top at 48\": {z0}..{z1}");
+    assert!((z1 - 46.0).abs() < 1e-6 && (z0 - 42.0).abs() < 1e-6, "the switch's top at 46\": {z0}..{z1}");
     assert_eq!(props(&mut s, "S")["mount_datum"]["value"], "top");
     let (_, z0, z1) = extent(&mut s, "REC3");
-    assert!(((z0 + z1) / 2.0 - 18.0).abs() < 1e-6, "the receptacle's middle at 18\"");
+    assert!(((z0 + z1) / 2.0 - 16.0).abs() < 1e-6, "the receptacle's middle at 16\"");
     // The legend's row.
     assert_eq!(h(&mut s, "T"), (json!(46.0), json!("legend"), json!("legend")));
     // A pull station by its symbol list's row, to its top.
@@ -304,7 +304,7 @@ fn ceiling_devices_sit_at_the_ceiling_and_floor_fixtures_on_the_floor() {
     // A water closet on the floor up to its seat (the accessibility list), an accessible one's
     // to the ADA height; a floor drain in the floor.
     let (_, z0, z1) = extent(&mut s, "P-1");
-    assert!(z0.abs() < 1e-6 && (z1 - 14.5).abs() < 1e-6, "P-1 from the floor to its seat: {z0}..{z1}");
+    assert!(z0.abs() < 1e-6 && (z1 - 15.5).abs() < 1e-6, "P-1 from the floor to its seat: {z0}..{z1}");
     let p1 = props(&mut s, "P-1");
     assert_eq!((p1["mounting"]["value"].clone(), p1["mount_height"]["source"]["kind"].clone()), (json!("floor"), json!("note")), "{p1:#}");
     let (_, _, z1) = extent(&mut s, "P-1H");
@@ -312,9 +312,9 @@ fn ceiling_devices_sit_at_the_ceiling_and_floor_fixtures_on_the_floor() {
     let (_, z0, _) = extent(&mut s, "FD");
     assert!(z0.abs() < 1e-6, "the floor drain at the floor");
     assert_eq!(props(&mut s, "FD")["mount_height_from"]["value"], "floor");
-    // A lavatory on its wall, its rim at the list's 36".
+    // A lavatory on its wall, its rim at the list's 35".
     let (_, _, z1) = extent(&mut s, "P-2");
-    assert!((z1 - 36.0).abs() < 1e-6, "the lavatory's rim at 36\": {z1}");
+    assert!((z1 - 35.0).abs() < 1e-6, "the lavatory's rim at 35\": {z1}");
     assert_eq!(props(&mut s, "P-2")["mounting"]["value"], "wall");
 }
 
@@ -340,7 +340,7 @@ fn g_height_compares_a_height_to_its_top_at_the_devices_top() {
     for f in sw {
         assert_eq!(f["verdict"], "pass", "{f:#}");
         assert_eq!(f["measured"]["to"], "top", "{f:#}");
-        assert!((f["measured"]["aff_in"].as_f64().unwrap_or(0.0) - 48.0).abs() < 0.01, "{f:#}");
+        assert!((f["measured"]["aff_in"].as_f64().unwrap_or(0.0) - 46.0).abs() < 0.01, "{f:#}");
     }
 }
 
