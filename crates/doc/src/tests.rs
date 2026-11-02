@@ -587,3 +587,46 @@ fn space_names_its_tab() {
     assert_eq!(p.layout(), Some("Sheet A"));
     assert_eq!(p.tab_name(), "Sheet A");
 }
+
+#[test]
+fn objects_whose_size_puts_them_beyond_the_limit_are_dropped() {
+    let mut d = Drawing::new_imperial();
+    let ins = |block: &str, s: f64| {
+        EntityKind::Insert(Insert {
+            block: block.into(),
+            insert: Vec3::ZERO,
+            scale: Vec3::new(s, s, 1.0),
+            rotation: 0.0,
+            attribs: vec![],
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+            clip: None,
+        })
+    };
+    let circle = |r: f64| EntityKind::Circle(Circle { center: Vec3::ZERO, radius: r });
+    // "Unit" holds a unit line; "Mixed" a unit line and a circle far too big, so the circle goes
+    // and references to "Mixed" measure what is left.
+    let mut unit = Block::new("Unit");
+    unit.entities.push(Entity::new(Handle(1), line((0.0, 0.0), (1.0, 0.0))));
+    d.blocks.insert("Unit".into(), std::sync::Arc::new(unit));
+    let mut mixed = Block::new("Mixed");
+    mixed.entities.push(Entity::new(Handle(2), line((0.0, 0.0), (1.0, 0.0))));
+    mixed.entities.push(Entity::new(Handle(3), circle(1e300)));
+    d.blocks.insert("Mixed".into(), std::sync::Arc::new(mixed));
+    d.bump_handseed(Handle(10));
+    let keep = [
+        d.add(&Space::Model, Common::default(), line((0.0, 0.0), (10.0, 0.0))).unwrap(),
+        d.add(&Space::Model, Common::default(), circle(1e11)).unwrap(),
+        d.add(&Space::Model, Common::default(), ins("Unit", 2.0)).unwrap(),
+        d.add(&Space::Model, Common::default(), ins("Mixed", 1.0)).unwrap(),
+    ];
+    for kind in [circle(1e13), circle(f64::MAX), ins("Unit", 1e13)] {
+        d.add(&Space::Model, Common::default(), kind).unwrap();
+    }
+    assert_eq!(d.drop_beyond_limit(1e12), 4, "three in model space, one in a block");
+    assert_eq!(d.model.iter().map(|e| e.handle).collect::<Vec<_>>(), keep);
+    assert_eq!(d.block("Mixed").map(|b| b.entities.len()), Some(1));
+    assert_eq!(d.drop_beyond_limit(1e12), 0, "nothing more on a second pass");
+}

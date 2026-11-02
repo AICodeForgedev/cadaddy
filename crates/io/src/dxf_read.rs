@@ -2305,6 +2305,9 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     crate::dxf_raw::read(&secs, &mut d);
     crate::mark_dynamic_copies_anonymous(&mut d);
     fill_measurements(&mut d);
+    // A size (radius, text height, insert scale, width, bulge) that puts an object beyond the
+    // limit drops it as a coordinate there does.
+    let beyond_limit = beyond_limit.saturating_add(d.drop_beyond_limit(LIMIT));
     d.skipped_records = skipped;
     if cut_off {
         d.read_notes.push(CUT_OFF_NOTE.into());
@@ -2327,7 +2330,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     if beyond_limit > 0 {
         let n = beyond_limit;
         d.read_notes.push(format!(
-            "DXF: {n} object{} had coordinates beyond \u{b1}1e12 (the limit CADaddy works within) and {} dropped",
+            "DXF: {n} object{} had coordinates or a size beyond \u{b1}1e12 (the limit CADaddy works within) and {} dropped",
             if n == 1 { "" } else { "s" },
             if n == 1 { "was" } else { "were" }
         ));
@@ -2338,6 +2341,10 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     }
     Ok(d)
 }
+
+/// How far from the origin an object may reach (every command works within it); one beyond it is
+/// dropped on reading.
+pub(crate) const LIMIT: f64 = 1e12;
 
 /// A TEXT, MTEXT, ATTRIB or ATTDEF whose height (group 40) is NaN or infinite gets the default
 /// height (it used to read as 1e-9, invisibly); returns how many were changed.
@@ -2366,7 +2373,7 @@ fn drop_undefined(secs: &mut [cadaddy_dxf::Section]) -> ((usize, usize), usize) 
     // Coordinates (10-39) decide where an object is; other numbers (radii, pattern line offsets,
     // extended data) have their own readers, which take a bad one for 0 or skip it.
     let bad = |t: &Tag| (10..=39).contains(&t.code) && matches!(t.value, cadaddy_dxf::Value::Real(r) if !r.is_finite());
-    let huge = |t: &Tag| (10..=39).contains(&t.code) && matches!(t.value, cadaddy_dxf::Value::Real(r) if r.is_finite() && r.abs() > 1e12);
+    let huge = |t: &Tag| (10..=39).contains(&t.code) && matches!(t.value, cadaddy_dxf::Value::Real(r) if r.is_finite() && r.abs() > LIMIT);
     let (mut objects, mut others, mut oversize) = (0usize, 0usize, 0usize);
     for s in secs.iter_mut() {
         let drops_objects = matches!(s.name.as_str(), "ENTITIES" | "BLOCKS");

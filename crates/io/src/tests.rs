@@ -3348,7 +3348,57 @@ fn dxf_objects_beyond_the_coordinate_limit_are_dropped_with_one_note() {
     assert_eq!(d.entity_count(), 2, "the two lines within ±1e12 stay");
     let notes: Vec<&String> = d.read_notes.iter().filter(|n| n.contains("beyond")).collect();
     assert_eq!(notes.len(), 1, "{:?}", d.read_notes);
-    assert!(notes[0].starts_with("DXF: 2 objects had coordinates beyond \u{b1}1e12"), "{}", notes[0]);
+    assert!(notes[0].starts_with("DXF: 2 objects had coordinates or a size beyond \u{b1}1e12"), "{}", notes[0]);
+}
+
+#[test]
+fn dxf_objects_whose_size_is_beyond_the_limit_are_dropped_with_the_same_note() {
+    let block = "0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n8\n0\n2\nU\n70\n0\n10\n0\n20\n0\n3\nU\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n0\n0\nENDBLK\n8\n0\n0\nENDSEC\n";
+    let far = [
+        "0\nCIRCLE\n8\n0\n10\n0\n20\n0\n40\n1e300\n",
+        "0\nCIRCLE\n8\n0\n10\n0\n20\n0\n40\n1e13\n",
+        "0\nARC\n8\n0\n10\n0\n20\n0\n40\n1e300\n50\n0\n51\n90\n",
+        "0\nTEXT\n8\n0\n10\n0\n20\n0\n40\n1e300\n1\nbig\n",
+        "0\nMTEXT\n8\n0\n10\n0\n20\n0\n40\n1\n41\n1e300\n1\nwide text\n",
+        "0\nINSERT\n8\n0\n2\nU\n10\n0\n20\n0\n41\n1e13\n",
+        "0\nINSERT\n8\n0\n2\nU\n10\n0\n20\n0\n41\n1e300\n42\n1e300\n",
+        "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n1e300\n10\n10\n20\n0\n",
+    ];
+    let kept = [
+        "0\nLINE\n8\n0\n10\n0\n20\n0\n11\n10\n21\n0\n",
+        "0\nCIRCLE\n8\n0\n10\n0\n20\n0\n40\n5\n",
+        "0\nPOINT\n8\n0\n10\n1e11\n20\n1e11\n",
+        "0\nINSERT\n8\n0\n2\nU\n10\n0\n20\n0\n41\n1e9\n",
+        "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n0.5\n10\n10\n20\n0\n",
+        // A segment barely bent: a huge radius, but it stays by its chord.
+        "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n1e-9\n10\n10000\n20\n0\n",
+    ];
+    let dxf = format!("{block}0\nSECTION\n2\nENTITIES\n{}{}0\nENDSEC\n0\nEOF\n", far.concat(), kept.concat());
+    let d = read(dxf.as_bytes(), "sizes.dxf").unwrap();
+    assert_eq!(d.entity_count(), kept.len(), "{:?}", d.model.iter().map(|e| e.kind.type_name()).collect::<Vec<_>>());
+    let notes: Vec<&String> = d.read_notes.iter().filter(|n| n.contains("beyond")).collect();
+    assert_eq!(notes.len(), 1, "{:?}", d.read_notes);
+    let want = format!("DXF: {} objects had coordinates or a size beyond \u{b1}1e12", far.len());
+    assert!(notes[0].starts_with(&want), "{}", notes[0]);
+    // The block keeps its line: only references that blow it up go.
+    assert_eq!(d.block("U").map(|b| b.entities.len()), Some(1));
+}
+
+#[test]
+fn dwg_objects_whose_size_is_beyond_the_limit_are_dropped_with_the_note() {
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(10.0, 0.0, 0.0) })).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Circle(Circle { center: Vec3::ZERO, radius: 1e300 })).unwrap();
+    let bytes = write_dwg(&d, Version::R2018, DwgEngine::Bridge).unwrap();
+    for engine in [DwgEngine::Bridge, DwgEngine::Native] {
+        let back = read_dwg(&bytes, engine).unwrap();
+        assert_eq!(back.entity_count(), 1, "{engine:?}");
+        assert!(
+            back.read_notes.iter().any(|n| n.contains("1 object had coordinates or a size beyond \u{b1}1e12")),
+            "{engine:?}: {:?}",
+            back.read_notes
+        );
+    }
 }
 
 thread_local! {
