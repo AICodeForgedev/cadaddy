@@ -52,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
         attedit::attedit_spec(),
         attedit::dash_attedit_spec(),
         CommandSpec::new("wblock", "Write Block", run_wblock)
-            .alias(&["w", "-wblock"])
+            .alias(&["w"])
             .params("{force?: bool (replace an existing file; otherwise it is refused), path (no extension: .dwg), name? | handles?, base?}")
             .interactive(|_| Ok(Box::new(wblock::WblockM::default()))),
         dash_wblock::dash_wblock_spec(),
@@ -458,6 +458,12 @@ fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
             h.remap_sources(&copies);
         }
         d.model.push(e);
+    }
+    // A block or selected objects bring only the layers, linetypes, styles and blocks they use,
+    // as AutoCAD's WBLOCK writes them (the defaults and the current ones stay); the whole drawing
+    // (`whole`, WBLOCK's `*`) keeps everything.
+    if !p.get("whole").and_then(Value::as_bool).unwrap_or(false) {
+        purge::purge_unused(&mut d);
     }
     let hooks = super::file::io().ok_or_else(|| bad("wblock", "file formats are not available in this build"))?;
     let bytes = (hooks.write)(&d, &path).map_err(|e| bad("wblock", e))?;

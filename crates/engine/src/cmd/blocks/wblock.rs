@@ -78,7 +78,7 @@ impl Interactive for WblockM {
                     "*" => {
                         let d = s.doc()?;
                         let all: Vec<String> = d.model.iter().map(|e| e.handle.hex()).collect();
-                        self.write(s, json!({ "path": path, "handles": all }))
+                        self.write(s, json!({ "path": path, "handles": all, "whole": true }))
                     }
                     "=" => self.write(s, json!({ "path": path, "name": stem(&path) })),
                     name => self.write(s, json!({ "path": path, "name": name })),

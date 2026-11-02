@@ -48,22 +48,23 @@ fn run_dash_wblock(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let base = point_param(p, "base").unwrap_or(Vec2::ZERO);
     let path = str_param(p, "path").ok_or_else(|| bad("-wblock", "`path` is required"))?.to_string();
-    let r = write(s, &path, Source::Objects(&hs, base))?;
+    let force = p.get("force").and_then(Value::as_bool).unwrap_or(false);
+    let r = write(s, &path, Source::Objects(&hs, base), force)?;
     erase(s, &hs)?;
     Ok(r)
 }
 
 /// Write `what` to `path` through WBLOCK's JSON form (its checks and the written drawing's
-/// settings, styles and fresh fingerprint).
-fn write(s: &mut Session, path: &str, what: Source) -> Result<Value> {
+/// settings, styles and fresh fingerprint); `force` replaces an existing file.
+fn write(s: &mut Session, path: &str, what: Source, force: bool) -> Result<Value> {
     let hex = |hs: &[Handle]| hs.iter().map(|h| h.hex()).collect::<Vec<_>>();
     let p = match what {
         Source::Whole => {
             let all: Vec<Handle> = s.doc()?.model.iter().map(|e| e.handle).collect();
-            json!({ "path": path, "handles": hex(&all) })
+            json!({ "path": path, "handles": hex(&all), "whole": true, "force": force })
         }
-        Source::Block(name) => json!({ "path": path, "name": name }),
-        Source::Objects(hs, base) => json!({ "path": path, "handles": hex(hs), "base": [base.x, base.y] }),
+        Source::Block(name) => json!({ "path": path, "name": name, "force": force }),
+        Source::Objects(hs, base) => json!({ "path": path, "handles": hex(hs), "base": [base.x, base.y], "force": force }),
     };
     super::run_wblock(s, &p)
 }
@@ -257,7 +258,8 @@ impl DashWblockM {
     }
 
     fn write(&self, s: &mut Session, what: Source) -> Result<Step> {
-        if let Err(e) = write(s, &self.path, what) {
+        // The file was asked about already (replaced only on Yes).
+        if let Err(e) = write(s, &self.path, what, true) {
             s.echo(e.to_string());
         }
         Ok(Step::Done)
@@ -267,7 +269,7 @@ impl DashWblockM {
         if hs.is_empty() {
             return Ok(Step::Done);
         }
-        match write(s, &self.path, Source::Objects(hs, self.base)) {
+        match write(s, &self.path, Source::Objects(hs, self.base), true) {
             Ok(_) => erase(s, hs)?,
             Err(e) => s.echo(e.to_string()),
         }
