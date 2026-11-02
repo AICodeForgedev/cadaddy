@@ -187,6 +187,36 @@ fn device_of(s: &mut Session, mark: &str) -> Value {
 }
 
 #[test]
+fn a_switch_takes_its_wiring_device_sections_product_record() {
+    let mut s = plan();
+    fill(&mut s);
+    let dir = std::env::temp_dir().join(format!("cadaddy-products-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let spec = dir.join("26 27 26 - Wiring Devices.txt");
+    std::fs::write(
+        &spec,
+        "SECTION 262726 - WIRING DEVICES\nPART 2 - PRODUCTS\n2.4 TOGGLE SWITCHES\nB. Switches, 120/277 V, 20 A:\n1. Single Pole:\n\
+         a. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\n1) Hubbell.\n2) Leviton.\n\
+         2.8 FINISHES\nA. Device Color:\n1. Wiring Devices Connected to Normal Power System: white unless otherwise indicated.\nPART 3 - EXECUTION\n",
+    )
+    .unwrap();
+    let r = s.execute("bim.products", &json!({"specs": [dir.to_string_lossy()]})).unwrap();
+    assert!(r["elements"].as_u64().unwrap_or(0) >= 1, "{r:#}");
+    let sw = device_of(&mut s, "S");
+    assert_eq!(sw["color"]["value"], "white", "{sw:#}");
+    assert_eq!(sw["color"]["source"]["kind"], "spec");
+    assert_eq!(sw["rating"]["value"], "120/277 V, 20 A");
+    assert!(sw["approved_makers"]["value"].as_str().is_some_and(|m| m.contains("Hubbell") && m.contains("listed makers only")), "{sw:#}");
+    let product: Value = serde_json::from_str(sw["product"]["value"].as_str().unwrap_or("null")).unwrap();
+    assert!(product["required"]["section"].as_str().is_some_and(|x| x.starts_with("26 27 26")), "{product:#}");
+    assert_eq!(product["approved"]["none"], "no submittal for this kind");
+    assert_eq!(product["resolved"]["configuration"], "single pole");
+    // A kind no section speaks for and no submittal covers is listed with why.
+    assert!(r["no_product_data"].as_object().is_some_and(|m| !m.is_empty()), "{r:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location() {
     let mut s = plan();
     let r = fill(&mut s);

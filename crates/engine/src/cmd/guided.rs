@@ -426,6 +426,9 @@ pub struct GuidedJob {
     /// Submittal PDFs (or folders of them) whose products go onto the built elements.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submittals: Vec<String>,
+    /// Specification section PDFs (or folders of them): what each kind of product must be.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub specs: Vec<String>,
     /// The type marks the submittals give products for: device types as the legends' are.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submittal_types: Vec<String>,
@@ -736,6 +739,7 @@ impl GuidedJob {
             checkpoint: None,
             checkpoint_given: false,
             submittals: Vec::new(),
+            specs: Vec::new(),
             submittal_types: Vec::new(),
             luminaire_types: Vec::new(),
             wall_luminaire_types: Vec::new(),
@@ -4885,6 +4889,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         submittals_step(s, job, &mut result);
         bim_step(s, job, "submittals applied", t);
     }
+    // The specifications' product data (and the submittals' as applied) onto the elements.
+    let t = web_time::Instant::now();
+    products_step(s, job, &mut result);
+    bim_step(s, job, "product data", t);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -5095,6 +5103,86 @@ const MAX_SHEET_LINKS: usize = 2_000;
 /// and its level (a sheet listed already keeps its entry and gains its place).
 /// The build's identity pass (`bim.identity` then `rooms.graph`): merged copies leave the counts,
 /// findings go on the build stage, and the answer's summary goes in the result as `identity`.
+/// The specifications the job reads: those given, else a project's specifications folder beside
+/// its submittals (`…\\03_Specifications` next to `…\\02_Submittals`).
+fn job_specs(job: &GuidedJob) -> Vec<String> {
+    if !job.specs.is_empty() {
+        return job.specs.clone();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for given in &job.submittals {
+        let Some(parent) = std::path::Path::new(given.trim()).parent() else { continue };
+        let Ok(rd) = std::fs::read_dir(parent) else { continue };
+        let mut found: Vec<String> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().to_ascii_uppercase().contains("SPEC")))
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        found.sort();
+        for f in found {
+            if !out.contains(&f) {
+                out.push(f);
+            }
+        }
+    }
+    out
+}
+
+/// The specifications' and submittals' product data onto the built elements (`bim.products`,
+/// after the submittals): each device, fixture and equipment element's `product` record. Never
+/// stops the job: kinds no section or submittal speaks for are a finding.
+fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
+    let specs = job_specs(job);
+    if specs.is_empty() && job.submittals.is_empty() {
+        return;
+    }
+    let v = match s.execute("bim.products", &json!({"specs": specs})) {
+        Ok(v) => v,
+        Err(e) => {
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("The product data could not be applied: {e}"),
+                "bim.products failed after the build",
+                2,
+                Vec::new(),
+                None,
+                false,
+            );
+            return;
+        }
+    };
+    let line = format!(
+        "  product data: {} spec sections ({} requirements, kinds {}); records on {} elements; by kind {}",
+        v.get("sections").and_then(Value::as_array).map_or(0, Vec::len),
+        v.get("requirements").and_then(Value::as_u64).unwrap_or(0),
+        v.get("kinds_specified").map(Value::to_string).unwrap_or_default(),
+        v.get("elements").and_then(Value::as_u64).unwrap_or(0),
+        v.get("by_kind").map(Value::to_string).unwrap_or_default()
+    );
+    report_progress(s, json!({"step": "products", "elements": v.get("elements")}), &line);
+    s.echo(line);
+    let none: Vec<String> = v
+        .get("no_product_data")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(k, why)| format!("{k}: {}", why.as_str().unwrap_or("")))
+        .collect();
+    if !none.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} kinds of element carry no product data: {}", none.len(), none.join("; ")),
+            "No specification section read and no submittal speaks for them",
+            1,
+            vec!["Give the job their specification sections or submittals".into()],
+            None,
+            false,
+        );
+    }
+    result["products"] = v;
+}
+
 /// The submittals' products onto the built elements (BUILD ORDER: after the architecture and the
 /// MEP objects; `bim.submittals`). Never stops the job: what they leave open is a finding.
 fn submittals_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
@@ -10396,6 +10484,11 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
     // Interactive unless asked: the job stops at each checkpoint for an answer.
     job.auto = p.get("auto").and_then(Value::as_bool).unwrap_or(false);
     job.submittals = match p.get("submittals") {
+        Some(Value::String(one)) if !one.trim().is_empty() => vec![one.trim().to_string()],
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(64).collect(),
+        _ => Vec::new(),
+    };
+    job.specs = match p.get("specs") {
         Some(Value::String(one)) if !one.trim().is_empty() => vec![one.trim().to_string()],
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(64).collect(),
         _ => Vec::new(),

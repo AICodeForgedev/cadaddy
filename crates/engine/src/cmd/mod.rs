@@ -69,6 +69,7 @@ pub mod paramconv;
 pub mod planview;
 pub mod pointcloud;
 pub mod procure;
+pub mod products;
 pub mod progress;
 pub mod project;
 pub mod project_hub;
@@ -848,6 +849,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(codebook::specs());
         v.extend(spec_import::specs());
         v.extend(submittals::specs());
+        v.extend(products::specs());
         v.extend(dimcheck::specs());
         v.extend(agentready::specs());
         v.extend(underlay::specs());
