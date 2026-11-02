@@ -31,7 +31,7 @@ use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, RawTag, Space};
 use cadaddy_geom::{Bounds2, Vec2, Vec3};
 use cadaddy_walk3d::validate::{
     self as v, Check, Element, GateMode, Model, ModelLevel, ModelOpening, ModelWall, Mounting, PrintSheet, Prints, Report, Run, Scope, Severity,
-    Status, Symbol,
+    Status, Symbol, UnmeasuredWall, WallSpan,
 };
 use cadaddy_walk3d::{BuildingSpec, Role, level_at};
 use serde_json::{Value, json};
@@ -248,6 +248,10 @@ impl Frame {
     pub(crate) fn upf(&self) -> f64 {
         self.upf
     }
+    /// A level's floor height in drawing units (its elevation), when the spec has the level.
+    pub(crate) fn floor_z(&self, level: &str) -> Option<f64> {
+        self.spec_levels.iter().find(|l| l.name.eq_ignore_ascii_case(level.trim())).map(|l| l.elevation_ft * self.upf).filter(|z| z.is_finite())
+    }
     /// The level a sheet point is on and the point in building feet.
     pub(crate) fn to_ft(&self, p: Vec2) -> (String, [f64; 2]) {
         let name =
@@ -383,8 +387,11 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
         let EntityKind::Mesh(mesh) = &e.kind else { continue };
         if part == "wall" {
             built_walls = true;
-            if m.walls.len() < v::MAX_ITEMS {
-                m.walls.extend(mesh_walls(e, mesh, &frame, None, &wall_types));
+            if m.walls.len() + m.wall_spans.len() < v::MAX_ITEMS {
+                let p = mesh_walls(e, mesh, &frame, None, &wall_types);
+                m.walls.extend(p.walls);
+                m.wall_spans.extend(p.spans);
+                m.unmeasured_walls.extend(p.unmeasured);
             }
             continue;
         }
@@ -497,6 +504,7 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
         });
     }
     m.walls = distinct_walls(std::mem::take(&mut m.walls));
+    m.wall_spans = distinct_spans(std::mem::take(&mut m.wall_spans));
     (m.capped(), frame)
 }
 
@@ -512,29 +520,68 @@ fn stud_depths(sp: &BuildingSpec) -> HashMap<String, f64> {
         .collect()
 }
 
-/// One plan rectangle (feet) of a built wall as a model wall.
-fn wall_piece(e: &Entity, level: String, ft: &[[f64; 2]], studs: &HashMap<String, f64>) -> Option<ModelWall> {
-    let (a, b, thick) = centreline(ft)?;
-    let ty = xdata_after(&e.common.xdata, super::wallgen::APP).find_map(|s| s.strip_prefix("type:")).map(str::to_string);
-    Some(ModelWall {
-        id: e.handle.hex(),
-        level,
-        a,
-        b,
-        thickness_in: thick * 12.0,
-        stud_in: ty.as_ref().and_then(|t| studs.get(&t.to_ascii_lowercase()).copied()),
-        wall_type: ty,
+/// A built wall's stored host wall records: its own `host_wall` property, else an MEP
+/// element's `prop:HOST_WALL=` tag (the handle of the wall it was put on).
+pub(crate) fn stored_host(e: &Entity) -> Option<String> {
+    let own = cadaddy_doc::props::read(&e.common.xdata).get("host_wall").map(|p| p.text().trim().to_string()).filter(|h| !h.is_empty());
+    own.or_else(|| {
+        e.common.xdata.iter().filter(|t| t.code == 1000).take(512).find_map(|t| {
+            let v = t.value.trim();
+            let head = v.get(..15)?;
+            head.eq_ignore_ascii_case("prop:HOST_WALL=").then(|| v.get(15..).unwrap_or("").trim().to_string()).filter(|h| !h.is_empty())
+        })
     })
+    .filter(|h| h.len() <= 32 && Handle::parse_hex(h).is_some())
+}
+
+/// What built wall meshes give Validate: their pieces standing on the floor (the plan's walls),
+/// their pieces over an opening (with the heights they span), and the walls that couldn't be
+/// measured, with why.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WallPieces {
+    pub walls: Vec<ModelWall>,
+    pub spans: Vec<WallSpan>,
+    pub unmeasured: Vec<UnmeasuredWall>,
+}
+
+impl WallPieces {
+    fn extend(&mut self, o: WallPieces) {
+        self.walls.extend(o.walls);
+        self.spans.extend(o.spans);
+        self.unmeasured.extend(o.unmeasured);
+    }
+    fn len(&self) -> usize {
+        self.walls.len() + self.spans.len()
+    }
+}
+
+/// One plan footprint (feet) of a built wall as model walls: one per rectangle of it
+/// ([`footprint_centrelines`]), with the wall's type and thickness; why not when it has none.
+fn wall_piece(e: &Entity, level: &str, ft: &[[f64; 2]], studs: &HashMap<String, f64>) -> std::result::Result<Vec<ModelWall>, String> {
+    let ty = xdata_after(&e.common.xdata, super::wallgen::APP).find_map(|s| s.strip_prefix("type:")).map(str::to_string);
+    let stud = ty.as_ref().and_then(|t| studs.get(&t.to_ascii_lowercase()).copied());
+    Ok(footprint_centrelines(ft)?
+        .into_iter()
+        .map(|(a, b, thick)| ModelWall {
+            id: e.handle.hex(),
+            level: level.to_string(),
+            a,
+            b,
+            thickness_in: thick * 12.0,
+            stud_in: stud,
+            wall_type: ty.clone(),
+        })
+        .collect())
 }
 
 /// The built walls of `level` whose plan box comes within `reach` feet of `rect` (building
 /// feet): what one element's host is looked for among, without reading the whole model.
-pub(crate) fn walls_near(d: &Drawing, sp: &BuildingSpec, frame: &Frame, level: &str, rect: [f64; 4], reach: f64) -> Vec<ModelWall> {
+pub(crate) fn walls_near(d: &Drawing, sp: &BuildingSpec, frame: &Frame, level: &str, rect: [f64; 4], reach: f64) -> WallPieces {
     let studs = stud_depths(sp);
     let lo = frame.to_sheet(level, [rect[0] - reach, rect[1] - reach]);
     let hi = frame.to_sheet(level, [rect[2] + reach, rect[3] + reach]);
     let near = Bounds2::new(Vec2::new(lo.x.min(hi.x), lo.y.min(hi.y)), Vec2::new(lo.x.max(hi.x), lo.y.max(hi.y)));
-    let mut out = Vec::new();
+    let mut out = WallPieces::default();
     for e in d.model.iter().take(MAX_ENTITIES) {
         if super::wallgen::made_as(e).is_none_or(|p| p != "wall") {
             continue;
@@ -552,79 +599,145 @@ pub(crate) fn walls_near(d: &Drawing, sp: &BuildingSpec, frame: &Frame, level: &
             break;
         }
     }
-    distinct_walls(out)
+    out.walls = distinct_walls(out.walls);
+    out.spans = distinct_spans(out.spans);
+    out
 }
 
+/// A piece standing more than this above its level's floor is over an opening, inches.
+const SPAN_ABOVE_IN: f64 = 12.0;
+
 /// A built wall mesh's walls (building feet on its level's plan, on `only` when given): one per
-/// plan rectangle of its pieces ([`wall_rects`]), with the wall's type and thickness.
-fn mesh_walls(e: &Entity, mesh: &cadaddy_doc::Mesh, frame: &Frame, only: Option<&str>, studs: &HashMap<String, f64>) -> Vec<ModelWall> {
-    let mut out = Vec::new();
-    for rect in wall_rects(mesh) {
-        let c = rect.iter().fold(Vec2::new(0.0, 0.0), |a, p| a + *p) * (1.0 / rect.len().max(1) as f64);
-        let (on, _) = frame.built_ft(e, c);
+/// rectangle of each footprint of its pieces ([`wall_pieces`]), with the wall's type and
+/// thickness. A piece standing on the floor is a wall of the plan; a piece over an opening (a
+/// header box, a mesh that starts above its floor) a span with its heights; a footprint that
+/// gives no centreline, or a mesh with no footprint at all, is listed with why.
+pub(crate) fn mesh_walls(e: &Entity, mesh: &cadaddy_doc::Mesh, frame: &Frame, only: Option<&str>, studs: &HashMap<String, f64>) -> WallPieces {
+    let mut out = WallPieces::default();
+    let pieces = wall_pieces(mesh);
+    if pieces.is_empty() {
+        let n = mesh.vertices.len().clamp(1, 1_000_000) as f64;
+        let c = mesh.vertices.iter().take(1_000_000).fold(Vec2::new(0.0, 0.0), |a, p| a + p.xy()) * (1.0 / n);
+        let (on, at) = frame.built_ft(e, c);
+        if only.is_none_or(|l| on.eq_ignore_ascii_case(l)) {
+            let why = if mesh.vertices.is_empty() {
+                "its mesh has no vertices"
+            } else {
+                "its mesh has no flat footprint (no bottom or cap face) to measure"
+            };
+            out.unmeasured.push(UnmeasuredWall { id: e.handle.hex(), level: on, at, why: why.into() });
+        }
+        return out;
+    }
+    let (z_lo, tol) = mesh_floor(mesh);
+    let upf = frame.upf();
+    for p in pieces {
+        let c = p.outline.iter().fold(Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / p.outline.len().max(1) as f64);
+        let (on, at) = frame.built_ft(e, c);
         if only.is_some_and(|l| !on.eq_ignore_ascii_case(l)) {
             continue;
         }
-        let ft: Vec<[f64; 2]> = rect.iter().map(|p| frame.built_on(&on, e, *p)).collect();
-        out.extend(wall_piece(e, on, &ft, studs));
+        let ft: Vec<[f64; 2]> = p.outline.iter().map(|q| frame.built_on(&on, e, *q)).collect();
+        let floor = frame.floor_z(&on).unwrap_or(z_lo);
+        let (bottom_in, top_in) = ((p.z0 - floor) / upf * 12.0, (p.z1 - floor) / upf * 12.0);
+        let raised = p.z0 - z_lo > tol || bottom_in > SPAN_ABOVE_IN;
+        match wall_piece(e, &on, &ft, studs) {
+            Ok(ws) if raised => out.spans.extend(ws.into_iter().map(|wall| WallSpan { wall, bottom_in, top_in })),
+            Ok(ws) => out.walls.extend(ws),
+            Err(why) => out.unmeasured.push(UnmeasuredWall { id: e.handle.hex(), level: on, at, why }),
+        }
     }
     out
 }
 
-/// A wall mesh's plan rectangles (sheet units). A wall built from a face pair is boxes: their
-/// bottoms on the floor are its pieces (the boxes over an opening start higher and are left
-/// out, so an opening is a gap). A wall Walk mode built has no bottoms: its faces stand on the
-/// floor and the cap over each pair of faces is the wall; the caps are its pieces then.
-pub(crate) fn wall_rects(mesh: &cadaddy_doc::Mesh) -> Vec<Vec<Vec2>> {
-    let z0 = mesh.vertices.iter().fold(f64::INFINITY, |lo, v| lo.min(v.z));
-    let z1 = mesh.vertices.iter().fold(f64::NEG_INFINITY, |hi, v| hi.max(v.z));
-    let tol = ((z1 - z0).abs() * 1e-6).max(1e-9);
-    // Its flat faces, and the height each lies at.
-    let flat: Vec<(f64, Vec<Vec2>)> = mesh
-        .faces
-        .iter()
-        .take(100_000)
-        .filter_map(|f| {
-            let vs: Vec<Vec3> = f.v.iter().take(64).filter_map(|i| mesh.vertices.get(*i as usize).copied()).collect();
-            let z = vs.first()?.z;
-            (vs.len() >= 3 && vs.iter().all(|v| (v.z - z).abs() <= tol)).then(|| (z, vs.iter().map(|v| v.xy()).collect()))
-        })
-        .collect();
-    let on_floor = flat.iter().any(|(z, _)| (z - z0).abs() <= tol);
-    let mut seen: BTreeSet<Vec<(i64, i64)>> = BTreeSet::new();
-    let mut out: Vec<Vec<Vec2>> = Vec::new();
-    for (z, f) in flat {
-        if on_floor && (z - z0).abs() > tol {
+/// A mesh's lowest point and the height tolerance its flat faces are read with.
+fn mesh_floor(mesh: &cadaddy_doc::Mesh) -> (f64, f64) {
+    let z0 = mesh.vertices.iter().take(1_000_000).fold(f64::INFINITY, |lo, v| lo.min(v.z));
+    let z1 = mesh.vertices.iter().take(1_000_000).fold(f64::NEG_INFINITY, |hi, v| hi.max(v.z));
+    (z0, ((z1 - z0).abs() * 1e-6).max(1e-9))
+}
+
+/// One plan footprint of a wall mesh (sheet units) and the heights its box spans.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Footprint {
+    pub outline: Vec<Vec2>,
+    pub z0: f64,
+    pub z1: f64,
+}
+
+/// A wall mesh's pieces: each flat footprint once, from its lowest face to its highest. A wall
+/// built from boxes has a bottom and a top per box: the boxes on the floor are its pieces on
+/// the plan, the boxes over an opening start higher. A wall Walk mode built has no bottoms (its
+/// faces stand on the floor and a cap lies over each pair): a cap spans from the floor up.
+pub(crate) fn wall_pieces(mesh: &cadaddy_doc::Mesh) -> Vec<Footprint> {
+    let (z_lo, tol) = mesh_floor(mesh);
+    let mut at: BTreeMap<Vec<(i64, i64)>, usize> = BTreeMap::new();
+    let mut out: Vec<Footprint> = Vec::new();
+    for f in mesh.faces.iter().take(100_000) {
+        let vs: Vec<Vec3> = f.v.iter().take(64).filter_map(|i| mesh.vertices.get(*i as usize).copied()).collect();
+        let Some(z) = vs.first().map(|v| v.z) else { continue };
+        if vs.len() < 3 || !vs.iter().all(|v| (v.z - z).abs() <= tol) {
             continue;
         }
         // A box's top over its bottom, or a cap drawn twice, is one piece.
-        let mut key: Vec<(i64, i64)> = f.iter().map(|p| ((p.x * 1e4).round() as i64, (p.y * 1e4).round() as i64)).collect();
+        let mut key: Vec<(i64, i64)> = vs.iter().map(|p| ((p.x * 1e4).round() as i64, (p.y * 1e4).round() as i64)).collect();
         key.sort_unstable();
         key.dedup();
-        if seen.insert(key) {
-            out.push(f);
+        match at.get(&key).and_then(|i| out.get_mut(*i)) {
+            Some(p) => {
+                p.z0 = p.z0.min(z);
+                p.z1 = p.z1.max(z);
+            }
+            None => {
+                at.insert(key, out.len());
+                out.push(Footprint { outline: vs.iter().map(|v| v.xy()).collect(), z0: z, z1: z });
+            }
+        }
+    }
+    if !out.iter().any(|p| (p.z0 - z_lo).abs() <= tol) {
+        for p in out.iter_mut().filter(|p| (p.z1 - p.z0).abs() <= tol) {
+            p.z0 = z_lo;
         }
     }
     out
+}
+
+/// A wall mesh's plan rectangles on the floor (sheet units): the [`wall_pieces`] that start at
+/// its lowest point (the boxes over an opening start higher and are left out, so an opening is
+/// a gap).
+#[cfg(test)]
+pub(crate) fn wall_rects(mesh: &cadaddy_doc::Mesh) -> Vec<Vec<Vec2>> {
+    let (z_lo, tol) = mesh_floor(mesh);
+    wall_pieces(mesh).into_iter().filter(|p| (p.z0 - z_lo).abs() <= tol).map(|p| p.outline).collect()
 }
 
 /// `walls` without the ones listed twice: a piece on the same centreline (either way round), as
 /// thick, on the same level as one before it (within an inch) is dropped.
 pub(crate) fn distinct_walls(walls: Vec<ModelWall>) -> Vec<ModelWall> {
+    distinct_by(walls, |w| w, |_, _| true)
+}
+
+/// `items` without the ones whose wall ([`distinct_walls`]) is listed before and `same` says
+/// are alike.
+fn distinct_by<T>(items: Vec<T>, wall: impl Fn(&T) -> &ModelWall, same: impl Fn(&T, &T) -> bool) -> Vec<T> {
     const SAME_FT: f64 = 1.0 / 12.0;
     let cell = |p: [f64; 2]| ((p[0] / SAME_FT).floor() as i64, (p[1] / SAME_FT).floor() as i64);
     let mid = |w: &ModelWall| [(w.a[0] + w.b[0]) / 2.0, (w.a[1] + w.b[1]) / 2.0];
     let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= SAME_FT;
     let mut seen: HashMap<(String, i64, i64), Vec<usize>> = HashMap::new();
-    let mut out: Vec<ModelWall> = Vec::with_capacity(walls.len());
-    for w in walls {
+    let mut out: Vec<T> = Vec::with_capacity(items.len());
+    for it in items {
+        let w = wall(&it);
         let level = w.level.to_ascii_lowercase();
-        let (cx, cy) = cell(mid(&w));
+        let (cx, cy) = cell(mid(w));
         let twice = (-1..=1).any(|dx| {
             (-1..=1).any(|dy| {
                 seen.get(&(level.clone(), cx + dx, cy + dy)).is_some_and(|ix| {
-                    ix.iter().filter_map(|i| out.get(*i)).any(|o| {
-                        (o.thickness_in - w.thickness_in).abs() <= 1.0 && ((near(o.a, w.a) && near(o.b, w.b)) || (near(o.a, w.b) && near(o.b, w.a)))
+                    ix.iter().filter_map(|i| out.get(*i)).any(|other| {
+                        let o = wall(other);
+                        (o.thickness_in - w.thickness_in).abs() <= 1.0
+                            && ((near(o.a, w.a) && near(o.b, w.b)) || (near(o.a, w.b) && near(o.b, w.a)))
+                            && same(other, &it)
                     })
                 })
             })
@@ -633,9 +746,14 @@ pub(crate) fn distinct_walls(walls: Vec<ModelWall>) -> Vec<ModelWall> {
             continue;
         }
         seen.entry((level, cx, cy)).or_default().push(out.len());
-        out.push(w);
+        out.push(it);
     }
     out
+}
+
+/// `spans` without the ones listed twice (as [`distinct_walls`], and as high within an inch).
+pub(crate) fn distinct_spans(spans: Vec<WallSpan>) -> Vec<WallSpan> {
+    distinct_by(spans, |s| &s.wall, |a, b| (a.bottom_in - b.bottom_in).abs() <= 1.0 && (a.top_in - b.top_in).abs() <= 1.0)
 }
 
 /// A mesh's bottom faces as plan polygons (sheet units).
@@ -701,6 +819,176 @@ fn fitted_centreline(q: &[[f64; 2]]) -> Option<([f64; 2], [f64; 2], f64)> {
     }
     let (_, a, b, thick, len) = best?;
     (thick.is_finite() && len > 1e-9).then_some((a, b, thick))
+}
+
+/// Corners of a wall footprint read, at most (hostile meshes).
+const MAX_CORNERS: usize = 64;
+/// Rectangles one footprint is cut into, at most.
+const MAX_RECTS: usize = 64;
+/// A wall piece thinner than this is a sliver (a box drawn flat), feet.
+const MIN_THICK_FT: f64 = 0.25 / 12.0;
+
+/// A wall footprint's centrelines and thicknesses (feet), or why it has none. Four corners are
+/// one piece ([`centreline`]); an outline whose sides all run along or across its longest side
+/// (an L, a notch, a jog) is cut into its rectangles, one piece each; any other outline is the
+/// least rectangle round it ([`fitted_centreline`] of its hull).
+pub(crate) fn footprint_centrelines(q: &[[f64; 2]]) -> std::result::Result<Vec<([f64; 2], [f64; 2], f64)>, String> {
+    let cs: Vec<_> = pieces_of(q)?.into_iter().filter(|c| c.2 >= MIN_THICK_FT).collect();
+    if cs.is_empty() {
+        return Err("its footprint is a sliver (thinner than 1/4 in)".into());
+    }
+    Ok(cs)
+}
+
+/// [`footprint_centrelines`] before slivers are left out.
+fn pieces_of(q: &[[f64; 2]]) -> std::result::Result<Vec<([f64; 2], [f64; 2], f64)>, String> {
+    if q.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {
+        return Err("a corner of its footprint is not a number".into());
+    }
+    if q.len() > MAX_CORNERS {
+        return Err(format!("its footprint has {} corners (at most {MAX_CORNERS} are read)", q.len()));
+    }
+    let pts = simplified(q);
+    if pts.len() < 3 {
+        return Err("its footprint has fewer than 3 distinct corners".into());
+    }
+    let area = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a[0] * b[1] - b[0] * a[1]).sum::<f64>().abs() / 2.0;
+    if !area.is_finite() || area <= 1e-9 {
+        return Err("its footprint has no area".into());
+    }
+    if let Some(c) = (pts.len() == 4).then(|| centreline(&pts)).flatten() {
+        return Ok(vec![c]);
+    }
+    if let Some(rects) = orthogonal_rects(&pts) {
+        let cs: Vec<_> = rects.iter().filter_map(|r| centreline(r)).collect();
+        if !cs.is_empty() {
+            return Ok(cs);
+        }
+    }
+    fitted_centreline(&hull(&pts)).map(|c| vec![c]).ok_or_else(|| "its footprint gives no centreline".into())
+}
+
+/// An outline without repeated corners and without corners on a straight side.
+fn simplified(q: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    const SAME_FT: f64 = 1e-6;
+    let mut pts: Vec<[f64; 2]> = Vec::with_capacity(q.len());
+    for p in q {
+        if pts.last().is_none_or(|l| (l[0] - p[0]).hypot(l[1] - p[1]) > SAME_FT) {
+            pts.push(*p);
+        }
+    }
+    while pts.len() > 1 && pts.first().zip(pts.last()).is_some_and(|(a, b)| (a[0] - b[0]).hypot(a[1] - b[1]) <= SAME_FT) {
+        pts.pop();
+    }
+    // Corners on a straight side (or a spike back along it) go, until none is left.
+    for _ in 0..MAX_CORNERS {
+        let n = pts.len();
+        if n < 3 {
+            break;
+        }
+        let straight = (0..n).find(|i| {
+            let (Some(a), Some(b), Some(c)) = (pts.get((i + n - 1) % n), pts.get(*i), pts.get((i + 1) % n)) else { return false };
+            let (u, w) = ([b[0] - a[0], b[1] - a[1]], [c[0] - b[0], c[1] - b[1]]);
+            let (lu, lw) = (u[0].hypot(u[1]), w[0].hypot(w[1]));
+            lu <= SAME_FT || lw <= SAME_FT || ((u[0] * w[1] - u[1] * w[0]) / (lu * lw)).abs() < 1e-6
+        });
+        match straight {
+            Some(i) => {
+                pts.remove(i);
+            }
+            None => break,
+        }
+    }
+    pts
+}
+
+/// An outline whose sides all run along or across its longest side, cut into rectangles along
+/// that side (slabs across it, the slabs of one cross-section joined); none for any other.
+fn orthogonal_rects(pts: &[[f64; 2]]) -> Option<Vec<[[f64; 2]; 4]>> {
+    const SAME_FT: f64 = 1e-6;
+    let n = pts.len();
+    let edge = |i: usize| -> Option<([f64; 2], [f64; 2])> { Some((*pts.get(i)?, *pts.get((i + 1) % n)?)) };
+    let (a, b) = (0..n).filter_map(edge).max_by(|x, y| {
+        let l = |e: &([f64; 2], [f64; 2])| (e.1[0] - e.0[0]).hypot(e.1[1] - e.0[1]);
+        l(x).total_cmp(&l(y))
+    })?;
+    let l = (b[0] - a[0]).hypot(b[1] - a[1]);
+    if !l.is_finite() || l <= SAME_FT {
+        return None;
+    }
+    let (u, nn) = ([(b[0] - a[0]) / l, (b[1] - a[1]) / l], [-(b[1] - a[1]) / l, (b[0] - a[0]) / l]);
+    let st: Vec<[f64; 2]> = pts.iter().map(|p| [p[0] * u[0] + p[1] * u[1], p[0] * nn[0] + p[1] * nn[1]]).collect();
+    // Every side along or across: within about half a degree.
+    let along_or_across = (0..n).filter_map(|i| Some((*st.get(i)?, *st.get((i + 1) % n)?))).all(|(p, q)| {
+        let (ds, dt) = ((q[0] - p[0]).abs(), (q[1] - p[1]).abs());
+        let len = ds.hypot(dt);
+        len <= SAME_FT || ds / len < 0.01 || dt / len < 0.01
+    });
+    if !along_or_across {
+        return None;
+    }
+    let mut xs: Vec<f64> = st.iter().map(|p| p[0]).collect();
+    xs.sort_by(f64::total_cmp);
+    xs.dedup_by(|x, y| (*x - *y).abs() <= SAME_FT);
+    // Rectangles as [s0, s1, t0, t1].
+    let mut rects: Vec<[f64; 4]> = Vec::new();
+    for w in xs.windows(2) {
+        let (s0, s1) = (w.first().copied().unwrap_or(0.0), w.get(1).copied().unwrap_or(0.0));
+        if s1 - s0 <= SAME_FT {
+            continue;
+        }
+        let sm = (s0 + s1) / 2.0;
+        let mut ts: Vec<f64> = (0..n)
+            .filter_map(|i| Some((*st.get(i)?, *st.get((i + 1) % n)?)))
+            .filter(|(p, q)| (p[0] - sm) * (q[0] - sm) < 0.0)
+            .map(|(p, q)| p[1] + (q[1] - p[1]) * (sm - p[0]) / (q[0] - p[0]))
+            .collect();
+        ts.sort_by(f64::total_cmp);
+        for pair in ts.chunks(2) {
+            let (Some(t0), Some(t1)) = (pair.first().copied(), pair.get(1).copied()) else { continue };
+            if t1 - t0 <= SAME_FT {
+                continue;
+            }
+            let same = |r: &[f64; 4]| (r[1] - s0).abs() <= SAME_FT && (r[2] - t0).abs() <= SAME_FT && (r[3] - t1).abs() <= SAME_FT;
+            match rects.iter_mut().find(|r| same(r)) {
+                Some(r) => r[1] = s1,
+                None => rects.push([s0, s1, t0, t1]),
+            }
+            if rects.len() > MAX_RECTS {
+                return None;
+            }
+        }
+    }
+    let xy = |s: f64, t: f64| [s * u[0] + t * nn[0], s * u[1] + t * nn[1]];
+    Some(rects.iter().map(|r| [xy(r[0], r[2]), xy(r[1], r[2]), xy(r[1], r[3]), xy(r[0], r[3])]).collect())
+}
+
+/// The convex hull of a few points (counter-clockwise).
+fn hull(pts: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    let mut p: Vec<[f64; 2]> = pts.iter().take(MAX_CORNERS).copied().collect();
+    p.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    p.dedup();
+    if p.len() < 3 {
+        return p;
+    }
+    let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let mut h: Vec<[f64; 2]> = Vec::with_capacity(p.len() * 2);
+    for pass in 0..2 {
+        let start = h.len();
+        let it: Vec<[f64; 2]> = if pass == 0 { p.clone() } else { p.iter().rev().copied().collect() };
+        for q in it {
+            while h.len() >= start + 2 {
+                let (Some(a), Some(b)) = (h.get(h.len() - 2).copied(), h.last().copied()) else { break };
+                if cross(a, b, q) > 0.0 {
+                    break;
+                }
+                h.pop();
+            }
+            h.push(q);
+        }
+        h.pop();
+    }
+    h
 }
 
 // ---------------------------------------------------------------- validate
@@ -1250,6 +1538,105 @@ mod tests {
         // A face alone (its partner's mesh holds the cap) is no wall.
         let face = quad_mesh(&[[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 0.0, 9.0], [0.0, 0.0, 9.0]]]);
         assert!(wall_rects(&face).is_empty());
+    }
+
+    /// Each piece's thickness, length and the coordinate across it (feet), longest first.
+    fn pieces(q: &[[f64; 2]]) -> Vec<(f64, f64, [f64; 2], [f64; 2])> {
+        let mut out: Vec<(f64, f64, [f64; 2], [f64; 2])> = footprint_centrelines(q)
+            .unwrap_or_else(|why| panic!("{why}"))
+            .into_iter()
+            .map(|(a, b, t)| (t, (b[0] - a[0]).hypot(b[1] - a[1]), a, b))
+            .collect();
+        out.sort_by(|x, y| y.1.total_cmp(&x.1));
+        out
+    }
+
+    #[test]
+    fn an_l_shaped_footprint_is_its_two_legs() {
+        // A 10' leg along x, 6" thick, and a 3' leg up from its west end (the least rectangle
+        // round it would be a 3' thick wall).
+        let ps = pieces(&[[0.0, 0.0], [10.0, 0.0], [10.0, 0.5], [0.5, 0.5], [0.5, 3.0], [0.0, 3.0]]);
+        assert_eq!(ps.len(), 2, "{ps:?}");
+        let (t, len, a, b) = ps[0];
+        assert!((t - 0.5).abs() < 1e-9 && (len - 9.5).abs() < 1e-9, "{ps:?}");
+        assert!((a[1] - 0.25).abs() < 1e-9 && (b[1] - 0.25).abs() < 1e-9, "{ps:?}");
+        let (t, len, a, b) = ps[1];
+        assert!((t - 0.5).abs() < 1e-9 && (len - 3.0).abs() < 1e-9, "{ps:?}");
+        assert!((a[0] - 0.25).abs() < 1e-9 && (b[0] - 0.25).abs() < 1e-9, "{ps:?}");
+        // Turned 30°: the same two legs.
+        let (c, s) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+        let q: Vec<[f64; 2]> = [[0.0, 0.0], [10.0, 0.0], [10.0, 0.5], [0.5, 0.5], [0.5, 3.0], [0.0, 3.0]]
+            .iter()
+            .map(|p| [p[0] * c - p[1] * s, p[0] * s + p[1] * c])
+            .collect();
+        let ps = pieces(&q);
+        assert_eq!(ps.len(), 2, "{ps:?}");
+        assert!(ps.iter().all(|p| (p.0 - 0.5).abs() < 1e-6), "{ps:?}");
+    }
+
+    #[test]
+    fn a_notched_footprint_is_its_thick_and_thin_pieces() {
+        // A 12" wall with a 9" alcove in its north face: the 3" back of the alcove its own piece.
+        let ps = pieces(&[[0.0, 0.0], [10.0, 0.0], [10.0, 1.0], [6.0, 1.0], [6.0, 0.25], [4.0, 0.25], [4.0, 1.0], [0.0, 1.0]]);
+        assert_eq!(ps.len(), 3, "{ps:?}");
+        let thin = ps.iter().find(|p| (p.0 - 0.25).abs() < 1e-9).unwrap_or_else(|| panic!("{ps:?}"));
+        assert!((thin.1 - 2.0).abs() < 1e-9 && (thin.2[1] - 0.125).abs() < 1e-9, "{ps:?}");
+        assert_eq!(ps.iter().filter(|p| (p.0 - 1.0).abs() < 1e-9 && (p.1 - 4.0).abs() < 1e-9).count(), 2, "{ps:?}");
+        // A jog (the wall steps 2" over half way along): two pieces, each 6".
+        let ps = pieces(&[[0.0, 0.0], [5.0, 0.0], [5.0, 1.0 / 6.0], [10.0, 1.0 / 6.0], [10.0, 2.0 / 3.0], [5.0, 2.0 / 3.0], [5.0, 0.5], [0.0, 0.5]]);
+        assert_eq!(ps.len(), 2, "{ps:?}");
+        assert!(ps.iter().all(|p| (p.0 - 0.5).abs() < 1e-9 && (p.1 - 5.0).abs() < 1e-9), "{ps:?}");
+    }
+
+    #[test]
+    fn a_six_cornered_footprint_is_the_least_rectangle_round_it() {
+        // A 6" wall with pointed ends (mitred both ways): no side across it, so one piece.
+        let ps = pieces(&[[0.0, 0.0], [8.0, 0.0], [8.25, 0.25], [8.0, 0.5], [0.0, 0.5], [-0.25, 0.25]]);
+        assert_eq!(ps.len(), 1, "{ps:?}");
+        let (t, len, a, b) = ps[0];
+        assert!((t - 0.5).abs() < 1e-9 && (len - 8.5).abs() < 1e-9 && (a[1] - 0.25).abs() < 1e-9 && (b[1] - 0.25).abs() < 1e-9, "{ps:?}");
+        // Corners repeated and on a straight side change nothing.
+        let ps = pieces(&[[0.0, 0.0], [0.0, 0.0], [4.0, 0.0], [10.0, 0.0], [10.0, 0.5], [0.0, 0.5]]);
+        assert_eq!(ps.len(), 1, "{ps:?}");
+        assert!((ps[0].0 - 0.5).abs() < 1e-9 && (ps[0].1 - 10.0).abs() < 1e-9, "{ps:?}");
+    }
+
+    #[test]
+    fn a_footprint_that_cant_be_measured_says_why() {
+        let why = |q: &[[f64; 2]]| footprint_centrelines(q).err().unwrap_or_default();
+        assert!(why(&[[0.0, 0.0], [0.001 / 12.0, 0.0], [0.001 / 12.0, 0.5], [0.0, 0.5]]).contains("sliver"));
+        assert!(why(&[[0.0, 0.0], [0.0, 0.0], [0.0, 0.5], [0.0, 0.5]]).contains("fewer than 3"));
+        assert!(why(&[[0.0, 0.0], [5.0, 0.0], [10.0, 0.0]]).contains("fewer than 3"));
+        assert!(why(&[[0.0, 0.0], [f64::NAN, 0.0], [1.0, 1.0]]).contains("not a number"));
+        let many: Vec<[f64; 2]> = (0..100).map(|i| [f64::from(i).cos(), f64::from(i).sin()]).collect();
+        assert!(why(&many).contains("corners"));
+        // A comb of 15 teeth (62 corners): its 30 pieces.
+        let mut comb = vec![[0.0, 0.0], [30.0, 0.0]];
+        for i in (0..15).rev() {
+            let x = f64::from(i) * 2.0;
+            comb.extend([[x + 2.0, 1.0], [x + 1.0, 1.0], [x + 1.0, 0.5], [x, 0.5]]);
+        }
+        assert_eq!(pieces(&comb).len(), 30);
+    }
+
+    #[test]
+    fn a_walls_box_over_its_door_is_a_piece_with_its_heights() {
+        // A 10' wall, 6" thick, 9' high, a 3' door from 4' to 7' (the header from 7' up).
+        let mut m = super::super::wallgen::empty_mesh();
+        for (s0, s1, z0, z1) in [(0.0, 4.0, 0.0, 9.0), (4.0, 7.0, 7.0, 9.0), (7.0, 10.0, 0.0, 9.0)] {
+            super::super::wallgen::add_box(&mut m, Vec2::new(s0, 0.0), Vec2::new(s1, 0.0), 0.5, z0, z1);
+        }
+        let mut ps = wall_pieces(&m);
+        ps.sort_by(|a, b| a.z0.total_cmp(&b.z0).then(a.outline[0].x.total_cmp(&b.outline[0].x)));
+        assert_eq!(ps.len(), 3, "{ps:?}");
+        assert!(ps[..2].iter().all(|p| p.z0 == 0.0 && p.z1 == 9.0), "{ps:?}");
+        assert_eq!((ps[2].z0, ps[2].z1), (7.0, 9.0), "{ps:?}");
+        // A wall that is only a header (its own mesh): one piece from 7' up.
+        let mut h = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut h, Vec2::new(0.0, 0.0), Vec2::new(3.0, 0.0), 0.5, 7.0, 9.0);
+        let hs = wall_pieces(&h);
+        assert_eq!(hs.len(), 1);
+        assert_eq!((hs[0].z0, hs[0].z1), (7.0, 9.0));
     }
 
     fn wall(id: &str, a: [f64; 2], b: [f64; 2], t: f64) -> ModelWall {

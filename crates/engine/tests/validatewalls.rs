@@ -186,8 +186,14 @@ fn a_job_built_models_devices_are_hosted_by_its_wall_elements() {
         assert!(host.is_object(), "a device {off_in:.2}\" off a wall face is hosted: {r:#}");
         assert!(!host["wall"].as_str().unwrap_or("face-").starts_with("face-"), "{r:#}");
         assert!(host["thickness_in"].as_f64().unwrap_or(0.0) > 1.0, "hosted by a wall with its thickness: {r:#}");
-        assert!(host["off_face_in"].as_f64().unwrap().abs() <= off_in + 0.5, "hosted by the face the mesh has it {off_in:.2}\" off: {r:#}");
-        assert_eq!(r["nearest_wall"]["wall"], host["wall"], "{r:#}");
+        if host["from"] == "stored" {
+            // Its stored host wall comes first (Q6139), within G-HOST's tolerance; at a corner
+            // that may be the other wall.
+            assert!(host["off_face_in"].as_f64().unwrap().abs() <= 6.0, "on its stored host wall: {r:#}");
+        } else {
+            assert!(host["off_face_in"].as_f64().unwrap().abs() <= off_in + 0.5, "hosted by the face the mesh has it {off_in:.2}\" off: {r:#}");
+            assert_eq!(r["nearest_wall"]["wall"], host["wall"], "{r:#}");
+        }
         // Two feet out from its face: no host, and the wall 24" away.
         if !moved_one && square {
             let dir = match host["face"].as_str().unwrap() {
