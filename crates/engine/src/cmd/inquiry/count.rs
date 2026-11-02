@@ -21,8 +21,8 @@ const MAX_HANDLES: usize = 100_000;
 /// COUNT's JSON parameters.
 pub(super) const PARAMS: &str = "{block?, object?: handle (count objects like this one), space?: current|model|all|<layout> (default current), \
      handles?: [...] (count in these objects), area?: [[x,y],[x,y]] | polygon (references inserted inside it), nested?: bool (default true), \
-     highlight?: bool, similar?: bool (list: also similar: {name: {scaled: [handles], exploded: [[handles]]}})} → \
-     {blocks: {name: n}, nested: {name: n}, spaces: {space: {name: n}}, total} | {block, count, nested, handles}, plus `message` and \
+     highlight?: bool, similar?: bool (also list similar references)} → \
+     {blocks: {name: n}, nested: {name: n}, spaces: {space: {name: n}}, total, similar? (with similar: {name: {scaled: [handles], exploded: [[handles]]}})} | {block, count, nested, handles}, plus `message` and \
      `selfCheck` (found/analyzed/skipped counts with reasons, and the caps hit: work, handles, blockDepth)";
 
 pub(super) fn machine() -> Box<dyn Interactive> {
