@@ -438,6 +438,10 @@ pub struct GuidedJob {
     /// What the print folder held when the job started ([`prints_stamp`]).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prints_stamp: String,
+    /// Each print file the job started from (name below the folder, size, content hash): a
+    /// checkpoint resumes against the same prints wherever they are, and a difference is named.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prints_files: Vec<PrintFile>,
     /// The set's sheet index from classify: one entry per real sheet, and the levels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<Value>,
@@ -740,6 +744,7 @@ impl GuidedJob {
             luminaire_types: Vec::new(),
             wall_luminaire_types: Vec::new(),
             prints_stamp: String::new(),
+            prints_files: Vec::new(),
             index: None,
             sheet_regions: Vec::new(),
             sheet_spans: Vec::new(),
@@ -2043,9 +2048,50 @@ fn default_checkpoint(job_id: &str) -> Option<String> {
     }
 }
 
-/// What the print folder holds (names, sizes, change times): a checkpoint of other prints isn't
-/// resumed.
-fn prints_stamp(pdfs: &str) -> String {
+/// One print file a job started from: its name below the print folder (`/` between folders, the
+/// same on every machine), its size and its content hash. Not its path or change time: the same
+/// prints copied to another folder or machine are the same prints.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrintFile {
+    pub name: String,
+    pub size: u64,
+    pub hash: String,
+}
+
+/// The print files at `pdfs` (a folder of prints, or one print file), with their content hashes.
+fn print_files(pdfs: &str) -> Vec<PrintFile> {
+    let path = std::path::Path::new(pdfs);
+    let files: Vec<(String, std::path::PathBuf)> = if path.is_file() {
+        path.file_name().and_then(|n| n.to_str()).map(|n| vec![(n.to_string(), path.to_path_buf())]).unwrap_or_default()
+    } else {
+        cadaddy_mepfix::printset::discover_sheets(path).unwrap_or_default()
+    };
+    files
+        .into_iter()
+        .map(|(name, p)| {
+            let size = std::fs::metadata(&p).map_or(0, |m| m.len());
+            // Unreadable: a hash no file has, so it never matches a readable one.
+            let hash = cadaddy_mepfix::printset::file_hash(&p).unwrap_or_else(|_| "unreadable".into());
+            PrintFile { name, size, hash }
+        })
+        .collect()
+}
+
+/// One stamp for a set of print files: their names, sizes and contents (stable on every machine).
+fn prints_stamp(files: &[PrintFile]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for f in files {
+        for b in f.name.bytes().chain([0]).chain(f.size.to_le_bytes()).chain(f.hash.bytes()).chain(*b"\n") {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    format!("content:{h:016x}")
+}
+
+/// The stamp checkpoints made before content stamps carry (names, sizes, change times, hashed
+/// with this build's hasher): only an unmoved, untouched folder matches it.
+fn legacy_prints_stamp(pdfs: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     if let Ok(files) = cadaddy_mepfix::printset::discover_sheets(std::path::Path::new(pdfs)) {
@@ -2062,6 +2108,76 @@ fn prints_stamp(pdfs: &str) -> String {
         }
     }
     format!("{:016x}", h.finish())
+}
+
+/// Most differences a refusal lists (the rest are counted).
+const MAX_PRINT_DIFFS: usize = 12;
+
+/// How the prints a checkpoint was made from differ from `now`, file by file (empty: the same).
+fn prints_diff(saved: &[PrintFile], now: &[PrintFile]) -> Vec<String> {
+    let mut out = Vec::new();
+    for f in saved {
+        match now.iter().find(|n| n.name == f.name) {
+            None => out.push(format!("{} is missing", f.name)),
+            Some(n) if n.size != f.size => out.push(format!("{} changed ({} bytes, was {})", f.name, n.size, f.size)),
+            Some(n) if n.hash != f.hash => out.push(format!("{} changed (same size, other content)", f.name)),
+            Some(_) => {}
+        }
+    }
+    for n in now.iter().filter(|n| !saved.iter().any(|f| f.name == n.name)) {
+        out.push(format!("{} is new", n.name));
+    }
+    if out.len() > MAX_PRINT_DIFFS {
+        let more = out.len() - MAX_PRINT_DIFFS;
+        out.truncate(MAX_PRINT_DIFFS);
+        out.push(format!("and {more} more"));
+    }
+    out
+}
+
+/// What a checkpoint's prints are next to the ones a job is started with.
+#[derive(Debug, PartialEq)]
+enum PrintsCheck {
+    /// The same files, content and all (`moved`: in another folder or on another machine).
+    Same { moved: bool },
+    /// Other prints: what differs.
+    Differs(Vec<String>),
+    /// A checkpoint made before content stamps, not in its own untouched folder: its prints
+    /// can't be compared (why, and the sheet files it read that aren't here).
+    Unchecked { why: String, missing: Vec<String> },
+}
+
+/// Compare the prints a checkpoint's job was made from with these (`files` at `pdfs`).
+fn check_prints(saved: &GuidedJob, pdfs: &str, files: &[PrintFile]) -> PrintsCheck {
+    let moved = saved.pdfs_path != pdfs;
+    if !saved.prints_files.is_empty() {
+        let diff = prints_diff(&saved.prints_files, files);
+        return if diff.is_empty() { PrintsCheck::Same { moved } } else { PrintsCheck::Differs(diff) };
+    }
+    if !moved && !saved.prints_stamp.is_empty() && saved.prints_stamp == legacy_prints_stamp(pdfs) {
+        return PrintsCheck::Same { moved: false };
+    }
+    // The sheet files the old job read: at least their names can be looked for.
+    let mut missing: Vec<String> = Vec::new();
+    if let Some(sheets) = saved.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array) {
+        for file in sheets.iter().filter_map(|sh| sh.get("file").and_then(Value::as_str)).take(4096) {
+            if !files.iter().any(|f| f.name == file) && !missing.iter().any(|m| m == file) {
+                missing.push(file.to_string());
+            }
+        }
+    }
+    missing.truncate(MAX_PRINT_DIFFS);
+    let why = if moved {
+        format!("it was made from the prints at {} before checkpoints kept their prints' content", saved.pdfs_path)
+    } else {
+        "it was made before checkpoints kept their prints' content, and the folder's files or change times are not the same".to_string()
+    };
+    PrintsCheck::Unchecked { why, missing }
+}
+
+/// The last part of a path written on any machine (a Windows or a Unix path): its file name.
+fn path_leaf(p: &str) -> &str {
+    p.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(p)
 }
 
 /// Save the job's drawing (its state inside) to the job's checkpoint; a failure is a note, not
@@ -2103,14 +2219,15 @@ fn is_job_checkpoint(path: &str) -> bool {
     d.agent.as_deref().and_then(|a| serde_json::from_str::<Value>(a).ok()).is_some_and(|a| a.get("guided_job").is_some())
 }
 
-/// The unfinished job a checkpoint holds for these prints and this goal, with its drawing.
-fn read_checkpoint(path: &str, pdfs: &str, goal: &JobGoal, stamp: &str) -> Option<(cadaddy_doc::Drawing, GuidedJob)> {
+/// The unfinished job of this goal a checkpoint holds, with its drawing (its prints are checked
+/// by the caller: [`check_prints`]).
+fn read_checkpoint(path: &str, goal: &JobGoal) -> Option<(cadaddy_doc::Drawing, GuidedJob)> {
     let hooks = super::file::io()?;
     let bytes = std::fs::read(path).ok()?;
     let d = (hooks.read)(&bytes, path).ok()?;
     let agent: Value = serde_json::from_str(d.agent.as_deref()?).ok()?;
     let job: GuidedJob = serde_json::from_value(agent.get("guided_job")?.clone()).ok()?;
-    (job.pdfs_path == pdfs && job.goal == *goal && job.prints_stamp == stamp && !job.is_done()).then_some((d, job))
+    (job.goal == *goal && !job.is_done()).then_some((d, job))
 }
 
 /// An unlisted tag printed by several symbols: a question with a crop.
@@ -10420,41 +10537,105 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
         }
         _ => default_checkpoint(&job.id),
     };
-    job.prints_stamp = prints_stamp(pdfs);
-    // A job of these prints cut off before it finished goes on from its last stage.
-    let resume = p.get("resume").and_then(Value::as_bool).unwrap_or(true);
-    if resume
+    job.prints_files = print_files(pdfs);
+    job.prints_stamp = prints_stamp(&job.prints_files);
+    // A job of these prints cut off before it finished goes on from its last stage: the same
+    // prints by content, wherever they are now (`resume: "any"`: whatever they are).
+    let any = match p.get("resume") {
+        None | Some(Value::Null | Value::Bool(true)) => Some(false),
+        Some(Value::Bool(false)) => None,
+        Some(Value::String(v)) if v.trim().eq_ignore_ascii_case("any") => Some(true),
+        Some(other) => return Err(bad("job.start", format!("resume is true, false or \"any\", not {other}"))),
+    };
+    if let Some(any) = any
         && let Some(path) = job.checkpoint.clone()
-        && let Some((d, mut saved)) = read_checkpoint(&path, pdfs, &job.goal, &job.prints_stamp)
+        && let Some((d, mut saved)) = read_checkpoint(&path, &job.goal)
     {
+        let check = check_prints(&saved, pdfs, &job.prints_files);
+        let note = match &check {
+            PrintsCheck::Same { moved: false } => None,
+            PrintsCheck::Same { moved: true } => {
+                Some(format!("the prints moved from {} to {pdfs} (the same files, content and all)", saved.pdfs_path))
+            }
+            PrintsCheck::Differs(diff) if any => Some(format!("resumed with other prints, as asked (resume: \"any\"): {}", diff.join("; "))),
+            PrintsCheck::Unchecked { why, missing } if any => Some(format!(
+                "resumed unchecked, as asked (resume: \"any\"): {why}{}",
+                if missing.is_empty() { "; every sheet file it read is here".to_string() } else { format!("; not here: {}", missing.join(", ")) }
+            )),
+            PrintsCheck::Differs(diff) => {
+                return Err(bad(
+                    "job.start",
+                    format!(
+                        "checkpoint {path} was made from other prints: {}. resume: false starts the job over (writing over the checkpoint); resume: \"any\" goes on from it anyway",
+                        diff.join("; ")
+                    ),
+                ));
+            }
+            PrintsCheck::Unchecked { why, missing } => {
+                return Err(bad(
+                    "job.start",
+                    format!(
+                        "checkpoint {path} can't be matched to these prints: {why}{}. resume: \"any\" goes on from it anyway (its prints taken to be these); resume: false starts the job over (writing over the checkpoint)",
+                        if missing.is_empty() { String::new() } else { format!("; sheet files it read that aren't here: {}", missing.join(", ")) }
+                    ),
+                ));
+            }
+        };
         *s.doc_mut()? = d;
         // The print set's project lives in the session, not the drawing.
         s.execute("printset.open", &json!({"path": pdfs}))?;
         for st in saved.stages.iter_mut().filter(|st| st.status == StageStatus::Running) {
             st.status = StageStatus::Pending;
         }
+        let moved_from = (saved.pdfs_path != pdfs).then(|| saved.pdfs_path.clone());
+        // From here the job's prints are these: the rest of it reads them, and the next resume
+        // checks against them.
+        saved.pdfs_path = pdfs.to_string();
+        saved.prints_files = job.prints_files.clone();
+        saved.prints_stamp = job.prints_stamp.clone();
         saved.checkpoint = Some(path.clone());
         saved.checkpoint_given = job.checkpoint_given;
         saved.auto = job.auto;
         if !job.submittals.is_empty() {
-            if saved.submittals != job.submittals {
+            // The same submittal files somewhere else keep what was read from them.
+            let same_files = saved.submittals.len() == job.submittals.len()
+                && saved.submittals.iter().zip(&job.submittals).all(|(a, b)| path_leaf(a) == path_leaf(b));
+            if !same_files {
                 saved.submittal_types.clear();
                 saved.luminaire_types.clear();
                 saved.wall_luminaire_types.clear();
             }
             saved.submittals = job.submittals.clone();
+        } else if let Some(gone) = saved.submittals.iter().find(|p| !std::path::Path::new(p).exists()) {
+            s.echo(format!("job: the checkpoint's submittals ({gone}) aren't on this machine: job.start {{submittals}} gives them"));
         }
         let done: Vec<&str> = saved.stages.iter().filter(|st| st.status == StageStatus::Done).map(|st| st.name.label()).collect();
-        let line = format!("job: resumed from {path} ({} stage(s) done: {})", done.len(), done.join(", "));
-        let data = json!({"step": "resumed", "checkpoint": path, "stages_done": done});
+        let line = format!(
+            "job: resumed from {path} ({} stage(s) done: {}){}",
+            done.len(),
+            done.join(", "),
+            note.as_deref().map_or_else(String::new, |n| format!("; {n}"))
+        );
+        let data = json!({"step": "resumed", "checkpoint": path, "stages_done": done, "prints_moved_from": moved_from, "note": note});
         report_progress(s, data, &line);
         s.echo(line);
-        saved.audit("job_resumed", "pipeline", None, None, Some(json!({"checkpoint": path})));
+        saved.audit("job_resumed", "pipeline", None, None, Some(json!({"checkpoint": path, "prints_moved_from": moved_from, "note": note})));
         advance_pipeline(s, &mut saved)?;
         save_job(s, &saved)?;
         let stats = model_stats_from_session(s);
         let mut status = job_status_value(&saved, stats.as_ref());
         status["resumed"] = json!(true);
+        status["prints_check"] = json!(match check {
+            PrintsCheck::Same { .. } => "same",
+            PrintsCheck::Differs(_) => "differs",
+            PrintsCheck::Unchecked { .. } => "unchecked",
+        });
+        if let Some(from) = moved_from {
+            status["prints_moved_from"] = json!(from);
+        }
+        if let Some(n) = note {
+            status["resume_note"] = json!(n);
+        }
         return Ok(status);
     }
     job.audit("job_start", "pipeline", None, None, Some(json!({"pdfs": pdfs, "goal": goal_str, "auto": job.auto})));
@@ -11396,7 +11577,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("job.start", "Start Guided Job", cmd_start)
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
@@ -11425,6 +11606,112 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod ckpt_tests {
+    use super::*;
+
+    fn pf(name: &str, size: u64, hash: &str) -> PrintFile {
+        PrintFile { name: name.into(), size, hash: hash.into() }
+    }
+
+    /// Q6156: a difference names the file and says how it differs; the same files are none.
+    #[test]
+    fn prints_diff_names_each_file_that_differs() {
+        let saved = vec![pf("A-101.pdf", 10, "aa"), pf("Mech/M-1.pdf", 20, "bb"), pf("E-1.pdf", 30, "cc"), pf("Old.pdf", 5, "dd")];
+        assert!(prints_diff(&saved, &saved).is_empty());
+        let now = vec![pf("A-101.pdf", 10, "aa"), pf("Mech/M-1.pdf", 21, "bx"), pf("E-1.pdf", 30, "cx"), pf("New.pdf", 1, "ee")];
+        let d = prints_diff(&saved, &now);
+        assert_eq!(
+            d,
+            vec![
+                "Mech/M-1.pdf changed (21 bytes, was 20)".to_string(),
+                "E-1.pdf changed (same size, other content)".into(),
+                "Old.pdf is missing".into(),
+                "New.pdf is new".into()
+            ]
+        );
+        // A long list is capped and counted.
+        let many: Vec<PrintFile> = (0..40).map(|i| pf(&format!("S-{i}.pdf"), 1, "x")).collect();
+        let d = prints_diff(&[], &many);
+        assert_eq!(d.len(), MAX_PRINT_DIFFS + 1);
+        assert_eq!(d.last().map(String::as_str), Some("and 28 more"));
+    }
+
+    /// Q6156: the stamp is the files' names, sizes and contents: not where they are or when they
+    /// were written, and stable (no per-process hasher keys).
+    #[test]
+    fn prints_stamp_is_content_only_and_stable() {
+        let a = vec![pf("A-101.pdf", 10, "00000000000000aa")];
+        assert_eq!(prints_stamp(&a), prints_stamp(&a.clone()));
+        assert!(prints_stamp(&a).starts_with("content:"));
+        assert_ne!(prints_stamp(&a), prints_stamp(&[pf("A-101.pdf", 10, "00000000000000ab")]));
+        assert_ne!(prints_stamp(&a), prints_stamp(&[pf("A-102.pdf", 10, "00000000000000aa")]));
+        assert_ne!(prints_stamp(&a), prints_stamp(&[pf("A-101.pdf", 11, "00000000000000aa")]));
+        // A known value: the same on every machine and build.
+        assert_eq!(prints_stamp(&[]), "content:cbf29ce484222325");
+    }
+
+    /// Q6156: the same files in two folders with other change times are the same prints; one
+    /// changed byte is named.
+    #[test]
+    fn print_files_match_by_content_across_folders() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let root = std::env::temp_dir().join(format!("cadaddy_ckptany_unit_{}_{nanos}", std::process::id()));
+        let (a, b) = (root.join("a"), root.join("b"));
+        for dir in [&a, &b] {
+            std::fs::create_dir_all(dir.join("Sub")).unwrap();
+            std::fs::write(dir.join("One.pdf"), b"%PDF-1.4 one").unwrap();
+            std::fs::write(dir.join("Sub").join("Two.pdf"), b"%PDF-1.4 two").unwrap();
+        }
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(7200);
+        std::fs::File::options().write(true).open(b.join("One.pdf")).unwrap().set_modified(later).unwrap();
+        let (fa, fb) = (print_files(&a.display().to_string()), print_files(&b.display().to_string()));
+        assert_eq!(fa.len(), 2);
+        assert_eq!(fa.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["One.pdf", "Sub/Two.pdf"]);
+        assert_eq!(fa, fb);
+        let mut job = GuidedJob::new(&a.display().to_string(), JobGoal::Bim);
+        job.prints_files = fa;
+        assert_eq!(check_prints(&job, &a.display().to_string(), &fb), PrintsCheck::Same { moved: false });
+        assert_eq!(check_prints(&job, &b.display().to_string(), &fb), PrintsCheck::Same { moved: true });
+        std::fs::write(b.join("Sub").join("Two.pdf"), b"%PDF-1.4 tw0").unwrap();
+        let fb = print_files(&b.display().to_string());
+        assert_eq!(
+            check_prints(&job, &b.display().to_string(), &fb),
+            PrintsCheck::Differs(vec!["Sub/Two.pdf changed (same size, other content)".into()])
+        );
+        // One print file, not a folder.
+        let one = print_files(&a.join("One.pdf").display().to_string());
+        assert_eq!(one.len(), 1);
+        assert_eq!(one.first().map(|f| f.name.as_str()), Some("One.pdf"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Q6156: a checkpoint made before content stamps, from another folder (a Windows path), can't
+    /// be checked: the sheet files it read that aren't here are named.
+    #[test]
+    fn a_checkpoint_without_content_stamps_is_unchecked() {
+        let mut job = GuidedJob::new("C:\\Jobs\\Sample\\prints", JobGoal::Bim);
+        job.prints_stamp = "0123456789abcdef".into();
+        job.sheets = Some(json!({"sheets": [{"file": "One.pdf"}, {"file": "Sub/Gone.pdf"}, {"file": "One.pdf"}]}));
+        let here = vec![pf("One.pdf", 3, "aa")];
+        match check_prints(&job, "/made-up/prints", &here) {
+            PrintsCheck::Unchecked { why, missing } => {
+                assert!(why.contains("C:\\Jobs\\Sample\\prints"), "{why}");
+                assert_eq!(missing, vec!["Sub/Gone.pdf".to_string()]);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn path_leaf_reads_windows_and_unix_paths() {
+        assert_eq!(path_leaf("C:\\Jobs\\Sub\\Lighting.pdf"), "Lighting.pdf");
+        assert_eq!(path_leaf("/mnt/jobs/Sub/Lighting.pdf"), "Lighting.pdf");
+        assert_eq!(path_leaf("C:\\Jobs\\Sub\\"), "Sub");
+        assert_eq!(path_leaf("Lighting.pdf"), "Lighting.pdf");
+    }
+}
 
 #[cfg(test)]
 mod tests {

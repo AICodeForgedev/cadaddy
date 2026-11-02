@@ -158,10 +158,10 @@
       "id": "E-RECEPT-TYPE",
       "trade": "electrical",
       "applies_to": {"kinds": ["receptacle", "outlet", "floor_box"], "categories": ["IfcOutlet"], "marks": []},
-      "check": "Each receptacle is the type the legend, notes and code call for: GFCI near sinks and in wet locations, tamper-resistant in dwelling and guest rooms, weather-resistant with a cover outdoors, and USB, quad or floor box as tagged.",
+      "check": "Each receptacle is the type the legend, notes and code call for: GFCI near sinks and in wet locations, weather-resistant with a cover outdoors, and USB, quad or floor box as tagged (tamper-resistance is E-RECEPT-TR's).",
       "how": [
         "Read the symbol and its subscript tag (GFI, WP, USB, quad) on the plan crop and the matching legend row.",
-        "Check the general notes for blanket requirements (all receptacles tamper-resistant; GFCI within a distance of a sink).",
+        "Check the general notes for blanket requirements (GFCI within a distance of a sink, weather-resistant outdoors).",
         "The element's type and properties in the object list must carry every required rating; a missing rating is a 'fail'."
       ],
       "documents": ["plan", "legend", "general_notes", "spec"],
@@ -171,6 +171,33 @@
       "examples": {
         "pass": "The receptacle beside the vanity is tagged GFI on the plan and is a GFCI type in the model.",
         "fail": "The exterior receptacle is a plain duplex in the model; the plan tags it WP."
+      }
+    },
+    {
+      "id": "E-RECEPT-TR",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["receptacle"], "categories": [], "marks": []},
+      "check": "Every 15 or 20 A, 125 V receptacle (duplex, GFCI, USB, quad) in a dwelling unit, guest room, guest suite or other area the code lists is tamper-resistant.",
+      "how": [
+        "The prescreen gives each receptacle's tamper-resistance fact and where it came from: its product record, its legend row or type tag (TR), or a general note or spec line making every receptacle tamper-resistant.",
+        "Where it says 'unsure', look for the fact yourself: the TR subscript beside the symbol, the legend row of its tag, the general notes and the wiring device spec section.",
+        "A receptacle in such a room that is not tamper-resistant is a 'fail' citing what says so; a GFCI receptacle is checked here as well as by E-RECEPT-TYPE."
+      ],
+      "documents": ["plan", "enlarged_plan", "legend", "general_notes", "spec", "submittal"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": "spec",
+      "examples": {
+        "pass": "The general notes say all receptacles shall be tamper-resistant; the guest room's duplex receptacles pass, citing the note.",
+        "fail": "The guest room's GFCI receptacle by the vanity is a product the record says is not tamper-resistant."
+      },
+      "code": {
+        "cite": "NEC 406.12",
+        "says": "In the areas listed, nonlocking 15- and 20-ampere, 125-volt receptacles shall be listed tamper-resistant receptacles.",
+        "rooms": ["dwelling unit", "dwelling", "apartment", "guest room", "guestroom", "guest suite", "hotel room", "motel room", "dormitory", "dorm room", "child care", "day care", "daycare", "preschool", "assisted living"],
+        "typical_units": true,
+        "max_amps": 20,
+        "max_volts": 125
       }
     },
     {
@@ -247,6 +274,115 @@
       "examples": {
         "pass": "Four recessed fixtures in the RCP's grid are recessed in the 9 ft ceiling in the model.",
         "fail": "A sconce shown on the elevation at mirror height is placed in the ceiling."
+      }
+    },
+    {
+      "id": "E-LUM-TYPE",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["luminaire", "light_fixture", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},
+      "check": "Every luminaire's type tag has a row in the fixture schedule and a product in the lighting submittal, and its product fields (maker, catalog number, voltage, wattage, lumens, CCT, dimming, finish) are what they say; where the schedule and the submittal disagree it is a conflict citing both.",
+      "how": [
+        "The prescreen gives each luminaire's type, its fixture schedule rows and its submittal product with each field's source, and its verdict: pass, fail (the model's product differs from the documents), conflict (the documents disagree: a plan tag with no schedule row, a scheduled type the submittal leaves out, a field the schedule and the cut sheet give differently) or unsure (no fixture schedule or submittal read).",
+        "Read the type tag beside the fixture on the RCP or lighting plan crop and find its row in the fixture schedule crop; compare the catalog number, voltage, lamp or lumens, CCT, dimming and mounting with the submittal's cut sheet page.",
+        "A conflict is the documents', not the model's: report the element 'unsure' and cite both documents, unless a print image settles which one holds."
+      ],
+      "documents": ["plan", "rcp", "schedule", "submittal", "spec"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": "tags",
+      "examples": {
+        "pass": "Type A's schedule row and its cut sheet give the same catalog number, 0-10V driver and 3500K; the model's type A carries them.",
+        "fail": "The schedule and cut sheet give type B a 0-10V driver; the model's type B says non-dim."
+      }
+    },
+    {
+      "id": "E-LUM-CONTROL",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["luminaire", "light_fixture", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},
+      "check": "Every luminaire has a control (a switch, dimmer or sensor of its room on its switch leg, or one linked to it) unless it is marked emergency or unswitched.",
+      "how": [
+        "The prescreen links each luminaire to the controls of its room by switch leg letter (or the link the model stores) and says which control, or why none is needed (an emergency, night light or unswitched marking, an exit sign).",
+        "On the lighting plan crop, find the switch leg letter beside the fixture and the switch with the same letter in the room; a fixture with no control and no emergency or unswitched marking is a 'fail'."
+      ],
+      "documents": ["plan", "enlarged_plan", "rcp", "legend", "schedule"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": "connectivity",
+      "examples": {
+        "pass": "The two downlights on leg a are controlled by the dimmer on leg a by the door; the emergency fixture in the corridor needs no switch.",
+        "fail": "The bath light is on leg c, but no switch in the room is on leg c."
+      }
+    },
+    {
+      "id": "E-SWITCH-LEG",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["switch", "occupancy_sensor", "dimmer"], "categories": [], "marks": []},
+      "check": "Every switch, dimmer and occupancy or vacancy sensor controls luminaires of its own room or area by its switch leg.",
+      "how": [
+        "The prescreen lists the luminaires each control reaches: the ones of its room with its switch leg letter (an unlettered control the unlettered ones), or the ones linked to it.",
+        "On the plan crop, the switch's subscript letter must match the letters at the fixtures it controls, in the same room; a leg with no fixture is a 'fail'."
+      ],
+      "documents": ["plan", "enlarged_plan", "legend"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": "connectivity",
+      "examples": {
+        "pass": "Switch leg b by the bed controls the two sconces marked b in the same room.",
+        "fail": "The switch is on leg d but no fixture in the room is marked d."
+      }
+    },
+    {
+      "id": "E-SWITCH-DIM",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["switch", "occupancy_sensor", "dimmer"], "categories": [], "marks": []},
+      "check": "A dimmer controls only dimmable drivers of its own protocol (0-10 V, ELV, TRIAC, DALI); a dimmer on a non-dimmable driver or a protocol mismatch is a fail.",
+      "how": [
+        "The prescreen reads each dimmer's protocol (its own type, the legend or the lighting controls schedule) and each controlled fixture's driver dimming (the model, the submittal's ordering row, the fixture schedule).",
+        "Check the lighting controls schedule and the fixture's cut sheet: a 0-10V driver needs a 0-10V dimmer with the control pair; an ELV or TRIAC dimmer can't dim it. 'Unsure' when either protocol is not stated."
+      ],
+      "documents": ["legend", "schedule", "submittal", "spec"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": "spec",
+      "examples": {
+        "pass": "The 0-10V dimmer controls two 0-10V downlights.",
+        "fail": "The dimmer controls a fixture whose cut sheet gives a non-dimming driver."
+      }
+    },
+    {
+      "id": "E-SWITCH-3WAY",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["switch", "dimmer"], "categories": [], "marks": []},
+      "check": "Every 3-way switch has its mate (another 3-way switch on the same leg in its room); a 4-way switch stands between two 3-ways.",
+      "how": [
+        "The prescreen finds 3-way and 4-way switches by their type words (the legend's '3-way' row, the type tag) and counts the set on each leg of each room.",
+        "On the plan crop, a 3-way switch at one door has its mate at the other door on the same leg; a lone 3-way is 'missing' its mate."
+      ],
+      "documents": ["plan", "enlarged_plan", "legend"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": "connectivity",
+      "examples": {
+        "pass": "The 3-way switches at the entry and by the bed are both on leg a.",
+        "fail": "Only one 3-way switch is in the room; the plan shows a second at the bed."
+      }
+    },
+    {
+      "id": "E-LUM-COUNT",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["luminaire", "light_fixture", "exit_sign", "switch", "occupancy_sensor", "dimmer"], "categories": ["IfcLightFixture"], "marks": []},
+      "check": "Per room, the model has as many luminaires and lighting controls of each type as the plan's symbols show.",
+      "how": [
+        "The prescreen counts the plan's luminaire and control symbols in the room by type tag and the model's elements in it.",
+        "Where the counts differ, find the symbols on the RCP, lighting or enlarged plan crop: the model's missing ones are 'missing', the ones the plan doesn't show 'extra'."
+      ],
+      "documents": ["plan", "enlarged_plan", "rcp"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": "counts",
+      "examples": {
+        "pass": "The plan shows two type F sconces and a 3-way pair in the room; the model has the same.",
+        "fail": "The enlarged plan shows a type D fixture over the vanity; the model's room has none."
       }
     },
     {

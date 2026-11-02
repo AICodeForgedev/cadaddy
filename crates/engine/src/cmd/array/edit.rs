@@ -25,7 +25,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("arrayedit", "Edit Array", run_arrayedit)
             .menu(&["Modify", "Object", "Array"])
             .params(
-                "{handle, cols?, rows?, colSpacing?, rowSpacing?, axisAngle? (degrees), rowElevation?, levels?, levelSpacing?, items?, angle? (fill, degrees), angleBetween?, rotate?: bool, center? ([x, y]), path arrays: method? (\"divide\" | \"measure\"), spacing?, align?: bool; base? ([x, y], the new base point), remove?: [[i, j, level]…] (items taken out), reset?: bool (brings back replaced and removed items), replace?: {handles, base? ([x, y], default the objects' centre), items: [[i, j, level]…] | \"source\"}, source?: {item? ([i, j, level], default [0, 0, 0])} (places the source objects for editing; ARRAYCLOSE ends)}",
+                "{handle, cols?, rows?, colSpacing?, rowSpacing?, columns? (same as cols), columnSpacing? (same as colSpacing), axisAngle? (degrees), rowElevation?, levels?, levelSpacing?, items?, angle? (fill, degrees), angleBetween?, rotate?: bool, center? ([x, y]), path arrays: method? (\"divide\" | \"measure\"), spacing?, align?: bool; base? ([x, y], the new base point), remove?: [[i, j, level]…] (items taken out), reset?: bool (brings back replaced and removed items), replace?: {handles, base? ([x, y], default the objects' centre), items: [[i, j, level]…] | \"source\"}, source?: {item? ([i, j, level], default [0, 0, 0])} (places the source objects for editing; ARRAYCLOSE ends)}",
             )
             .interactive(|_| Ok(Box::new(EditM::default()))),
         CommandSpec::new("arrayclose", "Close Array Editing", run_arrayclose)
@@ -379,13 +379,13 @@ fn apply_params(a: &mut ArrayParams, p: &Value, to_local: &Mat3) -> Result<()> {
     }
     match &mut a.kind {
         ArrayKind::Rect(r) => {
-            if let Some(n) = count_param(p, "cols")? {
+            if let Some(n) = count_param(p, super::column_key("arrayedit", p, "cols", "columns")?)? {
                 r.cols = n;
             }
             if let Some(n) = count_param(p, "rows")? {
                 r.rows = n;
             }
-            if let Some(x) = num_param(p, "colSpacing")? {
+            if let Some(x) = num_param(p, super::column_key("arrayedit", p, "colSpacing", "columnSpacing")?)? {
                 r.col_spacing = x;
             }
             if let Some(x) = num_param(p, "rowSpacing")? {

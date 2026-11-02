@@ -11,16 +11,30 @@
 //!   - `prints/`: a PNG crop of every sheet that shows the area: each trade's plan, enlarged
 //!     plans, the RCP (the area's box, plus a margin, carried onto the sheet by the sheet's
 //!     registration on its level's plan, else by the view placement the job kept, else the plan
-//!     itself), interior elevations naming the room, the partition legend and the schedule or
+//!     itself), every sheet an element of the area was read from (Q6134: placed when it can
+//!     be, else round the element's source point on it, else round the room's tag, else the
+//!     whole view in tiles marked `unregistered`), the level's sheets by their level tag or a
+//!     title naming the level (offered the same way; a partial view that names neither the
+//!     room's number nor its name is left out, saying so), interior elevations naming the room, the partition legend and the schedule or
 //!     legend rows of the type marks present, general-notes blocks, and the submittal pages of
-//!     the products present. A crop is at least 150 dpi of the printed sheet (the paper size is
+//!     the products present and of the job's submittals for the area's marks and kinds (one the
+//!     job applied but does not list is named in `submittals_unlisted`). No two crops are the
+//!     same view, none is narrower than 320 px. A crop is at least 150 dpi of the printed sheet (the paper size is
 //!     taken from the sheet's shape, ARCH/ANSI/ISO), in tiles when large; the manifest gives
 //!     each crop's sheet rectangle and pixel scale, so a sheet point is at
-//!     `((x − x0)·s, (y1 − y)·s)` pixels.
+//!     `((x − x0)·s, (y1 − y)·s)` pixels. A crop is drawn as its PDF page prints (Q6135): the
+//!     lettering the import read off strokes as those strokes (the readings, often at a glyph
+//!     cluster's size, are left out), no masks (the import's merged masks sit later than what
+//!     they covered), nothing on a layer that is off; each picture is labelled by the view of
+//!     its own sheet it overlaps most; each crop is compared with its sheet's PDF page read
+//!     again (the job's file and page, `prints` when the job's folder isn't here) at the same
+//!     rectangle and pixels, the similarity in the manifest, a low one flagged there and in
+//!     `prompt.md`. Only pictures whose files were written are listed.
 //!   - `model/`: the model over each plan crop (the print in grey, the model by trade colour:
 //!     architecture blue, electrical red, mechanical green, plumbing cyan, fire magenta), a
 //!     clean plan of the model alone, and when the model is built a 3D view of the area and an
-//!     elevation of each of its longest walls (`model.render` with a camera).
+//!     elevation of each side of it, the camera inside the area (one per direction, the longest
+//!     sides first; `model.render` with a camera).
 //!   - `objects.json`: every model element in the area (handle, kind, trade, mark, tag, name,
 //!     level, room, position, height above the floor, host wall and face, mounting, size,
 //!     system, circuit, switch leg, maker, catalog number, submittal, source sheet and point, and
@@ -87,6 +101,22 @@ const MAX_AREA_LIMIT: usize = 500;
 /// Row and note crops of one sheet, at most.
 const MAX_TEXT_CROPS_PER_SHEET: usize = 6;
 const MAX_ELEVATIONS: usize = 6;
+/// The sheets an area's elements cite, and the source points kept per sheet.
+const MAX_CITED_SHEETS: usize = 200;
+const MAX_CITED_POINTS: usize = 500;
+/// The shortest side of a print crop, pixels (a narrower view is widened round its centre).
+const MIN_CROP_PX: f64 = 320.0;
+/// A view of a sheet smaller than this share of it is a partial view (a stair, an elevator, one
+/// unit), not the level's plan (a sheet of two or four floors' plans gives each a fifth or more).
+const PARTIAL_VIEW: f64 = 0.10;
+/// Two crops of one sheet sharing this much of their union are the same view.
+const SAME_VIEW: f64 = 0.9;
+/// Tiles a side of a whole view of a sheet that isn't placed on the plan.
+const WHOLE_TILES_SIDE: u32 = 2;
+/// The submittal pages offered for a kind no element of the area carries a submittal for.
+const MAX_KIND_PAGES: usize = 3;
+/// The submittal pages looked at across the building.
+const MAX_SUBMITTAL_PAGES: usize = 2_000;
 /// Enlarged views of a room's unit type, and riser diagram crops, in one packet at most.
 const MAX_UNIT_VIEWS: usize = 6;
 /// The views a unit type lists (its plans, RCP, trades' plans, elevations) taken at most.
@@ -113,7 +143,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{level?: name, kind?: room|zone|equipment_room|corridor, area?: [x0,y0,x1,y1] (building feet: a custom window, listed as a zone; needs `level` when the building has several), cursor?: n, limit?: n (100, at most 500)} → {total, cursor, areas: [{id, kind, level, number?, name?, room?, stretch?: [i, n], outline: [[x,y]] (feet), box: [x0,y0,x1,y1] (feet)}], next?, levels}: the areas to check, one room, corridor stretch (≤ 40 ft) or equipment room each; ids are stable")
             .noundo(),
         CommandSpec::new(CMD_PACKET, "Validation Evidence Packet", run_packet)
-            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40)} → the manifest: {packet, area, prints: [{file, sheet, title, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by}], model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals, objects, rules, prompt, counts, left_out: [{what, why}]}: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
+            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40), compare?: bool (true: each crop against its PDF page), prints?: folder of the job's PDFs (when the job's isn't on this machine)} → the manifest: {packet, area, prints: [{file, sheet, title, view?, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by: reference|registration|view_placement|same_sheet|unit_type|text|source_point|room_tag|unregistered, unregistered?: true (not placed on the plan: no overlay), cited?: true (an element here was read from it), page?, similarity?: 0–1 (to its PDF page), similarity_low?: true}], similarity: {about, low_under, compared, low: [{file, similarity}], not_compared: [{sheet, why}]}, model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals: [{file, submittal, page, for}], submittals_unlisted: [{submittal, pages, for, applied_to, marks}] (applied by the job, its file not among the job's submittals), objects, rules, prompt, counts, left_out: [{what, why}]}; every sheet an element of the area was read from is in it (placed, else round the source points, else round the room's tag, else the whole view in tiles), and every sheet of the level (by its tag or its title) unless it doesn't show the area (said in left_out); one wall elevation per side direction, from inside the area: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
             .noundo()
             .files(),
     ]
@@ -654,6 +684,12 @@ struct Crop {
     shows: Option<String>,
     /// How the view is turned and mirrored against the room on the plan.
     orientation: Option<Value>,
+    /// The sheet is not placed on the level's plan: the model can't be drawn over it.
+    unregistered: bool,
+    /// An element of the area was read from this sheet.
+    cited: bool,
+    /// The whole view on the sheet (its tiles share it).
+    whole: [f64; 4],
 }
 
 impl Crop {
@@ -684,9 +720,105 @@ impl Crop {
             if let Some(or) = &self.orientation {
                 m.insert("orientation".into(), or.clone());
             }
+            if self.unregistered {
+                m.insert("unregistered".into(), json!(true));
+            }
+            if self.cited {
+                m.insert("cited".into(), json!(true));
+            }
         }
         o
     }
+}
+
+/// `r` widened round its centre to at least `min` a side, kept on `sheet` where it can be.
+fn widen(r: [f64; 4], min: f64, sheet: [f64; 4]) -> [f64; 4] {
+    let mut out = r;
+    for (lo, hi) in [(0usize, 2usize), (1, 3)] {
+        let (a, b) = (r[lo], r[hi]);
+        let (s0, s1) = (sheet[lo], sheet[hi]);
+        if !(min.is_finite() && b - a < min) {
+            continue;
+        }
+        let half = min.min((s1 - s0).max(b - a)) / 2.0;
+        let c = (a + b) / 2.0;
+        let (mut x0, mut x1) = (c - half, c + half);
+        if x0 < s0 {
+            x1 += s0 - x0;
+            x0 = s0;
+        }
+        if x1 > s1 {
+            x0 = (x0 - (x1 - s1)).max(s0);
+            x1 = s1;
+        }
+        out[lo] = x0;
+        out[hi] = x1;
+    }
+    out
+}
+
+/// How much of `a` and `b` is shared: the overlap over the union of the two rectangles.
+fn overlap(a: [f64; 4], b: [f64; 4]) -> f64 {
+    let area = |r: [f64; 4]| ((r[2] - r[0]) * (r[3] - r[1])).max(0.0);
+    let i = intersect(a, b).map_or(0.0, area);
+    let u = area(a) + area(b) - i;
+    if u > 0.0 { i / u } else { 0.0 }
+}
+
+/// A level's number from its name (`Level 2`, `L2`, `02`), if it has one.
+fn level_number(level: &str) -> Option<u32> {
+    let digits: String = level.chars().filter(char::is_ascii_digit).take(3).collect();
+    digits.parse().ok()
+}
+
+/// The floor a word counts (`2ND`, `SECOND`, `2`), if it is one.
+fn ordinal(word: &str) -> Option<u32> {
+    const WORDS: [&str; 12] = ["FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH", "SIXTH", "SEVENTH", "EIGHTH", "NINTH", "TENTH", "ELEVENTH", "TWELFTH"];
+    if let Some(i) = WORDS.iter().position(|w| *w == word) {
+        return u32::try_from(i + 1).ok();
+    }
+    let digits = word.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let suffix = word.get(digits.len()..).unwrap_or("");
+    if digits.is_empty() || digits.len() > 3 || !digits.chars().all(|c| c.is_ascii_digit()) || !matches!(suffix, "" | "ST" | "ND" | "RD" | "TH") {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// Whether a sheet's (or view's) title names `level`: `LEVEL 2`, `2ND FLOOR`, `SECOND FLOOR`,
+/// `2ND-4TH FLOOR`, `FLOOR 2`; a level with no number by its name (`ROOF PLAN`).
+pub(crate) fn title_names_level(title: &str, level: &str) -> bool {
+    let up = upper_words(&title.replace(['.', '-', '/', '_', ',', '(', ')', '&'], " "));
+    let words: Vec<&str> = up.split_whitespace().take(200).collect();
+    let Some(n) = level_number(level) else {
+        let name = upper_words(level);
+        return name.len() >= 3 && format!(" {up} ").contains(&format!(" {name} "));
+    };
+    const JOIN: [&str; 4] = ["THRU", "THROUGH", "TO", "AND"];
+    for (i, w) in words.iter().enumerate() {
+        if !matches!(*w, "FLOOR" | "FLOORS" | "LEVEL" | "LEVELS") {
+            continue;
+        }
+        // `LEVEL 2`, `FLOOR 2`.
+        if words.get(i + 1).and_then(|x| x.parse::<u32>().ok()) == Some(n) {
+            return true;
+        }
+        // `2ND FLOOR`, `SECOND THRU FOURTH FLOORS`, `2ND-4TH FLOOR`.
+        let mut nums: Vec<u32> = Vec::new();
+        for x in words.iter().take(i).rev().take(4) {
+            match ordinal(x) {
+                Some(k) => nums.push(k),
+                None if JOIN.contains(x) => {}
+                None => break,
+            }
+        }
+        match nums.as_slice() {
+            [one] if *one == n => return true,
+            [hi, lo, ..] if (*lo.min(hi)..=*lo.max(hi)).contains(&n) => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// A turn, degrees counter-clockwise in [0, 360), to a tenth.
@@ -781,10 +913,16 @@ pub(crate) fn layout_fit(ty: &Value, area: &Area, elements: &[(String, [f64; 2])
 
 /// A sheet rectangle cut into pictures at `ppu` pixels per unit: whole pixels, tiles of at most
 /// [`TILE_PX`]; past [`MAX_TILES_SIDE`] tiles a side the scale drops (returned).
+#[cfg(test)]
 fn tiles(rect: [f64; 4], ppu: f64) -> (f64, Vec<([f64; 4], [u32; 2], [u32; 2])>) {
+    tiles_max(rect, ppu, MAX_TILES_SIDE)
+}
+
+/// [`tiles`] with at most `side` tiles a side.
+fn tiles_max(rect: [f64; 4], ppu: f64, side: u32) -> (f64, Vec<([f64; 4], [u32; 2], [u32; 2])>) {
     let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
     let longest = w.max(h) * ppu;
-    let cap = f64::from(TILE_PX * MAX_TILES_SIDE);
+    let cap = f64::from(TILE_PX * side.clamp(1, MAX_TILES_SIDE));
     let ppu = if longest > cap { ppu * cap / longest } else { ppu };
     let wpx = ((w * ppu).ceil().max(16.0)).min(cap) as u32;
     let hpx = ((h * ppu).ceil().max(16.0)).min(cap) as u32;
@@ -1102,7 +1240,7 @@ fn whole_walls<'a>(pieces: &[&'a v::ModelWall]) -> Vec<WholeWall<'a>> {
 
 /// Which area of a level a point belongs to: the first whose outline holds it, else the one
 /// whose outline is nearest, within [`EDGE_FT`] (an item on its room's wall line).
-fn home_of(areas: &[&Area], p: [f64; 2]) -> Option<usize> {
+pub(crate) fn home_of(areas: &[&Area], p: [f64; 2]) -> Option<usize> {
     if let Some(i) = areas.iter().position(|a| a.outline.len() >= 3 && point_in(&a.outline, p)) {
         return Some(i);
     }
@@ -1201,10 +1339,54 @@ struct InArea {
     categories: BTreeSet<String>,
     marks: BTreeSet<String>,
     wall_types: BTreeSet<String>,
-    submittals: BTreeSet<String>,
     counts: Value,
     /// The handles of the elements beside the area (not its own).
     nearby: BTreeSet<String>,
+    /// The sheets the area's elements were read from (sheet number, upper case): how many
+    /// elements cite each, and the points they were read at.
+    cited: BTreeMap<String, Cited>,
+    /// The area's own elements: kind, mark, submittal (for the submittals' matching).
+    products: Vec<(String, Option<String>, Option<String>)>,
+    /// The area holds luminaires or lighting controls: its packet carries the lighting-control
+    /// legend.
+    lighting: bool,
+    /// The lighting types' cut-sheet pages (`<file> p.<n>`) the packet carries.
+    cut_sheets: BTreeSet<String>,
+}
+
+/// The elements of an area read from one sheet.
+#[derive(Clone, Debug, Default)]
+struct Cited {
+    elements: usize,
+    points: Vec<[f64; 2]>,
+}
+
+/// The sheet an element's print source names (`E-9/1`: sheet E-9, its first view or page), upper
+/// case; none for what is not a sheet number (`room 512`).
+pub(crate) fn sheet_key(doc: &str) -> Option<String> {
+    let t = doc.trim();
+    let t = match t.rsplit_once('/') {
+        Some((a, b)) if !b.is_empty() && b.chars().all(|c| c.is_ascii_digit()) => a.trim(),
+        _ => t,
+    };
+    let ok = !t.is_empty() && t.len() <= 24 && !t.contains(char::is_whitespace) && t.chars().any(|c| c.is_ascii_digit());
+    ok.then(|| t.to_ascii_uppercase())
+}
+
+/// Note an element's print source in `cited`.
+fn cite(cited: &mut BTreeMap<String, Cited>, src: Option<&Value>) {
+    let Some(key) = src.and_then(|v| v.get("sheet")).and_then(Value::as_str).and_then(sheet_key) else { return };
+    if cited.len() >= MAX_CITED_SHEETS && !cited.contains_key(&key) {
+        return;
+    }
+    let c = cited.entry(key).or_default();
+    c.elements += 1;
+    let at = src.and_then(|v| v.get("at")).and_then(Value::as_array).and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?]));
+    if let Some(p) = at.filter(|p| p.iter().all(|v| v.is_finite()))
+        && c.points.len() < MAX_CITED_POINTS
+    {
+        c.points.push(p);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1234,10 +1416,11 @@ fn in_area(
     let mut kinds = BTreeSet::new();
     let mut categories = BTreeSet::new();
     let mut marks = BTreeSet::new();
-    let mut submittals = BTreeSet::new();
     let mut elements: Vec<Value> = Vec::new();
     let mut nearby: Vec<Value> = Vec::new();
     let mut nearby_handles: BTreeSet<String> = BTreeSet::new();
+    let mut cited: BTreeMap<String, Cited> = BTreeMap::new();
+    let mut products: Vec<(String, Option<String>, Option<String>)> = Vec::new();
     let mut els: Vec<&v::Element> = model.elements.iter().filter(|e| lvl(&e.level) && inside(reach, e.at)).collect();
     els.sort_by(|a, b| (a.kind.as_str(), a.id.as_str()).cmp(&(b.kind.as_str(), b.id.as_str())));
     // The area's own: inside its outline (or on its wall line, no other room's); the rest beside it.
@@ -1273,9 +1456,8 @@ fn in_area(
         }
         props.sort();
         let sub = field(&props, &e.fields, &["submittal"]);
-        if let Some(sb) = &sub {
-            submittals.insert(sb.clone());
-        }
+        cite(&mut cited, print_src.as_ref());
+        products.push((rk.kind.clone(), e.mark.clone(), sub.clone()));
         let mounting = field(&props, &e.fields, &["mounting"])
             .unwrap_or_else(|| serde_json::to_value(e.mounting).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default());
         // The wall it is on: its stored host wall's nearest piece when the model has that wall,
@@ -1393,9 +1575,8 @@ fn in_area(
             marks.insert(m.clone());
         }
         let sub = field(&props, &none, &["submittal"]);
-        if let Some(sb) = &sub {
-            submittals.insert(sb.clone());
-        }
+        cite(&mut cited, print_src.as_ref());
+        products.push((b.kind.clone(), mark.clone(), sub.clone()));
         let mine: Vec<Value> =
             failures.iter().filter(|f| f.element.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&b.handle))).map(fail_json).collect();
         elements.push(json!({
@@ -1523,7 +1704,19 @@ fn in_area(
     if total_elements > MAX_OBJECTS || total_runs > MAX_OBJECTS {
         objects["left_out"] = json!(format!("listed at most {MAX_OBJECTS} elements and runs each"));
     }
-    InArea { objects, kinds, categories, marks, wall_types, submittals, counts, nearby: nearby_handles }
+    InArea {
+        objects,
+        kinds,
+        categories,
+        marks,
+        wall_types,
+        counts,
+        nearby: nearby_handles,
+        cited,
+        products,
+        lighting: false,
+        cut_sheets: BTreeSet::new(),
+    }
 }
 
 // ---------------------------------------------------------------- rules and prompt
@@ -1560,7 +1753,7 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         counts.get("walls").and_then(Value::as_u64).unwrap_or(0),
         counts.get("openings").and_then(Value::as_u64).unwrap_or(0),
     ));
-    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: each symbol the room's enlarged plans, else its level's trade plans, show in it against the model's elements of the same kind (`missing` names the sheet and the point), elements no symbol stands for `extra`, and the room type's project-rule set). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
+    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: each symbol the room's enlarged plans, else its level's trade plans, show in it against the model's elements of the same kind (`missing` names the sheet and the point), elements no symbol stands for `extra`, and the room type's project-rule set; E-RECEPT-TR: each receptacle's tamper-resistance fact and its source where the code wants tamper-resistant receptacles, `unsure` when nothing says; E-LUM-TYPE, E-LUM-CONTROL, E-SWITCH-LEG, E-SWITCH-DIM, E-SWITCH-3WAY, E-LUM-COUNT: the luminaires' types against the fixture schedule and submittal, their controls by switch leg, dimmers against their drivers, 3-way pairs, and the plan's symbol counts per room). Start from these numbers; overturn one only with a print image that shows otherwise. A `conflict` finding means the documents disagree (both are cited): report that element `unsure`, citing both documents, unless a print image settles it.\n- `objects.json` `lighting`: each luminaire type present with its fixture schedule rows and submittal product (its cut-sheet pages are among the submittal pictures), and the legend rows of the controls present; each luminaire and control carries its `lighting` facts (switch leg, dimming, dimmer, 3-way).\n");
     s.push_str("- `objects.json` `wall_spans`: wall pieces over an opening (a door's header), with the heights they span above the floor; the plan shows a gap there, and an item below one is in the opening. `walls_unmeasured`: walls whose footprint gives no centreline, with why.\n");
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
@@ -1570,13 +1763,14 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
     s.push_str("- Print crops (what the documents say):\n");
     for c in crops {
         s.push_str(&format!(
-            "  - `{}`: sheet {} {}, {}{}{}\n",
+            "  - `{}`: sheet {}{}, {}{}{}{}\n",
             c.file,
             c.sheet,
-            c.title,
+            c.view.as_ref().map_or_else(|| format!(" {}", c.title).trim_end().to_string(), |v| format!(" view {v}")),
             c.kind.replace('_', " "),
             c.shows.as_ref().map(|x| format!(" ({x})")).unwrap_or_default(),
-            c.orientation.as_ref().and_then(turn_words).map(|w| format!("; {w}")).unwrap_or_default()
+            c.orientation.as_ref().and_then(turn_words).map(|w| format!("; {w}")).unwrap_or_default(),
+            if c.unregistered { "; NOT placed on the plan: no overlay, find the area on it by its walls, doors and tags" } else { "" }
         ));
     }
     s.push_str("- Model pictures (what was built):\n");
@@ -1824,6 +2018,286 @@ fn render_drawing(od: &Drawing, rect: [f64; 4], px: [u32; 2]) -> Option<Vec<u8>>
     png_of(od, &all, rect, px)
 }
 
+// ---------------------------------------------------------------- a print as its page shows it
+
+/// The layer (off) the PDF import keeps lettering strokes on once it has read them as text, and
+/// the text style of a reading no hidden text confirms (`cadaddy_io::pdf_read`; that crate
+/// reaches this one only through the read hook, so a test checks the names agree).
+const SHX_SOURCE_LAYER: &str = "PDF-SHX-SOURCE";
+const OCR_TEXT_STYLE: &str = "PDF-SHX-OCR";
+/// The import names a style after the PDF font its text was set in (`PDF-Arial`).
+const PDF_STYLE_PREFIX: &str = "PDF-";
+/// Under this, a crop is flagged as not looking like its PDF page.
+const MIN_SIMILARITY: f64 = 0.6;
+/// PDF pages read again per packet to compare its crops with.
+const MAX_COMPARE_SHEETS: usize = 24;
+/// A printed line counts as matched within this many pixels.
+const INK_REACH_PX: i64 = 2;
+/// A pixel this dark (0–255) or darker is ink.
+const INK_LEVEL: u32 = 200;
+
+fn on_layer(e: &Entity, name: &str) -> bool {
+    e.common.layer.eq_ignore_ascii_case(name)
+}
+
+/// The drawing's tables for drawing a print: the lettering strokes the import read as text
+/// shown again (the page shows them, not the reading).
+fn print_tables(d: &Drawing) -> Drawing {
+    let mut t = d.clone();
+    for l in t.layers.iter_mut().filter(|l| l.name.eq_ignore_ascii_case(SHX_SOURCE_LAYER)) {
+        l.on = true;
+        l.frozen = false;
+    }
+    t
+}
+
+/// What of a print's objects its page shows. The lettering the import read off strokes is
+/// drawn as those strokes (`PDF-SHX-SOURCE`), not as the reading: an unconfirmed reading
+/// (`PDF-SHX-OCR`) is left out (its strokes stayed linework), and where the crop holds the kept
+/// strokes, so is every text not set in a PDF font (the readings the hidden text confirmed,
+/// often at a cluster's size, not the lettering's). Masks (wipeouts) are left out: on white
+/// paper they only hide, and the import's merged masks sit later than what they covered
+/// (a block of notes, half a plan). Objects on layers that are off or frozen stay out.
+fn as_printed<'a>(d: &Drawing, ents: &[&'a Entity]) -> Vec<&'a Entity> {
+    let strokes = ents.iter().any(|e| on_layer(e, SHX_SOURCE_LAYER));
+    let shown = |e: &Entity| on_layer(e, SHX_SOURCE_LAYER) || d.layer(&e.common.layer).is_none_or(|l| l.visible());
+    ents.iter()
+        .copied()
+        .filter(|e| shown(e))
+        .filter(|e| match &e.kind {
+            EntityKind::Wipeout(_) => false,
+            EntityKind::Text(t) => {
+                let style = t.style.to_ascii_uppercase();
+                style != OCR_TEXT_STYLE && (!strokes || style.starts_with(PDF_STYLE_PREFIX))
+            }
+            _ => true,
+        })
+        .collect()
+}
+
+/// A picture's ink: one bit per pixel, row by row.
+struct Ink {
+    w: u32,
+    h: u32,
+    bits: Vec<u64>,
+    count: usize,
+}
+
+impl Ink {
+    /// From a picture's RGBA bytes (opaque: the page is white).
+    fn of(w: u32, h: u32, rgba: &[u8]) -> Ink {
+        let n = (w as usize).saturating_mul(h as usize).min(rgba.len() / 4);
+        let mut bits = vec![0u64; n.div_ceil(64)];
+        let mut count = 0usize;
+        for (i, p) in rgba.chunks_exact(4).enumerate().take(n) {
+            let lum = (u32::from(p[0]) * 3 + u32::from(p[1]) * 6 + u32::from(p[2])) / 10;
+            if lum <= INK_LEVEL
+                && let Some(b) = bits.get_mut(i / 64)
+            {
+                *b |= 1 << (i % 64);
+                count += 1;
+            }
+        }
+        Ink { w, h, bits, count }
+    }
+    fn at(&self, x: i64, y: i64) -> bool {
+        if x < 0 || y < 0 || x >= i64::from(self.w) || y >= i64::from(self.h) {
+            return false;
+        }
+        let i = (y as usize) * (self.w as usize) + x as usize;
+        self.bits.get(i / 64).is_some_and(|b| b & (1 << (i % 64)) != 0)
+    }
+    fn near(&self, x: i64, y: i64) -> bool {
+        (-INK_REACH_PX..=INK_REACH_PX).any(|dy| (-INK_REACH_PX..=INK_REACH_PX).any(|dx| self.at(x + dx, y + dy)))
+    }
+    /// The share of this picture's ink that `other` has within reach.
+    fn found_in(&self, other: &Ink) -> f64 {
+        if self.count == 0 {
+            return 1.0;
+        }
+        let mut hit = 0usize;
+        for (k, b) in self.bits.iter().enumerate() {
+            let mut v = *b;
+            while v != 0 {
+                let i = k * 64 + v.trailing_zeros() as usize;
+                v &= v - 1;
+                let (x, y) = ((i % self.w.max(1) as usize) as i64, (i / self.w.max(1) as usize) as i64);
+                if other.near(x, y) {
+                    hit += 1;
+                }
+            }
+        }
+        hit as f64 / self.count as f64
+    }
+}
+
+/// How alike two pictures of one rectangle are, 0–1: the harmonic mean of the share of each
+/// one's ink the other has within [`INK_REACH_PX`] (both blank: 1).
+fn similarity(a: &Ink, b: &Ink) -> f64 {
+    if a.count == 0 && b.count == 0 {
+        return 1.0;
+    }
+    if a.count == 0 || b.count == 0 {
+        return 0.0;
+    }
+    let (p, r) = (a.found_in(b), b.found_in(a));
+    if p + r <= 0.0 { 0.0 } else { 2.0 * p * r / (p + r) }
+}
+
+/// `ents` drawn over `rect` at `px` (as [`png_of`]): the PNG, and its ink.
+fn png_and_ink(d: &Drawing, ents: &[&Entity], rect: [f64; 4], px: [u32; 2]) -> Option<(Vec<u8>, Ink)> {
+    let list = cadaddy_render::build_entities(d, ents.iter().copied(), &cadaddy_render::Options::default());
+    let ro = cadaddy_render::raster::RasterOptions { background: cadaddy_color::Rgb(255, 255, 255), hairline: 1.2, px_per_mm: 0.0, antialias: true };
+    let pm = cadaddy_render::raster::render(&list, &view_of(rect, px), &ro)?;
+    let ink = Ink::of(pm.width(), pm.height(), pm.data());
+    Some((pm.encode_png().ok()?, ink))
+}
+
+/// Where a sheet's PDF page is and where the job put it in the drawing.
+#[derive(Clone, Debug)]
+struct PageRef {
+    path: std::path::PathBuf,
+    file: String,
+    page: u64,
+    scale: Option<f64>,
+    region: [f64; 4],
+}
+
+/// Each imported sheet's page (by sheet number, upper case), from the job: its classified
+/// sheets (file, page, scale) and where each landed (`sheet_regions`). `prints` overrides the
+/// folder the job read them from.
+fn page_refs(job: &super::guided::GuidedJob, prints: Option<&str>) -> BTreeMap<String, std::result::Result<PageRef, String>> {
+    let mut out = BTreeMap::new();
+    let entries: Vec<&Value> =
+        job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).into_iter().flatten().take(MAX_FOLDER_FILES).collect();
+    let folder = prints.map(str::to_string).unwrap_or_else(|| job.pdfs_path.clone());
+    let dir = local_path(&folder);
+    let dir = if dir.is_file() { dir.parent().map(std::path::Path::to_path_buf).unwrap_or_default() } else { dir };
+    for r in job.sheet_regions.iter().take(MAX_FOLDER_FILES) {
+        let key = r.number.trim().to_ascii_uppercase();
+        if key.is_empty() || out.contains_key(&key) || !r.rect.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let current = |sh: &&&Value| sh.get("superseded_by").and_then(Value::as_str).is_none_or(str::is_empty);
+        // A sheet printing several views is classified once per view (`P-301/2`).
+        let is_it = |n: &str| n.split('/').next().is_some_and(|x| x.trim().eq_ignore_ascii_case(&key));
+        let Some(sh) = entries.iter().filter(current).find(|sh| sh.get("number").and_then(Value::as_str).is_some_and(is_it)) else {
+            continue;
+        };
+        let file = sh.get("file").and_then(Value::as_str).unwrap_or_default().to_string();
+        let page = sh.get("page").and_then(Value::as_u64).filter(|p| *p >= 1).unwrap_or(1);
+        let scale = sh.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 1.0);
+        let named = local_path(&file);
+        let path = if named.is_absolute() && named.is_file() { named } else { dir.join(last_part(&file)) };
+        let got = if file.is_empty() {
+            Err("the job keeps no PDF file for it".to_string())
+        } else if path.is_file() {
+            Ok(PageRef { path, file: last_part(&file), page, scale, region: norm_rect(r.rect) })
+        } else {
+            Err(format!("its PDF ({}) isn't on this machine: give the prints folder as `prints`", last_part(&file)))
+        };
+        out.insert(key, got);
+    }
+    out
+}
+
+/// A sheet's PDF page read again as the page shows it (no text recovery, no masks, no
+/// images), and the map from the drawing's sheet rectangle onto it.
+struct PageRead {
+    d: Drawing,
+    /// drawing point → page point: `[sx, sy, x0, y0, px0, py0]`, `p = (q − q0)·s + p0`.
+    map: [f64; 6],
+}
+
+fn read_page(r: &PageRef) -> std::result::Result<PageRead, String> {
+    let hook = super::file::io().and_then(|h| h.read_pdf).ok_or_else(|| "PDF pages can't be read in this build".to_string())?;
+    let bytes = crate::readfile::read(&r.path).map_err(|e| e.to_string())?;
+    if bytes.len() > 200 * 1024 * 1024 {
+        return Err("the file is over 200 MB".into());
+    }
+    let mut q = json!({"page": r.page, "images": false, "masks": false, "recoverText": false});
+    if let Some(k) = r.scale {
+        q["scale"] = json!(k);
+    }
+    let (d, rep) = hook(&bytes, &q)?;
+    let sheet = |i: usize| rep.get("sheet").and_then(|v| v.get(i)).and_then(Value::as_f64).filter(|x| x.is_finite() && *x > 0.0);
+    let k = rep.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 0.0).unwrap_or(1.0);
+    let (Some(w), Some(h)) = (sheet(0), sheet(1)) else { return Err("the page has no size".into()) };
+    let (rw, rh) = (r.region[2] - r.region[0], r.region[3] - r.region[1]);
+    if rw <= 0.0 || rh <= 0.0 {
+        return Err("the sheet has no size in the drawing".into());
+    }
+    Ok(PageRead { d, map: [w * k / rw, h * k / rh, r.region[0], r.region[1], 0.0, 0.0] })
+}
+
+impl PageRead {
+    fn rect(&self, r: [f64; 4]) -> [f64; 4] {
+        let [sx, sy, x0, y0, px, py] = self.map;
+        [(r[0] - x0) * sx + px, (r[1] - y0) * sy + py, (r[2] - x0) * sx + px, (r[3] - y0) * sy + py]
+    }
+    fn ink(&self, rect: [f64; 4], px: [u32; 2]) -> Option<Ink> {
+        let r = self.rect(rect);
+        let b = Bounds2::new(Vec2::new(r[0], r[1]), Vec2::new(r[2], r[3]));
+        let ents: Vec<&Entity> = self
+            .d
+            .model
+            .iter()
+            .map(|e| e.as_ref())
+            .filter(|e| b.intersects(&cadaddy_doc::entity_bounds(&self.d, e, 0)))
+            .take(MAX_CROP_ENTITIES)
+            .collect();
+        png_and_ink(&self.d, &ents, r, px).map(|(_, ink)| ink)
+    }
+}
+
+/// The view a picture of `rect` on `sheet` is of: of the views the spec and the unit types
+/// place on that sheet, the one it overlaps most (its centre nearest on a tie).
+fn view_at(views: &[(String, String, [f64; 4])], sheet: &str, rect: [f64; 4]) -> Option<String> {
+    let c = [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0];
+    views
+        .iter()
+        .filter(|(s, ..)| s.eq_ignore_ascii_case(sheet.trim()))
+        .filter_map(|(_, t, r)| {
+            let i = intersect(rect, *r)?;
+            let area = (i[2] - i[0]) * (i[3] - i[1]);
+            let d = ((r[0] + r[2]) / 2.0 - c[0]).hypot((r[1] + r[3]) / 2.0 - c[1]);
+            (area > 0.0).then_some((area, d, t))
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.total_cmp(&a.1)).then(b.2.cmp(a.2)))
+        .map(|(_, _, t)| t.clone())
+}
+
+/// Every view the spec's sheet links and its unit types place on a sheet: (sheet, title, rect).
+fn sheet_views(d: &Drawing, sp: &BuildingSpec) -> Vec<(String, String, [f64; 4])> {
+    let mut out: Vec<(String, String, [f64; 4])> =
+        sp.sheets.iter().filter_map(|l| l.view.as_ref().map(|v| (l.number.trim().to_string(), v.title.clone(), norm_rect(v.rect)))).collect();
+    let spec = d.building_spec.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok());
+    for v in spec
+        .as_ref()
+        .and_then(|s| s.get("unit_types"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(1_000)
+        .filter_map(|t| t.get("views").and_then(Value::as_array))
+        .flatten()
+        .take(MAX_FOLDER_FILES)
+    {
+        let r = v.get("rect").and_then(Value::as_array);
+        let n = |i: usize| r.and_then(|r| r.get(i)).and_then(Value::as_f64).filter(|x| x.is_finite());
+        if let (Some(s), Some(t), Some(a), Some(b), Some(c), Some(e)) =
+            (v.get("sheet").and_then(Value::as_str), v.get("title").and_then(Value::as_str), n(0), n(1), n(2), n(3))
+        {
+            out.push((s.trim().to_string(), t.to_string(), norm_rect([a, b, c, e])));
+        }
+    }
+    out.sort_by(|a, b| {
+        a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.iter().zip(b.2.iter()).fold(std::cmp::Ordering::Equal, |o, (x, y)| o.then(x.total_cmp(y))))
+    });
+    out.dedup();
+    out
+}
+
 // ---------------------------------------------------------------- planning the crops
 
 /// Whether a link shows `level`.
@@ -1849,6 +2323,7 @@ fn plan_crops(
     unit: Option<&UnitOf>,
     fit: Option<&Value>,
 ) -> Planned {
+    let cited = &keys.cited;
     let mut crops: Vec<Crop> = Vec::new();
     let mut left_out: Vec<(String, String)> = Vec::new();
     let want = |t: &str| trades.is_empty() || t == "architecture" || t == "general" || trades.iter().any(|x| x == t);
@@ -1867,6 +2342,7 @@ fn plan_crops(
     let mut links: Vec<&SheetLink> = sp.sheets.iter().filter(|l| l.rect.is_some_and(|r| r.iter().all(|v| v.is_finite()))).collect();
     links.sort_by(|a, b| a.number.cmp(&b.number).then(a.view.as_ref().map(|v| v.title.as_str()).cmp(&b.view.as_ref().map(|v| v.title.as_str()))));
     let mut n = 0usize;
+    let mut same: Vec<(String, String)> = Vec::new();
     let mut push = |crops: &mut Vec<Crop>,
                     l: &SheetLink,
                     kind: &'static str,
@@ -1883,7 +2359,16 @@ fn plan_crops(
             return;
         }
         let ppu = dpi * paper_in / long;
-        let (ppu, parts) = tiles(rect, ppu);
+        // Never a sliver: at least MIN_CROP_PX a side, widened round its centre on the sheet.
+        let rect = widen(rect, MIN_CROP_PX / ppu, sheet_rect);
+        // No two pictures of one view.
+        if let Some(k) = crops.iter().find(|c| c.sheet.eq_ignore_ascii_case(&l.number) && overlap(c.whole, rect) >= SAME_VIEW) {
+            let what = shows.clone().or_else(|| l.view.as_ref().map(|v| v.title.clone())).unwrap_or_else(|| kind.replace('_', " "));
+            same.push((format!("sheet {} {what}", l.number), format!("the same view of sheet {} as {}", l.number, k.file)));
+            return;
+        }
+        // A whole view of a sheet that isn't placed is for finding the area on it: fewer tiles.
+        let (ppu, parts) = tiles_max(rect, ppu, if placed_by == "unregistered" { WHOLE_TILES_SIDE } else { MAX_TILES_SIDE });
         let got_dpi = ppu * long / paper_in;
         n += 1;
         let many = parts.len() > 1;
@@ -1910,6 +2395,9 @@ fn plan_crops(
                 place: place.clone(),
                 shows: shows.clone(),
                 orientation: orientation.clone(),
+                unregistered: false,
+                cited: false,
+                whole: rect,
             });
         }
     };
@@ -1922,8 +2410,19 @@ fn plan_crops(
         .take(MAX_TYPE_VIEWS)
         .filter_map(|v| v.get("sheet").and_then(Value::as_str).map(str::to_ascii_uppercase))
         .collect();
-    // 1. The plans, enlarged plans and RCPs of the area's level.
-    for l in links.iter().filter(|l| shows_level(l, &area.level)) {
+    // 1. The plans, enlarged plans and RCPs of the area's level (its level tag, or a title naming
+    //    the level), placed by their registration; an unplaced one is offered in 1c.
+    let names_level = |l: &SheetLink| {
+        shows_level(l, &area.level)
+            || (l.level.is_none()
+                && l.levels.is_empty()
+                && title_names_level(&format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str())), &area.level))
+    };
+    let mut pending: Vec<&SheetLink> = Vec::new();
+    // Placed, but the placement puts the area outside the view: looked for by the room's tag.
+    let mut missed: Vec<&SheetLink> = Vec::new();
+    let mut misses: Vec<(String, String, String)> = Vec::new();
+    for l in links.iter().filter(|l| names_level(l)) {
         let title = format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str()));
         let kind = sheet_kind(&title, true);
         if !matches!(kind, "plan" | "rcp" | "enlarged_plan") {
@@ -1942,16 +2441,20 @@ fn plan_crops(
             None if intersect(proj_box, clip).is_some() => (Place::Same, "same_sheet"),
             None if unit_sheets.contains(&l.number.to_ascii_uppercase()) => continue,
             None => {
-                left_out.push((
-                    format!("sheet {} {}", l.number, l.title),
-                    "it shows this level but is not placed on its plan yet (bim.identity registers it)".into(),
-                ));
+                pending.push(*l);
                 continue;
             }
         };
         let on_sheet: Vec<[f64; 2]> = corners(proj_box).iter().filter_map(|q| place.to_sheet(*q)).collect();
-        let Some(b) = bbox(&on_sheet).filter(|_| on_sheet.len() == 4) else { continue };
-        let Some(r) = intersect(b, clip) else { continue };
+        let Some(r) = bbox(&on_sheet).filter(|_| on_sheet.len() == 4).and_then(|b| intersect(b, clip)) else {
+            misses.push((
+                l.number.clone(),
+                view_label(l),
+                "it is placed on the level's plan, its view does not reach this area, and the room's tag is not on it".into(),
+            ));
+            missed.push(*l);
+            continue;
+        };
         let orientation = match &place {
             Place::Fit(reg) if kind == "enlarged_plan" || turn_deg(reg.b.atan2(reg.a)).abs() > 0.05 => Some(orientation_of(reg, by)),
             _ => None,
@@ -2095,6 +2598,123 @@ fn plan_crops(
             push(&mut crops, l, "enlarged_plan", trade, rect, "unit_type", None, Some(format!("unit type {}", u.name)), Some(o));
         }
     }
+    // 1c. The sheets the area's elements were read from (always in the packet), then the level's
+    //     sheets not placed on its plan: round the elements' source points on the sheet, else
+    //     round the room's tag on it, else the whole view in tiles, marked `unregistered`.
+    let mut todo: Vec<(&SheetLink, Option<&Cited>, bool)> = Vec::new();
+    for (key, c) in cited {
+        if crops.iter().any(|x| x.sheet.eq_ignore_ascii_case(key)) {
+            for x in crops.iter_mut().filter(|x| x.sheet.eq_ignore_ascii_case(key)) {
+                x.cited = true;
+            }
+            continue;
+        }
+        let of_sheet: Vec<&SheetLink> = links.iter().filter(|l| l.number.eq_ignore_ascii_case(key)).copied().collect();
+        // Its view of the area's level, else the whole sheet, else its first view.
+        let Some(l) = of_sheet.iter().find(|l| names_level(l)).or_else(|| of_sheet.iter().find(|l| l.view.is_none())).or(of_sheet.first()).copied()
+        else {
+            left_out.push((
+                format!("sheet {key}"),
+                format!("{} element(s) here were read from it, but the building spec lists no such sheet (levels.sheets)", c.elements),
+            ));
+            continue;
+        };
+        let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
+        if want(trade) {
+            todo.push((l, Some(c), missed.iter().any(|m| std::ptr::eq(*m, l))));
+        }
+    }
+    for (l, was_missed) in pending.into_iter().map(|l| (l, false)).chain(missed.iter().map(|l| (*l, true))) {
+        if !todo.iter().any(|(t, ..)| std::ptr::eq(*t, l)) {
+            todo.push((l, None, was_missed));
+        }
+    }
+    // The reference plan's sheet, for the scale of a sheet that isn't placed (the same paper
+    // scale: its size against the reference sheet's).
+    let centre = [(area.bbox[0] + area.bbox[2]) / 2.0, (area.bbox[1] + area.bbox[3]) / 2.0];
+    let centre_on_plan = {
+        let p = frame.to_sheet(&area.level, centre);
+        [p.x, p.y]
+    };
+    let ref_long = links
+        .iter()
+        .filter_map(|l| l.rect.map(norm_rect))
+        .find(|r| inside(*r, centre_on_plan))
+        .map(|r| (r[2] - r[0]).max(r[3] - r[1]))
+        .filter(|x| x.is_finite() && *x > 0.0);
+    let room_words: Vec<String> = [area.number.clone(), area.name.clone()].into_iter().flatten().filter(|k| !k.trim().is_empty()).collect();
+    for (l, c, was_missed) in todo {
+        let Some(sr) = l.rect.map(norm_rect) else { continue };
+        let clip = l.view.as_ref().and_then(|v| intersect(norm_rect(v.rect), sr)).unwrap_or(sr);
+        let long = (sr[2] - sr[0]).max(sr[3] - sr[1]);
+        if !(long.is_finite() && long > 0.0) {
+            continue;
+        }
+        let title = format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str()));
+        let kind = sheet_kind(&title, true);
+        let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
+        // The area's size on this sheet: the plan's units per foot, scaled as the sheet is to the
+        // reference sheet; generous (an enlarged view is drawn larger).
+        let per_ft = frame.upf() * ref_long.map_or(1.0, |rl| long / rl);
+        let half = [
+            (((area.bbox[2] - area.bbox[0]) / 2.0 + margin) * per_ft * 1.6).max(0.06 * long),
+            (((area.bbox[3] - area.bbox[1]) / 2.0 + margin) * per_ft * 1.6).max(0.06 * long),
+        ];
+        let around = |p: [f64; 2]| [p[0] - half[0], p[1] - half[1], p[0] + half[0], p[1] + half[1]];
+        let start = crops.len();
+        let points: Vec<[f64; 2]> = c.map(|c| c.points.iter().filter(|p| inside(sr, **p)).copied().collect()).unwrap_or_default();
+        let read = c.map(|c| format!("{} element(s) here were read from it", c.elements));
+        let shows = |what: String| Some(read.as_ref().map_or(what.clone(), |r| format!("{what}; {r}")));
+        if let Some(r) = bbox(&points).and_then(|b| intersect([b[0] - half[0], b[1] - half[1], b[2] + half[0], b[3] + half[1]], sr)) {
+            push(&mut crops, l, kind, trade, r, "source_point", None, shows("round the points the elements were read at".into()), None);
+        } else if let Some((at, word)) = room_tag(texts, clip, &room_words, long)
+            && let Some(r) = intersect(around(at), clip)
+        {
+            push(&mut crops, l, kind, trade, r, "room_tag", None, shows(format!("round {word} (its tag on the sheet)")), None);
+        } else {
+            if was_missed && c.is_none() {
+                // Its placement and its texts agree the area is not on it (said in `misses`).
+                continue;
+            }
+            let (cw, ch) = (clip[2] - clip[0], clip[3] - clip[1]);
+            let share = (cw * ch) / ((sr[2] - sr[0]) * (sr[3] - sr[1])).max(1e-9);
+            // Only a view that is clearly part of the level (an enlarged plan, a small view) and
+            // names nothing of the room is left out; a level's plan is offered whole.
+            if c.is_none() && !room_words.is_empty() && (share < PARTIAL_VIEW || kind == "enlarged_plan") {
+                misses.push((
+                    l.number.clone(),
+                    view_label(l),
+                    format!(
+                        "a partial view of the level ({}, {:.0}% of the sheet) that names neither {}: not this area",
+                        kind.replace('_', " "),
+                        share * 100.0,
+                        room_words.join(" nor ")
+                    ),
+                ));
+                continue;
+            }
+            push(
+                &mut crops,
+                l,
+                kind,
+                trade,
+                clip,
+                "unregistered",
+                None,
+                shows("the whole view: it is not placed on the level's plan yet (bim.identity)".into()),
+                None,
+            );
+        }
+        for x in crops.iter_mut().skip(start) {
+            x.unregistered = true;
+            x.cited = c.is_some();
+        }
+    }
+    for (number, label, why) in misses {
+        if !crops.iter().any(|x| x.sheet.eq_ignore_ascii_case(&number)) {
+            left_out.push((label, why));
+        }
+    }
     // 2. Interior elevations naming the room, the partition legend, the schedule and legend rows
     //    of the marks present, general notes.
     let mut room_keys: Vec<String> = [area.number.clone(), area.name.clone().filter(|n| n.trim().len() >= 3)].into_iter().flatten().collect();
@@ -2152,6 +2772,19 @@ fn plan_crops(
             }
             _ => {}
         }
+        // The lighting-control legend, where the area holds lighting.
+        if keys.lighting && matches!(kind, "legend" | "schedule" | "general_notes" | "spec" | "other") {
+            for key in ["LIGHTING CONTROL", "LIGHTING CONTROLS"] {
+                for (at, _) in texts.find(sr, key, true).into_iter().take(1) {
+                    add(
+                        &mut crops,
+                        "legend",
+                        [at[0] - 0.02 * w, at[1] - 0.3 * h, at[0] + 0.33 * w, at[1] + 0.03 * h],
+                        "lighting control legend".into(),
+                    );
+                }
+            }
+        }
         // General notes: on a notes sheet, and on the plans in the packet.
         if kind == "general_notes" || plan_sheets.contains(&l.number) {
             for (at, _) in texts.find(sr, "GENERAL NOTES", true).into_iter().take(1) {
@@ -2202,7 +2835,45 @@ fn plan_crops(
         risers += 1;
         push(&mut crops, l, "riser_diagram", trade, rect, "text", None, Some(shows), None);
     }
+    left_out.extend(same);
     Planned { crops, left_out }
+}
+
+/// A sheet and its view, as `left_out` names it.
+fn view_label(l: &SheetLink) -> String {
+    match &l.view {
+        Some(v) => format!("sheet {} view {}", l.number, v.title),
+        None => format!("sheet {} {}", l.number, l.title).trim_end().to_string(),
+    }
+}
+
+/// Where the room's tag is in `clip` of a sheet: its number (beside its name when the sheet has
+/// several), else its name when the sheet names it once.
+fn room_tag(texts: &Texts, clip: [f64; 4], words: &[String], long: f64) -> Option<([f64; 2], String)> {
+    let hits: Vec<(&String, Vec<[f64; 2]>)> = words.iter().map(|w| (w, texts.find(clip, w, false).into_iter().map(|h| h.0).collect())).collect();
+    // A tag `STUDIO 410` in one text.
+    if let (Some(n), Some(nm)) = (words.first(), words.get(1)) {
+        let both = format!("{nm} {n}");
+        let one: Vec<[f64; 2]> = texts.find(clip, &both, true).into_iter().chain(texts.find(clip, &format!("{n} {nm}"), true)).map(|h| h.0).collect();
+        if let Some(p) = one.first() {
+            return Some((*p, format!("room {n} {nm}")));
+        }
+    }
+    let near = 0.05 * long;
+    let (first, rest) = hits.split_first()?;
+    let names: Vec<[f64; 2]> = rest.iter().flat_map(|(_, h)| h.iter().copied()).collect();
+    let numbered = first.1.iter().find(|p| names.iter().any(|q| (p[0] - q[0]).hypot(p[1] - q[1]) <= near)).or(if first.1.len() == 1 {
+        first.1.first()
+    } else {
+        None
+    });
+    if let Some(p) = numbered {
+        return Some((*p, format!("room {}", first.0)));
+    }
+    match names.as_slice() {
+        [one] => Some((*one, format!("room {}", rest.first().map_or("", |r| r.0.as_str())))),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------- submittal pages
@@ -2228,7 +2899,8 @@ fn find_submittal(paths: &[String], name: &str) -> Option<std::path::PathBuf> {
             || f.file_stem().is_some_and(|x| x.to_string_lossy().to_ascii_lowercase() == want)
     };
     for p in paths.iter().take(MAX_FOLDER_FILES) {
-        let path = std::path::Path::new(p);
+        let local = local_path(p);
+        let path = local.as_path();
         if path.is_file() {
             if is(path) {
                 return Some(path.to_path_buf());
@@ -2242,6 +2914,29 @@ fn find_submittal(paths: &[String], name: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+/// A path the job kept, as this machine reaches it: a Windows drive path (`C:\\x\\y`) that isn't
+/// here is tried where WSL mounts the drive (`/mnt/c/x/y`).
+fn local_path(p: &str) -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(p);
+    if path.exists() || cfg!(windows) {
+        return path;
+    }
+    let b = p.as_bytes();
+    match (b.first(), b.get(1), b.get(2)) {
+        (Some(d), Some(b':'), Some(b'\\' | b'/')) if d.is_ascii_alphabetic() => {
+            let rest = p.get(3..).unwrap_or("").replace('\\', "/");
+            let wsl = std::path::PathBuf::from(format!("/mnt/{}/{rest}", char::from(d.to_ascii_lowercase())));
+            if wsl.exists() { wsl } else { path }
+        }
+        _ => path,
+    }
+}
+
+/// The last part of a path the job kept (either slash).
+fn last_part(p: &str) -> String {
+    p.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(p).to_string()
 }
 
 fn submittal_png(path: &std::path::Path, page: u32) -> std::result::Result<Vec<u8>, String> {
@@ -2259,6 +2954,50 @@ fn submittal_png(path: &std::path::Path, page: u32) -> std::result::Result<Vec<u
     let s = f64::from(SUBMITTAL_PX) / w.max(h);
     let px = [((w * s).ceil() as u32).clamp(16, SUBMITTAL_PX), ((h * s).ceil() as u32).clamp(16, SUBMITTAL_PX)];
     render_drawing(&pd, [ext.min.x, ext.min.y, ext.max.x, ext.max.y], px).ok_or_else(|| "the page couldn't be drawn".into())
+}
+
+/// What the job applied one submittal page to, across the building.
+#[derive(Default)]
+struct Applied {
+    marks: BTreeSet<String>,
+    /// Each kind it was applied to, and to how many.
+    kinds: BTreeMap<String, usize>,
+    elements: usize,
+}
+
+impl Applied {
+    /// Whether `kind` is what this page is mostly for (half its elements or more): a page applied
+    /// to a few elements of another kind (a sign typed like a fixture) is not offered for it.
+    fn is_for(&self, kind: &str) -> bool {
+        self.kinds.get(kind).is_some_and(|n| n * 2 >= self.elements)
+    }
+}
+
+/// Every submittal page the building's elements carry (`name p.N`; the plan elements and what
+/// the build modelled), with the marks (upper case) and kinds it was applied to.
+fn applied_submittals(d: &Drawing, kinds: &Kinds) -> BTreeMap<String, Applied> {
+    let mut out: BTreeMap<String, Applied> = BTreeMap::new();
+    for e in d.model.iter().take(MAX_ENTITIES) {
+        if e.common.xdata.is_empty() {
+            continue;
+        }
+        let store = cadaddy_doc::props::read(&e.common.xdata);
+        let Some(sb) = store.get("submittal").filter(|p| p.has_value()).map(|p| p.text().trim().to_string()).filter(|x| !x.is_empty()) else {
+            continue;
+        };
+        if out.len() >= MAX_SUBMITTAL_PAGES && !out.contains_key(&sb) {
+            continue;
+        }
+        let kind = super::elemprops::element_kind(e).unwrap_or_else(|| "device".into());
+        let mark = super::validate_kind::mark_of(e);
+        let a = out.entry(sb).or_default();
+        a.elements += 1;
+        if let Some(m) = mark.as_ref().filter(|m| !m.trim().is_empty()) {
+            a.marks.insert(m.trim().to_ascii_uppercase());
+        }
+        *a.kinds.entry(kinds.resolve(&kind, mark.as_deref(), Some(e)).kind).or_insert(0) += 1;
+    }
+    out
 }
 
 // ---------------------------------------------------------------- the packet
@@ -2302,7 +3041,21 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let (model, frame) = model_of(d, &sp);
     let area = area_param(CMD, &sp, p, d, &frame)?;
     let prints: Option<Prints> = prints_of(&sp).cloned().or_else(|| prints_from_job(s, &frame));
-    let job_submittals: Vec<String> = super::guided::load_job(s).ok().flatten().map(|j| j.submittals).unwrap_or_default();
+    let job = super::guided::load_job(s).ok().flatten();
+    let (job_submittals, job_prints): (Vec<String>, Option<String>) =
+        job.as_ref().map(|j| (j.submittals.clone(), Some(j.pdfs_path.clone()).filter(|x| !x.trim().is_empty()))).unwrap_or_default();
+    // The crops are compared with their PDF pages (`compare`, default on), read from `prints`
+    // when the job's folder isn't on this machine.
+    let compare = match p.get("compare") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad(CMD, "`compare` is true or false")),
+    };
+    let prints_dir: Option<String> = match p.get("prints") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(x)) if !x.trim().is_empty() && x.len() <= 4096 => Some(x.trim().to_string()),
+        Some(_) => return Err(bad(CMD, "`prints` is the folder (or PDF) the job's prints are in")),
+    };
     let (all_rules, rejected) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
     let only_rules: Option<BTreeSet<String>> = match p.get("rules") {
         None | Some(Value::Null) => None,
@@ -2327,6 +3080,21 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let level_areas = model_areas(d, &frame);
     let member = Membership::new(&area, &level_areas);
     let mut here = in_area(d, &model, prints.as_ref(), &area, &all_rules, &built, &kinds, &member);
+    // Each receptacle's tamper-resistance fact and where it came from (E-RECEPT-TR).
+    if let Some(Value::Array(els)) = here.objects.get_mut("elements") {
+        super::validate_tr::annotate(d, &sp, &model, &kinds, prints.as_ref(), &all_rules, &area, els);
+    }
+    // The lighting documents of the types present (fixture schedule rows, submittal products and
+    // their cut-sheet pages, the control legend), and each luminaire's and control's facts.
+    let lighting = match here.objects.get_mut("elements") {
+        Some(Value::Array(els)) => super::validate_lighting::annotate(d, &model, &kinds, prints.as_ref(), &all_rules, els),
+        _ => None,
+    };
+    if let Some((summary, pages)) = lighting {
+        here.objects["lighting"] = summary;
+        here.cut_sheets.extend(pages);
+        here.lighting = true;
+    }
     // The deterministic prescreen of the area: what was measured, for the judge to start from.
     let pre = ps::screen(&ps::Scope {
         d,
@@ -2352,7 +3120,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set",
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's. A `conflict` verdict: the documents disagree (both are cited in `documents`)",
         "checked": pre.checked,
         "unmeasured": pre.unmeasured,
         // The area's own: an element beside it is measured in its own area's packet.
@@ -2399,7 +3167,15 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     // The print crops.
     let within: Vec<[f64; 4]> = sp.sheets.iter().filter_map(|l| l.rect.map(norm_rect)).collect();
     let texts = Texts::of(d, &within);
-    let Planned { crops, mut left_out } = plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref());
+    let Planned { mut crops, mut left_out } = plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref());
+    // Each picture is labelled by the view it shows on its own sheet (a tile by the view it
+    // lies in), not by the link that brought it in.
+    let views = sheet_views(d, &sp);
+    for c in crops.iter_mut() {
+        if let Some(v) = view_at(&views, &c.sheet, c.rect).or_else(|| view_at(&views, &c.sheet, c.whole)) {
+            c.view = Some(v);
+        }
+    }
     if sp.sheets.is_empty() {
         left_out.push(("print crops".into(), "the building spec lists no sheets (levels.sheets finds them)".into()));
     }
@@ -2478,73 +3254,168 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             over: None,
         });
         let z = level_spec.map_or(0.0, |l| l.elevation_ft) * upf + 5.0 * upf;
-        let centre = [(area.bbox[0] + area.bbox[2]) / 2.0, (area.bbox[1] + area.bbox[3]) / 2.0];
-        let mut walls: Vec<&v::ModelWall> = model
-            .walls
+        // One elevation per side of the area (its outline's edges of 2' or more, longest first),
+        // the camera inside the area looking square at the side; a camera that would stand
+        // outside the area, or repeat another's view, is not used.
+        let outline: Vec<[f64; 2]> =
+            if area.outline.len() >= 3 { area.outline.iter().take(MAX_OUTLINE).copied().collect() } else { corners(area.bbox).to_vec() };
+        let mut sides: Vec<(f64, usize, [f64; 2], [f64; 2])> = outline
             .iter()
-            .filter(|w| {
-                w.level.eq_ignore_ascii_case(&area.level)
-                    && segment_touches(grow(area.bbox, 1.0), w.a, w.b)
-                    && (w.a[0] - w.b[0]).hypot(w.a[1] - w.b[1]) >= 2.0
-            })
+            .zip(outline.iter().cycle().skip(1))
+            .enumerate()
+            .map(|(i, (a, b))| ((b[0] - a[0]).hypot(b[1] - a[1]), i, *a, *b))
+            .filter(|(l, ..)| l.is_finite() && *l >= 2.0)
             .collect();
-        // Longest along the area first.
-        let along = |w: &v::ModelWall| {
-            let near = grow(area.bbox, 1.0);
-            let n = (0..=64)
-                .filter(|i| inside(near, [w.a[0] + (w.b[0] - w.a[0]) * f64::from(*i) / 64.0, w.a[1] + (w.b[1] - w.a[1]) * f64::from(*i) / 64.0]))
-                .count();
-            (w.a[0] - w.b[0]).hypot(w.a[1] - w.b[1]) * n as f64 / 65.0
-        };
-        walls.sort_by(|a, b| along(b).total_cmp(&along(a)).then(a.id.cmp(&b.id)));
-        for (k, w) in walls.into_iter().take(MAX_ELEVATIONS).enumerate() {
-            let (dx, dy) = (w.b[0] - w.a[0], w.b[1] - w.a[1]);
-            // The part of the wall along the area: its middle is what the camera looks at.
-            let near = grow(area.bbox, 1.0);
-            let ts: Vec<f64> = (0..=64).map(|i| f64::from(i) / 64.0).filter(|t| inside(near, [w.a[0] + dx * t, w.a[1] + dy * t])).collect();
-            let (t0, t1) = (ts.first().copied().unwrap_or(0.0), ts.last().copied().unwrap_or(1.0));
-            let tm = (t0 + t1) / 2.0;
-            let m = [w.a[0] + dx * tm, w.a[1] + dy * tm];
-            let l = (dx.hypot(dy) * (t1 - t0)).max(1e-9);
-            let full = dx.hypot(dy).max(1e-9);
-            let (mut nx, mut ny) = (-dy / full, dx / full);
-            if nx * (centre[0] - m[0]) + ny * (centre[1] - m[1]) < 0.0 {
-                nx = -nx;
-                ny = -ny;
-            }
-            let back = 6.0;
+        sides.sort_by(|x, y| y.0.total_cmp(&x.0).then(x.1.cmp(&y.1)));
+        let mut cameras: Vec<([f64; 2], [f64; 2])> = Vec::new();
+        for (len, i, a, b) in sides {
+            let (dx, dy) = ((b[0] - a[0]) / len, (b[1] - a[1]) / len);
+            let m = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+            let side = format!("side {} of the outline ({len:.1} ft)", i + 1);
+            // The normal into the area, and how far back the camera can stand inside it.
+            let inward = [(-dy, dx), (dy, -dx)].into_iter().find(|(nx, ny)| point_in(&outline, [m[0] + nx * 0.5, m[1] + ny * 0.5]));
+            let Some((nx, ny)) = inward else {
+                left_out.push((format!("model elevation of {side}"), "no point just inside the area faces it".into()));
+                continue;
+            };
+            let back = [6.0, 4.0, 3.0, 2.0, 1.0]
+                .into_iter()
+                .find(|d| (1..=4).all(|k| point_in(&outline, [m[0] + nx * d * f64::from(k) / 4.0, m[1] + ny * d * f64::from(k) / 4.0])));
+            let Some(back) = back else {
+                left_out.push((format!("model elevation of {side}"), "the area is too narrow there for a camera inside it".into()));
+                continue;
+            };
             let eye_ft = [m[0] + nx * back, m[1] + ny * back];
+            // The render frames the area's box, so two cameras facing the same way draw the same
+            // picture: one per direction.
+            if let Some(k) = cameras.iter().position(|(_, d)| d[0] * -nx + d[1] * -ny > 0.98) {
+                left_out.push((format!("model elevation of {side}"), format!("the same view as model/elevation_{:02}.png", k + 1)));
+                continue;
+            }
+            if cameras.len() >= MAX_ELEVATIONS {
+                left_out.push((
+                    format!("model elevation of {side}"),
+                    format!("over the packet's {MAX_ELEVATIONS} wall elevations (the longest sides are drawn)"),
+                ));
+                continue;
+            }
+            cameras.push((eye_ft, [-nx, -ny]));
+            // The model wall on that side, if there is one.
+            let wall = model
+                .walls
+                .iter()
+                .filter(|w| w.level.eq_ignore_ascii_case(&area.level))
+                .map(|w| (seg_dist(m, w.a, w.b).0, w))
+                .filter(|(d, w)| *d <= 1.0 + w.thickness_in / 24.0)
+                .min_by(|x, y| x.0.total_cmp(&y.0).then(x.1.id.cmp(&y.1.id)))
+                .map(|(_, w)| w.id.clone());
             let e = frame.to_built(&area.level, eye_ft);
             let t = frame.to_built(&area.level, m);
+            let k = cameras.len();
             model_imgs.push(ModelImage {
-                file: format!("model/elevation_{:02}.png", k + 1),
+                file: format!("model/elevation_{k:02}.png"),
                 kind: "elevation",
-                what: format!("the wall {} seen from inside the area (on its {} side, {:.1} ft along it)", w.id, compass(-nx, -ny), l),
+                what: format!(
+                    "the {} side of the area ({len:.1} ft{}) seen from inside it, {back:.0} ft back",
+                    compass(-nx, -ny),
+                    wall.as_ref().map_or_else(|| ", no model wall on it".to_string(), |w| format!(", wall {w}"))
+                ),
                 of: None,
                 rect: None,
                 px: Some([1200, 900]),
-                wall: Some(w.id.clone()),
+                wall,
                 render: Some(json!({"width": 1200, "height": 900, "level": area.level, "eye": [r2(e.x), r2(e.y), r2(z)], "target": [r2(t.x), r2(t.y), r2(z)], "around": around.clone()})),
                 over: None,
             });
         }
     }
 
-    // Submittal pages of the products present.
-    let mut subs: Vec<(String, String, u32, Option<std::path::PathBuf>)> = Vec::new();
-    for (i, sb) in here.submittals.iter().enumerate() {
-        let (name, page) = submittal_ref(sb);
-        let path = find_submittal(&job_submittals, &name);
-        if path.is_none() {
-            left_out.push((format!("submittal {sb}"), "its file is not among the job's submittals (bim.submittals paths)".into()));
+    // Submittal pages: those the area's elements carry, and the job's submittals matched to the
+    // area's marks and kinds (what the job applied to elements of the same type or kind
+    // elsewhere in the building).
+    let applied = applied_submittals(d, &kinds);
+    let mut wanted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (kind, mark, sub) in &here.products {
+        let why = mark.as_ref().map_or_else(|| format!("kind {kind}"), |m| format!("mark {m}"));
+        if let Some(sb) = sub {
+            wanted.entry(sb.clone()).or_default().insert(why);
             continue;
         }
-        subs.push((format!("prints/s{:02}_submittal_{}_p{page}.png", i + 1, safe(&name)), sb.clone(), page, path));
+        let by_mark: Vec<&String> = mark
+            .as_ref()
+            .map(|m| applied.iter().filter_map(|(r, a)| a.marks.contains(&m.to_ascii_uppercase()).then_some(r)).collect())
+            .unwrap_or_default();
+        if !by_mark.is_empty() {
+            for r in by_mark.into_iter().take(MAX_KIND_PAGES) {
+                wanted.entry(r.clone()).or_default().insert(format!("{why} (the job's submittal for its type; this element carries none)"));
+            }
+            continue;
+        }
+        for r in applied.iter().filter(|(_, a)| a.is_for(kind)).map(|(r, _)| r).take(MAX_KIND_PAGES) {
+            wanted
+                .entry(r.clone())
+                .or_default()
+                .insert(format!("kind {kind} (the job's submittal for that kind elsewhere; no element here carries one)"));
+        }
+    }
+    // The cut-sheet pages of the luminaire types present.
+    for page in &here.cut_sheets {
+        wanted.entry(page.clone()).or_default().insert("a luminaire type's cut sheet".to_string());
+    }
+    let mut search: Vec<String> = job_submittals.clone();
+    search.extend(job_prints.clone());
+    let mut subs: Vec<(String, String, u32, Option<std::path::PathBuf>, Vec<String>)> = Vec::new();
+    // A submittal the job applied but does not list: which, and what it was applied to.
+    let mut unlisted: BTreeMap<String, (BTreeSet<u32>, BTreeSet<String>)> = BTreeMap::new();
+    for (i, (sb, why)) in wanted.iter().enumerate() {
+        let (name, page) = submittal_ref(sb);
+        match find_submittal(&search, &name) {
+            Some(path) => subs.push((
+                format!("prints/s{:02}_submittal_{}_p{page}.png", i + 1, safe(&name)),
+                sb.clone(),
+                page,
+                Some(path),
+                why.iter().cloned().collect(),
+            )),
+            None => {
+                let u = unlisted.entry(name).or_default();
+                u.0.insert(page);
+                u.1.extend(why.iter().cloned());
+            }
+        }
+    }
+    // What the job lists: names only (never a whole path), and whether this machine has it.
+    let listed: Vec<String> = job_submittals
+        .iter()
+        .take(20)
+        .map(|p| format!("{}{}", last_part(p), if local_path(p).exists() { "" } else { " (not found on this machine)" }))
+        .collect();
+    let mut unlisted_json: Vec<Value> = Vec::new();
+    for (name, (pages, why)) in &unlisted {
+        let on = applied.iter().filter(|(r, _)| submittal_ref(r).0 == *name).fold((0usize, BTreeSet::new()), |(n, mut m), (_, a)| {
+            m.extend(a.marks.iter().cloned());
+            (n + a.elements, m)
+        });
+        let marks: Vec<String> = on.1.into_iter().take(20).collect();
+        left_out.push((
+            format!("submittal {name}"),
+            format!(
+                "the job applied it to {} element(s) (marks {}), but its file is not among the job's submittals ({}): give it to bim.submittals {{paths}}",
+                on.0,
+                if marks.is_empty() { "none".into() } else { marks.join(", ") },
+                if listed.is_empty() { "the job lists none".to_string() } else { format!("the job lists {}", listed.join(", ")) }
+            ),
+        ));
+        unlisted_json
+            .push(json!({"submittal": name, "pages": pages, "for": why.iter().take(20).collect::<Vec<_>>(), "applied_to": on.0, "marks": marks}));
     }
 
     // The cap: print crops first (each followed by its overlay), then submittals, then the rest.
     let mut order: Vec<(u8, usize)> = Vec::new();
-    for (i, c) in crops.iter().enumerate() {
+    // A level's sheet not placed on its plan, shown whole, that no element here was read from:
+    // last, after the model's pictures.
+    let whole_only = |c: &Crop| c.placed_by == "unregistered" && !c.cited;
+    for (i, c) in crops.iter().enumerate().filter(|(_, c)| !whole_only(c)) {
         order.push((0, i));
         if c.place.is_some()
             && let Some(j) = model_imgs.iter().position(|m| m.over == Some(i))
@@ -2563,6 +3434,9 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         let _ = m;
         order.push((1, j));
     }
+    for (i, _) in crops.iter().enumerate().filter(|(_, c)| whole_only(c)) {
+        order.push((0, i));
+    }
     let kept: BTreeSet<(u8, usize)> = order.iter().take(max_images).copied().collect();
     for (t, i) in order.iter().skip(max_images) {
         let f = match t {
@@ -2576,7 +3450,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let crops: Vec<(usize, &Crop)> = crops.iter().enumerate().filter(|(i, _)| kept.contains(&(0, *i))).collect();
     let model_imgs_kept: Vec<&ModelImage> = model_imgs.iter().enumerate().filter(|(j, _)| kept.contains(&(1, *j))).map(|(_, m)| m).collect();
-    let subs: Vec<&(String, String, u32, Option<std::path::PathBuf>)> =
+    let subs: Vec<&(String, String, u32, Option<std::path::PathBuf>, Vec<String>)> =
         subs.iter().enumerate().filter(|(k, _)| kept.contains(&(2, *k))).map(|(_, x)| x).collect();
 
     // Every file is checked before any is written.
@@ -2601,11 +3475,18 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     // The pictures.
     let all_rects: Vec<[f64; 4]> = crops.iter().map(|(_, c)| c.rect).collect();
     let index = PrintIndex::of(d, &all_rects);
+    // A picture is listed only once its file is there.
+    let written = |file: &str| std::fs::metadata(full(file)).is_ok_and(|m| m.is_file() && m.len() > 0);
     let write_png = |file: &str, png: Option<Vec<u8>>, left_out: &mut Vec<(String, String)>| -> Result<bool> {
         match png {
             Some(b) => {
                 super::exchange::write_file(CMD, &full(file), &b)?;
-                Ok(true)
+                if written(file) {
+                    Ok(true)
+                } else {
+                    left_out.push((file.to_string(), "the picture was drawn but its file isn't there".into()));
+                    Ok(false)
+                }
             }
             None => {
                 left_out.push((file.to_string(), "the picture couldn't be drawn".into()));
@@ -2613,20 +3494,86 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     };
+    // The prints as their pages show them.
+    let tables = print_tables(d);
     let mut prints_out: Vec<Value> = Vec::new();
+    let mut inks: Vec<(usize, &Crop, Ink)> = Vec::new();
     for (_, c) in &crops {
-        let ents = index.within(c.rect);
-        if write_png(&c.file, png_of(d, &ents, c.rect, c.px), &mut left_out)? {
-            prints_out.push(c.to_json());
+        let ents = as_printed(d, &index.within(c.rect));
+        match png_and_ink(&tables, &ents, c.rect, c.px) {
+            Some((png, ink)) => {
+                if write_png(&c.file, Some(png), &mut left_out)? {
+                    prints_out.push(c.to_json());
+                    inks.push((prints_out.len() - 1, *c, ink));
+                }
+            }
+            None => {
+                write_png(&c.file, None, &mut left_out)?;
+            }
         }
     }
+    // Each crop against its sheet's PDF page read again, at the same rectangle and pixels.
+    let similarity_json = {
+        let refs = job.as_ref().map(|j| page_refs(j, prints_dir.as_deref())).unwrap_or_default();
+        let sheets: BTreeSet<String> = inks.iter().map(|(_, c, _)| c.sheet.trim().to_ascii_uppercase()).collect();
+        let mut low: Vec<Value> = Vec::new();
+        let mut not_compared: Vec<Value> = Vec::new();
+        let mut compared = 0usize;
+        let mut read = 0usize;
+        for sheet in &sheets {
+            let why = if !compare {
+                Some("not asked (compare: false)".to_string())
+            } else {
+                match refs.get(sheet) {
+                    None => Some("the job keeps no PDF page for this sheet".to_string()),
+                    Some(Err(e)) => Some(e.clone()),
+                    Some(Ok(_)) if read >= MAX_COMPARE_SHEETS => Some(format!("over the {MAX_COMPARE_SHEETS} pages a packet reads again")),
+                    Some(Ok(r)) => {
+                        read += 1;
+                        match read_page(r) {
+                            Err(e) => Some(format!("{} p.{}: {e}", r.file, r.page)),
+                            Ok(page) => {
+                                for (k, c, ink) in inks.iter().filter(|(_, c, _)| c.sheet.trim().eq_ignore_ascii_case(sheet)) {
+                                    let Some(o) = prints_out.get_mut(*k) else { continue };
+                                    match page.ink(c.rect, c.px) {
+                                        Some(pi) => {
+                                            let sim = r2(similarity(ink, &pi));
+                                            o["similarity"] = json!(sim);
+                                            o["page"] = json!(format!("{} p.{}", r.file, r.page));
+                                            compared += 1;
+                                            if sim < MIN_SIMILARITY {
+                                                o["similarity_low"] = json!(true);
+                                                low.push(json!({"file": c.file, "similarity": sim}));
+                                            }
+                                        }
+                                        None => o["similarity_why"] = json!("the page couldn't be drawn at this rectangle"),
+                                    }
+                                }
+                                None
+                            }
+                        }
+                    }
+                }
+            };
+            if let Some(why) = why {
+                not_compared.push(json!({"sheet": sheet, "why": why}));
+            }
+        }
+        json!({
+            "about": "each print crop against its sheet's PDF page read again as the page shows it (no text read off strokes, no masks), at the same rectangle and pixels: the harmonic mean of the share of each picture's ink the other has within 2 px (1 = alike, 0 = nothing in common)",
+            "low_under": MIN_SIMILARITY,
+            "compared": compared,
+            "low": low,
+            "not_compared": not_compared,
+        })
+    };
     let mut model_out: Vec<Value> = Vec::new();
     for m in &model_imgs_kept {
         let ok = match (m.kind, m.over, &m.render) {
             ("overlay", Some(i), _) => {
                 let Some(c) = crops.iter().find(|(k, _)| *k == i).map(|(_, c)| *c) else { continue };
                 let place = c.place.clone().unwrap_or(Place::Same);
-                let od = model_drawing(d, &index.within(c.rect), &model, &area, &frame, &place, &all_rules, &built, upf, &kinds);
+                let od = model_drawing(d, &as_printed(d, &index.within(c.rect)), &model, &area, &frame, &place, &all_rules, &built, upf, &kinds);
                 write_png(&m.file, render_drawing(&od, c.rect, c.px), &mut left_out)?
             }
             ("plan", _, _) => {
@@ -2639,7 +3586,11 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
                 q["path"] = json!(full(&m.file));
                 q["force"] = json!(true);
                 match s.execute("model.render", &q) {
-                    Ok(_) => true,
+                    Ok(_) if written(&m.file) => true,
+                    Ok(_) => {
+                        left_out.push((m.file.clone(), "model.render wrote no file".into()));
+                        false
+                    }
                     Err(e) => {
                         left_out.push((m.file.clone(), format!("model.render: {e}")));
                         false
@@ -2653,12 +3604,13 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let mut subs_out: Vec<Value> = Vec::new();
-    for (file, sb, page, path) in &subs {
+    for (file, sb, page, path, why) in &subs {
         let Some(path) = path else { continue };
         match submittal_png(path, *page) {
             Ok(b) => {
-                super::exchange::write_file(CMD, &full(file), &b)?;
-                subs_out.push(json!({"file": file, "submittal": sb, "page": page}));
+                if write_png(file, Some(b), &mut left_out)? {
+                    subs_out.push(json!({"file": file, "submittal": sb, "page": page, "for": why}));
+                }
             }
             Err(e) => left_out.push((file.clone(), format!("submittal {sb}: {e}"))),
         }
@@ -2668,7 +3620,17 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let kept_crops: Vec<Crop> = crops.iter().map(|(_, c)| (*c).clone()).filter(|c| prints_out.iter().any(|j| j["file"] == json!(c.file))).collect();
     let kept_models: Vec<ModelImage> =
         model_imgs_kept.iter().map(|m| (*m).clone()).filter(|m| model_out.iter().any(|j| j["file"] == json!(m.file))).collect();
-    let prompt = prompt_md(&area, &kept_crops, &kept_models, &rules_on, &here.counts);
+    let mut prompt = prompt_md(&area, &kept_crops, &kept_models, &rules_on, &here.counts);
+    if let Some(low) = similarity_json["low"].as_array().filter(|l| !l.is_empty()) {
+        prompt.push_str("\n## Crops that may not look like their PDF page\n\n");
+        for l in low {
+            prompt.push_str(&format!(
+                "- `{}`: similarity {} to the page: read it with care, and say so when a finding rests on it.\n",
+                l["file"].as_str().unwrap_or_default(),
+                l["similarity"]
+            ));
+        }
+    }
     left_out.sort();
     left_out.dedup();
     let manifest = json!({
@@ -2681,6 +3643,8 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         "prints": prints_out,
         "model": model_out,
         "submittals": subs_out,
+        "submittals_unlisted": unlisted_json,
+        "similarity": similarity_json,
         "objects": "objects.json",
         "rules": "rules.json",
         "prompt": "prompt.md",
@@ -2769,6 +3733,109 @@ mod tests {
     }
 
     #[test]
+    fn a_source_names_its_sheet_without_its_view() {
+        assert_eq!(sheet_key("E-9/1").as_deref(), Some("E-9"));
+        assert_eq!(sheet_key(" p-8/12 ").as_deref(), Some("P-8"));
+        assert_eq!(sheet_key("A901").as_deref(), Some("A901"));
+        assert_eq!(sheet_key("M-8/x").as_deref(), Some("M-8/X"));
+        assert_eq!(sheet_key("room 512"), None);
+        assert_eq!(sheet_key("NOTES"), None);
+        assert_eq!(sheet_key(""), None);
+    }
+
+    #[test]
+    fn a_title_names_its_level() {
+        for (t, l) in [
+            ("SECURITY - 1ST FLOOR", "Level 1"),
+            ("LIGHTING PLAN - LEVEL 2", "L2"),
+            ("EGRESS PLAN - 2ND-5TH FLOOR", "Level 3"),
+            ("SIGNAGE - SECOND-FIFTH FLOOR PLAN", "Level 4"),
+            ("SECOND FLOOR SLAB PLAN", "Level 2"),
+            ("DATA - 2ND FLOOR (3RD FLOOR SIM.)", "Level 3"),
+            ("POWER PLAN FLOOR 3", "03"),
+            ("ROOF PLAN", "Roof"),
+        ] {
+            assert!(title_names_level(t, l), "{t} names {l}");
+        }
+        for (t, l) in [
+            ("SECURITY - 1ST FLOOR", "Level 2"),
+            ("EGRESS PLAN - 2ND-5TH FLOOR", "Level 1"),
+            ("PANEL SCHEDULE 2", "Level 2"),
+            ("ENLARGED UNIT PLAN", "Level 1"),
+            ("ROOF DRAIN DETAILS", "Level 1"),
+            ("1ST FLOOR", "T"),
+        ] {
+            assert!(!title_names_level(t, l), "{t} does not name {l}");
+        }
+    }
+
+    #[test]
+    fn a_narrow_crop_is_widened_on_its_sheet_and_views_are_compared() {
+        let sheet = [0.0, 0.0, 100.0, 50.0];
+        // A 2 × 40 sliver becomes 20 wide round its centre; one at the edge stays on the sheet.
+        assert_eq!(widen([49.0, 5.0, 51.0, 45.0], 20.0, sheet), [40.0, 5.0, 60.0, 45.0]);
+        assert_eq!(widen([0.0, 5.0, 2.0, 45.0], 20.0, sheet), [0.0, 5.0, 20.0, 45.0]);
+        assert_eq!(widen([10.0, 10.0, 40.0, 40.0], 20.0, sheet), [10.0, 10.0, 40.0, 40.0]);
+        // Never wider than the sheet.
+        assert_eq!(widen([10.0, 20.0, 12.0, 22.0], 500.0, sheet), [0.0, 0.0, 100.0, 50.0]);
+        assert!((overlap([0.0, 0.0, 10.0, 10.0], [0.0, 0.0, 10.0, 10.0]) - 1.0).abs() < 1e-12);
+        assert!((overlap([0.0, 0.0, 10.0, 10.0], [5.0, 0.0, 15.0, 10.0]) - 1.0 / 3.0).abs() < 1e-12);
+        assert_eq!(overlap([0.0, 0.0, 1.0, 1.0], [2.0, 2.0, 3.0, 3.0]), 0.0);
+        // A whole view in at most 2 × 2 tiles.
+        let (_, t) = tiles_max([0.0, 0.0, 10_000.0, 8_000.0], 1.0, 2);
+        assert_eq!(t.len(), 4);
+    }
+
+    #[test]
+    fn a_room_is_found_on_a_sheet_by_its_tag() {
+        let texts = Texts(vec![
+            ("410".into(), [10.0, 10.0], 1.0),
+            ("STUDIO".into(), [10.0, 12.0], 1.0),
+            ("410".into(), [90.0, 90.0], 1.0),
+            ("CORRIDOR".into(), [50.0, 50.0], 1.0),
+            ("CORRIDOR".into(), [60.0, 50.0], 1.0),
+            ("LIBRARY 101".into(), [30.0, 70.0], 1.0),
+        ]);
+        let all = [0.0, 0.0, 100.0, 100.0];
+        let w = |a: &[&str]| a.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        // The number beside the name, not the other 410.
+        assert_eq!(room_tag(&texts, all, &w(&["410", "Studio"]), 100.0).map(|x| x.0), Some([10.0, 10.0]));
+        // One tag holding both.
+        assert_eq!(room_tag(&texts, all, &w(&["101", "Library"]), 100.0).map(|x| x.0), Some([30.0, 70.0]));
+        // A name the sheet gives twice, with no number, is not a place.
+        assert_eq!(room_tag(&texts, all, &w(&["Corridor"]), 100.0), None);
+        // Only inside the view.
+        assert_eq!(room_tag(&texts, [80.0, 80.0, 100.0, 100.0], &w(&["410", "Studio"]), 100.0).map(|x| x.0), Some([90.0, 90.0]));
+        assert_eq!(room_tag(&texts, all, &w(&["999"]), 100.0), None);
+        assert_eq!(room_tag(&texts, all, &[], 100.0), None);
+    }
+
+    #[test]
+    fn a_submittal_page_is_offered_for_the_kind_it_is_mostly_for() {
+        let mut a = Applied { elements: 10, ..Applied::default() };
+        a.kinds.insert("luminaire".into(), 9);
+        a.kinds.insert("fire_alarm_device".into(), 1);
+        assert!(a.is_for("luminaire"));
+        assert!(!a.is_for("fire_alarm_device"));
+        assert!(!a.is_for("receptacle"));
+    }
+
+    #[test]
+    fn a_kept_path_is_named_by_its_last_part_and_read_where_this_machine_has_it() {
+        assert_eq!(last_part("C:\\Jobs\\Sample\\Submittals"), "Submittals");
+        assert_eq!(last_part("/jobs/sample/Lighting.pdf"), "Lighting.pdf");
+        assert_eq!(last_part("C:\\Jobs\\Sample\\"), "Sample");
+        assert_eq!(last_part("Lighting.pdf"), "Lighting.pdf");
+        // Not here, and no drive mount: as given.
+        let p = "Q:\\No Such Folder\\Submittals";
+        assert_eq!(local_path(p), std::path::PathBuf::from(p));
+        assert_eq!(local_path("relative/none"), std::path::PathBuf::from("relative/none"));
+        // A path that is here stays.
+        let here = std::env::temp_dir();
+        assert_eq!(local_path(&here.to_string_lossy()), here);
+    }
+
+    #[test]
     fn submittal_references_split_into_file_and_page() {
         assert_eq!(submittal_ref("Lighting.pdf p.3"), ("Lighting.pdf".into(), 3));
         assert_eq!(submittal_ref("Panels.pdf"), ("Panels.pdf".into(), 1));
@@ -2808,5 +3875,63 @@ mod tests {
         assert!(polygon_area(&clip_to_rect(&l, [20.0, 20.0, 40.0, 30.0])) < 1e-9);
         // A cell wholly inside is the cell.
         assert!((polygon_area(&clip_to_rect(&l, [20.0, 0.0, 30.0, 10.0])) - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_print_layer_and_style_names_are_the_pdf_readers() {
+        assert_eq!(SHX_SOURCE_LAYER, cadaddy_io::pdf_read::SHX_SOURCE_LAYER);
+        assert_eq!(OCR_TEXT_STYLE, cadaddy_io::pdf_read::OCR_TEXT_STYLE);
+    }
+
+    /// A `w` × `h` white picture with black pixels at `dots`.
+    fn picture(w: u32, h: u32, dots: &[(u32, u32)]) -> Ink {
+        let mut rgba = vec![255u8; (w * h * 4) as usize];
+        for (x, y) in dots {
+            let i = ((y * w + x) * 4) as usize;
+            rgba[i..i + 3].copy_from_slice(&[0, 0, 0]);
+        }
+        Ink::of(w, h, &rgba)
+    }
+
+    #[test]
+    fn similarity_forgives_a_pixel_or_two_and_nothing_more() {
+        let line: Vec<(u32, u32)> = (10..90).map(|x| (x, 50)).collect();
+        let a = picture(100, 100, &line);
+        assert_eq!(a.count, 80);
+        assert!((similarity(&a, &a) - 1.0).abs() < 1e-12);
+        // Two pixels down: the same line.
+        let b = picture(100, 100, &(10..90).map(|x| (x, 52)).collect::<Vec<_>>());
+        assert!((similarity(&a, &b) - 1.0).abs() < 1e-12);
+        // Five down: another one.
+        let c = picture(100, 100, &(10..90).map(|x| (x, 55)).collect::<Vec<_>>());
+        assert_eq!(similarity(&a, &c), 0.0);
+        // Half of it: found entirely in the whole, holding half of the whole (and the two
+        // pixels past its end within reach).
+        let d = picture(100, 100, &(10..50).map(|x| (x, 50)).collect::<Vec<_>>());
+        let r = 42.0 / 80.0;
+        assert!((similarity(&a, &d) - 2.0 * r / (1.0 + r)).abs() < 1e-9);
+        // Blank against blank is alike; blank against ink is not.
+        let blank = picture(100, 100, &[]);
+        assert_eq!(similarity(&blank, &blank), 1.0);
+        assert_eq!(similarity(&blank, &a), 0.0);
+        // A grey (light) pixel isn't ink.
+        let mut rgba = vec![255u8; 4];
+        rgba[..3].copy_from_slice(&[230, 230, 230]);
+        assert_eq!(Ink::of(1, 1, &rgba).count, 0);
+        // Hostile sizes never index past the bytes.
+        assert_eq!(Ink::of(1000, 1000, &[0; 8]).count, 2);
+    }
+
+    #[test]
+    fn a_picture_takes_the_view_it_overlaps_most_on_its_own_sheet() {
+        let views = vec![
+            ("P-1".to_string(), "PLAN - SANITARY".to_string(), [0.0, 0.0, 10.0, 10.0]),
+            ("P-1".to_string(), "PLAN - WATER".to_string(), [10.0, 0.0, 20.0, 10.0]),
+            ("P-2".to_string(), "OTHER SHEET".to_string(), [0.0, 0.0, 30.0, 30.0]),
+        ];
+        assert_eq!(view_at(&views, "P-1", [11.0, 1.0, 19.0, 9.0]).as_deref(), Some("PLAN - WATER"));
+        assert_eq!(view_at(&views, "p-1 ", [2.0, 1.0, 13.0, 9.0]).as_deref(), Some("PLAN - SANITARY"));
+        assert_eq!(view_at(&views, "P-1", [40.0, 40.0, 50.0, 50.0]), None);
+        assert_eq!(view_at(&views, "P-3", [0.0, 0.0, 5.0, 5.0]), None);
     }
 }
