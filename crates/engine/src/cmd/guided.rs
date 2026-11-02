@@ -4506,6 +4506,40 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         progress_line(&format!("  switches and sensors named by the legend's designations: {n}"));
                     }
                 }
+                // The typical rooms as unit types: their views and each room's hand and fit, for the
+                // packets and the unit takeoff (written unless the spec has its own).
+                if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+                    let empty = |v: &Value| v.is_null() || v.as_array().is_some_and(Vec::is_empty);
+                    if empty(&sp.unit_types) && empty(&sp.unit_instances) {
+                        let (types, instances) = job_unit_types(s.doc()?, job);
+                        if !types.is_empty() {
+                            let mirrored = instances.iter().filter(|i| i["hand"] == "mirrored").count();
+                            let fitted = instances.iter().filter(|i| i.get("fit").is_some()).count();
+                            progress_line(&format!(
+                                "  unit types: {} ({} views); {} rooms ({fitted} with their layout fit, {mirrored} mirrored)",
+                                types.len(),
+                                types.iter().map(|t| t["views"].as_array().map_or(0, Vec::len)).sum::<usize>(),
+                                instances.len()
+                            ));
+                            // Each room's level as the spec names it (the job's rooms carry its codes).
+                            let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+                            let mut instances = instances;
+                            for inst in &mut instances {
+                                let code = inst["level"].as_str().unwrap_or_default().to_string();
+                                let name = sp
+                                    .level(&code)
+                                    .or_else(|| sp.levels.iter().find(|l| !digits(&code).is_empty() && digits(&l.name) == digits(&code)))
+                                    .map(|l| l.name.clone());
+                                if let Some(n) = name {
+                                    inst["level"] = json!(n);
+                                }
+                            }
+                            sp.unit_types = Value::Array(types);
+                            sp.unit_instances = Value::Array(instances);
+                            s.doc_mut()?.building_spec = Some(sp.to_json());
+                        }
+                    }
+                }
                 // The plumbing fixtures named by their schedule.
                 if let Some(sch) = &schedule
                     && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
@@ -6788,6 +6822,189 @@ fn copy_room_fixtures(
     }
     (out, report)
 }
+
+/// The typical rooms as unit types (`unittypes`): each type of room the enlarged views draw,
+/// with every view of it (sheet, title, where: plans, RCP, power, mechanical, plumbing,
+/// elevations), and each room of the type as an instance with its hand and how its type's plan
+/// lies in it (turned, mirrored), as the stamping laid the views in. `(unit_types,
+/// unit_instances)`.
+fn job_unit_types(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Vec<Value>, Vec<Value>) {
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    if types.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let k_in = super::perceive::units_per_inch(d);
+    let upf = 12.0 * k_in;
+    let inside = |r: &[f64; 4], c: cadaddy_geom::Vec2| c.x >= r[0] && c.x <= r[2] && c.y >= r[1] && c.y <= r[3];
+    // Each type's views; its plan's linework (the first plan view: not an RCP, elevation or detail).
+    let mut views: BTreeMap<BTreeSet<String>, Vec<Value>> = BTreeMap::new();
+    let mut plan: BTreeMap<BTreeSet<String>, ([f64; 4], Vec<cadaddy_geom::Vec2>, String)> = BTreeMap::new();
+    // The guest-room views of no one type (seen before a type's own views are: added after).
+    let mut generic: Vec<Value> = Vec::new();
+    // Each sheet once, whole: its entry, else (a sheet only of several levels' views, P-7) one
+    // spanning all its views.
+    let refs = job_sheet_refs(job);
+    let base = |n: &str| n.split('/').next().unwrap_or(n).trim().to_ascii_uppercase();
+    let mut sheets: Vec<super::printmep::SheetRef> = Vec::new();
+    for r in &refs {
+        let b = base(&r.number);
+        match sheets.iter_mut().find(|s| base(&s.number) == b) {
+            // The sheet's own entry wins; views of it widen a stand-in to the whole sheet.
+            Some(s) if r.view.is_none() && r.number.trim().eq_ignore_ascii_case(&b) => *s = r.clone(),
+            Some(s) if s.view.is_none() && s.number.trim().eq_ignore_ascii_case(&b) => {}
+            Some(s) => {
+                s.rect = [s.rect[0].min(r.rect[0]), s.rect[1].min(r.rect[1]), s.rect[2].max(r.rect[2]), s.rect[3].max(r.rect[3])];
+                s.span = s.span.or(r.span);
+            }
+            None => sheets.push(super::printmep::SheetRef {
+                view: None,
+                number: if r.view.is_none() { r.number.clone() } else { b.clone() },
+                ..r.clone()
+            }),
+        }
+    }
+    for sh in sheets.iter().take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let mut objects = None;
+        let titled = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts);
+        let titles: Vec<[f64; 2]> = titled.iter().map(|t| t.at).collect();
+        for v in titled.iter().cloned() {
+            let words = type_words(&v.title, Some(&vocabulary));
+            // A view of "the guest room" naming no type and a floor (ENLARGED GUESTROOM - 3RD
+            // FLOOR - SANITARY): every guest room type's, on that floor.
+            let up = v.title.to_ascii_uppercase();
+            let enlarged = up.contains("ENLARGED") || up.contains("PLAN");
+            if !types.contains(&words) && enlarged && (up.contains("GUESTROOM") || up.contains("GUEST ROOM")) {
+                let Some(region) = v.region.or_else(|| title_cell(v.at, &titles, sh.rect)) else {
+                    progress_line(&format!("  unit types: {} {:?} at {:?}: no part of the sheet found for it", sh.number, v.title, v.at));
+                    continue;
+                };
+                let levels = cadaddy_mepfix::sheet_reader::detect_levels(&v.title);
+                for (_, list) in views.iter_mut().filter(|(w, _)| sleeping_room(w)) {
+                    if list.len() < MAX_UNIT_VIEWS {
+                        list.push(json!({"sheet": sh.number, "title": v.title, "rect": region, "sheet_rect": sh.rect, "scale": v.scale_text, "levels": levels}));
+                    }
+                }
+                generic.push(
+                    json!({"sheet": sh.number, "title": v.title, "rect": region, "sheet_rect": sh.rect, "scale": v.scale_text, "levels": levels}),
+                );
+                continue;
+            }
+            let Some(region) = v.region.filter(|_| types.contains(&words)) else { continue };
+            let list = views.entry(words.clone()).or_default();
+            if list.len() < MAX_UNIT_VIEWS {
+                list.push(json!({"sheet": sh.number, "title": v.title, "rect": region, "sheet_rect": sh.rect, "scale": v.scale_text}));
+            }
+            let up = v.title.to_ascii_uppercase();
+            let side = [" WALL", "ELEVATION", "SECTION", "DETAIL", "RCP", "REFLECTED"].iter().any(|w| up.contains(w));
+            if !side && !plan.contains_key(&words) {
+                let objs = objects.get_or_insert_with(|| super::bspec::plan_objects(&sub));
+                let ents: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+                    objs.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(&region, c))).copied().collect();
+                plan.insert(words, (region, super::grids::line_samples(&ents, upf), format!("{} {}", sh.number, v.title)));
+            }
+        }
+    }
+    if !generic.is_empty() {
+        let names: Vec<String> =
+            generic.iter().map(|g| format!("{} {}", g["sheet"].as_str().unwrap_or(""), g["title"].as_str().unwrap_or(""))).collect();
+        progress_line(&format!("  unit types: guest-room views of no one type, each floor's: {names:?}"));
+    }
+    for (_, list) in views.iter_mut().filter(|(w, _)| sleeping_room(w)) {
+        for g in &generic {
+            if list.len() < MAX_UNIT_VIEWS && !list.contains(g) {
+                list.push(g.clone());
+            }
+        }
+    }
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * upf, upf);
+    let id_of = |w: &BTreeSet<String>| w.iter().cloned().collect::<Vec<_>>().join("-");
+    // A room the rooms stage left unnumbered: the number printed in it on its floor's plan.
+    let numbers = super::identity::number_texts(d);
+    let printed = |outline: &[cadaddy_geom::Vec2]| -> Option<String> {
+        let b = bbox(outline);
+        let mid = [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0];
+        numbers
+            .iter()
+            .filter(|(_, at)| cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(at[0], at[1])))
+            .min_by(|a, b| (a.1[0] - mid[0]).hypot(a.1[1] - mid[1]).total_cmp(&(b.1[0] - mid[0]).hypot(b.1[1] - mid[1])))
+            .map(|(n, _)| n.clone())
+    };
+    let mut unit_types = Vec::new();
+    let mut instances = Vec::new();
+    // Rooms to live in (guest rooms, dwelling units): not a corridor or a back-of-house room that
+    // an enlarged view happens to show.
+    for words in types.iter().filter(|w| sleeping_room(w)) {
+        let of_type: Vec<usize> = (0..rooms.len()).filter(|i| rooms.get(*i).is_some_and(|r| type_words(&r.0, None) == *words)).collect();
+        let Some(vs) = views.get(words) else { continue };
+        // Its name: what its rooms are called most.
+        let mut names: BTreeMap<&str, usize> = BTreeMap::new();
+        for i in &of_type {
+            if let Some(r) = rooms.get(*i) {
+                *names.entry(r.0.trim()).or_default() += 1;
+            }
+        }
+        let name = names.iter().max_by_key(|(_, n)| **n).map_or_else(|| id_of(words), |(n, _)| (*n).to_string());
+        let p = plan.get(words);
+        unit_types.push(json!({
+            "id": id_of(words), "name": name, "views": vs,
+            "source": {"sheet": p.map_or_else(|| vs.first().and_then(|v| v.get("sheet")).cloned().unwrap_or(Value::Null), |p| json!(p.2.split(' ').next().unwrap_or(""))), "by": "guided job: typical-room views"},
+        }));
+        for i in of_type.iter().copied().take(MAX_STAMPED) {
+            let Some((rname, level, outline, number)) = rooms.get(i) else { continue };
+            let fit = p.and_then(|(region, lines, _)| {
+                let b = room_boxes.get(i)?;
+                rigid_room_fit(lines, *region, *b, &floor_lines, ROOM_FIT_MARGIN_FT * upf, 6.0 * k_in).map(|(f, _)| f).filter(|f| f.rigid)
+            });
+            let mut inst = json!({
+                "number": if number.trim().is_empty() { printed(outline).unwrap_or_else(|| stamped_room(rname, number, i)) } else { number.trim().to_string() },
+                "level": level, "type": id_of(words), "unit_type": id_of(words),
+                "hand": if fit.is_some_and(|f| f.k >= 4) { "mirrored" } else { "normal" },
+                "source": "guided job",
+            });
+            if let (Some(f), Some(p)) = (fit, p) {
+                inst["fit"] =
+                    json!({"rotation_deg": f64::from(f.k % 4) * 90.0, "mirrored": f.k >= 4, "view": p.2, "by": "linework (as the stamping)"});
+            }
+            instances.push(inst);
+        }
+    }
+    (unit_types, instances)
+}
+
+/// A view's part of its sheet when its linework can't be told from its neighbours' (views in a
+/// row sharing grid lines): from its title right to the next title of its row and up to the next
+/// title over it (else to the sheet's edge, less the title block's strip).
+fn title_cell(at: [f64; 2], titles: &[[f64; 2]], sheet: [f64; 4]) -> Option<[f64; 4]> {
+    let (w, h) = (sheet[2] - sheet[0], sheet[3] - sheet[1]);
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return None;
+    }
+    let row = 0.05 * h;
+    let left = (at[0] - 0.02 * w).max(sheet[0]);
+    let right = titles
+        .iter()
+        .filter(|t| (t[1] - at[1]).abs() <= row && t[0] > at[0] + 0.02 * w)
+        .map(|t| t[0] - 0.02 * w)
+        .fold(sheet[2] - TITLE_BLOCK_SHARE * w, f64::min);
+    let bottom = (at[1] - 0.02 * h).max(sheet[1]);
+    let top = titles.iter().filter(|t| t[1] > at[1] + row && t[0] >= left && t[0] <= right).map(|t| t[1] - 0.02 * h).fold(sheet[3], f64::min);
+    (right > left && top > bottom).then_some([left, bottom, right, top])
+}
+
+/// The strip of a sheet its title block takes (a share of its width, at the right).
+const TITLE_BLOCK_SHARE: f64 = 0.12;
+
+/// The views of one unit type kept at most.
+const MAX_UNIT_VIEWS: usize = 40;
 
 /// What [`stamp_typical_runs`] made: the stamped runs, which of the runs it was given lie in a
 /// typical room's plan (each `true` went into the rooms), and the count per sheet and view.
@@ -11792,6 +12009,95 @@ mod tests {
         let r = sp.mep.runs.iter().find(|r| r.system == "SAN").unwrap();
         assert_eq!((r.points.len(), r.size_in[0], r.top_ft), (1, 3.0, Some(10.0)));
         assert!(sp.check().iter().all(|i| !i.path.starts_with("mep.runs")), "{:?}", sp.check());
+    }
+
+    #[test]
+    fn the_typical_rooms_become_unit_types_with_their_views_and_each_rooms_hand() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        // The unit's linework at `o`: as drawn, turned half round, or mirrored (east to west).
+        let unit = |s: &mut crate::Session, o: [f64; 2], how: u8| {
+            let p = |x: f64, y: f64| match how {
+                1 => [o[0] + 144.0 - x, o[1] + 288.0 - y],
+                2 => [o[0] + 144.0 - x, o[1] + y],
+                _ => [o[0] + x, o[1] + y],
+            };
+            let mut segs =
+                vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((100.0, 210.0), (144.0, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, p(ax, ay), p(bx, by));
+            }
+        };
+        let x0 = 4234.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let v = [x0 + 300.0, 200.0];
+        unit(&mut s, v, 0);
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": "UNIT PLAN - DOUBLE QUEEN", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let e = [x0 + 1000.0, 300.0];
+        for (a, b) in [((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 94.0)), ((144.0, 94.0), (0.0, 94.0)), ((0.0, 94.0), (0.0, 0.0))] {
+            line(&mut s, [e[0] + a.0, e[1] + a.1], [e[0] + b.0, e[1] + b.1]);
+        }
+        s.execute("text", &json!({"at": [e[0], e[1] - 19.0], "text": "DOUBLE QUEEN - BED WALL", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [e[0], e[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        unit(&mut s, [10_000.0, 0.0], 0);
+        unit(&mut s, [10_400.0, 0.0], 1);
+        unit(&mut s, [10_800.0, 0.0], 2);
+        job.sheet_regions = vec![SheetRegion {
+            number: "A-8".into(),
+            level: "T".into(),
+            discipline: "A".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "A-8".into(), lo, hi }];
+        let room = |n: &str, x: f64, name: &str| json!({"name": name, "number": n, "level": "2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(
+                json!({"rooms": [room("201", 10_000.0, "DOUBLE QUEEN"), room("202", 10_400.0, "DOUBLE QUEEN"), room("203", 10_800.0, "DOUBLE QUEEN"), room("200", 11_200.0, "CORRIDOR")]}),
+            );
+        }
+        let (types, instances) = job_unit_types(s.doc().unwrap(), &job);
+        assert_eq!(types.len(), 1, "{types:?}");
+        let views: Vec<&str> = types[0]["views"].as_array().unwrap().iter().filter_map(|v| v["title"].as_str()).collect();
+        assert!(views.contains(&"UNIT PLAN - DOUBLE QUEEN") && views.contains(&"DOUBLE QUEEN - BED WALL"), "{views:?}");
+        let of = |n: &str| instances.iter().find(|i| i["number"] == n).unwrap().clone();
+        assert_eq!((of("201")["hand"].clone(), of("201")["fit"]["rotation_deg"].clone()), (json!("normal"), json!(0.0)), "{instances:?}");
+        assert_eq!((of("202")["hand"].clone(), of("202")["fit"]["rotation_deg"].clone()), (json!("normal"), json!(180.0)), "{instances:?}");
+        assert_eq!(of("203")["hand"], json!("mirrored"), "{instances:?}");
+        assert!(instances.iter().all(|i| i["type"] == types[0]["id"]), "no corridor unit: {instances:?}");
+    }
+
+    #[test]
+    fn a_view_whose_linework_runs_into_its_neighbours_takes_its_titles_cell() {
+        // P-7: four sanitary views in a row along the bottom, two water views over them.
+        let sheet = [0.0, 0.0, 2000.0, 1400.0];
+        let titles = [[100.0, 50.0], [550.0, 50.0], [1000.0, 50.0], [1450.0, 50.0], [550.0, 600.0], [1000.0, 600.0]];
+        let c = title_cell([550.0, 50.0], &titles, sheet).unwrap();
+        assert!((c[0] - 510.0).abs() < 1e-9 && (c[2] - 960.0).abs() < 1e-9, "to the next title of its row: {c:?}");
+        assert!((c[1] - 22.0).abs() < 1e-9 && (c[3] - 572.0).abs() < 1e-9, "up to the title over it: {c:?}");
+        // The last of the row stops at the title block; one with nothing over it runs to the top.
+        let last = title_cell([1450.0, 50.0], &titles, sheet).unwrap();
+        assert!((last[2] - 1760.0).abs() < 1e-9 && (last[3] - 1400.0).abs() < 1e-9, "{last:?}");
+        assert!(title_cell([1.0, 1.0], &titles, [0.0, 0.0, f64::NAN, 1.0]).is_none());
     }
 
     #[test]

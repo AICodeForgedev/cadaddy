@@ -279,6 +279,9 @@ pub(crate) struct UnitOf {
     pub name: String,
     pub hand: String,
     pub ty: Value,
+    /// How the type's plan lies in this room, as the job laid it (`{rotation_deg, mirrored,
+    /// view, by}`), when it was fitted.
+    pub fit: Value,
 }
 
 /// The building spec's unit instances by level and room number (read once).
@@ -303,7 +306,8 @@ impl Units {
             let name = Some(text(&ty, "name")).filter(|n| !n.is_empty()).unwrap_or_else(|| id.clone());
             let hand = if text(inst, "hand").eq_ignore_ascii_case("mirrored") { "mirrored" } else { "normal" }.to_string();
             let key = (text(inst, "level").trim().to_ascii_lowercase(), number.trim().to_ascii_lowercase());
-            out.entry(key).or_insert(UnitOf { id, name, hand, ty });
+            let fit = inst.get("fit").cloned().unwrap_or(Value::Null);
+            out.entry(key).or_insert(UnitOf { id, name, hand, ty, fit });
         }
         Units(out)
     }
@@ -865,7 +869,7 @@ mod tests {
         assert_eq!(set_for(&sets, Some("GUEST ROOM"), None).map(|s| s.0.as_str()), Some("guest_room"));
         assert_eq!(set_for(&sets, Some("Storage Room"), None).map(|s| s.0.as_str()), Some("room"));
         assert!(set_for(&sets, Some("Office"), None).is_none());
-        let unit = UnitOf { id: "ut-king".into(), name: "Guest Room King".into(), hand: "normal".into(), ty: Value::Null };
+        let unit = UnitOf { id: "ut-king".into(), name: "Guest Room King".into(), hand: "normal".into(), ty: Value::Null, fit: Value::Null };
         assert_eq!(set_for(&sets, Some("UNIT 214"), Some(&unit)).map(|s| s.0.as_str()), Some("guest_room"));
     }
 
