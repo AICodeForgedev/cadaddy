@@ -2321,6 +2321,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                         kind: "receptacle".into(),
                         leg: String::new(),
                         room: String::new(),
+                        aff_in: None,
+                        aff_note: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -2344,6 +2346,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                             kind: kind_of_tag(&t),
                             leg: String::new(),
                             room: String::new(),
+                            aff_in: None,
+                            aff_note: String::new(),
                         });
                         *c.by_type.entry(t).or_default() += 1;
                     }
@@ -4290,8 +4294,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
                 let unplaced: Vec<&super::readers::ReadDevice> = all_devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
-                let StampedRooms { devices: stamped, report, authority, panels, rooms, sleeping: guest } =
+                let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest } =
                     stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                // The heights the typical rooms' plans print by their devices.
+                let (notes, heights) = typical_heights(s.doc()?, job, &mut stamped);
+                if notes > 0 {
+                    progress_line(&format!("  typical rooms' height notes: {notes} read, {heights} stamped devices took theirs"));
+                }
                 room_panels = panels;
                 panel_rooms = rooms;
                 sleeping = guest;
@@ -5736,6 +5745,156 @@ fn stamp_typical_rooms(
     }
     StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect() }
 }
+
+/// The mounting heights the typical rooms' plans print by their devices ("44\" AFF",
+/// "MICROWAVE 65\" AFF" on a leader, "10\" AFF HORIZ") onto the devices stamped into the rooms
+/// of each type: each note's device (where its leader ends, else the round symbol beside it, else
+/// the note's own place) laid into every room of the view's type as the view goes into it, the
+/// device stamped into that room nearest it (within [`AFF_DEVICE_FT`]) takes the height. The notes
+/// read and the devices that took one.
+fn typical_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob, devices: &mut [super::readers::ReadDevice]) -> (usize, usize) {
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    if types.is_empty() || devices.is_empty() {
+        return (0, 0);
+    }
+    let k_in = super::perceive::units_per_inch(d);
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 12.0 * k_in);
+    let (mut notes_read, mut set) = (0usize, 0usize);
+    for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none()).take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let notes: Vec<(&cadaddy_mepfix::sheet_facts::TextItem, f64)> = texts
+            .iter()
+            .filter_map(|t| Some((t, super::propfill::mount_height_in(&t.value)?)))
+            .filter(|(_, h)| *h > 0.0 && *h < 240.0)
+            .take(MAX_STAMPED)
+            .collect();
+        if notes.is_empty() {
+            continue;
+        }
+        let (views, _) = room_views(&sub, &texts, &types, &vocabulary, &rooms);
+        if views.is_empty() {
+            continue;
+        }
+        // Every straight piece (a leader ends on its symbol: no reader of linework keeps those).
+        let mut segs: Vec<[[f64; 2]; 2]> = Vec::new();
+        for e in sub.model.iter() {
+            if segs.len() >= MAX_LEADER_PIECES {
+                break;
+            }
+            match &e.kind {
+                cadaddy_doc::EntityKind::Line(l) => segs.push([[l.a.x, l.a.y], [l.b.x, l.b.y]]),
+                cadaddy_doc::EntityKind::LwPolyline(pl) if !pl.closed && pl.vertices.len() <= 8 => {
+                    segs.extend(pl.vertices.windows(2).filter_map(|w| Some([[w.first()?.p.x, w.first()?.p.y], [w.get(1)?.p.x, w.get(1)?.p.y]])));
+                }
+                _ => {}
+            }
+        }
+        let rounds = cadaddy_mepfix::sheet_reader::round_shapes(&sub);
+        let objects = super::bspec::plan_objects(&sub);
+        let mut view_lines: BTreeMap<[u64; 4], Vec<cadaddy_geom::Vec2>> = BTreeMap::new();
+        let mut fits: BTreeMap<([u64; 4], usize), Option<RoomFit>> = BTreeMap::new();
+        let inside = |r: &[f64; 4], p: cadaddy_geom::Vec2| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
+        for (t, h) in &notes {
+            let Some((_, view, words)) = views
+                .iter()
+                .filter(|(_, r, _)| inside(r, t.at))
+                .min_by(|a, b| ((a.1[2] - a.1[0]) * (a.1[3] - a.1[1])).total_cmp(&((b.1[2] - b.1[0]) * (b.1[3] - b.1[1]))))
+            else {
+                continue;
+            };
+            notes_read += 1;
+            // The note's box (its lettering along its direction).
+            let th = t.height.max(1e-9);
+            let dir = cadaddy_geom::Vec2::from_angle(t.rotation);
+            let end = t.at + dir * (NOTE_CHAR_W * th * t.value.chars().count() as f64);
+            let near_note = |p: cadaddy_geom::Vec2| {
+                let ab = end - t.at;
+                let len2 = ab.x * ab.x + ab.y * ab.y;
+                let u = if len2 > 0.0 { (((p - t.at).x * ab.x + (p - t.at).y * ab.y) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                p.dist(t.at + ab * u) <= 1.5 * th
+            };
+            // A leader from the note: its far end. Else the round symbol nearest the note.
+            let leader = segs
+                .iter()
+                .filter_map(|sg| {
+                    let (a, b) = (cadaddy_geom::Vec2::new(sg[0][0], sg[0][1]), cadaddy_geom::Vec2::new(sg[1][0], sg[1][1]));
+                    if a.dist(b) < 2.0 * th {
+                        return None;
+                    }
+                    if near_note(a) && !near_note(b) {
+                        Some(b)
+                    } else if near_note(b) && !near_note(a) {
+                        Some(a)
+                    } else {
+                        None
+                    }
+                })
+                .max_by(|x, y| x.dist(t.at).total_cmp(&y.dist(t.at)));
+            let reach = AFF_SYMBOL_FT * 12.0 * k_in;
+            let symbol = |p: cadaddy_geom::Vec2, r: f64| {
+                rounds
+                    .iter()
+                    .map(|(c, _)| cadaddy_geom::Vec2::new(c[0], c[1]))
+                    .filter(|c| c.dist(p) <= r)
+                    .min_by(|a, b| a.dist(p).total_cmp(&b.dist(p)))
+            };
+            let at = match leader {
+                Some(tip) => symbol(tip, 0.5 * reach).unwrap_or(tip),
+                None => symbol(t.at, reach).unwrap_or(t.at),
+            };
+            let note = format!("{} on {}", t.value.trim(), sh.number);
+            for (ri, (name, level, outline, number)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
+                let b = bbox(outline);
+                let fit = *fits.entry((view.map(f64::to_bits), ri)).or_insert_with(|| {
+                    let lines = view_lines.entry(view.map(f64::to_bits)).or_insert_with(|| {
+                        let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+                            objects.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(view, c))).copied().collect();
+                        super::grids::line_samples(&mine, 12.0 * k_in)
+                    });
+                    rigid_room_fit(lines, *view, b, &floor_lines, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 6.0 * k_in).map(|f| f.0)
+                });
+                // Only where the view lies on the room by its lines: a share of its box is no place to
+                // tell one device from the next.
+                let Some(fit) = fit else { continue };
+                let Some(q) = place_in_room([at.x, at.y], *view, b, fit) else { continue };
+                let q = cadaddy_geom::Vec2::new(q[0], q[1]);
+                let label = stamped_room(name, number, ri);
+                let best = devices
+                    .iter_mut()
+                    .filter(|dv| dv.room == label && dv.level == *level && dv.aff_in.is_none())
+                    .map(|dv| {
+                        let dd = q.dist(cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]));
+                        (dd, dv)
+                    })
+                    .filter(|(dd, _)| *dd <= AFF_DEVICE_FT * 12.0 * k_in)
+                    .min_by(|a, b| a.0.total_cmp(&b.0));
+                if let Some((_, dv)) = best {
+                    dv.aff_in = Some(*h);
+                    dv.aff_note.clone_from(&note);
+                    set += 1;
+                }
+            }
+        }
+    }
+    (notes_read, set)
+}
+
+/// A height note's device is the round symbol within this of the note (feet; half of it from a
+/// leader's end); a stamped device within [`AFF_DEVICE_FT`] of where that lands in a room takes it.
+const AFF_SYMBOL_FT: f64 = 2.5;
+const AFF_DEVICE_FT: f64 = 2.5;
+/// A capital's width, in text heights (a note's box along its line).
+const NOTE_CHAR_W: f64 = 0.8;
+/// Straight pieces of a sheet looked at for height notes' leaders, at most.
+const MAX_LEADER_PIECES: usize = 400_000;
 
 /// What [`stamp_typical_runs`] made: the stamped runs, which of the runs it was given lie in a
 /// typical room's plan (each `true` went into the rooms), and the count per sheet and view.
@@ -10294,6 +10453,88 @@ mod tests {
     /// same room type, every later sheet a sheet's width further right) takes none of the plan's
     /// devices and moves none: each room of the type gets them, the floor plan's own of a tag in a
     /// room standing for that many.
+    #[test]
+    fn a_typical_rooms_height_notes_go_to_its_devices_in_every_room() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        // The unit's linework (12' x 24', a cross wall every 4', a stub that tells its ends apart),
+        // at `o`, turned half round with `turned`.
+        let unit = |s: &mut crate::Session, o: [f64; 2], turned: bool| {
+            let p = |x: f64, y: f64| if turned { [o[0] + 144.0 - x, o[1] + 288.0 - y] } else { [o[0] + x, o[1] + y] };
+            let mut segs =
+                vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((100.0, 210.0), (144.0, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, p(ax, ay), p(bx, by));
+            }
+        };
+        // The E-6 sheet: its border, the view, a receptacle's circle with "44\" AFF" beside it, a
+        // switch's circle with a leader from "MICROWAVE 65\" AFF".
+        let x0 = 4234.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let v = [x0 + 300.0, 200.0];
+        unit(&mut s, v, false);
+        s.execute("circle", &json!({"center": [v[0] + 20.0, v[1] + 20.0], "radius": 4.0})).unwrap();
+        s.execute("text", &json!({"at": [v[0] + 27.0, v[1] + 18.0], "text": "44\" AFF", "height": 4.0})).unwrap();
+        s.execute("circle", &json!({"center": [v[0] + 130.0, v[1] + 120.0], "radius": 4.0})).unwrap();
+        s.execute("text", &json!({"at": [v[0] + 40.0, v[1] + 150.0], "text": "MICROWAVE 65\" AFF", "height": 4.0})).unwrap();
+        line(&mut s, [v[0] + 86.0, v[1] + 152.0], [v[0] + 130.0, v[1] + 124.0]);
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": "ENLARGED DOUBLE QUEEN", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        // The floor: room 201 as drawn, room 202 across the corridor (turned half round).
+        unit(&mut s, [10_000.0, 0.0], false);
+        unit(&mut s, [10_400.0, 0.0], true);
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-6".into(),
+            level: "T".into(),
+            discipline: "E".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "E-6".into(), lo, hi }];
+        let room = |n: &str, x: f64| json!({"name": "DOUBLE QUEEN", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_400.0)]}));
+        }
+        let device = |tag: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at,
+            sheet: "E-6".into(),
+            level: "T".into(),
+            ..Default::default()
+        };
+        let read = [device("A", [v[0] + 20.0, v[1] + 20.0]), device("S", [v[0] + 130.0, v[1] + 120.0]), device("A", [v[0] + 120.0, v[1] + 270.0])];
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let mut stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced).devices;
+        assert_eq!(stamped.len(), 6, "{stamped:?}");
+        let (notes, set) = typical_heights(s.doc().unwrap(), &job, &mut stamped);
+        assert_eq!((notes, set), (2, 4), "{stamped:?}");
+        for room in ["201", "202"] {
+            let h = |tag: &str| -> Vec<Option<f64>> { stamped.iter().filter(|d| d.room == room && d.tag == tag).map(|d| d.aff_in).collect() };
+            assert_eq!(h("S"), [Some(65.0)], "room {room}: {stamped:?}");
+            let mut a = h("A");
+            a.sort_by(|x, y| x.unwrap_or(0.0).total_cmp(&y.unwrap_or(0.0)));
+            assert_eq!(a, [None, Some(44.0)], "room {room}: the other receptacle has no note");
+        }
+    }
+
     #[test]
     fn an_enlarged_plan_after_an_enlarged_rcp_stamps_every_room_of_its_type() {
         let mut s = crate::Session::new();

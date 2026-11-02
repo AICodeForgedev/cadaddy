@@ -355,7 +355,13 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
             0.0
         };
         let printed = known.filter(|h| h.source != SourceKind::Default && h.inches >= lowest).cloned();
-        let height = printed.or(ceiling.flatten()).or(wall_light).or_else(|| known.cloned()).unwrap_or(Height {
+        // Its own height printed by it on its typical room's plan ("44\" AFF"), before any other.
+        let noted = field(t, "mount_height_in").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0).map(|inches| Height {
+            inches,
+            source: SourceKind::Note,
+            doc: field(t, "mount_height_note").unwrap_or_else(|| "printed by it".into()),
+        });
+        let height = noted.or(printed).or(ceiling.flatten()).or(wall_light).or_else(|| known.cloned()).unwrap_or(Height {
             inches: default_height(kind),
             source: SourceKind::Default,
             doc: format!("usual height for a {kind}"),
