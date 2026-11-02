@@ -630,7 +630,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             kind_from: r.from,
             category: r.category,
             mark,
-            // What it is in words: its type as read (`water closet P-1`), else its class's.
+            // What it is in words: its type as read (`water closet WC-1`), else its class's.
             name: cadaddy_doc::props::read(&e.common.xdata)
                 .get("type")
                 .map(|p| p.text())

@@ -399,7 +399,7 @@ pub struct Ask<'a> {
     /// Its trade (`electrical`, `mechanical`…).
     pub trade: &'a str,
     pub record: Option<&'a Record>,
-    /// What it is in words (`water closet P-1`, `GFCI receptacle`): a list's item names it by
+    /// What it is in words (`water closet WC-1`, `GFCI receptacle`): a list's item names it by
     /// these too.
     pub name: Option<&'a str>,
     /// It is an accessible room's (an `ADA` fixture): a list's `ADA =` height is its.
