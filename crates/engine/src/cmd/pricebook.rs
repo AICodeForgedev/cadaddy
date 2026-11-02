@@ -162,8 +162,15 @@ fn quote_of(r: &BTreeMap<String, String>, origin: &'static str) -> Option<Quote>
     let pack_price = num(r.get("pack_price"));
     // The pack's price over its count when both are given (exact), else the unit price.
     let unit_price = pack_price.zip(pack_count(&pack)).map(|(pp, n)| pp / n).or_else(|| num(r.get("unit_price")))?;
+    let unit_price = (unit_price * 1e6).round() / 1e6;
     let mut date = g("date");
     date.truncate(10);
+    // A web price with no location is the vendor's online price.
+    let source_type = g("source_type");
+    let location = match g("location") {
+        l if l.is_empty() && source_type.eq_ignore_ascii_case("WEB") => "online".to_string(),
+        l => l,
+    };
     (!key.is_empty()).then(|| Quote {
         key,
         description: g("description"),
@@ -172,9 +179,9 @@ fn quote_of(r: &BTreeMap<String, String>, origin: &'static str) -> Option<Quote>
         pack,
         pack_price,
         unit_price,
-        source_type: g("source_type"),
+        source_type,
         vendor: g("vendor"),
-        location: g("location"),
+        location,
         url: g("url"),
         date,
         note: g("note"),
