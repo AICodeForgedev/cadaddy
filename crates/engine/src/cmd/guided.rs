@@ -7601,7 +7601,11 @@ fn equipment_step(
     }
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
     let rule = super::coderules::rules().into_iter().find(|r| r.id == "E-EQUIP-ELEC").unwrap_or_default();
-    let files = super::submittals::pdf_files(&job.submittals);
+    // Every submittal PDF, in any folder under those given (revision folders: `Rev 1-1`).
+    let mut files: Vec<String> = Vec::new();
+    for root in &job.submittals {
+        all_pdfs(std::path::Path::new(root.trim()), &mut files, 0);
+    }
     let mut rows: Vec<cadaddy_walk3d::EquipmentElectrical> = Vec::new();
     let mut asked = 0usize;
     let mut conflicts_all: Vec<(String, equipsub::Conflict)> = Vec::new();
@@ -7717,6 +7721,25 @@ fn equipment_step(
 
 /// Equipment connections looked at, at most.
 const MAX_EQUIPMENT_LOADS: usize = 200;
+
+/// The PDFs under `p` (a file, or a folder searched down a few levels), at most a few thousand.
+fn all_pdfs(p: &std::path::Path, out: &mut Vec<String>, depth: usize) {
+    if out.len() >= 5_000 || depth > 6 {
+        return;
+    }
+    if p.is_file() {
+        if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf")) {
+            out.push(p.to_string_lossy().to_string());
+        }
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(p) else { return };
+    let mut entries: Vec<std::path::PathBuf> = rd.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for e in entries {
+        all_pdfs(&e, out, depth + 1);
+    }
+}
 
 /// A question for the agent: the electrical data of a load whose submittal is scanned (no text),
 /// with the files to read; answered, the build checks the drawings against it. Its default keeps

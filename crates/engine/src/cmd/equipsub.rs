@@ -283,7 +283,11 @@ pub(crate) fn schedule_row(sp: &cadaddy_walk3d::BuildingSpec, tag: &str) -> Opti
         for c in &p.circuits {
             let up = c.description.to_ascii_uppercase();
             let words: Vec<&str> = up.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-').filter(|w| !w.is_empty()).collect();
+            // Its tag; else a description that is only the load (`ELEVATOR`); else one that starts
+            // with it (`ELEVATOR SUMP PUMP` is a pump, ranked below).
             let rank = if words.iter().any(|w| w.eq_ignore_ascii_case(tag)) {
+                4
+            } else if words.len() == 1 && words.first().is_some_and(|w| w.starts_with(&st)) {
                 3
             } else if words.first().is_some_and(|w| w.starts_with(&st)) {
                 2
@@ -383,6 +387,23 @@ mod tests {
                     SUPPLY MOTOR Model DTP0024 • 2.000 HP, 3 Phs, 208 V, 60 Hz, 6.1 FLA";
         let e = text_electrical(text);
         assert_eq!((e.mca, e.max_ocpd_a, e.sccr_a, e.volts, e.phase, e.fla), (Some(74.6), Some(80.0), Some(10_000.0), Some(208.0), Some(3), None));
+    }
+
+    #[test]
+    fn a_loads_schedule_row_is_the_one_that_is_it() {
+        use cadaddy_walk3d::{BuildingSpec, PanelCircuit, PanelSchedule};
+        let row = |n: &str, d: &str| PanelCircuit { number: n.into(), description: d.into(), ..PanelCircuit::default() };
+        let mut sp = BuildingSpec::default();
+        sp.mep.panel_schedules = vec![
+            PanelSchedule {
+                panel: "A".into(),
+                circuits: vec![row("11", "LTG - ELEVATOR PIT"), row("15", "ELEVATOR SUMP PUMP")],
+                ..PanelSchedule::default()
+            },
+            PanelSchedule { panel: "MDP".into(), circuits: vec![row("8", "ELEVATOR"), row("9", "DOAS-1")], ..PanelSchedule::default() },
+        ];
+        assert_eq!(schedule_row(&sp, "ELEV-1"), Some(("ELEVATOR".into(), "MDP".into())));
+        assert_eq!(schedule_row(&sp, "DOAS-1"), Some(("DOAS-1".into(), "MDP".into())));
     }
 
     #[test]
