@@ -1,0 +1,24 @@
+{
+  "about": "Code rules the build applies to the model's devices on its first run (bim.coderules), and Validate checks again. Each rule: its id, the code section, what it sets, and where it applies. Validate's E-RECEPT-TYPE / E-RECEPT-TR prescreen reads the same file.",
+  "rules": [
+    {
+      "id": "E-RECEPT-TR",
+      "cite": "NEC 406.12",
+      "kinds": ["receptacle", "quad_receptacle", "gfci_receptacle", "ceiling_receptacle"],
+      "sets": "tamper_resistant",
+      "rule": "Every 125/250 V, 15 and 20 A receptacle in a guest room or guest suite of a hotel or motel, and in a dwelling unit, is tamper-resistant (GFCI receptacles included).",
+      "rooms": {
+        "unit_rooms": true,
+        "name_words": ["GUEST", "SUITE", "DWELLING", "APARTMENT", "KING", "QUEEN", "SLEEPING"]
+      }
+    },
+    {
+      "id": "E-RECEPT-GFCI",
+      "cite": "NEC 210.8",
+      "kinds": ["receptacle", "quad_receptacle", "gfci_receptacle", "ceiling_receptacle"],
+      "sets": "gfci",
+      "rule": "GFCI protection is judged per circuit: a receptacle on a GFCI (or dual-function) breaker is already protected and is a standard device; where the print tags GFCI and the breaker isn't, the first device on the circuit is a GFCI receptacle and the ones after it on its load side are standard. A GFCI receptacle on a GFCI breaker is double protection. When the breaker's type isn't known the decision is left undecided.",
+      "tags": ["GFCI", "GFI", "GF"]
+    }
+  ]
+}
