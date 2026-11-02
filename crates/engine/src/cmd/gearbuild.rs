@@ -685,6 +685,25 @@ pub(crate) fn plan(
             );
             properties
                 .insert("PLACEMENT".into(), format!("proposed: along a wall of room {number}, its schedule's location; the plans don't locate it"));
+            // Where conduit may come in: each side's area (the submittal's drawn windows, else the
+            // box less the rule's margins) and its source; the router lands raceways inside them.
+            let drawn = g.top_plate_in.is_some() || g.bottom_plate_in.is_some();
+            let area_src = if drawn {
+                format!("drawn: {}", g.source)
+            } else {
+                format!("derived: the box less {} x {} in margins ({})", margin[0], margin[1], rule.cite)
+            };
+            for (side, a) in [("TOP", top_plate), ("BOTTOM", bottom_plate)] {
+                let v = if a[0] > 0.0 && a[1] > 0.0 {
+                    format!("{} W x {} D in, {:.0} sq in; {area_src}", a[0], a[1], a[0] * a[1])
+                } else {
+                    "none (no conduit this way)".to_string()
+                };
+                properties.insert(format!("{side} CONDUIT AREA"), v);
+            }
+            if !g.feed.is_empty() {
+                properties.insert("INCOMING LOCATION".into(), format!("{} ({})", g.feed, g.source));
+            }
             let mut sources = BTreeMap::new();
             sources.insert("size".into(), g.source.clone());
             sources.insert("position".into(), format!("proposed in room {number} ({})", header(tag, "location")));
@@ -922,6 +941,13 @@ mod tests {
         assert!((e.bottom_ft - 28.0 / 12.0).abs() < 1e-9);
         assert_eq!(e.sources.get("status").map(String::as_str), Some("proposed"));
         assert!(e.properties.get("WORKING SPACE").is_some_and(|w| w.contains("36 D")), "{:?}", e.properties);
+        assert!(
+            e.properties.get("TOP CONDUIT AREA").is_some_and(|a| a.starts_with("16 W x 4.25 D in") && a.contains("derived")),
+            "{:?}",
+            e.properties
+        );
+        assert!(e.properties.get("BOTTOM CONDUIT AREA").is_some_and(|a| a.starts_with("none")));
+        assert!(e.properties.get("INCOMING LOCATION").is_some_and(|a| a.starts_with("top")));
     }
 
     #[test]
