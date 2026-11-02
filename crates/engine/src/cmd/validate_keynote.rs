@@ -1778,8 +1778,10 @@ pub(crate) fn for_packet(kn: &Keynotes, area: &Area, margin: f64, sheets: &BTree
             })
         })
         .collect();
-    // The lists after the markers (a packet's cap keeps the markers first).
-    for i in lists.iter().take(MAX_PACKET_LISTS) {
+    // The lists of the sheets that mark the area after the markers (a packet's cap keeps the
+    // markers first); the other plans' lists are in the JSON only.
+    let marking: BTreeSet<usize> = here.iter().map(|m| m.list).collect();
+    for i in marking.iter().take(MAX_PACKET_LISTS) {
         if let Some(l) = kn.lists.get(*i) {
             asks.push(CropAsk { sheet: l.sheet.clone(), kind: "keynotes", rect: l.rect, shows: format!("{} {}", l.sheet, l.title) });
         }
