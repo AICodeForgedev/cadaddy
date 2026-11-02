@@ -212,6 +212,45 @@ fn elements(bytes: &[u8]) -> (Vec<Raw<'_>>, Option<usize>) {
     (out, cut)
 }
 
+/// How many graphic elements have points outside the range their own header gives (bytes 4–27:
+/// low then high x, y, z in UORs, stored offset by 2^31), or a range whose low end is above its
+/// high end. The range is written from the element's points, so either means a damaged element.
+/// Checked where the points are exact: the vertices of lines, line strings, shapes, curves and
+/// point strings, and the centre of an ellipse.
+fn out_of_range(raws: &[Raw], dim3: bool) -> usize {
+    let psize = if dim3 { 12 } else { 8 };
+    let range = |d: &[u8], k: usize| i32_at(d, 4 + k * 4).map(|v| f64::from(((v as u32) ^ 0x8000_0000) as i32));
+    raws.iter()
+        .filter(|r| !r.deleted() && matches!(r.ty(), 3 | 4 | 6 | 11 | 15 | 22))
+        .filter(|r| {
+            let d = r.data;
+            let (Some(x0), Some(y0), Some(x1), Some(y1)) = (range(d, 0), range(d, 1), range(d, 3), range(d, 4)) else { return false };
+            if x0 > x1 || y0 > y1 {
+                return true;
+            }
+            let pts: Vec<(f64, f64)> = match r.ty() {
+                3 => (0..2).filter_map(|k| Some((f64::from(i32_at(d, 36 + k * psize)?), f64::from(i32_at(d, 40 + k * psize)?)))).collect(),
+                15 => {
+                    let at = if dim3 { 68 } else { 56 };
+                    vax_at(d, at).zip(vax_at(d, at + 8)).into_iter().collect()
+                }
+                _ => {
+                    let n = usize::from(u16_at(d, 36).unwrap_or(0));
+                    (0..n).map_while(|k| Some((f64::from(i32_at(d, 38 + k * psize)?), f64::from(i32_at(d, 42 + k * psize)?)))).collect()
+                }
+            };
+            // A UOR of slack (and a little for the ellipse centre's double).
+            let inside = |v: f64, lo: f64, hi: f64| v >= lo - 1.0 - lo.abs() * 1e-12 && v <= hi + 1.0 + hi.abs() * 1e-12;
+            pts.iter().any(|&(x, y)| !(inside(x, x0, x1) && inside(y, y0, y1)))
+        })
+        .count()
+}
+
+/// `v` for a note: whole above 1,000, else to four places.
+fn amount(v: f64) -> String {
+    if v.abs() >= 1000.0 { format!("{v:.0}") } else { format!("{v:.4}") }
+}
+
 /// What the TCB says and what reading collects.
 struct Ctx {
     /// Master units per UOR.
@@ -797,6 +836,35 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     for (c, k) in out {
         let _ = d.add(&Space::Model, c, k);
     }
+    let beyond = d.drop_beyond_limit(crate::dxf_read::LIMIT);
+    if beyond > 0 {
+        d.read_notes.push(format!(
+            "DGN: {beyond} object{} had coordinates or a size beyond \u{b1}1e12 (the limit CADaddy works within) and {} dropped",
+            if beyond == 1 { "" } else { "s" },
+            if beyond == 1 { "was" } else { "were" }
+        ));
+    }
+    // Every point of an element is a 32-bit count of UORs: a design wider or taller than that
+    // plane can't be (an axis or centre stored as a double was damaged).
+    let ext = d.extents(&Space::Model);
+    let plane = 4_294_967_296.0 * ctx.scale;
+    if !ext.is_empty() && (ext.width() > plane * 1.000_001 || ext.height() > plane * 1.000_001) {
+        d.read_notes.push(format!(
+            "DGN: the design measures {} \u{d7} {} master units, more than its design plane holds ({} across at {} positions per master unit); the file is damaged and its extents can't be trusted",
+            amount(ext.width()),
+            amount(ext.height()),
+            amount(plane),
+            amount(1.0 / ctx.scale)
+        ));
+    }
+    let misplaced = out_of_range(&raws, ctx.dim3);
+    if misplaced > 0 {
+        d.read_notes.push(if misplaced == 1 {
+            "DGN: 1 element lies outside the range its header gives (the file is damaged; the element may be misplaced)".to_string()
+        } else {
+            format!("DGN: {misplaced} elements lie outside the ranges their headers give (the file is damaged; they may be misplaced)")
+        });
+    }
     if ctx.dim3 {
         d.read_notes.push("DGN: a 3D design file, read in plan (rotations about other axes are left out)".into());
     }
@@ -1302,6 +1370,62 @@ pub fn write(d: &Drawing) -> Result<(Vec<u8>, Vec<String>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A design file of a line and a circle, and where each element starts in it.
+    fn line_and_circle() -> (Vec<u8>, usize, usize) {
+        let mut d = Drawing::new_imperial();
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(10.0, 0.0, 0.0) })).unwrap();
+        d.add(&Space::Model, Common::default(), EntityKind::Circle(Circle { center: Vec3::new(5.0, 5.0, 0.0), radius: 2.0 })).unwrap();
+        let (bytes, _) = write(&d).unwrap();
+        let (raws, _) = elements(&bytes);
+        let at = |ty: u8| raws.iter().find(|r| r.ty() == ty).map(|r| r.at).unwrap();
+        (bytes.clone(), at(3), at(15))
+    }
+
+    fn notes(b: &[u8]) -> Vec<String> {
+        read(b).unwrap().read_notes
+    }
+
+    #[test]
+    fn an_element_outside_its_own_range_is_damage() {
+        let (good, line, _) = line_and_circle();
+        assert_eq!(notes(&good), Vec::<String>::new());
+        // A flipped bit in the line's end point moves it out of the range its header gives.
+        let mut hurt = good.clone();
+        hurt[line + 44 + 1] ^= 0x10;
+        let said = notes(&hurt);
+        assert!(said.iter().any(|n| n.starts_with("DGN: 1 element lies outside the range its header gives")), "{said:?}");
+        // A damaged range (its high x down to its low x) says the same.
+        let mut hurt = good.clone();
+        hurt.copy_within(line + 4..line + 8, line + 16);
+        assert!(notes(&hurt).iter().any(|n| n.contains("outside the range")), "{:?}", notes(&hurt));
+    }
+
+    #[test]
+    fn a_design_wider_than_its_design_plane_is_damage_and_beyond_the_limit_is_dropped() {
+        let (good, _, circle) = line_and_circle();
+        let d = read(&good).unwrap();
+        let plane = |b: &[u8]| {
+            let p = f64::from(i32_at(b, 1112).unwrap()) * f64::from(i32_at(b, 1116).unwrap());
+            4_294_967_296.0 / p
+        };
+        assert!(d.extents(&Space::Model).width() < plane(&good));
+        // The circle's axes (doubles, in UORs) made larger than the plane, still within ±1e12.
+        let mut wide = good.clone();
+        let axis = plane(&good) * 0.75 * f64::from(i32_at(&good, 1116).unwrap());
+        put_vax(&mut wide, circle + 36, axis);
+        put_vax(&mut wide, circle + 44, axis);
+        let said = notes(&wide);
+        assert!(said.iter().any(|n| n.starts_with("DGN: the design measures") && n.contains("more than its design plane holds")), "{said:?}");
+        // Beyond ±1e12: the circle is dropped with the counted note.
+        let mut far = good.clone();
+        let huge = 1e13 * f64::from(i32_at(&good, 1116).unwrap());
+        put_vax(&mut far, circle + 36, huge);
+        put_vax(&mut far, circle + 44, huge);
+        let d = read(&far).unwrap();
+        assert_eq!(d.entity_count(), 1);
+        assert!(d.read_notes.iter().any(|n| n.starts_with("DGN: 1 object had coordinates or a size beyond \u{b1}1e12")), "{:?}", d.read_notes);
+    }
 
     #[test]
     fn numbers_round_trip_through_the_file_encodings() {

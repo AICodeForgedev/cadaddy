@@ -679,6 +679,8 @@ fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
         "dirty": st.is_dirty(),
         "blockEditor": st.block_editor(),
         "space": space.tab_name(),
+        // INSUNITS by name ("Unitless" when the drawing declares none).
+        "units": summary::units_name(d.header.i64("INSUNITS", 0)),
         "entityCount": d.entity_count(),
         "counts": counts,
         "extents": if ext.is_empty() { Value::Null } else { json!([[ext.min.x, ext.min.y], [ext.max.x, ext.max.y]]) },
