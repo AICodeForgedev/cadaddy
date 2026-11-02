@@ -15,6 +15,10 @@ const MAX_SCHEDULES: usize = 200;
 const MAX_ROWS: usize = 200;
 /// How far below its title a schedule's header can be, in text heights.
 const HEADER_REACH: f64 = 16.0;
+/// A schedule's title is at least this much taller than its header's text.
+const TITLE_OVER_CELLS: f64 = 1.3;
+/// How far a number can sit from its column's header, in text heights.
+const COLUMN_REACH: f64 = 5.0;
 
 /// The panel a schedule's title names: `PANELBOARD G (TYPICAL OF 124 REQUIRED)`,
 /// `PANEL 'DP1'`, `PANEL SCHEDULE - P1`, `PANELBOARD P1 SCHEDULE`; and the number it is typical of.
@@ -59,11 +63,13 @@ fn letters(v: &str) -> bool {
 }
 
 /// One side of a two-sided schedule: its columns' x (the circuit number, breaker amps and poles).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Side {
     num: f64,
     amps: Option<f64>,
     poles: Option<f64>,
+    /// Its other number columns (wire size, load): a number nearest one of them is none of the above.
+    others: Vec<f64>,
     /// The left side (codes left of its numbers, the description right of them).
     left: bool,
 }
@@ -102,6 +108,10 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
             .collect();
         let Some(top) = ckts.iter().map(|t| t.at.y).max_by(f64::total_cmp) else { continue };
         let row_h = ckts.iter().map(|t| t.height).fold(h, f64::min);
+        // A title stands above its table in larger text (a cell naming a panel is a feeder row).
+        if h < TITLE_OVER_CELLS * ckts.iter().map(|t| t.height).fold(f64::INFINITY, f64::min) {
+            continue;
+        }
         let line: Vec<&&TextItem> = ckts.iter().copied().filter(|t| (t.at.y - top).abs() <= 0.6 * row_h).collect();
         let (Some(l), Some(r)) =
             (line.iter().min_by(|a, b| a.at.x.total_cmp(&b.at.x)).copied(), line.iter().max_by(|a, b| a.at.x.total_cmp(&b.at.x)).copied())
@@ -125,9 +135,18 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
         let first_after = |xs: &[f64], x: f64, limit: f64| xs.iter().copied().filter(|v| *v > x && *v < limit).min_by(f64::total_cmp);
         let last_before = |xs: &[f64], x: f64, limit: f64| xs.iter().copied().filter(|v| *v < x && *v > limit).max_by(f64::total_cmp);
         let mid = if two { (lnum + rnum) / 2.0 } else { f64::INFINITY };
-        let mut sides = vec![Side { num: lnum, amps: first_after(&amps, lnum, mid), poles: first_after(&poles, lnum, mid), left: true }];
+        let others = [named("SIZE"), named("(VA)"), named("LOAD"), named("*")].concat();
+        let half = |left: bool| -> Vec<f64> { others.iter().copied().filter(|x| if left { *x < mid } else { *x > mid }).collect() };
+        let mut sides =
+            vec![Side { num: lnum, amps: first_after(&amps, lnum, mid), poles: first_after(&poles, lnum, mid), others: half(true), left: true }];
         if two {
-            sides.push(Side { num: rnum, amps: last_before(&amps, rnum, mid), poles: last_before(&poles, rnum, mid), left: false });
+            sides.push(Side {
+                num: rnum,
+                amps: last_before(&amps, rnum, mid),
+                poles: last_before(&poles, rnum, mid),
+                others: half(false),
+                left: false,
+            });
         }
         let head_bottom = head.iter().map(|t| t.at.y).fold(top, f64::min);
         let (x0, x1) = (lnum - 8.0 * row_h, if two { rnum + 8.0 * row_h } else { lnum + 120.0 * row_h });
@@ -176,13 +195,22 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
                     }
                     continue;
                 }
-                let near = |col: Option<f64>, reach: f64| col.is_some_and(|cx| (x - cx).abs() <= reach * row_h);
-                if c.number.is_empty() && (x - side.num).abs() <= 1.5 * row_h && number(v).is_some() {
-                    c.number = v.to_string();
-                } else if near(side.poles, 1.2) && number(v).is_some() && c.poles.is_empty() {
-                    c.poles = v.to_string();
-                } else if near(side.amps, 1.8) && (number(v).is_some() || v.ends_with('A')) && c.amps.is_empty() {
-                    c.amps = v.trim_end_matches('A').to_string();
+                // A number belongs to the nearest of the circuit number, amps and poles columns
+                // (a text's height is its capitals': a few of them reach the next column).
+                let numeric = number(v.trim_end_matches('A')).is_some();
+                if numeric {
+                    let best = [(0u8, Some(side.num)), (1, side.amps), (2, side.poles)]
+                        .into_iter()
+                        .chain(side.others.iter().map(|o| (9u8, Some(*o))))
+                        .filter_map(|(k, cx)| cx.map(|cx| ((x - cx).abs(), k)))
+                        .filter(|(d, _)| *d <= COLUMN_REACH * row_h)
+                        .min_by(|a, b| a.0.total_cmp(&b.0));
+                    match best {
+                        Some((_, 0)) if c.number.is_empty() && number(v).is_some() => c.number = v.to_string(),
+                        Some((_, 1)) if c.amps.is_empty() => c.amps = v.trim_end_matches('A').to_string(),
+                        Some((_, 2)) if c.poles.is_empty() => c.poles = v.to_string(),
+                        _ => {}
+                    }
                 } else if letters(v) {
                     let between = match (side.left, side.amps) {
                         (true, Some(a)) => x > side.num && x < a - 1.0 * row_h,
@@ -354,6 +382,73 @@ mod tests {
         assert_eq!(protection(c("5"), &g.legend), (false, true));
         // The totals and the legend aren't circuits.
         assert!(g.circuits.iter().all(|c| !c.description.contains("TOTAL") && !c.description.contains("GROUND")), "{:#?}", g.circuits);
+    }
+
+    /// The same schedule as the PDF importer gives it (inches; a text's height its capitals').
+    #[test]
+    fn the_importers_geometry_reads_the_same() {
+        let h = 0.06;
+        let mut v = vec![t(23.93, 13.07, "PANELBOARD G (TYPICAL OF 124 REQUIRED)", 0.126), t(20.8, 12.3, "CKT", h), t(30.8, 12.3, "CKT", h)];
+        for (x, w) in [
+            (20.8, "#"),
+            (21.4, "DESCRIPTION"),
+            (23.2, "AMPS"),
+            (23.3, "AMPS"),
+            (23.7, "P"),
+            (24.0, "SIZE"),
+            (24.5, "(VA)"),
+            (27.0, "(VA)"),
+            (27.6, "SIZE"),
+            (28.0, "P"),
+            (28.2, "AMPS"),
+            (28.9, "DESCRIPTION"),
+            (30.9, "#"),
+        ] {
+            v.push(t(x, 12.2, w, h));
+        }
+        for (y, lc, ln, ld, rd, rn, rc) in [
+            (12.0, "AF", "1", "ROOM RCPT AND LIGHTING", "REFRIGERATOR", "2", "AF/GF"),
+            (11.9, "AF/GF", "3", "BATHROOM RCPT AND LIGHTING", "MICROWAVE", "4", "AF/GF"),
+        ] {
+            for (x, w) in [
+                (20.45, lc),
+                (20.8, ln),
+                (21.1, ld),
+                (23.4, "20"),
+                (23.7, "1"),
+                (24.0, "12"),
+                (24.5, "1,204"),
+                (27.0, "900"),
+                (27.6, "12"),
+                (28.0, "1"),
+                (28.3, "20"),
+                (28.6, rd),
+                (30.9, rn),
+                (31.1, rc),
+            ] {
+                v.push(t(x, y, w, 0.07));
+            }
+        }
+        v.push(t(21.0, 11.0, "PER PHASE SUB-TOTALS", 0.07));
+        let s = read(&v, "E-2");
+        let g = s.first().unwrap_or_else(|| panic!("{s:#?}"));
+        let c = |n: &str| g.circuits.iter().find(|c| c.number == n).unwrap_or_else(|| panic!("circuit {n}: {:#?}", g.circuits));
+        for n in ["1", "2", "3", "4"] {
+            assert_eq!(c(n).breaker, "20", "{:#?}", c(n));
+            assert_eq!(c(n).poles, 1);
+        }
+        assert_eq!(c("1").protection, ["AF"]);
+        assert_eq!(c("3").protection, ["AF", "GF"]);
+        assert_eq!(c("4").description, "MICROWAVE");
+    }
+
+    #[test]
+    fn a_cell_naming_a_panel_is_no_schedule_title() {
+        let mut v = panel_g();
+        // DP2's feeder row "PANELBOARD G (4 UNITS)" in the table's text, a header below it.
+        v.push(t(1516.0, 960.0, "PANELBOARD G2 (4 UNITS)", 7.1));
+        let s = read(&v, "E-2");
+        assert_eq!(s.iter().map(|p| p.panel.as_str()).collect::<Vec<_>>(), ["G"]);
     }
 
     #[test]
