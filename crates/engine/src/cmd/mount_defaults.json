@@ -1,13 +1,17 @@
-[
-  {"kind": "switch", "inches": 48, "to": "centre", "why": "the usual height of a switch (48\" to its middle), no document gives one"},
-  {"kind": "thermostat", "inches": 48, "to": "centre", "why": "the usual height of a thermostat (48\" to its middle), no document gives one"},
-  {"kind": "equipment connection", "inches": 48, "to": "centre", "why": "the usual height of an equipment connection, no document gives one"},
-  {"kind": "fire alarm device", "inches": 80, "to": "centre", "why": "the usual height of a wall fire alarm appliance (80\"), no document gives one"},
-  {"kind": "door holder", "inches": 80, "to": "centre", "why": "the usual height of a door holder, no document gives one"},
-  {"kind": "occupancy sensor", "inches": 108, "to": "centre", "why": "the usual height of a wall occupancy sensor, no document gives one"},
-  {"kind": "plumbing fixture", "words": ["CLEANOUT", "CLEAN OUT", "WCO"], "inches": 18, "to": "centre", "why": "the usual height of a wall cleanout, no document gives one"},
-  {"kind": "plumbing fixture", "words": ["LAVATORY", "SINK", "BASIN"], "inches": 34, "to": "top", "why": "the usual rim height of a lavatory or sink (34\"), no document gives one"},
-  {"kind": "plumbing fixture", "words": ["EYEWASH", "FAUCET", "HOSE"], "inches": 36, "to": "centre", "why": "the usual height of a wall faucet or eyewash, no document gives one"},
-  {"kind": "plumbing fixture", "inches": 18, "to": "centre", "why": "the usual height of a wall plumbing connection, no document gives one"},
-  {"kind": "device", "inches": 18, "to": "centre", "why": "the usual height of a receptacle or device (18\" to its middle), no document gives one"}
-]
+{
+  "floor_fixture_words": ["WATER CLOSET", "TOILET", "TUB", "SHOWER", "FLOOR", "MOP", "SERVICE BASIN", "WATER HEATER", "INTERCEPTOR", "PUMP", " FD ", " FCO ", " GCO ", "CLEANOUT", "CLEAN OUT"],
+  "wall_fixture_words": ["WALL"],
+  "defaults": [
+    {"kind": "switch", "inches": 48, "to": "centre", "why": "the usual height of a switch (48\" to its middle), no document gives one"},
+    {"kind": "thermostat", "inches": 48, "to": "centre", "why": "the usual height of a thermostat (48\" to its middle), no document gives one"},
+    {"kind": "equipment connection", "inches": 48, "to": "centre", "why": "the usual height of an equipment connection, no document gives one"},
+    {"kind": "fire alarm device", "inches": 80, "to": "centre", "why": "the usual height of a wall fire alarm appliance (80\"), no document gives one"},
+    {"kind": "door holder", "inches": 80, "to": "centre", "why": "the usual height of a door holder, no document gives one"},
+    {"kind": "occupancy sensor", "inches": 108, "to": "centre", "why": "the usual height of a wall occupancy sensor, no document gives one"},
+    {"kind": "plumbing fixture", "words": ["CLEANOUT", "CLEAN OUT", "WCO"], "inches": 18, "to": "centre", "why": "the usual height of a wall cleanout, no document gives one"},
+    {"kind": "plumbing fixture", "words": ["LAVATORY", "SINK", "BASIN"], "inches": 34, "to": "top", "why": "the usual rim height of a lavatory or sink (34\"), no document gives one"},
+    {"kind": "plumbing fixture", "words": ["EYEWASH", "FAUCET", "HOSE"], "inches": 36, "to": "centre", "why": "the usual height of a wall faucet or eyewash, no document gives one"},
+    {"kind": "plumbing fixture", "inches": 18, "to": "centre", "why": "the usual height of a wall plumbing connection, no document gives one"},
+    {"kind": "device", "inches": 18, "to": "centre", "why": "the usual height of a receptacle or device (18\" to its middle), no document gives one"}
+  ]
+}

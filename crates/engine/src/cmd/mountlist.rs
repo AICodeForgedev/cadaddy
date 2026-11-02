@@ -295,6 +295,23 @@ fn after_number(t: &str) -> &str {
     t.get(digits + 1..).unwrap_or("").trim()
 }
 
+/// A heading over a list of heights with no number of its own (`DEVICE MOUNTING HEIGHTS`,
+/// `MOUNTING HEIGHTS (UNO):`).
+fn heights_heading(t: &str) -> bool {
+    let u = t.trim().to_ascii_uppercase();
+    u.len() <= 60 && (u.contains("MOUNTING HEIGHT") || u.contains("MOUNTED HEIGHT")) && dims(&u).is_empty()
+}
+
+/// The words of a one-text row before its height (`RECEPTACLES ..... 18" AFF` → `RECEPTACLES`),
+/// leaders and punctuation dropped.
+fn subject_before_height(t: &str) -> String {
+    let cut = t.char_indices().find(|(i, c)| c.is_ascii_digit() && !dims(t.get(*i..).unwrap_or("")).is_empty()).map_or(t.len(), |(i, _)| i);
+    let head = t.get(..cut).unwrap_or("");
+    let words: Vec<&str> =
+        head.split(|c: char| !(c.is_ascii_alphanumeric() || c == '/' || c == '&')).filter(|w| w.chars().any(|c| c.is_ascii_alphabetic())).collect();
+    words.join(" ")
+}
+
 fn bullet(t: &str) -> bool {
     matches!(t.trim(), "•" | "·" | "-" | "*" | "\u{25AA}" | "\u{25CF}" | "o")
 }
@@ -355,7 +372,7 @@ pub fn read_lists_marking(texts: &[TextItem], used: &mut [bool]) -> Vec<Listed> 
     let starts: Vec<usize> = texts
         .iter()
         .enumerate()
-        .filter(|(_, t)| numbered(&t.value) && t.height.is_finite() && t.height > 0.0 && t.at.is_finite())
+        .filter(|(_, t)| (numbered(&t.value) || heights_heading(&t.value)) && t.height.is_finite() && t.height > 0.0 && t.at.is_finite())
         .map(|(i, _)| i)
         .take(MAX_ITEMS)
         .collect();
@@ -372,7 +389,7 @@ pub fn read_lists_marking(texts: &[TextItem], used: &mut [bool]) -> Vec<Listed> 
         let stop = column
             .iter()
             .filter_map(|i| texts.get(*i))
-            .filter(|t| numbered(&t.value) && (t.at.x - s.at.x).abs() <= h && t.at.y < s.at.y - 0.3 * h)
+            .filter(|t| (numbered(&t.value) || heights_heading(&t.value)) && (t.at.x - s.at.x).abs() <= h && t.at.y < s.at.y - 0.3 * h)
             .map(|t| t.at.y)
             .fold(f64::NEG_INFINITY, f64::max);
         let mut lines: Vec<(usize, &TextItem)> = column
@@ -414,7 +431,10 @@ pub fn read_lists_marking(texts: &[TextItem], used: &mut [bool]) -> Vec<Listed> 
             for row in rows.iter().skip(1) {
                 let (vals, words): (Vec<&&TextItem>, Vec<&&TextItem>) =
                     row.iter().filter(|t| !bullet(&t.value)).partition(|t| !dims(&t.value).is_empty());
-                let subject = words.iter().map(|t| norm(&t.value)).collect::<Vec<_>>().join(" ").trim().to_string();
+                // A row written in one text (`RECEPTACLES ..... 18" AFF`): its words before the
+                // height are what it is for.
+                let lead: Vec<String> = vals.iter().map(|t| subject_before_height(&norm(&t.value))).filter(|w| !w.is_empty()).collect();
+                let subject = words.iter().map(|t| norm(&t.value)).chain(lead).collect::<Vec<_>>().join(" ").trim().to_string();
                 let value = vals.iter().map(|t| norm(&t.value)).collect::<Vec<_>>().join(" ");
                 let Some(inches) = pick(&dims(&value)) else { continue };
                 if subject.is_empty() || numbered(&subject) {
@@ -629,8 +649,28 @@ mod tests {
         assert_eq!((wc.inches, wc.ada_inches, wc.datum), (Some(14.5), Some(18.0), Datum::Top));
         let lav = by("LAVATORIES").expect("lavatories");
         assert_eq!((lav.inches, lav.ada_inches, lav.datum), (Some(36.0), Some(34.0), Datum::Top));
-        assert!(!l.iter().any(|x| x.text.contains("PTAC")), "a keyed note is no list: {l:?}");
+        assert!(!l.iter().any(|x| x.text.contains("20A/2P")), "a keyed note is no list: {l:?}");
         assert_eq!(l.len(), 4, "{l:?}");
+    }
+
+    #[test]
+    fn a_heights_list_in_other_layouts() {
+        let h = 2.0;
+        let texts = vec![
+            // An unnumbered heading, each row one text with leaders.
+            t("DEVICE MOUNTING HEIGHTS:", 0.0, 20.0, h),
+            t("THERMOSTATS ........ 4'-0\" AFF TO TOP", 0.0, 17.0, h),
+            t("RECEPTACLES ........ 18\" AFF", 0.0, 14.0, h),
+            // The value left of the item.
+            t("+46\"", 0.0, 11.0, h),
+            t("DOORBELL", 8.0, 11.0, h),
+        ];
+        let l = read_lists(&texts);
+        let by = |s: &str| l.iter().find(|x| x.subject == s).cloned();
+        assert_eq!(by("THERMOSTATS").map(|x| (x.inches, x.datum)), Some((Some(48.0), Datum::Top)), "{l:?}");
+        assert_eq!(by("RECEPTACLES").map(|x| x.inches), Some(Some(18.0)), "{l:?}");
+        assert_eq!(by("DOORBELL").map(|x| x.inches), Some(Some(46.0)), "{l:?}");
+        assert!(names_item("THERMOSTATS", "thermostat", None, Some("T")));
     }
 
     #[test]

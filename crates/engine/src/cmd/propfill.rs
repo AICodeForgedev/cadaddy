@@ -72,7 +72,7 @@ const SIDE_FT: f64 = 1.0;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(FILL, "Fill Element Properties", run_fill)
-            .params("{} → {filled: {kind: {key: n}}, elements, devices, mount_heights: {type_mark: {inches, source, doc?}}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
+            .params("{} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
             .menu(&["Tools", "Building", "Fill Element Properties"]),
     ]
 }
@@ -322,32 +322,13 @@ enum Mount {
 }
 
 /// The words of a plumbing fixture set on the floor (a water closet, a tub, a floor drain), not
-/// hung on a wall (a lavatory, a sink in a counter, a wall cleanout).
+/// hung on a wall (a lavatory, a sink in a counter, a wall cleanout): the rules data's
+/// (`mount_defaults.json`, `floor_fixture_words` and `wall_fixture_words`).
 fn floor_fixture(words: &str) -> bool {
     let u = format!(" {} ", words.to_ascii_uppercase());
-    if u.contains("WALL") {
-        return false;
-    }
-    [
-        "WATER CLOSET",
-        "TOILET",
-        "BATH",
-        "TUB",
-        "SHOWER",
-        "FLOOR",
-        "MOP",
-        "SERVICE BASIN",
-        "WATER HEATER",
-        "INTERCEPTOR",
-        "PUMP",
-        " FD ",
-        " FCO ",
-        " GCO ",
-        "CLEANOUT",
-        "CLEAN OUT",
-    ]
-    .iter()
-    .any(|w| u.contains(w))
+    let data: Value = serde_json::from_str(MOUNT_RULES).unwrap_or_default();
+    let any = |key: &str| data[key].as_array().into_iter().flatten().filter_map(Value::as_str).any(|w| u.contains(w));
+    !any("wall_fixture_words") && any("floor_fixture_words")
 }
 
 /// A device's mounting height, where it came from (a step of the documents' order, the source
@@ -360,13 +341,15 @@ struct Chosen {
     datum: super::mountlist::Datum,
 }
 
-/// The usual mounting heights of the kinds of device no document gives one for: the rules data
-/// the build falls back on, each marked a default ([`MOUNT_DEFAULTS`]).
-const MOUNT_DEFAULTS: &str = include_str!("mount_defaults.json");
+/// The rules data the build falls back on: the usual mounting heights of the kinds of device no
+/// document gives one for (`defaults`, each marked a default), and the words that say a plumbing
+/// fixture stands on the floor.
+const MOUNT_RULES: &str = include_str!("mount_defaults.json");
 
 /// The rules data's default for `kind` (spaces or underscores), else a receptacle's.
 fn rules_default(kind: &str, fixture_words: &str) -> (f64, super::mountlist::Datum, String) {
-    let rows: Vec<Value> = serde_json::from_str(MOUNT_DEFAULTS).unwrap_or_default();
+    let data: Value = serde_json::from_str(MOUNT_RULES).unwrap_or_default();
+    let rows: Vec<Value> = data["defaults"].as_array().cloned().unwrap_or_default();
     let k = kind.replace('_', " ").to_ascii_lowercase();
     let words = fixture_words.to_ascii_uppercase();
     let row = rows
@@ -445,7 +428,7 @@ fn across<'a>(pieces: &'a [HostPiece], level: &str, p: Vec2, z: f64, reach: f64,
         }
         let ab = w.b - w.a;
         let len = ab.len();
-        if !(len > 1e-9) {
+        if len.is_nan() || len <= 1e-9 {
             continue;
         }
         let u = ab * (1.0 / len);
@@ -515,12 +498,14 @@ const FAR_SNAP_FT: f64 = 6.0;
 /// it was read (its box within the piece), its face flush with the face of the side it serves —
 /// its symbol's side; on the centreline, the side most of `others` (its circuit's other devices)
 /// are on; else the wall's left. A wall within [`HOST_SNAP_FT`] first, else within
-/// [`FAR_SNAP_FT`] (marked); none: not seated.
-fn seat(pieces: &[HostPiece], level: &str, p: Vec2, zc: f64, others: &[Vec2], upf: f64) -> Option<Seat> {
+/// [`FAR_SNAP_FT`] (marked) when `far_ok` (a kind that is always on a wall: a receptacle, a
+/// switch; not a device of no known kind, which may stand in the room); none: not seated.
+fn seat(pieces: &[HostPiece], level: &str, p: Vec2, zc: f64, others: &[Vec2], upf: f64, far_ok: bool) -> Option<Seat> {
     let slack = PIECE_SLACK_IN / 12.0 * upf;
     let (a, far) = match across(pieces, level, p, zc, HOST_SNAP_FT * upf, slack) {
         Some(a) => (a, false),
-        None => (across(pieces, level, p, zc, FAR_SNAP_FT * upf, slack)?, true),
+        None if far_ok => (across(pieces, level, p, zc, FAR_SNAP_FT * upf, slack)?, true),
+        None => return None,
     };
     let (w, l) = (BOX_IN[0] * upf / 12.0, BOX_IN[1] * upf / 12.0);
     let band = CENTRE_BAND * a.piece.half;
@@ -614,7 +599,8 @@ pub(crate) fn rehost_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         let circuit = t.fields.get("circuit").map(|f| split_switch_leg(f.value.trim()).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);
         let mut store = props::read(&e.common.xdata);
-        match seat(&pieces, &level.name, p, (z0 + z1) / 2.0, &others, upf) {
+        let known = !matches!(t.kind.trim(), "" | "device");
+        match seat(&pieces, &level.name, p, (z0 + z1) / 2.0, &others, upf, known) {
             Some(st) => {
                 let l = BOX_IN[1] * upf / 12.0;
                 let w = BOX_IN[0] * upf / 12.0;
@@ -1040,7 +1026,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let p = Vec2::new(x, y);
         let circuit = field(t, "circuit").map(|c| split_switch_leg(&c).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);
-        let placed_on = on_wall.then(|| seat(&pieces, &level.name, p, zc, &others, upf)).flatten();
+        let placed_on = on_wall.then(|| seat(&pieces, &level.name, p, zc, &others, upf, vkind != "device")).flatten();
         let (centre, along) = match &placed_on {
             Some(st) => (st.centre, st.along),
             None => (p, Vec2::new(1.0, 0.0)),
@@ -1971,10 +1957,61 @@ fn sheet_at(sp: &BuildingSpec, p: Vec2, level: Option<&str>) -> String {
 }
 
 fn run_fill(s: &mut Session, _p: &Value) -> Result<Value> {
+    // A device whose wall is gone (merged into another) goes in the wall there now first.
+    let reseated = match super::bspec::current(s, FILL) {
+        Ok((sp, _)) => rehost_devices(s.doc_mut()?, &sp),
+        Err(_) => 0,
+    };
     let mut r = fill(s)?;
+    r["reseated"] = json!(reseated);
     let devices = s.doc().map_or(0, |d| d.model.iter().filter(|e| made(e, DEVID).is_some()).count());
     r["devices"] = json!(devices);
     let n = r["elements"].as_u64().unwrap_or(0);
     s.echo(format!("Filled the properties of {n} element(s)."));
     Ok(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn piece(wall: u64, a: (f64, f64), b: (f64, f64), z: (f64, f64)) -> HostPiece {
+        HostPiece { wall: Handle(wall), level: Some("L1".into()), a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1), half: 3.0, z0: z.0, z1: z.1 }
+    }
+
+    #[test]
+    fn a_wall_piece_over_a_door_is_no_host_below_its_head() {
+        // Inches: a 6" wall along y = 0, over a door (84" up) from x 0 to 120, solid from 120 on.
+        let pieces = vec![piece(1, (0.0, 0.0), (120.0, 0.0), (84.0, 120.0)), piece(2, (120.0, 0.0), (240.0, 0.0), (0.0, 120.0))];
+        // Read 6" north of the wall over the door, at 18": the header is no host; the solid piece
+        // is 5' off: only a known wall kind goes in it, marked.
+        let p = Vec2::new(60.0, 6.0);
+        assert!(seat(&pieces, "L1", p, 18.0, &[], 12.0, false).is_none());
+        let far = seat(&pieces, "L1", p, 18.0, &[], 12.0, true).expect("in the solid piece");
+        assert_eq!(far.wall, Handle(2));
+        assert!(far.far);
+        // At 90" the piece over the door is there: in its north face, flush.
+        let st = seat(&pieces, "L1", p, 90.0, &[], 12.0, false).expect("over the door");
+        assert_eq!((st.wall, st.far, st.side_why), (Handle(1), false, "symbol"));
+        assert!((st.centre.y - 2.0).abs() < 1e-9 && (st.out.y - 1.0).abs() < 1e-9, "its face at 3\", its middle 1\" behind: {:?}", st.centre);
+        // On the centreline: the side its circuit's other devices are on.
+        let st = seat(&pieces, "L1", Vec2::new(180.0, 0.5), 18.0, &[Vec2::new(170.0, -40.0), Vec2::new(200.0, -30.0)], 12.0, false).expect("seated");
+        assert_eq!(st.side_why, "circuit");
+        assert!(st.out.y < 0.0 && (st.centre.y + 2.0).abs() < 1e-9, "south face: {:?}", st.centre);
+        // Along the wall where it was read, its box within the piece.
+        let st = seat(&pieces, "L1", Vec2::new(239.5, 8.0), 18.0, &[], 12.0, false).expect("at the end");
+        assert!((st.centre.x - 238.0).abs() < 1e-9, "{:?}", st.centre);
+    }
+
+    #[test]
+    fn a_floor_fixture_is_named_by_the_rules_data() {
+        assert!(floor_fixture("WATER CLOSET P-1"));
+        assert!(floor_fixture("floor drain FD"));
+        assert!(!floor_fixture("LAVATORY P-2"));
+        assert!(!floor_fixture("WALL CLEANOUT WCO"));
+        let (z, d, why) = rules_default("switch", "");
+        assert_eq!((z, d), (48.0, super::super::mountlist::Datum::Centre));
+        assert!(why.contains("no document"));
+        assert_eq!(rules_default("plumbing fixture", "LAVATORY").1, super::super::mountlist::Datum::Top);
+    }
 }

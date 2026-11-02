@@ -142,9 +142,11 @@ fn generic_job_devices_get_g_host_and_g_height_by_their_legend_and_project_rules
     // As the job leaves it: no rule naming kinds applies, and the prescreen says so.
     let r = s.execute("validate.prescreen", &json!({})).unwrap();
     assert_eq!(r["checked"]["G-HOST"], json!({"pass": 0, "fail": 0}), "every rule run is listed, with 0: {r}");
-    // G-HEIGHT measures nothing against a document yet; the job's usual heights (no document
-    // gives them) are reported as the defaults they are.
-    assert_eq!((r["checked"]["G-HEIGHT"]["pass"].as_u64(), r["checked"]["G-HEIGHT"]["fail"].as_u64()), (Some(0), Some(0)), "{r}");
+    // G-HEIGHT: the devices whose plan prints a height by them (`+48" AFF` by each switch) were
+    // built at it (Q6158); the job's usual heights for the rest (no document gives them) are
+    // reported as the defaults they are.
+    assert_eq!(r["checked"]["G-HEIGHT"]["fail"].as_u64(), Some(0), "{r}");
+    assert!(r["checked"]["G-HEIGHT"]["pass"].as_u64().is_some_and(|p| p >= n("S")), "{r}");
     assert!(r["checked"]["G-HEIGHT"]["default"].as_u64().is_some_and(|n| n > 0), "{r}");
     assert!(r["checked"]["G-PRESENT"].is_object(), "{r}");
     assert_eq!(r["unmatched"]["elements"].as_u64(), Some(devices), "{r}");
@@ -172,9 +174,15 @@ fn generic_job_devices_get_g_host_and_g_height_by_their_legend_and_project_rules
     assert!(rec.iter().all(|f| f["kind"] == "receptacle" && f["kind_from"] == "legend"), "{rec:?}");
     assert!(of("G-HOST", "S").iter().all(|f| f["kind"] == "switch" && f["kind_from"] == "legend"));
     assert!(of("G-HOST", "A").iter().all(|f| f["kind"] == "thermostat" && f["kind_from"] == "project_rule"));
-    // Switches are built at 48" and the project says 54": G-HEIGHT measures that.
+    // The switches are built at the +48" their plan prints by them (a project's 54" is no
+    // document of theirs over that note); one with no note by it is built at 48" (a default) and
+    // the project says 54": G-HEIGHT measures that.
     let sw = of("G-HEIGHT", "S");
-    assert!(!sw.is_empty() && sw.iter().all(|f| f["verdict"] == "fail" && (f["measured"]["off_in"].as_f64().unwrap() + 6.0).abs() < 0.5), "{sw:?}");
+    let noted = |f: &&Value| f["verdict"] == "pass" && f["measured"]["expected_from"].as_str().is_some_and(|w| w.contains("+48"));
+    let short = |f: &&Value| {
+        f["verdict"] == "fail" && f["measured"]["model_height_from"] == "default" && (f["measured"]["off_in"].as_f64().unwrap() + 6.0).abs() < 0.5
+    };
+    assert!(sw.iter().any(noted) && sw.iter().all(|f| noted(f) || short(f)), "{sw:?}");
     assert!(of("G-HEIGHT", "REC").iter().any(|f| f["verdict"] == "pass"));
 }
 
