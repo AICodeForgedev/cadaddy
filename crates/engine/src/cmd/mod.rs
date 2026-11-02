@@ -67,6 +67,7 @@ pub mod levels;
 pub mod lowvolt;
 pub mod markup;
 pub mod panelsched;
+pub mod mountlist;
 pub mod paramconv;
 pub mod planview;
 pub mod pointcloud;

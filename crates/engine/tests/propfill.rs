@@ -247,9 +247,9 @@ fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location
     let el = s.execute("bim.element", &json!({"handle": ha[0]})).unwrap();
     assert_eq!(el["host"]["wall"], a["host_wall"]["value"], "{el:#}");
     assert!(el["host"]["stored_wall"].is_null(), "the same wall: {el:#}");
-    // Read at 5', 0.8' on the plan: on the south wall's inside face (0.5'; its box's middle 1" off
-    // it), 20" up.
-    assert_eq!(a["location"]["value"], "5.00, 0.58, 1.67", "{a:#}");
+    // Read at 5', 0.8' on the plan: set in the south wall, its face flush with the wall's inside
+    // face (0.5'; its box's middle 1" behind it), 20" up.
+    assert_eq!(a["location"]["value"], "5.00, 0.42, 1.67", "{a:#}");
     assert_eq!(a["location"]["unit"], "ft");
     // A bare circuit number names no panel.
     let sw = device_of(&mut s, "S");
@@ -438,8 +438,8 @@ fn a_device_read_on_a_trade_sheet_lands_on_its_levels_architectural_plan() {
     // Where it was read stays its source.
     assert_eq!(b["circuit"]["source"]["doc"], "E-101");
     assert_eq!(b["circuit"]["source"]["at"], json!([3300.0, 60.0]));
-    // Devices read on the plan itself stay where they are, on their wall's face.
-    assert_eq!(device_of(&mut s, "A")["location"]["value"], "5.00, 0.58, 1.67");
+    // Devices read on the plan itself stay where they are, in their wall's face.
+    assert_eq!(device_of(&mut s, "A")["location"]["value"], "5.00, 0.42, 1.67");
 }
 
 #[test]
@@ -703,17 +703,18 @@ fn a_device_on_a_shared_wall_takes_the_room_on_its_face() {
     assert_eq!(device_of(&mut s, "B")["room"]["value"], "102", "its east face");
     assert_eq!(device_of(&mut s, "C")["room"]["value"], "102", "the outer wall's inside face");
     assert!(r["devices_in_no_room"].as_object().is_none_or(|m| m.is_empty()), "{r:#}");
-    // Each wall device on its wall's face (its box's middle 1" off it), where it was along the
-    // wall: A on the partition's west face (19.75'), D read 1.5' into the room on the south
-    // wall's inside face (0.5'); E mid-room, 4.5' from any wall, stays for review.
+    // Each wall device set in its wall, its box's face flush with the wall's face (its middle 1"
+    // inside), where it was along the wall: A in the partition's west face (19.75'), D read 1.5'
+    // into the room in the south wall's inside face (0.5'); E, a device of no known kind mid-room
+    // 4.5' from any wall, stays for review.
     let xy = |el: &Value| -> (f64, f64) {
         let v: Vec<f64> = el["location"]["value"].as_str().unwrap_or("").split(',').filter_map(|p| p.trim().parse().ok()).collect();
         (v.first().copied().unwrap_or(f64::NAN), v.get(1).copied().unwrap_or(f64::NAN))
     };
     let (ax, ay) = xy(&device_of(&mut s, "A"));
-    assert!((ax - (19.75 - 1.0 / 12.0)).abs() < 0.02 && (ay - 5.0).abs() < 0.02, "A at {ax}, {ay}");
+    assert!((ax - (19.75 + 1.0 / 12.0)).abs() < 0.02 && (ay - 5.0).abs() < 0.02, "A at {ax}, {ay}");
     let (dx, dy) = xy(&device_of(&mut s, "D"));
-    assert!((dx - 10.0).abs() < 0.02 && (dy - (0.5 + 1.0 / 12.0)).abs() < 0.02, "D at {dx}, {dy}");
+    assert!((dx - 10.0).abs() < 0.02 && (dy - (0.5 - 1.0 / 12.0)).abs() < 0.02, "D at {dx}, {dy}");
     let a = device_of(&mut s, "A");
     assert!(a["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()) && a["host_face"]["value"].is_string(), "{a:#}");
     let e = device_of(&mut s, "E");
