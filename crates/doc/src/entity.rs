@@ -683,6 +683,11 @@ pub struct Dimension {
     /// User moved the text (text_mid is authoritative).
     #[serde(default)]
     pub user_text_pos: bool,
+    /// Insertion point (DXF group 12): a dimension moved by an older AutoCAD keeps its offset
+    /// here with the `*D` block's contents left where they were, and is drawn translated by it.
+    /// Zero once the geometry is regenerated from the definition points.
+    #[serde(default)]
+    pub insertion_point: Vec3,
     /// Anonymous block with the rendered geometry (from files); regenerated when edited.
     #[serde(default)]
     pub block: Option<String>,

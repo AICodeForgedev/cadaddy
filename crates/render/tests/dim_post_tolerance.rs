@@ -6,6 +6,7 @@ use cadaddy_render::dimension_geometry;
 
 fn text(vars: serde_json::Value) -> (String, String) {
     let d = Dimension {
+        insertion_point: Default::default(),
         kind: DimKind::Linear { rotation: 0.0 },
         defpt: Vec3::new(0.0, 5.0, 0.0),
         text_mid: Vec3::ZERO,

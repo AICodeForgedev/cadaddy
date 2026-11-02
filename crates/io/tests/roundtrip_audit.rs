@@ -1018,6 +1018,7 @@ fn add_associated_dimension(d: &mut Drawing, a: cadaddy_doc::Handle, b: cadaddy_
     use cadaddy_geom::Vec3;
     let at = |point: &str, handle| DimAssoc { point: point.into(), handle, snap: AssocSnap::Mid };
     let dm = Dimension {
+        insertion_point: Default::default(),
         kind: DimKind::Linear { rotation: 0.0 },
         defpt: Vec3::new(5.0, -3.0, 0.0),
         text_mid: Vec3::ZERO,

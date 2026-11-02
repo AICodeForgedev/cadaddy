@@ -28,6 +28,7 @@ fn drawing() -> Drawing {
     let mut d = Drawing::new_imperial();
     d.dim_styles.push(styled());
     let dim = Dimension {
+        insertion_point: Default::default(),
         kind: DimKind::Linear { rotation: 0.0 },
         defpt: Vec3::new(0.0, 3.0, 0.0),
         text_mid: Vec3::ZERO,

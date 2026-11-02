@@ -1049,6 +1049,7 @@ mod tests {
     fn linear() -> cadaddy_doc::Dimension {
         let z = cadaddy_geom::Vec3::ZERO;
         cadaddy_doc::Dimension {
+            insertion_point: Default::default(),
             kind: cadaddy_doc::DimKind::Linear { rotation: 0.0 },
             defpt: z,
             text_mid: z,

@@ -11,6 +11,7 @@ use cadaddy_geom::Vec3;
 
 fn linear(a: [f64; 2], b: [f64; 2], at: [f64; 2]) -> Dimension {
     Dimension {
+        insertion_point: Default::default(),
         kind: DimKind::Linear { rotation: 0.0 },
         defpt: Vec3::new(at[0], at[1], 0.0),
         text_mid: Vec3::ZERO,
@@ -270,3 +271,45 @@ fn dimension_inside_a_block_gets_a_geometry_block() {
         back.block("DETAIL").unwrap().entities.iter().find_map(|e| if let EntityKind::Dimension(dm) = &e.kind { dm.block.clone() } else { None });
     assert!(inner.as_deref().is_some_and(|n| n.starts_with("*D") && back.block(n).is_some_and(|b| !b.entities.is_empty())), "{inner:?}");
 }
+
+#[test]
+fn a_moved_dimension_keeps_its_group_12_offset() {
+    let mut d = Drawing::new_metric();
+    // What an older AutoCAD left: the block contents where the dimension was measured, the
+    // move kept in group 12 (insertion point), as #2634's drawing has it.
+    let mut b = Block::new("*D3");
+    let h = d.new_handle();
+    b.entities.push(Entity::new(h, EntityKind::Line(Line { a: Vec3::new(150.0, 80.0, 0.0), b: Vec3::new(160.0, 80.0, 0.0) })));
+    d.blocks.insert("*D3".into(), Arc::new(b));
+    let mut dm = linear([0.0, 0.0], [10.0, 0.0], [5.0, 3.0]);
+    dm.block = Some("*D3".into());
+    dm.insertion_point = Vec3::new(-150.0, -80.0, 0.0);
+    let h = d.add(&Space::Model, Common::default(), EntityKind::Dimension(Box::new(dm))).unwrap();
+
+    // The block is written as read and the offset round-trips as group 12.
+    let back = cadaddy_io::read_dxf(cadaddy_io::write_dxf(&d).as_bytes()).unwrap();
+    let Some(EntityKind::Dimension(dm)) = back.entity(h).map(|e| &e.kind) else { panic!("dimension lost") };
+    assert_eq!(dm.insertion_point, Vec3::new(-150.0, -80.0, 0.0));
+    assert_eq!(dm.block.as_deref(), Some("*D3"));
+    let p = pairs(&cadaddy_io::write_dxf(&d));
+    let at = p.iter().position(|(c, v)| *c == 0 && v == "DIMENSION").unwrap();
+    let own = &p[at..p[at + 1..].iter().position(|(c, _)| *c == 0).map(|k| at + 1 + k).unwrap()];
+    assert!(own.iter().any(|(c, v)| *c == 12 && v.parse::<f64>() == Ok(-150.0)), "no group 12 x");
+    assert!(own.iter().any(|(c, v)| *c == 22 && v.parse::<f64>() == Ok(-80.0)), "no group 12 y");
+
+    // Edited (edits drop the block link): geometry regenerated from the definition points,
+    // so the save writes no offset.
+    let mut edited = back.clone();
+    edited
+        .modify_entity(h, |e| {
+            if let EntityKind::Dimension(dm) = &mut e.kind {
+                dm.block = None;
+            }
+        })
+        .unwrap();
+    let q = pairs(&cadaddy_io::write_dxf(&edited));
+    let at = q.iter().position(|(c, v)| *c == 0 && v == "DIMENSION").unwrap();
+    let own = &q[at..q[at + 1..].iter().position(|(c, _)| *c == 0).map(|k| at + 1 + k).unwrap()];
+    assert!(!own.iter().any(|(c, _)| *c == 12), "regenerated geometry keeps a stale offset");
+}
+

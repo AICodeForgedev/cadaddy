@@ -1430,6 +1430,12 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             // The text's middle as the file gave it, also when the text is not placed by hand: the
             // program that drew it knows its text style better than the dimension's geometry here.
             // (A dimension made here has no block yet, and its middle is not set: calculated.)
+            // Group 12: a block read from a file keeps the dimension's moved-by offset (AutoCAD
+            // draws the block translated by it); regenerated geometry already sits where the
+            // definition points place it, so it writes no offset.
+            if dm.block.is_some() && dm.insertion_point.is_finite() && dm.insertion_point != Vec3::ZERO {
+                w.p(12, dm.insertion_point);
+            }
             let stored = dm.block.is_some() && dm.text_mid.is_finite() && dm.text_mid != Vec3::ZERO;
             w.p(11, if dm.user_text_pos || stored { dm.text_mid } else { g.text_pos.to3(0.0) });
             let ty: i64 = match dm.kind {

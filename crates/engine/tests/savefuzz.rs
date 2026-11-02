@@ -1031,7 +1031,7 @@ fn the_comparison_finds_what_the_notes_leave_out() {
 #[test]
 fn placeholders_are_skipped_but_real_losses_are_found() {
     let mut d = Drawing::new_metric();
-    let dim = cadaddy_engine::doc::Dimension {
+    let dim = cadaddy_engine::doc::Dimension { insertion_point: Default::default(),
         kind: cadaddy_engine::doc::DimKind::Linear { rotation: 0.0 },
         defpt: Vec3::ZERO,
         text_mid: Vec3::ZERO,

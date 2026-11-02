@@ -81,7 +81,7 @@ fn s25(kind: DimKind, p13: Vec3, p14: Vec3, defpt: Vec3) -> Drawing {
         ..DimStyle::default()
     });
     d.header.set_str("DIMSTYLE", "S25");
-    let dm = Dimension {
+    let dm = Dimension { insertion_point: Default::default(),
         kind,
         defpt,
         text_mid: Vec3::ZERO,

@@ -138,7 +138,7 @@ fn dim(s: &Session, kind: DimKind, defpt: Vec2, p13: Vec2, p14: Vec2, p15: Vec2,
     // DIMUPT: the point that places a linear or aligned dimension line places its text too.
     let upt = matches!(kind, DimKind::Linear { .. } | DimKind::Aligned)
         && s.doc().ok().and_then(|d| d.dim_style(&style(s)).cloned()).unwrap_or_default().with_overrides(&overrides).user_text_places_line;
-    EntityKind::Dimension(Box::new(Dimension {
+    EntityKind::Dimension(Box::new(Dimension { insertion_point: Default::default(),
         kind,
         defpt: v3(defpt),
         text_mid: if upt { v3(defpt) } else { Vec3::ZERO },

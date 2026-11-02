@@ -1615,7 +1615,10 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if let Some(blk) = dm.block.as_ref().and_then(|n| ctx.d.block(n))
                 && ctx.depth < cadaddy_doc::MAX_BLOCK_DEPTH
             {
-                let sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, Mat3::IDENTITY) };
+                // DXF group 12: a moved dimension keeps its `*D` block where it was and the offset
+                // in the insertion point, so the block draws translated by it.
+                let off = if dm.insertion_point.is_finite() { dm.insertion_point.xy() } else { Vec2::ZERO };
+                let sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, Mat3::translate(off)) };
                 for be in blk.entities.iter() {
                     if !b.expand() {
                         break;

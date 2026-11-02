@@ -542,6 +542,8 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 p14: t.p(14),
                 p15: t.p(15),
                 p16: t.p(16),
+                // Group 12: where a dimension moved by an older AutoCAD draws its block from.
+                insertion_point: t.p(12),
                 text: mtext_dxf::decode_line(&t.s(1).unwrap_or_default()),
                 style: t.s(3).unwrap_or_else(|| "Standard".into()),
                 // Missing or negative (a file that doesn't keep it): worked out once the drawing

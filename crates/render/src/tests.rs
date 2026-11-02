@@ -378,6 +378,7 @@ fn truetype_mtext_and_dimension_text() {
 
 fn lin_dim() -> cadaddy_doc::Dimension {
     cadaddy_doc::Dimension {
+        insertion_point: Default::default(),
         kind: cadaddy_doc::DimKind::Linear { rotation: 0.0 },
         defpt: Vec3::new(0.0, 2.0, 0.0),
         text_mid: Vec3::ZERO,

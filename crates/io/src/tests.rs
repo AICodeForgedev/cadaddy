@@ -85,6 +85,7 @@ fn sample() -> Drawing {
         &Space::Model,
         c("0"),
         EntityKind::Dimension(Box::new(Dimension {
+            insertion_point: Default::default(),
             kind: DimKind::Linear { rotation: 0.0 },
             defpt: Vec3::new(0.0, -1.0, 0.0),
             text_mid: Vec3::ZERO,
@@ -576,7 +577,7 @@ fn dxf_roundtrips_page_setup() {
 // Round trips of styles, overrides, associativity, constraints and tables.
 
 fn dim(kind: DimKind, p13: Vec3, p14: Vec3) -> Dimension {
-    Dimension {
+    Dimension { insertion_point: Default::default(),
         kind,
         defpt: Vec3::new(p13.x, p13.y - 2.0, 0.0),
         text_mid: Vec3::ZERO,

@@ -6,7 +6,7 @@ use cadaddy_geom::{Vec2, Vec3};
 use cadaddy_render::{LineRole, dimension_geometry};
 
 fn dim(kind: DimKind) -> Dimension {
-    Dimension {
+    Dimension { insertion_point: Default::default(),
         kind,
         defpt: Vec3::ZERO,
         text_mid: Vec3::ZERO,
