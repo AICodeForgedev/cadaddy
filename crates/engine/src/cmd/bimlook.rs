@@ -1105,6 +1105,7 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let place = placement(s, &e, &c);
+    let piece = super::mepatoms::element_detail(s.doc()?, &e);
     let mut out = json!({
         "handle": hex,
         "trade": c.key,
@@ -1123,6 +1124,21 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
     });
     if let Some(o) = out.as_object_mut() {
         o.extend(place);
+    }
+    // A piece of a run: what it is, its run, circuit and neighbours; a device: its box and what
+    // feeds it, and how its face stands off its wall's (Q6157).
+    if let Some(Value::Object(x)) = piece {
+        let atom = x.contains_key("connects");
+        if let Some(o) = out.as_object_mut() {
+            if atom {
+                o.insert("piece".into(), Value::Object(x));
+            } else {
+                o.extend(x);
+            }
+        }
+    }
+    if let Some(f) = out.get("host").and_then(super::mepatoms::face_offset) {
+        out["wall_face"] = f;
     }
     if bool_or(p, "open_source", false) {
         let Some(se) = src else { return Err(bad(CMD, format!("{hex} has no source object on the sheet"))) };

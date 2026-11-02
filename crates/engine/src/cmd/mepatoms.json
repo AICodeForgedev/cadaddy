@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "about": "What the build makes each piece of an electrical run from (Q6157 mepatoms): stock lengths, supports, boxes and their volumes, conductor colours. Values are the code's (with the section) or the trade's usual stock (marked so); a project's own documents win where they say otherwise.",
+  "raceways": {
+    "EMT": {
+      "words": ["EMT", "ELECTRICAL METALLIC TUBING"],
+      "stock_ft": 10.0,
+      "stock_source": "trade stock: 10 ft lengths (UL 797)",
+      "strap_max_ft": 10.0,
+      "strap_from_end_ft": 3.0,
+      "strap_source": "NEC 358.30(A): within 3 ft of each box or termination and at most every 10 ft",
+      "stick": "EMT conduit",
+      "coupling": "EMT coupling",
+      "connector": "EMT connector",
+      "elbow": "EMT {angle}° elbow",
+      "offset": "EMT offset",
+      "strap": "Conduit strap"
+    },
+    "RMC": {
+      "words": ["RMC", "RGS", "GRC", "RIGID"],
+      "stock_ft": 10.0,
+      "stock_source": "trade stock: 10 ft lengths, threaded (UL 6)",
+      "strap_max_ft": 10.0,
+      "strap_from_end_ft": 3.0,
+      "strap_source": "NEC 344.30(A),(B)(1): within 3 ft of each box and at most every 10 ft",
+      "stick": "RMC conduit",
+      "coupling": "RMC coupling",
+      "connector": "RMC locknut and bushing",
+      "elbow": "RMC {angle}° elbow",
+      "offset": "RMC offset nipple",
+      "strap": "Conduit strap"
+    },
+    "IMC": {
+      "words": ["IMC", "INTERMEDIATE METAL"],
+      "stock_ft": 10.0,
+      "stock_source": "trade stock: 10 ft lengths, threaded (UL 1242)",
+      "strap_max_ft": 10.0,
+      "strap_from_end_ft": 3.0,
+      "strap_source": "NEC 342.30(A),(B)(1): within 3 ft of each box and at most every 10 ft",
+      "stick": "IMC conduit",
+      "coupling": "IMC coupling",
+      "connector": "IMC locknut and bushing",
+      "elbow": "IMC {angle}° elbow",
+      "offset": "IMC offset nipple",
+      "strap": "Conduit strap"
+    },
+    "PVC": {
+      "words": ["PVC", "RNC", "SCH 40", "SCH 80", "SCHEDULE 40", "SCHEDULE 80"],
+      "stock_ft": 10.0,
+      "stock_source": "trade stock: 10 ft lengths, belled (UL 651)",
+      "strap_max_ft": 3.0,
+      "strap_by_size": [[1.0, 3.0], [2.0, 5.0], [3.0, 6.0], [5.0, 7.0], [6.0, 8.0]],
+      "strap_from_end_ft": 3.0,
+      "strap_source": "NEC 352.30 and Table 352.30: within 3 ft of each box; 3 ft (1/2-1), 5 ft (1-1/4-2), 6 ft (2-1/2-3), 7 ft (3-1/2-5), 8 ft (6)",
+      "stick": "PVC conduit",
+      "coupling": "PVC coupling",
+      "connector": "PVC terminal adapter",
+      "elbow": "PVC {angle}° elbow",
+      "offset": "PVC offset",
+      "strap": "Conduit strap"
+    }
+  },
+  "cables": {
+    "NM": {
+      "words": ["NM", "NM-B", "ROMEX", "NONMETALLIC"],
+      "strap_max_ft": 4.5,
+      "strap_from_box_ft": 1.0,
+      "strap_source": "NEC 334.30: within 12 in of each box and at most every 4-1/2 ft",
+      "item": "NM-B cable",
+      "strap": "Cable staple",
+      "connector": ""
+    },
+    "MC": {
+      "words": ["MC", "METAL CLAD", "MC CABLE"],
+      "strap_max_ft": 6.0,
+      "strap_from_box_ft": 1.0,
+      "strap_source": "NEC 330.30(B): within 12 in of each box and at most every 6 ft",
+      "item": "MC cable",
+      "strap": "Cable strap",
+      "connector": "MC connector"
+    },
+    "AC": {
+      "words": ["AC", "BX", "ARMORED"],
+      "strap_max_ft": 4.5,
+      "strap_from_box_ft": 1.0,
+      "strap_source": "NEC 320.30(B): within 12 in of each box and at most every 4-1/2 ft",
+      "item": "AC cable",
+      "strap": "Cable strap",
+      "connector": "AC connector"
+    },
+    "SER": {
+      "words": ["SER", "SE CABLE", "SERVICE ENTRANCE"],
+      "strap_max_ft": 4.5,
+      "strap_from_box_ft": 1.0,
+      "strap_source": "NEC 338.10(B)(4)(a) to 334.30: within 12 in of each box and at most every 4-1/2 ft",
+      "item": "SER cable",
+      "strap": "Cable strap",
+      "connector": "SE cable connector"
+    }
+  },
+  "boxes": {
+    "sq4-1.5": { "item": "Box, 4\" square", "size": "4\" square", "depth_in": 1.5, "dims_in": [4.0, 4.0, 1.5], "cubic_in": 21.0, "material": "steel", "source": "NEC Table 314.16(A): 4 x 1-1/2 square, 21.0 cu in" },
+    "sq4-2.125": { "item": "Box, 4\" square", "size": "4\" square", "depth_in": 2.125, "dims_in": [4.0, 4.0, 2.125], "cubic_in": 30.3, "material": "steel", "source": "NEC Table 314.16(A): 4 x 2-1/8 square, 30.3 cu in" },
+    "sq411-2.125": { "item": "Box, 4-11/16\" square", "size": "4-11/16\" square", "depth_in": 2.125, "dims_in": [4.6875, 4.6875, 2.125], "cubic_in": 42.0, "material": "steel", "source": "NEC Table 314.16(A): 4-11/16 x 2-1/8 square, 42.0 cu in" },
+    "oct4-1.5": { "item": "Box, 4\" octagon", "size": "4\" octagon", "depth_in": 1.5, "dims_in": [4.0, 4.0, 1.5], "cubic_in": 15.5, "material": "steel", "source": "NEC Table 314.16(A): 4 x 1-1/2 octagon, 15.5 cu in" },
+    "oct4-2.125": { "item": "Box, 4\" octagon", "size": "4\" octagon", "depth_in": 2.125, "dims_in": [4.0, 4.0, 2.125], "cubic_in": 21.5, "material": "steel", "source": "NEC Table 314.16(A): 4 x 2-1/8 octagon, 21.5 cu in" },
+    "dev1-3.5": { "item": "Device box, 1 gang", "size": "3 x 2 x 3-1/2", "depth_in": 3.5, "dims_in": [2.0, 3.0, 3.5], "cubic_in": 18.0, "material": "steel", "source": "NEC Table 314.16(A): 3 x 2 x 3-1/2 device box, 18.0 cu in" },
+    "nm1-18": { "item": "Device box, 1 gang, nonmetallic", "size": "1 gang", "depth_in": 3.0, "dims_in": [2.25, 3.75, 3.0], "cubic_in": 18.0, "material": "nonmetallic", "source": "NEC 314.16(A)(2): the volume marked on a nonmetallic box (trade stock: 18 cu in)" },
+    "fan4-2.125": { "item": "Box, ceiling fan rated", "size": "4\" octagon", "depth_in": 2.125, "dims_in": [4.0, 4.0, 2.125], "cubic_in": 21.5, "material": "steel", "source": "NEC 314.27(C): a box listed for fan support; Table 314.16(A) 4 x 2-1/8 octagon" },
+    "floor": { "item": "Floor box", "size": "1 gang", "depth_in": 3.0, "dims_in": [4.0, 4.0, 3.0], "cubic_in": 0.0, "material": "steel", "source": "NEC 314.27(B): a box listed for floor installation" },
+    "junction": { "item": "Box, 4\" square", "size": "4\" square", "depth_in": 2.125, "dims_in": [4.0, 4.0, 2.125], "cubic_in": 30.3, "material": "steel", "source": "NEC Table 314.16(A): 4 x 2-1/8 square, 30.3 cu in (a junction where three or more runs meet)" }
+  },
+  "box_for": {
+    "receptacle": { "raceway": "sq4-2.125", "cable": "nm1-18", "ring": true },
+    "switch": { "raceway": "sq4-2.125", "cable": "nm1-18", "ring": true },
+    "low voltage outlet": { "raceway": "sq4-2.125", "cable": "nm1-18", "ring": true },
+    "data outlet": { "raceway": "sq4-2.125", "cable": "nm1-18", "ring": true },
+    "thermostat": { "raceway": "sq4-2.125", "cable": "nm1-18", "ring": true },
+    "fire alarm device": { "raceway": "sq4-2.125", "cable": "sq4-2.125", "ring": true },
+    "equipment connection": { "raceway": "sq4-2.125", "cable": "sq4-2.125", "ring": false },
+    "device": { "raceway": "oct4-1.5", "cable": "oct4-1.5", "ring": false },
+    "luminaire": { "raceway": "oct4-2.125", "cable": "oct4-2.125", "ring": false },
+    "light fixture": { "raceway": "oct4-2.125", "cable": "oct4-2.125", "ring": false },
+    "fan": { "raceway": "fan4-2.125", "cable": "fan4-2.125", "ring": false },
+    "floor": { "raceway": "floor", "cable": "floor", "ring": false }
+  },
+  "box_source": "the trade's usual box for the device (company default): 4 x 2-1/8 square with a 1 gang ring on raceway, a 1 gang box on cable, a 4 in octagon at a luminaire or a device of no known kind",
+  "ring": { "item": "Plaster ring", "size": "1 gang", "depth_in": 0.5, "source": "the trade's usual ring: 1 gang, 1/2 in raised (the wall's board on the box face decides it)" },
+  "default_raceway": "EMT",
+  "default_raceway_source": "branch circuits in EMT where the documents name no wiring method (company default)",
+  "insulation": "THHN",
+  "insulation_source": "THHN/THWN-2 copper where the specifications name no other (company default)",
+  "makeup_ft": 1.0,
+  "makeup_source": "1 ft of each conductor left at each box for makeup (company default; NEC 300.14 asks at least 6 in)",
+  "bushing_min_awg": 4,
+  "bushing_item": "Insulating bushing (bang-on)",
+  "bushing_source": "NEC 300.4(G): an insulating bushing where #4 or larger conductors enter a box or enclosure",
+  "locknut_item": "Locknut",
+  "locknut_source": "one locknut per connector at a knockout (the connector's listing)",
+  "default_voltage": "120/208",
+  "default_voltage_source": "120/208 V 3 phase 4 wire where the panel schedule gives no voltage (company default)",
+  "colors": {
+    "120/208": { "A": "black", "B": "red", "C": "blue", "N": "white", "G": "green" },
+    "120/240": { "A": "black", "B": "red", "C": "orange", "N": "white", "G": "green" },
+    "277/480": { "A": "brown", "B": "orange", "C": "yellow", "N": "gray", "G": "green" }
+  },
+  "colors_source": "NEC 200.6 (neutral white or gray), 250.119 (ground green); phase colours: the trade's usual code (company default; NEC 210.5(C) asks the code be posted)",
+  "phase_source": "panel circuit numbering: circuits 1-2 on phase A, 3-4 on B, 5-6 on C (standard panelboard bussing)",
+  "offset_max_ft": 1.0,
+  "joint_tol_in": 1.0,
+  "box_reach_ft": 3.0,
+  "panel_reach_ft": 5.0
+}

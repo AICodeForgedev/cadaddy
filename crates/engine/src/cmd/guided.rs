@@ -4880,6 +4880,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             s.doc_mut()?.building_spec = Some(sp.to_json());
         }
     }
+    // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff;
+    // not the typical-room views' (each room's own circuits are those). In the spec before the
+    // build, so each piece of a run knows its circuit, panel and conductors (Q6157).
+    let circuits: Vec<_> = job.circuits.iter().filter(|c| !room_view_circuits.contains(&c.id)).cloned().collect();
+    if !circuits.is_empty()
+        && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+    {
+        super::printcond::store_circuits(&mut sp, &circuits);
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
     let budget_s = super::bspec::BUILD_BUDGET_S;
     // The job merges walls read off several sheets after the build: its own line says the counts
     // the model ends with (= bim.tree), the build's would be a second, earlier set.
@@ -4918,9 +4928,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(v) = placed {
         result["devices"] = v;
     }
-    // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff;
-    // not the typical-room views' (each room's own circuits are those).
-    let circuits: Vec<_> = job.circuits.iter().filter(|c| !room_view_circuits.contains(&c.id)).cloned().collect();
+    // The circuits stay in the spec after the build's own steps.
     if !circuits.is_empty()
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {

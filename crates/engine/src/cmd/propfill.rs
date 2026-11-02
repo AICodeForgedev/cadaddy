@@ -1166,7 +1166,10 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                     put(&mut store, "room_b", Prop::new(r.label.clone(), Source::computed()), tally);
                 }
             }
-            "duct" | "pipe" | "conduit" | "fixture" | "equipment" if super::wallgen::made_as(e).as_deref() == Some("mep") => {
+            // A piece of a run (Q6157) carries its own properties from the build.
+            "duct" | "pipe" | "conduit" | "fixture" | "equipment"
+                if super::wallgen::made_as(e).as_deref() == Some("mep") && !super::mepatoms::is_atom(e) =>
+            {
                 let part = made(e, "part").unwrap_or_default();
                 let id = made(e, "mepid").unwrap_or_default();
                 let run = id.rsplit_once('/').and_then(|(base, _)| runs.get(base)).copied();
@@ -1247,6 +1250,10 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
         if d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).is_ok() {
             changed += 1;
         }
+    }
+    // The count index follows (a device's room, Q6157).
+    if changed > 0 && d.embedded.contains_key(super::mepatoms::INDEX_FILE) {
+        super::mepatoms::reindex(d);
     }
     filled.retain(|_, m| !m.is_empty());
     if changed > 0 {
