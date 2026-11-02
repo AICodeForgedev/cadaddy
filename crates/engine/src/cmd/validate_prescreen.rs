@@ -14,10 +14,20 @@
 //!     and `mounting_height`), each with its source (sheet, point, words). Off by more than
 //!     `height_in` is a `fail`; a model height that is a default no document gives is a
 //!     `default` (severity low).
-//!   - **G-PRESENT**: every room whose type has an expected set: each item of the set counted in
-//!     the room (`missing` when fewer, `extra` when more than an exact count).
+//!   - **G-PRESENT**: every room in scope against what the prints show in it
+//!     ([`super::validate_present`]): a typical room's unit type's enlarged plans (turned and
+//!     mirrored as the room's layout fit says), else its level's trade plans. Each symbol is
+//!     matched to the nearest model element of the same resolved kind within the rule's
+//!     `plan_in` (a `pass`, naming the element and how far off it is), else it is `missing` with
+//!     its sheet, its sheet point and its place in the room; an element of a trade those plans
+//!     show that no symbol stands for is `extra` (low), unless it was read from a sheet not
+//!     placed on its level's plan (then it is counted as not compared in `unmeasured`). An
+//!     element on a wall's line, outside every room, is the room on its side of the wall. Then
+//!     each room type's project-rule set: each item counted in the room (`missing` when fewer,
+//!     `extra` when more than an exact count). `present` counts the rooms and verdicts per room
+//!     type and per level, and the rooms by what gave their set.
 //!
-//! Expected sets are project rules, never built in: domain `custom`, key
+//! Project-rule sets are never built in: domain `custom`, key
 //! `prescreen.expect.<room type>`, value a list such as
 //! `panel=1; ptac=1; exhaust_fan@ceiling=1; receptacle=4+; water_closet|toilet=1`. An item is
 //! one or more names (`|`: any of them; a kind word, a type mark, `EF-*` a mark pattern), an
@@ -52,6 +62,7 @@ use super::validate::{Frame, model_of, prints_of};
 use super::validate_height::{self as vh, DocHeights};
 use super::validate_kind::Kinds;
 use super::validate_packet::{Area, compass, grow, inside, point_in, pt, r2, seg_dist};
+use super::validate_present as vp;
 use super::validate_rules::{self as vr, Effective};
 use super::*;
 use crate::{Result, Session};
@@ -80,7 +91,7 @@ const MAX_WRITTEN: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Validation Prescreen", run_prescreen)
-            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default), issue, expected, found, measured (G-HEIGHT: aff_in, expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, confidence, severity, area?, level, at?, source: \"prescreen\"}], next?, rooms_without_set, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room type's expected set (project rules `prescreen.expect.<room type>`) against what the room holds (G-PRESENT)")
+            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default), issue, expected, found, measured (G-HEIGHT: aff_in, expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, confidence, severity, area?, level, at?, source: \"prescreen\"}], next?, rooms_without_set, present: {by_room_type: {type: {rooms, pass, missing, extra}}, by_level: {level: {…}}, rooms_by_basis: {enlarged_plan, trade_plan, project_rule}}, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room against what the prints show in it — its unit type's enlarged plans turned as its layout fit says, else its level's trade plans: each symbol matched to an element of the same kind within plan_in, else missing (sheet, sheet point, place in the room); elements no symbol stands for extra — and each room type's project-rule set (`prescreen.expect.<room type>`) (G-PRESENT)")
             .noundo()
             .files(),
     ]
@@ -379,6 +390,8 @@ struct Item {
     record: Option<vh::Record>,
     /// Its symbol's point on its sheet (model coordinates): plan elements only.
     sheet_at: Option<cadaddy_geom::Vec2>,
+    /// The sheet it was read from, when its record says.
+    source: Option<String>,
 }
 
 /// An element's mounting height as its record has it from the documents (not a rule's or a
@@ -426,6 +439,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 built: false,
                 record: ent.and_then(vh::record_of),
                 sheet_at: ent.and_then(|x| vh::sheet_point(d, x)),
+                source: e.source.clone().filter(|s| !s.trim().is_empty()),
             }
         })
         .collect();
@@ -482,6 +496,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             // A built part's height record is its own, else the plan element's it was built from.
             record: vh::record_of(e).or_else(|| super::bimlook::made_source(e).and_then(|h| d.model.get(h)).and_then(|x| vh::record_of(x))),
             sheet_at: None,
+            source: None,
         });
     }
     out
@@ -509,6 +524,44 @@ pub(crate) struct Screened {
     pub unmatched: Unmatched,
     /// Per rule: elements it applies to but could not measure, by why.
     pub unmeasured: BTreeMap<String, BTreeMap<String, u64>>,
+    /// G-PRESENT's counts per room type and per level.
+    pub present: Present,
+}
+
+/// G-PRESENT's counts: rooms checked and verdicts, per room type and per level, and the rooms
+/// by what gave their set.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Present {
+    by_type: BTreeMap<String, BTreeMap<&'static str, u64>>,
+    by_level: BTreeMap<String, BTreeMap<&'static str, u64>>,
+    by_basis: BTreeMap<&'static str, u64>,
+}
+
+impl Present {
+    /// Kinds of rows listed per table, at most.
+    const MAX_ROWS: usize = 60;
+
+    fn empty() -> BTreeMap<&'static str, u64> {
+        [("rooms", 0), ("pass", 0), ("missing", 0), ("extra", 0)].into_iter().collect()
+    }
+    /// A room checked, once, and what gave its set (each source once).
+    fn room(&mut self, room_type: &str, level: &str, basis: &'static str, first: bool) {
+        *self.by_basis.entry(basis).or_default() += 1;
+        if first {
+            *self.by_type.entry(room_type.to_string()).or_insert_with(Self::empty).entry("rooms").or_default() += 1;
+            *self.by_level.entry(level.to_string()).or_insert_with(Self::empty).entry("rooms").or_default() += 1;
+        }
+    }
+    fn add(&mut self, room_type: &str, level: &str, verdict: &'static str) {
+        *self.by_type.entry(room_type.to_string()).or_insert_with(Self::empty).entry(verdict).or_default() += 1;
+        *self.by_level.entry(level.to_string()).or_insert_with(Self::empty).entry(verdict).or_default() += 1;
+    }
+    pub(crate) fn to_json(&self) -> Value {
+        let table = |m: &BTreeMap<String, BTreeMap<&'static str, u64>>| -> serde_json::Map<String, Value> {
+            m.iter().take(Self::MAX_ROWS).map(|(k, v)| (k.clone(), json!(v))).collect()
+        };
+        json!({"by_room_type": table(&self.by_type), "by_level": table(&self.by_level), "rooms_by_basis": self.by_basis})
+    }
 }
 
 /// Elements no rule naming kinds applies to.
@@ -557,7 +610,7 @@ impl Screened {
         self.findings.iter().filter(|f| f["verdict"] != "pass").count()
     }
     pub(crate) fn summary(&self) -> Value {
-        json!({"call": CMD, "problems": self.problems(), "checked": self.checked, "unmatched": self.unmatched.elements, "rooms_without_set": self.without_set.len()})
+        json!({"call": CMD, "problems": self.problems(), "checked": self.checked, "unmatched": self.unmatched.elements, "rooms_without_set": self.without_set.len(), "present": self.present.to_json()})
     }
 }
 
@@ -819,75 +872,269 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             unmeasured.remove(&r.rule.id);
         }
     }
-    // G-PRESENT: each room type's expected set.
+    // G-PRESENT: each room's expected set — what its unit type's enlarged plans (else its
+    // level's trade plans) show in it, and its room type's project-rule set.
     let (sets, bad_sets) = expected_sets(&sc.d.project_rules);
     let mut rooms = 0usize;
     let mut without_set = BTreeSet::new();
     let mut room_ids = BTreeSet::new();
+    let mut present = Present::default();
     if let Some(r) = on("G-PRESENT") {
+        let tol_ft = tol(r, "plan_in", 6.0) / 12.0;
         let units = Units::of(sc.d);
+        let symbols = vp::Symbols::of(sc.d, sc.sp, sc.frame, &kinds, sc.rules);
         let base_of = |id: &str| id.split('#').next().unwrap_or(id).to_string();
         let mut by_room: HashMap<String, Vec<&Item>> = HashMap::new();
         for (it, a) in &mine {
-            if let Some(a) = a {
-                by_room.entry(base_of(&a.id)).or_default().push(*it);
+            match a {
+                Some(a) => by_room.entry(base_of(&a.id)).or_default().push(*it),
+                // On a wall (a device the build put on the wall's line, outside every room's
+                // outline): the room on its side of the wall, a step past the wall's face.
+                None => {
+                    let side = walls.get(&it.level.to_ascii_lowercase()).and_then(|ws| {
+                        let (dd, q, w) = ws
+                            .iter()
+                            .map(|w| {
+                                let (dd, q) = seg_dist(it.at, w.a, w.b);
+                                (dd, q, *w)
+                            })
+                            .filter(|x| x.0.is_finite())
+                            .min_by(|x, y| x.0.total_cmp(&y.0))?;
+                        let n = [it.at[0] - q[0], it.at[1] - q[1]];
+                        let len = n[0].hypot(n[1]);
+                        if dd > vp::WALL_REACH_FT || len < 1e-3 {
+                            return None;
+                        }
+                        let step = (w.thickness_in / 24.0).max(0.0) + 0.3;
+                        let p = [q[0] + n[0] / len * step, q[1] + n[1] / len * step];
+                        by_level
+                            .get(&it.level.to_ascii_lowercase())?
+                            .iter()
+                            .find(|x| x.kind != "zone" && inside(x.bbox, p) && (x.outline.len() < 3 || point_in(&x.outline, p)))
+                            .copied()
+                    });
+                    if let Some(x) = side {
+                        by_room.entry(base_of(&x.id)).or_default().push(*it);
+                    }
+                }
             }
         }
+        let mut parts_of: HashMap<String, Vec<&Area>> = HashMap::new();
         for a in sc.areas.iter().filter(|a| a.kind != "zone") {
-            let room_id = a.id.split('#').next().unwrap_or(&a.id).to_string();
+            parts_of.entry(base_of(&a.id)).or_default().push(a);
+        }
+        for a in sc.areas.iter().filter(|a| a.kind != "zone") {
+            let room_id = base_of(&a.id);
             if !room_ids.insert(room_id.clone()) {
                 continue;
             }
             rooms += 1;
+            let parts: &[&Area] = parts_of.get(&room_id).map_or(&[], Vec::as_slice);
             let unit = units.get(&a.level, a.number.as_deref());
-            let Some((ty, set)) = set_for(&sets, a.name.as_deref(), unit) else {
-                without_set.insert(a.name.clone().or_else(|| unit.map(|u| u.name.clone())).unwrap_or_else(|| room_id.clone()));
-                continue;
-            };
             let held: &[&Item] = by_room.get(&room_id).map_or(&[], Vec::as_slice);
-            for ex in set {
-                let found: Vec<&&Item> =
-                    held.iter().filter(|it| ex.names.iter().any(|n| it.is(n)) && ex.mount.is_none_or(|m| it.mounting == m)).collect();
-                let n = found.len() as u32;
-                let verdict = if n < ex.count {
-                    "missing"
-                } else if !ex.at_least && n > ex.count {
-                    "extra"
-                } else {
-                    "pass"
-                };
-                tally(&r.rule.id, verdict);
-                let room_label = a.number.as_deref().map_or_else(|| room_id.clone(), |n| format!("{} {n}", a.name.as_deref().unwrap_or("room")));
-                let issue = match verdict {
-                    "missing" => format!("{room_label} holds {n} of the {} its type ({}) expects", ex.label(), ty.replace('_', " ")),
-                    "extra" => format!("{room_label} holds {n} where its type ({}) expects {}", ty.replace('_', " "), ex.label()),
-                    _ => format!("{room_label} holds {}", ex.label()),
-                };
-                let handles: Vec<&str> = found.iter().take(50).map(|it| it.handle.as_str()).collect();
-                let id = format!("PS-{}", hash8(&format!("G-PRESENT|{room_id}|{}|{verdict}", ex.text)));
-                let centre = [(a.bbox[0] + a.bbox[2]) / 2.0, (a.bbox[1] + a.bbox[3]) / 2.0];
-                let f = json!({
-                    "id": id,
-                    "rule": r.rule.id,
-                    "verdict": verdict,
-                    "issue": issue,
-                    "expected": ex.label(),
-                    "found": format!("{n}"),
-                    "measured": {"room_type": ty.replace('_', " "), "item": ex.text, "count": n, "handles": handles, "unit_type": unit.map(|u| u.id.clone())},
-                    "evidence": [],
-                    "confidence": 1.0,
-                    "severity": if verdict == "extra" { "low".to_string() } else { r.rule.severity.clone() },
-                    "area": room_id,
-                    "level": a.level,
-                    "at": pt([r2(centre[0]), r2(centre[1])]),
-                    "source": "prescreen",
-                });
-                let rank = match verdict {
-                    "pass" => 9,
-                    "extra" => 2,
-                    _ => sev_rank(&r.rule.severity),
-                };
-                findings.push((rank, f));
+            let room_label = a.number.as_deref().map_or_else(|| room_id.clone(), |n| format!("{} {n}", a.name.as_deref().unwrap_or("room")));
+            let room_type = unit.map(|u| u.name.clone()).or_else(|| a.name.clone()).unwrap_or_else(|| "room".into()).trim().to_ascii_lowercase();
+            let mut counted = false;
+            // 1. What the prints show in the room.
+            let printed = if symbols.is_empty() {
+                None
+            } else {
+                let look: Vec<vp::Held> = held.iter().map(|it| vp::Held { kind: &it.kind, mark: it.mark.as_deref(), at: it.at }).collect();
+                unit.and_then(|u| symbols.enlarged(parts, u, &look, tol_ft)).or_else(|| symbols.trade_plans(parts, tol_ft))
+            };
+            if let Some(set) = &printed {
+                present.room(&room_type, &a.level, set.basis, !counted);
+                counted = true;
+                let held_trade: Vec<&'static str> = held.iter().map(|it| super::validate_packet::trade_of_kind(&it.kind, sc.rules)).collect();
+                // Each expected symbol to its nearest element of the same kind within the
+                // tolerance, nearest pairs first.
+                let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+                for (i, ex) in set.items.iter().enumerate() {
+                    let Some(sym) = symbols.syms.get(ex.sym) else { continue };
+                    for (j, it) in held.iter().enumerate() {
+                        let dd = (it.at[0] - ex.at[0]).hypot(it.at[1] - ex.at[1]);
+                        if dd <= tol_ft && vp::same_kind(&sym.kind, sym.mark.as_deref(), &it.kind, it.mark.as_deref()) {
+                            pairs.push((dd, i, j));
+                        }
+                    }
+                }
+                pairs.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
+                let mut got: HashMap<usize, (usize, f64)> = HashMap::new();
+                let mut taken: BTreeSet<usize> = BTreeSet::new();
+                for (dd, i, j) in pairs {
+                    if got.contains_key(&i) || taken.contains(&j) {
+                        continue;
+                    }
+                    got.insert(i, (j, dd));
+                    taken.insert(j);
+                }
+                let sources = json!(set.sources);
+                let tol_in = r2(tol_ft * 12.0);
+                for (i, ex) in set.items.iter().enumerate() {
+                    let Some(sym) = symbols.syms.get(ex.sym) else { continue };
+                    let what = match &sym.mark {
+                        Some(m) if !sym.kind.eq_ignore_ascii_case(m) => format!("{} ({m})", sym.kind.replace('_', " ")),
+                        _ => sym.kind.replace('_', " "),
+                    };
+                    let shown_on = ex.view.clone().unwrap_or_else(|| ex.from.clone());
+                    let sheet_at = sym.sheet_at.map(|p| pt([r2(p[0]), r2(p[1])]));
+                    let source = json!({"sheet": ex.sheet, "view": ex.view, "at": sheet_at, "from": set.basis});
+                    let matched = got.get(&i).and_then(|(j, dd)| held.get(*j).map(|it| (*it, *dd)));
+                    let verdict = if matched.is_some() { "pass" } else { "missing" };
+                    tally(&r.rule.id, verdict);
+                    present.add(&room_type, &a.level, verdict);
+                    let key = sym.sheet_at.or(sym.plan.as_ref().map(|p| p.1)).unwrap_or(ex.at);
+                    let id = format!("PS-{}", hash8(&format!("G-PRESENT|{room_id}|{}|{:.1},{:.1}|{verdict}", ex.sheet, key[0], key[1])));
+                    let mut measured = json!({
+                        "basis": set.basis, "room_type": room_type, "unit_type": unit.map(|u| u.id.clone()), "symbol": what,
+                        "kind": sym.kind, "kind_from": sym.kind_from, "mark": sym.mark, "sheet": ex.sheet, "view": ex.view, "sheet_at": sheet_at,
+                        "expected_at": pt([r2(ex.at[0]), r2(ex.at[1])]), "tolerance_in": tol_in,
+                    });
+                    if !sym.sheet.trim().is_empty() && !sym.sheet.eq_ignore_ascii_case(&ex.sheet) {
+                        measured["read_as_sheet"] = json!(sym.sheet);
+                    }
+                    let (issue, found, handle) = match matched {
+                        Some((it, dd)) => {
+                            measured["off_in"] = json!(r2(dd * 12.0));
+                            (
+                                format!("{room_label} has the {what} {shown_on} shows"),
+                                format!("{} {:.1} in off", it.kind, dd * 12.0),
+                                Some(it.handle.clone()),
+                            )
+                        }
+                        None => (
+                            format!("{shown_on} shows a {what} in {room_label}; the model has none of that kind within {tol_in} in of it"),
+                            "nothing of that kind there".to_string(),
+                            None,
+                        ),
+                    };
+                    let f = json!({
+                        "id": id,
+                        "rule": r.rule.id,
+                        "handle": handle,
+                        "kind": sym.kind,
+                        "mark": sym.mark,
+                        "verdict": verdict,
+                        "issue": issue,
+                        "expected": format!("a {what} where {shown_on} shows it"),
+                        "found": found,
+                        "measured": measured,
+                        "expected_source": source,
+                        "evidence": [],
+                        "confidence": 1.0,
+                        "severity": r.rule.severity,
+                        "area": room_id,
+                        "level": a.level,
+                        "at": pt([r2(ex.at[0]), r2(ex.at[1])]),
+                        "source": "prescreen",
+                    });
+                    findings.push((if verdict == "pass" { 9 } else { sev_rank(&r.rule.severity) }, f));
+                }
+                // Elements of the trades those plans show that no symbol stands for.
+                let mut uncompared: BTreeMap<String, u64> = BTreeMap::new();
+                for (j, it) in held.iter().enumerate() {
+                    let trade = held_trade.get(j).copied().unwrap_or("general");
+                    if taken.contains(&j) || !set.trades.contains(trade) {
+                        continue;
+                    }
+                    let source_sheet = it.source.clone().or_else(|| print_sheet(sc.d, &it.handle, sc.frame.upf()));
+                    // Read from a sheet not placed on this level's plan (nor the room's type's
+                    // view): what that sheet shows was not compared, so it is not called extra.
+                    if !set.compares(source_sheet.as_deref()) {
+                        let sheet = source_sheet.as_deref().unwrap_or_default();
+                        *uncompared
+                            .entry(format!("elements read from {sheet}, a sheet not placed on its level's plan: not compared"))
+                            .or_default() += 1;
+                        continue;
+                    }
+                    tally(&r.rule.id, "extra");
+                    present.add(&room_type, &a.level, "extra");
+                    let what = match &it.mark {
+                        Some(m) if !it.kind.eq_ignore_ascii_case(m) => format!("{} ({m})", it.kind.replace('_', " ")),
+                        _ => it.kind.replace('_', " "),
+                    };
+                    let from = source_sheet.as_deref().map(|s| format!(" (read from {s})")).unwrap_or_default();
+                    let mut f = base(
+                        r,
+                        it,
+                        Some(a),
+                        "extra",
+                        format!("{room_label} has a {what}{from} that no {trade} plan compared here shows there"),
+                        format!("only what the {trade} plans show"),
+                        format!("a {what} no symbol stands for"),
+                        json!({"basis": set.basis, "room_type": room_type, "unit_type": unit.map(|u| u.id.clone()), "trade": trade, "source_sheet": source_sheet, "sources": sources, "tolerance_in": tol_in}),
+                    );
+                    f["id"] = json!(format!("PS-{}", hash8(&format!("G-PRESENT|{}|extra", it.handle))));
+                    f["area"] = json!(room_id);
+                    f["severity"] = json!("low");
+                    findings.push((2, f));
+                }
+                let notes = unmeasured.entry(r.rule.id.clone()).or_default();
+                for (why, n) in std::mem::take(&mut uncompared) {
+                    *notes.entry(why).or_default() += n;
+                }
+                if set.doubled > 0 {
+                    *notes.entry("symbols two views or sheets show, counted once".into()).or_default() += set.doubled as u64;
+                }
+                if set.foreign > 0 {
+                    *notes.entry("symbols whose tag reads as another trade's kind than their sheet's, not expected".into()).or_default() +=
+                        set.foreign as u64;
+                }
+                if notes.is_empty() {
+                    unmeasured.remove(&r.rule.id);
+                }
+            }
+            // 2. The room type's project-rule set (counts).
+            if let Some((ty, set)) = set_for(&sets, a.name.as_deref(), unit) {
+                present.room(&room_type, &a.level, "project_rule", !counted);
+                counted = true;
+                for ex in set {
+                    let found: Vec<&&Item> =
+                        held.iter().filter(|it| ex.names.iter().any(|n| it.is(n)) && ex.mount.is_none_or(|m| it.mounting == m)).collect();
+                    let n = found.len() as u32;
+                    let verdict = if n < ex.count {
+                        "missing"
+                    } else if !ex.at_least && n > ex.count {
+                        "extra"
+                    } else {
+                        "pass"
+                    };
+                    tally(&r.rule.id, verdict);
+                    present.add(&room_type, &a.level, verdict);
+                    let issue = match verdict {
+                        "missing" => format!("{room_label} holds {n} of the {} its type ({}) expects", ex.label(), ty.replace('_', " ")),
+                        "extra" => format!("{room_label} holds {n} where its type ({}) expects {}", ty.replace('_', " "), ex.label()),
+                        _ => format!("{room_label} holds {}", ex.label()),
+                    };
+                    let handles: Vec<&str> = found.iter().take(50).map(|it| it.handle.as_str()).collect();
+                    let id = format!("PS-{}", hash8(&format!("G-PRESENT|{room_id}|{}|{verdict}", ex.text)));
+                    let centre = [(a.bbox[0] + a.bbox[2]) / 2.0, (a.bbox[1] + a.bbox[3]) / 2.0];
+                    let f = json!({
+                        "id": id,
+                        "rule": r.rule.id,
+                        "verdict": verdict,
+                        "issue": issue,
+                        "expected": ex.label(),
+                        "found": format!("{n}"),
+                        "measured": {"basis": "project_rule", "room_type": ty.replace('_', " "), "item": ex.text, "count": n, "handles": handles, "unit_type": unit.map(|u| u.id.clone())},
+                        "evidence": [],
+                        "confidence": 1.0,
+                        "severity": if verdict == "extra" { "low".to_string() } else { r.rule.severity.clone() },
+                        "area": room_id,
+                        "level": a.level,
+                        "at": pt([r2(centre[0]), r2(centre[1])]),
+                        "source": "prescreen",
+                    });
+                    let rank = match verdict {
+                        "pass" => 9,
+                        "extra" => 2,
+                        _ => sev_rank(&r.rule.severity),
+                    };
+                    findings.push((rank, f));
+                }
+            }
+            if !counted {
+                without_set.insert(a.name.clone().or_else(|| unit.map(|u| u.name.clone())).unwrap_or_else(|| room_id.clone()));
             }
         }
     }
@@ -911,7 +1158,19 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         bad_sets,
         unmatched,
         unmeasured,
+        present,
     }
+}
+
+/// The sheet an element's properties say they were read from (its first print-sourced one).
+fn print_sheet(d: &Drawing, handle: &str, upf: f64) -> Option<String> {
+    let e = cadaddy_doc::Handle::parse_hex(handle).and_then(|h| d.model.get(h))?;
+    let kind = super::elemprops::element_kind(e).unwrap_or_else(|| "device".into());
+    super::elemprops::effective(e, &kind, upf)
+        .into_iter()
+        .take(200)
+        .filter(|(_, pr, _)| pr.has_value() && pr.source.kind == cadaddy_doc::props::SourceKind::Print)
+        .find_map(|(_, pr, _)| pr.source.doc.filter(|s| !s.trim().is_empty()).map(|s| s.chars().take(60).collect()))
 }
 
 // ---------------------------------------------------------------- the command
@@ -980,6 +1239,7 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
         "cursor": cursor,
         "findings": [],
         "rooms_without_set": out.without_set.iter().take(20).collect::<Vec<_>>(),
+        "present": out.present.to_json(),
         "disabled": out.disabled,
         "ms": start.elapsed().as_millis() as u64,
     });
@@ -1266,6 +1526,7 @@ mod tests {
             built: false,
             record: None,
             sheet_at: None,
+            source: None,
         };
         assert!(it.is("receptacle") && it.is("ef-2") && it.is("ef-*") && it.is("duplex"));
         assert!(!it.is("ptac") && !it.is("e*x") && !it.is("panel"));
