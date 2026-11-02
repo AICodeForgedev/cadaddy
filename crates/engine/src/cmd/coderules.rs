@@ -135,6 +135,7 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         let name = names.get(&key).cloned().unwrap_or_else(|| key.clone());
         tr.rooms.name_words.iter().find(|w| name.contains(w.as_str())).map(|w| format!("room {room} ({name}) is a guest room or dwelling ({w})"))
     };
+    let upf = sp.as_ref().map(|sp| sp.units_per_foot).filter(|u| u.is_finite() && *u > 0.0).unwrap_or(12.0);
     let d = s.doc()?;
     // Where each panel element is (the first device on a circuit is the one nearest it).
     let mut panel_at: BTreeMap<String, [f64; 3]> = BTreeMap::new();
@@ -155,7 +156,13 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
             continue;
         }
         if base == "equipment" || base == "gear" || base == "panel" {
-            if let Some(at) = xyz(&text(&store, "location")) {
+            // Where it is: its location, else its geometry's middle (a room's panel placed by the
+            // build carries no location).
+            let at = xyz(&text(&store, "location")).or_else(|| {
+                super::propfill::extent(d, e)
+                    .map(|(b, z0, z1)| [(b.min.x + b.max.x) / 2.0 / upf, (b.min.y + b.max.y) / 2.0 / upf, (z0 + z1) / 2.0 / upf])
+            });
+            if let Some(at) = at {
                 panel_at.insert(e.handle.hex(), at);
             }
             continue;
