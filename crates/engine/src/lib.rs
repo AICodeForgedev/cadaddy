@@ -1501,7 +1501,12 @@ pub enum ParamKind {
 pub fn param_kind(doc: &str, key: &str) -> Option<ParamKind> {
     let at = documented_params(doc).into_iter().find(|n| *n == key).map(|n| n.as_ptr() as usize - doc.as_ptr() as usize)?;
     let rest = doc.get(at + key.len()..)?.trim_start().strip_prefix('?').unwrap_or(doc.get(at + key.len()..)?.trim_start());
-    let ann = rest.trim_start().strip_prefix(':')?.trim_start();
+    annotation_kind(rest.trim_start().strip_prefix(':')?.trim_start())
+}
+
+/// The kind an annotation after a `:` gives (`bool`, `number (default 1)`, `degrees`), when it
+/// is a plain one.
+fn annotation_kind(ann: &str) -> Option<ParamKind> {
     let first = ann.split(|c: char| c.is_whitespace() || matches!(c, ',' | '}' | '|' | '(' | ')' | '/')).next().unwrap_or("");
     // A choice that includes a structure (`bool | {…}`, `number | [x,y]`) takes both.
     let tail = ann.split([',', '}']).next().unwrap_or(ann);
@@ -1741,12 +1746,77 @@ fn value_fields(notes: &[&str]) -> Option<Vec<String>> {
     (!fields.is_empty()).then_some(fields)
 }
 
-/// A one-entry `{word: value}` group: the word stands for any key (`attribs?: {TAG: value}`).
+/// A one-entry `{word: …}` group: the word stands for any key and what follows is each entry's
+/// value (`attribs?: {TAG: value}`, aliasedit's `set?: {alias: command}`, `visible?: {trade:
+/// bool}`). A field of a value is optional or one of several (`{on?: bool}`, `{kind, color?}`).
 fn is_map_doc(group: &str) -> bool {
-    let inner = group.trim().trim_start_matches('{').trim_end_matches('}');
-    let Some((key, value)) = inner.split_once(':') else { return false };
+    map_entry_doc(group).is_some()
+}
+
+/// What a map group ([`is_map_doc`]) says each entry's value is (`command`, `bool`, `[r, g, b] |
+/// "#rrggbb"`).
+fn map_entry_doc(group: &str) -> Option<&str> {
+    let inner = group.trim().strip_prefix('{')?.strip_suffix('}')?;
+    let (key, value) = inner.split_once(':')?;
     let key = key.trim();
-    value.trim() == "value" && !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    let value = value.trim();
+    if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') || value.is_empty() {
+        return None;
+    }
+    // One entry only: no `,` outside the value's own groups.
+    let mut depth = 0usize;
+    for c in value.chars() {
+        match c {
+            '{' | '[' | '(' => depth += 1,
+            '}' | ']' | ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    Some(value)
+}
+
+/// The entry value doc of the map a parameter's notes show ([`map_entry_doc`]); `None` when no
+/// note shows one, or two notes show different ones.
+fn map_value_doc<'a>(notes: &[&'a str]) -> Option<&'a str> {
+    let mut found = None;
+    for note in notes {
+        let Some(body) = note_value(note) else { continue };
+        let mut at = 0;
+        while let Some(open) = body.get(at..).and_then(|r| r.find('{')) {
+            let start = at + open;
+            let end = skip_group(body, start, b'{', b'}', false);
+            if end <= start {
+                break;
+            }
+            if let Some(entry) = body.get(start..end).and_then(map_entry_doc) {
+                if found.is_some_and(|f| f != entry) {
+                    return None;
+                }
+                found = Some(entry);
+            }
+            at = end;
+        }
+    }
+    found
+}
+
+/// An entry `name` of map parameter `k` whose value isn't what the map's doc `entry` says (a list
+/// or an object where it shows a single value, text where it shows a number…).
+fn wrong_map_entry(k: &str, name: &str, v: &Value, entry: &str) -> Option<String> {
+    if v.is_null() {
+        return None;
+    }
+    let plain = without_notes(entry);
+    let want = match annotation_kind(entry) {
+        Some(ParamKind::Number) if !v.is_number() => "a number",
+        Some(ParamKind::Bool) if !(v.is_boolean() || v.is_number() || v.is_string()) => "true or false",
+        Some(ParamKind::Text) if !v.is_string() => "a string",
+        _ if v.is_object() && !plain.contains('{') => "a single value, not an object",
+        _ if v.is_array() && !plain.contains('[') => "a single value, not a list",
+        _ => return None,
+    };
+    Some(format!("`{k}` entry `{name}` must be {want}"))
 }
 
 /// Parameter names that can't be negative: a radius, a size, a count, a gap, a tolerance.
@@ -1795,7 +1865,12 @@ fn refuse_wrong_typed_params(spec: &CommandSpec, params: &Value) -> Result<()> {
                     };
                     return Err(EngineError::BadParams { cmd: spec.id.into(), msg: format!("`{k}` must be {want}, not an object") });
                 }
-                if let Some(fields) = value_fields(&notes)
+                // A map (`set?: {alias: command}`): any key, each value as the doc says.
+                if let Some(entry) = map_value_doc(&notes) {
+                    if let Some(msg) = o.iter().find_map(|(name, v)| wrong_map_entry(k, name, v, entry)) {
+                        return Err(EngineError::BadParams { cmd: spec.id.into(), msg });
+                    }
+                } else if let Some(fields) = value_fields(&notes)
                     && let Some(bad) = o.keys().find(|f| !fields.contains(f))
                 {
                     let list = fields.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ");
