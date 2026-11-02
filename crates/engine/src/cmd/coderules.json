@@ -4,24 +4,92 @@
     {
       "id": "E-RECEPT-TR",
       "cite": "NEC 406.12",
-      "kinds": ["receptacle", "quad_receptacle", "gfci_receptacle", "ceiling_receptacle"],
+      "kinds": [
+        "receptacle",
+        "quad_receptacle",
+        "gfci_receptacle",
+        "ceiling_receptacle"
+      ],
       "sets": "tamper_resistant",
       "rule": "Every 125/250 V, 15 and 20 A receptacle in a guest room or guest suite of a hotel or motel, and in a dwelling unit, is tamper-resistant (GFCI receptacles included).",
       "rooms": {
         "unit_rooms": true,
-        "name_words": ["GUEST", "SUITE", "DWELLING", "APARTMENT", "BEDROOM", "SLEEPING", "LODGING"]
+        "name_words": [
+          "GUEST",
+          "SUITE",
+          "DWELLING",
+          "APARTMENT",
+          "BEDROOM",
+          "SLEEPING",
+          "LODGING"
+        ]
       }
     },
     {
       "id": "E-RECEPT-GFCI",
       "cite": "NEC 210.8",
-      "kinds": ["receptacle", "quad_receptacle", "gfci_receptacle", "ceiling_receptacle"],
+      "kinds": [
+        "receptacle",
+        "quad_receptacle",
+        "gfci_receptacle",
+        "ceiling_receptacle"
+      ],
       "sets": "gfci",
       "rule": "GFCI protection is judged per circuit: a receptacle on a GFCI (or dual-function) breaker is already protected and is a standard device; where the print tags GFCI and the breaker isn't, the first device on the circuit is a GFCI receptacle and the ones after it on its load side are standard. A GFCI receptacle on a GFCI breaker is double protection. When the breaker's type isn't known the decision is left undecided.",
-      "tags": ["GFCI", "GFI", "GF"],
+      "tags": [
+        "GFCI",
+        "GFI",
+        "GF"
+      ],
       "sink_reach_ft": 6,
-      "sink_words": ["SINK", "LAV", "LAVATORY", "KITCHENETTE"],
+      "sink_words": [
+        "SINK",
+        "LAV",
+        "LAVATORY",
+        "KITCHENETTE"
+      ],
       "location_rule": "A receptacle the print doesn't tag GFCI needs it within 6 ft of the outside edge of a sink (NEC 210.8(A)(7), (B)(5)); it is decided by its circuit like a tagged one."
+    },
+    {
+      "id": "E-WORKSPACE",
+      "cite": "NEC 110.26(A)",
+      "kinds": [
+        "panel",
+        "panelboard",
+        "switchboard",
+        "load_center",
+        "disconnect",
+        "transformer"
+      ],
+      "sets": "working_space",
+      "rule": "In front of electrical equipment likely to be worked on energized: a clear space as deep as the voltage to ground and the condition call for (0-150 V: 3 ft; 151-600 V: 3, 3.5 or 4 ft by condition 1, 2, 3), at least 30 in wide or the equipment's width, and 6.5 ft high. Gear the plans don't locate is laid out along its room's walls with that space clear (condition 1 assumed and said).",
+      "depth_in": [
+        [
+          150,
+          36,
+          36,
+          36
+        ],
+        [
+          600,
+          36,
+          42,
+          48
+        ],
+        [
+          1000,
+          36,
+          48,
+          60
+        ]
+      ],
+      "width_in": 30,
+      "height_in": 78,
+      "mount_top_in": 78,
+      "plate_margin_in": [
+        2.0,
+        1.5
+      ]
     }
   ]
 }
