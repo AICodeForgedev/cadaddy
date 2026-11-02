@@ -472,6 +472,9 @@ fn info_value(path: &str, full: bool) -> Result<Value, String> {
     if let (Some(obj), Some(w)) = (v.as_object_mut(), &warnings) {
         obj.insert("warnings".into(), w.clone());
     }
+    if let (Some(obj), Ok(d)) = (v.as_object_mut(), s.doc()) {
+        obj.insert("readNotes".into(), json!(d.read_notes));
+    }
     if full {
         return Ok(v);
     }
@@ -492,6 +495,8 @@ fn info_value(path: &str, full: bool) -> Result<Value, String> {
         "extents": extents,
         // Records a damaged file lost stay visible without --full.
         "skipped": v.get("skipped").cloned().unwrap_or(Value::Null),
+        // The reader's notes on what it left out, in words (empty for a complete read).
+        "readNotes": s.doc().map(|d| d.read_notes.clone()).unwrap_or_default(),
     });
     if let (Some(obj), Some(w)) = (short.as_object_mut(), warnings) {
         obj.insert("warnings".into(), w);
@@ -584,7 +589,8 @@ fn convert_file(i: &str, o: &str, framing: Framing) -> Result<(), String> {
     check_framed_output(framing, Some(o))?;
     let mut s = Session::for_app();
     open(&mut s, i)?;
-    if let Some(m) = skipped_message(s.doc().map_err(|e| e.to_string())?, i) {
+    let d = s.doc().map_err(|e| e.to_string())?;
+    for m in read_note_messages(d, i).into_iter().chain(skipped_message(d, i)) {
         eprintln!("{m}");
     }
     if cadaddy_io::is_image(o)
@@ -819,6 +825,12 @@ fn undrawn_message(d: &cadaddy_engine::doc::Drawing, path: &str) -> Option<Strin
     let list: Vec<String> = types.iter().map(|(t, n)| format!("{t}: {n}")).collect();
     let entities = if n == 1 { "entity" } else { "entities" };
     Some(format!("{path}: {n} {entities} not drawn ({})", list.join(", ")))
+}
+
+/// The reader's notes on what it left out of `path` (a damaged DWG's unreadable object records),
+/// one warning line each; empty for a complete read.
+fn read_note_messages(d: &cadaddy_engine::doc::Drawing, path: &str) -> Vec<String> {
+    d.read_notes.iter().map(|note| format!("{path}: {note}")).collect()
 }
 
 /// The warning for the records of `path` the reader could not place, or `None` when there are none.
