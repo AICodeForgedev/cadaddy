@@ -630,6 +630,10 @@ fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, rea
     if let Some(v) = transparency_440(e.common.transparency) {
         w.i(440, v);
     }
+    // ByBlock is the plot style name type 1 (ByLayer, 0, is the default and left out).
+    if e.common.plot_style.trim().eq_ignore_ascii_case("byblock") {
+        w.i(380, 1);
+    }
     // A material other than ByLayer: its MATERIAL object.
     if let Some(h) = e.common.material.as_deref().and_then(|m| w.materials.get(&m.trim().to_ascii_uppercase())).cloned() {
         w.s(347, h);
