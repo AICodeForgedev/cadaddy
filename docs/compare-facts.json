@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1198,
-    "count": 1198,
+    "callableAsJson": 1205,
+    "count": 1205,
     "ids": [
       "-attedit",
       "-block",
@@ -724,6 +724,7 @@
       "pan.left",
       "pan.right",
       "pan.up",
+      "panels.schedule",
       "paramconstraint",
       "paramconstraint.todimension",
       "parameters",
@@ -791,6 +792,12 @@
       "polygon",
       "presspull",
       "preview",
+      "pricebook.import",
+      "pricebook.list",
+      "pricebook.map",
+      "pricebook.remove",
+      "pricebook.set",
+      "pricebook.settings",
       "printers",
       "printrev.compare",
       "printrev.log",
@@ -1202,7 +1209,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 527,
+    "inMenus": 529,
     "typed": 564
   },
   "features": {
