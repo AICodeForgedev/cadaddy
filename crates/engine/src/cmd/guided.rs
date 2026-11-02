@@ -7783,6 +7783,39 @@ fn plumbing_fixtures(
         .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(sp.sheet.split('/').next().unwrap_or(&sp.sheet)).eq_ignore_ascii_case("P"))
         .map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi))
         .collect();
+    // A detail callout's bubble (`7` over `P-7`) names a sheet of the set under its view number: not
+    // a fixture, though the schedule has a P-7 and the bubble is the tags' own hexagon.
+    let sheet_numbers: BTreeSet<String> = job
+        .sheet_regions
+        .iter()
+        .map(|r| r.number.split('/').next().unwrap_or(&r.number).trim().to_ascii_uppercase())
+        .chain(
+            job.sheets
+                .as_ref()
+                .and_then(|v| v.get("sheets"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c.get("number").and_then(Value::as_str).map(|n| n.trim().to_ascii_uppercase())),
+        )
+        .collect();
+    let view_numbers: Vec<(cadaddy_geom::Vec2, &str)> = d
+        .model
+        .iter()
+        .filter(|e| spans.iter().any(|(_, lo, hi)| (*lo..*hi).contains(&e.handle.0)))
+        .filter_map(|e| match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) if (1..=2).contains(&t.value.trim().len()) && t.value.trim().chars().all(|c| c.is_ascii_digit()) => {
+                Some((t.insert.xy(), sheet_of_handle(&spans, e.handle.0)))
+            }
+            _ => None,
+        })
+        .take(MAX_FIXTURES)
+        .collect();
+    let callout = |value: &str, t: &cadaddy_doc::Text, sheet: &str| {
+        let h = t.height.max(1e-6);
+        sheet_numbers.contains(&value.to_ascii_uppercase())
+            && view_numbers.iter().any(|(p, s)| *s == sheet && (p.x - t.insert.x).abs() <= 3.0 * h && p.y > t.insert.y && p.y - t.insert.y <= 4.0 * h)
+    };
     let mut found: Vec<(String, [f64; 2], f64, String)> = Vec::new();
     for e in d.model.iter() {
         // Lettered, or a tag symbol's attribute (the hexagon P-1 by a water closet).
@@ -7794,7 +7827,10 @@ fn plumbing_fixtures(
         let Some((sheet, _, _)) = spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&e.handle.0)) else { continue };
         for t in lettered {
             let value = t.value.trim();
-            if !(tags.contains(value) && t.height.is_finite() && t.height > 0.0 && t.insert.is_finite()) || sheet_key(sheet) == value {
+            if !(tags.contains(value) && t.height.is_finite() && t.height > 0.0 && t.insert.is_finite())
+                || sheet_key(sheet) == value
+                || callout(value, t, sheet)
+            {
                 continue;
             }
             found.push((value.to_string(), [t.insert.x, t.insert.y], t.height, sheet.to_string()));
@@ -7945,6 +7981,11 @@ fn stacks_as_risers(sp: &mut cadaddy_walk3d::BuildingSpec, stacks: &[super::read
         n += 1;
     }
     n
+}
+
+/// The sheet of the set an object (by its handle) was imported for, among `spans`.
+fn sheet_of_handle<'a>(spans: &[(&'a str, u64, u64)], h: u64) -> &'a str {
+    spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&h)).map_or("", |(s, _, _)| *s)
 }
 
 /// Whether a typical room's type (its words, [`type_words`]) is a room to sleep in: a hotel's
@@ -12787,6 +12828,42 @@ mod tests {
         ] {
             assert_eq!(legend_kind(row), want, "{row}");
         }
+    }
+
+    #[test]
+    fn a_detail_callouts_bubble_is_no_plumbing_fixture() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let lo = s.doc().unwrap().handseed;
+        let t = |s: &mut crate::Session, at: [f64; 2], v: &str| {
+            s.execute("text", &json!({"at": at, "text": v, "height": 4.6})).unwrap();
+        };
+        // P-4: a mop sink tagged P-7, and the bubble of detail 7 on sheet P-7 (its view number over it).
+        t(&mut s, [100.0, 100.0], "P-7");
+        t(&mut s, [300.0, 100.0], "P-7");
+        t(&mut s, [301.0, 108.0], "7");
+        t(&mut s, [500.0, 100.0], "P-1");
+        let hi = s.doc().unwrap().handseed;
+        let region = |n: &str, x: f64| SheetRegion {
+            number: n.into(),
+            level: "3".into(),
+            discipline: "P".into(),
+            kind: "plan".into(),
+            rect: [x, 0.0, x + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        job.sheet_regions = vec![region("P-4", 0.0), region("P-7", 5000.0)];
+        job.sheet_spans = vec![SheetSpan { sheet: "P-4".into(), lo, hi }];
+        let row = |tag: &str| cadaddy_mepfix::fixture_schedule::ScheduledFixture { tag: tag.into(), ..Default::default() };
+        let schedule = cadaddy_mepfix::fixture_schedule::FixtureSchedule { rows: vec![row("P-1"), row("P-7")], extent: [0.0; 4] };
+        let found = plumbing_fixtures(s.doc().unwrap(), &job, &schedule);
+        let mut tags: Vec<(&str, f64)> = found.iter().map(|f| (f.tag.as_str(), f.at[0])).collect();
+        tags.sort_by(|a, b| a.1.total_cmp(&b.1));
+        assert_eq!(tags, [("P-7", 100.0), ("P-1", 500.0)], "{found:?}");
     }
 
     #[test]

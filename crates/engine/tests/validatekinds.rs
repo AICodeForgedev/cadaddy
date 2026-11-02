@@ -142,7 +142,10 @@ fn generic_job_devices_get_g_host_and_g_height_by_their_legend_and_project_rules
     // As the job leaves it: no rule naming kinds applies, and the prescreen says so.
     let r = s.execute("validate.prescreen", &json!({})).unwrap();
     assert_eq!(r["checked"]["G-HOST"], json!({"pass": 0, "fail": 0}), "every rule run is listed, with 0: {r}");
-    assert_eq!(r["checked"]["G-HEIGHT"], json!({"pass": 0, "fail": 0}), "{r}");
+    // G-HEIGHT measures nothing against a document yet; the job's usual heights (no document
+    // gives them) are reported as the defaults they are.
+    assert_eq!((r["checked"]["G-HEIGHT"]["pass"].as_u64(), r["checked"]["G-HEIGHT"]["fail"].as_u64()), (Some(0), Some(0)), "{r}");
+    assert!(r["checked"]["G-HEIGHT"]["default"].as_u64().is_some_and(|n| n > 0), "{r}");
     assert!(r["checked"]["G-PRESENT"].is_object(), "{r}");
     assert_eq!(r["unmatched"]["elements"].as_u64(), Some(devices), "{r}");
     assert_eq!(r["unmatched"]["kinds"]["device"].as_u64(), Some(devices), "{r}");
