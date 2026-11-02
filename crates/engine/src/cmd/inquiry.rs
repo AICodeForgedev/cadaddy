@@ -51,7 +51,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("drawing.summary", "Drawing Summary", summary::run_summary).params(summary::SUMMARY_PARAMS).noundo(),
         CommandSpec::new("drawing.query", "Query Drawing", summary::run_query).params(summary::QUERY_PARAMS).noundo(),
         CommandSpec::new("entities", "Query Entities", run_entities)
-            .params("{type?, layer?, selected?: bool (default false; true = current selection in active space), window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities}")
+            .params("{type?, layer?, selected?: bool (default false; true = current selection in active space), window?: [[x,y],[x,y]], crossing?: bool (default true; false = entirely inside), limit?, offset?} → {count (all matches), returned, offset, entities: [{handle, type, layer, color, transparency, geometry, extents: {min: [x,y,z], max: [x,y,z]}}], warning? (a type or layer filter no name matches)}: `type` (Line, LINE or AcDbLine) and `layer` take wildcards (* ? # @ . ~ [...]) and comma lists, any case, as the CLass option and object filters do")
             .noundo(),
         CommandSpec::new("shapes", "Analyze Shapes", shapes::run).params(shapes::PARAMS).noundo(),
         CommandSpec::new("usage", "Analyze Usage", usage::run).params(usage::PARAMS).noundo(),
@@ -441,6 +441,18 @@ fn list_text(s: &Session, h: Handle) -> String {
                 fmt_d(s, dm.defpt.y),
             ));
         }
+        EntityKind::Mesh(m) => {
+            let what = match m.kind {
+                cadaddy_doc::MeshKind::Subd => "Subdivision mesh".to_string(),
+                cadaddy_doc::MeshKind::Polyface => "Polyface mesh".to_string(),
+                cadaddy_doc::MeshKind::Polygon { m: rows, n: cols, .. } => format!("Polygon mesh, {rows} x {cols}"),
+            };
+            t.push_str(&format!(
+                "\n            Mesh type = {what}\n         Vertex count = {}\n           Face count = {}",
+                m.vertices.len(),
+                m.faces.len()
+            ));
+        }
         // Other objects: their properties one per line (LIST printed them as raw JSON).
         other => {
             if let Ok(serde_json::Value::Object(m)) = serde_json::to_value(other) {
@@ -449,6 +461,20 @@ fn list_text(s: &Session, h: Handle) -> String {
                 }
             }
         }
+    }
+    // 3D objects print where they are, as LIST's bounding box: their points alone don't say it.
+    if matches!(e.kind, EntityKind::Mesh(_) | EntityKind::Solid3d(_) | EntityKind::Surface(_) | EntityKind::Polyline3d(_) | EntityKind::Face3d(_))
+        && let Some((lo, hi)) = extents3(d, e)
+    {
+        t.push_str(&format!(
+            "\n         Bounding box:  Lower bound X={}  Y={}  Z={}\n                        Upper bound X={}  Y={}  Z={}",
+            fmt_d(s, lo.x),
+            fmt_d(s, lo.y),
+            fmt_d(s, lo.z),
+            fmt_d(s, hi.x),
+            fmt_d(s, hi.y),
+            fmt_d(s, hi.z)
+        ));
     }
     t
 }
@@ -711,15 +737,24 @@ fn run_entities(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "entities";
     let given = |k: &str| p.get(k).filter(|v| !v.is_null());
     let text = |k: &str| -> Result<Option<String>> {
-        given(k).map(|v| v.as_str().map(str::to_ascii_lowercase).ok_or_else(|| bad(CMD, format!("`{k}` must be a string")))).transpose()
+        given(k).map(|v| v.as_str().map(str::to_string).ok_or_else(|| bad(CMD, format!("`{k}` must be a string")))).transpose()
+    };
+    let filter = |k: &str| -> Result<Option<(String, crate::select::NameFilter)>> {
+        text(k)?
+            .map(|t| {
+                let f = crate::select::NameFilter::new(&t)
+                    .ok_or_else(|| bad(CMD, format!("`{k}` is longer than {} characters", crate::select::MAX_FILTER_LEN)))?;
+                Ok((t, f))
+            })
+            .transpose()
     };
     let count = |k: &str, default: usize| -> Result<usize> {
         given(k).map_or(Ok(default), |v| {
             v.as_u64().map(|n| usize::try_from(n).unwrap_or(usize::MAX)).ok_or_else(|| bad(CMD, format!("`{k}` must be a whole number, 0 or more")))
         })
     };
-    let ty = text("type")?;
-    let layer = text("layer")?;
+    let mut ty = filter("type")?;
+    let mut layer = filter("layer")?;
     let window = given("window")
         .map(|w| {
             let corners: Option<Vec<Vec2>> = w.as_array().filter(|a| a.len() == 2).and_then(|a| a.iter().map(point_value).collect());
@@ -735,19 +770,159 @@ fn run_entities(s: &mut Session, p: &Value) -> Result<Value> {
     let offset = count("offset", 0)?;
     let st = s.state()?;
     let d = &st.doc;
-    let Some(store) = d.space(&st.space) else { return Ok(json!({ "count": 0, "returned": 0, "entities": [] })) };
+    let store = d.space(&st.space);
+    // A filter that no name in the drawing passes says so, instead of a bare 0 (Q6125).
+    let mut warnings: Vec<String> = Vec::new();
+    if let Some((t, f)) = layer.as_mut() {
+        let used = store.into_iter().flat_map(|sp| sp.iter()).map(|e| e.common.layer.as_str());
+        let mut names: BTreeSet<&str> = d.layers.iter().map(|l| l.name.as_str()).collect();
+        names.extend(used);
+        if !names.iter().any(|n| f.matches(n)) {
+            warnings.push(format!("No layer in the drawing matches \"{t}\"."));
+        }
+    }
+    if let Some((t, f)) = ty.as_mut() {
+        let present: BTreeSet<&str> = store.into_iter().flat_map(|sp| sp.iter()).map(|e| e.kind.type_name()).collect();
+        let hit = store.into_iter().flat_map(|sp| sp.iter()).any(|e| crate::select::class_matches(e, f));
+        if !hit {
+            let have: Vec<&str> = present.iter().copied().take(20).collect();
+            let list = if have.is_empty() { "none".to_string() } else { have.join(", ") };
+            warnings.push(format!("No object in {} is of a type matching \"{t}\" (types here: {list}).", st.space.tab_name()));
+        }
+    }
+    let Some(store) = store else {
+        let mut out = json!({ "count": 0, "returned": 0, "offset": offset, "entities": [] });
+        attach_warning(&mut out, &warnings);
+        return Ok(out);
+    };
     let tol = window.as_ref().map(crate::select::window_tol).unwrap_or(0.0);
     let selection: std::collections::HashSet<Handle> = if selected { st.selection.iter().copied().collect() } else { Default::default() };
     let matches: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = store
         .iter()
         .filter(|e| !selected || selection.contains(&e.handle))
-        .filter(|e| ty.as_ref().is_none_or(|t| e.kind.type_name().to_ascii_lowercase() == *t || e.kind.dxf_name().to_ascii_lowercase() == *t))
-        .filter(|e| layer.as_ref().is_none_or(|l| e.common.layer.to_ascii_lowercase() == *l))
+        .filter(|e| ty.as_mut().is_none_or(|(_, f)| crate::select::class_matches(e, f)))
+        .filter(|e| layer.as_mut().is_none_or(|(_, f)| f.matches(&e.common.layer)))
         .filter(|e| window.as_ref().is_none_or(|w| crate::select::in_window(d, e, None, w, crossing, tol)))
         .collect();
-    let page: Vec<Value> = matches.iter().skip(offset).take(limit).map(|e| entity_summary(e)).collect();
+    if ty.iter().chain(layer.iter()).any(|(_, f)| f.exhausted()) {
+        return Err(bad(CMD, "a `type` or `layer` pattern is too complex to match; use fewer `*` wildcards"));
+    }
+    let page: Vec<Value> = matches
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|e| {
+            let mut v = entity_summary(e);
+            if let Some(o) = v.as_object_mut() {
+                o.insert(
+                    "extents".into(),
+                    extents3(d, e).map_or(Value::Null, |(lo, hi)| json!({ "min": [lo.x, lo.y, lo.z], "max": [hi.x, hi.y, hi.z] })),
+                );
+            }
+            v
+        })
+        .collect();
     // `count` is every match; `returned` is this page of them (`offset`, `limit`).
-    Ok(json!({ "count": matches.len(), "returned": page.len(), "offset": offset, "entities": page }))
+    let mut out = json!({ "count": matches.len(), "returned": page.len(), "offset": offset, "entities": page });
+    attach_warning(&mut out, &warnings);
+    Ok(out)
+}
+
+/// Add the filter warnings to a reply as one `warning` line (nothing when there are none).
+fn attach_warning(out: &mut Value, warnings: &[String]) {
+    if let (false, Some(o)) = (warnings.is_empty(), out.as_object_mut()) {
+        o.insert("warning".into(), Value::String(warnings.join(" ")));
+    }
+}
+
+/// Most points one object's extents read (a bigger mesh is measured by its first ones).
+const MAX_EXTENT_POINTS: usize = 1_000_000;
+/// Objects inside block references one object's Z range reads.
+const MAX_EXTENT_NESTED: usize = 20_000;
+
+/// A growing 3D box.
+struct Box3(Option<(Vec3, Vec3)>);
+
+impl Box3 {
+    fn add(&mut self, p: Vec3) {
+        if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
+            return;
+        }
+        self.0 = Some(match self.0 {
+            None => (p, p),
+            Some((lo, hi)) => (Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z)), Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z))),
+        });
+    }
+}
+
+/// The world box of an object's own 3D points (meshes, polyface and polygon meshes, 3D solids,
+/// surfaces, 3D polylines, 3D faces, lines), or `None` for any other object.
+fn points3(e: &Entity) -> Option<(Vec3, Vec3)> {
+    let mut b = Box3(None);
+    match &e.kind {
+        EntityKind::Mesh(m) => m.vertices.iter().take(MAX_EXTENT_POINTS).for_each(|v| b.add(*v)),
+        EntityKind::Solid3d(so) => {
+            let pr = so.props(so.mesh_tol());
+            if pr.min.x <= pr.max.x && pr.min.y <= pr.max.y && pr.min.z <= pr.max.z {
+                b.add(pr.min);
+                b.add(pr.max);
+            }
+        }
+        // A NURBS surface lies inside the hull of its control points.
+        EntityKind::Surface(sf) => sf.nurbs.control.iter().take(MAX_EXTENT_POINTS).for_each(|v| b.add(*v)),
+        EntityKind::Polyline3d(pl) => pl.points.iter().take(MAX_EXTENT_POINTS).for_each(|v| b.add(*v)),
+        EntityKind::Face3d(f) => f.corners.iter().for_each(|v| b.add(*v)),
+        EntityKind::Line(l) => [l.a, l.b].into_iter().for_each(|v| b.add(v)),
+        _ => return None,
+    }
+    b.0
+}
+
+/// The lowest and highest Z of an object: its 3D points, a block reference's contents at its
+/// insertion and Z scale, else its elevation.
+fn z_span(d: &cadaddy_doc::Drawing, e: &Entity, depth: usize, budget: &mut usize) -> Option<(f64, f64)> {
+    if let Some((lo, hi)) = points3(e) {
+        return Some((lo.z, hi.z));
+    }
+    if let EntityKind::Insert(ins) = &e.kind {
+        let base = ins.insert.z;
+        let inner = d.block(&ins.block).filter(|_| depth < 8).and_then(|blk| {
+            let mut span: Option<(f64, f64)> = None;
+            for c in blk.entities.iter() {
+                if *budget == 0 {
+                    break;
+                }
+                *budget -= 1;
+                if let Some((a, b)) = z_span(d, c, depth + 1, budget) {
+                    span = Some(span.map_or((a, b), |(lo, hi)| (lo.min(a), hi.max(b))));
+                }
+            }
+            let (lo, hi) = span?;
+            let (a, b) = (base + ins.scale.z * (lo - blk.base.z), base + ins.scale.z * (hi - blk.base.z));
+            Some((a.min(b), a.max(b)))
+        });
+        return Some(inner.unwrap_or((base, base))).filter(|(a, b)| a.is_finite() && b.is_finite());
+    }
+    let pb = cadaddy_doc::entity_bounds(d, e, 0);
+    let at = if pb.is_empty() { Vec2::ZERO } else { Vec2::new((pb.min.x + pb.max.x) / 2.0, (pb.min.y + pb.max.y) / 2.0) };
+    let z = entity_z(e, at).unwrap_or(0.0);
+    z.is_finite().then_some((z, z))
+}
+
+/// An object's 3D extents in world coordinates, `(min, max)`, or `None` when it has none (an
+/// empty block reference, a ray). 3D objects measure their points; everything else its plan
+/// extents between its lowest and highest Z.
+pub(crate) fn extents3(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<(Vec3, Vec3)> {
+    if let Some(b) = points3(e) {
+        return Some(b);
+    }
+    let pb = cadaddy_doc::entity_bounds(d, e, 0);
+    if pb.is_empty() || ![pb.min.x, pb.min.y, pb.max.x, pb.max.y].iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let mut budget = MAX_EXTENT_NESTED;
+    let (z0, z1) = z_span(d, e, 0, &mut budget)?;
+    Some((Vec3::new(pb.min.x, pb.min.y, z0), Vec3::new(pb.max.x, pb.max.y, z1)))
 }
 
 /// TEXTS: the readable text of the space's texts, multiline texts, block attributes and
