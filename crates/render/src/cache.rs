@@ -156,6 +156,7 @@ fn append_ref(dst: &mut DisplayList, src: &DisplayList) {
     dst.pens.extend_from_slice(&src.pens);
     dst.bounds = dst.bounds.union(&src.bounds);
     dst.expanded = dst.expanded.saturating_add(src.expanded);
+    dst.truncated |= src.truncated;
 }
 
 /// The list of one chunk's objects.
@@ -276,6 +277,7 @@ pub fn build_cached_into(d: &Drawing, space: &Space, opts: &Options, cache: &mut
             }
             out.bounds = bounds;
             out.expanded = expanded;
+            out.truncated = lists.iter().any(|l| l.truncated);
             cache.patched = true;
             cache.last = Some(fingerprint(&out));
             cache.parts = chunks.into_iter().zip(lists).map(|(chunk, list)| Part { chunk, list }).collect();
@@ -321,6 +323,7 @@ pub fn build_cached_into(d: &Drawing, space: &Space, opts: &Options, cache: &mut
                 }
                 out.bounds = lists.iter().fold(Bounds2::EMPTY, |b, l| b.union(&l.bounds));
                 out.expanded = expanded;
+                out.truncated = lists.iter().any(|l| l.truncated);
                 cache.patched = true;
                 cache.last = Some(fingerprint(&out));
                 cache.parts = chunks.into_iter().zip(lists).map(|(chunk, list)| Part { chunk, list }).collect();

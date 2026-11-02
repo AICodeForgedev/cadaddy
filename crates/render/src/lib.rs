@@ -184,6 +184,10 @@ pub struct DisplayList {
     pub sheet: Option<Sheet>,
     /// Block contents expanded while building (see [`MAX_BLOCK_EXPANSION`]).
     pub expanded: usize,
+    /// The expansion budget was spent: block contents past it are not in the list. The screen,
+    /// plots and exports draw what is here; the CLI and the control channel report this, so an
+    /// output that leaves contents out is never silent.
+    pub truncated: bool,
     /// Plot style end, join and fill style per primitive (parallel to `prims`; missing entries
     /// are "use object"), turned into geometry by [`pen::apply`].
     pub pens: Vec<Pen>,
@@ -722,10 +726,14 @@ impl Builder<'_> {
     /// Take one unit of the block-expansion budget; false once it is spent.
     fn expand(&mut self) -> bool {
         self.list.expanded = self.list.expanded.saturating_add(1);
-        match self.shared_budget {
+        let ok = match self.shared_budget {
             Some(spent) => spent.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < MAX_BLOCK_EXPANSION,
             None => self.list.expanded <= MAX_BLOCK_EXPANSION,
+        };
+        if !ok {
+            self.list.truncated = true;
         }
+        ok
     }
 }
 
@@ -886,6 +894,7 @@ fn append(dst: &mut DisplayList, src: DisplayList) {
     dst.pens.extend(src.pens);
     dst.bounds = dst.bounds.union(&src.bounds);
     dst.expanded = dst.expanded.saturating_add(src.expanded);
+    dst.truncated |= src.truncated;
 }
 
 /// The plot style table a build draws with: the one in `opts`, else (on screen) the layout's
@@ -1111,6 +1120,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
     // The contents are in paper units now: draw their pens before clipping.
     pen::apply(&mut sub.list, b.list.sheet.map_or_else(|| paper::paper_unit_mm(d), |s| s.unit_mm));
     b.list.expanded = b.list.expanded.saturating_add(sub.list.expanded);
+    b.list.truncated |= sub.list.truncated;
     append_clipped(&mut b.list, &sub.list, clip);
 }
 
@@ -2372,6 +2382,7 @@ fn underlay(b: &mut Builder, ctx: &Ctx, u: &cadaddy_doc::Underlay, rgb: Ink, lw:
         entity(&mut part, &sub, pe);
     }
     b.list.expanded = part.list.expanded;
+    b.list.truncated |= part.list.truncated;
     part.list.texts.clear();
     let fade = u.fade.min(80);
     for p in &mut part.list.prims {
@@ -2525,6 +2536,7 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
                 part.list.expanded = b.list.expanded;
                 insert_contents(&mut part, ctx, e, ins, blk);
                 b.list.expanded = part.list.expanded;
+                b.list.truncated |= part.list.truncated;
                 // Plot text entries point at primitives by index; the clipped copies are new ones.
                 part.list.texts.clear();
                 append_clipped(&mut b.list, &part.list, &Clip::Poly(&poly));
