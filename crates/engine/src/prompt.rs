@@ -26,6 +26,41 @@ impl Accept {
     pub const SELECT: Accept = Accept { point: true, number: false, text: false, select: true, enter: true };
 }
 
+/// Prompts that ask for one of their keywords, which AutoCAD 2024 writes without "or" before them:
+/// "Enter an option [?/Make/Set/…]:", "Enter layout option [Copy/Delete/…/?] <set>:", "New color
+/// [Truecolor/COlorbook] <BYLAYER>:". A prompt asking for something else besides its keywords has
+/// it: "Enter block name or [?]:", "Specify insertion base point or [Basepoint/…]:". Read from
+/// AutoCAD's command line over measured runs, where no prompt was written both ways.
+const NO_OR: [&str; 27] = [
+    "Bring to front",
+    "Calculate rectangle dimensions based on",
+    "Choose mode for selected object conversion",
+    "Create annotative block",
+    "Enter a configuration option",
+    "Enter a plotting preference",
+    "Enter an annotation option",
+    "Enter an option",
+    "Enter an option to change",
+    "Enter attribute visibility setting",
+    "Enter justification",
+    "Enter layout option",
+    "Enter leader format option",
+    "Enter line spacing type",
+    "Enter object ordering option",
+    "Enter polyline linetype generation option",
+    "Enter property to change",
+    "Enter the type of array",
+    "Enter type of unused objects to purge",
+    "Enter viewport arrangement",
+    "Explode block",
+    "New color",
+    "Orient relative to sheet in paper space viewports",
+    "Select a content type",
+    "Select a leader type",
+    "Use landing",
+    "Viewport View Locking",
+];
+
 /// A prompt shown on the command line.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -211,15 +246,7 @@ impl Prompt {
         let mut s = self.message.clone();
         // A message that already lists its options ("... or [Options]") keeps its own list.
         if !self.keywords.is_empty() && !self.message.trim_end().ends_with(']') {
-            // A question offers its answers ("Fix any errors detected? [Yes/No]"); anything else
-            // offers options besides what it asks for ("Specify next point or [Undo]").
-            s.push_str(if self.message.is_empty() {
-                "["
-            } else if self.message.ends_with('?') || self.message.ends_with(" or") {
-                " ["
-            } else {
-                " or ["
-            });
+            s.push_str(self.keyword_lead());
             s.push_str(&self.keywords.join("/"));
             s.push(']');
         }
@@ -228,6 +255,20 @@ impl Prompt {
         }
         s.push(':');
         s
+    }
+    /// What goes between the message and its keywords. A question offers its answers ("Fix any
+    /// errors detected? [Yes/No]"), and so does a prompt for an option ([`NO_OR`]) or one whose
+    /// message already ends in "or": " [". Anything else offers options besides what it asks for
+    /// ("Specify next point or [Undo]"): " or [". With no message, "[". The command line in the
+    /// window draws the keywords itself and takes this too.
+    pub fn keyword_lead(&self) -> &'static str {
+        if self.message.is_empty() {
+            "["
+        } else if self.message.ends_with('?') || self.message.ends_with(" or") || NO_OR.contains(&self.message.as_str()) {
+            " ["
+        } else {
+            " or ["
+        }
     }
     /// Whether `text` is a whole keyword or its capital-letter shortcut (not just a prefix).
     pub fn exact_keyword(&self, text: &str) -> bool {
@@ -447,6 +488,13 @@ mod tests {
     fn keywords() {
         let p = Prompt::new("Specify next point", Accept::POINT).kw(&["Undo", "Close"]);
         assert_eq!(p.display(), "Specify next point or [Undo/Close]:");
+        // A prompt for an option has no "or", as AutoCAD writes it.
+        let o = Prompt::new("Enter an option", Accept::TEXT).kw(&["Close", "Join"]);
+        assert_eq!(o.display(), "Enter an option [Close/Join]:");
+        let c = Prompt::new("New color", Accept::TEXT).kw(&["Truecolor", "COlorbook"]).default("BYLAYER");
+        assert_eq!(c.display(), "New color [Truecolor/COlorbook] <BYLAYER>:");
+        let b = Prompt::new("Enter block name", Accept::TEXT).kw(&["?"]);
+        assert_eq!(b.display(), "Enter block name or [?]:");
         let q = Prompt::new("Erase polyline?", Accept::TEXT).kw(&["Yes", "No"]).default("No");
         assert_eq!(q.display(), "Erase polyline? [Yes/No] <No>:");
         assert_eq!(p.match_keyword("u").as_deref(), Some("Undo"));

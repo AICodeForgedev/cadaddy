@@ -86,7 +86,7 @@ fn bad_and_hostile_values_are_refused() {
 fn visualstyles_typed_at_the_command_line() {
     let mut s = session();
     s.cmdline("vsm").unwrap();
-    assert!(prompt(&s).starts_with("Enter an option or [Ambient occlusion/Radius/Soft shadows/Tone map/eXit] <eXit>:"), "{}", prompt(&s));
+    assert!(prompt(&s).starts_with("Enter an option [Ambient occlusion/Radius/Soft shadows/Tone map/eXit] <eXit>:"), "{}", prompt(&s));
     s.cmdline("A").unwrap();
     assert!(prompt(&s).starts_with("Ambient occlusion strength (0 off … 2) <1>:"), "{}", prompt(&s));
     s.cmdline("1.5").unwrap();
