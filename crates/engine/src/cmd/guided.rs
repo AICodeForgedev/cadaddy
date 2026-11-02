@@ -428,6 +428,9 @@ pub struct GuidedJob {
     /// Submittal PDFs (or folders of them) whose products go onto the built elements.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submittals: Vec<String>,
+    /// Specification section PDFs (or folders of them): what each kind of product must be.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub specs: Vec<String>,
     /// The type marks the submittals give products for: device types as the legends' are.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submittal_types: Vec<String>,
@@ -440,6 +443,10 @@ pub struct GuidedJob {
     /// What the print folder held when the job started ([`prints_stamp`]).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prints_stamp: String,
+    /// Each print file the job started from (name below the folder, size, content hash): a
+    /// checkpoint resumes against the same prints wherever they are, and a difference is named.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prints_files: Vec<PrintFile>,
     /// The set's sheet index from classify: one entry per real sheet, and the levels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<Value>,
@@ -738,10 +745,12 @@ impl GuidedJob {
             checkpoint: None,
             checkpoint_given: false,
             submittals: Vec::new(),
+            specs: Vec::new(),
             submittal_types: Vec::new(),
             luminaire_types: Vec::new(),
             wall_luminaire_types: Vec::new(),
             prints_stamp: String::new(),
+            prints_files: Vec::new(),
             index: None,
             sheet_regions: Vec::new(),
             sheet_spans: Vec::new(),
@@ -2045,9 +2054,50 @@ fn default_checkpoint(job_id: &str) -> Option<String> {
     }
 }
 
-/// What the print folder holds (names, sizes, change times): a checkpoint of other prints isn't
-/// resumed.
-fn prints_stamp(pdfs: &str) -> String {
+/// One print file a job started from: its name below the print folder (`/` between folders, the
+/// same on every machine), its size and its content hash. Not its path or change time: the same
+/// prints copied to another folder or machine are the same prints.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrintFile {
+    pub name: String,
+    pub size: u64,
+    pub hash: String,
+}
+
+/// The print files at `pdfs` (a folder of prints, or one print file), with their content hashes.
+fn print_files(pdfs: &str) -> Vec<PrintFile> {
+    let path = std::path::Path::new(pdfs);
+    let files: Vec<(String, std::path::PathBuf)> = if path.is_file() {
+        path.file_name().and_then(|n| n.to_str()).map(|n| vec![(n.to_string(), path.to_path_buf())]).unwrap_or_default()
+    } else {
+        cadaddy_mepfix::printset::discover_sheets(path).unwrap_or_default()
+    };
+    files
+        .into_iter()
+        .map(|(name, p)| {
+            let size = std::fs::metadata(&p).map_or(0, |m| m.len());
+            // Unreadable: a hash no file has, so it never matches a readable one.
+            let hash = cadaddy_mepfix::printset::file_hash(&p).unwrap_or_else(|_| "unreadable".into());
+            PrintFile { name, size, hash }
+        })
+        .collect()
+}
+
+/// One stamp for a set of print files: their names, sizes and contents (stable on every machine).
+fn prints_stamp(files: &[PrintFile]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for f in files {
+        for b in f.name.bytes().chain([0]).chain(f.size.to_le_bytes()).chain(f.hash.bytes()).chain(*b"\n") {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    format!("content:{h:016x}")
+}
+
+/// The stamp checkpoints made before content stamps carry (names, sizes, change times, hashed
+/// with this build's hasher): only an unmoved, untouched folder matches it.
+fn legacy_prints_stamp(pdfs: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     if let Ok(files) = cadaddy_mepfix::printset::discover_sheets(std::path::Path::new(pdfs)) {
@@ -2064,6 +2114,76 @@ fn prints_stamp(pdfs: &str) -> String {
         }
     }
     format!("{:016x}", h.finish())
+}
+
+/// Most differences a refusal lists (the rest are counted).
+const MAX_PRINT_DIFFS: usize = 12;
+
+/// How the prints a checkpoint was made from differ from `now`, file by file (empty: the same).
+fn prints_diff(saved: &[PrintFile], now: &[PrintFile]) -> Vec<String> {
+    let mut out = Vec::new();
+    for f in saved {
+        match now.iter().find(|n| n.name == f.name) {
+            None => out.push(format!("{} is missing", f.name)),
+            Some(n) if n.size != f.size => out.push(format!("{} changed ({} bytes, was {})", f.name, n.size, f.size)),
+            Some(n) if n.hash != f.hash => out.push(format!("{} changed (same size, other content)", f.name)),
+            Some(_) => {}
+        }
+    }
+    for n in now.iter().filter(|n| !saved.iter().any(|f| f.name == n.name)) {
+        out.push(format!("{} is new", n.name));
+    }
+    if out.len() > MAX_PRINT_DIFFS {
+        let more = out.len() - MAX_PRINT_DIFFS;
+        out.truncate(MAX_PRINT_DIFFS);
+        out.push(format!("and {more} more"));
+    }
+    out
+}
+
+/// What a checkpoint's prints are next to the ones a job is started with.
+#[derive(Debug, PartialEq)]
+enum PrintsCheck {
+    /// The same files, content and all (`moved`: in another folder or on another machine).
+    Same { moved: bool },
+    /// Other prints: what differs.
+    Differs(Vec<String>),
+    /// A checkpoint made before content stamps, not in its own untouched folder: its prints
+    /// can't be compared (why, and the sheet files it read that aren't here).
+    Unchecked { why: String, missing: Vec<String> },
+}
+
+/// Compare the prints a checkpoint's job was made from with these (`files` at `pdfs`).
+fn check_prints(saved: &GuidedJob, pdfs: &str, files: &[PrintFile]) -> PrintsCheck {
+    let moved = saved.pdfs_path != pdfs;
+    if !saved.prints_files.is_empty() {
+        let diff = prints_diff(&saved.prints_files, files);
+        return if diff.is_empty() { PrintsCheck::Same { moved } } else { PrintsCheck::Differs(diff) };
+    }
+    if !moved && !saved.prints_stamp.is_empty() && saved.prints_stamp == legacy_prints_stamp(pdfs) {
+        return PrintsCheck::Same { moved: false };
+    }
+    // The sheet files the old job read: at least their names can be looked for.
+    let mut missing: Vec<String> = Vec::new();
+    if let Some(sheets) = saved.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array) {
+        for file in sheets.iter().filter_map(|sh| sh.get("file").and_then(Value::as_str)).take(4096) {
+            if !files.iter().any(|f| f.name == file) && !missing.iter().any(|m| m == file) {
+                missing.push(file.to_string());
+            }
+        }
+    }
+    missing.truncate(MAX_PRINT_DIFFS);
+    let why = if moved {
+        format!("it was made from the prints at {} before checkpoints kept their prints' content", saved.pdfs_path)
+    } else {
+        "it was made before checkpoints kept their prints' content, and the folder's files or change times are not the same".to_string()
+    };
+    PrintsCheck::Unchecked { why, missing }
+}
+
+/// The last part of a path written on any machine (a Windows or a Unix path): its file name.
+fn path_leaf(p: &str) -> &str {
+    p.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(p)
 }
 
 /// Save the job's drawing (its state inside) to the job's checkpoint; a failure is a note, not
@@ -2105,14 +2225,15 @@ fn is_job_checkpoint(path: &str) -> bool {
     d.agent.as_deref().and_then(|a| serde_json::from_str::<Value>(a).ok()).is_some_and(|a| a.get("guided_job").is_some())
 }
 
-/// The unfinished job a checkpoint holds for these prints and this goal, with its drawing.
-fn read_checkpoint(path: &str, pdfs: &str, goal: &JobGoal, stamp: &str) -> Option<(cadaddy_doc::Drawing, GuidedJob)> {
+/// The unfinished job of this goal a checkpoint holds, with its drawing (its prints are checked
+/// by the caller: [`check_prints`]).
+fn read_checkpoint(path: &str, goal: &JobGoal) -> Option<(cadaddy_doc::Drawing, GuidedJob)> {
     let hooks = super::file::io()?;
     let bytes = std::fs::read(path).ok()?;
     let d = (hooks.read)(&bytes, path).ok()?;
     let agent: Value = serde_json::from_str(d.agent.as_deref()?).ok()?;
     let job: GuidedJob = serde_json::from_value(agent.get("guided_job")?.clone()).ok()?;
-    (job.pdfs_path == pdfs && job.goal == *goal && job.prints_stamp == stamp && !job.is_done()).then_some((d, job))
+    (job.goal == *goal && !job.is_done()).then_some((d, job))
 }
 
 /// An unlisted tag printed by several symbols: a question with a crop.
@@ -4945,6 +5066,24 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         Err(e) => result["room_volumes_error"] = json!(e.to_string()),
     }
     bim_step(s, job, "room volumes built", t);
+    // The panel schedules (each circuit's breaker and its type), for the devices' props.
+    let t = web_time::Instant::now();
+    let schedules = s.doc().map(|d| panel_schedules(d, job)).unwrap_or_default();
+    if !schedules.is_empty()
+        && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+    {
+        let typed = schedules.iter().flat_map(|p| &p.circuits).filter(|c| !c.protection.is_empty()).count();
+        progress_line(&format!(
+            "  panel schedules: {} ({} circuits, {typed} with their breaker's type): {}",
+            schedules.len(),
+            schedules.iter().map(|p| p.circuits.len()).sum::<usize>(),
+            schedules.iter().map(|p| p.panel.as_str()).collect::<Vec<_>>().join(", ")
+        ));
+        result["panel_schedules"] = json!(schedules.len());
+        sp.mep.panel_schedules = schedules;
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    bim_step(s, job, "panel schedules", t);
     let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
         Ok(v) => {
@@ -4997,6 +5136,41 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         submittals_step(s, job, &mut result);
         bim_step(s, job, "submittals applied", t);
     }
+    // The specifications' product data (and the submittals' as applied) onto the elements.
+    let t = web_time::Instant::now();
+    products_step(s, job, &mut result);
+    bim_step(s, job, "product data", t);
+    // The code rules on the devices (tamper-resistant in guest rooms, GFCI by circuit), the
+    // decisions the documents can't make left `undecided` and asked.
+    let t = web_time::Instant::now();
+    match s.execute("bim.coderules", &json!({})) {
+        Ok(v) => {
+            let line = format!(
+                "  code rules: {} receptacles; tamper-resistant {} (TR stated in the documents for {}); GFCI by circuit {}",
+                v.get("receptacles").and_then(Value::as_u64).unwrap_or(0),
+                v.get("tamper_resistant").and_then(Value::as_u64).unwrap_or(0),
+                v.pointer("/tr_documented/stated").and_then(Value::as_u64).unwrap_or(0),
+                v.get("gfci").map(Value::to_string).unwrap_or_default()
+            );
+            report_progress(s, json!({"step": "code rules"}), &line);
+            s.echo(line);
+            let undecided = v.pointer("/gfci/undecided").and_then(Value::as_u64).unwrap_or(0);
+            if undecided > 0 {
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!("{undecided} GFCI receptacles are undecided: their breaker's type isn't in the panel schedule, or which is first on the circuit isn't known"),
+                    "GFCI is judged per circuit: a receptacle under a GFCI breaker is standard; else the first on the circuit is the GFCI",
+                    2,
+                    vec!["Give the panel schedules' breaker types, or mark which receptacle is first on each circuit".into()],
+                    None,
+                    false,
+                );
+            }
+            result["code_rules"] = v;
+        }
+        Err(e) => result["code_rules_error"] = json!(e.to_string()),
+    }
+    bim_step(s, job, "code rules", t);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -5207,6 +5381,86 @@ const MAX_SHEET_LINKS: usize = 2_000;
 /// and its level (a sheet listed already keeps its entry and gains its place).
 /// The build's identity pass (`bim.identity` then `rooms.graph`): merged copies leave the counts,
 /// findings go on the build stage, and the answer's summary goes in the result as `identity`.
+/// The specifications the job reads: those given, else a project's specifications folder beside
+/// its submittals (`…\\03_Specifications` next to `…\\02_Submittals`).
+fn job_specs(job: &GuidedJob) -> Vec<String> {
+    if !job.specs.is_empty() {
+        return job.specs.clone();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for given in &job.submittals {
+        let Some(parent) = std::path::Path::new(given.trim()).parent() else { continue };
+        let Ok(rd) = std::fs::read_dir(parent) else { continue };
+        let mut found: Vec<String> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().to_ascii_uppercase().contains("SPEC")))
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        found.sort();
+        for f in found {
+            if !out.contains(&f) {
+                out.push(f);
+            }
+        }
+    }
+    out
+}
+
+/// The specifications' and submittals' product data onto the built elements (`bim.products`,
+/// after the submittals): each device, fixture and equipment element's `product` record. Never
+/// stops the job: kinds no section or submittal speaks for are a finding.
+fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
+    let specs = job_specs(job);
+    if specs.is_empty() && job.submittals.is_empty() {
+        return;
+    }
+    let v = match s.execute("bim.products", &json!({"specs": specs})) {
+        Ok(v) => v,
+        Err(e) => {
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("The product data could not be applied: {e}"),
+                "bim.products failed after the build",
+                2,
+                Vec::new(),
+                None,
+                false,
+            );
+            return;
+        }
+    };
+    let line = format!(
+        "  product data: {} spec sections ({} requirements, kinds {}); records on {} elements; by kind {}",
+        v.get("sections").and_then(Value::as_array).map_or(0, Vec::len),
+        v.get("requirements").and_then(Value::as_u64).unwrap_or(0),
+        v.get("kinds_specified").map(Value::to_string).unwrap_or_default(),
+        v.get("elements").and_then(Value::as_u64).unwrap_or(0),
+        v.get("by_kind").map(Value::to_string).unwrap_or_default()
+    );
+    report_progress(s, json!({"step": "products", "elements": v.get("elements")}), &line);
+    s.echo(line);
+    let none: Vec<String> = v
+        .get("no_product_data")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(k, why)| format!("{k}: {}", why.as_str().unwrap_or("")))
+        .collect();
+    if !none.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} kinds of element carry no product data: {}", none.len(), none.join("; ")),
+            "No specification section read and no submittal speaks for them",
+            1,
+            vec!["Give the job their specification sections or submittals".into()],
+            None,
+            false,
+        );
+    }
+    result["products"] = v;
+}
+
 /// The submittals' products onto the built elements (BUILD ORDER: after the architecture and the
 /// MEP objects; `bim.submittals`). Never stops the job: what they leave open is a finding.
 fn submittals_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
@@ -5844,7 +6098,26 @@ fn rigid_room_fit(
     }
     let stride = (view_pts.len() / MAX_FIT_SAMPLES).max(1);
     let few: Vec<cadaddy_geom::Vec2> = view_pts.iter().step_by(stride).copied().collect();
-    let mut best: Option<(RoomFit, usize)> = None;
+    // Each turn's likeliest offsets (the most sample/line pairs agreeing), then the turn and
+    // offset whose lines match both ways: the view's samples on the floor's lines and the room's
+    // own lines explained by the view, each counted once. Pair counts alone can't tell a turn from
+    // its mirror when the walls are alike and only the bath and the door differ.
+    let cell = |p: cadaddy_geom::Vec2| ((p.x / tol).floor() as i64, (p.y / tol).floor() as i64);
+    let grid_of = |pts: &[cadaddy_geom::Vec2]| {
+        let mut g: std::collections::HashMap<(i64, i64), Vec<cadaddy_geom::Vec2>> = std::collections::HashMap::new();
+        for p in pts {
+            g.entry(cell(*p)).or_default().push(*p);
+        }
+        g
+    };
+    let hit = |g: &std::collections::HashMap<(i64, i64), Vec<cadaddy_geom::Vec2>>, p: cadaddy_geom::Vec2| {
+        let (cx, cy) = cell(p);
+        (-1..=1).any(|dx| (-1..=1).any(|dy| g.get(&(cx + dx, cy + dy)).is_some_and(|v| v.iter().any(|q| q.dist(p) <= tol))))
+    };
+    let floor_grid = grid_of(&near);
+    let inside: Vec<cadaddy_geom::Vec2> =
+        near.iter().filter(|f| f.x >= room[0] && f.x <= room[2] && f.y >= room[1] && f.y <= room[3]).copied().take(4 * MAX_FIT_SAMPLES).collect();
+    let mut best: Option<(RoomFit, usize, usize)> = None;
     for k in 0..8u8 {
         let turned: Vec<cadaddy_geom::Vec2> = few.iter().map(|p| turn_vec(*p - from, k)).collect();
         let mut votes: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
@@ -5857,16 +6130,26 @@ fn rigid_room_fit(
                 *votes.entry(((to.x / tol).round() as i64, (to.y / tol).round() as i64)).or_default() += 1;
             }
         }
-        // Ties go to the smaller offset key (a hash map's order differs run to run).
-        if let Some((o, n)) = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
-            && best.as_ref().is_none_or(|b| n > b.1)
-        {
+        // Its best few offsets (ties to the smaller key: a hash map's order differs run to run).
+        let mut ranked: Vec<((i64, i64), usize)> = votes.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        for (o, _) in ranked.into_iter().take(FIT_OFFSETS_TRIED) {
             let to = cadaddy_geom::Vec2::new(o.0 as f64 * tol, o.1 as f64 * tol);
-            best = Some((RoomFit { k, from, to, rigid: true }, n));
+            let placed: Vec<cadaddy_geom::Vec2> = turned.iter().map(|t| to + *t).collect();
+            let on_lines = placed.iter().filter(|p| hit(&floor_grid, **p)).count();
+            let placed_grid = grid_of(&placed);
+            let explained = inside.iter().filter(|f| hit(&placed_grid, **f)).count();
+            let score = on_lines + explained * few.len() / inside.len().max(1);
+            if best.as_ref().is_none_or(|b| score > b.2) {
+                best = Some((RoomFit { k, from, to, rigid: true }, on_lines, score));
+            }
         }
     }
-    best.filter(|(_, n)| *n * 100 >= few.len() * MIN_FIT_SHARE_PCT)
+    best.map(|(f, on, _)| (f, on)).filter(|(_, n)| *n * 100 >= few.len() * MIN_FIT_SHARE_PCT)
 }
+
+/// The offsets each turn of a view is tried at (its most agreed-on), for the two-way match.
+const FIT_OFFSETS_TRIED: usize = 3;
 
 /// How far round a room its floor's linework is looked at to lay a typical view in it, feet.
 const ROOM_FIT_MARGIN_FT: f64 = 3.0;
@@ -7584,6 +7867,33 @@ fn legend_symbols(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> BTreeMap<Shape, 
     pages.extend(non_plan_pages(job, "E").into_iter().filter(|(n, _)| !seen.contains(n)));
     for (number, sub) in &pages {
         legend_rows(sub, number, &mut out);
+    }
+    out
+}
+
+/// The panel schedules on the electrical sheets (the job's drawing's and those it didn't import),
+/// each panel once (the first sheet's).
+fn panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<cadaddy_walk3d::PanelSchedule> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut pages: Vec<(String, cadaddy_doc::Drawing)> = job_sheet_refs(job)
+        .iter()
+        .filter(|r| r.discipline.eq_ignore_ascii_case("E") && seen.insert(r.number.split('/').next().unwrap_or("").to_string()))
+        .take(MAX_LEGEND_SHEETS)
+        .map(|sh| {
+            (
+                sh.number.split('/').next().unwrap_or("").to_string(),
+                super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() }),
+            )
+        })
+        .collect();
+    pages.extend(non_plan_pages(job, "E").into_iter().filter(|(n, _)| !seen.contains(n)));
+    let mut out: Vec<cadaddy_walk3d::PanelSchedule> = Vec::new();
+    for (number, sub) in &pages {
+        for p in super::panelsched::read(&cadaddy_mepfix::sheet_facts::texts(sub), number) {
+            if !out.iter().any(|o| o.panel.eq_ignore_ascii_case(&p.panel)) {
+                out.push(p);
+            }
+        }
     }
     out
 }
@@ -10783,6 +11093,11 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(64).collect(),
         _ => Vec::new(),
     };
+    job.specs = match p.get("specs") {
+        Some(Value::String(one)) if !one.trim().is_empty() => vec![one.trim().to_string()],
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(64).collect(),
+        _ => Vec::new(),
+    };
     // The checkpoint: a path, false (none), else the default in the temporary folder.
     job.checkpoint = match p.get("checkpoint") {
         Some(Value::Bool(false)) => None,
@@ -10803,41 +11118,105 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
         }
         _ => default_checkpoint(&job.id),
     };
-    job.prints_stamp = prints_stamp(pdfs);
-    // A job of these prints cut off before it finished goes on from its last stage.
-    let resume = p.get("resume").and_then(Value::as_bool).unwrap_or(true);
-    if resume
+    job.prints_files = print_files(pdfs);
+    job.prints_stamp = prints_stamp(&job.prints_files);
+    // A job of these prints cut off before it finished goes on from its last stage: the same
+    // prints by content, wherever they are now (`resume: "any"`: whatever they are).
+    let any = match p.get("resume") {
+        None | Some(Value::Null | Value::Bool(true)) => Some(false),
+        Some(Value::Bool(false)) => None,
+        Some(Value::String(v)) if v.trim().eq_ignore_ascii_case("any") => Some(true),
+        Some(other) => return Err(bad("job.start", format!("resume is true, false or \"any\", not {other}"))),
+    };
+    if let Some(any) = any
         && let Some(path) = job.checkpoint.clone()
-        && let Some((d, mut saved)) = read_checkpoint(&path, pdfs, &job.goal, &job.prints_stamp)
+        && let Some((d, mut saved)) = read_checkpoint(&path, &job.goal)
     {
+        let check = check_prints(&saved, pdfs, &job.prints_files);
+        let note = match &check {
+            PrintsCheck::Same { moved: false } => None,
+            PrintsCheck::Same { moved: true } => {
+                Some(format!("the prints moved from {} to {pdfs} (the same files, content and all)", saved.pdfs_path))
+            }
+            PrintsCheck::Differs(diff) if any => Some(format!("resumed with other prints, as asked (resume: \"any\"): {}", diff.join("; "))),
+            PrintsCheck::Unchecked { why, missing } if any => Some(format!(
+                "resumed unchecked, as asked (resume: \"any\"): {why}{}",
+                if missing.is_empty() { "; every sheet file it read is here".to_string() } else { format!("; not here: {}", missing.join(", ")) }
+            )),
+            PrintsCheck::Differs(diff) => {
+                return Err(bad(
+                    "job.start",
+                    format!(
+                        "checkpoint {path} was made from other prints: {}. resume: false starts the job over (writing over the checkpoint); resume: \"any\" goes on from it anyway",
+                        diff.join("; ")
+                    ),
+                ));
+            }
+            PrintsCheck::Unchecked { why, missing } => {
+                return Err(bad(
+                    "job.start",
+                    format!(
+                        "checkpoint {path} can't be matched to these prints: {why}{}. resume: \"any\" goes on from it anyway (its prints taken to be these); resume: false starts the job over (writing over the checkpoint)",
+                        if missing.is_empty() { String::new() } else { format!("; sheet files it read that aren't here: {}", missing.join(", ")) }
+                    ),
+                ));
+            }
+        };
         *s.doc_mut()? = d;
         // The print set's project lives in the session, not the drawing.
         s.execute("printset.open", &json!({"path": pdfs}))?;
         for st in saved.stages.iter_mut().filter(|st| st.status == StageStatus::Running) {
             st.status = StageStatus::Pending;
         }
+        let moved_from = (saved.pdfs_path != pdfs).then(|| saved.pdfs_path.clone());
+        // From here the job's prints are these: the rest of it reads them, and the next resume
+        // checks against them.
+        saved.pdfs_path = pdfs.to_string();
+        saved.prints_files = job.prints_files.clone();
+        saved.prints_stamp = job.prints_stamp.clone();
         saved.checkpoint = Some(path.clone());
         saved.checkpoint_given = job.checkpoint_given;
         saved.auto = job.auto;
         if !job.submittals.is_empty() {
-            if saved.submittals != job.submittals {
+            // The same submittal files somewhere else keep what was read from them.
+            let same_files = saved.submittals.len() == job.submittals.len()
+                && saved.submittals.iter().zip(&job.submittals).all(|(a, b)| path_leaf(a) == path_leaf(b));
+            if !same_files {
                 saved.submittal_types.clear();
                 saved.luminaire_types.clear();
                 saved.wall_luminaire_types.clear();
             }
             saved.submittals = job.submittals.clone();
+        } else if let Some(gone) = saved.submittals.iter().find(|p| !std::path::Path::new(p).exists()) {
+            s.echo(format!("job: the checkpoint's submittals ({gone}) aren't on this machine: job.start {{submittals}} gives them"));
         }
         let done: Vec<&str> = saved.stages.iter().filter(|st| st.status == StageStatus::Done).map(|st| st.name.label()).collect();
-        let line = format!("job: resumed from {path} ({} stage(s) done: {})", done.len(), done.join(", "));
-        let data = json!({"step": "resumed", "checkpoint": path, "stages_done": done});
+        let line = format!(
+            "job: resumed from {path} ({} stage(s) done: {}){}",
+            done.len(),
+            done.join(", "),
+            note.as_deref().map_or_else(String::new, |n| format!("; {n}"))
+        );
+        let data = json!({"step": "resumed", "checkpoint": path, "stages_done": done, "prints_moved_from": moved_from, "note": note});
         report_progress(s, data, &line);
         s.echo(line);
-        saved.audit("job_resumed", "pipeline", None, None, Some(json!({"checkpoint": path})));
+        saved.audit("job_resumed", "pipeline", None, None, Some(json!({"checkpoint": path, "prints_moved_from": moved_from, "note": note})));
         advance_pipeline(s, &mut saved)?;
         save_job(s, &saved)?;
         let stats = model_stats_from_session(s);
         let mut status = job_status_value(&saved, stats.as_ref());
         status["resumed"] = json!(true);
+        status["prints_check"] = json!(match check {
+            PrintsCheck::Same { .. } => "same",
+            PrintsCheck::Differs(_) => "differs",
+            PrintsCheck::Unchecked { .. } => "unchecked",
+        });
+        if let Some(from) = moved_from {
+            status["prints_moved_from"] = json!(from);
+        }
+        if let Some(n) = note {
+            status["resume_note"] = json!(n);
+        }
         return Ok(status);
     }
     job.audit("job_start", "pipeline", None, None, Some(json!({"pdfs": pdfs, "goal": goal_str, "auto": job.auto})));
@@ -11779,7 +12158,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("job.start", "Start Guided Job", cmd_start)
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] (specification section PDFs, or folders of them; default a *Spec* folder beside the submittals: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
@@ -11808,6 +12187,112 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod ckpt_tests {
+    use super::*;
+
+    fn pf(name: &str, size: u64, hash: &str) -> PrintFile {
+        PrintFile { name: name.into(), size, hash: hash.into() }
+    }
+
+    /// Q6156: a difference names the file and says how it differs; the same files are none.
+    #[test]
+    fn prints_diff_names_each_file_that_differs() {
+        let saved = vec![pf("A-101.pdf", 10, "aa"), pf("Mech/M-1.pdf", 20, "bb"), pf("E-1.pdf", 30, "cc"), pf("Old.pdf", 5, "dd")];
+        assert!(prints_diff(&saved, &saved).is_empty());
+        let now = vec![pf("A-101.pdf", 10, "aa"), pf("Mech/M-1.pdf", 21, "bx"), pf("E-1.pdf", 30, "cx"), pf("New.pdf", 1, "ee")];
+        let d = prints_diff(&saved, &now);
+        assert_eq!(
+            d,
+            vec![
+                "Mech/M-1.pdf changed (21 bytes, was 20)".to_string(),
+                "E-1.pdf changed (same size, other content)".into(),
+                "Old.pdf is missing".into(),
+                "New.pdf is new".into()
+            ]
+        );
+        // A long list is capped and counted.
+        let many: Vec<PrintFile> = (0..40).map(|i| pf(&format!("S-{i}.pdf"), 1, "x")).collect();
+        let d = prints_diff(&[], &many);
+        assert_eq!(d.len(), MAX_PRINT_DIFFS + 1);
+        assert_eq!(d.last().map(String::as_str), Some("and 28 more"));
+    }
+
+    /// Q6156: the stamp is the files' names, sizes and contents: not where they are or when they
+    /// were written, and stable (no per-process hasher keys).
+    #[test]
+    fn prints_stamp_is_content_only_and_stable() {
+        let a = vec![pf("A-101.pdf", 10, "00000000000000aa")];
+        assert_eq!(prints_stamp(&a), prints_stamp(&a.clone()));
+        assert!(prints_stamp(&a).starts_with("content:"));
+        assert_ne!(prints_stamp(&a), prints_stamp(&[pf("A-101.pdf", 10, "00000000000000ab")]));
+        assert_ne!(prints_stamp(&a), prints_stamp(&[pf("A-102.pdf", 10, "00000000000000aa")]));
+        assert_ne!(prints_stamp(&a), prints_stamp(&[pf("A-101.pdf", 11, "00000000000000aa")]));
+        // A known value: the same on every machine and build.
+        assert_eq!(prints_stamp(&[]), "content:cbf29ce484222325");
+    }
+
+    /// Q6156: the same files in two folders with other change times are the same prints; one
+    /// changed byte is named.
+    #[test]
+    fn print_files_match_by_content_across_folders() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let root = std::env::temp_dir().join(format!("cadaddy_ckptany_unit_{}_{nanos}", std::process::id()));
+        let (a, b) = (root.join("a"), root.join("b"));
+        for dir in [&a, &b] {
+            std::fs::create_dir_all(dir.join("Sub")).unwrap();
+            std::fs::write(dir.join("One.pdf"), b"%PDF-1.4 one").unwrap();
+            std::fs::write(dir.join("Sub").join("Two.pdf"), b"%PDF-1.4 two").unwrap();
+        }
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(7200);
+        std::fs::File::options().write(true).open(b.join("One.pdf")).unwrap().set_modified(later).unwrap();
+        let (fa, fb) = (print_files(&a.display().to_string()), print_files(&b.display().to_string()));
+        assert_eq!(fa.len(), 2);
+        assert_eq!(fa.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["One.pdf", "Sub/Two.pdf"]);
+        assert_eq!(fa, fb);
+        let mut job = GuidedJob::new(&a.display().to_string(), JobGoal::Bim);
+        job.prints_files = fa;
+        assert_eq!(check_prints(&job, &a.display().to_string(), &fb), PrintsCheck::Same { moved: false });
+        assert_eq!(check_prints(&job, &b.display().to_string(), &fb), PrintsCheck::Same { moved: true });
+        std::fs::write(b.join("Sub").join("Two.pdf"), b"%PDF-1.4 tw0").unwrap();
+        let fb = print_files(&b.display().to_string());
+        assert_eq!(
+            check_prints(&job, &b.display().to_string(), &fb),
+            PrintsCheck::Differs(vec!["Sub/Two.pdf changed (same size, other content)".into()])
+        );
+        // One print file, not a folder.
+        let one = print_files(&a.join("One.pdf").display().to_string());
+        assert_eq!(one.len(), 1);
+        assert_eq!(one.first().map(|f| f.name.as_str()), Some("One.pdf"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Q6156: a checkpoint made before content stamps, from another folder (a Windows path), can't
+    /// be checked: the sheet files it read that aren't here are named.
+    #[test]
+    fn a_checkpoint_without_content_stamps_is_unchecked() {
+        let mut job = GuidedJob::new("C:\\Jobs\\Sample\\prints", JobGoal::Bim);
+        job.prints_stamp = "0123456789abcdef".into();
+        job.sheets = Some(json!({"sheets": [{"file": "One.pdf"}, {"file": "Sub/Gone.pdf"}, {"file": "One.pdf"}]}));
+        let here = vec![pf("One.pdf", 3, "aa")];
+        match check_prints(&job, "/made-up/prints", &here) {
+            PrintsCheck::Unchecked { why, missing } => {
+                assert!(why.contains("C:\\Jobs\\Sample\\prints"), "{why}");
+                assert_eq!(missing, vec!["Sub/Gone.pdf".to_string()]);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn path_leaf_reads_windows_and_unix_paths() {
+        assert_eq!(path_leaf("C:\\Jobs\\Sub\\Lighting.pdf"), "Lighting.pdf");
+        assert_eq!(path_leaf("/mnt/jobs/Sub/Lighting.pdf"), "Lighting.pdf");
+        assert_eq!(path_leaf("C:\\Jobs\\Sub\\"), "Sub");
+        assert_eq!(path_leaf("Lighting.pdf"), "Lighting.pdf");
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -12994,6 +13479,7 @@ mod tests {
             let p = |x: f64, y: f64| match how {
                 1 => [o[0] + 144.0 - x, o[1] + 288.0 - y],
                 2 => [o[0] + 144.0 - x, o[1] + y],
+                3 => [o[0] + x, o[1] + 288.0 - y],
                 _ => [o[0] + x, o[1] + y],
             };
             let mut segs =
@@ -13027,6 +13513,7 @@ mod tests {
         unit(&mut s, [10_000.0, 0.0], 0);
         unit(&mut s, [10_400.0, 0.0], 1);
         unit(&mut s, [10_800.0, 0.0], 2);
+        unit(&mut s, [11_600.0, 0.0], 3);
         job.sheet_regions = vec![SheetRegion {
             number: "A-8".into(),
             level: "T".into(),
@@ -13043,7 +13530,7 @@ mod tests {
         let room = |n: &str, x: f64, name: &str| json!({"name": name, "number": n, "level": "2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
         if let Some(st) = job.stage_mut(StageName::Rooms) {
             st.result = Some(
-                json!({"rooms": [room("201", 10_000.0, "DOUBLE QUEEN"), room("202", 10_400.0, "DOUBLE QUEEN"), room("203", 10_800.0, "DOUBLE QUEEN"), room("200", 11_200.0, "CORRIDOR")]}),
+                json!({"rooms": [room("201", 10_000.0, "DOUBLE QUEEN"), room("202", 10_400.0, "DOUBLE QUEEN"), room("203", 10_800.0, "DOUBLE QUEEN"), room("200", 11_200.0, "CORRIDOR"), room("204", 11_600.0, "DOUBLE QUEEN")]}),
             );
         }
         let (types, instances) = job_unit_types(s.doc().unwrap(), &job);
@@ -13054,6 +13541,9 @@ mod tests {
         assert_eq!((of("201")["hand"].clone(), of("201")["fit"]["rotation_deg"].clone()), (json!("normal"), json!(0.0)), "{instances:?}");
         assert_eq!((of("202")["hand"].clone(), of("202")["fit"]["rotation_deg"].clone()), (json!("normal"), json!(180.0)), "{instances:?}");
         assert_eq!(of("203")["hand"], json!("mirrored"), "{instances:?}");
+        // Flipped top to bottom (the hotel's 101 and 427): mirrored and turned half round, not
+        // only turned.
+        assert_eq!((of("204")["hand"].clone(), of("204")["fit"]["rotation_deg"].clone()), (json!("mirrored"), json!(180.0)), "{instances:?}");
         assert!(instances.iter().all(|i| i["type"] == types[0]["id"]), "no corridor unit: {instances:?}");
     }
 

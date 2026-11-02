@@ -1568,3 +1568,112 @@ fn json_counts_and_distances_match_typed_rules() {
     let r = s.execute("copy", &json!({"handles": [l["handle"]], "delta": [0, 5], "count": 3.0})).unwrap();
     assert_eq!(r["handles"].as_array().unwrap().len(), 3);
 }
+
+/// A value for parameter `k` as its documentation shows it: a number, a flag, text, an object
+/// with every field it lists, a map with a made-up key (Q6138).
+fn documented_example(doc: &str, k: &str) -> serde_json::Value {
+    let notes = param_notes(doc, k);
+    let scalar = |kind: Option<ParamKind>| match kind {
+        Some(ParamKind::Bool) => json!(true),
+        Some(ParamKind::Text) => json!("Sample"),
+        _ => json!(1),
+    };
+    if let Some(kind) = param_kind(doc, k) {
+        return scalar(Some(kind));
+    }
+    if let Some(entry) = map_value_doc(&notes) {
+        let plain = without_notes(entry);
+        let value = match annotation_kind(entry) {
+            Some(kind) => scalar(Some(kind)),
+            None if plain.trim_start().starts_with('{') => json!({}),
+            None if plain.trim_start().starts_with('[') => json!([]),
+            None => json!("Sample"),
+        };
+        return json!({ "Sample_Key": value });
+    }
+    if let Some(fields) = value_fields(&notes) {
+        return serde_json::Value::Object(fields.into_iter().map(|f| (f, json!(1))).collect());
+    }
+    if !notes.is_empty() && notes.iter().all(|n| note_is_list(n)) {
+        return json!([]);
+    }
+    if notes.iter().any(|n| note_takes_object(n)) {
+        return json!({});
+    }
+    json!(1)
+}
+
+/// Every command in the registry takes the call its own params doc documents: each parameter it
+/// offers, with a value of the documented shape, passes an agent's parameter checks (Q6138:
+/// `aliasedit {set: {QQC: …}}` and `array {columns, columnSpacing}` were refused after the checks
+/// got stricter). Failures are listed per command.
+#[test]
+fn every_commands_documented_params_example_parses() {
+    let mut bad = Vec::new();
+    let mut checked = 0;
+    for spec in command_specs() {
+        let doc = params_doc(spec);
+        let example: serde_json::Map<String, serde_json::Value> =
+            offered_params(spec).into_iter().map(|k| (k.to_string(), documented_example(doc, k))).collect();
+        let example = serde_json::Value::Object(example);
+        checked += 1;
+        if let Err(e) = refuse_unknown_params(spec, &example).and_then(|()| refuse_wrong_typed_params(spec, &example)) {
+            bad.push(format!("{} {example}: {e}", spec.id));
+        }
+    }
+    assert!(checked > 1000, "the registry was walked: {checked}");
+    assert!(bad.is_empty(), "{} commands refuse their own documented parameters:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// Map-typed parameters take any key and still check each value; aliasedit's map and array's
+/// documented column names are accepted (Q6138).
+#[test]
+fn map_params_take_any_key_and_check_values() {
+    let mut s = Session::new();
+    let r = s.execute_agent("aliasedit", &json!({ "set": { "QQC": "circle" } })).unwrap();
+    assert_eq!(r["aliases"]["qqc"], "circle", "{r}");
+    let e = s.execute_agent("aliasedit", &json!({ "set": { "QQD": { "cmd": "circle" } } })).unwrap_err().to_string();
+    assert!(e.contains("`set` entry `QQD` must be a single value, not an object"), "{e}");
+    let e = s.execute_agent("aliasedit", &json!({ "set": { "QQD": ["circle"] } })).unwrap_err().to_string();
+    assert!(e.contains("`set` entry `QQD` must be a single value, not a list"), "{e}");
+    s.execute_agent("aliasedit", &json!({ "remove": ["QQC"] })).unwrap();
+    // The map doc shapes.
+    assert_eq!(map_entry_doc("{alias: command}"), Some("command"));
+    assert_eq!(map_entry_doc("{TAG: value}"), Some("value"));
+    assert_eq!(map_entry_doc("{trade: [r, g, b] | \"#rrggbb\"}"), Some("[r, g, b] | \"#rrggbb\""));
+    assert_eq!(map_entry_doc("{on?: bool}"), None, "an optional field is a struct's");
+    assert_eq!(map_entry_doc("{kind, color?}"), None);
+    assert_eq!(map_entry_doc("{name: a, other: b}"), None);
+    assert!(wrong_map_entry("visible", "E", &json!({}), "bool").is_some_and(|m| m.contains("true or false")));
+    assert!(wrong_map_entry("waste", "E", &json!("x"), "number").is_some_and(|m| m.contains("a number")));
+    assert_eq!(wrong_map_entry("colors", "E", &json!([1, 0, 0]), "[r, g, b] | \"#rrggbb\""), None);
+}
+
+/// ARRAY's rectangular form takes `columns` and `columnSpacing` (AutoCAD's own words, the grips'
+/// names) as well as `cols` and `colSpacing`, and they make that many columns (Q6138).
+#[test]
+fn array_takes_columns_and_column_spacing() {
+    let mut s = Session::new();
+    s.execute("circle", &json!({ "center": [0, 0], "radius": 1 })).unwrap();
+    s.execute("selectall", &json!({})).unwrap();
+    s.execute_agent("array", &json!({ "type": "rectangular", "rows": 2, "columns": 3, "rowSpacing": 10, "columnSpacing": 7, "associative": false }))
+        .unwrap();
+    let mut xs: Vec<i64> = s
+        .doc()
+        .unwrap()
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Circle(c) => Some(c.center.x.round() as i64),
+            _ => None,
+        })
+        .collect();
+    xs.sort_unstable();
+    xs.dedup();
+    assert_eq!(xs, vec![0, 7, 14], "three columns 7 apart");
+    let e = s.execute("arrayrect", &json!({ "rows": 2, "cols": 2, "columns": 3 })).unwrap_err().to_string();
+    assert!(e.contains("`cols` and `columns` are the same parameter"), "{e}");
+    // An unknown one is refused by an agent, naming the accepted names.
+    let e = s.execute_agent("array", &json!({ "rows": 2, "nosuchparam": 3 })).unwrap_err().to_string();
+    assert!(e.contains("`nosuchparam` is not a parameter of array") && e.contains("`columns`") && e.contains("`cols`"), "{e}");
+}

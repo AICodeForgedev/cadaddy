@@ -186,6 +186,23 @@ fn category(e: Option<&Entity>, kind: &str) -> Option<String> {
         .or_else(|| model_kind_in(kind).and_then(validate_kinds::category_of))
 }
 
+/// What one of the job's tables says of a mark, in its own words (a legend row, a schedule row,
+/// a spec device tag): for the facts a kind doesn't hold (tamper-resistance, Q6142).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Said {
+    /// `legend`, `schedule` or `spec_tag` (a device's own).
+    pub from: &'static str,
+    /// Where: `legend "<heading>"`, `schedule <name> on <sheet>`, `spec tag <id>`.
+    pub source: String,
+    pub text: String,
+    /// A legend row's heading (`LIGHTING FIXTURE SCHEDULE`), when it has one.
+    pub heading: Option<String>,
+}
+
+/// Texts kept per mark, at most, and their longest.
+const MAX_SAID: usize = 4;
+const MAX_SAID_TEXT: usize = 300;
+
 /// What the job's tables, the BIM types and the project say each mark (and each spec device)
 /// is.
 #[derive(Clone, Debug, Default)]
@@ -200,6 +217,30 @@ pub struct Kinds {
     types: HashMap<String, String>,
     /// Mark → `validate.kind.<mark>`.
     project: HashMap<String, String>,
+    /// Mark → what the job's legend rows and schedule rows say of it, in words.
+    said: HashMap<String, Vec<Said>>,
+    /// The spec's device tags: id → what it says of the device, in words (the documents' fields
+    /// only: none the job inferred from a rule or a default).
+    said_devid: HashMap<String, Said>,
+    /// The spec's device tags: id → what the job inferred of it from a rule (`source: rule`), in
+    /// words: the job's own assumption, no document's.
+    assumed_devid: HashMap<String, String>,
+}
+
+/// A tag field's source that is the job's own inference, not a document's.
+fn inferred(source: &str) -> bool {
+    matches!(source.trim().to_ascii_lowercase().as_str(), "rule" | "default")
+}
+
+fn keep_said(said: &mut HashMap<String, Vec<Said>>, mark: Option<String>, from: &'static str, source: String, text: String, heading: Option<String>) {
+    let (Some(m), text) = (mark, text.trim().chars().take(MAX_SAID_TEXT).collect::<String>()) else { return };
+    if text.is_empty() {
+        return;
+    }
+    let list = said.entry(m).or_default();
+    if list.len() < MAX_SAID && !list.iter().any(|x| x.text == text) {
+        list.push(Said { from, source, text, heading });
+    }
 }
 
 impl Kinds {
@@ -219,15 +260,34 @@ impl Kinds {
             texts.iter().find_map(|t| model_kind_in(t)).map(str::to_string)
         };
         let mut by_devid = HashMap::new();
+        let mut texts: HashMap<String, Vec<Said>> = HashMap::new();
+        let mut said_devid = HashMap::new();
+        let mut assumed_devid = HashMap::new();
         let prints = prints.or(sp.prints.as_deref());
         for t in sp.tags.iter().take(MAX_ROWS).filter(|t| t.id.starts_with("device:")) {
             let field = |k: &str| t.fields.get(k).map(|f| f.value.as_str());
-            let Some(kind) = said(&t.kind, &["legend", "device_type", "description", "fixture"].iter().filter_map(|k| field(k)).collect::<Vec<_>>())
-            else {
+            let words_of: Vec<&str> = ["legend", "device_type", "description", "fixture"].iter().filter_map(|k| field(k)).collect();
+            let mark = ["type", "type_mark", "mark"].iter().find_map(|k| field(k).and_then(mark_key));
+            let documented: Vec<&str> = ["legend", "device_type", "description", "fixture"]
+                .iter()
+                .filter_map(|k| t.fields.get(*k).filter(|f| !inferred(&f.source)).map(|f| f.value.as_str()))
+                .collect();
+            let assumed: Vec<String> =
+                t.fields.iter().filter(|(_, f)| inferred(&f.source)).take(20).map(|(k, f)| format!("{k}: {}", f.value)).collect();
+            if !assumed.is_empty() && assumed_devid.len() < MAX_ROWS {
+                assumed_devid.insert(t.id.clone(), assumed.join("; ").chars().take(MAX_SAID_TEXT).collect::<String>());
+            }
+            let text = documented.join("; ");
+            if !text.trim().is_empty() && said_devid.len() < MAX_ROWS {
+                let source = format!("spec tag {}", t.id.chars().take(80).collect::<String>());
+                // One device's own words: never every device of its mark.
+                said_devid.insert(t.id.clone(), Said { from: "spec_tag", source, text: text.chars().take(MAX_SAID_TEXT).collect(), heading: None });
+            }
+            let Some(kind) = said(&t.kind, &words_of) else {
                 continue;
             };
             by_devid.insert(t.id.clone(), kind.clone());
-            vote(["type", "type_mark", "mark"].iter().find_map(|k| field(k).and_then(mark_key)), kind);
+            vote(mark, kind);
         }
         for s in prints.map_or(&[][..], |p| p.symbols.as_slice()).iter().take(MAX_ROWS) {
             if let Some(kind) = said(&s.kind, &[]) {
@@ -235,6 +295,9 @@ impl Kinds {
             }
         }
         for r in prints.map_or(&[][..], |p| p.schedule.as_slice()).iter().take(MAX_ROWS) {
+            let row: Vec<&str> = r.fields.values().take(40).map(String::as_str).collect();
+            let source = format!("schedule {} on {}, mark {}", r.schedule, r.sheet, r.mark).chars().take(160).collect();
+            keep_said(&mut texts, mark_key(&r.mark), "schedule", source, row.join("; "), None);
             let kind = r.kind.as_deref().unwrap_or_default();
             if let Some(kind) =
                 said(kind, &["description", "type", "item"].iter().filter_map(|k| r.fields.get(*k).map(String::as_str)).collect::<Vec<_>>())
@@ -254,7 +317,34 @@ impl Kinds {
             .filter(|t| !is_generic(&t.category))
             .filter_map(|t| Some((mark_key(&t.mark)?, words(&t.category))))
             .collect();
-        Kinds { by_devid, legend: legend_kinds(d), by_mark, types, project: project_kinds(&d.project_rules) }
+        let mut legend = HashMap::new();
+        for (mark, row, heading) in legend_rows(d) {
+            if let Some(kind) = model_kind_in(&row) {
+                legend.entry(mark.clone()).or_insert_with(|| kind.to_string());
+            }
+            let source = heading.as_deref().map_or_else(|| "legend".to_string(), |h| format!("legend \"{h}\""));
+            keep_said(&mut texts, Some(mark), "legend", source, row, heading);
+        }
+        Kinds { by_devid, legend, by_mark, types, project: project_kinds(&d.project_rules), said: texts, said_devid, assumed_devid }
+    }
+
+    /// What the job inferred of an element from a rule or a default, not from a document (its
+    /// spec device tag's fields of source `rule`/`default`), in words.
+    pub fn assumed_of(&self, e: Option<&Entity>) -> Option<&str> {
+        e.and_then(|e| super::bimlook::made_tag(e, "devid")).and_then(|id| self.assumed_devid.get(id)).map(String::as_str)
+    }
+
+    /// What the job's tables say of an element in words: its spec device tag's (the build's
+    /// `devid:`), then its mark's legend rows and schedule rows.
+    pub fn said_of(&self, mark: Option<&str>, e: Option<&Entity>) -> Vec<&Said> {
+        let own = e.and_then(|e| super::bimlook::made_tag(e, "devid")).and_then(|id| self.said_devid.get(id));
+        own.into_iter().chain(mark.and_then(mark_key).and_then(|m| self.said.get(&m)).into_iter().flatten()).collect()
+    }
+
+    /// Every mark's legend rows (each with its heading), for the tables a legend heading names
+    /// (a drawn lighting fixture schedule).
+    pub fn legend_said(&self) -> impl Iterator<Item = (&String, &Said)> {
+        self.said.iter().flat_map(|(m, list)| list.iter().filter(|s| s.from == "legend").map(move |s| (m, s)))
     }
 
     /// What an element of `kind` with `mark` (and its object `e`, when there is one) is.
@@ -355,10 +445,10 @@ pub(crate) fn rows_under<'a>(
     rows
 }
 
-/// What the legends in the drawing say each mark is: each device legend's or schedule's rows
-/// (the mark first, the words after it naming a kind the model holds), then the `KEY=MEANING`
-/// designations.
-fn legend_kinds(d: &Drawing) -> HashMap<String, String> {
+/// What the legends in the drawing say of each mark: each device legend's or schedule's rows
+/// (the mark first, the words after it; with the heading they stand under), then the
+/// `KEY=MEANING` designations, in that order.
+fn legend_rows(d: &Drawing) -> Vec<(String, String, Option<String>)> {
     use cadaddy_mepfix::device_types::{designations, is_device_table_heading};
     use cadaddy_mepfix::sheet_facts::TextItem;
     let text = |e: &Entity| -> Option<TextItem> {
@@ -389,19 +479,21 @@ fn legend_kinds(d: &Drawing) -> HashMap<String, String> {
             near.push(t);
         }
     }
-    let mut out: HashMap<String, String> = HashMap::new();
+    let mut out: Vec<(String, String, Option<String>)> = Vec::new();
     for h in &headings {
         for row in rows_under(h, &near) {
             let Some(i) = row.iter().position(|t| looks_like_mark(&t.value)) else { continue };
             let said: Vec<&str> = row.iter().skip(i + 1).map(|t| t.value.as_str()).collect();
-            if let (Some(mark), Some(kind)) = (row.get(i).and_then(|t| mark_key(&t.value)), model_kind_in(&said.join(" "))) {
-                out.entry(mark).or_insert_with(|| kind.to_string());
+            if let Some(mark) = row.get(i).and_then(|t| mark_key(&t.value))
+                && !said.is_empty()
+            {
+                out.push((mark, said.join(" "), Some(h.value.chars().take(MAX_NAME).collect())));
             }
         }
     }
     for (k, meaning) in designations(&keyed) {
-        if let (Some(mark), Some(kind)) = (mark_key(&k), model_kind_in(&meaning)) {
-            out.entry(mark).or_insert_with(|| kind.to_string());
+        if let Some(mark) = mark_key(&k) {
+            out.push((mark, meaning, None));
         }
     }
     out
