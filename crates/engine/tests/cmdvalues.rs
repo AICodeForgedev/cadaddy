@@ -144,6 +144,27 @@ fn typed_chprop_takes_hundredths_and_refuses_the_rest() {
 }
 
 #[test]
+fn typed_layer_lweight_refuses_instead_of_snapping() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "Walls"})).unwrap();
+    let lw = |s: &Session| s.doc().unwrap().layer("Walls").unwrap().lineweight;
+    s.cmdline("-LAYER").unwrap();
+    s.script("LW 0.35mm Walls\n\n").unwrap();
+    assert_eq!(lw(&s), Lineweight::Mm100(35));
+    s.cancel();
+    // 0.31 used to snap to 0.30; it is not one of AutoCAD's weights.
+    for bad in ["0.31", "nan", "-5", "999"] {
+        s.cmdline("-LAYER").unwrap();
+        let _ = s.script(&format!("LW {bad}\n"));
+        let said = format!("{bad} is not a lineweight; enter a standard lineweight in mm (0.00, 0.05");
+        assert!(s.log.iter().any(|l| l.to_ascii_lowercase().starts_with(&said)), "LW {bad}: {:?}", s.log);
+        s.log.clear();
+        s.cancel();
+        assert_eq!(lw(&s), Lineweight::Mm100(35), "-LAYER LW {bad}");
+    }
+}
+
+#[test]
 fn xplode_table_borders_and_vplayer_refuse_odd_lineweights() {
     let mut s = Session::new();
     s.execute("rectang", &json!({"p1": [0, 0], "p2": [10, 10]})).unwrap();
