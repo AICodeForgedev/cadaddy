@@ -530,7 +530,14 @@ fn set_header(s: &mut Session, name: &str, kind: Kind, v: &Value, bad: impl Fn(S
 
 /// Add the table variables and the dimension variables of the current style to a `SETVAR ?` list.
 pub(super) fn list(s: &Session, m: &mut serde_json::Map<String, Value>) {
-    let names = SETTINGS.iter().map(|(n, _, _)| *n).chain(HEADER.iter().chain(STORED).map(|(n, _, _)| *n)).chain(COMPUTED.iter().map(|(n, _)| *n));
+    // The session's computed values (AREA, DISTANCE…) win over a drawing header carrying the same
+    // name: `get` reads the session's, and the list shows what `get` returns.
+    for (n, _) in COMPUTED {
+        if let Some(v) = super::get(s, n) {
+            m.insert((*n).to_string(), v);
+        }
+    }
+    let names = SETTINGS.iter().map(|(n, _, _)| *n).chain(HEADER.iter().chain(STORED).map(|(n, _, _)| *n));
     for n in names.chain(cadaddy_doc::DIMVARS.iter().map(|(n, _)| *n)) {
         if !m.contains_key(n)
             && let Some(v) = super::get(s, n)

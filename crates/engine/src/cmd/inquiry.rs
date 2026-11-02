@@ -647,6 +647,13 @@ pub(crate) fn kind_area(k: &EntityKind) -> Result<(f64, f64)> {
             total
         }
         EntityKind::Region(r) => (r.area(), r.perimeter()),
+        // Like an open polyline: the area closed by the chord, the perimeter its own length.
+        EntityKind::Spline(sp) if sp.is_valid() => {
+            let b = sp.bounds();
+            let pts = sp.tessellate_spans((b.min.dist(b.max) * 1e-7).max(1e-12));
+            // A length past f64's range is too large to report, as a polyline's is, not 0.
+            (cadaddy_geom::shoelace(&pts).abs(), sp.checked_length().unwrap_or(f64::INFINITY))
+        }
         _ => return Err(bad("area", "object has no area")),
     })
 }
@@ -1202,13 +1209,22 @@ impl Interactive for DistM {
                     (Some(first), Some(second)) if first.viewport == second.viewport => (first.point, second.point, scale),
                     _ => (a, b, 1.0),
                 };
-                s.last_used.distance = a.dist(b);
+                let flat = a.dist(b);
                 let (za, zb) = if self.first_source.is_some() || s.picked_viewport.is_some() { (0.0, 0.0) } else { (z_at(s, a), z_at(s, b)) };
-                let t = dist_text(s, Vec3::new(a.x, a.y, za), Vec3::new(b.x, b.y, zb));
+                let (a, b) = (Vec3::new(a.x, a.y, za), Vec3::new(b.x, b.y, zb));
+                if !(b - a).len().is_finite() {
+                    // The first point stays LASTPOINT, as after a measurement.
+                    s.last_point = paper.0;
+                    return Err(bad("dist", "the distance is too large"));
+                }
+                s.last_used.distance = flat;
+                let t = dist_text(s, a, b);
                 for l in t.lines() {
                     s.echo(l.to_string());
                 }
                 live::keep(s, &[live::distance(s, paper.0, paper.1, scale)]);
+                // As in AutoCAD, the second point doesn't become LASTPOINT: the first stays.
+                s.last_point = paper.0;
                 Ok(Step::Done)
             }
             (Some(a), Input::Keyword(k)) if k == "Multiple points" => {
@@ -1258,7 +1274,12 @@ impl DistM {
     fn total(&self, s: &mut Session) -> Result<Step> {
         let model = model_points(&self.sources);
         let d = model.as_deref().or(self.multi.as_deref()).map_or(0.0, |p| path_len(p, &self.bulges));
+        if !d.is_finite() {
+            return Err(bad("dist", "the distance is too large"));
+        }
         s.echo(distance_line(s, d));
+        // DISTANCE: the total of Multiple points.
+        s.last_used.distance = d;
         if let Some(pts) = &self.multi {
             let labels = live::running(s, pts, &self.bulges, model.as_deref());
             live::keep(s, &labels);
@@ -1380,6 +1401,8 @@ impl AreaM {
             return Step::Done;
         }
         self.total = total;
+                // AREA: in Add and Subtract mode the running total.
+                s.last_used.area = total;
         s.echo(format!("Total area = {}", fmt_area(s, self.total)));
         Step::Continue
     }
