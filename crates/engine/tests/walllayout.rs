@@ -91,6 +91,8 @@ fn job(extra_objects: bool) -> Session {
         // Two switches side by side (1.8") at one height: one 2-gang plate.
         device(10.0, 9.4, "S", "switch", "1F2", json!({})),
         device(10.15, 9.4, "S2", "switch", "1F3", json!({})),
+        // A third read at the first one's spot (read twice): one gang, said stacked.
+        device(10.01, 9.4, "S3", "switch", "1FC", json!({})),
         // 1002: a refrigerator receptacle behind it, and one beside it (exposed).
         device(26.25, 0.6, "R", "receptacle", "1F4", json!({})),
         device(28.0, 0.6, "X", "receptacle", "1F5", json!({})),
@@ -245,6 +247,8 @@ fn two_switches_side_by_side_share_one_two_gang_plate() {
     let (a, b) = (props(&mut s, "S"), props(&mut s, "S2"));
     assert_eq!(a["plate_group"]["value"], b["plate_group"]["value"], "{a:#}\n{b:#}");
     assert!(a["faceplate"]["value"].as_str().is_some_and(|p| p.contains("2-gang")), "{a:#}");
+    assert!(r["plates"]["stacked"].as_u64().is_some_and(|n| n >= 1), "{r:#}");
+    assert_eq!(props(&mut s, "S3")["plate_group"]["value"], a["plate_group"]["value"]);
     // One plate: no overlap finding between them; its plate check passes.
     let fs = layout_findings(&mut s, "S");
     let plate = verdict(&fs, "plate");

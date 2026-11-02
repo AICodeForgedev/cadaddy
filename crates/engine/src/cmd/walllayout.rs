@@ -80,6 +80,8 @@ const OBJ_BACK_IN: f64 = 12.0;
 const OBJ_NEAR_IN: f64 = 6.0;
 /// The layout sheet's scale (paper inches per model inch: 1/2" = 1'-0").
 const SHEET_SCALE: f64 = 1.0 / 24.0;
+/// Devices this close along a face (inches) are at one spot: one gang.
+const STACKED_IN: f64 = 1.0;
 /// A wall device's `host_face` when no named face was found (the object schema's n/a).
 pub const NO_FACE: &str = "n/a";
 /// Constraint slots per device.
@@ -1058,6 +1060,7 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
     }
     let mut plate_of: HashMap<usize, (Plate, String, usize)> = HashMap::new();
     let mut ganged = 0usize;
+    let mut stacked = 0usize;
     for (fk, js) in &on_face {
         // Only devices that take a faceplate (receptacles, switches, outlets…) share one.
         let js: Vec<usize> =
@@ -1076,8 +1079,21 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
                 (None, Some(st)) => (Some(st), "the project's plate style"),
                 (None, None) => (None, "rules data (derived): the usual plate for its gangs"),
             };
-            let pl = solve::plate(&rules, style, members.len() as u32, from);
-            if members.len() > 1 {
+            // Gangs are the distinct positions: devices at one spot (read twice, or stacked
+            // from two sheets) are one gang, and said.
+            let mut spots: Vec<f64> = members.iter().filter_map(|j| placed.get(*j)).map(|(_, pl)| pl.t / inch).collect();
+            spots.sort_by(f64::total_cmp);
+            let mut n_gangs = 0u32;
+            let mut last = f64::NEG_INFINITY;
+            for t in spots {
+                if t - last > STACKED_IN {
+                    n_gangs += 1;
+                    last = t;
+                }
+            }
+            stacked += members.len().saturating_sub(n_gangs as usize);
+            let pl = solve::plate(&rules, style, n_gangs.max(1), from);
+            if n_gangs > 1 {
                 ganged += 1;
             }
             let name = cx.faces.get(*fk).map_or_else(String::new, |f| format!("{}#{}", f.name, g + 1));
@@ -1269,7 +1285,7 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
         "heights": heights,
         "constraints": tie_count,
         "objects": objs.len(),
-        "plates": {"by_style": styles, "ganged": ganged},
+        "plates": {"by_style": styles, "ganged": ganged, "stacked": stacked, "stacked_why": "devices at the same spot on a face as another (within 1 in): read twice or from two sheets; one gang"},
         "solve": solves,
         "fields": LAYOUT_FIELDS,
     }))
