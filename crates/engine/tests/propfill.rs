@@ -263,6 +263,25 @@ fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location
 }
 
 #[test]
+fn a_devices_breaker_type_is_its_printed_schedule_rows() {
+    let mut s = plan();
+    // The schedule as printed: circuit 3 a dual-function breaker (AF/GF, the legend's GF a
+    // ground fault interrupter), 5 an AFCI one.
+    let sched = json!({"mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF", "GF"], "source": "E-601"},
+                     {"number": "5", "description": "LIGHTS", "breaker": "20", "poles": 1, "protection": ["AF"], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).expect("schedules");
+    fill(&mut s);
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["breaker_type"]["value"], "GFCI + AFCI (dual function)", "{a:#}");
+    assert_eq!(a["gfci_breaker"]["value"], "yes");
+    assert_eq!(a["breaker_type"]["source"]["kind"], "schedule");
+    assert_eq!(a["breaker_type"]["source"]["doc"], "E-601 panel LP1 circuit 3");
+    // The breaker itself still from the panel's own row.
+    assert_eq!(a["breaker"]["value"], "20A");
+}
+
+#[test]
 fn a_legend_row_of_another_kind_of_device_is_not_a_switchs_height() {
     let mut s = plan();
     // The legend's S row is a speaker/strobe's (a fire alarm sheet's mark), not the switch's.

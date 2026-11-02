@@ -4837,6 +4837,24 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         Err(e) => result["room_volumes_error"] = json!(e.to_string()),
     }
     bim_step(s, job, "room volumes built", t);
+    // The panel schedules (each circuit's breaker and its type), for the devices' props.
+    let t = web_time::Instant::now();
+    let schedules = s.doc().map(|d| panel_schedules(d, job)).unwrap_or_default();
+    if !schedules.is_empty()
+        && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+    {
+        let typed = schedules.iter().flat_map(|p| &p.circuits).filter(|c| !c.protection.is_empty()).count();
+        progress_line(&format!(
+            "  panel schedules: {} ({} circuits, {typed} with their breaker's type): {}",
+            schedules.len(),
+            schedules.iter().map(|p| p.circuits.len()).sum::<usize>(),
+            schedules.iter().map(|p| p.panel.as_str()).collect::<Vec<_>>().join(", ")
+        ));
+        result["panel_schedules"] = json!(schedules.len());
+        sp.mep.panel_schedules = schedules;
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    bim_step(s, job, "panel schedules", t);
     let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
         Ok(v) => {
@@ -7318,6 +7336,33 @@ fn legend_symbols(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> BTreeMap<Shape, 
     pages.extend(non_plan_pages(job, "E").into_iter().filter(|(n, _)| !seen.contains(n)));
     for (number, sub) in &pages {
         legend_rows(sub, number, &mut out);
+    }
+    out
+}
+
+/// The panel schedules on the electrical sheets (the job's drawing's and those it didn't import),
+/// each panel once (the first sheet's).
+fn panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<cadaddy_walk3d::PanelSchedule> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut pages: Vec<(String, cadaddy_doc::Drawing)> = job_sheet_refs(job)
+        .iter()
+        .filter(|r| r.discipline.eq_ignore_ascii_case("E") && seen.insert(r.number.split('/').next().unwrap_or("").to_string()))
+        .take(MAX_LEGEND_SHEETS)
+        .map(|sh| {
+            (
+                sh.number.split('/').next().unwrap_or("").to_string(),
+                super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() }),
+            )
+        })
+        .collect();
+    pages.extend(non_plan_pages(job, "E").into_iter().filter(|(n, _)| !seen.contains(n)));
+    let mut out: Vec<cadaddy_walk3d::PanelSchedule> = Vec::new();
+    for (number, sub) in &pages {
+        for p in super::panelsched::read(&cadaddy_mepfix::sheet_facts::texts(sub), number) {
+            if !out.iter().any(|o| o.panel.eq_ignore_ascii_case(&p.panel)) {
+                out.push(p);
+            }
+        }
     }
     out
 }
