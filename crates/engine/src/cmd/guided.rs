@@ -4137,10 +4137,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // diffuser is in its area's ceiling.
                 sp.circulation = circulation.clone();
                 let rcp_sheets: Vec<[f64; 4]> = job.sheet_regions.iter().filter(|r| r.kind == "rcp").map(|r| r.rect).collect();
-                let (areas, read) = rcp_ceiling_areas(s.doc()?, &sp, &rcp_sheets);
+                let (mut areas, read) = rcp_ceiling_areas(s.doc()?, &sp, &rcp_sheets);
                 for line in &read {
                     progress_line(&format!("  RCP {line}"));
                 }
+                // And the typical rooms' own ceiling plans, into every room of their type.
+                let (typical, tags) = typical_rcp_areas(s.doc()?, &sp, job);
+                if tags > 0 {
+                    progress_line(&format!("  RCP typical rooms: {tags} height tags read, {} areas set", typical.len()));
+                }
+                areas.extend(typical);
                 if !areas.is_empty() {
                     // Each area's room takes its height (its ceiling is built there; the RCP's areas
                     // are not the level's whole ceiling, so the rooms' ceilings stay): the spec
@@ -4152,6 +4158,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(label)) || r.name.trim().eq_ignore_ascii_case(label)
                         }) {
                             r.ceiling_ft = Some(a.height_ft);
+                            r.ceiling_source.clone_from(&a.source);
                             rooms_set += 1;
                         }
                     }
@@ -4161,6 +4168,35 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         "  ceilings set per area from the RCPs: {} areas on {levels:?}, {rooms_set} rooms at their height; {seated} MEP runs and terminals reseated under them",
                         areas.len()
                     ));
+                }
+                // A typical room whose ceiling plan prints no height: its elevations' (measured).
+                let measured = typical_elevation_heights(s.doc()?, job);
+                if !measured.is_empty() {
+                    let mut set = 0usize;
+                    // A room's type: the rooms stage's room of its number, else its own name.
+                    let by_number: BTreeMap<String, BTreeSet<String>> = job_rooms(job)
+                        .iter()
+                        .filter(|(_, _, _, n)| !n.trim().is_empty())
+                        .map(|(name, _, _, n)| (n.trim().to_ascii_uppercase(), type_words(name, None)))
+                        .collect();
+                    for r in sp.rooms.iter_mut().filter(|r| r.ceiling_ft.is_none()) {
+                        let words = r
+                            .number
+                            .as_deref()
+                            .and_then(|n| by_number.get(&n.trim().to_ascii_uppercase()))
+                            .cloned()
+                            .unwrap_or_else(|| type_words(&r.name, None));
+                        if let Some((_, ft, source)) = measured.iter().find(|(w, _, _)| *w == words) {
+                            r.ceiling_ft = Some(*ft);
+                            r.ceiling_source = Some(source.clone());
+                            set += 1;
+                        }
+                    }
+                    let said: Vec<String> = measured
+                        .iter()
+                        .map(|(w, ft, _)| format!("{} {}", w.iter().cloned().collect::<Vec<_>>().join(" "), ft_in_label(*ft)))
+                        .collect();
+                    progress_line(&format!("  ceilings measured on the typical rooms' elevations: {said:?}; {set} rooms take theirs"));
                 }
                 // Nothing more than 5' outside its storey's shell: past it, it isn't in the
                 // building (site work, or a reading put in the wrong place). Out, and said.
@@ -5896,6 +5932,266 @@ const NOTE_CHAR_W: f64 = 0.8;
 /// Straight pieces of a sheet looked at for height notes' leaders, at most.
 const MAX_LEADER_PIECES: usize = 400_000;
 
+/// The ceilings the typical rooms' reflected ceiling plans print ("UNIT RCP - SINGLE QUEEN": a
+/// height tag in each area, the bath lower than the room): each view laid into every room of its
+/// type by its linework, each tag's area of the floor there (the floor's traced space round it)
+/// at its height, the room's own when the tag lands in the room's outline. The areas and the tags
+/// read.
+fn typical_rcp_areas(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec, job: &GuidedJob) -> (Vec<cadaddy_walk3d::CeilingArea>, usize) {
+    let mut floors: BTreeMap<String, Option<super::wallgen::Floors>> = BTreeMap::new();
+    typical_rcp_areas_on(d, sp, job, &mut |level, q| {
+        let grid = floors.entry(level.to_string()).or_insert_with(|| super::wallgen::room_floors(d, sp, level));
+        let Some(Ok((_, rects))) = grid.as_mut().map(|g| g.room_at(q)) else { return None };
+        Some(rects.iter().map(|[a, c]| [[a.x, a.y], [c.x, c.y]]).collect())
+    })
+}
+
+/// [`typical_rcp_areas`], the floor's traced space round a point (its rectangles) from `area_at`.
+fn typical_rcp_areas_on(
+    d: &cadaddy_doc::Drawing,
+    sp: &cadaddy_walk3d::BuildingSpec,
+    job: &GuidedJob,
+    area_at: &mut dyn FnMut(&str, cadaddy_geom::Vec2) -> Option<Vec<[[f64; 2]; 2]>>,
+) -> (Vec<cadaddy_walk3d::CeilingArea>, usize) {
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    let mut out: Vec<cadaddy_walk3d::CeilingArea> = Vec::new();
+    if types.is_empty() {
+        return (out, 0);
+    }
+    let k_in = super::perceive::units_per_inch(d);
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 12.0 * k_in);
+    let mut read = 0usize;
+    let inside = |r: &[f64; 4], p: cadaddy_geom::Vec2| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
+    for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none()).take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        // A height in a ceiling tag: its type letter just over it (a dimension string has none).
+        let typed = |t: &cadaddy_mepfix::sheet_facts::TextItem| {
+            let h = t.height.max(1e-6);
+            texts.iter().take(MAX_TAG_TEXTS).any(|o| {
+                let v = o.value.trim();
+                (1..=3).contains(&v.len())
+                    && v.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                    && v.chars().all(|c| c.is_ascii_alphanumeric())
+                    && (o.at.x - t.at.x).abs() <= CEILING_TAG_REACH * h
+                    && o.at.y > t.at.y
+                    && o.at.y - t.at.y <= CEILING_TAG_REACH * h
+            })
+        };
+        let tags: Vec<(cadaddy_geom::Vec2, f64)> = texts
+            .iter()
+            .filter_map(|t| Some((t, ceiling_height_tag(&t.value)?)))
+            .filter(|(t, _)| typed(t))
+            .map(|(t, ft)| (t.at, ft))
+            .take(MAX_STAMPED)
+            .collect();
+        if tags.is_empty() {
+            continue;
+        }
+        // The typical rooms' ceiling plans: a room type and RCP (or REFLECTED CEILING) in the title.
+        let views: Vec<([f64; 4], BTreeSet<String>, String)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
+            .into_iter()
+            .filter_map(|v| {
+                let up = v.title.to_ascii_uppercase();
+                let rcp = up.contains("REFLECTED CEILING") || up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP");
+                let words = type_words(&v.title, Some(&vocabulary));
+                (rcp && types.contains(&words)).then_some((v.region?, words, v.title.clone()))
+            })
+            .collect();
+        if views.is_empty() {
+            continue;
+        }
+        let objects = super::bspec::plan_objects(&sub);
+        for (view, words, title) in &views {
+            let mine: Vec<(cadaddy_geom::Vec2, f64)> = tags.iter().filter(|(p, _)| inside(view, *p)).copied().collect();
+            if mine.is_empty() {
+                continue;
+            }
+            read += mine.len();
+            let ents: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+                objects.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(view, c))).copied().collect();
+            let lines = super::grids::line_samples(&ents, 12.0 * k_in);
+            for (ri, (name, level, outline, number)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
+                let Some(lv) = sp.level(level) else { continue };
+                let b = bbox(outline);
+                let Some((fit, _)) = rigid_room_fit(&lines, *view, b, &floor_lines, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 6.0 * k_in) else { continue };
+                for (p, ft) in &mine {
+                    if lv.height_ft.is_finite() && lv.height_ft > 0.0 && *ft > lv.height_ft - CEILING_UNDER_FLOOR_FT {
+                        continue;
+                    }
+                    let Some(q) = place_in_room([p.x, p.y], *view, b, fit) else { continue };
+                    let q = cadaddy_geom::Vec2::new(q[0], q[1]);
+                    let Some(rects) = area_at(&lv.name, q) else { continue };
+                    let area = cadaddy_walk3d::Circulation { rects, ..Default::default() }.outline();
+                    if area.len() < 3 || out.iter().any(|a| a.level == lv.name && a.outline == area) {
+                        continue;
+                    }
+                    let room = cadaddy_geom::point_in_polygon(outline, q).then(|| stamped_room(name, number, ri));
+                    out.push(cadaddy_walk3d::CeilingArea {
+                        level: lv.name.clone(),
+                        room,
+                        outline: area,
+                        height_ft: *ft,
+                        grid: None,
+                        ceiling_type: None,
+                        guess: None,
+                        source: Some(format!("{} ceiling tag on {} {title}", ft_in_label(*ft), sh.number)),
+                    });
+                    if out.len() >= MAX_STAMPED {
+                        return (main_areas_only(out), read);
+                    }
+                }
+            }
+        }
+    }
+    (main_areas_only(out), read)
+}
+
+/// How far (in its text heights) a ceiling tag's type letter is over its height.
+const CEILING_TAG_REACH: f64 = 3.0;
+/// Texts of a sheet looked through for a tag's type letter, at most.
+const MAX_TAG_TEXTS: usize = 200_000;
+/// How far apart (feet, across) an elevation's ceiling and floor level markers may be.
+const ELEVATION_MARKER_FT: f64 = 3.0;
+
+/// Each typical room type's ceiling height measured on its interior elevations ("SINGLE QUEEN -
+/// BED WALL": the F.F. level line to the B.O. CEILING one, the view at its printed scale), for a
+/// type whose ceiling plan prints none: the type's words, the height (feet, the middle of what
+/// its elevations measure) and where it was measured.
+fn typical_elevation_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(BTreeSet<String>, f64, String)> {
+    use cadaddy_mepfix::sheet_facts::TextItem;
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    let mut found: BTreeMap<BTreeSet<String>, Vec<(f64, String)>> = BTreeMap::new();
+    if types.is_empty() {
+        return Vec::new();
+    }
+    let upf = 12.0 * super::perceive::units_per_inch(d);
+    let inside = |r: &[f64; 4], p: cadaddy_geom::Vec2| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
+    let squash = |v: &str| -> String { v.to_ascii_uppercase().chars().filter(|c| !c.is_whitespace()).collect() };
+    let is_ceiling = |v: &str| {
+        let u = squash(v);
+        u.starts_with("B.O.CEILING") || u.starts_with("BOTTOMOFCEILING") || u.starts_with("B.O.CLG")
+    };
+    let is_floor = |v: &str| {
+        let u = squash(v);
+        u == "F.F." || u == "FF" || u.starts_with("FIN.FLOOR") || u.starts_with("FINISHFLOOR")
+    };
+    for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none()).take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        if !texts.iter().any(|t| is_ceiling(&t.value)) {
+            continue;
+        }
+        // The sheet came in at its plans' scale (its typical plans lie on the floor one to one): a
+        // view at another is that much bigger or smaller. The scale most of its plan views print,
+        // else the one the set's classification gives the sheet.
+        let scale_of = |v: &cadaddy_mepfix::sheet_facts::ViewTitle| {
+            v.scale_text.as_deref().and_then(cadaddy_mepfix::sheet_reader::parse_scale).filter(|x| x.is_finite() && *x > 0.0)
+        };
+        let views = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts);
+        let mut plan_scales: BTreeMap<u64, usize> = BTreeMap::new();
+        // (A title wrapped onto two lines reads as its second, "DOUBLE QUEEN - ADA (TUB)": a view
+        // naming a room type that isn't an elevation, section or detail is one of its plans too.)
+        for v in views.iter().filter(|v| {
+            let up = v.title.to_ascii_uppercase();
+            let side_view = [" WALL", "ELEVATION", "SECTION", "DETAIL"].iter().any(|w| up.contains(w));
+            up.contains("PLAN")
+                || up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP")
+                || (!side_view && types.contains(&type_words(&v.title, Some(&vocabulary))))
+        }) {
+            if let Some(x) = scale_of(v) {
+                *plan_scales.entry(x.to_bits()).or_default() += 1;
+            }
+        }
+        let sheet_scale = plan_scales
+            .iter()
+            .max_by_key(|(_, n)| **n)
+            .map(|(b, _)| f64::from_bits(*b))
+            .or_else(|| sh.scale_text.as_deref().and_then(cadaddy_mepfix::sheet_reader::parse_scale).filter(|x| x.is_finite() && *x > 0.0));
+        for v in views {
+            let view_scale = scale_of(&v);
+            let factor = match (sheet_scale, view_scale) {
+                (Some(a), Some(b)) => a / b,
+                _ => 1.0,
+            };
+            let up = v.title.to_ascii_uppercase();
+            let elevation = up.contains(" WALL") || up.contains("ELEVATION");
+            let words = type_words(&v.title, Some(&vocabulary));
+            let Some(r) = v.region.filter(|_| elevation && !up.contains("RCP") && types.contains(&words)) else { continue };
+            // Its level markers' labels stand over (and under) their lines, past the linework.
+            let m = ELEVATION_MARKER_FT * upf;
+            let region = [r[0] - m, r[1] - m, r[2] + m, r[3] + m];
+            let ceilings: Vec<&TextItem> = texts.iter().filter(|t| inside(&region, t.at) && is_ceiling(&t.value)).collect();
+            let floors: Vec<&TextItem> = texts.iter().filter(|t| inside(&region, t.at) && is_floor(&t.value)).collect();
+            for c in ceilings.iter().take(8) {
+                // Its floor line: the F.F. marker under it, at its side of the view.
+                let Some(f) = floors
+                    .iter()
+                    .filter(|f| f.at.y < c.at.y && (f.at.x - c.at.x).abs() <= ELEVATION_MARKER_FT * upf)
+                    .min_by(|a, b| (c.at.y - a.at.y).total_cmp(&(c.at.y - b.at.y)))
+                else {
+                    continue;
+                };
+                let ft = ((c.at.y - f.at.y) * factor / upf * 12.0).round() / 12.0;
+                if (6.5..=20.0).contains(&ft) {
+                    let source = format!("{} measured on {} {} (F.F. to B.O. CEILING)", ft_in_label(ft), sh.number, v.title);
+                    found.entry(words.clone()).or_default().push((ft, source));
+                }
+            }
+        }
+    }
+    found
+        .into_iter()
+        .filter_map(|(words, mut hs)| {
+            hs.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (ft, source) = hs.get(hs.len() / 2)?.clone();
+            Some((words, ft, source))
+        })
+        .collect()
+}
+
+/// Of each room's ceiling areas, only its largest (the room itself, not its bath or closet)
+/// keeps the room's name: the room takes that one's height.
+fn main_areas_only(mut areas: Vec<cadaddy_walk3d::CeilingArea>) -> Vec<cadaddy_walk3d::CeilingArea> {
+    let size = |a: &cadaddy_walk3d::CeilingArea| {
+        let poly: Vec<cadaddy_geom::Vec2> = a.outline.iter().map(|p| cadaddy_geom::Vec2::new(p[0], p[1])).collect();
+        cadaddy_geom::shoelace(&poly).abs()
+    };
+    let mut best: BTreeMap<(String, String), (usize, f64)> = BTreeMap::new();
+    for (i, a) in areas.iter().enumerate() {
+        let Some(room) = &a.room else { continue };
+        let sz = size(a);
+        let e = best.entry((a.level.clone(), room.clone())).or_insert((i, sz));
+        if sz > e.1 {
+            *e = (i, sz);
+        }
+    }
+    let keep: BTreeSet<usize> = best.values().map(|(i, _)| *i).collect();
+    for (i, a) in areas.iter_mut().enumerate() {
+        if !keep.contains(&i) {
+            a.room = None;
+        }
+    }
+    areas
+}
+
+/// `9'-6"` for 9.5 (a ceiling height, feet).
+fn ft_in_label(ft: f64) -> String {
+    if !ft.is_finite() {
+        return "?".into();
+    }
+    let total = (ft.abs() * 12.0).round() as i64;
+    format!("{}'-{}\"", total / 12, total % 12)
+}
+
 /// What [`stamp_typical_runs`] made: the stamped runs, which of the runs it was given lie in a
 /// typical room's plan (each `true` went into the rooms), and the count per sheet and view.
 #[derive(Default)]
@@ -7223,6 +7519,7 @@ fn rcp_ceiling_areas(
                     grid: None,
                     ceiling_type: None,
                     guess: None,
+                    source: Some(format!("{} ceiling tag on {}", ft_in_label(*ft), v.title)),
                 });
                 found += 1;
             }
@@ -10453,6 +10750,174 @@ mod tests {
     /// same room type, every later sheet a sheet's width further right) takes none of the plan's
     /// devices and moves none: each room of the type gets them, the floor plan's own of a tag in a
     /// room standing for that many.
+    #[test]
+    fn a_typical_rooms_ceiling_plan_sets_each_rooms_ceiling_with_its_source() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        let unit = |s: &mut crate::Session, o: [f64; 2], turned: bool| {
+            let p = |x: f64, y: f64| if turned { [o[0] + 144.0 - x, o[1] + 288.0 - y] } else { [o[0] + x, o[1] + y] };
+            let mut segs =
+                vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((100.0, 210.0), (144.0, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, p(ax, ay), p(bx, by));
+            }
+        };
+        // The A-6 sheet: the unit's ceiling plan, 9'-0" in the room, 8'-0" in the bath (y < 100).
+        let x0 = 4234.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let v = [x0 + 300.0, 200.0];
+        unit(&mut s, v, false);
+        // Each in its ceiling tag (the type letter over it); a dimension string is no height.
+        s.execute("text", &json!({"at": [v[0] + 70.0, v[1] + 230.0], "text": "9'-0\"", "height": 4.0})).unwrap();
+        s.execute("text", &json!({"at": [v[0] + 72.0, v[1] + 236.0], "text": "D", "height": 4.0})).unwrap();
+        s.execute("text", &json!({"at": [v[0] + 20.0, v[1] + 30.0], "text": "8'-0\" AFF", "height": 4.0})).unwrap();
+        s.execute("text", &json!({"at": [v[0] + 22.0, v[1] + 36.0], "text": "A", "height": 4.0})).unwrap();
+        s.execute("text", &json!({"at": [v[0] + 30.0, v[1] + 160.0], "text": "10' - 1\"", "height": 4.0})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": "UNIT RCP - DOUBLE QUEEN", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        unit(&mut s, [10_000.0, 0.0], false);
+        unit(&mut s, [10_400.0, 0.0], true);
+        job.sheet_regions = vec![SheetRegion {
+            number: "A-6".into(),
+            level: "T".into(),
+            discipline: "A".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "A-6".into(), lo, hi }];
+        let room = |n: &str, x: f64| json!({"name": "DOUBLE QUEEN", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_400.0)]}));
+        }
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "units_per_foot": 12.0,
+            "levels": [{"name": "Level 2", "elevation_ft": 12.0, "height_ft": 10.0, "ceiling_ft": 8.5}]
+        }))
+        .unwrap();
+        // The floor's spaces: each room's bath (its end with the stub at 100") and the rest.
+        let mut area_at = |_: &str, q: cadaddy_geom::Vec2| -> Option<Vec<[[f64; 2]; 2]>> {
+            let r = |x0: f64, y0: f64, x1: f64, y1: f64| Some(vec![[[x0, y0], [x1, y1]]]);
+            match (q.x, q.y) {
+                (x, y) if (10_000.0..=10_144.0).contains(&x) && y < 100.0 => r(10_000.0, 0.0, 10_144.0, 100.0),
+                (x, _) if (10_000.0..=10_144.0).contains(&x) => r(10_000.0, 100.0, 10_144.0, 288.0),
+                (x, y) if (10_400.0..=10_544.0).contains(&x) && y > 188.0 => r(10_400.0, 188.0, 10_544.0, 288.0),
+                (x, _) if (10_400.0..=10_544.0).contains(&x) => r(10_400.0, 0.0, 10_544.0, 188.0),
+                _ => None,
+            }
+        };
+        let (areas, read) = typical_rcp_areas_on(s.doc().unwrap(), &sp, &job, &mut area_at);
+        assert_eq!((read, areas.len()), (2, 4), "{areas:?}");
+        for n in ["201", "202"] {
+            let mine: Vec<_> = areas.iter().filter(|a| a.room.as_deref() == Some(n)).collect();
+            assert_eq!(mine.len(), 1, "room {n}: its one main area {areas:?}");
+            assert!((mine[0].height_ft - 9.0).abs() < 1e-9, "room {n}: {:?}", mine[0]);
+            assert_eq!(mine[0].source.as_deref(), Some("9'-0\" ceiling tag on A-6 UNIT RCP - DOUBLE QUEEN"));
+        }
+        // The baths: 8', in no room's name (the room keeps its own height).
+        let baths: Vec<_> = areas.iter().filter(|a| a.room.is_none()).collect();
+        assert!(baths.len() == 2 && baths.iter().all(|a| (a.height_ft - 8.0).abs() < 1e-9), "{areas:?}");
+        let turned_bath = baths
+            .iter()
+            .any(|a| a.outline.iter().any(|p| p[0] >= 10_400.0 && p[1] >= 188.0 - 1e-6) && a.outline.iter().all(|p| p[1] >= 188.0 - 1e-6));
+        assert!(turned_bath, "the turned room's bath is at its other end: {baths:?}");
+    }
+
+    #[test]
+    fn a_typical_rooms_elevations_measure_its_ceiling() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        // A-8 (its plans at 3/8"): "DOUBLE QUEEN - BED WALL" at 1/2", so a third bigger: the wall
+        // 12' wide, its floor line and its ceiling line 7'-10" over it run out to their markers.
+        let z = 4.0 / 3.0;
+        let x0 = 4234.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let v = [x0 + 300.0, 200.0];
+        for (a, b) in [
+            ((0.0, 0.0), (144.0, 0.0)),
+            ((144.0, 0.0), (144.0, 94.0)),
+            ((144.0, 94.0), (0.0, 94.0)),
+            ((0.0, 94.0), (0.0, 0.0)),
+            ((144.0, 0.0), (180.0, 0.0)),
+            ((144.0, 94.0), (180.0, 94.0)),
+            ((20.0, 30.0), (60.0, 30.0)),
+        ] {
+            line(&mut s, [v[0] + z * a.0, v[1] + z * a.1], [v[0] + z * b.0, v[1] + z * b.1]);
+        }
+        let label = |s: &mut crate::Session, x: f64, y: f64, t: &str| {
+            s.execute("text", &json!({"at": [v[0] + z * x, v[1] + z * y], "text": t, "height": 3.0})).unwrap();
+        };
+        label(&mut s, 150.0, 96.0, "B.O. CEILING");
+        label(&mut s, 150.0, 91.0, "RE: PLANS");
+        label(&mut s, 150.0, 2.0, "F.F.");
+        label(&mut s, 150.0, -3.0, "VARIES");
+        let p = [x0 + 1000.0, 300.0];
+        for (a, b) in [
+            ((0.0, 0.0), (144.0, 0.0)),
+            ((144.0, 0.0), (144.0, 288.0)),
+            ((144.0, 288.0), (0.0, 288.0)),
+            ((0.0, 288.0), (0.0, 0.0)),
+            ((0.0, 100.0), (60.0, 100.0)),
+        ] {
+            line(&mut s, [p[0] + a.0, p[1] + a.1], [p[0] + b.0, p[1] + b.1]);
+        }
+        // Its title wrapped: only its second line reads as the title.
+        s.execute("text", &json!({"at": [p[0], p[1] - 19.0], "text": "DOUBLE QUEEN", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [p[0], p[1] - 28.0], "text": "SCALE: 3/8\" = 1'-0\"", "height": 4.6})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": "DOUBLE QUEEN - BED WALL", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/2\" = 1'-0\"", "height": 4.6})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        job.sheet_regions = vec![SheetRegion {
+            number: "A-8".into(),
+            level: "T".into(),
+            discipline: "A".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "A-8".into(), lo, hi }];
+        // The set's classification read one of the elevations' scales: the sheet's plan says 3/8".
+        job.sheets = Some(json!({"sheets": [{"number": "A-8", "discipline": "A", "type": "enlarged_plan", "scale": "1/2\" = 1'-0\""}]}));
+        let room = |n: &str, x: f64| json!({"name": "DOUBLE QUEEN", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_400.0)]}));
+        }
+        let m = typical_elevation_heights(s.doc().unwrap(), &job);
+        assert_eq!(m.len(), 1, "{m:?}");
+        let (words, ft, source) = &m[0];
+        assert_eq!(*words, type_words("DOUBLE QUEEN", None));
+        assert!((ft - 94.0 / 12.0).abs() < 1e-9, "{m:?}");
+        assert_eq!(source, "7'-10\" measured on A-8 DOUBLE QUEEN - BED WALL (F.F. to B.O. CEILING)");
+    }
+
     #[test]
     fn a_typical_rooms_height_notes_go_to_its_devices_in_every_room() {
         let mut s = crate::Session::new();

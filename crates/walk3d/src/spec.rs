@@ -671,6 +671,9 @@ pub struct Room {
     /// Ceiling height above the floor, feet; none = the level's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ceiling_ft: Option<f64>,
+    /// Where `ceiling_ft` was read (`9'-0" on A-501 ENLARGED UNIT RCP`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_source: Option<String>,
     #[serde(default)]
     pub materials: Surfaces,
     /// Base finish from the room finish schedule (`RB-1 4" RUBBER BASE`).
@@ -1995,6 +1998,9 @@ pub struct CeilingArea {
     /// Why the type is a guess, when it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guess: Option<String>,
+    /// Where its height was read (the tag and the sheet or view).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// A suspended ceiling grid: tile size (inches, along and across `angle_deg`) and a line

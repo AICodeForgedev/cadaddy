@@ -147,6 +147,35 @@ fn doors_and_windows_take_their_opening_sizes() {
 }
 
 #[test]
+fn a_window_gap_a_demising_wall_meets_is_two_windows() {
+    // Two rooms (x 0-20 and 20.5-40) whose south wall has one 12' gap (x 14-26) that the 6" wall
+    // between them meets end-on: a pier there, a window each side, none across it.
+    let mut d = Drawing::new_imperial();
+    for (a, b) in [((0., 0.), (14., 0.)), ((26., 0.), (40., 0.)), ((40., 0.), (40., 10.)), ((40., 10.), (0., 10.)), ((0., 10.), (0., 0.))] {
+        line(&mut d, a, b);
+    }
+    for (a, b) in
+        [((0.5, 0.5), (14., 0.5)), ((26., 0.5), (39.5, 0.5)), ((39.5, 0.5), (39.5, 9.5)), ((39.5, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))]
+    {
+        line(&mut d, a, b);
+    }
+    for x in [20.0, 20.5] {
+        line(&mut d, (x, 0.5), (x, 9.5));
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Plan", None);
+    let r = s.execute("wallgen", &json!({"rules": rules()})).unwrap();
+    assert_eq!(r["windows"], json!(2), "{r}");
+    let mut spans: Vec<(f64, f64)> = made(&s, "window")
+        .iter()
+        .map(|g| g.vertices.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v.x), hi.max(v.x))))
+        .collect();
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert!(spans.len() == 2 && (spans[0].0 - 168.0).abs() < 1e-3 && (spans[0].1 - 240.0).abs() < 1e-3, "{spans:?}");
+    assert!((spans[1].0 - 246.0).abs() < 1e-3 && (spans[1].1 - 312.0).abs() < 1e-3, "{spans:?}");
+}
+
+#[test]
 fn the_building_follows_the_plan_while_associative() {
     let mut s = room();
     s.execute("wallgen", &json!({"rules": rules()})).unwrap();

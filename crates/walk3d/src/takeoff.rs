@@ -229,6 +229,7 @@ mod tests {
             grid: None,
             ceiling_type: Some("c1".into()),
             guess: None,
+            source: None,
         });
         sp.rcp.soffits.push(Soffit {
             level: level.clone(),
