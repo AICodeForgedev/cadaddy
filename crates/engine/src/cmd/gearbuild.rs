@@ -208,6 +208,11 @@ pub(crate) struct SubmittedGear {
     /// Lugs per phase and their range (`3/0-500 kcmil`).
     pub main_lugs: Option<(u32, String)>,
     pub branch_lug: Option<String>,
+    /// Its conduit entry areas as the submittal draws them (width × depth, inches), when it does.
+    pub top_plate_in: Option<[f64; 2]>,
+    pub bottom_plate_in: Option<[f64; 2]>,
+    /// `switchboard` when the submittal says so (else a panelboard).
+    pub kind: String,
     pub source: String,
 }
 
@@ -240,6 +245,100 @@ fn lug_range(v: &str) -> bool {
     v.split_once('-').is_some_and(|(a, b)| size(a) && size(b))
 }
 
+/// A gear elevation drawing read by position (a drawing's text has no reading order): its height
+/// (the inch ruler's top mark, `90.00"`, three marks at least), its width (the number beside each
+/// `SECTION#` label, 12" or more, added), its depth and conduit areas (each `... CONDUIT` plan's
+/// dimension labels, those nearer a `RESTRICTED` label left out: the largest the section's depth,
+/// the one in line with it the area's depth, the largest left the area's width; `TOP`/`BOTTOM`
+/// beside the label which way conduit comes in).
+pub(crate) fn elevation_at(texts: &[TextItem]) -> Option<SubmittedGear> {
+    // A plan's dimension labels lie this close to its label (text heights): the elevation's own
+    // numbers (unit spaces) are farther.
+    const PLAN_REACH: f64 = 25.0;
+    let num = |t: &TextItem| {
+        let v = t.value.trim();
+        (v.chars().next().is_some_and(|c| c.is_ascii_digit()) && v.trim_end_matches('"').chars().all(|c| c.is_ascii_digit() || c == '.'))
+            .then(|| v.trim_end_matches('"').parse::<f64>().ok())
+            .flatten()
+            .filter(|x| x.is_finite())
+    };
+    let ruler: Vec<f64> = texts.iter().filter(|t| t.value.trim().ends_with('"')).filter_map(num).collect();
+    if ruler.len() < 3 {
+        return None;
+    }
+    let height = ruler.iter().copied().fold(0.0, f64::max);
+    // The drawing's text height (the median: a stray tiny or huge text doesn't set the scale).
+    let mut hs: Vec<f64> = texts.iter().map(|t| t.height).filter(|v| v.is_finite() && *v > 0.0).collect();
+    hs.sort_by(f64::total_cmp);
+    let h = hs.get(hs.len() / 2).copied().unwrap_or(1.0);
+    let labels: Vec<&TextItem> = texts.iter().filter(|t| t.value.to_ascii_uppercase().starts_with("SECTION#")).collect();
+    let mut widths: Vec<(f64, Vec2)> = Vec::new();
+    for l in &labels {
+        let w = texts
+            .iter()
+            .filter(|t| !t.value.trim().ends_with('"'))
+            .filter_map(|t| num(t).filter(|v| (12.0..=120.0).contains(v)).map(|v| (v, t.at)))
+            .filter(|(_, at)| at.dist(l.at) < 8.0 * h)
+            .min_by(|a, b| a.1.dist(l.at).total_cmp(&b.1.dist(l.at)));
+        if let Some(w) = w.filter(|w| !widths.iter().any(|x| x.1.dist(w.1) < 1e-6)) {
+            widths.push(w);
+        }
+    }
+    if widths.is_empty() {
+        return None;
+    }
+    let conduit: Vec<&TextItem> = texts.iter().filter(|t| t.value.to_ascii_uppercase().contains("CONDUIT")).collect();
+    let restricted: Vec<&TextItem> = texts.iter().filter(|t| t.value.to_ascii_uppercase().contains("RESTRICTED")).collect();
+    let dims: Vec<(f64, Vec2)> = texts
+        .iter()
+        .filter(|t| !t.value.trim().ends_with('"'))
+        .filter_map(|t| num(t).filter(|v| *v >= 6.0 && *v <= 120.0).map(|v| (v, t.at)))
+        .filter(|(v, at)| !widths.iter().any(|w| w.1.dist(*at) < 1e-6 && (w.0 - v).abs() < 1e-9))
+        .collect();
+    let (mut top, mut bottom, mut depth) = ([0.0f64, 0.0f64], [0.0f64, 0.0f64], 0.0f64);
+    for (ci, c) in conduit.iter().enumerate() {
+        // This plan's numbers: those nearest this label of all the conduit and restricted labels.
+        let mine: Vec<(f64, Vec2)> = dims
+            .iter()
+            .copied()
+            .filter(|(_, at)| {
+                let d = at.dist(c.at);
+                d < PLAN_REACH * h
+                    && conduit.iter().enumerate().all(|(j, o)| j == ci || at.dist(o.at) >= d)
+                    // A restricted area's own sizes sit right beside its label.
+                    && restricted.iter().all(|r| at.dist(r.at) >= 6.0 * h)
+            })
+            .collect();
+        let Some(&(sd, sd_at)) = mine.iter().max_by(|a, b| a.0.total_cmp(&b.0)) else { continue };
+        let in_line = |a: Vec2, b: Vec2| (a.x - b.x).abs() < 0.6 * h || (a.y - b.y).abs() < 0.6 * h;
+        let ad = mine.iter().filter(|(v, at)| *v < sd && in_line(*at, sd_at)).map(|x| x.0).fold(0.0, f64::max);
+        let aw = mine.iter().filter(|(v, at)| *v < sd && !(in_line(*at, sd_at) && (*v - ad).abs() < 1e-9)).map(|x| x.0).fold(0.0, f64::max);
+        if ad <= 0.0 || aw <= 0.0 {
+            continue;
+        }
+        depth = depth.max(sd);
+        // The way conduit comes in, in the label or beside it (`TOP & BOTTOM`, `BOTTOM ONLY`).
+        let near = |w: &str| {
+            texts
+                .iter()
+                .any(|t| t.at.dist(c.at) < 4.0 * h && t.value.to_ascii_uppercase().split(|ch: char| !ch.is_ascii_alphabetic()).any(|x| x == w))
+        };
+        if near("TOP") {
+            top = [top[0] + aw, top[1].max(ad)];
+        }
+        if near("BOTTOM") {
+            bottom = [bottom[0] + aw, bottom[1].max(ad)];
+        }
+    }
+    (depth > 0.0).then(|| SubmittedGear {
+        size_in: [height, widths.iter().map(|w| w.0).sum(), depth],
+        top_plate_in: (top[0] > 0.0).then_some(top),
+        bottom_plate_in: (bottom[0] > 0.0).then_some(bottom),
+        kind: "switchboard".into(),
+        ..SubmittedGear::default()
+    })
+}
+
 /// Per panel tag (`tags`), what the gear submittal's text says: the text after each designation
 /// (`<tag> - 1`, `<tag>--PANELBOARD`), up to the next designation.
 pub(crate) fn submittal_gear(text: &str, tags: &[String], source: &str) -> BTreeMap<String, SubmittedGear> {
@@ -249,7 +348,7 @@ pub(crate) fn submittal_gear(text: &str, tags: &[String], source: &str) -> BTree
     let mut out: BTreeMap<String, SubmittedGear> = BTreeMap::new();
     for tag in tags {
         let t = tag.to_ascii_uppercase();
-        let marks = [format!(" {t} - 1 "), format!(" {t}--PANELBOARD"), format!(" {t}-PANELBOARD")];
+        let marks = [format!(" {t} - 1 "), format!(" {t}--"), format!(" {t}-PANELBOARD")];
         let mut g = SubmittedGear { source: source.to_string(), ..SubmittedGear::default() };
         for m in &marks {
             let mut from = 0;
@@ -288,10 +387,32 @@ pub(crate) fn submittal_gear(text: &str, tags: &[String], source: &str) -> BTree
                     }
                 }
                 if g.feed.is_empty() {
-                    if win.contains("TOP FEED") || win.contains(" TOP ") {
-                        g.feed = "top".into();
-                    } else if win.contains("BOTTOM FEED") || win.contains(" BOTTOM ") {
-                        g.feed = "bottom".into();
+                    // Said outright first (`Incoming Location: Bottom`, `Top Feed`), then a bare word.
+                    g.feed = if win.contains("INCOMING LOCATION:BOTTOM") || win.contains("INCOMING LOCATION: BOTTOM") || win.contains("BOTTOM FEED") {
+                        "bottom".into()
+                    } else if win.contains("INCOMING LOCATION:TOP")
+                        || win.contains("INCOMING LOCATION: TOP")
+                        || win.contains("TOP FEED")
+                        || win.contains(" TOP ")
+                    {
+                        "top".into()
+                    } else if win.contains(" BOTTOM ") {
+                        "bottom".into()
+                    } else {
+                        String::new()
+                    };
+                }
+                if g.kind.is_empty() && win.contains("SWITCHBOARD") {
+                    g.kind = "switchboard".into();
+                }
+                // A switchboard's incoming lugs: `INCOMING LUGS: (6) 600 KCMIL`.
+                if g.main_lugs.is_none()
+                    && let Some(i) = win.find("INCOMING LUGS:")
+                {
+                    let rest: Vec<&str> = win.get(i + 14..).unwrap_or_default().split(' ').filter(|w| !w.is_empty()).take(3).collect();
+                    if let (Some(n), Some(size)) = (rest.first().and_then(|w| w.trim_matches(['(', ')']).parse::<u32>().ok()), rest.get(1)) {
+                        let unit = rest.get(2).filter(|u| u.starts_with("KCMIL") || u.starts_with("MCM")).map_or("", |_| " kcmil");
+                        g.main_lugs = Some((n, format!("{}{unit}", size.to_ascii_lowercase())));
                     }
                 }
                 if g.main_lugs.is_none()
@@ -315,7 +436,7 @@ pub(crate) fn submittal_gear(text: &str, tags: &[String], source: &str) -> BTree
                 }
             }
         }
-        if g.size_in != [0.0; 3] || g.main_lugs.is_some() {
+        if g.size_in != [0.0; 3] || g.main_lugs.is_some() || !g.feed.is_empty() {
             out.insert(tag.clone(), g);
         }
     }
@@ -540,6 +661,11 @@ pub(crate) fn plan(
             let [h, w, dp] = g.size_in;
             let margin = rule.plate_margin_in.unwrap_or([2.0, 1.5]);
             let plate = [(w - 2.0 * margin[0]).max(0.0), (dp - margin[1]).max(0.0)];
+            // The submittal's drawn conduit areas, where it draws them; else the box less margins.
+            let (top_plate, bottom_plate) = match (g.top_plate_in, g.bottom_plate_in) {
+                (None, None) => (if g.feed == "bottom" { [0.0, 0.0] } else { plate }, if g.feed == "bottom" { plate } else { [0.0, 0.0] }),
+                (t, b) => (t.unwrap_or([0.0, 0.0]), b.unwrap_or([0.0, 0.0])),
+            };
             let top = rule.mount_top_in.unwrap_or(78.0);
             let mut properties: BTreeMap<String, String> = schedules
                 .iter()
@@ -590,22 +716,18 @@ pub(crate) fn plan(
             }
             out.equipment.push(MepEquipment {
                 tag: tag.clone(),
-                kind: "panel".into(),
+                kind: if g.kind.is_empty() { "panel".into() } else { g.kind.clone() },
                 level: level.clone(),
                 min: at.min,
                 max: at.max,
                 bottom_ft: (top - h).max(0.0) / 12.0,
                 height_ft: h / 12.0,
-                title: format!("PANELBOARD {tag}"),
+                title: format!("{} {tag}", if g.kind == "switchboard" { "SWITCHBOARD" } else { "PANELBOARD" }),
                 properties,
                 sources,
                 confidence: 0.5,
                 terminations,
-                enclosure: Some(Enclosure {
-                    top_entry_in: if g.feed == "bottom" { [0.0, 0.0] } else { plate },
-                    bottom_entry_in: if g.feed == "bottom" { plate } else { [0.0, 0.0] },
-                    gutter_in: [0.0, 0.0],
-                }),
+                enclosure: Some(Enclosure { top_entry_in: top_plate, bottom_entry_in: bottom_plate, gutter_in: [0.0, 0.0] }),
                 ..MepEquipment::default()
             });
         }
@@ -686,6 +808,59 @@ mod tests {
     }
 
     #[test]
+    fn a_switchboards_bill_of_material_gives_its_feed_kind_and_incoming_lugs() {
+        let text = "--- page 9 of 85 --- 20000 1 MDP--SB2 SWITCHBOARD - 2 SECTIONS SB2, Incoming Location: Bottom, 2,000 Amp Top Thru Bus 1 - INCOMING LUGS: (6) 600 KCMIL AL/CU MECH";
+        let g = submittal_gear(text, &["MDP".into(), "DP1".into()], "switchgear");
+        let m = g.get("MDP").expect("MDP");
+        // Its size is on its elevation drawing (read by position: elevation_at).
+        assert_eq!(m.size_in, [0.0; 3]);
+        assert_eq!(m.feed, "bottom");
+        assert_eq!(m.kind, "switchboard");
+        assert_eq!(m.main_lugs, Some((6, "600 kcmil".into())));
+    }
+
+    #[test]
+    fn a_switchboards_elevation_reads_by_position() {
+        let tt = |x: f64, y: f64, v: &str| TextItem { value: v.to_string(), at: Vec2::new(x, y), height: 4.5, rotation: 0.0 };
+        let mut v = vec![
+            tt(121.2, 334.7, "32.00"),
+            tt(111.9, 326.5, "SECTION#"),
+            tt(117.1, 331.1, "WEIGHT:900.0"),
+            tt(103.1, 318.2, "7.5"),
+            tt(71.3, 334.7, "25.00"),
+            tt(60.8, 326.5, "SECTION#"),
+        ];
+        for (i, y) in [306.9, 288.9, 270.9, 252.9, 162.9].iter().enumerate() {
+            v.push(tt(19.5, *y, &format!("{}.00\"", [10, 20, 30, 40, 90][i])));
+        }
+        // Section 2's plan (a restricted area beside it), section 1's.
+        v.extend([
+            tt(114.8, 92.3, "RESTRICTED"),
+            tt(121.0, 83.3, "17.00"),
+            tt(103.1, 90.7, "12.00"),
+            tt(121.2, 41.3, "26.00"),
+            tt(113.7, 103.0, "TOP"),
+            tt(127.6, 103.0, "BOTTOM"),
+            tt(118.2, 107.5, "CONDUIT"),
+            tt(176.5, 80.2, "28.00"),
+            tt(164.6, 57.0, "2.50"),
+            tt(163.2, 80.2, "23.00"),
+        ]);
+        v.extend([
+            tt(70.1, 41.3, "19.00"),
+            tt(62.7, 103.0, "BOTTOM"),
+            tt(67.2, 107.5, "CONDUIT"),
+            tt(20.6, 80.2, "28.00"),
+            tt(35.6, 57.0, "2.50"),
+            tt(34.2, 80.2, "23.00"),
+        ]);
+        let g = elevation_at(&v).expect("read");
+        assert_eq!(g.size_in, [90.0, 57.0, 28.0]);
+        assert_eq!(g.top_plate_in, Some([26.0, 23.0]));
+        assert_eq!(g.bottom_plate_in, Some([45.0, 23.0]));
+    }
+
+    #[test]
     fn the_plan_feeds_each_panel_its_schedules_rows_and_lays_out_its_gear() {
         use cadaddy_walk3d::{BuildingSpec, PanelCircuit, PanelSchedule};
         let row =
@@ -720,6 +895,7 @@ mod tests {
                 main_lugs: Some((2, "3/0-500 kcmil".into())),
                 branch_lug: Some("#14-3/0".into()),
                 source: "sub".into(),
+                ..SubmittedGear::default()
             },
         )]
         .into_iter()

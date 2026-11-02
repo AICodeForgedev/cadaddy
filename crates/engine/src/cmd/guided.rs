@@ -7408,6 +7408,8 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         }
     }
     let mut gear: BTreeMap<String, super::gearbuild::SubmittedGear> = BTreeMap::new();
+    // The gear submittals read (file, name, text): their drawing pages are read again by position.
+    let mut read_files: Vec<(String, String, String)> = Vec::new();
     for f in super::submittals::pdf_files(&job.submittals).into_iter().take(MAX_GEAR_SUBMITTALS) {
         let name = std::path::Path::new(&f).file_stem().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string());
         let up = name.to_ascii_uppercase();
@@ -7422,6 +7424,73 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         for (k, v) in super::gearbuild::submittal_gear(&text, &tags, &name) {
             gear.entry(k).or_insert(v);
         }
+        read_files.push((f.clone(), name, text));
+    }
+    // Gear the text gives no size for: its elevation drawing (a page naming it and its sections),
+    // read by position; else an agent's answer; else a question for the agent.
+    let wanted: Vec<String> = sp
+        .mep
+        .panel_schedules
+        .iter()
+        .filter(|p| p.typical_of.is_none() && !sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&p.panel)))
+        .map(|p| p.panel.clone())
+        .filter(|t| gear.get(t).is_none_or(|g| g.size_in == [0.0; 3]))
+        .collect();
+    let read_pdf = super::file::io().and_then(|h| h.read_pdf);
+    let mut looked: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for tag in &wanted {
+        let up = tag.to_ascii_uppercase();
+        'files: for (f, name, text) in &read_files {
+            for page in text.split("--- page ").skip(1) {
+                let n: u32 = page.split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(0);
+                let words: Vec<String> = page.split(|c: char| !(c.is_ascii_alphanumeric() || c == '#')).map(str::to_ascii_uppercase).collect();
+                if n == 0 || !words.iter().any(|w| w == "SECTION#") || !words.contains(&up) {
+                    continue;
+                }
+                looked.entry(tag.clone()).or_default().push(format!("{name} p.{n}"));
+                let Some(read) = read_pdf else { continue };
+                let Ok(bytes) = crate::readfile::read(f) else { continue };
+                let Ok((d, _)) = read(&bytes, &json!({"page": n, "text": true, "images": false})) else { continue };
+                if let Some(e) = super::gearbuild::elevation_at(&cadaddy_mepfix::sheet_facts::texts(&d)) {
+                    let g = gear.entry(tag.clone()).or_default();
+                    g.size_in = e.size_in;
+                    g.top_plate_in = e.top_plate_in;
+                    g.bottom_plate_in = e.bottom_plate_in;
+                    if g.kind.is_empty() {
+                        g.kind = e.kind;
+                    }
+                    g.source = format!("{name} p.{n} (elevation drawing)");
+                    break 'files;
+                }
+            }
+        }
+    }
+    for tag in &wanted {
+        if gear.get(tag).is_some_and(|g| g.size_in != [0.0; 3]) {
+            continue;
+        }
+        // An agent's answer to an earlier question.
+        if let Some(a) = job
+            .rules
+            .iter()
+            .find(|r| r.key == format!("gear:{}", tag.to_ascii_uppercase()))
+            .and_then(|r| serde_json::from_str::<Value>(&r.value).ok())
+        {
+            let n = |k: &str| a.get(k).and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0);
+            let pair = |k: &str| a.get(k).and_then(Value::as_array).and_then(|v| Some([v.first()?.as_f64()?, v.get(1)?.as_f64()?]));
+            if let (Some(h), Some(w), Some(dp)) = (n("height_in"), n("width_in"), n("depth_in")) {
+                let g = gear.entry(tag.clone()).or_default();
+                g.size_in = [h, w, dp];
+                g.top_plate_in = pair("top_entry_in").or(g.top_plate_in);
+                g.bottom_plate_in = pair("bottom_entry_in").or(g.bottom_plate_in);
+                if let Some(feed) = a.get("feed").and_then(Value::as_str) {
+                    g.feed = feed.to_ascii_lowercase();
+                }
+                g.source = "an agent's reading of the submittal (job answer)".into();
+                continue;
+            }
+        }
+        gear_question(job, tag, looked.get(tag).cloned().unwrap_or_default(), &read_files.iter().map(|(_, n, _)| n.clone()).collect::<Vec<_>>());
     }
     let rooms: Vec<super::gearbuild::RoomBox> = {
         let d = s.doc()?;
@@ -7502,6 +7571,52 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
 
 /// Gear submittals read, at most.
 const MAX_GEAR_SUBMITTALS: usize = 40;
+
+/// What a gear question begins with (its tag follows), for its answer to be learned.
+const GEAR_QUESTION: &str = "Gear size: ";
+
+/// A question for the agent: the size (and conduit entry) of gear the documents give but the job
+/// couldn't read, with where to look; answered, the build lays the gear out with it. Its default
+/// leaves the gear unplaced, so a job running on its own goes on.
+fn gear_question(job: &mut GuidedJob, tag: &str, pages: Vec<String>, files: &[String]) {
+    let text = format!("{GEAR_QUESTION}{tag}");
+    let asked = job.stages.iter().flat_map(|st| &st.questions).any(|q| q.question.starts_with(&text));
+    if asked {
+        return;
+    }
+    let qid = job.next_qid(StageName::BimBuild);
+    let look = if pages.is_empty() { files.join("; ") } else { pages.join("; ") };
+    let q = Question {
+        id: qid,
+        stage: StageName::BimBuild,
+        question: format!(
+            "{text}: its box size isn't in a table the job reads. Read it from {look} (its elevation or dimension drawing) and answer {{height_in, width_in, depth_in, feed: \"top\"|\"bottom\", top_entry_in?: [w, d], bottom_entry_in?: [w, d]}}"
+        ),
+        why: "The electrical room is laid out and each piece of gear checked (entry plates, lugs, working space) from its size; without it the gear stays out of the model".into(),
+        choices: vec!["Leave unplaced".into()],
+        evidence: Some(QuestionEvidence {
+            crop_png_path: None,
+            sheet: None,
+            at: None,
+            values: Some(json!({"panel": tag, "pages": pages, "files": files})),
+            handles: Vec::new(),
+            tiled_crops: None,
+            leftovers: Vec::new(),
+        }),
+        default: Some("Leave unplaced".into()),
+        answer_schema: Some(json!({"type": "object", "properties": {
+            "height_in": {"type": "number"}, "width_in": {"type": "number"}, "depth_in": {"type": "number"},
+            "feed": {"type": "string"}, "top_entry_in": {"type": "array"}, "bottom_entry_in": {"type": "array"}}})),
+        answer: None,
+        answered_by: None,
+        answered_at: None,
+        kind: QuestionKind::Completeness,
+    };
+    job.add_question_to_worklist(&q);
+    if let Some(st) = job.stage_mut(StageName::BimBuild) {
+        st.questions.push(q);
+    }
+}
 
 /// The electrical sheets' pages: the job's drawing's E sheets and those it didn't import.
 fn electrical_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing)> {
@@ -10214,6 +10329,9 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
     if !text.is_empty() && q.default.as_deref() == Some(text) {
         return (None, "kept what the job read".into());
     }
+    if q.stage == StageName::BimBuild && q.question.starts_with(GEAR_QUESTION) && answer.get("height_in").is_some() {
+        return (Some(StageName::BimBuild), "the build lays the gear out with its size".into());
+    }
     let values = q.evidence.as_ref().and_then(|e| e.values.clone()).unwrap_or(Value::Null);
     let value = |k: &str| values.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let other = !text.is_empty() && !q.choices.iter().any(|c| c == text);
@@ -11595,6 +11713,15 @@ pub fn learn_from_answer(job: &mut GuidedJob, q: &Question) {
         && let Some(desc) = ev.values.as_ref().and_then(|v| v.get("description")).and_then(Value::as_str)
     {
         job.learn_rule(&format!("symbol:{desc}"), &format!("device:{device_type}"), &q.id, q.stage);
+    }
+
+    // Gear sizes an agent read off a drawing.
+    if q.stage == StageName::BimBuild
+        && q.question.starts_with(GEAR_QUESTION)
+        && answer.get("height_in").is_some()
+        && let Some(tag) = q.evidence.as_ref().and_then(|e| e.values.as_ref()).and_then(|v| v.get("panel")).and_then(Value::as_str)
+    {
+        job.learn_rule(&format!("gear:{}", tag.to_ascii_uppercase()), &answer.to_string(), &q.id, q.stage);
     }
 
     // Learn scale overrides.
