@@ -4951,6 +4951,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     products_step(s, job, &mut result);
     bim_step(s, job, "product data", t);
+    // The light fixture schedule on each luminaire, and the lighting documents checked against
+    // each other (plans, schedule, submittal).
+    let t = web_time::Instant::now();
+    if let Err(e) = lighting_step(s, job, &pages, &mut result) {
+        result["lighting_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "lighting", t);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -7570,6 +7577,164 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     }
     result["gear"] = json!({"placed": placed, "feeders": feeders, "unplaced": planned.unplaced, "review": review});
     equipment_step(s, job, pages, &types, &tags, result)
+}
+
+/// The lighting step ([`super::lightsched`]): the fixture schedule (by its grid) into the spec and
+/// onto each luminaire of its type; RFIs where the plans, the schedule and the submittal disagree.
+fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
+    use super::lightsched;
+    use cadaddy_doc::props::{self, Prop, Source, SourceKind};
+    let mut types: Vec<cadaddy_walk3d::FixtureType> = Vec::new();
+    let mut no_subs = false;
+    for (number, d) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(d);
+        if !texts
+            .iter()
+            .any(|t| t.value.to_ascii_uppercase().contains("FIXTURE SCHEDULE") || t.value.to_ascii_uppercase().contains("LUMINAIRE SCHEDULE"))
+        {
+            continue;
+        }
+        let segs = super::gridtable::segments(d);
+        for title in ["LIGHT FIXTURE SCHEDULE", "LIGHTING FIXTURE SCHEDULE", "LUMINAIRE SCHEDULE"] {
+            for tb in super::gridtable::read_titled(&texts, &segs, title, number) {
+                let (rows, ns) = lightsched::fixture_types(&tb);
+                no_subs |= ns;
+                for r in rows {
+                    if !types.iter().any(|t| t.tag == r.tag) {
+                        types.push(r);
+                    }
+                }
+            }
+        }
+    }
+    if types.is_empty() {
+        return Ok(());
+    }
+    // Each luminaire: its type's row; what was submitted for it.
+    let d = s.doc()?;
+    let mut changes: Vec<(cadaddy_doc::Handle, props::Props)> = Vec::new();
+    let mut on_plans: BTreeMap<String, usize> = BTreeMap::new();
+    let mut submitted: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+    for (e, base) in super::elemprops::elements(d).take(2_000_000) {
+        let kind = super::elemprops::reported_kind(e, base.clone());
+        if !matches!(kind.as_str(), "luminaire" | "wall_luminaire" | "light_fixture") {
+            continue;
+        }
+        let mut store = props::read(&e.common.xdata);
+        let text = |st: &props::Props, k: &str| st.get(k).filter(|p| p.has_value()).map(|p| p.text().trim().to_string()).unwrap_or_default();
+        let mark = {
+            let m = text(&store, "type_mark");
+            if m.is_empty() { text(&store, "type") } else { m }
+        };
+        let ty = lightsched::type_of(&mark);
+        if ty.is_empty() {
+            continue;
+        }
+        *on_plans.entry(ty.clone()).or_default() += 1;
+        let (maker, cat) = (text(&store, "manufacturer"), text(&store, "catalog_number"));
+        if !maker.is_empty() || !cat.is_empty() {
+            submitted.entry(ty.clone()).or_default().insert((maker, cat));
+        }
+        let Some(row) = types.iter().find(|t| t.tag == ty) else { continue };
+        let before = store.clone();
+        let src = Source::from_doc(SourceKind::Schedule, &format!("{} type {}", row.source, row.tag));
+        for (k, v) in [
+            ("basis_of_design", format!("{} {}", row.manufacturer, row.model).trim().to_string()),
+            ("lamp", row.lamp.clone()),
+            ("voltage", row.voltage.clone()),
+            ("installation", row.installation.clone()),
+            ("fixture_description", row.description.clone()),
+            ("schedule_notes", row.notes.clone()),
+        ] {
+            let keep = store.get(k).is_some_and(|old| old.source.kind == SourceKind::User);
+            if !keep && !v.is_empty() {
+                store.set(k, Prop::new(v, src.clone()));
+            }
+        }
+        if let Some(va) = row.va
+            && !store.get("fixture_va").is_some_and(|o| o.source.kind == SourceKind::User)
+        {
+            store.set("fixture_va", Prop::new(va, src.clone()).with_unit("VA"));
+        }
+        if store != before {
+            changes.push((e.handle, store));
+        }
+    }
+    let d = s.doc_mut()?;
+    for (h, store) in changes.iter() {
+        let _ = d.modify_entity(*h, |e| e.common.xdata = props::write(&e.common.xdata, store).into());
+    }
+    // The documents against each other.
+    let mut issues: Vec<(String, String, String)> = Vec::new();
+    for (ty, n) in &on_plans {
+        if !types.iter().any(|t| &t.tag == ty) {
+            issues.push((
+                ty.clone(),
+                format!("{n} luminaires of type {ty} on the plans; the light fixture schedule has no type {ty}"),
+                "Add the type to the schedule (basis of design, lamp, voltage, mounting) or correct the plans' tags".into(),
+            ));
+        }
+    }
+    for t in &types {
+        let Some(subs) = submitted.get(&t.tag) else { continue };
+        for (maker, cat) in subs {
+            let other_maker = !maker.is_empty() && !t.manufacturer.is_empty() && !lightsched::same_maker(&t.manufacturer, maker);
+            let other_product = !cat.is_empty() && !t.model.is_empty() && !lightsched::same_product(&t.model, cat);
+            if other_maker || other_product {
+                let note = if no_subs { "; the schedule's notes allow no substitutions unless approved" } else { "" };
+                issues.push((
+                    t.tag.clone(),
+                    format!(
+                        "type {}: the schedule's basis of design is {} {}; the submittal gives {} {}{note}",
+                        t.tag, t.manufacturer, t.model, maker, cat
+                    ),
+                    "Confirm the substitution is approved (or resubmit the basis of design)".into(),
+                ));
+            }
+        }
+    }
+    let unshown: Vec<String> = types.iter().filter(|t| !on_plans.contains_key(&t.tag)).map(|t| t.tag.clone()).collect();
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    let mut rfis = Vec::new();
+    for (ty, issue, fix) in &issues {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in issue.bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+        let id = format!("RFI-L{:08x}", h as u32);
+        if !sp.rfis.iter().any(|r| r.id == id) && sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
+            let kind = cadaddy_walk3d::RfiKind::Lighting;
+            sp.rfis.push(cadaddy_walk3d::Rfi {
+                id: id.clone(),
+                kind: Some(kind),
+                severity: kind.severity(),
+                about: format!("lighting type {ty}"),
+                issue: issue.clone(),
+                assumed: "The model keeps the plans' type and the submitted product until answered.".into(),
+                proposed: Some(fix.clone()),
+                ..cadaddy_walk3d::Rfi::default()
+            });
+            rfis.push(id);
+        }
+        job.add_finding(StageName::BimBuild, issue, "the lighting documents disagree", 1, vec![fix.clone()], None, false);
+    }
+    sp.mep.fixture_schedule = types.clone();
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.touch();
+    let line = format!(
+        "  lighting: fixture schedule {} types ({}){}; luminaires given their row {}; on the plans {:?}; scheduled but not on the plans {:?}; conflicts {}",
+        types.len(),
+        types.iter().map(|t| t.tag.as_str()).collect::<Vec<_>>().join(", "),
+        if no_subs { ", no substitutions" } else { "" },
+        changes.len(),
+        on_plans,
+        unshown,
+        issues.len()
+    );
+    report_progress(s, json!({"step": "lighting"}), &line);
+    s.echo(line);
+    result["lighting"] = json!({"types": types.len(), "luminaires": changes.len(), "conflicts": issues.len(), "rfis": rfis, "unshown": unshown});
+    Ok(())
 }
 
 /// What an equipment question begins with (its tag follows).

@@ -1201,6 +1201,9 @@ pub struct Mep {
     /// give them (protection, feeder): what the build checks and reports.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub equipment_electrical: Vec<EquipmentElectrical>,
+    /// The light fixture schedule as printed: each type's basis of design and data.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fixture_schedule: Vec<FixtureType>,
     /// The tables gear is checked with (conduit sizes, conductor areas, wire-bending space),
     /// when a project's differ from the defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1760,6 +1763,24 @@ pub struct PanelCircuit {
     pub load_va: Option<f64>,
     /// The sheet it was read from (`E-601`), empty when entered by hand.
     #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
+}
+
+/// A light fixture schedule's row: the type and its basis of design.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FixtureType {
+    pub tag: String,
+    pub manufacturer: String,
+    pub model: String,
+    pub lamp: String,
+    pub va: Option<f64>,
+    pub voltage: String,
+    pub installation: String,
+    pub description: String,
+    /// The schedule's note numbers on it (`2,3,5`).
+    pub notes: String,
+    /// The sheet it was read from.
     pub source: String,
 }
 
