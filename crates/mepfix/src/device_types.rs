@@ -34,7 +34,22 @@ pub struct Legend {
     pub types: BTreeSet<String>,
     /// Each table's extent `[x0, y0, x1, y1]`: symbols drawn there are samples, not devices.
     pub regions: Vec<[f64; 4]>,
+    /// Each type's row: its table and what the row says after the type (a type's first row wins).
+    pub rows: BTreeMap<String, LegendRow>,
 }
+
+/// One legend or schedule row: the table's heading and the row's other texts, left to right
+/// (`LIGHT FIXTURE SCHEDULE`, `2X4 LED TROFFER 120`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LegendRow {
+    pub table: String,
+    pub description: String,
+}
+
+/// A row's type sits within this many heading heights of the table's first column.
+const TYPE_COLUMN_H: f64 = 3.0;
+/// Longest description kept from one row.
+const MAX_DESCRIPTION: usize = 200;
 
 impl Legend {
     /// Whether `p` lies inside one of the legends or schedules.
@@ -46,6 +61,9 @@ impl Legend {
     pub fn merge(&mut self, other: Legend) {
         self.types.extend(other.types);
         self.regions.extend(other.regions);
+        for (k, v) in other.rows {
+            self.rows.entry(k).or_insert(v);
+        }
     }
 }
 
@@ -60,11 +78,42 @@ pub enum TagVerdict {
     Unlisted(String),
 }
 
+/// Words of a heading whose table lists no devices: panel, door, room, wall and finish tables,
+/// and the site, planting, material and code tables (`PLANT LEGEND`, `OCCUPANT LOAD FACTOR
+/// LEGEND`), whose marks a device's mark can share.
+const NOT_DEVICE_TABLES: &[&str] = &[
+    "PANEL",
+    "DOOR",
+    "WINDOW",
+    "ROOM",
+    "FINISH",
+    "WALL",
+    "PARTITION",
+    "SEE ",
+    "REFER",
+    "PLANT",
+    "EROSION",
+    "MATERIAL",
+    "OCCUPAN",
+    "PAVING",
+    "GRADING",
+    "HATCH",
+    "COLUMN",
+    "FOUNDATION",
+    "FOOTING",
+    "SHEAR",
+    "ANCHOR",
+    "PEDESTAL",
+    "HOLD DOWN",
+    "LINTEL",
+];
+
 /// Whether a heading names a table of device types: a symbol/electrical legend or a
-/// fixture/luminaire/device/equipment schedule. Panel, door, room and wall tables don't.
+/// fixture/luminaire/device/equipment schedule. Panel, door, room, wall, site and structural
+/// tables don't.
 pub fn is_device_table_heading(t: &str) -> bool {
     let u = t.trim().to_ascii_uppercase();
-    if u.len() > 60 || ["PANEL", "DOOR", "WINDOW", "ROOM", "FINISH", "WALL", "PARTITION", "SEE ", "REFER"].iter().any(|w| u.contains(w)) {
+    if u.len() > 60 || NOT_DEVICE_TABLES.iter().any(|w| u.contains(w)) {
         return false;
     }
     if u.contains("LEGEND") {
@@ -129,13 +178,33 @@ pub fn read_legend(texts: &[TextItem]) -> Legend {
             last_y = t.at.y;
             last_h = t.height;
         }
+        // Its type column: the first column of the rows (a neighbouring table the rows run into,
+        // an ABBREVIATIONS list beside a legend, keys its own words: `C` CONDUIT is no type).
+        let firsts: Vec<&TextItem> = rows.iter().filter_map(|row| row.iter().copied().min_by(|a, b| a.at.x.total_cmp(&b.at.x))).collect();
+        let column = firsts.iter().map(|t| t.at.x).fold(f64::INFINITY, f64::min);
+        // An ABBREVIATIONS list among the rows: the keys under its header are words, not types.
+        let abbreviations: Vec<Vec2> =
+            rows.iter().flatten().filter(|t| t.value.to_ascii_uppercase().contains("ABBREVIATION")).map(|t| t.at).collect();
+        let abbreviated = |t: &TextItem| abbreviations.iter().any(|a| t.at.y < a.y && (t.at.x - a.x).abs() <= TYPE_COLUMN_H * hh);
         let mut tags = BTreeSet::new();
+        let mut listed = BTreeSet::new();
+        let mut described: Vec<(String, LegendRow)> = Vec::new();
         let mut ext = [h.at.x, h.at.y + hh, h.at.x, h.at.y];
-        for row in &rows {
-            if let Some(first) = row.iter().min_by(|a, b| a.at.x.total_cmp(&b.at.x))
-                && is_type_tag(&first.value)
-            {
-                tags.insert(first.value.trim().to_string());
+        for (row, first) in rows.iter().zip(&firsts) {
+            if is_type_tag(&first.value) {
+                let tag = first.value.trim().to_string();
+                tags.insert(tag.clone());
+                if first.at.x - column <= TYPE_COLUMN_H * hh && !abbreviated(first) {
+                    let mut rest: Vec<&&TextItem> = row.iter().filter(|t| !std::ptr::eq(**t, *first)).collect();
+                    rest.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+                    let mut description = rest.iter().map(|t| t.value.trim()).filter(|v| !v.is_empty()).collect::<Vec<_>>().join(" ");
+                    if description.len() > MAX_DESCRIPTION {
+                        let cut = (0..=MAX_DESCRIPTION).rev().find(|i| description.is_char_boundary(*i)).unwrap_or(0);
+                        description.truncate(cut);
+                    }
+                    described.push((tag.clone(), LegendRow { table: h.value.trim().to_string(), description }));
+                    listed.insert(tag);
+                }
             }
             for t in row {
                 ext = [ext[0].min(t.at.x), ext[1].min(t.at.y), ext[2].max(t.at.x + t.height * t.value.chars().count() as f64), ext[3].max(t.at.y)];
@@ -147,7 +216,10 @@ pub fn read_legend(texts: &[TextItem]) -> Legend {
         // Room for the symbols drawn left of the first column and the last row's height.
         let pad = 2.0 * hh;
         out.regions.push([ext[0] - pad, ext[1] - pad, ext[2] + pad, ext[3] + pad]);
-        out.types.extend(tags);
+        out.types.extend(listed);
+        for (tag, row) in described {
+            out.rows.entry(tag).or_insert(row);
+        }
     }
     out
 }
@@ -171,6 +243,20 @@ pub fn sheet_number_forms(number: &str) -> Vec<String> {
 /// list (empty when none was found: then any tag-shaped mark counts); `learned` are tags an
 /// answer made device types; `sheet_numbers` are the set's sheet numbers.
 pub fn tag_verdict(tag: &str, legend: &BTreeSet<String>, learned: &BTreeSet<String>, sheet_numbers: &BTreeSet<String>) -> TagVerdict {
+    tag_verdict_listed(tag, legend, !legend.is_empty(), learned, sheet_numbers)
+}
+
+/// [`tag_verdict`] for a tag on one sheet: `listed` are the types the legends that speak for
+/// that sheet list (its own, its trade's); `any_listed`, whether the set has a legend at all
+/// (with none, any tag-shaped mark counts; with some, a sheet whose legends list nothing has
+/// only the known and learned marks).
+pub fn tag_verdict_listed(
+    tag: &str,
+    listed: &BTreeSet<String>,
+    any_listed: bool,
+    learned: &BTreeSet<String>,
+    sheet_numbers: &BTreeSet<String>,
+) -> TagVerdict {
     let t = tag.trim();
     if !is_type_tag(t) {
         // Lowercase switch legs, keynote numbers, dimensions, notes, long sheet numbers.
@@ -179,7 +265,7 @@ pub fn tag_verdict(tag: &str, legend: &BTreeSet<String>, learned: &BTreeSet<Stri
     if sheet_numbers.contains(t) {
         return TagVerdict::NotDevice("sheet number");
     }
-    if learned.contains(t) || legend.is_empty() || legend.contains(t) || is_known_mark(t) {
+    if learned.contains(t) || !any_listed || listed.contains(t) || is_known_mark(t) {
         return TagVerdict::Device(t.to_string());
     }
     TagVerdict::Unlisted(t.to_string())
@@ -262,6 +348,88 @@ mod tests {
         // A heading with only one tag row below it is a note, not a table.
         let l = read_legend(&[t("LEGEND", 0.0, 100.0, 5.0), t("A", 0.0, 90.0, 5.0), t("FIXTURE", 20.0, 90.0, 5.0)]);
         assert!(l.types.is_empty() && l.regions.is_empty());
+    }
+
+    #[test]
+    fn a_row_keeps_its_table_and_description() {
+        let l = read_legend(&sheet());
+        let a = l.rows.get("A").unwrap_or_else(|| panic!("{:?}", l.rows));
+        assert_eq!((a.table.as_str(), a.description.as_str()), ("LIGHTING FIXTURE SCHEDULE", "2X4 LED TROFFER 120"));
+        assert_eq!(l.rows.get("OS").map(|r| r.description.as_str()), Some("OCCUPANCY SENSOR"));
+        let mut merged = Legend::default();
+        merged.merge(l.clone());
+        merged.merge(read_legend(&[t("LEGEND", 0.0, 100.0, 5.0), t("A", 0.0, 90.0, 5.0), t("OTHER", 20.0, 90.0, 5.0), t("Q", 0.0, 80.0, 5.0)]));
+        assert_eq!(merged.rows["A"].description, "2X4 LED TROFFER 120", "a type's first row wins");
+    }
+
+    /// Q6165: a legend whose rows run into the ABBREVIATIONS list beside it (`C` CONDUIT, `P`
+    /// POLE) lists only its own types; site, planting and structural tables list none.
+    #[test]
+    fn abbreviations_and_other_trades_tables_are_not_device_types() {
+        let mut v = vec![
+            t("ELECTRICAL LEGEND", 1000.0, 1400.0, 7.0),
+            t("DESCRIPTION- LOW VOLTAGE DEVICES", 970.0, 1387.0, 5.0),
+            t("ABBREVIATIONS", 1230.0, 1387.0, 5.0),
+        ];
+        for (i, (d, k, m)) in [("TELEPHONE OUTLET", "A", "AMPERE"), ("", "C", "CONDUIT"), ("WIRELESS ACCESS POINT", "G", "GROUND"), ("", "P", "POLE")]
+            .iter()
+            .enumerate()
+        {
+            let y = 1373.0 - 7.0 * i as f64;
+            if !d.is_empty() {
+                v.push(t(d, 970.0, y, 5.0));
+            }
+            v.push(t(k, 1235.0, y, 5.0));
+            v.push(t(m, 1267.0, y, 5.0));
+        }
+        let l = read_legend(&v);
+        assert!(l.types.is_empty() && l.rows.is_empty(), "{:?}", l.types);
+        assert_eq!(l.regions.len(), 1, "its symbols are still samples");
+        // Its descriptions printed left of where the heading's table reaches: the list's own
+        // header says what its keys are.
+        let far: Vec<TextItem> = v.iter().map(|x| if x.at.x < 1000.0 { t(&x.value, 850.0, x.at.y, x.height) } else { x.clone() }).collect();
+        let l = read_legend(&far);
+        assert!(l.types.is_empty() && l.rows.is_empty(), "{:?}", l.types);
+        // A legend with its ABBREVIATIONS list under it, in its own column: its types stay its.
+        let mut stacked = vec![t("LEGEND", 1000.0, 1400.0, 7.0)];
+        for (i, (k, d)) in [("A", "2X4 LED TROFFER"), ("B", "LED DOWNLIGHT"), ("EM", "EMERGENCY BATTERY UNIT")].iter().enumerate() {
+            let y = 1386.0 - 9.0 * i as f64;
+            stacked.extend([t(k, 1000.0, y, 5.0), t(d, 1030.0, y, 5.0)]);
+        }
+        stacked.extend([
+            t("ABBREVIATIONS", 1000.0, 1350.0, 7.0),
+            t("AFF", 1000.0, 1338.0, 5.0),
+            t("ABOVE FINISHED FLOOR", 1030.0, 1338.0, 5.0),
+            t("GYP", 1000.0, 1329.0, 5.0),
+            t("GYPSUM BOARD", 1030.0, 1329.0, 5.0),
+        ]);
+        let l = read_legend(&stacked);
+        let want: BTreeSet<String> = ["A", "B", "EM"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(l.types, want, "{:?}", l.rows);
+        for h in [
+            "PLANT LEGEND",
+            "EROSION CONTROL LEGEND",
+            "COLUMN FOUNDATION SCHEDULE",
+            "WOOD COLUMN SCHEDULE",
+            "OCCUPANT LOAD FACTOR LEGEND",
+            "MATERIAL LEGEND",
+        ] {
+            assert!(!is_device_table_heading(h), "{h}");
+        }
+        assert!(is_device_table_heading("LIFE SAFETY LEGEND"), "its pull stations and extinguishers are");
+    }
+
+    /// Q6165: a sheet's tags are its own legends' types: with a legend in the set, a sheet whose
+    /// legends list nothing has only the known and learned marks.
+    #[test]
+    fn a_sheet_lists_its_own_types() {
+        let none = BTreeSet::new();
+        let sheets = BTreeSet::new();
+        let listed: BTreeSet<String> = ["A".to_string()].into();
+        assert_eq!(tag_verdict_listed("A", &listed, true, &none, &sheets), TagVerdict::Device("A".into()));
+        assert_eq!(tag_verdict_listed("A", &none, true, &none, &sheets), TagVerdict::Unlisted("A".into()));
+        assert_eq!(tag_verdict_listed("EF", &none, true, &none, &sheets), TagVerdict::Device("EF".into()), "a known mark");
+        assert_eq!(tag_verdict_listed("A", &none, false, &none, &sheets), TagVerdict::Device("A".into()), "no legend in the set");
     }
 
     #[test]
