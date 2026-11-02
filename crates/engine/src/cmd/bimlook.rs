@@ -979,24 +979,29 @@ fn placement(s: &Session, e: &Entity, c: &Class) -> serde_json::Map<String, Valu
         .ok()
         .and_then(|(rs, _)| rs.into_iter().find(|r| r.rule.id == "G-HOST").and_then(|r| r.rule.tolerance.get("plan_in").copied()))
         .unwrap_or(6.0);
-    // Its host as stored when it was put on a wall's face (`host_wall`, `host_face`: the build's
-    // hostsnap), else the wall it is measured on.
+    // Its host: the wall it is measured on, within the rule's reach; else, when the build put it on
+    // a wall's face (`host_wall`, its hostsnap) that validate's wall list can't measure (a short
+    // piece it doesn't read), that wall as stored. Moved off a wall the list holds, it has none.
     let stored = cadaddy_doc::props::read(&e.common.xdata);
-    let stored_host = stored.get("host_wall").filter(|p| p.has_value()).map(|p| {
-        let wall = p.text();
-        let mut h = json!({"wall": wall, "by": "stored: put on its wall's face by the build"});
+    let stored_wall = stored.get("host_wall").filter(|p| p.has_value()).map(|p| p.text());
+    let measured = near.as_ref().filter(|f| hostable && f.off_face_in.abs() <= tol).map(|f| {
+        let mut h = f.to_json();
+        if let Some(w) = stored_wall.as_ref().filter(|w| !w.eq_ignore_ascii_case(&f.wall)) {
+            h["stored_wall"] = json!(w);
+        }
+        h
+    });
+    let host = measured.or_else(|| {
+        let wall = stored_wall.as_ref().filter(|w| !walls.iter().any(|m| m.id.eq_ignore_ascii_case(w)))?;
+        let mut h = json!({"wall": wall, "by": "stored: put on its wall's face by the build (a wall the measure doesn't read)"});
         if let Some(f) = stored.get("host_face").filter(|f| f.has_value()) {
             h["face_dir"] = json!(f.text());
         }
         if let Some(pl) = stored.get("placement").filter(|f| f.has_value()) {
             h["placement"] = json!(pl.text());
         }
-        if let Some(n) = near.as_ref().filter(|n| n.wall.eq_ignore_ascii_case(&wall)) {
-            h["measured"] = n.to_json();
-        }
-        h
+        Some(h)
     });
-    let host = stored_host.or_else(|| near.as_ref().filter(|f| hostable && f.off_face_in.abs() <= tol).map(|f| f.to_json()));
     out.insert("host".into(), host.unwrap_or(Value::Null));
     out.insert("nearest_wall".into(), near.map_or(Value::Null, |f| f.to_json()));
     out
