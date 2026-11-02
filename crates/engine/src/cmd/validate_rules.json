@@ -99,12 +99,12 @@
     {
       "id": "G-HOST",
       "trade": "general",
-      "applies_to": {"kinds": ["receptacle", "outlet", "data_outlet", "switch", "panel", "panelboard", "thermostat", "pull_station", "horn_strobe", "strobe_wall"], "categories": ["IfcOutlet", "IfcSwitchingDevice", "IfcElectricDistributionBoard"], "marks": []},
-      "check": "A wall-hosted item is in the wall the print shows, on the face toward the room it serves.",
+      "applies_to": {"kinds": ["receptacle", "outlet", "data_outlet", "switch", "panel", "thermostat", "fire_alarm_device", "occupancy_sensor"], "categories": ["IfcOutlet", "IfcSwitchingDevice", "IfcElectricDistributionBoard"], "marks": []},
+      "check": "A wall-hosted item is in the wall the print shows, on the face toward the room it serves; a ceiling-hosted one (a detector, a ceiling sensor) is in the ceiling of that room.",
       "how": [
-        "On the plan crop, see which wall line the symbol touches and which side of it the symbol is drawn.",
-        "The object list gives the host wall and face; in the model picture the item must be on that wall, facing that room.",
-        "A floating item, the wrong wall, or the wrong face is a 'fail'."
+        "On the plan crop, see which wall line the symbol touches and which side of it the symbol is drawn; a symbol away from the walls (on the RCP or fire alarm plan) is ceiling-hosted.",
+        "The object list gives the host wall and face (and the prescreen's G-HOST distance to the face); in the model picture a wall item must be on that wall, facing that room, a ceiling item at the ceiling.",
+        "A floating item, the wrong wall, the wrong face, or a ceiling item placed on a wall (or the reverse) is a 'fail'."
       ],
       "documents": ["plan", "enlarged_plan", "interior_elevation"],
       "tolerance": {"plan_in": 6},
@@ -251,26 +251,26 @@
     {
       "id": "E-FA",
       "trade": "electrical",
-      "applies_to": {"kinds": ["smoke_detector", "heat_detector", "horn_strobe", "strobe_wall", "speaker", "pull_station"], "categories": [], "marks": []},
-      "check": "Detectors are at their RCP positions on the ceiling; notification appliances and pull stations are at the legend wall height.",
+      "applies_to": {"kinds": ["fire_alarm_device", "speaker"], "categories": [], "marks": []},
+      "check": "Every fire alarm device the fire alarm plan or RCP shows in the area is in the model: detectors on the ceiling at their positions, notification appliances and pull stations in the wall at the legend height.",
       "how": [
-        "Compare detectors on the RCP or fire alarm plan with the model: on the ceiling, same place.",
-        "Read the mounting height of wall appliances from the fire alarm legend.",
-        "Compare positions and heights in the object list."
+        "List each fire alarm symbol inside the area on the fire alarm plan or RCP crop; each must have a model element of a fire alarm kind near it (none is a 'missing' finding citing the crop).",
+        "Detectors: on the ceiling at the drawn place. Horns, strobes, speakers and pull stations: in the wall the symbol touches, at the mounting height of the fire alarm legend or general notes.",
+        "Compare positions, host and heights in the object list; a wall device on the ceiling, a detector on a wall, or a height outside the tolerance is a 'fail'."
       ],
       "documents": ["rcp", "plan", "legend", "general_notes"],
       "tolerance": {"plan_in": 6, "height_in": 2},
       "severity": "high",
       "prescreen": "overlay",
       "examples": {
-        "pass": "The smoke detector is on the ceiling where the RCP shows it.",
+        "pass": "The smoke detector is on the ceiling where the RCP shows it, and the horn strobe by the door is in the wall at the legend height.",
         "fail": "The horn strobe is placed at receptacle height; the legend says high on the wall."
       }
     },
     {
       "id": "E-CIRCUIT",
       "trade": "electrical",
-      "applies_to": {"kinds": ["receptacle", "outlet", "floor_box", "switch", "light_fixture", "luminaire", "disconnect", "junction_box", "conduit", "cable"], "categories": ["IfcOutlet", "IfcSwitchingDevice", "IfcLightFixture", "IfcJunctionBox", "IfcCableCarrierSegment"], "marks": []},
+      "applies_to": {"kinds": ["receptacle", "outlet", "floor_box", "switch", "light_fixture", "luminaire", "disconnect", "junction_box", "equipment_connection", "conduit", "cable"], "categories": ["IfcOutlet", "IfcSwitchingDevice", "IfcLightFixture", "IfcJunctionBox", "IfcCableCarrierSegment"], "marks": []},
       "check": "The element's circuit and switch-leg tags are the print's.",
       "how": [
         "Read the circuit number (panel and circuit) and switch leg letter beside each device or on its homerun on the plan crop.",
@@ -289,10 +289,10 @@
     {
       "id": "M-EF",
       "trade": "mechanical",
-      "applies_to": {"kinds": ["exhaust_fan", "fan"], "categories": ["IfcFan"], "marks": []},
-      "check": "Exhaust fans are at the mechanical plan location in the room shown, in or at the ceiling, with the fan schedule's tag and airflow, and ducted to the discharge the print shows (shaft, exterior wall or roof).",
+      "applies_to": {"kinds": ["fan"], "categories": ["IfcFan"], "marks": []},
+      "check": "Every exhaust fan the plans show in the area is in the model, at the mechanical plan location in the room shown, in the ceiling (or at it), with the fan schedule's tag and airflow, and ducted to the discharge the print shows (shaft, exterior wall or roof).",
       "how": [
-        "Find the fan symbol and tag on the mechanical plan or enlarged plan; confirm the room.",
+        "Find each fan symbol and tag on the mechanical, enlarged or electrical plan (its equipment connection) inside the area; a fan with no model element is a 'missing' finding citing the crop. Confirm the room, and that the model fan is in the ceiling, not on the floor or a wall.",
         "Look up the tag in the fan schedule (airflow, type) and compare with the object list.",
         "Follow its duct on the plan to the discharge (shaft, wall cap, roof cap) and check the model's duct reaches the same discharge."
       ],
@@ -365,7 +365,7 @@
     {
       "id": "M-TERMINAL",
       "trade": "mechanical",
-      "applies_to": {"kinds": ["diffuser", "grille"], "categories": ["IfcAirTerminal"], "marks": []},
+      "applies_to": {"kinds": ["terminal"], "categories": ["IfcAirTerminal"], "marks": []},
       "check": "Diffusers and grilles are at their RCP or mechanical plan positions, of the schedule's type and airflow.",
       "how": [
         "Compare each terminal on the RCP or mechanical plan with the model: same place, same count.",
@@ -436,6 +436,63 @@
       "examples": {
         "pass": "The lavatory has hot, cold, waste and vent lines to the riser at the tagged sizes.",
         "fail": "The vent line drawn on the riser is missing from the model."
+      }
+    },
+    {
+      "id": "M-PTAC",
+      "trade": "mechanical",
+      "applies_to": {"kinds": ["ptac"], "categories": [], "marks": []},
+      "check": "Every PTAC or through-wall unit the plans show in the area is in the model, in an exterior wall (its sleeve through that wall, usually under the window), of the schedule's tag.",
+      "how": [
+        "Find each PTAC or through-wall unit symbol and tag on the mechanical or enlarged plan inside the area; one with no model element is a 'missing' finding citing the crop.",
+        "The object list gives the unit's host wall: it must be a wall of the building's outside face (the plan's exterior wall, the side with the windows), not an interior partition.",
+        "Read its tag and schedule row (capacity, sleeve size) and compare with the object list; a unit on an interior wall or away from any wall is a 'fail'."
+      ],
+      "documents": ["plan", "enlarged_plan", "schedule", "interior_elevation"],
+      "tolerance": {"plan_in": 12},
+      "severity": "high",
+      "prescreen": "physical",
+      "examples": {
+        "pass": "The guest room's unit sits in the exterior wall under the window where the enlarged plan draws it, tagged as the schedule row.",
+        "fail": "The unit is modelled on the corridor wall; the plan draws it in the exterior wall."
+      }
+    },
+    {
+      "id": "E-OCC",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["occupancy_sensor"], "categories": [], "marks": []},
+      "check": "Every occupancy or vacancy sensor the plans show in the area is in the model, hosted as the legend says: in the wall at switch height for a wall sensor, on the ceiling for a ceiling sensor.",
+      "how": [
+        "List each occupancy or vacancy sensor symbol inside the area on the lighting plan, enlarged plan or RCP crop; one with no model element is a 'missing' finding citing the crop.",
+        "Read the legend row of its symbol: wall-mounted (a switch-box sensor) or ceiling-mounted.",
+        "In the object list a wall sensor is in the wall the symbol touches at the legend or switch height, a ceiling sensor on the ceiling; the other way round is a 'fail'."
+      ],
+      "documents": ["plan", "enlarged_plan", "rcp", "legend"],
+      "tolerance": {"plan_in": 6, "height_in": 2},
+      "severity": "medium",
+      "prescreen": "physical",
+      "examples": {
+        "pass": "The vacancy sensor by the bathroom door is in the wall at switch height, as the legend's wall sensor row says.",
+        "fail": "The ceiling occupancy sensor of the meeting room is modelled as a wall device by the door."
+      }
+    },
+    {
+      "id": "E-EQUIP-CONN",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["equipment_connection"], "categories": [], "marks": []},
+      "check": "Every equipment connection the electrical plans show in the area is in the model at the equipment it serves, of the equipment its tag names.",
+      "how": [
+        "Find each equipment connection symbol (the connection to a fan, unit, heater or other equipment) and its tag inside the area on the power or enlarged plan; one with no model element is a 'missing' finding citing the crop.",
+        "Read what its tag is from the equipment schedule or legend; the model's connection must sit at that equipment (an exhaust fan's in the ceiling, a through-wall unit's at the exterior wall).",
+        "A connection away from its equipment, or tagged as other equipment than the plan says, is a 'fail'."
+      ],
+      "documents": ["plan", "enlarged_plan", "schedule", "legend"],
+      "tolerance": {"plan_in": 12},
+      "severity": "medium",
+      "prescreen": "connectivity",
+      "examples": {
+        "pass": "The bathroom exhaust fan's connection is in the bathroom ceiling, tagged as the fan in the schedule.",
+        "fail": "The connection tagged for the bathroom fan is modelled in the closet next to it."
       }
     },
     {

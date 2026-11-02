@@ -677,7 +677,17 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     // G-HOST: the wall face.
     if let Some(r) = on("G-HOST") {
         let t = tol(r, "plan_in", 6.0);
-        for (it, a) in mine.iter().filter(|(it, _)| it.mounting != Mounting::Ceiling && applies(r, it)) {
+        // A kind whose mounting nothing says (a fire alarm device: a wall horn or a ceiling
+        // detector) is not measured against a wall; the judge checks its host.
+        let unknown = mine.iter().filter(|(it, _)| it.mounting == Mounting::Other && applies(r, it)).count() as u64;
+        if unknown > 0 {
+            *unmeasured
+                .entry(r.rule.id.clone())
+                .or_default()
+                .entry("mounting not known (wall or ceiling): the judge checks its host".into())
+                .or_default() += unknown;
+        }
+        for (it, a) in mine.iter().filter(|(it, _)| !matches!(it.mounting, Mounting::Ceiling | Mounting::Other) && applies(r, it)) {
             let near = walls.get(&it.level.to_ascii_lowercase()).map(|ws| nearest_wall(it.at, ws.iter().copied(), HOST_SEARCH_FT)).unwrap_or(None);
             let (verdict, issue, found, measured) = match &near {
                 Some(f) if f.off_face_in.abs() <= t => {
@@ -1068,6 +1078,78 @@ mod tests {
         assert_eq!(out.checked.get("G-PRESENT").map_or(0, |m| m.values().sum::<u64>()), 1_800);
         assert!(ms < 10_000, "screened in {ms} ms");
         eprintln!("hotel-sized prescreen: {ms} ms, {} findings", out.findings.len());
+    }
+
+    /// The kinds the PDF→BIM job builds each get a rule of their own (none is `unmatched`), and a
+    /// device whose mounting nothing says is not measured against a wall.
+    #[test]
+    fn the_jobs_kinds_all_have_rules() {
+        use cadaddy_walk3d::validate::Element;
+        let sp = BuildingSpec::from_json(
+            &json!({"units_per_foot": 12, "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9}]}).to_string(),
+        )
+        .unwrap();
+        let d = Drawing::default();
+        let frame = Frame::of_spec(&d, &sp);
+        let mut model = Model::default();
+        for (k, (a, b)) in
+            [([0.0, 0.0], [20.0, 0.0]), ([20.0, 0.0], [20.0, 12.0]), ([20.0, 12.0], [0.0, 12.0]), ([0.0, 12.0], [0.0, 0.0])].into_iter().enumerate()
+        {
+            model.walls.push(ModelWall { id: format!("W{k}"), level: "L1".into(), a, b, thickness_in: 6.0, stud_in: None, wall_type: None });
+        }
+        let kinds = [
+            ("fire_alarm_device", Mounting::Unknown),
+            ("horn_strobe", Mounting::Wall),
+            ("ptac", Mounting::Unknown),
+            ("equipment_connection", Mounting::Unknown),
+            ("occupancy_sensor", Mounting::Unknown),
+            ("plumbing_fixture", Mounting::Unknown),
+            ("return_grille", Mounting::Unknown),
+            ("exhaust_grille", Mounting::Unknown),
+            ("exhaust_fan", Mounting::Unknown),
+        ];
+        for (i, (kind, mounting)) in kinds.iter().enumerate() {
+            model.elements.push(Element {
+                id: format!("E{i:02X}"),
+                kind: kind.to_string(),
+                level: "L1".into(),
+                at: [1.0 + 2.0 * i as f64, 0.25],
+                z_in: Some(80.0),
+                mounting: *mounting,
+                ..Element::default()
+            });
+        }
+        let b = [0.0, 0.0, 20.0, 12.0];
+        let areas = vec![Area {
+            id: "L1/101".into(),
+            kind: "room",
+            level: "L1".into(),
+            number: Some("101".into()),
+            name: Some("Room".into()),
+            room: None,
+            stretch: None,
+            outline: vec![[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]],
+            bbox: b,
+        }];
+        let (rules, _) = vr::effective(&d.project_rules).unwrap();
+        let out = screen(&Scope {
+            d: &d,
+            sp: &sp,
+            model: &model,
+            frame: &frame,
+            prints: None,
+            rules: &rules,
+            areas: &areas,
+            whole_levels: false,
+            only: &[],
+        });
+        assert_eq!(out.elements, kinds.len());
+        assert_eq!(out.unmatched.elements, 0, "every kind has a rule: {:?}", out.unmatched.kinds);
+        // The horn strobe is measured on its wall; the fire alarm device of no mounting is left to the judge.
+        let measured: Vec<&str> = out.findings.iter().filter(|f| f["rule"] == "G-HOST").filter_map(|f| f["handle"].as_str()).collect();
+        assert!(measured.contains(&"E01") && !measured.contains(&"E00"), "{measured:?}");
+        let why = out.unmeasured.get("G-HOST").map(|m| m.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
+        assert!(why.iter().any(|w| w.contains("mounting not known")), "{:?}", out.unmeasured);
     }
 
     #[test]
