@@ -60,16 +60,41 @@ pub(crate) fn oneline_loads(texts: &[TextItem], panels: &[String], types: &[Stri
     out
 }
 
-fn after_number(up: &str, keys: &[&str]) -> Option<f64> {
+/// A number written next to its key, after it (`SCCR: 10 kAmp`, `NAMEPLATE AMPS: 42`) or before it
+/// (`74.6 Amps MCA`, `80 Amps MOP`); kA counts a thousand amps.
+fn number_at(up: &str, keys: &[&str]) -> Option<f64> {
+    let words: Vec<&str> = up.split(' ').filter(|w| !w.is_empty()).collect();
+    let bare = |w: &str| w.trim_matches([':', '=', '(', ')', ',']).to_string();
+    // A word's leading number (`10000RMS` → 10000, `74.6` → 74.6).
+    let num = |w: &str| {
+        let t = bare(w);
+        let n: String = t.chars().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == ',').collect();
+        n.replace(',', "").parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0)
+    };
+    let kilo = |w: &str| {
+        let u = bare(w);
+        u.starts_with("KA") || u.starts_with("KAMP") || u.starts_with("KAIC")
+    };
     for k in keys {
-        if let Some(i) = up.find(k) {
-            let rest = up.get(i + k.len()..).unwrap_or_default();
-            let n: String =
-                rest.trim_start_matches([' ', ':', '=', '(']).chars().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == ',').collect();
-            if let Ok(v) = n.replace(',', "").parse::<f64>()
-                && v.is_finite()
-                && v > 0.0
+        let kw: Vec<String> = k.split(' ').map(bare).collect();
+        for i in 0..words.len() {
+            if !kw.iter().enumerate().all(|(j, x)| words.get(i + j).is_some_and(|w| bare(w) == *x)) {
+                continue;
+            }
+            // Before, when a unit sits between: `74.6 Amps MCA`, `80 Amps MOP`.
+            let back = |n: usize| i.checked_sub(n).and_then(|j| words.get(j)).copied();
+            if let Some(u) = back(1).filter(|w| matches!(bare(w).as_str(), "AMPS" | "AMP" | "A" | "KA" | "KAMP" | "KAMPS"))
+                && let Some(v) = back(2).and_then(num)
             {
+                return Some(if bare(u).starts_with('K') { v * 1000.0 } else { v });
+            }
+            // Right after (a colon allowed): `SCCR: 10 kAmp`, `NAMEPLATE AMPS: 42`.
+            let after = i + kw.len();
+            if let Some(v) = words.get(after).and_then(|w| num(w)) {
+                return Some(if words.get(after + 1).is_some_and(|w| kilo(w)) { v * 1000.0 } else { v });
+            }
+            // Right before, no unit: `46 MCA`.
+            if let Some(v) = back(1).and_then(num) {
                 return Some(v);
             }
         }
@@ -78,16 +103,17 @@ fn after_number(up: &str, keys: &[&str]) -> Option<f64> {
 }
 
 /// The electrical data a submittal's text gives (nameplate / full-load / minimum circuit amps,
-/// maximum protection and fuse class, volts and phases, acceleration amps, HP, kW, SCCR).
+/// maximum protection and fuse class, volts and phases, acceleration amps, SCCR). A motor's own
+/// FLA inside a unit isn't the unit's: full-load amps count only when said in words.
 pub(crate) fn text_electrical(text: &str) -> EquipmentElectrical {
     let up: String = text.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_uppercase();
     let mut e = EquipmentElectrical {
-        nameplate_a: after_number(&up, &["NAMEPLATE AMPS", "NAMEPLATE CURRENT", "RATED CURRENT"]),
-        fla: after_number(&up, &["FULL LOAD AMPS", "FLA"]),
-        mca: after_number(&up, &["MINIMUM CIRCUIT AMPACITY", "MIN. CIRCUIT AMPACITY", "MCA"]),
-        max_ocpd_a: after_number(&up, &["MAX FUSE SIZE", "MAXIMUM OVERCURRENT PROTECTION", "MOCP", "MAX OCPD", "FUSE (AMP)", "MAX FUSE"]),
-        accel_a: after_number(&up, &["MAX ACCEL AMPS", "ACCELERATION AMPS", "ACCELERATING CURRENT"]),
-        sccr_a: after_number(&up, &["RATING (SCCR)", "SCCR"]),
+        nameplate_a: number_at(&up, &["NAMEPLATE AMPS", "NAMEPLATE CURRENT", "RATED CURRENT"]),
+        fla: number_at(&up, &["FULL LOAD AMPS", "FULL LOAD CURRENT"]),
+        mca: number_at(&up, &["MINIMUM CIRCUIT AMPACITY", "MIN. CIRCUIT AMPACITY", "MCA"]),
+        max_ocpd_a: number_at(&up, &["MAXIMUM OVERCURRENT PROTECTION", "MAX FUSE SIZE", "MAX FUSE", "MOCP", "MOP", "MAX OCPD", "FUSE (AMP)"]),
+        accel_a: number_at(&up, &["MAX ACCEL AMPS", "ACCELERATION AMPS", "ACCELERATING CURRENT"]),
+        sccr_a: number_at(&up, &["RATING (SCCR)", "SCCR"]),
         ..EquipmentElectrical::default()
     };
     for class in ["RK1", "RK5", "CLASS J", "CLASS T", "CLASS CC"] {
@@ -96,12 +122,17 @@ pub(crate) fn text_electrical(text: &str) -> EquipmentElectrical {
             break;
         }
     }
-    if let Some(v) = after_number(&up, &["SUPPLIED VOLTAGE", "VOLTAGE:", "VOLTS"]) {
-        e.volts = Some(v);
-    }
-    e.phase = if up.contains("3 PH") || up.contains("3PH") || up.contains("3-PHASE") || up.contains("3 PHASE") {
+    // Volts: a supply voltage said outright, else the first `208 V` / `480V` (100-600).
+    e.volts = number_at(&up, &["SUPPLIED VOLTAGE"]).or_else(|| {
+        let words: Vec<&str> = up.split(' ').collect();
+        words.windows(2).find_map(|w| {
+            let v = w[0].trim_end_matches('V').parse::<f64>().ok().filter(|v| (100.0..=600.0).contains(v))?;
+            (w[0].ends_with('V') || w[1].starts_with('V')).then_some(v)
+        })
+    });
+    e.phase = if ["3 PH", "3PH", "3-PHASE", "3 PHASE", "3 PHS", "3Ø"].iter().any(|p| up.contains(p)) {
         Some(3)
-    } else if up.contains("1 PH") || up.contains("1PH") || up.contains("SINGLE PHASE") {
+    } else if ["1 PH", "1PH", "SINGLE PHASE", "1 PHS"].iter().any(|p| up.contains(p)) {
         Some(1)
     } else {
         None
@@ -242,19 +273,29 @@ pub(crate) fn from_answer(a: &serde_json::Value) -> EquipmentElectrical {
     }
 }
 
-/// The schedules' rows naming a load (its description, its source panel).
+/// The schedule row naming a load (its description, its source panel): its tag, else a
+/// description that is the load (`ELEVATOR` for `ELEV-1`: it starts with the tag's letters), not
+/// one that only mentions it (`LTG - ELEVATOR PIT`).
 pub(crate) fn schedule_row(sp: &cadaddy_walk3d::BuildingSpec, tag: &str) -> Option<(String, String)> {
     let st = stem(tag)?;
+    let mut best: Option<(u8, String, String)> = None;
     for p in &sp.mep.panel_schedules {
         for c in &p.circuits {
-            let words: Vec<String> =
-                c.description.to_ascii_uppercase().split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-').map(str::to_string).collect();
-            if words.iter().any(|w| w.eq_ignore_ascii_case(tag) || w.starts_with(&st)) {
-                return Some((c.description.clone(), p.panel.clone()));
+            let up = c.description.to_ascii_uppercase();
+            let words: Vec<&str> = up.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-').filter(|w| !w.is_empty()).collect();
+            let rank = if words.iter().any(|w| w.eq_ignore_ascii_case(tag)) {
+                3
+            } else if words.first().is_some_and(|w| w.starts_with(&st)) {
+                2
+            } else {
+                0
+            };
+            if rank > 0 && best.as_ref().is_none_or(|b| rank > b.0) {
+                best = Some((rank, c.description.clone(), p.panel.clone()));
             }
         }
     }
-    None
+    best.map(|(_, d, p)| (d, p))
 }
 
 /// Every connection's data merged: a value the text gives over nothing.
@@ -334,6 +375,14 @@ mod tests {
         assert!(c[1].message.contains("10000") && c[1].message.contains("57287"));
         // #8 copper (50 A) is short of 125% of 42 A (52.5 A).
         assert!(check(&e, Some(("8", "cu")), None, &rule).iter().any(|x| x.check == "conductors"));
+    }
+
+    #[test]
+    fn a_units_data_reads_with_its_numbers_before_their_keys() {
+        let text = "Unit Voltage: 3 phs 208 V 60Hz Unit Main Input 74.6 Amps MCA • 80 Amps MOP • 208 V • 4 AWG Wire Min. SCCR: 10 kAmp \
+                    SUPPLY MOTOR Model DTP0024 • 2.000 HP, 3 Phs, 208 V, 60 Hz, 6.1 FLA";
+        let e = text_electrical(text);
+        assert_eq!((e.mca, e.max_ocpd_a, e.sccr_a, e.volts, e.phase, e.fla), (Some(74.6), Some(80.0), Some(10_000.0), Some(208.0), Some(3), None));
     }
 
     #[test]
