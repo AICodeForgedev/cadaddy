@@ -5913,19 +5913,22 @@ fn rigid_room_fit(
         // Its best few offsets (ties to the smaller key: a hash map's order differs run to run).
         let mut ranked: Vec<((i64, i64), usize)> = votes.into_iter().collect();
         ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        for (o, _) in ranked.into_iter().take(FIT_OFFSETS_TRIED) {
+        for (o, votes) in ranked.into_iter().take(FIT_OFFSETS_TRIED) {
             let to = cadaddy_geom::Vec2::new(o.0 as f64 * tol, o.1 as f64 * tol);
             let placed: Vec<cadaddy_geom::Vec2> = turned.iter().map(|t| to + *t).collect();
             let on_lines = placed.iter().filter(|p| hit(&floor_grid, **p)).count();
             let placed_grid = grid_of(&placed);
             let explained = inside.iter().filter(|f| hit(&placed_grid, **f)).count();
             let score = on_lines + explained * few.len() / inside.len().max(1);
-            if best.as_ref().is_none_or(|b| score > b.2) {
-                best = Some((RoomFit { k, from, to, rigid: true }, on_lines, score));
+            // Only an offset enough samples agree on counts (the vote the fit was always accepted
+            // by): the two-way score ranks those, it never turns a fit away.
+            let enough = votes * 100 >= few.len() * MIN_FIT_SHARE_PCT;
+            if enough && best.as_ref().is_none_or(|b| score > b.2) {
+                best = Some((RoomFit { k, from, to, rigid: true }, votes, score));
             }
         }
     }
-    best.map(|(f, on, _)| (f, on)).filter(|(_, n)| *n * 100 >= few.len() * MIN_FIT_SHARE_PCT)
+    best.map(|(f, on, _)| (f, on))
 }
 
 /// The offsets each turn of a view is tried at (its most agreed-on), for the two-way match.
