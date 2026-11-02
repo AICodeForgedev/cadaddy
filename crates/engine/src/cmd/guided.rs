@@ -3934,6 +3934,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut shells: Option<Vec<(String, Vec<[cadaddy_geom::Vec2; 2]>)>> = None;
     // Then the corridors, stairs and elevator hoistways inside it, before the rooms.
     let mut circulation: Vec<cadaddy_walk3d::Circulation> = Vec::new();
+    // What no registration could put onto the plans, kept out of the model: listed with why in
+    // the job's summary (Q6158).
+    let mut left_out: Vec<Value> = Vec::new();
     // Ensure sheet content is in the drawing so bspec.draft can read geometry.
     let t = web_time::Instant::now();
     ensure_sheets_loaded(s, job)?;
@@ -4195,6 +4198,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     let list: Vec<String> = unplaced.iter().map(|(k, (n, ft))| format!("{k}: {n} ({ft:.0} ft)")).collect();
                     progress_line(&format!("  MEP runs not placeable by sheet: {}", list.join(", ")));
                 }
+                for (k, (n, ft)) in unplaced.iter().take(MAX_LEFT_OUT) {
+                    left_out.push(json!({
+                        "what": "mep_runs",
+                        "where": k,
+                        "count": n,
+                        "feet": (ft * 10.0).round() / 10.0,
+                        "why": "no registration puts this sheet's view onto its level's architectural plan (nor is it a typical room's view): kept out of the model, not drawn at the sheet's coordinates",
+                    }));
+                }
                 if in_views > 0 {
                     progress_line(&format!("  estimated circuit routes in typical-room views (each room's own circuits instead): {in_views}"));
                 }
@@ -4221,6 +4233,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     None => false,
                 });
                 let dropped = (before.0 - sp.mep.runs.len() - in_views, before.1 - sp.mep.terminals.len(), before.2 - sp.mep.equipment.len());
+                for (what, n) in [("mep_terminals", dropped.1), ("mep_equipment", dropped.2)] {
+                    if n > 0 {
+                        left_out.push(json!({"what": what, "count": n, "why": "no registration puts their sheet's view onto its level's architectural plan: kept out of the model"}));
+                    }
+                }
                 progress_line(&format!(
                     "  MEP onto the plans: {} runs, {} terminals, {} equipment placed; not placeable (no fit to the architecture): {} runs, {} terminals, {} equipment",
                     sp.mep.runs.len(),
@@ -4476,6 +4493,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if out.len() < placed_n {
                     let n = placed_n - out.len();
                     progress_line(&format!("  devices outside the building (more than {OUTSIDE_SHELL_FT}' past its storey's shell), left out: {n}"));
+                    left_out.push(json!({
+                        "what": "devices",
+                        "count": n,
+                        "why": format!("placed more than {OUTSIDE_SHELL_FT} ft outside their storey's exterior walls (site lighting, or a sheet placed wrong): kept out of the model"),
+                    }));
                     job.add_finding(
                         StageName::BimBuild,
                         "Devices outside the building",
@@ -4496,6 +4518,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     .or_default() += 1;
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
+                for (k, n) in why.iter().take(MAX_LEFT_OUT) {
+                    left_out.push(json!({
+                        "what": "devices",
+                        "where": k,
+                        "count": n,
+                        "why": "no registration puts this sheet's view onto its level's architectural plan: kept out of the model (a typical room's plan stamps its devices into the rooms of its type instead)",
+                    }));
+                }
                 let unplaced: Vec<&super::readers::ReadDevice> = all_devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
                 let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest } =
                     stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
@@ -4876,11 +4906,35 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             s.doc_mut()?.building_spec = Some(sp.to_json());
         }
     }
+    // The mounting heights the notes of the sheets it didn't import list (a legend sheet's
+    // general notes, an accessibility sheet): the devices' heights after their own notes, the
+    // elevations, the enlarged plans and the legends (Q6158).
+    let t_notes = web_time::Instant::now();
+    let notes = mount_notes(job);
+    if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+        let sheets: BTreeSet<&str> = notes.iter().map(|n| n.sheet.as_str()).collect();
+        progress_line(&format!(
+            "  mounting heights the sheets' notes list: {} on {} ({:.1} s)",
+            notes.len(),
+            if sheets.is_empty() { "no sheet".to_string() } else { sheets.into_iter().collect::<Vec<_>>().join(", ") },
+            t_notes.elapsed().as_secs_f64()
+        ));
+        sp.mount_notes = notes;
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
     let budget_s = super::bspec::BUILD_BUDGET_S;
     // The job merges walls read off several sheets after the build: its own line says the counts
     // the model ends with (= bim.tree), the build's would be a second, earlier set.
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     bim_step(s, job, "model built", t);
+    result["left_out"] = json!(left_out);
+    if let Some(db) = result.get("deviceBuild") {
+        let line = format!(
+            "  device heights: {}; defaults (no document) by kind: {}; set in a wall's face: {}, no wall there: {}; outside their level's footprint: {}",
+            db["heights_from"], db["defaults_by_kind"], db["in_wall"], db["no_wall"], db["misplaced"]
+        );
+        progress_line(&line);
+    }
     if let Some(place) = placer.as_deref() {
         let (n, missed) = number_rooms_from_other_trades(s, job, place)?;
         if n > 0 || !missed.is_empty() {
@@ -4997,11 +5051,24 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     identity_step(s, job, &mut result);
     bim_step(s, job, "tag identity", t);
+    // The devices whose wall the identity merge removed: set in the wall there now.
+    if let Ok((sp, true)) = super::bspec::current(s, "bim_build") {
+        let n = super::propfill::rehost_devices(s.doc_mut()?, &sp);
+        if n > 0 {
+            progress_line(&format!("  devices set in their walls again (their walls merged): {n}"));
+        }
+        result["devices_reseated"] = json!(n);
+    }
     if !job.submittals.is_empty() {
         let t = web_time::Instant::now();
         submittals_step(s, job, &mut result);
         bim_step(s, job, "submittals applied", t);
     }
+    // Nothing outside the building unsaid: every element outside its level's footprint flagged and
+    // listed with why.
+    let t = web_time::Instant::now();
+    misplaced_step(s, job, &mut result);
+    bim_step(s, job, "elements outside the floors flagged", t);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -5212,6 +5279,57 @@ const MAX_SHEET_LINKS: usize = 2_000;
 /// and its level (a sheet listed already keeps its entry and gains its place).
 /// The build's identity pass (`bim.identity` then `rooms.graph`): merged copies leave the counts,
 /// findings go on the build stage, and the answer's summary goes in the result as `identity`.
+/// Groups of elements kept out of the model listed in the job's summary, at most.
+const MAX_LEFT_OUT: usize = 200;
+/// Elements outside their level's footprint listed one by one in the job's summary, at most.
+const MAX_MISPLACED_LISTED: usize = 200;
+
+/// Every built element outside its level's footprint (its floor and exterior walls) gets a `misplaced` property saying how far and
+/// why, and the job's result lists them (by part, the farthest first). Never stops the job.
+fn misplaced_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
+    let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return };
+    let Ok(d) = s.doc() else { return };
+    let found = super::propfill::outside_floors(d, &sp);
+    let mut by_part: BTreeMap<String, usize> = BTreeMap::new();
+    for o in &found {
+        *by_part.entry(o.part.clone()).or_default() += 1;
+    }
+    if let Ok(d) = s.doc_mut() {
+        for o in &found {
+            let why = format!(
+                "{:.1} ft outside {}'s footprint (its floor and exterior walls): placed where its sheet put it (check that sheet's registration onto the plan), or outside the building (a site item)",
+                o.outside_ft, o.level
+            );
+            let _ = d.modify_entity(o.handle, |e| {
+                let mut store = cadaddy_doc::props::read(&e.common.xdata);
+                store.set("misplaced", cadaddy_doc::props::Prop::new(why.clone(), cadaddy_doc::props::Source::computed()));
+                e.common.xdata = cadaddy_doc::props::write(&e.common.xdata, &store).into();
+            });
+        }
+    }
+    if !found.is_empty() {
+        progress_line(&format!("  elements outside their level's footprint (flagged misplaced): {} {by_part:?}", found.len()));
+        job.add_finding(
+            StageName::BimBuild,
+            "Elements outside the building's footprint",
+            &format!(
+                "{} elements lie more than 2 ft outside their level's footprint, its floor and exterior walls ({}); each is flagged `misplaced` with how far",
+                found.len(),
+                by_part.iter().map(|(k, n)| format!("{k}: {n}")).collect::<Vec<_>>().join(", ")
+            ),
+            2,
+            vec!["Check the registration of the sheets they were read from; a site item stays as it is".into()],
+            None,
+            false,
+        );
+    }
+    result["misplaced"] = json!({
+        "count": found.len(),
+        "by_part": by_part,
+        "first": found.iter().take(MAX_MISPLACED_LISTED).map(super::propfill::Outlier::to_json).collect::<Vec<_>>(),
+    });
+}
+
 /// The submittals' products onto the built elements (BUILD ORDER: after the architecture and the
 /// MEP objects; `bim.submittals`). Never stops the job: what they leave open is a finding.
 fn submittals_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
@@ -7691,6 +7809,29 @@ fn legend_designations(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> BTreeMap<St
 const MAX_LEGEND_TEXTS: usize = 5_000;
 /// Most electrical sheets read again for a legend the job's drawing doesn't hold.
 const MAX_LEGEND_SHEETS: usize = 6;
+
+/// The disciplines whose sheets that aren't plans may list mounting heights in their notes: the
+/// general (accessibility) sheets, the architecture's, the trades'.
+const MOUNT_NOTE_DISCIPLINES: [&str; 6] = ["G", "A", "E", "FA", "P", "M"];
+
+/// The mounting heights the notes of the set's sheets that aren't plans list (`17. ELECTRICAL
+/// DEVICE MOUNTED HEIGHTS: … RECEPTACLES 1'-6" CENTERLINE`, an accessibility sheet's `WATER
+/// CLOSETS (TO TOP OF SEAT): STANDARD = …`), each with its sheet.
+fn mount_notes(job: &GuidedJob) -> Vec<cadaddy_walk3d::MountNote> {
+    let mut out: Vec<cadaddy_walk3d::MountNote> = Vec::new();
+    for disc in MOUNT_NOTE_DISCIPLINES {
+        for (number, d) in non_plan_pages(job, disc) {
+            let texts = cadaddy_mepfix::sheet_facts::texts(&d);
+            for l in super::mountlist::read_lists(&texts) {
+                let n = l.to_note(&number);
+                if out.len() < super::mountlist::MAX_ENTRIES && !out.iter().any(|o| o.subject == n.subject && o.text == n.text) {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out
+}
 
 /// The designations on the set's electrical sheets that aren't plans (a legend on the one-line
 /// diagram's sheet, or the schedules'; the job's drawing keeps the plans).
@@ -11263,6 +11404,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "rules_learned": job.rules.len(),
         "audit_entries": job.audit.len(),
         "not_built": not_built_sheets(&job).join("; "),
+        "placement": placement_summary(&job),
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
     }))
 }
@@ -11328,6 +11470,9 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
         "answers": answers_value(job),
         "links": job.links,
     });
+    if job.is_done() {
+        v["placement"] = placement_summary(job);
+    }
     if !warnings.is_empty() {
         v["warnings"] = json!(warnings);
     }
@@ -11418,7 +11563,27 @@ fn job_summary(s: &Session, job: &GuidedJob, stats: Option<&ModelStats>) -> Valu
         "answers": answers_value(job),
         // From the saved model, not the stage's own count.
         "devices": s.doc().map_or(Value::Null, super::readers::model_device_counts),
+        "placement": placement_summary(job),
         "results": results,
+    })
+}
+
+/// What the build kept out of the model and what it put outside the floors, each with why, and
+/// where the devices' heights came from (Q6158): none until the build stage ran.
+fn placement_summary(job: &GuidedJob) -> Value {
+    let Some(r) = job.stages.iter().find(|st| st.name == StageName::BimBuild).and_then(|st| st.result.as_ref()) else { return Value::Null };
+    let db = r.get("deviceBuild").cloned().unwrap_or(Value::Null);
+    json!({
+        "left_out": r.get("left_out").cloned().unwrap_or(Value::Null),
+        "misplaced": r.get("misplaced").cloned().unwrap_or(Value::Null),
+        "devices": {
+            "heights_from": db.get("heights_from").cloned().unwrap_or(Value::Null),
+            "defaults_by_kind": db.get("defaults_by_kind").cloned().unwrap_or(Value::Null),
+            "in_wall": db.get("in_wall").cloned().unwrap_or(Value::Null),
+            "no_wall": db.get("no_wall").cloned().unwrap_or(Value::Null),
+            "no_wall_first": db.get("no_wall_first").cloned().unwrap_or(Value::Null),
+            "sides": db.get("sides").cloned().unwrap_or(Value::Null),
+        },
     })
 }
 

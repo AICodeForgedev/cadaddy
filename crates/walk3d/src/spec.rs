@@ -152,6 +152,11 @@ pub struct BuildingSpec {
     /// dimension strings, rooms, the rules file and its gate setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prints: Option<Box<crate::validate::Prints>>,
+    /// The mounting heights the set's notes give kinds of items (a general note's list, an
+    /// accessibility sheet's), read off sheets the model doesn't hold (`job.start` reads them):
+    /// the build and Validate take a device's height from them when nothing nearer gives one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mount_notes: Vec<MountNote>,
     /// Devices (fixture and device layers): types, mounting heights, attributes.
     #[serde(default)]
     pub devices: DeviceRules,
@@ -2146,6 +2151,28 @@ impl Issue {
     }
 }
 
+/// A mounting height a sheet's notes give a kind of item: `RECEPTACLES 1'-6" CENTERLINE` under a
+/// general note's `DEVICE MOUNTED HEIGHTS`, `WATER CLOSETS (TO TOP OF SEAT): STANDARD = 14" TO 15".
+/// ADA = 17" TO 19"` on an accessibility sheet.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MountNote {
+    /// The sheet it is on.
+    pub sheet: String,
+    /// What it is for, as written (`TOGGLE SWITCH`, `WATER CLOSETS`).
+    pub subject: String,
+    /// Its height above the floor, inches: the one it gives (`STANDARD =`), else none.
+    pub inches: Option<f64>,
+    /// The height it gives an accessible room's (`ADA =`), inches.
+    pub ada_inches: Option<f64>,
+    /// What the height is measured to on the item: `centre`, `top` or `bottom`.
+    pub datum: String,
+    /// It says the item is at the ceiling (`STANDARD = CEILING HEIGHT`).
+    pub ceiling: bool,
+    /// The words read.
+    pub text: String,
+}
+
 impl Default for BuildingSpec {
     fn default() -> Self {
         BuildingSpec::from_rules(&Rules::fallback())
@@ -2627,6 +2654,7 @@ impl BuildingSpec {
             rfis: Vec::new(),
             procurement: None,
             prints: None,
+            mount_notes: Vec::new(),
             ceiling_types: Vec::new(),
             soffit_types: Vec::new(),
             devices: r.devices.clone(),

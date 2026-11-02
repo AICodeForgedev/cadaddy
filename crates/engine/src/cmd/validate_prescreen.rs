@@ -91,7 +91,7 @@ const MAX_WRITTEN: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Validation Prescreen", run_prescreen)
-            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default), issue, expected, found, measured (G-HEIGHT: aff_in, expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, confidence, severity, area?, level, at?, source: \"prescreen\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), rooms_without_set, present: {by_room_type: {type: {rooms, pass, missing, extra}}, by_level: {level: {…}}, rooms_by_basis: {enlarged_plan, trade_plan, project_rule}}, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room against what the prints show in it — its unit type's enlarged plans turned as its layout fit says, else its level's trade plans: each symbol matched to an element of the same kind within plan_in, else missing (sheet, sheet point, place in the room); elements no symbol stands for extra — and each room type's project-rule set (`prescreen.expect.<room type>`) (G-PRESENT)")
+            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default), issue, expected, found, measured (G-HEIGHT: aff_in, to: centre|top|bottom (the point of the element compared: a height to its top at its top), expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, confidence, severity, area?, level, at?, source: \"prescreen\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), outside_floors: {count, flagged, by_part: {part: n}, elements?: [{handle, part, level, at_ft, outside_ft, flagged}] (in the path file)} (every built element more than 2 ft outside its level's footprint, its floor and its shell inside the exterior walls, and whether the build flagged it misplaced), rooms_without_set, present: {by_room_type: {type: {rooms, pass, missing, extra}}, by_level: {level: {…}}, rooms_by_basis: {enlarged_plan, trade_plan, project_rule}}, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room against what the prints show in it — its unit type's enlarged plans turned as its layout fit says, else its level's trade plans: each symbol matched to an element of the same kind within plan_in, else missing (sheet, sheet point, place in the room); elements no symbol stands for extra — and each room type's project-rule set (`prescreen.expect.<room type>`) (G-PRESENT)")
             .noundo()
             .files(),
     ]
@@ -490,6 +490,9 @@ struct Item {
     at: [f64; 2],
     /// Its mounting height (a wall item's centre), inches above the floor.
     z_in: Option<f64>,
+    /// A built part's bottom and top, inches above the floor (a height measured to its top or
+    /// bottom is compared there).
+    z_span_in: Option<(f64, f64)>,
     mounting: Mounting,
     built: bool,
     /// The wall its record says it is on (its own `host_wall`, or its built twin's).
@@ -545,6 +548,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 level: e.level.clone(),
                 at: e.at,
                 z_in: e.z_in,
+                z_span_in: None,
                 built: false,
                 host: ent.and_then(stored_host),
                 record: ent.and_then(vh::record_of),
@@ -580,21 +584,21 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
         }
         let at = frame.built_on(&level, e, b.center());
         let (floor, ceiling) = sp.level(&level).map_or((0.0, 9.0), |l| (l.elevation_ft, if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft }));
-        let (z_in, mounting) = match &e.kind {
+        let (z_in, z_span_in, mounting) = match &e.kind {
             EntityKind::Mesh(m) if !m.vertices.is_empty() => {
                 let (z0, z1) = m.vertices.iter().take(1_000_000).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.z), b.max(p.z)));
                 let (lo, hi) = ((z0 / upf - floor) * 12.0, (z1 / upf - floor) * 12.0);
                 if !lo.is_finite() || !hi.is_finite() {
-                    (None, Mounting::Other)
+                    (None, None, Mounting::Other)
                 } else if hi >= ceiling * 12.0 - 12.0 {
-                    (Some(lo), Mounting::Ceiling)
+                    (Some(lo), Some((lo, hi)), Mounting::Ceiling)
                 } else if lo <= 6.0 {
-                    (Some(lo), Mounting::Floor)
+                    (Some(lo), Some((lo, hi)), Mounting::Floor)
                 } else {
-                    (Some((lo + hi) / 2.0), Mounting::Wall)
+                    (Some((lo + hi) / 2.0), Some((lo, hi)), Mounting::Wall)
                 }
             }
-            _ => (None, Mounting::Other),
+            _ => (None, None, Mounting::Other),
         };
         let c = super::bimlook::classify(d, e);
         let mark = super::validate_kind::mark_of(e);
@@ -605,10 +609,16 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             kind_from: r.from,
             category: r.category,
             mark,
-            name: c.map(|c| c.ty),
+            // What it is in words: its type as read (`water closet P-1`), else its class's.
+            name: cadaddy_doc::props::read(&e.common.xdata)
+                .get("type")
+                .map(|p| p.text())
+                .filter(|t| !t.trim().is_empty())
+                .or_else(|| c.map(|c| c.ty)),
             level,
             at,
             z_in,
+            z_span_in,
             mounting,
             built: true,
             host: stored_host(e),
@@ -954,6 +964,8 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 room_name: a.and_then(|a| a.name.as_deref()),
                 trade: super::validate_packet::trade_of_kind(&it.kind, sc.rules),
                 record: it.record.as_ref(),
+                name: it.name.as_deref(),
+                ada: vh::is_ada(it.mark.as_deref(), it.name.as_deref()),
             };
             let Some(want) = docs.expected(&ask, sc.prints, &sc.d.project_rules) else {
                 let kind = it.kind.replace('_', " ");
@@ -991,6 +1003,12 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 }
                 continue;
             };
+            // A height to its top (or bottom) is compared at its top (bottom).
+            let z = match (want.datum, it.z_span_in) {
+                (vh::Datum::Top, Some((_, hi))) => hi,
+                (vh::Datum::Bottom, Some((lo, _))) => lo,
+                _ => z,
+            };
             let off = z - want.inches;
             let verdict = if off.abs() <= t { "pass" } else { "fail" };
             tally(&r.rule.id, verdict);
@@ -1003,6 +1021,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             };
             let measured = json!({
                 "aff_in": r2(z),
+                "to": want.datum.name(),
                 "expected_in": r2(want.inches),
                 "off_in": r2(off),
                 "expected_from": src,
@@ -1371,11 +1390,35 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
         Scope { d, sp: &sp, model: &model, frame: &frame, prints: prints.as_ref(), rules: &rules, areas: &areas, whole_levels: whole, only: &only };
     let out = screen(&sc);
     let wall_list = walls_summary(&model, &areas);
+    // Every built element outside its level's footprint (the scope's levels): none may be there
+    // unsaid.
+    let levels_in: BTreeSet<String> = areas.iter().map(|a| a.level.to_ascii_lowercase()).collect();
+    let outside: Vec<Value> = super::propfill::outside_floors(d, &sp)
+        .into_iter()
+        .filter(|o| levels_in.contains(&o.level.to_ascii_lowercase()))
+        .map(|o| {
+            let mut v = o.to_json();
+            let flagged = d.model.get(o.handle).and_then(|e| cadaddy_doc::props::read(&e.common.xdata).get("misplaced").map(|p| p.text()));
+            v["flagged"] = json!(flagged);
+            v
+        })
+        .collect();
+    let mut outside_parts: BTreeMap<String, u64> = BTreeMap::new();
+    for o in &outside {
+        *outside_parts.entry(o["part"].as_str().unwrap_or("").to_string()).or_default() += 1;
+    }
+    let outside_floors = json!({
+        "count": outside.len(),
+        "flagged": outside.iter().filter(|o| !o["flagged"].is_null()).count(),
+        "by_part": outside_parts,
+    });
     let listed: Vec<&Value> = out.findings.iter().filter(|f| all || f["verdict"] != "pass").collect();
     let total = listed.len();
     let mut written = Value::Null;
     if let Some(f) = &path {
-        let body = json!({"scope": key, "checked": out.checked, "unmatched": out.unmatched.to_json(), "unmeasured": out.unmeasured, "walls": wall_list, "findings": listed.iter().take(MAX_WRITTEN).collect::<Vec<_>>()});
+        let mut of = outside_floors.clone();
+        of["elements"] = json!(outside.iter().take(MAX_WRITTEN).collect::<Vec<_>>());
+        let body = json!({"scope": key, "checked": out.checked, "unmatched": out.unmatched.to_json(), "unmeasured": out.unmeasured, "walls": wall_list, "outside_floors": of, "findings": listed.iter().take(MAX_WRITTEN).collect::<Vec<_>>()});
         let text = serde_json::to_string_pretty(&body).map_err(|e| bad(CMD, e.to_string()))?;
         super::exchange::write_file(CMD, f, text.as_bytes())?;
         written = json!(f);
@@ -1390,6 +1433,7 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
         "unmatched": out.unmatched.to_json(),
         "unmeasured": out.unmeasured,
         "walls": wall_list,
+        "outside_floors": outside_floors,
         "total": total,
         "problems": out.problems(),
         "cursor": cursor,
@@ -1746,6 +1790,7 @@ mod tests {
             level: "L1".into(),
             at: [0.0, 0.0],
             z_in: None,
+            z_span_in: None,
             mounting: Mounting::Wall,
             built: false,
             host: None,
