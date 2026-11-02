@@ -102,6 +102,10 @@ const MAX_FOLDER_FILES: usize = 2_000;
 const SUBMITTAL_PX: u32 = 1650;
 /// What a model element may sit off its wall's centreline and still be hosted by it, feet.
 const HOST_REACH_FT: f64 = 1.5;
+/// How far outside every room's outline an element still belongs to the nearest room (an
+/// item on the wall line of its room, feet), and how far round the area the packet lists the
+/// elements beside it (`nearby`).
+const EDGE_FT: f64 = 1.0;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -148,7 +152,7 @@ pub(crate) fn grow(r: [f64; 4], by: f64) -> [f64; 4] {
     [r[0] - by, r[1] - by, r[2] + by, r[3] + by]
 }
 
-fn intersect(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
+pub(crate) fn intersect(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
     let r = [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
     (r[0] < r[2] && r[1] < r[3]).then_some(r)
 }
@@ -157,11 +161,11 @@ pub(crate) fn inside(r: [f64; 4], p: [f64; 2]) -> bool {
     p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3]
 }
 
-fn corners(r: [f64; 4]) -> [[f64; 2]; 4] {
+pub(crate) fn corners(r: [f64; 4]) -> [[f64; 2]; 4] {
     [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]]
 }
 
-fn norm_rect(r: [f64; 4]) -> [f64; 4] {
+pub(crate) fn norm_rect(r: [f64; 4]) -> [f64; 4] {
     [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]
 }
 
@@ -814,7 +818,7 @@ fn resolve_element(d: &Drawing, kinds: &Kinds, e: &v::Element) -> Resolved {
 }
 
 /// The trade an element kind belongs to: the first trade rule that applies, else by its words.
-fn trade_of_kind(kind: &str, rules: &[Effective]) -> &'static str {
+pub(crate) fn trade_of_kind(kind: &str, rules: &[Effective]) -> &'static str {
     if let Some(r) =
         rules.iter().find(|r| r.rule.trade != "general" && r.rule.applies_to.kinds.iter().all(|k| k != "*") && r.rule.applies_to_kind(kind))
     {
@@ -1049,6 +1053,99 @@ fn whole_walls<'a>(pieces: &[&'a v::ModelWall]) -> Vec<WholeWall<'a>> {
     out
 }
 
+/// Which area of a level a point belongs to: the first whose outline holds it, else the one
+/// whose outline is nearest, within [`EDGE_FT`] (an item on its room's wall line).
+fn home_of(areas: &[&Area], p: [f64; 2]) -> Option<usize> {
+    if let Some(i) = areas.iter().position(|a| a.outline.len() >= 3 && point_in(&a.outline, p)) {
+        return Some(i);
+    }
+    areas
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| {
+            let d = a
+                .outline
+                .iter()
+                .zip(a.outline.iter().cycle().skip(1))
+                .take(MAX_EDGES)
+                .map(|(x, y)| seg_dist(p, *x, *y).0)
+                .fold(f64::INFINITY, f64::min);
+            (d <= EDGE_FT).then_some((i, d))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
+        .map(|(i, _)| i)
+}
+
+/// Outline edges looked at per area, at most.
+const MAX_EDGES: usize = 10_000;
+
+/// Whose a point near an area is: the area's own (inside its outline, or on its wall line and
+/// no other room's), or another room's (with its label), or no room's.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Whose {
+    Own,
+    Other { area: String, room: Option<String> },
+    NoRoom,
+}
+
+/// The areas of the level an area is on, the area among them, for [`Membership::whose`].
+pub(crate) struct Membership<'a> {
+    area: &'a Area,
+    level: Vec<&'a Area>,
+}
+
+impl<'a> Membership<'a> {
+    pub(crate) fn new(area: &'a Area, all: &'a [Area]) -> Membership<'a> {
+        let mut level: Vec<&Area> = all.iter().filter(|a| a.level.eq_ignore_ascii_case(&area.level)).collect();
+        if !level.iter().any(|a| a.id == area.id) {
+            level.push(area);
+        }
+        Membership { area, level }
+    }
+
+    pub(crate) fn whose(&self, p: [f64; 2]) -> Whose {
+        // A custom window holds what is inside it.
+        if self.area.room.is_none() {
+            return if inside(self.area.bbox, p) { Whose::Own } else { Whose::NoRoom };
+        }
+        match home_of(&self.level, p).and_then(|i| self.level.get(i)) {
+            Some(a) if a.id == self.area.id => Whose::Own,
+            Some(a) => Whose::Other {
+                area: a.id.clone(),
+                room: match (&a.number, &a.name) {
+                    (Some(n), Some(m)) => Some(format!("{n} {m}")),
+                    (Some(n), None) => Some(n.clone()),
+                    (None, Some(m)) => Some(m.clone()),
+                    _ => None,
+                },
+            },
+            None => Whose::NoRoom,
+        }
+    }
+}
+
+/// An element beside the area, for `objects.json` `nearby`.
+fn nearby_json(handle: &str, r: &Resolved, mark: Option<&str>, at: [f64; 2], whose: &Whose) -> Value {
+    let (area, room) = match whose {
+        Whose::Other { area, room } => (Some(area.as_str()), room.as_deref()),
+        _ => (None, None),
+    };
+    json!({
+        "handle": handle,
+        "kind": r.kind,
+        "kind_from": r.from,
+        "category": r.category,
+        "mark": mark,
+        "at_ft": pt(at),
+        "room": room,
+        "area": area,
+        "why": match room.or(area) {
+            Some(x) => format!("outside this area's outline, in {x}: judged there, not here"),
+            None => "outside this area's outline and every room's: not judged here".into(),
+        },
+    })
+}
+
 /// What the packet knows of the model in the area.
 struct InArea {
     objects: Value,
@@ -1059,11 +1156,23 @@ struct InArea {
     wall_types: BTreeSet<String>,
     submittals: BTreeSet<String>,
     counts: Value,
+    /// The handles of the elements beside the area (not its own).
+    nearby: BTreeSet<String>,
 }
 
-fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rules: &[Effective], built: &[BuiltPart], kinds_of: &Kinds) -> InArea {
+#[allow(clippy::too_many_arguments)]
+fn in_area(
+    d: &Drawing,
+    model: &Model,
+    prints: Option<&Prints>,
+    area: &Area,
+    rules: &[Effective],
+    built: &[BuiltPart],
+    kinds_of: &Kinds,
+    member: &Membership,
+) -> InArea {
     let upf = super::elemprops::units_per_foot(d);
-    let reach = grow(area.bbox, 1.0);
+    let reach = grow(area.bbox, EDGE_FT);
     let lvl = |l: &str| l.eq_ignore_ascii_case(&area.level);
     // The failures bim.validate finds round the area.
     let failures: Vec<v::Failure> = prints
@@ -1080,8 +1189,17 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
     let mut marks = BTreeSet::new();
     let mut submittals = BTreeSet::new();
     let mut elements: Vec<Value> = Vec::new();
+    let mut nearby: Vec<Value> = Vec::new();
+    let mut nearby_handles: BTreeSet<String> = BTreeSet::new();
     let mut els: Vec<&v::Element> = model.elements.iter().filter(|e| lvl(&e.level) && inside(reach, e.at)).collect();
     els.sort_by(|a, b| (a.kind.as_str(), a.id.as_str()).cmp(&(b.kind.as_str(), b.id.as_str())));
+    // The area's own: inside its outline (or on its wall line, no other room's); the rest beside it.
+    let (els, beside): (Vec<&v::Element>, Vec<&v::Element>) = els.into_iter().partition(|e| member.whose(e.at) == Whose::Own);
+    for e in beside.into_iter().take(MAX_OBJECTS) {
+        let rk = resolve_element(d, kinds_of, e);
+        nearby_handles.insert(e.id.to_ascii_uppercase());
+        nearby.push(nearby_json(&e.id, &rk, e.mark.as_deref(), e.at, &member.whose(e.at)));
+    }
     let total_elements = els.len();
     for e in els.into_iter().take(MAX_OBJECTS) {
         let rk = resolve_element(d, kinds_of, e);
@@ -1113,20 +1231,35 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
         }
         let mounting = field(&props, &e.fields, &["mounting"])
             .unwrap_or_else(|| serde_json::to_value(e.mounting).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default());
-        // The wall it is on: the nearest wall of the level within reach of its centreline.
+        // The wall it is on: its stored host wall's nearest piece when the model has that wall,
+        // else the nearest wall of the level within reach of its centreline (a piece over an
+        // opening says so, with the heights it spans).
         let host = if e.mounting == Mounting::Wall || e.mounting == Mounting::Unknown {
-            model
+            let pieces: Vec<(&v::ModelWall, Option<(f64, f64)>)> = model
                 .walls
                 .iter()
-                .filter(|w| lvl(&w.level))
-                .map(|w| (seg_dist(e.at, w.a, w.b), w))
-                .filter(|((dist, _), w)| *dist <= HOST_REACH_FT + w.thickness_in / 24.0)
+                .map(|w| (w, None))
+                .chain(model.wall_spans.iter().map(|s| (&s.wall, Some((s.bottom_in, s.top_in)))))
+                .filter(|(w, _)| lvl(&w.level))
+                .collect();
+            let stored = ent.and_then(|x| super::validate::stored_host(x));
+            let mine: Vec<(&v::ModelWall, Option<(f64, f64)>)> =
+                stored.as_deref().map(|h| pieces.iter().copied().filter(|(w, _)| w.id.eq_ignore_ascii_case(h)).collect()).unwrap_or_default();
+            let (from, pieces) = if mine.is_empty() { ("nearest", pieces) } else { ("stored", mine) };
+            pieces
+                .into_iter()
+                .map(|(w, band)| (seg_dist(e.at, w.a, w.b), w, band))
+                .filter(|((dist, _), w, _)| from == "stored" || *dist <= HOST_REACH_FT + w.thickness_in / 24.0)
                 .min_by(|a, b| a.0.0.total_cmp(&b.0.0).then(a.1.id.cmp(&b.1.id)))
-                .map(|((dist, q), w)| {
+                .map(|((dist, q), w, band)| {
                     let (nx, ny) = (e.at[0] - q[0], e.at[1] - q[1]);
                     let (nx, ny) = if nx.hypot(ny) > 1e-6 { (nx, ny) } else { (centre[0] - q[0], centre[1] - q[1]) };
                     let toward_area = nx * (centre[0] - q[0]) + ny * (centre[1] - q[1]) >= 0.0;
-                    json!({"wall": w.id, "type": w.wall_type, "off_centreline_in": r2(dist * 12.0), "face": compass(nx, ny), "faces_area": toward_area})
+                    let mut j = json!({"wall": w.id, "type": w.wall_type, "off_centreline_in": r2(dist * 12.0), "face": compass(nx, ny), "faces_area": toward_area, "from": from});
+                    if let Some((bottom, top)) = band {
+                        j["over_opening"] = json!({"wall_from_aff_in": r2(bottom), "wall_to_aff_in": r2(top)});
+                    }
+                    j
                 })
         } else {
             None
@@ -1179,6 +1312,15 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
         if built_listed >= MAX_OBJECTS {
             break;
         }
+        let c = [(b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0];
+        let whose = member.whose(c);
+        if whose != Whose::Own {
+            if nearby.len() < MAX_OBJECTS && nearby_handles.insert(b.handle.to_ascii_uppercase()) {
+                let r = Resolved { kind: b.kind.clone(), from: b.kind_from, category: b.category.clone() };
+                nearby.push(nearby_json(&b.handle, &r, b.mark.as_deref(), c, &whose));
+            }
+            continue;
+        }
         built_listed += 1;
         kinds.insert(b.kind.clone());
         if let Some(c) = &b.category {
@@ -1207,7 +1349,6 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
         if let Some(sb) = &sub {
             submittals.insert(sb.clone());
         }
-        let c = [(b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0];
         let mine: Vec<Value> =
             failures.iter().filter(|f| f.element.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&b.handle))).map(fail_json).collect();
         elements.push(json!({
@@ -1283,6 +1424,27 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
     if !walls_json.is_empty() {
         kinds.insert("wall".into());
     }
+    // The pieces of wall over an opening (the plan shows a gap there) and the walls that can't
+    // be measured, so an element on one is never judged against nothing.
+    let mut spans: Vec<&v::WallSpan> =
+        model.wall_spans.iter().filter(|s| lvl(&s.wall.level) && segment_touches(reach, s.wall.a, s.wall.b)).take(MAX_OBJECTS).collect();
+    spans.sort_by(|a, b| a.wall.id.cmp(&b.wall.id).then(a.wall.a[0].total_cmp(&b.wall.a[0])).then(a.wall.a[1].total_cmp(&b.wall.a[1])));
+    let spans_json: Vec<Value> = spans
+        .iter()
+        .map(|s| {
+            json!({"handle": s.wall.id, "type": s.wall.wall_type, "a_ft": pt(s.wall.a), "b_ft": pt(s.wall.b), "thickness_in": r2(s.wall.thickness_in), "from_aff_in": r2(s.bottom_in), "to_aff_in": r2(s.top_in), "why": "over an opening"})
+        })
+        .collect();
+    let unmeasured_json: Vec<Value> = {
+        let ids: BTreeSet<&str> = walls.iter().map(|w| w.id.as_str()).chain(spans.iter().map(|s| s.wall.id.as_str())).collect();
+        model
+            .unmeasured_walls
+            .iter()
+            .filter(|u| lvl(&u.level) && inside(reach, u.at) && !ids.contains(u.id.as_str()))
+            .take(MAX_OBJECTS)
+            .map(|u| json!({"handle": u.id, "at_ft": pt(u.at), "why": u.why}))
+            .collect()
+    };
     let mut ops: Vec<&v::ModelOpening> =
         model.openings.iter().filter(|o| lvl(&o.level) && (inside(reach, o.min) || inside(reach, o.max))).take(MAX_OBJECTS).collect();
     ops.sort_by(|a, b| a.id.cmp(&b.id));
@@ -1294,15 +1456,19 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
         })
         .collect();
     let loose: Vec<Value> = failures.iter().filter(|f| f.element.is_none()).take(MAX_OBJECTS).map(fail_json).collect();
-    let counts = json!({"elements": total_elements + built_listed, "runs": total_runs, "walls": walls_json.len(), "openings": openings_json.len(), "failures": failures.len()});
+    let counts = json!({"elements": total_elements + built_listed, "nearby": nearby.len(), "runs": total_runs, "walls": walls_json.len(), "wall_spans": spans_json.len(), "walls_unmeasured": unmeasured_json.len(), "openings": openings_json.len(), "failures": failures.len()});
     let mut objects = json!({
         "area": area.id,
         "level": area.level,
         "units": "positions in building feet on the level's plan; heights in inches above the floor",
         "prints_known": prints.is_some(),
         "elements": elements,
+        "nearby": nearby,
+        "nearby_about": "elements just outside this area's outline (in the margin), each with the room it is in: not this area's, never judged here",
         "runs": runs_json,
         "walls": walls_json,
+        "wall_spans": spans_json,
+        "walls_unmeasured": unmeasured_json,
         "openings": openings_json,
         "failures_without_element": loose,
         "counts": counts,
@@ -1310,7 +1476,7 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
     if total_elements > MAX_OBJECTS || total_runs > MAX_OBJECTS {
         objects["left_out"] = json!(format!("listed at most {MAX_OBJECTS} elements and runs each"));
     }
-    InArea { objects, kinds, categories, marks, wall_types, submittals, counts }
+    InArea { objects, kinds, categories, marks, wall_types, submittals, counts, nearby: nearby_handles }
 }
 
 // ---------------------------------------------------------------- rules and prompt
@@ -1347,7 +1513,11 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         counts.get("walls").and_then(Value::as_u64).unwrap_or(0),
         counts.get("openings").and_then(Value::as_u64).unwrap_or(0),
     ));
-    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents; G-PRESENT: the room type's expected set against what the room holds). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
+    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: each symbol the room's enlarged plans, else its level's trade plans, show in it against the model's elements of the same kind (`missing` names the sheet and the point), elements no symbol stands for `extra`, and the room type's project-rule set). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
+    s.push_str("- `objects.json` `wall_spans`: wall pieces over an opening (a door's header), with the heights they span above the floor; the plan shows a gap there, and an item below one is in the opening. `walls_unmeasured`: walls whose footprint gives no centreline, with why.\n");
+    if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
+        s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
+    }
     s.push_str("- `rules.json`: the rules below, in full.\n");
     s.push_str("- `manifest.json`: every picture with its sheet, view, and the sheet rectangle it shows.\n");
     s.push_str("- Print crops (what the documents say):\n");
@@ -2107,7 +2277,9 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     // What the model holds here, and the rules that apply.
     let kinds = Kinds::of(d, &sp, prints.as_ref());
     let built = built_parts(d, &sp, &frame, &area, 30.0, &kinds);
-    let mut here = in_area(d, &model, prints.as_ref(), &area, &all_rules, &built, &kinds);
+    let level_areas = model_areas(d, &frame);
+    let member = Membership::new(&area, &level_areas);
+    let mut here = in_area(d, &model, prints.as_ref(), &area, &all_rules, &built, &kinds, &member);
     // The deterministic prescreen of the area: what was measured, for the judge to start from.
     let pre = ps::screen(&ps::Scope {
         d,
@@ -2120,10 +2292,29 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         whole_levels: false,
         only: &[],
     });
+    // Each element's expected height and where the documents give it (G-HEIGHT's reading).
+    if let Some(list) = here.objects.get_mut("elements").and_then(Value::as_array_mut) {
+        for el in list.iter_mut() {
+            let Some(h) = el.get("handle").and_then(Value::as_str).map(str::to_string) else { continue };
+            if let Some(f) = pre.findings.iter().find(|f| f["rule"] == "G-HEIGHT" && f["handle"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(&h)))
+            {
+                el["height_expected"] = f["measured"].get("expected_source").cloned().unwrap_or(Value::Null);
+                el["height_model_from"] = f["measured"].get("model_height_from").cloned().unwrap_or(Value::Null);
+                el["height_verdict"] = f["verdict"].clone();
+            }
+        }
+    }
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the documents, G-PRESENT the room type's expected set (project rules)",
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set",
         "checked": pre.checked,
-        "findings": pre.findings.iter().take(MAX_OBJECTS).collect::<Vec<_>>(),
+        "unmeasured": pre.unmeasured,
+        // The area's own: an element beside it is measured in its own area's packet.
+        "findings": pre
+            .findings
+            .iter()
+            .filter(|f| f["handle"].as_str().is_none_or(|h| !here.nearby.contains(&h.to_ascii_uppercase())))
+            .take(MAX_OBJECTS)
+            .collect::<Vec<_>>(),
     });
     // The room's unit type, and how its typical layout lies in the room.
     let unit = ps::unit_of(d, &area.level, area.number.as_deref());

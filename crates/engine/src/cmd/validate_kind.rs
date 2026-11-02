@@ -70,7 +70,7 @@ const MAX_NAME: usize = 60;
 const MAX_MARK: usize = 8;
 
 /// Lower case, words joined by `_`.
-fn words(s: &str) -> String {
+pub(crate) fn words(s: &str) -> String {
     let t: String = s.trim().chars().take(200).map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
     t.split('_').filter(|w| !w.is_empty()).collect::<Vec<_>>().join("_")
 }
@@ -258,44 +258,101 @@ impl Kinds {
     }
 
     /// What an element of `kind` with `mark` (and its object `e`, when there is one) is.
+    ///
+    /// A connection to equipment (`equipment_connection`) says only that it connects something:
+    /// it is what the job's tables or the project say its mark is (an `EF` row naming an
+    /// exhaust fan makes it an exhaust fan), else it stays a connection.
     pub fn resolve(&self, kind: &str, mark: Option<&str>, e: Option<&Entity>) -> Resolved {
         let done = |kind: String, from: &'static str| Resolved { category: category(e, &kind), kind, from };
         if !is_generic(kind) {
+            if is_connection(kind)
+                && let Some((k, from)) = self.by_tables(mark, e).filter(|(k, _)| !is_connection(k))
+            {
+                return done(k, from);
+            }
             return done(kind.to_string(), "element");
         }
-        let mark = mark.and_then(mark_key);
-        let by = |m: &HashMap<String, String>| mark.as_ref().and_then(|k| m.get(k)).cloned();
         if let Some(k) = e.and_then(stored) {
             return done(k, "stored");
         }
+        match self.by_tables(mark, e) {
+            Some((k, from)) => done(k, from),
+            None => done(kind.to_string(), "unresolved"),
+        }
+    }
+
+    /// What the job's tables and the project say an element with `mark` is: its BIM type, the
+    /// spec's device tag, a legend row, the symbols and schedules, `validate.kind.<mark>`.
+    fn by_tables(&self, mark: Option<&str>, e: Option<&Entity>) -> Option<(String, &'static str)> {
+        let mark = mark.and_then(mark_key);
+        let by = |m: &HashMap<String, String>| mark.as_ref().and_then(|k| m.get(k)).cloned();
         if let Some(k) = by(&self.types) {
-            return done(k, "bim_type");
+            return Some((k, "bim_type"));
         }
         if let Some(k) = e.and_then(|e| super::bimlook::made_tag(e, "devid")).and_then(|id| self.by_devid.get(id)).cloned() {
-            return done(k, "symbol_table");
+            return Some((k, "symbol_table"));
         }
         if let Some(k) = by(&self.legend) {
-            return done(k, "legend");
+            return Some((k, "legend"));
         }
         if let Some(k) = by(&self.by_mark) {
-            return done(k, "symbol_table");
+            return Some((k, "symbol_table"));
         }
-        if let Some(k) = by(&self.project) {
-            return done(k, "project_rule");
-        }
-        done(kind.to_string(), "unresolved")
+        by(&self.project).map(|k| (k, "project_rule"))
     }
+}
+
+/// Is `kind` a connection to equipment (`equipment_connection`): what it is, its mark says?
+fn is_connection(kind: &str) -> bool {
+    let w = words(kind);
+    w == "connection" || w.ends_with("_connection")
 }
 
 /// Is `t` shaped like a mark in a legend's first column: one short word of capitals and digits
 /// (dashes and dots between), a letter in it (`REC`, `GFCI`, `S3`, `EF-1`)?
-fn looks_like_mark(t: &str) -> bool {
+pub(crate) fn looks_like_mark(t: &str) -> bool {
     let t = t.trim();
     (1..=MAX_MARK).contains(&t.len())
         && t.chars().any(|c| c.is_ascii_uppercase())
         && t.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-' || c == '.')
         && !t.starts_with(['-', '.'])
         && !t.ends_with(['-', '.'])
+}
+
+/// Is `p` within reach of the table heading `h`: below it, from a little left of it to far
+/// right ([`LEGEND_DEPTH`] heading heights down at most)?
+pub(crate) fn below_heading(h: &cadaddy_mepfix::sheet_facts::TextItem, p: cadaddy_geom::Vec2) -> bool {
+    p.x >= h.at.x - LEGEND_LEFT * h.height
+        && p.x <= h.at.x + LEGEND_RIGHT * h.height
+        && p.y < h.at.y - 0.2 * h.height
+        && p.y > h.at.y - LEGEND_DEPTH * h.height
+}
+
+/// The rows of the table under heading `h` among `near`: top down until a blank band, each row
+/// left to right.
+pub(crate) fn rows_under<'a>(
+    h: &cadaddy_mepfix::sheet_facts::TextItem,
+    near: &'a [cadaddy_mepfix::sheet_facts::TextItem],
+) -> Vec<Vec<&'a cadaddy_mepfix::sheet_facts::TextItem>> {
+    let mut below: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = near.iter().filter(|t| below_heading(h, t.at)).collect();
+    below.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
+    let mut rows: Vec<Vec<&cadaddy_mepfix::sheet_facts::TextItem>> = Vec::new();
+    let (mut last_y, mut last_h) = (h.at.y, h.height);
+    for t in below {
+        let gap = last_y - t.at.y;
+        if gap > LEGEND_GAP * last_h.max(t.height) {
+            break;
+        }
+        match rows.last_mut() {
+            Some(row) if gap <= 0.5 * t.height.min(last_h) => row.push(t),
+            _ => rows.push(vec![t]),
+        }
+        (last_y, last_h) = (t.at.y, t.height);
+    }
+    for row in &mut rows {
+        row.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+    }
+    rows
 }
 
 /// What the legends in the drawing say each mark is: each device legend's or schedule's rows
@@ -320,12 +377,6 @@ fn legend_kinds(d: &Drawing) -> HashMap<String, String> {
     };
     let headings: Vec<TextItem> =
         d.model.iter().take(MAX_ENTITIES).filter_map(|e| text(e)).filter(|t| is_device_table_heading(&t.value)).take(MAX_HEADINGS).collect();
-    let reach = |h: &TextItem, p: cadaddy_geom::Vec2| {
-        p.x >= h.at.x - LEGEND_LEFT * h.height
-            && p.x <= h.at.x + LEGEND_RIGHT * h.height
-            && p.y < h.at.y - 0.2 * h.height
-            && p.y > h.at.y - LEGEND_DEPTH * h.height
-    };
     let mut keyed = Vec::new();
     let mut near = Vec::new();
     for t in d.model.iter().take(MAX_ENTITIES).filter_map(|e| text(e)) {
@@ -334,30 +385,13 @@ fn legend_kinds(d: &Drawing) -> HashMap<String, String> {
         }
         if t.value.contains('=') {
             keyed.push(t);
-        } else if headings.iter().any(|h| reach(h, t.at)) {
+        } else if headings.iter().any(|h| below_heading(h, t.at)) {
             near.push(t);
         }
     }
     let mut out: HashMap<String, String> = HashMap::new();
     for h in &headings {
-        let mut below: Vec<&TextItem> = near.iter().filter(|t| reach(h, t.at)).collect();
-        below.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
-        // Rows, top down, until a blank band.
-        let mut rows: Vec<Vec<&TextItem>> = Vec::new();
-        let (mut last_y, mut last_h) = (h.at.y, h.height);
-        for t in below {
-            let gap = last_y - t.at.y;
-            if gap > LEGEND_GAP * last_h.max(t.height) {
-                break;
-            }
-            match rows.last_mut() {
-                Some(row) if gap <= 0.5 * t.height.min(last_h) => row.push(t),
-                _ => rows.push(vec![t]),
-            }
-            (last_y, last_h) = (t.at.y, t.height);
-        }
-        for mut row in rows {
-            row.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+        for row in rows_under(h, &near) {
             let Some(i) = row.iter().position(|t| looks_like_mark(&t.value)) else { continue };
             let said: Vec<&str> = row.iter().skip(i + 1).map(|t| t.value.as_str()).collect();
             if let (Some(mark), Some(kind)) = (row.get(i).and_then(|t| mark_key(&t.value)), model_kind_in(&said.join(" "))) {
@@ -492,5 +526,10 @@ mod tests {
         assert!(a.unresolved() && a.kind == "device", "{a:?}");
         let own = k.resolve("switch", Some("REC"), None);
         assert_eq!((own.kind.as_str(), own.from), ("switch", "element"), "a named kind stays");
+        // An equipment connection is what its mark is, when the job or the project says.
+        let conn = k.resolve("equipment_connection", Some("EF"), None);
+        assert_eq!((conn.kind.as_str(), conn.from), ("exhaust_fan", "project_rule"), "{conn:?}");
+        let other = k.resolve("equipment_connection", Some("WH-9"), None);
+        assert_eq!((other.kind.as_str(), other.from), ("equipment_connection", "element"), "an unnamed mark keeps the connection");
     }
 }

@@ -8,7 +8,7 @@
 //! architectural plan, a power plan, a mechanical plan and a reflected ceiling plan side by side;
 //! six devices (receptacles, a GFCI receptacle, a panel, an exhaust fan) and a duct.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -481,14 +481,27 @@ fn a_run_resumes_after_save_and_reopen() {
     assert_eq!(st["run"], json!(run), "the latest run by default: {st}");
     assert_eq!(st["areas"]["done"], 1, "{st}");
     assert_eq!(st["areas"]["issued"], 1, "{st}");
-    let n = s.execute("validate.next", &json!({"run": run})).unwrap();
-    assert_eq!(n["area"]["id"], json!(second), "{n}");
-    let rest = {
+    // The pending areas come first; the one handed out and never reported comes again only when
+    // none is pending, and says so.
+    let mut order: Vec<String> = Vec::new();
+    for _ in 0..10 {
+        let n = s.execute("validate.next", &json!({"run": run})).unwrap();
+        if n["done"] == json!(true) {
+            break;
+        }
+        let id = n["area"]["id"].as_str().unwrap().to_string();
+        if id == second {
+            assert!(n["again"] == json!(true) && n["note"].as_str().unwrap().contains("handed out before"), "{n}");
+        } else {
+            assert!(n.get("again").is_none(), "a pending area is no repeat: {n}");
+        }
         let findings = judge(Path::new(n["packet"]["dir"].as_str().unwrap()), &j.truth, Judge { sizes: true, noisy: false });
-        s.execute("validate.report", &json!({"run": run, "area": second, "findings": findings})).unwrap();
-        drive(&mut s, &run, &j.truth, Judge { sizes: true, noisy: false }, 10)
-    };
-    assert_eq!(rest.len(), 2, "{rest:?}");
+        s.execute("validate.report", &json!({"run": run, "area": id, "findings": findings})).unwrap();
+        order.push(id);
+    }
+    assert_eq!(order.len(), 3, "{order:?}");
+    assert_eq!(order.last(), Some(&second), "the unreported area last: {order:?}");
+    assert_eq!(order.iter().collect::<BTreeSet<_>>().len(), 3, "each area once: {order:?}");
     let st = s.execute("validate.status", &json!({"run": run})).unwrap();
     assert_eq!(st["areas"]["done"], 4, "{st}");
     assert_eq!(cadaddy_engine::cmd::validate_run::status_text(&s), None, "nothing left to wait for");
@@ -714,5 +727,89 @@ fn a_cancelled_run_stops_waiting_and_resumes() {
     let st = j.s.execute("validate.status", &json!({"run": run})).unwrap();
     assert!(st.get("cancelled").is_none(), "{st}");
     assert!(j.s.execute("validate.next", &json!({"run": run})).unwrap()["area"]["id"].is_string());
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+/// Q6131: `validate.next` hands out every pending area before an issued, unreported one, and
+/// says when it repeats one.
+#[test]
+fn next_hands_out_the_pending_areas_before_a_repeat() {
+    let mut j = job();
+    let out = dir("order");
+    let run = start(&mut j.s, &out)["run"].as_str().unwrap().to_string();
+    let mut seen: Vec<String> = Vec::new();
+    for _ in 0..4 {
+        let n = j.s.execute("validate.next", &json!({"run": run})).unwrap();
+        assert!(n.get("again").is_none(), "a pending area first: {n}");
+        let id = n["area"]["id"].as_str().unwrap().to_string();
+        assert!(!seen.contains(&id), "{id} twice before the others: {seen:?}");
+        seen.push(id);
+    }
+    // None pending: the first one handed out and not reported comes again, and says so.
+    let n = j.s.execute("validate.next", &json!({"run": run})).unwrap();
+    assert_eq!(n["area"]["id"], json!(seen[0]), "{n}");
+    assert_eq!(n["again"], true, "{n}");
+    assert!(n["note"].as_str().unwrap().contains("handed out before"), "{n}");
+    // Reporting the second still works after the others were handed out.
+    let p = PathBuf::from(j.s.execute("validate.next", &json!({"run": run, "area": seen[1]})).unwrap()["packet"]["dir"].as_str().unwrap());
+    let findings = judge(&p, &j.truth, Judge { sizes: true, noisy: false });
+    j.s.execute("validate.report", &json!({"run": run, "area": seen[1], "findings": findings})).unwrap();
+    let st = j.s.execute("validate.status", &json!({"run": run})).unwrap();
+    assert_eq!((st["areas"]["done"].as_u64(), st["areas"]["issued"].as_u64()), (Some(1), Some(3)), "{st}");
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+/// A finding whose rule does not apply to its element's kind, or that names an element beside
+/// the area or outside it, is refused with the problem named; a rule for every element is not.
+#[test]
+fn a_finding_must_fit_its_element_and_its_area() {
+    let j = job();
+    // A device just inside the storage room, by the wall it shares with the office.
+    let (mut s, beside) = place(j.s, "RECEP", "E-POWR", [15.6, 6.0], "DUPLEX");
+    let out = dir("fit");
+    let run = start(&mut s, &out)["run"].as_str().unwrap().to_string();
+    let n = s.execute("validate.next", &json!({"run": run, "area": "L1/101"})).unwrap();
+    let packet = PathBuf::from(n["packet"]["dir"].as_str().unwrap());
+    let objects = read_json(&packet.join("objects.json"));
+    let own: Vec<&str> = objects["elements"].as_array().unwrap().iter().filter_map(|e| e["handle"].as_str()).collect();
+    let near = objects["nearby"].as_array().unwrap();
+    let up = |h: &str| h.to_ascii_uppercase();
+    // The storage device is the office's neighbour, not its own: listed apart, with its room.
+    assert!(!own.iter().any(|h| up(h) == up(&beside)), "{own:?}");
+    let it = near.iter().find(|e| e["handle"].as_str().is_some_and(|h| up(h) == up(&beside))).unwrap_or_else(|| panic!("{near:?}"));
+    assert!(it["room"].as_str().unwrap().contains("102"), "{it}");
+    assert!(it["why"].as_str().unwrap().contains("not here"), "{it}");
+    assert!(std::fs::read_to_string(packet.join("prompt.md")).unwrap().contains("`nearby`"));
+    // Nothing of the storage room is judged here: none of the office packet's rules came from it alone.
+    let manifest = read_json(&packet.join("manifest.json"));
+    let print = manifest["prints"][0].clone();
+    let ev = json!([{"image": print["file"], "sheet": print["sheet"], "what": "the symbol on the plan"}]);
+    let f = |rule: &str, h: &str, verdict: &str| json!({"rule": rule, "handle": h, "verdict": verdict, "issue": "x", "expected": "x", "found": "x", "evidence": ev, "confidence": 0.8});
+    let report = |s: &mut Session, list: Vec<Value>| s.execute("validate.report", &json!({"run": run, "area": "L1/101", "findings": list}));
+    let duct = j.duct.clone();
+    let fan = j.truth[5].handle.clone();
+    let recep = j.truth[0].handle.clone();
+    assert!(
+        own.iter().any(|h| up(h) == up(&fan)) && objects["runs"].as_array().unwrap().iter().any(|r| r["handle"].as_str().map(up) == Some(up(&duct)))
+    );
+    for (finding, want) in [
+        (f("G-HOST", &duct, "fail"), "does not apply"),
+        (f("E-RECEPT-TYPE", &fan, "fail"), "does not apply"),
+        (f("M-EF", &recep, "pass"), "does not apply"),
+        (f("G-PLACE", &beside, "fail"), "beside this area"),
+        (f("G-PLACE", &j.truth[3].handle, "pass"), "not one of this area's objects"),
+    ] {
+        let e = report(&mut s, vec![finding.clone()]).unwrap_err().to_string();
+        assert!(e.contains(want), "{finding}: {e}");
+    }
+    let e = report(&mut s, vec![f("G-HOST", &duct, "fail")]).unwrap_err().to_string();
+    assert!(e.contains("duct") && e.contains("receptacle"), "the element's kind and the rule's kinds are named: {e}");
+    // A rule for every element fits any of the area's own; a rule of the element's kind fits it.
+    let ok = report(&mut s, vec![f("G-PLACE", &duct, "pass"), f("M-EF", &fan, "pass"), f("E-RECEPT-TYPE", &recep, "pass")]).unwrap();
+    assert_eq!(ok["stored"], 3, "{ok}");
+    // The storage packet holds the device as its own.
+    let n = s.execute("validate.next", &json!({"run": run, "area": "L1/102"})).unwrap();
+    let objects = read_json(&PathBuf::from(n["packet"]["dir"].as_str().unwrap()).join("objects.json"));
+    assert!(objects["elements"].as_array().unwrap().iter().any(|e| e["handle"].as_str().map(up) == Some(up(&beside))), "{objects}");
     let _ = std::fs::remove_dir_all(&out);
 }

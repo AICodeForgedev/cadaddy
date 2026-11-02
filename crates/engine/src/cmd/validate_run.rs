@@ -56,6 +56,8 @@ const PLANT_KEY: &str = "validate_plant";
 const RUNS_KEPT: usize = 10;
 const MAX_RUN_AREAS: usize = 10_000;
 const MAX_FINDINGS: usize = 300;
+/// Objects of a packet's `objects.json` read for checking a report, at most (per list).
+const MAX_PACKET_OBJECTS: usize = 5_000;
 const MAX_EVIDENCE: usize = 8;
 const TEXT_MAX: usize = 600;
 const WHAT_MAX: usize = 300;
@@ -793,7 +795,8 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
                 .position(|x| x.id.eq_ignore_ascii_case(a))
                 .ok_or_else(|| bad(CMD, format!("area {} is not in run {} (validate.status lists its areas)", cut(a, 60), run.id)))?,
         ),
-        None => run.areas.iter().position(|x| x.status == "issued").or_else(|| run.areas.iter().position(|x| x.status == "pending")),
+        // The first pending area; an issued, unreported one only when none is pending.
+        None => run.areas.iter().position(|x| x.status == "pending").or_else(|| run.areas.iter().position(|x| x.status == "issued")),
     };
     let Some(i) = pick else {
         return Ok(
@@ -801,6 +804,8 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
         );
     };
     let Some(area) = run.areas.get(i).cloned() else { return Err(bad(CMD, "the run's area list changed: call validate.next again")) };
+    // Handed out before and not reported: said, so the judge knows it is no new area.
+    let again = want.is_none() && area.status == "issued";
     let folder = if area.dir.is_empty() { format!("{}/{}", run.id, folder_of(&area.id)) } else { area.dir.clone() };
     let dir = std::path::Path::new(&run.out_dir).join(&folder);
     let mut q = json!({"area": area.id, "out_dir": dir.to_string_lossy(), "force": !area.dir.is_empty()});
@@ -875,6 +880,13 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
     if rules.is_empty() {
         out["note"] = json!("no rule applies to what this area holds: report it with findings: [] and go on");
     }
+    if again {
+        out["again"] = json!(true);
+        out["note"] = json!(format!(
+            "every pending area is handed out; this one ({}) was handed out before and not reported yet: judge it and validate.report it",
+            area.id
+        ));
+    }
     // The prompt itself when it fits; else its file.
     if let Ok(text) = std::fs::read_to_string(dir.join("prompt.md"))
         && out.to_string().len() + text.len() + 40 <= super::agentready::ANSWER_MAX
@@ -905,6 +917,63 @@ fn packet_image(images: &[String], dir: &std::path::Path, given: &str) -> Option
     }
     let full = dir.to_string_lossy().replace('\\', "/");
     images.iter().find(|f| g == format!("{}/{}", full.trim_end_matches('/'), f) || g.ends_with(&format!("/{f}"))).cloned()
+}
+
+/// A packet object as `validate.report` checks a finding against it.
+struct PacketObject {
+    kind: String,
+    category: Option<String>,
+    mark: Option<String>,
+}
+
+enum Held<'a> {
+    /// One of the area's own objects.
+    Own(&'a PacketObject),
+    /// An element beside the area (in the margin, outside its outline), with its own room.
+    Nearby(Option<&'a str>),
+}
+
+/// The objects of a packet's `objects.json`, by handle (upper case).
+struct PacketObjects {
+    own: BTreeMap<String, PacketObject>,
+    nearby: BTreeMap<String, Option<String>>,
+}
+
+impl PacketObjects {
+    fn of(o: &Value) -> PacketObjects {
+        let s = |v: &Value, k: &str| v[k].as_str().map(str::to_string).filter(|x| !x.trim().is_empty());
+        let mut own = BTreeMap::new();
+        for k in ["elements", "runs", "walls", "openings"] {
+            for e in o[k].as_array().into_iter().flatten().take(MAX_PACKET_OBJECTS) {
+                let Some(h) = e["handle"].as_str() else { continue };
+                let kind = s(e, "kind").unwrap_or_else(|| if k == "walls" { "wall".into() } else { String::new() });
+                own.insert(h.trim().to_ascii_uppercase(), PacketObject { kind, category: s(e, "category"), mark: s(e, "mark") });
+            }
+        }
+        let nearby = o["nearby"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(MAX_PACKET_OBJECTS)
+            .filter_map(|e| Some((e["handle"].as_str()?.trim().to_ascii_uppercase(), s(e, "room"))))
+            .filter(|(h, _)| !own.contains_key(h))
+            .collect();
+        PacketObjects { own, nearby }
+    }
+
+    fn what(&self, handle: &str) -> Option<Held<'_>> {
+        let h = handle.trim().to_ascii_uppercase();
+        self.own.get(&h).map(Held::Own).or_else(|| self.nearby.get(&h).map(|r| Held::Nearby(r.as_deref())))
+    }
+}
+
+/// What a rule applies to, in words: its kinds, categories and mark patterns.
+fn applies_words(r: &vr::Rule) -> String {
+    let a = &r.applies_to;
+    let mut parts: Vec<String> = a.kinds.iter().map(|k| k.replace('_', " ")).collect();
+    parts.extend(a.categories.iter().cloned());
+    parts.extend(a.marks.iter().map(|m| format!("marks {m}")));
+    cut(&parts.join(", "), 200)
 }
 
 fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
@@ -948,8 +1017,11 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
     let (all, _) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
     let dir = std::path::Path::new(&run.out_dir).join(&area.dir);
-    // The trade of each element of the packet (a general rule's finding takes its element's).
-    let trades: BTreeMap<String, String> = read_json(&dir.join("objects.json"))
+    // What each object of the packet is (a general rule's finding takes its element's trade),
+    // and the elements beside the area that are not its own.
+    let objects = read_json(&dir.join("objects.json"));
+    let trades: BTreeMap<String, String> = objects
+        .as_ref()
         .map(|o| {
             ["elements", "runs"]
                 .iter()
@@ -958,6 +1030,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
                 .collect()
         })
         .unwrap_or_default();
+    let packet: Option<PacketObjects> = objects.as_ref().map(PacketObjects::of);
     let mut problems: Vec<String> = Vec::new();
     let mut findings: Vec<Finding> = Vec::new();
     for (k, f) in list.iter().enumerate() {
@@ -996,6 +1069,30 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
                 None
             }
         };
+        if let (Some(h), Some(po)) = (&handle, &packet)
+            && problems.len() == before
+        {
+            match po.what(h) {
+                Some(Held::Own(obj)) => {
+                    if let Some(r) = all.iter().find(|e| e.rule.id == rule)
+                        && r.rule.names_kinds()
+                        && !r.rule.applies_to_element(&obj.kind, obj.category.as_deref(), obj.mark.as_deref())
+                    {
+                        problems.push(format!(
+                            "finding {n}: rule {rule} does not apply to {h}, a {}{} (it applies to {})",
+                            obj.kind.replace('_', " "),
+                            obj.category.as_deref().map(|c| format!(", {c}")).unwrap_or_default(),
+                            applies_words(&r.rule)
+                        ));
+                    }
+                }
+                Some(Held::Nearby(room)) => problems.push(format!(
+                    "finding {n}: {h} is beside this area, not in it ({}; objects.json `nearby`): judge it in its own area",
+                    room.map(|r| format!("in room {r}")).unwrap_or_else(|| "in no room".into())
+                )),
+                None => problems.push(format!("finding {n}: {h} is not one of this area's objects (objects.json lists them)")),
+            }
+        }
         if verdict == "missing" && handle.is_some() {
             problems.push(format!(
                 "finding {n}: a `missing` finding has no handle (the model has nothing there; say what the print shows in `expected`)"

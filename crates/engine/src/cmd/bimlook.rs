@@ -16,12 +16,13 @@
 //! `model.render` draw: a drawing holding only the built model (the objects shared, not
 //! copied), its layers coloured by trade, the ghosted trades see-through.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use cadaddy_doc::color::Color;
 use cadaddy_doc::{Drawing, Entity, EntityKind, Handle};
 use cadaddy_geom::Vec3;
+use cadaddy_walk3d::validate::{ModelWall, WallSpan};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -523,7 +524,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         CommandSpec::new("bim.element", "Element Properties", run_element)
             .params(
-                "{handle? (default the one selected), open_source?: bool (plan view, zoomed to its source on the sheet, the source selected)} → {handle, trade, group, category, type, size, level, system, circuit, quantity: {count, length_ft?, area_sf?, height_ft?}, source: {handle, kind, layer, at, sheet?, sheet_file?}, attributes, issues: [{kind: bcf|rfi, guid|id, title, status}], at: [x,y] (building feet on its level's plan), bottom_ft, top_ft (above the datum), aff_in, center_aff_in, top_aff_in (above its level's floor), at_ceiling, host: {wall, type, face, off_face_in, off_centreline_in, thickness_in, along_ft} | null (when hosted: the wall face within the G-HOST tolerance), nearest_wall (within 10 ft)}",
+                "{handle? (default the one selected), open_source?: bool (plan view, zoomed to its source on the sheet, the source selected)} → {handle, trade, group, category, type, size, level, system, circuit, quantity: {count, length_ft?, area_sf?, height_ft?}, source: {handle, kind, layer, at, sheet?, sheet_file?}, attributes, issues: [{kind: bcf|rfi, guid|id, title, status}], at: [x,y] (building feet on its level's plan), bottom_ft, top_ft (above the datum), aff_in, center_aff_in, top_aff_in (above its level's floor), at_ceiling, host: {wall, type, face, off_face_in, off_centreline_in, thickness_in, along_ft, from: stored|nearest} | null (when hosted: its stored host wall's face, else the face of a wall there at its height, within the G-HOST tolerance), in_opening? (on the face line of a wall piece over an opening, below it: that face + wall_from_aff_in, wall_to_aff_in), stored_host? (its stored host wall is not among its level's built walls), nearest_wall (within 10 ft; a wall: itself, measured from its longest piece, `at` that piece's middle), wall_unmeasured? (a wall whose footprint gives no centreline: why)}",
             )
             .noundo(),
     ]
@@ -973,36 +974,56 @@ fn placement(s: &Session, e: &Entity, c: &Class) -> serde_json::Map<String, Valu
         out.insert("at_ceiling".into(), json!(at_ceiling));
     }
     let hostable = !UNHOSTED.iter().any(|k| c.category.contains(k)) && !at_ceiling;
-    let walls = super::validate::walls_near(d, &sp, &frame, &c.level, [at[0], at[1], at[0], at[1]], super::validate_prescreen::HOST_SEARCH_FT);
-    let near = super::validate_prescreen::nearest_wall(at, &walls, super::validate_prescreen::HOST_SEARCH_FT);
+    let search = super::validate_prescreen::HOST_SEARCH_FT;
+    // A built wall: measured from its own longest piece, so its nearest wall is itself (its
+    // box's centre may lie in the opening under its header).
+    if let (Some("wall"), EntityKind::Mesh(mesh)) = (super::wallgen::made_as(e).as_deref(), &e.kind) {
+        let studs = HashMap::new();
+        let own = super::validate::mesh_walls(e, mesh, &frame, Some(&c.level), &studs);
+        let len = |w: &&ModelWall| (w.b[0] - w.a[0]).hypot(w.b[1] - w.a[1]);
+        let longest = own
+            .walls
+            .iter()
+            .max_by(|a, b| len(a).total_cmp(&len(b)))
+            .or_else(|| own.spans.iter().map(|s| &s.wall).max_by(|a, b| len(a).total_cmp(&len(b))));
+        if let Some(w) = longest {
+            let mid = [(w.a[0] + w.b[0]) / 2.0, (w.a[1] + w.b[1]) / 2.0];
+            out.insert("at".into(), json!([r2(mid[0]), r2(mid[1])]));
+            let near = super::validate_prescreen::nearest_wall(mid, own.walls.iter().chain(own.spans.iter().map(|s| &s.wall)), search);
+            out.insert("host".into(), Value::Null);
+            out.insert("nearest_wall".into(), near.map_or(Value::Null, |f| f.to_json()));
+            return out;
+        }
+        if let Some(u) = own.unmeasured.first() {
+            out.insert("wall_unmeasured".into(), json!(u.why));
+        }
+    }
+    let pieces = super::validate::walls_near(d, &sp, &frame, &c.level, [at[0], at[1], at[0], at[1]], search);
+    let walls: Vec<&ModelWall> = pieces.walls.iter().collect();
+    let spans: Vec<&WallSpan> = pieces.spans.iter().collect();
+    let near = super::validate_prescreen::nearest_wall(at, walls.iter().copied().chain(spans.iter().map(|s| &s.wall)), search);
     let tol = super::validate_rules::effective(&d.project_rules)
         .ok()
         .and_then(|(rs, _)| rs.into_iter().find(|r| r.rule.id == "G-HOST").and_then(|r| r.rule.tolerance.get("plan_in").copied()))
         .unwrap_or(6.0);
-    // Its host: the wall it is measured on, within the rule's reach; else, when the build put it on
-    // a wall's face (`host_wall`, its hostsnap) that validate's wall list can't measure (a short
-    // piece it doesn't read), that wall as stored. Moved off a wall the list holds, it has none.
-    let stored = cadaddy_doc::props::read(&e.common.xdata);
-    let stored_wall = stored.get("host_wall").filter(|p| p.has_value()).map(|p| p.text());
-    let measured = near.as_ref().filter(|f| hostable && f.off_face_in.abs() <= tol).map(|f| {
-        let mut h = f.to_json();
-        if let Some(w) = stored_wall.as_ref().filter(|w| !w.eq_ignore_ascii_case(&f.wall)) {
-            h["stored_wall"] = json!(w);
-        }
-        h
-    });
-    let host = measured.or_else(|| {
-        let wall = stored_wall.as_ref().filter(|w| !walls.iter().any(|m| m.id.eq_ignore_ascii_case(w)))?;
-        let mut h = json!({"wall": wall, "by": "stored: put on its wall's face by the build (a wall the measure doesn't read)"});
-        if let Some(f) = stored.get("host_face").filter(|f| f.has_value()) {
-            h["face_dir"] = json!(f.text());
-        }
-        if let Some(pl) = stored.get("placement").filter(|f| f.has_value()) {
-            h["placement"] = json!(pl.text());
-        }
-        Some(h)
+    let center = out.get("center_aff_in").and_then(Value::as_f64);
+    let stored = super::validate::stored_host(e);
+    let h = super::validate_prescreen::host_of(at, center, stored.as_deref(), &walls, &spans, tol);
+    let host = h.face.as_ref().filter(|f| hostable && h.opening.is_none() && f.off_face_in.abs() <= tol).map(|f| {
+        let mut j = f.to_json();
+        j["from"] = json!(h.from);
+        j
     });
     out.insert("host".into(), host.unwrap_or(Value::Null));
+    if let (true, Some((f, bottom, top))) = (hostable, &h.opening) {
+        let mut j = f.to_json();
+        j["wall_from_aff_in"] = json!(r2(*bottom));
+        j["wall_to_aff_in"] = json!(r2(*top));
+        out.insert("in_opening".into(), j);
+    }
+    if let Some(m) = &h.stored_missing {
+        out.insert("stored_host".into(), json!({"wall": m, "why": "not among the built walls of its level"}));
+    }
     out.insert("nearest_wall".into(), near.map_or(Value::Null, |f| f.to_json()));
     out
 }

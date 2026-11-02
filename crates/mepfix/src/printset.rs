@@ -372,7 +372,8 @@ pub fn null_stage_runner(_stage: Stage, _sheet: &SheetEntry) -> SheetStageResult
 // ─── Content hashing (streaming FNV-1a) ─────────────────────────────────────
 
 /// Stream-hash a file on disk (FNV-1a, first 16 hex chars). Never reads the whole file at once.
-fn file_hash(path: &Path) -> Result<String, String> {
+/// Stable across runs, machines and builds (a job's checkpoint keeps it to tell its prints).
+pub fn file_hash(path: &Path) -> Result<String, String> {
     let mut file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
     let mut buf = [0u8; HASH_BUF];
