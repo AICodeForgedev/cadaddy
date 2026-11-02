@@ -138,8 +138,10 @@ fn answers_stand_alone_run_their_stage_once_and_the_job_can_go_on_unattended() {
 
     // rerun: false holds the re-run; job.next runs it.
     let devices = open_questions(&mut s, "devices");
-    let verify = devices.iter().find(|id| question_text(&mut s, id).contains("type right?")).expect("a device spot check").clone();
-    let r = s.execute("job.answer", &json!({"id": verify, "answer": "Not a device", "rerun": false})).expect("held");
+    // The set's only marks by symbols are its grids' A and B, no device types (Q6165): its
+    // completeness question's re-check holds the devices stage's re-run the same way.
+    let none = devices.iter().find(|id| question_text(&mut s, id).contains("No devices detected")).expect("the no-devices question").clone();
+    let r = s.execute("job.answer", &json!({"id": none, "answer": "There should be devices — re-check", "rerun": false})).expect("held");
     assert_eq!((r["rerun"].clone(), r["rerun_held"]["from"].clone()), (json!([]), json!("devices")), "{r}");
     assert_eq!(s.execute("job.status", &json!({})).expect("status")["rerun_held"], "devices");
     let n = s.execute("job.next", &json!({})).expect("job.next");
