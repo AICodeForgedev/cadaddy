@@ -1197,6 +1197,10 @@ pub struct Mep {
     /// or not.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub panel_schedules: Vec<PanelSchedule>,
+    /// Equipment connections' electrical data from their submittals, beside what the drawings
+    /// give them (protection, feeder): what the build checks and reports.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub equipment_electrical: Vec<EquipmentElectrical>,
     /// The tables gear is checked with (conduit sizes, conductor areas, wire-bending space),
     /// when a project's differ from the defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1757,6 +1761,40 @@ pub struct PanelCircuit {
     /// The sheet it was read from (`E-601`), empty when entered by hand.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
+}
+
+/// An equipment connection's electrical data (its submittal's, else unknown) and the drawings'
+/// provision for it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EquipmentElectrical {
+    /// Its tag on the one-line (`ELEV-1`) and what the schedule calls it.
+    pub tag: String,
+    pub description: String,
+    /// The drawings': its source panel, protection (`70A/3P`) and feeder type tag.
+    pub source_panel: String,
+    pub drawing_ocpd: String,
+    pub feeder: String,
+    /// The submittal's: volts and phases, nameplate / full-load / minimum circuit amps, the most
+    /// protection it allows (amps, and the fuse class when it names one), acceleration amps,
+    /// horsepower and kW, the controller's short-circuit current rating (amps).
+    pub volts: Option<f64>,
+    pub phase: Option<u32>,
+    pub nameplate_a: Option<f64>,
+    pub fla: Option<f64>,
+    pub mca: Option<f64>,
+    pub max_ocpd_a: Option<f64>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub fuse_class: String,
+    pub accel_a: Option<f64>,
+    pub hp: Option<f64>,
+    pub kw: Option<f64>,
+    pub sccr_a: Option<f64>,
+    /// Where its data came from (the submittal's file and page, or an agent's reading of it) and
+    /// the submittal's review status.
+    pub source: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub status: String,
 }
 
 /// A panel's schedule as printed (a panel the plans may not place, or a typical one every guest

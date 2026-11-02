@@ -39,6 +39,7 @@ mod draworder;
 mod edit;
 mod edit3d;
 pub mod elemprops;
+pub mod equipsub;
 pub mod estimate;
 mod exact_ends;
 mod exchange;

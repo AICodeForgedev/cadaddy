@@ -7569,7 +7569,199 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         );
     }
     result["gear"] = json!({"placed": placed, "feeders": feeders, "unplaced": planned.unplaced, "review": review});
+    equipment_step(s, job, pages, &types, &tags, result)
+}
+
+/// What an equipment question begins with (its tag follows).
+const EQUIP_QUESTION: &str = "Equipment electrical data: ";
+
+/// The loads the one-line feeds (not panels) against their submittals ([`super::equipsub`]):
+/// each one's data from its latest submittal's text, else an agent's reading (a job answer), else
+/// a question; the checks' failures RFIs and findings; the data kept in `mep.equipment_electrical`.
+fn equipment_step(
+    s: &mut Session,
+    job: &mut GuidedJob,
+    pages: &[(String, cadaddy_doc::Drawing)],
+    types: &[super::gearbuild::FeederType],
+    panels: &[String],
+    result: &mut Value,
+) -> crate::Result<()> {
+    use super::equipsub;
+    let type_tags: Vec<String> = types.iter().map(|t| t.tag.clone()).collect();
+    let mut loads: Vec<equipsub::OnelineLoad> = Vec::new();
+    for (_, d) in pages {
+        for l in equipsub::oneline_loads(&cadaddy_mepfix::sheet_facts::texts(d), panels, &type_tags) {
+            if !loads.iter().any(|x| x.tag.eq_ignore_ascii_case(&l.tag)) {
+                loads.push(l);
+            }
+        }
+    }
+    if loads.is_empty() {
+        return Ok(());
+    }
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    let rule = super::coderules::rules().into_iter().find(|r| r.id == "E-EQUIP-ELEC").unwrap_or_default();
+    let files = super::submittals::pdf_files(&job.submittals);
+    let mut rows: Vec<cadaddy_walk3d::EquipmentElectrical> = Vec::new();
+    let mut asked = 0usize;
+    let mut conflicts_all: Vec<(String, equipsub::Conflict)> = Vec::new();
+    for l in loads.iter().take(MAX_EQUIPMENT_LOADS) {
+        let (description, source_panel) = equipsub::schedule_row(&sp, &l.tag).unwrap_or_default();
+        let mut e = cadaddy_walk3d::EquipmentElectrical {
+            tag: l.tag.clone(),
+            description,
+            source_panel,
+            drawing_ocpd: l.ocpd.clone(),
+            feeder: l.feeder.clone(),
+            ..Default::default()
+        };
+        // Its submittals, the latest revision first.
+        let Some(st) = equipsub::stem(&l.tag) else { continue };
+        let mut mine: Vec<&String> = files
+            .iter()
+            .filter(|f| std::path::Path::new(f).file_name().is_some_and(|n| n.to_string_lossy().to_ascii_uppercase().contains(&st)))
+            .collect();
+        mine.sort_by(|a, b| equipsub::revision(b).cmp(&equipsub::revision(a)).then(a.cmp(b)));
+        let mut scanned: Vec<String> = Vec::new();
+        for f in mine.iter().take(MAX_GEAR_SUBMITTALS) {
+            let name = std::path::Path::new(f.as_str()).file_name().map_or_else(|| f.to_string(), |n| n.to_string_lossy().to_string());
+            let Ok(text) = crate::readfile::read(f.as_str())
+                .map_err(|e| e.to_string())
+                .and_then(|b| super::spec_import::pdf_text(&b, f).map_err(|e| e.to_string()))
+            else {
+                continue;
+            };
+            if e.status.is_empty() {
+                e.status = equipsub::review_status(&text);
+            }
+            let got = equipsub::text_electrical(&text);
+            if equipsub::has_data(&got) {
+                equipsub::merge(&mut e, &got);
+                e.source = format!("submittal {name}");
+                break;
+            }
+            scanned.push(name);
+        }
+        if !equipsub::has_data(&e) {
+            let key = format!("equip:{}", l.tag.to_ascii_uppercase());
+            match job.rules.iter().find(|r| r.key == key).and_then(|r| serde_json::from_str::<Value>(&r.value).ok()) {
+                Some(a) => equipsub::merge(&mut e, &equipsub::from_answer(&a)),
+                None if !scanned.is_empty() => {
+                    equipment_question(job, &l.tag, &e, &scanned);
+                    asked += 1;
+                }
+                None => {}
+            }
+        }
+        // The checks: the drawings' feeder conductors and the source's fault current.
+        let ft = types.iter().find(|t| t.tag.eq_ignore_ascii_case(&l.feeder));
+        let afc = sp
+            .mep
+            .panel_schedules
+            .iter()
+            .find(|p| p.panel.eq_ignore_ascii_case(&e.source_panel))
+            .and_then(|p| p.header.get("afc value"))
+            .and_then(|v| v.replace([',', 'A', 'a'], "").trim().parse::<f64>().ok());
+        for c in equipsub::check(&e, ft.map(|t| (t.size.as_str(), t.material.as_str())), afc, &rule) {
+            conflicts_all.push((l.tag.clone(), c));
+        }
+        rows.push(e);
+    }
+    // Each failure an RFI (once) and a finding.
+    let mut rfis = Vec::new();
+    for (tag, c) in &conflicts_all {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in format!("{tag}|{}|{}", c.check, c.message).bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+        let id = format!("RFI-E{:08x}", h as u32);
+        if !sp.rfis.iter().any(|r| r.id == id) && sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
+            let kind = cadaddy_walk3d::RfiKind::EquipmentElectrical;
+            sp.rfis.push(cadaddy_walk3d::Rfi {
+                id: id.clone(),
+                kind: Some(kind),
+                severity: kind.severity(),
+                about: format!("{tag} ({})", c.check),
+                issue: format!("Submittal against the drawings: {}", c.message),
+                assumed: "The model follows the submittal; the drawings' value is kept beside it until answered.".into(),
+                proposed: Some(c.fix.clone()),
+                ..cadaddy_walk3d::Rfi::default()
+            });
+            rfis.push(id);
+        }
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Equipment {tag} ({}): {}", c.check, c.message),
+            "its approved submittal differs from the drawings",
+            2,
+            vec![c.fix.clone()],
+            None,
+            false,
+        );
+    }
+    let line = format!(
+        "  equipment connections: {} on the one-line ({}); submittal data for {}; asked {asked}; conflicts {}: {}",
+        rows.len(),
+        rows.iter().map(|r| format!("{} {} {}", r.tag, r.drawing_ocpd, r.feeder)).collect::<Vec<_>>().join(", "),
+        rows.iter().filter(|r| super::equipsub::has_data(r)).count(),
+        conflicts_all.len(),
+        conflicts_all.iter().map(|(t, c)| format!("{t} {}", c.check)).collect::<Vec<_>>().join(", ")
+    );
+    sp.mep.equipment_electrical = rows;
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    report_progress(s, json!({"step": "equipment connections"}), &line);
+    s.echo(line);
+    result["equipment_electrical"] = json!({"conflicts": conflicts_all.len(), "rfis": rfis, "asked": asked});
     Ok(())
+}
+
+/// Equipment connections looked at, at most.
+const MAX_EQUIPMENT_LOADS: usize = 200;
+
+/// A question for the agent: the electrical data of a load whose submittal is scanned (no text),
+/// with the files to read; answered, the build checks the drawings against it. Its default keeps
+/// the drawings' values, so a job on its own goes on.
+fn equipment_question(job: &mut GuidedJob, tag: &str, e: &cadaddy_walk3d::EquipmentElectrical, files: &[String]) {
+    let text = format!("{EQUIP_QUESTION}{tag}");
+    if job.stages.iter().flat_map(|st| &st.questions).any(|q| q.question.starts_with(&text)) {
+        return;
+    }
+    let qid = job.next_qid(StageName::BimBuild);
+    let q = Question {
+        id: qid,
+        stage: StageName::BimBuild,
+        question: format!(
+            "{text}: its submittal is scanned (no text). Read its electrical data from {} (the latest approved revision; the data sheet: volts/phase, nameplate or full-load amps, minimum circuit amps, the most protection it allows and fuse class, acceleration amps, HP/kW, the controller's SCCR) and answer {{volts, phase, nameplate_a, fla, mca, max_ocpd_a, fuse_class, accel_a, hp, kw, sccr_a, source: \"<file> p.<n>\"}}. The drawings give it {} on feeder {} from {}.",
+            files.join("; "),
+            if e.drawing_ocpd.is_empty() { "no protection read" } else { &e.drawing_ocpd },
+            if e.feeder.is_empty() { "?" } else { &e.feeder },
+            if e.source_panel.is_empty() { "?" } else { &e.source_panel }
+        ),
+        why: "An equipment connection follows its approved submittal: protection, conductors and the controller's short-circuit rating are checked against it".into(),
+        choices: vec!["Keep the drawings' values".into()],
+        evidence: Some(QuestionEvidence {
+            crop_png_path: None,
+            sheet: None,
+            at: None,
+            values: Some(json!({"equipment": tag, "files": files, "drawings": {"ocpd": e.drawing_ocpd, "feeder": e.feeder, "source": e.source_panel}})),
+            handles: Vec::new(),
+            tiled_crops: None,
+            leftovers: Vec::new(),
+        }),
+        default: Some("Keep the drawings' values".into()),
+        answer_schema: Some(json!({"type": "object", "properties": {
+            "volts": {"type": "number"}, "phase": {"type": "number"}, "nameplate_a": {"type": "number"}, "fla": {"type": "number"}, "mca": {"type": "number"},
+            "max_ocpd_a": {"type": "number"}, "fuse_class": {"type": "string"}, "accel_a": {"type": "number"}, "hp": {"type": "number"}, "kw": {"type": "number"},
+            "sccr_a": {"type": "number"}, "source": {"type": "string"}}})),
+        answer: None,
+        answered_by: None,
+        answered_at: None,
+        kind: QuestionKind::Completeness,
+    };
+    job.add_question_to_worklist(&q);
+    if let Some(st) = job.stage_mut(StageName::BimBuild) {
+        st.questions.push(q);
+    }
 }
 
 /// Gear submittals read, at most.
@@ -10332,6 +10524,9 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
     if !text.is_empty() && q.default.as_deref() == Some(text) {
         return (None, "kept what the job read".into());
     }
+    if q.stage == StageName::BimBuild && q.question.starts_with(EQUIP_QUESTION) && answer.is_object() {
+        return (Some(StageName::BimBuild), "the build checks the drawings against the submittal's data".into());
+    }
     if q.stage == StageName::BimBuild && q.question.starts_with(GEAR_QUESTION) && answer.get("height_in").is_some() {
         return (Some(StageName::BimBuild), "the build lays the gear out with its size".into());
     }
@@ -11716,6 +11911,15 @@ pub fn learn_from_answer(job: &mut GuidedJob, q: &Question) {
         && let Some(desc) = ev.values.as_ref().and_then(|v| v.get("description")).and_then(Value::as_str)
     {
         job.learn_rule(&format!("symbol:{desc}"), &format!("device:{device_type}"), &q.id, q.stage);
+    }
+
+    // Equipment data an agent read off a scanned submittal.
+    if q.stage == StageName::BimBuild
+        && q.question.starts_with(EQUIP_QUESTION)
+        && answer.is_object()
+        && let Some(tag) = q.evidence.as_ref().and_then(|e| e.values.as_ref()).and_then(|v| v.get("equipment")).and_then(Value::as_str)
+    {
+        job.learn_rule(&format!("equip:{}", tag.to_ascii_uppercase()), &answer.to_string(), &q.id, q.stage);
     }
 
     // Gear sizes an agent read off a drawing.
