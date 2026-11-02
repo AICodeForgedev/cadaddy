@@ -102,6 +102,10 @@ const MAX_FOLDER_FILES: usize = 2_000;
 const SUBMITTAL_PX: u32 = 1650;
 /// What a model element may sit off its wall's centreline and still be hosted by it, feet.
 const HOST_REACH_FT: f64 = 1.5;
+/// How far outside every room's outline an element still belongs to the nearest room (an
+/// item on the wall line of its room, feet), and how far round the area the packet lists the
+/// elements beside it (`nearby`).
+const EDGE_FT: f64 = 1.0;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -1049,6 +1053,99 @@ fn whole_walls<'a>(pieces: &[&'a v::ModelWall]) -> Vec<WholeWall<'a>> {
     out
 }
 
+/// Which area of a level a point belongs to: the first whose outline holds it, else the one
+/// whose outline is nearest, within [`EDGE_FT`] (an item on its room's wall line).
+fn home_of(areas: &[&Area], p: [f64; 2]) -> Option<usize> {
+    if let Some(i) = areas.iter().position(|a| a.outline.len() >= 3 && point_in(&a.outline, p)) {
+        return Some(i);
+    }
+    areas
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| {
+            let d = a
+                .outline
+                .iter()
+                .zip(a.outline.iter().cycle().skip(1))
+                .take(MAX_EDGES)
+                .map(|(x, y)| seg_dist(p, *x, *y).0)
+                .fold(f64::INFINITY, f64::min);
+            (d <= EDGE_FT).then_some((i, d))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
+        .map(|(i, _)| i)
+}
+
+/// Outline edges looked at per area, at most.
+const MAX_EDGES: usize = 10_000;
+
+/// Whose a point near an area is: the area's own (inside its outline, or on its wall line and
+/// no other room's), or another room's (with its label), or no room's.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Whose {
+    Own,
+    Other { area: String, room: Option<String> },
+    NoRoom,
+}
+
+/// The areas of the level an area is on, the area among them, for [`Membership::whose`].
+pub(crate) struct Membership<'a> {
+    area: &'a Area,
+    level: Vec<&'a Area>,
+}
+
+impl<'a> Membership<'a> {
+    pub(crate) fn new(area: &'a Area, all: &'a [Area]) -> Membership<'a> {
+        let mut level: Vec<&Area> = all.iter().filter(|a| a.level.eq_ignore_ascii_case(&area.level)).collect();
+        if !level.iter().any(|a| a.id == area.id) {
+            level.push(area);
+        }
+        Membership { area, level }
+    }
+
+    pub(crate) fn whose(&self, p: [f64; 2]) -> Whose {
+        // A custom window holds what is inside it.
+        if self.area.room.is_none() {
+            return if inside(self.area.bbox, p) { Whose::Own } else { Whose::NoRoom };
+        }
+        match home_of(&self.level, p).and_then(|i| self.level.get(i)) {
+            Some(a) if a.id == self.area.id => Whose::Own,
+            Some(a) => Whose::Other {
+                area: a.id.clone(),
+                room: match (&a.number, &a.name) {
+                    (Some(n), Some(m)) => Some(format!("{n} {m}")),
+                    (Some(n), None) => Some(n.clone()),
+                    (None, Some(m)) => Some(m.clone()),
+                    _ => None,
+                },
+            },
+            None => Whose::NoRoom,
+        }
+    }
+}
+
+/// An element beside the area, for `objects.json` `nearby`.
+fn nearby_json(handle: &str, r: &Resolved, mark: Option<&str>, at: [f64; 2], whose: &Whose) -> Value {
+    let (area, room) = match whose {
+        Whose::Other { area, room } => (Some(area.as_str()), room.as_deref()),
+        _ => (None, None),
+    };
+    json!({
+        "handle": handle,
+        "kind": r.kind,
+        "kind_from": r.from,
+        "category": r.category,
+        "mark": mark,
+        "at_ft": pt(at),
+        "room": room,
+        "area": area,
+        "why": match room.or(area) {
+            Some(x) => format!("outside this area's outline, in {x}: judged there, not here"),
+            None => "outside this area's outline and every room's: not judged here".into(),
+        },
+    })
+}
+
 /// What the packet knows of the model in the area.
 struct InArea {
     objects: Value,
@@ -1059,11 +1156,23 @@ struct InArea {
     wall_types: BTreeSet<String>,
     submittals: BTreeSet<String>,
     counts: Value,
+    /// The handles of the elements beside the area (not its own).
+    nearby: BTreeSet<String>,
 }
 
-fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rules: &[Effective], built: &[BuiltPart], kinds_of: &Kinds) -> InArea {
+#[allow(clippy::too_many_arguments)]
+fn in_area(
+    d: &Drawing,
+    model: &Model,
+    prints: Option<&Prints>,
+    area: &Area,
+    rules: &[Effective],
+    built: &[BuiltPart],
+    kinds_of: &Kinds,
+    member: &Membership,
+) -> InArea {
     let upf = super::elemprops::units_per_foot(d);
-    let reach = grow(area.bbox, 1.0);
+    let reach = grow(area.bbox, EDGE_FT);
     let lvl = |l: &str| l.eq_ignore_ascii_case(&area.level);
     // The failures bim.validate finds round the area.
     let failures: Vec<v::Failure> = prints
@@ -1080,8 +1189,17 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
     let mut marks = BTreeSet::new();
     let mut submittals = BTreeSet::new();
     let mut elements: Vec<Value> = Vec::new();
+    let mut nearby: Vec<Value> = Vec::new();
+    let mut nearby_handles: BTreeSet<String> = BTreeSet::new();
     let mut els: Vec<&v::Element> = model.elements.iter().filter(|e| lvl(&e.level) && inside(reach, e.at)).collect();
     els.sort_by(|a, b| (a.kind.as_str(), a.id.as_str()).cmp(&(b.kind.as_str(), b.id.as_str())));
+    // The area's own: inside its outline (or on its wall line, no other room's); the rest beside it.
+    let (els, beside): (Vec<&v::Element>, Vec<&v::Element>) = els.into_iter().partition(|e| member.whose(e.at) == Whose::Own);
+    for e in beside.into_iter().take(MAX_OBJECTS) {
+        let rk = resolve_element(d, kinds_of, e);
+        nearby_handles.insert(e.id.to_ascii_uppercase());
+        nearby.push(nearby_json(&e.id, &rk, e.mark.as_deref(), e.at, &member.whose(e.at)));
+    }
     let total_elements = els.len();
     for e in els.into_iter().take(MAX_OBJECTS) {
         let rk = resolve_element(d, kinds_of, e);
@@ -1179,6 +1297,15 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
         if built_listed >= MAX_OBJECTS {
             break;
         }
+        let c = [(b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0];
+        let whose = member.whose(c);
+        if whose != Whose::Own {
+            if nearby.len() < MAX_OBJECTS && nearby_handles.insert(b.handle.to_ascii_uppercase()) {
+                let r = Resolved { kind: b.kind.clone(), from: b.kind_from, category: b.category.clone() };
+                nearby.push(nearby_json(&b.handle, &r, b.mark.as_deref(), c, &whose));
+            }
+            continue;
+        }
         built_listed += 1;
         kinds.insert(b.kind.clone());
         if let Some(c) = &b.category {
@@ -1207,7 +1334,6 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
         if let Some(sb) = &sub {
             submittals.insert(sb.clone());
         }
-        let c = [(b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0];
         let mine: Vec<Value> =
             failures.iter().filter(|f| f.element.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&b.handle))).map(fail_json).collect();
         elements.push(json!({
@@ -1294,13 +1420,15 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
         })
         .collect();
     let loose: Vec<Value> = failures.iter().filter(|f| f.element.is_none()).take(MAX_OBJECTS).map(fail_json).collect();
-    let counts = json!({"elements": total_elements + built_listed, "runs": total_runs, "walls": walls_json.len(), "openings": openings_json.len(), "failures": failures.len()});
+    let counts = json!({"elements": total_elements + built_listed, "nearby": nearby.len(), "runs": total_runs, "walls": walls_json.len(), "openings": openings_json.len(), "failures": failures.len()});
     let mut objects = json!({
         "area": area.id,
         "level": area.level,
         "units": "positions in building feet on the level's plan; heights in inches above the floor",
         "prints_known": prints.is_some(),
         "elements": elements,
+        "nearby": nearby,
+        "nearby_about": "elements just outside this area's outline (in the margin), each with the room it is in: not this area's, never judged here",
         "runs": runs_json,
         "walls": walls_json,
         "openings": openings_json,
@@ -1310,7 +1438,7 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
     if total_elements > MAX_OBJECTS || total_runs > MAX_OBJECTS {
         objects["left_out"] = json!(format!("listed at most {MAX_OBJECTS} elements and runs each"));
     }
-    InArea { objects, kinds, categories, marks, wall_types, submittals, counts }
+    InArea { objects, kinds, categories, marks, wall_types, submittals, counts, nearby: nearby_handles }
 }
 
 // ---------------------------------------------------------------- rules and prompt
@@ -1348,6 +1476,9 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         counts.get("openings").and_then(Value::as_u64).unwrap_or(0),
     ));
     s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents; G-PRESENT: the room type's expected set against what the room holds). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
+    if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
+        s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
+    }
     s.push_str("- `rules.json`: the rules below, in full.\n");
     s.push_str("- `manifest.json`: every picture with its sheet, view, and the sheet rectangle it shows.\n");
     s.push_str("- Print crops (what the documents say):\n");
@@ -2107,7 +2238,9 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     // What the model holds here, and the rules that apply.
     let kinds = Kinds::of(d, &sp, prints.as_ref());
     let built = built_parts(d, &sp, &frame, &area, 30.0, &kinds);
-    let mut here = in_area(d, &model, prints.as_ref(), &area, &all_rules, &built, &kinds);
+    let level_areas = model_areas(d, &frame);
+    let member = Membership::new(&area, &level_areas);
+    let mut here = in_area(d, &model, prints.as_ref(), &area, &all_rules, &built, &kinds, &member);
     // The deterministic prescreen of the area: what was measured, for the judge to start from.
     let pre = ps::screen(&ps::Scope {
         d,
@@ -2123,7 +2256,13 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     here.objects["prescreen"] = json!({
         "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the documents, G-PRESENT the room type's expected set (project rules)",
         "checked": pre.checked,
-        "findings": pre.findings.iter().take(MAX_OBJECTS).collect::<Vec<_>>(),
+        // The area's own: an element beside it is measured in its own area's packet.
+        "findings": pre
+            .findings
+            .iter()
+            .filter(|f| f["handle"].as_str().is_none_or(|h| !here.nearby.contains(&h.to_ascii_uppercase())))
+            .take(MAX_OBJECTS)
+            .collect::<Vec<_>>(),
     });
     // The room's unit type, and how its typical layout lies in the room.
     let unit = ps::unit_of(d, &area.level, area.number.as_deref());

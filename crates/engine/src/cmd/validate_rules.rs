@@ -103,11 +103,12 @@ pub struct Rule {
 }
 
 impl Rule {
-    /// Does an element of `kind` get this rule? Kinds compare word by word, so a
-    /// `gfci_receptacle` gets the `receptacle` rules.
+    /// Does an element of `kind` get this rule? By the kind families of
+    /// [`validate_kinds::kind_matches`] (one table for every rule): a `gfci_receptacle` gets the
+    /// `receptacle` rules and a `return_grille` the `terminal` ones, a `light_fixture` not the
+    /// plumbing `fixture` ones.
     pub fn applies_to_kind(&self, kind: &str) -> bool {
-        let k = format!("_{}_", words(kind));
-        self.applies_to.kinds.iter().any(|r| r == "*" || k.contains(&format!("_{}_", words(r))))
+        self.applies_to.kinds.iter().any(|r| validate_kinds::kind_matches(r, kind))
     }
 
     /// Does an element get this rule: by its kind, its BIM category (the IFC class it is
@@ -138,8 +139,8 @@ impl Rule {
             out.push(format!("{id}: applies_to names nothing"));
         }
         for k in &self.applies_to.kinds {
-            if k != "*" && !validate_kinds::is_model_kind(k) {
-                out.push(format!("{id}: kind `{k}` is not a kind the model holds"));
+            if k != "*" && !validate_kinds::is_rule_kind(k) {
+                out.push(format!("{id}: kind `{k}` is not a kind the model holds or a kind family"));
             }
         }
         let cats = categories();
@@ -209,12 +210,6 @@ pub fn mark_matches(p: &str, m: &str) -> bool {
         }
     }
     true
-}
-
-/// Lower case, words joined by `_`.
-fn words(s: &str) -> String {
-    let t: String = s.trim().chars().take(MAX_TEXT).map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
-    t.split('_').filter(|w| !w.is_empty()).collect::<Vec<_>>().join("_")
 }
 
 fn categories() -> &'static BTreeSet<String> {
@@ -639,7 +634,7 @@ mod tests {
     fn applies_to_kinds_are_kinds_the_model_holds() {
         for r in builtin().unwrap() {
             for k in &r.applies_to.kinds {
-                assert!(k == "*" || validate_kinds::is_model_kind(k), "{}: {k}", r.id);
+                assert!(k == "*" || validate_kinds::is_rule_kind(k), "{}: {k}", r.id);
             }
             for c in &r.applies_to.categories {
                 assert!(validate_kinds::model_categories().contains(c), "{}: {c}", r.id);
@@ -671,6 +666,45 @@ mod tests {
         assert!(gfci.contains("E-RECEPT-TYPE") && gfci.contains("G-HOST"), "{gfci:?}");
         assert!(!got("pipe").contains("M-DUCT-SIZE"));
         assert!(got("duct").contains("M-DUCT-SIZE"));
+    }
+
+    /// The kinds the job builds get their trade's rules through the family table (Q6131).
+    #[test]
+    fn the_jobs_kinds_get_rules_by_family() {
+        let rules = builtin().unwrap();
+        let got = |k: &str| -> BTreeSet<&str> { rules.iter().filter(|r| r.names_kinds() && r.applies_to_kind(k)).map(|r| r.id.as_str()).collect() };
+        let set = |ids: &[&'static str]| -> BTreeSet<&'static str> { ids.iter().copied().collect() };
+        assert_eq!(got("plumbing_fixture"), set(&["P-FIXTURE"]));
+        assert!(!got("light_fixture").contains("P-FIXTURE"), "a light fixture is no plumbing fixture");
+        for k in ["return_grille", "exhaust_grille", "diffuser", "supply_diffuser"] {
+            assert_eq!(got(k), set(&["M-TERMINAL"]), "{k}");
+        }
+        // Fire alarm devices: host, and their own rule (present, positions, heights).
+        assert_eq!(got("fire_alarm_device"), set(&["G-HOST", "E-FA"]));
+        assert_eq!(got("horn_strobe"), set(&["G-HOST", "E-FA"]));
+        assert_eq!(got("smoke_detector"), set(&["G-HOST", "E-FA"]));
+        // Through-wall units: present, in an exterior wall.
+        assert_eq!(got("ptac"), set(&["M-PTAC"]));
+        assert_eq!(got("through_wall_unit"), set(&["M-PTAC"]));
+        // Exhaust fans: present, in a ceiling; and the connection of a fan the tables don't name.
+        assert_eq!(got("exhaust_fan"), set(&["M-EF"]));
+        assert_eq!(got("equipment_connection"), set(&["E-CIRCUIT", "E-EQUIP-CONN"]));
+        // Occupancy sensors: present, host.
+        assert_eq!(got("occupancy_sensor"), set(&["G-HOST", "E-OCC"]));
+        assert_eq!(got("vacancy_sensor"), set(&["G-HOST", "E-OCC"]));
+        // A conduit is hosted by nothing; G-HOST is not its rule.
+        assert!(!got("conduit").contains("G-HOST"));
+        let rule = |id: &str| rules.iter().find(|r| r.id == id).unwrap();
+        for (id, words) in [
+            ("E-FA", &["in the model", "ceiling", "height"][..]),
+            ("M-PTAC", &["exterior wall"][..]),
+            ("M-EF", &["ceiling", "in the model"][..]),
+            ("E-OCC", &["in the model", "wall", "ceiling"][..]),
+        ] {
+            for w in words {
+                assert!(rule(id).check.contains(w) || rule(id).how.iter().any(|h| h.contains(w)), "{id}: {w}");
+            }
+        }
     }
 
     #[test]

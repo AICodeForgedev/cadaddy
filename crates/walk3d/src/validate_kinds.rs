@@ -105,6 +105,143 @@ pub fn is_model_kind(kind: &str) -> bool {
     MODEL_KINDS.iter().any(|(k, _)| k.eq_ignore_ascii_case(kind.trim()))
 }
 
+/// Kind families (Q6131): a rule naming a family applies to every kind in it, so the rules
+/// match the kinds the PDF→BIM job builds (`plumbing_fixture`, `return_grille`,
+/// `fire_alarm_notification`…) without each rule listing them. A member may be a family itself
+/// (`terminal` ⊇ `grille` ⊇ `return_grille`). This is the one table every rule's `applies_to`
+/// matching uses ([`kind_matches`]).
+pub const KIND_FAMILIES: &[(&str, &[&str])] = &[
+    ("terminal", &["diffuser", "grille", "register", "air_terminal"]),
+    ("diffuser", &["supply_diffuser", "linear_diffuser", "slot_diffuser", "ceiling_diffuser"]),
+    ("grille", &["return_grille", "exhaust_grille", "supply_grille", "transfer_grille"]),
+    ("register", &["supply_register", "return_register", "exhaust_register"]),
+    (
+        "fixture",
+        &[
+            "plumbing_fixture",
+            "lavatory",
+            "water_closet",
+            "toilet",
+            "urinal",
+            "sink",
+            "bathtub",
+            "tub",
+            "shower",
+            "mop_sink",
+            "service_sink",
+            "drinking_fountain",
+            "bidet",
+        ],
+    ),
+    ("fire_alarm_device", &["smoke_detector", "heat_detector", "duct_detector", "fire_alarm_notification", "pull_station", "fire_alarm_speaker"]),
+    ("fire_alarm_notification", &["horn_strobe", "horn", "strobe", "strobe_wall", "strobe_ceiling", "speaker_strobe"]),
+    (
+        "receptacle",
+        &[
+            "gfci_receptacle",
+            "ceiling_receptacle",
+            "quad_receptacle",
+            "duplex_receptacle",
+            "usb_receptacle",
+            "weatherproof_receptacle",
+            "ptac_receptacle",
+        ],
+    ),
+    ("data_outlet", &["tv_outlet", "av_outlet", "telephone_outlet", "catv_outlet"]),
+    ("switch", &["3way_switch", "three_way_switch", "4way_switch", "dimmer_switch", "dimmer"]),
+    ("occupancy_sensor", &["vacancy_sensor", "motion_sensor", "wall_occupancy_sensor", "ceiling_occupancy_sensor"]),
+    ("fan", &["exhaust_fan", "inline_fan", "supply_fan"]),
+    ("exhaust_fan", &["ceiling_exhaust_fan", "bath_exhaust_fan", "inline_exhaust_fan"]),
+    ("ptac", &["pthp", "through_wall_unit", "ptac_unit", "ptac_sleeve"]),
+    ("luminaire", &["light_fixture", "wall_luminaire", "downlight", "sconce"]),
+    ("panel", &["panelboard", "load_center"]),
+];
+
+/// Kinds the PDF→BIM job builds that no producer above makes and no family holds (a rule may
+/// name them).
+pub const JOB_KINDS: &[&str] = &["equipment_connection"];
+
+/// How deep families nest, at most (the table is checked to be shallower).
+const MAX_FAMILY_DEPTH: usize = 6;
+/// Longest kind read.
+const MAX_KIND: usize = 200;
+
+/// Lower case, words joined by `_`.
+fn norm(s: &str) -> String {
+    let t: String = s.trim().chars().take(MAX_KIND).map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
+    t.split('_').filter(|w| !w.is_empty()).collect::<Vec<_>>().join("_")
+}
+
+fn in_family_at(kind: &str, family: &str, depth: usize) -> bool {
+    if kind == family {
+        return true;
+    }
+    if depth >= MAX_FAMILY_DEPTH {
+        return false;
+    }
+    KIND_FAMILIES
+        .iter()
+        .filter(|(f, _)| *f == family)
+        .any(|(_, members)| members.iter().any(|m| *m == kind || (*m != family && in_family_at(kind, m, depth + 1))))
+}
+
+/// Is `kind` the kind `family` or in it (through nested families)? Both are compared as words
+/// (`Return Grille` = `return_grille`).
+pub fn in_family(kind: &str, family: &str) -> bool {
+    in_family_at(&norm(kind), &norm(family), 0)
+}
+
+/// Is `kind` one the family table names (a family or a member), or one of [`JOB_KINDS`]?
+pub fn is_family_kind(kind: &str) -> bool {
+    let k = norm(kind);
+    JOB_KINDS.contains(&k.as_str()) || KIND_FAMILIES.iter().any(|(f, members)| *f == k || members.contains(&k.as_str()))
+}
+
+/// A kind a rule's `applies_to` may name: one the model holds or one of the family table.
+pub fn is_rule_kind(kind: &str) -> bool {
+    is_model_kind(kind) || is_family_kind(kind)
+}
+
+/// Every kind that is known: the model's and the family table's.
+fn known_kinds() -> impl Iterator<Item = &'static str> {
+    MODEL_KINDS
+        .iter()
+        .map(|(k, _)| *k)
+        .chain(JOB_KINDS.iter().copied())
+        .chain(KIND_FAMILIES.iter().flat_map(|(f, m)| std::iter::once(*f).chain(m.iter().copied())))
+}
+
+/// The known kind an element's kind is: itself when known, else the longest known kind its
+/// words hold in a row (`ceiling_mounted_smoke_detector` → `smoke_detector`); none when its
+/// words hold no known kind.
+pub fn known_kind(kind: &str) -> Option<String> {
+    let k = norm(kind);
+    if k.is_empty() {
+        return None;
+    }
+    if is_rule_kind(&k) {
+        return Some(k);
+    }
+    let w = format!("_{k}_");
+    known_kinds().filter(|x| w.contains(&format!("_{x}_"))).max_by_key(|x| (x.len(), std::cmp::Reverse(*x))).map(str::to_string)
+}
+
+/// Does an element of `kind` get a rule whose `applies_to` names `rule_kind` (`*`: every
+/// element)? Only by the family table: a known kind gets the rules of its own kind and of every
+/// family it is in (`plumbing_fixture` gets `fixture`'s; `light_fixture` does not, it is no
+/// plumbing fixture); a kind the table does not know is read as the known kind its words hold
+/// ([`known_kind`]: `gfci duplex receptacle` gets `receptacle`'s).
+pub fn kind_matches(rule_kind: &str, kind: &str) -> bool {
+    let r = norm(rule_kind);
+    if rule_kind.trim() == "*" {
+        return true;
+    }
+    if r.is_empty() {
+        return false;
+    }
+    known_kind(kind).is_some_and(|k| in_family_at(&k, &r, 0))
+}
+
 /// A made-up entity tagged the way the model build and the MEP generator tag theirs.
 fn tagged(part: &str, extras: &[String]) -> Entity {
     let mut x = vec![RawTag { code: 1001, value: "CADADDY_WALLGEN".into() }];
@@ -195,5 +332,52 @@ mod tests {
         assert_eq!(category_of("exhaust_fan").as_deref(), Some("IfcFan"));
         assert_eq!(category_of("panel").as_deref(), Some("IfcElectricDistributionBoard"));
         assert_eq!(category_of("smoke_detector"), None);
+    }
+
+    #[test]
+    fn families_hold_the_kinds_the_job_builds() {
+        // The spec's pairs: fixture ⊇ plumbing_fixture; terminal ⊇ diffuser, grille, return_grille, exhaust_grille.
+        assert!(kind_matches("fixture", "plumbing_fixture"));
+        for k in ["diffuser", "grille", "return_grille", "exhaust_grille", "Supply Diffuser"] {
+            assert!(kind_matches("terminal", k), "{k}");
+        }
+        assert!(kind_matches("grille", "return_grille") && !kind_matches("diffuser", "return_grille"));
+        assert!(kind_matches("fire_alarm_device", "horn_strobe"), "through fire_alarm_notification");
+        assert!(kind_matches("fire_alarm_device", "smoke_detector") && kind_matches("fire_alarm_device", "fire_alarm_device"));
+        assert!(kind_matches("fan", "exhaust_fan") && kind_matches("fan", "ceiling_exhaust_fan"));
+        assert!(kind_matches("receptacle", "gfci_receptacle") && kind_matches("receptacle", "GFCI Receptacle"));
+        assert!(kind_matches("ptac", "through_wall_unit") && kind_matches("occupancy_sensor", "vacancy_sensor"));
+        // A known kind is no member of a family it only shares a word with.
+        assert!(!kind_matches("fixture", "light_fixture"), "a light fixture is no plumbing fixture");
+        assert!(!kind_matches("receptacle", "data_outlet") && !kind_matches("outlet", "data_outlet"));
+        assert!(!kind_matches("duct", "pipe") && !kind_matches("switch", "disconnect") && !kind_matches("fire_alarm_device", "conduit"));
+        // An unknown kind is read as the known kind its words hold.
+        assert_eq!(known_kind("ceiling mounted smoke detector").as_deref(), Some("smoke_detector"));
+        assert!(kind_matches("receptacle", "duplex_receptacle_20a") && kind_matches("fire_alarm_device", "addressable_horn_strobe"));
+        assert!(!kind_matches("receptacle", "unicorn") && known_kind("").is_none());
+        assert!(kind_matches("*", "unicorn") && !kind_matches("", "receptacle"));
+    }
+
+    #[test]
+    fn the_family_table_is_well_formed() {
+        let mut seen = BTreeSet::new();
+        for (f, members) in KIND_FAMILIES {
+            assert!(seen.insert(*f), "family {f} twice");
+            assert_eq!(norm(f), *f);
+            assert!(!members.is_empty(), "{f}");
+            for m in *members {
+                assert_eq!(norm(m), *m, "{m}");
+                assert_ne!(m, f, "{f} holds itself");
+                // No cycles: a member never holds its family.
+                assert!(!in_family(f, m), "{f} ⊂ {m} ⊂ {f}");
+            }
+        }
+        // Every family resolves within the depth cap.
+        for (f, _) in KIND_FAMILIES {
+            for k in known_kinds() {
+                let _ = in_family(k, f);
+            }
+        }
+        assert!(is_rule_kind("terminal") && is_rule_kind("receptacle") && !is_rule_kind("unicorn"));
     }
 }

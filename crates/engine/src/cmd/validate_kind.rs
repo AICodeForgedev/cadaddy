@@ -258,33 +258,54 @@ impl Kinds {
     }
 
     /// What an element of `kind` with `mark` (and its object `e`, when there is one) is.
+    ///
+    /// A connection to equipment (`equipment_connection`) says only that it connects something:
+    /// it is what the job's tables or the project say its mark is (an `EF` row naming an
+    /// exhaust fan makes it an exhaust fan), else it stays a connection.
     pub fn resolve(&self, kind: &str, mark: Option<&str>, e: Option<&Entity>) -> Resolved {
         let done = |kind: String, from: &'static str| Resolved { category: category(e, &kind), kind, from };
         if !is_generic(kind) {
+            if is_connection(kind)
+                && let Some((k, from)) = self.by_tables(mark, e).filter(|(k, _)| !is_connection(k))
+            {
+                return done(k, from);
+            }
             return done(kind.to_string(), "element");
         }
-        let mark = mark.and_then(mark_key);
-        let by = |m: &HashMap<String, String>| mark.as_ref().and_then(|k| m.get(k)).cloned();
         if let Some(k) = e.and_then(stored) {
             return done(k, "stored");
         }
+        match self.by_tables(mark, e) {
+            Some((k, from)) => done(k, from),
+            None => done(kind.to_string(), "unresolved"),
+        }
+    }
+
+    /// What the job's tables and the project say an element with `mark` is: its BIM type, the
+    /// spec's device tag, a legend row, the symbols and schedules, `validate.kind.<mark>`.
+    fn by_tables(&self, mark: Option<&str>, e: Option<&Entity>) -> Option<(String, &'static str)> {
+        let mark = mark.and_then(mark_key);
+        let by = |m: &HashMap<String, String>| mark.as_ref().and_then(|k| m.get(k)).cloned();
         if let Some(k) = by(&self.types) {
-            return done(k, "bim_type");
+            return Some((k, "bim_type"));
         }
         if let Some(k) = e.and_then(|e| super::bimlook::made_tag(e, "devid")).and_then(|id| self.by_devid.get(id)).cloned() {
-            return done(k, "symbol_table");
+            return Some((k, "symbol_table"));
         }
         if let Some(k) = by(&self.legend) {
-            return done(k, "legend");
+            return Some((k, "legend"));
         }
         if let Some(k) = by(&self.by_mark) {
-            return done(k, "symbol_table");
+            return Some((k, "symbol_table"));
         }
-        if let Some(k) = by(&self.project) {
-            return done(k, "project_rule");
-        }
-        done(kind.to_string(), "unresolved")
+        by(&self.project).map(|k| (k, "project_rule"))
     }
+}
+
+/// Is `kind` a connection to equipment (`equipment_connection`): what it is, its mark says?
+fn is_connection(kind: &str) -> bool {
+    let w = words(kind);
+    w == "connection" || w.ends_with("_connection")
 }
 
 /// Is `t` shaped like a mark in a legend's first column: one short word of capitals and digits
@@ -492,5 +513,10 @@ mod tests {
         assert!(a.unresolved() && a.kind == "device", "{a:?}");
         let own = k.resolve("switch", Some("REC"), None);
         assert_eq!((own.kind.as_str(), own.from), ("switch", "element"), "a named kind stays");
+        // An equipment connection is what its mark is, when the job or the project says.
+        let conn = k.resolve("equipment_connection", Some("EF"), None);
+        assert_eq!((conn.kind.as_str(), conn.from), ("exhaust_fan", "project_rule"), "{conn:?}");
+        let other = k.resolve("equipment_connection", Some("WH-9"), None);
+        assert_eq!((other.kind.as_str(), other.from), ("equipment_connection", "element"), "an unnamed mark keeps the connection");
     }
 }
