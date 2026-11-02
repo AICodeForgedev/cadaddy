@@ -84,7 +84,7 @@ fn outline_level(line: &str) -> Option<(usize, &str)> {
 /// `125 V, 20 A` (or `120/277 V, 20 A`) in a text.
 fn rating_in(t: &str) -> Option<String> {
     let u = t.to_ascii_uppercase();
-    let words: Vec<&str> = u.split(|c: char| c == ',' || c == ';' || c == ':').map(str::trim).collect();
+    let words: Vec<&str> = u.split([',', ';', ':']).map(str::trim).collect();
     let volts = words.iter().position(|w| w.ends_with(" V") && w.trim_end_matches(" V").chars().all(|c| c.is_ascii_digit() || c == '/'))?;
     let amps = words.get(volts + 1).filter(|w| w.ends_with(" A") && w.trim_end_matches(" A").chars().all(|c| c.is_ascii_digit()))?;
     Some(format!("{}, {}", words.get(volts)?, amps))
@@ -554,7 +554,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             "color": req.and_then(|r| r.color.clone()), "configuration": config.clone().or_else(|| req.and_then(|r| r.config.clone())),
             "rating": req.and_then(|r| r.rating.clone()), "features": req.map(|r| r.features.clone()).unwrap_or_default(),
         });
-        let src = req.map_or_else(|| Source::computed(), spec_src);
+        let src = req.map_or_else(Source::computed, spec_src);
         let mut set = |key: &str, value: Value, source: Source| {
             let keep = store.get(key).is_some_and(|old| old.source.kind == SourceKind::User);
             if !keep && !value.is_null() {

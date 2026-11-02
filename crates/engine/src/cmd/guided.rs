@@ -5820,7 +5820,26 @@ fn rigid_room_fit(
     }
     let stride = (view_pts.len() / MAX_FIT_SAMPLES).max(1);
     let few: Vec<cadaddy_geom::Vec2> = view_pts.iter().step_by(stride).copied().collect();
-    let mut best: Option<(RoomFit, usize)> = None;
+    // Each turn's likeliest offsets (the most sample/line pairs agreeing), then the turn and
+    // offset whose lines match both ways: the view's samples on the floor's lines and the room's
+    // own lines explained by the view, each counted once. Pair counts alone can't tell a turn from
+    // its mirror when the walls are alike and only the bath and the door differ.
+    let cell = |p: cadaddy_geom::Vec2| ((p.x / tol).floor() as i64, (p.y / tol).floor() as i64);
+    let grid_of = |pts: &[cadaddy_geom::Vec2]| {
+        let mut g: std::collections::HashMap<(i64, i64), Vec<cadaddy_geom::Vec2>> = std::collections::HashMap::new();
+        for p in pts {
+            g.entry(cell(*p)).or_default().push(*p);
+        }
+        g
+    };
+    let hit = |g: &std::collections::HashMap<(i64, i64), Vec<cadaddy_geom::Vec2>>, p: cadaddy_geom::Vec2| {
+        let (cx, cy) = cell(p);
+        (-1..=1).any(|dx| (-1..=1).any(|dy| g.get(&(cx + dx, cy + dy)).is_some_and(|v| v.iter().any(|q| q.dist(p) <= tol))))
+    };
+    let floor_grid = grid_of(&near);
+    let inside: Vec<cadaddy_geom::Vec2> =
+        near.iter().filter(|f| f.x >= room[0] && f.x <= room[2] && f.y >= room[1] && f.y <= room[3]).copied().take(4 * MAX_FIT_SAMPLES).collect();
+    let mut best: Option<(RoomFit, usize, usize)> = None;
     for k in 0..8u8 {
         let turned: Vec<cadaddy_geom::Vec2> = few.iter().map(|p| turn_vec(*p - from, k)).collect();
         let mut votes: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
@@ -5833,16 +5852,26 @@ fn rigid_room_fit(
                 *votes.entry(((to.x / tol).round() as i64, (to.y / tol).round() as i64)).or_default() += 1;
             }
         }
-        // Ties go to the smaller offset key (a hash map's order differs run to run).
-        if let Some((o, n)) = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
-            && best.as_ref().is_none_or(|b| n > b.1)
-        {
+        // Its best few offsets (ties to the smaller key: a hash map's order differs run to run).
+        let mut ranked: Vec<((i64, i64), usize)> = votes.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        for (o, _) in ranked.into_iter().take(FIT_OFFSETS_TRIED) {
             let to = cadaddy_geom::Vec2::new(o.0 as f64 * tol, o.1 as f64 * tol);
-            best = Some((RoomFit { k, from, to, rigid: true }, n));
+            let placed: Vec<cadaddy_geom::Vec2> = turned.iter().map(|t| to + *t).collect();
+            let on_lines = placed.iter().filter(|p| hit(&floor_grid, **p)).count();
+            let placed_grid = grid_of(&placed);
+            let explained = inside.iter().filter(|f| hit(&placed_grid, **f)).count();
+            let score = on_lines + explained * few.len() / inside.len().max(1);
+            if best.as_ref().is_none_or(|b| score > b.2) {
+                best = Some((RoomFit { k, from, to, rigid: true }, on_lines, score));
+            }
         }
     }
-    best.filter(|(_, n)| *n * 100 >= few.len() * MIN_FIT_SHARE_PCT)
+    best.map(|(f, on, _)| (f, on)).filter(|(_, n)| *n * 100 >= few.len() * MIN_FIT_SHARE_PCT)
 }
+
+/// The offsets each turn of a view is tried at (its most agreed-on), for the two-way match.
+const FIT_OFFSETS_TRIED: usize = 3;
 
 /// How far round a room its floor's linework is looked at to lay a typical view in it, feet.
 const ROOM_FIT_MARGIN_FT: f64 = 3.0;
@@ -11489,7 +11518,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("job.start", "Start Guided Job", cmd_start)
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: bool (default true: a job of the same prints and goal cut off before it finished goes on from its checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] (specification section PDFs, or folders of them; default a *Spec* folder beside the submittals: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
@@ -12471,6 +12500,7 @@ mod tests {
             let p = |x: f64, y: f64| match how {
                 1 => [o[0] + 144.0 - x, o[1] + 288.0 - y],
                 2 => [o[0] + 144.0 - x, o[1] + y],
+                3 => [o[0] + x, o[1] + 288.0 - y],
                 _ => [o[0] + x, o[1] + y],
             };
             let mut segs =
@@ -12504,6 +12534,7 @@ mod tests {
         unit(&mut s, [10_000.0, 0.0], 0);
         unit(&mut s, [10_400.0, 0.0], 1);
         unit(&mut s, [10_800.0, 0.0], 2);
+        unit(&mut s, [11_600.0, 0.0], 3);
         job.sheet_regions = vec![SheetRegion {
             number: "A-8".into(),
             level: "T".into(),
@@ -12520,7 +12551,7 @@ mod tests {
         let room = |n: &str, x: f64, name: &str| json!({"name": name, "number": n, "level": "2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
         if let Some(st) = job.stage_mut(StageName::Rooms) {
             st.result = Some(
-                json!({"rooms": [room("201", 10_000.0, "DOUBLE QUEEN"), room("202", 10_400.0, "DOUBLE QUEEN"), room("203", 10_800.0, "DOUBLE QUEEN"), room("200", 11_200.0, "CORRIDOR")]}),
+                json!({"rooms": [room("201", 10_000.0, "DOUBLE QUEEN"), room("202", 10_400.0, "DOUBLE QUEEN"), room("203", 10_800.0, "DOUBLE QUEEN"), room("200", 11_200.0, "CORRIDOR"), room("204", 11_600.0, "DOUBLE QUEEN")]}),
             );
         }
         let (types, instances) = job_unit_types(s.doc().unwrap(), &job);
@@ -12531,6 +12562,9 @@ mod tests {
         assert_eq!((of("201")["hand"].clone(), of("201")["fit"]["rotation_deg"].clone()), (json!("normal"), json!(0.0)), "{instances:?}");
         assert_eq!((of("202")["hand"].clone(), of("202")["fit"]["rotation_deg"].clone()), (json!("normal"), json!(180.0)), "{instances:?}");
         assert_eq!(of("203")["hand"], json!("mirrored"), "{instances:?}");
+        // Flipped top to bottom (the hotel's 101 and 427): mirrored and turned half round, not
+        // only turned.
+        assert_eq!((of("204")["hand"].clone(), of("204")["fit"]["rotation_deg"].clone()), (json!("mirrored"), json!(180.0)), "{instances:?}");
         assert!(instances.iter().all(|i| i["type"] == types[0]["id"]), "no corridor unit: {instances:?}");
     }
 
