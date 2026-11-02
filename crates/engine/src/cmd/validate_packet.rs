@@ -1657,7 +1657,19 @@ fn in_area(
     if total_elements > MAX_OBJECTS || total_runs > MAX_OBJECTS {
         objects["left_out"] = json!(format!("listed at most {MAX_OBJECTS} elements and runs each"));
     }
-    InArea { objects, kinds, categories, marks, wall_types, counts, nearby: nearby_handles, cited, products, lighting: false, cut_sheets: BTreeSet::new() }
+    InArea {
+        objects,
+        kinds,
+        categories,
+        marks,
+        wall_types,
+        counts,
+        nearby: nearby_handles,
+        cited,
+        products,
+        lighting: false,
+        cut_sheets: BTreeSet::new(),
+    }
 }
 
 // ---------------------------------------------------------------- rules and prompt
