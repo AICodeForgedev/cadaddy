@@ -586,3 +586,235 @@ fn bad_packet_calls_are_refused_and_never_panic() {
     assert!(r["note"].as_str().is_some_and(|n| n.contains("model.build")), "{r}");
     assert!(s.execute("validate.packet", &json!({"area": "L1/101", "out_dir": o})).is_err());
 }
+
+// ---------------------------------------------------------------- the sheets the elements cite (Q6134)
+
+/// More sheets, side by side past the enlarged plan: a fire alarm sheet and a low-voltage sheet
+/// no one placed on the plan, a lighting plan and a power plan titled with the level (no level
+/// tag, not placed), a stair enlargement titled with the level, and the power plan listed twice.
+const E102: f64 = 20000.0;
+const E103: f64 = 24000.0;
+const E104: f64 = 28000.0;
+const E105: f64 = 32000.0;
+const A402: f64 = 36000.0;
+
+/// Where the fire alarm sheet shows the receptacle's symbol, and where the lighting plan tags
+/// the office.
+fn on_e102() -> [f64; 2] {
+    [E102 + 1500.0, 1200.0]
+}
+fn office_tag_on_e104() -> [f64; 2] {
+    [E104 + 1000.0, 1000.0]
+}
+
+fn more_sheets(s: Session) -> Session {
+    let mut s = s;
+    layer(&mut s, "G-MORE");
+    symbol(&mut s, on_e102());
+    text(&mut s, [E102 + 200.0, 200.0], "FIRE ALARM DEVICES");
+    line(&mut s, E103, [0.0, 0.0], [100.0, 12.0]);
+    text(&mut s, office_tag_on_e104(), "OFFICE");
+    text(&mut s, [office_tag_on_e104()[0], office_tag_on_e104()[1] - 20.0], "101");
+    line(&mut s, E105, [0.0, 0.0], [100.0, 0.0]);
+    line(&mut s, A402 - OX + 200.0, [0.0, 0.0], [10.0, 10.0]);
+    let mut sp = spec();
+    let sheets = sp["sheets"].as_array_mut().unwrap();
+    let dup = sheets.iter().find(|x| x["number"] == "E-101").unwrap().clone();
+    sheets.push(dup);
+    sheets.push(sheet("E-102", "FIRE ALARM DEVICES", "E", None, E102, 0.0, None));
+    sheets.push(sheet("E-103", "LOW VOLTAGE DEVICES", "E", None, E103, 0.0, None));
+    sheets.push(sheet("E-104", "LIGHTING PLAN - LEVEL 1", "E", None, E104, 0.0, None));
+    sheets.push(sheet("E-105", "POWER PLAN - FIRST FLOOR", "E", None, E105, 0.0, None));
+    // Listed twice (two links of one view): shown once, even in tiles.
+    sheets.push(sheet("E-105", "POWER PLAN - FIRST FLOOR", "E", None, E105, 0.0, None));
+    sheets.push(json!({"number": "A-402", "title": "STAIR DETAILS", "discipline": "A", "source": "model", "rect": [A402, 0.0, A402 + SW, SH],
+        "view": {"title": "ENLARGED PLAN - STAIR - LEVEL 1", "rect": [A402 + 200.0, 200.0, A402 + 700.0, 600.0]}}));
+    s.execute("bspec.set", &json!({"spec": sp, "replace": true})).unwrap();
+    s
+}
+
+/// Records on entities (by handle) as a job would leave them: `key` = value from `source`.
+fn record(s: Session, sets: &[(String, &str, &str, cadaddy_engine::doc::props::Source)]) -> Session {
+    use cadaddy_engine::doc::props::{self, Prop};
+    let mut d = (*s.doc().unwrap()).clone();
+    for (h, key, value, src) in sets {
+        let h = cadaddy_engine::doc::Handle::parse_hex(h).unwrap();
+        d.modify_entity(h, |e| {
+            let mut store = props::read(&e.common.xdata);
+            store.set(key, Prop::new(value.to_string(), src.clone()));
+            e.common.xdata = props::write(&e.common.xdata, &store).into();
+        })
+        .unwrap();
+    }
+    let mut s2 = Session::empty();
+    s2.open_drawing(d, "Sample Job", None);
+    s2
+}
+
+fn print_source(doc: &str, at: [f64; 2]) -> cadaddy_engine::doc::props::Source {
+    use cadaddy_engine::doc::props::{Source, SourceKind};
+    Source { kind: SourceKind::Print, doc: Some(doc.into()), at: Some(at) }
+}
+
+fn rect_of(c: &Value) -> Vec<f64> {
+    c["sheet_rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()
+}
+
+#[test]
+fn every_sheet_an_element_was_read_from_and_every_sheet_of_the_level_is_offered() {
+    let j = job();
+    let s = more_sheets(j.s);
+    // The receptacle was read from the fire alarm sheet (at its symbol there); the panel from the
+    // low-voltage sheet, at a point of the plan (not on that sheet), as a job may keep it.
+    let mut s = record(
+        s,
+        &[
+            (j.recep.clone(), "symbol", "receptacle", print_source("E-102/1", on_e102())),
+            (j.panel.clone(), "symbol", "panel", print_source("E-103/1", [OX + 6.0, OY + 72.0])),
+        ],
+    );
+    let id = office(&mut s);
+    let out = dir("cited");
+    s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy(), "max_images": 200})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    let prints = m["prints"].as_array().unwrap();
+    let of = |sheet: &str| prints.iter().filter(|c| c["sheet"] == sheet).collect::<Vec<_>>();
+    let left = m["left_out"].as_array().unwrap();
+    let says = |what: &str| left.iter().find(|x| x["what"].as_str().is_some_and(|w| w.contains(what)));
+
+    // An element sourced from an unregistered sheet: cropped round its source point, and the
+    // symbol there is in the picture.
+    let fa = of("E-102");
+    assert_eq!(fa.len(), 1, "{fa:?}");
+    assert_eq!(fa[0]["placed_by"], "source_point", "{}", fa[0]);
+    assert_eq!(fa[0]["cited"], true);
+    assert_eq!(fa[0]["unregistered"], true);
+    assert!(fa[0]["shows"].as_str().unwrap().contains("1 element(s) here were read from it"), "{}", fa[0]);
+    let img = image::open(out.join(fa[0]["file"].as_str().unwrap())).unwrap().to_rgba8();
+    let (x, y) = pixel_of(fa[0], on_e102());
+    assert!(darkest(&img, x, y, 2) < 300, "the symbol the receptacle was read from at ({x:.1}, {y:.1})");
+    // Its source point is not on the sheet and nothing on it names the room: the whole sheet, in
+    // at most 2 × 2 tiles, marked unregistered.
+    let lv = of("E-103");
+    assert!(!lv.is_empty() && lv.len() <= 4, "{lv:?}");
+    for c in &lv {
+        assert_eq!(c["placed_by"], "unregistered", "{c}");
+        assert_eq!(c["cited"], true);
+        assert!(c["tile"].is_array(), "{c}");
+    }
+    // A sheet titled with the level (no level tag, not placed): round the room's tag on it.
+    let lt = of("E-104");
+    assert_eq!(lt.len(), 1, "{lt:?}");
+    assert_eq!(lt[0]["placed_by"], "room_tag", "{}", lt[0]);
+    assert!(lt[0]["shows"].as_str().unwrap().contains("101"), "{}", lt[0]);
+    assert!(lt[0].get("cited").is_none());
+    let r = rect_of(lt[0]);
+    let t = office_tag_on_e104();
+    assert!(t[0] > r[0] && t[0] < r[2] && t[1] > r[1] && t[1] < r[3], "the tag in the crop: {r:?}");
+    // A level-titled sheet that names nothing of the room is still offered whole (it is the
+    // level's plan); a partial view of the level that names neither is left out, saying why.
+    let pw = of("E-105");
+    assert!(!pw.is_empty() && pw.len() <= 4 && pw.iter().all(|c| c["placed_by"] == "unregistered"), "{pw:?}");
+    assert!(of("A-402").is_empty());
+    let stair = says("A-402").unwrap_or_else(|| panic!("A-402 in {left:?}"));
+    assert!(stair["why"].as_str().unwrap().contains("partial view"), "{stair}");
+    // None of the level's sheets is left out as merely unplaced.
+    assert!(!left.iter().any(|x| x["why"].as_str().is_some_and(|w| w.contains("not placed on its plan yet"))), "{left:?}");
+    // No two pictures of one view: the power plan listed twice gives one crop.
+    assert_eq!(of("E-101").iter().filter(|c| c["kind"] == "plan").count(), 1);
+    for sh in ["E-101", "E-105"] {
+        assert!(left.iter().any(|x| x["why"].as_str().is_some_and(|w| w.contains(&format!("the same view of sheet {sh}")))), "{sh}: {left:?}");
+    }
+    // No sliver: every crop that is not a tile is at least 320 px a side.
+    for c in prints.iter().filter(|c| c["tile"].is_null()) {
+        let px = c["px"].as_array().unwrap();
+        assert!(px.iter().all(|v| v.as_u64().unwrap() >= 320), "{c}");
+    }
+    // The prompt says which pictures are not placed on the plan.
+    let pr = std::fs::read_to_string(out.join("prompt.md")).unwrap();
+    assert!(pr.contains("NOT placed on the plan"), "{pr}");
+    // The model's wall elevations: one per side direction, each from inside the office.
+    let els: Vec<&Value> = m["model"].as_array().unwrap().iter().filter(|x| x["kind"] == "elevation").collect();
+    assert_eq!(els.len(), 4, "{els:?}");
+    let sides: std::collections::BTreeSet<&str> = els.iter().filter_map(|e| e["what"].as_str()?.split_whitespace().nth(1)).collect();
+    assert_eq!(sides.len(), 4, "{els:?}");
+    assert!(els.iter().all(|e| e["what"].as_str().unwrap().contains("seen from inside it")), "{els:?}");
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn a_tight_cap_cuts_the_unread_whole_sheets_first_and_says_so() {
+    let j = job();
+    let mut s = more_sheets(j.s);
+    let id = office(&mut s);
+    let all = dir("capall");
+    s.execute("validate.packet", &json!({"area": id, "out_dir": all.to_string_lossy(), "max_images": 200})).unwrap();
+    let full = read_json(&all.join("manifest.json"));
+    let n = full["counts"]["pictures"].as_u64().unwrap() as usize;
+    let whole: Vec<String> = full["prints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["placed_by"] == "unregistered" && c.get("cited").is_none())
+        .map(|c| c["file"].as_str().unwrap().to_string())
+        .collect();
+    assert!(!whole.is_empty(), "{full:#}");
+    // Room for all but those: they go, the model's pictures stay, and each is listed.
+    let out = dir("captight");
+    s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy(), "max_images": n - whole.len()})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    let files: Vec<&str> = m["prints"].as_array().unwrap().iter().chain(m["model"].as_array().unwrap()).filter_map(|c| c["file"].as_str()).collect();
+    assert!(whole.iter().all(|w| !files.contains(&w.as_str())), "{files:?}");
+    assert!(files.iter().any(|f| f.starts_with("model/elevation_")), "{files:?}");
+    let left = m["left_out"].as_array().unwrap();
+    for w in &whole {
+        assert!(left.iter().any(|x| x["what"] == json!(w) && x["why"].as_str().unwrap().contains("max_images")), "{w} in {left:?}");
+    }
+    for d in [all, out] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[test]
+fn the_packet_offers_the_submittals_of_its_marks_and_names_one_the_job_did_not_list() {
+    use cadaddy_engine::doc::props::{Source, SourceKind};
+    let j = job();
+    // The receptacle carries its submittal page; the fan carries none, but the job applied a fan
+    // submittal to another element of its type (mark EF-1) elsewhere.
+    let mut s = j.s;
+    layer(&mut s, "G-OTHER");
+    line(&mut s, A121, [60.0, 2.0], [61.0, 2.0]);
+    let other = {
+        let d = s.doc().unwrap();
+        d.model.iter().filter(|e| e.common.layer == "G-OTHER").last().map(|e| e.handle.hex()).unwrap()
+    };
+    let sub = |doc: &str| Source::from_doc(SourceKind::Submittal, doc);
+    let mut s = record(
+        s,
+        &[
+            (j.recep.clone(), "submittal", "Sample Devices p.2", sub("Sample Devices p.2")),
+            (other.clone(), "type_mark", "EF-1", Source::user()),
+            (other, "submittal", "Sample Fans p.4", sub("Sample Fans p.4")),
+        ],
+    );
+    let id = office(&mut s);
+    let out = dir("subs");
+    s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy()})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    let un = m["submittals_unlisted"].as_array().unwrap();
+    let by = |name: &str| un.iter().find(|x| x["submittal"] == name).unwrap_or_else(|| panic!("{name} in {un:?}"));
+    let dev = by("Sample Devices");
+    assert_eq!(dev["pages"], json!([2]));
+    assert!(dev["for"].as_array().unwrap().iter().any(|f| f == "mark DUPLEX"), "{dev}");
+    let fans = by("Sample Fans");
+    assert_eq!(fans["pages"], json!([4]));
+    assert_eq!(fans["applied_to"], 1);
+    assert_eq!(fans["marks"], json!(["EF-1"]));
+    assert!(fans["for"].as_array().unwrap().iter().any(|f| f.as_str().unwrap().starts_with("mark EF-1 (the job's submittal for its type")), "{fans}");
+    // left_out says which, and that the job lists none.
+    let left = m["left_out"].as_array().unwrap();
+    let fl = left.iter().find(|x| x["what"] == "submittal Sample Fans").unwrap_or_else(|| panic!("{left:?}"));
+    let why = fl["why"].as_str().unwrap();
+    assert!(why.contains("applied it to 1 element(s) (marks EF-1)") && why.contains("the job lists none"), "{why}");
+    let _ = std::fs::remove_dir_all(&out);
+}

@@ -11,16 +11,23 @@
 //!   - `prints/`: a PNG crop of every sheet that shows the area: each trade's plan, enlarged
 //!     plans, the RCP (the area's box, plus a margin, carried onto the sheet by the sheet's
 //!     registration on its level's plan, else by the view placement the job kept, else the plan
-//!     itself), interior elevations naming the room, the partition legend and the schedule or
+//!     itself), every sheet an element of the area was read from (Q6134: placed when it can
+//!     be, else round the element's source point on it, else round the room's tag, else the
+//!     whole view in tiles marked `unregistered`), the level's sheets by their level tag or a
+//!     title naming the level (offered the same way; a partial view that names neither the
+//!     room's number nor its name is left out, saying so), interior elevations naming the room, the partition legend and the schedule or
 //!     legend rows of the type marks present, general-notes blocks, and the submittal pages of
-//!     the products present. A crop is at least 150 dpi of the printed sheet (the paper size is
+//!     the products present and of the job's submittals for the area's marks and kinds (one the
+//!     job applied but does not list is named in `submittals_unlisted`). No two crops are the
+//!     same view, none is narrower than 320 px. A crop is at least 150 dpi of the printed sheet (the paper size is
 //!     taken from the sheet's shape, ARCH/ANSI/ISO), in tiles when large; the manifest gives
 //!     each crop's sheet rectangle and pixel scale, so a sheet point is at
 //!     `((x − x0)·s, (y1 − y)·s)` pixels.
 //!   - `model/`: the model over each plan crop (the print in grey, the model by trade colour:
 //!     architecture blue, electrical red, mechanical green, plumbing cyan, fire magenta), a
 //!     clean plan of the model alone, and when the model is built a 3D view of the area and an
-//!     elevation of each of its longest walls (`model.render` with a camera).
+//!     elevation of each side of it, the camera inside the area (one per direction, the longest
+//!     sides first; `model.render` with a camera).
 //!   - `objects.json`: every model element in the area (handle, kind, trade, mark, tag, name,
 //!     level, room, position, height above the floor, host wall and face, mounting, size,
 //!     system, circuit, switch leg, maker, catalog number, submittal, source sheet and point, and
@@ -87,6 +94,22 @@ const MAX_AREA_LIMIT: usize = 500;
 /// Row and note crops of one sheet, at most.
 const MAX_TEXT_CROPS_PER_SHEET: usize = 6;
 const MAX_ELEVATIONS: usize = 6;
+/// The sheets an area's elements cite, and the source points kept per sheet.
+const MAX_CITED_SHEETS: usize = 200;
+const MAX_CITED_POINTS: usize = 500;
+/// The shortest side of a print crop, pixels (a narrower view is widened round its centre).
+const MIN_CROP_PX: f64 = 320.0;
+/// A view of a sheet smaller than this share of it is a partial view (a stair, an elevator, one
+/// unit), not the level's plan (a sheet of two or four floors' plans gives each a fifth or more).
+const PARTIAL_VIEW: f64 = 0.10;
+/// Two crops of one sheet sharing this much of their union are the same view.
+const SAME_VIEW: f64 = 0.9;
+/// Tiles a side of a whole view of a sheet that isn't placed on the plan.
+const WHOLE_TILES_SIDE: u32 = 2;
+/// The submittal pages offered for a kind no element of the area carries a submittal for.
+const MAX_KIND_PAGES: usize = 3;
+/// The submittal pages looked at across the building.
+const MAX_SUBMITTAL_PAGES: usize = 2_000;
 /// Enlarged views of a room's unit type, and riser diagram crops, in one packet at most.
 const MAX_UNIT_VIEWS: usize = 6;
 /// The views a unit type lists (its plans, RCP, trades' plans, elevations) taken at most.
@@ -113,7 +136,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{level?: name, kind?: room|zone|equipment_room|corridor, area?: [x0,y0,x1,y1] (building feet: a custom window, listed as a zone; needs `level` when the building has several), cursor?: n, limit?: n (100, at most 500)} → {total, cursor, areas: [{id, kind, level, number?, name?, room?, stretch?: [i, n], outline: [[x,y]] (feet), box: [x0,y0,x1,y1] (feet)}], next?, levels}: the areas to check, one room, corridor stretch (≤ 40 ft) or equipment room each; ids are stable")
             .noundo(),
         CommandSpec::new(CMD_PACKET, "Validation Evidence Packet", run_packet)
-            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40)} → the manifest: {packet, area, prints: [{file, sheet, title, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by}], model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals, objects, rules, prompt, counts, left_out: [{what, why}]}: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
+            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40)} → the manifest: {packet, area, prints: [{file, sheet, title, view?, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by: reference|registration|view_placement|same_sheet|unit_type|text|source_point|room_tag|unregistered, unregistered?: true (not placed on the plan: no overlay), cited?: true (an element here was read from it)}], model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals: [{file, submittal, page, for}], submittals_unlisted: [{submittal, pages, for, applied_to, marks}] (applied by the job, its file not among the job's submittals), objects, rules, prompt, counts, left_out: [{what, why}]}; every sheet an element of the area was read from is in it (placed, else round the source points, else round the room's tag, else the whole view in tiles), and every sheet of the level (by its tag or its title) unless it doesn't show the area (said in left_out); one wall elevation per side direction, from inside the area: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
             .noundo()
             .files(),
     ]
@@ -607,6 +630,12 @@ struct Crop {
     shows: Option<String>,
     /// How the view is turned and mirrored against the room on the plan.
     orientation: Option<Value>,
+    /// The sheet is not placed on the level's plan: the model can't be drawn over it.
+    unregistered: bool,
+    /// An element of the area was read from this sheet.
+    cited: bool,
+    /// The whole view on the sheet (its tiles share it).
+    whole: [f64; 4],
 }
 
 impl Crop {
@@ -637,9 +666,105 @@ impl Crop {
             if let Some(or) = &self.orientation {
                 m.insert("orientation".into(), or.clone());
             }
+            if self.unregistered {
+                m.insert("unregistered".into(), json!(true));
+            }
+            if self.cited {
+                m.insert("cited".into(), json!(true));
+            }
         }
         o
     }
+}
+
+/// `r` widened round its centre to at least `min` a side, kept on `sheet` where it can be.
+fn widen(r: [f64; 4], min: f64, sheet: [f64; 4]) -> [f64; 4] {
+    let mut out = r;
+    for (lo, hi) in [(0usize, 2usize), (1, 3)] {
+        let (a, b) = (r[lo], r[hi]);
+        let (s0, s1) = (sheet[lo], sheet[hi]);
+        if !(min.is_finite() && b - a < min) {
+            continue;
+        }
+        let half = min.min((s1 - s0).max(b - a)) / 2.0;
+        let c = (a + b) / 2.0;
+        let (mut x0, mut x1) = (c - half, c + half);
+        if x0 < s0 {
+            x1 += s0 - x0;
+            x0 = s0;
+        }
+        if x1 > s1 {
+            x0 = (x0 - (x1 - s1)).max(s0);
+            x1 = s1;
+        }
+        out[lo] = x0;
+        out[hi] = x1;
+    }
+    out
+}
+
+/// How much of `a` and `b` is shared: the overlap over the union of the two rectangles.
+fn overlap(a: [f64; 4], b: [f64; 4]) -> f64 {
+    let area = |r: [f64; 4]| ((r[2] - r[0]) * (r[3] - r[1])).max(0.0);
+    let i = intersect(a, b).map_or(0.0, area);
+    let u = area(a) + area(b) - i;
+    if u > 0.0 { i / u } else { 0.0 }
+}
+
+/// A level's number from its name (`Level 2`, `L2`, `02`), if it has one.
+fn level_number(level: &str) -> Option<u32> {
+    let digits: String = level.chars().filter(char::is_ascii_digit).take(3).collect();
+    digits.parse().ok()
+}
+
+/// The floor a word counts (`2ND`, `SECOND`, `2`), if it is one.
+fn ordinal(word: &str) -> Option<u32> {
+    const WORDS: [&str; 12] = ["FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH", "SIXTH", "SEVENTH", "EIGHTH", "NINTH", "TENTH", "ELEVENTH", "TWELFTH"];
+    if let Some(i) = WORDS.iter().position(|w| *w == word) {
+        return u32::try_from(i + 1).ok();
+    }
+    let digits = word.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let suffix = word.get(digits.len()..).unwrap_or("");
+    if digits.is_empty() || digits.len() > 3 || !digits.chars().all(|c| c.is_ascii_digit()) || !matches!(suffix, "" | "ST" | "ND" | "RD" | "TH") {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// Whether a sheet's (or view's) title names `level`: `LEVEL 2`, `2ND FLOOR`, `SECOND FLOOR`,
+/// `2ND-4TH FLOOR`, `FLOOR 2`; a level with no number by its name (`ROOF PLAN`).
+pub(crate) fn title_names_level(title: &str, level: &str) -> bool {
+    let up = upper_words(&title.replace(['.', '-', '/', '_', ',', '(', ')', '&'], " "));
+    let words: Vec<&str> = up.split_whitespace().take(200).collect();
+    let Some(n) = level_number(level) else {
+        let name = upper_words(level);
+        return name.len() >= 3 && format!(" {up} ").contains(&format!(" {name} "));
+    };
+    const JOIN: [&str; 4] = ["THRU", "THROUGH", "TO", "AND"];
+    for (i, w) in words.iter().enumerate() {
+        if !matches!(*w, "FLOOR" | "FLOORS" | "LEVEL" | "LEVELS") {
+            continue;
+        }
+        // `LEVEL 2`, `FLOOR 2`.
+        if words.get(i + 1).and_then(|x| x.parse::<u32>().ok()) == Some(n) {
+            return true;
+        }
+        // `2ND FLOOR`, `SECOND THRU FOURTH FLOORS`, `2ND-4TH FLOOR`.
+        let mut nums: Vec<u32> = Vec::new();
+        for x in words.iter().take(i).rev().take(4) {
+            match ordinal(x) {
+                Some(k) => nums.push(k),
+                None if JOIN.contains(x) => {}
+                None => break,
+            }
+        }
+        match nums.as_slice() {
+            [one] if *one == n => return true,
+            [hi, lo, ..] if (*lo.min(hi)..=*lo.max(hi)).contains(&n) => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// A turn, degrees counter-clockwise in [0, 360), to a tenth.
@@ -734,10 +859,16 @@ pub(crate) fn layout_fit(ty: &Value, area: &Area, elements: &[(String, [f64; 2])
 
 /// A sheet rectangle cut into pictures at `ppu` pixels per unit: whole pixels, tiles of at most
 /// [`TILE_PX`]; past [`MAX_TILES_SIDE`] tiles a side the scale drops (returned).
+#[cfg(test)]
 fn tiles(rect: [f64; 4], ppu: f64) -> (f64, Vec<([f64; 4], [u32; 2], [u32; 2])>) {
+    tiles_max(rect, ppu, MAX_TILES_SIDE)
+}
+
+/// [`tiles`] with at most `side` tiles a side.
+fn tiles_max(rect: [f64; 4], ppu: f64, side: u32) -> (f64, Vec<([f64; 4], [u32; 2], [u32; 2])>) {
     let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
     let longest = w.max(h) * ppu;
-    let cap = f64::from(TILE_PX * MAX_TILES_SIDE);
+    let cap = f64::from(TILE_PX * side.clamp(1, MAX_TILES_SIDE));
     let ppu = if longest > cap { ppu * cap / longest } else { ppu };
     let wpx = ((w * ppu).ceil().max(16.0)).min(cap) as u32;
     let hpx = ((h * ppu).ceil().max(16.0)).min(cap) as u32;
@@ -1154,10 +1285,49 @@ struct InArea {
     categories: BTreeSet<String>,
     marks: BTreeSet<String>,
     wall_types: BTreeSet<String>,
-    submittals: BTreeSet<String>,
     counts: Value,
     /// The handles of the elements beside the area (not its own).
     nearby: BTreeSet<String>,
+    /// The sheets the area's elements were read from (sheet number, upper case): how many
+    /// elements cite each, and the points they were read at.
+    cited: BTreeMap<String, Cited>,
+    /// The area's own elements: kind, mark, submittal (for the submittals' matching).
+    products: Vec<(String, Option<String>, Option<String>)>,
+}
+
+/// The elements of an area read from one sheet.
+#[derive(Clone, Debug, Default)]
+struct Cited {
+    elements: usize,
+    points: Vec<[f64; 2]>,
+}
+
+/// The sheet an element's print source names (`E-9/1`: sheet E-9, its first view or page), upper
+/// case; none for what is not a sheet number (`room 512`).
+pub(crate) fn sheet_key(doc: &str) -> Option<String> {
+    let t = doc.trim();
+    let t = match t.rsplit_once('/') {
+        Some((a, b)) if !b.is_empty() && b.chars().all(|c| c.is_ascii_digit()) => a.trim(),
+        _ => t,
+    };
+    let ok = !t.is_empty() && t.len() <= 24 && !t.contains(char::is_whitespace) && t.chars().any(|c| c.is_ascii_digit());
+    ok.then(|| t.to_ascii_uppercase())
+}
+
+/// Note an element's print source in `cited`.
+fn cite(cited: &mut BTreeMap<String, Cited>, src: Option<&Value>) {
+    let Some(key) = src.and_then(|v| v.get("sheet")).and_then(Value::as_str).and_then(sheet_key) else { return };
+    if cited.len() >= MAX_CITED_SHEETS && !cited.contains_key(&key) {
+        return;
+    }
+    let c = cited.entry(key).or_default();
+    c.elements += 1;
+    let at = src.and_then(|v| v.get("at")).and_then(Value::as_array).and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?]));
+    if let Some(p) = at.filter(|p| p.iter().all(|v| v.is_finite()))
+        && c.points.len() < MAX_CITED_POINTS
+    {
+        c.points.push(p);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1187,10 +1357,11 @@ fn in_area(
     let mut kinds = BTreeSet::new();
     let mut categories = BTreeSet::new();
     let mut marks = BTreeSet::new();
-    let mut submittals = BTreeSet::new();
     let mut elements: Vec<Value> = Vec::new();
     let mut nearby: Vec<Value> = Vec::new();
     let mut nearby_handles: BTreeSet<String> = BTreeSet::new();
+    let mut cited: BTreeMap<String, Cited> = BTreeMap::new();
+    let mut products: Vec<(String, Option<String>, Option<String>)> = Vec::new();
     let mut els: Vec<&v::Element> = model.elements.iter().filter(|e| lvl(&e.level) && inside(reach, e.at)).collect();
     els.sort_by(|a, b| (a.kind.as_str(), a.id.as_str()).cmp(&(b.kind.as_str(), b.id.as_str())));
     // The area's own: inside its outline (or on its wall line, no other room's); the rest beside it.
@@ -1226,9 +1397,8 @@ fn in_area(
         }
         props.sort();
         let sub = field(&props, &e.fields, &["submittal"]);
-        if let Some(sb) = &sub {
-            submittals.insert(sb.clone());
-        }
+        cite(&mut cited, print_src.as_ref());
+        products.push((rk.kind.clone(), e.mark.clone(), sub.clone()));
         let mounting = field(&props, &e.fields, &["mounting"])
             .unwrap_or_else(|| serde_json::to_value(e.mounting).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default());
         // The wall it is on: the nearest wall of the level within reach of its centreline.
@@ -1331,9 +1501,8 @@ fn in_area(
             marks.insert(m.clone());
         }
         let sub = field(&props, &none, &["submittal"]);
-        if let Some(sb) = &sub {
-            submittals.insert(sb.clone());
-        }
+        cite(&mut cited, print_src.as_ref());
+        products.push((b.kind.clone(), mark.clone(), sub.clone()));
         let mine: Vec<Value> =
             failures.iter().filter(|f| f.element.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&b.handle))).map(fail_json).collect();
         elements.push(json!({
@@ -1438,7 +1607,7 @@ fn in_area(
     if total_elements > MAX_OBJECTS || total_runs > MAX_OBJECTS {
         objects["left_out"] = json!(format!("listed at most {MAX_OBJECTS} elements and runs each"));
     }
-    InArea { objects, kinds, categories, marks, wall_types, submittals, counts, nearby: nearby_handles }
+    InArea { objects, kinds, categories, marks, wall_types, counts, nearby: nearby_handles, cited, products }
 }
 
 // ---------------------------------------------------------------- rules and prompt
@@ -1484,13 +1653,14 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
     s.push_str("- Print crops (what the documents say):\n");
     for c in crops {
         s.push_str(&format!(
-            "  - `{}`: sheet {} {}, {}{}{}\n",
+            "  - `{}`: sheet {}{}, {}{}{}{}\n",
             c.file,
             c.sheet,
-            c.title,
+            c.view.as_ref().map_or_else(|| format!(" {}", c.title).trim_end().to_string(), |v| format!(" view {v}")),
             c.kind.replace('_', " "),
             c.shows.as_ref().map(|x| format!(" ({x})")).unwrap_or_default(),
-            c.orientation.as_ref().and_then(turn_words).map(|w| format!("; {w}")).unwrap_or_default()
+            c.orientation.as_ref().and_then(turn_words).map(|w| format!("; {w}")).unwrap_or_default(),
+            if c.unregistered { "; NOT placed on the plan: no overlay, find the area on it by its walls, doors and tags" } else { "" }
         ));
     }
     s.push_str("- Model pictures (what was built):\n");
@@ -1763,6 +1933,7 @@ fn plan_crops(
     unit: Option<&UnitOf>,
     fit: Option<&Value>,
 ) -> Planned {
+    let cited = &keys.cited;
     let mut crops: Vec<Crop> = Vec::new();
     let mut left_out: Vec<(String, String)> = Vec::new();
     let want = |t: &str| trades.is_empty() || t == "architecture" || t == "general" || trades.iter().any(|x| x == t);
@@ -1781,6 +1952,7 @@ fn plan_crops(
     let mut links: Vec<&SheetLink> = sp.sheets.iter().filter(|l| l.rect.is_some_and(|r| r.iter().all(|v| v.is_finite()))).collect();
     links.sort_by(|a, b| a.number.cmp(&b.number).then(a.view.as_ref().map(|v| v.title.as_str()).cmp(&b.view.as_ref().map(|v| v.title.as_str()))));
     let mut n = 0usize;
+    let mut same: Vec<(String, String)> = Vec::new();
     let mut push = |crops: &mut Vec<Crop>,
                     l: &SheetLink,
                     kind: &'static str,
@@ -1797,7 +1969,16 @@ fn plan_crops(
             return;
         }
         let ppu = dpi * paper_in / long;
-        let (ppu, parts) = tiles(rect, ppu);
+        // Never a sliver: at least MIN_CROP_PX a side, widened round its centre on the sheet.
+        let rect = widen(rect, MIN_CROP_PX / ppu, sheet_rect);
+        // No two pictures of one view.
+        if let Some(k) = crops.iter().find(|c| c.sheet.eq_ignore_ascii_case(&l.number) && overlap(c.whole, rect) >= SAME_VIEW) {
+            let what = shows.clone().or_else(|| l.view.as_ref().map(|v| v.title.clone())).unwrap_or_else(|| kind.replace('_', " "));
+            same.push((format!("sheet {} {what}", l.number), format!("the same view of sheet {} as {}", l.number, k.file)));
+            return;
+        }
+        // A whole view of a sheet that isn't placed is for finding the area on it: fewer tiles.
+        let (ppu, parts) = tiles_max(rect, ppu, if placed_by == "unregistered" { WHOLE_TILES_SIDE } else { MAX_TILES_SIDE });
         let got_dpi = ppu * long / paper_in;
         n += 1;
         let many = parts.len() > 1;
@@ -1824,6 +2005,9 @@ fn plan_crops(
                 place: place.clone(),
                 shows: shows.clone(),
                 orientation: orientation.clone(),
+                unregistered: false,
+                cited: false,
+                whole: rect,
             });
         }
     };
@@ -1836,8 +2020,19 @@ fn plan_crops(
         .take(MAX_TYPE_VIEWS)
         .filter_map(|v| v.get("sheet").and_then(Value::as_str).map(str::to_ascii_uppercase))
         .collect();
-    // 1. The plans, enlarged plans and RCPs of the area's level.
-    for l in links.iter().filter(|l| shows_level(l, &area.level)) {
+    // 1. The plans, enlarged plans and RCPs of the area's level (its level tag, or a title naming
+    //    the level), placed by their registration; an unplaced one is offered in 1c.
+    let names_level = |l: &SheetLink| {
+        shows_level(l, &area.level)
+            || (l.level.is_none()
+                && l.levels.is_empty()
+                && title_names_level(&format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str())), &area.level))
+    };
+    let mut pending: Vec<&SheetLink> = Vec::new();
+    // Placed, but the placement puts the area outside the view: looked for by the room's tag.
+    let mut missed: Vec<&SheetLink> = Vec::new();
+    let mut misses: Vec<(String, String, String)> = Vec::new();
+    for l in links.iter().filter(|l| names_level(l)) {
         let title = format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str()));
         let kind = sheet_kind(&title, true);
         if !matches!(kind, "plan" | "rcp" | "enlarged_plan") {
@@ -1856,16 +2051,20 @@ fn plan_crops(
             None if intersect(proj_box, clip).is_some() => (Place::Same, "same_sheet"),
             None if unit_sheets.contains(&l.number.to_ascii_uppercase()) => continue,
             None => {
-                left_out.push((
-                    format!("sheet {} {}", l.number, l.title),
-                    "it shows this level but is not placed on its plan yet (bim.identity registers it)".into(),
-                ));
+                pending.push(*l);
                 continue;
             }
         };
         let on_sheet: Vec<[f64; 2]> = corners(proj_box).iter().filter_map(|q| place.to_sheet(*q)).collect();
-        let Some(b) = bbox(&on_sheet).filter(|_| on_sheet.len() == 4) else { continue };
-        let Some(r) = intersect(b, clip) else { continue };
+        let Some(r) = bbox(&on_sheet).filter(|_| on_sheet.len() == 4).and_then(|b| intersect(b, clip)) else {
+            misses.push((
+                l.number.clone(),
+                view_label(l),
+                "it is placed on the level's plan, its view does not reach this area, and the room's tag is not on it".into(),
+            ));
+            missed.push(*l);
+            continue;
+        };
         let orientation = match &place {
             Place::Fit(reg) if kind == "enlarged_plan" || turn_deg(reg.b.atan2(reg.a)).abs() > 0.05 => Some(orientation_of(reg, by)),
             _ => None,
@@ -2009,6 +2208,123 @@ fn plan_crops(
             push(&mut crops, l, "enlarged_plan", trade, rect, "unit_type", None, Some(format!("unit type {}", u.name)), Some(o));
         }
     }
+    // 1c. The sheets the area's elements were read from (always in the packet), then the level's
+    //     sheets not placed on its plan: round the elements' source points on the sheet, else
+    //     round the room's tag on it, else the whole view in tiles, marked `unregistered`.
+    let mut todo: Vec<(&SheetLink, Option<&Cited>, bool)> = Vec::new();
+    for (key, c) in cited {
+        if crops.iter().any(|x| x.sheet.eq_ignore_ascii_case(key)) {
+            for x in crops.iter_mut().filter(|x| x.sheet.eq_ignore_ascii_case(key)) {
+                x.cited = true;
+            }
+            continue;
+        }
+        let of_sheet: Vec<&SheetLink> = links.iter().filter(|l| l.number.eq_ignore_ascii_case(key)).copied().collect();
+        // Its view of the area's level, else the whole sheet, else its first view.
+        let Some(l) = of_sheet.iter().find(|l| names_level(l)).or_else(|| of_sheet.iter().find(|l| l.view.is_none())).or(of_sheet.first()).copied()
+        else {
+            left_out.push((
+                format!("sheet {key}"),
+                format!("{} element(s) here were read from it, but the building spec lists no such sheet (levels.sheets)", c.elements),
+            ));
+            continue;
+        };
+        let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
+        if want(trade) {
+            todo.push((l, Some(c), missed.iter().any(|m| std::ptr::eq(*m, l))));
+        }
+    }
+    for (l, was_missed) in pending.into_iter().map(|l| (l, false)).chain(missed.iter().map(|l| (*l, true))) {
+        if !todo.iter().any(|(t, ..)| std::ptr::eq(*t, l)) {
+            todo.push((l, None, was_missed));
+        }
+    }
+    // The reference plan's sheet, for the scale of a sheet that isn't placed (the same paper
+    // scale: its size against the reference sheet's).
+    let centre = [(area.bbox[0] + area.bbox[2]) / 2.0, (area.bbox[1] + area.bbox[3]) / 2.0];
+    let centre_on_plan = {
+        let p = frame.to_sheet(&area.level, centre);
+        [p.x, p.y]
+    };
+    let ref_long = links
+        .iter()
+        .filter_map(|l| l.rect.map(norm_rect))
+        .find(|r| inside(*r, centre_on_plan))
+        .map(|r| (r[2] - r[0]).max(r[3] - r[1]))
+        .filter(|x| x.is_finite() && *x > 0.0);
+    let room_words: Vec<String> = [area.number.clone(), area.name.clone()].into_iter().flatten().filter(|k| !k.trim().is_empty()).collect();
+    for (l, c, was_missed) in todo {
+        let Some(sr) = l.rect.map(norm_rect) else { continue };
+        let clip = l.view.as_ref().and_then(|v| intersect(norm_rect(v.rect), sr)).unwrap_or(sr);
+        let long = (sr[2] - sr[0]).max(sr[3] - sr[1]);
+        if !(long.is_finite() && long > 0.0) {
+            continue;
+        }
+        let title = format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str()));
+        let kind = sheet_kind(&title, true);
+        let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
+        // The area's size on this sheet: the plan's units per foot, scaled as the sheet is to the
+        // reference sheet; generous (an enlarged view is drawn larger).
+        let per_ft = frame.upf() * ref_long.map_or(1.0, |rl| long / rl);
+        let half = [
+            (((area.bbox[2] - area.bbox[0]) / 2.0 + margin) * per_ft * 1.6).max(0.06 * long),
+            (((area.bbox[3] - area.bbox[1]) / 2.0 + margin) * per_ft * 1.6).max(0.06 * long),
+        ];
+        let around = |p: [f64; 2]| [p[0] - half[0], p[1] - half[1], p[0] + half[0], p[1] + half[1]];
+        let start = crops.len();
+        let points: Vec<[f64; 2]> = c.map(|c| c.points.iter().filter(|p| inside(sr, **p)).copied().collect()).unwrap_or_default();
+        let read = c.map(|c| format!("{} element(s) here were read from it", c.elements));
+        let shows = |what: String| Some(read.as_ref().map_or(what.clone(), |r| format!("{what}; {r}")));
+        if let Some(r) = bbox(&points).and_then(|b| intersect([b[0] - half[0], b[1] - half[1], b[2] + half[0], b[3] + half[1]], sr)) {
+            push(&mut crops, l, kind, trade, r, "source_point", None, shows("round the points the elements were read at".into()), None);
+        } else if let Some((at, word)) = room_tag(texts, clip, &room_words, long)
+            && let Some(r) = intersect(around(at), clip)
+        {
+            push(&mut crops, l, kind, trade, r, "room_tag", None, shows(format!("round {word} (its tag on the sheet)")), None);
+        } else {
+            if was_missed && c.is_none() {
+                // Its placement and its texts agree the area is not on it (said in `misses`).
+                continue;
+            }
+            let (cw, ch) = (clip[2] - clip[0], clip[3] - clip[1]);
+            let share = (cw * ch) / ((sr[2] - sr[0]) * (sr[3] - sr[1])).max(1e-9);
+            // Only a view that is clearly part of the level (an enlarged plan, a small view) and
+            // names nothing of the room is left out; a level's plan is offered whole.
+            if c.is_none() && !room_words.is_empty() && (share < PARTIAL_VIEW || kind == "enlarged_plan") {
+                misses.push((
+                    l.number.clone(),
+                    view_label(l),
+                    format!(
+                        "a partial view of the level ({}, {:.0}% of the sheet) that names neither {}: not this area",
+                        kind.replace('_', " "),
+                        share * 100.0,
+                        room_words.join(" nor ")
+                    ),
+                ));
+                continue;
+            }
+            push(
+                &mut crops,
+                l,
+                kind,
+                trade,
+                clip,
+                "unregistered",
+                None,
+                shows("the whole view: it is not placed on the level's plan yet (bim.identity)".into()),
+                None,
+            );
+        }
+        for x in crops.iter_mut().skip(start) {
+            x.unregistered = true;
+            x.cited = c.is_some();
+        }
+    }
+    for (number, label, why) in misses {
+        if !crops.iter().any(|x| x.sheet.eq_ignore_ascii_case(&number)) {
+            left_out.push((label, why));
+        }
+    }
     // 2. Interior elevations naming the room, the partition legend, the schedule and legend rows
     //    of the marks present, general notes.
     let mut room_keys: Vec<String> = [area.number.clone(), area.name.clone().filter(|n| n.trim().len() >= 3)].into_iter().flatten().collect();
@@ -2116,7 +2432,45 @@ fn plan_crops(
         risers += 1;
         push(&mut crops, l, "riser_diagram", trade, rect, "text", None, Some(shows), None);
     }
+    left_out.extend(same);
     Planned { crops, left_out }
+}
+
+/// A sheet and its view, as `left_out` names it.
+fn view_label(l: &SheetLink) -> String {
+    match &l.view {
+        Some(v) => format!("sheet {} view {}", l.number, v.title),
+        None => format!("sheet {} {}", l.number, l.title).trim_end().to_string(),
+    }
+}
+
+/// Where the room's tag is in `clip` of a sheet: its number (beside its name when the sheet has
+/// several), else its name when the sheet names it once.
+fn room_tag(texts: &Texts, clip: [f64; 4], words: &[String], long: f64) -> Option<([f64; 2], String)> {
+    let hits: Vec<(&String, Vec<[f64; 2]>)> = words.iter().map(|w| (w, texts.find(clip, w, false).into_iter().map(|h| h.0).collect())).collect();
+    // A tag `STUDIO 410` in one text.
+    if let (Some(n), Some(nm)) = (words.first(), words.get(1)) {
+        let both = format!("{nm} {n}");
+        let one: Vec<[f64; 2]> = texts.find(clip, &both, true).into_iter().chain(texts.find(clip, &format!("{n} {nm}"), true)).map(|h| h.0).collect();
+        if let Some(p) = one.first() {
+            return Some((*p, format!("room {n} {nm}")));
+        }
+    }
+    let near = 0.05 * long;
+    let (first, rest) = hits.split_first()?;
+    let names: Vec<[f64; 2]> = rest.iter().flat_map(|(_, h)| h.iter().copied()).collect();
+    let numbered = first.1.iter().find(|p| names.iter().any(|q| (p[0] - q[0]).hypot(p[1] - q[1]) <= near)).or(if first.1.len() == 1 {
+        first.1.first()
+    } else {
+        None
+    });
+    if let Some(p) = numbered {
+        return Some((*p, format!("room {}", first.0)));
+    }
+    match names.as_slice() {
+        [one] => Some((*one, format!("room {}", rest.first().map_or("", |r| r.0.as_str())))),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------- submittal pages
@@ -2142,7 +2496,8 @@ fn find_submittal(paths: &[String], name: &str) -> Option<std::path::PathBuf> {
             || f.file_stem().is_some_and(|x| x.to_string_lossy().to_ascii_lowercase() == want)
     };
     for p in paths.iter().take(MAX_FOLDER_FILES) {
-        let path = std::path::Path::new(p);
+        let local = local_path(p);
+        let path = local.as_path();
         if path.is_file() {
             if is(path) {
                 return Some(path.to_path_buf());
@@ -2156,6 +2511,29 @@ fn find_submittal(paths: &[String], name: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+/// A path the job kept, as this machine reaches it: a Windows drive path (`C:\\x\\y`) that isn't
+/// here is tried where WSL mounts the drive (`/mnt/c/x/y`).
+fn local_path(p: &str) -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(p);
+    if path.exists() || cfg!(windows) {
+        return path;
+    }
+    let b = p.as_bytes();
+    match (b.first(), b.get(1), b.get(2)) {
+        (Some(d), Some(b':'), Some(b'\\' | b'/')) if d.is_ascii_alphabetic() => {
+            let rest = p.get(3..).unwrap_or("").replace('\\', "/");
+            let wsl = std::path::PathBuf::from(format!("/mnt/{}/{rest}", char::from(d.to_ascii_lowercase())));
+            if wsl.exists() { wsl } else { path }
+        }
+        _ => path,
+    }
+}
+
+/// The last part of a path the job kept (either slash).
+fn last_part(p: &str) -> String {
+    p.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(p).to_string()
 }
 
 fn submittal_png(path: &std::path::Path, page: u32) -> std::result::Result<Vec<u8>, String> {
@@ -2173,6 +2551,50 @@ fn submittal_png(path: &std::path::Path, page: u32) -> std::result::Result<Vec<u
     let s = f64::from(SUBMITTAL_PX) / w.max(h);
     let px = [((w * s).ceil() as u32).clamp(16, SUBMITTAL_PX), ((h * s).ceil() as u32).clamp(16, SUBMITTAL_PX)];
     render_drawing(&pd, [ext.min.x, ext.min.y, ext.max.x, ext.max.y], px).ok_or_else(|| "the page couldn't be drawn".into())
+}
+
+/// What the job applied one submittal page to, across the building.
+#[derive(Default)]
+struct Applied {
+    marks: BTreeSet<String>,
+    /// Each kind it was applied to, and to how many.
+    kinds: BTreeMap<String, usize>,
+    elements: usize,
+}
+
+impl Applied {
+    /// Whether `kind` is what this page is mostly for (half its elements or more): a page applied
+    /// to a few elements of another kind (a sign typed like a fixture) is not offered for it.
+    fn is_for(&self, kind: &str) -> bool {
+        self.kinds.get(kind).is_some_and(|n| n * 2 >= self.elements)
+    }
+}
+
+/// Every submittal page the building's elements carry (`name p.N`; the plan elements and what
+/// the build modelled), with the marks (upper case) and kinds it was applied to.
+fn applied_submittals(d: &Drawing, kinds: &Kinds) -> BTreeMap<String, Applied> {
+    let mut out: BTreeMap<String, Applied> = BTreeMap::new();
+    for e in d.model.iter().take(MAX_ENTITIES) {
+        if e.common.xdata.is_empty() {
+            continue;
+        }
+        let store = cadaddy_doc::props::read(&e.common.xdata);
+        let Some(sb) = store.get("submittal").filter(|p| p.has_value()).map(|p| p.text().trim().to_string()).filter(|x| !x.is_empty()) else {
+            continue;
+        };
+        if out.len() >= MAX_SUBMITTAL_PAGES && !out.contains_key(&sb) {
+            continue;
+        }
+        let kind = super::elemprops::element_kind(e).unwrap_or_else(|| "device".into());
+        let mark = super::validate_kind::mark_of(e);
+        let a = out.entry(sb).or_default();
+        a.elements += 1;
+        if let Some(m) = mark.as_ref().filter(|m| !m.trim().is_empty()) {
+            a.marks.insert(m.trim().to_ascii_uppercase());
+        }
+        *a.kinds.entry(kinds.resolve(&kind, mark.as_deref(), Some(e)).kind).or_insert(0) += 1;
+    }
+    out
 }
 
 // ---------------------------------------------------------------- the packet
@@ -2216,7 +2638,8 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let (model, frame) = model_of(d, &sp);
     let area = area_param(CMD, &sp, p, d, &frame)?;
     let prints: Option<Prints> = prints_of(&sp).cloned().or_else(|| prints_from_job(s, &frame));
-    let job_submittals: Vec<String> = super::guided::load_job(s).ok().flatten().map(|j| j.submittals).unwrap_or_default();
+    let (job_submittals, job_prints): (Vec<String>, Option<String>) =
+        super::guided::load_job(s).ok().flatten().map(|j| (j.submittals, Some(j.pdfs_path).filter(|x| !x.trim().is_empty()))).unwrap_or_default();
     let (all_rules, rejected) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
     let only_rules: Option<BTreeSet<String>> = match p.get("rules") {
         None | Some(Value::Null) => None,
@@ -2392,73 +2815,164 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             over: None,
         });
         let z = level_spec.map_or(0.0, |l| l.elevation_ft) * upf + 5.0 * upf;
-        let centre = [(area.bbox[0] + area.bbox[2]) / 2.0, (area.bbox[1] + area.bbox[3]) / 2.0];
-        let mut walls: Vec<&v::ModelWall> = model
-            .walls
+        // One elevation per side of the area (its outline's edges of 2' or more, longest first),
+        // the camera inside the area looking square at the side; a camera that would stand
+        // outside the area, or repeat another's view, is not used.
+        let outline: Vec<[f64; 2]> =
+            if area.outline.len() >= 3 { area.outline.iter().take(MAX_OUTLINE).copied().collect() } else { corners(area.bbox).to_vec() };
+        let mut sides: Vec<(f64, usize, [f64; 2], [f64; 2])> = outline
             .iter()
-            .filter(|w| {
-                w.level.eq_ignore_ascii_case(&area.level)
-                    && segment_touches(grow(area.bbox, 1.0), w.a, w.b)
-                    && (w.a[0] - w.b[0]).hypot(w.a[1] - w.b[1]) >= 2.0
-            })
+            .zip(outline.iter().cycle().skip(1))
+            .enumerate()
+            .map(|(i, (a, b))| ((b[0] - a[0]).hypot(b[1] - a[1]), i, *a, *b))
+            .filter(|(l, ..)| l.is_finite() && *l >= 2.0)
             .collect();
-        // Longest along the area first.
-        let along = |w: &v::ModelWall| {
-            let near = grow(area.bbox, 1.0);
-            let n = (0..=64)
-                .filter(|i| inside(near, [w.a[0] + (w.b[0] - w.a[0]) * f64::from(*i) / 64.0, w.a[1] + (w.b[1] - w.a[1]) * f64::from(*i) / 64.0]))
-                .count();
-            (w.a[0] - w.b[0]).hypot(w.a[1] - w.b[1]) * n as f64 / 65.0
-        };
-        walls.sort_by(|a, b| along(b).total_cmp(&along(a)).then(a.id.cmp(&b.id)));
-        for (k, w) in walls.into_iter().take(MAX_ELEVATIONS).enumerate() {
-            let (dx, dy) = (w.b[0] - w.a[0], w.b[1] - w.a[1]);
-            // The part of the wall along the area: its middle is what the camera looks at.
-            let near = grow(area.bbox, 1.0);
-            let ts: Vec<f64> = (0..=64).map(|i| f64::from(i) / 64.0).filter(|t| inside(near, [w.a[0] + dx * t, w.a[1] + dy * t])).collect();
-            let (t0, t1) = (ts.first().copied().unwrap_or(0.0), ts.last().copied().unwrap_or(1.0));
-            let tm = (t0 + t1) / 2.0;
-            let m = [w.a[0] + dx * tm, w.a[1] + dy * tm];
-            let l = (dx.hypot(dy) * (t1 - t0)).max(1e-9);
-            let full = dx.hypot(dy).max(1e-9);
-            let (mut nx, mut ny) = (-dy / full, dx / full);
-            if nx * (centre[0] - m[0]) + ny * (centre[1] - m[1]) < 0.0 {
-                nx = -nx;
-                ny = -ny;
-            }
-            let back = 6.0;
+        sides.sort_by(|x, y| y.0.total_cmp(&x.0).then(x.1.cmp(&y.1)));
+        let mut cameras: Vec<([f64; 2], [f64; 2])> = Vec::new();
+        for (len, i, a, b) in sides {
+            let (dx, dy) = ((b[0] - a[0]) / len, (b[1] - a[1]) / len);
+            let m = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+            let side = format!("side {} of the outline ({len:.1} ft)", i + 1);
+            // The normal into the area, and how far back the camera can stand inside it.
+            let inward = [(-dy, dx), (dy, -dx)].into_iter().find(|(nx, ny)| point_in(&outline, [m[0] + nx * 0.5, m[1] + ny * 0.5]));
+            let Some((nx, ny)) = inward else {
+                left_out.push((format!("model elevation of {side}"), "no point just inside the area faces it".into()));
+                continue;
+            };
+            let back = [6.0, 4.0, 3.0, 2.0, 1.0]
+                .into_iter()
+                .find(|d| (1..=4).all(|k| point_in(&outline, [m[0] + nx * d * f64::from(k) / 4.0, m[1] + ny * d * f64::from(k) / 4.0])));
+            let Some(back) = back else {
+                left_out.push((format!("model elevation of {side}"), "the area is too narrow there for a camera inside it".into()));
+                continue;
+            };
             let eye_ft = [m[0] + nx * back, m[1] + ny * back];
+            // The render frames the area's box, so two cameras facing the same way draw the same
+            // picture: one per direction.
+            if let Some(k) = cameras.iter().position(|(_, d)| d[0] * -nx + d[1] * -ny > 0.98) {
+                left_out.push((format!("model elevation of {side}"), format!("the same view as model/elevation_{:02}.png", k + 1)));
+                continue;
+            }
+            if cameras.len() >= MAX_ELEVATIONS {
+                left_out.push((
+                    format!("model elevation of {side}"),
+                    format!("over the packet's {MAX_ELEVATIONS} wall elevations (the longest sides are drawn)"),
+                ));
+                continue;
+            }
+            cameras.push((eye_ft, [-nx, -ny]));
+            // The model wall on that side, if there is one.
+            let wall = model
+                .walls
+                .iter()
+                .filter(|w| w.level.eq_ignore_ascii_case(&area.level))
+                .map(|w| (seg_dist(m, w.a, w.b).0, w))
+                .filter(|(d, w)| *d <= 1.0 + w.thickness_in / 24.0)
+                .min_by(|x, y| x.0.total_cmp(&y.0).then(x.1.id.cmp(&y.1.id)))
+                .map(|(_, w)| w.id.clone());
             let e = frame.to_built(&area.level, eye_ft);
             let t = frame.to_built(&area.level, m);
+            let k = cameras.len();
             model_imgs.push(ModelImage {
-                file: format!("model/elevation_{:02}.png", k + 1),
+                file: format!("model/elevation_{k:02}.png"),
                 kind: "elevation",
-                what: format!("the wall {} seen from inside the area (on its {} side, {:.1} ft along it)", w.id, compass(-nx, -ny), l),
+                what: format!(
+                    "the {} side of the area ({len:.1} ft{}) seen from inside it, {back:.0} ft back",
+                    compass(-nx, -ny),
+                    wall.as_ref().map_or_else(|| ", no model wall on it".to_string(), |w| format!(", wall {w}"))
+                ),
                 of: None,
                 rect: None,
                 px: Some([1200, 900]),
-                wall: Some(w.id.clone()),
+                wall,
                 render: Some(json!({"width": 1200, "height": 900, "level": area.level, "eye": [r2(e.x), r2(e.y), r2(z)], "target": [r2(t.x), r2(t.y), r2(z)], "around": around.clone()})),
                 over: None,
             });
         }
     }
 
-    // Submittal pages of the products present.
-    let mut subs: Vec<(String, String, u32, Option<std::path::PathBuf>)> = Vec::new();
-    for (i, sb) in here.submittals.iter().enumerate() {
-        let (name, page) = submittal_ref(sb);
-        let path = find_submittal(&job_submittals, &name);
-        if path.is_none() {
-            left_out.push((format!("submittal {sb}"), "its file is not among the job's submittals (bim.submittals paths)".into()));
+    // Submittal pages: those the area's elements carry, and the job's submittals matched to the
+    // area's marks and kinds (what the job applied to elements of the same type or kind
+    // elsewhere in the building).
+    let applied = applied_submittals(d, &kinds);
+    let mut wanted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (kind, mark, sub) in &here.products {
+        let why = mark.as_ref().map_or_else(|| format!("kind {kind}"), |m| format!("mark {m}"));
+        if let Some(sb) = sub {
+            wanted.entry(sb.clone()).or_default().insert(why);
             continue;
         }
-        subs.push((format!("prints/s{:02}_submittal_{}_p{page}.png", i + 1, safe(&name)), sb.clone(), page, path));
+        let by_mark: Vec<&String> = mark
+            .as_ref()
+            .map(|m| applied.iter().filter_map(|(r, a)| a.marks.contains(&m.to_ascii_uppercase()).then_some(r)).collect())
+            .unwrap_or_default();
+        if !by_mark.is_empty() {
+            for r in by_mark.into_iter().take(MAX_KIND_PAGES) {
+                wanted.entry(r.clone()).or_default().insert(format!("{why} (the job's submittal for its type; this element carries none)"));
+            }
+            continue;
+        }
+        for r in applied.iter().filter(|(_, a)| a.is_for(kind)).map(|(r, _)| r).take(MAX_KIND_PAGES) {
+            wanted
+                .entry(r.clone())
+                .or_default()
+                .insert(format!("kind {kind} (the job's submittal for that kind elsewhere; no element here carries one)"));
+        }
+    }
+    let mut search: Vec<String> = job_submittals.clone();
+    search.extend(job_prints.clone());
+    let mut subs: Vec<(String, String, u32, Option<std::path::PathBuf>, Vec<String>)> = Vec::new();
+    // A submittal the job applied but does not list: which, and what it was applied to.
+    let mut unlisted: BTreeMap<String, (BTreeSet<u32>, BTreeSet<String>)> = BTreeMap::new();
+    for (i, (sb, why)) in wanted.iter().enumerate() {
+        let (name, page) = submittal_ref(sb);
+        match find_submittal(&search, &name) {
+            Some(path) => subs.push((
+                format!("prints/s{:02}_submittal_{}_p{page}.png", i + 1, safe(&name)),
+                sb.clone(),
+                page,
+                Some(path),
+                why.iter().cloned().collect(),
+            )),
+            None => {
+                let u = unlisted.entry(name).or_default();
+                u.0.insert(page);
+                u.1.extend(why.iter().cloned());
+            }
+        }
+    }
+    // What the job lists: names only (never a whole path), and whether this machine has it.
+    let listed: Vec<String> = job_submittals
+        .iter()
+        .take(20)
+        .map(|p| format!("{}{}", last_part(p), if local_path(p).exists() { "" } else { " (not found on this machine)" }))
+        .collect();
+    let mut unlisted_json: Vec<Value> = Vec::new();
+    for (name, (pages, why)) in &unlisted {
+        let on = applied.iter().filter(|(r, _)| submittal_ref(r).0 == *name).fold((0usize, BTreeSet::new()), |(n, mut m), (_, a)| {
+            m.extend(a.marks.iter().cloned());
+            (n + a.elements, m)
+        });
+        let marks: Vec<String> = on.1.into_iter().take(20).collect();
+        left_out.push((
+            format!("submittal {name}"),
+            format!(
+                "the job applied it to {} element(s) (marks {}), but its file is not among the job's submittals ({}): give it to bim.submittals {{paths}}",
+                on.0,
+                if marks.is_empty() { "none".into() } else { marks.join(", ") },
+                if listed.is_empty() { "the job lists none".to_string() } else { format!("the job lists {}", listed.join(", ")) }
+            ),
+        ));
+        unlisted_json
+            .push(json!({"submittal": name, "pages": pages, "for": why.iter().take(20).collect::<Vec<_>>(), "applied_to": on.0, "marks": marks}));
     }
 
     // The cap: print crops first (each followed by its overlay), then submittals, then the rest.
     let mut order: Vec<(u8, usize)> = Vec::new();
-    for (i, c) in crops.iter().enumerate() {
+    // A level's sheet not placed on its plan, shown whole, that no element here was read from:
+    // last, after the model's pictures.
+    let whole_only = |c: &Crop| c.placed_by == "unregistered" && !c.cited;
+    for (i, c) in crops.iter().enumerate().filter(|(_, c)| !whole_only(c)) {
         order.push((0, i));
         if c.place.is_some()
             && let Some(j) = model_imgs.iter().position(|m| m.over == Some(i))
@@ -2477,6 +2991,9 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         let _ = m;
         order.push((1, j));
     }
+    for (i, _) in crops.iter().enumerate().filter(|(_, c)| whole_only(c)) {
+        order.push((0, i));
+    }
     let kept: BTreeSet<(u8, usize)> = order.iter().take(max_images).copied().collect();
     for (t, i) in order.iter().skip(max_images) {
         let f = match t {
@@ -2490,7 +3007,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let crops: Vec<(usize, &Crop)> = crops.iter().enumerate().filter(|(i, _)| kept.contains(&(0, *i))).collect();
     let model_imgs_kept: Vec<&ModelImage> = model_imgs.iter().enumerate().filter(|(j, _)| kept.contains(&(1, *j))).map(|(_, m)| m).collect();
-    let subs: Vec<&(String, String, u32, Option<std::path::PathBuf>)> =
+    let subs: Vec<&(String, String, u32, Option<std::path::PathBuf>, Vec<String>)> =
         subs.iter().enumerate().filter(|(k, _)| kept.contains(&(2, *k))).map(|(_, x)| x).collect();
 
     // Every file is checked before any is written.
@@ -2567,12 +3084,12 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let mut subs_out: Vec<Value> = Vec::new();
-    for (file, sb, page, path) in &subs {
+    for (file, sb, page, path, why) in &subs {
         let Some(path) = path else { continue };
         match submittal_png(path, *page) {
             Ok(b) => {
                 super::exchange::write_file(CMD, &full(file), &b)?;
-                subs_out.push(json!({"file": file, "submittal": sb, "page": page}));
+                subs_out.push(json!({"file": file, "submittal": sb, "page": page, "for": why}));
             }
             Err(e) => left_out.push((file.clone(), format!("submittal {sb}: {e}"))),
         }
@@ -2595,6 +3112,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         "prints": prints_out,
         "model": model_out,
         "submittals": subs_out,
+        "submittals_unlisted": unlisted_json,
         "objects": "objects.json",
         "rules": "rules.json",
         "prompt": "prompt.md",
@@ -2680,6 +3198,109 @@ mod tests {
         // Too big for 4×4 tiles: the scale drops.
         let (ppu, t) = tiles([0.0, 0.0, 10_000.0, 100.0], 10.0);
         assert!(ppu < 10.0 && t.len() <= 4, "{ppu} {}", t.len());
+    }
+
+    #[test]
+    fn a_source_names_its_sheet_without_its_view() {
+        assert_eq!(sheet_key("E-9/1").as_deref(), Some("E-9"));
+        assert_eq!(sheet_key(" p-8/12 ").as_deref(), Some("P-8"));
+        assert_eq!(sheet_key("A901").as_deref(), Some("A901"));
+        assert_eq!(sheet_key("M-8/x").as_deref(), Some("M-8/X"));
+        assert_eq!(sheet_key("room 512"), None);
+        assert_eq!(sheet_key("NOTES"), None);
+        assert_eq!(sheet_key(""), None);
+    }
+
+    #[test]
+    fn a_title_names_its_level() {
+        for (t, l) in [
+            ("SECURITY - 1ST FLOOR", "Level 1"),
+            ("LIGHTING PLAN - LEVEL 2", "L2"),
+            ("EGRESS PLAN - 2ND-5TH FLOOR", "Level 3"),
+            ("SIGNAGE - SECOND-FIFTH FLOOR PLAN", "Level 4"),
+            ("SECOND FLOOR SLAB PLAN", "Level 2"),
+            ("DATA - 2ND FLOOR (3RD FLOOR SIM.)", "Level 3"),
+            ("POWER PLAN FLOOR 3", "03"),
+            ("ROOF PLAN", "Roof"),
+        ] {
+            assert!(title_names_level(t, l), "{t} names {l}");
+        }
+        for (t, l) in [
+            ("SECURITY - 1ST FLOOR", "Level 2"),
+            ("EGRESS PLAN - 2ND-5TH FLOOR", "Level 1"),
+            ("PANEL SCHEDULE 2", "Level 2"),
+            ("ENLARGED UNIT PLAN", "Level 1"),
+            ("ROOF DRAIN DETAILS", "Level 1"),
+            ("1ST FLOOR", "T"),
+        ] {
+            assert!(!title_names_level(t, l), "{t} does not name {l}");
+        }
+    }
+
+    #[test]
+    fn a_narrow_crop_is_widened_on_its_sheet_and_views_are_compared() {
+        let sheet = [0.0, 0.0, 100.0, 50.0];
+        // A 2 × 40 sliver becomes 20 wide round its centre; one at the edge stays on the sheet.
+        assert_eq!(widen([49.0, 5.0, 51.0, 45.0], 20.0, sheet), [40.0, 5.0, 60.0, 45.0]);
+        assert_eq!(widen([0.0, 5.0, 2.0, 45.0], 20.0, sheet), [0.0, 5.0, 20.0, 45.0]);
+        assert_eq!(widen([10.0, 10.0, 40.0, 40.0], 20.0, sheet), [10.0, 10.0, 40.0, 40.0]);
+        // Never wider than the sheet.
+        assert_eq!(widen([10.0, 20.0, 12.0, 22.0], 500.0, sheet), [0.0, 0.0, 100.0, 50.0]);
+        assert!((overlap([0.0, 0.0, 10.0, 10.0], [0.0, 0.0, 10.0, 10.0]) - 1.0).abs() < 1e-12);
+        assert!((overlap([0.0, 0.0, 10.0, 10.0], [5.0, 0.0, 15.0, 10.0]) - 1.0 / 3.0).abs() < 1e-12);
+        assert_eq!(overlap([0.0, 0.0, 1.0, 1.0], [2.0, 2.0, 3.0, 3.0]), 0.0);
+        // A whole view in at most 2 × 2 tiles.
+        let (_, t) = tiles_max([0.0, 0.0, 10_000.0, 8_000.0], 1.0, 2);
+        assert_eq!(t.len(), 4);
+    }
+
+    #[test]
+    fn a_room_is_found_on_a_sheet_by_its_tag() {
+        let texts = Texts(vec![
+            ("410".into(), [10.0, 10.0], 1.0),
+            ("STUDIO".into(), [10.0, 12.0], 1.0),
+            ("410".into(), [90.0, 90.0], 1.0),
+            ("CORRIDOR".into(), [50.0, 50.0], 1.0),
+            ("CORRIDOR".into(), [60.0, 50.0], 1.0),
+            ("LIBRARY 101".into(), [30.0, 70.0], 1.0),
+        ]);
+        let all = [0.0, 0.0, 100.0, 100.0];
+        let w = |a: &[&str]| a.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        // The number beside the name, not the other 410.
+        assert_eq!(room_tag(&texts, all, &w(&["410", "Studio"]), 100.0).map(|x| x.0), Some([10.0, 10.0]));
+        // One tag holding both.
+        assert_eq!(room_tag(&texts, all, &w(&["101", "Library"]), 100.0).map(|x| x.0), Some([30.0, 70.0]));
+        // A name the sheet gives twice, with no number, is not a place.
+        assert_eq!(room_tag(&texts, all, &w(&["Corridor"]), 100.0), None);
+        // Only inside the view.
+        assert_eq!(room_tag(&texts, [80.0, 80.0, 100.0, 100.0], &w(&["410", "Studio"]), 100.0).map(|x| x.0), Some([90.0, 90.0]));
+        assert_eq!(room_tag(&texts, all, &w(&["999"]), 100.0), None);
+        assert_eq!(room_tag(&texts, all, &[], 100.0), None);
+    }
+
+    #[test]
+    fn a_submittal_page_is_offered_for_the_kind_it_is_mostly_for() {
+        let mut a = Applied { elements: 10, ..Applied::default() };
+        a.kinds.insert("luminaire".into(), 9);
+        a.kinds.insert("fire_alarm_device".into(), 1);
+        assert!(a.is_for("luminaire"));
+        assert!(!a.is_for("fire_alarm_device"));
+        assert!(!a.is_for("receptacle"));
+    }
+
+    #[test]
+    fn a_kept_path_is_named_by_its_last_part_and_read_where_this_machine_has_it() {
+        assert_eq!(last_part("C:\\Jobs\\Sample\\Submittals"), "Submittals");
+        assert_eq!(last_part("/jobs/sample/Lighting.pdf"), "Lighting.pdf");
+        assert_eq!(last_part("C:\\Jobs\\Sample\\"), "Sample");
+        assert_eq!(last_part("Lighting.pdf"), "Lighting.pdf");
+        // Not here, and no drive mount: as given.
+        let p = "Q:\\No Such Folder\\Submittals";
+        assert_eq!(local_path(p), std::path::PathBuf::from(p));
+        assert_eq!(local_path("relative/none"), std::path::PathBuf::from("relative/none"));
+        // A path that is here stays.
+        let here = std::env::temp_dir();
+        assert_eq!(local_path(&here.to_string_lossy()), here);
     }
 
     #[test]
