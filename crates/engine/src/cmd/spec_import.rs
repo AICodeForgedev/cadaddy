@@ -147,6 +147,11 @@ fn run_accept(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ── PDF text extraction ────────────────────────────────────────────────────
 
+/// A PDF's text as a person reads it, page by page (`--- page N of M ---` between pages).
+pub(crate) fn pdf_text(bytes: &[u8], path: &str) -> Result<String> {
+    extract_pdf_text(bytes, path)
+}
+
 fn extract_pdf_text(bytes: &[u8], path: &str) -> Result<String> {
     let hooks = super::file::io().ok_or_else(|| bad(CMD_IMPORT, "PDF reading is not available in this build"))?;
     let read_pdf = hooks.read_pdf.ok_or_else(|| bad(CMD_IMPORT, "PDF import is not available in this build"))?;
