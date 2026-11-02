@@ -31,10 +31,10 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("rooms", "Rooms", run_list)
             .menu(&["Tools", "Building", "Rooms"])
-            .params("{outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (as rooms.list)} → as rooms.list (typed or from the menu: the Rooms palette)")
+            .params("{level?: name, outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (as rooms.list)} → as rooms.list (typed or from the menu: the Rooms palette)")
             .noundo(),
         CommandSpec::new("rooms.list", "List Rooms", run_list)
-            .params("{outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (read the labels only inside these sheet rectangles, each sheet in full)} → {rooms: [{name, number, area, areaSqFt, areaM2, perimeter, ceiling, ceilingFt, ceilingSource, elevation, volume, volumeCuFt, volumeM3, finishes, finishDetail, materials, level, label, at, outline}], count}")
+            .params("{level?: name (only that level's rooms), outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (read the labels only inside these sheet rectangles, each sheet in full)} → {rooms: [{name, number, area, areaSqFt, areaM2, perimeter, ceiling, ceilingFt, ceilingSource, elevation, volume, volumeCuFt, volumeM3, finishes, finishDetail, materials, level, label, at, outline}], count}: a built model's rooms at and outline where the 3D model draws them (the levels stacked), else on the sheet")
             .noundo(),
         CommandSpec::new("rooms.get", "Room", run_get).params("{name? | number? | label?} → the room (as rooms.list's)").noundo(),
         CommandSpec::new("rooms.goto", "Go to Room", run_goto).params("{name? | number? | label?} → {name, window}: the view shows the room").noundo(),
@@ -419,11 +419,59 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
             })
             .collect()
     });
-    let rs = rooms_in(s, regions.as_deref())?;
+    // One level's rooms: the spec's name for it (any case), else as the rooms have it.
+    let level = match str_param(p, "level").map(str::trim).filter(|l| !l.is_empty()) {
+        None => None,
+        Some(l) => {
+            let d = s.doc()?;
+            let sp = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok());
+            match sp.as_ref().map(|sp| sp.level(l).map(|x| x.name.clone())) {
+                Some(Some(name)) => Some(name),
+                Some(None) => return Err(bad("rooms.list", format!("there is no level named {}", l.chars().take(40).collect::<String>()))),
+                None => Some(l.to_string()),
+            }
+        }
+    };
+    let (mut rs, built) = match built_rooms(s)? {
+        Some(rs) => (rs, true),
+        None => (rooms_in(s, regions.as_deref())?, false),
+    };
+    if let Some(l) = &level {
+        rs.retain(|r| r.level.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(l)));
+    }
     let outline = bool_or(p, "outline", true);
     let d = s.doc()?;
+    // A built room is where the 3D model draws it: its level stacked as `model.render` stacks
+    // the levels (most often where the build already put it).
+    if built {
+        let shifts = render_shifts(d);
+        for r in &mut rs {
+            let Some(o) = r.level.as_deref().and_then(|l| shifts.iter().find(|(n, _)| n.eq_ignore_ascii_case(l))).map(|x| x.1) else { continue };
+            r.at += o;
+            for q in &mut r.outline {
+                *q += o;
+            }
+        }
+    }
     let list: Vec<Value> = rs.iter().map(|r| room_json(d, r, outline)).collect();
     Ok(json!({ "rooms": list, "count": rs.len() }))
+}
+
+/// How far the 3D model (`model.render`, the BIM view) draws each level's built objects from
+/// where they are in the drawing: its level's stacking (`stack_offsets`) less what
+/// `model.build` already moved them. Levels it draws where they are are not listed.
+fn render_shifts(d: &cadaddy_doc::Drawing) -> Vec<(String, Vec2)> {
+    super::bimlook::stack_offsets(d)
+        .into_iter()
+        .filter_map(|(level, o)| {
+            let e = d
+                .model
+                .iter()
+                .take(2_000_000)
+                .find(|e| super::wallgen::made_as(e).is_some() && super::bspec::made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(&level)))?;
+            super::bimlook::stack_move(Some(o), e).map(|m| (level, m))
+        })
+        .collect()
 }
 
 /// The room `p` names (`name`, any case; `number`; or `label` (handle hex)).

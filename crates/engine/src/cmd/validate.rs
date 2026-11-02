@@ -163,12 +163,40 @@ fn merged(mut a: Prints, b: Prints) -> Prints {
 
 // ---------------------------------------------------------------- the model
 
-/// Sheet to building feet, per level.
+/// Sheet to building feet, per level: one frame for every level. A point of a level's plan is
+/// its offset from the level's base, so the levels stand over each other as the 3D model and
+/// `model.render` stack them (a building point is where the stacked model has it, less the
+/// lowest level's base). A built object `model.build` moved to stack its level (its `stacked`
+/// tag) is taken back onto its level's plan first, so it is never moved twice.
 pub(crate) struct Frame {
     upf: f64,
     /// Level name, its plan's origin on the sheet.
     levels: Vec<(String, Vec2)>,
     spec_levels: Vec<cadaddy_walk3d::Level>,
+    /// Level name, how far `model.build` moved its built objects to stack the levels.
+    moved: Vec<(String, Vec2)>,
+}
+
+/// How far `model.build` moved each level's built objects to stack the levels (levels it did
+/// not move are not listed).
+fn build_moves(d: &Drawing, levels: usize) -> Vec<(String, Vec2)> {
+    let mut out: Vec<(String, Vec2)> = Vec::new();
+    for e in d.model.iter().take(MAX_ENTITIES) {
+        if out.len() >= levels {
+            break;
+        }
+        if super::wallgen::made_as(e).is_none() {
+            continue;
+        }
+        let off = super::bspec::stacked_by(e);
+        if off.len() <= 1e-9 {
+            continue;
+        }
+        if let Some(l) = super::bspec::made_level(e).filter(|l| !out.iter().any(|(n, _)| n.eq_ignore_ascii_case(l))) {
+            out.push((l, off));
+        }
+    }
+    out
 }
 
 impl Frame {
@@ -176,7 +204,43 @@ impl Frame {
     /// only): what one element's place needs.
     pub(crate) fn of_spec(d: &Drawing, sp: &BuildingSpec) -> Frame {
         let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-        Frame { upf, levels: cadaddy_walk3d::level_bases(d, &sp.to_rules()), spec_levels: sp.levels.clone() }
+        Frame { upf, levels: cadaddy_walk3d::level_bases(d, &sp.to_rules()), spec_levels: sp.levels.clone(), moved: build_moves(d, sp.levels.len()) }
+    }
+    /// The spec's name of a level (any case), else the name as given.
+    fn level_name(&self, level: &str) -> String {
+        self.spec_levels.iter().find(|l| l.name.eq_ignore_ascii_case(level.trim())).map_or_else(|| level.trim().to_string(), |l| l.name.clone())
+    }
+    /// How far `model.build` moved `level`'s built objects to stack the levels (zero when it
+    /// didn't).
+    fn moved(&self, level: &str) -> Vec2 {
+        self.moved.iter().find(|(n, _)| n.eq_ignore_ascii_case(level)).map_or(Vec2::new(0.0, 0.0), |m| m.1)
+    }
+    /// A built object's point in building feet on `level`'s plan.
+    pub(crate) fn built_on(&self, level: &str, e: &Entity, p: Vec2) -> [f64; 2] {
+        self.to_ft_on(level, p - super::bspec::stacked_by(e))
+    }
+    /// A built object's level (its build tag; else where the point lies on the sheets) and the
+    /// point in building feet.
+    pub(crate) fn built_ft(&self, e: &Entity, p: Vec2) -> (String, [f64; 2]) {
+        match super::bspec::made_level(e).filter(|l| !l.trim().is_empty()) {
+            Some(l) => {
+                let l = self.level_name(&l);
+                let at = self.built_on(&l, e, p);
+                (l, at)
+            }
+            None => self.to_ft(p - super::bspec::stacked_by(e)),
+        }
+    }
+    /// A built object's plan box on its level's plan (drawing units): where its level's sheet
+    /// draws it.
+    pub(crate) fn built_box(&self, e: &Entity, b: Bounds2) -> Bounds2 {
+        let off = super::bspec::stacked_by(e);
+        Bounds2::new(b.min - off, b.max - off)
+    }
+    /// A building point of `level` where the built model has it: the drawing coordinates of the
+    /// level's built objects, which `model.render` draws a level, a box or a camera in.
+    pub(crate) fn to_built(&self, level: &str, p: [f64; 2]) -> Vec2 {
+        self.to_sheet(level, p) + self.moved(level)
     }
     /// Drawing units per foot.
     pub(crate) fn upf(&self) -> f64 {
@@ -242,7 +306,12 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
     let rules = sp.to_rules();
     let scene = cadaddy_walk3d::derive(d, &rules);
     let upf = if scene.units_per_foot.is_finite() && scene.units_per_foot > 0.0 { scene.units_per_foot } else { sp.units_per_foot.max(1e-9) };
-    let frame = Frame { upf, levels: scene.levels.iter().map(|l| (l.name.clone(), l.base)).collect(), spec_levels: sp.levels.clone() };
+    let frame = Frame {
+        upf,
+        levels: scene.levels.iter().map(|l| (l.name.clone(), l.base)).collect(),
+        spec_levels: sp.levels.clone(),
+        moved: build_moves(d, sp.levels.len()),
+    };
     let types = types(d);
     let mut m = Model {
         levels: scene.levels.iter().map(|l| ModelLevel { name: l.name.clone(), height_ft: l.height_ft }).collect(),
@@ -274,13 +343,23 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
             .filter(|h| h.is_finite())
             .map_or(0.0, |h| h.clamp(0.01, 20.0) / 2.0);
         let z_ft = dev.pos.z - l.elevation_ft + if dev.ceiling { half } else { 0.0 };
+        // A device the build made and moved to stack its level: back over its own level's plan.
+        let (level, at) = match (&e.kind, super::wallgen::made_as(e)) {
+            (EntityKind::Insert(i), Some(_)) => {
+                let raw = i.insert.xy();
+                let (lv, ft) = frame.built_ft(e, raw);
+                let was = frame.to_ft_on(&l.name, raw);
+                (lv, [dev.pos.x + ft[0] - was[0], dev.pos.y + ft[1] - was[1]])
+            }
+            _ => (l.name.clone(), [dev.pos.x, dev.pos.y]),
+        };
         m.elements.push(Element {
             id: dev.handle.hex(),
             kind,
             mark,
             tag,
-            level: l.name.clone(),
-            at: [dev.pos.x, dev.pos.y],
+            level,
+            at,
             z_in: Some(if dev.ceiling { z_ft * 12.0 } else { dev.aff_ft * 12.0 }),
             mounting: if dev.ceiling { Mounting::Ceiling } else { Mounting::Wall },
             box_depth_in: prov.get("boxdepth").and_then(|v| v::parse_inches(v)),
@@ -301,8 +380,8 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
         }
         for quad in plan_quads(mesh) {
             let c = quad.iter().fold(Vec2::new(0.0, 0.0), |a, p| a + *p) * (1.0 / quad.len().max(1) as f64);
-            let (level, _) = frame.to_ft(c);
-            let ft: Vec<[f64; 2]> = quad.iter().map(|p| frame.to_ft(*p).1).collect();
+            let (level, _) = frame.built_ft(e, c);
+            let ft: Vec<[f64; 2]> = quad.iter().map(|p| frame.built_on(&level, e, *p)).collect();
             if part == "wall" {
                 m.walls.extend(wall_piece(e, level, &ft, &wall_types));
             } else {
@@ -450,17 +529,20 @@ pub(crate) fn walls_near(d: &Drawing, sp: &BuildingSpec, frame: &Frame, level: &
             continue;
         }
         let EntityKind::Mesh(mesh) = &e.kind else { continue };
+        if super::bspec::made_level(e).is_some_and(|l| !l.eq_ignore_ascii_case(level)) {
+            continue;
+        }
         let b = cadaddy_doc::entity_bounds(d, e, 0);
-        if b.is_empty() || !b.intersects(&near) {
+        if b.is_empty() || !frame.built_box(e, b).intersects(&near) {
             continue;
         }
         for quad in plan_quads(mesh) {
             let c = quad.iter().fold(Vec2::new(0.0, 0.0), |a, p| a + *p) * (1.0 / quad.len().max(1) as f64);
-            let (on, _) = frame.to_ft(c);
+            let (on, _) = frame.built_ft(e, c);
             if !on.eq_ignore_ascii_case(level) {
                 continue;
             }
-            let ft: Vec<[f64; 2]> = quad.iter().map(|p| frame.to_ft(*p).1).collect();
+            let ft: Vec<[f64; 2]> = quad.iter().map(|p| frame.built_on(&on, e, *p)).collect();
             out.extend(wall_piece(e, on, &ft, &studs));
         }
         if out.len() >= v::MAX_ITEMS {

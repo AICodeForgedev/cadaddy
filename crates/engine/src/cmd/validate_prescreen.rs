@@ -395,7 +395,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame) -> Vec<It
         if b.is_empty() {
             continue;
         }
-        let at = frame.to_ft_on(&level, b.center());
+        let at = frame.built_on(&level, e, b.center());
         let (floor, ceiling) = sp.level(&level).map_or((0.0, 9.0), |l| (l.elevation_ft, if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft }));
         let (z_in, mounting) = match &e.kind {
             EntityKind::Mesh(m) if !m.vertices.is_empty() => {
@@ -742,12 +742,6 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(CMD, format!("`rules` is a list of {}", RULES.join(", ")))),
     };
     let all = bool_or(p, "all", false);
-    // The scope: as `validate` takes it, inferred from what is given.
-    let mut q = p.clone();
-    if q.get("scope").is_none_or(Value::is_null) {
-        let scope = ["area", "room", "level"].into_iter().find(|k| p.get(*k).is_some_and(|v| !v.is_null())).unwrap_or("building");
-        q["scope"] = json!(scope);
-    }
     let path = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
     if let Some(f) = &path {
         super::exchange::guard_output(s, CMD, p, f)?;
@@ -756,7 +750,8 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
     let d: &Drawing = &doc;
     let (sp, _) = current(s, CMD)?;
     let (model, frame) = model_of(d, &sp);
-    let (key, areas) = super::validate_run::scope_areas(s, CMD, &q, d, &sp, &model, &frame)?;
+    // The scope: as `validate` takes it, inferred from what is given.
+    let (key, areas) = super::validate_run::scope_areas(s, CMD, p, d, &sp, &model, &frame)?;
     let whole = matches!(key["scope"].as_str(), Some("building" | "level"));
     let (rules, _) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
     let prints: Option<Prints> = prints_of(&sp).cloned().or_else(|| super::validate::prints_from_job(s, &frame));
