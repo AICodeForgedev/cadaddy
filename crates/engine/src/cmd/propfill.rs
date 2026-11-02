@@ -422,6 +422,14 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
             hp.note = Some("not printed: the usual height for this kind of device".into());
         }
         store.set("mount_height", hp.clone());
+        // What it is: its element's kind as read (its legend row's, its sheet's), else its mark's.
+        let own = t.kind.replace('_', " ");
+        let what = if own.trim().is_empty() || own == "device" { field(t, "device_kind").unwrap_or_else(|| kind.to_string()) } else { own };
+        let what_src = field(t, "kind_source").map_or_else(|| Source::print(&sheet, at), |row| Source::print(&row, at));
+        store.set("kind", Prop::new(what.replace(' ', "_"), what_src.clone()));
+        if let Some(ifc) = field(t, "ifc_class") {
+            store.set("ifc_class", Prop::new(ifc, what_src));
+        }
         store.set("offset", Prop::new(round2(height.inches / 12.0), hp.source.clone()).with_unit("ft"));
         if !sheet.is_empty() {
             store.set("sheet", Prop::new(sheet.clone(), Source::print(&sheet, at)));

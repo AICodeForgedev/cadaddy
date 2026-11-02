@@ -901,6 +901,7 @@ fn built_parts(d: &Drawing, sp: &BuildingSpec, frame: &Frame, area: &Area, reach
             }
             _ => None,
         };
+        let kind = super::elemprops::reported_kind(e, kind);
         out.push(BuiltPart { handle: e.handle.hex(), kind, rect, z_in, from: super::bimlook::made_source(e).map(|h| h.hex()) });
         if out.len() >= MAX_OBJECTS {
             break;

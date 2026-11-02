@@ -2323,6 +2323,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                         room: String::new(),
                         aff_in: None,
                         aff_note: String::new(),
+                        kind_source: String::new(),
+                        ifc_class: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -2348,6 +2350,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                             room: String::new(),
                             aff_in: None,
                             aff_note: String::new(),
+                            kind_source: String::new(),
+                            ifc_class: String::new(),
                         });
                         *c.by_type.entry(t).or_default() += 1;
                     }
@@ -4463,6 +4467,53 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 super::printcond::store_room_panels(&mut sp, gear);
                 super::printcond::store_room_circuits(&mut sp, runs, &circuits);
                 s.doc_mut()?.building_spec = Some(sp.to_json());
+            }
+        }
+        // A "receptacle" that is only a circuit-like name (a panel's feeder, DP2-11) by a keynote's
+        // box (its number drawn in it) is no device: every receptacle symbol is round.
+        let mut devices = devices;
+        let before_boxes = devices.len();
+        {
+            let d = s.doc()?;
+            let mut shapes: BTreeMap<String, bool> = BTreeMap::new();
+            devices.retain(|dv| {
+                if dv.kind != "receptacle" {
+                    return true;
+                }
+                let Some(cadaddy_doc::EntityKind::Insert(ins)) =
+                    cadaddy_doc::Handle::parse_hex(&dv.handle).and_then(|h| d.model.get(h)).map(|e| &e.kind)
+                else {
+                    return true;
+                };
+                !*shapes.entry(ins.block.clone()).or_insert_with(|| symbol_shape(d, &ins.block).is_some_and(|sh| plain_box(&sh)))
+            });
+        }
+        if devices.len() < before_boxes {
+            progress_line(&format!(
+                "  circuit names by a keynote's box (its number in it), not receptacles: {} left out",
+                before_boxes - devices.len()
+            ));
+        }
+        // What each device is, by the legend row its symbol is.
+        let legend = legend_symbols(s.doc()?, job);
+        if !legend.is_empty() {
+            let n = kinds_from_legend(s.doc()?, &legend, &mut devices);
+            let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+            for dv in &devices {
+                *kinds.entry(if dv.kind.is_empty() { super::readers::device_kind(&dv.tag).to_string() } else { dv.kind.clone() }).or_default() += 1;
+            }
+            progress_line(&format!(
+                "  device kinds from the legends: {} symbols in {} rows; {n} devices took theirs; by kind {kinds:?}",
+                legend.len(),
+                legend.values().collect::<BTreeSet<_>>().len()
+            ));
+            // The ones still of no kind: their marks, each a question for the legend.
+            let mut unknown: BTreeMap<&str, usize> = BTreeMap::new();
+            for dv in devices.iter().filter(|dv| dv.kind.is_empty() && super::readers::device_kind(&dv.tag) == "device") {
+                *unknown.entry(dv.tag.as_str()).or_default() += 1;
+            }
+            if !unknown.is_empty() {
+                progress_line(&format!("  devices of no kind (their mark is in no legend row or known list): {unknown:?}"));
             }
         }
         // The stacks are pipes through the storey, not devices.
@@ -7005,6 +7056,269 @@ const TITLE_BLOCK_SHARE: f64 = 0.12;
 
 /// The views of one unit type kept at most.
 const MAX_UNIT_VIEWS: usize = 40;
+
+/// A legend row's device kind and IFC class from its description (`DUPLEX RECEPTACLE - NEMA
+/// 5-20R`: a receptacle, `IfcOutlet`). None for a row that names no device (a mounting height
+/// note, a circuit designation, a fixture that the luminaire schedule types).
+pub(crate) fn legend_kind(description: &str) -> Option<(&'static str, &'static str)> {
+    let u = description.to_ascii_uppercase();
+    let has = |w: &str| u.contains(w);
+    if ["INSTALL DEVICE AT", "DESIGNATION", "MOUNT 6", "LOWER CASE", "INDICATES", "LIGHTING FIXTURE", "CIRCUITING"].iter().any(|w| has(w)) {
+        return None;
+    }
+    Some(if has("GFCI") || has("GROUND FAULT") || has("GFI ") {
+        ("gfci_receptacle", "IfcOutlet")
+    } else if has("CEILING MOUNTED") && has("RECEPTACLE") {
+        ("ceiling_receptacle", "IfcOutlet")
+    } else if has("QUAD") && has("RECEPTACLE") {
+        ("quad_receptacle", "IfcOutlet")
+    } else if has("RECEPTACLE") {
+        ("receptacle", "IfcOutlet")
+    } else if has("FLOOR BOX") {
+        ("floor_box", "IfcOutlet")
+    } else if has("3-WAY") || has("THREE WAY") {
+        ("3way_switch", "IfcSwitchingDevice")
+    } else if has("OCCUPANCY") || has("VACANCY") {
+        ("occupancy_sensor", "IfcSensor")
+    } else if has("SWITCH") && !has("DISCONNECT") {
+        ("switch", "IfcSwitchingDevice")
+    } else if has("DISCONNECT") {
+        ("disconnect", "IfcSwitchingDevice")
+    } else if has("SMOKE") {
+        ("smoke_detector", "IfcSensor")
+    } else if has("HEAT SENSOR") || has("HEAT DETECTOR") {
+        ("heat_detector", "IfcSensor")
+    } else if has("PULL STATION") {
+        ("pull_station", "IfcAlarm")
+    } else if has("HORN") || has("STROBE") {
+        ("fire_alarm_notification", "IfcAlarm")
+    } else if has("TELEVISION") || has("TV OUTLET") || has("CATV") {
+        ("tv_outlet", "IfcOutlet")
+    } else if has("DATA") || has("TELEPHONE") {
+        ("data_outlet", "IfcOutlet")
+    } else if has("AUDIO") {
+        ("av_outlet", "IfcOutlet")
+    } else if has("WIRELESS ACCESS") {
+        ("wireless_access_point", "IfcCommunicationsAppliance")
+    } else if has("CAMERA") {
+        ("camera", "IfcCommunicationsAppliance")
+    } else if has("SPEAKER") {
+        ("speaker", "IfcAudioVisualAppliance")
+    } else if has("THERMOSTAT") {
+        ("thermostat", "IfcUnitaryControlElement")
+    } else if has("EXHAUST FAN") {
+        ("exhaust_fan", "IfcFan")
+    } else if has("JUNCTION BOX") {
+        ("junction_box", "IfcJunctionBox")
+    } else if has("PANELBOARD") || has("PANEL BOARD") {
+        ("panel", "IfcElectricDistributionBoard")
+    } else if has("EXIT SIGN") {
+        ("exit_sign", "IfcLightFixture")
+    } else if has("DAMPER") {
+        ("motorized_damper", "IfcDamper")
+    } else if has("DOOR HOLD") {
+        ("door_holder", "IfcElectricAppliance")
+    } else if ["CARD READER", "INTERCOM", "BELL", "PUSH BUTTON", "VOLUME CONTROL", "DOOR CONTACT", "DOOR POWER", "POWER PACK"].iter().any(|w| has(w))
+    {
+        ("low_voltage_device", "IfcCommunicationsAppliance")
+    } else {
+        return None;
+    })
+}
+
+/// A symbol block's shape, whatever its size and name (a PDF import names the repeated drawings
+/// of each page apart): its lines, circles, arcs and polyline corners, put in its box scaled to
+/// one, rounded to a 16th, sorted. None for an empty block or one of more than 64 parts.
+pub(crate) fn symbol_shape(d: &cadaddy_doc::Drawing, block: &str) -> Option<Vec<(u8, i32, i32, i32)>> {
+    let b = d.block(block)?;
+    if b.entities.len() > 64 {
+        return None;
+    }
+    shape_of(b.entities.iter().map(|e| &e.kind))
+}
+
+/// [`symbol_shape`] of some drawn objects (a symbol drawn once, as linework, in a legend row).
+fn shape_of<'a>(objects: impl Iterator<Item = &'a cadaddy_doc::EntityKind>) -> Option<Vec<(u8, i32, i32, i32)>> {
+    let mut parts: Vec<(u8, [f64; 2], f64)> = Vec::new();
+    for kind in objects.take(64) {
+        match kind {
+            cadaddy_doc::EntityKind::Line(l) => {
+                parts.push((0, [l.a.x, l.a.y], 0.0));
+                parts.push((0, [l.b.x, l.b.y], 0.0));
+            }
+            cadaddy_doc::EntityKind::Circle(c) => parts.push((1, [c.center.x, c.center.y], c.radius)),
+            cadaddy_doc::EntityKind::Arc(a) => parts.push((2, [a.center.x, a.center.y], a.radius)),
+            cadaddy_doc::EntityKind::LwPolyline(pl) => parts.extend(pl.vertices.iter().take(64).map(|v| (3, [v.p.x, v.p.y], 0.0))),
+            _ => {}
+        }
+    }
+    let (lo, hi) = parts.iter().fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), (_, p, r)| {
+        ([lo[0].min(p[0] - r), lo[1].min(p[1] - r)], [hi[0].max(p[0] + r), hi[1].max(p[1] + r)])
+    });
+    let size = (hi[0] - lo[0]).max(hi[1] - lo[1]);
+    if parts.is_empty() || !(size.is_finite() && size > 0.0) {
+        return None;
+    }
+    let q = |v: f64| (v / size * 16.0).round() as i32;
+    let mut sig: Vec<(u8, i32, i32, i32)> = parts.iter().map(|(k, p, r)| (*k, q(p[0] - lo[0]), q(p[1] - lo[1]), q(*r))).collect();
+    sig.sort_unstable();
+    sig.dedup();
+    Some(sig)
+}
+
+/// A symbol's shape ([`symbol_shape`]).
+type Shape = Vec<(u8, i32, i32, i32)>;
+
+/// Whether a shape is a keynote's box: straight pieces only, drawn into all four corners of its
+/// extent (square or eased), with its number's strokes inside. A receptacle's symbol is round (a
+/// circle never comes near its extent's corners); an empty box (furniture, equipment drawn by a
+/// receptacle whose label it was taken for) has nothing inside.
+fn plain_box(shape: &Shape) -> bool {
+    let straight = !shape.is_empty() && shape.iter().all(|(k, _, _, r)| (*k == 0 || *k == 3) && *r == 0);
+    let (x1, y1) = shape.iter().fold((0, 0), |(x, y), (_, px, py, _)| (x.max(*px), y.max(*py)));
+    let corner = |x: i32, y: i32| shape.iter().any(|(_, px, py, _)| (px - x).abs() <= 1 && (py - y).abs() <= 1);
+    let inside = shape.iter().any(|(_, px, py, _)| *px > 1 && *px < x1 - 1 && *py > 1 && *py < y1 - 1);
+    straight && x1 > 2 && y1 > 2 && corner(0, 0) && corner(x1, 0) && corner(0, y1) && corner(x1, y1) && inside
+}
+
+/// The electrical legends' symbols: each row's symbol (by its shape) with its description and
+/// sheet. Read off the SYMBOL | DESCRIPTION tables of the E sheets: those in the drawing and the
+/// legend sheets the set wasn't imported for (re-read from their PDF pages).
+fn legend_symbols(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> BTreeMap<Shape, (String, String)> {
+    let mut out: BTreeMap<Shape, (String, String)> = BTreeMap::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut pages: Vec<(String, cadaddy_doc::Drawing)> = job_sheet_refs(job)
+        .iter()
+        .filter(|r| r.discipline.eq_ignore_ascii_case("E") && seen.insert(r.number.split('/').next().unwrap_or("").to_string()))
+        .take(MAX_LEGEND_SHEETS)
+        .map(|sh| {
+            (
+                sh.number.split('/').next().unwrap_or("").to_string(),
+                super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() }),
+            )
+        })
+        .collect();
+    pages.extend(non_plan_pages(job, "E").into_iter().filter(|(n, _)| !seen.contains(n)));
+    for (number, sub) in &pages {
+        legend_rows(sub, number, &mut out);
+    }
+    out
+}
+
+/// One sheet's legend rows into `out` ([`legend_symbols`]).
+fn legend_rows(sub: &cadaddy_doc::Drawing, number: &str, out: &mut BTreeMap<Shape, (String, String)>) {
+    let texts = cadaddy_mepfix::sheet_facts::texts(sub);
+    let heads: Vec<&cadaddy_mepfix::sheet_facts::TextItem> =
+        texts.iter().filter(|t| t.value.trim().eq_ignore_ascii_case("SYMBOL")).take(20).collect();
+    if heads.is_empty() {
+        return;
+    }
+    let symbols: Vec<(String, cadaddy_geom::Vec2)> = sub
+        .model
+        .iter()
+        .filter_map(|e| {
+            let cadaddy_doc::EntityKind::Insert(ins) = &e.kind else { return None };
+            let b = cadaddy_doc::entity_bounds(sub, e, 0);
+            (!b.is_empty()).then(|| (ins.block.clone(), b.center()))
+        })
+        .take(MAX_LEGEND_SYMBOLS)
+        .collect();
+    for head in heads {
+        let h = head.height.max(1e-6);
+        // Its description column: the DESCRIPTION header beside it, on its row.
+        let Some(desc) = texts
+            .iter()
+            .filter(|t| t.value.trim().to_ascii_uppercase().starts_with("DESCRIPTION") && (t.at.y - head.at.y).abs() <= h && t.at.x > head.at.x)
+            .min_by(|a, b| (a.at.x - head.at.x).total_cmp(&(b.at.x - head.at.x)))
+        else {
+            continue;
+        };
+        // The table: down to the next SYMBOL header under this one (or a long way).
+        let below = texts
+            .iter()
+            .filter(|t| t.value.trim().eq_ignore_ascii_case("SYMBOL") && (t.at.x - head.at.x).abs() <= 2.0 * h && t.at.y < head.at.y - h)
+            .map(|t| t.at.y)
+            .fold(head.at.y - LEGEND_ROWS_H * h, f64::max);
+        let rows: Vec<&cadaddy_mepfix::sheet_facts::TextItem> =
+            texts.iter().filter(|t| (t.at.x - desc.at.x).abs() <= 1.5 * h && t.at.y < head.at.y - 0.5 * h && t.at.y > below).collect();
+        for (block, c) in symbols.iter().filter(|(_, c)| c.x > head.at.x - 3.0 * h && c.x < desc.at.x && c.y < head.at.y && c.y > below) {
+            let Some(shape) = symbol_shape(sub, block) else { continue };
+            if out.contains_key(&shape) {
+                continue;
+            }
+            // Its row: the description line nearest its middle.
+            let Some(row) = rows
+                .iter()
+                .filter(|t| (t.at.y - c.y).abs() <= 2.0 * t.height.max(h))
+                .min_by(|a, b| (a.at.y - c.y).abs().total_cmp(&(b.at.y - c.y).abs()))
+            else {
+                continue;
+            };
+            out.insert(shape, (row.value.trim().to_string(), number.to_string()));
+        }
+        // A symbol drawn once (the import blocks only what repeats on a page): the linework in
+        // the row's symbol cell, left of its description, on its first line.
+        let x0 = head.at.x - 3.0 * h;
+        let x1 = desc.at.x - 0.5 * h;
+        let drawn: Vec<(cadaddy_geom::Bounds2, &cadaddy_doc::EntityKind)> = sub
+            .model
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.kind,
+                    cadaddy_doc::EntityKind::Line(_)
+                        | cadaddy_doc::EntityKind::Circle(_)
+                        | cadaddy_doc::EntityKind::Arc(_)
+                        | cadaddy_doc::EntityKind::LwPolyline(_)
+                )
+            })
+            .filter_map(|e| {
+                let b = cadaddy_doc::entity_bounds(sub, e, 0);
+                (!b.is_empty() && b.min.x >= x0 && b.max.x <= x1 && b.min.y > below && b.max.y < head.at.y).then_some((b, &e.kind))
+            })
+            .take(MAX_LEGEND_SYMBOLS)
+            .collect();
+        for row in &rows {
+            let th = row.height.max(1e-6);
+            let (y0, y1) = (row.at.y - 1.0 * th, row.at.y + 1.8 * th);
+            let cell: Vec<&cadaddy_doc::EntityKind> = drawn.iter().filter(|(b, _)| b.min.y >= y0 && b.max.y <= y1).map(|(_, k)| *k).collect();
+            if cell.len() < 2 {
+                continue;
+            }
+            let Some(shape) = shape_of(cell.into_iter()) else { continue };
+            out.entry(shape).or_insert_with(|| (row.value.trim().to_string(), number.to_string()));
+        }
+    }
+}
+
+/// A legend table's rows reach at most this many header heights down.
+const LEGEND_ROWS_H: f64 = 150.0;
+/// Symbols looked at on one legend sheet, at most.
+const MAX_LEGEND_SYMBOLS: usize = 50_000;
+
+/// Each device whose symbol is a legend row's: that row's kind and IFC class, the row its source.
+/// How many took one.
+fn kinds_from_legend(d: &cadaddy_doc::Drawing, legend: &BTreeMap<Shape, (String, String)>, devices: &mut [super::readers::ReadDevice]) -> usize {
+    let mut n = 0usize;
+    let mut shapes: BTreeMap<String, Option<Shape>> = BTreeMap::new();
+    for dv in devices.iter_mut() {
+        if !(dv.kind.is_empty() || dv.kind == "device") {
+            continue;
+        }
+        let Some(cadaddy_doc::EntityKind::Insert(ins)) = cadaddy_doc::Handle::parse_hex(&dv.handle).and_then(|h| d.model.get(h)).map(|e| &e.kind)
+        else {
+            continue;
+        };
+        let shape = shapes.entry(ins.block.clone()).or_insert_with(|| symbol_shape(d, &ins.block));
+        let Some((desc, sheet)) = shape.as_ref().and_then(|sh| legend.get(sh)) else { continue };
+        let Some((kind, ifc)) = legend_kind(desc) else { continue };
+        dv.kind = kind.into();
+        dv.ifc_class = ifc.into();
+        dv.kind_source = format!("{sheet} legend: {desc}");
+        n += 1;
+    }
+    n
+}
 
 /// What [`stamp_typical_runs`] made: the stamped runs, which of the runs it was given lie in a
 /// typical room's plan (each `true` went into the rooms), and the count per sheet and view.
@@ -12098,6 +12412,94 @@ mod tests {
         let last = title_cell([1450.0, 50.0], &titles, sheet).unwrap();
         assert!((last[2] - 1760.0).abs() < 1e-9 && (last[3] - 1400.0).abs() < 1e-9, "{last:?}");
         assert!(title_cell([1.0, 1.0], &titles, [0.0, 0.0, f64::NAN, 1.0]).is_none());
+    }
+
+    #[test]
+    fn a_symbol_is_known_by_its_shape_not_its_size_or_name() {
+        let mut s = crate::Session::new();
+        // A duplex receptacle (a circle, two short lines through it) at two sizes, and a keynote
+        // box (a square), each made a block.
+        let block = |s: &mut crate::Session, name: &str, k: f64, square: bool| {
+            let lo = s.doc().unwrap().handseed;
+            if square {
+                s.execute("pline", &json!({"vertices": [[0, 0], [k * 6.0, 0], [k * 6.0, k * 6.0], [0, k * 6.0]], "closed": true})).unwrap();
+            } else {
+                s.execute("circle", &json!({"center": [0, 0], "radius": k * 3.0})).unwrap();
+                s.execute("line", &json!({"points": [[-k * 4.5, k], [k * 4.5, k]]})).unwrap();
+                s.execute("line", &json!({"points": [[-k * 4.5, -k], [k * 4.5, -k]]})).unwrap();
+            }
+            let handles: Vec<String> = s.doc().unwrap().model.iter().filter(|e| e.handle.0 >= lo).map(|e| e.handle.hex()).collect();
+            s.execute("block", &json!({"name": name, "base": [0, 0], "handles": handles})).unwrap();
+        };
+        block(&mut s, "PDF-SYM-12", 1.0, false);
+        block(&mut s, "PDF-SYM-301", 4.0, false);
+        block(&mut s, "PDF-SYM-7", 1.0, true);
+        let d = s.doc().unwrap();
+        let (a, b, c) = (symbol_shape(d, "PDF-SYM-12"), symbol_shape(d, "PDF-SYM-301"), symbol_shape(d, "PDF-SYM-7"));
+        assert!(a.is_some() && a == b, "{a:?} {b:?}");
+        assert_ne!(a, c);
+        assert_eq!(symbol_shape(d, "NO-SUCH-BLOCK"), None);
+        // An empty box is no keynote (furniture by a receptacle); the receptacle isn't one either.
+        assert!(!plain_box(&c.unwrap()) && !plain_box(&a.unwrap()));
+        let keynote: Shape = vec![(3, 0, 0, 0), (3, 16, 0, 0), (3, 16, 16, 0), (3, 0, 16, 0), (0, 8, 4, 0), (0, 8, 12, 0)];
+        assert!(plain_box(&keynote));
+        let round: Shape = vec![
+            (3, 8, 0, 0),
+            (3, 16, 8, 0),
+            (3, 8, 16, 0),
+            (3, 0, 8, 0),
+            (3, 3, 2, 0),
+            (3, 13, 2, 0),
+            (3, 3, 14, 0),
+            (3, 13, 14, 0),
+            (0, 2, 6, 0),
+            (0, 14, 6, 0),
+        ];
+        assert!(!plain_box(&round), "a circle drawn as a polygon is round");
+        // A box with rounded corners, quantized onto its edges.
+        let rounded: Shape =
+            vec![(3, 0, 1, 0), (3, 0, 11, 0), (3, 1, 0, 0), (3, 1, 12, 0), (3, 15, 0, 0), (3, 15, 12, 0), (3, 16, 1, 0), (3, 16, 11, 0)];
+        assert!(!plain_box(&rounded), "an eased box with nothing in it");
+        // PDF-SYM-108 itself: an eased box with its "1" drawn inside.
+        let keynote_1: Shape = vec![
+            (0, 4, 11, 0),
+            (0, 6, 0, 0),
+            (3, 0, 0, 0),
+            (3, 0, 1, 0),
+            (3, 0, 10, 0),
+            (3, 0, 11, 0),
+            (3, 1, 0, 0),
+            (3, 1, 11, 0),
+            (3, 12, 2, 0),
+            (3, 12, 7, 0),
+            (3, 14, 0, 0),
+            (3, 14, 11, 0),
+        ];
+        assert!(plain_box(&keynote_1));
+    }
+
+    #[test]
+    fn a_legend_rows_description_names_its_devices_kind_and_ifc_class() {
+        // The hotel's E-1 legend rows, as printed.
+        for (row, want) in [
+            ("DUPLEX RECEPTACLE - NEMA 5-20R, UNO", Some(("receptacle", "IfcOutlet"))),
+            ("CEILING MOUNTED DUPLEX RECEPTACLE", Some(("ceiling_receptacle", "IfcOutlet"))),
+            ("QUAD RECEPTACLE - NEMA 5-20R, UNO", Some(("quad_receptacle", "IfcOutlet"))),
+            ("SINGLE POLE WALL SWITCH", Some(("switch", "IfcSwitchingDevice"))),
+            ("SMOKE SENSOR", Some(("smoke_detector", "IfcSensor"))),
+            ("FIRE ALARM HORN/STROBE", Some(("fire_alarm_notification", "IfcAlarm"))),
+            ("TELEVISION OUTLET", Some(("tv_outlet", "IfcOutlet"))),
+            ("TELEPHONE/DATA OUTLET", Some(("data_outlet", "IfcOutlet"))),
+            ("OCCUPANCY SENSOR", Some(("occupancy_sensor", "IfcSensor"))),
+            ("JUNCTION BOX", Some(("junction_box", "IfcJunctionBox"))),
+            ("DISCONNECT SWITCH", Some(("disconnect", "IfcSwitchingDevice"))),
+            ("ELECTRICAL PANELBOARD", Some(("panel", "IfcElectricDistributionBoard"))),
+            ("INSTALL DEVICE AT HEIGHT INDICATED (+60\" = MOUNT AT 60\"AFF)", None),
+            ("RECEPTACLE DESIGNATION - REFER TO ABBREVIATIONS ON THIS SHEET", None),
+            ("LIGHTING FIXTURE - REFER TO LIGHT FIXTURE SCHEDULE", None),
+        ] {
+            assert_eq!(legend_kind(row), want, "{row}");
+        }
     }
 
     #[test]

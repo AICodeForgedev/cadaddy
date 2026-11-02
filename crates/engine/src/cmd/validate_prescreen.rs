@@ -394,6 +394,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame) -> Vec<It
             continue;
         }
         let Some(kind) = super::elemprops::element_kind(e).filter(|k| MEP_KINDS.contains(&k.as_str())) else { continue };
+        let kind = super::elemprops::reported_kind(e, kind);
         let Some(level) = super::elemprops::level_of(e) else { continue };
         let b = cadaddy_doc::entity_bounds(d, e, 0);
         if b.is_empty() {
