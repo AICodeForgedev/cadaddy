@@ -80,6 +80,36 @@ pub fn in_view(b: &Aabb, v: &ShadeView) -> bool {
     (c.dot(v.right) - v.center.x).abs() <= hw + reach(v.right) && (c.dot(v.up) - v.center.y).abs() <= hh + reach(v.up)
 }
 
+/// The part of the plan (XY) view `v` shows of `bounds`: where the view's rectangle, carried
+/// along the view direction, crosses the box's bottom and top, within the box's plan; its whole
+/// plan when the view looks along the plan (a side view). `None` when the view misses it.
+pub fn plan_region(v: &ShadeView, bounds: &Aabb) -> Option<cadaddy_geom::Bounds2> {
+    use cadaddy_geom::{Bounds2, Vec2};
+    if bounds.is_empty() {
+        return None;
+    }
+    let whole = Bounds2::new(Vec2::new(bounds.lo.x, bounds.lo.y), Vec2::new(bounds.hi.x, bounds.hi.y));
+    let hh = v.height / 2.0;
+    let hw = hh * f64::from(v.width_px) / f64::from(v.height_px.max(1));
+    let (r, u) = (v.right, v.up);
+    // How far the view plane's axes stand from the plan's: none in a side view.
+    let det = r.x * u.y - r.y * u.x;
+    if det.abs() < 0.05 || !det.is_finite() {
+        return Some(whole);
+    }
+    let mut seen = Bounds2::EMPTY;
+    for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        for z in [bounds.lo.z, bounds.hi.z] {
+            // The plan point at height z on the ray through this corner of the view.
+            let a = v.center.x + sx * hw - r.z * z;
+            let b = v.center.y + sy * hh - u.z * z;
+            seen.add(Vec2::new((a * u.y - r.y * b) / det, (r.x * b - a * u.x) / det));
+        }
+    }
+    let out = seen.intersection(&whole);
+    (!out.is_empty() && out.min.is_finite() && out.max.is_finite()).then_some(out)
+}
+
 /// A run of the base scene's triangles and lines in one cell of the plan, and its bounds.
 #[derive(Clone, Debug)]
 pub struct Chunk {
@@ -423,6 +453,92 @@ fn box_side(b: &Aabb, planes: &[cadaddy_doc::SectionPlane]) -> Side {
 /// Most block references made instances (beyond them, references draw as part of the base).
 pub const MAX_INSTANCES: usize = 2_000_000;
 
+/// How many identical meshes make a prototype of their own (fewer draw in the base).
+pub const MIN_REPEAT: usize = 4;
+
+/// Meshes with more corners than this are never compared (a run's mesh, a wall's): repeated
+/// pieces are small.
+pub const MAX_REPEAT_CORNERS: usize = 512;
+
+/// Meshes that repeat: each shape's prototype (an object in its own frame), and each copy's
+/// prototype number and placement.
+#[derive(Default)]
+struct Repeats {
+    protos: Vec<(String, cadaddy_doc::Entity)>,
+    placed: std::collections::HashMap<cadaddy_doc::Handle, (u32, Mat4)>,
+}
+
+/// A mesh in its own frame: moved so its first corner is the origin and turned about Z so the
+/// first corner beside it in plan lies along +X; the placement back; a key equal for meshes
+/// that look the same (corners on a fine grid, faces, and what colours it).
+fn mesh_frame(e: &cadaddy_doc::Entity, m: &cadaddy_doc::Mesh) -> Option<(Vec<i64>, String, Vec<Vec3>, Mat4)> {
+    let o = *m.vertices.first()?;
+    // Its reach from the first corner (the same however it is turned).
+    let size = m.vertices.iter().map(|v| (*v - o).len()).fold(0.0, f64::max);
+    if !size.is_finite() || size <= 0.0 {
+        return None;
+    }
+    let grid = size * 1e-6;
+    let turn = m.vertices.iter().map(|v| *v - o).find(|d| d.x.hypot(d.y) > grid * 10.0).map_or(0.0, |d| d.y.atan2(d.x));
+    let (s, c) = turn.sin_cos();
+    let own: Vec<Vec3> = m
+        .vertices
+        .iter()
+        .map(|v| {
+            let d = *v - o;
+            Vec3::new(c * d.x + s * d.y, -s * d.x + c * d.y, d.z)
+        })
+        .collect();
+    let mut key: Vec<i64> = Vec::with_capacity(own.len() * 3 + m.faces.len() * 5);
+    for p in &own {
+        for x in [p.x, p.y, p.z] {
+            key.push((x / grid).round() as i64);
+        }
+    }
+    for f in &m.faces {
+        key.push(-1 - f.v.len() as i64);
+        key.extend(f.v.iter().map(|i| i64::from(*i)));
+        key.push(f.hidden as i64);
+    }
+    let cm = &e.common;
+    let look = format!("{}|{:?}|{}|{:?}|{:?}|{:?}|{:?}", cm.layer, cm.color, cm.linetype, cm.transparency, cm.material, m.kind, cm.visible);
+    let place = Mat4 { m: [[c, -s, 0.0, o.x], [s, c, 0.0, o.y], [0.0, 0.0, 1.0, o.z], [0.0, 0.0, 0.0, 1.0]] };
+    Some((key, look, own, place))
+}
+
+/// The meshes of `store` that repeat at least [`MIN_REPEAT`] times.
+fn repeated_meshes(d: &Drawing, store: &EntityStore) -> Repeats {
+    type Group = (Vec<(cadaddy_doc::Handle, Mat4)>, Option<cadaddy_doc::Entity>);
+    let mut groups: std::collections::HashMap<(Vec<i64>, String), Group> = std::collections::HashMap::new();
+    for e in store.iter() {
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        if m.vertices.len() > MAX_REPEAT_CORNERS || !d.is_visible(e) {
+            continue;
+        }
+        let Some((key, look, own, place)) = mesh_frame(e, m) else { continue };
+        let g = groups.entry((key, look)).or_insert_with(|| (Vec::new(), None));
+        if g.1.is_none() {
+            let mut p = (**e).clone();
+            p.kind = EntityKind::Mesh(cadaddy_doc::Mesh { vertices: own, faces: m.faces.clone(), kind: m.kind });
+            g.1 = Some(p);
+        }
+        g.0.push((e.handle, place));
+    }
+    let mut out = Repeats::default();
+    let mut kept: Vec<Group> = groups.into_values().filter(|g| g.0.len() >= MIN_REPEAT).collect();
+    // The same numbering from build to build.
+    kept.sort_by_key(|g| g.0.first().map(|x| x.0));
+    for (copies, proto) in kept {
+        let Some(proto) = proto else { continue };
+        let k = out.protos.len() as u32;
+        out.protos.push((format!("repeated mesh {} ×{}", proto.handle.hex(), copies.len()), proto));
+        for (h, m) in copies {
+            out.placed.insert(h, (k, m));
+        }
+    }
+    out
+}
+
 /// Build the model of `space` (curves to `tol`, colour 7 for `bg`), `progress` counting the steps
 /// done out of the total stored in `total`.
 pub fn build(d: &Drawing, space: &Space, tol: f64, bg: Rgb, progress: &AtomicUsize, total: &AtomicUsize) -> Model3 {
@@ -450,7 +566,9 @@ pub fn build_clipped(
             names.push(i.block.clone());
         }
     }
-    total.store(names.len() + 2, Ordering::Relaxed);
+    // Repeated meshes (the same shape and look, moved and turned about Z): instances too.
+    let repeats = repeated_meshes(d, store);
+    total.store(names.len() + repeats.protos.len() + 2, Ordering::Relaxed);
     let mut protos: Vec<Proto> = Vec::new();
     let mut proto_of: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for n in &names {
@@ -472,11 +590,33 @@ pub fn build_clipped(
         proto_of.insert(n.to_ascii_lowercase(), protos.len() as u32);
         protos.push(Proto { name: n.clone(), lods: [full, simple, boxed], bounds });
     }
+    // The repeated meshes' prototypes, after the blocks'.
+    let first_repeat = protos.len() as u32;
+    for (name, e) in repeats.protos {
+        progress.fetch_add(1, Ordering::Relaxed);
+        let full = scene(&with_model(d, std::iter::once(e)), &Space::Model, tol, bg);
+        let bounds = bounds_of(&full);
+        let simple = simplify(&full, &bounds, 5.0);
+        let boxed = box_of(&full, &bounds);
+        protos.push(Proto { name, lods: [full, simple, boxed], bounds });
+    }
     let mut instances = Vec::new();
     let mut rest = Vec::new();
     // Placements the section box cuts through: (reference, prototype, placement).
     let mut cut_through: Vec<(cadaddy_doc::Handle, u32, Mat4)> = Vec::new();
     for e in store.iter() {
+        if let Some(&(k, m)) = repeats.placed.get(&e.handle)
+            && instances.len() < MAX_INSTANCES
+        {
+            let p = first_repeat + k;
+            let bounds = protos.get(p as usize).map_or(Aabb::EMPTY, |pr| pr.bounds.placed(&m));
+            match box_side(&bounds, extra_planes) {
+                Side::Inside => instances.push(Instance { proto: p, m, bounds }),
+                Side::Outside => {}
+                Side::Cut => cut_through.push((e.handle, p, m)),
+            }
+            continue;
+        }
         if let EntityKind::Insert(i) = &e.kind
             && let Some(&p) = proto_of.get(&i.block.to_ascii_lowercase())
             && let Some(b) = d.block(&i.block)
@@ -732,6 +872,79 @@ mod tests {
         let shown: usize = vis_corner.instances.iter().map(|g| g.2.len()).sum();
         assert!(shown < 10_000, "corner view should cull most instances");
         assert!(scene_corner.tris.len() < full.tris.len(), "corner scene should have fewer tris than full");
+    }
+
+    #[test]
+    fn repeated_meshes_are_instanced_where_they_stand() {
+        // Forty device boxes, the same shape, moved and turned; two unlike ones; and three of a
+        // shape (too few to share).
+        let mut d = Drawing::new_metric();
+        let turned = |m: Mesh, at: Vec3, a: f64| {
+            let (s, c) = a.sin_cos();
+            Mesh { vertices: m.vertices.iter().map(|p| Vec3::new(c * p.x - s * p.y + at.x, s * p.x + c * p.y + at.y, p.z + at.z)).collect(), ..m }
+        };
+        let unit = boxmesh(Vec3::ZERO, Vec3::new(4.0, 2.0, 3.0));
+        for k in 0..40 {
+            let at = Vec3::new(f64::from(k) * 10.0, f64::from(k % 7) * 5.0, 1.5);
+            d.add(&Space::Model, Common::default(), EntityKind::Mesh(turned(unit.clone(), at, f64::from(k) * 0.3))).unwrap();
+        }
+        d.add(&Space::Model, Common::default(), EntityKind::Mesh(boxmesh(Vec3::ZERO, Vec3::new(9.0, 1.0, 1.0)))).unwrap();
+        d.add(&Space::Model, Common::default(), EntityKind::Mesh(boxmesh(Vec3::ZERO, Vec3::new(1.0, 9.0, 1.0)))).unwrap();
+        for k in 0..3 {
+            d.add(
+                &Space::Model,
+                Common::default(),
+                EntityKind::Mesh(boxmesh(Vec3::new(f64::from(k), 50.0, 0.0), Vec3::new(f64::from(k) + 0.5, 50.5, 7.0))),
+            )
+            .unwrap();
+        }
+        // The same shape in another colour is another prototype.
+        let red = Common { color: cadaddy_color::Color::from_aci(1), ..Common::default() };
+        for k in 0..4 {
+            d.add(&Space::Model, red.clone(), EntityKind::Mesh(turned(unit.clone(), Vec3::new(0.0, 100.0 + f64::from(k) * 10.0, 0.0), 0.0))).unwrap();
+        }
+        let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let m = build(&d, &Space::Model, 0.01, Rgb(0, 0, 0), &p, &t);
+        assert_eq!(p.load(Ordering::Relaxed), t.load(Ordering::Relaxed));
+        assert_eq!(m.protos.len(), 2, "{:?}", m.protos.iter().map(|p| &p.name).collect::<Vec<_>>());
+        assert_eq!(m.instances.len(), 44);
+        // One box's triangles held once per shape; the rest in the base.
+        assert!(m.protos.iter().all(|p| p.lods[0].tris.len() == 12));
+        assert_eq!(m.base.tris.len(), 5 * 12);
+        assert_eq!(m.total_tris(), 49 * 12);
+        // Every copy stands where its mesh does: the placed corners are the drawing's.
+        let plain = scene(&d, &Space::Model, 0.01, Rgb(0, 0, 0));
+        let key = |p: Vec3| ((p.x * 1e4).round() as i64, (p.y * 1e4).round() as i64, (p.z * 1e4).round() as i64);
+        let mut want: Vec<_> = plain.tris.iter().flat_map(|t| t.p).map(key).collect();
+        let mut got: Vec<_> = m.flatten().tris.iter().flat_map(|t| t.p).map(key).collect();
+        want.sort_unstable();
+        got.sort_unstable();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn the_plan_a_view_shows() {
+        let b = Aabb { lo: Vec3::new(0.0, 0.0, 0.0), hi: Vec3::new(1000.0, 500.0, 40.0) };
+        // From above: the view's rectangle.
+        let r = plan_region(&view(Vec2::new(100.0, 100.0), 50.0, 200, 100), &b).unwrap();
+        assert!((r.min.x - 50.0).abs() < 1e-9 && (r.max.x - 150.0).abs() < 1e-9, "{r:?}");
+        assert!((r.min.y - 75.0).abs() < 1e-9 && (r.max.y - 125.0).abs() < 1e-9, "{r:?}");
+        // Past the building's edge: cut to its plan; off it: nothing.
+        let edge = plan_region(&view(Vec2::new(0.0, 0.0), 50.0, 100, 100), &b).unwrap();
+        assert_eq!((edge.min.x, edge.min.y), (0.0, 0.0));
+        assert!(plan_region(&view(Vec2::new(-500.0, -500.0), 50.0, 100, 100), &b).is_none());
+        // From the side: the whole plan.
+        let side = ShadeView::new(cadaddy_geom::view3::Projection::new(Vec3::new(1.0, 0.0, 0.0)), Vec2::new(250.0, 20.0), 60.0, 100, 100);
+        let r = plan_region(&side, &b).unwrap();
+        assert_eq!((r.width(), r.height()), (1000.0, 500.0));
+        // An isometric view down onto the middle: round the middle, wider than from above.
+        let iso_p = cadaddy_geom::view3::Projection::new(Vec3::new(1.0, 1.0, 1.0));
+        let mid = Vec3::new(500.0, 250.0, 20.0);
+        let iso = ShadeView::new(iso_p, Vec2::new(mid.dot(iso_p.unwrap().right), mid.dot(iso_p.unwrap().up)), 50.0, 100, 100);
+        let r = plan_region(&iso, &b).unwrap();
+        assert!(r.contains(Vec2::new(500.0, 250.0)), "{r:?}");
+        assert!(r.width() > 50.0 && r.width() < 400.0, "{r:?}");
+        assert!(plan_region(&view(Vec2::ZERO, 10.0, 10, 10), &Aabb::EMPTY).is_none());
     }
 
     #[test]

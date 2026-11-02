@@ -13,6 +13,7 @@ pub mod codebook;
 pub mod concrete;
 mod derive;
 mod doors;
+pub mod fidelity;
 pub mod field;
 pub mod fixtures;
 pub mod fourd;

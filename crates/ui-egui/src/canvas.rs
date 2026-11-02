@@ -2874,6 +2874,39 @@ fn viewport_controls(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect, model: boo
     if !model {
         return;
     }
+    // The BIM view's fidelity level (shown while it applies): chosen, or by zoom (Auto).
+    let fidelity = app.canvas.shade.fidelity;
+    let fid_r = fidelity.shown.map(|shown| {
+        piece("  |  ");
+        let t = crate::i18n::t;
+        piece(&match fidelity.fixed {
+            Some(f) => format!("{}: {}", t("Fidelity"), t(f.label())),
+            None => format!("{}: {} ({})", t("Fidelity"), t("Auto"), t(shown.label())),
+        })
+    });
+    if let Some(fid_r) = fid_r {
+        let fresp = ui.interact(fid_r.expand(3.0), ui.id().with("vp_fidelity_menu"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        crate::icons::describe_control(ui, &fresp, "Fidelity Levels", None, false);
+        if fresp.hovered() {
+            p.rect_stroke(fid_r.expand(3.0), 2.0, Stroke::new(1.0, t.canvas_ink), egui::StrokeKind::Outside);
+        }
+        let mut choice = None;
+        egui::Popup::menu(&fresp).show(|ui| {
+            if ui.radio(fidelity.fixed.is_none(), crate::i18n::t("Auto")).clicked() {
+                choice = Some(None);
+                ui.close();
+            }
+            for f in cadaddy_walk3d::fidelity::Fidelity::ALL {
+                if ui.radio(fidelity.fixed == Some(f), crate::i18n::t(f.label())).clicked() {
+                    choice = Some(Some(f));
+                    ui.close();
+                }
+            }
+        });
+        if let Some(c) = choice {
+            app.canvas.shade.fidelity.fixed = c;
+        }
+    }
     let sresp = ui.interact(style_r.expand(3.0), ui.id().with("vp_style_menu"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     crate::icons::describe_control(ui, &sresp, "Visual style", None, false);
     if sresp.hovered() {

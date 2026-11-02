@@ -2051,6 +2051,9 @@ pub struct Session {
     pub active: usize,
     pub settings: Settings,
     pub running: Option<Running>,
+    /// The fidelity level the 3D view shows the BIM model at (set by the view while it does):
+    /// a pick of an element finer than it picks what stands for it ([`cmd::fidelity::pick_target`]).
+    pub fidelity_shown: Option<cadaddy_walk3d::fidelity::Fidelity>,
     /// See [`Session::keep_undo_step`].
     keep_undo_step: bool,
     /// MULTIPLE: the command started again each time it ends, until it is cancelled.
@@ -2282,6 +2285,7 @@ impl Session {
             clipboard: Vec::new(),
             clipboard_base: Vec2::ZERO,
             pending_window: None,
+            fidelity_shown: None,
             select_mode: None,
             select_single: false,
             untitled_counter: 0,
@@ -3116,7 +3120,10 @@ impl Session {
                     return Ok(Some(Input::Pick(cmd::groups::expand(self, hs))));
                 }
                 match select::pick(self.doc()?, &space, p, ap) {
-                    Some(h) => Ok(Some(Input::Pick(cmd::groups::expand(self, vec![h])))),
+                    Some(h) => {
+                        let hs = self.fidelity_pick(h);
+                        Ok(Some(Input::Pick(cmd::groups::expand(self, hs))))
+                    }
                     None => {
                         self.pending_window = Some(PendingWindow { corner: p, during_command: true });
                         Ok(None)
@@ -3886,10 +3893,19 @@ impl Session {
 
     /// One object picked with no command running: PICKADD adds it (Shift removes it), PICKADD
     /// off replaces the selection with it (Shift adds, or removes it when it was selected).
+    /// What a pick of `h` picks: `h`, or while the 3D view shows the model at a coarser level
+    /// than `h`'s, what stands for it there (its run, its room).
+    fn fidelity_pick(&self, h: Handle) -> Vec<Handle> {
+        match (self.fidelity_shown, self.doc()) {
+            (Some(level), Ok(d)) if self.space() == Space::Model => cmd::fidelity::pick_target(d, h, level),
+            _ => vec![h],
+        }
+    }
+
     fn idle_pick(&mut self, h: Handle, shift: bool) {
         let pickadd = self.settings.pickadd;
         // With group selection the object's selectable groups come (or go) with it.
-        let hs = cmd::groups::expand(self, vec![h]);
+        let hs = cmd::groups::expand(self, self.fidelity_pick(h));
         let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
         let had = sel.contains(&h);
         if shift && (pickadd || had) {

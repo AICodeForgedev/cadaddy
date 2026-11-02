@@ -7,9 +7,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cadaddy_color::Rgb;
+use cadaddy_engine::cmd::fidelity::Tiered;
 use cadaddy_geom::Vec3;
 use cadaddy_render::model3::{self, Model3};
 use cadaddy_render::shade::{self, Scene, ShadeView, VisualStyle};
+use cadaddy_walk3d::fidelity::{Fidelity, FidelityRules};
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt;
 
@@ -27,6 +29,52 @@ struct SceneKey {
     lightmap: u64,
     /// The 4D date shown (the model as it stands then).
     fourd: Option<crate::fourdpalette::Shown>,
+    /// The fidelity level the whole building is built at (room and detail share one: their
+    /// elements are the fine layer's).
+    level: Fidelity,
+}
+
+/// The fine layer's model: the room and detail elements up to `level` in `region` (plan).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FineKey {
+    scene: SceneKey,
+    level: Fidelity,
+    region: cadaddy_geom::Bounds2,
+}
+
+/// The fine layer's model and what it holds.
+struct Fine {
+    model: Model3,
+    elements: usize,
+    capped: bool,
+    ms: f64,
+}
+
+/// A fine model being built off the UI thread.
+struct PendingFine {
+    key: FineKey,
+    #[cfg(not(target_arch = "wasm32"))]
+    handle: std::thread::JoinHandle<Fine>,
+}
+
+/// What the fidelity levels know of a drawing revision: whether its BIM view shows (the levels
+/// apply), the rules and the drawing units a foot.
+#[derive(Clone)]
+struct LevelsOf {
+    doc: usize,
+    revision: u64,
+    on: bool,
+    rules: Arc<FidelityRules>,
+    upf: f64,
+}
+
+/// The fidelity setting (the view's override) and what the view shows.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FidelityView {
+    /// The level chosen; `None`: by zoom (Auto).
+    pub fixed: Option<Fidelity>,
+    /// The level shown; `None` when the levels don't apply (no BIM view).
+    pub shown: Option<Fidelity>,
 }
 
 /// A model being built off the UI thread, and how far it has got.
@@ -36,7 +84,7 @@ struct Pending {
     total: Arc<AtomicUsize>,
     started: web_time::Instant,
     #[cfg(not(target_arch = "wasm32"))]
-    handle: std::thread::JoinHandle<Model3>,
+    handle: std::thread::JoinHandle<(Option<Arc<Tiered>>, Model3)>,
 }
 
 /// What the 3D view costs and draws (the control channel's `ui.perf3d`).
@@ -67,6 +115,16 @@ pub struct Stats {
     pub bench_frames: u32,
     /// Triangles lit by baked light (LIGHTBAKE).
     pub baked: usize,
+    /// The fidelity level shown (`building`, `floor`, `room`, `detail`; empty when the levels
+    /// don't apply) and whether it was chosen (else by zoom).
+    pub fidelity: &'static str,
+    pub fidelity_fixed: bool,
+    /// The fine layer (the room and detail elements in view): elements, whether its cap cut
+    /// it, milliseconds it took (choosing and building), bytes it holds.
+    pub fine_elements: usize,
+    pub fine_capped: bool,
+    pub fine_ms: f64,
+    pub fine_bytes: usize,
 }
 
 /// An orbit benchmark under way: frames left, the azimuth reached, when it started.
@@ -90,8 +148,16 @@ pub fn bench(app: &mut CadApp, frames: u32) {
 pub struct State {
     model: Option<(SceneKey, Arc<Model3>)>,
     pending: Option<Pending>,
-    /// The model as one scene, for the CPU rasterizer.
-    flat: Option<(SceneKey, Arc<Scene>)>,
+    /// The BIM view by fidelity level (for the drawing revision it was built from).
+    tiered: Option<((usize, u64), Arc<Tiered>)>,
+    levels: Option<LevelsOf>,
+    pub fidelity: FidelityView,
+    fine: Option<(FineKey, Arc<Model3>)>,
+    fine_pending: Option<PendingFine>,
+    /// What the GPU's fine layer holds.
+    uploaded_fine: Option<(FineKey, VisualStyle, [u8; 3])>,
+    /// The model (and the fine layer's) as one scene, for the CPU rasterizer.
+    flat: Option<((SceneKey, Option<FineKey>), Arc<Scene>)>,
     gpu: Option<Gpu>,
     /// What the GPU buffers hold: model, style and background.
     uploaded: Option<(SceneKey, VisualStyle, [u8; 3])>,
@@ -130,13 +196,19 @@ pub fn active(app: &CadApp) -> Option<VisualStyle> {
 /// Draw the shaded view over `xf.rect`; false (nothing drawn) when the Model tab isn't in a 3D
 /// visual style.
 pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, bg: Rgb) -> bool {
-    let Some(style) = active(app) else { return false };
+    let Some(style) = active(app) else {
+        // Picks are the drawing's own again.
+        app.session.fidelity_shown = None;
+        app.canvas.shade.fidelity.shown = None;
+        return false;
+    };
     let ppp = ui.ctx().pixels_per_point();
     let (w, h) = ((xf.rect.width() * ppp).round().max(1.0) as u32, (xf.rect.height() * ppp).round().max(1.0) as u32);
     // Curves to about half a pixel, in power-of-two bands so zooming rebuilds rarely.
     let px_world = 1.0 / (xf.scale * f64::from(ppp)).max(1e-300);
     let band = (px_world * 0.5).log2().floor().clamp(-60.0, 60.0) as i32;
-    let Some((key, model)) = self::model(app, band) else {
+    let level = fidelity_level(app, xf.scale * f64::from(ppp));
+    let Some((key, model)) = self::model(app, band, level) else {
         // The first model is still being built.
         building_note(app, ui, painter, xf);
         return false;
@@ -151,6 +223,11 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
     st.last_frame = Some(now);
     let height = f64::from(xf.rect.height()) / xf.scale.max(1e-300);
     let view = ShadeView::new(xf.proj, xf.center, height, w, h);
+    // Close in: the room and detail elements of what is in view, as a layer of their own.
+    let fine = level.and_then(|l| fine_model(app, key, l, &view, &model));
+    if app.canvas.shade.fine_pending.is_some() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(30));
+    }
     // The model's lighting with the render environment (RENDERENVIRONMENT) applied: background,
     // fog, exposure, white balance, the environment map's sky. A file gone since leaves the rest.
     let lit = environment_lighting(app, &model);
@@ -170,21 +247,29 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         let g = st.gpu.get_or_insert_with(|| Gpu::new(&rs.device, caps.msaa));
         let up = Some((key, style, [bg.0, bg.1, bg.2]));
         if st.uploaded != up {
-            g.upload(&rs.device, &rs.queue, &model, style, bg);
+            g.upload(&rs.device, &rs.queue, COARSE, Some(&model), style, bg);
             st.uploaded = up;
+            // Placed about the coarse layer's origin: again with it.
+            st.uploaded_fine = None;
+            g.upload(&rs.device, &rs.queue, FINE, None, style, bg);
+        }
+        let fine_up = fine.as_ref().map(|(k, _)| (*k, style, [bg.0, bg.1, bg.2]));
+        if st.uploaded_fine != fine_up {
+            g.upload(&rs.device, &rs.queue, FINE, fine.as_ref().map(|f| &f.1), style, bg);
+            st.uploaded_fine = fine_up;
         }
         g.set_lighting(&rs.device, &rs.queue, lit.as_ref());
         let t0 = web_time::Instant::now();
         let vis = g.render(&rs.device, &rs.queue, &view, style, bg);
         st.stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        st.stats.tris_drawn = vis.tris;
-        st.stats.instances_drawn = vis.instances.iter().map(|g| g.2.len()).sum();
-        st.stats.chunks_drawn = vis.chunks.len();
+        st.stats.tris_drawn = vis.iter().map(|v| v.tris).sum();
+        st.stats.instances_drawn = vis.iter().map(|v| v.instances.iter().map(|g| g.2.len()).sum::<usize>()).sum();
+        st.stats.chunks_drawn = vis.iter().map(|v| v.chunks.len()).sum();
         // Buffers and textures, plus the render targets (4× colour and depth, the resolved image,
         // the pre-pass depth) and the shadow map.
         let (tw, th) = (u64::from(w), u64::from(h));
         st.stats.gpu_bytes =
-            g.bytes + (tw * th * (u64::from(g.samples) * 8 + 8)) as usize + (u64::from(SHADOW_PX) * u64::from(SHADOW_PX) * 4) as usize;
+            g.bytes() + (tw * th * (u64::from(g.samples) * 8 + 8)) as usize + (u64::from(SHADOW_PX) * u64::from(SHADOW_PX) * 4) as usize;
         if let Some(tv) = g.view() {
             let mut r = rs.renderer.write();
             match st.texture {
@@ -199,16 +284,23 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
     }
     if !drawn {
         // The CPU rasterizer, redrawn when the view, model or style changes.
+        let fk = (key, fine.as_ref().map(|f| f.0));
         let flat = match &app.canvas.shade.flat {
-            Some((k, f)) if *k == key => Arc::clone(f),
+            Some((k, f)) if *k == fk => Arc::clone(f),
             _ => {
-                let f = Arc::new(model.flatten());
-                app.canvas.shade.flat = Some((key, Arc::clone(&f)));
+                let mut f = model.flatten();
+                if let Some((_, m)) = &fine {
+                    let more = m.flatten();
+                    f.tris.extend(more.tris.into_iter().take(shade::MAX_SCENE.saturating_sub(f.tris.len())));
+                    f.lines.extend(more.lines);
+                }
+                let f = Arc::new(f);
+                app.canvas.shade.flat = Some((fk, Arc::clone(&f)));
                 f
             }
         };
         let env = app.session.state().ok().map(|st| format!("{:?}", st.render_environment)).unwrap_or_default();
-        let ck = format!("{:?}|{:?}|{:?}|{}x{}|{:?}|{:?}|{:?}|{env}", key, view.center, view.height, w, h, view.dir, view.right, (style, bg));
+        let ck = format!("{:?}|{:?}|{:?}|{}x{}|{:?}|{:?}|{:?}|{env}", fk, view.center, view.height, w, h, view.dir, view.right, (style, bg));
         let fresh = app.canvas.shade.cpu.as_ref().is_some_and(|(k, _)| *k == ck);
         if !fresh {
             let r = shade::rasterize_lit(&flat, &view, style, bg, lit.as_ref().or(flat.lighting.as_ref()));
@@ -328,15 +420,83 @@ fn building_note(app: &CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf) 
     painter.text(at, egui::Align2::RIGHT_BOTTOM, text, egui::FontId::proportional(13.0), t.text);
 }
 
-/// The model at detail `band` (curves to 2^band drawing units). A changed drawing or band starts
-/// a new build off the UI thread; until it is done the last model stays on screen (`None` before
-/// the first is ready).
-fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
+/// What the fidelity levels know of the current drawing revision (made once for it).
+fn levels_of(app: &mut CadApp) -> Option<LevelsOf> {
+    let st = app.session.state().ok()?;
+    let (doc, revision) = (Arc::as_ptr(&st.doc) as usize, st.revision);
+    if let Some(l) = app.canvas.shade.levels.as_ref().filter(|l| l.doc == doc && l.revision == revision) {
+        return Some(l.clone());
+    }
+    let d = &st.doc;
+    let on = !cadaddy_engine::cmd::bimlook::Look::of(d).off && cadaddy_engine::cmd::bimlook::has_model(d);
+    let rules = Arc::new(FidelityRules::of_spec(d.building_spec.as_deref()));
+    let upf = d
+        .building_spec
+        .as_deref()
+        .and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok())
+        .map(|sp| sp.units_per_foot)
+        .filter(|u| u.is_finite() && *u > 0.0)
+        .unwrap_or(12.0);
+    let lv = LevelsOf { doc, revision, on, rules, upf };
+    app.canvas.shade.levels = Some(lv.clone());
+    Some(lv)
+}
+
+/// The fidelity level the view shows at `px_per_unit` screen pixels a drawing unit: the one
+/// chosen, else by zoom (from the level shown, with the rules' hysteresis); `None` when the
+/// levels don't apply (no BIM view). Picks follow it.
+fn fidelity_level(app: &mut CadApp, px_per_unit: f64) -> Option<Fidelity> {
+    let lv = levels_of(app).filter(|l| l.on);
+    let f = &app.canvas.shade.fidelity;
+    let level = lv.map(|lv| f.fixed.unwrap_or_else(|| lv.rules.auto_level(px_per_unit * lv.upf, f.shown.unwrap_or(Fidelity::Building))));
+    let st = &mut app.canvas.shade;
+    st.fidelity.shown = level;
+    st.stats.fidelity = level.map_or("", Fidelity::name);
+    st.stats.fidelity_fixed = level.is_some() && st.fidelity.fixed.is_some();
+    app.session.fidelity_shown = level;
+    level
+}
+
+/// What the whole building's layer draws: the BIM view at `level` (its levels made here
+/// unless `tiers` holds them), else the drawing; at the 4D date.
+fn coarse_drawing(
+    doc: &Arc<cadaddy_doc::Drawing>,
+    level: Option<Fidelity>,
+    tiers: Option<Arc<Tiered>>,
+    fourd: Option<crate::fourdpalette::Shown>,
+) -> (Option<Arc<Tiered>>, Arc<cadaddy_doc::Drawing>) {
+    let tiers = level.and_then(|_| tiers.or_else(|| Tiered::of(doc).map(Arc::new)));
+    let mut d = match (&tiers, level) {
+        (Some(t), Some(l)) => Arc::new(t.coarse(l)),
+        // The BIM view without levels, else the drawing as it is.
+        _ => cadaddy_engine::cmd::bimlook::display(doc).map_or_else(|| Arc::clone(doc), Arc::new),
+    };
+    if let Some(f) = fourd
+        && let Ok((staged, _)) = cadaddy_engine::cmd::fourd::staged(&d, f.day, f.ghost)
+    {
+        d = Arc::new(staged);
+    }
+    (tiers, d)
+}
+
+/// The model at detail `band` (curves to 2^band drawing units) and fidelity `level`. A changed
+/// drawing, band or level starts a new build off the UI thread; until it is done the last model
+/// stays on screen (`None` before the first is ready).
+fn model(app: &mut CadApp, band: i32, level: Option<Fidelity>) -> Option<(SceneKey, Arc<Model3>)> {
     // Looks for a lightmap beside the drawing the first time.
     let _ = cadaddy_engine::cmd::lightbake::current(&mut app.session);
     let st = app.session.state().ok()?;
-    let key = SceneKey { doc: Arc::as_ptr(&st.doc) as usize, revision: st.revision, band, lightmap: st.lightmap_rev, fourd: app.fourd };
-    let mut doc = Arc::clone(&st.doc);
+    // Room and detail build the same whole-building layer (their elements are the fine one's).
+    let coarse = level.map(|l| l.min(Fidelity::Room));
+    let key = SceneKey {
+        doc: Arc::as_ptr(&st.doc) as usize,
+        revision: st.revision,
+        band,
+        lightmap: st.lightmap_rev,
+        fourd: app.fourd,
+        level: coarse.unwrap_or(Fidelity::Building),
+    };
+    let doc = Arc::clone(&st.doc);
     let shade_st = &mut app.canvas.shade;
     if shade_st.model.as_ref().is_some_and(|(k, _)| *k == key) {
         shade_st.stats.building = None;
@@ -348,15 +508,8 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     // Read section box planes from coordination state for 3D clipping.
     let crs = cadaddy_engine::cmd::coordination::coord_render_state(&doc);
     let sbox_planes = crs.sbox_planes();
-    // The BIM view: only the built model, in trade colours, the shell ghosted.
-    if let Some(bim) = cadaddy_engine::cmd::bimlook::display(&doc) {
-        doc = Arc::new(bim);
-    }
-    if let Some(f) = key.fourd
-        && let Ok((staged, _)) = cadaddy_engine::cmd::fourd::staged(&doc, f.day, f.ghost)
-    {
-        doc = Arc::new(staged);
-    }
+    // The levels already made for this revision.
+    let tiers = shade_st.tiered.as_ref().filter(|(k, _)| *k == (key.doc, key.revision)).map(|(_, t)| Arc::clone(t));
     // A build for another key is dropped (it finishes in the background and is ignored).
     if shade_st.pending.as_ref().is_some_and(|p| p.key != key) {
         shade_st.pending = None;
@@ -368,9 +521,13 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
             let (p2, t2) = (Arc::clone(&progress), Arc::clone(&total));
             let planes = sbox_planes.clone();
             let doc_t = Arc::clone(&doc);
+            let tiers_t = tiers.clone();
             let handle = std::thread::Builder::new()
                 .name("cadaddy-3d-model".into())
-                .spawn(move || model3::build_clipped(&doc_t, &cadaddy_doc::Space::Model, tol, bg, &p2, &t2, &planes))
+                .spawn(move || {
+                    let (t, d) = coarse_drawing(&doc_t, coarse, tiers_t, key.fourd);
+                    (t, model3::build_clipped(&d, &cadaddy_doc::Space::Model, tol, bg, &p2, &t2, &planes))
+                })
                 .ok();
             match handle {
                 Some(handle) => shade_st.pending = Some(Pending { key, progress, total, started: web_time::Instant::now(), handle }),
@@ -378,17 +535,18 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
                 None => {
                     let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
                     let started = web_time::Instant::now();
-                    let m = Arc::new(model3::build_clipped(&doc, &cadaddy_doc::Space::Model, tol, bg, &p, &t, &sbox_planes));
-                    return Some(finish(app, key, m, started));
+                    let (tiers, d) = coarse_drawing(&doc, coarse, tiers, key.fourd);
+                    let m = Arc::new(model3::build_clipped(&d, &cadaddy_doc::Space::Model, tol, bg, &p, &t, &sbox_planes));
+                    return Some(finish(app, key, m, tiers, started));
                 }
             }
         }
         let done = app.canvas.shade.pending.as_ref().is_some_and(|p| p.handle.is_finished());
         if done
             && let Some(p) = app.canvas.shade.pending.take()
-            && let Ok(m) = p.handle.join()
+            && let Ok((tiers, m)) = p.handle.join()
         {
-            return Some(finish(app, key, Arc::new(m), p.started));
+            return Some(finish(app, key, Arc::new(m), tiers, p.started));
         }
         if let Some(p) = &app.canvas.shade.pending {
             let total = p.total.load(Ordering::Relaxed).max(1);
@@ -400,13 +558,122 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     {
         let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
         let started = web_time::Instant::now();
-        let m = Arc::new(model3::build_clipped(&doc, &cadaddy_doc::Space::Model, tol, bg, &p, &t, &sbox_planes));
-        Some(finish(app, key, m, started))
+        let (tiers, d) = coarse_drawing(&doc, coarse, tiers, key.fourd);
+        let m = Arc::new(model3::build_clipped(&d, &cadaddy_doc::Space::Model, tol, bg, &p, &t, &sbox_planes));
+        Some(finish(app, key, m, tiers, started))
     }
 }
 
+/// The room and detail elements of `tiers` up to `level` in `region`, built (curves to `tol`,
+/// cut by `planes`, at the 4D date): the fine layer.
+fn build_fine(
+    tiers: &Tiered,
+    level: Fidelity,
+    region: &cadaddy_geom::Bounds2,
+    tol: f64,
+    bg: Rgb,
+    planes: &[cadaddy_doc::SectionPlane],
+    fourd: Option<crate::fourdpalette::Shown>,
+) -> Fine {
+    let started = web_time::Instant::now();
+    let Some((d, elements, capped)) = tiers.fine(level, region, cadaddy_engine::cmd::fidelity::MAX_FINE) else {
+        return Fine { model: Model3::default(), elements: 0, capped: false, ms: 0.0 };
+    };
+    let mut d = Arc::new(d);
+    if let Some(f) = fourd
+        && let Ok((staged, _)) = cadaddy_engine::cmd::fourd::staged(&d, f.day, f.ghost)
+    {
+        d = Arc::new(staged);
+    }
+    let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
+    let model = model3::build_clipped(&d, &cadaddy_doc::Space::Model, tol, bg, &p, &t, planes);
+    Fine { model, elements, capped, ms: started.elapsed().as_secs_f64() * 1000.0 }
+}
+
+/// The share a region may be bigger than what is seen (grown) before it is built again
+/// smaller, and how much a new region grows round what is seen.
+const FINE_SLACK: f64 = 16.0;
+const FINE_GROW: f64 = 0.5;
+
+fn grown(b: &cadaddy_geom::Bounds2, by: f64) -> cadaddy_geom::Bounds2 {
+    b.expand(b.width().max(b.height()) * by)
+}
+
+/// The fine layer at `level` for what `view` shows of the whole building's `model`: built off
+/// the UI thread for a region round the view (kept while the view stays inside it); the last
+/// one stays on screen until the next is ready. None below the room level (nothing held).
+fn fine_model(app: &mut CadApp, key: SceneKey, level: Fidelity, view: &ShadeView, model: &Model3) -> Option<(FineKey, Arc<Model3>)> {
+    let st = &mut app.canvas.shade;
+    let tiers = st.tiered.as_ref().filter(|(k, _)| *k == (key.doc, key.revision)).map(|(_, t)| Arc::clone(t));
+    let Some(tiers) = tiers.filter(|_| level >= Fidelity::Room) else {
+        st.fine_pending = None;
+        st.fine = None;
+        st.stats.fine_elements = 0;
+        st.stats.fine_capped = false;
+        st.stats.fine_bytes = 0;
+        return None;
+    };
+    // What the view shows of the plan (the whole building's height through it).
+    let bounds = if model.bounds.is_empty() {
+        let e = tiers.display.extents(&cadaddy_doc::Space::Model);
+        model3::Aabb { lo: Vec3::new(e.min.x, e.min.y, 0.0), hi: Vec3::new(e.max.x, e.max.y, 0.0) }
+    } else {
+        model.bounds
+    };
+    let seen = model3::plan_region(view, &bounds)?;
+    let current = st.fine_pending.as_ref().map(|p| p.key).or(st.fine.as_ref().map(|f| f.0)).filter(|k| k.scene == key && k.level == level);
+    let area = |b: &cadaddy_geom::Bounds2| b.width().max(1e-12) * b.height().max(1e-12);
+    let region = match current {
+        Some(k) if k.region.contains_box(&seen) && area(&k.region) <= FINE_SLACK * area(&grown(&seen, FINE_GROW)) => k.region,
+        _ => grown(&seen, FINE_GROW),
+    };
+    let fk = FineKey { scene: key, level, region };
+    if st.fine.as_ref().is_some_and(|(k, _)| *k == fk) {
+        return st.fine.clone();
+    }
+    if st.fine_pending.as_ref().is_some_and(|p| p.key != fk) {
+        st.fine_pending = None;
+    }
+    let tcol = crate::theme::Tokens::get().canvas;
+    let bg = Rgb(tcol.r(), tcol.g(), tcol.b());
+    let tol = 2f64.powi(key.band);
+    let planes = app.session.doc().map(|d| cadaddy_engine::cmd::coordination::coord_render_state(d).sbox_planes()).unwrap_or_default();
+    let st = &mut app.canvas.shade;
+    let mut done = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if st.fine_pending.is_none() {
+            let t = Arc::clone(&tiers);
+            let pl = planes.clone();
+            match std::thread::Builder::new().name("cadaddy-3d-fine".into()).spawn(move || build_fine(&t, level, &region, tol, bg, &pl, key.fourd)) {
+                Ok(handle) => st.fine_pending = Some(PendingFine { key: fk, handle }),
+                Err(_) => done = Some(build_fine(&tiers, level, &region, tol, bg, &planes, key.fourd)),
+            }
+        }
+        if st.fine_pending.as_ref().is_some_and(|p| p.handle.is_finished())
+            && let Some(p) = st.fine_pending.take()
+            && let Ok(f) = p.handle.join()
+        {
+            done = Some(f);
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        done = Some(build_fine(&tiers, level, &region, tol, bg, &planes, key.fourd));
+    }
+    if let Some(f) = done {
+        st.stats.fine_elements = f.elements;
+        st.stats.fine_capped = f.capped;
+        st.stats.fine_ms = f.ms;
+        st.stats.fine_bytes = f.model.bytes();
+        st.fine = Some((fk, Arc::new(f.model)));
+    }
+    // Until it is ready, the last one (a pan's or the level before's).
+    st.fine.clone()
+}
+
 /// Keep a finished model and its numbers.
-fn finish(app: &mut CadApp, key: SceneKey, m: Arc<Model3>, started: web_time::Instant) -> (SceneKey, Arc<Model3>) {
+fn finish(app: &mut CadApp, key: SceneKey, m: Arc<Model3>, tiers: Option<Arc<Tiered>>, started: web_time::Instant) -> (SceneKey, Arc<Model3>) {
     // The baked light for the base geometry's objects (instances keep the sky's).
     let mut m = Arc::unwrap_or_clone(m);
     m.base.baked = cadaddy_engine::cmd::lightbake::baked_for(&mut app.session, &m.base);
@@ -422,6 +689,7 @@ fn finish(app: &mut CadApp, key: SceneKey, m: Arc<Model3>, started: web_time::In
     st.stats.model_bytes = m.bytes();
     st.stats.building = None;
     st.model = Some((key, Arc::clone(&m)));
+    st.tiered = tiers.map(|t| ((key.doc, key.revision), t));
     (key, m)
 }
 
@@ -459,6 +727,32 @@ struct Buffer {
     buffer: Tracked,
 }
 
+/// The layer of the whole building's model, and of the fine one (fidelity levels).
+const COARSE: usize = 0;
+const FINE: usize = 1;
+
+/// One model on the GPU.
+#[derive(Default)]
+struct Layer {
+    /// Made for the current target and model.
+    bind_group: Option<wgpu::BindGroup>,
+    tris: Option<Buffer>,
+    /// See-through triangles (drawn after the others, blended).
+    clear_tris: Option<Buffer>,
+    lines: Option<Buffer>,
+    /// Vertex ranges in the three buffers (opaque, see-through, lines): each base chunk's, and
+    /// each prototype's at each level of detail.
+    chunk_ranges: Vec<[std::ops::Range<u32>; 3]>,
+    proto_ranges: Vec<[[std::ops::Range<u32>; 3]; 3]>,
+    model: Option<Arc<Model3>>,
+    /// Bytes in the GPU buffers.
+    bytes: usize,
+    /// The bind group's textures (bound with the target's pre-pass depth): the materials' and
+    /// the baked light's.
+    tex_view: Option<TrackedView>,
+    lm_view: Option<TrackedView>,
+}
+
 /// The shaded view's GPU renderer.
 struct Gpu {
     tri_pipeline: wgpu::RenderPipeline,
@@ -477,32 +771,19 @@ struct Gpu {
     /// The lightmap's: linear, clamped (cells have borders).
     lm_sampler: wgpu::Sampler,
     shadow_view: TrackedView,
-    /// Made for the current target and model.
-    bind_group: Option<wgpu::BindGroup>,
-    tris: Option<Buffer>,
-    /// See-through triangles (drawn after the others, blended).
-    clear_tris: Option<Buffer>,
-    lines: Option<Buffer>,
-    /// Vertex ranges in the three buffers (opaque, see-through, lines): each base chunk's, and
-    /// each prototype's at each level of detail.
-    chunk_ranges: Vec<[std::ops::Range<u32>; 3]>,
-    proto_ranges: Vec<[[std::ops::Range<u32>; 3]; 3]>,
+    /// The models drawn: [`COARSE`] (the whole building at its fidelity level) and [`FINE`]
+    /// (the room and detail elements in view).
+    layers: [Layer; 2],
     /// The frame's instance placements (slot 0: the identity, for the base geometry).
     instances: Option<Tracked>,
     instance_cap: u64,
-    model: Option<Arc<Model3>>,
-    /// Bytes in the GPU buffers.
-    bytes: usize,
     /// The scene's centre (vertices are stored relative to it, keeping f32 precision) and its
     /// extent, for the depth range.
     origin: Vec3,
     radius: f64,
     lighting: Option<cadaddy_render::light::Lighting>,
-    /// The bind group's textures (bound with the target's pre-pass depth): the materials', the
-    /// baked light's and the background image's (one white texel without one; `bg_image` the
-    /// image it holds, by address).
-    tex_view: Option<TrackedView>,
-    lm_view: Option<TrackedView>,
+    /// The background image's texture (one white texel without one; `bg_image` the image it
+    /// holds, by address).
     bg_view: TrackedView,
     bg_sampler: wgpu::Sampler,
     bg_image: usize,
@@ -733,21 +1014,12 @@ impl Gpu {
                 ..Default::default()
             }),
             shadow_view: shadow_tex.into_view(&wgpu::TextureViewDescriptor::default()),
-            bind_group: None,
-            tris: None,
-            clear_tris: None,
-            lines: None,
-            chunk_ranges: Vec::new(),
-            proto_ranges: Vec::new(),
+            layers: [Layer::default(), Layer::default()],
             instances: None,
             instance_cap: 0,
-            model: None,
-            bytes: 0,
             origin: Vec3::ZERO,
             radius: 1.0,
             lighting: None,
-            tex_view: None,
-            lm_view: None,
             bg_view: image_texture(device, None, 1, 1, &[255, 255, 255, 255]).into_view(&wgpu::TextureViewDescriptor::default()),
             bg_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("shaded_background"),
@@ -763,13 +1035,35 @@ impl Gpu {
 
     /// The model's triangles (none for Wireframe), the lines `style` shows, and the textures:
     /// the base chunk by chunk, then each prototype at each level of detail, with the ranges
-    /// each takes.
-    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, model: &Arc<Model3>, style: VisualStyle, bg: Rgb) {
+    /// each takes; into layer `slot`.
+    ///
+    /// The fine layer ([`FINE`]) is placed about the coarse one's origin (uploaded first), its
+    /// reach added to the depth range; without a model the layer is cleared.
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, slot: usize, model: Option<&Arc<Model3>>, style: VisualStyle, bg: Rgb) {
+        let Some(model) = model else {
+            if let Some(l) = self.layers.get_mut(slot) {
+                *l = Layer::default();
+            }
+            return;
+        };
         let b = model.bounds;
-        self.origin = if b.is_empty() { Vec3::ZERO } else { b.center() };
-        self.radius = if b.is_empty() { 1.0 } else { (b.diag() * 0.5).max(1e-9) };
-        let physical = style == VisualStyle::Realistic && model.base.lighting.is_some();
-        self.lighting = if physical { model.base.lighting.clone() } else { None };
+        let coarse_empty = self.layers.get(COARSE).and_then(|l| l.model.as_ref()).is_none_or(|m| m.bounds.is_empty());
+        if slot == COARSE {
+            self.origin = if b.is_empty() { Vec3::ZERO } else { b.center() };
+            self.radius = if b.is_empty() { 1.0 } else { (b.diag() * 0.5).max(1e-9) };
+            let physical = style == VisualStyle::Realistic && model.base.lighting.is_some();
+            self.lighting = if physical { model.base.lighting.clone() } else { None };
+        } else if !b.is_empty() {
+            if coarse_empty {
+                self.origin = b.center();
+                self.radius = (b.diag() * 0.5).max(1e-9);
+            } else {
+                let o = self.origin;
+                let reach = [b.lo, b.hi].iter().map(|p| (*p - o).len()).fold(0.0, f64::max) + b.diag() * 0.5;
+                self.radius = self.radius.max(reach);
+            }
+        }
+        let physical = self.lighting.is_some();
         // The textures of every scene, one layer each; each scene's numbering offset.
         let scenes: Vec<&Scene> = std::iter::once(&model.base).chain(model.protos.iter().flat_map(|p| p.lods.iter())).collect();
         let mut layers: Vec<&Arc<cadaddy_render::images::Raster>> = Vec::new();
@@ -841,13 +1135,16 @@ impl Gpu {
                 r
             })
             .collect();
-        self.bytes = tris.len() + clear.len() + lines.len() + layers.len().max(1) * (TEX_PX * TEX_PX * 4) as usize;
-        self.tris = buffer(device, "shaded_tris", &tris);
-        self.clear_tris = buffer(device, "shaded_glass", &clear);
-        self.lines = buffer(device, "shaded_lines", &lines);
-        self.chunk_ranges = chunk_ranges;
-        self.proto_ranges = proto_ranges;
-        self.model = Some(Arc::clone(model));
+        let mut up = Layer {
+            bytes: tris.len() + clear.len() + lines.len() + layers.len().max(1) * (TEX_PX * TEX_PX * 4) as usize,
+            tris: buffer(device, "shaded_tris", &tris),
+            clear_tris: buffer(device, "shaded_glass", &clear),
+            lines: buffer(device, "shaded_lines", &lines),
+            chunk_ranges,
+            proto_ranges,
+            model: Some(Arc::clone(model)),
+            ..Layer::default()
+        };
         // The textures, one layer each, resized to the layer size (at least one layer).
         let count = layers.len().max(1) as u32;
         let tex = Tracked::new(device.create_texture(&wgpu::TextureDescriptor {
@@ -899,16 +1196,24 @@ impl Gpu {
                 wgpu::Extent3d { width: lw, height: lh, depth_or_array_layers: 1 },
             );
         }
-        self.bytes += lbytes.len();
-        self.lm_view = Some(lm_tex.into_view(&wgpu::TextureViewDescriptor::default()));
-        self.tex_view = Some(tex_view);
-        self.bind_group = None;
+        up.bytes += lbytes.len();
+        up.lm_view = Some(lm_tex.into_view(&wgpu::TextureViewDescriptor::default()));
+        up.tex_view = Some(tex_view);
+        if let Some(l) = self.layers.get_mut(slot) {
+            *l = up;
+        }
+    }
+
+    /// Bytes in the GPU buffers.
+    fn bytes(&self) -> usize {
+        self.layers.iter().map(|l| l.bytes).sum()
     }
 
     /// The group binding the frame's uniform, the model's textures, the shadow map, the baked
     /// light, the background image and target `t`'s pre-pass depth.
-    fn group(&self, device: &wgpu::Device, t: &Target) -> Option<wgpu::BindGroup> {
-        let (tex_view, lm_view) = (self.tex_view.as_ref()?, self.lm_view.as_ref()?);
+    fn group(&self, device: &wgpu::Device, t: &Target, k: usize) -> Option<wgpu::BindGroup> {
+        let layer = self.layers.get(k)?;
+        let (tex_view, lm_view) = (layer.tex_view.as_ref()?, layer.lm_view.as_ref()?);
         Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("shaded"),
             layout: &self.layout,
@@ -956,16 +1261,19 @@ impl Gpu {
             };
             self.bg_view = texture.into_view(&wgpu::TextureViewDescriptor::default());
             self.bg_image = key;
-            self.bind_group = None;
+            for l in &mut self.layers {
+                l.bind_group = None;
+            }
         }
         self.lighting = Some(lit.clone());
     }
 
-    /// The frame's placements: the identity, then each visible group's instances in order
-    /// (relative to the origin); the groups' instance ranges.
-    fn placements(&self, model: &Model3, vis: &model3::Visible) -> (Vec<u8>, Vec<std::ops::Range<u32>>) {
+    /// The frame's placements: the identity, then each visible group's instances of each
+    /// layer in order (relative to the origin); each layer's groups' instance ranges.
+    fn placements(&self, vis: &[model3::Visible; 2]) -> (Vec<u8>, [Vec<std::ops::Range<u32>>; 2]) {
         let o = self.origin;
-        let mut out: Vec<u8> = Vec::with_capacity((1 + vis.instances.iter().map(|g| g.2.len()).sum::<usize>()) * INSTANCE_SIZE as usize);
+        let placed: usize = vis.iter().map(|v| v.instances.iter().map(|g| g.2.len()).sum::<usize>()).sum();
+        let mut out: Vec<u8> = Vec::with_capacity((1 + placed) * INSTANCE_SIZE as usize);
         let mut put = |rows: [[f64; 4]; 3]| {
             for r in rows {
                 for x in r {
@@ -974,23 +1282,30 @@ impl Gpu {
             }
         };
         put([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]);
-        let mut ranges = Vec::with_capacity(vis.instances.len());
+        let mut all: [Vec<std::ops::Range<u32>>; 2] = Default::default();
         let mut n = 1u32;
-        for (_, _, list) in &vis.instances {
-            let start = n;
-            for i in list {
-                let Some(inst) = model.instances.get(*i as usize) else { continue };
-                let m = &inst.m.m;
-                put([
-                    [m[0][0], m[0][1], m[0][2], m[0][3] - o.x],
-                    [m[1][0], m[1][1], m[1][2], m[1][3] - o.y],
-                    [m[2][0], m[2][1], m[2][2], m[2][3] - o.z],
-                ]);
-                n += 1;
+        for (k, v) in vis.iter().enumerate() {
+            let Some(model) = self.layers.get(k).and_then(|l| l.model.as_ref()) else { continue };
+            let mut ranges = Vec::with_capacity(v.instances.len());
+            for (_, _, list) in &v.instances {
+                let start = n;
+                for i in list {
+                    let Some(inst) = model.instances.get(*i as usize) else { continue };
+                    let m = &inst.m.m;
+                    put([
+                        [m[0][0], m[0][1], m[0][2], m[0][3] - o.x],
+                        [m[1][0], m[1][1], m[1][2], m[1][3] - o.y],
+                        [m[2][0], m[2][1], m[2][2], m[2][3] - o.z],
+                    ]);
+                    n += 1;
+                }
+                ranges.push(start..n);
             }
-            ranges.push(start..n);
+            if let Some(slot) = all.get_mut(k) {
+                *slot = ranges;
+            }
         }
-        (out, ranges)
+        (out, all)
     }
 
     /// The frame's uniform block, and the sun's view for the shadow map (when it shines).
@@ -1182,18 +1497,29 @@ impl Gpu {
     }
 
     /// Draw into the offscreen target sized like the view: what it shows, nearest first.
-    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, v: &ShadeView, style: VisualStyle, bg: Rgb) -> model3::Visible {
+    /// Draw both layers; what each showed.
+    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, v: &ShadeView, style: VisualStyle, bg: Rgb) -> [model3::Visible; 2] {
         let size = (v.width_px, v.height_px);
         if self.target.as_ref().is_none_or(|t| t.size != size) {
             self.target = Some(target(device, size, self.samples));
-            self.bind_group = None;
+            for l in &mut self.layers {
+                l.bind_group = None;
+            }
         }
-        if self.bind_group.is_none() {
-            self.bind_group = self.target.as_ref().and_then(|t| self.group(device, t));
+        for k in [COARSE, FINE] {
+            if self.layers.get(k).is_some_and(|l| l.bind_group.is_none() && l.model.is_some()) {
+                let g = self.target.as_ref().and_then(|t| self.group(device, t, k));
+                if let Some(l) = self.layers.get_mut(k) {
+                    l.bind_group = g;
+                }
+            }
         }
-        let Some(model) = self.model.clone() else { return model3::Visible::default() };
-        let vis = model.visible(v);
-        let (inst, groups) = self.placements(&model, &vis);
+        let vis: [model3::Visible; 2] =
+            [COARSE, FINE].map(|k| self.layers.get(k).and_then(|l| l.model.as_ref()).map(|m| m.visible(v)).unwrap_or_default());
+        if self.layers.iter().all(|l| l.model.is_none()) {
+            return vis;
+        }
+        let (inst, groups) = self.placements(&vis);
         let need = inst.len() as u64;
         if self.instances.is_none() || self.instance_cap < need {
             let cap = need.next_power_of_two().max(INSTANCE_SIZE * 64);
@@ -1205,23 +1531,24 @@ impl Gpu {
             })));
             self.instance_cap = cap;
         }
-        let (Some(t), Some(group), Some(ib)) = (&self.target, &self.bind_group, &self.instances) else { return vis };
+        let (Some(t), Some(ib)) = (&self.target, &self.instances) else { return vis };
         queue.write_buffer(ib, 0, &inst);
         let (u, sun) = self.uniforms(v, style, bg);
         queue.write_buffer(&self.uniform, 0, &u);
         let lin = |c: u8| f64::from(c) / 255.0;
         let physical = self.lighting.is_some();
-        // The draws of one buffer (0 opaque, 1 see-through, 2 lines): the visible chunks with
-        // the identity placement, then each group's prototype with its placements (a group's
-        // lines only at full detail).
-        let draws = |kind: usize| -> Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> {
+        // The draws of one layer's buffer (0 opaque, 1 see-through, 2 lines): the visible chunks
+        // with the identity placement, then each group's prototype with its placements (a
+        // group's lines only at full detail).
+        let draws = |k: usize, kind: usize| -> Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> {
+            let (Some(layer), Some(vis), Some(groups)) = (self.layers.get(k), vis.get(k), groups.get(k)) else { return Vec::new() };
             let mut d: Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> =
-                vis.chunks.iter().filter_map(|c| self.chunk_ranges.get(*c)).map(|r| (r[kind].clone(), 0..1)).collect();
-            for ((p, lod, _), ir) in vis.instances.iter().zip(&groups) {
+                vis.chunks.iter().filter_map(|c| layer.chunk_ranges.get(*c)).map(|r| (r[kind].clone(), 0..1)).collect();
+            for ((p, lod, _), ir) in vis.instances.iter().zip(groups) {
                 if kind == 2 && *lod != 0 {
                     continue;
                 }
-                if let Some(r) = self.proto_ranges.get(*p as usize).and_then(|l| l.get(*lod as usize)) {
+                if let Some(r) = layer.proto_ranges.get(*p as usize).and_then(|l| l.get(*lod as usize)) {
                     d.push((r[kind].clone(), ir.clone()));
                 }
             }
@@ -1244,12 +1571,14 @@ impl Gpu {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.shadow_group, &[]);
-            if let Some(m) = &self.tris {
-                pass.set_pipeline(&self.depth_pipeline);
-                pass.set_vertex_buffer(0, m.buffer.slice(..));
-                pass.set_vertex_buffer(1, ib.slice(..));
-                for (r, i) in draws(0) {
-                    pass.draw(r, i);
+            pass.set_pipeline(&self.depth_pipeline);
+            for (k, layer) in self.layers.iter().enumerate() {
+                if let Some(m) = &layer.tris {
+                    pass.set_vertex_buffer(0, m.buffer.slice(..));
+                    pass.set_vertex_buffer(1, ib.slice(..));
+                    for (r, i) in draws(k, 0) {
+                        pass.draw(r, i);
+                    }
                 }
             }
         }
@@ -1268,12 +1597,14 @@ impl Gpu {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.shadow_group, &[]);
-            if let Some(m) = &self.tris {
-                pass.set_pipeline(&self.shadow_pipeline);
-                pass.set_vertex_buffer(0, m.buffer.slice(..));
-                pass.set_vertex_buffer(1, ib.slice(..));
-                for (r, i) in draws(0) {
-                    pass.draw(r, i);
+            pass.set_pipeline(&self.shadow_pipeline);
+            for (k, layer) in self.layers.iter().enumerate() {
+                if let Some(m) = &layer.tris {
+                    pass.set_vertex_buffer(0, m.buffer.slice(..));
+                    pass.set_vertex_buffer(1, ib.slice(..));
+                    for (r, i) in draws(k, 0) {
+                        pass.draw(r, i);
+                    }
                 }
             }
         }
@@ -1298,19 +1629,31 @@ impl Gpu {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_bind_group(0, group, &[]);
-            if physical {
+            if physical && let Some(group) = self.layers.iter().find_map(|l| l.bind_group.as_ref()) {
+                pass.set_bind_group(0, group, &[]);
                 pass.set_pipeline(&self.bg_pipeline);
                 pass.draw(0..3, 0..1);
             }
-            for (kind, pipeline, m) in
-                [(0, &self.tri_pipeline, &self.tris), (2, &self.line_pipeline, &self.lines), (1, &self.clear_pipeline, &self.clear_tris)]
-            {
-                if let Some(m) = m {
+            // Opaque surfaces and lines of both layers, then the see-through ones (blended over
+            // everything opaque).
+            for kind in [0, 2, 1] {
+                let pipeline = match kind {
+                    0 => &self.tri_pipeline,
+                    2 => &self.line_pipeline,
+                    _ => &self.clear_pipeline,
+                };
+                for (k, layer) in self.layers.iter().enumerate() {
+                    let buf = match kind {
+                        0 => &layer.tris,
+                        2 => &layer.lines,
+                        _ => &layer.clear_tris,
+                    };
+                    let (Some(m), Some(group)) = (buf, &layer.bind_group) else { continue };
+                    pass.set_bind_group(0, group, &[]);
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, m.buffer.slice(..));
                     pass.set_vertex_buffer(1, ib.slice(..));
-                    for (r, i) in draws(kind) {
+                    for (r, i) in draws(k, kind) {
                         pass.draw(r, i);
                     }
                 }
@@ -1461,7 +1804,7 @@ mod tests {
             cadaddy_engine::cmd::apply_environment(&s, &mut lit).unwrap();
             let cpu = shade::rasterize_lit(&flat, &view, VisualStyle::Realistic, bg, Some(&lit));
             let mut g = Gpu::new(device, 1);
-            g.upload(device, queue, &model, VisualStyle::Realistic, bg);
+            g.upload(device, queue, COARSE, Some(&model), VisualStyle::Realistic, bg);
             g.set_lighting(device, queue, Some(&lit));
             g.render(device, queue, &view, VisualStyle::Realistic, bg);
             // The frame, read back (rows of 512 bytes: 256-aligned).

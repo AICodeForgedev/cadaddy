@@ -2443,3 +2443,8 @@
 	Validate Model Against Prints (Agent)	図面に対してモデルを検証（エージェント）
 	Validate: waiting for an agent	検証: エージェント待ち
 	Validation Run Status	検証の実行状況
+	Auto	自動
+	Fidelity	詳細度
+	Floor	フロア
+	Detail	詳細
+	Fidelity Levels	詳細度レベル

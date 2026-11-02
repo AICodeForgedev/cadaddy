@@ -1,0 +1,26 @@
+{
+  "source": "CADaddy starter fidelity rules",
+  "zoom": { "floor_px_per_ft": 8.0, "room_px_per_ft": 30.0, "detail_px_per_ft": 200.0, "hysteresis": 0.15 },
+  "default_tier": "room",
+  "marker_rgb": [255, 0, 200],
+  "rules": [
+    { "tier": "detail", "piece": ["fitting:coupling", "fitting:strap", "fitting:hanger", "fitting:support", "fitting:ring", "fitting:clamp", "fitting:connector", "fitting:locknut", "fitting:bushing"], "why": "couplings, straps, rings and other connectors only up close" },
+    { "tier": "detail", "part": ["coupling", "strap", "ring", "fastener", "screw", "anchor", "seam", "joint", "clip", "hanger"], "why": "fasteners and sheet seams only up close" },
+    { "tier": "building", "part": ["floor", "roof", "cricket", "parapet", "roof-drain", "stair", "column", "beam", "footing", "brace", "ground", "site", "curtainwall"], "why": "the shell, slabs, roof and structure" },
+    { "tier": "building", "trade": ["equipment"], "level_words": ["roof", "rooftop", "penthouse"], "why": "rooftop equipment" },
+    { "tier": "building", "trade": ["equipment"], "words": ["switchboard", "switchgear", "transformer", "xfmr", "distribution", "mdp", "msb", "generator", "ats", "transfer switch", "exhaust fan", "ef", "fan", "ahu", "air handler", "air handling", "rtu", "rooftop unit", "ptac", "condenser", "condensing", "cu", "doas", "erv", "chiller", "boiler", "cooling tower", "water heater", "elevator", "pump"], "why": "big electrical gear, fans and air units as blocks" },
+    { "tier": "building", "trade": ["equipment"], "min_extent_ft": 6.0, "why": "equipment 6 ft or more across" },
+    { "tier": "building", "kind": ["duct"], "piece": ["segment", "fitting"], "min_size_in": 14.0, "why": "main ducts (14 in and up)" },
+    { "tier": "building", "kind": ["pipe"], "piece": ["segment", "fitting"], "min_size_in": 3.0, "why": "mains and risers (3 in and up)" },
+    { "tier": "floor", "part": ["wall", "door", "window", "glass", "ceiling", "soffit", "railing", "room"], "why": "walls, openings and ceilings" },
+    { "tier": "floor", "kind": ["duct"], "piece": ["segment", "fitting"], "why": "branch ducts" },
+    { "tier": "floor", "kind": ["pipe"], "piece": ["segment", "fitting"], "min_size_in": 1.0, "why": "mid-size pipes (1 in and up)" },
+    { "tier": "floor", "kind": ["conduit", "tray"], "piece": ["segment", "fitting"], "why": "conduit and tray as runs" },
+    { "tier": "floor", "trade": ["terminals"], "why": "air terminals" },
+    { "tier": "floor", "trade": ["equipment"], "why": "panels and other equipment" },
+    { "tier": "room", "kind": ["pipe"], "piece": ["segment", "fitting"], "far": "line", "why": "small pipes: in the room; lines from a floor away" },
+    { "tier": "room", "kind": ["cable", "grounding"], "far": "line", "why": "cable runs: in the room; lines from a floor away" },
+    { "tier": "room", "trade": ["devices", "lights", "fixtures", "fire"], "why": "devices, luminaires, plumbing fixtures and sprinklers" },
+    { "tier": "room", "part": ["grid", "stud", "track", "framing", "drywall", "sheathing", "board", "box", "device", "light", "diffuser"], "why": "framing, drywall, ceiling grid and boxes" }
+  ]
+}
