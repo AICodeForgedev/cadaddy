@@ -1515,6 +1515,9 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
     ));
     s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: each symbol the room's enlarged plans, else its level's trade plans, show in it against the model's elements of the same kind (`missing` names the sheet and the point), elements no symbol stands for `extra`, and the room type's project-rule set). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
     s.push_str("- `objects.json` `wall_spans`: wall pieces over an opening (a door's header), with the heights they span above the floor; the plan shows a gap there, and an item below one is in the opening. `walls_unmeasured`: walls whose footprint gives no centreline, with why.\n");
+    if counts.get("keynote_markers").and_then(Value::as_u64).unwrap_or(0) > 0 {
+        s.push_str("- `objects.json` `keynotes`: the keynote lists of the sheets that mark this area (number → note, and what each note calls for: a box of a size, a device, conduit of a size and route, a sleeve, a fire rating) and each keynote marker in or by it, with its crop (`keynote_marker` crops; the `keynotes` crops are the lists). G-KEYNOTE in `prescreen` matched each call to the model at its marker; check what it could not measure on the crops.\n");
+    }
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
     }
@@ -1801,6 +1804,7 @@ fn plan_crops(
     keys: &InArea,
     unit: Option<&UnitOf>,
     fit: Option<&Value>,
+    keynotes: &[super::validate_keynote::CropAsk],
 ) -> Planned {
     let mut crops: Vec<Crop> = Vec::new();
     let mut left_out: Vec<(String, String)> = Vec::new();
@@ -2155,6 +2159,22 @@ fn plan_crops(
         risers += 1;
         push(&mut crops, l, "riser_diagram", trade, rect, "text", None, Some(shows), None);
     }
+    // 4. The keynote lists of the sheets that mark the area, and the print round each marker.
+    for k in keynotes {
+        let Some(l) = links
+            .iter()
+            .find(|l| l.number.eq_ignore_ascii_case(&k.sheet) && l.view.is_none())
+            .or_else(|| links.iter().find(|l| l.number.eq_ignore_ascii_case(&k.sheet)))
+        else {
+            continue;
+        };
+        let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
+        if !want(trade) {
+            continue;
+        }
+        let Some(rect) = l.rect.map(norm_rect).and_then(|sr| intersect(norm_rect(k.rect), sr)) else { continue };
+        push(&mut crops, l, k.kind, trade, rect, "keynote", None, Some(k.shows.clone()), None);
+    }
     Planned { crops, left_out }
 }
 
@@ -2305,7 +2325,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set",
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, G-KEYNOTE each keynote marker's called box, device, conduit or sleeve against the model at the marker (its note, size, route and the rated walls and floors keynote conduit passes)",
         "checked": pre.checked,
         "unmeasured": pre.unmeasured,
         // The area's own: an element beside it is measured in its own area's packet.
@@ -2352,7 +2372,26 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     // The print crops.
     let within: Vec<[f64; 4]> = sp.sheets.iter().filter_map(|l| l.rect.map(norm_rect)).collect();
     let texts = Texts::of(d, &within);
-    let Planned { crops, mut left_out } = plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref());
+    // The keynote lists and markers that mark the area (G-KEYNOTE's reading).
+    let keynotes = super::validate_keynote::Keynotes::read(d, &sp, &frame);
+    let level_plans: BTreeSet<String> = sp
+        .sheets
+        .iter()
+        .filter(|l| shows_level(l, &area.level))
+        .filter(|l| {
+            matches!(sheet_kind(&format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str())), true), "plan" | "rcp" | "enlarged_plan")
+        })
+        .map(|l| l.number.to_ascii_uppercase())
+        .collect();
+    let (keynotes_json, keynote_crops) = super::validate_keynote::for_packet(&keynotes, &area, margin, &level_plans);
+    let marker_count = keynotes_json["markers"].as_array().map_or(0, Vec::len);
+    if marker_count > 0 || keynotes_json["lists"].as_array().is_some_and(|l| !l.is_empty()) {
+        here.objects["keynotes"] = keynotes_json;
+        here.objects["counts"]["keynote_markers"] = json!(marker_count);
+        here.counts["keynote_markers"] = json!(marker_count);
+    }
+    let Planned { crops, mut left_out } =
+        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops);
     if sp.sheets.is_empty() {
         left_out.push(("print crops".into(), "the building spec lists no sheets (levels.sheets finds them)".into()));
     }
