@@ -472,7 +472,7 @@ impl Seat {
             Prop::new(format!("{:.3},{:.3}", self.out.x, self.out.y), Source::computed())
                 .with_note("the face's outward direction (plan): toward its room"),
         );
-        // Its named face (`121/S`) is given by bim.layout.rehost, once the rooms are traced.
+        // Its named face (`1201/S`) is given by bim.layout.rehost, once the rooms are traced.
         store.remove("host_face");
         let side_said = match self.side_why {
             "circuit" => "the side its circuit's other devices are on",
