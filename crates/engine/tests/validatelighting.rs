@@ -502,7 +502,10 @@ fn a_packet_carries_the_fixture_schedule_rows_submittals_and_control_legend() {
         o["elements"].as_array().unwrap().iter().find(|e| e["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&j.dimmer))).unwrap().clone();
     assert_eq!(el["lighting"]["dimmer"], true, "{el}");
     assert_eq!(el["lighting"]["protocol"], "0-10V", "{el}");
-    assert!(r["left_out"].to_string().contains("Sample Lighting Package p.7"), "{}", r["left_out"]);
+    assert!(r["left_out"].to_string().contains("submittal Sample Lighting Package"), "{}", r["left_out"]);
+    let unlisted = r["submittals_unlisted"].as_array().unwrap().iter().find(|u| u["submittal"] == "Sample Lighting Package").cloned();
+    assert!(unlisted.as_ref().is_some_and(|u| u["pages"].as_array().unwrap().contains(&json!(7))), "{}", r["submittals_unlisted"]);
+    assert!(unlisted.is_some_and(|u| u["for"].to_string().contains("cut sheet")), "{}", r["submittals_unlisted"]);
     // The packet's prescreen holds the lighting rules.
     for id in RULES {
         assert!(o["prescreen"]["checked"][id].is_object(), "{id}: {}", o["prescreen"]["checked"]);
