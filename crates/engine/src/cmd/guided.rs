@@ -4911,6 +4911,37 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     products_step(s, job, &mut result);
     bim_step(s, job, "product data", t);
+    // The code rules on the devices (tamper-resistant in guest rooms, GFCI by circuit), the
+    // decisions the documents can't make left `undecided` and asked.
+    let t = web_time::Instant::now();
+    match s.execute("bim.coderules", &json!({})) {
+        Ok(v) => {
+            let line = format!(
+                "  code rules: {} receptacles; tamper-resistant {} (TR stated in the documents for {}); GFCI by circuit {}",
+                v.get("receptacles").and_then(Value::as_u64).unwrap_or(0),
+                v.get("tamper_resistant").and_then(Value::as_u64).unwrap_or(0),
+                v.pointer("/tr_documented/stated").and_then(Value::as_u64).unwrap_or(0),
+                v.get("gfci").map(Value::to_string).unwrap_or_default()
+            );
+            report_progress(s, json!({"step": "code rules"}), &line);
+            s.echo(line);
+            let undecided = v.pointer("/gfci/undecided").and_then(Value::as_u64).unwrap_or(0);
+            if undecided > 0 {
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!("{undecided} GFCI receptacles are undecided: their breaker's type isn't in the panel schedule, or which is first on the circuit isn't known"),
+                    "GFCI is judged per circuit: a receptacle under a GFCI breaker is standard; else the first on the circuit is the GFCI",
+                    2,
+                    vec!["Give the panel schedules' breaker types, or mark which receptacle is first on each circuit".into()],
+                    None,
+                    false,
+                );
+            }
+            result["code_rules"] = v;
+        }
+        Err(e) => result["code_rules_error"] = json!(e.to_string()),
+    }
+    bim_step(s, job, "code rules", t);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {

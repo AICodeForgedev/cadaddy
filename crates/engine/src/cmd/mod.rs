@@ -25,6 +25,7 @@ pub mod classic;
 pub(crate) mod clip_partners;
 pub mod clipboard;
 pub mod codebook;
+pub mod coderules;
 pub mod colorbook;
 pub mod constraints;
 pub mod coordination;
@@ -851,6 +852,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(spec_import::specs());
         v.extend(submittals::specs());
         v.extend(products::specs());
+    v.extend(coderules::specs());
         v.extend(dimcheck::specs());
         v.extend(agentready::specs());
         v.extend(underlay::specs());

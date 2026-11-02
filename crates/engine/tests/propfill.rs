@@ -279,6 +279,25 @@ fn a_devices_breaker_type_is_its_printed_schedule_rows() {
     assert_eq!(a["breaker_type"]["source"]["doc"], "E-601 panel LP1 circuit 3");
     // The breaker itself still from the panel's own row.
     assert_eq!(a["breaker"]["value"], "20A");
+    // The code rules: under a GFCI breaker it is a standard receptacle, protected by its breaker;
+    // the office is no guest room (no TR rule), and the documents don't say TR.
+    let ha = find(&mut s, "device", json!({"type_mark": "A"}));
+    s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
+    let r = s.execute("bim.coderules", &json!({})).unwrap();
+    assert_eq!(r["gfci"]["breaker"], 1, "{r:#}");
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["gfci"]["value"], "breaker", "{a:#}");
+    assert_eq!(a["receptacle_type"]["value"], "standard");
+    assert_eq!(a["receptacle_type"]["source"]["kind"], "rule");
+    assert!(a["tamper_resistant"].is_null(), "{a:#}");
+    assert_eq!(a["tr_documented"]["value"], "not stated in the documents");
+    // As a guest room (a typical unit fitted into it), every receptacle is TR.
+    s.execute("bspec.set", &json!({"spec": {"unit_instances": [{"number": "101", "type": "Q", "hand": "normal"}]}})).unwrap();
+    let r = s.execute("bim.coderules", &json!({})).unwrap();
+    assert!(r["tamper_resistant"].as_u64().unwrap_or(0) >= 1, "{r:#}");
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["tamper_resistant"]["value"], "yes", "{a:#}");
+    assert!(a["tamper_resistant"]["source"]["doc"].as_str().is_some_and(|d| d.contains("406.12") && d.contains("101")), "{a:#}");
 }
 
 #[test]
