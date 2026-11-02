@@ -1706,6 +1706,10 @@ fn value_fields(notes: &[&str]) -> Option<Vec<String>> {
                 let end = skip_group(body, start, b'{', b'}', false);
                 let group = body.get(start..end)?;
                 objects += 1;
+                // `{TAG: value}`, `{key: value}`: a map whose keys are the caller's own names.
+                if is_map_doc(group) {
+                    return None;
+                }
                 if open_params(group) {
                     let other = delegate(note)?;
                     fields.extend(own_params(&documented_names(params_doc(other))).into_iter().map(str::to_string));
@@ -1735,6 +1739,14 @@ fn value_fields(notes: &[&str]) -> Option<Vec<String>> {
         }
     }
     (!fields.is_empty()).then_some(fields)
+}
+
+/// A one-entry `{word: value}` group: the word stands for any key (`attribs?: {TAG: value}`).
+fn is_map_doc(group: &str) -> bool {
+    let inner = group.trim().trim_start_matches('{').trim_end_matches('}');
+    let Some((key, value)) = inner.split_once(':') else { return false };
+    let key = key.trim();
+    value.trim() == "value" && !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Parameter names that can't be negative: a radius, a size, a count, a gap, a tolerance.

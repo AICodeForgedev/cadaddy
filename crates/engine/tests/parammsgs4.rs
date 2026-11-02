@@ -410,6 +410,8 @@ fn objects_where_a_value_goes_are_refused_by_name() {
     s.execute_agent("renderenvironment", &json!({"background": {"kind": "solid", "color": [0.2, 0.2, 0.2]}})).unwrap();
     s.execute_agent("tablestyle", &json!({"name": "T", "cellStyle": {"name": "Big", "textHeight": 0.5}})).unwrap();
     s.execute_agent("zoom", &json!({"mode": "extents"})).unwrap();
+    // `attribs?: {TAG: value}` is a map: any tag is a key.
+    s.execute_agent("symbol", &json!({"name": "pl_water_closet", "at": [10, 0], "attribs": {"MARK": "WC-3"}})).unwrap();
 }
 
 #[test]
