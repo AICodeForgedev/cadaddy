@@ -1116,6 +1116,7 @@ pub(crate) fn device_kind(tag: &str) -> &'static str {
         "FA" | "HS" | "SS" | "FS" | "ST" | "CM" => "fire alarm device",
         "TV" | "DA" | "TEL" | "WAP" | "CR" | "CAM" => "low voltage outlet",
         "EF" | "FCU" | "WH" | "PTAC" => "equipment connection",
+        "T" | "TSTAT" | "TH" => "thermostat",
         _ => "device",
     }
 }
