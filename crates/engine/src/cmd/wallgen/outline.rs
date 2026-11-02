@@ -457,7 +457,99 @@ impl Floors {
         self.rooms.push(rects);
         Ok((n, &self.rooms[n]))
     }
+
+    /// The floor no label traced, once every label is: each pocket of it (open floor between the
+    /// walls, its door gaps not closed) that touches one traced room only, holds none of
+    /// `keep_out` (labels that traced nothing: a room of their own) and is no bigger than
+    /// [`POCKET_SF`] joins that room — a guest room's bath behind its door, its entry the closing
+    /// of a narrow passage cut off. Each changed room (which one, its rectangles now) (Q6160).
+    pub(crate) fn join_pockets(&mut self, keep_out: &[Vec2]) -> Vec<(usize, &[[Vec2; 2]])> {
+        let (nx, ny, cell) = (self.nx, self.ny, self.cell);
+        let max_cells = (POCKET_SF * self.upf * self.upf / (cell * cell)).ceil() as usize;
+        let cell_of = |p: Vec2| {
+            let (i, j) = ((p.x - self.origin.x) / cell, (p.y - self.origin.y) / cell);
+            (i >= 0.0 && j >= 0.0 && (i as usize) < nx && (j as usize) < ny).then(|| j as usize * nx + i as usize)
+        };
+        let kept: std::collections::HashSet<usize> = keep_out.iter().filter_map(|p| cell_of(*p)).collect();
+        let open = |owner: &[u32], k: usize| !self.blocked.get(k).copied().unwrap_or(true) && owner.get(k) == Some(&0);
+        // Pockets meet through openings, not through a sliver of floor a cell or two wide left
+        // along a wall (between a wall and the corridor traced beside it): that joins every
+        // unit's bath along the corridor into one pocket.
+        let sliver = grow(&self.blocked, nx, ny, POCKET_SLIVER_CELLS);
+        let wide = |owner: &[u32], k: usize| open(owner, k) && !sliver.get(k).copied().unwrap_or(true);
+        let mut seen = vec![false; nx * ny];
+        let mut changed: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        for k0 in 0..nx * ny {
+            if seen.get(k0).copied().unwrap_or(true) || !wide(&self.owner, k0) {
+                continue;
+            }
+            let mut pocket = vec![k0];
+            let mut neighbours: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+            let mut queue = VecDeque::from([k0]);
+            if let Some(s) = seen.get_mut(k0) {
+                *s = true;
+            }
+            while let Some(k) = queue.pop_front() {
+                let (i, j) = (k % nx, k / nx);
+                for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                    if a >= nx || b >= ny {
+                        continue;
+                    }
+                    let q = b * nx + a;
+                    match self.owner.get(q).copied() {
+                        Some(o) if o > 0 => {
+                            neighbours.insert(o);
+                        }
+                        _ if wide(&self.owner, q) && seen.get(q) == Some(&false) => {
+                            if let Some(s) = seen.get_mut(q) {
+                                *s = true;
+                            }
+                            pocket.push(q);
+                            queue.push_back(q);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let [only] = neighbours.into_iter().collect::<Vec<_>>()[..] else { continue };
+            if pocket.len() > max_cells || pocket.iter().any(|k| kept.contains(k)) {
+                continue;
+            }
+            // The pocket and the floor along its walls the sliver test left out.
+            let mut mine = vec![false; nx * ny];
+            for k in &pocket {
+                if let Some(m) = mine.get_mut(*k) {
+                    *m = true;
+                }
+            }
+            let reach = grow(&mine, nx, ny, POCKET_SLIVER_CELLS);
+            for (k, o) in self.owner.iter_mut().enumerate() {
+                if *o == 0 && reach.get(k).copied().unwrap_or(false) && !self.blocked.get(k).copied().unwrap_or(true) {
+                    *o = only;
+                }
+            }
+            changed.insert(only as usize - 1);
+        }
+        let (ox, oy) = (self.origin.x, self.origin.y);
+        let mut done = Vec::new();
+        for n in changed {
+            let id = n as u32 + 1;
+            let fill: Vec<bool> = self.owner.iter().map(|o| *o == id).collect();
+            if let (Some(rects), Some(slot)) = (rects_of(&fill, nx, ny, |i| ox + i as f64 * cell, |j| oy + j as f64 * cell), self.rooms.get_mut(n)) {
+                *slot = rects;
+                done.push(n);
+            }
+        }
+        done.into_iter().filter_map(|n| self.rooms.get(n).map(|r| (n, r.as_slice()))).collect()
+    }
 }
+
+/// Cells a pocket's floor must keep from the walls to reach on ([`Floors::join_pockets`]).
+const POCKET_SLIVER_CELLS: usize = 2;
+
+/// The biggest pocket of untraced floor a room takes in ([`Floors::join_pockets`]), square feet:
+/// a bath, an entry, a closet or a vestibule; more is a room the labels missed.
+const POCKET_SF: f64 = 150.0;
 
 /// The cell nearest `k0` (within `reach` cells, through open cells) that is open once the gaps
 /// are closed (`grown` clear).
@@ -780,5 +872,65 @@ mod tests {
         // A vast plan gets coarser cells, not a vast grid.
         let big = ring(&[(0.0, 0.0), (1e6, 0.0), (1e6, 1e6), (0.0, 1e6)]);
         assert!(building(&big, Vec2::new(-3.0, -3.0), Vec2::new(1.2e7 + 3.0, 1.2e7 + 3.0), 12.0).is_some());
+    }
+
+    /// A room 30' × 20' (6" walls, feet × 12 units) with a bath 8' × 8' in its corner behind
+    /// a 3' door gap, and, when `passage`, a 4' passage between it and a second room.
+    fn bath_plan(passage: bool) -> (Vec<(Vec2, Vec2, f64)>, Vec<[Vec2; 2]>) {
+        let p = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        let mut walls = ring(&[(0.0, 0.0), (30.0, 0.0), (30.0, 20.0), (0.0, 20.0)]);
+        // The bath: its wall at x 22 with the door gap from y 3 to y 6, its top at y 8.
+        walls.push((p(22.0, 0.0), p(22.0, 3.0), 6.0));
+        walls.push((p(22.0, 6.0), p(22.0, 8.0), 6.0));
+        walls.push((p(22.0, 8.0), p(30.0, 8.0), 6.0));
+        if passage {
+            // Two rooms each side of a passage 4' wide (x 11–15), each with a door onto it.
+            for x in [11.0, 15.0] {
+                walls.push((p(x, 0.0), p(x, 9.0), 6.0));
+                walls.push((p(x, 12.0), p(x, 20.0), 6.0));
+            }
+        }
+        (walls, vec![[p(0.0, 0.0), p(30.0, 20.0)]])
+    }
+
+    #[test]
+    fn a_room_takes_in_its_bath_behind_its_door() {
+        let (walls, shell) = bath_plan(false);
+        let p = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        let mut f = Floors::new(&walls, &shell, 12.0, &[]).unwrap();
+        let (n, rects) = f.room_at(p(10.0, 12.0)).unwrap();
+        let before = sf_of(rects);
+        // The door gap closed: the room stops at the bath's walls (its 64 sf out).
+        assert!(before < 30.0 * 20.0 - 50.0, "{before} sf");
+        let joined = f.join_pockets(&[]);
+        let [(m, rects)] = joined[..] else { panic!("one room changed: {joined:?}") };
+        assert_eq!(m, n);
+        let after = sf_of(rects);
+        assert!(after > before + 50.0 && after < 30.0 * 20.0, "{before} → {after} sf");
+        // The bath is the room's now: its label there finds the room.
+        assert_eq!(f.room_at(p(26.0, 4.0)).unwrap().0, n);
+    }
+
+    #[test]
+    fn a_pocket_with_its_own_label_or_two_rooms_round_it_stays_out() {
+        let p = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        // A label in the bath that traced nothing keeps it out of the room.
+        let (walls, shell) = bath_plan(false);
+        let mut f = Floors::new(&walls, &shell, 12.0, &[]).unwrap();
+        f.room_at(p(10.0, 12.0)).unwrap();
+        assert!(f.join_pockets(&[p(26.0, 4.0)]).is_empty());
+        // A passage between two rooms is neither's.
+        let (walls, shell) = bath_plan(true);
+        let mut f = Floors::new(&walls, &shell, 12.0, &[]).unwrap();
+        let (a, _) = f.room_at(p(5.0, 10.0)).unwrap();
+        let (b, before) = f.room_at(p(18.0, 15.0)).unwrap();
+        let before = sf_of(before);
+        assert_ne!(a, b);
+        let joined = f.join_pockets(&[]);
+        // The right room takes its bath only; the passage stays out of both.
+        assert!(joined.iter().all(|(m, _)| *m == b), "{joined:?}");
+        let after = joined.first().map_or(before, |(_, r)| sf_of(r));
+        assert!(after < before + 8.0 * 8.0 + 10.0, "{before} → {after}: the passage went in too");
+        assert!(f.room_at(p(13.0, 4.0)).is_err() || f.room_at(p(13.0, 4.0)).is_ok_and(|(m, _)| m != a && m != b));
     }
 }

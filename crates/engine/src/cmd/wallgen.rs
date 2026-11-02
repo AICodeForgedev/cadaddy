@@ -1608,7 +1608,10 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     }
                 }
             });
-            if !between {
+            // Another wall running across the gap (a corridor's walls between two rooms' walls
+            // that happen to line up, a demising wall between two units' bath walls): the two
+            // pieces are two walls, the gap no opening; nothing the plan draws spans it (Q6160).
+            if !between && !gap_crossed(&pl.walls[..n], i, j, a.b, a.b + u * gap) {
                 gaps.push((i, a.b, a.b + u * gap, a.thickness));
             }
         }
@@ -1739,6 +1742,33 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         notes.push(format!("{}: {not_doors} arcs not taken for doors (no open wall where they shut: fixtures, equipment, furniture).", level.name));
     }
     pl
+}
+
+/// Whether a wall other than `i` and `j` (the two pieces either side of the gap `g0`–`g1`) runs
+/// across the gap: its centreline crosses the gap's line between the gap's ends, away from them by
+/// more than half its thickness (a wall meeting a jamb end-on is the jamb's return, not across).
+fn gap_crossed(walls: &[PlanWall], i: usize, j: usize, g0: Vec2, g1: Vec2) -> bool {
+    let width = g0.dist(g1);
+    if !(width.is_finite() && width > 1e-9) {
+        return false;
+    }
+    let u = (g1 - g0) * (1.0 / width);
+    walls.iter().enumerate().take(MAX_OBJECTS).any(|(k, c)| {
+        if k == i || k == j {
+            return false;
+        }
+        let d = c.b - c.a;
+        let den = u.cross(d);
+        // Parallel to the gap: along it, not across it.
+        if den.abs() <= 0.5 * d.len() {
+            return false;
+        }
+        // Where the wall's line meets the gap's (s along the gap, t along the wall).
+        let s = (c.a - g0).cross(d) / den;
+        let t = (c.a - g0).cross(u) / den;
+        let margin = c.thickness / 2.0;
+        s > margin && s < width - margin && (0.0..=1.0).contains(&t)
+    })
 }
 
 /// A window narrower than this (inches) beside a pier is no window: the pier's slot, filled.
@@ -2268,5 +2298,36 @@ mod tests {
         for ((k, n, at), (wk, wn, wat)) in seeds[1].iter().zip(want) {
             assert!(*k == wk && n == wn && at.dist(wat) < 1e-9, "{seeds:?}");
         }
+    }
+
+    fn plan_wall(a: (f64, f64), b: (f64, f64)) -> PlanWall {
+        PlanWall {
+            a: Vec2::new(a.0, a.1),
+            b: Vec2::new(b.0, b.1),
+            thickness: 6.0,
+            top: 108.0,
+            source: Handle(0),
+            cuts: Vec::new(),
+            extra: Vec::new(),
+            wall_type: None,
+        }
+    }
+
+    #[test]
+    fn a_gap_another_wall_runs_across_is_no_opening() {
+        // Two pieces of one line, x 0–100 and 172–300 (a 6' gap), inches.
+        let mut walls = vec![plan_wall((0.0, 0.0), (100.0, 0.0)), plan_wall((172.0, 0.0), (300.0, 0.0))];
+        let (g0, g1) = (Vec2::new(100.0, 0.0), Vec2::new(172.0, 0.0));
+        // Nothing across: an opening.
+        assert!(!gap_crossed(&walls, 0, 1, g0, g1));
+        // A wall meeting the jamb end-on (the room's return wall) is no wall across it.
+        walls.push(plan_wall((100.0, 0.0), (100.0, -96.0)));
+        assert!(!gap_crossed(&walls, 0, 1, g0, g1));
+        // A wall that lies along the gap's line is no wall across it either.
+        walls.push(plan_wall((110.0, 0.0), (160.0, 0.0)));
+        assert!(!gap_crossed(&walls, 0, 1, g0, g1));
+        // A demising wall running across the gap's middle: two walls lined up, no opening.
+        walls.push(plan_wall((136.0, -120.0), (136.0, 120.0)));
+        assert!(gap_crossed(&walls, 0, 1, g0, g1));
     }
 }
