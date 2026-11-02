@@ -60,6 +60,10 @@ pub(crate) struct CodeRule {
     pub height_in: Option<f64>,
     pub mount_top_in: Option<f64>,
     pub plate_margin_in: Option<[f64; 2]>,
+    /// Equipment connections: the conductor factor over nameplate / full-load amps, and the
+    /// ampacities by material and size (75 C column).
+    pub conductor_factor: Option<f64>,
+    pub ampacity_75c: BTreeMap<String, BTreeMap<String, f64>>,
 }
 
 /// The rooms a rule applies in: a typical unit's rooms (guest rooms), or rooms named so.
