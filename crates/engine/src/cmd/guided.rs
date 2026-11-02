@@ -7391,8 +7391,12 @@ fn panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<cadaddy_wal
     let mut out: Vec<cadaddy_walk3d::PanelSchedule> = Vec::new();
     for (number, sub) in &pages {
         for p in super::panelsched::read(&cadaddy_mepfix::sheet_facts::texts(sub), number) {
-            if !out.iter().any(|o| o.panel.eq_ignore_ascii_case(&p.panel)) {
-                out.push(p);
+            // A panel named twice: the schedule with more breakers read.
+            let read = |x: &cadaddy_walk3d::PanelSchedule| x.circuits.iter().filter(|c| !c.breaker.is_empty()).count();
+            match out.iter_mut().find(|o| o.panel.eq_ignore_ascii_case(&p.panel)) {
+                Some(o) if read(&p) > read(o) => *o = p,
+                Some(_) => {}
+                None => out.push(p),
             }
         }
     }

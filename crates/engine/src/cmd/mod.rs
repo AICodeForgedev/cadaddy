@@ -855,6 +855,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(products::specs());
     v.extend(coderules::specs());
     v.extend(pricebook::specs());
+    v.extend(panelsched::specs());
         v.extend(dimcheck::specs());
         v.extend(agentready::specs());
         v.extend(underlay::specs());

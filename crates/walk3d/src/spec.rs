@@ -1749,6 +1749,11 @@ pub struct PanelCircuit {
     /// schedule's legend saying what each is ([`PanelSchedule::legend`]).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub protection: Vec<String>,
+    /// Its wire size as the schedule prints it (`12`, `4/0`), and its load, VA.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub wire: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_va: Option<f64>,
     /// The sheet it was read from (`E-601`), empty when entered by hand.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
@@ -1770,6 +1775,9 @@ pub struct PanelSchedule {
     /// The schedule legend's codes: `GF` → `GROUND FAULT INTERRUPTER`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub legend: BTreeMap<String, String>,
+    /// Its header's facts as printed: `bus amps` → `125A`, `volts/phase`, `mounting`, `location`…
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub header: BTreeMap<String, String>,
 }
 
 /// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.

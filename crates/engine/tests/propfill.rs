@@ -279,6 +279,19 @@ fn a_devices_breaker_type_is_its_printed_schedule_rows() {
     assert_eq!(a["breaker_type"]["source"]["doc"], "E-601 panel LP1 circuit 3");
     // The breaker itself still from the panel's own row.
     assert_eq!(a["breaker"]["value"], "20A");
+    // The schedule as data: each circuit's breaker type and the model's devices on it; as CSV;
+    // as a CADaddy table.
+    let csv = std::env::temp_dir().join(format!("cadaddy-panels-{}.csv", std::process::id()));
+    let r = s.execute("panels.schedule", &json!({"panel": "lp1", "csv": csv.to_string_lossy(), "place": {"panel": "LP1", "at": [0, -100]}})).unwrap();
+    let c3 = r["panels"][0]["circuits"].as_array().unwrap().iter().find(|c| c["number"] == "3").cloned().unwrap();
+    assert_eq!(c3["protection"]["ground_fault"], true, "{r:#}");
+    assert_eq!(c3["protection"]["meaning"][1], "GF: GROUND FAULT INTERRUPTER");
+    assert_eq!(c3["breaker_amps"], json!(20.0));
+    assert!(c3["devices"]["count"].as_u64().unwrap_or(0) >= 1, "{c3:#}");
+    assert!(std::fs::read_to_string(&csv).unwrap().contains("LP1,,E-601,3,RECEPTACLES OFFICE 101,20,1,,,AF/GF,true,true,"));
+    let _ = std::fs::remove_file(&csv);
+    assert!(!r["placed"].is_null(), "{r:#}");
+    s.execute("undo", &json!({})).unwrap();
     // The code rules: under a GFCI breaker it is a standard receptacle, protected by its breaker;
     // the office is no guest room (no TR rule), and the documents don't say TR.
     let ha = find(&mut s, "device", json!({"type_mark": "A"}));
