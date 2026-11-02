@@ -157,10 +157,10 @@
       "id": "E-RECEPT-TYPE",
       "trade": "electrical",
       "applies_to": {"kinds": ["receptacle", "outlet", "floor_box"], "categories": ["IfcOutlet"], "marks": []},
-      "check": "Each receptacle is the type the legend, notes and code call for: GFCI near sinks and in wet locations, tamper-resistant in dwelling and guest rooms, weather-resistant with a cover outdoors, and USB, quad or floor box as tagged.",
+      "check": "Each receptacle is the type the legend, notes and code call for: GFCI near sinks and in wet locations, weather-resistant with a cover outdoors, and USB, quad or floor box as tagged (tamper-resistance is E-RECEPT-TR's).",
       "how": [
         "Read the symbol and its subscript tag (GFI, WP, USB, quad) on the plan crop and the matching legend row.",
-        "Check the general notes for blanket requirements (all receptacles tamper-resistant; GFCI within a distance of a sink).",
+        "Check the general notes for blanket requirements (GFCI within a distance of a sink, weather-resistant outdoors).",
         "The element's type and properties in the object list must carry every required rating; a missing rating is a 'fail'."
       ],
       "documents": ["plan", "legend", "general_notes", "spec"],
@@ -170,6 +170,33 @@
       "examples": {
         "pass": "The receptacle beside the vanity is tagged GFI on the plan and is a GFCI type in the model.",
         "fail": "The exterior receptacle is a plain duplex in the model; the plan tags it WP."
+      }
+    },
+    {
+      "id": "E-RECEPT-TR",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["receptacle"], "categories": [], "marks": []},
+      "check": "Every 15 or 20 A, 125 V receptacle (duplex, GFCI, USB, quad) in a dwelling unit, guest room, guest suite or other area the code lists is tamper-resistant.",
+      "how": [
+        "The prescreen gives each receptacle's tamper-resistance fact and where it came from: its product record, its legend row or type tag (TR), or a general note or spec line making every receptacle tamper-resistant.",
+        "Where it says 'unsure', look for the fact yourself: the TR subscript beside the symbol, the legend row of its tag, the general notes and the wiring device spec section.",
+        "A receptacle in such a room that is not tamper-resistant is a 'fail' citing what says so; a GFCI receptacle is checked here as well as by E-RECEPT-TYPE."
+      ],
+      "documents": ["plan", "enlarged_plan", "legend", "general_notes", "spec", "submittal"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": "spec",
+      "examples": {
+        "pass": "The general notes say all receptacles shall be tamper-resistant; the guest room's duplex receptacles pass, citing the note.",
+        "fail": "The guest room's GFCI receptacle by the vanity is a product the record says is not tamper-resistant."
+      },
+      "code": {
+        "cite": "NEC 406.12",
+        "says": "In the areas listed, nonlocking 15- and 20-ampere, 125-volt receptacles shall be listed tamper-resistant receptacles.",
+        "rooms": ["dwelling unit", "dwelling", "apartment", "guest room", "guestroom", "guest suite", "hotel room", "motel room", "dormitory", "dorm room", "child care", "day care", "daycare", "preschool", "assisted living"],
+        "typical_units": true,
+        "max_amps": 20,
+        "max_volts": 125
       }
     },
     {

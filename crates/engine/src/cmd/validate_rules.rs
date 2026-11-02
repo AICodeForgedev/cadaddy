@@ -83,6 +83,32 @@ pub struct Examples {
     pub fail: String,
 }
 
+/// Where a code requirement holds (a rule that checks one, e.g. E-RECEPT-TR): the code text it
+/// rests on and the rooms it covers, as data. A project adds room names with
+/// `validate.<RULE>.rooms` (domain `custom`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodeScope {
+    /// The code section (`NEC 406.12`).
+    pub cite: String,
+    /// What it requires, in short.
+    pub says: String,
+    /// The room names, unit types or room types it covers (`guest room`, `dwelling unit`).
+    pub rooms: Vec<String>,
+    /// Every room with a typical unit type (a guest room or dwelling unit of the job) is covered.
+    #[serde(default)]
+    pub typical_units: bool,
+    /// The device ratings it covers, at most (a receptacle known to be rated above is not).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_amps: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_volts: Option<f64>,
+}
+
+/// Room names a code scope lists (built in and a project's), at most; longest name.
+pub const MAX_CODE_ROOMS: usize = 100;
+const MAX_ROOM_NAME: usize = 60;
+
 /// A validation rule.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,6 +126,9 @@ pub struct Rule {
     /// The `bim.validate` check that covers the measurable part, if any.
     pub prescreen: Option<String>,
     pub examples: Examples,
+    /// The code requirement the rule checks and where it holds, when it checks one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<CodeScope>,
 }
 
 impl Rule {
@@ -184,6 +213,20 @@ impl Rule {
         if self.examples.pass.trim().is_empty() || self.examples.fail.trim().is_empty() {
             out.push(format!("{id}: needs a pass and a fail example"));
         }
+        if let Some(c) = &self.code {
+            if c.cite.trim().is_empty() || c.says.trim().is_empty() {
+                out.push(format!("{id}: its code needs the section it cites and what it says"));
+            }
+            if c.rooms.is_empty() && !c.typical_units {
+                out.push(format!("{id}: its code covers no rooms"));
+            }
+            if c.rooms.len() > MAX_CODE_ROOMS || c.rooms.iter().any(|r| r.trim().is_empty() || r.chars().count() > MAX_ROOM_NAME) {
+                out.push(format!("{id}: its code lists at most {MAX_CODE_ROOMS} rooms, each 1 to {MAX_ROOM_NAME} characters"));
+            }
+            if [c.max_amps, c.max_volts].iter().flatten().any(|x| !x.is_finite() || *x <= 0.0) {
+                out.push(format!("{id}: its code's ratings must be positive numbers"));
+            }
+        }
         out
     }
 }
@@ -266,6 +309,28 @@ pub enum Change {
     Tolerance(String, f64),
     Severity(String),
     Enabled(bool),
+    /// Room names the rule's code scope covers too.
+    Rooms(Vec<String>),
+}
+
+/// Room names as a project writes them (`dorm suite; sleeping room`): `;` or `,` between.
+pub fn parse_rooms(value: &str) -> std::result::Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in value.split([';', ',', '\n']).map(str::trim).filter(|r| !r.is_empty()) {
+        if r.chars().count() > MAX_ROOM_NAME || r.chars().any(char::is_control) {
+            return Err(format!("a room name is at most {MAX_ROOM_NAME} printable characters"));
+        }
+        if out.len() >= MAX_CODE_ROOMS {
+            return Err(format!("at most {MAX_CODE_ROOMS} room names"));
+        }
+        if !out.iter().any(|x| x.eq_ignore_ascii_case(r)) {
+            out.push(r.to_string());
+        }
+    }
+    if out.is_empty() {
+        return Err("name at least one room (e.g. `dorm suite; sleeping room`)".into());
+    }
+    Ok(out)
 }
 
 /// A project override, checked.
@@ -299,7 +364,9 @@ pub fn check_override(domain: RuleDomain, key: &str, value: &str) -> std::result
             let n: f64 = v.trim_end_matches(['"', '\'']).trim().parse().map_err(|_| format!("`{key}` must be a number, not `{v}`"))?;
             Change::Tolerance(name.to_string(), tolerance_value(name, n)?)
         }
-        ["severity"] | ["enabled"] if domain != RuleDomain::Custom => return Err(format!("`{key}`: set it in domain `custom`")),
+        ["severity"] | ["enabled"] | ["rooms"] if domain != RuleDomain::Custom => return Err(format!("`{key}`: set it in domain `custom`")),
+        ["rooms"] if rule.code.is_none() => return Err(format!("`{key}`: rule {id} checks no code requirement, so it has no rooms to add to")),
+        ["rooms"] => Change::Rooms(parse_rooms(v).map_err(|e| format!("`{key}`: {e}"))?),
         ["severity"] => {
             let s = v.to_ascii_lowercase();
             if !SEVERITIES.contains(&s.as_str()) {
@@ -314,7 +381,7 @@ pub fn check_override(domain: RuleDomain, key: &str, value: &str) -> std::result
         }),
         _ => {
             return Err(format!(
-                "`{key}`: a project may change `validate.{id}.tolerance.<name>`, `validate.{id}.severity` or `validate.{id}.enabled`"
+                "`{key}`: a project may change `validate.{id}.tolerance.<name>`, `validate.{id}.severity`, `validate.{id}.enabled` or (a rule with a code requirement) `validate.{id}.rooms`"
             ));
         }
     };
@@ -346,6 +413,7 @@ impl Effective {
             "tolerance": r.tolerance,
             "severity": r.severity,
             "prescreen": r.prescreen,
+            "code": r.code,
             "enabled": self.enabled,
             "source": self.source(),
         });
@@ -402,6 +470,18 @@ pub fn effective(pr: &ProjectRules) -> std::result::Result<(Vec<Effective>, Vec<
                 eff.enabled = b;
                 eff.changed.push(("enabled".into(), json!(true), json!(b), key));
             }
+            Change::Rooms(rooms) => {
+                if let Some(code) = eff.rule.code.as_mut() {
+                    let was = json!(code.rooms);
+                    for r in rooms {
+                        if code.rooms.len() < MAX_CODE_ROOMS && !code.rooms.iter().any(|x| x.eq_ignore_ascii_case(&r)) {
+                            code.rooms.push(r);
+                        }
+                    }
+                    let now = json!(code.rooms);
+                    eff.changed.push(("code.rooms".into(), was, now, key));
+                }
+            }
         }
     }
     Ok((out, rejected))
@@ -417,7 +497,7 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .noundo(),
         CommandSpec::new(CMD_SET, "Change a Validation Rule", run_set).params(
-            "{id: string (a rule id from validate.rules), tolerance?: {name: number} (plan_in, height_in, route_ft, size_in, depth_in, clear_width_in, clear_depth_in), severity?: string (high|medium|low), enabled?: bool, reset?: bool (drop this project's changes to the rule first), reason: string} → {rule, set: [key]}: change a rule for this project (kept in the project rules)",
+            "{id: string (a rule id from validate.rules), tolerance?: {name: number} (plan_in, height_in, route_ft, size_in, depth_in, clear_width_in, clear_depth_in), severity?: string (high|medium|low), enabled?: bool, rooms?: [string] (more room names a rule with a code requirement covers, e.g. E-RECEPT-TR), reset?: bool (drop this project's changes to the rule first), reason: string} → {rule, set: [key]}: change a rule for this project (kept in the project rules)",
         ),
     ]
 }
@@ -530,9 +610,24 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(b) = bool_param(cmd, p, "enabled")? {
         writes.push((RuleDomain::Custom, format!("{KEY_PREFIX}{id}.enabled"), b.to_string()));
     }
+    match p.get("rooms") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(a)) => {
+            let names: Vec<&str> = a
+                .iter()
+                .take(MAX_CODE_ROOMS + 1)
+                .map(|r| r.as_str().map(str::trim).ok_or_else(|| bad(cmd, "`rooms` is a list of room names")))
+                .collect::<Result<_>>()?;
+            if names.iter().any(|r| r.contains([';', ','])) {
+                return Err(bad(cmd, "a room name in `rooms` has no `;` or `,`"));
+            }
+            writes.push((RuleDomain::Custom, format!("{KEY_PREFIX}{id}.rooms"), names.join("; ")));
+        }
+        Some(_) => return Err(bad(cmd, "`rooms` is a list of room names")),
+    }
     let reset = bool_param(cmd, p, "reset")?.unwrap_or(false);
     if writes.is_empty() && !reset {
-        return Err(bad(cmd, "nothing to change: give `tolerance`, `severity`, `enabled` or `reset`"));
+        return Err(bad(cmd, "nothing to change: give `tolerance`, `severity`, `enabled`, `rooms` or `reset`"));
     }
     for (domain, key, value) in &writes {
         check_override(*domain, key, value).map_err(|e| bad(cmd, e))?;

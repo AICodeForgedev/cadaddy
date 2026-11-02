@@ -172,6 +172,7 @@ pub mod validate_packet;
 pub mod validate_prescreen;
 pub mod validate_rules;
 pub mod validate_run;
+pub mod validate_tr;
 pub mod verify;
 pub mod walkpub;
 pub mod wallgen;

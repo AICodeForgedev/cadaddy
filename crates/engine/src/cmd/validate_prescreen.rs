@@ -12,6 +12,10 @@
 //!     `mounting_height` rules for its kind and room). Off by more than `height_in` is a `fail`.
 //!   - **G-PRESENT**: every room whose type has an expected set: each item of the set counted in
 //!     the room (`missing` when fewer, `extra` when more than an exact count).
+//!   - **E-RECEPT-TR**: every receptacle in a room the rule's code scope covers (a guest room,
+//!     dwelling unit…: [`super::validate_tr`]) against its tamper-resistance fact: `pass` when
+//!     its product record, its own type tag or legend row, or a blanket note says TR; `fail`
+//!     when known not TR; `unsure` (and counted in `unmeasured`) when nothing says.
 //!
 //! Expected sets are project rules, never built in: domain `custom`, key
 //! `prescreen.expect.<room type>`, value a list such as
@@ -53,7 +57,7 @@ pub const CMD: &str = "validate.prescreen";
 /// The project-rule key prefix of a room type's expected set.
 pub const EXPECT_PREFIX: &str = "prescreen.expect.";
 /// The rules the prescreen measures.
-pub const RULES: [&str; 3] = ["G-HOST", "G-HEIGHT", "G-PRESENT"];
+pub const RULES: [&str; 4] = ["G-HOST", "G-HEIGHT", "G-PRESENT", super::validate_tr::RULE];
 /// How far a wall is looked for round an element, feet.
 pub const HOST_SEARCH_FT: f64 = 10.0;
 /// Items of one expected set, and the largest count, at most.
@@ -73,7 +77,7 @@ const MAX_WRITTEN: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Validation Prescreen", run_prescreen)
-            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}}, total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict, issue, expected, found, measured, confidence, severity, area?, level, at?, source: \"prescreen\"}], next?, rooms_without_set, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST), each element's height above its floor against the documents (G-HEIGHT), and each room type's expected set (project rules `prescreen.expect.<room type>`) against what the room holds (G-PRESENT)")
+            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT|E-RECEPT-TR], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra, unsure}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}}, total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict, issue, expected, found, measured, confidence, severity, area?, level, at?, source: \"prescreen\"}], next?, rooms_without_set, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST), each element's height above its floor against the documents (G-HEIGHT), each room type's expected set (project rules `prescreen.expect.<room type>`) against what the room holds (G-PRESENT), and each receptacle in a guest room, dwelling unit or other room the code lists against its tamper-resistance fact from its product record, type tag, legend row or a blanket note (E-RECEPT-TR: unsure when nothing says)")
             .noundo()
             .files(),
     ]
@@ -630,7 +634,12 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     let mut findings: Vec<(u8, Value)> = Vec::new();
     let mut checked: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
     // Every rule run is listed, with its counts (0 when it found nothing to check).
-    for (id, verdicts) in [("G-HOST", &["pass", "fail"][..]), ("G-HEIGHT", &["pass", "fail"][..]), ("G-PRESENT", &["pass", "missing", "extra"][..])] {
+    for (id, verdicts) in [
+        ("G-HOST", &["pass", "fail"][..]),
+        ("G-HEIGHT", &["pass", "fail"][..]),
+        ("G-PRESENT", &["pass", "missing", "extra"][..]),
+        (super::validate_tr::RULE, &["pass", "fail", "unsure"][..]),
+    ] {
         if on(id).is_some() {
             checked.insert(id.to_string(), verdicts.iter().map(|v| (v.to_string(), 0)).collect());
         }
@@ -743,13 +752,99 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             findings.push((if verdict == "pass" { 9 } else { sev_rank(&r.rule.severity) }, f));
         }
     }
+    let units = if on("G-PRESENT").is_some() || on(super::validate_tr::RULE).is_some() { Units::of(sc.d) } else { Units(HashMap::new()) };
+    // E-RECEPT-TR: each receptacle where the code wants tamper-resistant ones.
+    if let Some(r) = on(super::validate_tr::RULE)
+        && let Some(code) = &r.rule.code
+    {
+        use super::validate_tr::{self as vt, Subject};
+        let facts = vt::Facts::of(sc.d, sc.sp, &kinds, sc.prints);
+        let by_id: HashMap<String, &v::Element> = sc.model.elements.iter().take(MAX_ELEMENTS).map(|e| (e.id.to_ascii_uppercase(), e)).collect();
+        let print_units: HashMap<(String, String), &str> = sc
+            .prints
+            .map_or(&[][..], |p| p.rooms.as_slice())
+            .iter()
+            .take(MAX_ELEMENTS)
+            .filter_map(|pr| Some(((pr.level.trim().to_ascii_lowercase(), pr.number.trim().to_ascii_lowercase()), pr.unit_type.as_deref()?)))
+            .collect();
+        // A receptacle on its room's wall line (just outside the outline) is that room's, as in
+        // the packets: the nearest room of its level within a foot, when that room is in scope.
+        let level_rooms: Vec<Area> =
+            if mine.iter().any(|(it, a)| a.is_none() && applies(r, it)) { super::validate_packet::model_areas(sc.d, sc.frame) } else { Vec::new() };
+        let mut rooms_of: HashMap<String, Vec<&Area>> = HashMap::new();
+        for a in &level_rooms {
+            rooms_of.entry(a.level.to_ascii_lowercase()).or_default().push(a);
+        }
+        let on_wall_line = |it: &Item| -> Option<&Area> {
+            let list = rooms_of.get(&it.level.to_ascii_lowercase())?;
+            let home = list.get(super::validate_packet::home_of(list, it.at)?)?;
+            sc.areas.iter().find(|a| a.id == home.id)
+        };
+        let mut needs: HashMap<String, Option<String>> = HashMap::new();
+        for (it, a) in mine.iter().filter(|(it, _)| applies(r, it)) {
+            let mut skip = |why: &str| *unmeasured.entry(r.rule.id.clone()).or_default().entry(why.to_string()).or_default() += 1;
+            let Some(a) = a.or_else(|| on_wall_line(it)) else {
+                skip("not in a room: whether the code wants it tamper-resistant is not known");
+                continue;
+            };
+            let why_room = needs
+                .entry(a.id.clone())
+                .or_insert_with(|| {
+                    let pu = a.number.as_deref().and_then(|n| print_units.get(&(a.level.trim().to_ascii_lowercase(), n.trim().to_ascii_lowercase())));
+                    vt::required_in(code, a, units.get(&a.level, a.number.as_deref()), pu.copied())
+                })
+                .clone();
+            // A room the code doesn't list: the rule doesn't apply.
+            let Some(why_room) = why_room else { continue };
+            let el = by_id.get(&it.handle.to_ascii_uppercase()).copied();
+            let ent = cadaddy_doc::Handle::parse_hex(&it.handle).and_then(|h| sc.d.model.get(h)).map(|x| x.as_ref());
+            let subject = Subject {
+                mark: it.mark.as_deref(),
+                tag: el.and_then(|e| e.tag.as_deref()),
+                name: it.name.as_deref(),
+                fields: el.map(|e| &e.fields),
+                entity: ent,
+            };
+            if vt::outside_ratings(code, &subject).is_some() {
+                continue;
+            }
+            let fact = facts.fact(&subject);
+            let verdict = match fact.tr {
+                Some(true) => "pass",
+                Some(false) => "fail",
+                None => "unsure",
+            };
+            if verdict == "unsure" {
+                skip(vt::NOT_STATED);
+            }
+            tally(&r.rule.id, verdict);
+            let issue = match verdict {
+                "pass" => format!("{} is tamper-resistant: {}", it.kind, fact.source),
+                "fail" => format!("{} is not tamper-resistant ({}), but {why_room} wants it so", it.kind, fact.source),
+                _ => format!("{}: {why_room} wants it tamper-resistant", vt::NOT_STATED),
+            };
+            let found = match fact.tr {
+                Some(true) => "tamper-resistant".to_string(),
+                Some(false) => "not tamper-resistant".to_string(),
+                None => "not stated".to_string(),
+            };
+            let measured =
+                json!({"tamper_resistant": fact.tr, "from": fact.from, "source": fact.source, "required_because": why_room, "code": code.cite});
+            let f = base(r, it, Some(a), verdict, issue, format!("tamper-resistant ({})", code.cite), found, measured);
+            let rank = match verdict {
+                "pass" => 9,
+                "unsure" => 5,
+                _ => sev_rank(&r.rule.severity),
+            };
+            findings.push((rank, f));
+        }
+    }
     // G-PRESENT: each room type's expected set.
     let (sets, bad_sets) = expected_sets(&sc.d.project_rules);
     let mut rooms = 0usize;
     let mut without_set = BTreeSet::new();
     let mut room_ids = BTreeSet::new();
     if let Some(r) = on("G-PRESENT") {
-        let units = Units::of(sc.d);
         let base_of = |id: &str| id.split('#').next().unwrap_or(id).to_string();
         let mut by_room: HashMap<String, Vec<&Item>> = HashMap::new();
         for (it, a) in &mine {

@@ -1055,7 +1055,7 @@ fn whole_walls<'a>(pieces: &[&'a v::ModelWall]) -> Vec<WholeWall<'a>> {
 
 /// Which area of a level a point belongs to: the first whose outline holds it, else the one
 /// whose outline is nearest, within [`EDGE_FT`] (an item on its room's wall line).
-fn home_of(areas: &[&Area], p: [f64; 2]) -> Option<usize> {
+pub(crate) fn home_of(areas: &[&Area], p: [f64; 2]) -> Option<usize> {
     if let Some(i) = areas.iter().position(|a| a.outline.len() >= 3 && point_in(&a.outline, p)) {
         return Some(i);
     }
@@ -1475,7 +1475,7 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         counts.get("walls").and_then(Value::as_u64).unwrap_or(0),
         counts.get("openings").and_then(Value::as_u64).unwrap_or(0),
     ));
-    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents; G-PRESENT: the room type's expected set against what the room holds). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
+    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents; G-PRESENT: the room type's expected set against what the room holds; E-RECEPT-TR: each receptacle's tamper-resistance fact and its source where the code wants tamper-resistant receptacles, `unsure` when nothing says). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
     }
@@ -2241,6 +2241,10 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let level_areas = model_areas(d, &frame);
     let member = Membership::new(&area, &level_areas);
     let mut here = in_area(d, &model, prints.as_ref(), &area, &all_rules, &built, &kinds, &member);
+    // Each receptacle's tamper-resistance fact and where it came from (E-RECEPT-TR).
+    if let Some(Value::Array(els)) = here.objects.get_mut("elements") {
+        super::validate_tr::annotate(d, &sp, &model, &kinds, prints.as_ref(), &all_rules, &area, els);
+    }
     // The deterministic prescreen of the area: what was measured, for the judge to start from.
     let pre = ps::screen(&ps::Scope {
         d,
@@ -2254,7 +2258,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         only: &[],
     });
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the documents, G-PRESENT the room type's expected set (project rules)",
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the documents, G-PRESENT the room type's expected set (project rules), E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`)",
         "checked": pre.checked,
         // The area's own: an element beside it is measured in its own area's packet.
         "findings": pre
