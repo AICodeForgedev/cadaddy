@@ -14,7 +14,7 @@ use super::wblock::stem;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
 /// -WBLOCK erases the objects it writes, whatever its mOde option says: AutoCAD 2024 does, and
-/// keeps "Object conversion=Delete" as the setting.
+/// keeps "Object conversion=Delete" as the setting. OOPS brings them back, as after ERASE.
 pub(super) fn dash_wblock_spec() -> CommandSpec {
     CommandSpec::new("-wblock", "Write Block", run_dash_wblock)
         .params("{path, name? | handles?, base?} (the objects written are erased)")
@@ -68,11 +68,19 @@ fn write(s: &mut Session, path: &str, what: Source) -> Result<Value> {
     super::run_wblock(s, &p)
 }
 
+/// Erase what -WBLOCK wrote, as ERASE does: OOPS brings it back.
 fn erase(s: &mut Session, hs: &[Handle]) -> Result<()> {
     let doc = s.doc_mut()?;
+    let mut gone = Vec::new();
     for h in hs {
+        if let Some(space) = doc.space_of(*h)
+            && let Some(e) = doc.entity(*h).cloned()
+        {
+            gone.push((space, e));
+        }
         doc.remove_entity(*h);
     }
+    crate::cmd::classic::remember_erased(s, gone);
     s.set_selection(Vec::new());
     Ok(())
 }

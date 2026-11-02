@@ -242,3 +242,14 @@ fn the_json_form_of_dash_wblock_erases_what_it_writes() {
     assert!(s.execute("-wblock", &json!({ "path": none })).is_err());
     assert!(!std::path::Path::new(&none).exists());
 }
+
+/// OOPS brings back what -WBLOCK erased, as after ERASE.
+#[test]
+fn oops_brings_back_what_dash_wblock_erased() {
+    let (mut s, a, b, c) = drawing();
+    let dir = TempDir::new("dash-wblock");
+    s.execute("-wblock", &json!({ "path": file(&dir, "oops.dwg"), "handles": [a.hex(), b.hex()] })).unwrap();
+    assert!(!alive(&s, a) && !alive(&s, b) && alive(&s, c));
+    s.execute("oops", &json!({})).unwrap();
+    assert!(alive(&s, a) && alive(&s, b) && alive(&s, c));
+}
