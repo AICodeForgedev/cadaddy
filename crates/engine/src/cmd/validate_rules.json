@@ -136,6 +136,25 @@
       }
     },
     {
+      "id": "G-LAYOUT",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "A wall device is placed the way a crew lays it out: on its named wall face (room/side), at the documented height to the stated point of its plate (hard), at its along-face offset from its reference face or object (soft, within its band, solved to a stud side clear of pipes), inside the cabinet or behind the appliance its constraint names, and with its full faceplate clear of casings and other plates.",
+      "how": [
+        "The object list gives each wall device's host_face, height_aff to height_ref, offset_along from offset_from, offset_depth, faceplate, along_band, layout_solve and constraints; the prescreen's G-LAYOUT readings say which part failed (check: face, height, along, constraint, plate).",
+        "Compare with the enlarged plan's dimension strings and the interior elevations: the height to the stated point, the distance from the named face or opening edge, the cabinet or appliance it sits in or behind.",
+        "A height off by more than the tolerance, an offset outside its band, a plate edge outside its cabinet or appliance footprint, or a plate over a casing or another plate is a 'fail'; 'pending framing' is 'unsure' until the studs and pipes exist."
+      ],
+      "documents": ["enlarged_plan", "interior_elevation", "plan"],
+      "tolerance": {"height_in": 0.25},
+      "severity": "medium",
+      "prescreen": "physical",
+      "examples": {
+        "pass": "The microwave receptacle is centred in the upper cabinet within its 2 in band at 66 in AFF, its plate inside the cabinet.",
+        "fail": "The refrigerator receptacle's plate is 3.5 in past the refrigerator's back footprint: it would show beside the refrigerator."
+      }
+    },
+    {
       "id": "E-RECEPT-POS",
       "trade": "electrical",
       "applies_to": {"kinds": ["receptacle", "outlet", "floor_box"], "categories": ["IfcOutlet"], "marks": []},
