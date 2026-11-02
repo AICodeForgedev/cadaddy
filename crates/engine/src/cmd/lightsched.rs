@@ -59,9 +59,25 @@ fn alnum(v: &str) -> String {
     v.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase()
 }
 
-/// Two makers are one when a word of four letters or more is in both (`COOPER` / `Cooper
-/// Lighting`), or one's letters hold the other's.
+/// Lighting brands by the maker that owns them (`lightbrands.json`).
+const BRANDS: &str = include_str!("lightbrands.json");
+
+/// The maker family a name belongs to (`Lithonia Lighting` → ACUITY), if the data knows it.
+fn family(name: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(BRANDS).ok()?;
+    let up = name.to_ascii_uppercase();
+    v.get("families")?
+        .as_object()?
+        .iter()
+        .find_map(|(fam, brands)| brands.as_array()?.iter().filter_map(serde_json::Value::as_str).any(|b| up.contains(b)).then(|| fam.clone()))
+}
+
+/// Two makers are one when they're brands of one maker (`lightbrands.json`), or a word of four
+/// letters or more is in both (`COOPER` / `Cooper Lighting`), or one's letters hold the other's.
 pub(crate) fn same_maker(a: &str, b: &str) -> bool {
+    if let (Some(fa), Some(fb)) = (family(a), family(b)) {
+        return fa == fb;
+    }
     // Words every maker's name may carry don't make two makers one.
     const GENERIC: [&str; 10] = ["LIGHTING", "LIGHT", "ELECTRIC", "SOLUTIONS", "PRODUCTS", "COMPANY", "CORP", "GROUP", "INTERNATIONAL", "INDUSTRIES"];
     let words = |v: &str| {
@@ -85,8 +101,14 @@ pub(crate) fn same_product(model: &str, catalog: &str) -> bool {
         return true;
     }
     let (fm, fc) = (first(model), first(catalog));
-    (!fm.is_empty() && c.contains(&fm)) || (!fc.is_empty() && m.contains(&fc))
+    // One series with other options (`ML4DM10FSL9...` / `ML4DM10LSFL9...`): a common start of
+    // six letters or more.
+    let common = m.chars().zip(c.chars()).take_while(|(x, y)| x == y).count();
+    common >= SERIES_LEN || (!fm.is_empty() && c.contains(&fm)) || (!fc.is_empty() && m.contains(&fc))
 }
+
+/// The letters two catalog numbers share from their start for one series.
+const SERIES_LEN: usize = 6;
 
 /// A luminaire's type from its mark (`luminaire XA` → `XA`).
 pub(crate) fn type_of(mark: &str) -> String {
@@ -148,6 +170,10 @@ mod tests {
         assert!(!same_maker("ILLUMINATION LIGHTING", "Lithonia Lighting"));
         assert!(same_product("ML4DM10FSL9FS1E-TL40R2GMW", "ML4DM10FSL9FS1E"));
         assert!(!same_product("SMX6RLSFS010", "LDN6 40/10"));
+        assert!(same_product("ML4DM10FSL9FS1E-TL40R2GMW", "ML4DM10LSFL9FS1E/TL40R2GMW"));
+        assert!(!same_product("CS71SD", "CX71SD"));
+        assert!(same_maker("LITHONIA", "ACUITY"));
+        assert!(!same_maker("SIGNIFY", "COOPER LIGHTING SOLUTIONS"));
         assert_eq!(type_of("luminaire XA"), "XA");
     }
 }
