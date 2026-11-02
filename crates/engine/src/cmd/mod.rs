@@ -328,7 +328,7 @@ impl CommandSpec {
         if let Some(a) = self.access {
             return a;
         }
-        let names = crate::documented_params(self.params);
+        let names = crate::param_words(self.params);
         let any = |list: &[&str]| names.iter().any(|n| list.iter().any(|k| n.eq_ignore_ascii_case(k)));
         if any(NETWORK_PARAMS) {
             Access::Network
@@ -828,7 +828,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
             CommandSpec::new("spell", "Spelling", spell::run)
                 .menu(&["Tools", "Spelling"])
                 .alias(&["sp", "-spell"])
-                .params("{action?: \"check\" (default) | \"suggest\" | \"change\" | \"changeAll\" | \"ignoreAll\" | \"add\", handles? (default every object in the current space), suggestions?: bool (default true), word?, to?, handle? and where? (\"text\" | \"dimension\" | \"multileader\" | {attribute: n} | {cell: [row, col]}) for one change, all?: bool} → check: {misspelled: [{handle, where, word, context, suggestions}], checked}; change: {changed}")
+                .params("{action?: \"check\" (default) | \"suggest\" | \"change\" | \"changeAll\" | \"ignoreAll\" | \"add\", handles? (default every object in the current space), suggestions?: bool (default true), word?, to?, handle?, where? (\"text\" | \"dimension\" | \"multileader\" | {attribute: n} | {cell: [row, col]}) for one change, all?: bool} → check: {misspelled: [{handle, where, word, context, suggestions}], checked}; change: {changed}")
                 .interactive(|_| Ok(Box::new(spell::SpellM::default()))),
         );
         v.extend(models3d::specs());

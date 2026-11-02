@@ -586,6 +586,11 @@ fn out_of_range(n: &str, v: &Value) -> Option<String> {
     if fits {
         return None;
     }
+    // 'nan' or 'inf' isn't out of a range: it isn't a number to compare (battle test 7 B7-020:
+    // THICKNESS 'nan' said it must be -1000000000000 or more).
+    if !x.is_finite() {
+        return Some(format!("{n} must be a finite number."));
+    }
     Some(match *bound {
         Bound::Whole(lo, hi) => format!("{n} must be a whole number from {lo} to {hi}."),
         Bound::Between(lo, hi) if hi >= Bound::LARGEST => format!("{n} must be {lo} or more."),

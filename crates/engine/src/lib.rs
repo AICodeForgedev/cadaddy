@@ -925,11 +925,36 @@ pub struct Running {
 /// ones too, so it errs towards accepting. Only the parameter part counts: nothing after the
 /// top-level `→` (the result's keys), and no type word after a `:` (`closed?: bool`,
 /// `tolerance_in?: inches`), battle test 5 B7-019.
+///
+/// Only a word right inside a `{…}` names a parameter (battle test 7 B7-020: the lists offered
+/// `default`, `MVIEW`, `PNG`, `null`, `Title`): not one in a note in brackets (`(default: the
+/// selection)`, `(as MVIEW)`), an item of a `[…]` list (`[x, y]`, `[vertex, midpoint]`), a quoted
+/// value (`"Model"`), the value after a colon (`level: name`, `align?: TL|TC`) or a sign
+/// (`from +Y`). A doc without any `{…}` is read as one plain list.
 pub fn documented_params(doc: &str) -> Vec<&str> {
+    documented_names(doc).into_iter().map(|(name, _)| name).collect()
+}
+
+/// The words a command's parameter documentation puts where a name or a value goes, notes
+/// included, but not its result: what [`CommandSpec::reach`] looks for file and network words in
+/// (`colorMap?: path` reaches files although `path` there isn't a parameter's name).
+pub fn param_words(doc: &str) -> Vec<&str> {
+    words_in(doc, false)
+}
+
+/// The names the doc reader took before battle test 7 (a value word after a colon, a plain
+/// choice's values and a capitalised word left out): what the job, BIM and MEP lane's commands
+/// still take.
+fn lane_words(doc: &str) -> Vec<&str> {
+    words_in(doc, true)
+}
+
+/// [`param_words`]; `names` leaves out what the earlier reader didn't take as names.
+fn words_in(doc: &str, names: bool) -> Vec<&str> {
     let b = doc.as_bytes();
     let mut out = Vec::new();
-    let mut i = 0;
     let mut nest = 0usize;
+    let mut i = 0;
     while i < b.len() {
         let c = b[i];
         if c.is_ascii_alphabetic() || c == b'_' {
@@ -939,39 +964,138 @@ pub fn documented_params(doc: &str) -> Vec<&str> {
             }
             let prev = doc[..start].trim_end().chars().last();
             let next = doc[i..].trim_start().chars().next();
-            // A value's type word after a colon (`closed?: bool`) isn't a name; one followed by
-            // `?` or `:` (`path arrays: method?`) is.
             let word = &doc[start..i];
-            let value = prev == Some(':') && !matches!(next, Some('?' | ':')) && VALUE_WORDS.contains(&word);
+            let named = !matches!(next, Some('?' | ':'));
+            let left_out = names && named && (prev == Some(':') && VALUE_WORDS.contains(&word) || plain_choice(doc, start, prev));
+            if matches!(prev, Some('{' | ',' | '|' | '(' | ':' | ';' | '/' | '+'))
+                && matches!(next, Some(':' | '?' | ',' | '}' | ')' | '(' | '|' | '+' | '/' | '→'))
+                && !word.starts_with(|c: char| c.is_ascii_uppercase())
+                && !left_out
+            {
+                out.push(word);
+            }
+            continue;
+        }
+        match c {
+            b'{' | b'[' => nest += 1,
+            b'}' | b']' => nest = nest.saturating_sub(1),
+            _ if nest == 0 && doc.get(i..).is_some_and(|r| r.starts_with('→')) => {
+                i += '→'.len_utf8();
+                i = skip_group(doc, skip_group(doc, i, b'{', b'}', true), b'(', b')', false);
+                if doc.get(i..).is_some_and(|r| r.starts_with(':')) {
+                    i = doc.get(i..).and_then(|r| r.find('|')).map_or(doc.len(), |at| i + at);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
+/// [`documented_params`] with how deep in `{…}` each name is: 1 for a command's own parameters,
+/// more for the fields of a value (`polar: {count, angle?}`).
+fn documented_names(doc: &str) -> Vec<(&str, usize)> {
+    let b = doc.as_bytes();
+    let braced = doc.contains('{');
+    // Quoted spans are values; an odd count of quotes (an inch mark) leaves them alone.
+    let quotes = |q: u8| b.iter().filter(|c| **c == q).count() % 2 == 0;
+    let (skip_dq, skip_bq) = (quotes(b'"'), quotes(b'`'));
+    let choices = choice_words(doc);
+    let mut out = Vec::new();
+    let mut groups: Vec<u8> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_alphabetic() || c == b'_' {
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            let word = &doc[start..i];
+            let prev = doc[..start].trim_end().chars().last();
+            let next = doc[i..].trim_start().chars().next();
+            let named = !matches!(next, Some('?' | ':'));
             // `{name (e.g. …), at: …}`: a name with a note in brackets counts too (models3d.place
             // warned that its own `name` was ignored; tester 0.7.7f).
-            let is_choice = !matches!(next, Some('?' | ':')) && choice_value(doc, start, prev);
-            if !value
+            let is_choice = named && choice_value(doc, start, prev);
+            let inside = match groups.last() {
+                // A value after a colon (`closed?: bool`, `level: name`, `align?: TL|TC`) isn't
+                // a name; one followed by `?` or `:` (`path arrays: method?`) is.
+                // A format or a value joined to one (`path: CSV/TSV/XLSX file`) isn't either.
+                Some(b'{' | b'f') => {
+                    let joined = named && word.starts_with(|c: char| c.is_ascii_uppercase()) && (prev == Some('/') || next == Some('/'));
+                    let value = prev == Some(':') && named;
+                    !value && !joined
+                }
+                // A note in brackets names parameters too (`(file | text: its contents)`, `(+
+                // base?)`), but not a variable, a format or a value (`(HPASSOC)`, `(image: PNG,
+                // JPEG)`, `(Model, default true)`), one word alone (`(attach)`) or options
+                // (`(save/restore)`).
+                Some(b'(') => {
+                    let capital = word.starts_with(|c: char| c.is_ascii_uppercase());
+                    let alone = prev == Some('(') && next == Some(')');
+                    let option = named && (prev == Some('/') || next == Some('/'));
+                    !capital && !alone && !option
+                }
+                // A list's items are values (`[x, y]`, `[vertex, midpoint]`).
+                Some(_) => false,
+                // Outside every `{…}`: a name with its `?` or `:` (`…}; fit?: false`).
+                None => !braced || !named,
+            };
+            let doc_word = matches!(word, "default" | "e" | "g" | "eg" | "ie" | "true" | "false" | "null" | "none") && next != Some('?')
+                // An option's value named in a note or as a label (`(origin, 3point, set)`, `;
+                // set: leaderColor?`), where the option is a choice (`option: …|set|…`).
+                || choices.contains(&word) && next != Some('?') && (groups.last() == Some(&b'(') || next == Some(':'));
+            if inside
+                && !doc_word
                 && !is_choice
+                && !signed(b, start, prev)
                 && matches!(prev, Some('{' | ',' | '|' | '(' | ':' | ';' | '/' | '+'))
                 && matches!(next, Some(':' | '?' | ',' | '}' | ')' | '(' | '|' | '+' | '/' | '→'))
             {
-                out.push(&doc[start..i]);
+                let depth = groups.iter().filter(|g| **g == b'{').count();
+                out.push((word, depth));
             }
         } else {
             match c {
-                b'{' | b'[' => nest += 1,
-                b'}' | b']' => nest = nest.saturating_sub(1),
+                b'"' if skip_dq => {
+                    i = doc.get(i + 1..).and_then(|r| r.find('"')).map_or(b.len(), |at| i + at + 2);
+                    continue;
+                }
+                b'`' if skip_bq => {
+                    i = doc.get(i + 1..).and_then(|r| r.find('`')).map_or(b.len(), |at| i + at + 2);
+                    continue;
+                }
+                // `{mode: … | align {base, handles}}`, `{action: "save" {path, sheets}}`: the
+                // parameters of one form, after the value that picks it, are the command's own.
+                b'{' if doc[..i].trim_end().ends_with(|p: char| p.is_ascii_alphanumeric() || p == '"') => groups.push(b'f'),
+                b'{' | b'[' | b'(' => groups.push(c),
+                b'}' | b']' | b')' => {
+                    groups.pop();
+                }
+                // A result in a note (`(no name: → {current, configurations})`).
+                _ if groups.last() == Some(&b'(') && doc.get(i..).is_some_and(|r| r.starts_with('→')) => {
+                    i = skip_group(doc, i + '→'.len_utf8(), b'{', b'}', true);
+                    continue;
+                }
                 // The result of the command, not its parameters: the group after the arrow (and
-                // a note in brackets after it). Docs of several forms go on after it.
-                _ if nest == 0 && doc.get(i..).is_some_and(|r| r.starts_with('→')) => {
-                    i += '→'.len_utf8();
-                    i = skip_group(doc, skip_group(doc, i, b'{', b'}', true), b'(', b')', false);
+                // a note in brackets after it). Docs of several forms go on after it. A result
+                // told in words (`→ list: [{…}]; load: {name, …}`) runs to the next form.
+                _ if groups.is_empty() && doc.get(i..).is_some_and(|r| r.starts_with('→')) => {
+                    let at = i + '→'.len_utf8();
+                    let group = skip_group(doc, at, b'{', b'}', true);
+                    if group == at {
+                        i = next_form(doc, at);
+                        continue;
+                    }
+                    i = skip_group(doc, group, b'(', b')', false);
                     // `…: the readable text of TEXT, MTEXT` is prose about the result, up to the
                     // next form (`|`) or the end.
                     if doc.get(i..).is_some_and(|r| r.starts_with(':')) {
                         i = doc.get(i..).and_then(|r| r.find('|')).map_or(doc.len(), |at| i + at);
                     }
-                    continue;
-                }
-                // `(default Space, Zone, Grid)`: the default's values, not parameters.
-                b'(' if doc.get(i..).is_some_and(|r| r.starts_with("(default ")) => {
-                    i = skip_group(doc, i, b'(', b')', false).max(i + 1);
                     continue;
                 }
                 _ => {}
@@ -982,37 +1106,52 @@ pub fn documented_params(doc: &str) -> Vec<&str> {
     out
 }
 
-/// A word after `|` in `type?: all | layers | blocks`: one of the values the parameter before the
-/// colon takes, not a parameter (`purge {layers: 12345}` was accepted as if `layers` existed).
-fn choice_value(doc: &str, at: usize, prev: Option<char>) -> bool {
-    if prev != Some('|') {
-        return false;
+/// The values the doc's choices offer (`option: save|restore|set`, `mode?: on|off`).
+fn choice_words(doc: &str) -> Vec<&str> {
+    let b = doc.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_alphabetic() || b[i] == b'_' {
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            let prev = doc[..start].trim_end().chars().last();
+            let next = doc[i..].trim_start().chars().next();
+            let first = prev == Some(':') && next == Some('|');
+            if !matches!(next, Some('?' | ':')) && (first || choice_value(doc, start, prev)) {
+                out.push(&doc[start..i]);
+            }
+        } else {
+            i += 1;
+        }
     }
-    let before = doc.get(..at).unwrap_or("");
-    let mut depth = 0i32;
-    let mut segment = before.len();
-    for (i, c) in before.char_indices().rev() {
+    out
+}
+
+/// A word after a sign (`from +Y`, `-X`): a direction, not a name joined to another with `+`
+/// (`baseHandle+index`, `base + handle`).
+fn signed(b: &[u8], start: usize, prev: Option<char>) -> bool {
+    prev == Some('+') && start >= 2 && b.get(start - 1) == Some(&b'+') && b.get(start - 2).is_some_and(|c| c.is_ascii_whitespace() || *c == b'(')
+}
+
+/// Where the next form of a doc starts after a command's result at `at` (a top-level `|`
+/// followed by `{`), or the doc's end.
+fn next_form(doc: &str, at: usize) -> usize {
+    let b = doc.as_bytes();
+    let mut depth = 0usize;
+    let mut i = at;
+    while let Some(&c) = b.get(i) {
         match c {
-            ')' | ']' | '}' => depth += 1,
-            '(' | '[' | '{' if depth == 0 => {
-                segment = i + 1;
-                break;
-            }
-            '(' | '[' | '{' => depth -= 1,
-            ',' if depth == 0 => {
-                segment = i + 1;
-                break;
-            }
+            b'{' | b'[' | b'(' => depth += 1,
+            b'}' | b']' | b')' => depth = depth.saturating_sub(1),
+            b'|' if depth == 0 && doc.get(i + 1..).is_some_and(|r| r.trim_start().starts_with('{')) => return i,
             _ => {}
         }
-        segment = i;
+        i += 1;
     }
-    // Only a plain list of words after the colon (`type?: all | blocks | layers`); anything with
-    // a structure or a note in it may name real parameters (`vertices?: [...] | points`).
-    before
-        .get(segment..)
-        .and_then(|t| t.split_once(':'))
-        .is_some_and(|(_, list)| list.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '|' | ' ' | '-')))
+    b.len()
 }
 
 /// `at` moved past the balanced `open … close` group that starts there (after spaces); `at` itself
@@ -1043,9 +1182,69 @@ fn skip_group(doc: &str, at: usize, open: u8, close: u8, any: bool) -> usize {
     i
 }
 
+/// The doc's parameter part with every quoted span and note in brackets left out.
+fn without_notes(t: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0usize;
+    let mut quoted = false;
+    for c in t.chars() {
+        match c {
+            '"' if depth == 0 => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth = depth.saturating_sub(1),
+            _ if depth == 0 && !quoted => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Words that follow a `:` in a parameter list as a value's type or unit, never as a name.
 const VALUE_WORDS: [&str; 16] =
     ["bool", "boolean", "number", "string", "int", "integer", "degrees", "deg", "inches", "feet", "hex", "base64", "true", "false", "null", "typed"];
+
+/// [`choice_value`] as the reader took it before battle test 7: only a list of plain words.
+fn plain_choice(doc: &str, at: usize, prev: Option<char>) -> bool {
+    choice_segment(doc, at, prev).is_some_and(|list| list.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '|' | ' ' | '-')))
+}
+
+/// The text after the colon of the choice the word at `at` (after a `|`) is one value of.
+fn choice_segment(doc: &str, at: usize, prev: Option<char>) -> Option<&str> {
+    if prev != Some('|') {
+        return None;
+    }
+    let before = doc.get(..at).unwrap_or("");
+    let mut depth = 0i32;
+    let mut segment = before.len();
+    for (i, c) in before.char_indices().rev() {
+        match c {
+            ')' | ']' | '}' => depth += 1,
+            '(' | '[' | '{' if depth == 0 => {
+                segment = i + 1;
+                break;
+            }
+            '(' | '[' | '{' => depth -= 1,
+            ',' if depth == 0 => {
+                segment = i + 1;
+                break;
+            }
+            _ => {}
+        }
+        segment = i;
+    }
+    before.get(segment..).and_then(|t| t.split_once(':')).map(|(_, list)| list)
+}
+
+/// A word after `|` in `type?: all | layers | blocks`: one of the values the parameter before the
+/// colon takes, not a parameter (`purge {layers: 12345}` was accepted as if `layers` existed).
+fn choice_value(doc: &str, at: usize, prev: Option<char>) -> bool {
+    // Only a plain list of values after the colon (`type?: all | blocks | layers`, `space?: all
+    // (default)|current|<layout>`, `option: "?"|bind`); anything with a structure in it may name
+    // real parameters (`vertices?: [...] | points`).
+    choice_segment(doc, at, prev).is_some_and(|list| {
+        without_notes(list).chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '|' | ' ' | '-' | '<' | '>' | '*' | '.' | '\''))
+    })
+}
 
 /// Parameters every command takes: the objects it works on, and the agent rails' own
 /// (`confirmed`: an agent claiming the user's answer gets "Waiting for the user", not a refusal).
@@ -1054,8 +1253,35 @@ const ALWAYS_PARAMS: [&str; 3] = ["handle", "handles", "confirmed"];
 /// Whether a command's documentation leaves its parameters open: `<style fields or DIM*
 /// variables…>`, `…: any profile variable` or `...the parameters of arrayrect` at the top level
 /// of a parameter list stand for more names than it lists. One inside a nested `{…}` or `[…]`
-/// (`shade?: {…}`, `points: [[x,y]…]`) is that value's, not the command's.
+/// (`shade?: {…}`, `points: [[x,y]…]`) is that value's, not the command's, and so is one where a
+/// value goes (`type?: "Line"|"Circle"|...`, `space?: current|<layout>`, battle test 7 B7-019:
+/// those left qselect, count and pagesetup taking any parameter).
 fn open_params(doc: &str) -> bool {
+    let doc = doc.split('→').next().unwrap_or(doc);
+    let mut groups: Vec<char> = Vec::new();
+    for (i, c) in doc.char_indices() {
+        let rest = doc.get(i..).unwrap_or_default();
+        // Where a name goes: right after the `{` or a `,` of the command's own list.
+        let name_place = || groups == ['{'] && matches!(doc.get(..i).unwrap_or_default().trim_end().chars().last(), Some('{' | ','));
+        match c {
+            '{' | '[' | '(' => groups.push(c),
+            '}' | ']' | ')' => {
+                groups.pop();
+            }
+            // An ellipsis (`…`, `...`), not a range (`1..255`).
+            '…' if name_place() => return true,
+            '.' if rest.starts_with("...") && name_place() => return true,
+            // A placeholder `<…>` closed in the same list, not a comparison.
+            '<' if closes(rest) && name_place() => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// [`open_params`] as it was before battle test 7: an ellipsis or placeholder anywhere in the
+/// top-level list, a value's place too (the job, BIM and MEP lane's commands keep it).
+fn open_params_loose(doc: &str) -> bool {
     let doc = doc.split('→').next().unwrap_or(doc);
     let mut depth = 0usize;
     for (i, c) in doc.char_indices() {
@@ -1063,10 +1289,8 @@ fn open_params(doc: &str) -> bool {
         match c {
             '{' | '[' => depth += 1,
             '}' | ']' => depth = depth.saturating_sub(1),
-            // An ellipsis (`…`, `...`), not a range (`1..255`).
             '…' if depth == 1 => return true,
             '.' if depth == 1 && rest.starts_with("...") => return true,
-            // A placeholder `<…>` closed in the same list, not a comparison.
             '<' if depth == 1 && closes(rest) => return true,
             _ => {}
         }
@@ -1102,19 +1326,140 @@ pub fn params_doc(spec: &CommandSpec) -> &'static str {
 /// Whether `spec` takes parameters beyond the ones its documentation names (its doc leaves them
 /// open), so that an agent's unknown ones aren't refused.
 pub fn takes_open_params(spec: &CommandSpec) -> bool {
-    open_params(params_doc(spec))
+    if in_job_lane(spec.id) { open_params_loose(params_doc(spec)) } else { open_params(params_doc(spec)) }
 }
 
-/// The parameters given that `spec` doesn't take (none when its documentation lists none, or
-/// leaves them open).
+/// Command families of the job, BIM and MEP lane (the print-set pipeline and the building model):
+/// the agent guard keeps its earlier, looser checks for them ([`own_params`], the wrong-typed
+/// checks in [`refuse_wrong_typed_params`]); their callers are checked in that lane.
+const JOB_LANE: &[&str] = &[
+    "bim.",
+    "bspec.",
+    "mep.",
+    "model.",
+    "job.",
+    "rooms",
+    "walls.",
+    "wallgen",
+    "code.",
+    "estimate.",
+    "takeoff",
+    "schedule.",
+    "project.",
+    "rules.",
+    "validate",
+    "automation.",
+    "tags.",
+    "site.",
+    "finishes.",
+    "framing.",
+    "casework.",
+    "envelope.",
+    "plan.",
+    "prints.",
+    "arch.",
+    "levels.",
+    "stairs.",
+    "unittypes.",
+    "fieldview.",
+    "asbuilt.",
+    "override.",
+    "review.",
+    "rfi.",
+    "callouts.",
+    "cover.",
+    "calibrate.",
+    "fourd.",
+    "p2m.",
+    "lv.",
+    "parts.",
+    "furnish",
+    "drywall.",
+    "coordination.",
+    "ifc.",
+    "import.check",
+    "sheet.facts",
+    "labels.",
+    "roof.",
+    "grounding.",
+    "wholejob.",
+    "progress.",
+    "printset.",
+    "printrev.",
+    "co.",
+    "concrete.",
+    "ugsheets.",
+    "procure.",
+    "cobie.",
+    "bcf.",
+    "sheetset.from_model",
+];
+
+/// Whether command `id` belongs to the job, BIM and MEP lane ([`JOB_LANE`]).
+pub fn in_job_lane(id: &str) -> bool {
+    JOB_LANE.iter().any(|p| id.starts_with(p))
+}
+
+/// A command's own parameters among the names its doc mentions: the ones at the top of a form
+/// (`{handles?, polar: {count, angle?}}` → `handles`, `polar`), each once. A field of a value
+/// given at the top (`3darray {count: 5}`) was silently ignored.
+fn own_params<'a>(names: &[(&'a str, usize)]) -> Vec<&'a str> {
+    let mut out: Vec<&str> = Vec::new();
+    for (n, d) in names {
+        if *d <= 1 && !out.contains(n) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+/// Whether a command's doc says it takes no parameters: `{}` (or only a result, `→ […]`) before
+/// any note (`hatchtoback {moved: …}` ran as if nothing was given; battle test 7 B7-019).
+fn takes_nothing(doc: &str) -> bool {
+    let part = doc.split('→').next().unwrap_or(doc).trim();
+    !doc.trim().is_empty() && (part.is_empty() || part.starts_with("{}")) && documented_names(doc).is_empty()
+}
+
+/// The parameters given that `spec` doesn't take (none when its documentation leaves them open,
+/// or names none without saying it takes none).
 pub fn unknown_params(spec: &CommandSpec, params: &Value) -> Vec<String> {
     let Some(given) = params.as_object() else { return Vec::new() };
     let doc = params_doc(spec);
-    let known = documented_params(doc);
-    if known.is_empty() || open_params(doc) {
+    let lane = in_job_lane(spec.id);
+    let delegated = if lane { None } else { delegated_params(doc) };
+    if takes_open_params(spec) && delegated.is_none() {
+        return Vec::new();
+    }
+    if let Some(known) = delegated {
+        return given.keys().filter(|k| !known.contains(&k.as_str()) && !ALWAYS_PARAMS.contains(&k.as_str())).cloned().collect();
+    }
+    let names = documented_names(doc);
+    let known: Vec<&str> = if in_job_lane(spec.id) {
+        // Every word its doc puts where a name or a value goes, as the reader before battle test
+        // 7 took them (that lane's callers aren't checked here); none: anything goes.
+        let mut all: Vec<&str> = names.iter().map(|(n, _)| *n).collect();
+        all.extend(lane_words(doc));
+        if all.is_empty() {
+            return Vec::new();
+        }
+        all
+    } else {
+        own_params(&names)
+    };
+    if known.is_empty() && !takes_nothing(doc) {
         return Vec::new();
     }
     given.keys().filter(|k| !known.contains(&k.as_str()) && !ALWAYS_PARAMS.contains(&k.as_str())).cloned().collect()
+}
+
+/// The parameters a refusal offers: the command's own, each once (battle test 7 B7-020: purge
+/// offered `blocks` twice and `n`, dimangular `at` three times).
+pub fn offered_params(spec: &CommandSpec) -> Vec<&'static str> {
+    let doc = params_doc(spec);
+    match delegated_params(doc) {
+        Some(names) if !in_job_lane(spec.id) => names,
+        _ => own_params(&documented_names(doc)),
+    }
 }
 
 /// An agent's call with parameters the command doesn't take is refused before it runs (battle
@@ -1125,8 +1470,11 @@ fn refuse_unknown_params(spec: &CommandSpec, params: &Value) -> Result<()> {
     if unknown.is_empty() {
         return Ok(());
     }
-    let mut known: Vec<&str> = documented_params(params_doc(spec));
-    known.dedup();
+    let known = offered_params(spec);
+    if known.is_empty() {
+        let names: Vec<String> = unknown.iter().map(|k| format!("`{k}`")).collect();
+        return Err(EngineError::BadParams { cmd: spec.id.into(), msg: format!("{} takes no parameters (got {})", spec.id, names.join(", ")) });
+    }
     let list = |v: &[&str]| v.iter().map(|k| format!("`{k}`")).collect::<Vec<_>>().join(", ");
     let names: Vec<&str> = unknown.iter().map(String::as_str).collect();
     Err(EngineError::BadParams {
@@ -1206,9 +1554,187 @@ fn is_numeric_name(k: &str) -> bool {
         "_in",
         "_ft",
         "_mm",
+        // Battle test 7 B7-019: 'nan' was taken for these.
+        "cols",
+        "weight",
+        "margin",
+        "origin",
+        "ratio",
+        "duration",
+        "number",
+        "rotation",
+        "lens",
+        "exposure",
+        "intensity",
+        "latitude",
+        "longitude",
+        "timezone",
     ]
     .iter()
     .any(|w| k.contains(w))
+        || matches!(k.as_str(), "x" | "y" | "z" | "n" | "min" | "max")
+}
+
+/// What the doc says after parameter `key` each time it names it: from the end of the name to
+/// the next `,`, `;` or the end of its list (`?: bool | {width, height}`, `? (tile numbers from 1)`).
+fn param_notes<'a>(doc: &'a str, key: &str) -> Vec<&'a str> {
+    let base = doc.as_ptr() as usize;
+    documented_names(doc)
+        .into_iter()
+        .filter(|(n, _)| *n == key)
+        .filter_map(|(n, _)| {
+            let rest = doc.get(n.as_ptr() as usize - base + n.len()..)?;
+            let (mut depth, mut quoted) = (0usize, false);
+            for (i, c) in rest.char_indices() {
+                match c {
+                    '"' => quoted = !quoted,
+                    _ if quoted => {}
+                    '{' | '[' | '(' => depth += 1,
+                    '}' | ']' | ')' | ',' | ';' | '→' if depth == 0 => return rest.get(..i),
+                    '}' | ']' | ')' => depth -= 1,
+                    _ => {}
+                }
+            }
+            Some(rest)
+        })
+        .collect()
+}
+
+/// The value part of a note: after the `?` and the `:` (`?: bool | {width, height}` → `bool |
+/// {width, height}`); `None` for a note in brackets only (`? (save: …)`).
+fn note_value(note: &str) -> Option<&str> {
+    note.trim_start().trim_start_matches('?').trim_start().strip_prefix(':').map(str::trim_start)
+}
+
+/// Whether a note says the value may be an object: a `{…}` in its value, not in a note in
+/// brackets after it (`load?: path (reads one: {map})`); a note in brackets alone may show one
+/// (`where? ("text" | {attribute: n})`).
+fn note_takes_object(note: &str) -> bool {
+    match note_value(note) {
+        Some(v) => without_notes(v).contains('{'),
+        None => note.contains('{'),
+    }
+}
+
+/// Whether a note says the value is a list only (`elements?: [{offset, color?}]`).
+fn note_is_list(note: &str) -> bool {
+    note_value(note)
+        .is_some_and(|v| v.starts_with('[') && v.get(skip_group(v, 0, b'[', b']', false)..).is_some_and(|rest| without_notes(rest).trim().is_empty()))
+}
+
+/// The command a doc hands the rest of its parameters to: `…the parameters of plot`, `…the
+/// fields of light`, `(see tablestyle.cellstyle)`.
+fn delegate(doc: &str) -> Option<&'static CommandSpec> {
+    delegates(doc, &["the parameters of ", "the fields of ", "(see "]).into_iter().next()
+}
+
+/// The commands named after one of `leads` (`…the parameters of arrayrect, arraypolar or
+/// arraypath`).
+fn delegates(doc: &str, leads: &[&str]) -> Vec<&'static CommandSpec> {
+    let mut out = Vec::new();
+    for lead in leads {
+        let Some(at) = doc.find(lead) else { continue };
+        let tail = doc.get(at + lead.len()..).unwrap_or_default();
+        let tail = tail.split(['}', ')', ';', '(']).next().unwrap_or_default();
+        for part in tail.split(',').flat_map(|p| p.split(" or ")).flat_map(|p| p.split(" and ")) {
+            let id = part.trim().trim_matches('`');
+            match find_command(id).filter(|c| c.params != doc) {
+                Some(c) => out.push(c),
+                None => break,
+            }
+        }
+    }
+    out
+}
+
+/// What a doc that hands its other parameters to commands of its own (`{…the parameters of plot,
+/// device?}`) takes, when that is all that leaves it open: its names and theirs.
+fn delegated_params(doc: &'static str) -> Option<Vec<&'static str>> {
+    let leads = ["…the parameters of ", "...the parameters of ", "…the fields of ", "...the fields of "];
+    let others = delegates(doc, &leads);
+    if others.is_empty() || others.iter().any(|o| open_params(params_doc(o))) {
+        return None;
+    }
+    // Open for another reason as well (a `<placeholder>`): still open.
+    let mut rest = doc.to_string();
+    for lead in leads {
+        while let Some(at) = rest.find(lead) {
+            let end = rest.get(at..).and_then(|r| r.find([',', '}'])).map_or(rest.len(), |e| at + e);
+            rest.replace_range(at..end, "");
+        }
+    }
+    if open_params(&rest) {
+        return None;
+    }
+    let mut names = own_params(&documented_names(doc));
+    for o in others {
+        let theirs = own_params(&documented_names(params_doc(o)));
+        names.extend(theirs.into_iter().filter(|n| !names.contains(n)).collect::<Vec<_>>());
+    }
+    Some(names)
+}
+
+/// A note that is only a choice of plain values (`?: on|off`, `: extents|all|window (default)`).
+fn note_is_choice(note: &str) -> bool {
+    let n = without_notes(note);
+    let n = n.trim_start().trim_start_matches('?').trim_start();
+    n.strip_prefix(':')
+        .is_some_and(|list| list.contains('|') && list.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '|' | ' ' | '-' | '.' | '*')))
+}
+
+/// Whether a note says the value is a number or a point (`(tile numbers from 1)`, `[x,y]`,
+/// `degrees`, `mm`).
+fn note_is_numeric(note: &str) -> bool {
+    let n = note.to_ascii_lowercase();
+    n.contains("[x") || n.contains("number") || n.contains("degrees") || [" mm", " inches", " feet", " pixels", " dpi"].iter().any(|w| n.contains(w))
+}
+
+/// The fields a parameter's value takes when every note shows one object (`background?: {kind,
+/// color?, …}`); `None` when one note allows something else or leaves its fields open.
+fn value_fields(notes: &[&str]) -> Option<Vec<String>> {
+    let mut fields = Vec::new();
+    for note in notes {
+        let body = note_value(note)?;
+        // Each alternative that is an object (`{kind, color?}`, `bool | {width, height}`); one
+        // that leaves its fields open takes them from the command it names, else anything.
+        let mut objects = 0;
+        let mut at = 0;
+        while at < body.len() {
+            let alt = body.get(at..)?.trim_start();
+            let start = body.len() - alt.len();
+            if alt.starts_with('{') {
+                let end = skip_group(body, start, b'{', b'}', false);
+                let group = body.get(start..end)?;
+                objects += 1;
+                if open_params(group) {
+                    let other = delegate(note)?;
+                    fields.extend(own_params(&documented_names(params_doc(other))).into_iter().map(str::to_string));
+                }
+                fields.extend(own_params(&documented_names(group)).into_iter().map(str::to_string));
+                at = end;
+            }
+            // On to the next alternative (`|` outside any group).
+            let rest = body.get(at..)?;
+            let mut depth = 0usize;
+            let next = rest.char_indices().find_map(|(i, c)| {
+                match c {
+                    '{' | '[' | '(' => depth += 1,
+                    '}' | ']' | ')' => depth = depth.saturating_sub(1),
+                    '|' if depth == 0 => return Some(i + 1),
+                    _ => {}
+                }
+                None
+            });
+            match next {
+                Some(n) => at += n,
+                None => break,
+            }
+        }
+        if objects == 0 {
+            return None;
+        }
+    }
+    (!fields.is_empty()).then_some(fields)
 }
 
 /// Parameter names that can't be negative: a radius, a size, a count, a gap, a tolerance.
@@ -1229,14 +1755,44 @@ fn refuse_wrong_typed_params(spec: &CommandSpec, params: &Value) -> Result<()> {
             continue;
         }
         let kind = param_kind(doc, k);
+        let lane = !in_job_lane(spec.id);
+        let notes = if lane { param_notes(doc, k) } else { Vec::new() };
         // A number spelt as text that isn't finite ('nan', '-inf') was silently dropped (battle
         // test 6 B7-019): refused for every parameter that takes a number.
-        if kind != Some(ParamKind::Text) && (kind.is_some() || is_numeric_name(k)) && v.as_str().is_some_and(spells_non_finite) {
-            return Err(EngineError::BadParams { cmd: spec.id.into(), msg: format!("`{k}` must be a finite number, not {v}") });
+        let numeric = kind.is_some() || is_numeric_name(k) || notes.iter().any(|n| note_is_numeric(n));
+        if kind != Some(ParamKind::Text) && numeric && v.as_str().is_some_and(spells_non_finite) {
+            let want = if kind == Some(ParamKind::Bool) { "true or false" } else { "a finite number" };
+            return Err(EngineError::BadParams { cmd: spec.id.into(), msg: format!("`{k}` must be {want}, not {v}") });
         }
         // A size, count or tolerance below zero was dropped or replaced by the default.
         if is_non_negative_name(k) && v.as_f64().is_some_and(|n| n < 0.0) {
             return Err(EngineError::BadParams { cmd: spec.id.into(), msg: format!("`{k}` must be 0 or more (got {v})") });
+        }
+        // An object or a list where the doc shows a single value was read as "not given" (battle
+        // test 7 B7-019: 603 of 3,896 object values ran in 225 commands).
+        if lane && kind.is_none() && !notes.is_empty() {
+            if let Some(o) = v.as_object() {
+                let list_only = notes.iter().all(|n| note_is_list(n));
+                if list_only || !notes.iter().any(|n| note_takes_object(n)) {
+                    let want = if list_only {
+                        "a list"
+                    } else if notes.iter().any(|n| n.contains('[')) {
+                        "a list or a single value"
+                    } else {
+                        "a single value"
+                    };
+                    return Err(EngineError::BadParams { cmd: spec.id.into(), msg: format!("`{k}` must be {want}, not an object") });
+                }
+                if let Some(fields) = value_fields(&notes)
+                    && let Some(bad) = o.keys().find(|f| !fields.contains(f))
+                {
+                    let list = fields.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ");
+                    return Err(EngineError::BadParams { cmd: spec.id.into(), msg: format!("`{k}` has no field `{bad}`; it takes {list}") });
+                }
+            }
+            if v.is_array() && notes.iter().all(|n| note_is_choice(n)) {
+                return Err(EngineError::BadParams { cmd: spec.id.into(), msg: format!("`{k}` must be a single value, not a list") });
+            }
         }
         let Some(kind) = kind else { continue };
         let ok = match kind {
