@@ -254,7 +254,7 @@
 	Drafting	Desenho
 	Drafting Settings	Configurações de desenho
 	Drafting Settings...	Configurações de desenho...
-	Draw	Desenhar
+	Draw	Desenho
 	Draw Order	Ordem de exibição
 	Drawing (DWG)	Desenho (DWG)
 	Drawing (DXF)	Desenho (DXF)
@@ -1391,7 +1391,7 @@
 	Express Tools	Ferramentas Express
 	Break-line Symbol	Símbolo de linha de quebra
 	Replace Block...	Substituir bloco...
-	Move/Copy/Rotate	Mover/Copiar/Rotacionar
+	Move/Copy/Rotate	Mover/Copiar/Girar
 	Remove boundaries	Remover contornos
 	Inherit Properties	Herdar propriedades
 	Nothing to preview yet.	Ainda não há nada para visualizar.
@@ -2023,8 +2023,8 @@
 	Folder	Pasta
 	Text Styles	Estilos de texto
 	Dimension Styles	Estilos de cota
-	Layouts	Layouts
-	Xrefs	Xrefs
+	Layouts	Apresentações
+	Xrefs	Referências externas
 	Add to Drawing	Adicionar ao desenho
 	Choose a drawing to see what it holds.	Escolha um desenho para ver o que ele contém.
 	{name} inserted.	{name} inserido.
@@ -2228,22 +2228,22 @@
 	DXF drawing (.dxf)	Desenho DXF (.dxf)
 	Require a token for control connections (recommended)	Exigir um token para conexões de controle (recomendado)
 	Programs must first send the token CADaddy writes to a file only you can read, so other users' programs can't drive it. The Claude connector reads it for you. Takes effect the next time CADaddy starts.	Os programas precisam primeiro enviar o token que o CADaddy grava em um arquivo que só você pode ler, para que programas de outros usuários não possam controlá-lo. O conector do Claude o lê para você. Vale a partir da próxima vez que o CADaddy iniciar.
-	Add: Pick points	Adicionar: Selecionar pontos
-	Add: Select objects	Adicionar: Selecionar objetos
-	Associative	Associativa
+	Add: Pick points	Adicionar: indicar pontos
+	Add: Select objects	Adicionar: selecionar objetos
+	Associative	Associativo
 	Block to create or edit	Bloco a criar ou editar
 	Bottom left	Inferior esquerdo
 	Boundaries	Contornos
 	Click to set new origin	Clique para definir a nova origem
 	Create separate hatches	Criar hachuras separadas
-	Default to boundary extents	Usar a extensão do contorno como padrão
+	Default to boundary extents	Padrão para a extensão do contorno
 	Edit Block Definition	Editar definição de bloco
 	Hatch and Gradient	Hachura e gradiente
 	Hatch origin	Origem da hachura
 	Island detection	Detecção de ilhas
 	Normal	Normal
-	Open in Block Editor	Abrir no Editor de blocos
-	Outer	Externa
+	Open in Block Editor	Abrir no editor de blocos
+	Outer	Externo
 	Specified origin	Origem especificada
 	Use current origin	Usar origem atual
 	Building models (IFC)	Modelos de edificação (IFC)
@@ -2628,7 +2628,7 @@
 	What is there, as built	O que existe, como construído
 	Plan	Planta
 	3D	3D
-	Architectural	Arquitetura
+	Architectural	Arquitetônico
 	Structural	Estrutura
 	Mechanical	Mecânica
 	Plumbing	Hidráulica
@@ -3407,11 +3407,11 @@
 	Autosave failed	Falha no salvamento automático
 	Autosave failed: {message}	Falha no salvamento automático: {message}
 	Backup copies are off, so the current file will be replaced.	As cópias de segurança estão desativadas, então o arquivo atual será substituído.
-	Backup copy	Cópia de segurança
+	Backup copy	Cópia de backup
 	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	O CADaddy não conseguiu gravar uma cópia de recuperação; as alterações recentes seriam perdidas se o aplicativo parasse agora.
 	CADaddy has to close	O CADaddy precisa fechar
 	Close CADaddy	Fechar o CADaddy
-	Create backup copy with each save	Criar uma cópia de segurança a cada salvamento
+	Create backup copy with each save	Criar cópia de backup a cada salvamento
 	DXF keeps them. Use Save As to keep them in the drawing.	O DXF os mantém. Use Salvar como para mantê-los no desenho.
 	Details	Detalhes
 	Dismiss	Dispensar
@@ -3436,3 +3436,150 @@
 	Review Audit Trail	Trilha de auditoria da revisão
 	Accuracy Trend	Tendência de precisão
 	Measure Build Accuracy	Medir a precisão do modelo
+	Add…	Adicionar…
+	Alias file: {file}	Arquivo de aliases: {file}
+	Align Multileaders	Alinhar multilinhas
+	Analyze Usage	Analisar uso
+	Angstroms	Angströms
+	Apply to Layout	Aplicar à apresentação
+	Arrow size	Tamanho da seta
+	Associate	Associar
+	Astronomical Units	Unidades astronômicas
+	AutoLISP (LSP)	AutoLISP (LSP)
+	Boundaries picked: {n}	Contornos selecionados: {n}
+	built-in	integrado
+	Center the plot	Centralizar a plotagem
+	Centered	Centralizado
+	Centimeters	Centímetros
+	Choose the command the alias starts.	Escolha o comando que o alias inicia.
+	Clear Recent Files	Limpar arquivos recentes
+	Click the ruler to add a tab stop, right-click to remove one	Clique na régua para adicionar uma parada de tabulação; clique com o botão direito para remover
+	Close Block Editor	Fechar o editor de blocos
+	Collect	Coletar
+	Collect Multileaders	Coletar multilinhas
+	Color 1	Cor 1
+	Color 2	Cor 2
+	contains authoring elements. Open in Block Editor?	contém elementos de autoria. Abrir no editor de blocos?
+	Convert Text to Mtext	Converter texto em Mtexto
+	Crossing selection color:	Cor da seleção por cruzamento:
+	Curved	Curvo
+	Decameters	Decâmetros
+	Decimal	Decimal
+	Decimal Degrees	Graus decimais
+	Decimeters	Decímetros
+	Deg/Min/Sec	Gra/Min/Seg
+	Dim scale overall	Escala geral de cotas
+	Discard	Descartar
+	Don't Save	Não salvar
+	Drag Dynamic Grip	Arrastar pinça dinâmica
+	Drawing Units	Unidades do desenho
+	Dynamic Block Data	Dados de bloco dinâmico
+	Dynamic Block Grips	Pinças de bloco dinâmico
+	Dynamic Block Reference	Referência de bloco dinâmico
+	Edit Command Aliases (PGP)...	Editar aliases de comandos (PGP)...
+	Edit Multileader	Editar multilinha
+	Edit…	Editar…
+	Engineering	Engenharia
+	Enter block names to extract	Insira os nomes dos blocos a extrair
+	Enter geometric characteristic	Insira a característica geométrica
+	Enter name of LISP file to load	Insira o nome do arquivo LISP a carregar
+	Evaluate LISP	Avaliar LISP
+	Exclude:	Excluir:
+	Explode Attributes to Text	Explodir atributos em texto
+	Feet	Pés
+	First corner	Primeiro canto
+	Fit to paper	Ajustar ao papel
+	Fractional	Fracionário
+	Gigameters	Gigâmetros
+	Grads	Grados
+	Grips	Pinças
+	Groups	Grupos
+	Hatch Pick	Seleção de hachura
+	Hatches	Hachuras
+	Hectometers	Hectômetros
+	Hemispherical	Hemisférico
+	Imperial (inches)	Imperial (polegadas)
+	Implied Loops	Laços implícitos
+	Indicate selection area	Indicar área de seleção
+	Insertion scale	Escala de inserção
+	Interface scale	Escala da interface
+	Inverted	Invertido
+	Island	Ilha
+	Italic	Itálico
+	Justify	Justificar
+	Kilometers	Quilômetros
+	Light Years	Anos-luz
+	Limits	Limites
+	Load Application...	Carregar aplicativo...
+	Meters	Metros
+	Metric (millimetres)	Métrico (milímetros)
+	Microinches	Micropolegadas
+	Microns	Mícrons
+	Miles	Milhas
+	Mils	Mils
+	More than {n} aliases.	Mais de {n} aliases.
+	Multiline text	Texto multilinha
+	Nanometers	Nanômetros
+	New and the first drawing at startup use these units unless a default template is set (QNEWTEMPLATE).	Novos desenhos e o primeiro desenho na inicialização usam estas unidades, a menos que um modelo padrão esteja definido (QNEWTEMPLATE).
+	New block	Novo bloco
+	No alias file loaded. REINIT replaces these aliases with a file's.	Nenhum arquivo de aliases carregado. O REINIT substitui estes aliases pelos de um arquivo.
+	Object grouping	Agrupamento de objetos
+	Object selection limit for display of grips	Limite de seleção de objetos para exibir pinças
+	Objects on locked layers	Objetos em camadas bloqueadas
+	Open Recent	Abrir recentes
+	Opposite corner	Canto oposto
+	Origin: {x}, {y}	Origem: {x}, {y}
+	Overline	Sobrelinha
+	overrides built-in	substitui o integrado
+	Parsecs	Parsecs
+	Plot area	Área de plotagem
+	Plot object lineweights	Plotar espessuras de linha dos objetos
+	Plot offset	Deslocamento da plotagem
+	Plot transparency	Plotar transparência
+	Precision	Precisão
+	Printer/plotter	Impressora/plotter
+	Radians	Radianos
+	Sample output	Amostra de saída
+	Save alias	Salvar alias
+	Save Block	Salvar bloco
+	Save Block As	Salvar bloco como
+	Save changes to block "{name}"?	Salvar alterações no bloco "{name}"?
+	Save changes to {name}?	Salvar alterações em {name}?
+	Save Layout as Template	Salvar apresentação como modelo
+	Scientific	Científico
+	Select boundaries to remove	Selecione contornos para remover
+	Selection Area Effect	Efeito da área de seleção
+	Selection area opacity:	Opacidade da área de seleção:
+	Selection effect color	Cor do efeito de seleção
+	Selection modes	Modos de seleção
+	Selection preview	Visualização da seleção
+	Selection Preview Filter	Filtro de visualização da seleção
+	Set Dynamic Property	Definir propriedade dinâmica
+	Shape	Forma
+	Sheet Books to PDF...	Livros de folhas em PDF...
+	Show grips	Mostrar pinças
+	Spherical	Esférico
+	Surveyor's Units	Unidades de topografia
+	Text color	Cor do texto
+	Type an alias name.	Digite um nome de alias.
+	Underline	Sublinhado
+	Unitless	Adimensional
+	Units of new drawings	Unidades de novos desenhos
+	Units to scale inserted content	Unidades para dimensionar conteúdo inserido
+	Unsaved changes	Alterações não salvas
+	US Survey Feet	Pés topográficos norte-americanos
+	US Survey Inch	Polegada topográfica norte-americana
+	US Survey Mile	Milha topográfica norte-americana
+	US Survey Yard	Jarda topográfica norte-americana
+	Visual Effect Settings	Configurações de efeitos visuais
+	Visual Effect Settings...	Configurações de efeitos visuais...
+	When a command is active	Quando um comando está ativo
+	When no command is active	Quando nenhum comando está ativo
+	Window <	Janela <
+	Window selection color:	Cor da seleção por janela:
+	X offset (mm)	Deslocamento X (mm)
+	Y offset (mm)	Deslocamento Y (mm)
+	Yards	Jardas
+	Your changes will be lost if you don't save them.	Suas alterações serão perdidas se você não salvá-las.
+	{alias} is already defined; select it and use Edit.	{alias} já está definido; selecione-o e use Editar.
+	{command} is an unknown command.	{command} é um comando desconhecido.
