@@ -352,7 +352,7 @@ fn run(s: &mut crate::Session, p: &serde_json::Value) -> crate::Result<serde_jso
     let schedules: Vec<&PanelSchedule> =
         sp.mep.panel_schedules.iter().filter(|x| want.as_ref().is_none_or(|w| x.panel.eq_ignore_ascii_case(w))).collect();
     if !stored || sp.mep.panel_schedules.is_empty() {
-        return Err(super::bad(CMD, "no panel schedules in this drawing: a job reads them off the electrical sheets (job.start)"));
+        return Ok(json!({"panels": [], "note": "no panel schedules in this drawing: a job reads them off the electrical sheets (job.start)"}));
     }
     if schedules.is_empty() {
         return Err(super::bad(CMD, format!("no schedule for panel {}", want.unwrap_or_default())));
@@ -419,6 +419,7 @@ fn run(s: &mut crate::Session, p: &serde_json::Value) -> crate::Result<serde_jso
     }
     let mut out = json!({"panels": panels});
     if let Some(path) = super::str_param(p, "csv").map(str::trim).filter(|x| !x.is_empty()) {
+        super::exchange::guard_output(s, CMD, p, path)?;
         crate::writefile::write(path, &csv).map_err(|e| super::bad(CMD, format!("{path}: {e}")))?;
         out["csv"] = json!(path);
     }
