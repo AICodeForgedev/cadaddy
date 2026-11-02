@@ -9,7 +9,7 @@
       "rule": "Every 125/250 V, 15 and 20 A receptacle in a guest room or guest suite of a hotel or motel, and in a dwelling unit, is tamper-resistant (GFCI receptacles included).",
       "rooms": {
         "unit_rooms": true,
-        "name_words": ["GUEST", "SUITE", "DWELLING", "APARTMENT", "KING", "QUEEN", "SLEEPING"]
+        "name_words": ["GUEST", "SUITE", "DWELLING", "APARTMENT", "BEDROOM", "SLEEPING", "LODGING"]
       }
     },
     {
