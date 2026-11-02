@@ -402,11 +402,11 @@ fn write_quotes(dir: &Path, quotes: &[Quote]) -> std::io::Result<()> {
         t.push_str(&quote_line(q));
     }
     t.push('\n');
-    std::fs::write(dir.join("quotes.csv"), t)?;
+    crate::writefile::write(dir.join("quotes.csv"), t)?;
     // The first version's file, now in quotes.csv.
     let old = dir.join("prices.csv");
     if old.exists() {
-        std::fs::rename(&old, dir.join("prices.csv.bak"))?;
+        crate::writefile::rename(&old, dir.join("prices.csv.bak"))?;
     }
     Ok(())
 }
@@ -425,7 +425,7 @@ fn write_map(dir: &Path, map: &[MapRow]) -> std::io::Result<()> {
         );
     }
     t.push('\n');
-    std::fs::write(dir.join("map.csv"), t)
+    crate::writefile::write(dir.join("map.csv"), t)
 }
 
 /// A replaced or removed quote, kept.
@@ -434,7 +434,7 @@ fn to_history(dir: &Path, old: &Quote, on: &str, why: &str) -> std::io::Result<(
     std::fs::create_dir_all(dir)?;
     let path = dir.join("history.csv");
     let new = !path.exists();
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut f = crate::writefile::open_append(path)?;
     if new {
         writeln!(f, "{},changed_on,change", COLUMNS.join(","))?;
     }
@@ -601,7 +601,7 @@ fn run_settings(_s: &mut Session, p: &Value) -> Result<Value> {
     }
     let v = json!({"pick": r.pick, "vendor": r.vendor, "stale_days": r.stale_days});
     std::fs::create_dir_all(&dir)
-        .and_then(|()| std::fs::write(dir.join("settings.json"), v.to_string()))
+        .and_then(|()| crate::writefile::write(dir.join("settings.json"), v.to_string()))
         .map_err(|e| bad(C, format!("{}: {e}", dir.display())))?;
     Ok(v)
 }
