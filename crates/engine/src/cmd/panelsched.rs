@@ -419,7 +419,7 @@ fn run(s: &mut crate::Session, p: &serde_json::Value) -> crate::Result<serde_jso
     }
     let mut out = json!({"panels": panels});
     if let Some(path) = super::str_param(p, "csv").map(str::trim).filter(|x| !x.is_empty()) {
-        std::fs::write(path, &csv).map_err(|e| super::bad(CMD, format!("{path}: {e}")))?;
+        crate::writefile::write(path, &csv).map_err(|e| super::bad(CMD, format!("{path}: {e}")))?;
         out["csv"] = json!(path);
     }
     if let Some(pl) = p.get("place").filter(|v| !v.is_null()) {

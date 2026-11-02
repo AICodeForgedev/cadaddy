@@ -113,6 +113,7 @@ pub mod fourd;
 pub mod framing;
 pub mod furnish;
 pub mod gear;
+pub mod gearbuild;
 pub mod geo;
 pub mod grounding;
 pub mod guided;

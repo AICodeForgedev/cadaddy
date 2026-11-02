@@ -4956,7 +4956,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     bim_step(s, job, "room volumes built", t);
     // The panel schedules (each circuit's breaker and its type), for the devices' props.
     let t = web_time::Instant::now();
-    let schedules = s.doc().map(|d| panel_schedules(d, job)).unwrap_or_default();
+    let pages = s.doc().map(|d| electrical_pages(d, job)).unwrap_or_default();
+    let schedules = panel_schedules(&pages);
     if !schedules.is_empty()
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {
@@ -4972,6 +4973,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
     bim_step(s, job, "panel schedules", t);
+    // The electrical gear the plans don't place, from the schedules, the one-line and the gear
+    // submittals, in its rooms; the feeders between; the gear checked (entry, lugs) and reviewed.
+    let t = web_time::Instant::now();
+    if let Err(e) = gear_step(s, job, &pages, &mut result) {
+        result["gear_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "electrical gear", t);
     let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
         Ok(v) => {
@@ -7489,9 +7497,131 @@ fn legend_symbols(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> BTreeMap<Shape, 
     out
 }
 
-/// The panel schedules on the electrical sheets (the job's drawing's and those it didn't import),
-/// each panel once (the first sheet's).
-fn panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<cadaddy_walk3d::PanelSchedule> {
+/// The gear words a submittal's file name carries when it is a gear submittal.
+const GEAR_SUBMITTAL_WORDS: [&str; 4] = ["GEAR", "SWITCHGEAR", "PANELBOARD", "SWITCHBOARD"];
+
+/// The electrical gear from the documents ([`super::gearbuild`]): feeder types (the feeder
+/// schedule), each panel's incoming type (the one-line), the gear's box and lugs (the gear
+/// submittals); the gear laid out in its rooms (proposed), built, and checked by `gear.review`.
+fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    if sp.mep.panel_schedules.is_empty() {
+        return Ok(());
+    }
+    let tags: Vec<String> = sp.mep.panel_schedules.iter().map(|p| p.panel.clone()).collect();
+    let mut types: Vec<super::gearbuild::FeederType> = Vec::new();
+    for (number, d) in pages {
+        for f in super::gearbuild::feeder_types(&cadaddy_mepfix::sheet_facts::texts(d), number) {
+            if !types.iter().any(|t| t.tag.eq_ignore_ascii_case(&f.tag)) {
+                types.push(f);
+            }
+        }
+    }
+    let type_tags: Vec<String> = types.iter().map(|t| t.tag.clone()).collect();
+    let mut incoming: BTreeMap<String, String> = BTreeMap::new();
+    for (_, d) in pages {
+        for (k, v) in super::gearbuild::oneline_incoming(&cadaddy_mepfix::sheet_facts::texts(d), &tags, &type_tags) {
+            incoming.entry(k).or_insert(v);
+        }
+    }
+    let mut gear: BTreeMap<String, super::gearbuild::SubmittedGear> = BTreeMap::new();
+    for f in super::submittals::pdf_files(&job.submittals).into_iter().take(MAX_GEAR_SUBMITTALS) {
+        let name = std::path::Path::new(&f).file_stem().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string());
+        let up = name.to_ascii_uppercase();
+        if !GEAR_SUBMITTAL_WORDS.iter().any(|w| up.contains(w)) {
+            continue;
+        }
+        let Ok(text) =
+            crate::readfile::read(&f).map_err(|e| e.to_string()).and_then(|b| super::spec_import::pdf_text(&b, &f).map_err(|e| e.to_string()))
+        else {
+            continue;
+        };
+        for (k, v) in super::gearbuild::submittal_gear(&text, &tags, &name) {
+            gear.entry(k).or_insert(v);
+        }
+    }
+    let rooms: Vec<super::gearbuild::RoomBox> = {
+        let d = s.doc()?;
+        let offsets: BTreeMap<cadaddy_doc::Handle, cadaddy_geom::Vec2> = d
+            .model
+            .iter()
+            .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
+            .map(|e| (e.handle, super::bspec::stacked_by(e)))
+            .collect();
+        super::bspec::room_elements(d)
+            .into_iter()
+            .map(|r| super::gearbuild::RoomBox {
+                offset: offsets.get(&r.handle).copied().unwrap_or(cadaddy_geom::Vec2::ZERO),
+                level: r.level,
+                number: r.number.unwrap_or_default(),
+                name: r.name,
+                outline: r.outline,
+            })
+            .collect()
+    };
+    let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms);
+    let new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
+    let placed: Vec<String> =
+        planned.equipment.iter().map(|e| format!("{} ({})", e.tag, e.sources.get("position").cloned().unwrap_or_default())).collect();
+    sp.mep.equipment.extend(planned.equipment);
+    // The one-line's feeders replace those read the same way before (a rerun).
+    sp.mep.feeders.retain(|f| !f.source.contains("one-line tag"));
+    let feeders = planned.feeders.len();
+    sp.mep.feeders.extend(planned.feeders);
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    // The new gear built, then moved as the build moved its level to stack it.
+    let d = s.doc_mut()?;
+    let built = super::mep::build_equipment(d, &sp, Some(&new_tags));
+    for h in built {
+        let level = d.model.iter().find(|e| e.handle == h).and_then(|e| super::bspec::made_level(e));
+        let off = level.and_then(|l| rooms.iter().find(|r| r.level.eq_ignore_ascii_case(&l)).map(|r| r.offset)).unwrap_or(cadaddy_geom::Vec2::ZERO);
+        if off.len() > 1e-9 {
+            let m = cadaddy_geom::Mat3::translate(off);
+            let _ = d.modify_entity(h, |e| {
+                e.kind.transform(&m);
+                e.common.xdata = super::bspec::with_stacked(&e.common.xdata, off).into();
+            });
+        }
+    }
+    s.touch();
+    // The gear checked against what lands on it; each failure an RFI.
+    let review = s.execute("gear.review", &json!({})).unwrap_or_else(|e| json!({"error": e.to_string()}));
+    let findings: Vec<&Value> = review.get("findings").and_then(Value::as_array).into_iter().flatten().collect();
+    let line = format!(
+        "  electrical gear: feeder types {} ({}); one-line feeds {}; gear submittals give {} panels; laid out {}: {}; feeders {feeders}; unplaced {:?}; gear review: {} findings",
+        types.len(),
+        type_tags.join(", "),
+        incoming.len(),
+        gear.len(),
+        placed.len(),
+        placed.join("; "),
+        planned.unplaced,
+        findings.len()
+    );
+    report_progress(s, json!({"step": "electrical gear"}), &line);
+    s.echo(line);
+    for f in findings.iter().take(MAX_QUESTIONS_PER_STAGE) {
+        let msg = f.get("message").and_then(Value::as_str).unwrap_or_default();
+        let fix = f.get("fix").and_then(Value::as_str).unwrap_or_default();
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Gear {}: {msg}", f.get("gear").and_then(Value::as_str).unwrap_or_default()),
+            "gear.check against the feeders that land on it",
+            2,
+            vec![fix.to_string()],
+            None,
+            false,
+        );
+    }
+    result["gear"] = json!({"placed": placed, "feeders": feeders, "unplaced": planned.unplaced, "review": review});
+    Ok(())
+}
+
+/// Gear submittals read, at most.
+const MAX_GEAR_SUBMITTALS: usize = 40;
+
+/// The electrical sheets' pages: the job's drawing's E sheets and those it didn't import.
+fn electrical_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing)> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut pages: Vec<(String, cadaddy_doc::Drawing)> = job_sheet_refs(job)
         .iter()
@@ -7505,8 +7635,14 @@ fn panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<cadaddy_wal
         })
         .collect();
     pages.extend(non_plan_pages(job, "E").into_iter().filter(|(n, _)| !seen.contains(n)));
+    pages
+}
+
+/// The panel schedules on the electrical sheets, each panel once (a panel named twice: the
+/// schedule with more breakers read).
+fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk3d::PanelSchedule> {
     let mut out: Vec<cadaddy_walk3d::PanelSchedule> = Vec::new();
-    for (number, sub) in &pages {
+    for (number, sub) in pages {
         for p in super::panelsched::read(&cadaddy_mepfix::sheet_facts::texts(sub), number) {
             // A panel named twice: the schedule with more breakers read.
             let read = |x: &cadaddy_walk3d::PanelSchedule| x.circuits.iter().filter(|c| !c.breaker.is_empty()).count();

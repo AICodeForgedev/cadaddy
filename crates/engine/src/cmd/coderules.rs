@@ -52,6 +52,14 @@ pub(crate) struct CodeRule {
     pub sink_reach_ft: Option<f64>,
     /// The words that name a sink (a fixture's type, description or mark).
     pub sink_words: Vec<String>,
+    /// Working space (NEC 110.26): rows of [volts to ground up to, depth for condition 1, 2, 3]
+    /// inches; its least width and its height; where a panel's top is mounted; an entry plate's
+    /// margins inside the box (sides, front and back) when its usable size isn't given.
+    pub depth_in: Vec<[f64; 4]>,
+    pub width_in: Option<f64>,
+    pub height_in: Option<f64>,
+    pub mount_top_in: Option<f64>,
+    pub plate_margin_in: Option<[f64; 2]>,
 }
 
 /// The rooms a rule applies in: a typical unit's rooms (guest rooms), or rooms named so.
