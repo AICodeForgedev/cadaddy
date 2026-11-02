@@ -255,9 +255,17 @@ fn a_job_cut_off_goes_on_from_its_checkpoint() {
     let _ = std::fs::remove_file(&drawing);
     std::fs::copy(&copy, &checkpoint).expect("restore");
     std::fs::write(dir.join("Added Sheet.pdf"), std::fs::read(dir.join("Full Set.pdf")).expect("set")).expect("add");
+    // The prints changed: the checkpoint is refused, naming the file (Q6156), and resume: false
+    // starts over.
     let mut s = Session::new();
-    let st =
-        s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string()})).expect("fresh");
+    let e = s
+        .execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string()}))
+        .expect_err("other prints");
+    assert!(e.to_string().contains("Added Sheet.pdf is new"), "{e}");
+    let mut s = Session::new();
+    let st = s
+        .execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string(), "resume": false}))
+        .expect("fresh");
     assert!(st["resumed"].is_null(), "the prints changed: {st}");
     // The job's own checkpoint (none named: in the temporary folder) is removed when it is done.
     let mut s = Session::new();
