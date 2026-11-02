@@ -11,6 +11,9 @@ default-run = "cadaddy"
 workspace = true
 
 [dependencies]
+# Reads eframe's app.ron to tell whether a window state was saved (main.rs `saved_window`).
+# Already in Cargo.lock through eframe; same version so nothing is built twice.
+ron = "0.12"
 cadaddy-engine = { workspace = true }
 cadaddy-ui-egui = { workspace = true }
 cadaddy-io = { workspace = true }

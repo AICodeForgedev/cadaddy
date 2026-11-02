@@ -374,6 +374,24 @@ fn persistence_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Opt
     var("CADADDY_CONFIG_DIR").filter(|v| !v.is_empty()).map(|d| std::path::PathBuf::from(d).join("app-state"))
 }
 
+/// The key eframe saves the main window state under in its storage.
+const WINDOW_KEY: &str = "window";
+
+/// Whether eframe's storage file (`app.ron`, a map of keys to strings) holds a saved main window
+/// state. An unreadable or malformed file counts as none, as it does for eframe.
+fn saved_window(app_ron: &str) -> bool {
+    ron::from_str::<std::collections::HashMap<String, String>>(app_ron).is_ok_and(|kv| kv.contains_key(WINDOW_KEY))
+}
+
+/// The window state from the last session is saved and will be restored: in the folder
+/// `CADADDY_CONFIG_DIR` names, else eframe's own.
+fn restores_window() -> bool {
+    persistence_dir_from(|k| std::env::var_os(k))
+        .or_else(|| eframe::storage_dir(APP_ID))
+        .and_then(|dir| std::fs::read_to_string(dir.join("app.ron")).ok())
+        .is_some_and(|ron| saved_window(&ron))
+}
+
 /// Stencil bits of the window's render pass (see `NativeOptions::stencil_buffer`).
 const STENCIL_BITS: u8 = 8;
 
@@ -527,6 +545,7 @@ fn main() -> eframe::Result {
     install_io();
     cadaddy_ui_egui::startup::mark("logging and file formats");
     let surface = cadaddy_ui_egui::gpu::surface_config(std::env::var("CADADDY_VSYNC").ok().as_deref(), cfg!(all(unix, not(target_os = "macos"))));
+    let restoring = restores_window();
     let make_options = |attempt: graphics::Attempt| {
         let mut options = eframe::NativeOptions {
             // The crosshair is drawn by the app: present without a queue on Linux/BSD, where X11
@@ -541,11 +560,14 @@ fn main() -> eframe::Result {
                 .with_titlebar_shown(false)
                 .with_title_shown(false)
                 .with_app_id(APP_ID),
-            persist_window: false,
+            // The size, position and maximized state are kept between sessions; eframe keeps a
+            // restored window on the monitors that are connected now.
+            persist_window: true,
             persistence_path: persistence_dir_from(|k| std::env::var_os(k)),
-            // The window opens centred on its screen, not cascaded from the top-left corner.
+            // The first launch opens centred on its screen, not cascaded from the top-left corner;
+            // later launches go back where the window was (eframe would centre over that).
             // Wayland compositors place windows themselves.
-            centered: true,
+            centered: !restoring,
             // A stencil buffer clips the contents of clipped layout viewports on the GPU.
             stencil_buffer: STENCIL_BITS,
             ..Default::default()
@@ -716,6 +738,16 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
+
+    /// Only a readable `app.ron` with a window entry counts as a saved window state.
+    #[test]
+    fn a_saved_window_is_read_from_app_ron() {
+        assert!(super::saved_window(r#"{"cadaddy.prefs": "{}", "window": "(maximized: true)"}"#));
+        assert!(!super::saved_window(r#"{"cadaddy.prefs": "{\"window\":1}"}"#), "a value mentioning it is not the key");
+        assert!(!super::saved_window(""));
+        assert!(!super::saved_window("{\"window\": "), "truncated");
+        assert!(!super::saved_window("not ron at all"));
+    }
     use super::{
         config_dir_from, control_flag, control_port_from, filters_for_save, follow_desktop, persistence_dir_from, save_suggestion, too_big_for,
     };
