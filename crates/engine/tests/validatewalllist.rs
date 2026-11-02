@@ -296,7 +296,11 @@ fn every_wall_is_listed_whatever_its_footprint() {
     let span = o["wall_spans"].as_array().unwrap().iter().find(|w| w["handle"].as_str() == Some(door.as_str())).unwrap_or_else(|| panic!("{o:#}"));
     assert_eq!((span["from_aff_in"].as_f64(), span["to_aff_in"].as_f64()), (Some(84.0), Some(120.0)), "{span}");
     let gone = o["walls_unmeasured"].as_array().unwrap();
-    assert!(gone.iter().any(|w| w["handle"].as_str() == Some(handle(&names, "sliver").as_str()) && w["why"].as_str().is_some_and(|y| y.contains("sliver"))), "{o:#}");
+    assert!(
+        gone.iter()
+            .any(|w| w["handle"].as_str() == Some(handle(&names, "sliver").as_str()) && w["why"].as_str().is_some_and(|y| y.contains("sliver"))),
+        "{o:#}"
+    );
 }
 
 #[test]
