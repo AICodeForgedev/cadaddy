@@ -782,7 +782,7 @@ pub fn cfm_in(t: &str) -> Option<f64> {
 }
 
 /// A built element's footprint, height range and centre, in model coordinates.
-fn extent(d: &Drawing, e: &Entity) -> Option<(Bounds2, f64, f64)> {
+pub(crate) fn extent(d: &Drawing, e: &Entity) -> Option<(Bounds2, f64, f64)> {
     let EntityKind::Mesh(m) = &e.kind else {
         let b = cadaddy_doc::entity_bounds(d, e, 0);
         return (!b.is_empty()).then_some((b, 0.0, 0.0));

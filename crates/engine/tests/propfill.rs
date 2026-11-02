@@ -279,6 +279,19 @@ fn a_devices_breaker_type_is_its_printed_schedule_rows() {
     assert_eq!(a["breaker_type"]["source"]["doc"], "E-601 panel LP1 circuit 3");
     // The breaker itself still from the panel's own row.
     assert_eq!(a["breaker"]["value"], "20A");
+    // The schedule as data: each circuit's breaker type and the model's devices on it; as CSV;
+    // as a CADaddy table.
+    let csv = std::env::temp_dir().join(format!("cadaddy-panels-{}.csv", std::process::id()));
+    let r = s.execute("panels.schedule", &json!({"panel": "lp1", "csv": csv.to_string_lossy(), "place": {"panel": "LP1", "at": [0, -100]}})).unwrap();
+    let c3 = r["panels"][0]["circuits"].as_array().unwrap().iter().find(|c| c["number"] == "3").cloned().unwrap();
+    assert_eq!(c3["protection"]["ground_fault"], true, "{r:#}");
+    assert_eq!(c3["protection"]["meaning"][1], "GF: GROUND FAULT INTERRUPTER");
+    assert_eq!(c3["breaker_amps"], json!(20.0));
+    assert!(c3["devices"]["count"].as_u64().unwrap_or(0) >= 1, "{c3:#}");
+    assert!(std::fs::read_to_string(&csv).unwrap().contains("LP1,,E-601,3,RECEPTACLES OFFICE 101,20,1,,,AF/GF,true,true,"));
+    let _ = std::fs::remove_file(&csv);
+    assert!(!r["placed"].is_null(), "{r:#}");
+    s.execute("undo", &json!({})).unwrap();
     // The code rules: under a GFCI breaker it is a standard receptacle, protected by its breaker;
     // the office is no guest room (no TR rule), and the documents don't say TR.
     let ha = find(&mut s, "device", json!({"type_mark": "A"}));
@@ -298,6 +311,46 @@ fn a_devices_breaker_type_is_its_printed_schedule_rows() {
     let a = device_of(&mut s, "A");
     assert_eq!(a["tamper_resistant"]["value"], "yes", "{a:#}");
     assert!(a["tamper_resistant"]["source"]["doc"].as_str().is_some_and(|d| d.contains("406.12") && d.contains("101")), "{a:#}");
+    // Its product follows: the section's tamper-resistant receptacle, where the documents say TR.
+    let dir = std::env::temp_dir().join(format!("cadaddy-products-tr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("26 27 26 - Wiring Devices.txt"),
+        "SECTION 262726 - WIRING DEVICES\nPART 2 - PRODUCTS\n2.2 STRAIGHT-BLADE RECEPTACLES\nA. Convenience Receptacles: 125 V, 20 A; comply with NEMA WD 1.\n\
+         1. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\na. Hubbell.\nb. Leviton.\n\
+         B. Tamper-Resistant Convenience Receptacles: 125 V, 20 A; comply with NEMA WD 1.\n\
+         1. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\na. Hubbell.\nb. Leviton.\nPART 3 - EXECUTION\n",
+    )
+    .unwrap();
+    s.execute("bim.products", &json!({"specs": [dir.to_string_lossy()]})).unwrap();
+    let a = device_of(&mut s, "A");
+    let product: Value = serde_json::from_str(a["product"]["value"].as_str().unwrap_or("null")).unwrap();
+    assert!(product["required"]["product"].as_str().is_some_and(|p| p.to_ascii_uppercase().contains("TAMPER")), "{product:#}");
+    assert!(product["resolved"]["features"].as_array().is_some_and(|f| f.iter().any(|x| x == "TR")), "{product:#}");
+    assert!(a["tr_documented"]["value"].as_str().is_some_and(|d| d.starts_with("26 27 26") && d.to_ascii_uppercase().contains("TAMPER")), "{a:#}");
+    assert_eq!(a["tr_documented"]["source"]["kind"], "spec");
+    let _ = std::fs::remove_dir_all(&dir);
+    // Beside a sink on an AFCI-only breaker, the untagged receptacle needs GFCI: the circuit's
+    // first (here its only one) is the GFCI device.
+    let sched = json!({"mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF"], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).unwrap();
+    fill(&mut s);
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["gfci_breaker"]["value"], "no", "{a:#}");
+    let at: Vec<f64> = a["location"]["value"].as_str().unwrap().split(',').map(|v| v.trim().parse().unwrap()).collect();
+    let sink = find(&mut s, "fixture", json!({}));
+    assert!(!sink.is_empty(), "the plan's diffuser");
+    let level = a["level"]["value"].clone();
+    for (k, v) in [("type", json!("SINK")), ("location", json!(format!("{:.2}, {:.2}, 3.00", at[0] + 4.0, at[1]))), ("level", level)] {
+        s.execute("bim.props.set", &json!({"handle": sink[0], "key": k, "value": v})).unwrap();
+    }
+    let r = s.execute("bim.coderules", &json!({})).unwrap();
+    let a = device_of(&mut s, "A");
+    let sk = get(&mut s, &sink[0]);
+    assert_eq!(a["gfci"]["value"], "device", "{r:#} {a:#} SINK {sk:#}");
+    assert_eq!(a["receptacle_type"]["value"], "GFCI");
+    assert!(a["receptacle_type"]["source"]["doc"].as_str().is_some_and(|d| d.contains("needs GFCI") && d.contains("sink")), "{a:#}");
 }
 
 #[test]
