@@ -1171,6 +1171,8 @@ fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f6
     let mut walls_plan: Option<Option<Session>> = None;
     let mut cache = None;
     let mut unwalled: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    // Which tags those were (name, number, where), the first few: a missing room is findable.
+    let mut unwalled_tags: Vec<String> = Vec::new();
     let mut retraced = 0usize;
     let mut retraced_or_tried = 0usize;
     let extents: std::collections::HashMap<&String, cadaddy_geom::Bounds2> =
@@ -1216,7 +1218,13 @@ fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f6
                 retraced += 1;
                 keep_room(&mut kept, t);
             }
-            None => *unwalled.entry(t.level.clone()).or_default() += 1,
+            None => {
+                *unwalled.entry(t.level.clone()).or_default() += 1;
+                if unwalled_tags.len() < 20 {
+                    let what = [t.number.as_deref(), t.name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+                    unwalled_tags.push(format!("{} '{}' at [{:.0}, {:.0}]", t.level, what, t.at.x, t.at.y));
+                }
+            }
         }
     }
     *rooms = kept;
@@ -1227,7 +1235,7 @@ fn walled_rooms(d: &Drawing, sp: &BuildingSpec, rooms: &mut Vec<Traced>, upf: f6
         notes.push(format!("{level}: {n} room tag(s) not inside built walls (an enlarged view, a note's or the title block's box) — no room built."));
     }
     if !unwalled.is_empty() {
-        super::guided::progress_line(&format!("  room tags not inside built walls (no room): {unwalled:?}"));
+        super::guided::progress_line(&format!("  room tags not inside built walls (no room): {unwalled:?}: {}", unwalled_tags.join("; ")));
     }
     // One room per number and level (its tag's, else its spec room's): a corridor's, stair's or
     // hoistway's (its number tag on a piece of it the trace left out is no room of its own), else

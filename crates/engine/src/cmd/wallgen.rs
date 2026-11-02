@@ -1572,6 +1572,15 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // door swing's opening covers it), a window in an outside wall, else a cased opening.
     // Uses a spatial grid so each wall only checks nearby collinear neighbors for gaps.
     let (min_gap, max_gap) = (oz.min_ft * upf, oz.max_ft * upf);
+    // The level's corridors (traced before the walls are built): a gap in their air is no
+    // opening (Q6160).
+    let corridors: Vec<&cadaddy_walk3d::Circulation> = g
+        .spec
+        .iter()
+        .flat_map(|sp| sp.circulation.iter())
+        .filter(|c| c.kind == cadaddy_walk3d::CirculationKind::Corridor && c.level.eq_ignore_ascii_case(&level.name))
+        .collect();
+    let mut corridor_gaps = 0usize;
     let n = pl.walls.len().min(10_000);
     let mut gaps = Vec::new();
     let gap_cell = max_gap.max(max_thick);
@@ -1611,10 +1620,20 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             // Another wall running across the gap (a corridor's walls between two rooms' walls
             // that happen to line up, a demising wall between two units' bath walls): the two
             // pieces are two walls, the gap no opening; nothing the plan draws spans it (Q6160).
-            if !between && !gap_crossed(&pl.walls[..n], i, j, a.b, a.b + u * gap) {
-                gaps.push((i, a.b, a.b + u * gap, a.thickness));
+            if between || gap_crossed(&pl.walls[..n], i, j, a.b, a.b + u * gap) {
+                continue;
             }
+            // Two walls ending at a corridor's two sides, lined up across it (two units' entry
+            // or bath walls): the gap is the corridor's floor, no opening in a wall (Q6160).
+            if in_corridor_air(&corridors, gap_mid, u.perp(), a.thickness) {
+                corridor_gaps += 1;
+                continue;
+            }
+            gaps.push((i, a.b, a.b + u * gap, a.thickness));
         }
+    }
+    if corridor_gaps > 0 {
+        notes.push(format!("{}: {corridor_gaps} gaps across a corridor between lined-up walls left open (no header).", level.name));
     }
     // Outside: no other wall across one side of it.
     let outside = |p: Vec2, nrm: Vec2, walls: &[PlanWall]| {
@@ -1769,6 +1788,15 @@ fn gap_crossed(walls: &[PlanWall], i: usize, j: usize, g0: Vec2, g1: Vec2) -> bo
         let margin = c.thickness / 2.0;
         s > margin && s < width - margin && (0.0..=1.0).contains(&t)
     })
+}
+
+/// Whether a gap's middle `mid` is in a corridor's air: the corridor's floor on both sides of the
+/// gap's line (`nrm` across it), a wall's thickness `t` off it. A gap in a wall along a corridor
+/// (a cased opening into a lobby) has the corridor on one side only.
+fn in_corridor_air(corridors: &[&cadaddy_walk3d::Circulation], mid: Vec2, nrm: Vec2, t: f64) -> bool {
+    let off = nrm * t.max(1e-6);
+    let on_floor = |p: Vec2| corridors.iter().any(|c| c.holds([p.x, p.y]));
+    on_floor(mid) && on_floor(mid + off) && on_floor(mid - off)
 }
 
 /// A window narrower than this (inches) beside a pier is no window: the pier's slot, filled.
@@ -2329,5 +2357,32 @@ mod tests {
         // A demising wall running across the gap's middle: two walls lined up, no opening.
         walls.push(plan_wall((136.0, -120.0), (136.0, 120.0)));
         assert!(gap_crossed(&walls, 0, 1, g0, g1));
+    }
+
+    #[test]
+    fn a_gap_across_a_corridor_is_no_opening_one_along_it_is() {
+        // A corridor 66" wide (y 0–66) along x, inches.
+        let corridor = cadaddy_walk3d::Circulation {
+            kind: cadaddy_walk3d::CirculationKind::Corridor,
+            level: "Level 2".into(),
+            name: "CORRIDOR".into(),
+            at: [500.0, 33.0],
+            rects: vec![[[0.0, 0.0], [1000.0, 66.0]]],
+        };
+        let cs = [&corridor];
+        // Two units' entry walls lined up across it: the gap runs y 0–66 at x 300.
+        let (g0, g1) = (Vec2::new(300.0, 0.0), Vec2::new(300.0, 66.0));
+        let u = (g1 - g0) * (1.0 / g0.dist(g1));
+        assert!(in_corridor_air(&cs, (g0 + g1) * 0.5, u.perp(), 6.0));
+        // A cased opening in the corridor's own wall (y −3, centreline): corridor one side only.
+        let (h0, h1) = (Vec2::new(300.0, -3.0), Vec2::new(372.0, -3.0));
+        let v = (h1 - h0) * (1.0 / h0.dist(h1));
+        assert!(!in_corridor_air(&cs, (h0 + h1) * 0.5, v.perp(), 6.0));
+        // A gap in a room, away from the corridor.
+        let (k0, k1) = (Vec2::new(300.0, 100.0), Vec2::new(300.0, 160.0));
+        let w = (k1 - k0) * (1.0 / k0.dist(k1));
+        assert!(!in_corridor_air(&cs, (k0 + k1) * 0.5, w.perp(), 6.0));
+        // No corridors traced: nothing is in a corridor's air.
+        assert!(!in_corridor_air(&[], (g0 + g1) * 0.5, u.perp(), 6.0));
     }
 }

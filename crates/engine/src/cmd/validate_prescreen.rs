@@ -112,7 +112,7 @@ const MAX_WRITTEN: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Validation Prescreen", run_prescreen)
-            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT|E-RECEPT-TR|E-LUM-TYPE|E-LUM-CONTROL|E-SWITCH-LEG|E-SWITCH-DIM|E-SWITCH-3WAY|E-LUM-COUNT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra, unsure, conflict}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default; E-RECEPT-TR: pass|fail|unsure; lighting: pass|fail|unsure|conflict), issue, expected, found, measured (G-HEIGHT: aff_in, expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, documents? (a conflict's two sides), confidence, severity, area?, level, at?, source: \"prescreen\" | \"build\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), rooms_without_set, present: {by_room_type: {type: {rooms, pass, missing, extra}}, by_level: {level: {…}}, rooms_by_basis: {enlarged_plan, trade_plan, project_rule}}, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room against what the prints show in it — its unit type's enlarged plans turned as its layout fit says, else its level's trade plans: each symbol matched to an element of the same kind within plan_in, else missing (sheet, sheet point, place in the room); elements no symbol stands for extra — and each room type's project-rule set (`prescreen.expect.<room type>`) (G-PRESENT), and each receptacle in a guest room, dwelling unit or other room the code lists against its tamper-resistance fact from its product record, type tag, legend row or a blanket note (E-RECEPT-TR: unsure when nothing says), and the lighting: each luminaire's type against the fixture schedule and the submittal (E-LUM-TYPE: a conflict, citing both, where the documents disagree), its control (E-LUM-CONTROL: none needed when emergency or unswitched), each control's switch leg (E-SWITCH-LEG), each dimmer's drivers (E-SWITCH-DIM), each 3-way switch's mate (E-SWITCH-3WAY) and the plan's luminaire and control symbols per room against the model's (E-LUM-COUNT); the job's own conflict review items about lighting come in as conflicts (source build)")
+            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT|E-RECEPT-TR|E-LUM-TYPE|E-LUM-CONTROL|E-SWITCH-LEG|E-SWITCH-DIM|E-SWITCH-3WAY|E-LUM-COUNT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra, unsure, conflict}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default; E-RECEPT-TR: pass|fail|unsure; lighting: pass|fail|unsure|conflict), issue, expected, found, measured (G-HEIGHT: aff_in, expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, documents? (a conflict's two sides), confidence, severity, area?, level, at?, source: \"prescreen\" | \"build\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), rooms_without_set, no_room: {elements, first: [{handle, kind, level, at, nearest_area, off_ft}]} (elements in no area of their level, outside every room and more than a foot off any room's wall line; all of them in the `path` file), present: {by_room_type: {type: {rooms, pass, missing, extra}}, by_level: {level: {…}}, rooms_by_basis: {enlarged_plan, trade_plan, project_rule}}, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room against what the prints show in it — its unit type's enlarged plans turned as its layout fit says, else its level's trade plans: each symbol matched to an element of the same kind within plan_in, else missing (sheet, sheet point, place in the room); elements no symbol stands for extra — and each room type's project-rule set (`prescreen.expect.<room type>`) (G-PRESENT), and each receptacle in a guest room, dwelling unit or other room the code lists against its tamper-resistance fact from its product record, type tag, legend row or a blanket note (E-RECEPT-TR: unsure when nothing says), and the lighting: each luminaire's type against the fixture schedule and the submittal (E-LUM-TYPE: a conflict, citing both, where the documents disagree), its control (E-LUM-CONTROL: none needed when emergency or unswitched), each control's switch leg (E-SWITCH-LEG), each dimmer's drivers (E-SWITCH-DIM), each 3-way switch's mate (E-SWITCH-3WAY) and the plan's luminaire and control symbols per room against the model's (E-LUM-COUNT); the job's own conflict review items about lighting come in as conflicts (source build)")
             .noundo()
             .files(),
     ]
@@ -669,6 +669,9 @@ pub(crate) struct Screened {
     pub unmeasured: BTreeMap<String, BTreeMap<String, u64>>,
     /// G-PRESENT's counts per room type and per level.
     pub present: Present,
+    /// The elements in no area of their level (outside every room, more than a foot off any
+    /// room's wall line): each with the nearest area and how far off it is (Q6160).
+    pub no_room: Vec<Value>,
 }
 
 /// G-PRESENT's counts: rooms checked and verdicts, per room type and per level, and the rooms
@@ -801,9 +804,25 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     for a in sc.areas {
         by_level.entry(a.level.to_ascii_lowercase()).or_default().push(a);
     }
+    // Every area of the scope's levels (the scope's own when it is whole levels): whose wall line
+    // an element is on is decided among all of them, the nearest room winning.
+    let level_areas: Vec<Area> = if sc.whole_levels { Vec::new() } else { super::validate_packet::model_areas(sc.d, sc.frame) };
+    let mut all_by_level: HashMap<String, Vec<&Area>> = HashMap::new();
+    for a in &level_areas {
+        all_by_level.entry(a.level.to_ascii_lowercase()).or_default().push(a);
+    }
+    // An element's area: the one whose outline holds it on its level, else (a wall device in the
+    // wall's thickness, just outside the outline) the area on whose wall line it is, within a
+    // foot, when that area is in scope (Q6160).
     let area_of = |it: &Item| -> Option<&Area> {
-        let list = by_level.get(&it.level.to_ascii_lowercase())?;
-        list.iter().find(|a| inside(a.bbox, it.at) && (a.outline.len() < 3 || point_in(&a.outline, it.at))).copied()
+        let key = it.level.to_ascii_lowercase();
+        let list = by_level.get(&key)?;
+        if let Some(a) = list.iter().find(|a| inside(a.bbox, it.at) && (a.outline.len() < 3 || point_in(&a.outline, it.at))) {
+            return Some(*a);
+        }
+        let near = all_by_level.get(&key).unwrap_or(list);
+        let home = near.get(super::validate_packet::home_of(near, it.at)?)?;
+        list.iter().find(|a| a.id == home.id).copied()
     };
     let kinds = Kinds::of(sc.d, sc.sp, sc.prints);
     let all = items(sc.d, sc.sp, sc.model, sc.frame, &kinds);
@@ -1476,7 +1495,9 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         };
         a.0.cmp(&b.0).then_with(|| k(&a.1).cmp(&k(&b.1)))
     });
+    let no_room = no_room_list(&mine, &by_level);
     Screened {
+        no_room,
         findings: findings.into_iter().map(|(_, f)| f).collect(),
         checked,
         elements: mine.len(),
@@ -1488,6 +1509,48 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         unmeasured,
         present,
     }
+}
+
+/// Elements listed in no area, at most.
+const MAX_NO_ROOM: usize = 2_000;
+
+/// The elements in no area of their level: handle, kind, level, point and the nearest area of
+/// the level with its distance (feet), nearest-first by level.
+fn no_room_list(mine: &[(&Item, Option<&Area>)], by_level: &HashMap<String, Vec<&Area>>) -> Vec<Value> {
+    let mut out: Vec<(String, f64, Value)> = mine
+        .iter()
+        .filter(|(_, a)| a.is_none())
+        .take(MAX_NO_ROOM)
+        .map(|(it, _)| {
+            let nearest = by_level
+                .get(&it.level.to_ascii_lowercase())
+                .into_iter()
+                .flatten()
+                .filter_map(|a| {
+                    let d = a
+                        .outline
+                        .iter()
+                        .zip(a.outline.iter().cycle().skip(1))
+                        .take(10_000)
+                        .map(|(x, y)| seg_dist(it.at, *x, *y).0)
+                        .fold(f64::INFINITY, f64::min);
+                    d.is_finite().then_some((a, d))
+                })
+                .min_by(|x, y| x.1.total_cmp(&y.1));
+            let off = nearest.map_or(f64::INFINITY, |(_, d)| d);
+            let v = json!({
+                "handle": it.handle,
+                "kind": it.kind,
+                "level": it.level,
+                "at": pt([r2(it.at[0]), r2(it.at[1])]),
+                "nearest_area": nearest.map(|(a, _)| a.id.clone()),
+                "off_ft": nearest.map(|(_, d)| r2(d)),
+            });
+            (it.level.clone(), off, v)
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    out.into_iter().map(|(_, _, v)| v).collect()
 }
 
 /// The sheet an element's properties say they were read from (its first print-sourced one).
@@ -1549,7 +1612,7 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
     let total = listed.len();
     let mut written = Value::Null;
     if let Some(f) = &path {
-        let body = json!({"scope": key, "checked": out.checked, "unmatched": out.unmatched.to_json(), "unmeasured": out.unmeasured, "walls": wall_list, "findings": listed.iter().take(MAX_WRITTEN).collect::<Vec<_>>()});
+        let body = json!({"scope": key, "checked": out.checked, "unmatched": out.unmatched.to_json(), "unmeasured": out.unmeasured, "walls": wall_list, "no_room": out.no_room, "findings": listed.iter().take(MAX_WRITTEN).collect::<Vec<_>>()});
         let text = serde_json::to_string_pretty(&body).map_err(|e| bad(CMD, e.to_string()))?;
         super::exchange::write_file(CMD, f, text.as_bytes())?;
         written = json!(f);
@@ -1569,6 +1632,7 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
         "cursor": cursor,
         "findings": [],
         "rooms_without_set": out.without_set.iter().take(20).collect::<Vec<_>>(),
+        "no_room": {"elements": out.no_room.len(), "first": out.no_room.iter().take(10).collect::<Vec<_>>()},
         "present": out.present.to_json(),
         "disabled": out.disabled,
         "ms": start.elapsed().as_millis() as u64,
@@ -1595,6 +1659,7 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if r.to_string().len() > ANSWER_MAX {
         r["rooms_without_set"] = json!(out.without_set.len());
+        r["no_room"] = json!({"elements": out.no_room.len()});
     }
     Ok(r)
 }
