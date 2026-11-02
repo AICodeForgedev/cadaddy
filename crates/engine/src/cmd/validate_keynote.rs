@@ -801,8 +801,10 @@ impl Keynotes {
             c: [f64; 2],
             h: f64,
             segs: Vec<Seg>,
-            /// A circle round it, or a mask under it.
-            tagged: bool,
+            /// The circle round it or the mask under it (its box), when one is.
+            tagged: Option<[f64; 4]>,
+            /// Its own text.
+            text: cadaddy_doc::Handle,
         }
         let mut cands: Vec<Cand> = Vec::new();
         for (si, ts) in by_sheet.iter().enumerate() {
@@ -825,7 +827,7 @@ impl Keynotes {
                     Some(b) => [b.center().x, b.center().y],
                     None => [t.at[0] + 0.3 * t.h * t.text.len() as f64, t.at[1] + 0.5 * t.h],
                 };
-                cands.push(Cand { sheet: si, list: li, number, c, h: t.h, segs: Vec::new(), tagged: false });
+                cands.push(Cand { sheet: si, list: li, number, c, h: t.h, segs: Vec::new(), tagged: None, text: t.handle });
             }
         }
         if cands.is_empty() {
@@ -857,7 +859,7 @@ impl Keynotes {
                                 && inside([lo[0], lo[1], hi[0], hi[1]], c.c)
                                 && (hi[0] - lo[0]).max(hi[1] - lo[1]) <= 8.0 * c.h
                             {
-                                c.tagged = true;
+                                c.tagged = Some([lo[0], lo[1], hi[0], hi[1]]);
                             }
                         }
                     }
@@ -872,7 +874,8 @@ impl Keynotes {
                             if let Some(c) = cands.get_mut(*i) {
                                 let off = (ci.center.x - c.c[0]).hypot(ci.center.y - c.c[1]);
                                 if ci.radius <= reach_of(c.h) && off < ci.radius * 0.9 {
-                                    c.tagged = true;
+                                    let r = ci.radius;
+                                    c.tagged = Some([ci.center.x - r, ci.center.y - r, ci.center.x + r, ci.center.y + r]);
                                 }
                             }
                         }
@@ -902,9 +905,21 @@ impl Keynotes {
                 }
             }
         }
-        // Each marker onto its level's plan.
+        // Each marker onto its level's plan: its number alone in its shape (an equipment tag's
+        // hexagon holds its name over its number).
         for c in cands {
-            if !(c.tagged || enclosed(c.c, reach_of(c.h), &c.segs)) {
+            let shut = |p: [f64; 2]| match c.tagged {
+                Some(r) => inside(r, p),
+                None => enclosed(p, reach_of(c.h), &c.segs),
+            };
+            if !shut(c.c) {
+                continue;
+            }
+            let crowded = by_sheet.get(c.sheet).into_iter().flatten().any(|t| {
+                let mid = [t.at[0] + 0.3 * t.h * t.text.chars().count() as f64, t.at[1] + 0.5 * t.h];
+                t.handle != c.text && (mid[0] - c.c[0]).hypot(mid[1] - c.c[1]) <= reach_of(c.h) && shut(mid)
+            });
+            if crowded {
                 continue;
             }
             let Some((number_s, _, _)) = sheets.get(c.sheet) else { continue };
