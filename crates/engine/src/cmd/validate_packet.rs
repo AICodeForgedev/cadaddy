@@ -818,7 +818,7 @@ fn resolve_element(d: &Drawing, kinds: &Kinds, e: &v::Element) -> Resolved {
 }
 
 /// The trade an element kind belongs to: the first trade rule that applies, else by its words.
-fn trade_of_kind(kind: &str, rules: &[Effective]) -> &'static str {
+pub(crate) fn trade_of_kind(kind: &str, rules: &[Effective]) -> &'static str {
     if let Some(r) =
         rules.iter().find(|r| r.rule.trade != "general" && r.rule.applies_to.kinds.iter().all(|k| k != "*") && r.rule.applies_to_kind(kind))
     {
@@ -1475,7 +1475,7 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         counts.get("walls").and_then(Value::as_u64).unwrap_or(0),
         counts.get("openings").and_then(Value::as_u64).unwrap_or(0),
     ));
-    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents; G-PRESENT: the room type's expected set against what the room holds). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
+    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: the room type's expected set against what the room holds). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
     }
@@ -2253,9 +2253,22 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         whole_levels: false,
         only: &[],
     });
+    // Each element's expected height and where the documents give it (G-HEIGHT's reading).
+    if let Some(list) = here.objects.get_mut("elements").and_then(Value::as_array_mut) {
+        for el in list.iter_mut() {
+            let Some(h) = el.get("handle").and_then(Value::as_str).map(str::to_string) else { continue };
+            if let Some(f) = pre.findings.iter().find(|f| f["rule"] == "G-HEIGHT" && f["handle"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(&h)))
+            {
+                el["height_expected"] = f["measured"].get("expected_source").cloned().unwrap_or(Value::Null);
+                el["height_model_from"] = f["measured"].get("model_height_from").cloned().unwrap_or(Value::Null);
+                el["height_verdict"] = f["verdict"].clone();
+            }
+        }
+    }
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the documents, G-PRESENT the room type's expected set (project rules)",
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT the room type's expected set (project rules)",
         "checked": pre.checked,
+        "unmeasured": pre.unmeasured,
         // The area's own: an element beside it is measured in its own area's packet.
         "findings": pre
             .findings

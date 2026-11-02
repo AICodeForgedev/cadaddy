@@ -121,7 +121,7 @@
       "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
       "check": "A wall-mounted item is at the height above its floor that the documents give it (an AFF note, the interior elevation, the legend, the schedule or the general notes).",
       "how": [
-        "The object list gives each element's height above the floor and the prescreen's G-HEIGHT reading (the height the documents' rules expect and where that came from).",
+        "The object list gives each element's height above the floor and the prescreen's G-HEIGHT reading: the height the documents give it and where (height_expected: the sheet, the point and the words; an AFF note by it, the interior elevation, the legend, a schedule, the general notes, or the project rule validate.height.<mark|kind>), and whether its model height is a default no document gives.",
         "Look for an AFF note beside or leadered to the symbol on the enlarged plan, then the interior elevation of that wall, then the legend, schedule or general notes.",
         "A height off by more than the tolerance is a 'fail' citing the note or view; say 'unsure' when no document gives a height."
       ],

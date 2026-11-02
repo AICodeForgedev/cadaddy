@@ -532,3 +532,253 @@ fn bad_prescreen_calls_are_refused_and_never_panic() {
     let mut s = Session::new();
     assert!(s.execute("validate.prescreen", &json!({})).is_err());
 }
+
+// ---------------------------------------------------------------- G-HEIGHT's documents (Q6132)
+
+/// A made-up general notes block on the floor plan sheet and a mechanical one on M-401 (another
+/// trade's: its switch height is not the switches').
+fn general_notes(s: &mut Session) {
+    layer(s, "G-NOTE");
+    text(s, [200.0, 1600.0], "GENERAL NOTES");
+    text(s, [200.0, 1585.0], "1. MOUNTING HEIGHTS TO CENTER UNLESS NOTED:");
+    text(s, [200.0, 1570.0], "2. RECEPTACLES 18\" AFF");
+    text(s, [200.0, 1555.0], "3. SWITCHES 48\" AFF");
+    text(s, [M401 + 2000.0, 1600.0], "MECHANICAL NOTES");
+    text(s, [M401 + 2000.0, 1585.0], "1. SWITCHES 54\" AFF");
+}
+
+/// A made-up device legend on the floor plan sheet: each row's mark, name and mounting height.
+fn legend(s: &mut Session) {
+    layer(s, "E-LGND");
+    text(s, [200.0, 2000.0], "DEVICE LEGEND");
+    for (y, mark, name, h) in [(1985.0, "DUPLEX", "DUPLEX RECEPTACLE", "MOUNT 18\" AFF"), (1970.0, "SW", "SINGLE POLE SWITCH", "MOUNT 46\" AFF")] {
+        text(s, [200.0, y], mark);
+        text(s, [260.0, y], name);
+        text(s, [500.0, y], h);
+    }
+}
+
+/// A vertical dimension in drawing units from `bottom` up to `top`, its text as written.
+fn vertical_dim(s: &mut Session, bottom: [f64; 2], top: [f64; 2], written: &str) {
+    let p = |q: [f64; 2]| json!({"x": q[0], "y": q[1], "z": 0.0});
+    let dim: cadaddy_engine::doc::Dimension = serde_json::from_value(json!({
+        "kind": {"linear": {"rotation": std::f64::consts::FRAC_PI_2}},
+        "defpt": p([bottom[0] - 10.0, top[1]]),
+        "textMid": p([bottom[0] - 12.0, (bottom[1] + top[1]) / 2.0]),
+        "p13": p(bottom),
+        "p14": p(top),
+        "text": written,
+        "measurement": top[1] - bottom[1],
+    }))
+    .unwrap();
+    let d = s.doc_mut().unwrap();
+    let h = d.new_handle();
+    d.model.push(Entity::new(h, EntityKind::Dimension(Box::new(dim))));
+}
+
+/// Made-up interior elevations on A-501: room 101's shows the switch's mark with a 4'-0"
+/// dimension and a receptacle at 24" AFF; room 102's a receptacle at 30" AFF.
+fn elevations(s: &mut Session) {
+    layer(s, "A-ELEV");
+    text(s, [A501 + 200.0, 1500.0], "INTERIOR ELEVATION - ROOM 101");
+    text(s, [A501 + 300.0, 1560.0], "SW");
+    vertical_dim(s, [A501 + 290.0, 1510.0], [A501 + 290.0, 1550.0], "4'-0\"");
+    text(s, [A501 + 500.0, 1540.0], "RECEPTACLE");
+    text(s, [A501 + 500.0, 1530.0], "+24\" AFF");
+    text(s, [A501 + 1200.0, 1500.0], "INTERIOR ELEVATION - ROOM 102");
+    text(s, [A501 + 1300.0, 1540.0], "RECEPTACLE");
+    text(s, [A501 + 1300.0, 1530.0], "+30\" AFF");
+}
+
+/// Give an element a `mount_height` record as the job writes one.
+fn record(s: &mut Session, handle: &str, kind: cadaddy_engine::doc::props::SourceKind, doc: &str) {
+    use cadaddy_engine::doc::props::{self, Prop, Source};
+    let h = cadaddy_engine::doc::Handle::parse_hex(handle).unwrap();
+    let d = s.doc_mut().unwrap();
+    assert!(d.model.modify(h, |e| {
+        let mut store = props::read(&e.common.xdata);
+        store.set("mount_height", Prop::new(16.0, Source::from_doc(kind, doc)).with_unit("in"));
+        e.common.xdata = props::write(&e.common.xdata, &store).into();
+    }));
+}
+
+fn heights(s: &mut Session) -> (Value, Vec<Value>) {
+    let mut out = Vec::new();
+    let mut cursor = 0;
+    loop {
+        let r = s.execute("validate.prescreen", &json!({"level": "L1", "all": true, "limit": 50, "cursor": cursor, "rules": ["G-HEIGHT"]})).unwrap();
+        out.extend(findings(&r));
+        match r["next"].as_u64() {
+            Some(n) if n as usize > cursor => cursor = n as usize,
+            _ => return (r, out),
+        }
+    }
+}
+
+#[test]
+fn heights_come_from_the_general_notes_of_the_trade_then_the_legend_row() {
+    let mut j = job();
+    general_notes(&mut j.s);
+    let (r, fs) = heights(&mut j.s);
+    let rec = of(&fs, "G-HEIGHT", &j.on_wall).unwrap_or_else(|| panic!("no G-HEIGHT reading for the receptacle: {r}"));
+    assert_eq!(rec["verdict"], "pass", "{rec}");
+    let src = &rec["measured"]["expected_source"];
+    assert_eq!(src["from"], "general_note", "{rec}");
+    assert_eq!(src["sheet"], "A-101", "{rec}");
+    assert!(src["text"].as_str().unwrap().contains("RECEPTACLES 18\" AFF"), "{rec}");
+    assert!(src["at"].is_array(), "the point it was read at: {rec}");
+    assert_eq!(rec["expected_source"], *src, "the finding carries it too");
+    // The switch: the general notes' 48", not the mechanical notes' 54".
+    let sw = of(&fs, "G-HEIGHT", &j.switch).unwrap();
+    assert_eq!(sw["verdict"], "fail", "{sw}");
+    assert!((sw["measured"]["expected_in"].as_f64().unwrap() - 48.0).abs() < 1e-6, "{sw}");
+    assert!(sw["measured"]["expected_from"].as_str().unwrap().contains("GENERAL NOTES"), "{sw}");
+    assert_eq!(r["checked"]["G-HEIGHT"]["default"], 0, "{r}");
+    // The legend row of the mark comes before the general notes.
+    legend(&mut j.s);
+    let (r, fs) = heights(&mut j.s);
+    let rec = of(&fs, "G-HEIGHT", &j.on_wall).unwrap();
+    assert_eq!(rec["measured"]["expected_source"]["from"], "legend", "{rec}");
+    assert!(rec["measured"]["expected_source"]["text"].as_str().unwrap().contains("MOUNT 18\" AFF"), "{rec}");
+    assert!(rec["measured"]["expected_from"].as_str().unwrap().contains("row DUPLEX"), "{rec}");
+    let sw = of(&fs, "G-HEIGHT", &j.switch).unwrap();
+    assert!((sw["measured"]["expected_in"].as_f64().unwrap() - 46.0).abs() < 1e-6, "{sw}");
+    assert_eq!(sw["measured"]["expected_source"]["from"], "legend", "{sw}");
+    // Every wall item has a documented height now: nothing is unmeasured for want of one.
+    let why = r["unmeasured"]["G-HEIGHT"].as_object().cloned().unwrap_or_default();
+    assert!(why.keys().all(|w| !w.starts_with("receptacle") && !w.starts_with("switch")), "{r}");
+}
+
+#[test]
+fn an_interior_elevation_gives_its_rooms_heights_before_the_legend() {
+    let mut j = job();
+    legend(&mut j.s);
+    elevations(&mut j.s);
+    let (r, fs) = heights(&mut j.s);
+    // Room 101's elevation: the switch's 4'-0" dimension.
+    let sw = of(&fs, "G-HEIGHT", &j.switch).unwrap_or_else(|| panic!("{r}"));
+    let src = &sw["measured"]["expected_source"];
+    assert_eq!(src["from"], "elevation", "{sw}");
+    assert!((sw["measured"]["expected_in"].as_f64().unwrap() - 48.0).abs() < 1e-6, "{sw}");
+    assert_eq!(src["sheet"], "A-501", "{sw}");
+    assert!(src["what"].as_str().unwrap().contains("ROOM 101"), "{sw}");
+    assert!(src["text"].as_str().unwrap().contains("(dimension)"), "{sw}");
+    assert_eq!(sw["verdict"], "fail", "built at 36\": {sw}");
+    // Room 101's receptacle: its elevation's 24"; room 102's: its own elevation's 30".
+    let rec = of(&fs, "G-HEIGHT", &j.on_wall).unwrap();
+    assert!((rec["measured"]["expected_in"].as_f64().unwrap() - 24.0).abs() < 1e-6, "{rec}");
+    assert_eq!(rec["verdict"], "fail", "{rec}");
+    let r102 = fs.iter().filter(|f| f["kind"] == "receptacle" && f["area"].as_str().is_some_and(|a| a.contains("102"))).collect::<Vec<_>>();
+    assert!(!r102.is_empty(), "{r}");
+    assert!(r102.iter().all(|f| (f["measured"]["expected_in"].as_f64().unwrap() - 30.0).abs() < 1e-6), "{r102:?}");
+    assert!(r102.iter().all(|f| f["measured"]["expected_source"]["what"].as_str().unwrap().contains("ROOM 102")), "{r102:?}");
+}
+
+#[test]
+fn an_aff_note_beside_the_symbol_comes_first() {
+    let mut j = job();
+    legend(&mut j.s);
+    elevations(&mut j.s);
+    // A made-up height note beside the switch on the plan.
+    let p = at([14.5, 6.0]);
+    layer(&mut j.s, "E-ANNO");
+    text(&mut j.s, [p[0] + 6.0, p[1] + 5.0], "+36\" AFF");
+    let (r, fs) = heights(&mut j.s);
+    let sw = of(&fs, "G-HEIGHT", &j.switch).unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(sw["verdict"], "pass", "{sw}");
+    let src = &sw["measured"]["expected_source"];
+    assert_eq!(src["from"], "plan_note", "{sw}");
+    assert_eq!(src["sheet"], "A-101", "{sw}");
+    assert_eq!(src["text"], "+36\" AFF", "{sw}");
+    // It is the switch's note only: the receptacles keep their elevation heights.
+    let rec = of(&fs, "G-HEIGHT", &j.on_wall).unwrap();
+    assert_eq!(rec["measured"]["expected_source"]["from"], "elevation", "{rec}");
+    // A callout naming its kind ties to the symbol of that kind beside it, not to the others.
+    let q = at([27.0, 11.5]);
+    text(&mut j.s, [q[0] + 4.0, q[1] - 8.0], "GFCI RECEPTACLE @ 42\" AFF");
+    text(&mut j.s, [p[0] - 4.0, p[1] - 8.0], "THERMOSTAT 60\" AFF");
+    let (r, fs) = heights(&mut j.s);
+    let r102 =
+        fs.iter().find(|f| f["kind"] == "receptacle" && f["area"].as_str().is_some_and(|a| a.contains("102"))).unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(r102["measured"]["expected_source"]["from"], "plan_note", "{r102}");
+    assert!((r102["measured"]["expected_in"].as_f64().unwrap() - 42.0).abs() < 1e-6, "{r102}");
+    let sw = of(&fs, "G-HEIGHT", &j.switch).unwrap();
+    assert_eq!(sw["measured"]["expected_source"]["text"], "+36\" AFF", "a thermostat's note is no switch's: {sw}");
+    assert_eq!(of(&fs, "G-HEIGHT", &j.on_wall).unwrap()["measured"]["expected_source"]["from"], "elevation");
+}
+
+#[test]
+fn a_default_height_is_reported_as_one_and_unmeasured_names_the_kinds() {
+    use cadaddy_engine::doc::props::SourceKind;
+    let mut j = job();
+    // The job's records: a receptacle's usual height (a default), and the PTAC's rule written as
+    // if printed.
+    record(&mut j.s, &j.off_wall, SourceKind::Default, "not printed: the usual height for this kind of device");
+    record(&mut j.s, &j.ptac, SourceKind::Print, "rule: on the floor, 16\" high");
+    let (r, fs) = heights(&mut j.s);
+    for h in [&j.off_wall, &j.ptac] {
+        let f = of(&fs, "G-HEIGHT", h).unwrap_or_else(|| panic!("no G-HEIGHT reading for {h}: {r}"));
+        assert_eq!(f["verdict"], "default", "{f}");
+        assert_eq!(f["severity"], "low", "{f}");
+        assert_eq!(f["measured"]["model_height_from"], "default", "{f}");
+        assert!(f["issue"].as_str().unwrap().contains("not from any document"), "{f}");
+    }
+    assert_eq!(r["checked"]["G-HEIGHT"]["pass"], 0, "{r}");
+    assert!(r["checked"]["G-HEIGHT"]["default"].as_u64().unwrap() >= 2, "{r}");
+    let why: Vec<String> = r["unmeasured"]["G-HEIGHT"].as_object().unwrap().keys().cloned().collect();
+    assert!(why.iter().any(|w| w.starts_with("switch: no height in any document")), "{why:?}");
+    assert!(why.iter().any(|w| w.starts_with("receptacle: no height in any document") && w.contains("default")), "{why:?}");
+    assert!(why.iter().any(|w| w.starts_with("receptacle: no height in any document (an AFF note")), "the others of no record: {why:?}");
+    // Project rules: refused when they don't read, else the height of the mark or the kind.
+    for (dom, key, val) in
+        [("mounting_height", "validate.height.receptacle", "18"), ("custom", "validate.height.", "18"), ("custom", "validate.height.SW", "lots")]
+    {
+        assert!(rule(&mut j.s, dom, key, val).is_err(), "{dom} {key} {val}");
+    }
+    rule(&mut j.s, "custom", "validate.height.receptacle", "18\"").unwrap();
+    rule(&mut j.s, "custom", "validate.height.SW", "3'-0\"").unwrap();
+    let (r, fs) = heights(&mut j.s);
+    let sw = of(&fs, "G-HEIGHT", &j.switch).unwrap();
+    assert_eq!(sw["verdict"], "pass", "{sw}");
+    assert_eq!(sw["measured"]["expected_from"], "project rule validate.height.SW", "{sw}");
+    let off = of(&fs, "G-HEIGHT", &j.off_wall).unwrap();
+    assert_eq!(off["measured"]["expected_source"]["from"], "project_rule", "{off}");
+    assert_eq!(off["measured"]["model_height_from"], "default", "a default it stays: {off}");
+    assert!(off["issue"].as_str().unwrap().contains("its model height is a default"), "{off}");
+    let why: Vec<String> = r["unmeasured"]["G-HEIGHT"].as_object().cloned().unwrap_or_default().keys().cloned().collect();
+    assert!(why.iter().all(|w| !w.starts_with("receptacle") && !w.starts_with("switch")), "{why:?}");
+    // The tolerance is the rule's: an 18" receptacle fails a 30" rule at the 2" default and
+    // passes at 12".
+    rule(&mut j.s, "custom", "validate.height.receptacle", "30\"").unwrap();
+    let (_, fs) = heights(&mut j.s);
+    assert_eq!(of(&fs, "G-HEIGHT", &j.on_wall).unwrap()["verdict"], "fail");
+    j.s.execute("validate.rules.set", &json!({"id": "G-HEIGHT", "tolerance": {"height_in": 12}, "reason": "made-up test"})).unwrap();
+    let (_, fs) = heights(&mut j.s);
+    let rec = of(&fs, "G-HEIGHT", &j.on_wall).unwrap();
+    assert_eq!(rec["verdict"], "pass", "{rec}");
+    assert_eq!(rec["tolerance_in"], 12.0, "{rec}");
+}
+
+#[test]
+fn a_packet_shows_each_elements_expected_height_and_its_source() {
+    let mut j = job();
+    general_notes(&mut j.s);
+    let a101 = area_of(&mut j.s, "101");
+    let out = dir("h101");
+    j.s.execute("validate.packet", &json!({"area": a101, "out_dir": out.to_string_lossy()})).unwrap();
+    let o = read_json(&out.join("objects.json"));
+    let el = o["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&j.on_wall)))
+        .unwrap_or_else(|| panic!("{o}"));
+    assert_eq!(el["height_expected"]["from"], "general_note", "{el}");
+    assert_eq!(el["height_expected"]["sheet"], "A-101", "{el}");
+    assert!((el["height_expected"]["in"].as_f64().unwrap() - 18.0).abs() < 1e-6, "{el}");
+    assert_eq!(el["height_verdict"], "pass", "{el}");
+    assert!(o["prescreen"]["unmeasured"].is_object(), "{}", o["prescreen"]);
+    let g = o["prescreen"]["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "G-HEIGHT").unwrap_or_else(|| panic!("{}", o["prescreen"]));
+    assert!(g["expected_source"].is_object(), "{g}");
+    let _ = std::fs::remove_dir_all(&out);
+}
